@@ -1,0 +1,14 @@
+.git/**
+.vscode/**
+.dext/**
+.npmrc
+src/**
+test/**
+scripts/**
+dist/extensionHostTest.js
+node_modules/**
+*.map
+*.ts
+esbuild.mjs
+eslint.config.mjs
+vitest.config.mjs

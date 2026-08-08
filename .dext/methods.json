@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "methods": [
+    {
+      "id": "project.task.plan",
+      "title": "Plan Project Task",
+      "description": "Build a deterministic plan preview from typed task fields.",
+      "kind": "command",
+      "version": "1.0.0",
+      "input": [
+        {
+          "name": "goal",
+          "type": "string",
+          "required": true,
+          "description": "Concrete implementation goal."
+        },
+        {
+          "name": "areas",
+          "type": "enum",
+          "values": ["runtime", "editor", "tests"],
+          "multiple": true,
+          "description": "Areas included in the task."
+        }
+      ],
+      "output": { "kind": "plan" },
+      "executor": { "kind": "deterministic", "handler": "outlinePlan" }
+    }
+  ]
+}

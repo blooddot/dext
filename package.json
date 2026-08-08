@@ -1,0 +1,88 @@
+{
+  "name": "dext",
+  "displayName": "Dext",
+  "description": "A typed AI method environment for Visual Studio Code.",
+  "version": "0.1.0",
+  "publisher": "blooddot",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.105.0"
+  },
+  "categories": [
+    "Other",
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onView:dext.sidebar"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "dext.focus",
+        "title": "Dext: Focus Method Editor",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "dext.reloadMethods",
+        "title": "Dext: Reload Methods",
+        "icon": "$(refresh)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "dext",
+          "title": "Dext",
+          "icon": "media/dext.svg"
+        }
+      ]
+    },
+    "views": {
+      "dext": [
+        {
+          "id": "dext.sidebar",
+          "name": "Methods",
+          "type": "webview"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Dext",
+      "properties": {
+        "dext.globalMethodsFile": {
+          "type": "string",
+          "default": "",
+          "description": "Optional absolute path to a trusted global methods JSON file."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "lint": "eslint src test",
+    "test": "vitest run",
+    "test:host": "npm run build && node scripts/runExtensionTest.mjs",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run lint && npm run typecheck && npm run test && npm run build",
+    "vscode:prepublish": "npm run check"
+  },
+  "dependencies": {
+    "@ax-llm/ax": "23.0.11",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@vscode/codicons": "0.0.46-24",
+    "@eslint/js": "9.39.1",
+    "@types/node": "24.10.1",
+    "@types/vscode": "1.105.0",
+    "@vscode/test-electron": "3.1.0",
+    "esbuild": "0.25.12",
+    "eslint": "9.39.1",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.48.1",
+    "vitest": "4.1.10"
+  }
+}
