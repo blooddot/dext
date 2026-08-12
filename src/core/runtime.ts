@@ -88,6 +88,16 @@ const DEFAULT_HANDLERS: Readonly<Record<string, DeterministicHandler>> = {
   })
 };
 
+function mergeContext(resolved: readonly CodeRef[], supplemental: readonly CodeRef[]): CodeRef[] {
+  const seen = new Set<string>();
+  return [...resolved, ...supplemental].filter((reference) => {
+    const key = `${reference.uri}|${reference.contentHash}|${JSON.stringify(reference.range ?? null)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 export class DextRuntime {
   private readonly handlers: Readonly<Record<string, DeterministicHandler>>;
 
@@ -100,7 +110,10 @@ export class DextRuntime {
     this.handlers = { ...DEFAULT_HANDLERS, ...handlers };
   }
 
-  async execute(invocation: InvocationAst): Promise<RuntimeResponse> {
+  async execute(
+    invocation: InvocationAst,
+    supplementalContext: readonly CodeRef[] = []
+  ): Promise<RuntimeResponse> {
     const started = performance.now();
     const method = this.registry.get(invocation.method);
     if (!method) {
@@ -118,7 +131,11 @@ export class DextRuntime {
       invocation.arguments.map((argument) => [argument.name, argument.value])
     );
     this.ax.validateInput(contract, rawArguments);
-    const resolved = await this.resolver.resolve(invocation, method);
+    const resolvedInvocation = await this.resolver.resolve(invocation, method);
+    const resolved = {
+      ...resolvedInvocation,
+      context: mergeContext(resolvedInvocation.context, supplementalContext)
+    };
     const handler = this.handlers[method.executor.handler];
     if (!handler) {
       throw new Error(`Executor '${method.executor.handler}' is not available.`);

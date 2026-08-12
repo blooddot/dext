@@ -1,6 +1,6 @@
-import * as path from "node:path";
 import * as vscode from "vscode";
 import type { ContextHost, TextSnapshot } from "./core/contextResolver.js";
+import { parseFileReference } from "./core/fileReference.js";
 import type { Range } from "./core/types.js";
 
 function toRange(range: vscode.Range): Range {
@@ -26,6 +26,77 @@ async function snapshot(
   };
 }
 
+function workspaceFileUri(filePath: string): { uri: vscode.Uri; range?: vscode.Range } | undefined {
+  const parsed = parseFileReference(filePath);
+  const folders = vscode.workspace.workspaceFolders;
+  let folder = folders?.[0];
+  if (!folder) return undefined;
+  const normalized = parsed.path.replaceAll("\\", "/");
+  let segments = normalized.split("/");
+  if (folders && folders.length > 1) {
+    const matchingFolder = folders.find((candidate) => candidate.name === segments[0]);
+    if (matchingFolder) {
+      folder = matchingFolder;
+      segments = segments.slice(1);
+    }
+  }
+  if (
+    normalized.startsWith("/")
+    || /^[A-Za-z]:/.test(normalized)
+    || segments.length === 0
+    || segments.some((segment) => !segment || segment === "." || segment === "..")
+  ) {
+    throw new Error("@file paths must stay inside the current workspace.");
+  }
+  const uri = vscode.Uri.joinPath(folder.uri, ...segments);
+  const range = parsed.range
+    ? new vscode.Range(
+        parsed.range.start.line,
+        parsed.range.start.character,
+        parsed.range.end.line,
+        parsed.range.end.character
+      )
+    : undefined;
+  return { uri, ...(range ? { range } : {}) };
+}
+
+async function validatedDocumentRange(
+  uri: vscode.Uri,
+  range?: vscode.Range
+): Promise<{ document: vscode.TextDocument; range?: vscode.Range }> {
+  if (!vscode.workspace.getWorkspaceFolder(uri)) {
+    throw new Error("Files must stay inside the current workspace.");
+  }
+  const document = await vscode.workspace.openTextDocument(uri);
+  if (range && !document.validateRange(range).isEqual(range)) {
+    throw new Error("@file range is outside the target document.");
+  }
+  return { document, ...(range ? { range } : {}) };
+}
+
+export async function openWorkspaceDocument(uri: vscode.Uri, range?: Range): Promise<void> {
+  const vscodeRange = range
+    ? new vscode.Range(range.start.line, range.start.character, range.end.line, range.end.character)
+    : undefined;
+  const validated = await validatedDocumentRange(uri, vscodeRange);
+  const editor = await vscode.window.showTextDocument(validated.document);
+  if (validated.range) {
+    editor.selection = new vscode.Selection(validated.range.start, validated.range.end);
+    editor.revealRange(validated.range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+  }
+}
+
+export async function openWorkspaceFileReference(filePath: string): Promise<void> {
+  const target = workspaceFileUri(filePath);
+  if (!target) throw new Error("Open a workspace before opening an @file reference.");
+  const validated = await validatedDocumentRange(target.uri, target.range);
+  const editor = await vscode.window.showTextDocument(validated.document);
+  if (validated.range) {
+    editor.selection = new vscode.Selection(validated.range.start, validated.range.end);
+    editor.revealRange(validated.range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+  }
+}
+
 export class VsCodeContextHost implements ContextHost {
   async selection(): Promise<TextSnapshot | undefined> {
     const editor = vscode.window.activeTextEditor;
@@ -41,17 +112,17 @@ export class VsCodeContextHost implements ContextHost {
   }
 
   async file(filePath: string): Promise<TextSnapshot | undefined> {
-    const folder = vscode.workspace.workspaceFolders?.[0];
-    if (!folder) {
-      return undefined;
-    }
-    const root = folder.uri.fsPath;
-    const resolved = path.resolve(root, filePath);
-    const relative = path.relative(root, resolved);
-    if (relative.startsWith("..") || path.isAbsolute(relative)) {
-      throw new Error("@file paths must stay inside the current workspace.");
-    }
-    return snapshot(vscode.Uri.file(resolved));
+    const target = workspaceFileUri(filePath);
+    if (!target) return undefined;
+    if (!target.range) return snapshot(target.uri);
+    const { document, range } = await validatedDocumentRange(target.uri, target.range);
+    if (!range) return undefined;
+    return {
+      uri: target.uri.toString(),
+      content: document.getText(range),
+      version: document.version,
+      range: toRange(range)
+    };
   }
 
   async symbol(name: string): Promise<TextSnapshot | undefined> {

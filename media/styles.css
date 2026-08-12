@@ -18,7 +18,7 @@ body {
 }
 
 button,
-textarea {
+.chat-input {
   font: inherit;
 }
 
@@ -77,7 +77,7 @@ button {
 .mode:focus-visible,
 .method-row:focus-visible,
 button.primary:focus-visible,
-textarea:focus {
+.code-editor:focus-within {
   outline: 1px solid var(--vscode-focusBorder);
   outline-offset: -1px;
 }
@@ -129,92 +129,216 @@ main {
   background: var(--vscode-button-background);
 }
 
-.input-panel,
-.editor-shell {
+.input-panel {
   position: relative;
 }
 
-textarea {
+.chat-input {
   display: block;
   width: 100%;
-  min-height: 82px;
-  padding: 8px;
-  resize: vertical;
+  min-height: 96px;
+  max-height: 260px;
+  padding: 8px 36px 8px 8px;
+  overflow: auto;
+  border: 0;
+  outline: 0;
+  color: var(--vscode-input-foreground);
+  background: transparent;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chat-input:empty::before {
+  content: attr(data-placeholder);
+  color: var(--vscode-input-placeholderForeground);
+  pointer-events: none;
+}
+
+.code-editor {
+  width: 100%;
+  height: clamp(132px, 24vh, 180px);
+  min-height: 132px;
+  max-height: 180px;
+  overflow: hidden;
   border: 1px solid var(--vscode-input-border, transparent);
   border-radius: 3px;
-  color: var(--vscode-input-foreground);
-  background: var(--vscode-input-background);
-  line-height: 1.45;
+  background: var(--vscode-editor-background);
 }
 
-#code-input {
+.code-editor .cm-editor {
+  height: 100%;
+  color: var(--vscode-editor-foreground);
+  background: transparent;
   font-family: var(--vscode-editor-font-family);
   font-size: var(--vscode-editor-font-size, 12px);
-  tab-size: 2;
 }
 
-textarea::placeholder {
-  color: var(--vscode-input-placeholderForeground);
+.code-editor .cm-editor.cm-focused {
+  outline: 0;
 }
 
-.completions {
-  position: absolute;
-  z-index: 4;
-  top: calc(100% - 2px);
-  left: 0;
-  right: 0;
-  max-height: 176px;
+.code-editor .cm-scroller {
   overflow: auto;
-  padding: 3px;
-  border: 1px solid var(--vscode-editorSuggestWidget-border, var(--vscode-widget-border));
-  background: var(--vscode-editorSuggestWidget-background);
-  box-shadow: 0 4px 10px var(--vscode-widget-shadow);
+  font-family: inherit;
+  line-height: 24px;
 }
 
-.completion {
-  width: 100%;
-  min-height: 26px;
-  padding: 4px 6px;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-  text-align: left;
-  border: 0;
-  border-radius: 2px;
-  background: transparent;
+.code-editor .cm-content {
+  min-height: 100%;
+  padding: 8px;
+  caret-color: var(--vscode-editorCursor-foreground);
+}
+
+.code-editor .cm-line {
+  min-height: 24px;
+  padding: 0;
+}
+
+.code-editor .cm-cursor,
+.code-editor .cm-dropCursor {
+  border-left-color: var(--vscode-editorCursor-foreground);
+}
+
+.code-editor .cm-selectionBackground,
+.code-editor .cm-content ::selection {
+  background: var(--vscode-editor-selectionBackground) !important;
+}
+
+.code-editor .cm-tooltip {
+  max-width: calc(100% - 12px);
+  overflow: hidden;
+  border: 1px solid var(--vscode-editorSuggestWidget-border, var(--vscode-widget-border));
+  border-radius: 3px;
+  color: var(--vscode-editorSuggestWidget-foreground, var(--vscode-foreground));
+  background: var(--vscode-editorSuggestWidget-background, var(--vscode-editor-background));
+  box-shadow: 0 2px 8px var(--vscode-widget-shadow);
+}
+
+.code-editor .cm-tooltip-autocomplete > ul {
+  max-height: 128px;
+  font-family: var(--vscode-editor-font-family);
+}
+
+.code-editor .cm-tooltip-autocomplete > ul > li {
+  min-height: 22px;
+  padding: 2px 6px;
+}
+
+.code-editor .cm-tooltip-autocomplete > ul > li[aria-selected] {
+  color: var(--vscode-editorSuggestWidget-selectedForeground, var(--vscode-list-activeSelectionForeground));
+  background: var(--vscode-editorSuggestWidget-selectedBackground, var(--vscode-list-activeSelectionBackground));
+}
+
+.code-editor .cm-completionDetail {
+  color: var(--vscode-editorSuggestWidget-foreground, var(--vscode-descriptionForeground));
+  opacity: 0.75;
+}
+
+.dext-hover-tooltip,
+.dext-signature-tooltip {
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 6px 8px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.dext-hover-tooltip code,
+.dext-signature-tooltip code {
+  font-family: var(--vscode-editor-font-family);
+}
+
+.dext-tooltip-detail {
+  margin-top: 4px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.chat-composer {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 3px;
+  background: var(--vscode-input-background);
+}
+
+.chat-composer:focus-within {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.attachment-chip {
+  min-width: 0;
+  max-width: min(260px, calc(100% - 4px));
+  height: 24px;
+  margin: 2px;
+  padding-left: 0;
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  border: 1px solid var(--vscode-widget-border);
+  border-radius: 3px;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  vertical-align: middle;
+  user-select: none;
   cursor: pointer;
 }
 
-.completion.selected {
-  color: var(--vscode-editorSuggestWidget-selectedForeground);
-  background: var(--vscode-editorSuggestWidget-selectedBackground);
+.code-file-reference {
+  margin: 0 2px;
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
 }
 
-.completion > span:first-child,
-.completion-detail,
-.method-name,
-.method-meta {
+.attachment-open {
+  min-width: 0;
+  height: 22px;
+  padding: 0 0 0 6px;
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.attachment-label {
+  min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 
-.completion-detail {
-  max-width: 96px;
-  color: var(--vscode-descriptionForeground);
-  font-size: 11px;
+.attachment-remove {
+  width: 23px;
+  height: 22px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
 }
 
-.signature {
-  min-height: 18px;
-  padding-top: 4px;
-  color: var(--vscode-descriptionForeground);
-  font-family: var(--vscode-editor-font-family);
-  font-size: 11px;
-  overflow-wrap: anywhere;
+.attachment-remove:hover {
+  background: var(--vscode-toolbar-hoverBackground);
 }
 
-.diagnostics > div,
+.composer-attach {
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.chat-composer.drop-active {
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: -2px;
+  background: var(--vscode-list-dropBackground);
+}
+
 .finding {
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr);
@@ -225,12 +349,10 @@ textarea::placeholder {
   overflow-wrap: anywhere;
 }
 
-.diagnostics .error,
 .finding.error {
   color: var(--vscode-errorForeground);
 }
 
-.diagnostics .warning,
 .finding.warning {
   color: var(--vscode-editorWarning-foreground);
 }
@@ -382,6 +504,13 @@ pre {
 .method-name {
   font-family: var(--vscode-editor-font-family);
   font-size: 12px;
+}
+
+.method-name,
+.method-meta {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .method-row > i {

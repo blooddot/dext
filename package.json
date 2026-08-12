@@ -13,7 +13,8 @@
     "Programming Languages"
   ],
   "activationEvents": [
-    "onView:dext.sidebar"
+    "onView:dext.sidebar",
+    "onCommand:dext.copySelectionWithContext"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -27,8 +28,69 @@
         "command": "dext.reloadMethods",
         "title": "Dext: Reload Methods",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "dext.triggerSuggest",
+        "title": "Dext: Trigger Suggestions",
+        "icon": "$(symbol-field)"
+      },
+      {
+        "command": "dext.triggerParameterHints",
+        "title": "Dext: Trigger Parameter Hints",
+        "icon": "$(symbol-parameter)"
+      },
+      {
+        "command": "dext.addSelectionToChat",
+        "title": "Dext: Add Selection to Chat",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "dext.copySelectionWithContext",
+        "title": "Dext: Copy Selection with Context",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "dext.addFileToChat",
+        "title": "Dext: Add File to Chat",
+        "icon": "$(files)"
       }
     ],
+    "keybindings": [
+      {
+        "command": "dext.copySelectionWithContext",
+        "key": "ctrl+c",
+        "mac": "cmd+c",
+        "when": "editorTextFocus && editorHasSelection && config.dext.captureSelectionOnCopy"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "dext.addSelectionToChat",
+          "when": "editorHasSelection",
+          "group": "dext@1"
+        },
+        {
+          "command": "dext.copySelectionWithContext",
+          "when": "editorHasSelection",
+          "group": "dext@2"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "dext.addFileToChat",
+          "when": "resourceScheme != untitled",
+          "group": "dext@1"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "dext.addFileToChat",
+          "when": "resourceScheme != untitled",
+          "group": "dext@1"
+        }
+      ]
+    },
     "viewsContainers": {
       "activitybar": [
         {
@@ -54,19 +116,25 @@
           "type": "string",
           "default": "",
           "description": "Optional absolute path to a trusted global methods JSON file."
+        },
+        "dext.captureSelectionOnCopy": {
+          "type": "boolean",
+          "default": true,
+          "description": "Capture editor selections as Dext context when copying with Ctrl+C or Cmd+C. The clipboard still receives the exact selected text. Disable this to use VS Code's native copy behavior."
         }
       }
     }
   },
   "scripts": {
     "build": "node esbuild.mjs",
+    "test:build-assets": "node scripts/assertWebviewAssets.mjs",
     "watch": "node esbuild.mjs --watch",
     "lint": "eslint src test",
     "test": "vitest run",
     "test:host": "npm run build && node scripts/runExtensionTest.mjs",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "check": "npm run lint && npm run typecheck && npm run test && npm run build",
+    "check": "npm run lint && npm run typecheck && npm run test && npm run build && npm run test:build-assets",
     "vscode:prepublish": "npm run check"
   },
   "dependencies": {
@@ -74,10 +142,15 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
-    "@vscode/codicons": "0.0.46-24",
+    "@codemirror/autocomplete": "^6.20.3",
+    "@codemirror/commands": "^6.10.4",
+    "@codemirror/lint": "^6.9.7",
+    "@codemirror/state": "^6.7.1",
+    "@codemirror/view": "^6.43.8",
     "@eslint/js": "9.39.1",
     "@types/node": "24.10.1",
     "@types/vscode": "1.105.0",
+    "@vscode/codicons": "0.0.46-24",
     "@vscode/test-electron": "3.1.0",
     "esbuild": "0.25.12",
     "eslint": "9.39.1",

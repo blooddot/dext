@@ -12,7 +12,9 @@ export interface CompletionItem {
   label: string;
   insertText: string;
   detail: string;
-  kind: "method" | "parameter" | "value" | "reference";
+  kind: "namespace" | "method" | "parameter" | "value" | "reference";
+  replaceStart: number;
+  replaceEnd: number;
 }
 
 export interface LanguageDiagnostic {
@@ -25,6 +27,14 @@ export interface SignatureHelp {
   label: string;
   documentation: string;
   activeParameter: number;
+  parameters: { label: string; documentation: string }[];
+}
+
+export interface LanguageHover {
+  rangeStart: number;
+  rangeEnd: number;
+  label: string;
+  documentation: string;
 }
 
 function isReference(value: InvocationValue): value is ContextReference {
@@ -56,6 +66,121 @@ function methodSignature(method: RegisteredCallable): string {
   return `${method.id}(${method.input.map(formatParameter).join(", ")}) -> ${method.output.kind}`;
 }
 
+function unclosedCallOffset(source: string): number | undefined {
+  let callOffset: number | undefined;
+  let depth = 0;
+  let quote: '"' | "'" | undefined;
+  let escaped = false;
+
+  for (let offset = 0; offset < source.length; offset += 1) {
+    const character = source[offset];
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+    } else if (character === "(") {
+      if (depth === 0) callOffset = offset;
+      depth += 1;
+    } else if (character === ")" && depth > 0) {
+      depth -= 1;
+      if (depth === 0) callOffset = undefined;
+    }
+  }
+
+  return depth > 0 ? callOffset : undefined;
+}
+
+function topLevelOffsets(source: string, target: "," | ":"): number[] {
+  const offsets: number[] = [];
+  let parentheses = 0;
+  let brackets = 0;
+  let quote: '"' | "'" | undefined;
+  let escaped = false;
+
+  for (let offset = 0; offset < source.length; offset += 1) {
+    const character = source[offset];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === quote) quote = undefined;
+      continue;
+    }
+    if (character === '"' || character === "'") quote = character;
+    else if (character === "(") parentheses += 1;
+    else if (character === ")" && parentheses > 0) parentheses -= 1;
+    else if (character === "[") brackets += 1;
+    else if (character === "]" && brackets > 0) brackets -= 1;
+    else if (character === target && parentheses === 0 && brackets === 0) offsets.push(offset);
+  }
+  return offsets;
+}
+
+function wordEnd(source: string, cursor: number, pattern: RegExp): number {
+  const suffix = pattern.exec(source.slice(cursor))?.[0] ?? "";
+  return cursor + suffix.length;
+}
+
+function methodPathCompletions(
+  methods: RegisteredCallable[],
+  typedPath: string,
+  replaceStart: number,
+  replaceEnd: number
+): CompletionItem[] {
+  const path = typedPath.split(".");
+  const fragment = path.pop() ?? "";
+  const namespaces = new Map<string, number>();
+  const completions: CompletionItem[] = [];
+
+  for (const method of methods) {
+    const segments = method.id.split(".");
+    if (
+      segments.length <= path.length ||
+      path.some((segment, index) => segments[index] !== segment)
+    ) {
+      continue;
+    }
+    const label = segments[path.length];
+    if (!label?.startsWith(fragment)) {
+      continue;
+    }
+    if (segments.length > path.length + 1) {
+      namespaces.set(label, (namespaces.get(label) ?? 0) + 1);
+    } else {
+      completions.push({
+        label,
+        insertText: `${label}(`,
+        detail: `${method.kind} method | ${method.description}`,
+        kind: "method",
+        replaceStart,
+        replaceEnd
+      });
+    }
+  }
+
+  for (const [label, count] of namespaces) {
+    completions.push({
+      label,
+      insertText: `${label}.`,
+      detail: `namespace | ${count} ${count === 1 ? "method" : "methods"}`,
+      kind: "namespace",
+      replaceStart,
+      replaceEnd
+    });
+  }
+
+  return completions.sort(
+    (left, right) => left.label.localeCompare(right.label) || left.kind.localeCompare(right.kind)
+  );
+}
+
 export class DextLanguageService {
   constructor(private readonly registry: MethodRegistry) {}
 
@@ -63,39 +188,47 @@ export class DextLanguageService {
     const prefix = source.slice(0, cursor);
     if (!prefix.includes("(")) {
       const typed = /[A-Za-z0-9_.]*$/.exec(prefix)?.[0] ?? "";
-      return this.registry
-        .list()
-        .filter((method) => method.id.startsWith(typed))
-        .map((method) => ({
-          label: method.id,
-          insertText: `${method.id}(`,
-          detail: `${method.kind} | ${method.description}`,
-          kind: "method"
-        }));
+      const fragment = typed.slice(typed.lastIndexOf(".") + 1);
+      return methodPathCompletions(
+        this.registry.list(),
+        typed,
+        cursor - fragment.length,
+        wordEnd(source, cursor, /^[A-Za-z0-9_]*/)
+      );
     }
 
-    const methodId = prefix.slice(0, prefix.indexOf("(")).trim();
+    const callOffset = unclosedCallOffset(prefix);
+    if (callOffset === undefined) {
+      return [];
+    }
+    const methodId = prefix.slice(0, callOffset).trim();
     const method = this.registry.get(methodId);
     if (!method) {
       return [];
     }
-    const body = prefix.slice(prefix.indexOf("(") + 1);
-    const segment = body.slice(body.lastIndexOf(",") + 1);
-    const colon = segment.indexOf(":");
+    const body = prefix.slice(callOffset + 1);
+    const commaOffsets = topLevelOffsets(body, ",");
+    const segmentOffset = (commaOffsets.at(-1) ?? -1) + 1;
+    const segment = body.slice(segmentOffset);
+    const colon = topLevelOffsets(segment, ":")[0] ?? -1;
     if (colon < 0) {
       const used = new Set(
-        [...body.matchAll(/(?:^|,)\s*([A-Za-z_][A-Za-z0-9_]*)\s*:/g)].map(
-          (match) => match[1]
-        )
+        [0, ...commaOffsets.map((offset) => offset + 1)]
+          .map((offset) => /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:/.exec(body.slice(offset))?.[1])
+          .filter((name): name is string => name !== undefined)
       );
       const typed = segment.trim();
+      const replaceStart = cursor - typed.length;
+      const replaceEnd = wordEnd(source, cursor, /^[A-Za-z0-9_]*/);
       return method.input
         .filter((field) => !used.has(field.name) && field.name.startsWith(typed))
         .map((field) => ({
           label: field.name,
           insertText: `${field.name}: `,
           detail: formatParameter(field),
-          kind: "parameter"
+          kind: "parameter",
+          replaceStart,
+          replaceEnd
         }));
     }
 
@@ -104,33 +237,71 @@ export class DextLanguageService {
     if (!field) {
       return [];
     }
+    const valueText = segment.slice(colon + 1);
+    const leadingWhitespace = /^\s*/.exec(valueText)?.[0].length ?? 0;
+    const value = valueText.slice(leadingWhitespace);
+    const trimmed = value.trim();
+    if (value !== value.trimEnd() && trimmed) {
+      return [];
+    }
+    const valueStart = callOffset + 1 + segmentOffset + colon + 1 + leadingWhitespace;
+    const replaceEnd = wordEnd(source, cursor, /^[A-Za-z0-9_]*/);
+
     if (field.type === "enum") {
-      return (field.values ?? []).map((value) => ({
-        label: value,
-        insertText: `"${value}"`,
+      if (/^"(?:[^"\\]|\\.)*"$/.test(trimmed) || (trimmed.startsWith('"') && trimmed.slice(1).includes('"'))) {
+        return [];
+      }
+      const fragment = trimmed.startsWith('"') ? trimmed.slice(1) : trimmed;
+      if (!/^[A-Za-z0-9_]*$/.test(fragment)) {
+        return [];
+      }
+      return (field.values ?? []).filter((option) => option.startsWith(fragment)).map((option) => ({
+        label: option,
+        insertText: `"${option}"`,
         detail: "enum value",
-        kind: "value"
+        kind: "value",
+        replaceStart: valueStart,
+        replaceEnd
       }));
     }
     if (field.type === "context") {
-      return [
-        ["@selection", "@selection"],
-        ["@activeFile", "@activeFile"],
-        ["@file", '@file("")'],
-        ["@symbol", '@symbol("")']
-      ].map(([label, insertText]) => ({
-        label: label ?? "",
-        insertText: insertText ?? "",
-        detail: "context reference",
-        kind: "reference" as const
-      }));
+      if (/^@(file|symbol)\s*\(/.test(trimmed)) {
+        return [];
+      }
+      const references = [
+        { label: "@selection", insertText: "@selection", terminal: true },
+        { label: "@activeFile", insertText: "@activeFile", terminal: true },
+        { label: "@file", insertText: '@file("")', terminal: false },
+        { label: "@symbol", insertText: '@symbol("")', terminal: false }
+      ];
+      if (references.some((reference) => reference.terminal && reference.label === trimmed)) {
+        return [];
+      }
+      if (trimmed && !/^@[A-Za-z]*$/.test(trimmed)) {
+        return [];
+      }
+      return references
+        .filter((reference) => reference.label.startsWith(trimmed))
+        .map((reference) => ({
+          label: reference.label,
+          insertText: reference.insertText,
+          detail: "context reference",
+          kind: "reference" as const,
+          replaceStart: valueStart,
+          replaceEnd
+        }));
     }
     if (field.type === "boolean") {
-      return ["true", "false"].map((value) => ({
-        label: value,
-        insertText: value,
+      if (trimmed === "true" || trimmed === "false" || !/^[A-Za-z]*$/.test(trimmed)) {
+        return [];
+      }
+      return ["true", "false"].filter((option) => option.startsWith(trimmed)).map((option) => ({
+        label: option,
+        insertText: option,
         detail: "boolean",
-        kind: "value" as const
+        kind: "value" as const,
+        replaceStart: valueStart,
+        replaceEnd
       }));
     }
     return [];
@@ -190,23 +361,66 @@ export class DextLanguageService {
     return diagnostics;
   }
 
-  signature(source: string, cursor = source.length): SignatureHelp | undefined {
+  hover(source: string, cursor: number): LanguageHover | undefined {
+    let wordStart = cursor;
+    let wordEndOffset = cursor;
+    while (wordStart > 0 && /[A-Za-z0-9_.]/.test(source[wordStart - 1] ?? "")) wordStart -= 1;
+    while (wordEndOffset < source.length && /[A-Za-z0-9_.]/.test(source[wordEndOffset] ?? "")) {
+      wordEndOffset += 1;
+    }
+    const word = source.slice(wordStart, wordEndOffset);
+    const method = this.registry.get(word);
+    if (method) {
+      return {
+        rangeStart: wordStart,
+        rangeEnd: wordEndOffset,
+        label: methodSignature(method),
+        documentation: method.description
+      };
+    }
+
     const open = source.indexOf("(");
-    if (open < 0 || cursor <= open) {
+    const invocationMethod = open >= 0 ? this.registry.get(source.slice(0, open).trim()) : undefined;
+    if (!invocationMethod || cursor <= open) {
       return undefined;
     }
-    const method = this.registry.get(source.slice(0, open).trim());
+    const parameterWord = /^[A-Za-z_][A-Za-z0-9_]*$/.test(word) ? word : "";
+    const field = invocationMethod.input.find((candidate) => candidate.name === parameterWord);
+    if (!field || source.slice(wordEndOffset).match(/^\s*:/) === null) {
+      return undefined;
+    }
+    const qualifiers = [field.required ? "Required." : "Optional."];
+    if (field.default !== undefined) qualifiers.push(`Default: ${String(field.default)}.`);
+    return {
+      rangeStart: wordStart,
+      rangeEnd: wordEndOffset,
+      label: formatParameter(field),
+      documentation: [field.description, ...qualifiers].filter(Boolean).join(" ")
+    };
+  }
+
+  signature(source: string, cursor = source.length): SignatureHelp | undefined {
+    const prefix = source.slice(0, cursor);
+    const open = unclosedCallOffset(prefix);
+    if (open === undefined || cursor <= open) {
+      return undefined;
+    }
+    const method = this.registry.get(prefix.slice(0, open).trim());
     if (!method) {
       return undefined;
     }
     const activeParameter = Math.min(
-      (source.slice(open + 1, cursor).match(/,/g) ?? []).length,
+      topLevelOffsets(prefix.slice(open + 1), ",").length,
       Math.max(0, method.input.length - 1)
     );
     return {
       label: methodSignature(method),
       documentation: method.description,
-      activeParameter
+      activeParameter,
+      parameters: method.input.map((field) => ({
+        label: formatParameter(field),
+        documentation: field.description ?? ""
+      }))
     };
   }
 }

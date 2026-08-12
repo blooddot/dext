@@ -7,7 +7,7 @@ import { parseInvocation } from "./core/dsl.js";
 import { DextLanguageService } from "./core/languageService.js";
 import { MethodRegistry } from "./core/registry.js";
 import { DextRuntime } from "./core/runtime.js";
-import type { RuntimeResponse } from "./core/types.js";
+import type { CodeRef, RuntimeResponse } from "./core/types.js";
 import type { SidebarState } from "./webviewProtocol.js";
 import { VsCodeContextHost } from "./vscodeContextHost.js";
 
@@ -87,7 +87,7 @@ export class DextApplication {
     return this.runtime.execute(parseInvocation(source));
   }
 
-  executeChat(message: string): Promise<RuntimeResponse> {
-    return this.runtime.execute(compileChat(message));
+  executeChat(message: string, attachments: readonly CodeRef[] = []): Promise<RuntimeResponse> {
+    return this.runtime.execute(compileChat(message), attachments);
   }
 }

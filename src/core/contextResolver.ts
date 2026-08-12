@@ -24,7 +24,7 @@ export interface ContextHost {
   symbol(name: string): Promise<TextSnapshot | undefined>;
 }
 
-function toCodeRef(snapshot: TextSnapshot): CodeRef {
+export function toCodeRef(snapshot: TextSnapshot): CodeRef {
   return {
     kind: "codeRef",
     uri: snapshot.uri,

@@ -6,6 +6,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const application = new DextApplication();
   await application.reload();
   const sidebar = new DextSidebarProvider(context.extensionUri, application);
+  const reportCommandError = async <T>(run: () => Promise<T>): Promise<T | undefined> => {
+    try {
+      return await run();
+    } catch (error) {
+      await vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+      return undefined;
+    }
+  };
+  const focusSidebar = async (): Promise<void> => {
+    await vscode.commands.executeCommand("dext.sidebar.focus");
+  };
 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(DextSidebarProvider.viewType, sidebar),
@@ -17,6 +28,31 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await application.reload();
       await sidebar.refresh();
     }),
+    vscode.commands.registerCommand("dext.triggerSuggest", async () => {
+      await focusSidebar();
+      sidebar.triggerSuggest();
+    }),
+    vscode.commands.registerCommand("dext.triggerParameterHints", async () => {
+      await focusSidebar();
+      sidebar.triggerParameterHints();
+    }),
+    vscode.commands.registerCommand("dext.addSelectionToChat", () =>
+      reportCommandError(async () => {
+        await sidebar.addSelectionToChat();
+        await focusSidebar();
+        sidebar.showChat();
+      })
+    ),
+    vscode.commands.registerCommand("dext.copySelectionWithContext", () =>
+      reportCommandError(() => sidebar.copySelectionWithContext())
+    ),
+    vscode.commands.registerCommand("dext.addFileToChat", (resource?: vscode.Uri) =>
+      reportCommandError(async () => {
+        await sidebar.addFileToChat(resource);
+        await focusSidebar();
+        sidebar.showChat();
+      })
+    ),
     vscode.workspace.onDidChangeConfiguration(async (event) => {
       if (event.affectsConfiguration("dext.globalMethodsFile")) {
         await application.reload();
@@ -37,7 +73,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   watcher.onDidCreate(reload);
   watcher.onDidChange(reload);
   watcher.onDidDelete(reload);
-  context.subscriptions.push(watcher);
+  context.subscriptions.push(watcher, sidebar);
 }
 
 export function deactivate(): void {}

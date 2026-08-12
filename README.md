@@ -12,6 +12,8 @@ This version is intentionally offline. It does not connect to a model, request c
 - Declarative project configuration at `.dext/methods.json`.
 - Workspace Trust gating for all external method configuration.
 - Immutable code references containing URI, range, document version, SHA-256 hash, and content.
+- Context-aware editor copy: Ctrl+C or Cmd+C keeps the exact clipboard text while staging the selected code for Code or Chat.
+- Inline Chat attachments from captured selections, workspace file picking, and Explorer drag-and-drop.
 - A stable Dext IR and Ax adapter that keeps Ax implementation classes out of configuration.
 - Independent renderers for `text`, `code`, `review`, `plan`, and `patch` results.
 
@@ -32,6 +34,7 @@ Supported values are strings, numbers, booleans, arrays, and these context refer
 @selection
 @activeFile
 @file("src/extension.ts")
+@file("src/extension.ts#L10,1-L18,8")
 @symbol("DextRuntime")
 ```
 
@@ -44,6 +47,8 @@ Chat text -- deterministic map --+
 ```
 
 Chat currently maps to `core.chat.respond(message: ...)`. Its compiler is isolated so a future intent compiler can replace it without changing the runtime contract.
+
+With `dext.captureSelectionOnCopy` enabled (the default), copying a nonempty editor selection also captures its source URI, range, version, hash, and content. Pasting that unchanged text into Dext Chat inserts a removable attachment token at the caret instead of duplicate source text. In Code mode the same paste inserts a readable `@file("path#Lstart,column-Lend,column")` reference; pasting inside an existing `@file("")` inserts only its payload. Files can also be attached at the Chat caret with the paperclip button or by dragging workspace files into the composer. Disable the setting to restore VS Code's native copy behavior for selections.
 
 ## Method configuration
 

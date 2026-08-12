@@ -6,6 +6,7 @@ import { ContextResolver, type ContextHost } from "../src/core/contextResolver.j
 import { parseInvocation } from "../src/core/dsl.js";
 import { MethodRegistry } from "../src/core/registry.js";
 import { DextRuntime } from "../src/core/runtime.js";
+import type { CodeRef } from "../src/core/types.js";
 
 const host: ContextHost = {
   selection: async () => ({ uri: "file:///x.ts", content: "const x = 1;", version: 1 }),
@@ -70,5 +71,32 @@ describe("Dext runtime", () => {
         focus: { enum: ["correctness", "maintainability", "security"] }
       }
     });
+  });
+
+  it("merges supplemental attachment context once and does not leak it across executions", async () => {
+    const registry = new MethodRegistry();
+    registry.registerMany(BUILTIN_METHODS, "builtin");
+    const inspecting = new DextRuntime(registry, new ContextResolver(host), undefined, {
+      chatRespond: ({ context }) => ({
+        kind: "text",
+        text: context.map((reference) => reference.content).join(",")
+      })
+    });
+    const attachment: CodeRef = {
+      kind: "codeRef",
+      uri: "file:///attachment.ts",
+      documentVersion: 1,
+      contentHash: "attachment-hash",
+      content: "attached"
+    };
+
+    const withAttachment = await inspecting.execute(
+      compileChat("ignored"),
+      [attachment, attachment]
+    );
+    const withoutAttachment = await inspecting.execute(compileChat("ignored"));
+
+    expect(withAttachment.result).toEqual({ kind: "text", text: "attached" });
+    expect(withoutAttachment.result).toEqual({ kind: "text", text: "" });
   });
 });
