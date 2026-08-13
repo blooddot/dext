@@ -108,7 +108,7 @@ chat(message="must not run")
 `, registry);
     const result = await new WorkflowRuntime(runtime).execute(compiled.program!);
     expect(result.steps).toEqual([
-      expect.objectContaining({ method: "terminal.run", state: "cancelled" }),
+      expect.objectContaining({ method: "terminal.run", state: "cancelled", error: "cancelled" }),
       expect.objectContaining({ method: "chat", state: "skipped" })
     ]);
   });

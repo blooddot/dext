@@ -39,3 +39,20 @@ for (const diagnosticStyle of [
     `Missing required diagnostic style '${diagnosticStyle}' from the Webview CSS.`
   );
 }
+assert.match(
+  mainStyles,
+  /\.cm-lint-marker-error[^{}]*\{[^}]*content:\s*none\s*!important[^}]*position:\s*relative/i,
+  "Diagnostic markers must clear CodeMirror's data-image replacement content."
+);
+assert.match(
+  mainStyles,
+  /\.cm-lint-marker-error::before[^{}]*\.cm-lint-marker-error::after\s*\{[^}]*content:\s*["']{2}/i,
+  "The error marker must render as CSS lines instead of a font glyph."
+);
+assert.match(mainStyles, /\.cm-lint-marker-error::before\s*\{[^}]*rotate\(45deg\)/i);
+assert.match(mainStyles, /\.cm-lint-marker-error::after\s*\{[^}]*rotate\(-45deg\)/i);
+assert.match(mainStyles, /\.cm-lint-marker-warning::before\s*\{[^}]*content:\s*["']!["']/i);
+assert.match(mainStyles, /\.cm-lint-marker-info::before\s*\{[^}]*content:\s*["']i["']/i);
+assert.match(mainStyles, /\.finding\s*\{[^}]*display:\s*block/);
+assert.match(mainStyles, /\.finding\.with-icon\s*\{[^}]*display:\s*grid/);
+assert.ok(mainBundle.includes("with-icon"), "Review findings must opt into the icon grid layout.");

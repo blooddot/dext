@@ -156,24 +156,56 @@ main {
 .code-editor .cm-lint-marker-error,
 .code-editor .cm-lint-marker-warning,
 .code-editor .cm-lint-marker-info {
-  width: 8px;
-  height: 8px;
-  margin: 4px 6px;
-  border-radius: 50%;
+  display: flex !important;
+  width: 18px;
+  height: 18px;
+  margin: 0 1px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0;
+  background-color: transparent !important;
   background-image: none !important;
+  content: none !important;
+  font-size: 0;
+  position: relative;
+}
+
+.code-editor .cm-lint-marker-warning::before,
+.code-editor .cm-lint-marker-info::before {
+  font-family: var(--vscode-editor-font-family);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.code-editor .cm-lint-marker-error::before,
+.code-editor .cm-lint-marker-error::after {
+  width: 10px;
+  height: 2px;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  border-radius: 1px;
+  background-color: var(--vscode-editorError-foreground);
   content: "";
 }
 
-.code-editor .cm-lint-marker-error {
-  background-color: var(--vscode-editorError-foreground);
+.code-editor .cm-lint-marker-error::before {
+  transform: translate(-50%, -50%) rotate(45deg);
 }
 
-.code-editor .cm-lint-marker-warning {
-  background-color: var(--vscode-editorWarning-foreground);
+.code-editor .cm-lint-marker-error::after {
+  transform: translate(-50%, -50%) rotate(-45deg);
 }
 
-.code-editor .cm-lint-marker-info {
-  background-color: var(--vscode-editorInfo-foreground);
+.code-editor .cm-lint-marker-warning::before {
+  color: var(--vscode-editorWarning-foreground);
+  content: "!";
+}
+
+.code-editor .cm-lint-marker-info::before {
+  color: var(--vscode-editorInfo-foreground);
+  content: "i";
 }
 
 .code-editor .cm-lintRange {
@@ -364,13 +396,16 @@ main {
 }
 
 .finding {
+  display: block;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.finding.with-icon {
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr);
   gap: 4px;
   align-items: start;
-  padding-top: 4px;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
 }
 
 .finding.error {

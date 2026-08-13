@@ -226,7 +226,7 @@ function renderExecution(response: RuntimeResponse): DocumentFragment {
     fragment.append(summary);
     for (const finding of result.findings) {
       const item = document.createElement("div");
-      item.className = `finding ${finding.severity}`;
+      item.className = `finding ${finding.severity} with-icon`;
       const icon = document.createElement("i");
       icon.className = `codicon codicon-${finding.severity}`;
       const content = document.createElement("span");
