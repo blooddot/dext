@@ -14,7 +14,8 @@
   ],
   "activationEvents": [
     "onView:dext.sidebar",
-    "onCommand:dext.copySelectionWithContext"
+    "onCommand:dext.copySelectionWithContext",
+    "onLanguage:dext-api"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -26,8 +27,29 @@
       },
       {
         "command": "dext.reloadMethods",
-        "title": "Dext: Reload Methods",
+        "title": "Dext: Reload APIs",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "dext.openWorkspaceTrust",
+        "title": "Dext: Manage Workspace Trust",
+        "icon": "$(shield)"
+      },
+      {
+        "command": "dext.workspaceTrustedStatus",
+        "title": "Dext: Workspace Trusted",
+        "icon": {
+          "light": "media/workspace-trusted.svg",
+          "dark": "media/workspace-trusted.svg"
+        }
+      },
+      {
+        "command": "dext.workspaceUntrustedStatus",
+        "title": "Dext: Workspace Untrusted",
+        "icon": {
+          "light": "media/workspace-untrusted.svg",
+          "dark": "media/workspace-untrusted.svg"
+        }
       },
       {
         "command": "dext.triggerSuggest",
@@ -53,9 +75,18 @@
         "command": "dext.addFileToChat",
         "title": "Dext: Add File to Dext Input",
         "icon": "$(files)"
+      },
+      {
+        "command": "dext.configureAgent",
+        "title": "Dext: Configure Agent CLI",
+        "icon": "$(settings-gear)"
       }
     ],
     "keybindings": [
+      {
+        "command": "dext.triggerSuggest",
+        "key": "alt+/"
+      },
       {
         "command": "dext.copySelectionWithContext",
         "key": "ctrl+c",
@@ -64,6 +95,16 @@
       }
     ],
     "menus": {
+      "commandPalette": [
+        {
+          "command": "dext.workspaceTrustedStatus",
+          "when": "false"
+        },
+        {
+          "command": "dext.workspaceUntrustedStatus",
+          "when": "false"
+        }
+      ],
       "editor/context": [
         {
           "command": "dext.addSelectionToChat",
@@ -89,6 +130,23 @@
           "when": "resourceScheme != untitled",
           "group": "dext@1"
         }
+      ],
+      "view/title": [
+        {
+          "command": "dext.workspaceTrustedStatus",
+          "when": "view == dext.sidebar && dext.workspaceTrusted",
+          "group": "navigation@0"
+        },
+        {
+          "command": "dext.workspaceUntrustedStatus",
+          "when": "view == dext.sidebar && !dext.workspaceTrusted",
+          "group": "navigation@0"
+        },
+        {
+          "command": "dext.reloadMethods",
+          "when": "view == dext.sidebar",
+          "group": "navigation@1"
+        }
       ]
     },
     "viewsContainers": {
@@ -104,19 +162,28 @@
       "dext": [
         {
           "id": "dext.sidebar",
-          "name": "Methods",
+          "name": "",
           "type": "webview"
         }
       ]
     },
+    "languages": [
+      {
+        "id": "dext-api",
+        "extensions": [".dx"],
+        "aliases": ["Dext API"]
+      }
+    ],
+    "grammars": [
+      {
+        "language": "dext-api",
+        "scopeName": "source.dext-api",
+        "path": "./syntaxes/dext-api.tmLanguage.json"
+      }
+    ],
     "configuration": {
       "title": "Dext",
       "properties": {
-        "dext.globalMethodsFile": {
-          "type": "string",
-          "default": "",
-          "description": "Optional absolute path to a trusted global methods JSON file."
-        },
         "dext.captureSelectionOnCopy": {
           "type": "boolean",
           "default": true,

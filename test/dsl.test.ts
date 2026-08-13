@@ -18,7 +18,7 @@ describe("Dext Python workflow compiler", () => {
 edit = code.edit(target=[ref.selection], instruction=analysis.text)
 review = code.review(target=edit.files, instruction=edit.summary)
 if review.status == "pass":
-    code.apply(patch=edit.patch)
+    code.apply(result=edit)
 `);
     expect(result.diagnostics).toEqual([]);
     expect(result.program?.statements).toHaveLength(4);
@@ -33,6 +33,23 @@ if review.status == "pass":
     const source = `chat(message="输入测试")
 result = code.explain(target=[ref.file("pathx.py#L65,1-L78,1")])`;
     expect(compile(source).diagnostics).toEqual([]);
+  });
+
+  it("accepts patch results as code review and explanation targets", () => {
+    const result = compile(`edit_result = code.edit(target=ref.selection, instruction="format")
+review_result = code.review(target=edit_result.patch)
+explanation = code.explain(target=edit_result.patch)
+`);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("accepts every Dext result through the shared Result input type", () => {
+    const result = compile(`chat_result = chat(message="hello")
+review_result = code.review(target=chat_result)
+explain_result = code.explain(target=review_result)
+applied = code.apply(result=review_result)
+`);
+    expect(result.diagnostics).toEqual([]);
   });
 
   it("reports syntax, type, and unknown API diagnostics", () => {

@@ -22,6 +22,7 @@ export interface WorkflowDiagnostic {
 export interface WorkflowCompileResult {
   program?: WorkflowProgram;
   diagnostics: WorkflowDiagnostic[];
+  returnType?: WorkflowValueType;
 }
 
 type ValueType =
@@ -29,10 +30,20 @@ type ValueType =
   | { kind: "number" }
   | { kind: "boolean" }
   | { kind: "context" }
-  | { kind: "patch" }
   | { kind: "list"; item: ValueType }
   | { kind: "result"; name: string; fields: Readonly<Record<string, ValueType>> }
   | { kind: "unknown" };
+
+export type WorkflowValueType = ValueType;
+
+export interface WorkflowCompileOptions {
+  allowReturn?: boolean;
+  allowNestedCalls?: boolean;
+  allowImports?: boolean;
+  aliases?: ReadonlyMap<string, string>;
+  initialVariables?: ReadonlyMap<string, WorkflowValueType>;
+  customApiIds?: ReadonlySet<string>;
+}
 
 interface EnvironmentEntry {
   type: ValueType;
@@ -47,7 +58,10 @@ const RESULT_TYPES: Readonly<Record<string, ValueType>> = {
   }),
   edit: result("EditResult", {
     summary: { kind: "string" },
-    patch: { kind: "patch" },
+    patch: result("PatchResult", {
+      title: { kind: "string" },
+      changes: { kind: "list", item: { kind: "unknown" } }
+    }),
     files: { kind: "list", item: { kind: "context" } }
   }),
   review: result("ReviewResult", {
@@ -76,7 +90,10 @@ const RESULT_TYPES: Readonly<Record<string, ValueType>> = {
   text: result("TextResult", { text: { kind: "string" } }),
   code: result("CodeResult", { code: { kind: "string" }, language: { kind: "string" } }),
   plan: result("PlanResult", {}),
-  patch: { kind: "patch" }
+  patch: result("PatchResult", {
+    title: { kind: "string" },
+    changes: { kind: "list", item: { kind: "unknown" } }
+  })
 };
 
 function result(name: string, fields: Readonly<Record<string, ValueType>>): ValueType {
@@ -116,14 +133,29 @@ function memberPath(source: string, node: SyntaxNode): string | undefined {
   return namedChildren(node).map((child) => text(source, child)).join(".");
 }
 
+function resolveAlias(path: string, aliases?: ReadonlyMap<string, string>): string {
+  const direct = aliases?.get(path);
+  if (direct) return direct;
+  const parts = path.split(".");
+  const head = aliases?.get(parts[0] ?? "");
+  return head ? [head, ...parts.slice(1)].join(".") : path;
+}
+
 class Compiler {
   private readonly diagnostics: WorkflowDiagnostic[] = [];
   private readonly environment = new Map<string, EnvironmentEntry>();
 
   constructor(
     private readonly source: string,
-    private readonly registry: MethodRegistry
-  ) {}
+    private readonly registry: MethodRegistry,
+    private readonly options: WorkflowCompileOptions = {}
+  ) {
+    if (options.initialVariables) {
+      for (const [name, type] of options.initialVariables) {
+        this.environment.set(name, { type, from: 0 });
+      }
+    }
+  }
 
   compile(): WorkflowCompileResult {
     if (!this.source.trim()) {
@@ -138,7 +170,8 @@ class Compiler {
     }
     return {
       program: { kind: "workflow", source: this.source, statements },
-      diagnostics: this.diagnostics
+      diagnostics: this.diagnostics,
+      ...(this.returnType ? { returnType: this.returnType } : {})
     };
   }
 
@@ -160,9 +193,33 @@ class Compiler {
   }
 
   private compileStatement(node: SyntaxNode): WorkflowStatement | undefined {
+    if (node.name === "ImportStatement") {
+      const raw = this.source.slice(node.from, node.to).trim();
+      if (!this.options.allowImports) {
+        this.error("Import is not allowed in this context.", node.from, node.to);
+      } else if (!this.validImport(raw)) {
+        this.error("Imported API is not defined.", node.from, node.to);
+      }
+      return undefined;
+    }
     if (node.name === "AssignStatement") return this.compileAssignment(node);
     if (node.name === "ExpressionStatement") return this.compileExpressionStatement(node);
     if (node.name === "IfStatement") return this.compileIf(node);
+    if (node.name === "ReturnStatement") {
+      if (!this.options.allowReturn) {
+        this.error("return is only allowed in a custom API main function.", node.from, node.to);
+        return undefined;
+      }
+      const expressionNode = namedChildren(node).at(-1);
+      const value = expressionNode ? this.compileExpression(expressionNode) : undefined;
+      if (!value) {
+        this.error("A custom API main function must return a value.", node.from, node.to);
+        return undefined;
+      }
+      this.returnExpression = value.expression;
+      this.returnType = value.type;
+      return undefined;
+    }
     this.error(
       `${node.name.replace(/Statement$/, "")} is not allowed in Dext workflows.`,
       node.from,
@@ -279,7 +336,8 @@ class Compiler {
     const parts = namedChildren(node);
     const callee = parts[0];
     const args = parts.find((child) => child.name === "ArgList");
-    const method = callee ? memberPath(this.source, callee) : undefined;
+    const rawMethod = callee ? memberPath(this.source, callee) : undefined;
+    const method = rawMethod ? resolveAlias(rawMethod, this.options.aliases) : undefined;
     if (!method || !args) {
       this.error("Invalid API call.", node.from, node.to);
       return undefined;
@@ -291,6 +349,15 @@ class Compiler {
     const definition = this.registry.get(method);
     if (!definition) {
       this.error(`Unknown Dext API '${method}'.`, callee?.from ?? node.from, callee?.to ?? node.to);
+      return undefined;
+    }
+    if (
+      definition.executor.kind === "custom"
+      && this.options.customApiIds?.has(method)
+      && !this.options.aliases?.has(rawMethod ?? "")
+      && !this.options.aliases?.has(rawMethod?.split(".")[0] ?? "")
+    ) {
+      this.error(`Custom API '${method}' must be imported before use.`, callee?.from ?? node.from, callee?.to ?? node.to);
       return undefined;
     }
     const values = this.compileArguments(args, definition);
@@ -414,6 +481,28 @@ class Compiler {
           : { kind: "symbol", name: value };
         return { expression: { kind: "reference", reference, from: node.from, to: node.to }, type: { kind: "context" } };
       }
+      if (this.options.allowNestedCalls && args) {
+        const method = path ? resolveAlias(path, this.options.aliases) : undefined;
+        const definition = method ? this.registry.get(method) : undefined;
+        if (!method || !definition) {
+          this.error(`Unknown Dext API '${path ?? ""}'.`, node.from, node.to);
+          return undefined;
+        }
+        if (
+          definition.executor.kind === "custom"
+          && this.options.customApiIds?.has(method)
+          && !this.options.aliases?.has(path ?? "")
+          && !this.options.aliases?.has(path?.split(".")[0] ?? "")
+        ) {
+          this.error(`Custom API '${method}' must be imported before use.`, node.from, node.to);
+          return undefined;
+        }
+        const values = this.compileArguments(args, definition);
+        return {
+          expression: { kind: "call", call: { kind: "call", method, arguments: values, from: node.from, to: node.to }, from: node.from, to: node.to },
+          type: RESULT_TYPES[definition.output.kind] ?? { kind: "unknown" }
+        };
+      }
       this.error("Nested calls are limited to ref.file(...) and ref.symbol(...).", node.from, node.to);
       return undefined;
     }
@@ -424,6 +513,16 @@ class Compiler {
   private error(message: string, from: number, to: number): void {
     this.diagnostics.push({ message, severity: "error", from, to: Math.max(from + 1, to) });
   }
+
+  private validImport(raw: string): boolean {
+    const match = /^(?:from\s+([A-Za-z_][A-Za-z0-9_.]*)\s+import\s+[A-Za-z_][A-Za-z0-9_]*|import\s+([A-Za-z_][A-Za-z0-9_.]*))/.exec(raw);
+    const imported = match?.[1] ?? match?.[2];
+    if (!imported || !this.options.customApiIds) return false;
+    return [...this.options.customApiIds].some((id) => id === imported || id.startsWith(`${imported}.`));
+  }
+
+  returnExpression: WorkflowExpression | undefined;
+  returnType: ValueType | undefined;
 }
 
 function fieldType(field: FieldDefinition): ValueType {
@@ -432,21 +531,23 @@ function fieldType(field: FieldDefinition): ValueType {
     ? { kind: "string", literals: field.values }
     : { kind: "string" };
   else if (field.type === "context") value = { kind: "context" };
-  else if (field.type === "patch") value = { kind: "patch" };
+  else if (field.type === "result") value = result("Result", {});
   else value = { kind: field.type };
   return field.multiple ? { kind: "list", item: value } : value;
 }
 
 function matchesField(actual: ValueType, field: FieldDefinition): boolean {
-  const expected = fieldType(field);
   if (actual.kind === "unknown") return true;
-  if (field.multiple && expected.kind === "list") {
-    return actual.kind === expected.item.kind
-      || (actual.kind === "list" && actual.item.kind === expected.item.kind);
-  }
-  if (actual.kind !== expected.kind) return false;
-  if (actual.kind === "list" && expected.kind === "list") return actual.item.kind === expected.item.kind;
-  return true;
+  return [field.type, ...(field.accepts ?? [])].some((type) => {
+    const expected = fieldType({ ...field, type, ...(field.accepts ? { accepts: [] } : {}) });
+    if (field.multiple && expected.kind === "list") {
+      return actual.kind === expected.item.kind
+        || (actual.kind === "list" && actual.item.kind === expected.item.kind);
+    }
+    return expected.kind === "result"
+      ? actual.kind === "result"
+      : actual.kind === expected.kind;
+  });
 }
 
 function typesOverlap(left: ValueType, right: ValueType): boolean {
@@ -477,7 +578,7 @@ function validateStringLiteralComparison(
 }
 
 function fieldTypeName(field: FieldDefinition): string {
-  return typeName(fieldType(field));
+  return [field.type, ...(field.accepts ?? [])].map((type) => typeName(fieldType({ ...field, type, ...(field.accepts ? { accepts: [] } : {}) }))).join(" | ");
 }
 
 function typeName(type: ValueType): string {
@@ -486,6 +587,31 @@ function typeName(type: ValueType): string {
   return type.kind;
 }
 
-export function compileWorkflow(source: string, registry: MethodRegistry): WorkflowCompileResult {
-  return new Compiler(source, registry).compile();
+export function compileWorkflow(
+  source: string,
+  registry: MethodRegistry,
+  options: WorkflowCompileOptions = {}
+): WorkflowCompileResult {
+  const compiler = new Compiler(source, registry, options);
+  const result = compiler.compile();
+  if (result.program && compiler.returnExpression) {
+    result.program.returnExpression = compiler.returnExpression;
+  }
+  if (compiler.returnType) result.returnType = compiler.returnType;
+  return result;
+}
+
+export function parseWorkflowImports(source: string): Map<string, string> {
+  const imports = new Map<string, string>();
+  for (const line of source.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    let match = /^from\s+([A-Za-z_][A-Za-z0-9_.]*)\s+import\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?$/.exec(trimmed);
+    if (match) {
+      imports.set(match[3] ?? match[2]!, `${match[1]}.${match[2]}`);
+      continue;
+    }
+    match = /^import\s+([A-Za-z_][A-Za-z0-9_.]*)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?$/.exec(trimmed);
+    if (match) imports.set(match[2] ?? match[1]!.split(".").at(-1)!, match[1]!);
+  }
+  return imports;
 }

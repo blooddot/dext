@@ -2,7 +2,7 @@
 
 Dext is a typed AI workflow editor for Visual Studio Code. Workflows use a deliberately small Python syntax, but Dext parses them as data and never starts or embeds a Python interpreter.
 
-This first version is offline and deterministic. It validates workflow structure, resolves immutable code references, and produces typed result previews. It does not contact a model or write workspace files.
+Without an Agent profile, Dext validates workflow structure, resolves immutable code references, and produces typed deterministic result previews. When a Codex or Claude CLI profile is selected, the same typed API contract is sent to that CLI and its structured output is validated before display.
 
 ## Workflow language
 
@@ -25,10 +25,10 @@ review = code.review(
 )
 
 if review.status == "pass":
-    applied = code.apply(patch=edit.patch)
+    applied = code.apply(result=edit)
 ```
 
-The restricted language supports assignment, keyword-only API calls, strings (including triple-quoted strings), numbers, booleans, homogeneous lists, result member access, comments, and `if`/`else` with `==` or `!=`. Imports, user functions/classes, loops, arbitrary calls, reassignment, `eval`, `exec`, and system/file/network APIs are rejected. Execution is sequential; unselected and downstream steps are reported as `skipped`.
+The input workflow language supports assignment, keyword-only API calls, strings (including triple-quoted strings), numbers, booleans, homogeneous lists, result member access, comments, and `if`/`else` with `==` or `!=`. `.dx` API files additionally support one typed `main()` function and explicit imports. User functions/classes, loops, reassignment, `eval`, `exec`, and system/file/network APIs are rejected. Execution is sequential; unselected and downstream steps are reported as `skipped`.
 
 ## Built-in API
 
@@ -40,41 +40,41 @@ The restricted language supports assignment, keyword-only API calls, strings (in
 - `terminal.run(command, cwd=".", timeout_ms=120000) -> TerminalResult`
 - `print(text, label?) -> PrintResult`
 
-Results are fixed, typed, and composable. For example, `ChatResult.text`, `EditResult.patch`, `EditResult.files`, and `ReviewResult.status` can feed later steps. `ReviewStatus` is the string union `"pass" | "warning" | "fail"`.
+Every API output implements the shared `Result` contract. `code.review` and `code.explain` accept either code context or any prior `Result`; `code.apply(result=...)` accepts a `Result` and applies it when that result contains a patch. Agent CLIs receive prior results as versioned `dext-result` JSON envelopes instead of interpolated strings. Result variables and fields such as `edit_result: EditResult` and `edit_result.patch: PatchResult` are available to completion and hover. `ReviewStatus` is the string union `"pass" | "warning" | "fail"`.
 
 `terminal.run` is available only in a trusted local `file` workspace. Its `cwd` must stay inside the workspace, every command requires a VS Code modal confirmation, the timeout is capped at 10 minutes, and captured output is bounded. It returns `TerminalStatus = "succeeded" | "failed" | "timed_out"`; a nonzero exit code is a typed failed result, while rejecting the confirmation cancels that workflow step and skips downstream steps.
 
 `print` renders its typed text result only in Dext Output and never writes to the integrated terminal.
 
-Context values are `ref.selection`, `ref.active_file`, `ref.file("path")`, and `ref.symbol("name")`. Copying a VS Code selection, choosing a file, or dropping one into Dext inserts an atomic `ref.file("path#Lstart,column-Lend,column")` chip. The chip can be removed atomically, participates in undo/redo, and opens the referenced file and range when clicked.
+Context values are `ref.selection`, `ref.active_file`, `ref.file("path")`, and `ref.symbol("name")`:
+
+- `ref.selection` resolves the current selection in the active editor.
+- `ref.active_file` resolves the complete active editor file.
+- `ref.file("path")` resolves a workspace file or an optional line/column range.
+- `ref.symbol("name")` asks VS Code's workspace symbol provider for a declaration and its source range.
+
+Copying a VS Code selection, choosing a file, or dropping one into Dext inserts an atomic `ref.file("path#Lstart,column-Lend,column")` chip. The chip can be removed atomically, participates in undo/redo, and opens the referenced file and range when clicked.
 
 The editor uses CodeMirror's Python grammar for syntax highlighting, indentation, bracket matching, and native editor behavior. Dext adds API completion, keyword and result-field completion, signature help, hover documentation, exact compiler diagnostics, and a lint gutter.
 
 ## Method configuration
 
-Project methods live in `.dext/methods.json`; a trusted global file can be selected with `dext.globalMethodsFile`. IDs use Python-compatible dotted identifiers and appear as callable workflow APIs.
+Custom APIs live in `.dext/api/**/*.dx`. Directory segments become namespaces and each file exports one API through `main()`.
 
-```json
-{
-  "version": 1,
-  "methods": [
-    {
-      "id": "project.task.plan",
-      "title": "Plan Project Task",
-      "description": "Build a deterministic plan preview.",
-      "kind": "command",
-      "version": "1.0.0",
-      "input": [
-        { "name": "goal", "type": "string", "required": true }
-      ],
-      "output": { "kind": "plan" },
-      "executor": { "kind": "deterministic", "handler": "outlinePlan" }
-    }
-  ]
-}
+```python
+# .dext/api/team/review.dx -> team.review
+from common import explain
+
+def main(target: Context) -> ReviewResult:
+    analysis = explain(target=target)
+    return code.review(target=target, instruction=analysis.text)
 ```
 
-Configuration cannot contain JavaScript, Python, or shell code. External files are not read until VS Code marks the workspace as trusted, and `ref.file` cannot escape the workspace root.
+`.dx` uses a restricted Python-like syntax. It is parsed by Dext and never starts a Python interpreter. Imports are explicit and only refer to other `.dext/api` files; external files are not read until VS Code marks the workspace as trusted.
+
+Agent profiles are stored in VS Code extension global storage. The Run row exposes Agent, Model, Reasoning, and Speed selectors. Codex profiles read the local Codex model cache when available, including supported reasoning levels and speed tiers, and pass the selected values to the CLI. A `.dx` file may override the Agent and Model with `@api(agent="codex", model="...")`; otherwise the Run selection is used. `Dext: Configure Agent CLI` edits executable commands and custom model labels without handling credentials.
+
+Built-in APIs are always available. Custom APIs are scoped by explicit `import` or `from ... import ...` statements; completion, hover, signatures, and compilation use the same import scope.
 
 ## Architecture
 
@@ -84,6 +84,8 @@ Configuration cannot contain JavaScript, Python, or shell code. External files a
 - `src/core/contextResolver.ts`: immutable context snapshots.
 - `src/core/axAdapter.ts`: Ax/Zod/JSON Schema contract boundary.
 - `src/core/runtime.ts`: deterministic executor allowlist.
+- `src/core/customApi.ts`: `.dext/api` loader, imports, signatures, and custom plans.
+- `src/core/agentRunner.ts`: structured Codex/Claude CLI adapter boundary.
 - `src/webview/codeEditor.ts`: CodeMirror Python language integration.
 
 ## Development

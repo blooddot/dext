@@ -4,8 +4,7 @@ import type { ResolvedInvocation } from "../src/core/types.js";
 import type { DeterministicHandler } from "../src/core/runtime.js";
 
 const vscodeState = vi.hoisted(() => ({
-  trusted: true,
-  confirmation: "Run" as string | undefined
+  trusted: true
 }));
 
 vi.mock("vscode", () => ({
@@ -15,9 +14,7 @@ vi.mock("vscode", () => ({
       return [{ uri: { scheme: "file", fsPath: process.cwd() } }];
     }
   },
-  window: {
-    showWarningMessage: vi.fn(async () => vscodeState.confirmation)
-  }
+  window: {}
 }));
 
 let terminalRunHandler: DeterministicHandler;
@@ -48,7 +45,6 @@ describe("VS Code terminal host", () => {
   });
   beforeEach(() => {
     vscodeState.trusted = true;
-    vscodeState.confirmation = "Run";
   });
 
   it("requires a trusted workspace and rejects cwd traversal", async () => {
@@ -58,12 +54,6 @@ describe("VS Code terminal host", () => {
     vscodeState.trusted = true;
     await expect(terminalRunHandler(invocation({ command: "node --version", cwd: ".." })))
       .rejects.toThrow("inside the current workspace");
-  });
-
-  it("maps modal rejection to the dedicated cancellation error", async () => {
-    vscodeState.confirmation = undefined;
-    await expect(terminalRunHandler(invocation({ command: "node --version" })))
-      .rejects.toMatchObject({ name: "ExecutionCancelledError" });
   });
 
   it("runs through the platform shell and returns a fixed result", async () => {

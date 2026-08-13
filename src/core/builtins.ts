@@ -20,11 +20,11 @@ export const BUILTIN_METHODS: readonly CallableDefinition[] = [
   {
     id: "code.explain",
     title: "Explain Code",
-    description: "Resolve code references and return an honest deterministic explanation shell.",
+    description: "Explain the supplied code or prior Dext result according to the requested focus.",
     kind: "command",
     version: "1.0.0",
     input: [
-      { name: "target", type: "context", required: true, multiple: true, description: "Code to explain." },
+      { name: "target", type: "context", accepts: ["result"], required: true, multiple: true, description: "Code or Dext result to explain." },
       { name: "instruction", type: "string", description: "Explanation focus." }
     ],
     output: { kind: "explain" },
@@ -34,14 +34,17 @@ export const BUILTIN_METHODS: readonly CallableDefinition[] = [
   {
     id: "code.edit",
     title: "Edit Code",
-    description: "Produce a typed no-op edit preview until a model adapter is connected.",
+    description: "Produce a concrete, preview-only code edit with exact before and after content for every changed file.",
     kind: "command",
     version: "1.0.0",
     input: [
       { name: "target", type: "context", required: true, multiple: true, description: "Code to edit." },
       { name: "instruction", type: "string", required: true, description: "Requested edit." }
     ],
-    output: { kind: "edit" },
+    output: {
+      kind: "edit",
+      description: "A concrete edit proposal. Each patch change keeps the exact original content in before and the complete proposed replacement in after."
+    },
     context: [...CONTEXTS],
     executor: { kind: "deterministic", handler: "editCode" }
   },
@@ -52,7 +55,7 @@ export const BUILTIN_METHODS: readonly CallableDefinition[] = [
     kind: "command",
     version: "1.0.0",
     input: [
-      { name: "target", type: "context", required: true, multiple: true, description: "Code to review." },
+      { name: "target", type: "context", accepts: ["result"], required: true, multiple: true, description: "Code or Dext result to review." },
       { name: "instruction", type: "string", description: "Review focus." }
     ],
     output: { kind: "review" },
@@ -62,10 +65,10 @@ export const BUILTIN_METHODS: readonly CallableDefinition[] = [
   {
     id: "code.apply",
     title: "Apply Patch",
-    description: "Validate a typed patch result. First version reports no-op patches without writing files.",
+    description: "Validate and apply a typed edit result to the current trusted workspace.",
     kind: "command",
     version: "1.0.0",
-    input: [{ name: "patch", type: "patch", required: true, description: "Patch produced by code.edit." }],
+    input: [{ name: "result", type: "result", required: true, description: "A Dext result containing an applicable patch, usually an EditResult." }],
     output: { kind: "apply" },
     executor: { kind: "deterministic", handler: "applyPatch" }
   },

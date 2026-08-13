@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 interface PackageManifest {
   activationEvents?: string[];
   contributes?: {
+    menus?: Record<string, Array<{ command?: string; when?: string; group?: string }>>;
     keybindings?: Array<{ command?: string; key?: string; mac?: string; when?: string }>;
     configuration?: {
       properties?: Record<string, { type?: string; default?: unknown; description?: string }>;
@@ -33,5 +34,24 @@ describe("Dext package manifest", () => {
     expect(setting).toMatchObject({ type: "boolean", default: true });
     expect(setting?.description).toContain("exact selected text");
     expect(setting?.description).toContain("native copy behavior");
+  });
+
+  it("shows workspace trust status beside the API refresh view action", async () => {
+    const actions = (await manifest()).contributes?.menus?.["view/title"] ?? [];
+    expect(actions).toContainEqual({
+      command: "dext.workspaceTrustedStatus",
+      when: "view == dext.sidebar && dext.workspaceTrusted",
+      group: "navigation@0"
+    });
+    expect(actions).toContainEqual({
+      command: "dext.workspaceUntrustedStatus",
+      when: "view == dext.sidebar && !dext.workspaceTrusted",
+      group: "navigation@0"
+    });
+    expect(actions).toContainEqual({
+      command: "dext.reloadMethods",
+      when: "view == dext.sidebar",
+      group: "navigation@1"
+    });
   });
 });

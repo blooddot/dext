@@ -7,7 +7,7 @@ import { DextRuntime } from "../src/core/runtime.js";
 import { compileWorkflow } from "../src/core/workflow.js";
 import { WorkflowRuntime } from "../src/core/workflowRuntime.js";
 import { ExecutionCancelledError } from "../src/core/executionErrors.js";
-import type { TerminalResult } from "../src/core/types.js";
+import type { PatchResult, TerminalResult } from "../src/core/types.js";
 
 const host: ContextHost = {
   selection: async () => ({ uri: "file:///x.ts", content: "const x = 1;", version: 1 }),
@@ -40,7 +40,7 @@ review = code.review(target=edit.files, instruction=edit.summary)
     const { registry, workflow } = setup();
     const compiled = compileWorkflow(`review = code.review(target=[ref.selection])
 if review.status == "pass":
-    code.apply(patch=edit.patch)
+    code.apply(result=edit)
 else:
     chat(message="review needs attention")
 `, registry);
@@ -60,13 +60,39 @@ else:
     const method = BUILTIN_METHODS.find((candidate) => candidate.id === "code.review")!;
     const contract = new AxAdapter().compile(method);
     expect(contract.outputJsonSchema).toMatchObject({ type: "object", properties: { status: expect.any(Object) } });
+    const explain = new AxAdapter().compile(BUILTIN_METHODS.find((candidate) => candidate.id === "code.explain")!);
+    expect(explain.outputJsonSchema).toMatchObject({
+      properties: { files: { type: "array", items: { type: "object" } } }
+    });
   });
 
   it("does not write files when applying a no-op deterministic patch", async () => {
     const { registry, workflow } = setup();
     const compiled = compileWorkflow(`edit = code.edit(target=[ref.selection], instruction="format")
-applied = code.apply(patch=edit.patch)
+applied = code.apply(result=edit)
 `, registry);
+    const result = await workflow.execute(compiled.program!);
+    expect(result.executions.at(-1)?.result).toMatchObject({ kind: "apply", status: "unchanged" });
+  });
+
+  it("serializes non-code results as explain/review context", async () => {
+    const { registry, workflow } = setup();
+    const compiled = compileWorkflow(`chat_result = chat(message="hello")
+review_result = code.review(target=chat_result)
+explain_result = code.explain(target=review_result)
+`, registry);
+    expect(compiled.diagnostics).toEqual([]);
+    const result = await workflow.execute(compiled.program!);
+    expect(result.steps?.map((step) => step.state)).toEqual(["success", "success", "success"]);
+    expect(result.executions.at(-1)?.result).toMatchObject({ kind: "explain", files: [{ uri: "dext-result://review/0" }] });
+  });
+
+  it("accepts an EditResult itself when applying its nested patch", async () => {
+    const { registry, workflow } = setup();
+    const compiled = compileWorkflow(`edit_result = code.edit(target=ref.selection, instruction="format")
+applied = code.apply(result=edit_result)
+`, registry);
+    expect(compiled.diagnostics).toEqual([]);
     const result = await workflow.execute(compiled.program!);
     expect(result.executions.at(-1)?.result).toMatchObject({ kind: "apply", status: "unchanged" });
   });
@@ -136,5 +162,153 @@ chat(message=printed.text)`, registry);
       additionalProperties: false,
       properties: { label: { type: "string" } }
     });
+  });
+
+  it("routes selected API calls through the configured agent runner", async () => {
+    const registry = new MethodRegistry();
+    registry.registerMany(BUILTIN_METHODS, "builtin");
+    const runtime = new DextRuntime(registry, new ContextResolver(host));
+    runtime.setAgentProfiles([{
+      id: "test-agent",
+      label: "Test Agent",
+      provider: "codex",
+      command: "test-agent",
+      models: ["test-model"]
+    }]);
+    runtime.setAgentSelection({ profileId: "test-agent", model: "test-model" });
+    let receivedModel: string | undefined;
+    runtime.setAgentRunner({
+      run: async (request) => {
+        receivedModel = request.model;
+        return { kind: "chat", text: "agent response" };
+      }
+    });
+    const response = await runtime.execute({
+      kind: "invocation",
+      method: "chat",
+      source: "code",
+      arguments: [{ name: "message", value: "hello" }]
+    });
+    expect(receivedModel).toBe("test-model");
+    expect(response.result).toEqual({ kind: "chat", text: "agent response" });
+  });
+
+  it("maps isolated Agent edit previews back to the original code reference", async () => {
+    const registry = new MethodRegistry();
+    registry.registerMany(BUILTIN_METHODS, "builtin");
+    const runtime = new DextRuntime(registry, new ContextResolver(host));
+    runtime.setAgentProfiles([{
+      id: "test-agent",
+      label: "Test Agent",
+      provider: "codex",
+      command: "test-agent",
+      models: ["test-model"]
+    }]);
+    runtime.setAgentSelection({ profileId: "test-agent" });
+    runtime.setAgentRunner({
+      run: async () => ({
+        kind: "edit",
+        summary: "Preview",
+        patch: {
+          kind: "patch",
+          title: "Edit",
+          changes: [{ uri: "target-1/x.ts", before: "const x = 1;", after: "const x = 2;" }]
+        },
+        files: []
+      })
+    });
+
+    const response = await runtime.execute({
+      kind: "invocation",
+      method: "code.edit",
+      source: "code",
+      arguments: [
+        { name: "target", value: { kind: "selection" } },
+        { name: "instruction", value: "increment" }
+      ]
+    });
+    expect(response.result).toMatchObject({
+      kind: "edit",
+      files: [{ uri: "file:///x.ts", documentVersion: 1 }],
+      patch: {
+        changes: [{
+          uri: "file:///x.ts",
+          before: "const x = 1;",
+          after: "const x = 2;",
+          documentVersion: 1
+        }]
+      }
+    });
+  });
+
+  it("keeps terminal.run local when an Agent CLI is selected", async () => {
+    const registry = new MethodRegistry();
+    registry.registerMany(BUILTIN_METHODS, "builtin");
+    const terminalResult: TerminalResult = {
+      kind: "terminal",
+      status: "succeeded",
+      command: "echo local",
+      cwd: ".",
+      exit_code: 0,
+      stdout: "local",
+      stderr: "",
+      duration_ms: 1
+    };
+    const runtime = new DextRuntime(registry, new ContextResolver(host), undefined, {
+      terminalRun: () => terminalResult
+    });
+    runtime.setAgentProfiles([{
+      id: "test-agent",
+      label: "Test Agent",
+      provider: "codex",
+      command: "test-agent",
+      models: ["test-model"]
+    }]);
+    runtime.setAgentSelection({ profileId: "test-agent", model: "test-model" });
+    runtime.setAgentRunner({
+      run: async () => { throw new Error("terminal.run must not invoke the Agent CLI"); }
+    });
+
+    const response = await runtime.execute({
+      kind: "invocation",
+      method: "terminal.run",
+      source: "code",
+      arguments: [{ name: "command", value: "echo local" }]
+    });
+    expect(response.result).toEqual(terminalResult);
+  });
+
+  it("keeps apply and print local when an Agent CLI is selected", async () => {
+    const { runtime } = setup();
+    runtime.setAgentProfiles([{
+      id: "test-agent",
+      label: "Test Agent",
+      provider: "codex",
+      command: "test-agent",
+      models: ["test-model"]
+    }]);
+    runtime.setAgentSelection({ profileId: "test-agent", model: "test-model" });
+    runtime.setAgentRunner({
+      run: async () => { throw new Error("local APIs must not invoke the Agent CLI"); }
+    });
+
+    const printed = await runtime.execute({
+      kind: "invocation",
+      method: "print",
+      source: "code",
+      arguments: [{ name: "text", value: "local" }]
+    });
+    expect(printed.result).toEqual({ kind: "print", text: "local" });
+
+    const applied = await runtime.execute({
+      kind: "invocation",
+      method: "code.apply",
+      source: "code",
+      arguments: [{
+        name: "result",
+        value: { kind: "patch", title: "No changes", changes: [] } as PatchResult
+      }]
+    });
+    expect(applied.result).toMatchObject({ kind: "apply", status: "unchanged" });
   });
 });

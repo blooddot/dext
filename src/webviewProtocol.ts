@@ -5,7 +5,8 @@ import type {
   LanguageDiagnostic,
   SignatureHelp
 } from "./core/languageService.js";
-import type { InputExecutionResponse, RegisteredCallable } from "./core/types.js";
+import type { AgentStreamEvent, InputExecutionResponse, RegisteredCallable } from "./core/types.js";
+import type { AgentProfile, AgentSelection } from "./agentProfiles.js";
 import type { EditorTokenTheme } from "./vscodeTheme.js";
 
 export const webviewRequestSchema = z.discriminatedUnion("type", [
@@ -36,19 +37,31 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
     ])).max(8)
   }),
   z.object({ type: z.literal("chooseFiles") }),
-  z.object({ type: z.literal("reload") })
+  z.object({ type: z.literal("reload") }),
+  z.object({ type: z.literal("viewHistory") }),
+  z.object({
+    type: z.literal("agentSelection"),
+    selection: z.object({
+      profileId: z.string(),
+      model: z.string(),
+      reasoningEffort: z.string(),
+      speed: z.string(),
+      serviceTier: z.string()
+    }).strict()
+  })
 ]);
 
 export type WebviewRequest = z.infer<typeof webviewRequestSchema>;
 
 export interface SidebarState {
-  trusted: boolean;
   theme?: EditorTokenTheme;
   methods: Pick<
     RegisteredCallable,
     "id" | "title" | "description" | "kind" | "source" | "input" | "output"
   >[];
   diagnostics: string[];
+  agentProfiles: AgentProfile[];
+  agentSelection: AgentSelection;
 }
 
 export type WebviewResponse =
@@ -63,6 +76,7 @@ export type WebviewResponse =
       hover?: LanguageHover;
     }
   | { type: "execution"; response: InputExecutionResponse }
+  | { type: "agentEvent"; event: AgentStreamEvent }
   | { type: "executing"; value: boolean }
   | { type: "inputKind"; kind: "empty" | "workflow" | "invalid" }
   | { type: "insertFileReferences"; expressions: string[] }

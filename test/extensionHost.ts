@@ -12,6 +12,9 @@ export async function run(): Promise<void> {
   const commands = await vscode.commands.getCommands(true);
   assert.ok(commands.includes("dext.focus"), "Focus command is registered.");
   assert.ok(commands.includes("dext.reloadMethods"), "Reload command is registered.");
+  assert.ok(commands.includes("dext.openWorkspaceTrust"), "Workspace Trust command is registered.");
+  assert.ok(commands.includes("dext.workspaceTrustedStatus"), "Trusted workspace title action is registered.");
+  assert.ok(commands.includes("dext.workspaceUntrustedStatus"), "Untrusted workspace title action is registered.");
   assert.ok(commands.includes("dext.triggerSuggest"), "Suggest command is registered.");
   assert.ok(commands.includes("dext.triggerParameterHints"), "Parameter hints command is registered.");
   assert.ok(commands.includes("dext.addSelectionToChat"), "Selection attachment command is registered.");

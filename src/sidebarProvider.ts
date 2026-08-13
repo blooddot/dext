@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import * as vscode from "vscode";
 import type { DextApplication } from "./application.js";
+import type { AgentStreamEvent } from "./core/types.js";
 import {
   AttachmentStore,
   writeExactClipboardText
@@ -15,6 +16,7 @@ import { ReadyMessageQueue } from "./readyMessageQueue.js";
 import { openWorkspaceFileReference } from "./vscodeContextHost.js";
 import { webviewRequestSchema } from "./webviewProtocol.js";
 import type { WebviewResponse } from "./webviewProtocol.js";
+import type { DextHistoryStore } from "./historyStore.js";
 
 export class DextSidebarProvider implements vscode.WebviewViewProvider {
   static readonly viewType = "dext.sidebar";
@@ -24,7 +26,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
 
   constructor(
     private readonly extensionUri: vscode.Uri,
-    private readonly application: DextApplication
+    private readonly application: DextApplication,
+    private readonly history: DextHistoryStore,
+    private readonly onViewHistory: () => void
   ) {}
 
   resolveWebviewView(view: vscode.WebviewView): void {
@@ -132,7 +136,20 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           break;
         }
         case "executeInput":
-          await this.run(() => this.application.executeInput(request.source));
+          await this.run(request.source);
+          break;
+        case "viewHistory":
+          this.onViewHistory();
+          break;
+        case "agentSelection":
+          this.application.setAgentSelection({
+            ...(request.selection.profileId ? { profileId: request.selection.profileId } : {}),
+            ...(request.selection.model ? { model: request.selection.model } : {}),
+            ...(request.selection.reasoningEffort ? { reasoningEffort: request.selection.reasoningEffort } : {}),
+            ...(request.selection.speed ? { speed: request.selection.speed } : {}),
+            ...(request.selection.serviceTier ? { serviceTier: request.selection.serviceTier } : {})
+          });
+          await this.refresh();
           break;
         case "openFileReference":
           await openWorkspaceFileReference(request.reference);
@@ -229,13 +246,28 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async run(execute: () => Promise<Awaited<ReturnType<DextApplication["executeInput"]>>>): Promise<void> {
+  private async run(source: string): Promise<void> {
+    const events: AgentStreamEvent[] = [];
     await this.post({ type: "executing", value: true });
     try {
-      await this.post({ type: "execution", response: await execute() });
+      const response = await this.application.executeInput(source, {
+        onAgentEvent: (event) => {
+          events.push({ ...event });
+          this.postAgentEvent(event);
+        }
+      });
+      await this.history.addSuccess(source, events, response);
+      await this.post({ type: "execution", response });
+    } catch (error) {
+      await this.history.addFailure(source, events, error);
+      throw error;
     } finally {
       await this.post({ type: "executing", value: false });
     }
+  }
+
+  private postAgentEvent(event: AgentStreamEvent): void {
+    this.postWhenReady({ type: "agentEvent", event });
   }
 
   private async post(message: WebviewResponse): Promise<void> {
@@ -282,39 +314,51 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   <title>Dext</title>
 </head>
 <body>
-  <header class="toolbar">
-    <strong>Dext</strong>
-    <div class="toolbar-actions">
-      <span id="trust-status" class="status-dot" title="Workspace trust"></span>
-      <button id="reload" class="icon-button" type="button" title="Reload methods" aria-label="Reload methods"><i class="codicon codicon-refresh"></i></button>
-    </div>
-  </header>
-
-  <main>
+  <div class="app-shell">
+    <main>
     <section id="input-shell" class="input-panel unified-input">
       <div id="code-editor" class="code-editor" aria-label="Dext input"></div>
       <button id="attach-files" class="composer-attach icon-button" type="button" title="Attach workspace files" aria-label="Attach workspace files"><i class="codicon codicon-attach"></i></button>
     </section>
 
     <div class="action-row">
-      <button id="run" class="primary" type="button"><i class="codicon codicon-run"></i><span id="run-label">Send</span></button>
-      <button id="problems" class="problems-status" type="button" disabled>No problems</button>
+      <div class="agent-controls">
+        <select id="agent-profile" aria-label="Agent"></select>
+        <select id="agent-model" aria-label="Model"></select>
+        <select id="agent-reasoning" aria-label="Reasoning"></select>
+        <select id="agent-speed" aria-label="Speed"></select>
+      </div>
+      <div class="action-actions">
+        <button id="problems" class="problems-status" type="button" disabled>No problems</button>
+        <button id="run" class="primary" type="button"><i class="codicon codicon-run"></i><span id="run-label">Send</span></button>
+      </div>
     </div>
 
-    <section id="result-section" class="result-section hidden" aria-live="polite">
-      <div class="section-heading">
-        <span>Output</span>
-        <button id="clear-output" class="icon-button" type="button" title="Clear output" aria-label="Clear output"><i class="codicon codicon-close"></i></button>
+    <section id="result-section" class="result-section" aria-live="polite">
+      <div id="result-heading" class="section-heading collapsible-heading" role="button" tabindex="0" aria-expanded="true">
+        <span class="section-heading-label"><i class="section-chevron codicon codicon-chevron-down"></i><span>Output</span></span>
+        <div class="section-heading-actions">
+          <button id="view-history" class="icon-button" type="button" title="View Dext history" aria-label="View Dext history"><i class="codicon codicon-history"></i></button>
+          <button id="clear-output" class="icon-button" type="button" title="Clear output" aria-label="Clear output"><i class="codicon codicon-eraser"></i></button>
+        </div>
       </div>
-      <div id="result"></div>
+      <div id="result-body" class="collapsible-body result-body"><div id="result"></div></div>
     </section>
 
     <section class="methods-section">
-      <div class="section-heading"><span>Methods</span><span id="method-count" class="count"></span></div>
-      <div id="config-errors" class="config-errors"></div>
-      <div id="methods"></div>
+      <div id="methods-heading" class="section-heading collapsible-heading" role="button" tabindex="0" aria-expanded="true">
+        <span class="section-heading-label"><i class="section-chevron codicon codicon-chevron-down"></i><span>API <span id="method-count" class="count"></span></span></span>
+        <div class="section-heading-actions">
+          <button id="methods-toggle" class="icon-button compact" type="button" title="Collapse API namespaces" aria-label="Collapse API namespaces"><i class="codicon codicon-collapse-all"></i></button>
+        </div>
+      </div>
+      <div id="methods-body" class="collapsible-body">
+        <div id="config-errors" class="config-errors"></div>
+        <div id="methods"></div>
+      </div>
     </section>
-  </main>
+    </main>
+  </div>
   <script nonce="${nonce}" src="${script.toString()}"></script>
 </body>
 </html>`;

@@ -46,8 +46,8 @@ const codeRefSchema = z.object({
   content: z.string()
 }).passthrough();
 
-function scalarSchema(field: FieldDefinition): ZodType {
-  switch (field.type) {
+function scalarSchemaForType(field: FieldDefinition, type: FieldDefinition["type"]): ZodType {
+  switch (type) {
     case "string":
       return z.string();
     case "number":
@@ -61,9 +61,15 @@ function scalarSchema(field: FieldDefinition): ZodType {
       return z.enum(field.values as [string, ...string[]]);
     case "context":
       return z.union([contextReferenceSchema, codeRefSchema]);
-    case "patch":
-      return patchResultSchema;
+    case "result":
+      return dextResultSchema;
   }
+}
+
+function scalarSchema(field: FieldDefinition): ZodType {
+  const types = [field.type, ...(field.accepts ?? [])];
+  const schemas = types.map((type) => scalarSchemaForType(field, type));
+  return schemas.length === 1 ? schemas[0]! : z.union(schemas as [ZodType, ZodType, ...ZodType[]]);
 }
 
 function inputSchema(definition: CallableDefinition): ZodType {

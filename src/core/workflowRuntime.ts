@@ -2,9 +2,11 @@ import type { DextRuntime } from "./runtime.js";
 import { ExecutionCancelledError } from "./executionErrors.js";
 import type {
   DextResult,
+  CodeRef,
   InputExecutionResponse,
   InvocationValue,
   WorkflowCondition,
+  ExecutionMetadata,
   WorkflowExpression,
   WorkflowProgram,
   WorkflowStatement,
@@ -16,10 +18,14 @@ type RuntimeValue = InvocationValue | DextResult;
 export class WorkflowRuntime {
   constructor(private readonly runtime: DextRuntime) {}
 
-  async execute(program: WorkflowProgram): Promise<InputExecutionResponse> {
+  async execute(
+    program: WorkflowProgram,
+    supplementalContext: readonly CodeRef[] = [],
+    metadata: Readonly<ExecutionMetadata> = {}
+  ): Promise<InputExecutionResponse> {
     const environment = new Map<string, RuntimeValue>();
     const steps: WorkflowStepResponse[] = [];
-    await this.executeStatements(program.statements, environment, steps);
+    await this.executeStatements(program.statements, environment, steps, metadata, supplementalContext);
     return {
       kind: "workflow",
       executions: steps.flatMap((step) => step.response ? [step.response] : []),
@@ -27,10 +33,30 @@ export class WorkflowRuntime {
     };
   }
 
+  async executeValue(
+    program: WorkflowProgram,
+    initial: readonly (readonly [string, RuntimeValue])[] = [],
+    metadata: Readonly<ExecutionMetadata> = {}
+  ): Promise<DextResult> {
+    const environment = new Map<string, RuntimeValue>(initial);
+    const steps: WorkflowStepResponse[] = [];
+    const completed = await this.executeStatements(program.statements, environment, steps, metadata);
+    if (!completed || !program.returnExpression) {
+      throw new Error("Custom API main() did not return a result.");
+    }
+    const value = await this.evaluateAsync(program.returnExpression, environment, metadata);
+    if (typeof value !== "object" || value === null || Array.isArray(value) || !("kind" in value)) {
+      throw new Error("Custom API main() must return a Dext result.");
+    }
+    return value as DextResult;
+  }
+
   private async executeStatements(
     statements: readonly WorkflowStatement[],
     environment: Map<string, RuntimeValue>,
-    steps: WorkflowStepResponse[]
+    steps: WorkflowStepResponse[],
+    metadata: Readonly<ExecutionMetadata> = {},
+    supplementalContext: readonly CodeRef[] = []
   ): Promise<boolean> {
     for (let index = 0; index < statements.length; index += 1) {
       const statement = statements[index]!;
@@ -39,7 +65,7 @@ export class WorkflowRuntime {
         const selected = condition ? statement.consequent : statement.alternate;
         const skipped = condition ? statement.alternate : statement.consequent;
         this.markSkipped(skipped, steps);
-        if (!await this.executeStatements(selected, environment, steps)) {
+        if (!await this.executeStatements(selected, environment, steps, metadata, supplementalContext)) {
           this.markSkipped(statements.slice(index + 1), steps);
           return false;
         }
@@ -55,11 +81,11 @@ export class WorkflowRuntime {
           kind: "invocation",
           method: statement.call.method,
           source: "code",
-          arguments: statement.call.arguments.map((argument) => ({
+          arguments: await Promise.all(statement.call.arguments.map(async (argument) => ({
             name: argument.name,
-            value: this.evaluate(argument.value, environment) as InvocationValue
-          }))
-        });
+            value: await this.evaluateAsync(argument.value, environment, metadata) as InvocationValue
+          })))
+        }, supplementalContext, metadata);
         step.response = response;
         if (statement.assignment) environment.set(statement.assignment, response.result);
       } catch (error) {
@@ -83,6 +109,9 @@ export class WorkflowRuntime {
       if (value === undefined) throw new Error(`Variable '${expression.name}' is unavailable.`);
       return value;
     }
+    if (expression.kind === "call") {
+      throw new Error("Nested API calls must be evaluated asynchronously.");
+    }
     const object = this.evaluate(expression.object, environment);
     if (typeof object !== "object" || object === null || Array.isArray(object)) {
       throw new Error(`Cannot read '${expression.property}' from a non-object value.`);
@@ -90,6 +119,38 @@ export class WorkflowRuntime {
     const value = (object as unknown as Record<string, RuntimeValue>)[expression.property];
     if (value === undefined) throw new Error(`Result field '${expression.property}' is unavailable.`);
     return value;
+  }
+
+  private async evaluateAsync(
+    expression: WorkflowExpression,
+    environment: Map<string, RuntimeValue>,
+    metadata: Readonly<ExecutionMetadata> = {}
+  ): Promise<RuntimeValue> {
+    if (expression.kind === "call") {
+      const response = await this.runtime.execute({
+        kind: "invocation",
+        method: expression.call.method,
+        source: "code",
+        arguments: await Promise.all(expression.call.arguments.map(async (argument) => ({
+          name: argument.name,
+          value: await this.evaluateAsync(argument.value, environment, metadata) as InvocationValue
+        })))
+      }, [], metadata);
+      return response.result;
+    }
+    if (expression.kind === "member") {
+      const object = await this.evaluateAsync(expression.object, environment, metadata);
+      if (typeof object !== "object" || object === null || Array.isArray(object)) {
+        throw new Error(`Cannot read '${expression.property}' from a non-object value.`);
+      }
+      const value = (object as unknown as Record<string, RuntimeValue>)[expression.property];
+      if (value === undefined) throw new Error(`Result field '${expression.property}' is unavailable.`);
+      return value;
+    }
+    if (expression.kind === "list") {
+      return Promise.all(expression.values.map((value) => this.evaluateAsync(value, environment, metadata))) as Promise<InvocationValue>;
+    }
+    return this.evaluate(expression, environment);
   }
 
   private evaluateCondition(condition: WorkflowCondition, environment: Map<string, RuntimeValue>): boolean {

@@ -13,6 +13,11 @@ export type OutputKind =
   | "plan"
   | "patch";
 
+/** Common structural contract shared by every value returned from a Dext API. */
+export interface DextResultBase {
+  kind: OutputKind;
+}
+
 export interface Position {
   line: number;
   character: number;
@@ -45,7 +50,7 @@ export type InvocationValue =
   | boolean
   | ContextReference
   | CodeRef
-  | PatchResult
+  | DextResultBase
   | InvocationValue[];
 
 export type WorkflowScalar = string | number | boolean;
@@ -55,7 +60,9 @@ export type WorkflowExpression =
   | { kind: "list"; values: WorkflowExpression[]; from: number; to: number }
   | { kind: "reference"; reference: ContextReference; from: number; to: number }
   | { kind: "variable"; name: string; from: number; to: number }
-  | { kind: "member"; object: WorkflowExpression; property: string; from: number; to: number };
+  | { kind: "member"; object: WorkflowExpression; property: string; from: number; to: number }
+  | { kind: "call"; call: WorkflowCall; from: number; to: number };
+
 
 export interface WorkflowCall {
   kind: "call";
@@ -97,6 +104,7 @@ export interface WorkflowProgram {
   kind: "workflow";
   source: string;
   statements: WorkflowStatement[];
+  returnExpression?: WorkflowExpression;
 }
 
 export interface InvocationArgument {
@@ -111,11 +119,12 @@ export interface InvocationAst {
   source: "code" | "chat";
 }
 
-export type FieldType = "string" | "number" | "boolean" | "enum" | "context" | "patch";
+export type FieldType = "string" | "number" | "boolean" | "enum" | "context" | "result";
 
 export interface FieldDefinition {
   name: string;
   type: FieldType;
+  accepts?: FieldType[];
   description?: string;
   required?: boolean;
   values?: string[];
@@ -138,19 +147,32 @@ export interface CallableDefinition {
   executor: {
     kind: "deterministic";
     handler: string;
+  } | {
+    kind: "custom";
+    apiId: string;
   };
+}
+
+export interface CustomApiPlan {
+  id: string;
+  sourcePath: string;
+  parameters: string[];
+  program: WorkflowProgram;
+  returnExpression: WorkflowExpression;
+  agent?: string;
+  model?: string;
 }
 
 export interface RegisteredCallable extends CallableDefinition {
   source: MethodSource;
 }
 
-export interface TextResult {
+export interface TextResult extends DextResultBase {
   kind: "text";
   text: string;
 }
 
-export interface CodeResult {
+export interface CodeResult extends DextResultBase {
   kind: "code";
   code: string;
   language: string;
@@ -166,32 +188,32 @@ export interface ReviewFinding {
 
 export type ReviewStatus = "pass" | "warning" | "fail";
 
-export interface ChatResult {
+export interface ChatResult extends DextResultBase {
   kind: "chat";
   text: string;
 }
 
-export interface ExplainResult {
+export interface ExplainResult extends DextResultBase {
   kind: "explain";
   text: string;
   files: CodeRef[];
 }
 
-export interface EditResult {
+export interface EditResult extends DextResultBase {
   kind: "edit";
   summary: string;
   patch: PatchResult;
   files: CodeRef[];
 }
 
-export interface WorkflowReviewResult {
+export interface WorkflowReviewResult extends DextResultBase {
   kind: "review";
   status: ReviewStatus;
   summary: string;
   findings: ReviewFinding[];
 }
 
-export interface ApplyResult {
+export interface ApplyResult extends DextResultBase {
   kind: "apply";
   status: "applied" | "unchanged" | "conflict";
   files: CodeRef[];
@@ -200,7 +222,7 @@ export interface ApplyResult {
 
 export type TerminalStatus = "succeeded" | "failed" | "timed_out";
 
-export interface TerminalResult {
+export interface TerminalResult extends DextResultBase {
   kind: "terminal";
   status: TerminalStatus;
   command: string;
@@ -211,7 +233,7 @@ export interface TerminalResult {
   duration_ms: number;
 }
 
-export interface PrintResult {
+export interface PrintResult extends DextResultBase {
   kind: "print";
   text: string;
   label?: string;
@@ -223,7 +245,7 @@ export interface PlanStep {
   status: "pending" | "ready";
 }
 
-export interface PlanResult {
+export interface PlanResult extends DextResultBase {
   kind: "plan";
   title: string;
   steps: PlanStep[];
@@ -233,9 +255,12 @@ export interface PatchChange {
   uri: string;
   before: string;
   after: string;
+  range?: Range;
+  documentVersion?: number;
+  contentHash?: string;
 }
 
-export interface PatchResult {
+export interface PatchResult extends DextResultBase {
   kind: "patch";
   title: string;
   changes: PatchChange[];
@@ -264,6 +289,24 @@ export interface ResolvedInvocation {
 
 export interface ExecutionMetadata {
   instruction?: string;
+  agent?: string;
+  model?: string;
+  reasoningEffort?: string;
+  speed?: string;
+  serviceTier?: string;
+  onAgentEvent?: (event: AgentStreamEvent) => void;
+}
+
+export type AgentStreamPhase = "status" | "reasoning" | "message" | "tool";
+
+export interface AgentStreamEvent {
+  id?: string;
+  phase: AgentStreamPhase;
+  text: string;
+  title?: string;
+  replace?: boolean;
+  done?: boolean;
+  eventType?: string;
 }
 
 export interface RuntimeResponse {

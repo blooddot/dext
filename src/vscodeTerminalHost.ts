@@ -3,7 +3,6 @@ import { realpathSync, statSync } from "node:fs";
 import { performance } from "node:perf_hooks";
 import { isAbsolute, relative, resolve } from "node:path";
 import * as vscode from "vscode";
-import { ExecutionCancelledError } from "./core/executionErrors.js";
 import type { DeterministicHandler } from "./core/runtime.js";
 import type { TerminalResult } from "./core/types.js";
 
@@ -61,11 +60,26 @@ function appendLimited(current: string, chunk: Buffer): string {
 function execute(command: string, cwd: string, timeoutMs: number): Promise<TerminalResult> {
   return new Promise((complete, reject) => {
     const started = performance.now();
+    const environment = {
+      ...process.env,
+      TERM: process.env.TERM ?? "xterm-256color",
+      FORCE_COLOR: process.env.FORCE_COLOR ?? "1",
+      CLICOLOR_FORCE: process.env.CLICOLOR_FORCE ?? "1",
+      GIT_PAGER: "cat",
+      ...( /^\s*git(?:\s|$)/i.test(command)
+        ? {
+            GIT_CONFIG_COUNT: "1",
+            GIT_CONFIG_KEY_0: "color.ui",
+            GIT_CONFIG_VALUE_0: "always"
+          }
+        : {})
+    };
     const child = spawn(command, {
       cwd,
       shell: true,
       windowsHide: true,
       detached: process.platform !== "win32",
+      env: environment,
       stdio: ["ignore", "pipe", "pipe"]
     });
     let stdout = "";
@@ -121,13 +135,5 @@ export const terminalRunHandler: DeterministicHandler = async ({ arguments: args
   const root = trustedWorkspaceRoot();
   const cwd = workspaceCwd(root, args.cwd);
   const timeoutMs = timeoutValue(args.timeout_ms);
-  const confirmation = await vscode.window.showWarningMessage(
-    `Run this command in ${cwd}?\n\n${command}`,
-    { modal: true },
-    "Run"
-  );
-  if (confirmation !== "Run") {
-    throw new ExecutionCancelledError("terminal.run was cancelled by the user.");
-  }
   return execute(command, cwd, timeoutMs);
 };

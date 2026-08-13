@@ -30,6 +30,8 @@ describe("DextLanguageService workflow features", () => {
     const status = 'review = code.review(target=ref.selection)\nif review.status == "';
     expect(service.documentCompletions(status).map((item) => item.label))
       .toEqual(["pass", "warning", "fail"]);
+    const unquotedStatus = 'review = code.review(target=ref.selection)\nif review.status == pa';
+    expect(service.documentCompletions(unquotedStatus).map((item) => item.label)).toEqual(["pass"]);
     const terminalFields = 'terminal_result = terminal.run(command="node --version")\nterminal_result.';
     expect(service.documentCompletions(terminalFields).map((item) => item.label))
       .toEqual(["status", "command", "cwd", "exit_code", "stdout", "stderr", "duration_ms"]);
@@ -69,5 +71,52 @@ describe("DextLanguageService workflow features", () => {
       activeParameter: 0,
       label: expect.stringContaining("label?=string")
     });
+    const resultSource = 'edit_result = code.edit(target=ref.selection, instruction="format")\nedit_result.';
+    expect(service.documentCompletions(resultSource).map((item) => item.label)).toEqual(["summary", "patch", "files"]);
+    expect(service.documentHover(resultSource, resultSource.indexOf("edit_result") + 4)).toMatchObject({
+      label: "edit_result: EditResult"
+    });
+    const memberSource = 'edit_result = code.edit(target=ref.selection, instruction="format")\nedit_result.patch';
+    expect(service.documentHover(memberSource, memberSource.length - 2)).toMatchObject({
+      label: "edit_result.patch: PatchResult"
+    });
+  });
+
+  it("completes custom API imports and type annotations", () => {
+    const custom = new MethodRegistry();
+    custom.registerMany(BUILTIN_METHODS, "builtin");
+    custom.register({
+      id: "team.review",
+      title: "Team Review",
+      description: "Review code",
+      kind: "skill",
+      version: "1.0.0",
+      input: [{ name: "target", type: "context", required: true }],
+      output: { kind: "review" },
+      executor: { kind: "custom", apiId: "team.review" }
+    }, "project");
+    const apiService = new DextLanguageService(custom);
+    expect(apiService.apiCompletions("from team import r").map((item) => item.label)).toEqual(["review"]);
+    expect(apiService.apiCompletions("def main(target: C", "def main(target: C".length).map((item) => item.label)).toContain("Context");
+  });
+
+  it("limits custom APIs to explicit imports and resolves imported aliases", () => {
+    const custom = new MethodRegistry();
+    custom.registerMany(BUILTIN_METHODS, "builtin");
+    custom.register({
+      id: "team.explain",
+      title: "Team Explain",
+      description: "Explain code",
+      kind: "skill",
+      version: "1.0.0",
+      input: [{ name: "target", type: "context", required: true }],
+      output: { kind: "explain" },
+      executor: { kind: "custom", apiId: "team.explain" }
+    }, "project");
+    const imported = new DextLanguageService(custom);
+    imported.setCustomApiIds(new Set(["team.explain"]));
+    expect(imported.documentCompletions("tea").map((item) => item.label)).not.toContain("team");
+    expect(imported.documentCompletions("from team import explain\nexpl").map((item) => item.label)).toContain("explain");
+    expect(imported.documentHover("from team import explain\nexplain(target=ref.selection)", 27)).toMatchObject({ label: expect.stringContaining("team.explain") });
   });
 });

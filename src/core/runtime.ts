@@ -2,6 +2,12 @@ import { performance } from "node:perf_hooks";
 import { AxAdapter } from "./axAdapter.js";
 import type { ContextResolver } from "./contextResolver.js";
 import type { MethodRegistry } from "./registry.js";
+import type { CustomApiPlan } from "./types.js";
+import { WorkflowRuntime } from "./workflowRuntime.js";
+import { isDextResult, resultToCodeRefs } from "./resultSerialization.js";
+import { patchResultFrom } from "./patch.js";
+import type { AgentProfile, AgentSelection } from "../agentProfiles.js";
+import { CliAgentRunner, type AgentRunner } from "./agentRunner.js";
 import type {
   CodeRef,
   DextResult,
@@ -24,7 +30,10 @@ function requireCodeRef(value: unknown): CodeRef {
 
 function requireCodeRefs(value: unknown): CodeRef[] {
   const values = Array.isArray(value) ? value : [value];
-  return values.map(requireCodeRef);
+  return values.flatMap((item) => {
+    if (isDextResult(item)) return resultToCodeRefs(item);
+    return [requireCodeRef(item)];
+  });
 }
 
 function displayValue(value: unknown): string {
@@ -38,6 +47,54 @@ function displayValue(value: unknown): string {
     return value.uri;
   }
   return JSON.stringify(value) ?? "";
+}
+
+function normalizeAgentResult(kind: string, value: unknown): DextResult {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Agent output must be a JSON object.");
+  }
+  const record = value as Record<string, unknown>;
+  if (record.kind === undefined) return { kind, ...record } as DextResult;
+  if (record.kind !== kind) throw new Error(`Agent output kind '${typeof record.kind === "string" ? record.kind : "unknown"}' does not match '${kind}'.`);
+  return record as unknown as DextResult;
+}
+
+function previewTargetIndex(uri: string): number | undefined {
+  const match = /(?:^|[\\/])target-(\d+)(?:[\\/]|$)/.exec(uri);
+  return match ? Number(match[1]) - 1 : undefined;
+}
+
+function normalizeAgentEdit(result: DextResult, targets: readonly CodeRef[]): DextResult {
+  if (result.kind !== "edit") return result;
+  const used = new Set<number>();
+  const changes = result.patch.changes.map((change, changeIndex) => {
+    let targetIndex = targets.findIndex((target) => target.uri === change.uri);
+    if (targetIndex < 0) targetIndex = previewTargetIndex(change.uri) ?? -1;
+    if (targetIndex < 0 && targets.length === 1) targetIndex = 0;
+    if (targetIndex < 0) targetIndex = targets.findIndex((_, index) => !used.has(index));
+    const target = targets[targetIndex];
+    if (!target) throw new Error(`code.edit returned a change for an unknown target '${change.uri || changeIndex + 1}'.`);
+    used.add(targetIndex);
+    return {
+      uri: target.uri,
+      before: target.content,
+      after: change.after,
+      ...(target.range ? { range: target.range } : {}),
+      documentVersion: target.documentVersion,
+      contentHash: target.contentHash
+    };
+  });
+  return {
+    ...result,
+    files: [...targets],
+    patch: { ...result.patch, changes }
+  };
+}
+
+const AGENT_METHODS = new Set(["chat", "code.explain", "code.edit", "code.review"]);
+
+export function usesAgentRunner(methodId: string): boolean {
+  return AGENT_METHODS.has(methodId);
 }
 
 export const DEFAULT_HANDLERS: Readonly<Record<string, DeterministicHandler>> = {
@@ -94,13 +151,10 @@ export const DEFAULT_HANDLERS: Readonly<Record<string, DeterministicHandler>> = 
     };
   },
   applyPatch: ({ arguments: args }) => {
-    const patch = args.patch;
-    if (typeof patch !== "object" || patch === null || Array.isArray(patch) || patch.kind !== "patch") {
-      throw new Error("code.apply requires the patch field from an EditResult.");
-    }
+    const patch = patchResultFrom(args.result);
     const changed = patch.changes.filter((change) => change.before !== change.after);
     if (changed.length) {
-      throw new Error("Writing patches is not enabled in the deterministic first version.");
+      throw new Error("code.apply requires a workspace patch host for non-empty changes.");
     }
     return {
       kind: "apply",
@@ -150,6 +204,11 @@ function mergeContext(resolved: readonly CodeRef[], supplemental: readonly CodeR
 
 export class DextRuntime {
   private readonly handlers: Readonly<Record<string, DeterministicHandler>>;
+  private readonly customPlans = new Map<string, CustomApiPlan>();
+  private readonly agents = new Map<string, AgentProfile>();
+  private agentSelection: AgentSelection = {};
+  private agentRunner: AgentRunner;
+  private workspaceRoot = process.cwd();
 
   constructor(
     private readonly registry: MethodRegistry,
@@ -158,6 +217,29 @@ export class DextRuntime {
     handlers: Readonly<Record<string, DeterministicHandler>> = {}
   ) {
     this.handlers = { ...DEFAULT_HANDLERS, ...handlers };
+    this.agentRunner = new CliAgentRunner();
+  }
+
+  setCustomPlans(plans: ReadonlyMap<string, CustomApiPlan>): void {
+    this.customPlans.clear();
+    for (const [id, plan] of plans) this.customPlans.set(id, plan);
+  }
+
+  setAgentProfiles(profiles: readonly AgentProfile[]): void {
+    this.agents.clear();
+    for (const profile of profiles) this.agents.set(profile.id, profile);
+  }
+
+  setAgentSelection(selection: AgentSelection): void {
+    this.agentSelection = { ...selection };
+  }
+
+  setAgentRunner(runner: AgentRunner): void {
+    this.agentRunner = runner;
+  }
+
+  setWorkspaceRoot(root: string): void {
+    this.workspaceRoot = root;
   }
 
   async execute(
@@ -188,11 +270,52 @@ export class DextRuntime {
       context: mergeContext(resolvedInvocation.context, supplementalContext),
       metadata
     };
-    const handler = this.handlers[method.executor.handler];
-    if (!handler) {
-      throw new Error(`Executor '${method.executor.handler}' is not available.`);
+    let result: DextResult;
+    if (method.executor.kind === "custom") {
+      const plan = this.customPlans.get(method.executor.apiId);
+      if (!plan) throw new Error(`Custom API '${method.executor.apiId}' is not available.`);
+      const customMetadata: ExecutionMetadata = {
+        ...metadata,
+        ...(plan.agent ? { agent: plan.agent } : {}),
+        ...(plan.model ? { model: plan.model } : {})
+      };
+      result = await new WorkflowRuntime(this).executeValue(
+        plan.program,
+        Object.entries(resolved.arguments).map(([name, value]) => [name, value] as const),
+        customMetadata
+      );
+    } else {
+      const profileId = metadata.agent ?? this.agentSelection.profileId;
+      const profile = profileId ? this.agents.get(profileId) : undefined;
+      // Mutation/application and presentation APIs stay deterministic. Only
+      // semantic model operations are delegated to the selected Agent CLI.
+      if (profile && usesAgentRunner(method.id)) {
+        const raw = await this.agentRunner.run({
+          profile,
+          ...(metadata.model || this.agentSelection.model ? { model: metadata.model ?? this.agentSelection.model } : {}),
+          ...((metadata.reasoningEffort ?? this.agentSelection.reasoningEffort) ? { reasoningEffort: metadata.reasoningEffort ?? this.agentSelection.reasoningEffort } : {}),
+          ...((metadata.speed ?? this.agentSelection.speed) ? { speed: metadata.speed ?? this.agentSelection.speed } : {}),
+          ...((metadata.serviceTier ?? this.agentSelection.serviceTier) ? { serviceTier: metadata.serviceTier ?? this.agentSelection.serviceTier } : {}),
+          cwd: this.workspaceRoot,
+          method,
+          resolved,
+          contract,
+          metadata,
+          ...(metadata.onAgentEvent ? { onEvent: metadata.onAgentEvent } : {})
+        });
+        result = normalizeAgentResult(method.output.kind, raw);
+        if (method.id === "code.edit") {
+          result = normalizeAgentEdit(result, requireCodeRefs(resolved.arguments.target));
+        }
+      } else {
+        const handler = this.handlers[method.executor.handler];
+        if (!handler) {
+          throw new Error(`Executor '${method.executor.handler}' is not available.`);
+        }
+        result = await handler(resolved);
+      }
     }
-    const result = this.ax.validateOutput(contract, await handler(resolved));
+    result = this.ax.validateOutput(contract, result);
     return {
       invocation,
       method: {

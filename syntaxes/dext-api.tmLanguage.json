@@ -1,0 +1,7 @@
+{
+  "scopeName": "source.dext-api",
+  "name": "Dext API",
+  "patterns": [
+    { "include": "source.python" }
+  ]
+}
