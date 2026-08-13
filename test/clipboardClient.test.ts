@@ -15,22 +15,22 @@ describe("ClipboardClient", () => {
     await expect(written).resolves.toBe(true);
   });
 
-  it("returns ordinary text or a context-attachment match from Host reads", async () => {
+  it("returns ordinary text from Host reads", async () => {
     const requests: WebviewRequest[] = [];
     const client = new ClipboardClient((request) => requests.push(request));
-    const read = client.read("chat");
+    const read = client.read("code");
     const request = requests[0];
     const requestId = request?.type === "clipboardRead" ? request.requestId : -1;
 
-    expect(request).toMatchObject({ type: "clipboardRead", purpose: "chat" });
+    expect(request).toMatchObject({ type: "clipboardRead", purpose: "code" });
     client.accept({
       type: "clipboardReadResult",
       requestId,
       success: true,
       text: "selected code",
-      contextAttached: true
+      contextAttached: false
     });
-    await expect(read).resolves.toEqual({ text: "selected code", contextAttached: true });
+    await expect(read).resolves.toEqual({ text: "selected code", contextAttached: false });
   });
 
   it("returns a structured Code reference without exposing staged source text", async () => {
@@ -44,19 +44,19 @@ describe("ClipboardClient", () => {
       type: "clipboardReadResult",
       requestId,
       success: true,
-      text: '@file("src/extension.ts#L1,1-L1,2")',
+      text: 'ref.file("src/extension.ts#L1,1-L1,2")',
       contextAttached: false,
       codeReference: {
-        expression: '@file("src/extension.ts#L1,1-L1,2")',
+        expression: 'ref.file("src/extension.ts#L1,1-L1,2")',
         payload: "src/extension.ts#L1,1-L1,2"
       }
     });
 
     await expect(read).resolves.toEqual({
-      text: '@file("src/extension.ts#L1,1-L1,2")',
+      text: 'ref.file("src/extension.ts#L1,1-L1,2")',
       contextAttached: false,
       codeReference: {
-        expression: '@file("src/extension.ts#L1,1-L1,2")',
+        expression: 'ref.file("src/extension.ts#L1,1-L1,2")',
         payload: "src/extension.ts#L1,1-L1,2"
       }
     });

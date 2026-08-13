@@ -1,15 +1,14 @@
 import * as vscode from "vscode";
-import { MAX_ATTACHMENT_BYTES, type AttachmentView } from "./attachmentStore.js";
+import { MAX_ATTACHMENT_BYTES } from "./attachmentStore.js";
 import { toCodeRef, type TextSnapshot } from "./core/contextResolver.js";
 import {
-  compactFileReferenceLabel,
   formatDextFileReference,
+  formatDextFilePathReference,
   type DextFileReference
 } from "./core/fileReference.js";
 import type { CodeRef, Range } from "./core/types.js";
 
 export interface AttachmentSnapshot {
-  view: Omit<AttachmentView, "id">;
   reference: CodeRef;
   text: string;
 }
@@ -19,14 +18,6 @@ function rangeValue(range: vscode.Range): Range {
     start: { line: range.start.line, character: range.start.character },
     end: { line: range.end.line, character: range.end.character }
   };
-}
-
-function relativePath(uri: vscode.Uri): string {
-  return vscode.workspace.asRelativePath(uri, false) || uri.path.split("/").at(-1) || uri.toString();
-}
-
-function codeLabel(uri: vscode.Uri, range: vscode.Range): string {
-  return compactFileReferenceLabel(formatDextFileReference(relativePath(uri), rangeValue(range)).payload);
 }
 
 async function documentSnapshot(uri: vscode.Uri, range?: vscode.Range): Promise<TextSnapshot> {
@@ -45,25 +36,19 @@ async function documentSnapshot(uri: vscode.Uri, range?: vscode.Range): Promise<
 
 export async function selectionAttachment(): Promise<AttachmentSnapshot> {
   const editor = vscode.window.activeTextEditor;
-  if (!editor || editor.selection.isEmpty) throw new Error("Select code before adding it to Chat.");
+  if (!editor || editor.selection.isEmpty) throw new Error("Select code before adding it to Dext.");
   const uri = editor.document.uri;
   const selection = editor.selection;
   const snapshot = await documentSnapshot(uri, selection);
   return {
     text: snapshot.content,
-    reference: toCodeRef(snapshot),
-    view: {
-      kind: "code",
-      label: codeLabel(uri, selection),
-      uri: snapshot.uri,
-      ...(snapshot.range ? { range: snapshot.range } : {})
-    }
+    reference: toCodeRef(snapshot)
   };
 }
 
 export async function fileAttachment(uri: vscode.Uri): Promise<AttachmentSnapshot> {
   if (!vscode.workspace.getWorkspaceFolder(uri)) {
-    throw new Error("Chat files must stay inside the current workspace.");
+    throw new Error("Dext files must stay inside the current workspace.");
   }
   const stat = await vscode.workspace.fs.stat(uri);
   if ((stat.type & vscode.FileType.Directory) !== 0) throw new Error("Choose a file, not a directory.");
@@ -73,8 +58,7 @@ export async function fileAttachment(uri: vscode.Uri): Promise<AttachmentSnapsho
   const snapshot = await documentSnapshot(uri);
   return {
     text: snapshot.content,
-    reference: toCodeRef(snapshot),
-    view: { kind: "file", label: compactFileReferenceLabel(relativePath(uri)), uri: snapshot.uri }
+    reference: toCodeRef(snapshot)
   };
 }
 
@@ -88,4 +72,15 @@ export function clipboardFileReference(reference: CodeRef): DextFileReference | 
     includeWorkspaceFolder
   );
   return formatDextFileReference(relativePath, reference.range);
+}
+
+export function attachmentFileReference(snapshot: AttachmentSnapshot): DextFileReference {
+  const uri = vscode.Uri.parse(snapshot.reference.uri, true);
+  const folder = vscode.workspace.getWorkspaceFolder(uri);
+  if (!folder) throw new Error("Dext references must stay inside the current workspace.");
+  const includeWorkspaceFolder = (vscode.workspace.workspaceFolders?.length ?? 0) > 1;
+  const path = vscode.workspace.asRelativePath(uri, includeWorkspaceFolder);
+  return snapshot.reference.range
+    ? formatDextFileReference(path, snapshot.reference.range)
+    : formatDextFilePathReference(path);
 }

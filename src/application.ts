@@ -1,23 +1,29 @@
 import * as vscode from "vscode";
 import { BUILTIN_METHODS } from "./core/builtins.js";
-import { compileChat } from "./core/chatCompiler.js";
 import { loadMethodConfigs, type ConfigFileCandidate } from "./core/configLoader.js";
 import { ContextResolver } from "./core/contextResolver.js";
-import { parseInvocation } from "./core/dsl.js";
 import { DextLanguageService } from "./core/languageService.js";
 import { MethodRegistry } from "./core/registry.js";
 import { DextRuntime } from "./core/runtime.js";
-import type { CodeRef, RuntimeResponse } from "./core/types.js";
+import { compileWorkflow } from "./core/workflow.js";
+import { WorkflowRuntime } from "./core/workflowRuntime.js";
+import type { InputExecutionResponse } from "./core/types.js";
 import type { SidebarState } from "./webviewProtocol.js";
 import { VsCodeContextHost } from "./vscodeContextHost.js";
+import { terminalRunHandler } from "./vscodeTerminalHost.js";
+import { loadEditorTokenTheme } from "./vscodeTheme.js";
 
 export class DextApplication {
   readonly registry = new MethodRegistry();
   readonly language = new DextLanguageService(this.registry);
+  private readonly contextResolver = new ContextResolver(new VsCodeContextHost());
   readonly runtime = new DextRuntime(
     this.registry,
-    new ContextResolver(new VsCodeContextHost())
+    this.contextResolver,
+    undefined,
+    { terminalRun: terminalRunHandler }
   );
+  private readonly workflowRuntime = new WorkflowRuntime(this.runtime);
   private configDiagnostics: string[] = [];
 
   constructor() {
@@ -64,8 +70,10 @@ export class DextApplication {
   }
 
   state(): SidebarState {
+    const theme = loadEditorTokenTheme();
     return {
       trusted: vscode.workspace.isTrusted,
+      ...(theme ? { theme } : {}),
       methods: this.registry.list().map((method) => ({
         id: method.id,
         title: method.title,
@@ -79,15 +87,11 @@ export class DextApplication {
     };
   }
 
-  async executeCode(source: string): Promise<RuntimeResponse> {
-    const diagnostics = this.language.diagnostics(source);
-    if (diagnostics.some((diagnostic) => diagnostic.severity === "error")) {
-      throw new Error(diagnostics.map((diagnostic) => diagnostic.message).join("\n"));
+  async executeInput(source: string): Promise<InputExecutionResponse> {
+    const compiled = compileWorkflow(source, this.registry);
+    if (!compiled.program || compiled.diagnostics.some((item) => item.severity === "error")) {
+      throw new Error(compiled.diagnostics.map((item) => item.message).join("\n"));
     }
-    return this.runtime.execute(parseInvocation(source));
-  }
-
-  executeChat(message: string, attachments: readonly CodeRef[] = []): Promise<RuntimeResponse> {
-    return this.runtime.execute(compileChat(message), attachments);
+    return this.workflowRuntime.execute(compiled.program);
   }
 }

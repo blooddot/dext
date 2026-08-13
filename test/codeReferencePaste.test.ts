@@ -3,29 +3,43 @@ import type { ClipboardReadResult } from "../src/webview/clipboardClient.js";
 import { codeReferencePasteText } from "../src/webview/codeReferencePaste.js";
 
 const reference: ClipboardReadResult = {
-  text: '@file("src/review.ts#L3,5-L4,8")',
+  text: 'ref.file("src/review.ts#L3,5-L4,8")',
   contextAttached: false,
   codeReference: {
     payload: "src/review.ts#L3,5-L4,8",
-    expression: '@file("src/review.ts#L3,5-L4,8")'
+    expression: 'ref.file("src/review.ts#L3,5-L4,8")'
   }
 };
 
 describe("Code reference paste", () => {
   it("inserts the full reference expression into ordinary code", () => {
-    expect(codeReferencePasteText("core.code.review(target: )", 25, 25, reference))
+    expect(codeReferencePasteText("code.review(target=)", 19, 19, reference))
+      .toBe(reference.codeReference?.expression);
+  });
+
+  it("adds inline boundaries when pasting next to natural language", () => {
+    expect(codeReferencePasteText("Review this", 11, 11, reference))
+      .toBe(` ${reference.codeReference?.expression}`);
+    expect(codeReferencePasteText("Review later", 7, 7, reference))
+      .toBe(`${reference.codeReference?.expression} `);
+  });
+
+  it("uses existing argument whitespace without adding space before a terminator", () => {
+    const source = "code.review(target=)";
+    const cursor = source.indexOf(")");
+    expect(codeReferencePasteText(source, cursor, cursor, reference))
       .toBe(reference.codeReference?.expression);
   });
 
   it("inserts only the payload when the cursor is inside an existing file string", () => {
-    const source = 'core.code.review(target: @file(""))';
+    const source = 'code.review(target=ref.file(""))';
     const cursor = source.indexOf('""') + 1;
     expect(codeReferencePasteText(source, cursor, cursor, reference))
       .toBe(reference.codeReference?.payload);
   });
 
   it("inserts a quoted payload after an incomplete file call", () => {
-    const source = "core.code.review(target: @file()";
+    const source = "code.review(target=ref.file()";
     const cursor = source.indexOf(")");
     expect(codeReferencePasteText(source, cursor, cursor, reference))
       .toBe(`"${reference.codeReference?.payload}"`);

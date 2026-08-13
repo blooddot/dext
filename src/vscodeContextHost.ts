@@ -46,7 +46,7 @@ function workspaceFileUri(filePath: string): { uri: vscode.Uri; range?: vscode.R
     || segments.length === 0
     || segments.some((segment) => !segment || segment === "." || segment === "..")
   ) {
-    throw new Error("@file paths must stay inside the current workspace.");
+    throw new Error("ref.file paths must stay inside the current workspace.");
   }
   const uri = vscode.Uri.joinPath(folder.uri, ...segments);
   const range = parsed.range
@@ -69,7 +69,7 @@ async function validatedDocumentRange(
   }
   const document = await vscode.workspace.openTextDocument(uri);
   if (range && !document.validateRange(range).isEqual(range)) {
-    throw new Error("@file range is outside the target document.");
+    throw new Error("ref.file range is outside the target document.");
   }
   return { document, ...(range ? { range } : {}) };
 }
@@ -88,7 +88,7 @@ export async function openWorkspaceDocument(uri: vscode.Uri, range?: Range): Pro
 
 export async function openWorkspaceFileReference(filePath: string): Promise<void> {
   const target = workspaceFileUri(filePath);
-  if (!target) throw new Error("Open a workspace before opening an @file reference.");
+  if (!target) throw new Error("Open a workspace before opening a ref.file reference.");
   const validated = await validatedDocumentRange(target.uri, target.range);
   const editor = await vscode.window.showTextDocument(validated.document);
   if (validated.range) {

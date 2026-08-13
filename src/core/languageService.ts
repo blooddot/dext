@@ -1,12 +1,6 @@
-import { DslSyntaxError, parseInvocation } from "./dsl.js";
 import type { MethodRegistry } from "./registry.js";
-import type {
-  ContextReference,
-  FieldDefinition,
-  InvocationAst,
-  InvocationValue,
-  RegisteredCallable
-} from "./types.js";
+import type { FieldDefinition, RegisteredCallable } from "./types.js";
+import { compileWorkflow } from "./workflow.js";
 
 export interface CompletionItem {
   label: string;
@@ -21,6 +15,8 @@ export interface LanguageDiagnostic {
   message: string;
   severity: "error" | "warning";
   offset: number;
+  from?: number;
+  to?: number;
 }
 
 export interface SignatureHelp {
@@ -37,380 +33,282 @@ export interface LanguageHover {
   documentation: string;
 }
 
-function isReference(value: InvocationValue): value is ContextReference {
-  return typeof value === "object" && !Array.isArray(value) && "kind" in value;
-}
-
-function valueMatches(field: FieldDefinition, value: InvocationValue): boolean {
-  if (field.multiple) {
-    return Array.isArray(value) && value.every((entry) => valueMatches({ ...field, multiple: false }, entry));
-  }
-  if (Array.isArray(value)) {
-    return false;
-  }
-  if (field.type === "context") {
-    return isReference(value);
-  }
-  if (field.type === "enum") {
-    return typeof value === "string" && (field.values?.includes(value) ?? false);
-  }
-  return typeof value === field.type;
+export interface WorkflowDocumentState {
+  kind: "empty" | "workflow" | "invalid";
 }
 
 function formatParameter(field: FieldDefinition): string {
   const base = field.type === "enum" ? field.values?.join(" | ") ?? "string" : field.type;
-  return `${field.name}${field.required ? "" : "?"}: ${field.multiple ? `${base}[]` : base}`;
+  return `${field.name}${field.required ? "" : "?"}=${field.multiple ? `${base} | ${base}[]` : base}`;
 }
 
 function methodSignature(method: RegisteredCallable): string {
   return `${method.id}(${method.input.map(formatParameter).join(", ")}) -> ${method.output.kind}`;
 }
 
-function unclosedCallOffset(source: string): number | undefined {
-  let callOffset: number | undefined;
-  let depth = 0;
-  let quote: '"' | "'" | undefined;
-  let escaped = false;
-
-  for (let offset = 0; offset < source.length; offset += 1) {
-    const character = source[offset];
-    if (quote) {
-      if (escaped) {
-        escaped = false;
-      } else if (character === "\\") {
-        escaped = true;
-      } else if (character === quote) {
-        quote = undefined;
-      }
-      continue;
-    }
-    if (character === '"' || character === "'") {
-      quote = character;
-    } else if (character === "(") {
-      if (depth === 0) callOffset = offset;
-      depth += 1;
-    } else if (character === ")" && depth > 0) {
-      depth -= 1;
-      if (depth === 0) callOffset = undefined;
-    }
-  }
-
-  return depth > 0 ? callOffset : undefined;
+interface OpenCall {
+  method: string;
+  body: string;
 }
 
-function topLevelOffsets(source: string, target: "," | ":"): number[] {
-  const offsets: number[] = [];
-  let parentheses = 0;
-  let brackets = 0;
-  let quote: '"' | "'" | undefined;
+function openCall(source: string, cursor: number): OpenCall | undefined {
+  const stack: number[] = [];
+  let quote: "'" | '"' | undefined;
+  let triple = false;
   let escaped = false;
-
-  for (let offset = 0; offset < source.length; offset += 1) {
+  for (let offset = 0; offset < cursor; offset += 1) {
     const character = source[offset];
     if (quote) {
       if (escaped) escaped = false;
       else if (character === "\\") escaped = true;
+      else if (triple && source.slice(offset, offset + 3) === quote.repeat(3)) {
+        quote = undefined;
+        triple = false;
+        offset += 2;
+      } else if (!triple && character === quote) quote = undefined;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      triple = source.slice(offset, offset + 3) === character.repeat(3);
+      if (triple) offset += 2;
+    } else if (character === "(") stack.push(offset);
+    else if (character === ")") stack.pop();
+  }
+  const open = stack.at(-1);
+  if (open === undefined) return undefined;
+  const method = /[A-Za-z_][A-Za-z0-9_.]*$/.exec(source.slice(0, open))?.[0];
+  return method ? { method, body: source.slice(open + 1, cursor) } : undefined;
+}
+
+function activeArgument(body: string): string {
+  let start = 0;
+  let depth = 0;
+  let quote: "'" | '"' | undefined;
+  let escaped = false;
+  for (let offset = 0; offset < body.length; offset += 1) {
+    const character = body[offset];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
       else if (character === quote) quote = undefined;
-      continue;
-    }
-    if (character === '"' || character === "'") quote = character;
-    else if (character === "(") parentheses += 1;
-    else if (character === ")" && parentheses > 0) parentheses -= 1;
-    else if (character === "[") brackets += 1;
-    else if (character === "]" && brackets > 0) brackets -= 1;
-    else if (character === target && parentheses === 0 && brackets === 0) offsets.push(offset);
+    } else if (character === "'" || character === '"') quote = character;
+    else if (character === "(" || character === "[") depth += 1;
+    else if (character === ")" || character === "]") depth -= 1;
+    else if (character === "," && depth === 0) start = offset + 1;
   }
-  return offsets;
+  return body.slice(start);
 }
 
-function wordEnd(source: string, cursor: number, pattern: RegExp): number {
-  const suffix = pattern.exec(source.slice(cursor))?.[0] ?? "";
-  return cursor + suffix.length;
-}
-
-function methodPathCompletions(
-  methods: RegisteredCallable[],
-  typedPath: string,
-  replaceStart: number,
-  replaceEnd: number
-): CompletionItem[] {
-  const path = typedPath.split(".");
-  const fragment = path.pop() ?? "";
-  const namespaces = new Map<string, number>();
-  const completions: CompletionItem[] = [];
-
-  for (const method of methods) {
-    const segments = method.id.split(".");
-    if (
-      segments.length <= path.length ||
-      path.some((segment, index) => segments[index] !== segment)
-    ) {
-      continue;
-    }
-    const label = segments[path.length];
-    if (!label?.startsWith(fragment)) {
-      continue;
-    }
-    if (segments.length > path.length + 1) {
-      namespaces.set(label, (namespaces.get(label) ?? 0) + 1);
-    } else {
-      completions.push({
-        label,
-        insertText: `${label}(`,
-        detail: `${method.kind} method | ${method.description}`,
-        kind: "method",
-        replaceStart,
-        replaceEnd
-      });
-    }
-  }
-
-  for (const [label, count] of namespaces) {
-    completions.push({
-      label,
-      insertText: `${label}.`,
-      detail: `namespace | ${count} ${count === 1 ? "method" : "methods"}`,
-      kind: "namespace",
-      replaceStart,
-      replaceEnd
-    });
-  }
-
-  return completions.sort(
-    (left, right) => left.label.localeCompare(right.label) || left.kind.localeCompare(right.kind)
-  );
-}
+const RESULT_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  chat: ["text"],
+  explain: ["text", "files"],
+  edit: ["summary", "patch", "files"],
+  review: ["status", "summary", "findings"],
+  apply: ["status", "summary", "files"],
+  terminal: ["status", "command", "cwd", "exit_code", "stdout", "stderr", "duration_ms"],
+  print: ["text", "label"]
+};
 
 export class DextLanguageService {
   constructor(private readonly registry: MethodRegistry) {}
 
-  completions(source: string, cursor = source.length): CompletionItem[] {
-    const prefix = source.slice(0, cursor);
-    if (!prefix.includes("(")) {
-      const typed = /[A-Za-z0-9_.]*$/.exec(prefix)?.[0] ?? "";
-      const fragment = typed.slice(typed.lastIndexOf(".") + 1);
-      return methodPathCompletions(
-        this.registry.list(),
-        typed,
-        cursor - fragment.length,
-        wordEnd(source, cursor, /^[A-Za-z0-9_]*/)
-      );
-    }
+  inputDocument(source: string): WorkflowDocumentState {
+    if (!source.trim()) return { kind: "empty" };
+    return { kind: compileWorkflow(source, this.registry).program ? "workflow" : "invalid" };
+  }
 
-    const callOffset = unclosedCallOffset(prefix);
-    if (callOffset === undefined) {
-      return [];
-    }
-    const methodId = prefix.slice(0, callOffset).trim();
-    const method = this.registry.get(methodId);
-    if (!method) {
-      return [];
-    }
-    const body = prefix.slice(callOffset + 1);
-    const commaOffsets = topLevelOffsets(body, ",");
-    const segmentOffset = (commaOffsets.at(-1) ?? -1) + 1;
-    const segment = body.slice(segmentOffset);
-    const colon = topLevelOffsets(segment, ":")[0] ?? -1;
-    if (colon < 0) {
-      const used = new Set(
-        [0, ...commaOffsets.map((offset) => offset + 1)]
-          .map((offset) => /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:/.exec(body.slice(offset))?.[1])
-          .filter((name): name is string => name !== undefined)
-      );
-      const typed = segment.trim();
-      const replaceStart = cursor - typed.length;
-      const replaceEnd = wordEnd(source, cursor, /^[A-Za-z0-9_]*/);
-      return method.input
-        .filter((field) => !used.has(field.name) && field.name.startsWith(typed))
-        .map((field) => ({
-          label: field.name,
-          insertText: `${field.name}: `,
-          detail: formatParameter(field),
-          kind: "parameter",
-          replaceStart,
-          replaceEnd
-        }));
-    }
+  documentCompletions(source: string, cursor = source.length): CompletionItem[] {
+    const before = source.slice(0, cursor);
+    const word = /[A-Za-z_][A-Za-z0-9_.]*$/.exec(before)?.[0] ?? "";
+    const fragmentStart = word.lastIndexOf(".") + 1;
+    const replaceStart = cursor - (word.length - fragmentStart);
+    const replaceEnd = cursor + (/^[A-Za-z0-9_]*/.exec(source.slice(cursor))?.[0].length ?? 0);
+    const item = (
+      label: string,
+      insertText: string,
+      detail: string,
+      kind: CompletionItem["kind"]
+    ): CompletionItem => ({ label, insertText, detail, kind, replaceStart, replaceEnd });
 
-    const fieldName = segment.slice(0, colon).trim();
-    const field = method.input.find((candidate) => candidate.name === fieldName);
-    if (!field) {
-      return [];
-    }
-    const valueText = segment.slice(colon + 1);
-    const leadingWhitespace = /^\s*/.exec(valueText)?.[0].length ?? 0;
-    const value = valueText.slice(leadingWhitespace);
-    const trimmed = value.trim();
-    if (value !== value.trimEnd() && trimmed) {
-      return [];
-    }
-    const valueStart = callOffset + 1 + segmentOffset + colon + 1 + leadingWhitespace;
-    const replaceEnd = wordEnd(source, cursor, /^[A-Za-z0-9_]*/);
-
-    if (field.type === "enum") {
-      if (/^"(?:[^"\\]|\\.)*"$/.test(trimmed) || (trimmed.startsWith('"') && trimmed.slice(1).includes('"'))) {
-        return [];
-      }
-      const fragment = trimmed.startsWith('"') ? trimmed.slice(1) : trimmed;
-      if (!/^[A-Za-z0-9_]*$/.test(fragment)) {
-        return [];
-      }
-      return (field.values ?? []).filter((option) => option.startsWith(fragment)).map((option) => ({
-        label: option,
-        insertText: `"${option}"`,
-        detail: "enum value",
-        kind: "value",
-        replaceStart: valueStart,
-        replaceEnd
-      }));
-    }
-    if (field.type === "context") {
-      if (/^@(file|symbol)\s*\(/.test(trimmed)) {
-        return [];
-      }
-      const references = [
-        { label: "@selection", insertText: "@selection", terminal: true },
-        { label: "@activeFile", insertText: "@activeFile", terminal: true },
-        { label: "@file", insertText: '@file("")', terminal: false },
-        { label: "@symbol", insertText: '@symbol("")', terminal: false }
+    if (/ref\.[A-Za-z_]*$/.test(before)) {
+      const fragment = word.split(".").at(-1) ?? "";
+      const references: [string, string][] = [
+        ["selection", "selection"],
+        ["active_file", "active_file"],
+        ["file", 'file("")'],
+        ["symbol", 'symbol("")']
       ];
-      if (references.some((reference) => reference.terminal && reference.label === trimmed)) {
-        return [];
-      }
-      if (trimmed && !/^@[A-Za-z]*$/.test(trimmed)) {
-        return [];
-      }
-      return references
-        .filter((reference) => reference.label.startsWith(trimmed))
-        .map((reference) => ({
-          label: reference.label,
-          insertText: reference.insertText,
-          detail: "context reference",
-          kind: "reference" as const,
+      return references.filter(([label]) => label.startsWith(fragment))
+        .map(([label, insert]) => item(label, insert, "context reference", "reference"));
+    }
+
+    const statusComparison = /([A-Za-z_][A-Za-z0-9_]*)\.status\s*(?:==|!=)\s*["']([^"']*)$/.exec(before);
+    if (statusComparison) {
+      const assignment = new RegExp(
+        `^\\s*${statusComparison[1]}\\s*=\\s*([A-Za-z_][A-Za-z0-9_.]*)\\(`,
+        "m"
+      ).exec(source);
+      const output = assignment ? this.registry.get(assignment[1] ?? "")?.output.kind : undefined;
+      if (output === "review" || output === "apply" || output === "terminal") {
+        const values = output === "review"
+          ? ["pass", "warning", "fail"]
+          : output === "apply"
+            ? ["applied", "unchanged", "conflict"]
+            : ["succeeded", "failed", "timed_out"];
+        const fragment = statusComparison[2] ?? "";
+        const valueStart = cursor - fragment.length - 1;
+        return values.filter((value) => value.startsWith(fragment)).map((value) => ({
+          label: value,
+          insertText: `"${value}"`,
+          detail: `${output} status`,
+          kind: "value",
           replaceStart: valueStart,
-          replaceEnd
+          replaceEnd: cursor
         }));
-    }
-    if (field.type === "boolean") {
-      if (trimmed === "true" || trimmed === "false" || !/^[A-Za-z]*$/.test(trimmed)) {
-        return [];
       }
-      return ["true", "false"].filter((option) => option.startsWith(trimmed)).map((option) => ({
-        label: option,
-        insertText: option,
-        detail: "boolean",
-        kind: "value" as const,
-        replaceStart: valueStart,
-        replaceEnd
-      }));
     }
-    return [];
+
+    const member = /([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_]*)$/.exec(before);
+    if (member) {
+      const assignment = new RegExp(
+        `^\\s*${member[1]}\\s*=\\s*([A-Za-z_][A-Za-z0-9_.]*)\\(`,
+        "m"
+      ).exec(source);
+      const output = assignment ? this.registry.get(assignment[1] ?? "")?.output.kind : undefined;
+      if (output) {
+        return (RESULT_FIELDS[output] ?? [])
+          .filter((field) => field.startsWith(member[2] ?? ""))
+          .map((field) => item(field, field, `${output} result field`, "parameter"));
+      }
+    }
+
+    const call = openCall(source, cursor);
+    if (call) {
+      const method = this.registry.get(call.method);
+      if (method) {
+        const segment = activeArgument(call.body);
+        const assignment = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=([\s\S]*)$/.exec(segment);
+        if (assignment) {
+          const field = method.input.find((candidate) => candidate.name === assignment[1]);
+          const value = assignment[2]?.trimStart() ?? "";
+          const valueStart = cursor - value.length;
+          if (field?.type === "context") {
+            const fragment = /(?:^|\[\s*|,\s*)([A-Za-z_.]*)$/.exec(value)?.[1] ?? "";
+            const references = [
+              ["ref.selection", "ref.selection"],
+              ["ref.active_file", "ref.active_file"],
+              ["ref.file", 'ref.file("")'],
+              ["ref.symbol", 'ref.symbol("")']
+            ] as const;
+            return references.filter(([label]) => label.startsWith(fragment)).map(([label, insertText]) => ({
+              label,
+              insertText,
+              detail: "context reference",
+              kind: "reference",
+              replaceStart: cursor - fragment.length,
+              replaceEnd: cursor
+            }));
+          }
+          if (field?.type === "boolean") {
+            return ["True", "False"].filter((option) => option.startsWith(value)).map((option) => ({
+              label: option,
+              insertText: option,
+              detail: "boolean",
+              kind: "value",
+              replaceStart: valueStart,
+              replaceEnd: cursor
+            }));
+          }
+          if (field?.type === "enum") {
+            const fragment = value.startsWith('"') || value.startsWith("'") ? value.slice(1) : value;
+            return (field.values ?? []).filter((option) => option.startsWith(fragment)).map((option) => ({
+              label: option,
+              insertText: `"${option}"`,
+              detail: "enum value",
+              kind: "value",
+              replaceStart: valueStart,
+              replaceEnd: cursor
+            }));
+          }
+          return [];
+        }
+        const used = new Set(
+          [...call.body.matchAll(/([A-Za-z_][A-Za-z0-9_]*)\s*=/g)].map((match) => match[1])
+        );
+        const fragment = /[A-Za-z_][A-Za-z0-9_]*$/.exec(segment)?.[0] ?? "";
+        return method.input
+          .filter((field) => !used.has(field.name) && field.name.startsWith(fragment))
+          .map((field) => item(field.name, `${field.name}=`, formatParameter(field), "parameter"));
+      }
+    }
+
+    const methods = this.registry.list();
+    const path = word.split(".");
+    const fragment = path.pop() ?? "";
+    const prefix = path.length ? `${path.join(".")}.` : "";
+    const namespaces = new Map<string, number>();
+    const completions: CompletionItem[] = [];
+    for (const method of methods) {
+      if (!method.id.startsWith(prefix)) continue;
+      const remaining = method.id.slice(prefix.length);
+      const [segment, ...tail] = remaining.split(".");
+      if (!segment?.startsWith(fragment)) continue;
+      if (tail.length) namespaces.set(segment, (namespaces.get(segment) ?? 0) + 1);
+      else completions.push(item(segment, `${segment}(`, `${method.kind} | ${method.output.kind}`, "method"));
+    }
+    for (const [label, count] of namespaces) {
+      completions.push(item(label, `${label}.`, `namespace | ${count} methods`, "namespace"));
+    }
+    return completions.sort((left, right) => left.label.localeCompare(right.label));
   }
 
-  diagnostics(source: string): LanguageDiagnostic[] {
-    let invocation: InvocationAst;
-    try {
-      invocation = parseInvocation(source);
-    } catch (error) {
-      if (error instanceof DslSyntaxError) {
-        return [{ message: error.message, severity: "error", offset: error.offset }];
-      }
-      throw error;
-    }
-
-    const method = this.registry.get(invocation.method);
-    if (!method) {
-      return [{ message: `Unknown method '${invocation.method}'.`, severity: "error", offset: 0 }];
-    }
-    const diagnostics: LanguageDiagnostic[] = [];
-    const seen = new Set<string>();
-    for (const argument of invocation.arguments) {
-      if (seen.has(argument.name)) {
-        diagnostics.push({
-          message: `Argument '${argument.name}' is provided more than once.`,
-          severity: "error",
-          offset: source.indexOf(argument.name)
-        });
-        continue;
-      }
-      seen.add(argument.name);
-      const field = method.input.find((candidate) => candidate.name === argument.name);
-      if (!field) {
-        diagnostics.push({
-          message: `Unknown argument '${argument.name}'.`,
-          severity: "error",
-          offset: source.indexOf(argument.name)
-        });
-      } else if (!valueMatches(field, argument.value)) {
-        diagnostics.push({
-          message: `Argument '${argument.name}' does not match ${formatParameter(field)}.`,
-          severity: "error",
-          offset: source.indexOf(argument.name)
-        });
-      }
-    }
-    for (const field of method.input) {
-      if (field.required && !seen.has(field.name)) {
-        diagnostics.push({
-          message: `Missing required argument '${field.name}'.`,
-          severity: "error",
-          offset: source.length
-        });
-      }
-    }
-    return diagnostics;
+  documentDiagnostics(source: string): LanguageDiagnostic[] {
+    if (!source.trim()) return [];
+    return compileWorkflow(source, this.registry).diagnostics.map((diagnostic) => ({
+      message: diagnostic.message,
+      severity: diagnostic.severity,
+      offset: diagnostic.from,
+      from: diagnostic.from,
+      to: diagnostic.to
+    }));
   }
 
-  hover(source: string, cursor: number): LanguageHover | undefined {
-    let wordStart = cursor;
-    let wordEndOffset = cursor;
-    while (wordStart > 0 && /[A-Za-z0-9_.]/.test(source[wordStart - 1] ?? "")) wordStart -= 1;
-    while (wordEndOffset < source.length && /[A-Za-z0-9_.]/.test(source[wordEndOffset] ?? "")) {
-      wordEndOffset += 1;
-    }
-    const word = source.slice(wordStart, wordEndOffset);
-    const method = this.registry.get(word);
-    if (method) {
-      return {
-        rangeStart: wordStart,
-        rangeEnd: wordEndOffset,
-        label: methodSignature(method),
-        documentation: method.description
+  documentHover(source: string, cursor: number): LanguageHover | undefined {
+    const pattern = /[A-Za-z_][A-Za-z0-9_.]*/g;
+    for (const match of source.matchAll(pattern)) {
+      const from = match.index ?? 0;
+      const to = from + match[0].length;
+      if (cursor < from || cursor > to) continue;
+      const method = this.registry.get(match[0]);
+      if (method) {
+        return {
+          rangeStart: from,
+          rangeEnd: to,
+          label: methodSignature(method),
+          documentation: method.description
+        };
+      }
+      const docs: Record<string, string> = {
+        "ref.selection": "Current editor selection.",
+        "ref.active_file": "Current active file.",
+        "ref.file": "Immutable workspace file or range reference.",
+        "ref.symbol": "Workspace symbol reference."
       };
+      const documentation = docs[match[0]];
+      if (documentation) {
+        return { rangeStart: from, rangeEnd: to, label: match[0], documentation };
+      }
     }
-
-    const open = source.indexOf("(");
-    const invocationMethod = open >= 0 ? this.registry.get(source.slice(0, open).trim()) : undefined;
-    if (!invocationMethod || cursor <= open) {
-      return undefined;
-    }
-    const parameterWord = /^[A-Za-z_][A-Za-z0-9_]*$/.test(word) ? word : "";
-    const field = invocationMethod.input.find((candidate) => candidate.name === parameterWord);
-    if (!field || source.slice(wordEndOffset).match(/^\s*:/) === null) {
-      return undefined;
-    }
-    const qualifiers = [field.required ? "Required." : "Optional."];
-    if (field.default !== undefined) qualifiers.push(`Default: ${String(field.default)}.`);
-    return {
-      rangeStart: wordStart,
-      rangeEnd: wordEndOffset,
-      label: formatParameter(field),
-      documentation: [field.description, ...qualifiers].filter(Boolean).join(" ")
-    };
+    return undefined;
   }
 
-  signature(source: string, cursor = source.length): SignatureHelp | undefined {
-    const prefix = source.slice(0, cursor);
-    const open = unclosedCallOffset(prefix);
-    if (open === undefined || cursor <= open) {
-      return undefined;
-    }
-    const method = this.registry.get(prefix.slice(0, open).trim());
-    if (!method) {
-      return undefined;
-    }
+  documentSignature(source: string, cursor = source.length): SignatureHelp | undefined {
+    const call = /([A-Za-z_][A-Za-z0-9_.]*)\(([^()]*)$/.exec(source.slice(0, cursor));
+    const method = call ? this.registry.get(call[1] ?? "") : undefined;
+    if (!call || !method) return undefined;
     const activeParameter = Math.min(
-      topLevelOffsets(prefix.slice(open + 1), ",").length,
+      call[2]?.match(/,/g)?.length ?? 0,
       Math.max(0, method.input.length - 1)
     );
     return {

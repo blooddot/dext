@@ -2,145 +2,72 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { BUILTIN_METHODS } from "../src/core/builtins.js";
 import { DextLanguageService } from "../src/core/languageService.js";
 import { MethodRegistry } from "../src/core/registry.js";
-import type { CallableDefinition } from "../src/core/types.js";
 
-describe("DextLanguageService", () => {
+describe("DextLanguageService workflow features", () => {
   let service: DextLanguageService;
-
   beforeEach(() => {
     const registry = new MethodRegistry();
     registry.registerMany(BUILTIN_METHODS, "builtin");
     service = new DextLanguageService(registry);
   });
 
-  it("completes method paths one segment at a time", () => {
-    expect(service.completions("")).toEqual([
+  it("completes APIs, keyword arguments, references, and result fields", () => {
+    expect(service.documentCompletions("co").map((item) => item.label)).toEqual(["code"]);
+    const codeNamespace = service.documentCompletions("code.");
+    expect(codeNamespace.map((item) => item.label)).toEqual(["apply", "edit", "explain", "review"]);
+    expect(codeNamespace.every((item) => item.replaceStart === 5 && item.replaceEnd === 5)).toBe(true);
+    const codeFragment = service.documentCompletions("code.ex");
+    expect(codeFragment.map((item) => item.label)).toEqual(["explain"]);
+    expect(codeFragment[0]).toMatchObject({ replaceStart: 5, replaceEnd: 7 });
+    expect(service.documentCompletions("code.review(ta").map((item) => item.label)).toEqual(["target"]);
+    const references = service.documentCompletions("code.review(target=ref.");
+    expect(references.map((item) => item.label)).toEqual(["selection", "active_file", "file", "symbol"]);
+    expect(references.every((item) => item.replaceStart === 23 && item.replaceEnd === 23)).toBe(true);
+    expect(service.documentCompletions("code.review(target=r").map((item) => item.label))
+      .toEqual(["ref.selection", "ref.active_file", "ref.file", "ref.symbol"]);
+    const source = 'analysis = chat(message="x")\nedit = code.edit(target=[ref.selection], instruction=analysis.';
+    expect(service.documentCompletions(source).map((item) => item.label)).toEqual(["text"]);
+    const status = 'review = code.review(target=ref.selection)\nif review.status == "';
+    expect(service.documentCompletions(status).map((item) => item.label))
+      .toEqual(["pass", "warning", "fail"]);
+    const terminalFields = 'terminal_result = terminal.run(command="node --version")\nterminal_result.';
+    expect(service.documentCompletions(terminalFields).map((item) => item.label))
+      .toEqual(["status", "command", "cwd", "exit_code", "stdout", "stderr", "duration_ms"]);
+    const terminalStatus = 'terminal_result = terminal.run(command="node --version")\nif terminal_result.status == "';
+    expect(service.documentCompletions(terminalStatus).map((item) => item.label))
+      .toEqual(["succeeded", "failed", "timed_out"]);
+    const printed = 'printed = print(text="x")\nprinted.';
+    expect(service.documentCompletions(printed).map((item) => item.label)).toEqual(["text", "label"]);
+  });
+
+  it("reports exact semantic ranges", () => {
+    const source = 'code.review(instruction=2)';
+    expect(service.documentDiagnostics(source)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ message: expect.stringContaining("expects string"), from: source.indexOf("2"), to: source.indexOf("2") + 1 }),
+      expect.objectContaining({ message: "Missing required argument 'target'." })
+    ]));
+
+    const misspelled = "code.review(targe=ref.selection)";
+    expect(service.documentDiagnostics(misspelled)).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        label: "core",
-        insertText: "core.",
-        detail: "namespace | 3 methods",
-        kind: "namespace"
+        message: "Unknown argument 'targe' for 'code.review'.",
+        from: misspelled.indexOf("targe"),
+        to: misspelled.indexOf("targe") + "targe".length
       })
-    ]);
-    expect(service.completions("c")).toEqual([
-      expect.objectContaining({ label: "core", insertText: "core.", kind: "namespace" })
-    ]);
-    expect(service.completions("core.").map((item) => item.label)).toEqual([
-      "chat",
-      "code",
-      "context"
-    ]);
-    expect(service.completions("core.c").map((item) => item.label)).toEqual([
-      "chat",
-      "code",
-      "context"
-    ]);
-    expect(service.completions("core.chat.")).toEqual([
-      expect.objectContaining({
-        label: "respond",
-        insertText: "respond(",
-        detail: expect.stringContaining("command method"),
-        kind: "method"
-      })
-    ]);
-    expect(service.completions("core.code.").map((item) => item.label)).toEqual(["review"]);
-    expect(service.completions("core.context.").map((item) => item.label)).toEqual(["snapshot"]);
+    ]));
   });
 
-  it("completes parameters, enum values, and references", () => {
-    const parameterSource = "core.code.review(ta";
-    expect(service.completions(parameterSource)).toContainEqual(expect.objectContaining({
-      label: "target",
-      replaceStart: parameterSource.indexOf("ta"),
-      replaceEnd: parameterSource.length
-    }));
-
-    expect(service.completions("core.code.review(target: ").map((item) => item.label)).toEqual([
-      "@selection",
-      "@activeFile",
-      "@file",
-      "@symbol"
-    ]);
-    expect(service.completions("core.code.review(target: @fi").map((item) => item.label)).toEqual([
-      "@file"
-    ]);
-    expect(service.completions("core.code.review(target: @activeFile")).toEqual([]);
-    expect(service.completions("core.code.review(target: @file(")).toEqual([]);
-    expect(service.completions('core.code.review(target: @file("")')).toEqual([]);
-    expect(service.completions('core.code.review(target: @file("src/fi')).toEqual([]);
-
-    expect(
-      service.completions("core.code.review(target: @selection, focus: c").map((item) => item.label)
-    ).toEqual(["correctness"]);
-    expect(service.completions('core.code.review(target: @selection, focus: "correctness"')).toEqual([]);
-  });
-
-  it("filters boolean values and stops after a complete value", () => {
-    const definition: CallableDefinition = {
-      id: "test.toggle",
-      title: "Toggle",
-      description: "Toggle a setting.",
-      kind: "command",
-      version: "1.0.0",
-      input: [{ name: "enabled", type: "boolean", required: true }],
-      output: { kind: "text" },
-      executor: { kind: "deterministic", handler: "toggle" }
-    };
-    const registry = new MethodRegistry();
-    registry.register(definition, "project");
-    const booleanService = new DextLanguageService(registry);
-
-    expect(booleanService.completions("test.toggle(enabled: t").map((item) => item.label)).toEqual(["true"]);
-    expect(booleanService.completions("test.toggle(enabled: true")).toEqual([]);
-  });
-
-  it("replaces only the current method path segment", () => {
-    const source = "core.coZZ";
-    const completions = service.completions(source, "core.co".length);
-    expect(completions.map((item) => item.label)).toEqual(["code", "context"]);
-    expect(completions).toEqual(completions.map((item) => ({ ...item, replaceStart: 5, replaceEnd: 9 })));
-  });
-
-  it("stops completing after the method call is closed", () => {
-    expect(service.completions("core.code.review(target: @activeFile)")).toEqual([]);
-    expect(service.completions('core.code.review(target: @file("src/app.ts"))')).toEqual([]);
-  });
-
-  it("reports semantic diagnostics", () => {
-    expect(service.diagnostics("core.code.review(focus: 2)").map((item) => item.message)).toEqual([
-      "Argument 'focus' does not match focus?: correctness | maintainability | security.",
-      "Missing required argument 'target'."
-    ]);
-  });
-
-  it("provides signature help", () => {
-    expect(service.signature("core.code.review(target: @selection, ")).toMatchObject({
+  it("provides API hover and signature help", () => {
+    const source = "code.review(target=";
+    expect(service.documentHover(source, 2)).toMatchObject({ label: expect.stringContaining("code.review") });
+    expect(service.documentSignature(source)).toMatchObject({ activeParameter: 0, label: expect.stringContaining("target=") });
+    expect(service.documentSignature("terminal.run(command=\"pwd\", cwd=")).toMatchObject({
       activeParameter: 1,
-      label: expect.stringContaining("target: context"),
-      parameters: [expect.objectContaining({ label: "target: context" }), expect.any(Object)]
+      label: expect.stringContaining("timeout_ms?=number")
     });
-    expect(service.signature('core.code.review(target: @file("a,b"), focus: ')).toMatchObject({
-      activeParameter: 1
-    });
-    expect(service.signature('core.code.review(target: ["a,b", "c"], focus: ')).toMatchObject({
-      activeParameter: 1
-    });
-    expect(service.signature("core.code.review(target: @selection)")).toBeUndefined();
-  });
-
-  it("provides method and parameter hover content", () => {
-    const source = "core.code.review(target: @selection)";
-    expect(service.hover(source, source.indexOf("code"))).toMatchObject({
-      rangeStart: 0,
-      rangeEnd: "core.code.review".length,
-      label: expect.stringContaining("-> review"),
-      documentation: expect.stringContaining("structured review")
-    });
-    expect(service.hover(source, source.indexOf("target") + 1)).toMatchObject({
-      rangeStart: source.indexOf("target"),
-      rangeEnd: source.indexOf("target") + "target".length,
-      label: "target: context",
-      documentation: expect.stringContaining("Required")
+    expect(service.documentSignature("print(text=")).toMatchObject({
+      activeParameter: 0,
+      label: expect.stringContaining("label?=string")
     });
   });
 });

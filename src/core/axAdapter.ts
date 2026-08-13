@@ -2,10 +2,16 @@ import { f, type AxSignature } from "@ax-llm/ax";
 import { z, type ZodType } from "zod";
 import {
   codeResultSchema,
+  chatResultSchema,
   dextResultSchema,
+  editResultSchema,
+  explainResultSchema,
+  applyResultSchema,
   patchResultSchema,
   planResultSchema,
+  printResultSchema,
   reviewResultSchema,
+  terminalResultSchema,
   textResultSchema
 } from "./schemas.js";
 import type {
@@ -32,6 +38,14 @@ const contextReferenceSchema: ZodType<ContextReference> = z.discriminatedUnion("
   z.object({ kind: z.literal("symbol"), name: z.string().min(1) }).strict()
 ]);
 
+const codeRefSchema = z.object({
+  kind: z.literal("codeRef"),
+  uri: z.string(),
+  documentVersion: z.number(),
+  contentHash: z.string(),
+  content: z.string()
+}).passthrough();
+
 function scalarSchema(field: FieldDefinition): ZodType {
   switch (field.type) {
     case "string":
@@ -46,15 +60,20 @@ function scalarSchema(field: FieldDefinition): ZodType {
       }
       return z.enum(field.values as [string, ...string[]]);
     case "context":
-      return contextReferenceSchema;
+      return z.union([contextReferenceSchema, codeRefSchema]);
+    case "patch":
+      return patchResultSchema;
   }
 }
 
 function inputSchema(definition: CallableDefinition): ZodType {
   const shape: Record<string, ZodType> = {};
   for (const field of definition.input) {
-    let schema = field.multiple ? z.array(scalarSchema(field)) : scalarSchema(field);
-    if (!field.required) {
+    const scalar = scalarSchema(field);
+    let schema = field.multiple ? z.union([scalar, z.array(scalar)]) : scalar;
+    if (field.default !== undefined) {
+      schema = schema.default(field.default);
+    } else if (!field.required) {
       schema = schema.optional();
     }
     shape[field.name] = schema;
@@ -64,6 +83,18 @@ function inputSchema(definition: CallableDefinition): ZodType {
 
 function outputSchema(kind: CallableDefinition["output"]["kind"]): ZodType {
   switch (kind) {
+    case "chat":
+      return chatResultSchema;
+    case "explain":
+      return explainResultSchema;
+    case "edit":
+      return editResultSchema;
+    case "apply":
+      return applyResultSchema;
+    case "terminal":
+      return terminalResultSchema;
+    case "print":
+      return printResultSchema;
     case "text":
       return textResultSchema;
     case "code":

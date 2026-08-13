@@ -5,6 +5,7 @@ import type { MethodRegistry } from "./registry.js";
 import type {
   CodeRef,
   DextResult,
+  ExecutionMetadata,
   InvocationAst,
   ResolvedInvocation,
   RuntimeResponse
@@ -21,6 +22,11 @@ function requireCodeRef(value: unknown): CodeRef {
   return value as CodeRef;
 }
 
+function requireCodeRefs(value: unknown): CodeRef[] {
+  const values = Array.isArray(value) ? value : [value];
+  return values.map(requireCodeRef);
+}
+
 function displayValue(value: unknown): string {
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
     return String(value);
@@ -34,11 +40,33 @@ function displayValue(value: unknown): string {
   return JSON.stringify(value) ?? "";
 }
 
-const DEFAULT_HANDLERS: Readonly<Record<string, DeterministicHandler>> = {
+export const DEFAULT_HANDLERS: Readonly<Record<string, DeterministicHandler>> = {
   chatRespond: ({ arguments: args }) => ({
-    kind: "text",
+    kind: "chat",
     text: typeof args.message === "string" ? args.message : ""
   }),
+  explainCode: ({ arguments: args }) => {
+    const files = requireCodeRefs(args.target);
+    const lines = files.reduce((total, file) => total + file.content.split(/\r?\n/).length, 0);
+    return {
+      kind: "explain",
+      text: `Resolved ${lines} lines from ${files.length} code reference(s). A model adapter is required for semantic explanation.`,
+      files
+    };
+  },
+  editCode: ({ arguments: args, method }) => {
+    const files = requireCodeRefs(args.target);
+    return {
+      kind: "edit",
+      summary: "No changes generated: the deterministic executor does not invent semantic edits.",
+      patch: {
+        kind: "patch",
+        title: method.title,
+        changes: files.map((file) => ({ uri: file.uri, before: file.content, after: file.content }))
+      },
+      files
+    };
+  },
   contextSnapshot: ({ arguments: args }) => {
     const target = requireCodeRef(args.target);
     const extension = /\.([A-Za-z0-9]+)$/.exec(target.uri)?.[1] ?? "text";
@@ -50,20 +78,42 @@ const DEFAULT_HANDLERS: Readonly<Record<string, DeterministicHandler>> = {
     };
   },
   reviewCode: ({ arguments: args }) => {
-    const target = requireCodeRef(args.target);
-    const lines = target.content.split(/\r?\n/).length;
+    const targets = requireCodeRefs(args.target);
+    const lines = targets.reduce((total, target) => total + target.content.split(/\r?\n/).length, 0);
     return {
       kind: "review",
-      summary: `Resolved ${lines} lines for ${typeof args.focus === "string" ? args.focus : "correctness"} review.`,
+      status: "warning",
+      summary: `Resolved ${lines} lines for deterministic review.`,
       findings: [
         {
-          severity: "info",
+          severity: "warning",
           message: "The deterministic first-version executor validates context only; connect a model adapter for semantic findings.",
-          uri: target.uri
+          ...(targets[0] ? { uri: targets[0].uri } : {})
         }
       ]
     };
   },
+  applyPatch: ({ arguments: args }) => {
+    const patch = args.patch;
+    if (typeof patch !== "object" || patch === null || Array.isArray(patch) || patch.kind !== "patch") {
+      throw new Error("code.apply requires the patch field from an EditResult.");
+    }
+    const changed = patch.changes.filter((change) => change.before !== change.after);
+    if (changed.length) {
+      throw new Error("Writing patches is not enabled in the deterministic first version.");
+    }
+    return {
+      kind: "apply",
+      status: "unchanged",
+      files: [],
+      summary: "The patch contains no changes; no workspace files were written."
+    };
+  },
+  printText: ({ arguments: args }) => ({
+    kind: "print",
+    text: typeof args.text === "string" ? args.text : "",
+    ...(typeof args.label === "string" ? { label: args.label } : {})
+  }),
   echoText: ({ arguments: args }) => ({
     kind: "text",
     text: Object.values(args).map(displayValue).join(" ")
@@ -112,7 +162,8 @@ export class DextRuntime {
 
   async execute(
     invocation: InvocationAst,
-    supplementalContext: readonly CodeRef[] = []
+    supplementalContext: readonly CodeRef[] = [],
+    metadata: Readonly<ExecutionMetadata> = {}
   ): Promise<RuntimeResponse> {
     const started = performance.now();
     const method = this.registry.get(invocation.method);
@@ -134,7 +185,8 @@ export class DextRuntime {
     const resolvedInvocation = await this.resolver.resolve(invocation, method);
     const resolved = {
       ...resolvedInvocation,
-      context: mergeContext(resolvedInvocation.context, supplementalContext)
+      context: mergeContext(resolvedInvocation.context, supplementalContext),
+      metadata
     };
     const handler = this.handlers[method.executor.handler];
     if (!handler) {
@@ -150,7 +202,20 @@ export class DextRuntime {
         source: method.source
       },
       result,
-      durationMs: performance.now() - started
+      durationMs: performance.now() - started,
+      ...(metadata.instruction ? { instruction: metadata.instruction } : {})
     };
+  }
+
+  async executeSerial(
+    invocations: readonly InvocationAst[],
+    supplementalContext: readonly CodeRef[] = [],
+    metadata: Readonly<ExecutionMetadata> = {}
+  ): Promise<RuntimeResponse[]> {
+    const responses: RuntimeResponse[] = [];
+    for (const invocation of invocations) {
+      responses.push(await this.execute(invocation, supplementalContext, metadata));
+    }
+    return responses;
   }
 }

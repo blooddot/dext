@@ -30,7 +30,7 @@ export class ClipboardClient {
     return new Promise((resolve) => this.pending.set(requestId, { kind: "write", resolve }));
   }
 
-  read(purpose: "code" | "chat"): Promise<ClipboardReadResult | undefined> {
+  read(purpose: "code"): Promise<ClipboardReadResult | undefined> {
     const requestId = ++this.nextRequestId;
     this.post({ type: "clipboardRead", requestId, purpose });
     return new Promise((resolve) => this.pending.set(requestId, { kind: "read", resolve }));

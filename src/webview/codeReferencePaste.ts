@@ -1,8 +1,9 @@
 import type { ClipboardReadResult } from "./clipboardClient.js";
+import { inlineInsertion } from "./inputInsertion.js";
 
 function fileStringRanges(source: string): Array<{ start: number; end: number }> {
   const ranges: Array<{ start: number; end: number }> = [];
-  const pattern = /@file\s*\(\s*"/g;
+  const pattern = /ref\.file\s*\(\s*"/g;
   for (const match of source.matchAll(pattern)) {
     let offset = (match.index ?? 0) + match[0].length;
     const start = offset;
@@ -31,8 +32,8 @@ export function codeReferencePasteText(
   if (insideFileString) return reference.payload;
   const before = source.slice(0, selectionStart);
   const after = source.slice(selectionEnd);
-  if (/@file\s*\(\s*$/.test(before) && /^\s*(?:\)|$)/.test(after)) {
+  if (/ref\.file\s*\(\s*$/.test(before) && /^\s*(?:\)|$)/.test(after)) {
     return `"${reference.payload}"`;
   }
-  return reference.expression;
+  return inlineInsertion(source, selectionStart, selectionEnd, reference.expression).text;
 }

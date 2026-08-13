@@ -1,64 +1,99 @@
 import type { CallableDefinition } from "./types.js";
 
+const CONTEXTS = ["selection", "activeFile", "file", "symbol"] as const;
+
 export const BUILTIN_METHODS: readonly CallableDefinition[] = [
   {
-    id: "core.chat.respond",
-    title: "Respond",
-    description: "Return a deterministic structured response for chat input.",
+    id: "chat",
+    title: "Chat",
+    description: "Return a typed response for an explicit natural-language instruction.",
     kind: "command",
     version: "1.0.0",
     input: [
-      {
-        name: "message",
-        type: "string",
-        required: true,
-        description: "The user's message."
-      }
+      { name: "message", type: "string", required: true, description: "Instruction for the model." },
+      { name: "context", type: "context", multiple: true, description: "Optional immutable code references." }
     ],
-    output: { kind: "text" },
+    output: { kind: "chat" },
+    context: [...CONTEXTS],
     executor: { kind: "deterministic", handler: "chatRespond" }
   },
   {
-    id: "core.code.review",
-    title: "Review Code",
-    description: "Inspect referenced code and produce a structured review shell.",
+    id: "code.explain",
+    title: "Explain Code",
+    description: "Resolve code references and return an honest deterministic explanation shell.",
     kind: "command",
     version: "1.0.0",
     input: [
-      {
-        name: "target",
-        type: "context",
-        required: true,
-        description: "Code to review."
-      },
-      {
-        name: "focus",
-        type: "enum",
-        values: ["correctness", "maintainability", "security"],
-        default: "correctness",
-        description: "Review focus."
-      }
+      { name: "target", type: "context", required: true, multiple: true, description: "Code to explain." },
+      { name: "instruction", type: "string", description: "Explanation focus." }
+    ],
+    output: { kind: "explain" },
+    context: [...CONTEXTS],
+    executor: { kind: "deterministic", handler: "explainCode" }
+  },
+  {
+    id: "code.edit",
+    title: "Edit Code",
+    description: "Produce a typed no-op edit preview until a model adapter is connected.",
+    kind: "command",
+    version: "1.0.0",
+    input: [
+      { name: "target", type: "context", required: true, multiple: true, description: "Code to edit." },
+      { name: "instruction", type: "string", required: true, description: "Requested edit." }
+    ],
+    output: { kind: "edit" },
+    context: [...CONTEXTS],
+    executor: { kind: "deterministic", handler: "editCode" }
+  },
+  {
+    id: "code.review",
+    title: "Review Code",
+    description: "Resolve code and produce a structured review result.",
+    kind: "command",
+    version: "1.0.0",
+    input: [
+      { name: "target", type: "context", required: true, multiple: true, description: "Code to review." },
+      { name: "instruction", type: "string", description: "Review focus." }
     ],
     output: { kind: "review" },
-    context: ["selection", "activeFile", "file", "symbol"],
+    context: [...CONTEXTS],
     executor: { kind: "deterministic", handler: "reviewCode" }
   },
   {
-    id: "core.context.snapshot",
-    title: "Context Snapshot",
-    description: "Resolve a code reference and return its immutable snapshot.",
-    kind: "skill",
+    id: "code.apply",
+    title: "Apply Patch",
+    description: "Validate a typed patch result. First version reports no-op patches without writing files.",
+    kind: "command",
+    version: "1.0.0",
+    input: [{ name: "patch", type: "patch", required: true, description: "Patch produced by code.edit." }],
+    output: { kind: "apply" },
+    executor: { kind: "deterministic", handler: "applyPatch" }
+  },
+  {
+    id: "print",
+    title: "Print",
+    description: "Render a typed text value in Dext Output.",
+    kind: "command",
     version: "1.0.0",
     input: [
-      {
-        name: "target",
-        type: "context",
-        required: true,
-        description: "Code reference to resolve."
-      }
+      { name: "text", type: "string", required: true, description: "Text rendered in Dext Output." },
+      { name: "label", type: "string", description: "Optional output label." }
     ],
-    output: { kind: "code" },
-    context: ["selection", "activeFile", "file", "symbol"],
-    executor: { kind: "deterministic", handler: "contextSnapshot" }
+    output: { kind: "print" },
+    executor: { kind: "deterministic", handler: "printText" }
+  },
+  {
+    id: "terminal.run",
+    title: "Run Terminal Command",
+    description: "Run a confirmed command in a trusted local workspace and return captured output.",
+    kind: "command",
+    version: "1.0.0",
+    input: [
+      { name: "command", type: "string", required: true, description: "Command passed to the platform default shell." },
+      { name: "cwd", type: "string", default: ".", description: "Workspace-contained working directory." },
+      { name: "timeout_ms", type: "number", default: 120000, description: "Timeout in milliseconds, up to 600000." }
+    ],
+    output: { kind: "terminal" },
+    executor: { kind: "deterministic", handler: "terminalRun" }
   }
 ];

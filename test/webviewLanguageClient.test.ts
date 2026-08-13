@@ -21,15 +21,15 @@ class Cancellation {
 }
 
 function languageResponse(requestId: number): WebviewResponse {
-  return { type: "language", requestId, completions: [], diagnostics: [] };
+  return { type: "language", requestId, completions: [], diagnostics: [], inputKind: "empty" };
 }
 
 describe("Webview language request broker", () => {
   it("routes out-of-order responses to their matching requests", async () => {
     const requests: WebviewRequest[] = [];
     const broker = new LanguageRequestBroker((request) => requests.push(request));
-    const first = broker.request("core.", 5);
-    const second = broker.request("core.code.", 10);
+    const first = broker.request("code.", 5);
+    const second = broker.request("code.review", 11);
     const firstId = requests[0]?.type === "language" ? requests[0].requestId : -1;
     const secondId = requests[1]?.type === "language" ? requests[1].requestId : -1;
 
@@ -43,7 +43,7 @@ describe("Webview language request broker", () => {
     const requests: WebviewRequest[] = [];
     const cancellation = new Cancellation();
     const broker = new LanguageRequestBroker((request) => requests.push(request));
-    const response = broker.request("core.", 5, cancellation);
+    const response = broker.request("code.", 5, cancellation);
     const requestId = requests[0]?.type === "language" ? requests[0].requestId : -1;
 
     cancellation.cancel();
@@ -52,7 +52,7 @@ describe("Webview language request broker", () => {
   });
 
   it("rejects an outdated source snapshot", () => {
-    expect(sourceSnapshotMatches("core.code.review(", "core.code.review(")).toBe(true);
-    expect(sourceSnapshotMatches("core.code.review(target: ", "core.code.review(")).toBe(false);
+    expect(sourceSnapshotMatches("code.review(", "code.review(")).toBe(true);
+    expect(sourceSnapshotMatches("code.review(target=", "code.review(")).toBe(false);
   });
 });

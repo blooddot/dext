@@ -15,6 +15,9 @@ export class MethodRegistry {
 
   register(definition: CallableDefinition, source: MethodSource): void {
     const current = this.methods.get(definition.id);
+    if (current?.source === "builtin" && source !== "builtin") {
+      return;
+    }
     if (current && SOURCE_PRIORITY[current.source] > SOURCE_PRIORITY[source]) {
       return;
     }

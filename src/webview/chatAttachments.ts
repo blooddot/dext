@@ -69,17 +69,3 @@ export function parseDroppedFiles(payload: DroppedUriPayload): DroppedFileItem[]
   const fallback = parseUriList(payload.plainText);
   return fallback.length > 0 && fallback.every(isAbsoluteUri) ? uriItems(fallback) : [];
 }
-
-export function insertAtSelection(
-  value: string,
-  text: string,
-  start: number,
-  end: number
-): { value: string; cursor: number } {
-  const safeStart = Math.max(0, Math.min(start, value.length));
-  const safeEnd = Math.max(safeStart, Math.min(end, value.length));
-  return {
-    value: `${value.slice(0, safeStart)}${text}${value.slice(safeEnd)}`,
-    cursor: safeStart + text.length
-  };
-}

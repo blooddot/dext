@@ -3,13 +3,13 @@ import { z } from "zod";
 const contextKindSchema = z.enum(["selection", "activeFile", "file", "symbol"]);
 
 function matchesDefaultType(
-  type: "string" | "number" | "boolean" | "enum" | "context",
+  type: "string" | "number" | "boolean" | "enum" | "context" | "patch",
   value: string | number | boolean
 ): boolean {
   if (type === "enum") {
     return typeof value === "string";
   }
-  if (type === "context") {
+  if (type === "context" || type === "patch") {
     return false;
   }
   return typeof value === type;
@@ -18,7 +18,7 @@ function matchesDefaultType(
 export const fieldDefinitionSchema = z
   .object({
     name: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/),
-    type: z.enum(["string", "number", "boolean", "enum", "context"]),
+    type: z.enum(["string", "number", "boolean", "enum", "context", "patch"]),
     description: z.string().optional(),
     required: z.boolean().optional(),
     values: z.array(z.string()).optional(),
@@ -78,7 +78,7 @@ export const callableDefinitionSchema = z
     input: z.array(fieldDefinitionSchema),
     output: z
       .object({
-        kind: z.enum(["text", "code", "review", "plan", "patch"]),
+        kind: z.enum(["chat", "explain", "edit", "review", "apply", "terminal", "print", "text", "code", "plan", "patch"]),
         description: z.string().optional()
       })
       .strict(),
@@ -154,6 +154,7 @@ export const codeResultSchema = z.object({
 });
 export const reviewResultSchema = z.object({
   kind: z.literal("review"),
+  status: z.enum(["pass", "warning", "fail"]),
   summary: z.string(),
   findings: z.array(
     z.object({
@@ -164,6 +165,39 @@ export const reviewResultSchema = z.object({
     })
   )
 });
+export const chatResultSchema = z.object({ kind: z.literal("chat"), text: z.string() });
+export const explainResultSchema = z.object({
+  kind: z.literal("explain"),
+  text: z.string(),
+  files: z.array(z.unknown())
+});
+export const editResultSchema = z.object({
+  kind: z.literal("edit"),
+  summary: z.string(),
+  patch: z.lazy(() => patchResultSchema),
+  files: z.array(z.unknown())
+});
+export const applyResultSchema = z.object({
+  kind: z.literal("apply"),
+  status: z.enum(["applied", "unchanged", "conflict"]),
+  files: z.array(z.unknown()),
+  summary: z.string()
+});
+export const terminalResultSchema = z.object({
+  kind: z.literal("terminal"),
+  status: z.enum(["succeeded", "failed", "timed_out"]),
+  command: z.string(),
+  cwd: z.string(),
+  exit_code: z.number().int(),
+  stdout: z.string(),
+  stderr: z.string(),
+  duration_ms: z.number().nonnegative()
+});
+export const printResultSchema = z.object({
+  kind: z.literal("print"),
+  text: z.string(),
+  label: z.string().optional()
+}).strict();
 export const planResultSchema = z.object({
   kind: z.literal("plan"),
   title: z.string(),
@@ -184,9 +218,15 @@ export const patchResultSchema = z.object({
 });
 
 export const dextResultSchema = z.discriminatedUnion("kind", [
+  chatResultSchema,
+  explainResultSchema,
+  editResultSchema,
   textResultSchema,
   codeResultSchema,
   reviewResultSchema,
   planResultSchema,
-  patchResultSchema
+  patchResultSchema,
+  applyResultSchema,
+  terminalResultSchema,
+  printResultSchema
 ]);

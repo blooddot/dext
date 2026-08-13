@@ -2,12 +2,11 @@ import { describe, expect, it } from "vitest";
 import { webviewRequestSchema } from "../src/webviewProtocol.js";
 
 describe("Webview protocol", () => {
-  it("accepts attachment-aware chat and clipboard requests", () => {
+  it("accepts unified input and clipboard requests", () => {
     expect(webviewRequestSchema.parse({
-      type: "executeChat",
-      message: "Review this",
-      attachmentIds: ["attachment-1"]
-    })).toMatchObject({ type: "executeChat", attachmentIds: ["attachment-1"] });
+      type: "executeInput",
+      source: "Review this"
+    })).toMatchObject({ type: "executeInput", source: "Review this" });
     expect(webviewRequestSchema.safeParse({
       type: "clipboardWrite",
       requestId: 3,
@@ -16,7 +15,7 @@ describe("Webview protocol", () => {
     expect(webviewRequestSchema.safeParse({
       type: "clipboardRead",
       requestId: 4,
-      purpose: "chat"
+      purpose: "code"
     }).success).toBe(true);
     expect(webviewRequestSchema.safeParse({
       type: "dropFiles",
@@ -27,22 +26,17 @@ describe("Webview protocol", () => {
     }).success).toBe(true);
     expect(webviewRequestSchema.safeParse({ type: "chooseFiles" }).success).toBe(true);
     expect(webviewRequestSchema.safeParse({
-      type: "openAttachment",
-      attachmentId: "attachment-1"
-    }).success).toBe(true);
-    expect(webviewRequestSchema.safeParse({
       type: "openFileReference",
       reference: "src/review.ts#L1,1-L1,2"
     }).success).toBe(true);
   });
 
-  it("rejects the old chat shape and attachment lists beyond the host limit", () => {
+  it("rejects old mode-specific execution shapes", () => {
     expect(webviewRequestSchema.safeParse({ type: "executeChat", message: "hello" }).success)
       .toBe(false);
     expect(webviewRequestSchema.safeParse({
-      type: "executeChat",
-      message: "hello",
-      attachmentIds: Array.from({ length: 9 }, (_, index) => `attachment-${index}`)
+      type: "executeCode",
+      source: "chat(message=\"hello\")"
     }).success).toBe(false);
     expect(webviewRequestSchema.safeParse({
       type: "dropFiles",

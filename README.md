@@ -1,58 +1,58 @@
 # Dext
 
-Dext is a first-version typed AI method environment for Visual Studio Code. It treats commands and skills as callable definitions instead of free-form prompts. Code mode invokes those definitions directly; Chat mode deterministically compiles into the same invocation AST and runtime.
+Dext is a typed AI workflow editor for Visual Studio Code. Workflows use a deliberately small Python syntax, but Dext parses them as data and never starts or embeds a Python interpreter.
 
-This version is intentionally offline. It does not connect to a model, request credentials, run workspace scripts, or apply changes to files.
+This first version is offline and deterministic. It validates workflow structure, resolves immutable code references, and produces typed result previews. It does not contact a model or write workspace files.
 
-## Features
+## Workflow language
 
-- Activity Bar sidebar with Code and Chat input modes.
-- A compact method-call DSL with completion, diagnostics, and signature help.
-- Built-in, global, and project method sources with deterministic precedence.
-- Declarative project configuration at `.dext/methods.json`.
-- Workspace Trust gating for all external method configuration.
-- Immutable code references containing URI, range, document version, SHA-256 hash, and content.
-- Context-aware editor copy: Ctrl+C or Cmd+C keeps the exact clipboard text while staging the selected code for Code or Chat.
-- Inline Chat attachments from captured selections, workspace file picking, and Explorer drag-and-drop.
-- A stable Dext IR and Ax adapter that keeps Ax implementation classes out of configuration.
-- Independent renderers for `text`, `code`, `review`, `plan`, and `patch` results.
+Natural language must be explicit through `chat(...)`; arbitrary text is a compile error.
 
-## DSL
-
-One input contains exactly one method invocation with named arguments:
-
-```dext
-core.code.review(
-  target: @selection,
-  focus: "correctness"
+```python
+analysis = chat(
+    message="""Explain this implementation and give refactoring requirements.""",
+    context=[ref.selection],
 )
+
+edit = code.edit(
+    target=[ref.selection],
+    instruction=analysis.text,
+)
+
+review = code.review(
+    target=edit.files,
+    instruction=edit.summary,
+)
+
+if review.status == "pass":
+    applied = code.apply(patch=edit.patch)
 ```
 
-Supported values are strings, numbers, booleans, arrays, and these context references:
+The restricted language supports assignment, keyword-only API calls, strings (including triple-quoted strings), numbers, booleans, homogeneous lists, result member access, comments, and `if`/`else` with `==` or `!=`. Imports, user functions/classes, loops, arbitrary calls, reassignment, `eval`, `exec`, and system/file/network APIs are rejected. Execution is sequential; unselected and downstream steps are reported as `skipped`.
 
-```dext
-@selection
-@activeFile
-@file("src/extension.ts")
-@file("src/extension.ts#L10,1-L18,8")
-@symbol("DextRuntime")
-```
+## Built-in API
 
-Code and Chat share one execution pipeline:
+- `chat(...) -> ChatResult`
+- `code.explain(...) -> ExplainResult`
+- `code.edit(...) -> EditResult`
+- `code.review(...) -> ReviewResult`
+- `code.apply(...) -> ApplyResult`
+- `terminal.run(command, cwd=".", timeout_ms=120000) -> TerminalResult`
+- `print(text, label?) -> PrintResult`
 
-```text
-Code DSL  -- parse/type-check --+
-                                 +-- Invocation AST -- Dext Runtime -- Ax contract -- typed result
-Chat text -- deterministic map --+
-```
+Results are fixed, typed, and composable. For example, `ChatResult.text`, `EditResult.patch`, `EditResult.files`, and `ReviewResult.status` can feed later steps. `ReviewStatus` is the string union `"pass" | "warning" | "fail"`.
 
-Chat currently maps to `core.chat.respond(message: ...)`. Its compiler is isolated so a future intent compiler can replace it without changing the runtime contract.
+`terminal.run` is available only in a trusted local `file` workspace. Its `cwd` must stay inside the workspace, every command requires a VS Code modal confirmation, the timeout is capped at 10 minutes, and captured output is bounded. It returns `TerminalStatus = "succeeded" | "failed" | "timed_out"`; a nonzero exit code is a typed failed result, while rejecting the confirmation cancels that workflow step and skips downstream steps.
 
-With `dext.captureSelectionOnCopy` enabled (the default), copying a nonempty editor selection also captures its source URI, range, version, hash, and content. Pasting that unchanged text into Dext Chat inserts a removable attachment token at the caret instead of duplicate source text. In Code mode the same paste inserts a readable `@file("path#Lstart,column-Lend,column")` reference; pasting inside an existing `@file("")` inserts only its payload. Files can also be attached at the Chat caret with the paperclip button or by dragging workspace files into the composer. Disable the setting to restore VS Code's native copy behavior for selections.
+`print` renders its typed text result only in Dext Output and never writes to the integrated terminal.
+
+Context values are `ref.selection`, `ref.active_file`, `ref.file("path")`, and `ref.symbol("name")`. Copying a VS Code selection, choosing a file, or dropping one into Dext inserts an atomic `ref.file("path#Lstart,column-Lend,column")` chip. The chip can be removed atomically, participates in undo/redo, and opens the referenced file and range when clicked.
+
+The editor uses CodeMirror's Python grammar for syntax highlighting, indentation, bracket matching, and native editor behavior. Dext adds API completion, keyword and result-field completion, signature help, hover documentation, exact compiler diagnostics, and a lint gutter.
 
 ## Method configuration
 
-Project methods live in `.dext/methods.json`. An optional trusted global file can be selected with `dext.globalMethodsFile`.
+Project methods live in `.dext/methods.json`; a trusted global file can be selected with `dext.globalMethodsFile`. IDs use Python-compatible dotted identifiers and appear as callable workflow APIs.
 
 ```json
 {
@@ -65,13 +65,7 @@ Project methods live in `.dext/methods.json`. An optional trusted global file ca
       "kind": "command",
       "version": "1.0.0",
       "input": [
-        { "name": "goal", "type": "string", "required": true },
-        {
-          "name": "areas",
-          "type": "enum",
-          "values": ["runtime", "editor", "tests"],
-          "multiple": true
-        }
+        { "name": "goal", "type": "string", "required": true }
       ],
       "output": { "kind": "plan" },
       "executor": { "kind": "deterministic", "handler": "outlinePlan" }
@@ -80,30 +74,17 @@ Project methods live in `.dext/methods.json`. An optional trusted global file ca
 }
 ```
 
-Supported field types are `string`, `number`, `boolean`, `enum`, and `context`. Set `multiple` for array input. External definitions can select only deterministic handlers compiled into Dext; configuration cannot contain JavaScript or shell commands.
-
-Resolution order is `project > global > builtin` for identical method IDs. External files are not read until VS Code marks the workspace as trusted. `@file` cannot escape the workspace root.
-
-## Built-ins
-
-- `core.chat.respond`: deterministic Chat-mode target.
-- `core.code.review`: resolves code and returns a structured review shell.
-- `core.context.snapshot`: reusable Skill that renders a resolved `CodeRef`.
-
-The review executor confirms the typed pipeline and context boundary only. Semantic code review requires a future model adapter.
+Configuration cannot contain JavaScript, Python, or shell code. External files are not read until VS Code marks the workspace as trusted, and `ref.file` cannot escape the workspace root.
 
 ## Architecture
 
-- `src/core/types.ts`: stable Dext IR and result contracts.
-- `src/core/dsl.ts`: tokenizer and parser.
-- `src/core/languageService.ts`: completion, diagnostics, and signatures.
+- `src/core/workflow.ts`: Lezer Python parser traversal, restricted AST, semantic types, and exact diagnostics.
+- `src/core/workflowRuntime.ts`: sequential result composition and branch/step state.
+- `src/core/languageService.ts`: Dext completions, hover, signatures, and diagnostics.
 - `src/core/contextResolver.ts`: immutable context snapshots.
-- `src/core/axAdapter.ts`: Ax/Zod/JSON Schema boundary.
+- `src/core/axAdapter.ts`: Ax/Zod/JSON Schema contract boundary.
 - `src/core/runtime.ts`: deterministic executor allowlist.
-- `src/application.ts`: VS Code-neutral features composed for the host.
-- `src/sidebarProvider.ts`: typed Webview message bridge.
-
-Ax is used to build structured input/output signatures. Zod is the runtime source of truth and generates JSON Schema contracts. No Ax class or provider setting appears in method configuration.
+- `src/webview/codeEditor.ts`: CodeMirror Python language integration.
 
 ## Development
 
@@ -114,15 +95,4 @@ npm install
 npm run check
 ```
 
-Open the repository in VS Code and run the `Run Dext Extension` launch configuration. The build copies Codicons into `dist` so the Webview has no CDN dependency.
-
-Useful commands:
-
-```bash
-npm run build
-npm run lint
-npm test
-npm run test:host
-```
-
-`test:host` uses an installed VS Code build for an activation/sidebar smoke test. Set `VSCODE_EXECUTABLE_PATH` when VS Code is installed outside its standard platform location, or set `DEXT_TEST_DOWNLOAD=1` to use an isolated downloaded build.
+Run `npm run test:host` for the VS Code activation/sidebar smoke test. Set `VSCODE_EXECUTABLE_PATH` for a nonstandard VS Code installation or `DEXT_TEST_DOWNLOAD=1` for an isolated downloaded build.

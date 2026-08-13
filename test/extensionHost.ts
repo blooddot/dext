@@ -54,10 +54,11 @@ export async function run(): Promise<void> {
 
   const app = new DextApplication();
   await app.reload();
-  const snapshot = await app.executeCode('core.context.snapshot(target: @file("package.json#L1,1-L1,2"))');
-  assert.equal(snapshot.result.kind, "code", "A file reference fragment resolves to code.");
-  if (snapshot.result.kind === "code") {
-    assert.equal(snapshot.result.code, "{", "A file reference fragment resolves its exact range.");
+  const response = await app.executeInput('code.explain(target=[ref.file("package.json#L1,1-L1,2")])');
+  const snapshot = response.executions[0];
+  assert.equal(snapshot?.result.kind, "explain", "A file reference fragment resolves for explanation.");
+  if (snapshot?.result.kind === "explain") {
+    assert.equal(snapshot.result.files[0]?.content, "{", "A file reference fragment resolves its exact range.");
   }
   await openWorkspaceFileReference("package.json#L1,1-L1,2");
   assert.equal(

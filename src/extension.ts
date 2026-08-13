@@ -58,7 +58,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await application.reload();
         await sidebar.refresh();
       }
+      if (
+        event.affectsConfiguration("workbench.colorTheme")
+        || event.affectsConfiguration("workbench.preferredDarkColorTheme")
+        || event.affectsConfiguration("workbench.preferredLightColorTheme")
+        || event.affectsConfiguration("workbench.preferredHighContrastColorTheme")
+        || event.affectsConfiguration("workbench.preferredHighContrastLightColorTheme")
+        || event.affectsConfiguration("window.autoDetectColorScheme")
+        || event.affectsConfiguration("window.autoDetectHighContrast")
+        || event.affectsConfiguration("editor.tokenColorCustomizations")
+      ) {
+        await sidebar.refresh();
+      }
     }),
+    vscode.window.onDidChangeActiveColorTheme(() => sidebar.refresh()),
     vscode.workspace.onDidGrantWorkspaceTrust(async () => {
       await application.reload();
       await sidebar.refresh();

@@ -1,23 +1,15 @@
 import "../../media/styles.css";
-import type { AttachmentView } from "../attachmentStore.js";
-import type { FieldDefinition, RuntimeResponse } from "../core/types.js";
+import type {
+  FieldDefinition,
+  InputExecutionResponse,
+  RuntimeResponse,
+  WorkflowStepResponse
+} from "../core/types.js";
 import type { SidebarState, WebviewRequest, WebviewResponse } from "../webviewProtocol.js";
-import {
-  attachmentForComposerDelete,
-  composerParts,
-  normalizeComposerPoint,
-  removeComposerAttachment,
-  selectedComposerAttachments,
-  serializeComposerParts
-} from "./chatComposer.js";
+import { parseDroppedFiles } from "./chatAttachments.js";
 import { ClipboardClient } from "./clipboardClient.js";
 import { DextCodeEditor } from "./codeEditor.js";
 import { LanguageRequestBroker } from "./languageClient.js";
-import { parseDroppedFiles } from "./chatAttachments.js";
-import {
-  createFileReferenceChip,
-  fileReferenceChipDescriptor
-} from "./fileReferenceChip.js";
 
 interface VsCodeApi {
   postMessage(message: WebviewRequest): void;
@@ -33,16 +25,12 @@ function element<T extends HTMLElement>(id: string): T {
 
 const vscode = acquireVsCodeApi();
 const elements = {
-  codeMode: element<HTMLButtonElement>("code-mode"),
-  chatMode: element<HTMLButtonElement>("chat-mode"),
-  codePanel: element<HTMLElement>("code-panel"),
-  chatPanel: element<HTMLElement>("chat-panel"),
-  chatComposer: element<HTMLElement>("chat-composer"),
+  inputShell: element<HTMLElement>("input-shell"),
   codeEditor: element<HTMLElement>("code-editor"),
-  chatInput: element<HTMLElement>("chat-input"),
   attachFiles: element<HTMLButtonElement>("attach-files"),
   run: element<HTMLButtonElement>("run"),
-  runState: element<HTMLElement>("run-state"),
+  runLabel: element<HTMLElement>("run-label"),
+  problems: element<HTMLButtonElement>("problems"),
   reload: element<HTMLButtonElement>("reload"),
   trust: element<HTMLElement>("trust-status"),
   methods: element<HTMLElement>("methods"),
@@ -55,13 +43,11 @@ const elements = {
 
 const broker = new LanguageRequestBroker((request) => vscode.postMessage(request));
 const clipboard = new ClipboardClient((request) => vscode.postMessage(request));
-let mode: "code" | "chat" = "code";
 let executing = false;
 let hasErrors = false;
-let attachments = new Map<string, AttachmentView>();
-let chatPastePending = false;
-let savedChatRange: Range | undefined;
-const pendingAttachmentRemovals = new Set<string>();
+let problemCounts = { errors: 0, warnings: 0 };
+let inputKind: "empty" | "workflow" | "invalid" = "empty";
+let dropPosition: number | undefined;
 
 const editor = new DextCodeEditor({
   parent: elements.codeEditor,
@@ -69,221 +55,34 @@ const editor = new DextCodeEditor({
   clipboard,
   onRun: run,
   onOpenFileReference: (reference) => vscode.postMessage({ type: "openFileReference", reference }),
-  onDiagnosticsChanged(value) {
-    hasErrors = value;
-    updateRunDisabled();
+  onDiagnosticsChanged(counts) {
+    problemCounts = counts;
+    hasErrors = counts.errors > 0;
+    updateRunState();
+  },
+  onInputKindChanged(kind) {
+    inputKind = kind;
+    updateRunState();
   },
   onError: renderError
 });
 
-function updateRunDisabled(): void {
-  elements.run.disabled = executing || (mode === "code" && hasErrors);
-}
-
-function setMode(nextMode: "code" | "chat"): void {
-  mode = nextMode;
-  const code = mode === "code";
-  elements.codeMode.classList.toggle("active", code);
-  elements.chatMode.classList.toggle("active", !code);
-  elements.codeMode.setAttribute("aria-selected", String(code));
-  elements.chatMode.setAttribute("aria-selected", String(!code));
-  elements.codePanel.classList.toggle("hidden", !code);
-  elements.chatPanel.classList.toggle("hidden", code);
-  if (code) {
-    requestAnimationFrame(() => editor.focus());
-  } else {
-    focusChatInput();
-  }
-  updateRunDisabled();
-}
-
-function triggerCodeAction(action: "suggest" | "parameterHints"): void {
-  setMode("code");
-  requestAnimationFrame(() => {
-    if (action === "suggest") editor.triggerSuggest();
-    else editor.triggerParameterHints();
-  });
-}
-
-function nodeInsideAttachment(node: Node): boolean {
-  const element = node.nodeType === 1 ? node as Element : node.parentElement;
-  return Boolean(element?.closest("[data-attachment-id]"));
-}
-
-function captureChatRange(): void {
-  const selection = window.getSelection();
-  if (!selection?.rangeCount) return;
-  const range = selection.getRangeAt(0);
-  const inside = range.commonAncestorContainer === elements.chatInput
-    || elements.chatInput.contains(range.commonAncestorContainer);
-  if (!inside || nodeInsideAttachment(range.startContainer) || nodeInsideAttachment(range.endContainer)) {
-    return;
-  }
-  const saved = range.cloneRange();
-  if (saved.collapsed) {
-    const point = normalizeComposerPoint(elements.chatInput, saved.startContainer, saved.startOffset);
-    saved.setStart(point.container, point.offset);
-    saved.collapse(true);
-  }
-  savedChatRange = saved;
-}
-
-function chatRange(): Range {
-  if (
-    savedChatRange
-    && savedChatRange.startContainer.isConnected
-    && savedChatRange.endContainer.isConnected
-    && elements.chatInput.contains(savedChatRange.commonAncestorContainer)
-  ) {
-    return savedChatRange.cloneRange();
-  }
-  const range = document.createRange();
-  range.selectNodeContents(elements.chatInput);
-  range.collapse(false);
-  return range;
-}
-
-function selectChatRange(range: Range): void {
-  const selection = window.getSelection();
-  selection?.removeAllRanges();
-  selection?.addRange(range);
-  savedChatRange = range.cloneRange();
-}
-
-function focusChatInput(): void {
-  elements.chatInput.focus();
-  selectChatRange(chatRange());
-}
-
-function insertChatNode(node: Node): Range {
-  const range = chatRange();
-  range.deleteContents();
-  range.insertNode(node);
-  range.setStartAfter(node);
-  range.collapse(true);
-  return range;
-}
-
-function insertAttachmentAtChatRange(node: Node): void {
-  const range = insertChatNode(node);
-  const caret = document.createTextNode("\u200B");
-  node.parentNode?.insertBefore(caret, node.nextSibling);
-  range.setStartAfter(caret);
-  range.collapse(true);
-  selectChatRange(range);
-}
-
-function removeAttachmentToken(token: HTMLElement): void {
-  removeComposerAttachment(elements.chatInput, token);
-}
-
-function removeOrphanedChatCarets(): void {
-  const walker = document.createTreeWalker(elements.chatInput, NodeFilter.SHOW_TEXT);
-  const carets: Text[] = [];
-  while (walker.nextNode()) {
-    const node = walker.currentNode as Text;
-    if (node.textContent === "\u200B") carets.push(node);
-  }
-  for (const node of carets) {
-    const previous = node.previousSibling;
-    if (!(previous instanceof HTMLElement) || !previous.dataset.attachmentId) node.remove();
-  }
-}
-
-function insertChatText(text: string): void {
-  if (!text) return;
-  selectChatRange(insertChatNode(document.createTextNode(text)));
-}
-
-function attachmentElement(id: string): HTMLElement | undefined {
-  return [...elements.chatInput.querySelectorAll<HTMLElement>("[data-attachment-id]")]
-    .find((element) => element.dataset.attachmentId === id);
-}
-
-function createAttachmentToken(attachment: AttachmentView): HTMLElement {
-  const descriptor = fileReferenceChipDescriptor(attachment.label, attachment.uri);
-  const chip = createFileReferenceChip({ document, ...descriptor });
-  chip.dataset.attachmentId = attachment.id;
-  chip.contentEditable = "false";
-  return chip;
-}
-
-function requestAttachmentRemoval(token: HTMLElement, restoreCaret = false): void {
-  const id = token.dataset.attachmentId;
-  if (!id) return;
-  attachments.delete(id);
-  const point = removeComposerAttachment(elements.chatInput, token);
-  if (point && restoreCaret) {
-    const range = document.createRange();
-    range.setStart(point.container, point.offset);
-    range.collapse(true);
-    selectChatRange(range);
-  }
-  if (!pendingAttachmentRemovals.has(id)) {
-    pendingAttachmentRemovals.add(id);
-    vscode.postMessage({ type: "removeAttachment", attachmentId: id });
-  }
-}
-
-function attachmentEventToken(target: EventTarget | null): HTMLElement | undefined {
-  return target instanceof Element
-    ? target.closest<HTMLElement>("[data-attachment-id]") ?? undefined
-    : undefined;
-}
-
-function attachmentRemoveTarget(target: EventTarget | null): HTMLElement | undefined {
-  return target instanceof Element && target.closest(".attachment-remove")
-    ? attachmentEventToken(target)
-    : undefined;
-}
-
-function syncAttachments(next: AttachmentView[]): void {
-  for (const id of pendingAttachmentRemovals) {
-    if (!next.some((attachment) => attachment.id === id)) pendingAttachmentRemovals.delete(id);
-  }
-  const nextAttachments = new Map(next
-    .filter((attachment) => !pendingAttachmentRemovals.has(attachment.id))
-    .map((attachment) => [attachment.id, attachment]));
-  attachments = nextAttachments;
-  for (const token of elements.chatInput.querySelectorAll<HTMLElement>("[data-attachment-id]")) {
-    const id = token.dataset.attachmentId;
-    if (id && !nextAttachments.has(id)) removeAttachmentToken(token);
-  }
-  for (const attachment of nextAttachments.values()) {
-    if (!attachmentElement(attachment.id)) insertAttachmentAtChatRange(createAttachmentToken(attachment));
-  }
-}
-
-async function pasteChatInput(): Promise<void> {
-  if (chatPastePending) return;
-  captureChatRange();
-  chatPastePending = true;
-  try {
-    const result = await clipboard.read("chat");
-    if (!result || result.contextAttached || result.text.length === 0) return;
-    insertChatText(result.text);
-  } finally {
-    chatPastePending = false;
-    focusChatInput();
-  }
+function updateRunState(): void {
+  elements.run.disabled = executing || hasErrors || inputKind === "empty" || inputKind === "invalid";
+  elements.runLabel.textContent = "Run";
+  const parts = [
+    problemCounts.errors ? `${problemCounts.errors} error${problemCounts.errors === 1 ? "" : "s"}` : "",
+    problemCounts.warnings ? `${problemCounts.warnings} warning${problemCounts.warnings === 1 ? "" : "s"}` : ""
+  ].filter(Boolean);
+  elements.problems.textContent = parts.join(" · ") || "No problems";
+  elements.problems.disabled = parts.length === 0;
+  elements.problems.classList.toggle("has-problems", parts.length > 0);
 }
 
 function run(): void {
-  if (elements.run.disabled) return;
-  if (mode === "code") {
-    const source = editor.source.trim();
-    if (source) vscode.postMessage({ type: "executeCode", source });
-  } else {
-    const serialized = serializeComposerParts(composerParts(elements.chatInput));
-    const message = serialized.message.trim();
-    if (message || serialized.attachmentIds.length) {
-      vscode.postMessage({
-        type: "executeChat",
-        message,
-        attachmentIds: serialized.attachmentIds
-      });
-    }
-  }
+  const source = editor.source.trim();
+  if (!source || elements.run.disabled) return;
+  vscode.postMessage({ type: "executeInput", source });
 }
 
 function defaultValue(field: FieldDefinition): string {
@@ -291,9 +90,10 @@ function defaultValue(field: FieldDefinition): string {
   if (field.default !== undefined) {
     return typeof field.default === "string" ? `"${field.default}"` : String(field.default);
   }
-  if (field.type === "context") return "@selection";
+  if (field.type === "context") return "ref.selection";
+  if (field.type === "patch") return "edit.patch";
   if (field.type === "number") return "0";
-  if (field.type === "boolean") return "false";
+  if (field.type === "boolean") return "False";
   if (field.type === "enum") return `"${field.values?.[0] ?? ""}"`;
   return '""';
 }
@@ -301,11 +101,12 @@ function defaultValue(field: FieldDefinition): string {
 function methodTemplate(method: SidebarState["methods"][number]): string {
   const args = method.input
     .filter((field) => field.required)
-    .map((field) => `${field.name}: ${defaultValue(field)}`);
+    .map((field) => `${field.name}=${defaultValue(field)}`);
   return `${method.id}(${args.join(", ")})`;
 }
 
 function renderMethods(state: SidebarState): void {
+  editor.applyTheme(state.theme);
   elements.methods.replaceChildren();
   elements.methodCount.textContent = String(state.methods.length);
   for (const method of state.methods) {
@@ -325,11 +126,7 @@ function renderMethods(state: SidebarState): void {
     const insert = document.createElement("i");
     insert.className = "codicon codicon-add";
     row.append(identity, insert);
-    row.addEventListener("click", () => {
-      setMode("code");
-      const value = methodTemplate(method);
-      editor.setValue(value, Math.max(0, value.length - 1));
-    });
+    row.addEventListener("click", () => editor.insertInvocation(methodTemplate(method)));
     elements.methods.append(row);
   }
   elements.trust.className = `status-dot ${state.trusted ? "trusted" : "untrusted"}`;
@@ -340,6 +137,7 @@ function renderMethods(state: SidebarState): void {
     item.textContent = diagnostic;
     elements.configErrors.append(item);
   }
+  editor.refreshLanguageState();
 }
 
 function resultHeading(response: RuntimeResponse): HTMLElement {
@@ -357,27 +155,75 @@ function codeBlock(content: string): HTMLElement {
   return pre;
 }
 
-function renderResult(response: RuntimeResponse): void {
-  elements.result.replaceChildren(resultHeading(response));
+function renderExecution(response: RuntimeResponse): DocumentFragment {
+  const fragment = document.createDocumentFragment();
+  fragment.append(resultHeading(response));
   const result = response.result;
-  if (result.kind === "text") {
+  if (result.kind === "chat" || result.kind === "text") {
     const paragraph = document.createElement("p");
     paragraph.className = "text-result";
     paragraph.textContent = result.text;
-    elements.result.append(paragraph);
+    fragment.append(paragraph);
+  } else if (result.kind === "explain") {
+    const paragraph = document.createElement("p");
+    paragraph.className = "text-result";
+    paragraph.textContent = result.text;
+    fragment.append(paragraph);
+  } else if (result.kind === "edit") {
+    const paragraph = document.createElement("p");
+    paragraph.className = "text-result";
+    paragraph.textContent = result.summary;
+    fragment.append(paragraph);
+    for (const change of result.patch.changes) {
+      const file = document.createElement("div");
+      file.className = "patch-file";
+      file.textContent = change.uri;
+      fragment.append(file);
+    }
+  } else if (result.kind === "apply") {
+    const paragraph = document.createElement("p");
+    paragraph.className = "text-result";
+    paragraph.textContent = `${result.status}: ${result.summary}`;
+    fragment.append(paragraph);
+  } else if (result.kind === "print") {
+    if (result.label) {
+      const label = document.createElement("div");
+      label.className = "output-title";
+      label.textContent = result.label;
+      fragment.append(label);
+    }
+    const paragraph = document.createElement("p");
+    paragraph.className = "text-result";
+    paragraph.textContent = result.text;
+    fragment.append(paragraph);
+  } else if (result.kind === "terminal") {
+    const summary = document.createElement("p");
+    summary.className = "text-result";
+    summary.textContent = `${result.status} | exit ${result.exit_code} | ${Math.round(result.duration_ms)} ms | ${result.cwd}`;
+    const command = document.createElement("div");
+    command.className = "output-title";
+    command.textContent = result.command;
+    fragment.append(summary, command);
+    if (result.stdout) fragment.append(codeBlock(result.stdout));
+    if (result.stderr) {
+      const stderr = document.createElement("div");
+      stderr.className = "finding error";
+      stderr.textContent = result.stderr;
+      fragment.append(stderr);
+    }
   } else if (result.kind === "code") {
     if (result.title) {
       const title = document.createElement("div");
       title.className = "output-title";
       title.textContent = result.title;
-      elements.result.append(title);
+      fragment.append(title);
     }
-    elements.result.append(codeBlock(result.code));
+    fragment.append(codeBlock(result.code));
   } else if (result.kind === "review") {
     const summary = document.createElement("p");
     summary.className = "text-result";
     summary.textContent = result.summary;
-    elements.result.append(summary);
+    fragment.append(summary);
     for (const finding of result.findings) {
       const item = document.createElement("div");
       item.className = `finding ${finding.severity}`;
@@ -386,7 +232,7 @@ function renderResult(response: RuntimeResponse): void {
       const content = document.createElement("span");
       content.textContent = finding.message;
       item.append(icon, content);
-      elements.result.append(item);
+      fragment.append(item);
     }
   } else if (result.kind === "plan") {
     const title = document.createElement("div");
@@ -396,9 +242,7 @@ function renderResult(response: RuntimeResponse): void {
     list.className = "plan-list";
     for (const step of result.steps) {
       const item = document.createElement("li");
-      const name = document.createElement("span");
-      name.textContent = step.title;
-      item.append(name);
+      item.textContent = step.title;
       if (step.detail) {
         const detail = document.createElement("small");
         detail.textContent = step.detail;
@@ -406,12 +250,12 @@ function renderResult(response: RuntimeResponse): void {
       }
       list.append(item);
     }
-    elements.result.append(title, list);
-  } else {
+    fragment.append(title, list);
+  } else if (result.kind === "patch") {
     const title = document.createElement("div");
     title.className = "output-title";
     title.textContent = result.title;
-    elements.result.append(title);
+    fragment.append(title);
     for (const change of result.changes) {
       const file = document.createElement("div");
       file.className = "patch-file";
@@ -419,178 +263,122 @@ function renderResult(response: RuntimeResponse): void {
       uri.className = "patch-uri";
       uri.textContent = change.uri;
       file.append(uri, codeBlock(`- ${change.before}\n+ ${change.after}`));
-      elements.result.append(file);
+      fragment.append(file);
     }
+  }
+  return fragment;
+}
+
+function renderResult(response: InputExecutionResponse): void {
+  elements.result.replaceChildren();
+  const entries: WorkflowStepResponse[] = response.steps ?? response.executions.map((execution) => ({
+    method: execution.method.id,
+    state: "success" as const,
+    response: execution
+  }));
+  for (const [index, step] of entries.entries()) {
+    const item = document.createElement("section");
+    item.className = "execution-result";
+    if (step.response) item.append(renderExecution(step.response));
+    else {
+      const state = document.createElement("div");
+      state.className = `result-meta step-${step.state}`;
+      state.textContent = `${step.assignment ? `${step.assignment} = ` : ""}${step.method} | ${step.state}`;
+      item.append(state);
+      if (step.error) {
+        const error = document.createElement("p");
+        error.className = "finding error";
+        error.textContent = String(step.error);
+        item.append(error);
+      }
+    }
+    elements.result.append(item);
+    if (index < entries.length - 1) item.classList.add("has-next");
   }
   elements.resultSection.classList.remove("hidden");
 }
 
-function renderError(message: string): void {
-  renderResult({
-    invocation: { kind: "invocation", method: "runtime", arguments: [], source: "code" },
-    method: { id: "runtime", title: "Runtime", kind: "command", source: "builtin" },
-    durationMs: 0,
-    result: {
-      kind: "review",
-      summary: "Execution failed",
-      findings: [{ severity: "error", message }]
-    }
-  });
+function renderError(message: unknown): void {
+  const text = message instanceof Error ? message.message : String(message);
+  elements.result.replaceChildren();
+  const summary = document.createElement("p");
+  summary.className = "finding error";
+  summary.textContent = text;
+  elements.result.append(summary);
+  elements.resultSection.classList.remove("hidden");
 }
 
-elements.codeMode.addEventListener("click", () => setMode("code"));
-elements.chatMode.addEventListener("click", () => setMode("chat"));
-elements.run.addEventListener("click", run);
-elements.reload.addEventListener("click", () => vscode.postMessage({ type: "reload" }));
-elements.clearOutput.addEventListener("click", () => {
-  elements.result.replaceChildren();
-  elements.resultSection.classList.add("hidden");
-});
-elements.chatInput.addEventListener("keydown", (event) => {
-  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "v") {
-    event.preventDefault();
-    event.stopPropagation();
-    void pasteChatInput();
-    return;
-  }
-  if ((event.key === "Backspace" || event.key === "Delete") && !event.altKey && !event.ctrlKey && !event.metaKey) {
-    const selection = window.getSelection();
-    const range = selection?.rangeCount ? selection.getRangeAt(0) : undefined;
-    if (range && !range.collapsed) {
-      const selected = selectedComposerAttachments(elements.chatInput, range);
-      if (selected.length) {
-        event.preventDefault();
-        selected.forEach((token, index) => requestAttachmentRemoval(token, index === selected.length - 1));
-        return;
-      }
-    }
-    if (range?.collapsed) {
-      const token = attachmentForComposerDelete(
-        elements.chatInput,
-        range.startContainer,
-        range.startOffset,
-        event.key === "Backspace" ? "backward" : "forward"
-      );
-      if (token) {
-        event.preventDefault();
-        requestAttachmentRemoval(token, true);
-        return;
-      }
-    }
-  }
-  if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
-    event.preventDefault();
-    run();
-  }
-});
-for (const eventName of ["pointerdown", "mousedown"] as const) {
-  elements.chatComposer.addEventListener(eventName, (event) => {
-    const token = attachmentRemoveTarget(event.target);
-    if (!token) return;
-    event.preventDefault();
-    event.stopPropagation();
-    requestAttachmentRemoval(token, true);
-  });
-}
-elements.chatComposer.addEventListener("click", (event) => {
-  const removeToken = attachmentRemoveTarget(event.target);
-  if (removeToken) {
-    event.preventDefault();
-    event.stopPropagation();
-    requestAttachmentRemoval(removeToken, true);
-    return;
-  }
-  const token = attachmentEventToken(event.target);
-  const id = token?.dataset.attachmentId;
-  if (id) vscode.postMessage({ type: "openAttachment", attachmentId: id });
-});
-elements.chatInput.addEventListener("paste", (event) => {
-  event.preventDefault();
-  void pasteChatInput();
-});
-for (const eventName of ["input", "keyup", "mouseup", "focus"] as const) {
-  elements.chatInput.addEventListener(eventName, captureChatRange);
-}
-document.addEventListener("selectionchange", captureChatRange);
-elements.attachFiles.addEventListener("mousedown", captureChatRange);
-elements.attachFiles.addEventListener("click", () => {
-  vscode.postMessage({ type: "chooseFiles" });
-});
-elements.chatComposer.addEventListener("dragover", (event) => {
-  event.preventDefault();
-  elements.chatComposer.classList.add("drop-active");
-});
-elements.chatComposer.addEventListener("dragleave", (event) => {
-  if (event.relatedTarget instanceof Node && elements.chatComposer.contains(event.relatedTarget)) return;
-  elements.chatComposer.classList.remove("drop-active");
-});
-elements.chatComposer.addEventListener("drop", (event) => {
-  event.preventDefault();
-  elements.chatComposer.classList.remove("drop-active");
-  const transfer = event.dataTransfer;
-  if (!transfer) return;
-  const caretPosition = document.caretPositionFromPoint?.(event.clientX, event.clientY);
-  if (caretPosition && elements.chatInput.contains(caretPosition.offsetNode)) {
-    const range = document.createRange();
-    range.setStart(caretPosition.offsetNode, caretPosition.offset);
-    range.collapse(true);
-    savedChatRange = range;
-  }
+function droppedFiles(transfer: DataTransfer): ReturnType<typeof parseDroppedFiles> {
   const resourceUrlsType = [...transfer.types]
     .find((type) => type.toLowerCase() === "resourceurls") ?? "ResourceURLs";
   const codeFilesType = [...transfer.types]
     .find((type) => type.toLowerCase() === "codefiles") ?? "CodeFiles";
-  const items = parseDroppedFiles({
+  return parseDroppedFiles({
     uriList: transfer.getData("text/uri-list"),
     codeUriList: transfer.getData("application/vnd.code.uri-list"),
     resourceUrls: transfer.getData(resourceUrlsType),
     codeFiles: transfer.getData(codeFilesType),
     plainText: transfer.getData("text/plain")
   });
-  if (!items.length) return;
-  vscode.postMessage({ type: "dropFiles", items });
+}
+
+elements.run.addEventListener("click", run);
+elements.problems.addEventListener("click", () => editor.goToFirstDiagnostic());
+elements.reload.addEventListener("click", () => vscode.postMessage({ type: "reload" }));
+elements.attachFiles.addEventListener("click", () => vscode.postMessage({ type: "chooseFiles" }));
+elements.clearOutput.addEventListener("click", () => {
+  elements.result.replaceChildren();
+  elements.resultSection.classList.add("hidden");
 });
-const attachmentObserver = new MutationObserver(() => {
-  removeOrphanedChatCarets();
-  for (const [id] of attachments) {
-    if (attachmentElement(id)) continue;
-    attachments.delete(id);
-    vscode.postMessage({ type: "removeAttachment", attachmentId: id });
-  }
+elements.inputShell.addEventListener("dragover", (event) => {
+  event.preventDefault();
+  dropPosition = editor.positionAtPoint(event.clientX, event.clientY);
+  elements.inputShell.classList.add("drop-active");
 });
-attachmentObserver.observe(elements.chatInput, { childList: true, subtree: true });
+elements.inputShell.addEventListener("dragleave", (event) => {
+  if (event.relatedTarget instanceof Node && elements.inputShell.contains(event.relatedTarget)) return;
+  elements.inputShell.classList.remove("drop-active");
+  dropPosition = undefined;
+});
+elements.inputShell.addEventListener("drop", (event) => {
+  event.preventDefault();
+  elements.inputShell.classList.remove("drop-active");
+  const items = event.dataTransfer ? droppedFiles(event.dataTransfer) : [];
+  if (items.length) vscode.postMessage({ type: "dropFiles", items });
+  else dropPosition = undefined;
+});
 
 window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   const message = event.data;
-  if (broker.accept(message)) return;
-  if (clipboard.accept(message)) return;
+  if (broker.accept(message) || clipboard.accept(message)) return;
   if (message.type === "state") renderMethods(message.state);
-  if (message.type === "attachments") syncAttachments(message.attachments);
+  if (message.type === "inputKind") {
+    inputKind = message.kind;
+    updateRunState();
+  }
+  if (message.type === "insertFileReferences") {
+    editor.insertInline(message.expressions.join(" "), dropPosition);
+    dropPosition = undefined;
+  }
   if (message.type === "execution") renderResult(message.response);
   if (message.type === "executing") {
     executing = message.value;
-    elements.runState.textContent = executing ? "Running..." : "";
-    updateRunDisabled();
+    updateRunState();
   }
-  if (message.type === "error") renderError(message.message);
-  if (message.type === "focusEditor") {
-    if (mode === "code") editor.focus();
-    else focusChatInput();
+  if (message.type === "error") {
+    dropPosition = undefined;
+    renderError(message.message);
   }
-  if (message.type === "showChat") setMode("chat");
-  if (message.type === "triggerSuggest") {
-    triggerCodeAction("suggest");
-  }
-  if (message.type === "triggerParameterHints") {
-    triggerCodeAction("parameterHints");
-  }
+  if (message.type === "focusEditor" || message.type === "focusInput") editor.focus();
+  if (message.type === "triggerSuggest") editor.triggerSuggest();
+  if (message.type === "triggerParameterHints") editor.triggerParameterHints();
 });
 
 window.addEventListener("unload", () => {
   broker.dispose();
   clipboard.dispose();
-  attachmentObserver.disconnect();
   editor.destroy();
 });
 
+updateRunState();
 vscode.postMessage({ type: "ready" });

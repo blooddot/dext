@@ -13,9 +13,9 @@ describe("ReadyMessageQueue", () => {
 
   it("keeps queued messages across a view reset and clears them on disposal", () => {
     const queue = new ReadyMessageQueue<string>();
-    queue.enqueue("showChat");
+    queue.enqueue("focusInput");
     queue.markNotReady();
-    expect(queue.markReady()).toEqual(["showChat"]);
+    expect(queue.markReady()).toEqual(["focusInput"]);
     queue.enqueue("delivered-directly");
     queue.clear();
     expect(queue.isReady).toBe(false);

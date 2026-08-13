@@ -12,7 +12,7 @@ describe("Dext file references", () => {
       end: { line: 3, character: 7 }
     })).toEqual({
       payload: "src/review.ts#L3,5-L4,8",
-      expression: '@file("src/review.ts#L3,5-L4,8")'
+      expression: 'ref.file("src/review.ts#L3,5-L4,8")'
     });
   });
 

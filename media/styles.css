@@ -17,8 +17,7 @@ body {
   background: var(--vscode-sideBar-background);
 }
 
-button,
-.chat-input {
+button {
   font: inherit;
 }
 
@@ -74,7 +73,6 @@ button {
 }
 
 .icon-button:focus-visible,
-.mode:focus-visible,
 .method-row:focus-visible,
 button.primary:focus-visible,
 .code-editor:focus-within {
@@ -101,58 +99,8 @@ main {
   padding: 10px 10px 18px;
 }
 
-.mode-switch {
-  width: 100%;
-  height: 28px;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  border: 1px solid var(--vscode-input-border, var(--vscode-widget-border));
-  border-radius: 4px;
-  overflow: hidden;
-  margin-bottom: 8px;
-}
-
-.mode {
-  border: 0;
-  border-right: 1px solid var(--vscode-input-border, var(--vscode-widget-border));
-  background: var(--vscode-input-background);
-  cursor: pointer;
-  font-size: 12px;
-}
-
-.mode:last-child {
-  border-right: 0;
-}
-
-.mode.active {
-  color: var(--vscode-button-foreground);
-  background: var(--vscode-button-background);
-}
-
 .input-panel {
   position: relative;
-}
-
-.chat-input {
-  display: block;
-  width: 100%;
-  min-height: 96px;
-  max-height: 260px;
-  padding: 8px 36px 8px 8px;
-  overflow: auto;
-  border: 0;
-  outline: 0;
-  color: var(--vscode-input-foreground);
-  background: transparent;
-  line-height: 1.45;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.chat-input:empty::before {
-  content: attr(data-placeholder);
-  color: var(--vscode-input-placeholderForeground);
-  pointer-events: none;
 }
 
 .code-editor {
@@ -190,6 +138,65 @@ main {
   caret-color: var(--vscode-editorCursor-foreground);
 }
 
+.code-editor .cm-gutters {
+  border-right: 1px solid var(--vscode-editorGroup-border, var(--vscode-widget-border));
+  color: var(--vscode-editorLineNumber-foreground);
+  background: var(--vscode-editorGutter-background, var(--vscode-editor-background));
+}
+
+.code-editor .cm-activeLineGutter {
+  color: var(--vscode-editorLineNumber-activeForeground);
+  background: var(--vscode-editorGutter-background, var(--vscode-editor-background));
+}
+
+.code-editor .cm-gutterElement {
+  min-width: 20px;
+}
+
+.code-editor .cm-lint-marker-error,
+.code-editor .cm-lint-marker-warning,
+.code-editor .cm-lint-marker-info {
+  width: 8px;
+  height: 8px;
+  margin: 4px 6px;
+  border-radius: 50%;
+  background-image: none !important;
+  content: "";
+}
+
+.code-editor .cm-lint-marker-error {
+  background-color: var(--vscode-editorError-foreground);
+}
+
+.code-editor .cm-lint-marker-warning {
+  background-color: var(--vscode-editorWarning-foreground);
+}
+
+.code-editor .cm-lint-marker-info {
+  background-color: var(--vscode-editorInfo-foreground);
+}
+
+.code-editor .cm-lintRange {
+  background-image: none !important;
+  text-decoration-line: underline;
+  text-decoration-style: wavy;
+  text-decoration-thickness: 1px;
+  text-decoration-skip-ink: none;
+  text-underline-offset: 2px;
+}
+
+.code-editor .dext-diagnostic-error {
+  text-decoration-color: var(--vscode-editorError-foreground);
+}
+
+.code-editor .dext-diagnostic-warning {
+  text-decoration-color: var(--vscode-editorWarning-foreground);
+}
+
+.code-editor .dext-diagnostic-info {
+  text-decoration-color: var(--vscode-editorInfo-foreground);
+}
+
 .code-editor .cm-line {
   min-height: 24px;
   padding: 0;
@@ -213,6 +220,30 @@ main {
   color: var(--vscode-editorSuggestWidget-foreground, var(--vscode-foreground));
   background: var(--vscode-editorSuggestWidget-background, var(--vscode-editor-background));
   box-shadow: 0 2px 8px var(--vscode-widget-shadow);
+}
+
+.code-editor .cm-tooltip.cm-tooltip-lint {
+  color: var(--vscode-editorHoverWidget-foreground, var(--vscode-foreground));
+  background: var(--vscode-editorHoverWidget-background, var(--vscode-editor-background));
+  border-color: var(--vscode-editorHoverWidget-border, var(--vscode-widget-border));
+}
+
+.code-editor .cm-tooltip-lint .cm-diagnostic {
+  color: inherit;
+  background: transparent;
+}
+
+.code-editor .cm-tooltip-lint .cm-diagnostic-error {
+  border-left-color: var(--vscode-editorError-foreground);
+}
+
+.code-editor .cm-tooltip-lint .cm-diagnostic-warning {
+  border-left-color: var(--vscode-editorWarning-foreground);
+}
+
+.code-editor .cm-tooltip-lint .cm-diagnostic-info,
+.code-editor .cm-tooltip-lint .cm-diagnostic-hint {
+  border-left-color: var(--vscode-editorInfo-foreground);
 }
 
 .code-editor .cm-tooltip-autocomplete > ul {
@@ -251,19 +282,6 @@ main {
 .dext-tooltip-detail {
   margin-top: 4px;
   color: var(--vscode-descriptionForeground);
-}
-
-.chat-composer {
-  position: relative;
-  overflow: hidden;
-  border: 1px solid var(--vscode-input-border, transparent);
-  border-radius: 3px;
-  background: var(--vscode-input-background);
-}
-
-.chat-composer:focus-within {
-  outline: 1px solid var(--vscode-focusBorder);
-  outline-offset: -1px;
 }
 
 .attachment-chip {
@@ -333,10 +351,16 @@ main {
   color: var(--vscode-descriptionForeground);
 }
 
-.chat-composer.drop-active {
+.unified-input.drop-active {
   outline: 2px solid var(--vscode-focusBorder);
   outline-offset: -2px;
   background: var(--vscode-list-dropBackground);
+}
+
+.execution-result.has-next {
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--vscode-widget-border);
 }
 
 .finding {
@@ -387,12 +411,34 @@ button.primary:disabled {
   opacity: 0.55;
 }
 
-#run-state,
+.problems-status,
 .result-meta,
 .method-meta,
 .count {
   color: var(--vscode-descriptionForeground);
   font-size: 11px;
+}
+
+.problems-status {
+  min-height: 24px;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+}
+
+.problems-status:disabled {
+  color: var(--vscode-descriptionForeground);
+}
+
+.problems-status.has-problems {
+  color: var(--vscode-editorError-foreground);
+  cursor: pointer;
+}
+
+.problems-status.has-problems:hover,
+.problems-status.has-problems:focus-visible {
+  text-decoration: underline;
+  outline: none;
 }
 
 .result-section,

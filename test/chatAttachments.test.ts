@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  insertAtSelection,
   parseDroppedFiles,
   parseUriList
 } from "../src/webview/chatAttachments.js";
@@ -17,17 +16,6 @@ describe("Chat attachment helpers", () => {
       "file:///workspace/a.ts",
       "vscode-remote://ssh-remote+host/workspace/b.ts"
     ]);
-  });
-
-  it("inserts ordinary clipboard text at the selection captured before the host check", () => {
-    expect(insertAtSelection("before selected after", "pasted", 7, 15)).toEqual({
-      value: "before pasted after",
-      cursor: 13
-    });
-  });
-
-  it("clamps stale selection offsets to the current textarea value", () => {
-    expect(insertAtSelection("abc", "!", -3, 99)).toEqual({ value: "!", cursor: 1 });
   });
 
   it("uses a fully valid plain-text URI list only when the standard type is absent", () => {

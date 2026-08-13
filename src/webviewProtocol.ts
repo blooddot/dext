@@ -1,12 +1,12 @@
 import { z } from "zod";
-import type { AttachmentView } from "./attachmentStore.js";
 import type {
   CompletionItem,
   LanguageHover,
   LanguageDiagnostic,
   SignatureHelp
 } from "./core/languageService.js";
-import type { RegisteredCallable, RuntimeResponse } from "./core/types.js";
+import type { InputExecutionResponse, RegisteredCallable } from "./core/types.js";
+import type { EditorTokenTheme } from "./vscodeTheme.js";
 
 export const webviewRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ready") }),
@@ -16,12 +16,7 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
     source: z.string(),
     cursor: z.number().int().nonnegative()
   }),
-  z.object({ type: z.literal("executeCode"), source: z.string() }),
-  z.object({
-    type: z.literal("executeChat"),
-    message: z.string(),
-    attachmentIds: z.array(z.string().min(1)).max(8)
-  }),
+  z.object({ type: z.literal("executeInput"), source: z.string().min(1) }),
   z.object({
     type: z.literal("clipboardWrite"),
     requestId: z.number().int().nonnegative(),
@@ -30,10 +25,8 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("clipboardRead"),
     requestId: z.number().int().nonnegative(),
-    purpose: z.enum(["code", "chat"])
+    purpose: z.literal("code")
   }),
-  z.object({ type: z.literal("removeAttachment"), attachmentId: z.string().min(1) }),
-  z.object({ type: z.literal("openAttachment"), attachmentId: z.string().min(1) }),
   z.object({ type: z.literal("openFileReference"), reference: z.string().min(1) }),
   z.object({
     type: z.literal("dropFiles"),
@@ -50,6 +43,7 @@ export type WebviewRequest = z.infer<typeof webviewRequestSchema>;
 
 export interface SidebarState {
   trusted: boolean;
+  theme?: EditorTokenTheme;
   methods: Pick<
     RegisteredCallable,
     "id" | "title" | "description" | "kind" | "source" | "input" | "output"
@@ -64,12 +58,14 @@ export type WebviewResponse =
       requestId: number;
       completions: CompletionItem[];
       diagnostics: LanguageDiagnostic[];
+      inputKind: "empty" | "workflow" | "invalid";
       signature?: SignatureHelp;
       hover?: LanguageHover;
     }
-  | { type: "execution"; response: RuntimeResponse }
+  | { type: "execution"; response: InputExecutionResponse }
   | { type: "executing"; value: boolean }
-  | { type: "attachments"; attachments: AttachmentView[] }
+  | { type: "inputKind"; kind: "empty" | "workflow" | "invalid" }
+  | { type: "insertFileReferences"; expressions: string[] }
   | { type: "clipboardWriteResult"; requestId: number; success: boolean }
   | {
       type: "clipboardReadResult";
@@ -79,7 +75,7 @@ export type WebviewResponse =
       contextAttached: boolean;
       codeReference?: { expression: string; payload: string };
     }
-  | { type: "showChat" }
+  | { type: "focusInput" }
   | { type: "triggerSuggest" }
   | { type: "triggerParameterHints" }
   | { type: "error"; message: string }

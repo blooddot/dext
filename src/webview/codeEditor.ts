@@ -9,18 +9,22 @@ import {
   type CompletionContext,
   type CompletionResult
 } from "@codemirror/autocomplete";
+import { python } from "@codemirror/lang-python";
+import { defaultHighlightStyle, HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { tags, type Tag } from "@lezer/highlight";
 import {
   defaultKeymap,
   history,
   historyKeymap
 } from "@codemirror/commands";
 import {
+  Compartment,
   EditorState,
   StateEffect,
   StateField,
   type Extension
 } from "@codemirror/state";
-import { setDiagnostics, type Diagnostic } from "@codemirror/lint";
+import { lintGutter, setDiagnostics, type Diagnostic } from "@codemirror/lint";
 import {
   drawSelection,
   EditorView,
@@ -37,6 +41,8 @@ import { codeReferencePasteText } from "./codeReferencePaste.js";
 import { fileReferenceDecorations } from "./fileReferenceDecorations.js";
 import { sourceSnapshotMatches } from "./languageClient.js";
 import type { LanguageRequestBroker } from "./languageClient.js";
+import { inlineInsertion, invocationInsertion } from "./inputInsertion.js";
+import type { EditorTokenTheme } from "../vscodeTheme.js";
 
 export interface CodeEditorOptions {
   parent: HTMLElement;
@@ -44,11 +50,35 @@ export interface CodeEditorOptions {
   clipboard: ClipboardClient;
   onRun(): void;
   onOpenFileReference(reference: string): void;
-  onDiagnosticsChanged(hasErrors: boolean): void;
+  onDiagnosticsChanged(counts: { errors: number; warnings: number }): void;
+  onInputKindChanged(kind: "empty" | "workflow" | "invalid"): void;
   onError(error: unknown): void;
 }
 
 const signatureEffect = StateEffect.define<Tooltip | null>();
+const tokenTags: Readonly<Record<keyof EditorTokenTheme, readonly Tag[]>> = {
+  keyword: [tags.keyword, tags.controlKeyword],
+  string: [tags.string, tags.special(tags.string)],
+  number: [tags.number],
+  boolean: [tags.bool, tags.null],
+  comment: [tags.comment, tags.docComment],
+  function: [tags.function(tags.variableName), tags.function(tags.propertyName)],
+  property: [tags.propertyName, tags.attributeName],
+  variable: [tags.variableName, tags.definition(tags.variableName)],
+  type: [tags.typeName, tags.className],
+  operator: [tags.operator, tags.operatorKeyword],
+  punctuation: [tags.punctuation, tags.bracket]
+};
+
+function themeExtension(theme?: EditorTokenTheme): Extension {
+  if (!theme) return syntaxHighlighting(defaultHighlightStyle);
+  const rules = (Object.entries(theme) as [keyof EditorTokenTheme, string | undefined][])
+    .filter((entry): entry is [keyof EditorTokenTheme, string] => Boolean(entry[1]))
+    .map(([name, color]) => ({ tag: tokenTags[name], color }));
+  return rules.length
+    ? syntaxHighlighting(HighlightStyle.define(rules))
+    : syntaxHighlighting(defaultHighlightStyle);
+}
 const signatureField = StateField.define<Tooltip | null>({
   create: () => null,
   update(value, transaction) {
@@ -67,6 +97,10 @@ function completionType(kind: string): string {
   if (kind === "parameter") return "property";
   if (kind === "reference") return "variable";
   return "value";
+}
+
+function diagnosticMarkClass(severity: Diagnostic["severity"]): string {
+  return `dext-diagnostic-${severity === "hint" ? "info" : severity}`;
 }
 
 function signatureDom(document: Document, signature: SignatureHelp): HTMLElement {
@@ -117,12 +151,17 @@ function selectionMatches(
 
 export class DextCodeEditor {
   readonly view: EditorView;
+  private readonly theme = new Compartment();
   private diagnosticsTimer: ReturnType<typeof setTimeout> | undefined;
   private signatureTimer: ReturnType<typeof setTimeout> | undefined;
+  private diagnostics: Diagnostic[] = [];
 
   constructor(private readonly options: CodeEditorOptions) {
     const extensions: Extension[] = [
       history(),
+      python(),
+      this.theme.of(themeExtension()),
+      lintGutter(),
       highlightSpecialChars(),
       drawSelection(),
       closeBrackets(),
@@ -145,9 +184,8 @@ export class DextCodeEditor {
       EditorState.languageData.of(() => [{
         closeBrackets: { brackets: ["(", "[", '"'] }
       }]),
-      EditorView.lineWrapping,
       EditorView.contentAttributes.of({
-        "aria-label": "Dext method call",
+        "aria-label": "Dext input",
         spellcheck: "false",
         autocapitalize: "off",
         autocomplete: "off"
@@ -175,6 +213,8 @@ export class DextCodeEditor {
         { key: "Mod-x", run: () => { void this.cut(); return true; } },
         { key: "Mod-v", run: () => { void this.paste(); return true; } },
         { key: "Mod-Enter", run: () => { this.options.onRun(); return true; } },
+        { key: "F8", run: () => this.navigateDiagnostic(1) },
+        { key: "Shift-F8", run: () => this.navigateDiagnostic(-1) },
         ...closeBracketsKeymap,
         ...completionKeymap,
         ...historyKeymap,
@@ -206,6 +246,38 @@ export class DextCodeEditor {
     this.focus();
   }
 
+  insertInline(text: string, position?: number): void {
+    this.insert(text, position, inlineInsertion);
+  }
+
+  insertInvocation(text: string): void {
+    this.insert(text, undefined, invocationInsertion);
+  }
+
+  private insert(
+    text: string,
+    position: number | undefined,
+    edit: typeof inlineInsertion
+  ): void {
+    const selection = this.view.state.selection.main;
+    const from = position === undefined
+      ? selection.from
+      : Math.max(0, Math.min(position, this.view.state.doc.length));
+    const to = position === undefined ? selection.to : from;
+    const insertion = edit(this.source, from, to, text);
+    this.view.dispatch({
+      changes: { from, to, insert: insertion.text },
+      selection: { anchor: from + insertion.cursorOffset },
+      scrollIntoView: true,
+      userEvent: "input"
+    });
+    this.focus();
+  }
+
+  positionAtPoint(x: number, y: number): number | undefined {
+    return this.view.posAtCoords({ x, y }) ?? undefined;
+  }
+
   triggerSuggest(): void {
     this.focus();
     startCompletion(this.view);
@@ -214,6 +286,19 @@ export class DextCodeEditor {
   triggerParameterHints(): void {
     this.focus();
     void this.updateSignature();
+  }
+
+  applyTheme(theme?: EditorTokenTheme): void {
+    this.view.dispatch({ effects: this.theme.reconfigure(themeExtension(theme)) });
+  }
+
+  goToFirstDiagnostic(): boolean {
+    return this.navigateDiagnostic(1, true);
+  }
+
+  refreshLanguageState(): void {
+    this.scheduleDiagnostics(0);
+    this.updateInputKind();
   }
 
   destroy(): void {
@@ -277,9 +362,24 @@ export class DextCodeEditor {
 
   private updated(update: ViewUpdate): void {
     if (!update.docChanged && !update.selectionSet) return;
-    if (update.docChanged) this.scheduleDiagnostics(120);
+    if (update.docChanged) {
+      this.scheduleDiagnostics(120);
+      this.updateInputKind();
+    }
     if (this.signatureTimer) clearTimeout(this.signatureTimer);
     this.signatureTimer = setTimeout(() => void this.updateSignature(), 60);
+  }
+
+  private updateInputKind(): void {
+    const source = this.source;
+    if (!source.trim()) {
+      this.options.onInputKindChanged("empty");
+      return;
+    }
+    void this.options.broker.request(source, this.view.state.selection.main.head).then((response) => {
+      if (!response || !sourceSnapshotMatches(this.source, source)) return;
+      this.options.onInputKindChanged(response.inputKind);
+    });
   }
 
   private scheduleDiagnostics(delay: number): void {
@@ -290,23 +390,45 @@ export class DextCodeEditor {
   private async updateDiagnostics(): Promise<void> {
     const source = this.source;
     if (!source.trim()) {
+      this.diagnostics = [];
       this.view.dispatch(setDiagnostics(this.view.state, []));
-      this.options.onDiagnosticsChanged(false);
+      this.options.onDiagnosticsChanged({ errors: 0, warnings: 0 });
       return;
     }
     const response = await this.options.broker.request(source, source.length);
     if (!response || !sourceSnapshotMatches(this.source, source)) return;
     const diagnostics: Diagnostic[] = response.diagnostics.map((diagnostic) => {
-      const offset = Math.max(0, Math.min(source.length, diagnostic.offset));
+      const offset = Math.max(0, Math.min(source.length, diagnostic.from ?? diagnostic.offset));
       return {
         from: offset,
-        to: Math.min(source.length, offset + 1),
+        to: Math.max(offset, Math.min(source.length, diagnostic.to ?? offset + 1)),
         severity: diagnostic.severity,
-        message: diagnostic.message
+        message: diagnostic.message,
+        markClass: diagnosticMarkClass(diagnostic.severity)
       };
     });
+    this.diagnostics = diagnostics;
     this.view.dispatch(setDiagnostics(this.view.state, diagnostics));
-    this.options.onDiagnosticsChanged(response.diagnostics.some(({ severity }) => severity === "error"));
+    this.options.onDiagnosticsChanged({
+      errors: response.diagnostics.filter(({ severity }) => severity === "error").length,
+      warnings: response.diagnostics.filter(({ severity }) => severity === "warning").length
+    });
+  }
+
+  private navigateDiagnostic(direction: 1 | -1, fromStart = false): boolean {
+    if (!this.diagnostics.length) return false;
+    const cursor = fromStart ? -1 : this.view.state.selection.main.head;
+    const ordered = [...this.diagnostics].sort((left, right) => left.from - right.from);
+    const target = direction === 1
+      ? ordered.find((diagnostic) => diagnostic.from > cursor) ?? ordered[0]
+      : [...ordered].reverse().find((diagnostic) => diagnostic.from < cursor) ?? ordered.at(-1);
+    if (!target) return false;
+    this.view.dispatch({
+      selection: { anchor: target.from, head: target.to },
+      scrollIntoView: true
+    });
+    this.focus();
+    return true;
   }
 
   private async updateSignature(): Promise<void> {

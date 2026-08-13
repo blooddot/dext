@@ -37,7 +37,14 @@ export function toCodeRef(snapshot: TextSnapshot): CodeRef {
 }
 
 function isContextReference(value: InvocationValue): value is ContextReference {
-  return typeof value === "object" && !Array.isArray(value) && "kind" in value;
+  return typeof value === "object"
+    && !Array.isArray(value)
+    && "kind" in value
+    && ["selection", "activeFile", "file", "symbol"].includes(value.kind);
+}
+
+function isCodeRef(value: InvocationValue): value is CodeRef {
+  return typeof value === "object" && !Array.isArray(value) && value.kind === "codeRef";
 }
 
 export class ContextResolver {
@@ -60,9 +67,15 @@ export class ContextResolver {
         break;
     }
     if (!snapshot) {
-      throw new Error(`Unable to resolve @${reference.kind}.`);
+      throw new Error(`Unable to resolve ref.${reference.kind === "activeFile" ? "active_file" : reference.kind}.`);
     }
     return toCodeRef(snapshot);
+  }
+
+  async resolveReferences(references: readonly ContextReference[]): Promise<CodeRef[]> {
+    const resolved: CodeRef[] = [];
+    for (const reference of references) resolved.push(await this.resolveReference(reference));
+    return resolved;
   }
 
   async resolve(
@@ -80,7 +93,10 @@ export class ContextResolver {
       if (Array.isArray(value)) {
         const resolved: (InvocationValue | CodeRef)[] = [];
         for (const entry of value) {
-          if (isContextReference(entry)) {
+          if (isCodeRef(entry)) {
+            resolved.push(entry);
+            context.push(entry);
+          } else if (isContextReference(entry)) {
             const reference = await this.resolveReference(entry);
             resolved.push(reference);
             context.push(reference);
@@ -89,6 +105,9 @@ export class ContextResolver {
           }
         }
         args[field.name] = resolved as CodeRef[];
+      } else if (isCodeRef(value)) {
+        args[field.name] = value;
+        context.push(value);
       } else if (isContextReference(value)) {
         const reference = await this.resolveReference(value);
         args[field.name] = reference;
@@ -97,6 +116,6 @@ export class ContextResolver {
         args[field.name] = value;
       }
     }
-    return { invocation, method, arguments: args, context };
+    return { invocation, method, arguments: args, context, metadata: {} };
   }
 }

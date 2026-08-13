@@ -10,6 +10,47 @@ export interface ParsedFileReference {
   range?: Range;
 }
 
+export interface FileReferenceOccurrence {
+  start: number;
+  end: number;
+  expression: string;
+  payload: string;
+}
+
+function quotedStringEnd(source: string, start: number): number | undefined {
+  let escaped = false;
+  for (let offset = start; offset < source.length; offset += 1) {
+    const character = source[offset];
+    if (escaped) escaped = false;
+    else if (character === "\\") escaped = true;
+    else if (character === '"') return offset;
+  }
+  return undefined;
+}
+
+export function fileReferenceOccurrences(source: string): FileReferenceOccurrence[] {
+  const occurrences: FileReferenceOccurrence[] = [];
+  const prefix = /ref\.file\s*\(\s*"/g;
+  for (const match of source.matchAll(prefix)) {
+    const start = match.index ?? 0;
+    const payloadStart = start + match[0].length;
+    const quoteEnd = quotedStringEnd(source, payloadStart);
+    if (quoteEnd === undefined) continue;
+    const close = /^\s*\)/.exec(source.slice(quoteEnd + 1));
+    if (!close) continue;
+    let payload: string;
+    try {
+      payload = JSON.parse(`"${source.slice(payloadStart, quoteEnd)}"`) as string;
+    } catch {
+      continue;
+    }
+    if (!payload) continue;
+    const end = quoteEnd + 1 + close[0].length;
+    occurrences.push({ start, end, expression: source.slice(start, end), payload });
+  }
+  return occurrences;
+}
+
 export function compactFileReferenceLabel(value: string): string {
   const parsed = parseFileReference(value);
   const normalized = parsed.path.replaceAll("\\", "/");
@@ -35,7 +76,14 @@ export function formatDextFileReference(relativePath: string, range: Range): Dex
   const payload = `${normalizedPath}${fragment}`
     .replaceAll("\\", "\\\\")
     .replaceAll('"', '\\"');
-  return { payload, expression: `@file("${payload}")` };
+  return { payload, expression: `ref.file("${payload}")` };
+}
+
+export function formatDextFilePathReference(relativePath: string): DextFileReference {
+  const payload = relativePath.replaceAll("\\", "/")
+    .replaceAll("\\", "\\\\")
+    .replaceAll('"', '\\"');
+  return { payload, expression: `ref.file("${payload}")` };
 }
 
 export function parseFileReference(value: string): ParsedFileReference {
@@ -57,7 +105,7 @@ export function parseFileReference(value: string): ParsedFileReference {
     end: { line: endLine - 1, character: endCharacter - 1 }
   };
   if (comparePositions(range.start, range.end) > 0) {
-    throw new Error("@file range start must not be after its end.");
+    throw new Error("ref.file range start must not be after its end.");
   }
   return { path: value.slice(0, match.index), range };
 }
