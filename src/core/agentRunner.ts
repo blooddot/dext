@@ -88,14 +88,18 @@ function windowsCommandCandidates(
       names.push(join(options.env.LOCALAPPDATA, "Programs", "OpenAI", "Codex", "bin", "codex.exe"));
     }
   }
+  if (provider === "claude" && trimmed.toLowerCase() === "claude") {
+    names.push(join(options.home, ".local", "bin", "claude.exe"));
+    if (options.env.APPDATA) names.push(join(options.env.APPDATA, "npm", "claude.cmd"));
+  }
   return [...new Set(names)];
 }
 
 /**
  * Resolve a configured CLI without requiring the extension host to inherit the
  * same PATH as the user's terminal. Windows CLI installs commonly expose a
- * `.cmd` shim, while the Codex desktop app keeps its executable under
- * `%CODEX_HOME%\\.sandbox-bin`.
+ * `.cmd` shim; Codex Desktop and Claude Code's native installer also have
+ * provider-specific executable locations.
  */
 export function resolveCliCommand(
   command: string,
@@ -242,6 +246,26 @@ function stripNullProperties(value: unknown): unknown {
   );
 }
 
+export function extractClaudeResult(output: string): unknown {
+  let finalResult: unknown;
+  for (const line of output.split(/\r?\n/)) {
+    const event = extractJson(line);
+    if (!event || typeof event !== "object" || (event as { type?: unknown }).type !== "result") continue;
+    const result = event as { structured_output?: unknown; result?: unknown };
+    if (result.structured_output !== undefined) finalResult = result.structured_output;
+    else if (typeof result.result === "string") finalResult = extractJson(result.result) ?? result.result;
+    else if (result.result !== undefined) finalResult = result.result;
+  }
+  if (finalResult !== undefined) return stripNullProperties(finalResult);
+  const parsed = extractJson(output);
+  if (parsed && typeof parsed === "object" && "result" in parsed) {
+    const result = (parsed as { result?: unknown }).result;
+    if (typeof result === "string") return extractJson(result) ?? result;
+    return stripNullProperties(result);
+  }
+  return stripNullProperties(parsed ?? output);
+}
+
 function extractAgentValue(output: string, provider: AgentProfile["provider"]): unknown {
   if (provider === "codex") {
     let finalText = "";
@@ -253,13 +277,7 @@ function extractAgentValue(output: string, provider: AgentProfile["provider"]): 
     }
     return stripNullProperties(extractJson(finalText) ?? finalText);
   }
-  const parsed = extractJson(output);
-  if (parsed && typeof parsed === "object" && "result" in parsed) {
-    const result = (parsed as { result?: unknown }).result;
-    if (typeof result === "string") return extractJson(result) ?? result;
-    return stripNullProperties(result);
-  }
-  return stripNullProperties(parsed ?? output);
+  return extractClaudeResult(output);
 }
 
 function eventText(event: Record<string, unknown>, item?: Record<string, unknown>): string | undefined {
@@ -334,6 +352,87 @@ export function parseCodexStreamLine(
   };
 }
 
+function record(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function claudeContentText(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (!Array.isArray(value)) return undefined;
+  const text = value.flatMap((item) => {
+    const block = record(item);
+    if (!block || block.type === "thinking") return [];
+    if (typeof block.text === "string") return [block.text];
+    if (typeof block.content === "string") return [block.content];
+    return [];
+  }).join("");
+  return text || undefined;
+}
+
+function claudeToolText(block: Record<string, unknown>): string {
+  const input = record(block.input);
+  if (!input) return typeof block.input === "string" ? block.input : "";
+  if (typeof input.command === "string") return input.command;
+  return Object.keys(input).length ? JSON.stringify(input) : "";
+}
+
+/** Parse the public `stream-json` events emitted by Claude Code's print mode. */
+export function parseClaudeStreamLine(line: string): AgentStreamEvent | undefined {
+  const parsed = extractJson(line);
+  const event = record(parsed);
+  if (!event) return undefined;
+  const eventType = typeof event.type === "string" ? event.type : "";
+  if (!eventType || eventType === "system" || eventType === "result") return undefined;
+
+  if (eventType === "stream_event") {
+    const stream = record(event.event);
+    const streamType = typeof stream?.type === "string" ? stream.type : "";
+    if (streamType === "content_block_delta") {
+      const delta = record(stream?.delta);
+      if (delta?.type === "thinking_delta" || typeof delta?.thinking === "string") return undefined;
+      const text = typeof delta?.text === "string" ? delta.text : undefined;
+      if (!text) return undefined;
+      const index = typeof stream?.index === "number" ? stream.index : 0;
+      return { id: `claude-stream-${index}`, phase: "message", text, eventType };
+    }
+    if (streamType === "content_block_start") {
+      const block = record(stream?.content_block);
+      if (block?.type !== "tool_use") return undefined;
+      const id = typeof block.id === "string" ? block.id : undefined;
+      const title = typeof block.name === "string" ? block.name : "Tool";
+      const text = claudeToolText(block) || title;
+      return { ...(id ? { id } : {}), phase: "tool", title, text, eventType };
+    }
+    return undefined;
+  }
+
+  const message = record(event.message);
+  const blocks = Array.isArray(message?.content) ? message.content : [];
+  if (eventType === "assistant") {
+    const tool = blocks.map(record).find((block) => block?.type === "tool_use");
+    if (tool) {
+      const id = typeof tool.id === "string" ? tool.id : undefined;
+      const title = typeof tool.name === "string" ? tool.name : "Tool";
+      const text = claudeToolText(tool) || title;
+      return { ...(id ? { id } : {}), phase: "tool", title, text, eventType };
+    }
+    const text = claudeContentText(message?.content);
+    if (!text || isStructuredAgentResult(text)) return undefined;
+    const id = typeof message?.id === "string" ? message.id : undefined;
+    return { ...(id ? { id } : {}), phase: "message", text, eventType, done: true };
+  }
+  if (eventType === "user") {
+    const result = blocks.map(record).find((block) => block?.type === "tool_result");
+    if (!result) return undefined;
+    const id = typeof result.tool_use_id === "string" ? result.tool_use_id : undefined;
+    const text = claudeContentText(result.content) || "Completed";
+    return { ...(id ? { id } : {}), phase: "tool", text, replace: true, done: true, eventType };
+  }
+  return undefined;
+}
+
 function codexFailure(output: string): string | undefined {
   let message: string | undefined;
   for (const line of output.split(/\r?\n/)) {
@@ -344,6 +443,36 @@ function codexFailure(output: string): string | undefined {
     else if (event.type === "error" && typeof event.message === "string") message = event.message;
   }
   return message;
+}
+
+function claudeFailure(output: string): string | undefined {
+  for (const line of output.split(/\r?\n/)) {
+    const event = extractJson(line);
+    if (!event || typeof event !== "object" || (event as { type?: unknown }).type !== "result") continue;
+    const result = event as { is_error?: unknown; result?: unknown; subtype?: unknown };
+    if (result.is_error === true || result.subtype === "error") {
+      return typeof result.result === "string" ? result.result : "Claude Code returned an error result.";
+    }
+  }
+  return undefined;
+}
+
+/** Arguments for Claude Code's non-interactive, structured streaming mode. */
+export function claudeCliArguments(
+  options: Pick<AgentExecutionRequest, "model" | "reasoningEffort">,
+  outputSchema: object
+): string[] {
+  return [
+    "-p",
+    "--output-format", "stream-json",
+    "--verbose",
+    "--include-partial-messages",
+    "--json-schema", JSON.stringify(outputSchema),
+    "--no-session-persistence",
+    "--permission-mode", "plan",
+    ...(options.model ? ["--model", options.model] : []),
+    ...(options.reasoningEffort ? ["--effort", options.reasoningEffort] : [])
+  ];
 }
 
 function runProcess(
@@ -404,6 +533,9 @@ export class CliAgentRunner implements AgentRunner {
   }
 
   async run(request: AgentExecutionRequest): Promise<unknown> {
+    if (request.profile.provider === "aioa") {
+      throw new Error("AIOA integration is not configured yet.");
+    }
     if (!request.profile.command) throw new Error(`Agent '${request.profile.label}' has no CLI command configured.`);
     const configuredCommand = request.profile.command.trim();
     const command = resolveCliCommand(configuredCommand, request.profile.provider);
@@ -435,7 +567,7 @@ export class CliAgentRunner implements AgentRunner {
         "--config", 'model_reasoning_summary="detailed"',
         ...(serviceTier ? ["--config", 'service_tier="' + serviceTier + '"'] : []),
         "-"]
-      : ["-p", prompt, "--output-format", "json", "--json-schema", JSON.stringify(outputSchema), "--no-session-persistence", "--permission-mode", "plan", ...(executionRequest.model ? ["--model", executionRequest.model] : [])];
+      : claudeCliArguments(executionRequest, outputSchema);
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -445,22 +577,32 @@ export class CliAgentRunner implements AgentRunner {
         const event = parseCodexStreamLine(line, streamPhases);
         if (event) request.onEvent?.(event);
       };
-      const onStdout = request.profile.provider === "codex"
+      const emitClaudeLine = (line: string): void => {
+        const event = parseClaudeStreamLine(line);
+        if (event) request.onEvent?.(event);
+      };
+      const onStdout = request.profile.provider === "codex" || request.profile.provider === "claude"
         ? (chunk: string): void => {
             eventBuffer += chunk;
             const lines = eventBuffer.split(/\r?\n/);
             eventBuffer = lines.pop() ?? "";
-            for (const line of lines) emitCodexLine(line);
+            for (const line of lines) {
+              if (request.profile.provider === "codex") emitCodexLine(line);
+              else emitClaudeLine(line);
+            }
           }
         : undefined;
       const stdin = request.profile.provider === "codex"
         ? `${prompt}\n\n${input}`
-        : input;
+        : `${prompt}\n\nDext JSON payload:\n${input}`;
       const result = await runProcess(command, args, stdin, executionRequest.cwd, controller.signal, onStdout, processEnv);
       clearTimeout(timer);
       if (eventBuffer && request.profile.provider === "codex") emitCodexLine(eventBuffer);
+      if (eventBuffer && request.profile.provider === "claude") emitClaudeLine(eventBuffer);
       if (result.code !== 0) {
-        const structuredFailure = request.profile.provider === "codex" ? codexFailure(result.stdout) : undefined;
+        const structuredFailure = request.profile.provider === "codex"
+          ? codexFailure(result.stdout)
+          : request.profile.provider === "claude" ? claudeFailure(result.stdout) : undefined;
         const details = structuredFailure ?? [result.stderr.trim(), result.stdout.trim()].filter(Boolean).join("\n");
         throw new Error(`${request.profile.label} exited with code ${result.code ?? "unknown"}${details ? `:\n${details}` : ""}`);
       }

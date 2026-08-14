@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-export type AgentProvider = "codex" | "claude" | "qunshu";
+export type AgentProvider = "codex" | "claude" | "aioa";
 
 export interface AgentProfile {
   id: string;
@@ -97,15 +97,28 @@ function codexModelOptions(): AgentModelOption[] {
 }
 
 const CODEX_MODELS = codexModelOptions();
+const CLAUDE_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+const CLAUDE_MODELS: AgentModelOption[] = [
+  { id: "opus", label: "Opus", reasoningEfforts: CLAUDE_REASONING_EFFORTS, speedTiers: [], serviceTiers: [] },
+  { id: "sonnet", label: "Sonnet", reasoningEfforts: CLAUDE_REASONING_EFFORTS, speedTiers: [], serviceTiers: [] }
+];
 const DEFAULT_PROFILES: readonly AgentProfile[] = [
   { id: "codex", label: "Codex CLI", provider: "codex", command: "codex", models: CODEX_MODELS.map((model) => model.id), modelOptions: CODEX_MODELS },
-  { id: "claude", label: "Claude Code CLI", provider: "claude", command: "claude", models: [] },
-  { id: "qunshu", label: "群枢", provider: "qunshu", command: "", models: [] }
+  { id: "claude", label: "Claude Code CLI", provider: "claude", command: "claude", models: CLAUDE_MODELS.map((model) => model.id), modelOptions: CLAUDE_MODELS },
+  { id: "aioa", label: "AIOA", provider: "aioa", command: "", models: [] }
 ];
 
-function mergeProfiles(stored: readonly AgentProfile[] | undefined): AgentProfile[] {
+type StoredAgentProfile = AgentProfile | (Omit<AgentProfile, "provider"> & { provider: "qunshu" });
+
+function normalizeStoredProfile(profile: StoredAgentProfile): AgentProfile {
+  if (profile.provider !== "qunshu") return profile;
+  return { ...profile, id: "aioa", label: "AIOA", provider: "aioa" };
+}
+
+function mergeProfiles(stored: readonly StoredAgentProfile[] | undefined): AgentProfile[] {
+  const normalizedStored = stored?.map(normalizeStoredProfile);
   return DEFAULT_PROFILES.map((defaults) => {
-    const saved = stored?.find((profile) => profile.id === defaults.id);
+    const saved = normalizedStored?.find((profile) => profile.id === defaults.id);
     const savedOptions = saved?.modelOptions ?? [];
     const modelOptions = [...defaults.modelOptions ?? [], ...savedOptions]
       .filter((candidate, index, all) => all.findIndex((item) => item.id === candidate.id) === index);
@@ -118,7 +131,7 @@ function mergeProfiles(stored: readonly AgentProfile[] | undefined): AgentProfil
       ...(modelOptions.length ? { modelOptions } : {})
     };
   }).concat(
-    (stored ?? [])
+    (normalizedStored ?? [])
       .filter((profile) => !DEFAULT_PROFILES.some((defaults) => defaults.id === profile.id))
       .map((profile) => ({ ...profile, models: [...profile.models] }))
   );
@@ -129,9 +142,12 @@ export class AgentProfileStore {
   private selection: AgentSelection = {};
 
   constructor(private readonly state?: vscode.Memento) {
-    const stored = state?.get<AgentProfile[]>(STORAGE_KEY);
+    const stored = state?.get<StoredAgentProfile[]>(STORAGE_KEY);
     this.profiles = mergeProfiles(stored);
-    this.selection = state?.get<AgentSelection>(SELECTION_KEY) ?? {};
+    const storedSelection = state?.get<AgentSelection>(SELECTION_KEY) ?? {};
+    this.selection = storedSelection.profileId === "qunshu"
+      ? { ...storedSelection, profileId: "aioa" }
+      : storedSelection;
   }
 
   list(): AgentProfile[] {

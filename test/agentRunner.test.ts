@@ -2,7 +2,15 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { agentProcessEnvironment, codexOutputSchema, parseCodexStreamLine, resolveCliCommand } from "../src/core/agentRunner.js";
+import {
+  agentProcessEnvironment,
+  claudeCliArguments,
+  codexOutputSchema,
+  extractClaudeResult,
+  parseClaudeStreamLine,
+  parseCodexStreamLine,
+  resolveCliCommand
+} from "../src/core/agentRunner.js";
 import { BUILTIN_METHODS } from "../src/core/builtins.js";
 import { AxAdapter } from "../src/core/axAdapter.js";
 import { serializeResultForAgent } from "../src/core/resultSerialization.js";
@@ -49,6 +57,35 @@ describe("CLI command resolution", () => {
       type: "item.completed",
       item: { id: "item_2", type: "agent_message", text: '{"kind":"explain","text":"Done","files":[]}' }
     }))).toBeUndefined();
+  });
+
+  it("parses Claude text, tool, and structured result stream events", () => {
+    expect(parseClaudeStreamLine(JSON.stringify({
+      type: "stream_event",
+      event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Inspecting the target" } }
+    }))).toMatchObject({ id: "claude-stream-0", phase: "message", text: "Inspecting the target" });
+    expect(parseClaudeStreamLine(JSON.stringify({
+      type: "assistant",
+      message: { content: [{ type: "tool_use", id: "tool_1", name: "Bash", input: { command: "git status" } }] }
+    }))).toMatchObject({ id: "tool_1", phase: "tool", title: "Bash", text: "git status" });
+    expect(parseClaudeStreamLine(JSON.stringify({
+      type: "result",
+      subtype: "success",
+      structured_output: { kind: "explain", text: "Done", files: [] }
+    }))).toBeUndefined();
+    expect(extractClaudeResult([
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "Done" }] } }),
+      JSON.stringify({ type: "result", subtype: "success", structured_output: { kind: "explain", text: "Done", files: [] } })
+    ].join("\n"))).toEqual({ kind: "explain", text: "Done", files: [] });
+  });
+
+  it("uses Claude Code's non-interactive structured streaming flags", () => {
+    const args = claudeCliArguments({ model: "sonnet", reasoningEffort: "high" }, { type: "object" });
+    expect(args).toEqual(expect.arrayContaining([
+      "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
+      "--json-schema", JSON.stringify({ type: "object" }), "--no-session-persistence",
+      "--permission-mode", "plan", "--model", "sonnet", "--effort", "high"
+    ]));
   });
   it("makes optional output fields nullable while requiring every Codex object property", () => {
     const method = BUILTIN_METHODS.find((candidate) => candidate.id === "code.explain")!;
@@ -99,6 +136,21 @@ describe("CLI command resolution", () => {
       env: { CODEX_HOME: directory, Path: "" },
       home: directory
     })).toBe(configured);
+  });
+
+  it("finds Claude Code's native Windows installation when PATH is missing", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "dext-claude-test-"));
+    temporaryDirectories.push(directory);
+    const bin = join(directory, ".local", "bin");
+    await mkdir(bin, { recursive: true });
+    const executable = join(bin, "claude.exe");
+    await writeFile(executable, "binary", "utf8");
+
+    expect(resolveCliCommand("claude", "claude", {
+      platform: "win32",
+      env: { Path: "" },
+      home: directory
+    })).toBe(executable);
   });
 
   it("returns a configured non-Windows command without probing the local filesystem", () => {
