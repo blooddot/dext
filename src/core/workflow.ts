@@ -43,6 +43,7 @@ export interface WorkflowCompileOptions {
   aliases?: ReadonlyMap<string, string>;
   initialVariables?: ReadonlyMap<string, WorkflowValueType>;
   customApiIds?: ReadonlySet<string>;
+  requireCustomApiImports?: boolean;
 }
 
 interface EnvironmentEntry {
@@ -354,6 +355,7 @@ class Compiler {
     if (
       definition.executor.kind === "custom"
       && this.options.customApiIds?.has(method)
+      && this.options.requireCustomApiImports !== false
       && !this.options.aliases?.has(rawMethod ?? "")
       && !this.options.aliases?.has(rawMethod?.split(".")[0] ?? "")
     ) {
@@ -491,6 +493,7 @@ class Compiler {
         if (
           definition.executor.kind === "custom"
           && this.options.customApiIds?.has(method)
+          && this.options.requireCustomApiImports !== false
           && !this.options.aliases?.has(path ?? "")
           && !this.options.aliases?.has(path?.split(".")[0] ?? "")
         ) {

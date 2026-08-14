@@ -100,7 +100,7 @@ describe("DextLanguageService workflow features", () => {
     expect(apiService.apiCompletions("def main(target: C", "def main(target: C".length).map((item) => item.label)).toContain("Context");
   });
 
-  it("limits custom APIs to explicit imports and resolves imported aliases", () => {
+  it("exposes custom APIs globally in interactive workflows but requires imports inside API modules", () => {
     const custom = new MethodRegistry();
     custom.registerMany(BUILTIN_METHODS, "builtin");
     custom.register({
@@ -115,8 +115,10 @@ describe("DextLanguageService workflow features", () => {
     }, "project");
     const imported = new DextLanguageService(custom);
     imported.setCustomApiIds(new Set(["team.explain"]));
-    expect(imported.documentCompletions("tea").map((item) => item.label)).not.toContain("team");
-    expect(imported.documentCompletions("from team import explain\nexpl").map((item) => item.label)).toContain("explain");
-    expect(imported.documentHover("from team import explain\nexplain(target=ref.selection)", 27)).toMatchObject({ label: expect.stringContaining("team.explain") });
+    expect(imported.documentCompletions("tea").map((item) => item.label)).toContain("team");
+    expect(imported.documentHover("team.explain(target=ref.selection)", 5)).toMatchObject({ label: expect.stringContaining("team.explain") });
+    expect(imported.apiCompletions("tea").map((item) => item.label)).not.toContain("team");
+    expect(imported.apiCompletions("from team import explain\nexpl").map((item) => item.label)).toContain("explain");
+    expect(imported.apiHover("from team import explain\nexplain(target=ref.selection)", 27)).toMatchObject({ label: expect.stringContaining("team.explain") });
   });
 });

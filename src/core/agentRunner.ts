@@ -291,6 +291,49 @@ function eventText(event: Record<string, unknown>, item?: Record<string, unknown
   return candidates.map(findText).find((value): value is string => Boolean(value));
 }
 
+function isStructuredAgentResult(text: string): boolean {
+  const parsed = extractJson(text);
+  return typeof parsed === "object" && parsed !== null && typeof (parsed as { kind?: unknown }).kind === "string";
+}
+
+export function parseCodexStreamLine(
+  line: string,
+  streamPhases: Map<string, AgentStreamPhase> = new Map()
+): AgentStreamEvent | undefined {
+  const parsed = extractJson(line);
+  if (!parsed || typeof parsed !== "object") return undefined;
+  const event = parsed as Record<string, unknown>;
+  const eventType = typeof event.type === "string" ? event.type : undefined;
+  if (!eventType || eventType === "thread.started" || eventType === "turn.started") return undefined;
+  const item = typeof event.item === "object" && event.item !== null
+    ? event.item as Record<string, unknown>
+    : undefined;
+  const eventItemId = typeof event.item_id === "string" ? event.item_id : undefined;
+  const itemType = typeof item?.type === "string" ? item.type : undefined;
+  const text = eventText(event, item);
+  const eventId = typeof event.id === "string"
+    ? event.id
+    : typeof item?.id === "string" ? item.id : eventItemId;
+  let phase: AgentStreamPhase = eventItemId ? streamPhases.get(eventItemId) ?? "message" : "status";
+  if (itemType === "reasoning" || itemType === "analysis" || eventType.includes("reasoning")) phase = "reasoning";
+  else if (itemType === "agent_message" || eventType.includes("message") || eventType.includes("output_text")) phase = "message";
+  else if (itemType === "command_execution" || itemType === "tool_call" || eventType.includes("tool")) phase = "tool";
+  if (eventId && (eventType === "item.started" || itemType)) streamPhases.set(eventId, phase);
+  const command = typeof item?.command === "string" ? item.command : undefined;
+  const aggregatedOutput = typeof item?.aggregated_output === "string" ? item.aggregated_output : undefined;
+  const statusText = phase === "tool" ? (aggregatedOutput || command || text || "") : (text ?? "");
+  if (!statusText || (phase === "message" && isStructuredAgentResult(statusText))) return undefined;
+  return {
+    ...(eventId ? { id: eventId } : {}),
+    phase,
+    text: statusText,
+    ...(command ? { title: command } : {}),
+    ...(eventType === "item.updated" || eventType === "item.completed" ? { replace: true } : {}),
+    ...(eventType.endsWith("completed") || eventType.endsWith("done") ? { done: true } : {}),
+    eventType
+  };
+}
+
 function codexFailure(output: string): string | undefined {
   let message: string | undefined;
   for (const line of output.split(/\r?\n/)) {
@@ -378,9 +421,10 @@ export class CliAgentRunner implements AgentRunner {
       : request.contract.outputJsonSchema;
     await writeFile(schemaPath, JSON.stringify(outputSchema), "utf8");
     const input = payload(executionRequest, outputSchema);
+    const progressInstruction = "While working, emit concise progress updates that summarize what you are inspecting and why, without exposing hidden chain-of-thought. The final agent message must contain only JSON matching output_schema.";
     const prompt = request.method.id === "code.edit"
-      ? "Read the Dext JSON payload from stdin. Work only with the relative preview target paths in the isolated current directory. Do not access or modify files outside it. Return a preview-only EditResult with complete before and after text; Dext applies it separately. Output only JSON matching output_schema."
-      : "Read the Dext JSON payload from stdin. Values tagged kind=dext-result are prior typed API results; inspect their value field. Execute the requested API and output only JSON matching output_schema.";
+      ? `Read the Dext JSON payload from stdin. Work only with the relative preview target paths in the isolated current directory. Do not access or modify files outside it. Return a preview-only EditResult with complete before and after text; Dext applies it separately. ${progressInstruction}`
+      : `Read the Dext JSON payload from stdin. Values tagged kind=dext-result are prior typed API results; inspect their value field. Execute the requested API. ${progressInstruction}`;
     const serviceTier = executionRequest.serviceTier ?? (executionRequest.speed === "fast" ? "priority" : executionRequest.speed === "standard" ? "default" : undefined);
     const processEnv = await this.processEnvironment(command, executionRequest);
     const args: string[] = executionRequest.profile.provider === "codex"
@@ -388,6 +432,7 @@ export class CliAgentRunner implements AgentRunner {
         ...(request.method.id === "code.edit" ? ["--skip-git-repo-check"] : []),
         ...(executionRequest.model ? ["--model", executionRequest.model] : []),
         ...(executionRequest.reasoningEffort ? ["--config", 'model_reasoning_effort="' + executionRequest.reasoningEffort + '"'] : []),
+        "--config", 'model_reasoning_summary="detailed"',
         ...(serviceTier ? ["--config", 'service_tier="' + serviceTier + '"'] : []),
         "-"]
       : ["-p", prompt, "--output-format", "json", "--json-schema", JSON.stringify(outputSchema), "--no-session-persistence", "--permission-mode", "plan", ...(executionRequest.model ? ["--model", executionRequest.model] : [])];
@@ -397,38 +442,8 @@ export class CliAgentRunner implements AgentRunner {
       let eventBuffer = "";
       const streamPhases = new Map<string, AgentStreamPhase>();
       const emitCodexLine = (line: string): void => {
-        const parsed = extractJson(line);
-        if (!parsed || typeof parsed !== "object") return;
-        const event = parsed as Record<string, unknown>;
-        const eventType = typeof event.type === "string" ? event.type : undefined;
-        if (!eventType) return;
-        const item = typeof event.item === "object" && event.item !== null
-          ? event.item as Record<string, unknown>
-          : undefined;
-        const eventItemId = typeof event.item_id === "string" ? event.item_id : undefined;
-        const itemType = typeof item?.type === "string" ? item.type : undefined;
-        if (eventType === "thread.started" || eventType === "turn.started") return;
-        const text = eventText(event, item);
-        const eventId = typeof event.id === "string"
-          ? event.id
-          : typeof item?.id === "string" ? item.id : eventItemId;
-        let phase: AgentStreamPhase = eventItemId ? streamPhases.get(eventItemId) ?? "message" : "status";
-        if (itemType === "reasoning" || eventType.includes("reasoning")) phase = "reasoning";
-        else if (itemType === "agent_message" || eventType.includes("message") || eventType.includes("output_text")) phase = "message";
-        else if (itemType === "command_execution" || itemType === "tool_call" || eventType.includes("tool")) phase = "tool";
-        if (eventId && (eventType === "item.started" || itemType)) streamPhases.set(eventId, phase);
-        const command = typeof item?.command === "string" ? item.command : undefined;
-        const aggregatedOutput = typeof item?.aggregated_output === "string" ? item.aggregated_output : undefined;
-        const statusText = phase === "tool" ? (aggregatedOutput || command || text || "") : (text ?? "");
-        if (statusText) request.onEvent?.({
-          ...(eventId ? { id: eventId } : {}),
-          phase,
-          text: statusText,
-          ...(command ? { title: command } : {}),
-          ...(eventType === "item.updated" || eventType === "item.completed" ? { replace: true } : {}),
-          ...(eventType.endsWith("completed") || eventType.endsWith("done") ? { done: true } : {}),
-          eventType
-        });
+        const event = parseCodexStreamLine(line, streamPhases);
+        if (event) request.onEvent?.(event);
       };
       const onStdout = request.profile.provider === "codex"
         ? (chunk: string): void => {

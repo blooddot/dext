@@ -115,7 +115,8 @@ export class DextApplication {
     const compiled = compileWorkflow(source, this.registry, {
       allowImports: true,
       aliases: parseWorkflowImports(source),
-      customApiIds: this.customApiIds
+      customApiIds: this.customApiIds,
+      requireCustomApiImports: false
     });
     if (!compiled.program || compiled.diagnostics.some((item) => item.severity === "error")) {
       throw new Error(compiled.diagnostics.map((item) => item.message).join("\n"));

@@ -32,6 +32,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const focusSidebar = async (): Promise<void> => {
     await vscode.commands.executeCommand("dext.sidebar.focus");
   };
+  const activeDextEditor = (): boolean => vscode.window.activeTextEditor?.document.languageId === "dext-api";
   const updateTrustContext = (): void => {
     void vscode.commands.executeCommand("setContext", "dext.workspaceTrusted", vscode.workspace.isTrusted);
   };
@@ -71,10 +72,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("dext.workspaceTrustedStatus", openWorkspaceTrust),
     vscode.commands.registerCommand("dext.workspaceUntrustedStatus", openWorkspaceTrust),
     vscode.commands.registerCommand("dext.triggerSuggest", async () => {
+      if (activeDextEditor()) {
+        await vscode.commands.executeCommand("editor.action.triggerSuggest");
+        return;
+      }
       await focusSidebar();
       sidebar.triggerSuggest();
     }),
     vscode.commands.registerCommand("dext.triggerParameterHints", async () => {
+      if (activeDextEditor()) {
+        await vscode.commands.executeCommand("editor.action.triggerParameterHints");
+        return;
+      }
       await focusSidebar();
       sidebar.triggerParameterHints();
     }),
@@ -142,7 +151,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await sidebar.refresh();
     }),
     vscode.languages.registerCompletionItemProvider(
-      { scheme: "file", pattern: "**/.dext/api/**/*.dx" },
+      { language: "dext-api", scheme: "file" },
       {
         provideCompletionItems(document, position) {
           const source = document.getText();
@@ -169,12 +178,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       " "
     ),
     vscode.languages.registerHoverProvider(
-      { scheme: "file", pattern: "**/.dext/api/**/*.dx" },
+      { language: "dext-api", scheme: "file" },
       {
         provideHover(document, position) {
           const source = document.getText();
           const cursor = document.offsetAt(position);
-          const hover = application.language.documentHover(source, cursor);
+          const hover = application.language.apiHover(source, cursor);
           if (!hover) return undefined;
           return new vscode.Hover(
             new vscode.MarkdownString(`**${hover.label}**\n\n${hover.documentation}`),
@@ -184,11 +193,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     ),
     vscode.languages.registerSignatureHelpProvider(
-      { scheme: "file", pattern: "**/.dext/api/**/*.dx" },
+      { language: "dext-api", scheme: "file" },
       {
         provideSignatureHelp(document, position) {
           const source = document.getText();
-          const signature = application.language.documentSignature(source, document.offsetAt(position));
+          const signature = application.language.apiSignature(source, document.offsetAt(position));
           if (!signature) return undefined;
           const item = new vscode.SignatureInformation(signature.label, signature.documentation);
           item.parameters = signature.parameters.map((parameter) => new vscode.ParameterInformation(parameter.label, parameter.documentation));

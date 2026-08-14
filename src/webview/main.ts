@@ -691,6 +691,8 @@ function updateAgentProgress(label: string): void {
 
 function startAgentProgress(): void {
   agentRunStartedAt = Date.now();
+  agentStreamPanel();
+  updateAgentProgress("Thinking");
   agentRunTimer = setInterval(() => updateAgentProgress(agentProgressState), 100);
 }
 
@@ -736,8 +738,8 @@ function updateAgentGroupLabel(kind: "reasoning" | "files" | "tool"): void {
 }
 
 function renderAgentEvent(event: AgentStreamEvent): void {
-  if (event.phase === "status" || event.phase === "message") return;
-  if (event.phase === "reasoning") updateAgentProgress("Thinking");
+  if (event.phase === "status") return;
+  if (event.phase === "reasoning" || event.phase === "message") updateAgentProgress("Thinking");
   const group = agentGroup(event.phase === "tool" ? "tool" : "reasoning");
   const panel = group.body;
   if (event.phase === "tool") {

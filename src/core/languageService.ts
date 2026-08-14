@@ -154,11 +154,15 @@ export class DextLanguageService {
     this.customApiIds = new Set(ids);
   }
 
-  private visibleMethodEntries(source: string): VisibleMethod[] {
+  private visibleMethodEntries(source: string, customApisAreGlobal = true): VisibleMethod[] {
     const imports = parseWorkflowImports(source);
     const entries: VisibleMethod[] = [];
     for (const method of this.registry.list()) {
       if (!this.customApiIds.has(method.id)) {
+        entries.push({ name: method.id, method });
+        continue;
+      }
+      if (customApisAreGlobal) {
         entries.push({ name: method.id, method });
         continue;
       }
@@ -170,12 +174,8 @@ export class DextLanguageService {
     return entries;
   }
 
-  private visibleMethods(source: string): RegisteredCallable[] {
-    return this.visibleMethodEntries(source).map(({ method }) => method);
-  }
-
-  private resolveMethod(source: string, name: string): RegisteredCallable | undefined {
-    return this.visibleMethodEntries(source).find((entry) => entry.name === name)?.method;
+  private resolveMethod(source: string, name: string, customApisAreGlobal = true): RegisteredCallable | undefined {
+    return this.visibleMethodEntries(source, customApisAreGlobal).find((entry) => entry.name === name)?.method;
   }
 
   apiCompletions(source: string, cursor = source.length, apiId?: string): CompletionItem[] {
@@ -210,7 +210,7 @@ export class DextLanguageService {
       const definition = apiId ? this.registry.get(apiId) : undefined;
       if (definition) return definition.input.map((field) => item(field.name, `${field.name}: `, formatParameter(field), "parameter"));
     }
-    return this.documentCompletions(source, cursor);
+    return this.documentCompletions(source, cursor, false);
   }
 
   private apiNamespaceItems(source: string, item: (label: string, insertText: string, detail: string, kind: CompletionItem["kind"]) => CompletionItem): CompletionItem[] {
@@ -248,11 +248,12 @@ export class DextLanguageService {
     return { kind: compileWorkflow(source, this.registry, {
       allowImports: true,
       aliases: parseWorkflowImports(source),
-      customApiIds: this.customApiIds
+      customApiIds: this.customApiIds,
+      requireCustomApiImports: false
     }).program ? "workflow" : "invalid" };
   }
 
-  documentCompletions(source: string, cursor = source.length): CompletionItem[] {
+  documentCompletions(source: string, cursor = source.length, customApisAreGlobal = true): CompletionItem[] {
     const before = source.slice(0, cursor);
     const word = /[A-Za-z_][A-Za-z0-9_.]*$/.exec(before)?.[0] ?? "";
     const fragmentStart = word.lastIndexOf(".") + 1;
@@ -283,7 +284,7 @@ export class DextLanguageService {
         `^\\s*${statusComparison[1]}\\s*=\\s*([A-Za-z_][A-Za-z0-9_.]*)\\(`,
         "m"
       ).exec(source);
-      const output = assignment ? this.resolveMethod(source, assignment[1] ?? "")?.output.kind : undefined;
+      const output = assignment ? this.resolveMethod(source, assignment[1] ?? "", customApisAreGlobal)?.output.kind : undefined;
       if (output === "review" || output === "apply" || output === "terminal") {
         const values = output === "review"
           ? ["pass", "warning", "fail"]
@@ -310,7 +311,7 @@ export class DextLanguageService {
         `^\\s*${member[1]}\\s*=\\s*([A-Za-z_][A-Za-z0-9_.]*)\\(`,
         "m"
       ).exec(source);
-      const output = assignment ? this.resolveMethod(source, assignment[1] ?? "")?.output.kind : undefined;
+      const output = assignment ? this.resolveMethod(source, assignment[1] ?? "", customApisAreGlobal)?.output.kind : undefined;
       if (output) {
         return (RESULT_FIELDS[output] ?? [])
           .filter((field) => field.startsWith(member[2] ?? ""))
@@ -320,7 +321,7 @@ export class DextLanguageService {
 
     const call = openCall(source, cursor);
     if (call) {
-      const method = this.resolveMethod(source, call.method);
+      const method = this.resolveMethod(source, call.method, customApisAreGlobal);
       if (method) {
         const segment = activeArgument(call.body);
         const assignment = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=([\s\S]*)$/.exec(segment);
@@ -346,7 +347,7 @@ export class DextLanguageService {
             }));
             if (!field.accepts?.includes("result")) return referenceItems;
             const resultVariables = [...source.matchAll(/^\s*([A-Za-z_]\w*)\s*=\s*([A-Za-z_][A-Za-z0-9_.]*)\(/gm)]
-              .map((match) => ({ name: match[1]!, output: this.resolveMethod(source, match[2]!)?.output.kind }))
+              .map((match) => ({ name: match[1]!, output: this.resolveMethod(source, match[2]!, customApisAreGlobal)?.output.kind }))
               .filter((entry) => entry.output !== undefined)
               .map((entry) => ({ name: entry.name, output: entry.output! }));
             return [
@@ -364,7 +365,7 @@ export class DextLanguageService {
           if (field?.type === "result" || field?.accepts?.includes("result")) {
             const fragment = /(?:^|(?:\[|,)\s*)([A-Za-z_]\w*)$/.exec(value)?.[1] ?? "";
             const variables = [...source.matchAll(/^\s*([A-Za-z_]\w*)\s*=\s*([A-Za-z_][A-Za-z0-9_.]*)\(/gm)]
-              .map((match) => ({ name: match[1]!, output: this.resolveMethod(source, match[2]!)?.output.kind }))
+              .map((match) => ({ name: match[1]!, output: this.resolveMethod(source, match[2]!, customApisAreGlobal)?.output.kind }))
               .filter((entry) => entry.output !== undefined)
               .map((entry) => ({ name: entry.name, output: entry.output! }));
             return variables.filter(({ name }) => name.startsWith(fragment)).map(({ name, output }) => ({
@@ -409,7 +410,7 @@ export class DextLanguageService {
       }
     }
 
-    const methods = this.visibleMethodEntries(source);
+    const methods = this.visibleMethodEntries(source, customApisAreGlobal);
     const path = word.split(".");
     const fragment = path.pop() ?? "";
     const prefix = path.length ? `${path.join(".")}.` : "";
@@ -434,7 +435,8 @@ export class DextLanguageService {
     return compileWorkflow(source, this.registry, {
       allowImports: true,
       aliases: parseWorkflowImports(source),
-      customApiIds: this.customApiIds
+      customApiIds: this.customApiIds,
+      requireCustomApiImports: false
     }).diagnostics.map((diagnostic) => ({
       message: diagnostic.message,
       severity: diagnostic.severity,
@@ -444,13 +446,17 @@ export class DextLanguageService {
     }));
   }
 
-  documentHover(source: string, cursor: number): LanguageHover | undefined {
+  apiHover(source: string, cursor: number): LanguageHover | undefined {
+    return this.documentHover(source, cursor, false);
+  }
+
+  documentHover(source: string, cursor: number, customApisAreGlobal = true): LanguageHover | undefined {
     const pattern = /[A-Za-z_][A-Za-z0-9_.]*/g;
     for (const match of source.matchAll(pattern)) {
       const from = match.index ?? 0;
       const to = from + match[0].length;
       if (cursor < from || cursor > to) continue;
-      const method = this.resolveMethod(source, match[0]);
+      const method = this.resolveMethod(source, match[0], customApisAreGlobal);
       if (method) {
         return {
           rangeStart: from,
@@ -462,7 +468,7 @@ export class DextLanguageService {
       const member = /^([A-Za-z_]\w*)\.([A-Za-z_]\w*)$/.exec(match[0]);
       if (member) {
         const assignment = new RegExp(`^\\s*${member[1]}\\s*=\\s*([A-Za-z_][A-Za-z0-9_.]*)\\(`, "m").exec(source);
-        const output = assignment ? this.resolveMethod(source, assignment[1] ?? "")?.output.kind : undefined;
+        const output = assignment ? this.resolveMethod(source, assignment[1] ?? "", customApisAreGlobal)?.output.kind : undefined;
         const type = output ? RESULT_FIELD_TYPES[output]?.[member[2] ?? ""] : undefined;
         if (output && type) {
           return {
@@ -475,7 +481,7 @@ export class DextLanguageService {
       }
       const variableAssignment = new RegExp(`^\\s*${match[0]}\\s*=\\s*([A-Za-z_][A-Za-z0-9_.]*)\\(`, "m").exec(source);
       if (variableAssignment) {
-        const output = this.resolveMethod(source, variableAssignment[1] ?? "")?.output.kind;
+        const output = this.resolveMethod(source, variableAssignment[1] ?? "", customApisAreGlobal)?.output.kind;
         if (output) {
           return {
             rangeStart: from,
@@ -499,9 +505,13 @@ export class DextLanguageService {
     return undefined;
   }
 
-  documentSignature(source: string, cursor = source.length): SignatureHelp | undefined {
+  apiSignature(source: string, cursor = source.length): SignatureHelp | undefined {
+    return this.documentSignature(source, cursor, false);
+  }
+
+  documentSignature(source: string, cursor = source.length, customApisAreGlobal = true): SignatureHelp | undefined {
     const call = /([A-Za-z_][A-Za-z0-9_.]*)\(([^()]*)$/.exec(source.slice(0, cursor));
-    const method = call ? this.resolveMethod(source, call[1] ?? "") : undefined;
+    const method = call ? this.resolveMethod(source, call[1] ?? "", customApisAreGlobal) : undefined;
     if (!call || !method) return undefined;
     const activeParameter = Math.min(
       call[2]?.match(/,/g)?.length ?? 0,

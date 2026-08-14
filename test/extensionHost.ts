@@ -75,8 +75,43 @@ export async function run(): Promise<void> {
     "Opening a file reference rejects workspace traversal."
   );
 
+  const dxFile = vscode.Uri.joinPath(folder.uri, "test", "fixtures", "language.dx");
+  const dxDocument = await vscode.workspace.openTextDocument(dxFile);
+  assert.equal(dxDocument.languageId, "dext-api", "A .dx file activates the Dext language.");
+  await vscode.window.showTextDocument(dxDocument);
+  const methodStart = dxDocument.getText().indexOf("code.explain");
+  assert.ok(methodStart >= 0, "The Dext language fixture contains a built-in API call.");
+  const completionPosition = dxDocument.positionAt(methodStart + "code.".length);
+  const completions = await vscode.commands.executeCommand<vscode.CompletionList>(
+    "vscode.executeCompletionItemProvider",
+    dxDocument.uri,
+    completionPosition,
+    "."
+  );
+  assert.ok(
+    completions.items.some((item) => item.label === "explain"),
+    "A .dx file receives API completions from the registered VS Code provider."
+  );
+  const hovers = await vscode.commands.executeCommand<vscode.Hover[]>(
+    "vscode.executeHoverProvider",
+    dxDocument.uri,
+    dxDocument.positionAt(methodStart + "code.ex".length)
+  );
+  assert.ok(hovers.length > 0, "A .dx API call receives hover type information.");
+  const targetValue = dxDocument.getText().indexOf("target=target", methodStart);
+  const signatures = await vscode.commands.executeCommand<vscode.SignatureHelp>(
+    "vscode.executeSignatureHelpProvider",
+    dxDocument.uri,
+    dxDocument.positionAt(targetValue + "target=".length),
+    "("
+  );
+  assert.ok(signatures.signatures.length > 0, "A .dx API call receives parameter hints.");
+  assert.equal(signatures.activeParameter, 0, "Parameter hints select the first API parameter.");
+
   await vscode.commands.executeCommand("dext.triggerSuggest");
+  assert.equal(vscode.window.activeTextEditor?.document.uri.toString(), dxDocument.uri.toString(), "Suggest keeps focus in the .dx editor.");
   await vscode.commands.executeCommand("dext.triggerParameterHints");
+  assert.equal(vscode.window.activeTextEditor?.document.uri.toString(), dxDocument.uri.toString(), "Parameter hints keep focus in the .dx editor.");
   await new Promise((resolve) => setTimeout(resolve, 300));
   await vscode.commands.executeCommand("dext.reloadMethods");
   await vscode.commands.executeCommand("dext.focus");

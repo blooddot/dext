@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { agentProcessEnvironment, codexOutputSchema, resolveCliCommand } from "../src/core/agentRunner.js";
+import { agentProcessEnvironment, codexOutputSchema, parseCodexStreamLine, resolveCliCommand } from "../src/core/agentRunner.js";
 import { BUILTIN_METHODS } from "../src/core/builtins.js";
 import { AxAdapter } from "../src/core/axAdapter.js";
 import { serializeResultForAgent } from "../src/core/resultSerialization.js";
@@ -31,6 +31,24 @@ describe("CLI command resolution", () => {
       result_kind: "chat",
       value: { kind: "chat", text: "hello" }
     });
+  });
+
+  it("keeps Codex progress messages in the visible agent trace", () => {
+    expect(parseCodexStreamLine(JSON.stringify({
+      type: "item.completed",
+      item: { id: "item_0", type: "agent_message", text: "I will inspect the target first." }
+    }))).toMatchObject({ id: "item_0", phase: "message", text: "I will inspect the target first.", done: true });
+  });
+
+  it("keeps reasoning summaries but omits the final structured result from the trace", () => {
+    expect(parseCodexStreamLine(JSON.stringify({
+      type: "item.completed",
+      item: { id: "item_1", type: "reasoning", text: "The implementation needs one focused change." }
+    }))).toMatchObject({ id: "item_1", phase: "reasoning", text: "The implementation needs one focused change." });
+    expect(parseCodexStreamLine(JSON.stringify({
+      type: "item.completed",
+      item: { id: "item_2", type: "agent_message", text: '{"kind":"explain","text":"Done","files":[]}' }
+    }))).toBeUndefined();
   });
   it("makes optional output fields nullable while requiring every Codex object property", () => {
     const method = BUILTIN_METHODS.find((candidate) => candidate.id === "code.explain")!;

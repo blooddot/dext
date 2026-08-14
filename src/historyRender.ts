@@ -3,6 +3,7 @@ import { classHighlighter, highlightCode } from "@lezer/highlight";
 import type { AgentStreamEvent, DextResult, InputExecutionResponse, RuntimeResponse, WorkflowStepResponse } from "./core/types.js";
 import type { EditorTokenTheme } from "./vscodeTheme.js";
 import type { DextHistoryRecord } from "./historyStore.js";
+import { formatDuration } from "./webview/duration.js";
 
 export function escapeHtml(value: string): string {
   return value.replace(/[&><"]/g, (character) => ({
@@ -62,7 +63,7 @@ function resultBody(result: DextResult): string {
 
 function execution(response: RuntimeResponse): string {
   const raw = resultText(response.result);
-  return `<section class="history-execution"><div class="execution-heading"><span>${escapeHtml(response.method.id)}</span><span class="history-meta">${Math.round(response.durationMs)} ms</span>${raw ? copyButton(raw) : ""}</div>${resultBody(response.result)}</section>`;
+  return `<section class="history-execution"><div class="execution-heading"><span>${escapeHtml(response.method.id)}</span><span class="history-meta">${formatDuration(response.durationMs)}</span>${raw ? copyButton(raw) : ""}</div>${resultBody(response.result)}</section>`;
 }
 
 function steps(response: InputExecutionResponse): WorkflowStepResponse[] {
@@ -88,7 +89,7 @@ function eventGroup(label: string, events: readonly AgentStreamEvent[]): string 
 }
 
 function process(events: readonly AgentStreamEvent[]): string {
-  const reasoning = events.filter((event) => event.phase === "reasoning");
+  const reasoning = events.filter((event) => event.phase === "reasoning" || event.phase === "message");
   const tools = events.filter((event) => event.phase === "tool");
   return eventGroup("Thought", reasoning) + eventGroup(`Ran ${tools.length} command${tools.length === 1 ? "" : "s"}`, tools);
 }
@@ -116,7 +117,7 @@ export function renderHistoryRecord(record: DextHistoryRecord): string {
     ? `<pre class="error">${escapeHtml(record.error)}</pre>`
     : response ? output(response) : `<pre>${escapeHtml(record.output)}</pre>`;
   const outputCopy = record.error || (response ? outputText(response) : record.output);
-  return `<details class="history-record"><summary>${chevron()}<span>${escapeHtml(dateLabel(record.createdAt))}</span><span class="history-summary-input">${escapeHtml(firstLine)}</span><span class="history-meta">${duration ? `${Math.round(duration)} ms` : ""}</span></summary><div class="history-record-body"><details class="history-disclosure"><summary>${chevron()}<span>Input</span>${copyButton(record.input)}</summary><pre class="dext-source">${highlightDext(record.input)}</pre></details>${processHtml ? `<details class="history-disclosure"><summary>${chevron()}<span>Process</span></summary><div class="disclosure-body">${processHtml}</div></details>` : ""}<details class="history-disclosure" open><summary>${chevron()}<span>Output</span>${copyButton(outputCopy)}</summary><div class="disclosure-body">${outputHtml}</div></details></div></details>`;
+  return `<details class="history-record"><summary>${chevron()}<span>${escapeHtml(dateLabel(record.createdAt))}</span><span class="history-summary-input">${escapeHtml(firstLine)}</span><span class="history-meta">${duration ? formatDuration(duration) : ""}</span></summary><div class="history-record-body"><details class="history-disclosure"><summary>${chevron()}<span>Input</span>${copyButton(record.input)}</summary><pre class="dext-source">${highlightDext(record.input)}</pre></details>${processHtml ? `<details class="history-disclosure"><summary>${chevron()}<span>Process</span></summary><div class="disclosure-body">${processHtml}</div></details>` : ""}<details class="history-disclosure" open><summary>${chevron()}<span>Output</span>${copyButton(outputCopy)}</summary><div class="disclosure-body">${outputHtml}</div></details></div></details>`;
 }
 
 function color(value: string | undefined, fallback: string): string {

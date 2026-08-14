@@ -52,4 +52,41 @@ describe("Dext history rendering", () => {
     };
     expect(renderHistoryRecord(record)).toContain("old");
   });
+
+  it("renders Codex progress messages in the collapsible process trace", () => {
+    const record: DextHistoryRecord = {
+      id: "progress",
+      createdAt: 1,
+      input: "code.explain(target=ref.selection)",
+      process: [{ phase: "message", text: "I will inspect the selected implementation first." }],
+      output: ""
+    };
+
+    const html = renderHistoryRecord(record);
+    expect(html).toContain("Thought");
+    expect(html).toContain("I will inspect the selected implementation first.");
+  });
+
+  it("uses compact durations in history summaries and executions", () => {
+    const record: DextHistoryRecord = {
+      id: "duration",
+      createdAt: 1,
+      input: 'chat(message="hello")',
+      process: [],
+      output: "",
+      response: {
+        kind: "workflow",
+        executions: [{
+          invocation: { kind: "invocation", method: "chat", source: "code", arguments: [] },
+          method: { id: "chat", title: "Chat", kind: "command", source: "builtin" },
+          result: { kind: "chat", text: "hello" },
+          durationMs: 40_499
+        }]
+      }
+    };
+
+    const html = renderHistoryRecord(record);
+    expect(html).toContain("40s499ms");
+    expect(html).not.toContain("40499 ms");
+  });
 });

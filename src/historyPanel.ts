@@ -41,7 +41,7 @@ export class DextHistoryPanel implements vscode.Disposable {
     const codicons = this.panel.webview.asWebviewUri(
       vscode.Uri.joinPath(this.extensionUri, "dist", "codicons", "codicon.css")
     );
-    const records = [...this.store.list()].reverse();
+    const records = this.store.list();
     const body = records.length
       ? records.map(renderHistoryRecord).join("\n")
       : `<div class="empty">No Dext history yet.</div>`;

@@ -17,6 +17,10 @@ describe("DextHistoryStore", () => {
     await store.addFailure("terminal.run(command=\"git status\")", [], new Error("cancelled"));
     const records = store.list();
     expect(records).toHaveLength(2);
+    expect(records.map((record) => record.input)).toEqual([
+      'chat(message="hello")',
+      'terminal.run(command="git status")'
+    ]);
     expect(records[0]?.output).toContain("workflow");
     expect(records[0]?.response).toEqual({ kind: "workflow", executions: [] });
     expect(records[1]?.error).toBe("cancelled");

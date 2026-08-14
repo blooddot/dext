@@ -52,6 +52,26 @@ applied = code.apply(result=review_result)
     expect(result.diagnostics).toEqual([]);
   });
 
+  it("allows registered custom APIs without imports in interactive workflows", () => {
+    const registry = new MethodRegistry();
+    registry.registerMany(BUILTIN_METHODS, "builtin");
+    registry.register({
+      id: "dev.fix",
+      title: "Fix",
+      description: "Fix code",
+      kind: "skill",
+      version: "1.0.0",
+      input: [{ name: "target", type: "context", required: true }],
+      output: { kind: "review" },
+      executor: { kind: "custom", apiId: "dev.fix" }
+    }, "project");
+    const result = compileWorkflow("dev.fix(target=ref.selection)", registry, {
+      customApiIds: new Set(["dev.fix"]),
+      requireCustomApiImports: false
+    });
+    expect(result.diagnostics).toEqual([]);
+  });
+
   it("reports syntax, type, and unknown API diagnostics", () => {
     expect(compile('chat(message="unterminated)').diagnostics.length).toBeGreaterThan(0);
     expect(compile("chat(message=1)").diagnostics.map((item) => item.message).join("\n"))
