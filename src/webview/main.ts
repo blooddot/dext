@@ -13,6 +13,9 @@ import { ClipboardClient } from "./clipboardClient.js";
 import { DextCodeEditor } from "./codeEditor.js";
 import { LanguageRequestBroker } from "./languageClient.js";
 import { formatDuration } from "./duration.js";
+import { agentMessageCopyText, presentAgentMessage } from "../agentMessagePresentation.js";
+import type { AgentMessagePresentation } from "../agentMessagePresentation.js";
+import { presentDiff } from "../diffPresentation.js";
 
 interface VsCodeApi {
   postMessage(message: WebviewRequest): void;
@@ -497,6 +500,148 @@ function disclosureSummary(label: string, detail: string): HTMLElement {
   return summary;
 }
 
+type DiffMode = "inline" | "split";
+
+function setDiffMode(container: HTMLElement, mode: DiffMode): void {
+  const view = container.querySelector<HTMLElement>(".diff-view");
+  if (view) view.dataset.diffView = mode;
+  container.querySelectorAll<HTMLButtonElement>(".diff-mode-button").forEach((button) => {
+    const active = button.dataset.diffMode === mode;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+}
+
+function diffModeSwitch(container: HTMLElement): HTMLElement {
+  const control = document.createElement("span");
+  control.className = "diff-mode-switch";
+  control.setAttribute("role", "group");
+  control.setAttribute("aria-label", "Diff layout");
+  for (const [mode, label] of [["inline", "Inline"], ["split", "Split"]] as const) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `diff-mode-button${mode === "inline" ? " active" : ""}`;
+    button.dataset.diffMode = mode;
+    button.title = `${label} diff`;
+    button.textContent = label;
+    button.setAttribute("aria-pressed", String(mode === "inline"));
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setDiffMode(container, mode);
+    });
+    control.append(button);
+  }
+  return control;
+}
+
+function diffSide(line: ReturnType<typeof presentDiff>["rows"][number]["before"], marker: string): HTMLElement {
+  const side = document.createElement("span");
+  side.className = `diff-side ${line?.kind ?? "empty"}`;
+  const lineNumber = document.createElement("span");
+  lineNumber.className = "diff-line-number";
+  lineNumber.textContent = line ? String(line.line) : "";
+  const sign = document.createElement("span");
+  sign.className = "diff-marker";
+  sign.textContent = line ? marker : "";
+  const code = document.createElement("span");
+  code.className = "diff-code";
+  code.textContent = line?.text ?? "";
+  side.append(lineNumber, sign, code);
+  return side;
+}
+
+function appendDiffView(container: HTMLElement, change: PatchChange): void {
+  const presentation = presentDiff(change);
+  const view = document.createElement("div");
+  view.className = "diff-view";
+  view.dataset.diffView = "inline";
+  const inline = document.createElement("div");
+  inline.className = "diff-inline";
+  const split = document.createElement("div");
+  split.className = "diff-split";
+  for (const row of presentation.rows) {
+    if (row.before?.kind === "context") inline.append(diffSide(row.before, " "));
+    else {
+      if (row.before) inline.append(diffSide(row.before, "-"));
+      if (row.after) inline.append(diffSide(row.after, "+"));
+    }
+    const splitRow = document.createElement("span");
+    splitRow.className = "diff-split-row";
+    splitRow.append(
+      diffSide(row.before, row.before?.kind === "removed" ? "-" : " "),
+      diffSide(row.after, row.after?.kind === "added" ? "+" : " ")
+    );
+    split.append(splitRow);
+  }
+  view.append(inline, split);
+  container.append(view);
+}
+
+function fileChangeDisclosure(change: PatchChange, className = "agent-file-change"): HTMLDetailsElement {
+  const disclosure = document.createElement("details");
+  disclosure.className = className;
+  disclosure.dataset.diffContainer = "";
+  const summary = document.createElement("summary");
+  const chevron = document.createElement("i");
+  chevron.className = "disclosure-chevron codicon codicon-chevron-right";
+  const name = change.uri.replaceAll("\\", "/").split("/").pop() ?? change.uri;
+  const counts = presentDiff(change);
+  const label = document.createElement("span");
+  label.textContent = name;
+  const count = document.createElement("span");
+  count.className = "diff-count";
+  count.innerHTML = `<span class="diff-added">+${counts.added}</span> <span class="diff-removed">-${counts.removed}</span>`;
+  const path = document.createElement("div");
+  path.className = "agent-file-path";
+  path.textContent = change.uri;
+  summary.append(chevron, label, count, diffModeSwitch(disclosure));
+  disclosure.append(summary, path);
+  appendDiffView(disclosure, change);
+  return disclosure;
+}
+
+function appendAgentPresentationExtras(container: HTMLElement, presentation: AgentMessagePresentation): void {
+  for (const detail of presentation.details) {
+    const element = document.createElement("div");
+    element.className = `agent-result-detail ${detail.tone}`;
+    if (detail.meta) {
+      const meta = document.createElement("span");
+      meta.className = "agent-result-detail-meta";
+      meta.textContent = detail.meta;
+      element.append(meta);
+    }
+    element.append(document.createTextNode(detail.text));
+    container.append(element);
+  }
+  for (const change of presentation.changes) {
+    container.append(fileChangeDisclosure(change, "agent-file-change agent-result-change"));
+  }
+  for (const reference of presentation.references) {
+    const disclosure = document.createElement("details");
+    disclosure.className = "agent-result-reference";
+    const name = reference.uri.replaceAll("\\", "/").split("/").pop() ?? reference.uri;
+    const meta = [reference.location, reference.symbol].filter(Boolean).join(" · ");
+    disclosure.append(disclosureSummary(name, meta));
+    const path = document.createElement("div");
+    path.className = "agent-file-path";
+    path.textContent = reference.uri;
+    disclosure.append(path);
+    if (reference.content) disclosure.append(codeBlock(reference.content));
+    container.append(disclosure);
+  }
+  for (const section of presentation.sections) {
+    const disclosure = document.createElement("details");
+    disclosure.className = `agent-result-section ${section.tone}`;
+    disclosure.append(disclosureSummary(section.title, ""));
+    const body = document.createElement("div");
+    body.className = "agent-result-section-body";
+    body.append(section.code ? codeBlock(section.text) : copyableText(section.text));
+    disclosure.append(body);
+    container.append(disclosure);
+  }
+}
+
 function renderExecution(response: RuntimeResponse): DocumentFragment {
   const fragment = document.createDocumentFragment();
   fragment.append(resultHeading(response));
@@ -769,7 +914,7 @@ function renderAgentEvent(event: AgentStreamEvent): void {
       body.className = "agent-stream-text";
       item.append(body);
     } else {
-      const body = document.createElement("pre");
+      const body = document.createElement("div");
       body.className = "agent-stream-text";
       item.append(body);
     }
@@ -778,59 +923,46 @@ function renderAgentEvent(event: AgentStreamEvent): void {
   }
   const body = item.querySelector<HTMLElement>(".agent-stream-text");
   const eventBody = event.phase === "tool" && event.title === event.text ? "" : event.text;
-  if (body) body.textContent = event.replace ? eventBody : `${body.textContent ?? ""}${eventBody}`;
+  let copyText = event.text;
+  if (body && event.phase !== "tool") {
+    const raw = event.replace ? eventBody : `${body.dataset.raw ?? ""}${eventBody}`;
+    body.dataset.raw = raw;
+    const presentation = presentAgentMessage(raw);
+    copyText = agentMessageCopyText(presentation);
+    body.classList.toggle("agent-stream-result", presentation.structured);
+    if (presentation.structured) {
+      const heading = document.createElement("div");
+      heading.className = "agent-result-heading";
+      const title = document.createElement("span");
+      title.className = "agent-result-title";
+      title.textContent = presentation.title;
+      heading.append(title);
+      if (presentation.meta.length) {
+        const meta = document.createElement("span");
+        meta.className = "agent-result-meta";
+        meta.textContent = presentation.meta.join(" · ");
+        heading.append(meta);
+      }
+      const content = document.createElement("div");
+      content.className = "agent-result-content";
+      content.textContent = presentation.text;
+      body.replaceChildren(heading, ...(presentation.text ? [content] : []));
+      appendAgentPresentationExtras(body, presentation);
+    } else {
+      body.textContent = raw;
+    }
+  } else if (body) {
+    body.textContent = event.replace ? eventBody : `${body.textContent ?? ""}${eventBody}`;
+    copyText = body.textContent ?? event.text;
+  }
   const summaryLabel = item.querySelector<HTMLElement>(".agent-stream-summary-label");
   if (summaryLabel && event.phase === "tool") summaryLabel.textContent = (event.title ?? summaryLabel.textContent ?? "Command").slice(0, 180);
   const outputCopy = item.querySelector<HTMLButtonElement>(".output-copy");
   if (outputCopy) {
-    outputCopy.replaceWith(copyButton(body?.textContent ?? event.text));
+    outputCopy.replaceWith(copyButton(copyText));
   }
   elements.resultSection.classList.remove("hidden");
   setSectionOpen(elements.resultHeading, elements.resultBody, true);
-}
-
-function changedLineCounts(change: PatchChange): { added: number; removed: number } {
-  const before = change.before.split(/\r?\n/);
-  const after = change.after.split(/\r?\n/);
-  let prefix = 0;
-  while (prefix < before.length && prefix < after.length && before[prefix] === after[prefix]) prefix += 1;
-  let suffix = 0;
-  while (
-    suffix < before.length - prefix
-    && suffix < after.length - prefix
-    && before[before.length - 1 - suffix] === after[after.length - 1 - suffix]
-  ) suffix += 1;
-  return {
-    added: Math.max(0, after.length - prefix - suffix),
-    removed: Math.max(0, before.length - prefix - suffix)
-  };
-}
-
-function appendDiffLines(container: HTMLElement, change: PatchChange): void {
-  const before = change.before.split(/\r?\n/);
-  const after = change.after.split(/\r?\n/);
-  let prefix = 0;
-  while (prefix < before.length && prefix < after.length && before[prefix] === after[prefix]) prefix += 1;
-  let suffix = 0;
-  while (
-    suffix < before.length - prefix
-    && suffix < after.length - prefix
-    && before[before.length - 1 - suffix] === after[after.length - 1 - suffix]
-  ) suffix += 1;
-  const lines: { kind: "context" | "removed" | "added"; text: string }[] = [];
-  for (const text of before.slice(Math.max(0, prefix - 3), prefix)) lines.push({ kind: "context", text });
-  for (const text of before.slice(prefix, before.length - suffix)) lines.push({ kind: "removed", text });
-  for (const text of after.slice(prefix, after.length - suffix)) lines.push({ kind: "added", text });
-  for (const text of after.slice(after.length - suffix, Math.min(after.length, after.length - suffix + 3))) lines.push({ kind: "context", text });
-  const diff = document.createElement("pre");
-  diff.className = "agent-file-diff";
-  for (const line of lines) {
-    const row = document.createElement("span");
-    row.className = `agent-diff-line ${line.kind}`;
-    row.textContent = `${line.kind === "removed" ? "-" : line.kind === "added" ? "+" : " "} ${line.text}\n`;
-    diff.append(row);
-  }
-  container.append(diff);
 }
 
 function renderAgentFileChanges(entries: readonly WorkflowStepResponse[]): void {
@@ -844,21 +976,7 @@ function renderAgentFileChanges(entries: readonly WorkflowStepResponse[]): void 
     if (agentEditedUris.has(change.uri)) continue;
     agentEditedUris.add(change.uri);
     const group = agentGroup("files");
-    const disclosure = document.createElement("details");
-    disclosure.className = "agent-file-change";
-    const summary = document.createElement("summary");
-    const chevron = document.createElement("i");
-    chevron.className = "disclosure-chevron codicon codicon-chevron-right";
-    const name = change.uri.replaceAll("\\", "/").split("/").pop() ?? change.uri;
-    const counts = changedLineCounts(change);
-    const label = document.createElement("span");
-    label.textContent = `${name}  +${counts.added} -${counts.removed}`;
-    const path = document.createElement("div");
-    path.className = "agent-file-path";
-    path.textContent = change.uri;
-    summary.append(chevron, label);
-    disclosure.append(summary, path);
-    appendDiffLines(disclosure, change);
+    const disclosure = fileChangeDisclosure(change);
     group.body.append(disclosure);
   }
   if (changes.length) {

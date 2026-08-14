@@ -12,6 +12,7 @@ export async function run(): Promise<void> {
   const commands = await vscode.commands.getCommands(true);
   assert.ok(commands.includes("dext.focus"), "Focus command is registered.");
   assert.ok(commands.includes("dext.reloadMethods"), "Reload command is registered.");
+  assert.ok(commands.includes("dext.openHistory"), "History command is registered.");
   assert.ok(commands.includes("dext.openWorkspaceTrust"), "Workspace Trust command is registered.");
   assert.ok(commands.includes("dext.workspaceTrustedStatus"), "Trusted workspace title action is registered.");
   assert.ok(commands.includes("dext.workspaceUntrustedStatus"), "Untrusted workspace title action is registered.");
@@ -112,6 +113,23 @@ export async function run(): Promise<void> {
   assert.equal(vscode.window.activeTextEditor?.document.uri.toString(), dxDocument.uri.toString(), "Suggest keeps focus in the .dx editor.");
   await vscode.commands.executeCommand("dext.triggerParameterHints");
   assert.equal(vscode.window.activeTextEditor?.document.uri.toString(), dxDocument.uri.toString(), "Parameter hints keep focus in the .dx editor.");
+  const activeGroup = vscode.window.tabGroups.activeTabGroup;
+  const tabCount = activeGroup.tabs.length;
+  await vscode.commands.executeCommand("dext.openHistory");
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  const historyTab = vscode.window.tabGroups.activeTabGroup.activeTab;
+  if (!historyTab) throw new Error("Dext History did not open an active tab.");
+  assert.equal(historyTab.label, "Dext History", "History tab has a clear output title.");
+  assert.ok(historyTab.input instanceof vscode.TabInputWebview, "History opens as an independent webview tab.");
+  if (historyTab.input instanceof vscode.TabInputWebview) {
+    assert.ok(historyTab.input.viewType.endsWith("dext.history"), "History uses the Dext History webview.");
+  }
+  assert.equal(vscode.window.tabGroups.activeTabGroup, activeGroup, "History stays in the same editor group.");
+  assert.equal(vscode.window.tabGroups.activeTabGroup.tabs.length, tabCount + 1, "History adds one tab beside the current file.");
+  await vscode.commands.executeCommand("workbench.action.closeActiveEditor");
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.equal(vscode.window.activeTextEditor?.document.uri.toString(), dxDocument.uri.toString(), "Closing History returns to the original text editor.");
+  assert.equal(vscode.window.tabGroups.activeTabGroup.tabs.length, tabCount, "Closing History leaves the original tab intact.");
   await new Promise((resolve) => setTimeout(resolve, 300));
   await vscode.commands.executeCommand("dext.reloadMethods");
   await vscode.commands.executeCommand("dext.focus");

@@ -4,6 +4,10 @@ import type { AgentStreamEvent, DextResult, InputExecutionResponse, RuntimeRespo
 import type { EditorTokenTheme } from "./vscodeTheme.js";
 import type { DextHistoryRecord } from "./historyStore.js";
 import { formatDuration } from "./webview/duration.js";
+import { presentAgentMessage } from "./agentMessagePresentation.js";
+import { presentDiff } from "./diffPresentation.js";
+import type { AgentMessagePresentation } from "./agentMessagePresentation.js";
+import type { PatchChange } from "./core/types.js";
 
 export function escapeHtml(value: string): string {
   return value.replace(/[&><"]/g, (character) => ({
@@ -17,6 +21,31 @@ function chevron(): string {
 
 function copyButton(value: string): string {
   return `<button class="copy-button codicon codicon-copy" type="button" data-copy="${escapeHtml(value)}" title="Copy" aria-label="Copy"></button>`;
+}
+
+function diffModeSwitch(): string {
+  return `<span class="diff-mode-switch" role="group" aria-label="Diff layout"><button class="diff-mode-button active" type="button" data-diff-mode="inline" aria-pressed="true" title="Inline diff">Inline</button><button class="diff-mode-button" type="button" data-diff-mode="split" aria-pressed="false" title="Split diff">Split</button></span>`;
+}
+
+function diffSide(line: ReturnType<typeof presentDiff>["rows"][number]["before"], marker: string): string {
+  if (!line) return `<span class="diff-side empty"><span class="diff-line-number"></span><span class="diff-marker"></span><span class="diff-code"></span></span>`;
+  return `<span class="diff-side ${line.kind}"><span class="diff-line-number">${line.line}</span><span class="diff-marker">${marker}</span><span class="diff-code">${escapeHtml(line.text)}</span></span>`;
+}
+
+function renderDiff(change: Pick<PatchChange, "before" | "after">): string {
+  const diff = presentDiff(change);
+  const inline = diff.rows.flatMap((row) => {
+    if (row.before?.kind === "context") return [diffSide(row.before, " ")];
+    return [row.before ? diffSide(row.before, "-") : "", row.after ? diffSide(row.after, "+") : ""].filter(Boolean);
+  }).join("");
+  const split = diff.rows.map((row) => `<span class="diff-split-row">${diffSide(row.before, row.before?.kind === "removed" ? "-" : " ")}${diffSide(row.after, row.after?.kind === "added" ? "+" : " ")}</span>`).join("");
+  return `<div class="diff-view" data-diff-view="inline"><div class="diff-inline">${inline}</div><div class="diff-split">${split}</div></div>`;
+}
+
+function renderFileChange(change: Pick<PatchChange, "uri" | "before" | "after">): string {
+  const name = change.uri.replaceAll("\\", "/").split("/").pop() ?? change.uri;
+  const counts = presentDiff(change);
+  return `<details class="history-disclosure file-change" data-diff-container><summary>${chevron()}<span>${escapeHtml(name)}</span><span class="history-meta"><span class="diff-added">+${counts.added}</span> <span class="diff-removed">-${counts.removed}</span></span>${diffModeSwitch()}</summary><div class="file-path">${escapeHtml(change.uri)}</div>${renderDiff(change)}</details>`;
 }
 
 export function highlightDext(source: string): string {
@@ -49,7 +78,7 @@ function resultBody(result: DextResult): string {
   if (result.kind === "edit" || result.kind === "patch") {
     const changes = result.kind === "edit" ? result.patch.changes : result.changes;
     const summary = result.kind === "edit" ? `<p>${escapeHtml(result.summary)}</p>` : "";
-    return `${summary}${changes.map((change) => `<details class="history-disclosure file-change"><summary>${chevron()}<span>${escapeHtml(change.uri.replaceAll("\\", "/").split("/").pop() ?? change.uri)}</span></summary><div class="file-path">${escapeHtml(change.uri)}</div><pre class="diff"><span class="removed">- ${escapeHtml(change.before)}</span>\n<span class="added">+ ${escapeHtml(change.after)}</span></pre></details>`).join("")}`;
+    return `${summary}${changes.map(renderFileChange).join("")}`;
   }
   if (result.kind === "review") {
     return `<p>${escapeHtml(result.summary)}</p>${result.findings.map((finding) => `<div class="finding ${finding.severity}">${escapeHtml(finding.message)}</div>`).join("")}`;
@@ -85,7 +114,33 @@ function eventGroup(label: string, events: readonly AgentStreamEvent[]): string 
   if (!events.length) return "";
   return `<details class="history-disclosure process-group"><summary>${chevron()}<span>${escapeHtml(label)}</span><span class="history-meta">${events.length}</span></summary><div class="disclosure-body">${events.map((event) => event.phase === "tool"
     ? `<details class="history-disclosure process-event"><summary>${chevron()}<span>${escapeHtml((event.title ?? event.text.split(/\r?\n/, 1)[0] ?? "Command").slice(0, 180))}</span></summary>${event.title === event.text ? "" : `<pre>${escapeHtml(event.text)}</pre>`}</details>`
-    : `<div class="process-text">${escapeHtml(event.text)}</div>`).join("")}</div></details>`;
+    : processMessage(event.text)).join("")}</div></details>`;
+}
+
+function processMessage(text: string): string {
+  const presentation = presentAgentMessage(text);
+  if (!presentation.structured) return `<div class="process-text">${escapeHtml(text)}</div>`;
+  const meta = presentation.meta.length
+    ? `<span class="process-result-meta">${escapeHtml(presentation.meta.join(" · "))}</span>`
+    : "";
+  const body = presentation.text
+    ? `<div class="process-result-text">${escapeHtml(presentation.text)}</div>`
+    : "";
+  const details = presentation.details.map((detail) =>
+    `<div class="process-result-detail ${detail.tone}">${detail.meta ? `<span class="process-result-detail-meta">${escapeHtml(detail.meta)}</span>` : ""}${escapeHtml(detail.text)}</div>`
+  ).join("");
+  return `<section class="process-result process-result-${presentation.kind}"><div class="process-result-heading"><span class="process-result-title">${escapeHtml(presentation.title)}</span>${meta}</div>${body}${details}${renderPresentationExtras(presentation)}</section>`;
+}
+
+function renderPresentationExtras(presentation: AgentMessagePresentation): string {
+  const changes = presentation.changes.map(renderFileChange).join("");
+  const references = presentation.references.map((reference) => {
+    const name = reference.uri.replaceAll("\\", "/").split("/").pop() ?? reference.uri;
+    const meta = [reference.location, reference.symbol].filter(Boolean).join(" · ");
+    return `<details class="history-disclosure process-reference"><summary>${chevron()}<span>${escapeHtml(name)}</span>${meta ? `<span class="history-meta">${escapeHtml(meta)}</span>` : ""}</summary><div class="file-path">${escapeHtml(reference.uri)}</div>${reference.content ? `<pre>${escapeHtml(reference.content)}</pre>` : ""}</details>`;
+  }).join("");
+  const sections = presentation.sections.map((item) => `<details class="history-disclosure process-section ${item.tone}"><summary>${chevron()}<span>${escapeHtml(item.title)}</span></summary><div class="disclosure-body">${item.code ? `<pre>${escapeHtml(item.text)}</pre>` : `<div class="process-text">${escapeHtml(item.text)}</div>`}</div></details>`).join("");
+  return changes + references + sections;
 }
 
 function process(events: readonly AgentStreamEvent[]): string {

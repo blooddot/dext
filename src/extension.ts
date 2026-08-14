@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import { DextApplication } from "./application.js";
 import { DextSidebarProvider } from "./sidebarProvider.js";
 import { DextHistoryStore } from "./historyStore.js";
-import { DextHistoryPanel } from "./historyPanel.js";
+import { DextHistoryPanel } from "./historyEditorProvider.js";
 import {
   dextSemanticTokens,
   DEXT_SEMANTIC_TOKEN_MODIFIERS,
@@ -15,11 +15,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   if (folder) application.runtime.setWorkspaceRoot(folder.uri.fsPath);
   await application.reload();
   const history = new DextHistoryStore(context.globalState);
+  const historyPanel = new DextHistoryPanel(context.extensionUri, history);
   const sidebar = new DextSidebarProvider(
     context.extensionUri,
     application,
     history,
-    () => DextHistoryPanel.show(context.extensionUri, history)
+    () => historyPanel.showInActiveEditor()
   );
   const reportCommandError = async <T>(run: () => Promise<T>): Promise<T | undefined> => {
     try {
@@ -60,6 +61,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(DextSidebarProvider.viewType, sidebar),
+    historyPanel,
+    vscode.commands.registerCommand("dext.openHistory", () => historyPanel.showInActiveEditor()),
     vscode.commands.registerCommand("dext.focus", async () => {
       await vscode.commands.executeCommand("dext.sidebar.focus");
       sidebar.focusEditor();

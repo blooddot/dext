@@ -14,6 +14,7 @@
   ],
   "activationEvents": [
     "onView:dext.sidebar",
+    "onCommand:dext.openHistory",
     "onCommand:dext.copySelectionWithContext",
     "onLanguage:dext-api"
   ],
@@ -29,6 +30,11 @@
         "command": "dext.reloadMethods",
         "title": "Dext: Reload APIs",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "dext.openHistory",
+        "title": "Dext: Open History",
+        "icon": "$(history)"
       },
       {
         "command": "dext.openWorkspaceTrust",

@@ -67,6 +67,63 @@ describe("Dext history rendering", () => {
     expect(html).toContain("I will inspect the selected implementation first.");
   });
 
+  it("renders structured agent results as readable thought summaries instead of JSON", () => {
+    const structured = JSON.stringify({
+      kind: "review",
+      status: "pass",
+      summary: "The change correctly returns hello world.",
+      findings: []
+    });
+    const record: DextHistoryRecord = {
+      id: "structured-thought",
+      createdAt: 1,
+      input: "code.review(target=edit_result)",
+      process: [{ phase: "message", text: structured }],
+      output: ""
+    };
+
+    const html = renderHistoryRecord(record);
+    expect(html).toContain("process-result-review");
+    expect(html).toContain("Review");
+    expect(html).toContain("Passed");
+    expect(html).toContain("The change correctly returns hello world.");
+    expect(html).not.toContain("&quot;kind&quot;");
+    expect(html).not.toContain("findings");
+  });
+
+  it("keeps patch details and both diff layouts in structured thoughts", () => {
+    const structured = JSON.stringify({
+      kind: "edit",
+      summary: "Complete hello_world.",
+      patch: {
+        kind: "patch",
+        title: "Complete hello_world",
+        changes: [{
+          uri: "target-1/temp.py",
+          before: "def hello_world():\n    pass",
+          after: 'def hello_world():\n    return "hello world"'
+        }]
+      },
+      files: []
+    });
+    const record: DextHistoryRecord = {
+      id: "structured-patch",
+      createdAt: 1,
+      input: "code.edit(target=ref.selection, instruction=\"complete it\")",
+      process: [{ phase: "message", text: structured }],
+      output: ""
+    };
+
+    const html = renderHistoryRecord(record);
+    expect(html).toContain("target-1/temp.py");
+    expect(html).toContain("def hello_world():");
+    expect(html).toContain('return &quot;hello world&quot;');
+    expect(html).toContain('data-diff-mode="inline"');
+    expect(html).toContain('data-diff-mode="split"');
+    expect(html).toContain("diff-inline");
+    expect(html).toContain("diff-split");
+  });
+
   it("uses compact durations in history summaries and executions", () => {
     const record: DextHistoryRecord = {
       id: "duration",

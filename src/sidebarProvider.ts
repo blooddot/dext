@@ -28,7 +28,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     private readonly extensionUri: vscode.Uri,
     private readonly application: DextApplication,
     private readonly history: DextHistoryStore,
-    private readonly onViewHistory: () => void
+    private readonly onViewHistory: () => Promise<void>
   ) {}
 
   resolveWebviewView(view: vscode.WebviewView): void {
@@ -139,7 +139,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           await this.run(request.source);
           break;
         case "viewHistory":
-          this.onViewHistory();
+          await this.onViewHistory();
           break;
         case "agentSelection":
           this.application.setAgentSelection({
