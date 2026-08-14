@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import * as vscode from "vscode";
 import type { DextHistoryStore } from "./historyStore.js";
-import { historyTokenStyles, renderHistoryRecord } from "./historyRender.js";
+import { historyTokenStyles, renderHistorySession } from "./historyRender.js";
 import { loadEditorTokenTheme } from "./vscodeTheme.js";
 
 export class DextHistoryPanel implements vscode.Disposable {
@@ -58,9 +58,9 @@ export class DextHistoryPanel implements vscode.Disposable {
     const nonce = randomBytes(16).toString("base64");
     const codicons = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "dist", "codicons", "codicon.css"));
     const style = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "media", "styles.css"));
-    const records = this.history.list();
-    const body = records.length
-      ? records.map(renderHistoryRecord).join("\n")
+    const sessions = this.history.list();
+    const body = sessions.length
+      ? sessions.map(renderHistorySession).join("\n")
       : `<div class="history-empty">No Dext history yet.</div>`;
     return `<!doctype html>
 <html lang="en">

@@ -14,6 +14,7 @@ import { terminalRunHandler } from "./vscodeTerminalHost.js";
 import { applyPatchHandler } from "./vscodePatchHost.js";
 import { loadEditorTokenTheme } from "./vscodeTheme.js";
 import { AgentProfileStore, type AgentProfile, type AgentSelection } from "./agentProfiles.js";
+import { DefaultAioaCdpConnection } from "./core/aioaCdp.js";
 
 export class DextApplication {
   readonly registry = new MethodRegistry();
@@ -111,6 +112,19 @@ export class DextApplication {
     this.runtime.setAgentProfiles(this.agents.list());
   }
 
+  /** Verifies the configured local AIOA CDP session, launching it when requested. */
+  async verifyAioaCdp(): Promise<boolean> {
+    const profile = this.agents.list().find((candidate) => candidate.provider === "aioa");
+    if (!profile) throw new Error("The AIOA Agent profile is not available.");
+    const opened = await new DefaultAioaCdpConnection().open(profile);
+    try {
+      await opened.page.state();
+      return opened.launched;
+    } finally {
+      await opened.page.close();
+    }
+  }
+
   async executeInput(source: string, metadata: Readonly<ExecutionMetadata> = {}): Promise<InputExecutionResponse> {
     const compiled = compileWorkflow(source, this.registry, {
       allowImports: true,
@@ -122,5 +136,9 @@ export class DextApplication {
       throw new Error(compiled.diagnostics.map((item) => item.message).join("\n"));
     }
     return this.workflowRuntime.execute(compiled.program, [], metadata);
+  }
+
+  endAgentSession(sessionId: string): void {
+    this.runtime.endAgentSession(sessionId);
   }
 }

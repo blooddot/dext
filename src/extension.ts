@@ -3,6 +3,7 @@ import { DextApplication } from "./application.js";
 import { DextSidebarProvider } from "./sidebarProvider.js";
 import { DextHistoryStore } from "./historyStore.js";
 import { DextHistoryPanel } from "./historyEditorProvider.js";
+import { normalizeAioaCdpEndpoint } from "./core/aioaCdp.js";
 import {
   dextSemanticTokens,
   DEXT_SEMANTIC_TOKEN_MODIFIERS,
@@ -110,10 +111,72 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("dext.configureAgent", async () => {
       const profiles = application.agents.list();
       const picked = await vscode.window.showQuickPick(
-        profiles.map((profile) => ({ label: profile.label, description: profile.command || "Command not configured", profile })),
-        { placeHolder: "Choose an Agent CLI profile" }
+        profiles.map((profile) => ({
+          label: profile.label,
+          description: profile.provider === "aioa"
+            ? `${profile.connectionMode === "launch" ? "Launch" : "Attach"} · ${profile.endpoint ?? "CDP not configured"}`
+            : profile.command || "Command not configured",
+          profile
+        })),
+        { placeHolder: "Choose an Agent profile" }
       );
       if (!picked) return;
+      if (picked.profile.provider === "aioa") {
+        const connection = await vscode.window.showQuickPick([
+          {
+            label: "Launch",
+            description: "Dext starts AIOA with a local CDP port when no compatible instance is running.",
+            mode: "launch" as const
+          },
+          {
+            label: "Attach",
+            description: "Connect to an AIOA instance already started with a local CDP port.",
+            mode: "attach" as const
+          }
+        ], { placeHolder: "Choose how Dext connects to AIOA" });
+        if (!connection) return;
+        const rawEndpoint = await vscode.window.showInputBox({
+          prompt: "AIOA CDP URL (local loopback only)",
+          value: picked.profile.endpoint ?? "http://127.0.0.1:9229",
+          ignoreFocusOut: true
+        });
+        if (rawEndpoint === undefined) return;
+        let endpoint: string;
+        try {
+          endpoint = normalizeAioaCdpEndpoint(rawEndpoint);
+        } catch (error) {
+          await vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+          return;
+        }
+        let command = picked.profile.command;
+        if (connection.mode === "launch") {
+          const executable = await vscode.window.showInputBox({
+            prompt: "AIOA executable path",
+            value: command,
+            ignoreFocusOut: true
+          });
+          if (executable === undefined) return;
+          command = executable.trim();
+        }
+        application.updateAgentProfile({
+          ...picked.profile,
+          command,
+          endpoint,
+          connectionMode: connection.mode
+        });
+        try {
+          const launched = await application.verifyAioaCdp();
+          await vscode.window.showInformationMessage(
+            launched ? "AIOA started and its CDP session is ready." : "AIOA CDP session is ready."
+          );
+        } catch (error) {
+          await vscode.window.showWarningMessage(
+            `AIOA settings were saved, but CDP is not ready yet: ${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+        await sidebar.refresh();
+        return;
+      }
       const command = await vscode.window.showInputBox({
         prompt: `CLI command for ${picked.profile.label}`,
         value: picked.profile.command,

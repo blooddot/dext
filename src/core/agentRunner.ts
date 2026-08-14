@@ -25,6 +25,7 @@ export interface AgentExecutionRequest {
 
 export interface AgentRunner {
   run(request: AgentExecutionRequest): Promise<unknown>;
+  endSession?(sessionId: string): void;
 }
 
 interface ProcessResult {
@@ -127,7 +128,7 @@ export function resolveCliCommand(
   return undefined;
 }
 
-function displayValue(value: unknown): unknown {
+export function displayValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(displayValue);
   if (isDextResult(value)) return serializeResultForAgent(value);
   if (typeof value === "object" && value !== null && "content" in value && "uri" in value) {
@@ -221,13 +222,13 @@ function codexSchema(value: unknown, optional = false): unknown {
   return optional ? nullableSchema(schema) : schema;
 }
 
-function payload(request: AgentExecutionRequest, outputSchema: object): string {
+/** Stable invocation envelope for stateless CLI agent adapters. */
+export function agentPayload(request: AgentExecutionRequest): string {
   return JSON.stringify({
     api: request.method.id,
     description: request.method.description,
     arguments: Object.fromEntries(Object.entries(request.resolved.arguments).map(([key, value]) => [key, displayValue(value)])),
-    context: request.resolved.context.map(displayValue),
-    output_schema: outputSchema
+    context: request.resolved.context.map(displayValue)
   });
 }
 
@@ -475,6 +476,28 @@ export function claudeCliArguments(
   ];
 }
 
+/** Arguments for Codex's ephemeral, read-only structured execution mode. */
+export function codexCliArguments(
+  options: Pick<AgentExecutionRequest, "model" | "reasoningEffort">,
+  schemaPath: string,
+  codeEdit: boolean,
+  serviceTier?: string
+): string[] {
+  return [
+    "exec",
+    "--json",
+    "--ephemeral",
+    "--sandbox", "read-only",
+    "--output-schema", schemaPath,
+    ...(codeEdit ? ["--skip-git-repo-check"] : []),
+    ...(options.model ? ["--model", options.model] : []),
+    ...(options.reasoningEffort ? ["--config", 'model_reasoning_effort="' + options.reasoningEffort + '"'] : []),
+    "--config", 'model_reasoning_summary="detailed"',
+    ...(serviceTier ? ["--config", 'service_tier="' + serviceTier + '"'] : []),
+    "-"
+  ];
+}
+
 function runProcess(
   command: string,
   args: readonly string[],
@@ -534,7 +557,7 @@ export class CliAgentRunner implements AgentRunner {
 
   async run(request: AgentExecutionRequest): Promise<unknown> {
     if (request.profile.provider === "aioa") {
-      throw new Error("AIOA integration is not configured yet.");
+      throw new Error("AIOA requests must use the CDP runner.");
     }
     if (!request.profile.command) throw new Error(`Agent '${request.profile.label}' has no CLI command configured.`);
     const configuredCommand = request.profile.command.trim();
@@ -552,21 +575,15 @@ export class CliAgentRunner implements AgentRunner {
       ? codexOutputSchema(request.contract.outputJsonSchema)
       : request.contract.outputJsonSchema;
     await writeFile(schemaPath, JSON.stringify(outputSchema), "utf8");
-    const input = payload(executionRequest, outputSchema);
-    const progressInstruction = "While working, emit concise progress updates that summarize what you are inspecting and why, without exposing hidden chain-of-thought. The final agent message must contain only JSON matching output_schema.";
+    const input = agentPayload(executionRequest);
+    const progressInstruction = "While working, emit concise progress updates that summarize what you are inspecting and why, without exposing hidden chain-of-thought. The final agent message must contain only JSON matching the native structured-output schema.";
     const prompt = request.method.id === "code.edit"
       ? `Read the Dext JSON payload from stdin. Work only with the relative preview target paths in the isolated current directory. Do not access or modify files outside it. Return a preview-only EditResult with complete before and after text; Dext applies it separately. ${progressInstruction}`
       : `Read the Dext JSON payload from stdin. Values tagged kind=dext-result are prior typed API results; inspect their value field. Execute the requested API. ${progressInstruction}`;
     const serviceTier = executionRequest.serviceTier ?? (executionRequest.speed === "fast" ? "priority" : executionRequest.speed === "standard" ? "default" : undefined);
     const processEnv = await this.processEnvironment(command, executionRequest);
     const args: string[] = executionRequest.profile.provider === "codex"
-      ? ["exec", "--json", "--ephemeral", "--sandbox", "read-only", "--output-schema", schemaPath,
-        ...(request.method.id === "code.edit" ? ["--skip-git-repo-check"] : []),
-        ...(executionRequest.model ? ["--model", executionRequest.model] : []),
-        ...(executionRequest.reasoningEffort ? ["--config", 'model_reasoning_effort="' + executionRequest.reasoningEffort + '"'] : []),
-        "--config", 'model_reasoning_summary="detailed"',
-        ...(serviceTier ? ["--config", 'service_tier="' + serviceTier + '"'] : []),
-        "-"]
+      ? codexCliArguments(executionRequest, schemaPath, request.method.id === "code.edit", serviceTier)
       : claudeCliArguments(executionRequest, outputSchema);
     try {
       const controller = new AbortController();

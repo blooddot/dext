@@ -294,6 +294,7 @@ export interface ExecutionMetadata {
   reasoningEffort?: string;
   speed?: string;
   serviceTier?: string;
+  agentSessionId?: string;
   onAgentEvent?: (event: AgentStreamEvent) => void;
 }
 

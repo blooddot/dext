@@ -1,0 +1,622 @@
+import { describe, expect, it, vi } from "vitest";
+import type { AgentProfile } from "../src/agentProfiles.js";
+import {
+  AioaCdpAgentRunner,
+  aioaApiDefinition,
+  aioaBootstrapPrompt,
+  aioaExecutionPrompt,
+  aioaInputType,
+  aioaLaunchArguments,
+  aioaOutputType,
+  aioaRequestPayload,
+  aioaTurnPrompt,
+  DefaultAioaCdpConnection,
+  normalizeAioaCdpEndpoint,
+  normalizeAioaWorkspaceName,
+  openAioaWorkspaceConversation,
+  parseJsonOutput,
+  replaceAioaText,
+  type AioaCdpConnection,
+  type AioaCdpPage,
+  type AioaConversationSetupNavigator,
+  type AioaConversationSetupSnapshot,
+  type AioaTrustedInput
+} from "../src/core/aioaCdp.js";
+import type { AgentExecutionRequest } from "../src/core/agentRunner.js";
+import { AxAdapter } from "../src/core/axAdapter.js";
+import { BUILTIN_METHODS } from "../src/core/builtins.js";
+import type { CodeRef, RegisteredCallable } from "../src/core/types.js";
+
+function profile(mode: "attach" | "launch" = "attach"): AgentProfile {
+  return {
+    id: "aioa",
+    label: "AIOA",
+    provider: "aioa",
+    command: "AIOA.exe",
+    endpoint: "http://127.0.0.1:9229",
+    connectionMode: mode,
+    models: []
+  };
+}
+
+function request(onEvent?: AgentExecutionRequest["onEvent"], agentSessionId?: string): AgentExecutionRequest {
+  const method: RegisteredCallable = {
+    ...BUILTIN_METHODS.find((candidate) => candidate.id === "code.explain")!,
+    source: "builtin"
+  };
+  const target: CodeRef = {
+    kind: "codeRef",
+    uri: "file:///workspace/example.ts",
+    content: "export const answer = 42;",
+    documentVersion: 1,
+    contentHash: "hash"
+  };
+  return {
+    profile: profile(),
+    cwd: "C:/workspace",
+    method,
+    contract: new AxAdapter().compile(method),
+    resolved: {
+      invocation: { kind: "invocation", method: method.id, arguments: [{ name: "target", value: target }], source: "code" },
+      method,
+      arguments: { target },
+      context: [target],
+      metadata: agentSessionId ? { agentSessionId } : {}
+    },
+    metadata: agentSessionId ? { agentSessionId } : {},
+    ...(onEvent ? { onEvent } : {})
+  };
+}
+
+function chatRequest(message: string, agentSessionId = "output-session"): AgentExecutionRequest {
+  const method: RegisteredCallable = {
+    ...BUILTIN_METHODS.find((candidate) => candidate.id === "chat")!,
+    source: "builtin"
+  };
+  return {
+    profile: profile(),
+    cwd: "C:/workspace",
+    method,
+    contract: new AxAdapter().compile(method),
+    resolved: {
+      invocation: { kind: "invocation", method: method.id, arguments: [{ name: "message", value: message }], source: "chat" },
+      method,
+      arguments: { message, context: [] },
+      context: [],
+      metadata: { agentSessionId }
+    },
+    metadata: { agentSessionId }
+  };
+}
+
+function page(overrides: Partial<AioaCdpPage> = {}): AioaCdpPage {
+  return {
+    state: async () => ({ busy: false, assistantIds: [] }),
+    createConversation: async () => undefined,
+    submit: async () => undefined,
+    updatesAfter: async () => ({ busy: false, messages: [] }),
+    close: async () => undefined,
+    ...overrides
+  };
+}
+
+function setupSnapshot(
+  overrides: Partial<AioaConversationSetupSnapshot> = {}
+): AioaConversationSetupSnapshot {
+  return {
+    globalNewTaskPoints: [],
+    visibleMessageCount: 0,
+    workspaceRows: [],
+    ...overrides
+  };
+}
+
+function setupNavigator(
+  snapshots: readonly AioaConversationSetupSnapshot[]
+): AioaConversationSetupNavigator & {
+  click: ReturnType<typeof vi.fn>;
+  replaceText: ReturnType<typeof vi.fn>;
+} {
+  let index = 0;
+  const click = vi.fn().mockResolvedValue(undefined);
+  const replaceText = vi.fn().mockResolvedValue(undefined);
+  return {
+    snapshot: async () => snapshots[Math.min(index++, snapshots.length - 1)] ?? setupSnapshot(),
+    click,
+    replaceText
+  };
+}
+
+describe("AIOA CDP", () => {
+  it("uses one compact chat API definition followed by flat requests", () => {
+    const first = chatRequest("你好");
+    const next = chatRequest("你能为我做些什么吗？");
+    expect(aioaApiDefinition(first)).toBe([
+      "Define API chat",
+      "Input: message:string, context?:Context[]",
+      "Output: {\"kind\":\"chat\",\"text\":string}"
+    ].join("\n"));
+    expect(aioaExecutionPrompt(first)).toBe([
+      "Dext task: Chat",
+      aioaBootstrapPrompt(),
+      "Define API chat\nInput: message:string, context?:Context[]\nOutput: {\"kind\":\"chat\",\"text\":string}\n\nRequest: {\"api\":\"chat\",\"message\":\"你好\"}"
+    ].join("\n\n"));
+    expect(aioaTurnPrompt(next, false)).toBe("Request: {\"api\":\"chat\",\"message\":\"你能为我做些什么吗？\"}");
+  });
+
+  it("renders compact input and complex JSON Schema types without metadata", () => {
+    expect(aioaInputType([
+      { name: "mode", type: "enum", values: ["fast", "safe"], required: true },
+      { name: "targets", type: "context", accepts: ["result"], multiple: true },
+      { name: "timeout", type: "number", default: 1000 }
+    ])).toBe('mode:"fast"|"safe", targets?:(Context|DextResult)[], timeout?:number=1000');
+    expect(aioaOutputType({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      $defs: {
+        item: {
+          type: "object",
+          properties: { id: { type: "integer" }, label: { type: ["string", "null"] } },
+          required: ["id"],
+          additionalProperties: false
+        }
+      },
+      type: "object",
+      properties: {
+        kind: { const: "complex" },
+        items: { type: "array", items: { $ref: "#/$defs/item" } },
+        state: { oneOf: [{ enum: ["ready", "busy"] }, { type: "null" }] },
+        marker: { const: "fixed", nullable: true },
+        detail: { allOf: [{ type: "object", properties: { name: { type: "string" } }, required: ["name"] }], nullable: true },
+        metadata: { type: "object", additionalProperties: { anyOf: [{ type: "string" }, { type: "number" }] } }
+      },
+      required: ["kind", "items", "state"],
+      additionalProperties: false,
+      description: "ignored"
+    })).toBe('{"detail"?:{"name":string}|null,"items":({"id":number,"label"?:string|null})[],"kind":"complex","marker"?:"fixed"|null,"metadata"?:{[key:string]:string|number},"state":"ready"|"busy"|null}');
+  });
+
+  it("flattens AIOA arguments, normalizes multiple values, and omits empty context", () => {
+    expect(aioaRequestPayload(chatRequest("Hello"))).toBe('{"api":"chat","message":"Hello"}');
+    expect(aioaRequestPayload(request())).toBe('{"api":"code.explain","target":[{"uri":"file:///workspace/example.ts","content":"export const answer = 42;"}]}');
+  });
+
+  it("accepts only a plain local CDP endpoint", () => {
+    expect(normalizeAioaCdpEndpoint("http://127.0.0.1:9229/")).toBe("http://127.0.0.1:9229");
+    expect(normalizeAioaCdpEndpoint("http://[::1]:9229")).toBe("http://[::1]:9229");
+    expect(() => normalizeAioaCdpEndpoint("http://127.0.0.1")).toThrow(/port/i);
+    expect(() => normalizeAioaCdpEndpoint("https://127.0.0.1:9229")).toThrow(/loopback/i);
+    expect(() => normalizeAioaCdpEndpoint("http://192.168.1.20:9229")).toThrow(/loopback/i);
+    expect(() => normalizeAioaCdpEndpoint("http://user@127.0.0.1:9229")).toThrow(/credentials/i);
+  });
+
+  it("creates an empty task, searches the full picker, and selects the normalized workspace", async () => {
+    const newTask = { x: 10, y: 20 };
+    const selector = { x: 30, y: 40 };
+    const search = { x: 50, y: 60 };
+    const workspace = { x: 70, y: 80 };
+    const navigator = setupNavigator([
+      setupSnapshot({ globalNewTaskPoints: [newTask], visibleMessageCount: 4 }),
+      setupSnapshot({
+        globalNewTaskPoints: [newTask],
+        workspaceSelectorPoint: selector,
+        selectedWorkspaceName: "dext"
+      }),
+      setupSnapshot({ workspaceSelectorPoint: selector, workspaceSearchPoint: search }),
+      setupSnapshot({
+        workspaceSelectorPoint: selector,
+        workspaceSearchPoint: search,
+        workspaceRows: [{ name: "  \uff22\uff25\uff38\uff34  ", point: workspace, selected: false }]
+      }),
+      setupSnapshot({ selectedWorkspaceName: "bext" })
+    ]);
+
+    expect(normalizeAioaWorkspaceName("  \uff22\uff25\uff38\uff34  ")).toBe("bext");
+    await openAioaWorkspaceConversation("C:/github/bExT/", navigator, {
+      pollIntervalMs: 1,
+      sleep: async () => undefined
+    });
+
+    expect(navigator.click.mock.calls).toEqual([[newTask], [selector], [workspace]]);
+    expect(navigator.replaceText).toHaveBeenCalledWith(search, "bExT");
+  });
+
+  it("waits for an asynchronously rendered workspace picker", async () => {
+    const newTask = { x: 10, y: 20 };
+    const selector = { x: 30, y: 40 };
+    const search = { x: 50, y: 60 };
+    const workspace = { x: 70, y: 80 };
+    const navigator = setupNavigator([
+      setupSnapshot({ globalNewTaskPoints: [newTask] }),
+      setupSnapshot({ workspaceSelectorPoint: selector }),
+      setupSnapshot({ workspaceSelectorPoint: selector }),
+      setupSnapshot({ workspaceSelectorPoint: selector, workspaceSearchPoint: search }),
+      setupSnapshot({ workspaceRows: [{ name: "bext", point: workspace, selected: false }] }),
+      setupSnapshot({ selectedWorkspaceName: "bext" })
+    ]);
+
+    await openAioaWorkspaceConversation("C:/github/bext", navigator, {
+      timeoutMs: 2,
+      pollIntervalMs: 1,
+      sleep: async () => undefined
+    });
+
+    expect(navigator.replaceText).toHaveBeenCalledOnce();
+    expect(navigator.click.mock.calls).toEqual([[newTask], [selector], [workspace]]);
+  });
+
+  it("reports picker workspaces when the target is missing", async () => {
+    const navigator = setupNavigator([
+      setupSnapshot({ globalNewTaskPoints: [{ x: 10, y: 20 }] }),
+      setupSnapshot({ workspaceSelectorPoint: { x: 30, y: 40 } }),
+      setupSnapshot({ workspaceSearchPoint: { x: 50, y: 60 } }),
+      setupSnapshot({
+        workspaceRows: [
+          { name: "dext", point: { x: 70, y: 80 }, selected: false },
+          { name: "client", point: { x: 90, y: 100 }, selected: false }
+        ]
+      })
+    ]);
+
+    await expect(openAioaWorkspaceConversation("C:/github/bext", navigator, {
+      timeoutMs: 0,
+      pollIntervalMs: 1,
+      sleep: async () => undefined
+    })).rejects.toThrow(/'dext', 'client'/i);
+  });
+
+  it("rejects duplicate normalized workspace names in the picker", async () => {
+    const navigator = setupNavigator([
+      setupSnapshot({ globalNewTaskPoints: [{ x: 10, y: 20 }] }),
+      setupSnapshot({ workspaceSelectorPoint: { x: 30, y: 40 } }),
+      setupSnapshot({ workspaceSearchPoint: { x: 50, y: 60 } }),
+      setupSnapshot({
+        workspaceRows: [
+          { name: "bext", point: { x: 70, y: 80 }, selected: false },
+          { name: " BEXT ", point: { x: 90, y: 100 }, selected: false }
+        ]
+      })
+    ]);
+
+    await expect(openAioaWorkspaceConversation("C:/github/bext", navigator, {
+      timeoutMs: 0,
+      pollIntervalMs: 1,
+      sleep: async () => undefined
+    })).rejects.toThrow(/multiple workspaces matching/i);
+    expect(navigator.click).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects a workspace selection that is not verified on the empty task", async () => {
+    const navigator = setupNavigator([
+      setupSnapshot({ globalNewTaskPoints: [{ x: 10, y: 20 }] }),
+      setupSnapshot({ workspaceSelectorPoint: { x: 30, y: 40 } }),
+      setupSnapshot({ workspaceSearchPoint: { x: 50, y: 60 } }),
+      setupSnapshot({ workspaceRows: [{ name: "bext", point: { x: 70, y: 80 }, selected: false }] }),
+      setupSnapshot({ selectedWorkspaceName: "dext" })
+    ]);
+
+    await expect(openAioaWorkspaceConversation("C:/github/bext", navigator, {
+      timeoutMs: 0,
+      pollIntervalMs: 1,
+      sleep: async () => undefined
+    })).rejects.toThrow(/did not select workspace 'bext'/i);
+  });
+
+  it("does not accept the selected workspace while the new task has visible messages", async () => {
+    const navigator = setupNavigator([
+      setupSnapshot({ globalNewTaskPoints: [{ x: 10, y: 20 }] }),
+      setupSnapshot({ workspaceSelectorPoint: { x: 30, y: 40 } }),
+      setupSnapshot({ workspaceSearchPoint: { x: 50, y: 60 } }),
+      setupSnapshot({ workspaceRows: [{ name: "bext", point: { x: 70, y: 80 }, selected: false }] }),
+      setupSnapshot({ selectedWorkspaceName: "bext", visibleMessageCount: 1 })
+    ]);
+
+    await expect(openAioaWorkspaceConversation("C:/github/bext", navigator, {
+      timeoutMs: 0,
+      pollIntervalMs: 1,
+      sleep: async () => undefined
+    })).rejects.toThrow(/new empty task/i);
+  });
+
+  it("uses trusted CDP mouse and keyboard input to replace workspace search text", async () => {
+    const dispatchMouseEvent = vi.fn().mockResolvedValue({});
+    const dispatchKeyEvent = vi.fn().mockResolvedValue({});
+    const insertText = vi.fn().mockResolvedValue({});
+    const input = { dispatchMouseEvent, dispatchKeyEvent, insertText } as unknown as AioaTrustedInput;
+
+    await replaceAioaText(input, { x: 10, y: 20 }, "bext");
+
+    expect(dispatchMouseEvent).toHaveBeenNthCalledWith(1, expect.objectContaining({ type: "mousePressed" }));
+    expect(dispatchMouseEvent).toHaveBeenNthCalledWith(2, expect.objectContaining({ type: "mouseReleased" }));
+    expect(dispatchKeyEvent).toHaveBeenNthCalledWith(1, expect.objectContaining({ type: "keyDown", key: "Control" }));
+    expect(dispatchKeyEvent).toHaveBeenNthCalledWith(2, expect.objectContaining({ type: "keyDown", key: "a" }));
+    expect(dispatchKeyEvent).toHaveBeenNthCalledWith(3, expect.objectContaining({ type: "keyUp", key: "a" }));
+    expect(dispatchKeyEvent).toHaveBeenNthCalledWith(4, expect.objectContaining({ type: "keyUp", key: "Control" }));
+    expect(dispatchKeyEvent).toHaveBeenNthCalledWith(5, expect.objectContaining({ type: "keyDown", key: "Backspace" }));
+    expect(dispatchKeyEvent).toHaveBeenNthCalledWith(6, expect.objectContaining({ type: "keyUp", key: "Backspace" }));
+    expect(insertText).toHaveBeenCalledWith({ text: "bext" });
+  });
+
+  it("launches AIOA with a loopback-only debugging port when attach fails", async () => {
+    const ready = page();
+    const connector = { connect: vi.fn().mockRejectedValueOnce(new Error("offline")).mockResolvedValue(ready) };
+    const launcher = { launch: vi.fn().mockResolvedValue(undefined) };
+    const connection = new DefaultAioaCdpConnection(connector, launcher, {
+      startupTimeoutMs: 20,
+      pollIntervalMs: 0,
+      sleep: async () => undefined
+    });
+
+    const opened = await connection.open(profile("launch"));
+
+    expect(opened).toEqual({ page: ready, launched: true });
+    expect(launcher.launch).toHaveBeenCalledWith("AIOA.exe", [
+      "--remote-debugging-port=9229",
+      "--remote-debugging-address=127.0.0.1"
+    ]);
+    expect(aioaLaunchArguments("http://localhost:9876")).toEqual([
+      "--remote-debugging-port=9876",
+      "--remote-debugging-address=127.0.0.1"
+    ]);
+  });
+
+  it("streams only the new AIOA response and returns its typed JSON", async () => {
+    const submit = vi.fn().mockResolvedValue(undefined);
+    const close = vi.fn().mockResolvedValue(undefined);
+    const updatesAfter = vi.fn()
+      .mockResolvedValueOnce({ busy: true, messages: [] })
+      .mockResolvedValueOnce({
+        busy: false,
+        messages: [{ id: "new", text: '{"kind":"explain","text":"The value is exported.","files":[]}' }],
+        conversationId: "dext-task-1"
+      });
+    const connection: AioaCdpConnection = {
+      open: async () => ({ page: page({ submit, updatesAfter, close }), launched: false })
+    };
+    const events: string[] = [];
+    const runner = new AioaCdpAgentRunner(connection, { pollIntervalMs: 0, sleep: async () => undefined });
+
+    const result = await runner.run(request((event) => events.push(`${event.phase}:${event.text}`)));
+
+    expect(result).toEqual({ kind: "explain", text: "The value is exported.", files: [] });
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(aioaExecutionPrompt(request())).toContain("Do not modify workspace files");
+    expect(events).toEqual([
+      "status:Connecting to AIOA",
+      "status:Creating an AIOA task in the Dext workspace"
+    ]);
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("keeps polling until final content mounts after the work log finishes", async () => {
+    const updatesAfter = vi.fn()
+      .mockResolvedValueOnce({ busy: false, messages: [], conversationId: "dext-task-1" })
+      .mockResolvedValueOnce({
+        busy: false,
+        messages: [{ id: "position:4", text: '{"kind":"chat","text":"Hello"}' }],
+        conversationId: "dext-task-1"
+      });
+    const connection: AioaCdpConnection = {
+      open: async () => ({ page: page({ updatesAfter }), launched: false })
+    };
+    const runner = new AioaCdpAgentRunner(connection, { pollIntervalMs: 0, sleep: async () => undefined });
+
+    await expect(runner.run(chatRequest("Hello"))).resolves.toEqual({ kind: "chat", text: "Hello" });
+    expect(updatesAfter).toHaveBeenCalledTimes(2);
+  });
+
+  it("parses a typed result after AIOA adds execution status text", async () => {
+    const updatesAfter = vi.fn()
+      .mockResolvedValueOnce({ busy: true, messages: [] })
+      .mockResolvedValueOnce({
+        busy: false,
+        messages: [{ id: "position:4", text: "Executed for 4 seconds\n\n{\"kind\":\"chat\",\"text\":\"Hello\"}" }],
+        conversationId: "dext-task-1"
+      });
+    const connection: AioaCdpConnection = {
+      open: async () => ({ page: page({ updatesAfter }), launched: false })
+    };
+    const runner = new AioaCdpAgentRunner(connection, { pollIntervalMs: 0, sleep: async () => undefined });
+
+    await expect(runner.run(chatRequest("Hello"))).resolves.toEqual({ kind: "chat", text: "Hello" });
+  });
+
+  it("selects the current API result from mixed JSON without treating nested code references as output", () => {
+    const response = [
+      'Request: {"api":"code.explain","target":[{"kind":"codeRef","uri":"file:///workspace/example.ts"}]}',
+      'Result: {"kind":"explain","text":"The value is exported.","files":[{"kind":"codeRef","uri":"file:///workspace/example.ts"}]}'
+    ].join("\n\n");
+
+    expect(parseJsonOutput(response, "explain")).toEqual({
+      kind: "explain",
+      text: "The value is exported.",
+      files: [{ kind: "codeRef", uri: "file:///workspace/example.ts" }]
+    });
+  });
+
+  it("does not submit while AIOA is already generating", async () => {
+    const submit = vi.fn().mockResolvedValue(undefined);
+    const connection: AioaCdpConnection = {
+      open: async () => ({ page: page({ state: async () => ({ busy: true, assistantIds: [] }), submit }), launched: false })
+    };
+    const runner = new AioaCdpAgentRunner(connection, { sleep: async () => undefined });
+
+    await expect(runner.run(request())).rejects.toThrow(/already generating/i);
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("creates one AIOA task per Dext session and sends bootstrap rules only on the first turn", async () => {
+    let conversationId: string | undefined;
+    const createConversation = vi.fn(async () => { conversationId = undefined; });
+    const submit = vi.fn().mockResolvedValue(undefined);
+    const updatesAfter = vi.fn(async () => ({
+      busy: false,
+      messages: [{ id: `reply-${submit.mock.calls.length}`, text: '{"kind":"explain","text":"ok","files":[]}' }],
+      conversationId: conversationId ??= "dext-task-1"
+    }));
+    const connection: AioaCdpConnection = {
+      open: async () => ({
+        page: page({
+          state: async () => ({ busy: false, assistantIds: [], ...(conversationId ? { conversationId } : {}) }),
+          createConversation,
+          submit,
+          updatesAfter
+        }),
+        launched: false
+      })
+    };
+    const runner = new AioaCdpAgentRunner(connection, { pollIntervalMs: 0, sleep: async () => undefined });
+
+    await runner.run(request(undefined, "output-session"));
+    await runner.run(request(undefined, "output-session"));
+
+    expect(createConversation).toHaveBeenCalledTimes(1);
+    expect(submit).toHaveBeenCalledTimes(2);
+    expect(submit.mock.calls[0]?.[0]).toContain(aioaBootstrapPrompt());
+    expect(submit.mock.calls[1]?.[0]).not.toContain(aioaBootstrapPrompt());
+    expect(submit.mock.calls[0]?.[0]).toContain("Define API code.explain");
+    expect(submit.mock.calls[1]?.[0]).toBe('Request: {"api":"code.explain","target":[{"uri":"file:///workspace/example.ts","content":"export const answer = 42;"}]}');
+  });
+
+  it("defines another API once when the same AIOA session switches methods", async () => {
+    let conversationId: string | undefined;
+    const submit = vi.fn().mockResolvedValue(undefined);
+    const connection: AioaCdpConnection = {
+      open: async () => ({
+        page: page({
+          state: async () => ({ busy: false, assistantIds: [], ...(conversationId ? { conversationId } : {}) }),
+          createConversation: async () => { conversationId = undefined; },
+          submit,
+          updatesAfter: async () => ({
+            busy: false,
+            messages: [{
+              id: `reply-${submit.mock.calls.length}`,
+              text: submit.mock.calls.length === 2
+                ? '{"kind":"explain","text":"ok","files":[]}'
+                : '{"kind":"chat","text":"ok"}'
+            }],
+            conversationId: conversationId ??= "dext-task-1"
+          })
+        }),
+        launched: false
+      })
+    };
+    const runner = new AioaCdpAgentRunner(connection, { pollIntervalMs: 0, sleep: async () => undefined });
+
+    await runner.run(chatRequest("Hello"));
+    await runner.run(request(undefined, "output-session"));
+    await runner.run(chatRequest("Hello again"));
+
+    expect(submit.mock.calls[1]?.[0]).toContain("Define API code.explain");
+    expect(submit.mock.calls[1]?.[0]).not.toContain(aioaBootstrapPrompt());
+    expect(submit.mock.calls[2]?.[0]).toBe('Request: {"api":"chat","message":"Hello again"}');
+  });
+
+  it("redefines an API name when its transmitted input definition changes", async () => {
+    let conversationId: string | undefined;
+    const submit = vi.fn().mockResolvedValue(undefined);
+    const connection: AioaCdpConnection = {
+      open: async () => ({
+        page: page({
+          state: async () => ({ busy: false, assistantIds: [], ...(conversationId ? { conversationId } : {}) }),
+          createConversation: async () => { conversationId = undefined; },
+          submit,
+          updatesAfter: async () => ({
+            busy: false,
+            messages: [{ id: `reply-${submit.mock.calls.length}`, text: '{"kind":"chat","text":"ok"}' }],
+            conversationId: conversationId ??= "dext-task-1"
+          })
+        }),
+        launched: false
+      })
+    };
+    const runner = new AioaCdpAgentRunner(connection, { pollIntervalMs: 0, sleep: async () => undefined });
+    const changed = chatRequest("Hello again");
+    changed.method = {
+      ...changed.method,
+      version: "1.1.0",
+      input: [...changed.method.input, { name: "tone", type: "string" }]
+    };
+    changed.contract = new AxAdapter().compile(changed.method);
+    changed.resolved = {
+      ...changed.resolved,
+      method: changed.method,
+      arguments: { ...changed.resolved.arguments, tone: "brief" }
+    };
+    const descriptionOnly = {
+      ...changed,
+      method: { ...changed.method, description: "A locally revised description." },
+      resolved: {
+        ...changed.resolved,
+        arguments: { ...changed.resolved.arguments, message: "One more" }
+      }
+    };
+    descriptionOnly.contract = new AxAdapter().compile(descriptionOnly.method);
+    descriptionOnly.resolved.method = descriptionOnly.method;
+
+    await runner.run(chatRequest("Hello"));
+    await runner.run(changed);
+    await runner.run(descriptionOnly);
+
+    expect(submit.mock.calls[1]?.[0]).toContain("Define API chat\nInput: message:string, context?:Context[], tone?:string");
+    expect(submit.mock.calls[1]?.[0]).toContain('Request: {"api":"chat","message":"Hello again","tone":"brief"}');
+    expect(submit.mock.calls[2]?.[0]).toBe('Request: {"api":"chat","message":"One more","tone":"brief"}');
+  });
+
+  it("blocks a later turn when the user switched away from Dext's AIOA task", async () => {
+    let conversationId: string | undefined;
+    const submit = vi.fn().mockResolvedValue(undefined);
+    const connection: AioaCdpConnection = {
+      open: async () => ({
+        page: page({
+          state: async () => ({ busy: false, assistantIds: [], ...(conversationId ? { conversationId } : {}) }),
+          createConversation: async () => { conversationId = undefined; },
+          submit,
+          updatesAfter: async () => ({
+            busy: false,
+            messages: [{ id: "reply", text: '{"kind":"explain","text":"ok","files":[]}' }],
+            conversationId: conversationId ??= "dext-task-1"
+          })
+        }),
+        launched: false
+      })
+    };
+    const runner = new AioaCdpAgentRunner(connection, { pollIntervalMs: 0, sleep: async () => undefined });
+    await runner.run(request(undefined, "output-session"));
+    conversationId = "another-task";
+
+    await expect(runner.run(request(undefined, "output-session"))).rejects.toThrow(/not the task created/i);
+    expect(submit).toHaveBeenCalledTimes(1);
+  });
+
+  it("creates a fresh AIOA task after the Dext session is cleared", async () => {
+    let sequence = 0;
+    let conversationId: string | undefined;
+    const createConversation = vi.fn(async () => { conversationId = undefined; });
+    const submit = vi.fn().mockResolvedValue(undefined);
+    const connection: AioaCdpConnection = {
+      open: async () => ({
+        page: page({
+          state: async () => ({ busy: false, assistantIds: [], ...(conversationId ? { conversationId } : {}) }),
+          createConversation,
+          submit,
+          updatesAfter: async () => ({
+            busy: false,
+            messages: [{ id: "reply", text: '{"kind":"explain","text":"ok","files":[]}' }],
+            conversationId: conversationId ??= `dext-task-${++sequence}`
+          })
+        }),
+        launched: false
+      })
+    };
+    const runner = new AioaCdpAgentRunner(connection, { pollIntervalMs: 0, sleep: async () => undefined });
+    await runner.run(request(undefined, "output-session"));
+    runner.endSession("output-session");
+    await runner.run(request(undefined, "output-session"));
+
+    expect(createConversation).toHaveBeenCalledTimes(2);
+    expect(sequence).toBe(2);
+    expect(submit.mock.calls[0]?.[0]).toContain(aioaBootstrapPrompt());
+    expect(submit.mock.calls[1]?.[0]).toContain(aioaBootstrapPrompt());
+    expect(submit.mock.calls[1]?.[0]).toContain("Define API code.explain");
+  });
+});

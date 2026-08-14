@@ -144,14 +144,17 @@ main {
   display: none;
 }
 
+.history-session,
 .history-record {
   border-top: 1px solid var(--vscode-panel-border);
 }
 
+.history-session:first-child,
 .history-record:first-child {
   border-top: 0;
 }
 
+.history-session > summary,
 .history-record > summary,
 .history-disclosure > summary {
   min-height: 30px;
@@ -164,6 +167,7 @@ main {
   user-select: none;
 }
 
+.history-session > summary:hover,
 .history-record > summary:hover,
 .history-disclosure > summary:hover {
   background: var(--vscode-list-hoverBackground);
@@ -195,6 +199,10 @@ main {
   color: var(--vscode-descriptionForeground);
   font-size: 11px;
   white-space: nowrap;
+}
+
+.history-session-body {
+  padding: 2px 0 14px 16px;
 }
 
 .history-record-body {
@@ -971,6 +979,90 @@ button.primary:disabled {
 #result-body {
   flex: 1 1 auto;
   padding-left: 16px;
+}
+
+#result {
+  padding-right: 4px;
+}
+
+.output-turn {
+  border-top: 1px solid var(--vscode-panel-border);
+}
+
+.output-turn:first-child {
+  border-top: 0;
+}
+
+.output-turn > summary {
+  min-height: 32px;
+  padding: 3px 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 3px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.output-turn > summary::-webkit-details-marker {
+  display: none;
+}
+
+.output-turn > summary:hover {
+  background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.06));
+}
+
+.output-turn-time {
+  flex: 0 0 auto;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+
+.output-turn-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--vscode-descriptionForeground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.output-turn-body {
+  padding: 0 0 10px 14px;
+}
+
+.output-turn-section.execution-disclosure {
+  margin: 0;
+  border: 0;
+  border-top: 1px solid var(--vscode-widget-border);
+  border-radius: 0;
+  background: transparent;
+}
+
+.output-turn-section:first-child {
+  border-top: 0;
+}
+
+.output-turn-section-body.execution-disclosure-body {
+  padding: 0 4px 8px 18px;
+}
+
+.output-turn-input {
+  position: relative;
+}
+
+.output-turn-input > .output-copy {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+}
+
+.output-turn-input > .dext-source {
+  margin: 0;
+  padding: 6px 30px 6px 0;
+  border: 0;
+  background: transparent;
+  white-space: pre-wrap;
 }
 
 #methods-body {

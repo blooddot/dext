@@ -10,6 +10,11 @@ describe("Agent profile defaults", () => {
     expect(claude?.modelOptions?.[0]?.reasoningEfforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
   });
 
+  it("launches AIOA by default while retaining Attach as an explicit option", () => {
+    const aioa = new AgentProfileStore().list().find((profile) => profile.id === "aioa");
+    expect(aioa).toMatchObject({ provider: "aioa", connectionMode: "launch" });
+  });
+
   it("migrates the legacy Qunshu profile and selection to AIOA", () => {
     const state = {
       get<T>(key: string): T | undefined {

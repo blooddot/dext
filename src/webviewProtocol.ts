@@ -8,6 +8,7 @@ import type {
 import type { AgentStreamEvent, InputExecutionResponse, RegisteredCallable } from "./core/types.js";
 import type { AgentProfile, AgentSelection } from "./agentProfiles.js";
 import type { EditorTokenTheme } from "./vscodeTheme.js";
+import type { DextHistorySession } from "./historyStore.js";
 
 export const webviewRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ready") }),
@@ -39,6 +40,7 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("chooseFiles") }),
   z.object({ type: z.literal("reload") }),
   z.object({ type: z.literal("viewHistory") }),
+  z.object({ type: z.literal("clearOutput") }),
   z.object({
     type: z.literal("agentSelection"),
     selection: z.object({
@@ -75,9 +77,11 @@ export type WebviewResponse =
       signature?: SignatureHelp;
       hover?: LanguageHover;
     }
-  | { type: "execution"; response: InputExecutionResponse }
+  | { type: "outputSession"; session: DextHistorySession }
+  | { type: "execution"; turnId: string; response: InputExecutionResponse }
+  | { type: "executionFailed"; turnId: string; message: string }
   | { type: "agentEvent"; event: AgentStreamEvent }
-  | { type: "executing"; value: boolean }
+  | { type: "executing"; value: boolean; turnId: string; source?: string }
   | { type: "inputKind"; kind: "empty" | "workflow" | "invalid" }
   | { type: "insertFileReferences"; expressions: string[] }
   | { type: "clipboardWriteResult"; requestId: number; success: boolean }

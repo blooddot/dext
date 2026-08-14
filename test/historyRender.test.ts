@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { highlightDext, historyTokenStyles, renderHistoryRecord } from "../src/historyRender.js";
+import { highlightDext, historyTokenStyles, renderHistoryRecord, renderHistorySession } from "../src/historyRender.js";
 import type { DextHistoryRecord } from "../src/historyStore.js";
 
 describe("Dext history rendering", () => {
@@ -145,5 +145,21 @@ describe("Dext history rendering", () => {
     const html = renderHistoryRecord(record);
     expect(html).toContain("40s499ms");
     expect(html).not.toContain("40499 ms");
+  });
+
+  it("groups continuous turns under one collapsible conversation", () => {
+    const turns: DextHistoryRecord[] = ["first", "second"].map((text, index) => ({
+      id: String(index),
+      createdAt: index + 1,
+      input: `chat(message="${text}")`,
+      process: [],
+      output: ""
+    }));
+
+    const html = renderHistorySession({ id: "session", createdAt: 1, updatedAt: 2, turns });
+
+    expect(html).toContain('class="history-session"');
+    expect(html.match(/class="history-record"/g)).toHaveLength(2);
+    expect(html).toContain("2 turns");
   });
 });

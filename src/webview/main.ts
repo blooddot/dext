@@ -16,6 +16,7 @@ import { formatDuration } from "./duration.js";
 import { agentMessageCopyText, presentAgentMessage } from "../agentMessagePresentation.js";
 import type { AgentMessagePresentation } from "../agentMessagePresentation.js";
 import { presentDiff } from "../diffPresentation.js";
+import type { DextHistoryRecord, DextHistorySession } from "../historyStore.js";
 
 interface VsCodeApi {
   postMessage(message: WebviewRequest): void;
@@ -60,7 +61,6 @@ let problemCounts = { errors: 0, warnings: 0 };
 let dropPosition: number | undefined;
 let agentStream: HTMLElement | undefined;
 let agentTrace: HTMLDetailsElement | undefined;
-let agentStreamRunActive = false;
 let agentRunStartedAt = 0;
 let agentRunTimer: ReturnType<typeof setInterval> | undefined;
 let agentProgress: HTMLElement | undefined;
@@ -68,6 +68,15 @@ let agentProgressState: "Thinking" | "Worked" = "Thinking";
 let agentCommandIds = new Set<string>();
 let agentEditedUris = new Set<string>();
 const agentGroups = new Map<"reasoning" | "files" | "tool", { disclosure: HTMLDetailsElement; body: HTMLElement }>();
+interface OutputTurnElements {
+  disclosure: HTMLDetailsElement;
+  process: HTMLElement;
+  processDisclosure: HTMLDetailsElement;
+  output: HTMLElement;
+  outputDisclosure: HTMLDetailsElement;
+}
+const outputTurns = new Map<string, OutputTurnElements>();
+let activeTurn: OutputTurnElements | undefined;
 
 const editor = new DextCodeEditor({
   parent: elements.codeEditor,
@@ -89,6 +98,7 @@ const editor = new DextCodeEditor({
 
 function updateRunState(): void {
   elements.run.disabled = executing || hasErrors || inputKind === "empty" || inputKind === "invalid";
+  elements.clearOutput.disabled = executing;
   elements.runLabel.textContent = "Run";
   const parts = [
     problemCounts.errors ? `${problemCounts.errors} error${problemCounts.errors === 1 ? "" : "s"}` : "",
@@ -500,6 +510,65 @@ function disclosureSummary(label: string, detail: string): HTMLElement {
   return summary;
 }
 
+function outputTurnSection(label: string, open: boolean): { disclosure: HTMLDetailsElement; body: HTMLElement } {
+  const disclosure = document.createElement("details");
+  disclosure.className = "output-turn-section execution-disclosure";
+  disclosure.open = open;
+  disclosure.append(disclosureSummary(label, ""));
+  const body = document.createElement("div");
+  body.className = "output-turn-section-body execution-disclosure-body";
+  disclosure.append(body);
+  return { disclosure, body };
+}
+
+function createOutputTurn(turnId: string, source: string, createdAt = Date.now()): OutputTurnElements {
+  for (const turn of outputTurns.values()) turn.disclosure.open = false;
+  const disclosure = document.createElement("details");
+  disclosure.className = "output-turn";
+  disclosure.open = true;
+  disclosure.dataset.turnId = turnId;
+  const summary = document.createElement("summary");
+  const chevron = document.createElement("i");
+  chevron.className = "disclosure-chevron codicon codicon-chevron-right";
+  const time = document.createElement("span");
+  time.className = "output-turn-time";
+  time.textContent = new Date(createdAt).toLocaleTimeString();
+  const title = document.createElement("span");
+  title.className = "output-turn-title";
+  title.textContent = source.split(/\r?\n/, 1)[0]?.slice(0, 140) || "Dext turn";
+  summary.append(chevron, time, title);
+  const body = document.createElement("div");
+  body.className = "output-turn-body";
+  const input = outputTurnSection("Input", false);
+  const inputText = document.createElement("pre");
+  inputText.className = "dext-source";
+  inputText.textContent = source;
+  const inputCopy = document.createElement("div");
+  inputCopy.className = "output-turn-input";
+  inputCopy.append(inputText, copyButton(source));
+  input.body.append(inputCopy);
+  const process = outputTurnSection("Process", true);
+  const output = outputTurnSection("Output", true);
+  body.append(input.disclosure, process.disclosure, output.disclosure);
+  disclosure.append(summary, body);
+  elements.result.append(disclosure);
+  const turn = {
+    disclosure,
+    process: process.body,
+    processDisclosure: process.disclosure,
+    output: output.body,
+    outputDisclosure: output.disclosure
+  };
+  outputTurns.set(turnId, turn);
+  activeTurn = turn;
+  return turn;
+}
+
+function selectOutputTurn(turnId: string): OutputTurnElements | undefined {
+  activeTurn = outputTurns.get(turnId);
+  return activeTurn;
+}
+
 type DiffMode = "inline" | "split";
 
 function setDiffMode(container: HTMLElement, mode: DiffMode): void {
@@ -750,9 +819,8 @@ function renderExecution(response: RuntimeResponse): DocumentFragment {
 }
 
 function renderResult(response: InputExecutionResponse): void {
-  const preserveStream = agentStreamRunActive && Boolean(agentStream?.isConnected);
-  agentStreamRunActive = false;
-  if (!preserveStream) elements.result.replaceChildren();
+  const target = activeTurn?.output ?? elements.result;
+  target.replaceChildren();
   const entries: WorkflowStepResponse[] = response.steps ?? response.executions.map((execution) => ({
     method: execution.method.id,
     state: "success" as const,
@@ -778,7 +846,7 @@ function renderResult(response: InputExecutionResponse): void {
       }
       item.append(disclosure);
     }
-    elements.result.append(item);
+    target.append(item);
     if (index < entries.length - 1) item.classList.add("has-next");
   }
   elements.resultSection.classList.remove("hidden");
@@ -787,16 +855,12 @@ function renderResult(response: InputExecutionResponse): void {
 
 function renderError(message: unknown): void {
   const text = message instanceof Error ? message.message : String(message);
-  const preserveStream = agentStreamRunActive && Boolean(agentStream?.isConnected);
-  agentStreamRunActive = false;
-  if (!preserveStream) {
-    elements.result.replaceChildren();
-    agentStream = undefined;
-  }
+  const target = activeTurn?.output ?? elements.result;
+  target.replaceChildren();
   const summary = document.createElement("pre");
   summary.className = "error-output";
   summary.textContent = text;
-  elements.result.append(summary);
+  target.append(summary);
   elements.resultSection.classList.remove("hidden");
   setSectionOpen(elements.resultHeading, elements.resultBody, true);
 }
@@ -815,7 +879,7 @@ function agentStreamPanel(): HTMLElement {
   const panel = document.createElement("section");
   panel.className = "agent-stream-panel";
   trace.append(summary, panel);
-  elements.result.append(trace);
+  (activeTurn?.process ?? elements.result).append(trace);
   agentTrace = trace;
   agentStream = panel;
   agentProgress = progress;
@@ -995,6 +1059,38 @@ function resetAgentTrace(): void {
   agentGroups.clear();
 }
 
+function storedResponse(record: DextHistoryRecord): InputExecutionResponse | undefined {
+  if (record.response) return record.response;
+  try {
+    const parsed = JSON.parse(record.output) as InputExecutionResponse;
+    return parsed?.kind === "workflow" && Array.isArray(parsed.executions) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function renderOutputSession(session: DextHistorySession): void {
+  if (agentRunTimer) clearInterval(agentRunTimer);
+  agentRunTimer = undefined;
+  elements.result.replaceChildren();
+  outputTurns.clear();
+  activeTurn = undefined;
+  for (const record of session.turns) {
+    const turn = createOutputTurn(record.id, record.input, record.createdAt);
+    resetAgentTrace();
+    agentRunStartedAt = Date.now();
+    for (const event of record.process) renderAgentEvent(event);
+    if (agentTrace) finishAgentProgress();
+    turn.processDisclosure.open = false;
+    const response = storedResponse(record);
+    if (record.error) renderError(record.error);
+    else if (response) renderResult(response);
+    else if (record.output) turn.output.append(codeBlock(record.output));
+  }
+  elements.resultSection.classList.toggle("hidden", session.turns.length === 0);
+  setSectionOpen(elements.resultHeading, elements.resultBody, true);
+}
+
 function droppedFiles(transfer: DataTransfer): ReturnType<typeof parseDroppedFiles> {
   const resourceUrlsType = [...transfer.types]
     .find((type) => type.toLowerCase() === "resourceurls") ?? "ResourceURLs";
@@ -1037,12 +1133,7 @@ elements.methodsSection.addEventListener("keydown", (event) => {
 elements.attachFiles.addEventListener("click", () => vscode.postMessage({ type: "chooseFiles" }));
 elements.viewHistory.addEventListener("click", () => vscode.postMessage({ type: "viewHistory" }));
 elements.clearOutput.addEventListener("click", () => {
-  elements.result.replaceChildren();
-  agentStreamRunActive = false;
-  resetAgentTrace();
-  if (agentRunTimer) clearInterval(agentRunTimer);
-  agentRunTimer = undefined;
-  setSectionOpen(elements.resultHeading, elements.resultBody, true);
+  if (!executing) vscode.postMessage({ type: "clearOutput" });
 });
 document.getElementById("agent-profile")?.addEventListener("change", () => {
   const model = document.getElementById("agent-model") as HTMLSelectElement | null;
@@ -1096,19 +1187,31 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     editor.insertInline(message.expressions.join(" "), dropPosition);
     dropPosition = undefined;
   }
-  if (message.type === "execution") renderResult(message.response);
+  if (message.type === "outputSession") renderOutputSession(message.session);
+  if (message.type === "execution") {
+    selectOutputTurn(message.turnId);
+    renderResult(message.response);
+  }
+  if (message.type === "executionFailed") {
+    selectOutputTurn(message.turnId);
+    renderError(message.message);
+  }
   if (message.type === "agentEvent") renderAgentEvent(message.event);
   if (message.type === "executing") {
     executing = message.value;
     if (message.value) {
-      agentStreamRunActive = true;
-      elements.result.replaceChildren();
+      createOutputTurn(message.turnId, message.source ?? "Dext turn");
       resetAgentTrace();
       startAgentProgress();
       elements.resultSection.classList.remove("hidden");
       setSectionOpen(elements.resultHeading, elements.resultBody, true);
     } else {
+      selectOutputTurn(message.turnId);
       finishAgentProgress();
+      if (activeTurn) {
+        activeTurn.processDisclosure.open = false;
+        activeTurn.outputDisclosure.open = true;
+      }
     }
     updateRunState();
   }

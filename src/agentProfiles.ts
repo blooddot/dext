@@ -4,12 +4,15 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 export type AgentProvider = "codex" | "claude" | "aioa";
+export type AioaConnectionMode = "attach" | "launch";
 
 export interface AgentProfile {
   id: string;
   label: string;
   provider: AgentProvider;
   command: string;
+  endpoint?: string;
+  connectionMode?: AioaConnectionMode;
   models: string[];
   modelOptions?: AgentModelOption[];
 }
@@ -102,17 +105,38 @@ const CLAUDE_MODELS: AgentModelOption[] = [
   { id: "opus", label: "Opus", reasoningEfforts: CLAUDE_REASONING_EFFORTS, speedTiers: [], serviceTiers: [] },
   { id: "sonnet", label: "Sonnet", reasoningEfforts: CLAUDE_REASONING_EFFORTS, speedTiers: [], serviceTiers: [] }
 ];
+const AIOA_MODELS: AgentModelOption[] = [
+  { id: "active", label: "Active AIOA model", reasoningEfforts: [], speedTiers: [], serviceTiers: [] }
+];
 const DEFAULT_PROFILES: readonly AgentProfile[] = [
   { id: "codex", label: "Codex CLI", provider: "codex", command: "codex", models: CODEX_MODELS.map((model) => model.id), modelOptions: CODEX_MODELS },
   { id: "claude", label: "Claude Code CLI", provider: "claude", command: "claude", models: CLAUDE_MODELS.map((model) => model.id), modelOptions: CLAUDE_MODELS },
-  { id: "aioa", label: "AIOA", provider: "aioa", command: "", models: [] }
+  {
+    id: "aioa",
+    label: "AIOA",
+    provider: "aioa",
+    command: process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, "Programs", "AIOA", "AIOA.exe") : "AIOA.exe",
+    endpoint: "http://127.0.0.1:9229",
+    connectionMode: "launch",
+    models: AIOA_MODELS.map((model) => model.id),
+    modelOptions: AIOA_MODELS
+  }
 ];
 
 type StoredAgentProfile = AgentProfile | (Omit<AgentProfile, "provider"> & { provider: "qunshu" });
 
 function normalizeStoredProfile(profile: StoredAgentProfile): AgentProfile {
-  if (profile.provider !== "qunshu") return profile;
-  return { ...profile, id: "aioa", label: "AIOA", provider: "aioa" };
+  const normalized = profile.provider === "qunshu"
+    ? { ...profile, id: "aioa", label: "AIOA", provider: "aioa" as const }
+    : profile;
+  if (normalized.provider !== "aioa") return normalized;
+  const endpoint = normalized.endpoint === "http://127.0.0.1:43182" ? "http://127.0.0.1:9229" : normalized.endpoint;
+  return {
+    ...normalized,
+    command: normalized.command || (process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, "Programs", "AIOA", "AIOA.exe") : "AIOA.exe"),
+    ...(endpoint ? { endpoint } : {}),
+    connectionMode: normalized.connectionMode === "attach" ? "attach" : "launch"
+  };
 }
 
 function mergeProfiles(stored: readonly StoredAgentProfile[] | undefined): AgentProfile[] {
@@ -128,6 +152,8 @@ function mergeProfiles(stored: readonly StoredAgentProfile[] | undefined): Agent
       ...defaults,
       ...saved,
       models,
+      ...(saved?.endpoint || defaults.endpoint ? { endpoint: saved?.endpoint ?? defaults.endpoint } : {}),
+      ...(saved?.connectionMode || defaults.connectionMode ? { connectionMode: saved?.connectionMode ?? defaults.connectionMode } : {}),
       ...(modelOptions.length ? { modelOptions } : {})
     };
   }).concat(
@@ -154,6 +180,7 @@ export class AgentProfileStore {
     return this.profiles.map((profile) => ({
       ...profile,
       models: [...profile.models],
+      ...(profile.endpoint ? { endpoint: profile.endpoint } : {}),
       ...(profile.modelOptions ? { modelOptions: profile.modelOptions.map((model) => ({ ...model, reasoningEfforts: [...model.reasoningEfforts], speedTiers: [...model.speedTiers], serviceTiers: [...model.serviceTiers] })) } : {})
     }));
   }

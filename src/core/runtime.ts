@@ -7,7 +7,8 @@ import { WorkflowRuntime } from "./workflowRuntime.js";
 import { isDextResult, resultToCodeRefs } from "./resultSerialization.js";
 import { patchResultFrom } from "./patch.js";
 import type { AgentProfile, AgentSelection } from "../agentProfiles.js";
-import { CliAgentRunner, type AgentRunner } from "./agentRunner.js";
+import { DefaultAgentRunner } from "./agentRouter.js";
+import type { AgentRunner } from "./agentRunner.js";
 import type {
   CodeRef,
   DextResult,
@@ -217,7 +218,7 @@ export class DextRuntime {
     handlers: Readonly<Record<string, DeterministicHandler>> = {}
   ) {
     this.handlers = { ...DEFAULT_HANDLERS, ...handlers };
-    this.agentRunner = new CliAgentRunner();
+    this.agentRunner = new DefaultAgentRunner();
   }
 
   setCustomPlans(plans: ReadonlyMap<string, CustomApiPlan>): void {
@@ -236,6 +237,10 @@ export class DextRuntime {
 
   setAgentRunner(runner: AgentRunner): void {
     this.agentRunner = runner;
+  }
+
+  endAgentSession(sessionId: string): void {
+    this.agentRunner.endSession?.(sessionId);
   }
 
   setWorkspaceRoot(root: string): void {

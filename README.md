@@ -72,7 +72,14 @@ def main(target: Context) -> ReviewResult:
 
 `.dx` uses a restricted Python-like syntax. It is parsed by Dext and never starts a Python interpreter. Imports are explicit and only refer to other `.dext/api` files; external files are not read until VS Code marks the workspace as trusted.
 
-Agent profiles are stored in VS Code extension global storage. The Run row exposes Agent, Model, Reasoning, and Speed selectors. Codex profiles read the local Codex model cache when available, including supported reasoning levels and speed tiers. Claude Code profiles use its native `opus`/`sonnet` aliases and current effort levels. A `.dx` file may override the Agent and Model with `@api(agent="codex", model="...")`; otherwise the Run selection is used. `Dext: Configure Agent CLI` edits executable commands and custom model labels without handling credentials. AIOA is reserved as the third profile and is not connected yet.
+Agent profiles are stored in VS Code extension global storage. The Run row exposes Agent, Model, Reasoning, and Speed selectors. Codex profiles read the local Codex model cache when available, including supported reasoning levels and speed tiers. Claude Code profiles use its native `opus`/`sonnet` aliases and current effort levels. A `.dx` file may override the Agent and Model with `@api(agent="codex", model="...")`; otherwise the Run selection is used. `Dext: Configure Agent` edits executable commands and custom model labels without handling credentials.
+
+The AIOA profile connects to AIOA through an explicitly enabled local Chromium DevTools Protocol (CDP) port. It offers two modes:
+
+- `Launch` is the default. It starts the configured AIOA executable with a loopback-only CDP port and waits for it to become ready. If AIOA is already running without CDP, quit it first and run again.
+- `Attach` connects to an existing AIOA instance launched with `--remote-debugging-port=<port>`.
+
+The AIOA window remains an AIOA-owned desktop application; Dext does not access private IPC, browser storage, or credentials. The first turn in a Dext Output session creates a task in the matching AIOA workspace and sends the fixed adapter rules once. Later turns reuse that task and send only their typed payload and current output schema. Clearing Output ends that association, while preserving the grouped conversation in Dext History; the next run creates a fresh AIOA task. Model, permission level, connectors, and workspace context remain controlled by AIOA, so the AIOA profile exposes `Active AIOA model` rather than duplicating those controls. CDP is bound to `127.0.0.1` only and must never be exposed on a LAN interface.
 
 Built-in APIs are always available. Custom APIs are scoped by explicit `import` or `from ... import ...` statements; completion, hover, signatures, and compilation use the same import scope.
 
@@ -86,6 +93,7 @@ Built-in APIs are always available. Custom APIs are scoped by explicit `import` 
 - `src/core/runtime.ts`: deterministic executor allowlist.
 - `src/core/customApi.ts`: `.dext/api` loader, imports, signatures, and custom plans.
 - `src/core/agentRunner.ts`: structured Codex/Claude CLI adapter boundary.
+- `src/core/aioaCdp.ts`: local AIOA CDP attach/launch and Dext task-session adapter.
 - `src/webview/codeEditor.ts`: CodeMirror Python language integration.
 
 ## Development

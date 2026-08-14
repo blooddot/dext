@@ -3,19 +3,52 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  agentPayload,
   agentProcessEnvironment,
   claudeCliArguments,
+  codexCliArguments,
   codexOutputSchema,
   extractClaudeResult,
   parseClaudeStreamLine,
   parseCodexStreamLine,
-  resolveCliCommand
+  resolveCliCommand,
+  type AgentExecutionRequest
 } from "../src/core/agentRunner.js";
 import { BUILTIN_METHODS } from "../src/core/builtins.js";
 import { AxAdapter } from "../src/core/axAdapter.js";
 import { serializeResultForAgent } from "../src/core/resultSerialization.js";
+import type { AgentProfile } from "../src/agentProfiles.js";
+import type { RegisteredCallable } from "../src/core/types.js";
 
 const temporaryDirectories: string[] = [];
+
+function request(): AgentExecutionRequest {
+  const method: RegisteredCallable = {
+    ...BUILTIN_METHODS.find((candidate) => candidate.id === "chat")!,
+    source: "builtin"
+  };
+  const profile: AgentProfile = {
+    id: "codex",
+    label: "Codex",
+    provider: "codex",
+    command: "codex",
+    models: []
+  };
+  return {
+    profile,
+    cwd: "C:/workspace",
+    method,
+    contract: new AxAdapter().compile(method),
+    resolved: {
+      invocation: { kind: "invocation", method: "chat", arguments: [{ name: "message", value: "Hello" }], source: "chat" },
+      method,
+      arguments: { message: "Hello" },
+      context: [],
+      metadata: {}
+    },
+    metadata: {}
+  };
+}
 
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
@@ -87,6 +120,24 @@ describe("CLI command resolution", () => {
       "--permission-mode", "plan", "--model", "sonnet", "--effort", "high"
     ]));
   });
+
+  it("keeps schemas in native CLI flags instead of duplicating them in the stdin payload", () => {
+    const payload = JSON.parse(agentPayload(request())) as Record<string, unknown>;
+    expect(payload).toEqual({
+      api: "chat",
+      description: "Return a typed response for an explicit natural-language instruction.",
+      arguments: { message: "Hello" },
+      context: []
+    });
+    expect(payload).not.toHaveProperty("output_schema");
+    expect(codexCliArguments({ model: "gpt-5", reasoningEffort: "high" }, "output-schema.json", false, "priority"))
+      .toEqual(expect.arrayContaining([
+        "--ephemeral", "--sandbox", "read-only", "--output-schema", "output-schema.json",
+        "--model", "gpt-5", "--config", 'model_reasoning_effort="high"',
+        "--config", 'service_tier="priority"'
+      ]));
+  });
+
   it("makes optional output fields nullable while requiring every Codex object property", () => {
     const method = BUILTIN_METHODS.find((candidate) => candidate.id === "code.explain")!;
     const schema = codexOutputSchema(new AxAdapter().compile(method).outputJsonSchema) as {

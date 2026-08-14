@@ -193,6 +193,45 @@ chat(message=printed.text)`, registry);
     expect(response.result).toEqual({ kind: "chat", text: "agent response" });
   });
 
+  it("keeps local output validation strict across methods in one agent session", async () => {
+    const registry = new MethodRegistry();
+    registry.registerMany(BUILTIN_METHODS, "builtin");
+    const runtime = new DextRuntime(registry, new ContextResolver(host));
+    runtime.setAgentProfiles([{
+      id: "aioa",
+      label: "AIOA",
+      provider: "aioa",
+      command: "AIOA.exe",
+      models: []
+    }]);
+    runtime.setAgentSelection({ profileId: "aioa" });
+    const schemas: object[] = [];
+    runtime.setAgentRunner({
+      run: async (agentRequest) => {
+        schemas.push(agentRequest.contract.outputJsonSchema);
+        return agentRequest.method.id === "chat"
+          ? { kind: "chat", text: "valid" }
+          : { kind: "explain", text: "missing required files" };
+      }
+    });
+    const metadata = { agentSessionId: "output-session" };
+
+    await expect(runtime.execute({
+      kind: "invocation",
+      method: "chat",
+      source: "code",
+      arguments: [{ name: "message", value: "hello" }]
+    }, [], metadata)).resolves.toMatchObject({ result: { kind: "chat", text: "valid" } });
+    await expect(runtime.execute({
+      kind: "invocation",
+      method: "code.explain",
+      source: "code",
+      arguments: [{ name: "target", value: { kind: "selection" } }]
+    }, [], metadata)).rejects.toThrow();
+    expect(schemas).toHaveLength(2);
+    expect(schemas[0]).not.toEqual(schemas[1]);
+  });
+
   it("maps isolated Agent edit previews back to the original code reference", async () => {
     const registry = new MethodRegistry();
     registry.registerMany(BUILTIN_METHODS, "builtin");

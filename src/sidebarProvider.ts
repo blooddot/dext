@@ -16,13 +16,25 @@ import { ReadyMessageQueue } from "./readyMessageQueue.js";
 import { openWorkspaceFileReference } from "./vscodeContextHost.js";
 import { webviewRequestSchema } from "./webviewProtocol.js";
 import type { WebviewResponse } from "./webviewProtocol.js";
-import type { DextHistoryStore } from "./historyStore.js";
+import type { DextHistorySession, DextHistoryStore } from "./historyStore.js";
+
+function outputSession(): DextHistorySession {
+  const now = Date.now();
+  return {
+    id: randomBytes(12).toString("hex"),
+    createdAt: now,
+    updatedAt: now,
+    turns: []
+  };
+}
 
 export class DextSidebarProvider implements vscode.WebviewViewProvider {
   static readonly viewType = "dext.sidebar";
   private view: vscode.WebviewView | undefined;
   private readonly messageQueue = new ReadyMessageQueue<WebviewResponse>();
   private readonly attachments = new AttachmentStore();
+  private activeSession = outputSession();
+  private running = false;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -97,6 +109,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   dispose(): void {
+    this.application.endAgentSession(this.activeSession.id);
     this.attachments.dispose();
     this.messageQueue.clear();
   }
@@ -113,6 +126,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         case "ready": {
           const pendingMessages = this.messageQueue.markReady();
           await this.refresh();
+          await this.post({ type: "outputSession", session: this.activeSession });
           await this.flushPendingMessages(pendingMessages);
           break;
         }
@@ -140,6 +154,12 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           break;
         case "viewHistory":
           await this.onViewHistory();
+          break;
+        case "clearOutput":
+          if (this.running) throw new Error("Wait for the current Dext turn to finish before clearing Output.");
+          this.application.endAgentSession(this.activeSession.id);
+          this.activeSession = outputSession();
+          await this.post({ type: "outputSession", session: this.activeSession });
           break;
         case "agentSelection":
           this.application.setAgentSelection({
@@ -248,21 +268,34 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
 
   private async run(source: string): Promise<void> {
     const events: AgentStreamEvent[] = [];
-    await this.post({ type: "executing", value: true });
+    const turnId = randomBytes(12).toString("hex");
+    const sessionId = this.activeSession.id;
+    this.running = true;
+    await this.post({ type: "executing", value: true, turnId, source });
     try {
       const response = await this.application.executeInput(source, {
+        agentSessionId: sessionId,
         onAgentEvent: (event) => {
           events.push({ ...event });
           this.postAgentEvent(event);
         }
       });
-      await this.history.addSuccess(source, events, response);
-      await this.post({ type: "execution", response });
+      const turn = await this.history.addSuccess(source, events, response, sessionId);
+      this.activeSession.turns.push(turn);
+      this.activeSession.updatedAt = turn.createdAt;
+      await this.post({ type: "execution", turnId, response });
     } catch (error) {
-      await this.history.addFailure(source, events, error);
-      throw error;
+      const turn = await this.history.addFailure(source, events, error, sessionId);
+      this.activeSession.turns.push(turn);
+      this.activeSession.updatedAt = turn.createdAt;
+      await this.post({
+        type: "executionFailed",
+        turnId,
+        message: error instanceof Error ? error.message : String(error)
+      });
     } finally {
-      await this.post({ type: "executing", value: false });
+      this.running = false;
+      await this.post({ type: "executing", value: false, turnId });
     }
   }
 

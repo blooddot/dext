@@ -2,7 +2,7 @@ import { parser } from "@lezer/python";
 import { classHighlighter, highlightCode } from "@lezer/highlight";
 import type { AgentStreamEvent, DextResult, InputExecutionResponse, RuntimeResponse, WorkflowStepResponse } from "./core/types.js";
 import type { EditorTokenTheme } from "./vscodeTheme.js";
-import type { DextHistoryRecord } from "./historyStore.js";
+import type { DextHistoryRecord, DextHistorySession } from "./historyStore.js";
 import { formatDuration } from "./webview/duration.js";
 import { presentAgentMessage } from "./agentMessagePresentation.js";
 import { presentDiff } from "./diffPresentation.js";
@@ -173,6 +173,12 @@ export function renderHistoryRecord(record: DextHistoryRecord): string {
     : response ? output(response) : `<pre>${escapeHtml(record.output)}</pre>`;
   const outputCopy = record.error || (response ? outputText(response) : record.output);
   return `<details class="history-record"><summary>${chevron()}<span>${escapeHtml(dateLabel(record.createdAt))}</span><span class="history-summary-input">${escapeHtml(firstLine)}</span><span class="history-meta">${duration ? formatDuration(duration) : ""}</span></summary><div class="history-record-body"><details class="history-disclosure"><summary>${chevron()}<span>Input</span>${copyButton(record.input)}</summary><pre class="dext-source">${highlightDext(record.input)}</pre></details>${processHtml ? `<details class="history-disclosure"><summary>${chevron()}<span>Process</span></summary><div class="disclosure-body">${processHtml}</div></details>` : ""}<details class="history-disclosure" open><summary>${chevron()}<span>Output</span>${copyButton(outputCopy)}</summary><div class="disclosure-body">${outputHtml}</div></details></div></details>`;
+}
+
+export function renderHistorySession(session: DextHistorySession): string {
+  const firstInput = session.turns[0]?.input.split(/\r?\n/, 1)[0]?.slice(0, 140) ?? "Dext conversation";
+  const count = `${session.turns.length} turn${session.turns.length === 1 ? "" : "s"}`;
+  return `<details class="history-session"><summary>${chevron()}<span>${escapeHtml(dateLabel(session.createdAt))}</span><span class="history-summary-input">${escapeHtml(firstInput)}</span><span class="history-meta">${count}</span></summary><div class="history-session-body">${session.turns.map(renderHistoryRecord).join("")}</div></details>`;
 }
 
 function color(value: string | undefined, fallback: string): string {

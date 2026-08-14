@@ -4,6 +4,7 @@ import { webviewRequestSchema } from "../src/webviewProtocol.js";
 describe("Webview protocol", () => {
   it("accepts history requests", () => {
     expect(webviewRequestSchema.safeParse({ type: "viewHistory" }).success).toBe(true);
+    expect(webviewRequestSchema.safeParse({ type: "clearOutput" }).success).toBe(true);
   });
 
   it("accepts unified input and clipboard requests", () => {
