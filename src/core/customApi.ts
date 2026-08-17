@@ -74,6 +74,7 @@ function parseType(value: string): { fieldType: FieldDefinition["type"]; multipl
   if (normalized === "str" || normalized === "string") return { fieldType: "string" };
   if (normalized === "int" || normalized === "float" || normalized === "number") return { fieldType: "number" };
   if (normalized === "bool" || normalized === "boolean") return { fieldType: "boolean" };
+  if (normalized === "object" || /^dict\[str,(?:object|Any|unknown)\]$/i.test(normalized)) return { fieldType: "object" };
   const list = /^list\[(.+)\]$/i.exec(normalized);
   if (list) {
     const nested = parseType(list[1]!);
@@ -93,7 +94,44 @@ function outputKind(value: string): CallableDefinition["output"]["kind"] | undef
   return match?.[1]?.toLowerCase() as CallableDefinition["output"]["kind"] | undefined;
 }
 
-function functionSignature(source: string, node: SyntaxNode): { inputs: FieldDefinition[]; output: CallableDefinition["output"]["kind"] } {
+function typedDictResults(source: string): Map<string, CallableDefinition["output"]> {
+  const results = new Map<string, CallableDefinition["output"]>();
+  const classes = /^\s*class\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*TypedDict\s*\)\s*:\s*\r?\n((?:^[ \t]+[^\r\n]*(?:\r?\n|$))*)/gm;
+  for (const match of source.matchAll(classes)) {
+    const name = match[1]!;
+    const fields: FieldDefinition[] = [];
+    let kind: string | undefined;
+    for (const line of match[2]!.split(/\r?\n/)) {
+      const field = /^\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.+?)\s*$/.exec(line);
+      if (!field) continue;
+      const optional = /^NotRequired\[(.+)\]$/.exec(field[2]!.replace(/\s+/g, ""));
+      const parsed = parseType(optional?.[1] ?? field[2]!);
+      if (field[1] === "kind") {
+        if (parsed.fieldType !== "enum" || parsed.values?.length !== 1) {
+          throw new Error(`TypedDict '${name}' requires kind: Literal["..."] .`);
+        }
+        kind = parsed.values[0];
+        continue;
+      }
+      fields.push({
+        name: field[1]!,
+        type: parsed.fieldType,
+        ...(parsed.values ? { values: parsed.values } : {}),
+        ...(parsed.multiple ? { multiple: true } : {}),
+        required: !optional
+      });
+    }
+    if (!kind) throw new Error(`TypedDict '${name}' requires kind: Literal["..."] .`);
+    results.set(name, { kind, resultType: name, fields });
+  }
+  return results;
+}
+
+function functionSignature(
+  source: string,
+  node: SyntaxNode,
+  typedResults: ReadonlyMap<string, CallableDefinition["output"]>
+): { inputs: FieldDefinition[]; output: CallableDefinition["output"] } {
   const paramList = children(node).find((child) => child.name === "ParamList");
   const returnType = children(node).find((child) => child.name === "TypeDef" && text(source, child).startsWith("->"));
   if (!paramList || !returnType) throw new Error("main() requires parameter and return type annotations.");
@@ -118,8 +156,12 @@ function functionSignature(source: string, node: SyntaxNode): { inputs: FieldDef
     };
     inputs.push(field);
   }
-  const output = outputKind(text(source, returnType).replace(/^->\s*/, ""));
-  if (!output) throw new Error(`Unsupported main() return type '${text(source, returnType)}'.`);
+  const declared = text(source, returnType).replace(/^->\s*/, "").trim();
+  const output = typedResults.get(declared) ?? ((): CallableDefinition["output"] | undefined => {
+    const kind = outputKind(declared);
+    return kind ? { kind } : undefined;
+  })();
+  if (!output) throw new Error(`Unsupported main() return type '${declared}'.`);
   return { inputs, output };
 }
 
@@ -130,7 +172,9 @@ function parseImports(source: string, root: SyntaxNode): Map<string, string> {
     const raw = text(source, node);
     if (raw.startsWith("from ")) {
       const match = /^from\s+([A-Za-z_][A-Za-z0-9_.]*)\s+import\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?$/.exec(raw);
-      if (match) imports.set(match[3] ?? match[2]!, `${match[1]}.${match[2]}`);
+      if (match && match[1] !== "typing" && match[1] !== "typing_extensions") {
+        imports.set(match[3] ?? match[2]!, `${match[1]}.${match[2]}`);
+      }
     } else {
       const match = /^import\s+([A-Za-z_][A-Za-z0-9_.]*)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?$/.exec(raw);
       if (match) imports.set(match[2] ?? match[1]!.split(".").at(-1)!, match[1]!);
@@ -152,7 +196,7 @@ function parseHeader(path: string, source: string): CustomApiFile {
   if (!functionNode) throw new Error("A .dx API file must define main().");
   const nameNode = children(functionNode).find((child) => child.name === "VariableName");
   if (!nameNode || text(source, nameNode) !== "main") throw new Error("A .dx API file must export main().");
-  const signature = functionSignature(source, functionNode);
+  const signature = functionSignature(source, functionNode, typedDictResults(source));
   const id = apiIdFromPath(path);
   if (!id || id.split(".").some((part) => !identifier(part))) throw new Error(`Invalid API path for '${path}'.`);
   const definition: CallableDefinition = {
@@ -162,7 +206,7 @@ function parseHeader(path: string, source: string): CustomApiFile {
     kind: "skill",
     version: "1.0.0",
     input: signature.inputs,
-    output: { kind: signature.output },
+    output: signature.output,
     executor: { kind: "custom", apiId: id }
   };
   const decorated = firstNode(tree.topNode, "Decorator");
@@ -264,7 +308,10 @@ export async function loadCustomApis(
         throw new Error("main() must return exactly one Dext result.");
       }
       const expected = file.definition.output.kind;
-      if (outputType.kind !== "result" || outputType.name.toLowerCase() !== `${expected}result`) {
+      if (
+        !file.definition.output.fields
+        && (outputType.kind !== "result" || outputType.name.toLowerCase() !== `${expected}result`)
+      ) {
         throw new Error(`main() must return ${expected} result.`);
       }
       if (compiled.diagnostics.some((diagnostic) => diagnostic.severity === "error")) {

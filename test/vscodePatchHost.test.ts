@@ -66,9 +66,9 @@ let applyPatchHandler: DeterministicHandler;
 
 function invocation(before: string, after: string): ResolvedInvocation {
   return {
-    invocation: { kind: "invocation", method: "code.apply", arguments: [], source: "code" },
+    invocation: { kind: "invocation", method: "apply", arguments: [], source: "code" },
     method: {
-      id: "code.apply", title: "Apply", description: "Apply", kind: "command", version: "1",
+      id: "apply", title: "Apply", description: "Apply", kind: "command", version: "1",
       input: [], output: { kind: "apply" }, executor: { kind: "deterministic", handler: "applyPatch" }, source: "builtin"
     },
     arguments: {

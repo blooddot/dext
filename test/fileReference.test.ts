@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   compactFileReferenceLabel,
+  formatDextDirectoryReference,
   formatDextFileReference,
   parseFileReference
 } from "../src/core/fileReference.js";
@@ -13,6 +14,13 @@ describe("Dext file references", () => {
     })).toEqual({
       payload: "src/review.ts#L3,5-L4,8",
       expression: 'ref.file("src/review.ts#L3,5-L4,8")'
+    });
+  });
+
+  it("formats directory references without expanding their contents", () => {
+    expect(formatDextDirectoryReference("skills/dev-feat")).toEqual({
+      payload: "skills/dev-feat",
+      expression: 'ref.dir("skills/dev-feat")'
     });
   });
 

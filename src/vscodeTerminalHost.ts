@@ -12,7 +12,7 @@ const MAX_OUTPUT_BYTES = 256 * 1024;
 
 function requiredString(value: unknown, name: string): string {
   if (typeof value !== "string" || !value.trim()) {
-    throw new Error(`terminal.run requires a nonempty '${name}'.`);
+    throw new Error(`terminal requires a nonempty '${name}'.`);
   }
   return value;
 }
@@ -20,18 +20,18 @@ function requiredString(value: unknown, name: string): string {
 function timeoutValue(value: unknown): number {
   const timeout = value === undefined ? DEFAULT_TIMEOUT_MS : value;
   if (typeof timeout !== "number" || !Number.isInteger(timeout) || timeout <= 0 || timeout > MAX_TIMEOUT_MS) {
-    throw new Error(`terminal.run timeout_ms must be an integer from 1 to ${MAX_TIMEOUT_MS}.`);
+    throw new Error(`terminal timeout_ms must be an integer from 1 to ${MAX_TIMEOUT_MS}.`);
   }
   return timeout;
 }
 
 function trustedWorkspaceRoot(): string {
   if (!vscode.workspace.isTrusted) {
-    throw new Error("terminal.run requires a trusted workspace.");
+    throw new Error("terminal requires a trusted workspace.");
   }
   const folders = vscode.workspace.workspaceFolders;
   if (!folders?.length || folders.some((folder) => folder.uri.scheme !== "file")) {
-    throw new Error("terminal.run requires a local file workspace.");
+    throw new Error("terminal requires a local file workspace.");
   }
   return folders[0]!.uri.fsPath;
 }
@@ -42,10 +42,10 @@ function workspaceCwd(root: string, value: unknown): string {
   const cwd = realpathSync(resolve(realRoot, requested));
   const pathFromRoot = relative(realRoot, cwd);
   if (isAbsolute(pathFromRoot) || pathFromRoot === ".." || pathFromRoot.startsWith(`..\\`) || pathFromRoot.startsWith("../")) {
-    throw new Error("terminal.run cwd must stay inside the current workspace.");
+    throw new Error("terminal cwd must stay inside the current workspace.");
   }
   if (!statSync(cwd).isDirectory()) {
-    throw new Error("terminal.run cwd must be a directory.");
+    throw new Error("terminal cwd must be a directory.");
   }
   return cwd;
 }

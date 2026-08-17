@@ -7,97 +7,81 @@ import { DextRuntime } from "../src/core/runtime.js";
 import { compileWorkflow } from "../src/core/workflow.js";
 import { WorkflowRuntime } from "../src/core/workflowRuntime.js";
 import { ExecutionCancelledError } from "../src/core/executionErrors.js";
-import type { PatchResult, TerminalResult } from "../src/core/types.js";
+import type { AgentResult, PatchResult, TerminalResult } from "../src/core/types.js";
 
 const host: ContextHost = {
   selection: async () => ({ uri: "file:///x.ts", content: "const x = 1;", version: 1 }),
   activeFile: async () => ({ uri: "file:///x.ts", content: "const x = 1;", version: 1 }),
   file: async (path) => ({ uri: `file:///${path}`, content: "export const y = 2;", version: 1 }),
-  symbol: async () => undefined
+  symbol: async () => undefined,
+  dir: async (path) => ({ kind: "dirRef", uri: `file:///${path}`, path })
 };
 
 function setup() {
   const registry = new MethodRegistry();
   registry.registerMany(BUILTIN_METHODS, "builtin");
-  const runtime = new DextRuntime(registry, new ContextResolver(host));
+  const runtime = new DextRuntime(registry, new ContextResolver(host), undefined, {
+    terminalRun: async ({ arguments: args }) => ({
+      kind: "terminal",
+      status: "succeeded",
+      command: typeof args.command === "string" ? args.command : "",
+      cwd: ".",
+      exit_code: 0,
+      stdout: "",
+      stderr: "",
+      duration_ms: 0
+    })
+  });
   return { registry, runtime, workflow: new WorkflowRuntime(runtime) };
 }
 
 describe("Dext workflow runtime", () => {
-  it("executes composable typed results sequentially", async () => {
+  it("executes ask, agent and print in sequence", async () => {
     const { registry, workflow } = setup();
-    const compiled = compileWorkflow(`analysis = chat(message="explain", context=[ref.selection])
-edit = code.edit(target=[ref.selection], instruction=analysis.text)
-review = code.review(target=edit.files, instruction=edit.summary)
-`, registry);
+    const compiled = compileWorkflow(`answer = ask(input=f"Explain {ref.selection}")
+task = agent(input="Plan this change", apply=False)
+print(text=answer.text)`, registry);
     expect(compiled.diagnostics).toEqual([]);
     const result = await workflow.execute(compiled.program!);
-    expect(result.steps?.map((step) => step.state)).toEqual(["success", "success", "success"]);
-    expect(result.executions.map((item) => item.result.kind)).toEqual(["chat", "edit", "review"]);
+    expect(result.executions.map((item) => item.method.id)).toEqual(["ask", "agent", "print"]);
+    expect(result.executions.map((item) => item.result.kind)).toEqual(["chat", "agent", "print"]);
   });
 
-  it("marks the unselected if branch as skipped", async () => {
-    const { registry, workflow } = setup();
-    const compiled = compileWorkflow(`review = code.review(target=[ref.selection])
-if review.status == "pass":
-    code.apply(result=edit)
-else:
-    chat(message="review needs attention")
-`, registry);
-    expect(compiled.diagnostics.map((item) => item.message)).toContain("Unknown variable 'edit'.");
-
-    const valid = compileWorkflow(`review = code.review(target=[ref.selection])
-if review.status == "pass":
-    chat(message="pass")
-else:
-    chat(message="attention")
-`, registry);
-    const result = await workflow.execute(valid.program!);
-    expect(result.steps?.map((step) => step.state)).toEqual(["success", "skipped", "success"]);
+  it("builds strict contracts for public builtins", () => {
+    const { registry } = setup();
+    const ask = new AxAdapter().compile(registry.get("ask")!);
+    expect(ask.inputSchema.safeParse({ input: "hello" }).success).toBe(true);
+    expect(ask.inputSchema.safeParse({ message: "hello" }).success).toBe(false);
+    const agent = new AxAdapter().compile(registry.get("agent")!);
+    expect(agent.outputSchema.safeParse({ kind: "agent", text: "done" }).success).toBe(true);
+    expect(registry.get("chat")).toBeUndefined();
+    expect(registry.get("code.edit")).toBeUndefined();
+    const mcp = new AxAdapter().compile(registry.get("mcp")!);
+    expect(mcp.inputSchema.safeParse({ tool: "docs.read", input: { uri: "README.md" } }).success).toBe(true);
+    expect(mcp.inputSchema.safeParse({ tool: "docs.read", input: "{}" }).success).toBe(false);
   });
 
-  it("builds Ax/JSON Schema contracts for fixed outputs", () => {
-    const method = BUILTIN_METHODS.find((candidate) => candidate.id === "code.review")!;
-    const contract = new AxAdapter().compile(method);
-    expect(contract.outputJsonSchema).toMatchObject({ type: "object", properties: { status: expect.any(Object) } });
-    const explain = new AxAdapter().compile(BUILTIN_METHODS.find((candidate) => candidate.id === "code.explain")!);
-    expect(explain.outputJsonSchema).toMatchObject({
-      properties: { files: { type: "array", items: { type: "object" } } }
-    });
+  it("keeps apply and terminal local when an Agent is selected", async () => {
+    const { runtime } = setup();
+    let invoked = false;
+    runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
+    runtime.setAgentSelection({ profileId: "codex" });
+    runtime.setAgentRunner({ run: async () => { invoked = true; return { kind: "chat", text: "agent" }; } });
+    await expect(runtime.execute({ kind: "invocation", method: "terminal", source: "code", arguments: [{ name: "command", value: "echo test" }] }))
+      .resolves.toMatchObject({ result: { kind: "terminal" } });
+    expect(invoked).toBe(false);
   });
 
-  it("does not write files when applying a no-op deterministic patch", async () => {
-    const { registry, workflow } = setup();
-    const compiled = compileWorkflow(`edit = code.edit(target=[ref.selection], instruction="format")
-applied = code.apply(result=edit)
-`, registry);
-    const result = await workflow.execute(compiled.program!);
-    expect(result.executions.at(-1)?.result).toMatchObject({ kind: "apply", status: "unchanged" });
+  it("routes ask through the selected Agent runner", async () => {
+    const { runtime } = setup();
+    runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
+    runtime.setAgentSelection({ profileId: "codex" });
+    runtime.setAgentRunner({ run: async () => ({ kind: "chat", text: "agent response" }) });
+    await expect(runtime.execute({ kind: "invocation", method: "ask", source: "code", arguments: [{ name: "input", value: "hello" }] }))
+      .resolves.toMatchObject({ result: { kind: "chat", text: "agent response" } });
   });
 
-  it("serializes non-code results as explain/review context", async () => {
-    const { registry, workflow } = setup();
-    const compiled = compileWorkflow(`chat_result = chat(message="hello")
-review_result = code.review(target=chat_result)
-explain_result = code.explain(target=review_result)
-`, registry);
-    expect(compiled.diagnostics).toEqual([]);
-    const result = await workflow.execute(compiled.program!);
-    expect(result.steps?.map((step) => step.state)).toEqual(["success", "success", "success"]);
-    expect(result.executions.at(-1)?.result).toMatchObject({ kind: "explain", files: [{ uri: "dext-result://review/0" }] });
-  });
-
-  it("accepts an EditResult itself when applying its nested patch", async () => {
-    const { registry, workflow } = setup();
-    const compiled = compileWorkflow(`edit_result = code.edit(target=ref.selection, instruction="format")
-applied = code.apply(result=edit_result)
-`, registry);
-    expect(compiled.diagnostics).toEqual([]);
-    const result = await workflow.execute(compiled.program!);
-    expect(result.executions.at(-1)?.result).toMatchObject({ kind: "apply", status: "unchanged" });
-  });
-
-  it("composes terminal output fields and preserves failed exit results", async () => {
+  it("composes failed terminal fields and preserves the complete result", async () => {
     const registry = new MethodRegistry();
     registry.registerMany(BUILTIN_METHODS, "builtin");
     const terminalResult: TerminalResult = {
@@ -113,241 +97,199 @@ applied = code.apply(result=edit_result)
     const runtime = new DextRuntime(registry, new ContextResolver(host), undefined, {
       terminalRun: () => terminalResult
     });
-    const workflow = new WorkflowRuntime(runtime);
-    const compiled = compileWorkflow(`terminal_result = terminal.run(command="exit 7")
-chat(message=terminal_result.stderr)
-`, registry);
+    const compiled = compileWorkflow(`terminal_result = terminal(command="exit 7")
+printed = print(text=terminal_result.stderr)`, registry);
+
     expect(compiled.diagnostics).toEqual([]);
-    const result = await workflow.execute(compiled.program!);
+    const result = await new WorkflowRuntime(runtime).execute(compiled.program!);
     expect(result.steps?.map((step) => step.state)).toEqual(["success", "success"]);
     expect(result.executions[0]?.result).toEqual(terminalResult);
+    expect(result.executions[1]?.result).toEqual({ kind: "print", text: "failed" });
   });
 
-  it("marks rejected terminal confirmation as cancelled and skips downstream steps", async () => {
+  it("marks the unselected terminal status branch as skipped", async () => {
+    const { registry, workflow } = setup();
+    const compiled = compileWorkflow(`terminal_result = terminal(command="echo ok")
+if terminal_result.status == "succeeded":
+    print(text="success")
+else:
+    print(text="failure")`, registry);
+
+    expect(compiled.diagnostics).toEqual([]);
+    const result = await workflow.execute(compiled.program!);
+    expect(result.steps?.map((step) => step.state)).toEqual(["success", "skipped", "success"]);
+  });
+
+  it("marks a cancelled terminal confirmation and skips later calls", async () => {
     const registry = new MethodRegistry();
     registry.registerMany(BUILTIN_METHODS, "builtin");
     const runtime = new DextRuntime(registry, new ContextResolver(host), undefined, {
       terminalRun: () => { throw new ExecutionCancelledError("cancelled"); }
     });
-    const compiled = compileWorkflow(`terminal.run(command="echo no")
-chat(message="must not run")
-`, registry);
+    const compiled = compileWorkflow(`terminal(command="echo no")
+print(text="must not run")`, registry);
     const result = await new WorkflowRuntime(runtime).execute(compiled.program!);
+
     expect(result.steps).toEqual([
-      expect.objectContaining({ method: "terminal.run", state: "cancelled", error: "cancelled" }),
-      expect.objectContaining({ method: "chat", state: "skipped" })
+      expect.objectContaining({ method: "terminal", state: "cancelled", error: "cancelled" }),
+      expect.objectContaining({ method: "print", state: "skipped" })
     ]);
   });
 
-  it("builds the fixed terminal result contract", () => {
-    const method = BUILTIN_METHODS.find((candidate) => candidate.id === "terminal.run")!;
-    const contract = new AxAdapter().compile(method);
-    expect(contract.inputJsonSchema).toMatchObject({
-      properties: { command: { type: "string" }, cwd: { default: "." } }
-    });
-    expect(contract.outputJsonSchema).toMatchObject({
-      properties: { status: { enum: ["succeeded", "failed", "timed_out"] } }
-    });
-  });
-
-  it("returns a strict typed print result and composes its text", async () => {
+  it("keeps terminal and print contracts strict and composable", async () => {
     const { registry, workflow } = setup();
     const compiled = compileWorkflow(`printed = print(text="hello", label="Build")
-chat(message=printed.text)`, registry);
+answer = ask(input=printed.text)`, registry);
+
     expect(compiled.diagnostics).toEqual([]);
     const result = await workflow.execute(compiled.program!);
     expect(result.executions[0]?.result).toEqual({ kind: "print", text: "hello", label: "Build" });
-    const contract = new AxAdapter().compile(BUILTIN_METHODS.find((method) => method.id === "print")!);
-    expect(contract.outputJsonSchema).toMatchObject({
+    expect(result.executions[1]?.result).toEqual({ kind: "chat", text: "hello" });
+    const terminal = new AxAdapter().compile(registry.get("terminal")!);
+    expect(terminal.outputJsonSchema).toMatchObject({
+      properties: { status: { enum: ["succeeded", "failed", "timed_out"] } }
+    });
+    const printed = new AxAdapter().compile(registry.get("print")!);
+    expect(printed.outputJsonSchema).toMatchObject({
       additionalProperties: false,
       properties: { label: { type: "string" } }
     });
   });
 
-  it("routes selected API calls through the configured agent runner", async () => {
-    const registry = new MethodRegistry();
-    registry.registerMany(BUILTIN_METHODS, "builtin");
-    const runtime = new DextRuntime(registry, new ContextResolver(host));
-    runtime.setAgentProfiles([{
-      id: "test-agent",
-      label: "Test Agent",
-      provider: "codex",
-      command: "test-agent",
-      models: ["test-model"]
-    }]);
-    runtime.setAgentSelection({ profileId: "test-agent", model: "test-model" });
-    let receivedModel: string | undefined;
+  it("accepts an AgentResult patch directly in apply", async () => {
+    const { runtime } = setup();
+    const patch: PatchResult = { kind: "patch", title: "No changes", changes: [] };
+    const agentResult: AgentResult = { kind: "agent", text: "preview", patch };
+
+    await expect(runtime.execute({
+      kind: "invocation",
+      method: "apply",
+      source: "code",
+      arguments: [{ name: "result", value: agentResult }]
+    })).resolves.toMatchObject({ result: { kind: "apply", status: "unchanged" } });
+  });
+
+  it("keeps agent previews read-only and gates workspace writes on trust", async () => {
+    const { runtime } = setup();
+    runtime.setWorkspaceRoot(process.cwd());
+    runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: ["gpt-test"] }]);
+    runtime.setAgentSelection({ profileId: "codex", model: "gpt-test" });
+    const requests: { allowWorkspaceWrite: boolean | undefined; cwd: string }[] = [];
     runtime.setAgentRunner({
       run: async (request) => {
-        receivedModel = request.model;
-        return { kind: "chat", text: "agent response" };
+        requests.push({ allowWorkspaceWrite: request.allowWorkspaceWrite, cwd: request.cwd });
+        return { kind: "agent", text: "done" };
       }
     });
-    const response = await runtime.execute({
-      kind: "invocation",
-      method: "chat",
-      source: "code",
-      arguments: [{ name: "message", value: "hello" }]
-    });
-    expect(receivedModel).toBe("test-model");
-    expect(response.result).toEqual({ kind: "chat", text: "agent response" });
-  });
-
-  it("keeps local output validation strict across methods in one agent session", async () => {
-    const registry = new MethodRegistry();
-    registry.registerMany(BUILTIN_METHODS, "builtin");
-    const runtime = new DextRuntime(registry, new ContextResolver(host));
-    runtime.setAgentProfiles([{
-      id: "aioa",
-      label: "AIOA",
-      provider: "aioa",
-      command: "AIOA.exe",
-      models: []
-    }]);
-    runtime.setAgentSelection({ profileId: "aioa" });
-    const schemas: object[] = [];
-    runtime.setAgentRunner({
-      run: async (agentRequest) => {
-        schemas.push(agentRequest.contract.outputJsonSchema);
-        return agentRequest.method.id === "chat"
-          ? { kind: "chat", text: "valid" }
-          : { kind: "explain", text: "missing required files" };
-      }
-    });
-    const metadata = { agentSessionId: "output-session" };
 
     await expect(runtime.execute({
-      kind: "invocation",
-      method: "chat",
-      source: "code",
-      arguments: [{ name: "message", value: "hello" }]
-    }, [], metadata)).resolves.toMatchObject({ result: { kind: "chat", text: "valid" } });
+      kind: "invocation", method: "agent", source: "code",
+      arguments: [{ name: "input", value: "preview" }, { name: "apply", value: false }]
+    })).resolves.toMatchObject({ result: { kind: "agent", text: "done" } });
+    expect(requests).toEqual([{ allowWorkspaceWrite: false, cwd: process.cwd() }]);
+
     await expect(runtime.execute({
-      kind: "invocation",
-      method: "code.explain",
-      source: "code",
-      arguments: [{ name: "target", value: { kind: "selection" } }]
-    }, [], metadata)).rejects.toThrow();
-    expect(schemas).toHaveLength(2);
-    expect(schemas[0]).not.toEqual(schemas[1]);
+      kind: "invocation", method: "agent", source: "code", arguments: [{ name: "input", value: "write" }]
+    })).rejects.toThrow("trusted local workspace");
+    expect(requests).toHaveLength(1);
+
+    runtime.setWorkspaceTrusted(true);
+    await runtime.execute({
+      kind: "invocation", method: "agent", source: "code", arguments: [{ name: "input", value: "write" }]
+    });
+    expect(requests[1]).toEqual({ allowWorkspaceWrite: true, cwd: process.cwd() });
   });
 
-  it("maps isolated Agent edit previews back to the original code reference", async () => {
-    const registry = new MethodRegistry();
-    registry.registerMany(BUILTIN_METHODS, "builtin");
-    const runtime = new DextRuntime(registry, new ContextResolver(host));
-    runtime.setAgentProfiles([{
-      id: "test-agent",
-      label: "Test Agent",
-      provider: "codex",
-      command: "test-agent",
-      models: ["test-model"]
-    }]);
-    runtime.setAgentSelection({ profileId: "test-agent" });
-    runtime.setAgentRunner({
-      run: async () => ({
-        kind: "edit",
-        summary: "Preview",
-        patch: {
-          kind: "patch",
-          title: "Edit",
-          changes: [{ uri: "target-1/x.ts", before: "const x = 1;", after: "const x = 2;" }]
-        },
-        files: []
-      })
-    });
-
-    const response = await runtime.execute({
-      kind: "invocation",
-      method: "code.edit",
-      source: "code",
-      arguments: [
-        { name: "target", value: { kind: "selection" } },
-        { name: "instruction", value: "increment" }
-      ]
-    });
-    expect(response.result).toMatchObject({
-      kind: "edit",
-      files: [{ uri: "file:///x.ts", documentVersion: 1 }],
-      patch: {
-        changes: [{
-          uri: "file:///x.ts",
-          before: "const x = 1;",
-          after: "const x = 2;",
-          documentVersion: 1
-        }]
-      }
-    });
-  });
-
-  it("keeps terminal.run local when an Agent CLI is selected", async () => {
-    const registry = new MethodRegistry();
-    registry.registerMany(BUILTIN_METHODS, "builtin");
-    const terminalResult: TerminalResult = {
-      kind: "terminal",
-      status: "succeeded",
-      command: "echo local",
-      cwd: ".",
-      exit_code: 0,
-      stdout: "local",
-      stderr: "",
-      duration_ms: 1
+  it("preserves ask f-string reference order in the resolved input", async () => {
+    const resolved: string[] = [];
+    const orderedHost: ContextHost = {
+      selection: async () => {
+        resolved.push("selection");
+        return { uri: "file:///selection.ts", content: "selection", version: 1 };
+      },
+      activeFile: async () => undefined,
+      file: async (path) => {
+        resolved.push(`file:${path}`);
+        return { uri: `file:///${path}`, content: path, version: 1 };
+      },
+      symbol: async () => undefined,
+      dir: async () => undefined
     };
-    const runtime = new DextRuntime(registry, new ContextResolver(host), undefined, {
-      terminalRun: () => terminalResult
-    });
-    runtime.setAgentProfiles([{
-      id: "test-agent",
-      label: "Test Agent",
-      provider: "codex",
-      command: "test-agent",
-      models: ["test-model"]
-    }]);
-    runtime.setAgentSelection({ profileId: "test-agent", model: "test-model" });
-    runtime.setAgentRunner({
-      run: async () => { throw new Error("terminal.run must not invoke the Agent CLI"); }
-    });
+    const registry = new MethodRegistry();
+    registry.registerMany(BUILTIN_METHODS, "builtin");
+    const workflow = new WorkflowRuntime(new DextRuntime(registry, new ContextResolver(orderedHost)));
+    const compiled = compileWorkflow('answer = ask(input=f"A {ref.file(\'first.ts\')} B {ref.selection} C")', registry);
 
-    const response = await runtime.execute({
-      kind: "invocation",
-      method: "terminal.run",
-      source: "code",
-      arguments: [{ name: "command", value: "echo local" }]
-    });
-    expect(response.result).toEqual(terminalResult);
+    expect(compiled.diagnostics).toEqual([]);
+    const result = await workflow.execute(compiled.program!);
+    const text = (result.executions[0]?.result as { text?: string }).text ?? "";
+    expect(resolved).toEqual(["file:first.ts", "selection"]);
+    expect(text.indexOf('uri="file:///first.ts"')).toBeLessThan(text.indexOf('uri="file:///selection.ts"'));
   });
 
-  it("keeps apply and print local when an Agent CLI is selected", async () => {
+  it("forwards the selected model and rejects invalid Agent output", async () => {
     const { runtime } = setup();
-    runtime.setAgentProfiles([{
-      id: "test-agent",
-      label: "Test Agent",
-      provider: "codex",
-      command: "test-agent",
-      models: ["test-model"]
-    }]);
-    runtime.setAgentSelection({ profileId: "test-agent", model: "test-model" });
+    runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: ["gpt-test"] }]);
+    runtime.setAgentSelection({ profileId: "codex", model: "gpt-test" });
+    const models: (string | undefined)[] = [];
     runtime.setAgentRunner({
-      run: async () => { throw new Error("local APIs must not invoke the Agent CLI"); }
+      run: async (request) => {
+        models.push(request.model);
+        return request.method.id === "ask"
+          ? { kind: "chat", text: "valid" }
+          : { kind: "agent", text: "invalid", extra: true };
+      }
     });
 
-    const printed = await runtime.execute({
-      kind: "invocation",
-      method: "print",
-      source: "code",
-      arguments: [{ name: "text", value: "local" }]
-    });
-    expect(printed.result).toEqual({ kind: "print", text: "local" });
+    await expect(runtime.execute({
+      kind: "invocation", method: "ask", source: "code", arguments: [{ name: "input", value: "hello" }]
+    })).resolves.toMatchObject({ result: { kind: "chat", text: "valid" } });
+    await expect(runtime.execute({
+      kind: "invocation", method: "agent", source: "code",
+      arguments: [{ name: "input", value: "preview" }, { name: "apply", value: false }]
+    })).rejects.toThrow();
+    expect(models).toEqual(["gpt-test", "gpt-test"]);
+  });
 
-    const applied = await runtime.execute({
-      kind: "invocation",
-      method: "code.apply",
-      source: "code",
-      arguments: [{
-        name: "result",
-        value: { kind: "patch", title: "No changes", changes: [] } as PatchResult
+  it("keeps terminal, apply, and print local when an Agent is selected", async () => {
+    const { runtime } = setup();
+    runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
+    runtime.setAgentSelection({ profileId: "codex" });
+    runtime.setAgentRunner({ run: async () => { throw new Error("local APIs must not invoke the Agent runner"); } });
+
+    await expect(runtime.execute({
+      kind: "invocation", method: "terminal", source: "code", arguments: [{ name: "command", value: "echo local" }]
+    })).resolves.toMatchObject({ result: { kind: "terminal" } });
+    await expect(runtime.execute({
+      kind: "invocation", method: "print", source: "code", arguments: [{ name: "text", value: "local" }]
+    })).resolves.toMatchObject({ result: { kind: "print", text: "local" } });
+    await expect(runtime.execute({
+      kind: "invocation", method: "apply", source: "code", arguments: [{
+        name: "result", value: { kind: "patch", title: "No changes", changes: [] } as PatchResult
       }]
+    })).resolves.toMatchObject({ result: { kind: "apply", status: "unchanged" } });
+  });
+
+  it("passes typed nested MCP input and resolved scalar references to the configured caller", async () => {
+    const { registry, runtime, workflow } = setup();
+    const calls: Array<{ tool: string; input: Record<string, unknown> }> = [];
+    runtime.setMcpCaller(async (tool, input) => {
+      calls.push({ tool, input });
+      return { kind: "mcpRaw", server: "docs", tool: "read" };
     });
-    expect(applied.result).toMatchObject({ kind: "apply", status: "unchanged" });
+    const compiled = compileWorkflow(`result = mcp(
+    tool="docs.read",
+    input={"meta": {"labels": ["guide", "api"]}, "file": ref.file("README.md")}
+)`, registry);
+
+    expect(compiled.diagnostics).toEqual([]);
+    await workflow.execute(compiled.program!);
+    expect(calls).toEqual([{
+      tool: "docs.read",
+      input: {
+        meta: { labels: ["guide", "api"] },
+        file: expect.objectContaining({ kind: "codeRef", uri: "file:///README.md", content: "export const y = 2;" })
+      }
+    }]);
   });
 });

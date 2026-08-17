@@ -13,7 +13,7 @@ const reference: ClipboardReadResult = {
 
 describe("Code reference paste", () => {
   it("inserts the full reference expression into ordinary code", () => {
-    expect(codeReferencePasteText("code.review(target=)", 19, 19, reference))
+    expect(codeReferencePasteText("ask(input=)", 10, 10, reference))
       .toBe(reference.codeReference?.expression);
   });
 
@@ -25,21 +25,21 @@ describe("Code reference paste", () => {
   });
 
   it("uses existing argument whitespace without adding space before a terminator", () => {
-    const source = "code.review(target=)";
+    const source = "ask(input=)";
     const cursor = source.indexOf(")");
     expect(codeReferencePasteText(source, cursor, cursor, reference))
       .toBe(reference.codeReference?.expression);
   });
 
   it("inserts only the payload when the cursor is inside an existing file string", () => {
-    const source = 'code.review(target=ref.file(""))';
+    const source = 'ask(input=ref.file(""))';
     const cursor = source.indexOf('""') + 1;
     expect(codeReferencePasteText(source, cursor, cursor, reference))
       .toBe(reference.codeReference?.payload);
   });
 
   it("inserts a quoted payload after an incomplete file call", () => {
-    const source = "code.review(target=ref.file()";
+    const source = "ask(input=ref.file()";
     const cursor = source.indexOf(")");
     expect(codeReferencePasteText(source, cursor, cursor, reference))
       .toBe(`"${reference.codeReference?.payload}"`);

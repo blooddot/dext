@@ -42,7 +42,12 @@ import { codeReferencePasteText } from "./codeReferencePaste.js";
 import { fileReferenceDecorations } from "./fileReferenceDecorations.js";
 import { sourceSnapshotMatches } from "./languageClient.js";
 import type { LanguageRequestBroker } from "./languageClient.js";
-import { inlineInsertion, invocationInsertion } from "./inputInsertion.js";
+import {
+  coreInputReferenceInsertion,
+  inlineInsertion,
+  invocationInsertion,
+  normalizeCoreInputStrings
+} from "./inputInsertion.js";
 import type { EditorTokenTheme } from "../vscodeTheme.js";
 
 export interface CodeEditorOptions {
@@ -253,6 +258,26 @@ export class DextCodeEditor {
     this.insert(text, position, inlineInsertion);
   }
 
+  insertFileReferences(expressions: readonly string[], position?: number): void {
+    const selection = this.view.state.selection.main;
+    const from = position === undefined
+      ? selection.from
+      : Math.max(0, Math.min(position, this.view.state.doc.length));
+    const to = position === undefined ? selection.to : from;
+    const replacement = coreInputReferenceInsertion(this.source, from, to, expressions);
+    if (replacement) {
+      this.view.dispatch({
+        changes: { from: replacement.from, to: replacement.to, insert: replacement.text },
+        selection: { anchor: replacement.from + replacement.cursorOffset },
+        scrollIntoView: true,
+        userEvent: "input"
+      });
+      this.focus();
+      return;
+    }
+    this.insertInline(expressions.join(" "), position);
+  }
+
   insertInvocation(text: string): void {
     this.insert(text, undefined, invocationInsertion);
   }
@@ -366,6 +391,17 @@ export class DextCodeEditor {
   private updated(update: ViewUpdate): void {
     if (!update.docChanged && !update.selectionSet) return;
     if (update.docChanged) {
+      const normalized = normalizeCoreInputStrings(this.source);
+      if (normalized !== this.source) {
+        const cursor = Math.min(this.view.state.selection.main.head, normalized.length);
+        this.view.dispatch({
+          changes: { from: 0, to: this.view.state.doc.length, insert: normalized },
+          selection: { anchor: cursor },
+          scrollIntoView: true,
+          userEvent: "input"
+        });
+        return;
+      }
       this.scheduleDiagnostics(120);
       this.updateInputKind();
     }

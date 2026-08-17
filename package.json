@@ -198,7 +198,43 @@
           "type": "boolean",
           "default": true,
           "description": "Capture editor selections as Dext context when copying with Ctrl+C or Cmd+C. The clipboard still receives the exact selected text. Disable this to use VS Code's native copy behavior."
-        }
+        },
+        "dext.skillDirs": {
+          "type": "array",
+          "default": [],
+          "items": { "type": "string" },
+          "description": "Additional skill directories. Relative paths resolve from the current workspace; earlier directories take priority for duplicate skill names."
+        },
+          "dext.mcpTools": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "object",
+            "required": ["server", "tool"],
+            "properties": {
+              "server": { "type": "string" },
+              "tool": { "type": "string" },
+              "description": { "type": "string" }
+            }
+          },
+            "description": "MCP tools Dext may call. Their public name is the exact configured server.tool value; each tool must reference an entry in dext.mcpServers."
+          },
+          "dext.mcpServers": {
+            "type": "array",
+            "default": [],
+            "items": {
+              "type": "object",
+              "required": ["name", "transport", "command"],
+              "properties": {
+                "name": { "type": "string" },
+                "transport": { "enum": ["stdio"] },
+                "command": { "type": "string" },
+                "args": { "type": "array", "items": { "type": "string" } },
+                "timeoutMs": { "type": "integer", "minimum": 1000, "maximum": 120000 }
+              }
+            },
+            "description": "Local MCP stdio servers. Commands inherit the host environment; do not put credentials in this setting."
+          }
       }
     }
   },

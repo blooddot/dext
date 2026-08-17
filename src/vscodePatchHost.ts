@@ -27,7 +27,7 @@ async function validatedChange(change: PatchChange): Promise<{
 }> {
   const uri = vscode.Uri.parse(change.uri, true);
   if (uri.scheme !== "file" || !vscode.workspace.getWorkspaceFolder(uri)) {
-    throw new Error("code.apply only writes files inside the current workspace.");
+    throw new Error("apply only writes files inside the current workspace.");
   }
   const document = await vscode.workspace.openTextDocument(uri);
   const targetRange = change.range ? vscodeRange(change.range) : fullDocumentRange(document);
@@ -57,7 +57,7 @@ function codeRef(document: vscode.TextDocument): CodeRef {
 
 export const applyPatchHandler: DeterministicHandler = async ({ arguments: args }) => {
   if (!vscode.workspace.isTrusted) {
-    throw new Error("code.apply requires a trusted workspace.");
+    throw new Error("apply requires a trusted workspace.");
   }
   const patch = patchResultFrom(args.result);
   const changes = patch.changes.filter((change) => change.before !== change.after);

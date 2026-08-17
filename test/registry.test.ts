@@ -10,6 +10,7 @@ describe("MethodRegistry", () => {
       ...BUILTIN_METHODS[0]!,
       title: "Project override"
     }, "project");
-    expect(registry.get("chat")?.title).toBe("Chat");
+    expect(registry.get("ask")?.title).toBe("Ask");
+    expect(registry.get("chat")).toBeUndefined();
   });
 });

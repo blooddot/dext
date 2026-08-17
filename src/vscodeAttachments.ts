@@ -4,6 +4,7 @@ import { toCodeRef, type TextSnapshot } from "./core/contextResolver.js";
 import {
   formatDextFileReference,
   formatDextFilePathReference,
+  formatDextDirectoryReference,
   type DextFileReference
 } from "./core/fileReference.js";
 import type { CodeRef, Range } from "./core/types.js";
@@ -60,6 +61,15 @@ export async function fileAttachment(uri: vscode.Uri): Promise<AttachmentSnapsho
     text: snapshot.content,
     reference: toCodeRef(snapshot)
   };
+}
+
+export async function directoryAttachment(uri: vscode.Uri): Promise<DextFileReference> {
+  const folder = vscode.workspace.getWorkspaceFolder(uri);
+  if (!folder) throw new Error("Dext directories must stay inside the current workspace.");
+  const stat = await vscode.workspace.fs.stat(uri);
+  if ((stat.type & vscode.FileType.Directory) === 0) throw new Error("Choose a directory for ref.dir.");
+  const includeWorkspaceFolder = (vscode.workspace.workspaceFolders?.length ?? 0) > 1;
+  return formatDextDirectoryReference(vscode.workspace.asRelativePath(uri, includeWorkspaceFolder));
 }
 
 export function clipboardFileReference(reference: CodeRef): DextFileReference | undefined {

@@ -4,6 +4,7 @@ import type { MethodRegistry } from "./registry.js";
 import type {
   CallableDefinition,
   ContextReference,
+  DirectoryReference,
   FieldDefinition,
   WorkflowCall,
   WorkflowCondition,
@@ -30,6 +31,8 @@ type ValueType =
   | { kind: "number" }
   | { kind: "boolean" }
   | { kind: "context" }
+  | { kind: "dir" }
+  | { kind: "object" }
   | { kind: "list"; item: ValueType }
   | { kind: "result"; name: string; fields: Readonly<Record<string, ValueType>> }
   | { kind: "unknown" };
@@ -53,22 +56,14 @@ interface EnvironmentEntry {
 
 const RESULT_TYPES: Readonly<Record<string, ValueType>> = {
   chat: result("ChatResult", { text: { kind: "string" } }),
-  explain: result("ExplainResult", {
+  agent: result("AgentResult", {
     text: { kind: "string" },
-    files: { kind: "list", item: { kind: "context" } }
-  }),
-  edit: result("EditResult", {
     summary: { kind: "string" },
     patch: result("PatchResult", {
       title: { kind: "string" },
       changes: { kind: "list", item: { kind: "unknown" } }
     }),
     files: { kind: "list", item: { kind: "context" } }
-  }),
-  review: result("ReviewResult", {
-    status: { kind: "string", literals: ["pass", "warning", "fail"] },
-    summary: { kind: "string" },
-    findings: { kind: "list", item: { kind: "unknown" } }
   }),
   apply: result("ApplyResult", {
     status: { kind: "string", literals: ["applied", "unchanged", "conflict"] },
@@ -94,6 +89,19 @@ const RESULT_TYPES: Readonly<Record<string, ValueType>> = {
   patch: result("PatchResult", {
     title: { kind: "string" },
     changes: { kind: "list", item: { kind: "unknown" } }
+  }),
+  ui: result("UiResult", {
+    type: { kind: "string", literals: ["choice", "confirm", "input"] },
+    selected: { kind: "list", item: { kind: "string" } },
+    custom: { kind: "string" },
+    confirmed: { kind: "boolean" },
+    value: { kind: "string" }
+  }),
+  mcpRaw: result("McpRawResult", {
+    server: { kind: "string" },
+    tool: { kind: "string" },
+    content: { kind: "string" },
+    structured: { kind: "unknown" }
   })
 };
 
@@ -126,6 +134,32 @@ function decodeString(value: string): string {
     r: "\r",
     t: "\t"
   })[escaped] ?? escaped);
+}
+
+function decodeFormatText(value: string): string {
+  return value
+    .replace(/{{/g, "{")
+    .replace(/}}/g, "}")
+    .replace(/\\([\\'"nrt])/g, (_match, escaped: string) => ({
+      "\\": "\\",
+      "'": "'",
+      '"': '"',
+      n: "\n",
+      r: "\r",
+      t: "\t"
+    })[escaped] ?? escaped);
+}
+
+function formatStringBodyBounds(value: string): { from: number; to: number } | undefined {
+  if (!/^[fF]/.test(value)) return undefined;
+  const quoteStart = 1;
+  const quote = value.slice(quoteStart, quoteStart + 3) === '"""' || value.slice(quoteStart, quoteStart + 3) === "'''"
+    ? value.slice(quoteStart, quoteStart + 3)
+    : value.slice(quoteStart, quoteStart + 1);
+  if ((quote !== '"' && quote !== "'" && quote !== '"""' && quote !== "'''") || !value.endsWith(quote)) {
+    return undefined;
+  }
+  return { from: quoteStart + quote.length, to: value.length - quote.length };
 }
 
 function memberPath(source: string, node: SyntaxNode): string | undefined {
@@ -343,7 +377,7 @@ class Compiler {
       this.error("Invalid API call.", node.from, node.to);
       return undefined;
     }
-    if (method === "ref.file" || method === "ref.symbol") {
+    if (method === "ref.file" || method === "ref.symbol" || method === "ref.dir") {
       if (!referenceOnly) this.error("Reference constructors are values, not workflow steps.", node.from, node.to);
       return undefined;
     }
@@ -365,7 +399,7 @@ class Compiler {
     const values = this.compileArguments(args, definition);
     return {
       call: { kind: "call", method, arguments: values, from: node.from, to: node.to },
-      type: RESULT_TYPES[definition.output.kind] ?? { kind: "unknown" }
+      type: outputType(definition)
     };
   }
 
@@ -386,7 +420,9 @@ class Compiler {
       }
       if (seen.has(name)) this.error(`Argument '${name}' is provided more than once.`, nameNode.from, nameNode.to);
       seen.add(name);
-      const compiled = this.compileExpression(valueNode);
+      const compiled = valueNode.name === "FormatString"
+        ? this.compileFormatString(valueNode, definition, field)
+        : this.compileExpression(valueNode);
       if (compiled) {
         if (!matchesField(compiled.type, field)) {
           this.error(`Argument '${name}' expects ${fieldTypeName(field)}, not ${typeName(compiled.type)}.`, valueNode.from, valueNode.to);
@@ -396,7 +432,7 @@ class Compiler {
       index += 2;
     }
     for (const field of definition.input) {
-      if (field.required && !seen.has(field.name)) {
+      if (field.required && field.default === undefined && !seen.has(field.name)) {
         this.error(`Missing required argument '${field.name}'.`, node.from, node.to);
       }
     }
@@ -406,6 +442,56 @@ class Compiler {
     );
     if (positional.length) this.error("Dext API calls require keyword arguments.", positional[0]!.from, positional[0]!.to);
     return values;
+  }
+
+  private compileFormatString(
+    node: SyntaxNode,
+    definition: CallableDefinition,
+    field: FieldDefinition
+  ): { expression: WorkflowExpression; type: ValueType } | undefined {
+    if (!(["ask", "agent"].includes(definition.id) && field.name === "input")) {
+      this.error("f-strings are only allowed for ask/agent input.", node.from, node.to);
+      return undefined;
+    }
+    const raw = text(this.source, node);
+    const bounds = formatStringBodyBounds(raw);
+    if (!bounds) {
+      this.error("Dext input f-strings must use a single f prefix and a quoted string.", node.from, node.to);
+      return undefined;
+    }
+    const replacements = children(node).filter((child) => child.name === "FormatReplacement");
+    const parts: Extract<WorkflowExpression, { kind: "format" }>['parts'] = [];
+    let cursor = node.from + bounds.from;
+    for (const replacement of replacements) {
+      if (cursor < replacement.from) {
+        parts.push({ kind: "text", text: decodeFormatText(this.source.slice(cursor, replacement.from)) });
+      }
+      const expressions = children(replacement).filter((child) => !["{", "}"].includes(child.name));
+      if (expressions.length !== 1 || !expressions[0]) {
+        this.error("Dext input f-string interpolation does not support conversions or format specifiers.", replacement.from, replacement.to);
+      } else {
+        const compiled = this.compileExpression(expressions[0]);
+        const allowed = compiled
+          && (compiled.expression.kind === "reference"
+            || (compiled.expression.kind === "variable" && compiled.type.kind === "result"));
+        if (!allowed) {
+          this.error(
+            "Dext input f-string interpolation only allows ref.file/ref.dir/ref.selection/ref.active_file/ref.symbol or an earlier Result variable.",
+            expressions[0].from,
+            expressions[0].to
+          );
+        } else {
+          parts.push({ kind: "expression", expression: compiled.expression });
+        }
+      }
+      cursor = replacement.to;
+    }
+    const bodyEnd = node.from + bounds.to;
+    if (cursor < bodyEnd) parts.push({ kind: "text", text: decodeFormatText(this.source.slice(cursor, bodyEnd)) });
+    return {
+      expression: { kind: "format", parts, from: node.from, to: node.to },
+      type: { kind: "string" }
+    };
   }
 
   private compileExpression(node: SyntaxNode): { expression: WorkflowExpression; type: ValueType } | undefined {
@@ -429,13 +515,37 @@ class Compiler {
     }
     if (node.name === "ArrayExpression") {
       const compiled = namedChildren(node).map((child) => this.compileExpression(child)).filter((value) => value !== undefined);
-      const item = compiled[0]?.type ?? { kind: "unknown" as const };
-      for (const value of compiled.slice(1)) {
-        if (typeName(value.type) !== typeName(item)) this.error("List items must have the same type.", value.expression.from, value.expression.to);
-      }
+      const first = compiled[0]?.type ?? { kind: "unknown" as const };
+      const item = compiled.every((value) => typeName(value.type) === typeName(first))
+        ? first
+        : { kind: "unknown" as const };
       return {
         expression: { kind: "list", values: compiled.map((value) => value.expression), from: node.from, to: node.to },
         type: { kind: "list", item }
+      };
+    }
+    if (node.name === "DictionaryExpression") {
+      const entries: Extract<WorkflowExpression, { kind: "object" }>['entries'] = [];
+      const seen = new Set<string>();
+      const parts = children(node);
+      for (let index = 0; index < parts.length; index += 1) {
+        const key = parts[index];
+        if (key?.name !== "String") continue;
+        const colon = parts[index + 1];
+        const value = parts[index + 2];
+        if (colon?.name !== ":" || !value) continue;
+        const name = decodeString(text(this.source, key));
+        if (seen.has(name)) this.error(`Dictionary key '${name}' is provided more than once.`, key.from, key.to);
+        seen.add(name);
+        const compiled = this.compileExpression(value);
+        if (compiled) entries.push({ key: name, value: compiled.expression, from: key.from, to: value.to });
+        index += 2;
+      }
+      const invalidKey = parts.find((part, index) => part.name === ":" && parts[index - 1]?.name !== "String");
+      if (invalidKey) this.error("Dext dictionary keys must be strings.", invalidKey.from, invalidKey.to);
+      return {
+        expression: { kind: "object", entries, from: node.from, to: node.to },
+        type: { kind: "object" }
       };
     }
     if (node.name === "VariableName") {
@@ -471,17 +581,22 @@ class Compiler {
     if (node.name === "CallExpression") {
       const path = memberPath(this.source, namedChildren(node)[0]!);
       const args = namedChildren(node).find((child) => child.name === "ArgList");
-      if ((path === "ref.file" || path === "ref.symbol") && args) {
+      if ((path === "ref.file" || path === "ref.symbol" || path === "ref.dir") && args) {
         const values = namedChildren(args);
         if (values.length !== 1 || values[0]?.name !== "String") {
           this.error(`${path} requires exactly one string argument.`, args.from, args.to);
           return undefined;
         }
         const value = decodeString(text(this.source, values[0]));
-        const reference: ContextReference = path === "ref.file"
+        const reference: ContextReference | DirectoryReference = path === "ref.file"
           ? { kind: "file", path: value }
-          : { kind: "symbol", name: value };
-        return { expression: { kind: "reference", reference, from: node.from, to: node.to }, type: { kind: "context" } };
+          : path === "ref.symbol"
+            ? { kind: "symbol", name: value }
+            : { kind: "dir", path: value };
+        return {
+          expression: { kind: "reference", reference, from: node.from, to: node.to },
+          type: path === "ref.dir" ? { kind: "dir" } : { kind: "context" }
+        };
       }
       if (this.options.allowNestedCalls && args) {
         const method = path ? resolveAlias(path, this.options.aliases) : undefined;
@@ -503,10 +618,10 @@ class Compiler {
         const values = this.compileArguments(args, definition);
         return {
           expression: { kind: "call", call: { kind: "call", method, arguments: values, from: node.from, to: node.to }, from: node.from, to: node.to },
-          type: RESULT_TYPES[definition.output.kind] ?? { kind: "unknown" }
+          type: outputType(definition)
         };
       }
-      this.error("Nested calls are limited to ref.file(...) and ref.symbol(...).", node.from, node.to);
+      this.error("Nested calls are limited to ref.file(...), ref.dir(...), and ref.symbol(...).", node.from, node.to);
       return undefined;
     }
     this.error(`Expression '${node.name}' is not allowed in Dext workflows.`, node.from, node.to);
@@ -534,9 +649,18 @@ function fieldType(field: FieldDefinition): ValueType {
     ? { kind: "string", literals: field.values }
     : { kind: "string" };
   else if (field.type === "context") value = { kind: "context" };
+  else if (field.type === "dir") value = { kind: "dir" };
+  else if (field.type === "object") value = { kind: "object" };
   else if (field.type === "result") value = result("Result", {});
   else value = { kind: field.type };
   return field.multiple ? { kind: "list", item: value } : value;
+}
+
+function outputType(definition: CallableDefinition): ValueType {
+  if (!definition.output.fields) return RESULT_TYPES[definition.output.kind] ?? { kind: "unknown" };
+  const fields: Record<string, ValueType> = {};
+  for (const field of definition.output.fields) fields[field.name] = fieldType(field);
+  return result(definition.output.resultType ?? `${definition.output.kind}Result`, fields);
 }
 
 function matchesField(actual: ValueType, field: FieldDefinition): boolean {
@@ -587,6 +711,7 @@ function fieldTypeName(field: FieldDefinition): string {
 function typeName(type: ValueType): string {
   if (type.kind === "list") return `${typeName(type.item)}[]`;
   if (type.kind === "result") return type.name;
+  if (type.kind === "object") return "dict[str, object]";
   return type.kind;
 }
 

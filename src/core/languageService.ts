@@ -1,6 +1,8 @@
 import type { MethodRegistry } from "./registry.js";
 import type { FieldDefinition, RegisteredCallable } from "./types.js";
+import { formatFieldType, formatMethodParameter, formatMethodSignature } from "./methodSignature.js";
 import { compileWorkflow, parseWorkflowImports } from "./workflow.js";
+import type { SkillDescriptor } from "./skillCatalog.js";
 
 export interface CompletionItem {
   label: string;
@@ -40,18 +42,6 @@ export interface WorkflowDocumentState {
 export interface ApiCompletionContext {
   namespace: string;
   imported: string[];
-}
-
-function formatParameter(field: FieldDefinition): string {
-  const baseType = (type: FieldDefinition["type"]): string => type === "enum"
-    ? field.values?.join(" | ") ?? "string"
-    : type;
-  const base = [field.type, ...(field.accepts ?? [])].map(baseType).join(" | ");
-  return `${field.name}${field.required ? "" : "?"}=${field.multiple ? `${base} | ${base}[]` : base}`;
-}
-
-function methodSignature(method: RegisteredCallable): string {
-  return `${method.id}(${method.input.map(formatParameter).join(", ")}) -> ${method.output.kind}`;
 }
 
 interface OpenCall {
@@ -115,6 +105,7 @@ function activeArgument(body: string): string {
 
 const RESULT_FIELDS: Readonly<Record<string, readonly string[]>> = {
   chat: ["text"],
+  agent: ["text", "summary", "patch", "files"],
   explain: ["text", "files"],
   edit: ["summary", "patch", "files"],
   review: ["status", "summary", "findings"],
@@ -124,11 +115,13 @@ const RESULT_FIELDS: Readonly<Record<string, readonly string[]>> = {
   text: ["text"],
   code: ["code", "language", "title"],
   plan: ["title", "steps"],
-  patch: ["title", "changes"]
+  patch: ["title", "changes"],
+  ui: ["type", "selected", "custom", "confirmed", "value"]
 };
 
 const RESULT_FIELD_TYPES: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   chat: { text: "string" },
+  agent: { text: "string", summary: "string | undefined", patch: "PatchResult | undefined", files: "CodeRef[] | undefined" },
   explain: { text: "string", files: "CodeRef[]" },
   edit: { summary: "string", patch: "PatchResult", files: "CodeRef[]" },
   review: { status: '"pass" | "warning" | "fail"', summary: "string", findings: "ReviewFinding[]" },
@@ -138,20 +131,32 @@ const RESULT_FIELD_TYPES: Readonly<Record<string, Readonly<Record<string, string
   text: { text: "string" },
   code: { code: "string", language: "string", title: "string | undefined" },
   plan: { title: "string", steps: "PlanStep[]" },
-  patch: { title: "string", changes: "PatchChange[]" }
+  patch: { title: "string", changes: "PatchChange[]" },
+  ui: { type: '"choice" | "confirm" | "input"', selected: "string[]", custom: "string | undefined", confirmed: "boolean", value: "string | undefined" }
 };
 
 function resultTypeName(output: string): string {
   return `${output.slice(0, 1).toUpperCase()}${output.slice(1)}Result`;
 }
 
+function outputFields(method: RegisteredCallable | undefined): readonly FieldDefinition[] {
+  if (!method) return [];
+  if (method.output.fields) return method.output.fields;
+  return (RESULT_FIELDS[method.output.kind] ?? []).map((name) => ({ name, type: "string" }));
+}
+
 export class DextLanguageService {
   private customApiIds = new Set<string>();
+  private skills: SkillDescriptor[] = [];
 
   constructor(private readonly registry: MethodRegistry) {}
 
   setCustomApiIds(ids: ReadonlySet<string>): void {
     this.customApiIds = new Set(ids);
+  }
+
+  setSkillCompletions(skills: readonly SkillDescriptor[]): void {
+    this.skills = [...skills];
   }
 
   private visibleMethodEntries(source: string, customApisAreGlobal = true): VisibleMethod[] {
@@ -202,13 +207,13 @@ export class DextLanguageService {
       return this.apiNamespaceItems(before, item);
     }
     if (/:\s*[A-Za-z_]*$/.test(before)) {
-      const types = ["Context", "Result", "list", "Literal", "ChatResult", "ExplainResult", "EditResult", "ReviewResult", "ApplyResult", "TerminalResult", "PrintResult", "TextResult", "CodeResult", "PlanResult", "PatchResult"];
+          const types = ["Context", "Result", "list", "Literal", "ChatResult", "AgentResult", "ApplyResult", "TerminalResult", "PrintResult", "McpRawResult", "TextResult", "CodeResult", "PlanResult", "PatchResult"];
       const typeFragment = /[A-Za-z_]*$/.exec(before)?.[0] ?? "";
       return types.filter((type) => type.startsWith(typeFragment)).map((type) => item(type, type, "Dext type", "value"));
     }
     if (/\bmain\([^)]*$/.test(before)) {
       const definition = apiId ? this.registry.get(apiId) : undefined;
-      if (definition) return definition.input.map((field) => item(field.name, `${field.name}: `, formatParameter(field), "parameter"));
+      if (definition) return definition.input.map((field) => item(field.name, `${field.name}: `, formatMethodParameter(field), "parameter"));
     }
     return this.documentCompletions(source, cursor, false);
   }
@@ -240,7 +245,7 @@ export class DextLanguageService {
       const rest = method.id.slice(namespace.length + 1);
       if (!rest.includes(".") && rest.startsWith(fragment)) names.set(rest, method);
     }
-    return [...names].map(([label, method]) => item(label, label, methodSignature(method), "method"));
+    return [...names].map(([label, method]) => item(label, label, formatMethodSignature(method), "method"));
   }
 
   inputDocument(source: string): WorkflowDocumentState {
@@ -272,6 +277,7 @@ export class DextLanguageService {
         ["selection", "selection", "active editor selection"],
         ["active_file", "active_file", "complete active editor file"],
         ["file", 'file("")', "workspace file or range"],
+        ["dir", 'dir("")', "workspace directory without expanding its contents"],
         ["symbol", 'symbol("")', "workspace symbol declaration"]
       ];
       return references.filter(([label]) => label.startsWith(fragment))
@@ -311,11 +317,11 @@ export class DextLanguageService {
         `^\\s*${member[1]}\\s*=\\s*([A-Za-z_][A-Za-z0-9_.]*)\\(`,
         "m"
       ).exec(source);
-      const output = assignment ? this.resolveMethod(source, assignment[1] ?? "", customApisAreGlobal)?.output.kind : undefined;
-      if (output) {
-        return (RESULT_FIELDS[output] ?? [])
-          .filter((field) => field.startsWith(member[2] ?? ""))
-          .map((field) => item(field, field, `${output} result field`, "parameter"));
+      const method = assignment ? this.resolveMethod(source, assignment[1] ?? "", customApisAreGlobal) : undefined;
+      if (method) {
+        return outputFields(method)
+          .filter((field) => field.name.startsWith(member[2] ?? ""))
+          .map((field) => item(field.name, field.name, `${method.output.resultType ?? resultTypeName(method.output.kind)} field`, "parameter"));
       }
     }
 
@@ -335,6 +341,7 @@ export class DextLanguageService {
               ["ref.selection", "ref.selection", "active editor selection"],
               ["ref.active_file", "ref.active_file", "complete active editor file"],
               ["ref.file", 'ref.file("")', "workspace file or range"],
+              ["ref.dir", 'ref.dir("")', "workspace directory without expanding its contents"],
               ["ref.symbol", 'ref.symbol("")', "workspace symbol declaration"]
             ] as const;
             const referenceItems = references.filter(([label]) => label.startsWith(fragment)).map(([label, insertText, detail]) => ({
@@ -398,6 +405,17 @@ export class DextLanguageService {
               replaceEnd: cursor
             }));
           }
+          if (call.method === "skill" && assignment[1] === "skill") {
+            const fragment = value.startsWith('"') || value.startsWith("'") ? value.slice(1) : value;
+            return this.skills.filter((skill) => skill.id.startsWith(fragment)).map((skill) => ({
+              label: skill.id,
+              insertText: `"${skill.id}"`,
+              detail: `${skill.title} - ${skill.description}`,
+              kind: "value" as const,
+              replaceStart: valueStart,
+              replaceEnd: cursor
+            }));
+          }
           return [];
         }
         const used = new Set(
@@ -406,7 +424,7 @@ export class DextLanguageService {
         const fragment = /[A-Za-z_][A-Za-z0-9_]*$/.exec(segment)?.[0] ?? "";
         return method.input
           .filter((field) => !used.has(field.name) && field.name.startsWith(fragment))
-          .map((field) => item(field.name, `${field.name}=`, formatParameter(field), "parameter"));
+          .map((field) => item(field.name, `${field.name}=`, formatMethodParameter(field), "parameter"));
       }
     }
 
@@ -461,21 +479,24 @@ export class DextLanguageService {
         return {
           rangeStart: from,
           rangeEnd: to,
-          label: methodSignature(method),
+          label: formatMethodSignature(method),
           documentation: method.description
         };
       }
       const member = /^([A-Za-z_]\w*)\.([A-Za-z_]\w*)$/.exec(match[0]);
       if (member) {
         const assignment = new RegExp(`^\\s*${member[1]}\\s*=\\s*([A-Za-z_][A-Za-z0-9_.]*)\\(`, "m").exec(source);
-        const output = assignment ? this.resolveMethod(source, assignment[1] ?? "", customApisAreGlobal)?.output.kind : undefined;
-        const type = output ? RESULT_FIELD_TYPES[output]?.[member[2] ?? ""] : undefined;
-        if (output && type) {
+        const outputMethod = assignment ? this.resolveMethod(source, assignment[1] ?? "", customApisAreGlobal) : undefined;
+        const field = outputFields(outputMethod).find((candidate) => candidate.name === member[2]);
+        const type = outputMethod?.output.fields
+          ? field ? formatFieldType(field) : undefined
+          : outputMethod ? RESULT_FIELD_TYPES[outputMethod.output.kind]?.[member[2] ?? ""] : undefined;
+        if (outputMethod && type) {
           return {
             rangeStart: from,
             rangeEnd: to,
             label: `${member[0]}: ${type}`,
-            documentation: `${resultTypeName(output)} field returned by ${assignment?.[1] ?? output}.`
+            documentation: `${outputMethod.output.resultType ?? resultTypeName(outputMethod.output.kind)} field returned by ${assignment?.[1] ?? outputMethod.output.kind}.`
           };
         }
       }
@@ -495,6 +516,7 @@ export class DextLanguageService {
         "ref.selection": "The currently selected text and range in the active editor.",
         "ref.active_file": "The complete contents of the active editor file.",
         "ref.file": "A workspace file, optionally narrowed to a line and column range.",
+        "ref.dir": "A workspace directory reference. Its contents are never expanded implicitly.",
         "ref.symbol": "A workspace symbol lookup that resolves to its declaration and source range."
       };
       const documentation = docs[match[0]];
@@ -518,11 +540,11 @@ export class DextLanguageService {
       Math.max(0, method.input.length - 1)
     );
     return {
-      label: methodSignature(method),
+      label: formatMethodSignature(method),
       documentation: method.description,
       activeParameter,
       parameters: method.input.map((field) => ({
-        label: formatParameter(field),
+        label: formatMethodParameter(field),
         documentation: field.description ?? ""
       }))
     };

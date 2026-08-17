@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import type { ContextHost, TextSnapshot } from "./core/contextResolver.js";
 import { parseFileReference } from "./core/fileReference.js";
-import type { Range } from "./core/types.js";
+import type { DirRef, Range } from "./core/types.js";
 
 function toRange(range: vscode.Range): Range {
   return {
@@ -58,6 +58,29 @@ function workspaceFileUri(filePath: string): { uri: vscode.Uri; range?: vscode.R
       )
     : undefined;
   return { uri, ...(range ? { range } : {}) };
+}
+
+function workspaceDirectoryUri(directoryPath: string): vscode.Uri | undefined {
+  const folders = vscode.workspace.workspaceFolders;
+  let folder = folders?.[0];
+  if (!folder) return undefined;
+  const normalized = directoryPath.replaceAll("\\", "/");
+  let segments = normalized.split("/");
+  if (folders && folders.length > 1) {
+    const matchingFolder = folders.find((candidate) => candidate.name === segments[0]);
+    if (matchingFolder) {
+      folder = matchingFolder;
+      segments = segments.slice(1);
+    }
+  }
+  if (
+    normalized.startsWith("/")
+    || /^[A-Za-z]:/.test(normalized)
+    || segments.some((segment) => !segment || segment === "." || segment === "..")
+  ) {
+    throw new Error("ref.dir paths must stay inside the current workspace.");
+  }
+  return vscode.Uri.joinPath(folder.uri, ...segments);
 }
 
 async function validatedDocumentRange(
@@ -135,5 +158,15 @@ export class VsCodeContextHost implements ContextHost {
       return undefined;
     }
     return snapshot(match.location.uri, match.location.range, match.name);
+  }
+
+  async dir(directoryPath: string): Promise<DirRef | undefined> {
+    const uri = workspaceDirectoryUri(directoryPath);
+    if (!uri || !vscode.workspace.getWorkspaceFolder(uri)) return undefined;
+    const stat = await vscode.workspace.fs.stat(uri);
+    if ((stat.type & vscode.FileType.Directory) === 0) {
+      throw new Error("ref.dir requires a workspace directory.");
+    }
+    return { kind: "dirRef", uri: uri.toString(), path: directoryPath.replaceAll("\\", "/") };
   }
 }

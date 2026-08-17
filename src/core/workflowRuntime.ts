@@ -3,6 +3,7 @@ import { ExecutionCancelledError } from "./executionErrors.js";
 import type {
   DextResult,
   CodeRef,
+  InterpolatedInput,
   InputExecutionResponse,
   InvocationValue,
   WorkflowCondition,
@@ -104,6 +105,9 @@ export class WorkflowRuntime {
     if (expression.kind === "literal") return expression.value;
     if (expression.kind === "reference") return expression.reference;
     if (expression.kind === "list") return expression.values.map((value) => this.evaluate(value, environment)) as InvocationValue[];
+    if (expression.kind === "object") {
+      return Object.fromEntries(expression.entries.map((entry) => [entry.key, this.evaluate(entry.value, environment)]));
+    }
     if (expression.kind === "variable") {
       const value = environment.get(expression.name);
       if (value === undefined) throw new Error(`Variable '${expression.name}' is unavailable.`);
@@ -111,6 +115,9 @@ export class WorkflowRuntime {
     }
     if (expression.kind === "call") {
       throw new Error("Nested API calls must be evaluated asynchronously.");
+    }
+    if (expression.kind === "format") {
+      throw new Error("Dext input f-strings must be evaluated asynchronously.");
     }
     const object = this.evaluate(expression.object, environment);
     if (typeof object !== "object" || object === null || Array.isArray(object)) {
@@ -126,6 +133,23 @@ export class WorkflowRuntime {
     environment: Map<string, RuntimeValue>,
     metadata: Readonly<ExecutionMetadata> = {}
   ): Promise<RuntimeValue> {
+    if (expression.kind === "format") {
+      const parts: InterpolatedInput["parts"] = [];
+      for (const part of expression.parts) {
+        if (part.kind === "text") {
+          if (part.text) parts.push(part.text);
+          continue;
+        }
+        const value = await this.evaluateAsync(part.expression, environment, metadata);
+        if (typeof value === "string") parts.push(value);
+        else if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+          parts.push(value as Exclude<InterpolatedInput["parts"][number], string>);
+        } else {
+          throw new Error("Dext input f-string interpolation resolved to an unsupported value.");
+        }
+      }
+      return { kind: "interpolatedInput", parts };
+    }
     if (expression.kind === "call") {
       const response = await this.runtime.execute({
         kind: "invocation",
@@ -149,6 +173,13 @@ export class WorkflowRuntime {
     }
     if (expression.kind === "list") {
       return Promise.all(expression.values.map((value) => this.evaluateAsync(value, environment, metadata))) as Promise<InvocationValue>;
+    }
+    if (expression.kind === "object") {
+      const entries = await Promise.all(expression.entries.map(async (entry) => [
+        entry.key,
+        await this.evaluateAsync(entry.value, environment, metadata)
+      ] as const));
+      return Object.fromEntries(entries);
     }
     return this.evaluate(expression, environment);
   }

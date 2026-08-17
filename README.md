@@ -6,54 +6,56 @@ Without an Agent profile, Dext validates workflow structure, resolves immutable 
 
 ## Workflow language
 
-Natural language must be explicit through `chat(...)`; arbitrary text is a compile error.
+Natural language must be explicit through an API string argument; arbitrary text is a compile error.
 
 ```python
-analysis = chat(
-    message="""Explain this implementation and give refactoring requirements.""",
-    context=[ref.selection],
+analysis = ask(input=f"""Explain this implementation and give refactoring requirements:
+{ref.selection}""")
+
+preview = agent(
+    input=f"Implement the requested refactoring in {ref.selection}",
+    apply=False,
 )
 
-edit = code.edit(
-    target=[ref.selection],
-    instruction=analysis.text,
-)
-
-review = code.review(
-    target=edit.files,
-    instruction=edit.summary,
-)
-
-if review.status == "pass":
-    applied = code.apply(result=edit)
+if preview.patch:
+    applied = apply(result=preview)
 ```
 
-The input workflow language supports assignment, keyword-only API calls, strings (including triple-quoted strings), numbers, booleans, homogeneous lists, result member access, comments, and `if`/`else` with `==` or `!=`. `.dx` API files additionally support one typed `main()` function and explicit imports. User functions/classes, loops, reassignment, `eval`, `exec`, and system/file/network APIs are rejected. Execution is sequential; unselected and downstream steps are reported as `skipped`.
+The input workflow language supports assignment, keyword-only API calls, strings (including triple-quoted strings), numbers, booleans, homogeneous lists, result member access, comments, and `if`/`else` with `==` or `!=`. Restricted Python f-strings are accepted only as the `input` argument of `ask` and `agent`: an interpolation may be one `ref.*` value or a prior `Result`, never an arbitrary Python expression. `.dx` API files additionally support one typed `main()` function and explicit imports. User functions/classes, loops, reassignment, `eval`, `exec`, and system/file/network APIs are rejected. Execution is sequential; unselected and downstream steps are reported as `skipped`.
 
 ## Built-in API
 
-- `chat(...) -> ChatResult`
-- `code.explain(...) -> ExplainResult`
-- `code.edit(...) -> EditResult`
-- `code.review(...) -> ReviewResult`
-- `code.apply(...) -> ApplyResult`
-- `terminal.run(command, cwd=".", timeout_ms=120000) -> TerminalResult`
+- `ask(input, workspace?) -> ChatResult`
+- `agent(input, apply=true, workspace?) -> AgentResult`
+- `apply(result) -> ApplyResult`
+- `terminal(command, cwd=".", timeout_ms=120000) -> TerminalResult`
+- `skill(skill, input, workspace?) -> ChatResult`
+- `mcp(tool, input={}) -> McpRawResult`
 - `print(text, label?) -> PrintResult`
+- `ui.choose(...)`, `ui.confirm(...)`, `ui.input(...) -> UiResult`
 
-Every API output implements the shared `Result` contract. `code.review` and `code.explain` accept either code context or any prior `Result`; `code.apply(result=...)` accepts a `Result` and applies it when that result contains a patch. Agent CLIs receive prior results as versioned `dext-result` JSON envelopes instead of interpolated strings. Result variables and fields such as `edit_result: EditResult` and `edit_result.patch: PatchResult` are available to completion and hover. `ReviewStatus` is the string union `"pass" | "warning" | "fail"`.
+Every API output implements the shared `Result` contract. `ask` handles read-only explanation and analysis; `agent` handles continuous tasks and may return an auditable patch. `apply(result=...)` applies an `AgentResult` patch when one is present. Agent CLIs receive prior results as versioned `dext-result` JSON envelopes instead of interpolated strings. Result variables and fields such as `agent_result: AgentResult` and `agent_result.patch: PatchResult` are available to completion and hover.
 
-`terminal.run` is available only in a trusted local `file` workspace. Its `cwd` must stay inside the workspace, every command requires a VS Code modal confirmation, the timeout is capped at 10 minutes, and captured output is bounded. It returns `TerminalStatus = "succeeded" | "failed" | "timed_out"`; a nonzero exit code is a typed failed result, while rejecting the confirmation cancels that workflow step and skips downstream steps.
+`ask` is always read-only. `agent` defaults `apply=true`: in a trusted local workspace, the selected workspace is the Agent CLI working directory and the Agent may edit only that workspace. Set `apply=false` to require a read-only preview; when a change is proposed, the resulting `AgentResult` may include a patch for `apply`. Both APIs default `workspace` to the current project root.
+
+```python
+answer = ask(input=f"Explain this code: {ref.selection}")
+preview = agent(input=f"Plan the requested change in {ref.file('docs/drag-drop.md')}", apply=False)
+```
+
+`terminal` is available only in a trusted local `file` workspace. Its `cwd` must stay inside the workspace, every command requires a VS Code modal confirmation, the timeout is capped at 10 minutes, and captured output is bounded. It returns `TerminalStatus = "succeeded" | "failed" | "timed_out"`; a nonzero exit code is a typed failed result, while rejecting the confirmation cancels that workflow step and skips downstream steps.
 
 `print` renders its typed text result only in Dext Output and never writes to the integrated terminal.
 
-Context values are `ref.selection`, `ref.active_file`, `ref.file("path")`, and `ref.symbol("name")`:
+Context values are `ref.selection`, `ref.active_file`, `ref.file("path")`, `ref.dir("path")`, and `ref.symbol("name")`:
 
 - `ref.selection` resolves the current selection in the active editor.
 - `ref.active_file` resolves the complete active editor file.
 - `ref.file("path")` resolves a workspace file or an optional line/column range.
+- `ref.dir("path")` resolves a workspace-contained directory without reading or expanding its contents.
 - `ref.symbol("name")` asks VS Code's workspace symbol provider for a declaration and its source range.
 
-Copying a VS Code selection, choosing a file, or dropping one into Dext inserts an atomic `ref.file("path#Lstart,column-Lend,column")` chip. The chip can be removed atomically, participates in undo/redo, and opens the referenced file and range when clicked.
+Copying a VS Code selection, choosing a file or folder, or dropping one into Dext inserts an atomic `ref.file(...)` or `ref.dir(...)` chip. The chip can be removed atomically and participates in undo/redo.
 
 The editor uses CodeMirror's Python grammar for syntax highlighting, indentation, bracket matching, and native editor behavior. Dext adds API completion, keyword and result-field completion, signature help, hover documentation, exact compiler diagnostics, and a lint gutter.
 
@@ -62,15 +64,51 @@ The editor uses CodeMirror's Python grammar for syntax highlighting, indentation
 Custom APIs live in `.dext/api/**/*.dx`. Directory segments become namespaces and each file exports one API through `main()`.
 
 ```python
-# .dext/api/team/review.dx -> team.review
-from common import explain
+# .dext/api/team/analyze.dx -> team.analyze
+from common import ask
 
-def main(target: Context) -> ReviewResult:
-    analysis = explain(target=target)
-    return code.review(target=target, instruction=analysis.text)
+def main(input: str) -> ChatResult:
+    return ask(input=input)
 ```
 
 `.dx` uses a restricted Python-like syntax. It is parsed by Dext and never starts a Python interpreter. Imports are explicit and only refer to other `.dext/api` files; external files are not read until VS Code marks the workspace as trusted.
+
+Typed results use Python's standard `TypedDict`, `Literal`, and `NotRequired` annotations rather than Dext-specific classes. The declared `kind` must be one `Literal` string; fields become the API output JSON Schema and member completions. TypedDict inheritance, `Protocol`, and complex generic types are intentionally unsupported.
+
+```python
+from typing import Literal, NotRequired, TypedDict
+
+class DocumentResult(TypedDict):
+    kind: Literal["document"]
+    uri: str
+    content: str
+    title: NotRequired[str]
+```
+
+Standard skills are discovered in `<workspace>/.agents/skills`, `<workspace>/dext/skills`, then `dext.skillDirs`; earlier directories win duplicate names. `skill` defaults `workspace` to the current project and injects the selected `SKILL.md` into the current Agent task. `ui.*` waits for a semantic user answer and resumes the same workflow. `mcp` only accepts configured full tool names in `dext.mcpTools`, such as `docs.read`; the registry resolves that exact name to its configured server and underlying tool without splitting it. Duplicate full names are configuration errors. The initial transport is local stdio: each call sends JSON-RPC `initialize`, `notifications/initialized`, and `tools/call`, then closes the process. Commands inherit their environment; Dext neither stores nor renders credentials. MCP `structuredContent` is preserved as `McpRawResult.structured`; a `.dx` API returning a `TypedDict` adapts that structure into its declared result and validates it strictly.
+
+```json
+{
+  "dext.mcpServers": [
+    { "name": "docs", "transport": "stdio", "command": "my-docs-mcp", "args": ["--stdio"] }
+  ],
+  "dext.mcpTools": [
+    { "server": "docs", "tool": "read", "description": "Read a document" }
+  ]
+}
+```
+
+```python
+from typing import Literal, TypedDict
+
+class DocumentResult(TypedDict):
+    kind: Literal["document"]
+    uri: str
+    content: str
+
+def main(input: dict[str, object]) -> DocumentResult:
+    return mcp(tool="docs.read", input=input)
+```
 
 Agent profiles are stored in VS Code extension global storage. The Run row exposes Agent, Model, Reasoning, and Speed selectors. Codex profiles read the local Codex model cache when available, including supported reasoning levels and speed tiers. Claude Code profiles use its native `opus`/`sonnet` aliases and current effort levels. A `.dx` file may override the Agent and Model with `@api(agent="codex", model="...")`; otherwise the Run selection is used. `Dext: Configure Agent` edits executable commands and custom model labels without handling credentials.
 

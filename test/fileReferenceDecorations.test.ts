@@ -5,7 +5,7 @@ describe("CodeMirror file reference decorations", () => {
   it("finds complete file references and preserves their full document ranges", () => {
     const first = 'ref.file("src/a.ts#L3,1-L4,2")';
     const second = 'ref.file ( "src/b.ts" )';
-    const source = `code.review(target=${first}, related=[${second}])`;
+    const source = 'ask(input=f"Review {' + first + '} and {' + second + '}")';
     expect(fileReferenceOccurrences(source)).toEqual([
       {
         start: source.indexOf(first),

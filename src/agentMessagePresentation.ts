@@ -1,9 +1,3 @@
-import type { OutputKind } from "./core/types.js";
-
-const RESULT_KINDS = new Set<OutputKind>([
-  "chat", "explain", "edit", "review", "apply", "terminal", "print", "text", "code", "plan", "patch"
-]);
-
 export interface AgentMessageDetail {
   text: string;
   tone: "error" | "warning" | "info";
@@ -80,7 +74,7 @@ function parsedResult(text: string): Record<string, unknown> | undefined {
   try {
     const parsed = record(JSON.parse(source));
     const value = parsed?.kind === "dext-result" ? record(parsed.value) : parsed;
-    return value && RESULT_KINDS.has(value.kind as OutputKind) ? value : undefined;
+    return value && typeof value.kind === "string" && value.kind.length > 0 ? value : undefined;
   } catch {
     return undefined;
   }
@@ -152,7 +146,7 @@ export function presentAgentMessage(raw: string): AgentMessagePresentation {
     sections: []
   };
 
-  const kind = value.kind as OutputKind;
+  const kind = value.kind as string;
   const patch = record(value.patch);
   const changes = patchChanges(kind === "edit" ? patch?.changes : value.changes);
   const references = codeReferences(value.files);
@@ -221,6 +215,12 @@ export function presentAgentMessage(raw: string): AgentMessagePresentation {
     if (label) meta.push(label);
   } else if (kind === "text") {
     title = "Text result";
+  } else if (kind === "mcpRaw") {
+    title = "MCP result";
+    text = string(value.content) || JSON.stringify(value.structured ?? {}, null, 2);
+  } else {
+    title = kind;
+    text = JSON.stringify(value, null, 2);
   }
 
   return { structured: true, kind, title, text, meta, details, changes, references, sections };

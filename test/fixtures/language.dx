@@ -1,2 +1,2 @@
-def main(target: Context) -> ExplainResult:
-    return code.explain(target=target)
+def main(input: str) -> ChatResult:
+    return ask(input=input)

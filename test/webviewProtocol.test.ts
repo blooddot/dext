@@ -41,7 +41,7 @@ describe("Webview protocol", () => {
       .toBe(false);
     expect(webviewRequestSchema.safeParse({
       type: "executeCode",
-      source: "chat(message=\"hello\")"
+      source: "ask(input=\"hello\")"
     }).success).toBe(false);
     expect(webviewRequestSchema.safeParse({
       type: "dropFiles",

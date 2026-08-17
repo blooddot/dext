@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { homedir } from "node:os";
 import { delimiter, extname, isAbsolute, join } from "node:path";
@@ -20,6 +20,8 @@ export interface AgentExecutionRequest {
   resolved: ResolvedInvocation;
   contract: AxMethodContract;
   metadata: Readonly<ExecutionMetadata>;
+  /** Only agent(apply=true) may receive a trusted workspace-write sandbox. */
+  allowWorkspaceWrite?: boolean;
   onEvent?: (event: AgentStreamEvent) => void;
 }
 
@@ -138,50 +140,6 @@ export function displayValue(value: unknown): unknown {
   return value;
 }
 
-function isCodeReference(value: unknown): value is ResolvedInvocation["context"][number] {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    && "kind" in value && value.kind === "codeRef";
-}
-
-function previewFileName(uri: string, index: number): string {
-  const tail = decodeURIComponent(uri.replaceAll("\\", "/").split("/").pop() ?? "");
-  const safe = tail.replace(/[^A-Za-z0-9._-]/g, "_");
-  return safe || `target-${index + 1}.txt`;
-}
-
-async function isolatedEditRequest(
-  request: AgentExecutionRequest,
-  directory: string
-): Promise<AgentExecutionRequest> {
-  if (request.method.id !== "code.edit") return request;
-  const raw = request.resolved.arguments.target;
-  const targets = (Array.isArray(raw) ? raw : [raw]).filter(isCodeReference);
-  const replacements = new Map<string, ResolvedInvocation["context"][number]>();
-  for (const [index, target] of targets.entries()) {
-    const relative = `target-${index + 1}/${previewFileName(target.uri, index)}`;
-    const filePath = join(directory, ...relative.split("/"));
-    await mkdir(join(directory, `target-${index + 1}`), { recursive: true });
-    await writeFile(filePath, target.content, "utf8");
-    replacements.set(`${target.uri}|${target.contentHash}`, { ...target, uri: relative });
-  }
-  const replace = (value: unknown): unknown => {
-    if (Array.isArray(value)) return value.map(replace);
-    if (!isCodeReference(value)) return value;
-    return replacements.get(`${value.uri}|${value.contentHash}`) ?? value;
-  };
-  return {
-    ...request,
-    cwd: directory,
-    resolved: {
-      ...request.resolved,
-      arguments: Object.fromEntries(
-        Object.entries(request.resolved.arguments).map(([name, value]) => [name, replace(value)])
-      ) as ResolvedInvocation["arguments"],
-      context: request.resolved.context.map((value) => replace(value) as ResolvedInvocation["context"][number])
-    }
-  };
-}
-
 type JsonSchema = Record<string, unknown>;
 
 function nullableSchema(schema: JsonSchema): JsonSchema {
@@ -227,8 +185,13 @@ export function agentPayload(request: AgentExecutionRequest): string {
   return JSON.stringify({
     api: request.method.id,
     description: request.method.description,
+    ...(request.metadata.instruction ? { instruction: request.metadata.instruction } : {}),
     arguments: Object.fromEntries(Object.entries(request.resolved.arguments).map(([key, value]) => [key, displayValue(value)])),
-    context: request.resolved.context.map(displayValue)
+    // ask/agent inline references are rendered in their input string
+    // at the original f-string location, so do not duplicate their content.
+    context: ["ask", "agent"].includes(request.method.id)
+      ? []
+      : request.resolved.context.map(displayValue)
   });
 }
 
@@ -460,7 +423,7 @@ function claudeFailure(output: string): string | undefined {
 
 /** Arguments for Claude Code's non-interactive, structured streaming mode. */
 export function claudeCliArguments(
-  options: Pick<AgentExecutionRequest, "model" | "reasoningEffort">,
+  options: Pick<AgentExecutionRequest, "model" | "reasoningEffort" | "allowWorkspaceWrite">,
   outputSchema: object
 ): string[] {
   return [
@@ -470,26 +433,27 @@ export function claudeCliArguments(
     "--include-partial-messages",
     "--json-schema", JSON.stringify(outputSchema),
     "--no-session-persistence",
-    "--permission-mode", "plan",
+    "--permission-mode", options.allowWorkspaceWrite ? "acceptEdits" : "plan",
     ...(options.model ? ["--model", options.model] : []),
     ...(options.reasoningEffort ? ["--effort", options.reasoningEffort] : [])
   ];
 }
 
-/** Arguments for Codex's ephemeral, read-only structured execution mode. */
+/** Arguments for Codex's structured execution mode. Workspace writes are only
+ * enabled for an explicitly trusted agent(apply=true) request. */
 export function codexCliArguments(
-  options: Pick<AgentExecutionRequest, "model" | "reasoningEffort">,
+  options: Pick<AgentExecutionRequest, "model" | "reasoningEffort" | "allowWorkspaceWrite">,
   schemaPath: string,
-  codeEdit: boolean,
+  allowWorkspaceWrite: boolean,
   serviceTier?: string
 ): string[] {
   return [
     "exec",
     "--json",
     "--ephemeral",
-    "--sandbox", "read-only",
+    "--sandbox", allowWorkspaceWrite ? "workspace-write" : "read-only",
     "--output-schema", schemaPath,
-    ...(codeEdit ? ["--skip-git-repo-check"] : []),
+    ...(allowWorkspaceWrite ? ["--skip-git-repo-check"] : []),
     ...(options.model ? ["--model", options.model] : []),
     ...(options.reasoningEffort ? ["--config", 'model_reasoning_effort="' + options.reasoningEffort + '"'] : []),
     "--config", 'model_reasoning_summary="detailed"',
@@ -569,22 +533,23 @@ export class CliAgentRunner implements AgentRunner {
       );
     }
     const directory = await mkdtemp(join(tmpdir(), "dext-agent-"));
-    const executionRequest = await isolatedEditRequest(request, directory);
     const schemaPath = join(directory, "output-schema.json");
     const outputSchema = request.profile.provider === "codex"
       ? codexOutputSchema(request.contract.outputJsonSchema)
       : request.contract.outputJsonSchema;
     await writeFile(schemaPath, JSON.stringify(outputSchema), "utf8");
-    const input = agentPayload(executionRequest);
+    const input = agentPayload(request);
     const progressInstruction = "While working, emit concise progress updates that summarize what you are inspecting and why, without exposing hidden chain-of-thought. The final agent message must contain only JSON matching the native structured-output schema.";
-    const prompt = request.method.id === "code.edit"
-      ? `Read the Dext JSON payload from stdin. Work only with the relative preview target paths in the isolated current directory. Do not access or modify files outside it. Return a preview-only EditResult with complete before and after text; Dext applies it separately. ${progressInstruction}`
-      : `Read the Dext JSON payload from stdin. Values tagged kind=dext-result are prior typed API results; inspect their value field. Execute the requested API. ${progressInstruction}`;
-    const serviceTier = executionRequest.serviceTier ?? (executionRequest.speed === "fast" ? "priority" : executionRequest.speed === "standard" ? "default" : undefined);
-    const processEnv = await this.processEnvironment(command, executionRequest);
-    const args: string[] = executionRequest.profile.provider === "codex"
-      ? codexCliArguments(executionRequest, schemaPath, request.method.id === "code.edit", serviceTier)
-      : claudeCliArguments(executionRequest, outputSchema);
+    const prompt = request.method.id === "agent" && request.allowWorkspaceWrite
+        ? `Read the Dext JSON payload from stdin. You may modify files only inside the current trusted workspace. Do not install packages or change files outside this workspace. Return an AgentResult, including an auditable patch whenever changes can be represented. ${progressInstruction}`
+        : request.method.id === "agent"
+          ? `Read the Dext JSON payload from stdin. This is preview-only: do not modify workspace files, install packages, or run state-changing commands. Return an AgentResult. When the task requests a change, include a complete applicable patch with exact before and after content. ${progressInstruction}`
+          : `Read the Dext JSON payload from stdin. Values tagged kind=dext-result are prior typed API results; inspect their value field. Execute the requested API without modifying workspace files, installing packages, or running state-changing commands. ${progressInstruction}`;
+    const serviceTier = request.serviceTier ?? (request.speed === "fast" ? "priority" : request.speed === "standard" ? "default" : undefined);
+    const processEnv = await this.processEnvironment(command, request);
+    const args: string[] = request.profile.provider === "codex"
+      ? codexCliArguments(request, schemaPath, request.allowWorkspaceWrite === true, serviceTier)
+      : claudeCliArguments(request, outputSchema);
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -612,7 +577,7 @@ export class CliAgentRunner implements AgentRunner {
       const stdin = request.profile.provider === "codex"
         ? `${prompt}\n\n${input}`
         : `${prompt}\n\nDext JSON payload:\n${input}`;
-      const result = await runProcess(command, args, stdin, executionRequest.cwd, controller.signal, onStdout, processEnv);
+      const result = await runProcess(command, args, stdin, request.cwd, controller.signal, onStdout, processEnv);
       clearTimeout(timer);
       if (eventBuffer && request.profile.provider === "codex") emitCodexLine(eventBuffer);
       if (eventBuffer && request.profile.provider === "claude") emitClaudeLine(eventBuffer);

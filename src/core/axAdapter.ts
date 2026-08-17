@@ -3,6 +3,7 @@ import { z, type ZodType } from "zod";
 import {
   codeResultSchema,
   chatResultSchema,
+  agentResultSchema,
   dextResultSchema,
   editResultSchema,
   explainResultSchema,
@@ -12,12 +13,16 @@ import {
   printResultSchema,
   reviewResultSchema,
   terminalResultSchema,
-  textResultSchema
+  textResultSchema,
+  uiResultSchema,
+  mcpRawResultSchema
 } from "./schemas.js";
 import type {
   CallableDefinition,
   ContextReference,
   DextResult,
+  DirectoryReference,
+  DirRef,
   FieldDefinition,
   InvocationValue
 } from "./types.js";
@@ -46,6 +51,11 @@ const codeRefSchema = z.object({
   content: z.string()
 }).passthrough();
 
+const directoryReferenceSchema: ZodType<DirectoryReference | DirRef> = z.union([
+  z.object({ kind: z.literal("dir"), path: z.string().min(1) }).strict(),
+  z.object({ kind: z.literal("dirRef"), uri: z.string(), path: z.string().min(1) }).strict()
+]);
+
 function scalarSchemaForType(field: FieldDefinition, type: FieldDefinition["type"]): ZodType {
   switch (type) {
     case "string":
@@ -54,6 +64,8 @@ function scalarSchemaForType(field: FieldDefinition, type: FieldDefinition["type
       return z.number();
     case "boolean":
       return z.boolean();
+    case "object":
+      return z.record(z.string(), z.unknown());
     case "enum":
       if (!field.values?.length) {
         throw new Error(`Enum field '${field.name}' requires at least one value.`);
@@ -61,6 +73,8 @@ function scalarSchemaForType(field: FieldDefinition, type: FieldDefinition["type
       return z.enum(field.values as [string, ...string[]]);
     case "context":
       return z.union([contextReferenceSchema, codeRefSchema]);
+    case "dir":
+      return directoryReferenceSchema;
     case "result":
       return dextResultSchema;
   }
@@ -87,10 +101,22 @@ function inputSchema(definition: CallableDefinition): ZodType {
   return z.object(shape).strict();
 }
 
-function outputSchema(kind: CallableDefinition["output"]["kind"]): ZodType {
-  switch (kind) {
+function outputSchema(output: CallableDefinition["output"]): ZodType {
+  if (output.fields) {
+    const shape: Record<string, ZodType> = { kind: z.literal(output.kind) };
+    for (const field of output.fields) {
+      const scalar = scalarSchema(field);
+      let schema = field.multiple ? z.array(scalar) : scalar;
+      if (!field.required) schema = schema.optional();
+      shape[field.name] = schema;
+    }
+    return z.object(shape).strict();
+  }
+  switch (output.kind) {
     case "chat":
       return chatResultSchema;
+    case "agent":
+      return agentResultSchema;
     case "explain":
       return explainResultSchema;
     case "edit":
@@ -111,13 +137,19 @@ function outputSchema(kind: CallableDefinition["output"]["kind"]): ZodType {
       return planResultSchema;
     case "patch":
       return patchResultSchema;
+    case "ui":
+      return uiResultSchema;
+    case "mcpRaw":
+      return mcpRawResultSchema;
+    default:
+      throw new Error(`Output kind '${output.kind}' requires a TypedDict result declaration.`);
   }
 }
 
 export class AxAdapter {
   compile(definition: CallableDefinition): AxMethodContract {
     const input = inputSchema(definition);
-    const output = outputSchema(definition.output.kind);
+    const output = outputSchema(definition.output);
     const signature = f()
       .input("invocationArguments", input.describe("Typed Dext invocation arguments."))
       .output(
@@ -142,7 +174,8 @@ export class AxAdapter {
   }
 
   validateOutput(contract: AxMethodContract, result: DextResult): DextResult {
-    contract.outputSchema.parse(result);
-    return dextResultSchema.parse(result) as DextResult;
+    const parsed = contract.outputSchema.parse(result);
+    const builtin = dextResultSchema.safeParse(parsed);
+    return (builtin.success ? builtin.data : parsed) as DextResult;
   }
 }

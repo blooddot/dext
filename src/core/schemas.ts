@@ -41,6 +41,13 @@ export const reviewResultSchema = z.object({
   )
 });
 export const chatResultSchema = z.object({ kind: z.literal("chat"), text: z.string() });
+export const agentResultSchema = z.object({
+  kind: z.literal("agent"),
+  text: z.string(),
+  summary: z.string().optional(),
+  patch: z.lazy(() => patchResultSchema).optional(),
+  files: z.array(codeRefResultSchema).optional()
+}).strict();
 export const explainResultSchema = z.object({
   kind: z.literal("explain"),
   text: z.string(),
@@ -73,6 +80,18 @@ export const printResultSchema = z.object({
   text: z.string(),
   label: z.string().optional()
 }).strict();
+export const uiResultSchema = z.discriminatedUnion("type", [
+  z.object({ kind: z.literal("ui"), type: z.literal("choice"), selected: z.array(z.string()), custom: z.string().optional() }).strict(),
+  z.object({ kind: z.literal("ui"), type: z.literal("confirm"), confirmed: z.boolean() }).strict(),
+  z.object({ kind: z.literal("ui"), type: z.literal("input"), value: z.string().optional() }).strict()
+]);
+export const mcpRawResultSchema = z.object({
+  kind: z.literal("mcpRaw"),
+  server: z.string(),
+  tool: z.string(),
+  content: z.string().optional(),
+  structured: z.record(z.string(), z.unknown()).optional()
+}).strict();
 export const planResultSchema = z.object({
   kind: z.literal("plan"),
   title: z.string(),
@@ -101,6 +120,7 @@ export const patchResultSchema = z.object({
 
 export const dextResultSchema = z.discriminatedUnion("kind", [
   chatResultSchema,
+  agentResultSchema,
   explainResultSchema,
   editResultSchema,
   textResultSchema,
@@ -110,5 +130,7 @@ export const dextResultSchema = z.discriminatedUnion("kind", [
   patchResultSchema,
   applyResultSchema,
   terminalResultSchema,
-  printResultSchema
+  printResultSchema,
+  uiResultSchema,
+  mcpRawResultSchema
 ]);

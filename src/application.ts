@@ -15,6 +15,8 @@ import { applyPatchHandler } from "./vscodePatchHost.js";
 import { loadEditorTokenTheme } from "./vscodeTheme.js";
 import { AgentProfileStore, type AgentProfile, type AgentSelection } from "./agentProfiles.js";
 import { DefaultAioaCdpConnection } from "./core/aioaCdp.js";
+import { SkillCatalog } from "./core/skillCatalog.js";
+import { McpToolRegistry, type McpServerConfig, type McpToolConfig } from "./core/mcpRegistry.js";
 
 export class DextApplication {
   readonly registry = new MethodRegistry();
@@ -29,6 +31,9 @@ export class DextApplication {
   private readonly workflowRuntime = new WorkflowRuntime(this.runtime);
   private configDiagnostics: string[] = [];
   private customApiIds = new Set<string>();
+  private workspaceRoot = process.cwd();
+  readonly skills = new SkillCatalog();
+  readonly mcp = new McpToolRegistry();
   readonly agents: AgentProfileStore;
 
   constructor(globalState?: vscode.Memento) {
@@ -36,11 +41,26 @@ export class DextApplication {
     this.registry.registerMany(BUILTIN_METHODS, "builtin");
     this.runtime.setAgentProfiles(this.agents.list());
     this.runtime.setAgentSelection(this.agents.currentSelection());
+    this.runtime.setSkillLoader((skill, workspace) => this.skills.load(skill, this.workspaceRoot, workspace.path));
+    this.runtime.setMcpCaller((tool, input) => this.mcp.call(tool, input));
   }
 
   async reload(): Promise<void> {
     this.registry.clearExternal();
+    const diagnostics: string[] = [];
     const folder = vscode.workspace.workspaceFolders?.[0];
+    this.workspaceRoot = folder?.uri.fsPath ?? process.cwd();
+    this.runtime.setWorkspaceRoot(this.workspaceRoot);
+    this.runtime.setWorkspaceTrusted(vscode.workspace.isTrusted && folder?.uri.scheme === "file");
+    const skillDirs = vscode.workspace.getConfiguration("dext").get<string[]>("skillDirs", []);
+    const mcpConfiguration = vscode.workspace.getConfiguration("dext");
+    diagnostics.push(...this.mcp.setServers(mcpConfiguration.get<McpServerConfig[]>("mcpServers", [])));
+    diagnostics.push(...this.mcp.setTools(mcpConfiguration.get<McpToolConfig[]>("mcpTools", [])));
+    try {
+      await this.skills.reload(this.workspaceRoot, skillDirs);
+    } catch (error) {
+      diagnostics.push(`Skill discovery: ${error instanceof Error ? error.message : String(error)}`);
+    }
     const loaded = await loadCustomApis(
       vscode.workspace.isTrusted,
       folder ? [vscode.Uri.joinPath(folder.uri, ".dext", "api").fsPath] : [],
@@ -80,7 +100,8 @@ export class DextApplication {
     this.runtime.setCustomPlans(loaded.plans);
     this.customApiIds = new Set(loaded.methods.map(({ definition }) => definition.id));
     this.language.setCustomApiIds(this.customApiIds);
-    this.configDiagnostics = loaded.diagnostics;
+    this.configDiagnostics = [...diagnostics, ...loaded.diagnostics];
+    this.language.setSkillCompletions(this.skills.list());
   }
 
   state(): SidebarState {

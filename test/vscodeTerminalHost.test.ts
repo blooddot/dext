@@ -21,9 +21,9 @@ let terminalRunHandler: DeterministicHandler;
 
 function invocation(arguments_: ResolvedInvocation["arguments"]): ResolvedInvocation {
   return {
-    invocation: { kind: "invocation", method: "terminal.run", arguments: [], source: "code" },
+    invocation: { kind: "invocation", method: "terminal", arguments: [], source: "code" },
     method: {
-      id: "terminal.run",
+      id: "terminal",
       title: "Run",
       description: "Run",
       kind: "command",

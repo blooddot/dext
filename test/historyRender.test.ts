@@ -14,7 +14,7 @@ describe("Dext history rendering", () => {
     const record: DextHistoryRecord = {
       id: "1",
       createdAt: 1,
-      input: 'chat(message="hello")',
+      input: 'ask(input="hello")',
       process: [{ phase: "reasoning", text: "Consider context" }],
       output: JSON.stringify({ kind: "workflow" }),
       response: {
@@ -128,7 +128,7 @@ describe("Dext history rendering", () => {
     const record: DextHistoryRecord = {
       id: "duration",
       createdAt: 1,
-      input: 'chat(message="hello")',
+      input: 'ask(input="hello")',
       process: [],
       output: "",
       response: {
@@ -151,7 +151,7 @@ describe("Dext history rendering", () => {
     const turns: DextHistoryRecord[] = ["first", "second"].map((text, index) => ({
       id: String(index),
       createdAt: index + 1,
-      input: `chat(message="${text}")`,
+      input: `ask(input="${text}")`,
       process: [],
       output: ""
     }));

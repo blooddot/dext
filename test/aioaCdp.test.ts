@@ -41,7 +41,7 @@ function profile(mode: "attach" | "launch" = "attach"): AgentProfile {
 
 function request(onEvent?: AgentExecutionRequest["onEvent"], agentSessionId?: string): AgentExecutionRequest {
   const method: RegisteredCallable = {
-    ...BUILTIN_METHODS.find((candidate) => candidate.id === "code.explain")!,
+    ...BUILTIN_METHODS.find((candidate) => candidate.id === "ask")!,
     source: "builtin"
   };
   const target: CodeRef = {
@@ -57,9 +57,9 @@ function request(onEvent?: AgentExecutionRequest["onEvent"], agentSessionId?: st
     method,
     contract: new AxAdapter().compile(method),
     resolved: {
-      invocation: { kind: "invocation", method: method.id, arguments: [{ name: "target", value: target }], source: "code" },
+      invocation: { kind: "invocation", method: method.id, arguments: [{ name: "input", value: "Explain the selected code" }], source: "code" },
       method,
-      arguments: { target },
+      arguments: { input: "Explain the selected code" },
       context: [target],
       metadata: agentSessionId ? { agentSessionId } : {}
     },
@@ -70,7 +70,7 @@ function request(onEvent?: AgentExecutionRequest["onEvent"], agentSessionId?: st
 
 function chatRequest(message: string, agentSessionId = "output-session"): AgentExecutionRequest {
   const method: RegisteredCallable = {
-    ...BUILTIN_METHODS.find((candidate) => candidate.id === "chat")!,
+    ...BUILTIN_METHODS.find((candidate) => candidate.id === "ask")!,
     source: "builtin"
   };
   return {
@@ -79,9 +79,9 @@ function chatRequest(message: string, agentSessionId = "output-session"): AgentE
     method,
     contract: new AxAdapter().compile(method),
     resolved: {
-      invocation: { kind: "invocation", method: method.id, arguments: [{ name: "message", value: message }], source: "chat" },
+      invocation: { kind: "invocation", method: method.id, arguments: [{ name: "input", value: message }], source: "chat" },
       method,
-      arguments: { message, context: [] },
+      arguments: { input: message },
       context: [],
       metadata: { agentSessionId }
     },
@@ -128,20 +128,29 @@ function setupNavigator(
 }
 
 describe("AIOA CDP", () => {
-  it("uses one compact chat API definition followed by flat requests", () => {
+  it("uses one compact ask API definition followed by flat requests", () => {
     const first = chatRequest("你好");
     const next = chatRequest("你能为我做些什么吗？");
     expect(aioaApiDefinition(first)).toBe([
-      "Define API chat",
-      "Input: message:string, context?:Context[]",
+      "Define API ask",
+      "Input: input:string, workspace?:dir",
       "Output: {\"kind\":\"chat\",\"text\":string}"
     ].join("\n"));
     expect(aioaExecutionPrompt(first)).toBe([
-      "Dext task: Chat",
+      "Dext task: Ask",
       aioaBootstrapPrompt(),
-      "Define API chat\nInput: message:string, context?:Context[]\nOutput: {\"kind\":\"chat\",\"text\":string}\n\nRequest: {\"api\":\"chat\",\"message\":\"你好\"}"
+      "Define API ask\nInput: input:string, workspace?:dir\nOutput: {\"kind\":\"chat\",\"text\":string}\n\nRequest: {\"api\":\"ask\",\"input\":\"你好\"}"
     ].join("\n\n"));
-    expect(aioaTurnPrompt(next, false)).toBe("Request: {\"api\":\"chat\",\"message\":\"你能为我做些什么吗？\"}");
+    expect(aioaTurnPrompt(next, false)).toBe("Request: {\"api\":\"ask\",\"input\":\"你能为我做些什么吗？\"}");
+  });
+
+  it("keeps agent preview and workspace-write instructions aligned with apply", () => {
+    const method: RegisteredCallable = {
+      ...BUILTIN_METHODS.find((candidate) => candidate.id === "agent")!,
+      source: "builtin"
+    };
+    expect(aioaBootstrapPrompt({ method, allowWorkspaceWrite: false })).toContain("preview-only");
+    expect(aioaBootstrapPrompt({ method, allowWorkspaceWrite: true })).toContain("selected trusted workspace");
   });
 
   it("renders compact input and complex JSON Schema types without metadata", () => {
@@ -176,8 +185,8 @@ describe("AIOA CDP", () => {
   });
 
   it("flattens AIOA arguments, normalizes multiple values, and omits empty context", () => {
-    expect(aioaRequestPayload(chatRequest("Hello"))).toBe('{"api":"chat","message":"Hello"}');
-    expect(aioaRequestPayload(request())).toBe('{"api":"code.explain","target":[{"uri":"file:///workspace/example.ts","content":"export const answer = 42;"}]}');
+    expect(aioaRequestPayload(chatRequest("Hello"))).toBe('{"api":"ask","input":"Hello"}');
+    expect(aioaRequestPayload(request())).toBe('{"api":"ask","input":"Explain the selected code"}');
   });
 
   it("accepts only a plain local CDP endpoint", () => {
@@ -366,7 +375,7 @@ describe("AIOA CDP", () => {
       .mockResolvedValueOnce({ busy: true, messages: [] })
       .mockResolvedValueOnce({
         busy: false,
-        messages: [{ id: "new", text: '{"kind":"explain","text":"The value is exported.","files":[]}' }],
+        messages: [{ id: "new", text: '{"kind":"chat","text":"The value is exported."}' }],
         conversationId: "dext-task-1"
       });
     const connection: AioaCdpConnection = {
@@ -377,7 +386,7 @@ describe("AIOA CDP", () => {
 
     const result = await runner.run(request((event) => events.push(`${event.phase}:${event.text}`)));
 
-    expect(result).toEqual({ kind: "explain", text: "The value is exported.", files: [] });
+    expect(result).toEqual({ kind: "chat", text: "The value is exported." });
     expect(submit).toHaveBeenCalledTimes(1);
     expect(aioaExecutionPrompt(request())).toContain("Do not modify workspace files");
     expect(events).toEqual([
@@ -422,14 +431,13 @@ describe("AIOA CDP", () => {
 
   it("selects the current API result from mixed JSON without treating nested code references as output", () => {
     const response = [
-      'Request: {"api":"code.explain","target":[{"kind":"codeRef","uri":"file:///workspace/example.ts"}]}',
-      'Result: {"kind":"explain","text":"The value is exported.","files":[{"kind":"codeRef","uri":"file:///workspace/example.ts"}]}'
+      'Request: {"api":"ask","input":"Explain the selected code"}',
+      'Result: {"kind":"chat","text":"The value is exported."}'
     ].join("\n\n");
 
-    expect(parseJsonOutput(response, "explain")).toEqual({
-      kind: "explain",
-      text: "The value is exported.",
-      files: [{ kind: "codeRef", uri: "file:///workspace/example.ts" }]
+    expect(parseJsonOutput(response, "chat")).toEqual({
+      kind: "chat",
+      text: "The value is exported."
     });
   });
 
@@ -450,7 +458,7 @@ describe("AIOA CDP", () => {
     const submit = vi.fn().mockResolvedValue(undefined);
     const updatesAfter = vi.fn(async () => ({
       busy: false,
-      messages: [{ id: `reply-${submit.mock.calls.length}`, text: '{"kind":"explain","text":"ok","files":[]}' }],
+      messages: [{ id: `reply-${submit.mock.calls.length}`, text: '{"kind":"chat","text":"ok"}' }],
       conversationId: conversationId ??= "dext-task-1"
     }));
     const connection: AioaCdpConnection = {
@@ -473,11 +481,11 @@ describe("AIOA CDP", () => {
     expect(submit).toHaveBeenCalledTimes(2);
     expect(submit.mock.calls[0]?.[0]).toContain(aioaBootstrapPrompt());
     expect(submit.mock.calls[1]?.[0]).not.toContain(aioaBootstrapPrompt());
-    expect(submit.mock.calls[0]?.[0]).toContain("Define API code.explain");
-    expect(submit.mock.calls[1]?.[0]).toBe('Request: {"api":"code.explain","target":[{"uri":"file:///workspace/example.ts","content":"export const answer = 42;"}]}');
+    expect(submit.mock.calls[0]?.[0]).toContain("Define API ask");
+    expect(submit.mock.calls[1]?.[0]).toBe('Request: {"api":"ask","input":"Explain the selected code"}');
   });
 
-  it("defines another API once when the same AIOA session switches methods", async () => {
+  it("reuses a defined API when the same AIOA session continues", async () => {
     let conversationId: string | undefined;
     const submit = vi.fn().mockResolvedValue(undefined);
     const connection: AioaCdpConnection = {
@@ -491,7 +499,7 @@ describe("AIOA CDP", () => {
             messages: [{
               id: `reply-${submit.mock.calls.length}`,
               text: submit.mock.calls.length === 2
-                ? '{"kind":"explain","text":"ok","files":[]}'
+                ? '{"kind":"chat","text":"ok"}'
                 : '{"kind":"chat","text":"ok"}'
             }],
             conversationId: conversationId ??= "dext-task-1"
@@ -506,9 +514,9 @@ describe("AIOA CDP", () => {
     await runner.run(request(undefined, "output-session"));
     await runner.run(chatRequest("Hello again"));
 
-    expect(submit.mock.calls[1]?.[0]).toContain("Define API code.explain");
+    expect(submit.mock.calls[1]?.[0]).toBe('Request: {"api":"ask","input":"Explain the selected code"}');
     expect(submit.mock.calls[1]?.[0]).not.toContain(aioaBootstrapPrompt());
-    expect(submit.mock.calls[2]?.[0]).toBe('Request: {"api":"chat","message":"Hello again"}');
+    expect(submit.mock.calls[2]?.[0]).toBe('Request: {"api":"ask","input":"Hello again"}');
   });
 
   it("redefines an API name when its transmitted input definition changes", async () => {
@@ -547,7 +555,7 @@ describe("AIOA CDP", () => {
       method: { ...changed.method, description: "A locally revised description." },
       resolved: {
         ...changed.resolved,
-        arguments: { ...changed.resolved.arguments, message: "One more" }
+        arguments: { ...changed.resolved.arguments, input: "One more" }
       }
     };
     descriptionOnly.contract = new AxAdapter().compile(descriptionOnly.method);
@@ -557,9 +565,9 @@ describe("AIOA CDP", () => {
     await runner.run(changed);
     await runner.run(descriptionOnly);
 
-    expect(submit.mock.calls[1]?.[0]).toContain("Define API chat\nInput: message:string, context?:Context[], tone?:string");
-    expect(submit.mock.calls[1]?.[0]).toContain('Request: {"api":"chat","message":"Hello again","tone":"brief"}');
-    expect(submit.mock.calls[2]?.[0]).toBe('Request: {"api":"chat","message":"One more","tone":"brief"}');
+    expect(submit.mock.calls[1]?.[0]).toContain("Define API ask\nInput: input:string, workspace?:dir, tone?:string");
+    expect(submit.mock.calls[1]?.[0]).toContain('Request: {"api":"ask","input":"Hello again","tone":"brief"}');
+    expect(submit.mock.calls[2]?.[0]).toBe('Request: {"api":"ask","input":"One more","tone":"brief"}');
   });
 
   it("blocks a later turn when the user switched away from Dext's AIOA task", async () => {
@@ -573,7 +581,7 @@ describe("AIOA CDP", () => {
           submit,
           updatesAfter: async () => ({
             busy: false,
-            messages: [{ id: "reply", text: '{"kind":"explain","text":"ok","files":[]}' }],
+            messages: [{ id: "reply", text: '{"kind":"chat","text":"ok"}' }],
             conversationId: conversationId ??= "dext-task-1"
           })
         }),
@@ -601,7 +609,7 @@ describe("AIOA CDP", () => {
           submit,
           updatesAfter: async () => ({
             busy: false,
-            messages: [{ id: "reply", text: '{"kind":"explain","text":"ok","files":[]}' }],
+            messages: [{ id: "reply", text: '{"kind":"chat","text":"ok"}' }],
             conversationId: conversationId ??= `dext-task-${++sequence}`
           })
         }),
@@ -617,6 +625,6 @@ describe("AIOA CDP", () => {
     expect(sequence).toBe(2);
     expect(submit.mock.calls[0]?.[0]).toContain(aioaBootstrapPrompt());
     expect(submit.mock.calls[1]?.[0]).toContain(aioaBootstrapPrompt());
-    expect(submit.mock.calls[1]?.[0]).toContain("Define API code.explain");
+    expect(submit.mock.calls[1]?.[0]).toContain("Define API ask");
   });
 });

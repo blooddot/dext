@@ -415,12 +415,17 @@ function looksLikeStructuredOutput(text: string, expectedKind: string): boolean 
  * AIOA owns the active model, tools, and permissions. This adapter requests a
  * preview-only Dext result and never reads private browser stores or IPC data.
  */
-export function aioaBootstrapPrompt(): string {
+export function aioaBootstrapPrompt(request?: Pick<AgentExecutionRequest, "method" | "allowWorkspaceWrite">): string {
+  const workspacePolicy = request?.method.id === "agent" && request.allowWorkspaceWrite
+    ? "You may modify files only inside the selected trusted workspace. Do not install packages or change files outside that workspace. Return an auditable patch whenever the changes can be represented."
+    : request?.method.id === "agent"
+      ? "This is preview-only. Do not modify workspace files, install packages, or run commands that change state. When a change is requested, return a complete applicable patch with exact before and after content."
+      : "Do not modify workspace files, install packages, or run commands that change state. For code edits, return a preview patch only.";
   return [
     "You are the AIOA execution adapter for Dext.",
     "Handle the following typed Dext request in the current AIOA conversation.",
     "A Define API <name> declaration remains active for this conversation. Later Request objects reference it by API name; defining the same name again replaces its previous definition.",
-    "Do not modify workspace files, install packages, or run commands that change state. For code edits, return a preview patch only.",
+    workspacePolicy,
     "Do not reveal private chain-of-thought. You may use tools, then return only one JSON object that conforms exactly to the referenced API's Output definition."
   ].join("\n\n");
 }
@@ -583,7 +588,12 @@ export function aioaTurnPrompt(request: AgentExecutionRequest, includeDefinition
 }
 
 export function aioaExecutionPrompt(request: AgentExecutionRequest): string {
-  return `Dext task: ${request.method.title}\n\n${aioaBootstrapPrompt()}\n\n${aioaTurnPrompt(request, true)}`;
+  return [
+    `Dext task: ${request.method.title}`,
+    request.metadata.instruction,
+    aioaBootstrapPrompt(request),
+    aioaTurnPrompt(request, true)
+  ].filter((part): part is string => Boolean(part)).join("\n\n");
 }
 
 class ChromeRemoteAioaPage implements AioaCdpPage {

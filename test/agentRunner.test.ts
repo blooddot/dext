@@ -24,7 +24,7 @@ const temporaryDirectories: string[] = [];
 
 function request(): AgentExecutionRequest {
   const method: RegisteredCallable = {
-    ...BUILTIN_METHODS.find((candidate) => candidate.id === "chat")!,
+    ...BUILTIN_METHODS.find((candidate) => candidate.id === "ask")!,
     source: "builtin"
   };
   const profile: AgentProfile = {
@@ -40,9 +40,9 @@ function request(): AgentExecutionRequest {
     method,
     contract: new AxAdapter().compile(method),
     resolved: {
-      invocation: { kind: "invocation", method: "chat", arguments: [{ name: "message", value: "Hello" }], source: "chat" },
+      invocation: { kind: "invocation", method: "ask", arguments: [{ name: "input", value: "Hello" }], source: "chat" },
       method,
-      arguments: { message: "Hello" },
+      arguments: { input: "Hello" },
       context: [],
       metadata: {}
     },
@@ -121,12 +121,23 @@ describe("CLI command resolution", () => {
     ]));
   });
 
+  it("opens workspace writes only for an explicit agent apply request", () => {
+    expect(codexCliArguments({}, "output-schema.json", false)).toEqual(expect.arrayContaining([
+      "--sandbox", "read-only"
+    ]));
+    expect(codexCliArguments({}, "output-schema.json", true)).toEqual(expect.arrayContaining([
+      "--sandbox", "workspace-write", "--skip-git-repo-check"
+    ]));
+    expect(claudeCliArguments({ allowWorkspaceWrite: true }, { type: "object" }))
+      .toEqual(expect.arrayContaining(["--permission-mode", "acceptEdits"]));
+  });
+
   it("keeps schemas in native CLI flags instead of duplicating them in the stdin payload", () => {
     const payload = JSON.parse(agentPayload(request())) as Record<string, unknown>;
     expect(payload).toEqual({
-      api: "chat",
-      description: "Return a typed response for an explicit natural-language instruction.",
-      arguments: { message: "Hello" },
+      api: "ask",
+      description: "Hold a read-only conversation about a string input with optional inline Dext references.",
+      arguments: { input: "Hello" },
       context: []
     });
     expect(payload).not.toHaveProperty("output_schema");
@@ -139,12 +150,12 @@ describe("CLI command resolution", () => {
   });
 
   it("makes optional output fields nullable while requiring every Codex object property", () => {
-    const method = BUILTIN_METHODS.find((candidate) => candidate.id === "code.explain")!;
+    const method = BUILTIN_METHODS.find((candidate) => candidate.id === "agent")!;
     const schema = codexOutputSchema(new AxAdapter().compile(method).outputJsonSchema) as {
       required: string[];
       properties: { files: { items: { required: string[]; properties: { range: { type: string[] } } } } };
     };
-    expect(schema.required).toEqual(["kind", "text", "files"]);
+    expect(schema.required).toEqual(["kind", "text", "summary", "patch", "files"]);
     expect(schema.properties.files.items.required).toContain("range");
     expect(schema.properties.files.items.properties.range.type).toEqual(["object", "null"]);
   });

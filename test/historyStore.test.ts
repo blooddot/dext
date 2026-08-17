@@ -10,17 +10,17 @@ class MemoryState {
 describe("DextHistoryStore", () => {
   it("persists successful and failed execution records", async () => {
     const store = new DextHistoryStore(new MemoryState() as never);
-    await store.addSuccess("chat(message=\"hello\")", [{ phase: "status", text: "started" }], {
+    await store.addSuccess("ask(input=\"hello\")", [{ phase: "status", text: "started" }], {
       kind: "workflow",
       executions: []
     }, "session-1");
-    await store.addFailure("terminal.run(command=\"git status\")", [], new Error("cancelled"), "session-1");
+    await store.addFailure("terminal(command=\"git status\")", [], new Error("cancelled"), "session-1");
     const sessions = store.list();
     expect(sessions).toHaveLength(1);
     const records = sessions[0]!.turns;
     expect(records.map((record) => record.input)).toEqual([
-      'chat(message="hello")',
-      'terminal.run(command="git status")'
+      'ask(input="hello")',
+      'terminal(command="git status")'
     ]);
     expect(records[0]?.output).toContain("workflow");
     expect(records[0]?.response).toEqual({ kind: "workflow", executions: [] });
@@ -31,7 +31,7 @@ describe("DextHistoryStore", () => {
     const legacy = [{
       id: "old-1",
       createdAt: 100,
-      input: 'chat(message="old")',
+      input: 'ask(input="old")',
       process: [],
       output: '{"kind":"workflow","executions":[]}'
     }];
@@ -39,7 +39,7 @@ describe("DextHistoryStore", () => {
 
     expect(store.list()).toEqual([expect.objectContaining({
       id: "legacy-old-1",
-      turns: [expect.objectContaining({ id: "old-1", input: 'chat(message="old")' })]
+      turns: [expect.objectContaining({ id: "old-1", input: 'ask(input="old")' })]
     })]);
   });
 });

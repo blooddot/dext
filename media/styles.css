@@ -1593,7 +1593,7 @@ pre {
 
 .method-row {
   width: 100%;
-  min-height: 43px;
+  min-height: 52px;
   padding: 5px 6px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 18px;
@@ -1692,13 +1692,27 @@ details[open] > summary > .disclosure-chevron {
 .method-identity {
   min-width: 0;
   display: flex;
-  align-items: center;
+  flex-wrap: wrap;
+  align-items: baseline;
   gap: 8px;
 }
 
 .method-name {
   font-family: var(--vscode-editor-font-family);
   font-size: 12px;
+  font-weight: 600;
+}
+
+.method-signature {
+  flex-basis: 100%;
+  min-width: 0;
+  color: var(--vscode-descriptionForeground);
+  font-family: var(--vscode-editor-font-family);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .method-source-inline {

@@ -10,94 +10,49 @@ function compile(source: string) {
 }
 
 describe("Dext Python workflow compiler", () => {
-  it("compiles assignments, references, result fields, and if branches", () => {
-    const result = compile(`analysis = chat(
-    message="""Explain this code""",
-    context=[ref.selection],
-)
-edit = code.edit(target=[ref.selection], instruction=analysis.text)
-review = code.review(target=edit.files, instruction=edit.summary)
-if review.status == "pass":
-    code.apply(result=edit)
-`);
+  it("accepts the public top-level APIs and print", () => {
+    const result = compile(`answer = ask(input=f"Explain {ref.selection}")
+preview = agent(input=f"Implement {ref.file('src/a.ts')}", apply=False)
+apply(result=preview)
+terminal = terminal(command="git status")
+print(text=answer.text)`);
     expect(result.diagnostics).toEqual([]);
-    expect(result.program?.statements).toHaveLength(4);
+    expect(result.program?.statements).toHaveLength(5);
   });
 
-  it("accepts a single reference for a multi-target API", () => {
-    expect(compile('edit = code.edit(target=ref.selection, instruction="format")').diagnostics)
-      .toEqual([]);
-  });
-
-  it("accepts adjacent chat and file explanation statements without diagnostics", () => {
-    const source = `chat(message="输入测试")
-result = code.explain(target=[ref.file("pathx.py#L65,1-L78,1")])`;
-    expect(compile(source).diagnostics).toEqual([]);
-  });
-
-  it("accepts patch results as code review and explanation targets", () => {
-    const result = compile(`edit_result = code.edit(target=ref.selection, instruction="format")
-review_result = code.review(target=edit_result.patch)
-explanation = code.explain(target=edit_result.patch)
-`);
+  it("accepts skills, MCP, and UI under their public namespaces", () => {
+    const result = compile(`skill = skill(skill="dev-feat", input="implement", workspace=ref.dir("client"))
+data = mcp(tool="docs.read", input={"uri": "README.md", "options": {"tags": ["guide", "api"]}, "file": ref.file("README.md")})
+choice = ui.choose(label="Pick", options=["one", "two"])`);
     expect(result.diagnostics).toEqual([]);
   });
 
-  it("accepts every Dext result through the shared Result input type", () => {
-    const result = compile(`chat_result = chat(message="hello")
-review_result = code.review(target=chat_result)
-explain_result = code.explain(target=review_result)
-applied = code.apply(result=review_result)
-`);
-    expect(result.diagnostics).toEqual([]);
+  it("rejects removed MCP server and JSON-string input arguments", () => {
+    expect(compile('mcp(server="docs", tool="docs.read")').diagnostics.map((item) => item.message).join("\n"))
+      .toContain("Unknown argument 'server' for 'mcp'");
+    expect(compile('mcp(tool="docs.read", input="{}")').diagnostics.map((item) => item.message).join("\n"))
+      .toContain("expects dict[str, object]");
   });
 
-  it("allows registered custom APIs without imports in interactive workflows", () => {
-    const registry = new MethodRegistry();
-    registry.registerMany(BUILTIN_METHODS, "builtin");
-    registry.register({
-      id: "dev.fix",
-      title: "Fix",
-      description: "Fix code",
-      kind: "skill",
-      version: "1.0.0",
-      input: [{ name: "target", type: "context", required: true }],
-      output: { kind: "review" },
-      executor: { kind: "custom", apiId: "dev.fix" }
-    }, "project");
-    const result = compileWorkflow("dev.fix(target=ref.selection)", registry, {
-      customApiIds: new Set(["dev.fix"]),
-      requireCustomApiImports: false
-    });
-    expect(result.diagnostics).toEqual([]);
+  it("only permits safe core input f-string interpolation", () => {
+    expect(compile('ask(input=f"look at {ref.active_file}")').diagnostics).toEqual([]);
+    expect(compile('agent(input=f"change {ref.dir(\'src\')}")').diagnostics).toEqual([]);
+    expect(compile('ask(input=f"bad {1 + 2}")').diagnostics.map((item) => item.message).join("\n"))
+      .toContain("only allows ref.file/ref.dir");
+    expect(compile('print(text=f"bad {ref.selection}")').diagnostics.map((item) => item.message).join("\n"))
+      .toContain("f-strings are only allowed");
   });
 
-  it("reports syntax, type, and unknown API diagnostics", () => {
-    expect(compile('chat(message="unterminated)').diagnostics.length).toBeGreaterThan(0);
-    expect(compile("chat(message=1)").diagnostics.map((item) => item.message).join("\n"))
-      .toContain("expects string");
-    expect(compile("unknown.call(value=1)").diagnostics.map((item) => item.message).join("\n"))
-      .toContain("Unknown Dext API");
+  it("rejects all removed public APIs", () => {
+    for (const api of ["chat", "core.ask", "core.agent", "core.apply", "core.terminal", "core.skill", "core.mcp", "code.apply", "code.edit", "code.explain", "code.review", "terminal.run", "skill.run", "mcp.call"]) {
+      expect(compile(`${api}(input="x")`).diagnostics.map((item) => item.message).join("\n"))
+        .toContain(`Unknown Dext API '${api}'`);
+    }
   });
 
-  it("checks comparison types and string unions", () => {
-    const wrongType = compile('review = code.review(target=ref.selection)\nif review.status == 1:\n    chat(message="x")');
-    expect(wrongType.diagnostics.map((item) => item.message)).toContain(
-      "Cannot compare string with number."
-    );
-
-    const wrongStatus = compile('review = code.review(target=ref.selection)\nif review.status == "approved":\n    chat(message="x")');
-    expect(wrongStatus.diagnostics.map((item) => item.message).join("\n"))
-      .toContain('Expected one of "pass", "warning", "fail".');
-  });
-
-  it.each([
-    ["import os", "Import is not allowed"],
-    ["for value in values:\n    chat(message=value)", "For is not allowed"],
-    ["def run():\n    pass", "FunctionDefinition is not allowed"],
-    ["value = open(\"a\")", "Unknown Dext API 'open'"],
-    ["value = chat(message=\"a\")\nvalue = chat(message=\"b\")", "cannot be reassigned"]
-  ])("rejects unsupported Python: %s", (source, message) => {
-    expect(compile(source).diagnostics.map((item) => item.message).join("\n")).toContain(message);
+  it("checks public API argument types and required fields", () => {
+    expect(compile("ask(input=1)").diagnostics.map((item) => item.message).join("\n")).toContain("expects string");
+    expect(compile("agent(apply=False)").diagnostics.map((item) => item.message).join("\n")).toContain("Missing required argument 'input'");
+    expect(compile("terminal(command=1)").diagnostics.map((item) => item.message).join("\n")).toContain("expects string");
   });
 });

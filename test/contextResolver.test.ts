@@ -10,7 +10,8 @@ const host: ContextHost = {
   }),
   activeFile: async () => undefined,
   file: async (path) => ({ uri: `file:///${path}`, content: path, version: 1 }),
-  symbol: async (name) => ({ uri: "file:///src/a.ts", content: `class ${name} {}`, version: 4, symbol: name })
+  symbol: async (name) => ({ uri: "file:///src/a.ts", content: `class ${name} {}`, version: 4, symbol: name }),
+  dir: async (path) => ({ kind: "dirRef", uri: `file:///${path}`, path })
 };
 
 describe("ContextResolver", () => {
@@ -31,5 +32,10 @@ describe("ContextResolver", () => {
       .resolves.toMatchObject({ uri: "file:///src/b.ts" });
     await expect(resolver.resolveReference({ kind: "symbol", name: "User" }))
       .resolves.toMatchObject({ symbol: "User" });
+  });
+
+  it("resolves directory references without reading directory contents", async () => {
+    await expect(new ContextResolver(host).resolveDirectory({ kind: "dir", path: "src" }))
+      .resolves.toEqual({ kind: "dirRef", uri: "file:///src", path: "src" });
   });
 });

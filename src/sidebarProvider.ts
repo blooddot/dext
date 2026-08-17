@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import * as vscode from "vscode";
 import type { DextApplication } from "./application.js";
-import type { AgentStreamEvent } from "./core/types.js";
+import type { AgentStreamEvent, UiInteraction } from "./core/types.js";
 import {
   AttachmentStore,
   writeExactClipboardText
@@ -9,6 +9,7 @@ import {
 import {
   attachmentFileReference,
   clipboardFileReference,
+  directoryAttachment,
   fileAttachment,
   selectionAttachment
 } from "./vscodeAttachments.js";
@@ -243,7 +244,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         case "chooseFiles": {
           const uris = await vscode.window.showOpenDialog({
             canSelectFiles: true,
-            canSelectFolders: false,
+            canSelectFolders: true,
             canSelectMany: true,
             openLabel: "Add to Dext",
             ...(vscode.workspace.workspaceFolders?.[0]
@@ -275,6 +276,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     try {
       const response = await this.application.executeInput(source, {
         agentSessionId: sessionId,
+        ui: this.uiInteraction(),
         onAgentEvent: (event) => {
           events.push({ ...event });
           this.postAgentEvent(event);
@@ -299,6 +301,57 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  private uiInteraction(): UiInteraction {
+    return {
+      choose: async ({ label, options, multiple, allowCustom, customPlaceholder }) => {
+        const customId = "__dext_custom__";
+        const items = [
+          ...options.map((option) => ({ label: option, id: option })),
+          ...(allowCustom ? [{ label: "Other...", id: customId }] : [])
+        ];
+        const choices = multiple
+          ? await vscode.window.showQuickPick<{ label: string; id: string }>(items, {
+              title: label,
+              canPickMany: true,
+              ignoreFocusOut: true
+            }) ?? []
+          : await vscode.window.showQuickPick<{ label: string; id: string }>(items, {
+              title: label,
+              canPickMany: false,
+              ignoreFocusOut: true
+            }).then((picked) => picked ? [picked] : []);
+        if (!choices.some((choice) => choice.id === customId)) {
+          return { kind: "ui", type: "choice", selected: choices.map((choice) => choice.id) };
+        }
+        const custom = await vscode.window.showInputBox({
+          title: label,
+          prompt: customPlaceholder ?? "Enter a custom option",
+          ignoreFocusOut: true
+        });
+        return {
+          kind: "ui",
+          type: "choice",
+          selected: choices.filter((choice) => choice.id !== customId).map((choice) => choice.id),
+          ...(custom?.trim() ? { custom: custom.trim() } : {})
+        };
+      },
+      confirm: async ({ message, confirmLabel, cancelLabel }) => {
+        const picked = await vscode.window.showInformationMessage(message, { modal: true }, confirmLabel, cancelLabel);
+        return { kind: "ui", type: "confirm", confirmed: picked === confirmLabel };
+      },
+      input: async ({ label, placeholder, multiline }) => {
+        const value = await vscode.window.showInputBox({
+          title: label,
+          ...(multiline
+            ? { prompt: `${placeholder ?? ""} (multiline input is captured as plain text)` }
+            : placeholder ? { prompt: placeholder } : {}),
+          ignoreFocusOut: true
+        });
+        return { kind: "ui", type: "input", ...(value !== undefined ? { value } : {}) };
+      }
+    };
+  }
+
   private postAgentEvent(event: AgentStreamEvent): void {
     this.postWhenReady({ type: "agentEvent", event });
   }
@@ -318,10 +371,15 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private async addFileUris(uris: readonly vscode.Uri[]): Promise<void> {
-    const snapshots = await Promise.all(uris.map(async (uri) => fileAttachment(uri)));
+    const references = await Promise.all(uris.map(async (uri) => {
+      const stat = await vscode.workspace.fs.stat(uri);
+      if ((stat.type & vscode.FileType.Directory) !== 0) return directoryAttachment(uri);
+      const snapshot = await fileAttachment(uri);
+      return attachmentFileReference(snapshot);
+    }));
     this.postWhenReady({
       type: "insertFileReferences",
-      expressions: snapshots.map((snapshot) => attachmentFileReference(snapshot).expression)
+      expressions: references.map((reference) => reference.expression)
     });
   }
 

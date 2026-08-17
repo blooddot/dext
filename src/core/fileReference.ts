@@ -30,7 +30,7 @@ function quotedStringEnd(source: string, start: number): number | undefined {
 
 export function fileReferenceOccurrences(source: string): FileReferenceOccurrence[] {
   const occurrences: FileReferenceOccurrence[] = [];
-  const prefix = /ref\.file\s*\(\s*"/g;
+  const prefix = /ref\.(?:file|dir)\s*\(\s*"/g;
   for (const match of source.matchAll(prefix)) {
     const start = match.index ?? 0;
     const payloadStart = start + match[0].length;
@@ -84,6 +84,13 @@ export function formatDextFilePathReference(relativePath: string): DextFileRefer
     .replaceAll("\\", "\\\\")
     .replaceAll('"', '\\"');
   return { payload, expression: `ref.file("${payload}")` };
+}
+
+export function formatDextDirectoryReference(relativePath: string): DextFileReference {
+  const payload = relativePath.replaceAll("\\", "/")
+    .replaceAll("\\", "\\\\")
+    .replaceAll('"', '\\"');
+  return { payload, expression: `ref.dir("${payload}")` };
 }
 
 export function parseFileReference(value: string): ParsedFileReference {

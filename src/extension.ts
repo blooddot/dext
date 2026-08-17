@@ -14,6 +14,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const application = new DextApplication(context.globalState);
   const folder = vscode.workspace.workspaceFolders?.[0];
   if (folder) application.runtime.setWorkspaceRoot(folder.uri.fsPath);
+  application.runtime.setWorkspaceTrusted(vscode.workspace.isTrusted && folder?.uri.scheme === "file");
   await application.reload();
   const history = new DextHistoryStore(context.globalState);
   const historyPanel = new DextHistoryPanel(context.extensionUri, history);

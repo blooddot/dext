@@ -1,9 +1,5 @@
 import { createHash } from "node:crypto";
-import type { CodeRef, DextResultBase, OutputKind, PatchResult } from "./types.js";
-
-const RESULT_KINDS: ReadonlySet<string> = new Set<OutputKind>([
-  "chat", "explain", "edit", "review", "apply", "terminal", "print", "text", "code", "plan", "patch"
-]);
+import type { CodeRef, DextResultBase, PatchResult } from "./types.js";
 
 export function isDextResult(value: unknown): value is DextResultBase {
   return typeof value === "object"
@@ -11,7 +7,7 @@ export function isDextResult(value: unknown): value is DextResultBase {
     && !Array.isArray(value)
     && "kind" in value
     && typeof (value as { kind?: unknown }).kind === "string"
-    && RESULT_KINDS.has((value as { kind: string }).kind);
+    && !["", "codeRef", "dirRef"].includes((value as { kind: string }).kind);
 }
 
 function resultContent(value: DextResultBase): string {

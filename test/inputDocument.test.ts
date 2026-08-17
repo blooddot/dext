@@ -14,6 +14,6 @@ describe("Strict workflow document", () => {
   });
 
   it("accepts explicit chat code", () => {
-    expect(service.inputDocument('chat(message="Please explain this")').kind).toBe("workflow");
+    expect(service.inputDocument('ask(input="Please explain this")').kind).toBe("workflow");
   });
 });

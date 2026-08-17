@@ -86,4 +86,17 @@ describe("Agent message presentation", () => {
       { title: "Standard output", text: "clean", tone: "normal", code: true }
     ]);
   });
+
+  it("presents TypedDict result kinds without reducing them to plain prose", () => {
+    expect(presentAgentMessage(JSON.stringify({
+      kind: "document",
+      uri: "file:///workspace/readme.md",
+      content: "# Readme"
+    }))).toMatchObject({
+      structured: true,
+      kind: "document",
+      title: "document",
+      text: expect.stringContaining('"uri": "file:///workspace/readme.md"')
+    });
+  });
 });

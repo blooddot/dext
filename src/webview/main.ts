@@ -7,6 +7,7 @@ import type {
   RuntimeResponse,
   WorkflowStepResponse
 } from "../core/types.js";
+import { formatMethodSignature } from "../core/methodSignature.js";
 import type { SidebarState, WebviewRequest, WebviewResponse } from "../webviewProtocol.js";
 import { parseDroppedFiles } from "./chatAttachments.js";
 import { ClipboardClient } from "./clipboardClient.js";
@@ -17,6 +18,7 @@ import { agentMessageCopyText, presentAgentMessage } from "../agentMessagePresen
 import type { AgentMessagePresentation } from "../agentMessagePresentation.js";
 import { presentDiff } from "../diffPresentation.js";
 import type { DextHistoryRecord, DextHistorySession } from "../historyStore.js";
+import { groupMethodsForDisplay, isSyntheticBuiltinGroup } from "./methodGroups.js";
 
 interface VsCodeApi {
   postMessage(message: WebviewRequest): void;
@@ -118,19 +120,22 @@ function run(): void {
 function defaultValue(field: FieldDefinition): string {
   if (field.multiple) return `[${defaultValue({ ...field, multiple: false })}]`;
   if (field.default !== undefined) {
-    return typeof field.default === "string" ? `"${field.default}"` : String(field.default);
+    if (typeof field.default === "string") return `"${field.default}"`;
+    if (typeof field.default === "object") return JSON.stringify(field.default);
+    return String(field.default);
   }
   if (field.type === "context") return "ref.selection";
   if (field.type === "result") return "edit_result";
   if (field.type === "number") return "0";
   if (field.type === "boolean") return "False";
   if (field.type === "enum") return `"${field.values?.[0] ?? ""}"`;
+  if (field.type === "object") return "{}";
   return '""';
 }
 
 function methodTemplate(method: SidebarState["methods"][number]): string {
   const args = method.input
-    .filter((field) => field.required)
+    .filter((field) => field.required && field.default === undefined)
     .map((field) => `${field.name}=${defaultValue(field)}`);
   return `${method.id}(${args.join(", ")})`;
 }
@@ -139,26 +144,15 @@ function renderMethods(state: SidebarState): void {
   editor.applyTheme(state.theme);
   elements.methods.replaceChildren();
   elements.methodCount.textContent = String(state.methods.length);
-  type NamespaceNode = { methods: typeof state.methods; children: Map<string, NamespaceNode> };
-  const root: NamespaceNode = { methods: [], children: new Map() };
-  for (const method of state.methods) {
-    const parts = method.id.split(".");
-    let node = root;
-    for (const part of parts.slice(0, -1)) {
-      let child = node.children.get(part);
-      if (!child) { child = { methods: [], children: new Map() }; node.children.set(part, child); }
-      node = child;
-    }
-    node.methods.push(method);
-  }
-  const collectSources = (node: NamespaceNode): Set<string> => {
+  const root = groupMethodsForDisplay(state.methods);
+  const collectSources = (node: typeof root): Set<string> => {
     const sources = new Set<string>(node.methods.map((method) => method.source === "builtin" ? "builtin" : "project"));
     for (const child of node.children.values()) {
       for (const source of collectSources(child)) sources.add(source);
     }
     return sources;
   };
-  const renderNode = (node: NamespaceNode, parent: HTMLElement, prefix = ""): void => {
+  const renderNode = (node: typeof root, parent: HTMLElement, prefix = ""): void => {
     for (const [name, child] of [...node.children].sort(([a], [b]) => a.localeCompare(b))) {
       const group = document.createElement("details");
       group.className = "method-group";
@@ -174,7 +168,9 @@ function renderMethods(state: SidebarState): void {
       groupName.textContent = `${prefix}${name}`;
       label.append(groupName);
       const sources = [...collectSources(child)];
-      const sourceName = sources.length === 1 ? sources[0] : undefined;
+      const sourceName = isSyntheticBuiltinGroup(name, prefix, child)
+        ? undefined
+        : sources.length === 1 ? sources[0] : undefined;
       if (sourceName) {
         const source = document.createElement("span");
         source.className = "method-source";
@@ -199,13 +195,19 @@ function renderMethods(state: SidebarState): void {
     const name = document.createElement("span");
     name.className = "method-name";
     name.textContent = method.id.split(".").at(-1) ?? method.id;
+    const signature = document.createElement("span");
+    signature.className = "method-signature";
+    signature.textContent = formatMethodSignature({
+      ...method,
+      id: method.id.split(".").at(-1) ?? method.id
+    });
     if (!prefix) {
       const source = document.createElement("span");
       source.className = "method-source-inline";
       source.textContent = method.source === "builtin" ? "builtin" : "project";
-      identity.append(name, source);
+      identity.append(name, source, signature);
     } else {
-      identity.append(name);
+      identity.append(name, signature);
     }
     const insert = document.createElement("i");
     insert.className = "codicon codicon-add";
@@ -238,7 +240,7 @@ function syncMethodToggle(): void {
   const open = groups.length === 0 || groups.every((group) => group.open);
   const icon = elements.methodsToggle.querySelector("i");
   if (icon) icon.className = `codicon codicon-${open ? "collapse-all" : "expand-all"}`;
-  const title = open ? "Collapse API namespaces" : "Expand API namespaces";
+  const title = open ? "Collapse API groups" : "Expand API groups";
   elements.methodsToggle.title = title;
   elements.methodsToggle.setAttribute("aria-label", title);
 }
@@ -719,12 +721,13 @@ function renderExecution(response: RuntimeResponse): DocumentFragment {
     fragment.append(copyableText(result.text));
   } else if (result.kind === "explain") {
     fragment.append(copyableText(result.text));
-  } else if (result.kind === "edit") {
+  } else if (result.kind === "edit" || result.kind === "agent") {
     const paragraph = document.createElement("p");
     paragraph.className = "text-result";
-    paragraph.textContent = result.summary;
+    paragraph.textContent = result.kind === "agent" ? result.text : result.summary;
     fragment.append(paragraph);
-    for (const change of result.patch.changes) {
+    const changes = result.kind === "agent" ? result.patch?.changes ?? [] : result.patch.changes;
+    for (const change of changes) {
       const file = document.createElement("div");
       file.className = "patch-file";
       file.textContent = change.uri;
@@ -1184,7 +1187,7 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     updateRunState();
   }
   if (message.type === "insertFileReferences") {
-    editor.insertInline(message.expressions.join(" "), dropPosition);
+    editor.insertFileReferences(message.expressions, dropPosition);
     dropPosition = undefined;
   }
   if (message.type === "outputSession") renderOutputSession(message.session);

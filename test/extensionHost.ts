@@ -58,12 +58,9 @@ export async function run(): Promise<void> {
 
   const app = new DextApplication();
   await app.reload();
-  const response = await app.executeInput('code.explain(target=[ref.file("package.json#L1,1-L1,2")])');
+  const response = await app.executeInput('ask(input=f"Explain {ref.file(\'package.json#L1,1-L1,2\')}")');
   const snapshot = response.executions[0];
-  assert.equal(snapshot?.result.kind, "explain", "A file reference fragment resolves for explanation.");
-  if (snapshot?.result.kind === "explain") {
-    assert.equal(snapshot.result.files[0]?.content, "{", "A file reference fragment resolves its exact range.");
-  }
+  assert.equal(snapshot?.result.kind, "chat", "An inline file reference resolves for ask.");
   await openWorkspaceFileReference("package.json#L1,1-L1,2");
   assert.equal(
     vscode.window.activeTextEditor?.selection.isEqual(new vscode.Selection(0, 0, 0, 1)),
@@ -80,30 +77,30 @@ export async function run(): Promise<void> {
   const dxDocument = await vscode.workspace.openTextDocument(dxFile);
   assert.equal(dxDocument.languageId, "dext-api", "A .dx file activates the Dext language.");
   await vscode.window.showTextDocument(dxDocument);
-  const methodStart = dxDocument.getText().indexOf("code.explain");
+  const methodStart = dxDocument.getText().indexOf("ask");
   assert.ok(methodStart >= 0, "The Dext language fixture contains a built-in API call.");
-  const completionPosition = dxDocument.positionAt(methodStart + "code.".length);
+  const completionPosition = dxDocument.positionAt(methodStart + "a".length);
   const completions = await vscode.commands.executeCommand<vscode.CompletionList>(
     "vscode.executeCompletionItemProvider",
     dxDocument.uri,
     completionPosition,
-    "."
+    undefined
   );
   assert.ok(
-    completions.items.some((item) => item.label === "explain"),
+    completions.items.some((item) => item.label === "ask"),
     "A .dx file receives API completions from the registered VS Code provider."
   );
   const hovers = await vscode.commands.executeCommand<vscode.Hover[]>(
     "vscode.executeHoverProvider",
     dxDocument.uri,
-    dxDocument.positionAt(methodStart + "code.ex".length)
+    dxDocument.positionAt(methodStart + 1)
   );
   assert.ok(hovers.length > 0, "A .dx API call receives hover type information.");
-  const targetValue = dxDocument.getText().indexOf("target=target", methodStart);
+  const targetValue = dxDocument.getText().indexOf("input=input", methodStart);
   const signatures = await vscode.commands.executeCommand<vscode.SignatureHelp>(
     "vscode.executeSignatureHelpProvider",
     dxDocument.uri,
-    dxDocument.positionAt(targetValue + "target=".length),
+    dxDocument.positionAt(targetValue + "input=".length),
     "("
   );
   assert.ok(signatures.signatures.length > 0, "A .dx API call receives parameter hints.");
