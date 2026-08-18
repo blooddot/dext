@@ -9,11 +9,10 @@ Without an Agent profile, Dext validates workflow structure, resolves immutable 
 Natural language must be explicit through an API string argument; arbitrary text is a compile error.
 
 ```python
-analysis = ask(input=f"""Explain this implementation and give refactoring requirements:
-{ref.selection}""")
+analysis = ask(input="Explain this implementation and give refactoring requirements:")
 
 preview = agent(
-    input=f"Implement the requested refactoring in {ref.selection}",
+    input="Implement the requested refactoring",
     apply=False,
 )
 
@@ -21,7 +20,7 @@ if preview.patch:
     applied = apply(result=preview)
 ```
 
-The input workflow language supports assignment, keyword-only API calls, strings (including triple-quoted strings), numbers, booleans, homogeneous lists, result member access, comments, and `if`/`else` with `==` or `!=`. Restricted Python f-strings are accepted only as the `input` argument of `ask` and `agent`: an interpolation may be one `ref.*` value or a prior `Result`, never an arbitrary Python expression. `.dx` API files additionally support one typed `main()` function and explicit imports. User functions/classes, loops, reassignment, `eval`, `exec`, and system/file/network APIs are rejected. Execution is sequential; unselected and downstream steps are reported as `skipped`.
+The input workflow language supports assignment, keyword-only API calls, strings (including triple-quoted strings), numbers, booleans, homogeneous lists, result member access, comments, and `if`/`else` with `==` or `!=`. `ask` and `agent` accept ordinary strings. Dropping a file into either input writes a readable `@workspace/path#Lstart,end-Lend,end` token; the editor, Output, and History render that token as an atomic Chip while copy and execution retain the same readable string. Dext never inlines file contents into the prompt. `.dx` API files additionally support one typed `main()` function and explicit imports. User functions/classes, loops, reassignment, `eval`, `exec`, and system/file/network APIs are rejected. Execution is sequential; unselected and downstream steps are reported as `skipped`.
 
 ## Built-in API
 
@@ -39,8 +38,8 @@ Every API output implements the shared `Result` contract. `ask` handles read-onl
 `ask` is always read-only. `agent` defaults `apply=true`: in a trusted local workspace, the selected workspace is the Agent CLI working directory and the Agent may edit only that workspace. Set `apply=false` to require a read-only preview; when a change is proposed, the resulting `AgentResult` may include a patch for `apply`. Both APIs default `workspace` to the current project root.
 
 ```python
-answer = ask(input=f"Explain this code: {ref.selection}")
-preview = agent(input=f"Plan the requested change in {ref.file('docs/drag-drop.md')}", apply=False)
+answer = ask(input="Explain this code:")
+preview = agent(input="Plan the requested change", apply=False)
 ```
 
 `terminal` is available only in a trusted local `file` workspace. Its `cwd` must stay inside the workspace, every command requires a VS Code modal confirmation, the timeout is capped at 10 minutes, and captured output is bounded. It returns `TerminalStatus = "succeeded" | "failed" | "timed_out"`; a nonzero exit code is a typed failed result, while rejecting the confirmation cancels that workflow step and skips downstream steps.
@@ -55,7 +54,7 @@ Context values are `ref.selection`, `ref.active_file`, `ref.file("path")`, `ref.
 - `ref.dir("path")` resolves a workspace-contained directory without reading or expanding its contents.
 - `ref.symbol("name")` asks VS Code's workspace symbol provider for a declaration and its source range.
 
-Copying a VS Code selection, choosing a file or folder, or dropping one into Dext inserts an atomic `ref.file(...)` or `ref.dir(...)` chip. The chip can be removed atomically and participates in undo/redo.
+Copying a VS Code selection, choosing a file or folder, or dropping one into an `ask`/`agent` input inserts a readable `@path` token in the normal quoted input text. The token is rendered as an atomic Chip, can be removed atomically, and participates in undo/redo. Existing legacy marker, f-string, and nested-quote reference forms are migrated to this representation when loaded.
 
 The editor uses CodeMirror's Python grammar for syntax highlighting, indentation, bracket matching, and native editor behavior. Dext adds API completion, keyword and result-field completion, signature help, hover documentation, exact compiler diagnostics, and a lint gutter.
 
@@ -85,12 +84,20 @@ class DocumentResult(TypedDict):
     title: NotRequired[str]
 ```
 
-Standard skills are discovered in `<workspace>/.agents/skills`, `<workspace>/dext/skills`, then `dext.skillDirs`; earlier directories win duplicate names. `skill` defaults `workspace` to the current project and injects the selected `SKILL.md` into the current Agent task. `ui.*` waits for a semantic user answer and resumes the same workflow. `mcp` only accepts configured full tool names in `dext.mcpTools`, such as `docs.read`; the registry resolves that exact name to its configured server and underlying tool without splitting it. Duplicate full names are configuration errors. The initial transport is local stdio: each call sends JSON-RPC `initialize`, `notifications/initialized`, and `tools/call`, then closes the process. Commands inherit their environment; Dext neither stores nor renders credentials. MCP `structuredContent` is preserved as `McpRawResult.structured`; a `.dx` API returning a `TypedDict` adapts that structure into its declared result and validates it strictly.
+Standard skills are discovered in `<workspace>/.agents/skills`, `<workspace>/dext/skills`, then `dext.skillDirs`; earlier directories win duplicate names. `skill` defaults `workspace` to the current project and injects the selected `SKILL.md` into the current Agent task. `ui.*` waits for a semantic user answer and resumes the same workflow. `mcp` only accepts configured full tool names in `dext.mcpTools`, such as `docs.read`; the registry resolves that exact name to its configured server and underlying tool without splitting it. Duplicate full names are configuration errors. MCP calls require a trusted local workspace.
+
+`dext.mcpServers` supports local `stdio` and Streamable HTTP (`2025-03-26`). HTTP endpoints must be HTTPS, or loopback HTTP for local development. URL userinfo, query strings, fragments, inline headers, and credentials are rejected. A bearer-enabled server stores its access token only through `Dext: Set MCP Access Token`, in VS Code SecretStorage and scoped to the current workspace. `Dext: Clear MCP Access Token` removes it; `Dext: Verify MCP Server` performs an authenticated initialization check. Dext never writes credentials to settings, project files, output, or logs. HTTP calls use JSON or SSE responses, reject redirects, and close negotiated sessions with `DELETE`. MCP `structuredContent` is preserved as `McpRawResult.structured`; a `.dx` API returning a `TypedDict` adapts that structure into its declared result and validates it strictly.
 
 ```json
 {
   "dext.mcpServers": [
-    { "name": "docs", "transport": "stdio", "command": "my-docs-mcp", "args": ["--stdio"] }
+    { "name": "docs", "transport": "stdio", "command": "my-docs-mcp", "args": ["--stdio"] },
+    {
+      "name": "remote-docs",
+      "transport": "http",
+      "url": "https://mcp.example.test/v1",
+      "auth": { "type": "bearer" }
+    }
   ],
   "dext.mcpTools": [
     { "server": "docs", "tool": "read", "description": "Read a document" }
@@ -114,7 +121,7 @@ Agent profiles are stored in VS Code extension global storage. The Run row expos
 
 The AIOA profile connects to AIOA through an explicitly enabled local Chromium DevTools Protocol (CDP) port. It offers two modes:
 
-- `Launch` is the default. It starts the configured AIOA executable with a loopback-only CDP port and waits for it to become ready. If AIOA is already running without CDP, quit it first and run again.
+- `Launch` is the default. Dext first reuses the configured loopback endpoint when it is healthy. If it is unavailable, Dext asks the operating system for a free `127.0.0.1` port, starts AIOA with that loopback-only CDP port, and waits up to 60 seconds for it to become ready. The temporary endpoint is reused only for the current Dext extension session and is never written back to the profile. Startup diagnostics include the fixed endpoint, the last dynamic endpoint, process status, and the last CDP error.
 - `Attach` connects to an existing AIOA instance launched with `--remote-debugging-port=<port>`.
 
 The AIOA window remains an AIOA-owned desktop application; Dext does not access private IPC, browser storage, or credentials. The first turn in a Dext Output session creates a task in the matching AIOA workspace and sends the fixed adapter rules once. Later turns reuse that task and send only their typed payload and current output schema. Clearing Output ends that association, while preserving the grouped conversation in Dext History; the next run creates a fresh AIOA task. Model, permission level, connectors, and workspace context remain controlled by AIOA, so the AIOA profile exposes `Active AIOA model` rather than duplicating those controls. CDP is bound to `127.0.0.1` only and must never be exposed on a LAN interface.

@@ -1,6 +1,7 @@
 import { parser } from "@lezer/python";
 import type { SyntaxNode } from "@lezer/common";
 import type { MethodRegistry } from "./registry.js";
+import { normalizeInputReferenceSource } from "./fileReference.js";
 import type {
   CallableDefinition,
   ContextReference,
@@ -134,32 +135,6 @@ function decodeString(value: string): string {
     r: "\r",
     t: "\t"
   })[escaped] ?? escaped);
-}
-
-function decodeFormatText(value: string): string {
-  return value
-    .replace(/{{/g, "{")
-    .replace(/}}/g, "}")
-    .replace(/\\([\\'"nrt])/g, (_match, escaped: string) => ({
-      "\\": "\\",
-      "'": "'",
-      '"': '"',
-      n: "\n",
-      r: "\r",
-      t: "\t"
-    })[escaped] ?? escaped);
-}
-
-function formatStringBodyBounds(value: string): { from: number; to: number } | undefined {
-  if (!/^[fF]/.test(value)) return undefined;
-  const quoteStart = 1;
-  const quote = value.slice(quoteStart, quoteStart + 3) === '"""' || value.slice(quoteStart, quoteStart + 3) === "'''"
-    ? value.slice(quoteStart, quoteStart + 3)
-    : value.slice(quoteStart, quoteStart + 1);
-  if ((quote !== '"' && quote !== "'" && quote !== '"""' && quote !== "'''") || !value.endsWith(quote)) {
-    return undefined;
-  }
-  return { from: quoteStart + quote.length, to: value.length - quote.length };
 }
 
 function memberPath(source: string, node: SyntaxNode): string | undefined {
@@ -420,9 +395,7 @@ class Compiler {
       }
       if (seen.has(name)) this.error(`Argument '${name}' is provided more than once.`, nameNode.from, nameNode.to);
       seen.add(name);
-      const compiled = valueNode.name === "FormatString"
-        ? this.compileFormatString(valueNode, definition, field)
-        : this.compileExpression(valueNode);
+      const compiled = this.compileExpression(valueNode);
       if (compiled) {
         if (!matchesField(compiled.type, field)) {
           this.error(`Argument '${name}' expects ${fieldTypeName(field)}, not ${typeName(compiled.type)}.`, valueNode.from, valueNode.to);
@@ -442,56 +415,6 @@ class Compiler {
     );
     if (positional.length) this.error("Dext API calls require keyword arguments.", positional[0]!.from, positional[0]!.to);
     return values;
-  }
-
-  private compileFormatString(
-    node: SyntaxNode,
-    definition: CallableDefinition,
-    field: FieldDefinition
-  ): { expression: WorkflowExpression; type: ValueType } | undefined {
-    if (!(["ask", "agent"].includes(definition.id) && field.name === "input")) {
-      this.error("f-strings are only allowed for ask/agent input.", node.from, node.to);
-      return undefined;
-    }
-    const raw = text(this.source, node);
-    const bounds = formatStringBodyBounds(raw);
-    if (!bounds) {
-      this.error("Dext input f-strings must use a single f prefix and a quoted string.", node.from, node.to);
-      return undefined;
-    }
-    const replacements = children(node).filter((child) => child.name === "FormatReplacement");
-    const parts: Extract<WorkflowExpression, { kind: "format" }>['parts'] = [];
-    let cursor = node.from + bounds.from;
-    for (const replacement of replacements) {
-      if (cursor < replacement.from) {
-        parts.push({ kind: "text", text: decodeFormatText(this.source.slice(cursor, replacement.from)) });
-      }
-      const expressions = children(replacement).filter((child) => !["{", "}"].includes(child.name));
-      if (expressions.length !== 1 || !expressions[0]) {
-        this.error("Dext input f-string interpolation does not support conversions or format specifiers.", replacement.from, replacement.to);
-      } else {
-        const compiled = this.compileExpression(expressions[0]);
-        const allowed = compiled
-          && (compiled.expression.kind === "reference"
-            || (compiled.expression.kind === "variable" && compiled.type.kind === "result"));
-        if (!allowed) {
-          this.error(
-            "Dext input f-string interpolation only allows ref.file/ref.dir/ref.selection/ref.active_file/ref.symbol or an earlier Result variable.",
-            expressions[0].from,
-            expressions[0].to
-          );
-        } else {
-          parts.push({ kind: "expression", expression: compiled.expression });
-        }
-      }
-      cursor = replacement.to;
-    }
-    const bodyEnd = node.from + bounds.to;
-    if (cursor < bodyEnd) parts.push({ kind: "text", text: decodeFormatText(this.source.slice(cursor, bodyEnd)) });
-    return {
-      expression: { kind: "format", parts, from: node.from, to: node.to },
-      type: { kind: "string" }
-    };
   }
 
   private compileExpression(node: SyntaxNode): { expression: WorkflowExpression; type: ValueType } | undefined {
@@ -720,7 +643,7 @@ export function compileWorkflow(
   registry: MethodRegistry,
   options: WorkflowCompileOptions = {}
 ): WorkflowCompileResult {
-  const compiler = new Compiler(source, registry, options);
+  const compiler = new Compiler(normalizeInputReferenceSource(source), registry, options);
   const result = compiler.compile();
   if (result.program && compiler.returnExpression) {
     result.program.returnExpression = compiler.returnExpression;

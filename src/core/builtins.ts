@@ -10,7 +10,7 @@ export const BUILTIN_METHODS: readonly CallableDefinition[] = [
     kind: "command",
     version: "1.0.0",
     input: [
-      { name: "input", type: "string", required: true, description: "Question or analysis request. A restricted f-string may embed Dext references." },
+      { name: "input", type: "string", required: true, description: "Question or analysis request. Use @workspace/path tokens for attached code references." },
       { name: "workspace", type: "dir", description: "Optional workspace directory; defaults to the current project root." }
     ],
     output: { kind: "chat" },
@@ -24,7 +24,7 @@ export const BUILTIN_METHODS: readonly CallableDefinition[] = [
     kind: "command",
     version: "1.0.0",
     input: [
-      { name: "input", type: "string", required: true, description: "Task request. A restricted f-string may embed Dext references or earlier Dext results." },
+      { name: "input", type: "string", required: true, description: "Task request. Use @workspace/path tokens for attached code references." },
       { name: "apply", type: "boolean", default: true, description: "Allow trusted workspace changes. Set false to require a preview-only patch." },
       { name: "workspace", type: "dir", description: "Optional workspace directory; defaults to the current project root." }
     ],

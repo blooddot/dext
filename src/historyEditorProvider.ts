@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 import type { DextHistoryStore } from "./historyStore.js";
 import { historyTokenStyles, renderHistorySession } from "./historyRender.js";
 import { loadEditorTokenTheme } from "./vscodeTheme.js";
+import { openWorkspaceFileReference } from "./vscodeContextHost.js";
 
 export class DextHistoryPanel implements vscode.Disposable {
   static readonly viewType = "dext.history";
@@ -36,9 +37,12 @@ export class DextHistoryPanel implements vscode.Disposable {
       this.panel = undefined;
     });
     this.panel.webview.onDidReceiveMessage((raw: unknown) => {
-      const message = raw as { type?: string; text?: string };
+      const message = raw as { type?: string; text?: string; reference?: string };
       if (message.type === "copy" && typeof message.text === "string") {
         void vscode.env.clipboard.writeText(message.text);
+      }
+      if (message.type === "openFileReference" && typeof message.reference === "string") {
+        void openWorkspaceFileReference(message.reference);
       }
     });
     this.render();
@@ -98,16 +102,24 @@ export class DextHistoryPanel implements vscode.Disposable {
         return;
       }
       const copyButton = target?.closest('button[data-copy]');
-      if (!copyButton) return;
-      event.preventDefault();
-      event.stopPropagation();
-      vscode.postMessage({ type: 'copy', text: copyButton.dataset.copy || '' });
-      copyButton.classList.remove('codicon-copy');
-      copyButton.classList.add('codicon-check');
-      setTimeout(() => {
-        copyButton.classList.remove('codicon-check');
-        copyButton.classList.add('codicon-copy');
-      }, 900);
+      if (copyButton) {
+        event.preventDefault();
+        event.stopPropagation();
+        vscode.postMessage({ type: 'copy', text: copyButton.dataset.copy || '' });
+        copyButton.classList.remove('codicon-copy');
+        copyButton.classList.add('codicon-check');
+        setTimeout(() => {
+          copyButton.classList.remove('codicon-check');
+          copyButton.classList.add('codicon-copy');
+        }, 900);
+        return;
+      }
+      const reference = target?.closest('button[data-open-file-reference]');
+      if (reference) {
+        event.preventDefault();
+        event.stopPropagation();
+        vscode.postMessage({ type: 'openFileReference', reference: reference.dataset.openFileReference || '' });
+      }
     });
   </script>
 </body>

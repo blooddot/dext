@@ -42,4 +42,18 @@ describe("DextHistoryStore", () => {
       turns: [expect.objectContaining({ id: "old-1", input: 'ask(input="old")' })]
     })]);
   });
+
+  it("normalizes legacy inline reference storage before history presentation", () => {
+    const marker = "\uE000eyJraW5kIjoiZmlsZSIsInBheWxvYWQiOiJzcmMvYS50cyJ9\uE001";
+    const stored = [{
+      id: "old-ref",
+      createdAt: 100,
+      input: 'ask(input="Read ' + marker + '")',
+      process: [],
+      output: ""
+    }];
+    const store = new DextHistoryStore(new MemoryState(stored) as never);
+
+    expect(store.list()[0]?.turns[0]?.input).toBe('ask(input="Read @src/a.ts")');
+  });
 });

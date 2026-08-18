@@ -1,5 +1,6 @@
 import type * as vscode from "vscode";
 import type { AgentStreamEvent, InputExecutionResponse } from "./core/types.js";
+import { normalizeInputReferenceSource } from "./core/fileReference.js";
 
 const HISTORY_KEY = "dext.history";
 const MAX_TURNS = 100;
@@ -42,12 +43,12 @@ function isSession(value: DextHistoryRecord | DextHistorySession): value is Dext
 
 function normalizeSessions(stored: readonly (DextHistoryRecord | DextHistorySession)[]): DextHistorySession[] {
   return stored.flatMap((item) => isSession(item)
-    ? [{ ...item, turns: [...item.turns] }]
+    ? [{ ...item, turns: item.turns.map((turn) => ({ ...turn, input: normalizeInputReferenceSource(turn.input) })) }]
     : [{
         id: `legacy-${item.id}`,
         createdAt: item.createdAt,
         updatedAt: item.createdAt,
-        turns: [{ ...item }]
+        turns: [{ ...item, input: normalizeInputReferenceSource(item.input) }]
       }]
   );
 }

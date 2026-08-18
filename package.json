@@ -16,6 +16,9 @@
     "onView:dext.sidebar",
     "onCommand:dext.openHistory",
     "onCommand:dext.copySelectionWithContext",
+    "onCommand:dext.setMcpAccessToken",
+    "onCommand:dext.clearMcpAccessToken",
+    "onCommand:dext.verifyMcpServer",
     "onLanguage:dext-api"
   ],
   "main": "./dist/extension.js",
@@ -86,6 +89,21 @@
         "command": "dext.configureAgent",
         "title": "Dext: Configure Agent",
         "icon": "$(settings-gear)"
+      },
+      {
+        "command": "dext.setMcpAccessToken",
+        "title": "Dext: Set MCP Access Token",
+        "icon": "$(key)"
+      },
+      {
+        "command": "dext.clearMcpAccessToken",
+        "title": "Dext: Clear MCP Access Token",
+        "icon": "$(key)"
+      },
+      {
+        "command": "dext.verifyMcpServer",
+        "title": "Dext: Verify MCP Server",
+        "icon": "$(plug)"
       }
     ],
     "keybindings": [
@@ -223,17 +241,39 @@
             "type": "array",
             "default": [],
             "items": {
-              "type": "object",
-              "required": ["name", "transport", "command"],
-              "properties": {
-                "name": { "type": "string" },
-                "transport": { "enum": ["stdio"] },
-                "command": { "type": "string" },
-                "args": { "type": "array", "items": { "type": "string" } },
-                "timeoutMs": { "type": "integer", "minimum": 1000, "maximum": 120000 }
-              }
+              "oneOf": [
+                {
+                  "type": "object",
+                  "required": ["name", "transport", "command"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": { "type": "string" },
+                    "transport": { "enum": ["stdio"] },
+                    "command": { "type": "string" },
+                    "args": { "type": "array", "items": { "type": "string" } },
+                    "timeoutMs": { "type": "integer", "minimum": 1000, "maximum": 120000 }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": ["name", "transport", "url"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": { "type": "string" },
+                    "transport": { "enum": ["http"] },
+                    "url": { "type": "string", "format": "uri" },
+                    "auth": {
+                      "type": "object",
+                      "required": ["type"],
+                      "additionalProperties": false,
+                      "properties": { "type": { "enum": ["bearer"] } }
+                    },
+                    "timeoutMs": { "type": "integer", "minimum": 1000, "maximum": 120000 }
+                  }
+                }
+              ]
             },
-            "description": "Local MCP stdio servers. Commands inherit the host environment; do not put credentials in this setting."
+            "description": "MCP servers. Stdio commands run locally. HTTP endpoints must use HTTPS or loopback HTTP; use Dext commands to store bearer tokens in VS Code SecretStorage, never this setting."
           }
       }
     }

@@ -43,8 +43,8 @@ function stringArgument(value: unknown, fallback: string): string {
 
 function validationValue(value: unknown): unknown {
   return typeof value === "object" && value !== null && !Array.isArray(value)
-    && "kind" in value && value.kind === "interpolatedInput"
-    ? ""
+    && "kind" in value && value.kind === "input"
+    ? value
     : value;
 }
 
@@ -312,6 +312,9 @@ export class DextRuntime {
           : (() => { throw new Error("A TypedDict custom API must return mcp(...)."); })()
         : workflowResult;
     } else if (method.id === "mcp") {
+      if (!this.workspaceTrusted) {
+        throw new Error("mcp requires a trusted local workspace.");
+      }
       if (!this.mcpCaller) throw new Error("MCP registry is not configured.");
       const tool = resolved.arguments.tool;
       const input = resolved.arguments.input;

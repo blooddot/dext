@@ -15,13 +15,18 @@ import { applyPatchHandler } from "./vscodePatchHost.js";
 import { loadEditorTokenTheme } from "./vscodeTheme.js";
 import { AgentProfileStore, type AgentProfile, type AgentSelection } from "./agentProfiles.js";
 import { DefaultAioaCdpConnection } from "./core/aioaCdp.js";
+import { DefaultAgentRunner } from "./core/agentRouter.js";
 import { SkillCatalog } from "./core/skillCatalog.js";
-import { McpToolRegistry, type McpServerConfig, type McpToolConfig } from "./core/mcpRegistry.js";
+import { McpToolRegistry, type HttpMcpServerConfig, type McpToolConfig } from "./core/mcpRegistry.js";
+import { McpAccessTokenStore } from "./core/mcpSecrets.js";
 
 export class DextApplication {
   readonly registry = new MethodRegistry();
   readonly language = new DextLanguageService(this.registry);
   private readonly contextResolver = new ContextResolver(new VsCodeContextHost());
+  /** Verification and executed AIOA turns share the same dynamic CDP endpoint
+   * for this extension lifetime; profile configuration is never rewritten. */
+  private readonly aioaConnection = new DefaultAioaCdpConnection();
   readonly runtime = new DextRuntime(
     this.registry,
     this.contextResolver,
@@ -32,12 +37,21 @@ export class DextApplication {
   private configDiagnostics: string[] = [];
   private customApiIds = new Set<string>();
   private workspaceRoot = process.cwd();
+  private workspaceUri: vscode.Uri | undefined;
+  private workspaceTrusted = false;
   readonly skills = new SkillCatalog();
   readonly mcp = new McpToolRegistry();
   readonly agents: AgentProfileStore;
+  private readonly mcpSecrets: McpAccessTokenStore | undefined;
 
-  constructor(globalState?: vscode.Memento) {
+  constructor(globalState?: vscode.Memento, secretStorage?: vscode.SecretStorage) {
+    this.runtime.setAgentRunner(new DefaultAgentRunner(undefined, this.aioaConnection));
     this.agents = new AgentProfileStore(globalState);
+    if (secretStorage) {
+      const mcpSecrets = new McpAccessTokenStore(secretStorage, () => this.workspaceUri?.toString());
+      this.mcpSecrets = mcpSecrets;
+      this.mcp.setAccessTokenProvider(async (server) => mcpSecrets.get(server.name));
+    }
     this.registry.registerMany(BUILTIN_METHODS, "builtin");
     this.runtime.setAgentProfiles(this.agents.list());
     this.runtime.setAgentSelection(this.agents.currentSelection());
@@ -49,12 +63,14 @@ export class DextApplication {
     this.registry.clearExternal();
     const diagnostics: string[] = [];
     const folder = vscode.workspace.workspaceFolders?.[0];
+    this.workspaceUri = folder?.uri;
     this.workspaceRoot = folder?.uri.fsPath ?? process.cwd();
+    this.workspaceTrusted = vscode.workspace.isTrusted && folder?.uri.scheme === "file";
     this.runtime.setWorkspaceRoot(this.workspaceRoot);
-    this.runtime.setWorkspaceTrusted(vscode.workspace.isTrusted && folder?.uri.scheme === "file");
+    this.runtime.setWorkspaceTrusted(this.workspaceTrusted);
     const skillDirs = vscode.workspace.getConfiguration("dext").get<string[]>("skillDirs", []);
     const mcpConfiguration = vscode.workspace.getConfiguration("dext");
-    diagnostics.push(...this.mcp.setServers(mcpConfiguration.get<McpServerConfig[]>("mcpServers", [])));
+    diagnostics.push(...this.mcp.setServers(mcpConfiguration.get<unknown[]>("mcpServers", [])));
     diagnostics.push(...this.mcp.setTools(mcpConfiguration.get<McpToolConfig[]>("mcpTools", [])));
     try {
       await this.skills.reload(this.workspaceRoot, skillDirs);
@@ -137,7 +153,7 @@ export class DextApplication {
   async verifyAioaCdp(): Promise<boolean> {
     const profile = this.agents.list().find((candidate) => candidate.provider === "aioa");
     if (!profile) throw new Error("The AIOA Agent profile is not available.");
-    const opened = await new DefaultAioaCdpConnection().open(profile);
+    const opened = await this.aioaConnection.open(profile);
     try {
       await opened.page.state();
       return opened.launched;
@@ -161,5 +177,40 @@ export class DextApplication {
 
   endAgentSession(sessionId: string): void {
     this.runtime.endAgentSession(sessionId);
+  }
+
+  isTrustedLocalWorkspace(): boolean {
+    return this.workspaceTrusted;
+  }
+
+  bearerHttpServers(): HttpMcpServerConfig[] {
+    return this.mcp.listServers().filter((server): server is HttpMcpServerConfig =>
+      server.transport === "http" && server.auth?.type === "bearer"
+    );
+  }
+
+  async setMcpAccessToken(serverName: string, token: string): Promise<void> {
+    this.assertBearerHttpServer(serverName);
+    if (!this.mcpSecrets) throw new Error("VS Code SecretStorage is not available.");
+    await this.mcpSecrets.store(serverName, token);
+  }
+
+  async clearMcpAccessToken(serverName: string): Promise<void> {
+    this.assertBearerHttpServer(serverName);
+    if (!this.mcpSecrets) throw new Error("VS Code SecretStorage is not available.");
+    await this.mcpSecrets.delete(serverName);
+  }
+
+  async verifyMcpServer(serverName: string): Promise<void> {
+    this.assertBearerHttpServer(serverName);
+    await this.mcp.verifyServer(serverName);
+  }
+
+  private assertBearerHttpServer(serverName: string): void {
+    if (!this.workspaceTrusted) throw new Error("MCP credentials require a trusted local workspace.");
+    const server = this.mcp.getServer(serverName);
+    if (server?.transport !== "http" || server.auth?.type !== "bearer") {
+      throw new Error(`MCP server '${serverName}' is not a bearer-authenticated HTTP server.`);
+    }
   }
 }

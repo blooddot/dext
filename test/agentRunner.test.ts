@@ -149,6 +149,15 @@ describe("CLI command resolution", () => {
       ]));
   });
 
+  it("passes readable @ input directly to an Agent adapter", () => {
+    const value = request();
+    value.resolved.arguments.input = "Read @src/a.ts then @docs";
+    expect(JSON.parse(agentPayload(value))).toMatchObject({
+      arguments: { input: "Read @src/a.ts then @docs" }
+    });
+    expect(JSON.parse(agentPayload(value))).not.toHaveProperty("inputContext");
+  });
+
   it("makes optional output fields nullable while requiring every Codex object property", () => {
     const method = BUILTIN_METHODS.find((candidate) => candidate.id === "agent")!;
     const schema = codexOutputSchema(new AxAdapter().compile(method).outputJsonSchema) as {

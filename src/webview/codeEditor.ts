@@ -40,13 +40,13 @@ import type { SignatureHelp } from "../core/languageService.js";
 import type { ClipboardClient, ClipboardReadResult } from "./clipboardClient.js";
 import { codeReferencePasteText } from "./codeReferencePaste.js";
 import { fileReferenceDecorations } from "./fileReferenceDecorations.js";
+import { normalizeInputReferenceSource } from "../core/fileReference.js";
 import { sourceSnapshotMatches } from "./languageClient.js";
 import type { LanguageRequestBroker } from "./languageClient.js";
 import {
-  coreInputReferenceInsertion,
+  fileReferenceInsertion,
   inlineInsertion,
-  invocationInsertion,
-  normalizeCoreInputStrings
+  invocationInsertion
 } from "./inputInsertion.js";
 import type { EditorTokenTheme } from "../vscodeTheme.js";
 
@@ -245,9 +245,10 @@ export class DextCodeEditor {
   }
 
   setValue(value: string, cursor = value.length): void {
+    const normalized = normalizeInputReferenceSource(value);
     this.view.dispatch({
-      changes: { from: 0, to: this.view.state.doc.length, insert: value },
-      selection: { anchor: Math.max(0, Math.min(cursor, value.length)) },
+      changes: { from: 0, to: this.view.state.doc.length, insert: normalized },
+      selection: { anchor: Math.max(0, Math.min(cursor, normalized.length)) },
       scrollIntoView: true,
       userEvent: "input"
     });
@@ -259,23 +260,23 @@ export class DextCodeEditor {
   }
 
   insertFileReferences(expressions: readonly string[], position?: number): void {
+    const normalized = normalizeInputReferenceSource(this.source);
+    if (normalized !== this.source) {
+      this.setValue(normalized, this.view.state.selection.main.head);
+    }
     const selection = this.view.state.selection.main;
     const from = position === undefined
       ? selection.from
       : Math.max(0, Math.min(position, this.view.state.doc.length));
     const to = position === undefined ? selection.to : from;
-    const replacement = coreInputReferenceInsertion(this.source, from, to, expressions);
-    if (replacement) {
-      this.view.dispatch({
-        changes: { from: replacement.from, to: replacement.to, insert: replacement.text },
-        selection: { anchor: replacement.from + replacement.cursorOffset },
-        scrollIntoView: true,
-        userEvent: "input"
-      });
-      this.focus();
-      return;
-    }
-    this.insertInline(expressions.join(" "), position);
+    const insertion = fileReferenceInsertion(this.source, from, to, expressions);
+    this.view.dispatch({
+      changes: { from: insertion.from, to: insertion.to, insert: insertion.text },
+      selection: { anchor: insertion.from + insertion.cursorOffset },
+      scrollIntoView: true,
+      userEvent: "input"
+    });
+    this.focus();
   }
 
   insertInvocation(text: string): void {
@@ -391,14 +392,17 @@ export class DextCodeEditor {
   private updated(update: ViewUpdate): void {
     if (!update.docChanged && !update.selectionSet) return;
     if (update.docChanged) {
-      const normalized = normalizeCoreInputStrings(this.source);
-      if (normalized !== this.source) {
-        const cursor = Math.min(this.view.state.selection.main.head, normalized.length);
-        this.view.dispatch({
-          changes: { from: 0, to: this.view.state.doc.length, insert: normalized },
-          selection: { anchor: cursor },
-          scrollIntoView: true,
-          userEvent: "input"
+      const source = this.source;
+      const normalized = normalizeInputReferenceSource(source);
+      if (normalized !== source) {
+        const selection = this.view.state.selection.main;
+        queueMicrotask(() => {
+          if (this.source !== source) return;
+          this.view.dispatch({
+            changes: { from: 0, to: source.length, insert: normalized },
+            selection: { anchor: Math.min(selection.anchor, normalized.length), head: Math.min(selection.head, normalized.length) },
+            userEvent: "input.migrate"
+          });
         });
         return;
       }

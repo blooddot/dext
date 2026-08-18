@@ -11,7 +11,7 @@ import {
 } from "./dextSemanticTokens.js";
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-  const application = new DextApplication(context.globalState);
+  const application = new DextApplication(context.globalState, context.secrets);
   const folder = vscode.workspace.workspaceFolders?.[0];
   if (folder) application.runtime.setWorkspaceRoot(folder.uri.fsPath);
   application.runtime.setWorkspaceTrusted(vscode.workspace.isTrusted && folder?.uri.scheme === "file");
@@ -55,6 +55,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       "Use the Command Palette to run 'Workspaces: Manage Workspace Trust'."
     );
   };
+  const pickBearerHttpServer = async (): Promise<string | undefined> => {
+    if (!application.isTrustedLocalWorkspace()) {
+      await vscode.window.showErrorMessage("MCP credentials require a trusted local workspace.");
+      return undefined;
+    }
+    const servers = application.bearerHttpServers();
+    if (!servers.length) {
+      await vscode.window.showErrorMessage("No bearer-authenticated HTTP MCP servers are configured in dext.mcpServers.");
+      return undefined;
+    }
+    if (servers.length === 1) return servers[0]?.name;
+    const picked = await vscode.window.showQuickPick(
+      servers.map((server) => ({ label: server.name, description: server.url })),
+      { placeHolder: "Choose an HTTP MCP server" }
+    );
+    return picked?.label;
+  };
   updateTrustContext();
   const semanticLegend = new vscode.SemanticTokensLegend(
     [...DEXT_SEMANTIC_TOKEN_TYPES],
@@ -76,6 +93,42 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("dext.openWorkspaceTrust", openWorkspaceTrust),
     vscode.commands.registerCommand("dext.workspaceTrustedStatus", openWorkspaceTrust),
     vscode.commands.registerCommand("dext.workspaceUntrustedStatus", openWorkspaceTrust),
+    vscode.commands.registerCommand("dext.setMcpAccessToken", () =>
+      reportCommandError(async () => {
+        const serverName = await pickBearerHttpServer();
+        if (!serverName) return;
+        const token = await vscode.window.showInputBox({
+          prompt: `Access token for MCP server '${serverName}'`,
+          password: true,
+          ignoreFocusOut: true
+        });
+        if (token === undefined) return;
+        await application.setMcpAccessToken(serverName, token);
+        await vscode.window.showInformationMessage(`Stored the access token for MCP server '${serverName}'.`);
+      })
+    ),
+    vscode.commands.registerCommand("dext.clearMcpAccessToken", () =>
+      reportCommandError(async () => {
+        const serverName = await pickBearerHttpServer();
+        if (!serverName) return;
+        const confirmed = await vscode.window.showWarningMessage(
+          `Clear the stored access token for MCP server '${serverName}'?`,
+          { modal: true },
+          "Clear"
+        );
+        if (confirmed !== "Clear") return;
+        await application.clearMcpAccessToken(serverName);
+        await vscode.window.showInformationMessage(`Cleared the access token for MCP server '${serverName}'.`);
+      })
+    ),
+    vscode.commands.registerCommand("dext.verifyMcpServer", () =>
+      reportCommandError(async () => {
+        const serverName = await pickBearerHttpServer();
+        if (!serverName) return;
+        await application.verifyMcpServer(serverName);
+        await vscode.window.showInformationMessage(`MCP server '${serverName}' is ready.`);
+      })
+    ),
     vscode.commands.registerCommand("dext.triggerSuggest", async () => {
       if (activeDextEditor()) {
         await vscode.commands.executeCommand("editor.action.triggerSuggest");
@@ -198,6 +251,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await sidebar.refresh();
     }),
     vscode.workspace.onDidChangeConfiguration(async (event) => {
+      if (event.affectsConfiguration("dext.mcpServers") || event.affectsConfiguration("dext.mcpTools")) {
+        await application.reload();
+        await sidebar.refresh();
+        return;
+      }
       if (
         event.affectsConfiguration("workbench.colorTheme")
         || event.affectsConfiguration("workbench.preferredDarkColorTheme")

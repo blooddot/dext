@@ -19,9 +19,7 @@ describe("DextLanguageService workflow features", () => {
     expect(service.documentCompletions("skill(skill=").map((item) => item.label)).toEqual([]);
   });
 
-  it("offers references for an input f-string and Agent result fields", () => {
-    const refs = service.documentCompletions('ask(input=f"{ref.');
-    expect(refs.map((item) => item.label)).toEqual(["selection", "active_file", "file", "dir", "symbol"]);
+  it("offers Agent result fields", () => {
     const source = 'task = agent(input="plan", apply=False)\ntask.';
     expect(service.documentCompletions(source).map((item) => item.label)).toEqual(["text", "summary", "patch", "files"]);
   });
@@ -46,8 +44,6 @@ describe("DextLanguageService workflow features", () => {
       activeParameter: 0,
       label: expect.stringContaining("options")
     });
-    const refs = service.documentCompletions('agent(input=f"{ref.');
-    expect(refs.map((item) => item.label)).toEqual(["selection", "active_file", "file", "dir", "symbol"]);
     expect(service.documentHover("ref.dir", 2)).toMatchObject({
       label: "ref.dir",
       documentation: expect.stringContaining("never expanded")

@@ -11,15 +11,19 @@ import {
   aioaRequestPayload,
   aioaTurnPrompt,
   DefaultAioaCdpConnection,
+  defaultAioaExecutable,
   normalizeAioaCdpEndpoint,
   normalizeAioaWorkspaceName,
   openAioaWorkspaceConversation,
   parseJsonOutput,
   replaceAioaText,
+  resolveAioaExecutable,
   type AioaCdpConnection,
   type AioaCdpPage,
+  type AioaCdpPortAllocator,
   type AioaConversationSetupNavigator,
   type AioaConversationSetupSnapshot,
+  type AioaStartedProcess,
   type AioaTrustedInput
 } from "../src/core/aioaCdp.js";
 import type { AgentExecutionRequest } from "../src/core/agentRunner.js";
@@ -98,6 +102,16 @@ function page(overrides: Partial<AioaCdpPage> = {}): AioaCdpPage {
     close: async () => undefined,
     ...overrides
   };
+}
+
+function portAllocator(...ports: number[]): AioaCdpPortAllocator & { allocate: ReturnType<typeof vi.fn> } {
+  const allocate = vi.fn();
+  for (const port of ports) allocate.mockResolvedValueOnce(port);
+  return { allocate };
+}
+
+function startedProcess(failure: () => ReturnType<AioaStartedProcess["failure"]> = () => undefined): AioaStartedProcess {
+  return { pid: 42, failure };
 }
 
 function setupSnapshot(
@@ -345,27 +359,230 @@ describe("AIOA CDP", () => {
     expect(insertText).toHaveBeenCalledWith({ text: "bext" });
   });
 
-  it("launches AIOA with a loopback-only debugging port when attach fails", async () => {
+  it("launches AIOA on a dynamic loopback-only port when the fixed endpoint fails", async () => {
     const ready = page();
     const connector = { connect: vi.fn().mockRejectedValueOnce(new Error("offline")).mockResolvedValue(ready) };
-    const launcher = { launch: vi.fn().mockResolvedValue(undefined) };
+    const launcher = { launch: vi.fn().mockResolvedValue(startedProcess()) };
+    const allocator = portAllocator(42_001);
     const connection = new DefaultAioaCdpConnection(connector, launcher, {
       startupTimeoutMs: 20,
       pollIntervalMs: 0,
-      sleep: async () => undefined
+      sleep: async () => undefined,
+      portAllocator: allocator
     });
 
-    const opened = await connection.open(profile("launch"));
+    const launchProfile = { ...profile("launch"), endpoint: "http://localhost:9229" };
+    const opened = await connection.open(launchProfile);
 
     expect(opened).toEqual({ page: ready, launched: true });
     expect(launcher.launch).toHaveBeenCalledWith("AIOA.exe", [
-      "--remote-debugging-port=9229",
+      "--remote-debugging-port=42001",
       "--remote-debugging-address=127.0.0.1"
     ]);
+    expect(allocator.allocate).toHaveBeenCalledOnce();
     expect(aioaLaunchArguments("http://localhost:9876")).toEqual([
       "--remote-debugging-port=9876",
       "--remote-debugging-address=127.0.0.1"
     ]);
+    expect(connector.connect).toHaveBeenNthCalledWith(1, "http://localhost:9229");
+    expect(connector.connect).toHaveBeenNthCalledWith(2, "http://127.0.0.1:42001");
+  });
+
+  it("does not allocate or launch when the fixed launch endpoint is healthy", async () => {
+    const ready = page();
+    const connector = { connect: vi.fn().mockResolvedValue(ready) };
+    const launcher = { launch: vi.fn().mockResolvedValue(startedProcess()) };
+    const allocator = portAllocator(42_002);
+    const connection = new DefaultAioaCdpConnection(connector, launcher, { portAllocator: allocator });
+
+    await expect(connection.open(profile("launch"))).resolves.toEqual({ page: ready, launched: false });
+    expect(allocator.allocate).not.toHaveBeenCalled();
+    expect(launcher.launch).not.toHaveBeenCalled();
+  });
+
+  it("keeps a successful manual localhost attachment on its configured endpoint", async () => {
+    const ready = page();
+    const connector = { connect: vi.fn().mockResolvedValue(ready) };
+    const launcher = { launch: vi.fn().mockResolvedValue(startedProcess()) };
+    const connection = new DefaultAioaCdpConnection(connector, launcher);
+
+    const opened = await connection.open({ ...profile("attach"), endpoint: "http://localhost:9229" });
+
+    expect(opened).toEqual({ page: ready, launched: false });
+    expect(connector.connect).toHaveBeenCalledWith("http://localhost:9229");
+    expect(launcher.launch).not.toHaveBeenCalled();
+  });
+
+  it("does not allocate or launch when attach mode cannot reach its fixed endpoint", async () => {
+    const connector = { connect: vi.fn().mockRejectedValue(new Error("offline")) };
+    const launcher = { launch: vi.fn().mockResolvedValue(startedProcess()) };
+    const allocator = portAllocator(42_003);
+    const connection = new DefaultAioaCdpConnection(connector, launcher, { portAllocator: allocator });
+
+    await expect(connection.open(profile("attach"))).rejects.toThrow(/Unable to attach/i);
+    expect(allocator.allocate).not.toHaveBeenCalled();
+    expect(launcher.launch).not.toHaveBeenCalled();
+  });
+
+  it("keeps polling a cold AIOA launch until CDP becomes ready", async () => {
+    const ready = page();
+    const connector = {
+      connect: vi.fn()
+        .mockRejectedValueOnce(new Error("initial refused"))
+        .mockRejectedValueOnce(new Error("starting"))
+        .mockRejectedValueOnce(new Error("still starting"))
+        .mockResolvedValueOnce(ready)
+    };
+    const launcher = { launch: vi.fn().mockResolvedValue(startedProcess()) };
+    const allocator = portAllocator(42_004);
+    const connection = new DefaultAioaCdpConnection(connector, launcher, {
+      startupTimeoutMs: 100,
+      pollIntervalMs: 0,
+      sleep: async () => undefined,
+      portAllocator: allocator
+    });
+
+    await expect(connection.open(profile("launch"))).resolves.toEqual({ page: ready, launched: true });
+    expect(connector.connect).toHaveBeenCalledTimes(4);
+    expect(launcher.launch).toHaveBeenCalledOnce();
+  });
+
+  it("reports a launcher spawn error with the CDP endpoint", async () => {
+    const connector = { connect: vi.fn().mockRejectedValue(new Error("offline")) };
+    const launcher = { launch: vi.fn().mockRejectedValue(new Error("spawn ENOENT")) };
+    const connection = new DefaultAioaCdpConnection(connector, launcher, { portAllocator: portAllocator(42_005) });
+
+    await expect(connection.open(profile("launch"))).rejects.toThrow(/127\.0\.0\.1:42005.*spawn ENOENT/i);
+  });
+
+  it("keeps polling after an AIOA process exit and reports it with the final CDP failure", async () => {
+    const connector = { connect: vi.fn().mockRejectedValue(new Error("offline")) };
+    const launcher = {
+      launch: vi.fn().mockResolvedValue(startedProcess(() => ({ kind: "exit", code: 0, signal: null })))
+    };
+    const connection = new DefaultAioaCdpConnection(connector, launcher, {
+      startupTimeoutMs: 0,
+      sleep: async () => undefined,
+      portAllocator: portAllocator(42_006, 42_007)
+    });
+
+    await expect(connection.open(profile("launch"))).rejects.toThrow(/exited before CDP.*code 0.*offline/i);
+    expect(connector.connect).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps polling after an AIOA process error and reports it with the final CDP failure", async () => {
+    const connector = { connect: vi.fn().mockRejectedValue(new Error("offline")) };
+    const launcher = {
+      launch: vi.fn().mockResolvedValue(startedProcess(() => ({ kind: "error", error: new Error("access denied") })))
+    };
+    const connection = new DefaultAioaCdpConnection(connector, launcher, {
+      startupTimeoutMs: 0,
+      sleep: async () => undefined,
+      portAllocator: portAllocator(42_008, 42_009)
+    });
+
+    await expect(connection.open(profile("launch"))).rejects.toThrow(/launch error: access denied.*offline/i);
+    expect(connector.connect).toHaveBeenCalledTimes(3);
+  });
+
+  it("reports the endpoint and last CDP error after startup timeout", async () => {
+    const connector = {
+      connect: vi.fn().mockRejectedValue(new Error("CDP still refused"))
+    };
+    const launcher = { launch: vi.fn().mockResolvedValue(startedProcess()) };
+    const connection = new DefaultAioaCdpConnection(connector, launcher, {
+      startupTimeoutMs: 0,
+      sleep: async () => undefined,
+      portAllocator: portAllocator(42_010, 42_011)
+    });
+
+    await expect(connection.open(profile("launch"))).rejects.toThrow(/fixed endpoint.*9229.*Last dynamic endpoint.*42011.*CDP still refused/i);
+  });
+
+  it("does not wait through a full startup timeout when a dynamic AIOA launch exits cleanly", async () => {
+    const connector = { connect: vi.fn().mockRejectedValue(new Error("CDP still refused")) };
+    const launcher = {
+      launch: vi.fn().mockResolvedValue(startedProcess(() => ({ kind: "exit", code: 0, signal: null })))
+    };
+    const connection = new DefaultAioaCdpConnection(connector, launcher, {
+      startupTimeoutMs: 60_000,
+      pollIntervalMs: 1_000,
+      sleep: async () => undefined,
+      portAllocator: portAllocator(42_014, 42_015)
+    });
+
+    await expect(connection.open(profile("launch"))).rejects.toThrow(/exited before CDP.*code 0.*CDP still refused/i);
+    // One failed fixed-endpoint probe plus a four-second grace window for each
+    // dynamic launch, instead of two 60-second blind waits.
+    expect(connector.connect).toHaveBeenCalledTimes(11);
+  });
+
+  it("stops polling immediately when a dynamic AIOA launch crashes with a non-zero exit", async () => {
+    const connector = { connect: vi.fn().mockRejectedValue(new Error("CDP still refused")) };
+    const launcher = {
+      launch: vi.fn().mockResolvedValue(startedProcess(() => ({ kind: "exit", code: 9, signal: null })))
+    };
+    const connection = new DefaultAioaCdpConnection(connector, launcher, {
+      startupTimeoutMs: 60_000,
+      pollIntervalMs: 1_000,
+      sleep: async () => undefined,
+      portAllocator: portAllocator(42_018, 42_019)
+    });
+
+    await expect(connection.open(profile("launch"))).rejects.toThrow(/exited before CDP.*code 9.*CDP still refused/i);
+    // One fixed-endpoint probe plus two dynamic launches that each stop after
+    // the first poll, instead of two 60-second blind waits.
+    expect(connector.connect).toHaveBeenCalledTimes(3);
+  });
+
+  it("reuses a healthy dynamic endpoint and falls back to a new one when it stops responding", async () => {
+    const first = page();
+    const second = page();
+    const connector = {
+      connect: vi.fn()
+        .mockRejectedValueOnce(new Error("fixed offline"))
+        .mockResolvedValueOnce(first)
+        .mockResolvedValueOnce(first)
+        .mockRejectedValueOnce(new Error("cached offline"))
+        .mockRejectedValueOnce(new Error("fixed offline"))
+        .mockResolvedValueOnce(second)
+    };
+    const launcher = { launch: vi.fn().mockResolvedValue(startedProcess()) };
+    const allocator = portAllocator(42_012, 42_013);
+    const connection = new DefaultAioaCdpConnection(connector, launcher, {
+      startupTimeoutMs: 0,
+      sleep: async () => undefined,
+      portAllocator: allocator
+    });
+
+    await expect(connection.open(profile("launch"))).resolves.toEqual({ page: first, launched: true });
+    await expect(connection.open(profile("launch"))).resolves.toEqual({ page: first, launched: false });
+    await expect(connection.open(profile("launch"))).resolves.toEqual({ page: second, launched: true });
+    expect(allocator.allocate).toHaveBeenCalledTimes(2);
+    expect(launcher.launch).toHaveBeenCalledTimes(2);
+    expect(connector.connect).toHaveBeenNthCalledWith(2, "http://127.0.0.1:42012");
+    expect(connector.connect).toHaveBeenNthCalledWith(3, "http://127.0.0.1:42012");
+    expect(connector.connect).toHaveBeenNthCalledWith(6, "http://127.0.0.1:42013");
+  });
+
+  it("reports an allocator failure without launching AIOA", async () => {
+    const connector = { connect: vi.fn().mockRejectedValue(new Error("fixed offline")) };
+    const launcher = { launch: vi.fn().mockResolvedValue(startedProcess()) };
+    const allocator = { allocate: vi.fn().mockRejectedValue(new Error("bind denied")) };
+    const connection = new DefaultAioaCdpConnection(connector, launcher, { portAllocator: allocator });
+
+    await expect(connection.open(profile("launch"))).rejects.toThrow(/allocate.*9229.*bind denied/i);
+    expect(launcher.launch).not.toHaveBeenCalled();
+  });
+
+  it("preserves configured executables and probes the local AIOA installation as a fallback", () => {
+    const environment = { LOCALAPPDATA: "C:/Users/Test/AppData/Local" };
+    const fallback = defaultAioaExecutable(environment);
+    expect(resolveAioaExecutable("custom-aioa.exe", environment, () => false)).toBe("custom-aioa.exe");
+    expect(resolveAioaExecutable("C:/tools/AIOA.exe", environment, (path) => path === "C:/tools/AIOA.exe"))
+      .toBe("C:/tools/AIOA.exe");
+    expect(resolveAioaExecutable("C:/missing/AIOA.exe", environment, (path) => path === fallback)).toBe(fallback);
+    expect(() => resolveAioaExecutable("", environment, () => false)).toThrow(/Checked:.*AIOA\.exe/i);
   });
 
   it("streams only the new AIOA response and returns its typed JSON", async () => {
@@ -391,9 +608,53 @@ describe("AIOA CDP", () => {
     expect(aioaExecutionPrompt(request())).toContain("Do not modify workspace files");
     expect(events).toEqual([
       "status:Connecting to AIOA",
-      "status:Creating an AIOA task in the Dext workspace"
+      "status:Creating an AIOA task in the Dext workspace",
+      "status:Waiting for AIOA response"
     ]);
     expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("reports an AIOA turn that never starts responding instead of waiting for the global timeout", async () => {
+    let now = 0;
+    const events: string[] = [];
+    const connection: AioaCdpConnection = {
+      open: async () => ({ page: page({ updatesAfter: async () => ({ busy: true, messages: [] }) }), launched: false })
+    };
+    const runner = new AioaCdpAgentRunner(connection, {
+      timeoutMs: 1_000,
+      pollIntervalMs: 10,
+      initialResponseTimeoutMs: 20,
+      sleep: async () => { now += 10; },
+      now: () => now
+    });
+
+    await expect(runner.run(request((event) => events.push(`${event.phase}:${event.text}`))))
+      .rejects.toThrow(/did not begin responding within 1 seconds/i);
+    expect(events).toContain("status:Waiting for AIOA response");
+  });
+
+  it("keeps a silent work log private while using it to detect whether AIOA is still active", async () => {
+    let now = 0;
+    const events: string[] = [];
+    const connection: AioaCdpConnection = {
+      open: async () => ({
+        page: page({ updatesAfter: async () => ({ busy: true, messages: [], activity: "private work-log detail" }) }),
+        launched: false
+      })
+    };
+    const runner = new AioaCdpAgentRunner(connection, {
+      timeoutMs: 1_000,
+      pollIntervalMs: 10,
+      initialResponseTimeoutMs: 20,
+      responseIdleTimeoutMs: 30,
+      sleep: async () => { now += 10; },
+      now: () => now
+    });
+
+    await expect(runner.run(request((event) => events.push(`${event.phase}:${event.text}`))))
+      .rejects.toThrow(/stopped responding for 1 seconds/i);
+    expect(events).toContain("status:AIOA is working");
+    expect(events.join("\n")).not.toContain("private work-log detail");
   });
 
   it("keeps polling until final content mounts after the work log finishes", async () => {

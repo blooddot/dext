@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 interface PackageManifest {
   activationEvents?: string[];
   contributes?: {
+    commands?: Array<{ command?: string; title?: string }>;
     menus?: Record<string, Array<{ command?: string; when?: string; group?: string }>>;
     keybindings?: Array<{ command?: string; key?: string; mac?: string; when?: string }>;
     configuration?: {
@@ -53,5 +54,19 @@ describe("Dext package manifest", () => {
       when: "view == dext.sidebar",
       group: "navigation@1"
     });
+  });
+
+  it("contributes secure HTTP MCP settings and credential commands", async () => {
+    const value = await manifest();
+    expect(value.activationEvents).toContain("onCommand:dext.setMcpAccessToken");
+    expect(value.activationEvents).toContain("onCommand:dext.clearMcpAccessToken");
+    expect(value.activationEvents).toContain("onCommand:dext.verifyMcpServer");
+    expect(value.contributes?.commands).toEqual(expect.arrayContaining([
+      expect.objectContaining({ command: "dext.setMcpAccessToken", title: "Dext: Set MCP Access Token" }),
+      expect.objectContaining({ command: "dext.clearMcpAccessToken", title: "Dext: Clear MCP Access Token" }),
+      expect.objectContaining({ command: "dext.verifyMcpServer", title: "Dext: Verify MCP Server" })
+    ]));
+    const setting = (await manifest()).contributes?.configuration?.properties?.["dext.mcpServers"];
+    expect(setting?.description).toContain("SecretStorage");
   });
 });

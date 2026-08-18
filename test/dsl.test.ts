@@ -11,11 +11,13 @@ function compile(source: string) {
 
 describe("Dext Python workflow compiler", () => {
   it("accepts the public top-level APIs and print", () => {
-    const result = compile(`answer = ask(input=f"Explain {ref.selection}")
-preview = agent(input=f"Implement {ref.file('src/a.ts')}", apply=False)
-apply(result=preview)
-terminal = terminal(command="git status")
-print(text=answer.text)`);
+    const result = compile([
+      'answer = ask(input="Explain @src/selection.ts")',
+      'preview = agent(input="Implement @src/a.ts", apply=False)',
+      "apply(result=preview)",
+      'terminal = terminal(command="git status")',
+      "print(text=answer.text)"
+    ].join("\n"));
     expect(result.diagnostics).toEqual([]);
     expect(result.program?.statements).toHaveLength(5);
   });
@@ -34,13 +36,19 @@ choice = ui.choose(label="Pick", options=["one", "two"])`);
       .toContain("expects dict[str, object]");
   });
 
-  it("only permits safe core input f-string interpolation", () => {
-    expect(compile('ask(input=f"look at {ref.active_file}")').diagnostics).toEqual([]);
+  it("migrates legacy input f-string references but rejects arbitrary f-strings", () => {
+    expect(compile('ask(input=f"look at {ref.file(\'src/a.ts\')}")').diagnostics).toEqual([]);
     expect(compile('agent(input=f"change {ref.dir(\'src\')}")').diagnostics).toEqual([]);
     expect(compile('ask(input=f"bad {1 + 2}")').diagnostics.map((item) => item.message).join("\n"))
-      .toContain("only allows ref.file/ref.dir");
+      .toContain("FormatString");
     expect(compile('print(text=f"bad {ref.selection}")').diagnostics.map((item) => item.message).join("\n"))
-      .toContain("f-strings are only allowed");
+      .toContain("FormatString");
+  });
+
+  it("accepts editor-generated @ input and still rejects a raw string/reference binary expression", () => {
+    expect(compile('ask(input="Review @docs/drag-drop.md")').diagnostics).toEqual([]);
+    expect(compile('ask(input="Review " + ref.file("docs/drag-drop.md"))').diagnostics.map((item) => item.message).join("\n"))
+      .toContain("BinaryExpression");
   });
 
   it("rejects all removed public APIs", () => {

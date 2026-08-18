@@ -19,6 +19,13 @@ import type { AgentMessagePresentation } from "../agentMessagePresentation.js";
 import { presentDiff } from "../diffPresentation.js";
 import type { DextHistoryRecord, DextHistorySession } from "../historyStore.js";
 import { groupMethodsForDisplay, isSyntheticBuiltinGroup } from "./methodGroups.js";
+import {
+  compactFileReferenceLabel,
+  inputReferenceDisplayParts,
+  inputReferenceDisplayText,
+  normalizeInputReferenceSource
+} from "../core/fileReference.js";
+import { createFileReferenceChip, fileReferenceChipDescriptor } from "./fileReferenceChip.js";
 
 interface VsCodeApi {
   postMessage(message: WebviewRequest): void;
@@ -66,7 +73,7 @@ let agentTrace: HTMLDetailsElement | undefined;
 let agentRunStartedAt = 0;
 let agentRunTimer: ReturnType<typeof setInterval> | undefined;
 let agentProgress: HTMLElement | undefined;
-let agentProgressState: "Thinking" | "Worked" = "Thinking";
+let agentProgressState = "Thinking";
 let agentCommandIds = new Set<string>();
 let agentEditedUris = new Set<string>();
 const agentGroups = new Map<"reasoning" | "files" | "tool", { disclosure: HTMLDetailsElement; body: HTMLElement }>();
@@ -523,7 +530,42 @@ function outputTurnSection(label: string, open: boolean): { disclosure: HTMLDeta
   return { disclosure, body };
 }
 
+function referenceIcon(kind: "file" | "dir" | "symbol" | "selection" | "activeFile"): string {
+  if (kind === "dir") return "folder";
+  if (kind === "symbol") return "symbol-method";
+  return "file";
+}
+
+/** Renders readable @path tokens as the same chips used by the editor.
+ * The source remains unchanged for copy and history replay. */
+function renderedInputSource(source: string): HTMLPreElement {
+  const pre = document.createElement("pre");
+  pre.className = "dext-source";
+  for (const part of inputReferenceDisplayParts(source)) {
+    if (part.kind === "text") {
+      pre.append(document.createTextNode(part.value));
+      continue;
+    }
+    const reference = part.reference;
+    const descriptor = fileReferenceChipDescriptor(
+      compactFileReferenceLabel(reference.payload),
+      reference.payload
+    );
+    pre.append(createFileReferenceChip({
+      document,
+      ...descriptor,
+      modifierClass: "output-file-reference",
+      icon: referenceIcon(reference.kind),
+      ...(reference.kind === "file"
+        ? { onOpen: () => vscode.postMessage({ type: "openFileReference", reference: reference.payload }) }
+        : {})
+    }));
+  }
+  return pre;
+}
+
 function createOutputTurn(turnId: string, source: string, createdAt = Date.now()): OutputTurnElements {
+  source = normalizeInputReferenceSource(source);
   for (const turn of outputTurns.values()) turn.disclosure.open = false;
   const disclosure = document.createElement("details");
   disclosure.className = "output-turn";
@@ -537,14 +579,12 @@ function createOutputTurn(turnId: string, source: string, createdAt = Date.now()
   time.textContent = new Date(createdAt).toLocaleTimeString();
   const title = document.createElement("span");
   title.className = "output-turn-title";
-  title.textContent = source.split(/\r?\n/, 1)[0]?.slice(0, 140) || "Dext turn";
+  title.textContent = inputReferenceDisplayText(source).split(/\r?\n/, 1)[0]?.slice(0, 140) || "Dext turn";
   summary.append(chevron, time, title);
   const body = document.createElement("div");
   body.className = "output-turn-body";
   const input = outputTurnSection("Input", false);
-  const inputText = document.createElement("pre");
-  inputText.className = "dext-source";
-  inputText.textContent = source;
+  const inputText = renderedInputSource(source);
   const inputCopy = document.createElement("div");
   inputCopy.className = "output-turn-input";
   inputCopy.append(inputText, copyButton(source));
@@ -892,7 +932,7 @@ function agentStreamPanel(): HTMLElement {
 
 function updateAgentProgress(label: string): void {
   if (!agentProgress) return;
-  agentProgressState = label === "Worked" ? "Worked" : "Thinking";
+  agentProgressState = label;
   const elapsed = agentRunStartedAt ? Math.max(0, Date.now() - agentRunStartedAt) : 0;
   const details = [
     agentEditedUris.size ? `Edited ${agentEditedUris.size} file${agentEditedUris.size === 1 ? "" : "s"}` : "",
@@ -950,7 +990,10 @@ function updateAgentGroupLabel(kind: "reasoning" | "files" | "tool"): void {
 }
 
 function renderAgentEvent(event: AgentStreamEvent): void {
-  if (event.phase === "status") return;
+  if (event.phase === "status") {
+    updateAgentProgress(event.text);
+    return;
+  }
   if (event.phase === "reasoning" || event.phase === "message") updateAgentProgress("Thinking");
   const group = agentGroup(event.phase === "tool" ? "tool" : "reasoning");
   const panel = group.body;

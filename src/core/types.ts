@@ -64,13 +64,6 @@ export interface DirectoryReference {
   path: string;
 }
 
-/** Internal representation for a ask/agent f-string. It keeps
- * references separate until the context resolver can resolve them in order. */
-export interface InterpolatedInput {
-  kind: "interpolatedInput";
-  parts: (string | ContextReference | DirectoryReference | DextResultBase)[];
-}
-
 export type InvocationValue =
   | string
   | number
@@ -78,7 +71,6 @@ export type InvocationValue =
   | ContextReference
   | DirectoryReference
   | DirRef
-  | InterpolatedInput
   | CodeRef
   | DextResultBase
   | InvocationValue[]

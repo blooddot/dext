@@ -9,15 +9,18 @@ import {
 } from "@codemirror/view";
 import {
   compactFileReferenceLabel,
-  fileReferenceOccurrences,
-  type FileReferenceOccurrence
+  inputReferenceProjections,
+  type InputReferenceProjection
 } from "../core/fileReference.js";
 import {
   createFileReferenceChip,
   fileReferenceChipDescriptor
 } from "./fileReferenceChip.js";
 
-export { fileReferenceOccurrences } from "../core/fileReference.js";
+export {
+  fileReferenceOccurrences,
+  inputReferenceProjections
+} from "../core/fileReference.js";
 
 export interface FileReferenceDecorationOptions {
   onOpen(reference: string): void;
@@ -25,33 +28,36 @@ export interface FileReferenceDecorationOptions {
 
 class FileReferenceWidget extends WidgetType {
   constructor(
-    private readonly occurrence: FileReferenceOccurrence,
+    private readonly projection: InputReferenceProjection,
     private readonly onOpen: (reference: string) => void
   ) {
     super();
   }
 
   override eq(other: FileReferenceWidget): boolean {
-    return this.occurrence.start === other.occurrence.start
-      && this.occurrence.end === other.occurrence.end
-      && this.occurrence.payload === other.occurrence.payload;
+    return this.projection.interpolationStart === other.projection.interpolationStart
+      && this.projection.interpolationEnd === other.projection.interpolationEnd
+      && this.projection.reference.payload === other.projection.reference.payload;
   }
 
   override toDOM(view: EditorView): HTMLElement {
     const descriptor = fileReferenceChipDescriptor(
-      compactFileReferenceLabel(this.occurrence.payload),
-      this.occurrence.payload
+      compactFileReferenceLabel(this.projection.reference.payload),
+      this.projection.reference.payload
     );
     return createFileReferenceChip({
       document: view.dom.ownerDocument,
       ...descriptor,
       modifierClass: "code-file-reference",
       suppressPointerDown: true,
-      onOpen: () => this.onOpen(this.occurrence.payload),
+      onOpen: () => this.onOpen(this.projection.reference.payload),
       onRemove: () => {
         view.dispatch({
-          changes: { from: this.occurrence.start, to: this.occurrence.end },
-          selection: { anchor: this.occurrence.start },
+          changes: {
+            from: this.projection.interpolationStart,
+            to: this.projection.interpolationEnd
+          },
+          selection: { anchor: this.projection.interpolationStart },
           scrollIntoView: true,
           userEvent: "delete"
         });
@@ -65,16 +71,19 @@ class FileReferenceWidget extends WidgetType {
   }
 }
 
-function referenceDecorations(
-  view: EditorView,
+export function inputReferenceProjectionDecorations(
+  source: string,
   onOpen: (reference: string) => void
 ): DecorationSet {
-  return Decoration.set(fileReferenceOccurrences(view.state.doc.toString()).map((occurrence) => (
-    Decoration.replace({
-      widget: new FileReferenceWidget(occurrence, onOpen),
-      inclusive: false
-    }).range(occurrence.start, occurrence.end)
-  )), true);
+  const projections = inputReferenceProjections(source);
+  return Decoration.set([
+    ...projections.map((projection) => (
+      Decoration.replace({
+        widget: new FileReferenceWidget(projection, onOpen),
+        inclusive: false
+      }).range(projection.interpolationStart, projection.interpolationEnd)
+    ))
+  ], true);
 }
 
 export function fileReferenceDecorations(options: FileReferenceDecorationOptions): Extension {
@@ -83,11 +92,13 @@ export function fileReferenceDecorations(options: FileReferenceDecorationOptions
     decorations: DecorationSet;
 
     constructor(view: EditorView) {
-      this.decorations = referenceDecorations(view, onOpen);
+      this.decorations = inputReferenceProjectionDecorations(view.state.doc.toString(), onOpen);
     }
 
     update(update: ViewUpdate): void {
-      if (update.docChanged) this.decorations = referenceDecorations(update.view, onOpen);
+      if (update.docChanged) {
+        this.decorations = inputReferenceProjectionDecorations(update.view.state.doc.toString(), onOpen);
+      }
     }
   }, {
     decorations: (value) => value.decorations

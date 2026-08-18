@@ -147,6 +147,22 @@ describe("Dext history rendering", () => {
     expect(html).not.toContain("40499 ms");
   });
 
+  it("renders readable @ reference tokens as Chips while retaining raw copy source", () => {
+    const token = "@src/pathx.py#L55,1-L66,32";
+    const record: DextHistoryRecord = {
+      id: "reference",
+      createdAt: 1,
+      input: 'agent(input="Explain ' + token + '")',
+      process: [],
+      output: ""
+    };
+
+    const html = renderHistoryRecord(record);
+    expect(html).toContain("history-file-reference");
+    expect(html).toContain("pathx.py 55-66");
+    expect(html).toContain(token);
+  });
+
   it("groups continuous turns under one collapsible conversation", () => {
     const turns: DextHistoryRecord[] = ["first", "second"].map((text, index) => ({
       id: String(index),

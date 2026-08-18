@@ -187,8 +187,7 @@ export function agentPayload(request: AgentExecutionRequest): string {
     description: request.method.description,
     ...(request.metadata.instruction ? { instruction: request.metadata.instruction } : {}),
     arguments: Object.fromEntries(Object.entries(request.resolved.arguments).map(([key, value]) => [key, displayValue(value)])),
-    // ask/agent inline references are rendered in their input string
-    // at the original f-string location, so do not duplicate their content.
+    // Inline inputs are readable @path tokens and are sent unchanged.
     context: ["ask", "agent"].includes(request.method.id)
       ? []
       : request.resolved.context.map(displayValue)

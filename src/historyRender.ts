@@ -8,6 +8,13 @@ import { presentAgentMessage } from "./agentMessagePresentation.js";
 import { presentDiff } from "./diffPresentation.js";
 import type { AgentMessagePresentation } from "./agentMessagePresentation.js";
 import type { PatchChange } from "./core/types.js";
+import {
+  compactFileReferenceLabel,
+  inputReferenceDisplayParts,
+  inputReferenceDisplayText,
+  normalizeInputReferenceSource,
+  type ContextReferenceOccurrence
+} from "./core/fileReference.js";
 
 export function escapeHtml(value: string): string {
   return value.replace(/[&><"]/g, (character) => ({
@@ -58,6 +65,29 @@ export function highlightDext(source: string): string {
     () => { html += "\n"; }
   );
   return html;
+}
+
+function referenceIcon(reference: ContextReferenceOccurrence): string {
+  if (reference.kind === "dir") return "folder";
+  if (reference.kind === "symbol") return "symbol-method";
+  return "file";
+}
+
+/** History keeps readable source for copy/replay and renders @path tokens as
+ * Chips in the rendered view. */
+function inputReferenceChip(reference: ContextReferenceOccurrence): string {
+  const label = compactFileReferenceLabel(reference.payload);
+  const title = escapeHtml(reference.payload);
+  const open = reference.kind === "file"
+    ? ` data-open-file-reference="${title}"`
+    : "";
+  return `<span class="attachment-chip history-file-reference" title="${title}"><button class="attachment-open" type="button" title="Open ${escapeHtml(label)}" aria-label="Open ${escapeHtml(label)}"${open}><i class="codicon codicon-${referenceIcon(reference)}"></i><span class="attachment-label">${escapeHtml(label)}</span></button></span>`;
+}
+
+function renderedInputSource(source: string): string {
+  return inputReferenceDisplayParts(source)
+    .map((part) => part.kind === "text" ? escapeHtml(part.value) : inputReferenceChip(part.reference))
+    .join("");
 }
 
 function resultText(result: DextResult): string {
@@ -164,19 +194,22 @@ function dateLabel(timestamp: number): string {
 }
 
 export function renderHistoryRecord(record: DextHistoryRecord): string {
+  const input = normalizeInputReferenceSource(record.input);
   const response = parsedResponse(record);
-  const firstLine = record.input.split(/\r?\n/, 1)[0]!.slice(0, 140);
+  const firstLine = inputReferenceDisplayText(input).split(/\r?\n/, 1)[0]!.slice(0, 140);
   const duration = response?.executions.reduce((total, item) => total + item.durationMs, 0) ?? 0;
   const processHtml = process(record.process);
   const outputHtml = record.error
     ? `<pre class="error">${escapeHtml(record.error)}</pre>`
     : response ? output(response) : `<pre>${escapeHtml(record.output)}</pre>`;
   const outputCopy = record.error || (response ? outputText(response) : record.output);
-  return `<details class="history-record"><summary>${chevron()}<span>${escapeHtml(dateLabel(record.createdAt))}</span><span class="history-summary-input">${escapeHtml(firstLine)}</span><span class="history-meta">${duration ? formatDuration(duration) : ""}</span></summary><div class="history-record-body"><details class="history-disclosure"><summary>${chevron()}<span>Input</span>${copyButton(record.input)}</summary><pre class="dext-source">${highlightDext(record.input)}</pre></details>${processHtml ? `<details class="history-disclosure"><summary>${chevron()}<span>Process</span></summary><div class="disclosure-body">${processHtml}</div></details>` : ""}<details class="history-disclosure" open><summary>${chevron()}<span>Output</span>${copyButton(outputCopy)}</summary><div class="disclosure-body">${outputHtml}</div></details></div></details>`;
+  return `<details class="history-record"><summary>${chevron()}<span>${escapeHtml(dateLabel(record.createdAt))}</span><span class="history-summary-input">${escapeHtml(firstLine)}</span><span class="history-meta">${duration ? formatDuration(duration) : ""}</span></summary><div class="history-record-body"><details class="history-disclosure"><summary>${chevron()}<span>Input</span>${copyButton(input)}</summary><pre class="dext-source">${renderedInputSource(input)}</pre></details>${processHtml ? `<details class="history-disclosure"><summary>${chevron()}<span>Process</span></summary><div class="disclosure-body">${processHtml}</div></details>` : ""}<details class="history-disclosure" open><summary>${chevron()}<span>Output</span>${copyButton(outputCopy)}</summary><div class="disclosure-body">${outputHtml}</div></details></div></details>`;
 }
 
 export function renderHistorySession(session: DextHistorySession): string {
-  const firstInput = session.turns[0]?.input.split(/\r?\n/, 1)[0]?.slice(0, 140) ?? "Dext conversation";
+  const firstInput = session.turns[0]
+    ? inputReferenceDisplayText(session.turns[0].input).split(/\r?\n/, 1)[0]?.slice(0, 140) ?? "Dext conversation"
+    : "Dext conversation";
   const count = `${session.turns.length} turn${session.turns.length === 1 ? "" : "s"}`;
   return `<details class="history-session"><summary>${chevron()}<span>${escapeHtml(dateLabel(session.createdAt))}</span><span class="history-summary-input">${escapeHtml(firstInput)}</span><span class="history-meta">${count}</span></summary><div class="history-session-body">${session.turns.map(renderHistoryRecord).join("")}</div></details>`;
 }

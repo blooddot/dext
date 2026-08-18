@@ -4,7 +4,6 @@ import type {
   ContextReference,
   DirectoryReference,
   DirRef,
-  InterpolatedInput,
   InvocationValue,
   Range,
   RegisteredCallable,
@@ -63,34 +62,8 @@ function isDirRef(value: InvocationValue): value is DirRef {
     && "kind" in value && value.kind === "dirRef";
 }
 
-function isInterpolatedInput(value: InvocationValue): value is InterpolatedInput {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    && "kind" in value && value.kind === "interpolatedInput";
-}
-
 function isRecord(value: InvocationValue): value is { [key: string]: InvocationValue } {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isDirectoryPart(value: InterpolatedInput["parts"][number]): value is DirectoryReference {
-  return typeof value === "object" && value !== null && value.kind === "dir" && "path" in value;
-}
-
-function isContextPart(value: InterpolatedInput["parts"][number]): value is ContextReference {
-  return typeof value === "object" && value !== null
-    && ["selection", "activeFile", "file", "symbol"].includes(value.kind);
-}
-
-function inlineCodeReference(value: CodeRef): string {
-  const range = value.range
-    ? ` range="${value.range.start.line + 1}:${value.range.start.character + 1}-${value.range.end.line + 1}:${value.range.end.character + 1}"`
-    : "";
-  const symbol = value.symbol ? ` symbol=${JSON.stringify(value.symbol)}` : "";
-  return `<dext-ref uri=${JSON.stringify(value.uri)}${range}${symbol}>\n${value.content}\n</dext-ref>`;
-}
-
-function inlineDirectoryReference(value: DirRef): string {
-  return `<dext-dir uri=${JSON.stringify(value.uri)} path=${JSON.stringify(value.path)} />`;
 }
 
 export class ContextResolver {
@@ -130,31 +103,7 @@ export class ContextResolver {
     return directory;
   }
 
-  private async resolveInterpolatedInput(value: InterpolatedInput): Promise<{ input: string; context: CodeRef[] }> {
-    const parts: string[] = [];
-    const context: CodeRef[] = [];
-    for (const part of value.parts) {
-      if (typeof part === "string") {
-        parts.push(part);
-      } else if (isDirectoryPart(part)) {
-        parts.push(inlineDirectoryReference(await this.resolveDirectory(part)));
-      } else if (isContextPart(part)) {
-        const reference = await this.resolveReference(part);
-        context.push(reference);
-        parts.push(inlineCodeReference(reference));
-      } else {
-        parts.push(`<dext-result>${JSON.stringify(part)}</dext-result>`);
-      }
-    }
-    return { input: parts.join(""), context };
-  }
-
   private async resolveValue(value: InvocationValue, context: CodeRef[]): Promise<InvocationValue> {
-    if (isInterpolatedInput(value)) {
-      const resolved = await this.resolveInterpolatedInput(value);
-      context.push(...resolved.context);
-      return resolved.input;
-    }
     if (isCodeRef(value)) {
       context.push(value);
       return value;

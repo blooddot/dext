@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { appendFileSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { createServer } from "node:net";
+import { dirname, join } from "node:path";
 import CDP from "chrome-remote-interface";
 import type { AgentProfile } from "../agentProfiles.js";
 import { displayValue, type AgentExecutionRequest, type AgentRunner } from "./agentRunner.js";
@@ -8,9 +10,14 @@ import type { FieldDefinition } from "./types.js";
 
 const DEFAULT_TIMEOUT_MS = 600_000;
 const DEFAULT_POLL_INTERVAL_MS = 300;
-const DEFAULT_STARTUP_TIMEOUT_MS = 20_000;
+const DEFAULT_STARTUP_TIMEOUT_MS = 60_000;
+const DEFAULT_INITIAL_RESPONSE_TIMEOUT_MS = 75_000;
+const DEFAULT_RESPONSE_IDLE_TIMEOUT_MS = 90_000;
+const DEFAULT_FINAL_CONTENT_GRACE_MS = 2_000;
+const EARLY_EXIT_STARTUP_GRACE_MS = 4_000;
 const DEFAULT_WORKSPACE_TIMEOUT_MS = 2_000;
 const DEFAULT_WORKSPACE_POLL_INTERVAL_MS = 100;
+const DEFAULT_INITIAL_LOAD_TIMEOUT_MS = 15_000;
 const COMPOSER_SELECTOR = "textarea.aioa-biz-composer-editor";
 const ASSISTANT_MESSAGE_SELECTOR = "article.aioa-message.assistant";
 const USER_MESSAGE_SELECTOR = "article.aioa-message.user[data-message-id]";
@@ -29,6 +36,9 @@ export interface AioaConversationState {
 export interface AioaConversationUpdate {
   busy: boolean;
   messages: readonly AioaAssistantMessage[];
+  /** Internal progress fingerprint. It is never rendered because it can
+   * contain the host application's private work-log detail. */
+  activity?: string;
   conversationId?: string;
 }
 
@@ -83,19 +93,39 @@ export interface AioaCdpConnector {
 }
 
 export interface AioaProcessLauncher {
-  launch(executable: string, args: readonly string[]): Promise<void>;
+  launch(executable: string, args: readonly string[]): Promise<AioaStartedProcess>;
+}
+
+/** Allocates one ephemeral IPv4 loopback port for a new local AIOA instance. */
+export interface AioaCdpPortAllocator {
+  allocate(): Promise<number>;
+}
+
+export type AioaProcessFailure =
+  | { kind: "error"; error: Error }
+  | { kind: "exit"; code: number | null; signal: NodeJS.Signals | null };
+
+/** The child is unreferenced so it can outlive the host, while launch failures and early exits stay observable. */
+export interface AioaStartedProcess {
+  readonly pid?: number;
+  failure(): AioaProcessFailure | undefined;
 }
 
 interface AioaCdpRunnerOptions {
   timeoutMs?: number;
   pollIntervalMs?: number;
   sleep?: (milliseconds: number) => Promise<void>;
+  initialResponseTimeoutMs?: number;
+  responseIdleTimeoutMs?: number;
+  finalContentGraceMs?: number;
+  now?: () => number;
 }
 
 interface AioaCdpConnectionOptions {
   startupTimeoutMs?: number;
   pollIntervalMs?: number;
   sleep?: (milliseconds: number) => Promise<void>;
+  portAllocator?: AioaCdpPortAllocator;
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -212,13 +242,21 @@ export async function openAioaWorkspaceConversation(
   const pollIntervalMs = Math.max(1, options.pollIntervalMs ?? DEFAULT_WORKSPACE_POLL_INTERVAL_MS);
   const wait = options.sleep ?? sleep;
   const attempts = Math.max(1, Math.floor(timeoutMs / pollIntervalMs) + 1);
-  const initial = await navigator.snapshot();
-  if (initial.globalNewTaskPoints.length !== 1) {
-    throw new Error(
-      initial.globalNewTaskPoints.length === 0
-        ? "AIOA's global new-task button was not found."
-        : "AIOA has multiple visible global new-task buttons."
-    );
+  // AIOA 首次启动时页面需要时间渲染，先轮询等待"新建任务"按钮出现，
+  // 而不是立即快照一次就判定失败。
+  const initialLoadAttempts = Math.max(1, Math.floor(DEFAULT_INITIAL_LOAD_TIMEOUT_MS / pollIntervalMs) + 1);
+  const initial = await waitForSetupSnapshot(
+    navigator,
+    initialLoadAttempts,
+    pollIntervalMs,
+    wait,
+    (snapshot) => snapshot.globalNewTaskPoints.length >= 1
+  );
+  if (!initial) {
+    throw new Error("AIOA's global new-task button was not found.");
+  }
+  if (initial.globalNewTaskPoints.length > 1) {
+    throw new Error("AIOA has multiple visible global new-task buttons.");
   }
   await navigator.click(initial.globalNewTaskPoints[0]!);
 
@@ -333,12 +371,32 @@ export function aioaLaunchArguments(endpoint: string): string[] {
   ];
 }
 
-function resolveAioaExecutable(command: string): string {
-  const executable = command.trim() || defaultAioaExecutable();
-  if (/^[A-Za-z]:[\\/]/.test(executable) && !existsSync(executable)) {
-    throw new Error(`AIOA executable was not found: ${executable}`);
+function isExecutablePath(value: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(value) || value.startsWith("/") || value.startsWith("\\") || value.includes("/") || value.includes("\\");
+}
+
+export function resolveAioaExecutable(
+  command: string,
+  environment: NodeJS.ProcessEnv = process.env,
+  fileExists: (path: string) => boolean = existsSync
+): string {
+  const configured = command.trim();
+  const fallback = defaultAioaExecutable(environment);
+  const checked: string[] = [];
+
+  if (configured && !isExecutablePath(configured)) return configured;
+  if (configured) {
+    checked.push(configured);
+    if (fileExists(configured)) return configured;
   }
-  return executable;
+  if (!checked.includes(fallback)) {
+    checked.push(fallback);
+    if (fileExists(fallback)) return fallback;
+  }
+  // A bare executable may be resolved by the platform PATH. A concrete local
+  // app path is always checked before Dext attempts to launch it.
+  if (!isExecutablePath(fallback)) return fallback;
+  throw new Error(`AIOA executable was not found. Checked: ${checked.map((path) => `'${path}'`).join(", ")}.`);
 }
 
 export function parseJsonOutput(text: string, expectedKind?: string): unknown {
@@ -658,7 +716,12 @@ class ChromeRemoteAioaPage implements AioaCdpPage {
   }
 
   async updatesAfter(assistantIds: ReadonlySet<string>): Promise<AioaConversationUpdate> {
-    const snapshot = await this.evaluate<{ busy: boolean; messages: AioaAssistantMessage[]; conversationId?: string }>(`
+    const snapshot = await this.evaluate<{
+      busy: boolean;
+      messages: AioaAssistantMessage[];
+      activity?: string;
+      conversationId?: string;
+    }>(`
       (() => {
         const isVisible = (element) => {
           const rect = element.getBoundingClientRect();
@@ -667,6 +730,10 @@ class ChromeRemoteAioaPage implements AioaCdpPage {
         };
         const assistantMessages = [...document.querySelectorAll('${ASSISTANT_MESSAGE_SELECTOR}')].filter(isVisible);
         const userMessage = [...document.querySelectorAll('${USER_MESSAGE_SELECTOR}')].find(isVisible);
+        const workLog = assistantMessages
+          .flatMap((message) => [...message.querySelectorAll('.aioa-work-log')])
+          .filter(isVisible)
+          .at(-1);
         return JSON.stringify({
           busy: [...document.querySelectorAll('button[aria-label="停止生成"]')]
             .some((button) => isVisible(button) && !button.disabled),
@@ -681,6 +748,7 @@ class ChromeRemoteAioaPage implements AioaCdpPage {
               };
             })
             .slice(-4),
+          activity: (workLog?.innerText || '').trim() || undefined,
           conversationId: userMessage?.getAttribute('data-message-id') || undefined
         });
       })()
@@ -688,6 +756,7 @@ class ChromeRemoteAioaPage implements AioaCdpPage {
     return {
       busy: snapshot.busy === true,
       messages: snapshot.messages.filter((message) => !assistantIds.has(message.id) && message.text.length > 0),
+      ...(snapshot.activity ? { activity: snapshot.activity } : {}),
       ...(snapshot.conversationId ? { conversationId: snapshot.conversationId } : {})
     };
   }
@@ -793,17 +862,94 @@ class ChromeRemoteAioaConnector implements AioaCdpConnector {
   }
 }
 
+function logAioaLaunch(message: string): void {
+  try {
+    appendFileSync(join(tmpdir(), "dext-aioa-debug.log"), `${new Date().toISOString()} ${message}\n`, "utf8");
+  } catch {
+    // Logging is best-effort and must never break the launcher.
+  }
+}
+
 class NodeAioaProcessLauncher implements AioaProcessLauncher {
-  async launch(executable: string, args: readonly string[]): Promise<void> {
-    await new Promise<void>((resolve, reject) => {
-      const child = spawn(executable, args, { detached: true, stdio: "ignore", windowsHide: true });
-      child.once("error", reject);
-      child.once("spawn", () => {
+  async launch(executable: string, args: readonly string[]): Promise<AioaStartedProcess> {
+    let failure: AioaProcessFailure | undefined;
+    logAioaLaunch(`launch executable=${executable} args=${JSON.stringify(args)} cwd=${dirname(executable)}`);
+    logAioaLaunch(`env LOCALAPPDATA=${process.env.LOCALAPPDATA} APPDATA=${process.env.APPDATA} USERPROFILE=${process.env.USERPROFILE}`);
+    const electronEnv = Object.entries(process.env)
+      .filter(([key]) => /^(ELECTRON|NODE|CHROME)/i.test(key))
+      .map(([key, value]) => `${key}=${value}`)
+      .join(" ");
+    logAioaLaunch(`env[electron/node/chrome] ${electronEnv || "(none)"}`);
+    // VS Code 本身是 Electron 应用，会向子进程泄漏 ELECTRON_RUN_AS_NODE 等
+    // 变量，导致 AIOA 以纯 Node 模式启动并拒绝 Chromium 的调试参数。启动前
+    // 清掉这些泄漏变量，让 AIOA 以正常的 GUI 模式运行。
+    const childEnv: NodeJS.ProcessEnv = { ...process.env };
+    for (const key of Object.keys(childEnv)) {
+      if (/^(ELECTRON|CHROME)/i.test(key)) delete childEnv[key];
+    }
+    return new Promise<AioaStartedProcess>((resolve, reject) => {
+      const child = spawn(executable, args, { stdio: ["ignore", "pipe", "pipe"], cwd: dirname(executable), env: childEnv });
+      child.stdout?.on("data", (chunk: Buffer) => logAioaLaunch(`[stdout] ${chunk.toString()}`));
+      child.stderr?.on("data", (chunk: Buffer) => logAioaLaunch(`[stderr] ${chunk.toString()}`));
+      const captureError = (error: Error) => {
+        logAioaLaunch(`error ${error.message}`);
+        failure ??= { kind: "error", error };
+      };
+      child.on("error", captureError);
+      child.once("exit", (code, signal) => {
+        logAioaLaunch(`exit code=${code} signal=${signal}`);
+        failure ??= { kind: "exit", code, signal };
+      });
+      const onSpawnError = (error: Error) => {
+        child.off("spawn", onSpawn);
+        reject(error);
+      };
+      const onSpawn = () => {
+        child.off("error", onSpawnError);
         child.unref();
-        resolve();
+        resolve({
+          ...(child.pid === undefined ? {} : { pid: child.pid }),
+          failure: () => failure
+        });
+      };
+      child.once("error", onSpawnError);
+      child.once("spawn", onSpawn);
+    });
+  }
+}
+
+/** Uses the operating system to choose a currently free local port. The socket
+ * is immediately released so Chromium can bind it with its own process. */
+class NodeAioaCdpPortAllocator implements AioaCdpPortAllocator {
+  allocate(): Promise<number> {
+    return new Promise((resolve, reject) => {
+      const server = createServer();
+      const fail = (error: Error): void => {
+        server.close();
+        reject(error);
+      };
+      server.once("error", fail);
+      server.listen({ host: "127.0.0.1", port: 0, exclusive: true }, () => {
+        server.off("error", fail);
+        const address = server.address();
+        if (!address || typeof address === "string" || !Number.isInteger(address.port) || address.port < 1) {
+          server.close(() => reject(new Error("Unable to allocate an AIOA CDP port.")));
+          return;
+        }
+        server.close((error) => {
+          if (error) reject(error);
+          else resolve(address.port);
+        });
       });
     });
   }
+}
+
+function startupFailureDetail(failure: AioaProcessFailure): string {
+  if (failure.kind === "error") return `AIOA launch error: ${failure.error.message}`;
+  const code = failure.code === null ? "null" : String(failure.code);
+  const signal = failure.signal ? `, signal ${failure.signal}` : "";
+  return `AIOA exited before CDP became ready (code ${code}${signal})`;
 }
 
 /** Opens an existing local AIOA CDP instance, optionally launching it first. */
@@ -811,6 +957,8 @@ export class DefaultAioaCdpConnection implements AioaCdpConnection {
   private readonly startupTimeoutMs: number;
   private readonly pollIntervalMs: number;
   private readonly wait: (milliseconds: number) => Promise<void>;
+  private readonly portAllocator: AioaCdpPortAllocator;
+  private dynamicEndpoint: { key: string; endpoint: string } | undefined;
 
   constructor(
     private readonly connector: AioaCdpConnector = new ChromeRemoteAioaConnector(),
@@ -820,11 +968,21 @@ export class DefaultAioaCdpConnection implements AioaCdpConnection {
     this.startupTimeoutMs = options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS;
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
     this.wait = options.sleep ?? sleep;
+    this.portAllocator = options.portAllocator ?? new NodeAioaCdpPortAllocator();
   }
 
   async open(profile: AgentProfile): Promise<{ page: AioaCdpPage; launched: boolean }> {
     if (profile.provider !== "aioa") throw new Error("AIOA CDP can only open the AIOA profile.");
     const endpoint = normalizeAioaCdpEndpoint(profile.endpoint ?? "");
+    const cacheKey = this.dynamicCacheKey(profile, endpoint);
+    if (this.dynamicEndpoint && this.dynamicEndpoint.key !== cacheKey) this.dynamicEndpoint = undefined;
+    if (this.dynamicEndpoint) {
+      try {
+        return { page: await this.connector.connect(this.dynamicEndpoint.endpoint), launched: false };
+      } catch {
+        this.dynamicEndpoint = undefined;
+      }
+    }
     try {
       return { page: await this.connector.connect(endpoint), launched: false };
     } catch (initialError) {
@@ -835,24 +993,94 @@ export class DefaultAioaCdpConnection implements AioaCdpConnection {
           + "Choose Dext: Configure Agent > AIOA > Launch to start AIOA automatically."
         );
       }
+      return this.launchOnDynamicPort(profile, endpoint, cacheKey, initialError);
     }
+  }
 
+  private dynamicCacheKey(profile: AgentProfile, endpoint: string): string {
+    return `${profile.connectionMode ?? "launch"}\u0000${endpoint}\u0000${profile.command.trim()}`;
+  }
+
+  private async launchOnDynamicPort(
+    profile: AgentProfile,
+    fixedEndpoint: string,
+    cacheKey: string,
+    initialError: unknown
+  ): Promise<{ page: AioaCdpPage; launched: boolean }> {
     const executable = resolveAioaExecutable(profile.command);
-    await this.launcher.launch(executable, aioaLaunchArguments(endpoint));
-    const deadline = Date.now() + this.startupTimeoutMs;
-    let lastError: unknown;
-    while (Date.now() < deadline) {
+    const fixedDetail = initialError instanceof Error ? initialError.message : String(initialError);
+    let lastError: unknown = initialError;
+    let lastEndpoint: string | undefined;
+    let processFailure: AioaProcessFailure | undefined;
+
+    // A port can be claimed after allocation, so retry one new ephemeral port
+    // when the first launched instance never makes CDP available.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      let port: number;
       try {
-        return { page: await this.connector.connect(endpoint), launched: true };
+        port = await this.portAllocator.allocate();
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new Error(`Unable to allocate an AIOA CDP port after ${fixedEndpoint} failed: ${detail}`);
+      }
+      const launchEndpoint = `http://127.0.0.1:${port}`;
+      lastEndpoint = launchEndpoint;
+      let process: AioaStartedProcess;
+      try {
+        process = await this.launcher.launch(executable, aioaLaunchArguments(launchEndpoint));
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new Error(`Unable to launch AIOA after ${fixedEndpoint} failed; dynamic endpoint ${launchEndpoint}: ${detail}`);
+      }
+
+      const opened = await this.waitForLaunchedCdp(process, launchEndpoint);
+      if (opened.page) {
+        this.dynamicEndpoint = { key: cacheKey, endpoint: launchEndpoint };
+        return { page: opened.page, launched: true };
+      }
+      lastError = opened.lastError;
+      processFailure = opened.processFailure;
+    }
+    const cdpDetail = lastError instanceof Error ? lastError.message : "unknown startup error";
+    const processDetail = processFailure ? ` ${startupFailureDetail(processFailure)}.` : "";
+    throw new Error(
+      `AIOA did not expose CDP after fixed endpoint ${fixedEndpoint} failed (${fixedDetail}). `
+      + `Last dynamic endpoint: ${lastEndpoint}.${processDetail} Last CDP error: ${cdpDetail}`
+    );
+  }
+
+  private async waitForLaunchedCdp(
+    process: AioaStartedProcess,
+    launchEndpoint: string
+  ): Promise<{ page?: AioaCdpPage; lastError?: unknown; processFailure?: AioaProcessFailure }> {
+    let lastError: unknown;
+    let processFailure: AioaProcessFailure | undefined;
+    const interval = Math.max(1, this.pollIntervalMs);
+    const attempts = Math.max(1, Math.ceil(this.startupTimeoutMs / interval) + 1);
+    const earlyExitAttempts = Math.max(1, Math.ceil(EARLY_EXIT_STARTUP_GRACE_MS / interval) + 1);
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      processFailure ??= process.failure();
+      try {
+        return { page: await this.connector.connect(launchEndpoint) };
       } catch (error) {
         lastError = error;
-        await this.wait(this.pollIntervalMs);
       }
+      // A crashed or rejected launch can never expose CDP, so stop polling
+      // immediately instead of waiting out the full startup timeout.
+      if (processFailure?.kind === "error") break;
+      if (processFailure?.kind === "exit") {
+        if (processFailure.code !== 0) break;
+        // Electron forwards a second launch to the already-running instance and
+        // exits with code 0. That instance cannot adopt a new CDP port, so do
+        // not make the user wait through two full startup timeouts.
+        if (attempt + 1 >= earlyExitAttempts) break;
+      }
+      if (attempt < attempts - 1) await this.wait(this.pollIntervalMs);
     }
-    const detail = lastError instanceof Error ? lastError.message : "unknown startup error";
-    throw new Error(
-      `AIOA did not expose CDP at ${endpoint} after launch. Quit an existing AIOA instance and run again. ${detail}`
-    );
+    return {
+      ...(lastError === undefined ? {} : { lastError }),
+      ...(processFailure ? { processFailure } : {})
+    };
   }
 }
 
@@ -866,6 +1094,10 @@ export class AioaCdpAgentRunner implements AgentRunner {
   private readonly timeoutMs: number;
   private readonly pollIntervalMs: number;
   private readonly wait: (milliseconds: number) => Promise<void>;
+  private readonly initialResponseTimeoutMs: number;
+  private readonly responseIdleTimeoutMs: number;
+  private readonly finalContentGraceMs: number;
+  private readonly now: () => number;
   private readonly sessions = new Map<string, AioaOwnedSession>();
 
   constructor(
@@ -875,6 +1107,10 @@ export class AioaCdpAgentRunner implements AgentRunner {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
     this.wait = options.sleep ?? sleep;
+    this.initialResponseTimeoutMs = options.initialResponseTimeoutMs ?? DEFAULT_INITIAL_RESPONSE_TIMEOUT_MS;
+    this.responseIdleTimeoutMs = options.responseIdleTimeoutMs ?? DEFAULT_RESPONSE_IDLE_TIMEOUT_MS;
+    this.finalContentGraceMs = options.finalContentGraceMs ?? DEFAULT_FINAL_CONTENT_GRACE_MS;
+    this.now = options.now ?? Date.now;
   }
 
   endSession(sessionId: string): void {
@@ -914,15 +1150,21 @@ export class AioaCdpAgentRunner implements AgentRunner {
         prompt = aioaExecutionPrompt(request);
       }
       await page.submit(prompt);
+      request.onEvent?.({ phase: "status", text: "Waiting for AIOA response" });
       if (ownedSession && includeDefinition) {
         ownedSession.apiDefinitions.set(request.method.id, definitionSignature);
       }
       const knownMessages = new Set(initial.assistantIds);
-      const deadline = Date.now() + this.timeoutMs;
+      const submittedAt = this.now();
+      const deadline = submittedAt + this.timeoutMs;
       let observedAssistant = false;
       let lastText = "";
+      let lastActivity = "";
+      let receivedActivity = false;
+      let lastActivityAt = submittedAt;
+      let completedWithoutResultAt: number | undefined;
       let conversationId = ownedConversation;
-      while (Date.now() < deadline) {
+      while (this.now() < deadline) {
         await this.wait(this.pollIntervalMs);
         const update = await page.updatesAfter(knownMessages);
         if (!conversationId && update.conversationId) {
@@ -937,10 +1179,20 @@ export class AioaCdpAgentRunner implements AgentRunner {
         const text = update.messages.at(-1)?.text.trim() ?? "";
         if (text) {
           observedAssistant = true;
+          if (text !== lastText) {
+            receivedActivity = true;
+            lastActivityAt = this.now();
+          }
           if (text !== lastText && !looksLikeStructuredOutput(text, request.method.output.kind)) {
             request.onEvent?.({ phase: "message", id: "aioa-response", text, replace: true });
           }
           lastText = text;
+        }
+        if (update.activity && update.activity !== lastActivity) {
+          lastActivity = update.activity;
+          receivedActivity = true;
+          lastActivityAt = this.now();
+          request.onEvent?.({ phase: "status", text: "AIOA is working" });
         }
         if (observedAssistant && !update.busy) {
           if (!conversationId) {
@@ -951,6 +1203,27 @@ export class AioaCdpAgentRunner implements AgentRunner {
             throw new Error("AIOA did not return the JSON result required by this Dext API.");
           }
           return result;
+        }
+        if (!observedAssistant && !update.busy) {
+          completedWithoutResultAt ??= this.now();
+          if (this.now() - completedWithoutResultAt >= this.finalContentGraceMs) {
+            throw new Error("AIOA finished without returning the JSON result required by this Dext API.");
+          }
+        } else {
+          completedWithoutResultAt = undefined;
+        }
+        const elapsedSinceActivity = this.now() - lastActivityAt;
+        if (!receivedActivity && elapsedSinceActivity >= this.initialResponseTimeoutMs) {
+          throw new Error(
+            `AIOA did not begin responding within ${Math.ceil(this.initialResponseTimeoutMs / 1_000)} seconds. `
+            + "Check that its selected model is available, then run again."
+          );
+        }
+        if (receivedActivity && elapsedSinceActivity >= this.responseIdleTimeoutMs) {
+          throw new Error(
+            `AIOA stopped responding for ${Math.ceil(this.responseIdleTimeoutMs / 1_000)} seconds before returning a result. `
+            + "The AIOA task may be stalled; stop it there and run again."
+          );
         }
       }
       throw new Error("AIOA did not finish before Dext's 10 minute timeout.");

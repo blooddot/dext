@@ -21,6 +21,9 @@ export async function run(): Promise<void> {
   assert.ok(commands.includes("dext.addSelectionToChat"), "Selection attachment command is registered.");
   assert.ok(commands.includes("dext.copySelectionWithContext"), "Context copy command is registered.");
   assert.ok(commands.includes("dext.addFileToChat"), "File attachment command is registered.");
+  assert.ok(commands.includes("dext.setMcpAccessToken"), "Set MCP access token command is registered.");
+  assert.ok(commands.includes("dext.clearMcpAccessToken"), "Clear MCP access token command is registered.");
+  assert.ok(commands.includes("dext.verifyMcpServer"), "Verify MCP server command is registered.");
   assert.equal(
     vscode.workspace.getConfiguration("dext").get("captureSelectionOnCopy"),
     true,

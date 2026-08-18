@@ -1,38 +1,45 @@
 import { describe, expect, it } from "vitest";
-import { fileReferenceOccurrences } from "../src/webview/fileReferenceDecorations.js";
+import {
+  atReferenceOccurrences,
+  inputReferenceProjections,
+  normalizeInputReferenceSource
+} from "../src/core/fileReference.js";
+import { inputReferenceProjectionDecorations } from "../src/webview/fileReferenceDecorations.js";
 
-describe("CodeMirror file reference decorations", () => {
-  it("finds complete file references and preserves their full document ranges", () => {
-    const first = 'ref.file("src/a.ts#L3,1-L4,2")';
-    const second = 'ref.file ( "src/b.ts" )';
-    const source = 'ask(input=f"Review {' + first + '} and {' + second + '}")';
-    expect(fileReferenceOccurrences(source)).toEqual([
-      {
-        start: source.indexOf(first),
-        end: source.indexOf(first) + first.length,
-        expression: first,
-        payload: "src/a.ts#L3,1-L4,2"
-      },
-      {
-        start: source.indexOf(second),
-        end: source.indexOf(second) + second.length,
-        expression: second,
-        payload: "src/b.ts"
-      }
-    ]);
+describe("@ file reference decorations", () => {
+  it("projects a readable @path token as one atomic Chip range", () => {
+    const token = "@src/pathx.py#L55,1-L66,32";
+    const source = 'agent(input="说明 ' + token + ' 后续")';
+    const projection = inputReferenceProjections(source);
+    expect(projection).toMatchObject([{ reference: { kind: "file", payload: "src/pathx.py#L55,1-L66,32" } }]);
+    const ranges: Array<{ from: number; to: number }> = [];
+    inputReferenceProjectionDecorations(source, () => {}).between(0, source.length, (from, to) => {
+      ranges.push({ from, to });
+    });
+    expect(ranges).toEqual([{ from: source.indexOf(token), to: source.indexOf(token) + token.length }]);
   });
 
-  it("ignores incomplete, empty, and invalid string references", () => {
-    expect(fileReferenceOccurrences('ref.file("") ref.file("open" ref.file("bad\\q")')).toEqual([]);
+  it("only recognizes workspace-relative paths with valid ranges", () => {
+    const values = atReferenceOccurrences([
+      "@src/a.ts",
+      "person@example.com",
+      "@mention",
+      "@src/a.ts#L4,1-L3,1",
+      "@src/a.ts#L4,1-Lx,1",
+      "@../secret.ts"
+    ].join(" "));
+    expect(values.map((item) => item.payload)).toEqual(["src/a.ts"]);
   });
 
-  it("unescapes payloads while retaining the original expression", () => {
-    const expression = 'ref.file("src/a\\\\b\\"c.ts")';
-    expect(fileReferenceOccurrences(expression)).toEqual([{
-      start: 0,
-      end: expression.length,
-      expression,
-      payload: 'src/a\\b"c.ts'
-    }]);
+  it("migrates legacy marker, f-string, and broken nested input to readable @ tokens", () => {
+    const marker = "\uE000eyJraW5kIjoiZmlsZSIsInBheWxvYWQiOiJzcmMvYS50cyJ9\uE001";
+    const fString = 'agent(input=f"Read {ref.file(\'src/a.ts\')}")';
+    const broken = 'agent(input="Read ref.file("src/a.ts")")';
+    for (const source of ['agent(input="Read ' + marker + '")', fString, broken]) {
+      const migrated = normalizeInputReferenceSource(source);
+      expect(migrated).toBe('agent(input="Read @src/a.ts")');
+    }
+    expect(normalizeInputReferenceSource('print(text="ref.file("src/a.ts")")'))
+      .toBe('print(text="ref.file("src/a.ts")")');
   });
 });

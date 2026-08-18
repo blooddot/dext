@@ -1,63 +1,49 @@
 import { describe, expect, it } from "vitest";
+import { inputReferenceProjections } from "../src/core/fileReference.js";
 import {
   coreInputReferenceInsertion,
+  fileReferenceInsertion,
   inlineInsertion,
-  invocationInsertion,
-  normalizeCoreInputStrings
+  invocationInsertion
 } from "../src/webview/inputInsertion.js";
 
-describe("Unified input insertion", () => {
-  it("keeps file references inline with workflow values", () => {
+describe("@ reference insertion", () => {
+  it("keeps ordinary references inline outside input values", () => {
     expect(inlineInsertion("target=value", 12, 12, 'ref.file("src/a.ts")')).toEqual({
-      text: ' ref.file("src/a.ts")',
-      cursorOffset: 21
+      text: ' ref.file("src/a.ts")', cursorOffset: 21
     });
-    expect(inlineInsertion("target=, next=True", 7, 7, 'ref.file("src/a.ts")')).toEqual({
-      text: 'ref.file("src/a.ts")',
-      cursorOffset: 20
-    });
+    expect(invocationInsertion('ask(input="first")', 18, 18, 'ask(input="next")'))
+      .toEqual({ text: '\nask(input="next")', cursorOffset: 18 });
   });
 
-  it("uses existing argument whitespace and avoids padding before terminators", () => {
-    const source = "ask(input=)";
-    const cursor = source.indexOf(")");
-    expect(inlineInsertion(source, cursor, cursor, 'ref.file("src/a.ts")')).toEqual({
-      text: 'ref.file("src/a.ts")',
-      cursorOffset: 20
-    });
-  });
-
-  it("places method-list invocations on line boundaries", () => {
-    const source = "ask(input=\"first\")";
-    expect(invocationInsertion(source, source.length, source.length, "ask(input=\"next\")"))
-      .toEqual({ text: "\nask(input=\"next\")", cursorOffset: 18 });
-  });
-
-  it("upgrades ask and agent input strings to f-strings when a reference is inserted", () => {
+  it("stores a dragged input reference as a readable @ token", () => {
     const source = 'agent(input="Implement this: ")';
     const cursor = source.indexOf('"', source.indexOf("input")) + 1 + "Implement this: ".length;
-    expect(coreInputReferenceInsertion(source, cursor, cursor, ['ref.file("docs/drag-drop.md")'])).toEqual({
-      from: source.indexOf('"', source.indexOf("input")),
-      to: source.lastIndexOf('"') + 1,
-      text: 'f"Implement this: {ref.file("docs/drag-drop.md")}"',
-      cursorOffset: 49
-    });
-    expect(coreInputReferenceInsertion('ask(input="ref.file(\\"literal.ts\\")")', 15, 15, ['ref.file("x.ts")']))
-      .toEqual({
-        from: 10,
-        to: 36,
-        text: 'f"ref. {ref.file("x.ts")} file(\\"literal.ts\\")"',
-        cursorOffset: 25
-      });
+    const edit = coreInputReferenceInsertion(source, cursor, cursor, ['ref.file("docs/drag-drop.md")']);
+    expect(edit?.text).toMatch(/^"Implement this: /);
+    expect(edit?.text).not.toContain('f"');
+    expect(edit?.text).not.toContain("ref.file(");
+    expect(edit?.text).toContain("@docs/drag-drop.md");
+    expect(inputReferenceProjections(edit?.text ?? "")).toMatchObject([
+      { reference: { kind: "file", payload: "docs/drag-drop.md" } }
+    ]);
   });
 
-  it("keeps existing f-string references in place and restores a normal string after the last reference is removed", () => {
-    const source = 'ask(input=f"Explain {ref.file(\'src/a.ts\')} now")';
-    const cursor = source.indexOf(" now");
-    expect(coreInputReferenceInsertion(source, cursor, cursor, ['ref.dir("docs")'])?.text)
-      .toBe('f"Explain {ref.file(\'src/a.ts\')} {ref.dir("docs")} now"');
-    expect(normalizeCoreInputStrings('ask(input=f"Explain {{literal}}")'))
-      .toBe('ask(input="Explain {literal}")');
-    expect(normalizeCoreInputStrings(source)).toBe(source);
+  it("uses the semantic input when a drop has no reliable CodeMirror position", () => {
+    const source = 'agent(input="Explain this code")';
+    const edit = fileReferenceInsertion(source, 0, 0, ['ref.file("src/pathx.py#L55,1-L66,32")']);
+    const finalSource = `${source.slice(0, edit.from)}${edit.text}${source.slice(edit.to)}`;
+    expect(finalSource).toMatch(/^agent\(input="Explain this code /);
+    expect(finalSource).not.toContain('f"');
+    expect(finalSource).not.toContain("ref.file(");
+    expect(finalSource).toContain("@src/pathx.py#L55,1-L66,32");
+    expect(inputReferenceProjections(finalSource)[0]?.reference.payload).toBe("src/pathx.py#L55,1-L66,32");
+  });
+
+  it("creates a normal quoted input for an unfinished ask/agent call", () => {
+    const edit = coreInputReferenceInsertion("ask(input=)", 10, 10, ['ref.file("a.ts")']);
+    expect(edit?.text).toMatch(/^"/);
+    expect(edit?.text).not.toContain('f"');
+    expect(inputReferenceProjections(edit?.text ?? "")[0]?.reference.payload).toBe("a.ts");
   });
 });

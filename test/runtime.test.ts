@@ -6,6 +6,7 @@ import { MethodRegistry } from "../src/core/registry.js";
 import { DextRuntime } from "../src/core/runtime.js";
 import { compileWorkflow } from "../src/core/workflow.js";
 import { WorkflowRuntime } from "../src/core/workflowRuntime.js";
+import { fileReferenceInsertion } from "../src/webview/inputInsertion.js";
 import { ExecutionCancelledError } from "../src/core/executionErrors.js";
 import type { AgentResult, PatchResult, TerminalResult } from "../src/core/types.js";
 
@@ -200,7 +201,7 @@ answer = ask(input=printed.text)`, registry);
     expect(requests[1]).toEqual({ allowWorkspaceWrite: true, cwd: process.cwd() });
   });
 
-  it("preserves ask f-string reference order in the resolved input", async () => {
+  it("preserves readable @ tokens without resolving file content", async () => {
     const resolved: string[] = [];
     const orderedHost: ContextHost = {
       selection: async () => {
@@ -218,13 +219,29 @@ answer = ask(input=printed.text)`, registry);
     const registry = new MethodRegistry();
     registry.registerMany(BUILTIN_METHODS, "builtin");
     const workflow = new WorkflowRuntime(new DextRuntime(registry, new ContextResolver(orderedHost)));
-    const compiled = compileWorkflow('answer = ask(input=f"A {ref.file(\'first.ts\')} B {ref.selection} C")', registry);
+    const compiled = compileWorkflow('answer = ask(input="A @first.ts B @selection C")', registry);
 
     expect(compiled.diagnostics).toEqual([]);
     const result = await workflow.execute(compiled.program!);
     const text = (result.executions[0]?.result as { text?: string }).text ?? "";
-    expect(resolved).toEqual(["file:first.ts", "selection"]);
-    expect(text.indexOf('uri="file:///first.ts"')).toBeLessThan(text.indexOf('uri="file:///selection.ts"'));
+    expect(resolved).toEqual([]);
+    expect(text).toBe("A @first.ts B @selection C");
+  });
+
+  it("compiles and resolves the exact serialized agent file-drop input", async () => {
+    const { registry, workflow } = setup();
+    const initial = 'agent(input="这段代码是什么含义")';
+    const edit = fileReferenceInsertion(initial, 0, 0, ['ref.file("src/pathx.py#L55,1-L66,32")']);
+    const source = `${initial.slice(0, edit.from)}${edit.text}${initial.slice(edit.to)}`;
+
+    expect(source).toMatch(/^agent\(input="这段代码是什么含义 /);
+    expect(source).not.toContain('f"');
+    expect(source).not.toContain("ref.file(");
+    const compiled = compileWorkflow(source, registry);
+    expect(compiled.diagnostics).toEqual([]);
+    const result = await workflow.execute(compiled.program!);
+    expect((result.executions[0]?.result as { text?: string }).text)
+      .toBe("这段代码是什么含义 @src/pathx.py#L55,1-L66,32");
   });
 
   it("forwards the selected model and rejects invalid Agent output", async () => {
@@ -272,6 +289,7 @@ answer = ask(input=printed.text)`, registry);
 
   it("passes typed nested MCP input and resolved scalar references to the configured caller", async () => {
     const { registry, runtime, workflow } = setup();
+    runtime.setWorkspaceTrusted(true);
     const calls: Array<{ tool: string; input: Record<string, unknown> }> = [];
     runtime.setMcpCaller(async (tool, input) => {
       calls.push({ tool, input });
@@ -291,5 +309,17 @@ answer = ask(input=printed.text)`, registry);
         file: expect.objectContaining({ kind: "codeRef", uri: "file:///README.md", content: "export const y = 2;" })
       }
     }]);
+  });
+
+  it("requires a trusted local workspace before invoking an MCP caller", async () => {
+    const { runtime } = setup();
+    runtime.setMcpCaller(async () => ({ kind: "mcpRaw", server: "docs", tool: "read" }));
+
+    await expect(runtime.execute({
+      kind: "invocation",
+      method: "mcp",
+      source: "code",
+      arguments: [{ name: "tool", value: "docs.read" }, { name: "input", value: {} }]
+    })).rejects.toThrow("trusted local workspace");
   });
 });

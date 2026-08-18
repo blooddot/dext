@@ -114,6 +114,7 @@ def main(input: dict[str, object]) -> DocumentResult:
     );
     expect(loaded.diagnostics).toEqual([]);
     const runtime = new DextRuntime(registry, new ContextResolver(host));
+    runtime.setWorkspaceTrusted(true);
     runtime.setCustomPlans(loaded.plans);
     runtime.setMcpCaller(async () => ({
       kind: "mcpRaw",

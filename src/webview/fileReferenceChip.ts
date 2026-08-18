@@ -8,6 +8,7 @@ export interface FileReferenceChipDescriptor {
 export interface FileReferenceChipOptions extends FileReferenceChipDescriptor {
   document: Document;
   modifierClass?: string;
+  icon?: string;
   onOpen?: () => void;
   onRemove?: () => void;
   suppressPointerDown?: boolean;
@@ -33,7 +34,7 @@ export function createFileReferenceChip(options: FileReferenceChipOptions): HTML
   open.title = options.openLabel;
   open.setAttribute("aria-label", options.openLabel);
   const icon = options.document.createElement("i");
-  icon.className = "codicon codicon-file";
+  icon.className = `codicon codicon-${options.icon ?? "file"}`;
   const label = options.document.createElement("span");
   label.className = "attachment-label";
   label.textContent = options.label;
@@ -47,7 +48,8 @@ export function createFileReferenceChip(options: FileReferenceChipOptions): HTML
   const close = options.document.createElement("i");
   close.className = "codicon codicon-close";
   remove.append(close);
-  chip.append(open, remove);
+  chip.append(open);
+  if (options.onRemove) chip.append(remove);
 
   if (options.suppressPointerDown) {
     for (const eventName of ["pointerdown", "mousedown"] as const) {

@@ -19,6 +19,17 @@ interface QuotedString {
   formatted: boolean;
 }
 
+interface CoreInputArgument {
+  valueStart: number;
+  valueEnd: number;
+  literal?: QuotedString;
+}
+
+interface LocatedCoreInputArgument {
+  argument: CoreInputArgument;
+  appendAtEnd: boolean;
+}
+
 function needsInlinePrefix(character: string): boolean {
   return Boolean(character) && !/\s|[=(:,[]/.test(character);
 }
@@ -55,7 +66,7 @@ export function invocationInsertion(
   };
 }
 
-function quotedString(source: string, start: number): QuotedString | undefined {
+function quotedString(source: string, start: number, allowUnterminated = false): QuotedString | undefined {
   const formatted = source[start] === "f" || source[start] === "F";
   const quoteStart = formatted ? start + 1 : start;
   const prefix = source.slice(quoteStart, quoteStart + 3);
@@ -76,7 +87,9 @@ function quotedString(source: string, start: number): QuotedString | undefined {
       return { literalStart: start, bodyStart, bodyEnd: index, end: index + quote.length, quote, formatted };
     }
   }
-  return undefined;
+  return allowUnterminated
+    ? { literalStart: start, bodyStart, bodyEnd: source.length, end: source.length, quote, formatted }
+    : undefined;
 }
 
 function closingParenthesis(source: string, open: number): number | undefined {
@@ -98,14 +111,34 @@ function closingParenthesis(source: string, open: number): number | undefined {
   return undefined;
 }
 
-function coreInputString(source: string, from: number, to: number): QuotedString | undefined {
+function argumentEnd(source: string, start: number, limit: number): number {
+  let depth = 0;
+  for (let index = start; index < limit; index += 1) {
+    if (source[index] === '"' || source[index] === "'" || source[index] === "f" || source[index] === "F") {
+      const value = quotedString(source, index);
+      if (value) {
+        index = value.end - 1;
+        continue;
+      }
+    }
+    if (source[index] === "(") depth += 1;
+    else if (source[index] === ")") {
+      if (depth === 0) return index;
+      depth -= 1;
+    } else if (source[index] === "," && depth === 0) {
+      return index;
+    }
+  }
+  return limit;
+}
+
+function coreInputArguments(source: string): CoreInputArgument[] {
+  const argumentsFound: CoreInputArgument[] = [];
   const calls = /\b(?:ask|agent)\s*\(/g;
   for (const match of source.matchAll(calls)) {
     const open = (match.index ?? 0) + match[0].length - 1;
-    const close = closingParenthesis(source, open);
-    if (close === undefined) continue;
+    const close = closingParenthesis(source, open) ?? source.length;
     let index = open + 1;
-    let depth = 0;
     while (index < close) {
       while (/\s/.test(source[index] ?? "")) index += 1;
       const name = /^[A-Za-z_][A-Za-z0-9_]*/.exec(source.slice(index))?.[0];
@@ -118,42 +151,86 @@ function coreInputString(source: string, from: number, to: number): QuotedString
       if (source[index] !== "=") continue;
       index += 1;
       while (/\s/.test(source[index] ?? "")) index += 1;
-      const value = quotedString(source, index);
-      if (name === "input" && value && from >= value.bodyStart && to <= value.bodyEnd) return value;
-      if (value) {
-        index = value.end;
-        continue;
+      const end = argumentEnd(source, index, close);
+      const value = quotedString(source, index, name === "input" && end === source.length);
+      if (name === "input") {
+        argumentsFound.push({
+          valueStart: index,
+          valueEnd: end,
+          ...(value ? { literal: value } : {})
+        });
       }
-      for (; index < close; index += 1) {
-        if (source[index] === '"' || source[index] === "'" || source[index] === "f" || source[index] === "F") {
-          const end = quotedString(source, index);
-          if (end) {
-            index = end.end - 1;
-            continue;
-          }
-        }
-        if (source[index] === "(") depth += 1;
-        else if (source[index] === ")") depth -= 1;
-        else if (source[index] === "," && depth === 0) {
-          index += 1;
-          break;
-        }
-      }
+      index = end + 1;
     }
   }
-  return undefined;
+  return argumentsFound;
 }
 
-function interpolationText(expressions: readonly string[]): string {
-  return expressions.map((expression) => `{${expression}}`).join(" ");
+function coreInputArgument(source: string, from: number, to: number): LocatedCoreInputArgument | undefined {
+  const candidates = coreInputArguments(source);
+  const atPosition = candidates.find((candidate) => {
+    const regionStart = candidate.literal?.literalStart ?? candidate.valueStart;
+    // Coordinates around atomic reference Chips may resolve to either quote
+    // boundary or the closing parenthesis. Keep that whole input value
+    // semantic so an attachment never falls back to a raw expression.
+    return from >= regionStart && to <= candidate.valueEnd + 1;
+  });
+  if (atPosition) return { argument: atPosition, appendAtEnd: false };
+  if (!candidates.length) return undefined;
+  // A Chip widget can make CodeMirror's coordinate lookup return no source
+  // position. Attachments still belong to an input literal, never as a raw
+  // expression beside it, so use the closest input as an unambiguous fallback.
+  const nearest = candidates.reduce((closest, candidate) => {
+    const start = candidate.literal?.literalStart ?? candidate.valueStart;
+    const end = candidate.valueEnd + 1;
+    const distance = from < start ? start - from : from > end ? from - end : 0;
+    const closestStart = closest.literal?.literalStart ?? closest.valueStart;
+    const closestEnd = closest.valueEnd + 1;
+    const closestDistance = from < closestStart ? closestStart - from : from > closestEnd ? from - closestEnd : 0;
+    return distance < closestDistance ? candidate : closest;
+  });
+  return { argument: nearest, appendAtEnd: true };
 }
 
-function escapedFormatLiteral(value: string): string {
-  return value.replaceAll("{", "{{").replaceAll("}", "}}");
+function referenceCall(expression: string): { name: string; value: string } | undefined {
+  const prefix = /^\s*(ref\.(?:file|dir|symbol))\s*\(\s*(['"])/.exec(expression);
+  if (!prefix) return undefined;
+  const name = prefix[1]!;
+  const quote = prefix[2]!;
+  let index = prefix[0].length;
+  let value = "";
+  let escaped = false;
+  for (; index < expression.length; index += 1) {
+    const character = expression[index]!;
+    if (escaped) {
+      const decoded = ({ "\\": "\\", "'": "'", '"': '"', n: "\n", r: "\r", t: "\t" } as const)[character];
+      if (decoded === undefined) return undefined;
+      value += decoded;
+      escaped = false;
+      continue;
+    }
+    if (character === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (character === quote) break;
+    value += character;
+  }
+  if (escaped || index === expression.length || !/^\s*\)$/.test(expression.slice(index + 1))) return undefined;
+  return { name, value };
 }
 
-/** Converts only a ask/agent input literal at the insertion point.
- * Plain strings elsewhere remain literal text, even if they spell ref.file(). */
+function inputReferenceText(expressions: readonly string[]): string {
+  return expressions.map((expression) => {
+    const reference = referenceCall(expression);
+    if (!reference) return expression;
+    // ask/agent input is plain source text. The Chip is a rendering of this
+    // readable token, never an alternate f-string or private marker value.
+    return `@${reference.value}`;
+  }).join(" ");
+}
+
+/** Inserts readable @workspace/path tokens into ask/agent string input. */
 export function coreInputReferenceInsertion(
   source: string,
   from: number,
@@ -161,69 +238,51 @@ export function coreInputReferenceInsertion(
   expressions: readonly string[]
 ): SourceReplacement | undefined {
   if (!expressions.length) return undefined;
-  const value = coreInputString(source, from, to);
-  if (!value) return undefined;
-  const relativeFrom = from - value.bodyStart;
-  const before = source.slice(value.bodyStart, from);
-  const after = source.slice(to, value.bodyEnd);
-  const prefix = needsInlinePrefix(source[from - 1] ?? "") ? " " : "";
-  const suffix = to === value.bodyEnd || !needsInlineSuffix(source[to] ?? "") ? "" : " ";
-  const inserted = interpolationText(expressions);
-  const body = value.formatted
-    ? `${before}${prefix}${inserted}${suffix}${after}`
-    : `${escapedFormatLiteral(before)}${prefix}${inserted}${suffix}${escapedFormatLiteral(after)}`;
-  const literal = `f${value.quote}${body}${value.quote}`;
+  const target = coreInputArgument(source, from, to);
+  if (!target) return undefined;
+  const argument = target.argument;
+  const value = argument.literal;
+  if (!value) {
+    const inserted = inputReferenceText(expressions);
+    return {
+      from: argument.valueStart,
+      to: argument.valueEnd,
+      text: `"${inserted}"`,
+      cursorOffset: 1 + inserted.length
+    };
+  }
+  const insertionFrom = target.appendAtEnd
+    ? value.bodyEnd
+    : Math.max(value.bodyStart, Math.min(from, value.bodyEnd));
+  const insertionTo = target.appendAtEnd
+    ? value.bodyEnd
+    : Math.max(insertionFrom, Math.min(to, value.bodyEnd));
+  const before = source.slice(value.bodyStart, insertionFrom);
+  const after = source.slice(insertionTo, value.bodyEnd);
+  const prefix = insertionFrom > value.bodyStart && needsInlinePrefix(source[insertionFrom - 1] ?? "") ? " " : "";
+  const suffix = insertionTo < value.bodyEnd && needsInlineSuffix(source[insertionTo] ?? "") ? " " : "";
+  const inserted = inputReferenceText(expressions);
+  const body = `${before}${prefix}${inserted}${suffix}${after}`;
+  const literal = `${value.quote}${body}${value.quote}`;
   return {
     from: value.literalStart,
     to: value.end,
     text: literal,
-    cursorOffset: (value.bodyStart - value.literalStart) + (value.formatted ? 0 : 1)
-      + (value.formatted ? relativeFrom : escapedFormatLiteral(before).length)
-      + prefix.length + inserted.length
+    cursorOffset: value.quote.length + before.length + prefix.length + inserted.length
   };
 }
 
-function hasFormatReplacement(body: string): boolean {
-  for (let index = 0; index < body.length; index += 1) {
-    if (body[index] === "{") {
-      if (body[index + 1] === "{") {
-        index += 1;
-        continue;
-      }
-      return true;
-    }
-    if (body[index] === "}") {
-      if (body[index + 1] !== "}") return true;
-      index += 1;
-    }
-  }
-  return false;
-}
-
-/** When the final reference interpolation is removed, restore the concise
- * normal string form. Invalid f-strings intentionally remain untouched. */
-export function normalizeCoreInputStrings(source: string): string {
-  const replacements: SourceReplacement[] = [];
-  const calls = /\b(?:ask|agent)\s*\(/g;
-  for (const match of source.matchAll(calls)) {
-    const open = (match.index ?? 0) + match[0].length - 1;
-    const close = closingParenthesis(source, open);
-    if (close === undefined) continue;
-    const argumentsSource = source.slice(open + 1, close);
-    const found = /\binput\s*=\s*/.exec(argumentsSource);
-    if (!found) continue;
-    const start = open + 1 + found.index + found[0].length;
-    const value = quotedString(source, start);
-    if (!value?.formatted || hasFormatReplacement(source.slice(value.bodyStart, value.bodyEnd))) continue;
-    const body = source.slice(value.bodyStart, value.bodyEnd).replaceAll("{{", "{").replaceAll("}}", "}");
-    replacements.push({
-      from: value.literalStart,
-      to: value.end,
-      text: `${value.quote}${body}${value.quote}`,
-      cursorOffset: 0
-    });
-  }
-  return replacements.reduceRight((result, replacement) => (
-    `${result.slice(0, replacement.from)}${replacement.text}${result.slice(replacement.to)}`
-  ), source);
+/** Calculates the exact document change used by CodeMirror file attachment
+ * drops. ask/agent input stays semantic; all other code retains the generic
+ * inline-reference behavior. */
+export function fileReferenceInsertion(
+  source: string,
+  from: number,
+  to: number,
+  expressions: readonly string[]
+): SourceReplacement {
+  const semantic = coreInputReferenceInsertion(source, from, to, expressions);
+  if (semantic) return semantic;
+  const inline = inlineInsertion(source, from, to, expressions.join(" "));
+  return { from, to, text: inline.text, cursorOffset: inline.cursorOffset };
 }

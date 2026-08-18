@@ -18,6 +18,7 @@ import { openWorkspaceFileReference } from "./vscodeContextHost.js";
 import { webviewRequestSchema } from "./webviewProtocol.js";
 import type { WebviewResponse } from "./webviewProtocol.js";
 import type { DextHistorySession, DextHistoryStore } from "./historyStore.js";
+import { normalizeInputReferenceSource } from "./core/fileReference.js";
 
 function outputSession(): DextHistorySession {
   const now = Date.now();
@@ -268,6 +269,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private async run(source: string): Promise<void> {
+    source = normalizeInputReferenceSource(source);
     const events: AgentStreamEvent[] = [];
     const turnId = randomBytes(12).toString("hex");
     const sessionId = this.activeSession.id;
