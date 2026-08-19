@@ -91,7 +91,7 @@ function renderedInputSource(source: string): string {
 }
 
 function resultText(result: DextResult): string {
-  if (result.kind === "chat" || result.kind === "text" || result.kind === "explain" || result.kind === "print") return result.text;
+  if (result.kind === "chat" || result.kind === "text" || result.kind === "explain" || result.kind === "print" || result.kind === "agent") return result.text;
   if (result.kind === "edit" || result.kind === "review" || result.kind === "apply") return result.summary;
   if (result.kind === "terminal") return [result.stdout, result.stderr].filter(Boolean).join("\n");
   if (result.kind === "code") return result.code;
@@ -109,6 +109,10 @@ function resultBody(result: DextResult): string {
     const changes = result.kind === "edit" ? result.patch.changes : result.changes;
     const summary = result.kind === "edit" ? `<p>${escapeHtml(result.summary)}</p>` : "";
     return `${summary}${changes.map(renderFileChange).join("")}`;
+  }
+  if (result.kind === "agent") {
+    const changes = result.patch?.changes ?? [];
+    return `${result.text ? `<p>${escapeHtml(result.text)}</p>` : ""}${changes.map(renderFileChange).join("")}`;
   }
   if (result.kind === "review") {
     return `<p>${escapeHtml(result.summary)}</p>${result.findings.map((finding) => `<div class="finding ${finding.severity}">${escapeHtml(finding.message)}</div>`).join("")}`;
@@ -143,7 +147,7 @@ function outputText(response: InputExecutionResponse): string {
 function eventGroup(label: string, events: readonly AgentStreamEvent[]): string {
   if (!events.length) return "";
   return `<details class="history-disclosure process-group"><summary>${chevron()}<span>${escapeHtml(label)}</span><span class="history-meta">${events.length}</span></summary><div class="disclosure-body">${events.map((event) => event.phase === "tool"
-    ? `<details class="history-disclosure process-event"><summary>${chevron()}<span>${escapeHtml((event.title ?? event.text.split(/\r?\n/, 1)[0] ?? "Command").slice(0, 180))}</span></summary>${event.title === event.text ? "" : `<pre>${escapeHtml(event.text)}</pre>`}</details>`
+    ? `<details class="history-disclosure process-event"><summary>${chevron()}<span>${escapeHtml((event.title ?? event.text.split(/\r?\n/, 1)[0] ?? "Command").slice(0, 180))}</span></summary><pre>${escapeHtml(event.text)}</pre></details>`
     : processMessage(event.text)).join("")}</div></details>`;
 }
 
@@ -174,9 +178,12 @@ function renderPresentationExtras(presentation: AgentMessagePresentation): strin
 }
 
 function process(events: readonly AgentStreamEvent[]): string {
-  const reasoning = events.filter((event) => event.phase === "reasoning" || event.phase === "message");
-  const tools = events.filter((event) => event.phase === "tool");
-  return eventGroup("Thought", reasoning) + eventGroup(`Ran ${tools.length} command${tools.length === 1 ? "" : "s"}`, tools);
+  const work = events.filter((event) => event.group === "aioa-work-log");
+  const reasoning = events.filter((event) => event.group !== "aioa-work-log" && (event.phase === "reasoning" || event.phase === "message"));
+  const tools = events.filter((event) => event.group !== "aioa-work-log" && event.phase === "tool");
+  return eventGroup("Thought", reasoning)
+    + eventGroup("AIOA activity", work)
+    + eventGroup(`Ran ${tools.length} command${tools.length === 1 ? "" : "s"}`, tools);
 }
 
 function parsedResponse(record: DextHistoryRecord): InputExecutionResponse | undefined {

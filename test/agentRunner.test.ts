@@ -5,13 +5,17 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   agentPayload,
   agentProcessEnvironment,
+  claudeConversationArguments,
   claudeCliArguments,
+  codexConversationArguments,
   codexCliArguments,
   codexOutputSchema,
+  extractConversationText,
   extractClaudeResult,
   parseClaudeStreamLine,
   parseCodexStreamLine,
   resolveCliCommand,
+  runProcess,
   type AgentExecutionRequest
 } from "../src/core/agentRunner.js";
 import { BUILTIN_METHODS } from "../src/core/builtins.js";
@@ -121,6 +125,25 @@ describe("CLI command resolution", () => {
     ]));
   });
 
+  it("uses normal provider prompts without an output schema for conversations", () => {
+    expect(codexConversationArguments({ allowWorkspaceWrite: true }, "priority"))
+      .toEqual(expect.arrayContaining(["exec", "--json", "--sandbox", "workspace-write", "--skip-git-repo-check"]));
+    expect(codexConversationArguments({ allowWorkspaceWrite: false }))
+      .toEqual(expect.arrayContaining(["--sandbox", "read-only"]));
+    expect(codexConversationArguments({ allowWorkspaceWrite: false })).not.toContain("--output-schema");
+    expect(claudeConversationArguments({ allowWorkspaceWrite: false }))
+      .toEqual(expect.arrayContaining(["--permission-mode", "plan"]));
+    expect(claudeConversationArguments({ allowWorkspaceWrite: true })).not.toContain("--json-schema");
+  });
+
+  it("keeps ordinary conversation replies as raw text", () => {
+    const text = '{"kind":"chat","text":"this is ordinary model text"}';
+    expect(extractConversationText(JSON.stringify({
+      type: "item.completed",
+      item: { type: "agent_message", text }
+    }), "codex")).toBe(text);
+  });
+
   it("opens workspace writes only for an explicit agent apply request", () => {
     expect(codexCliArguments({}, "output-schema.json", false)).toEqual(expect.arrayContaining([
       "--sandbox", "read-only"
@@ -226,5 +249,19 @@ describe("CLI command resolution", () => {
 
   it("returns a configured non-Windows command without probing the local filesystem", () => {
     expect(resolveCliCommand("codex", "codex", { platform: "linux", env: {}, home: "/tmp" })).toBe("codex");
+  });
+
+  it("terminates a running CLI process when its execution signal is aborted", async () => {
+    const controller = new AbortController();
+    const running = runProcess(
+      process.execPath,
+      ["-e", "setInterval(() => undefined, 1000)"],
+      "",
+      process.cwd(),
+      controller.signal
+    );
+    setTimeout(() => controller.abort(), 25);
+
+    await expect(running).rejects.toMatchObject({ name: "ExecutionCancelledError" });
   });
 });

@@ -26,7 +26,7 @@ import {
   type AioaStartedProcess,
   type AioaTrustedInput
 } from "../src/core/aioaCdp.js";
-import type { AgentExecutionRequest } from "../src/core/agentRunner.js";
+import type { AgentConversationRequest, AgentExecutionRequest } from "../src/core/agentRunner.js";
 import { AxAdapter } from "../src/core/axAdapter.js";
 import { BUILTIN_METHODS } from "../src/core/builtins.js";
 import type { CodeRef, RegisteredCallable } from "../src/core/types.js";
@@ -93,6 +93,39 @@ function chatRequest(message: string, agentSessionId = "output-session"): AgentE
   };
 }
 
+function conversationRequest(message: string, agentSessionId = "conversation-session"): AgentConversationRequest {
+  return {
+    profile: profile(),
+    mode: "ask",
+    cwd: "C:/workspace",
+    input: message,
+    metadata: { agentSessionId },
+    allowWorkspaceWrite: false
+  };
+}
+
+function agentRequest(input = "Fix the selected code"): AgentExecutionRequest {
+  const method: RegisteredCallable = {
+    ...BUILTIN_METHODS.find((candidate) => candidate.id === "agent")!,
+    source: "builtin"
+  };
+  return {
+    profile: profile(),
+    cwd: "C:/workspace",
+    method,
+    contract: new AxAdapter().compile(method),
+    resolved: {
+      invocation: { kind: "invocation", method: method.id, arguments: [{ name: "input", value: input }], source: "chat" },
+      method,
+      arguments: { input, apply: true },
+      context: [],
+      metadata: {}
+    },
+    metadata: {},
+    allowWorkspaceWrite: true
+  };
+}
+
 function page(overrides: Partial<AioaCdpPage> = {}): AioaCdpPage {
   return {
     state: async () => ({ busy: false, assistantIds: [] }),
@@ -142,6 +175,29 @@ function setupNavigator(
 }
 
 describe("AIOA CDP", () => {
+  it("submits normal conversations as plain text without defining an API", async () => {
+    const submit = vi.fn().mockResolvedValue(undefined);
+    const runner = new AioaCdpAgentRunner({
+      open: async () => ({
+        launched: false,
+        page: page({
+          state: async () => ({ busy: false, assistantIds: [], conversationId: "conversation-1" }),
+          submit,
+          updatesAfter: async () => ({
+            busy: false,
+            messages: [{ id: "assistant-1", text: "Here is the direct answer." }],
+            conversationId: "conversation-1"
+          })
+        })
+      })
+    }, { sleep: async () => undefined });
+
+    await expect(runner.runConversation(conversationRequest("Explain this module.")))
+      .resolves.toBe("Here is the direct answer.");
+    expect(submit).toHaveBeenCalledWith("Explain this module.");
+    expect(submit.mock.calls.flat()).not.toContain(expect.stringMatching(/Define API|Request:/));
+  });
+
   it("uses one compact ask API definition followed by flat requests", () => {
     const first = chatRequest("你好");
     const next = chatRequest("你能为我做些什么吗？");
@@ -241,6 +297,26 @@ describe("AIOA CDP", () => {
 
     expect(navigator.click.mock.calls).toEqual([[newTask], [selector], [workspace]]);
     expect(navigator.replaceText).toHaveBeenCalledWith(search, "bExT");
+  });
+
+  it("prefers a workspace-specific new-task action when AIOA exposes one", async () => {
+    const workspaceTask = { x: 12, y: 24 };
+    const navigator = setupNavigator([
+      setupSnapshot({
+        globalNewTaskPoints: [{ x: 1, y: 2 }],
+        workspaceNewTaskPoints: [workspaceTask]
+      }),
+      setupSnapshot({ selectedWorkspaceName: "dext" })
+    ]);
+
+    await openAioaWorkspaceConversation("C:/github/dext", navigator, {
+      pollIntervalMs: 1,
+      sleep: async () => undefined
+    });
+
+    expect(navigator.click).toHaveBeenCalledOnce();
+    expect(navigator.click).toHaveBeenCalledWith(workspaceTask);
+    expect(navigator.replaceText).not.toHaveBeenCalled();
   });
 
   it("waits for an asynchronously rendered workspace picker", async () => {
@@ -614,6 +690,195 @@ describe("AIOA CDP", () => {
     expect(close).toHaveBeenCalledOnce();
   });
 
+  it("streams AIOA work-log command cards as expandable tool events", async () => {
+    const updatesAfter = vi.fn()
+      .mockResolvedValueOnce({
+        busy: true,
+        messages: [],
+        tools: [{
+          id: "assistant-1:command:0",
+          title: "git status",
+          text: "Shell\n\ngit status\n\nOn branch master\n\nSuccess",
+          done: true
+        }]
+      })
+      .mockResolvedValueOnce({
+        busy: false,
+        messages: [{ id: "new", text: '{"kind":"chat","text":"Finished"}' }],
+        conversationId: "dext-task-1"
+      });
+    const connection: AioaCdpConnection = {
+      open: async () => ({ page: page({ updatesAfter }), launched: false })
+    };
+    const events: NonNullable<AgentExecutionRequest["onEvent"]> extends (event: infer Event) => void ? Event[] : never = [];
+    const runner = new AioaCdpAgentRunner(connection, { pollIntervalMs: 0, sleep: async () => undefined });
+
+    await expect(runner.run(request((event) => events.push(event)))).resolves.toEqual({ kind: "chat", text: "Finished" });
+    expect(events).toContainEqual({
+      id: "assistant-1:command:0",
+      phase: "tool",
+      title: "git status",
+      text: "Shell\n\ngit status\n\nOn branch master\n\nSuccess",
+      group: "aioa-work-log",
+      replace: true,
+      done: true
+    });
+  });
+
+  it("retries one malformed agent result and decodes its Base64 code fields", async () => {
+    const before = 'throw new Error("broken");';
+    const after = 'throw new Error("fixed");';
+    const content = 'export const message = "fixed";\n';
+    const encode = (value: string) => `dext-base64:${Buffer.from(value, "utf8").toString("base64")}`;
+    const malformed = '{"kind":"agent","text":"Applied","patch":{"kind":"patch","title":"Fix","changes":[{"uri":"file:///workspace/example.ts","before":"throw new Error("broken");","after":"throw new Error("fixed");"}]}}';
+    const repaired = JSON.stringify({
+      kind: "agent",
+      text: "Applied",
+      patch: {
+        kind: "patch",
+        title: "Fix",
+        changes: [{
+          uri: "file:///workspace/example.ts",
+          before: encode(before),
+          after: encode(after)
+        }]
+      },
+      files: [{
+        kind: "codeRef",
+        uri: "file:///workspace/example.ts",
+        content: encode(content),
+        contentHash: "hash",
+        documentVersion: 1
+      }]
+    });
+    const submit = vi.fn().mockResolvedValue(undefined);
+    const updatesAfter = vi.fn()
+      .mockResolvedValueOnce({
+        busy: false,
+        messages: [{ id: "malformed", text: malformed }],
+        conversationId: "dext-task-1"
+      })
+      .mockResolvedValueOnce({
+        busy: false,
+        messages: [{ id: "malformed", text: malformed }],
+        conversationId: "dext-task-1"
+      })
+      .mockResolvedValueOnce({ busy: true, messages: [], conversationId: "dext-task-1" })
+      .mockResolvedValueOnce({
+        busy: false,
+        messages: [{ id: "repaired", text: repaired }],
+        conversationId: "dext-task-1"
+      });
+    const connection: AioaCdpConnection = {
+      open: async () => ({ page: page({ submit, updatesAfter }), launched: false })
+    };
+    const runner = new AioaCdpAgentRunner(connection, { pollIntervalMs: 0, sleep: async () => undefined });
+
+    await expect(runner.run(agentRequest())).resolves.toEqual({
+      kind: "agent",
+      text: "Applied",
+      patch: {
+        kind: "patch",
+        title: "Fix",
+        changes: [{ uri: "file:///workspace/example.ts", before, after }]
+      },
+      files: [{
+        kind: "codeRef",
+        uri: "file:///workspace/example.ts",
+        content,
+        contentHash: "hash",
+        documentVersion: 1
+      }]
+    });
+    expect(submit).toHaveBeenCalledTimes(2);
+    expect(submit.mock.calls[0]?.[0]).toContain("dext-base64:");
+    expect(submit.mock.calls[1]?.[0]).toContain("previous response was not valid JSON");
+  });
+
+  it("reports the original format error when the agent repair response is still invalid", async () => {
+    const malformed = '{"kind":"agent","text":"Applied","patch":{"kind":"patch","title":"Fix","changes":[{"uri":"file:///workspace/example.ts","before":"throw new Error("broken");","after":""}]}}';
+    const submit = vi.fn().mockResolvedValue(undefined);
+    const updatesAfter = vi.fn()
+      .mockResolvedValueOnce({
+        busy: false,
+        messages: [{ id: "malformed", text: malformed }],
+        conversationId: "dext-task-1"
+      })
+      .mockResolvedValueOnce({ busy: true, messages: [], conversationId: "dext-task-1" })
+      .mockResolvedValueOnce({
+        busy: false,
+        messages: [{ id: "still-malformed", text: malformed }],
+        conversationId: "dext-task-1"
+      });
+    const connection: AioaCdpConnection = {
+      open: async () => ({ page: page({ submit, updatesAfter }), launched: false })
+    };
+    const runner = new AioaCdpAgentRunner(connection, { pollIntervalMs: 0, sleep: async () => undefined });
+
+    await expect(runner.run(agentRequest())).rejects.toThrow("AIOA did not return the JSON result required by this Dext API.");
+    expect(submit).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not submit a format retry for a valid agent result", async () => {
+    const submit = vi.fn().mockResolvedValue(undefined);
+    const updatesAfter = vi.fn().mockResolvedValue({
+      busy: false,
+      messages: [{ id: "result", text: '{"kind":"agent","text":"Applied"}' }],
+      conversationId: "dext-task-1"
+    });
+    const connection: AioaCdpConnection = {
+      open: async () => ({ page: page({ submit, updatesAfter }), launched: false })
+    };
+    const runner = new AioaCdpAgentRunner(connection, { pollIntervalMs: 0, sleep: async () => undefined });
+
+    await expect(runner.run(agentRequest())).resolves.toEqual({ kind: "agent", text: "Applied" });
+    expect(submit).toHaveBeenCalledOnce();
+  });
+
+  it("clicks stop only in the Dext-owned AIOA task when execution is cancelled", async () => {
+    const controller = new AbortController();
+    const stop = vi.fn().mockResolvedValue(true);
+    const state = vi.fn()
+      .mockResolvedValueOnce({ busy: false, assistantIds: [] })
+      .mockResolvedValueOnce({ busy: false, assistantIds: [], conversationId: "dext-task-1" })
+      .mockResolvedValueOnce({ busy: true, assistantIds: [], conversationId: "dext-task-1" })
+      .mockResolvedValueOnce({ busy: true, assistantIds: [], conversationId: "dext-task-1" });
+    const connection: AioaCdpConnection = {
+      open: async () => ({ page: page({ state, stop }), launched: false })
+    };
+    const runner = new AioaCdpAgentRunner(connection, {
+      pollIntervalMs: 1,
+      sleep: async () => { controller.abort(); }
+    });
+    const cancelled = request();
+    cancelled.signal = controller.signal;
+
+    await expect(runner.run(cancelled)).rejects.toMatchObject({ name: "ExecutionCancelledError" });
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it("does not click stop after the user switches away from the Dext-owned AIOA task", async () => {
+    const controller = new AbortController();
+    const stop = vi.fn().mockResolvedValue(true);
+    const state = vi.fn()
+      .mockResolvedValueOnce({ busy: false, assistantIds: [] })
+      .mockResolvedValueOnce({ busy: false, assistantIds: [], conversationId: "dext-task-1" })
+      .mockResolvedValueOnce({ busy: true, assistantIds: [], conversationId: "dext-task-1" })
+      .mockResolvedValueOnce({ busy: true, assistantIds: [], conversationId: "other-task" });
+    const connection: AioaCdpConnection = {
+      open: async () => ({ page: page({ state, stop }), launched: false })
+    };
+    const runner = new AioaCdpAgentRunner(connection, {
+      pollIntervalMs: 1,
+      sleep: async () => { controller.abort(); }
+    });
+    const cancelled = request();
+    cancelled.signal = controller.signal;
+
+    await expect(runner.run(cancelled)).rejects.toMatchObject({ name: "ExecutionCancelledError" });
+    expect(stop).not.toHaveBeenCalled();
+  });
+
   it("reports an AIOA turn that never starts responding instead of waiting for the global timeout", async () => {
     let now = 0;
     const events: string[] = [];
@@ -633,12 +898,39 @@ describe("AIOA CDP", () => {
     expect(events).toContain("status:Waiting for AIOA response");
   });
 
-  it("keeps a silent work log private while using it to detect whether AIOA is still active", async () => {
+  it("allows the default AIOA timeout to complete after more than 30 minutes", async () => {
     let now = 0;
-    const events: string[] = [];
+    const waits = [1_800_001, 386_000];
+    const updatesAfter = vi.fn()
+      .mockResolvedValueOnce({ busy: true, messages: [], activity: "Still working" })
+      .mockResolvedValueOnce({
+        busy: false,
+        messages: [{ id: "new", text: '{"kind":"chat","text":"Finished"}' }],
+        conversationId: "dext-task-1"
+      });
+    const connection: AioaCdpConnection = {
+      open: async () => ({ page: page({ updatesAfter }), launched: false })
+    };
+    const runner = new AioaCdpAgentRunner(connection, {
+      pollIntervalMs: 1,
+      sleep: async () => { now += waits.shift() ?? 0; },
+      now: () => now
+    });
+
+    await expect(runner.run(request())).resolves.toEqual({ kind: "chat", text: "Finished" });
+    expect(now).toBe(2_186_001);
+  });
+
+  it("streams visible work-log updates with one replaceable event while detecting activity", async () => {
+    let now = 0;
+    const events: NonNullable<AgentExecutionRequest["onEvent"]> extends (event: infer Event) => void ? Event[] : never = [];
+    const updatesAfter = vi.fn()
+      .mockResolvedValueOnce({ busy: true, messages: [], activity: "Inspecting files" })
+      .mockResolvedValueOnce({ busy: true, messages: [], activity: "Running tests" })
+      .mockResolvedValue({ busy: true, messages: [], activity: "Running tests" });
     const connection: AioaCdpConnection = {
       open: async () => ({
-        page: page({ updatesAfter: async () => ({ busy: true, messages: [], activity: "private work-log detail" }) }),
+        page: page({ updatesAfter }),
         launched: false
       })
     };
@@ -651,10 +943,12 @@ describe("AIOA CDP", () => {
       now: () => now
     });
 
-    await expect(runner.run(request((event) => events.push(`${event.phase}:${event.text}`))))
+    await expect(runner.run(request((event) => events.push(event))))
       .rejects.toThrow(/stopped responding for 1 seconds/i);
-    expect(events).toContain("status:AIOA is working");
-    expect(events.join("\n")).not.toContain("private work-log detail");
+    expect(events.filter((event) => event.id === "aioa-work-log")).toEqual([
+      { phase: "message", id: "aioa-work-log", text: "Inspecting files", group: "aioa-work-log", replace: true },
+      { phase: "message", id: "aioa-work-log", text: "Running tests", group: "aioa-work-log", replace: true }
+    ]);
   });
 
   it("keeps polling until final content mounts after the work log finishes", async () => {
@@ -672,6 +966,21 @@ describe("AIOA CDP", () => {
 
     await expect(runner.run(chatRequest("Hello"))).resolves.toEqual({ kind: "chat", text: "Hello" });
     expect(updatesAfter).toHaveBeenCalledTimes(2);
+  });
+
+  it("treats a settled stop control without a final message as a completed AIOA turn", async () => {
+    let now = 0;
+    const connection: AioaCdpConnection = {
+      open: async () => ({ page: page({ updatesAfter: async () => ({ busy: false, messages: [], conversationId: "dext-task-1" }) }), launched: false })
+    };
+    const runner = new AioaCdpAgentRunner(connection, {
+      pollIntervalMs: 10,
+      finalContentGraceMs: 20,
+      sleep: async () => { now += 10; },
+      now: () => now
+    });
+
+    await expect(runner.run(chatRequest("Hello"))).rejects.toThrow(/finished without returning/i);
   });
 
   it("parses a typed result after AIOA adds execution status text", async () => {
@@ -743,6 +1052,39 @@ describe("AIOA CDP", () => {
     expect(submit.mock.calls[0]?.[0]).toContain(aioaBootstrapPrompt());
     expect(submit.mock.calls[1]?.[0]).not.toContain(aioaBootstrapPrompt());
     expect(submit.mock.calls[0]?.[0]).toContain("Define API ask");
+    expect(submit.mock.calls[1]?.[0]).toBe('Request: {"api":"ask","input":"Explain the selected code"}');
+  });
+
+  it("keeps a task ID that becomes available immediately after the first submission", async () => {
+    const createConversation = vi.fn().mockResolvedValue(undefined);
+    const submit = vi.fn().mockResolvedValue(undefined);
+    const state = vi.fn()
+      .mockResolvedValueOnce({ busy: false, assistantIds: [] })
+      .mockResolvedValueOnce({ busy: false, assistantIds: [] })
+      .mockResolvedValueOnce({ busy: false, assistantIds: [], conversationId: "dext-task-1" })
+      .mockResolvedValueOnce({ busy: false, assistantIds: [], conversationId: "dext-task-1" })
+      .mockResolvedValueOnce({ busy: false, assistantIds: [], conversationId: "dext-task-1" })
+      .mockResolvedValueOnce({ busy: false, assistantIds: [], conversationId: "dext-task-1" });
+    const connection: AioaCdpConnection = {
+      open: async () => ({
+        page: page({
+          state,
+          createConversation,
+          submit,
+          updatesAfter: async () => ({
+            busy: false,
+            messages: [{ id: `reply-${submit.mock.calls.length}`, text: '{"kind":"chat","text":"ok"}' }]
+          })
+        }),
+        launched: false
+      })
+    };
+    const runner = new AioaCdpAgentRunner(connection, { pollIntervalMs: 0, sleep: async () => undefined });
+
+    await runner.run(request(undefined, "output-session"));
+    await runner.run(request(undefined, "output-session"));
+
+    expect(createConversation).toHaveBeenCalledOnce();
     expect(submit.mock.calls[1]?.[0]).toBe('Request: {"api":"ask","input":"Explain the selected code"}');
   });
 
@@ -831,14 +1173,15 @@ describe("AIOA CDP", () => {
     expect(submit.mock.calls[2]?.[0]).toBe('Request: {"api":"ask","input":"One more","tone":"brief"}');
   });
 
-  it("blocks a later turn when the user switched away from Dext's AIOA task", async () => {
+  it("creates a fresh Dext task when the user switched away from its AIOA task", async () => {
     let conversationId: string | undefined;
+    const createConversation = vi.fn(async () => { conversationId = undefined; });
     const submit = vi.fn().mockResolvedValue(undefined);
     const connection: AioaCdpConnection = {
       open: async () => ({
         page: page({
           state: async () => ({ busy: false, assistantIds: [], ...(conversationId ? { conversationId } : {}) }),
-          createConversation: async () => { conversationId = undefined; },
+          createConversation,
           submit,
           updatesAfter: async () => ({
             busy: false,
@@ -853,8 +1196,10 @@ describe("AIOA CDP", () => {
     await runner.run(request(undefined, "output-session"));
     conversationId = "another-task";
 
-    await expect(runner.run(request(undefined, "output-session"))).rejects.toThrow(/not the task created/i);
-    expect(submit).toHaveBeenCalledTimes(1);
+    await expect(runner.run(request(undefined, "output-session"))).resolves.toEqual({ kind: "chat", text: "ok" });
+    expect(createConversation).toHaveBeenCalledTimes(2);
+    expect(submit).toHaveBeenCalledTimes(2);
+    expect(submit.mock.calls[1]?.[0]).toContain(aioaBootstrapPrompt());
   });
 
   it("creates a fresh AIOA task after the Dext session is cleared", async () => {

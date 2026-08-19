@@ -27,6 +27,7 @@ export interface AgentModelOption {
 }
 
 export interface AgentSelection {
+  mode?: "agent" | "ask" | "code";
   profileId?: string;
   model?: string;
   reasoningEffort?: string;
@@ -191,6 +192,7 @@ export class AgentProfileStore {
 
   setSelection(selection: AgentSelection): void {
     this.selection = {
+      ...(selection.mode ? { mode: selection.mode } : {}),
       ...(selection.profileId ? { profileId: selection.profileId } : {}),
       ...(selection.model ? { model: selection.model } : {}),
       ...(selection.reasoningEffort ? { reasoningEffort: selection.reasoningEffort } : {}),

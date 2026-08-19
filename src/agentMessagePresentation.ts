@@ -148,7 +148,7 @@ export function presentAgentMessage(raw: string): AgentMessagePresentation {
 
   const kind = value.kind as string;
   const patch = record(value.patch);
-  const changes = patchChanges(kind === "edit" ? patch?.changes : value.changes);
+  const changes = patchChanges(kind === "edit" || kind === "agent" ? patch?.changes : value.changes);
   const references = codeReferences(value.files);
   const findings = findingDetails(value.findings);
   const meta: string[] = [];
@@ -161,6 +161,10 @@ export function presentAgentMessage(raw: string): AgentMessagePresentation {
     title = "Edit proposal";
     if (changes.length) meta.push(count(changes.length, "file"));
     if (!text) text = string(patch?.title);
+  } else if (kind === "agent") {
+    title = "Agent";
+    if (changes.length) meta.push(count(changes.length, "file"));
+    if (references.length) meta.push(count(references.length, "reference"));
   } else if (kind === "review") {
     title = "Review";
     const state = status(value.status);

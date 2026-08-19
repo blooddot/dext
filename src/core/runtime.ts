@@ -6,6 +6,7 @@ import type { ContextResolver } from "./contextResolver.js";
 import type { MethodRegistry } from "./registry.js";
 import type { AgentResult, CustomApiPlan, DirRef, McpRawResult, UiChoiceResult, UiConfirmResult, UiInputResult } from "./types.js";
 import { WorkflowRuntime } from "./workflowRuntime.js";
+import { ExecutionCancelledError } from "./executionErrors.js";
 import { patchResultFrom } from "./patch.js";
 import type { AgentProfile, AgentSelection } from "../agentProfiles.js";
 import { DefaultAgentRunner } from "./agentRouter.js";
@@ -243,6 +244,7 @@ export class DextRuntime {
 
   endAgentSession(sessionId: string): void {
     this.agentRunner.endSession?.(sessionId);
+    this.agentRunner.endSession?.(`${sessionId}\u0000conversation`);
   }
 
   setWorkspaceRoot(root: string): void {
@@ -266,6 +268,7 @@ export class DextRuntime {
     supplementalContext: readonly CodeRef[] = [],
     metadata: Readonly<ExecutionMetadata> = {}
   ): Promise<RuntimeResponse> {
+    if (metadata.signal?.aborted) throw new ExecutionCancelledError();
     const started = performance.now();
     const method = this.registry.get(invocation.method);
     if (!method) {
@@ -373,6 +376,7 @@ export class DextRuntime {
           contract,
           metadata: runnerMetadata,
           allowWorkspaceWrite: agentWriteEnabled,
+          ...(metadata.signal ? { signal: metadata.signal } : {}),
           ...(runnerMetadata.onAgentEvent ? { onEvent: runnerMetadata.onAgentEvent } : {})
         });
         result = normalizeAgentResult(method.output.kind, raw);
@@ -396,6 +400,59 @@ export class DextRuntime {
       result,
       durationMs: performance.now() - started,
       ...(metadata.instruction ? { instruction: metadata.instruction } : {})
+    };
+  }
+
+  /** Runs a normal Agent or Ask turn without compiling it as Dext code or
+   * imposing a typed API response on the selected provider. */
+  async executeConversation(
+    mode: "agent" | "ask",
+    input: string,
+    metadata: Readonly<ExecutionMetadata> = {}
+  ): Promise<RuntimeResponse> {
+    if (metadata.signal?.aborted) throw new ExecutionCancelledError();
+    const text = input.trim();
+    if (!text) throw new Error("Enter a message before sending it.");
+    const method = this.registry.get(mode);
+    if (!method) throw new Error(`Built-in conversation mode '${mode}' is not available.`);
+    const profileId = metadata.agent ?? this.agentSelection.profileId ?? this.agents.keys().next().value;
+    const profile = profileId ? this.agents.get(profileId) : undefined;
+    if (!profile) throw new Error("Choose an Agent before starting a conversation.");
+    if (!this.agentRunner.runConversation) {
+      throw new Error(`Agent '${profile.label}' does not support normal conversation mode.`);
+    }
+    const allowWorkspaceWrite = mode === "agent";
+    if (allowWorkspaceWrite && !this.workspaceTrusted) {
+      throw new Error("Agent mode requires a trusted local workspace.");
+    }
+    const started = performance.now();
+    const sessionId = metadata.agentSessionId
+      ? `${metadata.agentSessionId}\u0000conversation`
+      : undefined;
+    const response = await this.agentRunner.runConversation({
+      profile,
+      ...(metadata.model || this.agentSelection.model ? { model: metadata.model ?? this.agentSelection.model } : {}),
+      ...((metadata.reasoningEffort ?? this.agentSelection.reasoningEffort) ? { reasoningEffort: metadata.reasoningEffort ?? this.agentSelection.reasoningEffort } : {}),
+      ...((metadata.speed ?? this.agentSelection.speed) ? { speed: metadata.speed ?? this.agentSelection.speed } : {}),
+      ...((metadata.serviceTier ?? this.agentSelection.serviceTier) ? { serviceTier: metadata.serviceTier ?? this.agentSelection.serviceTier } : {}),
+      cwd: this.workspaceRoot,
+      input: text,
+      mode,
+      metadata: { ...metadata, ...(sessionId ? { agentSessionId: sessionId } : {}) },
+      allowWorkspaceWrite,
+      ...(metadata.signal ? { signal: metadata.signal } : {}),
+      ...(metadata.onAgentEvent ? { onEvent: metadata.onAgentEvent } : {})
+    });
+    return {
+      invocation: {
+        kind: "invocation",
+        method: mode,
+        arguments: [{ name: "input", value: text }],
+        source: "chat"
+      },
+      method: { id: mode, title: method.title, kind: method.kind, source: method.source },
+      result: { kind: "chat", text: response },
+      durationMs: performance.now() - started
     };
   }
 

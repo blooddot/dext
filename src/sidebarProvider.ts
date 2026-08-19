@@ -52,6 +52,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   private readonly attachments = new AttachmentStore();
   private activeSession = outputSession();
   private running = false;
+  private activeExecution: { turnId: string; controller: AbortController } | undefined;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -127,6 +128,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   dispose(): void {
+    this.activeExecution?.controller.abort();
     this.application.endAgentSession(this.activeSession.id);
     this.attachments.dispose();
     this.messageQueue.clear();
@@ -168,7 +170,12 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           break;
         }
         case "executeInput":
-          await this.run(request.source);
+          await this.run(request.mode, request.source);
+          break;
+        case "stopExecution":
+          if (this.activeExecution?.turnId === request.turnId) {
+            this.activeExecution.controller.abort();
+          }
           break;
         case "viewHistory":
           await this.onViewHistory();
@@ -181,6 +188,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           break;
         case "agentSelection":
           this.application.setAgentSelection({
+            mode: request.selection.mode,
             ...(request.selection.profileId ? { profileId: request.selection.profileId } : {}),
             ...(request.selection.model ? { model: request.selection.model } : {}),
             ...(request.selection.reasoningEffort ? { reasoningEffort: request.selection.reasoningEffort } : {}),
@@ -306,22 +314,29 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async run(source: string): Promise<void> {
+  private async run(mode: "agent" | "ask" | "code", source: string): Promise<void> {
+    if (this.running) throw new Error("Wait for the current Dext turn to finish before running another one.");
     source = normalizeInputReferenceSource(source);
     const events: AgentStreamEvent[] = [];
     const turnId = randomBytes(12).toString("hex");
     const sessionId = this.activeSession.id;
+    const controller = new AbortController();
+    this.activeExecution = { turnId, controller };
     this.running = true;
     await this.post({ type: "executing", value: true, turnId, source });
     try {
-      const response = await this.application.executeInput(source, {
+      const metadata = {
         agentSessionId: sessionId,
+        signal: controller.signal,
         ui: this.uiInteraction(),
-        onAgentEvent: (event) => {
+        onAgentEvent: (event: AgentStreamEvent) => {
           events.push({ ...event });
           this.postAgentEvent(event);
         }
-      });
+      };
+      const response = mode === "code"
+        ? await this.application.executeInput(source, metadata)
+        : await this.application.executeConversation(mode, source, metadata);
       const turn = await this.history.addSuccess(source, events, response, sessionId);
       this.activeSession.turns.push(turn);
       this.activeSession.updatedAt = turn.createdAt;
@@ -337,6 +352,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       });
     } finally {
       this.running = false;
+      if (this.activeExecution?.turnId === turnId) this.activeExecution = undefined;
       await this.post({ type: "executing", value: false, turnId });
     }
   }
@@ -476,43 +492,63 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
 </head>
 <body>
   <div class="app-shell">
-    <main>
-    <section id="input-shell" class="input-panel unified-input">
-      <div id="code-editor" class="code-editor" aria-label="Dext input"></div>
-      <button id="attach-files" class="composer-attach icon-button" type="button" title="Attach workspace files" aria-label="Attach workspace files"><i class="codicon codicon-attach"></i></button>
-    </section>
-
-    <div id="attachment-bar" class="attachment-bar hidden" aria-label="Image attachments"></div>
-
-    <div class="action-row">
-      <div class="agent-controls">
-        <select id="agent-profile" aria-label="Agent"></select>
-        <select id="agent-model" aria-label="Model"></select>
-        <select id="agent-reasoning" aria-label="Reasoning"></select>
-        <select id="agent-speed" aria-label="Speed"></select>
-      </div>
-      <div class="action-actions">
-        <button id="problems" class="problems-status" type="button" disabled>No problems</button>
-        <button id="run" class="primary" type="button"><i class="codicon codicon-run"></i><span id="run-label">Send</span></button>
-      </div>
-    </div>
-
+    <main id="dext-main">
     <section id="result-section" class="result-section" aria-live="polite">
       <div id="result-heading" class="section-heading collapsible-heading" role="button" tabindex="0" aria-expanded="true">
         <span class="section-heading-label"><i class="section-chevron codicon codicon-chevron-down"></i><span>Output</span></span>
         <div class="section-heading-actions">
           <button id="view-history" class="icon-button" type="button" title="View Dext history" aria-label="View Dext history"><i class="codicon codicon-history"></i></button>
           <button id="clear-output" class="icon-button" type="button" title="Clear output" aria-label="Clear output"><i class="codicon codicon-eraser"></i></button>
+          <button id="result-fullscreen" class="icon-button panel-fullscreen" type="button" title="Maximize Output" aria-label="Maximize Output"><i class="codicon codicon-screen-full"></i></button>
         </div>
       </div>
       <div id="result-body" class="collapsible-body result-body"><div id="result"></div></div>
     </section>
 
-    <section class="methods-section">
+    <section id="input-section" class="input-section">
+      <div id="input-heading" class="section-heading collapsible-heading" role="button" tabindex="0" aria-expanded="true">
+        <span class="section-heading-label"><i class="section-chevron codicon codicon-chevron-down"></i><span>Input</span></span>
+        <div class="section-heading-actions">
+          <button id="input-fullscreen" class="icon-button panel-fullscreen" type="button" title="Maximize Input" aria-label="Maximize Input"><i class="codicon codicon-screen-full"></i></button>
+        </div>
+      </div>
+      <div id="input-body" class="collapsible-body input-body">
+        <section id="input-shell" class="input-panel unified-input">
+          <div id="code-editor" class="code-editor" aria-label="Dext input"></div>
+          <button id="attach-files" class="composer-attach icon-button" type="button" title="Attach workspace files" aria-label="Attach workspace files"><i class="codicon codicon-attach"></i></button>
+        </section>
+
+        <div id="attachment-bar" class="attachment-bar hidden" aria-label="Image attachments"></div>
+
+        <div class="action-row">
+          <div id="composer-controls" class="composer-controls">
+            <div class="composer-menu">
+              <button id="mode-control" class="composer-control" type="button" aria-haspopup="menu" aria-expanded="false"><span class="composer-control-label">Mode</span><span id="mode-control-value" class="composer-control-value"></span><i class="codicon codicon-chevron-down"></i></button>
+              <div id="mode-menu" class="composer-popover" role="menu" hidden></div>
+            </div>
+            <div class="composer-menu">
+              <button id="agent-control" class="composer-control" type="button" aria-haspopup="menu" aria-expanded="false"><span class="composer-control-label">Agent</span><span id="agent-control-value" class="composer-control-value"></span><i class="codicon codicon-chevron-down"></i></button>
+              <div id="agent-menu" class="composer-popover" role="menu" hidden></div>
+            </div>
+            <div class="composer-menu">
+              <button id="model-control" class="composer-control" type="button" aria-haspopup="menu" aria-expanded="false"><span class="composer-control-label">Model</span><span id="model-control-value" class="composer-control-value"></span><i class="codicon codicon-chevron-down"></i></button>
+              <div id="model-menu" class="composer-popover composer-model-popover" role="menu" hidden></div>
+            </div>
+          </div>
+          <div class="action-actions">
+            <button id="problems" class="problems-status" type="button" disabled>No problems</button>
+            <button id="run" class="primary" type="button"><i class="codicon codicon-run"></i><span id="run-label">Send</span></button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="methods-section" class="methods-section">
       <div id="methods-heading" class="section-heading collapsible-heading" role="button" tabindex="0" aria-expanded="true">
         <span class="section-heading-label"><i class="section-chevron codicon codicon-chevron-down"></i><span>API <span id="method-count" class="count"></span></span></span>
         <div class="section-heading-actions">
           <button id="methods-toggle" class="icon-button compact" type="button" title="Collapse API namespaces" aria-label="Collapse API namespaces"><i class="codicon codicon-collapse-all"></i></button>
+          <button id="methods-fullscreen" class="icon-button panel-fullscreen" type="button" title="Maximize API" aria-label="Maximize API"><i class="codicon codicon-screen-full"></i></button>
         </div>
       </div>
       <div id="methods-body" class="collapsible-body">

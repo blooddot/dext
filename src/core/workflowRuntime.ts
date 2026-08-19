@@ -41,6 +41,8 @@ export class WorkflowRuntime {
     const environment = new Map<string, RuntimeValue>(initial);
     const steps: WorkflowStepResponse[] = [];
     const completed = await this.executeStatements(program.statements, environment, steps, metadata);
+    const cancelled = [...steps].reverse().find((step) => step.state === "cancelled");
+    if (!completed && cancelled) throw new ExecutionCancelledError(cancelled.error);
     if (!completed || !program.returnExpression) {
       throw new Error("Custom API main() did not return a result.");
     }
@@ -77,6 +79,7 @@ export class WorkflowRuntime {
         state: "success"
       };
       try {
+        if (metadata.signal?.aborted) throw new ExecutionCancelledError();
         const response = await this.runtime.execute({
           kind: "invocation",
           method: statement.call.method,
@@ -132,6 +135,7 @@ export class WorkflowRuntime {
     environment: Map<string, RuntimeValue>,
     metadata: Readonly<ExecutionMetadata> = {}
   ): Promise<RuntimeValue> {
+    if (metadata.signal?.aborted) throw new ExecutionCancelledError();
     if (expression.kind === "call") {
       const response = await this.runtime.execute({
         kind: "invocation",

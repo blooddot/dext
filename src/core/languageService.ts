@@ -414,6 +414,7 @@ export class DextLanguageService {
       }
     }
 
+    if (!word) return [];
     const methods = this.visibleMethodEntries(source, customApisAreGlobal);
     const path = word.split(".");
     const fragment = path.pop() ?? "";

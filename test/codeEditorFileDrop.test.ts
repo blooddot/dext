@@ -11,7 +11,7 @@ interface EditorChange {
   insert: string;
 }
 
-function dropHarness(source: string): { editor: DextCodeEditor; focus: ReturnType<typeof vi.fn> } {
+function dropHarness(source: string, selection = 0): { editor: DextCodeEditor; focus: ReturnType<typeof vi.fn> } {
   let current = source;
   const focus = vi.fn();
   const document = {
@@ -20,7 +20,7 @@ function dropHarness(source: string): { editor: DextCodeEditor; focus: ReturnTyp
   };
   const view = {
     state: {
-      selection: { main: { from: 0, to: 0 } },
+      selection: { main: { from: selection, to: selection } },
       doc: document
     },
     dispatch(spec: unknown) {
@@ -43,12 +43,15 @@ describe("CodeMirror file-reference drop", () => {
     expect(compileWorkflow(source, registry).diagnostics).toEqual([]);
   }
 
-  it("converts a normal agent input when the drop has fallen back to an unrelated selection", () => {
-    const { editor, focus } = dropHarness('agent(input="这段代码是什么含义")');
+  it("inserts at the current selection outside an agent input", () => {
+    const source = 'input = """这段代码是什么含义\n"""\nagent(input=input)';
+    const cursor = source.indexOf("\n");
+    const { editor, focus } = dropHarness(source, cursor);
 
     editor.insertFileReferences(['@src/pathx.py#L55,1-L66,32']);
 
-    expect(editor.source).toMatch(/^agent\(input="这段代码是什么含义/);
+    expect(editor.source).toContain('input = """这段代码是什么含义 @src/pathx.py#L55,1-L66,32\n"""');
+    expect(editor.source).toContain("agent(input=input)");
     expectCompiled(editor.source);
     expect(editor.source).not.toContain('f"');
     expect(editor.source).not.toContain('ref.file(');

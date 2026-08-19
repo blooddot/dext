@@ -175,6 +175,19 @@ export class DextApplication {
     return this.workflowRuntime.execute(compiled.program, [], metadata);
   }
 
+  async executeConversation(
+    mode: "agent" | "ask",
+    input: string,
+    metadata: Readonly<ExecutionMetadata> = {}
+  ): Promise<InputExecutionResponse> {
+    const response = await this.runtime.executeConversation(mode, input, metadata);
+    return {
+      kind: "workflow",
+      executions: [response],
+      steps: [{ method: response.method.id, state: "success", response }]
+    };
+  }
+
   endAgentSession(sessionId: string): void {
     this.runtime.endAgentSession(sessionId);
   }

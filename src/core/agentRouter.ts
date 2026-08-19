@@ -1,5 +1,10 @@
 import { AioaCdpAgentRunner, type AioaCdpConnection } from "./aioaCdp.js";
-import { CliAgentRunner, type AgentExecutionRequest, type AgentRunner } from "./agentRunner.js";
+import {
+  CliAgentRunner,
+  type AgentConversationRequest,
+  type AgentExecutionRequest,
+  type AgentRunner
+} from "./agentRunner.js";
 
 /** Routes AIOA CDP requests without changing the existing CLI adapters. */
 export class DefaultAgentRunner implements AgentRunner {
@@ -14,6 +19,12 @@ export class DefaultAgentRunner implements AgentRunner {
 
   run(request: AgentExecutionRequest): Promise<unknown> {
     return request.profile.provider === "aioa" ? this.aioa.run(request) : this.cli.run(request);
+  }
+
+  runConversation(request: AgentConversationRequest): Promise<string> {
+    return request.profile.provider === "aioa"
+      ? this.aioa.runConversation(request)
+      : this.cli.runConversation(request);
   }
 
   endSession(sessionId: string): void {

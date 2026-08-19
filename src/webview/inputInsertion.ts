@@ -25,11 +25,6 @@ interface CoreInputArgument {
   literal?: QuotedString;
 }
 
-interface LocatedCoreInputArgument {
-  argument: CoreInputArgument;
-  appendAtEnd: boolean;
-}
-
 function needsInlinePrefix(character: string): boolean {
   return Boolean(character) && !/\s|[=(:,[]/.test(character);
 }
@@ -166,30 +161,15 @@ function coreInputArguments(source: string): CoreInputArgument[] {
   return argumentsFound;
 }
 
-function coreInputArgument(source: string, from: number, to: number): LocatedCoreInputArgument | undefined {
+function coreInputArgument(source: string, from: number, to: number): CoreInputArgument | undefined {
   const candidates = coreInputArguments(source);
-  const atPosition = candidates.find((candidate) => {
+  return candidates.find((candidate) => {
     const regionStart = candidate.literal?.literalStart ?? candidate.valueStart;
     // Coordinates around atomic reference Chips may resolve to either quote
     // boundary or the closing parenthesis. Keep that whole input value
     // semantic so an attachment never falls back to a raw expression.
     return from >= regionStart && to <= candidate.valueEnd + 1;
   });
-  if (atPosition) return { argument: atPosition, appendAtEnd: false };
-  if (!candidates.length) return undefined;
-  // A Chip widget can make CodeMirror's coordinate lookup return no source
-  // position. Attachments still belong to an input literal, never as a raw
-  // expression beside it, so use the closest input as an unambiguous fallback.
-  const nearest = candidates.reduce((closest, candidate) => {
-    const start = candidate.literal?.literalStart ?? candidate.valueStart;
-    const end = candidate.valueEnd + 1;
-    const distance = from < start ? start - from : from > end ? from - end : 0;
-    const closestStart = closest.literal?.literalStart ?? closest.valueStart;
-    const closestEnd = closest.valueEnd + 1;
-    const closestDistance = from < closestStart ? closestStart - from : from > closestEnd ? from - closestEnd : 0;
-    return distance < closestDistance ? candidate : closest;
-  });
-  return { argument: nearest, appendAtEnd: true };
 }
 
 function inputReferenceText(expressions: readonly string[]): string {
@@ -204,9 +184,8 @@ export function coreInputReferenceInsertion(
   expressions: readonly string[]
 ): SourceReplacement | undefined {
   if (!expressions.length) return undefined;
-  const target = coreInputArgument(source, from, to);
-  if (!target) return undefined;
-  const argument = target.argument;
+  const argument = coreInputArgument(source, from, to);
+  if (!argument) return undefined;
   const value = argument.literal;
   if (!value) {
     const inserted = inputReferenceText(expressions);
@@ -217,12 +196,8 @@ export function coreInputReferenceInsertion(
       cursorOffset: 1 + inserted.length
     };
   }
-  const insertionFrom = target.appendAtEnd
-    ? value.bodyEnd
-    : Math.max(value.bodyStart, Math.min(from, value.bodyEnd));
-  const insertionTo = target.appendAtEnd
-    ? value.bodyEnd
-    : Math.max(insertionFrom, Math.min(to, value.bodyEnd));
+  const insertionFrom = Math.max(value.bodyStart, Math.min(from, value.bodyEnd));
+  const insertionTo = Math.max(insertionFrom, Math.min(to, value.bodyEnd));
   const before = source.slice(value.bodyStart, insertionFrom);
   const after = source.slice(insertionTo, value.bodyEnd);
   const prefix = insertionFrom > value.bodyStart && needsInlinePrefix(source[insertionFrom - 1] ?? "") ? " " : "";

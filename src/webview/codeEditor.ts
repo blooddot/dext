@@ -60,7 +60,14 @@ export interface CodeEditorOptions {
   onOpenReference(reference: ContextReferenceOccurrence): void;
   onDiagnosticsChanged(counts: { errors: number; warnings: number }): void;
   onInputKindChanged(kind: "empty" | "workflow" | "invalid"): void;
+  onSourceChanged?(): void;
   onError(error: unknown): void;
+}
+
+export function pasteEventText(event: Pick<ClipboardEvent, "clipboardData">): string | undefined {
+  const clipboardData = event.clipboardData;
+  if (!clipboardData || !clipboardData.types.includes("text/plain")) return undefined;
+  return clipboardData.getData("text/plain");
 }
 
 const signatureEffect = StateEffect.define<Tooltip | null>();
@@ -163,6 +170,7 @@ export class DextCodeEditor {
   private diagnosticsTimer: ReturnType<typeof setTimeout> | undefined;
   private signatureTimer: ReturnType<typeof setTimeout> | undefined;
   private diagnostics: Diagnostic[] = [];
+  private languageEnabled = true;
 
   constructor(private readonly options: CodeEditorOptions) {
     const extensions: Extension[] = [
@@ -213,7 +221,7 @@ export class DextCodeEditor {
         },
         paste: (event) => {
           event.preventDefault();
-          void this.paste();
+          void this.paste(pasteEventText(event));
           return true;
         }
       }),
@@ -346,8 +354,24 @@ export class DextCodeEditor {
   }
 
   refreshLanguageState(): void {
+    if (!this.languageEnabled) return;
     this.scheduleDiagnostics(0);
     this.updateInputKind();
+  }
+
+  setLanguageEnabled(enabled: boolean): void {
+    if (this.languageEnabled === enabled) return;
+    this.languageEnabled = enabled;
+    if (enabled) {
+      this.refreshLanguageState();
+      return;
+    }
+    if (this.diagnosticsTimer) clearTimeout(this.diagnosticsTimer);
+    if (this.signatureTimer) clearTimeout(this.signatureTimer);
+    this.diagnostics = [];
+    this.view.dispatch(setDiagnostics(this.view.state, []));
+    this.view.dispatch({ effects: signatureEffect.of(null) });
+    this.options.onDiagnosticsChanged({ errors: 0, warnings: 0 });
   }
 
   destroy(): void {
@@ -357,6 +381,7 @@ export class DextCodeEditor {
   }
 
   private async completions(context: CompletionContext): Promise<CompletionResult | null> {
+    if (!this.languageEnabled) return null;
     const source = context.state.doc.toString();
     const response = await this.options.broker.request(source, context.pos, {
       get isCancellationRequested() { return context.aborted; },
@@ -384,6 +409,7 @@ export class DextCodeEditor {
   }
 
   private async hover(view: EditorView, position: number): Promise<Tooltip | null> {
+    if (!this.languageEnabled) return null;
     const source = view.state.doc.toString();
     const response = await this.options.broker.request(source, position);
     if (!response?.hover || !sourceSnapshotMatches(view.state.doc.toString(), source)) return null;
@@ -412,6 +438,9 @@ export class DextCodeEditor {
   private updated(update: ViewUpdate): void {
     if (!update.docChanged && !update.selectionSet) return;
     if (update.docChanged) {
+      // Input mode can disable language services, but the composer still needs
+      // to react immediately when its text changes.
+      this.options.onSourceChanged?.();
       const source = this.source;
       const normalized = normalizeInputReferenceSource(source);
       if (normalized !== source) {
@@ -426,9 +455,12 @@ export class DextCodeEditor {
         });
         return;
       }
-      this.scheduleDiagnostics(120);
-      this.updateInputKind();
+      if (this.languageEnabled) {
+        this.scheduleDiagnostics(120);
+        this.updateInputKind();
+      }
     }
+    if (!this.languageEnabled) return;
     if (this.signatureTimer) clearTimeout(this.signatureTimer);
     this.signatureTimer = setTimeout(() => void this.updateSignature(), 60);
   }
@@ -451,6 +483,7 @@ export class DextCodeEditor {
   }
 
   private async updateDiagnostics(): Promise<void> {
+    if (!this.languageEnabled) return;
     const source = this.source;
     if (!source.trim()) {
       this.diagnostics = [];
@@ -495,6 +528,7 @@ export class DextCodeEditor {
   }
 
   private async updateSignature(): Promise<void> {
+    if (!this.languageEnabled) return;
     const source = this.source;
     const cursor = this.view.state.selection.main.head;
     const response = await this.options.broker.request(source, cursor);
@@ -526,9 +560,13 @@ export class DextCodeEditor {
     this.replaceSelection("", "delete.cut");
   }
 
-  private async paste(): Promise<void> {
+  private async paste(eventText?: string): Promise<void> {
     const source = this.source;
     const selection = this.view.state.selection.main;
+    if (eventText !== undefined) {
+      if (eventText) this.replaceSelection(eventText, "input.paste");
+      return;
+    }
     const result = await this.options.clipboard.read("code");
     if (!result || !selectionMatches(this.view, source, selection.anchor, selection.head)) return;
     let text: string;

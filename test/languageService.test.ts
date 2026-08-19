@@ -13,6 +13,9 @@ describe("DextLanguageService workflow features", () => {
 
   it("completes public top-level methods and print", () => {
     expect(service.documentCompletions("co")).toEqual([]);
+    for (const source of ["随便输入一下", "input = ", "input = +"]) {
+      expect(service.documentCompletions(source)).toEqual([]);
+    }
     expect(service.documentCompletions("a").map((item) => item.label))
       .toEqual(["agent", "apply", "ask"]);
     expect(service.documentCompletions("agent(in").map((item) => item.label)).toEqual(["input"]);

@@ -7,11 +7,26 @@ describe("Webview protocol", () => {
     expect(webviewRequestSchema.safeParse({ type: "clearOutput" }).success).toBe(true);
   });
 
-  it("accepts unified input and clipboard requests", () => {
+  it("accepts code and normal conversation input requests", () => {
     expect(webviewRequestSchema.parse({
       type: "executeInput",
+      mode: "code",
       source: "Review this"
-    })).toMatchObject({ type: "executeInput", source: "Review this" });
+    })).toMatchObject({ type: "executeInput", mode: "code", source: "Review this" });
+    expect(webviewRequestSchema.safeParse({
+      type: "executeInput",
+      mode: "agent",
+      source: "Inspect this feature"
+    }).success).toBe(true);
+    expect(webviewRequestSchema.safeParse({
+      type: "executeInput",
+      mode: "ask",
+      source: "What does this module do?"
+    }).success).toBe(true);
+    expect(webviewRequestSchema.parse({
+      type: "stopExecution",
+      turnId: "turn-1"
+    })).toMatchObject({ type: "stopExecution", turnId: "turn-1" });
     expect(webviewRequestSchema.safeParse({
       type: "clipboardWrite",
       requestId: 3,
@@ -43,6 +58,8 @@ describe("Webview protocol", () => {
       type: "executeCode",
       source: "ask(input=\"hello\")"
     }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({ type: "executeInput", source: "hello" }).success)
+      .toBe(false);
     expect(webviewRequestSchema.safeParse({
       type: "dropFiles",
       items: [{ kind: "unknown", value: "file:///a.ts" }]

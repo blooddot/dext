@@ -42,9 +42,22 @@ function element<T extends HTMLElement>(id: string): T {
 
 const vscode = acquireVsCodeApi();
 const elements = {
+  main: element<HTMLElement>("dext-main"),
+  inputSection: element<HTMLElement>("input-section"),
+  inputHeading: element<HTMLElement>("input-heading"),
+  inputBody: element<HTMLElement>("input-body"),
   inputShell: element<HTMLElement>("input-shell"),
   codeEditor: element<HTMLElement>("code-editor"),
   attachFiles: element<HTMLButtonElement>("attach-files"),
+  modeControl: element<HTMLButtonElement>("mode-control"),
+  modeControlValue: element<HTMLElement>("mode-control-value"),
+  modeMenu: element<HTMLElement>("mode-menu"),
+  agentControl: element<HTMLButtonElement>("agent-control"),
+  agentControlValue: element<HTMLElement>("agent-control-value"),
+  agentMenu: element<HTMLElement>("agent-menu"),
+  modelControl: element<HTMLButtonElement>("model-control"),
+  modelControlValue: element<HTMLElement>("model-control-value"),
+  modelMenu: element<HTMLElement>("model-menu"),
   run: element<HTMLButtonElement>("run"),
   runLabel: element<HTMLElement>("run-label"),
   problems: element<HTMLButtonElement>("problems"),
@@ -60,15 +73,24 @@ const elements = {
   result: element<HTMLElement>("result"),
   viewHistory: element<HTMLButtonElement>("view-history"),
   clearOutput: element<HTMLButtonElement>("clear-output"),
+  inputFullscreen: element<HTMLButtonElement>("input-fullscreen"),
+  resultFullscreen: element<HTMLButtonElement>("result-fullscreen"),
+  methodsFullscreen: element<HTMLButtonElement>("methods-fullscreen"),
+  methodsSectionElement: element<HTMLElement>("methods-section"),
   attachmentBar: element<HTMLElement>("attachment-bar")
 };
 
 const broker = new LanguageRequestBroker((request) => vscode.postMessage(request));
 const clipboard = new ClipboardClient((request) => vscode.postMessage(request));
 let executing = false;
+let stopping = false;
+let activeTurnId: string | undefined;
 let hasErrors = false;
 let problemCounts = { errors: 0, warnings: 0 };
 let inputKind: "empty" | "workflow" | "invalid" = "empty";
+type InputMode = "agent" | "ask" | "code";
+let inputMode: InputMode = "agent";
+let sidebarState: SidebarState | undefined;
 let dropPosition: number | undefined;
 let agentStream: HTMLElement | undefined;
 let agentTrace: HTMLDetailsElement | undefined;
@@ -78,7 +100,7 @@ let agentProgress: HTMLElement | undefined;
 let agentProgressState = "Thinking";
 let agentCommandIds = new Set<string>();
 let agentEditedUris = new Set<string>();
-const agentGroups = new Map<"reasoning" | "files" | "tool", { disclosure: HTMLDetailsElement; body: HTMLElement }>();
+const agentGroups = new Map<"reasoning" | "work" | "files" | "tool", { disclosure: HTMLDetailsElement; body: HTMLElement }>();
 const imageAttachments = new Map<string, HTMLElement>();
 interface OutputTurnElements {
   disclosure: HTMLDetailsElement;
@@ -105,6 +127,9 @@ const editor = new DextCodeEditor({
     inputKind = kind;
     updateRunState();
   },
+  onSourceChanged() {
+    updateRunState();
+  },
   onError: renderError
 });
 
@@ -115,22 +140,85 @@ function openInputReference(reference: ContextReferenceOccurrence): void {
 }
 
 function updateRunState(): void {
-  elements.run.disabled = executing || hasErrors || inputKind === "empty" || inputKind === "invalid";
+  const codeMode = inputMode === "code";
+  elements.run.disabled = executing
+    ? stopping || !activeTurnId
+    : !editor.source.trim() || (codeMode && (hasErrors || inputKind === "invalid"));
   elements.clearOutput.disabled = executing;
-  elements.runLabel.textContent = "Run";
+  elements.runLabel.textContent = executing ? (stopping ? "Stopping" : "Stop") : codeMode ? "Run" : "Send";
+  const runIcon = elements.run.querySelector<HTMLElement>("i");
+  if (runIcon) runIcon.className = `codicon codicon-${executing ? "debug-stop" : "run"}`;
+  elements.run.classList.toggle("stopping", stopping);
   const parts = [
     problemCounts.errors ? `${problemCounts.errors} error${problemCounts.errors === 1 ? "" : "s"}` : "",
     problemCounts.warnings ? `${problemCounts.warnings} warning${problemCounts.warnings === 1 ? "" : "s"}` : ""
   ].filter(Boolean);
-  elements.problems.textContent = parts.join(" · ") || "No problems";
-  elements.problems.disabled = parts.length === 0;
-  elements.problems.classList.toggle("has-problems", parts.length > 0);
+  elements.problems.textContent = codeMode ? parts.join(" · ") || "No problems" : "Code mode only";
+  elements.problems.disabled = !codeMode || parts.length === 0;
+  elements.problems.classList.toggle("has-problems", codeMode && parts.length > 0);
+  elements.inputShell.classList.toggle("conversation-mode", !codeMode);
 }
 
 function run(): void {
+  if (executing) {
+    if (!activeTurnId || stopping) return;
+    stopping = true;
+    vscode.postMessage({ type: "stopExecution", turnId: activeTurnId });
+    updateRunState();
+    return;
+  }
   const source = editor.source.trim();
   if (!source || elements.run.disabled) return;
-  vscode.postMessage({ type: "executeInput", source });
+  vscode.postMessage({ type: "executeInput", mode: inputMode, source });
+}
+
+type PanelName = "input" | "result" | "methods";
+
+const panels: Record<PanelName, { section: HTMLElement; heading: HTMLElement; body: HTMLElement; button: HTMLButtonElement; label: string }> = {
+  input: { section: elements.inputSection, heading: elements.inputHeading, body: elements.inputBody, button: elements.inputFullscreen, label: "Input" },
+  result: { section: elements.resultSection, heading: elements.resultHeading, body: elements.resultBody, button: elements.resultFullscreen, label: "Output" },
+  methods: { section: elements.methodsSectionElement, heading: elements.methodsSection, body: elements.methodsBody, button: elements.methodsFullscreen, label: "API" }
+};
+let fullscreenPanel: PanelName | undefined;
+let fullscreenSnapshot: Record<PanelName, boolean> | undefined;
+
+function syncFullscreenButtons(): void {
+  for (const [name, panel] of Object.entries(panels) as [PanelName, typeof panels[PanelName]][]) {
+    const active = fullscreenPanel === name;
+    const title = active ? `Restore ${panel.label}` : `Maximize ${panel.label}`;
+    panel.button.title = title;
+    panel.button.setAttribute("aria-label", title);
+    const icon = panel.button.querySelector<HTMLElement>("i");
+    if (icon) icon.className = `codicon codicon-screen-${active ? "normal" : "full"}`;
+  }
+}
+
+function toggleFullscreen(name: PanelName): void {
+  if (fullscreenPanel === name) {
+    fullscreenPanel = undefined;
+    elements.main.classList.remove("workspace-fullscreen");
+    for (const panelName of Object.keys(panels) as PanelName[]) {
+      panels[panelName].section.classList.remove("panel-expanded");
+      setSectionOpen(panels[panelName].heading, panels[panelName].body, fullscreenSnapshot?.[panelName] ?? true);
+    }
+    fullscreenSnapshot = undefined;
+    syncFullscreenButtons();
+    return;
+  }
+  if (!fullscreenPanel) {
+    fullscreenSnapshot = Object.fromEntries((Object.keys(panels) as PanelName[]).map((panelName) => [
+      panelName,
+      panels[panelName].heading.getAttribute("aria-expanded") === "true"
+    ])) as Record<PanelName, boolean>;
+  }
+  fullscreenPanel = name;
+  elements.main.classList.add("workspace-fullscreen");
+  for (const panelName of Object.keys(panels) as PanelName[]) {
+    const active = panelName === name;
+    panels[panelName].section.classList.toggle("panel-expanded", active);
+    setSectionOpen(panels[panelName].heading, panels[panelName].body, active);
+  }
+  syncFullscreenButtons();
 }
 
 function defaultValue(field: FieldDefinition): string {
@@ -275,54 +363,216 @@ function setSectionOpen(heading: HTMLElement, body: HTMLElement, open: boolean):
 }
 
 function toggleSection(heading: HTMLElement, body: HTMLElement): void {
+  if (fullscreenPanel) {
+    if (panels[fullscreenPanel].heading !== heading) return;
+    const panelName = fullscreenPanel;
+    toggleFullscreen(panelName);
+    setSectionOpen(heading, body, false);
+    return;
+  }
   setSectionOpen(heading, body, heading.getAttribute("aria-expanded") !== "true");
 }
 
 function renderAgentControls(state: SidebarState): void {
-  const profile = document.getElementById("agent-profile") as HTMLSelectElement | null;
-  const model = document.getElementById("agent-model") as HTMLSelectElement | null;
-  const reasoning = document.getElementById("agent-reasoning") as HTMLSelectElement | null;
-  const speed = document.getElementById("agent-speed") as HTMLSelectElement | null;
-  if (!profile || !model || !reasoning || !speed) return;
-  profile.replaceChildren(new Option("Agent default", ""));
-  for (const item of state.agentProfiles) profile.append(new Option(item.label, item.id));
-  profile.value = state.agentSelection.profileId ?? "";
-  const selected = state.agentProfiles.find((item) => item.id === profile.value);
-  model.replaceChildren(new Option("Model default", ""));
+  sidebarState = state;
+  inputMode = state.agentSelection.mode ?? inputMode;
+  editor.setLanguageEnabled(inputMode === "code");
+  const selected = state.agentProfiles.find((item) => item.id === state.agentSelection.profileId)
+    ?? state.agentProfiles[0];
   type ModelOption = { id: string; label: string; reasoningEfforts: string[]; speedTiers: string[]; serviceTiers: string[]; defaultReasoningEffort?: string };
   const options: ModelOption[] = selected?.modelOptions
     ? selected.modelOptions
     : (selected?.models ?? []).map((item): ModelOption => ({ id: item, label: item, reasoningEfforts: [], speedTiers: [], serviceTiers: [] }));
-  for (const item of options) model.append(new Option(item.label, item.id));
-  model.value = state.agentSelection.model ?? "";
-  const selectedModel = options.find((item) => item.id === model.value);
-  reasoning.replaceChildren(new Option("Reasoning default", ""));
-  for (const effort of selectedModel?.reasoningEfforts ?? []) reasoning.append(new Option(effort, effort));
-  const selectedReasoning: string = state.agentSelection.reasoningEffort ?? "";
-  const defaultReasoning: string = selectedModel?.defaultReasoningEffort ?? "";
-  let resolvedReasoning: string = defaultReasoning;
-  if (selectedModel?.reasoningEfforts.includes(selectedReasoning)) resolvedReasoning = selectedReasoning;
-  reasoning.value = resolvedReasoning;
-  speed.replaceChildren(new Option("Speed default", ""));
-  for (const tier of selectedModel?.speedTiers ?? []) speed.append(new Option(tier === "standard" ? "Standard" : tier, tier));
-  speed.value = state.agentSelection.speed ?? "";
+  const selectedModel = options.find((item) => item.id === state.agentSelection.model);
+  const modeLabel: Record<InputMode, string> = { agent: "Agent", ask: "Ask", code: "Code" };
+  elements.modeControlValue.textContent = modeLabel[inputMode];
+  elements.agentControlValue.textContent = selected?.label ?? "Choose";
+  elements.modelControlValue.textContent = selectedModel?.label ?? "Default";
+  renderComposerMenu(elements.modeMenu, [
+    ["agent", "Agent", "codicon-hubot"],
+    ["ask", "Ask", "codicon-comment-discussion"],
+    ["code", "Code", "codicon-code"]
+  ], inputMode, (mode) => {
+    inputMode = mode as InputMode;
+    submitAgentSelection({});
+  });
+  renderComposerMenu(elements.agentMenu, state.agentProfiles.map((item) => [item.id, item.label, "codicon-account"]), selected?.id ?? "", (profileId) => {
+    submitAgentSelection({ profileId, model: "", reasoningEffort: "", speed: "", serviceTier: "" });
+  });
+  renderModelMenu(state, options, selectedModel);
+  updateRunState();
 }
 
-function submitAgentSelection(): void {
-  const profile = document.getElementById("agent-profile") as HTMLSelectElement | null;
-  const model = document.getElementById("agent-model") as HTMLSelectElement | null;
-  const reasoning = document.getElementById("agent-reasoning") as HTMLSelectElement | null;
-  const speed = document.getElementById("agent-speed") as HTMLSelectElement | null;
-  if (!profile || !model || !reasoning || !speed) return;
+function renderComposerMenu(
+  menu: HTMLElement,
+  items: readonly (readonly [string, string, string])[],
+  selected: string,
+  onSelect: (value: string) => void
+): void {
+  menu.replaceChildren();
+  for (const [value, label, icon] of items) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "composer-menu-option";
+    button.setAttribute("role", "menuitemradio");
+    button.setAttribute("aria-checked", String(value === selected));
+    const glyph = document.createElement("i");
+    glyph.className = `codicon ${icon}`;
+    const text = document.createElement("span");
+    text.textContent = label;
+    const check = document.createElement("i");
+    check.className = `codicon codicon-${value === selected ? "check" : "blank"}`;
+    button.append(glyph, text, check);
+    button.addEventListener("click", () => onSelect(value));
+    menu.append(button);
+  }
+}
+
+function renderModelMenu(
+  state: SidebarState,
+  options: readonly { id: string; label: string; reasoningEfforts: string[]; speedTiers: string[]; serviceTiers: string[]; defaultReasoningEffort?: string }[],
+  selectedModel: { id: string; label: string; reasoningEfforts: string[]; speedTiers: string[]; serviceTiers: string[]; defaultReasoningEffort?: string } | undefined
+): void {
+  const current = state.agentSelection;
+  const categories: { title: string; value: string; items: readonly (readonly [string, string])[]; selected: string; onSelect: (value: string) => void }[] = [
+    {
+      title: "Model",
+      value: selectedModel?.label ?? "Default",
+      items: options.map((item) => [item.id, item.label]),
+      selected: current.model ?? "",
+      onSelect: (model) => {
+        const next = options.find((item) => item.id === model);
+        submitAgentSelection({ model, reasoningEffort: next?.defaultReasoningEffort ?? "", speed: "", serviceTier: "" });
+      }
+    },
+    {
+      title: "Reasoning",
+      value: current.reasoningEffort ?? selectedModel?.defaultReasoningEffort ?? "Default",
+      items: (selectedModel?.reasoningEfforts ?? []).map((item) => [item, item]),
+      selected: current.reasoningEffort ?? selectedModel?.defaultReasoningEffort ?? "",
+      onSelect: (reasoningEffort) => submitAgentSelection({ reasoningEffort })
+    },
+    {
+      title: "Speed",
+      value: current.speed ?? "Default",
+      items: (selectedModel?.speedTiers ?? []).map((item) => [item, item === "standard" ? "Standard" : item]),
+      selected: current.speed ?? "",
+      onSelect: (speed) => submitAgentSelection({ speed })
+    },
+    {
+      title: "Advanced",
+      value: current.serviceTier ?? "Default",
+      items: (selectedModel?.serviceTiers ?? []).map((item) => [item, item]),
+      selected: current.serviceTier ?? "",
+      onSelect: (serviceTier) => submitAgentSelection({ serviceTier })
+    }
+  ];
+  elements.modelMenu.replaceChildren();
+  elements.modelMenu.dataset.modelMenuView = "categories";
+  for (const category of categories) {
+    if (!category.items.length) continue;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "composer-menu-option composer-menu-category";
+    const title = document.createElement("span");
+    title.textContent = category.title;
+    const value = document.createElement("span");
+    value.className = "composer-menu-category-value";
+    value.textContent = category.value;
+    const chevron = document.createElement("i");
+    chevron.className = "codicon codicon-chevron-right";
+    button.append(title, value, chevron);
+    const openChoices = (event: Event): void => {
+      event.stopPropagation();
+      renderModelChoices(elements.modelMenu, category.title, category.items, category.selected, category.onSelect);
+    };
+    button.addEventListener("click", openChoices);
+    button.addEventListener("mouseenter", () => {
+      if (!elements.modelMenu.hidden && elements.modelMenu.dataset.modelMenuView === "categories") {
+        renderModelChoices(elements.modelMenu, category.title, category.items, category.selected, category.onSelect);
+      }
+    });
+    elements.modelMenu.append(button);
+  }
+}
+
+function renderModelChoices(
+  menu: HTMLElement,
+  title: string,
+  items: readonly (readonly [string, string])[],
+  selected: string,
+  onSelect: (value: string) => void
+): void {
+  menu.replaceChildren();
+  menu.dataset.modelMenuView = "choices";
+  const back = document.createElement("button");
+  back.type = "button";
+  back.className = "composer-menu-back";
+  back.innerHTML = '<i class="codicon codicon-chevron-left"></i><span></span>';
+  const label = back.querySelector("span");
+  if (label) label.textContent = title;
+  back.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const state = sidebarState;
+    if (!state) return;
+    const selected = state.agentProfiles.find((item) => item.id === state.agentSelection.profileId)
+      ?? state.agentProfiles[0];
+    const options = selected?.modelOptions
+      ? selected.modelOptions
+      : (selected?.models ?? []).map((item) => ({ id: item, label: item, reasoningEfforts: [], speedTiers: [], serviceTiers: [] }));
+    renderModelMenu(state, options, options.find((item) => item.id === state.agentSelection.model));
+  });
+  menu.append(back);
+  for (const [value, label] of items) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "composer-menu-option";
+    button.setAttribute("role", "menuitemradio");
+    button.setAttribute("aria-checked", String(value === selected));
+    const text = document.createElement("span");
+    text.textContent = label;
+    const check = document.createElement("i");
+    check.className = `codicon codicon-${value === selected ? "check" : "blank"}`;
+    button.append(text, check);
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      onSelect(value);
+    });
+    menu.append(button);
+  }
+}
+
+function submitAgentSelection(change: Partial<SidebarState["agentSelection"]>): void {
+  const selection = sidebarState?.agentSelection;
+  closeComposerMenus();
   vscode.postMessage({
     type: "agentSelection", selection: {
-      profileId: profile.value,
-      model: model.value,
-      reasoningEffort: reasoning.value,
-      speed: speed.value,
-      serviceTier: ""
+      mode: inputMode,
+      profileId: change.profileId ?? selection?.profileId ?? "",
+      model: change.model ?? selection?.model ?? "",
+      reasoningEffort: change.reasoningEffort ?? selection?.reasoningEffort ?? "",
+      speed: change.speed ?? selection?.speed ?? "",
+      serviceTier: change.serviceTier ?? selection?.serviceTier ?? ""
     }
   });
+}
+
+const composerMenus = [
+  { control: elements.modeControl, menu: elements.modeMenu },
+  { control: elements.agentControl, menu: elements.agentMenu },
+  { control: elements.modelControl, menu: elements.modelMenu }
+];
+
+function closeComposerMenus(except?: HTMLElement): void {
+  for (const item of composerMenus) {
+    const open = item.menu === except;
+    item.menu.hidden = !open;
+    item.control.setAttribute("aria-expanded", String(open));
+  }
+}
+
+function toggleComposerMenu(menu: HTMLElement): void {
+  closeComposerMenus(menu.hidden ? menu : undefined);
 }
 
 function resultHeading(response: RuntimeResponse): HTMLElement {
@@ -778,12 +1028,7 @@ function renderExecution(response: RuntimeResponse): DocumentFragment {
     paragraph.textContent = result.kind === "agent" ? result.text : result.summary;
     fragment.append(paragraph);
     const changes = result.kind === "agent" ? result.patch?.changes ?? [] : result.patch.changes;
-    for (const change of changes) {
-      const file = document.createElement("div");
-      file.className = "patch-file";
-      file.textContent = change.uri;
-      fragment.append(file);
-    }
+    for (const change of changes) fragment.append(fileChangeDisclosure(change, "agent-file-change execution-file-change"));
   } else if (result.kind === "apply") {
     const paragraph = document.createElement("p");
     paragraph.className = "text-result";
@@ -859,15 +1104,7 @@ function renderExecution(response: RuntimeResponse): DocumentFragment {
     title.className = "output-title";
     title.textContent = result.title;
     fragment.append(title);
-    for (const change of result.changes) {
-      const file = document.createElement("div");
-      file.className = "patch-file";
-      const uri = document.createElement("div");
-      uri.className = "patch-uri";
-      uri.textContent = change.uri;
-      file.append(uri, codeBlock(`- ${change.before}\n+ ${change.after}`));
-      fragment.append(file);
-    }
+    for (const change of result.changes) fragment.append(fileChangeDisclosure(change, "agent-file-change execution-file-change"));
   }
   return fragment;
 }
@@ -966,7 +1203,7 @@ function finishAgentProgress(): void {
   if (agentTrace) agentTrace.open = false;
 }
 
-function agentGroup(kind: "reasoning" | "files" | "tool"): { disclosure: HTMLDetailsElement; body: HTMLElement } {
+function agentGroup(kind: "reasoning" | "work" | "files" | "tool"): { disclosure: HTMLDetailsElement; body: HTMLElement } {
   const panel = agentStreamPanel();
   const existing = agentGroups.get(kind);
   if (existing?.disclosure.isConnected) return existing;
@@ -977,12 +1214,18 @@ function agentGroup(kind: "reasoning" | "files" | "tool"): { disclosure: HTMLDet
   chevron.className = "disclosure-chevron codicon codicon-chevron-right";
   const label = document.createElement("span");
   label.className = "agent-trace-label";
-  label.textContent = kind === "reasoning" ? "Thought briefly" : kind === "files" ? "Edited files" : "Ran commands";
+  label.textContent = kind === "reasoning"
+    ? "Thought briefly"
+    : kind === "work"
+      ? "AIOA activity"
+      : kind === "files"
+        ? "Edited files"
+        : "Ran commands";
   const body = document.createElement("div");
   body.className = "agent-trace-group-body";
   summary.append(chevron, label);
   disclosure.append(summary, body);
-  const order = { reasoning: 0, files: 1, tool: 2 } as const;
+  const order = { reasoning: 0, work: 1, files: 2, tool: 3 } as const;
   const next = [...panel.querySelectorAll<HTMLElement>(".agent-trace-group")]
     .find((candidate) => order[candidate.dataset.kind as keyof typeof order] > order[kind]);
   disclosure.dataset.kind = kind;
@@ -993,7 +1236,7 @@ function agentGroup(kind: "reasoning" | "files" | "tool"): { disclosure: HTMLDet
   return group;
 }
 
-function updateAgentGroupLabel(kind: "reasoning" | "files" | "tool"): void {
+function updateAgentGroupLabel(kind: "reasoning" | "work" | "files" | "tool"): void {
   const label = agentGroups.get(kind)?.disclosure.querySelector<HTMLElement>(".agent-trace-label");
   if (!label) return;
   if (kind === "files") label.textContent = `Edited ${agentEditedUris.size} file${agentEditedUris.size === 1 ? "" : "s"}`;
@@ -1006,7 +1249,7 @@ function renderAgentEvent(event: AgentStreamEvent): void {
     return;
   }
   if (event.phase === "reasoning" || event.phase === "message") updateAgentProgress("Thinking");
-  const group = agentGroup(event.phase === "tool" ? "tool" : "reasoning");
+  const group = agentGroup(event.group === "aioa-work-log" ? "work" : event.phase === "tool" ? "tool" : "reasoning");
   const panel = group.body;
   if (event.phase === "tool") {
     const commandId = event.id ?? event.title ?? event.text;
@@ -1043,7 +1286,7 @@ function renderAgentEvent(event: AgentStreamEvent): void {
     panel.append(item);
   }
   const body = item.querySelector<HTMLElement>(".agent-stream-text");
-  const eventBody = event.phase === "tool" && event.title === event.text ? "" : event.text;
+  const eventBody = event.text;
   let copyText = event.text;
   if (body && event.phase !== "tool") {
     const raw = event.replace ? eventBody : `${body.dataset.raw ?? ""}${eventBody}`;
@@ -1198,6 +1441,23 @@ function addImageAttachment(relativePath: string, webviewUri: string, name: stri
 elements.run.addEventListener("click", run);
 elements.problems.addEventListener("click", () => editor.goToFirstDiagnostic());
 elements.methodsToggle.addEventListener("click", toggleMethodGroups);
+elements.inputHeading.addEventListener("click", (event) => {
+  if (event.target instanceof Element && event.target.closest("button")) return;
+  toggleSection(elements.inputHeading, elements.inputBody);
+});
+elements.inputHeading.addEventListener("keydown", (event) => {
+  if (event.target instanceof Element && event.target.closest("button")) return;
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    toggleSection(elements.inputHeading, elements.inputBody);
+  }
+});
+for (const [name, panel] of Object.entries(panels) as [PanelName, typeof panels[PanelName]][]) {
+  panel.button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleFullscreen(name);
+  });
+}
 elements.resultHeading.addEventListener("click", (event) => {
   if (event.target instanceof Element && event.target.closest("button")) return;
   toggleSection(elements.resultHeading, elements.resultBody);
@@ -1225,27 +1485,16 @@ elements.viewHistory.addEventListener("click", () => vscode.postMessage({ type: 
 elements.clearOutput.addEventListener("click", () => {
   if (!executing) vscode.postMessage({ type: "clearOutput" });
 });
-document.getElementById("agent-profile")?.addEventListener("change", () => {
-  const model = document.getElementById("agent-model") as HTMLSelectElement | null;
-  if (model) model.value = "";
-  const reasoning = document.getElementById("agent-reasoning") as HTMLSelectElement | null;
-  const speed = document.getElementById("agent-speed") as HTMLSelectElement | null;
-  if (reasoning) reasoning.value = "";
-  if (speed) speed.value = "";
-  submitAgentSelection();
+for (const item of composerMenus) {
+  item.control.addEventListener("click", () => toggleComposerMenu(item.menu));
+}
+document.addEventListener("click", (event) => {
+  if (event.target instanceof Element && event.target.closest(".composer-menu")) return;
+  closeComposerMenus();
 });
-document.getElementById("agent-model")?.addEventListener("change", () => {
-  const reasoning = document.getElementById("agent-reasoning") as HTMLSelectElement | null;
-  const speed = document.getElementById("agent-speed") as HTMLSelectElement | null;
-  if (reasoning) reasoning.value = "";
-  if (speed) speed.value = "";
-  submitAgentSelection();
-});
-document.getElementById("agent-reasoning")?.addEventListener("change", () => {
-  submitAgentSelection();
-});
-document.getElementById("agent-speed")?.addEventListener("change", () => {
-  submitAgentSelection();
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  closeComposerMenus();
 });
 elements.inputShell.addEventListener("paste", (event) => {
   const imageItem = findImageItem(event.clipboardData);
@@ -1327,12 +1576,18 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   if (message.type === "executing") {
     executing = message.value;
     if (message.value) {
+      activeTurnId = message.turnId;
+      stopping = false;
       createOutputTurn(message.turnId, message.source ?? "Dext turn");
       resetAgentTrace();
       startAgentProgress();
       elements.resultSection.classList.remove("hidden");
-      setSectionOpen(elements.resultHeading, elements.resultBody, true);
+      if (!fullscreenPanel || fullscreenPanel === "result") {
+        setSectionOpen(elements.resultHeading, elements.resultBody, true);
+      }
     } else {
+      if (activeTurnId === message.turnId) activeTurnId = undefined;
+      stopping = false;
       selectOutputTurn(message.turnId);
       finishAgentProgress();
       if (activeTurn) {
@@ -1358,4 +1613,5 @@ window.addEventListener("unload", () => {
 });
 
 updateRunState();
+syncFullscreenButtons();
 vscode.postMessage({ type: "ready" });

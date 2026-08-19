@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { homedir } from "node:os";
 import { delimiter, extname, isAbsolute, join } from "node:path";
 import { isDextResult, serializeResultForAgent } from "./resultSerialization.js";
+import { ExecutionCancelledError } from "./executionErrors.js";
 import type { AgentProfile } from "../agentProfiles.js";
 import type { AxMethodContract } from "./axAdapter.js";
 import type { AgentStreamEvent, AgentStreamPhase, ExecutionMetadata, RegisteredCallable, ResolvedInvocation } from "./types.js";
@@ -23,10 +24,29 @@ export interface AgentExecutionRequest {
   /** Only agent(apply=true) may receive a trusted workspace-write sandbox. */
   allowWorkspaceWrite?: boolean;
   onEvent?: (event: AgentStreamEvent) => void;
+  signal?: AbortSignal;
+}
+
+/** An unstructured user conversation. Unlike Dext APIs, it has no JSON
+ * envelope or output schema and its result is ordinary assistant text. */
+export interface AgentConversationRequest {
+  profile: AgentProfile;
+  mode: "agent" | "ask";
+  model?: string;
+  reasoningEffort?: string;
+  speed?: string;
+  serviceTier?: string;
+  cwd: string;
+  input: string;
+  metadata: Readonly<ExecutionMetadata>;
+  allowWorkspaceWrite: boolean;
+  onEvent?: (event: AgentStreamEvent) => void;
+  signal?: AbortSignal;
 }
 
 export interface AgentRunner {
   run(request: AgentExecutionRequest): Promise<unknown>;
+  runConversation?(request: AgentConversationRequest): Promise<string>;
   endSession?(sessionId: string): void;
 }
 
@@ -243,6 +263,23 @@ function extractAgentValue(output: string, provider: AgentProfile["provider"]): 
   return extractClaudeResult(output);
 }
 
+/** Extracts a normal assistant reply without attempting to parse it as a
+ * Dext result. A conversation is allowed to contain arbitrary text or JSON. */
+export function extractConversationText(output: string, provider: AgentProfile["provider"]): string {
+  if (provider === "codex") {
+    let finalText = "";
+    for (const line of output.split(/\r?\n/)) {
+      const event = extractJson(line);
+      if (!event || typeof event !== "object") continue;
+      const item = (event as { item?: { type?: string; text?: string } }).item;
+      if (item?.type === "agent_message" && typeof item.text === "string") finalText = item.text;
+    }
+    return finalText || output.trim();
+  }
+  const result = extractClaudeResult(output);
+  return typeof result === "string" ? result : JSON.stringify(result, null, 2);
+}
+
 function eventText(event: Record<string, unknown>, item?: Record<string, unknown>): string | undefined {
   const candidates: unknown[] = [
     event.delta,
@@ -438,6 +475,22 @@ export function claudeCliArguments(
   ];
 }
 
+/** Claude's stream mode without a Dext output contract. */
+export function claudeConversationArguments(
+  options: Pick<AgentConversationRequest, "model" | "reasoningEffort" | "allowWorkspaceWrite">
+): string[] {
+  return [
+    "-p",
+    "--output-format", "stream-json",
+    "--verbose",
+    "--include-partial-messages",
+    "--no-session-persistence",
+    "--permission-mode", options.allowWorkspaceWrite ? "acceptEdits" : "plan",
+    ...(options.model ? ["--model", options.model] : []),
+    ...(options.reasoningEffort ? ["--effort", options.reasoningEffort] : [])
+  ];
+}
+
 /** Arguments for Codex's structured execution mode. Workspace writes are only
  * enabled for an explicitly trusted agent(apply=true) request. */
 export function codexCliArguments(
@@ -461,7 +514,27 @@ export function codexCliArguments(
   ];
 }
 
-function runProcess(
+/** Codex's JSON event stream is used only for Process rendering. No JSON
+ * schema is passed, so the final assistant message remains ordinary text. */
+export function codexConversationArguments(
+  options: Pick<AgentConversationRequest, "model" | "reasoningEffort" | "allowWorkspaceWrite">,
+  serviceTier?: string
+): string[] {
+  return [
+    "exec",
+    "--json",
+    "--ephemeral",
+    "--sandbox", options.allowWorkspaceWrite ? "workspace-write" : "read-only",
+    ...(options.allowWorkspaceWrite ? ["--skip-git-repo-check"] : []),
+    ...(options.model ? ["--model", options.model] : []),
+    ...(options.reasoningEffort ? ["--config", 'model_reasoning_effort="' + options.reasoningEffort + '"'] : []),
+    "--config", 'model_reasoning_summary="detailed"',
+    ...(serviceTier ? ["--config", 'service_tier="' + serviceTier + '"'] : []),
+    "-"
+  ];
+}
+
+export function runProcess(
   command: string,
   args: readonly string[],
   input: string,
@@ -476,6 +549,7 @@ function runProcess(
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let aborting = false;
     const finish = (callback: () => void): void => {
       if (settled) return;
       settled = true;
@@ -483,10 +557,35 @@ function runProcess(
       callback();
     };
     const abort = (): void => {
-      child.kill();
-      finish(() => reject(new Error("Agent execution was cancelled.")));
+      if (aborting || settled) return;
+      aborting = true;
+      const terminate = (): Promise<void> => {
+        if (process.platform !== "win32" || child.pid === undefined) {
+          child.kill();
+          return Promise.resolve();
+        }
+        return new Promise((done) => {
+          const killer = spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
+            windowsHide: true,
+            stdio: "ignore"
+          });
+          killer.once("error", () => {
+            child.kill();
+            done();
+          });
+          killer.once("close", () => done());
+        });
+      };
+      const signalReason: unknown = signal?.reason;
+      const reason = signalReason instanceof Error && signalReason.name !== "AbortError"
+        ? signalReason
+        : new ExecutionCancelledError();
+      void terminate().finally(() => finish(() => reject(reason)));
     };
     signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) {
+      abort();
+    }
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
@@ -494,8 +593,12 @@ function runProcess(
       onStdout?.(chunk);
     });
     child.stderr.on("data", (chunk: string) => { stderr += chunk; });
-    child.on("error", (error) => finish(() => reject(new Error(`Unable to start '${command}': ${error.message}`))));
-    child.on("close", (code) => finish(() => resolve({ stdout, stderr, code })));
+    child.on("error", (error) => {
+      if (!aborting) finish(() => reject(new Error(`Unable to start '${command}': ${error.message}`)));
+    });
+    child.on("close", (code) => {
+      if (!aborting) finish(() => resolve({ stdout, stderr, code }));
+    });
     child.stdin.end(input);
   });
 }
@@ -505,13 +608,17 @@ export class CliAgentRunner implements AgentRunner {
 
   constructor(private readonly timeoutMs = 600_000) {}
 
-  private async processEnvironment(command: string, request: AgentExecutionRequest): Promise<NodeJS.ProcessEnv | undefined> {
+  private async processEnvironment(
+    command: string,
+    request: Pick<AgentExecutionRequest | AgentConversationRequest, "profile" | "cwd" | "signal">
+  ): Promise<NodeJS.ProcessEnv | undefined> {
     if (request.profile.provider !== "codex") return undefined;
     if (this.codexUsesChatGpt === undefined) {
       try {
-        const status = await runProcess(command, ["login", "status"], "", request.cwd);
+        const status = await runProcess(command, ["login", "status"], "", request.cwd, request.signal);
         this.codexUsesChatGpt = status.code === 0 && /logged in using chatgpt/i.test(`${status.stdout}\n${status.stderr}`);
-      } catch {
+      } catch (error) {
+        if (error instanceof ExecutionCancelledError) throw error;
         this.codexUsesChatGpt = false;
       }
     }
@@ -523,6 +630,7 @@ export class CliAgentRunner implements AgentRunner {
       throw new Error("AIOA requests must use the CDP runner.");
     }
     if (!request.profile.command) throw new Error(`Agent '${request.profile.label}' has no CLI command configured.`);
+    if (request.signal?.aborted) throw new ExecutionCancelledError();
     const configuredCommand = request.profile.command.trim();
     const command = resolveCliCommand(configuredCommand, request.profile.provider);
     if (!command) {
@@ -551,7 +659,10 @@ export class CliAgentRunner implements AgentRunner {
       : claudeCliArguments(request, outputSchema);
     try {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+      const timer = setTimeout(() => controller.abort(new Error("Agent execution timed out.")), this.timeoutMs);
+      const cancel = (): void => controller.abort(new ExecutionCancelledError());
+      request.signal?.addEventListener("abort", cancel, { once: true });
+      if (request.signal?.aborted) cancel();
       let eventBuffer = "";
       const streamPhases = new Map<string, AgentStreamPhase>();
       const emitCodexLine = (line: string): void => {
@@ -576,8 +687,13 @@ export class CliAgentRunner implements AgentRunner {
       const stdin = request.profile.provider === "codex"
         ? `${prompt}\n\n${input}`
         : `${prompt}\n\nDext JSON payload:\n${input}`;
-      const result = await runProcess(command, args, stdin, request.cwd, controller.signal, onStdout, processEnv);
-      clearTimeout(timer);
+      let result: ProcessResult;
+      try {
+        result = await runProcess(command, args, stdin, request.cwd, controller.signal, onStdout, processEnv);
+      } finally {
+        clearTimeout(timer);
+        request.signal?.removeEventListener("abort", cancel);
+      }
       if (eventBuffer && request.profile.provider === "codex") emitCodexLine(eventBuffer);
       if (eventBuffer && request.profile.provider === "claude") emitClaudeLine(eventBuffer);
       if (result.code !== 0) {
@@ -592,6 +708,65 @@ export class CliAgentRunner implements AgentRunner {
       return value;
     } finally {
       await rm(directory, { recursive: true, force: true });
+    }
+  }
+
+  async runConversation(request: AgentConversationRequest): Promise<string> {
+    if (request.profile.provider === "aioa") {
+      throw new Error("AIOA requests must use the CDP runner.");
+    }
+    if (!request.profile.command) throw new Error(`Agent '${request.profile.label}' has no CLI command configured.`);
+    if (request.signal?.aborted) throw new ExecutionCancelledError();
+    const command = resolveCliCommand(request.profile.command.trim(), request.profile.provider);
+    if (!command) {
+      throw new Error(
+        `Unable to start '${request.profile.command.trim()}': command was not found. `
+        + `Install ${request.profile.label} or use "Dext: Configure Agent CLI" to set its executable path.`
+      );
+    }
+    const serviceTier = request.serviceTier ?? (request.speed === "fast" ? "priority" : request.speed === "standard" ? "default" : undefined);
+    const args = request.profile.provider === "codex"
+      ? codexConversationArguments(request, serviceTier)
+      : claudeConversationArguments(request);
+    const processEnv = await this.processEnvironment(command, request);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error("Agent execution timed out.")), this.timeoutMs);
+    const cancel = (): void => controller.abort(new ExecutionCancelledError());
+    request.signal?.addEventListener("abort", cancel, { once: true });
+    if (request.signal?.aborted) cancel();
+    let eventBuffer = "";
+    const streamPhases = new Map<string, AgentStreamPhase>();
+    const onStdout = (chunk: string): void => {
+      eventBuffer += chunk;
+      const lines = eventBuffer.split(/\r?\n/);
+      eventBuffer = lines.pop() ?? "";
+      for (const line of lines) {
+        const event = request.profile.provider === "codex"
+          ? parseCodexStreamLine(line, streamPhases)
+          : parseClaudeStreamLine(line);
+        if (event) request.onEvent?.(event);
+      }
+    };
+    try {
+      const result = await runProcess(command, args, request.input, request.cwd, controller.signal, onStdout, processEnv);
+      if (eventBuffer) {
+        const event = request.profile.provider === "codex"
+          ? parseCodexStreamLine(eventBuffer, streamPhases)
+          : parseClaudeStreamLine(eventBuffer);
+        if (event) request.onEvent?.(event);
+      }
+      if (result.code !== 0) {
+        const details = request.profile.provider === "codex"
+          ? codexFailure(result.stdout)
+          : claudeFailure(result.stdout);
+        throw new Error(`${request.profile.label} exited with code ${result.code ?? "unknown"}${details ? `:\n${details}` : ""}`);
+      }
+      const text = extractConversationText(result.stdout, request.profile.provider);
+      if (!text) throw new Error(`${request.profile.label} returned no response.`);
+      return text;
+    } finally {
+      clearTimeout(timer);
+      request.signal?.removeEventListener("abort", cancel);
     }
   }
 }

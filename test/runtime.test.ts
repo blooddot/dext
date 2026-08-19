@@ -82,6 +82,30 @@ print(text=answer.text)`, registry);
       .resolves.toMatchObject({ result: { kind: "chat", text: "agent response" } });
   });
 
+  it("runs Agent and Ask as ordinary provider conversations", async () => {
+    const { runtime } = setup();
+    runtime.setWorkspaceTrusted(true);
+    runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
+    runtime.setAgentSelection({ profileId: "codex" });
+    const requests: { mode: string; input: string; allowWorkspaceWrite: boolean }[] = [];
+    runtime.setAgentRunner({
+      run: async () => ({ kind: "chat", text: "unused" }),
+      runConversation: async (request) => {
+        requests.push(request);
+        return `reply: ${request.input}`;
+      }
+    });
+
+    await expect(runtime.executeConversation("agent", "Update this module"))
+      .resolves.toMatchObject({ result: { kind: "chat", text: "reply: Update this module" } });
+    await expect(runtime.executeConversation("ask", "Explain this module"))
+      .resolves.toMatchObject({ result: { kind: "chat", text: "reply: Explain this module" } });
+    expect(requests).toEqual([
+      expect.objectContaining({ mode: "agent", input: "Update this module", allowWorkspaceWrite: true }),
+      expect.objectContaining({ mode: "ask", input: "Explain this module", allowWorkspaceWrite: false })
+    ]);
+  });
+
   it("composes failed terminal fields and preserves the complete result", async () => {
     const registry = new MethodRegistry();
     registry.registerMany(BUILTIN_METHODS, "builtin");
@@ -133,6 +157,21 @@ print(text="must not run")`, registry);
 
     expect(result.steps).toEqual([
       expect.objectContaining({ method: "terminal", state: "cancelled", error: "cancelled" }),
+      expect.objectContaining({ method: "print", state: "skipped" })
+    ]);
+  });
+
+  it("marks the active step cancelled and skips later calls when its signal is aborted", async () => {
+    const { registry, workflow } = setup();
+    const compiled = compileWorkflow(`print(text="first")
+print(text="must not run")`, registry);
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await workflow.execute(compiled.program!, [], { signal: controller.signal });
+
+    expect(result.steps).toEqual([
+      expect.objectContaining({ method: "print", state: "cancelled" }),
       expect.objectContaining({ method: "print", state: "skipped" })
     ]);
   });
@@ -201,6 +240,31 @@ answer = ask(input=printed.text)`, registry);
     expect(requests[1]).toEqual({ allowWorkspaceWrite: true, cwd: process.cwd() });
   });
 
+  it("passes the workflow cancellation signal to the selected Agent runner", async () => {
+    const { runtime } = setup();
+    runtime.setWorkspaceRoot(process.cwd());
+    runtime.setWorkspaceTrusted(true);
+    runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
+    runtime.setAgentSelection({ profileId: "codex" });
+    let received: AbortSignal | undefined;
+    runtime.setAgentRunner({
+      run: async (request) => {
+        received = request.signal;
+        return { kind: "agent", text: "done" };
+      }
+    });
+    const controller = new AbortController();
+
+    await runtime.execute({
+      kind: "invocation",
+      method: "agent",
+      source: "code",
+      arguments: [{ name: "input", value: "work" }]
+    }, [], { signal: controller.signal });
+
+    expect(received).toBe(controller.signal);
+  });
+
   it("preserves readable @ tokens without resolving file content", async () => {
     const resolved: string[] = [];
     const orderedHost: ContextHost = {
@@ -230,18 +294,20 @@ answer = ask(input=printed.text)`, registry);
 
   it("compiles and resolves the exact serialized agent file-drop input", async () => {
     const { registry, workflow } = setup();
-    const initial = 'agent(input="这段代码是什么含义")';
-    const edit = fileReferenceInsertion(initial, 0, 0, ['@src/pathx.py#L55,1-L66,32']);
+    const initial = 'input = """这段代码是什么含义\n"""\nagent(input=input)';
+    const cursor = initial.indexOf("\n");
+    const edit = fileReferenceInsertion(initial, cursor, cursor, ['@src/pathx.py#L55,1-L66,32']);
     const source = `${initial.slice(0, edit.from)}${edit.text}${initial.slice(edit.to)}`;
 
-    expect(source).toMatch(/^agent\(input="这段代码是什么含义 /);
+    expect(source).toContain('input = """这段代码是什么含义 @src/pathx.py#L55,1-L66,32\n"""');
+    expect(source).toContain("agent(input=input)");
     expect(source).not.toContain('f"');
     expect(source).not.toContain("ref.file(");
     const compiled = compileWorkflow(source, registry);
     expect(compiled.diagnostics).toEqual([]);
     const result = await workflow.execute(compiled.program!);
     expect((result.executions[0]?.result as { text?: string }).text)
-      .toBe("这段代码是什么含义 @src/pathx.py#L55,1-L66,32");
+      .toBe("这段代码是什么含义 @src/pathx.py#L55,1-L66,32\n");
   });
 
   it("forwards the selected model and rejects invalid Agent output", async () => {

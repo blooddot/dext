@@ -18,7 +18,12 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
     source: z.string(),
     cursor: z.number().int().nonnegative()
   }),
-  z.object({ type: z.literal("executeInput"), source: z.string().min(1) }),
+  z.object({
+    type: z.literal("executeInput"),
+    mode: z.enum(["agent", "ask", "code"]),
+    source: z.string().min(1)
+  }),
+  z.object({ type: z.literal("stopExecution"), turnId: z.string().min(1) }),
   z.object({
     type: z.literal("clipboardWrite"),
     requestId: z.number().int().nonnegative(),
@@ -51,6 +56,7 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("agentSelection"),
     selection: z.object({
+      mode: z.enum(["agent", "ask", "code"]),
       profileId: z.string(),
       model: z.string(),
       reasoningEffort: z.string(),

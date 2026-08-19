@@ -36,6 +36,24 @@ describe("Agent message presentation", () => {
     expect(agentMessageCopyText(presentation)).not.toContain('"kind"');
   });
 
+  it("keeps an agent patch available for the same diff presentation", () => {
+    const presentation = presentAgentMessage(JSON.stringify({
+      kind: "agent",
+      text: "Applied the change.",
+      patch: {
+        kind: "patch",
+        title: "Update greeting",
+        changes: [{ uri: "file:///workspace/greeting.ts", before: "export const greeting = 'hi';", after: "export const greeting = 'hello';" }]
+      }
+    }));
+
+    expect(presentation).toMatchObject({
+      title: "Agent",
+      meta: ["1 file"],
+      changes: [{ uri: "file:///workspace/greeting.ts", before: "export const greeting = 'hi';", after: "export const greeting = 'hello';" }]
+    });
+  });
+
   it("keeps normal progress prose unchanged", () => {
     const text = "Inspecting the selected implementation first.";
     expect(presentAgentMessage(text)).toEqual({

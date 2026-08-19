@@ -372,6 +372,7 @@ export interface ExecutionMetadata {
   speed?: string;
   serviceTier?: string;
   agentSessionId?: string;
+  signal?: AbortSignal;
   onAgentEvent?: (event: AgentStreamEvent) => void;
   ui?: UiInteraction;
 }
@@ -397,6 +398,8 @@ export interface AgentStreamEvent {
   phase: AgentStreamPhase;
   text: string;
   title?: string;
+  /** Keeps AIOA work-log context and its command cards together in the UI. */
+  group?: "aioa-work-log";
   replace?: boolean;
   done?: boolean;
   eventType?: string;

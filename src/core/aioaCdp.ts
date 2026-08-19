@@ -4,18 +4,24 @@ import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import CDP from "chrome-remote-interface";
 import type { AgentProfile } from "../agentProfiles.js";
-import { displayValue, type AgentExecutionRequest, type AgentRunner } from "./agentRunner.js";
+import {
+  displayValue,
+  type AgentConversationRequest,
+  type AgentExecutionRequest,
+  type AgentRunner
+} from "./agentRunner.js";
+import { ExecutionCancelledError } from "./executionErrors.js";
 import type { FieldDefinition } from "./types.js";
 
-const DEFAULT_TIMEOUT_MS = 600_000;
+const DEFAULT_TIMEOUT_MS = 3_600_000;
 const DEFAULT_POLL_INTERVAL_MS = 300;
 const DEFAULT_STARTUP_TIMEOUT_MS = 60_000;
 const DEFAULT_INITIAL_RESPONSE_TIMEOUT_MS = 75_000;
 const DEFAULT_RESPONSE_IDLE_TIMEOUT_MS = 90_000;
 const DEFAULT_FINAL_CONTENT_GRACE_MS = 2_000;
 const EARLY_EXIT_STARTUP_GRACE_MS = 4_000;
-const DEFAULT_WORKSPACE_TIMEOUT_MS = 2_000;
-const DEFAULT_WORKSPACE_POLL_INTERVAL_MS = 100;
+const DEFAULT_WORKSPACE_TIMEOUT_MS = 10_000;
+const DEFAULT_WORKSPACE_POLL_INTERVAL_MS = 150;
 const DEFAULT_INITIAL_LOAD_TIMEOUT_MS = 15_000;
 const COMPOSER_SELECTOR = "textarea.aioa-biz-composer-editor";
 const ASSISTANT_MESSAGE_SELECTOR = "article.aioa-message.assistant";
@@ -24,6 +30,13 @@ const USER_MESSAGE_SELECTOR = "article.aioa-message.user[data-message-id]";
 export interface AioaAssistantMessage {
   id: string;
   text: string;
+}
+
+export interface AioaToolMessage {
+  id: string;
+  title: string;
+  text: string;
+  done: boolean;
 }
 
 export interface AioaConversationState {
@@ -35,9 +48,10 @@ export interface AioaConversationState {
 export interface AioaConversationUpdate {
   busy: boolean;
   messages: readonly AioaAssistantMessage[];
-  /** Internal progress fingerprint. It is never rendered because it can
-   * contain the host application's private work-log detail. */
+  /** Text from the latest visible .aioa-work-log rendered in AIOA's UI. */
   activity?: string;
+  /** Command cards from the latest visible AIOA work log. */
+  tools?: readonly AioaToolMessage[];
   conversationId?: string;
 }
 
@@ -46,6 +60,7 @@ export interface AioaCdpPage {
   createConversation(workspaceRoot: string): Promise<void>;
   submit(message: string): Promise<void>;
   updatesAfter(assistantIds: ReadonlySet<string>): Promise<AioaConversationUpdate>;
+  stop?(): Promise<boolean>;
   close(): Promise<void>;
 }
 
@@ -62,6 +77,7 @@ export interface AioaWorkspacePickerRow {
 
 export interface AioaConversationSetupSnapshot {
   globalNewTaskPoints: readonly AioaPagePoint[];
+  workspaceNewTaskPoints?: readonly AioaPagePoint[];
   visibleMessageCount: number;
   workspaceRows: readonly AioaWorkspacePickerRow[];
   workspaceSelectorPoint?: AioaPagePoint;
@@ -128,6 +144,22 @@ interface AioaCdpConnectionOptions {
 }
 
 type JsonRecord = Record<string, unknown>;
+
+const DEXT_BASE64_PREFIX = "dext-base64:";
+const DEXT_AGENT_BASE64_INSTRUCTION = [
+  "For an agent response, the outer object must be valid JSON.",
+  "When agent.patch.changes[].before, agent.patch.changes[].after, or agent.files[].content contains code or other text that could be difficult to escape, encode that field as UTF-8 standard Base64 prefixed exactly with 'dext-base64:'.",
+  "Do not Base64-encode any other field."
+].join(" ");
+
+function timeoutDuration(timeoutMs: number): string {
+  if (timeoutMs % 60_000 === 0) {
+    const minutes = timeoutMs / 60_000;
+    return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  }
+  const seconds = Math.ceil(timeoutMs / 1_000);
+  return `${seconds} second${seconds === 1 ? "" : "s"}`;
+}
 
 function record(value: unknown): JsonRecord | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -249,10 +281,27 @@ export async function openAioaWorkspaceConversation(
     initialLoadAttempts,
     pollIntervalMs,
     wait,
-    (snapshot) => snapshot.globalNewTaskPoints.length >= 1
+    (snapshot) => (snapshot.workspaceNewTaskPoints?.length ?? 0) >= 1
+      || snapshot.globalNewTaskPoints.length >= 1
   );
   if (!initial) {
     throw new Error("AIOA's global new-task button was not found.");
+  }
+  const workspaceNewTaskPoints = initial.workspaceNewTaskPoints ?? [];
+  if (workspaceNewTaskPoints.length === 1) {
+    await navigator.click(workspaceNewTaskPoints[0]!);
+    const selectedTask = await waitForSetupSnapshot(
+      navigator,
+      attempts,
+      pollIntervalMs,
+      wait,
+      (snapshot) => snapshot.visibleMessageCount === 0
+        && normalizeAioaWorkspaceName(snapshot.selectedWorkspaceName ?? "") === normalizedWorkspaceName
+    );
+    if (!selectedTask) {
+      throw new Error(`AIOA did not open a new task in workspace '${workspaceName}'.`);
+    }
+    return;
   }
   if (initial.globalNewTaskPoints.length > 1) {
     throw new Error("AIOA has multiple visible global new-task buttons.");
@@ -428,6 +477,51 @@ export function parseJsonOutput(text: string, expectedKind?: string): unknown {
     if (result !== undefined) return result;
   }
   return undefined;
+}
+
+function decodeDextBase64(value: unknown): unknown {
+  if (typeof value !== "string" || !value.startsWith(DEXT_BASE64_PREFIX)) return value;
+  const encoded = value.slice(DEXT_BASE64_PREFIX.length);
+  if (encoded && !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) {
+    throw new Error("AIOA returned invalid dext-base64 content.");
+  }
+  const bytes = Buffer.from(encoded, "base64");
+  const decoded = bytes.toString("utf8");
+  if (Buffer.from(decoded, "utf8").toString("base64") !== encoded) {
+    throw new Error("AIOA returned invalid UTF-8 dext-base64 content.");
+  }
+  return decoded;
+}
+
+/** Decodes only the optional agent code-text fields documented in the API prompt. */
+function decodeAgentBase64Fields(value: JsonRecord): JsonRecord {
+  const patch = record(value.patch);
+  const rawChanges = Array.isArray(patch?.changes) ? patch.changes as readonly unknown[] : undefined;
+  const changes = rawChanges
+    ? rawChanges.map((change): unknown => {
+      const item = record(change);
+      if (!item) return change;
+      return {
+        ...item,
+        ...(typeof item.before === "string" ? { before: decodeDextBase64(item.before) } : {}),
+        ...(typeof item.after === "string" ? { after: decodeDextBase64(item.after) } : {})
+      };
+    })
+    : undefined;
+  const rawFiles = Array.isArray(value.files) ? value.files as readonly unknown[] : undefined;
+  const files = rawFiles
+    ? rawFiles.map((file): unknown => {
+      const item = record(file);
+      return item
+        ? { ...item, ...(typeof item.content === "string" ? { content: decodeDextBase64(item.content) } : {}) }
+        : file;
+    })
+    : undefined;
+  return {
+    ...value,
+    ...(patch && changes ? { patch: { ...patch, changes } } : {}),
+    ...(files ? { files } : {})
+  };
 }
 
 /** Extracts complete top-level JSON objects while ignoring braces inside strings. */
@@ -627,7 +721,8 @@ export function aioaApiDefinition(request: AgentExecutionRequest): string {
   return [
     `Define API ${request.method.id}`,
     `Input: ${aioaInputType(request.method.input)}`,
-    `Output: ${aioaOutputType(request.contract.outputJsonSchema)}`
+    `Output: ${aioaOutputType(request.contract.outputJsonSchema)}`,
+    ...(request.method.id === "agent" ? [DEXT_AGENT_BASE64_INSTRUCTION] : [])
   ].join("\n");
 }
 
@@ -635,13 +730,23 @@ function aioaDefinitionSignature(request: AgentExecutionRequest): string {
   return JSON.stringify({
     version: request.method.version,
     input: aioaInputType(request.method.input),
-    output: aioaOutputType(request.contract.outputJsonSchema)
+    output: aioaOutputType(request.contract.outputJsonSchema),
+    ...(request.method.id === "agent" ? { codeTextEncoding: DEXT_AGENT_BASE64_INSTRUCTION } : {})
   });
 }
 
 export function aioaTurnPrompt(request: AgentExecutionRequest, includeDefinition = true): string {
   const requestPrompt = `Request: ${aioaRequestPayload(request)}`;
   return includeDefinition ? `${aioaApiDefinition(request)}\n\n${requestPrompt}` : requestPrompt;
+}
+
+function aioaJsonRepairPrompt(request: AgentExecutionRequest): string {
+  return [
+    "Your previous response was not valid JSON for the active Dext API.",
+    "Return only one replacement JSON object conforming exactly to the original Output definition. Do not include Markdown, explanation, or any text outside that object.",
+    `The replacement object's kind must be ${JSON.stringify(request.method.output.kind)}.`,
+    DEXT_AGENT_BASE64_INSTRUCTION
+  ].join("\n\n");
 }
 
 export function aioaExecutionPrompt(request: AgentExecutionRequest): string {
@@ -683,8 +788,9 @@ class ChromeRemoteAioaPage implements AioaCdpPage {
   }
 
   async createConversation(workspaceRoot: string): Promise<void> {
+    const workspaceName = workspaceNameFromRoot(workspaceRoot);
     await openAioaWorkspaceConversation(workspaceRoot, {
-      snapshot: async () => this.conversationSetupSnapshot(),
+      snapshot: async () => this.conversationSetupSnapshot(workspaceName),
       click: async (point) => this.click(point),
       replaceText: async (point, text) => replaceAioaText(this.client.Input, point, text)
     });
@@ -719,6 +825,7 @@ class ChromeRemoteAioaPage implements AioaCdpPage {
       busy: boolean;
       messages: AioaAssistantMessage[];
       activity?: string;
+      tools?: AioaToolMessage[];
       conversationId?: string;
     }>(`
       (() => {
@@ -733,6 +840,29 @@ class ChromeRemoteAioaPage implements AioaCdpPage {
           .flatMap((message) => [...message.querySelectorAll('.aioa-work-log')])
           .filter(isVisible)
           .at(-1);
+        const workLogOwner = workLog
+          ? assistantMessages.find((message) => message.contains(workLog))
+          : undefined;
+        const workLogId = workLogOwner?.getAttribute('data-message-id') || 'work-log';
+        // AIOA hides a command card's details while it is collapsed. textContent
+        // preserves that context whereas innerText only returns rendered text.
+        const textOf = (element) => (element?.textContent || '').trim();
+        const tools = workLog
+          ? [...workLog.querySelectorAll('.aioa-work-command-card')].map((card, index) => {
+            const tool = textOf(card.querySelector('.aioa-work-command-tool'));
+            const command = textOf(card.querySelector('.aioa-work-command-text'));
+            const output = textOf(card.querySelector('.aioa-work-command-output'));
+            const result = textOf(card.querySelector('.aioa-work-command-result'));
+            const detail = [tool, command, output, result].filter(Boolean).join('\\n\\n') || textOf(card);
+            const title = command || tool || detail.split(/\\r?\\n/, 1)[0] || 'Command';
+            return {
+              id: workLogId + ':command:' + index,
+              title,
+              text: detail || title,
+              done: Boolean(card.querySelector('.aioa-work-command-result'))
+            };
+          })
+          : [];
         return JSON.stringify({
           busy: [...document.querySelectorAll('button[aria-label="停止生成"]')]
             .some((button) => isVisible(button) && !button.disabled),
@@ -748,6 +878,7 @@ class ChromeRemoteAioaPage implements AioaCdpPage {
             })
             .slice(-4),
           activity: (workLog?.innerText || '').trim() || undefined,
+          ...(tools.length ? { tools } : {}),
           conversationId: userMessage?.getAttribute('data-message-id') || undefined
         });
       })()
@@ -756,15 +887,38 @@ class ChromeRemoteAioaPage implements AioaCdpPage {
       busy: snapshot.busy === true,
       messages: snapshot.messages.filter((message) => !assistantIds.has(message.id) && message.text.length > 0),
       ...(snapshot.activity ? { activity: snapshot.activity } : {}),
+      ...(snapshot.tools?.length ? { tools: snapshot.tools } : {}),
       ...(snapshot.conversationId ? { conversationId: snapshot.conversationId } : {})
     };
+  }
+
+  async stop(): Promise<boolean> {
+    const point = await this.evaluate<AioaPagePoint | null>(`
+      (() => {
+        const button = [...document.querySelectorAll('button[aria-label="停止生成"]')]
+          .find((candidate) => {
+            const rect = candidate.getBoundingClientRect();
+            const style = getComputedStyle(candidate);
+            return rect.width > 0 && rect.height > 0
+              && style.display !== 'none' && style.visibility !== 'hidden'
+              && !candidate.disabled;
+          });
+        if (!button) return JSON.stringify(null);
+        const rect = button.getBoundingClientRect();
+        return JSON.stringify({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+      })()
+    `);
+    if (!point) return false;
+    await this.click(point);
+    return true;
   }
 
   async close(): Promise<void> {
     await this.client.close();
   }
 
-  private async conversationSetupSnapshot(): Promise<AioaConversationSetupSnapshot> {
+  private async conversationSetupSnapshot(workspaceName: string): Promise<AioaConversationSetupSnapshot> {
+    const workspaceLabel = `${workspaceName} 新建任务`;
     return this.evaluate<AioaConversationSetupSnapshot>(`
       (() => {
         const isVisible = (element) => {
@@ -783,28 +937,52 @@ class ChromeRemoteAioaPage implements AioaCdpPage {
             && text(button) === '新建任务')
           .map(point)
           .filter(Boolean);
+        const workspaceNewTaskPoints = [...document.querySelectorAll('button')]
+          .filter((button) => isVisible(button)
+            && button.getAttribute('aria-label') === ${JSON.stringify(workspaceLabel)})
+          .map(point)
+          .filter(Boolean);
         const composer = document.querySelector('form.aioa-biz-chat-composer');
-        const emptyWorkspaceSelector = [...document.querySelectorAll('button[aria-expanded]')]
+        const emptyWorkspaceSelector = [...document.querySelectorAll(
+          'button[aria-expanded], button[aria-label*="选择工作空间"], [aria-label*="选择工作空间"]'
+        )]
           .filter(isVisible)
-          .find((button) => button.getAttribute('aria-label') === '选择工作空间'
+          .find((button) => button.getAttribute('aria-label')?.includes('选择工作空间')
             || button.getAttribute('title') === '选择工作空间');
         const selectedWorkspaceSelector = composer
-          ? [...composer.querySelectorAll('button[aria-expanded]')]
+          ? [...composer.querySelectorAll('button[aria-expanded], [aria-label^="工作空间："]')]
             .filter(isVisible)
-            .find((button) => Boolean(button.querySelector('svg.lucide-folder, svg.lucide-folder-open')))
+            .find((button) => Boolean(button.querySelector('svg.lucide-folder, svg.lucide-folder-open'))
+              || button.getAttribute('aria-label')?.startsWith('工作空间：'))
           : undefined;
         const workspaceSelector = emptyWorkspaceSelector || selectedWorkspaceSelector;
         const workspaceSelectorPoint = point(workspaceSelector);
-        const workspaceSearch = document.querySelector('input[placeholder="搜索工作空间"]');
+        const workspaceSearch = document.querySelector(
+          'input[placeholder*="搜索工作空间"], input[aria-label*="工作空间"], input[placeholder*="搜索"]'
+        );
         const workspaceSearchPoint = point(workspaceSearch);
-        const pickerRoot = workspaceSearch?.closest('[class*="project-picker"]') || document;
-        const workspaceRows = [...pickerRoot.querySelectorAll('button[role="menuitemradio"]')]
+        const pickerRoot = workspaceSearch?.closest(
+          '[role="dialog"], [role="listbox"], [class*="project-picker"], [class*="workspace-picker"], [class*="popover"], [class*="dropdown"]'
+        ) || document;
+        // AIOA has used menuitemradio, option, and plain data rows across
+        // releases. Keep the extraction scoped to the open picker so unrelated
+        // menus cannot be mistaken for workspaces.
+        const workspaceRows = [...pickerRoot.querySelectorAll(
+          'button[role="menuitemradio"], [role="menuitemradio"], [role="option"], [aria-label$=" 工作空间"], [aria-label^="工作空间："], [data-workspace-id], [data-project-id]'
+        )]
           .filter(isVisible)
-          .map((row) => ({
-            name: text(row),
-            point: point(row),
-            selected: row.getAttribute('aria-checked') === 'true'
-          }))
+          .map((row) => {
+            const label = text(row) || row.getAttribute('aria-label') || row.getAttribute('title') || '';
+            const name = label
+              .replace(/^工作空间：\\s*/, '')
+              .replace(/\\s+工作空间\\s*$/, '')
+              .trim();
+            return {
+              name,
+              point: point(row),
+              selected: row.getAttribute('aria-checked') === 'true'
+            };
+          })
           .filter((row) => row.point && row.name !== '不使用工作空间');
         const selectedProject = composer
           ? [...composer.querySelectorAll('.aioa-composer-context-project')].find(isVisible)
@@ -817,6 +995,7 @@ class ChromeRemoteAioaPage implements AioaCdpPage {
           .length;
         return JSON.stringify({
           globalNewTaskPoints,
+          ...(workspaceNewTaskPoints.length ? { workspaceNewTaskPoints } : {}),
           visibleMessageCount,
           workspaceRows,
           ...(workspaceSelectorPoint ? { workspaceSelectorPoint } : {}),
@@ -1097,8 +1276,23 @@ export class AioaCdpAgentRunner implements AgentRunner {
     this.sessions.delete(sessionId);
   }
 
+  /**
+   * A Dext output session must never send into a task the user selected in
+   * AIOA. When its remembered task is no longer active, discard the binding
+   * so this turn creates a fresh Dext-owned task instead.
+   */
+  private activeSession(sessionId: string | undefined, conversationId: string | undefined): AioaOwnedSession | undefined {
+    const ownedSession = sessionId ? this.sessions.get(sessionId) : undefined;
+    if (ownedSession && ownedSession.conversationId !== conversationId) {
+      if (sessionId) this.sessions.delete(sessionId);
+      return undefined;
+    }
+    return ownedSession;
+  }
+
   async run(request: AgentExecutionRequest): Promise<unknown> {
     if (request.profile.provider !== "aioa") throw new Error("AIOA CDP runner can only execute the AIOA profile.");
+    if (request.signal?.aborted) throw new ExecutionCancelledError();
     request.onEvent?.({ phase: "status", text: "Connecting to AIOA" });
     const { page, launched } = await this.connection.open(request.profile);
     try {
@@ -1107,16 +1301,13 @@ export class AioaCdpAgentRunner implements AgentRunner {
         throw new Error("AIOA is already generating. Wait for its current response before running Dext.");
       }
       const sessionId = request.metadata.agentSessionId;
-      const ownedSession = sessionId ? this.sessions.get(sessionId) : undefined;
+      const ownedSession = this.activeSession(sessionId, before.conversationId);
       const ownedConversation = ownedSession?.conversationId;
       const definitionSignature = aioaDefinitionSignature(request);
       const includeDefinition = ownedSession?.apiDefinitions.get(request.method.id) !== definitionSignature;
       let initial: AioaConversationState;
       let prompt: string;
       if (ownedConversation) {
-        if (before.conversationId !== ownedConversation) {
-          throw new Error("The active AIOA task is not the task created for this Dext Output session. Switch back or clear Dext Output to start a new task.");
-        }
         initial = before;
         prompt = aioaTurnPrompt(request, includeDefinition);
         request.onEvent?.({ phase: "status", text: "Using Dext's existing AIOA task" });
@@ -1129,7 +1320,9 @@ export class AioaCdpAgentRunner implements AgentRunner {
         initial = await page.state();
         prompt = aioaExecutionPrompt(request);
       }
+      if (request.signal?.aborted) throw new ExecutionCancelledError();
       await page.submit(prompt);
+      const submitted = await page.state();
       request.onEvent?.({ phase: "status", text: "Waiting for AIOA response" });
       if (ownedSession && includeDefinition) {
         ownedSession.apiDefinitions.set(request.method.id, definitionSignature);
@@ -1140,12 +1333,30 @@ export class AioaCdpAgentRunner implements AgentRunner {
       let observedAssistant = false;
       let lastText = "";
       let lastActivity = "";
+      const toolStates = new Map<string, string>();
       let receivedActivity = false;
       let lastActivityAt = submittedAt;
       let completedWithoutResultAt: number | undefined;
-      let conversationId = ownedConversation;
+      let repairPromptSubmitted = false;
+      let repairGenerationObserved = false;
+      let repairResponseObserved = false;
+      let malformedResultId: string | undefined;
+      let malformedResultText = "";
+      let conversationId = ownedConversation ?? submitted.conversationId ?? initial.conversationId;
+      if (sessionId && !ownedSession && conversationId) {
+        this.sessions.set(sessionId, {
+          conversationId,
+          apiDefinitions: new Map([[request.method.id, definitionSignature]])
+        });
+      }
       while (this.now() < deadline) {
         await this.wait(this.pollIntervalMs);
+        if (request.signal?.aborted) {
+          const current = await page.state();
+          const ownsCurrentTask = Boolean(conversationId && current.conversationId === conversationId);
+          if (ownsCurrentTask && current.busy) await page.stop?.();
+          throw new ExecutionCancelledError();
+        }
         const update = await page.updatesAfter(knownMessages);
         if (!conversationId && update.conversationId) {
           conversationId = update.conversationId;
@@ -1156,9 +1367,13 @@ export class AioaCdpAgentRunner implements AgentRunner {
             });
           }
         }
-        const text = update.messages.at(-1)?.text.trim() ?? "";
+        const latestMessage = update.messages.at(-1);
+        const text = latestMessage?.text.trim() ?? "";
         if (text) {
           observedAssistant = true;
+          if (repairPromptSubmitted && (latestMessage?.id !== malformedResultId || text !== malformedResultText)) {
+            repairResponseObserved = true;
+          }
           if (text !== lastText) {
             receivedActivity = true;
             lastActivityAt = this.now();
@@ -1168,21 +1383,58 @@ export class AioaCdpAgentRunner implements AgentRunner {
           }
           lastText = text;
         }
+        repairGenerationObserved ||= repairPromptSubmitted && update.busy;
         if (update.activity && update.activity !== lastActivity) {
           lastActivity = update.activity;
           receivedActivity = true;
           lastActivityAt = this.now();
-          request.onEvent?.({ phase: "status", text: "AIOA is working" });
+          request.onEvent?.({
+            phase: "message",
+            id: "aioa-work-log",
+            text: update.activity,
+            group: "aioa-work-log",
+            replace: true
+          });
+        }
+        for (const tool of update.tools ?? []) {
+          const signature = `${tool.title}\u0000${tool.text}\u0000${tool.done}`;
+          if (toolStates.get(tool.id) === signature) continue;
+          toolStates.set(tool.id, signature);
+          receivedActivity = true;
+          lastActivityAt = this.now();
+          request.onEvent?.({
+            id: tool.id,
+            phase: "tool",
+            title: tool.title,
+            text: tool.text,
+            group: "aioa-work-log",
+            replace: true,
+            ...(tool.done ? { done: true } : {})
+          });
         }
         if (observedAssistant && !update.busy) {
           if (!conversationId) {
             throw new Error("AIOA did not expose the new task identity required for safe Dext conversation reuse.");
           }
           const result = parseJsonOutput(lastText, request.method.output.kind);
-          if (result === undefined || !record(result)) {
-            throw new Error("AIOA did not return the JSON result required by this Dext API.");
+          const resultRecord = record(result);
+          if (resultRecord) {
+            return request.method.id === "agent" ? decodeAgentBase64Fields(resultRecord) : resultRecord;
           }
-          return result;
+          if (request.method.id === "agent" && !repairPromptSubmitted) {
+            repairPromptSubmitted = true;
+            malformedResultId = latestMessage?.id;
+            malformedResultText = lastText;
+            receivedActivity = true;
+            lastActivityAt = this.now();
+            request.onEvent?.({ phase: "status", text: "AIOA returned malformed JSON; requesting a format-only retry" });
+            await page.submit(aioaJsonRepairPrompt(request));
+            continue;
+          }
+          if (repairPromptSubmitted && !repairGenerationObserved && !repairResponseObserved) {
+            continue;
+          }
+          throw new Error("AIOA did not return the JSON result required by this Dext API.");
         }
         if (!observedAssistant && !update.busy) {
           completedWithoutResultAt ??= this.now();
@@ -1206,7 +1458,138 @@ export class AioaCdpAgentRunner implements AgentRunner {
           );
         }
       }
-      throw new Error("AIOA did not finish before Dext's 10 minute timeout.");
+      throw new Error(`AIOA did not finish before Dext's ${timeoutDuration(this.timeoutMs)} timeout.`);
+    } finally {
+      await page.close();
+    }
+  }
+
+  /** Sends ordinary chat text to the Dext-owned AIOA conversation. This path
+   * deliberately does not define an API, parse JSON, or request a repair. */
+  async runConversation(request: AgentConversationRequest): Promise<string> {
+    if (request.profile.provider !== "aioa") throw new Error("AIOA CDP runner can only execute the AIOA profile.");
+    if (request.signal?.aborted) throw new ExecutionCancelledError();
+    request.onEvent?.({ phase: "status", text: "Connecting to AIOA" });
+    const { page, launched } = await this.connection.open(request.profile);
+    try {
+      const before = await page.state();
+      if (before.busy) {
+        throw new Error("AIOA is already generating. Wait for its current response before running Dext.");
+      }
+      const sessionId = request.metadata.agentSessionId;
+      const ownedSession = this.activeSession(sessionId, before.conversationId);
+      const ownedConversation = ownedSession?.conversationId;
+      let initial: AioaConversationState;
+      if (ownedConversation) {
+        initial = before;
+        request.onEvent?.({ phase: "status", text: "Using Dext's existing AIOA task" });
+      } else {
+        request.onEvent?.({
+          phase: "status",
+          text: launched ? "AIOA started; creating a task in the Dext workspace" : "Creating an AIOA task in the Dext workspace"
+        });
+        await page.createConversation(request.cwd);
+        initial = await page.state();
+      }
+      if (request.signal?.aborted) throw new ExecutionCancelledError();
+      await page.submit(request.input);
+      const submitted = await page.state();
+      request.onEvent?.({ phase: "status", text: "Waiting for AIOA response" });
+      const knownMessages = new Set(initial.assistantIds);
+      const submittedAt = this.now();
+      const deadline = submittedAt + this.timeoutMs;
+      let observedAssistant = false;
+      let lastText = "";
+      let lastActivity = "";
+      const toolStates = new Map<string, string>();
+      let receivedActivity = false;
+      let lastActivityAt = submittedAt;
+      let completedWithoutResultAt: number | undefined;
+      let conversationId = ownedConversation ?? submitted.conversationId ?? initial.conversationId;
+      if (sessionId && !ownedSession && conversationId) {
+        this.sessions.set(sessionId, { conversationId, apiDefinitions: new Map() });
+      }
+      while (this.now() < deadline) {
+        await this.wait(this.pollIntervalMs);
+        if (request.signal?.aborted) {
+          const current = await page.state();
+          const ownsCurrentTask = Boolean(conversationId && current.conversationId === conversationId);
+          if (ownsCurrentTask && current.busy) await page.stop?.();
+          throw new ExecutionCancelledError();
+        }
+        const update = await page.updatesAfter(knownMessages);
+        if (!conversationId && update.conversationId) {
+          conversationId = update.conversationId;
+          if (sessionId) this.sessions.set(sessionId, { conversationId, apiDefinitions: new Map() });
+        }
+        const latestMessage = update.messages.at(-1);
+        const text = latestMessage?.text.trim() ?? "";
+        if (text) {
+          observedAssistant = true;
+          if (text !== lastText) {
+            receivedActivity = true;
+            lastActivityAt = this.now();
+            request.onEvent?.({ phase: "message", id: "aioa-response", text, replace: true });
+          }
+          lastText = text;
+        }
+        if (update.activity && update.activity !== lastActivity) {
+          lastActivity = update.activity;
+          receivedActivity = true;
+          lastActivityAt = this.now();
+          request.onEvent?.({
+            phase: "message",
+            id: "aioa-work-log",
+            text: update.activity,
+            group: "aioa-work-log",
+            replace: true
+          });
+        }
+        for (const tool of update.tools ?? []) {
+          const signature = `${tool.title}\u0000${tool.text}\u0000${tool.done}`;
+          if (toolStates.get(tool.id) === signature) continue;
+          toolStates.set(tool.id, signature);
+          receivedActivity = true;
+          lastActivityAt = this.now();
+          request.onEvent?.({
+            id: tool.id,
+            phase: "tool",
+            title: tool.title,
+            text: tool.text,
+            group: "aioa-work-log",
+            replace: true,
+            ...(tool.done ? { done: true } : {})
+          });
+        }
+        if (observedAssistant && !update.busy) {
+          if (!conversationId) {
+            throw new Error("AIOA did not expose the new task identity required for safe Dext conversation reuse.");
+          }
+          return lastText;
+        }
+        if (!observedAssistant && !update.busy) {
+          completedWithoutResultAt ??= this.now();
+          if (this.now() - completedWithoutResultAt >= this.finalContentGraceMs) {
+            throw new Error("AIOA finished without returning a response.");
+          }
+        } else {
+          completedWithoutResultAt = undefined;
+        }
+        const elapsedSinceActivity = this.now() - lastActivityAt;
+        if (!receivedActivity && elapsedSinceActivity >= this.initialResponseTimeoutMs) {
+          throw new Error(
+            `AIOA did not begin responding within ${Math.ceil(this.initialResponseTimeoutMs / 1_000)} seconds. `
+            + "Check that its selected model is available, then run again."
+          );
+        }
+        if (receivedActivity && elapsedSinceActivity >= this.responseIdleTimeoutMs) {
+          throw new Error(
+            `AIOA stopped responding for ${Math.ceil(this.responseIdleTimeoutMs / 1_000)} seconds before returning a result. `
+            + "The AIOA task may be stalled; stop it there and run again."
+          );
+        }
+      }
+      throw new Error(`AIOA did not finish before Dext's ${timeoutDuration(this.timeoutMs)} timeout.`);
     } finally {
       await page.close();
     }

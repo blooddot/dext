@@ -67,6 +67,25 @@ describe("Dext history rendering", () => {
     expect(html).toContain("I will inspect the selected implementation first.");
   });
 
+  it("keeps AIOA activity and its command details in one history group", () => {
+    const record: DextHistoryRecord = {
+      id: "aioa-work-log",
+      createdAt: 1,
+      input: 'agent(input="Inspect this")',
+      process: [
+        { phase: "message", group: "aioa-work-log", text: "Inspecting the workspace" },
+        { phase: "tool", group: "aioa-work-log", title: "git status", text: "git status" }
+      ],
+      output: ""
+    };
+
+    const html = renderHistoryRecord(record);
+    expect(html).toContain("AIOA activity");
+    expect(html).toContain("Inspecting the workspace");
+    expect(html).toContain("git status");
+    expect(html).not.toContain("Ran 1 command");
+  });
+
   it("renders structured agent results as readable thought summaries instead of JSON", () => {
     const structured = JSON.stringify({
       kind: "review",
@@ -122,6 +141,38 @@ describe("Dext history rendering", () => {
     expect(html).toContain('data-diff-mode="split"');
     expect(html).toContain("diff-inline");
     expect(html).toContain("diff-split");
+  });
+
+  it("renders an agent result patch as an expandable diff in history", () => {
+    const record: DextHistoryRecord = {
+      id: "agent-patch",
+      createdAt: 1,
+      input: "agent(input=\"update greeting\")",
+      process: [],
+      output: "",
+      response: {
+        kind: "workflow",
+        executions: [{
+          invocation: { kind: "invocation", method: "agent", source: "code", arguments: [] },
+          method: { id: "agent", title: "Agent", kind: "command", source: "builtin" },
+          result: {
+            kind: "agent",
+            text: "Applied the change.",
+            patch: {
+              kind: "patch",
+              title: "Update greeting",
+              changes: [{ uri: "file:///workspace/greeting.ts", before: "export const greeting = 'hi';", after: "export const greeting = 'hello';" }]
+            }
+          },
+          durationMs: 10
+        }]
+      }
+    };
+
+    const html = renderHistoryRecord(record);
+    expect(html).toContain("greeting.ts");
+    expect(html).toContain("data-diff-mode=\"split\"");
+    expect(html).toContain("export const greeting");
   });
 
   it("uses compact durations in history summaries and executions", () => {

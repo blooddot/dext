@@ -29,14 +29,16 @@ describe("@ reference insertion", () => {
     ]);
   });
 
-  it("uses the semantic input when a drop has no reliable CodeMirror position", () => {
-    const source = 'agent(input="Explain this code")';
-    const edit = fileReferenceInsertion(source, 0, 0, ['@src/pathx.py#L55,1-L66,32']);
+  it("inserts at the cursor in an external triple-quoted input variable", () => {
+    const source = 'input = """Explain this code\n"""\nagent(input=input)';
+    const cursor = source.indexOf("\n");
+    const edit = fileReferenceInsertion(source, cursor, cursor, ['@src/pathx.py#L55,1-L66,32']);
     const finalSource = `${source.slice(0, edit.from)}${edit.text}${source.slice(edit.to)}`;
-    expect(finalSource).toMatch(/^agent\(input="Explain this code /);
+    expect(edit.from).toBe(cursor);
+    expect(finalSource).toContain('input = """Explain this code @src/pathx.py#L55,1-L66,32\n"""');
+    expect(finalSource).toContain("agent(input=input)");
     expect(finalSource).not.toContain('f"');
     expect(finalSource).not.toContain("ref.file(");
-    expect(finalSource).toContain("@src/pathx.py#L55,1-L66,32");
     expect(inputReferenceProjections(finalSource)[0]?.reference.payload).toBe("src/pathx.py#L55,1-L66,32");
   });
 
