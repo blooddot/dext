@@ -192,42 +192,8 @@ function coreInputArgument(source: string, from: number, to: number): LocatedCor
   return { argument: nearest, appendAtEnd: true };
 }
 
-function referenceCall(expression: string): { name: string; value: string } | undefined {
-  const prefix = /^\s*(ref\.(?:file|dir|symbol))\s*\(\s*(['"])/.exec(expression);
-  if (!prefix) return undefined;
-  const name = prefix[1]!;
-  const quote = prefix[2]!;
-  let index = prefix[0].length;
-  let value = "";
-  let escaped = false;
-  for (; index < expression.length; index += 1) {
-    const character = expression[index]!;
-    if (escaped) {
-      const decoded = ({ "\\": "\\", "'": "'", '"': '"', n: "\n", r: "\r", t: "\t" } as const)[character];
-      if (decoded === undefined) return undefined;
-      value += decoded;
-      escaped = false;
-      continue;
-    }
-    if (character === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (character === quote) break;
-    value += character;
-  }
-  if (escaped || index === expression.length || !/^\s*\)$/.test(expression.slice(index + 1))) return undefined;
-  return { name, value };
-}
-
 function inputReferenceText(expressions: readonly string[]): string {
-  return expressions.map((expression) => {
-    const reference = referenceCall(expression);
-    if (!reference) return expression;
-    // ask/agent input is plain source text. The Chip is a rendering of this
-    // readable token, never an alternate f-string or private marker value.
-    return `@${reference.value}`;
-  }).join(" ");
+  return expressions.join(" ");
 }
 
 /** Inserts readable @workspace/path tokens into ask/agent string input. */
@@ -283,6 +249,6 @@ export function fileReferenceInsertion(
 ): SourceReplacement {
   const semantic = coreInputReferenceInsertion(source, from, to, expressions);
   if (semantic) return semantic;
-  const inline = inlineInsertion(source, from, to, expressions.join(" "));
+  const inline = inlineInsertion(source, from, to, inputReferenceText(expressions));
   return { from, to, text: inline.text, cursorOffset: inline.cursorOffset };
 }

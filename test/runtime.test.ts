@@ -231,7 +231,7 @@ answer = ask(input=printed.text)`, registry);
   it("compiles and resolves the exact serialized agent file-drop input", async () => {
     const { registry, workflow } = setup();
     const initial = 'agent(input="这段代码是什么含义")';
-    const edit = fileReferenceInsertion(initial, 0, 0, ['ref.file("src/pathx.py#L55,1-L66,32")']);
+    const edit = fileReferenceInsertion(initial, 0, 0, ['@src/pathx.py#L55,1-L66,32']);
     const source = `${initial.slice(0, edit.from)}${edit.text}${initial.slice(edit.to)}`;
 
     expect(source).toMatch(/^agent\(input="这段代码是什么含义 /);
@@ -297,7 +297,7 @@ answer = ask(input=printed.text)`, registry);
     });
     const compiled = compileWorkflow(`result = mcp(
     tool="docs.read",
-    input={"meta": {"labels": ["guide", "api"]}, "file": ref.file("README.md")}
+    input={"meta": {"labels": ["guide", "api"]}, "file": "@README.md"}
 )`, registry);
 
     expect(compiled.diagnostics).toEqual([]);

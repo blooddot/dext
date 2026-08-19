@@ -5,6 +5,29 @@
   "version": "0.1.0",
   "publisher": "blooddot",
   "license": "MIT",
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#111827",
+    "theme": "dark"
+  },
+  "pricing": "Free",
+  "keywords": [
+    "ai",
+    "agent",
+    "workflow",
+    "mcp",
+    "codex",
+    "claude",
+    "automation"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/blooddot/dext.git"
+  },
+  "bugs": {
+    "url": "https://github.com/blooddot/dext/issues"
+  },
+  "homepage": "https://github.com/blooddot/dext#readme",
   "engines": {
     "vscode": "^1.105.0"
   },

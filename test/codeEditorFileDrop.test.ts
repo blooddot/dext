@@ -46,7 +46,7 @@ describe("CodeMirror file-reference drop", () => {
   it("converts a normal agent input when the drop has fallen back to an unrelated selection", () => {
     const { editor, focus } = dropHarness('agent(input="这段代码是什么含义")');
 
-    editor.insertFileReferences(['ref.file("src/pathx.py#L55,1-L66,32")']);
+    editor.insertFileReferences(['@src/pathx.py#L55,1-L66,32']);
 
     expect(editor.source).toMatch(/^agent\(input="这段代码是什么含义/);
     expectCompiled(editor.source);
@@ -62,7 +62,7 @@ describe("CodeMirror file-reference drop", () => {
     const { editor } = dropHarness(source);
     const position = source.indexOf("请解释");
 
-    editor.insertFileReferences(['ref.file("src/pathx.py#L55,1-L66,32")'], position);
+    editor.insertFileReferences(['@src/pathx.py#L55,1-L66,32'], position);
 
     expect(editor.source).toMatch(/^agent\(input="这段代码是什么含义，/);
     expect(editor.source).not.toContain('f"');

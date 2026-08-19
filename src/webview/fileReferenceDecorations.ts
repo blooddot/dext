@@ -10,6 +10,7 @@ import {
 import {
   compactFileReferenceLabel,
   inputReferenceProjections,
+  type ContextReferenceOccurrence,
   type InputReferenceProjection
 } from "../core/fileReference.js";
 import {
@@ -18,18 +19,17 @@ import {
 } from "./fileReferenceChip.js";
 
 export {
-  fileReferenceOccurrences,
   inputReferenceProjections
 } from "../core/fileReference.js";
 
 export interface FileReferenceDecorationOptions {
-  onOpen(reference: string): void;
+  onOpen(reference: ContextReferenceOccurrence): void;
 }
 
 class FileReferenceWidget extends WidgetType {
   constructor(
     private readonly projection: InputReferenceProjection,
-    private readonly onOpen: (reference: string) => void
+    private readonly onOpen: (reference: ContextReferenceOccurrence) => void
   ) {
     super();
   }
@@ -37,6 +37,7 @@ class FileReferenceWidget extends WidgetType {
   override eq(other: FileReferenceWidget): boolean {
     return this.projection.interpolationStart === other.projection.interpolationStart
       && this.projection.interpolationEnd === other.projection.interpolationEnd
+      && this.projection.reference.kind === other.projection.reference.kind
       && this.projection.reference.payload === other.projection.reference.payload;
   }
 
@@ -50,7 +51,7 @@ class FileReferenceWidget extends WidgetType {
       ...descriptor,
       modifierClass: "code-file-reference",
       suppressPointerDown: true,
-      onOpen: () => this.onOpen(this.projection.reference.payload),
+      onOpen: () => this.onOpen(this.projection.reference),
       onRemove: () => {
         view.dispatch({
           changes: {
@@ -73,7 +74,7 @@ class FileReferenceWidget extends WidgetType {
 
 export function inputReferenceProjectionDecorations(
   source: string,
-  onOpen: (reference: string) => void
+  onOpen: (reference: ContextReferenceOccurrence) => void
 ): DecorationSet {
   const projections = inputReferenceProjections(source);
   return Decoration.set([
@@ -87,7 +88,7 @@ export function inputReferenceProjectionDecorations(
 }
 
 export function fileReferenceDecorations(options: FileReferenceDecorationOptions): Extension {
-  const onOpen = (reference: string): void => options.onOpen(reference);
+  const onOpen = (reference: ContextReferenceOccurrence): void => options.onOpen(reference);
   const plugin = ViewPlugin.fromClass(class {
     decorations: DecorationSet;
 

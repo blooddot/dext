@@ -38,15 +38,11 @@ describe("DextLanguageService workflow features", () => {
     });
   });
 
-  it("completes ui APIs and supports every public reference kind", () => {
+  it("completes ui APIs", () => {
     expect(service.documentCompletions("ui.").map((item) => item.label)).toEqual(["choose", "confirm", "input"]);
     expect(service.documentSignature("ui.choose(label=", "ui.choose(label=".length)).toMatchObject({
       activeParameter: 0,
       label: expect.stringContaining("options")
-    });
-    expect(service.documentHover("ref.dir", 2)).toMatchObject({
-      label: "ref.dir",
-      documentation: expect.stringContaining("never expanded")
     });
   });
 

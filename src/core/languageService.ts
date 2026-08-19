@@ -207,7 +207,7 @@ export class DextLanguageService {
       return this.apiNamespaceItems(before, item);
     }
     if (/:\s*[A-Za-z_]*$/.test(before)) {
-          const types = ["Context", "Result", "list", "Literal", "ChatResult", "AgentResult", "ApplyResult", "TerminalResult", "PrintResult", "McpRawResult", "TextResult", "CodeResult", "PlanResult", "PatchResult"];
+      const types = ["Context", "Result", "list", "Literal", "ChatResult", "AgentResult", "ApplyResult", "TerminalResult", "PrintResult", "McpRawResult", "TextResult", "CodeResult", "PlanResult", "PatchResult"];
       const typeFragment = /[A-Za-z_]*$/.exec(before)?.[0] ?? "";
       return types.filter((type) => type.startsWith(typeFragment)).map((type) => item(type, type, "Dext type", "value"));
     }
@@ -250,12 +250,14 @@ export class DextLanguageService {
 
   inputDocument(source: string): WorkflowDocumentState {
     if (!source.trim()) return { kind: "empty" };
-    return { kind: compileWorkflow(source, this.registry, {
-      allowImports: true,
-      aliases: parseWorkflowImports(source),
-      customApiIds: this.customApiIds,
-      requireCustomApiImports: false
-    }).program ? "workflow" : "invalid" };
+    return {
+      kind: compileWorkflow(source, this.registry, {
+        allowImports: true,
+        aliases: parseWorkflowImports(source),
+        customApiIds: this.customApiIds,
+        requireCustomApiImports: false
+      }).program ? "workflow" : "invalid"
+    };
   }
 
   documentCompletions(source: string, cursor = source.length, customApisAreGlobal = true): CompletionItem[] {
@@ -270,19 +272,6 @@ export class DextLanguageService {
       detail: string,
       kind: CompletionItem["kind"]
     ): CompletionItem => ({ label, insertText, detail, kind, replaceStart, replaceEnd });
-
-    if (/ref\.[A-Za-z_]*$/.test(before)) {
-      const fragment = word.split(".").at(-1) ?? "";
-      const references: [string, string, string][] = [
-        ["selection", "selection", "active editor selection"],
-        ["active_file", "active_file", "complete active editor file"],
-        ["file", 'file("")', "workspace file or range"],
-        ["dir", 'dir("")', "workspace directory without expanding its contents"],
-        ["symbol", 'symbol("")', "workspace symbol declaration"]
-      ];
-      return references.filter(([label]) => label.startsWith(fragment))
-        .map(([label, insert, detail]) => item(label, insert, detail, "reference"));
-    }
 
     const statusComparison = /([A-Za-z_][A-Za-z0-9_]*)\.status\s*(?:==|!=)\s*(?:["']([^"']*)$|([A-Za-z_][A-Za-z0-9_]*)$|)$/.exec(before);
     if (statusComparison) {
@@ -336,13 +325,10 @@ export class DextLanguageService {
           const value = assignment[2]?.trimStart() ?? "";
           const valueStart = cursor - value.length;
           if (field?.type === "context") {
-            const fragment = /(?:^|\[\s*|,\s*)([A-Za-z_.]*)$/.exec(value)?.[1] ?? "";
+            const fragment = /(?:^|\[\s*|,\s*)(@?[A-Za-z_.]*)$/.exec(value)?.[1] ?? "";
             const references = [
-              ["ref.selection", "ref.selection", "active editor selection"],
-              ["ref.active_file", "ref.active_file", "complete active editor file"],
-              ["ref.file", 'ref.file("")', "workspace file or range"],
-              ["ref.dir", 'ref.dir("")', "workspace directory without expanding its contents"],
-              ["ref.symbol", 'ref.symbol("")', "workspace symbol declaration"]
+              ["@selection", "@selection", "active editor selection"],
+              ["@active_file", "@active_file", "complete active editor file"]
             ] as const;
             const referenceItems = references.filter(([label]) => label.startsWith(fragment)).map(([label, insertText, detail]) => ({
               label,
@@ -511,17 +497,6 @@ export class DextLanguageService {
             documentation: `Result returned by ${variableAssignment[1]}.`
           };
         }
-      }
-      const docs: Record<string, string> = {
-        "ref.selection": "The currently selected text and range in the active editor.",
-        "ref.active_file": "The complete contents of the active editor file.",
-        "ref.file": "A workspace file, optionally narrowed to a line and column range.",
-        "ref.dir": "A workspace directory reference. Its contents are never expanded implicitly.",
-        "ref.symbol": "A workspace symbol lookup that resolves to its declaration and source range."
-      };
-      const documentation = docs[match[0]];
-      if (documentation) {
-        return { rangeStart: from, rangeEnd: to, label: match[0], documentation };
       }
     }
     return undefined;

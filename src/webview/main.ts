@@ -23,7 +23,8 @@ import {
   compactFileReferenceLabel,
   inputReferenceDisplayParts,
   inputReferenceDisplayText,
-  normalizeInputReferenceSource
+  normalizeInputReferenceSource,
+  type ContextReferenceOccurrence
 } from "../core/fileReference.js";
 import { createFileReferenceChip, fileReferenceChipDescriptor } from "./fileReferenceChip.js";
 
@@ -58,7 +59,8 @@ const elements = {
   configErrors: element<HTMLElement>("config-errors"),
   result: element<HTMLElement>("result"),
   viewHistory: element<HTMLButtonElement>("view-history"),
-  clearOutput: element<HTMLButtonElement>("clear-output")
+  clearOutput: element<HTMLButtonElement>("clear-output"),
+  attachmentBar: element<HTMLElement>("attachment-bar")
 };
 
 const broker = new LanguageRequestBroker((request) => vscode.postMessage(request));
@@ -66,7 +68,7 @@ const clipboard = new ClipboardClient((request) => vscode.postMessage(request));
 let executing = false;
 let hasErrors = false;
 let problemCounts = { errors: 0, warnings: 0 };
-  let inputKind: "empty" | "workflow" | "invalid" = "empty";
+let inputKind: "empty" | "workflow" | "invalid" = "empty";
 let dropPosition: number | undefined;
 let agentStream: HTMLElement | undefined;
 let agentTrace: HTMLDetailsElement | undefined;
@@ -77,6 +79,7 @@ let agentProgressState = "Thinking";
 let agentCommandIds = new Set<string>();
 let agentEditedUris = new Set<string>();
 const agentGroups = new Map<"reasoning" | "files" | "tool", { disclosure: HTMLDetailsElement; body: HTMLElement }>();
+const imageAttachments = new Map<string, HTMLElement>();
 interface OutputTurnElements {
   disclosure: HTMLDetailsElement;
   process: HTMLElement;
@@ -92,7 +95,7 @@ const editor = new DextCodeEditor({
   broker,
   clipboard,
   onRun: run,
-  onOpenFileReference: (reference) => vscode.postMessage({ type: "openFileReference", reference }),
+  onOpenReference: openInputReference,
   onDiagnosticsChanged(counts) {
     problemCounts = counts;
     hasErrors = counts.errors > 0;
@@ -104,6 +107,12 @@ const editor = new DextCodeEditor({
   },
   onError: renderError
 });
+
+function openInputReference(reference: ContextReferenceOccurrence): void {
+  if (reference.kind === "file") {
+    vscode.postMessage({ type: "openFileReference", reference: reference.payload });
+  }
+}
 
 function updateRunState(): void {
   elements.run.disabled = executing || hasErrors || inputKind === "empty" || inputKind === "invalid";
@@ -131,7 +140,7 @@ function defaultValue(field: FieldDefinition): string {
     if (typeof field.default === "object") return JSON.stringify(field.default);
     return String(field.default);
   }
-  if (field.type === "context") return "ref.selection";
+  if (field.type === "context") return "@selection";
   if (field.type === "result") return "edit_result";
   if (field.type === "number") return "0";
   if (field.type === "boolean") return "False";
@@ -193,33 +202,33 @@ function renderMethods(state: SidebarState): void {
       parent.append(group);
     }
     for (const method of node.methods) {
-    const row = document.createElement("button");
-    row.type = "button";
-    row.className = "method-row";
-    row.title = method.description;
-    const identity = document.createElement("span");
-    identity.className = "method-identity";
-    const name = document.createElement("span");
-    name.className = "method-name";
-    name.textContent = method.id.split(".").at(-1) ?? method.id;
-    const signature = document.createElement("span");
-    signature.className = "method-signature";
-    signature.textContent = formatMethodSignature({
-      ...method,
-      id: method.id.split(".").at(-1) ?? method.id
-    });
-    if (!prefix) {
-      const source = document.createElement("span");
-      source.className = "method-source-inline";
-      source.textContent = method.source === "builtin" ? "builtin" : "project";
-      identity.append(name, source, signature);
-    } else {
-      identity.append(name, signature);
-    }
-    const insert = document.createElement("i");
-    insert.className = "codicon codicon-add";
-    row.append(identity, insert);
-    row.addEventListener("click", () => editor.insertInvocation(methodTemplate(method)));
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "method-row";
+      row.title = method.description;
+      const identity = document.createElement("span");
+      identity.className = "method-identity";
+      const name = document.createElement("span");
+      name.className = "method-name";
+      name.textContent = method.id.split(".").at(-1) ?? method.id;
+      const signature = document.createElement("span");
+      signature.className = "method-signature";
+      signature.textContent = formatMethodSignature({
+        ...method,
+        id: method.id.split(".").at(-1) ?? method.id
+      });
+      if (!prefix) {
+        const source = document.createElement("span");
+        source.className = "method-source-inline";
+        source.textContent = method.source === "builtin" ? "builtin" : "project";
+        identity.append(name, source, signature);
+      } else {
+        identity.append(name, signature);
+      }
+      const insert = document.createElement("i");
+      insert.className = "codicon codicon-add";
+      row.append(identity, insert);
+      row.addEventListener("click", () => editor.insertInvocation(methodTemplate(method)));
       parent.append(row);
     }
   }
@@ -305,13 +314,15 @@ function submitAgentSelection(): void {
   const reasoning = document.getElementById("agent-reasoning") as HTMLSelectElement | null;
   const speed = document.getElementById("agent-speed") as HTMLSelectElement | null;
   if (!profile || !model || !reasoning || !speed) return;
-  vscode.postMessage({ type: "agentSelection", selection: {
-    profileId: profile.value,
-    model: model.value,
-    reasoningEffort: reasoning.value,
-    speed: speed.value,
-    serviceTier: ""
-  } });
+  vscode.postMessage({
+    type: "agentSelection", selection: {
+      profileId: profile.value,
+      model: model.value,
+      reasoningEffort: reasoning.value,
+      speed: speed.value,
+      serviceTier: ""
+    }
+  });
 }
 
 function resultHeading(response: RuntimeResponse): HTMLElement {
@@ -557,7 +568,7 @@ function renderedInputSource(source: string): HTMLPreElement {
       modifierClass: "output-file-reference",
       icon: referenceIcon(reference.kind),
       ...(reference.kind === "file"
-        ? { onOpen: () => vscode.postMessage({ type: "openFileReference", reference: reference.payload }) }
+        ? { onOpen: () => openInputReference(reference) }
         : {})
     }));
   }
@@ -1133,7 +1144,7 @@ function renderOutputSession(session: DextHistorySession): void {
     else if (response) renderResult(response);
     else if (record.output) turn.output.append(codeBlock(record.output));
   }
-  elements.resultSection.classList.toggle("hidden", session.turns.length === 0);
+  elements.resultSection.classList.remove("hidden");
   setSectionOpen(elements.resultHeading, elements.resultBody, true);
 }
 
@@ -1149,6 +1160,39 @@ function droppedFiles(transfer: DataTransfer): ReturnType<typeof parseDroppedFil
     codeFiles: transfer.getData(codeFilesType),
     plainText: transfer.getData("text/plain")
   });
+}
+
+function findImageItem(data: DataTransfer | null): DataTransferItem | undefined {
+  if (!data) return undefined;
+  for (const item of data.items) {
+    if (item.kind === "file" && item.type.startsWith("image/")) return item;
+  }
+  return undefined;
+}
+
+function addImageAttachment(relativePath: string, webviewUri: string, name: string): void {
+  if (imageAttachments.has(relativePath)) return;
+  const chip = document.createElement("div");
+  chip.className = "image-attachment";
+  const image = document.createElement("img");
+  image.src = webviewUri;
+  image.alt = name;
+  image.title = name;
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "image-attachment-remove";
+  remove.setAttribute("aria-label", "Remove image");
+  remove.textContent = "\u00d7";
+  remove.addEventListener("click", () => {
+    chip.remove();
+    imageAttachments.delete(relativePath);
+    editor.removeFileReference(relativePath);
+    vscode.postMessage({ type: "deleteImageAttachment", relativePath });
+  });
+  chip.append(image, remove);
+  elements.attachmentBar.append(chip);
+  elements.attachmentBar.classList.remove("hidden");
+  imageAttachments.set(relativePath, chip);
 }
 
 elements.run.addEventListener("click", run);
@@ -1203,23 +1247,56 @@ document.getElementById("agent-reasoning")?.addEventListener("change", () => {
 document.getElementById("agent-speed")?.addEventListener("change", () => {
   submitAgentSelection();
 });
-elements.inputShell.addEventListener("dragover", (event) => {
+elements.inputShell.addEventListener("paste", (event) => {
+  const imageItem = findImageItem(event.clipboardData);
+  if (!imageItem) return;
+  const file = imageItem.getAsFile();
+  if (!file) return;
   event.preventDefault();
+  event.stopPropagation();
+  const reader = new FileReader();
+  reader.onload = () => {
+    if (typeof reader.result !== "string") return;
+    const dataUrl = reader.result;
+    const comma = dataUrl.indexOf(",");
+    const header = dataUrl.slice(0, comma);
+    const mimeType = header.slice(5, header.indexOf(";"));
+    const base64 = dataUrl.slice(comma + 1);
+    vscode.postMessage({ type: "pasteImage", data: base64, mimeType });
+  };
+  reader.readAsDataURL(file);
+}, true);
+
+window.addEventListener("dragenter", (event) => {
+  vscode.postMessage({ type: "debugLog", message: `dragenter types=${[...(event.dataTransfer?.types ?? [])].join("|")}` });
+}, true);
+window.addEventListener("dragover", (event) => {
+  const inShell = event.target instanceof Node && elements.inputShell.contains(event.target);
+  vscode.postMessage({ type: "debugLog", message: `dragover inShell=${inShell} types=${[...(event.dataTransfer?.types ?? [])].join("|")}` });
+  if (!inShell) return;
+  event.preventDefault();
+  event.stopPropagation();
   dropPosition = editor.positionAtPoint(event.clientX, event.clientY);
   elements.inputShell.classList.add("drop-active");
-});
-elements.inputShell.addEventListener("dragleave", (event) => {
+}, true);
+window.addEventListener("dragleave", (event) => {
   if (event.relatedTarget instanceof Node && elements.inputShell.contains(event.relatedTarget)) return;
   elements.inputShell.classList.remove("drop-active");
   dropPosition = undefined;
-});
-elements.inputShell.addEventListener("drop", (event) => {
+}, true);
+window.addEventListener("drop", (event) => {
+  const inShell = event.target instanceof Node && elements.inputShell.contains(event.target);
+  vscode.postMessage({ type: "debugLog", message: `drop inShell=${inShell} types=${[...(event.dataTransfer?.types ?? [])].join("|")}` });
+  if (!inShell) return;
   event.preventDefault();
+  event.stopPropagation();
   elements.inputShell.classList.remove("drop-active");
   const items = event.dataTransfer ? droppedFiles(event.dataTransfer) : [];
   if (items.length) vscode.postMessage({ type: "dropFiles", items });
   else dropPosition = undefined;
-});
+}, true);
+
+vscode.postMessage({ type: "debugLog", message: "main.ts loaded (drag diagnostic v2)" });
 
 window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   const message = event.data;
@@ -1232,6 +1309,10 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   if (message.type === "insertFileReferences") {
     editor.insertFileReferences(message.expressions, dropPosition);
     dropPosition = undefined;
+  }
+  if (message.type === "imageAttachment") {
+    addImageAttachment(message.relativePath, message.webviewUri, message.name);
+    editor.insertFileReferences([`@${message.relativePath}`]);
   }
   if (message.type === "outputSession") renderOutputSession(message.session);
   if (message.type === "execution") {

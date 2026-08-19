@@ -1,6 +1,5 @@
 import { spawn } from "node:child_process";
-import { appendFileSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync } from "node:fs";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import CDP from "chrome-remote-interface";
@@ -862,24 +861,9 @@ class ChromeRemoteAioaConnector implements AioaCdpConnector {
   }
 }
 
-function logAioaLaunch(message: string): void {
-  try {
-    appendFileSync(join(tmpdir(), "dext-aioa-debug.log"), `${new Date().toISOString()} ${message}\n`, "utf8");
-  } catch {
-    // Logging is best-effort and must never break the launcher.
-  }
-}
-
 class NodeAioaProcessLauncher implements AioaProcessLauncher {
   async launch(executable: string, args: readonly string[]): Promise<AioaStartedProcess> {
     let failure: AioaProcessFailure | undefined;
-    logAioaLaunch(`launch executable=${executable} args=${JSON.stringify(args)} cwd=${dirname(executable)}`);
-    logAioaLaunch(`env LOCALAPPDATA=${process.env.LOCALAPPDATA} APPDATA=${process.env.APPDATA} USERPROFILE=${process.env.USERPROFILE}`);
-    const electronEnv = Object.entries(process.env)
-      .filter(([key]) => /^(ELECTRON|NODE|CHROME)/i.test(key))
-      .map(([key, value]) => `${key}=${value}`)
-      .join(" ");
-    logAioaLaunch(`env[electron/node/chrome] ${electronEnv || "(none)"}`);
     // VS Code 本身是 Electron 应用，会向子进程泄漏 ELECTRON_RUN_AS_NODE 等
     // 变量，导致 AIOA 以纯 Node 模式启动并拒绝 Chromium 的调试参数。启动前
     // 清掉这些泄漏变量，让 AIOA 以正常的 GUI 模式运行。
@@ -888,16 +872,12 @@ class NodeAioaProcessLauncher implements AioaProcessLauncher {
       if (/^(ELECTRON|CHROME)/i.test(key)) delete childEnv[key];
     }
     return new Promise<AioaStartedProcess>((resolve, reject) => {
-      const child = spawn(executable, args, { stdio: ["ignore", "pipe", "pipe"], cwd: dirname(executable), env: childEnv });
-      child.stdout?.on("data", (chunk: Buffer) => logAioaLaunch(`[stdout] ${chunk.toString()}`));
-      child.stderr?.on("data", (chunk: Buffer) => logAioaLaunch(`[stderr] ${chunk.toString()}`));
+      const child = spawn(executable, args, { stdio: "ignore", cwd: dirname(executable), env: childEnv });
       const captureError = (error: Error) => {
-        logAioaLaunch(`error ${error.message}`);
         failure ??= { kind: "error", error };
       };
       child.on("error", captureError);
       child.once("exit", (code, signal) => {
-        logAioaLaunch(`exit code=${code} signal=${signal}`);
         failure ??= { kind: "exit", code, signal };
       });
       const onSpawnError = (error: Error) => {

@@ -1,9 +1,13 @@
 import { randomBytes } from "node:crypto";
+import { appendFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import * as vscode from "vscode";
 import type { DextApplication } from "./application.js";
 import type { AgentStreamEvent, UiInteraction } from "./core/types.js";
 import {
   AttachmentStore,
+  MAX_ATTACHMENT_BYTES,
   writeExactClipboardText
 } from "./attachmentStore.js";
 import {
@@ -30,6 +34,17 @@ function outputSession(): DextHistorySession {
   };
 }
 
+function imageExtension(mimeType: string): string | undefined {
+  const normalized = mimeType.toLowerCase().split(";")[0]!.trim();
+  return ({
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+    "image/bmp": ".bmp"
+  })[normalized];
+}
+
 export class DextSidebarProvider implements vscode.WebviewViewProvider {
   static readonly viewType = "dext.sidebar";
   private view: vscode.WebviewView | undefined;
@@ -52,7 +67,8 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       enableScripts: true,
       localResourceRoots: [
         vscode.Uri.joinPath(this.extensionUri, "dist"),
-        vscode.Uri.joinPath(this.extensionUri, "media")
+        vscode.Uri.joinPath(this.extensionUri, "media"),
+        ...(vscode.workspace.workspaceFolders?.map((folder) => folder.uri) ?? [])
       ]
     };
     view.webview.html = this.html(view.webview);
@@ -176,6 +192,13 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         case "openFileReference":
           await openWorkspaceFileReference(request.reference);
           break;
+        case "debugLog":
+          appendFileSync(
+            join(tmpdir(), "dext-webview-debug.log"),
+            `${new Date().toISOString()} ${request.message}\n`,
+            "utf8"
+          );
+          break;
         case "clipboardWrite": {
           try {
             await vscode.env.clipboard.writeText(request.text);
@@ -255,6 +278,21 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           if (uris?.length) await this.addFileUris(uris);
           break;
         }
+        case "pasteImage": {
+          const attachment = await this.storeImage(request.data, request.mimeType);
+          const view = this.view;
+          if (!view) throw new Error("Dext input is not ready.");
+          await this.post({
+            type: "imageAttachment",
+            relativePath: attachment.relativePath,
+            webviewUri: view.webview.asWebviewUri(attachment.uri).toString(),
+            name: attachment.name
+          });
+          break;
+        }
+        case "deleteImageAttachment":
+          await this.deleteImage(request.relativePath);
+          break;
         case "reload":
           await this.application.reload();
           await this.refresh();
@@ -313,15 +351,15 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         ];
         const choices = multiple
           ? await vscode.window.showQuickPick<{ label: string; id: string }>(items, {
-              title: label,
-              canPickMany: true,
-              ignoreFocusOut: true
-            }) ?? []
+            title: label,
+            canPickMany: true,
+            ignoreFocusOut: true
+          }) ?? []
           : await vscode.window.showQuickPick<{ label: string; id: string }>(items, {
-              title: label,
-              canPickMany: false,
-              ignoreFocusOut: true
-            }).then((picked) => picked ? [picked] : []);
+            title: label,
+            canPickMany: false,
+            ignoreFocusOut: true
+          }).then((picked) => picked ? [picked] : []);
         if (!choices.some((choice) => choice.id === customId)) {
           return { kind: "ui", type: "choice", selected: choices.map((choice) => choice.id) };
         }
@@ -385,6 +423,36 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     });
   }
 
+  private async storeImage(data: string, mimeType: string): Promise<{ relativePath: string; uri: vscode.Uri; name: string }> {
+    const extension = imageExtension(mimeType);
+    if (!extension) throw new Error("Unsupported image format. Paste a PNG, JPEG, GIF, WebP, or BMP image.");
+    const workspaceUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+    if (!workspaceUri) throw new Error("Open a workspace before attaching an image.");
+    const name = `${randomBytes(12).toString("hex")}${extension}`;
+    const buffer = Buffer.from(data, "base64");
+    if (buffer.byteLength > MAX_ATTACHMENT_BYTES) {
+      throw new Error(`Attachments must be ${MAX_ATTACHMENT_BYTES} bytes or smaller.`);
+    }
+    const directory = vscode.Uri.joinPath(workspaceUri, ".dext", "attachments");
+    await vscode.workspace.fs.createDirectory(directory);
+    const uri = vscode.Uri.joinPath(directory, name);
+    await vscode.workspace.fs.writeFile(uri, buffer);
+    return { relativePath: `.dext/attachments/${name}`, uri, name };
+  }
+
+  private async deleteImage(relativePath: string): Promise<void> {
+    const normalized = relativePath.replaceAll("\\", "/");
+    if (!/^\.dext\/attachments\/[a-f0-9]{24}\.(?:png|jpg|gif|webp|bmp)$/.test(normalized)) return;
+    const workspaceUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+    if (!workspaceUri) return;
+    const uri = vscode.Uri.joinPath(workspaceUri, ...normalized.split("/"));
+    try {
+      await vscode.workspace.fs.delete(uri);
+    } catch (error) {
+      if (!(error instanceof vscode.FileSystemError && error.code === "FileNotFound")) throw error;
+    }
+  }
+
   private html(webview: vscode.Webview): string {
     const nonce = randomBytes(16).toString("base64");
     const script = webview.asWebviewUri(
@@ -401,7 +469,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; font-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource}; style-src ${webview.cspSource} 'unsafe-inline'; font-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
   <link rel="stylesheet" href="${codicons.toString()}">
   <link rel="stylesheet" href="${style.toString()}">
   <title>Dext</title>
@@ -413,6 +481,8 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       <div id="code-editor" class="code-editor" aria-label="Dext input"></div>
       <button id="attach-files" class="composer-attach icon-button" type="button" title="Attach workspace files" aria-label="Attach workspace files"><i class="codicon codicon-attach"></i></button>
     </section>
+
+    <div id="attachment-bar" class="attachment-bar hidden" aria-label="Image attachments"></div>
 
     <div class="action-row">
       <div class="agent-controls">

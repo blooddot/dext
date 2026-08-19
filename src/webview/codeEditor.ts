@@ -15,7 +15,8 @@ import { tags, type Tag } from "@lezer/highlight";
 import {
   defaultKeymap,
   history,
-  historyKeymap
+  historyKeymap,
+  indentWithTab
 } from "@codemirror/commands";
 import {
   Compartment,
@@ -40,7 +41,8 @@ import type { SignatureHelp } from "../core/languageService.js";
 import type { ClipboardClient, ClipboardReadResult } from "./clipboardClient.js";
 import { codeReferencePasteText } from "./codeReferencePaste.js";
 import { fileReferenceDecorations } from "./fileReferenceDecorations.js";
-import { normalizeInputReferenceSource } from "../core/fileReference.js";
+import { inputReferenceProjections, normalizeInputReferenceSource } from "../core/fileReference.js";
+import type { ContextReferenceOccurrence } from "../core/fileReference.js";
 import { sourceSnapshotMatches } from "./languageClient.js";
 import type { LanguageRequestBroker } from "./languageClient.js";
 import {
@@ -55,7 +57,7 @@ export interface CodeEditorOptions {
   broker: LanguageRequestBroker;
   clipboard: ClipboardClient;
   onRun(): void;
-  onOpenFileReference(reference: string): void;
+  onOpenReference(reference: ContextReferenceOccurrence): void;
   onDiagnosticsChanged(counts: { errors: number; warnings: number }): void;
   onInputKindChanged(kind: "empty" | "workflow" | "invalid"): void;
   onError(error: unknown): void;
@@ -174,7 +176,7 @@ export class DextCodeEditor {
       closeBrackets(),
       signatureField,
       fileReferenceDecorations({
-        onOpen: (reference) => options.onOpenFileReference(reference)
+        onOpen: (reference) => options.onOpenReference(reference)
       }),
       autocompletion({
         override: [(context) => this.completions(context)],
@@ -216,6 +218,7 @@ export class DextCodeEditor {
         }
       }),
       keymap.of([
+        indentWithTab,
         { key: "Mod-c", run: () => { void this.copy(); return true; } },
         { key: "Mod-x", run: () => { void this.cut(); return true; } },
         { key: "Mod-v", run: () => { void this.paste(); return true; } },
@@ -275,6 +278,23 @@ export class DextCodeEditor {
       selection: { anchor: insertion.from + insertion.cursorOffset },
       scrollIntoView: true,
       userEvent: "input"
+    });
+    this.focus();
+  }
+
+  removeFileReference(payload: string): void {
+    const projection = inputReferenceProjections(this.source).find(
+      (candidate) => candidate.reference.payload === payload
+    );
+    if (!projection) return;
+    this.view.dispatch({
+      changes: {
+        from: projection.interpolationStart,
+        to: projection.interpolationEnd
+      },
+      selection: { anchor: projection.interpolationStart },
+      scrollIntoView: true,
+      userEvent: "delete"
     });
     this.focus();
   }

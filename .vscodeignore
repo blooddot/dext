@@ -7,8 +7,10 @@ test/**
 scripts/**
 dist/extensionHostTest.js
 node_modules/**
-*.map
+**/*.map
 *.ts
 esbuild.mjs
 eslint.config.mjs
 vitest.config.mjs
+tsconfig.json
+.gitignore

@@ -163,6 +163,22 @@ describe("Dext history rendering", () => {
     expect(html).toContain(token);
   });
 
+  it("renders image attachments as ordinary file reference Chips", () => {
+    const path = ".dext/attachments/0123456789abcdef01234567.png";
+    const record: DextHistoryRecord = {
+      id: "image-reference",
+      createdAt: 1,
+      input: `ask(input="Inspect @${path}")`,
+      process: [],
+      output: ""
+    };
+
+    const html = renderHistoryRecord(record);
+    expect(html).toContain("data-open-file-reference");
+    expect(html).toContain("0123456789abcdef01234567.png");
+    expect(html).not.toContain("data-open-image-attachment");
+  });
+
   it("groups continuous turns under one collapsible conversation", () => {
     const turns: DextHistoryRecord[] = ["first", "second"].map((text, index) => ({
       id: String(index),

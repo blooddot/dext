@@ -23,8 +23,8 @@ describe("Dext Python workflow compiler", () => {
   });
 
   it("accepts skills, MCP, and UI under their public namespaces", () => {
-    const result = compile(`skill = skill(skill="dev-feat", input="implement", workspace=ref.dir("client"))
-data = mcp(tool="docs.read", input={"uri": "README.md", "options": {"tags": ["guide", "api"]}, "file": ref.file("README.md")})
+    const result = compile(`skill = skill(skill="dev-feat", input="implement", workspace="@client")
+data = mcp(tool="docs.read", input={"uri": "README.md", "options": {"tags": ["guide", "api"]}, "file": "@README.md"})
 choice = ui.choose(label="Pick", options=["one", "two"])`);
     expect(result.diagnostics).toEqual([]);
   });
@@ -62,5 +62,19 @@ choice = ui.choose(label="Pick", options=["one", "two"])`);
     expect(compile("ask(input=1)").diagnostics.map((item) => item.message).join("\n")).toContain("expects string");
     expect(compile("agent(apply=False)").diagnostics.map((item) => item.message).join("\n")).toContain("Missing required argument 'input'");
     expect(compile("terminal(command=1)").diagnostics.map((item) => item.message).join("\n")).toContain("expects string");
+  });
+
+  it("supports literal variable declarations and reuses them as arguments", () => {
+    expect(compile('prompt = "Explain the selected code"\nagent(input=prompt)').diagnostics).toEqual([]);
+    expect(compile('prompt: str = "Explain"\nagent(input=prompt)').diagnostics).toEqual([]);
+  });
+
+  it("supports list and dict literal variables", () => {
+    expect(compile('tags = ["a", "b"]\nopts = {"x": 1}').diagnostics).toEqual([]);
+  });
+
+  it("rejects mismatched literal variable type annotations", () => {
+    expect(compile('prompt: int = "hello"').diagnostics.map((item) => item.message).join("\n"))
+      .toContain("declared as number but assigned string");
   });
 });

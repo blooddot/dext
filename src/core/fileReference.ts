@@ -43,17 +43,6 @@ interface LegacyMarker {
   payload: string;
 }
 
-function quotedStringEnd(source: string, start: number, quote: string): number | undefined {
-  let escaped = false;
-  for (let offset = start; offset < source.length; offset += 1) {
-    const character = source[offset];
-    if (escaped) escaped = false;
-    else if (character === "\\") escaped = true;
-    else if (source.startsWith(quote, offset)) return offset;
-  }
-  return undefined;
-}
-
 function decodeReferenceString(value: string): string | undefined {
   let decoded = "";
   let escaped = false;
@@ -69,41 +58,6 @@ function decodeReferenceString(value: string): string | undefined {
     escaped = false;
   }
   return escaped ? undefined : decoded;
-}
-
-export function contextReferenceOccurrences(source: string): ContextReferenceOccurrence[] {
-  const occurrences: ContextReferenceOccurrence[] = [];
-  const prefix = /ref\.(file|dir|symbol)\s*\(\s*(['"])/g;
-  for (const match of source.matchAll(prefix)) {
-    const start = match.index ?? 0;
-    const payloadStart = start + match[0].length;
-    const quoteEnd = quotedStringEnd(source, payloadStart, match[2]!);
-    if (quoteEnd === undefined) continue;
-    const close = /^\s*\)/.exec(source.slice(quoteEnd + 1));
-    if (!close) continue;
-    const payload = decodeReferenceString(source.slice(payloadStart, quoteEnd));
-    if (!payload) continue;
-    const end = quoteEnd + 1 + close[0].length;
-    occurrences.push({
-      kind: match[1]! as ContextReferenceOccurrence["kind"],
-      start,
-      end,
-      expression: source.slice(start, end),
-      payload
-    });
-  }
-  return occurrences;
-}
-
-export function fileReferenceOccurrences(source: string): FileReferenceOccurrence[] {
-  return contextReferenceOccurrences(source)
-    .filter((reference) => reference.kind === "file" || reference.kind === "dir")
-    .map((reference) => ({
-      start: reference.start,
-      end: reference.end,
-      expression: reference.expression,
-      payload: reference.payload
-    }));
 }
 
 function comparePositions(left: Range["start"], right: Range["start"]): number {
@@ -275,22 +229,16 @@ export function formatDextFileReference(relativePath: string, range: Range): Dex
   const normalizedPath = relativePath.replaceAll("\\", "/");
   const fragment = `#L${range.start.line + 1},${range.start.character + 1}`
     + `-L${range.end.line + 1},${range.end.character + 1}`;
-  const payload = `${normalizedPath}${fragment}`
-    .replaceAll("\\", "\\\\")
-    .replaceAll('"', '\\"');
-  return { payload, expression: `ref.file("${payload}")` };
+  const payload = `${normalizedPath}${fragment}`;
+  return { payload, expression: `@${payload}` };
 }
 
 export function formatDextFilePathReference(relativePath: string): DextFileReference {
-  const payload = relativePath.replaceAll("\\", "/")
-    .replaceAll("\\", "\\\\")
-    .replaceAll('"', '\\"');
-  return { payload, expression: `ref.file("${payload}")` };
+  const payload = relativePath.replaceAll("\\", "/");
+  return { payload, expression: `@${payload}` };
 }
 
 export function formatDextDirectoryReference(relativePath: string): DextFileReference {
-  const payload = relativePath.replaceAll("\\", "/")
-    .replaceAll("\\", "\\\\")
-    .replaceAll('"', '\\"');
-  return { payload, expression: `ref.dir("${payload}")` };
+  const payload = relativePath.replaceAll("\\", "/");
+  return { payload, expression: `@${payload}/` };
 }

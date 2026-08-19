@@ -38,7 +38,14 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
     ])).max(8)
   }),
   z.object({ type: z.literal("chooseFiles") }),
+  z.object({
+    type: z.literal("pasteImage"),
+    data: z.string().min(1),
+    mimeType: z.string().min(1)
+  }),
+  z.object({ type: z.literal("deleteImageAttachment"), relativePath: z.string().min(1) }),
   z.object({ type: z.literal("reload") }),
+  z.object({ type: z.literal("debugLog"), message: z.string() }),
   z.object({ type: z.literal("viewHistory") }),
   z.object({ type: z.literal("clearOutput") }),
   z.object({
@@ -69,14 +76,14 @@ export interface SidebarState {
 export type WebviewResponse =
   | { type: "state"; state: SidebarState }
   | {
-      type: "language";
-      requestId: number;
-      completions: CompletionItem[];
-      diagnostics: LanguageDiagnostic[];
-      inputKind: "empty" | "workflow" | "invalid";
-      signature?: SignatureHelp;
-      hover?: LanguageHover;
-    }
+    type: "language";
+    requestId: number;
+    completions: CompletionItem[];
+    diagnostics: LanguageDiagnostic[];
+    inputKind: "empty" | "workflow" | "invalid";
+    signature?: SignatureHelp;
+    hover?: LanguageHover;
+  }
   | { type: "outputSession"; session: DextHistorySession }
   | { type: "execution"; turnId: string; response: InputExecutionResponse }
   | { type: "executionFailed"; turnId: string; message: string }
@@ -84,15 +91,16 @@ export type WebviewResponse =
   | { type: "executing"; value: boolean; turnId: string; source?: string }
   | { type: "inputKind"; kind: "empty" | "workflow" | "invalid" }
   | { type: "insertFileReferences"; expressions: string[] }
+  | { type: "imageAttachment"; relativePath: string; webviewUri: string; name: string }
   | { type: "clipboardWriteResult"; requestId: number; success: boolean }
   | {
-      type: "clipboardReadResult";
-      requestId: number;
-      success: boolean;
-      text: string;
-      contextAttached: boolean;
-      codeReference?: { expression: string; payload: string };
-    }
+    type: "clipboardReadResult";
+    requestId: number;
+    success: boolean;
+    text: string;
+    contextAttached: boolean;
+    codeReference?: { expression: string; payload: string };
+  }
   | { type: "focusInput" }
   | { type: "triggerSuggest" }
   | { type: "triggerParameterHints" }

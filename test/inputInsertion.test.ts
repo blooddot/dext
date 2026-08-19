@@ -19,7 +19,7 @@ describe("@ reference insertion", () => {
   it("stores a dragged input reference as a readable @ token", () => {
     const source = 'agent(input="Implement this: ")';
     const cursor = source.indexOf('"', source.indexOf("input")) + 1 + "Implement this: ".length;
-    const edit = coreInputReferenceInsertion(source, cursor, cursor, ['ref.file("docs/drag-drop.md")']);
+    const edit = coreInputReferenceInsertion(source, cursor, cursor, ['@docs/drag-drop.md']);
     expect(edit?.text).toMatch(/^"Implement this: /);
     expect(edit?.text).not.toContain('f"');
     expect(edit?.text).not.toContain("ref.file(");
@@ -31,7 +31,7 @@ describe("@ reference insertion", () => {
 
   it("uses the semantic input when a drop has no reliable CodeMirror position", () => {
     const source = 'agent(input="Explain this code")';
-    const edit = fileReferenceInsertion(source, 0, 0, ['ref.file("src/pathx.py#L55,1-L66,32")']);
+    const edit = fileReferenceInsertion(source, 0, 0, ['@src/pathx.py#L55,1-L66,32']);
     const finalSource = `${source.slice(0, edit.from)}${edit.text}${source.slice(edit.to)}`;
     expect(finalSource).toMatch(/^agent\(input="Explain this code /);
     expect(finalSource).not.toContain('f"');
@@ -41,7 +41,7 @@ describe("@ reference insertion", () => {
   });
 
   it("creates a normal quoted input for an unfinished ask/agent call", () => {
-    const edit = coreInputReferenceInsertion("ask(input=)", 10, 10, ['ref.file("a.ts")']);
+    const edit = coreInputReferenceInsertion("ask(input=)", 10, 10, ['@a.ts']);
     expect(edit?.text).toMatch(/^"/);
     expect(edit?.text).not.toContain('f"');
     expect(inputReferenceProjections(edit?.text ?? "")[0]?.reference.payload).toBe("a.ts");

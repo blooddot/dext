@@ -87,11 +87,11 @@ export type WorkflowExpression =
   | { kind: "member"; object: WorkflowExpression; property: string; from: number; to: number }
   | { kind: "call"; call: WorkflowCall; from: number; to: number }
   | {
-      kind: "format";
-      parts: ({ kind: "text"; text: string } | { kind: "expression"; expression: WorkflowExpression })[];
-      from: number;
-      to: number;
-    };
+    kind: "format";
+    parts: ({ kind: "text"; text: string } | { kind: "expression"; expression: WorkflowExpression })[];
+    from: number;
+    to: number;
+  };
 
 
 export interface WorkflowCall {
@@ -104,31 +104,31 @@ export interface WorkflowCall {
 
 export type WorkflowCondition =
   | {
-      kind: "comparison";
-      operator: "==" | "!=";
-      left: WorkflowExpression;
-      right: WorkflowExpression;
-      from: number;
-      to: number;
-    }
+    kind: "comparison";
+    operator: "==" | "!=";
+    left: WorkflowExpression;
+    right: WorkflowExpression;
+    from: number;
+    to: number;
+  }
   | { kind: "boolean"; value: WorkflowExpression; from: number; to: number };
 
 export type WorkflowStatement =
   | {
-      kind: "step";
-      assignment?: string;
-      call: WorkflowCall;
-      from: number;
-      to: number;
-    }
+    kind: "step";
+    assignment?: string;
+    call: WorkflowCall;
+    from: number;
+    to: number;
+  }
   | {
-      kind: "if";
-      condition: WorkflowCondition;
-      consequent: WorkflowStatement[];
-      alternate: WorkflowStatement[];
-      from: number;
-      to: number;
-    };
+    kind: "if";
+    condition: WorkflowCondition;
+    consequent: WorkflowStatement[];
+    alternate: WorkflowStatement[];
+    from: number;
+    to: number;
+  };
 
 export interface WorkflowProgram {
   kind: "workflow";

@@ -53,6 +53,8 @@ export interface WorkflowCompileOptions {
 interface EnvironmentEntry {
   type: ValueType;
   from: number;
+  /** 字面量变量的值表达式，用于在引用处内联展开。 */
+  value?: WorkflowExpression;
 }
 
 const RESULT_TYPES: Readonly<Record<string, ValueType>> = {
@@ -108,6 +110,28 @@ const RESULT_TYPES: Readonly<Record<string, ValueType>> = {
 
 function result(name: string, fields: Readonly<Record<string, ValueType>>): ValueType {
   return { kind: "result", name, fields };
+}
+
+/** 把变量类型注解（如 ": str"、": list[str]"）解析为编译期 ValueType。 */
+function parseValueType(raw: string): ValueType | undefined {
+  const normalized = raw.replace(/^\s*:\s*/, "").replace(/\s+/g, "");
+  if (/^(str|string)$/i.test(normalized)) return { kind: "string" };
+  if (/^(int|float|number)$/i.test(normalized)) return { kind: "number" };
+  if (/^(bool|boolean)$/i.test(normalized)) return { kind: "boolean" };
+  if (/^(object|dict\[str,(object|Any|unknown)\])$/i.test(normalized)) return { kind: "object" };
+  const list = /^list\[(.+)\]$/i.exec(normalized);
+  if (list) {
+    const item = parseValueType(list[1]!);
+    return item ? { kind: "list", item } : undefined;
+  }
+  return undefined;
+}
+
+/** 检查声明类型与字面量推断类型是否一致（list 递归比较元素）。 */
+function typesMatch(declared: ValueType, actual: ValueType): boolean {
+  if (declared.kind === "unknown" || actual.kind === "unknown") return true;
+  if (declared.kind === "list" && actual.kind === "list") return typesMatch(declared.item, actual.item);
+  return declared.kind === actual.kind;
 }
 
 function children(node: SyntaxNode): SyntaxNode[] {
@@ -241,9 +265,8 @@ class Compiler {
   private compileAssignment(node: SyntaxNode): WorkflowStatement | undefined {
     const parts = namedChildren(node);
     const variable = parts.find((child) => child.name === "VariableName");
-    const callNode = parts.find((child) => child.name === "CallExpression");
-    if (!variable || !callNode) {
-      this.error("Assignments must bind the result of a Dext API call.", node.from, node.to);
+    if (!variable) {
+      this.error("Assignments must name a variable.", node.from, node.to);
       return undefined;
     }
     const name = text(this.source, variable);
@@ -251,10 +274,42 @@ class Compiler {
       this.error(`Variable '${name}' cannot be reassigned.`, variable.from, variable.to);
       return undefined;
     }
-    const compiled = this.compileCall(callNode, false);
+    const callNode = parts.find((child) => child.name === "CallExpression");
+    if (callNode) {
+      const compiled = this.compileCall(callNode);
+      if (!compiled) return undefined;
+      this.environment.set(name, { type: compiled.type, from: variable.from });
+      return { kind: "step", assignment: name, call: compiled.call, from: node.from, to: node.to };
+    }
+    const valueNode = parts.find((child) =>
+      ["String", "Number", "Boolean", "ArrayExpression", "DictionaryExpression"].includes(child.name)
+    );
+    if (!valueNode) {
+      this.error("Assignments must bind the result of a Dext API call or a literal value.", node.from, node.to);
+      return undefined;
+    }
+    const compiled = this.compileExpression(valueNode);
     if (!compiled) return undefined;
-    this.environment.set(name, { type: compiled.type, from: variable.from });
-    return { kind: "step", assignment: name, call: compiled.call, from: node.from, to: node.to };
+    const typeDef = parts.find((child) => child.name === "TypeDef");
+    let type = compiled.type;
+    if (typeDef) {
+      const declared = parseValueType(text(this.source, typeDef));
+      if (!declared) {
+        this.error(`Unsupported variable type annotation '${text(this.source, typeDef)}'.`, typeDef.from, typeDef.to);
+        return undefined;
+      }
+      if (!typesMatch(declared, compiled.type)) {
+        this.error(
+          `Variable '${name}' is declared as ${typeName(declared)} but assigned ${typeName(compiled.type)}.`,
+          node.from,
+          node.to
+        );
+        return undefined;
+      }
+      type = declared;
+    }
+    this.environment.set(name, { type, from: variable.from, value: compiled.expression });
+    return undefined;
   }
 
   private compileExpressionStatement(node: SyntaxNode): WorkflowStatement | undefined {
@@ -263,7 +318,7 @@ class Compiler {
       this.error("Only Dext API calls may be used as expression statements.", node.from, node.to);
       return undefined;
     }
-    const compiled = this.compileCall(callNode, false);
+    const compiled = this.compileCall(callNode);
     return compiled
       ? { kind: "step", call: compiled.call, from: node.from, to: node.to }
       : undefined;
@@ -342,7 +397,7 @@ class Compiler {
     return { kind: "boolean", value: value.expression, from: node.from, to: node.to };
   }
 
-  private compileCall(node: SyntaxNode, referenceOnly: boolean): { call: WorkflowCall; type: ValueType } | undefined {
+  private compileCall(node: SyntaxNode): { call: WorkflowCall; type: ValueType } | undefined {
     const parts = namedChildren(node);
     const callee = parts[0];
     const args = parts.find((child) => child.name === "ArgList");
@@ -350,10 +405,6 @@ class Compiler {
     const method = rawMethod ? resolveAlias(rawMethod, this.options.aliases) : undefined;
     if (!method || !args) {
       this.error("Invalid API call.", node.from, node.to);
-      return undefined;
-    }
-    if (method === "ref.file" || method === "ref.symbol" || method === "ref.dir") {
-      if (!referenceOnly) this.error("Reference constructors are values, not workflow steps.", node.from, node.to);
       return undefined;
     }
     const definition = this.registry.get(method);
@@ -397,10 +448,11 @@ class Compiler {
       seen.add(name);
       const compiled = this.compileExpression(valueNode);
       if (compiled) {
-        if (!matchesField(compiled.type, field)) {
-          this.error(`Argument '${name}' expects ${fieldTypeName(field)}, not ${typeName(compiled.type)}.`, valueNode.from, valueNode.to);
+        const coerced = this.coerceContextValue(compiled, field);
+        if (!matchesField(coerced.type, field)) {
+          this.error(`Argument '${name}' expects ${fieldTypeName(field)}, not ${typeName(coerced.type)}.`, valueNode.from, valueNode.to);
         }
-        values.push({ name, value: compiled.expression, from: nameNode.from, to: valueNode.to });
+        values.push({ name, value: coerced.expression, from: nameNode.from, to: valueNode.to });
       }
       index += 2;
     }
@@ -415,6 +467,81 @@ class Compiler {
     );
     if (positional.length) this.error("Dext API calls require keyword arguments.", positional[0]!.from, positional[0]!.to);
     return values;
+  }
+
+  private coerceContextValue(
+    compiled: { expression: WorkflowExpression; type: ValueType },
+    field: FieldDefinition
+  ): { expression: WorkflowExpression; type: ValueType } {
+    if (field.multiple) {
+      if (compiled.expression.kind !== "list") return compiled;
+      const itemTarget = field.type === "context" || field.type === "dir" ? field.type : undefined;
+      if (!itemTarget) return compiled;
+      const values = compiled.expression.values.map((entry) =>
+        entry.kind === "literal" && typeof entry.value === "string"
+          ? this.referenceExpression(entry.value, itemTarget, entry.from, entry.to)
+          : entry
+      );
+      return {
+        expression: { ...compiled.expression, values },
+        type: { kind: "list", item: { kind: itemTarget } }
+      };
+    }
+    if (field.type === "object" && compiled.expression.kind === "object") {
+      return {
+        expression: this.coerceReferenceTokens(compiled.expression),
+        type: compiled.type
+      };
+    }
+    if (field.type !== "context" && field.type !== "dir") return compiled;
+    if (compiled.expression.kind === "literal" && typeof compiled.expression.value === "string") {
+      return {
+        expression: this.referenceExpression(compiled.expression.value, field.type, compiled.expression.from, compiled.expression.to),
+        type: { kind: field.type }
+      };
+    }
+    return compiled;
+  }
+
+  /** Converts @token string literals nested inside object/list values into
+   * typed references so structured arguments (e.g. MCP input) keep resolving
+   * attachments the way the removed ref.* expressions did. */
+  private coerceReferenceTokens(expression: WorkflowExpression): WorkflowExpression {
+    if (expression.kind === "literal" && typeof expression.value === "string") {
+      const value = expression.value;
+      if (!value.startsWith("@")) return expression;
+      return this.referenceExpression(
+        value,
+        value.endsWith("/") ? "dir" : "context",
+        expression.from,
+        expression.to
+      );
+    }
+    if (expression.kind === "list") {
+      return {
+        ...expression,
+        values: expression.values.map((entry) => this.coerceReferenceTokens(entry))
+      };
+    }
+    if (expression.kind === "object") {
+      return {
+        ...expression,
+        entries: expression.entries.map((entry) => ({ ...entry, value: this.coerceReferenceTokens(entry.value) }))
+      };
+    }
+    return expression;
+  }
+
+  private referenceExpression(
+    value: string,
+    target: "context" | "dir",
+    from: number,
+    to: number
+  ): WorkflowExpression {
+    const reference: ContextReference | DirectoryReference = target === "dir"
+      ? { kind: "dir", path: value.replace(/^@/, "").replace(/\/+$/, "") }
+      : contextReferenceFromToken(value);
+    return { kind: "reference", reference, from, to };
   }
 
   private compileExpression(node: SyntaxNode): { expression: WorkflowExpression; type: ValueType } | undefined {
@@ -478,16 +605,12 @@ class Compiler {
         this.error(`Unknown variable '${name}'.`, node.from, node.to);
         return undefined;
       }
+      if (entry.value) {
+        return { expression: entry.value, type: entry.type };
+      }
       return { expression: { kind: "variable", name, from: node.from, to: node.to }, type: entry.type };
     }
     if (node.name === "MemberExpression") {
-      const path = memberPath(this.source, node);
-      if (path === "ref.selection" || path === "ref.active_file") {
-        const reference: ContextReference = path.endsWith("selection")
-          ? { kind: "selection" }
-          : { kind: "activeFile" };
-        return { expression: { kind: "reference", reference, from: node.from, to: node.to }, type: { kind: "context" } };
-      }
       const parts = namedChildren(node);
       const object = parts[0] ? this.compileExpression(parts[0]) : undefined;
       const property = parts[1] ? text(this.source, parts[1]) : "";
@@ -504,23 +627,6 @@ class Compiler {
     if (node.name === "CallExpression") {
       const path = memberPath(this.source, namedChildren(node)[0]!);
       const args = namedChildren(node).find((child) => child.name === "ArgList");
-      if ((path === "ref.file" || path === "ref.symbol" || path === "ref.dir") && args) {
-        const values = namedChildren(args);
-        if (values.length !== 1 || values[0]?.name !== "String") {
-          this.error(`${path} requires exactly one string argument.`, args.from, args.to);
-          return undefined;
-        }
-        const value = decodeString(text(this.source, values[0]));
-        const reference: ContextReference | DirectoryReference = path === "ref.file"
-          ? { kind: "file", path: value }
-          : path === "ref.symbol"
-            ? { kind: "symbol", name: value }
-            : { kind: "dir", path: value };
-        return {
-          expression: { kind: "reference", reference, from: node.from, to: node.to },
-          type: path === "ref.dir" ? { kind: "dir" } : { kind: "context" }
-        };
-      }
       if (this.options.allowNestedCalls && args) {
         const method = path ? resolveAlias(path, this.options.aliases) : undefined;
         const definition = method ? this.registry.get(method) : undefined;
@@ -544,7 +650,7 @@ class Compiler {
           type: outputType(definition)
         };
       }
-      this.error("Nested calls are limited to ref.file(...), ref.dir(...), and ref.symbol(...).", node.from, node.to);
+      this.error("Nested API calls are not allowed in this context.", node.from, node.to);
       return undefined;
     }
     this.error(`Expression '${node.name}' is not allowed in Dext workflows.`, node.from, node.to);
@@ -564,6 +670,13 @@ class Compiler {
 
   returnExpression: WorkflowExpression | undefined;
   returnType: ValueType | undefined;
+}
+
+function contextReferenceFromToken(value: string): ContextReference {
+  const token = value.startsWith("@") ? value.slice(1) : value;
+  if (token === "selection") return { kind: "selection" };
+  if (token === "active_file") return { kind: "activeFile" };
+  return { kind: "file", path: token };
 }
 
 function fieldType(field: FieldDefinition): ValueType {
