@@ -52,9 +52,13 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("deleteImageAttachment"), relativePath: z.string().min(1) }),
   z.object({ type: z.literal("reload") }),
   z.object({ type: z.literal("debugLog"), message: z.string() }),
-  z.object({ type: z.literal("viewHistory") }),
-  z.object({ type: z.literal("newConversation") }),
   z.object({ type: z.literal("selectConversation"), sessionId: z.string().min(1) }),
+  z.object({ type: z.literal("closeConversation"), sessionId: z.string().min(1) }),
+  z.object({
+    type: z.literal("pinConversation"),
+    sessionId: z.string().min(1),
+    pinned: z.boolean()
+  }),
   z.object({ type: z.literal("clearOutput") }),
   z.object({
     type: z.literal("agentSelection"),
@@ -76,6 +80,7 @@ export interface ConversationSummary {
   title: string;
   updatedAt: number;
   turnCount: number;
+  pinned: boolean;
 }
 
 export interface SidebarState {
@@ -102,6 +107,7 @@ export type WebviewResponse =
   }
   | { type: "outputSession"; session: DextHistorySession }
   | { type: "conversations"; sessions: ConversationSummary[]; activeId: string }
+  | { type: "openMethods" }
   | { type: "execution"; turnId: string; response: InputExecutionResponse }
   | { type: "executionFailed"; turnId: string; message: string }
   | { type: "agentEvent"; event: AgentStreamEvent }
@@ -118,6 +124,7 @@ export type WebviewResponse =
     contextAttached: boolean;
     codeReference?: { expression: string; payload: string };
   }
+  | { type: "setInput"; source: string }
   | { type: "focusInput" }
   | { type: "triggerSuggest" }
   | { type: "triggerParameterHints" }

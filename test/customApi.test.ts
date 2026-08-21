@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { BUILTIN_METHODS } from "../src/core/builtins.js";
 import { loadCustomApis } from "../src/core/customApi.js";
@@ -14,6 +13,48 @@ const files = new Map([
   ["C:/workspace/.dext/api/team/review.dx", `import team.explain as describe\n\ndef main(input: str) -> ChatResult:\n    return describe(input=input)\n`],
   ["C:/workspace/.dext/api/team/namespace.dx", `import team\n\ndef main(input: str) -> ChatResult:\n    return team.explain(input=input)\n`]
 ]);
+
+// A workspace defines its own multi-phase APIs; this fixture stands in for one
+// so the tests never depend on API files living in this repository.
+const workflowFiles = new Map([
+  ["C:/workspace/.dext/api/workflow/feature.dx", `def main(input: str, mcp_tool: str = "", mcp_input: dict[str, object] = {}, apply: bool = True) -> AgentResult:
+    if mcp_tool != "":
+        source = mcp(tool=mcp_tool, input=mcp_input)
+        context = agent(input=source.content, apply=False)
+    else:
+        context = agent(input=input, apply=False)
+    plan = agent(input=context.text, apply=False)
+    plan_confirmation = ui.confirm(
+        message=plan.text,
+        confirm_label="Implement",
+        cancel_label="Keep the plan"
+    )
+    if plan_confirmation.confirmed == True:
+        implementation = agent(input=plan.text, apply=apply)
+        implementation_confirmation = ui.confirm(
+            message=implementation.text,
+            confirm_label="Validate",
+            cancel_label="Keep the changes"
+        )
+        if implementation_confirmation.confirmed == True:
+            final = agent(input=implementation.text, apply=False)
+        else:
+            final = implementation
+    else:
+        final = plan
+    return final
+`]
+]);
+
+async function loadWorkflow(registry: MethodRegistry) {
+  return loadCustomApis(
+    true,
+    ["C:/workspace/.dext/api"],
+    async () => [...workflowFiles.keys()],
+    async (path) => workflowFiles.get(path),
+    registry
+  );
+}
 
 const host: ContextHost = {
   selection: async () => ({ uri: "file:///selection.ts", content: "const x = 1;", version: 1 }),
@@ -184,46 +225,20 @@ def main(input: dict[str, object]) -> DocumentResult:
     ]);
   });
 
-  it("discovers only the three project-level development APIs", async () => {
-    const apiRoot = join(process.cwd(), ".dext", "api");
-    const entries = await readdir(apiRoot, { recursive: true, withFileTypes: true });
-    const apiPaths = entries
-      .filter((entry) => entry.isFile() && entry.name.endsWith(".dx"))
-      .map((entry) => join(entry.parentPath, entry.name));
+  it("namespaces a nested workspace API and keeps its original source", async () => {
     const registry = new MethodRegistry();
     registry.registerMany(BUILTIN_METHODS, "builtin");
-    const loaded = await loadCustomApis(
-      true,
-      [apiRoot],
-      async () => apiPaths,
-      async (path) => readFile(path, "utf8"),
-      registry
-    );
+    const loaded = await loadWorkflow(registry);
     expect(loaded.diagnostics).toEqual([]);
-    expect([...loaded.plans.keys()].sort()).toEqual(["dev.feat", "dev.fix", "dev.plan"]);
-    expect(loaded.files.find((file) => file.id === "dev.feat")?.source)
-      .toContain('rules=["dev/feat.md", "dev/feat/read_context.md"]');
-    expect(loaded.files.find((file) => file.id === "dev.fix")?.source)
-      .toContain('rules=["dev/fix.md", "dev/fix/parse.md"]');
-    expect(loaded.files.find((file) => file.id === "dev.plan")?.source)
-      .toContain('rules=["dev/plan.md", "dev/plan/detect.md"]');
+    expect([...loaded.plans.keys()]).toEqual(["workflow.feature"]);
+    expect(loaded.files.find((file) => file.id === "workflow.feature")?.source)
+      .toContain("plan_confirmation = ui.confirm(");
   });
 
-  it("orchestrates dev.feat directly through Agent and ui.confirm", async () => {
-    const apiRoot = join(process.cwd(), ".dext", "api");
-    const entries = await readdir(apiRoot, { recursive: true, withFileTypes: true });
-    const paths = entries
-      .filter((entry) => entry.isFile() && entry.name.endsWith(".dx"))
-      .map((entry) => join(entry.parentPath, entry.name));
+  it("orchestrates a multi-phase API directly through Agent and ui.confirm", async () => {
     const registry = new MethodRegistry();
     registry.registerMany(BUILTIN_METHODS, "builtin");
-    const loaded = await loadCustomApis(
-      true,
-      [apiRoot],
-      async () => paths,
-      async (path) => readFile(path, "utf8"),
-      registry
-    );
+    const loaded = await loadWorkflow(registry);
     const runtime = new DextRuntime(registry, new ContextResolver(host));
     runtime.setWorkspaceTrusted(true);
     runtime.setCustomPlans(loaded.plans);
@@ -251,7 +266,7 @@ def main(input: dict[str, object]) -> DocumentResult:
     };
     const response = await runtime.execute({
       kind: "invocation",
-      method: "dev.feat",
+      method: "workflow.feature",
       source: "code",
       arguments: [{ name: "input", value: "implement T1" }]
     }, [], { ui });
@@ -260,21 +275,10 @@ def main(input: dict[str, object]) -> DocumentResult:
     expect(confirmations).toEqual(["confirmed implementation plan", "implemented changes"]);
   });
 
-  it("executes MCP before the dev.feat context phase when configured", async () => {
-    const apiRoot = join(process.cwd(), ".dext", "api");
-    const entries = await readdir(apiRoot, { recursive: true, withFileTypes: true });
-    const paths = entries
-      .filter((entry) => entry.isFile() && entry.name.endsWith(".dx"))
-      .map((entry) => join(entry.parentPath, entry.name));
+  it("executes MCP before the first context phase when configured", async () => {
     const registry = new MethodRegistry();
     registry.registerMany(BUILTIN_METHODS, "builtin");
-    const loaded = await loadCustomApis(
-      true,
-      [apiRoot],
-      async () => paths,
-      async (path) => readFile(path, "utf8"),
-      registry
-    );
+    const loaded = await loadWorkflow(registry);
     const runtime = new DextRuntime(registry, new ContextResolver(host));
     runtime.setWorkspaceTrusted(true);
     runtime.setCustomPlans(loaded.plans);
@@ -302,7 +306,7 @@ def main(input: dict[str, object]) -> DocumentResult:
     };
     await runtime.execute({
       kind: "invocation",
-      method: "dev.feat",
+      method: "workflow.feature",
       source: "code",
       arguments: [
         { name: "input", value: "ignored local input" },

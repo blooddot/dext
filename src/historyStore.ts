@@ -74,6 +74,28 @@ export class DextHistoryStore {
     return normalizeSessions(stored);
   }
 
+  async remove(sessionId: string): Promise<void> {
+    const sessions = this.list().filter((session) => session.id !== sessionId);
+    await this.state.update(HISTORY_KEY, sessions);
+  }
+
+  // A fork copies turns into a conversation of its own so that continuing it
+  // never appends to the conversation it came from.
+  async fork(turns: readonly DextHistoryRecord[]): Promise<DextHistorySession> {
+    const createdAt = Date.now();
+    const session: DextHistorySession = {
+      id: `fork-${createdAt}-${Math.random().toString(36).slice(2, 8)}`,
+      createdAt,
+      updatedAt: createdAt,
+      turns: turns.map((turn, index) => ({
+        ...turn,
+        id: `${createdAt}-${index}-${Math.random().toString(36).slice(2, 8)}`
+      }))
+    };
+    await this.state.update(HISTORY_KEY, trimSessions([...this.list(), session]));
+    return session;
+  }
+
   async addSuccess(
     input: string,
     process: readonly AgentStreamEvent[],

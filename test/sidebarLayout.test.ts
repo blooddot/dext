@@ -7,11 +7,14 @@ async function source(path: string): Promise<string> {
 }
 
 describe("sidebar panel layout", () => {
-  it("keeps API out of the main flow and exposes it from the top toolbar", async () => {
+  it("keeps API out of the main flow and exposes it from the view title bar", async () => {
     const html = await source("src/sidebarProvider.ts");
+    const manifest = await source("package.json");
     expect(html).toContain('<section id="input-section" class="input-section">');
     expect(html).toContain('id="input-heading" class="section-heading collapsible-heading" role="button" tabindex="0" aria-expanded="true"');
-    expect(html).toContain('id="view-methods"');
+    expect(html).not.toContain('id="view-methods"');
+    expect(manifest).toContain('"command": "dext.viewApis"');
+    expect(html).toContain('viewApis(): void {\n    this.postWhenReady({ type: "openMethods" });');
     expect(html).toContain('<dialog id="methods-dialog" class="methods-dialog"');
     expect(html).toContain('id="close-methods"');
     expect(html).not.toContain('id="methods-section"');
@@ -55,16 +58,58 @@ describe("sidebar panel layout", () => {
     expect(css).not.toContain('.input-section[data-mode="code"] .composer-menu:has(#agent-control)');
   });
 
-  it("provides a top conversation switcher and keeps input errors out of Output", async () => {
+  it("switches conversations through editor-style tabs and keeps input errors out of Output", async () => {
     const html = await source("src/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
-    expect(html).toContain('id="conversation-control"');
-    expect(html).toContain('id="conversation-menu"');
-    expect(html).toContain('id="new-conversation"');
+    const manifest = await source("package.json");
+    const css = await source("media/styles.css");
+    // The old two-row header is gone: the toolbar lives in VS Code's view
+    // title bar and the only webview chrome left is the tab strip.
+    expect(html).not.toContain('class="chat-header"');
+    expect(css).not.toContain(".chat-header");
+    expect(html).toContain('<nav id="conversation-tabs" class="conversation-tabs" role="tablist"');
+    expect(css).toMatch(/^\.app-shell \{[\s\S]*?flex-direction: column;/m);
+    expect(css).toMatch(/^main \{\n {2}flex: 1 1 auto;/m);
+    expect(css).toMatch(/\.conversation-tab \{[\s\S]*?max-width: 190px;[\s\S]*?\}/);
+    expect(main).toMatch(/function renderConversations[\s\S]*?conversation-tab-label[\s\S]*?conversation-tab-close/);
+    expect(main).toMatch(/function selectConversation[\s\S]*?type: "selectConversation"/);
+    expect(main).toMatch(/function closeConversation[\s\S]*?type: "closeConversation"/);
+    expect(manifest).toContain('"command": "dext.newConversation"');
+    expect(html).toMatch(/async openConversation\(session: DextHistorySession\)[\s\S]*?activateConversation\(existing\)/);
     expect(html).toContain('id="input-error" class="input-error"');
     expect(main).toMatch(/function renderInputError[\s\S]*elements\.inputError\.hidden = false/);
     expect(main).toMatch(/message\.type === "error"[\s\S]*renderInputError\(message\.message\)/);
     expect(main).not.toContain("Code mode only");
+  });
+
+  it("closes a conversation tab without dropping the conversation from history", async () => {
+    const sidebar = await source("src/sidebarProvider.ts");
+    const close = sidebar.slice(
+      sidebar.indexOf("private async closeConversation"),
+      sidebar.indexOf("constructor(")
+    );
+    expect(sidebar).toContain("private openConversations: string[]");
+    expect(close).toContain("this.openConversations = this.openConversations.filter((id) => id !== sessionId)");
+    expect(close).toContain("const neighbour = remaining[index] ?? remaining[index - 1]");
+    // The session store backs history, so closing a tab must never touch it.
+    expect(close).not.toContain("this.sessions.delete");
+    expect(sidebar).toMatch(/type: "conversations",[\s\S]*?this\.orderedConversations\(\)\.flatMap/);
+  });
+
+  it("pins a conversation tab to the front of the strip and back onto the next reload", async () => {
+    const sidebar = await source("src/sidebarProvider.ts");
+    const main = await source("src/webview/main.ts");
+    const css = await source("media/styles.css");
+    expect(sidebar).toMatch(/private orderedConversations\(\): string\[\][\s\S]*?this\.preferences\.pinned\(\)\.filter\(\(id\) => this\.openConversations\.includes\(id\)\)/);
+    // Only pinned conversations survive a reload; the rest start from the last
+    // conversation that was worked on.
+    expect(sidebar).toMatch(/hydrateSessions\(\): void \{[\s\S]*?const pinned = this\.preferences\.pinned\(\)\.filter\(\(id\) => this\.sessions\.has\(id\)\);[\s\S]*?new Set\(\[\.\.\.pinned, this\.activeSession\.id\]\)/);
+    // Closing is an explicit dismissal, so it releases the pin as well.
+    expect(sidebar).toMatch(/private async closeConversation[\s\S]*?if \(this\.preferences\.isPinned\(sessionId\)\) await this\.preferences\.setPinned\(sessionId, false\)/);
+    expect(main).toMatch(/tab\.dataset\.vscodeContext = JSON\.stringify\(\{[\s\S]*?webviewSection: "conversationTab"[\s\S]*?dextTabPinned: conversation\.pinned/);
+    expect(main).toMatch(/conversation\.pinned \? "conversation-tab-pin" : "conversation-tab-close"/);
+    expect(main).toMatch(/function pinConversation[\s\S]*?type: "pinConversation"/);
+    expect(css).toMatch(/\.conversation-tab\.pinned \{[\s\S]*?max-width: 128px;/);
   });
 
   it("renders text output through a safe Markdown surface with code token styles", async () => {
@@ -186,10 +231,14 @@ describe("sidebar panel layout", () => {
   });
 
   it("opens the complete API list in a dialog and keeps method insertion intact", async () => {
+    const html = await source("src/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
     const css = await source("media/styles.css");
     expect(main).toMatch(/function openMethodsDialog[\s\S]*?methodsDialog\.showModal\(\)/);
     expect(main).toMatch(/function closeMethodsDialog[\s\S]*?methodsDialog\.close\(\)/);
+    expect(html).toContain('id="reload-methods"');
+    expect(main).toMatch(/elements\.reloadMethods\.addEventListener\("click"[\s\S]*?type: "reload"/);
+    expect(main).toMatch(/function setMethodsReloading[\s\S]*?codicon-modifier-spin/);
     expect(main).toMatch(/row\.addEventListener\("click", \(\) => \{[\s\S]*?editor\.insertInvocation[\s\S]*?closeMethodsDialog\(\)/);
     expect(css).toContain('.methods-dialog {');
     expect(css).toContain('.methods-dialog-body {');

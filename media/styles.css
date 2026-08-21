@@ -26,22 +26,115 @@ body {
   position: relative;
   width: 100%;
   height: 100%;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
 
-.chat-header {
-  height: 40px;
-  padding: 6px 8px 4px;
+.conversation-tabs {
+  flex: 0 0 auto;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  border-bottom: 1px solid var(--vscode-sideBar-border, var(--vscode-widget-border));
+  align-items: stretch;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  background: var(--vscode-editorGroupHeader-tabsBackground, var(--vscode-sideBar-background));
+  border-bottom: 1px solid var(--vscode-editorGroupHeader-tabsBorder, var(--vscode-sideBar-border, var(--vscode-widget-border)));
 }
 
-.chat-header-actions {
+.conversation-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.conversation-tabs[hidden] {
+  display: none;
+}
+
+.conversation-tab {
+  flex: 0 0 auto;
+  max-width: 190px;
+  min-width: 0;
+  height: 32px;
+  padding: 0 4px 0 10px;
   display: flex;
   align-items: center;
   gap: 2px;
+  border-right: 1px solid var(--vscode-tab-border, var(--vscode-widget-border));
+  color: var(--vscode-tab-inactiveForeground, var(--vscode-descriptionForeground));
+  background: var(--vscode-tab-inactiveBackground, transparent);
+}
+
+.conversation-tab:hover {
+  background: var(--vscode-tab-hoverBackground, var(--vscode-list-hoverBackground));
+}
+
+.conversation-tab.active {
+  color: var(--vscode-tab-activeForeground, var(--vscode-foreground));
+  background: var(--vscode-tab-activeBackground, var(--vscode-editor-background));
+  box-shadow: inset 0 1px 0 0 var(--vscode-tab-activeBorderTop, var(--vscode-focusBorder));
+}
+
+.conversation-tab-label {
+  min-width: 0;
+  padding: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.conversation-tab-close,
+.conversation-tab-pin {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 4px;
+  color: inherit;
+  background: transparent;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.conversation-tab-close .codicon,
+.conversation-tab-pin .codicon {
+  font-size: 14px;
+}
+
+.conversation-tab.active .conversation-tab-close,
+.conversation-tab:hover .conversation-tab-close,
+.conversation-tab-close:focus-visible,
+.conversation-tab-pin {
+  opacity: 1;
+}
+
+.conversation-tab-close:hover,
+.conversation-tab-pin:hover {
+  background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground));
+}
+
+/* A pinned tab keeps its place at the head of the strip, so it only needs
+   enough width to stay recognizable. */
+.conversation-tab.pinned {
+  max-width: 128px;
+}
+
+.conversation-tabs.busy .conversation-tab {
+  opacity: 0.6;
+}
+
+.conversation-tabs.busy .conversation-tab-label,
+.conversation-tabs.busy .conversation-tab-close {
+  cursor: default;
 }
 
 .methods-dialog {
@@ -98,105 +191,6 @@ body {
   min-height: 0;
   padding: 6px 12px 14px;
   overflow: auto;
-}
-
-.conversation-menu {
-  position: relative;
-  min-width: 0;
-}
-
-.conversation-control {
-  max-width: min(320px, calc(100vw - 96px));
-  height: 28px;
-  padding: 0 8px;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  border: 0;
-  border-radius: 6px;
-  color: var(--vscode-foreground);
-  background: transparent;
-  font: inherit;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.conversation-control:hover,
-.conversation-control[aria-expanded="true"] {
-  background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground));
-}
-
-#conversation-control-value {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.conversation-control > .codicon {
-  flex: 0 0 auto;
-  color: var(--vscode-descriptionForeground);
-  font-size: 12px;
-}
-
-.conversation-popover {
-  position: absolute;
-  z-index: 30;
-  top: 32px;
-  left: 0;
-  width: min(320px, calc(100vw - 24px));
-  max-height: min(360px, calc(100vh - 56px));
-  padding: 4px;
-  overflow: auto;
-  border: 1px solid var(--vscode-menu-border, var(--vscode-widget-border));
-  border-radius: 7px;
-  color: var(--vscode-menu-foreground, var(--vscode-foreground));
-  background: var(--vscode-menu-background, var(--vscode-editorWidget-background));
-  box-shadow: 0 8px 24px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.35));
-}
-
-.conversation-popover[hidden] {
-  display: none;
-}
-
-.conversation-option {
-  width: 100%;
-  min-height: 42px;
-  padding: 6px 8px;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto 16px;
-  gap: 8px;
-  align-items: center;
-  border: 0;
-  border-radius: 4px;
-  color: inherit;
-  background: transparent;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.conversation-option:hover,
-.conversation-option.active {
-  background: var(--vscode-list-activeSelectionBackground, var(--vscode-list-hoverBackground));
-  color: var(--vscode-list-activeSelectionForeground, var(--vscode-foreground));
-}
-
-.conversation-option-title {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.conversation-option-meta,
-.conversation-empty {
-  color: var(--vscode-descriptionForeground);
-  font-size: 11px;
-}
-
-.conversation-empty {
-  padding: 10px 8px;
 }
 
 @media (min-width: 1200px) {
@@ -276,7 +270,7 @@ button.primary:focus-visible,
 }
 
 main {
-  height: calc(100% - 40px);
+  flex: 1 1 auto;
   min-height: 0;
   padding: 10px 10px 0;
   display: flex;
@@ -364,11 +358,23 @@ main {
   white-space: nowrap;
 }
 
+/* A name the user chose reads as the conversation's own, not as a preview of
+   its first message. */
+.history-summary-input.named {
+  color: var(--vscode-foreground);
+}
+
 .history-meta {
   margin-left: 4px;
   color: var(--vscode-descriptionForeground);
   font-size: 11px;
   white-space: nowrap;
+}
+
+.history-favorite {
+  flex: 0 0 auto;
+  font-size: 13px;
+  color: var(--vscode-charts-yellow, var(--vscode-notificationsWarningIcon-foreground, #cca700));
 }
 
 .history-session-body {

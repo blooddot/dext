@@ -22,6 +22,8 @@ import { openWorkspaceFileReference } from "./vscodeContextHost.js";
 import { webviewRequestSchema } from "./webviewProtocol.js";
 import type { ConversationSummary, WebviewResponse } from "./webviewProtocol.js";
 import type { DextHistorySession, DextHistoryStore } from "./historyStore.js";
+import type { DextConversationPreferences } from "./conversationPreferences.js";
+import { conversationTitle } from "./historyRender.js";
 import { normalizeInputReferenceSource } from "./core/fileReference.js";
 
 function outputSession(): DextHistorySession {
@@ -32,11 +34,6 @@ function outputSession(): DextHistorySession {
     updatedAt: now,
     turns: []
   };
-}
-
-function conversationTitle(session: DextHistorySession): string {
-  const first = session.turns[0]?.input.replace(/\s+/g, " ").trim();
-  return first ? first.slice(0, 72) : "New conversation";
 }
 
 function imageExtension(mimeType: string): string | undefined {
@@ -57,6 +54,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   private readonly attachments = new AttachmentStore();
   private activeSession = outputSession();
   private readonly sessions = new Map<string, DextHistorySession>();
+  // Conversations behave like editor tabs: the strip only shows the ones that
+  // are open, while every conversation stays reachable through history.
+  private openConversations: string[] = [this.activeSession.id];
   private sessionsHydrated = false;
   private running = false;
   private activeExecution: { turnId: string; controller: AbortController } | undefined;
@@ -69,32 +69,95 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     if (!this.sessions.has(this.activeSession.id)) this.sessions.set(this.activeSession.id, this.activeSession);
     const latest = [...this.sessions.values()].sort((a, b) => b.updatedAt - a.updatedAt)[0];
     if (latest) this.activeSession = latest;
+    // Pinning a conversation is what keeps its tab across reloads; everything
+    // else starts from the conversation that was last worked on.
+    const pinned = this.preferences.pinned().filter((id) => this.sessions.has(id));
+    this.openConversations = [...new Set([...pinned, this.activeSession.id])];
   }
 
-  private conversationSummaries(): ConversationSummary[] {
-    return [...this.sessions.values()]
-      .sort((a, b) => b.updatedAt - a.updatedAt)
-      .map((session) => ({
-        id: session.id,
-        title: conversationTitle(session),
-        updatedAt: session.updatedAt,
-        turnCount: session.turns.length
-      }));
+  // Pinned tabs lead the strip so that they keep their place as other
+  // conversations open and close beside them.
+  private orderedConversations(): string[] {
+    const pinned = this.preferences.pinned().filter((id) => this.openConversations.includes(id));
+    return [...pinned, ...this.openConversations.filter((id) => !pinned.includes(id))];
+  }
+
+  private summarize(session: DextHistorySession): ConversationSummary {
+    return {
+      id: session.id,
+      title: this.preferences.title(session.id) ?? conversationTitle(session),
+      updatedAt: session.updatedAt,
+      turnCount: session.turns.length,
+      pinned: this.preferences.isPinned(session.id)
+    };
   }
 
   private async postConversationState(): Promise<void> {
     await this.post({
       type: "conversations",
-      sessions: this.conversationSummaries(),
+      sessions: this.orderedConversations().flatMap((id) => {
+        const session = this.sessions.get(id);
+        return session ? [this.summarize(session)] : [];
+      }),
       activeId: this.activeSession.id
     });
+  }
+
+  private async activateConversation(session: DextHistorySession): Promise<void> {
+    if (session.id !== this.activeSession.id) {
+      this.application.endAgentSession(this.activeSession.id);
+      this.activeSession = session;
+    }
+    if (!this.openConversations.includes(session.id)) this.openConversations.push(session.id);
+    await this.postConversationState();
+    await this.post({ type: "outputSession", session: this.activeSession });
+  }
+
+  // A new conversation opens its own tab, while clearing replaces the
+  // conversation shown in the tab that is already active.
+  private async startConversation(replaceActiveTab = false): Promise<void> {
+    const index = replaceActiveTab ? this.openConversations.indexOf(this.activeSession.id) : -1;
+    this.application.endAgentSession(this.activeSession.id);
+    this.activeSession = outputSession();
+    this.sessions.set(this.activeSession.id, this.activeSession);
+    if (index === -1) this.openConversations.push(this.activeSession.id);
+    else this.openConversations[index] = this.activeSession.id;
+    await this.postConversationState();
+    await this.post({ type: "outputSession", session: this.activeSession });
+  }
+
+  // Closing a tab only hides the conversation; history keeps it so that the
+  // conversation list can reopen it later.
+  private async closeConversation(sessionId: string): Promise<void> {
+    const visible = this.orderedConversations();
+    const index = visible.indexOf(sessionId);
+    if (index === -1) return;
+    this.openConversations = this.openConversations.filter((id) => id !== sessionId);
+    // Closing is an explicit dismissal, so a pinned conversation must not come
+    // back on the next reload.
+    if (this.preferences.isPinned(sessionId)) await this.preferences.setPinned(sessionId, false);
+    if (sessionId !== this.activeSession.id) {
+      await this.postConversationState();
+      return;
+    }
+    const remaining = visible.filter((id) => id !== sessionId);
+    const neighbour = remaining[index] ?? remaining[index - 1];
+    const session = neighbour ? this.sessions.get(neighbour) : undefined;
+    if (!session) {
+      await this.startConversation();
+      return;
+    }
+    this.application.endAgentSession(this.activeSession.id);
+    this.activeSession = session;
+    await this.postConversationState();
+    await this.post({ type: "outputSession", session: this.activeSession });
   }
 
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly application: DextApplication,
     private readonly history: DextHistoryStore,
-    private readonly onViewHistory: () => Promise<void>
+    private readonly preferences: DextConversationPreferences
   ) {}
 
   resolveWebviewView(view: vscode.WebviewView): void {
@@ -136,6 +199,62 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
 
   showChat(): void {
     this.postWhenReady({ type: "focusInput" });
+  }
+
+  viewApis(): void {
+    this.postWhenReady({ type: "openMethods" });
+  }
+
+  async newConversation(): Promise<void> {
+    if (this.running) throw new Error("Wait for the current Dext turn to finish before starting another conversation.");
+    this.hydrateSessions();
+    await this.startConversation();
+  }
+
+  // History hands over its own copy of a conversation; an already open one
+  // keeps the in-memory instance so that a running turn stays attached to it.
+  async openConversation(session: DextHistorySession): Promise<void> {
+    if (this.running) throw new Error("Wait for the current Dext turn to finish before switching conversations.");
+    this.hydrateSessions();
+    const existing = this.sessions.get(session.id) ?? session;
+    this.sessions.set(existing.id, existing);
+    await this.activateConversation(existing);
+  }
+
+  // Renaming only replaces the label a conversation is listed under. The agent
+  // runners key their CLI and AIOA sessions on the conversation id, which the
+  // rename never touches, so a renamed conversation keeps answering in the same
+  // agent session it always did.
+  async renameConversation(sessionId: string, title: string): Promise<void> {
+    await this.preferences.setTitle(sessionId, title);
+    await this.postConversationState();
+  }
+
+  async pinConversation(sessionId: string, pinned: boolean): Promise<void> {
+    this.hydrateSessions();
+    await this.preferences.setPinned(sessionId, pinned);
+    await this.postConversationState();
+  }
+
+  async closeTab(sessionId: string): Promise<void> {
+    if (this.running) throw new Error("Wait for the current Dext turn to finish before closing a conversation.");
+    this.hydrateSessions();
+    await this.closeConversation(sessionId);
+  }
+
+  async forgetConversation(sessionId: string): Promise<void> {
+    if (this.running) throw new Error("Wait for the current Dext turn to finish before deleting a conversation.");
+    this.hydrateSessions();
+    this.sessions.delete(sessionId);
+    if (this.openConversations.includes(sessionId)) {
+      await this.closeConversation(sessionId);
+      return;
+    }
+    if (sessionId === this.activeSession.id) await this.startConversation();
+  }
+
+  setInput(source: string): void {
+    this.postWhenReady({ type: "setInput", source });
   }
 
   async addSelectionToChat(): Promise<void> {
@@ -215,34 +334,23 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
             this.activeExecution.controller.abort();
           }
           break;
-        case "viewHistory":
-          await this.onViewHistory();
-          break;
-        case "newConversation":
-          if (this.running) throw new Error("Wait for the current Dext turn to finish before starting another conversation.");
-          this.application.endAgentSession(this.activeSession.id);
-          this.activeSession = outputSession();
-          this.sessions.set(this.activeSession.id, this.activeSession);
-          await this.postConversationState();
-          await this.post({ type: "outputSession", session: this.activeSession });
-          break;
         case "selectConversation": {
           if (this.running) throw new Error("Wait for the current Dext turn to finish before switching conversations.");
           const selected = this.sessions.get(request.sessionId);
           if (!selected) throw new Error("Conversation not found.");
-          this.application.endAgentSession(this.activeSession.id);
-          this.activeSession = selected;
-          await this.postConversationState();
-          await this.post({ type: "outputSession", session: this.activeSession });
+          await this.activateConversation(selected);
           break;
         }
+        case "closeConversation":
+          if (this.running) throw new Error("Wait for the current Dext turn to finish before closing a conversation.");
+          await this.closeConversation(request.sessionId);
+          break;
+        case "pinConversation":
+          await this.pinConversation(request.sessionId, request.pinned);
+          break;
         case "clearOutput":
-          if (this.running) throw new Error("Wait for the current Dext turn to finish before clearing Output.");
-          this.application.endAgentSession(this.activeSession.id);
-          this.activeSession = outputSession();
-          this.sessions.set(this.activeSession.id, this.activeSession);
-          await this.postConversationState();
-          await this.post({ type: "outputSession", session: this.activeSession });
+          if (this.running) throw new Error("Wait for the current Dext turn to finish before clearing the conversation.");
+          await this.startConversation(true);
           break;
         case "agentSelection":
           this.application.setAgentSelection({
@@ -575,26 +683,14 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
 </head>
 <body>
   <div class="app-shell">
-    <header class="chat-header">
-      <div class="conversation-menu">
-        <button id="conversation-control" class="conversation-control" type="button" aria-haspopup="menu" aria-expanded="false">
-          <span id="conversation-control-value">New conversation</span><i class="codicon codicon-chevron-down"></i>
-        </button>
-        <div id="conversation-menu" class="conversation-popover" role="menu" hidden></div>
-      </div>
-      <div class="chat-header-actions">
-        <button id="view-methods" class="icon-button" type="button" title="View APIs" aria-label="View APIs" aria-haspopup="dialog" aria-expanded="false"><i class="codicon codicon-symbol-method"></i></button>
-        <button id="new-conversation" class="icon-button" type="button" title="New conversation" aria-label="New conversation"><i class="codicon codicon-add"></i></button>
-        <button id="view-history" class="icon-button" type="button" title="View Dext history" aria-label="View Dext history"><i class="codicon codicon-history"></i></button>
-      </div>
-    </header>
+    <nav id="conversation-tabs" class="conversation-tabs" role="tablist" aria-label="Dext conversations"></nav>
     <main id="dext-main">
     <section id="result-section" class="result-section" aria-live="polite">
       <div id="result-heading" class="section-heading collapsible-heading" role="button" tabindex="0" aria-expanded="true">
-        <span class="section-heading-label"><i class="section-chevron codicon codicon-chevron-down"></i><span>Output</span></span>
+        <span class="section-heading-label"><i class="section-chevron codicon codicon-chevron-down"></i><span>Conversation</span></span>
         <div class="section-heading-actions">
-          <button id="clear-output" class="icon-button" type="button" title="Clear output" aria-label="Clear output"><i class="codicon codicon-eraser"></i></button>
-          <button id="result-fullscreen" class="icon-button panel-fullscreen" type="button" title="Maximize Output" aria-label="Maximize Output"><i class="codicon codicon-screen-full"></i></button>
+          <button id="clear-output" class="icon-button" type="button" title="Clear conversation" aria-label="Clear conversation"><i class="codicon codicon-eraser"></i></button>
+          <button id="result-fullscreen" class="icon-button panel-fullscreen" type="button" title="Maximize Conversation" aria-label="Maximize Conversation"><i class="codicon codicon-screen-full"></i></button>
         </div>
       </div>
       <div id="result-body" class="collapsible-body result-body"><div id="result"></div></div>
@@ -647,6 +743,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         <header class="methods-dialog-header">
           <div class="methods-dialog-title"><i class="codicon codicon-symbol-method"></i><span id="methods-dialog-title">APIs</span><span id="method-count" class="count"></span></div>
           <div class="methods-dialog-actions">
+            <button id="reload-methods" class="icon-button compact" type="button" title="Reload APIs" aria-label="Reload APIs"><i class="codicon codicon-refresh"></i></button>
             <button id="methods-toggle" class="icon-button compact" type="button" title="Collapse API namespaces" aria-label="Collapse API namespaces"><i class="codicon codicon-collapse-all"></i></button>
             <button id="close-methods" class="icon-button" type="button" title="Close APIs" aria-label="Close APIs"><i class="codicon codicon-close"></i></button>
           </div>

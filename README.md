@@ -33,21 +33,18 @@ The input workflow language supports assignment, keyword-only API calls, strings
 - `print(text, label?) -> PrintResult`
 - `ui.choose(...)`, `ui.confirm(...)`, `ui.input(...) -> UiResult`
 
-This repository defines three project-local custom APIs under `.dext/api/dev/`.
-They are not part of Dext's built-in API set:
+Everything beyond that list is project-local: a workspace defines its own APIs
+as `.dx` files under `.dext/api/`, and their directory becomes the namespace, so
+`.dext/api/workflow/feature.dx` registers `workflow.feature`. Dext ships no such
+APIs of its own.
 
-- `dev.feat(input, apply=True) -> AgentResult` for task-file, description, or sync-driven feature work.
-- `dev.fix(input, apply=True) -> AgentResult` for defect triage and minimal fixes.
-- `dev.plan(input, apply=True) -> AgentResult` for PRD analysis and task-plan generation.
-
-Each top-level API directly composes the built-in `mcp`, `agent`, and UI APIs.
-For example, `dev.feat` reads context, makes a plan, uses `ui.confirm`,
-implements, uses `ui.confirm` again, then validates. It does not import or
-register project-level phase APIs.
-Pass a registered textual MCP tool through optional `mcp_tool` and `mcp_input`
-to run `mcp(...)` before the first Agent phase. The compact workflow
-The API-level and phase-specific rules are kept under `.dext/rules/dev/`; every Agent phase explicitly declares the ordered rules it uses. Confirmable actions
-such as code generation and commit remain explicit UI gates.
+A project-local API composes the built-in `mcp`, `agent`, and UI APIs directly
+rather than importing intermediate phase APIs. A typical feature workflow reads
+context, makes a plan, gates on `ui.confirm`, implements, gates again, then
+validates. Declaring optional `mcp_tool` and `mcp_input` parameters lets a
+registered textual MCP tool run before the first Agent phase. Rules live under
+`.dext/rules/`; every Agent phase declares the ordered rules it uses, and
+confirmable actions such as code generation and commit stay explicit UI gates.
 
 UI APIs return a result and resume the current workflow; they do not require a
 separate callback registration. Assign the result when later steps need it:

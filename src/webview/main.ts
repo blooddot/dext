@@ -48,11 +48,7 @@ function element<T extends HTMLElement>(id: string): T {
 const vscode = acquireVsCodeApi();
 const elements = {
   main: element<HTMLElement>("dext-main"),
-  conversationControl: element<HTMLButtonElement>("conversation-control"),
-  conversationControlValue: element<HTMLElement>("conversation-control-value"),
-  conversationMenu: element<HTMLElement>("conversation-menu"),
-  newConversation: element<HTMLButtonElement>("new-conversation"),
-  viewMethods: element<HTMLButtonElement>("view-methods"),
+  conversationTabs: element<HTMLElement>("conversation-tabs"),
   methodsDialog: element<HTMLDialogElement>("methods-dialog"),
   closeMethods: element<HTMLButtonElement>("close-methods"),
   inputSection: element<HTMLElement>("input-section"),
@@ -82,9 +78,9 @@ const elements = {
   methods: element<HTMLElement>("methods"),
   methodCount: element<HTMLElement>("method-count"),
   methodsToggle: element<HTMLButtonElement>("methods-toggle"),
+  reloadMethods: element<HTMLButtonElement>("reload-methods"),
   configErrors: element<HTMLElement>("config-errors"),
   result: element<HTMLElement>("result"),
-  viewHistory: element<HTMLButtonElement>("view-history"),
   clearOutput: element<HTMLButtonElement>("clear-output"),
   inputFullscreen: element<HTMLButtonElement>("input-fullscreen"),
   resultFullscreen: element<HTMLButtonElement>("result-fullscreen"),
@@ -102,7 +98,6 @@ let inputKind: "empty" | "workflow" | "invalid" = "empty";
 type InputMode = "agent" | "ask" | "code";
 let inputMode: InputMode = "agent";
 let sidebarState: SidebarState | undefined;
-let conversations: ConversationSummary[] = [];
 let activeConversationId: string | undefined;
 let dropPosition: number | undefined;
 let pendingDropPosition: number | undefined;
@@ -217,6 +212,7 @@ function updateRunState(): void {
     ? stopping || !activeTurnId
     : !editor.source.trim() || (codeMode && (hasErrors || inputKind === "invalid"));
   elements.clearOutput.disabled = executing;
+  elements.conversationTabs.classList.toggle("busy", executing);
   elements.runLabel.textContent = executing ? (stopping ? "Stopping" : "Stop") : codeMode ? "Run" : "Send";
   const runIcon = elements.run.querySelector<HTMLElement>("i");
   if (runIcon) runIcon.className = `codicon codicon-${executing ? "debug-stop" : "run"}`;
@@ -251,7 +247,7 @@ type PanelName = "input" | "result";
 
 const panels: Record<PanelName, { section: HTMLElement; heading: HTMLElement; body: HTMLElement; button: HTMLButtonElement; label: string }> = {
   input: { section: elements.inputSection, heading: elements.inputHeading, body: elements.inputBody, button: elements.inputFullscreen, label: "Input" },
-  result: { section: elements.resultSection, heading: elements.resultHeading, body: elements.resultBody, button: elements.resultFullscreen, label: "Output" }
+  result: { section: elements.resultSection, heading: elements.resultHeading, body: elements.resultBody, button: elements.resultFullscreen, label: "Conversation" }
 };
 let fullscreenPanel: PanelName | undefined;
 let fullscreenSnapshot: Record<PanelName, boolean> | undefined;
@@ -295,16 +291,19 @@ function toggleFullscreen(name: PanelName): void {
   syncFullscreenButtons();
 }
 
+function setMethodsReloading(reloading: boolean): void {
+  elements.reloadMethods.disabled = reloading;
+  elements.reloadMethods.querySelector(".codicon")
+    ?.classList.toggle("codicon-modifier-spin", reloading);
+}
+
 function openMethodsDialog(): void {
-  closeConversationMenu();
   closeComposerMenus();
   if (!elements.methodsDialog.open) elements.methodsDialog.showModal();
-  elements.viewMethods.setAttribute("aria-expanded", "true");
 }
 
 function closeMethodsDialog(): void {
   if (elements.methodsDialog.open) elements.methodsDialog.close();
-  elements.viewMethods.setAttribute("aria-expanded", "false");
 }
 
 function defaultValue(field: FieldDefinition): string {
@@ -664,56 +663,74 @@ function submitAgentSelection(change: Partial<SidebarState["agentSelection"]>): 
   });
 }
 
-function renderConversations(next: ConversationSummary[], activeId: string): void {
-  conversations = next;
+function selectConversation(sessionId: string): void {
+  if (executing || sessionId === activeConversationId) return;
+  vscode.postMessage({ type: "selectConversation", sessionId });
+}
+
+function closeConversation(sessionId: string): void {
+  if (executing) return;
+  vscode.postMessage({ type: "closeConversation", sessionId });
+}
+
+function pinConversation(sessionId: string, pinned: boolean): void {
+  vscode.postMessage({ type: "pinConversation", sessionId, pinned });
+}
+
+function renderConversations(sessions: readonly ConversationSummary[], activeId: string): void {
   activeConversationId = activeId;
-  const active = conversations.find((item) => item.id === activeId);
-  elements.conversationControlValue.textContent = active?.title ?? "New conversation";
-  elements.conversationMenu.replaceChildren();
-  if (!conversations.length) {
-    const empty = document.createElement("div");
-    empty.className = "conversation-empty";
-    empty.textContent = "No conversations yet";
-    elements.conversationMenu.append(empty);
-    return;
-  }
-  for (const conversation of conversations) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = `conversation-option${conversation.id === activeId ? " active" : ""}`;
-    button.setAttribute("role", "menuitemradio");
-    button.setAttribute("aria-checked", String(conversation.id === activeId));
-    const title = document.createElement("span");
-    title.className = "conversation-option-title";
-    title.textContent = conversation.title;
-    const meta = document.createElement("span");
-    meta.className = "conversation-option-meta";
-    meta.textContent = conversation.turnCount ? `${conversation.turnCount} turn${conversation.turnCount === 1 ? "" : "s"}` : "Empty";
-    const check = document.createElement("i");
-    check.className = `codicon codicon-${conversation.id === activeId ? "check" : "blank"}`;
-    button.append(title, meta, check);
-    button.addEventListener("click", () => {
-      closeConversationMenu();
-      if (conversation.id !== activeConversationId) {
-        vscode.postMessage({ type: "selectConversation", sessionId: conversation.id });
-      }
+  elements.conversationTabs.replaceChildren();
+  elements.conversationTabs.hidden = sessions.length === 0;
+  let activeTab: HTMLElement | undefined;
+  for (const conversation of sessions) {
+    const active = conversation.id === activeId;
+    const tab = document.createElement("div");
+    tab.className = `conversation-tab${active ? " active" : ""}${conversation.pinned ? " pinned" : ""}`;
+    tab.setAttribute("role", "tab");
+    tab.setAttribute("aria-selected", String(active));
+    tab.title = conversation.title;
+    // VS Code reads this attribute to build the native tab context menu and
+    // passes the merged object to the invoked command.
+    tab.dataset.vscodeContext = JSON.stringify({
+      webviewSection: "conversationTab",
+      sessionId: conversation.id,
+      dextTabPinned: conversation.pinned,
+      // Renaming seeds its input box from the name shown on the tab, which is
+      // the only place an unsaved conversation's name exists.
+      dextTabTitle: conversation.title,
+      preventDefaultContextMenuItems: true
     });
-    elements.conversationMenu.append(button);
+    // Middle-click closes a tab, matching VS Code editor tabs.
+    tab.addEventListener("auxclick", (event) => {
+      if (event.button !== 1) return;
+      event.preventDefault();
+      closeConversation(conversation.id);
+    });
+    const label = document.createElement("button");
+    label.type = "button";
+    label.className = "conversation-tab-label";
+    label.textContent = conversation.title;
+    label.addEventListener("click", () => selectConversation(conversation.id));
+    // A pinned tab trades its close button for the pin that releases it, so
+    // that pinned conversations are not dismissed by a stray click.
+    const action = document.createElement("button");
+    action.type = "button";
+    action.className = conversation.pinned ? "conversation-tab-pin" : "conversation-tab-close";
+    action.title = conversation.pinned ? "Unpin conversation" : "Close conversation";
+    action.setAttribute("aria-label", `${conversation.pinned ? "Unpin" : "Close"} ${conversation.title}`);
+    const actionIcon = document.createElement("i");
+    actionIcon.className = `codicon codicon-${conversation.pinned ? "pinned" : "close"}`;
+    action.append(actionIcon);
+    action.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (conversation.pinned) pinConversation(conversation.id, false);
+      else closeConversation(conversation.id);
+    });
+    tab.append(label, action);
+    if (active) activeTab = tab;
+    elements.conversationTabs.append(tab);
   }
-}
-
-function closeConversationMenu(): void {
-  elements.conversationMenu.hidden = true;
-  elements.conversationControl.setAttribute("aria-expanded", "false");
-}
-
-function toggleConversationMenu(): void {
-  const open = elements.conversationMenu.hidden;
-  closeConversationMenu();
-  if (open) {
-    elements.conversationMenu.hidden = false;
-    elements.conversationControl.setAttribute("aria-expanded", "true");
-  }
+  activeTab?.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 
 const composerMenus = [
@@ -1732,13 +1749,14 @@ function clearSubmittedInput(): void {
 elements.run.addEventListener("click", run);
 elements.problems.addEventListener("click", () => editor.goToFirstDiagnostic());
 elements.methodsToggle.addEventListener("click", toggleMethodGroups);
-elements.viewMethods.addEventListener("click", openMethodsDialog);
+elements.reloadMethods.addEventListener("click", () => {
+  // Reloading an unchanged API set would otherwise look like nothing happened.
+  setMethodsReloading(true);
+  vscode.postMessage({ type: "reload" });
+});
 elements.closeMethods.addEventListener("click", closeMethodsDialog);
 elements.methodsDialog.addEventListener("click", (event) => {
   if (event.target === elements.methodsDialog) closeMethodsDialog();
-});
-elements.methodsDialog.addEventListener("close", () => {
-  elements.viewMethods.setAttribute("aria-expanded", "false");
 });
 elements.inputHeading.addEventListener("click", (event) => {
   if (event.target instanceof Element && event.target.closest("button")) return;
@@ -1769,15 +1787,6 @@ elements.resultHeading.addEventListener("keydown", (event) => {
   }
 });
 elements.attachFiles.addEventListener("click", () => vscode.postMessage({ type: "chooseFiles" }));
-elements.viewHistory.addEventListener("click", () => vscode.postMessage({ type: "viewHistory" }));
-elements.conversationControl.addEventListener("click", (event) => {
-  event.stopPropagation();
-  toggleConversationMenu();
-});
-elements.newConversation.addEventListener("click", () => {
-  closeConversationMenu();
-  vscode.postMessage({ type: "newConversation" });
-});
 elements.clearOutput.addEventListener("click", () => {
   if (!executing) vscode.postMessage({ type: "clearOutput" });
 });
@@ -1785,14 +1794,11 @@ for (const item of composerMenus) {
   item.control.addEventListener("click", () => toggleComposerMenu(item.menu));
 }
 document.addEventListener("click", (event) => {
-  if (event.target instanceof Element && event.target.closest(".conversation-menu")) return;
-  closeConversationMenu();
   if (event.target instanceof Element && event.target.closest(".composer-menu")) return;
   closeComposerMenus();
 });
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
-  closeConversationMenu();
   closeComposerMenus();
 });
 elements.inputShell.addEventListener("paste", (event) => {
@@ -1857,7 +1863,10 @@ vscode.postMessage({ type: "debugLog", message: "main.ts loaded (drag diagnostic
 window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   const message = event.data;
   if (broker.accept(message) || clipboard.accept(message)) return;
-  if (message.type === "state") renderMethods(message.state);
+  if (message.type === "state") {
+    setMethodsReloading(false);
+    renderMethods(message.state);
+  }
   if (message.type === "inputKind") {
     inputKind = message.kind;
     updateRunState();
@@ -1873,6 +1882,7 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   }
   if (message.type === "outputSession") renderOutputSession(message.session);
   if (message.type === "conversations") renderConversations(message.sessions, message.activeId);
+  if (message.type === "openMethods") openMethodsDialog();
   if (message.type === "execution") {
     selectOutputTurn(message.turnId);
     renderResult(message.response);
@@ -1910,6 +1920,10 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     dropPosition = undefined;
     pendingDropPosition = undefined;
     renderInputError(message.message);
+  }
+  if (message.type === "setInput") {
+    editor.setValue(message.source);
+    editor.focus();
   }
   if (message.type === "focusEditor" || message.type === "focusInput") editor.focus();
   if (message.type === "triggerSuggest") editor.triggerSuggest();

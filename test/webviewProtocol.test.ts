@@ -2,9 +2,30 @@ import { describe, expect, it } from "vitest";
 import { webviewRequestSchema } from "../src/webviewProtocol.js";
 
 describe("Webview protocol", () => {
-  it("accepts history requests", () => {
-    expect(webviewRequestSchema.safeParse({ type: "viewHistory" }).success).toBe(true);
+  it("accepts output and conversation tab requests", () => {
     expect(webviewRequestSchema.safeParse({ type: "clearOutput" }).success).toBe(true);
+    expect(webviewRequestSchema.safeParse({
+      type: "selectConversation",
+      sessionId: "session-1"
+    }).success).toBe(true);
+    expect(webviewRequestSchema.safeParse({
+      type: "closeConversation",
+      sessionId: "session-1"
+    }).success).toBe(true);
+    expect(webviewRequestSchema.safeParse({
+      type: "pinConversation",
+      sessionId: "session-1",
+      pinned: true
+    }).success).toBe(true);
+    expect(webviewRequestSchema.safeParse({ type: "pinConversation", sessionId: "session-1" }).success)
+      .toBe(false);
+  });
+
+  it("rejects conversation requests now served by view title commands", () => {
+    expect(webviewRequestSchema.safeParse({ type: "viewHistory" }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({ type: "newConversation" }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({ type: "closeConversation", sessionId: "" }).success)
+      .toBe(false);
   });
 
   it("accepts code and normal conversation input requests", () => {

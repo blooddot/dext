@@ -27,6 +27,31 @@ describe("DextHistoryStore", () => {
     expect(records[1]?.error).toBe("cancelled");
   });
 
+  it("forks selected turns into a conversation of their own", async () => {
+    const store = new DextHistoryStore(new MemoryState() as never);
+    await store.addSuccess("first", [], { kind: "workflow", executions: [] }, "session-1");
+    await store.addSuccess("second", [], { kind: "workflow", executions: [] }, "session-1");
+    const original = store.list()[0]!;
+
+    const forked = await store.fork(original.turns.slice(0, 1));
+
+    expect(forked.turns.map((turn) => turn.input)).toEqual(["first"]);
+    // A fork must not share turn identity with the conversation it came from.
+    expect(forked.turns[0]?.id).not.toBe(original.turns[0]?.id);
+    expect(store.list().map((session) => session.id)).toEqual([original.id, forked.id]);
+    expect(store.list()[0]?.turns).toHaveLength(2);
+  });
+
+  it("removes a single conversation and keeps the rest", async () => {
+    const store = new DextHistoryStore(new MemoryState() as never);
+    await store.addSuccess("kept", [], { kind: "workflow", executions: [] }, "session-1");
+    await store.addSuccess("dropped", [], { kind: "workflow", executions: [] }, "session-2");
+
+    await store.remove("session-2");
+
+    expect(store.list().map((session) => session.id)).toEqual(["session-1"]);
+  });
+
   it("migrates each legacy flat record into a one-turn conversation", () => {
     const legacy = [{
       id: "old-1",

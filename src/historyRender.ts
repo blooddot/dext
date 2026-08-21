@@ -26,6 +26,12 @@ function chevron(): string {
   return `<i class="disclosure-chevron codicon codicon-chevron-right"></i>`;
 }
 
+// VS Code reads this attribute to build the native context menu and passes the
+// merged object to the invoked command.
+function contextAttribute(context: Record<string, string | boolean>): string {
+  return `data-vscode-context='${escapeHtml(JSON.stringify(context)).replaceAll("'", "&#39;")}'`;
+}
+
 function copyButton(value: string): string {
   return `<button class="copy-button codicon codicon-copy" type="button" data-copy="${escapeHtml(value)}" title="Copy" aria-label="Copy"></button>`;
 }
@@ -236,7 +242,7 @@ function dateLabel(timestamp: number): string {
   return new Date(timestamp).toLocaleString();
 }
 
-export function renderHistoryRecord(record: DextHistoryRecord): string {
+export function renderHistoryRecord(record: DextHistoryRecord, sessionId?: string): string {
   const input = normalizeInputReferenceSource(record.input);
   const response = parsedResponse(record);
   const firstLine = inputReferenceDisplayText(input).split(/\r?\n/, 1)[0]!.slice(0, 140);
@@ -246,15 +252,63 @@ export function renderHistoryRecord(record: DextHistoryRecord): string {
     ? `<pre class="error">${escapeHtml(record.error)}</pre>`
     : response ? output(response) : `<pre>${escapeHtml(record.output)}</pre>`;
   const outputCopy = record.error || (response ? outputText(response) : record.output);
-  return `<details class="history-record"><summary>${chevron()}<span>${escapeHtml(dateLabel(record.createdAt))}</span><span class="history-summary-input">${escapeHtml(firstLine)}</span><span class="history-meta">${duration ? formatDuration(duration) : ""}</span></summary><div class="history-record-body"><details class="history-disclosure"><summary>${chevron()}<span>Input</span>${copyButton(input)}</summary><pre class="dext-source">${renderedInputSource(input)}</pre></details>${processHtml ? `<details class="history-disclosure"><summary>${chevron()}<span>Process</span></summary><div class="disclosure-body">${processHtml}</div></details>` : ""}<details class="history-disclosure" open><summary>${chevron()}<span>Output</span>${copyButton(outputCopy)}</summary><div class="disclosure-body">${outputHtml}</div></details></div></details>`;
+  const context = sessionId
+    ? ` ${contextAttribute({
+      webviewSection: "turn",
+      sessionId,
+      turnId: record.id,
+      preventDefaultContextMenuItems: true
+    })}`
+    : "";
+  return `<details class="history-record"${context}><summary>${chevron()}<span>${escapeHtml(dateLabel(record.createdAt))}</span><span class="history-summary-input">${escapeHtml(firstLine)}</span><span class="history-meta">${duration ? formatDuration(duration) : ""}</span></summary><div class="history-record-body"><details class="history-disclosure"><summary>${chevron()}<span>Input</span>${copyButton(input)}</summary><pre class="dext-source">${renderedInputSource(input)}</pre></details>${processHtml ? `<details class="history-disclosure"><summary>${chevron()}<span>Process</span></summary><div class="disclosure-body">${processHtml}</div></details>` : ""}<details class="history-disclosure" open><summary>${chevron()}<span>Output</span>${copyButton(outputCopy)}</summary><div class="disclosure-body">${outputHtml}</div></details></div></details>`;
 }
 
-export function renderHistorySession(session: DextHistorySession): string {
-  const firstInput = session.turns[0]
-    ? inputReferenceDisplayText(session.turns[0].input).split(/\r?\n/, 1)[0]?.slice(0, 140) ?? "Dext conversation"
-    : "Dext conversation";
+/** The name a conversation carries until the user renames it: the opening line
+ * of its first message, with @ references spelled out. */
+export function conversationTitle(session: DextHistorySession): string {
+  const first = session.turns[0];
+  if (!first) return "New conversation";
+  const line = inputReferenceDisplayText(normalizeInputReferenceSource(first.input))
+    .split(/\r?\n/, 1)[0]!
+    .trim()
+    .slice(0, 140);
+  return line || "New conversation";
+}
+
+export interface HistorySessionView {
+  favorite?: boolean;
+  name?: string;
+}
+
+export function renderHistorySession(session: DextHistorySession, view: HistorySessionView = {}): string {
+  const favorite = view.favorite === true;
   const count = `${session.turns.length} turn${session.turns.length === 1 ? "" : "s"}`;
-  return `<details class="history-session"><summary>${chevron()}<span>${escapeHtml(dateLabel(session.createdAt))}</span><span class="history-summary-input">${escapeHtml(firstInput)}</span><span class="history-meta">${count}</span></summary><div class="history-session-body">${session.turns.map(renderHistoryRecord).join("")}</div></details>`;
+  const context = contextAttribute({
+    webviewSection: "session",
+    sessionId: session.id,
+    dextFavorite: favorite,
+    preventDefaultContextMenuItems: true
+  });
+  const star = favorite
+    ? `<i class="history-favorite codicon codicon-star-full" title="Favorite" aria-label="Favorite"></i>`
+    : "";
+  const label = view.name ?? conversationTitle(session);
+  return `<details class="history-session${favorite ? " favorite" : ""}" ${context}><summary>${chevron()}${star}<span>${escapeHtml(dateLabel(session.createdAt))}</span><span class="history-summary-input${view.name ? " named" : ""}">${escapeHtml(label)}</span><span class="history-meta">${count}</span></summary><div class="history-session-body">${session.turns.map((turn) => renderHistoryRecord(turn, session.id)).join("")}</div></details>`;
+}
+
+export function conversationMarkdown(session: DextHistorySession): string {
+  const turns = session.turns.map((record, index) => {
+    const response = parsedResponse(record);
+    const answer = record.error || (response ? outputText(response) : record.output);
+    return [
+      `## Turn ${index + 1} — ${dateLabel(record.createdAt)}`,
+      "### Input",
+      inputReferenceDisplayText(normalizeInputReferenceSource(record.input)),
+      record.error ? "### Error" : "### Output",
+      answer
+    ].join("\n\n");
+  });
+  return [`# Dext conversation — ${dateLabel(session.createdAt)}`, ...turns].join("\n\n");
 }
 
 function color(value: string | undefined, fallback: string): string {

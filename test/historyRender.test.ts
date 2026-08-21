@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { highlightDext, historyTokenStyles, renderHistoryRecord, renderHistorySession } from "../src/historyRender.js";
+import {
+  conversationMarkdown,
+  conversationTitle,
+  highlightDext,
+  historyTokenStyles,
+  renderHistoryRecord,
+  renderHistorySession
+} from "../src/historyRender.js";
 import type { DextHistoryRecord } from "../src/historyStore.js";
 
 describe("Dext history rendering", () => {
@@ -352,5 +359,89 @@ describe("Dext history rendering", () => {
     expect(html).toContain('class="history-session"');
     expect(html.match(/class="history-record"/g)).toHaveLength(2);
     expect(html).toContain("2 turns");
+  });
+
+  it("tags conversations and turns so the native context menu knows its target", () => {
+    const turns: DextHistoryRecord[] = ["first", "second"].map((text, index) => ({
+      id: `turn-${index}`,
+      createdAt: index + 1,
+      input: `ask(input="${text}")`,
+      process: [],
+      output: ""
+    }));
+
+    const html = renderHistorySession({ id: "session-1", createdAt: 1, updatedAt: 2, turns });
+
+    expect(html).toContain('data-vscode-context=\'{&quot;webviewSection&quot;:&quot;session&quot;,&quot;sessionId&quot;:&quot;session-1&quot;,&quot;dextFavorite&quot;:false,&quot;preventDefaultContextMenuItems&quot;:true}\'');
+    expect(html).toContain('&quot;webviewSection&quot;:&quot;turn&quot;,&quot;sessionId&quot;:&quot;session-1&quot;,&quot;turnId&quot;:&quot;turn-0&quot;');
+    // A turn rendered on its own has no conversation to act on.
+    expect(renderHistoryRecord(turns[0]!)).not.toContain("data-vscode-context");
+  });
+
+  it("marks a favorite conversation for both the reader and the context menu", () => {
+    const session = {
+      id: "session-1",
+      createdAt: 1,
+      updatedAt: 2,
+      turns: [{ id: "turn-0", createdAt: 1, input: 'ask(input="first")', process: [], output: "" }]
+    };
+
+    const html = renderHistorySession(session, { favorite: true });
+
+    expect(html).toContain('class="history-session favorite"');
+    expect(html).toContain("codicon-star-full");
+    expect(html).toContain("&quot;dextFavorite&quot;:true");
+    // A turn inherits the conversation's favorite state from its parent element.
+    expect(html.match(/dextFavorite/g)).toHaveLength(1);
+  });
+
+  it("names a conversation after its first message until it is renamed", () => {
+    const session = {
+      id: "session-1",
+      createdAt: 1,
+      updatedAt: 2,
+      turns: [{
+        id: "turn-0",
+        createdAt: 1,
+        input: 'agent(input="Explain @src/a.ts\nand then stop")',
+        process: [],
+        output: ""
+      }]
+    };
+
+    // A reference is spelled out the compact way it reads in the UI.
+    expect(conversationTitle(session)).toBe('agent(input="Explain a.ts');
+    expect(conversationTitle({ ...session, turns: [] })).toBe("New conversation");
+    expect(renderHistorySession(session)).toContain('agent(input=&quot;Explain a.ts');
+
+    const renamed = renderHistorySession(session, { name: "Auth refactor" });
+    const summary = renamed.slice(0, renamed.indexOf("history-session-body"));
+    expect(summary).toContain('class="history-summary-input named">Auth refactor<');
+    // The chosen name replaces the first message in the conversation header,
+    // while the turn below still shows what was actually asked.
+    expect(summary).not.toContain("Explain a.ts");
+    expect(renamed).toContain("Explain a.ts");
+  });
+
+  it("copies a conversation as Markdown with one section per turn", () => {
+    const turns: DextHistoryRecord[] = [
+      {
+        id: "turn-0",
+        createdAt: 1,
+        input: 'ask(input="explain")',
+        process: [],
+        output: "",
+        response: { kind: "workflow", executions: [] }
+      },
+      { id: "turn-1", createdAt: 2, input: 'ask(input="retry")', process: [], output: "", error: "cancelled" }
+    ];
+
+    const markdown = conversationMarkdown({ id: "session-1", createdAt: 1, updatedAt: 2, turns });
+
+    expect(markdown).toContain("# Dext conversation");
+    expect(markdown).toContain("## Turn 1");
+    expect(markdown).toContain('ask(input="explain")');
+    expect(markdown).toContain("### Error");
+    expect(markdown).toContain("cancelled");
   });
 });

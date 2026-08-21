@@ -2,7 +2,11 @@ import * as vscode from "vscode";
 import { DextApplication } from "./application.js";
 import { DextSidebarProvider } from "./sidebarProvider.js";
 import { DextHistoryStore } from "./historyStore.js";
+import type { DextHistoryRecord, DextHistorySession } from "./historyStore.js";
 import { DextHistoryPanel } from "./historyEditorProvider.js";
+import { DextConversationPreferences } from "./conversationPreferences.js";
+import type { HistorySortOrder } from "./conversationPreferences.js";
+import { conversationMarkdown, conversationTitle } from "./historyRender.js";
 import { normalizeAioaCdpEndpoint } from "./core/aioaCdp.js";
 import {
   dextSemanticTokens,
@@ -17,13 +21,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   application.runtime.setWorkspaceTrusted(vscode.workspace.isTrusted && folder?.uri.scheme === "file");
   await application.reload();
   const history = new DextHistoryStore(context.globalState);
-  const historyPanel = new DextHistoryPanel(context.extensionUri, history);
-  const sidebar = new DextSidebarProvider(
-    context.extensionUri,
-    application,
-    history,
-    () => historyPanel.showInActiveEditor()
-  );
+  const preferences = new DextConversationPreferences(context.globalState);
+  const historyPanel = new DextHistoryPanel(context.extensionUri, history, preferences);
+  const sidebar = new DextSidebarProvider(context.extensionUri, application, history, preferences);
   const reportCommandError = async <T>(run: () => Promise<T>): Promise<T | undefined> => {
     try {
       return await run();
@@ -36,6 +36,66 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await vscode.commands.executeCommand("dext.sidebar.focus");
   };
   const activeDextEditor = (): boolean => vscode.window.activeTextEditor?.document.languageId === "dext-api";
+  // The History and sidebar webviews pass the right-clicked element's context
+  // object.
+  interface ConversationContext {
+    sessionId?: string;
+    turnId?: string;
+    dextTabTitle?: string;
+  }
+  const historySession = (context?: ConversationContext): DextHistorySession => {
+    const session = context?.sessionId
+      ? history.list().find((item) => item.id === context.sessionId)
+      : undefined;
+    if (!session) throw new Error("Conversation not found in Dext history.");
+    return session;
+  };
+  const forkConversation = async (source: DextHistorySession, turns: readonly DextHistoryRecord[]): Promise<void> => {
+    const forked = await history.fork(turns);
+    // A fork of a conversation the user took the trouble to name would be hard
+    // to recognize under a name derived from its first message.
+    const name = preferences.title(source.id);
+    if (name) await preferences.setTitle(forked.id, `${name} (fork)`);
+    await sidebar.openConversation(forked);
+    await focusSidebar();
+    sidebar.showChat();
+    historyPanel.refresh();
+  };
+  const renameConversation = async (sessionId: string, current: string): Promise<void> => {
+    const name = await vscode.window.showInputBox({
+      title: "Rename Dext conversation",
+      prompt: "Leave the name empty to go back to the one taken from the first message.",
+      value: current,
+      ignoreFocusOut: true
+    });
+    if (name === undefined) return;
+    await sidebar.renameConversation(sessionId, name);
+    historyPanel.refresh();
+  };
+  // A conversation tab may still be unsaved, so it is addressed by id rather
+  // than looked up in history.
+  const tabSessionId = (context?: ConversationContext): string => {
+    if (!context?.sessionId) throw new Error("Conversation tab not found.");
+    return context.sessionId;
+  };
+  const updateHistoryContext = (): void => {
+    void vscode.commands.executeCommand("setContext", "dext.historyNewestFirst", preferences.sortOrder() === "newest");
+    void vscode.commands.executeCommand("setContext", "dext.historyFavoritesOnly", preferences.favoritesOnly());
+  };
+  const setSortOrder = async (order: HistorySortOrder): Promise<void> => {
+    await preferences.setSortOrder(order);
+    updateHistoryContext();
+    historyPanel.refresh();
+  };
+  const setFavoritesOnly = async (favoritesOnly: boolean): Promise<void> => {
+    await preferences.setFavoritesOnly(favoritesOnly);
+    updateHistoryContext();
+    historyPanel.refresh();
+  };
+  const setFavorite = async (context: ConversationContext | undefined, favorite: boolean): Promise<void> => {
+    await preferences.setFavorite(historySession(context).id, favorite);
+    historyPanel.refresh();
+  };
   const updateTrustContext = (): void => {
     void vscode.commands.executeCommand("setContext", "dext.workspaceTrusted", vscode.workspace.isTrusted);
   };
@@ -73,6 +133,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return picked?.label;
   };
   updateTrustContext();
+  updateHistoryContext();
   const semanticLegend = new vscode.SemanticTokensLegend(
     [...DEXT_SEMANTIC_TOKEN_TYPES],
     [...DEXT_SEMANTIC_TOKEN_MODIFIERS]
@@ -82,6 +143,90 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.window.registerWebviewViewProvider(DextSidebarProvider.viewType, sidebar),
     historyPanel,
     vscode.commands.registerCommand("dext.openHistory", () => historyPanel.showInActiveEditor()),
+    vscode.commands.registerCommand("dext.history.continueConversation", (context?: ConversationContext) =>
+      reportCommandError(async () => {
+        await sidebar.openConversation(historySession(context));
+        await focusSidebar();
+        sidebar.showChat();
+      })
+    ),
+    vscode.commands.registerCommand("dext.history.forkConversation", (context?: ConversationContext) =>
+      reportCommandError(() => {
+        const session = historySession(context);
+        return forkConversation(session, session.turns);
+      })
+    ),
+    vscode.commands.registerCommand("dext.history.forkFromTurn", (context?: ConversationContext) =>
+      reportCommandError(() => {
+        const session = historySession(context);
+        const index = session.turns.findIndex((turn) => turn.id === context?.turnId);
+        if (index === -1) throw new Error("Conversation turn not found.");
+        return forkConversation(session, session.turns.slice(0, index + 1));
+      })
+    ),
+    vscode.commands.registerCommand("dext.history.renameConversation", (context?: ConversationContext) =>
+      reportCommandError(() => {
+        const session = historySession(context);
+        return renameConversation(session.id, preferences.title(session.id) ?? conversationTitle(session));
+      })
+    ),
+    vscode.commands.registerCommand("dext.history.editTurnInput", (context?: ConversationContext) =>
+      reportCommandError(async () => {
+        const turn = historySession(context).turns.find((item) => item.id === context?.turnId);
+        if (!turn) throw new Error("Conversation turn not found.");
+        sidebar.setInput(turn.input);
+        await focusSidebar();
+        sidebar.showChat();
+      })
+    ),
+    vscode.commands.registerCommand("dext.history.copyConversation", (context?: ConversationContext) =>
+      reportCommandError(async () => {
+        await vscode.env.clipboard.writeText(conversationMarkdown(historySession(context)));
+      })
+    ),
+    vscode.commands.registerCommand("dext.history.deleteConversation", (context?: ConversationContext) =>
+      reportCommandError(async () => {
+        const session = historySession(context);
+        const confirmed = await vscode.window.showWarningMessage(
+          `Delete this Dext conversation and its ${session.turns.length} turn${session.turns.length === 1 ? "" : "s"}?`,
+          { modal: true },
+          "Delete"
+        );
+        if (confirmed !== "Delete") return;
+        // Detach the conversation before erasing it so a refused close leaves
+        // history intact.
+        await sidebar.forgetConversation(session.id);
+        await history.remove(session.id);
+        await preferences.forget(session.id);
+        historyPanel.refresh();
+      })
+    ),
+    vscode.commands.registerCommand("dext.history.addFavorite", (context?: ConversationContext) =>
+      reportCommandError(() => setFavorite(context, true))
+    ),
+    vscode.commands.registerCommand("dext.history.removeFavorite", (context?: ConversationContext) =>
+      reportCommandError(() => setFavorite(context, false))
+    ),
+    vscode.commands.registerCommand("dext.history.showNewestFirst", () => setSortOrder("newest")),
+    vscode.commands.registerCommand("dext.history.showOldestFirst", () => setSortOrder("oldest")),
+    vscode.commands.registerCommand("dext.history.showFavoritesOnly", () => setFavoritesOnly(true)),
+    vscode.commands.registerCommand("dext.history.showAllConversations", () => setFavoritesOnly(false)),
+    vscode.commands.registerCommand("dext.tab.renameConversation", (context?: ConversationContext) =>
+      reportCommandError(() => renameConversation(tabSessionId(context), context?.dextTabTitle ?? ""))
+    ),
+    vscode.commands.registerCommand("dext.tab.pinConversation", (context?: ConversationContext) =>
+      reportCommandError(() => sidebar.pinConversation(tabSessionId(context), true))
+    ),
+    vscode.commands.registerCommand("dext.tab.unpinConversation", (context?: ConversationContext) =>
+      reportCommandError(() => sidebar.pinConversation(tabSessionId(context), false))
+    ),
+    vscode.commands.registerCommand("dext.tab.closeConversation", (context?: ConversationContext) =>
+      reportCommandError(() => sidebar.closeTab(tabSessionId(context)))
+    ),
+    vscode.commands.registerCommand("dext.viewApis", () => sidebar.viewApis()),
+    vscode.commands.registerCommand("dext.newConversation", () =>
+      reportCommandError(() => sidebar.newConversation())
+    ),
     vscode.commands.registerCommand("dext.focus", async () => {
       await vscode.commands.executeCommand("dext.sidebar.focus");
       sidebar.focusEditor();

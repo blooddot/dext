@@ -63,6 +63,88 @@
         "icon": "$(history)"
       },
       {
+        "command": "dext.newConversation",
+        "title": "Dext: New Conversation",
+        "icon": "$(add)"
+      },
+      {
+        "command": "dext.history.continueConversation",
+        "title": "Continue in Dext"
+      },
+      {
+        "command": "dext.history.forkConversation",
+        "title": "Fork Conversation"
+      },
+      {
+        "command": "dext.history.forkFromTurn",
+        "title": "Fork From This Turn"
+      },
+      {
+        "command": "dext.history.editTurnInput",
+        "title": "Edit This Input in Dext"
+      },
+      {
+        "command": "dext.history.copyConversation",
+        "title": "Copy Conversation as Markdown"
+      },
+      {
+        "command": "dext.history.deleteConversation",
+        "title": "Delete Conversation"
+      },
+      {
+        "command": "dext.history.renameConversation",
+        "title": "Rename Conversation"
+      },
+      {
+        "command": "dext.tab.renameConversation",
+        "title": "Rename"
+      },
+      {
+        "command": "dext.history.addFavorite",
+        "title": "Add to Favorites"
+      },
+      {
+        "command": "dext.history.removeFavorite",
+        "title": "Remove from Favorites"
+      },
+      {
+        "command": "dext.history.showNewestFirst",
+        "title": "Dext History: Show Newest First",
+        "icon": "$(arrow-down)"
+      },
+      {
+        "command": "dext.history.showOldestFirst",
+        "title": "Dext History: Show Oldest First",
+        "icon": "$(arrow-up)"
+      },
+      {
+        "command": "dext.history.showFavoritesOnly",
+        "title": "Dext History: Show Favorites Only",
+        "icon": "$(star-empty)"
+      },
+      {
+        "command": "dext.history.showAllConversations",
+        "title": "Dext History: Show All Conversations",
+        "icon": "$(star-full)"
+      },
+      {
+        "command": "dext.tab.pinConversation",
+        "title": "Pin"
+      },
+      {
+        "command": "dext.tab.unpinConversation",
+        "title": "Unpin"
+      },
+      {
+        "command": "dext.tab.closeConversation",
+        "title": "Close"
+      },
+      {
+        "command": "dext.viewApis",
+        "title": "Dext: View APIs",
+        "icon": "$(symbol-method)"
+      },
+      {
         "command": "dext.openWorkspaceTrust",
         "title": "Dext: Manage Workspace Trust",
         "icon": "$(shield)"
@@ -150,6 +232,96 @@
         {
           "command": "dext.workspaceUntrustedStatus",
           "when": "false"
+        },
+        {
+          "command": "dext.history.continueConversation",
+          "when": "false"
+        },
+        {
+          "command": "dext.history.forkConversation",
+          "when": "false"
+        },
+        {
+          "command": "dext.history.forkFromTurn",
+          "when": "false"
+        },
+        {
+          "command": "dext.history.editTurnInput",
+          "when": "false"
+        },
+        {
+          "command": "dext.history.copyConversation",
+          "when": "false"
+        },
+        {
+          "command": "dext.history.deleteConversation",
+          "when": "false"
+        },
+        {
+          "command": "dext.history.renameConversation",
+          "when": "false"
+        },
+        {
+          "command": "dext.tab.renameConversation",
+          "when": "false"
+        },
+        {
+          "command": "dext.history.addFavorite",
+          "when": "false"
+        },
+        {
+          "command": "dext.history.removeFavorite",
+          "when": "false"
+        },
+        {
+          "command": "dext.history.showNewestFirst",
+          "when": "false"
+        },
+        {
+          "command": "dext.history.showOldestFirst",
+          "when": "false"
+        },
+        {
+          "command": "dext.history.showFavoritesOnly",
+          "when": "false"
+        },
+        {
+          "command": "dext.history.showAllConversations",
+          "when": "false"
+        },
+        {
+          "command": "dext.tab.pinConversation",
+          "when": "false"
+        },
+        {
+          "command": "dext.tab.unpinConversation",
+          "when": "false"
+        },
+        {
+          "command": "dext.tab.closeConversation",
+          "when": "false"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "dext.history.showFavoritesOnly",
+          "when": "activeWebviewPanelId == 'dext.history' && !dext.historyFavoritesOnly",
+          "group": "navigation@1"
+        },
+        {
+          "command": "dext.history.showAllConversations",
+          "when": "activeWebviewPanelId == 'dext.history' && dext.historyFavoritesOnly",
+          "group": "navigation@1"
+        },
+        {
+          "command": "dext.history.showOldestFirst",
+          "when": "activeWebviewPanelId == 'dext.history' && dext.historyNewestFirst",
+          "group": "navigation@2"
+        },
+        {
+          "command": "dext.history.showNewestFirst",
+          "when": "activeWebviewPanelId == 'dext.history' && !dext.historyNewestFirst",
+          "group": "navigation@2"
         }
       ],
       "editor/context": [
@@ -190,9 +362,86 @@
           "group": "navigation@0"
         },
         {
-          "command": "dext.reloadMethods",
+          "command": "dext.newConversation",
           "when": "view == dext.sidebar",
           "group": "navigation@1"
+        },
+        {
+          "command": "dext.openHistory",
+          "when": "view == dext.sidebar",
+          "group": "navigation@2"
+        },
+        {
+          "command": "dext.viewApis",
+          "when": "view == dext.sidebar",
+          "group": "navigation@3"
+        }
+      ],
+      "webview/context": [
+        {
+          "command": "dext.history.forkFromTurn",
+          "when": "webviewId == 'dext.history' && webviewSection == 'turn'",
+          "group": "1_turn@1"
+        },
+        {
+          "command": "dext.history.editTurnInput",
+          "when": "webviewId == 'dext.history' && webviewSection == 'turn'",
+          "group": "1_turn@2"
+        },
+        {
+          "command": "dext.history.continueConversation",
+          "when": "webviewId == 'dext.history' && (webviewSection == 'session' || webviewSection == 'turn')",
+          "group": "2_conversation@1"
+        },
+        {
+          "command": "dext.history.forkConversation",
+          "when": "webviewId == 'dext.history' && (webviewSection == 'session' || webviewSection == 'turn')",
+          "group": "2_conversation@2"
+        },
+        {
+          "command": "dext.history.copyConversation",
+          "when": "webviewId == 'dext.history' && (webviewSection == 'session' || webviewSection == 'turn')",
+          "group": "3_copy@1"
+        },
+        {
+          "command": "dext.history.renameConversation",
+          "when": "webviewId == 'dext.history' && (webviewSection == 'session' || webviewSection == 'turn')",
+          "group": "2_conversation@0"
+        },
+        {
+          "command": "dext.history.addFavorite",
+          "when": "webviewId == 'dext.history' && (webviewSection == 'session' || webviewSection == 'turn') && !dextFavorite",
+          "group": "2_conversation@3"
+        },
+        {
+          "command": "dext.history.removeFavorite",
+          "when": "webviewId == 'dext.history' && (webviewSection == 'session' || webviewSection == 'turn') && dextFavorite",
+          "group": "2_conversation@3"
+        },
+        {
+          "command": "dext.history.deleteConversation",
+          "when": "webviewId == 'dext.history' && (webviewSection == 'session' || webviewSection == 'turn')",
+          "group": "4_delete@1"
+        },
+        {
+          "command": "dext.tab.renameConversation",
+          "when": "webviewId == 'dext.sidebar' && webviewSection == 'conversationTab'",
+          "group": "0_rename@1"
+        },
+        {
+          "command": "dext.tab.pinConversation",
+          "when": "webviewId == 'dext.sidebar' && webviewSection == 'conversationTab' && !dextTabPinned",
+          "group": "1_pin@1"
+        },
+        {
+          "command": "dext.tab.unpinConversation",
+          "when": "webviewId == 'dext.sidebar' && webviewSection == 'conversationTab' && dextTabPinned",
+          "group": "1_pin@1"
+        },
+        {
+          "command": "dext.tab.closeConversation",
+          "when": "webviewId == 'dext.sidebar' && webviewSection == 'conversationTab'",
+          "group": "2_close@1"
         }
       ]
     },

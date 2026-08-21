@@ -1,6 +1,8 @@
 import { randomBytes } from "node:crypto";
 import * as vscode from "vscode";
 import type { DextHistoryStore } from "./historyStore.js";
+import type { DextConversationPreferences } from "./conversationPreferences.js";
+import { orderHistorySessions } from "./conversationPreferences.js";
 import { historyTokenStyles, renderHistorySession } from "./historyRender.js";
 import { loadEditorTokenTheme } from "./vscodeTheme.js";
 import { openWorkspaceFileReference } from "./vscodeContextHost.js";
@@ -11,7 +13,8 @@ export class DextHistoryPanel implements vscode.Disposable {
 
   constructor(
     private readonly extensionUri: vscode.Uri,
-    private readonly history: DextHistoryStore
+    private readonly history: DextHistoryStore,
+    private readonly preferences: DextConversationPreferences
   ) {}
 
   showInActiveEditor(): Promise<void> {
@@ -49,6 +52,10 @@ export class DextHistoryPanel implements vscode.Disposable {
     return Promise.resolve();
   }
 
+  refresh(): void {
+    this.render();
+  }
+
   dispose(): void {
     this.panel?.dispose();
   }
@@ -62,10 +69,21 @@ export class DextHistoryPanel implements vscode.Disposable {
     const nonce = randomBytes(16).toString("base64");
     const codicons = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "dist", "codicons", "codicon.css"));
     const style = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "media", "styles.css"));
-    const sessions = this.history.list();
+    const ordering = this.preferences.historyOrdering();
+    const favorites = new Set(ordering.favorites);
+    const sessions = orderHistorySessions(this.history.list(), ordering);
+    const empty = ordering.favoritesOnly
+      ? "No favorite Dext conversations yet."
+      : "No Dext history yet.";
     const body = sessions.length
-      ? sessions.map(renderHistorySession).join("\n")
-      : `<div class="history-empty">No Dext history yet.</div>`;
+      ? sessions.map((session) => {
+        const name = this.preferences.title(session.id);
+        return renderHistorySession(session, {
+          favorite: favorites.has(session.id),
+          ...(name ? { name } : {})
+        });
+      }).join("\n")
+      : `<div class="history-empty">${empty}</div>`;
     return `<!doctype html>
 <html lang="en">
 <head>
