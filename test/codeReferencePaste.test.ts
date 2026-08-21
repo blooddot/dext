@@ -51,4 +51,5 @@ describe("Code reference paste", () => {
       contextAttached: false
     })).toBe("ordinary");
   });
+
 });

@@ -24,16 +24,15 @@ function metadata(source: string, fallback: string): Pick<SkillDescriptor, "titl
   return { title: name, description };
 }
 
-/** Discovers standard SKILL.md packages. The first configured root wins so
- * project-local skills predictably override later shared directories. */
+/** Discovers Dext-owned SKILL.md packages. The local .dext directory wins
+ * over explicitly configured shared roots. */
 export class SkillCatalog {
   private readonly entries = new Map<string, SkillDescriptor>();
 
   async reload(workspaceRoot: string, skillDirs: readonly string[] = []): Promise<void> {
     this.entries.clear();
     const roots = [
-      join(workspaceRoot, ".agents", "skills"),
-      join(workspaceRoot, "dext", "skills"),
+      join(workspaceRoot, ".dext", "skills"),
       ...skillDirs.map((directory) => resolve(workspaceRoot, directory))
     ];
     for (const root of roots) await this.addRoot(root);

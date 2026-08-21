@@ -11,6 +11,8 @@ export const BUILTIN_METHODS: readonly CallableDefinition[] = [
     version: "1.0.0",
     input: [
       { name: "input", type: "string", required: true, description: "Question or analysis request. Use @workspace/path tokens for attached code references." },
+      { name: "skills", type: "string", multiple: true, internal: true, description: "Optional Dext skill identifiers loaded only for this Ask call." },
+      { name: "rules", type: "string", multiple: true, internal: true, description: "Optional .dext/rules-relative files loaded only for this Ask call." },
       { name: "workspace", type: "dir", description: "Optional workspace directory; defaults to the current project root." }
     ],
     output: { kind: "chat" },
@@ -26,6 +28,8 @@ export const BUILTIN_METHODS: readonly CallableDefinition[] = [
     input: [
       { name: "input", type: "string", required: true, description: "Task request. Use @workspace/path tokens for attached code references." },
       { name: "apply", type: "boolean", default: true, description: "Allow trusted workspace changes. Set false to require a preview-only patch." },
+      { name: "skills", type: "string", multiple: true, internal: true, description: "Optional Dext skill identifiers loaded only for this Agent call." },
+      { name: "rules", type: "string", multiple: true, internal: true, description: "Optional .dext/rules-relative files loaded only for this Agent call." },
       { name: "workspace", type: "dir", description: "Optional workspace directory; defaults to the current project root." }
     ],
     output: {

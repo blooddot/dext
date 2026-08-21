@@ -318,6 +318,7 @@
     "@ax-llm/ax": "23.0.11",
     "chrome-remote-interface": "^0.34.0",
     "jsonc-parser": "^3.3.1",
+    "markdown-it": "^14.1.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -333,6 +334,7 @@
     "@lezer/highlight": "^1.2.1",
     "@lezer/python": "^1.1.18",
     "@types/chrome-remote-interface": "^0.34.0",
+    "@types/markdown-it": "^14.2.0",
     "@types/node": "24.10.1",
     "@types/vscode": "1.105.0",
     "@vscode/codicons": "0.0.46-24",

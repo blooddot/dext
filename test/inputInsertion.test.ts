@@ -47,5 +47,22 @@ describe("@ reference insertion", () => {
     expect(edit?.text).toMatch(/^"/);
     expect(edit?.text).not.toContain('f"');
     expect(inputReferenceProjections(edit?.text ?? "")[0]?.reference.payload).toBe("a.ts");
+    expect(edit?.text).toContain("@a.ts ");
+  });
+
+  it("leaves a separator after an attachment inserted at the end of chat input", () => {
+    const edit = fileReferenceInsertion("", 0, 0, ["@.dext/attachments/screenshot.png"]);
+    expect(edit).toMatchObject({ text: "@.dext/attachments/screenshot.png ", cursorOffset: 34 });
+    expect(inputReferenceProjections(edit.text)).toEqual([{
+      reference: {
+        kind: "file",
+        start: 0,
+        end: 33,
+        expression: "@.dext/attachments/screenshot.png",
+        payload: ".dext/attachments/screenshot.png"
+      },
+      interpolationStart: 0,
+      interpolationEnd: 33
+    }]);
   });
 });

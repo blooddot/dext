@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
-import { relative, resolve, sep } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { readFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { AxAdapter } from "./axAdapter.js";
 import type { ContextResolver } from "./contextResolver.js";
@@ -40,6 +41,15 @@ function displayValue(value: unknown): string {
 
 function stringArgument(value: unknown, fallback: string): string {
   return typeof value === "string" ? value : fallback;
+}
+
+function stringListArgument(value: unknown, name: string): string[] {
+  if (value === undefined) return [];
+  if (typeof value === "string") return value.trim() ? [value.trim()] : [];
+  if (!Array.isArray(value) || !value.every((item): item is string => typeof item === "string")) {
+    throw new Error(`${name} must be an array of strings.`);
+  }
+  return [...new Set(value.map((item) => item.trim()).filter(Boolean))];
 }
 
 function validationValue(value: unknown): unknown {
@@ -102,6 +112,24 @@ function workspaceCwd(root: string, workspace: unknown): string {
     throw new Error("ask/agent workspace must stay inside the current project.");
   }
   return candidate;
+}
+
+function workspaceDirectory(workspace: unknown, root: string): DirRef {
+  return workspace
+    && typeof workspace === "object"
+    && "kind" in workspace
+    && workspace.kind === "dirRef"
+    && "uri" in workspace
+    && typeof workspace.uri === "string"
+    && "path" in workspace
+    && typeof workspace.path === "string"
+    ? { kind: "dirRef", uri: workspace.uri, path: workspace.path }
+    : defaultWorkspace(root);
+}
+
+function combineInstructions(...values: readonly (string | undefined)[]): string | undefined {
+  const parts = values.map((value) => value?.trim()).filter((value): value is string => Boolean(value));
+  return parts.length ? parts.join("\n\n") : undefined;
 }
 
 export function usesAgentRunner(methodId: string): boolean {
@@ -212,6 +240,7 @@ export class DextRuntime {
   private workspaceRoot = process.cwd();
   private workspaceTrusted = false;
   private skillLoader: ((skill: string, workspace: DirRef) => Promise<{ instructions: string; sourcePath: string }>) | undefined;
+  private ruleLoader: ((path: string) => Promise<string | undefined>) | undefined;
   private mcpCaller: ((tool: string, input: Record<string, unknown>) => Promise<DextResult>) | undefined;
 
   constructor(
@@ -257,6 +286,10 @@ export class DextRuntime {
 
   setSkillLoader(loader: (skill: string, workspace: DirRef) => Promise<{ instructions: string; sourcePath: string }>): void {
     this.skillLoader = loader;
+  }
+
+  setRuleLoader(loader: (path: string) => Promise<string | undefined>): void {
+    this.ruleLoader = loader;
   }
 
   setMcpCaller(caller: (tool: string, input: Record<string, unknown>) => Promise<DextResult>): void {
@@ -336,6 +369,53 @@ export class DextRuntime {
           throw new Error("agent(apply=true) requires a trusted local workspace.");
         }
         let runnerMetadata = metadata;
+        if (method.id === "ask" || method.id === "agent") {
+          const directory = workspaceDirectory(resolved.arguments.workspace, this.workspaceRoot);
+          const skills = stringListArgument(resolved.arguments.skills, "skills");
+          const skillInstructions: string[] = [];
+          if (skills.length) {
+            if (!this.skillLoader) throw new Error("Agent call skill loading is not configured.");
+            for (const skill of skills) {
+              const loaded = await this.skillLoader(skill, directory);
+              skillInstructions.push([
+                `Follow the skill '${skill}' from ${loaded.sourcePath} for this ${method.id} call.`,
+                loaded.instructions
+              ].join("\n\n"));
+            }
+          }
+          const rules = stringListArgument(resolved.arguments.rules, "rules");
+          const ruleInstructions: string[] = [];
+          if (rules.length) {
+            if (!this.workspaceTrusted) {
+              throw new Error("rules require a trusted local workspace.");
+            }
+            const rulesRoot = join(this.workspaceRoot, ".dext", "rules");
+            for (const rule of rules) {
+              if (isAbsolute(rule) || rule.includes("\0")) {
+                throw new Error("rules must use paths relative to .dext/rules.");
+              }
+              const resolvedPath = resolve(rulesRoot, rule);
+              if (!insideWorkspace(this.workspaceRoot, resolvedPath) || !insideWorkspace(rulesRoot, resolvedPath)) {
+                throw new Error("rules must stay below .dext/rules.");
+              }
+              try {
+                const content = this.ruleLoader
+                  ? await this.ruleLoader(resolvedPath)
+                  : await readFile(resolvedPath, "utf8");
+                if (content === undefined) throw new Error("file not found");
+                ruleInstructions.push(`Apply rule '${rule}':\n\n${content}`);
+              } catch (error) {
+                throw new Error(`Unable to read rule '${rule}': ${error instanceof Error ? error.message : String(error)}`);
+              }
+            }
+          }
+          const callInstruction = combineInstructions(
+            combineInstructions(undefined, ...skillInstructions),
+            ...ruleInstructions
+          );
+          const instruction = combineInstructions(metadata.instruction, callInstruction);
+          if (instruction) runnerMetadata = { ...metadata, instruction };
+        }
         if (method.id === "skill") {
           if (!this.skillLoader) throw new Error("Skill discovery is not configured.");
           const workspace = resolved.arguments.workspace;

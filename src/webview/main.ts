@@ -1,14 +1,19 @@
 import "../../media/styles.css";
+import MarkdownIt from "markdown-it";
+import { parser as pythonParser } from "@lezer/python";
+import { classHighlighter, highlightCode } from "@lezer/highlight";
 import type {
   FieldDefinition,
   AgentStreamEvent,
+  AgentToolKind,
+  DextResult,
   InputExecutionResponse,
   PatchChange,
   RuntimeResponse,
   WorkflowStepResponse
 } from "../core/types.js";
 import { formatMethodSignature } from "../core/methodSignature.js";
-import type { SidebarState, WebviewRequest, WebviewResponse } from "../webviewProtocol.js";
+import type { ConversationSummary, SidebarState, WebviewRequest, WebviewResponse } from "../webviewProtocol.js";
 import { parseDroppedFiles } from "./chatAttachments.js";
 import { ClipboardClient } from "./clipboardClient.js";
 import { DextCodeEditor } from "./codeEditor.js";
@@ -43,13 +48,22 @@ function element<T extends HTMLElement>(id: string): T {
 const vscode = acquireVsCodeApi();
 const elements = {
   main: element<HTMLElement>("dext-main"),
+  conversationControl: element<HTMLButtonElement>("conversation-control"),
+  conversationControlValue: element<HTMLElement>("conversation-control-value"),
+  conversationMenu: element<HTMLElement>("conversation-menu"),
+  newConversation: element<HTMLButtonElement>("new-conversation"),
+  viewMethods: element<HTMLButtonElement>("view-methods"),
+  methodsDialog: element<HTMLDialogElement>("methods-dialog"),
+  closeMethods: element<HTMLButtonElement>("close-methods"),
   inputSection: element<HTMLElement>("input-section"),
   inputHeading: element<HTMLElement>("input-heading"),
   inputBody: element<HTMLElement>("input-body"),
   inputShell: element<HTMLElement>("input-shell"),
+  inputError: element<HTMLElement>("input-error"),
   codeEditor: element<HTMLElement>("code-editor"),
   attachFiles: element<HTMLButtonElement>("attach-files"),
   modeControl: element<HTMLButtonElement>("mode-control"),
+  modeControlIcon: element<HTMLElement>("mode-control-icon"),
   modeControlValue: element<HTMLElement>("mode-control-value"),
   modeMenu: element<HTMLElement>("mode-menu"),
   agentControl: element<HTMLButtonElement>("agent-control"),
@@ -58,6 +72,7 @@ const elements = {
   modelControl: element<HTMLButtonElement>("model-control"),
   modelControlValue: element<HTMLElement>("model-control-value"),
   modelMenu: element<HTMLElement>("model-menu"),
+  modelSubmenu: element<HTMLElement>("model-submenu"),
   run: element<HTMLButtonElement>("run"),
   runLabel: element<HTMLElement>("run-label"),
   problems: element<HTMLButtonElement>("problems"),
@@ -65,8 +80,6 @@ const elements = {
   resultHeading: element<HTMLElement>("result-heading"),
   resultBody: element<HTMLElement>("result-body"),
   methods: element<HTMLElement>("methods"),
-  methodsSection: element<HTMLElement>("methods-heading"),
-  methodsBody: element<HTMLElement>("methods-body"),
   methodCount: element<HTMLElement>("method-count"),
   methodsToggle: element<HTMLButtonElement>("methods-toggle"),
   configErrors: element<HTMLElement>("config-errors"),
@@ -75,8 +88,6 @@ const elements = {
   clearOutput: element<HTMLButtonElement>("clear-output"),
   inputFullscreen: element<HTMLButtonElement>("input-fullscreen"),
   resultFullscreen: element<HTMLButtonElement>("result-fullscreen"),
-  methodsFullscreen: element<HTMLButtonElement>("methods-fullscreen"),
-  methodsSectionElement: element<HTMLElement>("methods-section"),
   attachmentBar: element<HTMLElement>("attachment-bar")
 };
 
@@ -91,7 +102,10 @@ let inputKind: "empty" | "workflow" | "invalid" = "empty";
 type InputMode = "agent" | "ask" | "code";
 let inputMode: InputMode = "agent";
 let sidebarState: SidebarState | undefined;
+let conversations: ConversationSummary[] = [];
+let activeConversationId: string | undefined;
 let dropPosition: number | undefined;
+let pendingDropPosition: number | undefined;
 let agentStream: HTMLElement | undefined;
 let agentTrace: HTMLDetailsElement | undefined;
 let agentRunStartedAt = 0;
@@ -100,7 +114,26 @@ let agentProgress: HTMLElement | undefined;
 let agentProgressState = "Thinking";
 let agentCommandIds = new Set<string>();
 let agentEditedUris = new Set<string>();
-const agentGroups = new Map<"reasoning" | "work" | "files" | "tool", { disclosure: HTMLDetailsElement; body: HTMLElement }>();
+const agentEventItems = new Map<string, HTMLElement>();
+interface AgentToolCommand {
+  body: HTMLElement;
+  copy: HTMLButtonElement;
+  label: string;
+  summaryLabel: HTMLElement;
+  group?: AgentToolGroup;
+}
+interface AgentToolGroup {
+  disclosure: HTMLDetailsElement;
+  label: HTMLElement;
+  body: HTMLElement;
+  commands: AgentToolCommand[];
+  /** Set when the agent named the group itself, which wins over a counted label. */
+  labelText?: string;
+}
+const agentToolItems = new Map<string, AgentToolCommand>();
+const agentToolGroups = new Map<string, AgentToolGroup>();
+let agentToolGroup: AgentToolGroup | undefined;
+let agentFileChanges: { disclosure: HTMLDetailsElement; body: HTMLElement; label: HTMLElement } | undefined;
 const imageAttachments = new Map<string, HTMLElement>();
 interface OutputTurnElements {
   disclosure: HTMLDetailsElement;
@@ -111,6 +144,41 @@ interface OutputTurnElements {
 }
 const outputTurns = new Map<string, OutputTurnElements>();
 let activeTurn: OutputTurnElements | undefined;
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"]/g, (character) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    "\"": "&quot;"
+  })[character] ?? character);
+}
+
+const markdown = new MarkdownIt({
+  html: false,
+  breaks: true,
+  highlight(source, language) {
+    const normalized = language.trim().toLowerCase();
+    if (normalized !== "python" && normalized !== "py") return "";
+    try {
+      let html = "";
+      highlightCode(
+        source,
+        pythonParser.parse(source),
+        classHighlighter,
+        (text, classes) => {
+          html += classes
+            ? `<span class="${classes}">${escapeHtml(text)}</span>`
+            : escapeHtml(text);
+        },
+        () => { html += "\n"; }
+      );
+      return html;
+    } catch {
+      return "";
+    }
+  }
+});
 
 const editor = new DextCodeEditor({
   parent: elements.codeEditor,
@@ -128,6 +196,9 @@ const editor = new DextCodeEditor({
     updateRunState();
   },
   onSourceChanged() {
+    // A pending host file lookup must not insert at a stale document offset.
+    pendingDropPosition = undefined;
+    clearInputError();
     updateRunState();
   },
   onError: renderError
@@ -141,6 +212,7 @@ function openInputReference(reference: ContextReferenceOccurrence): void {
 
 function updateRunState(): void {
   const codeMode = inputMode === "code";
+  elements.inputSection.dataset.mode = inputMode;
   elements.run.disabled = executing
     ? stopping || !activeTurnId
     : !editor.source.trim() || (codeMode && (hasErrors || inputKind === "invalid"));
@@ -153,9 +225,10 @@ function updateRunState(): void {
     problemCounts.errors ? `${problemCounts.errors} error${problemCounts.errors === 1 ? "" : "s"}` : "",
     problemCounts.warnings ? `${problemCounts.warnings} warning${problemCounts.warnings === 1 ? "" : "s"}` : ""
   ].filter(Boolean);
-  elements.problems.textContent = codeMode ? parts.join(" · ") || "No problems" : "Code mode only";
+  elements.problems.textContent = parts.join(" · ") || "No problems";
   elements.problems.disabled = !codeMode || parts.length === 0;
   elements.problems.classList.toggle("has-problems", codeMode && parts.length > 0);
+  elements.problems.classList.toggle("hidden", !codeMode);
   elements.inputShell.classList.toggle("conversation-mode", !codeMode);
 }
 
@@ -169,15 +242,16 @@ function run(): void {
   }
   const source = editor.source.trim();
   if (!source || elements.run.disabled) return;
+  clearInputError();
   vscode.postMessage({ type: "executeInput", mode: inputMode, source });
+  clearSubmittedInput();
 }
 
-type PanelName = "input" | "result" | "methods";
+type PanelName = "input" | "result";
 
 const panels: Record<PanelName, { section: HTMLElement; heading: HTMLElement; body: HTMLElement; button: HTMLButtonElement; label: string }> = {
   input: { section: elements.inputSection, heading: elements.inputHeading, body: elements.inputBody, button: elements.inputFullscreen, label: "Input" },
-  result: { section: elements.resultSection, heading: elements.resultHeading, body: elements.resultBody, button: elements.resultFullscreen, label: "Output" },
-  methods: { section: elements.methodsSectionElement, heading: elements.methodsSection, body: elements.methodsBody, button: elements.methodsFullscreen, label: "API" }
+  result: { section: elements.resultSection, heading: elements.resultHeading, body: elements.resultBody, button: elements.resultFullscreen, label: "Output" }
 };
 let fullscreenPanel: PanelName | undefined;
 let fullscreenSnapshot: Record<PanelName, boolean> | undefined;
@@ -219,6 +293,18 @@ function toggleFullscreen(name: PanelName): void {
     setSectionOpen(panels[panelName].heading, panels[panelName].body, active);
   }
   syncFullscreenButtons();
+}
+
+function openMethodsDialog(): void {
+  closeConversationMenu();
+  closeComposerMenus();
+  if (!elements.methodsDialog.open) elements.methodsDialog.showModal();
+  elements.viewMethods.setAttribute("aria-expanded", "true");
+}
+
+function closeMethodsDialog(): void {
+  if (elements.methodsDialog.open) elements.methodsDialog.close();
+  elements.viewMethods.setAttribute("aria-expanded", "false");
 }
 
 function defaultValue(field: FieldDefinition): string {
@@ -316,7 +402,10 @@ function renderMethods(state: SidebarState): void {
       const insert = document.createElement("i");
       insert.className = "codicon codicon-add";
       row.append(identity, insert);
-      row.addEventListener("click", () => editor.insertInvocation(methodTemplate(method)));
+      row.addEventListener("click", () => {
+        editor.insertInvocation(methodTemplate(method));
+        closeMethodsDialog();
+      });
       parent.append(row);
     }
   }
@@ -373,6 +462,12 @@ function toggleSection(heading: HTMLElement, body: HTMLElement): void {
   setSectionOpen(heading, body, heading.getAttribute("aria-expanded") !== "true");
 }
 
+function displayOptionValue(value: string): string {
+  return value
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
 function renderAgentControls(state: SidebarState): void {
   sidebarState = state;
   inputMode = state.agentSelection.mode ?? inputMode;
@@ -385,9 +480,19 @@ function renderAgentControls(state: SidebarState): void {
     : (selected?.models ?? []).map((item): ModelOption => ({ id: item, label: item, reasoningEfforts: [], speedTiers: [], serviceTiers: [] }));
   const selectedModel = options.find((item) => item.id === state.agentSelection.model);
   const modeLabel: Record<InputMode, string> = { agent: "Agent", ask: "Ask", code: "Code" };
+  const modeIcon: Record<InputMode, string> = {
+    agent: "codicon-hubot",
+    ask: "codicon-comment-discussion",
+    code: "codicon-code"
+  };
   elements.modeControlValue.textContent = modeLabel[inputMode];
+  elements.modeControlIcon.className = `codicon ${modeIcon[inputMode]}`;
   elements.agentControlValue.textContent = selected?.label ?? "Choose";
-  elements.modelControlValue.textContent = selectedModel?.label ?? "Default";
+  const selectedModelLabel = selectedModel?.label ?? "Default";
+  const selectedEffort = state.agentSelection.reasoningEffort ?? selectedModel?.defaultReasoningEffort;
+  elements.modelControlValue.textContent = selectedEffort && selectedModel
+    ? `${selectedModelLabel} ${displayOptionValue(selectedEffort)}`
+    : selectedModelLabel;
   renderComposerMenu(elements.modeMenu, [
     ["agent", "Agent", "codicon-hubot"],
     ["ask", "Ask", "codicon-comment-discussion"],
@@ -447,28 +552,30 @@ function renderModelMenu(
     },
     {
       title: "Reasoning",
-      value: current.reasoningEffort ?? selectedModel?.defaultReasoningEffort ?? "Default",
-      items: (selectedModel?.reasoningEfforts ?? []).map((item) => [item, item]),
+      value: displayOptionValue(current.reasoningEffort ?? selectedModel?.defaultReasoningEffort ?? "Default"),
+      items: (selectedModel?.reasoningEfforts ?? []).map((item) => [item, displayOptionValue(item)]),
       selected: current.reasoningEffort ?? selectedModel?.defaultReasoningEffort ?? "",
       onSelect: (reasoningEffort) => submitAgentSelection({ reasoningEffort })
     },
     {
       title: "Speed",
-      value: current.speed ?? "Default",
-      items: (selectedModel?.speedTiers ?? []).map((item) => [item, item === "standard" ? "Standard" : item]),
+      value: displayOptionValue(current.speed ?? "Default"),
+      items: (selectedModel?.speedTiers ?? []).map((item) => [item, displayOptionValue(item)]),
       selected: current.speed ?? "",
       onSelect: (speed) => submitAgentSelection({ speed })
     },
     {
       title: "Advanced",
-      value: current.serviceTier ?? "Default",
-      items: (selectedModel?.serviceTiers ?? []).map((item) => [item, item]),
+      value: displayOptionValue(current.serviceTier ?? "Default"),
+      items: (selectedModel?.serviceTiers ?? []).map((item) => [item, displayOptionValue(item)]),
       selected: current.serviceTier ?? "",
       onSelect: (serviceTier) => submitAgentSelection({ serviceTier })
     }
   ];
   elements.modelMenu.replaceChildren();
   elements.modelMenu.dataset.modelMenuView = "categories";
+  elements.modelSubmenu.replaceChildren();
+  elements.modelSubmenu.hidden = true;
   for (const category of categories) {
     if (!category.items.length) continue;
     const button = document.createElement("button");
@@ -484,14 +591,9 @@ function renderModelMenu(
     button.append(title, value, chevron);
     const openChoices = (event: Event): void => {
       event.stopPropagation();
-      renderModelChoices(elements.modelMenu, category.title, category.items, category.selected, category.onSelect);
+      renderModelChoices(elements.modelSubmenu, category.title, category.items, category.selected, category.onSelect);
     };
     button.addEventListener("click", openChoices);
-    button.addEventListener("mouseenter", () => {
-      if (!elements.modelMenu.hidden && elements.modelMenu.dataset.modelMenuView === "categories") {
-        renderModelChoices(elements.modelMenu, category.title, category.items, category.selected, category.onSelect);
-      }
-    });
     elements.modelMenu.append(button);
   }
 }
@@ -505,24 +607,12 @@ function renderModelChoices(
 ): void {
   menu.replaceChildren();
   menu.dataset.modelMenuView = "choices";
-  const back = document.createElement("button");
-  back.type = "button";
-  back.className = "composer-menu-back";
-  back.innerHTML = '<i class="codicon codicon-chevron-left"></i><span></span>';
-  const label = back.querySelector("span");
-  if (label) label.textContent = title;
-  back.addEventListener("click", (event) => {
-    event.stopPropagation();
-    const state = sidebarState;
-    if (!state) return;
-    const selected = state.agentProfiles.find((item) => item.id === state.agentSelection.profileId)
-      ?? state.agentProfiles[0];
-    const options = selected?.modelOptions
-      ? selected.modelOptions
-      : (selected?.models ?? []).map((item) => ({ id: item, label: item, reasoningEfforts: [], speedTiers: [], serviceTiers: [] }));
-    renderModelMenu(state, options, options.find((item) => item.id === state.agentSelection.model));
-  });
-  menu.append(back);
+  menu.hidden = false;
+  positionModelSubmenu();
+  const heading = document.createElement("div");
+  heading.className = "composer-menu-submenu-heading";
+  heading.textContent = title;
+  menu.append(heading);
   for (const [value, label] of items) {
     const button = document.createElement("button");
     button.type = "button";
@@ -542,6 +632,23 @@ function renderModelChoices(
   }
 }
 
+function positionModelSubmenu(): void {
+  if (elements.modelSubmenu.hidden) return;
+  const modelMenu = elements.modelMenu.getBoundingClientRect();
+  const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+  const submenuWidth = Math.min(216, Math.max(0, viewportWidth - 24));
+  const gap = 4;
+  const edgePadding = 8;
+  const rightSpace = viewportWidth - modelMenu.right - gap - edgePadding;
+  const leftSpace = modelMenu.left - gap - edgePadding;
+  const fitsRight = rightSpace >= submenuWidth;
+  const fitsLeft = leftSpace >= submenuWidth;
+  const side = fitsRight || (!fitsLeft && rightSpace >= leftSpace) ? "right" : "left";
+  elements.modelSubmenu.dataset.submenuSide = side;
+}
+
+window.addEventListener("resize", positionModelSubmenu);
+
 function submitAgentSelection(change: Partial<SidebarState["agentSelection"]>): void {
   const selection = sidebarState?.agentSelection;
   closeComposerMenus();
@@ -557,6 +664,58 @@ function submitAgentSelection(change: Partial<SidebarState["agentSelection"]>): 
   });
 }
 
+function renderConversations(next: ConversationSummary[], activeId: string): void {
+  conversations = next;
+  activeConversationId = activeId;
+  const active = conversations.find((item) => item.id === activeId);
+  elements.conversationControlValue.textContent = active?.title ?? "New conversation";
+  elements.conversationMenu.replaceChildren();
+  if (!conversations.length) {
+    const empty = document.createElement("div");
+    empty.className = "conversation-empty";
+    empty.textContent = "No conversations yet";
+    elements.conversationMenu.append(empty);
+    return;
+  }
+  for (const conversation of conversations) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `conversation-option${conversation.id === activeId ? " active" : ""}`;
+    button.setAttribute("role", "menuitemradio");
+    button.setAttribute("aria-checked", String(conversation.id === activeId));
+    const title = document.createElement("span");
+    title.className = "conversation-option-title";
+    title.textContent = conversation.title;
+    const meta = document.createElement("span");
+    meta.className = "conversation-option-meta";
+    meta.textContent = conversation.turnCount ? `${conversation.turnCount} turn${conversation.turnCount === 1 ? "" : "s"}` : "Empty";
+    const check = document.createElement("i");
+    check.className = `codicon codicon-${conversation.id === activeId ? "check" : "blank"}`;
+    button.append(title, meta, check);
+    button.addEventListener("click", () => {
+      closeConversationMenu();
+      if (conversation.id !== activeConversationId) {
+        vscode.postMessage({ type: "selectConversation", sessionId: conversation.id });
+      }
+    });
+    elements.conversationMenu.append(button);
+  }
+}
+
+function closeConversationMenu(): void {
+  elements.conversationMenu.hidden = true;
+  elements.conversationControl.setAttribute("aria-expanded", "false");
+}
+
+function toggleConversationMenu(): void {
+  const open = elements.conversationMenu.hidden;
+  closeConversationMenu();
+  if (open) {
+    elements.conversationMenu.hidden = false;
+    elements.conversationControl.setAttribute("aria-expanded", "true");
+  }
+}
+
 const composerMenus = [
   { control: elements.modeControl, menu: elements.modeMenu },
   { control: elements.agentControl, menu: elements.agentMenu },
@@ -569,6 +728,7 @@ function closeComposerMenus(except?: HTMLElement): void {
     item.menu.hidden = !open;
     item.control.setAttribute("aria-expanded", String(open));
   }
+  if (except !== elements.modelMenu) elements.modelSubmenu.hidden = true;
 }
 
 function toggleComposerMenu(menu: HTMLElement): void {
@@ -625,6 +785,15 @@ function codeBlock(content: string): HTMLElement {
   return copyableContent(content);
 }
 
+function uiResultText(result: Extract<DextResult, { kind: "ui" }>): string {
+  if (result.type === "choice") {
+    const selected = result.selected.length ? result.selected.join(", ") : "No selection";
+    return result.custom ? `${selected} (custom: ${result.custom})` : selected;
+  }
+  if (result.type === "confirm") return result.confirmed ? "Confirmed" : "Cancelled";
+  return result.value ?? "No input";
+}
+
 const ANSI_COLOR_CLASSES = [
   "ansi-black", "ansi-red", "ansi-green", "ansi-yellow",
   "ansi-blue", "ansi-magenta", "ansi-cyan", "ansi-white",
@@ -658,7 +827,19 @@ function ansi256Color(value: number): string {
   return `rgb(${channel(red)}, ${channel(green)}, ${channel(blue)})`;
 }
 
+function normalizeTerminalText(content: string): string {
+  // Progress tools redraw a line with a bare carriage return. Resolve that
+  // redraw before putting the text into a webview <pre>, which cannot emulate
+  // a terminal cursor.
+  return content
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.slice(line.lastIndexOf("\r") + 1))
+    .join("\n");
+}
+
 function terminalText(content: string): DocumentFragment {
+  content = normalizeTerminalText(content);
   const fragment = document.createDocumentFragment();
   const active = new Set<string>();
   let foreground: string | undefined;
@@ -760,10 +941,10 @@ function terminalBlock(content: string, className = "terminal-output"): HTMLElem
 function copyableText(content: string): HTMLElement {
   const wrapper = document.createElement("div");
   wrapper.className = "output-text-copyable";
-  const paragraph = document.createElement("p");
-  paragraph.className = "text-result";
-  paragraph.textContent = content;
-  wrapper.append(paragraph, copyButton(content));
+  const body = document.createElement("div");
+  body.className = "markdown-body";
+  body.innerHTML = markdown.render(content);
+  wrapper.append(body, copyButton(content));
   return wrapper;
 }
 
@@ -1023,17 +1204,12 @@ function renderExecution(response: RuntimeResponse): DocumentFragment {
   } else if (result.kind === "explain") {
     fragment.append(copyableText(result.text));
   } else if (result.kind === "edit" || result.kind === "agent") {
-    const paragraph = document.createElement("p");
-    paragraph.className = "text-result";
-    paragraph.textContent = result.kind === "agent" ? result.text : result.summary;
-    fragment.append(paragraph);
+    const summary = result.kind === "agent" ? result.text : result.summary;
+    if (summary) fragment.append(copyableText(summary));
     const changes = result.kind === "agent" ? result.patch?.changes ?? [] : result.patch.changes;
     for (const change of changes) fragment.append(fileChangeDisclosure(change, "agent-file-change execution-file-change"));
   } else if (result.kind === "apply") {
-    const paragraph = document.createElement("p");
-    paragraph.className = "text-result";
-    paragraph.textContent = `${result.status}: ${result.summary}`;
-    fragment.append(paragraph);
+    fragment.append(copyableText(`${result.status}: ${result.summary}`));
   } else if (result.kind === "print") {
     if (result.label) {
       const label = document.createElement("div");
@@ -1068,10 +1244,7 @@ function renderExecution(response: RuntimeResponse): DocumentFragment {
     }
     fragment.append(codeBlock(result.code));
   } else if (result.kind === "review") {
-    const summary = document.createElement("p");
-    summary.className = "text-result";
-    summary.textContent = result.summary;
-    fragment.append(summary);
+    fragment.append(copyableText(result.summary));
     for (const finding of result.findings) {
       const item = document.createElement("div");
       item.className = `finding ${finding.severity} with-icon`;
@@ -1105,6 +1278,8 @@ function renderExecution(response: RuntimeResponse): DocumentFragment {
     title.textContent = result.title;
     fragment.append(title);
     for (const change of result.changes) fragment.append(fileChangeDisclosure(change, "agent-file-change execution-file-change"));
+  } else if (result.kind === "ui") {
+    fragment.append(copyableText(uiResultText(result)));
   }
   return fragment;
 }
@@ -1141,10 +1316,20 @@ function renderResult(response: InputExecutionResponse): void {
     if (index < entries.length - 1) item.classList.add("has-next");
   }
   elements.resultSection.classList.remove("hidden");
-  setSectionOpen(elements.resultHeading, elements.resultBody, true);
 }
 
-function renderError(message: unknown): void {
+function clearInputError(): void {
+  elements.inputError.textContent = "";
+  elements.inputError.hidden = true;
+}
+
+function renderInputError(message: unknown): void {
+  const text = message instanceof Error ? message.message : String(message);
+  elements.inputError.textContent = text;
+  elements.inputError.hidden = false;
+}
+
+function renderOutputError(message: unknown): void {
   const text = message instanceof Error ? message.message : String(message);
   const target = activeTurn?.output ?? elements.result;
   target.replaceChildren();
@@ -1153,7 +1338,10 @@ function renderError(message: unknown): void {
   summary.textContent = text;
   target.append(summary);
   elements.resultSection.classList.remove("hidden");
-  setSectionOpen(elements.resultHeading, elements.resultBody, true);
+}
+
+function renderError(message: unknown): void {
+  renderInputError(message);
 }
 
 function agentStreamPanel(): HTMLElement {
@@ -1203,44 +1391,125 @@ function finishAgentProgress(): void {
   if (agentTrace) agentTrace.open = false;
 }
 
-function agentGroup(kind: "reasoning" | "work" | "files" | "tool"): { disclosure: HTMLDetailsElement; body: HTMLElement } {
-  const panel = agentStreamPanel();
-  const existing = agentGroups.get(kind);
-  if (existing?.disclosure.isConnected) return existing;
+function agentEventKind(event: AgentStreamEvent): "reasoning" | "work" | "tool" {
+  if (event.phase === "tool") return "tool";
+  return event.group === "aioa-work-log" ? "work" : "reasoning";
+}
+
+function createAgentEventItem(event: AgentStreamEvent): HTMLElement {
+  const kind = agentEventKind(event);
+  const message = document.createElement("section");
+  message.className = `agent-stream-item agent-trace-message agent-trace-${kind}`;
+  const body = document.createElement("div");
+  body.className = "agent-stream-text markdown-body";
+  message.append(body);
+  return message;
+}
+
+function agentToolLabel(event: AgentStreamEvent): string {
+  return (event.title ?? event.text.split(/\r?\n/, 1)[0] ?? "Command").slice(0, 180);
+}
+
+function updateAgentToolGroupLabel(group: AgentToolGroup): void {
+  if (group.labelText) {
+    group.label.textContent = group.labelText;
+    return;
+  }
+  const count = group.commands.length;
+  group.label.textContent = `Ran ${count} command${count === 1 ? "" : "s"}`;
+}
+
+const TOOL_GLYPHS: Record<AgentToolKind, string> = {
+  command: "codicon-terminal",
+  file: "codicon-diff",
+  image: "codicon-file-media",
+  step: "codicon-circle-small-filled"
+};
+
+function toolGlyph(kind: AgentToolKind = "command"): HTMLElement {
+  const icon = document.createElement("i");
+  icon.className = `agent-trace-glyph codicon ${TOOL_GLYPHS[kind]}`;
+  return icon;
+}
+
+function createAgentToolGroup(): AgentToolGroup {
   const disclosure = document.createElement("details");
-  disclosure.className = `agent-trace-group agent-trace-${kind}`;
+  disclosure.className = "agent-stream-item agent-trace-event agent-trace-tool";
+  disclosure.open = false;
   const summary = document.createElement("summary");
   const chevron = document.createElement("i");
   chevron.className = "disclosure-chevron codicon codicon-chevron-right";
   const label = document.createElement("span");
-  label.className = "agent-trace-label";
-  label.textContent = kind === "reasoning"
-    ? "Thought briefly"
-    : kind === "work"
-      ? "AIOA activity"
-      : kind === "files"
-        ? "Edited files"
-        : "Ran commands";
+  label.className = "agent-stream-summary-label";
   const body = document.createElement("div");
-  body.className = "agent-trace-group-body";
-  summary.append(chevron, label);
+  body.className = "agent-trace-tool-body";
+  summary.append(toolGlyph(), label, chevron);
   disclosure.append(summary, body);
-  const order = { reasoning: 0, work: 1, files: 2, tool: 3 } as const;
-  const next = [...panel.querySelectorAll<HTMLElement>(".agent-trace-group")]
-    .find((candidate) => order[candidate.dataset.kind as keyof typeof order] > order[kind]);
-  disclosure.dataset.kind = kind;
-  if (next) panel.insertBefore(disclosure, next);
-  else panel.append(disclosure);
-  const group = { disclosure, body };
-  agentGroups.set(kind, group);
-  return group;
+  agentStreamPanel().append(disclosure);
+  return { disclosure, label, body, commands: [] };
 }
 
-function updateAgentGroupLabel(kind: "reasoning" | "work" | "files" | "tool"): void {
-  const label = agentGroups.get(kind)?.disclosure.querySelector<HTMLElement>(".agent-trace-label");
-  if (!label) return;
-  if (kind === "files") label.textContent = `Edited ${agentEditedUris.size} file${agentEditedUris.size === 1 ? "" : "s"}`;
-  if (kind === "tool") label.textContent = `Ran ${agentCommandIds.size} command${agentCommandIds.size === 1 ? "" : "s"}`;
+function createAgentToolCommand(
+  event: AgentStreamEvent,
+  container: HTMLElement,
+  group?: AgentToolGroup
+): AgentToolCommand {
+  const command = document.createElement("details");
+  command.className = "agent-trace-command";
+  command.open = false;
+  const summary = document.createElement("summary");
+  const chevron = document.createElement("i");
+  chevron.className = "disclosure-chevron codicon codicon-chevron-right";
+  const summaryLabel = document.createElement("span");
+  summaryLabel.className = "agent-trace-command-label";
+  summary.append(toolGlyph(event.toolKind), summaryLabel, chevron);
+  command.append(summary);
+  const body = document.createElement("pre");
+  body.className = "terminal-output agent-trace-command-body";
+  const code = document.createElement("code");
+  body.append(code);
+  const copy = copyButton(event.text);
+  command.append(body, copy);
+  container.append(command);
+  const item: AgentToolCommand = {
+    body,
+    copy,
+    label: agentToolLabel(event),
+    summaryLabel,
+    ...(group ? { group } : {})
+  };
+  summaryLabel.textContent = item.label;
+  if (group) {
+    group.commands.push(item);
+    updateAgentToolGroupLabel(group);
+  }
+  return item;
+}
+
+/**
+ * Agents that report their own step grouping get reproduced exactly, including
+ * steps they chose to show on their own row. Agents that only stream a flat list
+ * of tool calls keep the older behaviour of folding consecutive calls together.
+ */
+function agentToolGroupFor(
+  event: AgentStreamEvent,
+  trailingGroup: (group: AgentToolGroup | undefined) => AgentToolGroup | undefined
+): AgentToolGroup | undefined {
+  if (event.solo) {
+    agentToolGroup = undefined;
+    return undefined;
+  }
+  if (event.groupId) {
+    agentToolGroup = undefined;
+    const existing = agentToolGroups.get(event.groupId);
+    const group = existing?.disclosure.isConnected ? existing : createAgentToolGroup();
+    if (event.groupLabel) group.labelText = event.groupLabel;
+    agentToolGroups.set(event.groupId, group);
+    return group;
+  }
+  const group = trailingGroup(agentToolGroup) ?? createAgentToolGroup();
+  agentToolGroup = group;
+  return group;
 }
 
 function renderAgentEvent(event: AgentStreamEvent): void {
@@ -1249,46 +1518,52 @@ function renderAgentEvent(event: AgentStreamEvent): void {
     return;
   }
   if (event.phase === "reasoning" || event.phase === "message") updateAgentProgress("Thinking");
-  const group = agentGroup(event.group === "aioa-work-log" ? "work" : event.phase === "tool" ? "tool" : "reasoning");
-  const panel = group.body;
+  const panel = agentStreamPanel();
+  // An adjacency group may only keep collecting while it is the newest entry,
+  // otherwise a later command would be back-dated into an earlier point.
+  const trailingGroup = (group: AgentToolGroup | undefined): AgentToolGroup | undefined =>
+    group?.disclosure.isConnected && group.disclosure === panel.lastElementChild ? group : undefined;
   if (event.phase === "tool") {
-    const commandId = event.id ?? event.title ?? event.text;
-    agentCommandIds.add(commandId);
-    updateAgentGroupLabel("tool");
+    // The header counts commands, so steps the agent reported as file or image
+    // work must not inflate it.
+    if ((event.toolKind ?? "command") === "command") agentCommandIds.add(event.id ?? event.title ?? event.text);
     updateAgentProgress(agentProgressState);
-  }
-  let item = event.id
-    ? [...panel.querySelectorAll<HTMLElement>("[data-event-id]")].find((candidate) => candidate.dataset.eventId === event.id)
-    : undefined;
-  if (!item) {
-    item = document.createElement(event.phase === "tool" ? "details" : "div");
-    item.className = `agent-stream-item agent-stream-${event.phase}`;
-    if (event.id) item.dataset.eventId = event.id;
-    if (event.phase === "tool") {
-      (item as HTMLDetailsElement).open = false;
-      const summary = document.createElement("summary");
-      const chevron = document.createElement("i");
-      chevron.className = "disclosure-chevron codicon codicon-chevron-right";
-      const label = document.createElement("span");
-      label.className = "agent-stream-summary-label";
-      label.textContent = (event.title ?? event.text.split(/\r?\n/, 1)[0]!).slice(0, 180);
-      summary.append(chevron, label);
-      item.append(summary);
-      const body = document.createElement("pre");
-      body.className = "agent-stream-text";
-      item.append(body);
+    let command = event.id ? agentToolItems.get(event.id) : undefined;
+    if (command) {
+      agentToolGroup = event.groupId || event.solo ? undefined : trailingGroup(command.group);
+      if (command.group && event.groupLabel) command.group.labelText = event.groupLabel;
     } else {
-      const body = document.createElement("div");
-      body.className = "agent-stream-text";
-      item.append(body);
+      const group = agentToolGroupFor(event, trailingGroup);
+      command = createAgentToolCommand(event, group?.body ?? panel, group);
+      if (event.id) agentToolItems.set(event.id, command);
     }
+    const raw = event.replace ? event.text : `${command.body.textContent ?? ""}${event.text}`;
+    const code = command.body.querySelector("code");
+    if (code) code.replaceChildren(terminalText(raw));
+    else command.body.textContent = raw;
+    command.label = event.title ?? command.label;
+    command.summaryLabel.textContent = command.label;
+    const copy = copyButton(raw);
+    command.copy.replaceWith(copy);
+    command.copy = copy;
+    if (command.group) updateAgentToolGroupLabel(command.group);
+    elements.resultSection.classList.remove("hidden");
+    return;
+  }
+  let item = event.id ? agentEventItems.get(event.id) : undefined;
+  if (!item) {
+    // Only a newly appended message breaks the run of commands; replacing the text
+    // of an earlier message leaves the trailing group open for more commands.
+    agentToolGroup = undefined;
+    item = createAgentEventItem(event);
+    if (event.id) agentEventItems.set(event.id, item);
     item.append(copyButton(event.text));
     panel.append(item);
   }
   const body = item.querySelector<HTMLElement>(".agent-stream-text");
   const eventBody = event.text;
   let copyText = event.text;
-  if (body && event.phase !== "tool") {
+  if (body) {
     const raw = event.replace ? eventBody : `${body.dataset.raw ?? ""}${eventBody}`;
     body.dataset.raw = raw;
     const presentation = presentAgentMessage(raw);
@@ -1308,25 +1583,19 @@ function renderAgentEvent(event: AgentStreamEvent): void {
         heading.append(meta);
       }
       const content = document.createElement("div");
-      content.className = "agent-result-content";
-      content.textContent = presentation.text;
+      content.className = "agent-result-content markdown-body";
+      content.innerHTML = presentation.text ? markdown.render(presentation.text) : "";
       body.replaceChildren(heading, ...(presentation.text ? [content] : []));
       appendAgentPresentationExtras(body, presentation);
     } else {
-      body.textContent = raw;
+      body.innerHTML = markdown.render(raw);
     }
-  } else if (body) {
-    body.textContent = event.replace ? eventBody : `${body.textContent ?? ""}${eventBody}`;
-    copyText = body.textContent ?? event.text;
   }
-  const summaryLabel = item.querySelector<HTMLElement>(".agent-stream-summary-label");
-  if (summaryLabel && event.phase === "tool") summaryLabel.textContent = (event.title ?? summaryLabel.textContent ?? "Command").slice(0, 180);
   const outputCopy = item.querySelector<HTMLButtonElement>(".output-copy");
   if (outputCopy) {
     outputCopy.replaceWith(copyButton(copyText));
   }
   elements.resultSection.classList.remove("hidden");
-  setSectionOpen(elements.resultHeading, elements.resultBody, true);
 }
 
 function renderAgentFileChanges(entries: readonly WorkflowStepResponse[]): void {
@@ -1339,12 +1608,25 @@ function renderAgentFileChanges(entries: readonly WorkflowStepResponse[]): void 
   for (const change of changes) {
     if (agentEditedUris.has(change.uri)) continue;
     agentEditedUris.add(change.uri);
-    const group = agentGroup("files");
-    const disclosure = fileChangeDisclosure(change);
-    group.body.append(disclosure);
+    if (!agentFileChanges?.disclosure.isConnected) {
+      const disclosure = document.createElement("details");
+      disclosure.className = "agent-stream-item agent-trace-event agent-trace-files";
+      const summary = document.createElement("summary");
+      const chevron = document.createElement("i");
+      chevron.className = "disclosure-chevron codicon codicon-chevron-right";
+      const label = document.createElement("span");
+      label.className = "agent-stream-summary-label";
+      const body = document.createElement("div");
+      body.className = "agent-file-changes";
+      summary.append(chevron, label);
+      disclosure.append(summary, body);
+      agentStreamPanel().append(disclosure);
+      agentFileChanges = { disclosure, body, label };
+    }
+    agentFileChanges.body.append(fileChangeDisclosure(change));
   }
   if (changes.length) {
-    updateAgentGroupLabel("files");
+    if (agentFileChanges) agentFileChanges.label.textContent = `Edited ${agentEditedUris.size} file${agentEditedUris.size === 1 ? "" : "s"}`;
     updateAgentProgress(agentProgressState);
   }
 }
@@ -1356,7 +1638,11 @@ function resetAgentTrace(): void {
   agentProgressState = "Thinking";
   agentCommandIds = new Set<string>();
   agentEditedUris = new Set<string>();
-  agentGroups.clear();
+  agentEventItems.clear();
+  agentToolItems.clear();
+  agentToolGroups.clear();
+  agentToolGroup = undefined;
+  agentFileChanges = undefined;
 }
 
 function storedResponse(record: DextHistoryRecord): InputExecutionResponse | undefined {
@@ -1372,6 +1658,8 @@ function storedResponse(record: DextHistoryRecord): InputExecutionResponse | und
 function renderOutputSession(session: DextHistorySession): void {
   if (agentRunTimer) clearInterval(agentRunTimer);
   agentRunTimer = undefined;
+  clearInputError();
+  editor.setValue("");
   elements.result.replaceChildren();
   outputTurns.clear();
   activeTurn = undefined;
@@ -1383,12 +1671,11 @@ function renderOutputSession(session: DextHistorySession): void {
     if (agentTrace) finishAgentProgress();
     turn.processDisclosure.open = false;
     const response = storedResponse(record);
-    if (record.error) renderError(record.error);
+    if (record.error) renderOutputError(record.error);
     else if (response) renderResult(response);
     else if (record.output) turn.output.append(codeBlock(record.output));
   }
   elements.resultSection.classList.remove("hidden");
-  setSectionOpen(elements.resultHeading, elements.resultBody, true);
 }
 
 function droppedFiles(transfer: DataTransfer): ReturnType<typeof parseDroppedFiles> {
@@ -1438,9 +1725,21 @@ function addImageAttachment(relativePath: string, webviewUri: string, name: stri
   imageAttachments.set(relativePath, chip);
 }
 
+function clearSubmittedInput(): void {
+  editor.setValue("");
+}
+
 elements.run.addEventListener("click", run);
 elements.problems.addEventListener("click", () => editor.goToFirstDiagnostic());
 elements.methodsToggle.addEventListener("click", toggleMethodGroups);
+elements.viewMethods.addEventListener("click", openMethodsDialog);
+elements.closeMethods.addEventListener("click", closeMethodsDialog);
+elements.methodsDialog.addEventListener("click", (event) => {
+  if (event.target === elements.methodsDialog) closeMethodsDialog();
+});
+elements.methodsDialog.addEventListener("close", () => {
+  elements.viewMethods.setAttribute("aria-expanded", "false");
+});
 elements.inputHeading.addEventListener("click", (event) => {
   if (event.target instanceof Element && event.target.closest("button")) return;
   toggleSection(elements.inputHeading, elements.inputBody);
@@ -1469,19 +1768,16 @@ elements.resultHeading.addEventListener("keydown", (event) => {
     toggleSection(elements.resultHeading, elements.resultBody);
   }
 });
-elements.methodsSection.addEventListener("click", (event) => {
-  if (event.target instanceof Element && event.target.closest("button")) return;
-  toggleSection(elements.methodsSection, elements.methodsBody);
-});
-elements.methodsSection.addEventListener("keydown", (event) => {
-  if (event.target instanceof Element && event.target.closest("button")) return;
-  if (event.key === "Enter" || event.key === " ") {
-    event.preventDefault();
-    toggleSection(elements.methodsSection, elements.methodsBody);
-  }
-});
 elements.attachFiles.addEventListener("click", () => vscode.postMessage({ type: "chooseFiles" }));
 elements.viewHistory.addEventListener("click", () => vscode.postMessage({ type: "viewHistory" }));
+elements.conversationControl.addEventListener("click", (event) => {
+  event.stopPropagation();
+  toggleConversationMenu();
+});
+elements.newConversation.addEventListener("click", () => {
+  closeConversationMenu();
+  vscode.postMessage({ type: "newConversation" });
+});
 elements.clearOutput.addEventListener("click", () => {
   if (!executing) vscode.postMessage({ type: "clearOutput" });
 });
@@ -1489,11 +1785,14 @@ for (const item of composerMenus) {
   item.control.addEventListener("click", () => toggleComposerMenu(item.menu));
 }
 document.addEventListener("click", (event) => {
+  if (event.target instanceof Element && event.target.closest(".conversation-menu")) return;
+  closeConversationMenu();
   if (event.target instanceof Element && event.target.closest(".composer-menu")) return;
   closeComposerMenus();
 });
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
+  closeConversationMenu();
   closeComposerMenus();
 });
 elements.inputShell.addEventListener("paste", (event) => {
@@ -1541,8 +1840,16 @@ window.addEventListener("drop", (event) => {
   event.stopPropagation();
   elements.inputShell.classList.remove("drop-active");
   const items = event.dataTransfer ? droppedFiles(event.dataTransfer) : [];
-  if (items.length) vscode.postMessage({ type: "dropFiles", items });
-  else dropPosition = undefined;
+  const position = dropPosition;
+  dropPosition = undefined;
+  pendingDropPosition = items.length ? position : undefined;
+  if (items.length) {
+    vscode.postMessage({
+      type: "dropFiles",
+      items,
+      ...(position === undefined ? {} : { position })
+    });
+  }
 }, true);
 
 vscode.postMessage({ type: "debugLog", message: "main.ts loaded (drag diagnostic v2)" });
@@ -1556,21 +1863,23 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     updateRunState();
   }
   if (message.type === "insertFileReferences") {
-    editor.insertFileReferences(message.expressions, dropPosition);
-    dropPosition = undefined;
+    const position = pendingDropPosition === message.position ? message.position : undefined;
+    pendingDropPosition = undefined;
+    editor.insertFileReferences(message.expressions, position);
   }
   if (message.type === "imageAttachment") {
     addImageAttachment(message.relativePath, message.webviewUri, message.name);
     editor.insertFileReferences([`@${message.relativePath}`]);
   }
   if (message.type === "outputSession") renderOutputSession(message.session);
+  if (message.type === "conversations") renderConversations(message.sessions, message.activeId);
   if (message.type === "execution") {
     selectOutputTurn(message.turnId);
     renderResult(message.response);
   }
   if (message.type === "executionFailed") {
     selectOutputTurn(message.turnId);
-    renderError(message.message);
+    renderOutputError(message.message);
   }
   if (message.type === "agentEvent") renderAgentEvent(message.event);
   if (message.type === "executing") {
@@ -1599,7 +1908,8 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   }
   if (message.type === "error") {
     dropPosition = undefined;
-    renderError(message.message);
+    pendingDropPosition = undefined;
+    renderInputError(message.message);
   }
   if (message.type === "focusEditor" || message.type === "focusInput") editor.focus();
   if (message.type === "triggerSuggest") editor.triggerSuggest();

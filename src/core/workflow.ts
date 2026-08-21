@@ -282,7 +282,8 @@ class Compiler {
       return { kind: "step", assignment: name, call: compiled.call, from: node.from, to: node.to };
     }
     const valueNode = parts.find((child) =>
-      ["String", "Number", "Boolean", "ArrayExpression", "DictionaryExpression"].includes(child.name)
+      child.from > variable.to
+      && ["String", "Number", "Boolean", "ArrayExpression", "DictionaryExpression", "VariableName", "MemberExpression"].includes(child.name)
     );
     if (!valueNode) {
       this.error("Assignments must bind the result of a Dext API call or a literal value.", node.from, node.to);
@@ -309,6 +310,10 @@ class Compiler {
       type = declared;
     }
     this.environment.set(name, { type, from: variable.from, value: compiled.expression });
+    if (valueNode.name === "VariableName" || valueNode.name === "MemberExpression") {
+      this.environment.set(name, { type, from: variable.from });
+      return { kind: "assign", assignment: name, expression: compiled.expression, from: node.from, to: node.to };
+    }
     return undefined;
   }
 

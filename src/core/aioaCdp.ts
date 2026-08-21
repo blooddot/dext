@@ -11,7 +11,7 @@ import {
   type AgentRunner
 } from "./agentRunner.js";
 import { ExecutionCancelledError } from "./executionErrors.js";
-import type { FieldDefinition } from "./types.js";
+import type { AgentStreamEvent, AgentToolKind, FieldDefinition } from "./types.js";
 
 const DEFAULT_TIMEOUT_MS = 3_600_000;
 const DEFAULT_POLL_INTERVAL_MS = 300;
@@ -32,12 +32,27 @@ export interface AioaAssistantMessage {
   text: string;
 }
 
-export interface AioaToolMessage {
+export interface AioaWorkLogText {
+  kind: "text";
+  id: string;
+  text: string;
+}
+
+export interface AioaWorkLogStep {
+  kind: "step";
   id: string;
   title: string;
   text: string;
   done: boolean;
+  stepKind: AgentToolKind;
+  /** Set when AIOA nested this step inside one of its own activity groups. */
+  groupId?: string;
+  groupLabel?: string;
+  /** Set when AIOA gave the step its own row instead of folding it into a group. */
+  solo?: boolean;
 }
+
+export type AioaWorkLogSegment = AioaWorkLogText | AioaWorkLogStep;
 
 export interface AioaConversationState {
   busy: boolean;
@@ -48,10 +63,9 @@ export interface AioaConversationState {
 export interface AioaConversationUpdate {
   busy: boolean;
   messages: readonly AioaAssistantMessage[];
-  /** Text from the latest visible .aioa-work-log rendered in AIOA's UI. */
-  activity?: string;
-  /** Command cards from the latest visible AIOA work log. */
-  tools?: readonly AioaToolMessage[];
+  /** Prose and command cards of the latest visible .aioa-work-log, in the order
+   * AIOA rendered them, so the Process timeline can interleave them the same way. */
+  segments?: readonly AioaWorkLogSegment[];
   conversationId?: string;
 }
 
@@ -563,6 +577,41 @@ function looksLikeStructuredOutput(text: string, expectedKind: string): boolean 
 }
 
 /**
+ * Re-emits only the work-log segments AIOA changed since the last poll, keeping
+ * their rendered order and AIOA's own step grouping so the Process timeline can
+ * mirror the work log instead of reconstructing it.
+ */
+function workLogEvents(
+  segments: readonly AioaWorkLogSegment[] | undefined,
+  seen: Map<string, string>
+): AgentStreamEvent[] {
+  const events: AgentStreamEvent[] = [];
+  for (const segment of segments ?? []) {
+    const signature = segment.kind === "text"
+      ? segment.text
+      : [segment.title, segment.text, segment.done, segment.groupId, segment.groupLabel].join("\u0000");
+    if (seen.get(segment.id) === signature) continue;
+    seen.set(segment.id, signature);
+    events.push(segment.kind === "text"
+      ? { phase: "message", id: segment.id, text: segment.text, group: "aioa-work-log", replace: true }
+      : {
+        id: segment.id,
+        phase: "tool",
+        title: segment.title,
+        text: segment.text,
+        group: "aioa-work-log",
+        toolKind: segment.stepKind,
+        replace: true,
+        ...(segment.groupId ? { groupId: segment.groupId } : {}),
+        ...(segment.groupLabel ? { groupLabel: segment.groupLabel } : {}),
+        ...(segment.solo ? { solo: true } : {}),
+        ...(segment.done ? { done: true } : {})
+      });
+  }
+  return events;
+}
+
+/**
  * AIOA owns the active model, tools, and permissions. This adapter requests a
  * preview-only Dext result and never reads private browser stores or IPC data.
  */
@@ -598,7 +647,7 @@ function fieldType(field: FieldDefinition): string {
 }
 
 export function aioaInputType(fields: readonly FieldDefinition[]): string {
-  return fields.map((field) => {
+  return fields.filter((field) => !field.internal).map((field) => {
     const optional = !field.required || field.default !== undefined ? "?" : "";
     const defaultValue = field.default === undefined ? "" : `=${JSON.stringify(field.default)}`;
     return `${field.name}${optional}:${fieldType(field)}${defaultValue}`;
@@ -708,6 +757,7 @@ export function aioaRequestPayload(request: AgentExecutionRequest): string {
   for (const [name, rawValue] of Object.entries(request.resolved.arguments)) {
     if (rawValue === undefined) continue;
     const field = fields.get(name);
+    if (field?.internal) continue;
     let value = displayValue(rawValue);
     if (field?.multiple && !Array.isArray(value)) value = [value];
     const acceptsContext = field?.type === "context" || field?.accepts?.includes("context") === true;
@@ -824,8 +874,7 @@ class ChromeRemoteAioaPage implements AioaCdpPage {
     const snapshot = await this.evaluate<{
       busy: boolean;
       messages: AioaAssistantMessage[];
-      activity?: string;
-      tools?: AioaToolMessage[];
+      segments?: AioaWorkLogSegment[];
       conversationId?: string;
     }>(`
       (() => {
@@ -844,25 +893,96 @@ class ChromeRemoteAioaPage implements AioaCdpPage {
           ? assistantMessages.find((message) => message.contains(workLog))
           : undefined;
         const workLogId = workLogOwner?.getAttribute('data-message-id') || 'work-log';
-        // AIOA hides a command card's details while it is collapsed. textContent
-        // preserves that context whereas innerText only returns rendered text.
-        const textOf = (element) => (element?.textContent || '').trim();
-        const tools = workLog
-          ? [...workLog.querySelectorAll('.aioa-work-command-card')].map((card, index) => {
+        // AIOA collapses the work log and every step inside it, and innerText is
+        // empty for a hidden subtree, so labels and bodies come from textContent.
+        const textOf = (element) => (element?.textContent || '').replace(/\\u00a0/g, ' ').trim();
+        // A summary's parts are separate elements with no whitespace between them,
+        // so concatenating textContent would glue "已编辑 6 个文件" onto "+66-36".
+        const joinParts = (element) => {
+          if (!element) return '';
+          const parts = [...element.children]
+            .map((child) => joinParts(child))
+            .filter(Boolean);
+          if (!parts.length) return textOf(element).replace(/\\s+/g, ' ');
+          return parts.join(' ');
+        };
+        const rowLabel = (element) => joinParts(element.querySelector(':scope > summary')).trim();
+        const noteText = (element) => {
+          const rendered = (element.innerText || '').trim();
+          if (rendered) return rendered;
+          const blocks = [...element.querySelectorAll('.aioa-rich-content > div > *')]
+            .map((block) => textOf(block))
+            .filter(Boolean);
+          return blocks.length ? blocks.join('\\n\\n') : textOf(element);
+        };
+        const stepKind = (element) => {
+          if (element.querySelector('.aioa-work-command-card') || element.matches('.aioa-work-command-step')) return 'command';
+          if (element.matches('.aioa-work-file-step')) return 'file';
+          if (element.matches('.aioa-work-image-step')) return 'image';
+          return 'step';
+        };
+        const stepDetail = (element) => {
+          const card = element.querySelector('.aioa-work-command-card');
+          if (card) {
             const tool = textOf(card.querySelector('.aioa-work-command-tool'));
             const command = textOf(card.querySelector('.aioa-work-command-text'));
             const output = textOf(card.querySelector('.aioa-work-command-output'));
             const result = textOf(card.querySelector('.aioa-work-command-result'));
             const detail = [tool, command, output, result].filter(Boolean).join('\\n\\n') || textOf(card);
-            const title = command || tool || detail.split(/\\r?\\n/, 1)[0] || 'Command';
-            return {
-              id: workLogId + ':command:' + index,
-              title,
-              text: detail || title,
-              done: Boolean(card.querySelector('.aioa-work-command-result'))
+            return { title: command || tool || rowLabel(element) || 'Command', text: detail };
+          }
+          const label = rowLabel(element) || 'Step';
+          const body = [...element.children]
+            .filter((child) => child.tagName.toLowerCase() !== 'summary')
+            .map((child) => textOf(child))
+            .filter(Boolean)
+            .join('\\n');
+          return { title: label, text: body && !label.includes(body) ? label + '\\n\\n' + body : label };
+        };
+        const segments = [];
+        let textIndex = 0;
+        let stepIndex = 0;
+        let groupIndex = 0;
+        const pushText = (value) => {
+          const text = (value || '').trim();
+          if (!text) return;
+          const last = segments[segments.length - 1];
+          if (last && last.kind === 'text') {
+            last.text = last.text + '\\n\\n' + text;
+            return;
+          }
+          segments.push({ kind: 'text', id: workLogId + ':text:' + textIndex++, text });
+        };
+        const pushStep = (element, group) => {
+          const detail = stepDetail(element);
+          segments.push({
+            kind: 'step',
+            id: workLogId + ':step:' + stepIndex++,
+            title: detail.title,
+            text: detail.text,
+            done: element.classList.contains('done'),
+            stepKind: stepKind(element),
+            ...(group ? { groupId: group.id, groupLabel: group.label } : { solo: true })
+          });
+        };
+        const logBody = workLog ? (workLog.querySelector('.aioa-work-log-body') || workLog) : undefined;
+        for (const child of logBody ? [...logBody.children] : []) {
+          if (child.tagName.toLowerCase() === 'summary') continue;
+          if (child.matches('.aioa-work-activity-group')) {
+            const steps = [...child.querySelectorAll(':scope > .aioa-work-activity-group-body > .aioa-work-step')];
+            if (!steps.length) { pushText(textOf(child)); continue; }
+            const group = {
+              id: workLogId + ':group:' + groupIndex++,
+              label: rowLabel(child)
             };
-          })
-          : [];
+            for (const step of steps) pushStep(step, group);
+            continue;
+          }
+          if (child.matches('.aioa-work-step')) { pushStep(child, undefined); continue; }
+          if (child.matches('.aioa-work-note')) { pushText(noteText(child)); continue; }
+          pushText(textOf(child));
+        }
+        if (logBody && !segments.length) pushText(textOf(logBody));
         return JSON.stringify({
           busy: [...document.querySelectorAll('button[aria-label="停止生成"]')]
             .some((button) => isVisible(button) && !button.disabled),
@@ -877,8 +997,7 @@ class ChromeRemoteAioaPage implements AioaCdpPage {
               };
             })
             .slice(-4),
-          activity: (workLog?.innerText || '').trim() || undefined,
-          ...(tools.length ? { tools } : {}),
+          ...(segments.length ? { segments } : {}),
           conversationId: userMessage?.getAttribute('data-message-id') || undefined
         });
       })()
@@ -886,8 +1005,7 @@ class ChromeRemoteAioaPage implements AioaCdpPage {
     return {
       busy: snapshot.busy === true,
       messages: snapshot.messages.filter((message) => !assistantIds.has(message.id) && message.text.length > 0),
-      ...(snapshot.activity ? { activity: snapshot.activity } : {}),
-      ...(snapshot.tools?.length ? { tools: snapshot.tools } : {}),
+      ...(snapshot.segments?.length ? { segments: snapshot.segments } : {}),
       ...(snapshot.conversationId ? { conversationId: snapshot.conversationId } : {})
     };
   }
@@ -1332,8 +1450,7 @@ export class AioaCdpAgentRunner implements AgentRunner {
       const deadline = submittedAt + this.timeoutMs;
       let observedAssistant = false;
       let lastText = "";
-      let lastActivity = "";
-      const toolStates = new Map<string, string>();
+      const segmentStates = new Map<string, string>();
       let receivedActivity = false;
       let lastActivityAt = submittedAt;
       let completedWithoutResultAt: number | undefined;
@@ -1384,33 +1501,11 @@ export class AioaCdpAgentRunner implements AgentRunner {
           lastText = text;
         }
         repairGenerationObserved ||= repairPromptSubmitted && update.busy;
-        if (update.activity && update.activity !== lastActivity) {
-          lastActivity = update.activity;
+        const workLog = workLogEvents(update.segments, segmentStates);
+        if (workLog.length) {
           receivedActivity = true;
           lastActivityAt = this.now();
-          request.onEvent?.({
-            phase: "message",
-            id: "aioa-work-log",
-            text: update.activity,
-            group: "aioa-work-log",
-            replace: true
-          });
-        }
-        for (const tool of update.tools ?? []) {
-          const signature = `${tool.title}\u0000${tool.text}\u0000${tool.done}`;
-          if (toolStates.get(tool.id) === signature) continue;
-          toolStates.set(tool.id, signature);
-          receivedActivity = true;
-          lastActivityAt = this.now();
-          request.onEvent?.({
-            id: tool.id,
-            phase: "tool",
-            title: tool.title,
-            text: tool.text,
-            group: "aioa-work-log",
-            replace: true,
-            ...(tool.done ? { done: true } : {})
-          });
+          for (const event of workLog) request.onEvent?.(event);
         }
         if (observedAssistant && !update.busy) {
           if (!conversationId) {
@@ -1500,8 +1595,7 @@ export class AioaCdpAgentRunner implements AgentRunner {
       const deadline = submittedAt + this.timeoutMs;
       let observedAssistant = false;
       let lastText = "";
-      let lastActivity = "";
-      const toolStates = new Map<string, string>();
+      const segmentStates = new Map<string, string>();
       let receivedActivity = false;
       let lastActivityAt = submittedAt;
       let completedWithoutResultAt: number | undefined;
@@ -1533,33 +1627,11 @@ export class AioaCdpAgentRunner implements AgentRunner {
           }
           lastText = text;
         }
-        if (update.activity && update.activity !== lastActivity) {
-          lastActivity = update.activity;
+        const workLog = workLogEvents(update.segments, segmentStates);
+        if (workLog.length) {
           receivedActivity = true;
           lastActivityAt = this.now();
-          request.onEvent?.({
-            phase: "message",
-            id: "aioa-work-log",
-            text: update.activity,
-            group: "aioa-work-log",
-            replace: true
-          });
-        }
-        for (const tool of update.tools ?? []) {
-          const signature = `${tool.title}\u0000${tool.text}\u0000${tool.done}`;
-          if (toolStates.get(tool.id) === signature) continue;
-          toolStates.set(tool.id, signature);
-          receivedActivity = true;
-          lastActivityAt = this.now();
-          request.onEvent?.({
-            id: tool.id,
-            phase: "tool",
-            title: tool.title,
-            text: tool.text,
-            group: "aioa-work-log",
-            replace: true,
-            ...(tool.done ? { done: true } : {})
-          });
+          for (const event of workLog) request.onEvent?.(event);
         }
         if (observedAssistant && !update.busy) {
           if (!conversationId) {

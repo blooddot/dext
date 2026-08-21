@@ -56,6 +56,15 @@ export class DextApplication {
     this.runtime.setAgentProfiles(this.agents.list());
     this.runtime.setAgentSelection(this.agents.currentSelection());
     this.runtime.setSkillLoader((skill, workspace) => this.skills.load(skill, this.workspaceRoot, workspace.path));
+    this.runtime.setRuleLoader(async (path) => {
+      try {
+        const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(path));
+        return new TextDecoder().decode(bytes);
+      } catch (error) {
+        if (error instanceof vscode.FileSystemError && error.code === "FileNotFound") return undefined;
+        throw error;
+      }
+    });
     this.runtime.setMcpCaller((tool, input) => this.mcp.call(tool, input));
   }
 

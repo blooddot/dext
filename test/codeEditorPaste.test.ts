@@ -17,4 +17,12 @@ describe("editor paste events", () => {
       clipboardData: { types: [], getData: vi.fn() } as unknown as DataTransfer
     })).toBeUndefined();
   });
+
+  it("accepts browser plain text even when the browser changes the MIME casing", () => {
+    const getData = vi.fn(() => "copied response");
+    expect(pasteEventText({
+      clipboardData: { types: ["TEXT/PLAIN"], getData } as unknown as DataTransfer
+    })).toBe("copied response");
+    expect(getData).toHaveBeenCalledWith("TEXT/PLAIN");
+  });
 });

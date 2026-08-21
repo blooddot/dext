@@ -20,7 +20,7 @@ import {
 import { ReadyMessageQueue } from "./readyMessageQueue.js";
 import { openWorkspaceFileReference } from "./vscodeContextHost.js";
 import { webviewRequestSchema } from "./webviewProtocol.js";
-import type { WebviewResponse } from "./webviewProtocol.js";
+import type { ConversationSummary, WebviewResponse } from "./webviewProtocol.js";
 import type { DextHistorySession, DextHistoryStore } from "./historyStore.js";
 import { normalizeInputReferenceSource } from "./core/fileReference.js";
 
@@ -32,6 +32,11 @@ function outputSession(): DextHistorySession {
     updatedAt: now,
     turns: []
   };
+}
+
+function conversationTitle(session: DextHistorySession): string {
+  const first = session.turns[0]?.input.replace(/\s+/g, " ").trim();
+  return first ? first.slice(0, 72) : "New conversation";
 }
 
 function imageExtension(mimeType: string): string | undefined {
@@ -51,8 +56,39 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   private readonly messageQueue = new ReadyMessageQueue<WebviewResponse>();
   private readonly attachments = new AttachmentStore();
   private activeSession = outputSession();
+  private readonly sessions = new Map<string, DextHistorySession>();
+  private sessionsHydrated = false;
   private running = false;
   private activeExecution: { turnId: string; controller: AbortController } | undefined;
+  private readonly pendingAttachmentDeletes = new Set<string>();
+
+  private hydrateSessions(): void {
+    if (this.sessionsHydrated) return;
+    this.sessionsHydrated = true;
+    for (const session of this.history.list()) this.sessions.set(session.id, session);
+    if (!this.sessions.has(this.activeSession.id)) this.sessions.set(this.activeSession.id, this.activeSession);
+    const latest = [...this.sessions.values()].sort((a, b) => b.updatedAt - a.updatedAt)[0];
+    if (latest) this.activeSession = latest;
+  }
+
+  private conversationSummaries(): ConversationSummary[] {
+    return [...this.sessions.values()]
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .map((session) => ({
+        id: session.id,
+        title: conversationTitle(session),
+        updatedAt: session.updatedAt,
+        turnCount: session.turns.length
+      }));
+  }
+
+  private async postConversationState(): Promise<void> {
+    await this.post({
+      type: "conversations",
+      sessions: this.conversationSummaries(),
+      activeId: this.activeSession.id
+    });
+  }
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -145,7 +181,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       switch (request.type) {
         case "ready": {
           const pendingMessages = this.messageQueue.markReady();
+          this.hydrateSessions();
           await this.refresh();
+          await this.postConversationState();
           await this.post({ type: "outputSession", session: this.activeSession });
           await this.flushPendingMessages(pendingMessages);
           break;
@@ -180,10 +218,30 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         case "viewHistory":
           await this.onViewHistory();
           break;
+        case "newConversation":
+          if (this.running) throw new Error("Wait for the current Dext turn to finish before starting another conversation.");
+          this.application.endAgentSession(this.activeSession.id);
+          this.activeSession = outputSession();
+          this.sessions.set(this.activeSession.id, this.activeSession);
+          await this.postConversationState();
+          await this.post({ type: "outputSession", session: this.activeSession });
+          break;
+        case "selectConversation": {
+          if (this.running) throw new Error("Wait for the current Dext turn to finish before switching conversations.");
+          const selected = this.sessions.get(request.sessionId);
+          if (!selected) throw new Error("Conversation not found.");
+          this.application.endAgentSession(this.activeSession.id);
+          this.activeSession = selected;
+          await this.postConversationState();
+          await this.post({ type: "outputSession", session: this.activeSession });
+          break;
+        }
         case "clearOutput":
           if (this.running) throw new Error("Wait for the current Dext turn to finish before clearing Output.");
           this.application.endAgentSession(this.activeSession.id);
           this.activeSession = outputSession();
+          this.sessions.set(this.activeSession.id, this.activeSession);
+          await this.postConversationState();
           await this.post({ type: "outputSession", session: this.activeSession });
           break;
         case "agentSelection":
@@ -243,6 +301,15 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           const clipboardContext = this.attachments.clipboardReference(text);
           try {
             codeReference = clipboardContext ? clipboardFileReference(clipboardContext) : undefined;
+            // A selection copied from a VS Code editor does not pass through
+            // Dext's context-copy command. Recover its workspace reference
+            // when the clipboard text still matches the active selection.
+            if (!codeReference) {
+              const editor = vscode.window.activeTextEditor;
+              if (editor && !editor.selection.isEmpty && editor.document.getText(editor.selection) === text) {
+                codeReference = attachmentFileReference(await selectionAttachment());
+              }
+            }
           } catch (error) {
             await this.post({
               type: "clipboardReadResult",
@@ -270,7 +337,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           ).values()];
           await this.addFileUris(uniqueItems.map((item) => item.kind === "uri"
             ? vscode.Uri.parse(item.value, true)
-            : vscode.Uri.file(item.value)));
+            : vscode.Uri.file(item.value)), request.position);
           break;
         }
         case "chooseFiles": {
@@ -299,7 +366,8 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           break;
         }
         case "deleteImageAttachment":
-          await this.deleteImage(request.relativePath);
+          if (this.running) this.pendingAttachmentDeletes.add(request.relativePath);
+          else await this.deleteImage(request.relativePath);
           break;
         case "reload":
           await this.application.reload();
@@ -340,11 +408,15 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       const turn = await this.history.addSuccess(source, events, response, sessionId);
       this.activeSession.turns.push(turn);
       this.activeSession.updatedAt = turn.createdAt;
+      this.sessions.set(this.activeSession.id, this.activeSession);
+      await this.postConversationState();
       await this.post({ type: "execution", turnId, response });
     } catch (error) {
       const turn = await this.history.addFailure(source, events, error, sessionId);
       this.activeSession.turns.push(turn);
       this.activeSession.updatedAt = turn.createdAt;
+      this.sessions.set(this.activeSession.id, this.activeSession);
+      await this.postConversationState();
       await this.post({
         type: "executionFailed",
         turnId,
@@ -353,8 +425,18 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     } finally {
       this.running = false;
       if (this.activeExecution?.turnId === turnId) this.activeExecution = undefined;
-      await this.post({ type: "executing", value: false, turnId });
+      try {
+        await this.flushAttachmentDeletes();
+      } finally {
+        await this.post({ type: "executing", value: false, turnId });
+      }
     }
+  }
+
+  private async flushAttachmentDeletes(): Promise<void> {
+    const pending = [...this.pendingAttachmentDeletes];
+    this.pendingAttachmentDeletes.clear();
+    for (const relativePath of pending) await this.deleteImage(relativePath);
   }
 
   private uiInteraction(): UiInteraction {
@@ -426,7 +508,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     for (const message of messages) await this.post(message);
   }
 
-  private async addFileUris(uris: readonly vscode.Uri[]): Promise<void> {
+  private async addFileUris(uris: readonly vscode.Uri[], position?: number): Promise<void> {
     const references = await Promise.all(uris.map(async (uri) => {
       const stat = await vscode.workspace.fs.stat(uri);
       if ((stat.type & vscode.FileType.Directory) !== 0) return directoryAttachment(uri);
@@ -435,7 +517,8 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     }));
     this.postWhenReady({
       type: "insertFileReferences",
-      expressions: references.map((reference) => reference.expression)
+      expressions: references.map((reference) => reference.expression),
+      ...(position === undefined ? {} : { position })
     });
   }
 
@@ -492,12 +575,24 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
 </head>
 <body>
   <div class="app-shell">
+    <header class="chat-header">
+      <div class="conversation-menu">
+        <button id="conversation-control" class="conversation-control" type="button" aria-haspopup="menu" aria-expanded="false">
+          <span id="conversation-control-value">New conversation</span><i class="codicon codicon-chevron-down"></i>
+        </button>
+        <div id="conversation-menu" class="conversation-popover" role="menu" hidden></div>
+      </div>
+      <div class="chat-header-actions">
+        <button id="view-methods" class="icon-button" type="button" title="View APIs" aria-label="View APIs" aria-haspopup="dialog" aria-expanded="false"><i class="codicon codicon-symbol-method"></i></button>
+        <button id="new-conversation" class="icon-button" type="button" title="New conversation" aria-label="New conversation"><i class="codicon codicon-add"></i></button>
+        <button id="view-history" class="icon-button" type="button" title="View Dext history" aria-label="View Dext history"><i class="codicon codicon-history"></i></button>
+      </div>
+    </header>
     <main id="dext-main">
     <section id="result-section" class="result-section" aria-live="polite">
       <div id="result-heading" class="section-heading collapsible-heading" role="button" tabindex="0" aria-expanded="true">
         <span class="section-heading-label"><i class="section-chevron codicon codicon-chevron-down"></i><span>Output</span></span>
         <div class="section-heading-actions">
-          <button id="view-history" class="icon-button" type="button" title="View Dext history" aria-label="View Dext history"><i class="codicon codicon-history"></i></button>
           <button id="clear-output" class="icon-button" type="button" title="Clear output" aria-label="Clear output"><i class="codicon codicon-eraser"></i></button>
           <button id="result-fullscreen" class="icon-button panel-fullscreen" type="button" title="Maximize Output" aria-label="Maximize Output"><i class="codicon codicon-screen-full"></i></button>
         </div>
@@ -518,12 +613,14 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           <button id="attach-files" class="composer-attach icon-button" type="button" title="Attach workspace files" aria-label="Attach workspace files"><i class="codicon codicon-attach"></i></button>
         </section>
 
+        <div id="input-error" class="input-error" role="alert" hidden></div>
+
         <div id="attachment-bar" class="attachment-bar hidden" aria-label="Image attachments"></div>
 
         <div class="action-row">
           <div id="composer-controls" class="composer-controls">
             <div class="composer-menu">
-              <button id="mode-control" class="composer-control" type="button" aria-haspopup="menu" aria-expanded="false"><span class="composer-control-label">Mode</span><span id="mode-control-value" class="composer-control-value"></span><i class="codicon codicon-chevron-down"></i></button>
+              <button id="mode-control" class="composer-control" type="button" aria-haspopup="menu" aria-expanded="false"><i id="mode-control-icon" class="codicon codicon-comment-discussion" aria-hidden="true"></i><span class="composer-control-label">Mode</span><span id="mode-control-value" class="composer-control-value"></span><i class="codicon codicon-chevron-down"></i></button>
               <div id="mode-menu" class="composer-popover" role="menu" hidden></div>
             </div>
             <div class="composer-menu">
@@ -533,6 +630,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
             <div class="composer-menu">
               <button id="model-control" class="composer-control" type="button" aria-haspopup="menu" aria-expanded="false"><span class="composer-control-label">Model</span><span id="model-control-value" class="composer-control-value"></span><i class="codicon codicon-chevron-down"></i></button>
               <div id="model-menu" class="composer-popover composer-model-popover" role="menu" hidden></div>
+              <div id="model-submenu" class="composer-popover composer-model-popover composer-model-submenu" role="menu" hidden></div>
             </div>
           </div>
           <div class="action-actions">
@@ -543,20 +641,22 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       </div>
     </section>
 
-    <section id="methods-section" class="methods-section">
-      <div id="methods-heading" class="section-heading collapsible-heading" role="button" tabindex="0" aria-expanded="true">
-        <span class="section-heading-label"><i class="section-chevron codicon codicon-chevron-down"></i><span>API <span id="method-count" class="count"></span></span></span>
-        <div class="section-heading-actions">
-          <button id="methods-toggle" class="icon-button compact" type="button" title="Collapse API namespaces" aria-label="Collapse API namespaces"><i class="codicon codicon-collapse-all"></i></button>
-          <button id="methods-fullscreen" class="icon-button panel-fullscreen" type="button" title="Maximize API" aria-label="Maximize API"><i class="codicon codicon-screen-full"></i></button>
+    </main>
+    <dialog id="methods-dialog" class="methods-dialog" aria-labelledby="methods-dialog-title">
+      <div class="methods-dialog-surface">
+        <header class="methods-dialog-header">
+          <div class="methods-dialog-title"><i class="codicon codicon-symbol-method"></i><span id="methods-dialog-title">APIs</span><span id="method-count" class="count"></span></div>
+          <div class="methods-dialog-actions">
+            <button id="methods-toggle" class="icon-button compact" type="button" title="Collapse API namespaces" aria-label="Collapse API namespaces"><i class="codicon codicon-collapse-all"></i></button>
+            <button id="close-methods" class="icon-button" type="button" title="Close APIs" aria-label="Close APIs"><i class="codicon codicon-close"></i></button>
+          </div>
+        </header>
+        <div id="methods-dialog-body" class="methods-dialog-body">
+          <div id="config-errors" class="config-errors"></div>
+          <div id="methods"></div>
         </div>
       </div>
-      <div id="methods-body" class="collapsible-body">
-        <div id="config-errors" class="config-errors"></div>
-        <div id="methods"></div>
-      </div>
-    </section>
-    </main>
+    </dialog>
   </div>
   <script nonce="${nonce}" src="${script.toString()}"></script>
 </body>

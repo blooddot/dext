@@ -12,20 +12,21 @@ afterEach(async () => {
 });
 
 describe("SkillCatalog", () => {
-  it("discovers default directories in priority order and loads SKILL.md", async () => {
+  it("discovers only the Dext-owned default directory and loads SKILL.md", async () => {
     const root = await mkdtemp(join(tmpdir(), "dext-skills-"));
     roots.push(root);
-    await mkdir(join(root, ".agents", "skills", "dev-feat"), { recursive: true });
-    await mkdir(join(root, "dext", "skills", "dev-feat"), { recursive: true });
-    await writeFile(join(root, ".agents", "skills", "dev-feat", "SKILL.md"), "# Feature\nPrimary skill\n", "utf8");
-    await writeFile(join(root, "dext", "skills", "dev-feat", "SKILL.md"), "# Shadow\nSecondary skill\n", "utf8");
+    await mkdir(join(root, ".dext", "skills", "dev-feat"), { recursive: true });
+    await mkdir(join(root, ".agents", "skills", "ignored"), { recursive: true });
+    await writeFile(join(root, ".dext", "skills", "dev-feat", "SKILL.md"), "# Feature\nPrimary skill\n", "utf8");
+    await writeFile(join(root, ".agents", "skills", "ignored", "SKILL.md"), "# Ignored\nNot a Dext skill\n", "utf8");
     const catalog = new SkillCatalog();
     await catalog.reload(root);
     expect(catalog.list()).toMatchObject([{ id: "dev-feat", title: "Feature" }]);
     await expect(catalog.load("dev-feat", root)).resolves.toMatchObject({
       instructions: "# Feature\nPrimary skill\n",
-      sourcePath: join(root, ".agents", "skills", "dev-feat", "SKILL.md")
+      sourcePath: join(root, ".dext", "skills", "dev-feat", "SKILL.md")
     });
+    expect(catalog.list().map((skill) => skill.id)).toEqual(["dev-feat"]);
   });
 
   it("accepts configured additional directories after project defaults", async () => {

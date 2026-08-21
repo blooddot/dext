@@ -188,7 +188,7 @@ export function coreInputReferenceInsertion(
   if (!argument) return undefined;
   const value = argument.literal;
   if (!value) {
-    const inserted = inputReferenceText(expressions);
+    const inserted = `${inputReferenceText(expressions)} `;
     return {
       from: argument.valueStart,
       to: argument.valueEnd,
@@ -201,7 +201,11 @@ export function coreInputReferenceInsertion(
   const before = source.slice(value.bodyStart, insertionFrom);
   const after = source.slice(insertionTo, value.bodyEnd);
   const prefix = insertionFrom > value.bodyStart && needsInlinePrefix(source[insertionFrom - 1] ?? "") ? " " : "";
-  const suffix = insertionTo < value.bodyEnd && needsInlineSuffix(source[insertionTo] ?? "") ? " " : "";
+  // Keep the caret outside the following reference token. Without a trailing
+  // separator, the next typed letter becomes part of the @path chip.
+  const suffix = insertionTo < value.bodyEnd && needsInlineSuffix(source[insertionTo] ?? "")
+    ? " "
+    : insertionTo === value.bodyEnd ? " " : "";
   const inserted = inputReferenceText(expressions);
   const body = `${before}${prefix}${inserted}${suffix}${after}`;
   const literal = `${value.quote}${body}${value.quote}`;
@@ -209,7 +213,7 @@ export function coreInputReferenceInsertion(
     from: value.literalStart,
     to: value.end,
     text: literal,
-    cursorOffset: value.quote.length + before.length + prefix.length + inserted.length
+    cursorOffset: value.quote.length + before.length + prefix.length + inserted.length + suffix.length
   };
 }
 
@@ -225,5 +229,11 @@ export function fileReferenceInsertion(
   const semantic = coreInputReferenceInsertion(source, from, to, expressions);
   if (semantic) return semantic;
   const inline = inlineInsertion(source, from, to, inputReferenceText(expressions));
-  return { from, to, text: inline.text, cursorOffset: inline.cursorOffset };
+  const separator = to === source.length && expressions.some((expression) => expression.startsWith("@")) ? " " : "";
+  return {
+    from,
+    to,
+    text: `${inline.text}${separator}`,
+    cursorOffset: inline.cursorOffset + separator.length
+  };
 }

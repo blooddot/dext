@@ -53,7 +53,37 @@ describe("Dext history rendering", () => {
     expect(renderHistoryRecord(record)).toContain("old");
   });
 
-  it("renders Codex progress messages in the collapsible process trace", () => {
+  it("renders UI results so selections and confirmations are visible in history", () => {
+    const record: DextHistoryRecord = {
+      id: "ui-result",
+      createdAt: 1,
+      input: 'choice = ui.choose(label="Pick", options=["one", "two"])',
+      process: [],
+      output: "",
+      response: {
+        kind: "workflow",
+        executions: [
+          {
+            invocation: { kind: "invocation", method: "ui.choose", source: "code", arguments: [] },
+            method: { id: "ui.choose", title: "Choose", kind: "command", source: "builtin" },
+            result: { kind: "ui", type: "choice", selected: ["two"] },
+            durationMs: 1
+          },
+          {
+            invocation: { kind: "invocation", method: "ui.confirm", source: "code", arguments: [] },
+            method: { id: "ui.confirm", title: "Confirm", kind: "command", source: "builtin" },
+            result: { kind: "ui", type: "confirm", confirmed: false },
+            durationMs: 1
+          }
+        ]
+      }
+    };
+    const html = renderHistoryRecord(record);
+    expect(html).toContain("two");
+    expect(html).toContain("Cancelled");
+  });
+
+  it("renders Codex progress messages inline in the process timeline", () => {
     const record: DextHistoryRecord = {
       id: "progress",
       createdAt: 1,
@@ -63,11 +93,11 @@ describe("Dext history rendering", () => {
     };
 
     const html = renderHistoryRecord(record);
-    expect(html).toContain("Thought");
+    expect(html).toContain('class="process-message"');
     expect(html).toContain("I will inspect the selected implementation first.");
   });
 
-  it("keeps AIOA activity and its command details in one history group", () => {
+  it("keeps AIOA dialogue and expandable command details in the same process timeline", () => {
     const record: DextHistoryRecord = {
       id: "aioa-work-log",
       createdAt: 1,
@@ -80,10 +110,88 @@ describe("Dext history rendering", () => {
     };
 
     const html = renderHistoryRecord(record);
-    expect(html).toContain("AIOA activity");
     expect(html).toContain("Inspecting the workspace");
     expect(html).toContain("git status");
     expect(html).not.toContain("Ran 1 command");
+    expect(html).toContain('class="process-message"');
+    expect(html).toMatch(/class="history-disclosure process-event(?: process-command-group)?"/);
+  });
+
+  it("groups consecutive commands without moving them across process messages", () => {
+    const record: DextHistoryRecord = {
+      id: "grouped-process-commands",
+      createdAt: 1,
+      input: 'agent(input="update greeting")',
+      process: [
+        { phase: "reasoning", text: "Inspect the current implementation" },
+        { phase: "tool", title: "rg greeting", text: "rg greeting" },
+        { phase: "tool", title: "Get-Content greeting.ts", text: "Get-Content greeting.ts" },
+        { phase: "message", text: "Apply the smallest change" },
+        { phase: "tool", title: "npm test", text: "npm test" }
+      ],
+      output: ""
+    };
+
+    const html = renderHistoryRecord(record);
+    expect(html).toContain("Ran 2 commands");
+    expect(html).toContain('class="history-disclosure process-event process-command-group"');
+    expect(html.indexOf("Inspect the current implementation")).toBeLessThan(html.indexOf("Ran 2 commands"));
+    expect(html.indexOf("Ran 2 commands")).toBeLessThan(html.indexOf("Apply the smallest change"));
+    expect(html.indexOf("Apply the smallest change")).toBeLessThan(html.indexOf("npm test"));
+  });
+
+  it("reproduces the step grouping an agent reported instead of regrouping by arrival", () => {
+    const grouped = (groupId: string, title: string) => ({
+      phase: "tool" as const,
+      group: "aioa-work-log" as const,
+      groupId,
+      groupLabel: groupId === "g0" ? "运行了 2 条命令" : "已编辑 1 个文件 · 运行了 1 条命令",
+      toolKind: "command" as const,
+      title,
+      text: title
+    });
+    const record: DextHistoryRecord = {
+      id: "reported-groups",
+      createdAt: 1,
+      input: 'agent(input="fix layout")',
+      process: [
+        { phase: "message", group: "aioa-work-log", text: "Locating the selector" },
+        grouped("g0", "rg selector"),
+        grouped("g0", "rg fallback"),
+        { phase: "tool", group: "aioa-work-log", toolKind: "image", solo: true, title: "已查看 shot.png", text: "已查看 shot.png" },
+        { phase: "message", group: "aioa-work-log", text: "Applying the fix" },
+        grouped("g1", "npm test")
+      ],
+      output: ""
+    };
+
+    const html = renderHistoryRecord(record);
+    expect(html).toContain("运行了 2 条命令");
+    expect(html).toContain("已编辑 1 个文件 · 运行了 1 条命令");
+    expect(html).not.toContain("Ran 2 commands");
+    // The standalone step keeps its own row rather than joining a group.
+    expect(html).toContain('class="history-disclosure process-event process-command-solo"');
+    expect(html.indexOf("运行了 2 条命令")).toBeLessThan(html.indexOf("已查看 shot.png"));
+    expect(html.indexOf("已查看 shot.png")).toBeLessThan(html.indexOf("Applying the fix"));
+    expect(html.indexOf("Applying the fix")).toBeLessThan(html.indexOf("npm test"));
+  });
+
+  it("preserves the arrival order of thoughts and commands", () => {
+    const record: DextHistoryRecord = {
+      id: "interleaved-process",
+      createdAt: 1,
+      input: 'agent(input="update greeting")',
+      process: [
+        { phase: "reasoning", text: "Inspect the current implementation" },
+        { phase: "tool", title: "rg greeting", text: "rg greeting" },
+        { phase: "message", text: "Apply the smallest change" }
+      ],
+      output: ""
+    };
+
+    const html = renderHistoryRecord(record);
+    expect(html.indexOf("Inspect the current implementation")).toBeLessThan(html.indexOf("rg greeting"));
+    expect(html.indexOf("rg greeting")).toBeLessThan(html.indexOf("Apply the smallest change"));
   });
 
   it("renders structured agent results as readable thought summaries instead of JSON", () => {

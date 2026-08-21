@@ -66,8 +66,10 @@ export interface CodeEditorOptions {
 
 export function pasteEventText(event: Pick<ClipboardEvent, "clipboardData">): string | undefined {
   const clipboardData = event.clipboardData;
-  if (!clipboardData || !clipboardData.types.includes("text/plain")) return undefined;
-  return clipboardData.getData("text/plain");
+  if (!clipboardData) return undefined;
+  const plainTextType = [...clipboardData.types]
+    .find((type) => type.toLowerCase() === "text/plain");
+  return plainTextType ? clipboardData.getData(plainTextType) : undefined;
 }
 
 const signatureEffect = StateEffect.define<Tooltip | null>();
@@ -167,6 +169,8 @@ function selectionMatches(
 export class DextCodeEditor {
   readonly view: EditorView;
   private readonly theme = new Compartment();
+  private readonly language = new Compartment();
+  private readonly lineWrapping = new Compartment();
   private diagnosticsTimer: ReturnType<typeof setTimeout> | undefined;
   private signatureTimer: ReturnType<typeof setTimeout> | undefined;
   private diagnostics: Diagnostic[] = [];
@@ -175,7 +179,8 @@ export class DextCodeEditor {
   constructor(private readonly options: CodeEditorOptions) {
     const extensions: Extension[] = [
       history(),
-      python(),
+      this.language.of(python()),
+      this.lineWrapping.of([]),
       this.theme.of(themeExtension()),
       lineNumbers(),
       lintGutter(),
@@ -362,6 +367,12 @@ export class DextCodeEditor {
   setLanguageEnabled(enabled: boolean): void {
     if (this.languageEnabled === enabled) return;
     this.languageEnabled = enabled;
+    this.view.dispatch({
+      effects: [
+        this.language.reconfigure(enabled ? python() : []),
+        this.lineWrapping.reconfigure(enabled ? [] : EditorView.lineWrapping)
+      ]
+    });
     if (enabled) {
       this.refreshLanguageState();
       return;
@@ -563,15 +574,19 @@ export class DextCodeEditor {
   private async paste(eventText?: string): Promise<void> {
     const source = this.source;
     const selection = this.view.state.selection.main;
-    if (eventText !== undefined) {
-      if (eventText) this.replaceSelection(eventText, "input.paste");
+    const result = await this.options.clipboard.read("code");
+    if (!selectionMatches(this.view, source, selection.anchor, selection.head)) return;
+    if (!result) {
+      if (eventText !== undefined) this.replaceSelection(eventText, "input.paste");
       return;
     }
-    const result = await this.options.clipboard.read("code");
-    if (!result || !selectionMatches(this.view, source, selection.anchor, selection.head)) return;
     let text: string;
     try {
-      text = this.pasteText(source, selection.from, selection.to, result);
+      // Browser paste data is useful as a fallback, but the host clipboard is
+      // authoritative when it can recover a structured workspace reference.
+      text = result.codeReference
+        ? this.pasteText(source, selection.from, selection.to, result)
+        : eventText || result.text;
     } catch (error) {
       this.options.onError(error);
       return;

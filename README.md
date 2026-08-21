@@ -33,6 +33,34 @@ The input workflow language supports assignment, keyword-only API calls, strings
 - `print(text, label?) -> PrintResult`
 - `ui.choose(...)`, `ui.confirm(...)`, `ui.input(...) -> UiResult`
 
+This repository defines three project-local custom APIs under `.dext/api/dev/`.
+They are not part of Dext's built-in API set:
+
+- `dev.feat(input, apply=True) -> AgentResult` for task-file, description, or sync-driven feature work.
+- `dev.fix(input, apply=True) -> AgentResult` for defect triage and minimal fixes.
+- `dev.plan(input, apply=True) -> AgentResult` for PRD analysis and task-plan generation.
+
+Each top-level API directly composes the built-in `mcp`, `agent`, and UI APIs.
+For example, `dev.feat` reads context, makes a plan, uses `ui.confirm`,
+implements, uses `ui.confirm` again, then validates. It does not import or
+register project-level phase APIs.
+Pass a registered textual MCP tool through optional `mcp_tool` and `mcp_input`
+to run `mcp(...)` before the first Agent phase. The compact workflow
+The API-level and phase-specific rules are kept under `.dext/rules/dev/`; every Agent phase explicitly declares the ordered rules it uses. Confirmable actions
+such as code generation and commit remain explicit UI gates.
+
+UI APIs return a result and resume the current workflow; they do not require a
+separate callback registration. Assign the result when later steps need it:
+
+```python
+confirmation = ui.confirm(message="Apply this change?")
+if confirmation.confirmed == True:
+    print(text="Continue")
+```
+
+The selected value, confirmation state, or input text is also rendered in
+Output and History after the interaction completes.
+
 Every API output implements the shared `Result` contract. `ask` handles read-only explanation and analysis; `agent` handles continuous tasks and may return an auditable patch. `apply(result=...)` applies an `AgentResult` patch when one is present. Agent CLIs receive prior results as versioned `dext-result` JSON envelopes instead of interpolated strings. Result variables and fields such as `agent_result: AgentResult` and `agent_result.patch: PatchResult` are available to completion and hover.
 
 `ask` is always read-only. `agent` defaults `apply=true`: in a trusted local workspace, the selected workspace is the Agent CLI working directory and the Agent may edit only that workspace. Set `apply=false` to require a read-only preview; when a change is proposed, the resulting `AgentResult` may include a patch for `apply`. Both APIs default `workspace` to the current project root.
@@ -70,7 +98,7 @@ def main(input: str) -> ChatResult:
     return ask(input=input)
 ```
 
-`.dx` uses a restricted Python-like syntax. It is parsed by Dext and never starts a Python interpreter. Imports are explicit and only refer to other `.dext/api` files; external files are not read until VS Code marks the workspace as trusted.
+`.dx` uses a restricted Python-like syntax. It is parsed by Dext and never starts a Python interpreter. Imports are explicit and only refer to other `.dext/api` files; external files are not read until VS Code marks the workspace as trusted. A nested `agent(...)` or `ask(...)` call may set `skills=["name"]` and `rules=["path.md"]`. Skills are explicit packages, while rules are ordered policy files. Rule paths are resolved only below `<workspace>/.dext/rules`; skill packages are discovered only below `<workspace>/.dext/skills` unless the user explicitly configures an additional `dext.skillDirs` directory. Dext loads selected skills first and rules last, so the API's narrow rules constrain the general skill workflow. These two parameters are internal workflow controls and do not appear in ordinary user-facing API signatures.
 
 Typed results use Python's standard `TypedDict`, `Literal`, and `NotRequired` annotations rather than Dext-specific classes. The declared `kind` must be one `Literal` string; fields become the API output JSON Schema and member completions. TypedDict inheritance, `Protocol`, and complex generic types are intentionally unsupported.
 
@@ -84,7 +112,7 @@ class DocumentResult(TypedDict):
     title: NotRequired[str]
 ```
 
-Standard skills are discovered in `<workspace>/.agents/skills`, `<workspace>/dext/skills`, then `dext.skillDirs`; earlier directories win duplicate names. `skill` defaults `workspace` to the current project and injects the selected `SKILL.md` into the current Agent task. `ui.*` waits for a semantic user answer and resumes the same workflow. `mcp` only accepts configured full tool names in `dext.mcpTools`, such as `docs.read`; the registry resolves that exact name to its configured server and underlying tool without splitting it. Duplicate full names are configuration errors. MCP calls require a trusted local workspace.
+Standard skills are discovered in `<workspace>/.dext/skills`, then `dext.skillDirs`; earlier directories win duplicate names. `skill` defaults `workspace` to the current project and injects the selected `SKILL.md` into the current Agent task. `ui.*` waits for a semantic user answer and resumes the same workflow. `mcp` only accepts configured full tool names in `dext.mcpTools`, such as `docs.read`; the registry resolves that exact name to its configured server and underlying tool without splitting it. Duplicate full names are configuration errors. MCP calls require a trusted local workspace.
 
 `dext.mcpServers` supports local `stdio` and Streamable HTTP (`2025-03-26`). HTTP endpoints must be HTTPS, or loopback HTTP for local development. URL userinfo, query strings, fragments, inline headers, and credentials are rejected. A bearer-enabled server stores its access token only through `Dext: Set MCP Access Token`, in VS Code SecretStorage and scoped to the current workspace. `Dext: Clear MCP Access Token` removes it; `Dext: Verify MCP Server` performs an authenticated initialization check. Dext never writes credentials to settings, project files, output, or logs. HTTP calls use JSON or SSE responses, reject redirects, and close negotiated sessions with `DELETE`. MCP `structuredContent` is preserved as `McpRawResult.structured`; a `.dx` API returning a `TypedDict` adapts that structure into its declared result and validates it strictly.
 

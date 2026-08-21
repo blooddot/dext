@@ -40,7 +40,8 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
     items: z.array(z.discriminatedUnion("kind", [
       z.object({ kind: z.literal("uri"), value: z.string().min(1) }),
       z.object({ kind: z.literal("path"), value: z.string().min(1) })
-    ])).max(8)
+    ])).max(8),
+    position: z.number().int().nonnegative().optional()
   }),
   z.object({ type: z.literal("chooseFiles") }),
   z.object({
@@ -52,6 +53,8 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("reload") }),
   z.object({ type: z.literal("debugLog"), message: z.string() }),
   z.object({ type: z.literal("viewHistory") }),
+  z.object({ type: z.literal("newConversation") }),
+  z.object({ type: z.literal("selectConversation"), sessionId: z.string().min(1) }),
   z.object({ type: z.literal("clearOutput") }),
   z.object({
     type: z.literal("agentSelection"),
@@ -67,6 +70,13 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
 ]);
 
 export type WebviewRequest = z.infer<typeof webviewRequestSchema>;
+
+export interface ConversationSummary {
+  id: string;
+  title: string;
+  updatedAt: number;
+  turnCount: number;
+}
 
 export interface SidebarState {
   theme?: EditorTokenTheme;
@@ -91,12 +101,13 @@ export type WebviewResponse =
     hover?: LanguageHover;
   }
   | { type: "outputSession"; session: DextHistorySession }
+  | { type: "conversations"; sessions: ConversationSummary[]; activeId: string }
   | { type: "execution"; turnId: string; response: InputExecutionResponse }
   | { type: "executionFailed"; turnId: string; message: string }
   | { type: "agentEvent"; event: AgentStreamEvent }
   | { type: "executing"; value: boolean; turnId: string; source?: string }
   | { type: "inputKind"; kind: "empty" | "workflow" | "invalid" }
-  | { type: "insertFileReferences"; expressions: string[] }
+  | { type: "insertFileReferences"; expressions: string[]; position?: number }
   | { type: "imageAttachment"; relativePath: string; webviewUri: string; name: string }
   | { type: "clipboardWriteResult"; requestId: number; success: boolean }
   | {

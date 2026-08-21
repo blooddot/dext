@@ -695,11 +695,15 @@ describe("AIOA CDP", () => {
       .mockResolvedValueOnce({
         busy: true,
         messages: [],
-        tools: [{
-          id: "assistant-1:command:0",
+        segments: [{
+          kind: "step",
+          id: "assistant-1:step:0",
           title: "git status",
           text: "Shell\n\ngit status\n\nOn branch master\n\nSuccess",
-          done: true
+          done: true,
+          stepKind: "command",
+          groupId: "assistant-1:group:0",
+          groupLabel: "运行了 1 条命令"
         }]
       })
       .mockResolvedValueOnce({
@@ -715,11 +719,14 @@ describe("AIOA CDP", () => {
 
     await expect(runner.run(request((event) => events.push(event)))).resolves.toEqual({ kind: "chat", text: "Finished" });
     expect(events).toContainEqual({
-      id: "assistant-1:command:0",
+      id: "assistant-1:step:0",
       phase: "tool",
       title: "git status",
       text: "Shell\n\ngit status\n\nOn branch master\n\nSuccess",
       group: "aioa-work-log",
+      toolKind: "command",
+      groupId: "assistant-1:group:0",
+      groupLabel: "运行了 1 条命令",
       replace: true,
       done: true
     });
@@ -902,7 +909,11 @@ describe("AIOA CDP", () => {
     let now = 0;
     const waits = [1_800_001, 386_000];
     const updatesAfter = vi.fn()
-      .mockResolvedValueOnce({ busy: true, messages: [], activity: "Still working" })
+      .mockResolvedValueOnce({
+        busy: true,
+        messages: [],
+        segments: [{ kind: "text", id: "assistant-1:text:0", text: "Still working" }]
+      })
       .mockResolvedValueOnce({
         busy: false,
         messages: [{ id: "new", text: '{"kind":"chat","text":"Finished"}' }],
@@ -921,13 +932,18 @@ describe("AIOA CDP", () => {
     expect(now).toBe(2_186_001);
   });
 
-  it("streams visible work-log updates with one replaceable event while detecting activity", async () => {
+  it("replaces a growing work-log paragraph in place while detecting activity", async () => {
     let now = 0;
     const events: NonNullable<AgentExecutionRequest["onEvent"]> extends (event: infer Event) => void ? Event[] : never = [];
+    const paragraph = (text: string) => ({
+      busy: true,
+      messages: [],
+      segments: [{ kind: "text", id: "assistant-1:text:0", text }]
+    });
     const updatesAfter = vi.fn()
-      .mockResolvedValueOnce({ busy: true, messages: [], activity: "Inspecting files" })
-      .mockResolvedValueOnce({ busy: true, messages: [], activity: "Running tests" })
-      .mockResolvedValue({ busy: true, messages: [], activity: "Running tests" });
+      .mockResolvedValueOnce(paragraph("Inspecting files"))
+      .mockResolvedValueOnce(paragraph("Inspecting files and running tests"))
+      .mockResolvedValue(paragraph("Inspecting files and running tests"));
     const connection: AioaCdpConnection = {
       open: async () => ({
         page: page({ updatesAfter }),
@@ -945,10 +961,60 @@ describe("AIOA CDP", () => {
 
     await expect(runner.run(request((event) => events.push(event))))
       .rejects.toThrow(/stopped responding for 1 seconds/i);
-    expect(events.filter((event) => event.id === "aioa-work-log")).toEqual([
-      { phase: "message", id: "aioa-work-log", text: "Inspecting files", group: "aioa-work-log", replace: true },
-      { phase: "message", id: "aioa-work-log", text: "Running tests", group: "aioa-work-log", replace: true }
+    expect(events.filter((event) => event.id === "assistant-1:text:0")).toEqual([
+      { phase: "message", id: "assistant-1:text:0", text: "Inspecting files", group: "aioa-work-log", replace: true },
+      {
+        phase: "message",
+        id: "assistant-1:text:0",
+        text: "Inspecting files and running tests",
+        group: "aioa-work-log",
+        replace: true
+      }
     ]);
+  });
+
+  it("streams work-log prose and commands in the order AIOA rendered them", async () => {
+    const events: NonNullable<AgentExecutionRequest["onEvent"]> extends (event: infer Event) => void ? Event[] : never = [];
+    const updatesAfter = vi.fn()
+      .mockResolvedValueOnce({
+        busy: true,
+        messages: [],
+        segments: [
+          { kind: "text", id: "assistant-1:text:0", text: "Locating the selector" },
+          { kind: "step", id: "assistant-1:step:0", title: "rg selector", text: "rg selector", done: true, stepKind: "command", groupId: "assistant-1:group:0", groupLabel: "运行了 1 条命令" }
+        ]
+      })
+      .mockResolvedValueOnce({
+        busy: true,
+        messages: [],
+        segments: [
+          { kind: "text", id: "assistant-1:text:0", text: "Locating the selector" },
+          { kind: "step", id: "assistant-1:step:0", title: "rg selector", text: "rg selector", done: true, stepKind: "command", groupId: "assistant-1:group:0", groupLabel: "运行了 1 条命令" },
+          { kind: "step", id: "assistant-1:step:1", title: "已查看 shot.png", text: "已查看 shot.png", done: true, stepKind: "image", solo: true },
+          { kind: "text", id: "assistant-1:text:1", text: "Applying the fix" },
+          { kind: "step", id: "assistant-1:step:2", title: "npm test", text: "npm test", done: true, stepKind: "command", groupId: "assistant-1:group:1", groupLabel: "运行了 1 条命令" }
+        ]
+      })
+      .mockResolvedValueOnce({
+        busy: false,
+        messages: [{ id: "new", text: '{"kind":"chat","text":"Finished"}' }],
+        conversationId: "dext-task-1"
+      });
+    const connection: AioaCdpConnection = {
+      open: async () => ({ page: page({ updatesAfter }), launched: false })
+    };
+    const runner = new AioaCdpAgentRunner(connection, { pollIntervalMs: 0, sleep: async () => undefined });
+
+    await expect(runner.run(request((event) => events.push(event)))).resolves.toEqual({ kind: "chat", text: "Finished" });
+    expect(events.filter((event) => event.group === "aioa-work-log").map((event) => event.id)).toEqual([
+      "assistant-1:text:0",
+      "assistant-1:step:0",
+      "assistant-1:step:1",
+      "assistant-1:text:1",
+      "assistant-1:step:2"
+    ]);
+    expect(events.find((event) => event.id === "assistant-1:step:1")).toMatchObject({ solo: true, toolKind: "image" });
+    expect(events.find((event) => event.id === "assistant-1:step:1")).not.toHaveProperty("groupId");
   });
 
   it("keeps polling until final content mounts after the work log finishes", async () => {

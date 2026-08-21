@@ -44,5 +44,5 @@ export function methodResultType(method: Pick<RegisteredCallable, "output">): st
 
 /** Render the complete public call contract for a Dext API. */
 export function formatMethodSignature(method: Pick<RegisteredCallable, "id" | "input" | "output">): string {
-  return `${method.id}(${method.input.map(formatMethodParameter).join(", ")}) -> ${methodResultType(method)}`;
+  return `${method.id}(${method.input.filter((field) => !field.internal).map(formatMethodParameter).join(", ")}) -> ${methodResultType(method)}`;
 }

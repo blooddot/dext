@@ -73,6 +73,25 @@ export class WorkflowRuntime {
         }
         continue;
       }
+      if (statement.kind === "assign") {
+        const step: WorkflowStepResponse = {
+          assignment: statement.assignment,
+          method: "=",
+          state: "success"
+        };
+        try {
+          if (metadata.signal?.aborted) throw new ExecutionCancelledError();
+          environment.set(statement.assignment, await this.evaluateAsync(statement.expression, environment, metadata));
+        } catch (error) {
+          step.state = error instanceof ExecutionCancelledError ? "cancelled" : "failed";
+          step.error = error instanceof Error ? error.message : String(error);
+          steps.push(step);
+          this.markSkipped(statements.slice(index + 1), steps);
+          return false;
+        }
+        steps.push(step);
+        continue;
+      }
       const step: WorkflowStepResponse = {
         ...(statement.assignment ? { assignment: statement.assignment } : {}),
         method: statement.call.method,
@@ -185,6 +204,8 @@ export class WorkflowRuntime {
           method: statement.call.method,
           state: "skipped"
         });
+      } else if (statement.kind === "assign") {
+        steps.push({ assignment: statement.assignment, method: "=", state: "skipped" });
       } else {
         this.markSkipped(statement.consequent, steps);
         this.markSkipped(statement.alternate, steps);

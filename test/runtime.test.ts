@@ -82,6 +82,59 @@ print(text=answer.text)`, registry);
       .resolves.toMatchObject({ result: { kind: "chat", text: "agent response" } });
   });
 
+  it("loads selected skills before ordered rules from .dext", async () => {
+    const { runtime } = setup();
+    runtime.setWorkspaceRoot(process.cwd());
+    runtime.setWorkspaceTrusted(true);
+    runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
+    runtime.setAgentSelection({ profileId: "codex" });
+    runtime.setSkillLoader(async (skill) => ({
+      sourcePath: `${skill}/SKILL.md`,
+      instructions: `skill ${skill}`
+    }));
+    runtime.setRuleLoader(async (path) => {
+      if (path.endsWith("base.md")) return "base rule";
+      if (path.endsWith("phase.md")) return "phase rule";
+      return undefined;
+    });
+    let instruction = "";
+    runtime.setAgentRunner({
+      run: async (request) => {
+        instruction = request.metadata.instruction ?? "";
+        return { kind: "agent", text: "done" };
+      }
+    });
+
+    await runtime.execute({
+      kind: "invocation",
+      method: "agent",
+      source: "code",
+      arguments: [
+        { name: "input", value: "implement" },
+        { name: "apply", value: false },
+        { name: "skills", value: ["project", "testing", "project"] },
+        { name: "rules", value: ["dev/base.md", "dev/phase.md"] }
+      ]
+    });
+
+    expect(instruction).toBe([
+      "Follow the skill 'project' from project/SKILL.md for this agent call.\n\nskill project",
+      "Follow the skill 'testing' from testing/SKILL.md for this agent call.\n\nskill testing",
+      "Apply rule 'dev/base.md':\n\nbase rule",
+      "Apply rule 'dev/phase.md':\n\nphase rule"
+    ].join("\n\n"));
+    await expect(runtime.execute({
+      kind: "invocation",
+      method: "agent",
+      source: "code",
+      arguments: [
+        { name: "input", value: "implement" },
+        { name: "apply", value: false },
+        { name: "rules", value: ["../api/dev/feat.dx"] }
+      ]
+    })).rejects.toThrow("rules must stay below .dext/rules");
+  });
+
   it("runs Agent and Ask as ordinary provider conversations", async () => {
     const { runtime } = setup();
     runtime.setWorkspaceTrusted(true);

@@ -202,11 +202,14 @@ function codexSchema(value: unknown, optional = false): unknown {
 
 /** Stable invocation envelope for stateless CLI agent adapters. */
 export function agentPayload(request: AgentExecutionRequest): string {
+  const fields = new Map(request.method.input.map((field) => [field.name, field]));
   return JSON.stringify({
     api: request.method.id,
     description: request.method.description,
     ...(request.metadata.instruction ? { instruction: request.metadata.instruction } : {}),
-    arguments: Object.fromEntries(Object.entries(request.resolved.arguments).map(([key, value]) => [key, displayValue(value)])),
+    arguments: Object.fromEntries(Object.entries(request.resolved.arguments)
+      .filter(([key]) => !fields.get(key)?.internal)
+      .map(([key, value]) => [key, displayValue(value)])),
     // Inline inputs are readable @path tokens and are sent unchanged.
     context: ["ask", "agent"].includes(request.method.id)
       ? []

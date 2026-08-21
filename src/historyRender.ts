@@ -97,6 +97,14 @@ function resultText(result: DextResult): string {
   if (result.kind === "code") return result.code;
   if (result.kind === "patch") return result.changes.map((change) => `${change.uri}\n- ${change.before}\n+ ${change.after}`).join("\n\n");
   if (result.kind === "plan") return result.steps.map((step) => `${step.title}${step.detail ? `: ${step.detail}` : ""}`).join("\n");
+  if (result.kind === "ui") {
+    if (result.type === "choice") {
+      const selected = result.selected.length ? result.selected.join(", ") : "No selection";
+      return result.custom ? `${selected} (custom: ${result.custom})` : selected;
+    }
+    if (result.type === "confirm") return result.confirmed ? "Confirmed" : "Cancelled";
+    return result.value ?? "No input";
+  }
   return "";
 }
 
@@ -144,13 +152,6 @@ function outputText(response: InputExecutionResponse): string {
   return response.executions.map((item) => resultText(item.result)).filter(Boolean).join("\n\n");
 }
 
-function eventGroup(label: string, events: readonly AgentStreamEvent[]): string {
-  if (!events.length) return "";
-  return `<details class="history-disclosure process-group"><summary>${chevron()}<span>${escapeHtml(label)}</span><span class="history-meta">${events.length}</span></summary><div class="disclosure-body">${events.map((event) => event.phase === "tool"
-    ? `<details class="history-disclosure process-event"><summary>${chevron()}<span>${escapeHtml((event.title ?? event.text.split(/\r?\n/, 1)[0] ?? "Command").slice(0, 180))}</span></summary><pre>${escapeHtml(event.text)}</pre></details>`
-    : processMessage(event.text)).join("")}</div></details>`;
-}
-
 function processMessage(text: string): string {
   const presentation = presentAgentMessage(text);
   if (!presentation.structured) return `<div class="process-text">${escapeHtml(text)}</div>`;
@@ -177,13 +178,48 @@ function renderPresentationExtras(presentation: AgentMessagePresentation): strin
   return changes + references + sections;
 }
 
+function commandLabel(event: AgentStreamEvent): string {
+  return (event.title ?? event.text.split(/\r?\n/, 1)[0] ?? "Command").slice(0, 180);
+}
+
+function commandRow(event: AgentStreamEvent, className = "process-command"): string {
+  return `<details class="history-disclosure ${className}"><summary>${chevron()}<span>${escapeHtml(commandLabel(event))}</span></summary><pre>${escapeHtml(event.text)}</pre></details>`;
+}
+
 function process(events: readonly AgentStreamEvent[]): string {
-  const work = events.filter((event) => event.group === "aioa-work-log");
-  const reasoning = events.filter((event) => event.group !== "aioa-work-log" && (event.phase === "reasoning" || event.phase === "message"));
-  const tools = events.filter((event) => event.group !== "aioa-work-log" && event.phase === "tool");
-  return eventGroup("Thought", reasoning)
-    + eventGroup("AIOA activity", work)
-    + eventGroup(`Ran ${tools.length} command${tools.length === 1 ? "" : "s"}`, tools);
+  const html: string[] = [];
+  let tools: AgentStreamEvent[] = [];
+  let groupId: string | undefined;
+  const flushTools = (): void => {
+    const firstTool = tools[0];
+    if (!firstTool) return;
+    // A lone unnamed command already names itself in the group summary, so only
+    // real groups need a nested row per command.
+    const lone = !firstTool.groupLabel && tools.length === 1;
+    const label = firstTool.groupLabel ?? (lone ? commandLabel(firstTool) : `Ran ${tools.length} commands`);
+    const body = lone ? `<pre>${escapeHtml(firstTool.text)}</pre>` : tools.map((event) => commandRow(event)).join("");
+    html.push(`<details class="history-disclosure process-event process-command-group"><summary>${chevron()}<span>${escapeHtml(label)}</span></summary><div class="disclosure-body">${body}</div></details>`);
+    tools = [];
+    groupId = undefined;
+  };
+  for (const event of events) {
+    if (event.phase === "status") continue;
+    if (event.phase === "tool") {
+      if (event.solo) {
+        flushTools();
+        html.push(commandRow(event, "process-event process-command-solo"));
+        continue;
+      }
+      if (tools.length && event.groupId !== groupId) flushTools();
+      groupId = event.groupId;
+      tools.push(event);
+      continue;
+    }
+    flushTools();
+    html.push(`<section class="process-message">${processMessage(event.text)}</section>`);
+  }
+  flushTools();
+  return html.join("");
 }
 
 function parsedResponse(record: DextHistoryRecord): InputExecutionResponse | undefined {

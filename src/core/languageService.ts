@@ -409,7 +409,7 @@ export class DextLanguageService {
         );
         const fragment = /[A-Za-z_][A-Za-z0-9_]*$/.exec(segment)?.[0] ?? "";
         return method.input
-          .filter((field) => !used.has(field.name) && field.name.startsWith(fragment))
+          .filter((field) => !field.internal && !used.has(field.name) && field.name.startsWith(fragment))
           .map((field) => item(field.name, `${field.name}=`, formatMethodParameter(field), "parameter"));
       }
     }
@@ -519,7 +519,7 @@ export class DextLanguageService {
       label: formatMethodSignature(method),
       documentation: method.description,
       activeParameter,
-      parameters: method.input.map((field) => ({
+      parameters: method.input.filter((field) => !field.internal).map((field) => ({
         label: formatMethodParameter(field),
         documentation: field.description ?? ""
       }))

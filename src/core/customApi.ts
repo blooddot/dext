@@ -90,7 +90,7 @@ function parseType(value: string): { fieldType: FieldDefinition["type"]; multipl
 
 function outputKind(value: string): CallableDefinition["output"]["kind"] | undefined {
   const name = value.replace(/\s+/g, "");
-  const match = /^(Chat|Explain|Edit|Review|Apply|Terminal|Print|Text|Code|Plan|Patch)Result$/.exec(name);
+  const match = /^(Chat|Agent|Explain|Edit|Review|Apply|Terminal|Print|Text|Code|Plan|Patch)Result$/.exec(name);
   return match?.[1]?.toLowerCase() as CallableDefinition["output"]["kind"] | undefined;
 }
 
@@ -152,7 +152,8 @@ function functionSignature(
       required: !defaultNode,
       ...(defaultNode?.name === "String" ? { default: text(source, defaultNode).slice(1, -1) } : {}),
       ...(defaultNode?.name === "Number" ? { default: Number(text(source, defaultNode)) } : {}),
-      ...(defaultNode?.name === "Boolean" ? { default: text(source, defaultNode) === "True" } : {})
+      ...(defaultNode?.name === "Boolean" ? { default: text(source, defaultNode) === "True" } : {}),
+      ...(defaultNode?.name === "DictionaryExpression" && text(source, defaultNode).trim() === "{}" ? { default: {} } : {})
     };
     inputs.push(field);
   }
@@ -184,10 +185,15 @@ function parseImports(source: string, root: SyntaxNode): Map<string, string> {
 }
 
 function dedent(value: string): string {
-  const lines = value.replace(/^\s*:\s*/, "").split(/\r?\n/);
+  const lines = value.replace(/^\s*:\s*\r?\n/, "").split(/\r?\n/);
   const nonEmpty = lines.filter((line) => line.trim().length > 0);
   const indent = nonEmpty.length ? Math.min(...nonEmpty.map((line) => line.match(/^\s*/)?.[0].length ?? 0)) : 0;
   return lines.map((line) => line.slice(indent)).join("\n").trim();
+}
+
+function decoratorStringOption(options: string, name: string): string | undefined {
+  const match = new RegExp(`\\b${name}\\s*=\\s*["']([^"']+)["']`).exec(options);
+  return match?.[1];
 }
 
 function parseHeader(path: string, source: string): CustomApiFile {
@@ -211,8 +217,8 @@ function parseHeader(path: string, source: string): CustomApiFile {
   };
   const decorated = firstNode(tree.topNode, "Decorator");
   const options = decorated ? text(source, decorated) : "";
-  const agent = /\bagent\s*=\s*["']([^"']+)["']/.exec(options)?.[1];
-  const model = /\bmodel\s*=\s*["']([^"']+)["']/.exec(options)?.[1];
+  const agent = decoratorStringOption(options, "agent");
+  const model = decoratorStringOption(options, "model");
   return {
     path,
     id,
@@ -305,7 +311,11 @@ export async function loadCustomApis(
       const compiled = compileWorkflow(bodySource, registry, options);
       const outputType = compiled.returnType;
       if (!compiled.program || !compiled.program.returnExpression || !outputType) {
-        throw new Error("main() must return exactly one Dext result.");
+        const details = compiled.diagnostics
+          .filter((diagnostic) => diagnostic.severity === "error")
+          .map((diagnostic) => diagnostic.message)
+          .join(" ");
+        throw new Error(`main() must return exactly one Dext result.${details ? ` ${details}` : ""}`);
       }
       const expected = file.definition.output.kind;
       if (

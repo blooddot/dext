@@ -122,6 +122,13 @@ export type WorkflowStatement =
     to: number;
   }
   | {
+    kind: "assign";
+    assignment: string;
+    expression: WorkflowExpression;
+    from: number;
+    to: number;
+  }
+  | {
     kind: "if";
     condition: WorkflowCondition;
     consequent: WorkflowStatement[];
@@ -154,6 +161,8 @@ export type FieldType = "string" | "number" | "boolean" | "object" | "enum" | "c
 export interface FieldDefinition {
   name: string;
   type: FieldType;
+  /** Runtime-only argument omitted from public signatures and completions. */
+  internal?: boolean;
   accepts?: FieldType[];
   description?: string;
   required?: boolean;
@@ -393,6 +402,8 @@ export interface UiInteraction {
 
 export type AgentStreamPhase = "status" | "reasoning" | "message" | "tool";
 
+export type AgentToolKind = "command" | "file" | "image" | "step";
+
 export interface AgentStreamEvent {
   id?: string;
   phase: AgentStreamPhase;
@@ -400,6 +411,13 @@ export interface AgentStreamEvent {
   title?: string;
   /** Keeps AIOA work-log context and its command cards together in the UI. */
   group?: "aioa-work-log";
+  /** Identity of the group the agent itself put this step in. Agents that report
+   * their own grouping get reproduced exactly; the rest fall back to arrival order. */
+  groupId?: string;
+  groupLabel?: string;
+  /** A step the agent showed on its own row, so it needs no enclosing group. */
+  solo?: boolean;
+  toolKind?: AgentToolKind;
   replace?: boolean;
   done?: boolean;
   eventType?: string;
