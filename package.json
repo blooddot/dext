@@ -290,6 +290,34 @@
     "menus": {
       "commandPalette": [
         {
+          "command": "dext.setCompletionApiKey",
+          "when": "false"
+        },
+        {
+          "command": "dext.clearCompletionApiKey",
+          "when": "false"
+        },
+        {
+          "command": "dext.testCompletionModel",
+          "when": "false"
+        },
+        {
+          "command": "dext.toggleCompletion",
+          "when": "false"
+        },
+        {
+          "command": "dext.triggerSuggest",
+          "when": "false"
+        },
+        {
+          "command": "dext.triggerParameterHints",
+          "when": "false"
+        },
+        {
+          "command": "dext.sidebar.focus",
+          "when": "false"
+        },
+        {
           "command": "dext.workspaceTrustedStatus",
           "when": "false"
         },
@@ -695,10 +723,10 @@
         },
         "dext.completion.debounceMs": {
           "type": "integer",
-          "default": 200,
+          "default": 80,
           "minimum": 1,
           "maximum": 5000,
-          "description": "Idle time after the last keystroke before a completion is requested."
+          "description": "Idle time after the last keystroke before a completion is requested. Only the first keystroke of a burst waits: once a request is in flight the following keystrokes wait on that same answer rather than starting another. Keeping under the provider's requests-per-second limit is handled separately, by spacing requests out once the provider says they are arriving too quickly, so this does not need raising for that."
         },
         "dext.completion.prefixChars": {
           "type": "integer",

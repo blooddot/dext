@@ -4,7 +4,9 @@ import {
   CompletionCache,
   CompletionClient,
   CompletionKeyStore,
+  CompletionPacer,
   DEFAULT_ENDPOINTS,
+  completesSingleLine,
   completionWindow,
   endpointFor,
   isChatApi,
@@ -13,7 +15,8 @@ import {
   stripCodeFence,
   trimCompletion,
   type CompletionFetch,
-  type CompletionSettings
+  type CompletionSettings,
+  type CompletionTiming
 } from "../src/core/completionProvider.js";
 import { isIgnored, parseIgnoreRules } from "../src/core/ignoreRules.js";
 
@@ -29,6 +32,29 @@ function jsonResponse(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), { status, headers: { "Content-Type": "application/json" } });
 }
 
+/** A server-sent event stream that records how much of itself was consumed, so a
+ * test can tell that the request really was cut short rather than read to the
+ * end and trimmed afterwards. */
+function eventStream(lines: string[]): { response: Response; sent: () => number } {
+  let sent = 0;
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (sent >= lines.length) {
+        controller.close();
+        return;
+      }
+      controller.enqueue(new TextEncoder().encode(`${lines[sent]!}\n`));
+      sent += 1;
+      // Yields to the reader so an abort lands between chunks the way it would
+      // over a real connection.
+      await Promise.resolve();
+    }
+  });
+  return { response: new Response(body, { status: 200 }), sent: () => sent };
+}
+
+const chunk = (text: string): string => `data: ${JSON.stringify({ choices: [{ text }] })}`;
+
 describe("completion model backend", () => {
   it("stays off until an endpoint and a model are both configured", () => {
     expect(normalizeCompletionSettings({ enabled: true }).enabled).toBe(false);
@@ -36,7 +62,7 @@ describe("completion model backend", () => {
     expect(settings().enabled).toBe(true);
     // A nonsense value falls back rather than breaking every keystroke.
     expect(settings({ maxTokens: -5 }).maxTokens).toBe(64);
-    expect(settings({ debounceMs: 0 }).debounceMs).toBe(200);
+    expect(settings({ debounceMs: 0 }).debounceMs).toBe(80);
     // Ceilings keep a typo from turning a completion into a full generation.
     expect(settings({ maxTokens: 1_000_000 }).maxTokens).toBe(2048);
     expect(settings({ api: "ollama" }).api).toBe("ollama");
@@ -56,7 +82,7 @@ describe("completion model backend", () => {
     expect(url).toBe("https://models.example/v1/completions");
     expect(new Headers(init.headers).get("Authorization")).toBe("Bearer secret-key");
     const sent = JSON.parse(init.body as string) as Record<string, unknown>;
-    expect(sent).toMatchObject({ model: "small-fim", prompt: "function one() {\n  ", suffix: "\n}", stream: false });
+    expect(sent).toMatchObject({ model: "small-fim", prompt: "function one() {\n  ", suffix: "\n}", stream: true });
     expect(sent.max_tokens).toBe(64);
     // Left to run to max_tokens the model keeps going into whatever follows,
     // which is slow and produces a second copy of the next function.
@@ -85,7 +111,10 @@ describe("completion model backend", () => {
 
   it("stays silent on failure and reports a real outage once", async () => {
     const errors: string[] = [];
-    const failing = new CompletionClient(async () => jsonResponse({}, 500), (message) => errors.push(message));
+    const failing = new CompletionClient(
+      async () => jsonResponse({}, 500),
+      (failure) => errors.push(failure.message)
+    );
     expect(await failing.complete(settings(), { prefix: "a", suffix: "" })).toBe("");
     expect(errors).toEqual(["The completion model returned HTTP 500."]);
 
@@ -95,7 +124,7 @@ describe("completion model backend", () => {
       (_url, init) => new Promise((_resolve, reject) => {
         init.signal?.addEventListener("abort", () => reject(new Error("aborted")));
       }),
-      (message) => cancelled.push(message)
+      (failure) => cancelled.push(failure.message)
     );
     const controller = new AbortController();
     const pending = hanging.complete(settings(), { prefix: "a", suffix: "" }, undefined, controller.signal);
@@ -125,7 +154,142 @@ describe("completion model backend", () => {
     expect(window.suffix).toBe("CURSOR");
     // An offset past the end clamps instead of producing undefined slices.
     expect(completionWindow("abc", 99, { prefixChars: 2, suffixChars: 2 }))
-      .toEqual({ prefix: "bc", suffix: "" });
+      .toEqual({ prefix: "bc", suffix: "", singleLine: false });
+  });
+
+  it("assembles a completion out of streamed deltas", async () => {
+    const { response } = eventStream([chunk("return "), chunk("1;"), "data: [DONE]"]);
+    const client = new CompletionClient(async () => response);
+    expect(await client.complete(settings(), { prefix: "const a = ", suffix: "" })).toBe("return 1;");
+  });
+
+  it("stops reading as soon as the completion is finished, rather than draining the model", async () => {
+    // Everything after the blank line belongs to whatever comes next in the
+    // file. Waiting for it is the difference between a fast suggestion and a
+    // slow one, so the request is abandoned the moment it arrives.
+    const tail = Array.from({ length: 20 }, (_, index) => chunk(`token${index}`));
+    const { response, sent } = eventStream([chunk("return 1;"), chunk("\n\n"), ...tail, "data: [DONE]"]);
+    const client = new CompletionClient(async () => response);
+    expect(await client.complete(settings(), { prefix: "function one() {\n  ", suffix: "" })).toBe("return 1;");
+    // Two deltas were needed. The stream reads one ahead, so anything beyond a
+    // handful would mean it ran to the end and trimmed afterwards.
+    expect(sent()).toBeLessThan(5);
+  });
+
+  it("cuts a single-line completion off at the newline without reading the rest", async () => {
+    const tail = Array.from({ length: 20 }, (_, index) => chunk(`token${index}`));
+    const { response, sent } = eventStream([
+      chunk("value"),
+      chunk("\n  more()"),
+      ...tail,
+      "data: [DONE]"
+    ]);
+    const client = new CompletionClient(async () => response);
+    const completion = await client.complete(
+      settings(),
+      { prefix: "const a = ", suffix: ";", singleLine: true }
+    );
+    expect(completion).toBe("value");
+    expect(sent()).toBeLessThan(5);
+  });
+
+  it("asks the model to stop at the newline when only one line can be used", async () => {
+    const fetchImpl = vi.fn<CompletionFetch>(async () => eventStream(["data: [DONE]"]).response);
+    await new CompletionClient(fetchImpl).complete(
+      settings(),
+      { prefix: "const a = ", suffix: ";", singleLine: true }
+    );
+    const [, init] = fetchImpl.mock.calls[0]!;
+    expect((JSON.parse(init.body as string) as Record<string, unknown>).stop).toEqual(["\n"]);
+  });
+
+  it("falls back to the whole body when an endpoint ignores the stream flag", async () => {
+    // Answering a streaming request with an ordinary JSON body is common enough
+    // among OpenAI-compatible gateways that discarding it is not an option.
+    const client = new CompletionClient(async () => jsonResponse({ choices: [{ text: "return 1;" }] }));
+    expect(await client.complete(settings(), { prefix: "const a = ", suffix: "" })).toBe("return 1;");
+  });
+
+  it("reads Anthropic and chat deltas out of their own fields", async () => {
+    const anthropic = eventStream([
+      `data: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "a + b" } })}`
+    ]);
+    expect(await new CompletionClient(async () => anthropic.response).complete(
+      settings({ api: "anthropic", endpoint: DEFAULT_ENDPOINTS.anthropic }),
+      { prefix: "return ", suffix: "" }
+    )).toBe("a + b");
+
+    const chat = eventStream([`data: ${JSON.stringify({ choices: [{ delta: { content: "a + b" } }] })}`]);
+    expect(await new CompletionClient(async () => chat.response).complete(
+      settings({ api: "openai-chat" }),
+      { prefix: "return ", suffix: "" }
+    )).toBe("a + b");
+  });
+
+  it("only completes one line where more lines could not be used", () => {
+    // Something already sits after the cursor on this line.
+    expect(completesSingleLine({ prefix: "foo(", suffix: ")\nnext()" })).toBe(true);
+    // A comment ends where the line does.
+    expect(completesSingleLine({ prefix: "code()\n  // explain the ", suffix: "\n" })).toBe(true);
+    expect(completesSingleLine({ prefix: "code()\n  # explain the ", suffix: "\n" })).toBe(true);
+    // An empty line inside a block is where a whole block is wanted.
+    expect(completesSingleLine({ prefix: "function one() {\n  ", suffix: "\n}" })).toBe(false);
+    expect(completesSingleLine({ prefix: "const a = ", suffix: "" })).toBe(false);
+  });
+
+  it("reports a rate limit as something to slow down for rather than a broken setup", async () => {
+    const failures: { message: string; rateLimited: boolean; retryAfterMs?: number }[] = [];
+    const limited = new Response(JSON.stringify({ error: { message: "4 qps" } }), {
+      status: 429,
+      headers: { "Retry-After": "2" }
+    });
+    const client = new CompletionClient(async () => limited.clone(), (failure) => failures.push(failure));
+    expect(await client.complete(settings(), { prefix: "a", suffix: "" })).toBe("");
+    expect(failures.at(-1)).toMatchObject({ rateLimited: true, retryAfterMs: 2000 });
+
+    // Anything else is a fault, and answering it by waiting would only hide it.
+    const broken: { rateLimited: boolean }[] = [];
+    const other = new CompletionClient(async () => jsonResponse({}, 401), (failure) => broken.push(failure));
+    await other.complete(settings(), { prefix: "a", suffix: "" });
+    expect(broken.at(-1)?.rateLimited).toBe(false);
+  });
+
+  it("learns how fast a provider will accept requests, and eases off once it stops refusing", () => {
+    const pacer = new CompletionPacer();
+    // Nothing is held back until a provider has actually objected.
+    pacer.started(0);
+    expect(pacer.wait(10)).toBe(0);
+
+    pacer.refused(1000);
+    pacer.started(1000);
+    expect(pacer.wait(1100)).toBe(200);
+    expect(pacer.wait(1400)).toBe(0);
+
+    // Still refusing, so the spacing doubles rather than being tried again.
+    pacer.refused(1500);
+    expect(pacer.spacing).toBe(600);
+    // A provider that says how long to wait is believed over the doubling.
+    pacer.refused(2000, 2500);
+    expect(pacer.spacing).toBe(2500);
+
+    // Quiet for long enough, so it starts giving the time back.
+    expect(pacer.wait(2000 + 30_000)).toBeLessThanOrEqual(1250);
+    expect(pacer.spacing).toBe(1250);
+  });
+
+  it("holds the prefix window still while the cursor moves, so a prompt cache can hit", () => {
+    // A window that slid by a character per keystroke would change the start of
+    // every prompt, and a provider only reuses work on a prompt that begins the
+    // way the last one did.
+    const line = `${"x".repeat(63)}\n`;
+    const text = line.repeat(200);
+    const settings = { prefixChars: 4000, suffixChars: 500 };
+    const first = completionWindow(text, 8000, settings);
+    const later = completionWindow(text, 8000 + 300, settings);
+    expect(later.prefix.startsWith(first.prefix.slice(0, 2000))).toBe(true);
+    // And it begins on a line boundary rather than in the middle of a token.
+    expect(text.slice(8000 - first.prefix.length - 1, 8000 - first.prefix.length)).toBe("\n");
+    expect(first.prefix.length).toBeLessThanOrEqual(settings.prefixChars);
   });
 
   it("caches by exact cursor position and evicts the least recently used entry", () => {
@@ -140,6 +304,31 @@ describe("completion model backend", () => {
     // The suffix is part of the key: the same prefix in different surroundings is
     // a different completion.
     expect(cache.get({ prefix: "a", suffix: "x" })).toBeUndefined();
+  });
+
+  it("follows a suggestion the user is typing out, instead of asking again per character", () => {
+    const cache = new CompletionCache();
+    cache.set({ prefix: "const total = ", suffix: ";" }, "items.length");
+    // Typing the start of what was suggested leaves the rest of it standing.
+    expect(cache.get({ prefix: "const total = i", suffix: ";" })).toBe("tems.length");
+    expect(cache.get({ prefix: "const total = items.", suffix: ";" })).toBe("length");
+    // Typed all the way to the end: correct, and nothing left to offer.
+    expect(cache.get({ prefix: "const total = items.length", suffix: ";" })).toBe("");
+    // Typing something else is a different completion, not a stale one.
+    expect(cache.get({ prefix: "const total = x", suffix: ";" })).toBeUndefined();
+    // The suffix changes when the surroundings do, and then nothing carries over.
+    expect(cache.get({ prefix: "const total = i", suffix: ")" })).toBeUndefined();
+  });
+
+  it("follows a suggestion in a long file, where the prefix window slides as it grows", () => {
+    const cache = new CompletionCache();
+    const settings = { prefixChars: 20, suffixChars: 10 };
+    const before = `${"x".repeat(40)}const a = `;
+    cache.set(completionWindow(before, before.length, settings), "1;");
+    const after = `${before}1`;
+    // The window is full, so it dropped a character from the front at the same
+    // time as gaining one at the cursor. The completion still applies.
+    expect(cache.get(completionWindow(after, after.length, settings))).toBe(";");
   });
 
   it("keeps the API key in secret storage, shared across workspaces", async () => {
@@ -198,7 +387,11 @@ describe("anthropic completion transport", () => {
     expect(headers.get("anthropic-version")).toBe("2023-06-01");
     expect(headers.get("Authorization")).toBeNull();
     const sent = JSON.parse(init.body as string) as Record<string, unknown>;
-    expect(sent).toMatchObject({ model: "claude-fast", max_tokens: 64, stop_sequences: ["\n\n"] });
+    expect(sent).toMatchObject({
+      model: "claude-fast",
+      max_tokens: 64,
+      stop_sequences: ["\n\n", "</after_cursor>"]
+    });
     // No FIM endpoint exists, so the cursor has to be described in the prompt.
     const messages = sent.messages as { content: string }[];
     expect(messages[0]!.content).toContain("def add(a, b):");
@@ -271,6 +464,67 @@ describe("openai chat completion transport", () => {
       .toBe("return a + b");
   });
 
+  // Mid-line, so only one line can be used, and the text after the cursor shares
+  // nothing with the completion that the duplicate trim would take off the end.
+  const cursor = { prefix: "foo(", suffix: ", second)\nnext()" };
+
+  it("does not let a chat model's opening newline swallow a single-line completion", async () => {
+    // A FIM model knows the cursor column, so a newline it emits first is a real
+    // choice and the stop belongs on the server.
+    const fim = vi.fn<CompletionFetch>(async () => jsonResponse({ choices: [{ text: "" }] }));
+    await new CompletionClient(fim).complete(settings(), { ...cursor, singleLine: true });
+    expect((JSON.parse(fim.mock.calls[0]![1].body as string) as { stop: string[] }).stop).toEqual(["\n"]);
+
+    // A chat model is only told where the cursor is in words, so the same stop
+    // would cut the reply to nothing before it wrote anything.
+    const sent = vi.fn<CompletionFetch>(async () =>
+      jsonResponse({ choices: [{ message: { content: "\n\nfirstArg\nunrelated()" } }] }));
+    const completion = await new CompletionClient(sent).complete(chat(), { ...cursor, singleLine: true });
+    expect((JSON.parse(sent.mock.calls[0]![1].body as string) as { stop: string[] }).stop)
+      .toEqual(["\n\n", "</after_cursor>"]);
+    // The leading blank is dropped and the single-line cut made here instead.
+    expect(completion).toBe("firstArg");
+  });
+
+  it("waits past the opening newline of a streamed chat reply", async () => {
+    const delta = (content: string): string => `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}`;
+    const tail = Array.from({ length: 8 }, (_, index) => delta(`\nline${index}()`));
+    const stream = eventStream([delta("\n"), delta("firstArg"), ...tail]);
+    const completion = await new CompletionClient(async () => stream.response).complete(
+      chat(),
+      { ...cursor, singleLine: true }
+    );
+    expect(completion).toBe("firstArg");
+    // Stopped at the line end rather than reading the whole budget. The reader
+    // runs ahead of the consumer, so the check is only that most of the tail
+    // went unread.
+    expect(stream.sent()).toBeLessThan(10);
+  });
+
+  it("never inserts the prompt's own scaffolding into the file", async () => {
+    // Observed from a real gateway: the model answers correctly and then closes
+    // the tag it was given. Inserted as ghost text that would write the prompt
+    // into the user's code.
+    const leaked = vi.fn<CompletionFetch>(async () =>
+      jsonResponse({ choices: [{ message: { content: "#0000ff</after_cursor>" } }] }));
+    expect(await new CompletionClient(leaked).complete(chat(), { prefix: 'x = "', suffix: '"\n' }))
+      .toBe("#0000ff");
+    // Asked of the server too, so the tokens are usually never generated.
+    const sent = JSON.parse(leaked.mock.calls[0]![1].body as string) as { stop: string[] };
+    expect(sent.stop).toContain("</after_cursor>");
+
+    // And cut mid-stream, so a leaked tag also ends the request early.
+    const delta = (content: string): string => `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}`;
+    const stream = eventStream([
+      delta("#0000ff"),
+      delta("</after_cursor>"),
+      ...Array.from({ length: 6 }, (_, index) => delta(`trailing${index}`))
+    ]);
+    expect(await new CompletionClient(async () => stream.response).complete(chat(), { prefix: "a", suffix: "" }))
+      .toBe("#0000ff");
+    expect(stream.sent()).toBeLessThan(8);
+  });
+
   it("keeps the two OpenAI paths apart", () => {
     expect(endpointFor({ api: "openai", endpoint: "https://api.openai.com/v1" }))
       .toBe("https://api.openai.com/v1/completions");
@@ -291,20 +545,23 @@ describe("openai chat completion transport", () => {
     // well-formed body, and not one character the chosen format can read.
     const errors: string[] = [];
     const chatShaped = jsonResponse({ choices: [{ message: { content: "return a + b" } }] });
-    const client = new CompletionClient(async () => chatShaped.clone(), (message) => errors.push(message));
+    const client = new CompletionClient(async () => chatShaped.clone(), (failure) => errors.push(failure.message));
     expect(await client.complete(settings({ api: "openai" }), { prefix: "a", suffix: "" })).toBe("");
     expect(errors.at(-1)).toContain("OpenAI Chat Completions format instead");
 
     // And the reverse, for a FIM endpoint configured as chat.
     const fimShaped = jsonResponse({ choices: [{ text: "return a + b" }] });
     const swapped: string[] = [];
-    const other = new CompletionClient(async () => fimShaped.clone(), (message) => swapped.push(message));
+    const other = new CompletionClient(async () => fimShaped.clone(), (failure) => swapped.push(failure.message));
     expect(await other.complete(chat(), { prefix: "a", suffix: "" })).toBe("");
     expect(swapped.at(-1)).toContain("OpenAI-compatible FIM format instead");
 
     // A model that genuinely has nothing to add stays silent, as before.
     const quiet: string[] = [];
-    const empty = new CompletionClient(async () => jsonResponse({ choices: [{ text: "" }] }), (m) => quiet.push(m));
+    const empty = new CompletionClient(
+      async () => jsonResponse({ choices: [{ text: "" }] }),
+      (failure) => quiet.push(failure.message)
+    );
     expect(await empty.complete(settings(), { prefix: "a", suffix: "" })).toBe("");
     expect(quiet).toEqual([]);
   });
@@ -348,6 +605,25 @@ describe("connectivity test", () => {
     });
     expect(await new CompletionClient(fetchImpl).verify(pending)).toBe("ok");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the timing of real completions alone", async () => {
+    // The diagnosis runs this test and then prints the last timing, so a test
+    // that recorded its own would have the report describe a request that never
+    // streams as evidence that the endpoint refuses to stream.
+    const timings: CompletionTiming[] = [];
+    const stream = eventStream([chunk("a + b"), "data: [DONE]"]);
+    const responses = [jsonResponse({ choices: [{ text: "verified" }] }), stream.response];
+    const client = new CompletionClient(async () => responses.shift()!, () => undefined, (timing) => {
+      timings.push(timing);
+    });
+
+    expect(await client.verify(settings())).toBe("verified");
+    expect(timings).toEqual([]);
+
+    expect(await client.complete(settings(), { prefix: "return ", suffix: "" })).toBe("a + b");
+    expect(timings).toHaveLength(1);
+    expect(timings[0]!.firstTokenMs).toBeTypeOf("number");
   });
 });
 

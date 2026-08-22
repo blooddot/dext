@@ -228,6 +228,53 @@ describe("Dext package manifest", () => {
     }
   });
 
+  it("keeps the command palette down to the completion entries with nowhere else to be", async () => {
+    const value = await manifest();
+    const hidden = new Set(
+      (value.contributes?.menus?.commandPalette ?? [])
+        .filter((item) => item.when === "false")
+        .map((item) => item.command)
+    );
+    // Every one of these is a line in the status bar menu, and the two key
+    // commands are also linked from the settings page. Registered, so those
+    // links and that menu keep working; hidden, so searching "dext" is not
+    // seven ways into the same place.
+    for (const command of [
+      "dext.setCompletionApiKey",
+      "dext.clearCompletionApiKey",
+      "dext.testCompletionModel",
+      "dext.toggleCompletion"
+    ]) {
+      expect(hidden).toContain(command);
+    }
+    // The way in, the way back out, and the way to find out why nothing appears.
+    for (const command of [
+      "dext.completionMenu",
+      "dext.configureCompletionModel",
+      "dext.diagnoseCompletion"
+    ]) {
+      expect(hidden).not.toContain(command);
+    }
+  });
+
+  it("hides the commands that only exist for a keybinding or a duplicate of one", async () => {
+    const value = await manifest();
+    const hidden = new Set(
+      (value.contributes?.menus?.commandPalette ?? [])
+        .filter((item) => item.when === "false")
+        .map((item) => item.command)
+    );
+    // Nobody opens the palette to ask for a suggestion inside a box the palette
+    // is currently covering. These exist for alt+/ and the parameter hint chord.
+    expect(hidden).toContain("dext.triggerSuggest");
+    expect(hidden).toContain("dext.triggerParameterHints");
+    // The view contributes an automatic focus command whose generated title has
+    // a gap where the unnamed view should be. `dext.focus` does the same thing
+    // and then puts the cursor in the input.
+    expect(hidden).toContain("dext.sidebar.focus");
+    expect((value.contributes?.commands ?? []).map((item) => item.command)).toContain("dext.focus");
+  });
+
   it("exposes every timeout that can cut a turn off", async () => {
     const properties = (await manifest()).contributes?.configuration?.properties ?? {};
     expect(properties["dext.agent.timeoutMs"]).toMatchObject({ type: "integer", default: 600000 });

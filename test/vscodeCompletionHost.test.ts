@@ -136,6 +136,113 @@ describe("inline completion host", () => {
     provider.dispose();
   });
 
+  it("waits on a generation already in flight instead of restarting it per keystroke", async () => {
+    // The editor cancels the previous call on every keystroke. What matters is
+    // that the request it started survives, because abandoning a nearly
+    // finished generation and asking again is most of the wait.
+    let release = (): void => undefined;
+    let entered = (): void => undefined;
+    const arrived = new Promise<void>((resolve) => { release = resolve; });
+    const inFlight = new Promise<void>((resolve) => { entered = resolve; });
+    const fetchImpl = vi.fn(async () => {
+      entered();
+      await arrived;
+      return new Response(JSON.stringify({ choices: [{ text: "items.length" }] }));
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+    const provider = host();
+
+    const first = provider.provideInlineCompletionItems(
+      document("const total = "), position, context, cancellation()
+    );
+    await inFlight;
+    // Two more characters typed while that request is still out.
+    const second = provider.provideInlineCompletionItems(
+      document("const total = i"), position, context, cancellation()
+    );
+    const third = provider.provideInlineCompletionItems(
+      document("const total = it"), position, context, cancellation()
+    );
+    release();
+
+    expect((await first).map((item) => item.insertText)).toEqual(["items.length"]);
+    // Each keystroke gets what is left of the same answer, rather than its own.
+    expect((await second).map((item) => item.insertText)).toEqual(["tems.length"]);
+    expect((await third).map((item) => item.insertText)).toEqual(["ems.length"]);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    provider.dispose();
+  });
+
+  it("abandons a generation once what was typed no longer matches it", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ choices: [{ text: "items.length" }] })));
+    vi.stubGlobal("fetch", fetchImpl);
+    const provider = host();
+    await provider.provideInlineCompletionItems(
+      document("const total = "), position, context, cancellation()
+    );
+    // 'x' is not how the suggestion started, so reusing it would be wrong.
+    await provider.provideInlineCompletionItems(
+      document("const total = x"), position, context, cancellation()
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    provider.dispose();
+  });
+
+  it("keeps an answer that arrived after the editor gave up, rather than paying for it twice", async () => {
+    // The editor abandons the call the moment the next key goes down, which
+    // here happens while the model is answering. The generation it paid for
+    // still answers the position it asked about.
+    const token = { isCancellationRequested: false, onCancellationRequested: () => undefined };
+    const fetchImpl = vi.fn(async () => {
+      token.isCancellationRequested = true;
+      return new Response(JSON.stringify({ choices: [{ text: "return 1;" }] }));
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+    const provider = host();
+    expect(await provider.provideInlineCompletionItems(
+      document("const a = "), position, context, token as never
+    )).toEqual([]);
+    expect(provider.report().outcome).toContain("kept for the next keystroke");
+
+    expect((await provider.provideInlineCompletionItems(
+      document("const a = "), position, context, cancellation()
+    )).map((item) => item.insertText)).toEqual(["return 1;"]);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    provider.dispose();
+  });
+
+  it("answers a rate limit by slowing down rather than by blaming the setup", async () => {
+    const fetchImpl = vi.fn(async () => new Response(
+      JSON.stringify({ error: { message: "Token 请求频率超限: 4 qps" } }),
+      { status: 429 }
+    ));
+    vi.stubGlobal("fetch", fetchImpl);
+    const provider = host();
+    expect(await provider.provideInlineCompletionItems(
+      document("const a = "), position, context, cancellation()
+    )).toEqual([]);
+    const notice = state.messages.at(-1) ?? "";
+    expect(notice).toContain("4 qps");
+    expect(notice).toContain("spacing its completion requests out");
+    // Telling someone it will "keep trying quietly" while being refused for
+    // trying too often is the wrong advice.
+    expect(notice).not.toContain("keep trying quietly");
+    provider.dispose();
+  });
+
+  it("reads the API key once rather than on every keystroke", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ choices: [{ text: "x" }] })));
+    vi.stubGlobal("fetch", fetchImpl);
+    const apiKey = vi.fn(async () => "key");
+    const provider = new DextCompletionHost({ settings: () => settings(), apiKey });
+    await provider.provideInlineCompletionItems(document("const a = "), position, context, cancellation());
+    await provider.provideInlineCompletionItems(document("const b = "), position, context, cancellation());
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    // Secret storage is the OS keychain, which is far too slow to ask per key.
+    expect(apiKey).toHaveBeenCalledTimes(1);
+    provider.dispose();
+  });
+
   it("does not reach the network when the request is already superseded", async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ choices: [{ text: "x" }] })));
     vi.stubGlobal("fetch", fetchImpl);

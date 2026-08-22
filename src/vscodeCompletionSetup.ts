@@ -5,7 +5,8 @@ import {
   isChatApi,
   requiresApiKey,
   type CompletionApi,
-  type CompletionSettings
+  type CompletionSettings,
+  type CompletionTiming
 } from "./core/completionProvider.js";
 
 export interface CompletionSetupOptions {
@@ -248,6 +249,22 @@ export interface CompletionDiagnostics {
   invocations: number;
   outcome: string;
   since: string;
+  /** Where the wait went on the last request that reached the backend. */
+  timing: CompletionTiming | undefined;
+  /** Milliseconds currently being enforced between requests, zero when none. */
+  spacing: number;
+}
+
+/** Splitting the wait at the first token is what says whether a slow suggestion
+ * is worth tuning for: everything before it is the provider queueing, the
+ * network and reading the prompt, and only what comes after responds to
+ * `maxTokens` or to the stop sequences. */
+function describeTiming(timing: CompletionTiming | undefined, spacing: number): string {
+  const paced = spacing > 0 ? ` Requests are spaced ${spacing}ms apart after a rate limit.` : "";
+  if (!timing) return `no request timed yet.${paced}`;
+  if (timing.firstTokenMs === undefined) return `${timing.totalMs}ms, without streaming.${paced}`;
+  return `${timing.totalMs}ms total — ${timing.firstTokenMs}ms to the first token, `
+    + `${timing.totalMs - timing.firstTokenMs}ms generating the rest.${paced}`;
 }
 
 /** Builds the report shown by the diagnose command. Pure so the wording is
@@ -279,6 +296,7 @@ export function diagnosisReport(input: {
   lines.push("");
   lines.push(`Editor asked for a completion ${input.report.invocations} time(s).`);
   lines.push(`Last outcome: ${input.report.outcome} (${input.report.since})`);
+  lines.push(`Timing:       ${describeTiming(input.report.timing, input.report.spacing)}`);
   if (input.editor) {
     lines.push(`Active file:  ${input.editor.path} [${input.editor.languageId}, ${input.editor.scheme}]`);
   } else {
@@ -343,6 +361,44 @@ function conclusions(input: Parameters<typeof diagnosisReport>[0]): string[] {
     found.push(
       "The same cursor answers when asked directly but not while typing, so the backend is fine and the "
       + "difference is timing: the probe allows at least 10000ms."
+    );
+  }
+  const timing = input.report.timing;
+  if (timing && timing.firstTokenMs === undefined && timing.totalMs > 400) {
+    found.push(
+      `The endpoint ignored the stream flag and answered with one whole body after ${timing.totalMs}ms, so `
+      + "nothing could be shown until the model had finished. Streaming is what normally lets Dext stop a "
+      + "completion at the first useful line and show it, so this is the single biggest thing slowing "
+      + "suggestions down here, and it is the provider's choice rather than a setting."
+      + (input.settings.api === "openai"
+        ? " Gateways that refuse to stream /completions often will stream /chat/completions, so the "
+          + "openai-chat format is worth trying."
+        : "")
+      + ` Failing that, a lower dext.completion.maxTokens (currently ${input.settings.maxTokens}) is the `
+      + "only remaining lever, because the whole generation is being waited for either way."
+    );
+  }
+  if (timing && timing.totalMs > 700) {
+    const generating = timing.firstTokenMs === undefined ? undefined : timing.totalMs - timing.firstTokenMs;
+    if (generating !== undefined && timing.firstTokenMs! > generating) {
+      found.push(
+        `Suggestions are slow, and ${timing.firstTokenMs}ms of the ${timing.totalMs}ms went by before the `
+        + "first token arrived. That is the provider queueing the request, the round trip to it, and it "
+        + "reading the prompt — none of which Dext can shorten by generating less. Lowering maxTokens will "
+        + "not help. A nearer or less contended endpoint, or a smaller model, is what moves this number."
+      );
+    } else if (generating !== undefined) {
+      found.push(
+        `Suggestions are slow, and ${generating}ms of the ${timing.totalMs}ms was spent generating. That `
+        + `part does shrink with dext.completion.maxTokens, currently ${input.settings.maxTokens}.`
+      );
+    }
+  }
+  if (input.report.spacing > 0) {
+    found.push(
+      `The provider refused a request for arriving too quickly, so Dext is holding requests `
+      + `${input.report.spacing}ms apart. That spacing is part of any delay being felt, and it relaxes on `
+      + "its own once the refusals stop."
     );
   }
   if (input.probe && "completion" in input.probe && !input.probe.completion.trim()) {

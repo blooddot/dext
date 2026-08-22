@@ -268,14 +268,20 @@ describe("inline completion diagnosis", () => {
     suspended: false,
     inlineSuggestEnabled: true,
     editor: { languageId: "typescript", scheme: "file", path: "src/app.ts" },
-    report: { invocations: 12, outcome: "offered a completion", since: "2s ago" },
+    report: {
+      invocations: 12,
+      outcome: "offered a completion",
+      since: "2s ago",
+      timing: undefined,
+      spacing: 0
+    },
     probe: { completion: "return 1;" }
   };
 
   it("says nothing in Dext ran when the editor never asked", () => {
     const report = setup.diagnosisReport({
       ...base,
-      report: { invocations: 0, outcome: "never asked for a completion", since: "-" }
+      report: { ...base.report, invocations: 0, outcome: "never asked for a completion", since: "-" }
     });
     // The single most useful fact: a count of zero rules out every gate inside
     // the provider. The advice has to stay about what the reader can check,
@@ -322,6 +328,7 @@ describe("inline completion diagnosis", () => {
         timeoutMs: 3000
       }),
       report: {
+        ...base.report,
         invocations: 1,
         outcome: "the request failed: The completion model did not answer within 3000ms.",
         since: "17s ago"
@@ -330,6 +337,61 @@ describe("inline completion diagnosis", () => {
     expect(report).toContain("dext.completion.timeoutMs = 3000ms");
     expect(report).toContain("Raise the setting");
     expect(report).toContain("the difference is timing");
+  });
+
+  it("separates waiting for the provider from generating, because only one of them is tunable", () => {
+    // Most of the wait was over before a single token arrived, so generating
+    // less cannot recover it. Saying otherwise sends someone to turn maxTokens
+    // down and conclude that nothing helps.
+    const queueing = setup.diagnosisReport({
+      ...base,
+      report: { ...base.report, timing: { firstTokenMs: 1400, totalMs: 1800 } }
+    });
+    expect(queueing).toContain("1400ms to the first token");
+    expect(queueing).toContain("Lowering maxTokens will not help");
+
+    // The other way round, and the setting is exactly the right lever.
+    const generating = setup.diagnosisReport({
+      ...base,
+      report: { ...base.report, timing: { firstTokenMs: 200, totalMs: 1800 } }
+    });
+    expect(generating).toContain("1600ms of the 1800ms was spent generating");
+    expect(generating).toContain("dext.completion.maxTokens");
+    expect(generating).not.toContain("Lowering maxTokens will not help");
+
+    // A quick request is not something to explain at all.
+    const quick = setup.diagnosisReport({
+      ...base,
+      report: { ...base.report, timing: { firstTokenMs: 90, totalMs: 240 } }
+    });
+    expect(quick).toContain("240ms total");
+    expect(quick).not.toContain("Suggestions are slow");
+  });
+
+  it("calls out a provider that ignored the stream flag, since that disables the main optimisation", () => {
+    // An endpoint answering with one whole body means nothing can be shown
+    // until the model has finished, which no Dext setting can undo. It is worth
+    // naming, because from the outside it is indistinguishable from a slow model.
+    const report = setup.diagnosisReport({
+      ...base,
+      report: { ...base.report, timing: { firstTokenMs: undefined, totalMs: 1585 } }
+    });
+    expect(report).toContain("1585ms, without streaming");
+    expect(report).toContain("ignored the stream flag");
+    expect(report).toContain("openai-chat format is worth trying");
+
+    // A streaming endpoint is not accused of it.
+    const streamed = setup.diagnosisReport({
+      ...base,
+      report: { ...base.report, timing: { firstTokenMs: 300, totalMs: 1585 } }
+    });
+    expect(streamed).not.toContain("ignored the stream flag");
+  });
+
+  it("counts the rate limit spacing as part of the delay being felt", () => {
+    const report = setup.diagnosisReport({ ...base, report: { ...base.report, spacing: 600 } });
+    expect(report).toContain("holding requests 600ms apart");
+    expect(report).toContain("relaxes on");
   });
 
   it("admits when everything it can see is correct", () => {
