@@ -6,7 +6,7 @@ import { homedir } from "node:os";
 import { delimiter, extname, isAbsolute, join } from "node:path";
 import { isDextResult, serializeResultForAgent } from "./resultSerialization.js";
 import { ExecutionCancelledError } from "./executionErrors.js";
-import type { AgentProfile } from "../agentProfiles.js";
+import type { AgentPermission, AgentProfile } from "../agentProfiles.js";
 import type { AxMethodContract } from "./axAdapter.js";
 import type { AgentStreamEvent, AgentStreamPhase, ExecutionMetadata, RegisteredCallable, ResolvedInvocation } from "./types.js";
 
@@ -23,6 +23,8 @@ export interface AgentExecutionRequest {
   metadata: Readonly<ExecutionMetadata>;
   /** Only agent(apply=true) may receive a trusted workspace-write sandbox. */
   allowWorkspaceWrite?: boolean;
+  /** Extra provider CLI arguments from `dext.agentCliArgs`, already filtered. */
+  cliArguments?: readonly string[];
   onEvent?: (event: AgentStreamEvent) => void;
   signal?: AbortSignal;
 }
@@ -31,7 +33,7 @@ export interface AgentExecutionRequest {
  * envelope or output schema and its result is ordinary assistant text. */
 export interface AgentConversationRequest {
   profile: AgentProfile;
-  mode: "agent" | "ask";
+  mode: "agent" | "ask" | "plan";
   model?: string;
   reasoningEffort?: string;
   speed?: string;
@@ -40,6 +42,11 @@ export interface AgentConversationRequest {
   input: string;
   metadata: Readonly<ExecutionMetadata>;
   allowWorkspaceWrite: boolean;
+  /** The tier the composer asked for. `allowWorkspaceWrite` stays the single
+   * gate on writes; this only decides how the provider is told about it. */
+  permission?: AgentPermission;
+  /** Extra provider CLI arguments from `dext.agentCliArgs`, already filtered. */
+  cliArguments?: readonly string[];
   onEvent?: (event: AgentStreamEvent) => void;
   signal?: AbortSignal;
 }
@@ -460,10 +467,31 @@ function claudeFailure(output: string): string | undefined {
   return undefined;
 }
 
+/** A boolean write flag is the DSL's vocabulary: `agent(apply=...)` can reach
+ * the workspace or not, and never asks for more than that. */
+export function permissionForWrite(allowWorkspaceWrite: boolean | undefined): AgentPermission {
+  return allowWorkspaceWrite === true ? "workspace-write" : "read-only";
+}
+
+/** Claude names the tiers after what it will do without asking. `plan` refuses
+ * every edit, `acceptEdits` takes file edits, and `bypassPermissions` stops
+ * asking altogether. */
+export function claudePermissionMode(permission: AgentPermission): string {
+  if (permission === "full-access") return "bypassPermissions";
+  return permission === "workspace-write" ? "acceptEdits" : "plan";
+}
+
+/** Codex names the tiers after the sandbox it puts the process in. */
+export function codexSandbox(permission: AgentPermission): string {
+  if (permission === "full-access") return "danger-full-access";
+  return permission === "workspace-write" ? "workspace-write" : "read-only";
+}
+
 /** Arguments for Claude Code's non-interactive, structured streaming mode. */
 export function claudeCliArguments(
-  options: Pick<AgentExecutionRequest, "model" | "reasoningEffort" | "allowWorkspaceWrite">,
-  outputSchema: object
+  options: { model?: string; reasoningEffort?: string; permission: AgentPermission },
+  outputSchema: object,
+  extraArguments: readonly string[] = []
 ): string[] {
   return [
     "-p",
@@ -472,15 +500,17 @@ export function claudeCliArguments(
     "--include-partial-messages",
     "--json-schema", JSON.stringify(outputSchema),
     "--no-session-persistence",
-    "--permission-mode", options.allowWorkspaceWrite ? "acceptEdits" : "plan",
+    "--permission-mode", claudePermissionMode(options.permission),
     ...(options.model ? ["--model", options.model] : []),
-    ...(options.reasoningEffort ? ["--effort", options.reasoningEffort] : [])
+    ...(options.reasoningEffort ? ["--effort", options.reasoningEffort] : []),
+    ...extraArguments
   ];
 }
 
 /** Claude's stream mode without a Dext output contract. */
 export function claudeConversationArguments(
-  options: Pick<AgentConversationRequest, "model" | "reasoningEffort" | "allowWorkspaceWrite">
+  options: { model?: string; reasoningEffort?: string; permission: AgentPermission },
+  extraArguments: readonly string[] = []
 ): string[] {
   return [
     "-p",
@@ -488,31 +518,35 @@ export function claudeConversationArguments(
     "--verbose",
     "--include-partial-messages",
     "--no-session-persistence",
-    "--permission-mode", options.allowWorkspaceWrite ? "acceptEdits" : "plan",
+    "--permission-mode", claudePermissionMode(options.permission),
     ...(options.model ? ["--model", options.model] : []),
-    ...(options.reasoningEffort ? ["--effort", options.reasoningEffort] : [])
+    ...(options.reasoningEffort ? ["--effort", options.reasoningEffort] : []),
+    ...extraArguments
   ];
 }
 
 /** Arguments for Codex's structured execution mode. Workspace writes are only
  * enabled for an explicitly trusted agent(apply=true) request. */
 export function codexCliArguments(
-  options: Pick<AgentExecutionRequest, "model" | "reasoningEffort" | "allowWorkspaceWrite">,
+  options: { model?: string; reasoningEffort?: string },
   schemaPath: string,
-  allowWorkspaceWrite: boolean,
-  serviceTier?: string
+  permission: AgentPermission,
+  serviceTier?: string,
+  extraArguments: readonly string[] = []
 ): string[] {
+  const sandbox = codexSandbox(permission);
   return [
     "exec",
     "--json",
     "--ephemeral",
-    "--sandbox", allowWorkspaceWrite ? "workspace-write" : "read-only",
+    "--sandbox", sandbox,
     "--output-schema", schemaPath,
-    ...(allowWorkspaceWrite ? ["--skip-git-repo-check"] : []),
+    ...(sandbox === "read-only" ? [] : ["--skip-git-repo-check"]),
     ...(options.model ? ["--model", options.model] : []),
     ...(options.reasoningEffort ? ["--config", 'model_reasoning_effort="' + options.reasoningEffort + '"'] : []),
     "--config", 'model_reasoning_summary="detailed"',
     ...(serviceTier ? ["--config", 'service_tier="' + serviceTier + '"'] : []),
+    ...extraArguments,
     "-"
   ];
 }
@@ -520,19 +554,22 @@ export function codexCliArguments(
 /** Codex's JSON event stream is used only for Process rendering. No JSON
  * schema is passed, so the final assistant message remains ordinary text. */
 export function codexConversationArguments(
-  options: Pick<AgentConversationRequest, "model" | "reasoningEffort" | "allowWorkspaceWrite">,
-  serviceTier?: string
+  options: { model?: string; reasoningEffort?: string; permission: AgentPermission },
+  serviceTier?: string,
+  extraArguments: readonly string[] = []
 ): string[] {
+  const sandbox = codexSandbox(options.permission);
   return [
     "exec",
     "--json",
     "--ephemeral",
-    "--sandbox", options.allowWorkspaceWrite ? "workspace-write" : "read-only",
-    ...(options.allowWorkspaceWrite ? ["--skip-git-repo-check"] : []),
+    "--sandbox", sandbox,
+    ...(sandbox === "read-only" ? [] : ["--skip-git-repo-check"]),
     ...(options.model ? ["--model", options.model] : []),
     ...(options.reasoningEffort ? ["--config", 'model_reasoning_effort="' + options.reasoningEffort + '"'] : []),
     "--config", 'model_reasoning_summary="detailed"',
     ...(serviceTier ? ["--config", 'service_tier="' + serviceTier + '"'] : []),
+    ...extraArguments,
     "-"
   ];
 }
@@ -609,7 +646,13 @@ export function runProcess(
 export class CliAgentRunner implements AgentRunner {
   private codexUsesChatGpt: boolean | undefined;
 
-  constructor(private readonly timeoutMs = 600_000) {}
+  constructor(private timeoutMs = 600_000) {}
+
+  /** A long agent turn is cut off by this timer, so it has to follow the
+   * setting rather than be fixed when the runner was built. */
+  setTimeoutMs(timeoutMs: number): void {
+    this.timeoutMs = timeoutMs;
+  }
 
   private async processEnvironment(
     command: string,
@@ -657,9 +700,13 @@ export class CliAgentRunner implements AgentRunner {
           : `Read the Dext JSON payload from stdin. Values tagged kind=dext-result are prior typed API results; inspect their value field. Execute the requested API without modifying workspace files, installing packages, or running state-changing commands. ${progressInstruction}`;
     const serviceTier = request.serviceTier ?? (request.speed === "fast" ? "priority" : request.speed === "standard" ? "default" : undefined);
     const processEnv = await this.processEnvironment(command, request);
+    // The typed API path stays a two-state world: `agent(apply=...)` never asks
+    // for full access, whatever the composer's own selector says.
+    const permission = permissionForWrite(request.allowWorkspaceWrite);
+    const extraArguments = request.cliArguments ?? [];
     const args: string[] = request.profile.provider === "codex"
-      ? codexCliArguments(request, schemaPath, request.allowWorkspaceWrite === true, serviceTier)
-      : claudeCliArguments(request, outputSchema);
+      ? codexCliArguments(request, schemaPath, permission, serviceTier, extraArguments)
+      : claudeCliArguments({ ...request, permission }, outputSchema, extraArguments);
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(new Error("Agent execution timed out.")), this.timeoutMs);
@@ -728,9 +775,15 @@ export class CliAgentRunner implements AgentRunner {
       );
     }
     const serviceTier = request.serviceTier ?? (request.speed === "fast" ? "priority" : request.speed === "standard" ? "default" : undefined);
+    // A tier that would write is only honoured when the caller also opened the
+    // write gate, so a read-only mode can never be talked into full access.
+    const permission = request.allowWorkspaceWrite
+      ? request.permission ?? "workspace-write"
+      : "read-only";
+    const extraArguments = request.cliArguments ?? [];
     const args = request.profile.provider === "codex"
-      ? codexConversationArguments(request, serviceTier)
-      : claudeConversationArguments(request);
+      ? codexConversationArguments({ ...request, permission }, serviceTier, extraArguments)
+      : claudeConversationArguments({ ...request, permission }, extraArguments);
     const processEnv = await this.processEnvironment(command, request);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(new Error("Agent execution timed out.")), this.timeoutMs);

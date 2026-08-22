@@ -1368,11 +1368,11 @@ interface AioaOwnedSession {
 }
 
 export class AioaCdpAgentRunner implements AgentRunner {
-  private readonly timeoutMs: number;
+  private timeoutMs: number;
   private readonly pollIntervalMs: number;
   private readonly wait: (milliseconds: number) => Promise<void>;
   private readonly initialResponseTimeoutMs: number;
-  private readonly responseIdleTimeoutMs: number;
+  private responseIdleTimeoutMs: number;
   private readonly finalContentGraceMs: number;
   private readonly now: () => number;
   private readonly sessions = new Map<string, AioaOwnedSession>();
@@ -1388,6 +1388,15 @@ export class AioaCdpAgentRunner implements AgentRunner {
     this.responseIdleTimeoutMs = options.responseIdleTimeoutMs ?? DEFAULT_RESPONSE_IDLE_TIMEOUT_MS;
     this.finalContentGraceMs = options.finalContentGraceMs ?? DEFAULT_FINAL_CONTENT_GRACE_MS;
     this.now = options.now ?? Date.now;
+  }
+
+  /** The overall and idle budgets are the two AIOA waits users actually hit, so
+   * they follow the settings while the runner keeps its open sessions. */
+  setTimeouts(timeouts: { timeoutMs?: number; responseIdleTimeoutMs?: number }): void {
+    if (timeouts.timeoutMs !== undefined) this.timeoutMs = timeouts.timeoutMs;
+    if (timeouts.responseIdleTimeoutMs !== undefined) {
+      this.responseIdleTimeoutMs = timeouts.responseIdleTimeoutMs;
+    }
   }
 
   endSession(sessionId: string): void {

@@ -81,6 +81,27 @@ describe("custom .dx APIs", () => {
     expect(result.plans.has("team.review")).toBe(true);
   });
 
+  it("names an API by its path below the directory it was found in", async () => {
+    const registry = new MethodRegistry();
+    registry.registerMany(BUILTIN_METHODS, "builtin");
+    const shared = new Map([
+      ["D:/shared/dext-apis/team/explain.dx", `def main(input: str) -> ChatResult:\n    return ask(input=input)\n`],
+      ["D:/shared/dext-apis/audit.dx", `def main(input: str) -> ChatResult:\n    return ask(input=input)\n`]
+    ]);
+    const result = await loadCustomApis(
+      true,
+      ["D:/shared/dext-apis"],
+      async () => [...shared.keys()],
+      async (path) => shared.get(path),
+      registry
+    );
+    expect(result.diagnostics).toEqual([]);
+    // A configured directory produces the same names the workspace's own
+    // .dext/api would, rather than a name built from the whole disk path.
+    expect(registry.get("team.explain")).toBeDefined();
+    expect(registry.get("audit")).toBeDefined();
+  });
+
   it("executes a custom API through the existing runtime", async () => {
     const registry = new MethodRegistry();
     registry.registerMany(BUILTIN_METHODS, "builtin");

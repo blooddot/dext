@@ -16,6 +16,7 @@ import { formatMethodSignature } from "../core/methodSignature.js";
 import type { ConversationSummary, SidebarState, WebviewRequest, WebviewResponse } from "../webviewProtocol.js";
 import { parseDroppedFiles } from "./chatAttachments.js";
 import { ClipboardClient } from "./clipboardClient.js";
+import { FileSearchClient } from "./fileSearchClient.js";
 import { DextCodeEditor } from "./codeEditor.js";
 import { LanguageRequestBroker } from "./languageClient.js";
 import { formatDuration } from "./duration.js";
@@ -62,6 +63,11 @@ const elements = {
   modeControlIcon: element<HTMLElement>("mode-control-icon"),
   modeControlValue: element<HTMLElement>("mode-control-value"),
   modeMenu: element<HTMLElement>("mode-menu"),
+  permissionMenuShell: element<HTMLElement>("permission-menu-shell"),
+  permissionControl: element<HTMLButtonElement>("permission-control"),
+  permissionControlIcon: element<HTMLElement>("permission-control-icon"),
+  permissionControlValue: element<HTMLElement>("permission-control-value"),
+  permissionMenu: element<HTMLElement>("permission-menu"),
   agentControl: element<HTMLButtonElement>("agent-control"),
   agentControlValue: element<HTMLElement>("agent-control-value"),
   agentMenu: element<HTMLElement>("agent-menu"),
@@ -89,14 +95,27 @@ const elements = {
 
 const broker = new LanguageRequestBroker((request) => vscode.postMessage(request));
 const clipboard = new ClipboardClient((request) => vscode.postMessage(request));
+const fileSearch = new FileSearchClient((request) => vscode.postMessage(request));
 let executing = false;
 let stopping = false;
 let activeTurnId: string | undefined;
 let hasErrors = false;
 let problemCounts = { errors: 0, warnings: 0 };
 let inputKind: "empty" | "workflow" | "invalid" = "empty";
-type InputMode = "agent" | "ask" | "code";
+type InputMode = "agent" | "ask" | "plan" | "code";
 let inputMode: InputMode = "agent";
+type AgentPermission = "read-only" | "workspace-write" | "full-access";
+const PERMISSION_LABEL: Record<AgentPermission, string> = {
+  "read-only": "Read only",
+  "workspace-write": "Workspace write",
+  "full-access": "Full access"
+};
+const PERMISSION_ICON: Record<AgentPermission, string> = {
+  "read-only": "codicon-shield",
+  "workspace-write": "codicon-edit",
+  "full-access": "codicon-unlock"
+};
+let agentPermission: AgentPermission = "workspace-write";
 let sidebarState: SidebarState | undefined;
 let activeConversationId: string | undefined;
 let dropPosition: number | undefined;
@@ -179,6 +198,7 @@ const editor = new DextCodeEditor({
   parent: elements.codeEditor,
   broker,
   clipboard,
+  files: fileSearch,
   onRun: run,
   onOpenReference: openInputReference,
   onDiagnosticsChanged(counts) {
@@ -226,6 +246,7 @@ function updateRunState(): void {
   elements.problems.classList.toggle("has-problems", codeMode && parts.length > 0);
   elements.problems.classList.toggle("hidden", !codeMode);
   elements.inputShell.classList.toggle("conversation-mode", !codeMode);
+  syncTurnActions();
 }
 
 function run(): void {
@@ -470,6 +491,10 @@ function displayOptionValue(value: string): string {
 function renderAgentControls(state: SidebarState): void {
   sidebarState = state;
   inputMode = state.agentSelection.mode ?? inputMode;
+  if (state.settings) {
+    defaultDiffMode = state.settings.diffView;
+    editor.setSubmitOnEnter(state.settings.submitOnEnter);
+  }
   editor.setLanguageEnabled(inputMode === "code");
   const selected = state.agentProfiles.find((item) => item.id === state.agentSelection.profileId)
     ?? state.agentProfiles[0];
@@ -478,14 +503,21 @@ function renderAgentControls(state: SidebarState): void {
     ? selected.modelOptions
     : (selected?.models ?? []).map((item): ModelOption => ({ id: item, label: item, reasoningEfforts: [], speedTiers: [], serviceTiers: [] }));
   const selectedModel = options.find((item) => item.id === state.agentSelection.model);
-  const modeLabel: Record<InputMode, string> = { agent: "Agent", ask: "Ask", code: "Code" };
+  const modeLabel: Record<InputMode, string> = { agent: "Agent", ask: "Ask", plan: "Plan", code: "Code" };
   const modeIcon: Record<InputMode, string> = {
     agent: "codicon-hubot",
     ask: "codicon-comment-discussion",
+    plan: "codicon-checklist",
     code: "codicon-code"
   };
   elements.modeControlValue.textContent = modeLabel[inputMode];
   elements.modeControlIcon.className = `codicon ${modeIcon[inputMode]}`;
+  agentPermission = state.agentSelection.permission ?? agentPermission;
+  // Ask and Plan are read-only by definition and Code carries its permission on
+  // each call, so the tier is only a choice in Agent mode.
+  elements.permissionMenuShell.hidden = inputMode !== "agent";
+  elements.permissionControlValue.textContent = PERMISSION_LABEL[agentPermission];
+  elements.permissionControlIcon.className = `codicon ${PERMISSION_ICON[agentPermission]}`;
   elements.agentControlValue.textContent = selected?.label ?? "Choose";
   const selectedModelLabel = selectedModel?.label ?? "Default";
   const selectedEffort = state.agentSelection.reasoningEffort ?? selectedModel?.defaultReasoningEffort;
@@ -495,10 +527,19 @@ function renderAgentControls(state: SidebarState): void {
   renderComposerMenu(elements.modeMenu, [
     ["agent", "Agent", "codicon-hubot"],
     ["ask", "Ask", "codicon-comment-discussion"],
+    ["plan", "Plan", "codicon-checklist"],
     ["code", "Code", "codicon-code"]
   ], inputMode, (mode) => {
     inputMode = mode as InputMode;
     submitAgentSelection({});
+  });
+  renderComposerMenu(elements.permissionMenu, [
+    ["read-only", PERMISSION_LABEL["read-only"], PERMISSION_ICON["read-only"]],
+    ["workspace-write", PERMISSION_LABEL["workspace-write"], PERMISSION_ICON["workspace-write"]],
+    ["full-access", PERMISSION_LABEL["full-access"], PERMISSION_ICON["full-access"]]
+  ], agentPermission, (permission) => {
+    agentPermission = permission as AgentPermission;
+    submitAgentSelection({ permission: agentPermission });
   });
   renderComposerMenu(elements.agentMenu, state.agentProfiles.map((item) => [item.id, item.label, "codicon-account"]), selected?.id ?? "", (profileId) => {
     submitAgentSelection({ profileId, model: "", reasoningEffort: "", speed: "", serviceTier: "" });
@@ -654,6 +695,7 @@ function submitAgentSelection(change: Partial<SidebarState["agentSelection"]>): 
   vscode.postMessage({
     type: "agentSelection", selection: {
       mode: inputMode,
+      permission: change.permission ?? selection?.permission ?? agentPermission,
       profileId: change.profileId ?? selection?.profileId ?? "",
       model: change.model ?? selection?.model ?? "",
       reasoningEffort: change.reasoningEffort ?? selection?.reasoningEffort ?? "",
@@ -735,6 +777,7 @@ function renderConversations(sessions: readonly ConversationSummary[], activeId:
 
 const composerMenus = [
   { control: elements.modeControl, menu: elements.modeMenu },
+  { control: elements.permissionControl, menu: elements.permissionMenu },
   { control: elements.agentControl, menu: elements.agentMenu },
   { control: elements.modelControl, menu: elements.modelMenu }
 ];
@@ -1023,6 +1066,32 @@ function renderedInputSource(source: string): HTMLPreElement {
   return pre;
 }
 
+/** Turn actions live in the summary, which is a click target of its own, so
+ * every one of them has to stop the click from folding the turn. */
+function turnActionButton(icon: string, label: string, onActivate: () => void): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "output-turn-action icon-button compact";
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  button.disabled = executing;
+  const glyph = document.createElement("i");
+  glyph.className = `codicon codicon-${icon}`;
+  button.append(glyph);
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onActivate();
+  });
+  return button;
+}
+
+function syncTurnActions(): void {
+  for (const button of elements.result.querySelectorAll<HTMLButtonElement>(".output-turn-action, .plan-action.primary")) {
+    button.disabled = executing;
+  }
+}
+
 function createOutputTurn(turnId: string, source: string, createdAt = Date.now()): OutputTurnElements {
   source = normalizeInputReferenceSource(source);
   for (const turn of outputTurns.values()) turn.disclosure.open = false;
@@ -1039,10 +1108,21 @@ function createOutputTurn(turnId: string, source: string, createdAt = Date.now()
   const title = document.createElement("span");
   title.className = "output-turn-title";
   title.textContent = inputReferenceDisplayText(source).split(/\r?\n/, 1)[0]?.slice(0, 140) || "Dext turn";
-  summary.append(chevron, time, title);
+  const actions = document.createElement("span");
+  actions.className = "output-turn-actions";
+  actions.append(
+    turnActionButton("edit", "Edit and resend", () => {
+      editor.setValue(source);
+      setSectionOpen(elements.inputHeading, elements.inputBody, true);
+    }),
+    turnActionButton("debug-restart", "Retry this turn", () => {
+      vscode.postMessage({ type: "retryTurn", turnId });
+    })
+  );
+  summary.append(chevron, time, title, actions);
   const body = document.createElement("div");
   body.className = "output-turn-body";
-  const input = outputTurnSection("Input", false);
+  const input = outputTurnSection("Input", true);
   const inputText = renderedInputSource(source);
   const inputCopy = document.createElement("div");
   inputCopy.className = "output-turn-input";
@@ -1072,6 +1152,8 @@ function selectOutputTurn(turnId: string): OutputTurnElements | undefined {
 
 type DiffMode = "inline" | "split";
 
+let defaultDiffMode: DiffMode = "inline";
+
 function setDiffMode(container: HTMLElement, mode: DiffMode): void {
   const view = container.querySelector<HTMLElement>(".diff-view");
   if (view) view.dataset.diffView = mode;
@@ -1090,11 +1172,11 @@ function diffModeSwitch(container: HTMLElement): HTMLElement {
   for (const [mode, label] of [["inline", "Inline"], ["split", "Split"]] as const) {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = `diff-mode-button${mode === "inline" ? " active" : ""}`;
+    button.className = `diff-mode-button${mode === defaultDiffMode ? " active" : ""}`;
     button.dataset.diffMode = mode;
     button.title = `${label} diff`;
     button.textContent = label;
-    button.setAttribute("aria-pressed", String(mode === "inline"));
+    button.setAttribute("aria-pressed", String(mode === defaultDiffMode));
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -1144,11 +1226,16 @@ function appendDiffView(container: HTMLElement, change: PatchChange): void {
     );
     split.append(splitRow);
   }
+  view.dataset.diffView = defaultDiffMode;
   view.append(inline, split);
   container.append(view);
 }
 
-function fileChangeDisclosure(change: PatchChange, className = "agent-file-change"): HTMLDetailsElement {
+function fileChangeDisclosure(
+  change: PatchChange,
+  className = "agent-file-change",
+  reviewTurnId?: string
+): HTMLDetailsElement {
   const disclosure = document.createElement("details");
   disclosure.className = className;
   disclosure.dataset.diffContainer = "";
@@ -1166,9 +1253,107 @@ function fileChangeDisclosure(change: PatchChange, className = "agent-file-chang
   path.className = "agent-file-path";
   path.textContent = change.uri;
   summary.append(chevron, label, count, diffModeSwitch(disclosure));
+  if (reviewTurnId) {
+    disclosure.dataset.reviewUri = change.uri;
+    summary.append(patchReviewActions(reviewTurnId, [change.uri]));
+  }
   disclosure.append(summary, path);
   appendDiffView(disclosure, change);
   return disclosure;
+}
+
+/** Nothing has been written yet at this point, so the buttons are the only way
+ * the change reaches the workspace. */
+function patchReviewActions(turnId: string, uris: readonly string[], suffix = ""): HTMLElement {
+  const row = document.createElement("span");
+  row.className = "patch-review-actions";
+  const button = (
+    icon: string,
+    label: string,
+    accept: boolean,
+    variant: string
+  ): HTMLButtonElement => {
+    const element = document.createElement("button");
+    element.type = "button";
+    element.className = `patch-review-action ${variant}`;
+    element.title = label;
+    element.setAttribute("aria-label", label);
+    const glyph = document.createElement("i");
+    glyph.className = `codicon codicon-${icon}`;
+    const text = document.createElement("span");
+    text.textContent = label;
+    element.append(glyph, text);
+    element.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      for (const sibling of row.querySelectorAll("button")) sibling.disabled = true;
+      vscode.postMessage({ type: "resolvePatch", turnId, uris: [...uris], accept });
+    });
+    return element;
+  };
+  row.append(
+    button("check", `Accept${suffix}`, true, "accept"),
+    button("close", `Reject${suffix}`, false, "reject")
+  );
+  return row;
+}
+
+/** A resolved file stops being a proposal, so its entry either reports what
+ * happened or steps aside. A conflict stays reviewable on purpose. */
+function applyPatchResolution(
+  turnId: string,
+  uris: readonly string[],
+  status: "applied" | "rejected" | "conflict" | "unchanged",
+  message: string
+): void {
+  for (const uri of uris) {
+    for (const entry of elements.result.querySelectorAll<HTMLDetailsElement>("details[data-review-uri]")) {
+      if (entry.dataset.reviewUri !== uri) continue;
+      const actions = entry.querySelector<HTMLElement>(".patch-review-actions");
+      if (status === "conflict") {
+        for (const button of actions?.querySelectorAll("button") ?? []) button.disabled = false;
+        entry.classList.add("patch-conflict");
+        continue;
+      }
+      entry.open = false;
+      delete entry.dataset.reviewUri;
+      entry.classList.remove("patch-conflict");
+      entry.classList.add(status === "rejected" ? "patch-rejected" : "patch-applied");
+      actions?.replaceWith(patchReviewOutcome(status));
+    }
+  }
+  const all = elements.result.querySelector<HTMLElement>(`[data-review-all="${turnId}"]`);
+  if (all) {
+    if (elements.result.querySelector("details[data-review-uri]")) {
+      for (const button of all.querySelectorAll("button")) button.disabled = false;
+    } else {
+      all.remove();
+    }
+  }
+  if (status === "conflict") appendPatchNotice(message);
+}
+
+/** A conflict is reported beside the changes rather than through the error
+ * renderer, which clears the turn it is called on. */
+function appendPatchNotice(message: string): void {
+  const target = activeTurn?.output ?? elements.result;
+  const existing = target.querySelector(".patch-review-notice");
+  if (existing) existing.remove();
+  const notice = document.createElement("div");
+  notice.className = "patch-review-notice";
+  notice.textContent = message;
+  target.append(notice);
+}
+
+function patchReviewOutcome(status: "applied" | "rejected" | "unchanged"): HTMLElement {
+  const outcome = document.createElement("span");
+  outcome.className = `patch-review-outcome ${status}`;
+  const glyph = document.createElement("i");
+  glyph.className = `codicon codicon-${status === "rejected" ? "circle-slash" : "check-all"}`;
+  const label = document.createElement("span");
+  label.textContent = status === "rejected" ? "Rejected" : status === "unchanged" ? "No change" : "Accepted";
+  outcome.append(glyph, label);
+  return outcome;
 }
 
 function appendAgentPresentationExtras(container: HTMLElement, presentation: AgentMessagePresentation): void {
@@ -1212,19 +1397,57 @@ function appendAgentPresentationExtras(container: HTMLElement, presentation: Age
   }
 }
 
-function renderExecution(response: RuntimeResponse): DocumentFragment {
+/** A plan is a document plus a decision, so the result carries both: open it to
+ * edit, or hand the edited file to the Agent. */
+function planActions(planPath: string): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "plan-actions";
+  const open = document.createElement("button");
+  open.type = "button";
+  open.className = "plan-action";
+  const openGlyph = document.createElement("i");
+  openGlyph.className = "codicon codicon-checklist";
+  const openLabel = document.createElement("span");
+  openLabel.textContent = planPath.split("/").pop() ?? planPath;
+  open.title = `Open ${planPath}`;
+  open.append(openGlyph, openLabel);
+  open.addEventListener("click", () => {
+    vscode.postMessage({ type: "openFileReference", reference: planPath });
+  });
+  const build = document.createElement("button");
+  build.type = "button";
+  build.className = "plan-action primary";
+  build.title = "Hand this plan to the Agent";
+  const buildGlyph = document.createElement("i");
+  buildGlyph.className = "codicon codicon-play";
+  const buildLabel = document.createElement("span");
+  buildLabel.textContent = "Build plan";
+  build.append(buildGlyph, buildLabel);
+  build.disabled = executing;
+  build.addEventListener("click", () => {
+    build.disabled = true;
+    vscode.postMessage({ type: "buildPlan", planPath });
+  });
+  row.append(open, build);
+  return row;
+}
+
+function renderExecution(response: RuntimeResponse, reviewTurnId?: string): DocumentFragment {
   const fragment = document.createDocumentFragment();
   fragment.append(resultHeading(response));
   const result = response.result;
   if (result.kind === "chat" || result.kind === "text") {
     fragment.append(copyableText(result.text));
+    if (result.kind === "chat" && result.planPath) fragment.append(planActions(result.planPath));
   } else if (result.kind === "explain") {
     fragment.append(copyableText(result.text));
   } else if (result.kind === "edit" || result.kind === "agent") {
     const summary = result.kind === "agent" ? result.text : result.summary;
     if (summary) fragment.append(copyableText(summary));
     const changes = result.kind === "agent" ? result.patch?.changes ?? [] : result.patch.changes;
-    for (const change of changes) fragment.append(fileChangeDisclosure(change, "agent-file-change execution-file-change"));
+    for (const change of changes) {
+      fragment.append(fileChangeDisclosure(change, "agent-file-change execution-file-change", reviewTurnId));
+    }
   } else if (result.kind === "apply") {
     fragment.append(copyableText(`${result.status}: ${result.summary}`));
   } else if (result.kind === "print") {
@@ -1301,7 +1524,28 @@ function renderExecution(response: RuntimeResponse): DocumentFragment {
   return fragment;
 }
 
-function renderResult(response: InputExecutionResponse): void {
+/** Reviewing file by file is the careful path, so a single row covers the common
+ * case of taking or dropping the whole proposal. */
+function patchReviewHeader(turnId: string, entries: readonly WorkflowStepResponse[]): HTMLElement {
+  const files = new Set<string>();
+  for (const step of entries) {
+    const result = step.response?.result;
+    if (result?.kind !== "agent") continue;
+    for (const change of result.patch?.changes ?? []) files.add(change.uri);
+  }
+  const header = document.createElement("div");
+  header.className = "patch-review-header";
+  header.dataset.reviewAll = turnId;
+  const label = document.createElement("span");
+  label.className = "patch-review-label";
+  label.textContent = `${files.size} file${files.size === 1 ? "" : "s"} awaiting review`;
+  // An empty uri list is the host's signal to take every pending file, so the
+  // row keeps working after some files have already been resolved.
+  header.append(label, patchReviewActions(turnId, [], " all"));
+  return header;
+}
+
+function renderResult(response: InputExecutionResponse, reviewTurnId?: string): void {
   const target = activeTurn?.output ?? elements.result;
   target.replaceChildren();
   const entries: WorkflowStepResponse[] = response.steps ?? response.executions.map((execution) => ({
@@ -1310,10 +1554,14 @@ function renderResult(response: InputExecutionResponse): void {
     response: execution
   }));
   renderAgentFileChanges(entries);
+  if (reviewTurnId) target.append(patchReviewHeader(reviewTurnId, entries));
+  // Comprehension branches ran at the same time, so they are laid out beside one
+  // another instead of pretending they were a sequence.
+  let fanOut: HTMLElement | undefined;
   for (const [index, step] of entries.entries()) {
     const item = document.createElement("section");
     item.className = "execution-result";
-    if (step.response) item.append(renderExecution(step.response));
+    if (step.response) item.append(renderExecution(step.response, reviewTurnId));
     else {
       const disclosure = document.createElement("details");
       disclosure.className = "execution-disclosure step-disclosure";
@@ -1329,8 +1577,20 @@ function renderResult(response: InputExecutionResponse): void {
       }
       item.append(disclosure);
     }
-    target.append(item);
-    if (index < entries.length - 1) item.classList.add("has-next");
+    if (step.branch === undefined) {
+      fanOut = undefined;
+      target.append(item);
+      if (index < entries.length - 1) item.classList.add("has-next");
+      continue;
+    }
+    if (!fanOut) {
+      fanOut = document.createElement("div");
+      fanOut.className = "fan-out";
+      target.append(fanOut);
+    }
+    item.classList.add("fan-out-branch");
+    item.dataset.branch = String(step.branch + 1);
+    fanOut.append(item);
   }
   elements.resultSection.classList.remove("hidden");
 }
@@ -1744,6 +2004,12 @@ function addImageAttachment(relativePath: string, webviewUri: string, name: stri
 
 function clearSubmittedInput(): void {
   editor.setValue("");
+  // The chips stand for references that just left the composer with the turn,
+  // so they go with it. The files stay on disk because the recorded turn and
+  // its history entry still point at them.
+  for (const chip of imageAttachments.values()) chip.remove();
+  imageAttachments.clear();
+  elements.attachmentBar.classList.add("hidden");
 }
 
 elements.run.addEventListener("click", run);
@@ -1862,7 +2128,7 @@ vscode.postMessage({ type: "debugLog", message: "main.ts loaded (drag diagnostic
 
 window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   const message = event.data;
-  if (broker.accept(message) || clipboard.accept(message)) return;
+  if (broker.accept(message) || clipboard.accept(message) || fileSearch.accept(message)) return;
   if (message.type === "state") {
     setMethodsReloading(false);
     renderMethods(message.state);
@@ -1885,7 +2151,10 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   if (message.type === "openMethods") openMethodsDialog();
   if (message.type === "execution") {
     selectOutputTurn(message.turnId);
-    renderResult(message.response);
+    renderResult(message.response, message.reviewPatch ? message.turnId : undefined);
+  }
+  if (message.type === "patchResolved") {
+    applyPatchResolution(message.turnId, message.uris, message.status, message.message);
   }
   if (message.type === "executionFailed") {
     selectOutputTurn(message.turnId);

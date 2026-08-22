@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as vscode from "vscode";
 import type { DextApplication } from "./application.js";
-import type { AgentStreamEvent, UiInteraction } from "./core/types.js";
+import type { AgentStreamEvent, ApplyResult, InputExecutionResponse, PatchResult, UiInteraction } from "./core/types.js";
+import { applyPatchHandler } from "./vscodePatchHost.js";
 import {
   AttachmentStore,
   MAX_ATTACHMENT_BYTES,
@@ -18,6 +19,8 @@ import {
   selectionAttachment
 } from "./vscodeAttachments.js";
 import { ReadyMessageQueue } from "./readyMessageQueue.js";
+import { rankFileMatches } from "./core/fileSearch.js";
+import { planPathSegments } from "./core/planFile.js";
 import { openWorkspaceFileReference } from "./vscodeContextHost.js";
 import { webviewRequestSchema } from "./webviewProtocol.js";
 import type { ConversationSummary, WebviewResponse } from "./webviewProtocol.js";
@@ -25,6 +28,24 @@ import type { DextHistorySession, DextHistoryStore } from "./historyStore.js";
 import type { DextConversationPreferences } from "./conversationPreferences.js";
 import { conversationTitle } from "./historyRender.js";
 import { normalizeInputReferenceSource } from "./core/fileReference.js";
+
+/** An `agent(apply=False)` step proposes changes and writes nothing, so its
+ * patch is the one Dext holds for review. A step that was allowed to write has
+ * already landed and must not be offered again. */
+function unappliedPatch(response: InputExecutionResponse): PatchResult | undefined {
+  const changes: PatchResult["changes"] = [];
+  let title = "Proposed changes";
+  for (const execution of response.executions) {
+    if (execution.result.kind !== "agent" || !execution.result.patch) continue;
+    const applied = execution.invocation.arguments
+      .some((argument) => argument.name === "apply" && argument.value !== false);
+    if (applied) continue;
+    title = execution.result.patch.title || title;
+    changes.push(...execution.result.patch.changes.filter((change) => change.before !== change.after));
+  }
+  if (!changes.length) return undefined;
+  return { kind: "patch", title, changes };
+}
 
 function outputSession(): DextHistorySession {
   const now = Date.now();
@@ -35,6 +56,13 @@ function outputSession(): DextHistorySession {
     turns: []
   };
 }
+
+// The picker ranks paths in the host, so the index has to be broad enough to
+// contain the answer while staying cheap enough to rebuild on a stale read.
+const MAX_INDEXED_FILES = 20000;
+const MAX_FILE_SUGGESTIONS = 40;
+const FILE_INDEX_TTL_MS = 15000;
+const FILE_INDEX_EXCLUDE = "**/{node_modules,.git,dist,out,build,.venv,__pycache__,.dext/attachments}/**";
 
 function imageExtension(mimeType: string): string | undefined {
   const normalized = mimeType.toLowerCase().split(";")[0]!.trim();
@@ -61,6 +89,11 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   private running = false;
   private activeExecution: { turnId: string; controller: AbortController } | undefined;
   private readonly pendingAttachmentDeletes = new Set<string>();
+  // A read-only Agent turn leaves a patch nobody applied yet. It is kept per
+  // turn so two turns in the same conversation cannot resolve each other's
+  // files, and so a rejected file simply disappears from the entry.
+  private readonly pendingPatches = new Map<string, PatchResult>();
+  private fileIndex: { paths: string[]; loadedAt: number } | undefined;
 
   private hydrateSessions(): void {
     if (this.sessionsHydrated) return;
@@ -257,6 +290,13 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     this.postWhenReady({ type: "setInput", source });
   }
 
+  /** The keyboard and Command Palette route into the same abort the composer's
+   * Stop button uses, so there is only one way a turn ends early. */
+  stopExecution(): void {
+    if (!this.activeExecution) throw new Error("No Dext turn is running.");
+    this.activeExecution.controller.abort();
+  }
+
   async addSelectionToChat(): Promise<void> {
     const attachment = await selectionAttachment();
     this.postWhenReady({
@@ -334,6 +374,20 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
             this.activeExecution.controller.abort();
           }
           break;
+        case "retryTurn": {
+          const turn = this.activeSession.turns.find((item) => item.id === request.turnId);
+          if (!turn) throw new Error("Conversation turn not found.");
+          // Turns recorded before Dext tracked the mode fall back to the one
+          // the composer is showing, which is what the user sees on screen.
+          await this.run(turn.mode ?? this.application.state().agentSelection.mode ?? "agent", turn.input);
+          break;
+        }
+        case "buildPlan":
+          await this.buildPlan(request.planPath);
+          break;
+        case "resolvePatch":
+          await this.resolvePatch(request.turnId, request.uris, request.accept);
+          break;
         case "selectConversation": {
           if (this.running) throw new Error("Wait for the current Dext turn to finish before switching conversations.");
           const selected = this.sessions.get(request.sessionId);
@@ -355,6 +409,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         case "agentSelection":
           this.application.setAgentSelection({
             mode: request.selection.mode,
+            permission: request.selection.permission,
             ...(request.selection.profileId ? { profileId: request.selection.profileId } : {}),
             ...(request.selection.model ? { model: request.selection.model } : {}),
             ...(request.selection.reasoningEffort ? { reasoningEffort: request.selection.reasoningEffort } : {}),
@@ -365,6 +420,17 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           break;
         case "openFileReference":
           await openWorkspaceFileReference(request.reference);
+          break;
+        case "searchFiles":
+          await this.post({
+            type: "searchFilesResult",
+            requestId: request.requestId,
+            files: rankFileMatches(
+              await this.workspaceFileIndex(),
+              request.query,
+              MAX_FILE_SUGGESTIONS
+            )
+          });
           break;
         case "debugLog":
           appendFileSync(
@@ -490,7 +556,91 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async run(mode: "agent" | "ask" | "code", source: string): Promise<void> {
+  /** Accepting is what actually writes a read-only Agent turn to disk. Files are
+   * resolved one entry at a time so accepting part of a proposal leaves the rest
+   * pending instead of discarding it. */
+  private async resolvePatch(turnId: string, uris: readonly string[], accept: boolean): Promise<void> {
+    const pending = this.pendingPatches.get(turnId);
+    if (!pending) throw new Error("These changes are no longer available for review.");
+    const targets = uris.length
+      ? pending.changes.filter((change) => uris.includes(change.uri))
+      : [...pending.changes];
+    if (!targets.length) throw new Error("None of those files are part of this proposal.");
+    const resolved = targets.map((change) => change.uri);
+    const remaining = pending.changes.filter((change) => !resolved.includes(change.uri));
+    if (!accept) {
+      this.forgetResolvedChanges(turnId, pending, remaining);
+      await this.post({
+        type: "patchResolved",
+        turnId,
+        uris: resolved,
+        status: "rejected",
+        message: `Discarded ${resolved.length} proposed change${resolved.length === 1 ? "" : "s"}.`
+      });
+      return;
+    }
+    const patch: PatchResult = { kind: "patch", title: pending.title, changes: targets };
+    const result = await applyPatchHandler({
+      invocation: { kind: "invocation", method: "apply", arguments: [], source: "chat" },
+      method: this.applyMethod(),
+      arguments: { result: patch },
+      context: [],
+      metadata: {}
+    }) as ApplyResult;
+    // A conflict leaves the entry pending: the file moved on, and re-reviewing
+    // it is the only honest next step.
+    if (result.status === "applied" || result.status === "unchanged") {
+      this.forgetResolvedChanges(turnId, pending, remaining);
+    }
+    await this.post({
+      type: "patchResolved",
+      turnId,
+      uris: resolved,
+      status: result.status === "applied" || result.status === "unchanged" ? result.status : "conflict",
+      message: result.summary
+    });
+  }
+
+  private forgetResolvedChanges(turnId: string, pending: PatchResult, remaining: PatchResult["changes"]): void {
+    if (remaining.length) this.pendingPatches.set(turnId, { ...pending, changes: remaining });
+    else this.pendingPatches.delete(turnId);
+  }
+
+  private applyMethod(): Parameters<typeof applyPatchHandler>[0]["method"] {
+    const method = this.application.registry.get("apply");
+    if (!method) throw new Error("The apply API is not available.");
+    return method;
+  }
+
+  /** Handing a plan to the Agent re-reads the file rather than trusting the
+   * text from the turn, so edits the user made in the editor are what gets
+   * built. The path comes from the webview, so it is checked before any read. */
+  private async buildPlan(planPath: string): Promise<void> {
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    if (!folder || !this.application.isTrustedLocalWorkspace()) {
+      throw new Error("Building a plan requires a trusted local workspace.");
+    }
+    const segments = planPathSegments(planPath);
+    const target = vscode.Uri.joinPath(folder.uri, ...segments);
+    let text: string;
+    try {
+      text = new TextDecoder().decode(await vscode.workspace.fs.readFile(target));
+    } catch {
+      throw new Error(`Plan '${segments.join("/")}' is no longer available.`);
+    }
+    if (!text.trim()) throw new Error(`Plan '${segments.join("/")}' is empty.`);
+    // setSelection replaces the whole record, so the agent, model, and effort
+    // choices have to be carried over or they are lost with the mode switch.
+    this.application.setAgentSelection({ ...this.application.state().agentSelection, mode: "agent" });
+    await this.refresh();
+    await this.run("agent", [
+      `Implement the plan in ${segments.join("/")} exactly as written. Do not edit the plan file itself.`,
+      "",
+      text.trim()
+    ].join("\n"));
+  }
+
+  private async run(mode: "agent" | "ask" | "plan" | "code", source: string): Promise<void> {
     if (this.running) throw new Error("Wait for the current Dext turn to finish before running another one.");
     source = normalizeInputReferenceSource(source);
     const events: AgentStreamEvent[] = [];
@@ -498,7 +648,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     const sessionId = this.activeSession.id;
     const controller = new AbortController();
     this.activeExecution = { turnId, controller };
-    this.running = true;
+    this.setRunning(true);
     await this.post({ type: "executing", value: true, turnId, source });
     try {
       const metadata = {
@@ -513,14 +663,21 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       const response = mode === "code"
         ? await this.application.executeInput(source, metadata)
         : await this.application.executeConversation(mode, source, metadata);
-      const turn = await this.history.addSuccess(source, events, response, sessionId);
+      const turn = await this.history.addSuccess(source, events, response, sessionId, mode);
       this.activeSession.turns.push(turn);
       this.activeSession.updatedAt = turn.createdAt;
       this.sessions.set(this.activeSession.id, this.activeSession);
       await this.postConversationState();
-      await this.post({ type: "execution", turnId, response });
+      const reviewable = unappliedPatch(response);
+      if (reviewable) this.pendingPatches.set(turnId, reviewable);
+      await this.post({
+        type: "execution",
+        turnId,
+        response,
+        ...(reviewable ? { reviewPatch: true } : {})
+      });
     } catch (error) {
-      const turn = await this.history.addFailure(source, events, error, sessionId);
+      const turn = await this.history.addFailure(source, events, error, sessionId, mode);
       this.activeSession.turns.push(turn);
       this.activeSession.updatedAt = turn.createdAt;
       this.sessions.set(this.activeSession.id, this.activeSession);
@@ -531,7 +688,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         message: error instanceof Error ? error.message : String(error)
       });
     } finally {
-      this.running = false;
+      this.setRunning(false);
       if (this.activeExecution?.turnId === turnId) this.activeExecution = undefined;
       try {
         await this.flushAttachmentDeletes();
@@ -539,6 +696,35 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         await this.post({ type: "executing", value: false, turnId });
       }
     }
+  }
+
+  // Ranking happens over a cached listing rather than one glob per keystroke,
+  // because a glob cannot express a fuzzy match that crosses path separators.
+  private async workspaceFileIndex(): Promise<readonly string[]> {
+    const now = Date.now();
+    if (this.fileIndex && now - this.fileIndex.loadedAt < FILE_INDEX_TTL_MS) return this.fileIndex.paths;
+    let paths: string[];
+    try {
+      const uris = await vscode.workspace.findFiles("**/*", FILE_INDEX_EXCLUDE, MAX_INDEXED_FILES);
+      paths = uris.flatMap((uri) => {
+        const relative = vscode.workspace.asRelativePath(uri, false).replaceAll("\\", "/");
+        // A file outside every workspace folder has no reference Dext can build.
+        return relative.startsWith("..") || relative.includes(":") ? [] : [relative];
+      });
+    } catch {
+      // A failed listing must leave the composer usable, not raise an error
+      // banner over a keystroke the user did not think of as a command.
+      paths = [];
+    }
+    this.fileIndex = { paths, loadedAt: now };
+    return paths;
+  }
+
+  // The stop keybinding is only live while a turn is running, which keeps a
+  // convenient chord from shadowing anything the rest of the time.
+  private setRunning(running: boolean): void {
+    this.running = running;
+    void vscode.commands.executeCommand("setContext", "dext.running", running);
   }
 
   private async flushAttachmentDeletes(): Promise<void> {
@@ -718,6 +904,10 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
             <div class="composer-menu">
               <button id="mode-control" class="composer-control" type="button" aria-haspopup="menu" aria-expanded="false"><i id="mode-control-icon" class="codicon codicon-comment-discussion" aria-hidden="true"></i><span class="composer-control-label">Mode</span><span id="mode-control-value" class="composer-control-value"></span><i class="codicon codicon-chevron-down"></i></button>
               <div id="mode-menu" class="composer-popover" role="menu" hidden></div>
+            </div>
+            <div id="permission-menu-shell" class="composer-menu">
+              <button id="permission-control" class="composer-control" type="button" aria-haspopup="menu" aria-expanded="false"><i id="permission-control-icon" class="codicon codicon-shield" aria-hidden="true"></i><span class="composer-control-label">Permission</span><span id="permission-control-value" class="composer-control-value"></span><i class="codicon codicon-chevron-down"></i></button>
+              <div id="permission-menu" class="composer-popover" role="menu" hidden></div>
             </div>
             <div class="composer-menu">
               <button id="agent-control" class="composer-control" type="button" aria-haspopup="menu" aria-expanded="false"><span class="composer-control-label">Agent</span><span id="agent-control-value" class="composer-control-value"></span><i class="codicon codicon-chevron-down"></i></button>

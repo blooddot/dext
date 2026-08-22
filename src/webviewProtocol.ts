@@ -20,10 +20,19 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("executeInput"),
-    mode: z.enum(["agent", "ask", "code"]),
+    mode: z.enum(["agent", "ask", "plan", "code"]),
     source: z.string().min(1)
   }),
   z.object({ type: z.literal("stopExecution"), turnId: z.string().min(1) }),
+  z.object({ type: z.literal("retryTurn"), turnId: z.string().min(1) }),
+  z.object({ type: z.literal("buildPlan"), planPath: z.string().min(1).max(512) }),
+  z.object({
+    type: z.literal("resolvePatch"),
+    turnId: z.string().min(1),
+    /** Empty means every file the turn proposed, which is the Accept all path. */
+    uris: z.array(z.string().min(1)).max(200),
+    accept: z.boolean()
+  }),
   z.object({
     type: z.literal("clipboardWrite"),
     requestId: z.number().int().nonnegative(),
@@ -35,6 +44,11 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
     purpose: z.literal("code")
   }),
   z.object({ type: z.literal("openFileReference"), reference: z.string().min(1) }),
+  z.object({
+    type: z.literal("searchFiles"),
+    requestId: z.number().int().nonnegative(),
+    query: z.string().max(120)
+  }),
   z.object({
     type: z.literal("dropFiles"),
     items: z.array(z.discriminatedUnion("kind", [
@@ -63,7 +77,8 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("agentSelection"),
     selection: z.object({
-      mode: z.enum(["agent", "ask", "code"]),
+      mode: z.enum(["agent", "ask", "plan", "code"]),
+      permission: z.enum(["read-only", "workspace-write", "full-access"]),
       profileId: z.string(),
       model: z.string(),
       reasoningEffort: z.string(),
@@ -92,6 +107,10 @@ export interface SidebarState {
   diagnostics: string[];
   agentProfiles: AgentProfile[];
   agentSelection: AgentSelection;
+  settings?: {
+    diffView: "inline" | "split";
+    submitOnEnter: boolean;
+  };
 }
 
 export type WebviewResponse =
@@ -108,8 +127,17 @@ export type WebviewResponse =
   | { type: "outputSession"; session: DextHistorySession }
   | { type: "conversations"; sessions: ConversationSummary[]; activeId: string }
   | { type: "openMethods" }
-  | { type: "execution"; turnId: string; response: InputExecutionResponse }
+  /** `reviewPatch` is set when the host is holding an unapplied patch for this
+   * turn, which is what puts Accept and Reject on its file changes. */
+  | { type: "execution"; turnId: string; response: InputExecutionResponse; reviewPatch?: boolean }
   | { type: "executionFailed"; turnId: string; message: string }
+  | {
+    type: "patchResolved";
+    turnId: string;
+    uris: string[];
+    status: "applied" | "rejected" | "conflict" | "unchanged";
+    message: string;
+  }
   | { type: "agentEvent"; event: AgentStreamEvent }
   | { type: "executing"; value: boolean; turnId: string; source?: string }
   | { type: "inputKind"; kind: "empty" | "workflow" | "invalid" }
@@ -124,6 +152,7 @@ export type WebviewResponse =
     contextAttached: boolean;
     codeReference?: { expression: string; payload: string };
   }
+  | { type: "searchFilesResult"; requestId: number; files: string[] }
   | { type: "setInput"; source: string }
   | { type: "focusInput" }
   | { type: "triggerSuggest" }

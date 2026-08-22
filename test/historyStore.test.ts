@@ -27,6 +27,39 @@ describe("DextHistoryStore", () => {
     expect(records[1]?.error).toBe("cancelled");
   });
 
+  it("honours the configured turn and output limits on every write", async () => {
+    const limits = { maxTurns: 2, maxOutputLength: 12 };
+    const store = new DextHistoryStore(new MemoryState() as never, () => limits);
+    for (const input of ["first", "second", "third"]) {
+      await store.addSuccess(input, [], { kind: "workflow", executions: [] }, "session-1");
+    }
+    // The oldest turn is what goes when the cap is reached.
+    expect(store.list()[0]?.turns.map((turn) => turn.input)).toEqual(["second", "third"]);
+
+    await store.addSuccess("a".repeat(40), [{ phase: "status", text: "b".repeat(40) }], {
+      kind: "workflow",
+      executions: []
+    }, "session-2");
+    const turn = store.list().at(-1)?.turns.at(-1);
+    expect(turn?.input).toBe(`${"a".repeat(12)}\n... output truncated ...`);
+    expect(turn?.process[0]?.text).toBe(`${"b".repeat(12)}\n... output truncated ...`);
+
+    // Raising the limit takes effect on the next write, not the next window.
+    limits.maxTurns = 10;
+    limits.maxOutputLength = 100;
+    await store.addSuccess("c".repeat(40), [], { kind: "workflow", executions: [] }, "session-2");
+    expect(store.list().at(-1)?.turns.at(-1)?.input).toBe("c".repeat(40));
+  });
+
+  it("falls back to the built-in limits when a setting is nonsense", async () => {
+    const store = new DextHistoryStore(
+      new MemoryState() as never,
+      () => ({ maxTurns: 0, maxOutputLength: -5 })
+    );
+    await store.addSuccess("kept", [], { kind: "workflow", executions: [] }, "session-1");
+    expect(store.list()[0]?.turns.map((turn) => turn.input)).toEqual(["kept"]);
+  });
+
   it("forks selected turns into a conversation of their own", async () => {
     const store = new DextHistoryStore(new MemoryState() as never);
     await store.addSuccess("first", [], { kind: "workflow", executions: [] }, "session-1");

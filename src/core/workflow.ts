@@ -239,6 +239,8 @@ class Compiler {
     if (node.name === "AssignStatement") return this.compileAssignment(node);
     if (node.name === "ExpressionStatement") return this.compileExpressionStatement(node);
     if (node.name === "IfStatement") return this.compileIf(node);
+    if (node.name === "ForStatement") return this.compileFor(node);
+    if (node.name === "TryStatement") return this.compileTry(node);
     if (node.name === "ReturnStatement") {
       if (!this.options.allowReturn) {
         this.error("return is only allowed in a custom API main function.", node.from, node.to);
@@ -280,6 +282,15 @@ class Compiler {
       if (!compiled) return undefined;
       this.environment.set(name, { type: compiled.type, from: variable.from });
       return { kind: "step", assignment: name, call: compiled.call, from: node.from, to: node.to };
+    }
+    const comprehensionNode = parts.find((child) => child.name === "ArrayComprehensionExpression");
+    if (comprehensionNode) {
+      const compiled = this.compileComprehension(comprehensionNode);
+      if (!compiled) return undefined;
+      // No `value` on the entry: a comprehension runs API calls, so it cannot be
+      // folded into a compile-time constant the way a list literal is.
+      this.environment.set(name, { type: compiled.type, from: variable.from });
+      return { kind: "assign", assignment: name, expression: compiled.expression, from: node.from, to: node.to };
     }
     const valueNode = parts.find((child) =>
       child.from > variable.to
@@ -359,6 +370,120 @@ class Compiler {
       condition,
       consequent,
       alternate,
+      from: node.from,
+      to: node.to
+    };
+  }
+
+  /** `try`/`except` replaces the all-or-nothing default: a failing step hands
+   * control to the handler instead of skipping everything downstream. Nothing a
+   * block assigns escapes it, since whether the block ran at all is only known
+   * once the workflow runs. */
+  private compileTry(node: SyntaxNode): WorkflowStatement | undefined {
+    const parts = children(node);
+    const bodies = parts.filter((child) => child.name === "Body");
+    const exceptIndex = parts.findIndex((child) => child.name === "except");
+    const finallyIndex = parts.findIndex((child) => child.name === "finally");
+    if (parts.some((child) => child.name === "else")) {
+      this.error("try in Dext workflows takes except and finally but not else.", node.from, node.to);
+      return undefined;
+    }
+    if (parts.filter((child) => child.name === "except").length > 1) {
+      this.error("A Dext try statement takes a single except block.", node.from, node.to);
+      return undefined;
+    }
+    if (exceptIndex < 0 || !bodies[0] || !bodies[1]) {
+      this.error("A try statement requires a body and an except block.", node.from, node.to);
+      return undefined;
+    }
+    // A named exception type would suggest Dext filters on it, which it does
+    // not: there is one failure channel and the handler catches all of it.
+    const caught = parts[exceptIndex + 1];
+    if (caught?.name === "VariableName" && text(this.source, caught) !== "Exception") {
+      this.error(
+        "Dext try catches every failure. Write 'except:' or 'except Exception as name:'.",
+        caught.from,
+        caught.to
+      );
+      return undefined;
+    }
+    const asIndex = parts.findIndex((child) => child.name === "as");
+    const errorNode = asIndex > exceptIndex ? parts[asIndex + 1] : undefined;
+    if (asIndex > exceptIndex && errorNode?.name !== "VariableName") {
+      this.error("except ... as requires a variable name.", node.from, node.to);
+      return undefined;
+    }
+    const finalizerBody = finallyIndex >= 0
+      ? parts.slice(finallyIndex + 1).find((child) => child.name === "Body")
+      : undefined;
+    const before = new Map(this.environment);
+    const body = this.compileStatements(bodies[0]);
+    this.restore(before);
+    if (errorNode) {
+      // The message is the only thing the handler learns about the failure, and
+      // it is a plain string so it can be printed or passed along.
+      this.environment.set(text(this.source, errorNode), { type: { kind: "string" }, from: errorNode.from });
+    }
+    const handler = this.compileStatements(bodies[1]);
+    this.restore(before);
+    const finalizer = finalizerBody ? this.compileStatements(finalizerBody) : [];
+    this.restore(before);
+    return {
+      kind: "try",
+      body,
+      handler,
+      ...(errorNode ? { error: text(this.source, errorNode) } : {}),
+      finalizer,
+      from: node.from,
+      to: node.to
+    };
+  }
+
+  private restore(snapshot: ReadonlyMap<string, EnvironmentEntry>): void {
+    this.environment.clear();
+    for (const entry of snapshot) this.environment.set(...entry);
+  }
+
+  /** A loop reads a list and runs its body once per item. The loop variable only
+   * exists inside the body, and nothing the body assigns escapes it, because the
+   * number of passes is not known until the workflow runs. */
+  private compileFor(node: SyntaxNode): WorkflowStatement | undefined {
+    const parts = children(node);
+    const variable = parts.find((child) => child.name === "VariableName");
+    const inIndex = parts.findIndex((child) => child.name === "in");
+    const iterableNode = inIndex >= 0
+      ? parts.slice(inIndex + 1).find((child) => child.name !== "Body" && child.name !== ":" && child.name !== "Comment")
+      : undefined;
+    const body = parts.find((child) => child.name === "Body");
+    if (!variable || !iterableNode || !body) {
+      this.error("A for statement requires 'for name in list:' and a body.", node.from, node.to);
+      return undefined;
+    }
+    // `for` and the loop variable are the only nodes allowed before `in`, so
+    // anything else means a destructuring form Dext does not support.
+    if (inIndex !== 2) {
+      this.error("A for statement takes exactly one loop variable.", node.from, node.to);
+      return undefined;
+    }
+    const name = this.source.slice(variable.from, variable.to);
+    const iterable = this.compileExpression(iterableNode);
+    if (!iterable) return undefined;
+    if (iterable.type.kind !== "list" && iterable.type.kind !== "unknown") {
+      this.error(`for requires a list but ${typeName(iterable.type)} was given.`, iterableNode.from, iterableNode.to);
+      return undefined;
+    }
+    const before = new Map(this.environment);
+    this.environment.set(name, {
+      type: iterable.type.kind === "list" ? iterable.type.item : { kind: "unknown" },
+      from: variable.from
+    });
+    const statements = this.compileStatements(body);
+    this.restore(before);
+    return {
+      kind: "for",
+      variable: name,
+      iterable: iterable.expression,
+      body: statements,
       from: node.from,
       to: node.to
     };
@@ -549,6 +674,71 @@ class Compiler {
     return { kind: "reference", reference, from, to };
   }
 
+  /** `[body for name in list]` produces one value per item with no way for the
+   * items to see one another, so it is the one place Dext can safely fan out.
+   * Only a single `for` clause is accepted, and no `if` filter, because a filter
+   * would make the result length unknown before the run. */
+  private compileComprehension(node: SyntaxNode): { expression: WorkflowExpression; type: ValueType } | undefined {
+    const parts = children(node).filter((child) => child.name !== "Comment");
+    const forIndex = parts.findIndex((child) => child.name === "for");
+    const inIndex = parts.findIndex((child) => child.name === "in");
+    const bodyNode = parts.slice(1, forIndex).find((child) => child.name !== "[");
+    const variable = parts[forIndex + 1];
+    const iterableNode = parts.slice(inIndex + 1).find((child) => child.name !== "]");
+    if (forIndex < 0 || inIndex !== forIndex + 2 || !bodyNode || variable?.name !== "VariableName" || !iterableNode) {
+      this.error("A comprehension must read '[call(...) for name in list]'.", node.from, node.to);
+      return undefined;
+    }
+    if (parts.filter((child) => child.name === "for").length > 1 || parts.some((child) => child.name === "if")) {
+      this.error("A comprehension takes exactly one 'for' clause and no 'if' filter.", node.from, node.to);
+      return undefined;
+    }
+    const iterable = this.compileExpression(iterableNode);
+    if (!iterable) return undefined;
+    if (iterable.type.kind !== "list" && iterable.type.kind !== "unknown") {
+      this.error(
+        `A comprehension requires a list but ${typeName(iterable.type)} was given.`,
+        iterableNode.from,
+        iterableNode.to
+      );
+      return undefined;
+    }
+    const name = text(this.source, variable);
+    const before = new Map(this.environment);
+    this.environment.set(name, {
+      type: iterable.type.kind === "list" ? iterable.type.item : { kind: "unknown" },
+      from: variable.from
+    });
+    // A call is the whole point of a comprehension, so it is compiled directly
+    // rather than going through the nested-call gate that keeps calls out of
+    // ordinary expressions.
+    const compiledCall = bodyNode.name === "CallExpression" ? this.compileCall(bodyNode) : undefined;
+    const body = compiledCall
+      ? {
+        expression: {
+          kind: "call" as const,
+          call: compiledCall.call,
+          from: bodyNode.from,
+          to: bodyNode.to
+        },
+        type: compiledCall.type
+      }
+      : this.compileExpression(bodyNode);
+    this.restore(before);
+    if (!body) return undefined;
+    return {
+      expression: {
+        kind: "comprehension",
+        variable: name,
+        iterable: iterable.expression,
+        body: body.expression,
+        from: node.from,
+        to: node.to
+      },
+      type: { kind: "list", item: body.type }
+    };
+  }
+
   private compileExpression(node: SyntaxNode): { expression: WorkflowExpression; type: ValueType } | undefined {
     if (node.name === "String") {
       return {
@@ -579,6 +769,7 @@ class Compiler {
         type: { kind: "list", item }
       };
     }
+    if (node.name === "ArrayComprehensionExpression") return this.compileComprehension(node);
     if (node.name === "DictionaryExpression") {
       const entries: Extract<WorkflowExpression, { kind: "object" }>['entries'] = [];
       const seen = new Set<string>();

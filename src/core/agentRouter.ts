@@ -17,6 +17,20 @@ export class DefaultAgentRunner implements AgentRunner {
 
   private readonly aioa: AioaCdpAgentRunner;
 
+  setTimeouts(timeouts: {
+    agentTimeoutMs?: number;
+    aioaTimeoutMs?: number;
+    aioaIdleTimeoutMs?: number;
+  }): void {
+    if (timeouts.agentTimeoutMs !== undefined) this.cli.setTimeoutMs(timeouts.agentTimeoutMs);
+    this.aioa.setTimeouts({
+      ...(timeouts.aioaTimeoutMs === undefined ? {} : { timeoutMs: timeouts.aioaTimeoutMs }),
+      ...(timeouts.aioaIdleTimeoutMs === undefined
+        ? {}
+        : { responseIdleTimeoutMs: timeouts.aioaIdleTimeoutMs })
+    });
+  }
+
   run(request: AgentExecutionRequest): Promise<unknown> {
     return request.profile.provider === "aioa" ? this.aioa.run(request) : this.cli.run(request);
   }

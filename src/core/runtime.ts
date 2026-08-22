@@ -9,7 +9,7 @@ import type { AgentResult, CustomApiPlan, DirRef, McpRawResult, UiChoiceResult, 
 import { WorkflowRuntime } from "./workflowRuntime.js";
 import { ExecutionCancelledError } from "./executionErrors.js";
 import { patchResultFrom } from "./patch.js";
-import type { AgentProfile, AgentSelection } from "../agentProfiles.js";
+import type { AgentPermission, AgentProfile, AgentProvider, AgentSelection } from "../agentProfiles.js";
 import { DefaultAgentRunner } from "./agentRouter.js";
 import type { AgentRunner } from "./agentRunner.js";
 import type {
@@ -84,7 +84,29 @@ function adaptTypedMcpResult(result: McpRawResult, kind: string): DextResult {
   return { ...result.structured, kind } as DextResult;
 }
 
-const AGENT_METHODS = new Set(["ask", "agent", "skill"]);
+/** The fallback Plan instruction. It asks for the document only, because Dext
+ * saves the whole reply as the plan file. */
+const DEFAULT_PLAN_INSTRUCTION = [
+  "You are in Dext Plan mode. Investigate the workspace and return an implementation plan.",
+  "",
+  "Constraints:",
+  "- Do not create, modify, or delete any file. Dext saves the plan document for you.",
+  "- Do not ask clarifying questions. Record open questions and assumptions in the plan instead.",
+  "- Reply with the plan document alone: no preamble and no closing remarks.",
+  "",
+  "Write GitHub-flavoured Markdown with these sections:",
+  "- `# <short title>`",
+  "- `## Goal` — what is true once the work is done.",
+  "- `## Files` — every file to touch, one line each on why.",
+  "- `## Tasks` — an ordered checklist, each item small enough to verify on its own.",
+  "- `## Verification` — the commands or checks that prove the work is correct.",
+  "- `## Risks` — what could go wrong, or `None known`."
+].join("\n");
+
+const AGENT_METHODS = new Set(["ask", "plan", "agent", "skill"]);
+/** The methods that take free-form input plus skills, rules, and a workspace,
+ * as opposed to `skill`, which builds its instruction from the skill itself. */
+const CONVERSATION_METHODS = new Set(["ask", "plan", "agent"]);
 
 function defaultWorkspace(root: string): DirRef {
   return { kind: "dirRef", uri: pathToFileURL(root).toString(), path: "." };
@@ -239,6 +261,8 @@ export class DextRuntime {
   private agentRunner: AgentRunner;
   private workspaceRoot = process.cwd();
   private workspaceTrusted = false;
+  private defaultAgentPermission: AgentPermission = "workspace-write";
+  private agentCliArguments: Readonly<Partial<Record<AgentProvider, readonly string[]>>> = {};
   private skillLoader: ((skill: string, workspace: DirRef) => Promise<{ instructions: string; sourcePath: string }>) | undefined;
   private ruleLoader: ((path: string) => Promise<string | undefined>) | undefined;
   private mcpCaller: ((tool: string, input: Record<string, unknown>) => Promise<DextResult>) | undefined;
@@ -269,6 +293,27 @@ export class DextRuntime {
 
   setAgentRunner(runner: AgentRunner): void {
     this.agentRunner = runner;
+  }
+
+  /** The tier a fresh conversation starts at when the composer has not chosen
+   * one, so a project can be careful by default. */
+  setDefaultAgentPermission(permission: AgentPermission): void {
+    this.defaultAgentPermission = permission;
+  }
+
+  setAgentCliArguments(argumentsByProvider: Readonly<Partial<Record<AgentProvider, readonly string[]>>>): void {
+    this.agentCliArguments = { ...argumentsByProvider };
+  }
+
+  private agentPermission(): AgentPermission {
+    return this.agentSelection.permission ?? this.defaultAgentPermission;
+  }
+
+  /** Extra CLI arguments are an escape hatch into the provider process, so an
+   * untrusted workspace never gets to supply them. */
+  private extraCliArguments(profile: AgentProfile): readonly string[] {
+    if (!this.workspaceTrusted) return [];
+    return this.agentCliArguments[profile.provider] ?? [];
   }
 
   endAgentSession(sessionId: string): void {
@@ -369,7 +414,7 @@ export class DextRuntime {
           throw new Error("agent(apply=true) requires a trusted local workspace.");
         }
         let runnerMetadata = metadata;
-        if (method.id === "ask" || method.id === "agent") {
+        if (CONVERSATION_METHODS.has(method.id)) {
           const directory = workspaceDirectory(resolved.arguments.workspace, this.workspaceRoot);
           const skills = stringListArgument(resolved.arguments.skills, "skills");
           const skillInstructions: string[] = [];
@@ -448,7 +493,7 @@ export class DextRuntime {
           ...((metadata.reasoningEffort ?? this.agentSelection.reasoningEffort) ? { reasoningEffort: metadata.reasoningEffort ?? this.agentSelection.reasoningEffort } : {}),
           ...((metadata.speed ?? this.agentSelection.speed) ? { speed: metadata.speed ?? this.agentSelection.speed } : {}),
           ...((metadata.serviceTier ?? this.agentSelection.serviceTier) ? { serviceTier: metadata.serviceTier ?? this.agentSelection.serviceTier } : {}),
-          cwd: ["ask", "agent"].includes(method.id)
+          cwd: CONVERSATION_METHODS.has(method.id)
             ? workspaceCwd(this.workspaceRoot, resolved.arguments.workspace)
             : this.workspaceRoot,
           method,
@@ -456,6 +501,7 @@ export class DextRuntime {
           contract,
           metadata: runnerMetadata,
           allowWorkspaceWrite: agentWriteEnabled,
+          ...(this.extraCliArguments(profile).length ? { cliArguments: this.extraCliArguments(profile) } : {}),
           ...(metadata.signal ? { signal: metadata.signal } : {}),
           ...(runnerMetadata.onAgentEvent ? { onEvent: runnerMetadata.onAgentEvent } : {})
         });
@@ -483,10 +529,10 @@ export class DextRuntime {
     };
   }
 
-  /** Runs a normal Agent or Ask turn without compiling it as Dext code or
-   * imposing a typed API response on the selected provider. */
+  /** Runs a normal Agent, Ask, or Plan turn without compiling it as Dext code
+   * or imposing a typed API response on the selected provider. */
   async executeConversation(
-    mode: "agent" | "ask",
+    mode: "agent" | "ask" | "plan",
     input: string,
     metadata: Readonly<ExecutionMetadata> = {}
   ): Promise<RuntimeResponse> {
@@ -500,6 +546,17 @@ export class DextRuntime {
     if (!profile) throw new Error("Choose an Agent before starting a conversation.");
     if (!this.agentRunner.runConversation) {
       throw new Error(`Agent '${profile.label}' does not support normal conversation mode.`);
+    }
+    const permission = mode === "agent" ? this.agentPermission() : "read-only";
+    // Read-only Agent turns are reviews, not conversations: the typed API path
+    // is the only one that returns a patch Dext can show and apply.
+    if (mode === "agent" && permission === "read-only") {
+      return this.execute({
+        kind: "invocation",
+        method: "agent",
+        source: "chat",
+        arguments: [{ name: "input", value: text }, { name: "apply", value: false }]
+      }, [], metadata);
     }
     const allowWorkspaceWrite = mode === "agent";
     if (allowWorkspaceWrite && !this.workspaceTrusted) {
@@ -516,10 +573,12 @@ export class DextRuntime {
       ...((metadata.speed ?? this.agentSelection.speed) ? { speed: metadata.speed ?? this.agentSelection.speed } : {}),
       ...((metadata.serviceTier ?? this.agentSelection.serviceTier) ? { serviceTier: metadata.serviceTier ?? this.agentSelection.serviceTier } : {}),
       cwd: this.workspaceRoot,
-      input: text,
+      input: mode === "plan" ? `${await this.planInstruction()}\n\n---\n\nGoal:\n\n${text}` : text,
       mode,
       metadata: { ...metadata, ...(sessionId ? { agentSessionId: sessionId } : {}) },
       allowWorkspaceWrite,
+      permission,
+      ...(this.extraCliArguments(profile).length ? { cliArguments: this.extraCliArguments(profile) } : {}),
       ...(metadata.signal ? { signal: metadata.signal } : {}),
       ...(metadata.onAgentEvent ? { onEvent: metadata.onAgentEvent } : {})
     });
@@ -534,6 +593,21 @@ export class DextRuntime {
       result: { kind: "chat", text: response },
       durationMs: performance.now() - started
     };
+  }
+
+  /** Plan mode owns the shape of its answer, so the instruction is part of the
+   * prompt rather than the user's message. A project can replace it wholesale
+   * through `.dext/rules/plan.md`. */
+  private async planInstruction(): Promise<string> {
+    if (!this.workspaceTrusted) return DEFAULT_PLAN_INSTRUCTION;
+    const path = join(this.workspaceRoot, ".dext", "rules", "plan.md");
+    try {
+      const content = this.ruleLoader ? await this.ruleLoader(path) : await readFile(path, "utf8");
+      if (content && content.trim()) return content.trim();
+    } catch {
+      // No project instruction is the normal case, not a failure.
+    }
+    return DEFAULT_PLAN_INSTRUCTION;
   }
 
   async executeSerial(

@@ -36,11 +36,19 @@
     "Programming Languages"
   ],
   "activationEvents": [
+    "onStartupFinished",
     "onView:dext.sidebar",
     "onCommand:dext.openHistory",
     "onCommand:dext.copySelectionWithContext",
     "onCommand:dext.setMcpAccessToken",
     "onCommand:dext.clearMcpAccessToken",
+    "onCommand:dext.setCompletionApiKey",
+    "onCommand:dext.clearCompletionApiKey",
+    "onCommand:dext.toggleCompletion",
+    "onCommand:dext.completionMenu",
+    "onCommand:dext.configureCompletionModel",
+    "onCommand:dext.testCompletionModel",
+    "onCommand:dext.diagnoseCompletion",
     "onCommand:dext.verifyMcpServer",
     "onLanguage:dext-api"
   ],
@@ -68,6 +76,11 @@
         "icon": "$(add)"
       },
       {
+        "command": "dext.stopExecution",
+        "title": "Dext: Stop Execution",
+        "icon": "$(debug-stop)"
+      },
+      {
         "command": "dext.history.continueConversation",
         "title": "Continue in Dext"
       },
@@ -82,6 +95,10 @@
       {
         "command": "dext.history.editTurnInput",
         "title": "Edit This Input in Dext"
+      },
+      {
+        "command": "dext.history.recordWorkflow",
+        "title": "Record Conversation as Dext Workflow"
       },
       {
         "command": "dext.history.copyConversation",
@@ -201,6 +218,37 @@
         "icon": "$(key)"
       },
       {
+        "command": "dext.configureCompletionModel",
+        "title": "Dext: Configure Completion Model",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "dext.completionMenu",
+        "title": "Dext: Inline Completion Options"
+      },
+      {
+        "command": "dext.testCompletionModel",
+        "title": "Dext: Test Completion Model"
+      },
+      {
+        "command": "dext.diagnoseCompletion",
+        "title": "Dext: Diagnose Inline Completion"
+      },
+      {
+        "command": "dext.setCompletionApiKey",
+        "title": "Dext: Set Completion API Key",
+        "icon": "$(key)"
+      },
+      {
+        "command": "dext.clearCompletionApiKey",
+        "title": "Dext: Clear Completion API Key",
+        "icon": "$(key)"
+      },
+      {
+        "command": "dext.toggleCompletion",
+        "title": "Dext: Toggle Inline Completion"
+      },
+      {
         "command": "dext.clearMcpAccessToken",
         "title": "Dext: Clear MCP Access Token",
         "icon": "$(key)"
@@ -215,6 +263,22 @@
       {
         "command": "dext.triggerSuggest",
         "key": "alt+/"
+      },
+      {
+        "command": "dext.focus",
+        "key": "ctrl+alt+d",
+        "mac": "cmd+alt+d"
+      },
+      {
+        "command": "dext.newConversation",
+        "key": "ctrl+alt+n",
+        "mac": "cmd+alt+n"
+      },
+      {
+        "command": "dext.stopExecution",
+        "key": "ctrl+alt+.",
+        "mac": "cmd+alt+.",
+        "when": "dext.running"
       },
       {
         "command": "dext.copySelectionWithContext",
@@ -247,6 +311,10 @@
         },
         {
           "command": "dext.history.editTurnInput",
+          "when": "false"
+        },
+        {
+          "command": "dext.history.recordWorkflow",
           "when": "false"
         },
         {
@@ -399,6 +467,11 @@
           "group": "2_conversation@2"
         },
         {
+          "command": "dext.history.recordWorkflow",
+          "when": "webviewId == 'dext.history' && (webviewSection == 'session' || webviewSection == 'turn') && dext.workspaceTrusted",
+          "group": "2_conversation@3"
+        },
+        {
           "command": "dext.history.copyConversation",
           "when": "webviewId == 'dext.history' && (webviewSection == 'session' || webviewSection == 'turn')",
           "group": "3_copy@1"
@@ -494,6 +567,171 @@
           "default": [],
           "items": { "type": "string" },
           "description": "Additional skill directories. Relative paths resolve from the current workspace; earlier directories take priority for duplicate skill names."
+        },
+        "dext.apiDirs": {
+          "type": "array",
+          "default": [],
+          "items": { "type": "string" },
+          "description": "Additional directories searched for .dx API files. Relative paths resolve from the current workspace. The workspace's own .dext/api is always searched first, so a configured directory cannot shadow a project API."
+        },
+        "dext.plan.directory": {
+          "type": "string",
+          "default": ".dext/plans",
+          "description": "Workspace-relative directory where Plan mode saves its documents. Must stay inside the workspace."
+        },
+        "dext.submitOnEnter": {
+          "type": "boolean",
+          "default": true,
+          "description": "Send the message with Enter in Agent, Ask, and Plan modes, using Shift+Enter for a newline. Turn this off to require Ctrl+Enter to send. Code mode always runs with Ctrl+Enter."
+        },
+        "dext.diff.defaultView": {
+          "type": "string",
+          "default": "inline",
+          "enum": ["inline", "split"],
+          "enumDescriptions": [
+            "Show removed and added lines in one column.",
+            "Show before and after side by side."
+          ],
+          "description": "Layout a file change opens in. Each change can still be switched individually after it is shown."
+        },
+        "dext.history.maxTurns": {
+          "type": "integer",
+          "default": 100,
+          "minimum": 1,
+          "description": "Turns kept across all conversations. The oldest turns are dropped first, which also removes them from the conversation tab strip."
+        },
+        "dext.history.maxOutputLength": {
+          "type": "integer",
+          "default": 200000,
+          "minimum": 1000,
+          "description": "Characters kept per stored input, process event, and serialized output before history truncates it."
+        },
+        "dext.agentPermission": {
+          "type": "string",
+          "default": "workspace-write",
+          "enum": ["read-only", "workspace-write", "full-access"],
+          "enumDescriptions": [
+            "Agent turns propose a patch and change nothing until the change is accepted in Dext Output.",
+            "Agent turns edit the trusted workspace directly, the way the selected CLI would on its own.",
+            "Agent turns run without the provider sandbox and may touch anything the CLI can reach."
+          ],
+          "description": "Starting permission tier for Agent mode. The composer's Permission control overrides this for the current conversation. Ask and Plan are always read-only."
+        },
+        "dext.agentCliArgs": {
+          "type": "object",
+          "default": {},
+          "properties": {
+            "codex": { "type": "array", "items": { "type": "string" }, "description": "Extra arguments appended to every Codex invocation." },
+            "claude": { "type": "array", "items": { "type": "string" }, "description": "Extra arguments appended to every Claude Code invocation." },
+            "aioa": { "type": "array", "items": { "type": "string" }, "description": "Reserved; AIOA runs over CDP and takes no CLI arguments." }
+          },
+          "additionalProperties": false,
+          "markdownDescription": "Extra CLI arguments passed through to each agent provider, appended after the arguments Dext builds. Ignored outside a trusted workspace. Dext's own flags win, so these cannot loosen the permission tier."
+        },
+        "dext.agent.timeoutMs": {
+          "type": "integer",
+          "default": 600000,
+          "minimum": 1000,
+          "description": "How long a single CLI agent turn may run before Dext aborts it. Raise this when long refactors are being cut off mid-run."
+        },
+        "dext.aioa.timeoutMs": {
+          "type": "integer",
+          "default": 3600000,
+          "minimum": 1000,
+          "description": "How long an AIOA turn may run in total before Dext gives up on it."
+        },
+        "dext.aioa.idleTimeoutMs": {
+          "type": "integer",
+          "default": 90000,
+          "minimum": 1000,
+          "description": "How long AIOA may go without producing new output before Dext treats the turn as stalled. Raise this when AIOA thinks for a long time between updates."
+        },
+        "dext.terminal.defaultTimeoutMs": {
+          "type": "integer",
+          "default": 120000,
+          "minimum": 1000,
+          "maximum": 600000,
+          "description": "Timeout applied to terminal() calls that do not pass timeout_ms. Values are capped at 600000 milliseconds, which is also the hard ceiling for an explicit timeout_ms."
+        },
+        "dext.completion": {
+          "type": "object",
+          "default": {},
+          "markdownDeprecationMessage": "Replaced by the individual `dext.completion.*` settings, which the Settings UI can render as a dropdown and text boxes rather than an untyped table. Dext moves any values across on startup and then removes this entry, so nothing needs to be done by hand.",
+          "description": "Superseded by the individual dext.completion.* settings."
+        },
+        "dext.completion.enabled": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Offer inline completions while typing. Stays off until `#dext.completion.endpoint#` and `#dext.completion.model#` are both set.\n\n**Fastest way in:** [Configure completion model](command:dext.configureCompletionModel) asks for the API format, the request URL, the model ID and the API key in one pass, then offers to test the connection. It is also on the Dext status bar item.\n\n**API key:** there is deliberately no API key box on this page. A key in `settings.json` ends up in source control or a synced profile sooner or later, so it is kept in VS Code's encrypted secret storage: [Set API key](command:dext.setCompletionApiKey) · [Clear API key](command:dext.clearCompletionApiKey)"
+        },
+        "dext.completion.api": {
+          "type": "string",
+          "default": "openai",
+          "enum": ["openai", "openai-chat", "anthropic", "ollama"],
+          "enumDescriptions": [
+            "POST <base>/completions. A dedicated fill-in-the-middle model that accepts a prompt and a suffix. Fastest and most exact, but a chat model answered through this format returns a body it cannot read.",
+            "POST <base>/chat/completions. What most providers actually expose, DeepSeek and Qwen included. There is no suffix field, so the code around the cursor is sent as a chat prompt.",
+            "POST <base>/messages. Claude has no fill-in-the-middle endpoint, so the code around the cursor is sent as a chat prompt instead, which is slower and less exact.",
+            "POST <base>/api/generate. A local Ollama server using its own fill-in-the-middle fields."
+          ],
+          "description": "API format the completion model speaks. This has to match what the endpoint serves: the wrong choice returns a valid response that no completion can be read out of."
+        },
+        "dext.completion.endpoint": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Base URL of the completion model, with no trailing slash. The API path for the chosen format is appended if it is not already there, so `https://api.openai.com/v1` reaches `/v1/completions`.\n\nUsual values: `https://api.openai.com/v1`, `https://api.anthropic.com/v1`, `http://localhost:11434`."
+        },
+        "dext.completion.model": {
+          "type": "string",
+          "default": "",
+          "description": "Model ID to complete with. For the openai and ollama formats it must support fill-in-the-middle, since Dext sends both a prefix and a suffix. The anthropic format emulates that with a chat prompt, so pick the fastest Claude model available."
+        },
+        "dext.completion.maxTokens": {
+          "type": "integer",
+          "default": 64,
+          "minimum": 1,
+          "maximum": 2048,
+          "description": "Longest completion to request. This is the main thing deciding how long a suggestion takes to appear, because generation time scales with it. A completion is a continuation of a line or two, not a whole function, so raise it only if suggestions are being cut short."
+        },
+        "dext.completion.debounceMs": {
+          "type": "integer",
+          "default": 200,
+          "minimum": 1,
+          "maximum": 5000,
+          "description": "Idle time after the last keystroke before a completion is requested."
+        },
+        "dext.completion.prefixChars": {
+          "type": "integer",
+          "default": 4000,
+          "minimum": 1,
+          "maximum": 32000,
+          "description": "Characters before the cursor sent as context. Measured in characters rather than lines so one long generated line cannot exhaust the budget."
+        },
+        "dext.completion.suffixChars": {
+          "type": "integer",
+          "default": 1000,
+          "minimum": 1,
+          "maximum": 32000,
+          "description": "Characters after the cursor sent as context."
+        },
+        "dext.completion.timeoutMs": {
+          "type": "integer",
+          "default": 10000,
+          "minimum": 1,
+          "maximum": 30000,
+          "description": "How long a completion request may take before it is abandoned. Hosted gateways routinely need several seconds to emit maxTokens tokens, and a request abandoned at that point has burned them without showing anything. Waiting longer costs little, because the editor cancels the request as soon as the next key is pressed."
+        },
+        "dext.completion.ignoreGitignore": {
+          "type": "boolean",
+          "default": true,
+          "description": "Do not complete in files excluded by .gitignore. A .dextignore file in the workspace root adds further exclusions and is honored either way."
+        },
+        "dext.workflow.maxConcurrency": {
+          "type": "integer",
+          "default": 4,
+          "minimum": 1,
+          "maximum": 16,
+          "description": "Branches a list comprehension runs at once in Code mode. Each branch can start its own agent process, so raising this multiplies both throughput and machine load. Everything outside a comprehension stays sequential."
         },
           "dext.mcpTools": {
           "type": "array",

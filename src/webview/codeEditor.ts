@@ -1,4 +1,5 @@
 import {
+  acceptCompletion,
   autocompletion,
   closeBrackets,
   closeBracketsKeymap,
@@ -16,7 +17,8 @@ import {
   defaultKeymap,
   history,
   historyKeymap,
-  indentWithTab
+  indentWithTab,
+  insertNewlineAndIndent
 } from "@codemirror/commands";
 import {
   Compartment,
@@ -39,6 +41,7 @@ import {
 } from "@codemirror/view";
 import type { SignatureHelp } from "../core/languageService.js";
 import type { ClipboardClient, ClipboardReadResult } from "./clipboardClient.js";
+import type { FileSearchClient } from "./fileSearchClient.js";
 import { codeReferencePasteText } from "./codeReferencePaste.js";
 import { fileReferenceDecorations } from "./fileReferenceDecorations.js";
 import { inputReferenceProjections, normalizeInputReferenceSource } from "../core/fileReference.js";
@@ -56,6 +59,7 @@ export interface CodeEditorOptions {
   parent: HTMLElement;
   broker: LanguageRequestBroker;
   clipboard: ClipboardClient;
+  files: FileSearchClient;
   onRun(): void;
   onOpenReference(reference: ContextReferenceOccurrence): void;
   onDiagnosticsChanged(counts: { errors: number; warnings: number }): void;
@@ -171,10 +175,12 @@ export class DextCodeEditor {
   private readonly theme = new Compartment();
   private readonly language = new Compartment();
   private readonly lineWrapping = new Compartment();
+  private readonly submitKeymap = new Compartment();
   private diagnosticsTimer: ReturnType<typeof setTimeout> | undefined;
   private signatureTimer: ReturnType<typeof setTimeout> | undefined;
   private diagnostics: Diagnostic[] = [];
   private languageEnabled = true;
+  private submitOnEnter = true;
 
   constructor(private readonly options: CodeEditorOptions) {
     const extensions: Extension[] = [
@@ -182,6 +188,9 @@ export class DextCodeEditor {
       this.language.of(python()),
       this.lineWrapping.of([]),
       this.theme.of(themeExtension()),
+      // Ahead of the main keymap so that a chat-mode Enter is claimed before
+      // the default binding turns it into a newline.
+      this.submitKeymap.of(this.submitKeymapExtension()),
       lineNumbers(),
       lintGutter(),
       highlightSpecialChars(),
@@ -192,7 +201,10 @@ export class DextCodeEditor {
         onOpen: (reference) => options.onOpenReference(reference)
       }),
       autocompletion({
-        override: [(context) => this.completions(context)],
+        override: [
+          (context) => this.fileCompletions(context),
+          (context) => this.completions(context)
+        ],
         activateOnTyping: true,
         activateOnCompletion: (completion) => ["namespace", "method", "property"].includes(completion.type ?? ""),
         defaultKeymap: false,
@@ -254,6 +266,38 @@ export class DextCodeEditor {
 
   get source(): string {
     return this.view.state.doc.toString();
+  }
+
+  /** Chat modes treat the composer as a message box, so Enter sends and
+   * Shift+Enter breaks the line. Code mode is a real editor: Enter must always
+   * add a line there and Mod-Enter stays the way to run. */
+  private submitKeymapExtension(): Extension {
+    if (this.languageEnabled || !this.submitOnEnter) return [];
+    return keymap.of([
+      {
+        key: "Enter",
+        run: (view) => {
+          // An open completion list owns Enter first, otherwise picking a file
+          // from the @ menu would send the message instead.
+          if (acceptCompletion(view)) return true;
+          this.options.onRun();
+          return true;
+        }
+      },
+      { key: "Shift-Enter", run: insertNewlineAndIndent }
+    ]);
+  }
+
+  private refreshSubmitKeymap(): void {
+    this.view.dispatch({
+      effects: this.submitKeymap.reconfigure(this.submitKeymapExtension())
+    });
+  }
+
+  setSubmitOnEnter(enabled: boolean): void {
+    if (this.submitOnEnter === enabled) return;
+    this.submitOnEnter = enabled;
+    this.refreshSubmitKeymap();
   }
 
   focus(): void {
@@ -370,7 +414,8 @@ export class DextCodeEditor {
     this.view.dispatch({
       effects: [
         this.language.reconfigure(enabled ? python() : []),
-        this.lineWrapping.reconfigure(enabled ? [] : EditorView.lineWrapping)
+        this.lineWrapping.reconfigure(enabled ? [] : EditorView.lineWrapping),
+        this.submitKeymap.reconfigure(this.submitKeymapExtension())
       ]
     });
     if (enabled) {
@@ -389,6 +434,46 @@ export class DextCodeEditor {
     if (this.diagnosticsTimer) clearTimeout(this.diagnosticsTimer);
     if (this.signatureTimer) clearTimeout(this.signatureTimer);
     this.view.destroy();
+  }
+
+  /** The `@` picker is deliberately independent of the language service: chat
+   * modes turn that service off, and attaching a file is exactly the thing the
+   * composer needs there. */
+  private async fileCompletions(context: CompletionContext): Promise<CompletionResult | null> {
+    const token = context.matchBefore(/@[^\s@#"'`(){}[\],]*/);
+    if (!token) return null;
+    const source = context.state.doc.toString();
+    // An `@` glued to a word is an email or a decorator argument, never a
+    // reference the user is starting to type.
+    if (/[\p{L}\p{N}_.+-]/u.test(source[token.from - 1] ?? "")) return null;
+    const files = await this.options.files.search(token.text.slice(1));
+    if (context.aborted || !files.length) return null;
+    return {
+      from: token.from,
+      to: token.to,
+      // The host already ranked these; re-filtering here would drop matches
+      // that span directory boundaries.
+      filter: false,
+      options: files.map((path) => {
+        const directory = path.slice(0, Math.max(0, path.lastIndexOf("/")));
+        return {
+          label: `@${path}`,
+          ...(directory ? { detail: directory } : {}),
+          type: "file",
+          apply: (view: EditorView, _completion: Completion, from: number, to: number) => {
+            // The trailing space closes the reference chip so the next keystroke
+            // is not absorbed into the path.
+            const insert = `@${path} `;
+            view.dispatch({
+              changes: { from, to, insert },
+              selection: { anchor: from + insert.length },
+              scrollIntoView: true,
+              userEvent: "input.complete"
+            });
+          }
+        };
+      })
+    };
   }
 
   private async completions(context: CompletionContext): Promise<CompletionResult | null> {

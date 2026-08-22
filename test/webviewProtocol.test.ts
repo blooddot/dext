@@ -48,6 +48,48 @@ describe("Webview protocol", () => {
       type: "stopExecution",
       turnId: "turn-1"
     })).toMatchObject({ type: "stopExecution", turnId: "turn-1" });
+    expect(webviewRequestSchema.parse({
+      type: "retryTurn",
+      turnId: "turn-1"
+    })).toMatchObject({ type: "retryTurn", turnId: "turn-1" });
+    expect(webviewRequestSchema.safeParse({ type: "retryTurn", turnId: "" }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({
+      type: "executeInput",
+      mode: "plan",
+      source: "Add a cache"
+    }).success).toBe(true);
+    expect(webviewRequestSchema.parse({
+      type: "buildPlan",
+      planPath: ".dext/plans/20260821-103000-add-a-cache.plan.md"
+    })).toMatchObject({ type: "buildPlan" });
+    expect(webviewRequestSchema.safeParse({ type: "buildPlan", planPath: "" }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({ type: "buildPlan", planPath: "x".repeat(513) }).success)
+      .toBe(false);
+    // An empty uri list is how Accept all asks for every pending file.
+    expect(webviewRequestSchema.parse({
+      type: "resolvePatch",
+      turnId: "turn-1",
+      uris: [],
+      accept: true
+    })).toMatchObject({ type: "resolvePatch", accept: true });
+    expect(webviewRequestSchema.safeParse({
+      type: "resolvePatch",
+      turnId: "turn-1",
+      uris: ["file:///a.ts"],
+      accept: false
+    }).success).toBe(true);
+    expect(webviewRequestSchema.safeParse({
+      type: "resolvePatch",
+      turnId: "",
+      uris: [],
+      accept: true
+    }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({
+      type: "resolvePatch",
+      turnId: "turn-1",
+      uris: [""],
+      accept: true
+    }).success).toBe(false);
     expect(webviewRequestSchema.safeParse({
       type: "clipboardWrite",
       requestId: 3,
@@ -70,6 +112,21 @@ describe("Webview protocol", () => {
       type: "openFileReference",
       reference: "src/review.ts#L1,1-L1,2"
     }).success).toBe(true);
+  });
+
+  it("accepts file picker queries including the empty one", () => {
+    // An empty query is how the picker asks for a starting list the moment the
+    // user types `@`, so it must not be rejected as missing input.
+    expect(webviewRequestSchema.safeParse({ type: "searchFiles", requestId: 0, query: "" }).success)
+      .toBe(true);
+    expect(webviewRequestSchema.safeParse({ type: "searchFiles", requestId: 7, query: "srcrev" }).success)
+      .toBe(true);
+    expect(webviewRequestSchema.safeParse({
+      type: "searchFiles",
+      requestId: 7,
+      query: "x".repeat(121)
+    }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({ type: "searchFiles", query: "src" }).success).toBe(false);
   });
 
   it("rejects old mode-specific execution shapes", () => {

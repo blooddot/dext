@@ -584,6 +584,10 @@ main {
 
 .input-section {
   --input-editor-height: clamp(112px, 24vh, 240px);
+  /* Agent is the default mode, so it keeps the plain button accent. Every
+     other mode tints the composer through these two properties. */
+  --composer-accent: var(--vscode-button-background);
+  --composer-accent-foreground: var(--vscode-button-foreground);
   margin: 10px -10px 0;
   padding: 4px 10px 10px;
   border-top: 1px solid var(--vscode-sideBar-border, var(--vscode-widget-border));
@@ -952,6 +956,137 @@ main {
   background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.08));
 }
 
+.patch-review-header {
+  margin-bottom: 6px;
+  padding: 4px 6px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  border: 1px solid color-mix(in srgb, var(--vscode-focusBorder) 40%, var(--vscode-widget-border, #454545));
+  border-radius: 3px;
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background, #1e1e1e));
+}
+
+.patch-review-label {
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+}
+
+.patch-review-actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.patch-review-action {
+  height: 22px;
+  padding: 0 7px;
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  border: 1px solid var(--vscode-widget-border, #454545);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--vscode-foreground);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.patch-review-action.accept {
+  border-color: color-mix(in srgb, var(--vscode-terminal-ansiGreen, #73c991) 60%, transparent);
+  color: var(--vscode-terminal-ansiGreen, #73c991);
+}
+
+.patch-review-action.reject {
+  border-color: color-mix(in srgb, var(--vscode-errorForeground, #f14c4c) 50%, transparent);
+  color: var(--vscode-errorForeground, #f14c4c);
+}
+
+.patch-review-action:hover:not(:disabled) {
+  background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.08));
+}
+
+.patch-review-action:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.patch-review-outcome {
+  flex: 0 0 auto;
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+
+.patch-review-outcome.applied {
+  color: var(--vscode-terminal-ansiGreen, #73c991);
+}
+
+.agent-file-change.patch-rejected {
+  opacity: 0.55;
+}
+
+.agent-file-change.patch-conflict {
+  border-color: var(--vscode-errorForeground, #f14c4c);
+}
+
+.patch-review-notice {
+  margin-top: 6px;
+  padding: 4px 6px;
+  border-left: 2px solid var(--vscode-errorForeground, #f14c4c);
+  color: var(--vscode-errorForeground, #f14c4c);
+  font-size: 12px;
+}
+
+.plan-actions {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.plan-action {
+  min-width: 0;
+  height: 24px;
+  padding: 0 8px;
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  border: 1px solid var(--vscode-widget-border, #454545);
+  border-radius: 3px;
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background, #1e1e1e));
+  color: var(--vscode-textLink-foreground, #3794ff);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.plan-action.primary {
+  border-color: var(--vscode-button-background, #0e639c);
+  background: var(--vscode-button-background, #0e639c);
+  color: var(--vscode-button-foreground, #ffffff);
+}
+
+.plan-action:hover:not(:disabled) {
+  border-color: var(--vscode-focusBorder);
+}
+
+.plan-action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.plan-action > span {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .composer-attach {
   position: absolute;
   right: 5px;
@@ -1032,6 +1167,33 @@ main {
   margin-bottom: 10px;
   padding-bottom: 10px;
   border-bottom: 1px solid var(--vscode-widget-border);
+}
+
+/* Comprehension branches ran concurrently, so they are shown as columns. The
+   sidebar is narrow, so they collapse to a single column rather than shrinking
+   past the point of being readable. */
+.fan-out {
+  margin-bottom: 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 8px;
+}
+
+.fan-out-branch {
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--vscode-widget-border, #454545);
+  border-radius: 3px;
+}
+
+.fan-out-branch::before {
+  display: block;
+  margin-bottom: 4px;
+  content: "Branch " attr(data-branch);
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .finding {
@@ -1164,29 +1326,47 @@ main {
   font-size: 13px;
 }
 
+.input-section[data-mode="ask"] {
+  --composer-accent: var(--vscode-terminal-ansiGreen, #73c991);
+}
+
+.input-section[data-mode="plan"] {
+  --composer-accent: var(--vscode-terminal-ansiYellow, #d7ba7d);
+}
+
+.input-section[data-mode="code"] {
+  --composer-accent: var(--vscode-terminal-ansiCyan, #4fc1ff);
+}
+
+/* The accents are mid-tone colors, so the editor background reads against them
+   whether the theme is dark or light. */
+.input-section[data-mode="ask"],
+.input-section[data-mode="plan"],
+.input-section[data-mode="code"] {
+  --composer-accent-foreground: var(--vscode-editor-background);
+}
+
 .input-section[data-mode="ask"] #mode-control,
+.input-section[data-mode="plan"] #mode-control,
 .input-section[data-mode="code"] #mode-control {
   height: 32px;
-  border-color: color-mix(in srgb, var(--vscode-focusBorder) 68%, var(--vscode-widget-border));
+  border-color: color-mix(in srgb, var(--composer-accent) 68%, var(--vscode-widget-border));
+  color: var(--composer-accent);
+  background: color-mix(in srgb, var(--composer-accent) 14%, var(--vscode-editor-background));
   font-weight: 600;
 }
 
-.input-section[data-mode="ask"] #mode-control {
-  color: var(--vscode-terminal-ansiGreen, #73c991);
-  background: color-mix(in srgb, var(--vscode-terminal-ansiGreen, #73c991) 14%, var(--vscode-editor-background));
-}
-
-.input-section[data-mode="ask"] #mode-control > #mode-control-icon {
-  color: var(--vscode-terminal-ansiGreen, #73c991);
-}
-
-.input-section[data-mode="code"] #mode-control {
-  color: var(--vscode-terminal-ansiCyan, #4fc1ff);
-  background: color-mix(in srgb, var(--vscode-terminal-ansiCyan, #4fc1ff) 14%, var(--vscode-editor-background));
-}
-
+.input-section[data-mode="ask"] #mode-control > #mode-control-icon,
+.input-section[data-mode="plan"] #mode-control > #mode-control-icon,
 .input-section[data-mode="code"] #mode-control > #mode-control-icon {
-  color: var(--vscode-terminal-ansiCyan, #4fc1ff);
+  color: var(--composer-accent);
+}
+
+.input-section[data-mode="ask"] #mode-control:focus-visible,
+.input-section[data-mode="plan"] #mode-control:focus-visible,
+.input-section[data-mode="code"] #mode-control:focus-visible {
+  outline: 1px solid var(--composer-accent);
+  outline-offset: -1px;
 }
 
 .composer-popover {
@@ -1335,6 +1515,21 @@ button.primary {
 
 button.primary:hover {
   background: var(--vscode-button-hoverBackground);
+}
+
+/* Send carries the colour of the mode it will run in, so the composer says what
+   is about to happen before the button is pressed. */
+#run {
+  color: var(--composer-accent-foreground, var(--vscode-button-foreground));
+  background: var(--composer-accent, var(--vscode-button-background));
+}
+
+#run:hover:not(:disabled) {
+  background: color-mix(
+    in srgb,
+    var(--composer-accent, var(--vscode-button-background)) 86%,
+    var(--vscode-editor-foreground)
+  );
 }
 
 button.primary:disabled {
@@ -1560,11 +1755,32 @@ button.primary.stopping {
 }
 
 .output-turn-title {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   color: var(--vscode-descriptionForeground);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.output-turn-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  /* Revealed on hover so the turn header stays quiet while reading, matching
+     the way VS Code treats row actions in its own lists. */
+  opacity: 0;
+}
+
+.output-turn > summary:hover .output-turn-actions,
+.output-turn > summary:focus-within .output-turn-actions {
+  opacity: 1;
+}
+
+.output-turn-action:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .output-turn-body {

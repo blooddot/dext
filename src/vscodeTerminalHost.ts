@@ -17,8 +17,17 @@ function requiredString(value: unknown, name: string): string {
   return value;
 }
 
+/** MAX_TIMEOUT_MS stays a hard ceiling: a configured value above it is a
+ * mistake, not a request to let a runaway command live longer. */
+function configuredDefaultTimeout(): number {
+  const value = vscode.workspace
+    .getConfiguration("dext")
+    .get<number>("terminal.defaultTimeoutMs", DEFAULT_TIMEOUT_MS);
+  return Number.isInteger(value) && value > 0 && value <= MAX_TIMEOUT_MS ? value : DEFAULT_TIMEOUT_MS;
+}
+
 function timeoutValue(value: unknown): number {
-  const timeout = value === undefined ? DEFAULT_TIMEOUT_MS : value;
+  const timeout = value === undefined ? configuredDefaultTimeout() : value;
   if (typeof timeout !== "number" || !Number.isInteger(timeout) || timeout <= 0 || timeout > MAX_TIMEOUT_MS) {
     throw new Error(`terminal timeout_ms must be an integer from 1 to ${MAX_TIMEOUT_MS}.`);
   }

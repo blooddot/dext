@@ -135,7 +135,17 @@ function resultBody(result: DextResult): string {
   if (result.kind === "plan") return `<ol>${result.steps.map((step) => `<li>${escapeHtml(step.title)}${step.detail ? `<small>${escapeHtml(step.detail)}</small>` : ""}</li>`).join("")}</ol>`;
   if (result.kind === "code") return `<pre class="code-text">${escapeHtml(result.code)}</pre>`;
   const text = resultText(result);
-  return text ? `<p>${escapeHtml(text)}</p>` : "";
+  const body = text ? `<p>${escapeHtml(text)}</p>` : "";
+  // History replays a plan turn read-only: the document opens, but handing it to
+  // the Agent belongs to the live composer.
+  if (result.kind === "chat" && result.planPath) return `${body}${planLink(result.planPath)}`;
+  return body;
+}
+
+function planLink(planPath: string): string {
+  const title = escapeHtml(planPath);
+  const label = escapeHtml(planPath.split("/").pop() ?? planPath);
+  return `<div class="plan-actions"><span class="attachment-chip history-file-reference" title="${title}"><button class="attachment-open" type="button" title="Open ${label}" aria-label="Open ${label}" data-open-file-reference="${title}"><i class="codicon codicon-checklist"></i><span class="attachment-label">${label}</span></button></span></div>`;
 }
 
 function execution(response: RuntimeResponse): string {
@@ -242,6 +252,9 @@ function dateLabel(timestamp: number): string {
   return new Date(timestamp).toLocaleString();
 }
 
+const TURN_ACTION_HINT = "Right-click for turn and conversation actions";
+const SESSION_ACTION_HINT = "Right-click for conversation actions";
+
 export function renderHistoryRecord(record: DextHistoryRecord, sessionId?: string): string {
   const input = normalizeInputReferenceSource(record.input);
   const response = parsedResponse(record);
@@ -260,7 +273,10 @@ export function renderHistoryRecord(record: DextHistoryRecord, sessionId?: strin
       preventDefaultContextMenuItems: true
     })}`
     : "";
-  return `<details class="history-record"${context}><summary>${chevron()}<span>${escapeHtml(dateLabel(record.createdAt))}</span><span class="history-summary-input">${escapeHtml(firstLine)}</span><span class="history-meta">${duration ? formatDuration(duration) : ""}</span></summary><div class="history-record-body"><details class="history-disclosure"><summary>${chevron()}<span>Input</span>${copyButton(input)}</summary><pre class="dext-source">${renderedInputSource(input)}</pre></details>${processHtml ? `<details class="history-disclosure"><summary>${chevron()}<span>Process</span></summary><div class="disclosure-body">${processHtml}</div></details>` : ""}<details class="history-disclosure" open><summary>${chevron()}<span>Output</span>${copyButton(outputCopy)}</summary><div class="disclosure-body">${outputHtml}</div></details></div></details>`;
+  // The turn actions are a context menu with no visual affordance of its own,
+  // so the row says where to find them.
+  const hint = sessionId ? ` title="${TURN_ACTION_HINT}"` : "";
+  return `<details class="history-record"${context}><summary${hint}>${chevron()}<span>${escapeHtml(dateLabel(record.createdAt))}</span><span class="history-summary-input">${escapeHtml(firstLine)}</span><span class="history-meta">${duration ? formatDuration(duration) : ""}</span></summary><div class="history-record-body"><details class="history-disclosure"><summary>${chevron()}<span>Input</span>${copyButton(input)}</summary><pre class="dext-source">${renderedInputSource(input)}</pre></details>${processHtml ? `<details class="history-disclosure"><summary>${chevron()}<span>Process</span></summary><div class="disclosure-body">${processHtml}</div></details>` : ""}<details class="history-disclosure" open><summary>${chevron()}<span>Output</span>${copyButton(outputCopy)}</summary><div class="disclosure-body">${outputHtml}</div></details></div></details>`;
 }
 
 /** The name a conversation carries until the user renames it: the opening line
@@ -293,7 +309,7 @@ export function renderHistorySession(session: DextHistorySession, view: HistoryS
     ? `<i class="history-favorite codicon codicon-star-full" title="Favorite" aria-label="Favorite"></i>`
     : "";
   const label = view.name ?? conversationTitle(session);
-  return `<details class="history-session${favorite ? " favorite" : ""}" ${context}><summary>${chevron()}${star}<span>${escapeHtml(dateLabel(session.createdAt))}</span><span class="history-summary-input${view.name ? " named" : ""}">${escapeHtml(label)}</span><span class="history-meta">${count}</span></summary><div class="history-session-body">${session.turns.map((turn) => renderHistoryRecord(turn, session.id)).join("")}</div></details>`;
+  return `<details class="history-session${favorite ? " favorite" : ""}" ${context}><summary title="${SESSION_ACTION_HINT}">${chevron()}${star}<span>${escapeHtml(dateLabel(session.createdAt))}</span><span class="history-summary-input${view.name ? " named" : ""}">${escapeHtml(label)}</span><span class="history-meta">${count}</span></summary><div class="history-session-body">${session.turns.map((turn) => renderHistoryRecord(turn, session.id)).join("")}</div></details>`;
 }
 
 export function conversationMarkdown(session: DextHistorySession): string {

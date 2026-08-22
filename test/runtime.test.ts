@@ -48,6 +48,266 @@ print(text=answer.text)`, registry);
     expect(result.executions.map((item) => item.result.kind)).toEqual(["chat", "agent", "print"]);
   });
 
+  it("runs a for loop once per item and drops the loop variable afterwards", async () => {
+    const { registry, workflow } = setup();
+    const compiled = compileWorkflow([
+      'commands = ["git status", "git diff"]',
+      "for command in commands:",
+      "    terminal(command=command)"
+    ].join("\n"), registry);
+    expect(compiled.diagnostics).toEqual([]);
+    const result = await workflow.execute(compiled.program!);
+    // A literal list is inlined at compile time, so the only steps are the two
+    // passes through the body.
+    expect(result.steps?.map((step) => step.state)).toEqual(["success", "success"]);
+    // The body runs with the item bound, so each pass sees its own command.
+    expect(result.executions.map((item) => item.result.kind === "terminal" ? item.result.command : ""))
+      .toEqual(["git status", "git diff"]);
+  });
+
+  it("marks a loop body skipped when the list is empty and stops the workflow when a pass fails", async () => {
+    const { registry, workflow } = setup();
+    const empty = compileWorkflow([
+      "items: list[str] = []",
+      "for item in items:",
+      "    terminal(command=item)"
+    ].join("\n"), registry);
+    expect(empty.diagnostics).toEqual([]);
+    const emptyResult = await workflow.execute(empty.program!);
+    expect(emptyResult.steps).toEqual([{ method: "terminal", state: "skipped" }]);
+
+    const registry2 = new MethodRegistry();
+    registry2.registerMany(BUILTIN_METHODS, "builtin");
+    let calls = 0;
+    const runtime = new DextRuntime(registry2, new ContextResolver(host), undefined, {
+      terminalRun: () => {
+        calls += 1;
+        if (calls === 2) throw new Error("second command failed");
+        return {
+          kind: "terminal",
+          status: "succeeded",
+          command: "",
+          cwd: ".",
+          exit_code: 0,
+          stdout: "",
+          stderr: "",
+          duration_ms: 0
+        } satisfies TerminalResult;
+      }
+    });
+    const failing = compileWorkflow([
+      'commands = ["a", "b", "c"]',
+      "for command in commands:",
+      "    terminal(command=command)",
+      'print(text="done")'
+    ].join("\n"), registry2);
+    expect(failing.diagnostics).toEqual([]);
+    const failed = await new WorkflowRuntime(runtime).execute(failing.program!);
+    // A failing pass stops the loop, and everything after it is reported skipped
+    // rather than silently dropped.
+    expect(failed.steps?.map((step) => `${step.method}:${step.state}`)).toEqual([
+      "terminal:success",
+      "terminal:failed",
+      "print:skipped"
+    ]);
+    expect(calls).toBe(2);
+  });
+
+  it("fans a comprehension out concurrently, caps the width, and keeps list order", async () => {
+    const registry = new MethodRegistry();
+    registry.registerMany(BUILTIN_METHODS, "builtin");
+    let inFlight = 0;
+    let peak = 0;
+    const runtime = new DextRuntime(registry, new ContextResolver(host), undefined, {
+      terminalRun: async ({ arguments: args }) => {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        // The later items resolve sooner, so an implementation that appended
+        // results as they settled would scramble the order.
+        const command = typeof args.command === "string" ? args.command : "";
+        await new Promise((resolve) => setTimeout(resolve, command === "a" ? 20 : 1));
+        inFlight -= 1;
+        return {
+          kind: "terminal",
+          status: "succeeded",
+          command,
+          cwd: ".",
+          exit_code: 0,
+          stdout: command,
+          stderr: "",
+          duration_ms: 0
+        } satisfies TerminalResult;
+      }
+    });
+    const workflow = new WorkflowRuntime(runtime);
+    workflow.setMaxConcurrency(2);
+    const compiled = compileWorkflow([
+      'commands = ["a", "b", "c", "d"]',
+      "runs = [terminal(command=command) for command in commands]"
+    ].join("\n"), registry);
+    expect(compiled.diagnostics).toEqual([]);
+    const result = await workflow.execute(compiled.program!);
+    expect(peak).toBe(2);
+    // Each branch gets its own step, indexed by position, followed by the
+    // assignment that binds the collected list.
+    expect(result.steps?.map((step) => `${step.method}#${step.branch ?? "-"}:${step.state}`)).toEqual([
+      "terminal#0:success",
+      "terminal#1:success",
+      "terminal#2:success",
+      "terminal#3:success",
+      "=#-:success"
+    ]);
+    expect(result.executions.map((item) => item.result.kind === "terminal" ? item.result.command : ""))
+      .toEqual(["a", "b", "c", "d"]);
+  });
+
+  it("stops a fan-out on cancellation and reports the branch that failed", async () => {
+    const registry = new MethodRegistry();
+    registry.registerMany(BUILTIN_METHODS, "builtin");
+    const controller = new AbortController();
+    let started = 0;
+    const runtime = new DextRuntime(registry, new ContextResolver(host), undefined, {
+      terminalRun: async ({ arguments: args }) => {
+        started += 1;
+        if (started === 1) controller.abort();
+        const command = typeof args.command === "string" ? args.command : "";
+        if (command === "b") throw new Error("branch b failed");
+        return {
+          kind: "terminal",
+          status: "succeeded",
+          command,
+          cwd: ".",
+          exit_code: 0,
+          stdout: "",
+          stderr: "",
+          duration_ms: 0
+        } satisfies TerminalResult;
+      }
+    });
+    const cancelling = new WorkflowRuntime(runtime);
+    cancelling.setMaxConcurrency(1);
+    const compiled = compileWorkflow([
+      'commands = ["a", "b", "c"]',
+      "runs = [terminal(command=command) for command in commands]",
+      'print(text="done")'
+    ].join("\n"), registry);
+    expect(compiled.diagnostics).toEqual([]);
+    const cancelled = await cancelling.execute(compiled.program!, [], { signal: controller.signal });
+    // Aborting stops handing out branches: the first one already in flight still
+    // finishes, the second never starts, and the statement after the fan-out is
+    // reported skipped rather than dropped.
+    expect(started).toBe(1);
+    expect(cancelled.steps?.map((step) => `${step.method}:${step.state}`)).toEqual([
+      "terminal:success",
+      "=:cancelled",
+      "print:skipped"
+    ]);
+
+    const failing = new WorkflowRuntime(new DextRuntime(registry, new ContextResolver(host), undefined, {
+      terminalRun: async ({ arguments: args }) => {
+        const command = typeof args.command === "string" ? args.command : "";
+        if (command === "b") throw new Error("branch b failed");
+        return {
+          kind: "terminal",
+          status: "succeeded",
+          command,
+          cwd: ".",
+          exit_code: 0,
+          stdout: "",
+          stderr: "",
+          duration_ms: 0
+        } satisfies TerminalResult;
+      }
+    }));
+    failing.setMaxConcurrency(1);
+    const result = await failing.execute(compiled.program!);
+    const failed = result.steps?.find((step) => step.state === "failed");
+    expect(failed).toMatchObject({ method: "terminal", branch: 1 });
+    expect(failed?.error).toContain("branch b failed");
+    expect(result.steps?.at(-1)).toMatchObject({ method: "print", state: "skipped" });
+  });
+
+  it("hands a failing step to except instead of skipping the rest of the workflow", async () => {
+    const registry = new MethodRegistry();
+    registry.registerMany(BUILTIN_METHODS, "builtin");
+    const runtime = new DextRuntime(registry, new ContextResolver(host), undefined, {
+      terminalRun: () => {
+        throw new Error("npm test exited 1");
+      }
+    });
+    const compiled = compileWorkflow([
+      "try:",
+      '    checked = terminal(command="npm test")',
+      "except Exception as failure:",
+      "    print(text=failure)",
+      "finally:",
+      '    print(text="cleanup")',
+      'print(text="still running")'
+    ].join("\n"), registry);
+    expect(compiled.diagnostics).toEqual([]);
+    const result = await new WorkflowRuntime(runtime).execute(compiled.program!);
+    expect(result.steps?.map((step) => `${step.method}:${step.state}`)).toEqual([
+      "terminal:failed",
+      "print:success",
+      "print:success",
+      "print:success"
+    ]);
+    // The handler sees the failure message, and the statement after the try runs
+    // because the failure was handled.
+    const handled = result.executions[0];
+    expect(handled?.result.kind === "print" && handled.result.text).toContain("npm test exited 1");
+  });
+
+  it("runs finally on success, skips the handler, and lets cancellation pass through", async () => {
+    const { registry, workflow } = setup();
+    const passing = compileWorkflow([
+      "try:",
+      '    checked = terminal(command="npm test")',
+      "except:",
+      '    print(text="recovering")',
+      "finally:",
+      '    print(text="cleanup")'
+    ].join("\n"), registry);
+    expect(passing.diagnostics).toEqual([]);
+    const result = await workflow.execute(passing.program!);
+    expect(result.steps?.map((step) => `${step.method}:${step.state}`)).toEqual([
+      "terminal:success",
+      "print:skipped",
+      "print:success"
+    ]);
+
+    const controller = new AbortController();
+    const cancellingRegistry = new MethodRegistry();
+    cancellingRegistry.registerMany(BUILTIN_METHODS, "builtin");
+    const cancelling = new WorkflowRuntime(new DextRuntime(
+      cancellingRegistry,
+      new ContextResolver(host),
+      undefined,
+      {
+        terminalRun: () => {
+          controller.abort();
+          throw new ExecutionCancelledError();
+        }
+      }
+    ));
+    const compiled = compileWorkflow([
+      "try:",
+      '    checked = terminal(command="npm test")',
+      "except:",
+      '    print(text="recovering")',
+      "finally:",
+      '    print(text="cleanup")'
+    ].join("\n"), cancellingRegistry);
+    const cancelled = await cancelling.execute(compiled.program!, [], { signal: controller.signal });
+    // Stopping is the user's decision, so except does not get to override it and
+    // neither the handler nor the finalizer runs.
+    expect(cancelled.steps?.map((step) => `${step.method}:${step.state}`)).toEqual([
+      "terminal:cancelled",
+      "print:skipped",
+      "print:skipped"
+    ]);
+  });
+
   it("builds strict contracts for public builtins", () => {
     const { registry } = setup();
     const ask = new AxAdapter().compile(registry.get("ask")!);
@@ -157,6 +417,192 @@ print(text=answer.text)`, registry);
       expect.objectContaining({ mode: "agent", input: "Update this module", allowWorkspaceWrite: true }),
       expect.objectContaining({ mode: "ask", input: "Explain this module", allowWorkspaceWrite: false })
     ]);
+  });
+
+  it("turns a read-only Agent turn into a preview-only patch instead of a conversation", async () => {
+    const { runtime } = setup();
+    runtime.setWorkspaceTrusted(true);
+    runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
+    runtime.setAgentSelection({ profileId: "codex", permission: "read-only" });
+    const patch: PatchResult = {
+      kind: "patch",
+      title: "Proposed",
+      changes: [{ uri: "file:///x.ts", before: "const x = 1;", after: "const x = 2;" }]
+    };
+    const conversations: string[] = [];
+    const typed: { apply: unknown }[] = [];
+    runtime.setAgentRunner({
+      run: async (request) => {
+        typed.push({ apply: request.resolved.arguments.apply });
+        return { kind: "agent", text: "Proposed a change", patch } satisfies AgentResult;
+      },
+      runConversation: async (request) => {
+        conversations.push(request.input);
+        return "should not be used";
+      }
+    });
+
+    const response = await runtime.executeConversation("agent", "Rename the flag");
+    // The provider must be told not to write, and the reply must carry the patch
+    // Dext can show and later apply.
+    expect(typed).toEqual([{ apply: false }]);
+    expect(conversations).toEqual([]);
+    expect(response.result).toMatchObject({ kind: "agent", patch: { changes: patch.changes } });
+    // The recorded call is what the review UI keys off, so `apply` has to be on it.
+    expect(response.invocation.arguments).toEqual([
+      { name: "input", value: "Rename the flag" },
+      { name: "apply", value: false }
+    ]);
+  });
+
+  it("keeps a write tier on the conversation path and never lets a read-only mode escalate", async () => {
+    const { runtime } = setup();
+    runtime.setWorkspaceTrusted(true);
+    runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
+    runtime.setRuleLoader(async () => undefined);
+    const requests: { mode: string; permission?: string; allowWorkspaceWrite: boolean }[] = [];
+    runtime.setAgentRunner({
+      run: async () => ({ kind: "chat", text: "unused" }),
+      runConversation: async (request) => {
+        requests.push(request);
+        return "done";
+      }
+    });
+
+    runtime.setAgentSelection({ profileId: "codex", permission: "full-access" });
+    await runtime.executeConversation("agent", "Update this module");
+    await runtime.executeConversation("ask", "Explain this module");
+    await runtime.executeConversation("plan", "Add a cache");
+    expect(requests).toEqual([
+      expect.objectContaining({ mode: "agent", permission: "full-access", allowWorkspaceWrite: true }),
+      // Ask and Plan stay read-only however the composer is configured.
+      expect.objectContaining({ mode: "ask", permission: "read-only", allowWorkspaceWrite: false }),
+      expect.objectContaining({ mode: "plan", permission: "read-only", allowWorkspaceWrite: false })
+    ]);
+  });
+
+  it("passes provider CLI arguments through only from a trusted workspace", async () => {
+    const { runtime } = setup();
+    runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
+    runtime.setAgentSelection({ profileId: "codex", permission: "workspace-write" });
+    runtime.setAgentCliArguments({ codex: ["--profile", "audit"], claude: ["--add-dir", "/tmp"] });
+    const requests: { cliArguments?: readonly string[] }[] = [];
+    runtime.setAgentRunner({
+      run: async () => ({ kind: "chat", text: "unused" }),
+      runConversation: async (request) => {
+        requests.push(request);
+        return "done";
+      }
+    });
+
+    runtime.setWorkspaceTrusted(false);
+    await runtime.executeConversation("ask", "Explain this module");
+    runtime.setWorkspaceTrusted(true);
+    await runtime.executeConversation("agent", "Update this module");
+    expect(requests[0]?.cliArguments).toBeUndefined();
+    // Only the selected provider's arguments are forwarded.
+    expect(requests[1]?.cliArguments).toEqual(["--profile", "audit"]);
+  });
+
+  it("falls back to the configured default permission until the composer chooses one", async () => {
+    const { runtime } = setup();
+    runtime.setWorkspaceTrusted(true);
+    runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
+    runtime.setAgentSelection({ profileId: "codex" });
+    runtime.setDefaultAgentPermission("full-access");
+    let permission: string | undefined;
+    runtime.setAgentRunner({
+      run: async () => ({ kind: "chat", text: "unused" }),
+      runConversation: async (request) => {
+        permission = request.permission;
+        return "done";
+      }
+    });
+
+    await runtime.executeConversation("agent", "Update this module");
+    expect(permission).toBe("full-access");
+    // An explicit choice always wins over the setting.
+    runtime.setAgentSelection({ profileId: "codex", permission: "workspace-write" });
+    await runtime.executeConversation("agent", "Update this module");
+    expect(permission).toBe("workspace-write");
+  });
+
+  it("runs Plan read-only and prefixes the built-in planning instruction", async () => {
+    const { runtime } = setup();
+    runtime.setWorkspaceTrusted(true);
+    runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
+    runtime.setAgentSelection({ profileId: "codex" });
+    runtime.setRuleLoader(async () => undefined);
+    const requests: { mode: string; input: string; allowWorkspaceWrite: boolean }[] = [];
+    runtime.setAgentRunner({
+      run: async () => ({ kind: "chat", text: "unused" }),
+      runConversation: async (request) => {
+        requests.push(request);
+        return "# Plan\n\n## Goal\nShip it.";
+      }
+    });
+
+    await expect(runtime.executeConversation("plan", "Add a cache"))
+      .resolves.toMatchObject({ method: { id: "plan" }, result: { kind: "chat" } });
+    const request = requests[0]!;
+    // Plan must never reach the write path, whatever the provider decides to do.
+    expect(request.allowWorkspaceWrite).toBe(false);
+    expect(request.mode).toBe("plan");
+    expect(request.input).toContain("You are in Dext Plan mode.");
+    expect(request.input).toContain("Do not create, modify, or delete any file.");
+    // The user's own words stay verbatim below the instruction.
+    expect(request.input.endsWith("Goal:\n\nAdd a cache")).toBe(true);
+  });
+
+  it("lets .dext/rules/plan.md replace the built-in Plan instruction", async () => {
+    const { runtime } = setup();
+    runtime.setWorkspaceRoot("/workspace");
+    runtime.setWorkspaceTrusted(true);
+    runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
+    runtime.setAgentSelection({ profileId: "codex" });
+    const requestedPaths: string[] = [];
+    runtime.setRuleLoader(async (path) => {
+      requestedPaths.push(path.replaceAll("\\", "/"));
+      return "Project planning instruction.\n";
+    });
+    let sent = "";
+    runtime.setAgentRunner({
+      run: async () => ({ kind: "chat", text: "unused" }),
+      runConversation: async (request) => {
+        sent = request.input;
+        return "# Plan";
+      }
+    });
+
+    await runtime.executeConversation("plan", "Add a cache");
+    expect(requestedPaths).toEqual(["/workspace/.dext/rules/plan.md"]);
+    expect(sent).toContain("Project planning instruction.");
+    expect(sent).not.toContain("You are in Dext Plan mode.");
+  });
+
+  it("keeps the built-in Plan instruction when the workspace is untrusted", async () => {
+    const { runtime } = setup();
+    runtime.setWorkspaceTrusted(false);
+    runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
+    runtime.setAgentSelection({ profileId: "codex" });
+    let loaderCalls = 0;
+    runtime.setRuleLoader(async () => {
+      loaderCalls += 1;
+      return "untrusted instruction";
+    });
+    let sent = "";
+    runtime.setAgentRunner({
+      run: async () => ({ kind: "chat", text: "unused" }),
+      runConversation: async (request) => {
+        sent = request.input;
+        return "# Plan";
+      }
+    });
+
+    await runtime.executeConversation("plan", "Add a cache");
+    // An untrusted workspace must not get to dictate the prompt.
+    expect(loaderCalls).toBe(0);
+    expect(sent).toContain("You are in Dext Plan mode.");
   });
 
   it("composes failed terminal fields and preserves the complete result", async () => {

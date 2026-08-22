@@ -3,8 +3,15 @@ import type { AgentStreamEvent, InputExecutionResponse } from "./core/types.js";
 import { normalizeInputReferenceSource } from "./core/fileReference.js";
 
 const HISTORY_KEY = "dext.history";
-const MAX_TURNS = 100;
-const MAX_OUTPUT_LENGTH = 200_000;
+
+export interface DextHistoryLimits {
+  /** Turns kept across all conversations. The oldest are dropped first. */
+  maxTurns: number;
+  /** Characters kept per stored string before it is truncated. */
+  maxOutputLength: number;
+}
+
+export const DEFAULT_HISTORY_LIMITS: DextHistoryLimits = { maxTurns: 100, maxOutputLength: 200_000 };
 
 export interface DextHistoryRecord {
   id: string;
@@ -12,6 +19,9 @@ export interface DextHistoryRecord {
   input: string;
   process: AgentStreamEvent[];
   output: string;
+  /** The mode the turn ran in, so that retrying it reproduces the same run.
+   * Absent on turns recorded before Dext started tracking it. */
+  mode?: "agent" | "ask" | "plan" | "code";
   response?: InputExecutionResponse;
   error?: string;
 }
@@ -23,15 +33,15 @@ export interface DextHistorySession {
   turns: DextHistoryRecord[];
 }
 
-function bounded(value: string): string {
-  return value.length > MAX_OUTPUT_LENGTH
-    ? `${value.slice(0, MAX_OUTPUT_LENGTH)}\n... output truncated ...`
+function bounded(value: string, maxOutputLength: number): string {
+  return value.length > maxOutputLength
+    ? `${value.slice(0, maxOutputLength)}\n... output truncated ...`
     : value;
 }
 
-function serializeResponse(response: InputExecutionResponse): string {
+function serializeResponse(response: InputExecutionResponse, maxOutputLength: number): string {
   try {
-    return bounded(JSON.stringify(response, null, 2));
+    return bounded(JSON.stringify(response, null, 2), maxOutputLength);
   } catch {
     return "Unable to serialize execution output.";
   }
@@ -53,10 +63,10 @@ function normalizeSessions(stored: readonly (DextHistoryRecord | DextHistorySess
   );
 }
 
-function trimSessions(sessions: readonly DextHistorySession[]): DextHistorySession[] {
+function trimSessions(sessions: readonly DextHistorySession[], maxTurns: number): DextHistorySession[] {
   const next = sessions.map((session) => ({ ...session, turns: [...session.turns] }));
   let turnCount = next.reduce((total, session) => total + session.turns.length, 0);
-  while (turnCount > MAX_TURNS && next.length) {
+  while (turnCount > maxTurns && next.length) {
     const first = next[0]!;
     first.turns.shift();
     turnCount -= 1;
@@ -67,7 +77,22 @@ function trimSessions(sessions: readonly DextHistorySession[]): DextHistorySessi
 }
 
 export class DextHistoryStore {
-  constructor(private readonly state: vscode.Memento) {}
+  /** Limits are read per write rather than captured once, so changing the
+   * setting takes effect on the next turn instead of the next window. */
+  constructor(
+    private readonly state: vscode.Memento,
+    private readonly readLimits: () => DextHistoryLimits = () => DEFAULT_HISTORY_LIMITS
+  ) {}
+
+  private limits(): DextHistoryLimits {
+    const { maxTurns, maxOutputLength } = this.readLimits();
+    return {
+      maxTurns: Number.isInteger(maxTurns) && maxTurns > 0 ? maxTurns : DEFAULT_HISTORY_LIMITS.maxTurns,
+      maxOutputLength: Number.isInteger(maxOutputLength) && maxOutputLength > 0
+        ? maxOutputLength
+        : DEFAULT_HISTORY_LIMITS.maxOutputLength
+    };
+  }
 
   list(): DextHistorySession[] {
     const stored = this.state.get<(DextHistoryRecord | DextHistorySession)[]>(HISTORY_KEY, []);
@@ -92,7 +117,7 @@ export class DextHistoryStore {
         id: `${createdAt}-${index}-${Math.random().toString(36).slice(2, 8)}`
       }))
     };
-    await this.state.update(HISTORY_KEY, trimSessions([...this.list(), session]));
+    await this.state.update(HISTORY_KEY, trimSessions([...this.list(), session], this.limits().maxTurns));
     return session;
   }
 
@@ -100,12 +125,15 @@ export class DextHistoryStore {
     input: string,
     process: readonly AgentStreamEvent[],
     response: InputExecutionResponse,
-    sessionId?: string
+    sessionId?: string,
+    mode?: DextHistoryRecord["mode"]
   ): Promise<DextHistoryRecord> {
+    const { maxOutputLength } = this.limits();
     return this.add({
-      input: bounded(input),
-      process: process.map((event) => ({ ...event, text: bounded(event.text) })),
-      output: serializeResponse(response),
+      input: bounded(input, maxOutputLength),
+      process: process.map((event) => ({ ...event, text: bounded(event.text, maxOutputLength) })),
+      output: serializeResponse(response, maxOutputLength),
+      ...(mode ? { mode } : {}),
       response
     }, sessionId);
   }
@@ -114,14 +142,17 @@ export class DextHistoryStore {
     input: string,
     process: readonly AgentStreamEvent[],
     error: unknown,
-    sessionId?: string
+    sessionId?: string,
+    mode?: DextHistoryRecord["mode"]
   ): Promise<DextHistoryRecord> {
     const message = error instanceof Error ? error.message : String(error);
+    const { maxOutputLength } = this.limits();
     return this.add({
-      input: bounded(input),
-      process: process.map((event) => ({ ...event, text: bounded(event.text) })),
+      input: bounded(input, maxOutputLength),
+      process: process.map((event) => ({ ...event, text: bounded(event.text, maxOutputLength) })),
       output: "",
-      error: bounded(message)
+      ...(mode ? { mode } : {}),
+      error: bounded(message, maxOutputLength)
     }, sessionId);
   }
 
@@ -144,7 +175,7 @@ export class DextHistoryStore {
     } else {
       sessions.push({ id: sessionId, createdAt, updatedAt: createdAt, turns: [turn] });
     }
-    await this.state.update(HISTORY_KEY, trimSessions(sessions));
+    await this.state.update(HISTORY_KEY, trimSessions(sessions, this.limits().maxTurns));
     return turn;
   }
 }

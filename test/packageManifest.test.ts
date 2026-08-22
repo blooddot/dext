@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { COMPLETION_APIS, COMPLETION_FIELDS } from "../src/core/completionProvider.js";
 
 interface PackageManifest {
   activationEvents?: string[];
@@ -9,7 +10,24 @@ interface PackageManifest {
     menus?: Record<string, Array<{ command?: string; when?: string; group?: string }>>;
     keybindings?: Array<{ command?: string; key?: string; mac?: string; when?: string }>;
     configuration?: {
-      properties?: Record<string, { type?: string; default?: unknown; description?: string }>;
+      properties?: Record<string, {
+        type?: string;
+        default?: unknown;
+        enum?: string[];
+        minimum?: number;
+        maximum?: number;
+        description?: string;
+        markdownDescription?: string;
+        markdownDeprecationMessage?: string;
+        enumDescriptions?: string[];
+        properties?: Record<string, {
+          type?: string;
+          default?: unknown;
+          enum?: string[];
+          description?: string;
+          enumDescriptions?: string[];
+        }>;
+      }>;
     };
   };
 }
@@ -28,6 +46,25 @@ describe("Dext package manifest", () => {
       mac: "cmd+c",
       when: "editorTextFocus && editorHasSelection && config.dext.captureSelectionOnCopy"
     });
+  });
+
+  it("binds the everyday conversation commands and scopes stop to a running turn", async () => {
+    const keybindings = (await manifest()).contributes?.keybindings ?? [];
+    expect(keybindings).toContainEqual({ command: "dext.focus", key: "ctrl+alt+d", mac: "cmd+alt+d" });
+    expect(keybindings)
+      .toContainEqual({ command: "dext.newConversation", key: "ctrl+alt+n", mac: "cmd+alt+n" });
+    // Stop only claims its chord while a turn is running, so it cannot shadow
+    // an editor binding the rest of the time.
+    expect(keybindings).toContainEqual({
+      command: "dext.stopExecution",
+      key: "ctrl+alt+.",
+      mac: "cmd+alt+.",
+      when: "dext.running"
+    });
+    expect((await manifest()).contributes?.commands)
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ command: "dext.stopExecution", title: "Dext: Stop Execution" })
+      ]));
   });
 
   it("enables selection capture by default and explains the native-copy fallback", async () => {
@@ -130,6 +167,117 @@ describe("Dext package manifest", () => {
       .toContain("webviewId == 'dext.history'");
     expect(titles.get("dext.tab.renameConversation")).toBe("Rename");
     expect(titles.get("dext.history.renameConversation")).toBe("Rename Conversation");
+  });
+
+  it("offers recording a conversation as a workflow only where a file can be written", async () => {
+    const value = await manifest();
+    const entry = (value.contributes?.menus?.["webview/context"] ?? [])
+      .find((item) => item.command === "dext.history.recordWorkflow");
+    expect(entry?.when).toContain("webviewSection == 'session' || webviewSection == 'turn'");
+    // Writing into `.dext/api` needs a trusted workspace, so the action is not
+    // offered where it would only be able to fail.
+    expect(entry?.when).toContain("dext.workspaceTrusted");
+    const titles = new Map((value.contributes?.commands ?? []).map((item) => [item.command, item.title]));
+    expect(titles.get("dext.history.recordWorkflow")).toBe("Record Conversation as Dext Workflow");
+  });
+
+  it("configures the completion backend without ever asking for the key in settings", async () => {
+    const value = await manifest();
+    const properties = value.contributes?.configuration?.properties ?? {};
+    // One object setting renders in the Settings UI as an untyped key/value
+    // table with an Add Item button: no dropdown, and nowhere to type the URL.
+    // Each field is its own setting so the UI can draw a real control for it.
+    // The object form stays declared but deprecated: the Settings UI hides it,
+    // and a registered key is the only kind Dext is allowed to delete when it
+    // migrates the values across.
+    expect(properties["dext.completion"]?.markdownDeprecationMessage).toContain("Replaced by");
+    expect(properties["dext.completion.endpoint"]).toMatchObject({ type: "string", default: "" });
+    expect(properties["dext.completion.model"]).toMatchObject({ type: "string", default: "" });
+    expect(properties["dext.completion.ignoreGitignore"]).toMatchObject({ type: "boolean", default: true });
+    // Every field the backend reads has to be contributed, or it can only ever
+    // hold its default.
+    for (const field of COMPLETION_FIELDS) {
+      expect(properties).toHaveProperty(`dext.completion.${field}`);
+    }
+    // Every format the backend can speak has to be offered here too, or the
+    // wizard would write a value settings.json rejects.
+    const api = properties["dext.completion.api"];
+    expect(api?.enum).toEqual([...COMPLETION_APIS]);
+    expect(api?.enumDescriptions).toHaveLength(COMPLETION_APIS.length);
+    // The provider has to exist before the sidebar is ever opened, or inline
+    // completion silently does nothing until something else activates Dext.
+    expect(value.activationEvents).toContain("onStartupFinished");
+    // A key in settings.json ends up in source control, so there is no box for
+    // one; the description says where it goes and links to the command.
+    expect(JSON.stringify(properties["dext.completion.apiKey"])).toBe(undefined);
+    const enabled = properties["dext.completion.enabled"];
+    expect(enabled?.markdownDescription).toContain("secret storage");
+    expect(enabled?.markdownDescription).toContain("(command:dext.setCompletionApiKey)");
+    expect(enabled?.markdownDescription).toContain("(command:dext.configureCompletionModel)");
+    const commands = (value.contributes?.commands ?? []).map((item) => item.command);
+    for (const command of [
+      "dext.configureCompletionModel",
+      "dext.completionMenu",
+      "dext.testCompletionModel",
+      "dext.setCompletionApiKey",
+      "dext.clearCompletionApiKey",
+      "dext.toggleCompletion"
+    ]) {
+      expect(commands).toContain(command);
+      expect(value.activationEvents).toContain(`onCommand:${command}`);
+    }
+  });
+
+  it("exposes every timeout that can cut a turn off", async () => {
+    const properties = (await manifest()).contributes?.configuration?.properties ?? {};
+    expect(properties["dext.agent.timeoutMs"]).toMatchObject({ type: "integer", default: 600000 });
+    expect(properties["dext.aioa.timeoutMs"]).toMatchObject({ type: "integer", default: 3600000 });
+    expect(properties["dext.aioa.idleTimeoutMs"]).toMatchObject({ type: "integer", default: 90000 });
+    expect(properties["dext.terminal.defaultTimeoutMs"])
+      .toMatchObject({ type: "integer", default: 120000 });
+    // The terminal ceiling stays a ceiling, so the setting cannot be used to
+    // let a runaway command live longer than Dext allows.
+    expect(properties["dext.terminal.defaultTimeoutMs"]?.description).toContain("600000");
+    // Settings are English only, by convention for this manifest. Every piece of
+    // prose counts, not just `description`.
+    for (const [name, property] of Object.entries(properties)) {
+      expect(JSON.stringify({ name, property })).not.toMatch(/[\u4e00-\u9fff]/);
+    }
+  });
+
+  it("exposes the layout and history limits the UI reads at runtime", async () => {
+    const properties = (await manifest()).contributes?.configuration?.properties ?? {};
+    expect(properties["dext.apiDirs"]).toMatchObject({ type: "array", default: [] });
+    // A configured directory must not be able to take over a project's own API.
+    expect(properties["dext.apiDirs"]?.description).toContain("cannot shadow a project API");
+    expect(properties["dext.plan.directory"]).toMatchObject({ type: "string", default: ".dext/plans" });
+    expect(properties["dext.plan.directory"]?.description).toContain("inside the workspace");
+    expect(properties["dext.submitOnEnter"]).toMatchObject({ type: "boolean", default: true });
+    expect(properties["dext.submitOnEnter"]?.description).toContain("Shift+Enter");
+    expect(properties["dext.diff.defaultView"]).toMatchObject({ type: "string", default: "inline" });
+    expect(properties["dext.diff.defaultView"]?.enum).toEqual(["inline", "split"]);
+    expect(properties["dext.history.maxTurns"]).toMatchObject({ type: "integer", default: 100 });
+    expect(properties["dext.history.maxOutputLength"]).toMatchObject({ type: "integer", default: 200000 });
+    // Fan-out width has a ceiling because every branch can start its own process.
+    const concurrency = properties["dext.workflow.maxConcurrency"];
+    expect(concurrency).toMatchObject({ type: "integer", default: 4, minimum: 1 });
+    expect(concurrency?.maximum).toBeLessThanOrEqual(16);
+    expect(concurrency?.description).toContain("comprehension");
+  });
+
+  it("offers three Agent permission tiers and a trusted-only CLI passthrough", async () => {
+    const properties = (await manifest()).contributes?.configuration?.properties ?? {};
+    const permission = properties["dext.agentPermission"];
+    expect(permission).toMatchObject({ type: "string", default: "workspace-write" });
+    expect(permission?.enum).toEqual(["read-only", "workspace-write", "full-access"]);
+    // Each tier has to say what it will do before it is picked.
+    expect(permission?.enumDescriptions).toHaveLength(3);
+    expect(permission?.description).toContain("Ask and Plan are always read-only");
+    const passthrough = properties["dext.agentCliArgs"];
+    expect(passthrough).toMatchObject({ type: "object", default: {} });
+    expect(passthrough?.markdownDescription).toContain("trusted workspace");
+    // A passthrough argument must not be a way around the tier.
+    expect(passthrough?.markdownDescription).toContain("cannot loosen the permission tier");
   });
 
   it("contributes secure HTTP MCP settings and credential commands", async () => {

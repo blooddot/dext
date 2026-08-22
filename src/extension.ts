@@ -1,12 +1,22 @@
 import * as vscode from "vscode";
 import { DextApplication } from "./application.js";
 import { DextSidebarProvider } from "./sidebarProvider.js";
-import { DextHistoryStore } from "./historyStore.js";
+import { DEFAULT_HISTORY_LIMITS, DextHistoryStore } from "./historyStore.js";
 import type { DextHistoryRecord, DextHistorySession } from "./historyStore.js";
 import { DextHistoryPanel } from "./historyEditorProvider.js";
 import { DextConversationPreferences } from "./conversationPreferences.js";
 import type { HistorySortOrder } from "./conversationPreferences.js";
 import { conversationMarkdown, conversationTitle } from "./historyRender.js";
+import { recordWorkflow } from "./core/workflowRecorder.js";
+import { DextCompletionHost } from "./vscodeCompletionHost.js";
+import {
+  configureCompletionModel,
+  diagnoseCompletion,
+  openCompletionMenu,
+  setCompletionApiKey,
+  testCompletionModel,
+  type CompletionDiagnoseOptions
+} from "./vscodeCompletionSetup.js";
 import { normalizeAioaCdpEndpoint } from "./core/aioaCdp.js";
 import {
   dextSemanticTokens,
@@ -20,7 +30,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   if (folder) application.runtime.setWorkspaceRoot(folder.uri.fsPath);
   application.runtime.setWorkspaceTrusted(vscode.workspace.isTrusted && folder?.uri.scheme === "file");
   await application.reload();
-  const history = new DextHistoryStore(context.globalState);
+  const history = new DextHistoryStore(context.globalState, () => {
+    const configuration = vscode.workspace.getConfiguration("dext");
+    return {
+      maxTurns: configuration.get<number>("history.maxTurns", DEFAULT_HISTORY_LIMITS.maxTurns),
+      maxOutputLength: configuration.get<number>(
+        "history.maxOutputLength",
+        DEFAULT_HISTORY_LIMITS.maxOutputLength
+      )
+    };
+  });
   const preferences = new DextConversationPreferences(context.globalState);
   const historyPanel = new DextHistoryPanel(context.extensionUri, history, preferences);
   const sidebar = new DextSidebarProvider(context.extensionUri, application, history, preferences);
@@ -71,6 +90,32 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (name === undefined) return;
     await sidebar.renameConversation(sessionId, name);
     historyPanel.refresh();
+  };
+  /** Writes the recorded skeleton into `.dext/api` and opens it, because the file
+   * is meant to be edited before it is trusted. A name already in use gets a
+   * numbered suffix rather than overwriting an API someone else wrote. */
+  const recordConversation = async (session: DextHistorySession): Promise<void> => {
+    const target = vscode.workspace.workspaceFolders?.[0];
+    if (!target || !application.isTrustedLocalWorkspace()) {
+      throw new Error("Recording a conversation as a workflow requires a trusted local workspace.");
+    }
+    const recorded = recordWorkflow(session.turns);
+    const directory = vscode.Uri.joinPath(target.uri, ".dext", "api");
+    await vscode.workspace.fs.createDirectory(directory);
+    let file = vscode.Uri.joinPath(directory, recorded.fileName);
+    for (let suffix = 2; suffix < 100; suffix += 1) {
+      try {
+        await vscode.workspace.fs.stat(file);
+      } catch {
+        break;
+      }
+      file = vscode.Uri.joinPath(directory, `${recorded.apiId}_${suffix}.dx`);
+    }
+    await vscode.workspace.fs.writeFile(file, new TextEncoder().encode(recorded.source));
+    await application.reload();
+    await sidebar.refresh();
+    const document = await vscode.workspace.openTextDocument(file);
+    await vscode.window.showTextDocument(document, { preview: false });
   };
   // A conversation tab may still be unsaved, so it is addressed by id rather
   // than looked up in history.
@@ -134,6 +179,35 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
   updateTrustContext();
   updateHistoryContext();
+  const completionHost = new DextCompletionHost({
+    settings: () => application.completionSettings(),
+    apiKey: () => application.completionApiKey()
+  });
+  const completionDiagnostics = vscode.window.createOutputChannel("Dext Completion");
+  // A leftover `dext.completion` object shadows the individual settings, so it
+  // is cleared before the first keystroke rather than on next launch. It only
+  // does anything the first time, in the first window to run it.
+  void application.migrateCompletionSettings()
+    .then((migrated) => {
+      if (migrated) completionHost.refresh();
+    })
+    .catch(() => {
+      // A read-only settings file is not a reason to fail activation.
+    });
+  const completionSetup: CompletionDiagnoseOptions = {
+    report: () => completionHost.report(),
+    probe: (document, position) => completionHost.probe(document, position),
+    scope: (field) => application.completionSettingScope(field),
+    settings: () => application.completionSettings(),
+    writeSettings: (patch) => application.writeCompletionSettings(patch),
+    apiKey: () => application.completionApiKey(),
+    setApiKey: (value) => application.setCompletionApiKey(value),
+    clearApiKey: () => application.clearCompletionApiKey(),
+    verify: (settings, apiKey) => completionHost.verify(settings, apiKey),
+    suspended: () => completionHost.suspended,
+    toggle: () => completionHost.toggle(),
+    refresh: () => completionHost.refresh()
+  };
   const semanticLegend = new vscode.SemanticTokensLegend(
     [...DEXT_SEMANTIC_TOKEN_TYPES],
     [...DEXT_SEMANTIC_TOKEN_MODIFIERS]
@@ -178,6 +252,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await focusSidebar();
         sidebar.showChat();
       })
+    ),
+    vscode.commands.registerCommand("dext.history.recordWorkflow", (context?: ConversationContext) =>
+      reportCommandError(() => recordConversation(historySession(context)))
     ),
     vscode.commands.registerCommand("dext.history.copyConversation", (context?: ConversationContext) =>
       reportCommandError(async () => {
@@ -231,6 +308,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await vscode.commands.executeCommand("dext.sidebar.focus");
       sidebar.focusEditor();
     }),
+    vscode.commands.registerCommand("dext.stopExecution", () =>
+      reportCommandError(() => Promise.resolve(sidebar.stopExecution()))
+    ),
     vscode.commands.registerCommand("dext.reloadMethods", async () => {
       await application.reload();
       await sidebar.refresh();
@@ -264,6 +344,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         if (confirmed !== "Clear") return;
         await application.clearMcpAccessToken(serverName);
         await vscode.window.showInformationMessage(`Cleared the access token for MCP server '${serverName}'.`);
+      })
+    ),
+    vscode.commands.registerCommand("dext.completionMenu", () =>
+      reportCommandError(() => openCompletionMenu(completionSetup))
+    ),
+    vscode.commands.registerCommand("dext.configureCompletionModel", () =>
+      reportCommandError(() => configureCompletionModel(completionSetup))
+    ),
+    vscode.commands.registerCommand("dext.testCompletionModel", () =>
+      reportCommandError(() => testCompletionModel(completionSetup))
+    ),
+    completionDiagnostics,
+    vscode.commands.registerCommand("dext.diagnoseCompletion", () =>
+      reportCommandError(() => diagnoseCompletion(completionSetup, completionDiagnostics))
+    ),
+    vscode.commands.registerCommand("dext.setCompletionApiKey", () =>
+      reportCommandError(() => setCompletionApiKey(completionSetup))
+    ),
+    vscode.commands.registerCommand("dext.clearCompletionApiKey", () =>
+      reportCommandError(async () => {
+        await application.clearCompletionApiKey();
+        completionHost.refresh();
+        await vscode.window.showInformationMessage("Cleared the Dext completion API key.");
       })
     ),
     vscode.commands.registerCommand("dext.verifyMcpServer", () =>
@@ -396,8 +499,46 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await sidebar.refresh();
     }),
     vscode.workspace.onDidChangeConfiguration(async (event) => {
-      if (event.affectsConfiguration("dext.mcpServers") || event.affectsConfiguration("dext.mcpTools")) {
+      if (
+        event.affectsConfiguration("dext.mcpServers")
+        || event.affectsConfiguration("dext.mcpTools")
+        // A new API directory changes the registered API set, so this one has to
+        // go through a full reload rather than a refresh.
+        || event.affectsConfiguration("dext.apiDirs")
+      ) {
         await application.reload();
+        await sidebar.refresh();
+        return;
+      }
+      if (
+        event.affectsConfiguration("dext.diff.defaultView")
+        || event.affectsConfiguration("dext.submitOnEnter")
+      ) {
+        await sidebar.refresh();
+        return;
+      }
+      // Timeouts and the fan-out width take effect on the next turn without
+      // reloading the API set, which would needlessly re-scan the workspace.
+      if (
+        event.affectsConfiguration("dext.agent.timeoutMs")
+        || event.affectsConfiguration("dext.aioa.timeoutMs")
+        || event.affectsConfiguration("dext.aioa.idleTimeoutMs")
+        || event.affectsConfiguration("dext.workflow.maxConcurrency")
+      ) {
+        application.applyTimeoutSettings();
+        return;
+      }
+      // Cached completions were produced under the old configuration, and the
+      // status bar advertises the model, so both are rebuilt.
+      if (event.affectsConfiguration("dext.completion")) {
+        completionHost.refresh();
+        return;
+      }
+      if (
+        event.affectsConfiguration("dext.agentPermission")
+        || event.affectsConfiguration("dext.agentCliArgs")
+      ) {
+        application.applyAgentPermissionSettings();
         await sidebar.refresh();
         return;
       }
@@ -420,6 +561,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await application.reload();
       await sidebar.refresh();
     }),
+    completionHost,
+    // Every file document, with the exclusions applied inside the provider. A
+    // `pattern` here would be matched against the absolute path, which is one
+    // more thing that can quietly fail to match.
+    vscode.languages.registerInlineCompletionItemProvider({ scheme: "file" }, completionHost),
+    vscode.commands.registerCommand("dext.toggleCompletion", () => completionHost.toggle()),
     vscode.languages.registerCompletionItemProvider(
       { language: "dext-api", scheme: "file" },
       {

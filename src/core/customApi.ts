@@ -53,13 +53,20 @@ function identifier(value: string): boolean {
   return /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(value);
 }
 
-function apiIdFromPath(path: string): string {
+/** An API's name is its path below the directory it was found in, so the same
+ * file laid out under `.dext/api` or under a configured directory gets the same
+ * dotted id. */
+export function apiIdFromPath(path: string, root?: string): string {
   const normalized = path.replace(/\\/g, "/");
   const marker = "/.dext/api/";
   const index = normalized.lastIndexOf(marker);
-  const relative = (index >= 0 ? normalized.slice(index + marker.length) : normalized)
-    .replace(/\.dx$/i, "")
-    .replace(/^\/+/, "");
+  const normalizedRoot = root?.replace(/\\/g, "/").replace(/\/+$/, "");
+  const base = index >= 0
+    ? normalized.slice(index + marker.length)
+    : normalizedRoot && normalized.toLowerCase().startsWith(`${normalizedRoot.toLowerCase()}/`)
+      ? normalized.slice(normalizedRoot.length + 1)
+      : normalized;
+  const relative = base.replace(/\.dx$/i, "").replace(/^\/+/, "");
   return relative.split("/").filter(Boolean).join(".");
 }
 
@@ -196,14 +203,14 @@ function decoratorStringOption(options: string, name: string): string | undefine
   return match?.[1];
 }
 
-function parseHeader(path: string, source: string): CustomApiFile {
+function parseHeader(path: string, source: string, root?: string): CustomApiFile {
   const tree = parser.parse(source);
   const functionNode = firstNode(tree.topNode, "FunctionDefinition");
   if (!functionNode) throw new Error("A .dx API file must define main().");
   const nameNode = children(functionNode).find((child) => child.name === "VariableName");
   if (!nameNode || text(source, nameNode) !== "main") throw new Error("A .dx API file must export main().");
   const signature = functionSignature(source, functionNode, typedDictResults(source));
-  const id = apiIdFromPath(path);
+  const id = apiIdFromPath(path, root);
   if (!id || id.split(".").some((part) => !identifier(part))) throw new Error(`Invalid API path for '${path}'.`);
   const definition: CallableDefinition = {
     id,
@@ -268,7 +275,7 @@ export async function loadCustomApis(
       try {
         const content = await readFile(path);
         if (content === undefined) continue;
-        files.push(parseHeader(path, content));
+        files.push(parseHeader(path, content, root));
       } catch (error) {
         diagnostics.push(`${path}: ${error instanceof Error ? error.message : String(error)}`);
       }

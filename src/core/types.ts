@@ -87,6 +87,17 @@ export type WorkflowExpression =
   | { kind: "member"; object: WorkflowExpression; property: string; from: number; to: number }
   | { kind: "call"; call: WorkflowCall; from: number; to: number }
   | {
+    /** A list comprehension. Because the body cannot see anything the other
+     * items produce, every item is independent and the runtime fans them out
+     * concurrently instead of running them one after another. */
+    kind: "comprehension";
+    variable: string;
+    iterable: WorkflowExpression;
+    body: WorkflowExpression;
+    from: number;
+    to: number;
+  }
+  | {
     kind: "format";
     parts: ({ kind: "text"; text: string } | { kind: "expression"; expression: WorkflowExpression })[];
     from: number;
@@ -133,6 +144,27 @@ export type WorkflowStatement =
     condition: WorkflowCondition;
     consequent: WorkflowStatement[];
     alternate: WorkflowStatement[];
+    from: number;
+    to: number;
+  }
+  | {
+    kind: "for";
+    /** The loop variable, scoped to the body and gone once the loop ends. */
+    variable: string;
+    iterable: WorkflowExpression;
+    body: WorkflowStatement[];
+    from: number;
+    to: number;
+  }
+  | {
+    kind: "try";
+    body: WorkflowStatement[];
+    handler: WorkflowStatement[];
+    /** Name bound to the failure message inside the handler, from `except ... as
+     * name`. Only the handler can see it. */
+    error?: string;
+    /** Runs whether or not the body failed, so cleanup is not skipped. */
+    finalizer: WorkflowStatement[];
     from: number;
     to: number;
   };
@@ -233,6 +265,8 @@ export type ReviewStatus = "pass" | "warning" | "fail";
 export interface ChatResult extends DextResultBase {
   kind: "chat";
   text: string;
+  /** Workspace-relative path of the saved plan document, set only by Plan mode. */
+  planPath?: string;
 }
 
 /** Result of a continuous agent task. A patch is present when the Agent
@@ -445,4 +479,7 @@ export interface WorkflowStepResponse {
   state: ExecutionState;
   response?: RuntimeResponse;
   error?: string;
+  /** Zero-based index of a comprehension branch, so concurrent fan-out steps can
+   * be told apart and grouped in Output. Absent for ordinary sequential steps. */
+  branch?: number;
 }

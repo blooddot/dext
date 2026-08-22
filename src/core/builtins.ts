@@ -20,6 +20,22 @@ export const BUILTIN_METHODS: readonly CallableDefinition[] = [
     executor: { kind: "deterministic", handler: "askRespond" }
   },
   {
+    id: "plan",
+    title: "Plan",
+    description: "Explore the workspace read-only and produce an editable implementation plan document.",
+    kind: "command",
+    version: "1.0.0",
+    input: [
+      { name: "input", type: "string", required: true, description: "Goal to plan for. Use @workspace/path tokens for attached code references." },
+      { name: "skills", type: "string", multiple: true, internal: true, description: "Optional Dext skill identifiers loaded only for this Plan call." },
+      { name: "rules", type: "string", multiple: true, internal: true, description: "Optional .dext/rules-relative files loaded only for this Plan call." },
+      { name: "workspace", type: "dir", description: "Optional workspace directory; defaults to the current project root." },
+    ],
+    output: { kind: "chat" },
+    context: [...CONTEXTS],
+    executor: { kind: "deterministic", handler: "askRespond" }
+  },
+  {
     id: "agent",
     title: "Agent",
     description: "Run a continuous task from a string input with optional inline Dext references. By default, the selected Agent may modify a trusted workspace.",
@@ -65,7 +81,7 @@ export const BUILTIN_METHODS: readonly CallableDefinition[] = [
   {
     id: "terminal",
     title: "Run Terminal Command",
-    description: "Run a confirmed command in a trusted local workspace and return captured output.",
+    description: "Run a command in a trusted local workspace and return captured output. The command runs without a confirmation prompt, so a workflow decides what is safe to run.",
     kind: "command",
     version: "1.0.0",
     input: [

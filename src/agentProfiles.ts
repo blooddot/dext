@@ -26,8 +26,17 @@ export interface AgentModelOption {
   serviceTiers: string[];
 }
 
+/** How much of the machine an Agent turn may touch. `read-only` proposes a
+ * patch for review, `workspace-write` edits the trusted workspace, and
+ * `full-access` drops the provider sandbox entirely. */
+export type AgentPermission = "read-only" | "workspace-write" | "full-access";
+
+export const AGENT_PERMISSIONS: readonly AgentPermission[] = ["read-only", "workspace-write", "full-access"];
+
 export interface AgentSelection {
-  mode?: "agent" | "ask" | "code";
+  mode?: "agent" | "ask" | "plan" | "code";
+  /** Only Agent mode reads this; Ask and Plan are read-only by definition. */
+  permission?: AgentPermission;
   profileId?: string;
   model?: string;
   reasoningEffort?: string;
@@ -193,6 +202,7 @@ export class AgentProfileStore {
   setSelection(selection: AgentSelection): void {
     this.selection = {
       ...(selection.mode ? { mode: selection.mode } : {}),
+      ...(selection.permission ? { permission: selection.permission } : {}),
       ...(selection.profileId ? { profileId: selection.profileId } : {}),
       ...(selection.model ? { model: selection.model } : {}),
       ...(selection.reasoningEffort ? { reasoningEffort: selection.reasoningEffort } : {}),

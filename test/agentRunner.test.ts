@@ -7,9 +7,12 @@ import {
   agentProcessEnvironment,
   claudeConversationArguments,
   claudeCliArguments,
+  claudePermissionMode,
   codexConversationArguments,
   codexCliArguments,
   codexOutputSchema,
+  codexSandbox,
+  permissionForWrite,
   extractConversationText,
   extractClaudeResult,
   parseClaudeStreamLine,
@@ -117,7 +120,10 @@ describe("CLI command resolution", () => {
   });
 
   it("uses Claude Code's non-interactive structured streaming flags", () => {
-    const args = claudeCliArguments({ model: "sonnet", reasoningEffort: "high" }, { type: "object" });
+    const args = claudeCliArguments(
+      { model: "sonnet", reasoningEffort: "high", permission: "read-only" },
+      { type: "object" }
+    );
     expect(args).toEqual(expect.arrayContaining([
       "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
       "--json-schema", JSON.stringify({ type: "object" }), "--no-session-persistence",
@@ -126,14 +132,52 @@ describe("CLI command resolution", () => {
   });
 
   it("uses normal provider prompts without an output schema for conversations", () => {
-    expect(codexConversationArguments({ allowWorkspaceWrite: true }, "priority"))
+    expect(codexConversationArguments({ permission: "workspace-write" }, "priority"))
       .toEqual(expect.arrayContaining(["exec", "--json", "--sandbox", "workspace-write", "--skip-git-repo-check"]));
-    expect(codexConversationArguments({ allowWorkspaceWrite: false }))
+    expect(codexConversationArguments({ permission: "read-only" }))
       .toEqual(expect.arrayContaining(["--sandbox", "read-only"]));
-    expect(codexConversationArguments({ allowWorkspaceWrite: false })).not.toContain("--output-schema");
-    expect(claudeConversationArguments({ allowWorkspaceWrite: false }))
+    expect(codexConversationArguments({ permission: "read-only" })).not.toContain("--output-schema");
+    expect(codexConversationArguments({ permission: "read-only" })).not.toContain("--skip-git-repo-check");
+    expect(claudeConversationArguments({ permission: "read-only" }))
       .toEqual(expect.arrayContaining(["--permission-mode", "plan"]));
-    expect(claudeConversationArguments({ allowWorkspaceWrite: true })).not.toContain("--json-schema");
+    expect(claudeConversationArguments({ permission: "workspace-write" })).not.toContain("--json-schema");
+  });
+
+  it("maps each permission tier onto the flag its provider understands", () => {
+    expect(claudePermissionMode("read-only")).toBe("plan");
+    expect(claudePermissionMode("workspace-write")).toBe("acceptEdits");
+    expect(claudePermissionMode("full-access")).toBe("bypassPermissions");
+    expect(codexSandbox("read-only")).toBe("read-only");
+    expect(codexSandbox("workspace-write")).toBe("workspace-write");
+    expect(codexSandbox("full-access")).toBe("danger-full-access");
+    // Full access still needs the git check skipped, exactly like a write turn.
+    expect(codexConversationArguments({ permission: "full-access" }))
+      .toEqual(expect.arrayContaining(["--sandbox", "danger-full-access", "--skip-git-repo-check"]));
+    expect(claudeConversationArguments({ permission: "full-access" }))
+      .toEqual(expect.arrayContaining(["--permission-mode", "bypassPermissions"]));
+    // The DSL only ever knows about writing or not, so it can never reach the
+    // top tier however the composer is configured.
+    expect(permissionForWrite(true)).toBe("workspace-write");
+    expect(permissionForWrite(false)).toBe("read-only");
+    expect(permissionForWrite(undefined)).toBe("read-only");
+  });
+
+  it("appends passthrough CLI arguments after Dext's own and before Codex's stdin marker", () => {
+    const codex = codexConversationArguments(
+      { permission: "workspace-write" },
+      undefined,
+      ["--config", 'sandbox_workspace_write.network_access=true']
+    );
+    expect(codex.slice(-3)).toEqual([
+      "--config", 'sandbox_workspace_write.network_access=true', "-"
+    ]);
+    // A passthrough argument must never be able to displace the sandbox flag.
+    expect(codex.indexOf("--sandbox")).toBeLessThan(codex.indexOf("sandbox_workspace_write.network_access=true"));
+    const claude = claudeConversationArguments({ permission: "read-only" }, ["--add-dir", "/tmp/scratch"]);
+    expect(claude.slice(-2)).toEqual(["--add-dir", "/tmp/scratch"]);
+    expect(claude.indexOf("--permission-mode")).toBeLessThan(claude.indexOf("--add-dir"));
+    const structured = codexCliArguments({}, "output-schema.json", "read-only", undefined, ["--profile", "audit"]);
+    expect(structured.slice(-3)).toEqual(["--profile", "audit", "-"]);
   });
 
   it("keeps ordinary conversation replies as raw text", () => {
@@ -145,13 +189,13 @@ describe("CLI command resolution", () => {
   });
 
   it("opens workspace writes only for an explicit agent apply request", () => {
-    expect(codexCliArguments({}, "output-schema.json", false)).toEqual(expect.arrayContaining([
+    expect(codexCliArguments({}, "output-schema.json", "read-only")).toEqual(expect.arrayContaining([
       "--sandbox", "read-only"
     ]));
-    expect(codexCliArguments({}, "output-schema.json", true)).toEqual(expect.arrayContaining([
+    expect(codexCliArguments({}, "output-schema.json", "workspace-write")).toEqual(expect.arrayContaining([
       "--sandbox", "workspace-write", "--skip-git-repo-check"
     ]));
-    expect(claudeCliArguments({ allowWorkspaceWrite: true }, { type: "object" }))
+    expect(claudeCliArguments({ permission: "workspace-write" }, { type: "object" }))
       .toEqual(expect.arrayContaining(["--permission-mode", "acceptEdits"]));
   });
 
@@ -164,7 +208,7 @@ describe("CLI command resolution", () => {
       context: []
     });
     expect(payload).not.toHaveProperty("output_schema");
-    expect(codexCliArguments({ model: "gpt-5", reasoningEffort: "high" }, "output-schema.json", false, "priority"))
+    expect(codexCliArguments({ model: "gpt-5", reasoningEffort: "high" }, "output-schema.json", "read-only", "priority"))
       .toEqual(expect.arrayContaining([
         "--ephemeral", "--sandbox", "read-only", "--output-schema", "output-schema.json",
         "--model", "gpt-5", "--config", 'model_reasoning_effort="high"',

@@ -40,6 +40,8 @@ export const reviewResultSchema = z.object({
     })
   )
 });
+/** `planPath` is deliberately absent: Dext attaches it after a Plan turn, so
+ * advertising it in the contract would only invite an agent to invent one. */
 export const chatResultSchema = z.object({ kind: z.literal("chat"), text: z.string() });
 export const agentResultSchema = z.object({
   kind: z.literal("agent"),

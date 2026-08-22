@@ -20,7 +20,7 @@ if preview.patch:
     applied = apply(result=preview)
 ```
 
-The input workflow language supports assignment, keyword-only API calls, strings (including triple-quoted strings), numbers, booleans, homogeneous lists, result member access, comments, and `if`/`else` with `==` or `!=`. `ask` and `agent` accept ordinary strings. Dropping a file into either input writes a readable `@workspace/path#Lstart,end-Lend,end` token; the editor, Output, and History render that token as an atomic Chip while copy and execution retain the same readable string. Dext never inlines file contents into the prompt. `.dx` API files additionally support one typed `main()` function and explicit imports. User functions/classes, loops, reassignment, `eval`, `exec`, and system/file/network APIs are rejected. Execution is sequential; unselected and downstream steps are reported as `skipped`.
+The input workflow language supports assignment, keyword-only API calls, strings (including triple-quoted strings), numbers, booleans, homogeneous lists, result member access, comments, `if`/`else` with `==` or `!=`, and `for name in list:` over a homogeneous list. The loop variable takes the list's element type and only exists inside the body. A list comprehension, `[call(...) for name in list]`, is the one construct that runs concurrently: its branches cannot see one another, so Dext fans them out up to `dext.workflow.maxConcurrency` and collects the results in list order. One `for` clause, no `if` filter. `try`/`except` with an optional `finally` replaces the default all-or-nothing behavior: a failing step inside the body hands control to the handler and the workflow keeps going. `except Exception as name:` binds the failure message as a string, visible only inside the handler. There is one failure channel, so a named exception type is rejected rather than silently ignored, and stopping a run is never caught — cancellation passes through and the handler does not run. `ask` and `agent` accept ordinary strings. Dropping a file into either input writes a readable `@workspace/path#Lstart,end-Lend,end` token; the editor, Output, and History render that token as an atomic Chip while copy and execution retain the same readable string. Dext never inlines file contents into the prompt. `.dx` API files additionally support one typed `main()` function and explicit imports. User functions/classes, `while`, reassignment, `eval`, `exec`, and system/file/network APIs are rejected. Execution is sequential apart from comprehension fan-out; unselected and downstream steps are reported as `skipped`.
 
 ## Built-in API
 
@@ -95,6 +95,8 @@ def main(input: str) -> ChatResult:
     return ask(input=input)
 ```
 
+A conversation can be turned into a starting point instead of being written from scratch: right-click a Dext History entry and choose **Record Conversation as Dext Workflow**. Each successful turn becomes a step, a prompt repeated across turns becomes a `main()` parameter, a confirmation the conversation went through becomes a `ui.confirm` call, and a Code-mode turn is left as a comment. The file is written under `.dext/api` and opened for editing; it is a skeleton to revise, not a finished API.
+
 `.dx` uses a restricted Python-like syntax. It is parsed by Dext and never starts a Python interpreter. Imports are explicit and only refer to other `.dext/api` files; external files are not read until VS Code marks the workspace as trusted. A nested `agent(...)` or `ask(...)` call may set `skills=["name"]` and `rules=["path.md"]`. Skills are explicit packages, while rules are ordered policy files. Rule paths are resolved only below `<workspace>/.dext/rules`; skill packages are discovered only below `<workspace>/.dext/skills` unless the user explicitly configures an additional `dext.skillDirs` directory. Dext loads selected skills first and rules last, so the API's narrow rules constrain the general skill workflow. These two parameters are internal workflow controls and do not appear in ordinary user-facing API signatures.
 
 Typed results use Python's standard `TypedDict`, `Literal`, and `NotRequired` annotations rather than Dext-specific classes. The declared `kind` must be one `Literal` string; fields become the API output JSON Schema and member completions. TypedDict inheritance, `Protocol`, and complex generic types are intentionally unsupported.
@@ -153,6 +155,21 @@ The AIOA window remains an AIOA-owned desktop application; Dext does not access 
 
 Built-in APIs are always available. Custom APIs are scoped by explicit `import` or `from ... import ...` statements; completion, hover, signatures, and compilation use the same import scope.
 
+## Inline completion
+
+Inline completion is a separate backend from the agent profiles, because the Codex, Claude, and AIOA CLIs answer in seconds and a completion has to arrive between two keystrokes. Click the Dext status bar item, or run `Dext: Configure Completion Model`, and a short wizard asks for the API format, the base URL, the model ID, and the key, then offers to send one real request to check the whole thing works. The API key is never a setting: it is kept in VS Code's encrypted secret storage. Everything else lands in `dext.completion` in user settings, so a model configured once is available in every project.
+
+Four formats are supported, and the choice has to match what the endpoint actually serves:
+
+- `openai` — an OpenAI-compatible `/completions` endpoint that takes a `prompt` and a `suffix`. The fastest and most exact option, but only dedicated fill-in-the-middle models serve it.
+- `openai-chat` — `/chat/completions`, which is what most providers expose, DeepSeek and Qwen included. There is no suffix field, so the code on either side of the cursor is sent as a chat prompt.
+- `anthropic` — Claude's `/messages` endpoint, emulating fill-in-the-middle the same way.
+- `ollama` — a local Ollama server called through `/api/generate`, using its own fill-in-the-middle fields. No key needed.
+
+The two chat formats are slower and less exact than a real FIM model, and the reply is stripped of any code fence it comes wrapped in, so pick the fastest model the provider offers. Choosing the wrong format is the easiest way to get a backend that reports itself configured and completes nothing: the endpoint answers HTTP 200 with a body the other format cannot read a single character out of. Dext detects that case specifically and says which format to switch to, both during the connection test and on the first failed keystroke.
+
+Completion is off until an endpoint and a model are both configured. Requests are debounced, cancelled when the next keystroke arrives, and cached per exact cursor position, so the same position never asks twice. Context is a prefix and suffix window measured in characters rather than lines, so one long generated line cannot exhaust the budget. Files excluded by `.gitignore` are skipped, and a `.dextignore` in the workspace root adds to those rules — read last, so it can also re-include a path `.gitignore` excluded. `.dx` files are left to the typed API completion provider. The status bar item turns completion off for the current window without editing settings, which is what makes it easy to live alongside another completion extension.
+
 ## Architecture
 
 - `src/core/workflow.ts`: Lezer Python parser traversal, restricted AST, semantic types, and exact diagnostics.
@@ -164,6 +181,8 @@ Built-in APIs are always available. Custom APIs are scoped by explicit `import` 
 - `src/core/customApi.ts`: `.dext/api` loader, imports, signatures, and custom plans.
 - `src/core/agentRunner.ts`: structured Codex/Claude CLI adapter boundary.
 - `src/core/aioaCdp.ts`: local AIOA CDP attach/launch and Dext task-session adapter.
+- `src/core/completionProvider.ts`: fill-in-the-middle backend, cache, and secret-stored key.
+- `src/core/workflowRecorder.ts`: History conversation to `.dx` skeleton.
 - `src/webview/codeEditor.ts`: CodeMirror Python language integration.
 
 ## Development
