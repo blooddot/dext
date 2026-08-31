@@ -163,14 +163,15 @@ describe("sidebar panel layout", () => {
 
   it("colors Send with the accent of the mode it will run in", async () => {
     const css = await source("media/styles.css");
-    // Agent is the plain default; the other modes retint the same two
+    // Agent is the plain default; the other modes retint the shared accent
     // properties, which both the mode control and Send read.
-    expect(css).toMatch(/\.input-section \{[\s\S]*?--composer-accent: var\(--vscode-button-background\);[\s\S]*?--composer-accent-foreground: var\(--vscode-button-foreground\);/);
+    expect(css).toMatch(/\.input-section \{[\s\S]*?--composer-accent: var\(--vscode-button-background\);[\s\S]*?--composer-accent-fill: var\(--composer-accent\);[\s\S]*?--composer-accent-foreground: var\(--vscode-button-foreground\);/);
     expect(css).toMatch(/\.input-section\[data-mode="ask"\] \{\n {2}--composer-accent: var\(--vscode-terminal-ansiGreen/);
-    expect(css).toMatch(/\.input-section\[data-mode="plan"\] \{\n {2}--composer-accent: var\(--vscode-terminal-ansiYellow/);
+    expect(css).toMatch(/\.input-section\[data-mode="plan"\] \{[\s\S]*?--composer-accent: var\(--vscode-notificationsWarningIcon-foreground, #cca700\);[\s\S]*?--composer-accent-fill: color-mix\([\s\S]*?var\(--composer-accent\) 38%/);
+    expect(css).toMatch(/\.input-section\[data-mode="plan"\] \{[\s\S]*?--composer-accent-foreground: color-mix\([\s\S]*?var\(--composer-accent\) 72%/);
     expect(css).toMatch(/\.input-section\[data-mode="code"\] \{\n {2}--composer-accent: var\(--vscode-terminal-ansiCyan/);
-    expect(css).toMatch(/#run \{[\s\S]*?color: var\(--composer-accent-foreground, var\(--vscode-button-foreground\)\);[\s\S]*?background: var\(--composer-accent, var\(--vscode-button-background\)\);/);
-    expect(css).toMatch(/#run:hover:not\(:disabled\) \{[\s\S]*?color-mix\([\s\S]*?var\(--composer-accent/);
+    expect(css).toMatch(/#run \{[\s\S]*?color: var\(--composer-accent-foreground, var\(--vscode-button-foreground\)\);[\s\S]*?background: var\(--composer-accent-fill, var\(--vscode-button-background\)\);/);
+    expect(css).toMatch(/#run:hover:not\(:disabled\) \{[\s\S]*?color-mix\([\s\S]*?var\(--composer-accent-fill/);
     // The mode control reads the same accent rather than repeating the colors.
     expect(css).toMatch(/\.input-section\[data-mode="code"\] #mode-control \{[\s\S]*?border-color: color-mix\(in srgb, var\(--composer-accent\) 68%[\s\S]*?color: var\(--composer-accent\);[\s\S]*?background: color-mix\(in srgb, var\(--composer-accent\) 14%/);
     expect(css).toMatch(/\.input-section\[data-mode="code"\] #mode-control:focus-visible \{[\s\S]*?outline: 1px solid var\(--composer-accent\);/);
@@ -298,7 +299,8 @@ describe("sidebar panel layout", () => {
     expect(css).toMatch(/\.code-editor \{[\s\S]*?height: 100%;[\s\S]*?min-height: 0;[\s\S]*?\}/);
     expect(css).toMatch(/\.attachment-bar \{[\s\S]*?max-height: 76px;[\s\S]*?overflow: auto;[\s\S]*?\}/);
     expect(css).toMatch(/\.input-section\.section-collapsed,[\s\S]*?\.result-section\.section-collapsed \{[\s\S]*?flex: 0 0 auto;/);
-    expect(css).toMatch(/\.result-section \{[\s\S]*?flex: 1 1 auto;/);
+    expect(css).toMatch(/\.result-section \{[\s\S]*?flex: 1 1 0;/);
+    expect(css).toMatch(/#result-body \{[\s\S]*?flex-basis: 0;[\s\S]*?min-height: 0;[\s\S]*?overflow: auto;/);
     expect(css).toMatch(/@media \(max-height: 480px\)[\s\S]*?\.input-section \{[\s\S]*?--input-editor-height: clamp\(56px, 20vh, 96px\);/);
     expect(css).toMatch(/main\.workspace-fullscreen > \.panel-expanded \{[\s\S]*?max-height: none;/);
   });
@@ -345,15 +347,15 @@ describe("sidebar panel layout", () => {
     expect(clear).not.toContain("deleteImageAttachment");
     expect(main).not.toContain("function clearImageAttachments");
     expect(main).toMatch(/image-attachment-remove[\s\S]*?type: "deleteImageAttachment"/);
-    expect(sidebar).toMatch(/private setRunning\(running: boolean\): void \{[\s\S]*?"setContext", "dext\.running", running/);
-    expect(sidebar).toMatch(/stopExecution\(\): void \{[\s\S]*?this\.activeExecution\.controller\.abort\(\);/);
+    expect(sidebar).toMatch(/private updateRunningContext\(\): void \{[\s\S]*?"dext\.running",[\s\S]*?this\.activeExecutions\.has\(this\.activeSession\.id\)/);
+    expect(sidebar).toMatch(/stopExecution\(\): void \{[\s\S]*?this\.activeExecutions\.get\(this\.activeSession\.id\)[\s\S]*?execution\.controller\.abort\(\);/);
   });
 
   it("defers temporary image deletion until the running turn has consumed its input", async () => {
     const sidebar = await source("src/sidebarProvider.ts");
     expect(sidebar).toContain("private readonly pendingAttachmentDeletes = new Set<string>();");
-    expect(sidebar).toMatch(/case "deleteImageAttachment":[\s\S]*?if \(this\.running\) this\.pendingAttachmentDeletes\.add\(request\.relativePath\);/);
-    expect(sidebar).toMatch(/this\.setRunning\(false\);[\s\S]*?await this\.flushAttachmentDeletes\(\);/);
+    expect(sidebar).toMatch(/case "deleteImageAttachment":[\s\S]*?if \(this\.activeExecutions\.size\) this\.pendingAttachmentDeletes\.add\(request\.relativePath\);/);
+    expect(sidebar).toMatch(/if \(!this\.activeExecutions\.size\) await this\.flushAttachmentDeletes\(\);/);
   });
 
   it("keeps live trace entries in event arrival order and folds consecutive commands together", async () => {
@@ -418,6 +420,13 @@ describe("sidebar panel layout", () => {
     expect(renderAgentEvent).not.toContain("setSectionOpen(elements.resultHeading, elements.resultBody, true)");
   });
 
+  it("keeps live Process output visible without disrupting manual scrolling", async () => {
+    const main = await source("src/webview/main.ts");
+    expect(main).toMatch(/function resultIsNearBottom[\s\S]*?scrollHeight - scrollTop - clientHeight <= 24/);
+    expect(main).toMatch(/function followResultIfNeeded[\s\S]*?requestAnimationFrame[\s\S]*?scrollTop = elements\.resultBody\.scrollHeight/);
+    expect(main).toMatch(/message\.type === "agentEvent" && message\.sessionId === activeConversationId[\s\S]*?const shouldFollow = resultIsNearBottom\(\);[\s\S]*?renderAgentEvent\(message\.event\);[\s\S]*?followResultIfNeeded\(shouldFollow\);/);
+  });
+
   it("supports shared panel fullscreen and stop execution interactions", async () => {
     const main = await source("src/webview/main.ts");
     const sidebar = await source("src/sidebarProvider.ts");
@@ -426,8 +435,31 @@ describe("sidebar panel layout", () => {
     expect(main).toMatch(/if \(fullscreenPanel\)[\s\S]*toggleFullscreen\(panelName\);[\s\S]*setSectionOpen\(heading, body, false\);/);
     expect(main).not.toContain('onHeightChanged(height)');
     expect(main).toContain('vscode.postMessage({ type: "stopExecution", turnId: activeTurnId })');
-    expect(sidebar).toContain('private activeExecution: { turnId: string; controller: AbortController } | undefined;');
-    expect(sidebar).toContain('this.activeExecution?.turnId === request.turnId');
+    expect(sidebar).toContain('private readonly activeExecutions = new Map<string, {');
+    expect(sidebar).toContain('if (execution.turnId === request.turnId) execution.controller.abort();');
+  });
+
+  it("keeps agent turns running independently across conversation tabs", async () => {
+    const sidebar = await source("src/sidebarProvider.ts");
+    const main = await source("src/webview/main.ts");
+    const protocol = await source("src/webviewProtocol.ts");
+    const css = await source("media/styles.css");
+    expect(sidebar).not.toContain("Wait for the current Dext turn to finish before starting another conversation.");
+    expect(sidebar).toMatch(/const session = this\.activeSession;[\s\S]*?this\.activeExecutions\.has\(sessionId\)[\s\S]*?this\.activeExecutions\.set\(sessionId/);
+    expect(sidebar).toMatch(/onAgentEvent:[\s\S]*?this\.postAgentEvent\(sessionId, event\)/);
+    expect(sidebar).toMatch(/this\.history\.addSuccess\(source, events, response, sessionId, mode\)/);
+    expect(protocol).toContain('running: boolean;');
+    expect(protocol).toContain('{ type: "agentEvent"; sessionId: string; event: AgentStreamEvent }');
+    expect(main).toContain("const runningConversationIds = new Set<string>();");
+    expect(main).toMatch(/function selectConversation[\s\S]*?sessionId === activeConversationId/);
+    expect(main).toMatch(/const activeChanged = activeConversationId !== activeId;[\s\S]*?activeChanged \|\| !runningConversationIds\.has\(activeId\)/);
+    expect(main).toMatch(/message\.type === "agentEvent" && message\.sessionId === activeConversationId/);
+    expect(main).toMatch(/const existingTurn = outputTurns\.get\(message\.turnId\)/);
+    // Codicons declares `.codicon[class*='codicon-'] { display: inline-block }`.
+    // The idle rule needs matching specificity so the activity icon does not
+    // appear on every newly opened conversation.
+    expect(css).toMatch(/\.conversation-tab \.conversation-tab-activity \{[\s\S]*?display: none/);
+    expect(css).toMatch(/\.conversation-tab\.running \.conversation-tab-activity[\s\S]*?display: inline-block/);
   });
 
   it("opens the complete API list in a dialog and keeps method insertion intact", async () => {

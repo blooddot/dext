@@ -118,6 +118,7 @@ const PERMISSION_ICON: Record<AgentPermission, string> = {
 let agentPermission: AgentPermission = "workspace-write";
 let sidebarState: SidebarState | undefined;
 let activeConversationId: string | undefined;
+const runningConversationIds = new Set<string>();
 let dropPosition: number | undefined;
 let pendingDropPosition: number | undefined;
 let agentStream: HTMLElement | undefined;
@@ -232,7 +233,6 @@ function updateRunState(): void {
     ? stopping || !activeTurnId
     : !editor.source.trim() || (codeMode && (hasErrors || inputKind === "invalid"));
   elements.clearOutput.disabled = executing;
-  elements.conversationTabs.classList.toggle("busy", executing);
   elements.runLabel.textContent = executing ? (stopping ? "Stopping" : "Stop") : codeMode ? "Run" : "Send";
   const runIcon = elements.run.querySelector<HTMLElement>("i");
   if (runIcon) runIcon.className = `codicon codicon-${executing ? "debug-stop" : "run"}`;
@@ -706,12 +706,12 @@ function submitAgentSelection(change: Partial<SidebarState["agentSelection"]>): 
 }
 
 function selectConversation(sessionId: string): void {
-  if (executing || sessionId === activeConversationId) return;
+  if (sessionId === activeConversationId) return;
   vscode.postMessage({ type: "selectConversation", sessionId });
 }
 
 function closeConversation(sessionId: string): void {
-  if (executing) return;
+  if (runningConversationIds.has(sessionId)) return;
   vscode.postMessage({ type: "closeConversation", sessionId });
 }
 
@@ -720,17 +720,31 @@ function pinConversation(sessionId: string, pinned: boolean): void {
 }
 
 function renderConversations(sessions: readonly ConversationSummary[], activeId: string): void {
+  const activeChanged = activeConversationId !== activeId;
   activeConversationId = activeId;
+  runningConversationIds.clear();
+  for (const conversation of sessions) {
+    if (conversation.running) runningConversationIds.add(conversation.id);
+  }
+  // The next scoped `executing` message installs the selected conversation's
+  // turn id. Clear the previous one even when both tabs happen to be running,
+  // otherwise Stop can briefly target the conversation we just left.
+  if (activeChanged || !runningConversationIds.has(activeId)) {
+    executing = false;
+    stopping = false;
+    activeTurnId = undefined;
+    updateRunState();
+  }
   elements.conversationTabs.replaceChildren();
   elements.conversationTabs.hidden = sessions.length === 0;
   let activeTab: HTMLElement | undefined;
   for (const conversation of sessions) {
     const active = conversation.id === activeId;
     const tab = document.createElement("div");
-    tab.className = `conversation-tab${active ? " active" : ""}${conversation.pinned ? " pinned" : ""}`;
+    tab.className = `conversation-tab${active ? " active" : ""}${conversation.pinned ? " pinned" : ""}${conversation.running ? " running" : ""}`;
     tab.setAttribute("role", "tab");
     tab.setAttribute("aria-selected", String(active));
-    tab.title = conversation.title;
+    tab.title = conversation.running ? `${conversation.title} — running` : conversation.title;
     // VS Code reads this attribute to build the native tab context menu and
     // passes the merged object to the invoked command.
     tab.dataset.vscodeContext = JSON.stringify({
@@ -753,12 +767,19 @@ function renderConversations(sessions: readonly ConversationSummary[], activeId:
     label.className = "conversation-tab-label";
     label.textContent = conversation.title;
     label.addEventListener("click", () => selectConversation(conversation.id));
+    const activity = document.createElement("i");
+    activity.className = "conversation-tab-activity codicon codicon-loading codicon-modifier-spin";
+    activity.title = "Dext turn running";
+    activity.setAttribute("aria-label", "Dext turn running");
     // A pinned tab trades its close button for the pin that releases it, so
     // that pinned conversations are not dismissed by a stray click.
     const action = document.createElement("button");
     action.type = "button";
     action.className = conversation.pinned ? "conversation-tab-pin" : "conversation-tab-close";
-    action.title = conversation.pinned ? "Unpin conversation" : "Close conversation";
+    action.title = conversation.running
+      ? "Stop the running turn before closing"
+      : conversation.pinned ? "Unpin conversation" : "Close conversation";
+    action.disabled = conversation.running;
     action.setAttribute("aria-label", `${conversation.pinned ? "Unpin" : "Close"} ${conversation.title}`);
     const actionIcon = document.createElement("i");
     actionIcon.className = `codicon codicon-${conversation.pinned ? "pinned" : "close"}`;
@@ -768,7 +789,7 @@ function renderConversations(sessions: readonly ConversationSummary[], activeId:
       if (conversation.pinned) pinConversation(conversation.id, false);
       else closeConversation(conversation.id);
     });
-    tab.append(label, action);
+    tab.append(label, activity, action);
     if (active) activeTab = tab;
     elements.conversationTabs.append(tab);
   }
@@ -1621,6 +1642,20 @@ function renderError(message: unknown): void {
   renderInputError(message);
 }
 
+/** Keep a live Agent trace in view only while the reader is already at its
+ * end. Scrolling upward to inspect an earlier event must remain stable. */
+function resultIsNearBottom(): boolean {
+  const { scrollTop, scrollHeight, clientHeight } = elements.resultBody;
+  return scrollHeight - scrollTop - clientHeight <= 24;
+}
+
+function followResultIfNeeded(shouldFollow: boolean): void {
+  if (!shouldFollow) return;
+  requestAnimationFrame(() => {
+    elements.resultBody.scrollTop = elements.resultBody.scrollHeight;
+  });
+}
+
 function agentStreamPanel(): HTMLElement {
   if (agentStream?.isConnected) return agentStream;
   const trace = document.createElement("details");
@@ -2149,31 +2184,41 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   if (message.type === "outputSession") renderOutputSession(message.session);
   if (message.type === "conversations") renderConversations(message.sessions, message.activeId);
   if (message.type === "openMethods") openMethodsDialog();
-  if (message.type === "execution") {
+  if (message.type === "execution" && message.sessionId === activeConversationId) {
     selectOutputTurn(message.turnId);
     renderResult(message.response, message.reviewPatch ? message.turnId : undefined);
   }
-  if (message.type === "patchResolved") {
+  if (message.type === "patchResolved" && message.sessionId === activeConversationId) {
     applyPatchResolution(message.turnId, message.uris, message.status, message.message);
   }
-  if (message.type === "executionFailed") {
+  if (message.type === "executionFailed" && message.sessionId === activeConversationId) {
     selectOutputTurn(message.turnId);
     renderOutputError(message.message);
   }
-  if (message.type === "agentEvent") renderAgentEvent(message.event);
-  if (message.type === "executing") {
+  if (message.type === "agentEvent" && message.sessionId === activeConversationId) {
+    const shouldFollow = resultIsNearBottom();
+    renderAgentEvent(message.event);
+    followResultIfNeeded(shouldFollow);
+  }
+  if (message.type === "executing" && message.sessionId === activeConversationId) {
     executing = message.value;
     if (message.value) {
       activeTurnId = message.turnId;
       stopping = false;
-      createOutputTurn(message.turnId, message.source ?? "Dext turn");
-      resetAgentTrace();
-      startAgentProgress();
+      const existingTurn = outputTurns.get(message.turnId);
+      if (existingTurn) {
+        activeTurn = existingTurn;
+      } else {
+        createOutputTurn(message.turnId, message.source ?? "Dext turn");
+        resetAgentTrace();
+        startAgentProgress();
+      }
       elements.resultSection.classList.remove("hidden");
       if (!fullscreenPanel || fullscreenPanel === "result") {
         setSectionOpen(elements.resultHeading, elements.resultBody, true);
       }
     } else {
+      const shouldFollow = resultIsNearBottom();
       if (activeTurnId === message.turnId) activeTurnId = undefined;
       stopping = false;
       selectOutputTurn(message.turnId);
@@ -2181,6 +2226,7 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
       if (activeTurn) {
         activeTurn.processDisclosure.open = false;
         activeTurn.outputDisclosure.open = true;
+        followResultIfNeeded(shouldFollow);
       }
     }
     updateRunState();

@@ -130,13 +130,20 @@ body {
   max-width: 128px;
 }
 
-.conversation-tabs.busy .conversation-tab {
-  opacity: 0.6;
+.conversation-tab .conversation-tab-activity {
+  display: none;
+  flex: 0 0 auto;
+  color: var(--vscode-progressBar-background, var(--vscode-focusBorder));
+  font-size: 13px;
 }
 
-.conversation-tabs.busy .conversation-tab-label,
-.conversation-tabs.busy .conversation-tab-close {
-  cursor: default;
+.conversation-tab.running .conversation-tab-activity {
+  display: inline-block;
+}
+
+.conversation-tab.running .conversation-tab-close,
+.conversation-tab.running .conversation-tab-pin {
+  display: none;
 }
 
 .methods-dialog {
@@ -587,8 +594,9 @@ main {
 .input-section {
   --input-editor-height: clamp(112px, 24vh, 240px);
   /* Agent is the default mode, so it keeps the plain button accent. Every
-     other mode tints the composer through these two properties. */
+     other mode tints the composer through these properties. */
   --composer-accent: var(--vscode-button-background);
+  --composer-accent-fill: var(--composer-accent);
   --composer-accent-foreground: var(--vscode-button-foreground);
   margin: 10px -10px 0;
   padding: 4px 10px 10px;
@@ -1339,7 +1347,15 @@ main {
 }
 
 .input-section[data-mode="plan"] {
-  --composer-accent: var(--vscode-terminal-ansiYellow, #d7ba7d);
+  /* Terminal yellow can be almost fluorescent in high-contrast themes. The
+     warning token is a calmer ochre, and the filled action is deliberately
+     mixed down to the deeper treatment used by Cursor's Plan control. */
+  --composer-accent: var(--vscode-notificationsWarningIcon-foreground, #cca700);
+  --composer-accent-fill: color-mix(
+    in srgb,
+    var(--composer-accent) 38%,
+    var(--vscode-editor-background)
+  );
 }
 
 .input-section[data-mode="code"] {
@@ -1349,9 +1365,16 @@ main {
 /* The accents are mid-tone colors, so the editor background reads against them
    whether the theme is dark or light. */
 .input-section[data-mode="ask"],
-.input-section[data-mode="plan"],
 .input-section[data-mode="code"] {
   --composer-accent-foreground: var(--vscode-editor-background);
+}
+
+.input-section[data-mode="plan"] {
+  --composer-accent-foreground: color-mix(
+    in srgb,
+    var(--composer-accent) 72%,
+    var(--vscode-editor-foreground)
+  );
 }
 
 .input-section[data-mode="ask"] #mode-control,
@@ -1529,13 +1552,13 @@ button.primary:hover {
    is about to happen before the button is pressed. */
 #run {
   color: var(--composer-accent-foreground, var(--vscode-button-foreground));
-  background: var(--composer-accent, var(--vscode-button-background));
+  background: var(--composer-accent-fill, var(--vscode-button-background));
 }
 
 #run:hover:not(:disabled) {
   background: color-mix(
     in srgb,
-    var(--composer-accent, var(--vscode-button-background)) 86%,
+    var(--composer-accent-fill, var(--vscode-button-background)) 86%,
     var(--vscode-editor-foreground)
   );
 }
@@ -1587,7 +1610,10 @@ button.primary:disabled {
   min-height: 34px;
   min-width: 0;
   display: flex;
-  flex: 1 1 auto;
+  /* Process can grow without bound while an Agent is running. Give this
+     section the remaining viewport space rather than letting its content
+     height participate in the flex calculation and push the composer away. */
+  flex: 1 1 0;
   flex-direction: column;
   overflow: hidden;
 }
@@ -1715,6 +1741,9 @@ button.primary.stopping {
 }
 
 #result-body {
+  /* A zero flex basis keeps long, expanded disclosures inside this scroll
+     port. Without it, their intrinsic height can escape the sidebar layout. */
+  flex-basis: 0;
   min-height: 0;
   overflow: auto;
 }

@@ -86,8 +86,12 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   // are open, while every conversation stays reachable through history.
   private openConversations: string[] = [this.activeSession.id];
   private sessionsHydrated = false;
-  private running = false;
-  private activeExecution: { turnId: string; controller: AbortController } | undefined;
+  private readonly activeExecutions = new Map<string, {
+    turnId: string;
+    source: string;
+    controller: AbortController;
+    events: AgentStreamEvent[];
+  }>();
   private readonly pendingAttachmentDeletes = new Set<string>();
   // A read-only Agent turn leaves a patch nobody applied yet. It is kept per
   // turn so two turns in the same conversation cannot resolve each other's
@@ -101,11 +105,25 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     for (const session of this.history.list()) this.sessions.set(session.id, session);
     if (!this.sessions.has(this.activeSession.id)) this.sessions.set(this.activeSession.id, this.activeSession);
     const latest = [...this.sessions.values()].sort((a, b) => b.updatedAt - a.updatedAt)[0];
-    if (latest) this.activeSession = latest;
-    // Pinning a conversation is what keeps its tab across reloads; everything
-    // else starts from the conversation that was last worked on.
+    const layout = this.preferences.conversationLayout();
+    const restored = layout.openConversationIds.filter((id) => this.sessions.has(id));
+    const previouslyActive = layout.activeConversationId
+      ? this.sessions.get(layout.activeConversationId)
+      : undefined;
+    if (previouslyActive) this.activeSession = previouslyActive;
+    else if (latest) this.activeSession = latest;
+    // Keep every tab the user left open, including non-pinned ones. Pins still
+    // provide a backwards-compatible fallback for layouts saved before this
+    // state was introduced.
     const pinned = this.preferences.pinned().filter((id) => this.sessions.has(id));
-    this.openConversations = [...new Set([...pinned, this.activeSession.id])];
+    this.openConversations = [...new Set([...restored, ...pinned, this.activeSession.id])];
+  }
+
+  private async persistConversationLayout(): Promise<void> {
+    await this.preferences.setConversationLayout({
+      openConversationIds: this.openConversations,
+      activeConversationId: this.activeSession.id
+    });
   }
 
   // Pinned tabs lead the strip so that they keep their place as other
@@ -121,7 +139,8 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       title: this.preferences.title(session.id) ?? conversationTitle(session),
       updatedAt: session.updatedAt,
       turnCount: session.turns.length,
-      pinned: this.preferences.isPinned(session.id)
+      pinned: this.preferences.isPinned(session.id),
+      running: this.activeExecutions.has(session.id)
     };
   }
 
@@ -137,24 +156,26 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private async activateConversation(session: DextHistorySession): Promise<void> {
-    if (session.id !== this.activeSession.id) {
-      this.application.endAgentSession(this.activeSession.id);
-      this.activeSession = session;
-    }
+    this.activeSession = session;
     if (!this.openConversations.includes(session.id)) this.openConversations.push(session.id);
+    await this.persistConversationLayout();
+    this.updateRunningContext();
     await this.postConversationState();
     await this.post({ type: "outputSession", session: this.activeSession });
+    await this.postActiveExecution(session.id);
   }
 
   // A new conversation opens its own tab, while clearing replaces the
   // conversation shown in the tab that is already active.
   private async startConversation(replaceActiveTab = false): Promise<void> {
     const index = replaceActiveTab ? this.openConversations.indexOf(this.activeSession.id) : -1;
-    this.application.endAgentSession(this.activeSession.id);
+    if (replaceActiveTab) this.application.endAgentSession(this.activeSession.id);
     this.activeSession = outputSession();
     this.sessions.set(this.activeSession.id, this.activeSession);
     if (index === -1) this.openConversations.push(this.activeSession.id);
     else this.openConversations[index] = this.activeSession.id;
+    await this.persistConversationLayout();
+    this.updateRunningContext();
     await this.postConversationState();
     await this.post({ type: "outputSession", session: this.activeSession });
   }
@@ -165,11 +186,16 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     const visible = this.orderedConversations();
     const index = visible.indexOf(sessionId);
     if (index === -1) return;
+    if (this.activeExecutions.has(sessionId)) {
+      throw new Error("Stop this Dext turn before closing its conversation.");
+    }
+    this.application.endAgentSession(sessionId);
     this.openConversations = this.openConversations.filter((id) => id !== sessionId);
     // Closing is an explicit dismissal, so a pinned conversation must not come
     // back on the next reload.
     if (this.preferences.isPinned(sessionId)) await this.preferences.setPinned(sessionId, false);
     if (sessionId !== this.activeSession.id) {
+      await this.persistConversationLayout();
       await this.postConversationState();
       return;
     }
@@ -180,10 +206,12 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       await this.startConversation();
       return;
     }
-    this.application.endAgentSession(this.activeSession.id);
     this.activeSession = session;
+    await this.persistConversationLayout();
+    this.updateRunningContext();
     await this.postConversationState();
     await this.post({ type: "outputSession", session: this.activeSession });
+    await this.postActiveExecution(session.id);
   }
 
   constructor(
@@ -239,7 +267,6 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   async newConversation(): Promise<void> {
-    if (this.running) throw new Error("Wait for the current Dext turn to finish before starting another conversation.");
     this.hydrateSessions();
     await this.startConversation();
   }
@@ -247,7 +274,6 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   // History hands over its own copy of a conversation; an already open one
   // keeps the in-memory instance so that a running turn stays attached to it.
   async openConversation(session: DextHistorySession): Promise<void> {
-    if (this.running) throw new Error("Wait for the current Dext turn to finish before switching conversations.");
     this.hydrateSessions();
     const existing = this.sessions.get(session.id) ?? session;
     this.sessions.set(existing.id, existing);
@@ -266,17 +292,19 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   async pinConversation(sessionId: string, pinned: boolean): Promise<void> {
     this.hydrateSessions();
     await this.preferences.setPinned(sessionId, pinned);
+    await this.persistConversationLayout();
     await this.postConversationState();
   }
 
   async closeTab(sessionId: string): Promise<void> {
-    if (this.running) throw new Error("Wait for the current Dext turn to finish before closing a conversation.");
     this.hydrateSessions();
     await this.closeConversation(sessionId);
   }
 
   async forgetConversation(sessionId: string): Promise<void> {
-    if (this.running) throw new Error("Wait for the current Dext turn to finish before deleting a conversation.");
+    if (this.activeExecutions.has(sessionId)) {
+      throw new Error("Stop this Dext turn before deleting its conversation.");
+    }
     this.hydrateSessions();
     this.sessions.delete(sessionId);
     if (this.openConversations.includes(sessionId)) {
@@ -284,6 +312,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       return;
     }
     if (sessionId === this.activeSession.id) await this.startConversation();
+    else await this.persistConversationLayout();
   }
 
   setInput(source: string): void {
@@ -293,8 +322,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   /** The keyboard and Command Palette route into the same abort the composer's
    * Stop button uses, so there is only one way a turn ends early. */
   stopExecution(): void {
-    if (!this.activeExecution) throw new Error("No Dext turn is running.");
-    this.activeExecution.controller.abort();
+    const execution = this.activeExecutions.get(this.activeSession.id);
+    if (!execution) throw new Error("No Dext turn is running in this conversation.");
+    execution.controller.abort();
   }
 
   async addSelectionToChat(): Promise<void> {
@@ -323,8 +353,10 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   dispose(): void {
-    this.activeExecution?.controller.abort();
-    this.application.endAgentSession(this.activeSession.id);
+    for (const [sessionId, execution] of this.activeExecutions) {
+      execution.controller.abort();
+      this.application.endAgentSession(sessionId);
+    }
     this.attachments.dispose();
     this.messageQueue.clear();
   }
@@ -344,6 +376,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           await this.refresh();
           await this.postConversationState();
           await this.post({ type: "outputSession", session: this.activeSession });
+          await this.postActiveExecution(this.activeSession.id);
           await this.flushPendingMessages(pendingMessages);
           break;
         }
@@ -370,8 +403,8 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           await this.run(request.mode, request.source);
           break;
         case "stopExecution":
-          if (this.activeExecution?.turnId === request.turnId) {
-            this.activeExecution.controller.abort();
+          for (const execution of this.activeExecutions.values()) {
+            if (execution.turnId === request.turnId) execution.controller.abort();
           }
           break;
         case "retryTurn": {
@@ -389,21 +422,21 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           await this.resolvePatch(request.turnId, request.uris, request.accept);
           break;
         case "selectConversation": {
-          if (this.running) throw new Error("Wait for the current Dext turn to finish before switching conversations.");
           const selected = this.sessions.get(request.sessionId);
           if (!selected) throw new Error("Conversation not found.");
           await this.activateConversation(selected);
           break;
         }
         case "closeConversation":
-          if (this.running) throw new Error("Wait for the current Dext turn to finish before closing a conversation.");
           await this.closeConversation(request.sessionId);
           break;
         case "pinConversation":
           await this.pinConversation(request.sessionId, request.pinned);
           break;
         case "clearOutput":
-          if (this.running) throw new Error("Wait for the current Dext turn to finish before clearing the conversation.");
+          if (this.activeExecutions.has(this.activeSession.id)) {
+            throw new Error("Stop this Dext turn before clearing the conversation.");
+          }
           await this.startConversation(true);
           break;
         case "agentSelection":
@@ -540,7 +573,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           break;
         }
         case "deleteImageAttachment":
-          if (this.running) this.pendingAttachmentDeletes.add(request.relativePath);
+          if (this.activeExecutions.size) this.pendingAttachmentDeletes.add(request.relativePath);
           else await this.deleteImage(request.relativePath);
           break;
         case "reload":
@@ -560,6 +593,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
    * resolved one entry at a time so accepting part of a proposal leaves the rest
    * pending instead of discarding it. */
   private async resolvePatch(turnId: string, uris: readonly string[], accept: boolean): Promise<void> {
+    const sessionId = this.activeSession.id;
     const pending = this.pendingPatches.get(turnId);
     if (!pending) throw new Error("These changes are no longer available for review.");
     const targets = uris.length
@@ -572,6 +606,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       this.forgetResolvedChanges(turnId, pending, remaining);
       await this.post({
         type: "patchResolved",
+        sessionId,
         turnId,
         uris: resolved,
         status: "rejected",
@@ -594,6 +629,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     }
     await this.post({
       type: "patchResolved",
+      sessionId,
       turnId,
       uris: resolved,
       status: result.status === "applied" || result.status === "unchanged" ? result.status : "conflict",
@@ -641,15 +677,19 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private async run(mode: "agent" | "ask" | "plan" | "code", source: string): Promise<void> {
-    if (this.running) throw new Error("Wait for the current Dext turn to finish before running another one.");
     source = normalizeInputReferenceSource(source);
     const events: AgentStreamEvent[] = [];
     const turnId = randomBytes(12).toString("hex");
-    const sessionId = this.activeSession.id;
+    const session = this.activeSession;
+    const sessionId = session.id;
+    if (this.activeExecutions.has(sessionId)) {
+      throw new Error("Wait for this conversation's current Dext turn to finish before running another one.");
+    }
     const controller = new AbortController();
-    this.activeExecution = { turnId, controller };
-    this.setRunning(true);
-    await this.post({ type: "executing", value: true, turnId, source });
+    this.activeExecutions.set(sessionId, { turnId, source, controller, events });
+    this.updateRunningContext();
+    await this.postConversationState();
+    await this.post({ type: "executing", sessionId, value: true, turnId, source });
     try {
       const metadata = {
         agentSessionId: sessionId,
@@ -657,43 +697,47 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         ui: this.uiInteraction(),
         onAgentEvent: (event: AgentStreamEvent) => {
           events.push({ ...event });
-          this.postAgentEvent(event);
+          this.postAgentEvent(sessionId, event);
         }
       };
       const response = mode === "code"
         ? await this.application.executeInput(source, metadata)
         : await this.application.executeConversation(mode, source, metadata);
       const turn = await this.history.addSuccess(source, events, response, sessionId, mode);
-      this.activeSession.turns.push(turn);
-      this.activeSession.updatedAt = turn.createdAt;
-      this.sessions.set(this.activeSession.id, this.activeSession);
+      session.turns.push(turn);
+      session.updatedAt = turn.createdAt;
+      this.sessions.set(sessionId, session);
       await this.postConversationState();
       const reviewable = unappliedPatch(response);
       if (reviewable) this.pendingPatches.set(turnId, reviewable);
       await this.post({
         type: "execution",
+        sessionId,
         turnId,
         response,
         ...(reviewable ? { reviewPatch: true } : {})
       });
     } catch (error) {
       const turn = await this.history.addFailure(source, events, error, sessionId, mode);
-      this.activeSession.turns.push(turn);
-      this.activeSession.updatedAt = turn.createdAt;
-      this.sessions.set(this.activeSession.id, this.activeSession);
+      session.turns.push(turn);
+      session.updatedAt = turn.createdAt;
+      this.sessions.set(sessionId, session);
       await this.postConversationState();
       await this.post({
         type: "executionFailed",
+        sessionId,
         turnId,
         message: error instanceof Error ? error.message : String(error)
       });
     } finally {
-      this.setRunning(false);
-      if (this.activeExecution?.turnId === turnId) this.activeExecution = undefined;
+      const active = this.activeExecutions.get(sessionId);
+      if (active?.turnId === turnId) this.activeExecutions.delete(sessionId);
+      this.updateRunningContext();
+      await this.postConversationState();
       try {
-        await this.flushAttachmentDeletes();
+        if (!this.activeExecutions.size) await this.flushAttachmentDeletes();
       } finally {
-        await this.post({ type: "executing", value: false, turnId });
+        await this.post({ type: "executing", sessionId, value: false, turnId });
       }
     }
   }
@@ -722,9 +766,12 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
 
   // The stop keybinding is only live while a turn is running, which keeps a
   // convenient chord from shadowing anything the rest of the time.
-  private setRunning(running: boolean): void {
-    this.running = running;
-    void vscode.commands.executeCommand("setContext", "dext.running", running);
+  private updateRunningContext(): void {
+    void vscode.commands.executeCommand(
+      "setContext",
+      "dext.running",
+      this.activeExecutions.has(this.activeSession.id)
+    );
   }
 
   private async flushAttachmentDeletes(): Promise<void> {
@@ -784,8 +831,23 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     };
   }
 
-  private postAgentEvent(event: AgentStreamEvent): void {
-    this.postWhenReady({ type: "agentEvent", event });
+  private postAgentEvent(sessionId: string, event: AgentStreamEvent): void {
+    this.postWhenReady({ type: "agentEvent", sessionId, event });
+  }
+
+  private async postActiveExecution(sessionId: string): Promise<void> {
+    const execution = this.activeExecutions.get(sessionId);
+    if (!execution) return;
+    await this.post({
+      type: "executing",
+      sessionId,
+      value: true,
+      turnId: execution.turnId,
+      source: execution.source
+    });
+    for (const event of execution.events) {
+      await this.post({ type: "agentEvent", sessionId, event });
+    }
   }
 
   private async post(message: WebviewResponse): Promise<void> {

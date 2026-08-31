@@ -65,6 +65,33 @@ describe("conversation preferences", () => {
     expect(store.pinned()).toEqual(["second"]);
   });
 
+  it("persists the open tabs and selected tab for the next VS Code session", async () => {
+    const store = preferences();
+
+    await store.setConversationLayout({
+      openConversationIds: ["first", "second", "first", ""],
+      activeConversationId: "second"
+    });
+
+    expect(store.conversationLayout()).toEqual({
+      openConversationIds: ["first", "second"],
+      activeConversationId: "second"
+    });
+
+    await store.forget("second");
+    expect(store.conversationLayout()).toEqual({ openConversationIds: ["first"] });
+  });
+
+  it("restores the saved tabs and active conversation when the sidebar is created again", async () => {
+    const sidebar = await readFile(resolve("src/sidebarProvider.ts"), "utf8");
+
+    expect(sidebar).toContain("const layout = this.preferences.conversationLayout();");
+    expect(sidebar).toContain("const restored = layout.openConversationIds.filter((id) => this.sessions.has(id));");
+    expect(sidebar).toContain("const previouslyActive = layout.activeConversationId");
+    expect(sidebar).toContain("await this.preferences.setConversationLayout({");
+    expect(sidebar).toContain("activeConversationId: this.activeSession.id");
+  });
+
   it("renders the History panel through the stored ordering and names", async () => {
     const panel = await readFile(resolve("src/historyEditorProvider.ts"), "utf8");
 

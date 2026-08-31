@@ -77,6 +77,8 @@ function trimSessions(sessions: readonly DextHistorySession[], maxTurns: number)
 }
 
 export class DextHistoryStore {
+  private mutation = Promise.resolve();
+
   /** Limits are read per write rather than captured once, so changing the
    * setting takes effect on the next turn instead of the next window. */
   constructor(
@@ -100,25 +102,29 @@ export class DextHistoryStore {
   }
 
   async remove(sessionId: string): Promise<void> {
-    const sessions = this.list().filter((session) => session.id !== sessionId);
-    await this.state.update(HISTORY_KEY, sessions);
+    await this.mutate(async () => {
+      const sessions = this.list().filter((session) => session.id !== sessionId);
+      await this.state.update(HISTORY_KEY, sessions);
+    });
   }
 
   // A fork copies turns into a conversation of its own so that continuing it
   // never appends to the conversation it came from.
   async fork(turns: readonly DextHistoryRecord[]): Promise<DextHistorySession> {
-    const createdAt = Date.now();
-    const session: DextHistorySession = {
-      id: `fork-${createdAt}-${Math.random().toString(36).slice(2, 8)}`,
-      createdAt,
-      updatedAt: createdAt,
-      turns: turns.map((turn, index) => ({
-        ...turn,
-        id: `${createdAt}-${index}-${Math.random().toString(36).slice(2, 8)}`
-      }))
-    };
-    await this.state.update(HISTORY_KEY, trimSessions([...this.list(), session], this.limits().maxTurns));
-    return session;
+    return this.mutate(async () => {
+      const createdAt = Date.now();
+      const session: DextHistorySession = {
+        id: `fork-${createdAt}-${Math.random().toString(36).slice(2, 8)}`,
+        createdAt,
+        updatedAt: createdAt,
+        turns: turns.map((turn, index) => ({
+          ...turn,
+          id: `${createdAt}-${index}-${Math.random().toString(36).slice(2, 8)}`
+        }))
+      };
+      await this.state.update(HISTORY_KEY, trimSessions([...this.list(), session], this.limits().maxTurns));
+      return session;
+    });
   }
 
   async addSuccess(
@@ -160,22 +166,33 @@ export class DextHistoryStore {
     record: Omit<DextHistoryRecord, "id" | "createdAt">,
     requestedSessionId?: string
   ): Promise<DextHistoryRecord> {
-    const createdAt = Date.now();
-    const turn: DextHistoryRecord = {
-      ...record,
-      id: `${createdAt}-${Math.random().toString(36).slice(2, 8)}`,
-      createdAt
-    };
-    const sessionId = requestedSessionId ?? `single-${turn.id}`;
-    const sessions = this.list();
-    const existing = sessions.find((session) => session.id === sessionId);
-    if (existing) {
-      existing.turns.push(turn);
-      existing.updatedAt = createdAt;
-    } else {
-      sessions.push({ id: sessionId, createdAt, updatedAt: createdAt, turns: [turn] });
-    }
-    await this.state.update(HISTORY_KEY, trimSessions(sessions, this.limits().maxTurns));
-    return turn;
+    return this.mutate(async () => {
+      const createdAt = Date.now();
+      const turn: DextHistoryRecord = {
+        ...record,
+        id: `${createdAt}-${Math.random().toString(36).slice(2, 8)}`,
+        createdAt
+      };
+      const sessionId = requestedSessionId ?? `single-${turn.id}`;
+      const sessions = this.list();
+      const existing = sessions.find((session) => session.id === sessionId);
+      if (existing) {
+        existing.turns.push(turn);
+        existing.updatedAt = createdAt;
+      } else {
+        sessions.push({ id: sessionId, createdAt, updatedAt: createdAt, turns: [turn] });
+      }
+      await this.state.update(HISTORY_KEY, trimSessions(sessions, this.limits().maxTurns));
+      return turn;
+    });
+  }
+
+  /** Agent work may finish in parallel, but VS Code mementos are whole-value
+   * writes. Queue only that short read/modify/write section so one completed
+   * conversation cannot overwrite another. */
+  private mutate<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.mutation.then(operation, operation);
+    this.mutation = result.then(() => undefined, () => undefined);
+    return result;
   }
 }

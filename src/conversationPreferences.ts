@@ -3,6 +3,7 @@ import type * as vscode from "vscode";
 const PINNED_KEY = "dext.pinnedConversations";
 const FAVORITES_KEY = "dext.favoriteConversations";
 const TITLES_KEY = "dext.conversationTitles";
+const LAYOUT_KEY = "dext.conversationLayout";
 const MAX_TITLE_LENGTH = 140;
 const SORT_ORDER_KEY = "dext.historySortOrder";
 const FAVORITES_ONLY_KEY = "dext.historyFavoritesOnly";
@@ -13,6 +14,13 @@ export interface HistoryOrdering {
   order: HistorySortOrder;
   favorites: readonly string[];
   favoritesOnly: boolean;
+}
+
+export interface ConversationLayout {
+  /** Conversation tabs that should be restored when VS Code starts again. */
+  openConversationIds: readonly string[];
+  /** The tab that was selected when the extension host last stopped. */
+  activeConversationId?: string;
 }
 
 interface OrderableSession {
@@ -90,6 +98,27 @@ export class DextConversationPreferences {
     await this.state.update(TITLES_KEY, titles);
   }
 
+  conversationLayout(): ConversationLayout {
+    const stored = this.state.get<Partial<ConversationLayout>>(LAYOUT_KEY, {});
+    const openConversationIds = Array.isArray(stored.openConversationIds)
+      ? [...new Set(stored.openConversationIds.filter((id): id is string => typeof id === "string" && Boolean(id)))]
+      : [];
+    return {
+      openConversationIds,
+      ...(typeof stored.activeConversationId === "string" && stored.activeConversationId
+        ? { activeConversationId: stored.activeConversationId }
+        : {})
+    };
+  }
+
+  async setConversationLayout(layout: ConversationLayout): Promise<void> {
+    const openConversationIds = [...new Set(layout.openConversationIds.filter(Boolean))];
+    await this.state.update(LAYOUT_KEY, {
+      openConversationIds,
+      ...(layout.activeConversationId ? { activeConversationId: layout.activeConversationId } : {})
+    } satisfies ConversationLayout);
+  }
+
   sortOrder(): HistorySortOrder {
     return this.state.get<HistorySortOrder>(SORT_ORDER_KEY, "newest") === "oldest" ? "oldest" : "newest";
   }
@@ -120,5 +149,10 @@ export class DextConversationPreferences {
     await this.setPinned(sessionId, false);
     await this.setFavorite(sessionId, false);
     await this.setTitle(sessionId, "");
+    const layout = this.conversationLayout();
+    await this.setConversationLayout({
+      openConversationIds: layout.openConversationIds.filter((id) => id !== sessionId),
+      ...(layout.activeConversationId === sessionId ? {} : { activeConversationId: layout.activeConversationId })
+    });
   }
 }

@@ -96,6 +96,7 @@ export interface ConversationSummary {
   updatedAt: number;
   turnCount: number;
   pinned: boolean;
+  running: boolean;
 }
 
 export interface SidebarState {
@@ -129,17 +130,18 @@ export type WebviewResponse =
   | { type: "openMethods" }
   /** `reviewPatch` is set when the host is holding an unapplied patch for this
    * turn, which is what puts Accept and Reject on its file changes. */
-  | { type: "execution"; turnId: string; response: InputExecutionResponse; reviewPatch?: boolean }
-  | { type: "executionFailed"; turnId: string; message: string }
+  | { type: "execution"; sessionId: string; turnId: string; response: InputExecutionResponse; reviewPatch?: boolean }
+  | { type: "executionFailed"; sessionId: string; turnId: string; message: string }
   | {
     type: "patchResolved";
+    sessionId: string;
     turnId: string;
     uris: string[];
     status: "applied" | "rejected" | "conflict" | "unchanged";
     message: string;
   }
-  | { type: "agentEvent"; event: AgentStreamEvent }
-  | { type: "executing"; value: boolean; turnId: string; source?: string }
+  | { type: "agentEvent"; sessionId: string; event: AgentStreamEvent }
+  | { type: "executing"; sessionId: string; value: boolean; turnId: string; source?: string }
   | { type: "inputKind"; kind: "empty" | "workflow" | "invalid" }
   | { type: "insertFileReferences"; expressions: string[]; position?: number }
   | { type: "imageAttachment"; relativePath: string; webviewUri: string; name: string }

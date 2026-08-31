@@ -7,6 +7,13 @@ class MemoryState {
   async update(_: string, value: unknown): Promise<void> { this.value = value; }
 }
 
+class DelayedMemoryState extends MemoryState {
+  override async update(key: string, value: unknown): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await super.update(key, value);
+  }
+}
+
 describe("DextHistoryStore", () => {
   it("persists successful and failed execution records", async () => {
     const store = new DextHistoryStore(new MemoryState() as never);
@@ -25,6 +32,19 @@ describe("DextHistoryStore", () => {
     expect(records[0]?.output).toContain("workflow");
     expect(records[0]?.response).toEqual({ kind: "workflow", executions: [] });
     expect(records[1]?.error).toBe("cancelled");
+  });
+
+  it("does not lose turns when separate conversations finish together", async () => {
+    const store = new DextHistoryStore(new DelayedMemoryState() as never);
+    await Promise.all([
+      store.addSuccess("first", [], { kind: "workflow", executions: [] }, "session-1"),
+      store.addSuccess("second", [], { kind: "workflow", executions: [] }, "session-2")
+    ]);
+
+    expect(store.list().map((session) => [session.id, session.turns[0]?.input])).toEqual([
+      ["session-1", "first"],
+      ["session-2", "second"]
+    ]);
   });
 
   it("honours the configured turn and output limits on every write", async () => {
