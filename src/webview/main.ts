@@ -87,7 +87,6 @@ const elements = {
   reloadMethods: element<HTMLButtonElement>("reload-methods"),
   configErrors: element<HTMLElement>("config-errors"),
   result: element<HTMLElement>("result"),
-  clearOutput: element<HTMLButtonElement>("clear-output"),
   inputFullscreen: element<HTMLButtonElement>("input-fullscreen"),
   resultFullscreen: element<HTMLButtonElement>("result-fullscreen"),
   attachmentBar: element<HTMLElement>("attachment-bar")
@@ -232,7 +231,6 @@ function updateRunState(): void {
   elements.run.disabled = executing
     ? stopping || !activeTurnId
     : !editor.source.trim() || (codeMode && (hasErrors || inputKind === "invalid"));
-  elements.clearOutput.disabled = executing;
   elements.runLabel.textContent = executing ? (stopping ? "Stopping" : "Stop") : codeMode ? "Run" : "Send";
   const runIcon = elements.run.querySelector<HTMLElement>("i");
   if (runIcon) runIcon.className = `codicon codicon-${executing ? "debug-stop" : "run"}`;
@@ -2088,9 +2086,6 @@ elements.resultHeading.addEventListener("keydown", (event) => {
   }
 });
 elements.attachFiles.addEventListener("click", () => vscode.postMessage({ type: "chooseFiles" }));
-elements.clearOutput.addEventListener("click", () => {
-  if (!executing) vscode.postMessage({ type: "clearOutput" });
-});
 for (const item of composerMenus) {
   item.control.addEventListener("click", () => toggleComposerMenu(item.menu));
 }

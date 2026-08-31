@@ -5,6 +5,7 @@ import {
   normalizeInputReferenceSource
 } from "../src/core/fileReference.js";
 import { inputReferenceProjectionDecorations } from "../src/webview/fileReferenceDecorations.js";
+import { fileReferenceRemovalEdit } from "../src/webview/fileReferenceDecorations.js";
 
 describe("@ file reference decorations", () => {
   it("projects a readable @path token as one atomic Chip range", () => {
@@ -16,7 +17,12 @@ describe("@ file reference decorations", () => {
     inputReferenceProjectionDecorations(source, () => {}).between(0, source.length, (from, to) => {
       ranges.push({ from, to });
     });
-    expect(ranges).toEqual([{ from: source.indexOf(token), to: source.indexOf(token) + token.length }]);
+    expect(ranges).toEqual([{ from: source.indexOf(" " + token), to: source.indexOf(token) + token.length + 1 }]);
+    expect(fileReferenceRemovalEdit(source, projection[0]!)).toEqual({
+      from: source.indexOf(" " + token),
+      to: source.indexOf(token) + token.length + 1,
+      insert: " "
+    });
   });
 
   it("only recognizes workspace-relative paths with valid ranges", () => {
@@ -29,6 +35,18 @@ describe("@ file reference decorations", () => {
       "@../secret.ts"
     ].join(" "));
     expect(values.map((item) => item.payload)).toEqual(["src/a.ts"]);
+  });
+
+  it("removes an initial chip and its separator without leaving a leading blank", () => {
+    const token = "@.dext/attachments/0123456789abcdef01234567.png";
+    const source = `ask(input="${token} 后续文字")`;
+    const [projection] = inputReferenceProjections(source);
+    expect(projection).toBeDefined();
+    expect(fileReferenceRemovalEdit(source, projection!)).toEqual({
+      from: source.indexOf(token),
+      to: source.indexOf(token) + token.length + 1,
+      insert: ""
+    });
   });
 
   it("migrates legacy marker, f-string, and broken nested input to readable @ tokens", () => {

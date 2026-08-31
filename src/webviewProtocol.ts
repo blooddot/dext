@@ -41,7 +41,7 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("clipboardRead"),
     requestId: z.number().int().nonnegative(),
-    purpose: z.literal("code")
+    purpose: z.enum(["code", "text"])
   }),
   z.object({ type: z.literal("openFileReference"), reference: z.string().min(1) }),
   z.object({
@@ -73,7 +73,6 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
     sessionId: z.string().min(1),
     pinned: z.boolean()
   }),
-  z.object({ type: z.literal("clearOutput") }),
   z.object({
     type: z.literal("agentSelection"),
     selection: z.object({

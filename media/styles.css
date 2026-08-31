@@ -919,9 +919,13 @@ main {
 }
 
 .code-file-reference {
-  margin: 0 2px;
+  margin: 0;
   font-family: var(--vscode-font-family);
   font-size: var(--vscode-font-size);
+}
+
+.history-file-reference {
+  margin: 0;
 }
 
 .attachment-open {

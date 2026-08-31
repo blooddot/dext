@@ -3,6 +3,7 @@ import { extname } from "node:path";
 import type { ContextHost, TextSnapshot } from "./core/contextResolver.js";
 import { parseFileReference } from "./core/fileReference.js";
 import type { DirRef, Range } from "./core/types.js";
+import type { DextStorage } from "./dextStorage.js";
 
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"]);
 
@@ -125,6 +126,19 @@ export async function openWorkspaceFileReference(filePath: string): Promise<void
     editor.selection = new vscode.Selection(validated.range.start, validated.range.end);
     editor.revealRange(validated.range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
   }
+}
+
+/** Opens a Dext-owned global plan or attachment when its reference was created
+ * under global storage; ordinary references retain workspace-only validation. */
+export async function openDextFileReference(filePath: string, storage: DextStorage): Promise<void> {
+  const uri = storage.uriForReference("plans", filePath) ?? storage.uriForReference("attachments", filePath);
+  if (!uri) return openWorkspaceFileReference(filePath);
+  if (IMAGE_EXTENSIONS.has(extname(uri.fsPath).toLowerCase())) {
+    await vscode.commands.executeCommand("vscode.open", uri);
+    return;
+  }
+  const document = await vscode.workspace.openTextDocument(uri);
+  await vscode.window.showTextDocument(document, { preview: false });
 }
 
 export class VsCodeContextHost implements ContextHost {

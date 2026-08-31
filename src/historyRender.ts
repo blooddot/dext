@@ -91,8 +91,18 @@ function inputReferenceChip(reference: ContextReferenceOccurrence): string {
 }
 
 function renderedInputSource(source: string): string {
-  return inputReferenceDisplayParts(source)
-    .map((part) => part.kind === "text" ? escapeHtml(part.value) : inputReferenceChip(part.reference))
+  const parts = inputReferenceDisplayParts(source);
+  return parts
+    .map((part, index) => {
+      if (part.kind === "ref") return inputReferenceChip(part.reference);
+      // The source has spaces to protect an @path token from the text typed
+      // beside it. The chip already supplies its own boundary in history.
+      const previous = parts[index - 1];
+      const next = parts[index + 1];
+      const value = `${previous?.kind === "ref" ? part.value.replace(/^[ \t]+/, "") : part.value}`
+        .replace(next?.kind === "ref" ? /[ \t]+$/ : /$^/, "");
+      return escapeHtml(value);
+    })
     .join("");
 }
 
@@ -309,7 +319,7 @@ export function renderHistorySession(session: DextHistorySession, view: HistoryS
     ? `<i class="history-favorite codicon codicon-star-full" title="Favorite" aria-label="Favorite"></i>`
     : "";
   const label = view.name ?? conversationTitle(session);
-  return `<details class="history-session${favorite ? " favorite" : ""}" ${context}><summary title="${SESSION_ACTION_HINT}">${chevron()}${star}<span>${escapeHtml(dateLabel(session.createdAt))}</span><span class="history-summary-input${view.name ? " named" : ""}">${escapeHtml(label)}</span><span class="history-meta">${count}</span></summary><div class="history-session-body">${session.turns.map((turn) => renderHistoryRecord(turn, session.id)).join("")}</div></details>`;
+  return `<details class="history-session${favorite ? " favorite" : ""}" ${context}><summary title="${SESSION_ACTION_HINT}">${chevron()}${star}<span class="history-summary-input${view.name ? " named" : ""}">${escapeHtml(label)}</span><span class="history-meta">${count}</span><span class="history-meta history-session-time">${escapeHtml(dateLabel(session.createdAt))}</span></summary><div class="history-session-body">${session.turns.map((turn) => renderHistoryRecord(turn, session.id)).join("")}</div></details>`;
 }
 
 export function conversationMarkdown(session: DextHistorySession): string {

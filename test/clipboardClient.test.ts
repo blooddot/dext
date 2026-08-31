@@ -33,6 +33,24 @@ describe("ClipboardClient", () => {
     await expect(read).resolves.toEqual({ text: "selected code", contextAttached: false });
   });
 
+  it("requests plain clipboard text without a code reference", async () => {
+    const requests: WebviewRequest[] = [];
+    const client = new ClipboardClient((request) => requests.push(request));
+    const read = client.read("text");
+    const request = requests[0];
+    const requestId = request?.type === "clipboardRead" ? request.requestId : -1;
+
+    expect(request).toMatchObject({ type: "clipboardRead", purpose: "text" });
+    client.accept({
+      type: "clipboardReadResult",
+      requestId,
+      success: true,
+      text: "const raw = true;",
+      contextAttached: false
+    });
+    await expect(read).resolves.toEqual({ text: "const raw = true;", contextAttached: false });
+  });
+
   it("returns a structured Code reference without exposing staged source text", async () => {
     const requests: WebviewRequest[] = [];
     const client = new ClipboardClient((request) => requests.push(request));

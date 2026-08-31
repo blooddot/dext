@@ -34,6 +34,7 @@ import {
   type CompletionSettings
 } from "./core/completionProvider.js";
 import { DEFAULT_PLAN_DIRECTORY, planFileName, planPathSegments } from "./core/planFile.js";
+import { DextStorage } from "./dextStorage.js";
 
 /** Global rather than per-workspace: the object form is rewritten in the user
  * settings file, so once is once for every window. */
@@ -65,9 +66,14 @@ export class DextApplication {
   private readonly mcpSecrets: McpAccessTokenStore | undefined;
   private readonly completionSecrets: CompletionKeyStore | undefined;
   private readonly globalState: vscode.Memento | undefined;
+  readonly storage: DextStorage;
 
-  constructor(globalState?: vscode.Memento, secretStorage?: vscode.SecretStorage) {
+  constructor(globalState?: vscode.Memento, secretStorage?: vscode.SecretStorage, globalStorageUri?: vscode.Uri) {
     this.globalState = globalState;
+    // Extension activation always supplies VS Code's Dext-specific global
+    // storage root. The plain file URI keeps lightweight hostless tests from
+    // needing to implement Uri.joinPath just to construct the application.
+    this.storage = new DextStorage(globalStorageUri ?? vscode.Uri.file(process.cwd()));
     this.agentRunner = new DefaultAgentRunner(undefined, this.aioaConnection);
     this.runtime.setAgentRunner(this.agentRunner);
     this.agents = new AgentProfileStore(globalState);
@@ -283,7 +289,7 @@ export class DextApplication {
     input: string,
     metadata: Readonly<ExecutionMetadata> = {}
   ): Promise<InputExecutionResponse> {
-    const response = await this.runtime.executeConversation(mode, input, metadata);
+    const response = await this.runtime.executeConversation(mode, this.storage.attachmentPrompt(input), metadata);
     const saved = mode === "plan" ? await this.savePlan(input, response) : response;
     return {
       kind: "workflow",
@@ -293,20 +299,27 @@ export class DextApplication {
   }
 
   /** A plan is only useful if it survives the turn, so Plan mode lands the reply
-   * in the workspace and hands the path back for the output to link. */
+   * in the configured Dext storage location and hands the reference back to the output. */
   private async savePlan(input: string, response: InputExecutionResponse["executions"][number]): Promise<InputExecutionResponse["executions"][number]> {
     const result = response.result;
     if (result.kind !== "chat" || !result.text.trim()) return response;
-    if (!this.workspaceTrusted || !this.workspaceUri) return response;
+    const workspaceStorage = this.storage.location() === "workspace";
+    if (workspaceStorage && (!this.workspaceTrusted || !this.workspaceUri)) return response;
     const configured = vscode.workspace.getConfiguration("dext").get<string>("plan.directory", DEFAULT_PLAN_DIRECTORY).trim();
-    const segments = planPathSegments(configured || DEFAULT_PLAN_DIRECTORY);
-    const directory = vscode.Uri.joinPath(this.workspaceUri, ...segments);
+    const segments = workspaceStorage ? planPathSegments(configured || DEFAULT_PLAN_DIRECTORY) : [];
+    const directory = workspaceStorage
+      ? vscode.Uri.joinPath(this.workspaceUri!, ...segments)
+      : this.storage.directory("plans");
     const name = planFileName(input, new Date());
     const target = vscode.Uri.joinPath(directory, name);
     await vscode.workspace.fs.createDirectory(directory);
     await vscode.workspace.fs.writeFile(target, new TextEncoder().encode(`${result.text.trimEnd()}\n`));
-    const planPath = [...segments, name].join("/");
+    const planPath = workspaceStorage ? [...segments, name].join("/") : this.storage.reference("plans", name);
     return { ...response, result: { ...result, planPath } };
+  }
+
+  planUri(reference: string): vscode.Uri | undefined {
+    return this.storage.uriForReference("plans", reference);
   }
 
   endAgentSession(sessionId: string): void {

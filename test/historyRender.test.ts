@@ -345,6 +345,19 @@ describe("Dext history rendering", () => {
     expect(html).not.toContain("data-open-image-attachment");
   });
 
+  it("does not render the source separators around file reference Chips", () => {
+    const record: DextHistoryRecord = {
+      id: "inline-reference",
+      createdAt: 1,
+      input: 'ask(input="before @src/a.ts after")',
+      process: [],
+      output: ""
+    };
+    const html = renderHistoryRecord(record);
+    expect(html).toContain("before<span class=\"attachment-chip");
+    expect(html).toContain("</span>after");
+  });
+
   it("groups continuous turns under one collapsible conversation", () => {
     const turns: DextHistoryRecord[] = ["first", "second"].map((text, index) => ({
       id: String(index),
@@ -359,6 +372,8 @@ describe("Dext history rendering", () => {
     expect(html).toContain('class="history-session"');
     expect(html.match(/class="history-record"/g)).toHaveLength(2);
     expect(html).toContain("2 turns");
+    const summary = html.slice(0, html.indexOf("history-session-body"));
+    expect(summary).toMatch(/history-summary-input[^>]*>ask\(input=&quot;first&quot;\)<\/span><span class="history-meta">2 turns<\/span><span class="history-meta history-session-time">/);
   });
 
   it("tags conversations and turns so the native context menu knows its target", () => {

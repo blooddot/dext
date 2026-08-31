@@ -62,7 +62,7 @@ function standardMcpServers(source: string): McpServerConfig[] {
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-  const application = new DextApplication(context.globalState, context.secrets);
+  const application = new DextApplication(context.globalState, context.secrets, context.globalStorageUri);
   const folder = vscode.workspace.workspaceFolders?.[0];
   if (folder) application.runtime.setWorkspaceRoot(folder.uri.fsPath);
   application.runtime.setWorkspaceTrusted(vscode.workspace.isTrusted && folder?.uri.scheme === "file");
@@ -78,7 +78,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     };
   });
   const preferences = new DextConversationPreferences(context.globalState);
-  const historyPanel = new DextHistoryPanel(context.extensionUri, history, preferences);
+  const historyPanel = new DextHistoryPanel(context.extensionUri, history, preferences, application.storage);
   const sidebar = new DextSidebarProvider(context.extensionUri, application, history, preferences);
   const reportCommandError = async <T>(run: () => Promise<T>): Promise<T | undefined> => {
     try {

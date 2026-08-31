@@ -2,8 +2,7 @@ import { describe, expect, it } from "vitest";
 import { webviewRequestSchema } from "../src/webviewProtocol.js";
 
 describe("Webview protocol", () => {
-  it("accepts output and conversation tab requests", () => {
-    expect(webviewRequestSchema.safeParse({ type: "clearOutput" }).success).toBe(true);
+  it("accepts conversation tab requests", () => {
     expect(webviewRequestSchema.safeParse({
       type: "selectConversation",
       sessionId: "session-1"
@@ -22,6 +21,7 @@ describe("Webview protocol", () => {
   });
 
   it("rejects conversation requests now served by view title commands", () => {
+    expect(webviewRequestSchema.safeParse({ type: "clearOutput" }).success).toBe(false);
     expect(webviewRequestSchema.safeParse({ type: "viewHistory" }).success).toBe(false);
     expect(webviewRequestSchema.safeParse({ type: "newConversation" }).success).toBe(false);
     expect(webviewRequestSchema.safeParse({ type: "closeConversation", sessionId: "" }).success)
@@ -99,6 +99,11 @@ describe("Webview protocol", () => {
       type: "clipboardRead",
       requestId: 4,
       purpose: "code"
+    }).success).toBe(true);
+    expect(webviewRequestSchema.safeParse({
+      type: "clipboardRead",
+      requestId: 5,
+      purpose: "text"
     }).success).toBe(true);
     expect(webviewRequestSchema.safeParse({
       type: "dropFiles",

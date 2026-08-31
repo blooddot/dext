@@ -612,10 +612,30 @@
           },
           "description": "Additional directories searched for .dx API files. Relative paths resolve from the current workspace. The workspace's own .dext/api is always searched first, so a configured directory cannot shadow a project API."
         },
+        "dext.storage.location": {
+          "type": "string",
+          "default": "global",
+          "enum": [
+            "global",
+            "workspace"
+          ],
+          "enumDescriptions": [
+            "Save Dext plans and pasted image attachments in Dext's VS Code global storage.",
+            "Save Dext plans and pasted image attachments under the current workspace's .dext directory."
+          ],
+          "description": "Where Dext stores generated plans and pasted image attachments. Existing files remain where they were created."
+        },
+        "dext.attachments.maxFiles": {
+          "type": "integer",
+          "default": 200,
+          "minimum": 1,
+          "maximum": 1000,
+          "description": "Maximum number of pasted image attachments to retain in the active Dext storage location. When exceeded, Dext removes the oldest attachments first."
+        },
         "dext.plan.directory": {
           "type": "string",
           "default": ".dext/plans",
-          "description": "Workspace-relative directory where Plan mode saves its documents. Must stay inside the workspace."
+          "description": "Workspace-relative directory where Plan mode saves its documents when dext.storage.location is workspace. Must stay inside the workspace."
         },
         "dext.submitOnEnter": {
           "type": "boolean",

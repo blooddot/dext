@@ -86,12 +86,12 @@ describe("sidebar panel layout", () => {
     expect(main).toMatch(/function planActions[\s\S]*?type: "buildPlan", planPath/);
     expect(builtins).toMatch(/id: "plan",\s*title: "Plan",/);
     expect(application).toMatch(/mode === "plan" \? await this\.savePlan\(input, response\) : response/);
-    expect(application).toMatch(/private async savePlan[\s\S]*?if \(!this\.workspaceTrusted \|\| !this\.workspaceUri\) return response/);
+    expect(application).toMatch(/private async savePlan[\s\S]*?const workspaceStorage = this\.storage\.location\(\) === "workspace"/);
+    expect(application).toMatch(/private async savePlan[\s\S]*?this\.storage\.directory\("plans"\)/);
     expect(application).toMatch(/private async savePlan[\s\S]*?planPath \}/);
     // Building re-reads the file so edits made in the editor are what runs.
     expect(sidebar).toMatch(/private async buildPlan[\s\S]*?vscode\.workspace\.fs\.readFile\(target\)/);
-    expect(sidebar).toMatch(/private async buildPlan[\s\S]*?isTrustedLocalWorkspace\(\)/);
-    expect(sidebar).toMatch(/private async buildPlan[\s\S]*?planPathSegments\(planPath\)/);
+    expect(sidebar).toMatch(/private async buildPlan[\s\S]*?application\.planUri\(planPath\)/);
     expect(sidebar).toMatch(/private async buildPlan[\s\S]*?await this\.run\("agent", \[/);
     // The mode switch must not wipe the agent, model, and effort choices.
     expect(sidebar).toContain('this.application.setAgentSelection({ ...this.application.state().agentSelection, mode: "agent" });');
@@ -221,9 +221,9 @@ describe("sidebar panel layout", () => {
     const main = await source("src/webview/main.ts");
     const css = await source("media/styles.css");
     expect(sidebar).toMatch(/private orderedConversations\(\): string\[\][\s\S]*?this\.preferences\.pinned\(\)\.filter\(\(id\) => this\.openConversations\.includes\(id\)\)/);
-    // Only pinned conversations survive a reload; the rest start from the last
-    // conversation that was worked on.
-    expect(sidebar).toMatch(/hydrateSessions\(\): void \{[\s\S]*?const pinned = this\.preferences\.pinned\(\)\.filter\(\(id\) => this\.sessions\.has\(id\)\);[\s\S]*?new Set\(\[\.\.\.pinned, this\.activeSession\.id\]\)/);
+    // Reopen every tab the user left open; pins remain the fallback for older
+    // saved layouts that did not record the open-tab list.
+    expect(sidebar).toMatch(/hydrateSessions\(\): void \{[\s\S]*?const restored = layout\.openConversationIds\.filter\(\(id\) => this\.sessions\.has\(id\)\);[\s\S]*?const pinned = this\.preferences\.pinned\(\)\.filter\(\(id\) => this\.sessions\.has\(id\)\);[\s\S]*?new Set\(\[\.\.\.restored, \.\.\.pinned, this\.activeSession\.id\]\)/);
     // Closing is an explicit dismissal, so it releases the pin as well.
     expect(sidebar).toMatch(/private async closeConversation[\s\S]*?if \(this\.preferences\.isPinned\(sessionId\)\) await this\.preferences\.setPinned\(sessionId, false\)/);
     expect(main).toMatch(/tab\.dataset\.vscodeContext = JSON\.stringify\(\{[\s\S]*?webviewSection: "conversationTab"[\s\S]*?dextTabPinned: conversation\.pinned/);
@@ -281,6 +281,7 @@ describe("sidebar panel layout", () => {
     // reconfigured alongside the language and wrapping ones.
     expect(editor).toMatch(/setLanguageEnabled\(enabled: boolean\)[\s\S]*?this\.submitKeymap\.reconfigure\(this\.submitKeymapExtension\(\)\)/);
     expect(editor).toContain('{ key: "Mod-Enter", run: () => { this.options.onRun(); return true; } }');
+    expect(editor).toContain('{ key: "Mod-Shift-v", run: () => { void this.pasteRaw(); return true; } }');
     // The compartment has to outrank the default Enter binding below it.
     expect(editor.indexOf("this.submitKeymap.of(")).toBeLessThan(editor.indexOf("...defaultKeymap"));
   });

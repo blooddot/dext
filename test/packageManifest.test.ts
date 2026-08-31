@@ -297,6 +297,10 @@ describe("Dext package manifest", () => {
     expect(properties["dext.apiDirs"]).toMatchObject({ type: "array", default: [] });
     // A configured directory must not be able to take over a project's own API.
     expect(properties["dext.apiDirs"]?.description).toContain("cannot shadow a project API");
+    expect(properties["dext.storage.location"]).toMatchObject({ type: "string", default: "global" });
+    expect(properties["dext.storage.location"]?.enum).toEqual(["global", "workspace"]);
+    expect(properties["dext.attachments.maxFiles"]).toMatchObject({ type: "integer", default: 200, minimum: 1, maximum: 1000 });
+    expect(properties["dext.attachments.maxFiles"]?.description).toContain("oldest");
     expect(properties["dext.plan.directory"]).toMatchObject({ type: "string", default: ".dext/plans" });
     expect(properties["dext.plan.directory"]?.description).toContain("inside the workspace");
     expect(properties["dext.submitOnEnter"]).toMatchObject({ type: "boolean", default: true });

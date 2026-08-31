@@ -5,7 +5,8 @@ import type { DextConversationPreferences } from "./conversationPreferences.js";
 import { orderHistorySessions } from "./conversationPreferences.js";
 import { historyTokenStyles, renderHistorySession } from "./historyRender.js";
 import { loadEditorTokenTheme } from "./vscodeTheme.js";
-import { openWorkspaceFileReference } from "./vscodeContextHost.js";
+import { openDextFileReference } from "./vscodeContextHost.js";
+import type { DextStorage } from "./dextStorage.js";
 
 export class DextHistoryPanel implements vscode.Disposable {
   static readonly viewType = "dext.history";
@@ -14,7 +15,8 @@ export class DextHistoryPanel implements vscode.Disposable {
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly history: DextHistoryStore,
-    private readonly preferences: DextConversationPreferences
+    private readonly preferences: DextConversationPreferences,
+    private readonly storage: DextStorage
   ) {}
 
   showInActiveEditor(): Promise<void> {
@@ -45,7 +47,7 @@ export class DextHistoryPanel implements vscode.Disposable {
         void vscode.env.clipboard.writeText(message.text);
       }
       if (message.type === "openFileReference" && typeof message.reference === "string") {
-        void openWorkspaceFileReference(message.reference);
+        void openDextFileReference(message.reference, this.storage);
       }
     });
     this.render();

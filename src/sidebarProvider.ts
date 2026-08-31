@@ -21,7 +21,7 @@ import {
 import { ReadyMessageQueue } from "./readyMessageQueue.js";
 import { rankFileMatches } from "./core/fileSearch.js";
 import { planPathSegments } from "./core/planFile.js";
-import { openWorkspaceFileReference } from "./vscodeContextHost.js";
+import { openDextFileReference } from "./vscodeContextHost.js";
 import { webviewRequestSchema } from "./webviewProtocol.js";
 import type { ConversationSummary, WebviewResponse } from "./webviewProtocol.js";
 import type { DextHistorySession, DextHistoryStore } from "./historyStore.js";
@@ -229,6 +229,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       localResourceRoots: [
         vscode.Uri.joinPath(this.extensionUri, "dist"),
         vscode.Uri.joinPath(this.extensionUri, "media"),
+        this.application.storage.globalStorageUri,
         ...(vscode.workspace.workspaceFolders?.map((folder) => folder.uri) ?? [])
       ]
     };
@@ -433,12 +434,6 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         case "pinConversation":
           await this.pinConversation(request.sessionId, request.pinned);
           break;
-        case "clearOutput":
-          if (this.activeExecutions.has(this.activeSession.id)) {
-            throw new Error("Stop this Dext turn before clearing the conversation.");
-          }
-          await this.startConversation(true);
-          break;
         case "agentSelection":
           this.application.setAgentSelection({
             mode: request.selection.mode,
@@ -452,7 +447,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           await this.refresh();
           break;
         case "openFileReference":
-          await openWorkspaceFileReference(request.reference);
+          await openDextFileReference(request.reference, this.application.storage);
           break;
         case "searchFiles":
           await this.post({
@@ -507,11 +502,13 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           let codeReference: ReturnType<typeof clipboardFileReference>;
           const clipboardContext = this.attachments.clipboardReference(text);
           try {
-            codeReference = clipboardContext ? clipboardFileReference(clipboardContext) : undefined;
+            codeReference = request.purpose === "code" && clipboardContext
+              ? clipboardFileReference(clipboardContext)
+              : undefined;
             // A selection copied from a VS Code editor does not pass through
             // Dext's context-copy command. Recover its workspace reference
             // when the clipboard text still matches the active selection.
-            if (!codeReference) {
+            if (request.purpose === "code" && !codeReference) {
               const editor = vscode.window.activeTextEditor;
               if (editor && !editor.selection.isEmpty && editor.document.getText(editor.selection) === text) {
                 codeReference = attachmentFileReference(await selectionAttachment());
@@ -656,21 +653,21 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     if (!folder || !this.application.isTrustedLocalWorkspace()) {
       throw new Error("Building a plan requires a trusted local workspace.");
     }
-    const segments = planPathSegments(planPath);
-    const target = vscode.Uri.joinPath(folder.uri, ...segments);
+    const target = this.application.planUri(planPath)
+      ?? vscode.Uri.joinPath(folder.uri, ...planPathSegments(planPath));
     let text: string;
     try {
       text = new TextDecoder().decode(await vscode.workspace.fs.readFile(target));
     } catch {
-      throw new Error(`Plan '${segments.join("/")}' is no longer available.`);
+      throw new Error(`Plan '${planPath}' is no longer available.`);
     }
-    if (!text.trim()) throw new Error(`Plan '${segments.join("/")}' is empty.`);
+    if (!text.trim()) throw new Error(`Plan '${planPath}' is empty.`);
     // setSelection replaces the whole record, so the agent, model, and effort
     // choices have to be carried over or they are lost with the mode switch.
     this.application.setAgentSelection({ ...this.application.state().agentSelection, mode: "agent" });
     await this.refresh();
     await this.run("agent", [
-      `Implement the plan in ${segments.join("/")} exactly as written. Do not edit the plan file itself.`,
+      `Implement the plan in ${planPath} exactly as written. Do not edit the plan file itself.`,
       "",
       text.trim()
     ].join("\n"));
@@ -881,26 +878,24 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   private async storeImage(data: string, mimeType: string): Promise<{ relativePath: string; uri: vscode.Uri; name: string }> {
     const extension = imageExtension(mimeType);
     if (!extension) throw new Error("Unsupported image format. Paste a PNG, JPEG, GIF, WebP, or BMP image.");
-    const workspaceUri = vscode.workspace.workspaceFolders?.[0]?.uri;
-    if (!workspaceUri) throw new Error("Open a workspace before attaching an image.");
     const name = `${randomBytes(12).toString("hex")}${extension}`;
     const buffer = Buffer.from(data, "base64");
     if (buffer.byteLength > MAX_ATTACHMENT_BYTES) {
       throw new Error(`Attachments must be ${MAX_ATTACHMENT_BYTES} bytes or smaller.`);
     }
-    const directory = vscode.Uri.joinPath(workspaceUri, ".dext", "attachments");
+    const directory = this.application.storage.directory("attachments");
     await vscode.workspace.fs.createDirectory(directory);
     const uri = vscode.Uri.joinPath(directory, name);
     await vscode.workspace.fs.writeFile(uri, buffer);
-    return { relativePath: `.dext/attachments/${name}`, uri, name };
+    await this.application.storage.pruneAttachments(this.application.storage.attachmentLimit(), uri);
+    return { relativePath: this.application.storage.reference("attachments", name), uri, name };
   }
 
   private async deleteImage(relativePath: string): Promise<void> {
     const normalized = relativePath.replaceAll("\\", "/");
-    if (!/^\.dext\/attachments\/[a-f0-9]{24}\.(?:png|jpg|gif|webp|bmp)$/.test(normalized)) return;
-    const workspaceUri = vscode.workspace.workspaceFolders?.[0]?.uri;
-    if (!workspaceUri) return;
-    const uri = vscode.Uri.joinPath(workspaceUri, ...normalized.split("/"));
+    if (!/^(?:\.dext|\.dext-global)\/attachments\/[a-f0-9]{24}\.(?:png|jpg|gif|webp|bmp)$/.test(normalized)) return;
+    const uri = this.application.storage.uriForReference("attachments", normalized);
+    if (!uri) return;
     try {
       await vscode.workspace.fs.delete(uri);
     } catch (error) {
@@ -937,7 +932,6 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       <div id="result-heading" class="section-heading collapsible-heading" role="button" tabindex="0" aria-expanded="true">
         <span class="section-heading-label"><i class="section-chevron codicon codicon-chevron-down"></i><span>Conversation</span></span>
         <div class="section-heading-actions">
-          <button id="clear-output" class="icon-button" type="button" title="Clear conversation" aria-label="Clear conversation"><i class="codicon codicon-eraser"></i></button>
           <button id="result-fullscreen" class="icon-button panel-fullscreen" type="button" title="Maximize Conversation" aria-label="Maximize Conversation"><i class="codicon codicon-screen-full"></i></button>
         </div>
       </div>

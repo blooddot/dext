@@ -43,7 +43,7 @@ import type { SignatureHelp } from "../core/languageService.js";
 import type { ClipboardClient, ClipboardReadResult } from "./clipboardClient.js";
 import type { FileSearchClient } from "./fileSearchClient.js";
 import { codeReferencePasteText } from "./codeReferencePaste.js";
-import { fileReferenceDecorations } from "./fileReferenceDecorations.js";
+import { fileReferenceDecorations, fileReferenceRemovalEdit } from "./fileReferenceDecorations.js";
 import { inputReferenceProjections, normalizeInputReferenceSource } from "../core/fileReference.js";
 import type { ContextReferenceOccurrence } from "../core/fileReference.js";
 import { sourceSnapshotMatches } from "./languageClient.js";
@@ -247,6 +247,7 @@ export class DextCodeEditor {
         { key: "Mod-c", run: () => { void this.copy(); return true; } },
         { key: "Mod-x", run: () => { void this.cut(); return true; } },
         { key: "Mod-v", run: () => { void this.paste(); return true; } },
+        { key: "Mod-Shift-v", run: () => { void this.pasteRaw(); return true; } },
         { key: "Alt-/", run: () => { startCompletion(this.view); return true; } },
         { key: "Mod-Enter", run: () => { this.options.onRun(); return true; } },
         { key: "F8", run: () => this.navigateDiagnostic(1) },
@@ -344,12 +345,14 @@ export class DextCodeEditor {
       (candidate) => candidate.reference.payload === payload
     );
     if (!projection) return;
+    const removal = fileReferenceRemovalEdit(this.source, projection);
     this.view.dispatch({
       changes: {
-        from: projection.interpolationStart,
-        to: projection.interpolationEnd
+        from: removal.from,
+        to: removal.to,
+        insert: removal.insert
       },
-      selection: { anchor: projection.interpolationStart },
+      selection: { anchor: removal.from + removal.insert.length },
       scrollIntoView: true,
       userEvent: "delete"
     });
@@ -676,6 +679,17 @@ export class DextCodeEditor {
       this.options.onError(error);
       return;
     }
+    if (text) this.replaceSelection(text, "input.paste");
+  }
+
+  /** Ctrl+Shift+V deliberately bypasses Dext's selection-to-reference lookup
+   * so the exact clipboard text lands in the composer. */
+  private async pasteRaw(eventText?: string): Promise<void> {
+    const source = this.source;
+    const selection = this.view.state.selection.main;
+    const result = await this.options.clipboard.read("text");
+    if (!selectionMatches(this.view, source, selection.anchor, selection.head)) return;
+    const text = result?.text ?? eventText;
     if (text) this.replaceSelection(text, "input.paste");
   }
 
