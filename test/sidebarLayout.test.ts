@@ -60,6 +60,18 @@ describe("sidebar panel layout", () => {
     expect(css).not.toContain('.input-section[data-mode="code"] .composer-menu:has(#agent-control)');
   });
 
+  it("keeps the composer usable when the Dext view is made very narrow", async () => {
+    const css = await source("media/styles.css");
+    // VS Code does not expose a minimum-width option for Webview Views, so the
+    // webview supplies the minimum canvas and lets the host scroll it.
+    expect(css).toMatch(/body \{[\s\S]*?min-width: 300px;/);
+    // Before reaching that hard minimum, the footer gets another line rather
+    // than allowing its menus and Send button to overlap.
+    expect(css).toMatch(/\.action-row \{[\s\S]*?flex-wrap: wrap;/);
+    expect(css).toMatch(/\.composer-controls \{[\s\S]*?flex: 1 1 400px;[\s\S]*?flex-wrap: wrap;/);
+    expect(css).toMatch(/\.composer-menu \{[\s\S]*?min-width: 96px;[\s\S]*?flex: 1 1 96px;/);
+  });
+
   it("offers Plan beside Agent, Ask, and Code and lands its result as a document", async () => {
     const main = await source("src/webview/main.ts");
     const sidebar = await source("src/sidebarProvider.ts");

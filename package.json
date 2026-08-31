@@ -50,6 +50,7 @@
     "onCommand:dext.testCompletionModel",
     "onCommand:dext.diagnoseCompletion",
     "onCommand:dext.verifyMcpServer",
+    "onCommand:dext.importMcpConfigurationFromClipboard",
     "onLanguage:dext-api"
   ],
   "main": "./dist/extension.js",
@@ -257,6 +258,11 @@
         "command": "dext.verifyMcpServer",
         "title": "Dext: Verify MCP Server",
         "icon": "$(plug)"
+      },
+      {
+        "command": "dext.importMcpConfigurationFromClipboard",
+        "title": "Dext: Import MCP Configuration from Clipboard",
+        "icon": "$(cloud-download)"
       }
     ],
     "keybindings": [
@@ -593,13 +599,17 @@
         "dext.skillDirs": {
           "type": "array",
           "default": [],
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "description": "Additional skill directories. Relative paths resolve from the current workspace; earlier directories take priority for duplicate skill names."
         },
         "dext.apiDirs": {
           "type": "array",
           "default": [],
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "description": "Additional directories searched for .dx API files. Relative paths resolve from the current workspace. The workspace's own .dext/api is always searched first, so a configured directory cannot shadow a project API."
         },
         "dext.plan.directory": {
@@ -615,7 +625,10 @@
         "dext.diff.defaultView": {
           "type": "string",
           "default": "inline",
-          "enum": ["inline", "split"],
+          "enum": [
+            "inline",
+            "split"
+          ],
           "enumDescriptions": [
             "Show removed and added lines in one column.",
             "Show before and after side by side."
@@ -637,7 +650,11 @@
         "dext.agentPermission": {
           "type": "string",
           "default": "workspace-write",
-          "enum": ["read-only", "workspace-write", "full-access"],
+          "enum": [
+            "read-only",
+            "workspace-write",
+            "full-access"
+          ],
           "enumDescriptions": [
             "Agent turns propose a patch and change nothing until the change is accepted in Dext Output.",
             "Agent turns edit the trusted workspace directly, the way the selected CLI would on its own.",
@@ -649,16 +666,34 @@
           "type": "object",
           "default": {},
           "properties": {
-            "codex": { "type": "array", "items": { "type": "string" }, "description": "Extra arguments appended to every Codex invocation." },
-            "claude": { "type": "array", "items": { "type": "string" }, "description": "Extra arguments appended to every Claude Code invocation." },
-            "aioa": { "type": "array", "items": { "type": "string" }, "description": "Reserved; AIOA runs over CDP and takes no CLI arguments." }
+            "codex": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Extra arguments appended to every Codex invocation."
+            },
+            "claude": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Extra arguments appended to every Claude Code invocation."
+            },
+            "aioa": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Reserved; AIOA runs over CDP and takes no CLI arguments."
+            }
           },
           "additionalProperties": false,
           "markdownDescription": "Extra CLI arguments passed through to each agent provider, appended after the arguments Dext builds. Ignored outside a trusted workspace. Dext's own flags win, so these cannot loosen the permission tier."
         },
         "dext.agent.timeoutMs": {
           "type": "integer",
-          "default": 600000,
+          "default": 3600000,
           "minimum": 1000,
           "description": "How long a single CLI agent turn may run before Dext aborts it. Raise this when long refactors are being cut off mid-run."
         },
@@ -695,7 +730,12 @@
         "dext.completion.api": {
           "type": "string",
           "default": "openai",
-          "enum": ["openai", "openai-chat", "anthropic", "ollama"],
+          "enum": [
+            "openai",
+            "openai-chat",
+            "anthropic",
+            "ollama"
+          ],
           "enumDescriptions": [
             "POST <base>/completions. A dedicated fill-in-the-middle model that accepts a prompt and a suffix. Fastest and most exact, but a chat model answered through this format returns a body it cannot read.",
             "POST <base>/chat/completions. What most providers actually expose, DeepSeek and Qwen included. There is no suffix field, so the code around the cursor is sent as a chat prompt.",
@@ -761,58 +801,113 @@
           "maximum": 16,
           "description": "Branches a list comprehension runs at once in Code mode. Each branch can start its own agent process, so raising this multiplies both throughput and machine load. Everything outside a comprehension stays sequential."
         },
-          "dext.mcpTools": {
+        "dext.mcpTools": {
           "type": "array",
           "default": [],
           "items": {
             "type": "object",
-            "required": ["server", "tool"],
+            "required": [
+              "server",
+              "tool"
+            ],
             "properties": {
-              "server": { "type": "string" },
-              "tool": { "type": "string" },
-              "description": { "type": "string" }
+              "server": {
+                "type": "string"
+              },
+              "tool": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              }
             }
           },
-            "description": "MCP tools Dext may call. Their public name is the exact configured server.tool value; each tool must reference an entry in dext.mcpServers."
-          },
-          "dext.mcpServers": {
-            "type": "array",
-            "default": [],
-            "items": {
-              "oneOf": [
-                {
-                  "type": "object",
-                  "required": ["name", "transport", "command"],
-                  "additionalProperties": false,
-                  "properties": {
-                    "name": { "type": "string" },
-                    "transport": { "enum": ["stdio"] },
-                    "command": { "type": "string" },
-                    "args": { "type": "array", "items": { "type": "string" } },
-                    "timeoutMs": { "type": "integer", "minimum": 1000, "maximum": 120000 }
-                  }
-                },
-                {
-                  "type": "object",
-                  "required": ["name", "transport", "url"],
-                  "additionalProperties": false,
-                  "properties": {
-                    "name": { "type": "string" },
-                    "transport": { "enum": ["http"] },
-                    "url": { "type": "string", "format": "uri" },
-                    "auth": {
-                      "type": "object",
-                      "required": ["type"],
-                      "additionalProperties": false,
-                      "properties": { "type": { "enum": ["bearer"] } }
-                    },
-                    "timeoutMs": { "type": "integer", "minimum": 1000, "maximum": 120000 }
+          "description": "MCP tools Dext may call. Their public name is the exact configured server.tool value; each tool must reference an entry in dext.mcpServers."
+        },
+        "dext.mcpServers": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": [
+                  "name",
+                  "transport",
+                  "command"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "transport": {
+                    "enum": [
+                      "stdio"
+                    ]
+                  },
+                  "command": {
+                    "type": "string"
+                  },
+                  "args": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "timeoutMs": {
+                    "type": "integer",
+                    "minimum": 1000,
+                    "maximum": 120000
                   }
                 }
-              ]
-            },
-            "description": "MCP servers. Stdio commands run locally. HTTP endpoints must use HTTPS or loopback HTTP; use Dext commands to store bearer tokens in VS Code SecretStorage, never this setting."
-          }
+              },
+              {
+                "type": "object",
+                "required": [
+                  "name",
+                  "transport",
+                  "url"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "transport": {
+                    "enum": [
+                      "http"
+                    ]
+                  },
+                  "url": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "auth": {
+                    "type": "object",
+                    "required": [
+                      "type"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "type": {
+                        "enum": [
+                          "bearer"
+                        ]
+                      }
+                    }
+                  },
+                  "timeoutMs": {
+                    "type": "integer",
+                    "minimum": 1000,
+                    "maximum": 120000
+                  }
+                }
+              }
+            ]
+          },
+          "description": "MCP servers. Stdio commands run locally. HTTP endpoints must use HTTPS or loopback HTTP; use Dext commands to store bearer tokens in VS Code SecretStorage, never this setting."
+        }
       }
     }
   },

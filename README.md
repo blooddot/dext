@@ -115,6 +115,8 @@ Standard skills are discovered in `<workspace>/.dext/skills`, then `dext.skillDi
 
 `dext.mcpServers` supports local `stdio` and Streamable HTTP (`2025-03-26`). HTTP endpoints must be HTTPS, or loopback HTTP for local development. URL userinfo, query strings, fragments, inline headers, and credentials are rejected. A bearer-enabled server stores its access token only through `Dext: Set MCP Access Token`, in VS Code SecretStorage and scoped to the current workspace. `Dext: Clear MCP Access Token` removes it; `Dext: Verify MCP Server` performs an authenticated initialization check. Dext never writes credentials to settings, project files, output, or logs. HTTP calls use JSON or SSE responses, reject redirects, and close negotiated sessions with `DELETE`. MCP `structuredContent` is preserved as `McpRawResult.structured`; a `.dx` API returning a `TypedDict` adapts that structure into its declared result and validates it strictly.
 
+For MCP documentation that uses the common object form, copy the entire JSON block and run `Dext: Import MCP Configuration from Clipboard`. For example, the command accepts `{ "mcpServers": { "teambition-openapi-mcp": { "command": "npx", "args": ["-y", "@tng/teambition-openapi-mcp", "user-mcp", "-u", "<your_user_token>"] } } }`. Dext stores the server in workspace settings, calls `tools/list`, and creates its explicit tool allowlist automatically. The importer refuses `env`, because those values commonly contain secrets. Stdio arguments are stored as given, so leave documentation placeholders in place until you deliberately provide a token and never commit a workspace setting containing one; use the regular Dext credential command for bearer HTTP servers.
+
 ```json
 {
   "dext.mcpServers": [

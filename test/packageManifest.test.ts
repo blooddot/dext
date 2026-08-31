@@ -277,7 +277,7 @@ describe("Dext package manifest", () => {
 
   it("exposes every timeout that can cut a turn off", async () => {
     const properties = (await manifest()).contributes?.configuration?.properties ?? {};
-    expect(properties["dext.agent.timeoutMs"]).toMatchObject({ type: "integer", default: 600000 });
+    expect(properties["dext.agent.timeoutMs"]).toMatchObject({ type: "integer", default: 3600000 });
     expect(properties["dext.aioa.timeoutMs"]).toMatchObject({ type: "integer", default: 3600000 });
     expect(properties["dext.aioa.idleTimeoutMs"]).toMatchObject({ type: "integer", default: 90000 });
     expect(properties["dext.terminal.defaultTimeoutMs"])
@@ -332,10 +332,15 @@ describe("Dext package manifest", () => {
     expect(value.activationEvents).toContain("onCommand:dext.setMcpAccessToken");
     expect(value.activationEvents).toContain("onCommand:dext.clearMcpAccessToken");
     expect(value.activationEvents).toContain("onCommand:dext.verifyMcpServer");
+    expect(value.activationEvents).toContain("onCommand:dext.importMcpConfigurationFromClipboard");
     expect(value.contributes?.commands).toEqual(expect.arrayContaining([
       expect.objectContaining({ command: "dext.setMcpAccessToken", title: "Dext: Set MCP Access Token" }),
       expect.objectContaining({ command: "dext.clearMcpAccessToken", title: "Dext: Clear MCP Access Token" }),
-      expect.objectContaining({ command: "dext.verifyMcpServer", title: "Dext: Verify MCP Server" })
+      expect.objectContaining({ command: "dext.verifyMcpServer", title: "Dext: Verify MCP Server" }),
+      expect.objectContaining({
+        command: "dext.importMcpConfigurationFromClipboard",
+        title: "Dext: Import MCP Configuration from Clipboard"
+      })
     ]));
     const setting = (await manifest()).contributes?.configuration?.properties?.["dext.mcpServers"];
     expect(setting?.description).toContain("SecretStorage");

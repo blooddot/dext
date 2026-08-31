@@ -44,6 +44,12 @@ export interface McpToolCallResult {
   structuredContent?: Record<string, unknown>;
 }
 
+/** A tool returned by the MCP `tools/list` capability. */
+export interface McpDiscoveredTool {
+  name: string;
+  description?: string;
+}
+
 export interface McpTransportOptions {
   accessToken?: string;
 }
@@ -56,6 +62,7 @@ export interface McpTransport {
     options?: McpTransportOptions
   ): Promise<McpToolCallResult>;
   verify?(server: McpServerConfig, options?: McpTransportOptions): Promise<void>;
+  listTools?(server: McpServerConfig, options?: McpTransportOptions): Promise<McpDiscoveredTool[]>;
 }
 
 export type McpAccessTokenProvider = (server: HttpMcpServerConfig) => Promise<string | undefined>;
@@ -89,6 +96,20 @@ function toolResult(value: unknown, server: McpServerConfig, tool: string): McpT
     ...(content !== undefined ? { content } : {}),
     ...(structuredContent !== undefined ? { structuredContent } : {})
   };
+}
+
+function discoveredTools(value: unknown, server: McpServerConfig): McpDiscoveredTool[] {
+  if (!isRecord(value) || !Array.isArray(value.tools)) {
+    throw new Error(`MCP server '${server.name}' returned an invalid tools/list response.`);
+  }
+  const tools: McpDiscoveredTool[] = [];
+  for (const item of value.tools) {
+    if (!isRecord(item) || typeof item.name !== "string" || !IDENTIFIER.test(item.name)) {
+      throw new Error(`MCP server '${server.name}' returned an invalid tool name.`);
+    }
+    tools.push({ name: item.name, ...(typeof item.description === "string" ? { description: item.description } : {}) });
+  }
+  return tools;
 }
 
 function isLoopbackHost(host: string): boolean {
@@ -286,6 +307,21 @@ export class StdioMcpTransport implements McpTransport {
       await client.close();
     }
   }
+
+  async listTools(server: McpServerConfig): Promise<McpDiscoveredTool[]> {
+    if (server.transport !== "stdio") throw new Error(`MCP server '${server.name}' is not a stdio server.`);
+    const process: ChildProcessWithoutNullStreams = spawn(server.command, server.args ?? [], {
+      stdio: ["pipe", "pipe", "pipe"], shell: false, windowsHide: true
+    });
+    const client = new StdioJsonRpcClient(process, server.name, timeoutFor(server));
+    try {
+      await client.request("initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "dext", version: "0.1.0" } });
+      client.notify("notifications/initialized", {});
+      return discoveredTools(await client.request("tools/list", {}), server);
+    } finally {
+      await client.close();
+    }
+  }
 }
 
 class HttpMcpStatusError extends Error {
@@ -369,6 +405,10 @@ class StreamableHttpMcpClient {
       await this.initialize();
       return this.request("tools/call", { name: tool, arguments: argumentsValue });
     }
+  }
+
+  async listTools(): Promise<unknown> {
+    return this.request("tools/list", {});
   }
 
   async terminate(): Promise<void> {
@@ -484,6 +524,17 @@ export class HttpMcpTransport implements McpTransport {
       await client.terminate();
     }
   }
+
+  async listTools(server: McpServerConfig, options: McpTransportOptions = {}): Promise<McpDiscoveredTool[]> {
+    if (server.transport !== "http") throw new Error(`MCP server '${server.name}' is not an HTTP server.`);
+    const client = new StreamableHttpMcpClient(server, this.fetchImpl, options.accessToken);
+    try {
+      await client.initialize();
+      return discoveredTools(await client.listTools(), server);
+    } finally {
+      await client.terminate();
+    }
+  }
 }
 
 class DefaultMcpTransport implements McpTransport {
@@ -505,6 +556,12 @@ class DefaultMcpTransport implements McpTransport {
     return server.transport === "http"
       ? this.http.verify(server, options)
       : this.stdio.verify(server);
+  }
+
+  listTools(server: McpServerConfig, options: McpTransportOptions = {}): Promise<McpDiscoveredTool[]> {
+    return server.transport === "http"
+      ? this.http.listTools(server, options)
+      : this.stdio.listTools(server);
   }
 }
 
@@ -658,6 +715,14 @@ export class McpToolRegistry {
     if (!server) throw new Error(`MCP server '${name}' is not configured.`);
     if (!this.transport.verify) throw new Error("MCP transport verification is not available.");
     await this.transport.verify(server, await this.transportOptions(server));
+  }
+
+  /** Queries a configured server so callers can populate the explicit tool allowlist. */
+  async discoverServerTools(name: string): Promise<McpDiscoveredTool[]> {
+    const server = this.servers.get(name);
+    if (!server) throw new Error(`MCP server '${name}' is not configured.`);
+    if (!this.transport.listTools) throw new Error("MCP tool discovery is not available.");
+    return this.transport.listTools(server, await this.transportOptions(server));
   }
 
   private async transportOptions(server: McpServerConfig): Promise<McpTransportOptions> {

@@ -1,0 +1,17 @@
+{
+    "dext.mcpServers": [
+        {
+            "name": "teambition-openapi-mcp",
+            "transport": "stdio",
+            "command": "npx",
+            "args": [
+                "-y",
+                "@tng/teambition-openapi-mcp",
+                "user-mcp",
+                "-u",
+                "u-zoPytBEuqHJUdFsnAZxSIIMawURyzdwHeDQqv7bbm7AoTpVa"
+            ]
+        }
+    ],
+    "dext.mcpTools": []
+}

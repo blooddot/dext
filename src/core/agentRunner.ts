@@ -63,6 +63,8 @@ interface ProcessResult {
   code: number | null;
 }
 
+type ProcessRunner = typeof runProcess;
+
 interface CommandResolutionOptions {
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
@@ -288,6 +290,21 @@ export function extractConversationText(output: string, provider: AgentProfile["
   }
   const result = extractClaudeResult(output);
   return typeof result === "string" ? result : JSON.stringify(result, null, 2);
+}
+
+/** The public JSONL stream announces the durable Codex thread before any turn
+ * events. Dext keeps that provider ID separate from its own conversation ID so
+ * several open tabs can resume independently without relying on `--last`. */
+export function extractCodexThreadId(output: string): string | undefined {
+  for (const line of output.split(/\r?\n/)) {
+    const event = extractJson(line);
+    if (!event || typeof event !== "object") continue;
+    const record = event as { type?: unknown; thread_id?: unknown };
+    if (record.type === "thread.started" && typeof record.thread_id === "string" && record.thread_id.trim()) {
+      return record.thread_id;
+    }
+  }
+  return undefined;
 }
 
 function eventText(event: Record<string, unknown>, item?: Record<string, unknown>): string | undefined {
@@ -556,13 +573,14 @@ export function codexCliArguments(
 export function codexConversationArguments(
   options: { model?: string; reasoningEffort?: string; permission: AgentPermission },
   serviceTier?: string,
-  extraArguments: readonly string[] = []
+  extraArguments: readonly string[] = [],
+  session: { persist?: boolean; resumeId?: string } = {}
 ): string[] {
   const sandbox = codexSandbox(options.permission);
   return [
     "exec",
     "--json",
-    "--ephemeral",
+    ...(session.persist ? [] : ["--ephemeral"]),
     "--sandbox", sandbox,
     ...(sandbox === "read-only" ? [] : ["--skip-git-repo-check"]),
     ...(options.model ? ["--model", options.model] : []),
@@ -570,6 +588,7 @@ export function codexConversationArguments(
     "--config", 'model_reasoning_summary="detailed"',
     ...(serviceTier ? ["--config", 'service_tier="' + serviceTier + '"'] : []),
     ...extraArguments,
+    ...(session.resumeId ? ["resume", session.resumeId] : []),
     "-"
   ];
 }
@@ -645,8 +664,14 @@ export function runProcess(
 
 export class CliAgentRunner implements AgentRunner {
   private codexUsesChatGpt: boolean | undefined;
+  /** Dext owns the stable UI conversation key; Codex owns the resumable thread
+   * UUID. This map joins them while the extension host is alive. */
+  private readonly codexConversationSessions = new Map<string, string>();
 
-  constructor(private timeoutMs = 600_000) {}
+  constructor(
+    private timeoutMs = 600_000,
+    private readonly processRunner: ProcessRunner = runProcess
+  ) {}
 
   /** A long agent turn is cut off by this timer, so it has to follow the
    * setting rather than be fixed when the runner was built. */
@@ -661,7 +686,7 @@ export class CliAgentRunner implements AgentRunner {
     if (request.profile.provider !== "codex") return undefined;
     if (this.codexUsesChatGpt === undefined) {
       try {
-        const status = await runProcess(command, ["login", "status"], "", request.cwd, request.signal);
+        const status = await this.processRunner(command, ["login", "status"], "", request.cwd, request.signal);
         this.codexUsesChatGpt = status.code === 0 && /logged in using chatgpt/i.test(`${status.stdout}\n${status.stderr}`);
       } catch (error) {
         if (error instanceof ExecutionCancelledError) throw error;
@@ -739,7 +764,7 @@ export class CliAgentRunner implements AgentRunner {
         : `${prompt}\n\nDext JSON payload:\n${input}`;
       let result: ProcessResult;
       try {
-        result = await runProcess(command, args, stdin, request.cwd, controller.signal, onStdout, processEnv);
+        result = await this.processRunner(command, args, stdin, request.cwd, controller.signal, onStdout, processEnv);
       } finally {
         clearTimeout(timer);
         request.signal?.removeEventListener("abort", cancel);
@@ -781,8 +806,19 @@ export class CliAgentRunner implements AgentRunner {
       ? request.permission ?? "workspace-write"
       : "read-only";
     const extraArguments = request.cliArguments ?? [];
+    const conversationKey = request.profile.provider === "codex"
+      ? request.metadata.agentSessionId
+      : undefined;
+    const resumeId = conversationKey
+      ? this.codexConversationSessions.get(conversationKey)
+      : undefined;
     const args = request.profile.provider === "codex"
-      ? codexConversationArguments({ ...request, permission }, serviceTier, extraArguments)
+      ? codexConversationArguments(
+          { ...request, permission },
+          serviceTier,
+          extraArguments,
+          { persist: Boolean(conversationKey), ...(resumeId ? { resumeId } : {}) }
+        )
       : claudeConversationArguments({ ...request, permission }, extraArguments);
     const processEnv = await this.processEnvironment(command, request);
     const controller = new AbortController();
@@ -797,6 +833,10 @@ export class CliAgentRunner implements AgentRunner {
       const lines = eventBuffer.split(/\r?\n/);
       eventBuffer = lines.pop() ?? "";
       for (const line of lines) {
+        if (conversationKey) {
+          const threadId = extractCodexThreadId(line);
+          if (threadId) this.codexConversationSessions.set(conversationKey, threadId);
+        }
         const event = request.profile.provider === "codex"
           ? parseCodexStreamLine(line, streamPhases)
           : parseClaudeStreamLine(line);
@@ -804,8 +844,12 @@ export class CliAgentRunner implements AgentRunner {
       }
     };
     try {
-      const result = await runProcess(command, args, request.input, request.cwd, controller.signal, onStdout, processEnv);
+      const result = await this.processRunner(command, args, request.input, request.cwd, controller.signal, onStdout, processEnv);
       if (eventBuffer) {
+        if (conversationKey) {
+          const threadId = extractCodexThreadId(eventBuffer);
+          if (threadId) this.codexConversationSessions.set(conversationKey, threadId);
+        }
         const event = request.profile.provider === "codex"
           ? parseCodexStreamLine(eventBuffer, streamPhases)
           : parseClaudeStreamLine(eventBuffer);

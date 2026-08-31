@@ -8,17 +8,20 @@ import {
   claudeConversationArguments,
   claudeCliArguments,
   claudePermissionMode,
+  CliAgentRunner,
   codexConversationArguments,
   codexCliArguments,
   codexOutputSchema,
   codexSandbox,
   permissionForWrite,
   extractConversationText,
+  extractCodexThreadId,
   extractClaudeResult,
   parseClaudeStreamLine,
   parseCodexStreamLine,
   resolveCliCommand,
   runProcess,
+  type AgentConversationRequest,
   type AgentExecutionRequest
 } from "../src/core/agentRunner.js";
 import { BUILTIN_METHODS } from "../src/core/builtins.js";
@@ -54,6 +57,24 @@ function request(): AgentExecutionRequest {
       metadata: {}
     },
     metadata: {}
+  };
+}
+
+function conversationRequest(input: string, agentSessionId: string): AgentConversationRequest {
+  return {
+    profile: {
+      id: "codex",
+      label: "Codex",
+      provider: "codex",
+      command: process.execPath,
+      models: []
+    },
+    mode: "ask",
+    cwd: process.cwd(),
+    input,
+    metadata: { agentSessionId },
+    allowWorkspaceWrite: false,
+    permission: "read-only"
   };
 }
 
@@ -141,6 +162,67 @@ describe("CLI command resolution", () => {
     expect(claudeConversationArguments({ permission: "read-only" }))
       .toEqual(expect.arrayContaining(["--permission-mode", "plan"]));
     expect(claudeConversationArguments({ permission: "workspace-write" })).not.toContain("--json-schema");
+  });
+
+  it("persists the first Codex conversation turn and resumes its exact thread", () => {
+    const initial = codexConversationArguments(
+      { model: "gpt-5", permission: "read-only" },
+      undefined,
+      [],
+      { persist: true }
+    );
+    expect(initial).not.toContain("--ephemeral");
+    expect(initial).not.toContain("resume");
+
+    const resumed = codexConversationArguments(
+      { model: "gpt-5", permission: "read-only" },
+      undefined,
+      [],
+      { persist: true, resumeId: "019c1234-5678-7000-8000-000000000000" }
+    );
+    expect(resumed.slice(-3)).toEqual([
+      "resume", "019c1234-5678-7000-8000-000000000000", "-"
+    ]);
+    expect(resumed).not.toContain("--ephemeral");
+  });
+
+  it("extracts the resumable Codex thread ID without rendering it as progress", () => {
+    const started = JSON.stringify({
+      type: "thread.started",
+      thread_id: "019c1234-5678-7000-8000-000000000000"
+    });
+    expect(extractCodexThreadId(`${started}\n${JSON.stringify({ type: "turn.started" })}`))
+      .toBe("019c1234-5678-7000-8000-000000000000");
+    expect(parseCodexStreamLine(started)).toBeUndefined();
+  });
+
+  it("resumes the Codex thread bound to the same Dext conversation only", async () => {
+    const invocations: string[][] = [];
+    let nextThread = 1;
+    const runner = new CliAgentRunner(1_000, async (_command, args, _input, _cwd, _signal, onStdout) => {
+      if (args[0] === "login") return { stdout: "", stderr: "", code: 1 };
+      invocations.push([...args]);
+      const resumedAt = args.indexOf("resume");
+      const threadId = resumedAt === -1 ? `thread-${nextThread++}` : args[resumedAt + 1]!;
+      const stdout = [
+        JSON.stringify({ type: "thread.started", thread_id: threadId }),
+        JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: `reply from ${threadId}` } })
+      ].join("\n");
+      onStdout?.(`${stdout}\n`);
+      return { stdout, stderr: "", code: 0 };
+    });
+
+    await expect(runner.runConversation(conversationRequest("first", "chat-a")))
+      .resolves.toBe("reply from thread-1");
+    await expect(runner.runConversation(conversationRequest("second", "chat-a")))
+      .resolves.toBe("reply from thread-1");
+    await expect(runner.runConversation(conversationRequest("other", "chat-b")))
+      .resolves.toBe("reply from thread-2");
+
+    expect(invocations[0]).not.toContain("resume");
+    expect(invocations[0]).not.toContain("--ephemeral");
+    expect(invocations[1]?.slice(-3)).toEqual(["resume", "thread-1", "-"]);
+    expect(invocations[2]).not.toContain("resume");
   });
 
   it("maps each permission tier onto the flag its provider understands", () => {

@@ -198,4 +198,19 @@ describe("McpToolRegistry", () => {
     await expect(registry.verifyServer("remote")).rejects.toThrow("requires an access token");
     expect(verified).toEqual([]);
   });
+
+  it("discovers server tools for a caller to add to the explicit allowlist", async () => {
+    const registry = new McpToolRegistry({
+      call: async () => ({}),
+      listTools: async (server) => [
+        { name: "list_projects", description: `List projects from ${server.name}` },
+        { name: "create_task" }
+      ]
+    });
+    registry.setServers([{ name: "team", transport: "stdio", command: "npx" }]);
+    await expect(registry.discoverServerTools("team")).resolves.toEqual([
+      { name: "list_projects", description: "List projects from team" },
+      { name: "create_task" }
+    ]);
+  });
 });
