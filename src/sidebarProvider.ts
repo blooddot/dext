@@ -8,14 +8,14 @@ import type { AgentStreamEvent, ApplyResult, InputExecutionResponse, PatchResult
 import { applyPatchHandler } from "./vscodePatchHost.js";
 import {
   AttachmentStore,
-  MAX_ATTACHMENT_BYTES,
   writeExactClipboardText
 } from "./attachmentStore.js";
 import {
   attachmentFileReference,
-  clipboardFileReference,
+  activeCodeSelection,
   directoryAttachment,
   fileAttachment,
+  isCodeDocument,
   selectionAttachment
 } from "./vscodeAttachments.js";
 import { ReadyMessageQueue } from "./readyMessageQueue.js";
@@ -337,20 +337,34 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   async copySelectionWithContext(): Promise<string> {
+    const editor = vscode.window.activeTextEditor;
     const attachment = await selectionAttachment();
     const copiedText = await writeExactClipboardText(vscode.env.clipboard, attachment.text);
-    this.attachments.stageClipboard(attachment.text, attachment.reference);
+    if (editor && isCodeDocument(editor.document)) {
+      this.attachments.stageClipboard(attachment.text, attachmentFileReference(attachment));
+    } else {
+      this.attachments.clearClipboard();
+    }
     return copiedText;
+  }
+
+  /** Terminal text has no VS Code document URI. Save a bounded snapshot as a
+   * Dext-owned log and stage its @attachment token for the next ordinary paste. */
+  async copyTerminalSelectionWithContext(): Promise<void> {
+    await vscode.commands.executeCommand("workbench.action.terminal.copySelection");
+    const text = await vscode.env.clipboard.readText();
+    if (!text) throw new Error("Select terminal output before copying it with context.");
+    const attachment = await this.storeTerminalOutput(text);
+    this.attachments.stageClipboard(text, {
+      payload: attachment.relativePath,
+      expression: `@${attachment.relativePath}`
+    });
   }
 
   async addFileToChat(resource?: vscode.Uri): Promise<void> {
     const uri = resource ?? vscode.window.activeTextEditor?.document.uri;
-    if (!uri) throw new Error("Choose a workspace file before adding it to Dext input.");
-    const attachment = await fileAttachment(uri);
-    this.postWhenReady({
-      type: "insertFileReferences",
-      expressions: [attachmentFileReference(attachment).expression]
-    });
+    if (!uri) throw new Error("Choose a workspace file or directory before adding it to Dext input.");
+    await this.addFileUris([uri]);
   }
 
   dispose(): void {
@@ -499,18 +513,16 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
             });
             throw error;
           }
-          let codeReference: ReturnType<typeof clipboardFileReference>;
-          const clipboardContext = this.attachments.clipboardReference(text);
+          let codeReference = request.purpose === "code"
+            ? this.attachments.clipboardReference(text)
+            : undefined;
           try {
-            codeReference = request.purpose === "code" && clipboardContext
-              ? clipboardFileReference(clipboardContext)
-              : undefined;
             // A selection copied from a VS Code editor does not pass through
             // Dext's context-copy command. Recover its workspace reference
             // when the clipboard text still matches the active selection.
             if (request.purpose === "code" && !codeReference) {
-              const editor = vscode.window.activeTextEditor;
-              if (editor && !editor.selection.isEmpty && editor.document.getText(editor.selection) === text) {
+              const editor = activeCodeSelection();
+              if (editor && editor.document.getText(editor.selection) === text) {
                 codeReference = attachmentFileReference(await selectionAttachment());
               }
             }
@@ -865,8 +877,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     const references = await Promise.all(uris.map(async (uri) => {
       const stat = await vscode.workspace.fs.stat(uri);
       if ((stat.type & vscode.FileType.Directory) !== 0) return directoryAttachment(uri);
-      const snapshot = await fileAttachment(uri);
-      return attachmentFileReference(snapshot);
+      return fileAttachment(uri);
     }));
     this.postWhenReady({
       type: "insertFileReferences",
@@ -880,9 +891,25 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     if (!extension) throw new Error("Unsupported image format. Paste a PNG, JPEG, GIF, WebP, or BMP image.");
     const name = `${randomBytes(12).toString("hex")}${extension}`;
     const buffer = Buffer.from(data, "base64");
-    if (buffer.byteLength > MAX_ATTACHMENT_BYTES) {
-      throw new Error(`Attachments must be ${MAX_ATTACHMENT_BYTES} bytes or smaller.`);
+    const limit = this.application.storage.attachmentByteLimit();
+    if (buffer.byteLength > limit) {
+      throw new Error(`Attachments must be ${limit} bytes or smaller.`);
     }
+    const directory = this.application.storage.directory("attachments");
+    await vscode.workspace.fs.createDirectory(directory);
+    const uri = vscode.Uri.joinPath(directory, name);
+    await vscode.workspace.fs.writeFile(uri, buffer);
+    await this.application.storage.pruneAttachments(this.application.storage.attachmentLimit(), uri);
+    return { relativePath: this.application.storage.reference("attachments", name), uri, name };
+  }
+
+  private async storeTerminalOutput(text: string): Promise<{ relativePath: string; uri: vscode.Uri; name: string }> {
+    const buffer = Buffer.from(text, "utf8");
+    const limit = this.application.storage.attachmentByteLimit();
+    if (buffer.byteLength > limit) {
+      throw new Error(`Terminal output must be ${limit} bytes or smaller.`);
+    }
+    const name = `terminal-${randomBytes(12).toString("hex")}.log`;
     const directory = this.application.storage.directory("attachments");
     await vscode.workspace.fs.createDirectory(directory);
     const uri = vscode.Uri.joinPath(directory, name);

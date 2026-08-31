@@ -487,6 +487,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("dext.copySelectionWithContext", () =>
       reportCommandError(() => sidebar.copySelectionWithContext())
     ),
+    vscode.commands.registerCommand("dext.copyTerminalSelectionWithContext", () =>
+      reportCommandError(() => sidebar.copyTerminalSelectionWithContext())
+    ),
     vscode.commands.registerCommand("dext.addFileToChat", (resource?: vscode.Uri) =>
       reportCommandError(async () => {
         await sidebar.addFileToChat(resource);

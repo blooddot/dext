@@ -24,6 +24,19 @@ describe("Code reference paste", () => {
       .toBe(`${reference.codeReference?.expression} `);
   });
 
+  it("leaves a separator after a pasted terminal reference", () => {
+    const terminalReference: ClipboardReadResult = {
+      text: "copied terminal output",
+      contextAttached: false,
+      codeReference: {
+        expression: "@.dext-global/attachments/terminal-1234567890abcdef.log",
+        payload: ".dext-global/attachments/terminal-1234567890abcdef.log"
+      }
+    };
+    expect(codeReferencePasteText("", 0, 0, terminalReference))
+      .toBe("@.dext-global/attachments/terminal-1234567890abcdef.log ");
+  });
+
   it("uses existing argument whitespace without adding space before a terminator", () => {
     const source = "ask(input=)";
     const cursor = source.indexOf(")");

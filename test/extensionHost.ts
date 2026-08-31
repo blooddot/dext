@@ -58,6 +58,7 @@ export async function run(): Promise<void> {
 
   await vscode.commands.executeCommand("dext.addSelectionToChat");
   await vscode.commands.executeCommand("dext.addFileToChat", file);
+  await vscode.commands.executeCommand("dext.addFileToChat", folder.uri);
 
   const app = new DextApplication();
   await app.reload();

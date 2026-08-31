@@ -17,6 +17,7 @@ import {
   extractConversationText,
   extractCodexThreadId,
   extractClaudeResult,
+  agentTokenUsage,
   parseClaudeStreamLine,
   parseCodexStreamLine,
   resolveCliCommand,
@@ -107,6 +108,26 @@ describe("CLI command resolution", () => {
       type: "item.completed",
       item: { id: "item_0", type: "agent_message", text: "I will inspect the target first." }
     }))).toMatchObject({ id: "item_0", phase: "message", text: "I will inspect the target first.", done: true });
+  });
+
+  it("captures provider-reported token usage from completed Codex and Claude turns", () => {
+    expect(parseCodexStreamLine(JSON.stringify({
+      type: "turn.completed",
+      usage: { input_tokens: 1_000, cached_input_tokens: 250, output_tokens: 300 }
+    }))).toMatchObject({
+      phase: "status",
+      done: true,
+      usage: { inputTokens: 1_000, cachedInputTokens: 250, outputTokens: 300 }
+    });
+    expect(parseClaudeStreamLine(JSON.stringify({
+      type: "result",
+      usage: { input_tokens: 500, output_tokens: 120, total_tokens: 620 }
+    }))).toMatchObject({
+      phase: "status",
+      done: true,
+      usage: { inputTokens: 500, outputTokens: 120, totalTokens: 620 }
+    });
+    expect(agentTokenUsage({ input_tokens: -1, output_tokens: "120" })).toBeUndefined();
   });
 
   it("keeps reasoning summaries but omits the final structured result from the trace", () => {

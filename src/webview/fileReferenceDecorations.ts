@@ -43,8 +43,12 @@ function whitespaceBefore(source: string, offset: number): number {
   return offset;
 }
 
-function whitespaceAfter(source: string, offset: number): number {
-  while (offset < source.length && /[ \t]/.test(source[offset] ?? "")) offset += 1;
+function whitespaceAfter(source: string, offset: number, maximum = Number.POSITIVE_INFINITY): number {
+  let count = 0;
+  while (offset < source.length && count < maximum && /[ \t]/.test(source[offset] ?? "")) {
+    offset += 1;
+    count += 1;
+  }
   return offset;
 }
 
@@ -67,7 +71,10 @@ function decoratedReferences(source: string): DecoratedReference[] {
       // Between two chips the preceding chip owns the shared separator, which
       // keeps replacement ranges disjoint.
       from: previous?.interpolationEnd === leading ? projection.interpolationStart : leading,
-      to: whitespaceAfter(source, projection.interpolationEnd)
+      // Insertions add one separator so text typed immediately after a chip
+      // cannot be parsed into its path. Hide that generated separator, but
+      // retain any additional spaces the user explicitly types after it.
+      to: whitespaceAfter(source, projection.interpolationEnd, 1)
     };
   });
 }

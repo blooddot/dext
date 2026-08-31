@@ -51,6 +51,7 @@ describe("sidebar panel layout", () => {
     expect(main).toContain('pendingDropPosition = undefined');
     expect(editor).toContain('this.lineWrapping.reconfigure(enabled ? [] : EditorView.lineWrapping)');
     expect(css).toContain('.input-shell.conversation-mode .cm-gutters');
+    expect(css).toMatch(/\.code-file-reference \{[\s\S]*?margin: 0;/);
     expect(css).toContain('.input-section[data-mode="ask"] #mode-control');
     expect(css).toContain('.input-section[data-mode="plan"] #mode-control');
     expect(css).toContain('.input-section[data-mode="code"] #mode-control');
@@ -145,6 +146,8 @@ describe("sidebar panel layout", () => {
     // than shown disabled.
     expect(main).toContain('elements.permissionMenuShell.hidden = inputMode !== "agent"');
     expect(main).toMatch(/renderComposerMenu\(elements\.permissionMenu, \[[\s\S]*?"full-access"/);
+    expect(main).toContain('elements.permissionControl.classList.toggle("is-full-access", agentPermission === "full-access")');
+    expect(main).toContain('}, ["full-access"]);');
     expect(main).toContain('permission: change.permission ?? selection?.permission ?? agentPermission');
     expect(manifest).toContain('"dext.agentPermission"');
     expect(manifest).toContain('"dext.agentCliArgs"');
@@ -159,6 +162,8 @@ describe("sidebar panel layout", () => {
     expect(sidebar).toMatch(/if \(result\.status === "applied" \|\| result\.status === "unchanged"\) \{\s*this\.forgetResolvedChanges/);
     expect(css).toContain(".patch-review-action.accept");
     expect(css).toContain(".agent-file-change.patch-conflict");
+    expect(css).toContain("#permission-control.is-full-access {");
+    expect(css).toContain(".composer-menu-option.composer-menu-option-warning {");
   });
 
   it("colors Send with the accent of the mode it will run in", async () => {
@@ -242,6 +247,29 @@ describe("sidebar panel layout", () => {
     expect(css).toContain(".tok-keyword");
   });
 
+  it("shows provider token usage in Process only when the provider reports it", async () => {
+    const main = await source("src/webview/main.ts");
+    expect(main).toContain("let agentTokenUsage: AgentTokenUsage | undefined;");
+    expect(main).toMatch(/function renderAgentEvent[\s\S]*?if \(event\.usage\) agentTokenUsage = event\.usage;/);
+    expect(main).toMatch(/function updateAgentProgress[\s\S]*?totalTokens[\s\S]*?tokens/);
+  });
+
+  it("keeps Process as the only disclosure around the live agent timeline", async () => {
+    const main = await source("src/webview/main.ts");
+    const css = await source("media/styles.css");
+    expect(main).toMatch(/function agentStreamPanel[\s\S]*?activeTurn\?\.process[\s\S]*?processDisclosure\.querySelector/);
+    expect(main).not.toContain('trace.className = "agent-run-disclosure"');
+    expect(css).not.toContain(".agent-run-disclosure");
+  });
+
+  it("opens workspace Markdown links from output in the editor", async () => {
+    const main = await source("src/webview/main.ts");
+    const outputLinks = await source("src/webview/outputLink.ts");
+    expect(main).toMatch(/function openOutputLink[\s\S]*?closest<HTMLAnchorElement>\("a\[href\]"\)[\s\S]*?type: "openFileReference"/);
+    expect(main).toContain('elements.result.addEventListener("click", openOutputLink);');
+    expect(outputLinks).toContain('value.toLowerCase().startsWith("file:")');
+  });
+
   it("offers the @ file picker in every mode and inserts the same chip as a drop", async () => {
     const editor = await source("src/webview/codeEditor.ts");
     const sidebar = await source("src/sidebarProvider.ts");
@@ -302,6 +330,7 @@ describe("sidebar panel layout", () => {
     expect(css).toMatch(/\.input-section\.section-collapsed,[\s\S]*?\.result-section\.section-collapsed \{[\s\S]*?flex: 0 0 auto;/);
     expect(css).toMatch(/\.result-section \{[\s\S]*?flex: 1 1 0;/);
     expect(css).toMatch(/#result-body \{[\s\S]*?flex-basis: 0;[\s\S]*?min-height: 0;[\s\S]*?overflow: auto;/);
+    expect(css).toMatch(/#result-body \{[\s\S]*?scrollbar-gutter: stable;/);
     expect(css).toMatch(/@media \(max-height: 480px\)[\s\S]*?\.input-section \{[\s\S]*?--input-editor-height: clamp\(56px, 20vh, 96px\);/);
     expect(css).toMatch(/main\.workspace-fullscreen > \.panel-expanded \{[\s\S]*?max-height: none;/);
   });

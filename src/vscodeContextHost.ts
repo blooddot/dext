@@ -131,6 +131,16 @@ export async function openWorkspaceFileReference(filePath: string): Promise<void
 /** Opens a Dext-owned global plan or attachment when its reference was created
  * under global storage; ordinary references retain workspace-only validation. */
 export async function openDextFileReference(filePath: string, storage: DextStorage): Promise<void> {
+  // Markdown output may use a standard file URL instead of a workspace-relative
+  // path. Keep that useful, but validate it through openWorkspaceDocument so a
+  // Webview can never open a file outside the current workspace.
+  try {
+    const uri = vscode.Uri.parse(filePath, true);
+    if (uri.scheme === "file") return openWorkspaceDocument(uri);
+  } catch {
+    // Fall through to the ordinary reference resolver, which will report an
+    // invalid relative path with its usual error message.
+  }
   const uri = storage.uriForReference("plans", filePath) ?? storage.uriForReference("attachments", filePath);
   if (!uri) return openWorkspaceFileReference(filePath);
   if (IMAGE_EXTENSIONS.has(extname(uri.fsPath).toLowerCase())) {

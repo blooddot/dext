@@ -345,7 +345,23 @@ describe("Dext history rendering", () => {
     expect(html).not.toContain("data-open-image-attachment");
   });
 
-  it("does not render the source separators around file reference Chips", () => {
+  it("renders trailing-slash directory references as folder Chips", () => {
+    const record: DextHistoryRecord = {
+      id: "directory-reference",
+      createdAt: 1,
+      input: 'ask(input="Inspect @src/components/")',
+      process: [],
+      output: ""
+    };
+
+    const html = renderHistoryRecord(record);
+    expect(html).toContain("history-file-reference");
+    expect(html).toContain("codicon-folder");
+    expect(html).toContain("components");
+    expect(html).not.toContain("data-open-file-reference");
+  });
+
+  it("renders source separators around file reference Chips", () => {
     const record: DextHistoryRecord = {
       id: "inline-reference",
       createdAt: 1,
@@ -354,8 +370,8 @@ describe("Dext history rendering", () => {
       output: ""
     };
     const html = renderHistoryRecord(record);
-    expect(html).toContain("before<span class=\"attachment-chip");
-    expect(html).toContain("</span>after");
+    expect(html).toContain("before <span class=\"attachment-chip");
+    expect(html).toContain("</span> after");
   });
 
   it("groups continuous turns under one collapsible conversation", () => {

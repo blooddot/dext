@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { attachmentByteLimit, MAX_ATTACHMENT_BYTES } from "./attachmentStore.js";
 
 export const STORAGE_LOCATIONS = ["global", "workspace"] as const;
 export type StorageLocation = typeof STORAGE_LOCATIONS[number];
@@ -6,6 +7,8 @@ export type StoredDextFile = "attachments" | "plans";
 export const DEFAULT_MAX_ATTACHMENT_FILES = 200;
 
 const GLOBAL_REFERENCE_ROOT = ".dext-global";
+const ATTACHMENT_FILE = /^(?:[a-f0-9]{24}\.(?:png|jpg|gif|webp|bmp)|terminal-[a-f0-9]{24}\.log)$/i;
+const ATTACHMENT_REFERENCE = /@((?:\.dext-global|\.dext)\/attachments\/(?:[a-f0-9]{24}\.(?:png|jpg|gif|webp|bmp)|terminal-[a-f0-9]{24}\.log))/gi;
 
 function safeSegments(path: string): string[] | undefined {
   const segments = path.replaceAll("\\", "/").split("/");
@@ -28,6 +31,12 @@ export class DextStorage {
   attachmentLimit(): number {
     const value = vscode.workspace.getConfiguration("dext").get<number>("attachments.maxFiles", DEFAULT_MAX_ATTACHMENT_FILES);
     return Number.isInteger(value) && value > 0 ? value : DEFAULT_MAX_ATTACHMENT_FILES;
+  }
+
+  attachmentByteLimit(): number {
+    const value = vscode.workspace.getConfiguration("dext")
+      .get<number>("attachments.maxBytes", MAX_ATTACHMENT_BYTES);
+    return attachmentByteLimit(value);
   }
 
   directory(kind: StoredDextFile): vscode.Uri {
@@ -62,10 +71,10 @@ export class DextStorage {
   }
 
   /** The original user text remains a compact token in history, while an agent
-   * receives the global on-disk path it needs to inspect an image. */
+   * receives the on-disk path it needs to inspect an image or terminal log. */
   attachmentPrompt(input: string): string {
-    const paths = [...input.matchAll(/@\.dext-global\/attachments\/([a-f0-9]{24}\.(?:png|jpg|gif|webp|bmp))/gi)]
-      .map((match) => this.uriForReference("attachments", `${GLOBAL_REFERENCE_ROOT}/attachments/${match[1]}`)?.fsPath)
+    const paths = [...input.matchAll(ATTACHMENT_REFERENCE)]
+      .map((match) => this.uriForReference("attachments", match[1] ?? "")?.fsPath)
       .filter((path): path is string => Boolean(path));
     if (!paths.length) return input;
     return `${input}\n\nDext attachment files (read-only):\n${paths.map((path) => `- ${path}`).join("\n")}`;
@@ -80,12 +89,12 @@ export class DextStorage {
       if (error instanceof vscode.FileSystemError && error.code === "FileNotFound") return;
       throw error;
     }
-    const images = entries
-      .filter(([name, type]) => type === vscode.FileType.File && /^[a-f0-9]{24}\.(?:png|jpg|gif|webp|bmp)$/i.test(name))
+    const attachments = entries
+      .filter(([name, type]) => type === vscode.FileType.File && ATTACHMENT_FILE.test(name))
       .map(([name]) => vscode.Uri.joinPath(directory, name));
-    const excess = images.length - maxFiles;
+    const excess = attachments.length - maxFiles;
     if (excess <= 0) return;
-    const dated = await Promise.all(images.map(async (uri) => ({ uri, stat: await vscode.workspace.fs.stat(uri) })));
+    const dated = await Promise.all(attachments.map(async (uri) => ({ uri, stat: await vscode.workspace.fs.stat(uri) })));
     dated.sort((left, right) => left.stat.mtime - right.stat.mtime || left.stat.ctime - right.stat.ctime);
     const protectedUri = keep?.toString();
     await Promise.all(dated

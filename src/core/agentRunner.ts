@@ -8,7 +8,7 @@ import { isDextResult, serializeResultForAgent } from "./resultSerialization.js"
 import { ExecutionCancelledError } from "./executionErrors.js";
 import type { AgentPermission, AgentProfile } from "../agentProfiles.js";
 import type { AxMethodContract } from "./axAdapter.js";
-import type { AgentStreamEvent, AgentStreamPhase, ExecutionMetadata, RegisteredCallable, ResolvedInvocation } from "./types.js";
+import type { AgentStreamEvent, AgentStreamPhase, AgentTokenUsage, ExecutionMetadata, RegisteredCallable, ResolvedInvocation } from "./types.js";
 
 export interface AgentExecutionRequest {
   profile: AgentProfile;
@@ -350,6 +350,7 @@ export function parseCodexStreamLine(
   const event = parsed as Record<string, unknown>;
   const eventType = typeof event.type === "string" ? event.type : undefined;
   if (!eventType || eventType === "thread.started" || eventType === "turn.started") return undefined;
+  const usage = agentTokenUsage(event.usage);
   const item = typeof event.item === "object" && event.item !== null
     ? event.item as Record<string, unknown>
     : undefined;
@@ -367,7 +368,7 @@ export function parseCodexStreamLine(
   const command = typeof item?.command === "string" ? item.command : undefined;
   const aggregatedOutput = typeof item?.aggregated_output === "string" ? item.aggregated_output : undefined;
   const statusText = phase === "tool" ? (aggregatedOutput || command || text || "") : (text ?? "");
-  if (!statusText || (phase === "message" && isStructuredAgentResult(statusText))) return undefined;
+  if ((!statusText && !usage) || (phase === "message" && isStructuredAgentResult(statusText))) return undefined;
   return {
     ...(eventId ? { id: eventId } : {}),
     phase,
@@ -375,7 +376,8 @@ export function parseCodexStreamLine(
     ...(command ? { title: command } : {}),
     ...(eventType === "item.updated" || eventType === "item.completed" ? { replace: true } : {}),
     ...(eventType.endsWith("completed") || eventType.endsWith("done") ? { done: true } : {}),
-    eventType
+    eventType,
+    ...(usage ? { usage } : {})
   };
 }
 
@@ -383,6 +385,30 @@ function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined;
+}
+
+function tokenCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+/** Normalizes the fields emitted by Codex and Claude's JSON CLIs. Unknown
+ * provider payloads intentionally yield no usage rather than an estimate. */
+export function agentTokenUsage(value: unknown): AgentTokenUsage | undefined {
+  const usage = record(value);
+  if (!usage) return undefined;
+  const inputTokens = tokenCount(usage.input_tokens ?? usage.inputTokens);
+  const cachedInputTokens = tokenCount(usage.cached_input_tokens ?? usage.cachedInputTokens);
+  const outputTokens = tokenCount(usage.output_tokens ?? usage.outputTokens);
+  const totalTokens = tokenCount(usage.total_tokens ?? usage.totalTokens);
+  if (inputTokens === undefined && cachedInputTokens === undefined && outputTokens === undefined && totalTokens === undefined) {
+    return undefined;
+  }
+  return {
+    ...(inputTokens === undefined ? {} : { inputTokens }),
+    ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
+    ...(outputTokens === undefined ? {} : { outputTokens }),
+    ...(totalTokens === undefined ? {} : { totalTokens })
+  };
 }
 
 function claudeContentText(value: unknown): string | undefined {
@@ -411,7 +437,11 @@ export function parseClaudeStreamLine(line: string): AgentStreamEvent | undefine
   const event = record(parsed);
   if (!event) return undefined;
   const eventType = typeof event.type === "string" ? event.type : "";
-  if (!eventType || eventType === "system" || eventType === "result") return undefined;
+  if (!eventType || eventType === "system") return undefined;
+  const usage = agentTokenUsage(event.usage);
+  if (eventType === "result") {
+    return usage ? { phase: "status", text: "", eventType, done: true, usage } : undefined;
+  }
 
   if (eventType === "stream_event") {
     const stream = record(event.event);

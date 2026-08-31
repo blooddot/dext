@@ -1,7 +1,19 @@
-import type { CodeRef } from "./core/types.js";
+import type { DextFileReference } from "./core/fileReference.js";
 
-export const MAX_ATTACHMENT_BYTES = 256 * 1024;
+/** Default ceiling for content Dext persists from the clipboard or terminal. */
+export const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+export const MIN_ATTACHMENT_BYTES = 64 * 1024;
+export const MAX_CONFIGURED_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 export const CLIPBOARD_TTL_MS = 60_000;
+
+export function attachmentByteLimit(value: unknown): number {
+  return typeof value === "number"
+    && Number.isInteger(value)
+    && value >= MIN_ATTACHMENT_BYTES
+    && value <= MAX_CONFIGURED_ATTACHMENT_BYTES
+    ? value
+    : MAX_ATTACHMENT_BYTES;
+}
 
 export interface TextClipboardWriter {
   writeText(text: string): Thenable<void>;
@@ -17,7 +29,7 @@ export async function writeExactClipboardText(
 
 interface ClipboardEntry {
   text: string;
-  reference: CodeRef;
+  reference: DextFileReference;
   expiresAt: number;
 }
 
@@ -28,10 +40,10 @@ export class AttachmentStore {
 
   stageClipboard(
     text: string,
-    reference: CodeRef
+    reference: DextFileReference
   ): void {
-    if (!text) throw new Error("Select code before copying it with context.");
-    this.assertSize(reference);
+    if (!text) throw new Error("Select text before copying it with context.");
+    this.assertSize(text);
     this.clipboard = {
       text,
       reference,
@@ -39,8 +51,12 @@ export class AttachmentStore {
     };
   }
 
-  clipboardReference(text: string): CodeRef | undefined {
+  clipboardReference(text: string): DextFileReference | undefined {
     return this.matchClipboard(text)?.reference;
+  }
+
+  clearClipboard(): void {
+    this.clipboard = undefined;
   }
 
   dispose(): void {
@@ -61,8 +77,8 @@ export class AttachmentStore {
     return clipboard;
   }
 
-  private assertSize(reference: CodeRef): void {
-    if (new TextEncoder().encode(reference.content).byteLength > MAX_ATTACHMENT_BYTES) {
+  private assertSize(text: string): void {
+    if (new TextEncoder().encode(text).byteLength > MAX_ATTACHMENT_BYTES) {
       throw new Error(`Attachments must be ${MAX_ATTACHMENT_BYTES} bytes or smaller.`);
     }
   }

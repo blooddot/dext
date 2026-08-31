@@ -6,6 +6,7 @@ import type {
   FieldDefinition,
   AgentStreamEvent,
   AgentToolKind,
+  AgentTokenUsage,
   DextResult,
   InputExecutionResponse,
   PatchChange,
@@ -33,6 +34,7 @@ import {
   type ContextReferenceOccurrence
 } from "../core/fileReference.js";
 import { createFileReferenceChip, fileReferenceChipDescriptor } from "./fileReferenceChip.js";
+import { outputLinkReference } from "./outputLink.js";
 
 interface VsCodeApi {
   postMessage(message: WebviewRequest): void;
@@ -121,11 +123,11 @@ const runningConversationIds = new Set<string>();
 let dropPosition: number | undefined;
 let pendingDropPosition: number | undefined;
 let agentStream: HTMLElement | undefined;
-let agentTrace: HTMLDetailsElement | undefined;
 let agentRunStartedAt = 0;
 let agentRunTimer: ReturnType<typeof setInterval> | undefined;
 let agentProgress: HTMLElement | undefined;
 let agentProgressState = "Thinking";
+let agentTokenUsage: AgentTokenUsage | undefined;
 let agentCommandIds = new Set<string>();
 let agentEditedUris = new Set<string>();
 const agentEventItems = new Map<string, HTMLElement>();
@@ -223,6 +225,19 @@ function openInputReference(reference: ContextReferenceOccurrence): void {
   if (reference.kind === "file") {
     vscode.postMessage({ type: "openFileReference", reference: reference.payload });
   }
+}
+
+/** Open workspace-file links emitted in Markdown output in the VS Code editor.
+ * External links retain their ordinary browser behaviour. */
+function openOutputLink(event: MouseEvent): void {
+  const target = event.target instanceof Element ? event.target : null;
+  const link = target?.closest<HTMLAnchorElement>("a[href]");
+  if (!link || !elements.result.contains(link)) return;
+  const reference = outputLinkReference(link.getAttribute("href") ?? "");
+  if (!reference) return;
+  event.preventDefault();
+  event.stopPropagation();
+  vscode.postMessage({ type: "openFileReference", reference });
 }
 
 function updateRunState(): void {
@@ -516,6 +531,7 @@ function renderAgentControls(state: SidebarState): void {
   elements.permissionMenuShell.hidden = inputMode !== "agent";
   elements.permissionControlValue.textContent = PERMISSION_LABEL[agentPermission];
   elements.permissionControlIcon.className = `codicon ${PERMISSION_ICON[agentPermission]}`;
+  elements.permissionControl.classList.toggle("is-full-access", agentPermission === "full-access");
   elements.agentControlValue.textContent = selected?.label ?? "Choose";
   const selectedModelLabel = selectedModel?.label ?? "Default";
   const selectedEffort = state.agentSelection.reasoningEffort ?? selectedModel?.defaultReasoningEffort;
@@ -530,6 +546,11 @@ function renderAgentControls(state: SidebarState): void {
   ], inputMode, (mode) => {
     inputMode = mode as InputMode;
     submitAgentSelection({});
+  }, [], {
+    agent: "composer-menu-option-mode-agent",
+    ask: "composer-menu-option-mode-ask",
+    plan: "composer-menu-option-mode-plan",
+    code: "composer-menu-option-mode-code"
   });
   renderComposerMenu(elements.permissionMenu, [
     ["read-only", PERMISSION_LABEL["read-only"], PERMISSION_ICON["read-only"]],
@@ -538,7 +559,7 @@ function renderAgentControls(state: SidebarState): void {
   ], agentPermission, (permission) => {
     agentPermission = permission as AgentPermission;
     submitAgentSelection({ permission: agentPermission });
-  });
+  }, ["full-access"]);
   renderComposerMenu(elements.agentMenu, state.agentProfiles.map((item) => [item.id, item.label, "codicon-account"]), selected?.id ?? "", (profileId) => {
     submitAgentSelection({ profileId, model: "", reasoningEffort: "", speed: "", serviceTier: "" });
   });
@@ -550,13 +571,16 @@ function renderComposerMenu(
   menu: HTMLElement,
   items: readonly (readonly [string, string, string])[],
   selected: string,
-  onSelect: (value: string) => void
+  onSelect: (value: string) => void,
+  warningValues: readonly string[] = [],
+  itemClasses: Readonly<Record<string, string>> = {}
 ): void {
   menu.replaceChildren();
   for (const [value, label, icon] of items) {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "composer-menu-option";
+    const itemClass = itemClasses[value];
+    button.className = `composer-menu-option${warningValues.includes(value) ? " composer-menu-option-warning" : ""}${itemClass ? ` ${itemClass}` : ""}`;
     button.setAttribute("role", "menuitemradio");
     button.setAttribute("aria-checked", String(value === selected));
     const glyph = document.createElement("i");
@@ -1656,22 +1680,13 @@ function followResultIfNeeded(shouldFollow: boolean): void {
 
 function agentStreamPanel(): HTMLElement {
   if (agentStream?.isConnected) return agentStream;
-  const trace = document.createElement("details");
-  trace.className = "agent-run-disclosure";
-  trace.open = true;
-  const summary = document.createElement("summary");
-  const chevron = document.createElement("i");
-  chevron.className = "disclosure-chevron codicon codicon-chevron-right";
-  const progress = document.createElement("span");
-  progress.className = "agent-progress";
-  summary.append(chevron, progress);
   const panel = document.createElement("section");
   panel.className = "agent-stream-panel";
-  trace.append(summary, panel);
-  (activeTurn?.process ?? elements.result).append(trace);
-  agentTrace = trace;
+  (activeTurn?.process ?? elements.result).append(panel);
   agentStream = panel;
-  agentProgress = progress;
+  // Process already owns the first-level disclosure. Put live run metadata in
+  // its title instead of nesting a second disclosure around the timeline.
+  agentProgress = activeTurn?.processDisclosure.querySelector<HTMLElement>(".disclosure-meta") ?? undefined;
   updateAgentProgress(agentProgressState);
   return panel;
 }
@@ -1680,7 +1695,15 @@ function updateAgentProgress(label: string): void {
   if (!agentProgress) return;
   agentProgressState = label;
   const elapsed = agentRunStartedAt ? Math.max(0, Date.now() - agentRunStartedAt) : 0;
+  const totalTokens = agentTokenUsage?.totalTokens
+    ?? (agentTokenUsage?.inputTokens !== undefined && agentTokenUsage.outputTokens !== undefined
+      ? agentTokenUsage.inputTokens + agentTokenUsage.outputTokens
+      : undefined);
+  const tokenLabel = totalTokens === undefined
+    ? ""
+    : `${totalTokens >= 1_000 ? `${(totalTokens / 1_000).toFixed(totalTokens >= 10_000 ? 0 : 1)}k` : totalTokens} tokens`;
   const details = [
+    tokenLabel,
     agentEditedUris.size ? `Edited ${agentEditedUris.size} file${agentEditedUris.size === 1 ? "" : "s"}` : "",
     agentCommandIds.size ? `Ran ${agentCommandIds.size} command${agentCommandIds.size === 1 ? "" : "s"}` : ""
   ].filter(Boolean);
@@ -1698,7 +1721,6 @@ function finishAgentProgress(): void {
   if (agentRunTimer) clearInterval(agentRunTimer);
   agentRunTimer = undefined;
   updateAgentProgress("Worked");
-  if (agentTrace) agentTrace.open = false;
 }
 
 function agentEventKind(event: AgentStreamEvent): "reasoning" | "work" | "tool" {
@@ -1823,8 +1845,9 @@ function agentToolGroupFor(
 }
 
 function renderAgentEvent(event: AgentStreamEvent): void {
+  if (event.usage) agentTokenUsage = event.usage;
   if (event.phase === "status") {
-    updateAgentProgress(event.text);
+    updateAgentProgress(event.text || agentProgressState);
     return;
   }
   if (event.phase === "reasoning" || event.phase === "message") updateAgentProgress("Thinking");
@@ -1943,9 +1966,9 @@ function renderAgentFileChanges(entries: readonly WorkflowStepResponse[]): void 
 
 function resetAgentTrace(): void {
   agentStream = undefined;
-  agentTrace = undefined;
   agentProgress = undefined;
   agentProgressState = "Thinking";
+  agentTokenUsage = undefined;
   agentCommandIds = new Set<string>();
   agentEditedUris = new Set<string>();
   agentEventItems.clear();
@@ -1978,7 +2001,7 @@ function renderOutputSession(session: DextHistorySession): void {
     resetAgentTrace();
     agentRunStartedAt = Date.now();
     for (const event of record.process) renderAgentEvent(event);
-    if (agentTrace) finishAgentProgress();
+    if (agentStream) finishAgentProgress();
     turn.processDisclosure.open = false;
     const response = storedResponse(record);
     if (record.error) renderOutputError(record.error);
@@ -2046,6 +2069,7 @@ function clearSubmittedInput(): void {
 }
 
 elements.run.addEventListener("click", run);
+elements.result.addEventListener("click", openOutputLink);
 elements.problems.addEventListener("click", () => editor.goToFirstDiagnostic());
 elements.methodsToggle.addEventListener("click", toggleMethodGroups);
 elements.reloadMethods.addEventListener("click", () => {

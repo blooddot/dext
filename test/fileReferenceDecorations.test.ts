@@ -25,6 +25,21 @@ describe("@ file reference decorations", () => {
     });
   });
 
+  it("keeps spaces typed after a Chip outside its atomic range", () => {
+    const token = "@src/pathx.py";
+    // The first space is the automatically inserted path separator. The
+    // second represents a space the user typed after the reference.
+    const source = `agent(input="${token}  后续")`;
+    const ranges: Array<{ from: number; to: number }> = [];
+    inputReferenceProjectionDecorations(source, () => {}).between(0, source.length, (from, to) => {
+      ranges.push({ from, to });
+    });
+    expect(ranges).toEqual([{
+      from: source.indexOf(token),
+      to: source.indexOf(token) + token.length + 1
+    }]);
+  });
+
   it("only recognizes workspace-relative paths with valid ranges", () => {
     const values = atReferenceOccurrences([
       "@src/a.ts",
@@ -35,6 +50,15 @@ describe("@ file reference decorations", () => {
       "@../secret.ts"
     ].join(" "));
     expect(values.map((item) => item.payload)).toEqual(["src/a.ts"]);
+  });
+
+  it("recognizes trailing-slash directory references as folder Chips", () => {
+    const [directory] = atReferenceOccurrences('agent(input="Inspect @src/components/")');
+    expect(directory).toMatchObject({
+      kind: "dir",
+      expression: "@src/components/",
+      payload: "src/components"
+    });
   });
 
   it("removes an initial chip and its separator without leaving a leading blank", () => {

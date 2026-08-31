@@ -438,6 +438,15 @@ export type AgentStreamPhase = "status" | "reasoning" | "message" | "tool";
 
 export type AgentToolKind = "command" | "file" | "image" | "step";
 
+/** Token counts reported by a provider for one completed agent turn. Cached
+ * input is diagnostic metadata only and is never added to the total twice. */
+export interface AgentTokenUsage {
+  inputTokens?: number;
+  cachedInputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+}
+
 export interface AgentStreamEvent {
   id?: string;
   phase: AgentStreamPhase;
@@ -455,6 +464,7 @@ export interface AgentStreamEvent {
   replace?: boolean;
   done?: boolean;
   eventType?: string;
+  usage?: AgentTokenUsage;
 }
 
 export interface RuntimeResponse {

@@ -35,5 +35,12 @@ export function codeReferencePasteText(
   if (/ref\.file\s*\(\s*$/.test(before) && /^\s*(?:\)|$)/.test(after)) {
     return `"${reference.payload}"`;
   }
-  return inlineInsertion(source, selectionStart, selectionEnd, reference.expression).text;
+  const insertion = inlineInsertion(source, selectionStart, selectionEnd, reference.expression);
+  // A readable @ reference is rendered as an atomic chip. When it is pasted
+  // at the end of the composer, retain a source-space after it so the next
+  // typed character cannot be absorbed into the token and hidden by the chip.
+  const terminalSeparator = reference.expression.startsWith("@") && selectionEnd === source.length
+    ? " "
+    : "";
+  return `${insertion.text}${terminalSeparator}`;
 }

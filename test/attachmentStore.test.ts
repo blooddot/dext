@@ -2,18 +2,18 @@ import { describe, expect, it } from "vitest";
 import {
   AttachmentStore,
   CLIPBOARD_TTL_MS,
+  attachmentByteLimit,
+  MAX_CONFIGURED_ATTACHMENT_BYTES,
   MAX_ATTACHMENT_BYTES,
+  MIN_ATTACHMENT_BYTES,
   writeExactClipboardText
 } from "../src/attachmentStore.js";
-import type { CodeRef } from "../src/core/types.js";
+import type { DextFileReference } from "../src/core/fileReference.js";
 
-function codeRef(content = "const value = 1;"): CodeRef {
+function codeRef(content = "const value = 1;"): DextFileReference {
   return {
-    kind: "codeRef",
-    uri: "file:///src/value.ts",
-    documentVersion: 1,
-    contentHash: `hash:${content}`,
-    content
+    payload: `src/value.ts#${content.length}`,
+    expression: `@src/value.ts#${content.length}`
   };
 }
 
@@ -49,9 +49,17 @@ describe("AttachmentStore", () => {
 
   it("rejects oversized staged context", () => {
     const store = new AttachmentStore();
+    const text = "a".repeat(MAX_ATTACHMENT_BYTES + 1);
     expect(() => store.stageClipboard(
-      "selected text",
-      codeRef("a".repeat(MAX_ATTACHMENT_BYTES + 1))
+      text,
+      codeRef(text)
     )).toThrow("bytes or smaller");
+  });
+
+  it("uses the configured attachment limit only inside its safe range", () => {
+    expect(attachmentByteLimit(MIN_ATTACHMENT_BYTES)).toBe(MIN_ATTACHMENT_BYTES);
+    expect(attachmentByteLimit(MAX_CONFIGURED_ATTACHMENT_BYTES)).toBe(MAX_CONFIGURED_ATTACHMENT_BYTES);
+    expect(attachmentByteLimit(MIN_ATTACHMENT_BYTES - 1)).toBe(MAX_ATTACHMENT_BYTES);
+    expect(attachmentByteLimit(MAX_CONFIGURED_ATTACHMENT_BYTES + 1)).toBe(MAX_ATTACHMENT_BYTES);
   });
 });

@@ -91,18 +91,8 @@ function inputReferenceChip(reference: ContextReferenceOccurrence): string {
 }
 
 function renderedInputSource(source: string): string {
-  const parts = inputReferenceDisplayParts(source);
-  return parts
-    .map((part, index) => {
-      if (part.kind === "ref") return inputReferenceChip(part.reference);
-      // The source has spaces to protect an @path token from the text typed
-      // beside it. The chip already supplies its own boundary in history.
-      const previous = parts[index - 1];
-      const next = parts[index + 1];
-      const value = `${previous?.kind === "ref" ? part.value.replace(/^[ \t]+/, "") : part.value}`
-        .replace(next?.kind === "ref" ? /[ \t]+$/ : /$^/, "");
-      return escapeHtml(value);
-    })
+  return inputReferenceDisplayParts(source)
+    .map((part) => part.kind === "ref" ? inputReferenceChip(part.reference) : escapeHtml(part.value))
     .join("");
 }
 

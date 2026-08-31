@@ -100,8 +100,10 @@ function validWorkspaceRelativePath(path: string): boolean {
   return segments.length > 1 || /\.[\p{L}\p{N}_-]+$/u.test(name);
 }
 
-/** Finds only legal readable @workspace/path#range references. The boundary
- * check intentionally rejects emails and ordinary @mentions. */
+/** Finds only legal readable @workspace/path#range references. A trailing
+ * slash identifies a directory; it stays in the source expression but not in
+ * the reference payload passed to the chip. The boundary check intentionally
+ * rejects emails and ordinary @mentions. */
 export function atReferenceOccurrences(source: string): ContextReferenceOccurrence[] {
   const values: ContextReferenceOccurrence[] = [];
   for (const match of source.matchAll(AT_TOKEN_CANDIDATE)) {
@@ -110,7 +112,9 @@ export function atReferenceOccurrences(source: string): ContextReferenceOccurren
     if (previous && /[\p{L}\p{N}_.+-]/u.test(previous)) continue;
     const expression = match[0];
     if (!expression) continue;
-    const payload = expression.slice(1);
+    const candidate = expression.slice(1);
+    const directory = candidate.endsWith("/");
+    const payload = directory ? candidate.slice(0, -1) : candidate;
     let parsed: ParsedFileReference;
     try {
       parsed = parseFileReference(payload);
@@ -120,7 +124,7 @@ export function atReferenceOccurrences(source: string): ContextReferenceOccurren
     if (!validWorkspaceRelativePath(parsed.path)) continue;
     // Do not silently chip only the path portion of a malformed #range.
     if (source[start + expression.length] === "#") continue;
-    values.push({ kind: "file", start, end: start + expression.length, expression, payload });
+    values.push({ kind: directory ? "dir" : "file", start, end: start + expression.length, expression, payload });
   }
   return values;
 }

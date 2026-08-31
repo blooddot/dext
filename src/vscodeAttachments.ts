@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { MAX_ATTACHMENT_BYTES } from "./attachmentStore.js";
+import { attachmentByteLimit, MAX_ATTACHMENT_BYTES } from "./attachmentStore.js";
 import { toCodeRef, type TextSnapshot } from "./core/contextResolver.js";
 import {
   formatDextFileReference,
@@ -14,6 +14,25 @@ export interface AttachmentSnapshot {
   text: string;
 }
 
+/** Source and configuration documents make useful file references. Prose,
+ * rendered output, and delimited data do not: pasting those should preserve
+ * the exact text a user copied. */
+export function isCodeDocument(document: Pick<vscode.TextDocument, "languageId">): boolean {
+  return !new Set([
+    "plaintext",
+    "markdown",
+    "log",
+    "output",
+    "csv",
+    "tsv",
+    "scminput",
+    "git-commit",
+    "git-rebase",
+    "search-result",
+    "todo"
+  ]).has(document.languageId);
+}
+
 function rangeValue(range: vscode.Range): Range {
   return {
     start: { line: range.start.line, character: range.start.character },
@@ -24,8 +43,10 @@ function rangeValue(range: vscode.Range): Range {
 async function documentSnapshot(uri: vscode.Uri, range?: vscode.Range): Promise<TextSnapshot> {
   const document = await vscode.workspace.openTextDocument(uri);
   const content = range ? document.getText(range) : document.getText();
-  if (new TextEncoder().encode(content).byteLength > MAX_ATTACHMENT_BYTES) {
-    throw new Error(`Attachments must be ${MAX_ATTACHMENT_BYTES} bytes or smaller.`);
+  const limit = attachmentByteLimit(vscode.workspace.getConfiguration("dext")
+    .get<number>("attachments.maxBytes", MAX_ATTACHMENT_BYTES));
+  if (new TextEncoder().encode(content).byteLength > limit) {
+    throw new Error(`Attachments must be ${limit} bytes or smaller.`);
   }
   return {
     uri: document.uri.toString(),
@@ -37,7 +58,7 @@ async function documentSnapshot(uri: vscode.Uri, range?: vscode.Range): Promise<
 
 export async function selectionAttachment(): Promise<AttachmentSnapshot> {
   const editor = vscode.window.activeTextEditor;
-  if (!editor || editor.selection.isEmpty) throw new Error("Select code before adding it to Dext.");
+  if (!editor || editor.selection.isEmpty) throw new Error("Select text before adding it to Dext.");
   const uri = editor.document.uri;
   const selection = editor.selection;
   const snapshot = await documentSnapshot(uri, selection);
@@ -47,20 +68,22 @@ export async function selectionAttachment(): Promise<AttachmentSnapshot> {
   };
 }
 
-export async function fileAttachment(uri: vscode.Uri): Promise<AttachmentSnapshot> {
+export function activeCodeSelection(): vscode.TextEditor | undefined {
+  const editor = vscode.window.activeTextEditor;
+  return editor && !editor.selection.isEmpty && isCodeDocument(editor.document) ? editor : undefined;
+}
+
+/** A workspace file reference is only a path token. Do not read the file just
+ * to create it: the agent can inspect a large file on demand, while pasted
+ * content continues to be bounded before Dext stores it. */
+export async function fileAttachment(uri: vscode.Uri): Promise<DextFileReference> {
   if (!vscode.workspace.getWorkspaceFolder(uri)) {
     throw new Error("Dext files must stay inside the current workspace.");
   }
   const stat = await vscode.workspace.fs.stat(uri);
   if ((stat.type & vscode.FileType.Directory) !== 0) throw new Error("Choose a file, not a directory.");
-  if (stat.size > MAX_ATTACHMENT_BYTES) {
-    throw new Error(`Attachments must be ${MAX_ATTACHMENT_BYTES} bytes or smaller.`);
-  }
-  const snapshot = await documentSnapshot(uri);
-  return {
-    text: snapshot.content,
-    reference: toCodeRef(snapshot)
-  };
+  const includeWorkspaceFolder = (vscode.workspace.workspaceFolders?.length ?? 0) > 1;
+  return formatDextFilePathReference(vscode.workspace.asRelativePath(uri, includeWorkspaceFolder));
 }
 
 export async function directoryAttachment(uri: vscode.Uri): Promise<DextFileReference> {

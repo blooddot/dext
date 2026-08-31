@@ -919,7 +919,10 @@ main {
 }
 
 .code-file-reference {
-  margin: 0;
+  /* CodeMirror replaces the source separators around a reference with this
+   * widget. Give the widget the same inline breathing room that those spaces
+   * retain when the identical input is rendered in conversation history. */
+  margin: 0 2px;
   font-family: var(--vscode-font-family);
   font-size: var(--vscode-font-size);
 }
@@ -1325,6 +1328,25 @@ main {
 
 #mode-control { max-width: 108px; }
 #agent-control { max-width: 142px; }
+#permission-control.is-full-access {
+  border-color: color-mix(
+    in srgb,
+    var(--vscode-notificationsWarningIcon-foreground, #cca700) 68%,
+    var(--vscode-widget-border)
+  );
+  color: var(--vscode-notificationsWarningIcon-foreground, #cca700);
+  background: color-mix(
+    in srgb,
+    var(--vscode-notificationsWarningIcon-foreground, #cca700) 14%,
+    var(--vscode-editor-background)
+  );
+  font-weight: 600;
+}
+
+#permission-control.is-full-access > #permission-control-icon {
+  color: inherit;
+}
+
 #model-control {
   max-width: 220px;
   padding-right: 5px;
@@ -1483,6 +1505,63 @@ main {
 
 .composer-menu-option .codicon-blank {
   visibility: hidden;
+}
+
+/* Full access is deliberately distinct: it can work outside the workspace,
+   so the yellow treatment remains visible both before and after it is picked. */
+.composer-menu-option.composer-menu-option-warning {
+  color: var(--vscode-notificationsWarningIcon-foreground, #cca700);
+}
+
+.composer-menu-option.composer-menu-option-warning[aria-checked="true"],
+.composer-menu-option.composer-menu-option-warning:hover,
+.composer-menu-option.composer-menu-option-warning:focus-visible {
+  color: var(--vscode-notificationsWarningIcon-foreground, #cca700);
+  background: color-mix(
+    in srgb,
+    var(--vscode-notificationsWarningIcon-foreground, #cca700) 16%,
+    var(--vscode-menu-background, var(--vscode-editorWidget-background))
+  );
+}
+
+/* Mode colors are visible while choosing, not only after a mode becomes active. */
+.composer-menu-option-mode-agent {
+  --mode-menu-color: var(--vscode-button-background, #0e639c);
+}
+
+.composer-menu-option-mode-ask {
+  --mode-menu-color: var(--vscode-terminal-ansiGreen, #73c991);
+}
+
+.composer-menu-option-mode-plan {
+  --mode-menu-color: var(--vscode-notificationsWarningIcon-foreground, #cca700);
+}
+
+.composer-menu-option-mode-code {
+  --mode-menu-color: var(--vscode-terminal-ansiCyan, #4fc1ff);
+}
+
+.composer-menu-option-mode-agent,
+.composer-menu-option-mode-ask,
+.composer-menu-option-mode-plan,
+.composer-menu-option-mode-code {
+  color: var(--mode-menu-color);
+}
+
+.composer-menu-option-mode-agent:hover,
+.composer-menu-option-mode-agent:focus-visible,
+.composer-menu-option-mode-ask:hover,
+.composer-menu-option-mode-ask:focus-visible,
+.composer-menu-option-mode-plan:hover,
+.composer-menu-option-mode-plan:focus-visible,
+.composer-menu-option-mode-code:hover,
+.composer-menu-option-mode-code:focus-visible {
+  color: var(--mode-menu-color);
+  background: color-mix(
+    in srgb,
+    var(--mode-menu-color) 16%,
+    var(--vscode-menu-background, var(--vscode-editorWidget-background))
+  );
 }
 
 .composer-model-popover .composer-menu-option {
@@ -1750,6 +1829,10 @@ button.primary.stopping {
   flex-basis: 0;
   min-height: 0;
   overflow: auto;
+  /* Reserve the vertical scrollbar's track even before output overflows. This
+     keeps Markdown lines and disclosure headers from shifting horizontally
+     when a turn becomes scrollable. */
+  scrollbar-gutter: stable;
 }
 
 #result-body {
@@ -2100,14 +2183,9 @@ pre {
 }
 
 .agent-stream-panel {
-  padding: 2px 0 8px 18px;
+  padding: 2px 0 8px;
 }
 
-.agent-run-disclosure {
-  margin: 0 0 10px;
-}
-
-.agent-run-disclosure > summary,
 .agent-trace-group > summary,
 .agent-trace-event > summary,
 .agent-file-change > summary {
@@ -2117,22 +2195,12 @@ pre {
   list-style: none;
 }
 
-.agent-run-disclosure > summary::-webkit-details-marker,
 .agent-trace-group > summary::-webkit-details-marker,
 .agent-file-change > summary::-webkit-details-marker,
 .agent-stream-item > summary::-webkit-details-marker {
   display: none;
 }
 
-.agent-run-disclosure > summary {
-  min-height: 28px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  border-radius: 3px;
-}
-
-.agent-run-disclosure > summary:hover,
 .agent-trace-group > summary:hover,
 .agent-trace-event > summary:hover,
 .agent-file-change > summary:hover {

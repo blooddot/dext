@@ -46,6 +46,17 @@ describe("Dext package manifest", () => {
       mac: "cmd+c",
       when: "editorTextFocus && editorHasSelection && config.dext.captureSelectionOnCopy"
     });
+    expect(value.contributes?.keybindings).toContainEqual({
+      command: "dext.copyTerminalSelectionWithContext",
+      key: "ctrl+c",
+      mac: "cmd+c",
+      when: "terminalFocus && terminalTextSelected && config.dext.captureSelectionOnCopy"
+    });
+    expect(value.contributes?.keybindings).toContainEqual({
+      command: "dext.copyTerminalSelectionWithContext",
+      key: "ctrl+shift+c",
+      when: "isWindows && terminalFocus && terminalTextSelected && config.dext.captureSelectionOnCopy"
+    });
   });
 
   it("binds the everyday conversation commands and scopes stop to a running turn", async () => {
@@ -65,6 +76,18 @@ describe("Dext package manifest", () => {
       .toEqual(expect.arrayContaining([
         expect.objectContaining({ command: "dext.stopExecution", title: "Dext: Stop Execution" })
       ]));
+  });
+
+  it("labels the Explorer command for both files and directories", async () => {
+    const value = await manifest();
+    expect(value.contributes?.commands).toContainEqual(
+      expect.objectContaining({ command: "dext.addFileToChat", title: "Dext: Add to Dext Input" })
+    );
+    expect(value.contributes?.menus?.["explorer/context"]).toContainEqual({
+      command: "dext.addFileToChat",
+      when: "resourceScheme != untitled",
+      group: "dext@1"
+    });
   });
 
   it("enables selection capture by default and explains the native-copy fallback", async () => {
@@ -281,7 +304,7 @@ describe("Dext package manifest", () => {
     expect(properties["dext.aioa.timeoutMs"]).toMatchObject({ type: "integer", default: 3600000 });
     expect(properties["dext.aioa.idleTimeoutMs"]).toMatchObject({ type: "integer", default: 90000 });
     expect(properties["dext.terminal.defaultTimeoutMs"])
-      .toMatchObject({ type: "integer", default: 120000 });
+      .toMatchObject({ type: "integer", default: 1800000 });
     // The terminal ceiling stays a ceiling, so the setting cannot be used to
     // let a runaway command live longer than Dext allows.
     expect(properties["dext.terminal.defaultTimeoutMs"]?.description).toContain("600000");
@@ -301,6 +324,9 @@ describe("Dext package manifest", () => {
     expect(properties["dext.storage.location"]?.enum).toEqual(["global", "workspace"]);
     expect(properties["dext.attachments.maxFiles"]).toMatchObject({ type: "integer", default: 200, minimum: 1, maximum: 1000 });
     expect(properties["dext.attachments.maxFiles"]?.description).toContain("oldest");
+    expect(properties["dext.attachments.maxBytes"])
+      .toMatchObject({ type: "integer", default: 5 * 1024 * 1024, minimum: 64 * 1024, maximum: 50 * 1024 * 1024 });
+    expect(properties["dext.attachments.maxBytes"]?.description).toContain("Workspace @file references are not size-limited");
     expect(properties["dext.plan.directory"]).toMatchObject({ type: "string", default: ".dext/plans" });
     expect(properties["dext.plan.directory"]?.description).toContain("inside the workspace");
     expect(properties["dext.submitOnEnter"]).toMatchObject({ type: "boolean", default: true });
