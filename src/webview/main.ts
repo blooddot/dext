@@ -34,7 +34,7 @@ import {
   type ContextReferenceOccurrence
 } from "../core/fileReference.js";
 import { createFileReferenceChip, fileReferenceChipDescriptor } from "./fileReferenceChip.js";
-import { outputLinkReference } from "./outputLink.js";
+import { outputExternalLink, outputLinkReference } from "./outputLink.js";
 
 interface VsCodeApi {
   postMessage(message: WebviewRequest): void;
@@ -173,6 +173,10 @@ function escapeHtml(value: string): string {
 const markdown = new MarkdownIt({
   html: false,
   breaks: true,
+  // Agent output often contains a bare URL instead of Markdown's
+  // `[label](url)` form. Turn those into anchors as well, so the shared
+  // output-link handler can hand them to the extension host.
+  linkify: true,
   highlight(source, language) {
     const normalized = language.trim().toLowerCase();
     if (normalized !== "python" && normalized !== "py") return "";
@@ -195,6 +199,13 @@ const markdown = new MarkdownIt({
     }
   }
 });
+
+// markdown-it intentionally rejects `file:` destinations. Dext's host-side
+// handler validates these URLs against the current workspace, so keep the
+// renderer from turning an otherwise valid file link into inert plain text.
+const defaultValidateLink = markdown.validateLink.bind(markdown);
+markdown.validateLink = (url: string): boolean =>
+  /^file:/i.test(url.trim()) || defaultValidateLink(url);
 
 const editor = new DextCodeEditor({
   parent: elements.codeEditor,
@@ -227,17 +238,22 @@ function openInputReference(reference: ContextReferenceOccurrence): void {
   }
 }
 
-/** Open workspace-file links emitted in Markdown output in the VS Code editor.
- * External links retain their ordinary browser behaviour. */
+/** Open output links through the host, since Webview CSP prevents navigation. */
 function openOutputLink(event: MouseEvent): void {
   const target = event.target instanceof Element ? event.target : null;
   const link = target?.closest<HTMLAnchorElement>("a[href]");
   if (!link || !elements.result.contains(link)) return;
-  const reference = outputLinkReference(link.getAttribute("href") ?? "");
-  if (!reference) return;
+  const href = link.getAttribute("href") ?? "";
+  const reference = outputLinkReference(href);
+  const externalUrl = reference ? undefined : outputExternalLink(href);
+  if (!reference && !externalUrl) return;
   event.preventDefault();
   event.stopPropagation();
-  vscode.postMessage({ type: "openFileReference", reference });
+  if (reference) {
+    vscode.postMessage({ type: "openFileReference", reference });
+  } else if (externalUrl) {
+    vscode.postMessage({ type: "openExternalLink", url: externalUrl });
+  }
 }
 
 function updateRunState(): void {

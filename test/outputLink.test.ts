@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { outputLinkReference } from "../src/webview/outputLink.js";
+import { outputExternalLink, outputLinkReference } from "../src/webview/outputLink.js";
 
 describe("output Markdown links", () => {
   it("turns workspace-relative Markdown links into editor references", () => {
@@ -18,5 +18,12 @@ describe("output Markdown links", () => {
   it("lets the host validate standard file URLs against the workspace", () => {
     expect(outputLinkReference("file:///C:/workspace/ConfigRule.py"))
       .toBe("file:///C:/workspace/ConfigRule.py");
+  });
+
+  it("hands browser and mail links to the extension host", () => {
+    expect(outputExternalLink("https://example.com/docs?q=1")).toBe("https://example.com/docs?q=1");
+    expect(outputExternalLink("mailto:hello@example.com")).toBe("mailto:hello@example.com");
+    expect(outputExternalLink("file:///C:/workspace/ConfigRule.py")).toBeUndefined();
+    expect(outputExternalLink("javascript:alert(1)")).toBeUndefined();
   });
 });

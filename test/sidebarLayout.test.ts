@@ -267,7 +267,10 @@ describe("sidebar panel layout", () => {
     const outputLinks = await source("src/webview/outputLink.ts");
     expect(main).toMatch(/function openOutputLink[\s\S]*?closest<HTMLAnchorElement>\("a\[href\]"\)[\s\S]*?type: "openFileReference"/);
     expect(main).toContain('elements.result.addEventListener("click", openOutputLink);');
+    expect(main).toContain('type: "openExternalLink", url: externalUrl');
     expect(outputLinks).toContain('value.toLowerCase().startsWith("file:")');
+    expect(outputLinks).toContain('export function outputExternalLink');
+    expect(main).toContain("linkify: true");
   });
 
   it("offers the @ file picker in every mode and inserts the same chip as a drop", async () => {

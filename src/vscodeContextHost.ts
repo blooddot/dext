@@ -113,6 +113,18 @@ export async function openWorkspaceDocument(uri: vscode.Uri, range?: Range): Pro
   }
 }
 
+/** Opens a browser/email link after checking that it is an allowed URI scheme. */
+export async function openExternalLink(url: string): Promise<void> {
+  const uri = vscode.Uri.parse(url, true);
+  if (!new Set(["http", "https", "mailto"]).has(uri.scheme.toLowerCase())) {
+    throw new Error("Only HTTP(S) and mailto links can be opened from output.");
+  }
+  const opened = await vscode.env.openExternal(uri);
+  if (!opened) {
+    throw new Error("VS Code could not open this link in an external application.");
+  }
+}
+
 export async function openWorkspaceFileReference(filePath: string): Promise<void> {
   const target = workspaceFileUri(filePath);
   if (!target) throw new Error("Open a workspace before opening a ref.file reference.");

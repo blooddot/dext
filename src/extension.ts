@@ -30,7 +30,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   if (folder) application.runtime.setWorkspaceRoot(folder.uri.fsPath);
   application.runtime.setWorkspaceTrusted(vscode.workspace.isTrusted && folder?.uri.scheme === "file");
   await application.reload();
-  const history = new DextHistoryStore(context.globalState, () => {
+  // Conversation history belongs to the active workspace. Using globalState
+  // here makes every project share the same sessions, so reopening VS Code (or
+  // switching projects) can restore a conversation from an unrelated project.
+  // workspaceState survives extension/window reloads while remaining scoped to
+  // the current workspace.
+  const history = new DextHistoryStore(context.workspaceState, () => {
     const configuration = vscode.workspace.getConfiguration("dext");
     return {
       maxTurns: configuration.get<number>("history.maxTurns", DEFAULT_HISTORY_LIMITS.maxTurns),
@@ -40,7 +45,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       )
     };
   });
-  const preferences = new DextConversationPreferences(context.globalState);
+  const preferences = new DextConversationPreferences(context.workspaceState);
   const historyPanel = new DextHistoryPanel(context.extensionUri, history, preferences, application.storage);
   const sidebar = new DextSidebarProvider(context.extensionUri, application, history, preferences);
   if (folder?.uri.scheme === "file") {

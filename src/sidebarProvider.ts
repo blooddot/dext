@@ -21,7 +21,7 @@ import {
 import { ReadyMessageQueue } from "./readyMessageQueue.js";
 import { rankFileMatches } from "./core/fileSearch.js";
 import { planPathSegments } from "./core/planFile.js";
-import { openDextFileReference } from "./vscodeContextHost.js";
+import { openDextFileReference, openExternalLink } from "./vscodeContextHost.js";
 import { webviewRequestSchema } from "./webviewProtocol.js";
 import type { ConversationSummary, WebviewResponse } from "./webviewProtocol.js";
 import type { DextHistorySession, DextHistoryStore } from "./historyStore.js";
@@ -462,6 +462,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           break;
         case "openFileReference":
           await openDextFileReference(request.reference, this.application.storage);
+          break;
+        case "openExternalLink":
+          await openExternalLink(request.url);
           break;
         case "searchFiles":
           await this.post({

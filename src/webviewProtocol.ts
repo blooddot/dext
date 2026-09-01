@@ -44,6 +44,7 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
     purpose: z.enum(["code", "text"])
   }),
   z.object({ type: z.literal("openFileReference"), reference: z.string().min(1) }),
+  z.object({ type: z.literal("openExternalLink"), url: z.string().min(1) }),
   z.object({
     type: z.literal("searchFiles"),
     requestId: z.number().int().nonnegative(),

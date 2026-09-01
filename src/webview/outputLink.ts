@@ -1,6 +1,21 @@
 const DEXT_RANGE_FRAGMENT = /#L\d+,\d+-L\d+,\d+$/;
 
 /**
+ * Links in a VS Code Webview cannot navigate themselves: the Webview CSP
+ * deliberately disallows it. Only let the extension host hand off schemes
+ * which VS Code can safely open outside the Webview.
+ */
+export function outputExternalLink(href: string): string | undefined {
+  const value = href.trim();
+  try {
+    const url = new URL(value);
+    return ["http:", "https:", "mailto:"].includes(url.protocol) ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Converts a Markdown link destination into the workspace-relative reference
  * understood by the extension host. Web links deliberately stay in the
  * browser, while `file:` URLs can be validated by the host before opening.

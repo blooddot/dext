@@ -117,6 +117,10 @@ describe("Webview protocol", () => {
       type: "openFileReference",
       reference: "src/review.ts#L1,1-L1,2"
     }).success).toBe(true);
+    expect(webviewRequestSchema.safeParse({
+      type: "openExternalLink",
+      url: "https://example.com/docs"
+    }).success).toBe(true);
   });
 
   it("accepts file picker queries including the empty one", () => {
@@ -151,5 +155,6 @@ describe("Webview protocol", () => {
       type: "openFileReference",
       reference: ""
     }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({ type: "openExternalLink", url: "" }).success).toBe(false);
   });
 });
