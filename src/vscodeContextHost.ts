@@ -7,6 +7,24 @@ import type { DextStorage } from "./dextStorage.js";
 
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"]);
 
+function localFileLink(value: string): { path: string; range?: Range } | undefined {
+  const absolute = /^[A-Za-z]:[\\/]/.test(value) || (value.startsWith("/") && !value.startsWith("//"));
+  if (!absolute) return undefined;
+  // Dext's output links use `path:line` or `path:line:column`. The final
+  // numeric suffix is unambiguous for the paths emitted by the providers.
+  const location = /:(\d+)(?::(\d+))?$/.exec(value);
+  const path = location ? value.slice(0, location.index) : value;
+  if (!/^[A-Za-z]:[\\/]/.test(path) && !(path.startsWith("/") && !path.startsWith("//"))) return undefined;
+  if (!location) return { path };
+  const line = Number(location[1]);
+  const character = Number(location[2] ?? "1");
+  if (!Number.isSafeInteger(line) || !Number.isSafeInteger(character) || line < 1 || character < 1) {
+    return { path };
+  }
+  const point = { line: line - 1, character: character - 1 };
+  return { path, range: { start: point, end: point } };
+}
+
 function toRange(range: vscode.Range): Range {
   return {
     start: { line: range.start.line, character: range.start.character },
@@ -106,7 +124,10 @@ export async function openWorkspaceDocument(uri: vscode.Uri, range?: Range): Pro
     ? new vscode.Range(range.start.line, range.start.character, range.end.line, range.end.character)
     : undefined;
   const validated = await validatedDocumentRange(uri, vscodeRange);
-  const editor = await vscode.window.showTextDocument(validated.document);
+  const editor = await vscode.window.showTextDocument(validated.document, {
+    preview: false,
+    viewColumn: vscode.ViewColumn.Active
+  });
   if (validated.range) {
     editor.selection = new vscode.Selection(validated.range.start, validated.range.end);
     editor.revealRange(validated.range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
@@ -133,7 +154,10 @@ export async function openWorkspaceFileReference(filePath: string): Promise<void
     return;
   }
   const validated = await validatedDocumentRange(target.uri, target.range);
-  const editor = await vscode.window.showTextDocument(validated.document);
+  const editor = await vscode.window.showTextDocument(validated.document, {
+    preview: false,
+    viewColumn: vscode.ViewColumn.Active
+  });
   if (validated.range) {
     editor.selection = new vscode.Selection(validated.range.start, validated.range.end);
     editor.revealRange(validated.range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
@@ -143,6 +167,9 @@ export async function openWorkspaceFileReference(filePath: string): Promise<void
 /** Opens a Dext-owned global plan or attachment when its reference was created
  * under global storage; ordinary references retain workspace-only validation. */
 export async function openDextFileReference(filePath: string, storage: DextStorage): Promise<void> {
+  filePath = filePath.trim().replace(/^@(?=\.dext(?:-global)?\/)/i, "");
+  const localLink = localFileLink(filePath);
+  if (localLink) return openWorkspaceDocument(vscode.Uri.file(localLink.path), localLink.range);
   // Markdown output may use a standard file URL instead of a workspace-relative
   // path. Keep that useful, but validate it through openWorkspaceDocument so a
   // Webview can never open a file outside the current workspace.
@@ -160,7 +187,10 @@ export async function openDextFileReference(filePath: string, storage: DextStora
     return;
   }
   const document = await vscode.workspace.openTextDocument(uri);
-  await vscode.window.showTextDocument(document, { preview: false });
+  await vscode.window.showTextDocument(document, {
+    preview: false,
+    viewColumn: vscode.ViewColumn.Active
+  });
 }
 
 export class VsCodeContextHost implements ContextHost {

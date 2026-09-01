@@ -69,6 +69,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       return undefined;
     }
   };
+  const reportInvalidAgentCliConfiguration = async (): Promise<void> => {
+    const invalid = application.invalidAgentCliIds();
+    if (!invalid.length) return;
+    await vscode.window.showErrorMessage(
+      `Unsupported Dext agent CLI profile${invalid.length === 1 ? "" : "s"}: ${invalid.join(", ")}. `
+      + "Supported values: codex, claude."
+    );
+  };
+  await reportInvalidAgentCliConfiguration();
   const focusSidebar = async (): Promise<void> => {
     await vscode.commands.executeCommand("dext.sidebar.focus");
   };
@@ -319,6 +328,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       reportCommandError(() => sidebar.closeTab(tabSessionId(context)))
     ),
     vscode.commands.registerCommand("dext.viewApis", () => sidebar.viewApis()),
+    vscode.commands.registerCommand("dext.viewMcp", () => sidebar.viewMcp()),
+    vscode.commands.registerCommand("dext.addMcp", () => sidebar.addMcp()),
     vscode.commands.registerCommand("dext.newConversation", () =>
       reportCommandError(() => sidebar.newConversation())
     ),
@@ -432,7 +443,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       })
     ),
     vscode.commands.registerCommand("dext.configureAgent", async () => {
-      const profiles = application.agents.list();
+      const profiles = application.agentProfiles();
       const picked = await vscode.window.showQuickPick(
         profiles.map((profile) => ({
           label: profile.label,
@@ -554,8 +565,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (
         event.affectsConfiguration("dext.agentPermission")
         || event.affectsConfiguration("dext.agentCliArgs")
+        || event.affectsConfiguration("dext.agentCli")
       ) {
         application.applyAgentPermissionSettings();
+        application.refreshAgentProfiles();
+        if (event.affectsConfiguration("dext.agentCli")) {
+          await reportInvalidAgentCliConfiguration();
+        }
         await sidebar.refresh();
         return;
       }
@@ -603,6 +619,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             );
             completion.detail = candidate.detail;
             completion.insertText = candidate.insertText;
+            if (candidate.sortText) completion.sortText = candidate.sortText;
             completion.range = new vscode.Range(document.positionAt(candidate.replaceStart), document.positionAt(candidate.replaceEnd));
             return completion;
           });

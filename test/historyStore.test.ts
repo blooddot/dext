@@ -105,6 +105,19 @@ describe("DextHistoryStore", () => {
     expect(store.list().map((session) => session.id)).toEqual(["session-1"]);
   });
 
+  it("removes one turn and drops an empty conversation", async () => {
+    const store = new DextHistoryStore(new MemoryState() as never);
+    await store.addSuccess("first", [], { kind: "workflow", executions: [] }, "session-1");
+    await store.addSuccess("second", [], { kind: "workflow", executions: [] }, "session-1");
+    const turns = store.list()[0]!.turns;
+
+    expect(await store.removeTurn("session-1", turns[0]!.id)).toBe(true);
+    expect(store.list()[0]?.turns.map((turn) => turn.input)).toEqual(["second"]);
+    expect(await store.removeTurn("session-1", turns[1]!.id)).toBe(true);
+    expect(store.list()).toEqual([]);
+    expect(await store.removeTurn("session-1", "missing")).toBe(false);
+  });
+
   it("migrates each legacy flat record into a one-turn conversation", () => {
     const legacy = [{
       id: "old-1",

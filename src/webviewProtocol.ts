@@ -9,6 +9,7 @@ import type { AgentStreamEvent, InputExecutionResponse, RegisteredCallable } fro
 import type { AgentProfile, AgentSelection } from "./agentProfiles.js";
 import type { EditorTokenTheme } from "./vscodeTheme.js";
 import type { DextHistorySession } from "./historyStore.js";
+import type { McpDiscoveredTool, McpServerConfig } from "./core/mcpRegistry.js";
 
 export const webviewRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ready") }),
@@ -25,6 +26,7 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("stopExecution"), turnId: z.string().min(1) }),
   z.object({ type: z.literal("retryTurn"), turnId: z.string().min(1) }),
+  z.object({ type: z.literal("deleteTurn"), turnId: z.string().min(1) }),
   z.object({ type: z.literal("buildPlan"), planPath: z.string().min(1).max(512) }),
   z.object({
     type: z.literal("resolvePatch"),
@@ -65,8 +67,45 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
     mimeType: z.string().min(1)
   }),
   z.object({ type: z.literal("deleteImageAttachment"), relativePath: z.string().min(1) }),
+  z.object({
+    type: z.literal("uiResponse"),
+    requestId: z.string().min(1),
+    response: z.discriminatedUnion("type", [
+      z.object({ type: z.literal("choice"), selected: z.array(z.string()), custom: z.string().optional() }),
+      z.object({ type: z.literal("confirm"), confirmed: z.boolean() }),
+      z.object({ type: z.literal("input"), value: z.string().optional() })
+    ])
+  }),
   z.object({ type: z.literal("reload") }),
+  z.object({ type: z.literal("openMcp") }),
+  z.object({ type: z.literal("addMcp") }),
+  z.object({ type: z.literal("generateMcp"), requestId: z.string().min(1), document: z.string().min(1).max(80000) }),
+  z.object({
+    type: z.literal("createMcp"),
+    scope: z.enum(["project", "global"]).optional(),
+    selectedTools: z.array(z.string().min(1).max(200)).max(1000).optional(),
+    server: z.discriminatedUnion("transport", [
+      z.object({
+        name: z.string().min(1).max(80), transport: z.literal("stdio"),
+        command: z.string().min(1).max(512), args: z.array(z.string().max(512)).max(32).optional(),
+        timeoutMs: z.number().int().min(1000).max(120000).optional()
+      }).strict(),
+      z.object({
+        name: z.string().min(1).max(80), transport: z.literal("http"),
+        url: z.string().min(1).max(2048), auth: z.object({ type: z.literal("bearer") }).optional(),
+        timeoutMs: z.number().int().min(1000).max(120000).optional()
+      }).strict()
+    ])
+  }),
+  z.object({
+    type: z.literal("prepareMcp"), requestId: z.string().min(1), scope: z.enum(["project", "global"]).optional(),
+    server: z.discriminatedUnion("transport", [
+      z.object({ name: z.string().min(1).max(80), transport: z.literal("stdio"), command: z.string().min(1).max(512), args: z.array(z.string().max(512)).max(32).optional(), timeoutMs: z.number().int().min(1000).max(120000).optional() }).strict(),
+      z.object({ name: z.string().min(1).max(80), transport: z.literal("http"), url: z.string().min(1).max(2048), auth: z.object({ type: z.literal("bearer") }).optional(), timeoutMs: z.number().int().min(1000).max(120000).optional() }).strict()
+    ])
+  }),
   z.object({ type: z.literal("debugLog"), message: z.string() }),
+  z.object({ type: z.literal("newConversation") }),
   z.object({ type: z.literal("selectConversation"), sessionId: z.string().min(1) }),
   z.object({ type: z.literal("closeConversation"), sessionId: z.string().min(1) }),
   z.object({
@@ -99,6 +138,18 @@ export interface ConversationSummary {
   running: boolean;
 }
 
+export interface GlobalResourceItem {
+  name: string;
+  detail?: string;
+}
+
+export interface GlobalResources {
+  apis: GlobalResourceItem[];
+  mcps: GlobalResourceItem[];
+  rules: GlobalResourceItem[];
+  skills: GlobalResourceItem[];
+}
+
 export interface SidebarState {
   theme?: EditorTokenTheme;
   methods: Pick<
@@ -112,6 +163,9 @@ export interface SidebarState {
     diffView: "inline" | "split";
     submitOnEnter: boolean;
   };
+  mcpServers: McpServerConfig[];
+  mcpDiagnostics: string[];
+  globalResources?: GlobalResources;
 }
 
 export type WebviewResponse =
@@ -128,6 +182,25 @@ export type WebviewResponse =
   | { type: "outputSession"; session: DextHistorySession }
   | { type: "conversations"; sessions: ConversationSummary[]; activeId: string }
   | { type: "openMethods" }
+  | { type: "openMcp" }
+  | { type: "mcpAssistant" }
+  | { type: "mcpProgress"; requestId: string; event: AgentStreamEvent }
+  | { type: "mcpToolsDiscovered"; requestId: string; tools: McpDiscoveredTool[] }
+  | { type: "mcpGenerated"; requestId: string; server: McpServerConfig }
+  | { type: "mcpCreated"; name: string }
+  | {
+    type: "uiRequest";
+    requestId: string;
+    request: {
+      type: "choice";
+      label: string;
+      options: string[];
+      multiple: boolean;
+      allowCustom: boolean;
+      customPlaceholder?: string;
+    } | { type: "confirm"; message: string; confirmLabel: string; cancelLabel: string }
+      | { type: "input"; label: string; placeholder?: string; multiline: boolean };
+  }
   /** `reviewPatch` is set when the host is holding an unapplied patch for this
    * turn, which is what puts Accept and Reject on its file changes. */
   | { type: "execution"; sessionId: string; turnId: string; response: InputExecutionResponse; reviewPatch?: boolean }

@@ -87,11 +87,20 @@ export function parseMcpManifest(source: string, path: string): McpManifestLoad 
   const tools: McpToolConfig[] = [];
   const methods: CallableDefinition[] = [];
   for (const rawTool of rawTools) {
-    if (!isRecord(rawTool) || typeof rawTool.name !== "string" || !IDENTIFIER.test(rawTool.name)) {
+    if (!isRecord(rawTool)) {
       diagnostics.push(`${path}: every MCP tool requires a valid 'name'.`);
       continue;
     }
-    const toolName = rawTool.name;
+    // Older Dext builds wrote the registry's flattened `{server, tool}` shape
+    // into manifests. Accept that shape when it belongs to this server so an
+    // existing configuration can be repaired on the next save, while keeping
+    // the canonical on-disk form as `{name, ...}`.
+    const legacyName = rawTool.server === name && typeof rawTool.tool === "string" ? rawTool.tool : undefined;
+    const toolName = typeof rawTool.name === "string" ? rawTool.name : legacyName;
+    if (!toolName || !IDENTIFIER.test(toolName)) {
+      diagnostics.push(`${path}: every MCP tool requires a valid 'name'.`);
+      continue;
+    }
     const inputSchema = rawTool.inputSchema;
     if (!isRecord(inputSchema)) {
       diagnostics.push(`${path}: MCP tool '${toolName}' requires an object 'inputSchema'.`);

@@ -117,7 +117,8 @@ describe("Dext package manifest", () => {
     ).toEqual([
       ["dext.newConversation", "navigation@1"],
       ["dext.openHistory", "navigation@2"],
-      ["dext.viewApis", "navigation@3"]
+      ["dext.viewApis", "navigation@3"],
+      ["dext.viewMcp", "navigation@4"]
     ]);
     // Reloading APIs belongs with the API list it refreshes, and History is the
     // single place that reopens a past conversation.
@@ -270,14 +271,15 @@ describe("Dext package manifest", () => {
     ]) {
       expect(hidden).toContain(command);
     }
-    // The way in, the way back out, and the way to find out why nothing appears.
+    // Completion configuration stays searchable; the status-bar menu and
+    // diagnostic helpers do not duplicate it in the command palette.
     for (const command of [
       "dext.completionMenu",
-      "dext.configureCompletionModel",
       "dext.diagnoseCompletion"
     ]) {
-      expect(hidden).not.toContain(command);
+      expect(hidden).toContain(command);
     }
+    expect(hidden).not.toContain("dext.configureCompletionModel");
   });
 
   it("hides the commands that only exist for a keybinding or a duplicate of one", async () => {
@@ -355,6 +357,13 @@ describe("Dext package manifest", () => {
     expect(passthrough?.markdownDescription).toContain("trusted workspace");
     // A passthrough argument must not be a way around the tier.
     expect(passthrough?.markdownDescription).toContain("cannot loosen the permission tier");
+    const agentCli = properties["dext.agentCli"];
+    expect(agentCli).toMatchObject({ type: "array", default: ["codex", "claude"] });
+    const agentCliItems = (agentCli as unknown as { items?: { type?: string; enum?: string[] } } | undefined)?.items;
+    expect(agentCliItems).toMatchObject({ type: "string" });
+    expect(agentCliItems?.enum).toBeUndefined();
+    expect(agentCli?.markdownDescription).toContain("Enter profile IDs manually");
+    expect(agentCli?.markdownDescription).toContain("unsupported IDs are rejected");
   });
 
   it("keeps MCP credentials in SecretStorage without contributing legacy settings", async () => {

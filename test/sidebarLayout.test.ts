@@ -69,8 +69,8 @@ describe("sidebar panel layout", () => {
     // Before reaching that hard minimum, the footer gets another line rather
     // than allowing its menus and Send button to overlap.
     expect(css).toMatch(/\.action-row \{[\s\S]*?flex-wrap: wrap;/);
-    expect(css).toMatch(/\.composer-controls \{[\s\S]*?flex: 1 1 400px;[\s\S]*?flex-wrap: wrap;/);
-    expect(css).toMatch(/\.composer-menu \{[\s\S]*?min-width: 96px;[\s\S]*?flex: 1 1 96px;/);
+    expect(css).toMatch(/\.composer-controls \{[\s\S]*?flex: 0 1 auto;[\s\S]*?flex-wrap: wrap;/);
+    expect(css).toMatch(/\.composer-menu \{[\s\S]*?min-width: 0;[\s\S]*?flex: 0 1 auto;/);
   });
 
   it("offers Plan beside Agent, Ask, and Code and lands its result as a document", async () => {
@@ -198,6 +198,7 @@ describe("sidebar panel layout", () => {
     expect(css).toMatch(/\.conversation-tab \{[\s\S]*?max-width: 190px;[\s\S]*?\}/);
     expect(main).toMatch(/function renderConversations[\s\S]*?conversation-tab-label[\s\S]*?conversation-tab-close/);
     expect(main).toMatch(/function selectConversation[\s\S]*?type: "selectConversation"/);
+    expect(main).toMatch(/conversationTabs\.addEventListener\("dblclick"[\s\S]*?type: "newConversation"/);
     expect(main).toMatch(/function closeConversation[\s\S]*?type: "closeConversation"/);
     expect(manifest).toContain('"command": "dext.newConversation"');
     expect(html).toMatch(/async openConversation\(session: DextHistorySession\)[\s\S]*?activateConversation\(existing\)/);

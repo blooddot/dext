@@ -24,6 +24,7 @@ The input workflow language supports assignment, keyword-only API calls, strings
 
 ## Built-in API
 
+- `create(type="api"|"mcp"|"rule"|"skill", input, scope="project"|"global") -> ChatResult` — create a resource from a description or URL (use in Code mode)
 - `ask(input, workspace?) -> ChatResult`
 - `agent(input, apply=true, workspace?) -> AgentResult`
 - `apply(result) -> ApplyResult`
@@ -33,10 +34,10 @@ The input workflow language supports assignment, keyword-only API calls, strings
 - `print(text, label?) -> PrintResult`
 - `ui.choose(...)`, `ui.confirm(...)`, `ui.input(...) -> UiResult`
 
-Everything beyond that list is project-local: a workspace defines its own APIs
-as `.dx` files under `.dext/api/`, and their directory becomes the namespace, so
-`.dext/api/workflow/feature.dx` registers `workflow.feature`. Dext ships no such
-APIs of its own.
+Project APIs live as `.dx` files under `.dext/api/`, and their directory becomes
+the namespace, so `.dext/api/workflow/feature.dx` registers `workflow.feature`.
+Global APIs are stored in Dext global storage and are available in every
+workspace; a project API with the same id takes precedence.
 
 A project-local API composes the built-in `mcp`, `agent`, and UI APIs directly
 rather than importing intermediate phase APIs. A typical feature workflow reads
@@ -69,7 +70,8 @@ preview = agent(input="Plan the requested change", apply=False)
 
 `terminal` is available only in a trusted local `file` workspace. Its `cwd` must stay inside the workspace, every command requires a VS Code modal confirmation, the timeout is capped at 10 minutes, and captured output is bounded. It returns `TerminalStatus = "succeeded" | "failed" | "timed_out"`; a nonzero exit code is a typed failed result, while rejecting the confirmation cancels that workflow step and skips downstream steps.
 
-`print` renders its typed text result only in Dext Output and never writes to the integrated terminal.
+`print` renders values only in Dext Output and never writes to the integrated terminal. Strings and primitive values are
+shown as text; lists, dictionaries, and API results are rendered as JSON.
 
 Context values are `ref.selection`, `ref.active_file`, `ref.file("path")`, `ref.dir("path")`, and `ref.symbol("name")`:
 
@@ -115,11 +117,21 @@ class DocumentResult(TypedDict):
     title: NotRequired[str]
 ```
 
-Standard skills are discovered in `<workspace>/.dext/skills`, then `dext.skillDirs`; earlier directories win duplicate names. `skill` defaults `workspace` to the current project and injects the selected `SKILL.md` into the current Agent task. `ui.*` waits for a semantic user answer and resumes the same workflow.
+Standard skills are discovered in `<workspace>/.dext/skills`, then Dext global
+storage, then `dext.skillDirs`; earlier directories win duplicate names. `create`
+can place a skill in either scope. `skill` defaults `workspace` to the current
+project and injects the selected `SKILL.md` into the current Agent task.
+`ui.*` waits for a semantic user answer and resumes the same workflow.
 
 ## MCP APIs
 
-MCP manifests live in `<workspace>/.dext/mcp/*.jsonc`: one file declares one server and its explicit tool allowlist. Each enabled tool becomes a typed API named `mcp.<server>.<tool>`, with completion, signature help, required-argument validation, and structured result-field completion. The `inputSchema` is required; `outputSchema` is optional, but enables typed fields from MCP `structuredContent`.
+MCP manifests live in `<workspace>/.dext/mcp/*.jsonc` or Dext global storage:
+one file declares one server and its explicit tool allowlist. Each enabled tool
+becomes a typed API named `mcp.<server>.<tool>`, with completion, signature help,
+required-argument validation, and structured result-field completion. Project
+manifests take precedence when a server name collides. The `inputSchema` is
+required; `outputSchema` is optional, but enables typed fields from MCP
+`structuredContent`.
 
 ```jsonc
 // .dext/mcp/docs.jsonc
@@ -153,6 +165,8 @@ print(text=document.content)
 MCP calls require a trusted local workspace. Manifests support local `stdio` and Streamable HTTP. HTTP endpoints must use HTTPS, or loopback HTTP for local development. URL userinfo, query strings, fragments, inline headers, and credentials are rejected. A bearer-enabled server stores its access token only through `Dext: Set MCP Access Token`, in VS Code SecretStorage and scoped to the current workspace. Do not put credentials in a manifest, including stdio arguments. `Dext: Clear MCP Access Token` removes an HTTP bearer token; `Dext: Verify MCP Server` performs an authenticated initialization check. Editing, creating, or deleting a manifest reloads its APIs automatically.
 
 Agent profiles are stored in VS Code extension global storage. The Run row exposes Agent, Model, Reasoning, and Speed selectors. Codex profiles read the local Codex model cache when available, including supported reasoning levels and speed tiers. Claude Code profiles use its native `opus`/`sonnet` aliases and current effort levels. A `.dx` file may override the Agent and Model with `@api(agent="codex", model="...")`; otherwise the Run selection is used. `Dext: Configure Agent` edits executable commands and custom model labels without handling credentials.
+
+The `dext.agentCli` setting controls which built-in Agent profiles are shown in the composer. It defaults to `codex` and `claude`; enter profile IDs manually to change the list (supported IDs are `codex`, `claude`, and `aioa`). Unsupported IDs are rejected with an error.
 
 The AIOA profile connects to AIOA through an explicitly enabled local Chromium DevTools Protocol (CDP) port. It offers two modes:
 

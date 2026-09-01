@@ -11,6 +11,7 @@ describe("Webview protocol", () => {
       type: "closeConversation",
       sessionId: "session-1"
     }).success).toBe(true);
+    expect(webviewRequestSchema.safeParse({ type: "newConversation" }).success).toBe(true);
     expect(webviewRequestSchema.safeParse({
       type: "pinConversation",
       sessionId: "session-1",
@@ -20,10 +21,9 @@ describe("Webview protocol", () => {
       .toBe(false);
   });
 
-  it("rejects conversation requests now served by view title commands", () => {
+  it("rejects conversation requests that remain served by view title commands", () => {
     expect(webviewRequestSchema.safeParse({ type: "clearOutput" }).success).toBe(false);
     expect(webviewRequestSchema.safeParse({ type: "viewHistory" }).success).toBe(false);
-    expect(webviewRequestSchema.safeParse({ type: "newConversation" }).success).toBe(false);
     expect(webviewRequestSchema.safeParse({ type: "closeConversation", sessionId: "" }).success)
       .toBe(false);
   });
@@ -52,6 +52,10 @@ describe("Webview protocol", () => {
       type: "retryTurn",
       turnId: "turn-1"
     })).toMatchObject({ type: "retryTurn", turnId: "turn-1" });
+    expect(webviewRequestSchema.parse({
+      type: "deleteTurn",
+      turnId: "turn-1"
+    })).toMatchObject({ type: "deleteTurn", turnId: "turn-1" });
     expect(webviewRequestSchema.safeParse({ type: "retryTurn", turnId: "" }).success).toBe(false);
     expect(webviewRequestSchema.safeParse({
       type: "executeInput",

@@ -202,6 +202,232 @@ body {
   overflow: auto;
 }
 
+.resource-search {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, var(--vscode-widget-border));
+  border-radius: 3px;
+  font: inherit;
+}
+
+.resource-search:focus { outline: 1px solid var(--vscode-focusBorder); }
+
+/* Agent-driven UI stays inside the Dext conversation surface instead of
+   opening VS Code's editor-level Quick Pick. This keeps keyboard focus and
+   the text cursor in the dialog that belongs to the conversation. */
+.ui-dialog {
+  width: min(420px, calc(100% - 20px));
+  max-width: none;
+  padding: 0;
+  border: 1px solid var(--vscode-editorWidget-border, var(--vscode-widget-border));
+  border-radius: 7px;
+  color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  box-shadow: 0 18px 48px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.45));
+}
+
+.ui-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.ui-dialog-surface {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ui-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+}
+
+.ui-dialog-label {
+  color: var(--vscode-foreground);
+  font-weight: 600;
+}
+
+.ui-dialog-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 5px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.ui-dialog-option:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.ui-dialog-option:has(input:focus-visible) {
+  background: var(--vscode-list-focusBackground, var(--vscode-list-hoverBackground));
+}
+
+.ui-dialog-option input {
+  accent-color: var(--vscode-focusBorder);
+}
+
+/* Chromium draws a large, theme-dependent focus ring around native radio and
+   checkbox controls. The option row already communicates focus/hover state,
+   so avoid that ring obscuring the control itself. */
+.ui-dialog-option input:focus {
+  outline: none;
+  box-shadow: none;
+}
+
+.ui-dialog-input {
+  width: 100%;
+  min-height: 30px;
+  padding: 6px 8px;
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 3px;
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  font: inherit;
+  resize: vertical;
+}
+
+.ui-dialog-input:focus {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.ui-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 0 12px 12px;
+}
+
+.ui-dialog-actions button {
+  min-width: 74px;
+  min-height: 28px;
+  padding: 4px 12px;
+  border: 1px solid var(--vscode-button-border, transparent);
+  border-radius: 3px;
+  color: var(--vscode-button-foreground);
+  background: var(--vscode-button-background);
+  cursor: pointer;
+}
+
+.ui-dialog-actions button.secondary {
+  color: var(--vscode-button-secondaryForeground);
+  background: var(--vscode-button-secondaryBackground);
+}
+
+.mcp-assistant-dialog {
+  width: min(640px, calc(100vw - 28px));
+}
+
+.mcp-assistant-body {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 14px;
+}
+
+.mcp-assistant-message {
+  color: var(--vscode-descriptionForeground);
+  line-height: 1.45;
+}
+
+.mcp-assistant-input,
+.mcp-assistant-preview {
+  min-height: 0;
+  resize: vertical;
+  font-family: var(--vscode-editor-font-family, monospace);
+}
+
+.mcp-assistant-input {
+  font-family: inherit;
+}
+
+.mcp-assistant-label {
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+.mcp-assistant-status {
+  min-height: 18px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+}
+.mcp-assistant-process {
+  margin: 2px 0 4px;
+  overflow: hidden;
+  border: 1px solid var(--vscode-widget-border);
+  border-radius: 4px;
+  background: var(--vscode-editorWidget-background, transparent);
+}
+.mcp-assistant-process > summary {
+  min-height: 28px;
+  padding: 6px 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  list-style: none;
+}
+.mcp-assistant-process > summary::-webkit-details-marker { display: none; }
+.mcp-assistant-process > summary:hover { background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, .06)); }
+.mcp-assistant-process-body {
+  max-height: 240px;
+  overflow: auto;
+  padding: 2px 10px 8px 26px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+}
+.mcp-process-event {
+  margin: 6px 0;
+  line-height: 1.35;
+}
+.mcp-process-event strong {
+  display: block;
+  color: var(--vscode-foreground);
+  font-weight: 600;
+}
+.mcp-process-event > div {
+  color: var(--vscode-descriptionForeground);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.mcp-assistant-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--vscode-widget-border);
+  border-radius: 4px;
+}
+.mcp-tool-choice {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 4px 7px;
+  align-items: start;
+  padding: 4px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.mcp-tool-choice:hover { background: var(--vscode-list-hoverBackground); }
+.mcp-tool-choice small {
+  grid-column: 2;
+  color: var(--vscode-descriptionForeground);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 @media (min-width: 1200px) {
   .app-shell {
     width: min(1120px, calc(100% - 32px));
@@ -873,6 +1099,14 @@ main {
   font-family: var(--vscode-editor-font-family);
 }
 
+.dext-signature-tooltip code strong {
+  padding: 0 2px;
+  border-radius: 2px;
+  color: var(--vscode-editorSuggestWidget-selectedForeground, var(--vscode-list-activeSelectionForeground));
+  background: var(--vscode-editorSuggestWidget-selectedBackground, var(--vscode-list-activeSelectionBackground));
+  font-weight: inherit;
+}
+
 .dext-tooltip-detail {
   margin-top: 4px;
   color: var(--vscode-descriptionForeground);
@@ -1274,7 +1508,10 @@ main {
 .composer-controls {
   /* Leave Send on this line when there is room, otherwise move it below the
      controls before any of the controls can overlap. */
-  flex: 1 1 400px;
+  /* Keep the controls tightly packed around their labels.  They may still
+     shrink and wrap when the sidebar is narrow, but should not consume all
+     remaining space on a normal-width composer. */
+  flex: 0 1 auto;
   flex-wrap: wrap;
   overflow: visible;
 }
@@ -1286,14 +1523,14 @@ main {
 
 .composer-menu {
   position: relative;
-  min-width: 96px;
-  max-width: 128px;
-  flex: 1 1 96px;
+  min-width: 0;
+  max-width: none;
+  flex: 0 1 auto;
 }
 
 .composer-control {
   min-width: 0;
-  width: 100%;
+  width: auto;
   max-width: 154px;
   height: 30px;
   padding: 0 9px;
@@ -1306,11 +1543,25 @@ main {
   background: color-mix(in srgb, var(--vscode-editorWidget-background, var(--vscode-editor-background)) 78%, transparent);
   font: inherit;
   cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
 }
 
 .composer-control:hover,
 .composer-control[aria-expanded="true"] {
-  background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground));
+  /* Some themes expose a transparent toolbar hover token, which made these
+     compact controls look inert. Mix in the foreground as a reliable visual
+     cue, then retain the theme's normal surface beneath it. */
+  border-color: color-mix(
+    in srgb,
+    var(--vscode-foreground) 30%,
+    var(--vscode-widget-border, var(--vscode-foreground))
+  );
+  background: color-mix(
+    in srgb,
+    var(--vscode-foreground) 12%,
+    var(--vscode-editorWidget-background, var(--vscode-editor-background))
+  );
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--vscode-foreground) 8%, transparent);
 }
 
 .composer-control-label {
@@ -1351,6 +1602,21 @@ main {
   color: inherit;
 }
 
+#permission-control.is-full-access:hover,
+#permission-control.is-full-access[aria-expanded="true"] {
+  border-color: var(--vscode-notificationsWarningIcon-foreground, #cca700);
+  background: color-mix(
+    in srgb,
+    var(--vscode-notificationsWarningIcon-foreground, #cca700) 26%,
+    var(--vscode-editor-background)
+  );
+  box-shadow: 0 0 0 1px color-mix(
+    in srgb,
+    var(--vscode-notificationsWarningIcon-foreground, #cca700) 22%,
+    transparent
+  );
+}
+
 #model-control {
   max-width: 220px;
   padding-right: 5px;
@@ -1362,8 +1628,12 @@ main {
 
 #model-control:hover,
 #model-control[aria-expanded="true"] {
-  border-color: transparent;
-  background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground));
+  border-color: color-mix(in srgb, var(--vscode-foreground) 30%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--vscode-foreground) 12%,
+    var(--vscode-editorWidget-background, var(--vscode-editor-background))
+  );
 }
 
 #mode-control > #mode-control-icon {
@@ -1428,6 +1698,17 @@ main {
 .input-section[data-mode="code"] #mode-control:focus-visible {
   outline: 1px solid var(--composer-accent);
   outline-offset: -1px;
+}
+
+.input-section[data-mode="ask"] #mode-control:hover,
+.input-section[data-mode="ask"] #mode-control[aria-expanded="true"],
+.input-section[data-mode="plan"] #mode-control:hover,
+.input-section[data-mode="plan"] #mode-control[aria-expanded="true"],
+.input-section[data-mode="code"] #mode-control:hover,
+.input-section[data-mode="code"] #mode-control[aria-expanded="true"] {
+  border-color: var(--composer-accent);
+  background: color-mix(in srgb, var(--composer-accent) 26%, var(--vscode-editor-background));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--composer-accent) 20%, transparent);
 }
 
 .composer-popover {
@@ -2727,6 +3008,34 @@ pre {
 .method-row:hover {
   background: var(--vscode-list-hoverBackground);
 }
+
+.resource-category {
+  margin: 3px 0;
+  border: 1px solid var(--vscode-widget-border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.resource-category > summary {
+  min-height: 34px;
+  padding: 6px 9px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  background: color-mix(in srgb, var(--vscode-sideBar-background) 72%, transparent);
+}
+
+.resource-category > summary::-webkit-details-marker { display: none; }
+.resource-category > summary:hover { background: var(--vscode-list-hoverBackground); }
+.resource-category-icon { color: var(--vscode-descriptionForeground); font-size: 13px; }
+.resource-category-label { font-weight: 600; flex: 1; }
+.resource-category-count { color: var(--vscode-descriptionForeground); font-size: 11px; }
+.resource-category-body { padding: 2px 4px 5px; }
+.resource-row { min-height: 44px; grid-template-columns: minmax(0, 1fr); cursor: default; }
+.resource-empty { padding: 8px 10px 9px 25px; color: var(--vscode-descriptionForeground); font-size: 11px; }
 
 .method-group {
   margin: 2px 0;

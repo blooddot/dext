@@ -54,6 +54,33 @@ const elements = {
   conversationTabs: element<HTMLElement>("conversation-tabs"),
   methodsDialog: element<HTMLDialogElement>("methods-dialog"),
   closeMethods: element<HTMLButtonElement>("close-methods"),
+  mcpDialog: element<HTMLDialogElement>("mcp-dialog"),
+  closeMcp: element<HTMLButtonElement>("close-mcp"),
+  mcpToggle: element<HTMLButtonElement>("mcp-toggle"),
+  mcpServers: element<HTMLElement>("mcp-servers"),
+  mcpSearch: element<HTMLInputElement>("mcp-search"),
+  mcpCount: element<HTMLElement>("mcp-count"),
+  mcpErrors: element<HTMLElement>("mcp-errors"),
+  mcpEmpty: element<HTMLElement>("mcp-empty"),
+  mcpAssistantDialog: element<HTMLDialogElement>("mcp-assistant-dialog"),
+  mcpAssistantClose: element<HTMLButtonElement>("mcp-assistant-close"),
+  mcpAssistantInput: element<HTMLTextAreaElement>("mcp-assistant-input"),
+  mcpAssistantStatus: element<HTMLElement>("mcp-assistant-status"),
+  mcpAssistantProcess: element<HTMLDetailsElement>("mcp-assistant-process"),
+  mcpAssistantProcessMeta: element<HTMLElement>("mcp-assistant-process-meta"),
+  mcpAssistantProcessBody: element<HTMLElement>("mcp-assistant-process-body"),
+  mcpAssistantTools: element<HTMLElement>("mcp-assistant-tools"),
+  mcpAssistantPreview: element<HTMLTextAreaElement>("mcp-assistant-preview"),
+  mcpAssistantScope: element<HTMLSelectElement>("mcp-assistant-scope"),
+  mcpAssistantScopeLabel: element<HTMLElement>("mcp-assistant-scope-label"),
+  mcpAssistantGenerate: element<HTMLButtonElement>("mcp-assistant-generate"),
+  mcpAssistantSave: element<HTMLButtonElement>("mcp-assistant-save"),
+  uiDialog: element<HTMLDialogElement>("ui-dialog"),
+  uiDialogForm: element<HTMLFormElement>("ui-dialog-form"),
+  uiDialogTitle: element<HTMLElement>("ui-dialog-title"),
+  uiDialogClose: element<HTMLButtonElement>("ui-dialog-close"),
+  uiDialogBody: element<HTMLElement>("ui-dialog-body"),
+  uiDialogActions: element<HTMLElement>("ui-dialog-actions"),
   inputSection: element<HTMLElement>("input-section"),
   inputHeading: element<HTMLElement>("input-heading"),
   inputBody: element<HTMLElement>("input-body"),
@@ -89,10 +116,14 @@ const elements = {
   reloadMethods: element<HTMLButtonElement>("reload-methods"),
   configErrors: element<HTMLElement>("config-errors"),
   result: element<HTMLElement>("result"),
+  resultToggle: element<HTMLButtonElement>("result-toggle"),
   inputFullscreen: element<HTMLButtonElement>("input-fullscreen"),
   resultFullscreen: element<HTMLButtonElement>("result-fullscreen"),
   attachmentBar: element<HTMLElement>("attachment-bar")
 };
+
+type UiRequestMessage = Extract<WebviewResponse, { type: "uiRequest" }>;
+let activeUiRequest: UiRequestMessage | undefined;
 
 const broker = new LanguageRequestBroker((request) => vscode.postMessage(request));
 const clipboard = new ClipboardClient((request) => vscode.postMessage(request));
@@ -118,6 +149,7 @@ const PERMISSION_ICON: Record<AgentPermission, string> = {
 };
 let agentPermission: AgentPermission = "workspace-write";
 let sidebarState: SidebarState | undefined;
+let lastSidebarState: SidebarState | undefined;
 let activeConversationId: string | undefined;
 const runningConversationIds = new Set<string>();
 let dropPosition: number | undefined;
@@ -356,6 +388,358 @@ function closeMethodsDialog(): void {
   if (elements.methodsDialog.open) elements.methodsDialog.close();
 }
 
+function openMcpDialog(): void {
+  closeComposerMenus();
+  if (!elements.mcpDialog.open) elements.mcpDialog.showModal();
+}
+
+function closeMcpDialog(): void {
+  if (elements.mcpDialog.open) elements.mcpDialog.close();
+}
+
+function syncResourceToggle(): void {
+  const groups = [...elements.mcpServers.querySelectorAll<HTMLDetailsElement>("details.resource-category")];
+  const open = groups.length === 0 || groups.every((group) => group.open);
+  const icon = elements.mcpToggle.querySelector("i");
+  if (icon) icon.className = `codicon codicon-${open ? "collapse-all" : "expand-all"}`;
+  const title = open ? "Collapse resource categories" : "Expand resource categories";
+  elements.mcpToggle.title = title;
+  elements.mcpToggle.setAttribute("aria-label", title);
+}
+
+function toggleResourceCategories(): void {
+  const groups = [...elements.mcpServers.querySelectorAll<HTMLDetailsElement>("details.resource-category")];
+  const open = groups.some((group) => !group.open);
+  groups.forEach((group) => { group.open = open; });
+  syncResourceToggle();
+}
+
+function openMcpAssistantDialog(): void {
+  closeComposerMenus();
+  if (!elements.mcpAssistantDialog.open) elements.mcpAssistantDialog.showModal();
+  elements.mcpAssistantInput.focus();
+}
+
+function finishUi(response: Extract<WebviewRequest, { type: "uiResponse" }>["response"]): void {
+  if (!activeUiRequest) return;
+  vscode.postMessage({ type: "uiResponse", requestId: activeUiRequest.requestId, response });
+  activeUiRequest = undefined;
+  if (elements.uiDialog.open) elements.uiDialog.close();
+}
+
+function cancelUi(): void {
+  const request = activeUiRequest?.request;
+  if (!request) return;
+  if (request.type === "choice") finishUi({ type: "choice", selected: [] });
+  else if (request.type === "confirm") finishUi({ type: "confirm", confirmed: false });
+  else finishUi({ type: "input" });
+}
+
+function uiButton(label: string, secondary: boolean, onClick: () => void): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = label;
+  if (secondary) button.className = "secondary";
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+function openUiDialog(message: UiRequestMessage): void {
+  activeUiRequest = message;
+  closeComposerMenus();
+  elements.uiDialogTitle.textContent = message.request.type === "confirm" ? "Confirm" : message.request.label;
+  elements.uiDialogBody.replaceChildren();
+  elements.uiDialogActions.replaceChildren();
+  if (message.request.type === "choice") {
+    const choiceRequest = message.request;
+    const prompt = document.createElement("div");
+    prompt.className = "ui-dialog-label";
+    prompt.textContent = message.request.label;
+    elements.uiDialogBody.append(prompt);
+    const group = document.createElement("div");
+    const inputType = choiceRequest.multiple ? "checkbox" : "radio";
+    choiceRequest.options.forEach((option, index) => {
+      const label = document.createElement("label");
+      label.className = "ui-dialog-option";
+      const input = document.createElement("input");
+      input.type = inputType;
+      input.name = "ui-choice";
+      input.value = option;
+      if (!choiceRequest.multiple && index === 0) input.checked = true;
+      label.append(input, document.createTextNode(option));
+      group.append(label);
+    });
+    let customInput: HTMLInputElement | undefined;
+    if (choiceRequest.allowCustom) {
+      const customLabel = document.createElement("label");
+      customLabel.className = "ui-dialog-option";
+      customLabel.append(document.createTextNode("Other"));
+      customInput = document.createElement("input");
+      customInput.type = "text";
+      customInput.className = "ui-dialog-input";
+      customInput.placeholder = choiceRequest.customPlaceholder ?? "Enter a custom option";
+      customLabel.append(customInput);
+      group.append(customLabel);
+    }
+    elements.uiDialogBody.append(group);
+    elements.uiDialogActions.append(
+      uiButton("Cancel", true, cancelUi),
+      uiButton("Continue", false, () => {
+        const selected = [...elements.uiDialogBody.querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked, input[type="radio"]:checked')].map((input) => input.value);
+        const custom = customInput?.value.trim();
+        finishUi({ type: "choice", selected: custom && !choiceRequest.multiple ? [] : selected, ...(custom ? { custom } : {}) });
+      })
+    );
+    queueMicrotask(() => elements.uiDialogBody.querySelector<HTMLElement>("input")?.focus());
+  } else if (message.request.type === "confirm") {
+    const text = document.createElement("div");
+    text.textContent = message.request.message;
+    elements.uiDialogBody.append(text);
+    elements.uiDialogActions.append(
+      uiButton(message.request.cancelLabel, true, cancelUi),
+      uiButton(message.request.confirmLabel, false, () => finishUi({ type: "confirm", confirmed: true }))
+    );
+  } else {
+    const label = document.createElement("div");
+    label.className = "ui-dialog-label";
+    label.textContent = message.request.label;
+    const input = message.request.multiline ? document.createElement("textarea") : document.createElement("input");
+    input.className = "ui-dialog-input";
+    input.placeholder = message.request.placeholder ?? "";
+    elements.uiDialogBody.append(label, input);
+    elements.uiDialogActions.append(
+      uiButton("Cancel", true, cancelUi),
+      uiButton("Submit", false, () => finishUi({ type: "input", value: input.value }))
+    );
+    if (!message.request.multiline) {
+      input.addEventListener("keydown", (event) => {
+        if ((event as KeyboardEvent).key === "Enter") {
+          event.preventDefault();
+          finishUi({ type: "input", value: input.value });
+        }
+      });
+    }
+    queueMicrotask(() => input.focus());
+  }
+  if (!elements.uiDialog.open) elements.uiDialog.showModal();
+}
+
+function renderMcp(state: SidebarState): void {
+  const resources = state.globalResources ?? {
+    apis: [],
+    mcps: state.mcpServers.map((server) => ({ name: server.name, detail: server.transport })),
+    rules: [],
+    skills: []
+  };
+  elements.mcpServers.replaceChildren();
+  const query = elements.mcpSearch.value.trim().toLowerCase();
+  const matches = (item: { name: string; detail?: string }): boolean =>
+    !query || `${item.name} ${item.detail ?? ""}`.toLowerCase().includes(query);
+  const categories = [
+    ["APIs", "symbol-method", resources.apis.filter(matches)],
+    ["MCP", "server", resources.mcps.filter(matches)],
+    ["Rules", "law", resources.rules.filter(matches)],
+    ["Skills", "sparkle", resources.skills.filter(matches)]
+  ] as const;
+  const total = categories.reduce((sum, [, , items]) => sum + items.length, 0);
+  elements.mcpCount.textContent = String(total);
+  elements.mcpEmpty.hidden = true;
+  for (const [title, icon, items] of categories) {
+    const group = document.createElement("details");
+    group.className = "resource-category";
+    group.open = true;
+    const summary = document.createElement("summary");
+    const chevron = document.createElement("i");
+    chevron.className = "disclosure-chevron codicon codicon-chevron-down";
+    const categoryIcon = document.createElement("i");
+    categoryIcon.className = `resource-category-icon codicon codicon-${icon}`;
+    const label = document.createElement("span");
+    label.className = "resource-category-label";
+    label.textContent = title;
+    const count = document.createElement("span");
+    count.className = "resource-category-count";
+    count.textContent = String(items.length);
+    summary.append(chevron, categoryIcon, label, count);
+    const body = document.createElement("div");
+    body.className = "resource-category-body";
+    if (!items.length) {
+      const empty = document.createElement("div");
+      empty.className = "resource-empty";
+      empty.textContent = `No global ${title.toLowerCase()} found.`;
+      body.append(empty);
+    }
+    for (const resource of items) {
+      const row = document.createElement("div");
+      row.className = "method-row resource-row";
+      const identity = document.createElement("span");
+      identity.className = "method-identity";
+      const name = document.createElement("span");
+      name.className = "method-name";
+      name.textContent = resource.name;
+      identity.append(name);
+      if (resource.detail) {
+        const detail = document.createElement("span");
+        detail.className = "method-signature";
+        detail.textContent = resource.detail;
+        identity.append(detail);
+      }
+      row.append(identity);
+      body.append(row);
+    }
+    group.append(summary, body);
+    group.addEventListener("toggle", syncResourceToggle);
+    elements.mcpServers.append(group);
+  }
+  syncResourceToggle();
+  elements.mcpErrors.replaceChildren();
+  for (const diagnostic of state.mcpDiagnostics) {
+    const item = document.createElement("div");
+    item.textContent = diagnostic;
+    elements.mcpErrors.append(item);
+  }
+}
+
+let mcpAssistantRequestId: string | undefined;
+let mcpAssistantRunningRequestId: string | undefined;
+let mcpAssistantStopping = false;
+let mcpAssistantServer: SidebarState["mcpServers"][number] | undefined;
+let mcpAssistantProcessStartedAt: number | undefined;
+let mcpAssistantProcessCount = 0;
+let mcpAssistantProcessTokens: number | undefined;
+let mcpAssistantPendingTools: string[] | undefined;
+
+function resetMcpAssistantProcess(): void {
+  mcpAssistantProcessStartedAt = undefined;
+  mcpAssistantProcessCount = 0;
+  mcpAssistantProcessTokens = undefined;
+  mcpAssistantPendingTools = undefined;
+  elements.mcpAssistantProcessBody.replaceChildren();
+  elements.mcpAssistantProcessMeta.textContent = "";
+  elements.mcpAssistantProcess.hidden = true;
+  elements.mcpAssistantProcess.open = false;
+  elements.mcpAssistantTools.replaceChildren();
+  elements.mcpAssistantTools.hidden = true;
+}
+
+function updateMcpAssistantAction(): void {
+  // MCP generation is presented in its own dialog. Keep its Stop state
+  // independent from the conversation composer run control below.
+  if (mcpAssistantRunningRequestId) {
+    elements.mcpAssistantGenerate.hidden = false;
+    elements.mcpAssistantGenerate.disabled = mcpAssistantStopping;
+    elements.mcpAssistantGenerate.textContent = mcpAssistantStopping ? "Stopping" : "Stop";
+    elements.mcpAssistantGenerate.classList.toggle("stopping", mcpAssistantStopping);
+    return;
+  }
+  elements.mcpAssistantGenerate.disabled = false;
+  elements.mcpAssistantGenerate.textContent = "Generate";
+  elements.mcpAssistantGenerate.classList.remove("stopping");
+}
+
+function renderMcpAssistantEvent(event: AgentStreamEvent): void {
+  if (!mcpAssistantProcessStartedAt) mcpAssistantProcessStartedAt = Date.now();
+  mcpAssistantProcessCount += 1;
+  const usage = event.usage;
+  if (usage) {
+    mcpAssistantProcessTokens = usage.totalTokens
+      ?? (usage.inputTokens !== undefined && usage.outputTokens !== undefined
+        ? usage.inputTokens + usage.outputTokens
+        : mcpAssistantProcessTokens);
+  }
+  elements.mcpAssistantProcess.hidden = false;
+  const elapsed = Math.max(0, Date.now() - mcpAssistantProcessStartedAt);
+  const tokenLabel = mcpAssistantProcessTokens === undefined ? "" : ` · ${mcpAssistantProcessTokens} tokens`;
+  elements.mcpAssistantProcessMeta.textContent = `Worked for ${formatDuration(elapsed)} · ${mcpAssistantProcessCount} events${tokenLabel}`;
+  if (event.phase === "status" && !event.text.trim()) return;
+  const row = document.createElement("div");
+  row.className = `mcp-process-event mcp-process-${event.phase}`;
+  const title = document.createElement("strong");
+  title.textContent = event.title || (event.phase === "tool" ? "Tool" : event.phase[0]!.toUpperCase() + event.phase.slice(1));
+  const text = document.createElement("div");
+  text.textContent = event.text;
+  row.append(title, text);
+  elements.mcpAssistantProcessBody.append(row);
+  elements.mcpAssistantProcessBody.scrollTop = elements.mcpAssistantProcessBody.scrollHeight;
+}
+
+function generateMcpAssistant(): void {
+  if (mcpAssistantRunningRequestId) {
+    if (mcpAssistantStopping) return;
+    mcpAssistantStopping = true;
+    elements.mcpAssistantStatus.textContent = "Stopping MCP generation…";
+    vscode.postMessage({ type: "stopExecution", turnId: mcpAssistantRunningRequestId });
+    updateMcpAssistantAction();
+    return;
+  }
+  const documentText = elements.mcpAssistantInput.value.trim();
+  if (!documentText) { elements.mcpAssistantStatus.textContent = "Paste a documentation or registry URL first."; return; }
+  const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  mcpAssistantRequestId = requestId;
+  elements.mcpAssistantGenerate.disabled = true;
+  elements.mcpAssistantStatus.textContent = "Dext is reading the documentation and drafting a safe configuration…";
+  resetMcpAssistantProcess();
+  elements.mcpAssistantProcess.hidden = false;
+  elements.mcpAssistantProcess.open = true;
+  mcpAssistantProcessStartedAt = Date.now();
+  vscode.postMessage({ type: "generateMcp", requestId, document: documentText });
+}
+
+function saveMcpAssistant(): void {
+  if (!mcpAssistantServer) return;
+  let value: unknown;
+  try { value = JSON.parse(elements.mcpAssistantPreview.value); } catch { elements.mcpAssistantStatus.textContent = "Configuration must be valid JSON."; return; }
+  if (!value || typeof value !== "object" || Array.isArray(value)) { elements.mcpAssistantStatus.textContent = "Configuration must be a JSON object."; return; }
+  const server = value as Record<string, unknown>;
+  if ((server.transport !== "http" && server.transport !== "stdio") || typeof server.name !== "string") {
+    elements.mcpAssistantStatus.textContent = "Configuration needs a name and a supported transport."; return;
+  }
+  const candidate = server.transport === "http"
+    ? { name: server.name, transport: "http" as const, url: typeof server.url === "string" ? server.url : "", ...(server.auth ? { auth: { type: "bearer" as const } } : {}) }
+    : { name: server.name, transport: "stdio" as const, command: typeof server.command === "string" ? server.command : "", ...(Array.isArray(server.args) ? { args: server.args.filter((item): item is string => typeof item === "string") } : {}) };
+  if (mcpAssistantPendingTools === undefined) {
+    const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    mcpAssistantRequestId = requestId;
+    vscode.postMessage({ type: "prepareMcp", requestId, scope: elements.mcpAssistantScope.value as "project" | "global", server: candidate });
+    elements.mcpAssistantStatus.textContent = "Discovering MCP tools…";
+    elements.mcpAssistantSave.disabled = true;
+    return;
+  }
+  vscode.postMessage({ type: "createMcp", scope: elements.mcpAssistantScope.value as "project" | "global", selectedTools: mcpAssistantPendingTools, server: candidate });
+  elements.mcpAssistantStatus.textContent = "MCP saved. Refreshing its tools…";
+  elements.mcpAssistantSave.disabled = true;
+}
+
+function renderMcpToolChoices(tools: Array<{ name: string; description?: string }>): void {
+  mcpAssistantPendingTools = tools.map((tool) => tool.name);
+  elements.mcpAssistantTools.replaceChildren();
+  elements.mcpAssistantTools.hidden = false;
+  const heading = document.createElement("div");
+  heading.className = "mcp-assistant-label";
+  heading.textContent = `Select tools to add (${tools.length})`;
+  elements.mcpAssistantTools.append(heading);
+  for (const tool of tools) {
+    const label = document.createElement("label");
+    label.className = "mcp-tool-choice";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = true;
+    input.addEventListener("change", () => {
+      if (!mcpAssistantPendingTools) return;
+      mcpAssistantPendingTools = input.checked
+        ? [...new Set([...mcpAssistantPendingTools, tool.name])]
+        : mcpAssistantPendingTools.filter((name) => name !== tool.name);
+    });
+    const text = document.createElement("span");
+    text.textContent = tool.name;
+    const description = document.createElement("small");
+    description.textContent = tool.description ?? "";
+    label.append(input, text, description);
+    elements.mcpAssistantTools.append(label);
+  }
+  elements.mcpAssistantStatus.textContent = "Choose the tools to include, then save MCP.";
+  elements.mcpAssistantSave.disabled = false;
+}
+
 function defaultValue(field: FieldDefinition): string {
   if (field.multiple) return `[${defaultValue({ ...field, multiple: false })}]`;
   if (field.default !== undefined) {
@@ -490,6 +874,32 @@ function syncMethodToggle(): void {
 function toggleMethodGroups(): void {
   const groups = [...elements.methods.querySelectorAll<HTMLDetailsElement>("details.method-group")];
   setMethodGroupsOpen(groups.some((group) => !group.open));
+}
+
+function setResultDetailsOpen(open: boolean): void {
+  elements.result.querySelectorAll<HTMLDetailsElement>("details").forEach((detail) => {
+    detail.open = open;
+  });
+  syncResultToggle();
+}
+
+function syncResultToggle(): void {
+  const details = [...elements.result.querySelectorAll<HTMLDetailsElement>("details.output-turn")];
+  // Show the collapse action as soon as any conversation content is open.
+  const open = details.length === 0 || details.some((detail) => detail.open);
+  const icon = elements.resultToggle.querySelector("i");
+  if (icon) icon.className = `codicon codicon-${open ? "collapse-all" : "expand-all"}`;
+  const title = open ? "Collapse conversation" : "Expand conversation";
+  elements.resultToggle.title = title;
+  elements.resultToggle.setAttribute("aria-label", title);
+}
+
+function toggleResultDetails(): void {
+  const details = [...elements.result.querySelectorAll<HTMLDetailsElement>("details.output-turn")];
+  // The button is a collapse action whenever at least one turn is open. In a
+  // mixed state it must therefore collapse everything, rather than expand the
+  // closed turns just because one happens to be closed.
+  setResultDetailsOpen(!details.some((detail) => detail.open));
 }
 
 function setSectionOpen(heading: HTMLElement, body: HTMLElement, open: boolean): void {
@@ -757,6 +1167,13 @@ function pinConversation(sessionId: string, pinned: boolean): void {
   vscode.postMessage({ type: "pinConversation", sessionId, pinned });
 }
 
+// Match editor tab strips: double-clicking unused space creates a fresh tab,
+// while double-clicking an existing tab keeps the browser's normal behaviour.
+elements.conversationTabs.addEventListener("dblclick", (event) => {
+  if (event.target instanceof Element && event.target.closest(".conversation-tab")) return;
+  vscode.postMessage({ type: "newConversation" });
+});
+
 function renderConversations(sessions: readonly ConversationSummary[], activeId: string): void {
   const activeChanged = activeConversationId !== activeId;
   activeConversationId = activeId;
@@ -957,6 +1374,20 @@ function normalizeTerminalText(content: string): string {
     .join("\n");
 }
 
+/**
+ * A number of CLIs (notably when launched through a JSON/non-TTY adapter)
+ * deliberately omit ANSI SGR codes. Keep the output readable in that case by
+ * highlighting the small, tool-agnostic vocabulary used by test runners and
+ * shell prompts. This is only a fallback; real ANSI styling always wins.
+ */
+function plainTerminalClass(line: string): string | undefined {
+  if (/^\s*(?:[>$]|PS [^>]*>)\s+/.test(line)) return "ansi-cyan";
+  if (/\b(?:fail(?:ed|ure)?|errors?|fatal)\b|[✗×]/i.test(line)) return "ansi-red";
+  if (/\b(?:pass(?:ed)?|success(?:ful)?|succeed(?:ed)?|ok)\b|✓/i.test(line)) return "ansi-green";
+  if (/^\s*(?:RUN|Test Files|Tests|Snapshots|Start|Duration)\b/.test(line)) return "ansi-bright-blue";
+  return undefined;
+}
+
 function terminalText(content: string): DocumentFragment {
   content = normalizeTerminalText(content);
   const fragment = document.createDocumentFragment();
@@ -969,11 +1400,28 @@ function terminalText(content: string): DocumentFragment {
     "g"
   );
   let cursor = 0;
+  const hasAnsi = content.includes(escape);
 
   const appendText = (value: string): void => {
     if (!value) return;
     if (active.size === 0 && !foreground) {
-      fragment.append(document.createTextNode(value));
+      if (hasAnsi) {
+        fragment.append(document.createTextNode(value));
+        return;
+      }
+      const lines = value.split("\n");
+      lines.forEach((line, index) => {
+        const className = plainTerminalClass(line);
+        if (className) {
+          const span = document.createElement("span");
+          span.className = className;
+          span.textContent = line;
+          fragment.append(span);
+        } else {
+          fragment.append(document.createTextNode(line));
+        }
+        if (index < lines.length - 1) fragment.append(document.createTextNode("\n"));
+      });
       return;
     }
     const span = document.createElement("span");
@@ -1102,27 +1550,92 @@ function referenceIcon(kind: "file" | "dir" | "symbol" | "selection" | "activeFi
 function renderedInputSource(source: string): HTMLPreElement {
   const pre = document.createElement("pre");
   pre.className = "dext-source";
-  for (const part of inputReferenceDisplayParts(source)) {
-    if (part.kind === "text") {
-      pre.append(document.createTextNode(part.value));
-      continue;
-    }
-    const reference = part.reference;
-    const descriptor = fileReferenceChipDescriptor(
-      compactFileReferenceLabel(reference.payload),
-      reference.payload
-    );
-    pre.append(createFileReferenceChip({
-      document,
-      ...descriptor,
-      modifierClass: "output-file-reference",
-      icon: referenceIcon(reference.kind),
-      ...(reference.kind === "file"
-        ? { onOpen: () => openInputReference(reference) }
-        : {})
-    }));
+  const parts = inputReferenceDisplayParts(source);
+  const references = parts.filter((part): part is Extract<typeof part, { kind: "ref" }> => part.kind === "ref");
+  if (!references.length) {
+    pre.append(highlightDextFragment(source));
+    return pre;
   }
+
+  // Highlight the complete source with valid identifiers in place of @path
+  // tokens, then swap those identifiers for their interactive Chips. This
+  // keeps strings and multiline calls in one parse tree instead of attempting
+  // to highlight incomplete fragments around each reference.
+  const placeholders = references.map((_, index) => {
+    let value = `__dext_reference_${index}__`;
+    while (source.includes(value)) value = `_${value}_`;
+    return value;
+  });
+  const highlightedSource = parts.map((part) => part.kind === "ref"
+    ? placeholders[references.indexOf(part)]!
+    : part.value
+  ).join("");
+  const highlighted = highlightDextFragment(highlightedSource);
+  const walker = document.createTreeWalker(highlighted, NodeFilter.SHOW_TEXT);
+  const textNodes: Text[] = [];
+  let node: Node | null;
+  while ((node = walker.nextNode())) textNodes.push(node as Text);
+  for (const textNode of textNodes) {
+    const value = textNode.nodeValue ?? "";
+    const marker = new RegExp(`(${placeholders.map(escapeRegExp).join("|")})`, "g");
+    if (!marker.test(value)) continue;
+    marker.lastIndex = 0;
+    const replacement = document.createDocumentFragment();
+    let cursor = 0;
+    for (const match of value.matchAll(marker)) {
+      const index = match.index ?? 0;
+      if (index > cursor) replacement.append(document.createTextNode(value.slice(cursor, index)));
+      const referenceIndex = placeholders.indexOf(match[0]);
+      if (referenceIndex >= 0) replacement.append(inputReferenceChipElement(references[referenceIndex]!.reference));
+      cursor = index + match[0].length;
+    }
+    if (cursor < value.length) replacement.append(document.createTextNode(value.slice(cursor)));
+    textNode.replaceWith(replacement);
+  }
+  pre.append(highlighted);
   return pre;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function highlightDextFragment(source: string): DocumentFragment {
+  const fragment = document.createDocumentFragment();
+  highlightCode(
+    source,
+    pythonParser.parse(source),
+    classHighlighter,
+    (text, classes) => {
+      if (!text) return;
+      if (!classes) {
+        fragment.append(document.createTextNode(text));
+        return;
+      }
+      const span = document.createElement("span");
+      span.className = classes;
+      span.textContent = text;
+      fragment.append(span);
+    },
+    () => fragment.append(document.createTextNode("\n"))
+  );
+  return fragment;
+}
+
+function inputReferenceChipElement(reference: ContextReferenceOccurrence): HTMLElement {
+  const descriptor = fileReferenceChipDescriptor(
+    compactFileReferenceLabel(reference.payload),
+    reference.payload
+  );
+  return createFileReferenceChip({
+    document,
+    ...descriptor,
+    modifierClass: "output-file-reference",
+    icon: referenceIcon(reference.kind),
+    ...(reference.kind === "file"
+      ? { onOpen: () => openInputReference(reference) }
+      : {})
+  });
 }
 
 /** Turn actions live in the summary, which is a click target of its own, so
@@ -1141,6 +1654,19 @@ function turnActionButton(icon: string, label: string, onActivate: () => void): 
     event.preventDefault();
     event.stopPropagation();
     onActivate();
+  });
+  return button;
+}
+
+function turnCopyButton(text: () => string): HTMLButtonElement {
+  const button = turnActionButton("copy", "Copy turn", () => {
+    void clipboard.write(text()).then((success) => {
+      if (!success) return;
+      const icon = button.querySelector<HTMLElement>("i");
+      if (!icon) return;
+      icon.className = "codicon codicon-check";
+      window.setTimeout(() => { icon.className = "codicon codicon-copy"; }, 900);
+    });
   });
   return button;
 }
@@ -1167,6 +1693,8 @@ function createOutputTurn(turnId: string, source: string, createdAt = Date.now()
   const title = document.createElement("span");
   title.className = "output-turn-title";
   title.textContent = inputReferenceDisplayText(source).split(/\r?\n/, 1)[0]?.slice(0, 140) || "Dext turn";
+  const body = document.createElement("div");
+  body.className = "output-turn-body";
   const actions = document.createElement("span");
   actions.className = "output-turn-actions";
   actions.append(
@@ -1176,11 +1704,13 @@ function createOutputTurn(turnId: string, source: string, createdAt = Date.now()
     }),
     turnActionButton("debug-restart", "Retry this turn", () => {
       vscode.postMessage({ type: "retryTurn", turnId });
+    }),
+    turnCopyButton(() => disclosure.textContent?.trim() ?? ""),
+    turnActionButton("trash", "Delete turn", () => {
+      vscode.postMessage({ type: "deleteTurn", turnId });
     })
   );
   summary.append(chevron, time, title, actions);
-  const body = document.createElement("div");
-  body.className = "output-turn-body";
   const input = outputTurnSection("Input", true);
   const inputText = renderedInputSource(source);
   const inputCopy = document.createElement("div");
@@ -1201,6 +1731,7 @@ function createOutputTurn(turnId: string, source: string, createdAt = Date.now()
   };
   outputTurns.set(turnId, turn);
   activeTurn = turn;
+  syncResultToggle();
   return turn;
 }
 
@@ -1652,6 +2183,7 @@ function renderResult(response: InputExecutionResponse, reviewTurnId?: string): 
     fanOut.append(item);
   }
   elements.resultSection.classList.remove("hidden");
+  syncResultToggle();
 }
 
 function clearInputError(): void {
@@ -1674,6 +2206,7 @@ function renderOutputError(message: unknown): void {
   summary.textContent = text;
   target.append(summary);
   elements.resultSection.classList.remove("hidden");
+  syncResultToggle();
 }
 
 function renderError(message: unknown): void {
@@ -1945,6 +2478,7 @@ function renderAgentEvent(event: AgentStreamEvent): void {
     outputCopy.replaceWith(copyButton(copyText));
   }
   elements.resultSection.classList.remove("hidden");
+  syncResultToggle();
 }
 
 function renderAgentFileChanges(entries: readonly WorkflowStepResponse[]): void {
@@ -2025,6 +2559,7 @@ function renderOutputSession(session: DextHistorySession): void {
     else if (record.output) turn.output.append(codeBlock(record.output));
   }
   elements.resultSection.classList.remove("hidden");
+  syncResultToggle();
 }
 
 function droppedFiles(transfer: DataTransfer): ReturnType<typeof parseDroppedFiles> {
@@ -2086,6 +2621,17 @@ function clearSubmittedInput(): void {
 
 elements.run.addEventListener("click", run);
 elements.result.addEventListener("click", openOutputLink);
+// Conversation output is read-only. Suppress the browser's native context
+// menu so actions such as Cut and Paste cannot suggest unsupported behavior;
+// copying is available from each turn's action strip instead.
+elements.result.addEventListener("contextmenu", (event) => {
+  event.preventDefault();
+});
+elements.resultToggle.addEventListener("click", (event) => {
+  event.stopPropagation();
+  toggleResultDetails();
+});
+elements.result.addEventListener("toggle", syncResultToggle, true);
 elements.problems.addEventListener("click", () => editor.goToFirstDiagnostic());
 elements.methodsToggle.addEventListener("click", toggleMethodGroups);
 elements.reloadMethods.addEventListener("click", () => {
@@ -2097,6 +2643,26 @@ elements.closeMethods.addEventListener("click", closeMethodsDialog);
 elements.methodsDialog.addEventListener("click", (event) => {
   if (event.target === elements.methodsDialog) closeMethodsDialog();
 });
+elements.closeMcp.addEventListener("click", closeMcpDialog);
+elements.mcpToggle.addEventListener("click", toggleResourceCategories);
+elements.mcpSearch.addEventListener("input", () => {
+  if (lastSidebarState) renderMcp(lastSidebarState);
+});
+elements.mcpDialog.addEventListener("click", (event) => {
+  if (event.target === elements.mcpDialog) closeMcpDialog();
+});
+elements.mcpAssistantClose.addEventListener("click", () => elements.mcpAssistantDialog.close());
+elements.mcpAssistantGenerate.addEventListener("click", generateMcpAssistant);
+elements.mcpAssistantSave.addEventListener("click", saveMcpAssistant);
+elements.mcpAssistantDialog.addEventListener("click", (event) => {
+  if (event.target === elements.mcpAssistantDialog) elements.mcpAssistantDialog.close();
+});
+elements.uiDialogClose.addEventListener("click", cancelUi);
+elements.uiDialog.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  cancelUi();
+});
+elements.uiDialogForm.addEventListener("submit", (event) => event.preventDefault());
 elements.inputHeading.addEventListener("click", (event) => {
   if (event.target instanceof Element && event.target.closest("button")) return;
   toggleSection(elements.inputHeading, elements.inputBody);
@@ -2200,8 +2766,10 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   const message = event.data;
   if (broker.accept(message) || clipboard.accept(message) || fileSearch.accept(message)) return;
   if (message.type === "state") {
+    lastSidebarState = message.state;
     setMethodsReloading(false);
     renderMethods(message.state);
+    renderMcp(message.state);
   }
   if (message.type === "inputKind") {
     inputKind = message.kind;
@@ -2219,6 +2787,39 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   if (message.type === "outputSession") renderOutputSession(message.session);
   if (message.type === "conversations") renderConversations(message.sessions, message.activeId);
   if (message.type === "openMethods") openMethodsDialog();
+  if (message.type === "openMcp") openMcpDialog();
+  if (message.type === "mcpAssistant") openMcpAssistantDialog();
+  if (message.type === "mcpProgress" && message.requestId === mcpAssistantRequestId) {
+    renderMcpAssistantEvent(message.event);
+  }
+  if (message.type === "mcpToolsDiscovered" && message.requestId === mcpAssistantRequestId) {
+    renderMcpToolChoices(message.tools);
+  }
+  if (message.type === "mcpGenerated" && message.requestId === mcpAssistantRequestId) {
+    mcpAssistantServer = message.server;
+    elements.mcpAssistantPreview.value = JSON.stringify(message.server, null, 2);
+    elements.mcpAssistantPreview.hidden = false;
+    elements.mcpAssistantScope.hidden = false;
+    elements.mcpAssistantScopeLabel.hidden = false;
+    elements.mcpAssistantGenerate.hidden = true;
+    elements.mcpAssistantSave.hidden = false;
+    // Tool discovery follows generation; keep Save disabled until the
+    // allowlist view has been populated.
+    elements.mcpAssistantSave.disabled = true;
+    // Completed Conversation Process sections are collapsed by default; keep
+    // the MCP trace available on demand as well.
+    elements.mcpAssistantProcess.open = false;
+    const elapsed = mcpAssistantProcessStartedAt ? Math.max(0, Date.now() - mcpAssistantProcessStartedAt) : 0;
+    const tokenLabel = mcpAssistantProcessTokens === undefined ? "" : ` · ${mcpAssistantProcessTokens} tokens`;
+    elements.mcpAssistantProcessMeta.textContent = `Worked for ${formatDuration(elapsed)} · ${mcpAssistantProcessCount} events${tokenLabel}`;
+    elements.mcpAssistantStatus.textContent = "Review the draft, choose where to save it, then confirm.";
+  }
+  if (message.type === "mcpCreated") {
+    elements.mcpAssistantStatus.textContent = `MCP '${message.name}' was added and its tools are ready.`;
+    elements.mcpAssistantDialog.close();
+    openMcpDialog();
+  }
+  if (message.type === "uiRequest") openUiDialog(message);
   if (message.type === "execution" && message.sessionId === activeConversationId) {
     selectOutputTurn(message.turnId);
     renderResult(message.response, message.reviewPatch ? message.turnId : undefined);
@@ -2235,7 +2836,25 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     renderAgentEvent(message.event);
     followResultIfNeeded(shouldFollow);
   }
-  if (message.type === "executing" && message.sessionId === activeConversationId) {
+  if (message.type === "executing" && (
+    message.sessionId === activeConversationId
+    || message.turnId === mcpAssistantRunningRequestId
+    || (message.value && message.turnId === mcpAssistantRequestId)
+  )) {
+    // MCP manifest generation has its own action in the MCP dialog. It is not
+    // a conversation turn and must not change the composer run control or
+    // create a phantom output entry in conversation history.
+    if (message.turnId === mcpAssistantRunningRequestId || (!mcpAssistantRunningRequestId && message.turnId === mcpAssistantRequestId && message.value)) {
+      if (message.value) {
+        mcpAssistantRunningRequestId = message.turnId;
+        mcpAssistantStopping = false;
+      } else {
+        mcpAssistantRunningRequestId = undefined;
+        elements.mcpAssistantProcess.open = false;
+      }
+      updateMcpAssistantAction();
+      return;
+    }
     executing = message.value;
     if (message.value) {
       activeTurnId = message.turnId;
@@ -2270,6 +2889,11 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     dropPosition = undefined;
     pendingDropPosition = undefined;
     renderInputError(message.message);
+    if (elements.mcpAssistantDialog.open) {
+      elements.mcpAssistantStatus.textContent = message.message;
+      updateMcpAssistantAction();
+      elements.mcpAssistantSave.disabled = false;
+    }
   }
   if (message.type === "setInput") {
     editor.setValue(message.source);
@@ -2288,4 +2912,5 @@ window.addEventListener("unload", () => {
 
 updateRunState();
 syncFullscreenButtons();
+syncResultToggle();
 vscode.postMessage({ type: "ready" });

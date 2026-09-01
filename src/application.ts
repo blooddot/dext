@@ -1,4 +1,4 @@
-import { isAbsolute } from "node:path";
+import { isAbsolute, sep } from "node:path";
 import * as vscode from "vscode";
 import { BUILTIN_METHODS } from "./core/builtins.js";
 import { loadCustomApis } from "./core/customApi.js";
@@ -8,8 +8,8 @@ import { MethodRegistry } from "./core/registry.js";
 import { DextRuntime } from "./core/runtime.js";
 import { compileWorkflow, parseWorkflowImports } from "./core/workflow.js";
 import { DEFAULT_MAX_CONCURRENCY, WorkflowRuntime } from "./core/workflowRuntime.js";
-import type { CallableDefinition, ExecutionMetadata, InputExecutionResponse } from "./core/types.js";
-import type { SidebarState } from "./webviewProtocol.js";
+import type { CallableDefinition, DextResult, ExecutionMetadata, InputExecutionResponse } from "./core/types.js";
+import type { GlobalResourceItem, GlobalResources, SidebarState } from "./webviewProtocol.js";
 import { VsCodeContextHost } from "./vscodeContextHost.js";
 import { terminalRunHandler } from "./vscodeTerminalHost.js";
 import { applyPatchHandler } from "./vscodePatchHost.js";
@@ -17,6 +17,7 @@ import { loadEditorTokenTheme } from "./vscodeTheme.js";
 import {
   AgentProfileStore,
   AGENT_PERMISSIONS,
+  SUPPORTED_AGENT_PROFILE_IDS,
   type AgentPermission,
   type AgentProfile,
   type AgentProvider,
@@ -25,7 +26,7 @@ import {
 import { DefaultAioaCdpConnection } from "./core/aioaCdp.js";
 import { DefaultAgentRunner } from "./core/agentRouter.js";
 import { SkillCatalog } from "./core/skillCatalog.js";
-import { McpToolRegistry, type HttpMcpServerConfig, type McpServerConfig, type McpToolConfig } from "./core/mcpRegistry.js";
+import { McpToolRegistry, type HttpMcpServerConfig, type McpServerConfig, type McpToolConfig, type McpDiscoveredTool } from "./core/mcpRegistry.js";
 import { McpAccessTokenStore } from "./core/mcpSecrets.js";
 import { parseMcpManifest } from "./core/mcpManifest.js";
 import {
@@ -60,6 +61,7 @@ export class DextApplication {
   private workspaceRoot = process.cwd();
   private workspaceUri: vscode.Uri | undefined;
   private workspaceTrusted = false;
+  private globalResources: GlobalResources = { apis: [], mcps: [], rules: [], skills: [] };
   readonly skills = new SkillCatalog();
   readonly mcp = new McpToolRegistry();
   readonly agents: AgentProfileStore;
@@ -85,7 +87,7 @@ export class DextApplication {
       this.completionSecrets = new CompletionKeyStore(secretStorage, () => this.workspaceUri?.toString());
     }
     this.registry.registerMany(BUILTIN_METHODS, "builtin");
-    this.runtime.setAgentProfiles(this.agents.list());
+    this.refreshAgentProfiles();
     this.runtime.setAgentSelection(this.agents.currentSelection());
     this.runtime.setSkillLoader((skill, workspace) => this.skills.load(skill, this.workspaceRoot, workspace.path));
     this.runtime.setRuleLoader(async (path) => {
@@ -93,11 +95,28 @@ export class DextApplication {
         const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(path));
         return new TextDecoder().decode(bytes);
       } catch (error) {
-        if (error instanceof vscode.FileSystemError && error.code === "FileNotFound") return undefined;
+        if (error instanceof vscode.FileSystemError && error.code === "FileNotFound") {
+          const projectRulesRoot = vscode.Uri.joinPath(vscode.Uri.file(this.workspaceRoot), ".dext", "rules").fsPath;
+          const relativePath = path.startsWith(`${projectRulesRoot}${sep}`)
+            ? path.slice(projectRulesRoot.length + 1)
+            : undefined;
+          if (relativePath) {
+            try {
+              const globalFile = vscode.Uri.joinPath(this.storage.globalStorageUri, "rules", ...relativePath.split(/[\\\\/]/));
+              const bytes = await vscode.workspace.fs.readFile(globalFile);
+              return new TextDecoder().decode(bytes);
+            } catch (globalError) {
+              if (globalError instanceof vscode.FileSystemError && globalError.code === "FileNotFound") return undefined;
+              throw globalError;
+            }
+          }
+          return undefined;
+        }
         throw error;
       }
     });
     this.runtime.setMcpCaller((tool, input) => this.mcp.call(tool, input));
+    this.runtime.setCreateHandler(({ arguments: args, metadata }) => this.createResource(args, metadata));
   }
 
   async reload(): Promise<void> {
@@ -122,7 +141,7 @@ export class DextApplication {
       "project"
     );
     try {
-      await this.skills.reload(this.workspaceRoot, skillDirs);
+      await this.skills.reload(this.workspaceRoot, skillDirs, vscode.Uri.joinPath(this.storage.globalStorageUri, "skills").fsPath);
     } catch (error) {
       diagnostics.push(`Skill discovery: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -167,6 +186,56 @@ export class DextApplication {
     this.language.setCustomApiIds(this.customApiIds);
     this.configDiagnostics = [...diagnostics, ...loaded.diagnostics];
     this.language.setSkillCompletions(this.skills.list());
+    this.globalResources = await this.loadGlobalResources();
+  }
+
+  private async loadGlobalResources(): Promise<GlobalResources> {
+    const root = this.storage.globalStorageUri;
+    const listFiles = async (directory: vscode.Uri, extension?: string): Promise<string[]> => {
+      const files: string[] = [];
+      const visit = async (current: vscode.Uri): Promise<void> => {
+        let entries: [string, vscode.FileType][];
+        try { entries = await vscode.workspace.fs.readDirectory(current); }
+        catch (error) {
+          if (error instanceof vscode.FileSystemError && error.code === "FileNotFound") return;
+          throw error;
+        }
+        for (const [name, type] of entries) {
+          const child = vscode.Uri.joinPath(current, name);
+          if (type === vscode.FileType.Directory) await visit(child);
+          else if (type === vscode.FileType.File && (!extension || name.toLowerCase().endsWith(extension))) files.push(child.fsPath);
+        }
+      };
+      await visit(directory);
+      return files.sort((a, b) => a.localeCompare(b));
+    };
+    const relativeName = (file: string, directory: vscode.Uri, extension: string): string => {
+      const base = directory.fsPath.replace(/[\\/]$/, "");
+      return file.slice(base.length + 1).replace(/[\\/]/g, ".").replace(new RegExp(`${extension}$`, "i"), "");
+    };
+    const apiRoot = vscode.Uri.joinPath(root, "api");
+    const ruleRoot = vscode.Uri.joinPath(root, "rules");
+    const skillRoot = vscode.Uri.joinPath(root, "skills");
+    const apis = (await listFiles(apiRoot, ".dx")).map((file) => ({ name: relativeName(file, apiRoot, ".dx") }));
+    const rules = (await listFiles(ruleRoot, ".md")).map((file) => ({ name: relativeName(file, ruleRoot, ".md") }));
+    const skills = (await listFiles(skillRoot, "skill.md")).map((file) => ({
+      name: file.slice(skillRoot.fsPath.replace(/[\\/]$/, "").length + 1).replace(/[\\/]/g, "/").replace(/\/SKILL\.md$/i, "")
+    }));
+    const mcps: GlobalResourceItem[] = [];
+    for (const file of await listFiles(vscode.Uri.joinPath(root, "mcp"), ".jsonc")) {
+      try {
+        const manifest = parseMcpManifest(new TextDecoder().decode(await vscode.workspace.fs.readFile(vscode.Uri.file(file))), file);
+        if (manifest.server) mcps.push({
+          name: manifest.server.name,
+          detail: manifest.server.transport === "http"
+            ? manifest.server.url
+            : manifest.server.command
+        });
+      } catch {
+        mcps.push({ name: file.split(/[\\/]/).pop()!.replace(/\.jsonc$/i, ""), detail: "invalid configuration" });
+      }
+    }
+    return { apis, mcps: mcps.sort((a, b) => a.name.localeCompare(b.name)), rules, skills };
   }
 
   /** A timeout that fires cuts the turn off with nothing the user can do about
@@ -186,12 +255,13 @@ export class DextApplication {
     this.workflowRuntime.setMaxConcurrency(positive("workflow.maxConcurrency", DEFAULT_MAX_CONCURRENCY));
   }
 
-  /** `.dext/api` is always searched; `dext.apiDirs` adds to it. Relative entries
-   * resolve from the workspace, and the built-in directory stays first so a
-   * configured directory cannot shadow a project's own API. */
+  /** Project APIs are searched first, then global APIs; `dext.apiDirs` adds to
+   * the shared roots. Relative entries resolve from the workspace, and the
+   * project directory stays first so a global API cannot shadow it. */
   private apiDirectories(folder: vscode.WorkspaceFolder | undefined): string[] {
-    if (!folder) return [];
-    const roots = [vscode.Uri.joinPath(folder.uri, ".dext", "api").fsPath];
+    const roots = folder ? [vscode.Uri.joinPath(folder.uri, ".dext", "api").fsPath] : [];
+    roots.push(vscode.Uri.joinPath(this.storage.globalStorageUri, "api").fsPath);
+    if (!folder) return roots;
     const configured = vscode.workspace.getConfiguration("dext").get<string[]>("apiDirs", []) ?? [];
     for (const entry of configured) {
       const value = typeof entry === "string" ? entry.trim() : "";
@@ -202,40 +272,46 @@ export class DextApplication {
     return roots;
   }
 
-  /** The project owns its MCP manifests. One file per server keeps a tool's
-   * allowlist and its API contract together rather than split across settings. */
-  private async loadMcpManifests(folder: vscode.WorkspaceFolder | undefined): Promise<{
+  /** Project and global MCP manifests use the same format. One file per server
+   * keeps the allowlist and its API contract together rather than split across settings. */
+  private async loadMcpManifests(folder: vscode.WorkspaceFolder | undefined, includeGlobal = true): Promise<{
     servers: McpServerConfig[];
     tools: McpToolConfig[];
     methods: CallableDefinition[];
     diagnostics: string[];
   }> {
-    if (!folder || folder.uri.scheme !== "file") return { servers: [], tools: [], methods: [], diagnostics: [] };
-    const directory = vscode.Uri.joinPath(folder.uri, ".dext", "mcp");
-    let entries: [string, vscode.FileType][];
-    try {
-      entries = await vscode.workspace.fs.readDirectory(directory);
-    } catch (error) {
-      if (error instanceof vscode.FileSystemError && error.code === "FileNotFound") {
-        return { servers: [], tools: [], methods: [], diagnostics: [] };
-      }
-      return { servers: [], tools: [], methods: [], diagnostics: [`MCP manifest discovery: ${error instanceof Error ? error.message : String(error)}`] };
-    }
+    const directories: vscode.Uri[] = [];
+    if (folder?.uri.scheme === "file") directories.push(vscode.Uri.joinPath(folder.uri, ".dext", "mcp"));
+    if (includeGlobal) directories.push(vscode.Uri.joinPath(this.storage.globalStorageUri, "mcp"));
     const servers: McpServerConfig[] = [];
     const tools: McpToolConfig[] = [];
     const methods: CallableDefinition[] = [];
     const diagnostics: string[] = [];
-    for (const [name, type] of entries.sort(([left], [right]) => left.localeCompare(right))) {
+    const seenServerNames = new Set<string>();
+    for (const directory of directories) {
+      let entries: [string, vscode.FileType][];
+      try { entries = await vscode.workspace.fs.readDirectory(directory); }
+      catch (error) {
+        if (error instanceof vscode.FileSystemError && error.code === "FileNotFound") continue;
+        diagnostics.push(`MCP manifest discovery: ${error instanceof Error ? error.message : String(error)}`);
+        continue;
+      }
+      for (const [name, type] of entries.sort(([left], [right]) => left.localeCompare(right))) {
       if (type !== vscode.FileType.File || !name.toLowerCase().endsWith(".jsonc")) continue;
       const file = vscode.Uri.joinPath(directory, name);
       try {
         const manifest = parseMcpManifest(new TextDecoder().decode(await vscode.workspace.fs.readFile(file)), file.fsPath);
-        if (manifest.server) servers.push(manifest.server);
+        if (manifest.server && seenServerNames.has(manifest.server.name)) continue;
+        if (manifest.server) {
+          seenServerNames.add(manifest.server.name);
+          servers.push(manifest.server);
+        }
         tools.push(...manifest.tools);
         methods.push(...manifest.methods);
         diagnostics.push(...manifest.diagnostics);
       } catch (error) {
         diagnostics.push(`${file.fsPath}: ${error instanceof Error ? error.message : String(error)}`);
+      }
       }
     }
     return { servers, tools, methods, diagnostics };
@@ -277,10 +353,182 @@ export class DextApplication {
         output: method.output
       })),
       diagnostics: this.configDiagnostics,
-      agentProfiles: this.agents.list(),
+      mcpServers: this.mcp.listServers(),
+      mcpDiagnostics: this.configDiagnostics.filter((item) => item.toLowerCase().includes("mcp")),
+      globalResources: this.globalResources,
+      agentProfiles: this.agentProfiles(),
       agentSelection: this.agents.currentSelection(),
       settings: this.webviewSettings()
     };
+  }
+
+  /** Creates a project-owned MCP manifest. The server is verified and its
+   * tools are discovered when possible, so the generated file is immediately
+   * usable while keeping the explicit allowlist required by Dext. */
+  async createMcpManifest(server: McpServerConfig, scope: "project" | "global" = "project", selectedTools?: readonly string[]): Promise<void> {
+    if (!/^[A-Za-z0-9_.-]+$/.test(server.name)) {
+      throw new Error("MCP server names must use letters, numbers, dots, underscores, or hyphens.");
+    }
+    if (server.transport === "http") {
+      let url: URL;
+      try { url = new URL(server.url); } catch { throw new Error("MCP HTTP URL is invalid."); }
+      const loopback = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(url.hostname);
+      if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
+        throw new Error("MCP HTTP URL must use HTTPS or loopback HTTP.");
+      }
+      if (url.username || url.password || url.search || url.hash) {
+        throw new Error("MCP HTTP URL must not contain credentials, query strings, or fragments.");
+      }
+    } else if (!server.command.trim()) {
+      throw new Error("MCP stdio command is required.");
+    }
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    if (scope === "project" && (!folder || folder.uri.scheme !== "file" || !this.workspaceTrusted)) {
+      throw new Error("Creating an MCP configuration requires a trusted local workspace.");
+    }
+    const directory = scope === "global"
+      ? vscode.Uri.joinPath(this.storage.globalStorageUri, "mcp")
+      : vscode.Uri.joinPath(folder!.uri, ".dext", "mcp");
+    await vscode.workspace.fs.createDirectory(directory);
+    const file = vscode.Uri.joinPath(directory, `${server.name}.jsonc`);
+    try {
+      await vscode.workspace.fs.stat(file);
+      throw new Error(`MCP configuration '${server.name}' already exists.`);
+    } catch (error) {
+      if (!(error instanceof vscode.FileSystemError && error.code === "FileNotFound")) throw error;
+    }
+    const initial = { ...server, tools: [] };
+    await vscode.workspace.fs.writeFile(file, new TextEncoder().encode(`${JSON.stringify(initial, null, 2)}\n`));
+    await this.reload();
+    let tools: Array<Record<string, unknown>> = [];
+    try {
+      const discovered = await this.mcp.discoverServerTools(server.name);
+      const selected = selectedTools === undefined ? discovered : discovered.filter((tool) => selectedTools.includes(tool.name));
+      tools = selected.map((tool) => ({
+        // Manifest tools are local allowlist entries.  The server is already
+        // declared by the containing file, so the parser expects the MCP
+        // protocol's tool name here (not the registry's flattened
+        // `{server, tool}` representation).
+        name: tool.name,
+        ...(tool.description ? { description: tool.description } : {}),
+        ...(tool.inputSchema ? { inputSchema: tool.inputSchema } : {}),
+        ...(tool.outputSchema ? { outputSchema: tool.outputSchema } : {})
+      }));
+    } catch {
+      // Saving the server is still useful when discovery needs credentials or
+      // the endpoint is temporarily unavailable; the user can edit/reload it.
+    }
+    const manifest = { ...server, tools };
+    await vscode.workspace.fs.writeFile(file, new TextEncoder().encode(`${JSON.stringify(manifest, null, 2)}\n`));
+    await this.reload();
+  }
+
+  async discoverMcpTools(server: McpServerConfig): Promise<McpDiscoveredTool[]> {
+    return this.mcp.discoverTools(server);
+  }
+
+  /** Ask the currently selected Agent CLI to turn MCP documentation or a
+   * natural-language description into a server manifest. */
+  async generateMcpManifest(document: string, metadata: Readonly<ExecutionMetadata> = {}): Promise<McpServerConfig> {
+    const trimmed = document.trim();
+    let documentUrl: string | undefined;
+    try {
+      const url = new URL(trimmed);
+      if (["http:", "https:"].includes(url.protocol)) documentUrl = trimmed;
+    } catch {
+      // Natural-language MCP descriptions are also accepted by create().
+    }
+    let documentation = "";
+    if (documentUrl) {
+      try {
+        const fetched = await fetch(documentUrl, { signal: AbortSignal.timeout(15_000) });
+        if (fetched.ok) documentation = (await fetched.text()).slice(0, 80_000);
+      } catch {
+        // The selected CLI may still be able to access the URL itself.
+      }
+    }
+    const selection = this.agents.currentSelection();
+    const response = await this.runtime.executeConversation("ask", [
+      "You generate Dext MCP configuration.",
+      "Read the MCP documentation or interpret the user's description and return exactly one JSON object, with no markdown fences or commentary.",
+      "Allowed shape: {name, transport:'http', url, auth?:{type:'bearer'}, timeoutMs?} or {name, transport:'stdio', command, args?, timeoutMs?}.",
+      "Use the actual MCP endpoint or install command from the documentation; do not invent credentials.",
+      documentUrl ? `Documentation URL: ${documentUrl}` : `User description: ${trimmed}`,
+      documentation ? `Documentation content:\n${documentation}` : "No documentation was fetched; infer only what the URL or user description supports."
+    ].join("\n"), {
+      ...(selection.profileId ? { agent: selection.profileId } : {}),
+      ...metadata
+    });
+    if (response.result.kind !== "chat") throw new Error("The selected Agent did not return text.");
+    const raw = response.result.text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+    let value: unknown;
+    try { value = JSON.parse(raw); } catch { throw new Error("The Agent returned invalid JSON. Try again or paste a direct MCP configuration."); }
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("The Agent returned an invalid MCP configuration.");
+    const candidate = value as Record<string, unknown>;
+    if (candidate.transport === "http" && typeof candidate.name === "string" && typeof candidate.url === "string") {
+      return {
+        name: candidate.name, transport: "http", url: candidate.url,
+        ...(candidate.auth && typeof candidate.auth === "object" ? { auth: { type: "bearer" as const } } : {}),
+        ...(typeof candidate.timeoutMs === "number" ? { timeoutMs: candidate.timeoutMs } : {})
+      };
+    }
+    if (candidate.transport === "stdio" && typeof candidate.name === "string" && typeof candidate.command === "string") {
+      const args = Array.isArray(candidate.args) ? candidate.args.filter((item): item is string => typeof item === "string") : undefined;
+      return { name: candidate.name, transport: "stdio", command: candidate.command, ...(args?.length ? { args } : {}), ...(typeof candidate.timeoutMs === "number" ? { timeoutMs: candidate.timeoutMs } : {}) };
+    }
+    throw new Error("The Agent returned an unsupported MCP configuration shape.");
+  }
+
+  private async createResource(args: Record<string, unknown>, metadata: Readonly<ExecutionMetadata>): Promise<DextResult> {
+    const type = args.type;
+    const input = args.input;
+    const scope = args.scope === "global" ? "global" : "project";
+    if (!["api", "mcp", "rule", "skill"].includes(String(type))) throw new Error("create type must be 'api', 'mcp', 'rule', or 'skill'.");
+    if (typeof input !== "string" || !input.trim()) throw new Error("create input must be a non-empty string.");
+    if (scope === "project" && !this.workspaceTrusted) throw new Error("Project resource creation requires a trusted local workspace.");
+    if (type === "mcp") {
+      const server = await this.generateMcpManifest(input, metadata);
+      await this.createMcpManifest(server, scope);
+      return { kind: "chat", text: `Created MCP configuration '${server.name}' (${scope}).` };
+    }
+    const response = await this.runtime.executeConversation("ask", [
+      type === "api" ? "Generate one Dext custom API file." : type === "rule" ? "Generate one Dext rule markdown file." : "Generate one Dext SKILL.md package.",
+      "Return exactly one JSON object with fields name and content, with no markdown fences or commentary.",
+      type === "api"
+        ? "name must be a dotted API id using letters, numbers, underscores, and dots; content must be valid Dext .dx containing def main(...)."
+        : type === "rule"
+          ? "name must be a safe markdown filename without path separators; content must be concise policy markdown."
+          : "name must be a safe skill directory name without path separators; content must be a complete SKILL.md.",
+      "The resource should implement this request:", input.trim()
+    ].join("\n"), metadata);
+    if (response.result.kind !== "chat") throw new Error("The selected Agent did not return resource text.");
+    let value: unknown;
+    try { value = JSON.parse(response.result.text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim()); }
+    catch { throw new Error("The Agent returned invalid resource JSON."); }
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("The Agent returned an invalid resource object.");
+    const candidate = value as Record<string, unknown>;
+    const name = typeof candidate.name === "string" ? candidate.name.trim() : "";
+    const content = typeof candidate.content === "string" ? candidate.content.trim() : "";
+    if (type === "api") {
+      if (!/^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)*$/.test(name) || !content.includes("def main")) throw new Error("The Agent returned an unsupported API shape.");
+      const compiled = compileWorkflow(content, this.registry, { allowImports: true, aliases: parseWorkflowImports(content), customApiIds: this.customApiIds, requireCustomApiImports: false });
+      if (!compiled.program || compiled.diagnostics.some((item) => item.severity === "error")) throw new Error(`The Agent returned invalid Dext API source: ${compiled.diagnostics.map((item) => item.message).join("\\n")}`);
+    } else if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(name) || !content) throw new Error("The Agent returned an unsupported resource shape.");
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    if (scope === "project" && (!folder || folder.uri.scheme !== "file")) throw new Error("Project resources require a local workspace.");
+    const root = scope === "global"
+      ? vscode.Uri.joinPath(this.storage.globalStorageUri, type === "api" ? "api" : type === "rule" ? "rules" : "skills")
+      : vscode.Uri.joinPath(folder!.uri, ".dext", type === "api" ? "api" : type === "rule" ? "rules" : "skills");
+    const segments = type === "api" ? name.split(".") : [name];
+    const fileName = segments.pop()!;
+    const directory = vscode.Uri.joinPath(root, ...segments, ...(type === "skill" ? [fileName] : []));
+    const file = vscode.Uri.joinPath(directory, type === "skill" ? "SKILL.md" : `${fileName}${type === "rule" ? ".md" : ".dx"}`);
+    try { await vscode.workspace.fs.stat(file); throw new Error(`${String(type)} '${name}' already exists.`); }
+    catch (error) { if (!(error instanceof vscode.FileSystemError && error.code === "FileNotFound")) throw error; }
+    await vscode.workspace.fs.createDirectory(directory);
+    await vscode.workspace.fs.writeFile(file, new TextEncoder().encode(`${content}\n`));
+    await this.reload();
+    return { kind: "chat", text: `Created ${String(type)} '${name}' (${scope}).` };
   }
 
   /** The webview cannot read configuration itself, so the settings it renders
@@ -299,9 +547,48 @@ export class DextApplication {
     this.runtime.setAgentSelection(selection);
   }
 
+  /** Profiles exposed to the composer. AIOA remains installed and fully
+   * runnable, but is opt-in through the `dext.agentCli` setting so it is not
+   * advertised to external users by default. */
+  agentProfiles(): AgentProfile[] {
+    const configured = vscode.workspace.getConfiguration("dext").get<unknown>("agentCli", ["codex", "claude"]);
+    const ids = Array.isArray(configured)
+      ? [...new Set(configured
+        .filter((item): item is string => typeof item === "string" && item.trim() !== "")
+        .map((item) => item.trim()))]
+      : [];
+    const enabledIds = ids.filter((id) => (SUPPORTED_AGENT_PROFILE_IDS as readonly string[]).includes(id));
+    const selectedIds = enabledIds.length ? enabledIds : ["codex", "claude"];
+    return this.agents.list(selectedIds);
+  }
+
+  /** Returns non-empty profile IDs that cannot be used by `dext.agentCli`. */
+  invalidAgentCliIds(): string[] {
+    const configured = vscode.workspace.getConfiguration("dext").get<unknown>("agentCli", ["codex", "claude"]);
+    if (!Array.isArray(configured)) return [];
+    return [...new Set(configured
+      .filter((item): item is string => typeof item === "string" && item.trim() !== "")
+      .map((item) => item.trim())
+      .filter((id) => !(SUPPORTED_AGENT_PROFILE_IDS as readonly string[]).includes(id)))];
+  }
+
+  refreshAgentProfiles(): void {
+    const profiles = this.agentProfiles();
+    this.runtime.setAgentProfiles(profiles);
+    const selection = this.agents.currentSelection();
+    if (selection.profileId && !profiles.some((profile) => profile.id === selection.profileId)) {
+      const fallback = profiles[0];
+      if (fallback) {
+        const next = { ...selection, profileId: fallback.id, model: "", reasoningEffort: "", speed: "", serviceTier: "" };
+        this.agents.setSelection(next);
+        this.runtime.setAgentSelection(next);
+      }
+    }
+  }
+
   updateAgentProfile(profile: AgentProfile): void {
     this.agents.update(profile);
-    this.runtime.setAgentProfiles(this.agents.list());
+    this.refreshAgentProfiles();
   }
 
   /** Verifies the configured local AIOA CDP session, launching it when requested. */

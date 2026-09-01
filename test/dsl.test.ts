@@ -64,6 +64,15 @@ choice = ui.choose(label="Pick", options=["one", "two"])`);
     expect(compile("terminal(command=1)").diagnostics.map((item) => item.message).join("\n")).toContain("expects string");
   });
 
+  it("accepts structured values in print", () => {
+    expect(compile([
+      'confirmation = ui.confirm(message="Continue?")',
+      "print(text=confirmation)",
+      "print(text={\"status\": confirmation.confirmed})",
+      "print(text=[1, 2, 3])"
+    ].join("\n")).diagnostics).toEqual([]);
+  });
+
   it("supports literal variable declarations and reuses them as arguments", () => {
     expect(compile('prompt = "Explain the selected code"\nagent(input=prompt)').diagnostics).toEqual([]);
     expect(compile('prompt: str = "Explain"\nagent(input=prompt)').diagnostics).toEqual([]);

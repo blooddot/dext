@@ -39,6 +39,18 @@ function displayValue(value: unknown): string {
   return JSON.stringify(value) ?? "";
 }
 
+/** Print keeps structured values unambiguous so the output can be copied back
+ * into a workflow or inspected as data. URI-backed references remain compact. */
+function printValue(value: unknown): string {
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (typeof value === "object" && value !== null && !Array.isArray(value) && "uri" in value && typeof value.uri === "string") {
+    return value.uri;
+  }
+  return JSON.stringify(value) ?? "";
+}
+
 function stringArgument(value: unknown, fallback: string): string {
   return typeof value === "string" ? value : fallback;
 }
@@ -183,7 +195,7 @@ export const DEFAULT_HANDLERS: Readonly<Record<string, DeterministicHandler>> = 
   },
   printText: ({ arguments: args }) => ({
     kind: "print",
-    text: typeof args.text === "string" ? args.text : "",
+    text: printValue(args.text),
     ...(typeof args.label === "string" ? { label: args.label } : {})
   }),
   echoText: ({ arguments: args }) => ({
@@ -266,6 +278,7 @@ export class DextRuntime {
   private skillLoader: ((skill: string, workspace: DirRef) => Promise<{ instructions: string; sourcePath: string }>) | undefined;
   private ruleLoader: ((path: string) => Promise<string | undefined>) | undefined;
   private mcpCaller: ((tool: string, input: Record<string, unknown>) => Promise<McpRawResult>) | undefined;
+  private createHandler: DeterministicHandler | undefined;
 
   constructor(
     private readonly registry: MethodRegistry,
@@ -341,6 +354,12 @@ export class DextRuntime {
     this.mcpCaller = caller;
   }
 
+  /** Host-owned resource creation (API/MCP). Kept outside the generic
+   * deterministic handler map because it needs workspace and Agent services. */
+  setCreateHandler(handler: DeterministicHandler): void {
+    this.createHandler = handler;
+  }
+
   async execute(
     invocation: InvocationAst,
     supplementalContext: readonly CodeRef[] = [],
@@ -411,6 +430,9 @@ export class DextRuntime {
         throw new Error("mcp requires a string tool and dictionary input.");
       }
       result = await this.mcpCaller(tool, input);
+    } else if (method.id === "create") {
+      if (!this.createHandler) throw new Error("create is not configured in this host.");
+      result = await this.createHandler(resolved);
     } else {
       const profileId = metadata.agent ?? this.agentSelection.profileId;
       const profile = profileId ? this.agents.get(profileId) : undefined;

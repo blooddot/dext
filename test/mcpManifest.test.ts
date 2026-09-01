@@ -62,4 +62,14 @@ describe("MCP manifests", () => {
     expect(loaded.methods).toEqual([]);
     expect(loaded.diagnostics.join(" ")).toContain("requires an object 'inputSchema'");
   });
+
+  it("accepts manifests written by the pre-0.1 tool discovery shape", () => {
+    const loaded = parseMcpManifest(`{
+      "name": "docs", "transport": "http", "url": "https://example.test/mcp",
+      "tools": [{ "server": "docs", "tool": "read", "inputSchema": { "type": "object", "properties": {} } }]
+    }`, "legacy.jsonc");
+    expect(loaded.diagnostics).toEqual([]);
+    expect(loaded.tools[0]).toMatchObject({ server: "docs", tool: "read" });
+    expect(loaded.methods[0]?.id).toBe("mcp.docs.read");
+  });
 });

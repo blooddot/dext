@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as vscode from "vscode";
 import type { DextApplication } from "./application.js";
-import type { AgentStreamEvent, ApplyResult, InputExecutionResponse, PatchResult, UiInteraction } from "./core/types.js";
+import type { AgentStreamEvent, ApplyResult, InputExecutionResponse, PatchResult, UiChoiceResult, UiConfirmResult, UiInputResult, UiInteraction, UiResult } from "./core/types.js";
 import { applyPatchHandler } from "./vscodePatchHost.js";
 import {
   AttachmentStore,
@@ -28,6 +28,7 @@ import type { DextHistorySession, DextHistoryStore } from "./historyStore.js";
 import type { DextConversationPreferences } from "./conversationPreferences.js";
 import { conversationTitle } from "./historyRender.js";
 import { normalizeInputReferenceSource } from "./core/fileReference.js";
+import type { McpServerConfig } from "./core/mcpRegistry.js";
 
 /** An `agent(apply=False)` step proposes changes and writes nothing, so its
  * patch is the one Dext holds for review. A step that was allowed to write has
@@ -92,11 +93,19 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     controller: AbortController;
     events: AgentStreamEvent[];
   }>();
+  // MCP manifest generation is an Agent-backed operation too, but it is not a
+  // conversation turn and therefore does not belong in activeExecutions.
+  // Keeping its controller separately lets the shared Stop button cancel it.
+  private mcpAssistantExecution: { requestId: string; controller: AbortController } | undefined;
   private readonly pendingAttachmentDeletes = new Set<string>();
   // A read-only Agent turn leaves a patch nobody applied yet. It is kept per
   // turn so two turns in the same conversation cannot resolve each other's
   // files, and so a rejected file simply disappears from the entry.
   private readonly pendingPatches = new Map<string, PatchResult>();
+  private readonly pendingUi = new Map<string, {
+    resolve: (result: UiResult) => void;
+    reject: (error: Error) => void;
+  }>();
   private fileIndex: { paths: string[]; loadedAt: number } | undefined;
 
   private hydrateSessions(): void {
@@ -267,6 +276,14 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     this.postWhenReady({ type: "openMethods" });
   }
 
+  viewMcp(): void {
+    this.postWhenReady({ type: "openMcp" });
+  }
+
+  addMcp(): void {
+    this.postWhenReady({ type: "mcpAssistant" });
+  }
+
   async newConversation(): Promise<void> {
     this.hydrateSessions();
     await this.startConversation();
@@ -302,6 +319,29 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     await this.closeConversation(sessionId);
   }
 
+  async deleteTurn(turnId: string): Promise<void> {
+    if (this.activeExecutions.has(this.activeSession.id)) {
+      throw new Error("Stop this Dext turn before deleting a conversation turn.");
+    }
+    this.hydrateSessions();
+    const index = this.activeSession.turns.findIndex((turn) => turn.id === turnId);
+    if (index === -1) throw new Error("Conversation turn not found.");
+    const confirmed = await vscode.window.showWarningMessage(
+      "Delete this conversation turn?",
+      { modal: true },
+      "Delete"
+    );
+    if (confirmed !== "Delete") return;
+    const removed = await this.history.removeTurn(this.activeSession.id, turnId);
+    if (!removed) throw new Error("Conversation turn not found.");
+    this.activeSession.turns.splice(index, 1);
+    this.activeSession.updatedAt = this.activeSession.turns.at(-1)?.createdAt ?? this.activeSession.createdAt;
+    if (this.activeSession.turns.length) this.activeSession.createdAt = this.activeSession.turns[0]!.createdAt;
+    this.pendingPatches.delete(turnId);
+    await this.postConversationState();
+    await this.post({ type: "outputSession", session: this.activeSession });
+  }
+
   async forgetConversation(sessionId: string): Promise<void> {
     if (this.activeExecutions.has(sessionId)) {
       throw new Error("Stop this Dext turn before deleting its conversation.");
@@ -324,8 +364,15 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
    * Stop button uses, so there is only one way a turn ends early. */
   stopExecution(): void {
     const execution = this.activeExecutions.get(this.activeSession.id);
-    if (!execution) throw new Error("No Dext turn is running in this conversation.");
-    execution.controller.abort();
+    if (execution) {
+      execution.controller.abort();
+      return;
+    }
+    if (this.mcpAssistantExecution) {
+      this.mcpAssistantExecution.controller.abort();
+      return;
+    }
+    throw new Error("No Dext turn is running in this conversation.");
   }
 
   async addSelectionToChat(): Promise<void> {
@@ -372,7 +419,11 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       execution.controller.abort();
       this.application.endAgentSession(sessionId);
     }
+    this.mcpAssistantExecution?.controller.abort();
+    this.mcpAssistantExecution = undefined;
     this.attachments.dispose();
+    for (const pending of this.pendingUi.values()) pending.reject(new Error("Dext UI interaction was closed."));
+    this.pendingUi.clear();
     this.messageQueue.clear();
   }
 
@@ -417,9 +468,26 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         case "executeInput":
           await this.run(request.mode, request.source);
           break;
+        case "uiResponse": {
+          const pending = this.pendingUi.get(request.requestId);
+          if (!pending) break;
+          this.pendingUi.delete(request.requestId);
+          const response = request.response;
+          if (response.type === "choice") {
+            pending.resolve({ kind: "ui", type: "choice", selected: response.selected, ...(response.custom?.trim() ? { custom: response.custom.trim() } : {}) } satisfies UiChoiceResult);
+          } else if (response.type === "confirm") {
+            pending.resolve({ kind: "ui", type: "confirm", confirmed: response.confirmed } satisfies UiConfirmResult);
+          } else {
+            pending.resolve({ kind: "ui", type: "input", ...(response.value !== undefined ? { value: response.value } : {}) } satisfies UiInputResult);
+          }
+          break;
+        }
         case "stopExecution":
           for (const execution of this.activeExecutions.values()) {
             if (execution.turnId === request.turnId) execution.controller.abort();
+          }
+          if (this.mcpAssistantExecution?.requestId === request.turnId) {
+            this.mcpAssistantExecution.controller.abort();
           }
           break;
         case "retryTurn": {
@@ -430,11 +498,17 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           await this.run(turn.mode ?? this.application.state().agentSelection.mode ?? "agent", turn.input);
           break;
         }
+        case "deleteTurn":
+          await this.deleteTurn(request.turnId);
+          break;
         case "buildPlan":
           await this.buildPlan(request.planPath);
           break;
         case "resolvePatch":
           await this.resolvePatch(request.turnId, request.uris, request.accept);
+          break;
+        case "newConversation":
+          await this.newConversation();
           break;
         case "selectConversation": {
           const selected = this.sessions.get(request.sessionId);
@@ -592,6 +666,86 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           await this.application.reload();
           await this.refresh();
           break;
+        case "openMcp":
+          await this.post({ type: "openMcp" });
+          break;
+        case "addMcp":
+          // Keep the entire add flow in the conversation webview so the user
+          // gets a multiline, chat-like composer instead of an editor-level
+          // one-line input box.
+          await this.post({ type: "mcpAssistant" });
+          break;
+        case "generateMcp": {
+          // Stream the selected Agent's process into the MCP dialog. A
+          // notification progress item is intentionally not used here: it
+          // hides the useful context in the bottom-right corner.
+          if (this.mcpAssistantExecution) throw new Error("MCP generation is already running.");
+          const controller = new AbortController();
+          this.mcpAssistantExecution = { requestId: request.requestId, controller };
+          this.updateRunningContext();
+          await this.post({
+            type: "executing",
+            sessionId: this.activeSession.id,
+            value: true,
+            turnId: request.requestId,
+            source: "Add MCP with AI"
+          });
+          try {
+            const server = await this.application.generateMcpManifest(request.document, {
+              signal: controller.signal,
+              onAgentEvent: (event) => this.postWhenReady({ type: "mcpProgress", requestId: request.requestId, event })
+            });
+            await this.post({ type: "mcpGenerated", requestId: request.requestId, server });
+            // Discover tools as soon as the draft arrives so the review step
+            // can show an explicit allowlist before the user saves anything.
+            try {
+              const tools = await this.application.discoverMcpTools(server);
+              await this.post({ type: "mcpToolsDiscovered", requestId: request.requestId, tools });
+            } catch {
+              // A draft remains editable/savable when discovery needs auth or
+              // the endpoint is temporarily unavailable.
+              await this.post({ type: "mcpToolsDiscovered", requestId: request.requestId, tools: [] });
+            }
+          } finally {
+            if (this.mcpAssistantExecution?.requestId === request.requestId) {
+              this.mcpAssistantExecution = undefined;
+            }
+            this.updateRunningContext();
+            await this.post({ type: "executing", sessionId: this.activeSession.id, value: false, turnId: request.requestId });
+          }
+          break;
+        }
+        case "prepareMcp": {
+          const server: McpServerConfig = request.server.transport === "stdio"
+            ? { name: request.server.name, transport: "stdio", command: request.server.command, ...(request.server.args ? { args: request.server.args } : {}), ...(request.server.timeoutMs !== undefined ? { timeoutMs: request.server.timeoutMs } : {}) }
+            : { name: request.server.name, transport: "http", url: request.server.url, ...(request.server.auth ? { auth: request.server.auth } : {}), ...(request.server.timeoutMs !== undefined ? { timeoutMs: request.server.timeoutMs } : {}) };
+          const tools = await this.application.discoverMcpTools(server);
+          await this.post({ type: "mcpToolsDiscovered", requestId: request.requestId, tools });
+          break;
+        }
+        case "createMcp": {
+          // Zod's optional fields are typed as `T | undefined`; normalize them
+          // at the host boundary so exactOptionalPropertyTypes remains sound.
+          const server: McpServerConfig = request.server.transport === "stdio"
+            ? {
+              name: request.server.name,
+              transport: "stdio",
+              command: request.server.command,
+              ...(request.server.args ? { args: request.server.args } : {}),
+              ...(request.server.timeoutMs !== undefined ? { timeoutMs: request.server.timeoutMs } : {})
+            }
+            : {
+              name: request.server.name,
+              transport: "http",
+              url: request.server.url,
+              ...(request.server.auth ? { auth: request.server.auth } : {}),
+              ...(request.server.timeoutMs !== undefined ? { timeoutMs: request.server.timeoutMs } : {})
+            };
+          await this.application.createMcpManifest(server, request.scope ?? "project", request.selectedTools);
+          await this.refresh();
+          await this.post({ type: "mcpCreated", name: server.name });
+          break;
+        }
       }
     } catch (error) {
       await this.post({
@@ -782,7 +936,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     void vscode.commands.executeCommand(
       "setContext",
       "dext.running",
-      this.activeExecutions.has(this.activeSession.id)
+      this.activeExecutions.has(this.activeSession.id) || Boolean(this.mcpAssistantExecution)
     );
   }
 
@@ -793,52 +947,22 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private uiInteraction(): UiInteraction {
+    const request = <T extends UiResult>(interaction: NonNullable<Extract<WebviewResponse, { type: "uiRequest" }>["request"]>): Promise<T> => {
+      const requestId = randomBytes(12).toString("hex");
+      return new Promise<T>((resolve, reject) => {
+        this.pendingUi.set(requestId, { resolve: resolve as (result: UiResult) => void, reject });
+        void this.post({ type: "uiRequest", requestId, request: interaction });
+      });
+    };
     return {
       choose: async ({ label, options, multiple, allowCustom, customPlaceholder }) => {
-        const customId = "__dext_custom__";
-        const items = [
-          ...options.map((option) => ({ label: option, id: option })),
-          ...(allowCustom ? [{ label: "Other...", id: customId }] : [])
-        ];
-        const choices = multiple
-          ? await vscode.window.showQuickPick<{ label: string; id: string }>(items, {
-            title: label,
-            canPickMany: true,
-            ignoreFocusOut: true
-          }) ?? []
-          : await vscode.window.showQuickPick<{ label: string; id: string }>(items, {
-            title: label,
-            canPickMany: false,
-            ignoreFocusOut: true
-          }).then((picked) => picked ? [picked] : []);
-        if (!choices.some((choice) => choice.id === customId)) {
-          return { kind: "ui", type: "choice", selected: choices.map((choice) => choice.id) };
-        }
-        const custom = await vscode.window.showInputBox({
-          title: label,
-          prompt: customPlaceholder ?? "Enter a custom option",
-          ignoreFocusOut: true
-        });
-        return {
-          kind: "ui",
-          type: "choice",
-          selected: choices.filter((choice) => choice.id !== customId).map((choice) => choice.id),
-          ...(custom?.trim() ? { custom: custom.trim() } : {})
-        };
+        return request<UiChoiceResult>({ type: "choice", label, options: [...options], multiple, allowCustom, ...(customPlaceholder ? { customPlaceholder } : {}) });
       },
       confirm: async ({ message, confirmLabel, cancelLabel }) => {
-        const picked = await vscode.window.showInformationMessage(message, { modal: true }, confirmLabel, cancelLabel);
-        return { kind: "ui", type: "confirm", confirmed: picked === confirmLabel };
+        return request<UiConfirmResult>({ type: "confirm", message, confirmLabel, cancelLabel });
       },
       input: async ({ label, placeholder, multiline }) => {
-        const value = await vscode.window.showInputBox({
-          title: label,
-          ...(multiline
-            ? { prompt: `${placeholder ?? ""} (multiline input is captured as plain text)` }
-            : placeholder ? { prompt: placeholder } : {}),
-          ignoreFocusOut: true
-        });
-        return { kind: "ui", type: "input", ...(value !== undefined ? { value } : {}) };
+        return request<UiInputResult>({ type: "input", label, ...(placeholder ? { placeholder } : {}), multiline });
       }
     };
   }
@@ -962,6 +1086,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       <div id="result-heading" class="section-heading collapsible-heading" role="button" tabindex="0" aria-expanded="true">
         <span class="section-heading-label"><i class="section-chevron codicon codicon-chevron-down"></i><span>Conversation</span></span>
         <div class="section-heading-actions">
+          <button id="result-toggle" class="icon-button" type="button" title="Collapse conversation" aria-label="Collapse conversation"><i class="codicon codicon-collapse-all"></i></button>
           <button id="result-fullscreen" class="icon-button panel-fullscreen" type="button" title="Maximize Conversation" aria-label="Maximize Conversation"><i class="codicon codicon-screen-full"></i></button>
         </div>
       </div>
@@ -1029,6 +1154,56 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           <div id="methods"></div>
         </div>
       </div>
+    </dialog>
+    <dialog id="mcp-dialog" class="methods-dialog" aria-labelledby="mcp-dialog-title">
+      <div class="methods-dialog-surface">
+        <header class="methods-dialog-header">
+          <div class="methods-dialog-title"><i class="codicon codicon-server"></i><span id="mcp-dialog-title">Global Resources</span><span id="mcp-count" class="count"></span></div>
+          <div class="methods-dialog-actions">
+            <button id="mcp-toggle" class="icon-button compact" type="button" title="Collapse resource categories" aria-label="Collapse resource categories"><i class="codicon codicon-collapse-all"></i></button>
+            <button id="close-mcp" class="icon-button" type="button" title="Close global resources" aria-label="Close global resources"><i class="codicon codicon-close"></i></button>
+          </div>
+        </header>
+        <div id="mcp-dialog-body" class="methods-dialog-body">
+          <input id="mcp-search" class="resource-search" type="search" placeholder="Search global resources" aria-label="Search global resources">
+          <div id="mcp-errors" class="config-errors"></div>
+          <div id="mcp-servers"></div>
+          <div id="mcp-empty" class="empty-state" hidden>No MCP servers configured.</div>
+        </div>
+      </div>
+    </dialog>
+    <dialog id="mcp-assistant-dialog" class="ui-dialog mcp-assistant-dialog" aria-labelledby="mcp-assistant-title">
+      <form class="ui-dialog-surface" method="dialog">
+        <header class="methods-dialog-header">
+          <div id="mcp-assistant-title" class="methods-dialog-title"><i class="codicon codicon-sparkle"></i><span>Add MCP with AI</span></div>
+          <button id="mcp-assistant-close" class="icon-button" type="button" title="Cancel" aria-label="Cancel"><i class="codicon codicon-close"></i></button>
+        </header>
+        <div class="mcp-assistant-body">
+          <div class="mcp-assistant-message">Tell Dext what to connect. Paste MCP documentation, a registry URL, or a short description and Dext will draft the server configuration for you.</div>
+          <textarea id="mcp-assistant-input" class="ui-dialog-input mcp-assistant-input" rows="5" placeholder="https://example.com/mcp/docs or describe the server"></textarea>
+          <div id="mcp-assistant-status" class="mcp-assistant-status" aria-live="polite"></div>
+          <details id="mcp-assistant-process" class="mcp-assistant-process" hidden>
+            <summary><i class="disclosure-chevron codicon codicon-chevron-right"></i><span>Process</span><span id="mcp-assistant-process-meta" class="disclosure-meta"></span></summary>
+            <div id="mcp-assistant-process-body" class="mcp-assistant-process-body"></div>
+          </details>
+          <div id="mcp-assistant-tools" class="mcp-assistant-tools" hidden></div>
+          <label class="mcp-assistant-label" for="mcp-assistant-preview">Review configuration</label>
+          <textarea id="mcp-assistant-preview" class="ui-dialog-input mcp-assistant-preview" rows="10" hidden></textarea>
+          <label id="mcp-assistant-scope-label" class="mcp-assistant-label" for="mcp-assistant-scope" hidden>Save to</label>
+          <select id="mcp-assistant-scope" class="ui-dialog-input" hidden><option value="project">Project (.dext/mcp)</option><option value="global">Dext global storage</option></select>
+        </div>
+        <footer class="ui-dialog-actions"><button id="mcp-assistant-generate" type="button">Generate</button><button id="mcp-assistant-save" type="button" hidden>Save MCP</button></footer>
+      </form>
+    </dialog>
+    <dialog id="ui-dialog" class="ui-dialog" aria-labelledby="ui-dialog-title">
+      <form id="ui-dialog-form" class="ui-dialog-surface" method="dialog">
+        <header class="methods-dialog-header">
+          <div id="ui-dialog-title" class="methods-dialog-title"></div>
+          <button id="ui-dialog-close" class="icon-button" type="button" title="Cancel" aria-label="Cancel"><i class="codicon codicon-close"></i></button>
+        </header>
+        <div id="ui-dialog-body" class="ui-dialog-body"></div>
+        <footer id="ui-dialog-actions" class="ui-dialog-actions"></footer>
+      </form>
     </dialog>
   </div>
   <script nonce="${nonce}" src="${script.toString()}"></script>

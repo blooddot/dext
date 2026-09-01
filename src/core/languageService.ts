@@ -9,6 +9,8 @@ export interface CompletionItem {
   insertText: string;
   detail: string;
   kind: "namespace" | "method" | "parameter" | "value" | "reference";
+  /** Stable ordering hint for clients whose completion widget sorts labels. */
+  sortText?: string;
   replaceStart: number;
   replaceEnd: number;
 }
@@ -96,11 +98,31 @@ function activeArgument(body: string): string {
       else if (character === "\\") escaped = true;
       else if (character === quote) quote = undefined;
     } else if (character === "'" || character === '"') quote = character;
-    else if (character === "(" || character === "[") depth += 1;
-    else if (character === ")" || character === "]") depth -= 1;
+    else if (character === "(" || character === "[" || character === "{") depth += 1;
+    else if (character === ")" || character === "]" || character === "}") depth -= 1;
     else if (character === "," && depth === 0) start = offset + 1;
   }
   return body.slice(start);
+}
+
+function topLevelCommaCount(body: string): number {
+  let commas = 0;
+  let depth = 0;
+  let quote: "'" | '"' | undefined;
+  let escaped = false;
+  for (const character of body) {
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === quote) quote = undefined;
+      continue;
+    }
+    if (character === "'" || character === '"') quote = character;
+    else if (character === "(" || character === "[" || character === "{") depth += 1;
+    else if (character === ")" || character === "]" || character === "}") depth -= 1;
+    else if (character === "," && depth === 0) commas += 1;
+  }
+  return commas;
 }
 
 const RESULT_FIELDS: Readonly<Record<string, readonly string[]>> = {
@@ -213,7 +235,14 @@ export class DextLanguageService {
     }
     if (/\bmain\([^)]*$/.test(before)) {
       const definition = apiId ? this.registry.get(apiId) : undefined;
-      if (definition) return definition.input.map((field) => item(field.name, `${field.name}: `, formatMethodParameter(field), "parameter"));
+      if (definition) {
+        return definition.input
+          .filter((field) => !field.internal)
+          .map((field, index) => ({
+            ...item(field.name, `${field.name}: `, formatMethodParameter(field), "parameter"),
+            sortText: String(index).padStart(4, "0")
+          }));
+      }
     }
     return this.documentCompletions(source, cursor, false);
   }
@@ -408,9 +437,25 @@ export class DextLanguageService {
           [...call.body.matchAll(/([A-Za-z_][A-Za-z0-9_]*)\s*=/g)].map((match) => match[1])
         );
         const fragment = /[A-Za-z_][A-Za-z0-9_]*$/.exec(segment)?.[0] ?? "";
-        return method.input
-          .filter((field) => !field.internal && !used.has(field.name) && field.name.startsWith(fragment))
-          .map((field) => item(field.name, `${field.name}=`, formatMethodParameter(field), "parameter"));
+        const parameters = method.input.filter((field) => !field.internal);
+        // Prefer the first unused parameter at the current positional slot.
+        // This makes the common `foo(first=..., ` flow surface the next field
+        // immediately, while keeping declaration order for the rest.
+        const argumentIndex = parameters.length
+          ? Math.min(topLevelCommaCount(call.body), parameters.length - 1)
+          : 0;
+        const expected = parameters.slice(argumentIndex).find((field) => !used.has(field.name))
+          ?? parameters.find((field) => !used.has(field.name));
+        const candidates = parameters
+          .filter((field) => !used.has(field.name) && field.name.startsWith(fragment));
+        const expectedIndex = candidates.findIndex((field) => field.name === expected?.name);
+        const ordered = expectedIndex > 0
+          ? [candidates[expectedIndex]!, ...candidates.slice(0, expectedIndex), ...candidates.slice(expectedIndex + 1)]
+          : candidates;
+        return ordered.map((field, index) => ({
+          ...item(field.name, `${field.name}=`, formatMethodParameter(field), "parameter"),
+          sortText: String(index).padStart(4, "0")
+        }));
       }
     }
 
@@ -511,15 +556,21 @@ export class DextLanguageService {
     const call = /([A-Za-z_][A-Za-z0-9_.]*)\(([^()]*)$/.exec(source.slice(0, cursor));
     const method = call ? this.resolveMethod(source, call[1] ?? "", customApisAreGlobal) : undefined;
     if (!call || !method) return undefined;
-    const activeParameter = Math.min(
-      call[2]?.match(/,/g)?.length ?? 0,
-      Math.max(0, method.input.length - 1)
+    const parameters = method.input.filter((field) => !field.internal);
+    const body = call[2] ?? "";
+    const segment = activeArgument(body);
+    const named = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(segment)?.[1];
+    const positionalIndex = Math.min(
+      topLevelCommaCount(body),
+      Math.max(0, parameters.length - 1)
     );
+    const namedIndex = named ? parameters.findIndex((field) => field.name === named) : -1;
+    const activeParameter = namedIndex >= 0 ? namedIndex : positionalIndex;
     return {
       label: formatMethodSignature(method),
       documentation: method.description,
       activeParameter,
-      parameters: method.input.filter((field) => !field.internal).map((field) => ({
+      parameters: parameters.map((field) => ({
         label: formatMethodParameter(field),
         documentation: field.description ?? ""
       }))

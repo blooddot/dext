@@ -108,6 +108,29 @@ export class DextHistoryStore {
     });
   }
 
+  /** Remove one turn from a conversation. Empty conversations are not kept in
+   * persisted history, matching the fact that a new conversation has no
+   * history entry until its first turn completes. */
+  async removeTurn(sessionId: string, turnId: string): Promise<boolean> {
+    return this.mutate(async () => {
+      const sessions = this.list();
+      const session = sessions.find((item) => item.id === sessionId);
+      if (!session) return false;
+      const index = session.turns.findIndex((turn) => turn.id === turnId);
+      if (index === -1) return false;
+      session.turns.splice(index, 1);
+      if (!session.turns.length) {
+        const sessionIndex = sessions.indexOf(session);
+        if (sessionIndex >= 0) sessions.splice(sessionIndex, 1);
+      } else {
+        session.createdAt = session.turns[0]!.createdAt;
+        session.updatedAt = session.turns.at(-1)!.createdAt;
+      }
+      await this.state.update(HISTORY_KEY, sessions);
+      return true;
+    });
+  }
+
   // A fork copies turns into a conversation of its own so that continuing it
   // never appends to the conversation it came from.
   async fork(turns: readonly DextHistoryRecord[]): Promise<DextHistorySession> {

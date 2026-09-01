@@ -3,6 +3,7 @@ import {
   conversationMarkdown,
   conversationTitle,
   highlightDext,
+  highlightTerminal,
   historyTokenStyles,
   renderHistoryRecord,
   renderHistorySession
@@ -15,6 +16,46 @@ describe("Dext history rendering", () => {
     expect(html).toContain("tok-variableName");
     expect(html).toContain("tok-string");
     expect(historyTokenStyles({ string: "#123456" })).toContain("#123456");
+  });
+
+  it("renders ANSI terminal colors and strips cursor control sequences", () => {
+    const red = String.fromCharCode(27) + "[31mred" + String.fromCharCode(27) + "[0m";
+    const html = highlightTerminal(`before\r${red}\nnext`);
+    expect(html).toContain('<span class="ansi-red">red</span>');
+    // A carriage return rewrites the current terminal line, so the prefix is
+    // replaced by the colored output.
+    expect(html).not.toContain("before");
+    expect(html).toContain("next");
+    expect(html).not.toContain(String.fromCharCode(27));
+  });
+
+  it("adds fallback emphasis when a non-TTY command emits plain output", () => {
+    const html = highlightTerminal("RUN v4.1.10\nTest Files  1 passed (1)\nerror: failed");
+    expect(html).toContain('<span class="ansi-bright-blue">RUN v4.1.10</span>');
+    expect(html).toContain('<span class="ansi-green">Test Files  1 passed (1)</span>');
+    expect(html).toContain('<span class="ansi-red">error: failed</span>');
+  });
+
+  it("keeps terminal stderr separate and highlighted in history output", () => {
+    const record: DextHistoryRecord = {
+      id: "terminal-ansi",
+      createdAt: 1,
+      input: "terminal(command=\"npm test\")",
+      process: [],
+      output: "",
+      response: {
+        kind: "workflow",
+        executions: [{
+          invocation: { kind: "invocation", method: "terminal", source: "code", arguments: [] },
+          method: { id: "terminal", title: "Terminal", kind: "command", source: "builtin" },
+          result: { kind: "terminal", command: "npm test", cwd: ".", stdout: "\u001b[32mok\u001b[0m", stderr: "failed", status: "failed", exit_code: 1, duration_ms: 1 },
+          durationMs: 1
+        }]
+      }
+    };
+    const html = renderHistoryRecord(record);
+    expect(html).toContain('<span class="ansi-green">ok</span>');
+    expect(html).toContain('class="terminal-text terminal-stderr"');
   });
 
   it("renders structured output instead of a raw workflow JSON block", () => {
@@ -327,6 +368,21 @@ describe("Dext history rendering", () => {
     expect(html).toContain("history-file-reference");
     expect(html).toContain("pathx.py 55-66");
     expect(html).toContain(token);
+  });
+
+  it("syntax-highlights code-mode Input in rendered history", () => {
+    const record: DextHistoryRecord = {
+      id: "highlighted-input",
+      createdAt: 1,
+      input: 'ui.choose(label="Pick", options=["one", "two"], multiple=True)',
+      process: [],
+      output: ""
+    };
+
+    const html = renderHistoryRecord(record);
+    expect(html).toContain('class="tok-propertyName"');
+    expect(html).toContain('class="tok-string"');
+    expect(html).toContain('class="tok-bool"');
   });
 
   it("renders image attachments as ordinary file reference Chips", () => {

@@ -7,6 +7,14 @@ describe("output Markdown links", () => {
       .toBe("archive/bep/verify/ConfigRule.py");
     expect(outputLinkReference("./archive/bep/verify/test%20ConfigRule.py#L4,1-L8,1"))
       .toBe("archive/bep/verify/test ConfigRule.py#L4,1-L8,1");
+    expect(outputLinkReference("@.dext-global/attachments/0123456789abcdef01234567.png"))
+      .toBe(".dext-global/attachments/0123456789abcdef01234567.png");
+    expect(outputLinkReference("C:/github/blooddot/dext/package.json:809"))
+      .toBe("C:/github/blooddot/dext/package.json:809");
+    expect(outputLinkReference("C:/github/blooddot/dext/test%20file.ts:4"))
+      .toBe("C:/github/blooddot/dext/test file.ts:4");
+    expect(outputLinkReference("/Users/test/project/file.ts:42:3"))
+      .toBe("/Users/test/project/file.ts:42:3");
   });
 
   it("leaves external, fragment-only, and traversal links alone", () => {

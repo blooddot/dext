@@ -4,6 +4,20 @@ const CONTEXTS = ["selection", "activeFile", "file", "symbol"] as const;
 
 export const BUILTIN_METHODS: readonly CallableDefinition[] = [
   {
+    id: "create",
+    title: "Create",
+    description: "Create an API, MCP configuration, rule, or skill from a description or URL.",
+    kind: "command",
+    version: "1.0.0",
+    input: [
+      { name: "type", type: "enum", values: ["api", "mcp", "rule", "skill"], required: true, description: "What to create: an API, MCP configuration, rule, or skill." },
+      { name: "input", type: "string", required: true, description: "Description or documentation/registry URL used to create the resource." },
+      { name: "scope", type: "enum", values: ["project", "global"], default: "project", description: "Where to save it: the current project or Dext global storage." }
+    ],
+    output: { kind: "chat" },
+    executor: { kind: "deterministic", handler: "createResource" }
+  },
+  {
     id: "ask",
     title: "Ask",
     description: "Hold a read-only conversation about a string input with optional inline Dext references.",
@@ -68,11 +82,17 @@ export const BUILTIN_METHODS: readonly CallableDefinition[] = [
   {
     id: "print",
     title: "Print",
-    description: "Render a typed text value in Dext Output.",
+    description: "Render a value in Dext Output. Primitive values are shown as text; objects, lists, and API results are rendered as JSON.",
     kind: "command",
     version: "1.0.0",
     input: [
-      { name: "text", type: "string", required: true, description: "Text rendered in Dext Output." },
+      {
+        name: "text",
+        type: "string",
+        accepts: ["number", "boolean", "object", "list", "result", "context", "dir"],
+        required: true,
+        description: "Value rendered in Dext Output. Objects, lists, and API results are rendered as JSON."
+      },
       { name: "label", type: "string", description: "Optional output label." }
     ],
     output: { kind: "print" },

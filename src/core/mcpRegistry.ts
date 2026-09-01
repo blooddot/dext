@@ -736,6 +736,12 @@ export class McpToolRegistry {
     return this.transport.listTools(server, await this.transportOptions(server));
   }
 
+  /** Discover tools for a not-yet-persisted server configuration. */
+  async discoverTools(server: McpServerConfig): Promise<McpDiscoveredTool[]> {
+    if (!this.transport.listTools) throw new Error("MCP tool discovery is not available.");
+    return this.transport.listTools(server, await this.transportOptions(server));
+  }
+
   private async transportOptions(server: McpServerConfig): Promise<McpTransportOptions> {
     if (server.transport !== "http" || server.auth?.type !== "bearer") return {};
     const accessToken = await this.accessTokenProvider?.(server);

@@ -21,9 +21,22 @@ export function outputExternalLink(href: string): string | undefined {
  * browser, while `file:` URLs can be validated by the host before opening.
  */
 export function outputLinkReference(href: string): string | undefined {
-  const value = href.trim();
+  // Dext renders attachment tokens as `@.dext-global/...`; Markdown treats
+  // the leading @ as part of the destination, but the host resolver expects
+  // the storage reference without it.
+  const value = href.trim().replace(/^@(?=\.dext(?:-global)?\/)/i, "");
   if (!value || value.startsWith("#")) return undefined;
   if (value.toLowerCase().startsWith("file:")) return value;
+  // Codex links source files as `C:/workspace/file.ts:42` on Windows or
+  // `/Users/name/workspace/file.ts:42` on macOS/Linux. Treat these as local
+  // file paths, not as URI schemes or unsafe relative references.
+  if (/^[A-Za-z]:[\\/]/.test(value) || (value.startsWith("/") && !value.startsWith("//"))) {
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return undefined;
+    }
+  }
   if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(value) || value.startsWith("//")) return undefined;
 
   const hash = value.indexOf("#");

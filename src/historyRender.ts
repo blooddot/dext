@@ -73,6 +73,123 @@ export function highlightDext(source: string): string {
   return html;
 }
 
+const ANSI_COLOR_CLASSES = [
+  "ansi-black", "ansi-red", "ansi-green", "ansi-yellow",
+  "ansi-blue", "ansi-magenta", "ansi-cyan", "ansi-white",
+  "ansi-bright-black", "ansi-bright-red", "ansi-bright-green", "ansi-bright-yellow",
+  "ansi-bright-blue", "ansi-bright-magenta", "ansi-bright-cyan", "ansi-bright-white"
+];
+
+const ANSI_COLORS = new Map<number, string>([
+  [30, "ansi-black"], [31, "ansi-red"], [32, "ansi-green"], [33, "ansi-yellow"],
+  [34, "ansi-blue"], [35, "ansi-magenta"], [36, "ansi-cyan"], [37, "ansi-white"],
+  [90, "ansi-bright-black"], [91, "ansi-bright-red"], [92, "ansi-bright-green"], [93, "ansi-bright-yellow"],
+  [94, "ansi-bright-blue"], [95, "ansi-bright-magenta"], [96, "ansi-bright-cyan"], [97, "ansi-bright-white"]
+]);
+
+const ANSI_PALETTE = [
+  "#000000", "#cd3131", "#0dbc79", "#e5e510", "#2472c8", "#bc3fbc", "#11a8cd", "#e5e5e5",
+  "#666666", "#f14c4c", "#23d18b", "#f5f543", "#3b8eea", "#d670d6", "#29b8db", "#ffffff"
+];
+
+function ansi256Color(value: number): string {
+  if (value < 16) return ANSI_PALETTE[value] ?? ANSI_PALETTE[7]!;
+  if (value >= 232) {
+    const gray = 8 + (value - 232) * 10;
+    return `rgb(${gray}, ${gray}, ${gray})`;
+  }
+  const index = value - 16;
+  const red = Math.floor(index / 36);
+  const green = Math.floor((index % 36) / 6);
+  const blue = index % 6;
+  const channel = (component: number): number => component === 0 ? 0 : 55 + component * 40;
+  return `rgb(${channel(red)}, ${channel(green)}, ${channel(blue)})`;
+}
+
+function plainTerminalClass(line: string): string | undefined {
+  if (/^\s*(?:[>$]|PS [^>]*>)\s+/.test(line)) return "ansi-cyan";
+  if (/\b(?:fail(?:ed|ure)?|errors?|fatal)\b|[✗×]/i.test(line)) return "ansi-red";
+  if (/\b(?:pass(?:ed)?|success(?:ful)?|succeed(?:ed)?|ok)\b|✓/i.test(line)) return "ansi-green";
+  if (/^\s*(?:RUN|Test Files|Tests|Snapshots|Start|Duration)\b/.test(line)) return "ansi-bright-blue";
+  return undefined;
+}
+
+/** Render terminal ANSI SGR sequences as safe, theme-aware HTML. */
+export function highlightTerminal(source: string): string {
+  const content = source
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.slice(line.lastIndexOf("\r") + 1))
+    .join("\n");
+  const active = new Set<string>();
+  let foreground: string | undefined;
+  let html = "";
+  const escape = String.fromCharCode(27);
+  const bell = String.fromCharCode(7);
+  const ansi = new RegExp(
+    `${escape}(?:\\[([0-9;]*)m|\\[[0-?]*[ -/]*[@-~]|\\][^${bell}]*(?:${bell}|${escape}\\\\))`,
+    "g"
+  );
+  const hasAnsi = content.includes(escape);
+  let cursor = 0;
+  const appendText = (value: string): void => {
+    if (!value) return;
+    const text = escapeHtml(value);
+    if (active.size === 0 && !foreground) {
+      if (hasAnsi) {
+        html += text;
+      } else {
+        html += value.split("\n").map((line) => {
+          const className = plainTerminalClass(line);
+          return className ? `<span class="${className}">${escapeHtml(line)}</span>` : escapeHtml(line);
+        }).join("\n");
+      }
+      return;
+    }
+    const style = foreground ? ` style="color:${foreground}"` : "";
+    html += `<span class="${[...active].join(" ")}"${style}>${text}</span>`;
+  };
+
+  for (const match of content.matchAll(ansi)) {
+    appendText(content.slice(cursor, match.index));
+    const codes = match[1] === undefined ? [] : (match[1] ? match[1].split(";").map(Number) : [0]);
+    for (let index = 0; index < codes.length; index += 1) {
+      const code = codes[index] ?? 0;
+      if (code === 0) {
+        active.clear();
+        foreground = undefined;
+      } else if (code === 1) active.add("ansi-bold");
+      else if (code === 2) active.add("ansi-dim");
+      else if (code === 3) active.add("ansi-italic");
+      else if (code === 4) active.add("ansi-underline");
+      else if (code === 22) { active.delete("ansi-bold"); active.delete("ansi-dim"); }
+      else if (code === 23) active.delete("ansi-italic");
+      else if (code === 24) active.delete("ansi-underline");
+      else if (code === 39) { for (const color of ANSI_COLOR_CLASSES) active.delete(color); foreground = undefined; }
+      else {
+        const color = ANSI_COLORS.get(code);
+        if (color) {
+          for (const existing of ANSI_COLOR_CLASSES) active.delete(existing);
+          active.add(color);
+          foreground = undefined;
+        } else if ((code === 38 || code === 48) && codes[index + 1] === 5 && codes[index + 2] !== undefined) {
+          if (code === 38) foreground = ansi256Color(codes[index + 2]!);
+          index += 2;
+        } else if ((code === 38 || code === 48) && codes[index + 1] === 2 && codes[index + 4] !== undefined) {
+          if (code === 38) {
+            const [red, green, blue] = codes.slice(index + 2, index + 5);
+            foreground = `rgb(${red}, ${green}, ${blue})`;
+          }
+          index += 4;
+        }
+      }
+    }
+    cursor = match.index + match[0].length;
+  }
+  appendText(content.slice(cursor));
+  return html;
+}
+
 function referenceIcon(reference: ContextReferenceOccurrence): string {
   if (reference.kind === "dir") return "folder";
   if (reference.kind === "symbol") return "symbol-method";
@@ -91,9 +208,26 @@ function inputReferenceChip(reference: ContextReferenceOccurrence): string {
 }
 
 function renderedInputSource(source: string): string {
-  return inputReferenceDisplayParts(source)
-    .map((part) => part.kind === "ref" ? inputReferenceChip(part.reference) : escapeHtml(part.value))
-    .join("");
+  const normalized = normalizeInputReferenceSource(source);
+  const parts = inputReferenceDisplayParts(normalized);
+  const references = parts.filter((part): part is Extract<typeof part, { kind: "ref" }> => part.kind === "ref");
+  if (!references.length) return highlightDext(normalized);
+
+  // Keep references as widgets while highlighting the complete source. A
+  // placeholder is a valid Python identifier in every context where a
+  // readable @path token can occur (including inside a string), so Lezer can
+  // still classify the surrounding Dext syntax correctly. Replace the
+  // placeholder after highlighting to avoid breaking token spans.
+  const placeholders = references.map((_, index) => `__dext_reference_${index}__`);
+  const highlightedSource = parts.map((part) => part.kind === "ref"
+    ? placeholders[references.indexOf(part)]!
+    : part.value
+  ).join("");
+  let html = highlightDext(highlightedSource);
+  references.forEach((part, index) => {
+    html = html.replaceAll(escapeHtml(placeholders[index]!), inputReferenceChip(part.reference));
+  });
+  return html;
 }
 
 function resultText(result: DextResult): string {
@@ -116,8 +250,11 @@ function resultText(result: DextResult): string {
 
 function resultBody(result: DextResult): string {
   if (result.kind === "terminal") {
-    const content = [result.stdout, result.stderr].filter(Boolean).join("\n");
-    return `<details class="history-disclosure terminal-result"><summary>${chevron()}<span>${escapeHtml(result.command)}</span><span class="history-meta">${escapeHtml(result.status)} · exit ${result.exit_code}</span></summary><div class="disclosure-body"><div class="history-meta">${escapeHtml(result.cwd)}</div>${content ? `<pre class="terminal-text">${escapeHtml(content)}</pre>` : ""}</div></details>`;
+    const output = [
+      result.stdout ? `<pre class="terminal-text">${highlightTerminal(result.stdout)}</pre>` : "",
+      result.stderr ? `<pre class="terminal-text terminal-stderr">${highlightTerminal(result.stderr)}</pre>` : ""
+    ].join("");
+    return `<details class="history-disclosure terminal-result"><summary>${chevron()}<span>${escapeHtml(result.command)}</span><span class="history-meta">${escapeHtml(result.status)} · exit ${result.exit_code}</span></summary><div class="disclosure-body"><div class="history-meta">${escapeHtml(result.cwd)}</div>${output}</div></details>`;
   }
   if (result.kind === "edit" || result.kind === "patch") {
     const changes = result.kind === "edit" ? result.patch.changes : result.changes;
@@ -199,7 +336,7 @@ function commandLabel(event: AgentStreamEvent): string {
 }
 
 function commandRow(event: AgentStreamEvent, className = "process-command"): string {
-  return `<details class="history-disclosure ${className}"><summary>${chevron()}<span>${escapeHtml(commandLabel(event))}</span></summary><pre>${escapeHtml(event.text)}</pre></details>`;
+  return `<details class="history-disclosure ${className}"><summary>${chevron()}<span>${escapeHtml(commandLabel(event))}</span></summary><pre class="terminal-text">${highlightTerminal(event.text)}</pre></details>`;
 }
 
 function process(events: readonly AgentStreamEvent[]): string {
@@ -213,7 +350,7 @@ function process(events: readonly AgentStreamEvent[]): string {
     // real groups need a nested row per command.
     const lone = !firstTool.groupLabel && tools.length === 1;
     const label = firstTool.groupLabel ?? (lone ? commandLabel(firstTool) : `Ran ${tools.length} commands`);
-    const body = lone ? `<pre>${escapeHtml(firstTool.text)}</pre>` : tools.map((event) => commandRow(event)).join("");
+    const body = lone ? `<pre class="terminal-text">${highlightTerminal(firstTool.text)}</pre>` : tools.map((event) => commandRow(event)).join("");
     html.push(`<details class="history-disclosure process-event process-command-group"><summary>${chevron()}<span>${escapeHtml(label)}</span></summary><div class="disclosure-body">${body}</div></details>`);
     tools = [];
     groupId = undefined;
@@ -309,7 +446,7 @@ export function renderHistorySession(session: DextHistorySession, view: HistoryS
     ? `<i class="history-favorite codicon codicon-star-full" title="Favorite" aria-label="Favorite"></i>`
     : "";
   const label = view.name ?? conversationTitle(session);
-  return `<details class="history-session${favorite ? " favorite" : ""}" ${context}><summary title="${SESSION_ACTION_HINT}">${chevron()}${star}<span class="history-summary-input${view.name ? " named" : ""}">${escapeHtml(label)}</span><span class="history-meta">${count}</span><span class="history-meta history-session-time">${escapeHtml(dateLabel(session.createdAt))}</span></summary><div class="history-session-body">${session.turns.map((turn) => renderHistoryRecord(turn, session.id)).join("")}</div></details>`;
+  return `<details class="history-session${favorite ? " favorite" : ""}" ${context}><summary title="${SESSION_ACTION_HINT}">${chevron()}${star}<span class="history-summary-input${view.name ? " named" : ""}">${escapeHtml(label)}</span><span class="history-meta">${count}</span><span class="history-meta history-session-time">${escapeHtml(dateLabel(session.createdAt))}</span></summary><div class="history-session-body"><div class="history-session-actions">${copyButton(conversationMarkdown(session))}</div>${session.turns.map((turn) => renderHistoryRecord(turn, session.id)).join("")}</div></details>`;
 }
 
 export function conversationMarkdown(session: DextHistorySession): string {

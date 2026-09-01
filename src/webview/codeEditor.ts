@@ -206,10 +206,16 @@ export class DextCodeEditor {
           (context) => this.completions(context)
         ],
         activateOnTyping: true,
+        // Keep the list responsive without querying the language service on
+        // every single key event. This is short enough to feel immediate while
+        // avoiding a request for half-typed identifiers.
+        activateOnTypingDelay: 180,
         activateOnCompletion: (completion) => ["namespace", "method", "property"].includes(completion.type ?? ""),
         defaultKeymap: false,
         icons: true,
-        maxRenderedOptions: 50
+        // Keep the list compact so the signature/help text and editor remain
+        // visible; scrolling is still available for methods with many fields.
+        maxRenderedOptions: 8
       }),
       hoverTooltip((view, position) => this.hover(view, position), {
         hoverTime: 300,
@@ -243,12 +249,17 @@ export class DextCodeEditor {
         }
       }),
       keymap.of([
+        // Tab accepts the selected suggestion when a list is open. Returning
+        // false with no list lets the normal indentation binding handle it.
+        { key: "Tab", run: (view) => acceptCompletion(view) },
         indentWithTab,
         { key: "Mod-c", run: () => { void this.copy(); return true; } },
         { key: "Mod-x", run: () => { void this.cut(); return true; } },
         { key: "Mod-v", run: () => { void this.paste(); return true; } },
         { key: "Mod-Shift-v", run: () => { void this.pasteRaw(); return true; } },
         { key: "Alt-/", run: () => { startCompletion(this.view); return true; } },
+        { key: "Mod-Space", run: () => { startCompletion(this.view); return true; } },
+        { key: "Mod-Shift-Space", run: () => { void this.updateSignature(); return true; } },
         { key: "Mod-Enter", run: () => { this.options.onRun(); return true; } },
         { key: "F8", run: () => this.navigateDiagnostic(1) },
         { key: "Shift-F8", run: () => this.navigateDiagnostic(-1) },
@@ -492,15 +503,22 @@ export class DextCodeEditor {
     if (!response || context.aborted || context.state.doc.toString() !== source) return null;
     const first = response.completions[0];
     if (!first) return null;
+    // Keep parameter completions visible alongside signature help. The tooltip
+    // explains the active argument, while this list lets users discover and
+    // insert the next argument without memorising API fields.
     return {
       from: first.replaceStart,
       to: first.replaceEnd,
-      options: response.completions.map((item) => {
+      options: response.completions.map((item, index) => {
         const apply = completionApply(item);
         return {
           label: item.label,
           detail: item.detail,
           type: completionType(item.kind),
+          // CodeMirror otherwise falls back to alphabetical ordering. The
+          // language service emits fields in declaration order, so keep that
+          // order visible in the completion widget.
+          sortText: item.sortText ?? String(index).padStart(4, "0"),
           ...(apply ? { apply } : {})
         };
       })

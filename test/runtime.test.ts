@@ -695,6 +695,29 @@ answer = ask(input=printed.text)`, registry);
     });
   });
 
+  it("renders structured print values as readable text", async () => {
+    const { registry, runtime } = setup();
+    const result = await runtime.execute({
+      kind: "invocation",
+      method: "print",
+      source: "code",
+      arguments: [{ name: "text", value: { kind: "ui", type: "confirm", confirmed: true } }]
+    });
+    expect(result.result).toEqual({
+      kind: "print",
+      text: '{"kind":"ui","type":"confirm","confirmed":true}'
+    });
+    const list = await runtime.execute({
+      kind: "invocation",
+      method: "print",
+      source: "code",
+      arguments: [{ name: "text", value: [{ value: 1 }, { value: 2 }] }]
+    });
+    expect(list.result).toMatchObject({ kind: "print", text: '[{"value":1},{"value":2}]' });
+    const contract = new AxAdapter().compile(registry.get("print")!);
+    expect(() => contract.inputSchema.parse({ text: { kind: "custom", value: 1 } })).not.toThrow();
+  });
+
   it("accepts an AgentResult patch directly in apply", async () => {
     const { runtime } = setup();
     const patch: PatchResult = { kind: "patch", title: "No changes", changes: [] };

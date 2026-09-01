@@ -51,6 +51,8 @@
     "onCommand:dext.testCompletionModel",
     "onCommand:dext.diagnoseCompletion",
     "onCommand:dext.verifyMcpServer",
+    "onCommand:dext.viewMcp",
+    "onCommand:dext.addMcp",
     "onLanguage:dext-api"
   ],
   "main": "./dist/extension.js",
@@ -161,6 +163,16 @@
         "command": "dext.viewApis",
         "title": "Dext: View APIs",
         "icon": "$(symbol-method)"
+      },
+      {
+        "command": "dext.viewMcp",
+          "title": "Dext: View Global Resources",
+        "icon": "$(server)"
+      },
+      {
+        "command": "dext.addMcp",
+        "title": "Dext: Add MCP Server",
+        "icon": "$(add)"
       },
       {
         "command": "dext.openWorkspaceTrust",
@@ -413,6 +425,66 @@
         {
           "command": "dext.tab.closeConversation",
           "when": "false"
+        },
+        {
+          "command": "dext.reloadMethods",
+          "when": "false"
+        },
+        {
+          "command": "dext.viewApis",
+          "when": "false"
+        },
+        {
+          "command": "dext.viewMcp",
+          "when": "false"
+        },
+        {
+          "command": "dext.addMcp",
+          "when": "false"
+        },
+        {
+          "command": "dext.openWorkspaceTrust",
+          "when": "false"
+        },
+        {
+          "command": "dext.setMcpAccessToken",
+          "when": "false"
+        },
+        {
+          "command": "dext.clearMcpAccessToken",
+          "when": "false"
+        },
+        {
+          "command": "dext.verifyMcpServer",
+          "when": "false"
+        },
+        {
+          "command": "dext.completionMenu",
+          "when": "false"
+        },
+        {
+          "command": "dext.diagnoseCompletion",
+          "when": "false"
+        },
+        {
+          "command": "dext.addSelectionToChat",
+          "when": "false"
+        },
+        {
+          "command": "dext.copySelectionWithContext",
+          "when": "false"
+        },
+        {
+          "command": "dext.copyTerminalSelectionWithContext",
+          "when": "false"
+        },
+        {
+          "command": "dext.addFileToChat",
+          "when": "false"
+        },
+        {
+          "command": "dext.stopExecution",
+          "when": "dext.running"
         }
       ],
       "editor/title": [
@@ -488,6 +560,11 @@
           "command": "dext.viewApis",
           "when": "view == dext.sidebar",
           "group": "navigation@3"
+        },
+        {
+          "command": "dext.viewMcp",
+          "when": "view == dext.sidebar",
+          "group": "navigation@4"
         }
       ],
       "webview/context": [
@@ -728,6 +805,17 @@
           },
           "additionalProperties": false,
           "markdownDescription": "Extra CLI arguments passed through to each agent provider, appended after the arguments Dext builds. Ignored outside a trusted workspace. Dext's own flags win, so these cannot loosen the permission tier."
+        },
+        "dext.agentCli": {
+          "type": "array",
+          "default": [
+            "codex",
+            "claude"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "markdownDescription": "Agent CLI profile IDs shown in the Dext composer. Enter profile IDs manually (Codex and Claude are enabled by default). Supported IDs are `codex`, `claude`, and `aioa`; unsupported IDs are rejected."
         },
         "dext.agent.timeoutMs": {
           "type": "integer",

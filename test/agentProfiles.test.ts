@@ -15,6 +15,11 @@ describe("Agent profile defaults", () => {
     expect(aioa).toMatchObject({ provider: "aioa", connectionMode: "launch" });
   });
 
+  it("can expose only the profiles selected by the user", () => {
+    const profiles = new AgentProfileStore().list(["codex", "claude"]);
+    expect(profiles.map((profile) => profile.id)).toEqual(["codex", "claude"]);
+  });
+
   it("migrates the legacy Qunshu profile and selection to AIOA", () => {
     const state = {
       get<T>(key: string): T | undefined {

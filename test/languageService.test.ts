@@ -86,4 +86,14 @@ describe("DextLanguageService workflow features", () => {
       label: "mcp(tool: string, input: dict[str, object] = {}) -> McpRawResult"
     });
   });
+
+  it("keeps parameter completion and signature highlighting in declaration order", () => {
+    const completion = service.documentCompletions("agent(");
+    expect(completion.map((item) => item.label)).toEqual(["input", "apply", "workspace"]);
+    expect(completion.map((item) => item.sortText)).toEqual(["0000", "0001", "0002"]);
+    const next = service.documentCompletions('agent(input="hello", ');
+    expect(next.map((item) => item.label)).toEqual(["apply", "workspace"]);
+    expect(next[0]?.sortText).toBe("0000");
+    expect(service.documentSignature("agent(apply=False, input=")).toMatchObject({ activeParameter: 0 });
+  });
 });

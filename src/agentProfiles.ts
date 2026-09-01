@@ -6,6 +6,10 @@ import { join } from "node:path";
 export type AgentProvider = "codex" | "claude" | "aioa";
 export type AioaConnectionMode = "attach" | "launch";
 
+/** Profile IDs accepted by the `dext.agentCli` setting. Keep this separate
+ * from the settings manifest so the runtime can validate hand-entered IDs. */
+export const SUPPORTED_AGENT_PROFILE_IDS: readonly AgentProvider[] = ["codex", "claude", "aioa"];
+
 export interface AgentProfile {
   id: string;
   label: string;
@@ -186,13 +190,16 @@ export class AgentProfileStore {
       : storedSelection;
   }
 
-  list(): AgentProfile[] {
-    return this.profiles.map((profile) => ({
-      ...profile,
-      models: [...profile.models],
-      ...(profile.endpoint ? { endpoint: profile.endpoint } : {}),
-      ...(profile.modelOptions ? { modelOptions: profile.modelOptions.map((model) => ({ ...model, reasoningEfforts: [...model.reasoningEfforts], speedTiers: [...model.speedTiers], serviceTiers: [...model.serviceTiers] })) } : {})
-    }));
+  list(enabledIds?: readonly string[]): AgentProfile[] {
+    const enabled = enabledIds ? new Set(enabledIds) : undefined;
+    return this.profiles
+      .filter((profile) => !enabled || enabled.has(profile.id))
+      .map((profile) => ({
+        ...profile,
+        models: [...profile.models],
+        ...(profile.endpoint ? { endpoint: profile.endpoint } : {}),
+        ...(profile.modelOptions ? { modelOptions: profile.modelOptions.map((model) => ({ ...model, reasoningEfforts: [...model.reasoningEfforts], speedTiers: [...model.speedTiers], serviceTiers: [...model.serviceTiers] })) } : {})
+      }));
   }
 
   currentSelection(): AgentSelection {

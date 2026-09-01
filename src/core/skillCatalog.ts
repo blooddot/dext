@@ -29,10 +29,11 @@ function metadata(source: string, fallback: string): Pick<SkillDescriptor, "titl
 export class SkillCatalog {
   private readonly entries = new Map<string, SkillDescriptor>();
 
-  async reload(workspaceRoot: string, skillDirs: readonly string[] = []): Promise<void> {
+  async reload(workspaceRoot: string, skillDirs: readonly string[] = [], globalRoot?: string): Promise<void> {
     this.entries.clear();
     const roots = [
       join(workspaceRoot, ".dext", "skills"),
+      ...(globalRoot ? [resolve(globalRoot)] : []),
       ...skillDirs.map((directory) => resolve(workspaceRoot, directory))
     ];
     for (const root of roots) await this.addRoot(root);
