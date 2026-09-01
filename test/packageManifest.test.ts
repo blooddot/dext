@@ -357,22 +357,18 @@ describe("Dext package manifest", () => {
     expect(passthrough?.markdownDescription).toContain("cannot loosen the permission tier");
   });
 
-  it("contributes secure HTTP MCP settings and credential commands", async () => {
+  it("keeps MCP credentials in SecretStorage without contributing legacy settings", async () => {
     const value = await manifest();
     expect(value.activationEvents).toContain("onCommand:dext.setMcpAccessToken");
     expect(value.activationEvents).toContain("onCommand:dext.clearMcpAccessToken");
     expect(value.activationEvents).toContain("onCommand:dext.verifyMcpServer");
-    expect(value.activationEvents).toContain("onCommand:dext.importMcpConfigurationFromClipboard");
     expect(value.contributes?.commands).toEqual(expect.arrayContaining([
       expect.objectContaining({ command: "dext.setMcpAccessToken", title: "Dext: Set MCP Access Token" }),
       expect.objectContaining({ command: "dext.clearMcpAccessToken", title: "Dext: Clear MCP Access Token" }),
-      expect.objectContaining({ command: "dext.verifyMcpServer", title: "Dext: Verify MCP Server" }),
-      expect.objectContaining({
-        command: "dext.importMcpConfigurationFromClipboard",
-        title: "Dext: Import MCP Configuration from Clipboard"
-      })
+      expect.objectContaining({ command: "dext.verifyMcpServer", title: "Dext: Verify MCP Server" })
     ]));
-    const setting = (await manifest()).contributes?.configuration?.properties?.["dext.mcpServers"];
-    expect(setting?.description).toContain("SecretStorage");
+    const properties = value.contributes?.configuration?.properties ?? {};
+    expect(properties["dext.mcpServers"]).toBeUndefined();
+    expect(properties["dext.mcpTools"]).toBeUndefined();
   });
 });

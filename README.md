@@ -111,40 +111,42 @@ class DocumentResult(TypedDict):
     title: NotRequired[str]
 ```
 
-Standard skills are discovered in `<workspace>/.dext/skills`, then `dext.skillDirs`; earlier directories win duplicate names. `skill` defaults `workspace` to the current project and injects the selected `SKILL.md` into the current Agent task. `ui.*` waits for a semantic user answer and resumes the same workflow. `mcp` only accepts configured full tool names in `dext.mcpTools`, such as `docs.read`; the registry resolves that exact name to its configured server and underlying tool without splitting it. Duplicate full names are configuration errors. MCP calls require a trusted local workspace.
+Standard skills are discovered in `<workspace>/.dext/skills`, then `dext.skillDirs`; earlier directories win duplicate names. `skill` defaults `workspace` to the current project and injects the selected `SKILL.md` into the current Agent task. `ui.*` waits for a semantic user answer and resumes the same workflow.
 
-`dext.mcpServers` supports local `stdio` and Streamable HTTP (`2025-03-26`). HTTP endpoints must be HTTPS, or loopback HTTP for local development. URL userinfo, query strings, fragments, inline headers, and credentials are rejected. A bearer-enabled server stores its access token only through `Dext: Set MCP Access Token`, in VS Code SecretStorage and scoped to the current workspace. `Dext: Clear MCP Access Token` removes it; `Dext: Verify MCP Server` performs an authenticated initialization check. Dext never writes credentials to settings, project files, output, or logs. HTTP calls use JSON or SSE responses, reject redirects, and close negotiated sessions with `DELETE`. MCP `structuredContent` is preserved as `McpRawResult.structured`; a `.dx` API returning a `TypedDict` adapts that structure into its declared result and validates it strictly.
+## MCP APIs
 
-For MCP documentation that uses the common object form, copy the entire JSON block and run `Dext: Import MCP Configuration from Clipboard`. For example, the command accepts `{ "mcpServers": { "teambition-openapi-mcp": { "command": "npx", "args": ["-y", "@tng/teambition-openapi-mcp", "user-mcp", "-u", "<your_user_token>"] } } }`. Dext stores the server in workspace settings, calls `tools/list`, and creates its explicit tool allowlist automatically. The importer refuses `env`, because those values commonly contain secrets. Stdio arguments are stored as given, so leave documentation placeholders in place until you deliberately provide a token and never commit a workspace setting containing one; use the regular Dext credential command for bearer HTTP servers.
+MCP manifests live in `<workspace>/.dext/mcp/*.jsonc`: one file declares one server and its explicit tool allowlist. Each enabled tool becomes a typed API named `mcp.<server>.<tool>`, with completion, signature help, required-argument validation, and structured result-field completion. The `inputSchema` is required; `outputSchema` is optional, but enables typed fields from MCP `structuredContent`.
 
-```json
+```jsonc
+// .dext/mcp/docs.jsonc
 {
-  "dext.mcpServers": [
-    { "name": "docs", "transport": "stdio", "command": "my-docs-mcp", "args": ["--stdio"] },
-    {
-      "name": "remote-docs",
-      "transport": "http",
-      "url": "https://mcp.example.test/v1",
-      "auth": { "type": "bearer" }
+  "name": "docs",
+  "transport": "stdio",
+  "command": "my-docs-mcp",
+  "args": ["--stdio"],
+  "tools": [{
+    "name": "read",
+    "description": "Read a document",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "uri": { "type": "string" } },
+      "required": ["uri"]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": { "content": { "type": "string" } },
+      "required": ["content"]
     }
-  ],
-  "dext.mcpTools": [
-    { "server": "docs", "tool": "read", "description": "Read a document" }
-  ]
+  }]
 }
 ```
 
 ```python
-from typing import Literal, TypedDict
-
-class DocumentResult(TypedDict):
-    kind: Literal["document"]
-    uri: str
-    content: str
-
-def main(input: dict[str, object]) -> DocumentResult:
-    return mcp(tool="docs.read", input=input)
+document = mcp.docs.read(uri="README.md")
+print(text=document.content)
 ```
+
+MCP calls require a trusted local workspace. Manifests support local `stdio` and Streamable HTTP. HTTP endpoints must use HTTPS, or loopback HTTP for local development. URL userinfo, query strings, fragments, inline headers, and credentials are rejected. A bearer-enabled server stores its access token only through `Dext: Set MCP Access Token`, in VS Code SecretStorage and scoped to the current workspace. Do not put credentials in a manifest, including stdio arguments. `Dext: Clear MCP Access Token` removes an HTTP bearer token; `Dext: Verify MCP Server` performs an authenticated initialization check. Editing, creating, or deleting a manifest reloads its APIs automatically.
 
 Agent profiles are stored in VS Code extension global storage. The Run row exposes Agent, Model, Reasoning, and Speed selectors. Codex profiles read the local Codex model cache when available, including supported reasoning levels and speed tiers. Claude Code profiles use its native `opus`/`sonnet` aliases and current effort levels. A `.dx` file may override the Agent and Model with `@api(agent="codex", model="...")`; otherwise the Run selection is used. `Dext: Configure Agent` edits executable commands and custom model labels without handling credentials.
 

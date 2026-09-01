@@ -882,7 +882,10 @@ main {
   min-width: 0;
   max-width: min(260px, calc(100% - 4px));
   height: 24px;
-  margin: 2px;
+  /* Reference separators stay in the source text in both the composer and
+     rendered turns. Keeping chips margin-free makes every reference kind use
+     that one spacing rule. */
+  margin: 0;
   padding-left: 0;
   display: inline-flex;
   gap: 5px;
@@ -920,9 +923,10 @@ main {
 
 .code-file-reference {
   /* CodeMirror replaces the source separators around a reference with this
-   * widget. Give the widget the same inline breathing room that those spaces
-   * retain when the identical input is rendered in conversation history. */
-  margin: 0 2px;
+   * widget. The source separators already provide its inline breathing room;
+   * adding a chip margin here makes pasted attachments visibly too far from
+   * the surrounding text. */
+  margin: 0;
   font-family: var(--vscode-font-family);
   font-size: var(--vscode-font-size);
 }
@@ -1526,7 +1530,7 @@ main {
 
 /* Mode colors are visible while choosing, not only after a mode becomes active. */
 .composer-menu-option-mode-agent {
-  --mode-menu-color: var(--vscode-button-background, #0e639c);
+  --mode-menu-color: var(--vscode-descriptionForeground, #a0a0a0);
 }
 
 .composer-menu-option-mode-ask {

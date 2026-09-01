@@ -8,7 +8,7 @@ import { inputReferenceProjectionDecorations } from "../src/webview/fileReferenc
 import { fileReferenceRemovalEdit } from "../src/webview/fileReferenceDecorations.js";
 
 describe("@ file reference decorations", () => {
-  it("projects a readable @path token as one atomic Chip range", () => {
+  it("projects a readable @path token as one atomic Chip range without consuming its separators", () => {
     const token = "@src/pathx.py#L55,1-L66,32";
     const source = 'agent(input="说明 ' + token + ' 后续")';
     const projection = inputReferenceProjections(source);
@@ -17,7 +17,7 @@ describe("@ file reference decorations", () => {
     inputReferenceProjectionDecorations(source, () => {}).between(0, source.length, (from, to) => {
       ranges.push({ from, to });
     });
-    expect(ranges).toEqual([{ from: source.indexOf(" " + token), to: source.indexOf(token) + token.length + 1 }]);
+    expect(ranges).toEqual([{ from: source.indexOf(token), to: source.indexOf(token) + token.length }]);
     expect(fileReferenceRemovalEdit(source, projection[0]!)).toEqual({
       from: source.indexOf(" " + token),
       to: source.indexOf(token) + token.length + 1,
@@ -25,7 +25,7 @@ describe("@ file reference decorations", () => {
     });
   });
 
-  it("keeps spaces typed after a Chip outside its atomic range", () => {
+  it("keeps source spaces around a Chip outside its atomic range", () => {
     const token = "@src/pathx.py";
     // The first space is the automatically inserted path separator. The
     // second represents a space the user typed after the reference.
@@ -36,8 +36,26 @@ describe("@ file reference decorations", () => {
     });
     expect(ranges).toEqual([{
       from: source.indexOf(token),
-      to: source.indexOf(token) + token.length + 1
+      to: source.indexOf(token) + token.length
     }]);
+  });
+
+  it("uses the same separator rule for code, directory, image, and terminal references", () => {
+    const references = [
+      "@src/pathx.py#L55,1-L66,32",
+      "@src/components/",
+      "@.dext/attachments/0123456789abcdef01234567.png",
+      "@.dext-global/attachments/terminal-0123456789abcdef01234567.log"
+    ];
+    const source = `agent(input="${references.join(" ")}")`;
+    const ranges: Array<{ from: number; to: number }> = [];
+    inputReferenceProjectionDecorations(source, () => {}).between(0, source.length, (from, to) => {
+      ranges.push({ from, to });
+    });
+    expect(ranges).toEqual(references.map((reference) => ({
+      from: source.indexOf(reference),
+      to: source.indexOf(reference) + reference.length
+    })));
   });
 
   it("only recognizes workspace-relative paths with valid ranges", () => {

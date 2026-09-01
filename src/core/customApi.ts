@@ -247,7 +247,9 @@ function initialTypes(file: CustomApiFile): ReadonlyMap<string, WorkflowValueTyp
         ? { kind: "result", name: "Result", fields: {} }
         : field.type === "enum"
           ? { kind: "string", ...(field.values ? { literals: field.values } : {}) }
-          : { kind: field.type };
+          : field.type === "list"
+            ? { kind: "list", item: { kind: "unknown" } }
+            : { kind: field.type };
     if (field.multiple) type = { kind: "list", item: type };
     values.set(field.name, type);
   }

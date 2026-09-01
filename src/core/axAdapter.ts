@@ -66,6 +66,8 @@ function scalarSchemaForType(field: FieldDefinition, type: FieldDefinition["type
       return z.boolean();
     case "object":
       return z.record(z.string(), z.unknown());
+    case "list":
+      return z.array(z.unknown());
     case "enum":
       if (!field.values?.length) {
         throw new Error(`Enum field '${field.name}' requires at least one value.`);

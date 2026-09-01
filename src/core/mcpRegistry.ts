@@ -37,6 +37,8 @@ export interface McpToolConfig {
   server: string;
   tool: string;
   description?: string;
+  inputSchema?: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
 }
 
 export interface McpToolCallResult {
@@ -48,6 +50,8 @@ export interface McpToolCallResult {
 export interface McpDiscoveredTool {
   name: string;
   description?: string;
+  inputSchema?: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
 }
 
 export interface McpTransportOptions {
@@ -107,7 +111,12 @@ function discoveredTools(value: unknown, server: McpServerConfig): McpDiscovered
     if (!isRecord(item) || typeof item.name !== "string" || !IDENTIFIER.test(item.name)) {
       throw new Error(`MCP server '${server.name}' returned an invalid tool name.`);
     }
-    tools.push({ name: item.name, ...(typeof item.description === "string" ? { description: item.description } : {}) });
+    tools.push({
+      name: item.name,
+      ...(typeof item.description === "string" ? { description: item.description } : {}),
+      ...(isRecord(item.inputSchema) ? { inputSchema: item.inputSchema } : {}),
+      ...(isRecord(item.outputSchema) ? { outputSchema: item.outputSchema } : {})
+    });
   }
   return tools;
 }
@@ -677,7 +686,9 @@ export class McpToolRegistry {
       this.tools.set(key, {
         server: config.server,
         tool: config.tool,
-        ...(config.description ? { description: config.description } : {})
+        ...(config.description ? { description: config.description } : {}),
+        ...(config.inputSchema ? { inputSchema: config.inputSchema } : {}),
+        ...(config.outputSchema ? { outputSchema: config.outputSchema } : {})
       });
     }
     return diagnostics;

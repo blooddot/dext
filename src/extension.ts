@@ -23,43 +23,6 @@ import {
   DEXT_SEMANTIC_TOKEN_MODIFIERS,
   DEXT_SEMANTIC_TOKEN_TYPES
 } from "./dextSemanticTokens.js";
-import { McpToolRegistry, type McpServerConfig, type McpToolConfig } from "./core/mcpRegistry.js";
-
-function standardMcpServers(source: string): McpServerConfig[] {
-  let value: unknown;
-  try {
-    value = JSON.parse(source);
-  } catch {
-    throw new Error("The clipboard does not contain valid JSON.");
-  }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected a standard MCP JSON object with an 'mcpServers' field.");
-  }
-  const root = value as Record<string, unknown>;
-  const entries = root.mcpServers;
-  if (!entries || typeof entries !== "object" || Array.isArray(entries)) {
-    throw new Error("Expected a standard MCP JSON object with an 'mcpServers' field.");
-  }
-  return Object.entries(entries as Record<string, unknown>).map(([name, raw]) => {
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-      throw new Error(`MCP server '${name}' must be an object.`);
-    }
-    const config = raw as Record<string, unknown>;
-    if (typeof config.command === "string") {
-      if (config.args !== undefined && (!Array.isArray(config.args) || config.args.some((arg) => typeof arg !== "string"))) {
-        throw new Error(`MCP server '${name}' args must be strings.`);
-      }
-      if (config.env !== undefined) {
-        throw new Error(`MCP server '${name}' uses 'env', which Dext does not import because environment values can expose secrets.`);
-      }
-      return { name, transport: "stdio", command: config.command, ...(config.args ? { args: config.args as string[] } : {}) };
-    }
-    if (typeof config.url === "string") {
-      return { name, transport: "http", url: config.url };
-    }
-    throw new Error(`MCP server '${name}' needs either 'command' or 'url'.`);
-  });
-}
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const application = new DextApplication(context.globalState, context.secrets, context.globalStorageUri);
@@ -80,6 +43,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const preferences = new DextConversationPreferences(context.globalState);
   const historyPanel = new DextHistoryPanel(context.extensionUri, history, preferences, application.storage);
   const sidebar = new DextSidebarProvider(context.extensionUri, application, history, preferences);
+  if (folder?.uri.scheme === "file") {
+    const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(folder, ".dext/mcp/**/*.jsonc"));
+    const refreshMcpManifests = async (): Promise<void> => {
+      await application.reload();
+      await sidebar.refresh();
+    };
+    context.subscriptions.push(
+      watcher,
+      watcher.onDidCreate(() => { void refreshMcpManifests(); }),
+      watcher.onDidChange(() => { void refreshMcpManifests(); }),
+      watcher.onDidDelete(() => { void refreshMcpManifests(); })
+    );
+  }
   const reportCommandError = async <T>(run: () => Promise<T>): Promise<T | undefined> => {
     try {
       return await run();
@@ -204,7 +180,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
     const servers = application.bearerHttpServers();
     if (!servers.length) {
-      await vscode.window.showErrorMessage("No bearer-authenticated HTTP MCP servers are configured in dext.mcpServers.");
+      await vscode.window.showErrorMessage("No bearer-authenticated HTTP MCP servers are configured in .dext/mcp.");
       return undefined;
     }
     if (servers.length === 1) return servers[0]?.name;
@@ -213,50 +189,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       { placeHolder: "Choose an HTTP MCP server" }
     );
     return picked?.label;
-  };
-  const importMcpConfigurationFromClipboard = async (): Promise<void> => {
-    if (!application.isTrustedLocalWorkspace()) {
-      throw new Error("MCP servers can only be added in a trusted local workspace.");
-    }
-    const servers = standardMcpServers(await vscode.env.clipboard.readText());
-    const validation = new McpToolRegistry().setServers(servers);
-    if (validation.length) throw new Error(validation.join(" "));
-    if (!servers.length) throw new Error("The MCP configuration does not contain any servers.");
-
-    const configuration = vscode.workspace.getConfiguration("dext");
-    const existingServers = configuration.get<McpServerConfig[]>("mcpServers", []);
-    const names = new Set(servers.map((server) => server.name));
-    const existingTools = configuration.get<McpToolConfig[]>("mcpTools", []);
-    await configuration.update(
-      "mcpServers",
-      [...existingServers.filter((server) => !names.has(server.name)), ...servers],
-      vscode.ConfigurationTarget.Workspace
-    );
-    await application.reload();
-
-    const discovered: McpToolConfig[] = [];
-    const unavailable: string[] = [];
-    for (const server of servers) {
-      try {
-        const tools = await application.mcp.discoverServerTools(server.name);
-        discovered.push(...tools.map((tool) => ({ server: server.name, tool: tool.name, ...(tool.description ? { description: tool.description } : {}) })));
-      } catch (error) {
-        unavailable.push(`${server.name}: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
-    // Never retain a previous server's allowlist when an import replaces it;
-    // a failed discovery must leave the new endpoint with no callable tools.
-    await configuration.update(
-      "mcpTools",
-      [...existingTools.filter((tool) => !names.has(tool.server)), ...discovered],
-      vscode.ConfigurationTarget.Workspace
-    );
-    await application.reload();
-    const imported = servers.map((server) => server.name).join(", ");
-    const suffix = unavailable.length
-      ? ` Tool discovery failed for ${unavailable.join("; ")}. The server was saved; run the command again after fixing it.`
-      : ` Registered ${discovered.length} tool${discovered.length === 1 ? "" : "s"}.`;
-    await vscode.window.showInformationMessage(`Imported MCP server${servers.length === 1 ? "" : "s"}: ${imported}.${suffix}`);
   };
   updateTrustContext();
   updateHistoryContext();
@@ -458,9 +390,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await vscode.window.showInformationMessage(`MCP server '${serverName}' is ready.`);
       })
     ),
-    vscode.commands.registerCommand("dext.importMcpConfigurationFromClipboard", () =>
-      reportCommandError(importMcpConfigurationFromClipboard)
-    ),
     vscode.commands.registerCommand("dext.triggerSuggest", async () => {
       if (activeDextEditor()) {
         await vscode.commands.executeCommand("editor.action.triggerSuggest");
@@ -586,13 +515,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await sidebar.refresh();
     }),
     vscode.workspace.onDidChangeConfiguration(async (event) => {
-      if (
-        event.affectsConfiguration("dext.mcpServers")
-        || event.affectsConfiguration("dext.mcpTools")
-        // A new API directory changes the registered API set, so this one has to
-        // go through a full reload rather than a refresh.
-        || event.affectsConfiguration("dext.apiDirs")
-      ) {
+      // A new API directory changes the registered API set, so this one has to
+      // go through a full reload rather than a refresh.
+      if (event.affectsConfiguration("dext.apiDirs")) {
         await application.reload();
         await sidebar.refresh();
         return;

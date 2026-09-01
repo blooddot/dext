@@ -188,7 +188,7 @@ export interface InvocationAst {
   source: "code" | "chat";
 }
 
-export type FieldType = "string" | "number" | "boolean" | "object" | "enum" | "context" | "dir" | "result";
+export type FieldType = "string" | "number" | "boolean" | "object" | "list" | "enum" | "context" | "dir" | "result";
 
 export interface FieldDefinition {
   name: string;
@@ -383,7 +383,13 @@ export interface PatchResult extends DextResultBase {
   changes: PatchChange[];
 }
 
-export type DextResult =
+/** A structured result synthesized from a configured MCP output schema. */
+export interface McpTypedResult extends DextResultBase {
+  kind: `mcp.${string}`;
+  [key: string]: unknown;
+}
+
+export type DextResult = McpTypedResult
   | ChatResult
   | AgentResult
   | ExplainResult

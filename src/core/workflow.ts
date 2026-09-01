@@ -883,6 +883,7 @@ function fieldType(field: FieldDefinition): ValueType {
   else if (field.type === "context") value = { kind: "context" };
   else if (field.type === "dir") value = { kind: "dir" };
   else if (field.type === "object") value = { kind: "object" };
+  else if (field.type === "list") value = { kind: "list", item: { kind: "unknown" } };
   else if (field.type === "result") value = result("Result", {});
   else value = { kind: field.type };
   return field.multiple ? { kind: "list", item: value } : value;

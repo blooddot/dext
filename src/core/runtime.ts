@@ -265,7 +265,7 @@ export class DextRuntime {
   private agentCliArguments: Readonly<Partial<Record<AgentProvider, readonly string[]>>> = {};
   private skillLoader: ((skill: string, workspace: DirRef) => Promise<{ instructions: string; sourcePath: string }>) | undefined;
   private ruleLoader: ((path: string) => Promise<string | undefined>) | undefined;
-  private mcpCaller: ((tool: string, input: Record<string, unknown>) => Promise<DextResult>) | undefined;
+  private mcpCaller: ((tool: string, input: Record<string, unknown>) => Promise<McpRawResult>) | undefined;
 
   constructor(
     private readonly registry: MethodRegistry,
@@ -337,7 +337,7 @@ export class DextRuntime {
     this.ruleLoader = loader;
   }
 
-  setMcpCaller(caller: (tool: string, input: Record<string, unknown>) => Promise<DextResult>): void {
+  setMcpCaller(caller: (tool: string, input: Record<string, unknown>) => Promise<McpRawResult>): void {
     this.mcpCaller = caller;
   }
 
@@ -392,6 +392,14 @@ export class DextRuntime {
           ? adaptTypedMcpResult(workflowResult, method.output.kind)
           : (() => { throw new Error("A TypedDict custom API must return mcp(...)."); })()
         : workflowResult;
+    } else if (method.executor.kind === "deterministic" && method.executor.handler === "mcpTool") {
+      if (!this.workspaceTrusted) {
+        throw new Error("MCP tools require a trusted local workspace.");
+      }
+      if (!this.mcpCaller) throw new Error("MCP registry is not configured.");
+      const tool = method.id.slice("mcp.".length);
+      const raw = await this.mcpCaller(tool, resolved.arguments as Record<string, unknown>);
+      result = method.output.fields ? adaptTypedMcpResult(raw, method.output.kind) : raw;
     } else if (method.id === "mcp") {
       if (!this.workspaceTrusted) {
         throw new Error("mcp requires a trusted local workspace.");

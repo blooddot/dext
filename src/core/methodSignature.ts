@@ -6,6 +6,7 @@ function literal(value: string): string {
 
 function scalarType(type: FieldDefinition["type"], field: FieldDefinition): string {
   if (type === "object") return "dict[str, object]";
+  if (type === "list") return "list[object]";
   if (type !== "enum") return type;
   const values = field.values ?? [];
   return values.length ? values.map(literal).join(" | ") : "string";

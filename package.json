@@ -51,7 +51,6 @@
     "onCommand:dext.testCompletionModel",
     "onCommand:dext.diagnoseCompletion",
     "onCommand:dext.verifyMcpServer",
-    "onCommand:dext.importMcpConfigurationFromClipboard",
     "onLanguage:dext-api"
   ],
   "main": "./dist/extension.js",
@@ -264,11 +263,6 @@
         "command": "dext.verifyMcpServer",
         "title": "Dext: Verify MCP Server",
         "icon": "$(plug)"
-      },
-      {
-        "command": "dext.importMcpConfigurationFromClipboard",
-        "title": "Dext: Import MCP Configuration from Clipboard",
-        "icon": "$(cloud-download)"
       }
     ],
     "keybindings": [
@@ -844,113 +838,6 @@
           "minimum": 1,
           "maximum": 16,
           "description": "Branches a list comprehension runs at once in Code mode. Each branch can start its own agent process, so raising this multiplies both throughput and machine load. Everything outside a comprehension stays sequential."
-        },
-        "dext.mcpTools": {
-          "type": "array",
-          "default": [],
-          "items": {
-            "type": "object",
-            "required": [
-              "server",
-              "tool"
-            ],
-            "properties": {
-              "server": {
-                "type": "string"
-              },
-              "tool": {
-                "type": "string"
-              },
-              "description": {
-                "type": "string"
-              }
-            }
-          },
-          "description": "MCP tools Dext may call. Their public name is the exact configured server.tool value; each tool must reference an entry in dext.mcpServers."
-        },
-        "dext.mcpServers": {
-          "type": "array",
-          "default": [],
-          "items": {
-            "oneOf": [
-              {
-                "type": "object",
-                "required": [
-                  "name",
-                  "transport",
-                  "command"
-                ],
-                "additionalProperties": false,
-                "properties": {
-                  "name": {
-                    "type": "string"
-                  },
-                  "transport": {
-                    "enum": [
-                      "stdio"
-                    ]
-                  },
-                  "command": {
-                    "type": "string"
-                  },
-                  "args": {
-                    "type": "array",
-                    "items": {
-                      "type": "string"
-                    }
-                  },
-                  "timeoutMs": {
-                    "type": "integer",
-                    "minimum": 1000,
-                    "maximum": 120000
-                  }
-                }
-              },
-              {
-                "type": "object",
-                "required": [
-                  "name",
-                  "transport",
-                  "url"
-                ],
-                "additionalProperties": false,
-                "properties": {
-                  "name": {
-                    "type": "string"
-                  },
-                  "transport": {
-                    "enum": [
-                      "http"
-                    ]
-                  },
-                  "url": {
-                    "type": "string",
-                    "format": "uri"
-                  },
-                  "auth": {
-                    "type": "object",
-                    "required": [
-                      "type"
-                    ],
-                    "additionalProperties": false,
-                    "properties": {
-                      "type": {
-                        "enum": [
-                          "bearer"
-                        ]
-                      }
-                    }
-                  },
-                  "timeoutMs": {
-                    "type": "integer",
-                    "minimum": 1000,
-                    "maximum": 120000
-                  }
-                }
-              }
-            ]
-          },
-          "description": "MCP servers. Stdio commands run locally. HTTP endpoints must use HTTPS or loopback HTTP; use Dext commands to store bearer tokens in VS Code SecretStorage, never this setting."
         }
       }
     }

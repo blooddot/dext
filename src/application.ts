@@ -8,7 +8,7 @@ import { MethodRegistry } from "./core/registry.js";
 import { DextRuntime } from "./core/runtime.js";
 import { compileWorkflow, parseWorkflowImports } from "./core/workflow.js";
 import { DEFAULT_MAX_CONCURRENCY, WorkflowRuntime } from "./core/workflowRuntime.js";
-import type { ExecutionMetadata, InputExecutionResponse } from "./core/types.js";
+import type { CallableDefinition, ExecutionMetadata, InputExecutionResponse } from "./core/types.js";
 import type { SidebarState } from "./webviewProtocol.js";
 import { VsCodeContextHost } from "./vscodeContextHost.js";
 import { terminalRunHandler } from "./vscodeTerminalHost.js";
@@ -25,8 +25,9 @@ import {
 import { DefaultAioaCdpConnection } from "./core/aioaCdp.js";
 import { DefaultAgentRunner } from "./core/agentRouter.js";
 import { SkillCatalog } from "./core/skillCatalog.js";
-import { McpToolRegistry, type HttpMcpServerConfig, type McpToolConfig } from "./core/mcpRegistry.js";
+import { McpToolRegistry, type HttpMcpServerConfig, type McpServerConfig, type McpToolConfig } from "./core/mcpRegistry.js";
 import { McpAccessTokenStore } from "./core/mcpSecrets.js";
+import { parseMcpManifest } from "./core/mcpManifest.js";
 import {
   COMPLETION_FIELDS,
   CompletionKeyStore,
@@ -111,9 +112,15 @@ export class DextApplication {
     this.applyTimeoutSettings();
     this.applyAgentPermissionSettings();
     const skillDirs = vscode.workspace.getConfiguration("dext").get<string[]>("skillDirs", []);
-    const mcpConfiguration = vscode.workspace.getConfiguration("dext");
-    diagnostics.push(...this.mcp.setServers(mcpConfiguration.get<unknown[]>("mcpServers", [])));
-    diagnostics.push(...this.mcp.setTools(mcpConfiguration.get<McpToolConfig[]>("mcpTools", [])));
+    const mcpManifests = await this.loadMcpManifests(folder);
+    diagnostics.push(...mcpManifests.diagnostics);
+    diagnostics.push(...this.mcp.setServers(mcpManifests.servers));
+    diagnostics.push(...this.mcp.setTools(mcpManifests.tools));
+    const activeMcpTools = new Set(this.mcp.list().map((tool) => `${tool.server}.${tool.tool}`));
+    this.registry.registerMany(
+      mcpManifests.methods.filter((method) => activeMcpTools.has(method.id.slice("mcp.".length))),
+      "project"
+    );
     try {
       await this.skills.reload(this.workspaceRoot, skillDirs);
     } catch (error) {
@@ -193,6 +200,45 @@ export class DextApplication {
       if (!roots.includes(uri.fsPath)) roots.push(uri.fsPath);
     }
     return roots;
+  }
+
+  /** The project owns its MCP manifests. One file per server keeps a tool's
+   * allowlist and its API contract together rather than split across settings. */
+  private async loadMcpManifests(folder: vscode.WorkspaceFolder | undefined): Promise<{
+    servers: McpServerConfig[];
+    tools: McpToolConfig[];
+    methods: CallableDefinition[];
+    diagnostics: string[];
+  }> {
+    if (!folder || folder.uri.scheme !== "file") return { servers: [], tools: [], methods: [], diagnostics: [] };
+    const directory = vscode.Uri.joinPath(folder.uri, ".dext", "mcp");
+    let entries: [string, vscode.FileType][];
+    try {
+      entries = await vscode.workspace.fs.readDirectory(directory);
+    } catch (error) {
+      if (error instanceof vscode.FileSystemError && error.code === "FileNotFound") {
+        return { servers: [], tools: [], methods: [], diagnostics: [] };
+      }
+      return { servers: [], tools: [], methods: [], diagnostics: [`MCP manifest discovery: ${error instanceof Error ? error.message : String(error)}`] };
+    }
+    const servers: McpServerConfig[] = [];
+    const tools: McpToolConfig[] = [];
+    const methods: CallableDefinition[] = [];
+    const diagnostics: string[] = [];
+    for (const [name, type] of entries.sort(([left], [right]) => left.localeCompare(right))) {
+      if (type !== vscode.FileType.File || !name.toLowerCase().endsWith(".jsonc")) continue;
+      const file = vscode.Uri.joinPath(directory, name);
+      try {
+        const manifest = parseMcpManifest(new TextDecoder().decode(await vscode.workspace.fs.readFile(file)), file.fsPath);
+        if (manifest.server) servers.push(manifest.server);
+        tools.push(...manifest.tools);
+        methods.push(...manifest.methods);
+        diagnostics.push(...manifest.diagnostics);
+      } catch (error) {
+        diagnostics.push(`${file.fsPath}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    return { servers, tools, methods, diagnostics };
   }
 
   /** The permission default and the passthrough arguments are both settings, so

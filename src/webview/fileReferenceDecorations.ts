@@ -59,24 +59,15 @@ function hasAdjacentText(source: string, offset: number, direction: -1 | 1): boo
   return Boolean(character) && !/[ \t\r\n"'`()\x5B\x5D{},=]/.test(character);
 }
 
-/** Source keeps spaces around a reference so future typing cannot become part
- * of its path. The chip owns those spaces visually, making it read inline. */
+/** Source separators remain visible around a reference just as they do in the
+ * rendered turn output. The chip itself stays atomic; the separators keep the
+ * next typed character outside the path token. */
 function decoratedReferences(source: string): DecoratedReference[] {
-  const projections = inputReferenceProjections(source);
-  return projections.map((projection, index) => {
-    const leading = whitespaceBefore(source, projection.interpolationStart);
-    const previous = projections[index - 1];
-    return {
-      projection,
-      // Between two chips the preceding chip owns the shared separator, which
-      // keeps replacement ranges disjoint.
-      from: previous?.interpolationEnd === leading ? projection.interpolationStart : leading,
-      // Insertions add one separator so text typed immediately after a chip
-      // cannot be parsed into its path. Hide that generated separator, but
-      // retain any additional spaces the user explicitly types after it.
-      to: whitespaceAfter(source, projection.interpolationEnd, 1)
-    };
-  });
+  return inputReferenceProjections(source).map((projection) => ({
+    projection,
+    from: projection.interpolationStart,
+    to: projection.interpolationEnd
+  }));
 }
 
 /** Removes a chip and its artificial separators. Text on both sides keeps one
