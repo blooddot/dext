@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import type { McpRawResult } from "./types.js";
+import type { McpProcessEvent, McpRawResult } from "./types.js";
 
 const IDENTIFIER = /^[A-Za-z0-9_.-]+$/;
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -20,6 +20,10 @@ export interface StdioMcpServerConfig {
   transport: "stdio";
   command: string;
   args?: string[];
+  /** Inject a SecretStorage token into the named child-process environment variable. */
+  auth?: { type: "token"; env: string };
+  /** Set by Dext when loading a project/global manifest; not persisted by the manifest writer. */
+  scope?: "project" | "global";
   timeoutMs?: number;
 }
 
@@ -28,6 +32,8 @@ export interface HttpMcpServerConfig {
   transport: "http";
   url: string;
   auth?: { type: "bearer" };
+  /** Set by Dext when loading a project/global manifest; not persisted by the manifest writer. */
+  scope?: "project" | "global";
   timeoutMs?: number;
 }
 
@@ -56,6 +62,7 @@ export interface McpDiscoveredTool {
 
 export interface McpTransportOptions {
   accessToken?: string;
+  onProcessEvent?: (event: McpProcessEvent) => void;
 }
 
 export interface McpTransport {
@@ -69,7 +76,7 @@ export interface McpTransport {
   listTools?(server: McpServerConfig, options?: McpTransportOptions): Promise<McpDiscoveredTool[]>;
 }
 
-export type McpAccessTokenProvider = (server: HttpMcpServerConfig) => Promise<string | undefined>;
+export type McpAccessTokenProvider = (server: McpServerConfig) => Promise<string | undefined>;
 
 export type McpFetch = (url: string, init?: RequestInit) => Promise<Response>;
 
@@ -159,6 +166,16 @@ function authDiagnostic(value: unknown): string | undefined {
   return undefined;
 }
 
+function stdioAuthDiagnostic(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || value.type !== "token" || typeof value.env !== "string"
+    || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(value.env)
+    || Object.keys(value).some((key) => key !== "type" && key !== "env")) {
+    return "auth must be { type: 'token', env: '<environment variable name>' } for stdio.";
+  }
+  return undefined;
+}
+
 function normalizeTimeout(value: unknown, name: string, diagnostics: string[]): number | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "number" || !Number.isInteger(value) || value < 1_000 || value > 120_000) {
@@ -171,6 +188,7 @@ function normalizeTimeout(value: unknown, name: string, diagnostics: string[]): 
 class StdioJsonRpcClient {
   private nextId = 1;
   private buffer = "";
+  private stderrBuffer = "";
   private readonly pending = new Map<number, {
     resolve: (value: unknown) => void;
     reject: (error: Error) => void;
@@ -181,11 +199,15 @@ class StdioJsonRpcClient {
   constructor(
     private readonly process: ChildProcessWithoutNullStreams,
     private readonly serverName: string,
-    private readonly timeoutMs: number
+    private readonly timeoutMs: number,
+    private readonly onProcessEvent?: (event: McpProcessEvent) => void
   ) {
     this.exited = new Promise((resolve) => this.process.once("exit", () => resolve()));
     this.process.stdout.setEncoding("utf8");
     this.process.stdout.on("data", (chunk: string) => this.consume(chunk));
+    this.process.stderr.setEncoding("utf8");
+    this.process.stderr.on("data", (chunk: string) => this.consumeStderr(chunk));
+    this.process.stderr.on("end", () => this.flushStderr());
     this.process.on("error", () => this.failPending(`MCP server '${serverName}' could not be started.`));
     this.process.on("exit", () => this.failPending(`MCP server '${serverName}' exited before responding.`));
   }
@@ -214,6 +236,7 @@ class StdioJsonRpcClient {
       this.exited,
       new Promise<void>((resolve) => setTimeout(resolve, 250))
     ]);
+    this.flushStderr();
   }
 
   private send(message: Record<string, unknown>): void {
@@ -237,17 +260,72 @@ class StdioJsonRpcClient {
     }
   }
 
+  private consumeStderr(chunk: string): void {
+    this.stderrBuffer += chunk;
+    let newline = this.stderrBuffer.indexOf("\n");
+    while (newline >= 0) {
+      this.emitProcessEvent("stderr", this.stderrBuffer.slice(0, newline));
+      this.stderrBuffer = this.stderrBuffer.slice(newline + 1);
+      newline = this.stderrBuffer.indexOf("\n");
+    }
+  }
+
+  private flushStderr(): void {
+    if (!this.stderrBuffer) return;
+    this.emitProcessEvent("stderr", this.stderrBuffer);
+    this.stderrBuffer = "";
+  }
+
+  private emitProcessEvent(source: McpProcessEvent["source"], text: string): void {
+    const normalized = text.trim();
+    if (normalized) this.onProcessEvent?.({ source, text: normalized });
+  }
+
+  private consumeNotification(message: Record<string, unknown>, raw: string): void {
+    const method = typeof message.method === "string" ? message.method : undefined;
+    if (method === "notifications/progress" && isRecord(message.params)) {
+      const params = message.params;
+      const label = typeof params.message === "string" ? params.message : undefined;
+      const progress = typeof params.progress === "number" ? params.progress : undefined;
+      const total = typeof params.total === "number" ? params.total : undefined;
+      const value = progress === undefined ? undefined : total === undefined ? `${progress}` : `${progress}/${total}`;
+      this.emitProcessEvent("progress", [label, value].filter((part): part is string => Boolean(part)).join(" · ") || raw);
+      return;
+    }
+    this.emitProcessEvent("stdout", raw);
+  }
+
   private consumeLine(line: string): void {
     let message: unknown;
     try {
       message = JSON.parse(line);
     } catch {
-      this.failPending(`MCP server '${this.serverName}' sent invalid JSON-RPC.`);
+      // Keep the strict failure for lines that look like a damaged JSON
+      // message; plain-text lines are treated as server logs for compatibility.
+      if (line.startsWith("{") || line.startsWith("[")) {
+        this.failPending(`MCP server '${this.serverName}' sent invalid JSON-RPC.`);
+      }
+      // A few otherwise functional stdio MCP servers write progress logs to
+      // stdout.  JSON-RPC reserves stdout for protocol messages, but ignore a
+      // non-JSON line here so that a subsequent valid response can still be
+      // delivered.  Process exit and request timeouts remain authoritative
+      // failures when no response follows.
+      this.emitProcessEvent("stdout", line);
       return;
     }
-    if (!isRecord(message) || typeof message.id !== "number") return;
+    if (!isRecord(message)) {
+      this.emitProcessEvent("stdout", line);
+      return;
+    }
+    if (typeof message.id !== "number") {
+      this.consumeNotification(message, line);
+      return;
+    }
     const pending = this.pending.get(message.id);
-    if (!pending) return;
+    if (!pending) {
+      this.emitProcessEvent("stdout", line);
+      return;
+    }
     this.pending.delete(message.id);
     clearTimeout(pending.timer);
     if (message.error !== undefined) {
@@ -268,18 +346,29 @@ class StdioJsonRpcClient {
 
 /** Standard JSON-RPC stdio lifecycle for one MCP tool call. */
 export class StdioMcpTransport implements McpTransport {
+  private spawn(server: StdioMcpServerConfig, accessToken?: string): ChildProcessWithoutNullStreams {
+    const env = { ...process.env };
+    if (server.auth) {
+      if (!accessToken) throw new Error(`MCP server '${server.name}' requires an access token.`);
+      env[server.auth.env] = accessToken;
+    }
+    return spawn(server.command, server.args ?? [], {
+      stdio: ["pipe", "pipe", "pipe"],
+      shell: false,
+      windowsHide: true,
+      env
+    });
+  }
+
   async call(
     server: McpServerConfig,
     tool: string,
-    argumentsValue: Record<string, unknown>
+    argumentsValue: Record<string, unknown>,
+    options: McpTransportOptions = {}
   ): Promise<McpToolCallResult> {
     if (server.transport !== "stdio") throw new Error(`MCP server '${server.name}' is not a stdio server.`);
-    const process: ChildProcessWithoutNullStreams = spawn(server.command, server.args ?? [], {
-      stdio: ["pipe", "pipe", "pipe"],
-      shell: false,
-      windowsHide: true
-    });
-    const client = new StdioJsonRpcClient(process, server.name, timeoutFor(server));
+    const process = this.spawn(server, options.accessToken);
+    const client = new StdioJsonRpcClient(process, server.name, timeoutFor(server), options.onProcessEvent);
     try {
       await client.request("initialize", {
         protocolVersion: "2024-11-05",
@@ -297,14 +386,10 @@ export class StdioMcpTransport implements McpTransport {
     }
   }
 
-  async verify(server: McpServerConfig): Promise<void> {
+  async verify(server: McpServerConfig, options: McpTransportOptions = {}): Promise<void> {
     if (server.transport !== "stdio") throw new Error(`MCP server '${server.name}' is not a stdio server.`);
-    const process: ChildProcessWithoutNullStreams = spawn(server.command, server.args ?? [], {
-      stdio: ["pipe", "pipe", "pipe"],
-      shell: false,
-      windowsHide: true
-    });
-    const client = new StdioJsonRpcClient(process, server.name, timeoutFor(server));
+    const process = this.spawn(server, options.accessToken);
+    const client = new StdioJsonRpcClient(process, server.name, timeoutFor(server), options.onProcessEvent);
     try {
       await client.request("initialize", {
         protocolVersion: "2024-11-05",
@@ -317,12 +402,10 @@ export class StdioMcpTransport implements McpTransport {
     }
   }
 
-  async listTools(server: McpServerConfig): Promise<McpDiscoveredTool[]> {
+  async listTools(server: McpServerConfig, options: McpTransportOptions = {}): Promise<McpDiscoveredTool[]> {
     if (server.transport !== "stdio") throw new Error(`MCP server '${server.name}' is not a stdio server.`);
-    const process: ChildProcessWithoutNullStreams = spawn(server.command, server.args ?? [], {
-      stdio: ["pipe", "pipe", "pipe"], shell: false, windowsHide: true
-    });
-    const client = new StdioJsonRpcClient(process, server.name, timeoutFor(server));
+    const process = this.spawn(server, options.accessToken);
+    const client = new StdioJsonRpcClient(process, server.name, timeoutFor(server), options.onProcessEvent);
     try {
       await client.request("initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "dext", version: "0.1.0" } });
       client.notify("notifications/initialized", {});
@@ -558,19 +641,19 @@ class DefaultMcpTransport implements McpTransport {
   ): Promise<McpToolCallResult> {
     return server.transport === "http"
       ? this.http.call(server, tool, argumentsValue, options)
-      : this.stdio.call(server, tool, argumentsValue);
+      : this.stdio.call(server, tool, argumentsValue, options);
   }
 
   verify(server: McpServerConfig, options: McpTransportOptions = {}): Promise<void> {
     return server.transport === "http"
       ? this.http.verify(server, options)
-      : this.stdio.verify(server);
+      : this.stdio.verify(server, options);
   }
 
   listTools(server: McpServerConfig, options: McpTransportOptions = {}): Promise<McpDiscoveredTool[]> {
     return server.transport === "http"
       ? this.http.listTools(server, options)
-      : this.stdio.listTools(server);
+      : this.stdio.listTools(server, options);
   }
 }
 
@@ -607,8 +690,8 @@ export class McpToolRegistry {
       const keysDiagnostic = configurationKeysDiagnostic(
         value,
         transport === "stdio"
-          ? ["name", "transport", "command", "args", "timeoutMs"]
-          : ["name", "transport", "url", "auth", "timeoutMs"]
+          ? ["name", "transport", "command", "args", "auth", "scope", "timeoutMs"]
+          : ["name", "transport", "url", "auth", "scope", "timeoutMs"]
       );
       if (keysDiagnostic) {
         diagnostics.push(`MCP server '${name}' ${keysDiagnostic}`);
@@ -630,12 +713,19 @@ export class McpToolRegistry {
           diagnostics.push(`MCP server '${name}' args must be strings.`);
           continue;
         }
+        const stdioAuth = stdioAuthDiagnostic(value.auth);
+        if (stdioAuth) {
+          diagnostics.push(`MCP server '${name}' ${stdioAuth}`);
+          continue;
+        }
         const normalizedArgs = Array.isArray(args) ? args.filter((arg): arg is string => typeof arg === "string") : undefined;
         this.servers.set(name, {
           name,
           transport,
           command: value.command,
           ...(normalizedArgs ? { args: normalizedArgs } : {}),
+          ...(isRecord(value.auth) ? { auth: { type: "token", env: value.auth.env as string } } : {}),
+          ...(value.scope === "project" || value.scope === "global" ? { scope: value.scope } : {}),
           ...(timeoutMs !== undefined ? { timeoutMs } : {})
         });
         continue;
@@ -655,6 +745,7 @@ export class McpToolRegistry {
         transport,
         url: value.url as string,
         ...(value.auth !== undefined ? { auth: { type: "bearer" as const } } : {}),
+        ...(value.scope === "project" || value.scope === "global" ? { scope: value.scope } : {}),
         ...(timeoutMs !== undefined ? { timeoutMs } : {})
       });
     }
@@ -706,12 +797,19 @@ export class McpToolRegistry {
     return this.servers.get(name);
   }
 
-  async call(tool: string, input: Record<string, unknown>): Promise<McpRawResult> {
+  async call(
+    tool: string,
+    input: Record<string, unknown>,
+    options: Pick<McpTransportOptions, "onProcessEvent"> = {}
+  ): Promise<McpRawResult> {
     const definition = this.tools.get(tool);
     if (!definition) throw new Error(`MCP tool '${tool}' is not registered in dext.mcpTools.`);
     const configuredServer = this.servers.get(definition.server);
     if (!configuredServer) throw new Error(`MCP server '${definition.server}' is not configured.`);
-    const result = await this.transport.call(configuredServer, definition.tool, input, await this.transportOptions(configuredServer));
+    const result = await this.transport.call(configuredServer, definition.tool, input, {
+      ...await this.transportOptions(configuredServer),
+      ...options
+    });
     return {
       kind: "mcpRaw",
       server: definition.server,
@@ -743,7 +841,7 @@ export class McpToolRegistry {
   }
 
   private async transportOptions(server: McpServerConfig): Promise<McpTransportOptions> {
-    if (server.transport !== "http" || server.auth?.type !== "bearer") return {};
+    if (!server.auth) return {};
     const accessToken = await this.accessTokenProvider?.(server);
     if (!accessToken) {
       throw new Error(`MCP server '${server.name}' requires an access token. Run 'Dext: Set MCP Access Token'.`);

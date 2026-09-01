@@ -65,9 +65,18 @@ function scalarSchemaForType(field: FieldDefinition, type: FieldDefinition["type
     case "boolean":
       return z.boolean();
     case "object":
+      if (field.properties?.length) {
+        const shape: Record<string, ZodType> = {};
+        for (const property of field.properties) {
+          let schema = scalarSchema(property);
+          if (!property.required) schema = schema.optional();
+          shape[property.name] = schema;
+        }
+        return z.object(shape).passthrough();
+      }
       return z.record(z.string(), z.unknown());
     case "list":
-      return z.array(z.unknown());
+      return field.items ? z.array(scalarSchema(field.items)) : z.array(z.unknown());
     case "enum":
       if (!field.values?.length) {
         throw new Error(`Enum field '${field.name}' requires at least one value.`);

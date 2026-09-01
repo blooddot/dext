@@ -120,7 +120,7 @@ export const patchResultSchema = z.object({
   )
 });
 
-export const dextResultSchema = z.discriminatedUnion("kind", [
+const builtinDextResultSchema = z.discriminatedUnion("kind", [
   chatResultSchema,
   agentResultSchema,
   explainResultSchema,
@@ -136,3 +136,13 @@ export const dextResultSchema = z.discriminatedUnion("kind", [
   uiResultSchema,
   mcpRawResultSchema
 ]);
+
+/** Structured MCP tools use a method-specific `mcp.<server>.<tool>` kind. It
+ * cannot be represented by the literal discriminators above, so keep a
+ * permissive schema for that namespaced result while still rejecting arbitrary
+ * objects passed where a Dext Result is required. */
+const typedMcpResultSchema = z.object({
+  kind: z.string().startsWith("mcp.")
+}).passthrough();
+
+export const dextResultSchema = z.union([builtinDextResultSchema, typedMcpResultSchema]);

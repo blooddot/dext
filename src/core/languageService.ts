@@ -82,7 +82,7 @@ function openCall(source: string, cursor: number): OpenCall | undefined {
   }
   const open = stack.at(-1);
   if (open === undefined) return undefined;
-  const method = /[A-Za-z_][A-Za-z0-9_.]*$/.exec(source.slice(0, open))?.[0];
+  const method = /[A-Za-z_][A-Za-z0-9_.-]*$/.exec(source.slice(0, open))?.[0];
   return method ? { method, body: source.slice(open + 1, cursor) } : undefined;
 }
 
@@ -207,7 +207,7 @@ export class DextLanguageService {
 
   apiCompletions(source: string, cursor = source.length, apiId?: string): CompletionItem[] {
     const before = source.slice(0, cursor);
-    const word = /[A-Za-z_][A-Za-z0-9_.]*$/.exec(before)?.[0] ?? "";
+    const word = /[A-Za-z_][A-Za-z0-9_.-]*$/.exec(before)?.[0] ?? "";
     const fragment = word.split(".").at(-1) ?? "";
     const replaceStart = cursor - fragment.length;
     const replaceEnd = cursor;
@@ -219,13 +219,13 @@ export class DextLanguageService {
       replaceStart,
       replaceEnd
     });
-    if (/\bfrom\s+[A-Za-z_][A-Za-z0-9_.]*\s+import\s+[A-Za-z_]*$/.test(before)) {
+    if (/\bfrom\s+[A-Za-z_][A-Za-z0-9_.-]*\s+import\s+[A-Za-z_]*$/.test(before)) {
       return this.apiImportItems(before, item);
     }
-    if (/\bfrom\s+[A-Za-z_][A-Za-z0-9_.]*$/.test(before)) {
+    if (/\bfrom\s+[A-Za-z_][A-Za-z0-9_.-]*$/.test(before)) {
       return this.apiNamespaceItems(before, item);
     }
-    if (/\bimport\s+[A-Za-z_][A-Za-z0-9_.]*$/.test(before)) {
+    if (/\bimport\s+[A-Za-z_][A-Za-z0-9_.-]*$/.test(before)) {
       return this.apiNamespaceItems(before, item);
     }
     if (/:\s*[A-Za-z_]*$/.test(before)) {
@@ -248,7 +248,7 @@ export class DextLanguageService {
   }
 
   private apiNamespaceItems(source: string, item: (label: string, insertText: string, detail: string, kind: CompletionItem["kind"]) => CompletionItem): CompletionItem[] {
-    const match = /\b(?:from|import)\s+([A-Za-z_][A-Za-z0-9_.]*)$/.exec(source);
+    const match = /\b(?:from|import)\s+([A-Za-z_][A-Za-z0-9_.-]*)$/.exec(source);
     const prefix = match?.[1] ?? "";
     const base = prefix.endsWith(".") ? prefix.slice(0, -1) : prefix;
     const partial = prefix.endsWith(".") ? "" : base.split(".").at(-1) ?? "";
@@ -265,7 +265,7 @@ export class DextLanguageService {
   }
 
   private apiImportItems(source: string, item: (label: string, insertText: string, detail: string, kind: CompletionItem["kind"]) => CompletionItem): CompletionItem[] {
-    const match = /\bfrom\s+([A-Za-z_][A-Za-z0-9_.]*)\s+import\s+([A-Za-z_]*)$/.exec(source);
+    const match = /\bfrom\s+([A-Za-z_][A-Za-z0-9_.-]*)\s+import\s+([A-Za-z_]*)$/.exec(source);
     const namespace = match?.[1] ?? "";
     const fragment = match?.[2] ?? "";
     const names = new Map<string, RegisteredCallable>();
@@ -291,7 +291,7 @@ export class DextLanguageService {
 
   documentCompletions(source: string, cursor = source.length, customApisAreGlobal = true): CompletionItem[] {
     const before = source.slice(0, cursor);
-    const word = /[A-Za-z_][A-Za-z0-9_.]*$/.exec(before)?.[0] ?? "";
+    const word = /[A-Za-z_][A-Za-z0-9_.-]*$/.exec(before)?.[0] ?? "";
     const fragmentStart = word.lastIndexOf(".") + 1;
     const replaceStart = cursor - (word.length - fragmentStart);
     const replaceEnd = cursor + (/^[A-Za-z0-9_]*/.exec(source.slice(cursor))?.[0].length ?? 0);
@@ -305,7 +305,7 @@ export class DextLanguageService {
     const statusComparison = /([A-Za-z_][A-Za-z0-9_]*)\.status\s*(?:==|!=)\s*(?:["']([^"']*)$|([A-Za-z_][A-Za-z0-9_]*)$|)$/.exec(before);
     if (statusComparison) {
       const assignment = new RegExp(
-        `^\\s*${statusComparison[1]}\\s*=\\s*([A-Za-z_][A-Za-z0-9_.]*)\\(`,
+        `^\\s*${statusComparison[1]}\\s*=\\s*([A-Za-z_][A-Za-z0-9_.-]*)\\(`,
         "m"
       ).exec(source);
       const output = assignment ? this.resolveMethod(source, assignment[1] ?? "", customApisAreGlobal)?.output.kind : undefined;
@@ -332,7 +332,7 @@ export class DextLanguageService {
     const member = /([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_]*)$/.exec(before);
     if (member) {
       const assignment = new RegExp(
-        `^\\s*${member[1]}\\s*=\\s*([A-Za-z_][A-Za-z0-9_.]*)\\(`,
+        `^\\s*${member[1]}\\s*=\\s*([A-Za-z_][A-Za-z0-9_.-]*)\\(`,
         "m"
       ).exec(source);
       const method = assignment ? this.resolveMethod(source, assignment[1] ?? "", customApisAreGlobal) : undefined;
@@ -348,7 +348,7 @@ export class DextLanguageService {
       const method = this.resolveMethod(source, call.method, customApisAreGlobal);
       if (method) {
         const segment = activeArgument(call.body);
-        const assignment = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=([\s\S]*)$/.exec(segment);
+        const assignment = /^\s*([A-Za-z_][A-Za-z0-9_-]*)\s*=([\s\S]*)$/.exec(segment);
         if (assignment) {
           const field = method.input.find((candidate) => candidate.name === assignment[1]);
           const value = assignment[2]?.trimStart() ?? "";
@@ -368,8 +368,8 @@ export class DextLanguageService {
               replaceEnd: cursor
             }));
             if (!field.accepts?.includes("result")) return referenceItems;
-            const resultVariables = [...source.matchAll(/^\s*([A-Za-z_]\w*)\s*=\s*([A-Za-z_][A-Za-z0-9_.]*)\(/gm)]
-              .map((match) => ({ name: match[1]!, output: this.resolveMethod(source, match[2]!, customApisAreGlobal)?.output.kind }))
+            const resultVariables = [...source.matchAll(/^\s*([A-Za-z_]\w*)\s*=\s*([A-Za-z_][A-Za-z0-9_.-]*)\(/gm)]
+            .map((match) => ({ name: match[1]!, output: this.resolveMethod(source, match[2]!, customApisAreGlobal)?.output.kind }))
               .filter((entry) => entry.output !== undefined)
               .map((entry) => ({ name: entry.name, output: entry.output! }));
             return [
@@ -386,7 +386,7 @@ export class DextLanguageService {
           }
           if (field?.type === "result" || field?.accepts?.includes("result")) {
             const fragment = /(?:^|(?:\[|,)\s*)([A-Za-z_]\w*)$/.exec(value)?.[1] ?? "";
-            const variables = [...source.matchAll(/^\s*([A-Za-z_]\w*)\s*=\s*([A-Za-z_][A-Za-z0-9_.]*)\(/gm)]
+            const variables = [...source.matchAll(/^\s*([A-Za-z_]\w*)\s*=\s*([A-Za-z_][A-Za-z0-9_.-]*)\(/gm)]
               .map((match) => ({ name: match[1]!, output: this.resolveMethod(source, match[2]!, customApisAreGlobal)?.output.kind }))
               .filter((entry) => entry.output !== undefined)
               .map((entry) => ({ name: entry.name, output: entry.output! }));
@@ -434,7 +434,7 @@ export class DextLanguageService {
           return [];
         }
         const used = new Set(
-          [...call.body.matchAll(/([A-Za-z_][A-Za-z0-9_]*)\s*=/g)].map((match) => match[1])
+          [...call.body.matchAll(/([A-Za-z_][A-Za-z0-9_-]*)\s*=/g)].map((match) => match[1])
         );
         const fragment = /[A-Za-z_][A-Za-z0-9_]*$/.exec(segment)?.[0] ?? "";
         const parameters = method.input.filter((field) => !field.internal);
@@ -501,7 +501,7 @@ export class DextLanguageService {
   }
 
   documentHover(source: string, cursor: number, customApisAreGlobal = true): LanguageHover | undefined {
-    const pattern = /[A-Za-z_][A-Za-z0-9_.]*/g;
+    const pattern = /[A-Za-z_][A-Za-z0-9_.-]*/g;
     for (const match of source.matchAll(pattern)) {
       const from = match.index ?? 0;
       const to = from + match[0].length;
@@ -517,7 +517,7 @@ export class DextLanguageService {
       }
       const member = /^([A-Za-z_]\w*)\.([A-Za-z_]\w*)$/.exec(match[0]);
       if (member) {
-        const assignment = new RegExp(`^\\s*${member[1]}\\s*=\\s*([A-Za-z_][A-Za-z0-9_.]*)\\(`, "m").exec(source);
+        const assignment = new RegExp(`^\\s*${member[1]}\\s*=\\s*([A-Za-z_][A-Za-z0-9_.-]*)\\(`, "m").exec(source);
         const outputMethod = assignment ? this.resolveMethod(source, assignment[1] ?? "", customApisAreGlobal) : undefined;
         const field = outputFields(outputMethod).find((candidate) => candidate.name === member[2]);
         const type = outputMethod?.output.fields
@@ -532,7 +532,7 @@ export class DextLanguageService {
           };
         }
       }
-      const variableAssignment = new RegExp(`^\\s*${match[0]}\\s*=\\s*([A-Za-z_][A-Za-z0-9_.]*)\\(`, "m").exec(source);
+      const variableAssignment = new RegExp(`^\\s*${match[0]}\\s*=\\s*([A-Za-z_][A-Za-z0-9_.-]*)\\(`, "m").exec(source);
       if (variableAssignment) {
         const output = this.resolveMethod(source, variableAssignment[1] ?? "", customApisAreGlobal)?.output.kind;
         if (output) {
@@ -553,13 +553,13 @@ export class DextLanguageService {
   }
 
   documentSignature(source: string, cursor = source.length, customApisAreGlobal = true): SignatureHelp | undefined {
-    const call = /([A-Za-z_][A-Za-z0-9_.]*)\(([^()]*)$/.exec(source.slice(0, cursor));
+    const call = /([A-Za-z_][A-Za-z0-9_.-]*)\(([^()]*)$/.exec(source.slice(0, cursor));
     const method = call ? this.resolveMethod(source, call[1] ?? "", customApisAreGlobal) : undefined;
     if (!call || !method) return undefined;
     const parameters = method.input.filter((field) => !field.internal);
     const body = call[2] ?? "";
     const segment = activeArgument(body);
-    const named = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(segment)?.[1];
+    const named = /^\s*([A-Za-z_][A-Za-z0-9_-]*)\s*=/.exec(segment)?.[1];
     const positionalIndex = Math.min(
       topLevelCommaCount(body),
       Math.max(0, parameters.length - 1)

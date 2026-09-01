@@ -51,10 +51,4 @@ describe("method signatures", () => {
     expect(formatMethodSignature(api)).toBe("docs.read() -> DocumentResult");
   });
 
-  it("renders MCP dictionary inputs with Python-like type notation", () => {
-    const mcp = BUILTIN_METHODS.find((method) => method.id === "mcp");
-    expect(formatMethodSignature(mcp!)).toBe(
-      "mcp(tool: string, input: dict[str, object] = {}) -> McpRawResult"
-    );
-  });
 });

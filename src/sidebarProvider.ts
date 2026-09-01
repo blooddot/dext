@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as vscode from "vscode";
 import type { DextApplication } from "./application.js";
-import type { AgentStreamEvent, ApplyResult, InputExecutionResponse, PatchResult, UiChoiceResult, UiConfirmResult, UiInputResult, UiInteraction, UiResult } from "./core/types.js";
+import type { AgentStreamEvent, ApplyResult, InputExecutionResponse, McpProcessEvent, PatchResult, UiChoiceResult, UiConfirmResult, UiInputResult, UiInteraction, UiResult } from "./core/types.js";
 import { applyPatchHandler } from "./vscodePatchHost.js";
 import {
   AttachmentStore,
@@ -13,6 +13,7 @@ import {
 import {
   attachmentFileReference,
   activeCodeSelection,
+  clipboardFileReference,
   directoryAttachment,
   fileAttachment,
   isCodeDocument,
@@ -387,8 +388,11 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     const editor = vscode.window.activeTextEditor;
     const attachment = await selectionAttachment();
     const copiedText = await writeExactClipboardText(vscode.env.clipboard, attachment.text);
-    if (editor && isCodeDocument(editor.document)) {
-      this.attachments.stageClipboard(attachment.text, attachmentFileReference(attachment));
+    const reference = editor && isCodeDocument(editor.document)
+      ? clipboardFileReference(attachment.reference)
+      : undefined;
+    if (reference) {
+      this.attachments.stageClipboard(attachment.text, reference);
     } else {
       this.attachments.clearClipboard();
     }
@@ -599,8 +603,11 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
             // when the clipboard text still matches the active selection.
             if (request.purpose === "code" && !codeReference) {
               const editor = activeCodeSelection();
-              if (editor && editor.document.getText(editor.selection) === text) {
-                codeReference = attachmentFileReference(await selectionAttachment());
+              if (editor
+                && vscode.workspace.getWorkspaceFolder(editor.document.uri)
+                && editor.document.getText(editor.selection) === text) {
+                const attachment = await selectionAttachment();
+                codeReference = clipboardFileReference(attachment.reference);
               }
             }
           } catch (error) {
@@ -717,8 +724,8 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         }
         case "prepareMcp": {
           const server: McpServerConfig = request.server.transport === "stdio"
-            ? { name: request.server.name, transport: "stdio", command: request.server.command, ...(request.server.args ? { args: request.server.args } : {}), ...(request.server.timeoutMs !== undefined ? { timeoutMs: request.server.timeoutMs } : {}) }
-            : { name: request.server.name, transport: "http", url: request.server.url, ...(request.server.auth ? { auth: request.server.auth } : {}), ...(request.server.timeoutMs !== undefined ? { timeoutMs: request.server.timeoutMs } : {}) };
+            ? { name: request.server.name, transport: "stdio", command: request.server.command, scope: request.scope ?? "project", ...(request.server.args ? { args: request.server.args } : {}), ...(request.server.auth ? { auth: request.server.auth } : {}), ...(request.server.timeoutMs !== undefined ? { timeoutMs: request.server.timeoutMs } : {}) }
+            : { name: request.server.name, transport: "http", url: request.server.url, scope: request.scope ?? "project", ...(request.server.auth ? { auth: request.server.auth } : {}), ...(request.server.timeoutMs !== undefined ? { timeoutMs: request.server.timeoutMs } : {}) };
           const tools = await this.application.discoverMcpTools(server);
           await this.post({ type: "mcpToolsDiscovered", requestId: request.requestId, tools });
           break;
@@ -732,6 +739,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
               transport: "stdio",
               command: request.server.command,
               ...(request.server.args ? { args: request.server.args } : {}),
+              ...(request.server.auth ? { auth: request.server.auth } : {}),
               ...(request.server.timeoutMs !== undefined ? { timeoutMs: request.server.timeoutMs } : {})
             }
             : {
@@ -864,6 +872,17 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         onAgentEvent: (event: AgentStreamEvent) => {
           events.push({ ...event });
           this.postAgentEvent(sessionId, event);
+        },
+        onMcpEvent: (event: McpProcessEvent) => {
+          const processEvent: AgentStreamEvent = {
+            phase: "tool",
+            toolKind: "step",
+            solo: true,
+            title: `MCP ${event.source}`,
+            text: event.text
+          };
+          events.push(processEvent);
+          this.postAgentEvent(sessionId, processEvent);
         }
       };
       const response = mode === "code"

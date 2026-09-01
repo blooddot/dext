@@ -187,20 +187,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       "Use the Command Palette to run 'Workspaces: Manage Workspace Trust'."
     );
   };
-  const pickBearerHttpServer = async (): Promise<string | undefined> => {
+  const pickMcpCredentialServer = async (verifyOnly = false): Promise<string | undefined> => {
     if (!application.isTrustedLocalWorkspace()) {
       await vscode.window.showErrorMessage("MCP credentials require a trusted local workspace.");
       return undefined;
     }
-    const servers = application.bearerHttpServers();
+    const transports = verifyOnly
+      ? { transport: "http" as const }
+      : await vscode.window.showQuickPick([
+        { label: "HTTP · Bearer", description: "Send Authorization: Bearer ..." , transport: "http" as const },
+        { label: "stdio · Environment token", description: "Inject the token into the configured child-process environment variable", transport: "stdio" as const }
+      ], { placeHolder: "Choose MCP credential type" });
+    if (!transports) return undefined;
+    const servers = application.mcpCredentialServers(transports.transport);
     if (!servers.length) {
-      await vscode.window.showErrorMessage("No bearer-authenticated HTTP MCP servers are configured in .dext/mcp.");
+      await vscode.window.showErrorMessage(`No token-authenticated ${transports.transport} MCP servers are configured in .dext/mcp.`);
       return undefined;
     }
-    if (servers.length === 1) return servers[0]?.name;
     const picked = await vscode.window.showQuickPick(
-      servers.map((server) => ({ label: server.name, description: server.url })),
-      { placeHolder: "Choose an HTTP MCP server" }
+      servers.map((server) => ({
+        label: server.name,
+        description: server.transport === "http" ? server.url : `${server.command} ${(server.args ?? []).join(" ")}`
+      })),
+      { placeHolder: `Choose a ${transports.transport} MCP server` }
     );
     return picked?.label;
   };
@@ -349,7 +358,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("dext.workspaceUntrustedStatus", openWorkspaceTrust),
     vscode.commands.registerCommand("dext.setMcpAccessToken", () =>
       reportCommandError(async () => {
-        const serverName = await pickBearerHttpServer();
+        const serverName = await pickMcpCredentialServer();
         if (!serverName) return;
         const token = await vscode.window.showInputBox({
           prompt: `Access token for MCP server '${serverName}'`,
@@ -358,12 +367,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         });
         if (token === undefined) return;
         await application.setMcpAccessToken(serverName, token);
-        await vscode.window.showInformationMessage(`Stored the access token for MCP server '${serverName}'.`);
+        try {
+          const count = await application.discoverAndPersistMcpTools(serverName);
+          await vscode.window.showInformationMessage(`Stored the token for '${serverName}' and discovered ${count} MCP tool${count === 1 ? "" : "s"}.`);
+        } catch (error) {
+          await vscode.window.showWarningMessage(`Stored the token for '${serverName}', but tool discovery failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
       })
     ),
     vscode.commands.registerCommand("dext.clearMcpAccessToken", () =>
       reportCommandError(async () => {
-        const serverName = await pickBearerHttpServer();
+        const serverName = await pickMcpCredentialServer();
         if (!serverName) return;
         const confirmed = await vscode.window.showWarningMessage(
           `Clear the stored access token for MCP server '${serverName}'?`,
@@ -400,7 +414,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ),
     vscode.commands.registerCommand("dext.verifyMcpServer", () =>
       reportCommandError(async () => {
-        const serverName = await pickBearerHttpServer();
+        const serverName = await pickMcpCredentialServer(true);
         if (!serverName) return;
         await application.verifyMcpServer(serverName);
         await vscode.window.showInformationMessage(`MCP server '${serverName}' is ready.`);

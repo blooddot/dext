@@ -166,7 +166,7 @@
       },
       {
         "command": "dext.viewMcp",
-          "title": "Dext: View Global Resources",
+        "title": "Dext: View Global Resources",
         "icon": "$(server)"
       },
       {
@@ -448,7 +448,7 @@
         },
         {
           "command": "dext.setMcpAccessToken",
-          "when": "false"
+          "when": "true"
         },
         {
           "command": "dext.clearMcpAccessToken",

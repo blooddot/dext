@@ -8,6 +8,7 @@ import { presentAgentMessage } from "./agentMessagePresentation.js";
 import { presentDiff } from "./diffPresentation.js";
 import type { AgentMessagePresentation } from "./agentMessagePresentation.js";
 import type { PatchChange } from "./core/types.js";
+import { dextHighlightClass, dextHighlightRanges } from "./dextHighlight.js";
 import {
   compactFileReferenceLabel,
   inputReferenceDisplayParts,
@@ -63,12 +64,18 @@ function renderFileChange(change: Pick<PatchChange, "uri" | "before" | "after">)
 
 export function highlightDext(source: string): string {
   let html = "";
+  let offset = 0;
+  const ranges = dextHighlightRanges(source);
   highlightCode(
     source,
     parser.parse(source),
     classHighlighter,
-    (text, classes) => { html += classes ? `<span class="${classes}">${escapeHtml(text)}</span>` : escapeHtml(text); },
-    () => { html += "\n"; }
+    (text, classes) => {
+      const highlighted = dextHighlightClass(classes, offset, text, ranges);
+      html += highlighted ? `<span class="${highlighted}">${escapeHtml(text)}</span>` : escapeHtml(text);
+      offset += text.length;
+    },
+    () => { html += "\n"; offset += 1; }
   );
   return html;
 }
@@ -469,5 +476,5 @@ function color(value: string | undefined, fallback: string): string {
 }
 
 export function historyTokenStyles(theme?: EditorTokenTheme): string {
-  return `.tok-keyword{color:${color(theme?.keyword, "var(--vscode-symbolIcon-keywordForeground, #c586c0)")}}.tok-string,.tok-string2{color:${color(theme?.string, "var(--vscode-symbolIcon-stringForeground, #ce9178)")}}.tok-number{color:${color(theme?.number, "var(--vscode-symbolIcon-numberForeground, #b5cea8)")}}.tok-bool,.tok-atom{color:${color(theme?.boolean, "var(--vscode-symbolIcon-booleanForeground, #569cd6)")}}.tok-comment{color:${color(theme?.comment, "var(--vscode-descriptionForeground)")}}.tok-variableName,.tok-definition{color:${color(theme?.variable, "var(--vscode-editor-foreground)")}}.tok-propertyName{color:${color(theme?.property, "var(--vscode-symbolIcon-propertyForeground, #9cdcfe)")}}.tok-typeName,.tok-className{color:${color(theme?.type, "var(--vscode-symbolIcon-classForeground, #4ec9b0)")}}.tok-operator{color:${color(theme?.operator, "var(--vscode-editor-foreground)")}}.tok-punctuation{color:${color(theme?.punctuation, "var(--vscode-editor-foreground)")}}`;
+  return `.tok-keyword{color:${color(theme?.keyword, "var(--vscode-symbolIcon-keywordForeground, #c586c0)")}}.tok-string,.tok-string2{color:${color(theme?.string, "var(--vscode-symbolIcon-stringForeground, #ce9178)")}}.tok-number{color:${color(theme?.number, "var(--vscode-symbolIcon-numberForeground, #b5cea8)")}}.tok-bool,.tok-atom{color:${color(theme?.boolean, "var(--vscode-symbolIcon-booleanForeground, #569cd6)")}}.tok-comment{color:${color(theme?.comment, "var(--vscode-descriptionForeground)")}}.tok-variableName,.tok-definition{color:${color(theme?.variable, "var(--vscode-editor-foreground)")}}.tok-propertyName{color:${color(theme?.property, "var(--vscode-symbolIcon-propertyForeground, #9cdcfe)")}}.tok-function{color:${color(theme?.function, "var(--vscode-symbolIcon-methodForeground, #dcdcaa)")}}.tok-typeName,.tok-className{color:${color(theme?.type, "var(--vscode-symbolIcon-classForeground, #4ec9b0)")}}.tok-operator{color:${color(theme?.operator, "var(--vscode-editor-foreground)")}}.tok-punctuation{color:${color(theme?.punctuation, "var(--vscode-editor-foreground)")}}`;
 }

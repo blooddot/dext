@@ -349,7 +349,7 @@ describe("sidebar panel layout", () => {
     expect(main).toMatch(/function turnActionButton[\s\S]*?event\.preventDefault\(\);\s*event\.stopPropagation\(\);/);
     expect(main).toMatch(/turnActionButton\("edit", "Edit and resend", \(\) => \{[\s\S]*?editor\.setValue\(source\)/);
     expect(main).toMatch(/turnActionButton\("debug-restart", "Retry this turn", \(\) => \{[\s\S]*?type: "retryTurn", turnId/);
-    expect(main).toContain("summary.append(chevron, time, title, actions);");
+    expect(main).toContain("summary.append(chevron, title, time, actions);");
     // Actions have to go dead while a turn is running, including turns created
     // after the run started.
     expect(main).toContain("button.disabled = executing;");

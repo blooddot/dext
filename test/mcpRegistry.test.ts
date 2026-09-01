@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { HttpMcpTransport, McpToolRegistry, type McpFetch, type McpTransport } from "../src/core/mcpRegistry.js";
+import { HttpMcpTransport, McpToolRegistry, StdioMcpTransport, type McpFetch, type McpTransport } from "../src/core/mcpRegistry.js";
 
 function jsonResponse(value: unknown, sessionId?: string): Response {
   return new Response(JSON.stringify(value), {
@@ -104,6 +104,30 @@ describe("McpToolRegistry", () => {
       "MCP server 'unsafe' must not configure 'headers'; store access tokens with the Dext MCP command instead."
     ]);
     expect(registry.listServers().map((server) => server.name)).toEqual(["local", "remote"]);
+  });
+
+  it("accepts stdio token authentication with an environment variable", () => {
+    const registry = new McpToolRegistry({ call: async () => ({}) });
+    expect(registry.setServers([{
+      name: "user-mcp",
+      transport: "stdio",
+      command: "npx",
+      auth: { type: "token", env: "TB_MCP_USER_TOKEN" }
+    }])).toEqual([]);
+    expect(registry.listServers()[0]).toMatchObject({
+      name: "user-mcp",
+      auth: { type: "token", env: "TB_MCP_USER_TOKEN" }
+    });
+  });
+
+  it("rejects invalid stdio token environment declarations", () => {
+    const registry = new McpToolRegistry({ call: async () => ({}) });
+    expect(registry.setServers([{
+      name: "user-mcp",
+      transport: "stdio",
+      command: "npx",
+      auth: { type: "token", env: "not-valid-name" }
+    }])).toEqual(["MCP server 'user-mcp' auth must be { type: 'token', env: '<environment variable name>' } for stdio."]);
   });
 
   it("uses Streamable HTTP initialize, initialized notification, tools/call, and session termination", async () => {
@@ -212,5 +236,45 @@ describe("McpToolRegistry", () => {
       { name: "list_projects", description: "List projects from team" },
       { name: "create_task" }
     ]);
+  });
+
+  it("continues after a stdio MCP server writes a progress log to stdout", async () => {
+    const script = [
+      "let input = '';",
+      "process.stdin.setEncoding('utf8');",
+      "process.stdin.on('data', (chunk) => {",
+      "  input += chunk;",
+      "  let newline = input.indexOf('\\n');",
+      "  while (newline >= 0) {",
+      "    const message = JSON.parse(input.slice(0, newline));",
+      "    input = input.slice(newline + 1);",
+      "    if (message.method === 'initialize') {",
+      "      process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: message.id, result: {} }) + '\\n');",
+      "    } else if (message.method === 'tools/call') {",
+      "      process.stdout.write('Executing tool \\\"readTask\\\"\\n');",
+      "      process.stdout.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/progress', params: { progressToken: 'task', progress: 1, total: 1, message: 'Reading task' } }) + '\\n');",
+      "      process.stderr.write('Task request completed\\n');",
+      "      process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: message.id, result: { content: [{ type: 'text', text: 'task content' }] } }) + '\\n');",
+      "    }",
+      "    newline = input.indexOf('\\n');",
+      "  }",
+      "});"
+    ].join("\n");
+    const transport = new StdioMcpTransport();
+    const events: Array<{ source: string; text: string }> = [];
+
+    await expect(transport.call({
+      name: "noisy",
+      transport: "stdio",
+      command: process.execPath,
+      args: ["-e", script]
+    }, "readTask", {}, {
+      onProcessEvent: (event) => events.push(event)
+    })).resolves.toEqual({ content: "task content" });
+    expect(events).toEqual(expect.arrayContaining([
+      { source: "stdout", text: 'Executing tool "readTask"' },
+      { source: "progress", text: "Reading task · 1/1" },
+      { source: "stderr", text: "Task request completed" }
+    ]));
   });
 });

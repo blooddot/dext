@@ -88,6 +88,7 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
       z.object({
         name: z.string().min(1).max(80), transport: z.literal("stdio"),
         command: z.string().min(1).max(512), args: z.array(z.string().max(512)).max(32).optional(),
+        auth: z.object({ type: z.literal("token"), env: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/) }).optional(),
         timeoutMs: z.number().int().min(1000).max(120000).optional()
       }).strict(),
       z.object({
@@ -100,7 +101,7 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("prepareMcp"), requestId: z.string().min(1), scope: z.enum(["project", "global"]).optional(),
     server: z.discriminatedUnion("transport", [
-      z.object({ name: z.string().min(1).max(80), transport: z.literal("stdio"), command: z.string().min(1).max(512), args: z.array(z.string().max(512)).max(32).optional(), timeoutMs: z.number().int().min(1000).max(120000).optional() }).strict(),
+      z.object({ name: z.string().min(1).max(80), transport: z.literal("stdio"), command: z.string().min(1).max(512), args: z.array(z.string().max(512)).max(32).optional(), auth: z.object({ type: z.literal("token"), env: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/) }).optional(), timeoutMs: z.number().int().min(1000).max(120000).optional() }).strict(),
       z.object({ name: z.string().min(1).max(80), transport: z.literal("http"), url: z.string().min(1).max(2048), auth: z.object({ type: z.literal("bearer") }).optional(), timeoutMs: z.number().int().min(1000).max(120000).optional() }).strict()
     ])
   }),

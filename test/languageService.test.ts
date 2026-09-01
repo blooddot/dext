@@ -81,10 +81,6 @@ describe("DextLanguageService workflow features", () => {
       activeParameter: 1,
       label: expect.stringContaining("timeout_ms?: number = 120000")
     });
-    expect(service.documentSignature("mcp(tool=\"docs.read\", input=")).toMatchObject({
-      activeParameter: 1,
-      label: "mcp(tool: string, input: dict[str, object] = {}) -> McpRawResult"
-    });
   });
 
   it("keeps parameter completion and signature highlighting in declaration order", () => {

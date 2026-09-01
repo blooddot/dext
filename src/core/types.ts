@@ -201,6 +201,9 @@ export interface FieldDefinition {
   values?: string[];
   default?: string | number | boolean | { [key: string]: never };
   multiple?: boolean;
+  /** Nested contract information for structured MCP results. */
+  properties?: FieldDefinition[];
+  items?: FieldDefinition;
 }
 
 export interface CallableDefinition {
@@ -423,7 +426,17 @@ export interface ExecutionMetadata {
   agentSessionId?: string;
   signal?: AbortSignal;
   onAgentEvent?: (event: AgentStreamEvent) => void;
+  /** Process output emitted while an MCP tool is running. */
+  onMcpEvent?: (event: McpProcessEvent) => void;
   ui?: UiInteraction;
+}
+
+export type McpProcessEventSource = "stdout" | "stderr" | "progress";
+
+/** Non-result output emitted during an MCP tool invocation. */
+export interface McpProcessEvent {
+  source: McpProcessEventSource;
+  text: string;
 }
 
 /** Host-owned interaction surface. Runtime code only asks semantically; it

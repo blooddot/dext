@@ -385,6 +385,14 @@ describe("Dext history rendering", () => {
     expect(html).toContain('class="tok-bool"');
   });
 
+  it("highlights Dext call names and keyword arguments distinctly", () => {
+    const html = highlightDext('create(type="mcp", input="https://example.test", scope="project")');
+    expect(html).toContain('<span class="tok-function">create</span>');
+    expect(html).toContain('<span class="tok-propertyName">type</span>');
+    expect(html).toContain('<span class="tok-propertyName">input</span>');
+    expect(html).toContain('<span class="tok-propertyName">scope</span>');
+  });
+
   it("renders image attachments as ordinary file reference Chips", () => {
     const path = ".dext/attachments/0123456789abcdef01234567.png";
     const record: DextHistoryRecord = {

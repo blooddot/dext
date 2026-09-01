@@ -29,7 +29,10 @@ function schemaFields(schema: Record<string, unknown>, label: string, diagnostic
   const requiredNames = new Set(required ?? []);
   const fields: FieldDefinition[] = [];
   for (const [name, raw] of Object.entries(properties ?? {})) {
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+    // MCP schemas commonly expose HTTP-style names such as `x-operator-id`.
+    // Dext's parser preserves these names in keyword calls, so keep them
+    // intact instead of silently dropping useful inputSchema fields.
+    if (!/^[A-Za-z_][A-Za-z0-9_-]*$/.test(name)) {
       diagnostics.push(`${label} property '${name}' is not a valid Dext parameter name.`);
       continue;
     }
@@ -43,15 +46,32 @@ function schemaFields(schema: Record<string, unknown>, label: string, diagnostic
       : schemaType === "string" ? "string"
         : schemaType === "number" || schemaType === "integer" ? "number"
           : schemaType === "boolean" ? "boolean"
-            : schemaType === "array" ? "list"
+              : schemaType === "array" ? "list"
               : "object";
-    fields.push({
+    const field: FieldDefinition = {
       name,
       type,
       required: requiredNames.has(name),
       ...(typeof property.description === "string" ? { description: property.description } : {}),
       ...(enumValues?.length ? { values: enumValues } : {})
-    });
+    };
+    if (type === "object" && isRecord(property.properties)) {
+      const nested = schemaFields(property, `${label}.${name}`, diagnostics);
+      if (nested) field.properties = nested;
+    } else if (type === "list" && isRecord(property.items)) {
+      const item = property.items;
+      const itemType = item.type === "string" ? "string"
+        : item.type === "number" || item.type === "integer" ? "number"
+          : item.type === "boolean" ? "boolean"
+            : item.type === "array" ? "list" : "object";
+      const itemField: FieldDefinition = { name: `${name}Item`, type: itemType };
+      if (itemType === "object" && isRecord(item.properties)) {
+        const nested = schemaFields(item, `${label}.${name}[]`, diagnostics);
+        if (nested) itemField.properties = nested;
+      }
+      field.items = itemField;
+    }
+    fields.push(field);
   }
   return fields;
 }

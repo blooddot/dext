@@ -1,5 +1,6 @@
 import { parser } from "@lezer/python";
 import type { SyntaxNode } from "@lezer/common";
+import { parserCompatibleSource } from "./core/workflow.js";
 
 export const DEXT_SEMANTIC_TOKEN_TYPES = [
   "namespace",
@@ -39,7 +40,7 @@ function isFunctionCallee(node: SyntaxNode): boolean {
 }
 
 export function dextSemanticTokens(source: string): DextSemanticToken[] {
-  const tree = parser.parse(source);
+  const tree = parser.parse(parserCompatibleSource(source));
   const parameters = new Set<string>();
   const result: DextSemanticToken[] = [];
 

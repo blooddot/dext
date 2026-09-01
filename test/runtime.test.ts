@@ -6,6 +6,7 @@ import { MethodRegistry } from "../src/core/registry.js";
 import { DextRuntime } from "../src/core/runtime.js";
 import { compileWorkflow } from "../src/core/workflow.js";
 import { WorkflowRuntime } from "../src/core/workflowRuntime.js";
+import { parseMcpManifest } from "../src/core/mcpManifest.js";
 import { fileReferenceInsertion } from "../src/webview/inputInsertion.js";
 import { ExecutionCancelledError } from "../src/core/executionErrors.js";
 import type { AgentResult, PatchResult, TerminalResult } from "../src/core/types.js";
@@ -37,6 +38,34 @@ function setup() {
 }
 
 describe("Dext workflow runtime", () => {
+  it("accepts JSON object content for typed MCP results when structuredContent is omitted", async () => {
+    const registry = new MethodRegistry();
+    registry.registerMany(BUILTIN_METHODS, "builtin");
+    const loaded = parseMcpManifest(JSON.stringify({
+      name: "team",
+      transport: "stdio",
+      command: "team-mcp",
+      tools: [{
+        name: "query",
+        inputSchema: { type: "object", properties: {} },
+        outputSchema: { type: "object", properties: { code: { type: "integer" } } }
+      }]
+    }), "team.jsonc");
+    registry.registerMany(loaded.methods, "project");
+    const runtime = new DextRuntime(registry, new ContextResolver(host));
+    runtime.setWorkspaceTrusted(true);
+    runtime.setMcpCaller(async () => ({
+      kind: "mcpRaw",
+      server: "team",
+      tool: "query",
+      content: JSON.stringify({ code: 200 })
+    }));
+    const compiled = compileWorkflow("mcp.team.query()", registry);
+    expect(compiled.diagnostics).toEqual([]);
+    const execution = await new WorkflowRuntime(runtime).execute(compiled.program!);
+    expect(execution.executions[0]?.result).toMatchObject({ kind: "mcp.team.query", code: 200 });
+  });
+
   it("executes ask, agent and print in sequence", async () => {
     const { registry, workflow } = setup();
     const compiled = compileWorkflow(`answer = ask(input=f"Explain {ref.selection}")
@@ -317,9 +346,6 @@ print(text=answer.text)`, registry);
     expect(agent.outputSchema.safeParse({ kind: "agent", text: "done" }).success).toBe(true);
     expect(registry.get("chat")).toBeUndefined();
     expect(registry.get("code.edit")).toBeUndefined();
-    const mcp = new AxAdapter().compile(registry.get("mcp")!);
-    expect(mcp.inputSchema.safeParse({ tool: "docs.read", input: { uri: "README.md" } }).success).toBe(true);
-    expect(mcp.inputSchema.safeParse({ tool: "docs.read", input: "{}" }).success).toBe(false);
   });
 
   it("keeps apply and terminal local when an Agent is selected", async () => {
@@ -875,39 +901,4 @@ answer = ask(input=printed.text)`, registry);
     })).resolves.toMatchObject({ result: { kind: "apply", status: "unchanged" } });
   });
 
-  it("passes typed nested MCP input and resolved scalar references to the configured caller", async () => {
-    const { registry, runtime, workflow } = setup();
-    runtime.setWorkspaceTrusted(true);
-    const calls: Array<{ tool: string; input: Record<string, unknown> }> = [];
-    runtime.setMcpCaller(async (tool, input) => {
-      calls.push({ tool, input });
-      return { kind: "mcpRaw", server: "docs", tool: "read" };
-    });
-    const compiled = compileWorkflow(`result = mcp(
-    tool="docs.read",
-    input={"meta": {"labels": ["guide", "api"]}, "file": "@README.md"}
-)`, registry);
-
-    expect(compiled.diagnostics).toEqual([]);
-    await workflow.execute(compiled.program!);
-    expect(calls).toEqual([{
-      tool: "docs.read",
-      input: {
-        meta: { labels: ["guide", "api"] },
-        file: expect.objectContaining({ kind: "codeRef", uri: "file:///README.md", content: "export const y = 2;" })
-      }
-    }]);
-  });
-
-  it("requires a trusted local workspace before invoking an MCP caller", async () => {
-    const { runtime } = setup();
-    runtime.setMcpCaller(async () => ({ kind: "mcpRaw", server: "docs", tool: "read" }));
-
-    await expect(runtime.execute({
-      kind: "invocation",
-      method: "mcp",
-      source: "code",
-      arguments: [{ name: "tool", value: "docs.read" }, { name: "input", value: {} }]
-    })).rejects.toThrow("trusted local workspace");
-  });
 });

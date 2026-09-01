@@ -2,10 +2,14 @@ import { describe, expect, it } from "vitest";
 import { BUILTIN_METHODS } from "../src/core/builtins.js";
 import { MethodRegistry } from "../src/core/registry.js";
 import { compileWorkflow } from "../src/core/workflow.js";
+import { parseMcpManifest } from "../src/core/mcpManifest.js";
+
+const docsMcp = parseMcpManifest('{ "name": "docs", "transport": "stdio", "command": "docs-mcp", "tools": [{ "name": "read", "inputSchema": { "type": "object", "properties": { "uri": { "type": "string" } } } }] }', "docs.jsonc");
 
 function compile(source: string) {
   const registry = new MethodRegistry();
   registry.registerMany(BUILTIN_METHODS, "builtin");
+  registry.registerMany(docsMcp.methods, "project");
   return compileWorkflow(source, registry);
 }
 
@@ -22,18 +26,16 @@ describe("Dext Python workflow compiler", () => {
     expect(result.program?.statements).toHaveLength(5);
   });
 
-  it("accepts skills, MCP, and UI under their public namespaces", () => {
+  it("accepts skills, typed MCP, and UI under their public namespaces", () => {
     const result = compile(`skill = skill(skill="dev-feat", input="implement", workspace="@client")
-data = mcp(tool="docs.read", input={"uri": "README.md", "options": {"tags": ["guide", "api"]}, "file": "@README.md"})
+data = mcp.docs.read(uri="README.md")
 choice = ui.choose(label="Pick", options=["one", "two"])`);
     expect(result.diagnostics).toEqual([]);
   });
 
-  it("rejects removed MCP server and JSON-string input arguments", () => {
-    expect(compile('mcp(server="docs", tool="docs.read")').diagnostics.map((item) => item.message).join("\n"))
-      .toContain("Unknown argument 'server' for 'mcp'");
-    expect(compile('mcp(tool="docs.read", input="{}")').diagnostics.map((item) => item.message).join("\n"))
-      .toContain("expects dict[str, object]");
+  it("rejects the removed generic MCP dispatcher", () => {
+    expect(compile('mcp(tool="docs.read", input={})').diagnostics.map((item) => item.message).join("\n"))
+      .toContain("Unknown Dext API 'mcp'");
   });
 
   it("migrates legacy input f-string references but rejects arbitrary f-strings", () => {

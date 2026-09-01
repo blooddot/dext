@@ -2424,6 +2424,7 @@ button.primary.stopping {
 .tok-variableName,
 .tok-definition { color: var(--vscode-editor-foreground, var(--vscode-foreground)); }
 .tok-propertyName { color: var(--vscode-symbolIcon-propertyForeground, #9cdcfe); }
+.tok-function { color: var(--vscode-symbolIcon-methodForeground, #dcdcaa); }
 .tok-typeName,
 .tok-className { color: var(--vscode-symbolIcon-classForeground, #4ec9b0); }
 .tok-operator,

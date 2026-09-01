@@ -169,18 +169,5 @@ export const BUILTIN_METHODS: readonly CallableDefinition[] = [
     ],
     output: { kind: "chat" },
     executor: { kind: "deterministic", handler: "runSkill" }
-  },
-  {
-    id: "mcp",
-    title: "Call MCP Tool",
-    description: "Call an explicitly registered MCP tool by its configured full name with a typed dictionary input. Dext rejects unknown tools before transport is opened.",
-    kind: "command",
-    version: "1.0.0",
-    input: [
-      { name: "tool", type: "string", required: true, description: "Configured full tool name in server.tool form." },
-      { name: "input", type: "object", required: true, default: {}, description: "Dictionary supplied to the MCP tool." }
-    ],
-    output: { kind: "mcpRaw" },
-    executor: { kind: "deterministic", handler: "mcpCall" }
   }
 ];

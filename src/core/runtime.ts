@@ -71,10 +71,6 @@ function validationValue(value: unknown): unknown {
     : value;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function normalizeAgentResult(kind: string, value: unknown): DextResult {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("Agent output must be a JSON object.");
@@ -89,11 +85,32 @@ function isMcpRawResult(value: DextResult): value is McpRawResult {
   return value.kind === "mcpRaw";
 }
 
-function adaptTypedMcpResult(result: McpRawResult, kind: string): DextResult {
-  if (!result.structured) {
-    throw new Error("A TypedDict custom API requires structuredContent from mcp.");
+/**
+ * A number of MCP servers publish an outputSchema but still serialize the
+ * response as a JSON string in content (instead of returning
+ * structuredContent). Accept that interoperable wire shape when the text is
+ * a JSON object; non-JSON/plain-text responses must still fail because they
+ * cannot satisfy a TypedDict contract.
+ */
+function structuredMcpContent(result: McpRawResult): Record<string, unknown> | undefined {
+  if (result.structured) return result.structured;
+  if (typeof result.content !== "string") return undefined;
+  try {
+    const parsed: unknown = JSON.parse(result.content);
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
   }
-  return { ...result.structured, kind } as DextResult;
+}
+
+function adaptTypedMcpResult(result: McpRawResult, kind: string): DextResult {
+  const structured = structuredMcpContent(result);
+  if (!structured) {
+    throw new Error("A TypedDict custom API requires structuredContent (or JSON object content) from a typed MCP tool call.");
+  }
+  return { ...structured, kind } as DextResult;
 }
 
 /** The fallback Plan instruction. It asks for the document only, because Dext
@@ -277,7 +294,11 @@ export class DextRuntime {
   private agentCliArguments: Readonly<Partial<Record<AgentProvider, readonly string[]>>> = {};
   private skillLoader: ((skill: string, workspace: DirRef) => Promise<{ instructions: string; sourcePath: string }>) | undefined;
   private ruleLoader: ((path: string) => Promise<string | undefined>) | undefined;
-  private mcpCaller: ((tool: string, input: Record<string, unknown>) => Promise<McpRawResult>) | undefined;
+  private mcpCaller: ((
+    tool: string,
+    input: Record<string, unknown>,
+    onProcessEvent?: ExecutionMetadata["onMcpEvent"]
+  ) => Promise<McpRawResult>) | undefined;
   private createHandler: DeterministicHandler | undefined;
 
   constructor(
@@ -350,7 +371,11 @@ export class DextRuntime {
     this.ruleLoader = loader;
   }
 
-  setMcpCaller(caller: (tool: string, input: Record<string, unknown>) => Promise<McpRawResult>): void {
+  setMcpCaller(caller: (
+    tool: string,
+    input: Record<string, unknown>,
+    onProcessEvent?: ExecutionMetadata["onMcpEvent"]
+  ) => Promise<McpRawResult>): void {
     this.mcpCaller = caller;
   }
 
@@ -409,7 +434,7 @@ export class DextRuntime {
       result = method.output.fields
         ? isMcpRawResult(workflowResult)
           ? adaptTypedMcpResult(workflowResult, method.output.kind)
-          : (() => { throw new Error("A TypedDict custom API must return mcp(...)."); })()
+          : (() => { throw new Error("A TypedDict custom API must return a typed MCP tool result."); })()
         : workflowResult;
     } else if (method.executor.kind === "deterministic" && method.executor.handler === "mcpTool") {
       if (!this.workspaceTrusted) {
@@ -417,19 +442,12 @@ export class DextRuntime {
       }
       if (!this.mcpCaller) throw new Error("MCP registry is not configured.");
       const tool = method.id.slice("mcp.".length);
-      const raw = await this.mcpCaller(tool, resolved.arguments as Record<string, unknown>);
+      const raw = await this.mcpCaller(
+        tool,
+        resolved.arguments as Record<string, unknown>,
+        metadata.onMcpEvent
+      );
       result = method.output.fields ? adaptTypedMcpResult(raw, method.output.kind) : raw;
-    } else if (method.id === "mcp") {
-      if (!this.workspaceTrusted) {
-        throw new Error("mcp requires a trusted local workspace.");
-      }
-      if (!this.mcpCaller) throw new Error("MCP registry is not configured.");
-      const tool = resolved.arguments.tool;
-      const input = resolved.arguments.input;
-      if (typeof tool !== "string" || !isRecord(input)) {
-        throw new Error("mcp requires a string tool and dictionary input.");
-      }
-      result = await this.mcpCaller(tool, input);
     } else if (method.id === "create") {
       if (!this.createHandler) throw new Error("create is not configured in this host.");
       result = await this.createHandler(resolved);

@@ -30,7 +30,7 @@ The input workflow language supports assignment, keyword-only API calls, strings
 - `apply(result) -> ApplyResult`
 - `terminal(command, cwd=".", timeout_ms=120000) -> TerminalResult`
 - `skill(skill, input, workspace?) -> ChatResult`
-- `mcp(tool, input={}) -> McpRawResult`
+- MCP tools are exposed as typed `mcp.<server>.<tool>(...)` APIs generated from manifests.
 - `print(text, label?) -> PrintResult`
 - `ui.choose(...)`, `ui.confirm(...)`, `ui.input(...) -> UiResult`
 
@@ -39,7 +39,7 @@ the namespace, so `.dext/api/workflow/feature.dx` registers `workflow.feature`.
 Global APIs are stored in Dext global storage and are available in every
 workspace; a project API with the same id takes precedence.
 
-A project-local API composes the built-in `mcp`, `agent`, and UI APIs directly
+A project-local API composes typed MCP, `agent`, and UI APIs directly
 rather than importing intermediate phase APIs. A typical feature workflow reads
 context, makes a plan, gates on `ui.confirm`, implements, gates again, then
 validates. Declaring optional `mcp_tool` and `mcp_input` parameters lets a
@@ -162,7 +162,21 @@ document = mcp.docs.read(uri="README.md")
 print(text=document.content)
 ```
 
-MCP calls require a trusted local workspace. Manifests support local `stdio` and Streamable HTTP. HTTP endpoints must use HTTPS, or loopback HTTP for local development. URL userinfo, query strings, fragments, inline headers, and credentials are rejected. A bearer-enabled server stores its access token only through `Dext: Set MCP Access Token`, in VS Code SecretStorage and scoped to the current workspace. Do not put credentials in a manifest, including stdio arguments. `Dext: Clear MCP Access Token` removes an HTTP bearer token; `Dext: Verify MCP Server` performs an authenticated initialization check. Editing, creating, or deleting a manifest reloads its APIs automatically.
+For a stdio MCP that reads its credential from an environment variable, declare
+the variable without putting the secret in the manifest:
+
+```jsonc
+{
+  "name": "example-user-mcp",
+  "transport": "stdio",
+  "command": "npx",
+  "args": ["-y", "example-mcp"],
+  "auth": { "type": "token", "env": "EXAMPLE_MCP_TOKEN" },
+  "tools": []
+}
+```
+
+MCP calls require a trusted local workspace. Manifests support local `stdio` and Streamable HTTP. HTTP endpoints must use HTTPS, or loopback HTTP for local development. URL userinfo, query strings, fragments, inline headers, and credentials are rejected. A bearer-enabled HTTP server stores its token only through `Dext: Set MCP Access Token`. A stdio server may declare `auth: {"type":"token","env":"ENV_NAME"}`; Dext then injects its SecretStorage token into that child-process environment variable. Tokens are keyed by server and manifest scope: project manifests use workspace-scoped keys, while global manifests use global keys. Do not put credentials in a manifest or stdio arguments. `Dext: Clear MCP Access Token` removes the selected credential; `Dext: Verify MCP Server` performs an authenticated HTTP initialization check. Editing, creating, or deleting a manifest reloads its APIs automatically.
 
 Agent profiles are stored in VS Code extension global storage. The Run row exposes Agent, Model, Reasoning, and Speed selectors. Codex profiles read the local Codex model cache when available, including supported reasoning levels and speed tiers. Claude Code profiles use its native `opus`/`sonnet` aliases and current effort levels. A `.dx` file may override the Agent and Model with `@api(agent="codex", model="...")`; otherwise the Run selection is used. `Dext: Configure Agent` edits executable commands and custom model labels without handling credentials.
 

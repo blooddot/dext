@@ -1,5 +1,6 @@
 import { isAbsolute, sep } from "node:path";
 import * as vscode from "vscode";
+import { applyEdits, modify } from "jsonc-parser/lib/esm/main.js";
 import { BUILTIN_METHODS } from "./core/builtins.js";
 import { loadCustomApis } from "./core/customApi.js";
 import { ContextResolver } from "./core/contextResolver.js";
@@ -26,7 +27,7 @@ import {
 import { DefaultAioaCdpConnection } from "./core/aioaCdp.js";
 import { DefaultAgentRunner } from "./core/agentRouter.js";
 import { SkillCatalog } from "./core/skillCatalog.js";
-import { McpToolRegistry, type HttpMcpServerConfig, type McpServerConfig, type McpToolConfig, type McpDiscoveredTool } from "./core/mcpRegistry.js";
+import { McpToolRegistry, type McpServerConfig, type McpToolConfig, type McpDiscoveredTool } from "./core/mcpRegistry.js";
 import { McpAccessTokenStore } from "./core/mcpSecrets.js";
 import { parseMcpManifest } from "./core/mcpManifest.js";
 import {
@@ -83,7 +84,11 @@ export class DextApplication {
     if (secretStorage) {
       const mcpSecrets = new McpAccessTokenStore(secretStorage, () => this.workspaceUri?.toString());
       this.mcpSecrets = mcpSecrets;
-      this.mcp.setAccessTokenProvider(async (server) => mcpSecrets.get(server.name));
+      this.mcp.setAccessTokenProvider(async (server) => mcpSecrets.get(
+        server.name,
+        server.scope === "global" ? "global" : "workspace",
+        server.transport === "http" ? "bearer" : "token"
+      ));
       this.completionSecrets = new CompletionKeyStore(secretStorage, () => this.workspaceUri?.toString());
     }
     this.registry.registerMany(BUILTIN_METHODS, "builtin");
@@ -115,7 +120,9 @@ export class DextApplication {
         throw error;
       }
     });
-    this.runtime.setMcpCaller((tool, input) => this.mcp.call(tool, input));
+    this.runtime.setMcpCaller((tool, input, onProcessEvent) => this.mcp.call(tool, input, {
+      ...(onProcessEvent ? { onProcessEvent } : {})
+    }));
     this.runtime.setCreateHandler(({ arguments: args, metadata }) => this.createResource(args, metadata));
   }
 
@@ -280,15 +287,15 @@ export class DextApplication {
     methods: CallableDefinition[];
     diagnostics: string[];
   }> {
-    const directories: vscode.Uri[] = [];
-    if (folder?.uri.scheme === "file") directories.push(vscode.Uri.joinPath(folder.uri, ".dext", "mcp"));
-    if (includeGlobal) directories.push(vscode.Uri.joinPath(this.storage.globalStorageUri, "mcp"));
+    const directories: Array<{ uri: vscode.Uri; scope: "project" | "global" }> = [];
+    if (folder?.uri.scheme === "file") directories.push({ uri: vscode.Uri.joinPath(folder.uri, ".dext", "mcp"), scope: "project" });
+    if (includeGlobal) directories.push({ uri: vscode.Uri.joinPath(this.storage.globalStorageUri, "mcp"), scope: "global" });
     const servers: McpServerConfig[] = [];
     const tools: McpToolConfig[] = [];
     const methods: CallableDefinition[] = [];
     const diagnostics: string[] = [];
     const seenServerNames = new Set<string>();
-    for (const directory of directories) {
+    for (const { uri: directory, scope } of directories) {
       let entries: [string, vscode.FileType][];
       try { entries = await vscode.workspace.fs.readDirectory(directory); }
       catch (error) {
@@ -304,7 +311,7 @@ export class DextApplication {
         if (manifest.server && seenServerNames.has(manifest.server.name)) continue;
         if (manifest.server) {
           seenServerNames.add(manifest.server.name);
-          servers.push(manifest.server);
+          servers.push({ ...manifest.server, scope });
         }
         tools.push(...manifest.tools);
         methods.push(...manifest.methods);
@@ -451,7 +458,7 @@ export class DextApplication {
     const response = await this.runtime.executeConversation("ask", [
       "You generate Dext MCP configuration.",
       "Read the MCP documentation or interpret the user's description and return exactly one JSON object, with no markdown fences or commentary.",
-      "Allowed shape: {name, transport:'http', url, auth?:{type:'bearer'}, timeoutMs?} or {name, transport:'stdio', command, args?, timeoutMs?}.",
+      "Allowed shape: {name, transport:'http', url, auth?:{type:'bearer'}, timeoutMs?} or {name, transport:'stdio', command, args?, auth?:{type:'token',env:'ENV_NAME'}, timeoutMs?}.",
       "Use the actual MCP endpoint or install command from the documentation; do not invent credentials.",
       documentUrl ? `Documentation URL: ${documentUrl}` : `User description: ${trimmed}`,
       documentation ? `Documentation content:\n${documentation}` : "No documentation was fetched; infer only what the URL or user description supports."
@@ -474,7 +481,20 @@ export class DextApplication {
     }
     if (candidate.transport === "stdio" && typeof candidate.name === "string" && typeof candidate.command === "string") {
       const args = Array.isArray(candidate.args) ? candidate.args.filter((item): item is string => typeof item === "string") : undefined;
-      return { name: candidate.name, transport: "stdio", command: candidate.command, ...(args?.length ? { args } : {}), ...(typeof candidate.timeoutMs === "number" ? { timeoutMs: candidate.timeoutMs } : {}) };
+      const auth = candidate.auth && typeof candidate.auth === "object" && !Array.isArray(candidate.auth)
+        ? candidate.auth as Record<string, unknown>
+        : undefined;
+      const stdioAuth = auth?.type === "token" && typeof auth.env === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(auth.env)
+        ? { type: "token" as const, env: auth.env }
+        : undefined;
+      return {
+        name: candidate.name,
+        transport: "stdio",
+        command: candidate.command,
+        ...(args?.length ? { args } : {}),
+        ...(stdioAuth ? { auth: stdioAuth } : {}),
+        ...(typeof candidate.timeoutMs === "number" ? { timeoutMs: candidate.timeoutMs } : {})
+      };
     }
     throw new Error("The Agent returned an unsupported MCP configuration shape.");
   }
@@ -663,22 +683,77 @@ export class DextApplication {
     return this.workspaceTrusted;
   }
 
-  bearerHttpServers(): HttpMcpServerConfig[] {
-    return this.mcp.listServers().filter((server): server is HttpMcpServerConfig =>
-      server.transport === "http" && server.auth?.type === "bearer"
-    );
+  mcpCredentialServers(transport?: "http" | "stdio"): McpServerConfig[] {
+    return this.mcp.listServers().filter((server) => {
+      if (!server.auth || (transport && server.transport !== transport)) return false;
+      return true;
+    });
   }
 
   async setMcpAccessToken(serverName: string, token: string): Promise<void> {
-    this.assertBearerHttpServer(serverName);
+    const server = this.assertCredentialServer(serverName);
     if (!this.mcpSecrets) throw new Error("VS Code SecretStorage is not available.");
-    await this.mcpSecrets.store(serverName, token);
+    await this.mcpSecrets.store(
+      serverName,
+      token,
+      server.scope === "global" ? "global" : "workspace",
+      server.transport === "http" ? "bearer" : "token"
+    );
+  }
+
+  /** Discovers the authenticated server's tools and updates its manifest's
+   * explicit allowlist while preserving JSONC comments and formatting. */
+  async discoverAndPersistMcpTools(serverName: string): Promise<number> {
+    const server = this.assertCredentialServer(serverName);
+    const discovered = await this.mcp.discoverServerTools(serverName);
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    const directories: Array<{ uri: vscode.Uri; scope: "project" | "global" }> = [];
+    if (folder?.uri.scheme === "file") directories.push({ uri: vscode.Uri.joinPath(folder.uri, ".dext", "mcp"), scope: "project" });
+    directories.push({ uri: vscode.Uri.joinPath(this.storage.globalStorageUri, "mcp"), scope: "global" });
+    for (const { uri: directory, scope } of directories) {
+      if (server.scope && server.scope !== scope) continue;
+      let entries: [string, vscode.FileType][];
+      try { entries = await vscode.workspace.fs.readDirectory(directory); }
+      catch (error) {
+        if (error instanceof vscode.FileSystemError && error.code === "FileNotFound") continue;
+        throw error;
+      }
+      for (const [name, type] of entries) {
+        if (type !== vscode.FileType.File || !name.toLowerCase().endsWith(".jsonc")) continue;
+        const file = vscode.Uri.joinPath(directory, name);
+        const source = new TextDecoder().decode(await vscode.workspace.fs.readFile(file));
+        const parsed = parseMcpManifest(source, file.fsPath);
+        if (parsed.server?.name !== serverName) continue;
+        const tools = discovered.map((tool) => {
+          // Some MCP servers (including older Teambition package versions)
+          // omit outputSchema from tools/list. Keep a schema authored in the
+          // manifest so rediscovery does not silently disable result hints.
+          const existing = parsed.tools.find((candidate) => candidate.tool === tool.name);
+          return {
+            name: tool.name,
+            ...(tool.description ? { description: tool.description } : {}),
+            ...(tool.inputSchema ? { inputSchema: tool.inputSchema } : {}),
+            ...(tool.outputSchema ?? existing?.outputSchema
+              ? { outputSchema: tool.outputSchema ?? existing?.outputSchema } : {})
+          };
+        });
+        const edits = modify(source, ["tools"], tools, { formattingOptions: { insertSpaces: true, tabSize: 2 } });
+        await vscode.workspace.fs.writeFile(file, new TextEncoder().encode(applyEdits(source, edits)));
+        await this.reload();
+        return tools.length;
+      }
+    }
+    throw new Error(`MCP manifest for '${serverName}' could not be found.`);
   }
 
   async clearMcpAccessToken(serverName: string): Promise<void> {
-    this.assertBearerHttpServer(serverName);
+    const server = this.assertCredentialServer(serverName);
     if (!this.mcpSecrets) throw new Error("VS Code SecretStorage is not available.");
-    await this.mcpSecrets.delete(serverName);
+    await this.mcpSecrets.delete(
+      serverName,
+      server.scope === "global" ? "global" : "workspace",
+      server.transport === "http" ? "bearer" : "token"
+    );
   }
 
   /** Each field is its own setting rather than one object, because the Settings
@@ -791,5 +866,12 @@ export class DextApplication {
     if (server?.transport !== "http" || server.auth?.type !== "bearer") {
       throw new Error(`MCP server '${serverName}' is not a bearer-authenticated HTTP server.`);
     }
+  }
+
+  private assertCredentialServer(serverName: string): McpServerConfig {
+    if (!this.workspaceTrusted) throw new Error("MCP credentials require a trusted local workspace.");
+    const server = this.mcp.getServer(serverName);
+    if (!server?.auth) throw new Error(`MCP server '${serverName}' does not declare a token credential.`);
+    return server;
   }
 }

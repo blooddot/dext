@@ -35,4 +35,21 @@ describe("McpAccessTokenStore", () => {
     await expect(missingWorkspace.get("remote")).rejects.toThrow("local workspace");
     await expect(workspace.store("remote", "")).rejects.toThrow("cannot be empty");
   });
+
+  it("keeps global and stdio credentials separate from workspace HTTP credentials", async () => {
+    const requested: string[] = [];
+    const secrets: SecretStorageLike = {
+      get: async (key) => { requested.push(key); return undefined; },
+      store: async () => {},
+      delete: async () => {}
+    };
+    const store = new McpAccessTokenStore(secrets, () => "file:///workspace");
+
+    await store.get("team", "global", "token");
+    await store.get("team", "workspace", "bearer");
+
+    expect(requested[0]).toMatch(/^dext\.mcp\.token\.global\.[a-f0-9]{64}$/);
+    expect(requested[1]).toMatch(/^dext\.mcp\.bearer\.[a-f0-9]{64}$/);
+    expect(requested[0]).not.toEqual(requested[1]);
+  });
 });

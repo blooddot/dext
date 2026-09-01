@@ -35,6 +35,7 @@ import {
 } from "../core/fileReference.js";
 import { createFileReferenceChip, fileReferenceChipDescriptor } from "./fileReferenceChip.js";
 import { outputExternalLink, outputLinkReference } from "./outputLink.js";
+import { dextHighlightClass, dextHighlightRanges } from "../dextHighlight.js";
 
 interface VsCodeApi {
   postMessage(message: WebviewRequest): void;
@@ -695,7 +696,16 @@ function saveMcpAssistant(): void {
   }
   const candidate = server.transport === "http"
     ? { name: server.name, transport: "http" as const, url: typeof server.url === "string" ? server.url : "", ...(server.auth ? { auth: { type: "bearer" as const } } : {}) }
-    : { name: server.name, transport: "stdio" as const, command: typeof server.command === "string" ? server.command : "", ...(Array.isArray(server.args) ? { args: server.args.filter((item): item is string => typeof item === "string") } : {}) };
+    : {
+      name: server.name,
+      transport: "stdio" as const,
+      command: typeof server.command === "string" ? server.command : "",
+      ...(Array.isArray(server.args) ? { args: server.args.filter((item): item is string => typeof item === "string") } : {}),
+      ...(server.auth && typeof server.auth === "object" && (server.auth as Record<string, unknown>).type === "token"
+        && typeof (server.auth as Record<string, unknown>).env === "string"
+        ? { auth: { type: "token" as const, env: (server.auth as Record<string, unknown>).env as string } }
+        : {})
+    };
   if (mcpAssistantPendingTools === undefined) {
     const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
     mcpAssistantRequestId = requestId;
@@ -1602,22 +1612,27 @@ function escapeRegExp(value: string): string {
 
 function highlightDextFragment(source: string): DocumentFragment {
   const fragment = document.createDocumentFragment();
+  let offset = 0;
+  const ranges = dextHighlightRanges(source);
   highlightCode(
     source,
     pythonParser.parse(source),
     classHighlighter,
     (text, classes) => {
       if (!text) return;
-      if (!classes) {
+      const highlighted = dextHighlightClass(classes, offset, text, ranges);
+      if (!highlighted) {
         fragment.append(document.createTextNode(text));
+        offset += text.length;
         return;
       }
       const span = document.createElement("span");
-      span.className = classes;
+      span.className = highlighted;
       span.textContent = text;
       fragment.append(span);
+      offset += text.length;
     },
-    () => fragment.append(document.createTextNode("\n"))
+    () => { fragment.append(document.createTextNode("\n")); offset += 1; }
   );
   return fragment;
 }
@@ -1710,7 +1725,9 @@ function createOutputTurn(turnId: string, source: string, createdAt = Date.now()
       vscode.postMessage({ type: "deleteTurn", turnId });
     })
   );
-  summary.append(chevron, time, title, actions);
+  // Keep the turn title as the primary row label, matching the history view;
+  // metadata belongs at the trailing edge of the row rather than before it.
+  summary.append(chevron, title, time, actions);
   const input = outputTurnSection("Input", true);
   const inputText = renderedInputSource(source);
   const inputCopy = document.createElement("div");

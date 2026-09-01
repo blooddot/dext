@@ -15,7 +15,12 @@ for (const required of ["main.js", "main.css"]) {
 assert.deepEqual(fileNames.filter((file) => file.endsWith(".worker.js")), []);
 assert.ok((await stat(resolve("dist", "codicons", "codicon.ttf"))).size > 0, "Missing VS Code codicon font.");
 const mainBundle = await readFile(resolve(output, "main.js"), "utf8");
+const extensionBundle = await readFile(resolve("dist", "extension.js"), "utf8");
 const mainStyles = await readFile(resolve(output, "main.css"), "utf8");
+assert.ok(
+  !extensionBundle.includes("node_modules/jsonc-parser/lib/umd/main.js"),
+  "The extension bundle contains jsonc-parser's UMD entry. Import jsonc-parser/lib/esm/main.js explicitly; the UMD wrapper leaves unresolved relative requires in the VS Code extension host."
+);
 for (const action of [
   "code-file-reference",
   "dext-signature-tooltip",

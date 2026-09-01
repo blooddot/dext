@@ -17,12 +17,8 @@ const files = new Map([
 // A workspace defines its own multi-phase APIs; this fixture stands in for one
 // so the tests never depend on API files living in this repository.
 const workflowFiles = new Map([
-  ["C:/workspace/.dext/api/workflow/feature.dx", `def main(input: str, mcp_tool: str = "", mcp_input: dict[str, object] = {}, apply: bool = True) -> AgentResult:
-    if mcp_tool != "":
-        source = mcp(tool=mcp_tool, input=mcp_input)
-        context = agent(input=source.content, apply=False)
-    else:
-        context = agent(input=input, apply=False)
+  ["C:/workspace/.dext/api/workflow/feature.dx", `def main(input: str, apply: bool = True) -> AgentResult:
+    context = agent(input=input, apply=False)
     plan = agent(input=context.text, apply=False)
     plan_confirmation = ui.confirm(
         message=plan.text,
@@ -157,50 +153,6 @@ def main(input: str) -> DocumentResult:
     expect(() => contract.outputSchema.parse({ kind: "document", uri: "dext://doc/1" })).toThrow();
   });
 
-  it("adapts mcp structuredContent into a TypedDict result before validating it", async () => {
-    const registry = new MethodRegistry();
-    registry.registerMany(BUILTIN_METHODS, "builtin");
-    const typed = new Map([["C:/workspace/.dext/api/docs/read.dx", `from typing import Literal, TypedDict
-
-class DocumentResult(TypedDict):
-    kind: Literal["document"]
-    uri: str
-    content: str
-
-def main(input: dict[str, object]) -> DocumentResult:
-    return mcp(tool="docs.read", input=input)
-`]]);
-    const loaded = await loadCustomApis(
-      true,
-      ["C:/workspace/.dext/api"],
-      async () => [...typed.keys()],
-      async (path) => typed.get(path),
-      registry
-    );
-    expect(loaded.diagnostics).toEqual([]);
-    const runtime = new DextRuntime(registry, new ContextResolver(host));
-    runtime.setWorkspaceTrusted(true);
-    runtime.setCustomPlans(loaded.plans);
-    runtime.setMcpCaller(async () => ({
-      kind: "mcpRaw",
-      server: "docs",
-      tool: "read",
-      structured: { uri: "file:///workspace/readme.md", content: "# Readme" }
-    }));
-
-    const response = await runtime.execute({
-      kind: "invocation",
-      method: "docs.read",
-      source: "code",
-      arguments: [{ name: "input", value: { uri: "readme.md" } }]
-    });
-    expect(response.result).toEqual({
-      kind: "document",
-      uri: "file:///workspace/readme.md",
-      content: "# Readme"
-    });
-  });
-
   it("loads the selected rules for each nested Agent call", async () => {
     const apiPath = join(process.cwd(), ".dext", "api", "dev", "phase.dx");
     const firstPath = join(process.cwd(), ".dext", "rules", "dev", "first.md");
@@ -296,46 +248,4 @@ def main(input: dict[str, object]) -> DocumentResult:
     expect(confirmations).toEqual(["confirmed implementation plan", "implemented changes"]);
   });
 
-  it("executes MCP before the first context phase when configured", async () => {
-    const registry = new MethodRegistry();
-    registry.registerMany(BUILTIN_METHODS, "builtin");
-    const loaded = await loadWorkflow(registry);
-    const runtime = new DextRuntime(registry, new ContextResolver(host));
-    runtime.setWorkspaceTrusted(true);
-    runtime.setCustomPlans(loaded.plans);
-    runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
-    runtime.setAgentSelection({ profileId: "codex" });
-    let mcpTool = "";
-    let firstAgentInput = "";
-    let agentCalls = 0;
-    runtime.setMcpCaller(async (tool) => {
-      mcpTool = tool;
-      return { kind: "mcpRaw", server: "tasks", tool, content: "task from MCP" };
-    });
-    runtime.setAgentRunner({
-      run: async (request) => {
-        const input = request.resolved.arguments.input;
-        if (!firstAgentInput && typeof input === "string") firstAgentInput = input;
-        agentCalls += 1;
-        return { kind: "agent", text: agentCalls === 1 ? "context" : "plan" };
-      }
-    });
-    const ui: UiInteraction = {
-        choose: async () => ({ kind: "ui", type: "choice", selected: [] as string[] }),
-        confirm: async () => ({ kind: "ui", type: "confirm", confirmed: false }),
-        input: async () => ({ kind: "ui", type: "input", value: "" })
-    };
-    await runtime.execute({
-      kind: "invocation",
-      method: "workflow.feature",
-      source: "code",
-      arguments: [
-        { name: "input", value: "ignored local input" },
-        { name: "mcp_tool", value: "tasks.read" },
-        { name: "mcp_input", value: {} }
-      ]
-    }, [], { ui });
-    expect(mcpTool).toBe("tasks.read");
-    expect(firstAgentInput).toBe("task from MCP");
-  });
 });

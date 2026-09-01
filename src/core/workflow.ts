@@ -175,6 +175,52 @@ function resolveAlias(path: string, aliases?: ReadonlyMap<string, string>): stri
   return head ? [head, ...parts.slice(1)].join(".") : path;
 }
 
+/** The Python grammar treats `-` as subtraction, but MCP server/tool names are
+ * allowed to contain hyphens. Replace eligible hyphens outside strings/comments
+ * with a parser-safe Unicode identifier character. It is one UTF-16 code unit,
+ * so syntax-node offsets still point into the original source retained below. */
+export function parserCompatibleSource(source: string): string {
+  // Split into UTF-16 code units so replacement never shifts parser offsets.
+  const chars = source.split("");
+  let quote: "'" | '"' | undefined;
+  let triple = false;
+  let escaped = false;
+  let comment = false;
+  for (let index = 0; index < chars.length; index += 1) {
+    const character = chars[index];
+    if (comment) {
+      if (character === "\n" || character === "\r") comment = false;
+      continue;
+    }
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (triple && source.slice(index, index + 3) === quote.repeat(3)) {
+        quote = undefined;
+        triple = false;
+        index += 2;
+      } else if (!triple && character === quote) quote = undefined;
+      continue;
+    }
+    if (character === "#") {
+      comment = true;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      triple = source.slice(index, index + 3) === character.repeat(3);
+      if (triple) index += 2;
+      continue;
+    }
+    if (
+      character === "-"
+      && /[A-Za-z0-9_]/.test(chars[index - 1] ?? "")
+      && /[A-Za-z0-9_]/.test(chars[index + 1] ?? "")
+    ) chars[index] = "﹣";
+  }
+  return chars.join("");
+}
+
 class Compiler {
   private readonly diagnostics: WorkflowDiagnostic[] = [];
   private readonly environment = new Map<string, EnvironmentEntry>();
@@ -196,7 +242,7 @@ class Compiler {
       this.error("Enter a Dext workflow.", 0, 0);
       return { diagnostics: this.diagnostics };
     }
-    const tree = parser.parse(this.source);
+    const tree = parser.parse(parserCompatibleSource(this.source));
     this.collectSyntaxErrors(tree.topNode);
     const statements = this.compileStatements(tree.topNode);
     if (this.diagnostics.some((diagnostic) => diagnostic.severity === "error")) {
@@ -563,6 +609,7 @@ class Compiler {
     const parts = children(node);
     const values: WorkflowCall["arguments"] = [];
     const seen = new Set<string>();
+    const namedIndexes = new Set<number>();
     for (let index = 0; index < parts.length; index += 1) {
       const nameNode = parts[index];
       if (nameNode?.name !== "VariableName" || parts[index + 1]?.name !== "AssignOp") continue;
@@ -576,6 +623,9 @@ class Compiler {
       }
       if (seen.has(name)) this.error(`Argument '${name}' is provided more than once.`, nameNode.from, nameNode.to);
       seen.add(name);
+      namedIndexes.add(index);
+      namedIndexes.add(index + 1);
+      namedIndexes.add(index + 2);
       const compiled = this.compileExpression(valueNode);
       if (compiled) {
         const coerced = this.coerceContextValue(compiled, field);
@@ -586,16 +636,35 @@ class Compiler {
       }
       index += 2;
     }
+
+    // `print` is convenient for piping a whole result through Output, so also
+    // accept its common positional form (`print(result)`). Other Dext APIs
+    // remain keyword-only to keep workflow calls unambiguous.
+    const positional = parts.filter((part, index) =>
+      !namedIndexes.has(index) && !["(", ")", ",", "AssignOp"].includes(part.name)
+    );
+    const positionalPrint = definition.id === "print" && !seen.has("text") && positional.length === 1;
+    if (positionalPrint) {
+      const valueNode = positional[0]!;
+      const field = definition.input.find((candidate) => candidate.name === "text");
+      const compiled = this.compileExpression(valueNode);
+      if (field && compiled) {
+        const coerced = this.coerceContextValue(compiled, field);
+        if (!matchesField(coerced.type, field)) {
+          this.error(`Argument 'text' expects ${fieldTypeName(field)}, not ${typeName(coerced.type)}.`, valueNode.from, valueNode.to);
+        }
+        values.push({ name: "text", value: coerced.expression, from: valueNode.from, to: valueNode.to });
+        seen.add("text");
+      }
+    }
     for (const field of definition.input) {
       if (field.required && field.default === undefined && !seen.has(field.name)) {
         this.error(`Missing required argument '${field.name}'.`, node.from, node.to);
       }
     }
-    const positional = namedChildren(node).filter((part) =>
-      !["VariableName", "AssignOp"].includes(part.name)
-      && !values.some((value) => value.to === part.to)
-    );
-    if (positional.length) this.error("Dext API calls require keyword arguments.", positional[0]!.from, positional[0]!.to);
+    if (positional.length && !positionalPrint) {
+      this.error("Dext API calls require keyword arguments.", positional[0]!.from, positional[0]!.to);
+    }
     return values;
   }
 
