@@ -167,6 +167,20 @@ function outputFields(method: RegisteredCallable | undefined): readonly FieldDef
   return (RESULT_FIELDS[method.output.kind] ?? []).map((name) => ({ name, type: "string" }));
 }
 
+function childFields(field: FieldDefinition | undefined): readonly FieldDefinition[] {
+  if (!field) return [];
+  // A dot after an array-valued field addresses its element shape. This keeps
+  // completion useful for MCP responses such as `result: [{ id, content }]`.
+  if (field.type === "list") return childFields(field.items);
+  return field.properties ?? [];
+}
+
+/** Split a member expression while treating numeric (or computed) indexes as
+ * transparent traversal through an array element, e.g. `files[0].content`. */
+function expressionParts(expression: string): string[] {
+  return expression.match(/[A-Za-z_]\w*|\[[^\]]*\]/g) ?? [];
+}
+
 export class DextLanguageService {
   private customApiIds = new Set<string>();
   private skills: SkillDescriptor[] = [];
@@ -203,6 +217,28 @@ export class DextLanguageService {
 
   private resolveMethod(source: string, name: string, customApisAreGlobal = true): RegisteredCallable | undefined {
     return this.visibleMethodEntries(source, customApisAreGlobal).find((entry) => entry.name === name)?.method;
+  }
+
+  /** Fields exposed by a variable or a dotted expression rooted at a result. */
+  private expressionFields(source: string, expression: string, customApisAreGlobal = true): readonly FieldDefinition[] {
+    const parts = expression.split(".").flatMap(expressionParts);
+    const root = parts.shift();
+    if (!root) return [];
+    let fields: readonly FieldDefinition[] = [];
+    const assignment = new RegExp(`^\\s*${root}\\s*=\\s*([A-Za-z_][A-Za-z0-9_.-]*)\\(`, "m").exec(source);
+    if (assignment) {
+      fields = outputFields(this.resolveMethod(source, assignment[1] ?? "", customApisAreGlobal));
+    } else {
+      // Loop variables inherit the element type of the iterable expression.
+      const loop = [...source.matchAll(new RegExp(`^\\s*for\\s+${root}\\s+in\\s+([A-Za-z_]\\w*(?:\\.[A-Za-z_]\\w*)*)\\s*:`, "gm"))].at(-1);
+      if (loop?.[1] && loop[1] !== root) fields = this.expressionFields(source, loop[1], customApisAreGlobal);
+    }
+    for (const part of parts) {
+      if (part.startsWith("[")) continue;
+      const field = fields.find((candidate) => candidate.name === part);
+      fields = childFields(field);
+    }
+    return fields;
   }
 
   apiCompletions(source: string, cursor = source.length, apiId?: string): CompletionItem[] {
@@ -329,17 +365,19 @@ export class DextLanguageService {
       }
     }
 
-    const member = /([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_]*)$/.exec(before);
+    const member = /([A-Za-z_]\w*(?:(?:\.[A-Za-z_]\w*)|(?:\[\s*[^\]]+\s*\]))*)\.([A-Za-z_]*)$/.exec(before);
     if (member) {
-      const assignment = new RegExp(
-        `^\\s*${member[1]}\\s*=\\s*([A-Za-z_][A-Za-z0-9_.-]*)\\(`,
-        "m"
-      ).exec(source);
-      const method = assignment ? this.resolveMethod(source, assignment[1] ?? "", customApisAreGlobal) : undefined;
-      if (method) {
-        return outputFields(method)
+      const fields = this.expressionFields(source, member[1] ?? "", customApisAreGlobal);
+      const root = (member[1] ?? "").split(".")[0] ?? "";
+      const method = this.resolveMethod(
+        source,
+        new RegExp(`^\\s*${root}\\s*=\\s*([A-Za-z_][A-Za-z0-9_.-]*)\\(`, "m").exec(source)?.[1] ?? "",
+        customApisAreGlobal
+      );
+      if (fields.length) {
+        return fields
           .filter((field) => field.name.startsWith(member[2] ?? ""))
-          .map((field) => item(field.name, field.name, `${method.output.resultType ?? resultTypeName(method.output.kind)} field`, "parameter"));
+          .map((field) => item(field.name, field.name, `${method?.output.resultType ?? resultTypeName(method?.output.kind ?? "result")} field`, "parameter"));
       }
     }
 

@@ -25,6 +25,7 @@ import { planPathSegments } from "./core/planFile.js";
 import { openDextFileReference, openExternalLink } from "./vscodeContextHost.js";
 import { webviewRequestSchema } from "./webviewProtocol.js";
 import type { ConversationSummary, WebviewResponse } from "./webviewProtocol.js";
+import type { AgentSelection } from "./agentProfiles.js";
 import type { DextHistorySession, DextHistoryStore } from "./historyStore.js";
 import type { DextConversationPreferences } from "./conversationPreferences.js";
 import { conversationTitle } from "./historyRender.js";
@@ -59,6 +60,14 @@ function outputSession(): DextHistorySession {
   };
 }
 
+// A conversation that has never had its composer controls changed must start
+// from the product defaults. In particular, do not copy the profile store's
+// global last-used selection here: that would make a Code selection bleed into
+// every newly opened tab.
+function defaultConversationSelection(): AgentSelection {
+  return { mode: "agent" };
+}
+
 // The picker ranks paths in the host, so the index has to be broad enough to
 // contain the answer while staying cheap enough to rebuild on a stale read.
 const MAX_INDEXED_FILES = 20000;
@@ -84,6 +93,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   private readonly attachments = new AttachmentStore();
   private activeSession = outputSession();
   private readonly sessions = new Map<string, DextHistorySession>();
+  // Only the composer mode belongs to a conversation tab. Permission, CLI,
+  // model, and model parameters are global profile preferences.
+  private readonly conversationSelections = new Map<string, AgentSelection>();
   // Conversations behave like editor tabs: the strip only shows the ones that
   // are open, while every conversation stays reachable through history.
   private openConversations: string[] = [this.activeSession.id];
@@ -122,6 +134,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       : undefined;
     if (previouslyActive) this.activeSession = previouslyActive;
     else if (latest) this.activeSession = latest;
+    this.conversationSelections.set(this.activeSession.id, {
+      mode: this.application.state().agentSelection.mode ?? "agent"
+    });
     // Keep every tab the user left open, including non-pinned ones. Pins still
     // provide a backwards-compatible fallback for layouts saved before this
     // state was introduced.
@@ -167,10 +182,14 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
 
   private async activateConversation(session: DextHistorySession): Promise<void> {
     this.activeSession = session;
+    const mode = this.conversationSelections.get(session.id)?.mode ?? "agent";
+    this.conversationSelections.set(session.id, { mode });
+    this.application.setAgentSelection({ ...this.application.state().agentSelection, mode });
     if (!this.openConversations.includes(session.id)) this.openConversations.push(session.id);
     await this.persistConversationLayout();
     this.updateRunningContext();
     await this.postConversationState();
+    await this.refresh();
     await this.post({ type: "outputSession", session: this.activeSession });
     await this.postActiveExecution(session.id);
   }
@@ -182,11 +201,14 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     if (replaceActiveTab) this.application.endAgentSession(this.activeSession.id);
     this.activeSession = outputSession();
     this.sessions.set(this.activeSession.id, this.activeSession);
+    this.conversationSelections.set(this.activeSession.id, defaultConversationSelection());
+    this.application.setAgentSelection({ ...this.application.state().agentSelection, mode: "agent" });
     if (index === -1) this.openConversations.push(this.activeSession.id);
     else this.openConversations[index] = this.activeSession.id;
     await this.persistConversationLayout();
     this.updateRunningContext();
     await this.postConversationState();
+    await this.refresh();
     await this.post({ type: "outputSession", session: this.activeSession });
   }
 
@@ -217,9 +239,13 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       return;
     }
     this.activeSession = session;
+    const mode = this.conversationSelections.get(session.id)?.mode ?? "agent";
+    this.conversationSelections.set(session.id, { mode });
+    this.application.setAgentSelection({ ...this.application.state().agentSelection, mode });
     await this.persistConversationLayout();
     this.updateRunningContext();
     await this.postConversationState();
+    await this.refresh();
     await this.post({ type: "outputSession", session: this.activeSession });
     await this.postActiveExecution(session.id);
   }
@@ -349,6 +375,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     }
     this.hydrateSessions();
     this.sessions.delete(sessionId);
+    this.conversationSelections.delete(sessionId);
     if (this.openConversations.includes(sessionId)) {
       await this.closeConversation(sessionId);
       return;
@@ -388,7 +415,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     const editor = vscode.window.activeTextEditor;
     const attachment = await selectionAttachment();
     const copiedText = await writeExactClipboardText(vscode.env.clipboard, attachment.text);
-    const reference = editor && isCodeDocument(editor.document)
+    const reference = editor
+      && isCodeDocument(editor.document)
+      && vscode.workspace.getWorkspaceFolder(editor.document.uri)
       ? clipboardFileReference(attachment.reference)
       : undefined;
     if (reference) {
@@ -527,17 +556,21 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           await this.pinConversation(request.sessionId, request.pinned);
           break;
         case "agentSelection":
-          this.application.setAgentSelection({
-            mode: request.selection.mode,
+          {
+          const selection = {
+            ...this.application.state().agentSelection,
             permission: request.selection.permission,
             ...(request.selection.profileId ? { profileId: request.selection.profileId } : {}),
             ...(request.selection.model ? { model: request.selection.model } : {}),
             ...(request.selection.reasoningEffort ? { reasoningEffort: request.selection.reasoningEffort } : {}),
             ...(request.selection.speed ? { speed: request.selection.speed } : {}),
             ...(request.selection.serviceTier ? { serviceTier: request.selection.serviceTier } : {})
-          });
+          } satisfies AgentSelection;
+          this.conversationSelections.set(this.activeSession.id, { mode: request.selection.mode });
+          this.application.setAgentSelection({ ...selection, mode: request.selection.mode });
           await this.refresh();
           break;
+          }
         case "openFileReference":
           await openDextFileReference(request.reference, this.application.storage);
           break;
@@ -594,20 +627,40 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
             });
             throw error;
           }
-          let codeReference = request.purpose === "code"
-            ? this.attachments.clipboardReference(text)
-            : undefined;
+          let codeReference: ReturnType<typeof this.attachments.clipboardReference> = undefined;
           try {
-            // A selection copied from a VS Code editor does not pass through
-            // Dext's context-copy command. Recover its workspace reference
-            // when the clipboard text still matches the active selection.
-            if (request.purpose === "code" && !codeReference) {
-              const editor = activeCodeSelection();
-              if (editor
-                && vscode.workspace.getWorkspaceFolder(editor.document.uri)
-                && editor.document.getText(editor.selection) === text) {
-                const attachment = await selectionAttachment();
-                codeReference = clipboardFileReference(attachment.reference);
+            if (request.purpose === "code") {
+              const editor = vscode.window.activeTextEditor;
+              const hasMatchingSelection = Boolean(
+                editor
+                && !editor.selection.isEmpty
+                && editor.document.getText(editor.selection) === text
+              );
+
+              // A selection copied from a VS Code editor does not pass through
+              // Dext's context-copy command. Recover its workspace reference
+              // when the clipboard text still matches the active selection.
+              // When that selection is outside the workspace (or is prose),
+              // deliberately leave the text untouched. In particular, do not
+              // fall back to a stale staged reference from an earlier project
+              // selection with identical contents.
+              if (hasMatchingSelection) {
+                const current = activeCodeSelection();
+                if (current) {
+                  const attachment = await selectionAttachment();
+                  codeReference = clipboardFileReference(attachment.reference);
+                } else {
+                  // The matching selection is known to be non-project or
+                  // non-code. Drop any older staged context as well, so a
+                  // second paste after focus changes cannot resurrect a ref
+                  // for this external/prose content.
+                  this.attachments.clearClipboard();
+                }
+              } else {
+                // Explicit context-copy commands (including terminal output)
+                // have no active editor selection to validate against, so the
+                // short-lived staged reference remains available here.
+                codeReference = this.attachments.clipboardReference(text);
               }
             }
           } catch (error) {
@@ -842,6 +895,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     // setSelection replaces the whole record, so the agent, model, and effort
     // choices have to be carried over or they are lost with the mode switch.
     this.application.setAgentSelection({ ...this.application.state().agentSelection, mode: "agent" });
+    this.conversationSelections.set(this.activeSession.id, { mode: "agent" });
     await this.refresh();
     await this.run("agent", [
       `Implement the plan in ${planPath} exactly as written. Do not edit the plan file itself.`,

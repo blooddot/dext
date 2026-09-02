@@ -3,3 +3,6 @@ dist/
 *.vsix
 coverage/
 .vscode-test/
+.npm-cache
+.tmp-tb
+.volta

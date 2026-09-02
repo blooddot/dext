@@ -103,6 +103,9 @@ class FileReferenceWidget extends WidgetType {
   }
 
   override toDOM(view: EditorView): HTMLElement {
+    const source = view.state.doc.toString();
+    const before = source[this.projection.interpolationStart - 1] ?? "";
+    const after = source[this.projection.interpolationEnd] ?? "";
     const descriptor = fileReferenceChipDescriptor(
       compactFileReferenceLabel(this.projection.reference.payload),
       this.projection.reference.payload
@@ -110,7 +113,13 @@ class FileReferenceWidget extends WidgetType {
     return createFileReferenceChip({
       document: view.dom.ownerDocument,
       ...descriptor,
-      modifierClass: "code-file-reference",
+      modifierClass: [
+        "code-file-reference",
+        before && !/[\s]/.test(before)
+          ? "reference-adjacent-before" : "",
+        after && !/[\s]/.test(after)
+          ? "reference-adjacent-after" : ""
+      ].filter(Boolean).join(" "),
       suppressPointerDown: true,
       onOpen: () => this.onOpen(this.projection.reference),
       onRemove: () => {

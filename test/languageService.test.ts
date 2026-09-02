@@ -27,6 +27,30 @@ describe("DextLanguageService workflow features", () => {
     expect(service.documentCompletions(source).map((item) => item.label)).toEqual(["text", "summary", "patch", "files"]);
   });
 
+  it("offers element fields after indexing a list result", () => {
+    const registry = new MethodRegistry();
+    registry.register({
+      id: "mcp.search", title: "Search", description: "", kind: "command", version: "1.0.0",
+      input: [],
+      output: {
+        kind: "mcpRaw",
+        fields: [{
+          name: "files", type: "list", items: {
+            name: "item", type: "object", properties: [
+              { name: "id", type: "string" },
+              { name: "content", type: "string" },
+              { name: "note", type: "string" }
+            ]
+          }
+        }]
+      },
+      executor: { kind: "deterministic", handler: "askRespond" }
+    }, "project");
+    const indexed = new DextLanguageService(registry);
+    const source = "rows = mcp.search()\nrows.files[0].";
+    expect(indexed.documentCompletions(source).map((item) => item.label)).toEqual(["id", "content", "note"]);
+  });
+
   it("completes terminal result fields and terminal status values", () => {
     const fields = 'terminal_result = terminal(command="node --version")\nterminal_result.';
     expect(service.documentCompletions(fields).map((item) => item.label)).toEqual([

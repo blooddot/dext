@@ -185,9 +185,11 @@ export class AgentProfileStore {
     const stored = state?.get<StoredAgentProfile[]>(STORAGE_KEY);
     this.profiles = mergeProfiles(stored);
     const storedSelection = state?.get<AgentSelection>(SELECTION_KEY) ?? {};
-    this.selection = storedSelection.profileId === "qunshu"
-      ? { ...storedSelection, profileId: "aioa" }
-      : storedSelection;
+    const { mode, ...globalSelection } = storedSelection;
+    void mode;
+    this.selection = globalSelection.profileId === "qunshu"
+      ? { ...globalSelection, profileId: "aioa" }
+      : globalSelection;
   }
 
   list(enabledIds?: readonly string[]): AgentProfile[] {
@@ -207,6 +209,9 @@ export class AgentProfileStore {
   }
 
   setSelection(selection: AgentSelection): void {
+    // Mode belongs to the conversation tab. Keep it in the in-memory
+    // selection for the current runtime, but never persist it as a global
+    // profile preference.
     this.selection = {
       ...(selection.mode ? { mode: selection.mode } : {}),
       ...(selection.permission ? { permission: selection.permission } : {}),
@@ -216,7 +221,9 @@ export class AgentProfileStore {
       ...(selection.speed ? { speed: selection.speed } : {}),
       ...(selection.serviceTier ? { serviceTier: selection.serviceTier } : {})
     };
-    void this.state?.update(SELECTION_KEY, this.selection);
+    const { mode, ...globalSelection } = this.selection;
+    void mode;
+    void this.state?.update(SELECTION_KEY, globalSelection);
   }
 
   update(profile: AgentProfile): void {

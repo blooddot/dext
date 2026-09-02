@@ -26,14 +26,18 @@ export class ClipboardClient {
 
   write(text: string): Promise<boolean> {
     const requestId = ++this.nextRequestId;
+    const result = new Promise<boolean>((resolve) => this.pending.set(requestId, { kind: "write", resolve }));
     this.post({ type: "clipboardWrite", requestId, text });
-    return new Promise((resolve) => this.pending.set(requestId, { kind: "write", resolve }));
+    return result;
   }
 
   read(purpose: "code" | "text"): Promise<ClipboardReadResult | undefined> {
     const requestId = ++this.nextRequestId;
+    const result = new Promise<ClipboardReadResult | undefined>((resolve) => {
+      this.pending.set(requestId, { kind: "read", resolve });
+    });
     this.post({ type: "clipboardRead", requestId, purpose });
-    return new Promise((resolve) => this.pending.set(requestId, { kind: "read", resolve }));
+    return result;
   }
 
   accept(response: WebviewResponse): boolean {

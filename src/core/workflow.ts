@@ -876,18 +876,31 @@ class Compiler {
       return { expression: { kind: "variable", name, from: node.from, to: node.to }, type: entry.type };
     }
     if (node.name === "MemberExpression") {
-      const parts = namedChildren(node);
-      const object = parts[0] ? this.compileExpression(parts[0]) : undefined;
-      const property = parts[1] ? text(this.source, parts[1]) : "";
+      const parts = children(node);
+      const objectNode = parts.find((child) => child.name === "MemberExpression" || child.name === "VariableName" || child.name === "CallExpression" || child.name === "ArrayExpression" || child.name === "DictionaryExpression");
+      const object = objectNode ? this.compileExpression(objectNode) : undefined;
       if (!object) return undefined;
-      if (object.type.kind !== "result" || !object.type.fields[property]) {
-        this.error(`'${typeName(object.type)}' has no field '${property}'.`, node.from, node.to);
+      const dot = parts.findIndex((child) => child.name === ".");
+      if (dot >= 0) {
+        const propertyNode = parts[dot + 1];
+        const property = propertyNode ? text(this.source, propertyNode) : "";
+        if (object.type.kind !== "result" && object.type.kind !== "object" && object.type.kind !== "unknown") {
+          this.error(`Cannot read field '${property}' from ${typeName(object.type)}.`, node.from, node.to);
+          return undefined;
+        }
+        const type = object.type.kind === "result" ? (object.type.fields[property] ?? { kind: "unknown" as const }) : { kind: "unknown" as const };
+        return { expression: { kind: "member", object: object.expression, property, from: node.from, to: node.to }, type };
+      }
+      const open = parts.findIndex((child) => child.name === "[");
+      const indexNode = open >= 0 ? parts[open + 1] : undefined;
+      if (!indexNode) {
+        this.error("Invalid member access.", node.from, node.to);
         return undefined;
       }
-      return {
-        expression: { kind: "member", object: object.expression, property, from: node.from, to: node.to },
-        type: object.type.fields[property]
-      };
+      const index = this.compileExpression(indexNode);
+      if (!index) return undefined;
+      const type = object.type.kind === "list" ? object.type.item : { kind: "unknown" as const };
+      return { expression: { kind: "index", object: object.expression, index: index.expression, from: node.from, to: node.to }, type };
     }
     if (node.name === "CallExpression") {
       const path = memberPath(this.source, namedChildren(node)[0]!);
@@ -951,8 +964,21 @@ function fieldType(field: FieldDefinition): ValueType {
     : { kind: "string" };
   else if (field.type === "context") value = { kind: "context" };
   else if (field.type === "dir") value = { kind: "dir" };
-  else if (field.type === "object") value = { kind: "object" };
-  else if (field.type === "list") value = { kind: "list", item: { kind: "unknown" } };
+  else if (field.type === "object") {
+    // MCP schemas can describe object members recursively. Represent a named
+    // object as a result-shaped value so member expressions (including loop
+    // variables over arrays of objects) retain their fields.
+    if (field.properties?.length) {
+      const fields: Record<string, ValueType> = {};
+      for (const property of field.properties) fields[property.name] = fieldType(property);
+      value = result(`${field.name}Result`, fields);
+    } else {
+      value = { kind: "object" };
+    }
+  }
+  else if (field.type === "list") {
+    value = { kind: "list", item: field.items ? fieldType(field.items) : { kind: "unknown" } };
+  }
   else if (field.type === "result") value = result("Result", {});
   else value = { kind: field.type };
   return field.multiple ? { kind: "list", item: value } : value;

@@ -85,6 +85,7 @@ export type WorkflowExpression =
   | { kind: "reference"; reference: ContextReference | DirectoryReference; from: number; to: number }
   | { kind: "variable"; name: string; from: number; to: number }
   | { kind: "member"; object: WorkflowExpression; property: string; from: number; to: number }
+  | { kind: "index"; object: WorkflowExpression; index: WorkflowExpression; from: number; to: number }
   | { kind: "call"; call: WorkflowCall; from: number; to: number }
   | {
     /** A list comprehension. Because the body cannot see anything the other
@@ -193,6 +194,8 @@ export type FieldType = "string" | "number" | "boolean" | "object" | "list" | "e
 export interface FieldDefinition {
   name: string;
   type: FieldType;
+  /** Whether the field may explicitly contain JSON null. */
+  nullable?: boolean;
   /** Runtime-only argument omitted from public signatures and completions. */
   internal?: boolean;
   accepts?: FieldType[];

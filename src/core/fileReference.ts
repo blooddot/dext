@@ -109,10 +109,15 @@ export function atReferenceOccurrences(source: string): ContextReferenceOccurren
   for (const match of source.matchAll(AT_TOKEN_CANDIDATE)) {
     const start = match.index ?? 0;
     const previous = source[start - 1] ?? "";
-    if (previous && /[\p{L}\p{N}_.+-]/u.test(previous)) continue;
     const expression = match[0];
     if (!expression) continue;
     const candidate = expression.slice(1);
+    // Dext attachment references are unambiguous even when directly adjacent
+    // to prose (for example, "错误了@.dext-global/attachments/...log").
+    // Keep the boundary guard for ordinary references so email addresses and
+    // @mentions are not turned into chips.
+    const attachment = /^\.dext(?:-global)?\/attachments\//i.test(candidate);
+    if (previous && /[\p{L}\p{N}_.+-]/u.test(previous) && !attachment) continue;
     const directory = candidate.endsWith("/");
     const payload = directory ? candidate.slice(0, -1) : candidate;
     let parsed: ParsedFileReference;

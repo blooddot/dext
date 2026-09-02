@@ -15,6 +15,22 @@ describe("ClipboardClient", () => {
     await expect(written).resolves.toBe(true);
   });
 
+  it("handles a response delivered synchronously by the transport", async () => {
+    const client = new ClipboardClient((request) => {
+      if (request.type === "clipboardRead") {
+        client.accept({
+          type: "clipboardReadResult",
+          requestId: request.requestId,
+          success: true,
+          text: "pasted immediately",
+          contextAttached: false
+        });
+      }
+    });
+
+    await expect(client.read("text")).resolves.toMatchObject({ text: "pasted immediately" });
+  });
+
   it("returns ordinary text from Host reads", async () => {
     const requests: WebviewRequest[] = [];
     const client = new ClipboardClient((request) => requests.push(request));

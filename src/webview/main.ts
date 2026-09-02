@@ -36,6 +36,7 @@ import {
 import { createFileReferenceChip, fileReferenceChipDescriptor } from "./fileReferenceChip.js";
 import { outputExternalLink, outputLinkReference } from "./outputLink.js";
 import { dextHighlightClass, dextHighlightRanges } from "../dextHighlight.js";
+import { formatJsonOutput } from "./jsonOutput.js";
 
 interface VsCodeApi {
   postMessage(message: WebviewRequest): void;
@@ -152,6 +153,17 @@ let agentPermission: AgentPermission = "workspace-write";
 let sidebarState: SidebarState | undefined;
 let lastSidebarState: SidebarState | undefined;
 let activeConversationId: string | undefined;
+interface DraftAttachment {
+  relativePath: string;
+  webviewUri: string;
+  name: string;
+}
+interface ConversationDraft {
+  source: string;
+  attachments: DraftAttachment[];
+}
+const conversationDrafts = new Map<string, ConversationDraft>();
+let restoringDraft = false;
 const runningConversationIds = new Set<string>();
 let dropPosition: number | undefined;
 let pendingDropPosition: number | undefined;
@@ -260,6 +272,7 @@ const editor = new DextCodeEditor({
     // A pending host file lookup must not insert at a stale document offset.
     pendingDropPosition = undefined;
     clearInputError();
+    persistComposerDraft();
     updateRunState();
   },
   onError: renderError
@@ -939,7 +952,9 @@ function displayOptionValue(value: string): string {
 
 function renderAgentControls(state: SidebarState): void {
   sidebarState = state;
-  inputMode = state.agentSelection.mode ?? inputMode;
+  // A tab with no stored mode is a fresh conversation and must use Agent. Do
+  // not retain the previous tab's mode in the webview-local fallback.
+  inputMode = state.agentSelection.mode ?? "agent";
   if (state.settings) {
     defaultDiffMode = state.settings.diffView;
     editor.setSubmitOnEnter(state.settings.submitOnEnter);
@@ -961,7 +976,7 @@ function renderAgentControls(state: SidebarState): void {
   };
   elements.modeControlValue.textContent = modeLabel[inputMode];
   elements.modeControlIcon.className = `codicon ${modeIcon[inputMode]}`;
-  agentPermission = state.agentSelection.permission ?? agentPermission;
+  agentPermission = state.agentSelection.permission ?? "workspace-write";
   // Ask and Plan are read-only by definition and Code carries its permission on
   // each call, so the tier is only a choice in Agent mode.
   elements.permissionMenuShell.hidden = inputMode !== "agent";
@@ -1186,7 +1201,9 @@ elements.conversationTabs.addEventListener("dblclick", (event) => {
 
 function renderConversations(sessions: readonly ConversationSummary[], activeId: string): void {
   const activeChanged = activeConversationId !== activeId;
+  if (activeChanged) persistComposerDraft();
   activeConversationId = activeId;
+  if (activeChanged) restoreComposerDraft(activeId);
   runningConversationIds.clear();
   for (const conversation of sessions) {
     if (conversation.running) runningConversationIds.add(conversation.id);
@@ -1329,6 +1346,21 @@ function copyableContent(content: string, className = ""): HTMLElement {
 
 function codeBlock(content: string): HTMLElement {
   return copyableContent(content);
+}
+
+function jsonOutput(content: string): HTMLElement {
+  const formatted = formatJsonOutput(content);
+  if (!formatted) return copyableText(content);
+  const wrapper = document.createElement("div");
+  wrapper.className = "output-text-copyable json-output";
+  const body = document.createElement("div");
+  body.className = "markdown-body";
+  // Keep one shared Markdown rendering path for every output. The fence is
+  // needed to preserve JSON whitespace while still letting Markdown own the
+  // surrounding layout and code-block styling.
+  body.innerHTML = markdown.render("```json\n" + formatted + "\n```");
+  wrapper.append(body, copyButton(formatted));
+  return wrapper;
 }
 
 function uiResultText(result: Extract<DextResult, { kind: "ui" }>): string {
@@ -2064,7 +2096,9 @@ function renderExecution(response: RuntimeResponse, reviewTurnId?: string): Docu
       label.textContent = result.label;
       fragment.append(label);
     }
-    fragment.append(copyableText(result.text));
+    // Structured print values are formatted and highlighted as JSON; non-JSON
+    // text continues through the normal Markdown renderer.
+    fragment.append(jsonOutput(result.text));
   } else if (result.kind === "terminal") {
     const disclosure = document.createElement("details");
     disclosure.className = "execution-disclosure terminal-disclosure";
@@ -2241,6 +2275,17 @@ function followResultIfNeeded(shouldFollow: boolean): void {
   if (!shouldFollow) return;
   requestAnimationFrame(() => {
     elements.resultBody.scrollTop = elements.resultBody.scrollHeight;
+  });
+}
+
+/** Selecting a conversation should open at its latest reply, like a chat
+ * timeline. Defer until the freshly-rendered disclosures have been laid out
+ * so scrollHeight reflects the complete session. */
+function scrollResultToBottom(): void {
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      elements.resultBody.scrollTop = elements.resultBody.scrollHeight;
+    });
   });
 }
 
@@ -2559,7 +2604,6 @@ function renderOutputSession(session: DextHistorySession): void {
   if (agentRunTimer) clearInterval(agentRunTimer);
   agentRunTimer = undefined;
   clearInputError();
-  editor.setValue("");
   elements.result.replaceChildren();
   outputTurns.clear();
   activeTurn = undefined;
@@ -2573,10 +2617,11 @@ function renderOutputSession(session: DextHistorySession): void {
     const response = storedResponse(record);
     if (record.error) renderOutputError(record.error);
     else if (response) renderResult(response);
-    else if (record.output) turn.output.append(codeBlock(record.output));
+    else if (record.output) turn.output.append(jsonOutput(record.output));
   }
   elements.resultSection.classList.remove("hidden");
   syncResultToggle();
+  scrollResultToBottom();
 }
 
 function droppedFiles(transfer: DataTransfer): ReturnType<typeof parseDroppedFiles> {
@@ -2617,6 +2662,7 @@ function addImageAttachment(relativePath: string, webviewUri: string, name: stri
   remove.addEventListener("click", () => {
     chip.remove();
     imageAttachments.delete(relativePath);
+    activeImageAttachmentMetadata.delete(relativePath);
     editor.removeFileReference(relativePath);
     vscode.postMessage({ type: "deleteImageAttachment", relativePath });
   });
@@ -2624,6 +2670,45 @@ function addImageAttachment(relativePath: string, webviewUri: string, name: stri
   elements.attachmentBar.append(chip);
   elements.attachmentBar.classList.remove("hidden");
   imageAttachments.set(relativePath, chip);
+  activeImageAttachmentMetadata.set(relativePath, { relativePath, webviewUri, name });
+  persistComposerDraft();
+}
+
+const activeImageAttachmentMetadata = new Map<string, DraftAttachment>();
+
+function clearRenderedAttachments(): void {
+  for (const chip of imageAttachments.values()) chip.remove();
+  imageAttachments.clear();
+  activeImageAttachmentMetadata.clear();
+  elements.attachmentBar.classList.add("hidden");
+}
+
+function persistComposerDraft(): void {
+  if (!activeConversationId || restoringDraft) return;
+  const source = editor.source;
+  conversationDrafts.set(activeConversationId, {
+    source,
+    // If the user removes an image's @ reference directly in the editor, do
+    // not resurrect its chip when returning to this tab.
+    attachments: [...activeImageAttachmentMetadata.values()]
+      .filter((item) => source.includes(`@${item.relativePath}`))
+      .map((item) => ({ ...item }))
+  });
+}
+
+function restoreComposerDraft(sessionId: string): void {
+  const draft = conversationDrafts.get(sessionId);
+  restoringDraft = true;
+  try {
+    clearRenderedAttachments();
+    editor.setValue(draft?.source ?? "");
+    for (const attachment of draft?.attachments ?? []) {
+      addImageAttachment(attachment.relativePath, attachment.webviewUri, attachment.name);
+    }
+  } finally {
+    restoringDraft = false;
+  }
+  updateRunState();
 }
 
 function clearSubmittedInput(): void {
@@ -2633,7 +2718,9 @@ function clearSubmittedInput(): void {
   // its history entry still point at them.
   for (const chip of imageAttachments.values()) chip.remove();
   imageAttachments.clear();
+  activeImageAttachmentMetadata.clear();
   elements.attachmentBar.classList.add("hidden");
+  persistComposerDraft();
 }
 
 elements.run.addEventListener("click", run);

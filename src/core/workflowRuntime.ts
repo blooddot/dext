@@ -268,6 +268,22 @@ export class WorkflowRuntime {
       if (value === undefined) throw new Error(`Variable '${expression.name}' is unavailable.`);
       return value;
     }
+    if (expression.kind === "index") {
+      const object = this.evaluate(expression.object, environment);
+      const index = this.evaluate(expression.index, environment);
+      if (Array.isArray(object)) {
+        if (typeof index !== "number" || !Number.isInteger(index)) throw new Error("Array index must be an integer.");
+        const value = object[index];
+        if (value === undefined) throw new Error(`Array index ${index} is out of range.`);
+        return value;
+      }
+      if (typeof object === "object" && object !== null && (typeof index === "string" || typeof index === "number")) {
+        const value = (object as Record<string, RuntimeValue>)[String(index)];
+        if (value === undefined) throw new Error(`Object field '${String(index)}' is unavailable.`);
+        return value;
+      }
+      throw new Error("Cannot index this value.");
+    }
     if (expression.kind === "call" || expression.kind === "comprehension") {
       throw new Error("Nested API calls must be evaluated asynchronously.");
     }
@@ -309,6 +325,22 @@ export class WorkflowRuntime {
       const value = (object as unknown as Record<string, RuntimeValue>)[expression.property];
       if (value === undefined) throw new Error(`Result field '${expression.property}' is unavailable.`);
       return value;
+    }
+    if (expression.kind === "index") {
+      const object = await this.evaluateAsync(expression.object, environment, metadata);
+      const index = await this.evaluateAsync(expression.index, environment, metadata);
+      if (Array.isArray(object)) {
+        if (typeof index !== "number" || !Number.isInteger(index)) throw new Error("Array index must be an integer.");
+        const value = object[index];
+        if (value === undefined) throw new Error(`Array index ${index} is out of range.`);
+        return value;
+      }
+      if (typeof object === "object" && object !== null && (typeof index === "string" || typeof index === "number")) {
+        const value = (object as Record<string, RuntimeValue>)[String(index)];
+        if (value === undefined) throw new Error(`Object field '${String(index)}' is unavailable.`);
+        return value;
+      }
+      throw new Error("Cannot index this value.");
     }
     if (expression.kind === "comprehension") return this.evaluateComprehension(expression, environment, metadata);
     if (expression.kind === "list") {

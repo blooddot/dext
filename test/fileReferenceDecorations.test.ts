@@ -70,6 +70,14 @@ describe("@ file reference decorations", () => {
     expect(values.map((item) => item.payload)).toEqual(["src/a.ts"]);
   });
 
+  it("recognizes attachment references adjacent to prose without a separator", () => {
+    const [reference] = atReferenceOccurrences("打包错误了@.dext-global/attachments/terminal-0123456789abcdef01234567.log");
+    expect(reference).toMatchObject({
+      kind: "file",
+      payload: ".dext-global/attachments/terminal-0123456789abcdef01234567.log"
+    });
+  });
+
   it("recognizes trailing-slash directory references as folder Chips", () => {
     const [directory] = atReferenceOccurrences('agent(input="Inspect @src/components/")');
     expect(directory).toMatchObject({

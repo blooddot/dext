@@ -94,7 +94,8 @@ function scalarSchemaForType(field: FieldDefinition, type: FieldDefinition["type
 function scalarSchema(field: FieldDefinition): ZodType {
   const types = [field.type, ...(field.accepts ?? [])];
   const schemas = types.map((type) => scalarSchemaForType(field, type));
-  return schemas.length === 1 ? schemas[0]! : z.union(schemas as [ZodType, ZodType, ...ZodType[]]);
+  const schema = schemas.length === 1 ? schemas[0]! : z.union(schemas as [ZodType, ZodType, ...ZodType[]]);
+  return field.nullable ? schema.nullable() : schema;
 }
 
 function inputSchema(definition: CallableDefinition): ZodType {

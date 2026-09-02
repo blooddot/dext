@@ -18,7 +18,8 @@ import {
   history,
   historyKeymap,
   indentWithTab,
-  insertNewlineAndIndent
+  insertNewlineAndIndent,
+  redo
 } from "@codemirror/commands";
 import {
   Compartment,
@@ -74,6 +75,19 @@ export function pasteEventText(event: Pick<ClipboardEvent, "clipboardData">): st
   const plainTextType = [...clipboardData.types]
     .find((type) => type.toLowerCase() === "text/plain");
   return plainTextType ? clipboardData.getData(plainTextType) : undefined;
+}
+
+/** Read the browser clipboard as a fallback for keyboard paste. In a VS Code
+ * webview the host clipboard is normally preferred (it can carry a structured
+ * workspace reference), but browser paste events are not guaranteed to expose
+ * their data and host reads can be unavailable in restricted environments. */
+async function browserClipboardText(): Promise<string | undefined> {
+  try {
+    if (typeof navigator === "undefined" || !navigator.clipboard?.readText) return undefined;
+    return await navigator.clipboard.readText();
+  } catch {
+    return undefined;
+  }
 }
 
 const signatureEffect = StateEffect.define<Tooltip | null>();
@@ -211,7 +225,11 @@ export class DextCodeEditor {
         // avoiding a request for half-typed identifiers.
         activateOnTypingDelay: 180,
         activateOnCompletion: (completion) => ["namespace", "method", "property"].includes(completion.type ?? ""),
-        defaultKeymap: false,
+        // Keep CodeMirror's built-in completion keymap at high precedence so
+        // ArrowUp/ArrowDown (and Enter/Escape) control the suggestion widget
+        // the same way they do in VS Code. Custom bindings below still add
+        // Tab acceptance and the composer-specific submit behavior.
+        defaultKeymap: true,
         icons: true,
         // Keep the list compact so the signature/help text and editor remain
         // visible; scrolling is still available for methods with many fields.
@@ -257,6 +275,13 @@ export class DextCodeEditor {
         { key: "Mod-x", run: () => { void this.cut(); return true; } },
         { key: "Mod-v", run: () => { void this.paste(); return true; } },
         { key: "Mod-Shift-v", run: () => { void this.pasteRaw(); return true; } },
+        // CodeMirror's history keymap does not consistently provide the
+        // Ctrl/Cmd+Shift+Z convention across platforms. Register it
+        // explicitly so redo mirrors the usual editor shortcut.
+        // Mark the binding as handled so the browser's native editing history
+        // does not also consume the shortcut (which can leave CodeMirror's
+        // redo branch out of sync after the first invocation).
+        { key: "Mod-Shift-z", run: redo, preventDefault: true },
         { key: "Alt-/", run: () => { startCompletion(this.view); return true; } },
         { key: "Mod-Space", run: () => { startCompletion(this.view); return true; } },
         { key: "Mod-Shift-Space", run: () => { void this.updateSignature(); return true; } },
@@ -683,7 +708,8 @@ export class DextCodeEditor {
     const result = await this.options.clipboard.read("code");
     if (!selectionMatches(this.view, source, selection.anchor, selection.head)) return;
     if (!result) {
-      if (eventText !== undefined) this.replaceSelection(eventText, "input.paste");
+      const text = eventText ?? await browserClipboardText();
+      if (text) this.replaceSelection(text, "input.paste");
       return;
     }
     let text: string;
@@ -692,7 +718,7 @@ export class DextCodeEditor {
       // authoritative when it can recover a structured workspace reference.
       text = result.codeReference
         ? this.pasteText(source, selection.from, selection.to, result)
-        : eventText || result.text;
+        : eventText || result.text || await browserClipboardText() || "";
     } catch (error) {
       this.options.onError(error);
       return;
@@ -707,7 +733,7 @@ export class DextCodeEditor {
     const selection = this.view.state.selection.main;
     const result = await this.options.clipboard.read("text");
     if (!selectionMatches(this.view, source, selection.anchor, selection.head)) return;
-    const text = result?.text ?? eventText;
+    const text = eventText || result?.text || await browserClipboardText() || "";
     if (text) this.replaceSelection(text, "input.paste");
   }
 
@@ -721,10 +747,15 @@ export class DextCodeEditor {
   }
 
   private replaceSelection(text: string, userEvent: string): void {
+    // Clipboard text may use Windows-style CRLF (or legacy CR) line endings.
+    // CodeMirror documents use `\n` as their line separator; normalize before
+    // calculating the new caret position so pasted multiline text remains
+    // multiline and the selection does not land at an incorrect offset.
+    const normalizedText = text.replace(/\r\n?/g, "\n");
     const selection = this.view.state.selection.main;
     this.view.dispatch({
-      changes: { from: selection.from, to: selection.to, insert: text },
-      selection: { anchor: selection.from + text.length },
+      changes: { from: selection.from, to: selection.to, insert: normalizedText },
+      selection: { anchor: selection.from + normalizedText.length },
       scrollIntoView: true,
       userEvent
     });

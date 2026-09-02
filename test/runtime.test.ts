@@ -66,6 +66,60 @@ describe("Dext workflow runtime", () => {
     expect(execution.executions[0]?.result).toMatchObject({ kind: "mcp.team.query", code: 200 });
   });
 
+  it("accepts JSON objects wrapped in an MCP server response prefix", async () => {
+    const registry = new MethodRegistry();
+    registry.registerMany(BUILTIN_METHODS, "builtin");
+    const loaded = parseMcpManifest(JSON.stringify({
+      name: "team",
+      transport: "stdio",
+      command: "team-mcp",
+      tools: [{
+        name: "query",
+        inputSchema: { type: "object", properties: {} },
+        outputSchema: { type: "object", properties: { result: { type: "array" } } }
+      }]
+    }), "team.jsonc");
+    registry.registerMany(loaded.methods, "project");
+    const runtime = new DextRuntime(registry, new ContextResolver(host));
+    runtime.setWorkspaceTrusted(true);
+    runtime.setMcpCaller(async () => ({
+      kind: "mcpRaw",
+      server: "team",
+      tool: "query",
+      content: `API Response (Status: 200):\n${JSON.stringify({ result: [{ id: "t1" }] })}`
+    }));
+    const compiled = compileWorkflow("mcp.team.query()", registry);
+    expect(compiled.diagnostics).toEqual([]);
+    const execution = await new WorkflowRuntime(runtime).execute(compiled.program!);
+    expect(execution.executions[0]?.result).toMatchObject({
+      kind: "mcp.team.query",
+      result: [{ id: "t1" }]
+    });
+  });
+
+  it("does not expose the internal MCP kind when printing a typed result", async () => {
+    const registry = new MethodRegistry();
+    registry.registerMany(BUILTIN_METHODS, "builtin");
+    const loaded = parseMcpManifest(JSON.stringify({
+      name: "team", transport: "stdio", command: "team-mcp",
+      tools: [{ name: "query", inputSchema: { type: "object", properties: {} },
+        outputSchema: { type: "object", properties: { result: { type: "array" } } } }]
+    }), "team.jsonc");
+    registry.registerMany(loaded.methods, "project");
+    const runtime = new DextRuntime(registry, new ContextResolver(host));
+    runtime.setWorkspaceTrusted(true);
+    runtime.setMcpCaller(async () => ({
+      kind: "mcpRaw", server: "team", tool: "query",
+      structured: { result: [{ id: "t1" }] }
+    }));
+    const compiled = compileWorkflow("result = mcp.team.query()\nprint(result)", registry);
+    expect(compiled.diagnostics).toEqual([]);
+    const execution = await new WorkflowRuntime(runtime).execute(compiled.program!);
+    expect(execution.executions.at(-1)?.result).toMatchObject({
+      kind: "print", text: '{"result":[{"id":"t1"}]}'
+    });
+  });
+
   it("executes ask, agent and print in sequence", async () => {
     const { registry, workflow } = setup();
     const compiled = compileWorkflow(`answer = ask(input=f"Explain {ref.selection}")

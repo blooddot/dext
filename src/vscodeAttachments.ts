@@ -68,9 +68,16 @@ export async function selectionAttachment(): Promise<AttachmentSnapshot> {
   };
 }
 
+/** Return the selected code document only when it belongs to the workspace.
+ * External editors must remain ordinary clipboard text. */
 export function activeCodeSelection(): vscode.TextEditor | undefined {
   const editor = vscode.window.activeTextEditor;
-  return editor && !editor.selection.isEmpty && isCodeDocument(editor.document) ? editor : undefined;
+  return editor
+    && !editor.selection.isEmpty
+    && isCodeDocument(editor.document)
+    && vscode.workspace.getWorkspaceFolder(editor.document.uri)
+    ? editor
+    : undefined;
 }
 
 /** A workspace file reference is only a path token. Do not read the file just

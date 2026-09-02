@@ -4,6 +4,7 @@ import { DextLanguageService } from "../src/core/languageService.js";
 import { MethodRegistry } from "../src/core/registry.js";
 import { BUILTIN_METHODS } from "../src/core/builtins.js";
 import { compileWorkflow } from "../src/core/workflow.js";
+import { AxAdapter } from "../src/core/axAdapter.js";
 
 const manifest = `{
   // A checked-in MCP contract contains no credential values.
@@ -68,6 +69,39 @@ describe("MCP manifests", () => {
     expect(language.documentCompletions(source).map((item) => item.label)).toEqual(["total_count", "items"]);
   });
 
+  it("completes fields of objects nested in MCP result arrays", () => {
+    const loaded = parseMcpManifest(manifest.replace(
+      '"items": { "type": "array" }',
+      '"items": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "string" }, "content": { "type": "string" } } } }'
+    ), ".dext/mcp/github.jsonc");
+    const registry = new MethodRegistry();
+    registry.registerMany(BUILTIN_METHODS, "builtin");
+    registry.registerMany(loaded.methods, "project");
+    const language = new DextLanguageService(registry);
+    const source = 'result = mcp.github.search_issues(owner="dext")\nresult.items.';
+    expect(language.documentCompletions(source).map((item) => item.label)).toEqual(["id", "content"]);
+  });
+
+  it("completes Teambition-style result array members", () => {
+    const loaded = parseMcpManifest(`{
+      "name": "team", "transport": "stdio", "command": "team-mcp",
+      "tools": [{ "name": "query", "inputSchema": { "type": "object", "properties": {} },
+        "outputSchema": { "type": "object", "properties": {
+          "result": { "type": "array", "items": { "type": "object", "properties": {
+            "id": { "type": "string" }, "content": { "type": "string" }
+          } } }, "code": { "type": "integer" }
+        } }
+      }]
+    }`, "team.jsonc");
+    const registry = new MethodRegistry();
+    registry.registerMany(BUILTIN_METHODS, "builtin");
+    registry.registerMany(loaded.methods, "project");
+    const language = new DextLanguageService(registry);
+    const source = 'result = mcp.team.query()\nresult.result.';
+    expect(language.documentCompletions(source).map((item) => item.label)).toEqual(["id", "content"]);
+    expect(compileWorkflow('result = mcp.team.query()\nfor task in result.result:\n    print(text=task.content)', registry).diagnostics).toEqual([]);
+  });
+
   it("allows a typed MCP result to be printed positionally", () => {
     const loaded = parseMcpManifest(manifest, ".dext/mcp/github.jsonc");
     const registry = new MethodRegistry();
@@ -117,5 +151,36 @@ describe("MCP manifests", () => {
     registry.registerMany(loaded.methods, "project");
     const language = new DextLanguageService(registry);
     expect(language.documentCompletions("mcp").map((item) => item.label)).toEqual(["mcp"]);
+  });
+
+  it("accepts nullable fields and explicitly declared error metadata", () => {
+    const loaded = parseMcpManifest(JSON.stringify({
+      name: "team",
+      transport: "stdio",
+      command: "team-mcp",
+      tools: [{
+        name: "query",
+        inputSchema: { type: "object", properties: {} },
+        outputSchema: {
+          type: "object",
+          properties: {
+            result: {
+              type: "array",
+              items: { type: "object", properties: { startDate: { type: ["string", "null"] } } }
+            },
+            traceId: { type: "string" },
+            errorCode: { type: "string" }
+          }
+        }
+      }]
+    }), "team.jsonc");
+    expect(loaded.diagnostics).toEqual([]);
+    const contract = new AxAdapter().compile(loaded.methods[0]!);
+    expect(contract.outputSchema.parse({
+      kind: "mcp.team.query",
+      result: [{ startDate: null }],
+      traceId: "trace-1",
+      errorCode: "TASK_NOT_FOUND"
+    })).toMatchObject({ errorCode: "TASK_NOT_FOUND" });
   });
 });

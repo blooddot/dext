@@ -42,9 +42,67 @@ export type McpServerConfig = StdioMcpServerConfig | HttpMcpServerConfig;
 export interface McpToolConfig {
   server: string;
   tool: string;
+  /** MCP is the default; REST tools are executed by Dext's generic adapter. */
+  kind?: "mcp" | "rest";
+  method?: string;
+  url?: string;
+  /** Optional human-facing API documentation link. */
+  docsUrl?: string;
   description?: string;
   inputSchema?: Record<string, unknown>;
   outputSchema?: Record<string, unknown>;
+}
+
+export interface RestMcpAdapterOptions {
+  fetchImpl?: McpFetch;
+}
+
+/** Generic REST-to-MCP adapter. It deliberately knows nothing about any API
+ * domain: path placeholders become path parameters and remaining arguments
+ * become query parameters (or a JSON body for non-GET requests). */
+export class RestMcpAdapter {
+  private readonly fetchImpl: McpFetch;
+  constructor(options: RestMcpAdapterOptions = {}) {
+    this.fetchImpl = options.fetchImpl ?? ((url, init) => fetch(url, init));
+  }
+
+  async call(tool: McpToolConfig, input: Record<string, unknown>, token?: string): Promise<McpToolCallResult> {
+    if (!tool.url || !tool.method) throw new Error(`REST tool '${tool.tool}' requires method and url.`);
+    let url = tool.url;
+    const used = new Set<string>();
+    url = url.replace(/\{([A-Za-z_][A-Za-z0-9_-]*)\}/g, (_match, name: string) => {
+      used.add(name);
+      const value = input[name];
+      if (value === undefined || value === null) throw new Error(`REST tool '${tool.tool}' requires '${name}'.`);
+      if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") {
+        throw new Error(`REST tool '${tool.tool}' path parameter '${name}' must be a string, number, or boolean.`);
+      }
+      return encodeURIComponent(`${value}`);
+    });
+    const method = tool.method.toUpperCase();
+    const remaining = Object.entries(input).filter(([name]) => !used.has(name));
+    const headers = new Headers({ Accept: "application/json, text/plain, */*" });
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+    const init: RequestInit = { method, headers, redirect: "manual" };
+    if (method === "GET" || method === "HEAD" || method === "DELETE") {
+      const query = new URLSearchParams();
+      for (const [name, value] of remaining) if (value !== undefined && value !== null) query.set(name, typeof value === "string" ? value : JSON.stringify(value));
+      if ([...query].length) url += `${url.includes("?") ? "&" : "?"}${query}`;
+    } else if (remaining.length) {
+      headers.set("Content-Type", "application/json");
+      init.body = JSON.stringify(Object.fromEntries(remaining));
+    }
+    const response = await this.fetchImpl(url, init);
+    if (!response.ok) throw new Error(`REST tool '${tool.tool}' returned HTTP ${response.status}.`);
+    const text = await response.text();
+    if (!text) return {};
+    try {
+      const value: unknown = JSON.parse(text);
+      return isRecord(value) ? { structuredContent: value } : { content: text };
+    } catch {
+      return { content: text };
+    }
+  }
 }
 
 export interface McpToolCallResult {
@@ -135,7 +193,7 @@ function isLoopbackHost(host: string): boolean {
     || /^127(?:\.\d{1,3}){3}$/.test(host);
 }
 
-function httpUrlDiagnostic(rawUrl: unknown): string | undefined {
+export function httpUrlDiagnostic(rawUrl: unknown): string | undefined {
   if (typeof rawUrl !== "string" || !rawUrl.trim()) return "requires an HTTP url.";
   let url: URL;
   try {
@@ -662,6 +720,7 @@ export class McpToolRegistry {
   private readonly servers = new Map<string, McpServerConfig>();
   private readonly tools = new Map<string, McpToolConfig>();
   private accessTokenProvider: McpAccessTokenProvider | undefined;
+  private readonly rest = new RestMcpAdapter();
 
   constructor(private readonly transport: McpTransport = new DefaultMcpTransport()) {}
 
@@ -777,6 +836,10 @@ export class McpToolRegistry {
       this.tools.set(key, {
         server: config.server,
         tool: config.tool,
+        ...(config.kind ? { kind: config.kind } : {}),
+        ...(config.method ? { method: config.method } : {}),
+        ...(config.url ? { url: config.url } : {}),
+        ...(config.docsUrl ? { docsUrl: config.docsUrl } : {}),
         ...(config.description ? { description: config.description } : {}),
         ...(config.inputSchema ? { inputSchema: config.inputSchema } : {}),
         ...(config.outputSchema ? { outputSchema: config.outputSchema } : {})
@@ -806,10 +869,13 @@ export class McpToolRegistry {
     if (!definition) throw new Error(`MCP tool '${tool}' is not registered in dext.mcpTools.`);
     const configuredServer = this.servers.get(definition.server);
     if (!configuredServer) throw new Error(`MCP server '${definition.server}' is not configured.`);
-    const result = await this.transport.call(configuredServer, definition.tool, input, {
+    const transportOptions = {
       ...await this.transportOptions(configuredServer),
       ...options
-    });
+    };
+    const result = definition.kind === "rest"
+      ? await this.rest.call(definition, input, transportOptions.accessToken)
+      : await this.transport.call(configuredServer, definition.tool, input, transportOptions);
     return {
       kind: "mcpRaw",
       server: definition.server,

@@ -3,7 +3,7 @@
 // in the extension host ("Cannot find module './impl/format'").
 import { parse, type ParseError } from "jsonc-parser/lib/esm/main.js";
 import type { CallableDefinition, FieldDefinition } from "./types.js";
-import type { McpServerConfig, McpToolConfig } from "./mcpRegistry.js";
+import { httpUrlDiagnostic, type McpServerConfig, type McpToolConfig } from "./mcpRegistry.js";
 
 const IDENTIFIER = /^[A-Za-z0-9_.-]+$/;
 
@@ -38,19 +38,31 @@ function schemaFields(schema: Record<string, unknown>, label: string, diagnostic
     }
     const property = isRecord(raw) ? raw : {};
     const schemaType = property.type;
+    // JSON Schema permits nullable values either through the OpenAPI-style
+    // `nullable: true` extension or a union such as `type: ["string", "null"]`.
+    // Preserve that information so typed MCP results can accept real-world
+    // API nulls (for example, tasks without dates).
+    const unionTypes = Array.isArray(schemaType)
+      && schemaType.every((value): value is string => typeof value === "string")
+      ? schemaType
+      : undefined;
+    const nullable = property.nullable === true
+      || unionTypes?.some((value) => value === "null") === true;
+    const primaryType = unionTypes?.find((value) => value !== "null");
     const enumValues = Array.isArray(property.enum) && property.enum.every((value) => typeof value === "string")
       ? property.enum
       : undefined;
     const type: FieldDefinition["type"] = enumValues?.length
       ? "enum"
-      : schemaType === "string" ? "string"
-        : schemaType === "number" || schemaType === "integer" ? "number"
-          : schemaType === "boolean" ? "boolean"
-              : schemaType === "array" ? "list"
+      : primaryType === "string" || schemaType === "string" ? "string"
+        : primaryType === "number" || primaryType === "integer" || schemaType === "number" || schemaType === "integer" ? "number"
+          : primaryType === "boolean" || schemaType === "boolean" ? "boolean"
+              : primaryType === "array" || schemaType === "array" ? "list"
               : "object";
     const field: FieldDefinition = {
       name,
       type,
+      ...(nullable ? { nullable: true } : {}),
       required: requiredNames.has(name),
       ...(typeof property.description === "string" ? { description: property.description } : {}),
       ...(enumValues?.length ? { values: enumValues } : {})
@@ -121,6 +133,29 @@ export function parseMcpManifest(source: string, path: string): McpManifestLoad 
       diagnostics.push(`${path}: every MCP tool requires a valid 'name'.`);
       continue;
     }
+    const kind = rawTool.kind === undefined ? "mcp" : rawTool.kind;
+    if (kind !== "mcp" && kind !== "rest") {
+      diagnostics.push(`${path}: MCP tool '${toolName}' kind must be 'mcp' or 'rest'.`);
+      continue;
+    }
+    const method = rawTool.method === undefined ? undefined : rawTool.method;
+    const url = rawTool.url === undefined ? undefined : rawTool.url;
+    const docsUrl = rawTool.docsUrl === undefined ? undefined : rawTool.docsUrl;
+    if (docsUrl !== undefined && httpUrlDiagnostic(docsUrl)) {
+      diagnostics.push(`${path}: MCP tool '${toolName}' docsUrl ${httpUrlDiagnostic(docsUrl)}`);
+      continue;
+    }
+    if (kind === "rest") {
+      if (typeof method !== "string" || !/^(GET|POST|PUT|PATCH|DELETE|HEAD)$/i.test(method)) {
+        diagnostics.push(`${path}: REST tool '${toolName}' requires a valid HTTP method.`);
+        continue;
+      }
+      const urlError = httpUrlDiagnostic(url);
+      if (urlError) {
+        diagnostics.push(`${path}: REST tool '${toolName}' ${urlError}`);
+        continue;
+      }
+    }
     const inputSchema = rawTool.inputSchema;
     if (!isRecord(inputSchema)) {
       diagnostics.push(`${path}: MCP tool '${toolName}' requires an object 'inputSchema'.`);
@@ -139,7 +174,10 @@ export function parseMcpManifest(source: string, path: string): McpManifestLoad 
     // A schema without named properties still gives the server a contract, but
     // it cannot safely become a closed Dext result object with field completion.
     const typedOutput = output && isRecord(outputSchema) && isRecord(outputSchema.properties) ? output : undefined;
-    tools.push({ server: name, tool: toolName, description, inputSchema, ...(isRecord(outputSchema) ? { outputSchema } : {}) });
+    tools.push({ server: name, tool: toolName, description, inputSchema,
+      ...(kind === "rest" ? { kind: "rest" as const, method: method as string, url: url as string } : {}),
+      ...(typeof docsUrl === "string" ? { docsUrl } : {}),
+      ...(isRecord(outputSchema) ? { outputSchema } : {}) });
     const id = `mcp.${name}.${toolName}`;
     methods.push({
       id,

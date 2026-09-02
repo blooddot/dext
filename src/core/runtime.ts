@@ -48,6 +48,16 @@ function printValue(value: unknown): string {
   if (typeof value === "object" && value !== null && !Array.isArray(value) && "uri" in value && typeof value.uri === "string") {
     return value.uri;
   }
+  // `kind` is the runtime discriminator used by Dext to validate and route a
+  // result. It is not part of an MCP tool's payload and should not leak when a
+  // caller explicitly prints the structured result itself.
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    if (typeof record.kind === "string" && (record.kind === "mcpRaw" || record.kind.startsWith("mcp."))) {
+      const payload = Object.fromEntries(Object.entries(record).filter(([key]) => key !== "kind"));
+      return JSON.stringify(payload) ?? "";
+    }
+  }
   return JSON.stringify(value) ?? "";
 }
 
@@ -95,14 +105,29 @@ function isMcpRawResult(value: DextResult): value is McpRawResult {
 function structuredMcpContent(result: McpRawResult): Record<string, unknown> | undefined {
   if (result.structured) return result.structured;
   if (typeof result.content !== "string") return undefined;
-  try {
-    const parsed: unknown = JSON.parse(result.content);
-    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : undefined;
-  } catch {
-    return undefined;
+  // A few MCP servers (including the Teambition OpenAPI server) wrap their
+  // JSON response in a human-readable prefix such as
+  // `API Response (Status: 200):\n{ ... }`. Try the complete text first,
+  // then the outermost JSON object embedded in that text.
+  const text = result.content.trim();
+  const candidates = [text];
+  const objectStart = text.indexOf("{");
+  const objectEnd = text.lastIndexOf("}");
+  if (objectStart >= 0 && objectEnd > objectStart) {
+    candidates.push(text.slice(objectStart, objectEnd + 1));
   }
+  for (const candidate of candidates) {
+    try {
+      const parsed: unknown = JSON.parse(candidate);
+      if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Keep trying the embedded form; plain text still cannot satisfy a
+      // TypedDict output contract.
+    }
+  }
+  return undefined;
 }
 
 function adaptTypedMcpResult(result: McpRawResult, kind: string): DextResult {
