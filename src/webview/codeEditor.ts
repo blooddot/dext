@@ -444,7 +444,6 @@ export class DextCodeEditor {
   refreshLanguageState(): void {
     if (!this.languageEnabled) return;
     this.scheduleDiagnostics(0);
-    this.updateInputKind();
   }
 
   setLanguageEnabled(enabled: boolean): void {
@@ -524,7 +523,7 @@ export class DextCodeEditor {
         context.addEventListener("abort", listener, { onDocChange: true });
         return { dispose() {} };
       }
-    });
+    }, "completion");
     if (!response || context.aborted || context.state.doc.toString() !== source) return null;
     const first = response.completions[0];
     if (!first) return null;
@@ -553,7 +552,7 @@ export class DextCodeEditor {
   private async hover(view: EditorView, position: number): Promise<Tooltip | null> {
     if (!this.languageEnabled) return null;
     const source = view.state.doc.toString();
-    const response = await this.options.broker.request(source, position);
+    const response = await this.options.broker.request(source, position, undefined, "all");
     if (!response?.hover || !sourceSnapshotMatches(view.state.doc.toString(), source)) return null;
     const hover = response.hover;
     return {
@@ -599,24 +598,11 @@ export class DextCodeEditor {
       }
       if (this.languageEnabled) {
         this.scheduleDiagnostics(120);
-        this.updateInputKind();
       }
     }
     if (!this.languageEnabled) return;
     if (this.signatureTimer) clearTimeout(this.signatureTimer);
     this.signatureTimer = setTimeout(() => void this.updateSignature(), 60);
-  }
-
-  private updateInputKind(): void {
-    const source = this.source;
-    if (!source.trim()) {
-      this.options.onInputKindChanged("empty");
-      return;
-    }
-    void this.options.broker.request(source, this.view.state.selection.main.head).then((response) => {
-      if (!response || !sourceSnapshotMatches(this.source, source)) return;
-      this.options.onInputKindChanged(response.inputKind);
-    });
   }
 
   private scheduleDiagnostics(delay: number): void {
@@ -633,8 +619,9 @@ export class DextCodeEditor {
       this.options.onDiagnosticsChanged({ errors: 0, warnings: 0 });
       return;
     }
-    const response = await this.options.broker.request(source, source.length);
+    const response = await this.options.broker.request(source, source.length, undefined, "diagnostics");
     if (!response || !sourceSnapshotMatches(this.source, source)) return;
+    this.options.onInputKindChanged(response.inputKind);
     const diagnostics: Diagnostic[] = response.diagnostics.map((diagnostic) => {
       const offset = Math.max(0, Math.min(source.length, diagnostic.from ?? diagnostic.offset));
       return {

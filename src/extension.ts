@@ -732,9 +732,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   const watcher = vscode.workspace.createFileSystemWatcher("**/.dext/api/**/*.dx");
-  const reload = async (): Promise<void> => {
-    await application.reload();
-    await sidebar.refresh();
+  let reloadTimer: ReturnType<typeof setTimeout> | undefined;
+  let reloadRunning = false;
+  let reloadQueued = false;
+  const reload = (): void => {
+    reloadQueued = true;
+    if (reloadTimer !== undefined) clearTimeout(reloadTimer);
+    reloadTimer = setTimeout(() => {
+      reloadTimer = undefined;
+      if (reloadRunning) return;
+      reloadRunning = true;
+      reloadQueued = false;
+      void application.reload()
+        .then(() => sidebar.refresh())
+        .finally(() => {
+          reloadRunning = false;
+          if (reloadQueued) reload();
+        });
+    }, 150);
   };
   watcher.onDidCreate(reload);
   watcher.onDidChange(reload);

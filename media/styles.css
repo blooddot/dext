@@ -1544,12 +1544,6 @@ main {
   opacity: 0.85;
 }
 
-.unified-input.drop-active {
-  outline: 2px solid var(--vscode-focusBorder);
-  outline-offset: -2px;
-  background: var(--vscode-list-dropBackground);
-}
-
 .execution-result.has-next {
   margin-bottom: 10px;
   padding-bottom: 10px;

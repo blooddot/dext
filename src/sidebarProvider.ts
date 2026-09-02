@@ -121,6 +121,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     reject: (error: Error) => void;
   }>();
   private fileIndex: { paths: string[]; loadedAt: number } | undefined;
+  private fileIndexLoading: Promise<readonly string[]> | undefined;
+  private latestLanguageRequestId = -1;
+  private latestFileSearchRequestId = -1;
 
   private hydrateSessions(): void {
     if (this.sessionsHydrated) return;
@@ -193,18 +196,20 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     this.conversationSelections.set(session.id, selection);
     this.application.setAgentSelection(selection);
     if (!this.openConversations.includes(session.id)) this.openConversations.push(session.id);
-    // These writes are independent; run them together so a tab switch pays
-    // one persistence round-trip instead of two.
+    // Persistence and UI messages are independent. Do not make the webview
+    // wait for global-state I/O before it can paint the selected conversation.
     const writes: Promise<unknown>[] = [this.persistConversationLayout()];
     if (!cachedSelection && !storedSelection) {
       writes.push(this.preferences.setConversationSelection(session.id, selection));
     }
-    await Promise.all(writes);
     this.updateRunningContext();
-    await this.postConversationState();
-    await this.refresh();
-    await this.post({ type: "outputSession", session: this.activeSession });
-    await this.postActiveExecution(session.id);
+    await Promise.all([
+      ...writes,
+      this.postConversationState(),
+      this.refresh(),
+      this.post({ type: "outputSession", session: this.activeSession }),
+      this.postActiveExecution(session.id)
+    ]);
   }
 
   // A new conversation opens its own tab, while clearing replaces the
@@ -433,12 +438,6 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     this.hydrateSessions();
     const index = this.activeSession.turns.findIndex((turn) => turn.id === turnId);
     if (index === -1) throw new Error("Conversation turn not found.");
-    const confirmed = await vscode.window.showWarningMessage(
-      "Delete this conversation turn?",
-      { modal: true },
-      "Delete"
-    );
-    if (confirmed !== "Delete") return;
     const removed = await this.history.removeTurn(this.activeSession.id, turnId);
     if (!removed) throw new Error("Conversation turn not found.");
     this.activeSession.turns.splice(index, 1);
@@ -562,15 +561,27 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           break;
         }
         case "language": {
-          const diagnostics = request.source.trim()
+          if (request.requestId < this.latestLanguageRequestId) break;
+          this.latestLanguageRequestId = request.requestId;
+          const purpose = request.purpose ?? "all";
+          const needsDiagnostics = purpose === "all" || purpose === "diagnostics" || purpose === "inputKind";
+          const diagnostics = needsDiagnostics && request.source.trim()
             ? this.application.language.documentDiagnostics(request.source)
             : [];
-          const signature = this.application.language.documentSignature(request.source, request.cursor);
-          const hover = this.application.language.documentHover(request.source, request.cursor);
+          const signature = purpose === "all" || purpose === "signature"
+            ? this.application.language.documentSignature(request.source, request.cursor)
+            : undefined;
+          const hover = purpose === "all"
+            ? this.application.language.documentHover(request.source, request.cursor)
+            : undefined;
+          const completions = purpose === "all" || purpose === "completion"
+            ? this.application.language.documentCompletions(request.source, request.cursor)
+            : [];
+          if (request.requestId !== this.latestLanguageRequestId) break;
           await this.post({
             type: "language",
             requestId: request.requestId,
-            completions: this.application.language.documentCompletions(request.source, request.cursor),
+            completions,
             diagnostics,
             inputKind: request.source.trim()
               ? (diagnostics.some((item) => item.severity === "error") ? "invalid" : "workflow")
@@ -613,6 +624,12 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           await this.run(turn.mode ?? this.application.state().agentSelection.mode ?? "agent", turn.input);
           break;
         }
+        case "forkFromTurn":
+          await vscode.commands.executeCommand("dext.history.forkFromTurn", {
+            sessionId: this.activeSession.id,
+            turnId: request.turnId
+          });
+          break;
         case "deleteTurn":
           await this.deleteTurn(request.turnId);
           break;
@@ -664,17 +681,22 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         case "openExternalLink":
           await openExternalLink(request.url);
           break;
-        case "searchFiles":
+        case "searchFiles": {
+          if (request.requestId < this.latestFileSearchRequestId) break;
+          this.latestFileSearchRequestId = request.requestId;
+          const fileIndex = await this.workspaceFileIndex();
+          if (request.requestId !== this.latestFileSearchRequestId) break;
           await this.post({
             type: "searchFilesResult",
             requestId: request.requestId,
             files: rankFileMatches(
-              await this.workspaceFileIndex(),
+              fileIndex,
               request.query,
               MAX_FILE_SUGGESTIONS
             )
           });
           break;
+        }
         case "debugLog":
           appendFileSync(
             join(tmpdir(), "dext-webview-debug.log"),
@@ -769,15 +791,6 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
             contextAttached: false,
             ...(codeReference ? { codeReference } : {})
           });
-          break;
-        }
-        case "dropFiles": {
-          const uniqueItems = [...new Map(
-            request.items.map((item) => [`${item.kind}:${item.value}`, item])
-          ).values()];
-          await this.addFileUris(uniqueItems.map((item) => item.kind === "uri"
-            ? vscode.Uri.parse(item.value, true)
-            : vscode.Uri.file(item.value)), request.position);
           break;
         }
         case "chooseFiles": {
@@ -1031,7 +1044,10 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       const response = mode === "code"
         ? await this.application.executeInput(source, metadata)
         : await this.application.executeConversation(mode, source, metadata);
-      const turn = await this.history.addSuccess(source, events, response, sessionId, mode);
+      // The webview creates the visible row as soon as execution starts. Keep
+      // that id when persisting the result so retry/delete actions still point
+      // at the stored turn after success or cancellation.
+      const turn = await this.history.addSuccess(source, events, response, sessionId, mode, turnId);
       if (mode === "plan" && response.executions.some((execution) => execution.result.kind === "chat" && execution.result.planPath)) {
         const savedPath = response.executions.find((execution) => execution.result.kind === "chat" && execution.result.planPath)?.result;
         if (savedPath?.kind === "chat" && savedPath.planPath) {
@@ -1060,7 +1076,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         await this.history.updatePlanContext(sessionId, session.activePlanPath, "failed");
         await this.postPlanContext();
       }
-      const turn = await this.history.addFailure(source, events, error, sessionId, mode);
+      const turn = await this.history.addFailure(source, events, error, sessionId, mode, turnId);
       session.turns.push(turn);
       session.updatedAt = turn.createdAt;
       this.sessions.set(sessionId, session);
@@ -1094,21 +1110,29 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   private async workspaceFileIndex(): Promise<readonly string[]> {
     const now = Date.now();
     if (this.fileIndex && now - this.fileIndex.loadedAt < FILE_INDEX_TTL_MS) return this.fileIndex.paths;
-    let paths: string[];
+    if (this.fileIndexLoading) return this.fileIndexLoading;
+    this.fileIndexLoading = (async () => {
+      let paths: string[];
+      try {
+        const uris = await vscode.workspace.findFiles("**/*", FILE_INDEX_EXCLUDE, MAX_INDEXED_FILES);
+        paths = uris.flatMap((uri) => {
+          const relative = vscode.workspace.asRelativePath(uri, false).replaceAll("\\", "/");
+          // A file outside every workspace folder has no reference Dext can build.
+          return relative.startsWith("..") || relative.includes(":") ? [] : [relative];
+        });
+      } catch {
+        // A failed listing must leave the composer usable, not raise an error
+        // banner over a keystroke the user did not think of as a command.
+        paths = [];
+      }
+      this.fileIndex = { paths, loadedAt: Date.now() };
+      return paths;
+    })();
     try {
-      const uris = await vscode.workspace.findFiles("**/*", FILE_INDEX_EXCLUDE, MAX_INDEXED_FILES);
-      paths = uris.flatMap((uri) => {
-        const relative = vscode.workspace.asRelativePath(uri, false).replaceAll("\\", "/");
-        // A file outside every workspace folder has no reference Dext can build.
-        return relative.startsWith("..") || relative.includes(":") ? [] : [relative];
-      });
-    } catch {
-      // A failed listing must leave the composer usable, not raise an error
-      // banner over a keystroke the user did not think of as a command.
-      paths = [];
+      return await this.fileIndexLoading;
+    } finally {
+      this.fileIndexLoading = undefined;
     }
-    this.fileIndex = { paths, loadedAt: now };
-    return paths;
   }
 
   // The stop keybinding is only live while a turn is running, which keeps a
@@ -1190,7 +1214,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     for (const message of messages) await this.post(message);
   }
 
-  private async addFileUris(uris: readonly vscode.Uri[], position?: number): Promise<void> {
+  private async addFileUris(uris: readonly vscode.Uri[]): Promise<void> {
     const references = await Promise.all(uris.map(async (uri) => {
       const stat = await vscode.workspace.fs.stat(uri);
       if ((stat.type & vscode.FileType.Directory) !== 0) return directoryAttachment(uri);
@@ -1198,8 +1222,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     }));
     this.postWhenReady({
       type: "insertFileReferences",
-      expressions: references.map((reference) => reference.expression),
-      ...(position === undefined ? {} : { position })
+      expressions: references.map((reference) => reference.expression)
     });
   }
 

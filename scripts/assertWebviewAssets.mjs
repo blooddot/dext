@@ -27,8 +27,7 @@ for (const action of [
   "Dext input",
   "insertFileReferences",
   "executeInput",
-  "chooseFiles",
-  "CodeFiles"
+  "chooseFiles"
 ]) {
   assert.ok(mainBundle.includes(action), `Missing required Webview behavior '${action}' from the bundle.`);
 }

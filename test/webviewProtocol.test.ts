@@ -53,6 +53,10 @@ describe("Webview protocol", () => {
       turnId: "turn-1"
     })).toMatchObject({ type: "retryTurn", turnId: "turn-1" });
     expect(webviewRequestSchema.parse({
+      type: "forkFromTurn",
+      turnId: "turn-1"
+    })).toMatchObject({ type: "forkFromTurn", turnId: "turn-1" });
+    expect(webviewRequestSchema.parse({
       type: "deleteTurn",
       turnId: "turn-1"
     })).toMatchObject({ type: "deleteTurn", turnId: "turn-1" });
@@ -109,13 +113,6 @@ describe("Webview protocol", () => {
       requestId: 5,
       purpose: "text"
     }).success).toBe(true);
-    expect(webviewRequestSchema.safeParse({
-      type: "dropFiles",
-      items: [
-        { kind: "uri", value: "vscode-remote://ssh-remote+host/workspace/a.ts" },
-        { kind: "path", value: "C:\\workspace\\b.ts" }
-      ]
-    }).success).toBe(true);
     expect(webviewRequestSchema.safeParse({ type: "chooseFiles" }).success).toBe(true);
     expect(webviewRequestSchema.safeParse({
       type: "openFileReference",
@@ -151,10 +148,6 @@ describe("Webview protocol", () => {
     }).success).toBe(false);
     expect(webviewRequestSchema.safeParse({ type: "executeInput", source: "hello" }).success)
       .toBe(false);
-    expect(webviewRequestSchema.safeParse({
-      type: "dropFiles",
-      items: [{ kind: "unknown", value: "file:///a.ts" }]
-    }).success).toBe(false);
     expect(webviewRequestSchema.safeParse({
       type: "openFileReference",
       reference: ""

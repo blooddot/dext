@@ -191,7 +191,8 @@ export class DextHistoryStore {
     process: readonly AgentStreamEvent[],
     response: InputExecutionResponse,
     sessionId?: string,
-    mode?: DextHistoryRecord["mode"]
+    mode?: DextHistoryRecord["mode"],
+    turnId?: string
   ): Promise<DextHistoryRecord> {
     const { maxOutputLength } = this.limits();
     return this.add({
@@ -200,7 +201,7 @@ export class DextHistoryStore {
       output: serializeResponse(response, maxOutputLength),
       ...(mode ? { mode } : {}),
       response
-    }, sessionId);
+    }, sessionId, turnId);
   }
 
   async addFailure(
@@ -208,7 +209,8 @@ export class DextHistoryStore {
     process: readonly AgentStreamEvent[],
     error: unknown,
     sessionId?: string,
-    mode?: DextHistoryRecord["mode"]
+    mode?: DextHistoryRecord["mode"],
+    turnId?: string
   ): Promise<DextHistoryRecord> {
     const message = error instanceof Error ? error.message : String(error);
     const { maxOutputLength } = this.limits();
@@ -218,18 +220,19 @@ export class DextHistoryStore {
       output: "",
       ...(mode ? { mode } : {}),
       error: bounded(message, maxOutputLength)
-    }, sessionId);
+    }, sessionId, turnId);
   }
 
   private async add(
     record: Omit<DextHistoryRecord, "id" | "createdAt">,
-    requestedSessionId?: string
+    requestedSessionId?: string,
+    requestedTurnId?: string
   ): Promise<DextHistoryRecord> {
     return this.mutate(async () => {
       const createdAt = Date.now();
       const turn: DextHistoryRecord = {
         ...record,
-        id: `${createdAt}-${Math.random().toString(36).slice(2, 8)}`,
+        id: requestedTurnId ?? `${createdAt}-${Math.random().toString(36).slice(2, 8)}`,
         createdAt
       };
       const sessionId = requestedSessionId ?? `single-${turn.id}`;

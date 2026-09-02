@@ -17,7 +17,8 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
     type: z.literal("language"),
     requestId: z.number().int().nonnegative(),
     source: z.string(),
-    cursor: z.number().int().nonnegative()
+    cursor: z.number().int().nonnegative(),
+    purpose: z.enum(["all", "completion", "diagnostics", "inputKind", "signature"]).optional()
   }),
   z.object({
     type: z.literal("executeInput"),
@@ -27,6 +28,7 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("stopExecution"), turnId: z.string().min(1) }),
   z.object({ type: z.literal("retryTurn"), turnId: z.string().min(1) }),
+  z.object({ type: z.literal("forkFromTurn"), turnId: z.string().min(1) }),
   z.object({ type: z.literal("deleteTurn"), turnId: z.string().min(1) }),
   z.object({ type: z.literal("buildPlan"), planPath: z.string().min(1).max(512) }),
   z.object({ type: z.literal("choosePlan") }),
@@ -53,14 +55,6 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
     type: z.literal("searchFiles"),
     requestId: z.number().int().nonnegative(),
     query: z.string().max(120)
-  }),
-  z.object({
-    type: z.literal("dropFiles"),
-    items: z.array(z.discriminatedUnion("kind", [
-      z.object({ kind: z.literal("uri"), value: z.string().min(1) }),
-      z.object({ kind: z.literal("path"), value: z.string().min(1) })
-    ])).max(8),
-    position: z.number().int().nonnegative().optional()
   }),
   z.object({ type: z.literal("chooseFiles") }),
   z.object({
@@ -220,7 +214,7 @@ export type WebviewResponse =
   | { type: "agentEvent"; sessionId: string; event: AgentStreamEvent }
   | { type: "executing"; sessionId: string; value: boolean; turnId: string; source?: string; planPath?: string; executePlan?: boolean }
   | { type: "inputKind"; kind: "empty" | "workflow" | "invalid" }
-  | { type: "insertFileReferences"; expressions: string[]; position?: number }
+  | { type: "insertFileReferences"; expressions: string[] }
   | { type: "imageAttachment"; relativePath: string; webviewUri: string; name: string }
   | { type: "clipboardWriteResult"; requestId: number; success: boolean }
   | {

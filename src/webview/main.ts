@@ -15,7 +15,6 @@ import type {
 } from "../core/types.js";
 import { formatMethodSignature } from "../core/methodSignature.js";
 import type { ConversationSummary, SidebarState, WebviewRequest, WebviewResponse } from "../webviewProtocol.js";
-import { parseDroppedFiles } from "./chatAttachments.js";
 import { ClipboardClient } from "./clipboardClient.js";
 import { FileSearchClient } from "./fileSearchClient.js";
 import { DextCodeEditor } from "./codeEditor.js";
@@ -191,8 +190,6 @@ interface ConversationDraft {
 const conversationDrafts = new Map<string, ConversationDraft>();
 let restoringDraft = false;
 const runningConversationIds = new Set<string>();
-let dropPosition: number | undefined;
-let pendingDropPosition: number | undefined;
 let agentStream: HTMLElement | undefined;
 let agentRunStartedAt = 0;
 let agentRunTimer: ReturnType<typeof setInterval> | undefined;
@@ -202,6 +199,8 @@ let agentTokenUsage: AgentTokenUsage | undefined;
 let agentCommandIds = new Set<string>();
 let agentEditedUris = new Set<string>();
 const agentEventItems = new Map<string, HTMLElement>();
+const pendingAgentRenders = new Set<HTMLElement>();
+let agentRenderFrame: number | undefined;
 interface AgentToolCommand {
   body: HTMLElement;
   copy: HTMLButtonElement;
@@ -231,6 +230,51 @@ interface OutputTurnElements {
 }
 const outputTurns = new Map<string, OutputTurnElements>();
 let activeTurn: OutputTurnElements | undefined;
+
+// Keep the rendered DOM for recently visited conversations. Rebuilding a
+// long conversation means reparsing every process event and rerendering every
+// diff, which made an ordinary tab switch scale with conversation size.
+type ConversationViewCache = {
+  nodes: Node[];
+  turns: Map<string, OutputTurnElements>;
+  activeTurnId?: string;
+  signature: string;
+};
+const conversationViewCache = new Map<string, ConversationViewCache>();
+const MAX_CONVERSATION_VIEW_CACHE = 6;
+let renderedConversationId: string | undefined;
+let renderedConversationSignature: string | undefined;
+
+function conversationSignature(session: DextHistorySession): string {
+  const last = session.turns.at(-1);
+  return `${session.updatedAt}:${session.turns.length}:${last?.id ?? ""}:${last?.process.length ?? 0}`;
+}
+
+function cacheRenderedConversation(): void {
+  if (!renderedConversationId || !renderedConversationSignature) return;
+  flushAgentMessageRenders();
+  // A running turn is represented by a live, non-persisted output row and
+  // its process events are replayed when the tab becomes active again. Do
+  // not cache that transient DOM or those events would be appended twice.
+  if (runningConversationIds.has(renderedConversationId)) {
+    elements.result.replaceChildren();
+    return;
+  }
+  const activeTurnId = activeTurn?.disclosure.dataset.turnId;
+  conversationViewCache.delete(renderedConversationId);
+  conversationViewCache.set(renderedConversationId, {
+    nodes: [...elements.result.childNodes],
+    turns: new Map(outputTurns),
+    ...(activeTurnId ? { activeTurnId } : {}),
+    signature: renderedConversationSignature
+  });
+  elements.result.replaceChildren();
+  while (conversationViewCache.size > MAX_CONVERSATION_VIEW_CACHE) {
+    const oldest = conversationViewCache.keys().next().value;
+    if (!oldest) break;
+    conversationViewCache.delete(oldest);
+  }
+}
 
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"]/g, (character) => ({
@@ -295,8 +339,6 @@ const editor = new DextCodeEditor({
     updateRunState();
   },
   onSourceChanged() {
-    // A pending host file lookup must not insert at a stale document offset.
-    pendingDropPosition = undefined;
     clearInputError();
     persistComposerDraft();
     updateRunState();
@@ -1941,6 +1983,9 @@ function createOutputTurn(
         () => vscode.postMessage({ type: "retryTurn", turnId })
       );
     }, true),
+    turnActionButton("repo-forked", "Fork from this turn", () => {
+      vscode.postMessage({ type: "forkFromTurn", turnId });
+    }, true),
     turnCopyButton(() => disclosure.textContent?.trim() ?? ""),
     turnActionButton("trash", "Delete turn", () => {
       openConfirmationDialog(
@@ -2645,6 +2690,57 @@ function agentToolGroupFor(
   return group;
 }
 
+function renderAgentMessageItem(item: HTMLElement, body: HTMLElement): void {
+  if (!body.isConnected) return;
+  const raw = body.dataset.raw ?? "";
+  const presentation = presentAgentMessage(raw);
+  const copyText = agentMessageCopyText(presentation);
+  body.classList.toggle("agent-stream-result", presentation.structured);
+  if (presentation.structured) {
+    const heading = document.createElement("div");
+    heading.className = "agent-result-heading";
+    const title = document.createElement("span");
+    title.className = "agent-result-title";
+    title.textContent = presentation.title;
+    heading.append(title);
+    if (presentation.meta.length) {
+      const meta = document.createElement("span");
+      meta.className = "agent-result-meta";
+      meta.textContent = presentation.meta.join(" · ");
+      heading.append(meta);
+    }
+    const content = document.createElement("div");
+    content.className = "agent-result-content markdown-body";
+    content.innerHTML = presentation.text ? markdown.render(presentation.text) : "";
+    body.replaceChildren(heading, ...(presentation.text ? [content] : []));
+    appendAgentPresentationExtras(body, presentation);
+  } else {
+    body.innerHTML = markdown.render(raw);
+  }
+  const outputCopy = item.querySelector<HTMLButtonElement>(".output-copy");
+  if (outputCopy) outputCopy.replaceWith(copyButton(copyText));
+}
+
+function scheduleAgentMessageRender(item: HTMLElement): void {
+  pendingAgentRenders.add(item);
+  if (agentRenderFrame !== undefined) return;
+  agentRenderFrame = requestAnimationFrame(() => {
+    agentRenderFrame = undefined;
+    flushAgentMessageRenders();
+  });
+}
+
+function flushAgentMessageRenders(): void {
+  if (agentRenderFrame !== undefined) cancelAnimationFrame(agentRenderFrame);
+  agentRenderFrame = undefined;
+  const items = [...pendingAgentRenders];
+  pendingAgentRenders.clear();
+  for (const queued of items) {
+    const queuedBody = queued.querySelector<HTMLElement>(".agent-stream-text");
+    if (queuedBody) renderAgentMessageItem(queued, queuedBody);
+  }
+}
+
 function renderAgentEvent(event: AgentStreamEvent): void {
   if (event.usage) agentTokenUsage = event.usage;
   if (event.phase === "status") {
@@ -2696,38 +2792,10 @@ function renderAgentEvent(event: AgentStreamEvent): void {
   }
   const body = item.querySelector<HTMLElement>(".agent-stream-text");
   const eventBody = event.text;
-  let copyText = event.text;
   if (body) {
     const raw = event.replace ? eventBody : `${body.dataset.raw ?? ""}${eventBody}`;
     body.dataset.raw = raw;
-    const presentation = presentAgentMessage(raw);
-    copyText = agentMessageCopyText(presentation);
-    body.classList.toggle("agent-stream-result", presentation.structured);
-    if (presentation.structured) {
-      const heading = document.createElement("div");
-      heading.className = "agent-result-heading";
-      const title = document.createElement("span");
-      title.className = "agent-result-title";
-      title.textContent = presentation.title;
-      heading.append(title);
-      if (presentation.meta.length) {
-        const meta = document.createElement("span");
-        meta.className = "agent-result-meta";
-        meta.textContent = presentation.meta.join(" · ");
-        heading.append(meta);
-      }
-      const content = document.createElement("div");
-      content.className = "agent-result-content markdown-body";
-      content.innerHTML = presentation.text ? markdown.render(presentation.text) : "";
-      body.replaceChildren(heading, ...(presentation.text ? [content] : []));
-      appendAgentPresentationExtras(body, presentation);
-    } else {
-      body.innerHTML = markdown.render(raw);
-    }
-  }
-  const outputCopy = item.querySelector<HTMLButtonElement>(".output-copy");
-  if (outputCopy) {
-    outputCopy.replaceWith(copyButton(copyText));
+    scheduleAgentMessageRender(item);
   }
   elements.resultSection.classList.remove("hidden");
   syncResultToggle();
@@ -2767,6 +2835,9 @@ function renderAgentFileChanges(entries: readonly WorkflowStepResponse[]): void 
 }
 
 function resetAgentTrace(): void {
+  pendingAgentRenders.clear();
+  if (agentRenderFrame !== undefined) cancelAnimationFrame(agentRenderFrame);
+  agentRenderFrame = undefined;
   agentStream = undefined;
   agentProgress = undefined;
   agentProgressState = "Thinking";
@@ -2791,6 +2862,33 @@ function storedResponse(record: DextHistoryRecord): InputExecutionResponse | und
 }
 
 function renderOutputSession(session: DextHistorySession): void {
+  const signature = conversationSignature(session);
+  if (renderedConversationId === session.id && renderedConversationSignature === signature) return;
+  if (renderedConversationId && renderedConversationId !== session.id) cacheRenderedConversation();
+
+  const cached = conversationViewCache.get(session.id);
+  // Also verify turn identities. Older builds persisted a different id than
+  // the live row, so blindly restoring such a snapshot would keep delete and
+  // retry actions broken until the webview was fully reloaded.
+  const sessionTurnIds = new Set(session.turns.map((turn) => turn.id));
+  const cacheMatchesSession = cached
+    && cached.turns.size === sessionTurnIds.size
+    && [...cached.turns.keys()].every((turnId) => sessionTurnIds.has(turnId));
+  if (cached && cached.signature === signature && cacheMatchesSession) {
+    elements.result.replaceChildren(...cached.nodes);
+    outputTurns.clear();
+    for (const [turnId, turn] of cached.turns) outputTurns.set(turnId, turn);
+    activeTurn = cached.activeTurnId ? outputTurns.get(cached.activeTurnId) : [...outputTurns.values()].at(-1);
+    conversationViewCache.delete(session.id);
+    conversationViewCache.set(session.id, cached);
+    renderedConversationId = session.id;
+    renderedConversationSignature = signature;
+    elements.resultSection.classList.remove("hidden");
+    syncResultToggle();
+    syncJumpToLatest();
+    return;
+  }
+
   if (agentRunTimer) clearInterval(agentRunTimer);
   agentRunTimer = undefined;
   clearInputError();
@@ -2818,20 +2916,8 @@ function renderOutputSession(session: DextHistorySession): void {
   syncResultToggle();
   syncJumpToLatest();
   scrollResultToBottom();
-}
-
-function droppedFiles(transfer: DataTransfer): ReturnType<typeof parseDroppedFiles> {
-  const resourceUrlsType = [...transfer.types]
-    .find((type) => type.toLowerCase() === "resourceurls") ?? "ResourceURLs";
-  const codeFilesType = [...transfer.types]
-    .find((type) => type.toLowerCase() === "codefiles") ?? "CodeFiles";
-  return parseDroppedFiles({
-    uriList: transfer.getData("text/uri-list"),
-    codeUriList: transfer.getData("application/vnd.code.uri-list"),
-    resourceUrls: transfer.getData(resourceUrlsType),
-    codeFiles: transfer.getData(codeFilesType),
-    plainText: transfer.getData("text/plain")
-  });
+  renderedConversationId = session.id;
+  renderedConversationSignature = signature;
 }
 
 function findImageItem(data: DataTransfer | null): DataTransferItem | undefined {
@@ -3047,43 +3133,6 @@ elements.inputShell.addEventListener("paste", (event) => {
   reader.readAsDataURL(file);
 }, true);
 
-window.addEventListener("dragenter", (event) => {
-  vscode.postMessage({ type: "debugLog", message: `dragenter types=${[...(event.dataTransfer?.types ?? [])].join("|")}` });
-}, true);
-window.addEventListener("dragover", (event) => {
-  const inShell = event.target instanceof Node && elements.inputShell.contains(event.target);
-  vscode.postMessage({ type: "debugLog", message: `dragover inShell=${inShell} types=${[...(event.dataTransfer?.types ?? [])].join("|")}` });
-  if (!inShell) return;
-  event.preventDefault();
-  event.stopPropagation();
-  dropPosition = editor.positionAtPoint(event.clientX, event.clientY);
-  elements.inputShell.classList.add("drop-active");
-}, true);
-window.addEventListener("dragleave", (event) => {
-  if (event.relatedTarget instanceof Node && elements.inputShell.contains(event.relatedTarget)) return;
-  elements.inputShell.classList.remove("drop-active");
-  dropPosition = undefined;
-}, true);
-window.addEventListener("drop", (event) => {
-  const inShell = event.target instanceof Node && elements.inputShell.contains(event.target);
-  vscode.postMessage({ type: "debugLog", message: `drop inShell=${inShell} types=${[...(event.dataTransfer?.types ?? [])].join("|")}` });
-  if (!inShell) return;
-  event.preventDefault();
-  event.stopPropagation();
-  elements.inputShell.classList.remove("drop-active");
-  const items = event.dataTransfer ? droppedFiles(event.dataTransfer) : [];
-  const position = dropPosition;
-  dropPosition = undefined;
-  pendingDropPosition = items.length ? position : undefined;
-  if (items.length) {
-    vscode.postMessage({
-      type: "dropFiles",
-      items,
-      ...(position === undefined ? {} : { position })
-    });
-  }
-}, true);
-
 vscode.postMessage({ type: "debugLog", message: "main.ts loaded (drag diagnostic v2)" });
 
 window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
@@ -3118,9 +3167,7 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     updateRunState();
   }
   if (message.type === "insertFileReferences") {
-    const position = pendingDropPosition === message.position ? message.position : undefined;
-    pendingDropPosition = undefined;
-    editor.insertFileReferences(message.expressions, position);
+    editor.insertFileReferences(message.expressions);
   }
   if (message.type === "imageAttachment") {
     addImageAttachment(message.relativePath, message.webviewUri, message.name);
@@ -3167,12 +3214,20 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     openMcpDialog();
   }
   if (message.type === "uiRequest") openUiDialog(message);
+  if (message.type === "execution") {
+    // A background turn changes the session while its DOM may be cached.
+    // Drop that snapshot so returning to the tab renders the new turn once.
+    conversationViewCache.delete(message.sessionId);
+  }
   if (message.type === "execution" && message.sessionId === activeConversationId) {
     selectOutputTurn(message.turnId);
     renderResult(message.response, message.reviewPatch ? message.turnId : undefined);
   }
   if (message.type === "patchResolved" && message.sessionId === activeConversationId) {
     applyPatchResolution(message.turnId, message.uris, message.status, message.message);
+  }
+  if (message.type === "executionFailed") {
+    conversationViewCache.delete(message.sessionId);
   }
   if (message.type === "executionFailed" && message.sessionId === activeConversationId) {
     selectOutputTurn(message.turnId);
@@ -3239,8 +3294,6 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     updateRunState();
   }
   if (message.type === "error") {
-    dropPosition = undefined;
-    pendingDropPosition = undefined;
     renderInputError(message.message);
     if (elements.mcpAssistantDialog.open) {
       elements.mcpAssistantStatus.textContent = message.message;

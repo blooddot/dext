@@ -196,11 +196,15 @@ function expressionParts(expression: string): string[] {
 export class DextLanguageService {
   private customApiIds = new Set<string>();
   private skills: SkillDescriptor[] = [];
+  private compiledSource: string | undefined;
+  private compiledState: ReturnType<typeof compileWorkflow> | undefined;
 
   constructor(private readonly registry: MethodRegistry) {}
 
   setCustomApiIds(ids: ReadonlySet<string>): void {
     this.customApiIds = new Set(ids);
+    this.compiledSource = undefined;
+    this.compiledState = undefined;
   }
 
   setSkillCompletions(skills: readonly SkillDescriptor[]): void {
@@ -326,14 +330,20 @@ export class DextLanguageService {
 
   inputDocument(source: string): WorkflowDocumentState {
     if (!source.trim()) return { kind: "empty" };
-    return {
-      kind: compileWorkflow(source, this.registry, {
-        allowImports: true,
-        aliases: parseWorkflowImports(source),
-        customApiIds: this.customApiIds,
-        requireCustomApiImports: false
-      }).program ? "workflow" : "invalid"
-    };
+    return { kind: this.compiled(source).program ? "workflow" : "invalid" };
+  }
+
+  private compiled(source: string): ReturnType<typeof compileWorkflow> {
+    if (this.compiledSource === source && this.compiledState) return this.compiledState;
+    const state = compileWorkflow(source, this.registry, {
+      allowImports: true,
+      aliases: parseWorkflowImports(source),
+      customApiIds: this.customApiIds,
+      requireCustomApiImports: false
+    });
+    this.compiledSource = source;
+    this.compiledState = state;
+    return state;
   }
 
   documentCompletions(source: string, cursor = source.length, customApisAreGlobal = true): CompletionItem[] {
@@ -531,12 +541,7 @@ export class DextLanguageService {
 
   documentDiagnostics(source: string): LanguageDiagnostic[] {
     if (!source.trim()) return [];
-    return compileWorkflow(source, this.registry, {
-      allowImports: true,
-      aliases: parseWorkflowImports(source),
-      customApiIds: this.customApiIds,
-      requireCustomApiImports: false
-    }).diagnostics.map((diagnostic) => ({
+    return this.compiled(source).diagnostics.map((diagnostic) => ({
       message: diagnostic.message,
       severity: diagnostic.severity,
       offset: diagnostic.from,

@@ -34,6 +34,16 @@ describe("DextHistoryStore", () => {
     expect(records[1]?.error).toBe("cancelled");
   });
 
+  it("keeps the execution id when persisting a cancelled turn", async () => {
+    const store = new DextHistoryStore(new MemoryState() as never);
+
+    await store.addFailure("unfinished request", [], new Error("cancelled"), "session-1", "agent", "turn-running");
+
+    expect(store.list()[0]?.turns[0]?.id).toBe("turn-running");
+    expect(await store.removeTurn("session-1", "turn-running")).toBe(true);
+    expect(store.list()).toEqual([]);
+  });
+
   it("does not lose turns when separate conversations finish together", async () => {
     const store = new DextHistoryStore(new DelayedMemoryState() as never);
     await Promise.all([

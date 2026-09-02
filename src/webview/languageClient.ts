@@ -7,6 +7,8 @@ export interface CancellationLike {
   onCancellationRequested(listener: () => void): { dispose(): void };
 }
 
+export type LanguageRequestPurpose = "all" | "completion" | "diagnostics" | "inputKind" | "signature";
+
 interface PendingRequest {
   resolve(response: LanguageResponse | undefined): void;
   cancellation?: { dispose(): void };
@@ -21,7 +23,8 @@ export class LanguageRequestBroker {
   request(
     source: string,
     cursor: number,
-    cancellation?: CancellationLike
+    cancellation?: CancellationLike,
+    purpose: LanguageRequestPurpose = "all"
   ): Promise<LanguageResponse | undefined> {
     if (cancellation?.isCancellationRequested) return Promise.resolve(undefined);
     const requestId = ++this.requestId;
@@ -34,7 +37,7 @@ export class LanguageRequestBroker {
         });
       }
       this.pending.set(requestId, pending);
-      this.post({ type: "language", requestId, source, cursor });
+      this.post({ type: "language", requestId, source, cursor, purpose });
     });
   }
 

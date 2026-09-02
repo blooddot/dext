@@ -5,27 +5,29 @@ import type { WebviewRequest, WebviewResponse } from "../webviewProtocol.js";
  * otherwise repopulate the menu with stale paths. */
 export class FileSearchClient {
   private nextRequestId = 0;
-  private readonly pending = new Map<number, (files: string[]) => void>();
+  private pending: { requestId: number; resolve: (files: string[]) => void } | undefined;
 
   constructor(private readonly post: (request: WebviewRequest) => void) {}
 
   search(query: string): Promise<string[]> {
     const requestId = ++this.nextRequestId;
+    this.pending?.resolve([]);
+    this.pending = undefined;
     this.post({ type: "searchFiles", requestId, query });
-    return new Promise((resolve) => this.pending.set(requestId, resolve));
+    return new Promise((resolve) => { this.pending = { requestId, resolve }; });
   }
 
   accept(response: WebviewResponse): boolean {
     if (response.type !== "searchFilesResult") return false;
-    const resolve = this.pending.get(response.requestId);
-    if (!resolve) return true;
-    this.pending.delete(response.requestId);
+    if (this.pending?.requestId !== response.requestId) return true;
+    const resolve = this.pending.resolve;
+    this.pending = undefined;
     resolve(response.files);
     return true;
   }
 
   dispose(): void {
-    for (const resolve of this.pending.values()) resolve([]);
-    this.pending.clear();
+    this.pending?.resolve([]);
+    this.pending = undefined;
   }
 }

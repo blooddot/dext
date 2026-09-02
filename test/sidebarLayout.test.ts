@@ -48,7 +48,6 @@ describe("sidebar panel layout", () => {
     expect(main).toContain('elements.inputShell.classList.toggle("conversation-mode", !codeMode)');
     expect(main).toContain('elements.inputSection.dataset.mode = inputMode');
     expect(main).toContain('elements.modeControlIcon.className = `codicon ${modeIcon[inputMode]}`');
-    expect(main).toContain('pendingDropPosition = undefined');
     expect(editor).toContain('this.lineWrapping.reconfigure(enabled ? [] : EditorView.lineWrapping)');
     expect(css).toContain('.input-shell.conversation-mode .cm-gutters');
     expect(css).toMatch(/\.code-file-reference \{[\s\S]*?margin: 0;/);
@@ -294,7 +293,7 @@ describe("sidebar panel layout", () => {
     expect(picker).toContain("if (/[\\p{L}\\p{N}_.+-]/u.test(source[token.from - 1] ?? \"\")) return null;");
     expect(picker).toContain("filter: false");
     expect(picker).toContain("const insert = `@${path} `;");
-    expect(sidebar).toMatch(/case "searchFiles":[\s\S]*?rankFileMatches\(\s*await this\.workspaceFileIndex\(\)/);
+    expect(sidebar).toMatch(/case "searchFiles":[\s\S]*?const fileIndex = await this\.workspaceFileIndex\(\)[\s\S]*?rankFileMatches\(\s*fileIndex/);
     expect(sidebar).toMatch(/private async workspaceFileIndex[\s\S]*?vscode\.workspace\.findFiles\("\*\*\/\*", FILE_INDEX_EXCLUDE, MAX_INDEXED_FILES\)/);
     // A failed listing must not raise the composer's error banner.
     expect(sidebar).toMatch(/private async workspaceFileIndex[\s\S]*?\} catch \{[\s\S]*?paths = \[\];/);
@@ -352,15 +351,17 @@ describe("sidebar panel layout", () => {
     expect(main).toMatch(/function turnActionButton[\s\S]*?event\.preventDefault\(\);\s*event\.stopPropagation\(\);/);
     expect(main).toMatch(/turnActionButton\("edit", "Edit and resend", \(\) => \{[\s\S]*?editor\.setValue\(source\)/);
     expect(main).toMatch(/turnActionButton\("debug-restart", "Retry this turn", \(\) => \{[\s\S]*?type: "retryTurn", turnId/);
+    expect(main).toMatch(/turnActionButton\("repo-forked", "Fork from this turn", \(\) => \{[\s\S]*?type: "forkFromTurn", turnId/);
     expect(main).toContain("summary.append(chevron, title, time, actions);");
     // Only destructive actions on the active turn go dead while a turn is
     // running; copying and editing older turns remains available.
     expect(main).toMatch(/function syncTurnActions[\s\S]*?data-disable-while-running[\s\S]*?button\.disabled = executing &&/);
     expect(main).toMatch(/function updateRunState[\s\S]*?syncTurnActions\(\);/);
     expect(sidebar).toMatch(/case "retryTurn":[\s\S]*?this\.activeSession\.turns\.find\(\(item\) => item\.id === request\.turnId\)/);
+    expect(sidebar).toMatch(/case "forkFromTurn":[\s\S]*?dext\.history\.forkFromTurn[\s\S]*?sessionId: this\.activeSession\.id/);
     // Retry reproduces the recorded mode rather than whatever is selected now.
     expect(sidebar).toContain("await this.run(turn.mode ?? this.application.state().agentSelection.mode ?? \"agent\", turn.input);");
-    expect(sidebar).toContain("await this.history.addSuccess(source, events, response, sessionId, mode);");
+    expect(sidebar).toContain("await this.history.addSuccess(source, events, response, sessionId, mode, turnId);");
     expect(css).toMatch(/\.output-turn > summary:hover \.output-turn-actions,[\s\S]*?opacity: 1;/);
     // History's actions are a context menu with no affordance, so the row says so.
     expect(history).toContain('const TURN_ACTION_HINT = "Right-click for turn and conversation actions";');
@@ -404,7 +405,7 @@ describe("sidebar panel layout", () => {
     expect(main).toMatch(/function renderAgentEvent[\s\S]*?agentToolGroup = undefined;[\s\S]*?panel\.append\(item\);/);
     expect(main).toMatch(/function updateAgentToolGroupLabel[\s\S]*?Ran \$\{count\} command/);
     expect(main).toMatch(/function createAgentToolCommand[\s\S]*?document\.createElement\("details"\)[\s\S]*?terminalText\(raw\)/);
-    expect(main).toMatch(/function renderAgentEvent[\s\S]*?body\.innerHTML = markdown\.render\(raw\)/);
+    expect(main).toMatch(/function renderAgentMessageItem[\s\S]*?body\.innerHTML = markdown\.render\(raw\)/);
     expect(css).toMatch(/\.terminal-output \{[\s\S]*?max-height: 360px;[\s\S]*?overflow: auto;[\s\S]*?white-space: pre-wrap;/);
     expect(main).not.toContain("const order = { reasoning: 0, work: 1, files: 2, tool: 3 }");
   });
@@ -484,7 +485,7 @@ describe("sidebar panel layout", () => {
     expect(sidebar).not.toContain("Wait for the current Dext turn to finish before starting another conversation.");
     expect(sidebar).toMatch(/const session = this\.activeSession;[\s\S]*?this\.activeExecutions\.has\(sessionId\)[\s\S]*?this\.activeExecutions\.set\(sessionId/);
     expect(sidebar).toMatch(/onAgentEvent:[\s\S]*?this\.postAgentEvent\(sessionId, event\)/);
-    expect(sidebar).toMatch(/this\.history\.addSuccess\(source, events, response, sessionId, mode\)/);
+    expect(sidebar).toMatch(/this\.history\.addSuccess\(source, events, response, sessionId, mode, turnId\)/);
     expect(protocol).toContain('running: boolean;');
     expect(protocol).toContain('{ type: "agentEvent"; sessionId: string; event: AgentStreamEvent }');
     expect(main).toContain("const runningConversationIds = new Set<string>();");
