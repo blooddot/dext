@@ -36,6 +36,8 @@ export interface DextHistorySession {
   /** Explicit Plan target and lifecycle, kept with the conversation tab. */
   activePlanPath?: string;
   planStatus?: PlanStatus;
+  /** Archived conversations remain available but are hidden from the default history view. */
+  archivedAt?: number;
 }
 
 function bounded(value: string, maxOutputLength: number): string {
@@ -101,21 +103,38 @@ export class DextHistoryStore {
     };
   }
 
-  list(): DextHistorySession[] {
+  list(includeArchived = false): DextHistorySession[] {
     const stored = this.state.get<(DextHistoryRecord | DextHistorySession)[]>(HISTORY_KEY, []);
-    return normalizeSessions(stored);
+    const sessions = normalizeSessions(stored);
+    return includeArchived ? sessions : sessions.filter((session) => !session.archivedAt);
+  }
+
+  private all(): DextHistorySession[] {
+    return this.list(true);
+  }
+
+  async setArchived(sessionId: string, archived: boolean): Promise<boolean> {
+    return this.mutate(async () => {
+      const sessions = this.all();
+      const session = sessions.find((item) => item.id === sessionId);
+      if (!session) return false;
+      if (archived) session.archivedAt ??= Date.now();
+      else delete session.archivedAt;
+      await this.state.update(HISTORY_KEY, sessions);
+      return true;
+    });
   }
 
   async remove(sessionId: string): Promise<void> {
     await this.mutate(async () => {
-      const sessions = this.list().filter((session) => session.id !== sessionId);
+      const sessions = this.all().filter((session) => session.id !== sessionId);
       await this.state.update(HISTORY_KEY, sessions);
     });
   }
 
   async updatePlanContext(sessionId: string, activePlanPath: string | undefined, planStatus: PlanStatus): Promise<void> {
     await this.mutate(async () => {
-      const sessions = this.list();
+      const sessions = this.all();
       const session = sessions.find((item) => item.id === sessionId);
       if (!session) return;
       if (activePlanPath) session.activePlanPath = activePlanPath;
@@ -130,7 +149,7 @@ export class DextHistoryStore {
    * history entry until its first turn completes. */
   async removeTurn(sessionId: string, turnId: string): Promise<boolean> {
     return this.mutate(async () => {
-      const sessions = this.list();
+      const sessions = this.all();
       const session = sessions.find((item) => item.id === sessionId);
       if (!session) return false;
       const index = session.turns.findIndex((turn) => turn.id === turnId);
@@ -162,7 +181,7 @@ export class DextHistoryStore {
           id: `${createdAt}-${index}-${Math.random().toString(36).slice(2, 8)}`
         }))
       };
-      await this.state.update(HISTORY_KEY, trimSessions([...this.list(), session], this.limits().maxTurns));
+      await this.state.update(HISTORY_KEY, trimSessions([...this.all(), session], this.limits().maxTurns));
       return session;
     });
   }
@@ -214,7 +233,7 @@ export class DextHistoryStore {
         createdAt
       };
       const sessionId = requestedSessionId ?? `single-${turn.id}`;
-      const sessions = this.list();
+      const sessions = this.all();
       const existing = sessions.find((session) => session.id === sessionId);
       if (existing) {
         existing.turns.push(turn);

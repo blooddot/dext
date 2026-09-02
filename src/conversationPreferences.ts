@@ -1,4 +1,5 @@
 import type * as vscode from "vscode";
+import type { AgentSelection } from "./agentProfiles.js";
 
 const PINNED_KEY = "dext.pinnedConversations";
 const FAVORITES_KEY = "dext.favoriteConversations";
@@ -7,6 +8,8 @@ const LAYOUT_KEY = "dext.conversationLayout";
 const MAX_TITLE_LENGTH = 140;
 const SORT_ORDER_KEY = "dext.historySortOrder";
 const FAVORITES_ONLY_KEY = "dext.historyFavoritesOnly";
+const ARCHIVED_ONLY_KEY = "dext.historyArchivedOnly";
+const SELECTIONS_KEY = "dext.conversationSelections";
 
 export type HistorySortOrder = "newest" | "oldest";
 
@@ -14,6 +17,7 @@ export interface HistoryOrdering {
   order: HistorySortOrder;
   favorites: readonly string[];
   favoritesOnly: boolean;
+  archivedOnly?: boolean;
 }
 
 export interface ConversationLayout {
@@ -40,9 +44,10 @@ export function orderHistorySessions<T extends OrderableSession>(
   ordering: HistoryOrdering
 ): T[] {
   const favorites = new Set(ordering.favorites);
-  const visible = ordering.favoritesOnly
-    ? sessions.filter((session) => favorites.has(session.id))
-    : [...sessions];
+  const visible = sessions.filter((session) => {
+    const archived = Boolean((session as T & { archivedAt?: number }).archivedAt);
+    return archived === Boolean(ordering.archivedOnly) && (!ordering.favoritesOnly || favorites.has(session.id));
+  });
   const direction = ordering.order === "newest" ? -1 : 1;
   return visible.sort((left, right) => {
     const byFavorite = Number(favorites.has(right.id)) - Number(favorites.has(left.id));
@@ -119,6 +124,26 @@ export class DextConversationPreferences {
     } satisfies ConversationLayout);
   }
 
+  /** Composer settings that belong to an individual conversation tab. */
+  conversationSelection(sessionId: string): AgentSelection | undefined {
+    const selections = this.state.get<Record<string, AgentSelection>>(SELECTIONS_KEY, {});
+    const selection = selections[sessionId];
+    return selection && typeof selection === "object" ? { ...selection } : undefined;
+  }
+
+  async setConversationSelection(sessionId: string, selection: AgentSelection): Promise<void> {
+    const selections = { ...this.state.get<Record<string, AgentSelection>>(SELECTIONS_KEY, {}) };
+    selections[sessionId] = { ...selection };
+    await this.state.update(SELECTIONS_KEY, selections);
+  }
+
+  async forgetConversationSelection(sessionId: string): Promise<void> {
+    const selections = { ...this.state.get<Record<string, AgentSelection>>(SELECTIONS_KEY, {}) };
+    if (!(sessionId in selections)) return;
+    delete selections[sessionId];
+    await this.state.update(SELECTIONS_KEY, selections);
+  }
+
   sortOrder(): HistorySortOrder {
     return this.state.get<HistorySortOrder>(SORT_ORDER_KEY, "newest") === "oldest" ? "oldest" : "newest";
   }
@@ -131,6 +156,14 @@ export class DextConversationPreferences {
     return this.state.get<boolean>(FAVORITES_ONLY_KEY, false);
   }
 
+  archivedOnly(): boolean {
+    return this.state.get<boolean>(ARCHIVED_ONLY_KEY, false);
+  }
+
+  async setArchivedOnly(archivedOnly: boolean): Promise<void> {
+    await this.state.update(ARCHIVED_ONLY_KEY, archivedOnly);
+  }
+
   async setFavoritesOnly(favoritesOnly: boolean): Promise<void> {
     await this.state.update(FAVORITES_ONLY_KEY, favoritesOnly);
   }
@@ -139,7 +172,8 @@ export class DextConversationPreferences {
     return {
       order: this.sortOrder(),
       favorites: this.favorites(),
-      favoritesOnly: this.favoritesOnly()
+      favoritesOnly: this.favoritesOnly(),
+      archivedOnly: this.archivedOnly()
     };
   }
 
@@ -149,6 +183,7 @@ export class DextConversationPreferences {
     await this.setPinned(sessionId, false);
     await this.setFavorite(sessionId, false);
     await this.setTitle(sessionId, "");
+    await this.forgetConversationSelection(sessionId);
     const layout = this.conversationLayout();
     await this.setConversationLayout({
       openConversationIds: layout.openConversationIds.filter((id) => id !== sessionId),

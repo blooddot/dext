@@ -353,9 +353,9 @@ describe("sidebar panel layout", () => {
     expect(main).toMatch(/turnActionButton\("edit", "Edit and resend", \(\) => \{[\s\S]*?editor\.setValue\(source\)/);
     expect(main).toMatch(/turnActionButton\("debug-restart", "Retry this turn", \(\) => \{[\s\S]*?type: "retryTurn", turnId/);
     expect(main).toContain("summary.append(chevron, title, time, actions);");
-    // Actions have to go dead while a turn is running, including turns created
-    // after the run started.
-    expect(main).toContain("button.disabled = executing;");
+    // Only destructive actions on the active turn go dead while a turn is
+    // running; copying and editing older turns remains available.
+    expect(main).toMatch(/function syncTurnActions[\s\S]*?data-disable-while-running[\s\S]*?button\.disabled = executing &&/);
     expect(main).toMatch(/function updateRunState[\s\S]*?syncTurnActions\(\);/);
     expect(sidebar).toMatch(/case "retryTurn":[\s\S]*?this\.activeSession\.turns\.find\(\(item\) => item\.id === request\.turnId\)/);
     // Retry reproduces the recorded mode rather than whatever is selected now.

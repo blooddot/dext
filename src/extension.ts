@@ -91,7 +91,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
   const historySession = (context?: ConversationContext): DextHistorySession => {
     const session = context?.sessionId
-      ? history.list().find((item) => item.id === context.sessionId)
+      ? history.list(true).find((item) => item.id === context.sessionId)
       : undefined;
     if (!session) throw new Error("Conversation not found in Dext history.");
     return session;
@@ -153,6 +153,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const updateHistoryContext = (): void => {
     void vscode.commands.executeCommand("setContext", "dext.historyNewestFirst", preferences.sortOrder() === "newest");
     void vscode.commands.executeCommand("setContext", "dext.historyFavoritesOnly", preferences.favoritesOnly());
+    void vscode.commands.executeCommand("setContext", "dext.historyArchivedOnly", preferences.archivedOnly());
   };
   const setSortOrder = async (order: HistorySortOrder): Promise<void> => {
     await preferences.setSortOrder(order);
@@ -161,6 +162,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
   const setFavoritesOnly = async (favoritesOnly: boolean): Promise<void> => {
     await preferences.setFavoritesOnly(favoritesOnly);
+    updateHistoryContext();
+    historyPanel.refresh();
+  };
+  const setArchivedOnly = async (archivedOnly: boolean): Promise<void> => {
+    await preferences.setArchivedOnly(archivedOnly);
     updateHistoryContext();
     historyPanel.refresh();
   };
@@ -255,7 +261,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("dext.openHistory", () => historyPanel.showInActiveEditor()),
     vscode.commands.registerCommand("dext.history.continueConversation", (context?: ConversationContext) =>
       reportCommandError(async () => {
-        await sidebar.openConversation(historySession(context));
+        const session = historySession(context);
+        const restored = { ...session };
+        if (restored.archivedAt) delete restored.archivedAt;
+        if (session.archivedAt) await history.setArchived(session.id, false);
+        await sidebar.openConversation(restored);
         await focusSidebar();
         sidebar.showChat();
       })
@@ -314,6 +324,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         historyPanel.refresh();
       })
     ),
+    vscode.commands.registerCommand("dext.history.archiveConversation", (context?: ConversationContext) =>
+      reportCommandError(async () => {
+        const session = historySession(context);
+        await sidebar.forgetConversation(session.id);
+        await history.setArchived(session.id, true);
+        await preferences.setPinned(session.id, false);
+        historyPanel.refresh();
+      })
+    ),
+    vscode.commands.registerCommand("dext.history.unarchiveConversation", (context?: ConversationContext) =>
+      reportCommandError(async () => {
+        const session = historySession(context);
+        await history.setArchived(session.id, false);
+        historyPanel.refresh();
+      })
+    ),
     vscode.commands.registerCommand("dext.history.addFavorite", (context?: ConversationContext) =>
       reportCommandError(() => setFavorite(context, true))
     ),
@@ -324,6 +350,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("dext.history.showOldestFirst", () => setSortOrder("oldest")),
     vscode.commands.registerCommand("dext.history.showFavoritesOnly", () => setFavoritesOnly(true)),
     vscode.commands.registerCommand("dext.history.showAllConversations", () => setFavoritesOnly(false)),
+    vscode.commands.registerCommand("dext.history.showArchived", () => setArchivedOnly(true)),
+    vscode.commands.registerCommand("dext.history.showActive", () => setArchivedOnly(false)),
     vscode.commands.registerCommand("dext.tab.renameConversation", (context?: ConversationContext) =>
       reportCommandError(() => renameConversation(tabSessionId(context), context?.dextTabTitle ?? ""))
     ),

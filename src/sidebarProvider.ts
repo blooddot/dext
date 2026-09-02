@@ -60,12 +60,10 @@ function outputSession(): DextHistorySession {
   };
 }
 
-// A conversation that has never had its composer controls changed must start
-// from the product defaults. In particular, do not copy the profile store's
-// global last-used selection here: that would make a Code selection bleed into
-// every newly opened tab.
-function defaultConversationSelection(): AgentSelection {
-  return { mode: "agent" };
+// New tabs always start in Agent mode, while keeping the provider/model
+// controls the user was using in the tab they came from.
+function defaultConversationSelection(previous: AgentSelection): AgentSelection {
+  return { ...previous, mode: "agent" };
 }
 
 // The picker ranks paths in the host, so the index has to be broad enough to
@@ -93,8 +91,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   private readonly attachments = new AttachmentStore();
   private activeSession = outputSession();
   private readonly sessions = new Map<string, DextHistorySession>();
-  // Only the composer mode belongs to a conversation tab. Permission, CLI,
-  // model, and model parameters are global profile preferences.
+  // Every composer control belongs to its conversation tab. The application
+  // still receives the active tab's selection so execution uses the same
+  // runtime path, but no tab can overwrite another tab's controls.
   private readonly conversationSelections = new Map<string, AgentSelection>();
   // Conversations behave like editor tabs: the strip only shows the ones that
   // are open, while every conversation stays reachable through history.
@@ -136,9 +135,11 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       : undefined;
     if (previouslyActive) this.activeSession = previouslyActive;
     else if (latest) this.activeSession = latest;
-    this.conversationSelections.set(this.activeSession.id, {
-      mode: this.application.state().agentSelection.mode ?? "agent"
-    });
+    const storedSelection = this.preferences.conversationSelection(this.activeSession.id);
+    const initialSelection = storedSelection
+      ?? { ...this.application.state().agentSelection, mode: "agent" as const };
+    this.conversationSelections.set(this.activeSession.id, initialSelection);
+    this.application.setAgentSelection(initialSelection);
     // Keep every tab the user left open, including non-pinned ones. Pins still
     // provide a backwards-compatible fallback for layouts saved before this
     // state was introduced.
@@ -184,11 +185,21 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
 
   private async activateConversation(session: DextHistorySession): Promise<void> {
     this.activeSession = session;
-    const mode = this.conversationSelections.get(session.id)?.mode ?? "agent";
-    this.conversationSelections.set(session.id, { mode });
-    this.application.setAgentSelection({ ...this.application.state().agentSelection, mode });
+    const cachedSelection = this.conversationSelections.get(session.id);
+    const storedSelection = cachedSelection ? undefined : this.preferences.conversationSelection(session.id);
+    const selection = cachedSelection
+      ?? storedSelection
+      ?? { ...this.application.state().agentSelection, mode: "agent" as const };
+    this.conversationSelections.set(session.id, selection);
+    this.application.setAgentSelection(selection);
     if (!this.openConversations.includes(session.id)) this.openConversations.push(session.id);
-    await this.persistConversationLayout();
+    // These writes are independent; run them together so a tab switch pays
+    // one persistence round-trip instead of two.
+    const writes: Promise<unknown>[] = [this.persistConversationLayout()];
+    if (!cachedSelection && !storedSelection) {
+      writes.push(this.preferences.setConversationSelection(session.id, selection));
+    }
+    await Promise.all(writes);
     this.updateRunningContext();
     await this.postConversationState();
     await this.refresh();
@@ -203,8 +214,13 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     if (replaceActiveTab) this.application.endAgentSession(this.activeSession.id);
     this.activeSession = outputSession();
     this.sessions.set(this.activeSession.id, this.activeSession);
-    this.conversationSelections.set(this.activeSession.id, defaultConversationSelection());
-    this.application.setAgentSelection({ ...this.application.state().agentSelection, mode: "agent" });
+    const previousSelection = this.conversationSelections.get(
+      replaceActiveTab ? (this.openConversations[index] ?? "") : this.activeSession.id
+    ) ?? this.application.state().agentSelection;
+    const selection = defaultConversationSelection(previousSelection);
+    this.conversationSelections.set(this.activeSession.id, selection);
+    this.application.setAgentSelection(selection);
+    await this.preferences.setConversationSelection(this.activeSession.id, selection);
     if (index === -1) this.openConversations.push(this.activeSession.id);
     else this.openConversations[index] = this.activeSession.id;
     await this.persistConversationLayout();
@@ -241,9 +257,12 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       return;
     }
     this.activeSession = session;
-    const mode = this.conversationSelections.get(session.id)?.mode ?? "agent";
-    this.conversationSelections.set(session.id, { mode });
-    this.application.setAgentSelection({ ...this.application.state().agentSelection, mode });
+    const selection = this.conversationSelections.get(session.id)
+      ?? this.preferences.conversationSelection(session.id)
+      ?? { ...this.application.state().agentSelection, mode: "agent" as const };
+    this.conversationSelections.set(session.id, selection);
+    this.application.setAgentSelection(selection);
+    await this.preferences.setConversationSelection(session.id, selection);
     await this.persistConversationLayout();
     this.updateRunningContext();
     await this.postConversationState();
@@ -437,6 +456,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     this.hydrateSessions();
     this.sessions.delete(sessionId);
     this.conversationSelections.delete(sessionId);
+    await this.preferences.forgetConversationSelection(sessionId);
     if (this.openConversations.includes(sessionId)) {
       await this.closeConversation(sessionId);
       return;
@@ -623,16 +643,17 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         case "agentSelection":
           {
           const selection = {
-            ...this.application.state().agentSelection,
+            mode: request.selection.mode,
             permission: request.selection.permission,
-            ...(request.selection.profileId ? { profileId: request.selection.profileId } : {}),
-            ...(request.selection.model ? { model: request.selection.model } : {}),
-            ...(request.selection.reasoningEffort ? { reasoningEffort: request.selection.reasoningEffort } : {}),
-            ...(request.selection.speed ? { speed: request.selection.speed } : {}),
-            ...(request.selection.serviceTier ? { serviceTier: request.selection.serviceTier } : {})
+            profileId: request.selection.profileId,
+            model: request.selection.model,
+            reasoningEffort: request.selection.reasoningEffort,
+            speed: request.selection.speed,
+            serviceTier: request.selection.serviceTier
           } satisfies AgentSelection;
-          this.conversationSelections.set(this.activeSession.id, { mode: request.selection.mode });
-          this.application.setAgentSelection({ ...selection, mode: request.selection.mode });
+          this.conversationSelections.set(this.activeSession.id, selection);
+          await this.preferences.setConversationSelection(this.activeSession.id, selection);
+          this.application.setAgentSelection(selection);
           this.updateRunningContext();
           await this.refresh();
           break;

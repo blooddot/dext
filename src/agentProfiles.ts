@@ -212,17 +212,16 @@ export class AgentProfileStore {
   }
 
   setSelection(selection: AgentSelection): void {
-    // Mode belongs to the conversation tab. Keep it in the in-memory
-    // selection for the current runtime, but never persist it as a global
-    // profile preference.
+    // The sidebar supplies the complete active-tab selection. Preserve empty
+    // strings as intentional resets (for example when changing model).
     this.selection = {
-      ...(selection.mode ? { mode: selection.mode } : {}),
-      ...(selection.permission ? { permission: selection.permission } : {}),
-      ...(selection.profileId ? { profileId: selection.profileId } : {}),
-      ...(selection.model ? { model: selection.model } : {}),
-      ...(selection.reasoningEffort ? { reasoningEffort: selection.reasoningEffort } : {}),
-      ...(selection.speed ? { speed: selection.speed } : {}),
-      ...(selection.serviceTier ? { serviceTier: selection.serviceTier } : {})
+      ...(selection.mode !== undefined ? { mode: selection.mode } : {}),
+      ...(selection.permission !== undefined ? { permission: selection.permission } : {}),
+      ...(selection.profileId !== undefined ? { profileId: selection.profileId } : {}),
+      ...(selection.model !== undefined ? { model: selection.model } : {}),
+      ...(selection.reasoningEffort !== undefined ? { reasoningEffort: selection.reasoningEffort } : {}),
+      ...(selection.speed !== undefined ? { speed: selection.speed } : {}),
+      ...(selection.serviceTier !== undefined ? { serviceTier: selection.serviceTier } : {})
     };
     const { mode, ...globalSelection } = this.selection;
     void mode;

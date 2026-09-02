@@ -113,6 +113,14 @@
         "title": "Delete Conversation"
       },
       {
+        "command": "dext.history.archiveConversation",
+        "title": "Archive Conversation"
+      },
+      {
+        "command": "dext.history.unarchiveConversation",
+        "title": "Restore Conversation"
+      },
+      {
         "command": "dext.history.renameConversation",
         "title": "Rename Conversation"
       },
@@ -147,6 +155,16 @@
         "command": "dext.history.showAllConversations",
         "title": "Dext History: Show All Conversations",
         "icon": "$(star-full)"
+      },
+      {
+        "command": "dext.history.showArchived",
+        "title": "Dext History: Show Archived",
+        "icon": "$(archive)"
+      },
+      {
+        "command": "dext.history.showActive",
+        "title": "Dext History: Show Active",
+        "icon": "$(inbox)"
       },
       {
         "command": "dext.tab.pinConversation",
@@ -389,6 +407,14 @@
           "when": "false"
         },
         {
+          "command": "dext.history.archiveConversation",
+          "when": "false"
+        },
+        {
+          "command": "dext.history.unarchiveConversation",
+          "when": "false"
+        },
+        {
           "command": "dext.history.renameConversation",
           "when": "false"
         },
@@ -418,6 +444,14 @@
         },
         {
           "command": "dext.history.showAllConversations",
+          "when": "false"
+        },
+        {
+          "command": "dext.history.showArchived",
+          "when": "false"
+        },
+        {
+          "command": "dext.history.showActive",
           "when": "false"
         },
         {
@@ -494,6 +528,16 @@
         }
       ],
       "editor/title": [
+        {
+          "command": "dext.history.showArchived",
+          "when": "activeWebviewPanelId == 'dext.history' && !dext.historyArchivedOnly",
+          "group": "navigation@0"
+        },
+        {
+          "command": "dext.history.showActive",
+          "when": "activeWebviewPanelId == 'dext.history' && dext.historyArchivedOnly",
+          "group": "navigation@0"
+        },
         {
           "command": "dext.history.showFavoritesOnly",
           "when": "activeWebviewPanelId == 'dext.history' && !dext.historyFavoritesOnly",
@@ -633,6 +677,16 @@
           "command": "dext.history.deleteConversation",
           "when": "webviewId == 'dext.history' && (webviewSection == 'session' || webviewSection == 'turn')",
           "group": "4_delete@1"
+        },
+        {
+          "command": "dext.history.archiveConversation",
+          "when": "webviewId == 'dext.history' && (webviewSection == 'session' || webviewSection == 'turn') && !dextArchived",
+          "group": "4_delete@0"
+        },
+        {
+          "command": "dext.history.unarchiveConversation",
+          "when": "webviewId == 'dext.history' && (webviewSection == 'session' || webviewSection == 'turn') && dextArchived",
+          "group": "2_conversation@4"
         },
         {
           "command": "dext.tab.renameConversation",

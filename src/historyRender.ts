@@ -37,6 +37,30 @@ function copyButton(value: string): string {
   return `<button class="copy-button codicon codicon-copy" type="button" data-copy="${escapeHtml(value)}" title="Copy" aria-label="Copy"></button>`;
 }
 
+/** High-frequency conversation actions stay visible on hover; the complete
+ * action set remains available from the native context menu. */
+function historyActionButton(icon: string, command: string, label: string, sessionId: string): string {
+  return `<button class="history-session-action icon-button compact" type="button" data-history-command="${escapeHtml(command)}" data-session-id="${escapeHtml(sessionId)}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}"><i class="codicon codicon-${icon}"></i></button>`;
+}
+
+function historySessionActions(session: DextHistorySession, favorite: boolean): string {
+  const favoriteCommand = favorite ? "dext.history.removeFavorite" : "dext.history.addFavorite";
+  const favoriteLabel = favorite ? "Remove from favorites" : "Add to favorites";
+  const favoriteIcon = favorite ? "star-full" : "star-empty";
+  const archiveCommand = session.archivedAt ? "dext.history.unarchiveConversation" : "dext.history.archiveConversation";
+  const archiveLabel = session.archivedAt ? "Restore conversation" : "Archive conversation";
+  const archiveIcon = session.archivedAt ? "inbox" : "archive";
+  return [
+    historyActionButton("debug-continue", "dext.history.continueConversation", "Continue in Dext", session.id),
+    historyActionButton("repo-forked", "dext.history.forkConversation", "Fork conversation", session.id),
+    historyActionButton(favoriteIcon, favoriteCommand, favoriteLabel, session.id),
+    historyActionButton("edit", "dext.history.renameConversation", "Rename conversation", session.id),
+    historyActionButton("copy", "dext.history.copyConversation", "Copy conversation as Markdown", session.id),
+    historyActionButton(archiveIcon, archiveCommand, archiveLabel, session.id),
+    historyActionButton("trash", "dext.history.deleteConversation", "Delete conversation", session.id)
+  ].join("");
+}
+
 function diffModeSwitch(): string {
   return `<span class="diff-mode-switch" role="group" aria-label="Diff layout"><button class="diff-mode-button active" type="button" data-diff-mode="inline" aria-pressed="true" title="Inline diff">Inline</button><button class="diff-mode-button" type="button" data-diff-mode="split" aria-pressed="false" title="Split diff">Split</button></span>`;
 }
@@ -467,13 +491,14 @@ export function renderHistorySession(session: DextHistorySession, view: HistoryS
     webviewSection: "session",
     sessionId: session.id,
     dextFavorite: favorite,
+    ...(session.archivedAt ? { dextArchived: true } : {}),
     preventDefaultContextMenuItems: true
   });
   const star = favorite
     ? `<i class="history-favorite codicon codicon-star-full" title="Favorite" aria-label="Favorite"></i>`
     : "";
   const label = view.name ?? conversationTitle(session);
-  return `<details class="history-session${favorite ? " favorite" : ""}" ${context}><summary title="${SESSION_ACTION_HINT}">${chevron()}${star}<span class="history-summary-input${view.name ? " named" : ""}">${escapeHtml(label)}</span><span class="history-meta">${count}</span><span class="history-meta history-session-time">${escapeHtml(dateLabel(session.createdAt))}</span></summary><div class="history-session-body"><div class="history-session-actions">${copyButton(conversationMarkdown(session))}</div>${session.turns.map((turn) => renderHistoryRecord(turn, session.id)).join("")}</div></details>`;
+  return `<details class="history-session${favorite ? " favorite" : ""}${session.archivedAt ? " archived" : ""}" ${context}><summary title="${SESSION_ACTION_HINT}">${chevron()}${star}<span class="history-summary-input${view.name ? " named" : ""}">${escapeHtml(label)}</span><span class="history-meta">${count}</span><span class="history-meta history-session-time">${escapeHtml(dateLabel(session.createdAt))}</span><span class="history-session-actions">${historySessionActions(session, favorite)}</span></summary><div class="history-session-body">${session.turns.map((turn) => renderHistoryRecord(turn, session.id)).join("")}</div></details>`;
 }
 
 export function conversationMarkdown(session: DextHistorySession): string {

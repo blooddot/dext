@@ -82,6 +82,22 @@ describe("conversation preferences", () => {
     expect(store.conversationLayout()).toEqual({ openConversationIds: ["first"] });
   });
 
+  it("keeps composer selections isolated by conversation id", async () => {
+    const store = preferences();
+    const first = { mode: "ask" as const, permission: "workspace-write" as const, profileId: "codex", model: "gpt", reasoningEffort: "", speed: "standard", serviceTier: "default" };
+    const second = { mode: "agent" as const, permission: "full-access" as const, profileId: "claude", model: "sonnet", reasoningEffort: "high", speed: "", serviceTier: "" };
+
+    await store.setConversationSelection("first", first);
+    await store.setConversationSelection("second", second);
+
+    expect(store.conversationSelection("first")).toEqual(first);
+    expect(store.conversationSelection("second")).toEqual(second);
+
+    await store.forget("first");
+    expect(store.conversationSelection("first")).toBeUndefined();
+    expect(store.conversationSelection("second")).toEqual(second);
+  });
+
   it("restores the saved tabs and active conversation when the sidebar is created again", async () => {
     const sidebar = await readFile(resolve("src/sidebarProvider.ts"), "utf8");
 

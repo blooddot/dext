@@ -4,8 +4,9 @@
   font-size: var(--vscode-font-size);
   color: var(--vscode-foreground);
   background: var(--vscode-sideBar-background);
-  /* Keep Full access distinct from Plan's warning/ochre accent. */
-  --dext-full-access-accent: #c03e1b;
+  /* Keep Full access distinct from Plan's warning/ochre accent without the
+     high-alert feel of a saturated red. */
+  --dext-full-access-accent: #a9675c;
 }
 
 html,
@@ -636,6 +637,7 @@ main {
   border-radius: 3px;
   cursor: pointer;
   user-select: none;
+  position: relative;
 }
 
 .history-session > summary:hover,
@@ -682,6 +684,51 @@ main {
   flex: 0 0 auto;
   font-size: 13px;
   color: var(--vscode-charts-yellow, var(--vscode-notificationsWarningIcon-foreground, #cca700));
+}
+
+.history-session-actions {
+  position: absolute;
+  z-index: 1;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 0 2px 14px;
+  background: linear-gradient(
+    to right,
+    transparent,
+    var(--vscode-list-hoverBackground, rgba(37, 37, 38, 0.96)) 14px
+  );
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 80ms ease-out;
+}
+
+.history-session > summary:hover .history-session-actions,
+.history-session > summary:focus-within .history-session-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.history-session-action {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+  cursor: pointer;
+}
+
+.history-session-action:hover {
+  color: var(--vscode-foreground);
+  background: var(--vscode-toolbar-hoverBackground);
+}
+
+.history-session-action:last-child:hover {
+  color: var(--vscode-errorForeground);
 }
 
 .history-session-body {
@@ -1671,13 +1718,13 @@ main {
 #permission-control.is-full-access {
   border-color: color-mix(
     in srgb,
-    var(--dext-full-access-accent) 68%,
+    var(--dext-full-access-accent) 58%,
     var(--vscode-widget-border)
   );
   color: var(--dext-full-access-accent);
   background: color-mix(
     in srgb,
-    var(--dext-full-access-accent) 10%,
+    var(--dext-full-access-accent) 8%,
     var(--vscode-editor-background)
   );
   font-weight: 600;
@@ -1692,12 +1739,12 @@ main {
   border-color: var(--dext-full-access-accent);
   background: color-mix(
     in srgb,
-    var(--dext-full-access-accent) 18%,
+    var(--dext-full-access-accent) 14%,
     var(--vscode-editor-background)
   );
   box-shadow: 0 0 0 1px color-mix(
     in srgb,
-    var(--dext-full-access-accent) 16%,
+    var(--dext-full-access-accent) 12%,
     transparent
   );
 }
@@ -1877,7 +1924,8 @@ main {
 }
 
 /* Full access is deliberately distinct: it can work outside the workspace,
-   so the red-orange treatment remains visible both before and after it is picked. */
+   so the muted terracotta treatment remains visible both before and after it
+   is picked. */
 .composer-menu-option.composer-menu-option-warning {
   color: var(--dext-full-access-accent);
 }
@@ -2029,12 +2077,11 @@ button.primary:disabled {
   opacity: 0.55;
 }
 
-/* A running turn keeps a single, subtle activity signal on its Stop action.
-   The sheen is clipped to the pill so it reads as an edge sweep instead of a
-   second moving control. */
+/* A running turn keeps a single, very subtle light sweep on its Stop action.
+   The button itself stays still: only a soft highlight band moves across the
+   existing mode colour. */
 button.primary.executing {
   --running-accent: var(--composer-accent-fill, var(--vscode-button-background));
-  animation: dext-running-edge 1.8s ease-in-out infinite;
 }
 
 button.primary.plan-build.executing {
@@ -2048,12 +2095,15 @@ button.primary.executing::after {
   pointer-events: none;
   background: linear-gradient(
     108deg,
-    transparent 20%,
-    color-mix(in srgb, var(--running-accent) 38%, white) 48%,
-    transparent 76%
+    transparent 28%,
+    rgba(255, 255, 255, 0.16) 46%,
+    rgba(255, 255, 255, 0.2) 50%,
+    rgba(255, 255, 255, 0.16) 54%,
+    transparent 72%
   );
-  transform: translateX(-125%);
-  animation: dext-running-sheen 1.8s ease-in-out infinite;
+  border-radius: inherit;
+  transform: translateX(-125%) skewX(-8deg);
+  animation: dext-running-sheen 2.2s linear infinite;
 }
 
 button.primary.executing > * {
@@ -2061,19 +2111,19 @@ button.primary.executing > * {
   z-index: 1;
 }
 
-@keyframes dext-running-edge {
-  0%, 100% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--running-accent) 34%, transparent); }
-  50% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--running-accent) 82%, transparent), 0 0 10px color-mix(in srgb, var(--running-accent) 28%, transparent); }
-}
-
 @keyframes dext-running-sheen {
-  0% { transform: translateX(-125%); }
-  58%, 100% { transform: translateX(125%); }
+  0% { transform: translateX(-125%) skewX(-8deg); }
+  58%, 100% { transform: translateX(125%) skewX(-8deg); }
 }
 
 @media (prefers-reduced-motion: reduce) {
   button.primary.executing { animation: none; }
-  button.primary.executing::after { animation: none; opacity: 0; }
+  /* Reduced motion still gets a static highlight instead of losing the
+     running-state affordance entirely. */
+  button.primary.executing::after {
+    animation: none;
+    transform: none;
+  }
 }
 
 .problems-status,
@@ -2124,6 +2174,7 @@ button.primary.executing > * {
   flex: 1 1 0;
   flex-direction: column;
   overflow: hidden;
+  position: relative;
 }
 
 .section-heading {
@@ -2267,6 +2318,56 @@ button.primary.stopping {
 
 #result {
   padding-right: 4px;
+}
+
+.stream-jump-latest {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 3;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid color-mix(
+    in srgb,
+    var(--vscode-widget-border, var(--vscode-sideBar-border)) 72%,
+    transparent
+  );
+  border-radius: 50%;
+  color: var(--vscode-descriptionForeground);
+  background: color-mix(
+    in srgb,
+    var(--vscode-editor-background, var(--vscode-sideBar-background)) 92%,
+    var(--vscode-foreground)
+  );
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--vscode-widget-shadow, rgba(0, 0, 0, 0.3)) 56%, transparent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0.9;
+  transition: color 120ms ease, background 120ms ease, border-color 120ms ease, opacity 120ms ease;
+}
+
+.stream-jump-latest:hover,
+.stream-jump-latest:focus-visible {
+  color: var(--vscode-foreground);
+  background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground));
+  border-color: var(--vscode-focusBorder);
+  opacity: 1;
+}
+
+.stream-jump-latest:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+.stream-jump-latest .codicon {
+  font-size: 14px;
+}
+
+.stream-jump-latest[hidden] {
+  display: none;
 }
 
 .output-turn {

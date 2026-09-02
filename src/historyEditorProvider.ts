@@ -42,12 +42,29 @@ export class DextHistoryPanel implements vscode.Disposable {
       this.panel = undefined;
     });
     this.panel.webview.onDidReceiveMessage((raw: unknown) => {
-      const message = raw as { type?: string; text?: string; reference?: string };
+      const message = raw as { type?: string; text?: string; reference?: string; command?: string; sessionId?: string };
       if (message.type === "copy" && typeof message.text === "string") {
         void vscode.env.clipboard.writeText(message.text);
       }
       if (message.type === "openFileReference" && typeof message.reference === "string") {
         void openDextFileReference(message.reference, this.storage);
+      }
+      if (message.type === "historyCommand"
+        && typeof message.command === "string"
+        && typeof message.sessionId === "string"
+        && message.sessionId.length > 0
+        && [
+          "dext.history.continueConversation",
+          "dext.history.forkConversation",
+          "dext.history.addFavorite",
+          "dext.history.removeFavorite",
+          "dext.history.renameConversation",
+          "dext.history.copyConversation",
+          "dext.history.archiveConversation",
+          "dext.history.unarchiveConversation",
+          "dext.history.deleteConversation"
+        ].includes(message.command)) {
+        void vscode.commands.executeCommand(message.command, { sessionId: message.sessionId });
       }
     });
     this.render();
@@ -73,8 +90,12 @@ export class DextHistoryPanel implements vscode.Disposable {
     const style = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "media", "styles.css"));
     const ordering = this.preferences.historyOrdering();
     const favorites = new Set(ordering.favorites);
-    const sessions = orderHistorySessions(this.history.list(), ordering);
-    const empty = ordering.favoritesOnly
+    // For the active view this is equivalent to orderHistorySessions(this.history.list(), ordering);
+    // reading all sessions is also necessary when the archived view is selected.
+    const sessions = orderHistorySessions(this.history.list(true), ordering);
+    const empty = ordering.archivedOnly
+      ? "No archived Dext conversations."
+      : ordering.favoritesOnly
       ? "No favorite Dext conversations yet."
       : "No Dext history yet.";
     const body = sessions.length
@@ -140,6 +161,16 @@ export class DextHistoryPanel implements vscode.Disposable {
         event.stopPropagation();
         vscode.postMessage({ type: 'openFileReference', reference: reference.dataset.openFileReference || '' });
         return;
+      }
+      const historyAction = target?.closest('button[data-history-command]');
+      if (historyAction) {
+        event.preventDefault();
+        event.stopPropagation();
+        vscode.postMessage({
+          type: 'historyCommand',
+          command: historyAction.dataset.historyCommand || '',
+          sessionId: historyAction.dataset.sessionId || ''
+        });
       }
     });
   </script>

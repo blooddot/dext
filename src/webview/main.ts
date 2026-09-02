@@ -130,8 +130,23 @@ const elements = {
   attachmentBar: element<HTMLElement>("attachment-bar")
 };
 
+const jumpToLatest = document.createElement("button");
+jumpToLatest.type = "button";
+jumpToLatest.className = "stream-jump-latest";
+const jumpToLatestIcon = document.createElement("i");
+jumpToLatestIcon.className = "codicon codicon-arrow-down";
+jumpToLatestIcon.setAttribute("aria-hidden", "true");
+jumpToLatest.append(jumpToLatestIcon);
+jumpToLatest.setAttribute("aria-label", "Jump to latest output");
+jumpToLatest.title = "Jump to latest output";
+jumpToLatest.hidden = true;
+// Keep the control in the result panel's viewport layer instead of inside the
+// scrollable output. This keeps it visible while the reader inspects history.
+elements.resultSection.append(jumpToLatest);
+
 type UiRequestMessage = Extract<WebviewResponse, { type: "uiRequest" }>;
 let activeUiRequest: UiRequestMessage | undefined;
+let pendingConfirmation: (() => void) | undefined;
 
 const broker = new LanguageRequestBroker((request) => vscode.postMessage(request));
 const clipboard = new ClipboardClient((request) => vscode.postMessage(request));
@@ -158,6 +173,11 @@ const PERMISSION_ICON: Record<AgentPermission, string> = {
 let agentPermission: AgentPermission = "workspace-write";
 let sidebarState: SidebarState | undefined;
 let lastSidebarState: SidebarState | undefined;
+// The API/resource trees are independent of the active conversation. Keep a
+// compact signature so switching tabs only updates the composer controls
+// instead of rebuilding both trees on every state message.
+let renderedMethodsKey: string | undefined;
+let renderedMcpKey: string | undefined;
 let activeConversationId: string | undefined;
 interface DraftAttachment {
   relativePath: string;
@@ -484,11 +504,38 @@ function finishUi(response: Extract<WebviewRequest, { type: "uiResponse" }>["res
 }
 
 function cancelUi(): void {
+  if (pendingConfirmation) {
+    pendingConfirmation = undefined;
+    if (elements.uiDialog.open) elements.uiDialog.close();
+    return;
+  }
   const request = activeUiRequest?.request;
   if (!request) return;
   if (request.type === "choice") finishUi({ type: "choice", selected: [] });
   else if (request.type === "confirm") finishUi({ type: "confirm", confirmed: false });
   else finishUi({ type: "input" });
+}
+
+function openConfirmationDialog(message: string, onConfirm: () => void): void {
+  pendingConfirmation = onConfirm;
+  activeUiRequest = undefined;
+  closeComposerMenus();
+  elements.uiDialogTitle.textContent = "Confirm";
+  elements.uiDialogBody.replaceChildren();
+  elements.uiDialogActions.replaceChildren();
+  const text = document.createElement("div");
+  text.textContent = message;
+  elements.uiDialogBody.append(text);
+  elements.uiDialogActions.append(
+    uiButton("Cancel", true, cancelUi),
+    uiButton("Confirm", false, () => {
+      const confirm = pendingConfirmation;
+      pendingConfirmation = undefined;
+      if (elements.uiDialog.open) elements.uiDialog.close();
+      confirm?.();
+    })
+  );
+  if (!elements.uiDialog.open) elements.uiDialog.showModal();
 }
 
 function uiButton(label: string, secondary: boolean, onClick: () => void): HTMLButtonElement {
@@ -501,6 +548,7 @@ function uiButton(label: string, secondary: boolean, onClick: () => void): HTMLB
 }
 
 function openUiDialog(message: UiRequestMessage): void {
+  pendingConfirmation = undefined;
   activeUiRequest = message;
   closeComposerMenus();
   elements.uiDialogTitle.textContent = message.request.type === "confirm" ? "Confirm" : message.request.label;
@@ -923,7 +971,6 @@ function renderMethods(state: SidebarState): void {
     elements.configErrors.append(item);
   }
   editor.refreshLanguageState();
-  renderAgentControls(state);
 }
 
 function setMethodGroupsOpen(open: boolean): void {
@@ -1082,6 +1129,7 @@ function renderComposerMenu(
     button.type = "button";
     const itemClass = itemClasses[value];
     button.className = `composer-menu-option${warningValues.includes(value) ? " composer-menu-option-warning" : ""}${itemClass ? ` ${itemClass}` : ""}`;
+    button.tabIndex = -1;
     button.setAttribute("role", "menuitemradio");
     button.setAttribute("aria-checked", String(value === selected));
     const glyph = document.createElement("i");
@@ -1144,6 +1192,7 @@ function renderModelMenu(
     const button = document.createElement("button");
     button.type = "button";
     button.className = "composer-menu-option composer-menu-category";
+    button.tabIndex = -1;
     const title = document.createElement("span");
     title.textContent = category.title;
     const value = document.createElement("span");
@@ -1180,6 +1229,7 @@ function renderModelChoices(
     const button = document.createElement("button");
     button.type = "button";
     button.className = "composer-menu-option";
+    button.tabIndex = -1;
     button.setAttribute("role", "menuitemradio");
     button.setAttribute("aria-checked", String(value === selected));
     const text = document.createElement("span");
@@ -1288,11 +1338,28 @@ function renderConversations(sessions: readonly ConversationSummary[], activeId:
       dextTabTitle: conversation.title,
       preventDefaultContextMenuItems: true
     });
-    // Middle-click closes a tab, matching VS Code editor tabs.
+    // Middle-click closes a tab, matching VS Code editor tabs. Prevent the
+    // mousedown default as well: Chromium otherwise enables autoscroll on a
+    // horizontally overflowing tab strip before `auxclick` is dispatched.
+    let middleButtonDown = false;
+    tab.addEventListener("mousedown", (event) => {
+      if (event.button !== 1) return;
+      event.preventDefault();
+      event.stopPropagation();
+      middleButtonDown = true;
+      closeConversation(conversation.id);
+    });
     tab.addEventListener("auxclick", (event) => {
       if (event.button !== 1) return;
       event.preventDefault();
-      closeConversation(conversation.id);
+      event.stopPropagation();
+      // Keep a fallback for environments that do not deliver mousedown for
+      // auxiliary buttons, while avoiding a duplicate close request.
+      if (!middleButtonDown) closeConversation(conversation.id);
+      middleButtonDown = false;
+    });
+    tab.addEventListener("mouseup", (event) => {
+      if (event.button === 1) middleButtonDown = false;
     });
     const label = document.createElement("button");
     label.type = "button";
@@ -1335,6 +1402,11 @@ const composerMenus = [
   { control: elements.modelControl, menu: elements.modelMenu }
 ];
 
+for (const item of composerMenus) {
+  item.menu.addEventListener("keydown", (event) => handleComposerMenuKeydown(item.menu, event));
+}
+elements.modelSubmenu.addEventListener("keydown", (event) => handleComposerMenuKeydown(elements.modelSubmenu, event));
+
 function closeComposerMenus(except?: HTMLElement): void {
   for (const item of composerMenus) {
     const open = item.menu === except;
@@ -1344,8 +1416,63 @@ function closeComposerMenus(except?: HTMLElement): void {
   if (except !== elements.modelMenu) elements.modelSubmenu.hidden = true;
 }
 
+function composerMenuItems(menu: HTMLElement): HTMLButtonElement[] {
+  return [...menu.querySelectorAll<HTMLButtonElement>(":scope > button")];
+}
+
+function focusComposerMenuItem(menu: HTMLElement, index: number): void {
+  const items = composerMenuItems(menu);
+  if (!items.length) return;
+  const target = items[Math.max(0, Math.min(index, items.length - 1))]!;
+  items.forEach((item) => { item.tabIndex = item === target ? 0 : -1; });
+  target.focus();
+}
+
+function focusComposerTrigger(menu: HTMLElement): void {
+  const item = composerMenus.find((entry) => entry.menu === menu);
+  (item?.control ?? elements.modelControl).focus();
+}
+
+function handleComposerMenuKeydown(menu: HTMLElement, event: KeyboardEvent): void {
+  const items = composerMenuItems(menu);
+  if (!items.length) return;
+  const current = items.indexOf(document.activeElement as HTMLButtonElement);
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeComposerMenus();
+    focusComposerTrigger(menu === elements.modelSubmenu ? elements.modelMenu : menu);
+    return;
+  }
+  if (event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Home" || event.key === "End") {
+    event.preventDefault();
+    const direction = event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : 0;
+    const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1
+      : (current < 0 ? 0 : (current + direction + items.length) % items.length);
+    focusComposerMenuItem(menu, next);
+    return;
+  }
+  if (menu === elements.modelMenu && event.key === "ArrowRight" && current >= 0) {
+    event.preventDefault();
+    items[current]!.click();
+    queueMicrotask(() => focusComposerMenuItem(elements.modelSubmenu, 0));
+  } else if (menu === elements.modelSubmenu && event.key === "ArrowLeft") {
+    event.preventDefault();
+    elements.modelSubmenu.hidden = true;
+    elements.modelSubmenu.replaceChildren();
+    elements.modelMenu.hidden = false;
+    focusComposerMenuItem(elements.modelMenu, 0);
+  }
+}
+
 function toggleComposerMenu(menu: HTMLElement): void {
   closeComposerMenus(menu.hidden ? menu : undefined);
+  if (!menu.hidden) {
+    queueMicrotask(() => {
+      const items = composerMenuItems(menu);
+      const selected = items.findIndex((item) => item.getAttribute("aria-checked") === "true");
+      focusComposerMenuItem(menu, selected >= 0 ? selected : 0);
+    });
+  }
 }
 
 function resultHeading(response: RuntimeResponse): HTMLElement {
@@ -1737,13 +1864,14 @@ function inputReferenceChipElement(reference: ContextReferenceOccurrence): HTMLE
 
 /** Turn actions live in the summary, which is a click target of its own, so
  * every one of them has to stop the click from folding the turn. */
-function turnActionButton(icon: string, label: string, onActivate: () => void): HTMLButtonElement {
+function turnActionButton(icon: string, label: string, onActivate: () => void, disableWhileRunning = false): HTMLButtonElement {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "output-turn-action icon-button compact";
   button.title = label;
   button.setAttribute("aria-label", label);
-  button.disabled = executing;
+  button.disabled = disableWhileRunning && executing;
+  if (disableWhileRunning) button.dataset.disableWhileRunning = "true";
   const glyph = document.createElement("i");
   glyph.className = `codicon codicon-${icon}`;
   button.append(glyph);
@@ -1769,8 +1897,9 @@ function turnCopyButton(text: () => string): HTMLButtonElement {
 }
 
 function syncTurnActions(): void {
-  for (const button of elements.result.querySelectorAll<HTMLButtonElement>(".output-turn-action, .plan-action.primary")) {
-    button.disabled = executing;
+  for (const button of elements.result.querySelectorAll<HTMLButtonElement>(".output-turn-action[data-disable-while-running], .plan-action.primary")) {
+    const turn = button.closest<HTMLElement>(".output-turn");
+    button.disabled = executing && (!turn || turn.dataset.turnId === activeTurnId);
   }
 }
 
@@ -1807,12 +1936,18 @@ function createOutputTurn(
       setSectionOpen(elements.inputHeading, elements.inputBody, true);
     }),
     turnActionButton("debug-restart", "Retry this turn", () => {
-      vscode.postMessage({ type: "retryTurn", turnId });
-    }),
+      openConfirmationDialog(
+        "Retry this turn? Any write actions may run again.",
+        () => vscode.postMessage({ type: "retryTurn", turnId })
+      );
+    }, true),
     turnCopyButton(() => disclosure.textContent?.trim() ?? ""),
     turnActionButton("trash", "Delete turn", () => {
-      vscode.postMessage({ type: "deleteTurn", turnId });
-    })
+      openConfirmationDialog(
+        "Delete this turn from the conversation?",
+        () => vscode.postMessage({ type: "deleteTurn", turnId })
+      );
+    }, true)
   );
   // Keep the turn title as the primary row label, matching the history view;
   // metadata belongs at the trailing edge of the row rather than before it.
@@ -2316,10 +2451,19 @@ function resultIsNearBottom(): boolean {
   return scrollHeight - scrollTop - clientHeight <= 24;
 }
 
+function syncJumpToLatest(): void {
+  // The control is useful for both a live stream and already-finished
+  // conversations.  Tying visibility to `executing` (or to an active stream
+  // panel) made it disappear as soon as a response finished, even when the
+  // reader had scrolled away from the newest output.
+  jumpToLatest.hidden = resultIsNearBottom();
+}
+
 function followResultIfNeeded(shouldFollow: boolean): void {
   if (!shouldFollow) return;
   requestAnimationFrame(() => {
     elements.resultBody.scrollTop = elements.resultBody.scrollHeight;
+    syncJumpToLatest();
   });
 }
 
@@ -2330,6 +2474,7 @@ function scrollResultToBottom(): void {
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
       elements.resultBody.scrollTop = elements.resultBody.scrollHeight;
+      syncJumpToLatest();
     });
   });
 }
@@ -2671,6 +2816,7 @@ function renderOutputSession(session: DextHistorySession): void {
   }
   elements.resultSection.classList.remove("hidden");
   syncResultToggle();
+  syncJumpToLatest();
   scrollResultToBottom();
 }
 
@@ -2804,6 +2950,12 @@ elements.resultToggle.addEventListener("click", (event) => {
   toggleResultDetails();
 });
 elements.result.addEventListener("toggle", syncResultToggle, true);
+elements.resultBody.addEventListener("scroll", syncJumpToLatest, { passive: true });
+jumpToLatest.addEventListener("click", () => {
+  elements.resultBody.scrollTop = elements.resultBody.scrollHeight;
+  syncJumpToLatest();
+  elements.resultBody.focus({ preventScroll: true });
+});
 elements.problems.addEventListener("click", () => editor.goToFirstDiagnostic());
 elements.methodsToggle.addEventListener("click", toggleMethodGroups);
 elements.reloadMethods.addEventListener("click", () => {
@@ -2940,8 +3092,26 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   if (message.type === "state") {
     lastSidebarState = message.state;
     setMethodsReloading(false);
-    renderMethods(message.state);
-    renderMcp(message.state);
+    const methodsKey = JSON.stringify([
+      message.state.theme,
+      message.state.methods,
+      message.state.diagnostics
+    ]);
+    if (methodsKey !== renderedMethodsKey) {
+      renderedMethodsKey = methodsKey;
+      renderMethods(message.state);
+    }
+    const mcpKey = JSON.stringify([
+      message.state.mcpServers,
+      message.state.globalDiagnostics,
+      message.state.globalResources
+    ]);
+    if (mcpKey !== renderedMcpKey) {
+      renderedMcpKey = mcpKey;
+      renderMcp(message.state);
+    }
+    // Controls are conversation-scoped, unlike the API/resource trees above.
+    renderAgentControls(message.state);
   }
   if (message.type === "inputKind") {
     inputKind = message.kind;
@@ -3012,6 +3182,7 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     const shouldFollow = resultIsNearBottom();
     renderAgentEvent(message.event);
     followResultIfNeeded(shouldFollow);
+    syncJumpToLatest();
   }
   if (message.type === "executing" && (
     message.sessionId === activeConversationId
@@ -3051,6 +3222,7 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
       if (!fullscreenPanel || fullscreenPanel === "result") {
         setSectionOpen(elements.resultHeading, elements.resultBody, true);
       }
+      syncJumpToLatest();
     } else {
       const shouldFollow = resultIsNearBottom();
       if (activeTurnId === message.turnId) activeTurnId = undefined;
@@ -3062,6 +3234,7 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
         activeTurn.outputDisclosure.open = true;
         followResultIfNeeded(shouldFollow);
       }
+      syncJumpToLatest();
     }
     updateRunState();
   }
