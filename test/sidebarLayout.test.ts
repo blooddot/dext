@@ -79,6 +79,7 @@ describe("sidebar panel layout", () => {
     const application = await source("src/application.ts");
     const history = await source("src/historyRender.ts");
     const builtins = await source("src/core/builtins.ts");
+    expect(sidebar).toContain('<div class="plan-target-group">');
     expect(main).toMatch(/renderComposerMenu\(elements\.modeMenu, \[[\s\S]*?\["plan", "Plan", "codicon-checklist"\]/);
     expect(main).toContain('plan: "Plan"');
     // A plan turn ends in a file, so the result offers the file and the handoff.
@@ -86,16 +87,19 @@ describe("sidebar panel layout", () => {
     expect(main).toMatch(/function planActions[\s\S]*?type: "openFileReference", reference: planPath/);
     expect(main).toMatch(/function planActions[\s\S]*?type: "buildPlan", planPath/);
     expect(builtins).toMatch(/id: "plan",\s*title: "Plan",/);
-    expect(application).toMatch(/mode === "plan" \? await this\.savePlan\(input, response\) : response/);
+    expect(application).toMatch(/mode === "plan" && !metadata\.executePlan/);
+    expect(application).toMatch(/private async savePlan[\s\S]*?splitPlanResponse\(result\.text\)/);
+    expect(application).toMatch(/private async savePlan[\s\S]*?text: plan\.conversation, planPath/);
     expect(application).toMatch(/private async savePlan[\s\S]*?const workspaceStorage = this\.storage\.location\(\) === "workspace"/);
     expect(application).toMatch(/private async savePlan[\s\S]*?this\.storage\.directory\("plans"\)/);
     expect(application).toMatch(/private async savePlan[\s\S]*?planPath \}/);
+    expect(application).toContain("globalDiagnostics: this.globalDiagnostics");
+    expect(application).not.toContain('mcpDiagnostics: this.configDiagnostics.filter((item) => item.toLowerCase().includes("mcp"))');
     // Building re-reads the file so edits made in the editor are what runs.
     expect(sidebar).toMatch(/private async buildPlan[\s\S]*?vscode\.workspace\.fs\.readFile\(target\)/);
     expect(sidebar).toMatch(/private async buildPlan[\s\S]*?application\.planUri\(planPath\)/);
-    expect(sidebar).toMatch(/private async buildPlan[\s\S]*?await this\.run\("agent", \[/);
-    // The mode switch must not wipe the agent, model, and effort choices.
-    expect(sidebar).toContain('this.application.setAgentSelection({ ...this.application.state().agentSelection, mode: "agent" });');
+    expect(sidebar).toMatch(/private async buildPlan[\s\S]*?await this\.run\("plan", \[/);
+    expect(sidebar).toContain('].join("\\n"), undefined, true);');
     // History replays the document link but not the handoff button.
     expect(history).toMatch(/result\.kind === "chat" && result\.planPath/);
     expect(history).not.toContain('type: "buildPlan"');
@@ -134,7 +138,7 @@ describe("sidebar panel layout", () => {
     expect(application).toContain('this.workflowRuntime.setMaxConcurrency(positive("workflow.maxConcurrency"');
   });
 
-  it("shows the permission tier only for Agent mode and reviews its patch in place", async () => {
+  it("shows writable permission tiers for Agent and Plan modes", async () => {
     const html = await source("src/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
     const sidebar = await source("src/sidebarProvider.ts");
@@ -142,13 +146,12 @@ describe("sidebar panel layout", () => {
     const css = await source("media/styles.css");
     expect(html).toContain('id="permission-control"');
     expect(html).toContain('id="permission-menu-shell"');
-    // Ask and Plan are read-only by definition, so the control is hidden rather
-    // than shown disabled.
-    expect(main).toContain('elements.permissionMenuShell.hidden = inputMode !== "agent"');
+    // Ask is the dedicated read-only mode; Agent and Plan expose write scope.
+    expect(main).toContain('elements.permissionMenuShell.hidden = inputMode !== "agent" && inputMode !== "plan"');
     expect(main).toMatch(/renderComposerMenu\(elements\.permissionMenu, \[[\s\S]*?"full-access"/);
     expect(main).toContain('elements.permissionControl.classList.toggle("is-full-access", agentPermission === "full-access")');
     expect(main).toContain('}, ["full-access"]);');
-    expect(main).toContain('permission: change.permission ?? selection?.permission ?? agentPermission');
+    expect(main).toContain('permission: change.permission ?? agentPermission');
     expect(manifest).toContain('"dext.agentPermission"');
     expect(manifest).toContain('"dext.agentCliArgs"');
     // The host holds the patch, so the buttons only appear when it says so.
@@ -172,8 +175,8 @@ describe("sidebar panel layout", () => {
     // properties, which both the mode control and Send read.
     expect(css).toMatch(/\.input-section \{[\s\S]*?--composer-accent: var\(--vscode-button-background\);[\s\S]*?--composer-accent-fill: var\(--composer-accent\);[\s\S]*?--composer-accent-foreground: var\(--vscode-button-foreground\);/);
     expect(css).toMatch(/\.input-section\[data-mode="ask"\] \{\n {2}--composer-accent: var\(--vscode-terminal-ansiGreen/);
-    expect(css).toMatch(/\.input-section\[data-mode="plan"\] \{[\s\S]*?--composer-accent: var\(--vscode-notificationsWarningIcon-foreground, #cca700\);[\s\S]*?--composer-accent-fill: color-mix\([\s\S]*?var\(--composer-accent\) 38%/);
-    expect(css).toMatch(/\.input-section\[data-mode="plan"\] \{[\s\S]*?--composer-accent-foreground: color-mix\([\s\S]*?var\(--composer-accent\) 72%/);
+    expect(css).toMatch(/\.input-section\[data-mode="plan"\] \{[\s\S]*?--composer-accent: var\(--vscode-notificationsWarningIcon-foreground, #cca700\);[\s\S]*?--composer-accent-fill: color-mix\([\s\S]*?var\(--composer-accent\) 52%/);
+    expect(css).toMatch(/\.input-section\[data-mode="plan"\] \{[\s\S]*?--composer-accent-foreground: color-mix\([\s\S]*?var\(--composer-accent\) 88%/);
     expect(css).toMatch(/\.input-section\[data-mode="code"\] \{\n {2}--composer-accent: var\(--vscode-terminal-ansiCyan/);
     expect(css).toMatch(/#run \{[\s\S]*?color: var\(--composer-accent-foreground, var\(--vscode-button-foreground\)\);[\s\S]*?background: var\(--composer-accent-fill, var\(--vscode-button-background\)\);/);
     expect(css).toMatch(/#run:hover:not\(:disabled\) \{[\s\S]*?color-mix\([\s\S]*?var\(--composer-accent-fill/);

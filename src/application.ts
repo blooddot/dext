@@ -19,7 +19,7 @@ import {
   AgentProfileStore,
   AGENT_PERMISSIONS,
   SUPPORTED_AGENT_PROFILE_IDS,
-  type AgentPermission,
+  type WritableAgentPermission,
   type AgentProfile,
   type AgentProvider,
   type AgentSelection
@@ -37,6 +37,7 @@ import {
   type CompletionSettings
 } from "./core/completionProvider.js";
 import { DEFAULT_PLAN_DIRECTORY, planFileName, planPathSegments } from "./core/planFile.js";
+import { splitPlanResponse } from "./core/planResponse.js";
 import { DextStorage } from "./dextStorage.js";
 
 /** Global rather than per-workspace: the object form is rewritten in the user
@@ -63,6 +64,7 @@ export class DextApplication {
   private workspaceUri: vscode.Uri | undefined;
   private workspaceTrusted = false;
   private globalResources: GlobalResources = { apis: [], mcps: [], rules: [], skills: [] };
+  private globalDiagnostics: string[] = [];
   readonly skills = new SkillCatalog();
   readonly mcp = new McpToolRegistry();
   readonly agents: AgentProfileStore;
@@ -139,9 +141,11 @@ export class DextApplication {
     this.applyAgentPermissionSettings();
     const skillDirs = vscode.workspace.getConfiguration("dext").get<string[]>("skillDirs", []);
     const mcpManifests = await this.loadMcpManifests(folder);
-    diagnostics.push(...mcpManifests.diagnostics);
-    diagnostics.push(...this.mcp.setServers(mcpManifests.servers));
-    diagnostics.push(...this.mcp.setTools(mcpManifests.tools));
+    const mcpRegistryDiagnostics = [
+      ...this.mcp.setServers(mcpManifests.servers),
+      ...this.mcp.setTools(mcpManifests.tools)
+    ];
+    diagnostics.push(...mcpManifests.diagnostics, ...mcpRegistryDiagnostics);
     const activeMcpTools = new Set(this.mcp.list().map((tool) => `${tool.server}.${tool.tool}`));
     this.registry.registerMany(
       mcpManifests.methods.filter((method) => activeMcpTools.has(method.id.slice("mcp.".length))),
@@ -191,7 +195,26 @@ export class DextApplication {
     this.runtime.setCustomPlans(loaded.plans);
     this.customApiIds = new Set(loaded.methods.map(({ definition }) => definition.id));
     this.language.setCustomApiIds(this.customApiIds);
-    this.configDiagnostics = [...diagnostics, ...loaded.diagnostics];
+    const globalRoot = vscode.Uri.joinPath(this.storage.globalStorageUri, "api").fsPath.replace(/[\\/]$/, "");
+    const isGlobalApiDiagnostic = (message: string): boolean => {
+      const normalized = message.replaceAll("\\", "/").toLowerCase();
+      return normalized.startsWith(`${globalRoot.replaceAll("\\", "/").toLowerCase()}/`);
+    };
+    const globalApiDiagnostics = loaded.diagnostics.filter(isGlobalApiDiagnostic);
+    const projectApiDiagnostics = loaded.diagnostics.filter((message) => !isGlobalApiDiagnostic(message));
+    const nonMcpDiagnostics = diagnostics.filter((message) =>
+      !mcpManifests.diagnostics.includes(message) && !mcpRegistryDiagnostics.includes(message)
+    );
+    this.configDiagnostics = [
+      ...mcpManifests.projectDiagnostics,
+      ...projectApiDiagnostics,
+      ...nonMcpDiagnostics
+    ];
+    this.globalDiagnostics = [
+      ...mcpManifests.globalDiagnostics,
+      ...globalApiDiagnostics,
+      ...mcpRegistryDiagnostics
+    ];
     this.language.setSkillCompletions(this.skills.list());
     this.globalResources = await this.loadGlobalResources();
   }
@@ -286,6 +309,8 @@ export class DextApplication {
     tools: McpToolConfig[];
     methods: CallableDefinition[];
     diagnostics: string[];
+    projectDiagnostics: string[];
+    globalDiagnostics: string[];
   }> {
     const directories: Array<{ uri: vscode.Uri; scope: "project" | "global" }> = [];
     if (folder?.uri.scheme === "file") directories.push({ uri: vscode.Uri.joinPath(folder.uri, ".dext", "mcp"), scope: "project" });
@@ -294,13 +319,17 @@ export class DextApplication {
     const tools: McpToolConfig[] = [];
     const methods: CallableDefinition[] = [];
     const diagnostics: string[] = [];
+    const projectDiagnostics: string[] = [];
+    const globalDiagnostics: string[] = [];
     const seenServerNames = new Set<string>();
     for (const { uri: directory, scope } of directories) {
       let entries: [string, vscode.FileType][];
       try { entries = await vscode.workspace.fs.readDirectory(directory); }
       catch (error) {
         if (error instanceof vscode.FileSystemError && error.code === "FileNotFound") continue;
-        diagnostics.push(`MCP manifest discovery: ${error instanceof Error ? error.message : String(error)}`);
+        const message = `MCP manifest discovery: ${error instanceof Error ? error.message : String(error)}`;
+        diagnostics.push(message);
+        (scope === "global" ? globalDiagnostics : projectDiagnostics).push(message);
         continue;
       }
       for (const [name, type] of entries.sort(([left], [right]) => left.localeCompare(right))) {
@@ -316,12 +345,15 @@ export class DextApplication {
         tools.push(...manifest.tools);
         methods.push(...manifest.methods);
         diagnostics.push(...manifest.diagnostics);
+        (scope === "global" ? globalDiagnostics : projectDiagnostics).push(...manifest.diagnostics);
       } catch (error) {
-        diagnostics.push(`${file.fsPath}: ${error instanceof Error ? error.message : String(error)}`);
+        const message = `${file.fsPath}: ${error instanceof Error ? error.message : String(error)}`;
+        diagnostics.push(message);
+        (scope === "global" ? globalDiagnostics : projectDiagnostics).push(message);
       }
       }
     }
-    return { servers, tools, methods, diagnostics };
+    return { servers, tools, methods, diagnostics, projectDiagnostics, globalDiagnostics };
   }
 
   /** The permission default and the passthrough arguments are both settings, so
@@ -331,8 +363,8 @@ export class DextApplication {
     const configuration = vscode.workspace.getConfiguration("dext");
     const configured = configuration.get<string>("agentPermission", "workspace-write");
     this.runtime.setDefaultAgentPermission(
-      AGENT_PERMISSIONS.includes(configured as AgentPermission)
-        ? configured as AgentPermission
+      AGENT_PERMISSIONS.includes(configured as WritableAgentPermission)
+        ? configured as WritableAgentPermission
         : "workspace-write"
     );
     const raw = configuration.get<Record<string, unknown>>("agentCliArgs", {}) ?? {};
@@ -361,7 +393,7 @@ export class DextApplication {
       })),
       diagnostics: this.configDiagnostics,
       mcpServers: this.mcp.listServers(),
-      mcpDiagnostics: this.configDiagnostics.filter((item) => item.toLowerCase().includes("mcp")),
+      globalDiagnostics: this.globalDiagnostics,
       globalResources: this.globalResources,
       agentProfiles: this.agentProfiles(),
       agentSelection: this.agents.currentSelection(),
@@ -642,8 +674,33 @@ export class DextApplication {
     input: string,
     metadata: Readonly<ExecutionMetadata> = {}
   ): Promise<InputExecutionResponse> {
-    const response = await this.runtime.executeConversation(mode, this.storage.attachmentPrompt(input), metadata);
-    const saved = mode === "plan" ? await this.savePlan(input, response) : response;
+    let prompt = this.storage.attachmentPrompt(input);
+    if (mode === "plan" && metadata.planPath && !metadata.executePlan) {
+      const target = this.planUri(metadata.planPath);
+      if (!target) throw new Error(`Plan '${metadata.planPath}' is no longer available.`);
+      let current: string;
+      try {
+        current = new TextDecoder().decode(await vscode.workspace.fs.readFile(target));
+      } catch {
+        throw new Error(`Plan '${metadata.planPath}' is no longer available.`);
+      }
+      prompt = [
+        "Revise the selected plan document according to the user's request.",
+        "Keep the plan complete and internally consistent after applying the requested changes.",
+        "",
+        "Current plan document:",
+        "---",
+        current.trim(),
+        "---",
+        "",
+        "Requested changes:",
+        prompt
+      ].join("\n");
+    }
+    const response = await this.runtime.executeConversation(mode, prompt, metadata);
+    const saved = mode === "plan" && !metadata.executePlan
+      ? await this.savePlan(input, response, metadata.planPath)
+      : response;
     return {
       kind: "workflow",
       executions: [saved],
@@ -651,11 +708,14 @@ export class DextApplication {
     };
   }
 
-  /** A plan is only useful if it survives the turn, so Plan mode lands the reply
-   * in the configured Dext storage location and hands the reference back to the output. */
-  private async savePlan(input: string, response: InputExecutionResponse["executions"][number]): Promise<InputExecutionResponse["executions"][number]> {
+  /** A plan is only useful if it survives the turn. The model's document goes
+   * to the configured storage location, while its concise explanation remains
+   * in the chat beside the file reference. */
+  private async savePlan(input: string, response: InputExecutionResponse["executions"][number], existingPath?: string): Promise<InputExecutionResponse["executions"][number]> {
     const result = response.result;
     if (result.kind !== "chat" || !result.text.trim()) return response;
+    const plan = splitPlanResponse(result.text);
+    if (!plan.document) return response;
     const workspaceStorage = this.storage.location() === "workspace";
     if (workspaceStorage && (!this.workspaceTrusted || !this.workspaceUri)) return response;
     const configured = vscode.workspace.getConfiguration("dext").get<string>("plan.directory", DEFAULT_PLAN_DIRECTORY).trim();
@@ -663,12 +723,14 @@ export class DextApplication {
     const directory = workspaceStorage
       ? vscode.Uri.joinPath(this.workspaceUri!, ...segments)
       : this.storage.directory("plans");
-    const name = planFileName(input, new Date());
-    const target = vscode.Uri.joinPath(directory, name);
+    const name = existingPath ? undefined : planFileName(input, new Date());
+    const target = existingPath
+      ? this.planUri(existingPath) ?? vscode.Uri.joinPath(directory, ...planPathSegments(existingPath))
+      : vscode.Uri.joinPath(directory, name!);
     await vscode.workspace.fs.createDirectory(directory);
-    await vscode.workspace.fs.writeFile(target, new TextEncoder().encode(`${result.text.trimEnd()}\n`));
-    const planPath = workspaceStorage ? [...segments, name].join("/") : this.storage.reference("plans", name);
-    return { ...response, result: { ...result, planPath } };
+    await vscode.workspace.fs.writeFile(target, new TextEncoder().encode(`${plan.document}\n`));
+    const planPath = existingPath ?? (workspaceStorage ? [...segments, name!].join("/") : this.storage.reference("plans", name!));
+    return { ...response, result: { ...result, text: plan.conversation, planPath } };
   }
 
   planUri(reference: string): vscode.Uri | undefined {

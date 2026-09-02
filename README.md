@@ -25,8 +25,9 @@ The input workflow language supports assignment, keyword-only API calls, strings
 ## Built-in API
 
 - `create(type="api"|"mcp"|"rule"|"skill", input, scope="project"|"global") -> ChatResult` — create a resource from a description or URL (use in Code mode)
-- `ask(input, workspace?) -> ChatResult`
-- `agent(input, apply=true, workspace?) -> AgentResult`
+- `ask(input, skills?, rules?, workspace?) -> ChatResult`
+- `plan(input, skills?, rules?, workspace?) -> ChatResult`
+- `agent(input, apply=true, skills?, rules?, workspace?) -> AgentResult`
 - `apply(result) -> ApplyResult`
 - `terminal(command, cwd=".", timeout_ms=120000) -> TerminalResult`
 - `skill(skill, input, workspace?) -> ChatResult`
@@ -59,13 +60,13 @@ if confirmation.confirmed == True:
 The selected value, confirmation state, or input text is also rendered in
 Output and History after the interaction completes.
 
-Every API output implements the shared `Result` contract. `ask` handles read-only explanation and analysis; `agent` handles continuous tasks and may return an auditable patch. `apply(result=...)` applies an `AgentResult` patch when one is present. Agent CLIs receive prior results as versioned `dext-result` JSON envelopes instead of interpolated strings. Result variables and fields such as `agent_result: AgentResult` and `agent_result.patch: PatchResult` are available to completion and hover.
+Every API output implements the shared `Result` contract. `ask` handles read-only explanation and analysis; `agent` handles free-form continuous tasks; `plan` creates, maintains, and executes implementation plans. `apply(result=...)` applies an `AgentResult` patch when one is present. Agent CLIs receive prior results as versioned `dext-result` JSON envelopes instead of interpolated strings. Result variables and fields such as `agent_result: AgentResult` and `agent_result.patch: PatchResult` are available to completion and hover.
 
-`ask` is always read-only. `agent` defaults `apply=true`: in a trusted local workspace, the selected workspace is the Agent CLI working directory and the Agent may edit only that workspace. Set `apply=false` to require a read-only preview; when a change is proposed, the resulting `AgentResult` may include a patch for `apply`. Both APIs default `workspace` to the current project root.
+`ask` is always read-only. `agent` and `plan` use the composer's `Workspace write` or `Full access` scope; in a trusted local workspace, `Workspace write` limits edits to the selected workspace. Dext itself can always persist Plan documents in its managed global storage. Both APIs default `workspace` to the current project root.
 
 ```python
 answer = ask(input="Explain this code:")
-preview = agent(input="Plan the requested change", apply=False)
+result = agent(input="Implement the requested change")
 ```
 
 `terminal` is available only in a trusted local `file` workspace. Its `cwd` must stay inside the workspace, every command requires a VS Code modal confirmation, the timeout is capped at 10 minutes, and captured output is bounded. It returns `TerminalStatus = "succeeded" | "failed" | "timed_out"`; a nonzero exit code is a typed failed result, while rejecting the confirmation cancels that workflow step and skips downstream steps.
@@ -103,7 +104,7 @@ Dext History is scoped to the current VS Code workspace. Conversations,
 favorites, names, and open conversation tabs are restored after restarting VS
 Code, but are not shared with other projects.
 
-`.dx` uses a restricted Python-like syntax. It is parsed by Dext and never starts a Python interpreter. Imports are explicit and only refer to other `.dext/api` files; external files are not read until VS Code marks the workspace as trusted. A nested `agent(...)` or `ask(...)` call may set `skills=["name"]` and `rules=["path.md"]`. Skills are explicit packages, while rules are ordered policy files. Rule paths are resolved only below `<workspace>/.dext/rules`; skill packages are discovered only below `<workspace>/.dext/skills` unless the user explicitly configures an additional `dext.skillDirs` directory. Dext loads selected skills first and rules last, so the API's narrow rules constrain the general skill workflow. These two parameters are internal workflow controls and do not appear in ordinary user-facing API signatures.
+`.dx` uses a restricted Python-like syntax. It is parsed by Dext and never starts a Python interpreter. Imports are explicit and only refer to other `.dext/api` files; external files are not read until VS Code marks the workspace as trusted. A nested `agent(...)`, `ask(...)`, or `plan(...)` call may set `skills=["name"]` and `rules=["path.md"]`. Skills are explicit packages, while rules are ordered policy files. Rule paths are resolved only below `<workspace>/.dext/rules`; skill packages are discovered only below `<workspace>/.dext/skills` unless the user explicitly configures an additional `dext.skillDirs` directory. Dext loads selected skills first and rules last, so the API's narrow rules constrain the general skill workflow. These parameters appear in Dext signatures and completion; their contents are injected into the Agent instruction rather than forwarded as control fields to the provider.
 
 Typed results use Python's standard `TypedDict`, `Literal`, and `NotRequired` annotations rather than Dext-specific classes. The declared `kind` must be one `Literal` string; fields become the API output JSON Schema and member completions. TypedDict inheritance, `Protocol`, and complex generic types are intentionally unsupported.
 

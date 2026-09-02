@@ -9,9 +9,10 @@ import type { AgentResult, CustomApiPlan, DirRef, McpRawResult, UiChoiceResult, 
 import { WorkflowRuntime } from "./workflowRuntime.js";
 import { ExecutionCancelledError } from "./executionErrors.js";
 import { patchResultFrom } from "./patch.js";
-import type { AgentPermission, AgentProfile, AgentProvider, AgentSelection } from "../agentProfiles.js";
+import type { AgentPermission, AgentProfile, AgentProvider, AgentSelection, WritableAgentPermission } from "../agentProfiles.js";
 import { DefaultAgentRunner } from "./agentRouter.js";
 import type { AgentRunner } from "./agentRunner.js";
+import { PLAN_DOCUMENT_END, PLAN_DOCUMENT_START } from "./planResponse.js";
 import type {
   CodeRef,
   DextResult,
@@ -138,16 +139,14 @@ function adaptTypedMcpResult(result: McpRawResult, kind: string): DextResult {
   return { ...structured, kind } as DextResult;
 }
 
-/** The fallback Plan instruction. It asks for the document only, because Dext
- * saves the whole reply as the plan file. */
+/** The fallback Plan instruction. Dext separates the document from the chat
+ * reply before saving it. */
 const DEFAULT_PLAN_INSTRUCTION = [
   "You are in Dext Plan mode. Investigate the workspace and return an implementation plan.",
   "",
   "Constraints:",
   "- Do not create, modify, or delete any file. Dext saves the plan document for you.",
   "- Do not ask clarifying questions. Record open questions and assumptions in the plan instead.",
-  "- Reply with the plan document alone: no preamble and no closing remarks.",
-  "",
   "Write GitHub-flavoured Markdown with these sections:",
   "- `# <short title>`",
   "- `## Goal` — what is true once the work is done.",
@@ -155,6 +154,15 @@ const DEFAULT_PLAN_INSTRUCTION = [
   "- `## Tasks` — an ordered checklist, each item small enough to verify on its own.",
   "- `## Verification` — the commands or checks that prove the work is correct.",
   "- `## Risks` — what could go wrong, or `None known`."
+].join("\n");
+
+/** Kept outside the project-overridable plan rule: a custom rule controls the
+ * plan's content, but Dext still needs this boundary between chat and file. */
+const PLAN_RESPONSE_FORMAT_INSTRUCTION = [
+  "Response format required by Dext:",
+  "- First, write a concise conversational reply for the user in their language. State what you investigated, the important decisions, and—when revising an existing plan—what changed. Do not repeat the complete plan in this reply.",
+  `- Then put the complete plan document, and nothing else, between these exact delimiter lines: ${PLAN_DOCUMENT_START} and ${PLAN_DOCUMENT_END}.`,
+  "- Do not put the delimiters inside a Markdown code fence."
 ].join("\n");
 
 const AGENT_METHODS = new Set(["ask", "plan", "agent", "skill"]);
@@ -315,7 +323,7 @@ export class DextRuntime {
   private agentRunner: AgentRunner;
   private workspaceRoot = process.cwd();
   private workspaceTrusted = false;
-  private defaultAgentPermission: AgentPermission = "workspace-write";
+  private defaultAgentPermission: WritableAgentPermission = "workspace-write";
   private agentCliArguments: Readonly<Partial<Record<AgentProvider, readonly string[]>>> = {};
   private skillLoader: ((skill: string, workspace: DirRef) => Promise<{ instructions: string; sourcePath: string }>) | undefined;
   private ruleLoader: ((path: string) => Promise<string | undefined>) | undefined;
@@ -356,7 +364,7 @@ export class DextRuntime {
 
   /** The tier a fresh conversation starts at when the composer has not chosen
    * one, so a project can be careful by default. */
-  setDefaultAgentPermission(permission: AgentPermission): void {
+  setDefaultAgentPermission(permission: WritableAgentPermission): void {
     this.defaultAgentPermission = permission;
   }
 
@@ -364,7 +372,7 @@ export class DextRuntime {
     this.agentCliArguments = { ...argumentsByProvider };
   }
 
-  private agentPermission(): AgentPermission {
+  private agentPermission(): WritableAgentPermission {
     return this.agentSelection.permission ?? this.defaultAgentPermission;
   }
 
@@ -620,20 +628,10 @@ export class DextRuntime {
     if (!this.agentRunner.runConversation) {
       throw new Error(`Agent '${profile.label}' does not support normal conversation mode.`);
     }
-    const permission = mode === "agent" ? this.agentPermission() : "read-only";
-    // Read-only Agent turns are reviews, not conversations: the typed API path
-    // is the only one that returns a patch Dext can show and apply.
-    if (mode === "agent" && permission === "read-only") {
-      return this.execute({
-        kind: "invocation",
-        method: "agent",
-        source: "chat",
-        arguments: [{ name: "input", value: text }, { name: "apply", value: false }]
-      }, [], metadata);
-    }
-    const allowWorkspaceWrite = mode === "agent";
+    const permission: AgentPermission = mode === "ask" ? "read-only" : this.agentPermission();
+    const allowWorkspaceWrite = mode !== "ask";
     if (allowWorkspaceWrite && !this.workspaceTrusted) {
-      throw new Error("Agent mode requires a trusted local workspace.");
+      throw new Error(`${mode === "plan" ? "Plan" : "Agent"} mode requires a trusted local workspace.`);
     }
     const started = performance.now();
     const sessionId = metadata.agentSessionId
@@ -646,7 +644,9 @@ export class DextRuntime {
       ...((metadata.speed ?? this.agentSelection.speed) ? { speed: metadata.speed ?? this.agentSelection.speed } : {}),
       ...((metadata.serviceTier ?? this.agentSelection.serviceTier) ? { serviceTier: metadata.serviceTier ?? this.agentSelection.serviceTier } : {}),
       cwd: this.workspaceRoot,
-      input: mode === "plan" ? `${await this.planInstruction()}\n\n---\n\nGoal:\n\n${text}` : text,
+      input: mode === "plan" && !metadata.executePlan
+        ? `${await this.planInstruction()}\n\n${PLAN_RESPONSE_FORMAT_INSTRUCTION}\n\n---\n\nGoal:\n\n${text}`
+        : text,
       mode,
       metadata: { ...metadata, ...(sessionId ? { agentSessionId: sessionId } : {}) },
       allowWorkspaceWrite,
@@ -663,14 +663,20 @@ export class DextRuntime {
         source: "chat"
       },
       method: { id: mode, title: method.title, kind: method.kind, source: method.source },
-      result: { kind: "chat", text: response },
+      result: {
+        kind: "chat",
+        text: response,
+        ...(metadata.planPath ? { planPath: metadata.planPath } : {}),
+        ...(metadata.executePlan ? { executePlan: true } : {})
+      },
       durationMs: performance.now() - started
     };
   }
 
-  /** Plan mode owns the shape of its answer, so the instruction is part of the
-   * prompt rather than the user's message. A project can replace it wholesale
-   * through `.dext/rules/plan.md`. */
+  /** Plan mode owns the plan document's shape, so the instruction is part of
+   * the prompt rather than the user's message. A project can replace that
+   * document instruction through `.dext/rules/plan.md`; Dext's response
+   * envelope is appended separately so the chat/file boundary remains valid. */
   private async planInstruction(): Promise<string> {
     if (!this.workspaceTrusted) return DEFAULT_PLAN_INSTRUCTION;
     const path = join(this.workspaceRoot, ".dext", "rules", "plan.md");

@@ -39,4 +39,15 @@ describe("attachment document classification", () => {
     });
     expect(vscode.workspace.fs.stat).toHaveBeenCalledWith(uri);
   });
+
+  it("keeps an explicitly selected external file as a file URI reference", async () => {
+    const uri = { scheme: "file", toString: () => "file:///C:/outside/My%20File.ts" };
+    vscode.workspace.getWorkspaceFolder.mockReturnValue(undefined);
+    vscode.workspace.fs.stat.mockResolvedValue({ type: 1 });
+
+    await expect(fileAttachment(uri as never)).resolves.toEqual({
+      payload: "file:///C:/outside/My%20File.ts",
+      expression: "@file:///C:/outside/My%20File.ts"
+    });
+  });
 });

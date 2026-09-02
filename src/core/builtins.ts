@@ -36,7 +36,7 @@ export const BUILTIN_METHODS: readonly CallableDefinition[] = [
   {
     id: "plan",
     title: "Plan",
-    description: "Explore the workspace read-only and produce an editable implementation plan document.",
+    description: "Generate and execute an implementation plan with the selected Plan write scope.",
     kind: "command",
     version: "1.0.0",
     input: [

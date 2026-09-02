@@ -8,7 +8,7 @@ import type {
 import type { AgentStreamEvent, InputExecutionResponse, RegisteredCallable } from "./core/types.js";
 import type { AgentProfile, AgentSelection } from "./agentProfiles.js";
 import type { EditorTokenTheme } from "./vscodeTheme.js";
-import type { DextHistorySession } from "./historyStore.js";
+import type { DextHistorySession, PlanStatus } from "./historyStore.js";
 import type { McpDiscoveredTool, McpServerConfig } from "./core/mcpRegistry.js";
 
 export const webviewRequestSchema = z.discriminatedUnion("type", [
@@ -22,12 +22,14 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("executeInput"),
     mode: z.enum(["agent", "ask", "plan", "code"]),
-    source: z.string().min(1)
+    source: z.string().min(1),
+    planPath: z.string().min(1).max(512).optional()
   }),
   z.object({ type: z.literal("stopExecution"), turnId: z.string().min(1) }),
   z.object({ type: z.literal("retryTurn"), turnId: z.string().min(1) }),
   z.object({ type: z.literal("deleteTurn"), turnId: z.string().min(1) }),
   z.object({ type: z.literal("buildPlan"), planPath: z.string().min(1).max(512) }),
+  z.object({ type: z.literal("choosePlan") }),
   z.object({
     type: z.literal("resolvePatch"),
     turnId: z.string().min(1),
@@ -118,7 +120,7 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
     type: z.literal("agentSelection"),
     selection: z.object({
       mode: z.enum(["agent", "ask", "plan", "code"]),
-      permission: z.enum(["read-only", "workspace-write", "full-access"]),
+      permission: z.enum(["workspace-write", "full-access"]),
       profileId: z.string(),
       model: z.string(),
       reasoningEffort: z.string(),
@@ -165,7 +167,7 @@ export interface SidebarState {
     submitOnEnter: boolean;
   };
   mcpServers: McpServerConfig[];
-  mcpDiagnostics: string[];
+  globalDiagnostics: string[];
   globalResources?: GlobalResources;
 }
 
@@ -181,6 +183,7 @@ export type WebviewResponse =
     hover?: LanguageHover;
   }
   | { type: "outputSession"; session: DextHistorySession }
+  | { type: "planContext"; path?: string; status: PlanStatus }
   | { type: "conversations"; sessions: ConversationSummary[]; activeId: string }
   | { type: "openMethods" }
   | { type: "openMcp" }
@@ -215,7 +218,7 @@ export type WebviewResponse =
     message: string;
   }
   | { type: "agentEvent"; sessionId: string; event: AgentStreamEvent }
-  | { type: "executing"; sessionId: string; value: boolean; turnId: string; source?: string }
+  | { type: "executing"; sessionId: string; value: boolean; turnId: string; source?: string; planPath?: string; executePlan?: boolean }
   | { type: "inputKind"; kind: "empty" | "workflow" | "invalid" }
   | { type: "insertFileReferences"; expressions: string[]; position?: number }
   | { type: "imageAttachment"; relativePath: string; webviewUri: string; name: string }

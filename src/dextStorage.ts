@@ -9,6 +9,7 @@ export const DEFAULT_MAX_ATTACHMENT_FILES = 200;
 const GLOBAL_REFERENCE_ROOT = ".dext-global";
 const ATTACHMENT_FILE = /^(?:[a-f0-9]{24}\.(?:png|jpg|gif|webp|bmp)|terminal-[a-f0-9]{24}\.log)$/i;
 const ATTACHMENT_REFERENCE = /@((?:\.dext-global|\.dext)\/attachments\/(?:[a-f0-9]{24}\.(?:png|jpg|gif|webp|bmp)|terminal-[a-f0-9]{24}\.log))/gi;
+const EXTERNAL_FILE_REFERENCE = /@(file:\/\/\/[^\s@#"'`(){}[\],]+)/gi;
 
 function safeSegments(path: string): string[] | undefined {
   const segments = path.replaceAll("\\", "/").split("/");
@@ -73,9 +74,20 @@ export class DextStorage {
   /** The original user text remains a compact token in history, while an agent
    * receives the on-disk path it needs to inspect an image or terminal log. */
   attachmentPrompt(input: string): string {
-    const paths = [...input.matchAll(ATTACHMENT_REFERENCE)]
+    const ownedPaths = [...input.matchAll(ATTACHMENT_REFERENCE)]
       .map((match) => this.uriForReference("attachments", match[1] ?? "")?.fsPath)
       .filter((path): path is string => Boolean(path));
+    const externalPaths = [...input.matchAll(EXTERNAL_FILE_REFERENCE)]
+      .map((match) => {
+        try {
+          const uri = vscode.Uri.parse(match[1] ?? "", true);
+          return uri.scheme === "file" ? uri.fsPath : undefined;
+        } catch {
+          return undefined;
+        }
+      })
+      .filter((path): path is string => Boolean(path));
+    const paths = [...new Set([...ownedPaths, ...externalPaths])];
     if (!paths.length) return input;
     return `${input}\n\nDext attachment files (read-only):\n${paths.map((path) => `- ${path}`).join("\n")}`;
   }

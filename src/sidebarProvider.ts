@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 import * as vscode from "vscode";
 import type { DextApplication } from "./application.js";
 import type { AgentStreamEvent, ApplyResult, InputExecutionResponse, McpProcessEvent, PatchResult, UiChoiceResult, UiConfirmResult, UiInputResult, UiInteraction, UiResult } from "./core/types.js";
@@ -103,6 +103,8 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   private readonly activeExecutions = new Map<string, {
     turnId: string;
     source: string;
+    planPath?: string;
+    executePlan?: boolean;
     controller: AbortController;
     events: AgentStreamEvent[];
   }>();
@@ -281,6 +283,65 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
 
   async refresh(): Promise<void> {
     await this.post({ type: "state", state: this.application.state() });
+    await this.postPlanContext();
+  }
+
+  private async postPlanContext(): Promise<void> {
+    await this.post({ type: "planContext", ...(this.activeSession.activePlanPath ? { path: this.activeSession.activePlanPath } : {}), status: this.activeSession.planStatus ?? "new" });
+  }
+
+  async setActivePlan(reference: string | undefined): Promise<void> {
+    this.hydrateSessions();
+    if (this.activeExecutions.has(this.activeSession.id)) throw new Error("Stop the running turn before changing the active plan.");
+    if (reference) {
+      const uri = this.application.planUri(reference);
+      if (!uri) throw new Error(`'${reference}' is not a Dext plan file.`);
+      this.activeSession.activePlanPath = reference;
+      this.activeSession.planStatus = "active";
+    } else {
+      delete this.activeSession.activePlanPath;
+      this.activeSession.planStatus = "new";
+    }
+    await this.history.updatePlanContext(this.activeSession.id, this.activeSession.activePlanPath, this.activeSession.planStatus);
+    await this.postPlanContext();
+  }
+
+  async setActivePlanFromUri(uri: vscode.Uri): Promise<void> {
+    const globalRoot = this.application.storage.globalStorageUri.fsPath;
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    let reference: string | undefined;
+    const globalRelative = relative(globalRoot, uri.fsPath);
+    if (globalRelative && !globalRelative.startsWith(`..${sep}`) && globalRelative !== "..") {
+      const segments = globalRelative.split(/[\\/]+/).filter(Boolean);
+      if (segments[0] === "plans" && segments.length > 1) reference = [".dext-global", ...segments].join("/");
+    }
+    if (!reference && folder) {
+      const workspaceRelative = relative(folder.uri.fsPath, uri.fsPath);
+      if (workspaceRelative && !workspaceRelative.startsWith(`..${sep}`) && workspaceRelative !== "..") {
+        const normalized = workspaceRelative.replaceAll("\\", "/");
+        if (normalized.startsWith(".dext/plans/")) reference = normalized;
+      }
+    }
+    if (!reference || !reference.endsWith(".plan.md")) throw new Error("The active editor is not a Dext plan file.");
+    await this.setActivePlan(reference);
+  }
+
+  private async choosePlan(): Promise<void> {
+    this.hydrateSessions();
+    const items: Array<vscode.QuickPickItem & { reference?: string }> = [{ label: "$(add) New plan", description: "Create a new plan document" }];
+    const roots: Array<{ uri: vscode.Uri; prefix: string }> = [{ uri: vscode.Uri.joinPath(this.application.storage.globalStorageUri, "plans"), prefix: ".dext-global/plans" }];
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    if (folder) roots.push({ uri: vscode.Uri.joinPath(folder.uri, ".dext", "plans"), prefix: ".dext/plans" });
+    for (const root of roots) {
+      try {
+        for (const [name, type] of await vscode.workspace.fs.readDirectory(root.uri)) {
+          if (type === vscode.FileType.File && name.endsWith(".plan.md")) items.push({ label: name, description: root.prefix, reference: `${root.prefix}/${name}` });
+        }
+      } catch { /* A plan directory may not exist yet. */ }
+    }
+    const picked = await vscode.window.showQuickPick(items, { title: "Select a Dext plan", placeHolder: "Choose a plan to edit or start a new one" });
+    if (!picked) return;
+    await this.setActivePlan(picked.reference);
   }
 
   focusEditor(): void {
@@ -472,6 +533,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         case "ready": {
           const pendingMessages = this.messageQueue.markReady();
           this.hydrateSessions();
+          this.updateRunningContext();
           await this.refresh();
           await this.postConversationState();
           await this.post({ type: "outputSession", session: this.activeSession });
@@ -499,7 +561,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           break;
         }
         case "executeInput":
-          await this.run(request.mode, request.source);
+          await this.run(request.mode, request.source, request.planPath);
           break;
         case "uiResponse": {
           const pending = this.pendingUi.get(request.requestId);
@@ -537,6 +599,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         case "buildPlan":
           await this.buildPlan(request.planPath);
           break;
+        case "choosePlan":
+          await this.choosePlan();
+          break;
         case "resolvePatch":
           await this.resolvePatch(request.turnId, request.uris, request.accept);
           break;
@@ -568,6 +633,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           } satisfies AgentSelection;
           this.conversationSelections.set(this.activeSession.id, { mode: request.selection.mode });
           this.application.setAgentSelection({ ...selection, mode: request.selection.mode });
+          this.updateRunningContext();
           await this.refresh();
           break;
           }
@@ -892,37 +958,39 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       throw new Error(`Plan '${planPath}' is no longer available.`);
     }
     if (!text.trim()) throw new Error(`Plan '${planPath}' is empty.`);
-    // setSelection replaces the whole record, so the agent, model, and effort
-    // choices have to be carried over or they are lost with the mode switch.
-    this.application.setAgentSelection({ ...this.application.state().agentSelection, mode: "agent" });
-    this.conversationSelections.set(this.activeSession.id, { mode: "agent" });
+    this.activeSession.activePlanPath = planPath;
+    this.activeSession.planStatus = "running";
+    await this.history.updatePlanContext(this.activeSession.id, planPath, "running");
     await this.refresh();
-    await this.run("agent", [
+    await this.run("plan", [
       `Implement the plan in ${planPath} exactly as written. Do not edit the plan file itself.`,
       "",
       text.trim()
-    ].join("\n"));
+    ].join("\n"), undefined, true);
   }
 
-  private async run(mode: "agent" | "ask" | "plan" | "code", source: string): Promise<void> {
+  private async run(mode: "agent" | "ask" | "plan" | "code", source: string, planPath?: string, executePlan = false): Promise<void> {
     source = normalizeInputReferenceSource(source);
     const events: AgentStreamEvent[] = [];
     const turnId = randomBytes(12).toString("hex");
     const session = this.activeSession;
     const sessionId = session.id;
+    const executionPlanPath = executePlan ? planPath ?? session.activePlanPath : planPath;
     if (this.activeExecutions.has(sessionId)) {
       throw new Error("Wait for this conversation's current Dext turn to finish before running another one.");
     }
     const controller = new AbortController();
-    this.activeExecutions.set(sessionId, { turnId, source, controller, events });
+    this.activeExecutions.set(sessionId, { turnId, source, ...(executionPlanPath ? { planPath: executionPlanPath } : {}), ...(executePlan ? { executePlan: true } : {}), controller, events });
     this.updateRunningContext();
     await this.postConversationState();
-    await this.post({ type: "executing", sessionId, value: true, turnId, source });
+    await this.post({ type: "executing", sessionId, value: true, turnId, source, ...(executionPlanPath ? { planPath: executionPlanPath } : {}), ...(executePlan ? { executePlan: true } : {}) });
     try {
       const metadata = {
         agentSessionId: sessionId,
         signal: controller.signal,
         ui: this.uiInteraction(),
+        ...(mode === "plan" && executionPlanPath ? { planPath: executionPlanPath } : {}),
+        ...(executePlan ? { executePlan: true } : {}),
         onAgentEvent: (event: AgentStreamEvent) => {
           events.push({ ...event });
           this.postAgentEvent(sessionId, event);
@@ -943,6 +1011,15 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         ? await this.application.executeInput(source, metadata)
         : await this.application.executeConversation(mode, source, metadata);
       const turn = await this.history.addSuccess(source, events, response, sessionId, mode);
+      if (mode === "plan" && response.executions.some((execution) => execution.result.kind === "chat" && execution.result.planPath)) {
+        const savedPath = response.executions.find((execution) => execution.result.kind === "chat" && execution.result.planPath)?.result;
+        if (savedPath?.kind === "chat" && savedPath.planPath) {
+          session.activePlanPath = savedPath.planPath;
+          session.planStatus = "active";
+          await this.history.updatePlanContext(sessionId, savedPath.planPath, "active");
+          await this.postPlanContext();
+        }
+      }
       session.turns.push(turn);
       session.updatedAt = turn.createdAt;
       this.sessions.set(sessionId, session);
@@ -957,6 +1034,11 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         ...(reviewable ? { reviewPatch: true } : {})
       });
     } catch (error) {
+      if (mode === "plan" && session.planStatus === "running") {
+        session.planStatus = "failed";
+        await this.history.updatePlanContext(sessionId, session.activePlanPath, "failed");
+        await this.postPlanContext();
+      }
       const turn = await this.history.addFailure(source, events, error, sessionId, mode);
       session.turns.push(turn);
       session.updatedAt = turn.createdAt;
@@ -971,6 +1053,11 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     } finally {
       const active = this.activeExecutions.get(sessionId);
       if (active?.turnId === turnId) this.activeExecutions.delete(sessionId);
+      if (mode === "plan" && session.planStatus === "running") {
+        session.planStatus = "completed";
+        await this.history.updatePlanContext(sessionId, session.activePlanPath, "completed");
+        await this.postPlanContext();
+      }
       this.updateRunningContext();
       await this.postConversationState();
       try {
@@ -1010,6 +1097,13 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       "setContext",
       "dext.running",
       this.activeExecutions.has(this.activeSession.id) || Boolean(this.mcpAssistantExecution)
+    );
+    void vscode.commands.executeCommand(
+      "setContext",
+      "dext.planMode",
+      (this.conversationSelections.get(this.activeSession.id)?.mode
+        ?? this.application.state().agentSelection.mode
+        ?? "agent") === "plan"
     );
   }
 
@@ -1052,7 +1146,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       sessionId,
       value: true,
       turnId: execution.turnId,
-      source: execution.source
+      source: execution.source,
+      ...(execution.planPath ? { planPath: execution.planPath } : {}),
+      ...(execution.executePlan ? { executePlan: true } : {})
     });
     for (const event of execution.events) {
       await this.post({ type: "agentEvent", sessionId, event });
@@ -1162,6 +1258,14 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           <button id="result-toggle" class="icon-button" type="button" title="Collapse conversation" aria-label="Collapse conversation"><i class="codicon codicon-collapse-all"></i></button>
           <button id="result-fullscreen" class="icon-button panel-fullscreen" type="button" title="Maximize Conversation" aria-label="Maximize Conversation"><i class="codicon codicon-screen-full"></i></button>
         </div>
+      </div>
+      <div id="plan-toolbar" class="plan-toolbar" hidden>
+        <div class="plan-target-group">
+          <button id="plan-target" class="plan-target" type="button" title="Select a plan"><i class="codicon codicon-checklist"></i><span id="plan-target-label">New plan</span></button>
+          <button id="plan-choose" class="plan-choose" type="button" title="Select a plan" aria-label="Select a plan"><i class="codicon codicon-chevron-down"></i></button>
+        </div>
+        <span id="plan-status" class="plan-status">New plan</span>
+        <button id="plan-build" class="primary plan-build" type="button" title="Build the active plan"><i class="codicon codicon-play"></i><span>Build</span></button>
       </div>
       <div id="result-body" class="collapsible-body result-body"><div id="result"></div></div>
     </section>

@@ -344,14 +344,14 @@ describe("Dext package manifest", () => {
     expect(concurrency?.description).toContain("comprehension");
   });
 
-  it("offers three Agent permission tiers and a trusted-only CLI passthrough", async () => {
+  it("offers writable Agent and Plan permission tiers and a trusted-only CLI passthrough", async () => {
     const properties = (await manifest()).contributes?.configuration?.properties ?? {};
     const permission = properties["dext.agentPermission"];
     expect(permission).toMatchObject({ type: "string", default: "workspace-write" });
-    expect(permission?.enum).toEqual(["read-only", "workspace-write", "full-access"]);
+    expect(permission?.enum).toEqual(["workspace-write", "full-access"]);
     // Each tier has to say what it will do before it is picked.
-    expect(permission?.enumDescriptions).toHaveLength(3);
-    expect(permission?.description).toContain("Ask and Plan are always read-only");
+    expect(permission?.enumDescriptions).toHaveLength(2);
+    expect(permission?.description).toContain("Ask is always read-only");
     const passthrough = properties["dext.agentCliArgs"];
     expect(passthrough).toMatchObject({ type: "object", default: {} });
     expect(passthrough?.markdownDescription).toContain("trusted workspace");

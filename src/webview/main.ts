@@ -121,6 +121,12 @@ const elements = {
   resultToggle: element<HTMLButtonElement>("result-toggle"),
   inputFullscreen: element<HTMLButtonElement>("input-fullscreen"),
   resultFullscreen: element<HTMLButtonElement>("result-fullscreen"),
+  planToolbar: element<HTMLElement>("plan-toolbar"),
+  planTarget: element<HTMLButtonElement>("plan-target"),
+  planChoose: element<HTMLButtonElement>("plan-choose"),
+  planTargetLabel: element<HTMLElement>("plan-target-label"),
+  planStatus: element<HTMLElement>("plan-status"),
+  planBuild: element<HTMLButtonElement>("plan-build"),
   attachmentBar: element<HTMLElement>("attachment-bar")
 };
 
@@ -138,14 +144,14 @@ let problemCounts = { errors: 0, warnings: 0 };
 let inputKind: "empty" | "workflow" | "invalid" = "empty";
 type InputMode = "agent" | "ask" | "plan" | "code";
 let inputMode: InputMode = "agent";
-type AgentPermission = "read-only" | "workspace-write" | "full-access";
+let activePlanPath: string | undefined;
+let planStatus: "new" | "active" | "running" | "completed" | "failed" = "new";
+type AgentPermission = "workspace-write" | "full-access";
 const PERMISSION_LABEL: Record<AgentPermission, string> = {
-  "read-only": "Read only",
   "workspace-write": "Workspace write",
   "full-access": "Full access"
 };
 const PERMISSION_ICON: Record<AgentPermission, string> = {
-  "read-only": "codicon-shield",
   "workspace-write": "codicon-edit",
   "full-access": "codicon-unlock"
 };
@@ -312,6 +318,7 @@ function updateRunState(): void {
   const runIcon = elements.run.querySelector<HTMLElement>("i");
   if (runIcon) runIcon.className = `codicon codicon-${executing ? "debug-stop" : "run"}`;
   elements.run.classList.toggle("stopping", stopping);
+  elements.run.classList.toggle("executing", executing);
   const parts = [
     problemCounts.errors ? `${problemCounts.errors} error${problemCounts.errors === 1 ? "" : "s"}` : "",
     problemCounts.warnings ? `${problemCounts.warnings} warning${problemCounts.warnings === 1 ? "" : "s"}` : ""
@@ -321,7 +328,38 @@ function updateRunState(): void {
   elements.problems.classList.toggle("has-problems", codeMode && parts.length > 0);
   elements.problems.classList.toggle("hidden", !codeMode);
   elements.inputShell.classList.toggle("conversation-mode", !codeMode);
+  renderPlanToolbar();
   syncTurnActions();
+}
+
+function renderPlanToolbar(): void {
+  const visible = inputMode === "plan";
+  elements.planToolbar.hidden = !visible;
+  if (!visible) return;
+  elements.planTargetLabel.textContent = activePlanPath?.split("/").pop() ?? "New plan";
+  elements.planTarget.title = activePlanPath ? `Open ${activePlanPath}` : "Select a plan";
+  const labels = { new: "New plan", active: "Active", running: "Running", completed: "Completed", failed: "Failed" };
+  elements.planStatus.textContent = labels[planStatus];
+  elements.planBuild.hidden = !activePlanPath;
+  // A plan cannot be switched while its current turn is being edited or built.
+  // Keep the chooser in sync with Build so the host never receives a
+  // plan-selection request that it must reject because an execution is active.
+  const planLocked = executing || planStatus === "running";
+  elements.planChoose.disabled = planLocked;
+  // Opening the already-selected document remains useful while it runs. For a
+  // new plan, the target button is itself a chooser and must be locked too.
+  elements.planTarget.disabled = planLocked && !activePlanPath;
+  const planBuildRunning = planStatus === "running" && executing;
+  elements.planBuild.disabled = planBuildRunning
+    ? stopping || !activeTurnId
+    : executing || planStatus === "running" || !activePlanPath;
+  elements.planBuild.classList.toggle("executing", planBuildRunning);
+  elements.planBuild.classList.toggle("stopping", planBuildRunning && stopping);
+  const buildLabel = elements.planBuild.querySelector("span");
+  if (buildLabel) buildLabel.textContent = planBuildRunning ? "Stop" : planStatus === "completed" ? "Rebuild" : "Build";
+  elements.planBuild.title = planBuildRunning ? "Stop building the active plan" : "Build the active plan";
+  const buildIcon = elements.planBuild.querySelector<HTMLElement>("i");
+  if (buildIcon) buildIcon.className = `codicon codicon-${planBuildRunning ? "debug-stop" : "play"}`;
 }
 
 function run(): void {
@@ -335,7 +373,11 @@ function run(): void {
   const source = editor.source.trim();
   if (!source || elements.run.disabled) return;
   clearInputError();
-  vscode.postMessage({ type: "executeInput", mode: inputMode, source });
+  if (inputMode === "plan" && activePlanPath) {
+    vscode.postMessage({ type: "executeInput", mode: inputMode, source, planPath: activePlanPath });
+  } else {
+    vscode.postMessage({ type: "executeInput", mode: inputMode, source });
+  }
   clearSubmittedInput();
 }
 
@@ -564,7 +606,11 @@ function renderMcp(state: SidebarState): void {
     group.open = true;
     const summary = document.createElement("summary");
     const chevron = document.createElement("i");
-    chevron.className = "disclosure-chevron codicon codicon-chevron-down";
+    // Keep resource categories in step with API groups: closed categories use
+    // an explicit right chevron and open categories use a down chevron. Using
+    // the generic disclosure chevron here applies a rotation transform that
+    // makes the closed state point left instead.
+    chevron.className = "method-chevron codicon codicon-chevron-down";
     const categoryIcon = document.createElement("i");
     categoryIcon.className = `resource-category-icon codicon codicon-${icon}`;
     const label = document.createElement("span");
@@ -602,11 +648,14 @@ function renderMcp(state: SidebarState): void {
     }
     group.append(summary, body);
     group.addEventListener("toggle", syncResourceToggle);
+    group.addEventListener("toggle", () => {
+      chevron.className = `method-chevron codicon codicon-chevron-${group.open ? "down" : "right"}`;
+    });
     elements.mcpServers.append(group);
   }
   syncResourceToggle();
   elements.mcpErrors.replaceChildren();
-  for (const diagnostic of state.mcpDiagnostics) {
+  for (const diagnostic of state.globalDiagnostics) {
     const item = document.createElement("div");
     item.textContent = diagnostic;
     elements.mcpErrors.append(item);
@@ -846,7 +895,7 @@ function renderMethods(state: SidebarState): void {
       signature.textContent = formatMethodSignature({
         ...method,
         id: method.id.split(".").at(-1) ?? method.id
-      });
+      }, { includeInternal: ["agent", "ask", "plan"].includes(method.id) });
       if (!prefix) {
         const source = document.createElement("span");
         source.className = "method-source-inline";
@@ -976,10 +1025,12 @@ function renderAgentControls(state: SidebarState): void {
   };
   elements.modeControlValue.textContent = modeLabel[inputMode];
   elements.modeControlIcon.className = `codicon ${modeIcon[inputMode]}`;
-  agentPermission = state.agentSelection.permission ?? "workspace-write";
-  // Ask and Plan are read-only by definition and Code carries its permission on
-  // each call, so the tier is only a choice in Agent mode.
-  elements.permissionMenuShell.hidden = inputMode !== "agent";
+  // Invalidated legacy values fall back to the safe writable tier without a
+  // migration step; the composer no longer offers a read-only Agent tier.
+  agentPermission = state.agentSelection.permission === "full-access" ? "full-access" : "workspace-write";
+  // Ask is the dedicated read-only mode. Agent and Plan choose their write
+  // scope; Code carries its permission on each call.
+  elements.permissionMenuShell.hidden = inputMode !== "agent" && inputMode !== "plan";
   elements.permissionControlValue.textContent = PERMISSION_LABEL[agentPermission];
   elements.permissionControlIcon.className = `codicon ${PERMISSION_ICON[agentPermission]}`;
   elements.permissionControl.classList.toggle("is-full-access", agentPermission === "full-access");
@@ -1004,7 +1055,6 @@ function renderAgentControls(state: SidebarState): void {
     code: "composer-menu-option-mode-code"
   });
   renderComposerMenu(elements.permissionMenu, [
-    ["read-only", PERMISSION_LABEL["read-only"], PERMISSION_ICON["read-only"]],
     ["workspace-write", PERMISSION_LABEL["workspace-write"], PERMISSION_ICON["workspace-write"]],
     ["full-access", PERMISSION_LABEL["full-access"], PERMISSION_ICON["full-access"]]
   ], agentPermission, (permission) => {
@@ -1168,7 +1218,7 @@ function submitAgentSelection(change: Partial<SidebarState["agentSelection"]>): 
   vscode.postMessage({
     type: "agentSelection", selection: {
       mode: inputMode,
-      permission: change.permission ?? selection?.permission ?? agentPermission,
+      permission: change.permission ?? agentPermission,
       profileId: change.profileId ?? selection?.profileId ?? "",
       model: change.model ?? selection?.model ?? "",
       reasoningEffort: change.reasoningEffort ?? selection?.reasoningEffort ?? "",
@@ -1724,7 +1774,12 @@ function syncTurnActions(): void {
   }
 }
 
-function createOutputTurn(turnId: string, source: string, createdAt = Date.now()): OutputTurnElements {
+function createOutputTurn(
+  turnId: string,
+  source: string,
+  createdAt = Date.now(),
+  options: { executePlan?: boolean; planPath?: string } = {}
+): OutputTurnElements {
   source = normalizeInputReferenceSource(source);
   for (const turn of outputTurns.values()) turn.disclosure.open = false;
   const disclosure = document.createElement("details");
@@ -1739,7 +1794,9 @@ function createOutputTurn(turnId: string, source: string, createdAt = Date.now()
   time.textContent = new Date(createdAt).toLocaleTimeString();
   const title = document.createElement("span");
   title.className = "output-turn-title";
-  title.textContent = inputReferenceDisplayText(source).split(/\r?\n/, 1)[0]?.slice(0, 140) || "Dext turn";
+  title.textContent = options.executePlan && options.planPath
+    ? `Plan: ${options.planPath.split("/").pop() ?? options.planPath}`
+    : inputReferenceDisplayText(source).split(/\r?\n/, 1)[0]?.slice(0, 140) || "Dext turn";
   const body = document.createElement("div");
   body.className = "output-turn-body";
   const actions = document.createElement("span");
@@ -1760,15 +1817,18 @@ function createOutputTurn(turnId: string, source: string, createdAt = Date.now()
   // Keep the turn title as the primary row label, matching the history view;
   // metadata belongs at the trailing edge of the row rather than before it.
   summary.append(chevron, title, time, actions);
-  const input = outputTurnSection("Input", true);
-  const inputText = renderedInputSource(source);
-  const inputCopy = document.createElement("div");
-  inputCopy.className = "output-turn-input";
-  inputCopy.append(inputText, copyButton(source));
-  input.body.append(inputCopy);
+  if (!options.executePlan) {
+    const input = outputTurnSection("Input", true);
+    const inputText = renderedInputSource(source);
+    const inputCopy = document.createElement("div");
+    inputCopy.className = "output-turn-input";
+    inputCopy.append(inputText, copyButton(source));
+    input.body.append(inputCopy);
+    body.append(input.disclosure);
+  }
   const process = outputTurnSection("Process", true);
   const output = outputTurnSection("Output", true);
-  body.append(input.disclosure, process.disclosure, output.disclosure);
+  body.append(process.disclosure, output.disclosure);
   disclosure.append(summary, body);
   elements.result.append(disclosure);
   const turn = {
@@ -2036,8 +2096,7 @@ function appendAgentPresentationExtras(container: HTMLElement, presentation: Age
   }
 }
 
-/** A plan is a document plus a decision, so the result carries both: open it to
- * edit, or hand the edited file to the Agent. */
+/** A plan result links back to its saved document for review or editing. */
 function planActions(planPath: string): HTMLElement {
   const row = document.createElement("div");
   row.className = "plan-actions";
@@ -2047,27 +2106,13 @@ function planActions(planPath: string): HTMLElement {
   const openGlyph = document.createElement("i");
   openGlyph.className = "codicon codicon-checklist";
   const openLabel = document.createElement("span");
-  openLabel.textContent = planPath.split("/").pop() ?? planPath;
+  openLabel.textContent = `Plan: ${planPath.split("/").pop() ?? planPath}`;
   open.title = `Open ${planPath}`;
   open.append(openGlyph, openLabel);
   open.addEventListener("click", () => {
     vscode.postMessage({ type: "openFileReference", reference: planPath });
   });
-  const build = document.createElement("button");
-  build.type = "button";
-  build.className = "plan-action primary";
-  build.title = "Hand this plan to the Agent";
-  const buildGlyph = document.createElement("i");
-  buildGlyph.className = "codicon codicon-play";
-  const buildLabel = document.createElement("span");
-  buildLabel.textContent = "Build plan";
-  build.append(buildGlyph, buildLabel);
-  build.disabled = executing;
-  build.addEventListener("click", () => {
-    build.disabled = true;
-    vscode.postMessage({ type: "buildPlan", planPath });
-  });
-  row.append(open, build);
+  row.append(open);
   return row;
 }
 
@@ -2608,13 +2653,18 @@ function renderOutputSession(session: DextHistorySession): void {
   outputTurns.clear();
   activeTurn = undefined;
   for (const record of session.turns) {
-    const turn = createOutputTurn(record.id, record.input, record.createdAt);
+    const response = storedResponse(record);
+    const execution = response?.executions.find((item) => item.result.kind === "chat" && item.result.executePlan);
+    const planResult = execution?.result.kind === "chat" ? execution.result : undefined;
+    const turn = createOutputTurn(record.id, record.input, record.createdAt, {
+      ...(planResult?.executePlan ? { executePlan: true } : {}),
+      ...(planResult?.planPath ? { planPath: planResult.planPath } : {})
+    });
     resetAgentTrace();
     agentRunStartedAt = Date.now();
     for (const event of record.process) renderAgentEvent(event);
     if (agentStream) finishAgentProgress();
     turn.processDisclosure.open = false;
-    const response = storedResponse(record);
     if (record.error) renderOutputError(record.error);
     else if (response) renderResult(response);
     else if (record.output) turn.output.append(jsonOutput(record.output));
@@ -2724,6 +2774,24 @@ function clearSubmittedInput(): void {
 }
 
 elements.run.addEventListener("click", run);
+elements.planTarget.addEventListener("click", () => {
+  if (activePlanPath) vscode.postMessage({ type: "openFileReference", reference: activePlanPath });
+  else vscode.postMessage({ type: "choosePlan" });
+});
+elements.planChoose.addEventListener("click", () => vscode.postMessage({ type: "choosePlan" }));
+elements.planBuild.addEventListener("click", () => {
+  const planBuildRunning = planStatus === "running" && executing;
+  if (planBuildRunning) {
+    if (!activeTurnId || stopping) return;
+    stopping = true;
+    vscode.postMessage({ type: "stopExecution", turnId: activeTurnId });
+    updateRunState();
+    return;
+  }
+  if (!activePlanPath || executing) return;
+  elements.planBuild.disabled = true;
+  vscode.postMessage({ type: "buildPlan", planPath: activePlanPath });
+});
 elements.result.addEventListener("click", openOutputLink);
 // Conversation output is read-only. Suppress the browser's native context
 // menu so actions such as Cut and Paste cannot suggest unsupported behavior;
@@ -2890,6 +2958,11 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   }
   if (message.type === "outputSession") renderOutputSession(message.session);
   if (message.type === "conversations") renderConversations(message.sessions, message.activeId);
+  if (message.type === "planContext") {
+    activePlanPath = message.path;
+    planStatus = message.status;
+    renderPlanToolbar();
+  }
   if (message.type === "openMethods") openMethodsDialog();
   if (message.type === "openMcp") openMcpDialog();
   if (message.type === "mcpAssistant") openMcpAssistantDialog();
@@ -2967,7 +3040,10 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
       if (existingTurn) {
         activeTurn = existingTurn;
       } else {
-        createOutputTurn(message.turnId, message.source ?? "Dext turn");
+        createOutputTurn(message.turnId, message.source ?? "Dext turn", Date.now(), {
+          ...(message.executePlan ? { executePlan: true } : {}),
+          ...(message.planPath ? { planPath: message.planPath } : {})
+        });
         resetAgentTrace();
         startAgentProgress();
       }

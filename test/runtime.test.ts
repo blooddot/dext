@@ -131,6 +131,35 @@ print(text=answer.text)`, registry);
     expect(result.executions.map((item) => item.result.kind)).toEqual(["chat", "agent", "print"]);
   });
 
+  it("returns immediately from a custom workflow branch", async () => {
+    const { registry, workflow } = setup();
+    const compiled = compileWorkflow([
+      'before = print(text="before")',
+      'decision = ui.confirm(message="Continue?")',
+      "if decision.confirmed != True:",
+      "    return before",
+      'after = print(text="after")',
+      "return after"
+    ].join("\n"), registry, { allowReturn: true });
+    expect(compiled.diagnostics).toEqual([]);
+    const result = await workflow.executeValue(compiled.program!, [], {
+      ui: {
+        choose: async () => ({ kind: "ui", type: "choice", selected: [] }),
+        confirm: async () => ({ kind: "ui", type: "confirm", confirmed: false }),
+        input: async () => ({ kind: "ui", type: "input", value: "" })
+      }
+    });
+    expect(result).toMatchObject({ kind: "print", text: "before" });
+    const continued = await workflow.executeValue(compiled.program!, [], {
+      ui: {
+        choose: async () => ({ kind: "ui", type: "choice", selected: [] }),
+        confirm: async () => ({ kind: "ui", type: "confirm", confirmed: true }),
+        input: async () => ({ kind: "ui", type: "input", value: "" })
+      }
+    });
+    expect(continued).toMatchObject({ kind: "print", text: "after" });
+  });
+
   it("runs a for loop once per item and drops the loop variable afterwards", async () => {
     const { registry, workflow } = setup();
     const compiled = compileWorkflow([
@@ -480,7 +509,7 @@ print(text=answer.text)`, registry);
     runtime.setWorkspaceTrusted(true);
     runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
     runtime.setAgentSelection({ profileId: "codex" });
-    const requests: { mode: string; input: string; allowWorkspaceWrite: boolean }[] = [];
+    const requests: { mode: string; input: string; permission?: string; allowWorkspaceWrite: boolean }[] = [];
     runtime.setAgentRunner({
       run: async () => ({ kind: "chat", text: "unused" }),
       runConversation: async (request) => {
@@ -496,42 +525,6 @@ print(text=answer.text)`, registry);
     expect(requests).toEqual([
       expect.objectContaining({ mode: "agent", input: "Update this module", allowWorkspaceWrite: true }),
       expect.objectContaining({ mode: "ask", input: "Explain this module", allowWorkspaceWrite: false })
-    ]);
-  });
-
-  it("turns a read-only Agent turn into a preview-only patch instead of a conversation", async () => {
-    const { runtime } = setup();
-    runtime.setWorkspaceTrusted(true);
-    runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
-    runtime.setAgentSelection({ profileId: "codex", permission: "read-only" });
-    const patch: PatchResult = {
-      kind: "patch",
-      title: "Proposed",
-      changes: [{ uri: "file:///x.ts", before: "const x = 1;", after: "const x = 2;" }]
-    };
-    const conversations: string[] = [];
-    const typed: { apply: unknown }[] = [];
-    runtime.setAgentRunner({
-      run: async (request) => {
-        typed.push({ apply: request.resolved.arguments.apply });
-        return { kind: "agent", text: "Proposed a change", patch } satisfies AgentResult;
-      },
-      runConversation: async (request) => {
-        conversations.push(request.input);
-        return "should not be used";
-      }
-    });
-
-    const response = await runtime.executeConversation("agent", "Rename the flag");
-    // The provider must be told not to write, and the reply must carry the patch
-    // Dext can show and later apply.
-    expect(typed).toEqual([{ apply: false }]);
-    expect(conversations).toEqual([]);
-    expect(response.result).toMatchObject({ kind: "agent", patch: { changes: patch.changes } });
-    // The recorded call is what the review UI keys off, so `apply` has to be on it.
-    expect(response.invocation.arguments).toEqual([
-      { name: "input", value: "Rename the flag" },
-      { name: "apply", value: false }
     ]);
   });
 
@@ -555,9 +548,9 @@ print(text=answer.text)`, registry);
     await runtime.executeConversation("plan", "Add a cache");
     expect(requests).toEqual([
       expect.objectContaining({ mode: "agent", permission: "full-access", allowWorkspaceWrite: true }),
-      // Ask and Plan stay read-only however the composer is configured.
+      // Ask is read-only; Plan uses the selected write tier.
       expect.objectContaining({ mode: "ask", permission: "read-only", allowWorkspaceWrite: false }),
-      expect.objectContaining({ mode: "plan", permission: "read-only", allowWorkspaceWrite: false })
+      expect.objectContaining({ mode: "plan", permission: "full-access", allowWorkspaceWrite: true })
     ]);
   });
 
@@ -607,13 +600,13 @@ print(text=answer.text)`, registry);
     expect(permission).toBe("workspace-write");
   });
 
-  it("runs Plan read-only and prefixes the built-in planning instruction", async () => {
+  it("runs Plan with the selected write tier and prefixes the built-in planning instruction", async () => {
     const { runtime } = setup();
     runtime.setWorkspaceTrusted(true);
     runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
     runtime.setAgentSelection({ profileId: "codex" });
     runtime.setRuleLoader(async () => undefined);
-    const requests: { mode: string; input: string; allowWorkspaceWrite: boolean }[] = [];
+    const requests: { mode: string; input: string; permission?: string; allowWorkspaceWrite: boolean }[] = [];
     runtime.setAgentRunner({
       run: async () => ({ kind: "chat", text: "unused" }),
       runConversation: async (request) => {
@@ -625,13 +618,36 @@ print(text=answer.text)`, registry);
     await expect(runtime.executeConversation("plan", "Add a cache"))
       .resolves.toMatchObject({ method: { id: "plan" }, result: { kind: "chat" } });
     const request = requests[0]!;
-    // Plan must never reach the write path, whatever the provider decides to do.
-    expect(request.allowWorkspaceWrite).toBe(false);
+    expect(request.allowWorkspaceWrite).toBe(true);
+    expect(request.permission).toBe("workspace-write");
     expect(request.mode).toBe("plan");
     expect(request.input).toContain("You are in Dext Plan mode.");
     expect(request.input).toContain("Do not create, modify, or delete any file.");
     // The user's own words stay verbatim below the instruction.
     expect(request.input.endsWith("Goal:\n\nAdd a cache")).toBe(true);
+  });
+
+  it("executes a saved Plan in Plan mode with its selected write tier", async () => {
+    const { runtime } = setup();
+    runtime.setWorkspaceTrusted(true);
+    runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
+    runtime.setAgentSelection({ profileId: "codex", permission: "full-access" });
+    let request: { mode: string; input: string; permission?: string; allowWorkspaceWrite: boolean } | undefined;
+    runtime.setAgentRunner({
+      run: async () => ({ kind: "chat", text: "unused" }),
+      runConversation: async (value) => {
+        request = value;
+        return "Implemented.";
+      }
+    });
+
+    await runtime.executeConversation("plan", "Implement the saved plan", { executePlan: true });
+    expect(request).toMatchObject({
+      mode: "plan",
+      input: "Implement the saved plan",
+      permission: "full-access",
+      allowWorkspaceWrite: true
+    });
   });
 
   it("lets .dext/rules/plan.md replace the built-in Plan instruction", async () => {
@@ -679,10 +695,9 @@ print(text=answer.text)`, registry);
       }
     });
 
-    await runtime.executeConversation("plan", "Add a cache");
-    // An untrusted workspace must not get to dictate the prompt.
+    await expect(runtime.executeConversation("plan", "Add a cache")).rejects.toThrow("Plan mode requires a trusted local workspace");
     expect(loaderCalls).toBe(0);
-    expect(sent).toContain("You are in Dext Plan mode.");
+    expect(sent).toBe("");
   });
 
   it("composes failed terminal fields and preserves the complete result", async () => {

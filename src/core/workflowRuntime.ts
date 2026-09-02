@@ -14,6 +14,7 @@ import type {
 } from "./types.js";
 
 type RuntimeValue = InvocationValue | DextResult;
+type ExecutionFlow = true | false | { kind: "returned"; value: RuntimeValue };
 
 /** How many comprehension branches run at once. Each branch can start a CLI
  * process, so the default stays low enough that a fan-out over a large list does
@@ -51,13 +52,17 @@ export class WorkflowRuntime {
   ): Promise<DextResult> {
     const environment = new Map<string, RuntimeValue>(initial);
     const steps: WorkflowStepResponse[] = [];
-    const completed = await this.executeStatements(program.statements, environment, steps, metadata);
+    const flow = await this.executeStatements(program.statements, environment, steps, metadata);
     const cancelled = [...steps].reverse().find((step) => step.state === "cancelled");
-    if (!completed && cancelled) throw new ExecutionCancelledError(cancelled.error);
-    if (!completed || !program.returnExpression) {
+    if (flow === false && cancelled) throw new ExecutionCancelledError(cancelled.error);
+    if (flow === false) {
       throw new Error("Custom API main() did not return a result.");
     }
-    const value = await this.evaluateAsync(program.returnExpression, environment, metadata);
+    const value = flow === true
+      ? program.returnExpression
+        ? await this.evaluateAsync(program.returnExpression, environment, metadata)
+        : undefined
+      : flow.value;
     if (typeof value !== "object" || value === null || Array.isArray(value) || !("kind" in value)) {
       throw new Error("Custom API main() must return a Dext result.");
     }
@@ -70,7 +75,7 @@ export class WorkflowRuntime {
     steps: WorkflowStepResponse[],
     metadata: Readonly<ExecutionMetadata> = {},
     supplementalContext: readonly CodeRef[] = []
-  ): Promise<boolean> {
+  ): Promise<ExecutionFlow> {
     for (let index = 0; index < statements.length; index += 1) {
       const statement = statements[index]!;
       if (statement.kind === "if") {
@@ -78,23 +83,26 @@ export class WorkflowRuntime {
         const selected = condition ? statement.consequent : statement.alternate;
         const skipped = condition ? statement.alternate : statement.consequent;
         this.markSkipped(skipped, steps);
-        if (!await this.executeStatements(selected, environment, steps, metadata, supplementalContext)) {
+        const flow = await this.executeStatements(selected, environment, steps, metadata, supplementalContext);
+        if (flow !== true) {
           this.markSkipped(statements.slice(index + 1), steps);
-          return false;
+          return flow;
         }
         continue;
       }
       if (statement.kind === "for") {
-        if (!await this.executeLoop(statement, environment, steps, metadata, supplementalContext)) {
+        const flow = await this.executeLoop(statement, environment, steps, metadata, supplementalContext);
+        if (flow !== true) {
           this.markSkipped(statements.slice(index + 1), steps);
-          return false;
+          return flow;
         }
         continue;
       }
       if (statement.kind === "try") {
-        if (!await this.executeTry(statement, environment, steps, metadata, supplementalContext)) {
+        const flow = await this.executeTry(statement, environment, steps, metadata, supplementalContext);
+        if (flow !== true) {
           this.markSkipped(statements.slice(index + 1), steps);
-          return false;
+          return flow;
         }
         continue;
       }
@@ -123,6 +131,23 @@ export class WorkflowRuntime {
         }
         steps.push(step);
         continue;
+      }
+      if (statement.kind === "return") {
+        try {
+          if (metadata.signal?.aborted) throw new ExecutionCancelledError();
+          const value = await this.evaluateAsync(statement.expression, environment, metadata);
+          steps.push({ method: "return", state: "success" });
+          this.markSkipped(statements.slice(index + 1), steps);
+          return { kind: "returned", value };
+        } catch (error) {
+          steps.push({
+            method: "return",
+            state: error instanceof ExecutionCancelledError ? "cancelled" : "failed",
+            error: error instanceof Error ? error.message : String(error)
+          });
+          this.markSkipped(statements.slice(index + 1), steps);
+          return false;
+        }
       }
       const step: WorkflowStepResponse = {
         ...(statement.assignment ? { assignment: statement.assignment } : {}),
@@ -164,7 +189,7 @@ export class WorkflowRuntime {
     steps: WorkflowStepResponse[],
     metadata: Readonly<ExecutionMetadata>,
     supplementalContext: readonly CodeRef[]
-  ): Promise<boolean> {
+  ): Promise<ExecutionFlow> {
     const start = steps.length;
     const succeeded = await this.executeStatements(statement.body, environment, steps, metadata, supplementalContext);
     const recorded = steps.slice(start);
@@ -175,9 +200,14 @@ export class WorkflowRuntime {
       this.markSkipped(statement.finalizer, steps);
       return false;
     }
-    if (succeeded) {
+    if (succeeded === true) {
       this.markSkipped(statement.handler, steps);
       return this.runFinalizer(statement, environment, steps, metadata, supplementalContext);
+    }
+    if (typeof succeeded === "object") {
+      this.markSkipped(statement.handler, steps);
+      const finalized = await this.runFinalizer(statement, environment, steps, metadata, supplementalContext);
+      return finalized === true ? succeeded : finalized;
     }
     const failure = [...recorded].reverse().find((step) => step.state === "failed");
     const had = statement.error !== undefined && environment.has(statement.error);
@@ -185,7 +215,7 @@ export class WorkflowRuntime {
     if (statement.error !== undefined) {
       environment.set(statement.error, failure?.error ?? "The step failed without a message.");
     }
-    let handled: boolean;
+    let handled: ExecutionFlow;
     try {
       handled = await this.executeStatements(statement.handler, environment, steps, metadata, supplementalContext);
     } finally {
@@ -195,7 +225,7 @@ export class WorkflowRuntime {
       }
     }
     const finalized = await this.runFinalizer(statement, environment, steps, metadata, supplementalContext);
-    return handled && finalized;
+    return handled === true && finalized === true;
   }
 
   private async runFinalizer(
@@ -204,7 +234,7 @@ export class WorkflowRuntime {
     steps: WorkflowStepResponse[],
     metadata: Readonly<ExecutionMetadata>,
     supplementalContext: readonly CodeRef[]
-  ): Promise<boolean> {
+  ): Promise<ExecutionFlow> {
     if (!statement.finalizer.length) return true;
     return this.executeStatements(statement.finalizer, environment, steps, metadata, supplementalContext);
   }
@@ -217,7 +247,7 @@ export class WorkflowRuntime {
     steps: WorkflowStepResponse[],
     metadata: Readonly<ExecutionMetadata>,
     supplementalContext: readonly CodeRef[]
-  ): Promise<boolean> {
+  ): Promise<ExecutionFlow> {
     let items: RuntimeValue;
     try {
       if (metadata.signal?.aborted) throw new ExecutionCancelledError();
@@ -245,8 +275,9 @@ export class WorkflowRuntime {
     try {
       for (const item of items) {
         environment.set(statement.variable, item as RuntimeValue);
-        if (!await this.executeStatements(statement.body, environment, steps, metadata, supplementalContext)) {
-          return false;
+        const flow = await this.executeStatements(statement.body, environment, steps, metadata, supplementalContext);
+        if (flow !== true) {
+          return flow;
         }
       }
     } finally {
@@ -476,6 +507,8 @@ export class WorkflowRuntime {
         this.markSkipped(statement.body, steps);
         this.markSkipped(statement.handler, steps);
         this.markSkipped(statement.finalizer, steps);
+      } else if (statement.kind === "return") {
+        steps.push({ method: "return", state: "skipped" });
       } else {
         this.markSkipped(statement.consequent, steps);
         this.markSkipped(statement.alternate, steps);

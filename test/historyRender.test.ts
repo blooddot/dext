@@ -101,6 +101,20 @@ describe("Dext history rendering", () => {
     expect(renderHistoryRecord(record)).toContain("old");
   });
 
+  it("places a turn timestamp after its summary content", () => {
+    const record: DextHistoryRecord = {
+      id: "timestamp-order",
+      createdAt: 1,
+      input: 'ask(input="hello")',
+      process: [],
+      output: ""
+    };
+
+    const html = renderHistoryRecord(record);
+    const summary = html.slice(html.indexOf("<summary"), html.indexOf("</summary>"));
+    expect(summary.indexOf('class="history-summary-input"')).toBeLessThan(summary.indexOf("history-record-time"));
+  });
+
   it("renders UI results so selections and confirmations are visible in history", () => {
     const record: DextHistoryRecord = {
       id: "ui-result",
@@ -368,6 +382,23 @@ describe("Dext history rendering", () => {
     expect(html).toContain("history-file-reference");
     expect(html).toContain("pathx.py 55-66");
     expect(html).toContain(token);
+  });
+
+  it("does not syntax-highlight conversational prose in history input", () => {
+    const attachment = "@.dext-global/attachments/0123456789abcdef01234567.png";
+    const record: DextHistoryRecord = {
+      id: "plain-prose",
+      createdAt: 1,
+      input: `${attachment} 还有Build按钮要不要改成plan的主题色（深金色）?`,
+      process: [],
+      output: ""
+    };
+
+    const html = renderHistoryRecord(record);
+    expect(html).toContain("还有Build按钮要不要改成plan的主题色");
+    expect(html).toContain("history-file-reference");
+    expect(html).not.toContain("tok-variableName");
+    expect(html).not.toContain("tok-keyword");
   });
 
   it("syntax-highlights code-mode Input in rendered history", () => {

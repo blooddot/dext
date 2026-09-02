@@ -214,8 +214,23 @@ function inputReferenceChip(reference: ContextReferenceOccurrence): string {
   return `<span class="attachment-chip history-file-reference" title="${title}"><button class="attachment-open" type="button" title="Open ${escapeHtml(label)}" aria-label="Open ${escapeHtml(label)}"${open}><i class="codicon codicon-${referenceIcon(reference)}"></i><span class="attachment-label">${escapeHtml(label)}</span></button></span>`;
 }
 
+/** History does not persist the composer mode, so avoid applying the Dext
+ * (Python) highlighter to ordinary conversational prose. */
+function looksLikeDextCode(source: string): boolean {
+  const first = source.trimStart();
+  return /^(?:(?:await|const|let|var)\s+)?[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*\s*(?:\(|=)/.test(first);
+}
+
+function plainInputSource(source: string): string {
+  return inputReferenceDisplayParts(source).map((part) => part.kind === "ref"
+    ? inputReferenceChip(part.reference)
+    : escapeHtml(part.value)
+  ).join("");
+}
+
 function renderedInputSource(source: string): string {
   const normalized = normalizeInputReferenceSource(source);
+  if (!looksLikeDextCode(normalized)) return plainInputSource(normalized);
   const parts = inputReferenceDisplayParts(normalized);
   const references = parts.filter((part): part is Extract<typeof part, { kind: "ref" }> => part.kind === "ref");
   if (!references.length) return highlightDext(normalized);
@@ -288,7 +303,7 @@ function resultBody(result: DextResult): string {
 
 function planLink(planPath: string): string {
   const title = escapeHtml(planPath);
-  const label = escapeHtml(planPath.split("/").pop() ?? planPath);
+  const label = escapeHtml(`Plan: ${planPath.split("/").pop() ?? planPath}`);
   return `<div class="plan-actions"><span class="attachment-chip history-file-reference" title="${title}"><button class="attachment-open" type="button" title="Open ${label}" aria-label="Open ${label}" data-open-file-reference="${title}"><i class="codicon codicon-checklist"></i><span class="attachment-label">${label}</span></button></span></div>`;
 }
 
@@ -402,7 +417,11 @@ const SESSION_ACTION_HINT = "Right-click for conversation actions";
 export function renderHistoryRecord(record: DextHistoryRecord, sessionId?: string): string {
   const input = normalizeInputReferenceSource(record.input);
   const response = parsedResponse(record);
-  const firstLine = inputReferenceDisplayText(input).split(/\r?\n/, 1)[0]!.slice(0, 140);
+  const planExecution = response?.executions.find((item) => item.result.kind === "chat" && item.result.executePlan);
+  const planPath = planExecution?.result.kind === "chat" ? planExecution.result.planPath : undefined;
+  const firstLine = planPath
+    ? `Plan: ${planPath.split("/").pop() ?? planPath}`
+    : inputReferenceDisplayText(input).split(/\r?\n/, 1)[0]!.slice(0, 140);
   const duration = response?.executions.reduce((total, item) => total + item.durationMs, 0) ?? 0;
   const processHtml = process(record.process);
   const outputHtml = record.error
@@ -420,7 +439,8 @@ export function renderHistoryRecord(record: DextHistoryRecord, sessionId?: strin
   // The turn actions are a context menu with no visual affordance of its own,
   // so the row says where to find them.
   const hint = sessionId ? ` title="${TURN_ACTION_HINT}"` : "";
-  return `<details class="history-record"${context}><summary${hint}>${chevron()}<span>${escapeHtml(dateLabel(record.createdAt))}</span><span class="history-summary-input">${escapeHtml(firstLine)}</span><span class="history-meta">${duration ? formatDuration(duration) : ""}</span></summary><div class="history-record-body"><details class="history-disclosure"><summary>${chevron()}<span>Input</span>${copyButton(input)}</summary><pre class="dext-source">${renderedInputSource(input)}</pre></details>${processHtml ? `<details class="history-disclosure"><summary>${chevron()}<span>Process</span></summary><div class="disclosure-body">${processHtml}</div></details>` : ""}<details class="history-disclosure" open><summary>${chevron()}<span>Output</span>${copyButton(outputCopy)}</summary><div class="disclosure-body">${outputHtml}</div></details></div></details>`;
+  const inputHtml = planPath ? "" : `<details class="history-disclosure"><summary>${chevron()}<span>Input</span>${copyButton(input)}</summary><pre class="dext-source">${renderedInputSource(input)}</pre></details>`;
+  return `<details class="history-record"${context}><summary${hint}>${chevron()}<span class="history-summary-input">${escapeHtml(firstLine)}</span><span class="history-meta">${duration ? formatDuration(duration) : ""}</span><span class="history-meta history-record-time">${escapeHtml(dateLabel(record.createdAt))}</span></summary><div class="history-record-body">${inputHtml}${processHtml ? `<details class="history-disclosure"><summary>${chevron()}<span>Process</span></summary><div class="disclosure-body">${processHtml}</div></details>` : ""}<details class="history-disclosure" open><summary>${chevron()}<span>Output</span>${copyButton(outputCopy)}</summary><div class="disclosure-body">${outputHtml}</div></details></div></details>`;
 }
 
 /** The name a conversation carries until the user renames it: the opening line

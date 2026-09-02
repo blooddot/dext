@@ -50,6 +50,7 @@
     "onCommand:dext.configureCompletionModel",
     "onCommand:dext.testCompletionModel",
     "onCommand:dext.diagnoseCompletion",
+    "onCommand:dext.setActivePlan",
     "onCommand:dext.verifyMcpServer",
     "onCommand:dext.viewMcp",
     "onCommand:dext.addMcp",
@@ -224,6 +225,11 @@
         "command": "dext.addFileToChat",
         "title": "Dext: Add to Dext Input",
         "icon": "$(files)"
+      },
+      {
+        "command": "dext.setActivePlan",
+        "title": "Dext: Active Plan",
+        "icon": "$(checklist)"
       },
       {
         "command": "dext.configureAgent",
@@ -526,6 +532,11 @@
           "command": "dext.addFileToChat",
           "when": "resourceScheme != untitled",
           "group": "dext@1"
+        },
+        {
+          "command": "dext.setActivePlan",
+          "when": "dext.planMode && resourceFilename =~ /\\.plan\\.md$/",
+          "group": "dext@2"
         }
       ],
       "editor/title/context": [
@@ -533,6 +544,11 @@
           "command": "dext.addFileToChat",
           "when": "resourceScheme != untitled",
           "group": "dext@1"
+        },
+        {
+          "command": "dext.setActivePlan",
+          "when": "dext.planMode && resourceFilename =~ /\\.plan\\.md$/",
+          "group": "dext@2"
         }
       ],
       "view/title": [
@@ -766,16 +782,14 @@
           "type": "string",
           "default": "workspace-write",
           "enum": [
-            "read-only",
             "workspace-write",
             "full-access"
           ],
           "enumDescriptions": [
-            "Agent turns propose a patch and change nothing until the change is accepted in Dext Output.",
-            "Agent turns edit the trusted workspace directly, the way the selected CLI would on its own.",
+            "Agent and Plan turns edit the trusted workspace directly, the way the selected CLI would on its own.",
             "Agent turns run without the provider sandbox and may touch anything the CLI can reach."
           ],
-          "description": "Starting permission tier for Agent mode. The composer's Permission control overrides this for the current conversation. Ask and Plan are always read-only."
+          "description": "Starting write scope for Agent and Plan modes. The composer's Permission control overrides this for the current conversation. Ask is always read-only."
         },
         "dext.agentCliArgs": {
           "type": "object",

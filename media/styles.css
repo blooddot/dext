@@ -4,6 +4,8 @@
   font-size: var(--vscode-font-size);
   color: var(--vscode-foreground);
   background: var(--vscode-sideBar-background);
+  /* Keep Full access distinct from Plan's warning/ochre accent. */
+  --dext-full-access-accent: #c03e1b;
 }
 
 html,
@@ -43,6 +45,76 @@ body {
   background: var(--vscode-editorGroupHeader-tabsBackground, var(--vscode-sideBar-background));
   border-bottom: 1px solid var(--vscode-editorGroupHeader-tabsBorder, var(--vscode-sideBar-border, var(--vscode-widget-border)));
 }
+.plan-toolbar {
+  --plan-accent: var(--vscode-notificationsWarningIcon-foreground, #cca700);
+  --plan-accent-fill: color-mix(
+    in srgb,
+    var(--plan-accent) 52%,
+    var(--vscode-editor-background)
+  );
+  --plan-accent-foreground: color-mix(
+    in srgb,
+    var(--plan-accent) 88%,
+    var(--vscode-editor-foreground)
+  );
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--vscode-sideBar-border, var(--vscode-widget-border));
+  background: var(--vscode-editor-background);
+}
+.plan-toolbar[hidden] { display: none; }
+.plan-target-group {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex: 0 1 auto;
+}
+.plan-target {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  border: 0;
+  padding: 4px 6px;
+  color: var(--vscode-textLink-foreground, #3794ff);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.plan-target:hover { color: var(--vscode-textLink-activeForeground, var(--vscode-textLink-foreground, #3794ff)); text-decoration: underline; }
+.plan-target:focus-visible,
+.plan-choose:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+.plan-target span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-choose {
+  width: 22px;
+  height: 24px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+  cursor: pointer;
+}
+.plan-choose:hover:not(:disabled) { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); }
+.plan-target:disabled,
+.plan-choose:disabled { opacity: 0.5; cursor: default; }
+.plan-status { flex: 0 0 auto; color: var(--vscode-descriptionForeground); font-size: 0.9em; }
+button.primary.plan-build {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  color: var(--plan-accent-foreground);
+  background: var(--plan-accent-fill);
+}
+.plan-build:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--plan-accent-fill) 86%, var(--vscode-editor-foreground));
+}
+.plan-build[hidden] { display: none; }
 
 .conversation-tabs::-webkit-scrollbar {
   display: none;
@@ -1599,13 +1671,13 @@ main {
 #permission-control.is-full-access {
   border-color: color-mix(
     in srgb,
-    var(--vscode-notificationsWarningIcon-foreground, #cca700) 68%,
+    var(--dext-full-access-accent) 68%,
     var(--vscode-widget-border)
   );
-  color: var(--vscode-notificationsWarningIcon-foreground, #cca700);
+  color: var(--dext-full-access-accent);
   background: color-mix(
     in srgb,
-    var(--vscode-notificationsWarningIcon-foreground, #cca700) 14%,
+    var(--dext-full-access-accent) 10%,
     var(--vscode-editor-background)
   );
   font-weight: 600;
@@ -1617,15 +1689,15 @@ main {
 
 #permission-control.is-full-access:hover,
 #permission-control.is-full-access[aria-expanded="true"] {
-  border-color: var(--vscode-notificationsWarningIcon-foreground, #cca700);
+  border-color: var(--dext-full-access-accent);
   background: color-mix(
     in srgb,
-    var(--vscode-notificationsWarningIcon-foreground, #cca700) 26%,
+    var(--dext-full-access-accent) 18%,
     var(--vscode-editor-background)
   );
   box-shadow: 0 0 0 1px color-mix(
     in srgb,
-    var(--vscode-notificationsWarningIcon-foreground, #cca700) 22%,
+    var(--dext-full-access-accent) 16%,
     transparent
   );
 }
@@ -1660,13 +1732,12 @@ main {
 }
 
 .input-section[data-mode="plan"] {
-  /* Terminal yellow can be almost fluorescent in high-contrast themes. The
-     warning token is a calmer ochre, and the filled action is deliberately
-     mixed down to the deeper treatment used by Cursor's Plan control. */
+  /* Keep Plan's ochre accent readable without making the action buttons feel
+     muted against the editor background. */
   --composer-accent: var(--vscode-notificationsWarningIcon-foreground, #cca700);
   --composer-accent-fill: color-mix(
     in srgb,
-    var(--composer-accent) 38%,
+    var(--composer-accent) 52%,
     var(--vscode-editor-background)
   );
 }
@@ -1685,7 +1756,7 @@ main {
 .input-section[data-mode="plan"] {
   --composer-accent-foreground: color-mix(
     in srgb,
-    var(--composer-accent) 72%,
+    var(--composer-accent) 88%,
     var(--vscode-editor-foreground)
   );
 }
@@ -1806,18 +1877,18 @@ main {
 }
 
 /* Full access is deliberately distinct: it can work outside the workspace,
-   so the yellow treatment remains visible both before and after it is picked. */
+   so the red-orange treatment remains visible both before and after it is picked. */
 .composer-menu-option.composer-menu-option-warning {
-  color: var(--vscode-notificationsWarningIcon-foreground, #cca700);
+  color: var(--dext-full-access-accent);
 }
 
 .composer-menu-option.composer-menu-option-warning[aria-checked="true"],
 .composer-menu-option.composer-menu-option-warning:hover,
 .composer-menu-option.composer-menu-option-warning:focus-visible {
-  color: var(--vscode-notificationsWarningIcon-foreground, #cca700);
+  color: var(--dext-full-access-accent);
   background: color-mix(
     in srgb,
-    var(--vscode-notificationsWarningIcon-foreground, #cca700) 16%,
+    var(--dext-full-access-accent) 8%,
     var(--vscode-menu-background, var(--vscode-editorWidget-background))
   );
 }
@@ -1923,9 +1994,11 @@ button.primary {
   color: var(--vscode-button-foreground);
   background: var(--vscode-button-background);
   cursor: pointer;
+  position: relative;
+  overflow: hidden;
 }
 
-button.primary:hover {
+button.primary:hover:not(:disabled) {
   background: var(--vscode-button-hoverBackground);
 }
 
@@ -1943,10 +2016,64 @@ button.primary:hover {
     var(--vscode-editor-foreground)
   );
 }
+button.primary.plan-build:hover:not(:disabled) {
+  background: color-mix(
+    in srgb,
+    var(--plan-accent-fill) 86%,
+    var(--vscode-editor-foreground)
+  );
+}
 
 button.primary:disabled {
   cursor: default;
   opacity: 0.55;
+}
+
+/* A running turn keeps a single, subtle activity signal on its Stop action.
+   The sheen is clipped to the pill so it reads as an edge sweep instead of a
+   second moving control. */
+button.primary.executing {
+  --running-accent: var(--composer-accent-fill, var(--vscode-button-background));
+  animation: dext-running-edge 1.8s ease-in-out infinite;
+}
+
+button.primary.plan-build.executing {
+  --running-accent: var(--plan-accent-fill);
+}
+
+button.primary.executing::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    108deg,
+    transparent 20%,
+    color-mix(in srgb, var(--running-accent) 38%, white) 48%,
+    transparent 76%
+  );
+  transform: translateX(-125%);
+  animation: dext-running-sheen 1.8s ease-in-out infinite;
+}
+
+button.primary.executing > * {
+  position: relative;
+  z-index: 1;
+}
+
+@keyframes dext-running-edge {
+  0%, 100% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--running-accent) 34%, transparent); }
+  50% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--running-accent) 82%, transparent), 0 0 10px color-mix(in srgb, var(--running-accent) 28%, transparent); }
+}
+
+@keyframes dext-running-sheen {
+  0% { transform: translateX(-125%); }
+  58%, 100% { transform: translateX(125%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button.primary.executing { animation: none; }
+  button.primary.executing::after { animation: none; opacity: 0; }
 }
 
 .problems-status,

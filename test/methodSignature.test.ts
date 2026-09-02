@@ -10,6 +10,9 @@ describe("method signatures", () => {
     expect(formatMethodSignature(agent!)).toBe(
       "agent(input: string, apply?: boolean = True, workspace?: dir) -> AgentResult"
     );
+    expect(formatMethodSignature(agent!, { includeInternal: true })).toBe(
+      "agent(input: string, apply?: boolean = True, skills?: string | string[], rules?: string | string[], workspace?: dir) -> AgentResult"
+    );
   });
 
   it("renders array, enum, accepted, optional, and default field contracts", () => {

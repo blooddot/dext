@@ -84,11 +84,12 @@ export function activeCodeSelection(): vscode.TextEditor | undefined {
  * to create it: the agent can inspect a large file on demand, while pasted
  * content continues to be bounded before Dext stores it. */
 export async function fileAttachment(uri: vscode.Uri): Promise<DextFileReference> {
-  if (!vscode.workspace.getWorkspaceFolder(uri)) {
-    throw new Error("Dext files must stay inside the current workspace.");
-  }
   const stat = await vscode.workspace.fs.stat(uri);
   if ((stat.type & vscode.FileType.Directory) !== 0) throw new Error("Choose a file, not a directory.");
+  if (!vscode.workspace.getWorkspaceFolder(uri)) {
+    if (uri.scheme !== "file") throw new Error("Only local external files can be added to Dext.");
+    return formatDextFilePathReference(uri.toString());
+  }
   const includeWorkspaceFolder = (vscode.workspace.workspaceFolders?.length ?? 0) > 1;
   return formatDextFilePathReference(vscode.workspace.asRelativePath(uri, includeWorkspaceFolder));
 }

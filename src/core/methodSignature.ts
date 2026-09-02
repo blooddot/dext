@@ -43,7 +43,16 @@ export function methodResultType(method: Pick<RegisteredCallable, "output">): st
     ?? `${method.output.kind.slice(0, 1).toUpperCase()}${method.output.kind.slice(1)}Result`;
 }
 
-/** Render the complete public call contract for a Dext API. */
-export function formatMethodSignature(method: Pick<RegisteredCallable, "id" | "input" | "output">): string {
-  return `${method.id}(${method.input.filter((field) => !field.internal).map(formatMethodParameter).join(", ")}) -> ${methodResultType(method)}`;
+export interface MethodSignatureOptions {
+  /** Include runtime-controlled fields such as conversation rules and skills. */
+  includeInternal?: boolean;
+}
+
+/** Render the call contract for a Dext API. */
+export function formatMethodSignature(
+  method: Pick<RegisteredCallable, "id" | "input" | "output">,
+  options: MethodSignatureOptions = {}
+): string {
+  const fields = options.includeInternal ? method.input : method.input.filter((field) => !field.internal);
+  return `${method.id}(${fields.map(formatMethodParameter).join(", ")}) -> ${methodResultType(method)}`;
 }

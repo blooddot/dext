@@ -456,6 +456,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         sidebar.showChat();
       })
     ),
+    vscode.commands.registerCommand("dext.setActivePlan", (resource?: vscode.Uri) =>
+      reportCommandError(async () => {
+        const uri = resource ?? vscode.window.activeTextEditor?.document.uri;
+        if (!uri) throw new Error("Open a Dext plan file before setting it as active.");
+        await sidebar.setActivePlanFromUri(uri);
+        await focusSidebar();
+        sidebar.showChat();
+      })
+    ),
     vscode.commands.registerCommand("dext.configureAgent", async () => {
       const profiles = application.agentProfiles();
       const picked = await vscode.window.showQuickPick(

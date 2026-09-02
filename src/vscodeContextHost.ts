@@ -50,6 +50,22 @@ async function snapshot(
 
 function workspaceFileUri(filePath: string): { uri: vscode.Uri; range?: vscode.Range } | undefined {
   const parsed = parseFileReference(filePath);
+  const absoluteUri = /^file:\/\//i.test(parsed.path)
+    ? vscode.Uri.parse(parsed.path, true)
+    : /^[A-Za-z]:[\\/]/.test(parsed.path) || (parsed.path.startsWith("/") && !parsed.path.startsWith("//"))
+      ? vscode.Uri.file(parsed.path)
+      : undefined;
+  if (absoluteUri) {
+    const range = parsed.range
+      ? new vscode.Range(
+        parsed.range.start.line,
+        parsed.range.start.character,
+        parsed.range.end.line,
+        parsed.range.end.character
+      )
+      : undefined;
+    return { uri: absoluteUri, ...(range ? { range } : {}) };
+  }
   const folders = vscode.workspace.workspaceFolders;
   let folder = folders?.[0];
   if (!folder) return undefined;
@@ -107,9 +123,10 @@ function workspaceDirectoryUri(directoryPath: string): vscode.Uri | undefined {
 
 async function validatedDocumentRange(
   uri: vscode.Uri,
-  range?: vscode.Range
+  range?: vscode.Range,
+  workspaceOnly = true
 ): Promise<{ document: vscode.TextDocument; range?: vscode.Range }> {
-  if (!vscode.workspace.getWorkspaceFolder(uri)) {
+  if (workspaceOnly && !vscode.workspace.getWorkspaceFolder(uri)) {
     throw new Error("Files must stay inside the current workspace.");
   }
   const document = await vscode.workspace.openTextDocument(uri);
@@ -119,11 +136,11 @@ async function validatedDocumentRange(
   return { document, ...(range ? { range } : {}) };
 }
 
-export async function openWorkspaceDocument(uri: vscode.Uri, range?: Range): Promise<void> {
+export async function openWorkspaceDocument(uri: vscode.Uri, range?: Range, workspaceOnly = true): Promise<void> {
   const vscodeRange = range
     ? new vscode.Range(range.start.line, range.start.character, range.end.line, range.end.character)
     : undefined;
-  const validated = await validatedDocumentRange(uri, vscodeRange);
+  const validated = await validatedDocumentRange(uri, vscodeRange, workspaceOnly);
   const editor = await vscode.window.showTextDocument(validated.document, {
     preview: false,
     viewColumn: vscode.ViewColumn.Active
@@ -153,7 +170,7 @@ export async function openWorkspaceFileReference(filePath: string): Promise<void
     await vscode.commands.executeCommand("vscode.open", target.uri);
     return;
   }
-  const validated = await validatedDocumentRange(target.uri, target.range);
+  const validated = await validatedDocumentRange(target.uri, target.range, Boolean(vscode.workspace.getWorkspaceFolder(target.uri)));
   const editor = await vscode.window.showTextDocument(validated.document, {
     preview: false,
     viewColumn: vscode.ViewColumn.Active
@@ -169,13 +186,12 @@ export async function openWorkspaceFileReference(filePath: string): Promise<void
 export async function openDextFileReference(filePath: string, storage: DextStorage): Promise<void> {
   filePath = filePath.trim().replace(/^@(?=\.dext(?:-global)?\/)/i, "");
   const localLink = localFileLink(filePath);
-  if (localLink) return openWorkspaceDocument(vscode.Uri.file(localLink.path), localLink.range);
+  if (localLink) return openWorkspaceDocument(vscode.Uri.file(localLink.path), localLink.range, false);
   // Markdown output may use a standard file URL instead of a workspace-relative
-  // path. Keep that useful, but validate it through openWorkspaceDocument so a
-  // Webview can never open a file outside the current workspace.
+  // path. Keep that useful and open explicitly supplied local file references.
   try {
     const uri = vscode.Uri.parse(filePath, true);
-    if (uri.scheme === "file") return openWorkspaceDocument(uri);
+    if (uri.scheme === "file") return openWorkspaceDocument(uri, undefined, false);
   } catch {
     // Fall through to the ordinary reference resolver, which will report an
     // invalid relative path with its usual error message.
@@ -211,7 +227,7 @@ export class VsCodeContextHost implements ContextHost {
     const target = workspaceFileUri(filePath);
     if (!target) return undefined;
     if (!target.range) return snapshot(target.uri);
-    const { document, range } = await validatedDocumentRange(target.uri, target.range);
+    const { document, range } = await validatedDocumentRange(target.uri, target.range, Boolean(vscode.workspace.getWorkspaceFolder(target.uri)));
     if (!range) return undefined;
     return {
       uri: target.uri.toString(),

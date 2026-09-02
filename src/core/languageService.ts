@@ -56,6 +56,18 @@ interface VisibleMethod {
   method: RegisteredCallable;
 }
 
+const CONVERSATION_METHODS = new Set(["agent", "ask", "plan"]);
+
+function inputFields(method: RegisteredCallable): readonly FieldDefinition[] {
+  return CONVERSATION_METHODS.has(method.id)
+    ? method.input
+    : method.input.filter((field) => !field.internal);
+}
+
+function signatureOptions(method: RegisteredCallable): { includeInternal: true } | undefined {
+  return CONVERSATION_METHODS.has(method.id) ? { includeInternal: true } : undefined;
+}
+
 function openCall(source: string, cursor: number): OpenCall | undefined {
   const stack: number[] = [];
   let quote: "'" | '"' | undefined;
@@ -272,8 +284,7 @@ export class DextLanguageService {
     if (/\bmain\([^)]*$/.test(before)) {
       const definition = apiId ? this.registry.get(apiId) : undefined;
       if (definition) {
-        return definition.input
-          .filter((field) => !field.internal)
+        return inputFields(definition)
           .map((field, index) => ({
             ...item(field.name, `${field.name}: `, formatMethodParameter(field), "parameter"),
             sortText: String(index).padStart(4, "0")
@@ -310,7 +321,7 @@ export class DextLanguageService {
       const rest = method.id.slice(namespace.length + 1);
       if (!rest.includes(".") && rest.startsWith(fragment)) names.set(rest, method);
     }
-    return [...names].map(([label, method]) => item(label, label, formatMethodSignature(method), "method"));
+    return [...names].map(([label, method]) => item(label, label, formatMethodSignature(method, signatureOptions(method)), "method"));
   }
 
   inputDocument(source: string): WorkflowDocumentState {
@@ -475,7 +486,7 @@ export class DextLanguageService {
           [...call.body.matchAll(/([A-Za-z_][A-Za-z0-9_-]*)\s*=/g)].map((match) => match[1])
         );
         const fragment = /[A-Za-z_][A-Za-z0-9_]*$/.exec(segment)?.[0] ?? "";
-        const parameters = method.input.filter((field) => !field.internal);
+        const parameters = inputFields(method);
         // Prefer the first unused parameter at the current positional slot.
         // This makes the common `foo(first=..., ` flow surface the next field
         // immediately, while keeping declaration order for the rest.
@@ -549,7 +560,7 @@ export class DextLanguageService {
         return {
           rangeStart: from,
           rangeEnd: to,
-          label: formatMethodSignature(method),
+          label: formatMethodSignature(method, signatureOptions(method)),
           documentation: method.description
         };
       }
@@ -594,7 +605,7 @@ export class DextLanguageService {
     const call = /([A-Za-z_][A-Za-z0-9_.-]*)\(([^()]*)$/.exec(source.slice(0, cursor));
     const method = call ? this.resolveMethod(source, call[1] ?? "", customApisAreGlobal) : undefined;
     if (!call || !method) return undefined;
-    const parameters = method.input.filter((field) => !field.internal);
+    const parameters = inputFields(method);
     const body = call[2] ?? "";
     const segment = activeArgument(body);
     const named = /^\s*([A-Za-z_][A-Za-z0-9_-]*)\s*=/.exec(segment)?.[1];
@@ -605,7 +616,7 @@ export class DextLanguageService {
     const namedIndex = named ? parameters.findIndex((field) => field.name === named) : -1;
     const activeParameter = namedIndex >= 0 ? namedIndex : positionalIndex;
     return {
-      label: formatMethodSignature(method),
+      label: formatMethodSignature(method, signatureOptions(method)),
       documentation: method.description,
       activeParameter,
       parameters: parameters.map((field) => ({

@@ -168,6 +168,13 @@ export type WorkflowStatement =
     finalizer: WorkflowStatement[];
     from: number;
     to: number;
+  }
+  | {
+    /** Return from a custom API immediately with the evaluated result. */
+    kind: "return";
+    expression: WorkflowExpression;
+    from: number;
+    to: number;
   };
 
 export interface WorkflowProgram {
@@ -273,6 +280,9 @@ export interface ChatResult extends DextResultBase {
   text: string;
   /** Workspace-relative path of the saved plan document, set only by Plan mode. */
   planPath?: string;
+  /** The host is building an existing plan; keep the turn in Plan mode but
+   * send the implementation request directly instead of creating a new plan. */
+  executePlan?: boolean;
 }
 
 /** Result of a continuous agent task. A patch is present when the Agent
@@ -421,6 +431,10 @@ export interface ResolvedInvocation {
 
 export interface ExecutionMetadata {
   instruction?: string;
+  /** Explicit Plan document selected by the host for a revise turn. */
+  planPath?: string;
+  /** Build an existing plan while keeping the turn in Plan mode. */
+  executePlan?: boolean;
   agent?: string;
   model?: string;
   reasoningEffort?: string;

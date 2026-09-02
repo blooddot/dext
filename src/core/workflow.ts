@@ -298,9 +298,16 @@ class Compiler {
         this.error("A custom API main function must return a value.", node.from, node.to);
         return undefined;
       }
+      if (this.returnType && typeName(this.returnType) !== typeName(value.type)) {
+        this.error(
+          `All return statements must return the same type (already ${typeName(this.returnType)}, got ${typeName(value.type)}).`,
+          node.from,
+          node.to
+        );
+      }
       this.returnExpression = value.expression;
-      this.returnType = value.type;
-      return undefined;
+      if (!this.returnType) this.returnType = value.type;
+      return { kind: "return", expression: value.expression, from: node.from, to: node.to };
     }
     this.error(
       `${node.name.replace(/Statement$/, "")} is not allowed in Dext workflows.`,

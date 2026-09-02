@@ -13,6 +13,8 @@ export interface DextHistoryLimits {
 
 export const DEFAULT_HISTORY_LIMITS: DextHistoryLimits = { maxTurns: 100, maxOutputLength: 200_000 };
 
+export type PlanStatus = "new" | "active" | "running" | "completed" | "failed";
+
 export interface DextHistoryRecord {
   id: string;
   createdAt: number;
@@ -31,6 +33,9 @@ export interface DextHistorySession {
   createdAt: number;
   updatedAt: number;
   turns: DextHistoryRecord[];
+  /** Explicit Plan target and lifecycle, kept with the conversation tab. */
+  activePlanPath?: string;
+  planStatus?: PlanStatus;
 }
 
 function bounded(value: string, maxOutputLength: number): string {
@@ -104,6 +109,18 @@ export class DextHistoryStore {
   async remove(sessionId: string): Promise<void> {
     await this.mutate(async () => {
       const sessions = this.list().filter((session) => session.id !== sessionId);
+      await this.state.update(HISTORY_KEY, sessions);
+    });
+  }
+
+  async updatePlanContext(sessionId: string, activePlanPath: string | undefined, planStatus: PlanStatus): Promise<void> {
+    await this.mutate(async () => {
+      const sessions = this.list();
+      const session = sessions.find((item) => item.id === sessionId);
+      if (!session) return;
+      if (activePlanPath) session.activePlanPath = activePlanPath;
+      else delete session.activePlanPath;
+      session.planStatus = planStatus;
       await this.state.update(HISTORY_KEY, sessions);
     });
   }

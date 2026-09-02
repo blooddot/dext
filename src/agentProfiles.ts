@@ -30,17 +30,20 @@ export interface AgentModelOption {
   serviceTiers: string[];
 }
 
-/** How much of the machine an Agent turn may touch. `read-only` proposes a
- * patch for review, `workspace-write` edits the trusted workspace, and
- * `full-access` drops the provider sandbox entirely. */
+/** Provider-level access used internally for conversations and typed calls. */
 export type AgentPermission = "read-only" | "workspace-write" | "full-access";
 
-export const AGENT_PERMISSIONS: readonly AgentPermission[] = ["read-only", "workspace-write", "full-access"];
+/** Agent and Plan expose write scopes only. Ask is the dedicated read-only
+ * mode; the internal `read-only` permission remains available to it and to
+ * preview-only typed Agent calls. */
+export type WritableAgentPermission = Exclude<AgentPermission, "read-only">;
+
+export const AGENT_PERMISSIONS: readonly WritableAgentPermission[] = ["workspace-write", "full-access"];
 
 export interface AgentSelection {
   mode?: "agent" | "ask" | "plan" | "code";
-  /** Only Agent mode reads this; Ask and Plan are read-only by definition. */
-  permission?: AgentPermission;
+  /** Agent and Plan select a write scope; Ask always runs read-only. */
+  permission?: WritableAgentPermission;
   profileId?: string;
   model?: string;
   reasoningEffort?: string;
