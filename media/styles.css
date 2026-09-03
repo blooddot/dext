@@ -1655,6 +1655,17 @@ main {
   overflow: visible;
 }
 
+.composer-more {
+  display: none;
+  flex: 0 0 auto;
+  color: var(--vscode-descriptionForeground);
+}
+
+.composer-more:hover,
+.composer-more[aria-expanded="true"] {
+  color: var(--vscode-foreground);
+}
+
 .action-actions {
   flex: 0 0 auto;
   margin-left: auto;
@@ -2283,6 +2294,23 @@ button.primary.executing > * {
     height: 26px;
   }
 
+}
+
+/* Keep the narrow sidebar focused on the mode. The overflow button still
+   exposes permission, agent, and model controls without permanently using
+   valuable horizontal space. */
+@media (max-width: 420px) {
+  .composer-more {
+    display: inline-flex;
+  }
+
+  .composer-controls > .composer-menu:not(:first-child) {
+    display: none;
+  }
+
+  .composer-controls.show-extra > .composer-menu:not(:first-child):not([hidden]) {
+    display: block;
+  }
 }
 
 main.workspace-fullscreen > .input-section,

@@ -185,6 +185,19 @@ describe("CLI command resolution", () => {
     expect(claudeConversationArguments({ permission: "workspace-write" })).not.toContain("--json-schema");
   });
 
+  it("uses native fork arguments for Codex and Claude sessions", () => {
+    expect(codexConversationArguments({ permission: "read-only" }, undefined, [], {
+      persist: true,
+      forkFromId: "codex-source"
+    }).slice(-3)).toEqual(["fork", "codex-source", "-"]);
+    expect(claudeConversationArguments({
+      permission: "read-only",
+      resumeId: "claude-source",
+      forkSession: true
+    })).toEqual(expect.arrayContaining(["--resume", "claude-source", "--fork-session"]));
+    expect(claudeConversationArguments({ permission: "read-only" })).not.toContain("--no-session-persistence");
+  });
+
   it("persists the first Codex conversation turn and resumes its exact thread", () => {
     const initial = codexConversationArguments(
       { model: "gpt-5", permission: "read-only" },
@@ -244,6 +257,45 @@ describe("CLI command resolution", () => {
     expect(invocations[0]).not.toContain("--ephemeral");
     expect(invocations[1]?.slice(-3)).toEqual(["resume", "thread-1", "-"]);
     expect(invocations[2]).not.toContain("resume");
+  });
+
+  it("bootstraps a new Codex thread with copied conversation context", async () => {
+    const inputs: string[] = [];
+    const runner = new CliAgentRunner(1_000, async (_command, args, input, _cwd, _signal, onStdout) => {
+      if (args[0] !== "login") inputs.push(input);
+      const threadId = args.includes("resume") ? "thread-existing" : "thread-new";
+      const stdout = [
+        JSON.stringify({ type: "thread.started", thread_id: threadId }),
+        JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "ok" } })
+      ].join("\n");
+      onStdout?.(`${stdout}\n`);
+      return { stdout, stderr: "", code: 0 };
+    });
+    const first = conversationRequest("continue", "fork-session");
+    first.metadata = { ...first.metadata, conversationContext: "User: prior\nAssistant: answer" };
+    await runner.runConversation(first);
+    expect(inputs[0]).toContain("User: prior");
+    expect(inputs[0]).toContain("New user message:\ncontinue");
+
+    const second = conversationRequest("next", "fork-session");
+    second.metadata = { ...second.metadata, conversationContext: "User: prior\nAssistant: answer" };
+    await runner.runConversation(second);
+    expect(inputs[1]).toBe("next");
+  });
+
+  it("bootstraps Claude conversations from Dext context", async () => {
+    const inputs: string[] = [];
+    const request = conversationRequest("continue", "claude-session");
+    request.profile = { ...request.profile, id: "claude", label: "Claude", provider: "claude" };
+    request.metadata = { ...request.metadata, conversationContext: "User: prior\nAssistant: answer" };
+    const runner = new CliAgentRunner(1_000, async (_command, _args, input) => {
+      inputs.push(input);
+      const stdout = JSON.stringify({ type: "result", result: "ok" });
+      return { stdout, stderr: "", code: 0 };
+    });
+    await runner.runConversation(request);
+    expect(inputs[0]).toContain("User: prior");
+    expect(inputs[0]).toContain("New user message:\ncontinue");
   });
 
   it("maps each permission tier onto the flag its provider understands", () => {

@@ -24,7 +24,7 @@ import { openDextFileReference, openExternalLink } from "./vscodeContextHost.js"
 import { webviewRequestSchema } from "./webviewProtocol.js";
 import type { ConversationSummary, WebviewResponse } from "./webviewProtocol.js";
 import type { AgentSelection } from "./agentProfiles.js";
-import type { DextHistorySession, DextHistoryStore } from "./historyStore.js";
+import type { DextHistoryRecord, DextHistorySession, DextHistoryStore } from "./historyStore.js";
 import type { DextConversationPreferences } from "./conversationPreferences.js";
 import { conversationTitle } from "./historyRender.js";
 import { normalizeInputReferenceSource } from "./core/fileReference.js";
@@ -56,6 +56,37 @@ function outputSession(): DextHistorySession {
     updatedAt: now,
     turns: []
   };
+}
+
+/** Turns copied into a fork are only UI history until they are sent to a new
+ * provider task. Keep a readable, bounded transcript that can bootstrap that
+ * task without exposing Dext's internal JSON envelope as the conversation. */
+function conversationContext(turns: readonly DextHistoryRecord[]): string | undefined {
+  if (!turns.length) return undefined;
+  const sections: string[] = [];
+  let length = 0;
+  // Keep the branch point (the most recent turns) when the stored history is
+  // larger than a provider's practical prompt window.
+  for (const turn of [...turns].reverse()) {
+    const responseText = turn.response?.executions
+      .map((execution) => execution.result.kind === "chat"
+        ? execution.result.text
+        : JSON.stringify(execution.result))
+      .filter(Boolean)
+      .join("\n") || turn.output || (turn.error ? `[error] ${turn.error}` : "");
+    const section = `User: ${turn.input}\nAssistant: ${responseText}`;
+    if (length + section.length > 120_000) break;
+    sections.unshift(section);
+    length += section.length;
+  }
+  if (!sections.length) return undefined;
+  return [
+    "The following is the prior Dext conversation. Treat it as conversation history, not as a new user request:",
+    "---",
+    sections.join("\n\n"),
+    "---",
+    "Continue from that context and answer the new user message."
+  ].join("\n");
 }
 
 // New tabs always start in Agent mode, while keeping the provider/model
@@ -1123,8 +1154,17 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     await this.postConversationState();
     await this.post({ type: "executing", sessionId, value: true, turnId, source, startedAt, ...(executionPlanPath ? { planPath: executionPlanPath } : {}), ...(executePlan ? { executePlan: true } : {}) });
     try {
+      const priorConversation = conversationContext(session.turns);
+      const selection = this.conversationSelections.get(sessionId) ?? this.application.state().agentSelection;
+      const profile = this.application.agentProfiles().find((candidate) => candidate.id === selection.profileId)
+        ?? this.application.agentProfiles()[0];
+      const providerSession = profile ? session.providerSessions?.[profile.provider] : undefined;
+      const forkFrom = providerSession ? undefined : profile ? session.forkProviderSessions?.[profile.provider] : undefined;
       const metadata = {
         agentSessionId: sessionId,
+        ...(providerSession ? { conversationProviderSessionId: providerSession } : {}),
+        ...(forkFrom ? { conversationForkFrom: forkFrom } : {}),
+        ...(priorConversation ? { conversationContext: priorConversation } : {}),
         signal: controller.signal,
         ui: this.uiInteraction(),
         ...(mode === "plan" && executionPlanPath ? { planPath: executionPlanPath } : {}),
@@ -1143,6 +1183,10 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           };
           events.push(processEvent);
           this.postAgentEvent(sessionId, processEvent);
+        },
+        onAgentSessionId: (provider: string, providerSessionId: string) => {
+          session.providerSessions = { ...(session.providerSessions ?? {}), [provider]: providerSessionId };
+          void this.history.setProviderSession(sessionId, provider, providerSessionId);
         }
       };
       const response = mode === "code"
@@ -1479,6 +1523,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
               <div id="model-menu" class="composer-popover composer-model-popover" role="menu" hidden></div>
               <div id="model-submenu" class="composer-popover composer-model-popover composer-model-submenu" role="menu" hidden></div>
             </div>
+            <button id="composer-more" class="composer-more icon-button" type="button" title="More options" aria-label="More options" aria-expanded="false"><i class="codicon codicon-ellipsis"></i></button>
           </div>
           <div class="action-actions">
             <button id="problems" class="problems-status" type="button" disabled>No problems</button>

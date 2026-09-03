@@ -33,6 +33,12 @@ export interface DextHistorySession {
   createdAt: number;
   updatedAt: number;
   turns: DextHistoryRecord[];
+  /** Provider-owned session ids, keyed by provider name, used for native
+   * resume/fork operations. */
+  providerSessions?: Record<string, string>;
+  /** Provider session ids from the source conversation. A child consumes the
+   * matching entry when its first turn is sent. */
+  forkProviderSessions?: Record<string, string>;
   /** Explicit Plan target and lifecycle, kept with the conversation tab. */
   activePlanPath?: string;
   planStatus?: PlanStatus;
@@ -169,7 +175,10 @@ export class DextHistoryStore {
 
   // A fork copies turns into a conversation of its own so that continuing it
   // never appends to the conversation it came from.
-  async fork(turns: readonly DextHistoryRecord[]): Promise<DextHistorySession> {
+  async fork(
+    turns: readonly DextHistoryRecord[],
+    providerSessions?: Readonly<Record<string, string>>
+  ): Promise<DextHistorySession> {
     return this.mutate(async () => {
       const createdAt = Date.now();
       const session: DextHistorySession = {
@@ -179,10 +188,23 @@ export class DextHistoryStore {
         turns: turns.map((turn, index) => ({
           ...turn,
           id: `${createdAt}-${index}-${Math.random().toString(36).slice(2, 8)}`
-        }))
+        })),
+        ...(providerSessions && Object.keys(providerSessions).length
+          ? { forkProviderSessions: { ...providerSessions } }
+          : {})
       };
       await this.state.update(HISTORY_KEY, trimSessions([...this.all(), session], this.limits().maxTurns));
       return session;
+    });
+  }
+
+  async setProviderSession(sessionId: string, provider: string, providerSessionId: string): Promise<void> {
+    await this.mutate(async () => {
+      const sessions = this.all();
+      const session = sessions.find((item) => item.id === sessionId);
+      if (!session) return;
+      session.providerSessions = { ...(session.providerSessions ?? {}), [provider]: providerSessionId };
+      await this.state.update(HISTORY_KEY, sessions);
     });
   }
 

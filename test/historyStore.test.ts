@@ -96,11 +96,14 @@ describe("DextHistoryStore", () => {
     await store.addSuccess("second", [], { kind: "workflow", executions: [] }, "session-1");
     const original = store.list()[0]!;
 
-    const forked = await store.fork(original.turns.slice(0, 1));
+    await store.setProviderSession("session-1", "codex", "thread-1");
+    const sourceWithProvider = store.list()[0]!;
+    const forked = await store.fork(sourceWithProvider.turns.slice(0, 1), sourceWithProvider.providerSessions);
 
     expect(forked.turns.map((turn) => turn.input)).toEqual(["first"]);
     // A fork must not share turn identity with the conversation it came from.
     expect(forked.turns[0]?.id).not.toBe(original.turns[0]?.id);
+    expect(forked.forkProviderSessions).toEqual({ codex: "thread-1" });
     expect(store.list().map((session) => session.id)).toEqual([original.id, forked.id]);
     expect(store.list()[0]?.turns).toHaveLength(2);
   });

@@ -192,10 +192,39 @@ describe("AIOA CDP", () => {
       })
     }, { sleep: async () => undefined });
 
-    await expect(runner.runConversation(conversationRequest("Explain this module.")))
+    const request = conversationRequest("Explain this module.");
+    request.metadata = { ...request.metadata, conversationContext: "User: prior\nAssistant: answer" };
+    await expect(runner.runConversation(request))
       .resolves.toBe("Here is the direct answer.");
-    expect(submit).toHaveBeenCalledWith("Explain this module.");
+    expect(submit.mock.calls[0]?.[0]).toContain("User: prior");
+    expect(submit.mock.calls[0]?.[0]).toContain("New user message:\nExplain this module.");
     expect(submit.mock.calls.flat()).not.toContain(expect.stringMatching(/Define API|Request:/));
+  });
+
+  it("uses AIOA's native fork action when the source task is visible", async () => {
+    const submit = vi.fn().mockResolvedValue(undefined);
+    const forkConversation = vi.fn().mockResolvedValue(true);
+    let conversationId = "source-task";
+    const runner = new AioaCdpAgentRunner({
+      open: async () => ({
+        launched: false,
+        page: page({
+          state: async () => ({ busy: false, assistantIds: [], conversationId }),
+          forkConversation: async () => { forkConversation(); conversationId = "forked-task"; return true; },
+          submit,
+          updatesAfter: async () => ({
+            busy: false,
+            messages: [{ id: "assistant-1", text: "forked answer" }],
+            conversationId
+          })
+        })
+      })
+    }, { sleep: async () => undefined });
+    const request = conversationRequest("Continue on the branch.");
+    request.metadata = { ...request.metadata, conversationForkFrom: "source-task" };
+    await expect(runner.runConversation(request)).resolves.toBe("forked answer");
+    expect(forkConversation).toHaveBeenCalledOnce();
+    expect(submit).toHaveBeenCalledWith("Continue on the branch.");
   });
 
   it("uses one compact ask API definition followed by flat requests", () => {

@@ -292,6 +292,11 @@ export function extractConversationText(output: string, provider: AgentProfile["
   return typeof result === "string" ? result : JSON.stringify(result, null, 2);
 }
 
+function bootstrappedConversationInput(context: string | undefined, input: string): string {
+  const prior = context?.trim();
+  return prior ? `${prior}\n\nNew user message:\n${input}` : input;
+}
+
 /** The public JSONL stream announces the durable Codex thread before any turn
  * events. Dext keeps that provider ID separate from its own conversation ID so
  * several open tabs can resume independently without relying on `--last`. */
@@ -303,6 +308,18 @@ export function extractCodexThreadId(output: string): string | undefined {
     if (record.type === "thread.started" && typeof record.thread_id === "string" && record.thread_id.trim()) {
       return record.thread_id;
     }
+  }
+  return undefined;
+}
+
+/** Claude emits the durable session id on its JSONL envelope (usually on the
+ * initial system event, and again on the final result). */
+export function extractClaudeSessionId(output: string): string | undefined {
+  for (const line of output.split(/\r?\n/)) {
+    const event = extractJson(line);
+    if (!event || typeof event !== "object") continue;
+    const sessionId = (event as { session_id?: unknown }).session_id;
+    if (typeof sessionId === "string" && sessionId.trim()) return sessionId;
   }
   return undefined;
 }
@@ -556,7 +573,7 @@ export function claudeCliArguments(
 
 /** Claude's stream mode without a Dext output contract. */
 export function claudeConversationArguments(
-  options: { model?: string; reasoningEffort?: string; permission: AgentPermission },
+  options: { model?: string; reasoningEffort?: string; permission: AgentPermission; resumeId?: string; forkSession?: boolean },
   extraArguments: readonly string[] = []
 ): string[] {
   return [
@@ -564,7 +581,8 @@ export function claudeConversationArguments(
     "--output-format", "stream-json",
     "--verbose",
     "--include-partial-messages",
-    "--no-session-persistence",
+    ...(options.resumeId ? ["--resume", options.resumeId] : []),
+    ...(options.forkSession ? ["--fork-session"] : []),
     "--permission-mode", claudePermissionMode(options.permission),
     ...(options.model ? ["--model", options.model] : []),
     ...(options.reasoningEffort ? ["--effort", options.reasoningEffort] : []),
@@ -604,7 +622,7 @@ export function codexConversationArguments(
   options: { model?: string; reasoningEffort?: string; permission: AgentPermission },
   serviceTier?: string,
   extraArguments: readonly string[] = [],
-  session: { persist?: boolean; resumeId?: string } = {}
+  session: { persist?: boolean; resumeId?: string; forkFromId?: string } = {}
 ): string[] {
   const sandbox = codexSandbox(options.permission);
   return [
@@ -618,7 +636,7 @@ export function codexConversationArguments(
     "--config", 'model_reasoning_summary="detailed"',
     ...(serviceTier ? ["--config", 'service_tier="' + serviceTier + '"'] : []),
     ...extraArguments,
-    ...(session.resumeId ? ["resume", session.resumeId] : []),
+    ...(session.forkFromId ? ["fork", session.forkFromId] : session.resumeId ? ["resume", session.resumeId] : []),
     "-"
   ];
 }
@@ -697,6 +715,9 @@ export class CliAgentRunner implements AgentRunner {
   /** Dext owns the stable UI conversation key; Codex owns the resumable thread
    * UUID. This map joins them while the extension host is alive. */
   private readonly codexConversationSessions = new Map<string, string>();
+  /** Claude's session UUID is likewise kept separate from Dext's conversation
+   * id so a provider-native fork can target the source session. */
+  private readonly claudeConversationSessions = new Map<string, string>();
 
   constructor(
     private timeoutMs = 600_000,
@@ -836,20 +857,23 @@ export class CliAgentRunner implements AgentRunner {
       ? request.permission ?? "workspace-write"
       : "read-only";
     const extraArguments = request.cliArguments ?? [];
-    const conversationKey = request.profile.provider === "codex"
-      ? request.metadata.agentSessionId
-      : undefined;
+    const conversationKey = request.metadata.agentSessionId;
+    const providerSessions = request.profile.provider === "codex"
+      ? this.codexConversationSessions
+      : this.claudeConversationSessions;
     const resumeId = conversationKey
-      ? this.codexConversationSessions.get(conversationKey)
-      : undefined;
+      ? providerSessions.get(conversationKey) ?? request.metadata.conversationProviderSessionId
+      : request.metadata.conversationProviderSessionId;
+    if (conversationKey && resumeId) providerSessions.set(conversationKey, resumeId);
+    const forkFromId = !resumeId ? request.metadata.conversationForkFrom : undefined;
     const args = request.profile.provider === "codex"
       ? codexConversationArguments(
           { ...request, permission },
           serviceTier,
           extraArguments,
-          { persist: Boolean(conversationKey), ...(resumeId ? { resumeId } : {}) }
+          { persist: Boolean(conversationKey), ...(resumeId ? { resumeId } : {}), ...(forkFromId ? { forkFromId } : {}) }
         )
-      : claudeConversationArguments({ ...request, permission }, extraArguments);
+      : claudeConversationArguments({ ...request, permission, ...(resumeId ? { resumeId } : {}), ...(forkFromId ? { forkSession: true } : {}) }, extraArguments);
     const processEnv = await this.processEnvironment(command, request);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(new Error("Agent execution timed out.")), this.timeoutMs);
@@ -863,9 +887,12 @@ export class CliAgentRunner implements AgentRunner {
       const lines = eventBuffer.split(/\r?\n/);
       eventBuffer = lines.pop() ?? "";
       for (const line of lines) {
-        if (conversationKey) {
-          const threadId = extractCodexThreadId(line);
-          if (threadId) this.codexConversationSessions.set(conversationKey, threadId);
+        const providerSessionId = request.profile.provider === "codex"
+          ? extractCodexThreadId(line)
+          : extractClaudeSessionId(line);
+        if (conversationKey && providerSessionId) {
+          providerSessions.set(conversationKey, providerSessionId);
+          request.metadata.onAgentSessionId?.(request.profile.provider, providerSessionId);
         }
         const event = request.profile.provider === "codex"
           ? parseCodexStreamLine(line, streamPhases)
@@ -874,11 +901,17 @@ export class CliAgentRunner implements AgentRunner {
       }
     };
     try {
-      const result = await this.processRunner(command, args, request.input, request.cwd, controller.signal, onStdout, processEnv);
+      const input = (resumeId || forkFromId)
+        ? request.input
+        : bootstrappedConversationInput(request.metadata.conversationContext, request.input);
+      const result = await this.processRunner(command, args, input, request.cwd, controller.signal, onStdout, processEnv);
       if (eventBuffer) {
-        if (conversationKey) {
-          const threadId = extractCodexThreadId(eventBuffer);
-          if (threadId) this.codexConversationSessions.set(conversationKey, threadId);
+        const providerSessionId = request.profile.provider === "codex"
+          ? extractCodexThreadId(eventBuffer)
+          : extractClaudeSessionId(eventBuffer);
+        if (conversationKey && providerSessionId) {
+          providerSessions.set(conversationKey, providerSessionId);
+          request.metadata.onAgentSessionId?.(request.profile.provider, providerSessionId);
         }
         const event = request.profile.provider === "codex"
           ? parseCodexStreamLine(eventBuffer, streamPhases)

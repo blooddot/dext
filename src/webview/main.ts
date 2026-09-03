@@ -106,6 +106,7 @@ const elements = {
   modelControlValue: element<HTMLElement>("model-control-value"),
   modelMenu: element<HTMLElement>("model-menu"),
   modelSubmenu: element<HTMLElement>("model-submenu"),
+  composerMore: element<HTMLButtonElement>("composer-more"),
   run: element<HTMLButtonElement>("run"),
   runLabel: element<HTMLElement>("run-label"),
   problems: element<HTMLButtonElement>("problems"),
@@ -618,6 +619,7 @@ function toggleResourceCategories(): void {
 function openMcpAssistantDialog(): void {
   closeComposerMenus();
   if (!elements.mcpAssistantDialog.open) elements.mcpAssistantDialog.showModal();
+  updateMcpAssistantAction();
   elements.mcpAssistantInput.focus();
 }
 
@@ -772,7 +774,7 @@ function renderMcp(state: SidebarState): void {
   ] as const;
   const total = categories.reduce((sum, [, , items]) => sum + items.length, 0);
   elements.mcpCount.textContent = String(total);
-  elements.mcpEmpty.hidden = true;
+  elements.mcpEmpty.hidden = total !== 0;
   for (const [title, icon, items] of categories) {
     const group = document.createElement("details");
     group.className = "resource-category";
@@ -860,6 +862,13 @@ function resetMcpAssistantProcess(): void {
 function updateMcpAssistantAction(): void {
   // MCP generation is presented in its own dialog. Keep its Stop state
   // independent from the conversation composer run control below.
+  const closeLabel = mcpAssistantRunningRequestId
+    ? mcpAssistantStopping ? "Stopping MCP generation" : "Stop MCP generation"
+    : "Close MCP Assistant";
+  elements.mcpAssistantClose.title = closeLabel;
+  elements.mcpAssistantClose.setAttribute("aria-label", closeLabel);
+  const closeIcon = elements.mcpAssistantClose.querySelector<HTMLElement>("i");
+  if (closeIcon) closeIcon.className = `codicon codicon-${mcpAssistantRunningRequestId ? "debug-stop" : "close"}`;
   if (mcpAssistantRunningRequestId) {
     elements.mcpAssistantGenerate.hidden = false;
     elements.mcpAssistantGenerate.disabled = mcpAssistantStopping;
@@ -911,12 +920,17 @@ function generateMcpAssistant(): void {
   if (!documentText) { elements.mcpAssistantStatus.textContent = "Paste a documentation or registry URL first."; return; }
   const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   mcpAssistantRequestId = requestId;
-  elements.mcpAssistantGenerate.disabled = true;
+  // Mark the request busy immediately, before the host's executing event
+  // comes back. This closes the small race where a fast click on X/Esc could
+  // dismiss the dialog while generation was already in flight.
+  mcpAssistantRunningRequestId = requestId;
+  mcpAssistantStopping = false;
   elements.mcpAssistantStatus.textContent = "Dext is reading the documentation and drafting a safe configuration…";
   resetMcpAssistantProcess();
   elements.mcpAssistantProcess.hidden = false;
   elements.mcpAssistantProcess.open = true;
   mcpAssistantProcessStartedAt = Date.now();
+  updateMcpAssistantAction();
   vscode.postMessage({ type: "generateMcp", requestId, document: documentText });
 }
 
@@ -1431,6 +1445,16 @@ function selectConversation(sessionId: string): void {
 
 function closeConversation(sessionId: string): void {
   if (runningConversationIds.has(sessionId)) return;
+  const draft = conversationDrafts.get(sessionId);
+  if (draft?.source.trim() || draft?.attachments.length) {
+    const title = [...elements.conversationTabs.querySelectorAll<HTMLElement>(".conversation-tab")]
+      .find((tab) => tab.dataset.sessionId === sessionId)?.title ?? "this conversation";
+    openConfirmationDialog(`Discard the unsent draft in “${title}” and close it?`, () => {
+      conversationDrafts.delete(sessionId);
+      vscode.postMessage({ type: "closeConversation", sessionId });
+    });
+    return;
+  }
   vscode.postMessage({ type: "closeConversation", sessionId });
 }
 
@@ -1574,6 +1598,11 @@ function closeComposerMenus(except?: HTMLElement): void {
     item.control.setAttribute("aria-expanded", String(open));
   }
   if (except !== elements.modelMenu) elements.modelSubmenu.hidden = true;
+}
+
+function closeComposerExtras(): void {
+  elements.composerMore.setAttribute("aria-expanded", "false");
+  elements.composerMore.closest(".composer-controls")?.classList.remove("show-extra");
 }
 
 function composerMenuItems(menu: HTMLElement): HTMLButtonElement[] {
@@ -3330,12 +3359,6 @@ elements.planBuild.addEventListener("click", () => {
   vscode.postMessage({ type: "buildPlan", planPath: activePlanPath });
 });
 elements.result.addEventListener("click", openOutputLink);
-// Conversation output is read-only. Suppress the browser's native context
-// menu so actions such as Cut and Paste cannot suggest unsupported behavior;
-// copying is available from each turn's action strip instead.
-elements.result.addEventListener("contextmenu", (event) => {
-  event.preventDefault();
-});
 elements.resultToggle.addEventListener("click", (event) => {
   event.stopPropagation();
   toggleResultDetails();
@@ -3372,11 +3395,29 @@ elements.mcpSearch.addEventListener("input", () => {
 elements.mcpDialog.addEventListener("click", (event) => {
   if (event.target === elements.mcpDialog) closeMcpDialog();
 });
-elements.mcpAssistantClose.addEventListener("click", () => elements.mcpAssistantDialog.close());
+function requestCloseMcpAssistant(): void {
+  if (mcpAssistantRunningRequestId) {
+    // Closing while generation is active must go through the same cancellation
+    // path as the visible Stop button. The dialog stays open until the host
+    // confirms the abort with an `executing: false` message.
+    generateMcpAssistant();
+    return;
+  }
+  if (elements.mcpAssistantDialog.open) elements.mcpAssistantDialog.close();
+}
+
+elements.mcpAssistantClose.addEventListener("click", requestCloseMcpAssistant);
 elements.mcpAssistantGenerate.addEventListener("click", generateMcpAssistant);
 elements.mcpAssistantSave.addEventListener("click", saveMcpAssistant);
 elements.mcpAssistantDialog.addEventListener("click", (event) => {
-  if (event.target === elements.mcpAssistantDialog) elements.mcpAssistantDialog.close();
+  if (event.target === elements.mcpAssistantDialog) requestCloseMcpAssistant();
+});
+elements.mcpAssistantDialog.addEventListener("cancel", (event) => {
+  // Native dialog Esc dispatches `cancel` before closing. Intercept it while
+  // active so Esc behaves exactly like the close button and backdrop click.
+  if (!mcpAssistantRunningRequestId) return;
+  event.preventDefault();
+  requestCloseMcpAssistant();
 });
 elements.uiDialogClose.addEventListener("click", cancelUi);
 elements.uiDialog.addEventListener("cancel", (event) => {
@@ -3413,15 +3454,24 @@ elements.resultHeading.addEventListener("keydown", (event) => {
   }
 });
 elements.attachFiles.addEventListener("click", () => vscode.postMessage({ type: "chooseFiles" }));
+elements.composerMore.addEventListener("click", (event) => {
+  event.stopPropagation();
+  const controls = elements.composerMore.closest(".composer-controls");
+  const open = !controls?.classList.contains("show-extra");
+  controls?.classList.toggle("show-extra", open);
+  elements.composerMore.setAttribute("aria-expanded", String(open));
+});
 for (const item of composerMenus) {
   item.control.addEventListener("click", () => toggleComposerMenu(item.menu));
 }
 document.addEventListener("click", (event) => {
   if (event.target instanceof Element && event.target.closest(".composer-menu")) return;
+  closeComposerExtras();
   closeComposerMenus();
 });
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
+  closeComposerExtras();
   closeComposerMenus();
 });
 elements.inputShell.addEventListener("paste", (event) => {

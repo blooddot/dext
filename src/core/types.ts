@@ -441,6 +441,15 @@ export interface ExecutionMetadata {
   speed?: string;
   serviceTier?: string;
   agentSessionId?: string;
+  /** Provider-native session to fork before the next turn, when available. */
+  conversationForkFrom?: string;
+  /** Persisted provider session to resume after the extension restarts. */
+  conversationProviderSessionId?: string;
+  /** Prior Dext turns to bootstrap a provider conversation that has no native
+   * session yet (for example, the first turn after a fork or reload). */
+  conversationContext?: string;
+  /** Called when a provider exposes the native session id for this turn. */
+  onAgentSessionId?: (provider: string, sessionId: string) => void;
   signal?: AbortSignal;
   onAgentEvent?: (event: AgentStreamEvent) => void;
   /** Process output emitted while an MCP tool is running. */

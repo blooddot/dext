@@ -73,6 +73,8 @@ export interface AioaCdpPage {
   state(): Promise<AioaConversationState>;
   createConversation(workspaceRoot: string): Promise<void>;
   submit(message: string): Promise<void>;
+  /** Uses AIOA's own “fork from here” action on the visible conversation. */
+  forkConversation?(): Promise<boolean>;
   updatesAfter(assistantIds: ReadonlySet<string>): Promise<AioaConversationUpdate>;
   stop?(): Promise<boolean>;
   close(): Promise<void>;
@@ -870,6 +872,30 @@ class ChromeRemoteAioaPage implements AioaCdpPage {
     });
   }
 
+  async forkConversation(): Promise<boolean> {
+    const point = await this.evaluate<AioaPagePoint | null>(`
+      (() => {
+        const visible = (element) => {
+          const rect = element.getBoundingClientRect();
+          const style = getComputedStyle(element);
+          return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+        };
+        const button = [...document.querySelectorAll('button,[role="button"]')].find((candidate) => {
+          if (!visible(candidate)) return false;
+          const label = [candidate.getAttribute('aria-label'), candidate.getAttribute('title'), candidate.textContent]
+            .filter(Boolean).join(' ');
+          return /从这里分叉|fork from here|fork|branch/i.test(label);
+        });
+        if (!button) return JSON.stringify(null);
+        const rect = button.getBoundingClientRect();
+        return JSON.stringify({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+      })()
+    `);
+    if (!point) return false;
+    await this.click(point);
+    return true;
+  }
+
   async updatesAfter(assistantIds: ReadonlySet<string>): Promise<AioaConversationUpdate> {
     const snapshot = await this.evaluate<{
       busy: boolean;
@@ -1432,7 +1458,7 @@ export class AioaCdpAgentRunner implements AgentRunner {
       const ownedConversation = ownedSession?.conversationId;
       const definitionSignature = aioaDefinitionSignature(request);
       const includeDefinition = ownedSession?.apiDefinitions.get(request.method.id) !== definitionSignature;
-      let initial: AioaConversationState;
+      let initial: AioaConversationState = before;
       let prompt: string;
       if (ownedConversation) {
         initial = before;
@@ -1474,6 +1500,7 @@ export class AioaCdpAgentRunner implements AgentRunner {
           conversationId,
           apiDefinitions: new Map([[request.method.id, definitionSignature]])
         });
+        request.metadata.onAgentSessionId?.("aioa", conversationId);
       }
       while (this.now() < deadline) {
         await this.wait(this.pollIntervalMs);
@@ -1491,6 +1518,7 @@ export class AioaCdpAgentRunner implements AgentRunner {
               conversationId,
               apiDefinitions: new Map([[request.method.id, definitionSignature]])
             });
+            request.metadata.onAgentSessionId?.("aioa", conversationId);
           }
         }
         const latestMessage = update.messages.at(-1);
@@ -1582,9 +1610,28 @@ export class AioaCdpAgentRunner implements AgentRunner {
       }
       const sessionId = request.metadata.agentSessionId;
       const ownedSession = this.activeSession(sessionId, before.conversationId);
-      const ownedConversation = ownedSession?.conversationId;
-      let initial: AioaConversationState;
-      if (ownedConversation) {
+      let ownedConversation = ownedSession?.conversationId;
+      let initial: AioaConversationState = before;
+      let forked = false;
+      if (!ownedConversation && request.metadata.conversationForkFrom
+        && before.conversationId === request.metadata.conversationForkFrom
+        && page.forkConversation) {
+        forked = await page.forkConversation();
+        if (forked) {
+          // The click is asynchronous in AIOA; wait until the newly selected
+          // task exposes a different conversation identity before submitting.
+          for (let attempt = 0; attempt < 20; attempt += 1) {
+            initial = await page.state();
+            if (initial.conversationId && initial.conversationId !== before.conversationId) break;
+            await this.wait(100);
+          }
+          ownedConversation = undefined;
+          request.onEvent?.({ phase: "status", text: "Using AIOA's native fork" });
+        }
+      }
+      if (forked) {
+        // The native fork already opened a new AIOA task.
+      } else if (ownedConversation) {
         initial = before;
         request.onEvent?.({ phase: "status", text: "Using Dext's existing AIOA task" });
       } else {
@@ -1596,7 +1643,12 @@ export class AioaCdpAgentRunner implements AgentRunner {
         initial = await page.state();
       }
       if (request.signal?.aborted) throw new ExecutionCancelledError();
-      await page.submit(request.input);
+      const input = ownedConversation || forked
+        ? request.input
+        : request.metadata.conversationContext?.trim()
+          ? `${request.metadata.conversationContext.trim()}\n\nNew user message:\n${request.input}`
+          : request.input;
+      await page.submit(input);
       const submitted = await page.state();
       request.onEvent?.({ phase: "status", text: "Waiting for AIOA response" });
       const knownMessages = new Set(initial.assistantIds);
@@ -1611,6 +1663,7 @@ export class AioaCdpAgentRunner implements AgentRunner {
       let conversationId = ownedConversation ?? submitted.conversationId ?? initial.conversationId;
       if (sessionId && !ownedSession && conversationId) {
         this.sessions.set(sessionId, { conversationId, apiDefinitions: new Map() });
+        request.metadata.onAgentSessionId?.("aioa", conversationId);
       }
       while (this.now() < deadline) {
         await this.wait(this.pollIntervalMs);
@@ -1623,7 +1676,10 @@ export class AioaCdpAgentRunner implements AgentRunner {
         const update = await page.updatesAfter(knownMessages);
         if (!conversationId && update.conversationId) {
           conversationId = update.conversationId;
-          if (sessionId) this.sessions.set(sessionId, { conversationId, apiDefinitions: new Map() });
+          if (sessionId) {
+            this.sessions.set(sessionId, { conversationId, apiDefinitions: new Map() });
+            request.metadata.onAgentSessionId?.("aioa", conversationId);
+          }
         }
         const latestMessage = update.messages.at(-1);
         const text = latestMessage?.text.trim() ?? "";

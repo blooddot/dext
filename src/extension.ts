@@ -97,7 +97,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return session;
   };
   const forkConversation = async (source: DextHistorySession, turns: readonly DextHistoryRecord[]): Promise<void> => {
-    const forked = await history.fork(turns);
+    const forked = await history.fork(turns, source.providerSessions);
     // A fork of a conversation the user took the trouble to name would be hard
     // to recognize under a name derived from its first message.
     const name = preferences.title(source.id);
