@@ -7,6 +7,9 @@ test/**
 scripts/**
 dist/extensionHostTest.js
 node_modules/**
+.npm-cache/**
+.tmp-tb/**
+.volta/**
 **/*.map
 *.ts
 esbuild.mjs

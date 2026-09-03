@@ -203,7 +203,7 @@ describe("sidebar panel layout", () => {
     expect(main).toMatch(/conversationTabs\.addEventListener\("dblclick"[\s\S]*?type: "newConversation"/);
     expect(main).toMatch(/function closeConversation[\s\S]*?type: "closeConversation"/);
     expect(manifest).toContain('"command": "dext.newConversation"');
-    expect(html).toMatch(/async openConversation\(session: DextHistorySession\)[\s\S]*?activateConversation\(existing\)/);
+    expect(html).toMatch(/async openConversation\(session: DextHistorySession\)[\s\S]*?activateConversation\(existing(?:,[\s\S]*?)?\)/);
     expect(html).toContain('id="input-error" class="input-error"');
     expect(main).toMatch(/function renderInputError[\s\S]*elements\.inputError\.hidden = false/);
     expect(main).toMatch(/message\.type === "error"[\s\S]*renderInputError\(message\.message\)/);
@@ -485,6 +485,7 @@ describe("sidebar panel layout", () => {
     expect(sidebar).not.toContain("Wait for the current Dext turn to finish before starting another conversation.");
     expect(sidebar).toMatch(/const session = this\.activeSession;[\s\S]*?this\.activeExecutions\.has\(sessionId\)[\s\S]*?this\.activeExecutions\.set\(sessionId/);
     expect(sidebar).toMatch(/onAgentEvent:[\s\S]*?this\.postAgentEvent\(sessionId, event\)/);
+    expect(sidebar).toMatch(/private postAgentEvent\(sessionId: string, event: AgentStreamEvent\): void \{[\s\S]*?if \(this\.activeSession\.id !== sessionId\) return;[\s\S]*?this\.postWhenReady/);
     expect(sidebar).toMatch(/this\.history\.addSuccess\(source, events, response, sessionId, mode, turnId\)/);
     expect(protocol).toContain('running: boolean;');
     expect(protocol).toContain('{ type: "agentEvent"; sessionId: string; event: AgentStreamEvent }');
@@ -498,6 +499,60 @@ describe("sidebar panel layout", () => {
     // appear on every newly opened conversation.
     expect(css).toMatch(/\.conversation-tab \.conversation-tab-activity \{[\s\S]*?display: none/);
     expect(css).toMatch(/\.conversation-tab\.running \.conversation-tab-activity[\s\S]*?display: inline-block/);
+  });
+
+  it("clears stale conversation output before a tab switch waits on IPC", async () => {
+    const main = await source("src/webview/main.ts");
+    expect(main).toMatch(/function clearVisibleConversation[\s\S]*?cacheRenderedConversation\(\);[\s\S]*?elements\.result\.replaceChildren\(\);[\s\S]*?renderedConversationId = undefined/);
+    expect(main).toMatch(/function selectConversation[\s\S]*?activeConversationId = sessionId;[\s\S]*?clearVisibleConversation\(\);[\s\S]*?type: "selectConversation", sessionId, switchId/);
+    expect(main).toMatch(/label\.addEventListener\("pointerdown",[\s\S]*?selectConversation\(conversation\.id\)/);
+    expect(main).toMatch(/message\.type === "outputSession"[\s\S]*?message\.session\.id !== activeConversationId/);
+  });
+
+  it("pins a restored running conversation to the latest replayed event", async () => {
+    const main = await source("src/webview/main.ts");
+    expect(main).toMatch(/let forceInitialConversationScroll = false/);
+    expect(main).toMatch(/message\.switchId !== undefined[\s\S]*?forceInitialConversationScroll = true[\s\S]*?scrollResultToBottom\(\)/);
+    expect(main).toMatch(/if \(forceInitialConversationScroll\)[\s\S]*?forceInitialConversationScroll = false[\s\S]*?scrollResultToBottom\(\)/);
+  });
+
+  it("preserves the original start time when restoring a running conversation", async () => {
+    const sidebar = await source("src/sidebarProvider.ts");
+    const main = await source("src/webview/main.ts");
+    expect(sidebar).toMatch(/const startedAt = Date\.now\(\);[\s\S]*?activeExecutions\.set\(sessionId, \{[^\n]*startedAt/);
+    expect(sidebar).toMatch(/type: "executing", sessionId, value: true, turnId, source, startedAt/);
+    expect(sidebar).toMatch(/turnId: execution\.turnId,[\s\S]*?startedAt: execution\.startedAt/);
+    expect(main).toMatch(/function startAgentProgress\(startedAt = Date\.now\(\)\)/);
+    expect(main).toMatch(/startAgentProgress\(message\.startedAt\)/);
+  });
+
+  it("accepts host-initiated conversation switches without weakening local stale-response guards", async () => {
+    const sidebar = await source("src/sidebarProvider.ts");
+    const main = await source("src/webview/main.ts");
+    expect(sidebar).toMatch(/activateConversation\(existing, undefined, true\)/);
+    expect(sidebar).toMatch(/postConversationState\(undefined, true\)/);
+    expect(sidebar).toMatch(/type: "outputSession", session: this\.activeSession, hostInitiated: true/);
+    expect(main).toMatch(/!message\.hostInitiated && activeConversationId && message\.session\.id !== activeConversationId/);
+    expect(main).toMatch(/!message\.hostInitiated && message\.switchId === undefined && activeConversationId && message\.activeId !== activeConversationId/);
+    expect(main).toMatch(/if \(activeConversationId !== message\.activeId\) \{[\s\S]*?activeExecutionSessionId = undefined;[\s\S]*?clearVisibleConversation\(\);/);
+  });
+
+  it("snapshots replay events before awaiting the executing message", async () => {
+    const sidebar = await source("src/sidebarProvider.ts");
+    expect(sidebar).toMatch(/const replayEvents = \[\.\.\.execution\.events\];[\s\S]*?await this\.post\(\{[\s\S]*?type: "executing"[\s\S]*?\}\);[\s\S]*?events: replayEvents/);
+  });
+
+  it("restores a running conversation without relying on an evictable DOM cache", async () => {
+    const sidebar = await source("src/sidebarProvider.ts");
+    const main = await source("src/webview/main.ts");
+    expect(sidebar).toMatch(/const running = this\.activeExecutions\.has\(session\.id\);[\s\S]*?!running && this\.postedSessionSignatures/);
+    expect(main).toMatch(/const liveTurn = executing && activeExecutionSessionId === session\.id && activeTurn && activeTurnId[\s\S]*?elements\.result\.append\(liveTurn\.disclosure\);[\s\S]*?activeTurn = liveTurn/);
+    expect(main).toMatch(/elements\.resultBody\.dataset\.loading !== "true"/);
+  });
+
+  it("does not hydrate a different historical turn while an agent is streaming", async () => {
+    const main = await source("src/webview/main.ts");
+    expect(main).toMatch(/Copying a collapsed history row[\s\S]*?if \(!executing \|\| activeTurn === turn\) turn\.hydrate\?\.\(\)/);
   });
 
   it("opens the complete API list in a dialog and keeps method insertion intact", async () => {

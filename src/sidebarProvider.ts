@@ -1,7 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { appendFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, relative, sep } from "node:path";
+import { relative, sep } from "node:path";
 import * as vscode from "vscode";
 import type { DextApplication } from "./application.js";
 import type { AgentStreamEvent, ApplyResult, InputExecutionResponse, McpProcessEvent, PatchResult, UiChoiceResult, UiConfirmResult, UiInputResult, UiInteraction, UiResult } from "./core/types.js";
@@ -73,6 +71,11 @@ const MAX_FILE_SUGGESTIONS = 40;
 const FILE_INDEX_TTL_MS = 15000;
 const FILE_INDEX_EXCLUDE = "**/{node_modules,.git,dist,out,build,.venv,__pycache__,.dext/attachments}/**";
 
+function sessionSignature(session: DextHistorySession): string {
+  const last = session.turns.at(-1);
+  return `${session.updatedAt}:${session.turns.length}:${last?.id ?? ""}:${last?.process.length ?? 0}`;
+}
+
 function imageExtension(mimeType: string): string | undefined {
   const normalized = mimeType.toLowerCase().split(";")[0]!.trim();
   return ({
@@ -102,6 +105,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   private readonly activeExecutions = new Map<string, {
     turnId: string;
     source: string;
+    startedAt: number;
     planPath?: string;
     executePlan?: boolean;
     controller: AbortController;
@@ -112,6 +116,12 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   // Keeping its controller separately lets the shared Stop button cancel it.
   private mcpAssistantExecution: { requestId: string; controller: AbortController } | undefined;
   private readonly pendingAttachmentDeletes = new Set<string>();
+  private readonly postedSessionSignatures = new Map<string, string>();
+  private layoutWriteTimer: ReturnType<typeof setTimeout> | undefined;
+  private layoutWriteInFlight: Promise<void> | undefined;
+  private layoutWritePending = false;
+  private disposed = false;
+  private static readonly layoutWriteDebounceMs = 750;
   // A read-only Agent turn leaves a patch nobody applied yet. It is kept per
   // turn so two turns in the same conversation cannot resolve each other's
   // files, and so a rejected file simply disappears from the entry.
@@ -128,7 +138,8 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   private hydrateSessions(): void {
     if (this.sessionsHydrated) return;
     this.sessionsHydrated = true;
-    for (const session of this.history.list()) this.sessions.set(session.id, session);
+    const storedSessions = this.history.list();
+    for (const session of storedSessions) this.sessions.set(session.id, session);
     if (!this.sessions.has(this.activeSession.id)) this.sessions.set(this.activeSession.id, this.activeSession);
     const latest = [...this.sessions.values()].sort((a, b) => b.updatedAt - a.updatedAt)[0];
     const layout = this.preferences.conversationLayout();
@@ -157,6 +168,42 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     });
   }
 
+  private scheduleConversationLayoutPersist(): void {
+    if (this.disposed) return;
+    this.layoutWritePending = true;
+    if (this.layoutWriteTimer) clearTimeout(this.layoutWriteTimer);
+    this.layoutWriteTimer = setTimeout(() => {
+      this.layoutWriteTimer = undefined;
+      void this.flushScheduledConversationLayout();
+    }, DextSidebarProvider.layoutWriteDebounceMs);
+  }
+
+  private async flushScheduledConversationLayout(): Promise<void> {
+    if (this.layoutWriteInFlight || !this.layoutWritePending) return;
+    this.layoutWritePending = false;
+    const write = this.persistConversationLayout();
+    this.layoutWriteInFlight = write;
+    try {
+      await write;
+    } catch {
+      // persistConversationLayout already records the error. A deferred UI
+      // write must not turn a tab click into an unhandled rejection.
+    } finally {
+      this.layoutWriteInFlight = undefined;
+      // If another switch happened while the write was in flight, give the
+      // user another idle window instead of immediately issuing a second
+      // globalState write.
+      if (this.layoutWritePending) {
+        if (this.disposed) {
+          this.layoutWritePending = false;
+          void this.persistConversationLayout().catch(() => undefined);
+        } else {
+          this.scheduleConversationLayoutPersist();
+        }
+      }
+    }
+  }
+
   // Pinned tabs lead the strip so that they keep their place as other
   // conversations open and close beside them.
   private orderedConversations(): string[] {
@@ -175,18 +222,26 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     };
   }
 
-  private async postConversationState(): Promise<void> {
-    await this.post({
+  private async postConversationState(switchId?: number, hostInitiated = false): Promise<void> {
+    const conversationPayload = {
       type: "conversations",
       sessions: this.orderedConversations().flatMap((id) => {
         const session = this.sessions.get(id);
         return session ? [this.summarize(session)] : [];
       }),
-      activeId: this.activeSession.id
-    });
+      activeId: this.activeSession.id,
+      selection: this.conversationSelections.get(this.activeSession.id)
+        ?? this.application.state().agentSelection,
+      ...(this.activeSession.activePlanPath ? { planPath: this.activeSession.activePlanPath } : {}),
+      planStatus: this.activeSession.planStatus ?? "new",
+      ...(switchId !== undefined ? { switchId } : {}),
+      ...(hostInitiated ? { hostInitiated: true as const } : {})
+    } satisfies WebviewResponse;
+    await this.post(conversationPayload);
   }
 
-  private async activateConversation(session: DextHistorySession): Promise<void> {
+  private activateConversation(session: DextHistorySession, switchId?: number, hostInitiated = false): void {
+    const wasOpen = this.openConversations.includes(session.id);
     this.activeSession = session;
     const cachedSelection = this.conversationSelections.get(session.id);
     const storedSelection = cachedSelection ? undefined : this.preferences.conversationSelection(session.id);
@@ -195,21 +250,56 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       ?? { ...this.application.state().agentSelection, mode: "agent" as const };
     this.conversationSelections.set(session.id, selection);
     this.application.setAgentSelection(selection);
-    if (!this.openConversations.includes(session.id)) this.openConversations.push(session.id);
+    if (!wasOpen) this.openConversations.push(session.id);
     // Persistence and UI messages are independent. Do not make the webview
     // wait for global-state I/O before it can paint the selected conversation.
-    const writes: Promise<unknown>[] = [this.persistConversationLayout()];
+    // Keep the operations lazy so the stage timer includes the actual start of
+    // each operation. Passing already-started promises here makes the timer
+    // include unrelated work that ran while Promise.all was being assembled.
+    // Layout persistence is intentionally outside the critical path. Rapid
+    // tab changes are coalesced and written once after the UI settles.
+    this.scheduleConversationLayoutPersist();
     if (!cachedSelection && !storedSelection) {
-      writes.push(this.preferences.setConversationSelection(session.id, selection));
+      void this.preferences.setConversationSelection(session.id, selection).catch(() => {
+        // Selection persistence is best effort and must not block switching.
+      });
     }
     this.updateRunningContext();
-    await Promise.all([
-      ...writes,
-      this.postConversationState(),
-      this.refresh(),
-      this.post({ type: "outputSession", session: this.activeSession }),
-      this.postActiveExecution(session.id)
-    ]);
+    const sendActiveConversation = (): Promise<void> => this.post({
+      type: "activeConversation",
+      activeId: session.id,
+      selection,
+      ...(session.activePlanPath ? { planPath: session.activePlanPath } : {}),
+      planStatus: session.planStatus ?? "new",
+      ...(switchId !== undefined ? { switchId } : {}),
+      ...(hostInitiated ? { hostInitiated: true as const } : {})
+    });
+    const sendOutputSession = (): Promise<void> => {
+      const signature = sessionSignature(session);
+      // A running conversation has no stable cached DOM: its live row and
+      // buffered events must be restored after the historical payload. Never
+      // take the ref path here, because a stale/evicted cache would require a
+      // second request that can race the executing replay and leave the view
+      // stuck in its loading state.
+      const running = this.activeExecutions.has(session.id);
+      if (!running && this.postedSessionSignatures.get(session.id) === signature) {
+        return this.post({ type: "outputSessionRef", sessionId: session.id, signature, ...(switchId !== undefined ? { switchId } : {}), ...(hostInitiated ? { hostInitiated: true as const } : {}) });
+      }
+      this.postedSessionSignatures.set(session.id, signature);
+      return this.post({ type: "outputSession", session, ...(switchId !== undefined ? { switchId } : {}), ...(hostInitiated ? { hostInitiated: true as const } : {}) });
+    };
+    // Keep the historical payload ahead of the live execution replay. If the
+    // two posts race, an `executing` row can be rendered first and then be
+    // erased when outputSession rebuilds the result pane.
+    const switchMessages = async (): Promise<void> => {
+      await sendActiveConversation();
+      await sendOutputSession();
+      await this.postActiveExecution(session.id, switchId, hostInitiated);
+      if (!wasOpen) await this.postConversationState(switchId, hostInitiated);
+    };
+    // The webview paints the selected tab from its local state. Do not make
+    // the click handler wait for VS Code's postMessage delivery.
+    void switchMessages().catch(() => undefined);
   }
 
   // A new conversation opens its own tab, while clearing replaces the
@@ -230,9 +320,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     else this.openConversations[index] = this.activeSession.id;
     await this.persistConversationLayout();
     this.updateRunningContext();
-    await this.postConversationState();
+    await this.postConversationState(undefined, true);
     await this.refresh();
-    await this.post({ type: "outputSession", session: this.activeSession });
+    await this.post({ type: "outputSession", session: this.activeSession, hostInitiated: true });
   }
 
   // Closing a tab only hides the conversation; history keeps it so that the
@@ -270,10 +360,10 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     await this.preferences.setConversationSelection(session.id, selection);
     await this.persistConversationLayout();
     this.updateRunningContext();
-    await this.postConversationState();
+    await this.postConversationState(undefined, true);
     await this.refresh();
-    await this.post({ type: "outputSession", session: this.activeSession });
-    await this.postActiveExecution(session.id);
+    await this.post({ type: "outputSession", session: this.activeSession, hostInitiated: true });
+    await this.postActiveExecution(session.id, undefined, true);
   }
 
   constructor(
@@ -285,6 +375,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
 
   resolveWebviewView(view: vscode.WebviewView): void {
     this.view = view;
+    this.postedSessionSignatures.clear();
     this.messageQueue.markNotReady();
     view.webview.options = {
       enableScripts: true,
@@ -306,7 +397,8 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   async refresh(): Promise<void> {
-    await this.post({ type: "state", state: this.application.state() });
+    const state = this.application.state();
+    await this.post({ type: "state", state });
     await this.postPlanContext();
   }
 
@@ -407,7 +499,10 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     this.hydrateSessions();
     const existing = this.sessions.get(session.id) ?? session;
     this.sessions.set(existing.id, existing);
-    await this.activateConversation(existing);
+    // Preserve the asynchronous command contract used by history actions;
+    // the actual tab activation itself is deliberately detached from IPC.
+    await Promise.resolve();
+    this.activateConversation(existing, undefined, true);
   }
 
   // Renaming only replaces the label a conversation is listed under. The agent
@@ -528,6 +623,13 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   dispose(): void {
+    this.disposed = true;
+    if (this.layoutWriteTimer) clearTimeout(this.layoutWriteTimer);
+    this.layoutWriteTimer = undefined;
+    // Do not lose the latest tab layout when the extension is disposed during
+    // the debounce window. This is a single small global-state write and does
+    // not affect the normal tab-switch path.
+    void this.flushScheduledConversationLayout();
     for (const [sessionId, execution] of this.activeExecutions) {
       execution.controller.abort();
       this.application.endAgentSession(sessionId);
@@ -648,7 +750,15 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         case "selectConversation": {
           const selected = this.sessions.get(request.sessionId);
           if (!selected) throw new Error("Conversation not found.");
-          await this.activateConversation(selected);
+          this.activateConversation(selected, request.switchId);
+          break;
+        }
+        case "outputSessionRefMiss": {
+          const selected = this.sessions.get(request.sessionId);
+          if (!selected) break;
+          const signature = sessionSignature(selected);
+          this.postedSessionSignatures.set(request.sessionId, signature);
+          await this.post({ type: "outputSession", session: selected, ...(request.switchId !== undefined ? { switchId: request.switchId } : {}), ...(request.hostInitiated ? { hostInitiated: true as const } : {}) });
           break;
         }
         case "closeConversation":
@@ -697,13 +807,6 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           });
           break;
         }
-        case "debugLog":
-          appendFileSync(
-            join(tmpdir(), "dext-webview-debug.log"),
-            `${new Date().toISOString()} ${request.message}\n`,
-            "utf8"
-          );
-          break;
         case "clipboardWrite": {
           try {
             await vscode.env.clipboard.writeText(request.text);
@@ -1014,10 +1117,11 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       throw new Error("Wait for this conversation's current Dext turn to finish before running another one.");
     }
     const controller = new AbortController();
-    this.activeExecutions.set(sessionId, { turnId, source, ...(executionPlanPath ? { planPath: executionPlanPath } : {}), ...(executePlan ? { executePlan: true } : {}), controller, events });
+    const startedAt = Date.now();
+    this.activeExecutions.set(sessionId, { turnId, source, startedAt, ...(executionPlanPath ? { planPath: executionPlanPath } : {}), ...(executePlan ? { executePlan: true } : {}), controller, events });
     this.updateRunningContext();
     await this.postConversationState();
-    await this.post({ type: "executing", sessionId, value: true, turnId, source, ...(executionPlanPath ? { planPath: executionPlanPath } : {}), ...(executePlan ? { executePlan: true } : {}) });
+    await this.post({ type: "executing", sessionId, value: true, turnId, source, startedAt, ...(executionPlanPath ? { planPath: executionPlanPath } : {}), ...(executePlan ? { executePlan: true } : {}) });
     try {
       const metadata = {
         agentSessionId: sessionId,
@@ -1180,33 +1284,58 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private postAgentEvent(sessionId: string, event: AgentStreamEvent): void {
+    // Keep collecting events for background conversations so they can be
+    // replayed when the user returns, but do not flood the Webview IPC queue
+    // while another tab is visible.  The active conversation is restored via
+    // postActiveExecution(), which sends the buffered events as one batch.
+    if (this.activeSession.id !== sessionId) return;
     this.postWhenReady({ type: "agentEvent", sessionId, event });
   }
 
-  private async postActiveExecution(sessionId: string): Promise<void> {
+  private async postActiveExecution(sessionId: string, switchId?: number, hostInitiated = false): Promise<void> {
     const execution = this.activeExecutions.get(sessionId);
     if (!execution) return;
+    // Snapshot before awaiting the executing message. Events arriving after
+    // this point are delivered through the normal single-event path and must
+    // not be replayed a second time in the restore batch.
+    const replayEvents = [...execution.events];
     await this.post({
       type: "executing",
       sessionId,
       value: true,
       turnId: execution.turnId,
       source: execution.source,
+      startedAt: execution.startedAt,
       ...(execution.planPath ? { planPath: execution.planPath } : {}),
-      ...(execution.executePlan ? { executePlan: true } : {})
+      ...(execution.executePlan ? { executePlan: true } : {}),
+      ...(switchId !== undefined ? { switchId } : {}),
+      ...(hostInitiated ? { hostInitiated: true as const } : {})
     });
-    for (const event of execution.events) {
-      await this.post({ type: "agentEvent", sessionId, event });
+    if (replayEvents.length) {
+      // A tab restore can contain dozens of buffered events. Send one IPC
+      // message instead of awaiting one Webview post per event.
+      await this.post({ type: "agentEvents", sessionId, events: replayEvents, ...(switchId !== undefined ? { switchId } : {}) });
     }
   }
 
   private async post(message: WebviewResponse): Promise<void> {
-    if (!this.messageQueue.isReady) return;
-    await this.view?.webview.postMessage(message);
+    if (!this.messageQueue.isReady) {
+      return;
+    }
+    const view = this.view;
+    if (!view) {
+      return;
+    }
+    await view.webview.postMessage(message);
   }
 
   private postWhenReady(message: WebviewResponse): void {
-    if (this.messageQueue.enqueue(message) || !this.view) return;
+    if (this.messageQueue.enqueue(message)) {
+      return;
+    }
+    if (!this.view) {
+      return;
+    }
     void this.post(message);
   }
 

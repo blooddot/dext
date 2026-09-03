@@ -101,9 +101,9 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
       z.object({ name: z.string().min(1).max(80), transport: z.literal("http"), url: z.string().min(1).max(2048), auth: z.object({ type: z.literal("bearer") }).optional(), timeoutMs: z.number().int().min(1000).max(120000).optional() }).strict()
     ])
   }),
-  z.object({ type: z.literal("debugLog"), message: z.string() }),
   z.object({ type: z.literal("newConversation") }),
-  z.object({ type: z.literal("selectConversation"), sessionId: z.string().min(1) }),
+  z.object({ type: z.literal("selectConversation"), sessionId: z.string().min(1), switchId: z.number().int().positive().optional() }),
+  z.object({ type: z.literal("outputSessionRefMiss"), sessionId: z.string().min(1), signature: z.string(), switchId: z.number().int().positive().optional(), hostInitiated: z.literal(true).optional() }),
   z.object({ type: z.literal("closeConversation"), sessionId: z.string().min(1) }),
   z.object({
     type: z.literal("pinConversation"),
@@ -176,9 +176,30 @@ export type WebviewResponse =
     signature?: SignatureHelp;
     hover?: LanguageHover;
   }
-  | { type: "outputSession"; session: DextHistorySession }
+  | { type: "outputSession"; session: DextHistorySession; switchId?: number; hostInitiated?: true }
+  | { type: "outputSessionRef"; sessionId: string; signature: string; switchId?: number; hostInitiated?: true }
+  | {
+    type: "activeConversation";
+    activeId: string;
+    selection: AgentSelection;
+    planPath?: string;
+    planStatus: PlanStatus;
+    switchId?: number;
+    hostInitiated?: true;
+  }
   | { type: "planContext"; path?: string; status: PlanStatus }
-  | { type: "conversations"; sessions: ConversationSummary[]; activeId: string }
+  | {
+    type: "conversations";
+    sessions: ConversationSummary[];
+    activeId: string;
+    /** Active conversation-scoped controls, sent with the tab update so a
+     * tab switch does not need to resend the full sidebar state. */
+    selection?: AgentSelection;
+    planPath?: string;
+    planStatus?: PlanStatus;
+    switchId?: number;
+    hostInitiated?: true;
+  }
   | { type: "openMethods" }
   | { type: "openMcp" }
   | { type: "mcpAssistant" }
@@ -212,7 +233,8 @@ export type WebviewResponse =
     message: string;
   }
   | { type: "agentEvent"; sessionId: string; event: AgentStreamEvent }
-  | { type: "executing"; sessionId: string; value: boolean; turnId: string; source?: string; planPath?: string; executePlan?: boolean }
+  | { type: "agentEvents"; sessionId: string; events: AgentStreamEvent[]; switchId?: number }
+  | { type: "executing"; sessionId: string; value: boolean; turnId: string; source?: string; planPath?: string; executePlan?: boolean; startedAt?: number; switchId?: number; hostInitiated?: true }
   | { type: "inputKind"; kind: "empty" | "workflow" | "invalid" }
   | { type: "insertFileReferences"; expressions: string[] }
   | { type: "imageAttachment"; relativePath: string; webviewUri: string; name: string }

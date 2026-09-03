@@ -3,7 +3,7 @@ import * as vscode from "vscode";
 import type { DextHistoryStore } from "./historyStore.js";
 import type { DextConversationPreferences } from "./conversationPreferences.js";
 import { orderHistorySessions } from "./conversationPreferences.js";
-import { historyTokenStyles, renderHistorySession } from "./historyRender.js";
+import { historyTokenStyles, renderHistorySession, renderHistorySessionBody } from "./historyRender.js";
 import { loadEditorTokenTheme } from "./vscodeTheme.js";
 import { openDextFileReference } from "./vscodeContextHost.js";
 import type { DextStorage } from "./dextStorage.js";
@@ -45,6 +45,16 @@ export class DextHistoryPanel implements vscode.Disposable {
       const message = raw as { type?: string; text?: string; reference?: string; command?: string; sessionId?: string };
       if (message.type === "copy" && typeof message.text === "string") {
         void vscode.env.clipboard.writeText(message.text);
+      }
+      if (message.type === "loadHistorySession" && typeof message.sessionId === "string") {
+        const session = this.history.list(true).find((item) => item.id === message.sessionId);
+        if (session) {
+          void this.panel?.webview.postMessage({
+            type: "historySessionBody",
+            sessionId: session.id,
+            html: renderHistorySessionBody(session)
+          });
+        }
       }
       if (message.type === "openFileReference" && typeof message.reference === "string") {
         void openDextFileReference(message.reference, this.storage);
@@ -103,6 +113,7 @@ export class DextHistoryPanel implements vscode.Disposable {
         const name = this.preferences.title(session.id);
         return renderHistorySession(session, {
           favorite: favorites.has(session.id),
+          lazy: true,
           ...(name ? { name } : {})
         });
       }).join("\n")
@@ -172,6 +183,25 @@ export class DextHistoryPanel implements vscode.Disposable {
           sessionId: historyAction.dataset.sessionId || ''
         });
       }
+    });
+    document.addEventListener('toggle', (event) => {
+      const target = event.target instanceof HTMLDetailsElement ? event.target : null;
+      if (!target?.open || target.dataset.historyLazy !== 'true' || target.dataset.historyLoaded === 'true' || target.dataset.historyLoading === 'true') return;
+      const sessionId = target.dataset.historySessionId;
+      if (!sessionId) return;
+      target.dataset.historyLoading = 'true';
+      vscode.postMessage({ type: 'loadHistorySession', sessionId });
+    }, true);
+    window.addEventListener('message', (event) => {
+      const message = event.data;
+      if (!message || message.type !== 'historySessionBody' || typeof message.sessionId !== 'string' || typeof message.html !== 'string') return;
+      const target = [...document.querySelectorAll('details.history-session')].find((item) => item.dataset.historySessionId === message.sessionId);
+      if (!target) return;
+      const body = target.querySelector('.history-session-body');
+      if (!body) return;
+      body.innerHTML = message.html;
+      target.dataset.historyLoaded = 'true';
+      delete target.dataset.historyLoading;
     });
   </script>
 </body>

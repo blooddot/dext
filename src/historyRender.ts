@@ -1,5 +1,6 @@
 import { parser } from "@lezer/python";
 import { classHighlighter, highlightCode } from "@lezer/highlight";
+import MarkdownIt from "markdown-it";
 import type { AgentStreamEvent, DextResult, InputExecutionResponse, RuntimeResponse, WorkflowStepResponse } from "./core/types.js";
 import type { EditorTokenTheme } from "./vscodeTheme.js";
 import type { DextHistoryRecord, DextHistorySession } from "./historyStore.js";
@@ -21,6 +22,20 @@ export function escapeHtml(value: string): string {
   return value.replace(/[&><"]/g, (character) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;"
   })[character] ?? character);
+}
+
+// Process events are also shown in the live conversation, where Markdown owns
+// paragraph and soft-break layout. History must use the same interpretation:
+// rendering the stored source with pre-wrap turns Markdown's blank lines into
+// unusually large gaps after a conversation is reopened.
+const processMarkdown = new MarkdownIt({
+  html: false,
+  breaks: true,
+  linkify: true
+});
+
+function renderProcessMarkdown(source: string): string {
+  return processMarkdown.render(source);
 }
 
 function chevron(): string {
@@ -353,12 +368,12 @@ function outputText(response: InputExecutionResponse): string {
 
 function processMessage(text: string): string {
   const presentation = presentAgentMessage(text);
-  if (!presentation.structured) return `<div class="process-text">${escapeHtml(text)}</div>`;
+  if (!presentation.structured) return `<div class="process-text markdown-body">${renderProcessMarkdown(text)}</div>`;
   const meta = presentation.meta.length
     ? `<span class="process-result-meta">${escapeHtml(presentation.meta.join(" · "))}</span>`
     : "";
   const body = presentation.text
-    ? `<div class="process-result-text">${escapeHtml(presentation.text)}</div>`
+    ? `<div class="process-result-text markdown-body">${renderProcessMarkdown(presentation.text)}</div>`
     : "";
   const details = presentation.details.map((detail) =>
     `<div class="process-result-detail ${detail.tone}">${detail.meta ? `<span class="process-result-detail-meta">${escapeHtml(detail.meta)}</span>` : ""}${escapeHtml(detail.text)}</div>`
@@ -482,6 +497,12 @@ export function conversationTitle(session: DextHistorySession): string {
 export interface HistorySessionView {
   favorite?: boolean;
   name?: string;
+  /** Render only the session row; the turn body can be requested on demand. */
+  lazy?: boolean;
+}
+
+export function renderHistorySessionBody(session: DextHistorySession): string {
+  return session.turns.map((turn) => renderHistoryRecord(turn, session.id)).join("\n");
 }
 
 export function renderHistorySession(session: DextHistorySession, view: HistorySessionView = {}): string {
@@ -498,7 +519,11 @@ export function renderHistorySession(session: DextHistorySession, view: HistoryS
     ? `<i class="history-favorite codicon codicon-star-full" title="Favorite" aria-label="Favorite"></i>`
     : "";
   const label = view.name ?? conversationTitle(session);
-  return `<details class="history-session${favorite ? " favorite" : ""}${session.archivedAt ? " archived" : ""}" ${context}><summary title="${SESSION_ACTION_HINT}">${chevron()}${star}<span class="history-summary-input${view.name ? " named" : ""}">${escapeHtml(label)}</span><span class="history-meta">${count}</span><span class="history-meta history-session-time">${escapeHtml(dateLabel(session.createdAt))}</span><span class="history-session-actions">${historySessionActions(session, favorite)}</span></summary><div class="history-session-body">${session.turns.map((turn) => renderHistoryRecord(turn, session.id)).join("")}</div></details>`;
+  const body = view.lazy
+    ? `<div class="history-lazy-placeholder">Expand to load conversation turns.</div>`
+    : renderHistorySessionBody(session);
+  const lazyAttributes = view.lazy ? ` data-history-lazy="true" data-history-session-id="${escapeHtml(session.id)}"` : "";
+  return `<details class="history-session${favorite ? " favorite" : ""}${session.archivedAt ? " archived" : ""}"${lazyAttributes} ${context}><summary title="${SESSION_ACTION_HINT}">${chevron()}${star}<span class="history-summary-input${view.name ? " named" : ""}">${escapeHtml(label)}</span><span class="history-meta">${count}</span><span class="history-meta history-session-time">${escapeHtml(dateLabel(session.createdAt))}</span><span class="history-session-actions">${historySessionActions(session, favorite)}</span></summary><div class="history-session-body">${body}</div></details>`;
 }
 
 export function conversationMarkdown(session: DextHistorySession): string {

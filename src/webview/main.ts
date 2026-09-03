@@ -50,6 +50,7 @@ function element<T extends HTMLElement>(id: string): T {
 }
 
 const vscode = acquireVsCodeApi();
+
 const elements = {
   main: element<HTMLElement>("dext-main"),
   conversationTabs: element<HTMLElement>("conversation-tabs"),
@@ -153,6 +154,10 @@ const fileSearch = new FileSearchClient((request) => vscode.postMessage(request)
 let executing = false;
 let stopping = false;
 let activeTurnId: string | undefined;
+// The turn id alone is not enough when a history command activates another
+// conversation while the previous tab is still running. Keep the session
+// owner so a live row can never leak into the newly activated conversation.
+let activeExecutionSessionId: string | undefined;
 let hasErrors = false;
 let problemCounts = { errors: 0, warnings: 0 };
 let inputKind: "empty" | "workflow" | "invalid" = "empty";
@@ -178,6 +183,25 @@ let lastSidebarState: SidebarState | undefined;
 let renderedMethodsKey: string | undefined;
 let renderedMcpKey: string | undefined;
 let activeConversationId: string | undefined;
+// Monotonically identifies the latest tab click. Host responses can be
+// delayed by the Webview IPC queue, so stale responses must not overwrite a
+// newer local selection.
+let conversationSwitchId = 0;
+// Scroll correction is deferred until layout has settled.  A tab switch or a
+// real user scroll must invalidate an older correction; otherwise a queued
+// frame from the previous conversation can yank the newly selected view while
+// the user is trying to read it.
+let resultScrollFrame: number | undefined;
+let resultScrollGeneration = 0;
+// A restored running conversation receives its live row and buffered events
+// after the cached/history DOM has been painted. Force one final bottom snap
+// for that replay; otherwise adding the running row makes the old bottom look
+// like a manual scroll and the normal follow logic deliberately preserves it.
+let forceInitialConversationScroll = false;
+// Rendering a restored conversation can include Markdown, syntax highlighting,
+// and diff construction. Keep the tab switch responsive by yielding once so
+// the browser can paint an empty loading viewport before that work starts.
+let conversationRenderGeneration = 0;
 interface DraftAttachment {
   relativePath: string;
   webviewUri: string;
@@ -201,6 +225,8 @@ let agentEditedUris = new Set<string>();
 const agentEventItems = new Map<string, HTMLElement>();
 const pendingAgentRenders = new Set<HTMLElement>();
 let agentRenderFrame: number | undefined;
+let pendingAgentEventBatches: Array<{ sessionId: string; events: AgentStreamEvent[] }> = [];
+let agentEventBatchFrame: number | undefined;
 interface AgentToolCommand {
   body: HTMLElement;
   copy: HTMLButtonElement;
@@ -223,10 +249,13 @@ let agentFileChanges: { disclosure: HTMLDetailsElement; body: HTMLElement; label
 const imageAttachments = new Map<string, HTMLElement>();
 interface OutputTurnElements {
   disclosure: HTMLDetailsElement;
+  input?: HTMLElement;
   process: HTMLElement;
   processDisclosure: HTMLDetailsElement;
   output: HTMLElement;
   outputDisclosure: HTMLDetailsElement;
+  hydrated?: boolean;
+  hydrate?: () => void;
 }
 const outputTurns = new Map<string, OutputTurnElements>();
 let activeTurn: OutputTurnElements | undefined;
@@ -237,6 +266,7 @@ let activeTurn: OutputTurnElements | undefined;
 type ConversationViewCache = {
   nodes: Node[];
   turns: Map<string, OutputTurnElements>;
+  pendingAgentItems: HTMLElement[];
   activeTurnId?: string;
   signature: string;
 };
@@ -252,7 +282,6 @@ function conversationSignature(session: DextHistorySession): string {
 
 function cacheRenderedConversation(): void {
   if (!renderedConversationId || !renderedConversationSignature) return;
-  flushAgentMessageRenders();
   // A running turn is represented by a live, non-persisted output row and
   // its process events are replayed when the tab becomes active again. Do
   // not cache that transient DOM or those events would be appended twice.
@@ -260,11 +289,19 @@ function cacheRenderedConversation(): void {
     elements.result.replaceChildren();
     return;
   }
+  // Do not synchronously Markdown-render a potentially large trace from the
+  // pointerdown handler. Keep the dirty items with the detached nodes and
+  // render them after that conversation is restored.
+  const pendingAgentItems = [...pendingAgentRenders].filter((item) => item.isConnected);
+  pendingAgentRenders.clear();
+  if (agentRenderFrame !== undefined) cancelAnimationFrame(agentRenderFrame);
+  agentRenderFrame = undefined;
   const activeTurnId = activeTurn?.disclosure.dataset.turnId;
   conversationViewCache.delete(renderedConversationId);
   conversationViewCache.set(renderedConversationId, {
     nodes: [...elements.result.childNodes],
     turns: new Map(outputTurns),
+    pendingAgentItems,
     ...(activeTurnId ? { activeTurnId } : {}),
     signature: renderedConversationSignature
   });
@@ -274,6 +311,52 @@ function cacheRenderedConversation(): void {
     if (!oldest) break;
     conversationViewCache.delete(oldest);
   }
+}
+
+/**
+ * End the currently displayed conversation before asking the extension host
+ * for another one.  Selection is local and synchronous, whereas an IPC
+ * response (or a cold DOM rebuild) can take several frames.  Leaving the old
+ * nodes in place during that gap makes a slow switch look like the newly
+ * selected tab is lagging behind.  An empty result viewport is an honest
+ * loading state and lets the browser paint the selection change immediately.
+ */
+function clearVisibleConversation(): void {
+  conversationRenderGeneration += 1;
+  cancelScheduledResultScroll();
+  forceInitialConversationScroll = false;
+  cacheRenderedConversation();
+  if (agentRunTimer) clearInterval(agentRunTimer);
+  agentRunTimer = undefined;
+  resetAgentTrace();
+  clearInputError();
+  elements.result.replaceChildren();
+  outputTurns.clear();
+  activeTurn = undefined;
+  renderedConversationId = undefined;
+  renderedConversationSignature = undefined;
+  jumpToLatest.hidden = true;
+  elements.resultBody.dataset.loading = "true";
+  elements.resultBody.setAttribute("aria-busy", "true");
+  syncResultToggle();
+}
+
+function finishConversationLoading(): void {
+  delete elements.resultBody.dataset.loading;
+  elements.resultBody.setAttribute("aria-busy", "false");
+}
+
+function cancelScheduledResultScroll(): void {
+  resultScrollGeneration += 1;
+  if (resultScrollFrame !== undefined) cancelAnimationFrame(resultScrollFrame);
+  resultScrollFrame = undefined;
+}
+
+function restoreCachedAgentRenders(cached: ConversationViewCache): void {
+  for (const item of cached.pendingAgentItems) {
+    if (item.isConnected) scheduleAgentMessageRender(item);
+  }
+  cached.pendingAgentItems = [];
 }
 
 function escapeHtml(value: string): string {
@@ -1322,7 +1405,28 @@ function submitAgentSelection(change: Partial<SidebarState["agentSelection"]>): 
 
 function selectConversation(sessionId: string): void {
   if (sessionId === activeConversationId) return;
-  vscode.postMessage({ type: "selectConversation", sessionId });
+  const switchId = ++conversationSwitchId;
+  // Commit the tab highlight and remove the prior tab's view in the same
+  // event.  The replacement is restored from cache or received from the host
+  // afterwards, so a slow response never leaves stale conversation content
+  // below an already-selected tab.
+  persistComposerDraft();
+  activeConversationId = sessionId;
+  scheduleComposerDraftRestore(sessionId, switchId);
+  for (const tab of elements.conversationTabs.querySelectorAll<HTMLElement>(".conversation-tab")) {
+    const active = tab.dataset.sessionId === sessionId;
+    tab.classList.toggle("active", active);
+    tab.setAttribute("aria-selected", String(active));
+  }
+  executing = false;
+  stopping = false;
+  activeTurnId = undefined;
+  activeExecutionSessionId = undefined;
+  updateRunState();
+  clearVisibleConversation();
+  const cached = conversationViewCache.get(sessionId);
+  if (cached) renderOutputSessionRef(sessionId, cached.signature, switchId);
+  vscode.postMessage({ type: "selectConversation", sessionId, switchId });
 }
 
 function closeConversation(sessionId: string): void {
@@ -1345,7 +1449,7 @@ function renderConversations(sessions: readonly ConversationSummary[], activeId:
   const activeChanged = activeConversationId !== activeId;
   if (activeChanged) persistComposerDraft();
   activeConversationId = activeId;
-  if (activeChanged) restoreComposerDraft(activeId);
+  if (activeChanged) scheduleComposerDraftRestore(activeId);
   runningConversationIds.clear();
   for (const conversation of sessions) {
     if (conversation.running) runningConversationIds.add(conversation.id);
@@ -1357,6 +1461,7 @@ function renderConversations(sessions: readonly ConversationSummary[], activeId:
     executing = false;
     stopping = false;
     activeTurnId = undefined;
+    activeExecutionSessionId = undefined;
     updateRunState();
   }
   elements.conversationTabs.replaceChildren();
@@ -1366,6 +1471,7 @@ function renderConversations(sessions: readonly ConversationSummary[], activeId:
     const active = conversation.id === activeId;
     const tab = document.createElement("div");
     tab.className = `conversation-tab${active ? " active" : ""}${conversation.pinned ? " pinned" : ""}${conversation.running ? " running" : ""}`;
+    tab.dataset.sessionId = conversation.id;
     tab.setAttribute("role", "tab");
     tab.setAttribute("aria-selected", String(active));
     tab.title = conversation.running ? `${conversation.title} — running` : conversation.title;
@@ -1407,7 +1513,19 @@ function renderConversations(sessions: readonly ConversationSummary[], activeId:
     label.type = "button";
     label.className = "conversation-tab-label";
     label.textContent = conversation.title;
-    label.addEventListener("click", () => selectConversation(conversation.id));
+    // Select on press instead of waiting for the browser's click synthesis.
+    // In the trace, pointerup/click can arrive 90–180ms after pointerdown
+    // while the webview is busy.  The tab highlight and viewport reset are
+    // local, so there is no reason to make the visual switch wait for that
+    // extra event latency.  Keep click as the keyboard-accessible fallback;
+    // selectConversation is idempotent for the already-active tab.
+    label.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      selectConversation(conversation.id);
+    });
+    label.addEventListener("click", () => {
+      selectConversation(conversation.id);
+    });
     const activity = document.createElement("i");
     activity.className = "conversation-tab-activity codicon codicon-loading codicon-modifier-spin";
     activity.title = "Dext turn running";
@@ -1949,13 +2067,14 @@ function createOutputTurn(
   turnId: string,
   source: string,
   createdAt = Date.now(),
-  options: { executePlan?: boolean; planPath?: string } = {}
+  options: { executePlan?: boolean; planPath?: string; lazy?: boolean; open?: boolean } = {}
 ): OutputTurnElements {
   source = normalizeInputReferenceSource(source);
+  const lazy = options.lazy === true;
   for (const turn of outputTurns.values()) turn.disclosure.open = false;
   const disclosure = document.createElement("details");
   disclosure.className = "output-turn";
-  disclosure.open = true;
+  disclosure.open = options.open ?? !lazy;
   disclosure.dataset.turnId = turnId;
   const summary = document.createElement("summary");
   const chevron = document.createElement("i");
@@ -1986,7 +2105,15 @@ function createOutputTurn(
     turnActionButton("repo-forked", "Fork from this turn", () => {
       vscode.postMessage({ type: "forkFromTurn", turnId });
     }, true),
-    turnCopyButton(() => disclosure.textContent?.trim() ?? ""),
+    turnCopyButton(() => {
+      // Copying a collapsed history row is an explicit request for its full
+      // content, so hydrate it before collecting the text.
+      // Hydration resets the global agent trace and active turn. Never do
+      // that to a different row while another turn is streaming; its later
+      // events would otherwise be appended to this historical row.
+      if (!executing || activeTurn === turn) turn.hydrate?.();
+      return disclosure.textContent?.trim() ?? "";
+    }),
     turnActionButton("trash", "Delete turn", () => {
       openConfirmationDialog(
         "Delete this turn from the conversation?",
@@ -1997,26 +2124,35 @@ function createOutputTurn(
   // Keep the turn title as the primary row label, matching the history view;
   // metadata belongs at the trailing edge of the row rather than before it.
   summary.append(chevron, title, time, actions);
+  let inputBody: HTMLElement | undefined;
   if (!options.executePlan) {
+    // Keep the shared disclosure construction recognizable; lazy history
+    // turns close it immediately after creating the lightweight shell.
     const input = outputTurnSection("Input", true);
-    const inputText = renderedInputSource(source);
-    const inputCopy = document.createElement("div");
-    inputCopy.className = "output-turn-input";
-    inputCopy.append(inputText, copyButton(source));
-    input.body.append(inputCopy);
+    input.disclosure.open = !lazy;
+    inputBody = input.body;
+    if (!lazy) {
+      const inputText = renderedInputSource(source);
+      const inputCopy = document.createElement("div");
+      inputCopy.className = "output-turn-input";
+      inputCopy.append(inputText, copyButton(source));
+      input.body.append(inputCopy);
+    }
     body.append(input.disclosure);
   }
-  const process = outputTurnSection("Process", true);
-  const output = outputTurnSection("Output", true);
+  const process = outputTurnSection("Process", !lazy);
+  const output = outputTurnSection("Output", !lazy);
   body.append(process.disclosure, output.disclosure);
   disclosure.append(summary, body);
   elements.result.append(disclosure);
-  const turn = {
+  const turn: OutputTurnElements = {
     disclosure,
+    ...(inputBody ? { input: inputBody } : {}),
     process: process.body,
     processDisclosure: process.disclosure,
     output: output.body,
-    outputDisclosure: output.disclosure
+    outputDisclosure: output.disclosure,
+    hydrated: !lazy
   };
   outputTurns.set(turnId, turn);
   activeTurn = turn;
@@ -2505,8 +2641,15 @@ function syncJumpToLatest(): void {
 }
 
 function followResultIfNeeded(shouldFollow: boolean): void {
-  if (!shouldFollow) return;
-  requestAnimationFrame(() => {
+  if (!shouldFollow) {
+    cancelScheduledResultScroll();
+    return;
+  }
+  cancelScheduledResultScroll();
+  const generation = resultScrollGeneration;
+  resultScrollFrame = requestAnimationFrame(() => {
+    resultScrollFrame = undefined;
+    if (generation !== resultScrollGeneration) return;
     elements.resultBody.scrollTop = elements.resultBody.scrollHeight;
     syncJumpToLatest();
   });
@@ -2516,8 +2659,12 @@ function followResultIfNeeded(shouldFollow: boolean): void {
  * timeline. Defer until the freshly-rendered disclosures have been laid out
  * so scrollHeight reflects the complete session. */
 function scrollResultToBottom(): void {
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
+  cancelScheduledResultScroll();
+  const generation = resultScrollGeneration;
+  resultScrollFrame = requestAnimationFrame(() => {
+    resultScrollFrame = requestAnimationFrame(() => {
+      resultScrollFrame = undefined;
+      if (generation !== resultScrollGeneration || !activeConversationId || activeConversationId !== renderedConversationId) return;
       elements.resultBody.scrollTop = elements.resultBody.scrollHeight;
       syncJumpToLatest();
     });
@@ -2556,8 +2703,8 @@ function updateAgentProgress(label: string): void {
   agentProgress.textContent = `${agentProgressState} for ${formatDuration(elapsed)}${details.length ? ` · ${details.join(" · ")}` : ""}`;
 }
 
-function startAgentProgress(): void {
-  agentRunStartedAt = Date.now();
+function startAgentProgress(startedAt = Date.now()): void {
+  agentRunStartedAt = startedAt;
   agentStreamPanel();
   updateAgentProgress("Thinking");
   agentRunTimer = setInterval(() => updateAgentProgress(agentProgressState), 100);
@@ -2849,6 +2996,36 @@ function resetAgentTrace(): void {
   agentToolGroups.clear();
   agentToolGroup = undefined;
   agentFileChanges = undefined;
+  pendingAgentEventBatches = [];
+  if (agentEventBatchFrame !== undefined) cancelAnimationFrame(agentEventBatchFrame);
+  agentEventBatchFrame = undefined;
+}
+
+function flushAgentEventBatches(): void {
+  agentEventBatchFrame = undefined;
+  const batches = pendingAgentEventBatches;
+  pendingAgentEventBatches = [];
+  const shouldFollow = resultIsNearBottom();
+  const events = batches
+    .filter((batch) => batch.sessionId === activeConversationId)
+    .flatMap((batch) => batch.events);
+  if (!events.length) return;
+  for (const event of events) renderAgentEvent(event);
+  if (forceInitialConversationScroll) {
+    forceInitialConversationScroll = false;
+    scrollResultToBottom();
+  } else {
+    followResultIfNeeded(shouldFollow);
+  }
+  syncJumpToLatest();
+}
+
+function queueAgentEvents(sessionId: string, events: readonly AgentStreamEvent[]): void {
+  if (sessionId !== activeConversationId || !events.length) return;
+  pendingAgentEventBatches.push({ sessionId, events: [...events] });
+  if (agentEventBatchFrame === undefined) {
+    agentEventBatchFrame = requestAnimationFrame(flushAgentEventBatches);
+  }
 }
 
 function storedResponse(record: DextHistoryRecord): InputExecutionResponse | undefined {
@@ -2861,10 +3038,74 @@ function storedResponse(record: DextHistoryRecord): InputExecutionResponse | und
   }
 }
 
+/** Populate a history turn only when its disclosure is opened.  The shell
+ * still exposes the input title and turn actions, while expensive Markdown,
+ * syntax highlighting, diffs, and streamed process events stay out of the
+ * tab-switch critical path. */
+function hydrateStoredTurn(record: DextHistoryRecord, turn: OutputTurnElements): void {
+  if (turn.hydrated) return;
+  turn.hydrated = true;
+  const response = storedResponse(record);
+
+  // Plan turns use a more useful title once their response has been parsed.
+  // Keep that JSON parse off the tab-switch path and update the lightweight
+  // summary only after deferred hydration completes.
+  const planExecution = response?.executions.find((item) => item.result.kind === "chat" && item.result.executePlan);
+  const planResult = planExecution?.result.kind === "chat" ? planExecution.result : undefined;
+  if (planResult?.executePlan && planResult.planPath) {
+    const title = turn.disclosure.querySelector<HTMLElement>(".output-turn-title");
+    if (title) title.textContent = `Plan: ${planResult.planPath.split("/").pop() ?? planResult.planPath}`;
+  }
+
+  activeTurn = turn;
+  resetAgentTrace();
+  agentRunStartedAt = Date.now();
+  if (turn.input && turn.input.childElementCount === 0) {
+    const inputCopy = document.createElement("div");
+    inputCopy.className = "output-turn-input";
+    inputCopy.append(renderedInputSource(record.input), copyButton(record.input));
+    turn.input.append(inputCopy);
+  }
+  for (const event of record.process) renderAgentEvent(event);
+  if (agentStream) finishAgentProgress();
+  turn.processDisclosure.open = false;
+  if (record.error) renderOutputError(record.error);
+  else if (response) renderResult(response);
+  else if (record.output) turn.output.append(jsonOutput(record.output));
+  turn.outputDisclosure.open = true;
+  syncResultToggle();
+}
+
+function hydrateOutputTurnOnOpen(event: Event): void {
+  const target = event.target;
+  if (!(target instanceof HTMLDetailsElement) || !target.open || !target.classList.contains("output-turn")) return;
+  const turnId = target.dataset.turnId;
+  if (!turnId) return;
+  const turn = outputTurns.get(turnId);
+  if (!turn?.hydrate) return;
+  // Keep a live turn's streaming state intact while it is running. The
+  // historical row can be hydrated after the run completes.
+  if (executing && activeTurn && activeTurn !== turn) return;
+  const previousActiveTurn = activeTurn;
+  turn.hydrate();
+  if (previousActiveTurn && previousActiveTurn !== turn) activeTurn = previousActiveTurn;
+}
+
 function renderOutputSession(session: DextHistorySession): void {
   const signature = conversationSignature(session);
-  if (renderedConversationId === session.id && renderedConversationSignature === signature) return;
+  if (renderedConversationId === session.id && renderedConversationSignature === signature) {
+    return;
+  }
   if (renderedConversationId && renderedConversationId !== session.id) cacheRenderedConversation();
+
+  // Normally the host sends the historical session before replaying an active
+  // execution. A cache-ref miss can invert those two deliveries, however. In
+  // that case retain the already-created live row while rebuilding the stored
+  // rows, otherwise accepting the late session would erase the stream.
+  const liveTurn = executing && activeExecutionSessionId === session.id && activeTurn && activeTurnId
+    ? activeTurn
+    : undefined;
+  const liveTurnId = liveTurn ? activeTurnId : undefined;
 
   const cached = conversationViewCache.get(session.id);
   // Also verify turn identities. Older builds persisted a different id than
@@ -2874,8 +3115,9 @@ function renderOutputSession(session: DextHistorySession): void {
   const cacheMatchesSession = cached
     && cached.turns.size === sessionTurnIds.size
     && [...cached.turns.keys()].every((turnId) => sessionTurnIds.has(turnId));
-  if (cached && cached.signature === signature && cacheMatchesSession) {
+  if (!liveTurn && cached && cached.signature === signature && cacheMatchesSession) {
     elements.result.replaceChildren(...cached.nodes);
+    restoreCachedAgentRenders(cached);
     outputTurns.clear();
     for (const [turnId, turn] of cached.turns) outputTurns.set(turnId, turn);
     activeTurn = cached.activeTurnId ? outputTurns.get(cached.activeTurnId) : [...outputTurns.values()].at(-1);
@@ -2884,8 +3126,10 @@ function renderOutputSession(session: DextHistorySession): void {
     renderedConversationId = session.id;
     renderedConversationSignature = signature;
     elements.resultSection.classList.remove("hidden");
+    finishConversationLoading();
     syncResultToggle();
     syncJumpToLatest();
+    scrollResultToBottom();
     return;
   }
 
@@ -2895,29 +3139,56 @@ function renderOutputSession(session: DextHistorySession): void {
   elements.result.replaceChildren();
   outputTurns.clear();
   activeTurn = undefined;
-  for (const record of session.turns) {
-    const response = storedResponse(record);
-    const execution = response?.executions.find((item) => item.result.kind === "chat" && item.result.executePlan);
-    const planResult = execution?.result.kind === "chat" ? execution.result : undefined;
+  const renderGeneration = ++conversationRenderGeneration;
+  let latestTurn: OutputTurnElements | undefined;
+  for (const [index, record] of session.turns.entries()) {
+    // Keep all historical payload parsing lazy. The newest turn is hydrated
+    // after the browser paints the loading viewport; older turns parse their
+    // response only when the user expands them.
+    const latest = index === session.turns.length - 1;
     const turn = createOutputTurn(record.id, record.input, record.createdAt, {
-      ...(planResult?.executePlan ? { executePlan: true } : {}),
-      ...(planResult?.planPath ? { planPath: planResult.planPath } : {})
+      lazy: true,
+      open: latest
     });
-    resetAgentTrace();
-    agentRunStartedAt = Date.now();
-    for (const event of record.process) renderAgentEvent(event);
-    if (agentStream) finishAgentProgress();
-    turn.processDisclosure.open = false;
-    if (record.error) renderOutputError(record.error);
-    else if (response) renderResult(response);
-    else if (record.output) turn.output.append(jsonOutput(record.output));
+    turn.hydrate = () => hydrateStoredTurn(record, turn);
+    if (latest) latestTurn = turn;
   }
+  if (liveTurn && liveTurnId) {
+    elements.result.append(liveTurn.disclosure);
+    outputTurns.set(liveTurnId, liveTurn);
+    activeTurn = liveTurn;
+  }
+  // Set these before scheduling the correction: scrollResultToBottom rejects
+  // callbacks that no longer belong to the visible conversation.
+  renderedConversationId = session.id;
+  renderedConversationSignature = signature;
   elements.resultSection.classList.remove("hidden");
   syncResultToggle();
   syncJumpToLatest();
-  scrollResultToBottom();
-  renderedConversationId = session.id;
-  renderedConversationSignature = signature;
+  // Let the empty viewport paint first. This prevents a large restored turn
+  // from blocking wheel/touch input for the duration of Markdown rendering.
+  requestAnimationFrame(() => {
+    setTimeout(() => {
+      if (renderGeneration !== conversationRenderGeneration
+        || activeConversationId !== session.id
+        || renderedConversationId !== session.id) return;
+      // A running turn may have been replayed while the historical snapshot
+      // was waiting for its deferred hydration. Leave the live row untouched;
+      // its stream renderer owns activeTurn and will keep appending there.
+      if (executing) {
+        finishConversationLoading();
+        syncResultToggle();
+        syncJumpToLatest();
+        scrollResultToBottom();
+        return;
+      }
+      latestTurn?.hydrate?.();
+      finishConversationLoading();
+      syncResultToggle();
+      syncJumpToLatest();
+      scrollResultToBottom();
+    }, 0);
+  });
 }
 
 function findImageItem(data: DataTransfer | null): DataTransferItem | undefined {
@@ -2926,6 +3197,32 @@ function findImageItem(data: DataTransfer | null): DataTransferItem | undefined 
     if (item.kind === "file" && item.type.startsWith("image/")) return item;
   }
   return undefined;
+}
+
+function renderOutputSessionRef(sessionId: string, signature: string, switchId?: number, hostInitiated = false): void {
+  if (renderedConversationId === sessionId && renderedConversationSignature === signature) {
+    return;
+  }
+  if (renderedConversationId && renderedConversationId !== sessionId) cacheRenderedConversation();
+  const cached = conversationViewCache.get(sessionId);
+  if (!cached || cached.signature !== signature) {
+    vscode.postMessage({ type: "outputSessionRefMiss", sessionId, signature, ...(switchId !== undefined ? { switchId } : {}), ...(hostInitiated ? { hostInitiated: true as const } : {}) });
+    return;
+  }
+  elements.result.replaceChildren(...cached.nodes);
+  restoreCachedAgentRenders(cached);
+  outputTurns.clear();
+  for (const [turnId, turn] of cached.turns) outputTurns.set(turnId, turn);
+  activeTurn = cached.activeTurnId ? outputTurns.get(cached.activeTurnId) : [...outputTurns.values()].at(-1);
+  conversationViewCache.delete(sessionId);
+  conversationViewCache.set(sessionId, cached);
+  renderedConversationId = sessionId;
+  renderedConversationSignature = signature;
+  elements.resultSection.classList.remove("hidden");
+  finishConversationLoading();
+  syncResultToggle();
+  syncJumpToLatest();
+  scrollResultToBottom();
 }
 
 function addImageAttachment(relativePath: string, webviewUri: string, name: string): void {
@@ -2993,6 +3290,14 @@ function restoreComposerDraft(sessionId: string): void {
   updateRunState();
 }
 
+function scheduleComposerDraftRestore(sessionId: string, switchId?: number): void {
+  requestAnimationFrame(() => {
+    if (activeConversationId !== sessionId) return;
+    if (switchId !== undefined && switchId !== conversationSwitchId) return;
+    restoreComposerDraft(sessionId);
+  });
+}
+
 function clearSubmittedInput(): void {
   editor.setValue("");
   // The chips stand for references that just left the composer with the turn,
@@ -3035,8 +3340,14 @@ elements.resultToggle.addEventListener("click", (event) => {
   event.stopPropagation();
   toggleResultDetails();
 });
+elements.result.addEventListener("toggle", hydrateOutputTurnOnOpen, true);
 elements.result.addEventListener("toggle", syncResultToggle, true);
-elements.resultBody.addEventListener("scroll", syncJumpToLatest, { passive: true });
+elements.resultBody.addEventListener("scroll", () => {
+  // A manual wheel/touch scroll takes precedence over any deferred follow
+  // request left by a stream update or a previous tab switch.
+  cancelScheduledResultScroll();
+  syncJumpToLatest();
+}, { passive: true });
 jumpToLatest.addEventListener("click", () => {
   elements.resultBody.scrollTop = elements.resultBody.scrollHeight;
   syncJumpToLatest();
@@ -3133,8 +3444,6 @@ elements.inputShell.addEventListener("paste", (event) => {
   reader.readAsDataURL(file);
 }, true);
 
-vscode.postMessage({ type: "debugLog", message: "main.ts loaded (drag diagnostic v2)" });
-
 window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   const message = event.data;
   if (broker.accept(message) || clipboard.accept(message) || fileSearch.accept(message)) return;
@@ -3173,8 +3482,65 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     addImageAttachment(message.relativePath, message.webviewUri, message.name);
     editor.insertFileReferences([`@${message.relativePath}`]);
   }
-  if (message.type === "outputSession") renderOutputSession(message.session);
-  if (message.type === "conversations") renderConversations(message.sessions, message.activeId);
+  if (message.type === "outputSession") {
+    if (message.switchId !== undefined && message.switchId !== conversationSwitchId) return;
+    // A pre-click payload can arrive after the local tab selection.  It has
+    // no switch id to reject, so also require it to match the visible tab.
+    if (!message.hostInitiated && activeConversationId && message.session.id !== activeConversationId) return;
+    // A live row may have been restored before a delayed historical payload.
+    // Rebuilding the session in that case would silently remove the running
+    // turn from the pane.
+    if (executing && activeTurn && activeTurnId && message.session.id === activeConversationId
+      && elements.resultBody.dataset.loading !== "true") return;
+    renderOutputSession(message.session);
+  }
+  if (message.type === "outputSessionRef") {
+    if (message.switchId !== undefined && message.switchId !== conversationSwitchId) return;
+    if (!message.hostInitiated && activeConversationId && message.sessionId !== activeConversationId) return;
+    if (executing && activeTurn && activeTurnId && message.sessionId === activeConversationId) return;
+    renderOutputSessionRef(message.sessionId, message.signature, message.switchId, message.hostInitiated === true);
+  }
+  if (message.type === "activeConversation") {
+    if (message.switchId !== undefined && message.switchId !== conversationSwitchId) return;
+    // Messages emitted by refreshes before a click have no switch id.  Once
+    // the tab press has committed locally, an older active-id must not undo
+    // that selection (and trigger another layout/scroll pass).
+    if (!message.hostInitiated && message.switchId === undefined && activeConversationId && message.activeId !== activeConversationId) return;
+    // History actions (Continue/Fork) activate a conversation from the host,
+    // without going through selectConversation(). Clear the previous tab's
+    // execution state before its historical DOM is restored; otherwise the
+    // old live row can be appended to the newly selected conversation.
+    if (activeConversationId !== message.activeId) {
+      executing = false;
+      stopping = false;
+      activeTurnId = undefined;
+      activeExecutionSessionId = undefined;
+      clearVisibleConversation();
+    }
+    activeConversationId = message.activeId;
+    for (const tab of elements.conversationTabs.querySelectorAll<HTMLElement>(".conversation-tab")) {
+      const active = tab.dataset.sessionId === message.activeId;
+      tab.classList.toggle("active", active);
+      tab.setAttribute("aria-selected", String(active));
+    }
+    if (lastSidebarState) renderAgentControls({ ...lastSidebarState, agentSelection: message.selection });
+    activePlanPath = message.planPath;
+    planStatus = message.planStatus;
+    renderPlanToolbar();
+  }
+  if (message.type === "conversations") {
+    if (message.switchId !== undefined && message.switchId !== conversationSwitchId) return;
+    if (!message.hostInitiated && message.switchId === undefined && activeConversationId && message.activeId !== activeConversationId) return;
+    renderConversations(message.sessions, message.activeId);
+    if (message.selection && lastSidebarState) {
+      renderAgentControls({ ...lastSidebarState, agentSelection: message.selection });
+    }
+    if (message.planStatus) {
+      activePlanPath = message.planPath;
+      planStatus = message.planStatus;
+      renderPlanToolbar();
+    }
+  }
   if (message.type === "planContext") {
     activePlanPath = message.path;
     planStatus = message.status;
@@ -3236,10 +3602,22 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   if (message.type === "agentEvent" && message.sessionId === activeConversationId) {
     const shouldFollow = resultIsNearBottom();
     renderAgentEvent(message.event);
-    followResultIfNeeded(shouldFollow);
+    if (forceInitialConversationScroll) {
+      forceInitialConversationScroll = false;
+      scrollResultToBottom();
+    } else {
+      followResultIfNeeded(shouldFollow);
+    }
     syncJumpToLatest();
   }
-  if (message.type === "executing" && (
+  if (message.type === "agentEvents"
+    && (message.switchId === undefined || message.switchId === conversationSwitchId)
+    && message.sessionId === activeConversationId) {
+    queueAgentEvents(message.sessionId, message.events);
+  }
+  if (message.type === "executing"
+    && (message.switchId === undefined || message.switchId === conversationSwitchId)
+    && (
     message.sessionId === activeConversationId
     || message.turnId === mcpAssistantRunningRequestId
     || (message.value && message.turnId === mcpAssistantRequestId)
@@ -3260,7 +3638,14 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     }
     executing = message.value;
     if (message.value) {
+      if (message.switchId !== undefined) {
+        // The row is appended after the restored conversation's initial
+        // scroll correction. Keep the replay pinned to the newest event.
+        forceInitialConversationScroll = true;
+        scrollResultToBottom();
+      }
       activeTurnId = message.turnId;
+      activeExecutionSessionId = message.sessionId;
       stopping = false;
       const existingTurn = outputTurns.get(message.turnId);
       if (existingTurn) {
@@ -3271,7 +3656,7 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
           ...(message.planPath ? { planPath: message.planPath } : {})
         });
         resetAgentTrace();
-        startAgentProgress();
+        startAgentProgress(message.startedAt);
       }
       elements.resultSection.classList.remove("hidden");
       if (!fullscreenPanel || fullscreenPanel === "result") {
@@ -3279,8 +3664,10 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
       }
       syncJumpToLatest();
     } else {
+      forceInitialConversationScroll = false;
       const shouldFollow = resultIsNearBottom();
       if (activeTurnId === message.turnId) activeTurnId = undefined;
+      if (activeExecutionSessionId === message.sessionId) activeExecutionSessionId = undefined;
       stopping = false;
       selectOutputTurn(message.turnId);
       finishAgentProgress();

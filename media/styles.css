@@ -800,8 +800,14 @@ main {
   padding: 4px;
   color: var(--vscode-foreground);
   line-height: 1.45;
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* Process prose is rendered as Markdown. Let block elements determine the
+   vertical rhythm instead of preserving every source newline as a log line. */
+.history-view .process-text.markdown-body {
+  padding: 4px;
+  line-height: 1.55;
 }
 
 .process-result {
@@ -828,8 +834,15 @@ main {
 .process-result-text,
 .process-result-detail {
   line-height: 1.5;
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.process-result-text.markdown-body {
+  line-height: 1.6;
+}
+
+.process-result-detail {
+  white-space: pre-wrap;
 }
 
 .process-result-detail-meta,
@@ -2308,6 +2321,38 @@ button.primary.stopping {
 #result-body {
   flex: 1 1 auto;
   padding-left: 16px;
+}
+
+/* A restored conversation is initially painted as an empty viewport while
+   its latest turn is hydrated on the next frame. Do not expose a dead
+   scrollbar during that short loading window. */
+#result-body[data-loading="true"] {
+  position: relative;
+  overflow: hidden;
+}
+
+#result-body[data-loading="true"]::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+  width: 14px;
+  height: 14px;
+  margin: auto;
+  border: 2px solid var(--vscode-descriptionForeground);
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: dext-loading-spin 700ms linear infinite;
+  opacity: .7;
+  pointer-events: none;
+}
+
+#result-body[data-loading="true"] #result {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+@keyframes dext-loading-spin {
+  to { transform: rotate(360deg); }
 }
 
 #result {

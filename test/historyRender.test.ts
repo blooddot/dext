@@ -159,6 +159,22 @@ describe("Dext history rendering", () => {
     expect(html).toContain("I will inspect the selected implementation first.");
   });
 
+  it("uses Markdown paragraph and line-break rules for history Process messages", () => {
+    const record: DextHistoryRecord = {
+      id: "process-markdown-breaks",
+      createdAt: 1,
+      input: "agent(input=\"summarize\")",
+      process: [{ phase: "message", text: "First line\nsecond line\n\n- one\n- two" }],
+      output: ""
+    };
+
+    const html = renderHistoryRecord(record);
+    expect(html).toContain('class="process-text markdown-body"');
+    expect(html).toContain("<p>First line<br>");
+    expect(html).toContain("<ul>");
+    expect(html).toContain("<li>one</li>");
+  });
+
   it("keeps AIOA dialogue and expandable command details in the same process timeline", () => {
     const record: DextHistoryRecord = {
       id: "aioa-work-log",
