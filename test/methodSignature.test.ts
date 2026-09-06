@@ -7,11 +7,12 @@ describe("method signatures", () => {
   it("renders the complete public signature for a built-in API", () => {
     const agent = BUILTIN_METHODS.find((method) => method.id === "agent");
     expect(agent).toBeDefined();
+    const cliParameters = ', cli?: "codex" | "claude", model?: "sonnet" | "opus" | { model: string, reasoning?: "low" | "medium" | "high" | "xhigh" | "max" | "ultra", speed?: "standard" | "fast" }';
     expect(formatMethodSignature(agent!)).toBe(
-      "agent(input: string, apply?: boolean = True, workspace?: dir) -> AgentResult"
+      `agent(input: string, apply?: boolean = True, workspace?: dir${cliParameters}) -> AgentResult`
     );
     expect(formatMethodSignature(agent!, { includeInternal: true })).toBe(
-      "agent(input: string, apply?: boolean = True, skills?: string | string[], rules?: string | string[], workspace?: dir) -> AgentResult"
+      `agent(input: string, apply?: boolean = True, skills?: string | string[], rules?: string | string[], workspace?: dir${cliParameters}) -> AgentResult`
     );
   });
 

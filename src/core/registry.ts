@@ -12,6 +12,9 @@ const SOURCE_PRIORITY: Record<MethodSource, number> = {
 
 export class MethodRegistry {
   private readonly methods = new Map<string, RegisteredCallable>();
+  private revision = 0;
+
+  get version(): number { return this.revision; }
 
   register(definition: CallableDefinition, source: MethodSource): void {
     const current = this.methods.get(definition.id);
@@ -22,6 +25,7 @@ export class MethodRegistry {
       return;
     }
     this.methods.set(definition.id, { ...definition, source });
+    this.revision += 1;
   }
 
   registerMany(definitions: readonly CallableDefinition[], source: MethodSource): void {
@@ -44,6 +48,7 @@ export class MethodRegistry {
     for (const [id, method] of this.methods) {
       if (method.source !== "builtin") {
         this.methods.delete(id);
+        this.revision += 1;
       }
     }
   }

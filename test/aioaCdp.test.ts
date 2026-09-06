@@ -232,13 +232,13 @@ describe("AIOA CDP", () => {
     const next = chatRequest("你能为我做些什么吗？");
     expect(aioaApiDefinition(first)).toBe([
       "Define API ask",
-      "Input: input:string, workspace?:dir",
+      'Input: input:string, workspace?:dir, cli?:"codex"|"claude", model?:"sonnet"|"opus"|object',
       "Output: {\"kind\":\"chat\",\"text\":string}"
     ].join("\n"));
     expect(aioaExecutionPrompt(first)).toBe([
       "Dext task: Ask",
       aioaBootstrapPrompt(),
-      "Define API ask\nInput: input:string, workspace?:dir\nOutput: {\"kind\":\"chat\",\"text\":string}\n\nRequest: {\"api\":\"ask\",\"input\":\"你好\"}"
+      "Define API ask\nInput: input:string, workspace?:dir, cli?:\"codex\"|\"claude\", model?:\"sonnet\"|\"opus\"|object\nOutput: {\"kind\":\"chat\",\"text\":string}\n\nRequest: {\"api\":\"ask\",\"input\":\"你好\"}"
     ].join("\n\n"));
     expect(aioaTurnPrompt(next, false)).toBe("Request: {\"api\":\"ask\",\"input\":\"你能为我做些什么吗？\"}");
   });
@@ -1263,7 +1263,7 @@ describe("AIOA CDP", () => {
     await runner.run(changed);
     await runner.run(descriptionOnly);
 
-    expect(submit.mock.calls[1]?.[0]).toContain("Define API ask\nInput: input:string, workspace?:dir, tone?:string");
+    expect(submit.mock.calls[1]?.[0]).toContain('Define API ask\nInput: input:string, workspace?:dir, cli?:"codex"|"claude", model?:"sonnet"|"opus"|object, tone?:string');
     expect(submit.mock.calls[1]?.[0]).toContain('Request: {"api":"ask","input":"Hello again","tone":"brief"}');
     expect(submit.mock.calls[2]?.[0]).toBe('Request: {"api":"ask","input":"One more","tone":"brief"}');
   });

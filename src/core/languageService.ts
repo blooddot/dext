@@ -3,6 +3,7 @@ import type { FieldDefinition, RegisteredCallable } from "./types.js";
 import { formatFieldType, formatMethodParameter, formatMethodSignature } from "./methodSignature.js";
 import { compileWorkflow, parseWorkflowImports } from "./workflow.js";
 import type { SkillDescriptor } from "./skillCatalog.js";
+import { specializeBuiltinCli } from "./builtinCli.js";
 
 export interface CompletionItem {
   label: string;
@@ -137,6 +138,45 @@ function topLevelCommaCount(body: string): number {
   return commas;
 }
 
+function callCli(body: string): string | undefined {
+  // Reuse the quote/bracket-aware argument scanner so text inside input or a
+  // model dictionary cannot masquerade as a CLI argument.
+  let remaining = body;
+  while (remaining) {
+    const segment = activeArgument(remaining);
+    const match = /^\s*cli\s*=\s*["'](codex|claude)["']\s*$/.exec(segment);
+    if (match) return match[1];
+    if (segment.length === remaining.length) break;
+    remaining = remaining.slice(0, remaining.length - segment.length - 1);
+  }
+  return undefined;
+}
+
+function objectCompletions(field: FieldDefinition, value: string, source: string, cursor: number): CompletionItem[] {
+  if (!value.startsWith("{") || !field.properties) return [];
+  const body = value.slice(1);
+  const segment = activeArgument(body).trimStart();
+  const assignment = /^["']([^"']+)["']\s*:\s*([\s\S]*)$/.exec(segment);
+  if (assignment) {
+    const property = field.properties.find((item) => item.name === assignment[1]);
+    const raw = assignment[2] ?? "";
+    const fragment = raw.replace(/^["']/, "");
+    return (property?.values ?? []).filter((option) => option.startsWith(fragment)).map((option) => ({
+      label: option, insertText: JSON.stringify(option), detail: property?.description ?? "enum value", kind: "value",
+      replaceStart: cursor - raw.length,
+      replaceEnd: cursor + ((raw.startsWith('"') || raw.startsWith("'")) && source[cursor] === raw[0] ? 1 : 0)
+    }));
+  }
+  const fragment = segment.replace(/^["']/, "");
+  const used = new Set([...body.matchAll(/["']([^"']+)["']\s*:/g)].map((match) => match[1]));
+  return field.properties.filter((property) => !used.has(property.name) && property.name.startsWith(fragment)).map((property) => ({
+    label: property.name, insertText: `${JSON.stringify(property.name)}: `,
+    detail: formatMethodParameter(property), kind: "parameter",
+    replaceStart: cursor - segment.length,
+    replaceEnd: cursor + ((segment.startsWith('"') || segment.startsWith("'")) && source[cursor] === segment[0] ? 1 : 0)
+  }));
+}
+
 const RESULT_FIELDS: Readonly<Record<string, readonly string[]>> = {
   chat: ["text"],
   agent: ["text", "summary", "patch", "files"],
@@ -198,6 +238,7 @@ export class DextLanguageService {
   private skills: SkillDescriptor[] = [];
   private compiledSource: string | undefined;
   private compiledState: ReturnType<typeof compileWorkflow> | undefined;
+  private compiledRegistryVersion: number | undefined;
 
   constructor(private readonly registry: MethodRegistry) {}
 
@@ -334,7 +375,7 @@ export class DextLanguageService {
   }
 
   private compiled(source: string): ReturnType<typeof compileWorkflow> {
-    if (this.compiledSource === source && this.compiledState) return this.compiledState;
+    if (this.compiledSource === source && this.compiledState && this.compiledRegistryVersion === this.registry.version) return this.compiledState;
     const state = compileWorkflow(source, this.registry, {
       allowImports: true,
       aliases: parseWorkflowImports(source),
@@ -343,6 +384,7 @@ export class DextLanguageService {
     });
     this.compiledSource = source;
     this.compiledState = state;
+    this.compiledRegistryVersion = this.registry.version;
     return state;
   }
 
@@ -404,7 +446,8 @@ export class DextLanguageService {
 
     const call = openCall(source, cursor);
     if (call) {
-      const method = this.resolveMethod(source, call.method, customApisAreGlobal);
+      const resolvedMethod = this.resolveMethod(source, call.method, customApisAreGlobal);
+      const method = resolvedMethod ? specializeBuiltinCli(resolvedMethod, callCli(call.body)) : undefined;
       if (method) {
         const segment = activeArgument(call.body);
         const assignment = /^\s*([A-Za-z_][A-Za-z0-9_-]*)\s*=([\s\S]*)$/.exec(segment);
@@ -412,6 +455,10 @@ export class DextLanguageService {
           const field = method.input.find((candidate) => candidate.name === assignment[1]);
           const value = assignment[2]?.trimStart() ?? "";
           const valueStart = cursor - value.length;
+          if (field?.properties && value.startsWith("{")) return objectCompletions(field, value, source, cursor);
+          if (field?.type === "object" && field.properties && !value) {
+            return [{ label: "{ model, reasoning, speed }", insertText: '{"model": ""}', detail: formatFieldType(field), kind: "value", replaceStart: valueStart, replaceEnd: cursor }];
+          }
           if (field?.type === "context") {
             const fragment = /(?:^|\[\s*|,\s*)(@?[A-Za-z_.]*)$/.exec(value)?.[1] ?? "";
             const references = [
@@ -608,7 +655,8 @@ export class DextLanguageService {
 
   documentSignature(source: string, cursor = source.length, customApisAreGlobal = true): SignatureHelp | undefined {
     const call = /([A-Za-z_][A-Za-z0-9_.-]*)\(([^()]*)$/.exec(source.slice(0, cursor));
-    const method = call ? this.resolveMethod(source, call[1] ?? "", customApisAreGlobal) : undefined;
+    const resolvedMethod = call ? this.resolveMethod(source, call[1] ?? "", customApisAreGlobal) : undefined;
+    const method = resolvedMethod ? specializeBuiltinCli(resolvedMethod, callCli(call?.[2] ?? "")) : undefined;
     if (!call || !method) return undefined;
     const parameters = inputFields(method);
     const body = call[2] ?? "";

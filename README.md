@@ -181,6 +181,15 @@ MCP calls require a trusted local workspace. Manifests support local `stdio` and
 
 Agent profiles are stored in VS Code extension global storage. The Run row exposes Agent, Model, Reasoning, and Speed selectors. Codex profiles read the local Codex model cache when available, including supported reasoning levels and speed tiers. Claude Code profiles use its native `opus`/`sonnet` aliases and current effort levels. A `.dx` file may override the Agent and Model with `@api(agent="codex", model="...")`; otherwise the Run selection is used. `Dext: Configure Agent` edits executable commands and custom model labels without handling credentials.
 
+The built-in `agent`, `ask`, `plan`, `skill`, and `create` APIs also accept optional per-call `cli` and `model` arguments. `cli` is `"codex"` or `"claude"`. For Claude, `model` is `"sonnet"` or `"opus"`; for Codex it is a dictionary with a required `model` ID from the configured Codex model list, optional `reasoning` (`"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`, `"ultra"`), and optional `speed` (`"standard"`, `"fast"`). The selected model must support the requested reasoning level and Fast mode. If no local model list is available, Codex IDs are accepted as strings until the catalog is available.
+
+```python
+ask(input="Explain this code", cli="claude", model="sonnet")
+agent(input="Implement the change", cli="codex", model={"model": "gpt-6-astra", "reasoning": "high", "speed": "standard"})
+```
+
+Per-call options override the `.dx` decorator and composer without changing other calls. Omitted options retain the current selection when the CLI and model are unchanged; switching CLI or model resets incompatible model settings to CLI defaults. Codex Speed controls Standard/Fast processing directly; the duplicate Advanced service-tier menu has been removed.
+
 The `dext.agentCli` setting controls which built-in Agent profiles are shown in the composer. It defaults to `codex` and `claude`; enter profile IDs manually to change the list (supported IDs are `codex`, `claude`, and `aioa`). Unsupported IDs are rejected with an error.
 
 The AIOA profile connects to AIOA through an explicitly enabled local Chromium DevTools Protocol (CDP) port. It offers two modes:

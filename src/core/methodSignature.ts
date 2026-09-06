@@ -5,7 +5,9 @@ function literal(value: string): string {
 }
 
 function scalarType(type: FieldDefinition["type"], field: FieldDefinition): string {
-  if (type === "object") return "dict[str, object]";
+  if (type === "object") return field.properties?.length
+    ? `{ ${field.properties.map(formatMethodParameter).join(", ")} }`
+    : "dict[str, object]";
   if (type === "list") return "list[object]";
   if (type !== "enum") return type;
   const values = field.values ?? [];

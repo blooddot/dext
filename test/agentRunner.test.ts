@@ -173,6 +173,30 @@ describe("CLI command resolution", () => {
     ]));
   });
 
+  it.each([["fast", "priority"], ["standard", "default"]])("maps %s speed ahead of a stale Advanced tier for APIs and conversations", async (speed, tier) => {
+    const invocations: string[][] = [];
+    const runner = new CliAgentRunner(1_000, async (_command, args, _input, _cwd, _signal, onStdout) => {
+      if (args[0] === "login") return { stdout: "", stderr: "", code: 1 };
+      invocations.push([...args]);
+      const text = args.includes("--output-schema") ? JSON.stringify({ kind: "chat", text: "done" }) : "done";
+      const stdout = JSON.stringify({ type: "item.completed", item: { type: "agent_message", text } });
+      onStdout?.(`${stdout}\n`);
+      return { stdout, stderr: "", code: 0 };
+    });
+    const apiRequest = request();
+    apiRequest.profile.command = process.execPath;
+    apiRequest.cwd = process.cwd();
+    const staleTier = speed === "fast" ? "default" : "priority";
+    await runner.run({ ...apiRequest, model: "gpt-test", reasoningEffort: "high", speed, serviceTier: staleTier });
+    await runner.runConversation({ ...conversationRequest("test", "speed-test"), speed, serviceTier: staleTier });
+    expect(invocations).toHaveLength(2);
+    for (const args of invocations) {
+      expect(args).toContain(`service_tier="${tier}"`);
+      expect(args).not.toContain(`service_tier="${staleTier}"`);
+    }
+    expect(invocations[0]).toEqual(expect.arrayContaining(["--model", "gpt-test", 'model_reasoning_effort="high"']));
+  });
+
   it("uses normal provider prompts without an output schema for conversations", () => {
     expect(codexConversationArguments({ permission: "workspace-write" }, "priority"))
       .toEqual(expect.arrayContaining(["exec", "--json", "--sandbox", "workspace-write", "--skip-git-repo-check"]));

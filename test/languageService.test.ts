@@ -109,10 +109,10 @@ describe("DextLanguageService workflow features", () => {
 
   it("keeps parameter completion and signature highlighting in declaration order", () => {
     const completion = service.documentCompletions("agent(");
-    expect(completion.map((item) => item.label)).toEqual(["input", "apply", "skills", "rules", "workspace"]);
-    expect(completion.map((item) => item.sortText)).toEqual(["0000", "0001", "0002", "0003", "0004"]);
+    expect(completion.map((item) => item.label)).toEqual(["input", "apply", "skills", "rules", "workspace", "cli", "model"]);
+    expect(completion.map((item) => item.sortText)).toEqual(["0000", "0001", "0002", "0003", "0004", "0005", "0006"]);
     const next = service.documentCompletions('agent(input="hello", ');
-    expect(next.map((item) => item.label)).toEqual(["apply", "skills", "rules", "workspace"]);
+    expect(next.map((item) => item.label)).toEqual(["apply", "skills", "rules", "workspace", "cli", "model"]);
     expect(next[0]?.sortText).toBe("0000");
     expect(service.documentSignature("agent(apply=False, input=")).toMatchObject({ activeParameter: 0 });
   });

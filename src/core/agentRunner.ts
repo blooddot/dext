@@ -774,7 +774,7 @@ export class CliAgentRunner implements AgentRunner {
         : request.method.id === "agent"
           ? `Read the Dext JSON payload from stdin. This is preview-only: do not modify workspace files, install packages, or run state-changing commands. Return an AgentResult. When the task requests a change, include a complete applicable patch with exact before and after content. ${progressInstruction}`
           : `Read the Dext JSON payload from stdin. Values tagged kind=dext-result are prior typed API results; inspect their value field. Execute the requested API without modifying workspace files, installing packages, or running state-changing commands. ${progressInstruction}`;
-    const serviceTier = request.serviceTier ?? (request.speed === "fast" ? "priority" : request.speed === "standard" ? "default" : undefined);
+    const serviceTier = request.speed === "fast" ? "priority" : request.speed === "standard" ? "default" : request.serviceTier || undefined;
     const processEnv = await this.processEnvironment(command, request);
     // The typed API path stays a two-state world: `agent(apply=...)` never asks
     // for full access, whatever the composer's own selector says.
@@ -850,7 +850,7 @@ export class CliAgentRunner implements AgentRunner {
         + `Install ${request.profile.label} or use "Dext: Configure Agent CLI" to set its executable path.`
       );
     }
-    const serviceTier = request.serviceTier ?? (request.speed === "fast" ? "priority" : request.speed === "standard" ? "default" : undefined);
+    const serviceTier = request.speed === "fast" ? "priority" : request.speed === "standard" ? "default" : request.serviceTier || undefined;
     // A tier that would write is only honoured when the caller also opened the
     // write gate, so a read-only mode can never be talked into full access.
     const permission = request.allowWorkspaceWrite

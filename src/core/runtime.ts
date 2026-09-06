@@ -3,6 +3,7 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { AxAdapter } from "./axAdapter.js";
+import { builtinCliFields, builtinCliMetadata, CLI_BUILTIN_IDS, specializeBuiltinCli } from "./builtinCli.js";
 import type { ContextResolver } from "./contextResolver.js";
 import type { MethodRegistry } from "./registry.js";
 import type { AgentResult, CustomApiPlan, DirRef, McpRawResult, UiChoiceResult, UiConfirmResult, UiInputResult } from "./types.js";
@@ -352,6 +353,14 @@ export class DextRuntime {
   setAgentProfiles(profiles: readonly AgentProfile[]): void {
     this.agents.clear();
     for (const profile of profiles) this.agents.set(profile.id, profile);
+    for (const id of CLI_BUILTIN_IDS) {
+      const method = this.registry.get(id);
+      if (method?.source !== "builtin") continue;
+      this.registry.register({ ...method, input: [
+        ...method.input.filter((field) => field.name !== "cli" && field.name !== "model"),
+        ...builtinCliFields(profiles)
+      ] }, "builtin");
+    }
   }
 
   setAgentSelection(selection: AgentSelection): void {
@@ -425,7 +434,7 @@ export class DextRuntime {
   ): Promise<RuntimeResponse> {
     if (metadata.signal?.aborted) throw new ExecutionCancelledError();
     const started = performance.now();
-    const method = this.registry.get(invocation.method);
+    let method = this.registry.get(invocation.method);
     if (!method) {
       throw new Error(`Unknown method '${invocation.method}'.`);
     }
@@ -436,11 +445,19 @@ export class DextRuntime {
       }
       argumentNames.add(argument.name);
     }
-    const contract = this.ax.compile(method);
     const rawArguments = Object.fromEntries(
       invocation.arguments.map((argument) => [argument.name, validationValue(argument.value)])
     ) as Record<string, InvocationValue>;
+    if (CLI_BUILTIN_IDS.has(method.id)) {
+      const profileId = rawArguments.cli ?? metadata.agent ?? this.agentSelection.profileId;
+      const provider = typeof profileId === "string" ? this.agents.get(profileId)?.provider : undefined;
+      method = specializeBuiltinCli(method, rawArguments.cli ?? provider);
+    }
+    const contract = this.ax.compile(method);
     this.ax.validateInput(contract, rawArguments);
+    if (CLI_BUILTIN_IDS.has(method.id)) {
+      metadata = builtinCliMetadata(rawArguments, [...this.agents.values()], this.agentSelection, metadata);
+    }
     const resolvedInvocation = await this.resolver.resolve(invocation, method);
     const resolved = {
       ...resolvedInvocation,

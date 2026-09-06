@@ -37,6 +37,7 @@ import { outputExternalLink, outputLinkReference } from "./outputLink.js";
 import { dextHighlightClass, dextHighlightRanges } from "../dextHighlight.js";
 import { formatJsonOutput } from "./jsonOutput.js";
 import { observeComposerOverflow } from "./composerOverflow.js";
+import { CLI_SPEEDS } from "../core/builtinCli.js";
 
 interface VsCodeApi {
   postMessage(message: WebviewRequest): void;
@@ -1290,6 +1291,9 @@ function renderModelMenu(
   selectedModel: { id: string; label: string; reasoningEfforts: string[]; speedTiers: string[]; serviceTiers: string[]; defaultReasoningEffort?: string } | undefined
 ): void {
   const current = state.agentSelection;
+  const profile = state.agentProfiles.find((item) => item.id === current.profileId) ?? state.agentProfiles[0];
+  const selectedSpeed = current.speed || (current.serviceTier === "priority" || current.serviceTier === "fast"
+    ? "fast" : current.serviceTier === "default" ? "standard" : "");
   const categories: { title: string; value: string; items: readonly (readonly [string, string])[]; selected: string; onSelect: (value: string) => void }[] = [
     {
       title: "Model",
@@ -1310,17 +1314,10 @@ function renderModelMenu(
     },
     {
       title: "Speed",
-      value: displayOptionValue(current.speed ?? "Default"),
-      items: (selectedModel?.speedTiers ?? []).map((item) => [item, displayOptionValue(item)]),
-      selected: current.speed ?? "",
-      onSelect: (speed) => submitAgentSelection({ speed })
-    },
-    {
-      title: "Advanced",
-      value: displayOptionValue(current.serviceTier ?? "Default"),
-      items: (selectedModel?.serviceTiers ?? []).map((item) => [item, displayOptionValue(item)]),
-      selected: current.serviceTier ?? "",
-      onSelect: (serviceTier) => submitAgentSelection({ serviceTier })
+      value: displayOptionValue(selectedSpeed || "Default"),
+      items: (profile?.provider === "codex" ? CLI_SPEEDS : []).map((item) => [item, displayOptionValue(item)]),
+      selected: selectedSpeed,
+      onSelect: (speed) => submitAgentSelection({ speed, serviceTier: "" })
     }
   ];
   elements.modelMenu.replaceChildren();

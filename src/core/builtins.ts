@@ -1,8 +1,9 @@
 import type { CallableDefinition } from "./types.js";
+import { builtinCliFields, CLI_BUILTIN_IDS } from "./builtinCli.js";
 
 const CONTEXTS = ["selection", "activeFile", "file", "symbol"] as const;
 
-export const BUILTIN_METHODS: readonly CallableDefinition[] = [
+const METHODS: readonly CallableDefinition[] = [
   {
     id: "create",
     title: "Create",
@@ -171,3 +172,7 @@ export const BUILTIN_METHODS: readonly CallableDefinition[] = [
     executor: { kind: "deterministic", handler: "runSkill" }
   }
 ];
+
+export const BUILTIN_METHODS: readonly CallableDefinition[] = METHODS.map((method) =>
+  CLI_BUILTIN_IDS.has(method.id) ? { ...method, input: [...method.input, ...builtinCliFields()] } : method
+);

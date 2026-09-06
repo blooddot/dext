@@ -2,6 +2,7 @@ import { parser } from "@lezer/python";
 import type { SyntaxNode } from "@lezer/common";
 import type { MethodRegistry } from "./registry.js";
 import { normalizeInputReferenceSource } from "./fileReference.js";
+import { CLI_BUILTIN_IDS, specializeBuiltinCli } from "./builtinCli.js";
 import type {
   CallableDefinition,
   ContextReference,
@@ -614,6 +615,10 @@ class Compiler {
 
   private compileArguments(node: SyntaxNode, definition: CallableDefinition): WorkflowCall["arguments"] {
     const parts = children(node);
+    // Resolve a literal CLI before checking model, even if cli comes last.
+    const cliIndex = parts.findIndex((part, index) => text(this.source, part) === "cli" && parts[index + 1]?.name === "AssignOp");
+    const cliValue = cliIndex >= 0 ? parts[cliIndex + 2] : undefined;
+    if (cliValue) definition = specializeBuiltinCli(definition, /^["'](codex|claude)["']$/.exec(text(this.source, cliValue))?.[1]);
     const values: WorkflowCall["arguments"] = [];
     const seen = new Set<string>();
     const namedIndexes = new Set<number>();
@@ -638,6 +643,9 @@ class Compiler {
         const coerced = this.coerceContextValue(compiled, field);
         if (!matchesField(coerced.type, field)) {
           this.error(`Argument '${name}' expects ${fieldTypeName(field)}, not ${typeName(coerced.type)}.`, valueNode.from, valueNode.to);
+        }
+        if (CLI_BUILTIN_IDS.has(definition.id) && (name === "cli" || name === "model")) {
+          this.validateCliLiteral(coerced.expression, field, name);
         }
         values.push({ name, value: coerced.expression, from: nameNode.from, to: valueNode.to });
       }
@@ -673,6 +681,23 @@ class Compiler {
       this.error("Dext API calls require keyword arguments.", positional[0]!.from, positional[0]!.to);
     }
     return values;
+  }
+
+  private validateCliLiteral(expression: WorkflowExpression, field: FieldDefinition, path: string): void {
+    if (expression.kind === "literal" && field.type === "enum" && !field.values?.includes(String(expression.value))) {
+      this.error(`${path} must be one of ${field.values?.join(", ")}.`, expression.from, expression.to);
+    }
+    if (expression.kind !== "object" || !field.properties) return;
+    for (const property of field.properties) {
+      if (property.required && !expression.entries.some((entry) => entry.key === property.name)) {
+        this.error(`Missing required option '${path}.${property.name}'.`, expression.from, expression.to);
+      }
+    }
+    for (const entry of expression.entries) {
+      const property = field.properties.find((candidate) => candidate.name === entry.key);
+      if (!property) this.error(`Unknown option '${path}.${entry.key}'.`, entry.from, entry.to);
+      else this.validateCliLiteral(entry.value, property, `${path}.${entry.key}`);
+    }
   }
 
   private coerceContextValue(
@@ -1001,6 +1026,7 @@ function outputType(definition: CallableDefinition): ValueType {
 function matchesField(actual: ValueType, field: FieldDefinition): boolean {
   if (actual.kind === "unknown") return true;
   return [field.type, ...(field.accepts ?? [])].some((type) => {
+    if (type === "object" && actual.kind === "object") return true;
     const expected = fieldType({ ...field, type, ...(field.accepts ? { accepts: [] } : {}) });
     if (field.multiple && expected.kind === "list") {
       return actual.kind === expected.item.kind
