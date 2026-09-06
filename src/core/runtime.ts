@@ -449,7 +449,9 @@ export class DextRuntime {
       invocation.arguments.map((argument) => [argument.name, validationValue(argument.value)])
     ) as Record<string, InvocationValue>;
     if (CLI_BUILTIN_IDS.has(method.id)) {
-      const profileId = rawArguments.cli ?? metadata.agent ?? this.agentSelection.profileId;
+      const profileId = rawArguments.cli ?? (rawArguments.model !== undefined
+        ? this.agentSelection.profileId ?? metadata.agent
+        : metadata.agent ?? this.agentSelection.profileId);
       const provider = typeof profileId === "string" ? this.agents.get(profileId)?.provider : undefined;
       method = specializeBuiltinCli(method, rawArguments.cli ?? provider);
     }

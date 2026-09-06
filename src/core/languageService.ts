@@ -447,7 +447,8 @@ export class DextLanguageService {
     const call = openCall(source, cursor);
     if (call) {
       const resolvedMethod = this.resolveMethod(source, call.method, customApisAreGlobal);
-      const method = resolvedMethod ? specializeBuiltinCli(resolvedMethod, callCli(call.body)) : undefined;
+      const cli = callCli(call.body);
+      const method = resolvedMethod ? specializeBuiltinCli(resolvedMethod, cli) : undefined;
       if (method) {
         const segment = activeArgument(call.body);
         const assignment = /^\s*([A-Za-z_][A-Za-z0-9_-]*)\s*=([\s\S]*)$/.exec(segment);
@@ -656,7 +657,8 @@ export class DextLanguageService {
   documentSignature(source: string, cursor = source.length, customApisAreGlobal = true): SignatureHelp | undefined {
     const call = /([A-Za-z_][A-Za-z0-9_.-]*)\(([^()]*)$/.exec(source.slice(0, cursor));
     const resolvedMethod = call ? this.resolveMethod(source, call[1] ?? "", customApisAreGlobal) : undefined;
-    const method = resolvedMethod ? specializeBuiltinCli(resolvedMethod, callCli(call?.[2] ?? "")) : undefined;
+    const cli = callCli(call?.[2] ?? "");
+    const method = resolvedMethod ? specializeBuiltinCli(resolvedMethod, cli) : undefined;
     if (!call || !method) return undefined;
     const parameters = inputFields(method);
     const body = call[2] ?? "";

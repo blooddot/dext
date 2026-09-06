@@ -188,7 +188,7 @@ ask(input="Explain this code", cli="claude", model="sonnet")
 agent(input="Implement the change", cli="codex", model={"model": "gpt-6-astra", "reasoning": "high", "speed": "standard"})
 ```
 
-Per-call options override the `.dx` decorator and composer without changing other calls. Omitted options retain the current selection when the CLI and model are unchanged; switching CLI or model resets incompatible model settings to CLI defaults. Codex Speed controls Standard/Fast processing directly; the duplicate Advanced service-tier menu has been removed.
+Omit both `cli` and `model` to use the current Input selection (existing `.dx` decorator overrides still apply). Providing only `cli` uses that CLI's own default configuration, without inheriting Input or decorator model, reasoning, or speed settings—even when the CLI matches Input. Providing both uses the explicit model options and leaves omitted reasoning/speed options to the CLI defaults. Providing only `model` uses Input's selected CLI; unspecified options retain Input settings when the model is unchanged, otherwise they use CLI defaults. These overrides apply only to the current call. Codex Speed controls Standard/Fast processing directly; the duplicate Advanced service-tier menu has been removed.
 
 The `dext.agentCli` setting controls which built-in Agent profiles are shown in the composer. It defaults to `codex` and `claude`; enter profile IDs manually to change the list (supported IDs are `codex`, `claude`, and `aioa`). Unsupported IDs are rejected with an error.
 

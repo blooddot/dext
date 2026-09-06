@@ -59,8 +59,6 @@ describe("per-call built-in CLI options", () => {
     await execute({ cli: "claude", model: "opus" });
     await execute({});
     expect(requests[1]).toMatchObject({ profile: { id: "codex" }, model: "gpt-test", reasoningEffort: "high", speed: "fast" });
-    await execute({ cli: "claude" });
-    expect(requests[2]?.model || undefined).toBeUndefined();
   });
 
   it("uses the current CLI to validate a model-only override", async () => {
@@ -116,8 +114,8 @@ describe("per-call built-in CLI options", () => {
 
   it("does not borrow composer settings from a different decorator-selected CLI", async () => {
     const { execute, requests } = setup();
-    await execute({ cli: "claude" }, "ask", { agent: "claude" });
-    expect(requests[0]?.model || undefined).toBeUndefined();
+    await execute({ cli: "claude", model: "opus" }, "ask", { agent: "claude" });
+    expect(requests[0]?.model).toBe("opus");
     expect(requests[0]?.reasoningEffort).toBeUndefined();
     expect(requests[0]?.speed).toBeUndefined();
   });
@@ -139,6 +137,65 @@ describe("per-call built-in CLI options", () => {
       'ask(input="x", cli="claude", model="gpt-test")',
       'ask(input="x", cli="codex", model={"model":"gpt-test", "speed":"turbo"})'
     ]) expect(compileWorkflow(source, registry).diagnostics.some((item) => item.severity === "error")).toBe(true);
+  });
+
+  it.each(["ask", "plan", "agent", "skill", "create"])("uses CLI defaults when only cli is provided to %s", async (method) => {
+    const { registry, runtime, execute, requests } = setup();
+    const conversations: AgentConversationRequest[] = [];
+    if (method === "create") {
+      runtime.setAgentRunner({
+        run: async () => { throw new Error("create must use the host handler"); },
+        runConversation: async (request) => { conversations.push(request); return "created"; }
+      });
+      runtime.setCreateHandler(async (request) => (await runtime.executeConversation("ask", "create", request.metadata)).result);
+    }
+    const extra = method === "skill" ? ', skill="test"' : method === "create" ? ', type="rule"' : "";
+    expect(compileWorkflow(`${method}(input="x"${extra})`, registry).diagnostics).toEqual([]);
+    for (const cli of ["codex", "claude"]) {
+      await execute({ cli, ...(method === "agent" ? { apply: false } : {}), ...(method === "skill" ? { skill: "test" } : {}), ...(method === "create" ? { type: "rule" } : {}) }, method,
+        { agent: "codex", model: "decorator-model", reasoningEffort: "ultra", speed: "fast", serviceTier: "priority" });
+      const request = method === "create" ? conversations.at(-1) : requests.at(-1);
+      expect(request?.profile.id).toBe(cli);
+      expect(request?.model || undefined).toBeUndefined();
+      expect(request?.reasoningEffort).toBeUndefined();
+      expect(request?.speed).toBeUndefined();
+      expect(request?.serviceTier).toBeUndefined();
+      for (const source of [
+        `${method}(input="x", cli="${cli}"${extra})`,
+        `provider = "${cli}"\n${method}(input="x", cli=provider${extra})`
+      ]) expect(compileWorkflow(source, registry).diagnostics).toEqual([]);
+    }
+  });
+
+  it("uses CLI defaults for omitted options even when the explicit CLI and model match Input", async () => {
+    const { execute, requests, runtime } = setup();
+    await execute({ cli: "codex", model: { model: "gpt-test" } });
+    await execute({ cli: "codex", model: { model: "gpt-test", reasoning: "low" } });
+    await execute({ cli: "codex", model: { model: "gpt-test", speed: "standard" } });
+    runtime.setAgentSelection({ profileId: "claude", model: "opus", reasoningEffort: "high" });
+    await execute({ cli: "claude", model: "opus" });
+    expect(requests.map((request) => request.model)).toEqual(["gpt-test", "gpt-test", "gpt-test", "opus"]);
+    expect(requests.map((request) => request.reasoningEffort)).toEqual([undefined, "low", undefined, undefined]);
+    expect(requests.map((request) => request.speed)).toEqual([undefined, undefined, "standard", undefined]);
+    expect(requests.every((request) => request.serviceTier === undefined)).toBe(true);
+  });
+
+  it("uses Input's CLI for a model-only override, including when a decorator selects another CLI", async () => {
+    const { execute, requests } = setup();
+    await execute({ model: { model: "gpt-test", reasoning: "low" } }, "ask", { agent: "claude", model: "opus" });
+    expect(requests[0]).toMatchObject({ profile: { id: "codex" }, model: "gpt-test", reasoningEffort: "low", speed: "fast" });
+  });
+
+  it("evaluates a dynamic CLI-only call without inheriting Input settings", async () => {
+    const { registry, runtime, requests, execute } = setup();
+    const compiled = compileWorkflow('provider = "codex"\nask(input="x", cli=provider)', registry);
+    expect(compiled.diagnostics).toEqual([]);
+    await new WorkflowRuntime(runtime).execute(compiled.program!);
+    expect(requests[0]?.model || undefined).toBeUndefined();
+    expect(requests[0]?.reasoningEffort).toBeUndefined();
+    expect(requests[0]?.speed).toBeUndefined();
+    await execute({});
+    expect(requests[1]).toMatchObject({ model: "gpt-test", reasoningEffort: "high", speed: "fast" });
   });
 
   it("offers CLI-dependent enum values, Codex dictionary keys, and signatures", () => {
