@@ -1,8 +1,17 @@
 import type * as vscode from "vscode";
 import { describe, expect, it } from "vitest";
-import { AgentProfileStore } from "../src/agentProfiles.js";
+import { AgentProfileStore, modelOptionsFromCodexCache } from "../src/agentProfiles.js";
 
 describe("Agent profile defaults", () => {
+  it("does not expose Codex models marked hidden in the local cache", () => {
+    const options = modelOptionsFromCodexCache([
+      { slug: "gpt-reserve", display_name: "GPT-Reserve", visibility: "hide" },
+      { slug: "gpt-5.6-sol", display_name: "GPT-5.6-Sol", visibility: "show" }
+    ]);
+
+    expect(options.map((option) => option.id)).toEqual(["gpt-5.6-sol"]);
+  });
+
   it("exposes Claude Code models and supported effort levels", () => {
     const claude = new AgentProfileStore().list().find((profile) => profile.id === "claude");
     expect(claude).toMatchObject({ label: "Claude Code CLI", provider: "claude", command: "claude" });

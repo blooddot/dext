@@ -36,6 +36,7 @@ import { createFileReferenceChip, fileReferenceChipDescriptor } from "./fileRefe
 import { outputExternalLink, outputLinkReference } from "./outputLink.js";
 import { dextHighlightClass, dextHighlightRanges } from "../dextHighlight.js";
 import { formatJsonOutput } from "./jsonOutput.js";
+import { observeComposerOverflow } from "./composerOverflow.js";
 
 interface VsCodeApi {
   postMessage(message: WebviewRequest): void;
@@ -1395,8 +1396,13 @@ function positionModelSubmenu(): void {
   const leftSpace = modelMenu.left - gap - edgePadding;
   const fitsRight = rightSpace >= submenuWidth;
   const fitsLeft = leftSpace >= submenuWidth;
-  const side = fitsRight || (!fitsLeft && rightSpace >= leftSpace) ? "right" : "left";
+  const side = fitsRight ? "right" : fitsLeft ? "left" : "above";
   elements.modelSubmenu.dataset.submenuSide = side;
+  elements.modelSubmenu.style.left = side === "above"
+    ? `${modelMenu.left - elements.modelSubmenu.parentElement!.getBoundingClientRect().left}px` : "";
+  elements.modelSubmenu.style.setProperty("--composer-model-menu-height", `${modelMenu.height}px`);
+  elements.modelSubmenu.style.maxHeight = side === "above"
+    ? `${Math.max(0, modelMenu.top - gap - edgePadding)}px` : "";
 }
 
 window.addEventListener("resize", positionModelSubmenu);
@@ -1585,6 +1591,8 @@ const composerMenus = [
   { control: elements.agentControl, menu: elements.agentMenu },
   { control: elements.modelControl, menu: elements.modelMenu }
 ];
+
+observeComposerOverflow(element<HTMLElement>("composer-controls"));
 
 for (const item of composerMenus) {
   item.menu.addEventListener("keydown", (event) => handleComposerMenuKeydown(item.menu, event));
@@ -3456,10 +3464,14 @@ elements.resultHeading.addEventListener("keydown", (event) => {
 elements.attachFiles.addEventListener("click", () => vscode.postMessage({ type: "chooseFiles" }));
 elements.composerMore.addEventListener("click", (event) => {
   event.stopPropagation();
+  closeComposerMenus();
   const controls = elements.composerMore.closest(".composer-controls");
   const open = !controls?.classList.contains("show-extra");
   controls?.classList.toggle("show-extra", open);
   elements.composerMore.setAttribute("aria-expanded", String(open));
+  if (open) {
+    controls?.querySelector<HTMLButtonElement>(".composer-extras .composer-menu:not([hidden]) > button")?.focus();
+  }
 });
 for (const item of composerMenus) {
   item.control.addEventListener("click", () => toggleComposerMenu(item.menu));
@@ -3471,6 +3483,7 @@ document.addEventListener("click", (event) => {
 });
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
+  if (elements.composerMore.getAttribute("aria-expanded") === "true") elements.composerMore.focus();
   closeComposerExtras();
   closeComposerMenus();
 });

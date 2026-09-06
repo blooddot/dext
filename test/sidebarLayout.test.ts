@@ -65,10 +65,9 @@ describe("sidebar panel layout", () => {
     // VS Code does not expose a minimum-width option for Webview Views, so the
     // webview supplies the minimum canvas and lets the host scroll it.
     expect(css).toMatch(/body \{[\s\S]*?min-width: 300px;/);
-    // Before reaching that hard minimum, the footer gets another line rather
-    // than allowing its menus and Send button to overlap.
-    expect(css).toMatch(/\.action-row \{[\s\S]*?flex-wrap: wrap;/);
-    expect(css).toMatch(/\.composer-controls \{[\s\S]*?flex: 0 1 auto;[\s\S]*?flex-wrap: wrap;/);
+    // Extra controls collapse into a popover; Send stays on the same line.
+    expect(css).toMatch(/\.action-row \{[\s\S]*?flex-wrap: nowrap;/);
+    expect(css).toMatch(/\.composer-controls \{[\s\S]*?flex: 0 1 auto;[\s\S]*?flex-wrap: nowrap;/);
     expect(css).toMatch(/\.composer-menu \{[\s\S]*?min-width: 0;[\s\S]*?flex: 0 1 auto;/);
   });
 
@@ -445,7 +444,13 @@ describe("sidebar panel layout", () => {
     expect(css).toMatch(/\.composer-menu:last-child \.composer-model-submenu\[data-submenu-side="left"\] \{[\s\S]*?right: calc\(var\(--composer-model-menu-width\) \+ 4px\);[\s\S]*?left: auto;/);
     expect(main).toMatch(/function positionModelSubmenu\(\): void \{[\s\S]*?fitsRight[\s\S]*?fitsLeft[\s\S]*?modelSubmenu\.dataset\.submenuSide/);
     expect(main).not.toMatch(/button\.addEventListener\("mouseenter"[\s\S]*renderModelChoices\(elements\.modelSubmenu/);
-    expect(css).toMatch(/\.input-section:has\(\.composer-popover:not\(\[hidden\]\)\),[\s\S]*?\.input-panel \{[\s\S]*?overflow: visible;/);
+    // Keep checking the actual clipping ancestors, not any later occurrence
+    // of overflow: visible elsewhere in the stylesheet.
+    const overflowRule = css.match(/([^{}]*\.input-section:has\(\.composer-popover:not\(\[hidden\]\)\)[^{}]*)\{([^{}]*)\}/);
+    expect(overflowRule?.[1]).toContain('.input-section:has(.composer-popover:not([hidden])) .input-body');
+    expect(overflowRule?.[1]).toContain('.input-section:has(.composer-popover:not([hidden])) .input-panel');
+    expect(overflowRule?.[1]).toContain('.input-section:has(.show-extra) .input-body');
+    expect(overflowRule?.[2]).toContain('overflow: visible;');
   });
 
   it("does not reopen Output after a user folds it during result updates", async () => {

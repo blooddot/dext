@@ -66,23 +66,22 @@ function configuredCodexModel(): string | undefined {
   }
 }
 
-function codexModelOptions(): AgentModelOption[] {
-  const codexHome = process.env.CODEX_HOME || join(homedir(), ".codex");
-  const cachePath = join(codexHome, "models_cache.json");
-  try {
-    const parsed = JSON.parse(readFileSync(cachePath, "utf8")) as { models?: unknown };
-    if (Array.isArray(parsed.models)) {
-      const options = parsed.models.flatMap((candidate) => {
+export function modelOptionsFromCodexCache(models: unknown): AgentModelOption[] {
+  if (!Array.isArray(models)) return [];
+  return models.flatMap((candidate) => {
         if (!candidate || typeof candidate !== "object") return [];
         const value = candidate as {
           slug?: unknown;
           display_name?: unknown;
+          visibility?: unknown;
           default_reasoning_level?: unknown;
           supported_reasoning_levels?: unknown;
           additional_speed_tiers?: unknown;
           service_tiers?: unknown;
         };
-        if (typeof value.slug !== "string") return [];
+        // Codex keeps internal fallback models in its cache, but marks them
+        // hidden. They are not choices that clients should expose.
+        if (typeof value.slug !== "string" || value.visibility === "hide") return [];
         const reasoningEfforts = Array.isArray(value.supported_reasoning_levels)
           ? value.supported_reasoning_levels.flatMap((item) =>
             item && typeof item === "object" && typeof (item as { effort?: unknown }).effort === "string"
@@ -107,8 +106,15 @@ function codexModelOptions(): AgentModelOption[] {
           serviceTiers: [...new Set(serviceTiers)]
         }];
       });
-      if (options.length) return options;
-    }
+}
+
+function codexModelOptions(): AgentModelOption[] {
+  const codexHome = process.env.CODEX_HOME || join(homedir(), ".codex");
+  const cachePath = join(codexHome, "models_cache.json");
+  try {
+    const parsed = JSON.parse(readFileSync(cachePath, "utf8")) as { models?: unknown };
+    const options = modelOptionsFromCodexCache(parsed.models);
+    if (options.length) return options;
   } catch {
     // The cache is optional; the CLI default remains usable without it.
   }

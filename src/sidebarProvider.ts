@@ -1510,6 +1510,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
               <button id="mode-control" class="composer-control" type="button" aria-haspopup="menu" aria-expanded="false"><i id="mode-control-icon" class="codicon codicon-comment-discussion" aria-hidden="true"></i><span class="composer-control-label">Mode</span><span id="mode-control-value" class="composer-control-value"></span><i class="codicon codicon-chevron-down"></i></button>
               <div id="mode-menu" class="composer-popover" role="menu" hidden></div>
             </div>
+            <div id="composer-extras" class="composer-extras">
             <div id="permission-menu-shell" class="composer-menu">
               <button id="permission-control" class="composer-control" type="button" aria-haspopup="menu" aria-expanded="false"><i id="permission-control-icon" class="codicon codicon-shield" aria-hidden="true"></i><span class="composer-control-label">Permission</span><span id="permission-control-value" class="composer-control-value"></span><i class="codicon codicon-chevron-down"></i></button>
               <div id="permission-menu" class="composer-popover" role="menu" hidden></div>
@@ -1523,7 +1524,8 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
               <div id="model-menu" class="composer-popover composer-model-popover" role="menu" hidden></div>
               <div id="model-submenu" class="composer-popover composer-model-popover composer-model-submenu" role="menu" hidden></div>
             </div>
-            <button id="composer-more" class="composer-more icon-button" type="button" title="More options" aria-label="More options" aria-expanded="false"><i class="codicon codicon-ellipsis"></i></button>
+            </div>
+            <button id="composer-more" class="composer-more icon-button" type="button" title="More options" aria-label="More options" aria-controls="composer-extras" aria-expanded="false"><i class="codicon codicon-ellipsis"></i></button>
           </div>
           <div class="action-actions">
             <button id="problems" class="problems-status" type="button" disabled>No problems</button>

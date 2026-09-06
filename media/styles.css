@@ -990,7 +990,9 @@ main {
 
 .input-section:has(.composer-popover:not([hidden])),
 .input-section:has(.composer-popover:not([hidden])) .input-body,
-.input-section:has(.composer-popover:not([hidden])) .input-panel {
+.input-section:has(.composer-popover:not([hidden])) .input-panel,
+.input-section:has(.show-extra),
+.input-section:has(.show-extra) .input-body {
   overflow: visible;
 }
 
@@ -1630,7 +1632,7 @@ main {
 .action-row {
   min-height: 34px;
   flex: 0 0 auto;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 10px;
   justify-content: space-between;
   margin-top: 6px;
@@ -1645,14 +1647,18 @@ main {
 }
 
 .composer-controls {
-  /* Leave Send on this line when there is room, otherwise move it below the
-     controls before any of the controls can overlap. */
-  /* Keep the controls tightly packed around their labels.  They may still
-     shrink and wrap when the sidebar is narrow, but should not consume all
-     remaining space on a normal-width composer. */
+  position: relative;
+  /* The measured overflow layout moves extra choices into the ... popover. */
   flex: 0 1 auto;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   overflow: visible;
+}
+
+.composer-extras {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
 }
 
 .composer-more {
@@ -1903,6 +1909,12 @@ main {
 .composer-menu:last-child .composer-model-submenu[data-submenu-side="left"] {
   right: calc(var(--composer-model-menu-width) + 4px);
   left: auto;
+}
+
+.composer-menu:last-child .composer-model-submenu[data-submenu-side="above"] {
+  right: auto;
+  left: 0;
+  bottom: calc(34px + var(--composer-model-menu-height) + 4px);
 }
 
 .composer-menu-option {
@@ -2296,21 +2308,54 @@ button.primary.executing > * {
 
 }
 
-/* Keep the narrow sidebar focused on the mode. The overflow button still
-   exposes permission, agent, and model controls without permanently using
-   valuable horizontal space. */
-@media (max-width: 420px) {
-  .composer-more {
-    display: inline-flex;
-  }
+.composer-controls.is-compact .composer-more {
+  display: inline-flex;
+}
 
-  .composer-controls > .composer-menu:not(:first-child) {
-    display: none;
-  }
+.composer-controls.is-compact .composer-extras {
+  display: none;
+  position: absolute;
+  z-index: 30;
+  left: 0;
+  bottom: calc(100% + 6px);
+  flex-direction: column;
+  align-items: stretch;
+  width: max-content;
+  max-width: calc(100vw - 48px);
+  padding: 6px;
+  border: 1px solid var(--vscode-menu-border, var(--vscode-widget-border));
+  border-radius: 6px;
+  background: var(--vscode-menu-background, var(--vscode-editorWidget-background));
+  box-shadow: 0 4px 14px var(--vscode-widget-shadow);
+}
 
-  .composer-controls.show-extra > .composer-menu:not(:first-child):not([hidden]) {
-    display: block;
-  }
+.composer-controls.is-compact.show-extra .composer-extras {
+  display: flex;
+}
+
+.composer-controls.is-compact:not(.measure-extras) .composer-extras .composer-control {
+  max-width: 100%;
+  width: 100%;
+}
+
+/* Optional controls now live near the left edge. Do not right-align their
+   menus to a short model label, which would push the menu out of the view. */
+.composer-controls.is-compact .composer-extras .composer-popover:not(.composer-model-submenu) {
+  left: 0;
+  right: auto;
+  max-width: calc(100vw - 48px);
+}
+
+/* Measure the full toolbar without disturbing the visible compact layout. */
+.composer-controls.measure-extras .composer-extras {
+  display: flex;
+  position: absolute;
+  visibility: hidden;
+  flex-direction: row;
+  width: max-content;
+  max-width: none;
+  padding: 0;
+  border: 0;
 }
 
 main.workspace-fullscreen > .input-section,
