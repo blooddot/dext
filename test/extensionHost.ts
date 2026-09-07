@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import * as vscode from "vscode";
 import { DextApplication } from "../src/application.js";
 import { openWorkspaceFileReference } from "../src/vscodeContextHost.js";
+import { clipboardFileReferences } from "../src/vscodeClipboardFiles.js";
+import { selectionAttachment, type SelectionTarget } from "../src/vscodeAttachments.js";
 
 export async function run(): Promise<void> {
   const extension = vscode.extensions.getExtension("blooddot.dext");
@@ -13,6 +15,10 @@ export async function run(): Promise<void> {
   assert.ok(commands.includes("dext.focus"), "Focus command is registered.");
   assert.ok(commands.includes("dext.reloadMethods"), "Reload command is registered.");
   assert.ok(commands.includes("dext.openHistory"), "History command is registered.");
+  assert.ok(commands.includes("dext.history.renameTurn"), "Turn rename command is registered.");
+  assert.ok(commands.includes("dext.history.copyTurn"), "Turn copy command is registered.");
+  assert.ok(commands.includes("dext.history.retryTurn"), "Turn retry command is registered.");
+  assert.ok(commands.includes("dext.history.deleteTurn"), "Turn delete command is registered.");
   assert.ok(commands.includes("dext.openWorkspaceTrust"), "Workspace Trust command is registered.");
   assert.ok(commands.includes("dext.workspaceTrustedStatus"), "Trusted workspace title action is registered.");
   assert.ok(commands.includes("dext.workspaceUntrustedStatus"), "Untrusted workspace title action is registered.");
@@ -46,7 +52,32 @@ export async function run(): Promise<void> {
   editor.selection = new vscode.Selection(0, 0, 0, 1);
   assert.equal(vscode.window.activeTextEditor, editor, "The source editor is active before context copy.");
   assert.equal(editor.selection.isEmpty, false, "The context-copy selection is nonempty.");
+  const lenses = await vscode.commands.executeCommand<vscode.CodeLens[]>("vscode.executeCodeLensProvider", file);
+  assert.ok(!lenses?.some((lens) => lens.command?.command === "dext.addSelectionToChat"), "Selecting code does not insert a Dext CodeLens row.");
+  const selectionHovers = await vscode.commands.executeCommand<vscode.Hover[]>("vscode.executeHoverProvider", file, editor.selection.active);
+  const selectionAction = selectionHovers?.flatMap((hover) => hover.contents)
+    .find((content): content is vscode.MarkdownString => typeof content !== "string" && "value" in content && content.value.includes("command:dext.addSelectionToChat?"));
+  assert.ok(selectionAction, "Selected code exposes Add to Dext in an overlay hover at the caret.");
+  assert.deepEqual(selectionAction.isTrusted, { enabledCommands: ["dext.addSelectionToChat"] });
+  const args = /command:dext.addSelectionToChat\?([^\s]+)/.exec(selectionAction.value)?.[1];
+  assert.ok(args, "The hover link includes the captured selection.");
+  const target = (JSON.parse(decodeURIComponent(args)) as SelectionTarget[])[0]!;
+  assert.equal(target.uri, file.toString(), "The selection action captures the original file.");
+  editor.selection = new vscode.Selection(1, 0, 1, 0);
+  const selectedSnapshot = await selectionAttachment(target);
+  assert.equal(selectedSnapshot.text, copiedText, "Clicking the action uses the captured selection even after the caret moves.");
+  const clearedHovers = await vscode.commands.executeCommand<vscode.Hover[]>("vscode.executeHoverProvider", file, editor.selection.active);
+  assert.ok(!clearedHovers?.flatMap((hover) => hover.contents).some((content) =>
+    typeof content !== "string" && "value" in content && content.value.includes("command:dext.addSelectionToChat?")), "Clearing the selection removes the hover action.");
+  editor.selection = new vscode.Selection(0, 0, 0, 1);
   try {
+    await vscode.commands.executeCommand("copyFilePath", file);
+    if (clipboardBaseline) {
+      const paths = await vscode.env.clipboard.readText();
+      assert.deepEqual(await clipboardFileReferences(paths), [
+        { expression: "@package.json", payload: "package.json" }
+      ], "VS Code Copy Path resolves to the original workspace file reference.");
+    }
     const submittedText = await vscode.commands.executeCommand<string>("dext.copySelectionWithContext");
     assert.equal(submittedText, copiedText, "Context copy submits the exact selection text.");
     if (clipboardBaseline) {
@@ -57,6 +88,8 @@ export async function run(): Promise<void> {
   }
 
   await vscode.commands.executeCommand("dext.addSelectionToChat");
+  editor.selection = new vscode.Selection(1, 0, 1, 0);
+  await vscode.commands.executeCommand("dext.addSelectionToChat", target);
   await vscode.commands.executeCommand("dext.addFileToChat", file);
   await vscode.commands.executeCommand("dext.addFileToChat", folder.uri);
 

@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { attachmentByteLimit, MAX_ATTACHMENT_BYTES } from "./attachmentStore.js";
 import { toCodeRef, type TextSnapshot } from "./core/contextResolver.js";
 import {
+  atReferenceOccurrences,
   formatDextFileReference,
   formatDextFilePathReference,
   formatDextDirectoryReference,
@@ -12,6 +13,12 @@ import type { CodeRef, Range } from "./core/types.js";
 export interface AttachmentSnapshot {
   reference: CodeRef;
   text: string;
+}
+
+export interface SelectionTarget {
+  uri: string;
+  version: number;
+  range: Range;
 }
 
 /** Source and configuration documents make useful file references. Prose,
@@ -40,8 +47,11 @@ function rangeValue(range: vscode.Range): Range {
   };
 }
 
-async function documentSnapshot(uri: vscode.Uri, range?: vscode.Range): Promise<TextSnapshot> {
+async function documentSnapshot(uri: vscode.Uri, range?: vscode.Range, expectedVersion?: number): Promise<TextSnapshot> {
   const document = await vscode.workspace.openTextDocument(uri);
+  if (expectedVersion !== undefined && document.version !== expectedVersion) {
+    throw new Error("The selected code has changed. Select it again before adding it to Dext.");
+  }
   const content = range ? document.getText(range) : document.getText();
   const limit = attachmentByteLimit(vscode.workspace.getConfiguration("dext")
     .get<number>("attachments.maxBytes", MAX_ATTACHMENT_BYTES));
@@ -56,12 +66,14 @@ async function documentSnapshot(uri: vscode.Uri, range?: vscode.Range): Promise<
   };
 }
 
-export async function selectionAttachment(): Promise<AttachmentSnapshot> {
+export async function selectionAttachment(target?: SelectionTarget): Promise<AttachmentSnapshot> {
   const editor = vscode.window.activeTextEditor;
-  if (!editor || editor.selection.isEmpty) throw new Error("Select text before adding it to Dext.");
-  const uri = editor.document.uri;
-  const selection = editor.selection;
-  const snapshot = await documentSnapshot(uri, selection);
+  if (!target && (!editor || editor.selection.isEmpty)) throw new Error("Select text before adding it to Dext.");
+  const uri = target ? vscode.Uri.parse(target.uri, true) : editor!.document.uri;
+  const selection = target
+    ? new vscode.Range(target.range.start.line, target.range.start.character, target.range.end.line, target.range.end.character)
+    : editor!.selection;
+  const snapshot = await documentSnapshot(uri, selection, target?.version);
   return {
     text: snapshot.content,
     reference: toCodeRef(snapshot)
@@ -91,7 +103,13 @@ export async function fileAttachment(uri: vscode.Uri): Promise<DextFileReference
     return formatDextFilePathReference(uri.toString());
   }
   const includeWorkspaceFolder = (vscode.workspace.workspaceFolders?.length ?? 0) > 1;
-  return formatDextFilePathReference(vscode.workspace.asRelativePath(uri, includeWorkspaceFolder));
+  const reference = formatDextFilePathReference(vscode.workspace.asRelativePath(uri, includeWorkspaceFolder));
+  // Spaces and punctuation must not split a file chip into a partial path.
+  // An encoded local URI still references the original file without a copy.
+  if (uri.scheme === "file" && atReferenceOccurrences(reference.expression)[0]?.expression !== reference.expression) {
+    return formatDextFilePathReference(uri.toString());
+  }
+  return reference;
 }
 
 export async function directoryAttachment(uri: vscode.Uri): Promise<DextFileReference> {

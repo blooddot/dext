@@ -37,6 +37,23 @@ async function manifest(): Promise<PackageManifest> {
 }
 
 describe("Dext package manifest", () => {
+  it("copies file paths only in resource views or file editors without a selection", async () => {
+    const value = await manifest();
+    const bindings = value.contributes?.keybindings?.filter((item) => item.command === "copyFilePath");
+    expect(bindings).toEqual([
+      {
+        command: "copyFilePath", key: "ctrl+c", mac: "cmd+c",
+        when: "config.dext.copyFilePathOnCopy && !inputFocus && (filesExplorerFocus || openEditorsFocus || (editorAreaFocus && resourceScheme != untitled))"
+      },
+      {
+        command: "copyFilePath", key: "ctrl+c", mac: "cmd+c",
+        when: "config.dext.copyFilePathOnCopy && editorTextFocus && !editorHasSelection && resourceScheme != untitled"
+      }
+    ]);
+    expect(value.contributes?.configuration?.properties?.["dext.copyFilePathOnCopy"])
+      .toMatchObject({ type: "boolean", default: true });
+  });
+
   it("captures normal editor copy only for nonempty selections when enabled", async () => {
     const value = await manifest();
     expect(value.activationEvents).toContain("onCommand:dext.copySelectionWithContext");
@@ -81,8 +98,13 @@ describe("Dext package manifest", () => {
   it("labels the Explorer command for both files and directories", async () => {
     const value = await manifest();
     expect(value.contributes?.commands).toContainEqual(
-      expect.objectContaining({ command: "dext.addFileToChat", title: "Dext: Add to Dext Input" })
+      expect.objectContaining({ command: "dext.addFileToChat", title: "Add to Dext" })
     );
+    expect(value.contributes?.commands).toContainEqual(
+      expect.objectContaining({ command: "dext.addSelectionToChat", title: "Add to Dext" })
+    );
+    expect(value.contributes?.configuration?.properties?.["dext.selectionActions.enabled"])
+      .toMatchObject({ type: "boolean", default: true });
     expect(value.contributes?.menus?.["explorer/context"]).toContainEqual({
       command: "dext.addFileToChat",
       when: "resourceScheme != untitled",
@@ -135,7 +157,7 @@ describe("Dext package manifest", () => {
     const menu = value.contributes?.menus?.["webview/context"] ?? [];
     const palette = value.contributes?.menus?.commandPalette ?? [];
     expect(menu.filter((item) => item.when?.includes("webviewSection == 'turn'")).map((item) => item.command))
-      .toEqual(expect.arrayContaining(["dext.history.forkFromTurn", "dext.history.editTurnInput"]));
+      .toEqual(["dext.history.renameTurn", "dext.history.forkFromTurn", "dext.history.copyTurn", "dext.history.deleteTurn"]);
     for (const command of [
       "dext.history.continueConversation",
       "dext.history.forkConversation",
@@ -144,9 +166,11 @@ describe("Dext package manifest", () => {
     ]) {
       const item = menu.find((entry) => entry.command === command);
       expect(item?.when).toContain("webviewId == 'dext.history'");
-      // Session actions stay reachable when the click lands on a single turn.
-      expect(item?.when).toContain("webviewSection == 'session' || webviewSection == 'turn'");
+      expect(item?.when).toContain("webviewSection == 'session'");
+      expect(item?.when).not.toContain("webviewSection == 'turn'");
     }
+    expect(menu.find((item) => item.command === "dext.history.renameConversation")?.when)
+      .toBe("webviewId == 'dext.history' && webviewSection == 'session'");
     // Every one of them needs the right-clicked element to supply its target.
     for (const item of menu) {
       expect(palette).toContainEqual({ command: item.command, when: "false" });
@@ -197,7 +221,8 @@ describe("Dext package manifest", () => {
     const value = await manifest();
     const entry = (value.contributes?.menus?.["webview/context"] ?? [])
       .find((item) => item.command === "dext.history.recordWorkflow");
-    expect(entry?.when).toContain("webviewSection == 'session' || webviewSection == 'turn'");
+    expect(entry?.when).toContain("webviewSection == 'session'");
+    expect(entry?.when).not.toContain("webviewSection == 'turn'");
     // Writing into `.dext/api` needs a trusted workspace, so the action is not
     // offered where it would only be able to fail.
     expect(entry?.when).toContain("dext.workspaceTrusted");

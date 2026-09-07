@@ -3,6 +3,20 @@ import type { WebviewRequest } from "../src/webviewProtocol.js";
 import { ClipboardClient } from "../src/webview/clipboardClient.js";
 
 describe("ClipboardClient", () => {
+  it("preserves multiple file references in the host response", async () => {
+    const fileReferences = [
+      { expression: "@index.html", payload: "index.html" },
+      { expression: "@image.png", payload: "image.png" }
+    ];
+    const client = new ClipboardClient((request) => {
+      if (request.type === "clipboardRead") client.accept({
+        type: "clipboardReadResult", requestId: request.requestId, success: true,
+        text: "@index.html @image.png", contextAttached: false, fileReferences
+      });
+    });
+    await expect(client.read("code")).resolves.toMatchObject({ fileReferences });
+  });
+
   it("matches Host write acknowledgements to their request", async () => {
     const requests: WebviewRequest[] = [];
     const client = new ClipboardClient((request) => requests.push(request));

@@ -15,9 +15,11 @@ import {
   directoryAttachment,
   fileAttachment,
   isCodeDocument,
-  selectionAttachment
+  selectionAttachment,
+  type SelectionTarget
 } from "./vscodeAttachments.js";
 import { ReadyMessageQueue } from "./readyMessageQueue.js";
+import { clipboardFileReferences } from "./vscodeClipboardFiles.js";
 import { rankFileMatches } from "./core/fileSearch.js";
 import { planPathSegments } from "./core/planFile.js";
 import { openDextFileReference, openExternalLink } from "./vscodeContextHost.js";
@@ -26,7 +28,7 @@ import type { ConversationSummary, WebviewResponse } from "./webviewProtocol.js"
 import type { AgentSelection } from "./agentProfiles.js";
 import type { DextHistoryRecord, DextHistorySession, DextHistoryStore } from "./historyStore.js";
 import type { DextConversationPreferences } from "./conversationPreferences.js";
-import { conversationTitle } from "./historyRender.js";
+import { conversationTitle, historyTurnTitle } from "./historyRender.js";
 import { normalizeInputReferenceSource } from "./core/fileReference.js";
 import type { McpServerConfig } from "./core/mcpRegistry.js";
 
@@ -545,6 +547,25 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     await this.postConversationState();
   }
 
+  async renameTurn(sessionId: string, turnId: string, title: string): Promise<void> {
+    if (!await this.history.renameTurn(sessionId, turnId, title)) throw new Error("Conversation turn not found.");
+    const stored = this.history.list(true).find((session) => session.id === sessionId)?.turns.find((turn) => turn.id === turnId);
+    if (!stored) throw new Error("Conversation turn not found.");
+    // Open conversations retain their own objects while agents are running.
+    // Update only the name so continuing or switching tabs cannot restore it.
+    const cached = this.sessions.get(sessionId)?.turns.find((turn) => turn.id === turnId);
+    if (cached) {
+      if (stored.title) cached.title = stored.title;
+      else delete cached.title;
+    }
+    this.postedSessionSignatures.delete(sessionId);
+    this.postWhenReady({
+      type: "turnRenamed", sessionId, turnId,
+      ...(stored.title ? { title: stored.title } : {}),
+      displayTitle: historyTurnTitle(stored)
+    });
+  }
+
   async pinConversation(sessionId: string, pinned: boolean): Promise<void> {
     this.hydrateSessions();
     await this.preferences.setPinned(sessionId, pinned);
@@ -557,21 +578,41 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     await this.closeConversation(sessionId);
   }
 
-  async deleteTurn(turnId: string): Promise<void> {
-    if (this.activeExecutions.has(this.activeSession.id)) {
+  async retryTurn(sessionId: string, turnId: string): Promise<void> {
+    this.hydrateSessions();
+    if (this.activeExecutions.has(sessionId)) throw new Error("Stop this Dext turn before retrying a conversation turn.");
+    const session = this.sessions.get(sessionId) ?? this.history.list(true).find((item) => item.id === sessionId);
+    const turn = session?.turns.find((item) => item.id === turnId);
+    if (!session || !turn) throw new Error("Conversation turn not found.");
+    if (session.archivedAt) {
+      await this.history.setArchived(sessionId, false);
+      delete session.archivedAt;
+    }
+    await vscode.commands.executeCommand("dext.sidebar.focus");
+    this.showChat();
+    await this.openConversation(session);
+    await this.run(turn.mode ?? this.application.state().agentSelection.mode ?? "agent", turn.input);
+  }
+
+  async deleteTurn(turnId: string, sessionId = this.activeSession.id): Promise<void> {
+    this.hydrateSessions();
+    if (this.activeExecutions.has(sessionId)) {
       throw new Error("Stop this Dext turn before deleting a conversation turn.");
     }
-    this.hydrateSessions();
-    const index = this.activeSession.turns.findIndex((turn) => turn.id === turnId);
-    if (index === -1) throw new Error("Conversation turn not found.");
-    const removed = await this.history.removeTurn(this.activeSession.id, turnId);
+    const session = this.sessions.get(sessionId) ?? this.history.list(true).find((item) => item.id === sessionId);
+    const index = session?.turns.findIndex((turn) => turn.id === turnId) ?? -1;
+    if (!session || index === -1) throw new Error("Conversation turn not found.");
+    const removed = await this.history.removeTurn(sessionId, turnId, session.providerSessions);
     if (!removed) throw new Error("Conversation turn not found.");
-    this.activeSession.turns.splice(index, 1);
-    this.activeSession.updatedAt = this.activeSession.turns.at(-1)?.createdAt ?? this.activeSession.createdAt;
-    if (this.activeSession.turns.length) this.activeSession.createdAt = this.activeSession.turns[0]!.createdAt;
+    session.turns.splice(index, 1);
+    session.updatedAt = session.turns.at(-1)?.createdAt ?? session.createdAt;
+    if (session.turns.length) session.createdAt = session.turns[0]!.createdAt;
+    // Deletion only edits Dext history. Keep the provider session bindings and
+    // runner state intact, including when this was the final displayed turn.
     this.pendingPatches.delete(turnId);
+    this.postedSessionSignatures.delete(sessionId);
     await this.postConversationState();
-    await this.post({ type: "outputSession", session: this.activeSession });
+    await this.post({ type: "outputSession", session });
   }
 
   async forgetConversation(sessionId: string): Promise<void> {
@@ -594,6 +635,17 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     this.postWhenReady({ type: "setInput", source });
   }
 
+  editTurnInput(sessionId: string, turnId: string): void {
+    this.hydrateSessions();
+    const execution = this.activeExecutions.get(sessionId);
+    const session = this.sessions.get(sessionId) ?? this.history.list(true).find((item) => item.id === sessionId);
+    const source = execution?.turnId === turnId
+      ? execution.source
+      : session?.turns.find((turn) => turn.id === turnId)?.input;
+    if (source === undefined) throw new Error("Conversation turn not found.");
+    this.setInput(source);
+  }
+
   /** The keyboard and Command Palette route into the same abort the composer's
    * Stop button uses, so there is only one way a turn ends early. */
   stopExecution(): void {
@@ -609,8 +661,8 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     throw new Error("No Dext turn is running in this conversation.");
   }
 
-  async addSelectionToChat(): Promise<void> {
-    const attachment = await selectionAttachment();
+  async addSelectionToChat(target?: SelectionTarget): Promise<void> {
+    const attachment = await selectionAttachment(target);
     this.postWhenReady({
       type: "insertFileReferences",
       expressions: [attachmentFileReference(attachment).expression]
@@ -749,22 +801,32 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
             this.mcpAssistantExecution.controller.abort();
           }
           break;
-        case "retryTurn": {
-          const turn = this.activeSession.turns.find((item) => item.id === request.turnId);
-          if (!turn) throw new Error("Conversation turn not found.");
-          // Turns recorded before Dext tracked the mode fall back to the one
-          // the composer is showing, which is what the user sees on screen.
-          await this.run(turn.mode ?? this.application.state().agentSelection.mode ?? "agent", turn.input);
+        case "retryTurn":
+          await vscode.commands.executeCommand("dext.history.retryTurn", {
+            sessionId: request.sessionId ?? this.activeSession.id, turnId: request.turnId
+          });
           break;
-        }
         case "forkFromTurn":
           await vscode.commands.executeCommand("dext.history.forkFromTurn", {
-            sessionId: this.activeSession.id,
+            sessionId: request.sessionId ?? this.activeSession.id,
+            turnId: request.turnId
+          });
+          break;
+        case "renameTurn":
+          await vscode.commands.executeCommand("dext.history.renameTurn", {
+            sessionId: request.sessionId,
             turnId: request.turnId
           });
           break;
         case "deleteTurn":
-          await this.deleteTurn(request.turnId);
+          await vscode.commands.executeCommand("dext.history.deleteTurn", {
+            sessionId: request.sessionId ?? this.activeSession.id, turnId: request.turnId
+          });
+          break;
+        case "copyTurn":
+          await vscode.commands.executeCommand("dext.history.copyTurn", {
+            sessionId: request.sessionId, turnId: request.turnId
+          });
           break;
         case "buildPlan":
           await this.buildPlan(request.planPath);
@@ -871,6 +933,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
             throw error;
           }
           let codeReference: ReturnType<typeof this.attachments.clipboardReference> = undefined;
+          let fileReferences: Awaited<ReturnType<typeof clipboardFileReferences>>;
           try {
             if (request.purpose === "code") {
               const editor = vscode.window.activeTextEditor;
@@ -900,10 +963,10 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
                   this.attachments.clearClipboard();
                 }
               } else {
-                // Explicit context-copy commands (including terminal output)
-                // have no active editor selection to validate against, so the
-                // short-lived staged reference remains available here.
-                codeReference = this.attachments.clipboardReference(text);
+                // File Copy Path carries the original resources, including
+                // images. Resolve paths before falling back to staged context.
+                fileReferences = await clipboardFileReferences(text);
+                if (!fileReferences) codeReference = this.attachments.clipboardReference(text);
               }
             }
           } catch (error) {
@@ -921,9 +984,10 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
             type: "clipboardReadResult",
             requestId: request.requestId,
             success: true,
-            text: codeReference?.expression ?? text,
+            text: fileReferences?.map((reference) => reference.expression).join(" ") ?? codeReference?.expression ?? text,
             contextAttached: false,
-            ...(codeReference ? { codeReference } : {})
+            ...(codeReference ? { codeReference } : {}),
+            ...(fileReferences ? { fileReferences } : {})
           });
           break;
         }
@@ -1196,6 +1260,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       // that id when persisting the result so retry/delete actions still point
       // at the stored turn after success or cancellation.
       const turn = await this.history.addSuccess(source, events, response, sessionId, mode, turnId);
+      await this.persistProviderSessions(session);
       if (mode === "plan" && response.executions.some((execution) => execution.result.kind === "chat" && execution.result.planPath)) {
         const savedPath = response.executions.find((execution) => execution.result.kind === "chat" && execution.result.planPath)?.result;
         if (savedPath?.kind === "chat" && savedPath.planPath) {
@@ -1225,6 +1290,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         await this.postPlanContext();
       }
       const turn = await this.history.addFailure(source, events, error, sessionId, mode, turnId);
+      await this.persistProviderSessions(session);
       session.turns.push(turn);
       session.updatedAt = turn.createdAt;
       this.sessions.set(sessionId, session);
@@ -1250,6 +1316,14 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       } finally {
         await this.post({ type: "executing", sessionId, value: false, turnId });
       }
+    }
+  }
+
+  private async persistProviderSessions(session: DextHistorySession): Promise<void> {
+    // The CLI can report its ID before the first history record exists. Save
+    // it again after the turn is stored so the first turn survives a reload.
+    for (const [provider, providerSessionId] of Object.entries(session.providerSessions ?? {})) {
+      await this.history.setProviderSession(session.id, provider, providerSessionId);
     }
   }
 

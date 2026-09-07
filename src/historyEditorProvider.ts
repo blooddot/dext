@@ -3,7 +3,7 @@ import * as vscode from "vscode";
 import type { DextHistoryStore } from "./historyStore.js";
 import type { DextConversationPreferences } from "./conversationPreferences.js";
 import { orderHistorySessions } from "./conversationPreferences.js";
-import { historyTokenStyles, renderHistorySession, renderHistorySessionBody } from "./historyRender.js";
+import { historyTokenStyles, historyTurnTitle, renderHistorySession, renderHistorySessionBody } from "./historyRender.js";
 import { loadEditorTokenTheme } from "./vscodeTheme.js";
 import { openDextFileReference } from "./vscodeContextHost.js";
 import type { DextStorage } from "./dextStorage.js";
@@ -42,7 +42,7 @@ export class DextHistoryPanel implements vscode.Disposable {
       this.panel = undefined;
     });
     this.panel.webview.onDidReceiveMessage((raw: unknown) => {
-      const message = raw as { type?: string; text?: string; reference?: string; command?: string; sessionId?: string };
+      const message = raw as { type?: string; text?: string; reference?: string; command?: string; sessionId?: string; turnId?: string };
       if (message.type === "copy" && typeof message.text === "string") {
         void vscode.env.clipboard.writeText(message.text);
       }
@@ -62,8 +62,20 @@ export class DextHistoryPanel implements vscode.Disposable {
       if (message.type === "historyCommand"
         && typeof message.command === "string"
         && typeof message.sessionId === "string"
-        && message.sessionId.length > 0
-        && [
+        && message.sessionId.length > 0) {
+        const turnCommands = [
+          "dext.history.renameTurn",
+          "dext.history.forkFromTurn",
+          "dext.history.copyTurn",
+          "dext.history.deleteTurn"
+        ];
+        if (turnCommands.includes(message.command)) {
+          if (typeof message.turnId !== "string" || !message.turnId) return;
+          void vscode.commands.executeCommand(message.command, { sessionId: message.sessionId, turnId: message.turnId });
+          return;
+        }
+        if (message.turnId) return;
+        if ([
           "dext.history.continueConversation",
           "dext.history.forkConversation",
           "dext.history.addFavorite",
@@ -74,7 +86,8 @@ export class DextHistoryPanel implements vscode.Disposable {
           "dext.history.unarchiveConversation",
           "dext.history.deleteConversation"
         ].includes(message.command)) {
-        void vscode.commands.executeCommand(message.command, { sessionId: message.sessionId });
+          void vscode.commands.executeCommand(message.command, { sessionId: message.sessionId });
+        }
       }
     });
     this.render();
@@ -83,6 +96,16 @@ export class DextHistoryPanel implements vscode.Disposable {
 
   refresh(): void {
     this.render();
+  }
+
+  refreshTurnTitle(sessionId: string, turnId: string): void {
+    const turn = this.history.list(true).find((session) => session.id === sessionId)?.turns.find((item) => item.id === turnId);
+    if (!turn) return;
+    // Update the label in place so renaming never collapses the expanded turn.
+    void this.panel?.webview.postMessage({
+      type: "historyTurnTitle", sessionId, turnId,
+      title: historyTurnTitle(turn), named: Boolean(turn.title)
+    });
   }
 
   dispose(): void {
@@ -180,7 +203,8 @@ export class DextHistoryPanel implements vscode.Disposable {
         vscode.postMessage({
           type: 'historyCommand',
           command: historyAction.dataset.historyCommand || '',
-          sessionId: historyAction.dataset.sessionId || ''
+          sessionId: historyAction.dataset.sessionId || '',
+          turnId: historyAction.dataset.turnId || ''
         });
       }
     });
@@ -194,6 +218,16 @@ export class DextHistoryPanel implements vscode.Disposable {
     }, true);
     window.addEventListener('message', (event) => {
       const message = event.data;
+      if (message?.type === 'historyTurnTitle' && typeof message.title === 'string') {
+        const target = [...document.querySelectorAll('details.history-record')].find((item) =>
+          item.dataset.sessionId === message.sessionId && item.dataset.turnId === message.turnId);
+        const label = target?.querySelector(':scope > summary > .history-summary-input');
+        if (label) {
+          label.textContent = message.title;
+          label.classList.toggle('named', message.named === true);
+        }
+        return;
+      }
       if (!message || message.type !== 'historySessionBody' || typeof message.sessionId !== 'string' || typeof message.html !== 'string') return;
       const target = [...document.querySelectorAll('details.history-session')].find((item) => item.dataset.historySessionId === message.sessionId);
       if (!target) return;

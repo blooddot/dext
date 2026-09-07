@@ -4,6 +4,7 @@ export interface ClipboardReadResult {
   text: string;
   contextAttached: boolean;
   codeReference?: { expression: string; payload: string };
+  fileReferences?: Array<{ expression: string; payload: string }>;
 }
 
 interface PendingWrite {
@@ -54,7 +55,8 @@ export class ClipboardClient {
         ? {
             text: response.text,
             contextAttached: response.contextAttached,
-            ...(response.codeReference ? { codeReference: response.codeReference } : {})
+            ...(response.codeReference ? { codeReference: response.codeReference } : {}),
+            ...(response.fileReferences ? { fileReferences: response.fileReferences } : {})
           }
         : undefined);
     }

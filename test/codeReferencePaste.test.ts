@@ -12,6 +12,28 @@ const reference: ClipboardReadResult = {
 };
 
 describe("Code reference paste", () => {
+  it("inserts copied files as separate refs with a typing boundary", () => {
+    const files: ClipboardReadResult = {
+      text: "C:\\repo\\index.html\r\nC:\\repo\\image.png",
+      contextAttached: false,
+      fileReferences: [
+        { expression: "@index.html", payload: "index.html" },
+        { expression: "@image.png", payload: "image.png" }
+      ]
+    };
+    expect(codeReferencePasteText("Review", 6, 6, files)).toBe(" @index.html @image.png ");
+    expect(codeReferencePasteText("Review these later", 7, 12, files)).toBe("@index.html @image.png");
+  });
+
+  it("pastes a single copied file path into an existing ref.file argument", () => {
+    const source = 'ref.file("")';
+    expect(codeReferencePasteText(source, 10, 10, {
+      text: "C:\\repo\\index.html",
+      contextAttached: false,
+      fileReferences: [{ expression: "@index.html", payload: "index.html" }]
+    })).toBe("index.html");
+  });
+
   it("inserts the full reference expression into ordinary code", () => {
     expect(codeReferencePasteText("ask(input=)", 10, 10, reference))
       .toBe(reference.codeReference?.expression);

@@ -5,12 +5,49 @@ import {
   highlightDext,
   highlightTerminal,
   historyTokenStyles,
+  historyTurnMarkdown,
+  historyTurnTitle,
   renderHistoryRecord,
   renderHistorySession
 } from "../src/historyRender.js";
 import type { DextHistoryRecord } from "../src/historyStore.js";
 
 describe("Dext history rendering", () => {
+  it("provides turn actions with both identifiers, including in lazily loaded session bodies", () => {
+    const turn: DextHistoryRecord = { id: "turn-2", createdAt: 2, input: "question", output: "answer", process: [] };
+    const html = renderHistoryRecord(turn, "session-1");
+    const summary = html.slice(0, html.indexOf("</summary>"));
+    const actions = [...summary.matchAll(/<button[^>]*data-history-command="([^"]+)"[^>]*>/g)];
+    expect(actions.map((match) => match[1])).toEqual([
+      "dext.history.renameTurn",
+      "dext.history.forkFromTurn", "dext.history.copyTurn", "dext.history.deleteTurn"
+    ]);
+    for (const [button] of actions) {
+      expect(button).toContain('data-session-id="session-1"');
+      expect(button).toContain('data-turn-id="turn-2"');
+    }
+    expect(summary).toMatch(/data-history-command="dext.history.renameTurn"[^>]*title="Rename turn"[^>]*><i class="codicon codicon-rename"/);
+    expect(renderHistoryRecord(turn)).not.toContain("data-history-command");
+    const sessionHtml = renderHistorySession({ id: "session-1", createdAt: 2, updatedAt: 2, turns: [turn] });
+    const sessionSummary = sessionHtml.slice(0, sessionHtml.indexOf("</summary>"));
+    expect([...sessionSummary.matchAll(/data-history-command="([^"]+)"/g)].map((match) => match[1])).toEqual([
+      "dext.history.continueConversation", "dext.history.renameConversation", "dext.history.forkConversation",
+      "dext.history.copyConversation", "dext.history.addFavorite", "dext.history.archiveConversation", "dext.history.deleteConversation"
+    ]);
+  });
+
+  it("renders an escaped custom turn title without renaming the parent or changing the copied input", () => {
+    const turn: DextHistoryRecord = { id: "turn-1", title: '<New & "name">', createdAt: 1, input: "original question", output: "answer", process: [] };
+    const html = renderHistorySession({ id: "session-1", createdAt: 1, updatedAt: 1, turns: [turn] });
+    expect(html).toContain('class="history-summary-input named">&lt;New &amp; &quot;name&quot;&gt;</span>');
+    expect(html.slice(0, html.indexOf("</summary>"))).toContain("original question");
+    expect(historyTurnTitle(turn)).toBe(turn.title);
+    expect(historyTurnTitle({ ...turn, title: "" })).toBe("original question");
+    expect(historyTurnMarkdown(turn, 2)).toContain("## Turn 3");
+    expect(historyTurnMarkdown(turn)).toContain("### Input\n\noriginal question");
+    expect(historyTurnMarkdown(turn)).toContain("### Output\n\nanswer");
+  });
+
   it("uses Python token classes for Dext input", () => {
     const html = highlightDext('result = code.edit(target=ref.selection, instruction="fix")');
     expect(html).toContain("tok-variableName");

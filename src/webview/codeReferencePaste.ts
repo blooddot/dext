@@ -24,7 +24,12 @@ export function codeReferencePasteText(
   selectionEnd: number,
   result: ClipboardReadResult
 ): string {
-  const reference = result.codeReference;
+  if (result.fileReferences && result.fileReferences.length > 1) {
+    const expression = result.fileReferences.map((reference) => reference.expression).join(" ");
+    const insertion = inlineInsertion(source, selectionStart, selectionEnd, expression);
+    return insertion.text + (selectionEnd === source.length ? " " : "");
+  }
+  const reference = result.fileReferences?.[0] ?? result.codeReference;
   if (!reference) return result.text;
   const insideFileString = fileStringRanges(source).some(
     (range) => selectionStart >= range.start && selectionEnd <= range.end

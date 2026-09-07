@@ -686,7 +686,8 @@ main {
   color: var(--vscode-charts-yellow, var(--vscode-notificationsWarningIcon-foreground, #cca700));
 }
 
-.history-session-actions {
+.history-session-actions,
+.history-turn-actions {
   position: absolute;
   z-index: 1;
   right: 4px;
@@ -707,7 +708,9 @@ main {
 }
 
 .history-session > summary:hover .history-session-actions,
-.history-session > summary:focus-within .history-session-actions {
+.history-session > summary:focus-within .history-session-actions,
+.history-record > summary:hover .history-turn-actions,
+.history-record > summary:focus-within .history-turn-actions {
   opacity: 1;
   pointer-events: auto;
 }
@@ -727,7 +730,8 @@ main {
   background: var(--vscode-toolbar-hoverBackground);
 }
 
-.history-session-action:last-child:hover {
+.history-session-action[data-history-command="dext.history.deleteConversation"]:hover,
+.history-session-action[data-history-command="dext.history.deleteTurn"]:hover {
   color: var(--vscode-errorForeground);
 }
 
@@ -1327,6 +1331,11 @@ main {
   background: transparent;
   color: inherit;
   cursor: pointer;
+}
+
+/* References without a remove button need matching space at both edges. */
+.attachment-chip > .attachment-open:only-child {
+  padding-right: 6px;
 }
 
 .attachment-open .codicon,
@@ -2107,9 +2116,8 @@ button.primary:disabled {
   opacity: 0.55;
 }
 
-/* A running turn keeps a single, very subtle light sweep on its Stop action.
-   The button itself stays still: only a soft highlight band moves across the
-   existing mode colour. */
+/* A running turn uses the same subtle light sweep on Stop and Process.
+   Only the highlight moves; both controls keep their existing dimensions. */
 button.primary.executing {
   --running-accent: var(--composer-accent-fill, var(--vscode-button-background));
 }
@@ -2118,7 +2126,8 @@ button.primary.plan-build.executing {
   --running-accent: var(--plan-accent-fill);
 }
 
-button.primary.executing::after {
+button.primary.executing::after,
+.running-process > summary::after {
   content: "";
   position: absolute;
   inset: 0;
@@ -2136,7 +2145,23 @@ button.primary.executing::after {
   animation: dext-running-sheen 2.2s linear infinite;
 }
 
-button.primary.executing > * {
+.running-process > summary {
+  position: relative;
+  overflow: hidden;
+  border-radius: 3px;
+}
+
+.running-process > summary::after {
+  background: linear-gradient(
+    108deg,
+    transparent 28%,
+    color-mix(in srgb, var(--vscode-foreground) 12%, transparent) 50%,
+    transparent 72%
+  );
+}
+
+button.primary.executing > *,
+.running-process > summary > * {
   position: relative;
   z-index: 1;
 }
@@ -2150,7 +2175,8 @@ button.primary.executing > * {
   button.primary.executing { animation: none; }
   /* Reduced motion still gets a static highlight instead of losing the
      running-state affordance entirely. */
-  button.primary.executing::after {
+  button.primary.executing::after,
+  .running-process > summary::after {
     animation: none;
     transform: none;
   }
@@ -2557,6 +2583,10 @@ button.primary.stopping {
 .output-turn-action:disabled {
   opacity: 0.4;
   cursor: default;
+}
+
+.output-turn-action:has(.codicon-trash):hover:not(:disabled) {
+  color: var(--vscode-errorForeground);
 }
 
 .output-turn-body {

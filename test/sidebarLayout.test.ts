@@ -348,22 +348,28 @@ describe("sidebar panel layout", () => {
     // The summary is its own click target, so an action click must not fold the
     // turn it belongs to.
     expect(main).toMatch(/function turnActionButton[\s\S]*?event\.preventDefault\(\);\s*event\.stopPropagation\(\);/);
-    expect(main).toMatch(/turnActionButton\("edit", "Edit and resend", \(\) => \{[\s\S]*?editor\.setValue\(source\)/);
-    expect(main).toMatch(/turnActionButton\("debug-restart", "Retry this turn", \(\) => \{[\s\S]*?type: "retryTurn", turnId/);
-    expect(main).toMatch(/turnActionButton\("repo-forked", "Fork from this turn", \(\) => \{[\s\S]*?type: "forkFromTurn", turnId/);
+    expect(main).toMatch(/turnActionButton\(TURN_EDIT_ACTION.icon, TURN_EDIT_ACTION.label, \(\) => \{[\s\S]*?editor\.setValue\(source\)/);
+    expect(main).toMatch(/turnActionButton\(TURN_RENAME_ACTION.icon, TURN_RENAME_ACTION.label, \(\) => \{[\s\S]*?type: "renameTurn", sessionId, turnId/);
+    expect(sidebar).toMatch(/case "renameTurn":[\s\S]*?sessionId: request.sessionId/);
+    expect(main).toMatch(/turnActionButton\(TURN_RETRY_ACTION.icon, TURN_RETRY_ACTION.label, \(\) => \{[\s\S]*?type: "retryTurn", sessionId, turnId/);
+    expect(main).toMatch(/turnActionButton\(TURN_FORK_ACTION.icon, TURN_FORK_ACTION.label, \(\) => \{[\s\S]*?type: "forkFromTurn", sessionId, turnId/);
     expect(main).toContain("summary.append(chevron, title, time, actions);");
+    const actionOrder = [...main.matchAll(/turnActionButton\((TURN_\w+_ACTION)\.icon/g)].map((match) => match[1]);
+    expect(actionOrder).toEqual([
+      "TURN_EDIT_ACTION", "TURN_RETRY_ACTION", "TURN_RENAME_ACTION", "TURN_FORK_ACTION", "TURN_COPY_ACTION", "TURN_DELETE_ACTION"
+    ]);
     // Only destructive actions on the active turn go dead while a turn is
     // running; copying and editing older turns remains available.
     expect(main).toMatch(/function syncTurnActions[\s\S]*?data-disable-while-running[\s\S]*?button\.disabled = executing &&/);
     expect(main).toMatch(/function updateRunState[\s\S]*?syncTurnActions\(\);/);
-    expect(sidebar).toMatch(/case "retryTurn":[\s\S]*?this\.activeSession\.turns\.find\(\(item\) => item\.id === request\.turnId\)/);
-    expect(sidebar).toMatch(/case "forkFromTurn":[\s\S]*?dext\.history\.forkFromTurn[\s\S]*?sessionId: this\.activeSession\.id/);
+    expect(sidebar).toMatch(/case "retryTurn":[\s\S]*?dext\.history\.retryTurn[\s\S]*?sessionId: request.sessionId \?\? this\.activeSession\.id/);
+    expect(sidebar).toMatch(/case "forkFromTurn":[\s\S]*?dext\.history\.forkFromTurn[\s\S]*?sessionId: request.sessionId \?\? this\.activeSession\.id/);
     // Retry reproduces the recorded mode rather than whatever is selected now.
     expect(sidebar).toContain("await this.run(turn.mode ?? this.application.state().agentSelection.mode ?? \"agent\", turn.input);");
     expect(sidebar).toContain("await this.history.addSuccess(source, events, response, sessionId, mode, turnId);");
     expect(css).toMatch(/\.output-turn > summary:hover \.output-turn-actions,[\s\S]*?opacity: 1;/);
-    // History's actions are a context menu with no affordance, so the row says so.
-    expect(history).toContain('const TURN_ACTION_HINT = "Right-click for turn and conversation actions";');
+    expect(history).toContain('const TURN_ACTION_HINT = "Right-click for turn actions";');
+    expect(css).toMatch(/\.history-record > summary:hover \.history-turn-actions,[\s\S]*?opacity: 1;/);
     expect(history).toContain('<summary title="${SESSION_ACTION_HINT}">');
   });
 
@@ -557,7 +563,7 @@ describe("sidebar panel layout", () => {
 
   it("does not hydrate a different historical turn while an agent is streaming", async () => {
     const main = await source("src/webview/main.ts");
-    expect(main).toMatch(/Copying a collapsed history row[\s\S]*?if \(!executing \|\| activeTurn === turn\) turn\.hydrate\?\.\(\)/);
+    expect(main).toMatch(/turnActionButton\(TURN_COPY_ACTION.icon, TURN_COPY_ACTION.label, \(\) => \{\s*if \(sessionId\) vscode.postMessage\(\{ type: "copyTurn", sessionId, turnId \}\);\s*\}, true\)/);
   });
 
   it("opens the complete API list in a dialog and keeps method insertion intact", async () => {

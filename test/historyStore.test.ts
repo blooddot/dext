@@ -15,6 +15,61 @@ class DelayedMemoryState extends MemoryState {
 }
 
 describe("DextHistoryStore", () => {
+  it("keeps CLI bindings after deleting the final Dext record and reloading", async () => {
+    const state = new MemoryState();
+    const store = new DextHistoryStore(state as never);
+    await store.addSuccess("only turn", [], { kind: "workflow", executions: [] }, "session-1", "ask", "turn-1");
+    await store.setProviderSession("session-1", "claude", "claude-thread");
+    expect(await store.removeTurn("session-1", "turn-1", { codex: "codex-thread" })).toBe(true);
+    const restarted = new DextHistoryStore(state as never);
+    expect(restarted.list()[0]).toMatchObject({
+      id: "session-1", turns: [], providerSessions: { codex: "codex-thread", claude: "claude-thread" }
+    });
+    await restarted.addSuccess("continue", [], { kind: "workflow", executions: [] }, "session-1");
+    expect(restarted.list()[0]?.providerSessions).toEqual({ codex: "codex-thread", claude: "claude-thread" });
+  });
+
+  it("does not count retained empty CLI sessions as turns when enforcing history limits", async () => {
+    const store = new DextHistoryStore(new MemoryState() as never, () => ({ maxTurns: 1, maxOutputLength: 1000 }));
+    await store.addSuccess("only turn", [], { kind: "workflow", executions: [] }, "empty", "ask", "turn-1");
+    await store.removeTurn("empty", "turn-1", { codex: "thread" });
+    await store.addSuccess("first", [], { kind: "workflow", executions: [] }, "active");
+    await store.addSuccess("second", [], { kind: "workflow", executions: [] }, "active");
+    expect(store.list().flatMap((session) => session.turns.map((turn) => turn.input))).toEqual(["second"]);
+    expect(store.list().find((session) => session.id === "empty")?.providerSessions).toEqual({ codex: "thread" });
+  });
+
+  it("persists a turn title independently of its input, sibling turns and parent conversation", async () => {
+    const state = new MemoryState();
+    const store = new DextHistoryStore(state as never);
+    await store.addSuccess("original input", [], { kind: "workflow", executions: [] }, "session-1", "agent", "turn-1");
+    await store.addFailure("second input", [], "failed", "session-1", "agent", "turn-2");
+    const before = store.list()[0]!;
+    expect(await store.renameTurn("session-1", "turn-1", "  New title  ")).toBe(true);
+    const restored = new DextHistoryStore(state as never).list()[0]!;
+    expect(restored).toEqual({ ...before, turns: [{ ...before.turns[0]!, title: "New title" }, before.turns[1]!] });
+    expect(await store.renameTurn("session-1", "turn-1", "   ")).toBe(true);
+    expect(store.list()[0]).toEqual(before);
+    expect(await store.renameTurn("missing", "turn-1", "wrong")).toBe(false);
+    expect(await store.renameTurn("session-1", "missing", "wrong")).toBe(false);
+  });
+
+  it("keeps turn names during concurrent writes and forks them independently", async () => {
+    const store = new DextHistoryStore(new DelayedMemoryState() as never);
+    await store.addSuccess("first", [], { kind: "workflow", executions: [] }, "session-1", "ask", "turn-1");
+    await Promise.all([
+      store.renameTurn("session-1", "turn-1", "renamed"),
+      store.addSuccess("second", [], { kind: "workflow", executions: [] }, "session-1")
+    ]);
+    const source = store.list()[0]!;
+    expect(source.turns).toHaveLength(2);
+    expect(source.turns[0]?.title).toBe("renamed");
+    const forked = await store.fork(source.turns.slice(0, 1));
+    expect(forked.turns[0]?.title).toBe("renamed");
+    await store.renameTurn(forked.id, forked.turns[0]!.id, "fork title");
+    expect(store.list()[0]?.turns[0]?.title).toBe("renamed");
+  });
+
   it("persists successful and failed execution records", async () => {
     const store = new DextHistoryStore(new MemoryState() as never);
     await store.addSuccess("ask(input=\"hello\")", [{ phase: "status", text: "started" }], {

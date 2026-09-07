@@ -101,6 +101,22 @@
         "title": "Edit This Input in Dext"
       },
       {
+        "command": "dext.history.renameTurn",
+        "title": "Rename This Turn"
+      },
+      {
+        "command": "dext.history.copyTurn",
+        "title": "Copy This Turn as Markdown"
+      },
+      {
+        "command": "dext.history.retryTurn",
+        "title": "Retry This Turn"
+      },
+      {
+        "command": "dext.history.deleteTurn",
+        "title": "Delete This Turn from Dext"
+      },
+      {
         "command": "dext.history.recordWorkflow",
         "title": "Record Conversation as Dext Workflow"
       },
@@ -226,7 +242,7 @@
       },
       {
         "command": "dext.addSelectionToChat",
-        "title": "Dext: Add Selection to Dext Input",
+        "title": "Add to Dext",
         "icon": "$(comment-discussion)"
       },
       {
@@ -241,7 +257,7 @@
       },
       {
         "command": "dext.addFileToChat",
-        "title": "Dext: Add to Dext Input",
+        "title": "Add to Dext",
         "icon": "$(files)"
       },
       {
@@ -302,6 +318,18 @@
       }
     ],
     "keybindings": [
+      {
+        "command": "copyFilePath",
+        "key": "ctrl+c",
+        "mac": "cmd+c",
+        "when": "config.dext.copyFilePathOnCopy && !inputFocus && (filesExplorerFocus || openEditorsFocus || (editorAreaFocus && resourceScheme != untitled))"
+      },
+      {
+        "command": "copyFilePath",
+        "key": "ctrl+c",
+        "mac": "cmd+c",
+        "when": "config.dext.copyFilePathOnCopy && editorTextFocus && !editorHasSelection && resourceScheme != untitled"
+      },
       {
         "command": "dext.triggerSuggest",
         "key": "alt+/"
@@ -392,6 +420,22 @@
         },
         {
           "command": "dext.history.editTurnInput",
+          "when": "false"
+        },
+        {
+          "command": "dext.history.renameTurn",
+          "when": "false"
+        },
+        {
+          "command": "dext.history.copyTurn",
+          "when": "false"
+        },
+        {
+          "command": "dext.history.retryTurn",
+          "when": "false"
+        },
+        {
+          "command": "dext.history.deleteTurn",
           "when": "false"
         },
         {
@@ -629,64 +673,104 @@
       ],
       "webview/context": [
         {
+          "command": "dext.history.editTurnInput",
+          "when": "webviewId == 'dext.sidebar' && webviewSection == 'conversationTurn'",
+          "group": "1_turn@0"
+        },
+        {
+          "command": "dext.history.retryTurn",
+          "when": "webviewId == 'dext.sidebar' && webviewSection == 'conversationTurn' && !dextConversationRunning",
+          "group": "1_turn@1"
+        },
+        {
+          "command": "dext.history.renameTurn",
+          "when": "webviewId == 'dext.sidebar' && webviewSection == 'conversationTurn' && !dextTurnRunning",
+          "group": "1_turn@2"
+        },
+        {
           "command": "dext.history.forkFromTurn",
+          "when": "webviewId == 'dext.sidebar' && webviewSection == 'conversationTurn' && !dextTurnRunning",
+          "group": "1_turn@3"
+        },
+        {
+          "command": "dext.history.copyTurn",
+          "when": "webviewId == 'dext.sidebar' && webviewSection == 'conversationTurn' && !dextTurnRunning",
+          "group": "1_turn@4"
+        },
+        {
+          "command": "dext.history.deleteTurn",
+          "when": "webviewId == 'dext.sidebar' && webviewSection == 'conversationTurn' && !dextConversationRunning",
+          "group": "4_delete@1"
+        },
+        {
+          "command": "dext.history.renameTurn",
           "when": "webviewId == 'dext.history' && webviewSection == 'turn'",
           "group": "1_turn@1"
         },
         {
-          "command": "dext.history.editTurnInput",
+          "command": "dext.history.forkFromTurn",
           "when": "webviewId == 'dext.history' && webviewSection == 'turn'",
           "group": "1_turn@2"
         },
         {
+          "command": "dext.history.copyTurn",
+          "when": "webviewId == 'dext.history' && webviewSection == 'turn'",
+          "group": "1_turn@3"
+        },
+        {
+          "command": "dext.history.deleteTurn",
+          "when": "webviewId == 'dext.history' && webviewSection == 'turn'",
+          "group": "4_delete@1"
+        },
+        {
           "command": "dext.history.continueConversation",
-          "when": "webviewId == 'dext.history' && (webviewSection == 'session' || webviewSection == 'turn')",
-          "group": "2_conversation@1"
+          "when": "webviewId == 'dext.history' && webviewSection == 'session'",
+          "group": "2_conversation@0"
         },
         {
           "command": "dext.history.forkConversation",
-          "when": "webviewId == 'dext.history' && (webviewSection == 'session' || webviewSection == 'turn')",
+          "when": "webviewId == 'dext.history' && webviewSection == 'session'",
           "group": "2_conversation@2"
         },
         {
           "command": "dext.history.recordWorkflow",
-          "when": "webviewId == 'dext.history' && (webviewSection == 'session' || webviewSection == 'turn') && dext.workspaceTrusted",
-          "group": "2_conversation@3"
+          "when": "webviewId == 'dext.history' && webviewSection == 'session' && dext.workspaceTrusted",
+          "group": "2_conversation@6"
         },
         {
           "command": "dext.history.copyConversation",
-          "when": "webviewId == 'dext.history' && (webviewSection == 'session' || webviewSection == 'turn')",
-          "group": "3_copy@1"
+          "when": "webviewId == 'dext.history' && webviewSection == 'session'",
+          "group": "2_conversation@3"
         },
         {
           "command": "dext.history.renameConversation",
-          "when": "webviewId == 'dext.history' && (webviewSection == 'session' || webviewSection == 'turn')",
-          "group": "2_conversation@0"
+          "when": "webviewId == 'dext.history' && webviewSection == 'session'",
+          "group": "2_conversation@1"
         },
         {
           "command": "dext.history.addFavorite",
-          "when": "webviewId == 'dext.history' && (webviewSection == 'session' || webviewSection == 'turn') && !dextFavorite",
-          "group": "2_conversation@3"
+          "when": "webviewId == 'dext.history' && webviewSection == 'session' && !dextFavorite",
+          "group": "2_conversation@4"
         },
         {
           "command": "dext.history.removeFavorite",
-          "when": "webviewId == 'dext.history' && (webviewSection == 'session' || webviewSection == 'turn') && dextFavorite",
-          "group": "2_conversation@3"
+          "when": "webviewId == 'dext.history' && webviewSection == 'session' && dextFavorite",
+          "group": "2_conversation@4"
         },
         {
           "command": "dext.history.deleteConversation",
-          "when": "webviewId == 'dext.history' && (webviewSection == 'session' || webviewSection == 'turn')",
+          "when": "webviewId == 'dext.history' && webviewSection == 'session'",
           "group": "4_delete@1"
         },
         {
           "command": "dext.history.archiveConversation",
-          "when": "webviewId == 'dext.history' && (webviewSection == 'session' || webviewSection == 'turn') && !dextArchived",
+          "when": "webviewId == 'dext.history' && webviewSection == 'session' && !dextArchived",
           "group": "4_delete@0"
         },
         {
           "command": "dext.history.unarchiveConversation",
-          "when": "webviewId == 'dext.history' && (webviewSection == 'session' || webviewSection == 'turn') && dextArchived",
-          "group": "2_conversation@4"
+          "when": "webviewId == 'dext.history' && webviewSection == 'session' && dextArchived",
+          "group": "2_conversation@5"
         },
         {
           "command": "dext.tab.renameConversation",
@@ -749,6 +833,16 @@
     "configuration": {
       "title": "Dext",
       "properties": {
+        "dext.selectionActions.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show **Add to Dext** in a floating editor hover near the selection's active cursor after selecting workspace code. Does not add lines or change the code layout. Adds the selection to Input as a file reference. Changes take effect immediately; turning this off keeps the right-click menus available."
+        },
+        "dext.copyFilePathOnCopy": {
+          "type": "boolean",
+          "default": true,
+          "description": "Copy file paths with Ctrl+C or Cmd+C in Explorer, Open Editors, editor tabs, or a file editor without a text selection. Paste into Dext Input to insert references to the original files, including images. This replaces Explorer's file copy and the editor's copy-line behavior; disable it to restore those native shortcuts."
+        },
         "dext.captureSelectionOnCopy": {
           "type": "boolean",
           "default": true,

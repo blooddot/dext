@@ -2,6 +2,14 @@ import { describe, expect, it } from "vitest";
 import { webviewRequestSchema } from "../src/webviewProtocol.js";
 
 describe("Webview protocol", () => {
+  it("requires the original conversation and turn for a rename request", () => {
+    expect(webviewRequestSchema.parse({ type: "renameTurn", sessionId: "session-1", turnId: "turn-1" }))
+      .toEqual({ type: "renameTurn", sessionId: "session-1", turnId: "turn-1" });
+    expect(webviewRequestSchema.safeParse({ type: "renameTurn", turnId: "turn-1" }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({ type: "renameTurn", sessionId: "", turnId: "turn-1" }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({ type: "renameTurn", sessionId: "session-1", turnId: "" }).success).toBe(false);
+  });
+
   it("accepts conversation tab requests", () => {
     expect(webviewRequestSchema.safeParse({
       type: "selectConversation",

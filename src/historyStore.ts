@@ -17,6 +17,8 @@ export type PlanStatus = "new" | "active" | "running" | "completed" | "failed";
 
 export interface DextHistoryRecord {
   id: string;
+  /** Optional display name; the original input remains unchanged. */
+  title?: string;
   createdAt: number;
   input: string;
   process: AgentStreamEvent[];
@@ -80,10 +82,12 @@ function trimSessions(sessions: readonly DextHistorySession[], maxTurns: number)
   const next = sessions.map((session) => ({ ...session, turns: [...session.turns] }));
   let turnCount = next.reduce((total, session) => total + session.turns.length, 0);
   while (turnCount > maxTurns && next.length) {
-    const first = next[0]!;
+    const index = next.findIndex((session) => session.turns.length > 0);
+    if (index === -1) break;
+    const first = next[index]!;
     first.turns.shift();
     turnCount -= 1;
-    if (!first.turns.length) next.shift();
+    if (!first.turns.length) next.splice(index, 1);
     else first.createdAt = first.turns[0]!.createdAt;
   }
   return next;
@@ -138,6 +142,19 @@ export class DextHistoryStore {
     });
   }
 
+  async renameTurn(sessionId: string, turnId: string, title: string): Promise<boolean> {
+    return this.mutate(async () => {
+      const sessions = this.all();
+      const turn = sessions.find((session) => session.id === sessionId)?.turns.find((item) => item.id === turnId);
+      if (!turn) return false;
+      const name = title.trim().replace(/[\r\n]+/g, " ").slice(0, 140);
+      if (name) turn.title = name;
+      else delete turn.title;
+      await this.state.update(HISTORY_KEY, sessions);
+      return true;
+    });
+  }
+
   async updatePlanContext(sessionId: string, activePlanPath: string | undefined, planStatus: PlanStatus): Promise<void> {
     await this.mutate(async () => {
       const sessions = this.all();
@@ -150,21 +167,24 @@ export class DextHistoryStore {
     });
   }
 
-  /** Remove one turn from a conversation. Empty conversations are not kept in
-   * persisted history, matching the fact that a new conversation has no
-   * history entry until its first turn completes. */
-  async removeTurn(sessionId: string, turnId: string): Promise<boolean> {
+  /** Remove a Dext record, without modifying the CLI transcript. Keep an empty
+   * conversation if it owns provider bindings so reload can still resume it. */
+  async removeTurn(sessionId: string, turnId: string, providerSessions?: Readonly<Record<string, string>>): Promise<boolean> {
     return this.mutate(async () => {
       const sessions = this.all();
       const session = sessions.find((item) => item.id === sessionId);
       if (!session) return false;
       const index = session.turns.findIndex((turn) => turn.id === turnId);
       if (index === -1) return false;
+      if (providerSessions && Object.keys(providerSessions).length) {
+        session.providerSessions = { ...session.providerSessions, ...providerSessions };
+      }
       session.turns.splice(index, 1);
-      if (!session.turns.length) {
+      if (!session.turns.length && !Object.keys(session.providerSessions ?? {}).length
+        && !Object.keys(session.forkProviderSessions ?? {}).length) {
         const sessionIndex = sessions.indexOf(session);
         if (sessionIndex >= 0) sessions.splice(sessionIndex, 1);
-      } else {
+      } else if (session.turns.length) {
         session.createdAt = session.turns[0]!.createdAt;
         session.updatedAt = session.turns.at(-1)!.createdAt;
       }

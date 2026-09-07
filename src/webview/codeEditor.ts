@@ -703,7 +703,7 @@ export class DextCodeEditor {
     try {
       // Browser paste data is useful as a fallback, but the host clipboard is
       // authoritative when it can recover a structured workspace reference.
-      text = result.codeReference
+      text = result.codeReference || result.fileReferences?.length
         ? this.pasteText(source, selection.from, selection.to, result)
         : eventText || result.text || await browserClipboardText() || "";
     } catch (error) {

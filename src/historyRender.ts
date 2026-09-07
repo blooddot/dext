@@ -5,6 +5,7 @@ import type { AgentStreamEvent, DextResult, InputExecutionResponse, RuntimeRespo
 import type { EditorTokenTheme } from "./vscodeTheme.js";
 import type { DextHistoryRecord, DextHistorySession } from "./historyStore.js";
 import { formatDuration } from "./webview/duration.js";
+import { TURN_RENAME_ACTION, TURN_FORK_ACTION, TURN_COPY_ACTION, TURN_DELETE_ACTION } from "./turnPresentation.js";
 import { presentAgentMessage } from "./agentMessagePresentation.js";
 import { presentDiff } from "./diffPresentation.js";
 import type { AgentMessagePresentation } from "./agentMessagePresentation.js";
@@ -54,8 +55,18 @@ function copyButton(value: string): string {
 
 /** High-frequency conversation actions stay visible on hover; the complete
  * action set remains available from the native context menu. */
-function historyActionButton(icon: string, command: string, label: string, sessionId: string): string {
-  return `<button class="history-session-action icon-button compact" type="button" data-history-command="${escapeHtml(command)}" data-session-id="${escapeHtml(sessionId)}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}"><i class="codicon codicon-${icon}"></i></button>`;
+function historyActionButton(icon: string, command: string, label: string, sessionId: string, turnId?: string): string {
+  const target = turnId ? ` data-turn-id="${escapeHtml(turnId)}"` : "";
+  return `<button class="history-session-action icon-button compact" type="button" data-history-command="${escapeHtml(command)}" data-session-id="${escapeHtml(sessionId)}"${target} title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}"><i class="codicon codicon-${icon}"></i></button>`;
+}
+
+function historyTurnActions(sessionId: string, turnId: string): string {
+  return `<span class="history-turn-actions">${[
+    historyActionButton(TURN_RENAME_ACTION.icon, "dext.history.renameTurn", TURN_RENAME_ACTION.label, sessionId, turnId),
+    historyActionButton(TURN_FORK_ACTION.icon, "dext.history.forkFromTurn", TURN_FORK_ACTION.label, sessionId, turnId),
+    historyActionButton(TURN_COPY_ACTION.icon, "dext.history.copyTurn", TURN_COPY_ACTION.label, sessionId, turnId),
+    historyActionButton(TURN_DELETE_ACTION.icon, "dext.history.deleteTurn", TURN_DELETE_ACTION.label, sessionId, turnId)
+  ].join("")}</span>`;
 }
 
 function historySessionActions(session: DextHistorySession, favorite: boolean): string {
@@ -67,10 +78,10 @@ function historySessionActions(session: DextHistorySession, favorite: boolean): 
   const archiveIcon = session.archivedAt ? "inbox" : "archive";
   return [
     historyActionButton("debug-continue", "dext.history.continueConversation", "Continue in Dext", session.id),
-    historyActionButton("repo-forked", "dext.history.forkConversation", "Fork conversation", session.id),
-    historyActionButton(favoriteIcon, favoriteCommand, favoriteLabel, session.id),
-    historyActionButton("edit", "dext.history.renameConversation", "Rename conversation", session.id),
+    historyActionButton(TURN_RENAME_ACTION.icon, "dext.history.renameConversation", "Rename conversation", session.id),
+    historyActionButton(TURN_FORK_ACTION.icon, "dext.history.forkConversation", "Fork conversation", session.id),
     historyActionButton("copy", "dext.history.copyConversation", "Copy conversation as Markdown", session.id),
+    historyActionButton(favoriteIcon, favoriteCommand, favoriteLabel, session.id),
     historyActionButton(archiveIcon, archiveCommand, archiveLabel, session.id),
     historyActionButton("trash", "dext.history.deleteConversation", "Delete conversation", session.id)
   ].join("");
@@ -450,17 +461,24 @@ function dateLabel(timestamp: number): string {
   return new Date(timestamp).toLocaleString();
 }
 
-const TURN_ACTION_HINT = "Right-click for turn and conversation actions";
+const TURN_ACTION_HINT = "Right-click for turn actions";
 const SESSION_ACTION_HINT = "Right-click for conversation actions";
+
+export function historyTurnTitle(record: DextHistoryRecord): string {
+  if (record.title) return record.title;
+  const planExecution = parsedResponse(record)?.executions.find((item) => item.result.kind === "chat" && item.result.executePlan);
+  const planPath = planExecution?.result.kind === "chat" ? planExecution.result.planPath : undefined;
+  return planPath
+    ? `Plan: ${planPath.split("/").pop() ?? planPath}`
+    : inputReferenceDisplayText(normalizeInputReferenceSource(record.input)).split(/\r?\n/, 1)[0]!.slice(0, 140);
+}
 
 export function renderHistoryRecord(record: DextHistoryRecord, sessionId?: string): string {
   const input = normalizeInputReferenceSource(record.input);
   const response = parsedResponse(record);
   const planExecution = response?.executions.find((item) => item.result.kind === "chat" && item.result.executePlan);
   const planPath = planExecution?.result.kind === "chat" ? planExecution.result.planPath : undefined;
-  const firstLine = planPath
-    ? `Plan: ${planPath.split("/").pop() ?? planPath}`
-    : inputReferenceDisplayText(input).split(/\r?\n/, 1)[0]!.slice(0, 140);
+  const firstLine = historyTurnTitle(record);
   const duration = response?.executions.reduce((total, item) => total + item.durationMs, 0) ?? 0;
   const processHtml = process(record.process);
   const outputHtml = record.error
@@ -475,11 +493,10 @@ export function renderHistoryRecord(record: DextHistoryRecord, sessionId?: strin
       preventDefaultContextMenuItems: true
     })}`
     : "";
-  // The turn actions are a context menu with no visual affordance of its own,
-  // so the row says where to find them.
   const hint = sessionId ? ` title="${TURN_ACTION_HINT}"` : "";
+  const target = sessionId ? ` data-session-id="${escapeHtml(sessionId)}" data-turn-id="${escapeHtml(record.id)}"` : "";
   const inputHtml = planPath ? "" : `<details class="history-disclosure"><summary>${chevron()}<span>Input</span>${copyButton(input)}</summary><pre class="dext-source">${renderedInputSource(input)}</pre></details>`;
-  return `<details class="history-record"${context}><summary${hint}>${chevron()}<span class="history-summary-input">${escapeHtml(firstLine)}</span><span class="history-meta">${duration ? formatDuration(duration) : ""}</span><span class="history-meta history-record-time">${escapeHtml(dateLabel(record.createdAt))}</span></summary><div class="history-record-body">${inputHtml}${processHtml ? `<details class="history-disclosure"><summary>${chevron()}<span>Process</span></summary><div class="disclosure-body">${processHtml}</div></details>` : ""}<details class="history-disclosure" open><summary>${chevron()}<span>Output</span>${copyButton(outputCopy)}</summary><div class="disclosure-body">${outputHtml}</div></details></div></details>`;
+  return `<details class="history-record"${target}${context}><summary${hint}>${chevron()}<span class="history-summary-input${record.title ? " named" : ""}">${escapeHtml(firstLine)}</span><span class="history-meta">${duration ? formatDuration(duration) : ""}</span><span class="history-meta history-record-time">${escapeHtml(dateLabel(record.createdAt))}</span>${sessionId ? historyTurnActions(sessionId, record.id) : ""}</summary><div class="history-record-body">${inputHtml}${processHtml ? `<details class="history-disclosure"><summary>${chevron()}<span>Process</span></summary><div class="disclosure-body">${processHtml}</div></details>` : ""}<details class="history-disclosure" open><summary>${chevron()}<span>Output</span>${copyButton(outputCopy)}</summary><div class="disclosure-body">${outputHtml}</div></details></div></details>`;
 }
 
 /** The name a conversation carries until the user renames it: the opening line
@@ -526,18 +543,20 @@ export function renderHistorySession(session: DextHistorySession, view: HistoryS
   return `<details class="history-session${favorite ? " favorite" : ""}${session.archivedAt ? " archived" : ""}"${lazyAttributes} ${context}><summary title="${SESSION_ACTION_HINT}">${chevron()}${star}<span class="history-summary-input${view.name ? " named" : ""}">${escapeHtml(label)}</span><span class="history-meta">${count}</span><span class="history-meta history-session-time">${escapeHtml(dateLabel(session.createdAt))}</span><span class="history-session-actions">${historySessionActions(session, favorite)}</span></summary><div class="history-session-body">${body}</div></details>`;
 }
 
+export function historyTurnMarkdown(record: DextHistoryRecord, index = 0): string {
+  const response = parsedResponse(record);
+  const answer = record.error || (response ? outputText(response) : record.output);
+  return [
+    `## Turn ${index + 1}${record.title ? ` — ${record.title}` : ""} — ${dateLabel(record.createdAt)}`,
+    "### Input",
+    inputReferenceDisplayText(normalizeInputReferenceSource(record.input)),
+    record.error ? "### Error" : "### Output",
+    answer
+  ].join("\n\n");
+}
+
 export function conversationMarkdown(session: DextHistorySession): string {
-  const turns = session.turns.map((record, index) => {
-    const response = parsedResponse(record);
-    const answer = record.error || (response ? outputText(response) : record.output);
-    return [
-      `## Turn ${index + 1} — ${dateLabel(record.createdAt)}`,
-      "### Input",
-      inputReferenceDisplayText(normalizeInputReferenceSource(record.input)),
-      record.error ? "### Error" : "### Output",
-      answer
-    ].join("\n\n");
-  });
+  const turns = session.turns.map(historyTurnMarkdown);
   return [`# Dext conversation — ${dateLabel(session.createdAt)}`, ...turns].join("\n\n");
 }
 

@@ -24,6 +24,7 @@ import { agentMessageCopyText, presentAgentMessage } from "../agentMessagePresen
 import type { AgentMessagePresentation } from "../agentMessagePresentation.js";
 import { presentDiff } from "../diffPresentation.js";
 import type { DextHistoryRecord, DextHistorySession } from "../historyStore.js";
+import { TURN_EDIT_ACTION, TURN_RENAME_ACTION, TURN_RETRY_ACTION, TURN_FORK_ACTION, TURN_COPY_ACTION, TURN_DELETE_ACTION, TurnTitle } from "../turnPresentation.js";
 import { groupMethodsForDisplay, isSyntheticBuiltinGroup } from "./methodGroups.js";
 import {
   compactFileReferenceLabel,
@@ -252,6 +253,7 @@ let agentFileChanges: { disclosure: HTMLDetailsElement; body: HTMLElement; label
 const imageAttachments = new Map<string, HTMLElement>();
 interface OutputTurnElements {
   disclosure: HTMLDetailsElement;
+  title: TurnTitle;
   input?: HTMLElement;
   process: HTMLElement;
   processDisclosure: HTMLDetailsElement;
@@ -467,6 +469,10 @@ function updateRunState(): void {
   if (runIcon) runIcon.className = `codicon codicon-${executing ? "debug-stop" : "run"}`;
   elements.run.classList.toggle("stopping", stopping);
   elements.run.classList.toggle("executing", executing);
+  for (const [turnId, turn] of outputTurns) {
+    turn.processDisclosure.classList.toggle("running-process",
+      executing && turnId === activeTurnId && activeExecutionSessionId === activeConversationId);
+  }
   const parts = [
     problemCounts.errors ? `${problemCounts.errors} error${problemCounts.errors === 1 ? "" : "s"}` : "",
     problemCounts.warnings ? `${problemCounts.warnings} warning${problemCounts.warnings === 1 ? "" : "s"}` : ""
@@ -2077,19 +2083,6 @@ function turnActionButton(icon: string, label: string, onActivate: () => void, d
   return button;
 }
 
-function turnCopyButton(text: () => string): HTMLButtonElement {
-  const button = turnActionButton("copy", "Copy turn", () => {
-    void clipboard.write(text()).then((success) => {
-      if (!success) return;
-      const icon = button.querySelector<HTMLElement>("i");
-      if (!icon) return;
-      icon.className = "codicon codicon-check";
-      window.setTimeout(() => { icon.className = "codicon codicon-copy"; }, 900);
-    });
-  });
-  return button;
-}
-
 function syncTurnActions(): void {
   for (const button of elements.result.querySelectorAll<HTMLButtonElement>(".output-turn-action[data-disable-while-running], .plan-action.primary")) {
     const turn = button.closest<HTMLElement>(".output-turn");
@@ -2101,7 +2094,7 @@ function createOutputTurn(
   turnId: string,
   source: string,
   createdAt = Date.now(),
-  options: { executePlan?: boolean; planPath?: string; lazy?: boolean; open?: boolean } = {}
+  options: { executePlan?: boolean; planPath?: string; lazy?: boolean; open?: boolean; title?: string; sessionId?: string } = {}
 ): OutputTurnElements {
   source = normalizeInputReferenceSource(source);
   const lazy = options.lazy === true;
@@ -2118,41 +2111,49 @@ function createOutputTurn(
   time.textContent = new Date(createdAt).toLocaleTimeString();
   const title = document.createElement("span");
   title.className = "output-turn-title";
-  title.textContent = options.executePlan && options.planPath
+  const defaultTitle = options.executePlan && options.planPath
     ? `Plan: ${options.planPath.split("/").pop() ?? options.planPath}`
     : inputReferenceDisplayText(source).split(/\r?\n/, 1)[0]?.slice(0, 140) || "Dext turn";
+  const turnTitle = new TurnTitle(title, defaultTitle, options.title);
+  const sessionId = options.sessionId ?? activeConversationId;
+  // Scope native actions to this title only, leaving selection menus in the
+  // Input, Process and Output bodies intact. Refresh at invocation so cached
+  // rows and completed executions cannot retain stale running-state flags.
+  const updateContext = (): void => {
+    summary.dataset.vscodeContext = JSON.stringify({
+      webviewSection: "conversationTurn",
+      sessionId,
+      turnId,
+      dextTurnRunning: executing && activeExecutionSessionId === sessionId && activeTurnId === turnId,
+      dextConversationRunning: executing && activeExecutionSessionId === sessionId,
+      preventDefaultContextMenuItems: true
+    });
+  };
+  updateContext();
+  summary.addEventListener("contextmenu", updateContext);
   const body = document.createElement("div");
   body.className = "output-turn-body";
   const actions = document.createElement("span");
   actions.className = "output-turn-actions";
   actions.append(
-    turnActionButton("edit", "Edit and resend", () => {
+    turnActionButton(TURN_EDIT_ACTION.icon, TURN_EDIT_ACTION.label, () => {
       editor.setValue(source);
       setSectionOpen(elements.inputHeading, elements.inputBody, true);
     }),
-    turnActionButton("debug-restart", "Retry this turn", () => {
-      openConfirmationDialog(
-        "Retry this turn? Any write actions may run again.",
-        () => vscode.postMessage({ type: "retryTurn", turnId })
-      );
+    turnActionButton(TURN_RETRY_ACTION.icon, TURN_RETRY_ACTION.label, () => {
+      if (sessionId) vscode.postMessage({ type: "retryTurn", sessionId, turnId });
     }, true),
-    turnActionButton("repo-forked", "Fork from this turn", () => {
-      vscode.postMessage({ type: "forkFromTurn", turnId });
+    turnActionButton(TURN_RENAME_ACTION.icon, TURN_RENAME_ACTION.label, () => {
+      if (sessionId) vscode.postMessage({ type: "renameTurn", sessionId, turnId });
     }, true),
-    turnCopyButton(() => {
-      // Copying a collapsed history row is an explicit request for its full
-      // content, so hydrate it before collecting the text.
-      // Hydration resets the global agent trace and active turn. Never do
-      // that to a different row while another turn is streaming; its later
-      // events would otherwise be appended to this historical row.
-      if (!executing || activeTurn === turn) turn.hydrate?.();
-      return disclosure.textContent?.trim() ?? "";
-    }),
-    turnActionButton("trash", "Delete turn", () => {
-      openConfirmationDialog(
-        "Delete this turn from the conversation?",
-        () => vscode.postMessage({ type: "deleteTurn", turnId })
-      );
+    turnActionButton(TURN_FORK_ACTION.icon, TURN_FORK_ACTION.label, () => {
+      if (sessionId) vscode.postMessage({ type: "forkFromTurn", sessionId, turnId });
+    }, true),
+    turnActionButton(TURN_COPY_ACTION.icon, TURN_COPY_ACTION.label, () => {
+      if (sessionId) vscode.postMessage({ type: "copyTurn", sessionId, turnId });
+    }, true),
+    turnActionButton(TURN_DELETE_ACTION.icon, TURN_DELETE_ACTION.label, () => {
+      if (sessionId) vscode.postMessage({ type: "deleteTurn", sessionId, turnId });
     }, true)
   );
   // Keep the turn title as the primary row label, matching the history view;
@@ -2181,6 +2182,7 @@ function createOutputTurn(
   elements.result.append(disclosure);
   const turn: OutputTurnElements = {
     disclosure,
+    title: turnTitle,
     ...(inputBody ? { input: inputBody } : {}),
     process: process.body,
     processDisclosure: process.disclosure,
@@ -3087,8 +3089,7 @@ function hydrateStoredTurn(record: DextHistoryRecord, turn: OutputTurnElements):
   const planExecution = response?.executions.find((item) => item.result.kind === "chat" && item.result.executePlan);
   const planResult = planExecution?.result.kind === "chat" ? planExecution.result : undefined;
   if (planResult?.executePlan && planResult.planPath) {
-    const title = turn.disclosure.querySelector<HTMLElement>(".output-turn-title");
-    if (title) title.textContent = `Plan: ${planResult.planPath.split("/").pop() ?? planResult.planPath}`;
+    turn.title.setPlanPath(planResult.planPath);
   }
 
   activeTurn = turn;
@@ -3182,7 +3183,9 @@ function renderOutputSession(session: DextHistorySession): void {
     const latest = index === session.turns.length - 1;
     const turn = createOutputTurn(record.id, record.input, record.createdAt, {
       lazy: true,
-      open: latest
+      open: latest,
+      sessionId: session.id,
+      ...(record.title ? { title: record.title } : {})
     });
     turn.hydrate = () => hydrateStoredTurn(record, turn);
     if (latest) latestTurn = turn;
@@ -3507,6 +3510,12 @@ elements.inputShell.addEventListener("paste", (event) => {
 window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   const message = event.data;
   if (broker.accept(message) || clipboard.accept(message) || fileSearch.accept(message)) return;
+  if (message.type === "turnRenamed") {
+    if (renderedConversationId === message.sessionId) {
+      outputTurns.get(message.turnId)?.title.rename(message.title, message.displayTitle);
+    }
+    conversationViewCache.get(message.sessionId)?.turns.get(message.turnId)?.title.rename(message.title, message.displayTitle);
+  }
   if (message.type === "state") {
     lastSidebarState = message.state;
     setMethodsReloading(false);
@@ -3750,6 +3759,7 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   }
   if (message.type === "setInput") {
     editor.setValue(message.source);
+    setSectionOpen(elements.inputHeading, elements.inputBody, true);
     editor.focus();
   }
   if (message.type === "focusEditor" || message.type === "focusInput") editor.focus();

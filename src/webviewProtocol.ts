@@ -27,9 +27,11 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
     planPath: z.string().min(1).max(512).optional()
   }),
   z.object({ type: z.literal("stopExecution"), turnId: z.string().min(1) }),
-  z.object({ type: z.literal("retryTurn"), turnId: z.string().min(1) }),
-  z.object({ type: z.literal("forkFromTurn"), turnId: z.string().min(1) }),
-  z.object({ type: z.literal("deleteTurn"), turnId: z.string().min(1) }),
+  z.object({ type: z.literal("retryTurn"), turnId: z.string().min(1), sessionId: z.string().min(1).optional() }),
+  z.object({ type: z.literal("forkFromTurn"), turnId: z.string().min(1), sessionId: z.string().min(1).optional() }),
+  z.object({ type: z.literal("renameTurn"), sessionId: z.string().min(1), turnId: z.string().min(1) }),
+  z.object({ type: z.literal("deleteTurn"), turnId: z.string().min(1), sessionId: z.string().min(1).optional() }),
+  z.object({ type: z.literal("copyTurn"), turnId: z.string().min(1), sessionId: z.string().min(1) }),
   z.object({ type: z.literal("buildPlan"), planPath: z.string().min(1).max(512) }),
   z.object({ type: z.literal("choosePlan") }),
   z.object({
@@ -177,6 +179,7 @@ export type WebviewResponse =
     hover?: LanguageHover;
   }
   | { type: "outputSession"; session: DextHistorySession; switchId?: number; hostInitiated?: true }
+  | { type: "turnRenamed"; sessionId: string; turnId: string; title?: string; displayTitle: string }
   | { type: "outputSessionRef"; sessionId: string; signature: string; switchId?: number; hostInitiated?: true }
   | {
     type: "activeConversation";
@@ -246,6 +249,7 @@ export type WebviewResponse =
     text: string;
     contextAttached: boolean;
     codeReference?: { expression: string; payload: string };
+    fileReferences?: Array<{ expression: string; payload: string }>;
   }
   | { type: "searchFilesResult"; requestId: number; files: string[] }
   | { type: "setInput"; source: string }

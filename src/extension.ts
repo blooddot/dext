@@ -6,9 +6,12 @@ import type { DextHistoryRecord, DextHistorySession } from "./historyStore.js";
 import { DextHistoryPanel } from "./historyEditorProvider.js";
 import { DextConversationPreferences } from "./conversationPreferences.js";
 import type { HistorySortOrder } from "./conversationPreferences.js";
-import { conversationMarkdown, conversationTitle } from "./historyRender.js";
+import { conversationMarkdown, conversationTitle, historyTurnMarkdown, historyTurnTitle } from "./historyRender.js";
+import { DELETE_CONFIRMATION_DETAIL, TURN_DELETE_CONFIRMATION, TURN_RETRY_CONFIRMATION } from "./turnPresentation.js";
 import { recordWorkflow } from "./core/workflowRecorder.js";
 import { DextCompletionHost } from "./vscodeCompletionHost.js";
+import { DextSelectionActions } from "./vscodeSelectionActions.js";
+import type { SelectionTarget } from "./vscodeAttachments.js";
 import {
   configureCompletionModel,
   diagnoseCompletion,
@@ -290,11 +293,55 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return renameConversation(session.id, preferences.title(session.id) ?? conversationTitle(session));
       })
     ),
+    vscode.commands.registerCommand("dext.history.renameTurn", (context?: ConversationContext) =>
+      reportCommandError(async () => {
+        const session = historySession(context);
+        const turn = session.turns.find((item) => item.id === context?.turnId);
+        if (!turn) throw new Error("Conversation turn not found.");
+        const name = await vscode.window.showInputBox({
+          title: "Rename Dext turn",
+          prompt: "Leave the name empty to restore the title from this turn's input.",
+          value: historyTurnTitle(turn),
+          ignoreFocusOut: true
+        });
+        if (name === undefined) return;
+        await sidebar.renameTurn(session.id, turn.id, name);
+        historyPanel.refreshTurnTitle(session.id, turn.id);
+      })
+    ),
+    vscode.commands.registerCommand("dext.history.copyTurn", (context?: ConversationContext) =>
+      reportCommandError(async () => {
+        const session = historySession(context);
+        const index = session.turns.findIndex((item) => item.id === context?.turnId);
+        if (index === -1) throw new Error("Conversation turn not found.");
+        await vscode.env.clipboard.writeText(historyTurnMarkdown(session.turns[index]!, index));
+      })
+    ),
+    vscode.commands.registerCommand("dext.history.retryTurn", (context?: ConversationContext) =>
+      reportCommandError(async () => {
+        const session = historySession(context);
+        const turn = session.turns.find((item) => item.id === context?.turnId);
+        if (!turn) throw new Error("Conversation turn not found.");
+        const confirmed = await vscode.window.showWarningMessage(TURN_RETRY_CONFIRMATION, { modal: true }, "Retry");
+        if (confirmed !== "Retry") return;
+        await sidebar.retryTurn(session.id, turn.id);
+        historyPanel.refresh();
+      })
+    ),
+    vscode.commands.registerCommand("dext.history.deleteTurn", (context?: ConversationContext) =>
+      reportCommandError(async () => {
+        const session = historySession(context);
+        const turn = session.turns.find((item) => item.id === context?.turnId);
+        if (!turn) throw new Error("Conversation turn not found.");
+        if (!await confirmHistoryDeletion(TURN_DELETE_CONFIRMATION)) return;
+        await sidebar.deleteTurn(turn.id, session.id);
+        historyPanel.refresh();
+      })
+    ),
     vscode.commands.registerCommand("dext.history.editTurnInput", (context?: ConversationContext) =>
       reportCommandError(async () => {
-        const turn = historySession(context).turns.find((item) => item.id === context?.turnId);
-        if (!turn) throw new Error("Conversation turn not found.");
-        sidebar.setInput(turn.input);
+        if (!context?.sessionId || !context.turnId) throw new Error("Conversation turn not found.");
+        sidebar.editTurnInput(context.sessionId, context.turnId);
         await focusSidebar();
         sidebar.showChat();
       })
@@ -310,12 +357,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("dext.history.deleteConversation", (context?: ConversationContext) =>
       reportCommandError(async () => {
         const session = historySession(context);
-        const confirmed = await vscode.window.showWarningMessage(
-          `Delete this Dext conversation and its ${session.turns.length} turn${session.turns.length === 1 ? "" : "s"}?`,
-          { modal: true },
-          "Delete"
-        );
-        if (confirmed !== "Delete") return;
+        if (!await confirmHistoryDeletion(
+          `Delete this Dext conversation and its ${session.turns.length} turn${session.turns.length === 1 ? "" : "s"}?`
+        )) return;
         // Detach the conversation before erasing it so a refused close leaves
         // history intact.
         await sidebar.forgetConversation(session.id);
@@ -464,9 +508,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await focusSidebar();
       sidebar.triggerParameterHints();
     }),
-    vscode.commands.registerCommand("dext.addSelectionToChat", () =>
+    vscode.commands.registerCommand("dext.addSelectionToChat", (target?: SelectionTarget) =>
       reportCommandError(async () => {
-        await sidebar.addSelectionToChat();
+        await sidebar.addSelectionToChat(target);
         await focusSidebar();
         sidebar.showChat();
       })
@@ -754,7 +798,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   watcher.onDidCreate(reload);
   watcher.onDidChange(reload);
   watcher.onDidDelete(reload);
-  context.subscriptions.push(watcher, sidebar);
+  context.subscriptions.push(watcher, sidebar, new DextSelectionActions());
+}
+
+/** All conversation deletion entry points use the same native warning dialog. */
+async function confirmHistoryDeletion(message: string): Promise<boolean> {
+  return await vscode.window.showWarningMessage(
+    message,
+    { modal: true, detail: DELETE_CONFIRMATION_DETAIL },
+    "Delete"
+  ) === "Delete";
 }
 
 export function deactivate(): void {}
