@@ -14,7 +14,7 @@ describe("sidebar panel layout", () => {
     expect(html).toContain('id="input-heading" class="section-heading collapsible-heading" role="button" tabindex="0" aria-expanded="true"');
     expect(html).not.toContain('id="view-methods"');
     expect(manifest).toContain('"command": "dext.viewApis"');
-    expect(html).toContain('viewApis(): void {\n    this.postWhenReady({ type: "openMethods" });');
+    expect(html).toMatch(/viewApis\(\): void \{\r?\n[ ]{4}this\.postWhenReady\(\{ type: "openMethods" \}\);/);
     expect(html).toContain('<dialog id="methods-dialog" class="methods-dialog"');
     expect(html).toContain('id="close-methods"');
     expect(html).not.toContain('id="methods-section"');
@@ -172,10 +172,10 @@ describe("sidebar panel layout", () => {
     // Agent is the plain default; the other modes retint the shared accent
     // properties, which both the mode control and Send read.
     expect(css).toMatch(/\.input-section \{[\s\S]*?--composer-accent: var\(--vscode-button-background\);[\s\S]*?--composer-accent-fill: var\(--composer-accent\);[\s\S]*?--composer-accent-foreground: var\(--vscode-button-foreground\);/);
-    expect(css).toMatch(/\.input-section\[data-mode="ask"\] \{\n {2}--composer-accent: var\(--vscode-terminal-ansiGreen/);
+    expect(css).toMatch(/\.input-section\[data-mode="ask"\] \{\r?\n {2}--composer-accent: var\(--vscode-terminal-ansiGreen/);
     expect(css).toMatch(/\.input-section\[data-mode="plan"\] \{[\s\S]*?--composer-accent: var\(--vscode-notificationsWarningIcon-foreground, #cca700\);[\s\S]*?--composer-accent-fill: color-mix\([\s\S]*?var\(--composer-accent\) 52%/);
     expect(css).toMatch(/\.input-section\[data-mode="plan"\] \{[\s\S]*?--composer-accent-foreground: color-mix\([\s\S]*?var\(--composer-accent\) 88%/);
-    expect(css).toMatch(/\.input-section\[data-mode="code"\] \{\n {2}--composer-accent: var\(--vscode-terminal-ansiCyan/);
+    expect(css).toMatch(/\.input-section\[data-mode="code"\] \{\r?\n {2}--composer-accent: var\(--vscode-terminal-ansiCyan/);
     expect(css).toMatch(/#run \{[\s\S]*?color: var\(--composer-accent-foreground, var\(--vscode-button-foreground\)\);[\s\S]*?background: var\(--composer-accent-fill, var\(--vscode-button-background\)\);/);
     expect(css).toMatch(/#run:hover:not\(:disabled\) \{[\s\S]*?color-mix\([\s\S]*?var\(--composer-accent-fill/);
     // The mode control reads the same accent rather than repeating the colors.
@@ -195,7 +195,7 @@ describe("sidebar panel layout", () => {
     expect(css).not.toContain(".chat-header");
     expect(html).toContain('<nav id="conversation-tabs" class="conversation-tabs" role="tablist"');
     expect(css).toMatch(/^\.app-shell \{[\s\S]*?flex-direction: column;/m);
-    expect(css).toMatch(/^main \{\n {2}flex: 1 1 auto;/m);
+    expect(css).toMatch(/^main \{\r?\n {2}flex: 1 1 auto;/m);
     expect(css).toMatch(/\.conversation-tab \{[\s\S]*?max-width: 190px;[\s\S]*?\}/);
     expect(main).toMatch(/function renderConversations[\s\S]*?conversation-tab-label[\s\S]*?conversation-tab-close/);
     expect(main).toMatch(/function selectConversation[\s\S]*?type: "selectConversation"/);
