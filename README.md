@@ -1,12 +1,50 @@
 # Dext
 
-Dext is a typed AI workflow editor for Visual Studio Code. Workflows use a deliberately small Python syntax, but Dext parses them as data and never starts or embeds a Python interpreter.
+English | [简体中文](README.zh-CN.md)
+
+Dext brings AI conversations and typed workflows to Visual Studio Code. Ask questions, delegate changes, work through plans, or compose reusable workflows with APIs, Skills, and MCP tools.
+
+Workflows use a small subset of Python syntax. Dext parses and validates that syntax itself; no Python interpreter is required.
 
 Without an Agent profile, Dext validates workflow structure, resolves immutable code references, and produces typed deterministic result previews. When a Codex or Claude CLI profile is selected, the same typed API contract is sent to that CLI and its structured output is validated before display.
 
+## Features
+
+- **Four input modes:** Agent for tasks, Ask for read-only questions, Plan for implementation plans, and Code for typed workflows.
+- **Agent selection:** Codex CLI and Claude Code CLI, with provider-specific model controls.
+- **Typed editing:** API completion, parameter hints, hover information, diagnostics, and structured results.
+- **Reusable resources:** project and global APIs, Skills, rules, and MCP tools.
+- **Workspace context and history:** file and selection references, attachments, conversation tabs, favorites, and workflow recording.
+- **Optional inline completion:** a separately configured completion model for source files.
+
+## Installation
+
+Requires **VS Code 1.105 or newer**. For AI execution, install and authenticate the Agent CLI you intend to use. Dext does not bundle those applications or manage their login credentials.
+
+1. Download the `dext-<version>.vsix` attachment for your chosen version from [GitHub Releases](https://github.com/blooddot/dext/releases).
+2. Open the VS Code Command Palette and run **Extensions: Install from VSIX...**.
+3. Select the downloaded file and reload VS Code if prompted.
+
+If a release package is not available yet, follow [Development](#development) to build one locally. For later versions, download and install the corresponding VSIX again. See the [VS Code VSIX installation documentation](https://code.visualstudio.com/docs/configure/extensions/extension-marketplace#_install-from-a-vsix) for details.
+
+## Quick start
+
+1. Open your project folder in VS Code, then click Dext in the Activity Bar or run **Dext: Focus Input**.
+2. Choose an Agent and model in the input area. Use **Dext: Configure Agent** if the executable path or model labels need adjustment.
+3. Select **Ask**, enter a question such as “Explain the structure of this project,” and click **Send**. Add files or selections to the input when the question needs specific context.
+4. Select **Agent** to request changes, or **Plan** to create and work through an implementation plan. These modes expose the **Workspace write** and **Full access** scopes.
+5. Select **Code** to compose API calls, then click **Run**:
+
+```python
+answer = ask(input="Explain the structure of this project")
+print(text=answer.text)
+```
+
+Agent, Ask, and Plan accept natural language directly. Code mode expects workflow syntax. Use **Dext: Open History** to revisit conversations; right-click a history entry to record it as a reusable workflow.
+
 ## Workflow language
 
-Natural language must be explicit through an API string argument; arbitrary text is a compile error.
+In Code mode, natural language belongs in an API string argument; arbitrary text is a compile error.
 
 ```python
 analysis = ask(input="Explain this implementation and give refactoring requirements:")
@@ -84,6 +122,10 @@ Context values are `ref.selection`, `ref.active_file`, `ref.file("path")`, `ref.
 
 Copying a VS Code selection or choosing a file or folder inserts a readable `@path` token in the normal quoted input text. The token is rendered as an atomic Chip, can be removed atomically, and participates in undo/redo. Existing legacy marker, f-string, and nested-quote reference forms are migrated to this representation when loaded.
 
+Selecting workspace code shows **Add to Dext** in a floating editor hover near the active selection cursor after a brief pause. The hover overlays the editor without adding a row or shifting code, and keeps keyboard focus in the editor. Click it to add the selected file range to Input. VS Code controls the hover's appearance and placement; symbol information may share the same hover. Toggle `dext.selectionActions.enabled` in Settings to show or hide this action immediately. Editor, file list, and file tab context menus use the same **Add to Dext** label and remain available when the selection action is disabled.
+
+Press Ctrl+C (Cmd+C on macOS) on files in Explorer/Open Editors, an editor tab, or inside a file with no text selected, then Ctrl+V in Dext Input to insert references to the original paths. Multiple files and image files are supported without creating attachments. Ctrl+Shift+V pastes the path text as-is. Set `dext.copyFilePathOnCopy` to `false` to restore Explorer's native file copy and the editor's copy-line shortcut.
+
 The editor uses CodeMirror's Python grammar for syntax highlighting, indentation, bracket matching, and native editor behavior. Dext adds API completion, keyword and result-field completion, signature help, hover documentation, exact compiler diagnostics, and a lint gutter.
 
 ## Method configuration
@@ -104,7 +146,11 @@ Dext History is scoped to the current VS Code workspace. Conversations,
 favorites, names, and open conversation tabs are restored after restarting VS
 Code, but are not shared with other projects.
 
-`.dx` uses a restricted Python-like syntax. It is parsed by Dext and never starts a Python interpreter. Imports are explicit and only refer to other `.dext/api` files; external files are not read until VS Code marks the workspace as trusted. A nested `agent(...)`, `ask(...)`, or `plan(...)` call may set `skills=["name"]` and `rules=["path.md"]`. Skills are explicit packages, while rules are ordered policy files. Rule paths are resolved only below `<workspace>/.dext/rules`; skill packages are discovered only below `<workspace>/.dext/skills` unless the user explicitly configures an additional `dext.skillDirs` directory. Dext loads selected skills first and rules last, so the API's narrow rules constrain the general skill workflow. These parameters appear in Dext signatures and completion; their contents are injected into the Agent instruction rather than forwarded as control fields to the provider.
+History turns offer rename, fork, copy as Markdown, and delete from Dext, in that order, in both their toolbar and context menu. The live Conversation toolbar places edit input and retry before these four actions. History's parent conversation toolbar offers continue, rename, fork, copy, favorite, archive, and delete. Shared actions use consistent icons and relative order, with delete last. Turn titles are saved separately from the original input; clearing a title restores its default.
+
+Deleting a turn removes Dext's saved input/output record only. It does not erase CLI messages or undo file changes, and continuing the bound CLI session may still use the deleted turn's context. Dext retains CLI session IDs, including an empty conversation after its final displayed turn is deleted, so it can request the same session on restart. Resuming still requires that provider session to remain available. Retry appends a new execution to the conversation and can repeat write actions.
+
+`.dx` uses a restricted Python-like syntax. It is parsed by Dext and never starts a Python interpreter. Imports are explicit; built-ins are available through `common`, and custom imports refer to `.dext/api` files. External files are not read until VS Code marks the workspace as trusted. A nested `agent(...)`, `ask(...)`, or `plan(...)` call may set `skills=["name"]` and `rules=["path.md"]`. Skills are explicit packages, while rules are ordered policy files. Rule paths are resolved only below `<workspace>/.dext/rules`; skill discovery follows the order described below. Dext loads selected skills first and rules last, so the API's narrow rules constrain the general skill workflow. These parameters appear in Dext signatures and completion; their contents are injected into the Agent instruction rather than forwarded as control fields to the provider.
 
 Typed results use Python's standard `TypedDict`, `Literal`, and `NotRequired` annotations rather than Dext-specific classes. The declared `kind` must be one `Literal` string; fields become the API output JSON Schema and member completions. TypedDict inheritance, `Protocol`, and complex generic types are intentionally unsupported.
 
@@ -179,42 +225,37 @@ the variable without putting the secret in the manifest:
 
 MCP calls require a trusted local workspace. Manifests support local `stdio` and Streamable HTTP. HTTP endpoints must use HTTPS, or loopback HTTP for local development. URL userinfo, query strings, fragments, inline headers, and credentials are rejected. A bearer-enabled HTTP server stores its token only through `Dext: Set MCP Access Token`. A stdio server may declare `auth: {"type":"token","env":"ENV_NAME"}`; Dext then injects its SecretStorage token into that child-process environment variable. Tokens are keyed by server and manifest scope: project manifests use workspace-scoped keys, while global manifests use global keys. Do not put credentials in a manifest or stdio arguments. `Dext: Clear MCP Access Token` removes the selected credential; `Dext: Verify MCP Server` performs an authenticated HTTP initialization check. Editing, creating, or deleting a manifest reloads its APIs automatically.
 
-Agent profiles are stored in VS Code extension global storage. The Run row exposes Agent, Model, Reasoning, and Speed selectors. Codex profiles read the local Codex model cache when available, including supported reasoning levels and speed tiers. Claude Code profiles use its native `opus`/`sonnet` aliases and current effort levels. A `.dx` file may override the Agent and Model with `@api(agent="codex", model="...")`; otherwise the Run selection is used. `Dext: Configure Agent` edits executable commands and custom model labels without handling credentials.
+## Agent configuration
+
+Agent profiles are stored in VS Code extension global storage. The input area exposes Agent, Model, Reasoning, and Speed selectors where supported by the provider. Codex profiles read the local Codex model cache when available, including supported reasoning levels and speed tiers. Claude Code profiles use its native `opus`/`sonnet` aliases and configured effort levels. A `.dx` file may override the Agent and Model with `@api(agent="codex", model="...")`; otherwise the input selection is used. `Dext: Configure Agent` edits executable commands and custom model labels without handling credentials.
 
 The built-in `agent`, `ask`, `plan`, `skill`, and `create` APIs also accept optional per-call `cli` and `model` arguments. `cli` is `"codex"` or `"claude"`. For Claude, `model` is `"sonnet"` or `"opus"`; for Codex it is a dictionary with a required `model` ID from the configured Codex model list, optional `reasoning` (`"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`, `"ultra"`), and optional `speed` (`"standard"`, `"fast"`). The selected model must support the requested reasoning level and Fast mode. If no local model list is available, Codex IDs are accepted as strings until the catalog is available.
 
 ```python
 ask(input="Explain this code", cli="claude", model="sonnet")
-agent(input="Implement the change", cli="codex", model={"model": "gpt-6-astra", "reasoning": "high", "speed": "standard"})
+agent(input="Implement the change", cli="codex")
 ```
 
-Omit both `cli` and `model` to use the current Input selection (existing `.dx` decorator overrides still apply). Providing only `cli` uses that CLI's own default configuration, without inheriting Input or decorator model, reasoning, or speed settings—even when the CLI matches Input. Providing both uses the explicit model options and leaves omitted reasoning/speed options to the CLI defaults. Providing only `model` uses Input's selected CLI; unspecified options retain Input settings when the model is unchanged, otherwise they use CLI defaults. These overrides apply only to the current call. Codex Speed controls Standard/Fast processing directly; the duplicate Advanced service-tier menu has been removed.
+Omit both `cli` and `model` to use the current Input selection (existing `.dx` decorator overrides still apply). Providing only `cli` uses that CLI's own default configuration, without inheriting Input or decorator model, reasoning, or speed settings—even when the CLI matches Input. Providing both uses the explicit model options and leaves omitted reasoning/speed options to the CLI defaults. Providing only `model` uses Input's selected CLI; unspecified options retain Input settings when the model is unchanged, otherwise they use CLI defaults. These overrides apply only to the current call. Codex Speed controls Standard/Fast processing directly.
 
-The `dext.agentCli` setting controls which built-in Agent profiles are shown in the composer. It defaults to `codex` and `claude`; enter profile IDs manually to change the list (supported IDs are `codex`, `claude`, and `aioa`). Unsupported IDs are rejected with an error.
-
-The AIOA profile connects to AIOA through an explicitly enabled local Chromium DevTools Protocol (CDP) port. It offers two modes:
-
-- `Launch` is the default. Dext first reuses the configured loopback endpoint when it is healthy. If it is unavailable, Dext asks the operating system for a free `127.0.0.1` port, starts AIOA with that loopback-only CDP port, and waits up to 60 seconds for it to become ready. The temporary endpoint is reused only for the current Dext extension session and is never written back to the profile. Startup diagnostics include the fixed endpoint, the last dynamic endpoint, process status, and the last CDP error.
-- `Attach` connects to an existing AIOA instance launched with `--remote-debugging-port=<port>`.
-
-The AIOA window remains an AIOA-owned desktop application; Dext does not access private IPC, browser storage, or credentials. The first turn in a Dext Output session creates a task in the matching AIOA workspace and sends the fixed adapter rules once. Later turns reuse that task and send only their typed payload and current output schema. Clearing Output ends that association, while preserving the grouped conversation in Dext History; the next run creates a fresh AIOA task. Model, permission level, connectors, and workspace context remain controlled by AIOA, so the AIOA profile exposes `Active AIOA model` rather than duplicating those controls. CDP is bound to `127.0.0.1` only and must never be exposed on a LAN interface.
+The `dext.agentCli` setting controls which built-in Agent profiles are shown in the composer. It defaults to `codex` and `claude`; edit the list to choose which of these profiles to display.
 
 Built-in APIs are always available. Custom APIs are scoped by explicit `import` or `from ... import ...` statements; completion, hover, signatures, and compilation use the same import scope.
 
 ## Inline completion
 
-Inline completion is a separate backend from the agent profiles, because the Codex, Claude, and AIOA CLIs answer in seconds and a completion has to arrive between two keystrokes. Click the Dext status bar item, or run `Dext: Configure Completion Model`, and a short wizard asks for the API format, the base URL, the model ID, and the key, then offers to send one real request to check the whole thing works. The API key is never a setting: it is kept in VS Code's encrypted secret storage. Everything else lands in `dext.completion` in user settings, so a model configured once is available in every project.
+Inline completion is a separate backend from the agent profiles, so completion requests can use a model configured for low-latency suggestions while typing. Click the Dext status bar item, or run `Dext: Configure Completion Model`, and a short wizard asks for the API format, the base URL, the model ID, and the key, then offers to send one real request to check the whole thing works. The API key is never a setting: it is kept in VS Code's encrypted secret storage. Everything else lands in `dext.completion` in user settings, so a model configured once is available in every project.
 
 Four formats are supported, and the choice has to match what the endpoint actually serves:
 
-- `openai` — an OpenAI-compatible `/completions` endpoint that takes a `prompt` and a `suffix`. The fastest and most exact option, but only dedicated fill-in-the-middle models serve it.
-- `openai-chat` — `/chat/completions`, which is what most providers expose, DeepSeek and Qwen included. There is no suffix field, so the code on either side of the cursor is sent as a chat prompt.
-- `anthropic` — Claude's `/messages` endpoint, emulating fill-in-the-middle the same way.
-- `ollama` — a local Ollama server called through `/api/generate`, using its own fill-in-the-middle fields. No key needed.
+- `openai` — sends `prompt` and `suffix` to an OpenAI-compatible `/completions` endpoint; requires a model and endpoint that support fill-in-the-middle completion.
+- `openai-chat` — sends the code on either side of the cursor as a chat prompt to `/chat/completions`.
+- `anthropic` — sends a chat-style completion request to `/messages`.
+- `ollama` — calls a local Ollama server through `/api/generate`, using its fill-in-the-middle fields. No key needed.
 
-The two chat formats are slower and less exact than a real FIM model, and the reply is stripped of any code fence it comes wrapped in, so pick the fastest model the provider offers. Choosing the wrong format is the easiest way to get a backend that reports itself configured and completes nothing: the endpoint answers HTTP 200 with a body the other format cannot read a single character out of. Dext detects that case specifically and says which format to switch to, both during the connection test and on the first failed keystroke.
+Latency and completion quality depend on the model and endpoint. Dext strips code fences from chat responses. A format mismatch can produce an HTTP 200 response with no usable completion text; Dext reports recognized mismatches during connection tests and completion requests.
 
-Completion is off until an endpoint and a model are both configured. Requests are debounced and cancelled when the next keystroke arrives. Context is a prefix and suffix window measured in characters rather than lines, so one long generated line cannot exhaust the budget.
+Completion is off until an endpoint and a model are both configured. New requests are debounced; an in-flight generation can be reused when subsequent typing matches it. Context is a prefix and suffix window measured in characters rather than lines, so one long generated line cannot exhaust the budget.
 
 How long a suggestion takes to appear is mostly a question of how much work happens between the keystroke and the first thing worth showing, so several things keep that down.
 
@@ -222,7 +263,7 @@ The reply is streamed, and the request is abandoned as soon as the completion is
 
 A generation also outlives the keystroke that started it. The editor cancels the previous request every time a character is typed, and following that would mean throwing away a nearly finished answer and starting from nothing several times a second; instead the request keeps running and the next keystroke waits on the same answer, minus the characters typed since. It is only abandoned once what was typed has diverged from what it was writing. For the same reason there is nothing to debounce while a generation is already in flight, so those keystrokes skip the debounce entirely. Once an answer has arrived the cache continues the job: typing the beginning of what was suggested serves the rest of that same suggestion from memory.
 
-The prefix window is quantised and snapped to a line boundary rather than ending up wherever the character budget lands. Providers charge nothing to re-read a prompt they have already processed, but only when it begins the way the last one did, and a window sliding by one character per keystroke never hits that cache once.
+The prefix window is quantised and snapped to a line boundary to keep prompt prefixes stable between nearby keystrokes. This can improve reuse on backends that support prompt caching.
 
 Providers meter this kind of backend by requests per second, and one that allows four of them refuses the fifth rather than queueing it. No setting can predict that limit, so Dext learns it: requests go out as fast as they are asked for until one is refused with HTTP 429, and are then spaced out by an interval that doubles while refusals continue and relaxes once they stop. A `Retry-After` is believed over that guess. This happens on its own, so `dext.completion.debounceMs` only needs raising if the backend is metered tightly enough that even the first refusal is worth avoiding.
 
@@ -238,18 +279,48 @@ If suggestions come out truncated, raise `dext.completion.maxTokens`; it is the 
 - `src/core/runtime.ts`: deterministic executor allowlist.
 - `src/core/customApi.ts`: `.dext/api` loader, imports, signatures, and custom plans.
 - `src/core/agentRunner.ts`: structured Codex/Claude CLI adapter boundary.
-- `src/core/aioaCdp.ts`: local AIOA CDP attach/launch and Dext task-session adapter.
 - `src/core/completionProvider.ts`: fill-in-the-middle backend, cache, and secret-stored key.
 - `src/core/workflowRecorder.ts`: History conversation to `.dx` skeleton.
 - `src/webview/codeEditor.ts`: CodeMirror Python language integration.
 
 ## Development
 
-Requirements: Node.js 20 or newer and VS Code 1.105 or newer.
+Use the Node.js version pinned in `package.json` under `volta` (currently **22.23.2**) and VS Code 1.105 or newer.
 
 ```bash
-npm install
+git clone https://github.com/blooddot/dext.git
+cd dext
+npm ci
 npm run check
 ```
 
 Run `npm run test:host` for the VS Code activation/sidebar smoke test. Set `VSCODE_EXECUTABLE_PATH` for a nonstandard VS Code installation or `DEXT_TEST_DOWNLOAD=1` for an isolated downloaded build.
+
+Press **F5** in VS Code and choose **Run Dext Extension** to launch an Extension Development Host. Use `npm run watch` when iterating on the bundled code.
+
+## Packaging and releases
+
+```bash
+npm run package
+```
+
+This runs lint, type checking, unit tests, the build, and webview asset checks before creating `release/dext-<version>.vsix`. The version comes from `package.json`.
+
+The `release/` directory is created automatically, ignored by Git, and excluded from the VSIX contents. Packages for different versions are kept; packaging the same version replaces its existing file. For example, version `0.1.0` produces `release/dext-0.1.0.vsix`.
+
+To publish a version on GitHub:
+
+1. Update the version in `package.json` and `package-lock.json`, and add the release notes to [CHANGELOG.md](CHANGELOG.md).
+2. Run `npm run package`, install the generated VSIX, and check the main user flows.
+3. Commit the source changes and create a matching Git tag, such as `v0.1.0`.
+4. Push the commit and tag, create a GitHub Release for that tag, and upload the VSIX from `release/` as an attachment.
+
+Keep published installers with their corresponding Releases so that older versions remain easy to find. `npm run package` only creates a local package; it does not upload or publish it.
+
+## Feedback and license
+
+Report bugs or request features in [GitHub Issues](https://github.com/blooddot/dext/issues). Include the Dext and VS Code versions, reproduction steps, and relevant logs with credentials removed.
+
+Dext is source-available under the [PolyForm Perimeter License 1.0.1](LICENSE), with separate commercial licensing available by agreement. Ordinary use, including internal business use, is permitted subject to the license. Using Dext to provide a competing product or service to others requires separate authorization, even if that offering is free.
+
+See [commercial licensing](COMMERCIAL-LICENSING.md) for the scope and how to request an agreement. This is a source-available license, not an OSI-approved open-source license. Third-party components retain their own licenses. See [CHANGELOG.md](CHANGELOG.md) for version notes.
