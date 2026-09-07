@@ -1,11 +1,18 @@
 .git/**
 .vscode/**
+.vscode-test/**
 .dext/**
 .npmrc
 src/**
 test/**
 scripts/**
+docs/**
+coverage/**
+release/**
 dist/extensionHostTest.js
+# Legacy bundled font; current webviews load dist/codicons/codicon.css.
+dist/webview/assets/codicon-*.ttf
+# Keep media/styles.css for History, including pages open during an update.
 node_modules/**
 .npm-cache/**
 .tmp-tb/**

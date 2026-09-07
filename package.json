@@ -4,10 +4,10 @@
   "description": "A typed AI method environment for Visual Studio Code.",
   "version": "0.1.0",
   "publisher": "blooddot",
-  "license": "MIT",
+  "license": "SEE LICENSE IN LICENSE",
   "icon": "media/icon.png",
   "galleryBanner": {
-    "color": "#111827",
+    "color": "#131519",
     "theme": "dark"
   },
   "pricing": "Free",
@@ -1102,7 +1102,7 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "check": "npm run lint && npm run typecheck && npm run test && npm run build && npm run test:build-assets",
-    "package": "vsce package",
+    "package": "node -e \"require('node:fs').mkdirSync('release', { recursive: true })\" && vsce package --out release/",
     "vscode:prepublish": "npm run check"
   },
   "dependencies": {
