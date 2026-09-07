@@ -237,7 +237,7 @@ export type WebviewResponse =
   }
   | { type: "agentEvent"; sessionId: string; event: AgentStreamEvent }
   | { type: "agentEvents"; sessionId: string; events: AgentStreamEvent[]; switchId?: number }
-  | { type: "executing"; sessionId: string; value: boolean; turnId: string; source?: string; planPath?: string; executePlan?: boolean; startedAt?: number; switchId?: number; hostInitiated?: true }
+  | { type: "executing"; sessionId: string; value: boolean; turnId: string; source?: string; mode?: "agent" | "ask" | "plan" | "code"; planPath?: string; executePlan?: boolean; startedAt?: number; switchId?: number; hostInitiated?: true }
   | { type: "inputKind"; kind: "empty" | "workflow" | "invalid" }
   | { type: "insertFileReferences"; expressions: string[] }
   | { type: "imageAttachment"; relativePath: string; webviewUri: string; name: string }

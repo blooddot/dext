@@ -9,6 +9,12 @@ export const TURN_DELETE_CONFIRMATION = "Delete this turn from Dext?";
 export const DELETE_CONFIRMATION_DETAIL = "Only Dext's saved records are removed. CLI sessions and messages are kept, and continuing may still use that context. File changes are not undone.";
 export const TURN_RETRY_CONFIRMATION = "Retry this turn? Any write actions may run again.";
 
+export type TurnMode = "agent" | "ask" | "plan" | "code";
+
+export function turnModeLabel(mode?: TurnMode): string {
+  return mode ? { agent: "Agent", ask: "Ask", plan: "Plan", code: "Code" }[mode] : "Unknown";
+}
+
 /** Keep a custom name through deferred Plan hydration and cached tab restores. */
 export class TurnTitle {
   constructor(

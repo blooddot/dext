@@ -1,7 +1,9 @@
 import * as esbuild from "esbuild";
 import { copyFile, mkdir, rm } from "node:fs/promises";
+import { buildMarkdownStyles } from "./scripts/buildMarkdownStyles.mjs";
 
 const watch = process.argv.includes("--watch");
+await buildMarkdownStyles();
 await rm("dist/webview/editor.worker.js", { force: true });
 const contexts = await Promise.all([
   esbuild.context({

@@ -26,11 +26,19 @@ for (const required of [
   "dist/webview/main.css",
   "dist/webview/main.js",
   "dist/codicons/codicon.css",
-  "dist/codicons/codicon.ttf"
+  "dist/codicons/codicon.ttf",
+  "dist/markdown/github-markdown.css",
+  "dist/markdown/LICENSE"
 ]) {
   assert.ok(packagedFiles.has(required), `Missing packaged Webview asset '${required}'.`);
 }
 const historyStyles = await readFile(resolve("media", "styles.css"), "utf8");
+const markdownStyles = await readFile(resolve("dist", "markdown", "github-markdown.css"), "utf8");
+for (const theme of ["vscode-light", "vscode-dark", "vscode-high-contrast-light", "vscode-high-contrast"]) {
+  assert.ok(markdownStyles.includes(`body.${theme}`), `Markdown is missing the '${theme}' scope.`);
+}
+assert.ok(!markdownStyles.includes("prefers-color-scheme"), "Markdown must follow VS Code's theme, not the OS theme.");
+assert.ok(extensionBundle.includes("github-markdown.css"), "Webviews must load the packaged Markdown theme.");
 for (const selector of [".history-view", ".history-session > summary", ".history-session-actions"]) {
   assert.ok(historyStyles.includes(selector), `Missing History style '${selector}'.`);
 }

@@ -1,5 +1,6 @@
 import "../../media/styles.css";
 import MarkdownIt from "markdown-it";
+import { markdownCodeCopy } from "../markdownCopy.js";
 import { parser as pythonParser } from "@lezer/python";
 import { classHighlighter, highlightCode } from "@lezer/highlight";
 import type {
@@ -24,7 +25,7 @@ import { agentMessageCopyText, presentAgentMessage } from "../agentMessagePresen
 import type { AgentMessagePresentation } from "../agentMessagePresentation.js";
 import { presentDiff } from "../diffPresentation.js";
 import type { DextHistoryRecord, DextHistorySession } from "../historyStore.js";
-import { TURN_EDIT_ACTION, TURN_RENAME_ACTION, TURN_RETRY_ACTION, TURN_FORK_ACTION, TURN_COPY_ACTION, TURN_DELETE_ACTION, TurnTitle } from "../turnPresentation.js";
+import { TURN_EDIT_ACTION, TURN_RENAME_ACTION, TURN_RETRY_ACTION, TURN_FORK_ACTION, TURN_COPY_ACTION, TURN_DELETE_ACTION, TurnTitle, turnModeLabel } from "../turnPresentation.js";
 import { groupMethodsForDisplay, isSyntheticBuiltinGroup } from "./methodGroups.js";
 import {
   compactFileReferenceLabel,
@@ -407,6 +408,7 @@ const markdown = new MarkdownIt({
 // handler validates these URLs against the current workspace, so keep the
 // renderer from turning an otherwise valid file link into inert plain text.
 const defaultValidateLink = markdown.validateLink.bind(markdown);
+markdown.use(markdownCodeCopy);
 markdown.validateLink = (url: string): boolean =>
   /^file:/i.test(url.trim()) || defaultValidateLink(url);
 
@@ -458,15 +460,29 @@ function openOutputLink(event: MouseEvent): void {
   }
 }
 
+function composerSelectionLocked(): boolean {
+  return executing || runningConversationIds.has(activeConversationId ?? "");
+}
+
 function updateRunState(): void {
+  const selectionLocked = composerSelectionLocked();
+  for (const control of [elements.modeControl, elements.permissionControl, elements.agentControl, elements.modelControl]) {
+    control.disabled = selectionLocked;
+  }
+  for (const menu of [elements.modeMenu, elements.permissionMenu, elements.agentMenu, elements.modelMenu, elements.modelSubmenu]) {
+    for (const button of menu.querySelectorAll<HTMLButtonElement>("button")) button.disabled = selectionLocked;
+  }
+  if (selectionLocked) closeComposerMenus();
   const codeMode = inputMode === "code";
   elements.inputSection.dataset.mode = inputMode;
   elements.run.disabled = executing
     ? stopping || !activeTurnId
     : !editor.source.trim() || (codeMode && (hasErrors || inputKind === "invalid"));
   elements.runLabel.textContent = executing ? (stopping ? "Stopping" : "Stop") : codeMode ? "Run" : "Send";
+  elements.run.title = elements.runLabel.textContent;
+  elements.run.setAttribute("aria-label", elements.runLabel.textContent);
   const runIcon = elements.run.querySelector<HTMLElement>("i");
-  if (runIcon) runIcon.className = `codicon codicon-${executing ? "debug-stop" : "run"}`;
+  if (runIcon) runIcon.className = `codicon codicon-${executing ? "debug-stop" : codeMode ? "play" : "arrow-up"}`;
   elements.run.classList.toggle("stopping", stopping);
   elements.run.classList.toggle("executing", executing);
   for (const [turnId, turn] of outputTurns) {
@@ -511,7 +527,10 @@ function renderPlanToolbar(): void {
   elements.planBuild.classList.toggle("stopping", planBuildRunning && stopping);
   const buildLabel = elements.planBuild.querySelector("span");
   if (buildLabel) buildLabel.textContent = planBuildRunning ? "Stop" : planStatus === "completed" ? "Rebuild" : "Build";
-  elements.planBuild.title = planBuildRunning ? "Stop building the active plan" : "Build the active plan";
+  elements.planBuild.title = planBuildRunning
+    ? stopping ? "Stopping the active plan" : "Stop building the active plan"
+    : planStatus === "completed" ? "Rebuild the active plan" : "Build the active plan";
+  elements.planBuild.setAttribute("aria-label", elements.planBuild.title);
   const buildIcon = elements.planBuild.querySelector<HTMLElement>("i");
   if (buildIcon) buildIcon.className = `codicon codicon-${planBuildRunning ? "debug-stop" : "play"}`;
 }
@@ -1286,7 +1305,9 @@ function renderComposerMenu(
     const check = document.createElement("i");
     check.className = `codicon codicon-${value === selected ? "check" : "blank"}`;
     button.append(glyph, text, check);
-    button.addEventListener("click", () => onSelect(value));
+    button.addEventListener("click", () => {
+      if (!composerSelectionLocked()) onSelect(value);
+    });
     menu.append(button);
   }
 }
@@ -1346,6 +1367,7 @@ function renderModelMenu(
     button.append(title, value, chevron);
     const openChoices = (event: Event): void => {
       event.stopPropagation();
+      if (composerSelectionLocked()) return;
       renderModelChoices(elements.modelSubmenu, category.title, category.items, category.selected, category.onSelect);
     };
     button.addEventListener("click", openChoices);
@@ -1382,6 +1404,7 @@ function renderModelChoices(
     button.append(text, check);
     button.addEventListener("click", (event) => {
       event.stopPropagation();
+      if (composerSelectionLocked()) return;
       onSelect(value);
     });
     menu.append(button);
@@ -1411,6 +1434,7 @@ function positionModelSubmenu(): void {
 window.addEventListener("resize", positionModelSubmenu);
 
 function submitAgentSelection(change: Partial<SidebarState["agentSelection"]>): void {
+  if (composerSelectionLocked()) return;
   const selection = sidebarState?.agentSelection;
   closeComposerMenus();
   vscode.postMessage({
@@ -1495,8 +1519,8 @@ function renderConversations(sessions: readonly ConversationSummary[], activeId:
     stopping = false;
     activeTurnId = undefined;
     activeExecutionSessionId = undefined;
-    updateRunState();
   }
+  updateRunState();
   elements.conversationTabs.replaceChildren();
   elements.conversationTabs.hidden = sessions.length === 0;
   let activeTab: HTMLElement | undefined;
@@ -1665,6 +1689,7 @@ function handleComposerMenuKeydown(menu: HTMLElement, event: KeyboardEvent): voi
 }
 
 function toggleComposerMenu(menu: HTMLElement): void {
+  if (composerSelectionLocked()) return;
   closeComposerMenus(menu.hidden ? menu : undefined);
   if (!menu.hidden) {
     queueMicrotask(() => {
@@ -1709,6 +1734,16 @@ function copyButton(text: string): HTMLButtonElement {
   return button;
 }
 
+function markdownCopyToolbar(text: string, label = "Copy Markdown"): HTMLElement {
+  const toolbar = document.createElement("div");
+  toolbar.className = "markdown-copy-toolbar";
+  const button = copyButton(text);
+  button.title = label;
+  button.setAttribute("aria-label", button.title);
+  toolbar.append(button);
+  return toolbar;
+}
+
 function copyableContent(content: string, className = ""): HTMLElement {
   const wrapper = document.createElement("div");
   wrapper.className = "output-copyable";
@@ -1736,7 +1771,7 @@ function jsonOutput(content: string): HTMLElement {
   // needed to preserve JSON whitespace while still letting Markdown own the
   // surrounding layout and code-block styling.
   body.innerHTML = markdown.render("```json\n" + formatted + "\n```");
-  wrapper.append(body, copyButton(formatted));
+  wrapper.append(markdownCopyToolbar(formatted, "Copy JSON"), body);
   return wrapper;
 }
 
@@ -1930,7 +1965,7 @@ function copyableText(content: string): HTMLElement {
   const body = document.createElement("div");
   body.className = "markdown-body";
   body.innerHTML = markdown.render(content);
-  wrapper.append(body, copyButton(content));
+  wrapper.append(markdownCopyToolbar(content), body);
   return wrapper;
 }
 
@@ -2094,7 +2129,7 @@ function createOutputTurn(
   turnId: string,
   source: string,
   createdAt = Date.now(),
-  options: { executePlan?: boolean; planPath?: string; lazy?: boolean; open?: boolean; title?: string; sessionId?: string } = {}
+  options: { executePlan?: boolean; planPath?: string; lazy?: boolean; open?: boolean; title?: string; sessionId?: string; mode?: DextHistoryRecord["mode"] } = {}
 ): OutputTurnElements {
   source = normalizeInputReferenceSource(source);
   const lazy = options.lazy === true;
@@ -2164,6 +2199,12 @@ function createOutputTurn(
     // Keep the shared disclosure construction recognizable; lazy history
     // turns close it immediately after creating the lightweight shell.
     const input = outputTurnSection("Input", true);
+    const modeLabel = document.createElement("span");
+    modeLabel.className = "turn-mode";
+    modeLabel.dataset.mode = options.mode ?? "unknown";
+    modeLabel.textContent = turnModeLabel(options.mode);
+    modeLabel.title = options.mode ? `Submitted in ${turnModeLabel(options.mode)} mode` : "Mode was not recorded for this turn";
+    input.disclosure.querySelector(".disclosure-meta")?.replaceWith(modeLabel);
     input.disclosure.open = !lazy;
     inputBody = input.body;
     if (!lazy) {
@@ -3185,6 +3226,7 @@ function renderOutputSession(session: DextHistorySession): void {
       lazy: true,
       open: latest,
       sessionId: session.id,
+      mode: record.mode,
       ...(record.title ? { title: record.title } : {})
     });
     turn.hydrate = () => hydrateStoredTurn(record, turn);
@@ -3367,6 +3409,18 @@ elements.planBuild.addEventListener("click", () => {
   vscode.postMessage({ type: "buildPlan", planPath: activePlanPath });
 });
 elements.result.addEventListener("click", openOutputLink);
+document.addEventListener("click", (event) => {
+  const target = event.target instanceof Element ? event.target : undefined;
+  const button = target?.closest<HTMLButtonElement>("button.markdown-code-copy[data-copy]");
+  if (!button) return;
+  event.preventDefault();
+  event.stopPropagation();
+  void clipboard.write(button.dataset.copy ?? "").then((success) => {
+    if (!success) return;
+    button.classList.replace("codicon-copy", "codicon-check");
+    window.setTimeout(() => button.classList.replace("codicon-check", "codicon-copy"), 900);
+  });
+});
 elements.resultToggle.addEventListener("click", (event) => {
   event.stopPropagation();
   toggleResultDetails();
@@ -3721,6 +3775,7 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
         activeTurn = existingTurn;
       } else {
         createOutputTurn(message.turnId, message.source ?? "Dext turn", Date.now(), {
+          mode: message.mode,
           ...(message.executePlan ? { executePlan: true } : {}),
           ...(message.planPath ? { planPath: message.planPath } : {})
         });

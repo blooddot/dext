@@ -121,6 +121,7 @@ export class DextHistoryPanel implements vscode.Disposable {
     const nonce = randomBytes(16).toString("base64");
     const codicons = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "dist", "codicons", "codicon.css"));
     const style = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "media", "styles.css"));
+    const markdownStyle = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "dist", "markdown", "github-markdown.css"));
     const ordering = this.preferences.historyOrdering();
     const favorites = new Set(ordering.favorites);
     // For the active view this is equivalent to orderHistorySessions(this.history.list(), ordering);
@@ -148,6 +149,7 @@ export class DextHistoryPanel implements vscode.Disposable {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource}; style-src ${webview.cspSource} 'unsafe-inline'; font-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
   <link rel="stylesheet" href="${codicons.toString()}">
+  <link rel="stylesheet" href="${markdownStyle.toString()}">
   <link rel="stylesheet" href="${style.toString()}">
   <style>${historyTokenStyles(loadEditorTokenTheme())}</style>
   <title>Dext History</title>

@@ -30,6 +30,35 @@ function sidebarFixture(history: DextHistoryStore, sessions: DextHistorySession[
 }
 
 describe("shared History and Conversation actions", () => {
+  it("rejects late configuration changes while this conversation runs and unlocks independently of background runs", async () => {
+    const history = new DextHistoryStore(new MemoryState() as never);
+    const session: DextHistorySession = { id: "active", createdAt: 1, updatedAt: 1, turns: [] };
+    const { sidebar, activeExecutions, post } = sidebarFixture(history, [session]);
+    const selection = { mode: "plan", permission: "full-access", profileId: "codex", model: "new-model", reasoningEffort: "high", speed: "", serviceTier: "" };
+    const setConversationSelection = vi.fn().mockResolvedValue(undefined);
+    const setAgentSelection = vi.fn();
+    const conversationSelections = new Map();
+    const refresh = vi.fn().mockResolvedValue(undefined);
+    Object.assign(sidebar, {
+      preferences: { setConversationSelection }, application: { setAgentSelection },
+      conversationSelections, refresh, updateRunningContext: vi.fn()
+    });
+    const receive = (message: unknown) => (sidebar as unknown as { receive(message: unknown): Promise<void> }).receive(message);
+    activeExecutions.set("active", { turnId: "running" });
+    await receive({ type: "agentSelection", selection });
+    expect(setConversationSelection).not.toHaveBeenCalled();
+    expect(setAgentSelection).not.toHaveBeenCalled();
+    expect(conversationSelections.size).toBe(0);
+    expect(refresh).toHaveBeenCalledOnce();
+    activeExecutions.delete("active");
+    activeExecutions.set("background", { turnId: "other" });
+    await receive({ type: "agentSelection", selection });
+    expect(setConversationSelection).toHaveBeenCalledExactlyOnceWith("active", selection);
+    expect(setAgentSelection).toHaveBeenCalledExactlyOnceWith(selection);
+    expect(conversationSelections.get("active")).toEqual(selection);
+    expect(post).not.toHaveBeenCalled();
+  });
+
   it("edits the addressed input, including an unpersisted running turn, without changing saved records", async () => {
     const history = new DextHistoryStore(new MemoryState() as never);
     await history.addSuccess("saved prompt", [], { kind: "workflow", executions: [] }, "source", "ask", "saved");
@@ -87,11 +116,18 @@ describe("shared History and Conversation actions", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
-  it.each([false, true])("persists a CLI ID reported before the first record exists (failure=%s)", async (fail) => {
+  it.each((["agent", "ask", "plan", "code"] as const).flatMap((mode) => [false, true].map((fail) => ({ mode, fail }))))(
+    "preserves mode and CLI binding through live replay and persistence ($mode, failure=$fail)", async ({ mode, fail }) => {
     const memory = new MemoryState();
     const history = new DextHistoryStore(memory as never);
     const session: DextHistorySession = { id: "first-session", createdAt: 1, updatedAt: 1, turns: [] };
-    const { sidebar } = sidebarFixture(history, [session]);
+    const { sidebar, post } = sidebarFixture(history, [session]);
+    const execute = async (metadata: ExecutionMetadata) => {
+      await (sidebar as unknown as { postActiveExecution(id: string, switchId: number): Promise<void> }).postActiveExecution(session.id, 77);
+      metadata.onAgentSessionId?.("codex", "first-cli-thread");
+      if (fail) throw new Error("execution failed");
+      return { kind: "workflow" as const, executions: [] };
+    };
     Object.assign(sidebar, {
       conversationSelections: new Map(),
       uiInteraction: () => undefined,
@@ -101,16 +137,22 @@ describe("shared History and Conversation actions", () => {
         state: () => ({ agentSelection: { profileId: "codex" } }),
         agentProfiles: () => [{ id: "codex", provider: "codex" }],
         executeConversation: async (_mode: string, _input: string, metadata: ExecutionMetadata) => {
-          metadata.onAgentSessionId?.("codex", "first-cli-thread");
-          if (fail) throw new Error("execution failed");
-          return { kind: "workflow", executions: [] };
+          expect(_mode).toBe(mode);
+          return execute(metadata);
+        },
+        executeInput: async (_input: string, metadata: ExecutionMetadata) => {
+          expect(mode).toBe("code");
+          return execute(metadata);
         }
       }
     });
-    await (sidebar as unknown as { run(mode: string, source: string): Promise<void> }).run("ask", "first prompt");
+    await (sidebar as unknown as { run(mode: string, source: string): Promise<void> }).run(mode, "first prompt");
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({ type: "executing", value: true, mode, source: "first prompt" }));
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({ type: "executing", value: true, mode, switchId: 77 }));
     const restored = new DextHistoryStore(memory as never).list()[0]!;
     expect(restored.providerSessions).toEqual({ codex: "first-cli-thread" });
     expect(restored.turns).toHaveLength(1);
+    expect(restored.turns[0]?.mode).toBe(mode);
     expect(Boolean(restored.turns[0]?.error)).toBe(fail);
   });
 

@@ -137,6 +137,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   private sessionsHydrated = false;
   private readonly activeExecutions = new Map<string, {
     turnId: string;
+    mode: "agent" | "ask" | "plan" | "code";
     source: string;
     startedAt: number;
     planPath?: string;
@@ -862,6 +863,11 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           break;
         case "agentSelection":
           {
+          // Reject late menu clicks after execution has already started.
+          if (this.activeExecutions.has(this.activeSession.id)) {
+            await this.refresh();
+            break;
+          }
           const selection = {
             mode: request.selection.mode,
             permission: request.selection.permission,
@@ -1213,10 +1219,10 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     }
     const controller = new AbortController();
     const startedAt = Date.now();
-    this.activeExecutions.set(sessionId, { turnId, source, startedAt, ...(executionPlanPath ? { planPath: executionPlanPath } : {}), ...(executePlan ? { executePlan: true } : {}), controller, events });
+    this.activeExecutions.set(sessionId, { turnId, source, startedAt, mode, ...(executionPlanPath ? { planPath: executionPlanPath } : {}), ...(executePlan ? { executePlan: true } : {}), controller, events });
     this.updateRunningContext();
     await this.postConversationState();
-    await this.post({ type: "executing", sessionId, value: true, turnId, source, startedAt, ...(executionPlanPath ? { planPath: executionPlanPath } : {}), ...(executePlan ? { executePlan: true } : {}) });
+    await this.post({ type: "executing", sessionId, value: true, turnId, source, startedAt, mode, ...(executionPlanPath ? { planPath: executionPlanPath } : {}), ...(executePlan ? { executePlan: true } : {}) });
     try {
       const priorConversation = conversationContext(session.turns);
       const selection = this.conversationSelections.get(sessionId) ?? this.application.state().agentSelection;
@@ -1423,6 +1429,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       value: true,
       turnId: execution.turnId,
       source: execution.source,
+      mode: execution.mode,
       startedAt: execution.startedAt,
       ...(execution.planPath ? { planPath: execution.planPath } : {}),
       ...(execution.executePlan ? { executePlan: true } : {}),
@@ -1535,6 +1542,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource}; style-src ${webview.cspSource} 'unsafe-inline'; font-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
   <link rel="stylesheet" href="${codicons.toString()}">
+  <link rel="stylesheet" href="${webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "dist", "markdown", "github-markdown.css")).toString()}">
   <link rel="stylesheet" href="${style.toString()}">
   <title>Dext</title>
 </head>
@@ -1556,7 +1564,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           <button id="plan-choose" class="plan-choose" type="button" title="Select a plan" aria-label="Select a plan"><i class="codicon codicon-chevron-down"></i></button>
         </div>
         <span id="plan-status" class="plan-status">New plan</span>
-        <button id="plan-build" class="primary plan-build" type="button" title="Build the active plan"><i class="codicon codicon-play"></i><span>Build</span></button>
+        <button id="plan-build" class="primary plan-build" type="button" title="Build the active plan" aria-label="Build the active plan"><i class="codicon codicon-play" aria-hidden="true"></i><span>Build</span></button>
       </div>
       <div id="result-body" class="collapsible-body result-body"><div id="result"></div></div>
     </section>
@@ -1603,7 +1611,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           </div>
           <div class="action-actions">
             <button id="problems" class="problems-status" type="button" disabled>No problems</button>
-            <button id="run" class="primary" type="button"><i class="codicon codicon-run"></i><span id="run-label">Send</span></button>
+            <button id="run" class="primary circular-action" type="button" title="Send" aria-label="Send"><i class="codicon codicon-arrow-up" aria-hidden="true"></i><span id="run-label" hidden>Send</span></button>
           </div>
         </div>
       </div>

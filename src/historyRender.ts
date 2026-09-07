@@ -1,11 +1,12 @@
 import { parser } from "@lezer/python";
 import { classHighlighter, highlightCode } from "@lezer/highlight";
 import MarkdownIt from "markdown-it";
+import { markdownCodeCopy } from "./markdownCopy.js";
 import type { AgentStreamEvent, DextResult, InputExecutionResponse, RuntimeResponse, WorkflowStepResponse } from "./core/types.js";
 import type { EditorTokenTheme } from "./vscodeTheme.js";
 import type { DextHistoryRecord, DextHistorySession } from "./historyStore.js";
 import { formatDuration } from "./webview/duration.js";
-import { TURN_RENAME_ACTION, TURN_FORK_ACTION, TURN_COPY_ACTION, TURN_DELETE_ACTION } from "./turnPresentation.js";
+import { TURN_RENAME_ACTION, TURN_FORK_ACTION, TURN_COPY_ACTION, TURN_DELETE_ACTION, turnModeLabel } from "./turnPresentation.js";
 import { presentAgentMessage } from "./agentMessagePresentation.js";
 import { presentDiff } from "./diffPresentation.js";
 import type { AgentMessagePresentation } from "./agentMessagePresentation.js";
@@ -34,6 +35,7 @@ const processMarkdown = new MarkdownIt({
   breaks: true,
   linkify: true
 });
+processMarkdown.use(markdownCodeCopy);
 
 function renderProcessMarkdown(source: string): string {
   return processMarkdown.render(source);
@@ -49,8 +51,12 @@ function contextAttribute(context: Record<string, string | boolean>): string {
   return `data-vscode-context='${escapeHtml(JSON.stringify(context)).replaceAll("'", "&#39;")}'`;
 }
 
-function copyButton(value: string): string {
-  return `<button class="copy-button codicon codicon-copy" type="button" data-copy="${escapeHtml(value)}" title="Copy" aria-label="Copy"></button>`;
+function copyButton(value: string, label = "Copy"): string {
+  return `<button class="copy-button codicon codicon-copy" type="button" data-copy="${escapeHtml(value)}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}"></button>`;
+}
+
+function markdownOutput(text: string): string {
+  return `<div class="output-text-copyable"><div class="markdown-copy-toolbar">${copyButton(text, "Copy Markdown")}</div><div class="markdown-body">${renderProcessMarkdown(text)}</div></div>`;
 }
 
 /** High-frequency conversation actions stay visible on hover; the complete
@@ -321,6 +327,9 @@ function resultText(result: DextResult): string {
 }
 
 function resultBody(result: DextResult): string {
+  if (result.kind === "chat" || result.kind === "text" || result.kind === "explain") {
+    return `${markdownOutput(result.text)}${result.kind === "chat" && result.planPath ? planLink(result.planPath) : ""}`;
+  }
   if (result.kind === "terminal") {
     const output = [
       result.stdout ? `<pre class="terminal-text">${highlightTerminal(result.stdout)}</pre>` : "",
@@ -335,7 +344,7 @@ function resultBody(result: DextResult): string {
   }
   if (result.kind === "agent") {
     const changes = result.patch?.changes ?? [];
-    return `${result.text ? `<p>${escapeHtml(result.text)}</p>` : ""}${changes.map(renderFileChange).join("")}`;
+    return `${result.text ? markdownOutput(result.text) : ""}${changes.map(renderFileChange).join("")}`;
   }
   if (result.kind === "review") {
     return `<p>${escapeHtml(result.summary)}</p>${result.findings.map((finding) => `<div class="finding ${finding.severity}">${escapeHtml(finding.message)}</div>`).join("")}`;
@@ -345,12 +354,10 @@ function resultBody(result: DextResult): string {
   if (result.kind === "code") return `<pre class="code-text">${escapeHtml(result.code)}</pre>`;
   const text = resultText(result);
   const body = text ? `<p>${escapeHtml(text)}</p>` : "";
-  // History replays a plan turn read-only: the document opens, but handing it to
-  // the Agent belongs to the live composer.
-  if (result.kind === "chat" && result.planPath) return `${body}${planLink(result.planPath)}`;
   return body;
 }
 
+// History opens the plan document; building it belongs to the live composer.
 function planLink(planPath: string): string {
   const title = escapeHtml(planPath);
   const label = escapeHtml(`Plan: ${planPath.split("/").pop() ?? planPath}`);
@@ -495,7 +502,9 @@ export function renderHistoryRecord(record: DextHistoryRecord, sessionId?: strin
     : "";
   const hint = sessionId ? ` title="${TURN_ACTION_HINT}"` : "";
   const target = sessionId ? ` data-session-id="${escapeHtml(sessionId)}" data-turn-id="${escapeHtml(record.id)}"` : "";
-  const inputHtml = planPath ? "" : `<details class="history-disclosure"><summary>${chevron()}<span>Input</span>${copyButton(input)}</summary><pre class="dext-source">${renderedInputSource(input)}</pre></details>`;
+  const modeTitle = record.mode ? `Submitted in ${turnModeLabel(record.mode)} mode` : "Mode was not recorded for this turn";
+  const modeLabel = `<span class="turn-mode" data-mode="${escapeHtml(record.mode ?? "unknown")}" title="${escapeHtml(modeTitle)}">${turnModeLabel(record.mode)}</span>`;
+  const inputHtml = planPath ? "" : `<details class="history-disclosure"><summary>${chevron()}<span>Input</span>${modeLabel}${copyButton(input)}</summary><pre class="dext-source">${renderedInputSource(input)}</pre></details>`;
   return `<details class="history-record"${target}${context}><summary${hint}>${chevron()}<span class="history-summary-input${record.title ? " named" : ""}">${escapeHtml(firstLine)}</span><span class="history-meta">${duration ? formatDuration(duration) : ""}</span><span class="history-meta history-record-time">${escapeHtml(dateLabel(record.createdAt))}</span>${sessionId ? historyTurnActions(sessionId, record.id) : ""}</summary><div class="history-record-body">${inputHtml}${processHtml ? `<details class="history-disclosure"><summary>${chevron()}<span>Process</span></summary><div class="disclosure-body">${processHtml}</div></details>` : ""}<details class="history-disclosure" open><summary>${chevron()}<span>Output</span>${copyButton(outputCopy)}</summary><div class="disclosure-body">${outputHtml}</div></details></div></details>`;
 }
 

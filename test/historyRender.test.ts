@@ -13,6 +13,17 @@ import {
 import type { DextHistoryRecord } from "../src/historyStore.js";
 
 describe("Dext history rendering", () => {
+  it.each([
+    ["agent", "Agent"], ["ask", "Ask"], ["plan", "Plan"], ["code", "Code"], [undefined, "Unknown"]
+  ] as const)("shows the recorded input mode %s without changing the copied prompt", (mode, label) => {
+    const turn: DextHistoryRecord = { id: "turn", createdAt: 1, input: "prompt", output: "answer", process: [], ...(mode ? { mode } : {}) };
+    const html = renderHistoryRecord(turn, "session");
+    expect(html).toContain(`<span>Input</span><span class="turn-mode" data-mode="${mode ?? "unknown"}"`);
+    expect(html).toContain(`>${label}</span>`);
+    if (!mode) expect(html).toContain("Mode was not recorded for this turn");
+    expect(historyTurnMarkdown(turn)).toContain("### Input\n\nprompt");
+  });
+
   it("provides turn actions with both identifiers, including in lazily loaded session bodies", () => {
     const turn: DextHistoryRecord = { id: "turn-2", createdAt: 2, input: "question", output: "answer", process: [] };
     const html = renderHistoryRecord(turn, "session-1");

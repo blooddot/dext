@@ -173,8 +173,8 @@ describe("sidebar panel layout", () => {
     // properties, which both the mode control and Send read.
     expect(css).toMatch(/\.input-section \{[\s\S]*?--composer-accent: var\(--vscode-button-background\);[\s\S]*?--composer-accent-fill: var\(--composer-accent\);[\s\S]*?--composer-accent-foreground: var\(--vscode-button-foreground\);/);
     expect(css).toMatch(/\.input-section\[data-mode="ask"\] \{\r?\n {2}--composer-accent: var\(--vscode-terminal-ansiGreen/);
-    expect(css).toMatch(/\.input-section\[data-mode="plan"\] \{[\s\S]*?--composer-accent: var\(--vscode-notificationsWarningIcon-foreground, #cca700\);[\s\S]*?--composer-accent-fill: color-mix\([\s\S]*?var\(--composer-accent\) 52%/);
-    expect(css).toMatch(/\.input-section\[data-mode="plan"\] \{[\s\S]*?--composer-accent-foreground: color-mix\([\s\S]*?var\(--composer-accent\) 88%/);
+    expect(css).toMatch(/\.input-section\[data-mode="plan"\] \{[\s\S]*?--composer-accent: var\(--dext-plan-label\);[\s\S]*?--composer-accent-fill: var\(--dext-plan-fill\)/);
+    expect(css).toMatch(/\.input-section\[data-mode="plan"\] \{[\s\S]*?--composer-accent-foreground: var\(--dext-plan-foreground\)/);
     expect(css).toMatch(/\.input-section\[data-mode="code"\] \{\r?\n {2}--composer-accent: var\(--vscode-terminal-ansiCyan/);
     expect(css).toMatch(/#run \{[\s\S]*?color: var\(--composer-accent-foreground, var\(--vscode-button-foreground\)\);[\s\S]*?background: var\(--composer-accent-fill, var\(--vscode-button-background\)\);/);
     expect(css).toMatch(/#run:hover:not\(:disabled\) \{[\s\S]*?color-mix\([\s\S]*?var\(--composer-accent-fill/);
