@@ -23,7 +23,8 @@ export function harnessSpawnCommand(command: string, args: readonly string[]): {
   }
   const relative = /["']?%[~]?dp0%?[\\/]([^"\r\n]*?\.(?:m?js))["']/i.exec(script)?.[1]
     ?? /["']?%dp0%[\\/]([^"\r\n]*?\.(?:m?js))["']/i.exec(script)?.[1];
-  const entry = relative ? join(dirname(command), relative) : join(dirname(command), "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js");
+  // Shim paths use Windows separators even when inspected on another platform.
+  const entry = relative ? join(dirname(command), ...relative.split(/[\\/]/)) : join(dirname(command), "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js");
   if (!existsSync(entry)) throw new Error("Cannot resolve this Harness command shim. Configure the dsh Node entry or executable path.");
   const node = join(dirname(command), "node.exe");
   return { command: existsSync(node) ? node : "node", args: [entry, ...args] };

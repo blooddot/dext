@@ -44,14 +44,19 @@ describe("Harness ACP transport", { timeout: 15000 }, () => {
     })()).rejects.toThrow(/found|ENOENT/);
     await transport?.close();
   });
-  it("resolves an npm shim with spaces without using a shell", async () => {
+  it.each([
+    "%dp0%\\node_modules\\@deepseek-ai\\dsh\\custom dir\\entry.mjs",
+    "%~dp0\\node_modules\\@deepseek-ai\\dsh\\custom dir\\entry.mjs",
+    "%dp0%/node_modules/@deepseek-ai/dsh/custom dir/entry.mjs",
+    "%dp0%\\node_modules/@deepseek-ai\\dsh/custom dir\\entry.mjs"
+  ])("resolves an npm shim with spaces without using a shell: %s", async (shimEntry) => {
     const directory = await mkdtemp(join(tmpdir(), "dext shim ")); directories.push(directory);
-    const entry = join(directory, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js");
+    const entry = join(directory, "node_modules", "@deepseek-ai", "dsh", "custom dir", "entry.mjs");
     await mkdir(join(entry, ".."), { recursive: true }); await writeFile(entry, "");
     const shim = join(directory, "dsh.cmd");
-    await writeFile(shim, '@ECHO off\n"%dp0%\\node.exe" "%dp0%\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js" %*');
+    await writeFile(shim, `@ECHO off\n"%dp0%\\node.exe" "${shimEntry}" %*`);
     const args = ["--patch", "C:/path with spaces/policy.json"];
-    expect(harnessSpawnCommand(shim, args).args).toEqual([entry, ...args]);
+    expect(harnessSpawnCommand(shim, args)).toEqual({ command: "node", args: [entry, ...args] });
   });
   it("resolves Volta's dsh dispatcher through its installed npm shim", async () => {
     const home = await mkdtemp(join(tmpdir(), "dext-volta-shim-")); directories.push(home);
