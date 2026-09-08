@@ -64,11 +64,11 @@ body {
   --plan-accent-fill: var(--dext-plan-fill);
   --plan-accent-foreground: var(--dext-plan-foreground);
   display: flex;
+  flex: 0 0 auto;
+  min-width: 0;
   align-items: center;
   gap: 6px;
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--vscode-sideBar-border, var(--vscode-widget-border));
-  background: var(--vscode-editor-background);
+  padding: 0 0 6px;
 }
 .plan-toolbar[hidden] { display: none; }
 .plan-target-group {
@@ -95,7 +95,9 @@ body {
 .plan-target:focus-visible,
 .plan-choose:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
 .plan-target span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-target > .codicon { flex: 0 0 auto; }
 .plan-choose {
+  flex: 0 0 auto;
   width: 22px;
   height: 24px;
   padding: 0;
@@ -110,8 +112,10 @@ body {
 .plan-choose:hover:not(:disabled) { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); }
 .plan-target:disabled,
 .plan-choose:disabled { opacity: 0.5; cursor: default; }
-.plan-status { flex: 0 0 auto; color: var(--vscode-descriptionForeground); font-size: 0.9em; }
+.plan-status { flex: 0 0 auto; color: var(--vscode-descriptionForeground); font-size: 0.9em; white-space: nowrap; }
 button.primary.plan-build {
+  /* Add to the toolbar's 6px gap for 8px after the plan status. */
+  margin-left: 2px;
   width: auto;
   min-width: 60px;
   height: 22px;

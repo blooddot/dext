@@ -1558,14 +1558,6 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           <button id="result-fullscreen" class="icon-button panel-fullscreen" type="button" title="Maximize Conversation" aria-label="Maximize Conversation"><i class="codicon codicon-screen-full"></i></button>
         </div>
       </div>
-      <div id="plan-toolbar" class="plan-toolbar" hidden>
-        <div class="plan-target-group">
-          <button id="plan-target" class="plan-target" type="button" title="Select a plan"><i class="codicon codicon-checklist"></i><span id="plan-target-label">New plan</span></button>
-          <button id="plan-choose" class="plan-choose" type="button" title="Select a plan" aria-label="Select a plan"><i class="codicon codicon-chevron-down"></i></button>
-        </div>
-        <span id="plan-status" class="plan-status">New plan</span>
-        <button id="plan-build" class="primary plan-build" type="button" title="Build the active plan" aria-label="Build the active plan"><i class="codicon codicon-play" aria-hidden="true"></i><span>Build</span></button>
-      </div>
       <div id="result-body" class="collapsible-body result-body"><div id="result"></div></div>
     </section>
 
@@ -1577,6 +1569,14 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         </div>
       </div>
       <div id="input-body" class="collapsible-body input-body">
+        <div id="plan-toolbar" class="plan-toolbar" hidden>
+          <div class="plan-target-group">
+            <button id="plan-target" class="plan-target" type="button" title="Select a plan"><i class="codicon codicon-checklist"></i><span id="plan-target-label">New plan</span></button>
+            <button id="plan-choose" class="plan-choose" type="button" title="Select a plan" aria-label="Select a plan"><i class="codicon codicon-chevron-down"></i></button>
+          </div>
+          <span id="plan-status" class="plan-status">New plan</span>
+          <button id="plan-build" class="primary plan-build" type="button" title="Build the active plan" aria-label="Build the active plan"><i class="codicon codicon-play" aria-hidden="true"></i><span>Build</span></button>
+        </div>
         <section id="input-shell" class="input-panel unified-input">
           <div id="code-editor" class="code-editor" aria-label="Dext input"></div>
           <button id="attach-files" class="composer-attach icon-button" type="button" title="Attach workspace files" aria-label="Attach workspace files"><i class="codicon codicon-attach"></i></button>

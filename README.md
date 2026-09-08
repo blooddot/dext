@@ -11,7 +11,7 @@ Without an Agent profile, Dext validates workflow structure, resolves immutable 
 ## Features
 
 - **Four input modes:** Agent for tasks, Ask for read-only questions, Plan for implementation plans, and Code for typed workflows.
-- **Agent selection:** Codex CLI and Claude Code CLI, with provider-specific model controls.
+- **Agent selection:** Codex CLI and Claude CLI, with provider-specific model controls.
 - **Typed editing:** API completion, parameter hints, hover information, diagnostics, and structured results.
 - **Reusable resources:** project and global APIs, Skills, rules, and MCP tools.
 - **Workspace context and history:** file and selection references, attachments, conversation tabs, favorites, and workflow recording.

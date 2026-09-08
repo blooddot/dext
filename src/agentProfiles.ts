@@ -69,43 +69,43 @@ function configuredCodexModel(): string | undefined {
 export function modelOptionsFromCodexCache(models: unknown): AgentModelOption[] {
   if (!Array.isArray(models)) return [];
   return models.flatMap((candidate) => {
-        if (!candidate || typeof candidate !== "object") return [];
-        const value = candidate as {
-          slug?: unknown;
-          display_name?: unknown;
-          visibility?: unknown;
-          default_reasoning_level?: unknown;
-          supported_reasoning_levels?: unknown;
-          additional_speed_tiers?: unknown;
-          service_tiers?: unknown;
-        };
-        // Codex keeps internal fallback models in its cache, but marks them
-        // hidden. They are not choices that clients should expose.
-        if (typeof value.slug !== "string" || value.visibility === "hide") return [];
-        const reasoningEfforts = Array.isArray(value.supported_reasoning_levels)
-          ? value.supported_reasoning_levels.flatMap((item) =>
-            item && typeof item === "object" && typeof (item as { effort?: unknown }).effort === "string"
-              ? [(item as { effort: string }).effort]
-              : [])
-          : [];
-        const speedTiers = ["standard", ...(Array.isArray(value.additional_speed_tiers)
-          ? value.additional_speed_tiers.filter((item): item is string => typeof item === "string")
-          : [])];
-        const serviceTiers = ["default", ...(Array.isArray(value.service_tiers)
-          ? value.service_tiers.flatMap((item) =>
-            item && typeof item === "object" && typeof (item as { id?: unknown }).id === "string"
-              ? [(item as { id: string }).id]
-              : [])
-          : [])];
-        return [{
-          id: value.slug,
-          label: typeof value.display_name === "string" ? value.display_name : value.slug,
-          ...(typeof value.default_reasoning_level === "string" ? { defaultReasoningEffort: value.default_reasoning_level } : {}),
-          reasoningEfforts: [...new Set(reasoningEfforts)],
-          speedTiers: [...new Set(speedTiers)],
-          serviceTiers: [...new Set(serviceTiers)]
-        }];
-      });
+    if (!candidate || typeof candidate !== "object") return [];
+    const value = candidate as {
+      slug?: unknown;
+      display_name?: unknown;
+      visibility?: unknown;
+      default_reasoning_level?: unknown;
+      supported_reasoning_levels?: unknown;
+      additional_speed_tiers?: unknown;
+      service_tiers?: unknown;
+    };
+    // Codex keeps internal fallback models in its cache, but marks them
+    // hidden. They are not choices that clients should expose.
+    if (typeof value.slug !== "string" || value.visibility === "hide") return [];
+    const reasoningEfforts = Array.isArray(value.supported_reasoning_levels)
+      ? value.supported_reasoning_levels.flatMap((item) =>
+        item && typeof item === "object" && typeof (item as { effort?: unknown }).effort === "string"
+          ? [(item as { effort: string }).effort]
+          : [])
+      : [];
+    const speedTiers = ["standard", ...(Array.isArray(value.additional_speed_tiers)
+      ? value.additional_speed_tiers.filter((item): item is string => typeof item === "string")
+      : [])];
+    const serviceTiers = ["default", ...(Array.isArray(value.service_tiers)
+      ? value.service_tiers.flatMap((item) =>
+        item && typeof item === "object" && typeof (item as { id?: unknown }).id === "string"
+          ? [(item as { id: string }).id]
+          : [])
+      : [])];
+    return [{
+      id: value.slug,
+      label: typeof value.display_name === "string" ? value.display_name : value.slug,
+      ...(typeof value.default_reasoning_level === "string" ? { defaultReasoningEffort: value.default_reasoning_level } : {}),
+      reasoningEfforts: [...new Set(reasoningEfforts)],
+      speedTiers: [...new Set(speedTiers)],
+      serviceTiers: [...new Set(serviceTiers)]
+    }];
+  });
 }
 
 function codexModelOptions(): AgentModelOption[] {
@@ -133,7 +133,7 @@ const AIOA_MODELS: AgentModelOption[] = [
 ];
 const DEFAULT_PROFILES: readonly AgentProfile[] = [
   { id: "codex", label: "Codex CLI", provider: "codex", command: "codex", models: CODEX_MODELS.map((model) => model.id), modelOptions: CODEX_MODELS },
-  { id: "claude", label: "Claude Code CLI", provider: "claude", command: "claude", models: CLAUDE_MODELS.map((model) => model.id), modelOptions: CLAUDE_MODELS },
+  { id: "claude", label: "Claude CLI", provider: "claude", command: "claude", models: CLAUDE_MODELS.map((model) => model.id), modelOptions: CLAUDE_MODELS },
   {
     id: "aioa",
     label: "AIOA",

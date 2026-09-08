@@ -14,7 +14,7 @@ describe("Agent profile defaults", () => {
 
   it("exposes Claude Code models and supported effort levels", () => {
     const claude = new AgentProfileStore().list().find((profile) => profile.id === "claude");
-    expect(claude).toMatchObject({ label: "Claude Code CLI", provider: "claude", command: "claude" });
+    expect(claude).toMatchObject({ label: "Claude CLI", provider: "claude", command: "claude" });
     expect(claude?.modelOptions?.map((model) => model.id)).toEqual(["opus", "sonnet"]);
     expect(claude?.modelOptions?.[0]?.reasoningEfforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
   });
