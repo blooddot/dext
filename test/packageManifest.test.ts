@@ -56,7 +56,10 @@ describe("Dext package manifest", () => {
 
   it("captures normal editor copy only for nonempty selections when enabled", async () => {
     const value = await manifest();
-    expect(value.activationEvents).toContain("onCommand:dext.copySelectionWithContext");
+    expect(value.contributes?.commands).toEqual(expect.arrayContaining([
+      expect.objectContaining({ command: "dext.copySelectionWithContext" }),
+      expect.objectContaining({ command: "dext.copyTerminalSelectionWithContext" })
+    ]));
     expect(value.contributes?.keybindings).toContainEqual({
       command: "dext.copySelectionWithContext",
       key: "ctrl+c",
@@ -273,7 +276,6 @@ describe("Dext package manifest", () => {
       "dext.toggleCompletion"
     ]) {
       expect(commands).toContain(command);
-      expect(value.activationEvents).toContain(`onCommand:${command}`);
     }
   });
 
@@ -391,9 +393,6 @@ describe("Dext package manifest", () => {
 
   it("keeps MCP credentials in SecretStorage without contributing legacy settings", async () => {
     const value = await manifest();
-    expect(value.activationEvents).toContain("onCommand:dext.setMcpAccessToken");
-    expect(value.activationEvents).toContain("onCommand:dext.clearMcpAccessToken");
-    expect(value.activationEvents).toContain("onCommand:dext.verifyMcpServer");
     expect(value.contributes?.commands).toEqual(expect.arrayContaining([
       expect.objectContaining({ command: "dext.setMcpAccessToken", title: "Dext: Set MCP Access Token" }),
       expect.objectContaining({ command: "dext.clearMcpAccessToken", title: "Dext: Clear MCP Access Token" }),

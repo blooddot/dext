@@ -31,18 +31,22 @@ npm run package
 
 此命令先执行 lint、类型检查、单元测试、构建和 Webview 资源检查，再生成 `release/dext-<版本号>.vsix`。版本号来自 `package.json`。
 
-`release/` 会自动创建，已被 Git 忽略，也不会包含在 VSIX 中。不同版本的安装包会保留；重新打包同一版本会覆盖对应文件。例如 `0.1.0` 的输出为 `release/dext-0.1.0.vsix`。
+`release/` 会自动创建，已被 Git 忽略，也不会包含在 VSIX 中。不同版本的安装包会保留；重新打包同一版本会覆盖对应文件。例如 `0.1.1` 的输出为 `release/dext-0.1.1.vsix`。
 
 发布到 GitHub 的步骤：
 
 1. 更新 `package.json`、`package-lock.json` 中的版本，并在 [CHANGELOG.md](../CHANGELOG.md) 中填写版本说明。
 2. 运行 `npm run package`，安装生成的 VSIX，检查主要使用流程。
-3. 提交源码修改，创建与版本对应的 Git 标签，例如 `v0.1.0`。
+3. 提交源码修改，创建与版本对应的 Git 标签，例如 `v0.1.1`。
 4. 推送提交和标签，为该标签创建 GitHub Release，并上传 `release/` 中对应的 VSIX 作为附件。
 
 每个已发布安装包保存在对应的 Release 中，方便查找历史版本。`npm run package` 只生成本地安装包，不会自动上传或发布。
 
+更新 VS Code 插件商店时，使用高于已发布版本的版本号，运行 `npm run package`，然后在[发布者管理页面](https://marketplace.visualstudio.com/manage)通过现有扩展的更新入口上传生成的 VSIX。每个版本在 CHANGELOG 中新增一节，保留历史版本记录。发布 GitHub Release 不会更新商店页面。
+
 ## 架构
+
+MCP 初始化从 `package.json` 读取客户端名称和版本。协议版本分别维护在 `dext.mcpProtocolVersions.stdio` 和 `dext.mcpProtocolVersions.http`，HTTP 请求头复用 HTTP 协议版本。这些值会在构建时打包进扩展。只有对应传输实现支持该协议修订版时才应修改日期，并重新构建；它们不是面向用户的设置项。
 
 - `src/core/workflow.ts`：遍历 Lezer Python 语法树，限制语法、检查类型并生成诊断。
 - `src/core/workflowRuntime.ts`：顺序执行、结果组合和分支状态管理。

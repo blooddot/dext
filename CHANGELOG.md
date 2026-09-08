@@ -2,9 +2,14 @@
 
 All notable changes to Dext are documented in this file.
 
-## 0.1.0 - 2026-09-09
+## 0.1.1 - 2026-09-09
 
 Initial release.
+
+- Clarify the Marketplace summary with supported agents and reusable workflows.
+- Add a sidebar name, icon, and focus command declaration.
+- Remove redundant activation events generated automatically by VS Code.
+- Read MCP client identity from the extension manifest and centralize protocol versions for stdio and HTTP.
 
 - Add DeepSeek Harness 0.1.2-rc.1 as the third Agent backend over ACP SDK 1.4.0, with model discovery, bound resumable sessions, permission scopes and typed workflows.
 - Remove AIOA/CDP integration and its dependencies without legacy conversation compatibility.

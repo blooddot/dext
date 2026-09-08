@@ -1,9 +1,19 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { name, version, dext } from "../../package.json";
 import type { McpProcessEvent, McpRawResult } from "./types.js";
 
 const IDENTIFIER = /^[A-Za-z0-9_.-]+$/;
 const DEFAULT_TIMEOUT_MS = 30_000;
-const HTTP_PROTOCOL_VERSION = "2025-03-26";
+// Bundled from the extension manifest; independent of the user's workspace.
+const MCP_PROTOCOL_VERSIONS = dext.mcpProtocolVersions;
+
+function initializationParams(transport: McpServerConfig["transport"]) {
+  return {
+    protocolVersion: MCP_PROTOCOL_VERSIONS[transport],
+    capabilities: {},
+    clientInfo: { name, version }
+  };
+}
 const FORBIDDEN_HTTP_CONFIGURATION_KEYS = new Set([
   "token",
   "headers",
@@ -428,11 +438,7 @@ export class StdioMcpTransport implements McpTransport {
     const process = this.spawn(server, options.accessToken);
     const client = new StdioJsonRpcClient(process, server.name, timeoutFor(server), options.onProcessEvent);
     try {
-      await client.request("initialize", {
-        protocolVersion: "2024-11-05",
-        capabilities: {},
-        clientInfo: { name: "dext", version: "0.1.0" }
-      });
+      await client.request("initialize", initializationParams("stdio"));
       client.notify("notifications/initialized", {});
       return toolResult(
         await client.request("tools/call", { name: tool, arguments: argumentsValue }),
@@ -449,11 +455,7 @@ export class StdioMcpTransport implements McpTransport {
     const process = this.spawn(server, options.accessToken);
     const client = new StdioJsonRpcClient(process, server.name, timeoutFor(server), options.onProcessEvent);
     try {
-      await client.request("initialize", {
-        protocolVersion: "2024-11-05",
-        capabilities: {},
-        clientInfo: { name: "dext", version: "0.1.0" }
-      });
+      await client.request("initialize", initializationParams("stdio"));
       client.notify("notifications/initialized", {});
     } finally {
       await client.close();
@@ -465,7 +467,7 @@ export class StdioMcpTransport implements McpTransport {
     const process = this.spawn(server, options.accessToken);
     const client = new StdioJsonRpcClient(process, server.name, timeoutFor(server), options.onProcessEvent);
     try {
-      await client.request("initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "dext", version: "0.1.0" } });
+      await client.request("initialize", initializationParams("stdio"));
       client.notify("notifications/initialized", {});
       return discoveredTools(await client.request("tools/list", {}), server);
     } finally {
@@ -539,11 +541,7 @@ class StreamableHttpMcpClient {
 
   async initialize(): Promise<void> {
     this.sessionId = undefined;
-    await this.request("initialize", {
-      protocolVersion: HTTP_PROTOCOL_VERSION,
-      capabilities: {},
-      clientInfo: { name: "dext", version: "0.1.0" }
-    });
+    await this.request("initialize", initializationParams("http"));
     await this.notify("notifications/initialized", {});
   }
 
@@ -609,7 +607,7 @@ class StreamableHttpMcpClient {
   private headers(): Headers {
     const headers = new Headers({
       Accept: "application/json, text/event-stream",
-      "MCP-Protocol-Version": HTTP_PROTOCOL_VERSION
+      "MCP-Protocol-Version": MCP_PROTOCOL_VERSIONS.http
     });
     if (this.accessToken) headers.set("Authorization", `Bearer ${this.accessToken}`);
     return headers;
@@ -645,7 +643,7 @@ class StreamableHttpMcpClient {
   }
 }
 
-/** Streamable HTTP MCP transport for protocol version 2025-03-26. */
+/** Streamable HTTP MCP transport using the protocol version in the extension manifest. */
 export class HttpMcpTransport implements McpTransport {
   constructor(private readonly fetchImpl: McpFetch = (url, init) => fetch(url, init)) {}
 

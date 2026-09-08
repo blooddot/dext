@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { name, version, dext } from "../package.json";
 import { HttpMcpTransport, McpToolRegistry, StdioMcpTransport, type McpFetch, type McpTransport } from "../src/core/mcpRegistry.js";
 
 function jsonResponse(value: unknown, sessionId?: string): Response {
@@ -134,6 +135,7 @@ describe("McpToolRegistry", () => {
     const requests: Array<{ method: string; message?: Record<string, unknown>; session?: string | null; accept?: string | null }> = [];
     const fetcher: McpFetch = async (_url, init) => {
       const headers = new Headers(init?.headers);
+      expect(headers.get("MCP-Protocol-Version")).toBe(dext.mcpProtocolVersions.http);
       const method = init?.method ?? "GET";
       const message = method === "POST" ? requestMessage(init) : undefined;
       requests.push({
@@ -163,6 +165,11 @@ describe("McpToolRegistry", () => {
     expect(requests.map((request) => request.message?.method)).toEqual([
       "initialize", "notifications/initialized", "tools/call", undefined
     ]);
+    expect(requests[0]?.message?.params).toEqual({
+      protocolVersion: dext.mcpProtocolVersions.http,
+      capabilities: {},
+      clientInfo: { name, version }
+    });
     expect(requests.slice(1).map((request) => request.session)).toEqual(["session-a", "session-a", "session-a"]);
     expect(requests[0]?.accept).toContain("application/json");
     expect(requests[0]?.accept).toContain("text/event-stream");
@@ -236,6 +243,46 @@ describe("McpToolRegistry", () => {
       { name: "list_projects", description: "List projects from team" },
       { name: "create_task" }
     ]);
+  });
+
+  it.each(["verify", "listTools", "call"] as const)("sends manifest metadata when stdio %s initializes", async (operation) => {
+    const script = `
+      const assert = require('node:assert/strict');
+      const readline = require('node:readline');
+      const expected = JSON.parse(process.argv[1]);
+      let initialized = false;
+      readline.createInterface({ input: process.stdin }).on('line', (line) => {
+        const message = JSON.parse(line);
+        if (message.method === 'initialize') {
+          assert.deepEqual(message.params, expected);
+          initialized = true;
+        } else {
+          assert.ok(initialized);
+        }
+        if (message.id !== undefined) {
+          const result = message.method === 'tools/list' ? { tools: [] } : {};
+          process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: message.id, result }) + '\\n');
+        }
+      });
+    `;
+    const server = {
+      name: "metadata",
+      transport: "stdio" as const,
+      command: process.execPath,
+      args: ["-e", script, JSON.stringify({
+        protocolVersion: dext.mcpProtocolVersions.stdio,
+        capabilities: {},
+        clientInfo: { name, version }
+      })]
+    };
+    const transport = new StdioMcpTransport();
+    if (operation === "call") {
+      await expect(transport.call(server, "status", {})).resolves.toEqual({});
+    } else if (operation === "listTools") {
+      await expect(transport.listTools(server)).resolves.toEqual([]);
+    } else {
+      await expect(transport.verify(server)).resolves.toBeUndefined();
+    }
   });
 
   it("continues after a stdio MCP server writes a progress log to stdout", async () => {

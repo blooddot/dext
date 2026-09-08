@@ -31,18 +31,22 @@ npm run package
 
 This runs lint, type checking, unit tests, the build, and webview asset checks before creating `release/dext-<version>.vsix`. The version comes from `package.json`.
 
-The `release/` directory is created automatically, ignored by Git, and excluded from the VSIX contents. Packages for different versions are kept; packaging the same version replaces its existing file. For example, version `0.1.0` produces `release/dext-0.1.0.vsix`.
+The `release/` directory is created automatically, ignored by Git, and excluded from the VSIX contents. Packages for different versions are kept; packaging the same version replaces its existing file. For example, version `0.1.1` produces `release/dext-0.1.1.vsix`.
 
 To publish a version on GitHub:
 
 1. Update the version in `package.json` and `package-lock.json`, and add the release notes to [CHANGELOG.md](../CHANGELOG.md).
 2. Run `npm run package`, install the generated VSIX, and check the main user flows.
-3. Commit the source changes and create a matching Git tag, such as `v0.1.0`.
+3. Commit the source changes and create a matching Git tag, such as `v0.1.1`.
 4. Push the commit and tag, create a GitHub Release for that tag, and upload the VSIX from `release/` as an attachment.
 
 Keep published installers with their corresponding Releases so that older versions remain easy to find. `npm run package` only creates a local package; it does not upload or publish it.
 
+To update the VS Code Marketplace listing, use a version higher than the published version, run `npm run package`, and upload the generated VSIX through the existing extension's update action in [Manage Publishers & Extensions](https://marketplace.visualstudio.com/manage). Each release gets a new CHANGELOG section; retain earlier release entries. Publishing a GitHub Release does not update the Marketplace listing.
+
 ## Architecture
+
+MCP initialization reads the client name and version from `package.json`. Protocol versions are maintained separately under `dext.mcpProtocolVersions.stdio` and `dext.mcpProtocolVersions.http`; the HTTP request header uses the same HTTP value. These values are bundled at build time. Change protocol versions only when the corresponding transport supports that revision, then rebuild; they are not end-user settings.
 
 - `src/core/workflow.ts`: Lezer Python parser traversal, restricted AST, semantic types, and exact diagnostics.
 - `src/core/workflowRuntime.ts`: sequential result composition and branch/step state.

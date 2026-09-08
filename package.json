@@ -1,8 +1,8 @@
 {
   "name": "dext",
   "displayName": "Dext",
-  "description": "A typed AI method environment for Visual Studio Code.",
-  "version": "0.1.0",
+  "description": "AI coding with Codex, Claude, and DeepSeek. Chat, plan, and automate tasks with reusable workflows.",
+  "version": "0.1.1",
   "publisher": "blooddot",
   "license": "SEE LICENSE IN LICENSE",
   "icon": "media/icon.png",
@@ -31,34 +31,26 @@
   "engines": {
     "vscode": "^1.105.0"
   },
+  "dext": {
+    "mcpProtocolVersions": {
+      "stdio": "2024-11-05",
+      "http": "2025-03-26"
+    }
+  },
   "categories": [
     "Other",
     "Programming Languages"
   ],
   "activationEvents": [
-    "onStartupFinished",
-    "onView:dext.sidebar",
-    "onCommand:dext.openHistory",
-    "onCommand:dext.copySelectionWithContext",
-    "onCommand:dext.copyTerminalSelectionWithContext",
-    "onCommand:dext.setMcpAccessToken",
-    "onCommand:dext.clearMcpAccessToken",
-    "onCommand:dext.setCompletionApiKey",
-    "onCommand:dext.clearCompletionApiKey",
-    "onCommand:dext.toggleCompletion",
-    "onCommand:dext.completionMenu",
-    "onCommand:dext.configureCompletionModel",
-    "onCommand:dext.testCompletionModel",
-    "onCommand:dext.diagnoseCompletion",
-    "onCommand:dext.setActivePlan",
-    "onCommand:dext.verifyMcpServer",
-    "onCommand:dext.viewMcp",
-    "onCommand:dext.addMcp",
-    "onLanguage:dext-api"
+    "onStartupFinished"
   ],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
+      {
+        "command": "dext.sidebar.focus",
+        "title": "Dext: Focus Sidebar"
+      },
       {
         "command": "dext.focus",
         "title": "Dext: Focus Input",
@@ -807,7 +799,8 @@
       "dext": [
         {
           "id": "dext.sidebar",
-          "name": "",
+          "icon": "media/dext.svg",
+          "name": "Dext",
           "type": "webview"
         }
       ]
