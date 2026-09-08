@@ -1,5 +1,6 @@
 import type { DextRuntime } from "./runtime.js";
 import { ExecutionCancelledError } from "./executionErrors.js";
+import { AxAdapter } from "./axAdapter.js";
 import type {
   DextResult,
   CodeRef,
@@ -12,6 +13,7 @@ import type {
   WorkflowStatement,
   WorkflowStepResponse
 } from "./types.js";
+import type { InvocationAst, LocalWorkflowFunction, RuntimeResponse } from "./types.js";
 
 type RuntimeValue = InvocationValue | DextResult;
 type ExecutionFlow = true | false | { kind: "returned"; value: RuntimeValue };
@@ -24,7 +26,35 @@ export const DEFAULT_MAX_CONCURRENCY = 4;
 export class WorkflowRuntime {
   private maxConcurrency = DEFAULT_MAX_CONCURRENCY;
 
-  constructor(private readonly runtime: DextRuntime) {}
+  constructor(
+    private readonly runtime: DextRuntime,
+    private readonly functions: readonly LocalWorkflowFunction[] = [],
+    private readonly callStack: readonly string[] = []
+  ) {}
+
+  private async executeInvocation(
+    invocation: InvocationAst,
+    context: readonly CodeRef[] = [],
+    metadata: Readonly<ExecutionMetadata> = {}
+  ): Promise<RuntimeResponse> {
+    const fn = this.functions.find((candidate) => candidate.definition.id === invocation.method);
+    if (!fn) return this.runtime.execute(invocation, context, metadata);
+    if (metadata.signal?.aborted) throw new ExecutionCancelledError();
+    if (this.callStack.includes(invocation.method)) throw new Error(`Recursive local function call '${invocation.method}'.`);
+    const started = performance.now();
+    const ax = new AxAdapter();
+    const contract = ax.compile(fn.definition);
+    const argumentsByName = contract.inputSchema.parse(Object.fromEntries(invocation.arguments.map((arg) => [arg.name, arg.value]))) as Record<string, RuntimeValue>;
+    const runtime = new WorkflowRuntime(this.runtime, this.functions, [...this.callStack, invocation.method]);
+    runtime.setMaxConcurrency(this.maxConcurrency);
+    const value = await runtime.executeValue(fn.program, Object.entries(argumentsByName), metadata);
+    return {
+      invocation,
+      method: { id: fn.definition.id, title: fn.definition.title, kind: fn.definition.kind, source: "project" },
+      result: ax.validateOutput(contract, value),
+      durationMs: Math.max(0, performance.now() - started)
+    };
+  }
 
   setMaxConcurrency(value: number): void {
     this.maxConcurrency = Number.isFinite(value) && value >= 1 ? Math.floor(value) : DEFAULT_MAX_CONCURRENCY;
@@ -56,13 +86,10 @@ export class WorkflowRuntime {
     const cancelled = [...steps].reverse().find((step) => step.state === "cancelled");
     if (flow === false && cancelled) throw new ExecutionCancelledError(cancelled.error);
     if (flow === false) {
-      throw new Error("Custom API main() did not return a result.");
+      throw new Error([...steps].reverse().find((step) => step.state === "failed")?.error ?? "Custom API function did not return a result.");
     }
-    const value = flow === true
-      ? program.returnExpression
-        ? await this.evaluateAsync(program.returnExpression, environment, metadata)
-        : undefined
-      : flow.value;
+    if (flow === true) throw new Error("Custom API function did not return a result on this path.");
+    const value = flow.value;
     if (typeof value !== "object" || value === null || Array.isArray(value) || !("kind" in value)) {
       throw new Error("Custom API main() must return a Dext result.");
     }
@@ -156,7 +183,7 @@ export class WorkflowRuntime {
       };
       try {
         if (metadata.signal?.aborted) throw new ExecutionCancelledError();
-        const response = await this.runtime.execute({
+        const response = await this.executeInvocation({
           kind: "invocation",
           method: statement.call.method,
           source: "code",
@@ -225,7 +252,7 @@ export class WorkflowRuntime {
       }
     }
     const finalized = await this.runFinalizer(statement, environment, steps, metadata, supplementalContext);
-    return handled === true && finalized === true;
+    return finalized === true ? handled : finalized;
   }
 
   private async runFinalizer(
@@ -337,7 +364,7 @@ export class WorkflowRuntime {
   ): Promise<RuntimeValue> {
     if (metadata.signal?.aborted) throw new ExecutionCancelledError();
     if (expression.kind === "call") {
-      const response = await this.runtime.execute({
+      const response = await this.executeInvocation({
         kind: "invocation",
         method: expression.call.method,
         source: "code",
@@ -424,7 +451,7 @@ export class WorkflowRuntime {
         branchSteps[index] = step;
         try {
           if (expression.body.kind === "call") {
-            const response = await this.runtime.execute({
+            const response = await this.executeInvocation({
               kind: "invocation",
               method: expression.body.call.method,
               source: "code",

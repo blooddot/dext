@@ -201,6 +201,8 @@ export type FieldType = "string" | "number" | "boolean" | "object" | "list" | "e
 export interface FieldDefinition {
   name: string;
   type: FieldType;
+  /** Concrete Dext result annotation used by .dx function parameters. */
+  resultType?: string;
   /** Whether the field may explicitly contain JSON null. */
   nullable?: boolean;
   /** Runtime-only argument omitted from public signatures and completions. */
@@ -248,6 +250,13 @@ export interface CustomApiPlan {
   returnExpression: WorkflowExpression;
   agent?: string;
   model?: string;
+  /** File-private helpers. Only main is registered as a public API. */
+  functions?: LocalWorkflowFunction[];
+}
+
+export interface LocalWorkflowFunction {
+  definition: CallableDefinition;
+  program: WorkflowProgram;
 }
 
 export interface RegisteredCallable extends CallableDefinition {

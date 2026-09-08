@@ -1,7 +1,7 @@
 import { parser } from "@lezer/python";
 import type { SyntaxNode } from "@lezer/common";
-import type { MethodRegistry } from "./registry.js";
-import { compileWorkflow, type WorkflowCompileOptions, type WorkflowValueType } from "./workflow.js";
+import { MethodRegistry } from "./registry.js";
+import { compileWorkflow, fieldType, type WorkflowCompileOptions, type WorkflowValueType } from "./workflow.js";
 import type { CallableDefinition, CustomApiPlan, FieldDefinition, MethodSource } from "./types.js";
 
 export interface CustomApiFile {
@@ -11,6 +11,7 @@ export interface CustomApiFile {
   definition: CallableDefinition;
   imports: Map<string, string>;
   functionNode: SyntaxNode;
+  functions: { definition: CallableDefinition; node: SyntaxNode }[];
   agent?: string;
   model?: string;
 }
@@ -70,7 +71,7 @@ export function apiIdFromPath(path: string, root?: string): string {
   return relative.split("/").filter(Boolean).join(".");
 }
 
-function parseType(value: string): { fieldType: FieldDefinition["type"]; multiple?: boolean; values?: string[] } {
+function parseType(value: string): { fieldType: FieldDefinition["type"]; multiple?: boolean; values?: string[]; resultType?: string } {
   const normalized = value.replace(/\s+/g, "");
   const union = normalized.split("|").map((item) => item.trim());
   if (union.length === 2 && union[0] === "Context" && /^list\[Context\]$/i.test(union[1]!)) {
@@ -78,6 +79,7 @@ function parseType(value: string): { fieldType: FieldDefinition["type"]; multipl
   }
   if (normalized === "Context" || normalized === "context") return { fieldType: "context" };
   if (normalized === "Result" || normalized === "DextResult" || normalized === "result") return { fieldType: "result" };
+  if (outputKind(normalized)) return { fieldType: "result", resultType: normalized };
   if (normalized === "str" || normalized === "string") return { fieldType: "string" };
   if (normalized === "int" || normalized === "float" || normalized === "number") return { fieldType: "number" };
   if (normalized === "bool" || normalized === "boolean") return { fieldType: "boolean" };
@@ -92,12 +94,13 @@ function parseType(value: string): { fieldType: FieldDefinition["type"]; multipl
     const values = [...literal[1]!.matchAll(/["']([^"']+)["']/g)].map((match) => match[1]!);
     if (values.length) return { fieldType: "enum", values };
   }
-  return { fieldType: "string" };
+  throw new Error(`Unsupported parameter type '${value}'.`);
 }
 
 function outputKind(value: string): CallableDefinition["output"]["kind"] | undefined {
   const name = value.replace(/\s+/g, "");
-  const match = /^(Chat|Agent|Explain|Edit|Review|Apply|Terminal|Print|Text|Code|Plan|Patch)Result$/.exec(name);
+  if (name === "McpRawResult") return "mcpRaw";
+  const match = /^(Chat|Agent|Explain|Edit|Review|Apply|Terminal|Print|Text|Code|Plan|Patch|Ui)Result$/.exec(name);
   return match?.[1]?.toLowerCase() as CallableDefinition["output"]["kind"] | undefined;
 }
 
@@ -141,12 +144,13 @@ function functionSignature(
 ): { inputs: FieldDefinition[]; output: CallableDefinition["output"] } {
   const paramList = children(node).find((child) => child.name === "ParamList");
   const returnType = children(node).find((child) => child.name === "TypeDef" && text(source, child).startsWith("->"));
-  if (!paramList || !returnType) throw new Error("main() requires parameter and return type annotations.");
+  if (!paramList || !returnType) throw new Error("Functions require parameter and return type annotations.");
   const inputs: FieldDefinition[] = [];
   const parts = children(paramList);
   for (let index = 0; index < parts.length; index += 1) {
     const nameNode = parts[index];
     if (nameNode?.name !== "VariableName") continue;
+    if (inputs.some((field) => field.name === text(source, nameNode))) throw new Error(`Duplicate parameter '${text(source, nameNode)}'.`);
     const typeNode = parts[index + 1]?.name === "TypeDef" ? parts[index + 1] : undefined;
     if (!typeNode) throw new Error(`Parameter '${text(source, nameNode)}' requires a type annotation.`);
     const defaultNode = parts[index + 2]?.name === "AssignOp" ? parts[index + 3] : undefined;
@@ -154,6 +158,7 @@ function functionSignature(
     const field: FieldDefinition = {
       name: text(source, nameNode),
       type: parsed.fieldType,
+      ...(parsed.resultType ? { resultType: parsed.resultType } : {}),
       ...(parsed.values ? { values: parsed.values } : {}),
       ...(parsed.multiple ? { multiple: true } : {}),
       required: !defaultNode,
@@ -162,6 +167,7 @@ function functionSignature(
       ...(defaultNode?.name === "Boolean" ? { default: text(source, defaultNode) === "True" } : {}),
       ...(defaultNode?.name === "DictionaryExpression" && text(source, defaultNode).trim() === "{}" ? { default: {} } : {})
     };
+    if (defaultNode && field.default === undefined) throw new Error(`Unsupported default for parameter '${field.name}'; use a string, number, boolean or empty dictionary literal.`);
     inputs.push(field);
   }
   const declared = text(source, returnType).replace(/^->\s*/, "").trim();
@@ -169,7 +175,7 @@ function functionSignature(
     const kind = outputKind(declared);
     return kind ? { kind } : undefined;
   })();
-  if (!output) throw new Error(`Unsupported main() return type '${declared}'.`);
+  if (!output) throw new Error(`Unsupported function return type '${declared}'; expected a Dext result type.`);
   return { inputs, output };
 }
 
@@ -203,12 +209,70 @@ function decoratorStringOption(options: string, name: string): string | undefine
   return match?.[1];
 }
 
+/** Parse signatures separately so unsaved .dx documents can offer helper hints. */
+export function functionDefinitions(source: string, tolerant = false): { definition: CallableDefinition; node: SyntaxNode }[] {
+  const root = parser.parse(source).topNode;
+  const results = typedDictResults(source);
+  const functions: { definition: CallableDefinition; node: SyntaxNode }[] = [];
+  for (const top of collectTopLevel(root)) {
+    const node = top.name === "FunctionDefinition" ? top
+      : top.name === "DecoratedStatement" ? children(top).find((child) => child.name === "FunctionDefinition") : undefined;
+    if (!node) continue;
+    try {
+      if (children(node).some((child) => child.name === "async")) throw new Error("async functions are not supported in .dx files.");
+      const name = children(node).find((child) => child.name === "VariableName");
+      if (!name) throw new Error("Function name is missing.");
+      const id = text(source, name);
+      const signature = functionSignature(source, node, results);
+      functions.push({ node, definition: {
+        id, title: id, description: `Local Dext function ${id}.`, kind: "skill", version: "1.0.0",
+        input: signature.inputs, output: signature.output, executor: { kind: "custom", apiId: id }
+      } });
+    } catch (error) {
+      if (!tolerant) throw error;
+    }
+  }
+  return functions;
+}
+
+function calledMethods(value: unknown): string[] {
+  if (!value || typeof value !== "object") return [];
+  const record = value as Record<string, unknown>;
+  return [
+    ...(record.kind === "call" && typeof record.method === "string" ? [record.method] : []),
+    ...Object.values(record).flatMap(calledMethods)
+  ];
+}
+
+function checkCycles(graph: ReadonlyMap<string, readonly string[]>, label: string): void {
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const visit = (id: string): void => {
+    if (visiting.has(id)) throw new Error(`${label} at '${id}'.`);
+    if (visited.has(id)) return;
+    visiting.add(id);
+    for (const dependency of graph.get(id) ?? []) visit(dependency);
+    visiting.delete(id);
+    visited.add(id);
+  };
+  for (const id of graph.keys()) visit(id);
+}
+
 function parseHeader(path: string, source: string, root?: string): CustomApiFile {
   const tree = parser.parse(source);
-  const functionNode = firstNode(tree.topNode, "FunctionDefinition");
+  const validateSyntax = (node: SyntaxNode): void => {
+    if (node.type.isError) throw new Error(`Invalid .dx syntax near offset ${node.from}.`);
+    for (const child of children(node)) validateSyntax(child);
+  };
+  validateSyntax(tree.topNode);
+  const functions = functionDefinitions(source);
+  const functionNode = functions.find((fn) => fn.definition.id === "main")?.node;
   if (!functionNode) throw new Error("A .dx API file must define main().");
-  const nameNode = children(functionNode).find((child) => child.name === "VariableName");
-  if (!nameNode || text(source, nameNode) !== "main") throw new Error("A .dx API file must export main().");
+  const names = new Set<string>();
+  for (const fn of functions) {
+    if (names.has(fn.definition.id)) throw new Error(`Duplicate function '${fn.definition.id}'.`);
+    names.add(fn.definition.id);
+  }
   const signature = functionSignature(source, functionNode, typedDictResults(source));
   const id = apiIdFromPath(path, root);
   if (!id || id.split(".").some((part) => !identifier(part))) throw new Error(`Invalid API path for '${path}'.`);
@@ -222,7 +286,7 @@ function parseHeader(path: string, source: string, root?: string): CustomApiFile
     output: signature.output,
     executor: { kind: "custom", apiId: id }
   };
-  const decorated = firstNode(tree.topNode, "Decorator");
+  const decorated = functionNode.parent?.name === "DecoratedStatement" ? firstNode(functionNode.parent, "Decorator") : undefined;
   const options = decorated ? text(source, decorated) : "";
   const agent = decoratorStringOption(options, "agent");
   const model = decoratorStringOption(options, "model");
@@ -233,6 +297,7 @@ function parseHeader(path: string, source: string, root?: string): CustomApiFile
     definition,
     imports: parseImports(source, tree.topNode),
     functionNode,
+    functions: functions.filter((fn) => fn.definition.id !== "main"),
     ...(agent ? { agent } : {}),
     ...(model ? { model } : {})
   };
@@ -241,17 +306,7 @@ function parseHeader(path: string, source: string, root?: string): CustomApiFile
 function initialTypes(file: CustomApiFile): ReadonlyMap<string, WorkflowValueType> {
   const values = new Map<string, WorkflowValueType>();
   for (const field of file.definition.input) {
-    let type: WorkflowValueType = field.type === "context"
-      ? { kind: "context" }
-      : field.type === "result"
-        ? { kind: "result", name: "Result", fields: {} }
-        : field.type === "enum"
-          ? { kind: "string", ...(field.values ? { literals: field.values } : {}) }
-          : field.type === "list"
-            ? { kind: "list", item: { kind: "unknown" } }
-            : { kind: field.type };
-    if (field.multiple) type = { kind: "list", item: type };
-    values.set(field.name, type);
+    values.set(field.name, fieldType(field));
   }
   return values;
 }
@@ -299,70 +354,83 @@ export async function loadCustomApis(
   for (const file of files) {
     if (!registeredIds.has(file.id)) continue;
     try {
-      const body = children(file.functionNode).find((child) => child.name === "Body");
-      if (!body) throw new Error("main() requires a function body.");
-      const bodySource = dedent(file.source.slice(body.from, body.to));
+      const scope = new MethodRegistry();
+      for (const method of registry.list()) scope.register(method, method.source);
       const aliases = new Map<string, string>();
       for (const [alias, imported] of file.imports) {
         const isNamespace = registry.list().some((candidate) => candidate.id.startsWith(`${imported}.`));
         if (!registry.get(imported) && !isNamespace) throw new Error(`Imported API '${imported}' is not defined.`);
         aliases.set(alias, imported);
       }
-      dependencyGraph.set(file.id, [...file.imports.values()].filter((id) => id !== file.id));
-      const options: WorkflowCompileOptions = {
-        allowReturn: true,
-        allowNestedCalls: true,
-        allowImports: true,
-        aliases,
-        initialVariables: initialTypes(file),
-        customApiIds: new Set(files.map((candidate) => candidate.id))
+      for (const fn of file.functions) {
+        const name = fn.definition.id;
+        if (scope.get(name) || aliases.has(name) || scope.list().some((method) => method.id.startsWith(`${name}.`))) {
+          throw new Error(`Local function '${name}' conflicts with an API or import.`);
+        }
+        scope.register(fn.definition, source);
+      }
+      const localNames = new Set(file.functions.map((fn) => fn.definition.id));
+      const localGraph = new Map<string, string[]>();
+      const dependencies: string[] = [];
+      const compileFunction = (definition: CallableDefinition, node: SyntaxNode): CustomApiPlan => {
+        const name = definition.id === file.id ? "main" : definition.id;
+        const body = children(node).find((child) => child.name === "Body");
+        if (!body) throw new Error(`${name}() requires a function body.`);
+        const bodySource = dedent(file.source.slice(body.from, body.to));
+        const options: WorkflowCompileOptions = {
+          allowReturn: true,
+          allowNestedCalls: true,
+          allowImports: true,
+          aliases,
+          initialVariables: initialTypes({ ...file, definition }),
+          customApiIds: new Set(files.map((candidate) => candidate.id))
+        };
+        const compiled = compileWorkflow(bodySource, scope, options);
+        const outputType = compiled.returnType;
+        if (!compiled.program || !compiled.program.returnExpression || !outputType) {
+          const details = compiled.diagnostics
+            .filter((diagnostic) => diagnostic.severity === "error")
+            .map((diagnostic) => diagnostic.message)
+            .join(" ");
+          throw new Error(`${name}() must return a Dext result.${details ? ` ${details}` : ""}`);
+        }
+        const expected = definition.output.kind;
+        if (
+          !definition.output.fields
+          && (outputType.kind !== "result" || outputType.name.toLowerCase() !== `${expected}result`)
+        ) {
+          throw new Error(`${name}() must return ${expected} result.`);
+        }
+        if (compiled.diagnostics.some((diagnostic) => diagnostic.severity === "error")) {
+          throw new Error(compiled.diagnostics.map((diagnostic) => diagnostic.message).join(" "));
+        }
+        const calls = calledMethods(compiled.program);
+        localGraph.set(name, calls.filter((id) => localNames.has(id)));
+        dependencies.push(...calls.filter((id) => !localNames.has(id) && registry.get(id)?.executor.kind === "custom"));
+        return {
+          id: definition.id,
+          sourcePath: file.path,
+          parameters: definition.input.map((field) => field.name),
+          program: compiled.program,
+          returnExpression: compiled.program.returnExpression,
+          ...(file.agent ? { agent: file.agent } : {}),
+          ...(file.model ? { model: file.model } : {})
+        };
       };
-      const compiled = compileWorkflow(bodySource, registry, options);
-      const outputType = compiled.returnType;
-      if (!compiled.program || !compiled.program.returnExpression || !outputType) {
-        const details = compiled.diagnostics
-          .filter((diagnostic) => diagnostic.severity === "error")
-          .map((diagnostic) => diagnostic.message)
-          .join(" ");
-        throw new Error(`main() must return exactly one Dext result.${details ? ` ${details}` : ""}`);
-      }
-      const expected = file.definition.output.kind;
-      if (
-        !file.definition.output.fields
-        && (outputType.kind !== "result" || outputType.name.toLowerCase() !== `${expected}result`)
-      ) {
-        throw new Error(`main() must return ${expected} result.`);
-      }
-      if (compiled.diagnostics.some((diagnostic) => diagnostic.severity === "error")) {
-        throw new Error(compiled.diagnostics.map((diagnostic) => diagnostic.message).join(" "));
-      }
-      plans.set(file.id, {
-        id: file.id,
-        sourcePath: file.path,
-        parameters: file.definition.input.map((field) => field.name),
-        program: compiled.program,
-        returnExpression: compiled.program.returnExpression,
-        ...(file.agent ? { agent: file.agent } : {}),
-        ...(file.model ? { model: file.model } : {})
-      });
+      const plan = compileFunction(file.definition, file.functionNode);
+      const functions = file.functions.map((fn) => ({ definition: fn.definition, program: compileFunction(fn.definition, fn.node).program }));
+      checkCycles(localGraph, "Recursive local function call detected");
+      dependencyGraph.set(file.id, dependencies);
+      plans.set(file.id, { ...plan, ...(functions.length ? { functions } : {}) });
     } catch (error) {
       diagnostics.push(`${file.path}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
-  const visiting = new Set<string>();
-  const visited = new Set<string>();
-  const visit = (id: string): void => {
-    if (visiting.has(id)) throw new Error(`Circular custom API import detected at '${id}'.`);
-    if (visited.has(id)) return;
-    visiting.add(id);
-    for (const dependency of dependencyGraph.get(id) ?? []) visit(dependency);
-    visiting.delete(id);
-    visited.add(id);
-  };
   try {
-    for (const id of dependencyGraph.keys()) visit(id);
+    checkCycles(dependencyGraph, "Circular custom API call detected");
   } catch (error) {
     diagnostics.push(error instanceof Error ? error.message : String(error));
+    plans.clear();
   }
   return { files, plans, methods, diagnostics, blocked: false };
 }

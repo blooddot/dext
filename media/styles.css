@@ -2771,9 +2771,19 @@ button.primary.stopping {
   line-height: 18px;
 }
 
+.turn-mode[data-mode="ask"] {
+  color: var(--vscode-terminal-ansiGreen, #73c991);
+  background: color-mix(in srgb, var(--vscode-terminal-ansiGreen, #73c991) 14%, transparent);
+}
+
 .turn-mode[data-mode="plan"] {
   color: var(--dext-plan-label);
   background: color-mix(in srgb, var(--dext-plan-fill) 14%, transparent);
+}
+
+.turn-mode[data-mode="code"] {
+  color: var(--vscode-terminal-ansiCyan, #4fc1ff);
+  background: color-mix(in srgb, var(--vscode-terminal-ansiCyan, #4fc1ff) 14%, transparent);
 }
 
 /* GitHub Markdown supplies typography, spacing and content colors. These

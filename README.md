@@ -58,7 +58,7 @@ if preview.patch:
     applied = apply(result=preview)
 ```
 
-The input workflow language supports assignment, keyword-only API calls, strings (including triple-quoted strings), numbers, booleans, homogeneous lists, result member access, comments, `if`/`else` with `==` or `!=`, and `for name in list:` over a homogeneous list. The loop variable takes the list's element type and only exists inside the body. A list comprehension, `[call(...) for name in list]`, is the one construct that runs concurrently: its branches cannot see one another, so Dext fans them out up to `dext.workflow.maxConcurrency` and collects the results in list order. One `for` clause, no `if` filter. `try`/`except` with an optional `finally` replaces the default all-or-nothing behavior: a failing step inside the body hands control to the handler and the workflow keeps going. `except Exception as name:` binds the failure message as a string, visible only inside the handler. There is one failure channel, so a named exception type is rejected rather than silently ignored, and stopping a run is never caught — cancellation passes through and the handler does not run. `ask` and `agent` accept ordinary strings. File selections and attachments can be inserted as readable `@workspace/path#Lstart,end-Lend,end` tokens; the editor, Output, and History render that token as an atomic Chip while copy and execution retain the same readable string. Dext never inlines file contents into the prompt. `.dx` API files additionally support one typed `main()` function and explicit imports. User functions/classes, `while`, reassignment, `eval`, `exec`, and system/file/network APIs are rejected. Execution is sequential apart from comprehension fan-out; unselected and downstream steps are reported as `skipped`.
+The input workflow language supports assignment, keyword-only API calls, strings (including triple-quoted strings), numbers, booleans, homogeneous lists, result member access, comments, `if`/`else` with `==` or `!=`, and `for name in list:` over a homogeneous list. The loop variable takes the list's element type and only exists inside the body. A list comprehension, `[call(...) for name in list]`, is the one construct that runs concurrently: its branches cannot see one another, so Dext fans them out up to `dext.workflow.maxConcurrency` and collects the results in list order. One `for` clause, no `if` filter. `try`/`except` with an optional `finally` replaces the default all-or-nothing behavior: a failing step inside the body hands control to the handler and the workflow keeps going. `except Exception as name:` binds the failure message as a string, visible only inside the handler. There is one failure channel, so a named exception type is rejected rather than silently ignored, and stopping a run is never caught — cancellation passes through and the handler does not run. `ask` and `agent` accept ordinary strings. File selections and attachments can be inserted as readable `@workspace/path#Lstart,end-Lend,end` tokens; the editor, Output, and History render that token as an atomic Chip while copy and execution retain the same readable string. Dext never inlines file contents into the prompt. `.dx` API files additionally support a typed `main()` entry point, file-private typed helper functions, and explicit imports. Function definitions in the input composer, nested functions, recursive calls, classes, `while`, reassignment, `eval`, `exec`, and system/file/network APIs are rejected. Execution is sequential apart from comprehension fan-out; unselected and downstream steps are reported as `skipped`.
 
 ## Built-in API
 
@@ -139,6 +139,40 @@ from common import ask
 def main(input: str) -> ChatResult:
     return ask(input=input)
 ```
+
+`from playground import verify` imports the `main()` entry point of
+`.dext/api/playground/verify.dx`; call it as `verify()`. An alias such as
+`from playground import verify as check` is also supported. The imported API
+must exist and load successfully.
+
+Split a longer API into typed helper functions in the same file:
+
+```python
+# .dext/api/playground/develop.dx
+from playground import verify
+
+def report(checked: TerminalResult) -> PrintResult:
+    if checked.status != "succeeded":
+        return print(text=checked.stderr, label="Checks failed")
+    return print(text=checked.stdout, label="Checks passed")
+
+def main() -> PrintResult:
+    checked = verify()
+    return report(checked=checked)
+```
+
+Helpers may appear before or after `main()` and call other helpers or imported
+APIs. Each call has its own parameters and local variables. Parameters require
+type annotations; calls use keyword arguments and may omit parameters with
+literal defaults. Every function declares and returns a Dext result, such as
+`ChatResult`, `AgentResult`, `TerminalResult`, or `PrintResult`; returning a bare
+string, boolean, or list is not supported. Use `return print(text=value)` to
+return a summary or collection. `return` works inside `if`, `try`, and `except`;
+`finally` runs before the return completes, except on cancellation. A path that
+reaches the end without returning fails at runtime. Only `main()` is exported;
+helpers cannot be imported from another file. Recursive calls and helper names
+that conflict with APIs or imports are rejected. Helper calls, parameters, and
+result fields have completion and signature/hover assistance in `.dx` files.
 
 A conversation can be turned into a starting point instead of being written from scratch: right-click a Dext History entry and choose **Record Conversation as Dext Workflow**. Each successful turn becomes a step, a prompt repeated across turns becomes a `main()` parameter, a confirmation the conversation went through becomes a `ui.confirm` call, and a Code-mode turn is left as a comment. The file is written under `.dext/api` and opened for editing; it is a skeleton to revise, not a finished API.
 

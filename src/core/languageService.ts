@@ -2,6 +2,7 @@ import type { MethodRegistry } from "./registry.js";
 import type { FieldDefinition, RegisteredCallable } from "./types.js";
 import { formatFieldType, formatMethodParameter, formatMethodSignature } from "./methodSignature.js";
 import { compileWorkflow, parseWorkflowImports } from "./workflow.js";
+import { functionDefinitions } from "./customApi.js";
 import type { SkillDescriptor } from "./skillCatalog.js";
 import { specializeBuiltinCli } from "./builtinCli.js";
 
@@ -268,6 +269,13 @@ export class DextLanguageService {
         if (method.id === imported) entries.push({ name: alias, method });
         else if (method.id.startsWith(`${imported}.`)) entries.push({ name: `${alias}${method.id.slice(imported.length)}`, method });
       }
+    }
+    if (!customApisAreGlobal) {
+      try {
+        for (const { definition } of functionDefinitions(source, true)) {
+          if (definition.id !== "main") entries.push({ name: definition.id, method: { ...definition, source: "project" } });
+        }
+      } catch { /* An incomplete declaration must not break editor assistance. */ }
     }
     return entries;
   }

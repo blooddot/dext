@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { DextApiDefinitionProvider } from "./vscodeApiDefinitions.js";
 import { DextApplication } from "./application.js";
 import { DextSidebarProvider } from "./sidebarProvider.js";
 import { DEFAULT_HISTORY_LIMITS, DextHistoryStore } from "./historyStore.js";
@@ -722,6 +723,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       },
       ".",
       " "
+    ),
+    vscode.languages.registerDefinitionProvider(
+      { language: "dext-api", scheme: "file" },
+      new DextApiDefinitionProvider((id) => application.customApiSourcePath(id))
     ),
     vscode.languages.registerHoverProvider(
       { language: "dext-api", scheme: "file" },

@@ -22,6 +22,25 @@ describe("DextLanguageService workflow features", () => {
     expect(service.documentCompletions("skill(skill=").map((item) => item.label)).toEqual([]);
   });
 
+  it("offers private .dx helpers, signatures, hover and result fields while editing", () => {
+    const header = `def summarize(value: ChatResult, label: str = "summary") -> PrintResult:
+    return print(text=value.text, label=label)
+
+def main(input: str) -> PrintResult:
+    answer = ask(input=input)
+`;
+    const call = `${header}    report = summarize(value=answer, label=`;
+    expect(service.apiCompletions(`${header}    sum`).map((item) => item.label)).toContain("summarize");
+    expect(service.apiSignature(call)).toMatchObject({
+      label: 'summarize(value: ChatResult, label?: string = "summary") -> PrintResult', activeParameter: 1
+    });
+    const complete = `${header}    report = summarize(value=answer)\n    report.`;
+    expect(service.apiCompletions(complete).map((item) => item.label)).toEqual(["text", "label"]);
+    expect(service.apiHover(call, call.lastIndexOf("summarize") + 2)?.label).toContain("summarize(value: ChatResult");
+    expect(service.documentCompletions(`${header}    sum`).map((item) => item.label)).not.toContain("summarize");
+    expect(service.apiCompletions("sum")).toEqual([]);
+  });
+
   it("offers Agent result fields", () => {
     const source = 'task = agent(input="plan", apply=False)\ntask.';
     expect(service.documentCompletions(source).map((item) => item.label)).toEqual(["text", "summary", "patch", "files"]);

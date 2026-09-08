@@ -5,6 +5,7 @@ function literal(value: string): string {
 }
 
 function scalarType(type: FieldDefinition["type"], field: FieldDefinition): string {
+  if (type === "result" && field.resultType) return field.resultType;
   if (type === "object") return field.properties?.length
     ? `{ ${field.properties.map(formatMethodParameter).join(", ")} }`
     : "dict[str, object]";

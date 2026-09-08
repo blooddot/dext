@@ -290,13 +290,13 @@ class Compiler {
     if (node.name === "TryStatement") return this.compileTry(node);
     if (node.name === "ReturnStatement") {
       if (!this.options.allowReturn) {
-        this.error("return is only allowed in a custom API main function.", node.from, node.to);
+        this.error("return is only allowed in a custom API function.", node.from, node.to);
         return undefined;
       }
       const expressionNode = namedChildren(node).at(-1);
       const value = expressionNode ? this.compileExpression(expressionNode) : undefined;
       if (!value) {
-        this.error("A custom API main function must return a value.", node.from, node.to);
+        this.error("A custom API function must return a value.", node.from, node.to);
         return undefined;
       }
       if (this.returnType && typeName(this.returnType) !== typeName(value.type)) {
@@ -989,7 +989,7 @@ function contextReferenceFromToken(value: string): ContextReference {
   return { kind: "file", path: token };
 }
 
-function fieldType(field: FieldDefinition): ValueType {
+export function fieldType(field: FieldDefinition): ValueType {
   let value: ValueType;
   if (field.type === "enum") value = field.values
     ? { kind: "string", literals: field.values }
@@ -1011,12 +1011,12 @@ function fieldType(field: FieldDefinition): ValueType {
   else if (field.type === "list") {
     value = { kind: "list", item: field.items ? fieldType(field.items) : { kind: "unknown" } };
   }
-  else if (field.type === "result") value = result("Result", {});
+  else if (field.type === "result") value = Object.values(RESULT_TYPES).find((type) => type.kind === "result" && type.name === field.resultType) ?? result("Result", {});
   else value = { kind: field.type };
   return field.multiple ? { kind: "list", item: value } : value;
 }
 
-function outputType(definition: CallableDefinition): ValueType {
+export function outputType(definition: CallableDefinition): ValueType {
   if (!definition.output.fields) return RESULT_TYPES[definition.output.kind] ?? { kind: "unknown" };
   const fields: Record<string, ValueType> = {};
   for (const field of definition.output.fields) fields[field.name] = fieldType(field);
@@ -1033,7 +1033,7 @@ function matchesField(actual: ValueType, field: FieldDefinition): boolean {
         || (actual.kind === "list" && actual.item.kind === expected.item.kind);
     }
     return expected.kind === "result"
-      ? actual.kind === "result"
+      ? actual.kind === "result" && (!field.resultType || actual.name === field.resultType)
       : actual.kind === expected.kind;
   });
 }

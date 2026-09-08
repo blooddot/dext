@@ -60,6 +60,11 @@ export class DextApplication {
   private readonly workflowRuntime = new WorkflowRuntime(this.runtime);
   private configDiagnostics: string[] = [];
   private customApiIds = new Set<string>();
+  private readonly customApiSources = new Map<string, string>();
+
+  customApiSourcePath(id: string): string | undefined {
+    return this.customApiSources.get(id);
+  }
   private workspaceRoot = process.cwd();
   private workspaceUri: vscode.Uri | undefined;
   private workspaceTrusted = false;
@@ -193,6 +198,11 @@ export class DextApplication {
       "project"
     );
     this.runtime.setCustomPlans(loaded.plans);
+    this.customApiSources.clear();
+    const registered = new Set(loaded.methods.map(({ definition }) => definition));
+    for (const file of loaded.files) {
+      if (registered.has(file.definition)) this.customApiSources.set(file.id, file.path);
+    }
     this.customApiIds = new Set(loaded.methods.map(({ definition }) => definition.id));
     this.language.setCustomApiIds(this.customApiIds);
     const globalRoot = vscode.Uri.joinPath(this.storage.globalStorageUri, "api").fsPath.replace(/[\\/]$/, "");

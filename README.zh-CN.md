@@ -66,7 +66,7 @@ if preview.patch:
 - `[call(...) for name in list]` 列表推导式；这是支持并发执行的结构，各分支互不可见，并发上限由 `dext.workflow.maxConcurrency` 控制，结果保持输入顺序。仅支持一个 `for` 子句，不支持 `if` 过滤。
 - `try` / `except` 和可选的 `finally`；某一步失败后可以进入处理分支并继续工作流。`except Exception as name:` 将错误消息绑定为仅在处理分支内可见的字符串。不支持按具体异常类型区分处理，用户停止执行也不会被捕获。
 
-`.dx` API 文件还支持一个带类型声明的 `main()` 函数和显式导入。输入工作流不支持自定义函数或类、`while`、重复赋值、`eval`、`exec` 或任意系统、文件、网络 API；相关操作需通过 Dext 提供的 API 完成。除列表推导式外，执行按顺序进行；未选中的步骤及因上游失败未执行的后续步骤会标记为 `skipped`。
+`.dx` API 文件还支持带类型声明的 `main()` 入口、同文件内带类型声明的辅助函数和显式导入。辅助函数仅在当前文件可见；不支持嵌套定义或递归调用。输入工作流不支持自定义函数或类、`while`、重复赋值、`eval`、`exec` 或任意系统、文件、网络 API；相关操作需通过 Dext 提供的 API 完成。除列表推导式外，执行按顺序进行；未选中的步骤及因上游失败未执行的后续步骤会标记为 `skipped`。
 
 `ask` 和 `agent` 接受普通字符串。文件选区和附件会以可读的 `@workspace/path#Lstart,end-Lend,end` 标记插入；编辑器、Output 和 History 将其显示为引用块，复制和执行时保留可读标记。Dext 不把文件内容直接展开进提示词。
 
@@ -139,6 +139,28 @@ from common import ask
 def main(input: str) -> ChatResult:
     return ask(input=input)
 ```
+
+`from playground import verify` 导入的是 `.dext/api/playground/verify.dx` 的 `main()` 入口，随后通过 `verify()` 调用。也支持 `from playground import verify as check` 这样的别名。被导入的 API 必须存在并成功加载。
+
+较长的 API 可以拆成同文件内带类型声明的辅助函数：
+
+```python
+# .dext/api/playground/develop.dx
+from playground import verify
+
+def report(checked: TerminalResult) -> PrintResult:
+    if checked.status != "succeeded":
+        return print(text=checked.stderr, label="检查失败")
+    return print(text=checked.stdout, label="检查通过")
+
+def main() -> PrintResult:
+    checked = verify()
+    return report(checked=checked)
+```
+
+辅助函数可以放在 `main()` 前后，也可以调用其他辅助函数或已导入的 API。每次调用都有独立的参数和局部变量。参数必须声明类型，通过命名参数传入；有字面量默认值的参数可以省略。每个函数都要声明并返回 Dext 结果，例如 `ChatResult`、`AgentResult`、`TerminalResult` 或 `PrintResult`；目前不支持直接返回字符串、布尔值或列表，可通过 `return print(text=value)` 返回摘要或集合。
+
+`if`、`try`、`except` 中均可提前 `return`；除取消执行外，返回前会先执行 `finally`。实际执行到函数末尾却没有返回时，会报告运行错误。只有 `main()` 对外导出，辅助函数不能被其他文件导入；递归调用、与 API 或导入名称冲突的辅助函数会被拒绝。`.dx` 编辑器提供辅助函数调用、参数及结果字段补全，以及签名和悬浮提示。
 
 右键 Dext History 条目并选择 **Record Conversation as Dext Workflow**，可以从已有对话生成起始工作流：成功的轮次会转成步骤，重复提示词会成为 `main()` 参数，确认操作会转成 `ui.confirm`，Code 模式的轮次会保留为注释。文件写入 `.dext/api` 后自动打开，需要继续检查和调整。
 

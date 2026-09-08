@@ -6,6 +6,7 @@ import { ContextResolver, type ContextHost } from "../src/core/contextResolver.j
 import { MethodRegistry } from "../src/core/registry.js";
 import { DextRuntime } from "../src/core/runtime.js";
 import { AxAdapter } from "../src/core/axAdapter.js";
+import { ExecutionCancelledError } from "../src/core/executionErrors.js";
 import type { UiInteraction } from "../src/core/types.js";
 
 const files = new Map([
@@ -61,6 +62,218 @@ const host: ContextHost = {
 };
 
 describe("custom .dx APIs", () => {
+  async function loadSources(sources: Record<string, string>) {
+    const registry = new MethodRegistry();
+    registry.registerMany(BUILTIN_METHODS, "builtin");
+    const root = "C:/workspace/.dext/api";
+    const contents = new Map(Object.entries(sources).map(([name, source]) => [`${root}/${name}.dx`, source]));
+    const loaded = await loadCustomApis(true, [root], async () => [...contents.keys()], async (path) => contents.get(path), registry);
+    const runtime = new DextRuntime(registry, new ContextResolver(host));
+    runtime.setCustomPlans(loaded.plans);
+    const execute = (method: string, args: Record<string, string | boolean> = {}) => runtime.execute({
+      kind: "invocation", method, source: "code",
+      arguments: Object.entries(args).map(([name, value]) => ({ name, value }))
+    });
+    return { registry, loaded, runtime, execute };
+  }
+
+  it("imports a sibling API's main using from namespace import name", async () => {
+    const { loaded, execute } = await loadSources({
+      "playground/verify": 'def main() -> PrintResult:\n    return print(text="verified")',
+      "playground/develop": 'from playground import verify\n\ndef main() -> PrintResult:\n    return verify()'
+    });
+    expect(loaded.diagnostics).toEqual([]);
+    expect((await execute("playground.develop")).result).toMatchObject({ text: "verified" });
+  });
+
+  it("runs helpers before and after main with defaults, typed results and isolated scopes", async () => {
+    const { loaded, registry, execute } = await loadSources({
+      develop: `def summarize(value: ChatResult, label: str = "summary") -> PrintResult:
+    return print(text=value.text, label=label)
+
+def main(input: str) -> PrintResult:
+    value = ask(input=input)
+    first = analyze(input="first")
+    second = analyze(input="second")
+    return summarize(value=value)
+
+def analyze(input: str) -> PrintResult:
+    value = ask(input=input)
+    return summarize(value=value)
+`
+    });
+    expect(loaded.diagnostics).toEqual([]);
+    expect(registry.get("summarize")).toBeUndefined();
+    expect(loaded.methods.map((method) => method.definition.id)).toEqual(["develop"]);
+    expect((await execute("develop", { input: "original" })).result).toMatchObject({ text: "original", label: "summary" });
+  });
+
+  it("runs private helpers through fan-out and nested calls", async () => {
+    const { loaded, execute } = await loadSources({
+      develop: `def main() -> PrintResult:
+    names = ["first", "second"]
+    reports = [report(input=name) for name in names]
+    return print(text=reports)
+
+def report(input: str) -> PrintResult:
+    return print(text=ask(input=input).text)
+`
+    });
+    expect(loaded.diagnostics).toEqual([]);
+    const response = await execute("develop");
+    expect(JSON.parse((response.result as { text: string }).text)).toEqual([
+      { kind: "print", text: "first" }, { kind: "print", text: "second" }
+    ]);
+  });
+
+  it("returns from a helper's except block and still executes finally", async () => {
+    const { loaded, execute } = await loadSources({
+      develop: `def main() -> PrintResult:
+    return recover()
+
+def recover() -> PrintResult:
+    try:
+        proposal = agent(input="preview", apply=False)
+        return print(text=proposal.patch.changes)
+    except Exception as error:
+        return print(text=error, label="recovered")
+    finally:
+        print(text="cleanup")
+    return print(text="unreachable")
+`
+    });
+    expect(loaded.diagnostics).toEqual([]);
+    expect((await execute("develop")).result).toMatchObject({ label: "recovered" });
+  });
+
+  it("does not evaluate a skipped return when a function falls through", async () => {
+    const { loaded, execute } = await loadSources({
+      develop: `def main() -> PrintResult:
+    return conditional(enabled=False)
+
+def conditional(enabled: bool) -> PrintResult:
+    if enabled == True:
+        return print(text="must not run")
+`
+    });
+    expect(loaded.diagnostics).toEqual([]);
+    await expect(execute("develop")).rejects.toThrow("did not return a result on this path");
+  });
+
+  it("propagates cancellation from a helper through exception handlers", async () => {
+    const { loaded, runtime } = await loadSources({
+      develop: `def main() -> UiResult:
+    try:
+        return confirm()
+    except Exception as error:
+        return ui.input(label="must not recover")
+
+def confirm() -> UiResult:
+    try:
+        return ui.confirm(message="Proceed?")
+    except Exception as error:
+        return ui.input(label="must not recover")
+    finally:
+        ui.input(label="must not run after cancellation")
+`
+    });
+    expect(loaded.diagnostics).toEqual([]);
+    const prompts: string[] = [];
+    const ui: UiInteraction = {
+      choose: async () => ({ kind: "ui", type: "choice", selected: [] }),
+      confirm: async () => { throw new ExecutionCancelledError("Cancelled by user"); },
+      input: async ({ label }) => {
+        prompts.push(label);
+        return { kind: "ui", type: "input", value: "unexpected" };
+      }
+    };
+    await expect(runtime.execute({ kind: "invocation", method: "develop", source: "code", arguments: [] }, [], { ui }))
+      .rejects.toBeInstanceOf(ExecutionCancelledError);
+    expect(prompts).toEqual([]);
+  });
+
+  it("executes a finally return before completing a helper's exception return", async () => {
+    const { loaded, execute } = await loadSources({
+      develop: `def main() -> PrintResult:
+    return recover()
+def recover() -> PrintResult:
+    try:
+        proposal = agent(input="preview", apply=False)
+        return print(text=proposal.patch.changes)
+    except Exception as error:
+        return print(text=error)
+    finally:
+        return print(text="finalized")
+`
+    });
+    expect(loaded.diagnostics).toEqual([]);
+    expect((await execute("develop")).result).toMatchObject({ text: "finalized" });
+  });
+
+  it("preserves helper errors for the caller's exception handler", async () => {
+    const { loaded, execute } = await loadSources({
+      develop: `def main() -> PrintResult:
+    try:
+        return inspect()
+    except Exception as error:
+        return print(text=error)
+
+def inspect() -> PrintResult:
+    proposal = agent(input="preview", apply=False)
+    return print(text=proposal.patch.changes)
+`
+    });
+    expect(loaded.diagnostics).toEqual([]);
+    expect((await execute("develop")).result).toMatchObject({ text: "Result field 'patch' is unavailable." });
+  });
+
+  it.each([
+    ['def helper() -> PrintResult:\n    return helper()', "Recursive local function"],
+    ['def helper() -> PrintResult:\n    return other()\ndef other() -> PrintResult:\n    return helper()', "Recursive local function"],
+    ['def helper() -> PrintResult:\n    return ask(input="wrong")', "helper() must return print result"],
+    ['def helper() -> PrintResult:\n    return print(text=secret)', "Unknown variable"],
+    ['def helper() -> PrintResult:\n    return print(text="one")\ndef helper() -> PrintResult:\n    return print(text="two")', "Duplicate function"],
+    ['def helper() -> PrintResult:\n    return print(text="ok")\ndef ask() -> PrintResult:\n    return print(text="shadow")', "conflicts with an API"],
+    ['def helper(input) -> PrintResult:\n    return print(text=input)', "requires a type annotation"]
+  ])("rejects invalid helper definitions: %s", async (helper, diagnostic) => {
+    const { loaded } = await loadSources({ develop: `def main() -> PrintResult:\n    secret = "private"\n    return helper()\n\n${helper}` });
+    expect(loaded.diagnostics.join(" ")).toContain(diagnostic);
+    expect(loaded.plans.has("develop")).toBe(false);
+  });
+
+  it("does not leak helpers into other files or overwrite helpers with the same name", async () => {
+    const { loaded, execute } = await loadSources({
+      first: 'def main() -> PrintResult:\n    return report()\ndef report() -> PrintResult:\n    return print(text="first")',
+      second: 'def main() -> PrintResult:\n    return report()\ndef report() -> PrintResult:\n    return print(text="second")',
+      third: 'def main() -> PrintResult:\n    return report()'
+    });
+    expect(loaded.diagnostics.join(" ")).toContain("Unknown Dext API 'report'");
+    expect((await execute("first")).result).toMatchObject({ text: "first" });
+    expect((await execute("second")).result).toMatchObject({ text: "second" });
+  });
+
+  it("rejects wrong concrete result parameters", async () => {
+    const { loaded } = await loadSources({
+      develop: `def main() -> PrintResult:
+    wrong = print(text="wrong")
+    return summarize(value=wrong)
+def summarize(value: AgentResult) -> PrintResult:
+    return print(text=value.text)
+`
+    });
+    expect(loaded.diagnostics.length).toBeGreaterThan(0);
+    expect(loaded.plans.size).toBe(0);
+  });
+
+  it("rejects cycles that pass through a private helper and another API", async () => {
+    const { loaded } = await loadSources({
+      "team/first": 'from team import second\ndef main() -> PrintResult:\n    return helper()\ndef helper() -> PrintResult:\n    return second()',
+      "team/second": 'from team import first\ndef main() -> PrintResult:\n    return first()'
+    });
+    expect(loaded.diagnostics.join(" ")).toContain("Circular custom API call");
+    expect(loaded.plans.size).toBe(0);
+  });
+
   it("loads main signatures and explicit imports", async () => {
     const registry = new MethodRegistry();
     registry.registerMany(BUILTIN_METHODS, "builtin");

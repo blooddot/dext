@@ -87,7 +87,9 @@ function scalarSchemaForType(field: FieldDefinition, type: FieldDefinition["type
     case "dir":
       return directoryReferenceSchema;
     case "result":
-      return dextResultSchema;
+      return field.resultType
+        ? dextResultSchema.refine((value) => `${value.kind}Result`.toLowerCase() === field.resultType!.toLowerCase(), `Expected ${field.resultType}.`)
+        : dextResultSchema;
   }
 }
 

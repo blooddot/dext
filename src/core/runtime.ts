@@ -478,7 +478,7 @@ export class DextRuntime {
         ...(plan.agent ? { agent: plan.agent } : {}),
         ...(plan.model ? { model: plan.model } : {})
       };
-      const workflowResult = await new WorkflowRuntime(this).executeValue(
+      const workflowResult = await new WorkflowRuntime(this, plan.functions).executeValue(
         plan.program,
         Object.entries(resolved.arguments).map(([name, value]) => [name, value] as const),
         customMetadata
