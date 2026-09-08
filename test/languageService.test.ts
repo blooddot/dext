@@ -46,6 +46,78 @@ def main(input: str) -> PrintResult:
     expect(service.apiCompletions("sum")).toEqual([]);
   });
 
+  describe("project API imports", () => {
+    beforeEach(() => {
+      const registry = new MethodRegistry();
+      registry.registerMany(BUILTIN_METHODS, "builtin");
+      registry.register({ ...registry.get("terminal")!, id: "playground.verify", input: [] }, "project");
+      registry.register({ ...registry.get("ask")!, id: "playground.explain" }, "project");
+      service = new DextLanguageService(registry);
+      service.setCustomApiIds(new Set(["playground.verify", "playground.explain"]));
+    });
+
+    it.each([
+      ["from playground import verify", "verify"],
+      ["from playground import verify as check", "check"],
+      ["import playground.verify", "verify"],
+      ["import playground.verify as check", "check"],
+      ["import playground", "playground.verify"],
+      ["import playground as pg", "pg.verify"]
+    ])("provides editor assistance for %s in Code and .dx", (header, name) => {
+      const prefix = `${header}\n`;
+      const source = `${prefix}checked = ${name}()\n`;
+      expect(service.documentDiagnostics(source)).toEqual([]);
+      for (const global of [true, false]) {
+        const partial = name.slice(0, -1);
+        const label = name.split(".").at(-1);
+        expect(service.documentCompletions(prefix + partial, undefined, global).filter((item) => item.label === label))
+          .toHaveLength(1);
+        expect(service.documentSignature(prefix + name + "(", undefined, global)?.label)
+          .toContain("playground.verify(");
+        expect(service.documentCompletions(source + "checked.", undefined, global).map((item) => item.label))
+          .toContain("exit_code");
+        expect(service.documentCompletions(source + 'if checked.status == "', undefined, global).map((item) => item.label))
+          .toEqual(["succeeded", "failed", "timed_out"]);
+        expect(service.documentHover(source, source.indexOf("checked") + 2, global)?.label)
+          .toBe("checked: TerminalResult");
+        const member = source + "checked.stdout";
+        expect(service.documentHover(member, member.length - 2, global)?.label).toBe("checked.stdout: string");
+      }
+    });
+
+    it("completes imported call parameters and shows the active parameter", () => {
+      const source = "from playground import explain\nanswer = explain(in";
+      expect(service.documentCompletions(source).map((item) => item.label)).toEqual(["input"]);
+      expect(service.documentSignature(source)).toMatchObject({
+        activeParameter: 0, label: expect.stringContaining("input: string")
+      });
+    });
+
+    it("resolves an import that shadows a global method consistently with compilation", () => {
+      const source = "from playground import verify as ask\nchecked = ask()\n";
+      expect(service.documentDiagnostics(source)).toEqual([]);
+      expect(service.documentCompletions(source + "checked.").map((item) => item.label)).toContain("exit_code");
+      expect(service.documentCompletions(source + "as").filter((item) => item.label === "ask")).toHaveLength(1);
+      expect(service.documentSignature(source + "ask(")?.label).toContain("playground.verify(");
+    });
+
+    it("offers import targets in both editors", () => {
+      for (const complete of [service.documentCompletions.bind(service), service.apiCompletions.bind(service)]) {
+        expect(complete("from playground import v").map((item) => item.label)).toEqual(["verify"]);
+        expect(complete("from play").map((item) => item.label)).toEqual(["playground"]);
+        expect(complete("import play").map((item) => item.label)).toEqual(["playground"]);
+      }
+    });
+
+    it("keeps qualified Code calls available and .dx custom APIs scoped to imports", () => {
+      const source = "from playground import verify\nplayground.";
+      expect(service.documentCompletions(source).map((item) => item.label)).toEqual(["explain", "verify"]);
+      expect(service.apiCompletions(source)).toEqual([]);
+      expect(service.documentCompletions("ver")).toEqual([]);
+      expect(service.apiCompletions("ver")).toEqual([]);
+    });
+  });
+
   it("offers Agent result fields", () => {
     const source = 'task = agent(input="plan", apply=False)\ntask.';
     expect(service.documentCompletions(source).map((item) => item.label)).toEqual(["text", "summary", "patch", "files"]);

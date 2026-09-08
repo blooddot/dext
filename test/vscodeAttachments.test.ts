@@ -12,21 +12,9 @@ const vscode = vi.hoisted(() => ({
 
 vi.mock("vscode", () => vscode);
 
-import { fileAttachment, isCodeDocument } from "../src/vscodeAttachments.js";
+import { fileAttachment } from "../src/vscodeAttachments.js";
 
-describe("attachment document classification", () => {
-  it("uses workspace references only for code and configuration documents", () => {
-    expect(isCodeDocument({ languageId: "typescript" })).toBe(true);
-    expect(isCodeDocument({ languageId: "json" })).toBe(true);
-    expect(isCodeDocument({ languageId: "shellscript" })).toBe(true);
-  });
-
-  it("leaves prose, logs, and tabular text as ordinary pasted text", () => {
-    for (const languageId of ["plaintext", "markdown", "log", "output", "csv", "tsv"]) {
-      expect(isCodeDocument({ languageId })).toBe(false);
-    }
-  });
-
+describe("file attachments", () => {
   it("creates a workspace file reference without reading or size-limiting the file", async () => {
     const uri = {};
     vscode.workspace.getWorkspaceFolder.mockReturnValue({ uri: {} });

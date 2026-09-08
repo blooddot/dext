@@ -836,7 +836,7 @@
         "dext.selectionActions.enabled": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Show **Add to Dext** in a floating editor hover near the selection's active cursor after selecting workspace code. Does not add lines or change the code layout. Adds the selection to Input as a file reference. Changes take effect immediately; turning this off keeps the right-click menus available."
+          "markdownDescription": "Show **Add to Dext** in a floating editor hover near the selection's active cursor after selecting text in any workspace text file. Does not add lines or change the editor layout. Adds the selection to Input as a file reference. Changes take effect immediately; turning this off keeps the right-click menus available."
         },
         "dext.copyFilePathOnCopy": {
           "type": "boolean",
@@ -846,7 +846,7 @@
         "dext.captureSelectionOnCopy": {
           "type": "boolean",
           "default": true,
-          "description": "Capture editor selections as Dext context when copying with Ctrl+C or Cmd+C. The clipboard still receives the exact selected text. Disable this to use VS Code's native copy behavior."
+          "description": "Capture selections from any workspace text file, including Markdown, plain text, logs, and CSV, as Dext file references when copying with Ctrl+C or Cmd+C. The clipboard still receives the exact selected text. Disable this to use VS Code's native copy behavior."
         },
         "dext.skillDirs": {
           "type": "array",

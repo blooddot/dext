@@ -10,11 +10,10 @@ import {
 } from "./attachmentStore.js";
 import {
   attachmentFileReference,
-  activeCodeSelection,
+  activeWorkspaceSelection,
   clipboardFileReference,
   directoryAttachment,
   fileAttachment,
-  isCodeDocument,
   selectionAttachment,
   type SelectionTarget
 } from "./vscodeAttachments.js";
@@ -755,14 +754,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   async copySelectionWithContext(): Promise<string> {
-    const editor = vscode.window.activeTextEditor;
     const attachment = await selectionAttachment();
     const copiedText = await writeExactClipboardText(vscode.env.clipboard, attachment.text);
-    const reference = editor
-      && isCodeDocument(editor.document)
-      && vscode.workspace.getWorkspaceFolder(editor.document.uri)
-      ? clipboardFileReference(attachment.reference)
-      : undefined;
+    const reference = clipboardFileReference(attachment.reference);
     if (reference) {
       this.attachments.stageClipboard(attachment.text, reference);
     } else {
@@ -1052,20 +1046,20 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
               // A selection copied from a VS Code editor does not pass through
               // Dext's context-copy command. Recover its workspace reference
               // when the clipboard text still matches the active selection.
-              // When that selection is outside the workspace (or is prose),
+              // When that selection is outside the workspace,
               // deliberately leave the text untouched. In particular, do not
               // fall back to a stale staged reference from an earlier project
               // selection with identical contents.
               if (hasMatchingSelection) {
-                const current = activeCodeSelection();
+                const current = activeWorkspaceSelection();
                 if (current) {
                   const attachment = await selectionAttachment();
                   codeReference = clipboardFileReference(attachment.reference);
                 } else {
-                  // The matching selection is known to be non-project or
-                  // non-code. Drop any older staged context as well, so a
+                  // The matching selection is known to be non-project.
+                  // Drop any older staged context as well, so a
                   // second paste after focus changes cannot resurrect a ref
-                  // for this external/prose content.
+                  // for this external content.
                   this.attachments.clearClipboard();
                 }
               } else {

@@ -21,25 +21,6 @@ export interface SelectionTarget {
   range: Range;
 }
 
-/** Source and configuration documents make useful file references. Prose,
- * rendered output, and delimited data do not: pasting those should preserve
- * the exact text a user copied. */
-export function isCodeDocument(document: Pick<vscode.TextDocument, "languageId">): boolean {
-  return !new Set([
-    "plaintext",
-    "markdown",
-    "log",
-    "output",
-    "csv",
-    "tsv",
-    "scminput",
-    "git-commit",
-    "git-rebase",
-    "search-result",
-    "todo"
-  ]).has(document.languageId);
-}
-
 function rangeValue(range: vscode.Range): Range {
   return {
     start: { line: range.start.line, character: range.start.character },
@@ -50,7 +31,7 @@ function rangeValue(range: vscode.Range): Range {
 async function documentSnapshot(uri: vscode.Uri, range?: vscode.Range, expectedVersion?: number): Promise<TextSnapshot> {
   const document = await vscode.workspace.openTextDocument(uri);
   if (expectedVersion !== undefined && document.version !== expectedVersion) {
-    throw new Error("The selected code has changed. Select it again before adding it to Dext.");
+    throw new Error("The selected text has changed. Select it again before adding it to Dext.");
   }
   const content = range ? document.getText(range) : document.getText();
   const limit = attachmentByteLimit(vscode.workspace.getConfiguration("dext")
@@ -80,13 +61,12 @@ export async function selectionAttachment(target?: SelectionTarget): Promise<Att
   };
 }
 
-/** Return the selected code document only when it belongs to the workspace.
+/** Any workspace text document can supply a file reference, regardless of language.
  * External editors must remain ordinary clipboard text. */
-export function activeCodeSelection(): vscode.TextEditor | undefined {
+export function activeWorkspaceSelection(): vscode.TextEditor | undefined {
   const editor = vscode.window.activeTextEditor;
   return editor
     && !editor.selection.isEmpty
-    && isCodeDocument(editor.document)
     && vscode.workspace.getWorkspaceFolder(editor.document.uri)
     ? editor
     : undefined;

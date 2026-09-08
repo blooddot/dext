@@ -255,29 +255,30 @@ export class DextLanguageService {
 
   private visibleMethodEntries(source: string, customApisAreGlobal = true): VisibleMethod[] {
     const imports = parseWorkflowImports(source);
-    const entries: VisibleMethod[] = [];
-    for (const method of this.registry.list()) {
-      if (!this.customApiIds.has(method.id)) {
-        entries.push({ name: method.id, method });
-        continue;
+    const entries = new Map<string, RegisteredCallable>();
+    const methods = this.registry.list();
+    for (const method of methods) {
+      if (!this.customApiIds.has(method.id) || customApisAreGlobal) {
+        entries.set(method.id, method);
       }
-      if (customApisAreGlobal) {
-        entries.push({ name: method.id, method });
-        continue;
-      }
+    }
+    // Code accepts qualified custom API calls as well as explicit imports.
+    // Apply aliases in both editors, with imports taking precedence over globals.
+    for (const method of methods) {
+      if (!this.customApiIds.has(method.id)) continue;
       for (const [alias, imported] of imports) {
-        if (method.id === imported) entries.push({ name: alias, method });
-        else if (method.id.startsWith(`${imported}.`)) entries.push({ name: `${alias}${method.id.slice(imported.length)}`, method });
+        if (method.id === imported) entries.set(alias, method);
+        else if (method.id.startsWith(`${imported}.`)) entries.set(`${alias}${method.id.slice(imported.length)}`, method);
       }
     }
     if (!customApisAreGlobal) {
       try {
         for (const { definition } of functionDefinitions(source, true)) {
-          if (definition.id !== "main") entries.push({ name: definition.id, method: { ...definition, source: "project" } });
+          if (definition.id !== "main") entries.set(definition.id, { ...definition, source: "project" });
         }
       } catch { /* An incomplete declaration must not break editor assistance. */ }
     }
-    return entries;
+    return [...entries].map(([name, method]) => ({ name, method }));
   }
 
   private resolveMethod(source: string, name: string, customApisAreGlobal = true): RegisteredCallable | undefined {
@@ -320,15 +321,6 @@ export class DextLanguageService {
       replaceStart,
       replaceEnd
     });
-    if (/\bfrom\s+[A-Za-z_][A-Za-z0-9_.-]*\s+import\s+[A-Za-z_]*$/.test(before)) {
-      return this.apiImportItems(before, item);
-    }
-    if (/\bfrom\s+[A-Za-z_][A-Za-z0-9_.-]*$/.test(before)) {
-      return this.apiNamespaceItems(before, item);
-    }
-    if (/\bimport\s+[A-Za-z_][A-Za-z0-9_.-]*$/.test(before)) {
-      return this.apiNamespaceItems(before, item);
-    }
     if (/:\s*[A-Za-z_]*$/.test(before)) {
       const types = ["Context", "Result", "list", "Literal", "ChatResult", "AgentResult", "ApplyResult", "TerminalResult", "PrintResult", "McpRawResult", "TextResult", "CodeResult", "PlanResult", "PatchResult"];
       const typeFragment = /[A-Za-z_]*$/.exec(before)?.[0] ?? "";
@@ -408,6 +400,14 @@ export class DextLanguageService {
       detail: string,
       kind: CompletionItem["kind"]
     ): CompletionItem => ({ label, insertText, detail, kind, replaceStart, replaceEnd });
+
+    const line = before.slice(before.lastIndexOf("\n") + 1);
+    if (/^\s*from\s+[A-Za-z_][A-Za-z0-9_.-]*\s+import\s+[A-Za-z_]*$/.test(line)) {
+      return this.apiImportItems(line, item);
+    }
+    if (/^\s*(?:from|import)\s+[A-Za-z_][A-Za-z0-9_.-]*$/.test(line)) {
+      return this.apiNamespaceItems(line, item);
+    }
 
     const statusComparison = /([A-Za-z_][A-Za-z0-9_]*)\.status\s*(?:==|!=)\s*(?:["']([^"']*)$|([A-Za-z_][A-Za-z0-9_]*)$|)$/.exec(before);
     if (statusComparison) {

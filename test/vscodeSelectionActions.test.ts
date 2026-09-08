@@ -184,15 +184,20 @@ describe("selection Add to Dext overlay", () => {
     expect(state.execute).toHaveBeenLastCalledWith("editor.action.hideHover");
   });
 
-  it("does not offer actions for other documents, prose or files outside the workspace", () => {
+  it("does not offer actions for other documents or files outside the workspace", () => {
     expect(provider.provideHover(document(), state.editor!.selection.active)).toBeUndefined();
     state.workspace = false;
     expect(hover()).toBeUndefined();
-    state.workspace = true;
-    state.document = document("markdown");
-    state.editor = { ...state.editor!, document: state.document };
-    expect(hover()).toBeUndefined();
   });
+
+  it.each(["markdown", "plaintext", "log", "csv", "tsv", "git-commit", "custom-text"])(
+    "offers file range actions for workspace %s text", (languageId) => {
+      state.document = document(languageId);
+      state.editor = { ...state.editor!, document: state.document };
+      expect(target()).toEqual({ uri: state.document.uri.toString(), version: 3,
+        range: { start: { line: 2, character: 4 }, end: { line: 5, character: 8 } } });
+    }
+  );
 
   it.each(["editor", "window", "document", "offscreen", "command", "dispose"])(
     "cancels automatic display on %s changes", async (change) => {
@@ -233,6 +238,6 @@ describe("selection Add to Dext overlay", () => {
   it("rejects a stale action after the source document changes", async () => {
     const captured = target();
     state.document = document("typescript", 4);
-    await expect(selectionAttachment(captured)).rejects.toThrow("selected code has changed");
+    await expect(selectionAttachment(captured)).rejects.toThrow("selected text has changed");
   });
 });

@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
-import { isCodeDocument, type SelectionTarget } from "./vscodeAttachments.js";
+import { activeWorkspaceSelection, type SelectionTarget } from "./vscodeAttachments.js";
 
-/** Use the editor's overlay hover so selecting code never inserts a layout row.
+/** Use the editor's overlay hover so selecting text never inserts a layout row.
  * Capture the source in the link so clicking cannot change the selected target. */
 export class DextSelectionActions implements vscode.HoverProvider, vscode.Disposable {
   private readonly subscriptions: vscode.Disposable[];
@@ -28,10 +28,9 @@ export class DextSelectionActions implements vscode.HoverProvider, vscode.Dispos
   }
 
   private selectedEditor(): vscode.TextEditor | undefined {
-    const editor = vscode.window.activeTextEditor;
-    if (!editor || editor.selection.isEmpty
-      || !vscode.workspace.getConfiguration("dext", editor.document.uri).get<boolean>("selectionActions.enabled", true)
-      || !isCodeDocument(editor.document) || !vscode.workspace.getWorkspaceFolder(editor.document.uri)) return;
+    const editor = activeWorkspaceSelection();
+    if (!editor
+      || !vscode.workspace.getConfiguration("dext", editor.document.uri).get<boolean>("selectionActions.enabled", true)) return;
     return editor;
   }
 
@@ -50,7 +49,7 @@ export class DextSelectionActions implements vscode.HoverProvider, vscode.Dispos
     };
     const args = encodeURIComponent(JSON.stringify([target]));
     const content = new vscode.MarkdownString(
-      `[Add to Dext](command:dext.addSelectionToChat?${args} "Add the selected code to Dext Input as a file reference")`
+      `[Add to Dext](command:dext.addSelectionToChat?${args} "Add the selected text to Dext Input as a file reference")`
     );
     content.isTrusted = { enabledCommands: ["dext.addSelectionToChat"] };
     return new vscode.Hover(content, new vscode.Range(editor.selection.active, editor.selection.active));
