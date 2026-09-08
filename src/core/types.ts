@@ -488,7 +488,13 @@ export interface UiInteraction {
   input(options: { label: string; placeholder?: string; multiline: boolean }): Promise<UiInputResult>;
 }
 
-export type AgentStreamPhase = "status" | "reasoning" | "message" | "tool";
+export type AgentStreamPhase = "status" | "reasoning" | "message" | "tool" | "todo";
+
+export interface AgentTodoItem {
+  id: string;
+  text: string;
+  status: "pending" | "in_progress" | "completed";
+}
 
 export type AgentToolKind = "command" | "file" | "image" | "step";
 
@@ -506,8 +512,8 @@ export interface AgentStreamEvent {
   phase: AgentStreamPhase;
   text: string;
   title?: string;
-  /** Keeps AIOA work-log context and its command cards together in the UI. */
-  group?: "aioa-work-log";
+  /** Keeps agent work-log context and its command cards together in the UI. */
+  group?: "work-log";
   /** Identity of the group the agent itself put this step in. Agents that report
    * their own grouping get reproduced exactly; the rest fall back to arrival order. */
   groupId?: string;
@@ -519,6 +525,8 @@ export interface AgentStreamEvent {
   done?: boolean;
   eventType?: string;
   usage?: AgentTokenUsage;
+  /** Complete provider-reported snapshot; an empty list clears the panel. */
+  todos?: AgentTodoItem[];
 }
 
 export interface RuntimeResponse {

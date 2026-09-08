@@ -2,6 +2,7 @@ import { parser } from "@lezer/python";
 import { classHighlighter, highlightCode } from "@lezer/highlight";
 import MarkdownIt from "markdown-it";
 import { markdownCodeCopy } from "./markdownCopy.js";
+import { latestAgentTodos, renderAgentTodos } from "./agentTodoPresentation.js";
 import type { AgentStreamEvent, DextResult, InputExecutionResponse, RuntimeResponse, WorkflowStepResponse } from "./core/types.js";
 import type { EditorTokenTheme } from "./vscodeTheme.js";
 import type { DextHistoryRecord, DextHistorySession } from "./historyStore.js";
@@ -435,7 +436,7 @@ function process(events: readonly AgentStreamEvent[]): string {
     groupId = undefined;
   };
   for (const event of events) {
-    if (event.phase === "status") continue;
+    if (event.phase === "status" || event.phase === "todo") continue;
     if (event.phase === "tool") {
       if (event.solo) {
         flushTools();
@@ -474,7 +475,8 @@ const SESSION_ACTION_HINT = "Right-click for conversation actions";
 export function historyTurnTitle(record: DextHistoryRecord): string {
   if (record.title) return record.title;
   const planExecution = parsedResponse(record)?.executions.find((item) => item.result.kind === "chat" && item.result.executePlan);
-  const planPath = planExecution?.result.kind === "chat" ? planExecution.result.planPath : undefined;
+  const planPath = (record.executePlan ? record.planPath : undefined)
+    ?? (planExecution?.result.kind === "chat" ? planExecution.result.planPath : undefined);
   return planPath
     ? `Plan: ${planPath.split("/").pop() ?? planPath}`
     : inputReferenceDisplayText(normalizeInputReferenceSource(record.input)).split(/\r?\n/, 1)[0]!.slice(0, 140);
@@ -484,10 +486,11 @@ export function renderHistoryRecord(record: DextHistoryRecord, sessionId?: strin
   const input = normalizeInputReferenceSource(record.input);
   const response = parsedResponse(record);
   const planExecution = response?.executions.find((item) => item.result.kind === "chat" && item.result.executePlan);
-  const planPath = planExecution?.result.kind === "chat" ? planExecution.result.planPath : undefined;
+  const executePlan = record.executePlan || !!planExecution;
   const firstLine = historyTurnTitle(record);
   const duration = response?.executions.reduce((total, item) => total + item.durationMs, 0) ?? 0;
   const processHtml = process(record.process);
+  const todoHtml = renderAgentTodos(latestAgentTodos(record.process));
   const outputHtml = record.error
     ? `<pre class="error">${escapeHtml(record.error)}</pre>`
     : response ? output(response) : `<pre>${escapeHtml(record.output)}</pre>`;
@@ -504,8 +507,9 @@ export function renderHistoryRecord(record: DextHistoryRecord, sessionId?: strin
   const target = sessionId ? ` data-session-id="${escapeHtml(sessionId)}" data-turn-id="${escapeHtml(record.id)}"` : "";
   const modeTitle = record.mode ? `Submitted in ${turnModeLabel(record.mode)} mode` : "Mode was not recorded for this turn";
   const modeLabel = `<span class="turn-mode" data-mode="${escapeHtml(record.mode ?? "unknown")}" title="${escapeHtml(modeTitle)}">${turnModeLabel(record.mode)}</span>`;
-  const inputHtml = planPath ? "" : `<details class="history-disclosure"><summary>${chevron()}<span>Input</span>${modeLabel}${copyButton(input)}</summary><pre class="dext-source">${renderedInputSource(input)}</pre></details>`;
-  return `<details class="history-record"${target}${context}><summary${hint}>${chevron()}<span class="history-summary-input${record.title ? " named" : ""}">${escapeHtml(firstLine)}</span><span class="history-meta">${duration ? formatDuration(duration) : ""}</span><span class="history-meta history-record-time">${escapeHtml(dateLabel(record.createdAt))}</span>${sessionId ? historyTurnActions(sessionId, record.id) : ""}</summary><div class="history-record-body">${inputHtml}${processHtml ? `<details class="history-disclosure"><summary>${chevron()}<span>Process</span></summary><div class="disclosure-body">${processHtml}</div></details>` : ""}<details class="history-disclosure" open><summary>${chevron()}<span>Output</span>${copyButton(outputCopy)}</summary><div class="disclosure-body">${outputHtml}</div></details></div></details>`;
+  const inputHtml = executePlan ? "" : `<details class="history-disclosure"><summary>${chevron()}<span>Input</span>${modeLabel}${copyButton(input)}</summary><pre class="dext-source">${renderedInputSource(input)}</pre></details>`;
+  const planStatusHtml = executePlan ? `<span class="plan-status">${record.error ? "Failed" : "Completed"}</span>` : "";
+  return `<details class="history-record"${target}${context}><summary${hint}>${chevron()}<span class="history-summary-input${record.title ? " named" : ""}">${escapeHtml(firstLine)}</span>${planStatusHtml}<span class="history-meta">${duration ? formatDuration(duration) : ""}</span><span class="history-meta history-record-time">${escapeHtml(dateLabel(record.createdAt))}</span>${sessionId ? historyTurnActions(sessionId, record.id) : ""}</summary><div class="history-record-body">${inputHtml}${todoHtml}${processHtml ? `<details class="history-disclosure"><summary>${chevron()}<span>Process</span></summary><div class="disclosure-body">${processHtml}</div></details>` : ""}<details class="history-disclosure" open><summary>${chevron()}<span>Output</span>${copyButton(outputCopy)}</summary><div class="disclosure-body">${outputHtml}</div></details></div></details>`;
 }
 
 /** The name a conversation carries until the user renames it: the opening line

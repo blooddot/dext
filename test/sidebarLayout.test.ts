@@ -227,7 +227,7 @@ describe("sidebar panel layout", () => {
     const sidebar = await source("src/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
     const css = await source("media/styles.css");
-    expect(sidebar).toMatch(/private orderedConversations\(\): string\[\][\s\S]*?this\.preferences\.pinned\(\)\.filter\(\(id\) => this\.openConversations\.includes\(id\)\)/);
+    expect(sidebar).toMatch(/private orderedConversations\(\): string\[\][\s\S]*?this\.openConversations\.filter\(\(id\) => this\.preferences\.isPinned\(id\)\)/);
     // Reopen every tab the user left open; pins remain the fallback for older
     // saved layouts that did not record the open-tab list.
     expect(sidebar).toMatch(/hydrateSessions\(\): void \{[\s\S]*?const restored = layout\.openConversationIds\.filter\(\(id\) => this\.sessions\.has\(id\)\);[\s\S]*?const pinned = this\.preferences\.pinned\(\)\.filter\(\(id\) => this\.sessions\.has\(id\)\);[\s\S]*?new Set\(\[\.\.\.restored, \.\.\.pinned, this\.activeSession\.id\]\)/);
@@ -353,7 +353,7 @@ describe("sidebar panel layout", () => {
     expect(sidebar).toMatch(/case "renameTurn":[\s\S]*?sessionId: request.sessionId/);
     expect(main).toMatch(/turnActionButton\(TURN_RETRY_ACTION.icon, TURN_RETRY_ACTION.label, \(\) => \{[\s\S]*?type: "retryTurn", sessionId, turnId/);
     expect(main).toMatch(/turnActionButton\(TURN_FORK_ACTION.icon, TURN_FORK_ACTION.label, \(\) => \{[\s\S]*?type: "forkFromTurn", sessionId, turnId/);
-    expect(main).toContain("summary.append(chevron, title, time, actions);");
+    expect(main).toContain("summary.append(chevron, title, planExecutionStatus, time, actions);");
     const actionOrder = [...main.matchAll(/turnActionButton\((TURN_\w+_ACTION)\.icon/g)].map((match) => match[1]);
     expect(actionOrder).toEqual([
       "TURN_EDIT_ACTION", "TURN_RETRY_ACTION", "TURN_RENAME_ACTION", "TURN_FORK_ACTION", "TURN_COPY_ACTION", "TURN_DELETE_ACTION"
@@ -366,7 +366,7 @@ describe("sidebar panel layout", () => {
     expect(sidebar).toMatch(/case "forkFromTurn":[\s\S]*?dext\.history\.forkFromTurn[\s\S]*?sessionId: request.sessionId \?\? this\.activeSession\.id/);
     // Retry reproduces the recorded mode rather than whatever is selected now.
     expect(sidebar).toContain("await this.run(turn.mode ?? this.application.state().agentSelection.mode ?? \"agent\", turn.input);");
-    expect(sidebar).toContain("await this.history.addSuccess(source, events, response, sessionId, mode, turnId);");
+    expect(sidebar).toContain("await this.history.addSuccess(source, events, response, sessionId, mode, turnId, planExecution);");
     expect(css).toMatch(/\.output-turn > summary:hover \.output-turn-actions,[\s\S]*?opacity: 1;/);
     expect(history).toContain('const TURN_ACTION_HINT = "Right-click for turn actions";');
     expect(css).toMatch(/\.history-record > summary:hover \.history-turn-actions,[\s\S]*?opacity: 1;/);
@@ -404,7 +404,7 @@ describe("sidebar panel layout", () => {
   it("keeps live trace entries in event arrival order and folds consecutive commands together", async () => {
     const main = await source("src/webview/main.ts");
     const css = await source("media/styles.css");
-    expect(main).toContain("const agentEventItems = new Map<string, HTMLElement>();");
+    expect(main).toContain("let agentEventItems = new Map<string, HTMLElement>();");
     expect(main).toContain("let agentToolGroup: AgentToolGroup | undefined;");
     expect(main).toMatch(/function renderAgentEvent[\s\S]*?if \(event\.phase === "tool"\)[\s\S]*?createAgentToolCommand\(event, group\?\.body \?\? panel, group\)/);
     expect(main).toMatch(/function renderAgentEvent[\s\S]*?agentToolGroup = undefined;[\s\S]*?panel\.append\(item\);/);
@@ -417,7 +417,7 @@ describe("sidebar panel layout", () => {
 
   it("reproduces the grouping an agent reports and falls back to adjacency otherwise", async () => {
     const main = await source("src/webview/main.ts");
-    expect(main).toContain("const agentToolGroups = new Map<string, AgentToolGroup>();");
+    expect(main).toContain("let agentToolGroups = new Map<string, AgentToolGroup>();");
     // A named group is reused wherever it already sits, so a later step of the
     // same group is never split off into a new one.
     expect(main).toMatch(/if \(event\.groupId\) \{[\s\S]*?agentToolGroups\.get\(event\.groupId\)[\s\S]*?agentToolGroups\.set\(event\.groupId, group\);/);
@@ -495,9 +495,9 @@ describe("sidebar panel layout", () => {
     const css = await source("media/styles.css");
     expect(sidebar).not.toContain("Wait for the current Dext turn to finish before starting another conversation.");
     expect(sidebar).toMatch(/const session = this\.activeSession;[\s\S]*?this\.activeExecutions\.has\(sessionId\)[\s\S]*?this\.activeExecutions\.set\(sessionId/);
-    expect(sidebar).toMatch(/onAgentEvent:[\s\S]*?this\.postAgentEvent\(sessionId, event\)/);
+    expect(sidebar).toMatch(/onAgentEvent:[\s\S]*?this\.postAgentEvent\(sessionId, update\)/);
     expect(sidebar).toMatch(/private postAgentEvent\(sessionId: string, event: AgentStreamEvent\): void \{[\s\S]*?if \(this\.activeSession\.id !== sessionId\) return;[\s\S]*?this\.postWhenReady/);
-    expect(sidebar).toMatch(/this\.history\.addSuccess\(source, events, response, sessionId, mode, turnId\)/);
+    expect(sidebar).toMatch(/this\.history\.addSuccess\(source, events, response, sessionId, mode, turnId, planExecution\)/);
     expect(protocol).toContain('running: boolean;');
     expect(protocol).toContain('{ type: "agentEvent"; sessionId: string; event: AgentStreamEvent }');
     expect(main).toContain("const runningConversationIds = new Set<string>();");
@@ -561,7 +561,7 @@ describe("sidebar panel layout", () => {
     expect(main).toMatch(/elements\.resultBody\.dataset\.loading !== "true"/);
   });
 
-  it("does not hydrate a different historical turn while an agent is streaming", async () => {
+  it("copies turns through the host without changing the active stream", async () => {
     const main = await source("src/webview/main.ts");
     expect(main).toMatch(/turnActionButton\(TURN_COPY_ACTION.icon, TURN_COPY_ACTION.label, \(\) => \{\s*if \(sessionId\) vscode.postMessage\(\{ type: "copyTurn", sessionId, turnId \}\);\s*\}, true\)/);
   });

@@ -108,6 +108,11 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("outputSessionRefMiss"), sessionId: z.string().min(1), signature: z.string(), switchId: z.number().int().positive().optional(), hostInitiated: z.literal(true).optional() }),
   z.object({ type: z.literal("closeConversation"), sessionId: z.string().min(1) }),
   z.object({
+    type: z.literal("moveConversation"),
+    sessionId: z.string().min(1),
+    beforeSessionId: z.string().min(1).nullable()
+  }),
+  z.object({
     type: z.literal("pinConversation"),
     sessionId: z.string().min(1),
     pinned: z.boolean()

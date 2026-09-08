@@ -9,6 +9,7 @@ import { WorkflowRuntime } from "../src/core/workflowRuntime.js";
 import { parseMcpManifest } from "../src/core/mcpManifest.js";
 import { fileReferenceInsertion } from "../src/webview/inputInsertion.js";
 import { ExecutionCancelledError } from "../src/core/executionErrors.js";
+import type { AgentConversationRequest } from "../src/core/agentRunner.js";
 import type { AgentResult, PatchResult, TerminalResult } from "../src/core/types.js";
 
 const host: ContextHost = {
@@ -38,6 +39,21 @@ function setup() {
 }
 
 describe("Dext workflow runtime", () => {
+  it("keeps Harness Ask and plan generation read-only while permitting explicit execution", async () => {
+    const { runtime } = setup();
+    const requests: AgentConversationRequest[] = [];
+    runtime.setAgentProfiles([{ id: "deepseek-harness", provider: "deepseek-harness", command: "dsh", label: "Harness", models: [] }]);
+    runtime.setAgentSelection({ profileId: "deepseek-harness", permission: "full-access" });
+    runtime.setWorkspaceTrusted(true);
+    runtime.setAgentRunner({ run: async () => ({ kind: "chat", text: "typed" }), runConversation: async (request) => { requests.push(request); return "answer"; } });
+    await runtime.executeConversation("ask", "explain");
+    await runtime.executeConversation("plan", "plan it");
+    await runtime.executeConversation("plan", "build it", { executePlan: true });
+    await runtime.executeConversation("agent", "implement");
+    expect(requests.map((item) => item.permission)).toEqual(["read-only", "read-only", "full-access", "full-access"]);
+    expect(requests[1]?.input).toContain("dext-plan:start");
+    expect(requests[2]?.input).toBe("build it");
+  });
   it("accepts JSON object content for typed MCP results when structuredContent is omitted", async () => {
     const registry = new MethodRegistry();
     registry.registerMany(BUILTIN_METHODS, "builtin");

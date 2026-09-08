@@ -3,20 +3,17 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-export type AgentProvider = "codex" | "claude" | "aioa";
-export type AioaConnectionMode = "attach" | "launch";
+export type AgentProvider = "codex" | "claude" | "deepseek-harness";
 
 /** Profile IDs accepted by the `dext.agentCli` setting. Keep this separate
  * from the settings manifest so the runtime can validate hand-entered IDs. */
-export const SUPPORTED_AGENT_PROFILE_IDS: readonly AgentProvider[] = ["codex", "claude", "aioa"];
+export const SUPPORTED_AGENT_PROFILE_IDS: readonly AgentProvider[] = ["codex", "claude", "deepseek-harness"];
 
 export interface AgentProfile {
   id: string;
   label: string;
   provider: AgentProvider;
   command: string;
-  endpoint?: string;
-  connectionMode?: AioaConnectionMode;
   models: string[];
   modelOptions?: AgentModelOption[];
 }
@@ -128,42 +125,16 @@ const CLAUDE_MODELS: AgentModelOption[] = [
   { id: "opus", label: "Opus", reasoningEfforts: CLAUDE_REASONING_EFFORTS, speedTiers: [], serviceTiers: [] },
   { id: "sonnet", label: "Sonnet", reasoningEfforts: CLAUDE_REASONING_EFFORTS, speedTiers: [], serviceTiers: [] }
 ];
-const AIOA_MODELS: AgentModelOption[] = [
-  { id: "active", label: "Active AIOA model", reasoningEfforts: [], speedTiers: [], serviceTiers: [] }
-];
 const DEFAULT_PROFILES: readonly AgentProfile[] = [
   { id: "codex", label: "Codex CLI", provider: "codex", command: "codex", models: CODEX_MODELS.map((model) => model.id), modelOptions: CODEX_MODELS },
   { id: "claude", label: "Claude CLI", provider: "claude", command: "claude", models: CLAUDE_MODELS.map((model) => model.id), modelOptions: CLAUDE_MODELS },
-  {
-    id: "aioa",
-    label: "AIOA",
-    provider: "aioa",
-    command: process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, "Programs", "AIOA", "AIOA.exe") : "AIOA.exe",
-    endpoint: "http://127.0.0.1:9229",
-    connectionMode: "launch",
-    models: AIOA_MODELS.map((model) => model.id),
-    modelOptions: AIOA_MODELS
-  }
+  { id: "deepseek-harness", label: "DeepSeek Harness", provider: "deepseek-harness", command: "dsh", models: [] }
 ];
 
-type StoredAgentProfile = AgentProfile | (Omit<AgentProfile, "provider"> & { provider: "qunshu" });
-
-function normalizeStoredProfile(profile: StoredAgentProfile): AgentProfile {
-  const normalized = profile.provider === "qunshu"
-    ? { ...profile, id: "aioa", label: "AIOA", provider: "aioa" as const }
-    : profile;
-  if (normalized.provider !== "aioa") return normalized;
-  const endpoint = normalized.endpoint === "http://127.0.0.1:43182" ? "http://127.0.0.1:9229" : normalized.endpoint;
-  return {
-    ...normalized,
-    command: normalized.command || (process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, "Programs", "AIOA", "AIOA.exe") : "AIOA.exe"),
-    ...(endpoint ? { endpoint } : {}),
-    connectionMode: normalized.connectionMode === "attach" ? "attach" : "launch"
-  };
-}
+type StoredAgentProfile = AgentProfile;
 
 function mergeProfiles(stored: readonly StoredAgentProfile[] | undefined): AgentProfile[] {
-  const normalizedStored = stored?.map(normalizeStoredProfile);
+  const normalizedStored = stored?.filter((profile) => SUPPORTED_AGENT_PROFILE_IDS.includes(profile.provider) && profile.id === profile.provider);
   return DEFAULT_PROFILES.map((defaults) => {
     const saved = normalizedStored?.find((profile) => profile.id === defaults.id);
     const savedOptions = saved?.modelOptions ?? [];
@@ -175,8 +146,6 @@ function mergeProfiles(stored: readonly StoredAgentProfile[] | undefined): Agent
       ...defaults,
       ...saved,
       models,
-      ...(saved?.endpoint || defaults.endpoint ? { endpoint: saved?.endpoint ?? defaults.endpoint } : {}),
-      ...(saved?.connectionMode || defaults.connectionMode ? { connectionMode: saved?.connectionMode ?? defaults.connectionMode } : {}),
       ...(modelOptions.length ? { modelOptions } : {})
     };
   }).concat(
@@ -196,8 +165,8 @@ export class AgentProfileStore {
     const storedSelection = state?.get<AgentSelection>(SELECTION_KEY) ?? {};
     const { mode, ...globalSelection } = storedSelection;
     void mode;
-    this.selection = globalSelection.profileId === "qunshu"
-      ? { ...globalSelection, profileId: "aioa" }
+    this.selection = globalSelection.profileId && !this.profiles.some((profile) => profile.id === globalSelection.profileId)
+      ? { ...globalSelection, profileId: this.profiles[0]?.id ?? "codex", model: "", reasoningEffort: "", speed: "", serviceTier: "" }
       : globalSelection;
   }
 
@@ -208,7 +177,6 @@ export class AgentProfileStore {
       .map((profile) => ({
         ...profile,
         models: [...profile.models],
-        ...(profile.endpoint ? { endpoint: profile.endpoint } : {}),
         ...(profile.modelOptions ? { modelOptions: profile.modelOptions.map((model) => ({ ...model, reasoningEfforts: [...model.reasoningEfforts], speedTiers: [...model.speedTiers], serviceTiers: [...model.serviceTiers] })) } : {})
       }));
   }
@@ -235,6 +203,7 @@ export class AgentProfileStore {
   }
 
   update(profile: AgentProfile): void {
+    if (!SUPPORTED_AGENT_PROFILE_IDS.includes(profile.provider) || profile.id !== profile.provider) throw new Error(`Unsupported Agent backend: ${profile.id}`);
     const modelOptions = profile.modelOptions ? [...profile.modelOptions] : [];
     for (const id of profile.models) {
       if (!modelOptions.some((model) => model.id === id)) {

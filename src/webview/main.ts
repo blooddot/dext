@@ -39,6 +39,8 @@ import { outputExternalLink, outputLinkReference } from "./outputLink.js";
 import { dextHighlightClass, dextHighlightRanges } from "../dextHighlight.js";
 import { formatJsonOutput } from "./jsonOutput.js";
 import { observeComposerOverflow } from "./composerOverflow.js";
+import { enableConversationTabDrag } from "./conversationTabDrag.js";
+import { AgentTodoView } from "./agentTodoView.js";
 import { CLI_SPEEDS } from "../core/builtinCli.js";
 
 interface VsCodeApi {
@@ -227,8 +229,8 @@ let agentProgressState = "Thinking";
 let agentTokenUsage: AgentTokenUsage | undefined;
 let agentCommandIds = new Set<string>();
 let agentEditedUris = new Set<string>();
-const agentEventItems = new Map<string, HTMLElement>();
-const pendingAgentRenders = new Set<HTMLElement>();
+let agentEventItems = new Map<string, HTMLElement>();
+let pendingAgentRenders = new Set<HTMLElement>();
 let agentRenderFrame: number | undefined;
 let pendingAgentEventBatches: Array<{ sessionId: string; events: AgentStreamEvent[] }> = [];
 let agentEventBatchFrame: number | undefined;
@@ -247,17 +249,19 @@ interface AgentToolGroup {
   /** Set when the agent named the group itself, which wins over a counted label. */
   labelText?: string;
 }
-const agentToolItems = new Map<string, AgentToolCommand>();
-const agentToolGroups = new Map<string, AgentToolGroup>();
+let agentToolItems = new Map<string, AgentToolCommand>();
+let agentToolGroups = new Map<string, AgentToolGroup>();
 let agentToolGroup: AgentToolGroup | undefined;
 let agentFileChanges: { disclosure: HTMLDetailsElement; body: HTMLElement; label: HTMLElement } | undefined;
 const imageAttachments = new Map<string, HTMLElement>();
 interface OutputTurnElements {
   disclosure: HTMLDetailsElement;
   title: TurnTitle;
+  planExecutionStatus?: HTMLElement;
   input?: HTMLElement;
   process: HTMLElement;
   processDisclosure: HTMLDetailsElement;
+  todos: AgentTodoView;
   output: HTMLElement;
   outputDisclosure: HTMLDetailsElement;
   hydrated?: boolean;
@@ -504,12 +508,16 @@ function updateRunState(): void {
 
 function renderPlanToolbar(): void {
   const visible = inputMode === "plan";
+  editor.setPlaceholder(visible
+    ? activePlanPath ? "Describe changes to the selected plan…" : "Describe a new plan…"
+    : "");
   elements.planToolbar.hidden = !visible;
   if (!visible) return;
   elements.planTargetLabel.textContent = activePlanPath?.split("/").pop() ?? "New plan";
   elements.planTarget.title = activePlanPath ? `Open ${activePlanPath}` : "Select a plan";
   const labels = { new: "New plan", active: "Active", running: "Running", completed: "Completed", failed: "Failed" };
   elements.planStatus.textContent = labels[planStatus];
+  elements.planStatus.hidden = !activePlanPath;
   elements.planBuild.hidden = !activePlanPath;
   // A plan cannot be switched while its current turn is being edited or built.
   // Keep the chooser in sync with Build so the host never receives a
@@ -909,6 +917,7 @@ function updateMcpAssistantAction(): void {
 }
 
 function renderMcpAssistantEvent(event: AgentStreamEvent): void {
+  if (event.phase === "todo") return;
   if (!mcpAssistantProcessStartedAt) mcpAssistantProcessStartedAt = Date.now();
   mcpAssistantProcessCount += 1;
   const usage = event.usage;
@@ -1502,6 +1511,10 @@ elements.conversationTabs.addEventListener("dblclick", (event) => {
   vscode.postMessage({ type: "newConversation" });
 });
 
+const conversationTabDrag = enableConversationTabDrag(elements.conversationTabs, (sessionId, beforeSessionId) => {
+  vscode.postMessage({ type: "moveConversation", sessionId, beforeSessionId });
+});
+
 function renderConversations(sessions: readonly ConversationSummary[], activeId: string): void {
   const activeChanged = activeConversationId !== activeId;
   if (activeChanged) persistComposerDraft();
@@ -1609,7 +1622,8 @@ function renderConversations(sessions: readonly ConversationSummary[], activeId:
     if (active) activeTab = tab;
     elements.conversationTabs.append(tab);
   }
-  activeTab?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  conversationTabDrag.refresh();
+  if (!conversationTabDrag.tracking()) activeTab?.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 
 const composerMenus = [
@@ -2193,7 +2207,11 @@ function createOutputTurn(
   );
   // Keep the turn title as the primary row label, matching the history view;
   // metadata belongs at the trailing edge of the row rather than before it.
-  summary.append(chevron, title, time, actions);
+  const planExecutionStatus = document.createElement("span");
+  planExecutionStatus.className = "plan-status";
+  planExecutionStatus.hidden = !options.executePlan;
+  planExecutionStatus.textContent = "Running";
+  summary.append(chevron, title, planExecutionStatus, time, actions);
   let inputBody: HTMLElement | undefined;
   if (!options.executePlan) {
     // Keep the shared disclosure construction recognizable; lazy history
@@ -2217,16 +2235,19 @@ function createOutputTurn(
     body.append(input.disclosure);
   }
   const process = outputTurnSection("Process", !lazy);
+  const todos = new AgentTodoView();
   const output = outputTurnSection("Output", !lazy);
-  body.append(process.disclosure, output.disclosure);
+  body.append(todos.element, process.disclosure, output.disclosure);
   disclosure.append(summary, body);
   elements.result.append(disclosure);
   const turn: OutputTurnElements = {
     disclosure,
     title: turnTitle,
+    planExecutionStatus,
     ...(inputBody ? { input: inputBody } : {}),
     process: process.body,
     processDisclosure: process.disclosure,
+    todos,
     output: output.body,
     outputDisclosure: output.disclosure,
     hydrated: !lazy
@@ -2788,6 +2809,7 @@ function startAgentProgress(startedAt = Date.now()): void {
 }
 
 function finishAgentProgress(): void {
+  activeTurn?.todos.setRunning(false);
   if (agentRunTimer) clearInterval(agentRunTimer);
   agentRunTimer = undefined;
   updateAgentProgress("Worked");
@@ -2795,7 +2817,7 @@ function finishAgentProgress(): void {
 
 function agentEventKind(event: AgentStreamEvent): "reasoning" | "work" | "tool" {
   if (event.phase === "tool") return "tool";
-  return event.group === "aioa-work-log" ? "work" : "reasoning";
+  return event.group === "work-log" ? "work" : "reasoning";
 }
 
 function createAgentEventItem(event: AgentStreamEvent): HTMLElement {
@@ -2966,6 +2988,10 @@ function flushAgentMessageRenders(): void {
 }
 
 function renderAgentEvent(event: AgentStreamEvent): void {
+  if (event.phase === "todo") {
+    if (event.todos) activeTurn?.todos.update(event.todos);
+    return;
+  }
   if (event.usage) agentTokenUsage = event.usage;
   if (event.phase === "status") {
     updateAgentProgress(event.text || agentProgressState);
@@ -3105,6 +3131,40 @@ function queueAgentEvents(sessionId: string, events: readonly AgentStreamEvent[]
   }
 }
 
+/** Replay a stored turn synchronously without consuming the live turn's queues,
+ * reusing its event IDs, or stopping its progress timer. Scheduled callbacks
+ * resume with the original state after this scope returns. */
+function withIsolatedAgentTrace(turn: OutputTurnElements, render: () => void): void {
+  const previous = {
+    activeTurn, agentStream, agentRunStartedAt, agentRunTimer,
+    agentProgress, agentProgressState, agentTokenUsage, agentCommandIds, agentEditedUris,
+    agentEventItems, agentToolItems, agentToolGroups, agentToolGroup, agentFileChanges,
+    pendingAgentRenders, agentRenderFrame, pendingAgentEventBatches, agentEventBatchFrame
+  };
+  agentEventItems = new Map();
+  agentToolItems = new Map();
+  agentToolGroups = new Map();
+  pendingAgentRenders = new Set();
+  agentRenderFrame = undefined;
+  agentEventBatchFrame = undefined;
+  agentRunTimer = undefined;
+  resetAgentTrace();
+  activeTurn = turn;
+  try {
+    render();
+    // Historical prose must be painted before restoring the live render queue.
+    flushAgentMessageRenders();
+  } finally {
+    resetAgentTrace();
+    ({
+      activeTurn, agentStream, agentRunStartedAt, agentRunTimer,
+      agentProgress, agentProgressState, agentTokenUsage, agentCommandIds, agentEditedUris,
+      agentEventItems, agentToolItems, agentToolGroups, agentToolGroup, agentFileChanges,
+      pendingAgentRenders, agentRenderFrame, pendingAgentEventBatches, agentEventBatchFrame
+    } = previous);
+  }
+}
+
 function storedResponse(record: DextHistoryRecord): InputExecutionResponse | undefined {
   if (record.response) return record.response;
   try {
@@ -3121,7 +3181,11 @@ function storedResponse(record: DextHistoryRecord): InputExecutionResponse | und
  * tab-switch critical path. */
 function hydrateStoredTurn(record: DextHistoryRecord, turn: OutputTurnElements): void {
   if (turn.hydrated) return;
+  withIsolatedAgentTrace(turn, () => renderStoredTurn(record, turn));
   turn.hydrated = true;
+}
+
+function renderStoredTurn(record: DextHistoryRecord, turn: OutputTurnElements): void {
   const response = storedResponse(record);
 
   // Plan turns use a more useful title once their response has been parsed.
@@ -3129,12 +3193,19 @@ function hydrateStoredTurn(record: DextHistoryRecord, turn: OutputTurnElements):
   // summary only after deferred hydration completes.
   const planExecution = response?.executions.find((item) => item.result.kind === "chat" && item.result.executePlan);
   const planResult = planExecution?.result.kind === "chat" ? planExecution.result : undefined;
-  if (planResult?.executePlan && planResult.planPath) {
-    turn.title.setPlanPath(planResult.planPath);
+  if (record.executePlan || planResult?.executePlan) {
+    if (turn.planExecutionStatus) {
+      turn.planExecutionStatus.hidden = false;
+      turn.planExecutionStatus.textContent = record.error ? "Failed" : "Completed";
+    }
+    const planPath = record.planPath ?? planResult?.planPath;
+    if (planPath) turn.title.setPlanPath(planPath);
+    // Older records have no execution metadata until their response is parsed.
+    // Remove the generic shell before rendering the internal build prompt.
+    turn.input?.closest(".output-turn-section")?.remove();
+    delete turn.input;
   }
 
-  activeTurn = turn;
-  resetAgentTrace();
   agentRunStartedAt = Date.now();
   if (turn.input && turn.input.childElementCount === 0) {
     const inputCopy = document.createElement("div");
@@ -3144,6 +3215,7 @@ function hydrateStoredTurn(record: DextHistoryRecord, turn: OutputTurnElements):
   }
   for (const event of record.process) renderAgentEvent(event);
   if (agentStream) finishAgentProgress();
+  turn.todos.setRunning(false);
   turn.processDisclosure.open = false;
   if (record.error) renderOutputError(record.error);
   else if (response) renderResult(response);
@@ -3159,12 +3231,7 @@ function hydrateOutputTurnOnOpen(event: Event): void {
   if (!turnId) return;
   const turn = outputTurns.get(turnId);
   if (!turn?.hydrate) return;
-  // Keep a live turn's streaming state intact while it is running. The
-  // historical row can be hydrated after the run completes.
-  if (executing && activeTurn && activeTurn !== turn) return;
-  const previousActiveTurn = activeTurn;
   turn.hydrate();
-  if (previousActiveTurn && previousActiveTurn !== turn) activeTurn = previousActiveTurn;
 }
 
 function renderOutputSession(session: DextHistorySession): void {
@@ -3209,8 +3276,10 @@ function renderOutputSession(session: DextHistorySession): void {
     return;
   }
 
-  if (agentRunTimer) clearInterval(agentRunTimer);
-  agentRunTimer = undefined;
+  if (!liveTurn) {
+    if (agentRunTimer) clearInterval(agentRunTimer);
+    agentRunTimer = undefined;
+  }
   clearInputError();
   elements.result.replaceChildren();
   outputTurns.clear();
@@ -3227,8 +3296,11 @@ function renderOutputSession(session: DextHistorySession): void {
       open: latest,
       sessionId: session.id,
       mode: record.mode,
+      ...(record.executePlan ? { executePlan: true, ...(record.planPath ? { planPath: record.planPath } : {}) } : {}),
       ...(record.title ? { title: record.title } : {})
     });
+    // Closed history rows need their final status before deferred hydration.
+    if (turn.planExecutionStatus) turn.planExecutionStatus.textContent = record.error ? "Failed" : "Completed";
     turn.hydrate = () => hydrateStoredTurn(record, turn);
     if (latest) latestTurn = turn;
   }
@@ -3251,16 +3323,8 @@ function renderOutputSession(session: DextHistorySession): void {
       if (renderGeneration !== conversationRenderGeneration
         || activeConversationId !== session.id
         || renderedConversationId !== session.id) return;
-      // A running turn may have been replayed while the historical snapshot
-      // was waiting for its deferred hydration. Leave the live row untouched;
-      // its stream renderer owns activeTurn and will keep appending there.
-      if (executing) {
-        finishConversationLoading();
-        syncResultToggle();
-        syncJumpToLatest();
-        scrollResultToBottom();
-        return;
-      }
+      // The live row may have arrived during the deferred paint. Historical
+      // hydration has its own trace state, so both can remain visible.
       latestTurn?.hydrate?.();
       finishConversationLoading();
       syncResultToggle();
@@ -3710,6 +3774,7 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   }
   if (message.type === "execution" && message.sessionId === activeConversationId) {
     selectOutputTurn(message.turnId);
+    if (activeTurn?.planExecutionStatus && !activeTurn.planExecutionStatus.hidden) activeTurn.planExecutionStatus.textContent = "Completed";
     renderResult(message.response, message.reviewPatch ? message.turnId : undefined);
   }
   if (message.type === "patchResolved" && message.sessionId === activeConversationId) {
@@ -3720,6 +3785,7 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   }
   if (message.type === "executionFailed" && message.sessionId === activeConversationId) {
     selectOutputTurn(message.turnId);
+    if (activeTurn?.planExecutionStatus && !activeTurn.planExecutionStatus.hidden) activeTurn.planExecutionStatus.textContent = "Failed";
     renderOutputError(message.message);
   }
   if (message.type === "agentEvent" && message.sessionId === activeConversationId) {
@@ -3782,6 +3848,7 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
         resetAgentTrace();
         startAgentProgress(message.startedAt);
       }
+      activeTurn?.todos.setRunning(true);
       elements.resultSection.classList.remove("hidden");
       if (!fullscreenPanel || fullscreenPanel === "result") {
         setSectionOpen(elements.resultHeading, elements.resultBody, true);

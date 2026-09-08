@@ -36,6 +36,7 @@ import {
   hoverTooltip,
   lineNumbers,
   keymap,
+  placeholder,
   showTooltip,
   type Tooltip,
   type ViewUpdate
@@ -190,6 +191,8 @@ export class DextCodeEditor {
   private readonly language = new Compartment();
   private readonly lineWrapping = new Compartment();
   private readonly submitKeymap = new Compartment();
+  private readonly placeholderConfig = new Compartment();
+  private placeholderText = "";
   private diagnosticsTimer: ReturnType<typeof setTimeout> | undefined;
   private signatureTimer: ReturnType<typeof setTimeout> | undefined;
   private diagnostics: Diagnostic[] = [];
@@ -202,6 +205,7 @@ export class DextCodeEditor {
       this.language.of(python()),
       this.lineWrapping.of([]),
       this.theme.of(themeExtension()),
+      this.placeholderConfig.of([]),
       // Ahead of the main keymap so that a chat-mode Enter is claimed before
       // the default binding turns it into a newline.
       this.submitKeymap.of(this.submitKeymapExtension()),
@@ -335,6 +339,12 @@ export class DextCodeEditor {
     if (this.submitOnEnter === enabled) return;
     this.submitOnEnter = enabled;
     this.refreshSubmitKeymap();
+  }
+
+  setPlaceholder(text: string): void {
+    if (this.placeholderText === text) return;
+    this.placeholderText = text;
+    this.view.dispatch({ effects: this.placeholderConfig.reconfigure(text ? placeholder(text) : []) });
   }
 
   focus(): void {

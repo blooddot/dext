@@ -26,6 +26,9 @@ export interface DextHistoryRecord {
   /** The mode the turn ran in, so that retrying it reproduces the same run.
    * Absent on turns recorded before Dext started tracking it. */
   mode?: "agent" | "ask" | "plan" | "code";
+  /** Preserve Plan execution presentation even when a run fails without a response. */
+  executePlan?: boolean;
+  planPath?: string;
   response?: InputExecutionResponse;
   error?: string;
 }
@@ -234,7 +237,8 @@ export class DextHistoryStore {
     response: InputExecutionResponse,
     sessionId?: string,
     mode?: DextHistoryRecord["mode"],
-    turnId?: string
+    turnId?: string,
+    planExecution?: Pick<DextHistoryRecord, "executePlan" | "planPath">
   ): Promise<DextHistoryRecord> {
     const { maxOutputLength } = this.limits();
     return this.add({
@@ -242,6 +246,7 @@ export class DextHistoryStore {
       process: process.map((event) => ({ ...event, text: bounded(event.text, maxOutputLength) })),
       output: serializeResponse(response, maxOutputLength),
       ...(mode ? { mode } : {}),
+      ...planExecution,
       response
     }, sessionId, turnId);
   }
@@ -252,7 +257,8 @@ export class DextHistoryStore {
     error: unknown,
     sessionId?: string,
     mode?: DextHistoryRecord["mode"],
-    turnId?: string
+    turnId?: string,
+    planExecution?: Pick<DextHistoryRecord, "executePlan" | "planPath">
   ): Promise<DextHistoryRecord> {
     const message = error instanceof Error ? error.message : String(error);
     const { maxOutputLength } = this.limits();
@@ -261,6 +267,7 @@ export class DextHistoryStore {
       process: process.map((event) => ({ ...event, text: bounded(event.text, maxOutputLength) })),
       output: "",
       ...(mode ? { mode } : {}),
+      ...planExecution,
       error: bounded(message, maxOutputLength)
     }, sessionId, turnId);
   }

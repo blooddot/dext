@@ -6,16 +6,32 @@ Dext 是 Visual Studio Code 中的 AI 对话与类型化工作流编辑器。你
 
 工作流使用 Python 的一小部分语法，由 Dext 自行解析和校验，**不需要 Python 解释器**。
 
-没有配置 Agent 时，Dext 可以校验工作流结构、解析不可变的代码引用，并生成类型化的确定性结果预览。选择 Codex 或 Claude CLI 配置后，Dext 会把相同的类型化 API 契约交给对应 CLI 执行，并在展示前校验其结构化输出。
+没有配置 Agent 时，Dext 可以校验工作流结构、解析不可变的代码引用，并生成类型化的确定性结果预览。选择 Codex CLI、Claude CLI 或 DeepSeek Harness 配置后，Dext 会把相同的类型化 API 契约交给对应 CLI 执行，并在展示前校验其结构化输出。
 
 ## 功能
 
 - **四种输入模式**：Agent 执行任务，Ask 只读问答，Plan 管理实施计划，Code 编写类型化工作流。
-- **Agent 选择**：支持 Codex CLI 和 Claude CLI，并提供各后端支持的模型选项。
+- **Agent 选择**：支持 Codex CLI、Claude CLI 和 DeepSeek Harness，并提供各后端支持的模型选项。
 - **类型化编辑**：API 补全、参数提示、悬停说明、诊断信息和结构化结果。
 - **可复用资源**：项目级和全局 API、Skills、规则与 MCP 工具。
 - **工作区上下文与历史**：文件和选区引用、附件、对话标签页、收藏，以及从历史记录生成工作流。
 - **可选行内补全**：为源代码文件单独配置补全模型。
+
+## DeepSeek Harness
+
+运行 `npm install -g @deepseek-ai/dsh@0.1.2-rc.1` 安装已验证版本，在 Harness 中配置模型凭据，再在 Dext 选择 **DeepSeek Harness**。**Dext: Configure Agent** 可配置可执行文件路径并通过 ACP 发现模型和推理选项；首次选择也会发现模型。模型留空时使用 Harness 默认值。安装和凭据由 Harness 管理。
+
+发布包 `0.1.2-rc.1` 使用 ACP SDK `1.4.0`，Dext 固定使用同一 SDK 版本。已核对实际发布包的握手、创建/恢复/关闭会话、模型配置、执行及取消接口；入口为[官方 CLI](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/cli/README.md) 的 `dsh --profile acp`。新安装默认显示三个后端，可通过 `dext.agentCli` 限定列表。
+
+Code 模式支持 `ask(input="解释项目", cli="deepseek-harness")`；可选模型对象包含 `model`（ACP 返回的不透明选项值）和 `reasoning`。界面展示可读模型名称，不展示速度或服务等级。类型化调用要求最终消息为 JSON 对象，由 Dext 校验；格式错误会报告失败，不自动重跑可能已经修改文件的任务。
+
+每个活动对话使用独立 ACP 进程并复用会话，原生会话 ID 连同工作区、权限和启动配置绑定保存在通用历史字段中。关闭后释放进程，持久化会话可恢复。切换权限或分叉时创建新会话并注入 Dext 已记录的上下文；ACP 不提供原生分叉，内部工具状态不会复制。恢复失败会明确报错。
+
+Ask、预览调用和计划生成使用只读权限；Agent 和明确的计划执行使用所选写入范围。Dext 最后应用的配置将全部权限预设固定在该范围内，用户保存的默认预设不会放宽范围。受限模式拒绝升级请求，因为 ACP 未提供可验证的升级范围；完全访问模式下已知工具的请求使用 Dext 确认。[Windows ACL 约束是部分约束](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/sandbox/sandbox-local/README.md)，存在 Everyone 可写对象、硬链接等边界，不能视为严格隔离。工作区写入模式还允许 Harness 使用平台临时目录。
+
+受信任工作区的 `dext.agentCliArgs.deepseek-harness` 接受重复的 `--patch <path>` 参数对；Dext 管理 ACP profile 并最后附加权限配置。插件属于受信任代码，自定义配置必须保留官方沙箱实现，stdout 必须仅输出 JSON-RPC。配置更改需建立新连接。单轮超时使用 `dext.agent.timeoutMs`。过程按已提交消息和工具事件更新，不保证逐 token 展示，也不把上下文占用当作计费 token 消耗。
+
+AIOA/CDP 接入已移除，不提供旧 AIOA 对话兼容或迁移。
 
 ## 安装
 

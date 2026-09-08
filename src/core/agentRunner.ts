@@ -9,6 +9,8 @@ import { ExecutionCancelledError } from "./executionErrors.js";
 import type { AgentPermission, AgentProfile } from "../agentProfiles.js";
 import type { AxMethodContract } from "./axAdapter.js";
 import type { AgentStreamEvent, AgentStreamPhase, AgentTokenUsage, ExecutionMetadata, RegisteredCallable, ResolvedInvocation } from "./types.js";
+import { agentTodoEvent, ClaudeTodoTracker, isClaudeTodoTool, normalizeAgentTodos } from "./agentTodoTracking.js";
+import { cliCompletion } from "./cliCompletion.js";
 
 export interface AgentExecutionRequest {
   profile: AgentProfile;
@@ -55,6 +57,7 @@ export interface AgentRunner {
   run(request: AgentExecutionRequest): Promise<unknown>;
   runConversation?(request: AgentConversationRequest): Promise<string>;
   endSession?(sessionId: string): void;
+  dispose?(): void | Promise<void>;
 }
 
 interface ProcessResult {
@@ -292,7 +295,7 @@ export function extractConversationText(output: string, provider: AgentProfile["
   return typeof result === "string" ? result : JSON.stringify(result, null, 2);
 }
 
-function bootstrappedConversationInput(context: string | undefined, input: string): string {
+export function bootstrappedConversationInput(context: string | undefined, input: string): string {
   const prior = context?.trim();
   return prior ? `${prior}\n\nNew user message:\n${input}` : input;
 }
@@ -373,6 +376,10 @@ export function parseCodexStreamLine(
     : undefined;
   const eventItemId = typeof event.item_id === "string" ? event.item_id : undefined;
   const itemType = typeof item?.type === "string" ? item.type : undefined;
+  if (itemType === "todo_list") {
+    const todos = normalizeAgentTodos(item?.items, "codex");
+    return todos ? agentTodoEvent(todos) : undefined;
+  }
   const text = eventText(event, item);
   const eventId = typeof event.id === "string"
     ? event.id
@@ -476,6 +483,7 @@ export function parseClaudeStreamLine(line: string): AgentStreamEvent | undefine
       if (block?.type !== "tool_use") return undefined;
       const id = typeof block.id === "string" ? block.id : undefined;
       const title = typeof block.name === "string" ? block.name : "Tool";
+      if (isClaudeTodoTool(title)) return undefined;
       const text = claudeToolText(block) || title;
       return { ...(id ? { id } : {}), phase: "tool", title, text, eventType };
     }
@@ -505,6 +513,24 @@ export function parseClaudeStreamLine(line: string): AgentStreamEvent | undefine
     return { ...(id ? { id } : {}), phase: "tool", text, replace: true, done: true, eventType };
   }
   return undefined;
+}
+
+/** A Claude message can carry a task call alongside ordinary tool or text
+ * blocks. Emit both the snapshot and the remaining process content. */
+export function parseClaudeStreamEvents(line: string, todos: ClaudeTodoTracker): AgentStreamEvent[] {
+  const event = record(extractJson(line));
+  if (!event) return [];
+  const message = record(event.message);
+  const content = Array.isArray(message?.content) && !event.parent_tool_use_id
+    ? message.content.filter((raw) => {
+      const block = record(raw);
+      return !(block?.type === "tool_use" && isClaudeTodoTool(block.name))
+        && !(block?.type === "tool_result" && todos.ownsCall(block.tool_use_id));
+    }) : undefined;
+  const todo = todos.consume(event);
+  const process = content?.length === 0 ? undefined
+    : parseClaudeStreamLine(content ? JSON.stringify({ ...event, message: { ...message, content } }) : line);
+  return [...(todo ? [todo] : []), ...(process ? [process] : [])];
 }
 
 function codexFailure(output: string): string | undefined {
@@ -648,7 +674,8 @@ export function runProcess(
   cwd: string,
   signal?: AbortSignal,
   onStdout?: (chunk: string) => void,
-  env?: NodeJS.ProcessEnv
+  env?: NodeJS.ProcessEnv,
+  completion?: { consume: (chunk: string) => number | undefined; graceMs?: number }
 ): Promise<ProcessResult> {
   return new Promise((resolve, reject) => {
     const shell = process.platform === "win32" && /\.(?:cmd|bat)$/i.test(command);
@@ -657,14 +684,30 @@ export function runProcess(
     let stderr = "";
     let settled = false;
     let aborting = false;
+    let completionCode: number | undefined;
+    let completionTimer: ReturnType<typeof setTimeout> | undefined;
     const finish = (callback: () => void): void => {
       if (settled) return;
       settled = true;
+      if (completionTimer) clearTimeout(completionTimer);
       signal?.removeEventListener("abort", abort);
       callback();
     };
+    const finishCompleted = (): void => {
+      if (settled || aborting || completionCode === undefined) return;
+      const code = completionCode;
+      // The provider has ended the turn and emitted its final answer. Allow
+      // normal shutdown first, then release the completed CLI and its pipes.
+      // Do not kill descendants: a task may intentionally start a service.
+      finish(() => resolve({ stdout, stderr, code }));
+      child.kill("SIGKILL");
+      child.stdin.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+    };
     const abort = (): void => {
       if (aborting || settled) return;
+      if (completionCode !== undefined) { finishCompleted(); return; }
       aborting = true;
       const terminate = (): Promise<void> => {
         if (process.platform !== "win32" || child.pid === undefined) {
@@ -696,8 +739,13 @@ export function runProcess(
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
+      if (settled || aborting) return;
       stdout += chunk;
       onStdout?.(chunk);
+      if (completionCode === undefined) {
+        completionCode = completion?.consume(chunk);
+        if (completionCode !== undefined) completionTimer = setTimeout(finishCompleted, completion?.graceMs ?? 1000);
+      }
     });
     child.stderr.on("data", (chunk: string) => { stderr += chunk; });
     child.on("error", (error) => {
@@ -734,6 +782,7 @@ export class CliAgentRunner implements AgentRunner {
     command: string,
     request: Pick<AgentExecutionRequest | AgentConversationRequest, "profile" | "cwd" | "signal">
   ): Promise<NodeJS.ProcessEnv | undefined> {
+    if (request.profile.provider === "claude") return { ...process.env, CLAUDE_CODE_ENABLE_TODO_TOOLS: "1" };
     if (request.profile.provider !== "codex") return undefined;
     if (this.codexUsesChatGpt === undefined) {
       try {
@@ -748,8 +797,8 @@ export class CliAgentRunner implements AgentRunner {
   }
 
   async run(request: AgentExecutionRequest): Promise<unknown> {
-    if (request.profile.provider === "aioa") {
-      throw new Error("AIOA requests must use the CDP runner.");
+    if (request.profile.provider !== "codex" && request.profile.provider !== "claude") {
+      throw new Error("This provider requires its own Agent runner.");
     }
     if (!request.profile.command) throw new Error(`Agent '${request.profile.label}' has no CLI command configured.`);
     if (request.signal?.aborted) throw new ExecutionCancelledError();
@@ -795,9 +844,9 @@ export class CliAgentRunner implements AgentRunner {
         const event = parseCodexStreamLine(line, streamPhases);
         if (event) request.onEvent?.(event);
       };
+      const claudeTodos = new ClaudeTodoTracker();
       const emitClaudeLine = (line: string): void => {
-        const event = parseClaudeStreamLine(line);
-        if (event) request.onEvent?.(event);
+        for (const event of parseClaudeStreamEvents(line, claudeTodos)) request.onEvent?.(event);
       };
       const onStdout = request.profile.provider === "codex" || request.profile.provider === "claude"
         ? (chunk: string): void => {
@@ -815,7 +864,8 @@ export class CliAgentRunner implements AgentRunner {
         : `${prompt}\n\nDext JSON payload:\n${input}`;
       let result: ProcessResult;
       try {
-        result = await this.processRunner(command, args, stdin, request.cwd, controller.signal, onStdout, processEnv);
+        result = await this.processRunner(command, args, stdin, request.cwd, controller.signal, onStdout, processEnv,
+          { consume: cliCompletion(request.profile.provider) });
       } finally {
         clearTimeout(timer);
         request.signal?.removeEventListener("abort", cancel);
@@ -838,8 +888,8 @@ export class CliAgentRunner implements AgentRunner {
   }
 
   async runConversation(request: AgentConversationRequest): Promise<string> {
-    if (request.profile.provider === "aioa") {
-      throw new Error("AIOA requests must use the CDP runner.");
+    if (request.profile.provider !== "codex" && request.profile.provider !== "claude") {
+      throw new Error("This provider requires its own Agent runner.");
     }
     if (!request.profile.command) throw new Error(`Agent '${request.profile.label}' has no CLI command configured.`);
     if (request.signal?.aborted) throw new ExecutionCancelledError();
@@ -882,6 +932,7 @@ export class CliAgentRunner implements AgentRunner {
     if (request.signal?.aborted) cancel();
     let eventBuffer = "";
     const streamPhases = new Map<string, AgentStreamPhase>();
+    const claudeTodos = new ClaudeTodoTracker();
     const onStdout = (chunk: string): void => {
       eventBuffer += chunk;
       const lines = eventBuffer.split(/\r?\n/);
@@ -894,17 +945,20 @@ export class CliAgentRunner implements AgentRunner {
           providerSessions.set(conversationKey, providerSessionId);
           request.metadata.onAgentSessionId?.(request.profile.provider, providerSessionId);
         }
-        const event = request.profile.provider === "codex"
-          ? parseCodexStreamLine(line, streamPhases)
-          : parseClaudeStreamLine(line);
-        if (event) request.onEvent?.(event);
+        if (request.profile.provider === "codex") {
+          const event = parseCodexStreamLine(line, streamPhases);
+          if (event) request.onEvent?.(event);
+        } else {
+          for (const event of parseClaudeStreamEvents(line, claudeTodos)) request.onEvent?.(event);
+        }
       }
     };
     try {
       const input = (resumeId || forkFromId)
         ? request.input
         : bootstrappedConversationInput(request.metadata.conversationContext, request.input);
-      const result = await this.processRunner(command, args, input, request.cwd, controller.signal, onStdout, processEnv);
+      const result = await this.processRunner(command, args, input, request.cwd, controller.signal, onStdout, processEnv,
+        { consume: cliCompletion(request.profile.provider) });
       if (eventBuffer) {
         const providerSessionId = request.profile.provider === "codex"
           ? extractCodexThreadId(eventBuffer)
@@ -913,10 +967,12 @@ export class CliAgentRunner implements AgentRunner {
           providerSessions.set(conversationKey, providerSessionId);
           request.metadata.onAgentSessionId?.(request.profile.provider, providerSessionId);
         }
-        const event = request.profile.provider === "codex"
-          ? parseCodexStreamLine(eventBuffer, streamPhases)
-          : parseClaudeStreamLine(eventBuffer);
-        if (event) request.onEvent?.(event);
+        if (request.profile.provider === "codex") {
+          const event = parseCodexStreamLine(eventBuffer, streamPhases);
+          if (event) request.onEvent?.(event);
+        } else {
+          for (const event of parseClaudeStreamEvents(eventBuffer, claudeTodos)) request.onEvent?.(event);
+        }
       }
       if (result.code !== 0) {
         const details = request.profile.provider === "codex"

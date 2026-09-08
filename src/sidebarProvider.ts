@@ -22,6 +22,7 @@ import { ReadyMessageQueue } from "./readyMessageQueue.js";
 import { clipboardFileReferences } from "./vscodeClipboardFiles.js";
 import { rankFileMatches } from "./core/fileSearch.js";
 import { planPathSegments } from "./core/planFile.js";
+import { planTodoItems, planTodoInstruction, PlanTodoProgress, stripPlanTodoProgress } from "./core/planTodoProgress.js";
 import { openDextFileReference, openExternalLink } from "./vscodeContextHost.js";
 import { webviewRequestSchema } from "./webviewProtocol.js";
 import type { ConversationSummary, WebviewResponse } from "./webviewProtocol.js";
@@ -241,7 +242,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   // Pinned tabs lead the strip so that they keep their place as other
   // conversations open and close beside them.
   private orderedConversations(): string[] {
-    const pinned = this.preferences.pinned().filter((id) => this.openConversations.includes(id));
+    const pinned = this.openConversations.filter((id) => this.preferences.isPinned(id));
     return [...pinned, ...this.openConversations.filter((id) => !pinned.includes(id))];
   }
 
@@ -540,7 +541,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   // Renaming only replaces the label a conversation is listed under. The agent
-  // runners key their CLI and AIOA sessions on the conversation id, which the
+  // runners key their provider sessions on the conversation id, which the
   // rename never touches, so a renamed conversation keeps answering in the same
   // agent session it always did.
   async renameConversation(sessionId: string, title: string): Promise<void> {
@@ -571,6 +572,22 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     this.hydrateSessions();
     await this.preferences.setPinned(sessionId, pinned);
     await this.persistConversationLayout();
+    await this.postConversationState();
+  }
+
+  async moveConversation(sessionId: string, beforeSessionId: string | null): Promise<void> {
+    this.hydrateSessions();
+    const ordered = this.orderedConversations();
+    if (!ordered.includes(sessionId) || sessionId === beforeSessionId) return;
+    const pinned = this.preferences.isPinned(sessionId);
+    const group = ordered.filter((id) => this.preferences.isPinned(id) === pinned && id !== sessionId);
+    // Resolve against current tabs, so a late drop cannot reopen a closed tab
+    // or move a tab across the pinned boundary.
+    if (beforeSessionId !== null && !group.includes(beforeSessionId)) return;
+    group.splice(beforeSessionId === null ? group.length : group.indexOf(beforeSessionId), 0, sessionId);
+    const other = ordered.filter((id) => this.preferences.isPinned(id) !== pinned);
+    this.openConversations = pinned ? [...group, ...other] : [...other, ...group];
+    this.scheduleConversationLayoutPersist();
     await this.postConversationState();
   }
 
@@ -857,6 +874,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         }
         case "closeConversation":
           await this.closeConversation(request.sessionId);
+          break;
+        case "moveConversation":
+          await this.moveConversation(request.sessionId, request.beforeSessionId);
           break;
         case "pinConversation":
           await this.pinConversation(request.sessionId, request.pinned);
@@ -1202,6 +1222,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     await this.refresh();
     await this.run("plan", [
       `Implement the plan in ${planPath} exactly as written. Do not edit the plan file itself.`,
+      planTodoInstruction(planTodoItems(text)),
       "",
       text.trim()
     ].join("\n"), undefined, true);
@@ -1210,10 +1231,13 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   private async run(mode: "agent" | "ask" | "plan" | "code", source: string, planPath?: string, executePlan = false): Promise<void> {
     source = normalizeInputReferenceSource(source);
     const events: AgentStreamEvent[] = [];
+    const initialTodos = executePlan ? planTodoItems(source) : [];
+    const todoProgress = initialTodos.length ? new PlanTodoProgress(initialTodos) : undefined;
     const turnId = randomBytes(12).toString("hex");
     const session = this.activeSession;
     const sessionId = session.id;
     const executionPlanPath = executePlan ? planPath ?? session.activePlanPath : planPath;
+    const planExecution = executePlan ? { executePlan: true, ...(executionPlanPath ? { planPath: executionPlanPath } : {}) } : undefined;
     if (this.activeExecutions.has(sessionId)) {
       throw new Error("Wait for this conversation's current Dext turn to finish before running another one.");
     }
@@ -1224,6 +1248,11 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     await this.postConversationState();
     await this.post({ type: "executing", sessionId, value: true, turnId, source, startedAt, mode, ...(executionPlanPath ? { planPath: executionPlanPath } : {}), ...(executePlan ? { executePlan: true } : {}) });
     try {
+      if (todoProgress) {
+        const initial = todoProgress.initial();
+        events.push(initial);
+        this.postAgentEvent(sessionId, initial);
+      }
       const priorConversation = conversationContext(session.turns);
       const selection = this.conversationSelections.get(sessionId) ?? this.application.state().agentSelection;
       const profile = this.application.agentProfiles().find((candidate) => candidate.id === selection.profileId)
@@ -1240,8 +1269,10 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         ...(mode === "plan" && executionPlanPath ? { planPath: executionPlanPath } : {}),
         ...(executePlan ? { executePlan: true } : {}),
         onAgentEvent: (event: AgentStreamEvent) => {
-          events.push({ ...event });
-          this.postAgentEvent(sessionId, event);
+          for (const update of todoProgress ? todoProgress.consume(event) : [event]) {
+            events.push({ ...update });
+            this.postAgentEvent(sessionId, update);
+          }
         },
         onMcpEvent: (event: McpProcessEvent) => {
           const processEvent: AgentStreamEvent = {
@@ -1262,12 +1293,17 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       const response = mode === "code"
         ? await this.application.executeInput(source, metadata)
         : await this.application.executeConversation(mode, source, metadata);
+      if (todoProgress) {
+        for (const execution of response.executions) {
+          if (execution.result.kind === "chat") execution.result.text = stripPlanTodoProgress(execution.result.text);
+        }
+      }
       // The webview creates the visible row as soon as execution starts. Keep
       // that id when persisting the result so retry/delete actions still point
       // at the stored turn after success or cancellation.
-      const turn = await this.history.addSuccess(source, events, response, sessionId, mode, turnId);
+      const turn = await this.history.addSuccess(source, events, response, sessionId, mode, turnId, planExecution);
       await this.persistProviderSessions(session);
-      if (mode === "plan" && response.executions.some((execution) => execution.result.kind === "chat" && execution.result.planPath)) {
+      if (mode === "plan" && !executePlan && response.executions.some((execution) => execution.result.kind === "chat" && execution.result.planPath)) {
         const savedPath = response.executions.find((execution) => execution.result.kind === "chat" && execution.result.planPath)?.result;
         if (savedPath?.kind === "chat" && savedPath.planPath) {
           session.activePlanPath = savedPath.planPath;
@@ -1295,7 +1331,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         await this.history.updatePlanContext(sessionId, session.activePlanPath, "failed");
         await this.postPlanContext();
       }
-      const turn = await this.history.addFailure(source, events, error, sessionId, mode, turnId);
+      const turn = await this.history.addFailure(source, events, error, sessionId, mode, turnId, planExecution);
       await this.persistProviderSessions(session);
       session.turns.push(turn);
       session.updatedAt = turn.createdAt;
@@ -1311,8 +1347,11 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       const active = this.activeExecutions.get(sessionId);
       if (active?.turnId === turnId) this.activeExecutions.delete(sessionId);
       if (mode === "plan" && session.planStatus === "running") {
-        session.planStatus = "completed";
-        await this.history.updatePlanContext(sessionId, session.activePlanPath, "completed");
+        // Completion belongs to the saved execution turn. The composer now
+        // targets a new plan; selecting an older file explicitly still edits it.
+        delete session.activePlanPath;
+        session.planStatus = "new";
+        await this.history.updatePlanContext(sessionId, undefined, "new");
         await this.postPlanContext();
       }
       this.updateRunningContext();

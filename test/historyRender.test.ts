@@ -13,6 +13,19 @@ import {
 import type { DextHistoryRecord } from "../src/historyStore.js";
 
 describe("Dext history rendering", () => {
+  it.each([undefined, "Cancelled", "Agent failed"])("hides internal Plan input with execution metadata (%s)", (error) => {
+    const record: DextHistoryRecord = {
+      id: "build", createdAt: 1, input: "INTERNAL_PLAN_PROMPT", process: [], output: "Finished",
+      mode: "plan", executePlan: true, planPath: "plans/build.plan.md", ...(error ? { error } : {})
+    };
+    const html = renderHistoryRecord(record);
+    expect(html).not.toContain("INTERNAL_PLAN_PROMPT");
+    expect(html).not.toContain("<span>Input</span>");
+    expect(html).toContain("Plan: build.plan.md");
+    expect(html).toContain(`<span class="plan-status">${error ? "Failed" : "Completed"}</span>`);
+    expect(html).toContain(error ?? "Finished");
+  });
+
   it.each([
     ["agent", "Agent"], ["ask", "Ask"], ["plan", "Plan"], ["code", "Code"], [undefined, "Unknown"]
   ] as const)("shows the recorded input mode %s without changing the copied prompt", (mode, label) => {
@@ -223,14 +236,14 @@ describe("Dext history rendering", () => {
     expect(html).toContain("<li>one</li>");
   });
 
-  it("keeps AIOA dialogue and expandable command details in the same process timeline", () => {
+  it("keeps agent dialogue and expandable command details in the same process timeline", () => {
     const record: DextHistoryRecord = {
-      id: "aioa-work-log",
+      id: "work-log",
       createdAt: 1,
       input: 'agent(input="Inspect this")',
       process: [
-        { phase: "message", group: "aioa-work-log", text: "Inspecting the workspace" },
-        { phase: "tool", group: "aioa-work-log", title: "git status", text: "git status" }
+        { phase: "message", group: "work-log", text: "Inspecting the workspace" },
+        { phase: "tool", group: "work-log", title: "git status", text: "git status" }
       ],
       output: ""
     };
@@ -269,7 +282,7 @@ describe("Dext history rendering", () => {
   it("reproduces the step grouping an agent reported instead of regrouping by arrival", () => {
     const grouped = (groupId: string, title: string) => ({
       phase: "tool" as const,
-      group: "aioa-work-log" as const,
+      group: "work-log" as const,
       groupId,
       groupLabel: groupId === "g0" ? "运行了 2 条命令" : "已编辑 1 个文件 · 运行了 1 条命令",
       toolKind: "command" as const,
@@ -281,11 +294,11 @@ describe("Dext history rendering", () => {
       createdAt: 1,
       input: 'agent(input="fix layout")',
       process: [
-        { phase: "message", group: "aioa-work-log", text: "Locating the selector" },
+        { phase: "message", group: "work-log", text: "Locating the selector" },
         grouped("g0", "rg selector"),
         grouped("g0", "rg fallback"),
-        { phase: "tool", group: "aioa-work-log", toolKind: "image", solo: true, title: "已查看 shot.png", text: "已查看 shot.png" },
-        { phase: "message", group: "aioa-work-log", text: "Applying the fix" },
+        { phase: "tool", group: "work-log", toolKind: "image", solo: true, title: "已查看 shot.png", text: "已查看 shot.png" },
+        { phase: "message", group: "work-log", text: "Applying the fix" },
         grouped("g1", "npm test")
       ],
       output: ""

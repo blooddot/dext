@@ -113,6 +113,7 @@ body {
 .plan-target:disabled,
 .plan-choose:disabled { opacity: 0.5; cursor: default; }
 .plan-status { flex: 0 0 auto; color: var(--vscode-descriptionForeground); font-size: 0.9em; white-space: nowrap; }
+.code-editor .cm-placeholder { color: var(--vscode-input-placeholderForeground, var(--vscode-descriptionForeground)); }
 button.primary.plan-build {
   /* Add to the toolbar's 6px gap for 8px after the plan status. */
   margin-left: 2px;
@@ -141,7 +142,23 @@ button.primary.plan-build {
   display: none;
 }
 
+.agent-todos[hidden] { display: none; }
+.agent-todos > summary { display: flex; align-items: center; gap: 6px; }
+.agent-todos .disclosure-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-todo-list { list-style: none; margin: 0; padding: 6px 8px 8px; }
+.agent-todo-item { display: flex; align-items: flex-start; gap: 8px; padding: 5px 4px; border-radius: 3px; }
+.agent-todo-item > .codicon { flex: 0 0 16px; margin-top: 2px; color: var(--vscode-descriptionForeground); }
+.agent-todo-text { flex: 1; min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.agent-todo-status { flex: 0 0 auto; font-size: 11px; color: var(--vscode-descriptionForeground); }
+.agent-todo-item.active { background: var(--vscode-list-inactiveSelectionBackground); }
+.agent-todo-item.active > .codicon { color: var(--vscode-progressBar-background, var(--vscode-focusBorder)); }
+.agent-todo-item[data-status="completed"] > .codicon { color: var(--vscode-testing-iconPassed, var(--vscode-foreground)); }
+.agent-todo-item[data-status="completed"] .agent-todo-text { color: var(--vscode-descriptionForeground); }
+
 .conversation-tab {
+  position: relative;
+  user-select: none;
+  touch-action: none;
   flex: 0 0 auto;
   max-width: 190px;
   min-width: 0;
@@ -724,9 +741,11 @@ main {
 }
 
 .history-session > summary:hover .history-session-actions,
-.history-session > summary:focus-within .history-session-actions,
+.history-session > summary:focus-visible .history-session-actions,
+.history-session > summary:has(:focus-visible) .history-session-actions,
 .history-record > summary:hover .history-turn-actions,
-.history-record > summary:focus-within .history-turn-actions {
+.history-record > summary:focus-visible .history-turn-actions,
+.history-record > summary:has(:focus-visible) .history-turn-actions {
   opacity: 1;
   pointer-events: auto;
 }
@@ -829,6 +848,30 @@ main {
   padding: 4px;
   line-height: 1.55;
 }
+
+.conversation-tabs.dragging-tabs,
+.conversation-tabs.dragging-tabs * {
+  cursor: grabbing;
+}
+
+.conversation-tab.dragging {
+  opacity: 0.5;
+}
+
+.conversation-tab.drop-before::before,
+.conversation-tab.drop-after::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--vscode-focusBorder);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.conversation-tab.drop-before::before { left: 0; }
+.conversation-tab.drop-after::after { right: 0; }
 
 .process-result {
   padding: 5px 4px 7px;
@@ -2649,7 +2692,8 @@ button.primary.stopping {
 }
 
 .output-turn > summary:hover .output-turn-actions,
-.output-turn > summary:focus-within .output-turn-actions {
+.output-turn > summary:focus-visible .output-turn-actions,
+.output-turn > summary:has(:focus-visible) .output-turn-actions {
   opacity: 1;
   pointer-events: auto;
 }

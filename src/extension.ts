@@ -21,15 +21,18 @@ import {
   testCompletionModel,
   type CompletionDiagnoseOptions
 } from "./vscodeCompletionSetup.js";
-import { normalizeAioaCdpEndpoint } from "./core/aioaCdp.js";
 import {
   dextSemanticTokens,
   DEXT_SEMANTIC_TOKEN_MODIFIERS,
   DEXT_SEMANTIC_TOKEN_TYPES
 } from "./dextSemanticTokens.js";
 
+let activeApplication: DextApplication | undefined;
+
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const application = new DextApplication(context.globalState, context.secrets, context.globalStorageUri);
+  activeApplication = application;
+  context.subscriptions.push({ dispose: () => { void application.dispose(); } });
   const folder = vscode.workspace.workspaceFolders?.[0];
   if (folder) application.runtime.setWorkspaceRoot(folder.uri.fsPath);
   application.runtime.setWorkspaceTrusted(vscode.workspace.isTrusted && folder?.uri.scheme === "file");
@@ -78,7 +81,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (!invalid.length) return;
     await vscode.window.showErrorMessage(
       `Unsupported Dext agent CLI profile${invalid.length === 1 ? "" : "s"}: ${invalid.join(", ")}. `
-      + "Supported values: codex, claude."
+      + "Supported values: codex, claude, deepseek-harness."
     );
   };
   await reportInvalidAgentCliConfiguration();
@@ -543,76 +546,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const picked = await vscode.window.showQuickPick(
         profiles.map((profile) => ({
           label: profile.label,
-          description: profile.provider === "aioa"
-            ? `${profile.connectionMode === "launch" ? "Launch" : "Attach"} · ${profile.endpoint ?? "CDP not configured"}`
-            : profile.command || "Command not configured",
+          description: profile.command || "Command not configured",
           profile
         })),
         { placeHolder: "Choose an Agent profile" }
       );
       if (!picked) return;
-      if (picked.profile.provider === "aioa") {
-        const connection = await vscode.window.showQuickPick([
-          {
-            label: "Launch",
-            description: "Dext starts AIOA with a local CDP port when no compatible instance is running.",
-            mode: "launch" as const
-          },
-          {
-            label: "Attach",
-            description: "Connect to an AIOA instance already started with a local CDP port.",
-            mode: "attach" as const
-          }
-        ], { placeHolder: "Choose how Dext connects to AIOA" });
-        if (!connection) return;
-        const rawEndpoint = await vscode.window.showInputBox({
-          prompt: "AIOA CDP URL (local loopback only)",
-          value: picked.profile.endpoint ?? "http://127.0.0.1:9229",
-          ignoreFocusOut: true
-        });
-        if (rawEndpoint === undefined) return;
-        let endpoint: string;
-        try {
-          endpoint = normalizeAioaCdpEndpoint(rawEndpoint);
-        } catch (error) {
-          await vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
-          return;
-        }
-        let command = picked.profile.command;
-        if (connection.mode === "launch") {
-          const executable = await vscode.window.showInputBox({
-            prompt: "AIOA executable path",
-            value: command,
-            ignoreFocusOut: true
-          });
-          if (executable === undefined) return;
-          command = executable.trim();
-        }
-        application.updateAgentProfile({
-          ...picked.profile,
-          command,
-          endpoint,
-          connectionMode: connection.mode
-        });
-        try {
-          const launched = await application.verifyAioaCdp();
-          await vscode.window.showInformationMessage(
-            launched ? "AIOA started and its CDP session is ready." : "AIOA CDP session is ready."
-          );
-        } catch (error) {
-          await vscode.window.showWarningMessage(
-            `AIOA settings were saved, but CDP is not ready yet: ${error instanceof Error ? error.message : String(error)}`
-          );
-        }
-        await sidebar.refresh();
-        return;
-      }
       const command = await vscode.window.showInputBox({
         prompt: `CLI command for ${picked.profile.label}`,
         value: picked.profile.command,
         ignoreFocusOut: true
       });
       if (command === undefined) return;
+      if (picked.profile.provider === "deepseek-harness") {
+        application.updateAgentProfile({ ...picked.profile, command: command.trim() });
+        try { await application.discoverHarnessModels(); }
+        catch (error) { await vscode.window.showWarningMessage(`Harness settings saved; model discovery failed: ${String(error)}`); }
+        await sidebar.refresh();
+        return;
+      }
       const models = await vscode.window.showInputBox({
         prompt: "Supported models, separated by commas; leave empty for CLI default",
         value: picked.profile.models.join(", "),
@@ -645,8 +597,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       // reloading the API set, which would needlessly re-scan the workspace.
       if (
         event.affectsConfiguration("dext.agent.timeoutMs")
-        || event.affectsConfiguration("dext.aioa.timeoutMs")
-        || event.affectsConfiguration("dext.aioa.idleTimeoutMs")
         || event.affectsConfiguration("dext.workflow.maxConcurrency")
       ) {
         application.applyTimeoutSettings();
@@ -815,4 +765,4 @@ async function confirmHistoryDeletion(message: string): Promise<boolean> {
   ) === "Delete";
 }
 
-export function deactivate(): void {}
+export async function deactivate(): Promise<void> { await activeApplication?.dispose(); activeApplication = undefined; }

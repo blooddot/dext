@@ -24,7 +24,6 @@ import {
   type AgentProvider,
   type AgentSelection
 } from "./agentProfiles.js";
-import { DefaultAioaCdpConnection } from "./core/aioaCdp.js";
 import { DefaultAgentRunner } from "./core/agentRouter.js";
 import { SkillCatalog } from "./core/skillCatalog.js";
 import { McpToolRegistry, type McpServerConfig, type McpToolConfig, type McpDiscoveredTool } from "./core/mcpRegistry.js";
@@ -48,9 +47,6 @@ export class DextApplication {
   readonly registry = new MethodRegistry();
   readonly language = new DextLanguageService(this.registry);
   private readonly contextResolver = new ContextResolver(new VsCodeContextHost());
-  /** Verification and executed AIOA turns share the same dynamic CDP endpoint
-   * for this extension lifetime; profile configuration is never rewritten. */
-  private readonly aioaConnection = new DefaultAioaCdpConnection();
   readonly runtime = new DextRuntime(
     this.registry,
     this.contextResolver,
@@ -85,9 +81,14 @@ export class DextApplication {
     // storage root. The plain file URI keeps lightweight hostless tests from
     // needing to implement Uri.joinPath just to construct the application.
     this.storage = new DextStorage(globalStorageUri ?? vscode.Uri.file(process.cwd()));
-    this.agentRunner = new DefaultAgentRunner(undefined, this.aioaConnection);
+    this.agentRunner = new DefaultAgentRunner();
     this.runtime.setAgentRunner(this.agentRunner);
     this.agents = new AgentProfileStore(globalState);
+    this.agentRunner.harness.onModels = (profile, options) => {
+      const saved = this.agents.list().find((item) => item.id === profile.id);
+      const modelOptions = [...(saved?.modelOptions ?? []).filter((item) => !options.some((next) => next.id === item.id)), ...options];
+      this.updateAgentProfile({ ...profile, models: modelOptions.map((item) => item.id), modelOptions });
+    };
     if (secretStorage) {
       const mcpSecrets = new McpAccessTokenStore(secretStorage, () => this.workspaceUri?.toString());
       this.mcpSecrets = mcpSecrets;
@@ -288,9 +289,7 @@ export class DextApplication {
       return Number.isInteger(value) && value > 0 ? value : fallback;
     };
     this.agentRunner.setTimeouts({
-      agentTimeoutMs: positive("agent.timeoutMs", 600_000),
-      aioaTimeoutMs: positive("aioa.timeoutMs", 3_600_000),
-      aioaIdleTimeoutMs: positive("aioa.idleTimeoutMs", 90_000)
+      agentTimeoutMs: positive("agent.timeoutMs", 3_600_000)
     });
     this.workflowRuntime.setMaxConcurrency(positive("workflow.maxConcurrency", DEFAULT_MAX_CONCURRENCY));
   }
@@ -379,7 +378,7 @@ export class DextApplication {
     );
     const raw = configuration.get<Record<string, unknown>>("agentCliArgs", {}) ?? {};
     const byProvider: Partial<Record<AgentProvider, readonly string[]>> = {};
-    for (const provider of ["codex", "claude", "aioa"] as const) {
+    for (const provider of ["codex", "claude", "deepseek-harness"] as const) {
       const value = raw[provider];
       if (!Array.isArray(value)) continue;
       const args = value.filter((item): item is string => typeof item === "string" && item.trim() !== "");
@@ -609,24 +608,22 @@ export class DextApplication {
     this.runtime.setAgentSelection(selection);
   }
 
-  /** Profiles exposed to the composer. AIOA remains installed and fully
-   * runnable, but is opt-in through the `dext.agentCli` setting so it is not
-   * advertised to external users by default. */
+  /** Profiles exposed to the composer. */
   agentProfiles(): AgentProfile[] {
-    const configured = vscode.workspace.getConfiguration("dext").get<unknown>("agentCli", ["codex", "claude"]);
+    const configured = vscode.workspace.getConfiguration("dext").get<unknown>("agentCli", ["codex", "claude", "deepseek-harness"]);
     const ids = Array.isArray(configured)
       ? [...new Set(configured
         .filter((item): item is string => typeof item === "string" && item.trim() !== "")
         .map((item) => item.trim()))]
       : [];
     const enabledIds = ids.filter((id) => (SUPPORTED_AGENT_PROFILE_IDS as readonly string[]).includes(id));
-    const selectedIds = enabledIds.length ? enabledIds : ["codex", "claude"];
+    const selectedIds = enabledIds.length ? enabledIds : ["codex", "claude", "deepseek-harness"];
     return this.agents.list(selectedIds);
   }
 
   /** Returns non-empty profile IDs that cannot be used by `dext.agentCli`. */
   invalidAgentCliIds(): string[] {
-    const configured = vscode.workspace.getConfiguration("dext").get<unknown>("agentCli", ["codex", "claude"]);
+    const configured = vscode.workspace.getConfiguration("dext").get<unknown>("agentCli", ["codex", "claude", "deepseek-harness"]);
     if (!Array.isArray(configured)) return [];
     return [...new Set(configured
       .filter((item): item is string => typeof item === "string" && item.trim() !== "")
@@ -653,17 +650,18 @@ export class DextApplication {
     this.refreshAgentProfiles();
   }
 
-  /** Verifies the configured local AIOA CDP session, launching it when requested. */
-  async verifyAioaCdp(): Promise<boolean> {
-    const profile = this.agents.list().find((candidate) => candidate.provider === "aioa");
-    if (!profile) throw new Error("The AIOA Agent profile is not available.");
-    const opened = await this.aioaConnection.open(profile);
-    try {
-      await opened.page.state();
-      return opened.launched;
-    } finally {
-      await opened.page.close();
-    }
+  dispose(): Promise<void> {
+    return this.agentRunner.dispose();
+  }
+
+  async discoverHarnessModels(): Promise<void> {
+    const profile = this.agents.list().find((item) => item.provider === "deepseek-harness");
+    if (!profile) return;
+    const args = this.workspaceTrusted
+      ? vscode.workspace.getConfiguration("dext").get<Record<string, string[]>>("agentCliArgs", {})["deepseek-harness"] ?? []
+      : [];
+    const modelOptions = await this.agentRunner.harness.discoverModels(profile, this.workspaceRoot, args);
+    this.updateAgentProfile({ ...profile, models: modelOptions.map((item) => item.id), modelOptions });
   }
 
   async executeInput(source: string, metadata: Readonly<ExecutionMetadata> = {}): Promise<InputExecutionResponse> {

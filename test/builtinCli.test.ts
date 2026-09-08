@@ -12,7 +12,8 @@ import type { ExecutionMetadata, InvocationValue } from "../src/core/types.js";
 
 const profiles: AgentProfile[] = [
   { id: "codex", provider: "codex", command: "codex", label: "Codex", models: ["gpt-test", "gpt-other"] },
-  { id: "claude", provider: "claude", command: "claude", label: "Claude", models: ["sonnet", "opus"] }
+  { id: "claude", provider: "claude", command: "claude", label: "Claude", models: ["sonnet", "opus"] },
+  { id: "deepseek-harness", provider: "deepseek-harness", command: "dsh", label: "Harness", models: [] }
 ];
 
 function setup() {
@@ -38,6 +39,15 @@ function setup() {
 }
 
 describe("per-call built-in CLI options", () => {
+  it("routes Harness object options without inherited Codex tiers", async () => {
+    const { execute, requests, language } = setup();
+    await execute({ cli: "deepseek-harness", model: { model: "opaque-id", reasoning: "off" } });
+    expect(requests[0]).toMatchObject({ profile: { provider: "deepseek-harness" }, model: "opaque-id", reasoningEffort: "off" });
+    expect(requests[0]?.speed).toBeUndefined();
+    expect(requests[0]?.serviceTier).toBeUndefined();
+    await expect(execute({ cli: "deepseek-harness", model: { model: "opaque-id", speed: "fast" } })).rejects.toThrow();
+    expect(language.documentCompletions('ask(cli="deepseek-harness", model={').map((item) => item.label)).toEqual(["model", "reasoning"]);
+  });
   it.each(["ask", "plan", "agent", "skill"])("routes %s to Claude without inherited Codex settings", async (method) => {
     const { execute, requests } = setup();
     await execute({ cli: "claude", model: "sonnet", ...(method === "agent" ? { apply: false } : {}), ...(method === "skill" ? { skill: "test" } : {}) }, method);
@@ -71,7 +81,7 @@ describe("per-call built-in CLI options", () => {
   });
 
   it.each([
-    { cli: "aioa" },
+    { cli: "unsupported" },
     { cli: "claude", model: "gpt-test" },
     { cli: "claude", model: { model: "gpt-test" } },
     { cli: "codex", model: "sonnet" },
@@ -201,7 +211,7 @@ describe("per-call built-in CLI options", () => {
   it("offers CLI-dependent enum values, Codex dictionary keys, and signatures", () => {
     const { language } = setup();
     const labels = (source: string) => language.documentCompletions(source).map((item) => item.label);
-    expect(labels('ask(cli=')).toEqual(["codex", "claude"]);
+    expect(labels('ask(cli=')).toEqual(["codex", "claude", "deepseek-harness"]);
     expect(labels('ask(cli="claude", model=')).toEqual(["sonnet", "opus"]);
     expect(labels('ask(cli="codex", model={')).toEqual(["model", "reasoning", "speed"]);
     expect(labels('ask(cli="codex", model={"model": ')).toEqual(["gpt-test", "gpt-other"]);

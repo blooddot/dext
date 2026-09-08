@@ -11,6 +11,11 @@ describe("Webview protocol", () => {
   });
 
   it("accepts conversation tab requests", () => {
+    expect(webviewRequestSchema.safeParse({ type: "moveConversation", sessionId: "a", beforeSessionId: "b" }).success).toBe(true);
+    expect(webviewRequestSchema.safeParse({ type: "moveConversation", sessionId: "a", beforeSessionId: null }).success).toBe(true);
+    expect(webviewRequestSchema.safeParse({ type: "moveConversation", sessionId: "", beforeSessionId: null }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({ type: "moveConversation", sessionId: "a" }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({ type: "moveConversation", sessionId: "a", beforeSessionId: "" }).success).toBe(false);
     expect(webviewRequestSchema.safeParse({
       type: "selectConversation",
       sessionId: "session-1"

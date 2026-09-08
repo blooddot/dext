@@ -647,8 +647,9 @@ export class DextRuntime {
     if (!this.agentRunner.runConversation) {
       throw new Error(`Agent '${profile.label}' does not support normal conversation mode.`);
     }
-    const permission: AgentPermission = mode === "ask" ? "read-only" : this.agentPermission();
-    const allowWorkspaceWrite = mode !== "ask";
+    const readOnly = mode === "ask" || (profile.provider === "deepseek-harness" && mode === "plan" && !metadata.executePlan);
+    const permission: AgentPermission = readOnly ? "read-only" : this.agentPermission();
+    const allowWorkspaceWrite = !readOnly;
     if (allowWorkspaceWrite && !this.workspaceTrusted) {
       throw new Error(`${mode === "plan" ? "Plan" : "Agent"} mode requires a trusted local workspace.`);
     }

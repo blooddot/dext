@@ -15,18 +15,34 @@ class DelayedMemoryState extends MemoryState {
 }
 
 describe("DextHistoryStore", () => {
+  it("retains Plan execution identity after success, cancellation and reload without changing the input", async () => {
+    const state = new MemoryState();
+    const store = new DextHistoryStore(state as never);
+    const context = { executePlan: true, planPath: "plans/build.plan.md" };
+    await store.addSuccess("internal build prompt", [], { kind: "workflow", executions: [] }, "plan", "plan", "success", context);
+    await store.addFailure("internal build prompt", [], new Error("Cancelled"), "plan", "plan", "cancelled", context);
+    await store.addSuccess("Write a plan", [], { kind: "workflow", executions: [] }, "plan", "plan", "draft");
+    const turns = new DextHistoryStore(state as never).list()[0]!.turns;
+    expect(turns.slice(0, 2)).toEqual([
+      expect.objectContaining({ ...context, id: "success", input: "internal build prompt" }),
+      expect.objectContaining({ ...context, id: "cancelled", input: "internal build prompt", error: "Cancelled" })
+    ]);
+    expect(turns[2]?.executePlan).toBeUndefined();
+  });
+
   it("keeps CLI bindings after deleting the final Dext record and reloading", async () => {
     const state = new MemoryState();
     const store = new DextHistoryStore(state as never);
     await store.addSuccess("only turn", [], { kind: "workflow", executions: [] }, "session-1", "ask", "turn-1");
     await store.setProviderSession("session-1", "claude", "claude-thread");
+    await store.setProviderSession("session-1", "deepseek-harness", "dsh-binding");
     expect(await store.removeTurn("session-1", "turn-1", { codex: "codex-thread" })).toBe(true);
     const restarted = new DextHistoryStore(state as never);
     expect(restarted.list()[0]).toMatchObject({
-      id: "session-1", turns: [], providerSessions: { codex: "codex-thread", claude: "claude-thread" }
+      id: "session-1", turns: [], providerSessions: { codex: "codex-thread", claude: "claude-thread", "deepseek-harness": "dsh-binding" }
     });
     await restarted.addSuccess("continue", [], { kind: "workflow", executions: [] }, "session-1");
-    expect(restarted.list()[0]?.providerSessions).toEqual({ codex: "codex-thread", claude: "claude-thread" });
+    expect(restarted.list()[0]?.providerSessions).toEqual({ codex: "codex-thread", claude: "claude-thread", "deepseek-harness": "dsh-binding" });
   });
 
   it("does not count retained empty CLI sessions as turns when enforcing history limits", async () => {

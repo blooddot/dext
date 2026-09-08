@@ -957,12 +957,12 @@
               },
               "description": "Extra arguments appended to every Claude Code invocation."
             },
-            "aioa": {
+            "deepseek-harness": {
               "type": "array",
               "items": {
                 "type": "string"
               },
-              "description": "Reserved; AIOA runs over CDP and takes no CLI arguments."
+              "description": "Launcher arguments for DeepSeek Harness, before the ACP profile. Dext owns --profile and its final permission patch."
             }
           },
           "additionalProperties": false,
@@ -972,30 +972,19 @@
           "type": "array",
           "default": [
             "codex",
-            "claude"
+            "claude",
+            "deepseek-harness"
           ],
           "items": {
             "type": "string"
           },
-          "markdownDescription": "Agent CLI profile IDs shown in the Dext composer. Enter profile IDs manually (Codex and Claude are enabled by default). Supported IDs are `codex`, `claude`, and `aioa`; unsupported IDs are rejected."
+          "markdownDescription": "Agent backend IDs shown in the Dext composer: `codex`, `claude`, `deepseek-harness`. Unsupported IDs are rejected."
         },
         "dext.agent.timeoutMs": {
           "type": "integer",
           "default": 3600000,
           "minimum": 1000,
           "description": "How long a single CLI agent turn may run before Dext aborts it. Raise this when long refactors are being cut off mid-run."
-        },
-        "dext.aioa.timeoutMs": {
-          "type": "integer",
-          "default": 3600000,
-          "minimum": 1000,
-          "description": "How long an AIOA turn may run in total before Dext gives up on it."
-        },
-        "dext.aioa.idleTimeoutMs": {
-          "type": "integer",
-          "default": 90000,
-          "minimum": 1000,
-          "description": "How long AIOA may go without producing new output before Dext treats the turn as stalled. Raise this when AIOA thinks for a long time between updates."
         },
         "dext.terminal.defaultTimeoutMs": {
           "type": "integer",
@@ -1106,8 +1095,8 @@
     "vscode:prepublish": "npm run check"
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "1.4.0",
     "@ax-llm/ax": "23.0.11",
-    "chrome-remote-interface": "^0.34.0",
     "jsonc-parser": "^3.3.1",
     "markdown-it": "^14.1.0",
     "zod": "4.4.3"
@@ -1124,7 +1113,6 @@
     "@lezer/common": "^1.2.3",
     "@lezer/highlight": "^1.2.1",
     "@lezer/python": "^1.1.18",
-    "@types/chrome-remote-interface": "^0.34.0",
     "@types/markdown-it": "^14.2.0",
     "@types/node": "24.10.1",
     "@types/vscode": "1.105.0",

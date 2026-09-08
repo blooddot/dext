@@ -11,6 +11,11 @@ describe("DextLanguageService workflow features", () => {
     service = new DextLanguageService(registry);
   });
 
+  it("offers Harness as a built-in backend", () => {
+    expect(service.documentCompletions("ask(cli=").map((item) => item.label)).toContain("deepseek-harness");
+    expect(service.documentCompletions('ask(cli="deepseek-harness", model={').map((item) => item.label)).toEqual(["model", "reasoning"]);
+  });
+
   it("completes public top-level methods and print", () => {
     expect(service.documentCompletions("co")).toEqual([]);
     for (const source of ["随便输入一下", "input = ", "input = +"]) {

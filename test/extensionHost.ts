@@ -11,7 +11,9 @@ export async function run(): Promise<void> {
   await extension.activate();
   assert.equal(extension.isActive, true, "Dext extension activates.");
 
+  assert.deepEqual(vscode.workspace.getConfiguration("dext").inspect<string[]>("agentCli")?.defaultValue, ["codex", "claude", "deepseek-harness"]);
   const commands = await vscode.commands.getCommands(true);
+  assert.ok(commands.includes("dext.configureAgent"));
   assert.ok(commands.includes("dext.focus"), "Focus command is registered.");
   assert.ok(commands.includes("dext.reloadMethods"), "Reload command is registered.");
   assert.ok(commands.includes("dext.openHistory"), "History command is registered.");

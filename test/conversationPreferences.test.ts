@@ -130,7 +130,7 @@ describe("conversation preferences", () => {
     await store.setTitle("session-1", "   ");
     expect(store.title("session-1")).toBeUndefined();
 
-    // Renaming writes a label beside the conversation; the id the CLI and AIOA
+    // Renaming writes a label beside the conversation; the id the provider
     // sessions are bound to is never rewritten.
     expect(sidebar).toMatch(/async renameConversation\(sessionId: string, title: string\)[\s\S]*?this\.preferences\.setTitle\(sessionId, title\)/);
     expect(sidebar).toContain("this.preferences.title(session.id) ?? conversationTitle(session)");

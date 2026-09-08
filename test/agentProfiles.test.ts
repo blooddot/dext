@@ -19,9 +19,8 @@ describe("Agent profile defaults", () => {
     expect(claude?.modelOptions?.[0]?.reasoningEfforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
   });
 
-  it("launches AIOA by default while retaining Attach as an explicit option", () => {
-    const aioa = new AgentProfileStore().list().find((profile) => profile.id === "aioa");
-    expect(aioa).toMatchObject({ provider: "aioa", connectionMode: "launch" });
+  it("exposes Harness as the third backend", () => {
+    expect(new AgentProfileStore().list().map((profile) => profile.id)).toEqual(["codex", "claude", "deepseek-harness"]);
   });
 
   it("can expose only the profiles selected by the user", () => {
@@ -29,17 +28,10 @@ describe("Agent profile defaults", () => {
     expect(profiles.map((profile) => profile.id)).toEqual(["codex", "claude"]);
   });
 
-  it("migrates the legacy Qunshu profile and selection to AIOA", () => {
-    const state = {
-      get<T>(key: string): T | undefined {
-        if (key === "dext.agentProfiles") return [{ id: "qunshu", label: "群枢", provider: "qunshu", command: "", models: [] }] as T;
-        if (key === "dext.agentSelection") return { profileId: "qunshu" } as T;
-        return undefined;
-      },
-      update: async () => undefined
-    } as unknown as vscode.Memento;
+  it("ignores unsupported saved profiles and resets their model selection", () => {
+    const state = { get: (key: string) => key === "dext.agentProfiles" ? [{ id: "obsolete", provider: "obsolete", models: [] }] : { profileId: "obsolete", model: "old-model" }, update: async () => undefined } as unknown as vscode.Memento;
     const store = new AgentProfileStore(state);
-    expect(store.list().find((profile) => profile.id === "aioa")).toMatchObject({ label: "AIOA", provider: "aioa" });
-    expect(store.currentSelection()).toEqual({ profileId: "aioa" });
+    expect(store.list().some((profile) => profile.id === "obsolete")).toBe(false);
+    expect(store.currentSelection()).toMatchObject({ profileId: "codex", model: "" });
   });
 });

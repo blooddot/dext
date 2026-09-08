@@ -328,8 +328,6 @@ describe("Dext package manifest", () => {
   it("exposes every timeout that can cut a turn off", async () => {
     const properties = (await manifest()).contributes?.configuration?.properties ?? {};
     expect(properties["dext.agent.timeoutMs"]).toMatchObject({ type: "integer", default: 3600000 });
-    expect(properties["dext.aioa.timeoutMs"]).toMatchObject({ type: "integer", default: 3600000 });
-    expect(properties["dext.aioa.idleTimeoutMs"]).toMatchObject({ type: "integer", default: 90000 });
     expect(properties["dext.terminal.defaultTimeoutMs"])
       .toMatchObject({ type: "integer", default: 1800000 });
     // The terminal ceiling stays a ceiling, so the setting cannot be used to
@@ -383,12 +381,12 @@ describe("Dext package manifest", () => {
     // A passthrough argument must not be a way around the tier.
     expect(passthrough?.markdownDescription).toContain("cannot loosen the permission tier");
     const agentCli = properties["dext.agentCli"];
-    expect(agentCli).toMatchObject({ type: "array", default: ["codex", "claude"] });
+    expect(agentCli).toMatchObject({ type: "array", default: ["codex", "claude", "deepseek-harness"] });
     const agentCliItems = (agentCli as unknown as { items?: { type?: string; enum?: string[] } } | undefined)?.items;
     expect(agentCliItems).toMatchObject({ type: "string" });
     expect(agentCliItems?.enum).toBeUndefined();
-    expect(agentCli?.markdownDescription).toContain("Enter profile IDs manually");
-    expect(agentCli?.markdownDescription).toContain("unsupported IDs are rejected");
+    expect(agentCli?.markdownDescription).toContain("deepseek-harness");
+    expect(agentCli?.markdownDescription).toContain("Unsupported IDs are rejected");
   });
 
   it("keeps MCP credentials in SecretStorage without contributing legacy settings", async () => {

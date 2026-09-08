@@ -145,7 +145,7 @@ function callCli(body: string): string | undefined {
   let remaining = body;
   while (remaining) {
     const segment = activeArgument(remaining);
-    const match = /^\s*cli\s*=\s*["'](codex|claude)["']\s*$/.exec(segment);
+    const match = /^\s*cli\s*=\s*["'](codex|claude|deepseek-harness)["']\s*$/.exec(segment);
     if (match) return match[1];
     if (segment.length === remaining.length) break;
     remaining = remaining.slice(0, remaining.length - segment.length - 1);

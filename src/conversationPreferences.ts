@@ -58,7 +58,7 @@ export function orderHistorySessions<T extends OrderableSession>(
 /** Pinning keeps a conversation open across reloads, favouriting keeps it at
  * the top of history, and renaming replaces the name taken from its first
  * message. All three are keyed by conversation id, which is also the id the
- * agent runners bind their CLI or AIOA session to, so none of them can detach
+ * agent runners bind their provider session to, so none of them can detach
  * a conversation from the agent that is answering it. */
 export class DextConversationPreferences {
   constructor(private readonly state: vscode.Memento) {}
