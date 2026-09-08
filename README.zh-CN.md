@@ -30,11 +30,21 @@ Dext 是一款支持 AI 对话与类型化工作流的 Visual Studio Code 插件
 
 需要 **VS Code 1.105 或更新版本**。执行 AI 任务前，请安装并登录其中一个受支持的 Agent CLI，Dext 使用该 CLI 的登录凭据。
 
+### 从插件商店安装
+
+1. 在 VS Code 中打开扩展视图。
+2. 搜索 `blooddot.dext`，选择发布者为 **blooddot** 的 **Dext**。
+3. 点击 **安装**。
+
+也可以打开 [Dext 商店页面](https://marketplace.visualstudio.com/items?itemName=blooddot.dext)。后续可在扩展视图中管理更新。
+
+### 从 VSIX 安装
+
 1. 从 [GitHub Releases](https://github.com/blooddot/dext/releases) 下载 `dext-<版本号>.vsix`。
 2. 打开 VS Code 命令面板，执行 **Extensions: Install from VSIX...**（扩展：从 VSIX 安装）。
 3. 选择下载的文件；如果出现提示，重新加载 VS Code。
 
-更新时安装新版 VSIX 即可。从源码构建见[开发指南](docs/development.zh-CN.md)。
+手动安装的版本可通过安装新版 VSIX 更新。从源码构建见[开发指南](docs/development.zh-CN.md)。
 
 ## 快速上手
 

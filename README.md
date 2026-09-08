@@ -30,11 +30,21 @@ Dext supports **Codex CLI, Claude CLI, and DeepSeek Harness**. You can also conf
 
 Requires **VS Code 1.105 or newer**. For AI tasks, install and authenticate one of the supported Agent CLIs; Dext uses that CLI's credentials.
 
+### Install from the Marketplace
+
+1. Open the Extensions view in VS Code.
+2. Search for `blooddot.dext` and select **Dext** by **blooddot**.
+3. Click **Install**.
+
+You can also open the [Dext Marketplace page](https://marketplace.visualstudio.com/items?itemName=blooddot.dext). Manage updates from the Extensions view.
+
+### Install from VSIX
+
 1. Download `dext-<version>.vsix` from [GitHub Releases](https://github.com/blooddot/dext/releases).
 2. Open the VS Code Command Palette and run **Extensions: Install from VSIX...**.
 3. Select the downloaded file and reload VS Code if prompted.
 
-To update, install the new VSIX. To build from source, see [Development](docs/development.md).
+To update a manual installation, install the new VSIX. To build from source, see [Development](docs/development.md).
 
 ## Quick start
 
