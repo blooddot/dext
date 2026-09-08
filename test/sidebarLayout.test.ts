@@ -7,6 +7,22 @@ async function source(path: string): Promise<string> {
 }
 
 describe("sidebar panel layout", () => {
+  it("refreshes Harness model discovery once when the sidebar opens or Harness is selected", async () => {
+    const sidebar = await source("src/sidebarProvider.ts");
+    expect(sidebar).toContain("private harnessModelsDiscovered = false;");
+    expect(sidebar).toMatch(/resolveWebviewView[\s\S]*?discoverHarnessModelsOnce\(\)\.then/);
+    expect(sidebar).toMatch(/case "agentSelection":[\s\S]*?selection\.profileId === "deepseek-harness" && previousProfileId !== "deepseek-harness"[\s\S]*?await this\.discoverHarnessModelsOnce\(\)/);
+    expect(sidebar).toMatch(/private discoverHarnessModelsOnce\(\): Promise<void>[\s\S]*?this\.harnessModelsDiscovered = true/);
+  });
+
+  it("renders Harness model-provider groups in the model choices", async () => {
+    const main = await source("src/webview/main.ts");
+    const css = await source("media/styles.css");
+    expect(main).toContain("composer-model-group-heading");
+    expect(main).toMatch(/for \(const \{ value, label, group \} of items\)[\s\S]*?heading\.textContent = group/);
+    expect(css).toContain(".composer-model-group-heading {");
+  });
+
   it("keeps API out of the main flow and exposes it from the view title bar", async () => {
     const html = await source("src/sidebarProvider.ts");
     const manifest = await source("package.json");
@@ -564,6 +580,11 @@ describe("sidebar panel layout", () => {
   it("copies turns through the host without changing the active stream", async () => {
     const main = await source("src/webview/main.ts");
     expect(main).toMatch(/turnActionButton\(TURN_COPY_ACTION.icon, TURN_COPY_ACTION.label, \(\) => \{\s*if \(sessionId\) vscode.postMessage\(\{ type: "copyTurn", sessionId, turnId \}\);\s*\}, true\)/);
+  });
+
+  it("explains an empty Harness model picker instead of showing a blank menu", async () => {
+    const main = await source("src/webview/main.ts");
+    expect(main).toMatch(/if \(!options\.length\)[\s\S]*?No models discovered\.[\s\S]*?Dext: Configure Agent/);
   });
 
   it("opens the complete API list in a dialog and keeps method insertion intact", async () => {

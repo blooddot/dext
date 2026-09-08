@@ -439,6 +439,7 @@ export interface ResolvedInvocation {
 }
 
 export interface ExecutionMetadata {
+  agentPreset?: string;
   instruction?: string;
   /** Explicit Plan document selected by the host for a revise turn. */
   planPath?: string;

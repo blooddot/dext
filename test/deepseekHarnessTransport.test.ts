@@ -53,4 +53,19 @@ describe("Harness ACP transport", { timeout: 15000 }, () => {
     const args = ["--patch", "C:/path with spaces/policy.json"];
     expect(harnessSpawnCommand(shim, args).args).toEqual([entry, ...args]);
   });
+  it("resolves Volta's dsh dispatcher through its installed npm shim", async () => {
+    const home = await mkdtemp(join(tmpdir(), "dext-volta-shim-")); directories.push(home);
+    const dispatcher = join(home, "bin", "dsh.cmd");
+    const packageShim = join(home, "tools", "image", "packages", "@deepseek-ai", "dsh", "dsh.cmd");
+    const entry = join(home, "tools", "image", "packages", "@deepseek-ai", "dsh", "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js");
+    await mkdir(join(entry, ".."), { recursive: true });
+    await mkdir(join(home, "bin"), { recursive: true });
+    await writeFile(dispatcher, "@echo off\nvolta run %~n0 %*", "utf8");
+    await writeFile(packageShim, '@echo off\nnode "%dp0%\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js" %*', "utf8");
+    await writeFile(entry, "");
+
+    expect(harnessSpawnCommand(dispatcher, ["--profile", "acp"])).toEqual({
+      command: "node", args: [entry, "--profile", "acp"]
+    });
+  });
 });

@@ -589,6 +589,7 @@ export class DextRuntime {
         }
         const raw = await this.agentRunner.run({
           profile,
+          ...(profile.provider === "deepseek-harness" ? { agentPreset: metadata.agentPreset ?? this.agentSelection.agentPreset ?? "" } : {}),
           ...(metadata.model || this.agentSelection.model ? { model: metadata.model ?? this.agentSelection.model } : {}),
           ...((metadata.reasoningEffort ?? this.agentSelection.reasoningEffort) ? { reasoningEffort: metadata.reasoningEffort ?? this.agentSelection.reasoningEffort } : {}),
           ...((metadata.speed ?? this.agentSelection.speed) ? { speed: metadata.speed ?? this.agentSelection.speed } : {}),
@@ -659,6 +660,7 @@ export class DextRuntime {
       : undefined;
     const response = await this.agentRunner.runConversation({
       profile,
+      ...(profile.provider === "deepseek-harness" ? { agentPreset: metadata.agentPreset ?? this.agentSelection.agentPreset ?? "" } : {}),
       ...(metadata.model || this.agentSelection.model ? { model: metadata.model ?? this.agentSelection.model } : {}),
       ...((metadata.reasoningEffort ?? this.agentSelection.reasoningEffort) ? { reasoningEffort: metadata.reasoningEffort ?? this.agentSelection.reasoningEffort } : {}),
       ...((metadata.speed ?? this.agentSelection.speed) ? { speed: metadata.speed ?? this.agentSelection.speed } : {}),

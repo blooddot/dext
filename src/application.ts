@@ -25,6 +25,7 @@ import {
   type AgentSelection
 } from "./agentProfiles.js";
 import { DefaultAgentRunner } from "./core/agentRouter.js";
+import { listHarnessPresets } from "./core/harnessPresets.js";
 import { SkillCatalog } from "./core/skillCatalog.js";
 import { McpToolRegistry, type McpServerConfig, type McpToolConfig, type McpDiscoveredTool } from "./core/mcpRegistry.js";
 import { McpAccessTokenStore } from "./core/mcpSecrets.js";
@@ -82,12 +83,15 @@ export class DextApplication {
     // needing to implement Uri.joinPath just to construct the application.
     this.storage = new DextStorage(globalStorageUri ?? vscode.Uri.file(process.cwd()));
     this.agentRunner = new DefaultAgentRunner();
+    // Load once during extension startup. Later launches reuse this snapshot;
+    // Configure Agent and a fresh Harness selection explicitly refresh it.
+    void this.agentRunner.harness.preloadSettings();
     this.runtime.setAgentRunner(this.agentRunner);
     this.agents = new AgentProfileStore(globalState);
     this.agentRunner.harness.onModels = (profile, options) => {
       const saved = this.agents.list().find((item) => item.id === profile.id);
       const modelOptions = [...(saved?.modelOptions ?? []).filter((item) => !options.some((next) => next.id === item.id)), ...options];
-      this.updateAgentProfile({ ...profile, models: modelOptions.map((item) => item.id), modelOptions });
+      this.updateAgentProfile({ ...profile, ...(saved?.presets ? { presets: saved.presets } : {}), models: modelOptions.map((item) => item.id), modelOptions });
     };
     if (secretStorage) {
       const mcpSecrets = new McpAccessTokenStore(secretStorage, () => this.workspaceUri?.toString());
@@ -604,8 +608,12 @@ export class DextApplication {
   }
 
   setAgentSelection(selection: AgentSelection): void {
+    const previous = this.agents.currentSelection();
     this.agents.setSelection(selection);
     this.runtime.setAgentSelection(selection);
+    if (selection.profileId === "deepseek-harness" && previous.profileId !== "deepseek-harness") {
+      void this.agentRunner.harness.refreshSettings();
+    }
   }
 
   /** Profiles exposed to the composer. */
@@ -618,7 +626,7 @@ export class DextApplication {
       : [];
     const enabledIds = ids.filter((id) => (SUPPORTED_AGENT_PROFILE_IDS as readonly string[]).includes(id));
     const selectedIds = enabledIds.length ? enabledIds : ["codex", "claude", "deepseek-harness"];
-    return this.agents.list(selectedIds);
+    return this.agents.list(selectedIds, this.workspaceTrusted ? this.workspaceRoot : undefined);
   }
 
   /** Returns non-empty profile IDs that cannot be used by `dext.agentCli`. */
@@ -654,14 +662,27 @@ export class DextApplication {
     return this.agentRunner.dispose();
   }
 
+  async discoverHarnessPresets(): Promise<void> {
+    const profile = this.agents.list().find((item) => item.provider === "deepseek-harness");
+    if (!profile) return;
+    const presets = await listHarnessPresets(profile);
+    this.updateAgentProfile({ ...profile, presets });
+  }
+
   async discoverHarnessModels(): Promise<void> {
     const profile = this.agents.list().find((item) => item.provider === "deepseek-harness");
     if (!profile) return;
+    await this.discoverHarnessPresets();
     const args = this.workspaceTrusted
       ? vscode.workspace.getConfiguration("dext").get<Record<string, string[]>>("agentCliArgs", {})["deepseek-harness"] ?? []
       : [];
+    await this.agentRunner.harness.refreshSettings();
     const modelOptions = await this.agentRunner.harness.discoverModels(profile, this.workspaceRoot, args);
-    this.updateAgentProfile({ ...profile, models: modelOptions.map((item) => item.id), modelOptions });
+    const defaultModel = modelOptions.find((item) => item.isDefault);
+    this.updateAgentProfile({ ...profile, presets: this.agents.list().find((item) => item.id === profile.id)?.presets ?? [], models: modelOptions.map((item) => item.id), modelOptions, defaults: {
+      ...(defaultModel ? { model: defaultModel.id } : {}),
+      ...(defaultModel?.defaultReasoningEffort ? { reasoningEffort: defaultModel.defaultReasoningEffort } : {})
+    } });
   }
 
   async executeInput(source: string, metadata: Readonly<ExecutionMetadata> = {}): Promise<InputExecutionResponse> {

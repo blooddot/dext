@@ -30,6 +30,22 @@ function sidebarFixture(history: DextHistoryStore, sessions: DextHistorySession[
 }
 
 describe("shared History and Conversation actions", () => {
+  it("keeps an existing conversation's Harness preset when a late selection arrives", async () => {
+    const history = new DextHistoryStore(new MemoryState() as never);
+    await history.addSuccess("hello", [], { kind: "workflow", executions: [] }, "active", "agent", "turn");
+    const { sidebar, post } = sidebarFixture(history, history.list());
+    const selection = { mode: "agent", permission: "workspace-write", profileId: "deepseek-harness", model: "", reasoningEffort: "", speed: "", serviceTier: "", agentPreset: "standard" };
+    const setConversationSelection = vi.fn().mockResolvedValue(undefined);
+    const conversationSelections = new Map([["active", selection]]);
+    Object.assign(sidebar, { conversationSelections, preferences: { setConversationSelection } });
+    await (sidebar as unknown as { receive(message: unknown): Promise<void> }).receive({
+      type: "agentSelection", selection: { ...selection, agentPreset: "ptc" }
+    });
+    expect(setConversationSelection).not.toHaveBeenCalled();
+    expect(conversationSelections.get("active")?.agentPreset).toBe("standard");
+    expect(JSON.stringify(post.mock.calls)).toContain("new conversation");
+  });
+
   it("rejects late configuration changes while this conversation runs and unlocks independently of background runs", async () => {
     const history = new DextHistoryStore(new MemoryState() as never);
     const session: DextHistorySession = { id: "active", createdAt: 1, updatedAt: 1, turns: [] };

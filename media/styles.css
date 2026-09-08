@@ -1576,6 +1576,9 @@ main {
 }
 
 .input-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
   margin-top: 6px;
   padding: 7px 9px;
   border: 1px solid color-mix(in srgb, var(--vscode-editorError-foreground) 58%, var(--vscode-widget-border));
@@ -1583,9 +1586,16 @@ main {
   color: var(--vscode-errorForeground);
   background: color-mix(in srgb, var(--vscode-editorError-background, transparent) 28%, var(--vscode-textCodeBlock-background));
   font: var(--vscode-editor-font-size, 12px)/1.4 var(--vscode-editor-font-family);
+}
+
+.input-error[hidden] { display: none; }
+.input-error-message {
+  flex: 1;
+  min-width: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.input-error-close { flex: 0 0 auto; color: inherit; }
 
 .image-attachment {
   position: relative;
@@ -2082,14 +2092,36 @@ main {
   grid-template-columns: minmax(0, 1fr) 14px;
 }
 
+.composer-model-popover .composer-menu-option:disabled {
+  opacity: 0.55;
+  cursor: default;
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+}
+
 .composer-model-popover .composer-menu-category {
   grid-template-columns: minmax(0, 1fr) minmax(56px, auto) 14px;
+}
+
+.composer-model-popover .composer-preset-management {
+  margin-top: 4px;
+  padding-top: 7px;
+  border-top: 1px solid var(--vscode-menu-separatorBackground, var(--vscode-widget-border));
+  border-radius: 0;
 }
 
 .composer-menu-category-value {
   color: var(--vscode-descriptionForeground);
   font-size: 11px;
   text-align: right;
+}
+
+.composer-menu-empty {
+  padding: 7px 8px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: normal;
 }
 
 .composer-menu-back {
@@ -2123,6 +2155,17 @@ main {
   border-bottom: 1px solid var(--vscode-menu-separatorBackground, var(--vscode-widget-border));
   color: var(--vscode-descriptionForeground);
   font-size: 11px;
+}
+
+.composer-model-group-heading {
+  padding: 8px 6px 3px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.composer-menu-submenu-heading + .composer-model-group-heading {
+  padding-top: 6px;
 }
 
 button.primary {

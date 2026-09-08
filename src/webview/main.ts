@@ -42,6 +42,7 @@ import { observeComposerOverflow } from "./composerOverflow.js";
 import { enableConversationTabDrag } from "./conversationTabDrag.js";
 import { AgentTodoView } from "./agentTodoView.js";
 import { CLI_SPEEDS } from "../core/builtinCli.js";
+import { presentAgentSelection } from "../agentSelectionDefaults.js";
 
 interface VsCodeApi {
   postMessage(message: WebviewRequest): void;
@@ -94,6 +95,8 @@ const elements = {
   inputBody: element<HTMLElement>("input-body"),
   inputShell: element<HTMLElement>("input-shell"),
   inputError: element<HTMLElement>("input-error"),
+  inputErrorMessage: element<HTMLElement>("input-error-message"),
+  dismissInputError: element<HTMLButtonElement>("dismiss-input-error"),
   codeEditor: element<HTMLElement>("code-editor"),
   attachFiles: element<HTMLButtonElement>("attach-files"),
   modeControl: element<HTMLButtonElement>("mode-control"),
@@ -474,16 +477,21 @@ function updateRunState(): void {
     control.disabled = selectionLocked;
   }
   for (const menu of [elements.modeMenu, elements.permissionMenu, elements.agentMenu, elements.modelMenu, elements.modelSubmenu]) {
-    for (const button of menu.querySelectorAll<HTMLButtonElement>("button")) button.disabled = selectionLocked;
+    for (const button of menu.querySelectorAll<HTMLButtonElement>("button")) button.disabled = selectionLocked || button.dataset.presetDisabled === "true";
   }
   if (selectionLocked) closeComposerMenus();
   const codeMode = inputMode === "code";
+  const selection = sidebarState?.agentSelection;
+  const preset = selection?.profileId === "deepseek-harness"
+    ? sidebarState?.agentProfiles.find((profile) => profile.id === selection.profileId)?.presets?.find((item) => item.id === selection.agentPreset) : undefined;
+  const presetRestriction = preset?.requiresFullAccess && (inputMode !== "agent" || agentPermission !== "full-access")
+    ? "This preset requires Full access in Agent mode." : preset?.error;
   elements.inputSection.dataset.mode = inputMode;
   elements.run.disabled = executing
     ? stopping || !activeTurnId
-    : !editor.source.trim() || (codeMode && (hasErrors || inputKind === "invalid"));
+    : !editor.source.trim() || Boolean(presetRestriction) || (codeMode && (hasErrors || inputKind === "invalid"));
   elements.runLabel.textContent = executing ? (stopping ? "Stopping" : "Stop") : codeMode ? "Run" : "Send";
-  elements.run.title = elements.runLabel.textContent;
+  elements.run.title = !executing && presetRestriction ? presetRestriction : elements.runLabel.textContent;
   elements.run.setAttribute("aria-label", elements.runLabel.textContent);
   const runIcon = elements.run.querySelector<HTMLElement>("i");
   if (runIcon) runIcon.className = `codicon codicon-${executing ? "debug-stop" : codeMode ? "play" : "arrow-up"}`;
@@ -1233,11 +1241,9 @@ function renderAgentControls(state: SidebarState): void {
   editor.setLanguageEnabled(inputMode === "code");
   const selected = state.agentProfiles.find((item) => item.id === state.agentSelection.profileId)
     ?? state.agentProfiles[0];
-  type ModelOption = { id: string; label: string; reasoningEfforts: string[]; speedTiers: string[]; serviceTiers: string[]; defaultReasoningEffort?: string };
-  const options: ModelOption[] = selected?.modelOptions
-    ? selected.modelOptions
-    : (selected?.models ?? []).map((item): ModelOption => ({ id: item, label: item, reasoningEfforts: [], speedTiers: [], serviceTiers: [] }));
-  const selectedModel = options.find((item) => item.id === state.agentSelection.model);
+  const effective = presentAgentSelection(selected, state.agentSelection);
+  const options = effective.options;
+  const selectedModel = options.find((item) => item.id === effective.model);
   const modeLabel: Record<InputMode, string> = { agent: "Agent", ask: "Ask", plan: "Plan", code: "Code" };
   const modeIcon: Record<InputMode, string> = {
     agent: "codicon-hubot",
@@ -1257,8 +1263,8 @@ function renderAgentControls(state: SidebarState): void {
   elements.permissionControlIcon.className = `codicon ${PERMISSION_ICON[agentPermission]}`;
   elements.permissionControl.classList.toggle("is-full-access", agentPermission === "full-access");
   elements.agentControlValue.textContent = selected?.label ?? "Choose";
-  const selectedModelLabel = selectedModel?.label ?? "Default";
-  const selectedEffort = state.agentSelection.reasoningEffort ?? selectedModel?.defaultReasoningEffort;
+  const selectedModelLabel = effective.modelLabel;
+  const selectedEffort = effective.reasoningEffort;
   elements.modelControlValue.textContent = selectedEffort && selectedModel
     ? `${selectedModelLabel} ${displayOptionValue(selectedEffort)}`
     : selectedModelLabel;
@@ -1284,7 +1290,8 @@ function renderAgentControls(state: SidebarState): void {
     submitAgentSelection({ permission: agentPermission });
   }, ["full-access"]);
   renderComposerMenu(elements.agentMenu, state.agentProfiles.map((item) => [item.id, item.label, "codicon-account"]), selected?.id ?? "", (profileId) => {
-    submitAgentSelection({ profileId, model: "", reasoningEffort: "", speed: "", serviceTier: "" });
+    submitAgentSelection({ profileId, model: "", reasoningEffort: "", speed: "", serviceTier: "",
+      agentPreset: state.agentSelection.agentPreset ?? (profileId === "deepseek-harness" && !outputTurns.size ? "standard" : "") });
   });
   renderModelMenu(state, options, selectedModel);
   updateRunState();
@@ -1323,19 +1330,19 @@ function renderComposerMenu(
 
 function renderModelMenu(
   state: SidebarState,
-  options: readonly { id: string; label: string; reasoningEfforts: string[]; speedTiers: string[]; serviceTiers: string[]; defaultReasoningEffort?: string }[],
-  selectedModel: { id: string; label: string; reasoningEfforts: string[]; speedTiers: string[]; serviceTiers: string[]; defaultReasoningEffort?: string } | undefined
+  options: readonly { id: string; label: string; group?: string; reasoningEfforts: string[]; speedTiers: string[]; serviceTiers: string[]; defaultReasoningEffort?: string }[],
+  selectedModel: { id: string; label: string; group?: string; reasoningEfforts: string[]; speedTiers: string[]; serviceTiers: string[]; defaultReasoningEffort?: string } | undefined
 ): void {
   const current = state.agentSelection;
   const profile = state.agentProfiles.find((item) => item.id === current.profileId) ?? state.agentProfiles[0];
-  const selectedSpeed = current.speed || (current.serviceTier === "priority" || current.serviceTier === "fast"
-    ? "fast" : current.serviceTier === "default" ? "standard" : "");
-  const categories: { title: string; value: string; items: readonly (readonly [string, string])[]; selected: string; onSelect: (value: string) => void }[] = [
+  const effective = presentAgentSelection(profile, current);
+  const selectedSpeed = effective.speed;
+  const categories: { title: string; value: string; items: readonly { value: string; label: string; group?: string }[]; selected: string; onSelect: (value: string) => void }[] = [
     {
       title: "Model",
-      value: selectedModel?.label ?? "Default",
-      items: options.map((item) => [item.id, item.label]),
-      selected: current.model ?? "",
+      value: effective.modelLabel,
+      items: options.map((item) => ({ value: item.id, label: item.label, ...(item.group ? { group: item.group } : {}) })),
+      selected: effective.model,
       onSelect: (model) => {
         const next = options.find((item) => item.id === model);
         submitAgentSelection({ model, reasoningEffort: next?.defaultReasoningEffort ?? "", speed: "", serviceTier: "" });
@@ -1343,15 +1350,15 @@ function renderModelMenu(
     },
     {
       title: "Reasoning",
-      value: displayOptionValue(current.reasoningEffort ?? selectedModel?.defaultReasoningEffort ?? "Default"),
-      items: (selectedModel?.reasoningEfforts ?? []).map((item) => [item, displayOptionValue(item)]),
-      selected: current.reasoningEffort ?? selectedModel?.defaultReasoningEffort ?? "",
+      value: displayOptionValue(effective.reasoningEffort || "CLI setting"),
+      items: (selectedModel?.reasoningEfforts ?? []).map((item) => ({ value: item, label: displayOptionValue(item) })),
+      selected: effective.reasoningEffort,
       onSelect: (reasoningEffort) => submitAgentSelection({ reasoningEffort })
     },
     {
       title: "Speed",
-      value: displayOptionValue(selectedSpeed || "Default"),
-      items: (profile?.provider === "codex" ? CLI_SPEEDS : []).map((item) => [item, displayOptionValue(item)]),
+      value: displayOptionValue(selectedSpeed || "CLI setting"),
+      items: (profile?.provider === "codex" ? CLI_SPEEDS : []).map((item) => ({ value: item, label: displayOptionValue(item) })),
       selected: selectedSpeed,
       onSelect: (speed) => submitAgentSelection({ speed, serviceTier: "" })
     }
@@ -1360,6 +1367,35 @@ function renderModelMenu(
   elements.modelMenu.dataset.modelMenuView = "categories";
   elements.modelSubmenu.replaceChildren();
   elements.modelSubmenu.hidden = true;
+  if (profile?.provider === "deepseek-harness") {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "composer-menu-option composer-menu-category";
+    button.tabIndex = -1;
+    const title = document.createElement("span");
+    title.textContent = "Agent preset";
+    const value = document.createElement("span");
+    value.className = "composer-menu-category-value";
+    value.textContent = profile.presets?.find((preset) => preset.id === current.agentPreset)?.label || current.agentPreset || "ACP default";
+    const chevron = document.createElement("i");
+    chevron.className = "codicon codicon-chevron-right";
+    button.append(title, value, chevron);
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (!composerSelectionLocked()) renderHarnessPresetChoices(state);
+    });
+    elements.modelMenu.append(button);
+  }
+  if (!options.length) {
+    const empty = document.createElement("div");
+    empty.className = "composer-menu-empty";
+    empty.textContent = profile?.provider === "deepseek-harness"
+      ? "No models discovered. Using the Harness configuration; run Dext: Configure Agent to refresh this list."
+      : "No models are available for this Agent.";
+    elements.modelMenu.append(empty);
+    if (profile?.provider === "deepseek-harness") appendHarnessPresetManagementMenu(state);
+    return;
+  }
   for (const category of categories) {
     if (!category.items.length) continue;
     const button = document.createElement("button");
@@ -1382,12 +1418,101 @@ function renderModelMenu(
     button.addEventListener("click", openChoices);
     elements.modelMenu.append(button);
   }
+  if (profile?.provider === "deepseek-harness") appendHarnessPresetManagementMenu(state);
+}
+
+function appendHarnessPresetManagementMenu(state: SidebarState): void {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "composer-menu-option composer-preset-management";
+  button.tabIndex = -1;
+  const label = document.createElement("span");
+  label.textContent = "Manage presets";
+  const chevron = document.createElement("i");
+  chevron.className = "codicon codicon-chevron-right";
+  button.append(label, chevron);
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (!composerSelectionLocked()) renderHarnessPresetManagement(state);
+  });
+  elements.modelMenu.append(button);
+}
+
+function renderHarnessPresetChoices(state: SidebarState): void {
+  const profile = state.agentProfiles.find((item) => item.id === "deepseek-harness");
+  const current = state.agentSelection.agentPreset ?? "";
+  const locked = outputTurns.size > 0;
+  const fullAccess = state.agentSelection.permission === "full-access" && inputMode === "agent";
+  const menu = elements.modelSubmenu;
+  renderModelChoices(menu, "Agent preset", [], current, () => undefined);
+  if (locked) {
+    const note = document.createElement("div");
+    note.className = "composer-menu-empty";
+    note.textContent = "This conversation keeps its preset. Start a new conversation to change it.";
+    menu.append(note);
+  }
+  const presets = [{ id: "", label: "ACP default", description: "Use the existing ACP profile configuration.", error: undefined, requiresFullAccess: false }, ...(profile?.presets ?? [])];
+  for (const preset of presets) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "composer-menu-option";
+    button.tabIndex = -1;
+    button.setAttribute("role", "menuitemradio");
+    button.setAttribute("aria-checked", String(preset.id === current));
+    const restriction = preset.requiresFullAccess && !fullAccess;
+    button.disabled = locked || Boolean(preset.error) || restriction;
+    button.dataset.presetDisabled = String(button.disabled);
+    button.title = preset.error || (restriction ? "Requires Full access in Agent mode." : preset.description);
+    const label = document.createElement("span");
+    label.textContent = `${preset.label}${preset.error ? " (unavailable)" : restriction ? " (Full access)" : ""}`;
+    const check = document.createElement("i");
+    check.className = `codicon codicon-${preset.id === current ? "check" : "blank"}`;
+    button.append(label, check);
+    button.addEventListener("click", (event) => { event.stopPropagation(); submitAgentSelection({ agentPreset: preset.id }); });
+    menu.append(button);
+  }
+  if (current && !presets.some((preset) => preset.id === current)) {
+    const missing = document.createElement("div");
+    missing.className = "composer-menu-empty";
+    missing.textContent = `Preset '${current}' is unavailable. Refresh presets or choose another in a new conversation.`;
+    menu.append(missing);
+  }
+  positionModelSubmenu();
+}
+
+function renderHarnessPresetManagement(state: SidebarState): void {
+  const profile = state.agentProfiles.find((item) => item.id === "deepseek-harness");
+  const menu = elements.modelSubmenu;
+  renderModelChoices(menu, "Manage presets", [], "", () => undefined);
+  const actions: ["create" | "copy" | "edit" | "refresh", string][] = [
+    ["create", "Let Agent create a preset"], ["copy", "Copy and open configuration"],
+    ...(profile?.presets?.some((preset) => !preset.builtin) ? [["edit", "Open custom configuration"] as ["edit", string]] : []),
+    ["refresh", "Refresh presets"]
+  ];
+  for (const [action, label] of actions) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "composer-menu-option";
+    button.tabIndex = -1;
+    button.setAttribute("role", "menuitem");
+    const text = document.createElement("span");
+    text.textContent = label;
+    button.append(text);
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (composerSelectionLocked()) return;
+      closeComposerMenus();
+      vscode.postMessage({ type: "harnessPresetAction", action });
+    });
+    menu.append(button);
+  }
+  positionModelSubmenu();
 }
 
 function renderModelChoices(
   menu: HTMLElement,
   title: string,
-  items: readonly (readonly [string, string])[],
+  items: readonly { value: string; label: string; group?: string }[],
   selected: string,
   onSelect: (value: string) => void
 ): void {
@@ -1399,7 +1524,15 @@ function renderModelChoices(
   heading.className = "composer-menu-submenu-heading";
   heading.textContent = title;
   menu.append(heading);
-  for (const [value, label] of items) {
+  let priorGroup: string | undefined;
+  for (const { value, label, group } of items) {
+    if (group && group !== priorGroup) {
+      const heading = document.createElement("div");
+      heading.className = "composer-model-group-heading";
+      heading.textContent = group;
+      menu.append(heading);
+    }
+    priorGroup = group;
     const button = document.createElement("button");
     button.type = "button";
     button.className = "composer-menu-option";
@@ -1452,6 +1585,7 @@ function submitAgentSelection(change: Partial<SidebarState["agentSelection"]>): 
       permission: change.permission ?? agentPermission,
       profileId: change.profileId ?? selection?.profileId ?? "",
       model: change.model ?? selection?.model ?? "",
+      agentPreset: change.agentPreset ?? selection?.agentPreset ?? "",
       reasoningEffort: change.reasoningEffort ?? selection?.reasoningEffort ?? "",
       speed: change.speed ?? selection?.speed ?? "",
       serviceTier: change.serviceTier ?? selection?.serviceTier ?? ""
@@ -1655,7 +1789,7 @@ function closeComposerExtras(): void {
 }
 
 function composerMenuItems(menu: HTMLElement): HTMLButtonElement[] {
-  return [...menu.querySelectorAll<HTMLButtonElement>(":scope > button")];
+  return [...menu.querySelectorAll<HTMLButtonElement>(":scope > button")].filter((button) => !button.disabled);
 }
 
 function focusComposerMenuItem(menu: HTMLElement, index: number): void {
@@ -2697,13 +2831,13 @@ function renderResult(response: InputExecutionResponse, reviewTurnId?: string): 
 }
 
 function clearInputError(): void {
-  elements.inputError.textContent = "";
+  elements.inputErrorMessage.textContent = "";
   elements.inputError.hidden = true;
 }
 
 function renderInputError(message: unknown): void {
   const text = message instanceof Error ? message.message : String(message);
-  elements.inputError.textContent = text;
+  elements.inputErrorMessage.textContent = text;
   elements.inputError.hidden = false;
 }
 
@@ -3236,7 +3370,12 @@ function hydrateOutputTurnOnOpen(event: Event): void {
 
 function renderOutputSession(session: DextHistorySession): void {
   const signature = conversationSignature(session);
-  if (renderedConversationId === session.id && renderedConversationSignature === signature) {
+  const sessionTurnIds = new Set(session.turns.map((turn) => turn.id));
+  // A newly streamed row is newer than the last historical signature. Deleting
+  // that row can return to the same signature while the DOM still contains it.
+  const visibleTurnsMatch = outputTurns.size === sessionTurnIds.size
+    && [...outputTurns.keys()].every((turnId) => sessionTurnIds.has(turnId));
+  if (renderedConversationId === session.id && renderedConversationSignature === signature && visibleTurnsMatch) {
     return;
   }
   if (renderedConversationId && renderedConversationId !== session.id) cacheRenderedConversation();
@@ -3254,7 +3393,6 @@ function renderOutputSession(session: DextHistorySession): void {
   // Also verify turn identities. Older builds persisted a different id than
   // the live row, so blindly restoring such a snapshot would keep delete and
   // retry actions broken until the webview was fully reloaded.
-  const sessionTurnIds = new Set(session.turns.map((turn) => turn.id));
   const cacheMatchesSession = cached
     && cached.turns.size === sessionTurnIds.size
     && [...cached.turns.keys()].every((turnId) => sessionTurnIds.has(turnId));
@@ -3454,6 +3592,10 @@ function clearSubmittedInput(): void {
 }
 
 elements.run.addEventListener("click", run);
+elements.dismissInputError.addEventListener("click", () => {
+  clearInputError();
+  editor.focus();
+});
 elements.planTarget.addEventListener("click", () => {
   if (activePlanPath) vscode.postMessage({ type: "openFileReference", reference: activePlanPath });
   else vscode.postMessage({ type: "choosePlan" });
@@ -3671,6 +3813,9 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   }
   if (message.type === "outputSession") {
     if (message.switchId !== undefined && message.switchId !== conversationSwitchId) return;
+    // History can delete a turn in another tab. Do not keep that tab's stale
+    // DOM just because its snapshot must not replace the visible conversation.
+    if (message.session.id !== activeConversationId) conversationViewCache.delete(message.session.id);
     // A pre-click payload can arrive after the local tab selection.  It has
     // no switch id to reject, so also require it to match the visible tab.
     if (!message.hostInitiated && activeConversationId && message.session.id !== activeConversationId) return;

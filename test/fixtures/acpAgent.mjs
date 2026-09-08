@@ -3,7 +3,10 @@ import { randomUUID } from "node:crypto";
 const sessions = new Map();
 const send = (value) => process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", ...value })}\n`);
 const options = (model = "model-a", effort = "high") => [
-  { id: "model", name: "Model", type: "select", currentValue: model, options: [{ value: "model-a", name: "Model A" }, { value: "model-b", name: "Model B" }] },
+  { id: "model", name: "Model", type: "select", currentValue: model, options: [
+    { group: "deepseek", name: "DeepSeek", options: [{ value: "model-a", name: "Model A" }] },
+    { group: "openai", name: "openai", options: [{ value: "model-b", name: "Model B" }] }
+  ] },
   { id: "reasoning_effort", name: "Reasoning", type: "select", currentValue: effort, options: [{ value: "low", name: "Low" }, { value: "high", name: "High" }] }
 ];
 const update = (sessionId, event) => send({ method: "session/update", params: { sessionId, update: event } });

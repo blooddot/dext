@@ -13,6 +13,7 @@ import { agentTodoEvent, ClaudeTodoTracker, isClaudeTodoTool, normalizeAgentTodo
 import { cliCompletion } from "./cliCompletion.js";
 
 export interface AgentExecutionRequest {
+  agentPreset?: string;
   profile: AgentProfile;
   model?: string;
   reasoningEffort?: string;
@@ -34,6 +35,7 @@ export interface AgentExecutionRequest {
 /** An unstructured user conversation. Unlike Dext APIs, it has no JSON
  * envelope or output schema and its result is ordinary assistant text. */
 export interface AgentConversationRequest {
+  agentPreset?: string;
   profile: AgentProfile;
   mode: "agent" | "ask" | "plan";
   model?: string;
@@ -105,14 +107,17 @@ function windowsCommandCandidates(
   options: Required<CommandResolutionOptions>
 ): string[] {
   const trimmed = command.trim();
-  const hasPath = isAbsolute(trimmed) || trimmed.includes("\\") || trimmed.includes("/");
   const extensions = (options.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD")
     .split(";")
     .map((extension) => extension.trim().toLowerCase())
     .filter(Boolean);
-  const names = hasPath || extname(trimmed)
+  // A bare Volta shim (for example `dsh`) is a Unix shell script beside the
+  // Windows `.cmd` shim. `spawn()` cannot execute that bare file on Windows,
+  // so always prefer a PATHEXT-qualified command when the user did not name
+  // an extension explicitly.
+  const names = extname(trimmed)
     ? [trimmed]
-    : [trimmed, ...extensions.map((extension) => `${trimmed}${extension}`)];
+    : [...extensions.map((extension) => `${trimmed}${extension}`), trimmed];
 
   if (provider === "codex" && trimmed.toLowerCase() === "codex") {
     const configuredPath = configuredCodexCliPath(options);

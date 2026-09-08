@@ -3,9 +3,10 @@ import type { SessionConfigOption, SessionNotification, RequestPermissionRequest
 import type { AgentModelOption, AgentPermission, AgentProfile } from "../agentProfiles.js";
 import { agentPayload, bootstrappedConversationInput, type AgentRunner, type AgentConversationRequest, type AgentExecutionRequest } from "./agentRunner.js";
 import { ExecutionCancelledError } from "./executionErrors.js";
-import { createHarnessPolicy, decodeHarnessSession, encodeHarnessSession, harnessBinding } from "./deepseekHarnessPolicy.js";
+import { createHarnessPolicy, decodeHarnessSession, encodeHarnessSession, harnessBinding, readHarnessLaunchSettings, type HarnessLaunchSettings } from "./deepseekHarnessPolicy.js";
 import { DeepSeekHarnessTransport } from "./deepseekHarnessTransport.js";
 import { agentTodoEvent, normalizeAgentTodos } from "./agentTodoTracking.js";
+import { harnessPresetPatch } from "./harnessPresets.js";
 
 type Request = AgentConversationRequest;
 interface Session {
@@ -15,15 +16,21 @@ interface Session {
   request?: Request | undefined; messages: Map<string, string>; tools: Map<string, ToolCallUpdate>; fresh: boolean;
 }
 
-export function harnessChoices(options: readonly SessionConfigOption[], id: string): { value: string; name: string }[] {
+export function harnessChoices(options: readonly SessionConfigOption[], id: string): { value: string; name: string; group?: string }[] {
   const option = options.find((item) => item.id === id);
   if (!option || option.type !== "select") return [];
-  return option.options.flatMap((item) => "options" in item ? item.options : [item]);
+  return option.options.flatMap((item) => "group" in item
+    ? item.options.map((choice) => ({ value: choice.value, name: choice.name, group: item.name }))
+    : [{ value: item.value, name: item.name }]);
 }
 
-export function harnessModelOptions(options: readonly SessionConfigOption[]): AgentModelOption[] {
+export function harnessModelOptions(options: readonly SessionConfigOption[], defaultModel?: string, defaultEffort?: string): AgentModelOption[] {
   const current = options.find((item) => item.id === "model")?.currentValue;
+  const effort = defaultEffort ?? options.find((item) => item.id === "reasoning_effort")?.currentValue;
   return harnessChoices(options, "model").map((item) => ({ id: item.value, label: item.name,
+    ...(item.group ? { group: item.group } : {}),
+    ...(defaultModel ? { isDefault: item.value === defaultModel } : {}),
+    ...(item.value === current && typeof effort === "string" && effort ? { defaultReasoningEffort: effort } : {}),
     reasoningEfforts: item.value === current ? harnessChoices(options, "reasoning_effort").map((choice) => choice.value).filter(Boolean) : [],
     speedTiers: [], serviceTiers: [] }));
 }
@@ -33,9 +40,17 @@ export class DeepSeekHarnessRunner implements AgentRunner {
   private readonly queues = new Map<string, Promise<unknown>>();
   private disposed = false;
   private readonly controllers = new Set<AbortController>();
+  private settingsLoad?: Promise<HarnessLaunchSettings | undefined>;
   onModels?: (profile: AgentProfile, options: AgentModelOption[]) => void;
-  constructor(private timeoutMs = 3_600_000, private readonly transportFactory = (command: string, args: readonly string[], cwd: string, client: ConstructorParameters<typeof DeepSeekHarnessTransport>[3]) => new DeepSeekHarnessTransport(command, args, cwd, client)) {}
+  constructor(
+    private timeoutMs = 3_600_000,
+    private readonly transportFactory = (command: string, args: readonly string[], cwd: string, client: ConstructorParameters<typeof DeepSeekHarnessTransport>[3]) => new DeepSeekHarnessTransport(command, args, cwd, client),
+    private readonly settingsLoader: () => Promise<HarnessLaunchSettings | undefined> = readHarnessLaunchSettings
+  ) {}
   setTimeoutMs(value: number): void { this.timeoutMs = value; }
+  private launchSettings(): Promise<HarnessLaunchSettings | undefined> { return this.settingsLoad ??= this.settingsLoader(); }
+  async preloadSettings(): Promise<void> { await this.launchSettings(); }
+  async refreshSettings(): Promise<void> { this.settingsLoad = this.settingsLoader(); await this.settingsLoad; }
 
   private arguments(args: readonly string[], patch: string): string[] {
     for (let i = 0; i < args.length; i += 2) {
@@ -44,10 +59,12 @@ export class DeepSeekHarnessRunner implements AgentRunner {
     return [...args, "--profile", "acp", "--patch", patch];
   }
 
-  private async open(request: Request, binding: string): Promise<Session> {
+  private async open(request: Request, binding: string, settings?: HarnessLaunchSettings): Promise<Session> {
     if (request.signal?.aborted) throw new ExecutionCancelledError();
     const permission = request.allowWorkspaceWrite ? request.permission ?? "workspace-write" : "read-only";
-    const policy = await createHarnessPolicy(permission, request.cwd);
+    const presetPatch = request.agentPreset
+      ? await harnessPresetPatch(request.profile, request.agentPreset, permission, settings?.defaultModel ? { ...settings.defaultModel } : {}) : [];
+    const policy = await createHarnessPolicy(permission, request.cwd, settings, presetPatch);
     let session: Session | undefined;
     let transport: DeepSeekHarnessTransport | undefined;
     const onAbort = (): void => { void transport?.close(); };
@@ -132,7 +149,11 @@ export class DeepSeekHarnessRunner implements AgentRunner {
     if (target !== undefined && efforts.some((item) => item.value === target)) {
       session.options = (await session.transport.wait(session.transport.connection.setSessionConfigOption({ sessionId: session.id, configId: "reasoning_effort", value: target }))).configOptions;
     }
-    this.onModels?.(request.profile, harnessModelOptions(session.options).filter((item) => item.id === model));
+    const defaultModel = session.defaults.get("model");
+    this.onModels?.({ ...request.profile, defaults: {
+      ...(defaultModel ? { model: defaultModel } : {}),
+      ...(session.defaults.get("reasoning_effort") ? { reasoningEffort: session.defaults.get("reasoning_effort")! } : {})
+    } }, harnessModelOptions(session.options, defaultModel, session.defaults.get(`reasoning:${model}`)).filter((item) => item.id === model));
   }
 
   discoverModels(profile: AgentProfile, cwd: string, args: readonly string[] = []): Promise<AgentModelOption[]> {
@@ -152,13 +173,14 @@ export class DeepSeekHarnessRunner implements AgentRunner {
     controller.signal.addEventListener("abort", onAbort, { once: true });
     try {
       const request: Request = { profile, cwd, cliArguments: args, mode: "ask", input: "", metadata: {}, allowWorkspaceWrite: false, signal: controller.signal };
-      const binding = await harnessBinding(cwd, "read-only", profile.command, args);
-      session = await this.open(request, binding);
+      const settings = await this.launchSettings();
+      const binding = await harnessBinding(cwd, "read-only", profile.command, args, settings);
+      session = await this.open(request, binding, settings);
       if (controller.signal.aborted) throw new ExecutionCancelledError();
       const models: AgentModelOption[] = [];
       for (const choice of harnessChoices(session.options, "model")) {
         session.options = (await session.transport.wait(session.transport.connection.setSessionConfigOption({ sessionId: session.id, configId: "model", value: choice.value }))).configOptions;
-        models.push(harnessModelOptions(session.options).find((item) => item.id === choice.value)!);
+        models.push(harnessModelOptions(session.options, session.defaults.get("model")).find((item) => item.id === choice.value)!);
       }
       return models;
     } finally {
@@ -200,12 +222,13 @@ export class DeepSeekHarnessRunner implements AgentRunner {
     controller.signal.addEventListener("abort", abortTransport, { once: true });
     try {
       const permission = request.allowWorkspaceWrite ? request.permission ?? "workspace-write" : "read-only";
-      const binding = await harnessBinding(request.cwd, permission, request.profile.command, request.cliArguments ?? []);
+      const settings = await this.launchSettings();
+      const binding = await harnessBinding(request.cwd, permission, request.profile.command, request.cliArguments ?? [], settings, request.agentPreset);
       session = this.sessions.get(key);
       if (session && (session.binding !== binding || !session.transport.alive)) {
         await this.close(session); this.sessions.delete(key); session = undefined;
       }
-      session ??= await this.open(active, binding);
+      session ??= await this.open(active, binding, settings);
       this.sessions.set(key, session);
       if (controller.signal.aborted) throw controller.signal.reason;
       session.request = active; session.messages.clear(); session.tools.clear();

@@ -123,12 +123,14 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
       mode: z.enum(["agent", "ask", "plan", "code"]),
       permission: z.enum(["workspace-write", "full-access"]),
       profileId: z.string(),
+      agentPreset: z.string().max(128).optional(),
       model: z.string(),
       reasoningEffort: z.string(),
       speed: z.string(),
       serviceTier: z.string()
     }).strict()
-  })
+  }),
+  z.object({ type: z.literal("harnessPresetAction"), action: z.enum(["create", "copy", "edit", "refresh"]) })
 ]);
 
 export type WebviewRequest = z.infer<typeof webviewRequestSchema>;

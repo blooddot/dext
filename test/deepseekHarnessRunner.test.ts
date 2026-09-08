@@ -20,6 +20,15 @@ function request(input = "hello", key = "conversation"): AgentConversationReques
 afterEach(async () => { await Promise.all(runners.splice(0).map((value) => value.dispose())); });
 
 describe("Harness runner", { timeout: 15000 }, () => {
+  it("loads Harness settings once, unless an explicit refresh requests a new snapshot", async () => {
+    const loader = vi.fn(async () => undefined);
+    const value = new DeepSeekHarnessRunner(15000, (_command, _args, cwd, client) => new DeepSeekHarnessTransport(process.execPath, [fixture], cwd, client), loader);
+    runners.push(value);
+    await Promise.all([value.preloadSettings(), value.preloadSettings()]);
+    expect(loader).toHaveBeenCalledOnce();
+    await value.refreshSettings();
+    expect(loader).toHaveBeenCalledTimes(2);
+  });
   it("disposes model discovery while its handshake is pending", async () => {
     const value = new DeepSeekHarnessRunner(15000, (_command, _args, cwd, client) => new DeepSeekHarnessTransport(process.execPath, [fixture, "--no-handshake"], cwd, client));
     runners.push(value);
@@ -61,7 +70,10 @@ describe("Harness runner", { timeout: 15000 }, () => {
   it("discovers models and reasoning without submitting prompts", async () => {
     const options = await runner().discoverModels(request().profile, process.cwd());
     expect(options.map((item) => item.id)).toEqual(["model-a", "model-b"]);
-    expect(options.every((item) => item.reasoningEfforts.join() === "low,high")).toBe(true);
+    expect(options.map((item) => item.group)).toEqual(["DeepSeek", "openai"]);
+      expect(options.every((item) => item.reasoningEfforts.join() === "low,high")).toBe(true);
+      expect(options.filter((item) => item.isDefault).map((item) => item.id)).toEqual(["model-a"]);
+      expect(options.every((item) => item.defaultReasoningEffort)).toBe(true);
   });
   it("rejects unsupported model settings", async () => {
     await expect(runner().runConversation({ ...request(), model: "missing" })).rejects.toThrow("unavailable");

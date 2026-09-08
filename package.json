@@ -1099,6 +1099,7 @@
     "@ax-llm/ax": "23.0.11",
     "jsonc-parser": "^3.3.1",
     "markdown-it": "^14.1.0",
+    "yaml": "2.8.1",
     "zod": "4.4.3"
   },
   "devDependencies": {

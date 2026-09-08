@@ -27,6 +27,7 @@ import { openDextFileReference, openExternalLink } from "./vscodeContextHost.js"
 import { webviewRequestSchema } from "./webviewProtocol.js";
 import type { ConversationSummary, WebviewResponse } from "./webviewProtocol.js";
 import type { AgentSelection } from "./agentProfiles.js";
+import { copyHarnessPreset, harnessPresetFile } from "./core/harnessPresets.js";
 import type { DextHistoryRecord, DextHistorySession, DextHistoryStore } from "./historyStore.js";
 import type { DextConversationPreferences } from "./conversationPreferences.js";
 import { conversationTitle, historyTurnTitle } from "./historyRender.js";
@@ -95,7 +96,7 @@ function conversationContext(turns: readonly DextHistoryRecord[]): string | unde
 // New tabs always start in Agent mode, while keeping the provider/model
 // controls the user was using in the tab they came from.
 function defaultConversationSelection(previous: AgentSelection): AgentSelection {
-  return { ...previous, mode: "agent" };
+  return { ...previous, mode: "agent", ...(previous.profileId === "deepseek-harness" ? { agentPreset: previous.agentPreset ?? "standard" } : {}) };
 }
 
 // The picker ranks paths in the host, so the index has to be broad enough to
@@ -136,6 +137,11 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   // are open, while every conversation stays reachable through history.
   private openConversations: string[] = [this.activeSession.id];
   private sessionsHydrated = false;
+  // Model discovery opens an ACP session. Run it once when this sidebar first
+  // needs Harness, or when the user explicitly switches to Harness, rather
+  // than before every turn.
+  private harnessModelsDiscovered = false;
+  private harnessModelDiscovery: Promise<void> | undefined;
   private readonly activeExecutions = new Map<string, {
     turnId: string;
     mode: "agent" | "ask" | "plan" | "code";
@@ -423,6 +429,12 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     };
     view.webview.html = this.html(view.webview);
     view.webview.onDidReceiveMessage((raw: unknown) => this.receive(raw));
+    void this.discoverHarnessModelsOnce().then(
+      () => this.refresh(),
+      // The picker remains usable with the last known models when dsh is not
+      // installed or its provider is temporarily unavailable.
+      () => undefined
+    );
     view.onDidDispose(() => {
       if (this.view === view) {
         this.view = undefined;
@@ -547,6 +559,61 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   async renameConversation(sessionId: string, title: string): Promise<void> {
     await this.preferences.setTitle(sessionId, title);
     await this.postConversationState();
+  }
+
+  private discoverHarnessModelsOnce(): Promise<void> {
+    const selection = this.conversationSelections.get(this.activeSession.id)
+      ?? this.application.state().agentSelection;
+    if (
+      this.harnessModelsDiscovered
+      || selection.profileId !== "deepseek-harness"
+      || !this.application.agentProfiles().some((profile) => profile.id === "deepseek-harness")
+    ) return Promise.resolve();
+    if (this.harnessModelDiscovery) return this.harnessModelDiscovery;
+    this.harnessModelDiscovery = this.application.discoverHarnessModels()
+      .then(() => { this.harnessModelsDiscovered = true; })
+      .finally(() => { this.harnessModelDiscovery = undefined; });
+    return this.harnessModelDiscovery;
+  }
+
+  private async manageHarnessPreset(action: "create" | "copy" | "edit" | "refresh"): Promise<void> {
+    const sourceSelection = this.conversationSelections.get(this.activeSession.id) ?? this.application.state().agentSelection;
+    await this.application.discoverHarnessPresets();
+    await this.refresh();
+    if (action === "refresh") return;
+    const profile = this.application.agentProfiles().find((item) => item.provider === "deepseek-harness");
+    if (!profile) throw new Error("DeepSeek Harness is not enabled.");
+    if (action === "create") {
+      const preset = profile.presets?.find((item) => item.id === "cordis");
+      if (!preset || preset.error) throw new Error(preset?.error ?? "The Harness Create preset is unavailable.");
+      await this.newConversation();
+      const selection: AgentSelection = { ...sourceSelection, profileId: profile.id, agentPreset: "cordis", mode: "agent" };
+      this.conversationSelections.set(this.activeSession.id, selection);
+      this.application.setAgentSelection(selection);
+      await this.preferences.setConversationSelection(this.activeSession.id, selection);
+      await this.postConversationState();
+      await this.refresh();
+      this.setInput("Help me create a custom DeepSeek Harness Agent preset. First ask what I want it to do. Use the preset-authoring guidance supplied by Create mode, copy an existing preset into the Harness user preset directory, then edit that copy. Keep built-in presets unchanged. Explain the result and tell me to refresh Agent presets in Dext when it is ready.");
+      return;
+    }
+    const candidates = (profile.presets ?? []).filter((item) => action === "edit" ? !item.builtin : !item.error);
+    const picked = await vscode.window.showQuickPick(candidates.map((preset) => ({
+      label: preset.label, description: preset.id, detail: preset.error ?? preset.description, preset
+    })), { title: action === "copy" ? "Copy an Agent preset" : "Open a custom Agent preset", placeHolder: "Choose a preset" });
+    if (!picked) return;
+    let file: string;
+    if (action === "copy") {
+      const id = await vscode.window.showInputBox({
+        title: "Name the preset copy", prompt: "Lowercase letters, numbers and hyphens", value: `${picked.preset.id}-custom`,
+        validateInput: (value) => !/^[a-z0-9][a-z0-9-]{0,127}$/.test(value) ? "Use lowercase letters, numbers and hyphens."
+          : profile.presets?.some((item) => item.id === value) ? "That preset ID already exists." : undefined
+      });
+      if (!id) return;
+      file = await copyHarnessPreset(profile, picked.preset.id, id);
+    } else file = await harnessPresetFile(profile, picked.preset.id);
+    await vscode.window.showTextDocument(vscode.Uri.file(file));
+    await this.application.discoverHarnessPresets();
+    await this.refresh();
   }
 
   async renameTurn(sessionId: string, turnId: string, title: string): Promise<void> {
@@ -881,6 +948,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         case "pinConversation":
           await this.pinConversation(request.sessionId, request.pinned);
           break;
+        case "harnessPresetAction":
+          await this.manageHarnessPreset(request.action);
+          break;
         case "agentSelection":
           {
           // Reject late menu clicks after execution has already started.
@@ -888,11 +958,17 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
             await this.refresh();
             break;
           }
+          const previousProfileId = this.conversationSelections.get(this.activeSession.id)?.profileId;
+          const previousPreset = this.conversationSelections.get(this.activeSession.id)?.agentPreset ?? "";
+          if (this.activeSession.turns.length && (request.selection.agentPreset ?? previousPreset) !== previousPreset) {
+            throw new Error("Choose an Agent preset in a new conversation. This conversation keeps its original preset.");
+          }
           const selection = {
             mode: request.selection.mode,
             permission: request.selection.permission,
             profileId: request.selection.profileId,
             model: request.selection.model,
+            ...(request.selection.agentPreset !== undefined || previousPreset ? { agentPreset: request.selection.agentPreset ?? previousPreset } : {}),
             reasoningEffort: request.selection.reasoningEffort,
             speed: request.selection.speed,
             serviceTier: request.selection.serviceTier
@@ -900,6 +976,10 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           this.conversationSelections.set(this.activeSession.id, selection);
           await this.preferences.setConversationSelection(this.activeSession.id, selection);
           this.application.setAgentSelection(selection);
+          if (selection.profileId === "deepseek-harness" && previousProfileId !== "deepseek-harness") {
+            this.harnessModelsDiscovered = false;
+            await this.discoverHarnessModelsOnce().catch(() => undefined);
+          }
           this.updateRunningContext();
           await this.refresh();
           break;
@@ -1261,6 +1341,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       const forkFrom = providerSession ? undefined : profile ? session.forkProviderSessions?.[profile.provider] : undefined;
       const metadata = {
         agentSessionId: sessionId,
+        agentPreset: selection.agentPreset ?? "",
         ...(providerSession ? { conversationProviderSessionId: providerSession } : {}),
         ...(forkFrom ? { conversationForkFrom: forkFrom } : {}),
         ...(priorConversation ? { conversationContext: priorConversation } : {}),
@@ -1621,7 +1702,10 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           <button id="attach-files" class="composer-attach icon-button" type="button" title="Attach workspace files" aria-label="Attach workspace files"><i class="codicon codicon-attach"></i></button>
         </section>
 
-        <div id="input-error" class="input-error" role="alert" hidden></div>
+        <div id="input-error" class="input-error" role="alert" hidden>
+          <span id="input-error-message" class="input-error-message"></span>
+          <button id="dismiss-input-error" class="icon-button input-error-close" type="button" title="Dismiss error" aria-label="Dismiss error"><i class="codicon codicon-close" aria-hidden="true"></i></button>
+        </div>
 
         <div id="attachment-bar" class="attachment-bar hidden" aria-label="Image attachments"></div>
 

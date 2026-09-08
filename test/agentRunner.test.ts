@@ -427,6 +427,19 @@ describe("CLI command resolution", () => {
     })).toBe(join(directory, "codex.cmd"));
   });
 
+  it("prefers a Windows extension over a same-named Volta shell shim", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "dext-volta-command-test-"));
+    temporaryDirectories.push(directory);
+    await writeFile(join(directory, "dsh"), "#!/bin/bash", "utf8");
+    await writeFile(join(directory, "dsh.cmd"), "@echo off", "utf8");
+
+    expect(resolveCliCommand("dsh", "deepseek-harness", {
+      platform: "win32",
+      env: { Path: directory, PATHEXT: ".CMD;.EXE" },
+      home: directory
+    })).toBe(join(directory, "dsh.cmd"));
+  });
+
   it("finds the Codex desktop CLI under CODEX_HOME when PATH is missing", async () => {
     const directory = await mkdtemp(join(tmpdir(), "dext-codex-test-"));
     temporaryDirectories.push(directory);

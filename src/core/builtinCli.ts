@@ -83,6 +83,7 @@ export function builtinCliMetadata(
   const inherit = !explicitCli && sameSelection && model === inheritedModel;
   return {
     ...metadata, agent: profile.id, model,
+    agentPreset: profile.provider === "deepseek-harness" && !explicitCli && sameSelection ? selection.agentPreset ?? "" : "",
     reasoningEffort: reasoning ?? (inherit ? selection.reasoningEffort ?? "" : ""),
     speed: speed ?? (inherit ? selection.speed ?? "" : ""),
     serviceTier: speed ? "" : inherit ? selection.serviceTier ?? "" : ""

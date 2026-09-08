@@ -11,6 +11,16 @@ export function harnessSpawnCommand(command: string, args: readonly string[]): {
   if (/\.(?:m?js)$/i.test(command)) return { command: "node", args: [command, ...args] };
   if (!/\.(cmd|bat)$/i.test(command)) return { command, args: [...args] };
   const script = readFileSync(command, "utf8");
+  // Volta's bin directory deliberately contains a tiny `dsh.cmd` dispatcher.
+  // Unlike an npm shim it has no Node entry itself, but its installed package
+  // has the ordinary npm shim we can launch without invoking cmd.exe.
+  if (/\bvolta\s+run\s+%~n0\b/i.test(script)) {
+    const packageShim = join(
+      dirname(dirname(command)), "tools", "image", "packages", "@deepseek-ai", "dsh", "dsh.cmd"
+    );
+    if (existsSync(packageShim)) return harnessSpawnCommand(packageShim, args);
+    return { command: "volta", args: ["run", command.replace(/^.*[\\/]/, "").replace(/\.(cmd|bat)$/i, ""), ...args] };
+  }
   const relative = /["']?%[~]?dp0%?[\\/]([^"\r\n]*?\.(?:m?js))["']/i.exec(script)?.[1]
     ?? /["']?%dp0%[\\/]([^"\r\n]*?\.(?:m?js))["']/i.exec(script)?.[1];
   const entry = relative ? join(dirname(command), relative) : join(dirname(command), "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js");

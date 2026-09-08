@@ -16,12 +16,17 @@ export interface AgentProfile {
   command: string;
   models: string[];
   modelOptions?: AgentModelOption[];
+  presets?: HarnessPresetOption[];
+  defaults?: Pick<AgentSelection, "model" | "reasoningEffort" | "speed">;
 }
 
 export interface AgentModelOption {
   id: string;
   label: string;
+  /** ACP model-provider label, used to keep Harness choices readable. */
+  group?: string;
   defaultReasoningEffort?: string;
+  isDefault?: boolean;
   reasoningEfforts: string[];
   speedTiers: string[];
   serviceTiers: string[];
@@ -37,7 +42,17 @@ export type WritableAgentPermission = Exclude<AgentPermission, "read-only">;
 
 export const AGENT_PERMISSIONS: readonly WritableAgentPermission[] = ["workspace-write", "full-access"];
 
+export interface HarnessPresetOption {
+  id: string;
+  label: string;
+  description: string;
+  builtin: boolean;
+  requiresFullAccess: boolean;
+  error?: string;
+}
+
 export interface AgentSelection {
+  agentPreset?: string;
   mode?: "agent" | "ask" | "plan" | "code";
   /** Agent and Plan select a write scope; Ask always runs read-only. */
   permission?: WritableAgentPermission;
@@ -50,6 +65,57 @@ export interface AgentSelection {
 
 const STORAGE_KEY = "dext.agentProfiles";
 const SELECTION_KEY = "dext.agentSelection";
+
+/** Read only the quoted scalar settings used by the composer. Section values
+ * must not leak into root defaults (for example a different Codex profile). */
+export function codexConfiguredDefaults(sources: readonly string[]): NonNullable<AgentProfile["defaults"]> {
+  const sections = new Map<string, Record<string, string>>();
+  for (const source of sources) {
+    let section = "";
+    for (const line of source.split(/\r?\n/)) {
+      const header = /^\s*\[([^\]]+)\]/.exec(line);
+      if (header) { section = header[1]!.replace(/["']/g, ""); continue; }
+      const scalar = /^\s*(model|model_reasoning_effort|service_tier|profile)\s*=\s*(["'])(.*?)\2\s*(?:#.*)?$/.exec(line);
+      if (!scalar) continue;
+      const values = sections.get(section) ?? {};
+      values[scalar[1]!] = scalar[3]!;
+      sections.set(section, values);
+    }
+  }
+  const root = sections.get("") ?? {};
+  const values = { ...root, ...(root.profile ? sections.get(`profiles.${root.profile}`) : {}) };
+  return {
+    ...(values.model ? { model: values.model } : {}),
+    ...(values.model_reasoning_effort ? { reasoningEffort: values.model_reasoning_effort } : {}),
+    speed: values.service_tier === "priority" || values.service_tier === "fast" ? "fast" : "standard"
+  };
+}
+
+function optionalText(path: string): string {
+  try { return readFileSync(path, "utf8"); } catch { return ""; }
+}
+
+function configuredDefaults(provider: AgentProvider, workspaceRoot?: string): AgentProfile["defaults"] {
+  if (provider === "codex") {
+    return codexConfiguredDefaults([
+      optionalText(join(process.env.CODEX_HOME || join(homedir(), ".codex"), "config.toml")),
+      ...(workspaceRoot ? [optionalText(join(workspaceRoot, ".codex", "config.toml"))] : [])
+    ]);
+  }
+  if (provider !== "claude") return undefined;
+  let settings: Record<string, unknown> = {};
+  const paths = [join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "settings.json"),
+    ...(workspaceRoot ? [join(workspaceRoot, ".claude", "settings.json"), join(workspaceRoot, ".claude", "settings.local.json")] : [])];
+  for (const path of paths) {
+    try { settings = { ...settings, ...JSON.parse(optionalText(path)) as Record<string, unknown> }; } catch { /* Optional settings. */ }
+  }
+  const model = process.env.ANTHROPIC_MODEL || settings.model;
+  const effort = process.env.CLAUDE_CODE_EFFORT_LEVEL || settings.effortLevel;
+  return {
+    ...(typeof model === "string" && model ? { model } : {}),
+    ...(typeof effort === "string" && effort ? { reasoningEffort: effort } : {})
+  };
+}
 
 function configuredCodexModel(): string | undefined {
   const codexHome = process.env.CODEX_HOME || join(homedir(), ".codex");
@@ -170,13 +236,15 @@ export class AgentProfileStore {
       : globalSelection;
   }
 
-  list(enabledIds?: readonly string[]): AgentProfile[] {
+  list(enabledIds?: readonly string[], workspaceRoot?: string): AgentProfile[] {
     const enabled = enabledIds ? new Set(enabledIds) : undefined;
     return this.profiles
       .filter((profile) => !enabled || enabled.has(profile.id))
       .map((profile) => ({
         ...profile,
+        defaults: { ...profile.defaults, ...configuredDefaults(profile.provider, workspaceRoot) },
         models: [...profile.models],
+        ...(profile.presets ? { presets: profile.presets.map((preset) => ({ ...preset })) } : {}),
         ...(profile.modelOptions ? { modelOptions: profile.modelOptions.map((model) => ({ ...model, reasoningEfforts: [...model.reasoningEfforts], speedTiers: [...model.speedTiers], serviceTiers: [...model.serviceTiers] })) } : {})
       }));
   }
@@ -193,6 +261,7 @@ export class AgentProfileStore {
       ...(selection.permission !== undefined ? { permission: selection.permission } : {}),
       ...(selection.profileId !== undefined ? { profileId: selection.profileId } : {}),
       ...(selection.model !== undefined ? { model: selection.model } : {}),
+      ...(selection.agentPreset !== undefined ? { agentPreset: selection.agentPreset } : {}),
       ...(selection.reasoningEffort !== undefined ? { reasoningEffort: selection.reasoningEffort } : {}),
       ...(selection.speed !== undefined ? { speed: selection.speed } : {}),
       ...(selection.serviceTier !== undefined ? { serviceTier: selection.serviceTier } : {})
