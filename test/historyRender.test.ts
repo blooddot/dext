@@ -13,6 +13,21 @@ import {
 import type { DextHistoryRecord } from "../src/historyStore.js";
 
 describe("Dext history rendering", () => {
+  it("renders the latest answer above Process without replaying editable forms or secret answers", () => {
+    const question = { id: "question-1", blocking: true, questions: [{ id: "q", header: "", question: "Which <option>?", options: [] },
+      { id: "secret", header: "", question: "Secret?", options: [], isSecret: true }] };
+    const html = renderHistoryRecord({ id: "turn", createdAt: 1, input: "Input", output: "Done", process: [
+      { phase: "input", text: "", userInput: { ...question, status: "waiting" } },
+      { phase: "input", text: "", userInput: { ...question, status: "answered", answers: { q: { answers: ["Custom <answer>"] }, secret: { answers: ["private-value"] } } } },
+      { phase: "tool", text: "Tests passed" }
+    ] });
+    expect(html.match(/agent-input-card/g)).toHaveLength(1);
+    expect(html).toContain("Which &lt;option&gt;?");
+    expect(html).toContain("Custom &lt;answer&gt;");
+    expect(html).not.toContain("private-value");
+    expect(html).not.toContain("<form");
+    expect(html.indexOf("agent-input-card")).toBeLessThan(html.indexOf("<span>Process</span>"));
+  });
   it.each([undefined, "Cancelled", "Agent failed"])("hides internal Plan input with execution metadata (%s)", (error) => {
     const record: DextHistoryRecord = {
       id: "build", createdAt: 1, input: "INTERNAL_PLAN_PROMPT", process: [], output: "Finished",
@@ -22,7 +37,7 @@ describe("Dext history rendering", () => {
     expect(html).not.toContain("INTERNAL_PLAN_PROMPT");
     expect(html).not.toContain("<span>Input</span>");
     expect(html).toContain("Plan: build.plan.md");
-    expect(html).toContain(`<span class="plan-status">${error ? "Failed" : "Completed"}</span>`);
+    expect(html).toContain(`<span class="plan-status">${error ? "Failed" : "Incomplete"}</span>`);
     expect(html).toContain(error ?? "Finished");
   });
 
@@ -180,16 +195,16 @@ describe("Dext history rendering", () => {
     const record: DextHistoryRecord = {
       id: "ui-result",
       createdAt: 1,
-      input: 'choice = ui.choose(label="Pick", options=["one", "two"])',
+      input: 'choice = ui.radio(label="Pick", options=["one", "two"])',
       process: [],
       output: "",
       response: {
         kind: "workflow",
         executions: [
           {
-            invocation: { kind: "invocation", method: "ui.choose", source: "code", arguments: [] },
-            method: { id: "ui.choose", title: "Choose", kind: "command", source: "builtin" },
-            result: { kind: "ui", type: "choice", selected: ["two"] },
+            invocation: { kind: "invocation", method: "ui.radio", source: "code", arguments: [] },
+            method: { id: "ui.radio", title: "Radio", kind: "command", source: "builtin" },
+            result: { kind: "ui", type: "radio", selected: ["two"] },
             durationMs: 1
           },
           {
@@ -482,7 +497,7 @@ describe("Dext history rendering", () => {
     const record: DextHistoryRecord = {
       id: "highlighted-input",
       createdAt: 1,
-      input: 'ui.choose(label="Pick", options=["one", "two"], multiple=True)',
+      input: 'ui.select(label="Pick", options=["one", "two"], multiple=True)',
       process: [],
       output: ""
     };
@@ -647,4 +662,18 @@ describe("Dext history rendering", () => {
     expect(markdown).toContain("### Error");
     expect(markdown).toContain("cancelled");
   });
+});
+
+it("renders unknown historical UI results as bounded escaped JSON without an executable card", () => {
+  const output = JSON.stringify({ kind: "workflow", executions: [{
+    invocation: { kind: "invocation", method: "ui.choose", source: "code", arguments: [] },
+    method: { id: "ui.choose", title: "Old interaction", source: "builtin", kind: "command" },
+    result: { kind: "ui", type: "choice", selected: ["<img src=x onerror=alert(1)>", "x".repeat(30000)] }, durationMs: 1
+  }] });
+  const html = renderHistoryRecord({ id: "old", createdAt: 1, input: "Old workflow", process: [], output });
+  expect(html).toContain("&lt;img");
+  expect(html).not.toContain("<img");
+  expect(html).not.toContain("<form");
+  expect(html).not.toContain('type="radio"');
+  expect(html).not.toContain("x".repeat(21000));
 });

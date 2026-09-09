@@ -29,7 +29,7 @@ describe("Dext Python workflow compiler", () => {
   it("accepts skills, typed MCP, and UI under their public namespaces", () => {
     const result = compile(`skill = skill(skill="dev-feat", input="implement", workspace="@client")
 data = mcp.docs.read(uri="README.md")
-choice = ui.choose(label="Pick", options=["one", "two"])`);
+choice = ui.radio(label="Pick", options=["one", "two"])`);
     expect(result.diagnostics).toEqual([]);
   });
 
@@ -205,5 +205,20 @@ choice = ui.choose(label="Pick", options=["one", "two"])`);
       .toContain("for requires a list but string was given");
     expect(compile('for a, b in ["x"]:\n    ask(input=a)').diagnostics.map((item) => item.message).join("\n"))
       .toContain("exactly one loop variable");
+  });
+});
+
+describe("UI field diagnostics", () => {
+  const registry = new MethodRegistry(); registry.registerMany(BUILTIN_METHODS, "builtin");
+  it("reports the removed API as an ordinary unknown method", () => {
+    expect(compileWorkflow('ui.choose(label="Old", options=["a"])', registry).diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ message: "Unknown Dext API 'ui.choose'." })]));
+  });
+  it("rejects nested interactions even where nested calls are otherwise permitted", () => {
+    const compiled = compileWorkflow('ui.form(title="Form", fields=[ui.input(label="Nested")])', registry, { allowNestedCalls: true });
+    expect(compiled.diagnostics.some((diagnostic) => diagnostic.message.includes("declarative"))).toBe(true);
+  });
+  it("validates statically known fields reused through a variable", () => {
+    const compiled = compileWorkflow('fields = [{"id":"x","type":"radio","label":"X","options":["a"],"multiple":True}]\nui.form(title="Form", fields=fields)', registry);
+    expect(compiled.diagnostics.some((diagnostic) => diagnostic.message.includes("multiple"))).toBe(true);
   });
 });

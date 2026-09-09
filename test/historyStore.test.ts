@@ -1,3 +1,4 @@
+import { uiCallForm } from "../src/core/uiForm.js";
 import { describe, expect, it } from "vitest";
 import { DextHistoryStore } from "../src/historyStore.js";
 
@@ -15,6 +16,20 @@ class DelayedMemoryState extends MemoryState {
 }
 
 describe("DextHistoryStore", () => {
+  it("persists a round checkpoint before a final turn exists, without losing native session bindings", async () => {
+    const state = new MemoryState(); const store = new DextHistoryStore(state as never);
+    const todos = [{ id: "plan-1", text: "Implement", status: "in_progress" as const }];
+    await store.updatePlanProgress("plan", "plans/build.plan.md", todos);
+    await store.setProviderSession("plan", "codex", "native-session");
+    const restored = new DextHistoryStore(state as never).list()[0]!;
+    expect(restored.turns).toEqual([]);
+    expect(restored.planProgress).toEqual({ path: "plans/build.plan.md", todos });
+    expect(restored.providerSessions).toEqual({ codex: "native-session" });
+    await store.addSuccess("build", [], { kind: "workflow", executions: [] }, "plan", "plan", "turn", {
+      executePlan: true, planPath: "plans/build.plan.md", planOutcome: { status: "incomplete", reason: "No progress", rounds: 3 }
+    });
+    expect(new DextHistoryStore(state as never).list()[0]?.turns[0]?.planOutcome?.status).toBe("incomplete");
+  });
   it("retains Plan execution identity after success, cancellation and reload without changing the input", async () => {
     const state = new MemoryState();
     const store = new DextHistoryStore(state as never);
@@ -231,4 +246,21 @@ describe("DextHistoryStore", () => {
 
     expect(store.list()[0]?.turns[0]?.input).toBe('ask(input="Read @src/a.ts")');
   });
+});
+
+it("preserves raw unknown history while bounding new interaction summaries and omitting secrets", async () => {
+  const legacy = { id: "old", createdAt: 1, input: 'ui.choose(label="Old", options=["a"])', process: [], output: '{"kind":"ui","type":"choice","selected":["a"]}' };
+  const memory = new MemoryState([legacy]); const store = new DextHistoryStore(memory as never, () => ({ maxTurns: 10, maxOutputLength: 500 }));
+  expect(store.list()[0]?.turns[0]).toEqual(legacy);
+  const form = uiCallForm("input", { label: "Text" });
+  await store.addSuccess("Input", [
+    { phase: "input", text: "", uiInteraction: { sessionId: "s", turnId: "t", requestId: "r", status: "waiting", form } },
+    { phase: "input", text: "", uiInteraction: { sessionId: "s", turnId: "t", requestId: "r", status: "submitted", form, answers: { answer: { type: "input", value: "x".repeat(2000) } } } },
+    { phase: "input", text: "", userInput: { id: "native", blocking: true, status: "answered", questions: [{ id: "secret", question: "Secret", header: "", options: [], isSecret: true }], answers: { secret: { answers: ["private-value"] } } } }
+  ], { kind: "workflow", executions: [] }, "new", "code", "new-turn");
+  const record = store.list().find((session) => session.id === "new")!.turns[0]!;
+  expect(record.process).toHaveLength(2);
+  expect(record.process[0]?.text.length).toBeLessThan(550);
+  expect(JSON.stringify(record)).not.toContain("private-value");
+  expect(store.list()[0]?.turns[0]).toEqual(legacy);
 });

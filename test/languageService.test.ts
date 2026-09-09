@@ -161,9 +161,16 @@ def main(input: str) -> PrintResult:
     });
   });
 
+  it("completes form field types and indexed answers", () => {
+    expect(service.documentCompletions('ui.form(title="Form", fields=[{"type": "').map((item) => item.label)).toEqual(["select", "radio", "checkbox", "input"]);
+    expect(service.documentCompletions('reply = ui.form(title="Form", fields=[])\nreply.answers["x"].').map((item) => item.label)).toEqual(expect.arrayContaining(["selected", "value", "type"]));
+    expect(service.documentSignature('ui.radio(label=')).toMatchObject({ label: expect.stringContaining("UiRadioResult") });
+    expect(service.documentSignature('ui.choose(label=')).toBeUndefined();
+  });
+
   it("completes ui APIs", () => {
-    expect(service.documentCompletions("ui.").map((item) => item.label)).toEqual(["choose", "confirm", "input"]);
-    expect(service.documentSignature("ui.choose(label=", "ui.choose(label=".length)).toMatchObject({
+    expect(service.documentCompletions("ui.").map((item) => item.label)).toEqual(["alert", "checkbox", "confirm", "form", "input", "radio", "select"]);
+    expect(service.documentSignature("ui.radio(label=", "ui.radio(label=".length)).toMatchObject({
       activeParameter: 0,
       label: expect.stringContaining("options")
     });

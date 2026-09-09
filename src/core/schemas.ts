@@ -1,3 +1,4 @@
+import { uiFormResultSchema } from "./uiForm.js";
 import { z } from "zod";
 
 const positionSchema = z.object({
@@ -82,8 +83,14 @@ export const printResultSchema = z.object({
   text: z.string(),
   label: z.string().optional()
 }).strict();
+const uiSelections = z.array(z.string().max(2000)).max(200).refine((items) => new Set(items).size === items.length, "Duplicate selections");
 export const uiResultSchema = z.discriminatedUnion("type", [
-  z.object({ kind: z.literal("ui"), type: z.literal("choice"), selected: z.array(z.string()), custom: z.string().optional() }).strict(),
+  z.object({ kind: z.literal("ui"), type: z.literal("select"), selected: uiSelections }).strict(),
+  z.object({ kind: z.literal("ui"), type: z.literal("radio"), selected: uiSelections.max(1), custom: z.string().max(20000).optional() }).strict()
+    .refine((result) => !result.custom || !result.selected.length, "Radio options and custom answers are exclusive"),
+  z.object({ kind: z.literal("ui"), type: z.literal("checkbox"), selected: uiSelections, custom: z.string().max(20000).optional() }).strict(),
+  z.object({ kind: z.literal("ui"), type: z.literal("alert"), status: z.enum(["acknowledged", "dismissed"]) }).strict(),
+  uiFormResultSchema,
   z.object({ kind: z.literal("ui"), type: z.literal("confirm"), confirmed: z.boolean() }).strict(),
   z.object({ kind: z.literal("ui"), type: z.literal("input"), value: z.string().optional() }).strict()
 ]);

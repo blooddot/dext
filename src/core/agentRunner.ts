@@ -11,6 +11,9 @@ import type { AxMethodContract } from "./axAdapter.js";
 import type { AgentStreamEvent, AgentStreamPhase, AgentTokenUsage, ExecutionMetadata, RegisteredCallable, ResolvedInvocation } from "./types.js";
 import { agentTodoEvent, ClaudeTodoTracker, isClaudeTodoTool, normalizeAgentTodos } from "./agentTodoTracking.js";
 import { cliCompletion } from "./cliCompletion.js";
+import { agentTimeout, DEFAULT_AGENT_TIMEOUT_MS, DEFAULT_AGENT_IDLE_TIMEOUT_MS } from "./agentTimeout.js";
+import { trackCliToolActivity } from "./agentToolActivity.js";
+import { runCodexConversation } from "./codexConversationRunner.js";
 
 export interface AgentExecutionRequest {
   agentPreset?: string;
@@ -680,7 +683,8 @@ export function runProcess(
   signal?: AbortSignal,
   onStdout?: (chunk: string) => void,
   env?: NodeJS.ProcessEnv,
-  completion?: { consume: (chunk: string) => number | undefined; graceMs?: number }
+  completion?: { consume: (chunk: string) => number | undefined; graceMs?: number },
+  onActivity?: () => void
 ): Promise<ProcessResult> {
   return new Promise((resolve, reject) => {
     const shell = process.platform === "win32" && /\.(?:cmd|bat)$/i.test(command);
@@ -745,6 +749,7 @@ export function runProcess(
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
       if (settled || aborting) return;
+      if (chunk.length) onActivity?.();
       stdout += chunk;
       onStdout?.(chunk);
       if (completionCode === undefined) {
@@ -752,7 +757,11 @@ export function runProcess(
         if (completionCode !== undefined) completionTimer = setTimeout(finishCompleted, completion?.graceMs ?? 1000);
       }
     });
-    child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+    child.stderr.on("data", (chunk: string) => {
+      if (settled || aborting) return;
+      if (chunk.length) onActivity?.();
+      stderr += chunk;
+    });
     child.on("error", (error) => {
       if (!aborting) finish(() => reject(new Error(`Unable to start '${command}': ${error.message}`)));
     });
@@ -773,14 +782,19 @@ export class CliAgentRunner implements AgentRunner {
   private readonly claudeConversationSessions = new Map<string, string>();
 
   constructor(
-    private timeoutMs = 600_000,
-    private readonly processRunner: ProcessRunner = runProcess
+    private timeoutMs = DEFAULT_AGENT_TIMEOUT_MS,
+    private readonly processRunner: ProcessRunner = runProcess,
+    private idleTimeoutMs = DEFAULT_AGENT_IDLE_TIMEOUT_MS
   ) {}
 
   /** A long agent turn is cut off by this timer, so it has to follow the
    * setting rather than be fixed when the runner was built. */
   setTimeoutMs(timeoutMs: number): void {
     this.timeoutMs = timeoutMs;
+  }
+
+  setIdleTimeoutMs(timeoutMs: number): void {
+    this.idleTimeoutMs = timeoutMs;
   }
 
   private async processEnvironment(
@@ -839,18 +853,20 @@ export class CliAgentRunner implements AgentRunner {
       : claudeCliArguments({ ...request, permission }, outputSchema, extraArguments);
     try {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(new Error("Agent execution timed out.")), this.timeoutMs);
+      const timeout = agentTimeout(controller, this.timeoutMs, this.idleTimeoutMs);
       const cancel = (): void => controller.abort(new ExecutionCancelledError());
       request.signal?.addEventListener("abort", cancel, { once: true });
       if (request.signal?.aborted) cancel();
       let eventBuffer = "";
       const streamPhases = new Map<string, AgentStreamPhase>();
       const emitCodexLine = (line: string): void => {
+        trackCliToolActivity("codex", line, timeout);
         const event = parseCodexStreamLine(line, streamPhases);
         if (event) request.onEvent?.(event);
       };
       const claudeTodos = new ClaudeTodoTracker();
       const emitClaudeLine = (line: string): void => {
+        trackCliToolActivity("claude", line, timeout);
         for (const event of parseClaudeStreamEvents(line, claudeTodos)) request.onEvent?.(event);
       };
       const onStdout = request.profile.provider === "codex" || request.profile.provider === "claude"
@@ -870,9 +886,9 @@ export class CliAgentRunner implements AgentRunner {
       let result: ProcessResult;
       try {
         result = await this.processRunner(command, args, stdin, request.cwd, controller.signal, onStdout, processEnv,
-          { consume: cliCompletion(request.profile.provider) });
+          { consume: cliCompletion(request.profile.provider) }, timeout.activity);
       } finally {
-        clearTimeout(timer);
+        timeout.dispose();
         request.signal?.removeEventListener("abort", cancel);
       }
       if (eventBuffer && request.profile.provider === "codex") emitCodexLine(eventBuffer);
@@ -921,6 +937,16 @@ export class CliAgentRunner implements AgentRunner {
       : request.metadata.conversationProviderSessionId;
     if (conversationKey && resumeId) providerSessions.set(conversationKey, resumeId);
     const forkFromId = !resumeId ? request.metadata.conversationForkFrom : undefined;
+    if (request.profile.provider === "codex" && request.metadata.requestAgentInput) {
+      return runCodexConversation(request, {
+        command, env: await this.processEnvironment(command, request), resumeId, forkFromId, serviceTier,
+        timeoutMs: this.timeoutMs, idleTimeoutMs: this.idleTimeoutMs,
+        onThread: (id) => {
+          if (conversationKey) providerSessions.set(conversationKey, id);
+          request.metadata.onAgentSessionId?.("codex", id);
+        }
+      });
+    }
     const args = request.profile.provider === "codex"
       ? codexConversationArguments(
           { ...request, permission },
@@ -931,7 +957,7 @@ export class CliAgentRunner implements AgentRunner {
       : claudeConversationArguments({ ...request, permission, ...(resumeId ? { resumeId } : {}), ...(forkFromId ? { forkSession: true } : {}) }, extraArguments);
     const processEnv = await this.processEnvironment(command, request);
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(new Error("Agent execution timed out.")), this.timeoutMs);
+    const timeout = agentTimeout(controller, this.timeoutMs, this.idleTimeoutMs);
     const cancel = (): void => controller.abort(new ExecutionCancelledError());
     request.signal?.addEventListener("abort", cancel, { once: true });
     if (request.signal?.aborted) cancel();
@@ -943,6 +969,7 @@ export class CliAgentRunner implements AgentRunner {
       const lines = eventBuffer.split(/\r?\n/);
       eventBuffer = lines.pop() ?? "";
       for (const line of lines) {
+        trackCliToolActivity(request.profile.provider, line, timeout);
         const providerSessionId = request.profile.provider === "codex"
           ? extractCodexThreadId(line)
           : extractClaudeSessionId(line);
@@ -963,8 +990,9 @@ export class CliAgentRunner implements AgentRunner {
         ? request.input
         : bootstrappedConversationInput(request.metadata.conversationContext, request.input);
       const result = await this.processRunner(command, args, input, request.cwd, controller.signal, onStdout, processEnv,
-        { consume: cliCompletion(request.profile.provider) });
+        { consume: cliCompletion(request.profile.provider) }, timeout.activity);
       if (eventBuffer) {
+        trackCliToolActivity(request.profile.provider, eventBuffer, timeout);
         const providerSessionId = request.profile.provider === "codex"
           ? extractCodexThreadId(eventBuffer)
           : extractClaudeSessionId(eventBuffer);
@@ -989,7 +1017,7 @@ export class CliAgentRunner implements AgentRunner {
       if (!text) throw new Error(`${request.profile.label} returned no response.`);
       return text;
     } finally {
-      clearTimeout(timer);
+      timeout.dispose();
       request.signal?.removeEventListener("abort", cancel);
     }
   }

@@ -113,50 +113,7 @@ const METHODS: readonly CallableDefinition[] = [
     output: { kind: "terminal" },
     executor: { kind: "deterministic", handler: "terminalRun" }
   },
-  {
-    id: "ui.choose",
-    title: "Choose",
-    description: "Ask the user to choose one or more semantic options. Dext owns the UI presentation and resumes the current task after the answer.",
-    kind: "command",
-    version: "1.0.0",
-    input: [
-      { name: "label", type: "string", required: true, description: "Question or decision label." },
-      { name: "options", type: "string", required: true, multiple: true, description: "Available option labels." },
-      { name: "multiple", type: "boolean", default: false, description: "Allow more than one selection." },
-      { name: "allow_custom", type: "boolean", default: false, description: "Offer a custom text alternative." },
-      { name: "custom_placeholder", type: "string", description: "Hint for the custom text field." }
-    ],
-    output: { kind: "ui" },
-    executor: { kind: "deterministic", handler: "uiChoose" }
-  },
-  {
-    id: "ui.confirm",
-    title: "Confirm",
-    description: "Ask the user to confirm or cancel an operation, then resume the current task.",
-    kind: "command",
-    version: "1.0.0",
-    input: [
-      { name: "message", type: "string", required: true, description: "Confirmation message." },
-      { name: "confirm_label", type: "string", default: "Continue", description: "Confirm action label." },
-      { name: "cancel_label", type: "string", default: "Cancel", description: "Cancel action label." }
-    ],
-    output: { kind: "ui" },
-    executor: { kind: "deterministic", handler: "uiConfirm" }
-  },
-  {
-    id: "ui.input",
-    title: "Input",
-    description: "Ask the user for a text value, then resume the current task.",
-    kind: "command",
-    version: "1.0.0",
-    input: [
-      { name: "label", type: "string", required: true, description: "Input label." },
-      { name: "placeholder", type: "string", description: "Input hint." },
-      { name: "multiline", type: "boolean", default: false, description: "Request multiline text when the host supports it." }
-    ],
-    output: { kind: "ui" },
-    executor: { kind: "deterministic", handler: "uiInput" }
-  },
+  ...(["select", "radio", "checkbox", "input", "confirm", "alert", "form"] as const).map(uiDefinition),
   {
     id: "skill",
     title: "Run Skill",
@@ -176,3 +133,57 @@ const METHODS: readonly CallableDefinition[] = [
 export const BUILTIN_METHODS: readonly CallableDefinition[] = METHODS.map((method) =>
   CLI_BUILTIN_IDS.has(method.id) ? { ...method, input: [...method.input, ...builtinCliFields()] } : method
 );
+
+function uiDefinition(action: "select" | "radio" | "checkbox" | "input" | "confirm" | "alert" | "form"): CallableDefinition {
+  const input: CallableDefinition["input"] = [];
+  const field = (name: string, type: "string" | "boolean", defaultValue?: string | boolean): void => {
+    input.push({ name, type, ...(defaultValue === undefined ? { required: true } : { default: defaultValue }) });
+  };
+  if (["select", "radio", "checkbox", "input"].includes(action)) field("label", "string");
+  if (["select", "radio", "checkbox"].includes(action)) {
+    input.push({ name: "options", type: "list", items: { name: "option", type: "string" }, required: true, description: "Nonempty list of option labels." });
+    if (action === "select") { field("multiple", "boolean", false); field("placeholder", "string", "Select…"); }
+    else { field("allow_custom", "boolean", false); field("custom_placeholder", "string", ""); }
+  }
+  if (action === "input") { field("placeholder", "string", ""); field("multiline", "boolean", false); }
+  if (action === "confirm" || action === "alert") field("message", "string");
+  if (action === "confirm") { field("confirm_label", "string", "Continue"); field("cancel_label", "string", "Cancel"); }
+  if (action === "alert") field("acknowledge_label", "string", "OK");
+  if (action === "form") {
+    field("title", "string");
+    input.push({ name: "fields", type: "list", required: true, properties: uiFieldProperties(), description: "Declarative select, radio, checkbox or input fields." });
+    field("description", "string", ""); field("submit_label", "string", "Submit");
+    field("cancel_label", "string", "Cancel"); field("show_cancel", "boolean", true);
+  }
+  input.push({ name: "presentation", type: "enum", values: ["inline", "dialog"], default: action === "form" ? "inline" : "dialog", description: "Interaction container." });
+  return { id: `ui.${action}`, title: action, description: `Request ${action} interaction and wait for the user's response.`,
+    kind: "command", version: "1.0.0", input, output: { kind: "ui", resultType: `Ui${action[0]!.toUpperCase()}${action.slice(1)}Result`, fields: uiOutputFields(action) }, executor: { kind: "deterministic", handler: `ui${action[0]!.toUpperCase()}${action.slice(1)}` } };
+}
+
+function uiFieldProperties(): CallableDefinition["input"] {
+  return [
+    { name: "id", type: "string", required: true },
+    { name: "type", type: "enum", values: ["select", "radio", "checkbox", "input"], required: true },
+    { name: "label", type: "string", required: true },
+    { name: "description", type: "string" }, { name: "required", type: "boolean", default: true },
+    { name: "default", type: "string", accepts: ["list"] },
+    { name: "options", type: "list", description: "String options or objects with value, label and description." },
+    { name: "multiple", type: "boolean", description: "Only select supports multiple." },
+    { name: "allow_custom", type: "boolean", description: "Only radio and checkbox support custom answers." },
+    { name: "custom_placeholder", type: "string" }, { name: "placeholder", type: "string" }, { name: "multiline", type: "boolean" }
+  ];
+}
+export function uiOutputFields(action: string): CallableDefinition["input"] {
+  const fields: CallableDefinition["input"] = [{ name: "kind", type: "enum", values: ["ui"] }, { name: "type", type: "enum", values: [action] }];
+  if (["select", "radio", "checkbox"].includes(action)) fields.push({ name: "selected", type: "list", items: { name: "option", type: "string" } });
+  if (action === "radio" || action === "checkbox") fields.push({ name: "custom", type: "string" });
+  if (action === "input") fields.push({ name: "value", type: "string" });
+  if (action === "confirm") fields.push({ name: "confirmed", type: "boolean" });
+  if (action === "alert") fields.push({ name: "status", type: "enum", values: ["acknowledged", "dismissed"] });
+  if (action === "form") fields.push({ name: "status", type: "enum", values: ["submitted", "cancelled"] },
+    { name: "answers", type: "object", properties: [
+      { name: "type", type: "enum", values: ["select", "radio", "checkbox", "input"] },
+      { name: "selected", type: "list", items: { name: "option", type: "string" } }, { name: "custom", type: "string" }, { name: "value", type: "string" }
+    ] });
+  return fields;
+}

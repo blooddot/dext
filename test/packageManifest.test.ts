@@ -262,6 +262,10 @@ describe("Dext package manifest", () => {
     // A key in settings.json ends up in source control, so there is no box for
     // one; the description says where it goes and links to the command.
     expect(JSON.stringify(properties["dext.completion.apiKey"])).toBe(undefined);
+    for (const key of ["backend", "codexCommand", "codexModel", "codexTimeoutMs"]) expect(properties[`dext.completion.${key}`]).toBeUndefined();
+    for (const suffix of ["loginCompletionChatGPT", "logoutCompletionChatGPT", "triggerChatGPTCompletion"]) {
+      expect(value.contributes?.commands?.some((item) => item.command === `dext.${suffix}`)).toBe(false);
+    }
     const enabled = properties["dext.completion.enabled"];
     expect(enabled?.markdownDescription).toContain("secret storage");
     expect(enabled?.markdownDescription).toContain("(command:dext.setCompletionApiKey)");
@@ -329,7 +333,8 @@ describe("Dext package manifest", () => {
 
   it("exposes every timeout that can cut a turn off", async () => {
     const properties = (await manifest()).contributes?.configuration?.properties ?? {};
-    expect(properties["dext.agent.timeoutMs"]).toMatchObject({ type: "integer", default: 3600000 });
+    expect(properties["dext.agent.timeoutMs"]).toMatchObject({ type: "integer", default: 0, minimum: 0 });
+    expect(properties["dext.agent.idleTimeoutMs"]).toMatchObject({ type: "integer", default: 600000, minimum: 0 });
     expect(properties["dext.terminal.defaultTimeoutMs"])
       .toMatchObject({ type: "integer", default: 1800000 });
     // The terminal ceiling stays a ceiling, so the setting cannot be used to

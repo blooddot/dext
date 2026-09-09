@@ -1,3 +1,4 @@
+import { uiCallForm } from "./uiForm.js";
 import { randomUUID } from "node:crypto";
 import type { SessionConfigOption, SessionNotification, RequestPermissionRequest, RequestPermissionResponse, ToolCallUpdate } from "@agentclientprotocol/sdk";
 import type { AgentModelOption, AgentPermission, AgentProfile } from "../agentProfiles.js";
@@ -7,6 +8,7 @@ import { createHarnessPolicy, decodeHarnessSession, encodeHarnessSession, harnes
 import { DeepSeekHarnessTransport } from "./deepseekHarnessTransport.js";
 import { agentTodoEvent, normalizeAgentTodos } from "./agentTodoTracking.js";
 import { harnessPresetPatch } from "./harnessPresets.js";
+import { agentTimeout, DEFAULT_AGENT_TIMEOUT_MS, DEFAULT_AGENT_IDLE_TIMEOUT_MS } from "./agentTimeout.js";
 
 type Request = AgentConversationRequest;
 interface Session {
@@ -14,6 +16,7 @@ interface Session {
   policy: Awaited<ReturnType<typeof createHarnessPolicy>>;
   options: SessionConfigOption[]; defaults: Map<string, string>;
   request?: Request | undefined; messages: Map<string, string>; tools: Map<string, ToolCallUpdate>; fresh: boolean;
+  timeout?: ReturnType<typeof agentTimeout> | undefined;
 }
 
 export function harnessChoices(options: readonly SessionConfigOption[], id: string): { value: string; name: string; group?: string }[] {
@@ -43,11 +46,13 @@ export class DeepSeekHarnessRunner implements AgentRunner {
   private settingsLoad?: Promise<HarnessLaunchSettings | undefined>;
   onModels?: (profile: AgentProfile, options: AgentModelOption[]) => void;
   constructor(
-    private timeoutMs = 3_600_000,
+    private timeoutMs = DEFAULT_AGENT_TIMEOUT_MS,
     private readonly transportFactory = (command: string, args: readonly string[], cwd: string, client: ConstructorParameters<typeof DeepSeekHarnessTransport>[3]) => new DeepSeekHarnessTransport(command, args, cwd, client),
-    private readonly settingsLoader: () => Promise<HarnessLaunchSettings | undefined> = readHarnessLaunchSettings
+    private readonly settingsLoader: () => Promise<HarnessLaunchSettings | undefined> = readHarnessLaunchSettings,
+    private idleTimeoutMs = DEFAULT_AGENT_IDLE_TIMEOUT_MS
   ) {}
   setTimeoutMs(value: number): void { this.timeoutMs = value; }
+  setIdleTimeoutMs(value: number): void { this.idleTimeoutMs = value; }
   private launchSettings(): Promise<HarnessLaunchSettings | undefined> { return this.settingsLoad ??= this.settingsLoader(); }
   async preloadSettings(): Promise<void> { await this.launchSettings(); }
   async refreshSettings(): Promise<void> { this.settingsLoad = this.settingsLoader(); await this.settingsLoad; }
@@ -108,6 +113,8 @@ export class DeepSeekHarnessRunner implements AgentRunner {
     } else if (update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update") {
       const tool = { ...session.tools.get(update.toolCallId), ...update };
       session.tools.set(update.toolCallId, tool);
+      if (tool.status === "completed" || tool.status === "failed") session.timeout?.toolFinished(tool.toolCallId);
+      else session.timeout?.toolStarted(tool.toolCallId);
       const details = tool.content?.map((item) => item.type === "content" && item.content.type === "text" ? item.content.text : item.type === "diff" ? `${item.path}\n${item.newText}` : "").filter(Boolean).join("\n");
       request.onEvent?.({ id: `${session.id}:${tool.toolCallId}`, phase: "tool", group: "work-log", title: tool.title ?? "Tool", text: details || tool.title || "Tool", replace: true,
         done: tool.status === "completed" || tool.status === "failed", toolKind: tool.kind === "execute" ? "command" : tool.kind === "edit" || tool.kind === "read" ? "file" : "step" });
@@ -126,10 +133,10 @@ export class DeepSeekHarnessRunner implements AgentRunner {
     // The wire does not identify escalation scope. Ordinary confined operations
     // need no escalation; unknown scope must never expand a restricted boundary.
     if (permission !== "full-access" || !tool?.title || !request.metadata.ui) return reject();
-    const answer = await request.metadata.ui.confirm({ message: tool.title, confirmLabel: "Allow once", cancelLabel: "Reject" });
+    const answer = await request.metadata.ui.form(uiCallForm("confirm", { message: tool.title, confirm_label: "Allow once", cancel_label: "Reject" }), request.signal);
     if (request.signal?.aborted) return { outcome: { outcome: "cancelled" } };
     const allow = event.options.find((item) => item.kind === "allow_once");
-    return answer.confirmed && allow ? { outcome: { outcome: "selected", optionId: allow.optionId } } : reject();
+    return answer.status === "submitted" && allow ? { outcome: { outcome: "selected", optionId: allow.optionId } } : reject();
   }
 
   private async select(session: Session, request: Request): Promise<void> {
@@ -214,7 +221,7 @@ export class DeepSeekHarnessRunner implements AgentRunner {
     this.controllers.add(controller);
     const cancel = (): void => controller.abort(new ExecutionCancelledError());
     request.signal?.addEventListener("abort", cancel, { once: true });
-    const timer = setTimeout(() => controller.abort(new Error("DeepSeek Harness turn timed out.")), this.timeoutMs);
+    const timeout = agentTimeout(controller, this.timeoutMs, this.idleTimeoutMs);
     const active = { ...request, signal: controller.signal };
     let session: Session | undefined;
     let prompting = false;
@@ -230,6 +237,8 @@ export class DeepSeekHarnessRunner implements AgentRunner {
       }
       session ??= await this.open(active, binding, settings);
       this.sessions.set(key, session);
+      session.transport.onActivity = timeout.activity;
+      session.timeout = timeout;
       if (controller.signal.aborted) throw controller.signal.reason;
       session.request = active; session.messages.clear(); session.tools.clear();
       await this.select(session, active);
@@ -242,7 +251,9 @@ export class DeepSeekHarnessRunner implements AgentRunner {
       try {
         prompting = true;
         const result = await Promise.race([
-          session.transport.wait(session.transport.connection.prompt({ sessionId: session.id, prompt: [{ type: "text", text: input }] }), this.timeoutMs),
+          // The turn watchdog handles total and idle limits. A fixed RPC timer
+          // here would still terminate a long turn that is actively streaming.
+          session.transport.wait(session.transport.connection.prompt({ sessionId: session.id, prompt: [{ type: "text", text: input }] }), 0),
           new Promise<never>((_, reject) => {
             abortListener = () => {
               void current.transport.connection.cancel({ sessionId: current.id }).catch(() => undefined);
@@ -262,9 +273,9 @@ export class DeepSeekHarnessRunner implements AgentRunner {
       if (session) { await this.close(session); this.sessions.delete(key); }
       throw controller.signal.aborted ? controller.signal.reason : error;
     } finally {
-      clearTimeout(timer); this.controllers.delete(controller); request.signal?.removeEventListener("abort", cancel);
+      timeout.dispose(); this.controllers.delete(controller); request.signal?.removeEventListener("abort", cancel);
       controller.signal.removeEventListener("abort", abortTransport);
-      if (session) session.request = undefined;
+      if (session) { session.request = undefined; session.transport.onActivity = undefined; session.timeout = undefined; }
       if (session && !request.metadata.agentSessionId) { await this.close(session); this.sessions.delete(key); }
     }
   }

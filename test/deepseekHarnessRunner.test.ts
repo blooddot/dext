@@ -83,9 +83,9 @@ describe("Harness runner", { timeout: 15000 }, () => {
     expect(await runner().runConversation(request("permission"))).toContain('"optionId":"reject"');
   });
   it("uses the existing UI for known full-access permission requests", async () => {
-    const confirm = vi.fn(async () => ({ kind: "ui" as const, type: "confirm" as const, confirmed: true }));
+    const confirm = vi.fn(async () => ({ kind: "ui" as const, type: "form" as const, status: "submitted" as const, answers: {} }));
     const req = request("permission");
-    const text = await runner().runConversation({ ...req, allowWorkspaceWrite: true, permission: "full-access", metadata: { ...req.metadata, ui: { confirm, choose: vi.fn(), input: vi.fn() } } });
+    const text = await runner().runConversation({ ...req, allowWorkspaceWrite: true, permission: "full-access", metadata: { ...req.metadata, ui: { form: confirm } } });
     expect(text).toContain('"optionId":"allow"'); expect(confirm).toHaveBeenCalledOnce();
   });
   it("cancels a running turn and rejects a timed-out turn", async () => {
@@ -98,6 +98,20 @@ describe("Harness runner", { timeout: 15000 }, () => {
   });
   it("fails a crashed turn without retrying", async () => {
     await expect(runner().runConversation(request("crash"))).rejects.toThrow(/exited|closed/i);
+  });
+  it("waits for silent ACP tools, then resumes idle detection after completion", async () => {
+    const r = runner(0);
+    await r.runConversation(request());
+    r.setIdleTimeoutMs(500);
+    await expect(r.runConversation(request("tool-silent"))).resolves.toBe("tool-silent");
+    await expect(r.runConversation(request("tool-silent-hang"))).rejects.toThrow("without process activity");
+  });
+  it.each(["stream", "stderr-stream"])("renews the idle timeout for %s activity", async (input) => {
+    const r = runner(0);
+    await r.runConversation(request());
+    r.setIdleTimeoutMs(500);
+    await expect(r.runConversation(request(input))).resolves.toBe(input);
+    await expect(r.runConversation(request("hang"))).rejects.toThrow("without process activity");
   });
   it("parses only final JSON and does not rerun invalid structured output", async () => {
     const method = { ...BUILTIN_METHODS.find((item) => item.id === "ask")!, source: "builtin" as const };

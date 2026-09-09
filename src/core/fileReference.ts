@@ -219,7 +219,7 @@ export function normalizeInputReferenceSource(source: string): string {
       if (!/\{\s*ref\.(?:file|dir|symbol)\s*\(|\{\s*ref\.(?:selection|active_file)\s*\}/.test(body)) return whole;
       const migrated = body
         .replace(/\{\s*ref\.(?:file|dir|symbol)\s*\(\s*(['"])((?:\\.|(?!\1)[\s\S])*)\1\s*\)\s*\}/g,
-          (_match: string, innerQuote: string, payload: string) => `@${decodeReferenceString(payload) ?? payload}`)
+          (_match: string, _innerQuote: string, payload: string) => `@${decodeReferenceString(payload) ?? payload}`)
         .replace(/\{\s*ref\.selection\s*\}/g, "@selection")
         .replace(/\{\s*ref\.active_file\s*\}/g, "@active_file")
         .replace(/{{/g, "{")

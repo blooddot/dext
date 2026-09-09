@@ -1,3 +1,4 @@
+import type { UiFormDefinition, UiFormResult, UiInteractionState } from "./uiForm.js";
 export type MethodKind = "command" | "skill";
 export type MethodSource = "builtin" | "global" | "project";
 export type BuiltinOutputKind =
@@ -284,6 +285,12 @@ export interface ReviewFinding {
 
 export type ReviewStatus = "pass" | "warning" | "fail";
 
+export interface PlanExecutionOutcome {
+  status: "completed" | "incomplete" | "blocked" | "cancelled";
+  reason: string;
+  rounds: number;
+}
+
 export interface ChatResult extends DextResultBase {
   kind: "chat";
   text: string;
@@ -292,6 +299,7 @@ export interface ChatResult extends DextResultBase {
   /** The host is building an existing plan; keep the turn in Plan mode but
    * send the implementation request directly instead of creating a new plan. */
   executePlan?: boolean;
+  planOutcome?: PlanExecutionOutcome;
 }
 
 /** Result of a continuous agent task. A patch is present when the Agent
@@ -350,12 +358,19 @@ export interface PrintResult extends DextResultBase {
   label?: string;
 }
 
-export interface UiChoiceResult extends DextResultBase {
-  kind: "ui";
-  type: "choice";
-  selected: string[];
-  custom?: string;
+export interface UiSelectResult extends DextResultBase {
+  kind: "ui"; type: "select"; selected: string[];
 }
+export interface UiRadioResult extends DextResultBase {
+  kind: "ui"; type: "radio"; selected: string[]; custom?: string;
+}
+export interface UiCheckboxResult extends DextResultBase {
+  kind: "ui"; type: "checkbox"; selected: string[]; custom?: string;
+}
+export interface UiAlertResult extends DextResultBase {
+  kind: "ui"; type: "alert"; status: "acknowledged" | "dismissed";
+}
+export type { UiFormResult } from "./uiForm.js";
 
 export interface UiConfirmResult extends DextResultBase {
   kind: "ui";
@@ -369,7 +384,7 @@ export interface UiInputResult extends DextResultBase {
   value?: string;
 }
 
-export type UiResult = UiChoiceResult | UiConfirmResult | UiInputResult;
+export type UiResult = UiSelectResult | UiRadioResult | UiCheckboxResult | UiConfirmResult | UiInputResult | UiAlertResult | UiFormResult;
 
 /** Raw result of an MCP tools/call request. TypedDict custom APIs adapt only
  * the structured payload into domain-specific result kinds. */
@@ -462,6 +477,7 @@ export interface ExecutionMetadata {
   onAgentSessionId?: (provider: string, sessionId: string) => void;
   signal?: AbortSignal;
   onAgentEvent?: (event: AgentStreamEvent) => void;
+  requestAgentInput?: (request: AgentInputRequest, signal: AbortSignal) => Promise<AgentInputAnswers | null>;
   /** Process output emitted while an MCP tool is running. */
   onMcpEvent?: (event: McpProcessEvent) => void;
   ui?: UiInteraction;
@@ -475,21 +491,33 @@ export interface McpProcessEvent {
   text: string;
 }
 
-/** Host-owned interaction surface. Runtime code only asks semantically; it
- * never specifies visual components or modal presentation. */
+/** Host-owned, cancellable interaction surface shared by all UI APIs. */
 export interface UiInteraction {
-  choose(options: {
-    label: string;
-    options: readonly string[];
-    multiple: boolean;
-    allowCustom: boolean;
-    customPlaceholder?: string;
-  }): Promise<UiChoiceResult>;
-  confirm(options: { message: string; confirmLabel: string; cancelLabel: string }): Promise<UiConfirmResult>;
-  input(options: { label: string; placeholder?: string; multiline: boolean }): Promise<UiInputResult>;
+  form(definition: UiFormDefinition, signal?: AbortSignal): Promise<UiFormResult>;
 }
 
-export type AgentStreamPhase = "status" | "reasoning" | "message" | "tool" | "todo";
+export interface AgentInputQuestion {
+  id: string;
+  header: string;
+  question: string;
+  options: { label: string; description: string }[];
+  isSecret?: boolean;
+}
+
+export interface AgentInputRequest {
+  id: string;
+  questions: AgentInputQuestion[];
+  blocking: boolean;
+}
+
+export type AgentInputAnswers = Record<string, { answers: string[] }>;
+
+export interface AgentInputState extends AgentInputRequest {
+  status: "waiting" | "answered" | "dismissed";
+  answers?: AgentInputAnswers;
+}
+
+export type AgentStreamPhase = "status" | "reasoning" | "message" | "tool" | "todo" | "input";
 
 export interface AgentTodoItem {
   id: string;
@@ -528,6 +556,8 @@ export interface AgentStreamEvent {
   usage?: AgentTokenUsage;
   /** Complete provider-reported snapshot; an empty list clears the panel. */
   todos?: AgentTodoItem[];
+  userInput?: AgentInputState;
+  uiInteraction?: UiInteractionState;
 }
 
 export interface RuntimeResponse {

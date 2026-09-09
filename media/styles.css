@@ -146,12 +146,33 @@ button.primary.plan-build {
 .agent-todos > summary { display: flex; align-items: center; gap: 6px; }
 .agent-todos .disclosure-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-todo-list { list-style: none; margin: 0; padding: 6px 8px 8px; }
-.agent-todo-item { display: flex; align-items: flex-start; gap: 8px; padding: 5px 4px; border-radius: 3px; }
+.agent-todo-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 3px 0;
+  padding: 6px 8px;
+  border-inline-start: 2px solid transparent;
+  border-radius: 5px;
+}
 .agent-todo-item > .codicon { flex: 0 0 16px; margin-top: 2px; color: var(--vscode-descriptionForeground); }
 .agent-todo-text { flex: 1; min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 .agent-todo-status { flex: 0 0 auto; font-size: 11px; color: var(--vscode-descriptionForeground); }
-.agent-todo-item.active { background: var(--vscode-list-inactiveSelectionBackground); }
-.agent-todo-item.active > .codicon { color: var(--vscode-progressBar-background, var(--vscode-focusBorder)); }
+.agent-todo-item.active {
+  --todo-accent: var(--vscode-progressBar-background, var(--vscode-focusBorder));
+  border-inline-start-color: color-mix(in srgb, var(--todo-accent) 65%, transparent);
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--todo-accent) 9%, transparent),
+    color-mix(in srgb, var(--todo-accent) 3%, transparent));
+}
+.agent-todo-item.active > .codicon { color: var(--todo-accent); }
+.agent-todo-item.active .agent-todo-status { color: color-mix(in srgb, var(--todo-accent) 65%, var(--vscode-foreground)); }
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .agent-todo-item.active {
+  background: transparent;
+  outline: 1px solid var(--vscode-contrastBorder, var(--vscode-foreground));
+  border-inline-start-color: var(--vscode-focusBorder, var(--vscode-foreground));
+}
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .agent-todo-item.active .agent-todo-status { color: var(--vscode-foreground); }
 .agent-todo-item[data-status="completed"] > .codicon { color: var(--vscode-testing-iconPassed, var(--vscode-foreground)); }
 .agent-todo-item[data-status="completed"] .agent-todo-text { color: var(--vscode-descriptionForeground); }
 
@@ -1079,6 +1100,11 @@ main {
 
 .code-editor .cm-editor.cm-focused {
   outline: 0;
+}
+
+.code-editor .cm-editor.file-drop-active {
+  box-shadow: inset 0 0 0 2px var(--vscode-focusBorder);
+  background: var(--vscode-list-dropBackground, var(--vscode-editor-background));
 }
 
 .code-editor .cm-scroller {
@@ -3751,3 +3777,52 @@ details[open] > summary > .disclosure-chevron {
 }
 
 .json-output .markdown-body pre { max-height: 480px; }
+.agent-inputs[hidden] { display: none; }
+.agent-inputs { display: grid; gap: 10px; margin: 10px 0; }
+.agent-input-card { padding: 12px; border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); border-radius: 8px; background: var(--vscode-editor-background); }
+.agent-input-header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; margin-bottom: 10px; }
+.agent-input-status { font-size: 11px; color: var(--vscode-descriptionForeground); }
+.agent-input-question { min-width: 0; margin: 0 0 12px; padding: 0; border: 0; }
+.agent-input-question legend { padding: 0; margin-bottom: 8px; font-weight: 500; white-space: pre-wrap; overflow-wrap: anywhere; }
+.agent-input-option { display: flex; gap: 8px; align-items: flex-start; padding: 8px; margin: 4px 0; border: 1px solid transparent; border-radius: 5px; cursor: pointer; }
+.agent-input-option:hover { background: var(--vscode-list-hoverBackground); }
+.agent-input-option:has(input:checked) { border-color: var(--vscode-focusBorder); background: var(--vscode-list-inactiveSelectionBackground); }
+.agent-input-option input { flex: 0 0 auto; margin-top: 2px; accent-color: var(--vscode-focusBorder); }
+.agent-input-option span { min-width: 0; overflow-wrap: anywhere; }
+.agent-input-option small { display: block; margin-top: 3px; color: var(--vscode-descriptionForeground); }
+.agent-input-custom { box-sizing: border-box; width: 100%; margin-top: 6px; padding: 7px 8px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 4px; font: inherit; }
+.agent-input-custom:focus-visible, .agent-input-option:focus-within, .agent-input-actions button:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
+.agent-input-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.agent-input-actions button { padding: 5px 10px; border: 0; border-radius: 4px; background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); cursor: pointer; }
+.agent-input-actions .agent-input-submit { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+.agent-input-actions button:disabled { opacity: .5; cursor: default; }
+.agent-input-answer { margin: 4px 0 0; color: var(--vscode-descriptionForeground); white-space: pre-wrap; overflow-wrap: anywhere; }
+/* Shared workflow and Agent fields. Scoped selectors leave MCP controls intact. */
+.interaction-form { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.interaction-form h3, .interaction-form p { margin: 0; overflow-wrap: anywhere; }
+.interaction-field { border: 0; padding: 0; margin: 0; min-width: 0; }
+.interaction-field legend { font-weight: 600; padding: 0; margin-bottom: 6px; overflow-wrap: anywhere; max-width: 100%; }
+.interaction-field p, .interaction-option small, .interaction-select-popup small { display: block; color: var(--vscode-descriptionForeground); font-size: 12px; }
+.interaction-options { display: flex; flex-direction: column; gap: 6px; }
+.interaction-option { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; overflow-wrap: anywhere; }
+.interaction-option input { flex: 0 0 auto; margin-top: 3px; width: auto; }
+.interaction-option span { min-width: 0; }
+.interaction-form input:not([type=radio]):not([type=checkbox]), .interaction-form textarea { box-sizing: border-box; width: 100%; min-width: 0; padding: 7px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, var(--vscode-widget-border)); border-radius: 4px; font: inherit; }
+.interaction-form textarea { min-height: 90px; resize: vertical; }
+.interaction-form :focus-visible, .interaction-select-popup :focus-visible { outline: 2px solid var(--vscode-focusBorder); outline-offset: 1px; }
+.interaction-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+.interaction-form button, .interaction-close { cursor: pointer; white-space: normal; overflow-wrap: anywhere; }
+.interaction-form button { padding: 5px 9px; border: 1px solid var(--vscode-widget-border); border-radius: 4px; background: var(--vscode-button-secondaryBackground, var(--vscode-input-background)); color: var(--vscode-button-secondaryForeground, var(--vscode-foreground)); }
+.interaction-actions button[type=submit] { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+.interaction-form button:disabled { opacity: 0.6; cursor: default; }
+.interaction-error { color: var(--vscode-errorForeground); font-size: 12px; }
+.interaction-error:empty { display: none; }
+.interaction-dialog { box-sizing: border-box; width: min(480px, calc(100vw - 24px)); max-height: calc(100vh - 24px); padding: 18px; border: 1px solid var(--vscode-widget-border); border-radius: 6px; background: var(--vscode-editor-background); color: var(--vscode-foreground); overflow: auto; }
+.interaction-dialog::backdrop { background: rgb(0 0 0 / 30%); }
+.interaction-close { float: right; position: relative; z-index: 1; }
+.interaction-select { display: flex; gap: 6px; }
+.interaction-select > button:first-child { min-width: 0; flex: 1; text-align: left; }
+.interaction-select-popup { box-sizing: border-box; position: fixed; margin: 0; padding: 4px; overflow-y: auto; border: 1px solid var(--vscode-widget-border); border-radius: 4px; background: var(--vscode-editor-background); color: var(--vscode-foreground); }
+.interaction-select-popup button { display: block; width: 100%; border: 0; padding: 7px; color: inherit; background: transparent; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.interaction-select-popup [aria-selected=true] { background: var(--vscode-list-inactiveSelectionBackground); box-shadow: inset 3px 0 var(--vscode-focusBorder); }
+@media (forced-colors: active) { .interaction-select-popup [aria-selected=true] { border: 2px solid Highlight; } }

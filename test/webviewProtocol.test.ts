@@ -2,6 +2,22 @@ import { describe, expect, it } from "vitest";
 import { webviewRequestSchema } from "../src/webviewProtocol.js";
 
 describe("Webview protocol", () => {
+  it("requires conversation ownership and bounds agent question answers", () => {
+    const request = { type: "agentInputResponse", sessionId: "session", turnId: "turn", requestId: "request", answers: { q: { answers: ["Yes"] } } };
+    expect(webviewRequestSchema.parse(request)).toEqual(request);
+    expect(webviewRequestSchema.safeParse({ ...request, sessionId: "" }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({ ...request, answers: { q: { answers: [] } } }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({ ...request, answers: { q: { answers: ["x".repeat(20001)] } } }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({ ...request, answers: null }).success).toBe(true);
+  });
+  it("bounds dropped file requests and rejects embedded line breaks", () => {
+    const request = { type: "resolveDroppedFiles", requestId: 1, paths: ["file:///repo/a.ts", "file:///repo/b.ts"] };
+    expect(webviewRequestSchema.parse(request)).toEqual(request);
+    for (const paths of [[], Array(101).fill("/repo/a.ts"), ["/repo/a.ts\n/repo/b.ts"], ["x".repeat(8193)]]) {
+      expect(webviewRequestSchema.safeParse({ ...request, paths }).success).toBe(false);
+    }
+  });
+
   it("requires the original conversation and turn for a rename request", () => {
     expect(webviewRequestSchema.parse({ type: "renameTurn", sessionId: "session-1", turnId: "turn-1" }))
       .toEqual({ type: "renameTurn", sessionId: "session-1", turnId: "turn-1" });
@@ -167,4 +183,12 @@ describe("Webview protocol", () => {
     }).success).toBe(false);
     expect(webviewRequestSchema.safeParse({ type: "openExternalLink", url: "" }).success).toBe(false);
   });
+});
+
+it("requires scope and form answers in interaction responses", () => {
+  const current = { type: "uiResponse", sessionId: "s", turnId: "t", requestId: "r", response: { kind: "ui", type: "form", status: "submitted", answers: { q: { type: "radio", selected: ["yes"] } } } };
+  expect(webviewRequestSchema.safeParse(current).success).toBe(true);
+  expect(webviewRequestSchema.safeParse({ ...current, turnId: undefined }).success).toBe(false);
+  expect(webviewRequestSchema.safeParse({ ...current, response: { type: "choice", selected: [] } }).success).toBe(false);
+  expect(webviewRequestSchema.safeParse({ ...current, response: { ...current.response, status: "cancelled" } }).success).toBe(false);
 });

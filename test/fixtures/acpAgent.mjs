@@ -37,6 +37,13 @@ lines.on("line", async (line) => {
       const text = p.prompt.map((item) => item.text ?? "").join("");
       if (text === "crash") return process.exit(7);
       if (text === "hang") return;
+      if (text === "stream" || text === "stderr-stream") {
+        for (let index = 0; index < 8; index++) {
+          if (text === "stderr-stream") process.stderr.write("still working\n");
+          else update(p.sessionId, { sessionUpdate: "agent_message_chunk", messageId: "progress", content: { type: "text", text: "." } });
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      }
       if (text === "slow") await new Promise((resolve) => setTimeout(resolve, 120));
       if (text === "todo") update(p.sessionId, { sessionUpdate: "plan", entries: [
         { content: "Inspect", status: "in_progress", priority: "high" },
@@ -44,6 +51,7 @@ lines.on("line", async (line) => {
       ] });
       update(p.sessionId, { sessionUpdate: "agent_message_chunk", messageId: "progress", content: { type: "text", text: "Inspecting" } });
       update(p.sessionId, { sessionUpdate: "tool_call", toolCallId: "tool-1", title: "Inspect workspace", kind: "read", status: "in_progress" });
+      if (text.startsWith("tool-silent")) await new Promise((resolve) => setTimeout(resolve, 900));
       let answer = text;
       if (text === "permission") {
         const id = randomUUID();
@@ -54,6 +62,7 @@ lines.on("line", async (line) => {
         answer = JSON.stringify(await response);
       }
       update(p.sessionId, { sessionUpdate: "tool_call_update", toolCallId: "tool-1", status: "completed", content: [{ type: "content", content: { type: "text", text: "done" } }] });
+      if (text === "tool-silent-hang") return;
       if (text === "todo") update(p.sessionId, { sessionUpdate: "plan", entries: [
         { content: "Inspect", status: "completed", priority: "high" },
         { content: "Verify", status: "in_progress", priority: "medium" }

@@ -77,6 +77,15 @@ describe("custom .dx APIs", () => {
     return { registry, loaded, runtime, execute };
   }
 
+  it("supports concrete UI result annotations in custom APIs", async () => {
+    const { loaded, runtime } = await loadSources({ picker: 'def main() -> UiRadioResult:\n    return ui.radio(label="Pick", options=["a", "b"])\n' });
+    expect(loaded.diagnostics).toEqual([]);
+    const reply = await runtime.execute({ kind: "invocation", method: "picker", source: "code", arguments: [] }, [], {
+      ui: { form: async () => ({ kind: "ui", type: "form", status: "submitted", answers: { answer: { type: "radio", selected: ["b"] } } }) }
+    });
+    expect(reply.result).toEqual({ kind: "ui", type: "radio", selected: ["b"] });
+  });
+
   it("imports a sibling API's main using from namespace import name", async () => {
     const { loaded, execute } = await loadSources({
       "playground/verify": 'def main() -> PrintResult:\n    return print(text="verified")',
@@ -180,11 +189,10 @@ def confirm() -> UiResult:
     expect(loaded.diagnostics).toEqual([]);
     const prompts: string[] = [];
     const ui: UiInteraction = {
-      choose: async () => ({ kind: "ui", type: "choice", selected: [] }),
-      confirm: async () => { throw new ExecutionCancelledError("Cancelled by user"); },
-      input: async ({ label }) => {
-        prompts.push(label);
-        return { kind: "ui", type: "input", value: "unexpected" };
+      form: async (form) => {
+        if (!form.fields.length) throw new ExecutionCancelledError("Cancelled by user");
+        prompts.push(form.title);
+        return { kind: "ui", type: "form", status: "submitted", answers: { answer: { type: "input", value: "unexpected" } } };
       }
     };
     await expect(runtime.execute({ kind: "invocation", method: "develop", source: "code", arguments: [] }, [], { ui }))
@@ -443,12 +451,10 @@ def main(input: str) -> DocumentResult:
     });
     const confirmations: string[] = [];
     const ui: UiInteraction = {
-        choose: async () => ({ kind: "ui", type: "choice", selected: [] as string[] }),
-        confirm: async ({ message }: { message: string }) => {
-          confirmations.push(message);
-          return { kind: "ui", type: "confirm", confirmed: true };
-        },
-        input: async () => ({ kind: "ui", type: "input", value: "" })
+      form: async (form) => {
+        confirmations.push(form.description);
+        return { kind: "ui", type: "form", status: "submitted", answers: {} };
+      }
     };
     const response = await runtime.execute({
       kind: "invocation",

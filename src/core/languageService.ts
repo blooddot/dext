@@ -207,7 +207,7 @@ const RESULT_FIELD_TYPES: Readonly<Record<string, Readonly<Record<string, string
   code: { code: "string", language: "string", title: "string | undefined" },
   plan: { title: "string", steps: "PlanStep[]" },
   patch: { title: "string", changes: "PatchChange[]" },
-  ui: { type: '"choice" | "confirm" | "input"', selected: "string[]", custom: "string | undefined", confirmed: "boolean", value: "string | undefined" }
+  ui: { type: '"select" | "radio" | "checkbox" | "confirm" | "input" | "form" | "alert"', selected: "string[]", custom: "string | undefined", confirmed: "boolean", value: "string | undefined" }
 };
 
 function resultTypeName(output: string): string {
@@ -464,6 +464,10 @@ export class DextLanguageService {
           const field = method.input.find((candidate) => candidate.name === assignment[1]);
           const value = assignment[2]?.trimStart() ?? "";
           const valueStart = cursor - value.length;
+          if (field?.name === "fields" && field.properties && value.startsWith("[")) {
+            const brace = value.lastIndexOf("{");
+            if (brace >= 0) return objectCompletions(field, value.slice(brace), source, cursor);
+          }
           if (field?.properties && value.startsWith("{")) return objectCompletions(field, value, source, cursor);
           if (field?.type === "object" && field.properties && !value) {
             return [{ label: "{ model, reasoning, speed }", insertText: '{"model": ""}', detail: formatFieldType(field), kind: "value", replaceStart: valueStart, replaceEnd: cursor }];

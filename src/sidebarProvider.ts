@@ -1,8 +1,11 @@
+import { UiInteractionBroker } from "./uiInteractionBroker.js";
+import { publicInteractionState } from "./uiInteractionPresentation.js";
 import { randomBytes } from "node:crypto";
 import { relative, sep } from "node:path";
 import * as vscode from "vscode";
+import { AgentInputBroker } from "./agentInputBroker.js";
 import type { DextApplication } from "./application.js";
-import type { AgentStreamEvent, ApplyResult, InputExecutionResponse, McpProcessEvent, PatchResult, UiChoiceResult, UiConfirmResult, UiInputResult, UiInteraction, UiResult } from "./core/types.js";
+import type { AgentInputRequest, AgentStreamEvent, ApplyResult, InputExecutionResponse, McpProcessEvent, PatchResult, UiInteraction } from "./core/types.js";
 import { applyPatchHandler } from "./vscodePatchHost.js";
 import {
   AttachmentStore,
@@ -21,7 +24,9 @@ import { ReadyMessageQueue } from "./readyMessageQueue.js";
 import { clipboardFileReferences } from "./vscodeClipboardFiles.js";
 import { rankFileMatches } from "./core/fileSearch.js";
 import { planPathSegments } from "./core/planFile.js";
-import { planTodoItems, planTodoInstruction, PlanTodoProgress, stripPlanTodoProgress } from "./core/planTodoProgress.js";
+import { planTodoItems, planTodoInstruction, stripPlanTodoProgress } from "./core/planTodoProgress.js";
+import { PlanExecution, resumePlanTodos } from "./core/planExecution.js";
+import type { PlanExecutionOutcome } from "./core/types.js";
 import { openDextFileReference, openExternalLink } from "./vscodeContextHost.js";
 import { webviewRequestSchema } from "./webviewProtocol.js";
 import type { ConversationSummary, WebviewResponse } from "./webviewProtocol.js";
@@ -166,10 +171,8 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   // turn so two turns in the same conversation cannot resolve each other's
   // files, and so a rejected file simply disappears from the entry.
   private readonly pendingPatches = new Map<string, PatchResult>();
-  private readonly pendingUi = new Map<string, {
-    resolve: (result: UiResult) => void;
-    reject: (error: Error) => void;
-  }>();
+  private readonly uiInputs = new UiInteractionBroker();
+  private readonly agentInputs = new AgentInputBroker();
   private fileIndex: { paths: string[]; loadedAt: number } | undefined;
   private fileIndexLoading: Promise<readonly string[]> | undefined;
   private latestLanguageRequestId = -1;
@@ -179,7 +182,13 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     if (this.sessionsHydrated) return;
     this.sessionsHydrated = true;
     const storedSessions = this.history.list();
-    for (const session of storedSessions) this.sessions.set(session.id, session);
+    for (const session of storedSessions) {
+      if (session.planStatus === "running" && !this.activeExecutions.has(session.id)) {
+        session.planStatus = session.activePlanPath ? "active" : "new";
+        void this.history.updatePlanContext(session.id, session.activePlanPath, session.planStatus).catch(() => undefined);
+      }
+      this.sessions.set(session.id, session);
+    }
     if (!this.sessions.has(this.activeSession.id)) this.sessions.set(this.activeSession.id, this.activeSession);
     const latest = [...this.sessions.values()].sort((a, b) => b.updatedAt - a.updatedAt)[0];
     const layout = this.preferences.conversationLayout();
@@ -799,8 +808,8 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     this.mcpAssistantExecution?.controller.abort();
     this.mcpAssistantExecution = undefined;
     this.attachments.dispose();
-    for (const pending of this.pendingUi.values()) pending.reject(new Error("Dext UI interaction was closed."));
-    this.pendingUi.clear();
+    this.uiInputs.dispose();
+    this.agentInputs.dispose();
     this.messageQueue.clear();
   }
 
@@ -858,20 +867,14 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         case "executeInput":
           await this.run(request.mode, request.source, request.planPath);
           break;
-        case "uiResponse": {
-          const pending = this.pendingUi.get(request.requestId);
-          if (!pending) break;
-          this.pendingUi.delete(request.requestId);
-          const response = request.response;
-          if (response.type === "choice") {
-            pending.resolve({ kind: "ui", type: "choice", selected: response.selected, ...(response.custom?.trim() ? { custom: response.custom.trim() } : {}) } satisfies UiChoiceResult);
-          } else if (response.type === "confirm") {
-            pending.resolve({ kind: "ui", type: "confirm", confirmed: response.confirmed } satisfies UiConfirmResult);
-          } else {
-            pending.resolve({ kind: "ui", type: "input", ...(response.value !== undefined ? { value: response.value } : {}) } satisfies UiInputResult);
+        case "agentInputResponse":
+          this.agentInputs.respond(request.sessionId, request.turnId, request.requestId, request.answers);
+          break;
+        case "uiResponse":
+          if (!this.uiInputs.respond(request.sessionId, request.turnId, request.requestId, request.response)) {
+            await this.post({ type: "error", message: "Invalid or expired interaction response." });
           }
           break;
-        }
         case "stopExecution":
           for (const execution of this.activeExecutions.values()) {
             if (execution.turnId === request.turnId) execution.controller.abort();
@@ -967,15 +970,25 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
             speed: request.selection.speed,
             serviceTier: request.selection.serviceTier
           } satisfies AgentSelection;
-          this.conversationSelections.set(this.activeSession.id, selection);
-          await this.preferences.setConversationSelection(this.activeSession.id, selection);
+          const sessionId = this.activeSession.id;
+          this.conversationSelections.set(sessionId, selection);
           this.application.setAgentSelection(selection);
+          this.updateRunningContext();
+          // Publish the accepted selection before storage or ACP discovery can
+          // delay it. Execution must also see it if the user sends immediately.
+          const refresh = this.refresh();
           if (selection.profileId === "deepseek-harness" && previousProfileId !== "deepseek-harness") {
             this.harnessModelsDiscovered = false;
-            await this.discoverHarnessModelsOnce().catch(() => undefined);
+            void this.discoverHarnessModelsOnce()
+              .then(() => {
+                // Refresh current state, never the selection that started this
+                // request: the user may have changed models or conversations.
+                if (!this.disposed) return this.refresh();
+              })
+              // Keep the last known models usable if discovery is unavailable.
+              .catch(() => undefined);
           }
-          this.updateRunningContext();
-          await this.refresh();
+          await Promise.all([refresh, this.preferences.setConversationSelection(sessionId, selection)]);
           break;
           }
         case "openFileReference":
@@ -997,6 +1010,16 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
               request.query,
               MAX_FILE_SUGGESTIONS
             )
+          });
+          break;
+        }
+        case "resolveDroppedFiles": {
+          const references = await clipboardFileReferences(request.paths.join("\n"));
+          await this.post({
+            type: "resolveDroppedFilesResult",
+            requestId: request.requestId,
+            expressions: references?.map((reference) => reference.expression) ?? [],
+            ...(!references?.length ? { error: "Could not reference the dropped files. Check that they still exist and are accessible." } : {})
           });
           break;
         }
@@ -1305,13 +1328,17 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   private async run(mode: "agent" | "ask" | "plan" | "code", source: string, planPath?: string, executePlan = false): Promise<void> {
     source = normalizeInputReferenceSource(source);
     const events: AgentStreamEvent[] = [];
-    const initialTodos = executePlan ? planTodoItems(source) : [];
-    const todoProgress = initialTodos.length ? new PlanTodoProgress(initialTodos) : undefined;
     const turnId = randomBytes(12).toString("hex");
     const session = this.activeSession;
     const sessionId = session.id;
     const executionPlanPath = executePlan ? planPath ?? session.activePlanPath : planPath;
-    const planExecution = executePlan ? { executePlan: true, ...(executionPlanPath ? { planPath: executionPlanPath } : {}) } : undefined;
+    const previousPlan = executePlan ? [...session.turns].reverse().find((turn) => turn.executePlan && turn.planPath === executionPlanPath) : undefined;
+    const previousTodos = session.planProgress && session.planProgress.path === executionPlanPath ? session.planProgress.todos
+      : previousPlan ? [...previousPlan.process].reverse().find((event) => event.phase === "todo")?.todos ?? [] : [];
+    const planRun = executePlan ? new PlanExecution(resumePlanTodos(planTodoItems(source), previousTodos)) : undefined;
+    const todoProgress = planRun?.progress;
+    const planExecution: { executePlan: boolean; planPath?: string; planOutcome?: PlanExecutionOutcome } | undefined = executePlan
+      ? { executePlan: true, ...(executionPlanPath ? { planPath: executionPlanPath } : {}) } : undefined;
     if (this.activeExecutions.has(sessionId)) {
       throw new Error("Wait for this conversation's current Dext turn to finish before running another one.");
     }
@@ -1331,20 +1358,20 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       const selection = this.conversationSelections.get(sessionId) ?? this.application.state().agentSelection;
       const profile = this.application.agentProfiles().find((candidate) => candidate.id === selection.profileId)
         ?? this.application.agentProfiles()[0];
-      const providerSession = profile ? session.providerSessions?.[profile.provider] : undefined;
-      const forkFrom = providerSession ? undefined : profile ? session.forkProviderSessions?.[profile.provider] : undefined;
       const metadata = {
         agentSessionId: sessionId,
         agentPreset: selection.agentPreset ?? "",
-        ...(providerSession ? { conversationProviderSessionId: providerSession } : {}),
-        ...(forkFrom ? { conversationForkFrom: forkFrom } : {}),
         ...(priorConversation ? { conversationContext: priorConversation } : {}),
         signal: controller.signal,
-        ui: this.uiInteraction(),
+        ui: this.uiInteraction(sessionId, turnId, events),
+        requestAgentInput: (request: AgentInputRequest, signal: AbortSignal) =>
+          this.agentInputs.request(sessionId, turnId, request, signal),
         ...(mode === "plan" && executionPlanPath ? { planPath: executionPlanPath } : {}),
         ...(executePlan ? { executePlan: true } : {}),
         onAgentEvent: (event: AgentStreamEvent) => {
-          for (const update of todoProgress ? todoProgress.consume(event) : [event]) {
+          planRun?.observe(event);
+          const scoped = planRun ? { ...event, id: `plan-round-${planRun.rounds}:${event.id ?? "stream"}` } : event;
+          for (const update of todoProgress ? todoProgress.consume(scoped) : [event]) {
             events.push({ ...update });
             this.postAgentEvent(sessionId, update);
           }
@@ -1365,13 +1392,59 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           void this.history.setProviderSession(sessionId, provider, providerSessionId);
         }
       };
-      const response = mode === "code"
-        ? await this.application.executeInput(source, metadata)
-        : await this.application.executeConversation(mode, source, metadata);
-      if (todoProgress) {
-        for (const execution of response.executions) {
-          if (execution.result.kind === "chat") execution.result.text = stripPlanTodoProgress(execution.result.text);
+      let response: InputExecutionResponse;
+      let roundSource = todoProgress ? `${source}\n\nCurrent host task state (takes precedence over the document's unchecked boxes):\n${planTodoInstruction(todoProgress.snapshot())}` : source;
+      for (;;) {
+        if (controller.signal.aborted) throw new Error("Plan execution stopped by user.");
+        planRun?.beginRound();
+        const providerSession = profile ? session.providerSessions?.[profile.provider] : undefined;
+        const forkFrom = providerSession ? undefined : profile ? session.forkProviderSessions?.[profile.provider] : undefined;
+        let acceptingEvents = true;
+        const roundMetadata = { ...metadata,
+          onAgentEvent: (event: AgentStreamEvent) => { if (acceptingEvents) metadata.onAgentEvent(event); },
+          onMcpEvent: (event: McpProcessEvent) => { if (acceptingEvents) metadata.onMcpEvent(event); },
+          onAgentSessionId: (provider: string, id: string) => { if (acceptingEvents) metadata.onAgentSessionId(provider, id); },
+          ...(providerSession ? { conversationProviderSessionId: providerSession } : {}),
+          ...(forkFrom ? { conversationForkFrom: forkFrom } : {}) };
+        if (planRun?.verifying) roundSource = planRun.prompt(source);
+        try {
+          response = mode === "code"
+            ? await this.application.executeInput(roundSource, roundMetadata)
+            : await this.application.executeConversation(mode, roundSource, roundMetadata);
+        } finally { acceptingEvents = false; }
+        if (controller.signal.aborted) throw new Error("Plan execution stopped by user.");
+        if (!planRun || !todoProgress || !planExecution) break;
+        const answers: string[] = [];
+        for (const [index, execution] of response.executions.entries()) {
+          if (execution.result.kind !== "chat") continue;
+          // Some providers only include the final task report in their return value.
+          const report: AgentStreamEvent = { phase: "message", id: `plan-round-${planRun.rounds}:final-${index}`, text: execution.result.text, done: true };
+          for (const update of todoProgress.consume(report)) {
+            if (update.phase === "todo") { events.push(update); this.postAgentEvent(sessionId, update); }
+          }
+          execution.result.text = stripPlanTodoProgress(execution.result.text);
+          answers.push(execution.result.text);
         }
+        const outcome = planRun.finishRound();
+        if (executionPlanPath) {
+          session.planProgress = { path: executionPlanPath, todos: todoProgress.snapshot() };
+          await this.history.updatePlanProgress(sessionId, executionPlanPath, session.planProgress.todos);
+          await this.persistProviderSessions(session);
+        }
+        if (controller.signal.aborted) throw new Error("Plan execution stopped by user.");
+        if (outcome) {
+          planExecution.planOutcome = outcome;
+          for (const execution of response.executions) if (execution.result.kind === "chat") {
+            execution.result.planOutcome = outcome;
+            if (outcome.status !== "completed") execution.result.text += `\n\nDext plan execution: ${outcome.status}. ${outcome.reason}`;
+          }
+          break;
+        }
+        const notice: AgentStreamEvent = { phase: "message", id: `plan-round-${planRun.rounds}:continuation`, text: planRun.verifying
+          ? "Dext: all tasks are reported complete; running final verification."
+          : `Dext: ${todoProgress.snapshot().filter((item) => item.status !== "completed").length} tasks remain; continuing the plan.`, done: true };
+        events.push(notice); this.postAgentEvent(sessionId, notice);
+        roundSource = planRun.prompt(source, answers.join("\n"));
       }
       // The webview creates the visible row as soon as execution starts. Keep
       // that id when persisting the result so retry/delete actions still point
@@ -1401,9 +1474,14 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         ...(reviewable ? { reviewPatch: true } : {})
       });
     } catch (error) {
+      if (todoProgress && executionPlanPath) {
+        session.planProgress = { path: executionPlanPath, todos: todoProgress.snapshot() };
+        await this.history.updatePlanProgress(sessionId, executionPlanPath, session.planProgress.todos);
+      }
+      if (planExecution && controller.signal.aborted) planExecution.planOutcome = { status: "cancelled", reason: "Stopped by user. Plan progress is preserved.", rounds: planRun?.rounds ?? 0 };
       if (mode === "plan" && session.planStatus === "running") {
-        session.planStatus = "failed";
-        await this.history.updatePlanContext(sessionId, session.activePlanPath, "failed");
+        session.planStatus = controller.signal.aborted ? "active" : "failed";
+        await this.history.updatePlanContext(sessionId, session.activePlanPath, session.planStatus);
         await this.postPlanContext();
       }
       const turn = await this.history.addFailure(source, events, error, sessionId, mode, turnId, planExecution);
@@ -1416,17 +1494,20 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         type: "executionFailed",
         sessionId,
         turnId,
+        ...(planExecution?.planOutcome ? { planOutcome: planExecution.planOutcome } : {}),
         message: error instanceof Error ? error.message : String(error)
       });
     } finally {
       const active = this.activeExecutions.get(sessionId);
       if (active?.turnId === turnId) this.activeExecutions.delete(sessionId);
       if (mode === "plan" && session.planStatus === "running") {
-        // Completion belongs to the saved execution turn. The composer now
-        // targets a new plan; selecting an older file explicitly still edits it.
-        delete session.activePlanPath;
-        session.planStatus = "new";
-        await this.history.updatePlanContext(sessionId, undefined, "new");
+        if (planExecution?.planOutcome?.status === "completed") {
+          delete session.activePlanPath;
+          session.planStatus = "new";
+        } else {
+          session.planStatus = "active";
+        }
+        await this.history.updatePlanContext(sessionId, session.activePlanPath, session.planStatus);
         await this.postPlanContext();
       }
       this.updateRunningContext();
@@ -1500,25 +1581,12 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     for (const relativePath of pending) await this.deleteImage(relativePath);
   }
 
-  private uiInteraction(): UiInteraction {
-    const request = <T extends UiResult>(interaction: NonNullable<Extract<WebviewResponse, { type: "uiRequest" }>["request"]>): Promise<T> => {
-      const requestId = randomBytes(12).toString("hex");
-      return new Promise<T>((resolve, reject) => {
-        this.pendingUi.set(requestId, { resolve: resolve as (result: UiResult) => void, reject });
-        void this.post({ type: "uiRequest", requestId, request: interaction });
-      });
-    };
-    return {
-      choose: async ({ label, options, multiple, allowCustom, customPlaceholder }) => {
-        return request<UiChoiceResult>({ type: "choice", label, options: [...options], multiple, allowCustom, ...(customPlaceholder ? { customPlaceholder } : {}) });
-      },
-      confirm: async ({ message, confirmLabel, cancelLabel }) => {
-        return request<UiConfirmResult>({ type: "confirm", message, confirmLabel, cancelLabel });
-      },
-      input: async ({ label, placeholder, multiline }) => {
-        return request<UiInputResult>({ type: "input", label, ...(placeholder ? { placeholder } : {}), multiline });
-      }
-    };
+  private uiInteraction(sessionId: string, turnId: string, events: AgentStreamEvent[]): UiInteraction {
+    return { form: (form, signal) => this.uiInputs.request(sessionId, turnId, form, signal, (state) => {
+      const event: AgentStreamEvent = { phase: "input", id: state.requestId, text: "", uiInteraction: publicInteractionState(state) };
+      events.push(event);
+      this.postAgentEvent(sessionId, event);
+    }) };
   }
 
   private postAgentEvent(sessionId: string, event: AgentStreamEvent): void {
@@ -1693,7 +1761,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         </div>
         <section id="input-shell" class="input-panel unified-input">
           <div id="code-editor" class="code-editor" aria-label="Dext input"></div>
-          <button id="attach-files" class="composer-attach icon-button" type="button" title="Attach workspace files" aria-label="Attach workspace files"><i class="codicon codicon-attach"></i></button>
+          <button id="attach-files" class="composer-attach icon-button" type="button" title="Attach workspace files, or hold Shift and drag files into the input" aria-label="Attach workspace files"><i class="codicon codicon-attach"></i></button>
         </section>
 
         <div id="input-error" class="input-error" role="alert" hidden>

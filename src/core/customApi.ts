@@ -100,6 +100,7 @@ function parseType(value: string): { fieldType: FieldDefinition["type"]; multipl
 function outputKind(value: string): CallableDefinition["output"]["kind"] | undefined {
   const name = value.replace(/\s+/g, "");
   if (name === "McpRawResult") return "mcpRaw";
+  if (/^Ui(?:Select|Radio|Checkbox|Input|Confirm|Alert|Form)Result$/.test(name)) return "ui";
   const match = /^(Chat|Agent|Explain|Edit|Review|Apply|Terminal|Print|Text|Code|Plan|Patch|Ui)Result$/.exec(name);
   return match?.[1]?.toLowerCase() as CallableDefinition["output"]["kind"] | undefined;
 }
@@ -173,7 +174,7 @@ function functionSignature(
   const declared = text(source, returnType).replace(/^->\s*/, "").trim();
   const output = typedResults.get(declared) ?? ((): CallableDefinition["output"] | undefined => {
     const kind = outputKind(declared);
-    return kind ? { kind } : undefined;
+    return kind ? { kind, ...(kind === "ui" && declared !== "UiResult" ? { resultType: declared } : {}) } : undefined;
   })();
   if (!output) throw new Error(`Unsupported function return type '${declared}'; expected a Dext result type.`);
   return { inputs, output };
@@ -395,9 +396,12 @@ export async function loadCustomApis(
           throw new Error(`${name}() must return a Dext result.${details ? ` ${details}` : ""}`);
         }
         const expected = definition.output.kind;
+        if (definition.output.resultType && !definition.output.fields && (outputType.kind !== "result" || outputType.name !== definition.output.resultType)) {
+          throw new Error(`${name}() must return ${definition.output.resultType}.`);
+        }
         if (
           !definition.output.fields
-          && (outputType.kind !== "result" || outputType.name.toLowerCase() !== `${expected}result`)
+          && (outputType.kind !== "result" || (outputType.name.toLowerCase() !== `${expected}result` && !(expected === "ui" && /^Ui(?:Select|Radio|Checkbox|Input|Confirm|Alert|Form)Result$/.test(outputType.name))))
         ) {
           throw new Error(`${name}() must return ${expected} result.`);
         }

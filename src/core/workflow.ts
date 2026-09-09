@@ -1,3 +1,5 @@
+import { uiOutputFields } from "./builtins.js";
+import { parseUiForm } from "./uiForm.js";
 import { parser } from "@lezer/python";
 import type { SyntaxNode } from "@lezer/common";
 import type { MethodRegistry } from "./registry.js";
@@ -34,7 +36,7 @@ type ValueType =
   | { kind: "boolean" }
   | { kind: "context" }
   | { kind: "dir" }
-  | { kind: "object" }
+  | { kind: "object"; item?: ValueType }
   | { kind: "list"; item: ValueType }
   | { kind: "result"; name: string; fields: Readonly<Record<string, ValueType>> }
   | { kind: "unknown" };
@@ -95,7 +97,7 @@ const RESULT_TYPES: Readonly<Record<string, ValueType>> = {
     changes: { kind: "list", item: { kind: "unknown" } }
   }),
   ui: result("UiResult", {
-    type: { kind: "string", literals: ["choice", "confirm", "input"] },
+    type: { kind: "string", literals: ["select", "radio", "checkbox", "confirm", "input", "form", "alert"] },
     selected: { kind: "list", item: { kind: "string" } },
     custom: { kind: "string" },
     confirmed: { kind: "boolean" },
@@ -299,7 +301,7 @@ class Compiler {
         this.error("A custom API function must return a value.", node.from, node.to);
         return undefined;
       }
-      if (this.returnType && typeName(this.returnType) !== typeName(value.type)) {
+      if (this.returnType && typeName(this.returnType) !== typeName(value.type) && !(isUiResultType(this.returnType) && isUiResultType(value.type))) {
         this.error(
           `All return statements must return the same type (already ${typeName(this.returnType)}, got ${typeName(value.type)}).`,
           node.from,
@@ -307,6 +309,7 @@ class Compiler {
         );
       }
       this.returnExpression = value.expression;
+      if (this.returnType && isUiResultType(this.returnType) && isUiResultType(value.type) && typeName(this.returnType) !== typeName(value.type)) this.returnType = RESULT_TYPES.ui;
       if (!this.returnType) this.returnType = value.type;
       return { kind: "return", expression: value.expression, from: node.from, to: node.to };
     }
@@ -640,6 +643,14 @@ class Compiler {
       namedIndexes.add(index + 2);
       const compiled = this.compileExpression(valueNode);
       if (compiled) {
+        if (definition.id === "ui.form" && name === "fields") {
+          if (containsUiCall(compiled.expression)) this.error("Form fields must be declarative data, not UI API calls.", valueNode.from, valueNode.to);
+          const data = literalData(compiled.expression);
+          if (data !== undefined) {
+            try { parseUiForm({ title: "Form", fields: data }); }
+            catch (error) { this.error(error instanceof Error ? error.message : "Invalid form fields.", valueNode.from, valueNode.to); }
+          }
+        }
         const coerced = this.coerceContextValue(compiled, field);
         if (!matchesField(coerced.type, field)) {
           this.error(`Argument '${name}' expects ${fieldTypeName(field)}, not ${typeName(coerced.type)}.`, valueNode.from, valueNode.to);
@@ -931,7 +942,7 @@ class Compiler {
       }
       const index = this.compileExpression(indexNode);
       if (!index) return undefined;
-      const type = object.type.kind === "list" ? object.type.item : { kind: "unknown" as const };
+      const type = object.type.kind === "list" ? object.type.item : object.type.kind === "object" ? object.type.item ?? { kind: "unknown" as const } : { kind: "unknown" as const };
       return { expression: { kind: "index", object: object.expression, index: index.expression, from: node.from, to: node.to }, type };
     }
     if (node.name === "CallExpression") {
@@ -1011,15 +1022,25 @@ export function fieldType(field: FieldDefinition): ValueType {
   else if (field.type === "list") {
     value = { kind: "list", item: field.items ? fieldType(field.items) : { kind: "unknown" } };
   }
+  else if (field.type === "result" && /^Ui(?:Select|Radio|Checkbox|Input|Confirm|Alert|Form)Result$/.test(field.resultType ?? "")) {
+    const action = field.resultType!.slice(2, -6).toLowerCase();
+    value = result(field.resultType!, Object.fromEntries(uiOutputFields(action).map((property) => [property.name, fieldType(property)])));
+  }
   else if (field.type === "result") value = Object.values(RESULT_TYPES).find((type) => type.kind === "result" && type.name === field.resultType) ?? result("Result", {});
   else value = { kind: field.type };
   return field.multiple ? { kind: "list", item: value } : value;
 }
 
 export function outputType(definition: CallableDefinition): ValueType {
-  if (!definition.output.fields) return RESULT_TYPES[definition.output.kind] ?? { kind: "unknown" };
+  if (!definition.output.fields) {
+    const match = /^Ui(Select|Radio|Checkbox|Input|Confirm|Alert|Form)Result$/.exec(definition.output.resultType ?? "");
+    if (match) return outputType({ ...definition, output: { ...definition.output, fields: uiOutputFields(match[1]!.toLowerCase()) } });
+    return RESULT_TYPES[definition.output.kind] ?? { kind: "unknown" };
+  }
   const fields: Record<string, ValueType> = {};
-  for (const field of definition.output.fields) fields[field.name] = fieldType(field);
+  for (const field of definition.output.fields) fields[field.name] = definition.output.resultType === "UiFormResult" && field.name === "answers"
+    ? { kind: "object", item: result("UiFieldAnswer", Object.fromEntries((field.properties ?? []).map((property) => [property.name, fieldType(property)]))) }
+    : fieldType(field);
   return result(definition.output.resultType ?? `${definition.output.kind}Result`, fields);
 }
 
@@ -1030,7 +1051,7 @@ function matchesField(actual: ValueType, field: FieldDefinition): boolean {
     const expected = fieldType({ ...field, type, ...(field.accepts ? { accepts: [] } : {}) });
     if (field.multiple && expected.kind === "list") {
       return actual.kind === expected.item.kind
-        || (actual.kind === "list" && actual.item.kind === expected.item.kind);
+        || (actual.kind === "list" && (actual.item.kind === expected.item.kind || actual.item.kind === "unknown"));
     }
     return expected.kind === "result"
       ? actual.kind === "result" && (!field.resultType || actual.name === field.resultType)
@@ -1103,4 +1124,22 @@ export function parseWorkflowImports(source: string): Map<string, string> {
     if (match) imports.set(match[2] ?? match[1]!.split(".").at(-1)!, match[1]!);
   }
   return imports;
+}
+
+function containsUiCall(expression: WorkflowExpression): boolean {
+  if (expression.kind === "call") return expression.call.method.startsWith("ui.") || expression.call.arguments.some((argument) => containsUiCall(argument.value));
+  if (expression.kind === "list") return expression.values.some(containsUiCall);
+  if (expression.kind === "object") return expression.entries.some((entry) => containsUiCall(entry.value));
+  if (expression.kind === "comprehension") return containsUiCall(expression.body) || containsUiCall(expression.iterable);
+  return false;
+}
+function literalData(expression: WorkflowExpression): unknown {
+  if (expression.kind === "literal") return expression.value;
+  if (expression.kind === "list") { const values = expression.values.map(literalData); return values.some((value) => value === undefined) ? undefined : values; }
+  if (expression.kind === "object") { const values = expression.entries.map((entry) => [entry.key, literalData(entry.value)] as const); return values.some((entry) => entry[1] === undefined) ? undefined : Object.fromEntries(values); }
+  return undefined;
+}
+
+function isUiResultType(type: ValueType): boolean {
+  return type.kind === "result" && /^Ui(?:Select|Radio|Checkbox|Input|Confirm|Alert|Form)?Result$/.test(type.name);
 }

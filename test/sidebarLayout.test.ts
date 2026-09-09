@@ -7,11 +7,11 @@ async function source(path: string): Promise<string> {
 }
 
 describe("sidebar panel layout", () => {
-  it("refreshes Harness model discovery once when the sidebar opens or Harness is selected", async () => {
+  it("starts background Harness model discovery when the sidebar opens or Harness is selected", async () => {
     const sidebar = await source("src/sidebarProvider.ts");
     expect(sidebar).toContain("private harnessModelsDiscovered = false;");
     expect(sidebar).toMatch(/resolveWebviewView[\s\S]*?discoverHarnessModelsOnce\(\)\.then/);
-    expect(sidebar).toMatch(/case "agentSelection":[\s\S]*?selection\.profileId === "deepseek-harness" && previousProfileId !== "deepseek-harness"[\s\S]*?await this\.discoverHarnessModelsOnce\(\)/);
+    expect(sidebar).toMatch(/case "agentSelection":[\s\S]*?selection\.profileId === "deepseek-harness" && previousProfileId !== "deepseek-harness"[\s\S]*?void this\.discoverHarnessModelsOnce\(\)\s*\.then/);
     expect(sidebar).toMatch(/private discoverHarnessModelsOnce\(\): Promise<void>[\s\S]*?this\.harnessModelsDiscovered = true/);
   });
 

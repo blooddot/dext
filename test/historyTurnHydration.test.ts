@@ -106,3 +106,14 @@ describe("expanding history while a turn is streaming", () => {
     expect(turn.hydrated).toBe(true);
   });
 });
+
+it("hydrates unknown historical results as read-only output without dispatching an interaction", () => {
+  const { context, state } = harness();
+  const response = { kind: "workflow", executions: [{ method: { id: "ui.choose" }, result: { kind: "ui", type: "choice", selected: ["old"] } }] };
+  context.record.output = JSON.stringify(response);
+  const renderResult = vi.fn(); Object.assign(context, { renderResult });
+  runInNewContext("hydrateOutputTurnOnOpen(event)", context);
+  expect(renderResult).toHaveBeenCalledWith(response);
+  expect(context.renderAgentEvent).toHaveBeenCalledTimes(1);
+  expect(context.activeTurn).toBe(state.activeTurn);
+});

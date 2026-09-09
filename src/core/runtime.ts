@@ -1,3 +1,4 @@
+import { uiCallForm, uiCallResult, uiFormResultSchema, validateUiAnswers, type UiAction } from "./uiForm.js";
 import { performance } from "node:perf_hooks";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { readFile } from "node:fs/promises";
@@ -6,7 +7,7 @@ import { AxAdapter } from "./axAdapter.js";
 import { builtinCliFields, builtinCliMetadata, CLI_BUILTIN_IDS, specializeBuiltinCli } from "./builtinCli.js";
 import type { ContextResolver } from "./contextResolver.js";
 import type { MethodRegistry } from "./registry.js";
-import type { AgentResult, CustomApiPlan, DirRef, McpRawResult, UiChoiceResult, UiConfirmResult, UiInputResult } from "./types.js";
+import type { AgentResult, CustomApiPlan, DirRef, McpRawResult } from "./types.js";
 import { WorkflowRuntime } from "./workflowRuntime.js";
 import { ExecutionCancelledError } from "./executionErrors.js";
 import { patchResultFrom } from "./patch.js";
@@ -61,10 +62,6 @@ function printValue(value: unknown): string {
     }
   }
   return JSON.stringify(value) ?? "";
-}
-
-function stringArgument(value: unknown, fallback: string): string {
-  return typeof value === "string" ? value : fallback;
 }
 
 function stringListArgument(value: unknown, name: string): string[] {
@@ -271,36 +268,13 @@ export const DEFAULT_HANDLERS: Readonly<Record<string, DeterministicHandler>> = 
       after: reference.content
     }))
   }),
-  uiChoose: async ({ arguments: args, metadata }): Promise<UiChoiceResult> => {
-    if (!metadata.ui) throw new Error("ui.choose requires an interactive Dext host.");
-    const rawOptions = args.options;
-    const options = (Array.isArray(rawOptions) ? rawOptions : [rawOptions])
-      .filter((value): value is string => typeof value === "string");
-    if (!options.length) throw new Error("ui.choose requires at least one option.");
-    return metadata.ui.choose({
-      label: stringArgument(args.label, "Choose"),
-      options,
-      multiple: args.multiple === true,
-      allowCustom: args.allow_custom === true,
-      ...(typeof args.custom_placeholder === "string" ? { customPlaceholder: args.custom_placeholder } : {})
-    });
-  },
-  uiConfirm: async ({ arguments: args, metadata }): Promise<UiConfirmResult> => {
-    if (!metadata.ui) throw new Error("ui.confirm requires an interactive Dext host.");
-    return metadata.ui.confirm({
-      message: stringArgument(args.message, ""),
-      confirmLabel: stringArgument(args.confirm_label, "Continue"),
-      cancelLabel: stringArgument(args.cancel_label, "Cancel")
-    });
-  },
-  uiInput: async ({ arguments: args, metadata }): Promise<UiInputResult> => {
-    if (!metadata.ui) throw new Error("ui.input requires an interactive Dext host.");
-    return metadata.ui.input({
-      label: stringArgument(args.label, "Input"),
-      ...(typeof args.placeholder === "string" ? { placeholder: args.placeholder } : {}),
-      multiline: args.multiline === true
-    });
-  },
+  uiSelect: uiHandler("select"),
+  uiRadio: uiHandler("radio"),
+  uiCheckbox: uiHandler("checkbox"),
+  uiInput: uiHandler("input"),
+  uiConfirm: uiHandler("confirm"),
+  uiAlert: uiHandler("alert"),
+  uiForm: uiHandler("form"),
   runSkill: () => {
     throw new Error("skill requires a configured Agent profile.");
   }
@@ -314,6 +288,18 @@ function mergeContext(resolved: readonly CodeRef[], supplemental: readonly CodeR
     seen.add(key);
     return true;
   });
+}
+
+function uiHandler(action: UiAction): DeterministicHandler {
+  return async ({ arguments: args, metadata }) => {
+    if (!metadata.ui) throw new Error(`ui.${action} requires an interactive Dext host.`);
+    if (metadata.signal?.aborted) throw new ExecutionCancelledError();
+    const form = uiCallForm(action, args);
+    const result = uiFormResultSchema.parse(await metadata.ui.form(form, metadata.signal));
+    if (metadata.signal?.aborted) throw new ExecutionCancelledError();
+    if (result.status === "submitted") result.answers = validateUiAnswers(form, result.answers);
+    return uiCallResult(action, result);
+  };
 }
 
 export class DextRuntime {
@@ -709,17 +695,5 @@ export class DextRuntime {
       // No project instruction is the normal case, not a failure.
     }
     return DEFAULT_PLAN_INSTRUCTION;
-  }
-
-  async executeSerial(
-    invocations: readonly InvocationAst[],
-    supplementalContext: readonly CodeRef[] = [],
-    metadata: Readonly<ExecutionMetadata> = {}
-  ): Promise<RuntimeResponse[]> {
-    const responses: RuntimeResponse[] = [];
-    for (const invocation of invocations) {
-      responses.push(await this.execute(invocation, supplementalContext, metadata));
-    }
-    return responses;
   }
 }

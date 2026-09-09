@@ -1,3 +1,4 @@
+import { uiFormResultSchema } from "./core/uiForm.js";
 import { z } from "zod";
 import type {
   CompletionItem,
@@ -5,7 +6,7 @@ import type {
   LanguageDiagnostic,
   SignatureHelp
 } from "./core/languageService.js";
-import type { AgentStreamEvent, InputExecutionResponse, RegisteredCallable } from "./core/types.js";
+import type { AgentStreamEvent, InputExecutionResponse, RegisteredCallable, PlanExecutionOutcome } from "./core/types.js";
 import type { AgentProfile, AgentSelection } from "./agentProfiles.js";
 import type { EditorTokenTheme } from "./vscodeTheme.js";
 import type { DextHistorySession, PlanStatus } from "./historyStore.js";
@@ -27,6 +28,13 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
     planPath: z.string().min(1).max(512).optional()
   }),
   z.object({ type: z.literal("stopExecution"), turnId: z.string().min(1) }),
+  z.object({
+    type: z.literal("agentInputResponse"),
+    sessionId: z.string().min(1), turnId: z.string().min(1), requestId: z.string().min(1),
+    answers: z.record(z.string().min(1).max(256), z.object({
+      answers: z.array(z.string().min(1).max(20000)).length(1)
+    })).nullable()
+  }),
   z.object({ type: z.literal("retryTurn"), turnId: z.string().min(1), sessionId: z.string().min(1).optional() }),
   z.object({ type: z.literal("forkFromTurn"), turnId: z.string().min(1), sessionId: z.string().min(1).optional() }),
   z.object({ type: z.literal("renameTurn"), sessionId: z.string().min(1), turnId: z.string().min(1) }),
@@ -60,6 +68,11 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("chooseFiles") }),
   z.object({
+    type: z.literal("resolveDroppedFiles"),
+    requestId: z.number().int().nonnegative(),
+    paths: z.array(z.string().min(1).max(8192).regex(/^[^\r\n]+$/)).min(1).max(100)
+  }),
+  z.object({
     type: z.literal("pasteImage"),
     data: z.string().min(1),
     mimeType: z.string().min(1)
@@ -67,13 +80,9 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("deleteImageAttachment"), relativePath: z.string().min(1) }),
   z.object({
     type: z.literal("uiResponse"),
-    requestId: z.string().min(1),
-    response: z.discriminatedUnion("type", [
-      z.object({ type: z.literal("choice"), selected: z.array(z.string()), custom: z.string().optional() }),
-      z.object({ type: z.literal("confirm"), confirmed: z.boolean() }),
-      z.object({ type: z.literal("input"), value: z.string().optional() })
-    ])
-  }),
+    sessionId: z.string().min(1).max(128), turnId: z.string().min(1).max(128), requestId: z.string().min(1).max(128),
+    response: uiFormResultSchema
+  }).strict(),
   z.object({ type: z.literal("reload") }),
   z.object({ type: z.literal("openMcp") }),
   z.object({ type: z.literal("addMcp") }),
@@ -217,23 +226,10 @@ export type WebviewResponse =
   | { type: "mcpToolsDiscovered"; requestId: string; tools: McpDiscoveredTool[] }
   | { type: "mcpGenerated"; requestId: string; server: McpServerConfig }
   | { type: "mcpCreated"; name: string }
-  | {
-    type: "uiRequest";
-    requestId: string;
-    request: {
-      type: "choice";
-      label: string;
-      options: string[];
-      multiple: boolean;
-      allowCustom: boolean;
-      customPlaceholder?: string;
-    } | { type: "confirm"; message: string; confirmLabel: string; cancelLabel: string }
-      | { type: "input"; label: string; placeholder?: string; multiline: boolean };
-  }
   /** `reviewPatch` is set when the host is holding an unapplied patch for this
    * turn, which is what puts Accept and Reject on its file changes. */
   | { type: "execution"; sessionId: string; turnId: string; response: InputExecutionResponse; reviewPatch?: boolean }
-  | { type: "executionFailed"; sessionId: string; turnId: string; message: string }
+  | { type: "executionFailed"; sessionId: string; turnId: string; message: string; planOutcome?: PlanExecutionOutcome }
   | {
     type: "patchResolved";
     sessionId: string;
@@ -259,6 +255,7 @@ export type WebviewResponse =
     fileReferences?: Array<{ expression: string; payload: string }>;
   }
   | { type: "searchFilesResult"; requestId: number; files: string[] }
+  | { type: "resolveDroppedFilesResult"; requestId: number; expressions: string[]; error?: string }
   | { type: "setInput"; source: string }
   | { type: "focusInput" }
   | { type: "triggerSuggest" }

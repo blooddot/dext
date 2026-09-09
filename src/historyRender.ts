@@ -1,8 +1,9 @@
+import { uiResultText } from "./uiInteractionPresentation.js";
 import { parser } from "@lezer/python";
 import { classHighlighter, highlightCode } from "@lezer/highlight";
 import MarkdownIt from "markdown-it";
 import { markdownCodeCopy } from "./markdownCopy.js";
-import { latestAgentTodos, renderAgentTodos } from "./agentTodoPresentation.js";
+import { latestAgentTodos, renderAgentTodos, planExecutionLabel } from "./agentTodoPresentation.js";
 import type { AgentStreamEvent, DextResult, InputExecutionResponse, RuntimeResponse, WorkflowStepResponse } from "./core/types.js";
 import type { EditorTokenTheme } from "./vscodeTheme.js";
 import type { DextHistoryRecord, DextHistorySession } from "./historyStore.js";
@@ -316,15 +317,7 @@ function resultText(result: DextResult): string {
   if (result.kind === "code") return result.code;
   if (result.kind === "patch") return result.changes.map((change) => `${change.uri}\n- ${change.before}\n+ ${change.after}`).join("\n\n");
   if (result.kind === "plan") return result.steps.map((step) => `${step.title}${step.detail ? `: ${step.detail}` : ""}`).join("\n");
-  if (result.kind === "ui") {
-    if (result.type === "choice") {
-      const selected = result.selected.length ? result.selected.join(", ") : "No selection";
-      return result.custom ? `${selected} (custom: ${result.custom})` : selected;
-    }
-    if (result.type === "confirm") return result.confirmed ? "Confirmed" : "Cancelled";
-    return result.value ?? "No input";
-  }
-  return "";
+  return uiResultText(result);
 }
 
 function resultBody(result: DextResult): string {
@@ -436,7 +429,7 @@ function process(events: readonly AgentStreamEvent[]): string {
     groupId = undefined;
   };
   for (const event of events) {
-    if (event.phase === "status" || event.phase === "todo") continue;
+    if (event.phase === "status" || event.phase === "todo" || event.phase === "input") continue;
     if (event.phase === "tool") {
       if (event.solo) {
         flushTools();
@@ -453,6 +446,24 @@ function process(events: readonly AgentStreamEvent[]): string {
   }
   flushTools();
   return html.join("");
+}
+
+function inputHistory(events: readonly AgentStreamEvent[]): string {
+  const interactions = new Map(events.flatMap((event) => event.uiInteraction ? [[event.uiInteraction.requestId, event.uiInteraction] as const] : []));
+  const forms = [...interactions.values()].map((state) => {
+    const fields = state.form.fields.map((field) => `<p><strong>${escapeHtml(field.label)}</strong>: ${escapeHtml(field.secret ? "Answer hidden" : uiResultText(state.answers?.[field.id]))}</p>`).join("");
+    return `<section class="agent-input-card"><strong>${escapeHtml(state.form.title)} — ${state.status === "submitted" ? "Submitted" : "Closed"}</strong>${fields}</section>`;
+  }).join("");
+  const requests = new Map(events.flatMap((event) => event.userInput ? [[event.userInput.id, event.userInput] as const] : []));
+  return forms + [...requests.values()].map((request) => {
+    const status = request.status === "answered" ? "Answered" : "Closed";
+    const questions = request.questions.map((question) => {
+      const answer = request.status === "answered" ? question.isSecret ? "Answer submitted"
+        : request.answers?.[question.id]?.answers.join(", ") ?? "Answer submitted" : "No answer submitted";
+      return `<div class="agent-input-question"><strong>${escapeHtml(question.question)}</strong><p class="agent-input-answer">${escapeHtml(answer)}</p></div>`;
+    }).join("");
+    return `<section class="agent-input-card"><div class="agent-input-header"><strong>Question</strong><span class="agent-input-status">${status}</span></div>${questions}</section>`;
+  }).join("");
 }
 
 function parsedResponse(record: DextHistoryRecord): InputExecutionResponse | undefined {
@@ -490,7 +501,7 @@ export function renderHistoryRecord(record: DextHistoryRecord, sessionId?: strin
   const firstLine = historyTurnTitle(record);
   const duration = response?.executions.reduce((total, item) => total + item.durationMs, 0) ?? 0;
   const processHtml = process(record.process);
-  const todoHtml = renderAgentTodos(latestAgentTodos(record.process));
+  const todoHtml = renderAgentTodos(latestAgentTodos(record.process)) + inputHistory(record.process);
   const outputHtml = record.error
     ? `<pre class="error">${escapeHtml(record.error)}</pre>`
     : response ? output(response) : `<pre>${escapeHtml(record.output)}</pre>`;
@@ -508,7 +519,8 @@ export function renderHistoryRecord(record: DextHistoryRecord, sessionId?: strin
   const modeTitle = record.mode ? `Submitted in ${turnModeLabel(record.mode)} mode` : "Mode was not recorded for this turn";
   const modeLabel = `<span class="turn-mode" data-mode="${escapeHtml(record.mode ?? "unknown")}" title="${escapeHtml(modeTitle)}">${turnModeLabel(record.mode)}</span>`;
   const inputHtml = executePlan ? "" : `<details class="history-disclosure"><summary>${chevron()}<span>Input</span>${modeLabel}${copyButton(input)}</summary><pre class="dext-source">${renderedInputSource(input)}</pre></details>`;
-  const planStatusHtml = executePlan ? `<span class="plan-status">${record.error ? "Failed" : "Completed"}</span>` : "";
+  const planOutcome = record.planOutcome ?? (planExecution?.result.kind === "chat" ? planExecution.result.planOutcome : undefined);
+  const planStatusHtml = executePlan ? `<span class="plan-status">${planExecutionLabel(record.process, record.error, planOutcome)}</span>` : "";
   return `<details class="history-record"${target}${context}><summary${hint}>${chevron()}<span class="history-summary-input${record.title ? " named" : ""}">${escapeHtml(firstLine)}</span>${planStatusHtml}<span class="history-meta">${duration ? formatDuration(duration) : ""}</span><span class="history-meta history-record-time">${escapeHtml(dateLabel(record.createdAt))}</span>${sessionId ? historyTurnActions(sessionId, record.id) : ""}</summary><div class="history-record-body">${inputHtml}${todoHtml}${processHtml ? `<details class="history-disclosure"><summary>${chevron()}<span>Process</span></summary><div class="disclosure-body">${processHtml}</div></details>` : ""}<details class="history-disclosure" open><summary>${chevron()}<span>Output</span>${copyButton(outputCopy)}</summary><div class="disclosure-body">${outputHtml}</div></details></div></details>`;
 }
 

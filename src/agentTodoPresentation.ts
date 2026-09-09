@@ -1,4 +1,12 @@
-import type { AgentStreamEvent, AgentTodoItem } from "./core/types.js";
+import type { AgentStreamEvent, AgentTodoItem, PlanExecutionOutcome } from "./core/types.js";
+
+export function planExecutionLabel(events: readonly AgentStreamEvent[], error?: string, outcome?: PlanExecutionOutcome): string {
+  if (outcome?.status === "cancelled") return "Stopped";
+  if (error) return "Failed";
+  if (outcome) return { completed: "Completed", incomplete: "Incomplete", blocked: "Blocked", cancelled: "Stopped" }[outcome.status];
+  const items = latestAgentTodos(events);
+  return items.length && items.every((item) => item.status === "completed") ? "Completed" : "Incomplete";
+}
 
 const escape = (text: string): string => text.replace(/[&<>"']/g, (char) => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"

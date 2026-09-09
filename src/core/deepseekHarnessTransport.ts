@@ -39,13 +39,17 @@ export class DeepSeekHarnessTransport {
   private readonly exited: Promise<void>;
   private closing?: Promise<void>;
   capabilities?: InitializeResponse;
+  onActivity?: (() => void) | undefined;
 
   constructor(command: string, args: readonly string[], cwd: string, client: Client) {
     const resolved = resolveCliCommand(command, "deepseek-harness");
     if (!resolved) throw new Error(`DeepSeek Harness command '${command}' was not found. Install @deepseek-ai/dsh or configure its executable path.`);
     const invocation = harnessSpawnCommand(resolved, args);
     this.child = spawn(invocation.command, invocation.args, { cwd, windowsHide: true, stdio: "pipe", shell: false });
-    this.child.stderr.on("data", (chunk: Buffer) => { this.stderr = (this.stderr + chunk.toString()).slice(-16000); });
+    this.child.stderr.on("data", (chunk: Buffer) => {
+      if (chunk.length) this.onActivity?.();
+      this.stderr = (this.stderr + chunk.toString()).slice(-16000);
+    });
     this.exited = new Promise((resolve) => { this.child.once("exit", () => resolve()); this.child.once("error", () => resolve()); });
     this.connection = new ClientSideConnection(() => client, ndJsonStream(
       Writable.toWeb(this.child.stdin) as WritableStream<Uint8Array>,
@@ -58,6 +62,7 @@ export class DeepSeekHarnessTransport {
       const decoder = new StringDecoder("utf8");
       let buffer = "";
       this.child.stdout.on("data", (chunk: Buffer) => {
+        if (chunk.length) this.onActivity?.();
         buffer += decoder.write(chunk);
         if (buffer.length > 16 * 1024 * 1024) { fail("ACP protocol frame exceeds 16 MiB"); return; }
         const lines = buffer.split("\n"); buffer = lines.pop() ?? "";
@@ -81,7 +86,7 @@ export class DeepSeekHarnessTransport {
   async wait<T>(operation: Promise<T>, timeoutMs = 30000): Promise<T> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try { return await Promise.race([operation, this.failure, new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error("DeepSeek Harness operation timed out.")), timeoutMs);
+      if (timeoutMs > 0) timer = setTimeout(() => reject(new Error("DeepSeek Harness operation timed out.")), timeoutMs);
     })]); } finally { if (timer) clearTimeout(timer); }
   }
 

@@ -2,10 +2,14 @@ import { CliAgentRunner, type AgentConversationRequest, type AgentExecutionReque
 import { DeepSeekHarnessRunner } from "./deepseekHarnessRunner.js";
 export class DefaultAgentRunner implements AgentRunner {
   constructor(private readonly cli = new CliAgentRunner(), readonly harness = new DeepSeekHarnessRunner()) {}
-  setTimeouts(timeouts: { agentTimeoutMs?: number }): void {
+  setTimeouts(timeouts: { agentTimeoutMs?: number; agentIdleTimeoutMs?: number }): void {
     if (timeouts.agentTimeoutMs !== undefined) {
       this.cli.setTimeoutMs(timeouts.agentTimeoutMs);
       this.harness.setTimeoutMs(timeouts.agentTimeoutMs);
+    }
+    if (timeouts.agentIdleTimeoutMs !== undefined) {
+      this.cli.setIdleTimeoutMs(timeouts.agentIdleTimeoutMs);
+      this.harness.setIdleTimeoutMs(timeouts.agentIdleTimeoutMs);
     }
   }
   private runner(provider: string): CliAgentRunner | DeepSeekHarnessRunner {

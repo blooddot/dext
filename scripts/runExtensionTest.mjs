@@ -18,6 +18,9 @@ if (!useDownloadedBuild && !existsSync(vscodeExecutablePath)) {
 }
 
 const options = {
+  // Dext can launch this script from an Electron extension host. The test
+  // executable must start the editor rather than inherit Node-only mode.
+  extensionTestsEnv: { ELECTRON_RUN_AS_NODE: undefined },
   extensionDevelopmentPath: root,
   extensionTestsPath: join(root, "dist", "extensionHostTest.js"),
   launchArgs: [root, "--disable-extensions", "--skip-welcome", "--skip-release-notes"]

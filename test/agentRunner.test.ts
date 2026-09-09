@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   agentPayload,
   agentProcessEnvironment,
@@ -499,5 +499,56 @@ describe("CLI command resolution", () => {
     setTimeout(() => controller.abort(), 25);
 
     await expect(running).rejects.toMatchObject({ name: "ExecutionCancelledError" });
+  });
+
+  it.each(["stdout", "stderr"])("counts %s output as activity even without a rendered event", async (stream) => {
+    const activity = vi.fn();
+    const result = await runProcess(process.execPath,
+      ["-e", `process.${stream}.write('partial output')`], "", process.cwd(),
+      undefined, undefined, undefined, undefined, activity);
+    expect(result[stream as "stdout" | "stderr"]).toBe("partial output");
+    expect(activity).toHaveBeenCalled();
+  });
+
+  it.each(["conversation", "api"])("keeps an active %s and its silent tools running beyond the idle interval", async (kind) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let started!: () => void;
+    const ready = new Promise<void>((resolve) => { started = resolve; });
+    let activity!: () => void;
+    let emit!: (chunk: string) => void;
+    let finish!: () => void;
+    let executionSignal: AbortSignal | undefined;
+    const runner = new CliAgentRunner(0, async (_command, args, _input, _cwd, signal, onStdout, _env, _completion, onActivity) => {
+      if (args[0] === "login") return { stdout: "", stderr: "", code: 1 };
+      executionSignal = signal;
+      activity = onActivity!;
+      emit = onStdout!;
+      await new Promise<void>((resolve) => { finish = resolve; started(); });
+      return { stdout: JSON.stringify({ type: "item.completed", item: {
+        type: "agent_message", text: kind === "api" ? JSON.stringify({ kind: "chat", text: "done" }) : "done"
+      } }), stderr: "", code: 0 };
+    }, 1000);
+    try {
+      const req = request();
+      req.profile.command = process.execPath;
+      req.cwd = process.cwd();
+      const result = kind === "api" ? runner.run(req) : runner.runConversation(conversationRequest("hello", "timeout-test"));
+      await ready;
+      for (let index = 0; index < 6; index++) {
+        vi.advanceTimersByTime(750);
+        activity();
+        expect(executionSignal?.aborted).toBe(false);
+      }
+      emit('{"type":"item.started","item":');
+      emit('{"id":"command","type":"command_execution"}}\n');
+      vi.advanceTimersByTime(5000);
+      expect(executionSignal?.aborted).toBe(false);
+      emit('{"type":"item.completed","item":{"id":"command","type":"command_execution","aggregated_output":""}}\n');
+      vi.advanceTimersByTime(999);
+      expect(executionSignal?.aborted).toBe(false);
+      finish();
+      expect(await result).toEqual(kind === "api" ? { kind: "chat", text: "done" } : "done");
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
   });
 });

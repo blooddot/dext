@@ -24,6 +24,8 @@ const vscode = vi.hoisted(() => {
 
 vi.mock("vscode", () => vscode);
 import { clipboardFileReferences } from "../src/vscodeClipboardFiles.js";
+import { DextSidebarProvider } from "../src/sidebarProvider.js";
+import { FileDropClient } from "../src/webview/fileDropClient.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -34,6 +36,19 @@ beforeEach(() => {
 });
 
 describe("clipboard file paths", () => {
+  it("resolves dropped paths through the webview client and host into file references", async () => {
+    const sidebar = Object.create(DextSidebarProvider.prototype) as DextSidebarProvider;
+    const client = new FileDropClient((request) => {
+      void (sidebar as unknown as { receive(request: unknown): Promise<void> }).receive(request);
+    });
+    Object.assign(sidebar, { post: async (response: Parameters<FileDropClient["accept"]>[0]) => client.accept(response) });
+    await expect(client.resolve(["file:///C:/repo/a.ts", "file:///C:/repo/My%20File.ts"]))
+      .resolves.toEqual(["@a.ts", "@file:///C:/repo/My%20File.ts"]);
+    vscode.workspace.fs.stat.mockRejectedValueOnce(new Error("missing"));
+    await expect(client.resolve(["file:///C:/repo/missing.ts"])).rejects.toThrow("Could not reference");
+    client.dispose();
+  });
+
   it("references multiple original files, including images, without reading their content", async () => {
     await expect(clipboardFileReferences("C:\\repo\\index.html\r\nC:\\repo\\image.png")).resolves.toEqual([
       { expression: "@index.html", payload: "index.html" },

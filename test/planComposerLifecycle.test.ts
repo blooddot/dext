@@ -15,7 +15,8 @@ function harness(error?: string) {
     return { kind: "workflow", executions: [{
       invocation: { kind: "invocation", method: "plan", arguments: [], source: "chat" },
       method: { id: "plan", title: "Plan", kind: "command", source: "builtin" }, durationMs: 1,
-      result: { kind: "chat", executePlan: !!metadata.executePlan, planPath: metadata.planPath ?? "new.plan.md", text: "Done" }
+      result: { kind: "chat", executePlan: !!metadata.executePlan, planPath: metadata.planPath ?? "new.plan.md", text: metadata.executePlan
+        ? 'Done <!-- dext-todo: {"updates":[{"id":"plan-1","status":"completed"}],"verification":"passed"} -->' : "Done" }
     }] };
   });
   const sidebar = Object.create(DextSidebarProvider.prototype) as DextSidebarProvider;
@@ -27,11 +28,48 @@ function harness(error?: string) {
   });
   const run = (build = true, path?: string) => (sidebar as unknown as {
     run(mode: string, source: string, path: string | undefined, build: boolean): Promise<void>;
-  }).run("plan", "Request", path, build);
+  }).run("plan", build ? "## Tasks\n1. [ ] Implement and verify" : "Request", path, build);
   return { session, sidebar, history, execute, run };
 }
 
 describe("Plan composer after execution", () => {
+  it("resumes a persisted task checkpoint with verification instead of implementing completed work again", async () => {
+    const { session, execute, run } = harness();
+    session.planProgress = { path: "old.plan.md", todos: [{ id: "plan-1", text: "Implement and verify", status: "completed" }] };
+    await run();
+    expect(execute).toHaveBeenCalledOnce();
+    expect(execute.mock.calls[0]?.[1]).toContain("FINAL VERIFICATION");
+    expect(session.turns[0]?.planOutcome?.status).toBe("completed");
+  });
+  it("stops before another round when the user cancels, preserving partial progress", async () => {
+    const { sidebar, session, execute, history, run } = harness();
+    execute.mockImplementation(async (_mode, _source, metadata) => {
+      metadata.onAgentEvent?.({ phase: "message", text: '<!-- dext-todo: {"updates":[{"id":"plan-1","status":"in_progress"}]} -->' });
+      const active = (sidebar as unknown as { activeExecutions: Map<string, { controller: AbortController }> }).activeExecutions.get("session")!;
+      active.controller.abort(); throw new Error("Cancelled");
+    });
+    await run();
+    expect(execute).toHaveBeenCalledOnce();
+    expect(session).toMatchObject({ activePlanPath: "old.plan.md", planStatus: "active" });
+    expect(history.list()[0]?.planProgress?.todos[0]?.status).toBe("in_progress");
+    expect(session.turns[0]?.planOutcome?.status).toBe("cancelled");
+  });
+  it("continues using the returned native session and ignores late progress from an earlier round", async () => {
+    const { sidebar, execute, run, session } = harness();
+    let oldMetadata: ExecutionMetadata | undefined;
+    const original = execute.getMockImplementation()!;
+    Object.assign(sidebar, { application: { state: () => ({ agentSelection: {} }), agentProfiles: () => [{ id: "codex", provider: "codex" }], executeConversation: execute } });
+    execute.mockImplementation(async (mode, source, metadata) => {
+      if (oldMetadata) {
+        expect(metadata.conversationProviderSessionId).toBe("native-session");
+        oldMetadata.onAgentEvent?.({ phase: "message", text: '<!-- dext-todo: {"updates":[{"id":"plan-1","status":"pending"}]} -->' });
+      } else { oldMetadata = metadata; metadata.onAgentSessionId?.("codex", "native-session"); }
+      return original(mode, source, metadata);
+    });
+    await run();
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(session.turns[0]?.planOutcome?.status).toBe("completed");
+  });
   it("starts the next request as a new plan while retaining the completed execution's file", async () => {
     const { session, history, execute, run } = harness();
     await run();
@@ -42,7 +80,7 @@ describe("Plan composer after execution", () => {
     expect(saved.activePlanPath).toBeUndefined();
     expect(saved.turns[0]).toMatchObject({ executePlan: true, planPath: "old.plan.md" });
     await run(false);
-    expect(execute.mock.calls[1]?.[2].planPath).toBeUndefined();
+    expect(execute.mock.calls[2]?.[2].planPath).toBeUndefined();
     expect(session.activePlanPath).toBe("new.plan.md");
     expect(session.planStatus).toBe("active");
   });
@@ -59,7 +97,7 @@ describe("Plan composer after execution", () => {
     await run();
     await sidebar.setActivePlan("old.plan.md");
     await run(false, session.activePlanPath);
-    expect(execute.mock.calls[1]?.[2]).toMatchObject({ planPath: "old.plan.md" });
+    expect(execute.mock.calls[2]?.[2]).toMatchObject({ planPath: "old.plan.md" });
     expect(session).toMatchObject({ activePlanPath: "old.plan.md", planStatus: "active" });
   });
 

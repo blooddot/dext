@@ -1,5 +1,6 @@
+import { publicInteractionState } from "./uiInteractionPresentation.js";
 import type * as vscode from "vscode";
-import type { AgentStreamEvent, InputExecutionResponse } from "./core/types.js";
+import type { AgentStreamEvent, AgentTodoItem, InputExecutionResponse, PlanExecutionOutcome } from "./core/types.js";
 import { normalizeInputReferenceSource } from "./core/fileReference.js";
 
 const HISTORY_KEY = "dext.history";
@@ -29,6 +30,7 @@ export interface DextHistoryRecord {
   /** Preserve Plan execution presentation even when a run fails without a response. */
   executePlan?: boolean;
   planPath?: string;
+  planOutcome?: PlanExecutionOutcome;
   response?: InputExecutionResponse;
   error?: string;
 }
@@ -47,6 +49,7 @@ export interface DextHistorySession {
   /** Explicit Plan target and lifecycle, kept with the conversation tab. */
   activePlanPath?: string;
   planStatus?: PlanStatus;
+  planProgress?: { path: string; todos: AgentTodoItem[] };
   /** Archived conversations remain available but are hidden from the default history view. */
   archivedAt?: number;
 }
@@ -63,6 +66,35 @@ function serializeResponse(response: InputExecutionResponse, maxOutputLength: nu
   } catch {
     return "Unable to serialize execution output.";
   }
+}
+
+/** Store final interaction states only. Drafts stay in Webview state; secrets
+ * are removed defensively even when a provider supplies them in an event. */
+function storedProcess(process: readonly AgentStreamEvent[], limit: number): AgentStreamEvent[] {
+  const last = new Map<string, number>();
+  process.forEach((event, index) => {
+    const id = event.uiInteraction ? `ui:${event.uiInteraction.requestId}` : event.userInput ? `agent:${event.userInput.id}` : undefined;
+    if (id) last.set(id, index);
+  });
+  return process.flatMap((event, index) => {
+    const next = structuredClone(event); next.text = bounded(event.text, limit);
+    if (next.uiInteraction) {
+      if (last.get(`ui:${next.uiInteraction.requestId}`) !== index) return [];
+      next.uiInteraction = publicInteractionState(next.uiInteraction);
+      if (next.uiInteraction.status === "waiting") next.uiInteraction.status = "closed";
+      if (JSON.stringify(next.uiInteraction).length > limit) {
+        next.text = bounded(JSON.stringify(next.uiInteraction), limit); delete next.uiInteraction;
+        next.phase = "message";
+      }
+    }
+    if (next.userInput) {
+      if (last.get(`agent:${next.userInput.id}`) !== index) return [];
+      if (next.userInput.status === "waiting") next.userInput.status = "dismissed";
+      for (const question of next.userInput.questions) if (question.isSecret && next.userInput.answers) delete next.userInput.answers[question.id];
+      if (JSON.stringify(next.userInput).length > limit) { next.text = bounded(JSON.stringify(next.userInput), limit); delete next.userInput; next.phase = "message"; }
+    }
+    return [next];
+  });
 }
 
 function isSession(value: DextHistoryRecord | DextHistorySession): value is DextHistorySession {
@@ -170,6 +202,19 @@ export class DextHistoryStore {
     });
   }
 
+  async updatePlanProgress(sessionId: string, path: string, todos: readonly AgentTodoItem[]): Promise<void> {
+    await this.mutate(async () => {
+      const sessions = this.all();
+      let session = sessions.find((item) => item.id === sessionId);
+      if (!session) {
+        session = { id: sessionId, createdAt: Date.now(), updatedAt: Date.now(), turns: [], activePlanPath: path, planStatus: "running" };
+        sessions.push(session);
+      }
+      session.planProgress = { path, todos: todos.map((item) => ({ ...item })) };
+      await this.state.update(HISTORY_KEY, sessions);
+    });
+  }
+
   /** Remove a Dext record, without modifying the CLI transcript. Keep an empty
    * conversation if it owns provider bindings so reload can still resume it. */
   async removeTurn(sessionId: string, turnId: string, providerSessions?: Readonly<Record<string, string>>): Promise<boolean> {
@@ -238,12 +283,12 @@ export class DextHistoryStore {
     sessionId?: string,
     mode?: DextHistoryRecord["mode"],
     turnId?: string,
-    planExecution?: Pick<DextHistoryRecord, "executePlan" | "planPath">
+    planExecution?: Pick<DextHistoryRecord, "executePlan" | "planPath" | "planOutcome">
   ): Promise<DextHistoryRecord> {
     const { maxOutputLength } = this.limits();
     return this.add({
       input: bounded(input, maxOutputLength),
-      process: process.map((event) => ({ ...event, text: bounded(event.text, maxOutputLength) })),
+      process: storedProcess(process, maxOutputLength),
       output: serializeResponse(response, maxOutputLength),
       ...(mode ? { mode } : {}),
       ...planExecution,
@@ -258,13 +303,13 @@ export class DextHistoryStore {
     sessionId?: string,
     mode?: DextHistoryRecord["mode"],
     turnId?: string,
-    planExecution?: Pick<DextHistoryRecord, "executePlan" | "planPath">
+    planExecution?: Pick<DextHistoryRecord, "executePlan" | "planPath" | "planOutcome">
   ): Promise<DextHistoryRecord> {
     const message = error instanceof Error ? error.message : String(error);
     const { maxOutputLength } = this.limits();
     return this.add({
       input: bounded(input, maxOutputLength),
-      process: process.map((event) => ({ ...event, text: bounded(event.text, maxOutputLength) })),
+      process: storedProcess(process, maxOutputLength),
       output: "",
       ...(mode ? { mode } : {}),
       ...planExecution,

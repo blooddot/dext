@@ -88,7 +88,7 @@ function scalarSchemaForType(field: FieldDefinition, type: FieldDefinition["type
       return directoryReferenceSchema;
     case "result":
       return field.resultType
-        ? dextResultSchema.refine((value) => `${value.kind}Result`.toLowerCase() === field.resultType!.toLowerCase(), `Expected ${field.resultType}.`)
+        ? dextResultSchema.refine((value) => matchesResultAnnotation(value, field.resultType!), `Expected ${field.resultType}.`)
         : dextResultSchema;
   }
 }
@@ -116,6 +116,11 @@ function inputSchema(definition: CallableDefinition): ZodType {
 }
 
 function outputSchema(output: CallableDefinition["output"]): ZodType {
+  // UI field metadata describes editor hints, including a dynamic answer map.
+  // The executable contract must always use the strict result union instead.
+  if (output.kind === "ui") return output.resultType
+    ? uiResultSchema.refine((value) => matchesResultAnnotation(value, output.resultType!), `Expected ${output.resultType}.`)
+    : uiResultSchema;
   if (output.fields) {
     const shape: Record<string, ZodType> = { kind: z.literal(output.kind) };
     for (const field of output.fields) {
@@ -158,6 +163,11 @@ function outputSchema(output: CallableDefinition["output"]): ZodType {
     default:
       throw new Error(`Output kind '${output.kind}' requires a TypedDict result declaration.`);
   }
+}
+
+function matchesResultAnnotation(value: { kind: string }, name: string): boolean {
+  if (`${value.kind}Result`.toLowerCase() === name.toLowerCase()) return true;
+  return value.kind === "ui" && "type" in value && typeof value.type === "string" && `Ui${value.type}Result`.toLowerCase() === name.toLowerCase();
 }
 
 export class AxAdapter {

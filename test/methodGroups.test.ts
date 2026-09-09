@@ -16,14 +16,14 @@ describe("API panel method groups", () => {
   it("collects public top-level built-ins in one builtin group and preserves ui namespaces", () => {
     const groups = groupMethodsForDisplay([
       method("ask"), method("agent"), method("apply"), method("terminal"),
-      method("skill"), method("print"), method("ui.choose"),
+      method("skill"), method("print"), method("ui.radio"),
       method("team.deploy", "project")
     ]);
 
     expect(groups.children.get("builtin")?.methods.map((entry) => entry.id)).toEqual([
       "ask", "agent", "apply", "terminal", "skill", "print"
     ]);
-    expect(groups.children.get("ui")?.methods.map((entry) => entry.id)).toEqual(["ui.choose"]);
+    expect(groups.children.get("ui")?.methods.map((entry) => entry.id)).toEqual(["ui.radio"]);
     expect(groups.children.get("team")?.methods.map((entry) => entry.id)).toEqual(["team.deploy"]);
     expect(isSyntheticBuiltinGroup("builtin", "", groups.children.get("builtin")!)).toBe(true);
     expect(isSyntheticBuiltinGroup("ui", "", groups.children.get("ui")!)).toBe(false);

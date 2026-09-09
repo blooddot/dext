@@ -45,6 +45,7 @@ import type { SignatureHelp } from "../core/languageService.js";
 import type { ClipboardClient, ClipboardReadResult } from "./clipboardClient.js";
 import type { FileSearchClient } from "./fileSearchClient.js";
 import { codeReferencePasteText } from "./codeReferencePaste.js";
+import { bindFileDropTarget, droppedFilePaths, isFileDrag } from "./fileDrop.js";
 import { fileReferenceDecorations, fileReferenceRemovalEdit } from "./fileReferenceDecorations.js";
 import { inputReferenceProjections, normalizeInputReferenceSource } from "../core/fileReference.js";
 import type { ContextReferenceOccurrence } from "../core/fileReference.js";
@@ -52,16 +53,17 @@ import { sourceSnapshotMatches } from "./languageClient.js";
 import type { LanguageRequestBroker } from "./languageClient.js";
 import {
   fileReferenceInsertion,
-  inlineInsertion,
   invocationInsertion
 } from "./inputInsertion.js";
 import type { EditorTokenTheme } from "../vscodeTheme.js";
 
 export interface CodeEditorOptions {
   parent: HTMLElement;
+  dropTarget?: HTMLElement;
   broker: LanguageRequestBroker;
   clipboard: ClipboardClient;
   files: FileSearchClient;
+  resolveDroppedFiles(paths: string[]): Promise<string[]>;
   onRun(): void;
   onOpenReference(reference: ContextReferenceOccurrence): void;
   onDiagnosticsChanged(counts: { errors: number; warnings: number }): void;
@@ -198,6 +200,8 @@ export class DextCodeEditor {
   private diagnostics: Diagnostic[] = [];
   private languageEnabled = true;
   private submitOnEnter = true;
+  private dropRevision = 0;
+  private removeFileDropListeners?: () => void;
 
   constructor(private readonly options: CodeEditorOptions) {
     const extensions: Extension[] = [
@@ -302,6 +306,11 @@ export class DextCodeEditor {
       parent: options.parent,
       state: EditorState.create({ doc: "", extensions })
     });
+    this.removeFileDropListeners = bindFileDropTarget(options.dropTarget ?? options.parent, {
+      dragover: (event) => this.fileDragOver(event),
+      drop: (event) => this.fileDrop(event),
+      leave: () => this.setFileDragActive(false)
+    });
     this.scheduleDiagnostics(0);
   }
 
@@ -352,6 +361,8 @@ export class DextCodeEditor {
   }
 
   setValue(value: string, cursor = value.length): void {
+    // Also invalidate when switching between conversations with identical drafts.
+    this.dropRevision++;
     const normalized = normalizeInputReferenceSource(value);
     this.view.dispatch({
       changes: { from: 0, to: this.view.state.doc.length, insert: normalized },
@@ -360,10 +371,6 @@ export class DextCodeEditor {
       userEvent: "input"
     });
     this.focus();
-  }
-
-  insertInline(text: string, position?: number): void {
-    this.insert(text, position, inlineInsertion);
   }
 
   insertFileReferences(expressions: readonly string[], position?: number): void {
@@ -384,6 +391,45 @@ export class DextCodeEditor {
       userEvent: "input"
     });
     this.focus();
+  }
+
+  private setFileDragActive(active: boolean): void {
+    this.view.dom.classList.toggle("file-drop-active", active);
+  }
+
+  private fileDragOver(event: DragEvent): boolean {
+    const active = isFileDrag(event);
+    this.setFileDragActive(active);
+    if (!active) return false;
+    event.preventDefault();
+    event.dataTransfer!.dropEffect = "copy";
+    return true;
+  }
+
+  private fileDrop(event: DragEvent): boolean {
+    this.setFileDragActive(false);
+    if (!isFileDrag(event)) return false;
+    // Read synchronously: the browser clears DataTransfer after the event returns.
+    const paths = droppedFilePaths(event.dataTransfer);
+    if (!paths.length) {
+      if (![...event.dataTransfer!.types].some((type) => type.toLowerCase() === "files")) return false;
+      event.preventDefault();
+      event.stopPropagation();
+      this.options.onError(new Error("The dropped files did not include paths. Hold Shift and drag files from the VS Code Explorer into the input."));
+      return true;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const position = this.view.posAtCoords({ x: event.clientX, y: event.clientY })
+      ?? this.view.state.selection.main.head;
+    const revision = this.dropRevision;
+    void this.options.resolveDroppedFiles(paths).then((expressions) => {
+      if (revision !== this.dropRevision || !expressions.length) return;
+      this.insertFileReferences(expressions, position);
+    }).catch((error: unknown) => {
+      if (revision === this.dropRevision) this.options.onError(error);
+    });
+    return true;
   }
 
   removeFileReference(payload: string): void {
@@ -412,7 +458,7 @@ export class DextCodeEditor {
   private insert(
     text: string,
     position: number | undefined,
-    edit: typeof inlineInsertion
+    edit: typeof invocationInsertion
   ): void {
     const selection = this.view.state.selection.main;
     const from = position === undefined
@@ -429,17 +475,14 @@ export class DextCodeEditor {
     this.focus();
   }
 
-  positionAtPoint(x: number, y: number): number | undefined {
-    return this.view.posAtCoords({ x, y }) ?? undefined;
-  }
-
   triggerSuggest(): void {
-    this.focus();
+    // Host messages can arrive after focus has moved to another editor or input.
+    if (!this.view.hasFocus) return;
     startCompletion(this.view);
   }
 
   triggerParameterHints(): void {
-    this.focus();
+    if (!this.view.hasFocus) return;
     void this.updateSignature();
   }
 
@@ -479,6 +522,8 @@ export class DextCodeEditor {
   }
 
   destroy(): void {
+    this.dropRevision++;
+    this.removeFileDropListeners?.();
     if (this.diagnosticsTimer) clearTimeout(this.diagnosticsTimer);
     if (this.signatureTimer) clearTimeout(this.signatureTimer);
     this.view.destroy();
@@ -589,6 +634,7 @@ export class DextCodeEditor {
   private updated(update: ViewUpdate): void {
     if (!update.docChanged && !update.selectionSet) return;
     if (update.docChanged) {
+      this.dropRevision++;
       // Input mode can disable language services, but the composer still needs
       // to react immediately when its text changes.
       this.options.onSourceChanged?.();

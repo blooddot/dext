@@ -1,3 +1,5 @@
+import { uiResultText } from "../uiInteractionPresentation.js";
+import type { UiFormAnswers } from "../core/uiForm.js";
 import "../../media/styles.css";
 import MarkdownIt from "markdown-it";
 import { markdownCodeCopy } from "../markdownCopy.js";
@@ -8,7 +10,6 @@ import type {
   AgentStreamEvent,
   AgentToolKind,
   AgentTokenUsage,
-  DextResult,
   InputExecutionResponse,
   PatchChange,
   RuntimeResponse,
@@ -18,6 +19,7 @@ import { formatMethodSignature } from "../core/methodSignature.js";
 import type { ConversationSummary, SidebarState, WebviewRequest, WebviewResponse } from "../webviewProtocol.js";
 import { ClipboardClient } from "./clipboardClient.js";
 import { FileSearchClient } from "./fileSearchClient.js";
+import { FileDropClient } from "./fileDropClient.js";
 import { DextCodeEditor } from "./codeEditor.js";
 import { LanguageRequestBroker } from "./languageClient.js";
 import { formatDuration } from "./duration.js";
@@ -41,11 +43,15 @@ import { formatJsonOutput } from "./jsonOutput.js";
 import { observeComposerOverflow } from "./composerOverflow.js";
 import { enableConversationTabDrag } from "./conversationTabDrag.js";
 import { AgentTodoView } from "./agentTodoView.js";
+import { AgentInputView } from "./agentInputView.js";
+import { planExecutionLabel } from "../agentTodoPresentation.js";
 import { CLI_SPEEDS } from "../core/builtinCli.js";
 import { presentAgentSelection } from "../agentSelectionDefaults.js";
 
 interface VsCodeApi {
   postMessage(message: WebviewRequest): void;
+  getState(): { interactionDrafts?: Record<string, UiFormAnswers> } | undefined;
+  setState(state: { interactionDrafts: Record<string, UiFormAnswers> }): void;
 }
 
 declare function acquireVsCodeApi(): VsCodeApi;
@@ -154,13 +160,12 @@ jumpToLatest.hidden = true;
 // scrollable output. This keeps it visible while the reader inspects history.
 elements.resultSection.append(jumpToLatest);
 
-type UiRequestMessage = Extract<WebviewResponse, { type: "uiRequest" }>;
-let activeUiRequest: UiRequestMessage | undefined;
 let pendingConfirmation: (() => void) | undefined;
 
 const broker = new LanguageRequestBroker((request) => vscode.postMessage(request));
 const clipboard = new ClipboardClient((request) => vscode.postMessage(request));
 const fileSearch = new FileSearchClient((request) => vscode.postMessage(request));
+const fileDrop = new FileDropClient((request) => vscode.postMessage(request));
 let executing = false;
 let stopping = false;
 let activeTurnId: string | undefined;
@@ -265,6 +270,7 @@ interface OutputTurnElements {
   process: HTMLElement;
   processDisclosure: HTMLDetailsElement;
   todos: AgentTodoView;
+  questions: AgentInputView;
   output: HTMLElement;
   outputDisclosure: HTMLDetailsElement;
   hydrated?: boolean;
@@ -299,6 +305,7 @@ function cacheRenderedConversation(): void {
   // its process events are replayed when the tab becomes active again. Do
   // not cache that transient DOM or those events would be appended twice.
   if (runningConversationIds.has(renderedConversationId)) {
+    for (const turn of outputTurns.values()) turn.questions?.suspend();
     elements.result.replaceChildren();
     return;
   }
@@ -318,6 +325,7 @@ function cacheRenderedConversation(): void {
     ...(activeTurnId ? { activeTurnId } : {}),
     signature: renderedConversationSignature
   });
+  for (const turn of outputTurns.values()) turn.questions?.suspend();
   elements.result.replaceChildren();
   while (conversationViewCache.size > MAX_CONVERSATION_VIEW_CACHE) {
     const oldest = conversationViewCache.keys().next().value;
@@ -343,6 +351,7 @@ function clearVisibleConversation(): void {
   agentRunTimer = undefined;
   resetAgentTrace();
   clearInputError();
+  for (const turn of outputTurns.values()) turn.questions?.suspend();
   elements.result.replaceChildren();
   outputTurns.clear();
   activeTurn = undefined;
@@ -421,9 +430,11 @@ markdown.validateLink = (url: string): boolean =>
 
 const editor = new DextCodeEditor({
   parent: elements.codeEditor,
+  dropTarget: elements.inputShell,
   broker,
   clipboard,
   files: fileSearch,
+  resolveDroppedFiles: (paths) => fileDrop.resolve(paths),
   onRun: run,
   onOpenReference: openInputReference,
   onDiagnosticsChanged(counts) {
@@ -666,29 +677,13 @@ function openMcpAssistantDialog(): void {
   elements.mcpAssistantInput.focus();
 }
 
-function finishUi(response: Extract<WebviewRequest, { type: "uiResponse" }>["response"]): void {
-  if (!activeUiRequest) return;
-  vscode.postMessage({ type: "uiResponse", requestId: activeUiRequest.requestId, response });
-  activeUiRequest = undefined;
-  if (elements.uiDialog.open) elements.uiDialog.close();
-}
-
 function cancelUi(): void {
-  if (pendingConfirmation) {
-    pendingConfirmation = undefined;
-    if (elements.uiDialog.open) elements.uiDialog.close();
-    return;
-  }
-  const request = activeUiRequest?.request;
-  if (!request) return;
-  if (request.type === "choice") finishUi({ type: "choice", selected: [] });
-  else if (request.type === "confirm") finishUi({ type: "confirm", confirmed: false });
-  else finishUi({ type: "input" });
+  pendingConfirmation = undefined;
+  if (elements.uiDialog.open) elements.uiDialog.close();
 }
 
 function openConfirmationDialog(message: string, onConfirm: () => void): void {
   pendingConfirmation = onConfirm;
-  activeUiRequest = undefined;
   closeComposerMenus();
   elements.uiDialogTitle.textContent = "Confirm";
   elements.uiDialogBody.replaceChildren();
@@ -715,87 +710,6 @@ function uiButton(label: string, secondary: boolean, onClick: () => void): HTMLB
   if (secondary) button.className = "secondary";
   button.addEventListener("click", onClick);
   return button;
-}
-
-function openUiDialog(message: UiRequestMessage): void {
-  pendingConfirmation = undefined;
-  activeUiRequest = message;
-  closeComposerMenus();
-  elements.uiDialogTitle.textContent = message.request.type === "confirm" ? "Confirm" : message.request.label;
-  elements.uiDialogBody.replaceChildren();
-  elements.uiDialogActions.replaceChildren();
-  if (message.request.type === "choice") {
-    const choiceRequest = message.request;
-    const prompt = document.createElement("div");
-    prompt.className = "ui-dialog-label";
-    prompt.textContent = message.request.label;
-    elements.uiDialogBody.append(prompt);
-    const group = document.createElement("div");
-    const inputType = choiceRequest.multiple ? "checkbox" : "radio";
-    choiceRequest.options.forEach((option, index) => {
-      const label = document.createElement("label");
-      label.className = "ui-dialog-option";
-      const input = document.createElement("input");
-      input.type = inputType;
-      input.name = "ui-choice";
-      input.value = option;
-      if (!choiceRequest.multiple && index === 0) input.checked = true;
-      label.append(input, document.createTextNode(option));
-      group.append(label);
-    });
-    let customInput: HTMLInputElement | undefined;
-    if (choiceRequest.allowCustom) {
-      const customLabel = document.createElement("label");
-      customLabel.className = "ui-dialog-option";
-      customLabel.append(document.createTextNode("Other"));
-      customInput = document.createElement("input");
-      customInput.type = "text";
-      customInput.className = "ui-dialog-input";
-      customInput.placeholder = choiceRequest.customPlaceholder ?? "Enter a custom option";
-      customLabel.append(customInput);
-      group.append(customLabel);
-    }
-    elements.uiDialogBody.append(group);
-    elements.uiDialogActions.append(
-      uiButton("Cancel", true, cancelUi),
-      uiButton("Continue", false, () => {
-        const selected = [...elements.uiDialogBody.querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked, input[type="radio"]:checked')].map((input) => input.value);
-        const custom = customInput?.value.trim();
-        finishUi({ type: "choice", selected: custom && !choiceRequest.multiple ? [] : selected, ...(custom ? { custom } : {}) });
-      })
-    );
-    queueMicrotask(() => elements.uiDialogBody.querySelector<HTMLElement>("input")?.focus());
-  } else if (message.request.type === "confirm") {
-    const text = document.createElement("div");
-    text.textContent = message.request.message;
-    elements.uiDialogBody.append(text);
-    elements.uiDialogActions.append(
-      uiButton(message.request.cancelLabel, true, cancelUi),
-      uiButton(message.request.confirmLabel, false, () => finishUi({ type: "confirm", confirmed: true }))
-    );
-  } else {
-    const label = document.createElement("div");
-    label.className = "ui-dialog-label";
-    label.textContent = message.request.label;
-    const input = message.request.multiline ? document.createElement("textarea") : document.createElement("input");
-    input.className = "ui-dialog-input";
-    input.placeholder = message.request.placeholder ?? "";
-    elements.uiDialogBody.append(label, input);
-    elements.uiDialogActions.append(
-      uiButton("Cancel", true, cancelUi),
-      uiButton("Submit", false, () => finishUi({ type: "input", value: input.value }))
-    );
-    if (!message.request.multiline) {
-      input.addEventListener("keydown", (event) => {
-        if ((event as KeyboardEvent).key === "Enter") {
-          event.preventDefault();
-          finishUi({ type: "input", value: input.value });
-        }
-      });
-    }
-    queueMicrotask(() => input.focus());
-  }
-  if (!elements.uiDialog.open) elements.uiDialog.showModal();
 }
 
 function renderMcp(state: SidebarState): void {
@@ -1923,14 +1837,6 @@ function jsonOutput(content: string): HTMLElement {
   return wrapper;
 }
 
-function uiResultText(result: Extract<DextResult, { kind: "ui" }>): string {
-  if (result.type === "choice") {
-    const selected = result.selected.length ? result.selected.join(", ") : "No selection";
-    return result.custom ? `${selected} (custom: ${result.custom})` : selected;
-  }
-  if (result.type === "confirm") return result.confirmed ? "Confirmed" : "Cancelled";
-  return result.value ?? "No input";
-}
 
 const ANSI_COLOR_CLASSES = [
   "ansi-black", "ansi-red", "ansi-green", "ansi-yellow",
@@ -2370,8 +2276,23 @@ function createOutputTurn(
   }
   const process = outputTurnSection("Process", !lazy);
   const todos = new AgentTodoView();
+  const questionSessionId = activeConversationId;
+  const questions = new AgentInputView((requestId, answers) => {
+    if (questionSessionId) vscode.postMessage({ type: "agentInputResponse", sessionId: questionSessionId, turnId, requestId, answers });
+  }, (state, response) => vscode.postMessage({ type: "uiResponse", sessionId: state.sessionId, turnId: state.turnId, requestId: state.requestId, response }),
+  `${questionSessionId}:${turnId}`, {
+    get: (key) => vscode.getState()?.interactionDrafts?.[key],
+    set: (key, draft) => {
+      const drafts = { ...vscode.getState()?.interactionDrafts };
+      delete drafts[key];
+      if (Object.keys(draft).length) drafts[key] = draft;
+      const entries = Object.entries(drafts).slice(-32);
+      while (JSON.stringify(entries).length > 200000) entries.shift();
+      vscode.setState({ interactionDrafts: Object.fromEntries(entries) });
+    }
+  });
   const output = outputTurnSection("Output", !lazy);
-  body.append(todos.element, process.disclosure, output.disclosure);
+  body.append(todos.element, questions.element, process.disclosure, output.disclosure);
   disclosure.append(summary, body);
   elements.result.append(disclosure);
   const turn: OutputTurnElements = {
@@ -2382,6 +2303,7 @@ function createOutputTurn(
     process: process.body,
     processDisclosure: process.disclosure,
     todos,
+    questions,
     output: output.body,
     outputDisclosure: output.disclosure,
     hydrated: !lazy
@@ -2944,6 +2866,7 @@ function startAgentProgress(startedAt = Date.now()): void {
 
 function finishAgentProgress(): void {
   activeTurn?.todos.setRunning(false);
+  activeTurn?.questions?.setRunning(false);
   if (agentRunTimer) clearInterval(agentRunTimer);
   agentRunTimer = undefined;
   updateAgentProgress("Worked");
@@ -3122,6 +3045,11 @@ function flushAgentMessageRenders(): void {
 }
 
 function renderAgentEvent(event: AgentStreamEvent): void {
+  if (event.phase === "input") {
+    if (event.userInput) activeTurn?.questions?.update(event.userInput);
+    if (event.uiInteraction) activeTurn?.questions?.updateUi(event.uiInteraction);
+    return;
+  }
   if (event.phase === "todo") {
     if (event.todos) activeTurn?.todos.update(event.todos);
     return;
@@ -3330,7 +3258,7 @@ function renderStoredTurn(record: DextHistoryRecord, turn: OutputTurnElements): 
   if (record.executePlan || planResult?.executePlan) {
     if (turn.planExecutionStatus) {
       turn.planExecutionStatus.hidden = false;
-      turn.planExecutionStatus.textContent = record.error ? "Failed" : "Completed";
+      turn.planExecutionStatus.textContent = planExecutionLabel(record.process, record.error, record.planOutcome ?? planResult?.planOutcome);
     }
     const planPath = record.planPath ?? planResult?.planPath;
     if (planPath) turn.title.setPlanPath(planPath);
@@ -3398,6 +3326,7 @@ function renderOutputSession(session: DextHistorySession): void {
     && [...cached.turns.keys()].every((turnId) => sessionTurnIds.has(turnId));
   if (!liveTurn && cached && cached.signature === signature && cacheMatchesSession) {
     elements.result.replaceChildren(...cached.nodes);
+    for (const turn of cached.turns.values()) turn.questions?.resume();
     restoreCachedAgentRenders(cached);
     outputTurns.clear();
     for (const [turnId, turn] of cached.turns) outputTurns.set(turnId, turn);
@@ -3419,6 +3348,7 @@ function renderOutputSession(session: DextHistorySession): void {
     agentRunTimer = undefined;
   }
   clearInputError();
+  for (const turn of outputTurns.values()) turn.questions?.suspend();
   elements.result.replaceChildren();
   outputTurns.clear();
   activeTurn = undefined;
@@ -3438,7 +3368,7 @@ function renderOutputSession(session: DextHistorySession): void {
       ...(record.title ? { title: record.title } : {})
     });
     // Closed history rows need their final status before deferred hydration.
-    if (turn.planExecutionStatus) turn.planExecutionStatus.textContent = record.error ? "Failed" : "Completed";
+    if (turn.planExecutionStatus) turn.planExecutionStatus.textContent = planExecutionLabel(record.process, record.error, record.planOutcome);
     turn.hydrate = () => hydrateStoredTurn(record, turn);
     if (latest) latestTurn = turn;
   }
@@ -3491,6 +3421,7 @@ function renderOutputSessionRef(sessionId: string, signature: string, switchId?:
     return;
   }
   elements.result.replaceChildren(...cached.nodes);
+  for (const turn of cached.turns.values()) turn.questions?.resume();
   restoreCachedAgentRenders(cached);
   outputTurns.clear();
   for (const [turnId, turn] of cached.turns) outputTurns.set(turnId, turn);
@@ -3769,7 +3700,7 @@ elements.inputShell.addEventListener("paste", (event) => {
 
 window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   const message = event.data;
-  if (broker.accept(message) || clipboard.accept(message) || fileSearch.accept(message)) return;
+  if (broker.accept(message) || clipboard.accept(message) || fileSearch.accept(message) || fileDrop.accept(message)) return;
   if (message.type === "turnRenamed") {
     if (renderedConversationId === message.sessionId) {
       outputTurns.get(message.turnId)?.title.rename(message.title, message.displayTitle);
@@ -3911,7 +3842,6 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     elements.mcpAssistantDialog.close();
     openMcpDialog();
   }
-  if (message.type === "uiRequest") openUiDialog(message);
   if (message.type === "execution") {
     // A background turn changes the session while its DOM may be cached.
     // Drop that snapshot so returning to the tab renders the new turn once.
@@ -3919,7 +3849,8 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   }
   if (message.type === "execution" && message.sessionId === activeConversationId) {
     selectOutputTurn(message.turnId);
-    if (activeTurn?.planExecutionStatus && !activeTurn.planExecutionStatus.hidden) activeTurn.planExecutionStatus.textContent = "Completed";
+    const planResult = message.response.executions.find((execution) => execution.result.kind === "chat" && execution.result.executePlan)?.result;
+    if (activeTurn?.planExecutionStatus && !activeTurn.planExecutionStatus.hidden) activeTurn.planExecutionStatus.textContent = planExecutionLabel([], undefined, planResult?.kind === "chat" ? planResult.planOutcome : undefined);
     renderResult(message.response, message.reviewPatch ? message.turnId : undefined);
   }
   if (message.type === "patchResolved" && message.sessionId === activeConversationId) {
@@ -3930,7 +3861,7 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   }
   if (message.type === "executionFailed" && message.sessionId === activeConversationId) {
     selectOutputTurn(message.turnId);
-    if (activeTurn?.planExecutionStatus && !activeTurn.planExecutionStatus.hidden) activeTurn.planExecutionStatus.textContent = "Failed";
+    if (activeTurn?.planExecutionStatus && !activeTurn.planExecutionStatus.hidden) activeTurn.planExecutionStatus.textContent = planExecutionLabel([], message.message, message.planOutcome);
     renderOutputError(message.message);
   }
   if (message.type === "agentEvent" && message.sessionId === activeConversationId) {
@@ -3994,6 +3925,7 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
         startAgentProgress(message.startedAt);
       }
       activeTurn?.todos.setRunning(true);
+      activeTurn?.questions?.setRunning(true);
       elements.resultSection.classList.remove("hidden");
       if (!fullscreenPanel || fullscreenPanel === "result") {
         setSectionOpen(elements.resultHeading, elements.resultBody, true);
@@ -4037,6 +3969,7 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
 window.addEventListener("unload", () => {
   broker.dispose();
   clipboard.dispose();
+  fileDrop.dispose();
   editor.destroy();
 });
 
