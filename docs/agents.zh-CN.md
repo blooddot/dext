@@ -6,6 +6,8 @@
 
 支持 Codex CLI、Claude CLI 和 DeepSeek Harness。先安装并登录所选 CLI，再通过 Dext 输入区域选择 Agent 和模型；需要修改命令路径时运行 **Dext: Configure Agent**。
 
+Codex 对话通过 CLI 的 App Server 将原生提问显示为 Process 上方的卡片。选择选项或输入自己的答案后点击提交；异步提问允许 Agent 在等待回答时继续工作。任务完成或中断会关闭未回答的卡片，历史记录保留只读问答。已有的纯文本问题不能补接成交互。对话沿用普通 Codex 登录与配置，独立于 Dext 的补全账号。交互对话支持 `dext.agentCliArgs` 中的 `--config`、`--enable` 和 `--disable` 参数，其他 CLI 参数会给出明确的配置错误；类型化 `.dx` API 仍使用 `codex exec`。
+
 [通用配置](#通用配置) · [DeepSeek Harness](#deepseek-harness)
 
 ## 通用配置
@@ -38,6 +40,14 @@ agent(input="实现这次修改", cli="codex")
 
 内置 API 始终可用。Code 输入区支持直接使用自定义 API 的完整名称，也支持显式导入；`.dx` 文件中的自定义 API 通过 `import` 或 `from ... import ...` 进入作用域。补全、悬停、参数提示和编译都支持导入后的名称。
 
+### 单轮超时
+
+Dext 默认使用 `dext.agent.timeoutMs: 0`（不限制总时长）和 `dext.agent.idleTimeoutMs: 600000`（没有已报告的活动工具时，连续十分钟没有进程输出）。stdout、stderr 的每次输出都会重新开始空闲计时。收到 Codex、Claude 或 ACP 工具开始事件后暂停空闲检测，所有未结束的工具完成或失败后重新计满十分钟。通过调用 ID 跟踪并发工具并去除重复事件，因此工具调用仍在执行时，不会把静默命令当作模型卡死。
+
+工具执行保留提供方自身的时限。报告工具正在执行不代表进程一定正常：工具卡死或缺少结束事件可能让空闲检测持续暂停，仍可手动停止或设置整轮硬时限。提供方未报告带有调用 ID 的工具开始事件时，仍按普通空闲超时处理。
+
+任一值设为 `0` 可关闭对应限制。已显式配置的正数 `dext.agent.timeoutMs` 仍是硬性总时限，不因输出而延长；要只按活动计时，请删除旧覆盖值或改为 `0`。设置对新一轮执行生效，仍可随时点击停止。提供方的网络超时和单个工具的超时独立生效。
+
 ## DeepSeek Harness
 
 ### 安装与模型
@@ -64,6 +74,6 @@ Ask、预览调用和计划生成使用只读权限；Agent 和明确的计划�
 
 ### 高级配置与兼容性
 
-受信任工作区的 `dext.agentCliArgs.deepseek-harness` 接受重复的 `--patch <path>` 参数对；Dext 管理 ACP profile 并最后附加权限配置。插件属于受信任代码，自定义配置必须保留官方沙箱实现，stdout 必须仅输出 JSON-RPC。配置更改需建立新连接。单轮超时使用 `dext.agent.timeoutMs`。过程按已提交消息和工具事件更新，不保证逐 token 展示，也不把上下文占用当作计费 token 消耗。
+受信任工作区的 `dext.agentCliArgs.deepseek-harness` 接受重复的 `--patch <path>` 参数对；Dext 管理 ACP profile 并最后附加权限配置。插件属于受信任代码，自定义配置必须保留官方沙箱实现，stdout 必须仅输出 JSON-RPC。配置更改需建立新连接。单轮执行使用上文的总时限和空闲时限；ACP 初始化和模型配置请求保留各自的超时。过程按已提交消息和工具事件更新，不保证逐 token 展示，也不把上下文占用当作计费 token 消耗。
 
 AIOA/CDP 接入已移除，不提供旧 AIOA 对话兼容或迁移。

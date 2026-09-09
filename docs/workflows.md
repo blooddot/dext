@@ -47,7 +47,7 @@ Execution is sequential apart from comprehension fan-out; unselected and downstr
 - `skill(skill, input, workspace?) -> ChatResult`
 - MCP tools are exposed as typed `mcp.<server>.<tool>(...)` APIs generated from manifests.
 - `print(text, label?) -> PrintResult`
-- `ui.choose(...)`, `ui.confirm(...)`, `ui.input(...) -> UiResult`
+- UI interactions: `ui.select`, `ui.radio`, `ui.checkbox`, `ui.input`, `ui.confirm`, `ui.alert`, `ui.form`.
 
 Project APIs live as `.dx` files under `.dext/api/`, and their directory becomes
 the namespace, so `.dext/api/workflow/feature.dx` registers `workflow.feature`.
@@ -192,3 +192,62 @@ class DocumentResult(TypedDict):
 ## Execution and previews
 
 Without an Agent profile, Dext validates workflow structure, resolves immutable code references, and produces typed deterministic result previews. With a profile selected, the same typed API contract is sent to the CLI and its structured output is validated before display. A preview does not mean an AI task has run.
+
+## UI interactions and forms
+
+All UI calls wait for the user's answer and produce one workflow step. `presentation="inline"` places the interaction above Process in its conversation; `"dialog"` uses a dialog. Waiting pauses only the calling workflow. Stopping the task interrupts the wait and skips subsequent steps.
+
+```text
+ui.select(label, options, multiple=False, placeholder="Select…", presentation="dialog")
+ui.radio(label, options, allow_custom=False, custom_placeholder="", presentation="dialog")
+ui.checkbox(label, options, allow_custom=False, custom_placeholder="", presentation="dialog")
+ui.input(label, placeholder="", multiline=False, presentation="dialog")
+ui.confirm(message, confirm_label="Continue", cancel_label="Cancel", presentation="dialog")
+ui.alert(message, acknowledge_label="OK", presentation="dialog")
+ui.form(title, fields, description="", submit_label="Submit", cancel_label="Cancel", show_cancel=True, presentation="inline")
+```
+
+| API / field | Control | Result payload |
+| --- | --- | --- |
+| `ui.select` / `select` | Collapsed single or multiple dropdown | `type="select"`, `selected` array |
+| `ui.radio` / `radio` | Expanded mutually exclusive options | `type="radio"`, `selected` array and optional `custom` |
+| `ui.checkbox` / `checkbox` | Expanded independent checkboxes | `type="checkbox"`, `selected` array and optional `custom` |
+| `ui.input` / `input` | Single or multiline text | `type="input"`, string `value` |
+| `ui.confirm` | Confirm / cancel buttons | `type="confirm"`, boolean `confirmed` |
+| `ui.alert` | Acknowledge information | `type="alert"`, `status="acknowledged"` or `"dismissed"` |
+| `ui.form` | Submit all fields together | `type="form"`, `status="submitted"` or `"cancelled"`, `answers` keyed by field ID |
+
+API results include `kind="ui"`. Field answers inside `answers` contain only `type` and their value properties. A field description creates no interaction itself; never put executing API calls inside `fields`.
+
+```python
+fields = [
+    {"id": "environment", "type": "select", "label": "Environment", "options": [
+        {"value": "dev", "label": "Development", "description": "Local environment"},
+        {"value": "test", "label": "Testing"}
+    ]},
+    {"id": "approach", "type": "radio", "label": "Approach", "options": ["inspect", "change"], "allow_custom": True},
+    {"id": "checks", "type": "checkbox", "label": "Checks", "options": ["types", "tests", "build"], "required": False},
+    {"id": "details", "type": "input", "label": "Details", "multiline": True, "required": False},
+    {"id": "run_tests", "type": "radio", "label": "Run tests?", "options": [
+        {"value": "yes", "label": "Yes"}, {"value": "no", "label": "No"}
+    ]}
+]
+reply = ui.form(title="Settings", fields=fields, submit_label="Apply settings")
+if reply.status == "submitted":
+    if reply.answers["run_tests"].selected[0] == "yes":
+        print(text="Run the selected checks")
+```
+
+Fields have a unique `id`, `label`, optional `description`, `required` (default `True`) and `default`. Without an explicit default, form fields start unanswered. Choice defaults are arrays of option values; input defaults are strings. Default values must satisfy the field contract. Options are nonempty lists of strings or `{value, label, description?}` objects with unique string values. A string option is its own value. `radio` and `checkbox` do not accept `multiple`; only `select` supports it. Dropdowns do not accept custom text. Radio custom text excludes predefined options; checkbox custom text may accompany selections.
+
+Required choices need a selection or allowed custom answer. Required input uses trimmed text to check emptiness, but preserves the submitted text. Optional empty fields are omitted. A yes/no question is an ordinary radio: `selected=["no"]` is a submitted answer, never cancellation or a boolean. Use explicit string comparison in workflow branches.
+
+Shortcuts accept string option lists. `ui.radio` preselects the first item, `ui.checkbox` starts empty and permits an empty submission, and `ui.select` starts at its placeholder and requires a selection. `ui.input` preserves empty strings (`value=""`) on submission; cancellation omits `value`. Cancelled selection shortcuts return their own result type with `selected=[]` and no custom draft. Use `ui.form` to distinguish cancellation from an empty submission.
+
+Cancelling or closing a form returns `status="cancelled", answers={}`; submitting an empty-field form returns `status="submitted", answers={}`. `fields=[]` can express confirmation or information-only dialogs. `show_cancel=False` hides the cancel button, while the close action and stopping the task remain available. Confirm closes as `confirmed=False`. Alert's main button acknowledges; its close button or Escape dismisses. Clicking the backdrop does not dismiss an alert. Acknowledging information does not grant permission for a subsequent operation.
+
+Dropdown Escape closes the option popup first; another Escape closes the container. Radio supports arrow keys, checkboxes support Space, and dialogs restore focus. Pending requests and non-secret drafts survive conversation switches and Webview reconstruction while the host execution remains live. Completed requests show read-only summaries. Historical requests after a host restart are closed.
+
+Workflow and Agent inputs share controls. Native Agent questions still return one answer per question, preserve asynchronous answering and Skip, and clear secret input on submission without storing it in drafts or history. Public fields do not expose secret inputs.
+
+Limits: 32 fields, 200 options per field, 2,000 characters per label/value, 20,000 per text, and 200,000 UTF-8 bytes per form or answer payload. Unsupported fields/attributes, duplicate IDs/options/selections and answers not matching the live request are rejected. Unknown historical results use bounded, escaped read-only text/JSON; they never resume execution. Search, remote options, free creation, virtual lists, conditional fields and nested groups are outside this API version. Ordinary output uses `print`; progress remains in Process/Todo.

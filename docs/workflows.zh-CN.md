@@ -47,7 +47,7 @@ if preview.patch:
 - `skill(skill, input, workspace?) -> ChatResult`：使用指定 Skill 执行任务。
 - `mcp.<server>.<tool>(...)`：由 MCP 清单生成的类型化工具 API。
 - `print(text, label?) -> PrintResult`：在 Dext 中展示结果。
-- `ui.choose(...)`、`ui.confirm(...)`、`ui.input(...) -> UiResult`：请求用户选择、确认或输入。
+- UI 交互：`ui.select`、`ui.radio`、`ui.checkbox`、`ui.input`、`ui.confirm`、`ui.alert`、`ui.form`。
 
 上面的 `?` 表示可选参数，是文档记法。
 
@@ -173,3 +173,64 @@ class DocumentResult(TypedDict):
 ## 执行与预览
 
 没有配置 Agent 时，Dext 可以校验工作流结构、解析不可变的代码引用，并生成类型化的确定性结果预览。选择 Agent 配置后，相同的类型化 API 契约会交给对应 CLI 执行，其结构化输出会在展示前校验。预览不代表 AI 已执行任务。
+
+## UI 交互与表单
+
+所有 UI API 都等待用户回答，每次调用只记录一个工作流步骤。`presentation="inline"` 在所属对话的 Process 上方展示卡片，`"dialog"` 使用弹窗。等待只暂停所属工作流，停止任务会中断等待并跳过后续步骤。
+
+```text
+ui.select(label, options, multiple=False, placeholder="Select…", presentation="dialog")
+ui.radio(label, options, allow_custom=False, custom_placeholder="", presentation="dialog")
+ui.checkbox(label, options, allow_custom=False, custom_placeholder="", presentation="dialog")
+ui.input(label, placeholder="", multiline=False, presentation="dialog")
+ui.confirm(message, confirm_label="Continue", cancel_label="Cancel", presentation="dialog")
+ui.alert(message, acknowledge_label="OK", presentation="dialog")
+ui.form(title, fields, description="", submit_label="Submit", cancel_label="Cancel", show_cancel=True, presentation="inline")
+```
+
+| API / 字段 | 控件 | 返回内容 |
+| --- | --- | --- |
+| `ui.select` / `select` | 折叠式单选或多选下拉框 | `type="select"`、`selected` 数组 |
+| `ui.radio` / `radio` | 展开的互斥单选组 | `type="radio"`、`selected` 和可选 `custom` |
+| `ui.checkbox` / `checkbox` | 展开的独立复选框组 | `type="checkbox"`、`selected` 和可选 `custom` |
+| `ui.input` / `input` | 单行或多行文本 | `type="input"`、字符串 `value` |
+| `ui.confirm` | 确认、取消按钮 | `type="confirm"`、布尔值 `confirmed` |
+| `ui.alert` | 阅读信息后关闭 | `type="alert"`、`status="acknowledged"` 或 `"dismissed"` |
+| `ui.form` | 整组字段统一提交 | `type="form"`、`status="submitted"` 或 `"cancelled"`、按字段 ID 保存的 `answers` |
+
+API 结果带有 `kind="ui"`。`answers` 中的字段答案只包含 `type` 及对应值。字段描述仅为数据，可以保存到变量复用；不要在 `fields` 中调用交互 API。
+
+```python
+fields = [
+    {"id": "environment", "type": "select", "label": "Environment", "options": [
+        {"value": "dev", "label": "Development", "description": "Local environment"},
+        {"value": "test", "label": "Testing"}
+    ]},
+    {"id": "approach", "type": "radio", "label": "Approach", "options": ["inspect", "change"], "allow_custom": True},
+    {"id": "checks", "type": "checkbox", "label": "Checks", "options": ["types", "tests", "build"], "required": False},
+    {"id": "details", "type": "input", "label": "Details", "multiline": True, "required": False},
+    {"id": "run_tests", "type": "radio", "label": "Run tests?", "options": [
+        {"value": "yes", "label": "Yes"}, {"value": "no", "label": "No"}
+    ]}
+]
+reply = ui.form(title="Settings", fields=fields, submit_label="Apply settings")
+if reply.status == "submitted":
+    if reply.answers["run_tests"].selected[0] == "yes":
+        print(text="Run the selected checks")
+```
+
+字段具有唯一 `id`、`label`、可选 `description`、`required`（默认 `True`）和 `default`。表单未配置默认值时不预选。选择字段的默认值为选项值数组，输入默认值为字符串，均须通过字段校验。选项使用非空字符串列表或 `{value, label, description?}` 对象，稳定值是唯一字符串；字符串选项的值等于自身。
+
+只有 `select` 支持 `multiple`，`radio`、`checkbox` 不接受该参数。下拉不支持自定义文本；单选的自定义答案与预设选项互斥，复选框允许两者同时提交。必填选择字段至少有一个选择或有效自定义答案。输入按裁剪后的文本判断是否为空，提交时保留原文。可选且为空的字段不进入答案映射。
+
+是／否问题使用普通 radio，`selected=["no"]` 是正常提交的答案，不等于取消，也不自动转换为布尔值；后续分支应显式比较字符串。
+
+选择快捷 API 接受字符串选项列表：`ui.radio` 默认选中首项，`ui.checkbox` 默认不选且允许空提交，`ui.select` 初始显示占位提示且提交前必须选择。对象选项、默认值、必填配置使用 `ui.form`。`ui.input` 提交空字符串时保留 `value=""`，取消时省略 `value`。选择快捷入口取消时返回对应类型和 `selected=[]`，不返回自定义草稿；需要区分取消与主动空提交时使用 `ui.form`。
+
+取消或关闭表单返回 `status="cancelled", answers={}`；空字段表单提交返回 `status="submitted", answers={}`。`fields=[]` 可表达纯确认或告知。`show_cancel=False` 只隐藏取消按钮，仍可关闭交互或停止任务。确认关闭返回 `confirmed=False`；告知主按钮返回已读，关闭按钮或 Esc 返回已关闭，点击遮罩不会关闭告知。已读不代表授权后续操作。
+
+Esc 先关闭下拉弹层，再关闭外层容器。单选支持方向键，复选框支持 Space，弹窗关闭后恢复焦点。宿主执行仍存活时，切换对话或重建 Webview 可恢复请求及非秘密草稿。完成后的交互显示只读摘要，宿主重启后的历史请求显示为已关闭。
+
+工作流与 Agent 共用控件。Agent 仍按每题一个答案回传，保留异步回答、跳过及秘密输入语义；秘密输入提交后清空，不写入草稿或历史。公共字段不开放密码输入。
+
+限制为每张表单 32 个字段、每字段 200 个选项、标签和选项值最多 2,000 字符、文本最多 20,000 字符，表单和答案各最多 200,000 UTF-8 字节。不支持的类型或属性、重复 ID、重复选项值、重复选择、与原始请求不符的答案均被拒绝。未知历史结果通过有大小限制、转义后的文本或 JSON 只读展示，不能恢复执行。搜索、远程选项、自由创建、虚拟列表、条件字段和嵌套分组不在本版范围；普通输出使用 `print`，进度使用 Process/Todo。

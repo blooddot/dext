@@ -2,7 +2,7 @@
   "name": "dext",
   "displayName": "Dext",
   "description": "AI coding with Codex, Claude, and DeepSeek. Chat, plan, and automate tasks with reusable workflows.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "blooddot",
   "license": "SEE LICENSE IN LICENSE",
   "icon": "media/icon.png",
@@ -47,6 +47,14 @@
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
+      {
+        "command": "dext.evaluateCompletion",
+        "title": "Dext: Evaluate Completion Quality and Latency"
+      },
+      {
+        "command": "dext.clearCompletionMemory",
+        "title": "Dext: Clear Project Completion Memory"
+      },
       {
         "command": "dext.sidebar.focus",
         "title": "Dext: Focus Sidebar"
@@ -324,7 +332,13 @@
       },
       {
         "command": "dext.triggerSuggest",
-        "key": "alt+/"
+        "key": "alt+/",
+        "when": "focusedView == dext.sidebar"
+      },
+      {
+        "command": "editor.action.triggerSuggest",
+        "key": "alt+/",
+        "when": "editorTextFocus && editorLangId == dext-api && !editorReadonly"
       },
       {
         "command": "dext.focus",
@@ -975,9 +989,17 @@
         },
         "dext.agent.timeoutMs": {
           "type": "integer",
-          "default": 3600000,
-          "minimum": 1000,
-          "description": "How long a single CLI agent turn may run before Dext aborts it. Raise this when long refactors are being cut off mid-run."
+          "default": 0,
+          "minimum": 0,
+          "maximum": 2147483647,
+          "description": "Maximum total duration of a Codex, Claude, or DeepSeek Harness turn in milliseconds, even while it is producing output. 0 disables this limit. Use dext.agent.idleTimeoutMs to stop stalled turns. Changes apply to new turns."
+        },
+        "dext.agent.idleTimeoutMs": {
+          "type": "integer",
+          "default": 600000,
+          "minimum": 0,
+          "maximum": 2147483647,
+          "description": "How long a turn may receive no process output while no tool is reported active before Dext aborts it. Output restarts this timer; tool start pauses it, and the last tool result starts a fresh interval. Tool execution keeps its provider-specific limits. Default: ten minutes. 0 disables this limit. Changes apply to new turns."
         },
         "dext.terminal.defaultTimeoutMs": {
           "type": "integer",
@@ -992,10 +1014,21 @@
           "markdownDeprecationMessage": "Replaced by the individual `dext.completion.*` settings, which the Settings UI can render as a dropdown and text boxes rather than an untyped table. Dext moves any values across on startup and then removes this entry, so nothing needs to be done by hand.",
           "description": "Superseded by the individual dext.completion.* settings."
         },
+        "dext.completion.adaptation": {
+          "type": "string",
+          "enum": [
+            "off",
+            "session",
+            "workspace"
+          ],
+          "default": "session",
+          "scope": "window",
+          "description": "Adapt completion from observable feedback. Workspace stores bounded local statistics and saved-code references. Session clears stored project experience. Off stops using and collecting experience. Model weights are unchanged."
+        },
         "dext.completion.enabled": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "Offer inline completions while typing. Stays off until `#dext.completion.endpoint#` and `#dext.completion.model#` are both set.\n\n**Fastest way in:** [Configure completion model](command:dext.configureCompletionModel) asks for the API format, the request URL, the model ID and the API key in one pass, then offers to test the connection. It is also on the Dext status bar item.\n\n**API key:** there is deliberately no API key box on this page. A key in `settings.json` ends up in source control or a synced profile sooner or later, so it is kept in VS Code's encrypted secret storage: [Set API key](command:dext.setCompletionApiKey) · [Clear API key](command:dext.clearCompletionApiKey)"
+          "markdownDescription": "Enable inline code suggestions using an API model or local Ollama. [Configure a completion model](command:dext.configureCompletionModel). API keys stay in encrypted secret storage; use [Set Completion API Key](command:dext.setCompletionApiKey) to update yours."
         },
         "dext.completion.api": {
           "type": "string",

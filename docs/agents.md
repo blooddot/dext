@@ -6,6 +6,8 @@ English | [简体中文](agents.zh-CN.md)
 
 Dext supports Codex CLI, Claude CLI, and DeepSeek Harness. Install and authenticate your chosen CLI, then select the Agent and model in Dext. Run **Dext: Configure Agent** to change executable paths.
 
+Codex conversations use the CLI's App Server to show native questions as cards above Process. Select an option or type an answer, then submit; asynchronous questions let the agent continue working while you answer. Completed or interrupted turns close unanswered cards, and history shows read-only answers. Existing text-only questions cannot be answered retroactively. This uses your normal Codex login and configuration, independently of Dext's completion account. Interactive conversations accept `--config`, `--enable`, and `--disable` overrides in `dext.agentCliArgs`; other CLI flags produce an explicit configuration error. Typed `.dx` APIs continue using `codex exec`.
+
 [General configuration](#general-configuration) · [DeepSeek Harness](#deepseek-harness)
 
 ## General configuration
@@ -24,6 +26,14 @@ Omit both `cli` and `model` to use the current Input selection (existing `.dx` d
 The `dext.agentCli` setting controls which built-in Agent profiles are shown in the composer. It defaults to `codex`, `claude`, and `deepseek-harness`; edit the list to choose which of these profiles to display.
 
 Built-in APIs are always available. Code input accepts qualified custom API calls and explicit imports. In `.dx` files, custom APIs are scoped by `import` or `from ... import ...` statements. Completion, hover, signatures, and compilation support imported names.
+
+### Turn timeouts
+
+Dext defaults to `dext.agent.timeoutMs: 0` (no total time limit) and `dext.agent.idleTimeoutMs: 600000` (ten minutes without process output while no tool is reported active). Each stdout or stderr chunk restarts the idle timer. Codex, Claude, and ACP tool start events pause idle detection; after every outstanding tool completes or fails, a fresh idle interval starts. Concurrent tools and duplicate lifecycle events are tracked by call ID. Silent commands are therefore not mistaken for a stalled model while their tool call remains active.
+
+Tool execution retains its provider-specific limits. A reported active tool is not proof that its process is healthy: a hung tool or a missing completion event can keep idle detection paused. Stop and an explicitly configured total time limit remain effective. If a provider does not report an identifiable tool start, the ordinary idle timeout still applies.
+
+Set either value to `0` to disable that limit. An explicitly configured positive `dext.agent.timeoutMs` remains a hard limit regardless of output; remove an old override or set it to `0` to use activity-based timing alone. Changes apply to new turns, and Stop remains available. Provider network timeouts and individual tool timeouts remain independent.
 
 ## DeepSeek Harness
 
@@ -51,6 +61,6 @@ Ask, preview calls and Plan generation run read-only. Agent and explicit plan ex
 
 ### Advanced configuration and compatibility
 
-`dext.agentCliArgs.deepseek-harness` accepts repeated `--patch <path>` launcher pairs in trusted workspaces. Dext owns the ACP profile and appends its permission patch last. Plugins are trusted code: overlays must preserve the shipped sandbox wiring and keep stdout exclusively JSON-RPC. Configuration changes require a new connection. `dext.agent.timeoutMs` bounds a turn. Updates arrive as committed messages and tool events, not token-by-token deltas; context occupancy is not reported as billed token usage.
+`dext.agentCliArgs.deepseek-harness` accepts repeated `--patch <path>` launcher pairs in trusted workspaces. Dext owns the ACP profile and appends its permission patch last. Plugins are trusted code: overlays must preserve the shipped sandbox wiring and keep stdout exclusively JSON-RPC. Configuration changes require a new connection. Turns use the total and idle limits described above; ACP setup and model configuration requests retain their separate timeouts. Updates arrive as committed messages and tool events, not token-by-token deltas; context occupancy is not reported as billed token usage.
 
 AIOA/CDP support has been removed. Old AIOA conversations have no compatibility or migration support.
