@@ -290,6 +290,15 @@ describe("inline completion diagnosis", () => {
     expect(report).toContain("never called the provider");
     expect(report).toContain("Tab does not ask for a completion");
   });
+  it("omits endpoint credentials and distinguishes count statistics from timings", () => {
+    const report = setup.diagnosisReport({ ...base, probe: undefined,
+      settings: { ...base.settings, endpoint: "https://user:password@models.example/v1?api_key=secret#token" },
+      report: { ...base.report, measurements: [{ returnedCandidates: 1, providerMs: 5 }] } });
+    expect(report).toContain("https://models.example/v1");
+    expect(report).not.toMatch(/password|api_key|secret|#token/);
+    expect(report).toContain("returnedCandidates: p50=1.0 p95=1.0");
+    expect(report).toContain("providerMs: p50=5.0ms");
+  });
 
   it("names the editor setting that silences every provider at once", () => {
     const report = setup.diagnosisReport({ ...base, inlineSuggestEnabled: false });

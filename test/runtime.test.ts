@@ -160,17 +160,13 @@ print(text=answer.text)`, registry);
     expect(compiled.diagnostics).toEqual([]);
     const result = await workflow.executeValue(compiled.program!, [], {
       ui: {
-        choose: async () => ({ kind: "ui", type: "choice", selected: [] }),
-        confirm: async () => ({ kind: "ui", type: "confirm", confirmed: false }),
-        input: async () => ({ kind: "ui", type: "input", value: "" })
+        form: async () => ({ kind: "ui", type: "form", status: "cancelled", answers: {} })
       }
     });
     expect(result).toMatchObject({ kind: "print", text: "before" });
     const continued = await workflow.executeValue(compiled.program!, [], {
       ui: {
-        choose: async () => ({ kind: "ui", type: "choice", selected: [] }),
-        confirm: async () => ({ kind: "ui", type: "confirm", confirmed: true }),
-        input: async () => ({ kind: "ui", type: "input", value: "" })
+        form: async () => ({ kind: "ui", type: "form", status: "submitted", answers: {} })
       }
     });
     expect(continued).toMatchObject({ kind: "print", text: "after" });
@@ -986,4 +982,42 @@ answer = ask(input=printed.text)`, registry);
     })).resolves.toMatchObject({ result: { kind: "apply", status: "unchanged" } });
   });
 
+});
+
+describe("formal UI workflows", () => {
+  it.each(["select", "radio", "checkbox", "input", "confirm", "alert", "form"])("executes ui.%s as one step", async (action) => {
+    const { registry, workflow } = setup();
+    const args = ["select", "radio", "checkbox"].includes(action) ? 'label="Pick", options=["a", "b"]'
+      : action === "input" ? 'label="Text"' : action === "form" ? 'title="Form", fields=[]' : 'message="Continue?"';
+    const compiled = compileWorkflow(`ui.${action}(${args})`, registry);
+    expect(compiled.diagnostics).toEqual([]);
+    const response = await workflow.execute(compiled.program!, [], { ui: { form: async (form) => ({ kind: "ui", type: "form", status: "submitted",
+      answers: form.fields[0]?.type === "input" ? { answer: { type: "input", value: "" } }
+        : ["select", "radio", "checkbox"].includes(action) ? { answer: { type: action as "select" | "radio" | "checkbox", selected: ["b"] } } : {} }) } });
+    expect(response.executions).toHaveLength(1);
+    expect(response.executions[0]?.result).toMatchObject({ kind: "ui", type: action });
+  });
+  it("executes a mixed declarative form and reads answers by stable ID", async () => {
+    const { registry, workflow } = setup();
+    const compiled = compileWorkflow(`fields = [{"id": "run", "type": "radio", "label": "Run?", "options": ["yes", "no"]}, {"id": "text", "type": "input", "label": "Details", "required": False}]
+reply = ui.form(title="Settings", fields=fields)
+if reply.status == "submitted":
+    if reply.answers["run"].selected[0] == "no":
+        print(text="No tests")`, registry);
+    expect(compiled.diagnostics).toEqual([]);
+    const response = await workflow.execute(compiled.program!, [], { ui: { form: async () => ({ kind: "ui", type: "form", status: "submitted", answers: { run: { type: "radio", selected: ["no"] } } }) } });
+    expect(response.executions.map((execution) => execution.method.id)).toEqual(["ui.form", "print"]);
+    expect(response.executions[1]?.result).toMatchObject({ text: "No tests" });
+  });
+  it("stops before later workflow steps when an interaction is aborted", async () => {
+    const { registry, workflow } = setup(); const controller = new AbortController();
+    const compiled = compileWorkflow('ui.input(label="Text")\nprint(text="must not run")', registry);
+    let calls = 0;
+    const response = await workflow.execute(compiled.program!, [], { signal: controller.signal, ui: { form: async () => {
+      calls++; controller.abort(); return { kind: "ui", type: "form", status: "cancelled", answers: {} };
+    } } });
+    expect(response.executions).toEqual([]);
+    expect(response.steps?.map((step) => step.state)).toEqual(["cancelled", "skipped"]);
+    expect(calls).toBe(1);
+  });
 });

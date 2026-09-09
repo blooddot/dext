@@ -1,0 +1,522 @@
+[
+  {
+    "id": "constant-below",
+    "category": "suffix",
+    "intent": "constant below",
+    "prefix": "# Returns the constant defined at the bottom of this file.\ndef compute():\n    return MAGIC_",
+    "suffix": "\n\nMAGIC_CONSTANT_ZEBRA = 42\n",
+    "languageId": "python",
+    "reply": "CONSTANT_ZEBRA",
+    "expected": [
+      "# Returns the constant defined at the bottom of this file.\ndef compute():\n    return MAGIC_CONSTANT_ZEBRA\n\nMAGIC_CONSTANT_ZEBRA = 42\n"
+    ],
+    "related": [],
+    "singleLine": true
+  },
+  {
+    "id": "existing-helper",
+    "category": "local",
+    "intent": "existing helper",
+    "prefix": "function clampToRange(value: number, min: number, max: number) { return Math.min(Math.max(value, min), max); }\n// Clamp volume between zero and one.\nfunction normalizeVolume(input: number) {\n  return ",
+    "suffix": "\n}",
+    "languageId": "typescript",
+    "reply": "clampToRange(input, 0, 1);",
+    "expected": [
+      "function clampToRange(value: number, min: number, max: number) { return Math.min(Math.max(value, min), max); }\n// Clamp volume between zero and one.\nfunction normalizeVolume(input: number) {\n  return clampToRange(input, 0, 1);\n}"
+    ],
+    "related": [],
+    "singleLine": true
+  },
+  {
+    "id": "color-pattern",
+    "category": "string",
+    "intent": "color pattern",
+    "prefix": "COLORS = {\n    \"red\": \"#ff0000\",\n    \"green\": \"#00ff00\",\n    \"blue\": \"",
+    "suffix": "\",\n}\n",
+    "languageId": "python",
+    "reply": "#0000ff",
+    "expected": [
+      "COLORS = {\n    \"red\": \"#ff0000\",\n    \"green\": \"#00ff00\",\n    \"blue\": \"#0000ff\",\n}\n"
+    ],
+    "related": [],
+    "singleLine": true
+  },
+  {
+    "id": "line-item-total",
+    "category": "fields",
+    "intent": "line item total",
+    "prefix": "interface LineItem { quantity: number; unitPrice: number }\nconst items: LineItem[] = load();\nconst total = items.reduce((sum, item) => sum + item.",
+    "suffix": ", 0);",
+    "languageId": "typescript",
+    "reply": "quantity * item.unitPrice",
+    "expected": [
+      "interface LineItem { quantity: number; unitPrice: number }\nconst items: LineItem[] = load();\nconst total = items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);"
+    ],
+    "related": [],
+    "singleLine": true
+  },
+  {
+    "id": "even-number",
+    "category": "local",
+    "intent": "even number",
+    "prefix": "def is_even(n: int) -> bool:\n    return ",
+    "suffix": "\n",
+    "languageId": "python",
+    "reply": "n % 2 == 0",
+    "expected": [
+      "def is_even(n: int) -> bool:\n    return n % 2 == 0\n"
+    ],
+    "related": [],
+    "singleLine": true
+  },
+  {
+    "id": "config-path",
+    "category": "local",
+    "intent": "config path",
+    "prefix": "import { join } from \"node:path\";\n// Return home/config.json\nfunction configPath(home: string) {\n  return join(",
+    "suffix": "\n}",
+    "languageId": "typescript",
+    "reply": "home, \"config.json\");",
+    "expected": [
+      "import { join } from \"node:path\";\n// Return home/config.json\nfunction configPath(home: string) {\n  return join(home, \"config.json\");\n}"
+    ],
+    "related": [],
+    "singleLine": true
+  },
+  {
+    "id": "user-email",
+    "category": "cross-file",
+    "intent": "user email",
+    "prefix": "import { record } from './types';\n// Return the only field on record.\nconst value = record.",
+    "suffix": ";",
+    "languageId": "typescript",
+    "reply": "email",
+    "expected": [
+      "import { record } from './types';\n// Return the only field on record.\nconst value = record.email;"
+    ],
+    "related": [
+      {
+        "uri": "file:///fixture/types.ts",
+        "version": 1,
+        "kind": "definition",
+        "score": 1.5,
+        "text": "export const record: { email: string };"
+      }
+    ],
+    "singleLine": true
+  },
+  {
+    "id": "user-name",
+    "category": "cross-file",
+    "intent": "user name",
+    "prefix": "import { record } from './types';\n// Return the only field on record.\nconst value = record.",
+    "suffix": ";",
+    "languageId": "typescript",
+    "reply": "displayName",
+    "expected": [
+      "import { record } from './types';\n// Return the only field on record.\nconst value = record.displayName;"
+    ],
+    "related": [
+      {
+        "uri": "file:///fixture/types.ts",
+        "version": 1,
+        "kind": "definition",
+        "score": 1.5,
+        "text": "export const record: { displayName: string };"
+      }
+    ],
+    "singleLine": true
+  },
+  {
+    "id": "account-enabled",
+    "category": "cross-file",
+    "intent": "account enabled",
+    "prefix": "import { record } from './types';\n// Return the only field on record.\nconst value = record.",
+    "suffix": ";",
+    "languageId": "typescript",
+    "reply": "enabled",
+    "expected": [
+      "import { record } from './types';\n// Return the only field on record.\nconst value = record.enabled;"
+    ],
+    "related": [
+      {
+        "uri": "file:///fixture/types.ts",
+        "version": 1,
+        "kind": "definition",
+        "score": 1.5,
+        "text": "export const record: { enabled: boolean };"
+      }
+    ],
+    "singleLine": true
+  },
+  {
+    "id": "account-retries",
+    "category": "cross-file",
+    "intent": "account retries",
+    "prefix": "import { record } from './types';\n// Return the only field on record.\nconst value = record.",
+    "suffix": ";",
+    "languageId": "typescript",
+    "reply": "retries",
+    "expected": [
+      "import { record } from './types';\n// Return the only field on record.\nconst value = record.retries;"
+    ],
+    "related": [
+      {
+        "uri": "file:///fixture/types.ts",
+        "version": 1,
+        "kind": "definition",
+        "score": 1.5,
+        "text": "export const record: { retries: number };"
+      }
+    ],
+    "singleLine": true
+  },
+  {
+    "id": "renamed-field",
+    "category": "recent",
+    "intent": "renamed field",
+    "prefix": "// Follow the migration from name to displayName.\nconst label = user.",
+    "suffix": ";",
+    "languageId": "typescript",
+    "reply": "displayName",
+    "expected": [
+      "// Follow the migration from name to displayName.\nconst label = user.displayName;"
+    ],
+    "related": [
+      {
+        "uri": "file:///fixture/migration.ts",
+        "version": 2,
+        "kind": "recent",
+        "score": 1,
+        "text": "Before: user.name\nAfter: user.displayName"
+      }
+    ],
+    "singleLine": true
+  },
+  {
+    "id": "renamed-method",
+    "category": "recent",
+    "intent": "renamed method",
+    "prefix": "// Follow the recent client method rename.\nclient.",
+    "suffix": "(id);",
+    "languageId": "typescript",
+    "reply": "fetchUser",
+    "expected": [
+      "// Follow the recent client method rename.\nclient.fetchUser(id);"
+    ],
+    "related": [
+      {
+        "uri": "file:///fixture/client.ts",
+        "version": 3,
+        "kind": "recent",
+        "score": 1,
+        "text": "Before: client.getUser(id)\nAfter: client.fetchUser(id)"
+      }
+    ],
+    "singleLine": true
+  },
+  {
+    "id": "chinese-comment",
+    "category": "comment",
+    "intent": "chinese comment",
+    "prefix": "// 返回用户的邮箱地址\nconst user = { email: 'a@example.com', age: 20 };\nreturn user.",
+    "suffix": ";",
+    "languageId": "typescript",
+    "reply": "email",
+    "expected": [
+      "// 返回用户的邮箱地址\nconst user = { email: 'a@example.com', age: 20 };\nreturn user.email;"
+    ],
+    "related": [],
+    "singleLine": true
+  },
+  {
+    "id": "chinese-python",
+    "category": "comment",
+    "intent": "chinese python",
+    "prefix": "# 判断数字是否为正数\ndef positive(n):\n    return ",
+    "suffix": "\n",
+    "languageId": "python",
+    "reply": "n > 0",
+    "expected": [
+      "# 判断数字是否为正数\ndef positive(n):\n    return n > 0\n"
+    ],
+    "related": [],
+    "singleLine": true
+  },
+  {
+    "id": "string-quote",
+    "category": "string",
+    "intent": "string quote",
+    "prefix": "const protocol = \"https\";\nconst url = \"",
+    "suffix": "://example.com\";",
+    "languageId": "typescript",
+    "reply": "https",
+    "expected": [
+      "const protocol = \"https\";\nconst url = \"https://example.com\";"
+    ],
+    "related": [],
+    "singleLine": true
+  },
+  {
+    "id": "string-parentheses",
+    "category": "string",
+    "intent": "string parentheses",
+    "prefix": "const symbol = \"",
+    "suffix": "\";",
+    "languageId": "typescript",
+    "reply": "(",
+    "expected": [
+      "const symbol = \"(\";"
+    ],
+    "related": [],
+    "singleLine": true
+  },
+  {
+    "id": "middle-call",
+    "category": "middle",
+    "intent": "middle call",
+    "prefix": "Math.max(",
+    "suffix": " , 0)",
+    "languageId": "typescript",
+    "reply": "value",
+    "expected": [
+      "Math.max(value , 0)"
+    ],
+    "related": [],
+    "singleLine": true
+  },
+  {
+    "id": "middle-argument",
+    "category": "middle",
+    "intent": "middle argument",
+    "prefix": "console.log(user.",
+    "suffix": "displayName);",
+    "languageId": "typescript",
+    "reply": "",
+    "expected": [
+      "console.log(user.displayName);"
+    ],
+    "related": [],
+    "singleLine": true
+  },
+  {
+    "id": "identifier-tail",
+    "category": "middle",
+    "intent": "identifier tail",
+    "prefix": "const userName = 'a';\nconsole.log(us",
+    "suffix": "Name);",
+    "languageId": "typescript",
+    "reply": "erName",
+    "expected": [
+      "const userName = 'a';\nconsole.log(userName);"
+    ],
+    "related": [],
+    "singleLine": true
+  },
+  {
+    "id": "identifier-repeat",
+    "category": "middle",
+    "intent": "identifier repeat",
+    "prefix": "const userName = 'a';\nconsole.log(user",
+    "suffix": ");",
+    "languageId": "typescript",
+    "reply": "userName",
+    "expected": [
+      "const userName = 'a';\nconsole.log(userName);"
+    ],
+    "related": [],
+    "singleLine": true
+  },
+  {
+    "id": "multiline-block",
+    "category": "block",
+    "intent": "multiline block",
+    "prefix": "// Return a and b as separate properties.\nfunction pair(a, b) {",
+    "suffix": "\n}",
+    "languageId": "typescript",
+    "reply": "\n  return {\n    a,\n    b\n  };",
+    "expected": [
+      "// Return a and b as separate properties.\nfunction pair(a, b) {\n  return {\n    a,\n    b\n  };\n}"
+    ],
+    "related": [],
+    "singleLine": false
+  },
+  {
+    "id": "blank-in-block",
+    "category": "block",
+    "intent": "blank in block",
+    "prefix": "function f() {",
+    "suffix": "\n}",
+    "languageId": "typescript",
+    "reply": "\n  const a = 1;\n\n  return a;",
+    "expected": [
+      "function f() {\n  const a = 1;\n\n  return a;\n}"
+    ],
+    "related": [],
+    "singleLine": false
+  },
+  {
+    "id": "python-block",
+    "category": "block",
+    "intent": "python block",
+    "prefix": "# Print each item on its own line.\nfor item in items:",
+    "suffix": "\n",
+    "languageId": "python",
+    "reply": "\n    print(item)",
+    "expected": [
+      "# Print each item on its own line.\nfor item in items:\n    print(item)\n"
+    ],
+    "related": [],
+    "singleLine": false
+  },
+  {
+    "id": "tsx-prop",
+    "category": "tsx",
+    "intent": "tsx prop",
+    "prefix": "const label = 'Save';\nconst view = <button aria-label={",
+    "suffix": "}>Save</button>;",
+    "languageId": "typescriptreact",
+    "reply": "label",
+    "expected": [
+      "const label = 'Save';\nconst view = <button aria-label={label}>Save</button>;"
+    ],
+    "related": [],
+    "singleLine": true
+  },
+  {
+    "id": "tsx-child",
+    "category": "tsx",
+    "intent": "tsx child",
+    "prefix": "const title = 'Welcome';\nconst view = <h1>{",
+    "suffix": "}</h1>;",
+    "languageId": "typescriptreact",
+    "reply": "title",
+    "expected": [
+      "const title = 'Welcome';\nconst view = <h1>{title}</h1>;"
+    ],
+    "related": [],
+    "singleLine": true
+  },
+  {
+    "id": "crlf",
+    "category": "local",
+    "intent": "crlf",
+    "prefix": "function sum(a, b) {\r\n  return ",
+    "suffix": ";\r\n}",
+    "languageId": "typescript",
+    "reply": "a + b",
+    "expected": [
+      "function sum(a, b) {\r\n  return a + b;\r\n}"
+    ],
+    "related": [],
+    "singleLine": true
+  },
+  {
+    "id": "no-completion-comment",
+    "category": "empty",
+    "intent": "no completion comment",
+    "prefix": "// This comment is complete.",
+    "suffix": "",
+    "languageId": "typescript",
+    "reply": "",
+    "expected": [
+      "// This comment is complete."
+    ],
+    "related": [],
+    "singleLine": true
+  },
+  {
+    "id": "no-completion-statement",
+    "category": "empty",
+    "intent": "no completion statement",
+    "prefix": "const answer = 42;",
+    "suffix": "",
+    "languageId": "typescript",
+    "reply": "",
+    "expected": [
+      "const answer = 42;"
+    ],
+    "related": [],
+    "singleLine": true
+  },
+  {
+    "id": "no-completion-import",
+    "category": "empty",
+    "intent": "no completion import",
+    "prefix": "import { readFile } from 'node:fs/promises';",
+    "suffix": "",
+    "languageId": "typescript",
+    "reply": "",
+    "expected": [
+      "import { readFile } from 'node:fs/promises';"
+    ],
+    "related": [],
+    "singleLine": true
+  },
+  {
+    "id": "python-attribute",
+    "category": "fields",
+    "intent": "python attribute",
+    "prefix": "class User:\n    email: str\n\ndef get_email(user: User):\n    return user.",
+    "suffix": "\n",
+    "languageId": "python",
+    "reply": "email",
+    "expected": [
+      "class User:\n    email: str\n\ndef get_email(user: User):\n    return user.email\n"
+    ],
+    "related": [],
+    "singleLine": true
+  },
+  {
+    "id": "typed-array",
+    "category": "fields",
+    "intent": "typed array",
+    "prefix": "const items: string[] = [];\n// Number of items\nconst count = items.",
+    "suffix": ";",
+    "languageId": "typescript",
+    "reply": "length",
+    "expected": [
+      "const items: string[] = [];\n// Number of items\nconst count = items.length;"
+    ],
+    "related": [],
+    "singleLine": true
+  },
+  {
+    "id": "suffix-boolean",
+    "category": "suffix",
+    "intent": "suffix boolean",
+    "prefix": "const data = ",
+    "suffix": ";\nconst enabled: boolean = data;",
+    "languageId": "typescript",
+    "reply": "true",
+    "expected": [
+      "const data = true;\nconst enabled: boolean = data;"
+    ],
+    "related": [],
+    "singleLine": true
+  },
+  {
+    "id": "project-money-format",
+    "category": "project-example",
+    "intent": "Follow the saved project's money formatting helper in a new invoice summary.",
+    "prefix": "// Format the invoice amount using this project's existing money helper.\nconst invoiceAmount = ",
+    "suffix": ";",
+    "languageId": "typescript",
+    "reply": "formatMoney(invoice.total, invoice.currency)",
+    "expected": ["// Format the invoice amount using this project's existing money helper.\nconst invoiceAmount = formatMoney(invoice.total, invoice.currency);"],
+    "related": [],
+    "singleLine": true
+  },
+  {
+    "id": "project-error-format",
+    "category": "project-example",
+    "intent": "Follow the saved project's error rendering pattern in a new request handler.",
+    "prefix": "// Format the request error with the existing project helper.\nconst message = ",
+    "suffix": ";",
+    "languageId": "typescript",
+    "reply": "describeRequestError(error)",
+    "expected": ["// Format the request error with the existing project helper.\nconst message = describeRequestError(error);"],
+    "related": [],
+    "singleLine": true
+  }
+]

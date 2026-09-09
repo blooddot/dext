@@ -103,6 +103,8 @@ describe("completion settings migration", () => {
     expect(await application.migrateCompletionSettings()).toBe(false);
     expect(application.completionSettings().model).toBe("deepseek-v4-pro");
     expect(application.completionSettings().endpoint).toBe("https://models.example/v1");
+    expect(application.completionSettings()).not.toHaveProperty("backend");
+    expect(application.completionSettings().adaptation).toBe("session");
   });
 
   it("runs once, so a later window cannot undo a model configured in this one", async () => {

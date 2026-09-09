@@ -28,6 +28,46 @@ const settings = (overrides: Partial<CompletionSettings> = {}): CompletionSettin
     ...overrides
   });
 
+describe("bounded block completion and failure outcomes", () => {
+  it("associates sending with editor timing without transmitting local timestamps", async () => {
+    let now = 100;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+    let payload = ""; let measured: CompletionTiming | undefined;
+    try {
+      const client = new CompletionClient(async (_url, init) => {
+        payload = typeof init.body === "string" ? init.body : ""; now = 140;
+        return new Response(JSON.stringify({ choices: [{ text: "value" }] }));
+      }, () => undefined, (timing) => { measured = timing; });
+      await client.complete(settings(), { prefix: "return ", suffix: "", timingOrigin: { providerAt: 20, editAt: 10 } });
+      expect(measured?.providerToSendMs).toBe(80); expect(measured?.editToSendMs).toBe(90);
+      expect(measured?.totalMs).toBe(40);
+      expect(payload).not.toContain("timingOrigin"); expect(payload).not.toContain("providerAt");
+    } finally { clock.mockRestore(); }
+  });
+  it("keeps server-echoed credentials out of automatic failures and explicit probes", async () => {
+    const errors: string[] = [];
+    const client = new CompletionClient(async () => new Response("rejected credential secret-key", { status: 401 }), (error) => errors.push(error.message));
+    await client.complete(settings(), { prefix: "const value = ", suffix: "" }, "secret-key");
+    expect(errors).toEqual(["The completion model returned HTTP 401."]);
+    await expect(client.verify(settings(), "secret-key")).rejects.toThrow("rejected credential [redacted]");
+  });
+  it("rejects a stream that disconnects without a finish event", async () => {
+    const stream = eventStream([chunk("unfinishedExpression")]);
+    const client = new CompletionClient(async () => stream.response);
+    expect((await client.completeResult(settings(), { prefix: "const x = ", suffix: "" })).outcome).toBe("truncated");
+  });
+  it("preserves blank lines in an explicitly multi-line suggestion", async () => {
+    const code = "\n  const x = 1;\n\n  return x;";
+    const client = new CompletionClient(async () => new Response(JSON.stringify({ choices: [{ message: { content: code } }] })));
+    const result = await client.completeResult(settings({ api: "openai-chat" }), { prefix: "function f() {", suffix: "\n}", singleLine: false });
+    expect(result.outcome).toBe("success"); expect(result.text).toBe(code);
+  });
+  it("does not cache a token-limit truncation as a normal empty response", async () => {
+    const client = new CompletionClient(async () => new Response(JSON.stringify({ choices: [{ text: "unfinished(", finish_reason: "length" }] }, null, 2)));
+    expect((await client.completeResult(settings(), { prefix: "const x = ", suffix: "" })).outcome).toBe("truncated");
+  });
+});
+
 function jsonResponse(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), { status, headers: { "Content-Type": "application/json" } });
 }
@@ -90,7 +130,7 @@ describe("completion model backend", () => {
   });
 
   it("speaks Ollama's generate shape when that API is selected", async () => {
-    const fetchImpl = vi.fn<CompletionFetch>(async () => jsonResponse({ response: "return 1;" }));
+    const fetchImpl = vi.fn<CompletionFetch>(async () => jsonResponse({ response: "return 1;", done: true }));
     const client = new CompletionClient(fetchImpl);
     const completion = await client.complete(
       settings({ api: "ollama", endpoint: "http://localhost:11434" }),
@@ -212,14 +252,15 @@ describe("completion model backend", () => {
 
   it("reads Anthropic and chat deltas out of their own fields", async () => {
     const anthropic = eventStream([
-      `data: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "a + b" } })}`
+      `data: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "a + b" } })}`,
+      'data: {"type":"message_stop"}'
     ]);
     expect(await new CompletionClient(async () => anthropic.response).complete(
       settings({ api: "anthropic", endpoint: DEFAULT_ENDPOINTS.anthropic }),
       { prefix: "return ", suffix: "" }
     )).toBe("a + b");
 
-    const chat = eventStream([`data: ${JSON.stringify({ choices: [{ delta: { content: "a + b" } }] })}`]);
+    const chat = eventStream([`data: ${JSON.stringify({ choices: [{ delta: { content: "a + b" } }] })}`, "data: [DONE]"]);
     expect(await new CompletionClient(async () => chat.response).complete(
       settings({ api: "openai-chat" }),
       { prefix: "return ", suffix: "" }
@@ -349,6 +390,20 @@ describe("completion model backend", () => {
     await expect(store.store(" ")).rejects.toThrow(/cannot be empty/);
     await store.delete();
     expect(await store.get()).toBeUndefined();
+  });
+
+  it("reports credential presence without exporting keys, reading unrelated secrets or migrating them", async () => {
+    const legacy = `dext.completion.key.${createHash("sha256").update("/repo/one\u0000completion").digest("hex")}`;
+    const other = `dext.completion.key.${"a".repeat(64)}`;
+    const values = new Map([[legacy, "secret-one"], [other, "secret-other"], ["agent.key", "agent-secret"]]);
+    const secrets = { get: vi.fn(async (key: string) => values.get(key)), keys: async () => [...values.keys()], store: vi.fn(async () => undefined), delete: vi.fn(async () => undefined) };
+    const result = await new CompletionKeyStore(secrets, () => "/repo/one").status();
+    expect(result).toEqual({ storageReadable: true, globalPresent: false, currentLegacyPresent: true, otherLegacyCount: 1 });
+    expect(JSON.stringify(result)).not.toMatch(/secret-one|secret-other|agent-secret|dext\.completion\.key/);
+    expect(secrets.get.mock.calls.map(([key]) => key)).toEqual(["dext.completion.key", legacy]);
+    expect(secrets.store).not.toHaveBeenCalled(); expect(secrets.delete).not.toHaveBeenCalled();
+    secrets.get.mockRejectedValue(new Error("secret failure"));
+    expect(await new CompletionKeyStore(secrets).status()).toEqual({ storageReadable: false, globalPresent: false, currentLegacyPresent: false });
   });
 
   it("carries a key stored while the secret was still workspace-scoped", async () => {

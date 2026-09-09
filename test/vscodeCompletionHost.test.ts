@@ -1,12 +1,14 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeCompletionSettings, type CompletionSettings } from "../src/core/completionProvider.js";
 import type * as CompletionHostModule from "../src/vscodeCompletionHost.js";
+import type { DextCompletionContext } from "../src/vscodeCompletionContext.js";
 
 const state = vi.hoisted(() => ({
   ignoreFiles: new Map<string, string>(),
   statusItems: [] as { text: string; command: string | undefined; shown: number; hidden: number }[],
   messages: [] as string[],
-  commands: [] as string[]
+  commands: [] as string[],
+  activeUri: undefined as { path: string; scheme: string } | undefined
 }));
 
 vi.mock("vscode", () => {
@@ -25,6 +27,7 @@ vi.mock("vscode", () => {
     InlineCompletionItem,
     StatusBarAlignment: { Right: 2 },
     window: {
+      get activeTextEditor() { return state.activeUri ? { document: { uri: state.activeUri } } : undefined; },
       createStatusBarItem: () => {
         const item = {
           text: "",
@@ -49,7 +52,7 @@ vi.mock("vscode", () => {
       }
     },
     workspace: {
-      getWorkspaceFolder: () => ({ uri: { path: "/repo" } }),
+      getWorkspaceFolder: () => ({ uri: { path: "/repo", toString: () => "file:///repo" } }),
       asRelativePath: (uri: { path: string }) => uri.path.replace(/^\/repo\//, ""),
       getConfiguration: () => ({ get: (_key: string, fallback: unknown) => fallback }),
       fs: {
@@ -101,6 +104,24 @@ function cancellation(cancelled = false) {
 }
 
 describe("inline completion host", () => {
+  it("keeps an in-flight context snapshot when background retrieval finishes during typing", async () => {
+    let dependency = "initial";
+    let finish: (response: Response) => void = () => undefined;
+    const fetchImpl = vi.fn(() => new Promise<Response>((resolve) => { finish = resolve; }));
+    const retrieval = {
+      clear() {}, onInvalidExample() {}, allowed: () => true, dependencyValid: () => true,
+      snapshot: (doc: { getText: () => string }) => ({ prefix: doc.getText(), suffix: "", dependency, context: dependency })
+    } as unknown as DextCompletionContext;
+    const provider = new DextCompletionHost({ settings: () => settings(), apiKey: async () => "key", fetch: fetchImpl, context: retrieval });
+    const first = provider.provideInlineCompletionItems(document("const x = "), position, context, cancellation());
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
+    dependency = "late-definition";
+    const next = provider.provideInlineCompletionItems(document("const x = i"), position, context, cancellation());
+    await Promise.resolve(); await Promise.resolve();
+    finish(new Response(JSON.stringify({ choices: [{ text: "items.length" }] })));
+    await first; const items = await next;
+    expect(items[0]?.insertText).toBe("tems.length"); expect(fetchImpl).toHaveBeenCalledTimes(1); provider.dispose();
+  });
   beforeAll(async () => {
     ({ DextCompletionHost } = await import("../src/vscodeCompletionHost.js"));
   });
@@ -110,6 +131,7 @@ describe("inline completion host", () => {
     state.statusItems.length = 0;
     state.messages.length = 0;
     state.commands.length = 0;
+    state.activeUri = undefined;
     vi.unstubAllGlobals();
   });
 
@@ -133,7 +155,30 @@ describe("inline completion host", () => {
     );
     expect(second.map((item) => item.insertText)).toEqual(["return 1;"]);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const report = provider.report();
+    expect(report.measurements?.some((sample) => sample.contextAssemblyMs !== undefined)).toBe(true);
+    expect(report.measurements?.some((sample) => sample.debounceMs !== undefined)).toBe(true);
+    expect(report.measurements?.some((sample) => sample.cachedMs !== undefined)).toBe(true);
+    expect(report.measurements?.filter((sample) => sample.providerToSendMs !== undefined)).toHaveLength(1);
+    expect(report.timing?.providerToSendMs).toBeGreaterThanOrEqual(0);
+    expect(report.context?.prefixChars).toBe("const a = ".length);
+    expect(report.decisions?.returned_candidate).toBe(2);
+    expect(JSON.stringify(report)).not.toContain("return 1;");
     provider.dispose();
+  });
+
+  it("invalidates candidates immediately while project memory clearing waits on storage", async () => {
+    let release: () => void = () => undefined;
+    const disk = new Promise<void>((resolve) => { release = resolve; });
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ choices: [{ text: "items.length" }] })));
+    const provider = new DextCompletionHost({ settings: () => settings(), apiKey: async () => "key", fetch: fetchImpl,
+      memoryStore: { get: () => undefined, update: () => disk } });
+    state.activeUri = { path: "/repo/src/app.ts", scheme: "file" };
+    await provider.provideInlineCompletionItems(document("const a = "), position, context, cancellation());
+    const clearing = provider.clearMemory();
+    await provider.provideInlineCompletionItems(document("const a = "), position, context, cancellation());
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    release(); await clearing; provider.dispose();
   });
 
   it("waits on a generation already in flight instead of restarting it per keystroke", async () => {
@@ -222,7 +267,9 @@ describe("inline completion host", () => {
       document("const a = "), position, context, cancellation()
     )).toEqual([]);
     const notice = state.messages.at(-1) ?? "";
-    expect(notice).toContain("4 qps");
+    expect(notice).toContain("HTTP 429");
+    // Automatic diagnostics exclude raw response bodies, which can echo credentials or code.
+    expect(notice).not.toContain("4 qps");
     expect(notice).toContain("spacing its completion requests out");
     // Telling someone it will "keep trying quietly" while being refused for
     // trying too often is the wrong advice.

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { SecretStorageLike } from "./mcpSecrets.js";
+import { completionIdentity, type CompletionResult } from "./completionBackend.js";
 
 export type CompletionApi = "openai" | "openai-chat" | "ollama" | "anthropic";
 
@@ -12,6 +13,7 @@ export function isChatApi(api: CompletionApi): boolean {
 }
 
 export interface CompletionSettings {
+  adaptation: "off" | "session" | "workspace";
   enabled: boolean;
   /** `openai` speaks the OpenAI-compatible completions API with `suffix`;
    * `ollama` speaks `/api/generate` with its own FIM fields; `openai-chat` and
@@ -32,6 +34,7 @@ export interface CompletionSettings {
 }
 
 export const DEFAULT_COMPLETION_SETTINGS: CompletionSettings = {
+  adaptation: "session",
   enabled: false,
   api: "openai",
   endpoint: "",
@@ -77,6 +80,18 @@ export function requiresApiKey(api: CompletionApi): boolean {
 }
 
 export interface CompletionRequest {
+  /** Monotonic local timing only; never serialized into a model prompt. */
+  timingOrigin?: { providerAt: number; editAt?: number };
+  workspace?: string;
+  uri?: string;
+  version?: number;
+  offset?: number;
+  backendScope?: string;
+  dependency?: string;
+  context?: string;
+  sources?: { uri: string; revision: number; kind?: string }[];
+  strategy?: string;
+  policy?: { examples: number; output: number; samples: number };
   prefix: string;
   suffix: string;
   /** Language id of the document, passed through as a hint where the API takes
@@ -116,9 +131,22 @@ const COMPLETION_KEY = "dext.completion.key";
  * would mean re-entering it in every repository. */
 export class CompletionKeyStore {
   constructor(
-    private readonly secrets: SecretStorageLike,
+    private readonly secrets: SecretStorageLike & { keys?: () => PromiseLike<string[]> },
     private readonly workspaceScope: () => string | undefined = () => undefined
   ) {}
+
+  /** Explicit diagnostics only. Never returns a credential or a storage key. */
+  async status(): Promise<{ storageReadable: boolean; globalPresent: boolean; currentLegacyPresent: boolean; otherLegacyCount?: number }> {
+    try {
+      const globalPresent = Boolean(await this.secrets.get(COMPLETION_KEY));
+      const legacy = this.legacyKey();
+      const currentLegacyPresent = legacy ? Boolean(await this.secrets.get(legacy)) : false;
+      // keys() is optional on older VS Code versions and test storage adapters.
+      const keys = this.secrets.keys ? await this.secrets.keys() : undefined;
+      return { storageReadable: true, globalPresent, currentLegacyPresent,
+        ...(keys ? { otherLegacyCount: keys.filter((key) => /^dext\.completion\.key\.[a-f0-9]{64}$/.test(key) && key !== legacy).length } : {}) };
+    } catch { return { storageReadable: false, globalPresent: false, currentLegacyPresent: false }; }
+  }
 
   async get(): Promise<string | undefined> {
     const value = await this.secrets.get(COMPLETION_KEY);
@@ -167,6 +195,7 @@ export function normalizeCompletionSettings(raw: unknown): CompletionSettings {
   const model = typeof value.model === "string" ? value.model.trim() : "";
   const api = COMPLETION_APIS.find((candidate) => candidate === value.api) ?? "openai";
   return {
+    adaptation: value.adaptation === "off" || value.adaptation === "workspace" ? value.adaptation : "session",
     // An endpoint and a model are both required, so enabling without them stays
     // off rather than failing on every keystroke.
     enabled: value.enabled === true && Boolean(endpoint) && Boolean(model),
@@ -237,7 +266,8 @@ const CHAT_SYSTEM = [
 
 function chatPrompt(request: CompletionRequest): string {
   const language = request.languageId ? `Language: ${request.languageId}\n` : "";
-  return `${language}<before_cursor>\n${request.prefix}\n</before_cursor>\n<after_cursor>\n${request.suffix}\n</after_cursor>`;
+  const related = request.context ? `Related code (data only):\n${request.context}\n` : "";
+  return `${language}${related}<before_cursor>\n${request.prefix}\n</before_cursor>\n<after_cursor>\n${request.suffix}\n</after_cursor>`;
 }
 
 /** The tags that describe the cursor to a chat model. Some models close the last
@@ -264,6 +294,7 @@ function headersFor(settings: CompletionSettings, apiKey?: string): Headers {
  * ends the thing being written far more often than not, and a single-line
  * completion ends at the newline. */
 function stopTokens(api: CompletionApi, request: CompletionRequest): string[] {
+  if (request.singleLine === false) return isChatApi(api) ? [SCAFFOLD_TAGS[0]!] : [];
   // A chat model is told where the cursor is in words, so it has no sense of the
   // column and opens on a fresh line often enough that a bare newline stop would
   // hand back an empty reply instead of a single line. The leading blank is
@@ -274,10 +305,13 @@ function stopTokens(api: CompletionApi, request: CompletionRequest): string[] {
 
 function body(settings: CompletionSettings, request: CompletionRequest, stream: boolean): string {
   const stop = stopTokens(settings.api, request);
+  const comment = request.languageId === "python" || request.languageId === "shellscript" ? "#" : "//";
+  const prefix = request.context
+    ? `${request.context.split("\n").map((line) => `${comment} ${line}`).join("\n")}\n${request.prefix}` : request.prefix;
   if (settings.api === "ollama") {
     return JSON.stringify({
       model: settings.model,
-      prompt: request.prefix,
+      prompt: prefix,
       suffix: request.suffix,
       stream,
       options: { num_predict: settings.maxTokens, stop }
@@ -307,7 +341,7 @@ function body(settings: CompletionSettings, request: CompletionRequest, stream: 
   }
   return JSON.stringify({
     model: settings.model,
-    prompt: request.prefix,
+    prompt: prefix,
     suffix: request.suffix,
     max_tokens: settings.maxTokens,
     stop,
@@ -390,13 +424,14 @@ function streamLine(api: CompletionApi, line: string): string | undefined {
  * nothing later can add to it. Returning a value ends the request early, which
  * is the whole point of streaming: a model asked for 64 tokens usually produces
  * a usable completion in the first handful. */
-export function truncateAtStop(text: string, singleLine: boolean): string | undefined {
+export function truncateAtStop(text: string, singleLine: boolean, legacyBlankLine = true): string | undefined {
   if (singleLine) {
     const newline = text.indexOf("\n");
     // A leading newline means the model chose to start on the next line, which
     // is exactly what a single-line completion must not do.
     return newline === -1 ? undefined : text.slice(0, newline);
   }
+  if (!legacyBlankLine) return undefined;
   const blank = text.indexOf("\n\n");
   return blank === -1 ? undefined : text.slice(0, blank);
 }
@@ -408,13 +443,14 @@ export function truncateAtStop(text: string, singleLine: boolean): string | unde
  * A real FIM model gets none of this, because from one of those a leading
  * newline is a deliberate choice and there is no prompt scaffolding to echo. */
 function shapeReply(api: CompletionApi, request: CompletionRequest, text: string): string {
+  const unfenced = stripCodeFence(text);
   const shaped = isChatApi(api)
-    ? stripCodeFence(text).replace(/^\n+/, "").replace(SCAFFOLD, "")
+    ? (request.singleLine === false ? unfenced : unfenced.replace(/^\n+/, "")).replace(SCAFFOLD, "")
     : text;
   // A chat backend is not sent the single-line stop, so the cut it would have
   // made server-side is made here, and a streamed reply that already stopped
   // early passes through unchanged.
-  return truncateAtStop(shaped, request.singleLine === true) ?? shaped;
+  return truncateAtStop(shaped, request.singleLine === true, request.singleLine !== false) ?? shaped;
 }
 
 /** Where the wait went. Time to the first token is the provider's queue, network
@@ -422,6 +458,11 @@ function shapeReply(api: CompletionApi, request: CompletionRequest, text: string
  * `maxTokens` and the stop sequences. Tuning either without knowing which one
  * dominates is guesswork. */
 export interface CompletionTiming {
+  providerToSendMs?: number;
+  editToSendMs?: number;
+  firstByteMs?: number;
+  headersMs?: number;
+  processingMs?: number;
   /** Undefined where the reply did not stream, so no token can be timed. */
   firstTokenMs: number | undefined;
   totalMs: number;
@@ -471,13 +512,23 @@ export class CompletionClient {
     apiKey?: string,
     signal?: AbortSignal
   ): Promise<string> {
-    if (!settings.enabled) return "";
+    return (await this.completeResult(settings, request, apiKey, signal)).text;
+  }
+
+  async completeResult(settings: CompletionSettings, request: CompletionRequest, apiKey?: string, signal?: AbortSignal): Promise<CompletionResult> {
+    if (!settings.enabled) return { outcome: "unavailable", text: "" };
+    if (signal?.aborted) return { outcome: "cancelled", text: "" };
     try {
-      return await this.request(settings, request, apiKey, signal, { stream: true, measure: true });
+      const text = await this.request(settings, request, apiKey, signal, { stream: true, measure: true });
+      return signal?.aborted ? { outcome: "cancelled", text: "" } : { outcome: text ? "success" : "empty", text };
     } catch (error) {
       // A cancelled request is the normal case while typing, not a problem.
       if (!signal?.aborted) this.onError(failureOf(error));
-      return "";
+      const failure = failureOf(error);
+      return { outcome: signal?.aborted ? "cancelled" : error instanceof CompletionTruncatedError ? "truncated"
+        : error instanceof CompletionHttpError && error.status === 401 ? "unauthenticated"
+        : failure.rateLimited ? "rate_limited" : "error", text: "", reason: failure.message,
+        ...(failure.retryAfterMs === undefined ? {} : { retryAfterMs: failure.retryAfterMs }) };
     }
   }
 
@@ -517,8 +568,12 @@ export class CompletionClient {
     const abort = (): void => controller.abort();
     signal?.addEventListener("abort", abort, { once: true });
     const timer = setTimeout(abort, settings.timeoutMs);
-    const sentAt = Date.now();
+    if (signal?.aborted) controller.abort();
+    const sentAt = performance.now();
     let firstTokenAt: number | undefined;
+    let firstByteAt: number | undefined;
+    let headersAt: number | undefined;
+    let processingMs = 0;
     try {
       let response: Response;
       try {
@@ -529,31 +584,35 @@ export class CompletionClient {
           redirect: "manual",
           signal: controller.signal
         });
+        headersAt = performance.now();
       } catch {
         if (controller.signal.aborted && !signal?.aborted) {
           throw new Error(`The completion model did not answer within ${settings.timeoutMs}ms.`);
         }
-        throw new Error(`The completion model at ${endpointFor(settings)} is not reachable.`);
+        throw new Error("The completion model is not reachable. Check its endpoint and network connection.");
       }
       if (!response.ok) {
         const after = retryAfterMs(response);
+        if (stream) void response.body?.cancel().catch(() => undefined);
         throw new CompletionHttpError(
-          `The completion model returned HTTP ${response.status}. ${await detail(response)}`.trim(),
+          `The completion model returned HTTP ${response.status}. ${stream ? "" : await detail(response, apiKey)}`.trim(),
           response.status,
           after
         );
       }
       const text = stream && response.body
-        ? await this.readStreamed(response.body, settings, request, controller, (at) => { firstTokenAt = at; })
+        ? await this.readStreamed(response.body, settings, request, controller, (at) => { firstTokenAt = at; }, (at) => { firstByteAt = at; })
         : this.fromPayload(await response.json(), settings);
-      if (measure) {
-        this.onTiming({
-          firstTokenMs: firstTokenAt === undefined ? undefined : firstTokenAt - sentAt,
-          totalMs: Date.now() - sentAt
-        });
-      }
-      return trimCompletion(shapeReply(settings.api, request, text), request.suffix);
+      const processingAt = performance.now();
+      const result = trimCompletion(shapeReply(settings.api, request, text), request.suffix);
+      processingMs = performance.now() - processingAt;
+      return result;
     } finally {
+      if (measure) this.onTiming({ firstTokenMs: firstTokenAt === undefined ? undefined : firstTokenAt - sentAt,
+        ...(request.timingOrigin ? { providerToSendMs: sentAt - request.timingOrigin.providerAt,
+          ...(request.timingOrigin.editAt === undefined ? {} : { editToSendMs: sentAt - request.timingOrigin.editAt }) } : {}),
+        ...(firstByteAt === undefined ? {} : { firstByteMs: firstByteAt - sentAt }),
+        ...(headersAt === undefined ? {} : { headersMs: headersAt - sentAt }), processingMs, totalMs: performance.now() - sentAt });
       clearTimeout(timer);
       signal?.removeEventListener("abort", abort);
     }
@@ -567,19 +626,21 @@ export class CompletionClient {
     settings: CompletionSettings,
     request: CompletionRequest,
     controller: AbortController,
-    onFirstToken: (at: number) => void
+    onFirstToken: (at: number) => void,
+    onFirstByte: (at: number) => void
   ): Promise<string> {
-    const streamed = await readStream(body, settings.api, request, controller, onFirstToken);
+    const streamed = await readStream(body, settings.api, request, controller, onFirstToken, onFirstByte);
     if (streamed.streaming) return streamed.text;
     try {
       return this.fromPayload(JSON.parse(streamed.raw), settings);
     } catch (error) {
-      if (error instanceof CompletionFormatError) throw error;
+      if (error instanceof CompletionFormatError || error instanceof CompletionTruncatedError) throw error;
       return "";
     }
   }
 
   private fromPayload(payload: unknown, settings: CompletionSettings): string {
+    if (outputLimitReached(payload)) throw new CompletionTruncatedError("The completion reached its output limit.");
     const text = extract(settings.api, payload);
     if (!text && looksLikeAnotherFormat(settings.api, payload)) {
       throw new CompletionFormatError(formatMismatch(settings));
@@ -591,6 +652,7 @@ export class CompletionClient {
 /** Distinguished from a parse failure so that the advice about the API format
  * survives being thrown out of a body that was not JSON after all. */
 class CompletionFormatError extends Error {}
+class CompletionTruncatedError extends Error {}
 
 function failureOf(error: unknown): CompletionFailure {
   const message = error instanceof Error ? error.message : String(error);
@@ -656,7 +718,8 @@ async function readStream(
   api: CompletionApi,
   request: CompletionRequest,
   controller: AbortController,
-  onFirstToken: (at: number) => void
+  onFirstToken: (at: number) => void,
+  onFirstByte: (at: number) => void
 ): Promise<{ text: string; raw: string; streaming: boolean }> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -669,7 +732,11 @@ async function readStream(
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
+      if (!raw) onFirstByte(performance.now());
       const chunk = decoder.decode(value, { stream: true });
+      if (raw.length + chunk.length > 1_048_576) {
+        controller.abort(); throw new CompletionTruncatedError("The completion exceeded its response buffer limit.");
+      }
       raw += chunk;
       pending += chunk;
       let newline = pending.indexOf("\n");
@@ -677,7 +744,7 @@ async function readStream(
         const delta = streamLine(api, pending.slice(0, newline));
         pending = pending.slice(newline + 1);
         if (delta) {
-          if (!streaming) onFirstToken(Date.now());
+          if (!streaming) onFirstToken(performance.now());
           streaming = true;
           text += delta;
           // Stripped before the test so that a chat model's opening newline
@@ -686,7 +753,7 @@ async function readStream(
           // Reaching the prompt's own closing tag means the answer is over,
           // whatever the model intends to write next.
           const scaffold = isChatApi(api) && SCAFFOLD.test(sofar);
-          const finished = scaffold ? sofar.replace(SCAFFOLD, "") : truncateAtStop(sofar, singleLine);
+          const finished = scaffold ? sofar.replace(SCAFFOLD, "") : truncateAtStop(sofar, singleLine, request.singleLine !== false);
           if (finished !== undefined) {
             controller.abort();
             return { text: finished, raw, streaming: true };
@@ -700,13 +767,37 @@ async function readStream(
       streaming = true;
       text += last;
     }
-  } catch {
-    // A stream cut short still leaves something worth offering, and a keystroke
-    // is not the place to report a dropped connection.
+  } catch (error) {
+    throw new CompletionTruncatedError(error instanceof Error ? error.message : "The completion stream was interrupted.");
   } finally {
+    if (controller.signal.aborted) void reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
-  return { text: truncateAtStop(text, singleLine) ?? text, raw, streaming };
+  if (raw.split("\n").some((line) => {
+    try { return outputLimitReached(JSON.parse(line.replace(/^data:\s*/, ""))); } catch { return false; }
+  })) {
+    throw new CompletionTruncatedError("The completion reached its output limit.");
+  }
+  if (streaming && !raw.split("\n").some(streamEnd)) throw new CompletionTruncatedError("The completion stream ended without a finish event.");
+  return { text: truncateAtStop(text, singleLine, request.singleLine !== false) ?? text, raw, streaming };
+}
+
+function streamEnd(line: string): boolean {
+  const json = line.replace(/^data:\s*/, "").trim(); if (json === "[DONE]") return true;
+  try {
+    const value = JSON.parse(json) as Record<string, unknown>;
+    if (value.done === true || value.type === "message_stop") return true;
+    return Array.isArray(value.choices) && value.choices.some((choice: unknown) => choice && typeof choice === "object" && typeof (choice as Record<string, unknown>).finish_reason === "string");
+  } catch { return false; }
+}
+
+function outputLimitReached(payload: unknown): boolean {
+  if (!payload || typeof payload !== "object") return false;
+  const value = payload as Record<string, unknown>;
+  if (value.stop_reason === "max_tokens" || value.done_reason === "length") return true;
+  const delta = value.delta;
+  if (delta && typeof delta === "object" && (delta as Record<string, unknown>).stop_reason === "max_tokens") return true;
+  return Array.isArray(value.choices) && value.choices.some((choice: unknown) => choice && typeof choice === "object" && (choice as Record<string, unknown>).finish_reason === "length");
 }
 
 const API_LABELS: Record<CompletionApi, string> = {
@@ -745,9 +836,10 @@ function looksLikeAnotherFormat(api: CompletionApi, payload: unknown): boolean {
 /** The status code alone rarely says which of the key, the model name or the URL
  * is wrong, and the body usually does. An empty body is left out rather than
  * appended as a stray `{}`. */
-async function detail(response: Response): Promise<string> {
+async function detail(response: Response, apiKey?: string): Promise<string> {
   try {
-    const text = (await response.text()).trim();
+    const raw = (await response.text()).trim();
+    const text = apiKey ? raw.replaceAll(apiKey, "[redacted]") : raw;
     if (!text || text === "{}" || text === "null") return "";
     return text.length > 300 ? `${text.slice(0, 300)}...` : text;
   } catch {
@@ -793,7 +885,7 @@ export class CompletionCache {
   constructor(private readonly limit = 64) {}
 
   private static key(request: CompletionRequest): string {
-    return `${request.prefix}\u0000${request.suffix}`;
+    return `${completionIdentity(request)}\u0001${request.prefix}\u0000${request.suffix}`;
   }
 
   get(request: CompletionRequest): string | undefined {
@@ -812,9 +904,11 @@ export class CompletionCache {
    * while the prefix is allowed to have grown. */
   private typedForward(request: CompletionRequest): string | undefined {
     for (const [key, value] of [...this.entries].reverse()) {
+      const identity = `${completionIdentity(request)}\u0001`;
+      if (!key.startsWith(identity)) continue;
       const split = key.indexOf("\u0000");
       if (key.slice(split + 1) !== request.suffix) continue;
-      const typed = typedSince(key.slice(0, split), request.prefix);
+      const typed = typedSince(key.slice(identity.length, split), request.prefix);
       // An empty match is the same position, which the exact lookup has already
       // ruled out by the time this runs.
       if (!typed || !value.startsWith(typed)) continue;

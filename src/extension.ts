@@ -11,6 +11,9 @@ import { conversationMarkdown, conversationTitle, historyTurnMarkdown, historyTu
 import { DELETE_CONFIRMATION_DETAIL, TURN_DELETE_CONFIRMATION, TURN_RETRY_CONFIRMATION } from "./turnPresentation.js";
 import { recordWorkflow } from "./core/workflowRecorder.js";
 import { DextCompletionHost } from "./vscodeCompletionHost.js";
+import { DextCompletionContext } from "./vscodeCompletionContext.js";
+import { DextCompletionEvaluation } from "./vscodeCompletionEvaluation.js";
+import { CompletionMemoryEpochs } from "./core/completionMemory.js";
 import { DextSelectionActions } from "./vscodeSelectionActions.js";
 import type { SelectionTarget } from "./vscodeAttachments.js";
 import {
@@ -228,11 +231,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
   updateTrustContext();
   updateHistoryContext();
+  const completionContext = new DextCompletionContext((uri) => application.completionSettings(uri));
+  const completionEpochs = new CompletionMemoryEpochs(vscode.Uri.joinPath(context.globalStorageUri, "completion-memory-generations").fsPath);
   const completionHost = new DextCompletionHost({
-    settings: () => application.completionSettings(),
-    apiKey: () => application.completionApiKey()
+    settings: (uri) => application.completionSettings(uri),
+    apiKey: () => application.completionApiKey(),
+    context: completionContext,
+    memoryStore: context.workspaceState,
+    memoryEpochs: completionEpochs,
   });
+  const epochListener = completionEpochs.onChange(() => completionHost.refresh());
+  context.subscriptions.push(completionEpochs, { dispose: epochListener });
+  context.subscriptions.push(completionContext);
   const completionDiagnostics = vscode.window.createOutputChannel("Dext Completion");
+  const completionEvaluation = new DextCompletionEvaluation({
+    settings: (uri) => application.completionSettings(uri),
+    scope: (field, uri) => application.completionSettingScope(field, uri),
+    apiKey: () => application.completionApiKey(),
+    credentialStatus: () => application.completionCredentialStatus(),
+    output: completionDiagnostics
+  });
+  context.subscriptions.push(completionEvaluation);
   // A leftover `dext.completion` object shadows the individual settings, so it
   // is cleared before the first keystroke rather than on next launch. It only
   // does anything the first time, in the first window to run it.
@@ -244,10 +263,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       // A read-only settings file is not a reason to fail activation.
     });
   const completionSetup: CompletionDiagnoseOptions = {
+    evaluate: async () => { await completionEvaluation.run(); },
+    clearMemory: () => completionHost.clearMemory(),
+    memoryStatus: () => JSON.stringify(completionHost.memoryReport()),
     report: () => completionHost.report(),
     probe: (document, position) => completionHost.probe(document, position),
-    scope: (field) => application.completionSettingScope(field),
-    settings: () => application.completionSettings(),
+    scope: (field) => application.completionSettingScope(field, vscode.window.activeTextEditor?.document.uri),
+    settings: () => application.completionSettings(vscode.window.activeTextEditor?.document.uri),
     writeSettings: (patch) => application.writeCompletionSettings(patch),
     apiKey: () => application.completionApiKey(),
     setApiKey: (value) => application.setCompletionApiKey(value),
@@ -475,6 +497,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       reportCommandError(() => testCompletionModel(completionSetup))
     ),
     completionDiagnostics,
+    vscode.commands.registerCommand("dext.evaluateCompletion", (kind?: "quality" | "adaptation" | "performance") => completionEvaluation.run(kind)),
+    vscode.commands.registerCommand("dext.completionAccepted", (id: unknown) => { if (typeof id === "string") completionHost.accept(id); }),
+    vscode.commands.registerCommand("dext.clearCompletionMemory", () => reportCommandError(() => completionHost.clearMemory())),
     vscode.commands.registerCommand("dext.diagnoseCompletion", () =>
       reportCommandError(() => diagnoseCompletion(completionSetup, completionDiagnostics))
     ),
@@ -501,7 +526,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await vscode.commands.executeCommand("editor.action.triggerSuggest");
         return;
       }
-      await focusSidebar();
       sidebar.triggerSuggest();
     }),
     vscode.commands.registerCommand("dext.triggerParameterHints", async () => {
@@ -509,7 +533,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await vscode.commands.executeCommand("editor.action.triggerParameterHints");
         return;
       }
-      await focusSidebar();
       sidebar.triggerParameterHints();
     }),
     vscode.commands.registerCommand("dext.addSelectionToChat", (target?: SelectionTarget) =>
@@ -597,6 +620,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       // reloading the API set, which would needlessly re-scan the workspace.
       if (
         event.affectsConfiguration("dext.agent.timeoutMs")
+        || event.affectsConfiguration("dext.agent.idleTimeoutMs")
         || event.affectsConfiguration("dext.workflow.maxConcurrency")
       ) {
         application.applyTimeoutSettings();
@@ -605,8 +629,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       // Cached completions were produced under the old configuration, and the
       // status bar advertises the model, so both are rebuilt.
       if (event.affectsConfiguration("dext.completion")) {
-        completionHost.refresh();
-        return;
+          completionHost.refresh();
+                  return;
       }
       if (
         event.affectsConfiguration("dext.agentPermission")

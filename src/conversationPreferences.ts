@@ -80,10 +80,6 @@ export class DextConversationPreferences {
     return this.state.get<string[]>(FAVORITES_KEY, []);
   }
 
-  isFavorite(sessionId: string): boolean {
-    return this.favorites().includes(sessionId);
-  }
-
   async setFavorite(sessionId: string, favorite: boolean): Promise<void> {
     const remaining = this.favorites().filter((id) => id !== sessionId);
     await this.state.update(FAVORITES_KEY, favorite ? [...remaining, sessionId] : remaining);

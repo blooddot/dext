@@ -18,6 +18,10 @@
 //   node scripts/probeCompletionApi.mjs --endpoint https://host/v1 --model my-model --repeat 5
 
 import diagnostics from "node:diagnostics_channel";
+import { execFileSync } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import { build } from "esbuild";
 
 // Whether a pause cost a new connection is a fact Node will state outright, and
 // timing cannot: a gateway whose baseline drifts by a factor of two between runs
@@ -48,10 +52,131 @@ const text = (name, fallback = "") => {
   return typeof value === "string" ? value : fallback;
 };
 
+if (text("backend", "http") !== "http" || [...args.keys()].some((key) => key.startsWith("codex-") || key === "mock-codex")) {
+  throw new Error("ChatGPT Tab completion has been removed. Use the HTTP backend explicitly.");
+}
+
 const endpoint = text("endpoint").replace(/\/+$/, "");
 const model = text("model");
 const key = text("key") || process.env.DEXT_PROBE_KEY || "";
 const repeat = Math.max(1, Number(text("repeat", "3")));
+if (["offline", "cases", "backend", "adaptation", "performance", "quality", "suffix"].some((flag) => args.has(flag))) {
+  await productionProbe();
+  process.exit(process.exitCode ?? 0);
+}
+
+async function productionProbe() {
+  const compiled = await build({ stdin: { contents: ["completionProvider", "completionBackend", "completionCandidate", "completionContext", "completionMemory", "completionAdaptation", "completionProfiles", "completionEvaluation"].map((name) => `export * from './${name}.ts';`).join("\n"), resolveDir: resolve("src/core"), loader: "ts" }, bundle: true, platform: "node", format: "esm", write: false });
+  const core = await import("data:text/javascript;base64," + Buffer.from(compiled.outputFiles[0].text).toString("base64"));
+  let baseline;
+  const baselineRevision = text("baseline-revision");
+  if (baselineRevision) {
+    if (!/^[a-f0-9]{40}$/i.test(baselineRevision)) throw new Error("--baseline-revision must be a full commit SHA.");
+    const contents = execFileSync("git", ["show", `${baselineRevision}:src/core/completionProvider.ts`], { encoding: "utf8", maxBuffer: 2 * 1024 * 1024 });
+    const previous = await build({ stdin: { contents, resolveDir: resolve("src/core"), loader: "ts" }, bundle: true, platform: "node", format: "esm", write: false });
+    baseline = await import("data:text/javascript;base64," + Buffer.from(previous.outputFiles[0].text).toString("base64"));
+  }
+  const offline = args.has("offline");
+  if (!Number.isSafeInteger(repeat) || repeat > 1000) throw new Error("--repeat must be an integer between 1 and 1000.");
+  if (!offline && (!endpoint || !(model || text("models")))) throw new Error("Real evaluation requires --endpoint and --models. Credentials come from DEXT_PROBE_KEY.");
+  const models = (text("models") || model || "offline-fixture").split(",").filter(Boolean);
+  const api = text("api", text("shape") === "chat" ? "openai-chat" : "openai");
+  if (!core.COMPLETION_APIS.includes(api)) throw new Error("Unsupported --api format.");
+  const base = core.normalizeCompletionSettings({ enabled: true, endpoint: endpoint || "https://offline.invalid/v1", model: models[0], api, maxTokens: 128, timeoutMs: 10000 });
+  const modelSettings = (name) => {
+    const [id, shape] = name.split("@");
+    return { ...base, model: id, api: shape === "chat" ? "openai-chat" : shape === "fim" ? "openai" : base.api };
+  };
+  const quality = JSON.parse(await readFile(args.has("adaptation") ? "test/fixtures/completionQuality.json" : text("cases", "test/fixtures/completionQuality.json"), "utf8"));
+  const percentile = (values, p) => { const sorted = [...values].sort((a, b) => a - b); return sorted[Math.max(0, Math.ceil(sorted.length * p) - 1)] ?? null; };
+  console.log(JSON.stringify({ evaluation: offline ? "deterministic replay; not model quality evidence" : "real backend; fixture scoring requires review", scope: "shared production backend, context, policy and candidate pipeline; not VS Code display time", models, repeat }));
+  async function evaluate(test, settings, policy = { output: 1, examples: 1 }, previous = false) {
+    let raw = "";
+    const fetchImpl = offline ? async () => {
+      raw = test.reply;
+      return new Response(JSON.stringify(settings.api === "ollama" ? { response: raw, done: true } : settings.api === "anthropic" ? { content: [{ type: "text", text: raw }] } : { choices: [{ text: raw, message: { content: raw } }] }), { headers: { "content-type": "application/json" } });
+    } : async (url, init) => { const response = await fetch(url, init); return response; };
+    let timing;
+    let failure;
+    const client = new (previous ? baseline : core).CompletionClient(fetchImpl, (value) => { failure = value; }, (value) => { timing = value; });
+    if (previous) {
+      const at = performance.now();
+      const request = { ...baseline.completionWindow(test.prefix + test.suffix, test.prefix.length, settings), languageId: test.languageId };
+      const value = await client.complete(settings, request, offline ? undefined : key);
+      // The old editor provider inserts at the cursor; do not use the new replacement rules to grade it.
+      const candidate = value ? { text: value, replaceBefore: 0, replaceAfter: 0 } : undefined;
+      return { id: test.id, category: test.category, score: failure ? "failed" : core.scoreCompletion(test, candidate, test.expected),
+        outcome: failure ? "error" : value ? "success" : "empty", candidate: value, modelText: value, ...(offline ? { raw } : {}),
+        elapsedMs: performance.now() - at, timing, inputChars: request.prefix.length + request.suffix.length };
+    }
+    const backend = new core.HttpCompletionBackend(client, async () => offline ? undefined : key);
+    try { return { ...await core.evaluateCompletionCase(backend, settings, test, policy), ...(offline ? { raw } : {}), timing }; }
+    finally { backend.dispose(); }
+  }
+  if (args.has("suffix")) {
+    const client = new core.CompletionClient(); const replies = [];
+    for (const probe of core.SUFFIX_PROBES) replies.push(offline ? "" : await client.complete(base, probe, key));
+    console.log(JSON.stringify({ suffix: core.suffixEvidence(replies), replies, offline })); return;
+  }
+  if (args.has("adaptation")) {
+    const sequences = JSON.parse(await readFile(text("cases", "test/fixtures/completionAdaptation.json"), "utf8"));
+    for (const name of models) for (let round = 0; round < repeat; round++) for (const sequence of sequences) for (const mode of ["off", "session", "workspace"]) {
+      const test = quality.find((test) => test.id === sequence.later);
+      if (!test) throw new Error("Unknown held-out evaluation case.");
+      const learned = await core.evaluationSequenceContext(sequence, mode, modelSettings(name).model, test);
+      const result = await evaluate({ ...test, related: [...(test.related ?? []), ...learned.examples] }, modelSettings(name), learned.policy);
+      console.log(JSON.stringify({ sequence: sequence.id, mode, round, policy: learned.policy, exampleCount: learned.examples.length, result }));
+    }
+    console.log(JSON.stringify({ limitation: "Replay supplies recorded weak feedback. Real held-out task benefit must be established separately; offline answers do not depend on learned weights." })); return;
+  }
+  if (args.has("performance") && offline) {
+    const scenarios = ["cache", "first", "continuous", "large-file", "file-switch"];
+    for (const scenario of scenarios) {
+      const versions = baseline ? ["baseline", "current"] : ["current"];
+      const caches = Object.fromEntries(versions.map((version) => [version, new (version === "baseline" ? baseline : core).CompletionCache()]));
+      const times = Object.fromEntries(versions.map((version) => [version, []]));
+      for (let i = 0; i < repeat + 20; i++) {
+        const test = quality[i % quality.length];
+        const prefix = (scenario === "large-file" ? "// earlier code\n".repeat(100000) : "") + test.prefix;
+        const typed = scenario === "continuous" ? test.reply.slice(0, i % 4) : "";
+        const text = prefix + typed + test.suffix;
+        text.charCodeAt(text.length - 1); // Flatten constructed ropes outside the measured editor-owned path.
+        // Build the document before timing; the editor already owns this buffer.
+        const local = { ...test, prefix: (prefix + typed).slice(-base.prefixChars), suffix: test.suffix.slice(0, base.suffixChars), uri: scenario === "file-switch" ? `file:///fixture/${i}.ts` : "file:///fixture/a.ts" };
+        for (const version of i % 2 ? versions : [...versions].reverse()) {
+          const cache = caches[version];
+          if (scenario === "cache") {
+            const warm = version === "baseline" ? baseline.completionWindow(text, prefix.length, base) : core.assembleContext(local, test.related, base);
+            cache.set(warm, test.reply);
+          }
+          const at = performance.now();
+          const request = version === "baseline" ? baseline.completionWindow(text, prefix.length + typed.length, base) : core.assembleContext(local, test.related, base);
+          const value = cache.get(request) ?? test.reply;
+          if (version === "current") core.completionCandidate(value, request);
+          cache.set(request, value);
+          if (i >= 20) times[version].push(performance.now() - at);
+        }
+      }
+      for (const version of versions) console.log(JSON.stringify({ scenario, version, baselineRevision: baselineRevision || undefined, samples: times[version].length,
+        p50Ms: percentile(times[version], .5), p95Ms: percentile(times[version], .95), scope: "core context/cache/candidate processing with alternating versions; excludes VS Code reads, scheduling, network and display" }));
+    } return;
+  }
+  const rows = [];
+  const count = args.has("performance") ? repeat : repeat * quality.length;
+  for (let i = 0; i < count; i++) for (const name of models) {
+    const versions = baseline ? (i % 2 ? ["baseline", "current"] : ["current", "baseline"]) : ["current"];
+    for (const version of versions) {
+      const row = { model: name, version, baselineRevision: version === "baseline" ? baselineRevision : undefined,
+        ...await evaluate(quality[i % quality.length], modelSettings(name), undefined, version === "baseline") };
+      rows.push(row); console.log(JSON.stringify(row));
+    }
+  }
+  for (const name of models) for (const version of baseline ? ["baseline", "current"] : ["current"]) {
+    const samples = rows.filter((r) => r.model === name && r.version === version);
+    console.log(JSON.stringify({ model: name, version, samples: samples.length, counts: Object.fromEntries(["valid", "wrong", "empty", "missed", "failed"].map((score) => [score, samples.filter((r) => r.score === score).length])), p50Ms: percentile(samples.map((r) => r.elapsedMs), .5), p95Ms: percentile(samples.map((r) => r.elapsedMs), .95) }));
+  }
+  if (offline && rows.some((r) => r.version === "current" && ["wrong", "missed", "failed"].includes(r.score))) process.exitCode = 1;
+}
 // Pauses to try before a request, in seconds. Sweeping them finds the point at
 // which an idle connection stops being reused, and where that point falls says
 // who closed it: Node's pool gives up on an idle socket after about four

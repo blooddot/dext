@@ -137,6 +137,15 @@ async function validatedDocumentRange(
 }
 
 export async function openWorkspaceDocument(uri: vscode.Uri, range?: Range, workspaceOnly = true): Promise<void> {
+  // Absolute paths and file: links arrive here directly, bypassing the
+  // relative-reference image check. Let VS Code select its image editor.
+  if (!range && IMAGE_EXTENSIONS.has(extname(uri.fsPath).toLowerCase())) {
+    if (workspaceOnly && !vscode.workspace.getWorkspaceFolder(uri)) {
+      throw new Error("Files must stay inside the current workspace.");
+    }
+    await vscode.commands.executeCommand("vscode.open", uri);
+    return;
+  }
   const vscodeRange = range
     ? new vscode.Range(range.start.line, range.start.character, range.end.line, range.end.character)
     : undefined;

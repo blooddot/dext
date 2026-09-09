@@ -25,6 +25,7 @@ import {
   type AgentSelection
 } from "./agentProfiles.js";
 import { DefaultAgentRunner } from "./core/agentRouter.js";
+import { DEFAULT_AGENT_TIMEOUT_MS, DEFAULT_AGENT_IDLE_TIMEOUT_MS, MAX_AGENT_TIMEOUT_MS } from "./core/agentTimeout.js";
 import { listHarnessPresets } from "./core/harnessPresets.js";
 import { SkillCatalog } from "./core/skillCatalog.js";
 import { McpToolRegistry, type McpServerConfig, type McpToolConfig, type McpDiscoveredTool } from "./core/mcpRegistry.js";
@@ -292,8 +293,13 @@ export class DextApplication {
       const value = configuration.get<number>(key, fallback);
       return Number.isInteger(value) && value > 0 ? value : fallback;
     };
+    const timeout = (key: string, fallback: number): number => {
+      const value = configuration.get<number>(key, fallback);
+      return Number.isInteger(value) && value >= 0 && value <= MAX_AGENT_TIMEOUT_MS ? value : fallback;
+    };
     this.agentRunner.setTimeouts({
-      agentTimeoutMs: positive("agent.timeoutMs", 3_600_000)
+      agentTimeoutMs: timeout("agent.timeoutMs", DEFAULT_AGENT_TIMEOUT_MS),
+      agentIdleTimeoutMs: timeout("agent.idleTimeoutMs", DEFAULT_AGENT_IDLE_TIMEOUT_MS)
     });
     this.workflowRuntime.setMaxConcurrency(positive("workflow.maxConcurrency", DEFAULT_MAX_CONCURRENCY));
   }
@@ -850,8 +856,8 @@ export class DextApplication {
   /** Each field is its own setting rather than one object, because the Settings
    * UI renders an object as an untyped key/value table with an Add Item button:
    * no dropdown for the format, and no box to type the URL into. */
-  completionSettings(): CompletionSettings {
-    const configuration = vscode.workspace.getConfiguration("dext.completion");
+  completionSettings(uri?: vscode.Uri): CompletionSettings {
+    const configuration = vscode.workspace.getConfiguration("dext.completion", uri);
     const raw: Record<string, unknown> = {};
     for (const field of COMPLETION_FIELDS) {
       const value = configuration.get(field);
@@ -908,8 +914,8 @@ export class DextApplication {
   /** Where the value actually in force came from. A completion model is written
    * globally, so anything else means a project is overriding it, or that the
    * global write never landed. */
-  completionSettingScope(field: keyof CompletionSettings): string {
-    const inspected = vscode.workspace.getConfiguration("dext.completion").inspect(field);
+  completionSettingScope(field: keyof CompletionSettings, uri?: vscode.Uri): string {
+    const inspected = vscode.workspace.getConfiguration("dext.completion", uri).inspect(field);
     if (inspected?.workspaceFolderValue !== undefined) return "folder";
     if (inspected?.workspaceValue !== undefined) return "workspace";
     if (inspected?.globalValue !== undefined) return "user";
@@ -934,6 +940,10 @@ export class DextApplication {
       // Secret storage can be unavailable; a missing key is not an error at read time.
       return undefined;
     }
+  }
+
+  completionCredentialStatus() {
+    return this.completionSecrets?.status() ?? Promise.resolve({ storageReadable: false, globalPresent: false, currentLegacyPresent: false });
   }
 
   async setCompletionApiKey(value: string): Promise<void> {

@@ -10,6 +10,9 @@ import {
 } from "./core/completionProvider.js";
 
 export interface CompletionSetupOptions {
+  evaluate?: () => Promise<void>;
+  clearMemory?: () => Promise<void>;
+  memoryStatus?: () => string;
   settings: () => CompletionSettings;
   writeSettings: (patch: Partial<CompletionSettings>) => Promise<void>;
   apiKey: () => Promise<string | undefined>;
@@ -67,6 +70,12 @@ function step(index: number): string {
 function summarize(settings: CompletionSettings): string {
   if (!settings.endpoint || !settings.model) return "Not configured";
   return `${FORMATS[settings.api].label} · ${settings.model}`;
+}
+
+function endpointLabel(endpoint: string): string {
+  if (!endpoint) return "(not set)";
+  try { const url = new URL(endpoint); url.username = ""; url.password = ""; url.search = ""; url.hash = ""; return url.toString().replace(/\/$/, ""); }
+  catch { return "(invalid endpoint)"; }
 }
 
 /** A base URL that is not a URL produces a completion that silently never
@@ -245,6 +254,11 @@ export async function testCompletionModel(options: CompletionSetupOptions): Prom
 }
 
 export interface CompletionDiagnostics {
+  measurements?: Record<string, number>[];
+  memory?: { mode: string; roots: number; storageFailure: boolean };
+  context?: { prefixChars: number; suffixChars: number; relatedChars: number; sources: Record<string, number>; policy: { samples: number; output: number; examples: number } } | undefined;
+  background?: { cachedFiles: number; roots: number; queries: { running: number; queued: number }[] } | undefined;
+  decisions?: Record<string, number>;
   /** How many times the editor has asked the provider for a completion. */
   invocations: number;
   outcome: string;
@@ -284,10 +298,23 @@ export function diagnosisReport(input: {
   const settings = input.settings;
   lines.push("# Dext inline completion");
   lines.push("");
+  lines.push("Backend: HTTP / Ollama");
+  if (input.report.measurements?.length) {
+    for (const name of new Set(input.report.measurements.flatMap((m) => Object.keys(m)))) {
+      const values = input.report.measurements.map((m) => m[name]).filter((v): v is number => v !== undefined).sort((a, b) => a - b);
+      const unit = name.endsWith("Ms") ? "ms" : "";
+      lines.push(`${name}: p50=${values[Math.ceil(values.length * 0.5) - 1]!.toFixed(1)}${unit} p95=${values[Math.ceil(values.length * 0.95) - 1]!.toFixed(1)}${unit} samples=${values.length}`);
+    }
+    lines.push("Provider return is not the time ghost text was painted. Returned candidates are not measured impressions.");
+  }
+  if (input.report.memory) lines.push(`Adaptation: ${JSON.stringify(input.report.memory)}`);
+  if (input.report.context) lines.push(`Context and frozen policy (statistics only): ${JSON.stringify(input.report.context)}`);
+  if (input.report.background) lines.push(`Background work: ${JSON.stringify(input.report.background)}`);
+  if (input.report.decisions) lines.push(`Candidate decisions: ${JSON.stringify(input.report.decisions)}`);
   const scope = (field: keyof CompletionSettings): string =>
     input.scope ? ` [from ${input.scope(field)} settings]` : "";
   lines.push(`Format:    ${settings.api}${scope("api")}`);
-  lines.push(`Endpoint:  ${settings.endpoint || "(not set)"}${scope("endpoint")}`);
+  lines.push(`Endpoint:  ${endpointLabel(settings.endpoint)}${scope("endpoint")}`);
   lines.push(`Model:     ${settings.model || "(not set)"}${scope("model")}`);
   lines.push(`API key:   ${input.hasKey ? "stored" : "none stored"}`);
   lines.push(`Enabled:   ${settings.enabled}${scope("enabled")}`);
@@ -426,14 +453,6 @@ export async function diagnoseCompletion(
   channel: vscode.OutputChannel
 ): Promise<void> {
   const editor = vscode.window.activeTextEditor;
-  let probe: { completion: string } | { error: string } | undefined;
-  if (editor && options.settings().endpoint && options.settings().model) {
-    try {
-      probe = { completion: await options.probe(editor.document, editor.selection.active) };
-    } catch (error) {
-      probe = { error: error instanceof Error ? error.message : String(error) };
-    }
-  }
   const report = diagnosisReport({
     settings: options.settings(),
     hasKey: Boolean(await options.apiKey()),
@@ -448,7 +467,7 @@ export async function diagnoseCompletion(
       }
       : undefined,
     report: options.report(),
-    probe,
+    probe: undefined,
     scope: options.scope
   });
   channel.clear();
@@ -473,6 +492,12 @@ export async function openCompletionMenu(options: CompletionSetupOptions): Promi
       run: () => configureCompletionModel(options)
     }
   ];
+  if (options.clearMemory) items.push({ label: "Clear this project's completion memory", description: options.memoryStatus?.() ?? "", run: options.clearMemory });
+  if (options.evaluate) items.push({ label: "Evaluate completion quality and latency...", description: "Uses this Profile's model and credentials", run: options.evaluate });
+  items.push({ label: "Completion adaptation...", description: settings.adaptation, run: async () => {
+    const mode = await vscode.window.showQuickPick(["off", "session", "workspace"], { title: "Completion adaptation" });
+    if (mode === "off" || mode === "session" || mode === "workspace") { await options.writeSettings({ adaptation: mode }); options.refresh(); }
+  } });
 
   if (settings.enabled) {
     items.push({

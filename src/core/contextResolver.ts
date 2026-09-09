@@ -91,12 +91,6 @@ export class ContextResolver {
     return toCodeRef(snapshot);
   }
 
-  async resolveReferences(references: readonly ContextReference[]): Promise<CodeRef[]> {
-    const resolved: CodeRef[] = [];
-    for (const reference of references) resolved.push(await this.resolveReference(reference));
-    return resolved;
-  }
-
   async resolveDirectory(reference: DirectoryReference): Promise<DirRef> {
     const directory = await this.host.dir(reference.path);
     if (!directory) throw new Error("Unable to resolve ref.dir.");
