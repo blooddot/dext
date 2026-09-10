@@ -1,10 +1,11 @@
 import { UiInteractionBroker } from "./uiInteractionBroker.js";
+import { readHistoryResponse } from "./historyResponse.js";
 import { publicInteractionState } from "./uiInteractionPresentation.js";
 import { randomBytes } from "node:crypto";
 import { relative, sep } from "node:path";
 import * as vscode from "vscode";
 import { AgentInputBroker } from "./agentInputBroker.js";
-import type { DextApplication } from "./application.js";
+import type { DextApplication, ResourceDraft } from "./application.js";
 import type { AgentInputRequest, AgentStreamEvent, ApplyResult, InputExecutionResponse, McpProcessEvent, PatchResult, UiInteraction } from "./core/types.js";
 import { applyPatchHandler } from "./vscodePatchHost.js";
 import {
@@ -28,8 +29,9 @@ import { planTodoItems, planTodoInstruction, stripPlanTodoProgress } from "./cor
 import { PlanExecution, resumePlanTodos } from "./core/planExecution.js";
 import type { PlanExecutionOutcome } from "./core/types.js";
 import { openDextFileReference, openExternalLink } from "./vscodeContextHost.js";
+import { openBuiltinApiDefinition } from "./vscodeApiDefinitions.js";
 import { webviewRequestSchema } from "./webviewProtocol.js";
-import type { ConversationSummary, WebviewResponse } from "./webviewProtocol.js";
+import type { ConversationSummary, ResourceDraftPreview, WebviewResponse } from "./webviewProtocol.js";
 import type { AgentSelection } from "./agentProfiles.js";
 import { copyHarnessPreset, harnessPresetFile } from "./core/harnessPresets.js";
 import type { DextHistoryRecord, DextHistorySession, DextHistoryStore } from "./historyStore.js";
@@ -76,8 +78,8 @@ function conversationContext(turns: readonly DextHistoryRecord[]): string | unde
   // Keep the branch point (the most recent turns) when the stored history is
   // larger than a provider's practical prompt window.
   for (const turn of [...turns].reverse()) {
-    const responseText = turn.response?.executions
-      .map((execution) => execution.result.kind === "chat"
+    const responseText = readHistoryResponse(turn)?.executions
+      .map((execution) => execution.result.kind === "ask" || execution.result.kind === "plan" || execution.result.kind === "skill" || execution.result.kind === "agent"
         ? execution.result.text
         : JSON.stringify(execution.result))
       .filter(Boolean)
@@ -171,6 +173,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   // turn so two turns in the same conversation cannot resolve each other's
   // files, and so a rejected file simply disappears from the entry.
   private readonly pendingPatches = new Map<string, PatchResult>();
+  private readonly resourceDrafts = new Map<string, ResourceDraft>();
   private readonly uiInputs = new UiInteractionBroker();
   private readonly agentInputs = new AgentInputBroker();
   private fileIndex: { paths: string[]; loadedAt: number } | undefined;
@@ -867,6 +870,28 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         case "executeInput":
           await this.run(request.mode, request.source, request.planPath);
           break;
+        case "openResourceCreator":
+          await this.post({ type: "resourceCreatorOpened" });
+          break;
+        case "draftResource": {
+          const draft = await this.application.draftResource(request.resourceType, request.scope, request.input, {
+            agentSessionId: `resource-create:${request.sessionId}`
+          });
+          const id = randomBytes(12).toString("hex");
+          this.resourceDrafts.set(id, draft);
+          const preview: ResourceDraftPreview = { id, type: draft.type, scope: draft.scope, name: draft.name, content: draft.content };
+          await this.post({ type: "resourceDraft", requestId: request.requestId, draft: preview });
+          break;
+        }
+        case "saveResource": {
+          const draft = this.resourceDrafts.get(request.draftId);
+          if (!draft) throw new Error("The resource draft expired. Generate it again.");
+          const message = await this.application.saveResource(draft);
+          this.resourceDrafts.delete(request.draftId);
+          await this.refresh();
+          await this.post({ type: "resourceSaved", draftId: request.draftId, message });
+          break;
+        }
         case "agentInputResponse":
           this.agentInputs.respond(request.sessionId, request.turnId, request.requestId, request.answers);
           break;
@@ -993,6 +1018,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           }
         case "openFileReference":
           await openDextFileReference(request.reference, this.application.storage);
+          break;
+        case "openBuiltinApiDefinition":
+          await openBuiltinApiDefinition(request.id);
           break;
         case "openExternalLink":
           await openExternalLink(request.url);
@@ -1416,7 +1444,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         if (!planRun || !todoProgress || !planExecution) break;
         const answers: string[] = [];
         for (const [index, execution] of response.executions.entries()) {
-          if (execution.result.kind !== "chat") continue;
+          if (execution.result.kind !== "plan") continue;
           // Some providers only include the final task report in their return value.
           const report: AgentStreamEvent = { phase: "message", id: `plan-round-${planRun.rounds}:final-${index}`, text: execution.result.text, done: true };
           for (const update of todoProgress.consume(report)) {
@@ -1434,7 +1462,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         if (controller.signal.aborted) throw new Error("Plan execution stopped by user.");
         if (outcome) {
           planExecution.planOutcome = outcome;
-          for (const execution of response.executions) if (execution.result.kind === "chat") {
+          for (const execution of response.executions) if (execution.result.kind === "plan") {
             execution.result.planOutcome = outcome;
             if (outcome.status !== "completed") execution.result.text += `\n\nDext plan execution: ${outcome.status}. ${outcome.reason}`;
           }
@@ -1451,9 +1479,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       // at the stored turn after success or cancellation.
       const turn = await this.history.addSuccess(source, events, response, sessionId, mode, turnId, planExecution);
       await this.persistProviderSessions(session);
-      if (mode === "plan" && !executePlan && response.executions.some((execution) => execution.result.kind === "chat" && execution.result.planPath)) {
-        const savedPath = response.executions.find((execution) => execution.result.kind === "chat" && execution.result.planPath)?.result;
-        if (savedPath?.kind === "chat" && savedPath.planPath) {
+      if (mode === "plan" && !executePlan && response.executions.some((execution) => execution.result.kind === "plan" && execution.result.planPath)) {
+        const savedPath = response.executions.find((execution) => execution.result.kind === "plan" && execution.result.planPath)?.result;
+        if (savedPath?.kind === "plan" && savedPath.planPath) {
           session.activePlanPath = savedPath.planPath;
           session.planStatus = "active";
           await this.history.updatePlanContext(sessionId, savedPath.planPath, "active");
@@ -1747,6 +1775,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       <div id="input-heading" class="section-heading collapsible-heading" role="button" tabindex="0" aria-expanded="true">
         <span class="section-heading-label"><i class="section-chevron codicon codicon-chevron-down"></i><span>Input</span></span>
         <div class="section-heading-actions">
+          <button id="create-resource" class="icon-button" type="button" title="Create resource" aria-label="Create resource"><i class="codicon codicon-add"></i></button>
           <button id="input-fullscreen" class="icon-button panel-fullscreen" type="button" title="Maximize Input" aria-label="Maximize Input"><i class="codicon codicon-screen-full"></i></button>
         </div>
       </div>
@@ -1818,6 +1847,26 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           <div id="methods"></div>
         </div>
       </div>
+    </dialog>
+    <dialog id="resource-creator-dialog" class="ui-dialog mcp-assistant-dialog" aria-labelledby="resource-creator-title">
+      <form class="ui-dialog-surface" method="dialog">
+        <header class="methods-dialog-header">
+          <div id="resource-creator-title" class="methods-dialog-title"><i class="codicon codicon-sparkle"></i><span>Create resource</span></div>
+          <button id="resource-creator-close" class="icon-button" type="button" title="Cancel" aria-label="Cancel"><i class="codicon codicon-close"></i></button>
+        </header>
+        <div class="mcp-assistant-body">
+          <div class="mcp-assistant-message">Describe what you want to create. Continue refining the request and Dext keeps the creation conversation open until you confirm the generated draft.</div>
+          <label class="mcp-assistant-label" for="resource-creator-type">Resource</label>
+          <select id="resource-creator-type" class="ui-dialog-input"><option value="api">Custom API</option><option value="mcp">MCP configuration</option><option value="rule">Rule</option><option value="skill">Skill</option></select>
+          <label class="mcp-assistant-label" for="resource-creator-scope">Save to</label>
+          <select id="resource-creator-scope" class="ui-dialog-input"><option value="project">Project</option><option value="global">Dext global storage</option></select>
+          <textarea id="resource-creator-input" class="ui-dialog-input mcp-assistant-input" rows="5" placeholder="Describe the resource, or refine the existing draft"></textarea>
+          <div id="resource-creator-status" class="mcp-assistant-status" aria-live="polite"></div>
+          <label id="resource-creator-preview-label" class="mcp-assistant-label" for="resource-creator-preview" hidden>Preview</label>
+          <textarea id="resource-creator-preview" class="ui-dialog-input mcp-assistant-preview" rows="12" readonly hidden></textarea>
+        </div>
+        <footer class="ui-dialog-actions"><button id="resource-creator-generate" type="button">Generate draft</button><button id="resource-creator-save" type="button" hidden>Confirm and save</button></footer>
+      </form>
     </dialog>
     <dialog id="mcp-dialog" class="methods-dialog" aria-labelledby="mcp-dialog-title">
       <div class="methods-dialog-surface">

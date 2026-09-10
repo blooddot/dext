@@ -29,24 +29,36 @@ if preview.patch:
 - 赋值、仅使用关键字参数的 API 调用、字符串（包括三引号字符串）、数字、布尔值、同类型元素列表、结果字段访问和注释。
 - `if` / `else` 分支，以及 `==`、`!=` 比较。
 - `for name in list:` 顺序循环；列表元素必须类型一致，循环变量仅在循环体中有效。
+- `while` 顺序重试循环；最多执行 100 次。循环中新建变量不会泄漏到外部，已有变量可在保持相同类型的前提下更新。
 - `[call(...) for name in list]` 列表推导式；这是支持并发执行的结构，各分支互不可见，并发上限由 `dext.workflow.maxConcurrency` 控制，结果保持输入顺序。仅支持一个 `for` 子句，不支持 `if` 过滤。
 - `try` / `except` 和可选的 `finally`；某一步失败后可以进入处理分支并继续工作流。`except Exception as name:` 将错误消息绑定为仅在处理分支内可见的字符串。不支持按具体异常类型区分处理，用户停止执行也不会被捕获。
 
-`.dx` API 文件还支持带类型声明的 `main()` 入口、同文件内带类型声明的辅助函数和显式导入。辅助函数仅在当前文件可见；不支持嵌套定义或递归调用。输入工作流不支持自定义函数或类、`while`、重复赋值、`eval`、`exec` 或任意系统、文件、网络 API；相关操作需通过 Dext 提供的 API 完成。除列表推导式外，执行按顺序进行；未选中的步骤及因上游失败未执行的后续步骤会标记为 `skipped`。
+`.dx` API 文件还支持带类型声明的 `main()` 入口、同文件内带类型声明的辅助函数、显式导入和有上限的 `while` 重试循环。辅助函数仅在当前文件可见；不支持嵌套定义或递归调用。输入工作流不支持自定义函数或类、无限制的重复赋值、`eval`、`exec` 或任意系统、文件、网络 API；相关操作需通过 Dext 提供的 API 完成。循环仅可更新同类型的已有变量。除列表推导式外，执行按顺序进行；未选中的步骤及因上游失败未执行的后续步骤会标记为 `skipped`。
 
 `ask` 和 `agent` 接受普通字符串。文件选区和附件会以可读的 `@workspace/path#Lstart,end-Lend,end` 标记插入；编辑器、Output 和 History 将其显示为引用块，复制和执行时保留可读标记。Dext 不把文件内容直接展开进提示词。
 
 ## 内置 API
 
-- `create(type="api"|"mcp"|"rule"|"skill", input, scope="project"|"global") -> ChatResult`：根据描述或 URL 创建资源，在 Code 模式中使用。
-- `ask(input, skills?, rules?, workspace?) -> ChatResult`：只读解释和分析。
-- `plan(input, skills?, rules?, workspace?) -> ChatResult`：创建、维护和执行实施计划。
+- 通过侧栏的“Create resource”按钮创建 API、MCP 配置、规则和 Skill；它会保持专用创建对话、预览生成文件，并在确认后写入。
+- `ask(input, skills?, rules?, workspace?) -> AskResult`：只读解释和分析。
+- `plan(input, skills?, rules?, workspace?) -> PlanResult`：创建、维护和执行实施计划。
 - `agent(input, apply=true, skills?, rules?, workspace?) -> AgentResult`：执行持续性任务。
 - `apply(result) -> ApplyResult`：应用 `AgentResult` 中存在的补丁。
-- `terminal(command, cwd=".", timeout_ms=120000) -> TerminalResult`：运行经确认的终端命令。
-- `skill(skill, input, workspace?) -> ChatResult`：使用指定 Skill 执行任务。
+- `terminal(command, cwd=".", env={}, timeout_ms=120000) -> TerminalResult`：在平台 Shell 中运行任意终端命令；`env` 可传入仅对此命令有效的字符串环境变量。
+- `skill(skill, input, workspace?) -> SkillResult`：使用指定 Skill 执行任务。
 - `mcp.<server>.<tool>(...)`：由 MCP 清单生成的类型化工具 API。
 - `print(text, label?) -> PrintResult`：在 Dext 中展示结果。
+
+顶级内置 API 仅限上述列表。交互能力位于 `ui.*`；确认框或表单可传
+`on_cancel="abort"`，在用户取消时终止当前自定义 API，无需额外的
+`workflow.*` 控制 API。Node 标准库能力仅通过白名单 `node.*` 提供：
+`node.url`、`node.path`、`node.querystring`、可安全映射的 `node.util`、
+受工作区边界限制的 `node.fs` 与 `node.http.request`。函数名保持 Node
+原生 camelCase。文件和 HTTP 调用需要受信任工作区；命令仍使用 `terminal`。
+
+`node:crypto`、`node:zlib`、`node:timers/promises` 与包含环境信息的
+`node:os` 仅作为后续候选模块记录，当前不能调用。原始进程、socket、流、
+worker、VM、模块加载和 HTTP 服务监听能力不向 `.dx` 开放。
 - UI 交互：`ui.select`、`ui.radio`、`ui.checkbox`、`ui.input`、`ui.confirm`、`ui.alert`、`ui.form`。
 
 上面的 `?` 表示可选参数，是文档记法。
@@ -92,7 +104,7 @@ result = agent(input="实现所需的修改")
 
 选中工作区代码并短暂停顿后，活动光标附近会出现 **Add to Dext** 悬浮入口。浮层覆盖在编辑器上，不插入额外行、不挤动代码，也不会抢走键盘焦点；点击即可把该段代码的位置引用加入 Input。浮层的样式和位置由 VS Code 控制，可能与符号提示共用同一个浮层。在设置中切换 `dext.selectionActions.enabled` 可立即显示或隐藏该入口。正文、文件列表和文件标签的右键入口统一为 **Add to Dext**，不受选区入口开关影响。
 
-在资源管理器、“打开的编辑器”列表、文件标签或没有文字选区的文件正文中按 Ctrl+C（macOS 为 Cmd+C），再到 Dext Input 按 Ctrl+V，即可插入原文件路径的引用。支持多文件和图片文件，不会生成附件。Ctrl+Shift+V 按原文粘贴路径。将 `dext.copyFilePathOnCopy` 设为 `false`，可恢复资源管理器原生的文件复制和编辑器的整行复制快捷键。
+在资源管理器、“打开的编辑器”列表、文件标签或没有文字选区的文件正文中按 Ctrl+C（macOS 为 Cmd+C），再到 Dext Input 按 Ctrl+V，即可插入原文件路径的引用。支持多文件和图片文件，不会生成附件。编辑器悬浮提示显示时，Ctrl+C 保留 VS Code 原本的内容复制行为。Ctrl+Shift+V 按原文粘贴路径。将 `dext.copyFilePathOnCopy` 设为 `false`，可恢复资源管理器原生的文件复制和编辑器的整行复制快捷键。
 
 编辑器使用 CodeMirror 的 Python 语法能力提供高亮、缩进和括号匹配，Dext 在此基础上提供 API、关键字参数及结果字段补全、参数提示、悬停文档和编译诊断。
 
@@ -106,7 +118,7 @@ result = agent(input="实现所需的修改")
 # .dext/api/team/analyze.dx -> team.analyze
 from common import ask
 
-def main(input: str) -> ChatResult:
+def main(input: str) -> AskResult:
     return ask(input=input)
 ```
 
@@ -128,7 +140,7 @@ def main() -> PrintResult:
     return report(checked=checked)
 ```
 
-辅助函数可以放在 `main()` 前后，也可以调用其他辅助函数或已导入的 API。每次调用都有独立的参数和局部变量。参数必须声明类型，通过命名参数传入；有字面量默认值的参数可以省略。每个函数都要声明并返回 Dext 结果，例如 `ChatResult`、`AgentResult`、`TerminalResult` 或 `PrintResult`；目前不支持直接返回字符串、布尔值或列表，可通过 `return print(text=value)` 返回摘要或集合。
+辅助函数可以放在 `main()` 前后，也可以调用其他辅助函数或已导入的 API。每次调用都有独立的参数和局部变量。参数必须声明类型，通过命名参数传入；有字面量默认值的参数可以省略。每个函数都要声明并返回 Dext 结果，例如 `AskResult`、`PlanResult`、`SkillResult`、`AgentResult`、`TerminalResult` 或 `PrintResult`；目前不支持直接返回字符串、布尔值或列表，可通过 `return print(text=value)` 返回摘要或集合。
 
 `if`、`try`、`except` 中均可提前 `return`；除取消执行外，返回前会先执行 `finally`。实际执行到函数末尾却没有返回时，会报告运行错误。只有 `main()` 对外导出，辅助函数不能被其他文件导入；递归调用、与 API 或导入名称冲突的辅助函数会被拒绝。`.dx` 编辑器提供辅助函数调用、参数及结果字段补全，以及签名和悬浮提示。
 

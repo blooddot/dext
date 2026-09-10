@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { join } from "node:path";
 import { BUILTIN_METHODS } from "../src/core/builtins.js";
 import { loadCustomApis } from "../src/core/customApi.js";
+import { parseMcpManifest } from "../src/core/mcpManifest.js";
 import { ContextResolver, type ContextHost } from "../src/core/contextResolver.js";
 import { MethodRegistry } from "../src/core/registry.js";
 import { DextRuntime } from "../src/core/runtime.js";
@@ -10,9 +11,9 @@ import { ExecutionCancelledError } from "../src/core/executionErrors.js";
 import type { UiInteraction } from "../src/core/types.js";
 
 const files = new Map([
-  ["C:/workspace/.dext/api/team/explain.dx", `def main(input: str) -> ChatResult:\n    return ask(input=input)\n`],
-  ["C:/workspace/.dext/api/team/review.dx", `import team.explain as describe\n\ndef main(input: str) -> ChatResult:\n    return describe(input=input)\n`],
-  ["C:/workspace/.dext/api/team/namespace.dx", `import team\n\ndef main(input: str) -> ChatResult:\n    return team.explain(input=input)\n`]
+  ["C:/workspace/.dext/api/team/explain.dx", `def main(input: str) -> AskResult:\n    return ask(input=input)\n`],
+  ["C:/workspace/.dext/api/team/review.dx", `import team.explain as describe\n\ndef main(input: str) -> AskResult:\n    return describe(input=input)\n`],
+  ["C:/workspace/.dext/api/team/namespace.dx", `import team\n\ndef main(input: str) -> AskResult:\n    return team.explain(input=input)\n`]
 ]);
 
 // A workspace defines its own multi-phase APIs; this fixture stands in for one
@@ -77,6 +78,58 @@ describe("custom .dx APIs", () => {
     return { registry, loaded, runtime, execute };
   }
 
+  it("loads a task fix flow with typed task and activity MCP calls from self-contained fixtures", async () => {
+    const registry = new MethodRegistry();
+    registry.registerMany(BUILTIN_METHODS, "builtin");
+    // Synthetic contracts exercise loading and field types without local config,
+    // credentials, a running server, or a particular project's custom workflow.
+    const inputSchema = {
+      type: "object", properties: { task_id: { type: "string" } }, required: ["task_id"]
+    };
+    const manifest = parseMcpManifest(JSON.stringify({
+      name: "task-tracker", transport: "stdio", command: "fixture-mcp",
+      tools: [
+        {
+          name: "get_task", inputSchema,
+          outputSchema: {
+            type: "object", properties: { id: { type: "string" }, content: { type: "string" } },
+            required: ["id", "content"]
+          }
+        },
+        {
+          name: "list_activities", inputSchema,
+          outputSchema: {
+            type: "object", properties: {
+              items: { type: "array", items: {
+                type: "object", properties: { content: { type: "string" } }, required: ["content"]
+              } }
+            }, required: ["items"]
+          }
+        }
+      ]
+    }), "fixture-task-tracker.jsonc");
+    expect(manifest.diagnostics).toEqual([]);
+    registry.registerMany(manifest.methods, "project");
+    const source = `def main(task_id: str) -> AgentResult:
+    task = mcp.task-tracker.get_task(task_id=task_id)
+    activities = mcp.task-tracker.list_activities(task_id=task.id)
+    for activity in activities.items:
+        print(text=activity.content)
+    return agent(input=task.content, apply=False)
+`;
+    const root = "C:/workspace/.dext/api";
+    const apiPath = `${root}/dev/fix.dx`;
+    const loaded = await loadCustomApis(
+      true,
+      [root],
+      async () => [apiPath],
+      async () => source,
+      registry
+    );
+    expect(loaded.diagnostics).toEqual([]);
+    expect(loaded.plans.has("dev.fix")).toBe(true);
+  });
+
   it("supports concrete UI result annotations in custom APIs", async () => {
     const { loaded, runtime } = await loadSources({ picker: 'def main() -> UiRadioResult:\n    return ui.radio(label="Pick", options=["a", "b"])\n' });
     expect(loaded.diagnostics).toEqual([]);
@@ -97,7 +150,7 @@ describe("custom .dx APIs", () => {
 
   it("runs helpers before and after main with defaults, typed results and isolated scopes", async () => {
     const { loaded, registry, execute } = await loadSources({
-      develop: `def summarize(value: ChatResult, label: str = "summary") -> PrintResult:
+      develop: `def summarize(value: AskResult, label: str = "summary") -> PrintResult:
     return print(text=value.text, label=label)
 
 def main(input: str) -> PrintResult:
@@ -302,8 +355,8 @@ def summarize(value: AgentResult) -> PrintResult:
     const registry = new MethodRegistry();
     registry.registerMany(BUILTIN_METHODS, "builtin");
     const shared = new Map([
-      ["D:/shared/dext-apis/team/explain.dx", `def main(input: str) -> ChatResult:\n    return ask(input=input)\n`],
-      ["D:/shared/dext-apis/audit.dx", `def main(input: str) -> ChatResult:\n    return ask(input=input)\n`]
+      ["D:/shared/dext-apis/team/explain.dx", `def main(input: str) -> AskResult:\n    return ask(input=input)\n`],
+      ["D:/shared/dext-apis/audit.dx", `def main(input: str) -> AskResult:\n    return ask(input=input)\n`]
     ]);
     const result = await loadCustomApis(
       true,
@@ -337,7 +390,7 @@ def summarize(value: AgentResult) -> PrintResult:
       source: "code",
       arguments: [{ name: "input", value: "explain this" }]
     });
-    expect(response.result).toMatchObject({ kind: "chat", text: "explain this" });
+    expect(response.result).toMatchObject({ kind: "ask", text: "explain this" });
   });
 
   it("registers a restricted TypedDict result as a JSON schema contract", async () => {

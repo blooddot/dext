@@ -7,7 +7,7 @@ const method = (id: string, source: "builtin" | "project" = "builtin"): SidebarS
   title: id,
   description: id,
   input: [],
-  output: { kind: "chat" },
+  output: { kind: "ask" },
   kind: "command",
   source
 });

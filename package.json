@@ -322,13 +322,13 @@
         "command": "copyFilePath",
         "key": "ctrl+c",
         "mac": "cmd+c",
-        "when": "config.dext.copyFilePathOnCopy && !inputFocus && (filesExplorerFocus || openEditorsFocus || (editorAreaFocus && resourceScheme != untitled))"
+        "when": "config.dext.copyFilePathOnCopy && !editorHoverVisible && !inputFocus && (filesExplorerFocus || openEditorsFocus || (editorAreaFocus && resourceScheme != untitled))"
       },
       {
         "command": "copyFilePath",
         "key": "ctrl+c",
         "mac": "cmd+c",
-        "when": "config.dext.copyFilePathOnCopy && editorTextFocus && !editorHasSelection && resourceScheme != untitled"
+        "when": "config.dext.copyFilePathOnCopy && !editorHoverVisible && editorTextFocus && !editorHasSelection && resourceScheme != untitled"
       },
       {
         "command": "dext.triggerSuggest",
@@ -848,7 +848,7 @@
         "dext.copyFilePathOnCopy": {
           "type": "boolean",
           "default": true,
-          "description": "Copy file paths with Ctrl+C or Cmd+C in Explorer, Open Editors, editor tabs, or a file editor without a text selection. Paste into Dext Input to insert references to the original files, including images. This replaces Explorer's file copy and the editor's copy-line behavior; disable it to restore those native shortcuts."
+          "description": "Copy file paths with Ctrl+C or Cmd+C in Explorer, Open Editors, editor tabs, or a file editor without a text selection. Paste into Dext Input to insert references to the original files, including images. A visible editor hover keeps VS Code's content-copy shortcut. This replaces Explorer's file copy and the editor's copy-line behavior; disable it to restore those native shortcuts."
         },
         "dext.captureSelectionOnCopy": {
           "type": "boolean",
@@ -1108,7 +1108,8 @@
     }
   },
   "scripts": {
-    "build": "node esbuild.mjs",
+    "generate:node-builtins": "node scripts/generateNodeBuiltinCatalog.mjs",
+    "build": "npm run generate:node-builtins && node esbuild.mjs",
     "test:build-assets": "node scripts/assertWebviewAssets.mjs",
     "watch": "node esbuild.mjs --watch",
     "lint": "eslint src test",
@@ -1116,7 +1117,7 @@
     "test:host": "npm run build && node scripts/runExtensionTest.mjs",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "check": "npm run lint && npm run typecheck && npm run test && npm run build && npm run test:build-assets",
+    "check": "npm run generate:node-builtins -- --check && npm run lint && npm run typecheck && npm run test && npm run build && npm run test:build-assets",
     "package": "node -e \"require('node:fs').mkdirSync('release', { recursive: true })\" && vsce package --out release/",
     "vscode:prepublish": "npm run check"
   },

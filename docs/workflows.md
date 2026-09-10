@@ -24,7 +24,7 @@ if preview.patch:
     applied = apply(result=preview)
 ```
 
-The input workflow language supports assignment, keyword-only API calls, strings (including triple-quoted strings), numbers, booleans, homogeneous lists, result member access, comments, `if`/`else` with `==` or `!=`, and `for name in list:` over a homogeneous list. The loop variable takes the list's element type and only exists inside the body.
+The input workflow language supports assignment, keyword-only API calls, strings (including triple-quoted strings), numbers, booleans, homogeneous lists, result member access, comments, `if`/`else` with `==` or `!=`, `for name in list:` over a homogeneous list, and `while` for sequential retry flows. A `while` loop is capped at 100 iterations; bindings created inside it do not escape, while existing bindings may be updated with the same type.
 
 A list comprehension, `[call(...) for name in list]`, is the one construct that runs concurrently: its branches cannot see one another, so Dext fans them out up to `dext.workflow.maxConcurrency` and collects the results in list order. One `for` clause, no `if` filter.
 
@@ -32,21 +32,35 @@ A list comprehension, `[call(...) for name in list]`, is the one construct that 
 
 `ask` and `agent` accept ordinary strings. File selections and attachments can be inserted as readable `@workspace/path#Lstart,end-Lend,end` tokens; the editor, Output, and History render that token as an atomic Chip while copy and execution retain the same readable string. Dext never inlines file contents into the prompt.
 
-`.dx` API files additionally support a typed `main()` entry point, file-private typed helper functions, and explicit imports. Function definitions in the input composer, nested functions, recursive calls, classes, `while`, reassignment, `eval`, `exec`, and system/file/network APIs are rejected.
+`.dx` API files additionally support a typed `main()` entry point, file-private typed helper functions, explicit imports, and bounded `while` retry loops. Function definitions in the input composer, nested functions, recursive calls, classes, unrestricted reassignment, `eval`, `exec`, and system/file/network APIs are rejected. A loop may only update an existing variable when its type stays unchanged.
 
 Execution is sequential apart from comprehension fan-out; unselected and downstream steps are reported as `skipped`.
 
 ## Built-in API
 
-- `create(type="api"|"mcp"|"rule"|"skill", input, scope="project"|"global") -> ChatResult` — create a resource from a description or URL (use in Code mode)
-- `ask(input, skills?, rules?, workspace?) -> ChatResult`
-- `plan(input, skills?, rules?, workspace?) -> ChatResult`
+- Create APIs, MCP configurations, rules, and skills from the **Create resource** button in the sidebar. It keeps a dedicated creation conversation open, previews the generated file, and writes only after confirmation.
+- `ask(input, skills?, rules?, workspace?) -> AskResult`
+- `plan(input, skills?, rules?, workspace?) -> PlanResult`
 - `agent(input, apply=true, skills?, rules?, workspace?) -> AgentResult`
 - `apply(result) -> ApplyResult`
-- `terminal(command, cwd=".", timeout_ms=120000) -> TerminalResult`
-- `skill(skill, input, workspace?) -> ChatResult`
+- `terminal(command, cwd=".", env={}, timeout_ms=120000) -> TerminalResult` — runs an arbitrary command in the platform shell. `env` supplies string environment variables to that command.
+- `skill(skill, input, workspace?) -> SkillResult`
 - MCP tools are exposed as typed `mcp.<server>.<tool>(...)` APIs generated from manifests.
 - `print(text, label?) -> PrintResult`
+
+Only these top-level APIs are built in. UI interactions live under `ui.*`; a
+confirmation or form can use `on_cancel="abort"` to cancel the current custom
+API without a separate workflow-control API. Node standard-library access is
+provided only under the whitelisted `node.*` namespace: `node.url`,
+`node.path`, `node.querystring`, compatible `node.util` exports, workspace
+bounded `node.fs`, and `node.http.request`. Node function names retain their
+native camelCase spelling. File and HTTP calls require a trusted workspace;
+commands continue to use `terminal`.
+
+`node:crypto`, `node:zlib`, `node:timers/promises`, and environment-sensitive
+`node:os` calls are catalogued as future candidates, not callable APIs. Raw
+process, socket, stream, worker, VM, module-loader, and server-listening APIs
+remain outside `.dx`.
 - UI interactions: `ui.select`, `ui.radio`, `ui.checkbox`, `ui.input`, `ui.confirm`, `ui.alert`, `ui.form`.
 
 Project APIs live as `.dx` files under `.dext/api/`, and their directory becomes
@@ -102,7 +116,7 @@ Copying a VS Code selection or choosing a file or folder inserts a readable `@pa
 
 Selecting workspace code shows **Add to Dext** in a floating editor hover near the active selection cursor after a brief pause. The hover overlays the editor without adding a row or shifting code, and keeps keyboard focus in the editor. Click it to add the selected file range to Input. VS Code controls the hover's appearance and placement; symbol information may share the same hover. Toggle `dext.selectionActions.enabled` in Settings to show or hide this action immediately. Editor, file list, and file tab context menus use the same **Add to Dext** label and remain available when the selection action is disabled.
 
-Press Ctrl+C (Cmd+C on macOS) on files in Explorer/Open Editors, an editor tab, or inside a file with no text selected, then Ctrl+V in Dext Input to insert references to the original paths. Multiple files and image files are supported without creating attachments. Ctrl+Shift+V pastes the path text as-is. Set `dext.copyFilePathOnCopy` to `false` to restore Explorer's native file copy and the editor's copy-line shortcut.
+Press Ctrl+C (Cmd+C on macOS) on files in Explorer/Open Editors, an editor tab, or inside a file with no text selected, then Ctrl+V in Dext Input to insert references to the original paths. Multiple files and image files are supported without creating attachments. A visible editor hover keeps VS Code's normal content-copy shortcut. Ctrl+Shift+V pastes the path text as-is. Set `dext.copyFilePathOnCopy` to `false` to restore Explorer's native file copy and the editor's copy-line shortcut.
 
 The editor uses CodeMirror's Python grammar for syntax highlighting, indentation, bracket matching, and native editor behavior. Dext adds API completion, keyword and result-field completion, signature help, hover documentation, exact compiler diagnostics, and a lint gutter.
 
@@ -114,7 +128,7 @@ Custom APIs live in `.dext/api/**/*.dx`. Directory segments become namespaces an
 # .dext/api/team/analyze.dx -> team.analyze
 from common import ask
 
-def main(input: str) -> ChatResult:
+def main(input: str) -> AskResult:
     return ask(input=input)
 ```
 
@@ -143,7 +157,7 @@ Helpers may appear before or after `main()` and call other helpers or imported
 APIs. Each call has its own parameters and local variables. Parameters require
 type annotations; calls use keyword arguments and may omit parameters with
 literal defaults. Every function declares and returns a Dext result, such as
-`ChatResult`, `AgentResult`, `TerminalResult`, or `PrintResult`; returning a bare
+`AskResult`, `PlanResult`, `SkillResult`, `AgentResult`, `TerminalResult`, or `PrintResult`; returning a bare
 string, boolean, or list is not supported. Use `return print(text=value)` to
 return a summary or collection. `return` works inside `if`, `try`, and `except`;
 `finally` runs before the return completes, except on cancellation. A path that

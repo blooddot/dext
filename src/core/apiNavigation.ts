@@ -1,6 +1,8 @@
 import { parser } from "@lezer/python";
 import type { SyntaxNode } from "@lezer/common";
 import { parseWorkflowImports } from "./workflow.js";
+import { builtinTypeDefinition } from "./builtinTypeDefinitions.js";
+import { isBuiltinApiTarget } from "./builtinApiDefinitions.js";
 
 export interface DefinitionRange {
   from: number;
@@ -15,6 +17,18 @@ export interface ApiDefinitionTarget {
   /** Absent for a function in the current document. */
   apiId?: string;
   name: string;
+}
+
+export interface BuiltinTypeTarget {
+  originFrom: number;
+  originTo: number;
+  name: string;
+}
+
+export interface BuiltinApiTarget {
+  originFrom: number;
+  originTo: number;
+  id: string;
 }
 
 function children(node: SyntaxNode): SyntaxNode[] {
@@ -65,4 +79,58 @@ export function apiDefinitionTarget(source: string, cursor: number): ApiDefiniti
   const [head, ...tail] = name.split(".");
   const imported = imports.get(head!);
   return imported ? { ...origin, apiId: [imported, ...tail].join("."), name: "main" } : undefined;
+}
+
+/** Resolve a known built-in type only when it is used as a Python type annotation. */
+export function builtinTypeDefinitionTarget(source: string, cursor: number): BuiltinTypeTarget | undefined {
+  const root = parser.parse(source).topNode;
+  const token = [root.resolveInner(cursor, -1), root.resolveInner(cursor, 1)]
+    .find((node) => ["VariableName", "PropertyName"].includes(node.name) && node.from <= cursor && cursor <= node.to);
+  if (!token) return undefined;
+  for (let candidate: SyntaxNode | null = token; candidate && candidate.name !== "TypeDef"; candidate = candidate.parent) {
+    const name = source.slice(candidate.from, candidate.to).replace(/\s+/g, "");
+    if (builtinTypeDefinition(name)) return { originFrom: candidate.from, originTo: candidate.to, name };
+  }
+  return undefined;
+}
+
+/** Resolve a built-in type name in the generated type document. */
+export function builtinTypeReferenceTarget(source: string, cursor: number): BuiltinTypeTarget | undefined {
+  const match = [...source.matchAll(/[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*/g)].find((candidate) => {
+    const from = candidate.index ?? 0;
+    return from <= cursor && cursor <= from + candidate[0].length;
+  });
+  if (!match) return undefined;
+  const from = match.index ?? 0;
+  const direct = match[0];
+  if (builtinTypeDefinition(direct)) return { originFrom: from, originTo: from + direct.length, name: direct };
+
+  // Namespaced types are rendered as ordinary nested Python classes. Recover
+  // their qualified Dext type name from the generated marker above the class.
+  const lineStart = source.lastIndexOf("\n", from - 1) + 1;
+  const lineEnd = source.indexOf("\n", from);
+  const line = source.slice(lineStart, lineEnd < 0 ? source.length : lineEnd);
+  if (new RegExp(`^\\s*class\\s+${direct}\\b`).test(line)) {
+    const type = [...source.slice(0, lineStart).matchAll(/^\s*# Type: ([A-Za-z][A-Za-z0-9_.-]*)$/gm)].at(-1)?.[1];
+    if (type && builtinTypeDefinition(type)) return { originFrom: from, originTo: from + direct.length, name: type };
+  }
+  return undefined;
+}
+
+/** Resolve the API or namespace segment under the cursor, never prompts/comments. */
+export function builtinApiDefinitionTarget(source: string, cursor: number): BuiltinApiTarget | undefined {
+  const root = parser.parse(source).topNode;
+  const token = [root.resolveInner(cursor, -1), root.resolveInner(cursor, 1)]
+    .find((node) => ["VariableName", "PropertyName"].includes(node.name) && node.from <= cursor && cursor <= node.to);
+  if (!token) return undefined;
+  let callee = token;
+  while (callee.parent?.name === "MemberExpression") callee = callee.parent;
+  if (callee.parent?.name !== "CallExpression" || callee.parent.firstChild?.from !== callee.from) return undefined;
+  const segments = [...source.slice(callee.from, callee.to).matchAll(/[A-Za-z_]\w*/g)]
+    .map((match) => ({ name: match[0], from: callee.from + (match.index ?? 0), to: callee.from + (match.index ?? 0) + match[0].length }));
+  const index = segments.findIndex((segment) => segment.from <= cursor && cursor <= segment.to);
+  if (index < 0) return undefined;
+  const segment = segments[index]!;
+  const id = segments.slice(0, index + 1).map((part) => part.name).join(".");
+  return isBuiltinApiTarget(id) ? { originFrom: segment.from, originTo: segment.to, id } : undefined;
 }

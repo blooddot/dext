@@ -21,29 +21,11 @@ const codeRefResultSchema = z.object({
   content: z.string()
 }).strict();
 
-export const textResultSchema = z.object({ kind: z.literal("text"), text: z.string() });
-export const codeResultSchema = z.object({
-  kind: z.literal("code"),
-  code: z.string(),
-  language: z.string(),
-  title: z.string().optional()
-});
-export const reviewResultSchema = z.object({
-  kind: z.literal("review"),
-  status: z.enum(["pass", "warning", "fail"]),
-  summary: z.string(),
-  findings: z.array(
-    z.object({
-      severity: z.enum(["error", "warning", "info"]),
-      message: z.string(),
-      uri: z.string().optional(),
-      line: z.number().int().nonnegative().optional()
-    })
-  )
-});
 /** `planPath` is deliberately absent: Dext attaches it after a Plan turn, so
  * advertising it in the contract would only invite an agent to invent one. */
-export const chatResultSchema = z.object({ kind: z.literal("chat"), text: z.string() });
+export const askResultSchema = z.object({ kind: z.literal("ask"), text: z.string() });
+export const planResultSchema = z.object({ kind: z.literal("plan"), text: z.string() });
+export const skillResultSchema = z.object({ kind: z.literal("skill"), text: z.string() });
 export const agentResultSchema = z.object({
   kind: z.literal("agent"),
   text: z.string(),
@@ -51,17 +33,6 @@ export const agentResultSchema = z.object({
   patch: z.lazy(() => patchResultSchema).optional(),
   files: z.array(codeRefResultSchema).optional()
 }).strict();
-export const explainResultSchema = z.object({
-  kind: z.literal("explain"),
-  text: z.string(),
-  files: z.array(codeRefResultSchema)
-});
-export const editResultSchema = z.object({
-  kind: z.literal("edit"),
-  summary: z.string(),
-  patch: z.lazy(() => patchResultSchema),
-  files: z.array(codeRefResultSchema)
-});
 export const applyResultSchema = z.object({
   kind: z.literal("apply"),
   status: z.enum(["applied", "unchanged", "conflict"]),
@@ -101,17 +72,7 @@ export const mcpRawResultSchema = z.object({
   content: z.string().optional(),
   structured: z.record(z.string(), z.unknown()).optional()
 }).strict();
-export const planResultSchema = z.object({
-  kind: z.literal("plan"),
-  title: z.string(),
-  steps: z.array(
-    z.object({
-      title: z.string(),
-      detail: z.string().optional(),
-      status: z.enum(["pending", "ready"])
-    })
-  )
-});
+export const nodeResultSchema = z.object({ kind: z.literal("node") }).passthrough();
 export const patchResultSchema = z.object({
   kind: z.literal("patch"),
   title: z.string(),
@@ -128,19 +89,16 @@ export const patchResultSchema = z.object({
 });
 
 const builtinDextResultSchema = z.discriminatedUnion("kind", [
-  chatResultSchema,
-  agentResultSchema,
-  explainResultSchema,
-  editResultSchema,
-  textResultSchema,
-  codeResultSchema,
-  reviewResultSchema,
+  askResultSchema,
   planResultSchema,
+  agentResultSchema,
   patchResultSchema,
   applyResultSchema,
   terminalResultSchema,
   printResultSchema,
+  skillResultSchema,
   uiResultSchema,
+  nodeResultSchema,
   mcpRawResultSchema
 ]);
 

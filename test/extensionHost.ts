@@ -114,7 +114,7 @@ export async function run(): Promise<void> {
   await app.reload();
   const response = await app.executeInput('ask(input=f"Explain {ref.file(\'package.json#L1,1-L1,2\')}")');
   const snapshot = response.executions[0];
-  assert.equal(snapshot?.result.kind, "chat", "An inline file reference resolves for ask.");
+  assert.equal(snapshot?.result.kind, "ask", "An inline file reference resolves for ask.");
   await openWorkspaceFileReference("package.json#L1,1-L1,2");
   assert.equal(
     vscode.window.activeTextEditor?.selection.isEqual(new vscode.Selection(0, 0, 0, 1)),

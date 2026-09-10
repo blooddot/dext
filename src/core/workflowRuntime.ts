@@ -22,6 +22,7 @@ type ExecutionFlow = true | false | { kind: "returned"; value: RuntimeValue };
  * process, so the default stays low enough that a fan-out over a large list does
  * not exhaust the machine. */
 export const DEFAULT_MAX_CONCURRENCY = 4;
+export const MAX_WHILE_ITERATIONS = 100;
 
 export class WorkflowRuntime {
   private maxConcurrency = DEFAULT_MAX_CONCURRENCY;
@@ -119,6 +120,14 @@ export class WorkflowRuntime {
       }
       if (statement.kind === "for") {
         const flow = await this.executeLoop(statement, environment, steps, metadata, supplementalContext);
+        if (flow !== true) {
+          this.markSkipped(statements.slice(index + 1), steps);
+          return flow;
+        }
+        continue;
+      }
+      if (statement.kind === "while") {
+        const flow = await this.executeWhile(statement, environment, steps, metadata, supplementalContext);
         if (flow !== true) {
           this.markSkipped(statements.slice(index + 1), steps);
           return flow;
@@ -312,6 +321,38 @@ export class WorkflowRuntime {
       else environment.delete(statement.variable);
     }
     return true;
+  }
+
+  private async executeWhile(
+    statement: Extract<WorkflowStatement, { kind: "while" }>,
+    environment: Map<string, RuntimeValue>,
+    steps: WorkflowStepResponse[],
+    metadata: Readonly<ExecutionMetadata>,
+    supplementalContext: readonly CodeRef[]
+  ): Promise<ExecutionFlow> {
+    const before = new Map(environment);
+    try {
+      for (let iteration = 0; iteration < MAX_WHILE_ITERATIONS; iteration += 1) {
+        let condition: boolean;
+        try {
+          if (metadata.signal?.aborted) throw new ExecutionCancelledError();
+          condition = this.evaluateCondition(statement.condition, environment);
+        } catch (error) {
+          steps.push({ method: "while", state: error instanceof ExecutionCancelledError ? "cancelled" : "failed", error: error instanceof Error ? error.message : String(error) });
+          this.markSkipped(statement.body, steps);
+          return false;
+        }
+        if (!condition) return true;
+        const flow = await this.executeStatements(statement.body, environment, steps, metadata, supplementalContext);
+        if (flow !== true) return flow;
+      }
+      steps.push({ method: "while", state: "failed", error: `while exceeded the ${MAX_WHILE_ITERATIONS} iteration limit.` });
+      this.markSkipped(statement.body, steps);
+      return false;
+    } finally {
+      environment.clear();
+      for (const entry of before) environment.set(...entry);
+    }
   }
 
   private evaluate(expression: WorkflowExpression, environment: Map<string, RuntimeValue>): RuntimeValue {
@@ -530,13 +571,15 @@ export class WorkflowRuntime {
         steps.push({ assignment: statement.assignment, method: "=", state: "skipped" });
       } else if (statement.kind === "for") {
         this.markSkipped(statement.body, steps);
+      } else if (statement.kind === "while") {
+        this.markSkipped(statement.body, steps);
       } else if (statement.kind === "try") {
         this.markSkipped(statement.body, steps);
         this.markSkipped(statement.handler, steps);
         this.markSkipped(statement.finalizer, steps);
       } else if (statement.kind === "return") {
         steps.push({ method: "return", state: "skipped" });
-      } else {
+      } else if (statement.kind === "if") {
         this.markSkipped(statement.consequent, steps);
         this.markSkipped(statement.alternate, steps);
       }

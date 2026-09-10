@@ -10,6 +10,7 @@ import type { MethodRegistry } from "./registry.js";
 import type { AgentResult, CustomApiPlan, DirRef, McpRawResult } from "./types.js";
 import { WorkflowRuntime } from "./workflowRuntime.js";
 import { ExecutionCancelledError } from "./executionErrors.js";
+import { executeNodeBuiltin } from "./nodeBuiltin.js";
 import { patchResultFrom } from "./patch.js";
 import type { AgentPermission, AgentProfile, AgentProvider, AgentSelection, WritableAgentPermission } from "../agentProfiles.js";
 import { DefaultAgentRunner } from "./agentRouter.js";
@@ -28,19 +29,6 @@ import type {
 export type DeterministicHandler = (
   invocation: ResolvedInvocation
 ) => DextResult | Promise<DextResult>;
-
-function displayValue(value: unknown): string {
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  if (Array.isArray(value)) {
-    return value.map(displayValue).join(", ");
-  }
-  if (typeof value === "object" && value !== null && "uri" in value && typeof value.uri === "string") {
-    return value.uri;
-  }
-  return JSON.stringify(value) ?? "";
-}
 
 /** Print keeps structured values unambiguous so the output can be copied back
  * into a workflow or inspected as data. URI-backed references remain compact. */
@@ -219,8 +207,8 @@ export function usesAgentRunner(methodId: string): boolean {
 }
 
 export const DEFAULT_HANDLERS: Readonly<Record<string, DeterministicHandler>> = {
-  askRespond: ({ arguments: args }) => ({
-    kind: "chat",
+  askRespond: ({ arguments: args, method }) => ({
+    kind: method.id === "plan" ? "plan" : "ask",
     text: typeof args.input === "string" ? args.input : ""
   }),
   agentRespond: ({ arguments: args }) => ({
@@ -245,19 +233,6 @@ export const DEFAULT_HANDLERS: Readonly<Record<string, DeterministicHandler>> = 
     kind: "print",
     text: printValue(args.text),
     ...(typeof args.label === "string" ? { label: args.label } : {})
-  }),
-  echoText: ({ arguments: args }) => ({
-    kind: "text",
-    text: Object.values(args).map(displayValue).join(" ")
-  }),
-  outlinePlan: ({ method, arguments: args }) => ({
-    kind: "plan",
-    title: method.title,
-    steps: Object.entries(args).map(([name, value]) => ({
-      title: name,
-      detail: displayValue(value),
-      status: "ready"
-    }))
   }),
   previewPatch: ({ context, method }) => ({
     kind: "patch",
@@ -294,10 +269,14 @@ function uiHandler(action: UiAction): DeterministicHandler {
   return async ({ arguments: args, metadata }) => {
     if (!metadata.ui) throw new Error(`ui.${action} requires an interactive Dext host.`);
     if (metadata.signal?.aborted) throw new ExecutionCancelledError();
-    const form = uiCallForm(action, args);
+    const { on_cancel, ...formArguments } = args;
+    const form = uiCallForm(action, formArguments);
     const result = uiFormResultSchema.parse(await metadata.ui.form(form, metadata.signal));
     if (metadata.signal?.aborted) throw new ExecutionCancelledError();
     if (result.status === "submitted") result.answers = validateUiAnswers(form, result.answers);
+    if (on_cancel === "abort" && result.status !== "submitted") {
+      throw new ExecutionCancelledError("User cancelled the UI step.");
+    }
     return uiCallResult(action, result);
   };
 }
@@ -319,7 +298,6 @@ export class DextRuntime {
     input: Record<string, unknown>,
     onProcessEvent?: ExecutionMetadata["onMcpEvent"]
   ) => Promise<McpRawResult>) | undefined;
-  private createHandler: DeterministicHandler | undefined;
 
   constructor(
     private readonly registry: MethodRegistry,
@@ -407,12 +385,6 @@ export class DextRuntime {
     this.mcpCaller = caller;
   }
 
-  /** Host-owned resource creation (API/MCP). Kept outside the generic
-   * deterministic handler map because it needs workspace and Agent services. */
-  setCreateHandler(handler: DeterministicHandler): void {
-    this.createHandler = handler;
-  }
-
   async execute(
     invocation: InvocationAst,
     supplementalContext: readonly CodeRef[] = [],
@@ -486,9 +458,8 @@ export class DextRuntime {
         metadata.onMcpEvent
       );
       result = method.output.fields ? adaptTypedMcpResult(raw, method.output.kind) : raw;
-    } else if (method.id === "create") {
-      if (!this.createHandler) throw new Error("create is not configured in this host.");
-      result = await this.createHandler(resolved);
+    } else if (method.executor.kind === "deterministic" && method.executor.handler === "nodeBuiltin") {
+      result = await executeNodeBuiltin(resolved, this.workspaceRoot, this.workspaceTrusted);
     } else {
       const profileId = metadata.agent ?? this.agentSelection.profileId;
       const profile = profileId ? this.agents.get(profileId) : undefined;
@@ -672,7 +643,7 @@ export class DextRuntime {
       },
       method: { id: mode, title: method.title, kind: method.kind, source: method.source },
       result: {
-        kind: "chat",
+        kind: mode,
         text: response,
         ...(metadata.planPath ? { planPath: metadata.planPath } : {}),
         ...(metadata.executePlan ? { executePlan: true } : {})

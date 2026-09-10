@@ -7,7 +7,7 @@ import { MethodRegistry } from "../src/core/registry.js";
 import { DextRuntime } from "../src/core/runtime.js";
 import { compileWorkflow } from "../src/core/workflow.js";
 import { WorkflowRuntime } from "../src/core/workflowRuntime.js";
-import type { AgentConversationRequest, AgentExecutionRequest } from "../src/core/agentRunner.js";
+import type { AgentExecutionRequest } from "../src/core/agentRunner.js";
 import type { ExecutionMetadata, InvocationValue } from "../src/core/types.js";
 
 const profiles: AgentProfile[] = [
@@ -103,25 +103,6 @@ describe("per-call built-in CLI options", () => {
     expect(requests).toHaveLength(0);
   });
 
-  it("passes create options to the host's subsequent conversation request", async () => {
-    const { execute, runtime } = setup();
-    const requests: AgentConversationRequest[] = [];
-    runtime.setAgentRunner({
-      run: async () => { throw new Error("create must use the host handler"); },
-      runConversation: async (request) => { requests.push(request); return "created"; }
-    });
-    runtime.setCreateHandler(async (request) => {
-      const input = request.arguments.input;
-      if (typeof input !== "string") throw new Error("create input must be a string");
-      return (await runtime.executeConversation("ask", input, request.metadata)).result;
-    });
-    await execute({ type: "rule", cli: "claude", model: "opus" }, "create");
-    expect(requests[0]).toMatchObject({ profile: { id: "claude" }, model: "opus", permission: "read-only" });
-    expect(requests[0]?.reasoningEffort).toBeUndefined();
-    expect(requests[0]?.speed).toBeUndefined();
-    expect(requests[0]?.serviceTier).toBeUndefined();
-  });
-
   it("does not borrow composer settings from a different decorator-selected CLI", async () => {
     const { execute, requests } = setup();
     await execute({ cli: "claude", model: "opus" }, "ask", { agent: "claude" });
@@ -149,22 +130,14 @@ describe("per-call built-in CLI options", () => {
     ]) expect(compileWorkflow(source, registry).diagnostics.some((item) => item.severity === "error")).toBe(true);
   });
 
-  it.each(["ask", "plan", "agent", "skill", "create"])("uses CLI defaults when only cli is provided to %s", async (method) => {
-    const { registry, runtime, execute, requests } = setup();
-    const conversations: AgentConversationRequest[] = [];
-    if (method === "create") {
-      runtime.setAgentRunner({
-        run: async () => { throw new Error("create must use the host handler"); },
-        runConversation: async (request) => { conversations.push(request); return "created"; }
-      });
-      runtime.setCreateHandler(async (request) => (await runtime.executeConversation("ask", "create", request.metadata)).result);
-    }
-    const extra = method === "skill" ? ', skill="test"' : method === "create" ? ', type="rule"' : "";
+  it.each(["ask", "plan", "agent", "skill"])("uses CLI defaults when only cli is provided to %s", async (method) => {
+    const { registry, execute, requests } = setup();
+    const extra = method === "skill" ? ', skill="test"' : "";
     expect(compileWorkflow(`${method}(input="x"${extra})`, registry).diagnostics).toEqual([]);
     for (const cli of ["codex", "claude"]) {
-      await execute({ cli, ...(method === "agent" ? { apply: false } : {}), ...(method === "skill" ? { skill: "test" } : {}), ...(method === "create" ? { type: "rule" } : {}) }, method,
+      await execute({ cli, ...(method === "agent" ? { apply: false } : {}), ...(method === "skill" ? { skill: "test" } : {}) }, method,
         { agent: "codex", model: "decorator-model", reasoningEffort: "ultra", speed: "fast", serviceTier: "priority" });
-      const request = method === "create" ? conversations.at(-1) : requests.at(-1);
+      const request = requests.at(-1);
       expect(request?.profile.id).toBe(cli);
       expect(request?.model || undefined).toBeUndefined();
       expect(request?.reasoningEffort).toBeUndefined();
@@ -219,7 +192,7 @@ describe("per-call built-in CLI options", () => {
     expect(labels('ask(cli="codex", model={"model": "gpt-test", "speed": ')).toEqual(["standard", "fast"]);
     expect(labels('ask(input="pretend cli=codex", cli="claude", model=')).toEqual(["sonnet", "opus"]);
     expect(language.documentSignature('ask(cli="claude", model=')?.parameters.at(-1)?.label).toBe('model?: "sonnet" | "opus"');
-    expect(language.documentSignature('ask(cli="codex", model=')?.parameters.at(-1)?.label).toContain('model?: { model: "gpt-test" | "gpt-other"');
+    expect(language.documentSignature('ask(cli="codex", model=')?.parameters.at(-1)?.label).toBe("model?: agent.ModelOptions");
   });
 
   it("refreshes model choices when configured profiles change", () => {

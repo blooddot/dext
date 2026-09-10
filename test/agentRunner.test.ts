@@ -95,11 +95,11 @@ describe("CLI command resolution", () => {
   });
 
   it("wraps prior API results in a stable Agent CLI envelope", () => {
-    expect(serializeResultForAgent({ kind: "chat", text: "hello" } as const)).toEqual({
+    expect(serializeResultForAgent({ kind: "ask", text: "hello" } as const)).toEqual({
       kind: "dext-result",
       version: 1,
-      result_kind: "chat",
-      value: { kind: "chat", text: "hello" }
+      result_kind: "ask",
+      value: { kind: "ask", text: "hello" }
     });
   });
 
@@ -137,7 +137,7 @@ describe("CLI command resolution", () => {
     }))).toMatchObject({ id: "item_1", phase: "reasoning", text: "The implementation needs one focused change." });
     expect(parseCodexStreamLine(JSON.stringify({
       type: "item.completed",
-      item: { id: "item_2", type: "agent_message", text: '{"kind":"explain","text":"Done","files":[]}' }
+      item: { id: "item_2", type: "agent_message", text: '{"kind":"agent","text":"Done"}' }
     }))).toBeUndefined();
   });
 
@@ -153,12 +153,12 @@ describe("CLI command resolution", () => {
     expect(parseClaudeStreamLine(JSON.stringify({
       type: "result",
       subtype: "success",
-      structured_output: { kind: "explain", text: "Done", files: [] }
+      structured_output: { kind: "agent", text: "Done" }
     }))).toBeUndefined();
     expect(extractClaudeResult([
       JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "Done" }] } }),
-      JSON.stringify({ type: "result", subtype: "success", structured_output: { kind: "explain", text: "Done", files: [] } })
-    ].join("\n"))).toEqual({ kind: "explain", text: "Done", files: [] });
+      JSON.stringify({ type: "result", subtype: "success", structured_output: { kind: "agent", text: "Done" } })
+    ].join("\n"))).toEqual({ kind: "agent", text: "Done" });
   });
 
   it("uses Claude Code's non-interactive structured streaming flags", () => {
@@ -178,7 +178,7 @@ describe("CLI command resolution", () => {
     const runner = new CliAgentRunner(1_000, async (_command, args, _input, _cwd, _signal, onStdout) => {
       if (args[0] === "login") return { stdout: "", stderr: "", code: 1 };
       invocations.push([...args]);
-      const text = args.includes("--output-schema") ? JSON.stringify({ kind: "chat", text: "done" }) : "done";
+      const text = args.includes("--output-schema") ? JSON.stringify({ kind: "ask", text: "done" }) : "done";
       const stdout = JSON.stringify({ type: "item.completed", item: { type: "agent_message", text } });
       onStdout?.(`${stdout}\n`);
       return { stdout, stderr: "", code: 0 };
@@ -360,7 +360,7 @@ describe("CLI command resolution", () => {
   });
 
   it("keeps ordinary conversation replies as raw text", () => {
-    const text = '{"kind":"chat","text":"this is ordinary model text"}';
+    const text = '{"kind":"ask","text":"this is ordinary model text"}';
     expect(extractConversationText(JSON.stringify({
       type: "item.completed",
       item: { type: "agent_message", text }
@@ -525,7 +525,7 @@ describe("CLI command resolution", () => {
       emit = onStdout!;
       await new Promise<void>((resolve) => { finish = resolve; started(); });
       return { stdout: JSON.stringify({ type: "item.completed", item: {
-        type: "agent_message", text: kind === "api" ? JSON.stringify({ kind: "chat", text: "done" }) : "done"
+        type: "agent_message", text: kind === "api" ? JSON.stringify({ kind: "ask", text: "done" }) : "done"
       } }), stderr: "", code: 0 };
     }, 1000);
     try {
@@ -547,7 +547,7 @@ describe("CLI command resolution", () => {
       vi.advanceTimersByTime(999);
       expect(executionSignal?.aborted).toBe(false);
       finish();
-      expect(await result).toEqual(kind === "api" ? { kind: "chat", text: "done" } : "done");
+      expect(await result).toEqual(kind === "api" ? { kind: "ask", text: "done" } : "done");
       expect(vi.getTimerCount()).toBe(0);
     } finally { vi.useRealTimers(); }
   });

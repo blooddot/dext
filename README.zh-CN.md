@@ -81,7 +81,7 @@ print(text=answer.text)
 ```python
 from common import ask
 
-def main(input: str) -> ChatResult:
+def main(input: str) -> AskResult:
     return ask(input=input)
 ```
 

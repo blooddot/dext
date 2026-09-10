@@ -22,17 +22,13 @@ export interface RecordedWorkflow {
 const MIN_TITLE_LENGTH = 3;
 
 const RESULT_TYPES: Record<string, string> = {
-  chat: "ChatResult",
+  ask: "AskResult",
+  plan: "PlanResult",
   agent: "AgentResult",
   terminal: "TerminalResult",
   apply: "ApplyResult",
   print: "PrintResult",
-  text: "TextResult",
-  code: "CodeResult",
-  explain: "ExplainResult",
-  edit: "EditResult",
-  review: "ReviewResult",
-  plan: "PlanResult",
+  skill: "SkillResult",
   patch: "PatchResult"
 };
 
@@ -113,7 +109,7 @@ export function recordWorkflow(turns: readonly RecordedTurn[]): RecordedWorkflow
   const lines: string[] = [];
   const body: string[] = [];
   let lastVariable = "";
-  let returnType = "ChatResult";
+  let returnType = "AskResult";
   for (const [index, turn] of usable.entries()) {
     const text = turn.input.trim();
     for (const [order, message] of confirmations(turn).entries()) {
@@ -137,7 +133,7 @@ export function recordWorkflow(turns: readonly RecordedTurn[]): RecordedWorkflow
     body.push(`${variable} = ${method}(input=${argument}${method === "agent" ? ", apply=False" : ""})`);
     lastVariable = variable;
     const kind = lastResult(turn)?.kind;
-    returnType = (kind && RESULT_TYPES[kind]) ?? (method === "agent" ? "AgentResult" : "ChatResult");
+    returnType = (kind && RESULT_TYPES[kind]) ?? (method === "agent" ? "AgentResult" : "AskResult");
   }
   if (!lastVariable) {
     // Every turn was Code mode, so there is nothing to return but a note.

@@ -80,19 +80,6 @@ function parsedResult(text: string): Record<string, unknown> | undefined {
   }
 }
 
-function findingDetails(value: unknown): AgentMessageDetail[] {
-  return array(value).flatMap((item) => {
-    const finding = record(item);
-    const text = string(finding?.message);
-    if (!text) return [];
-    const severity = string(finding?.severity);
-    const tone = severity === "error" || severity === "warning" ? severity : "info";
-    const uri = string(finding?.uri);
-    const line = typeof finding?.line === "number" ? `:${finding.line}` : "";
-    return [{ text, tone, ...(uri ? { meta: `${uri}${line}` } : {}) }];
-  });
-}
-
 function patchChanges(value: unknown): AgentMessageChange[] {
   return array(value).flatMap((item) => {
     const change = record(item);
@@ -148,30 +135,17 @@ export function presentAgentMessage(raw: string): AgentMessagePresentation {
 
   const kind = value.kind as string;
   const patch = record(value.patch);
-  const changes = patchChanges(kind === "edit" || kind === "agent" ? patch?.changes : value.changes);
+  const changes = patchChanges(kind === "agent" ? patch?.changes : value.changes);
   const references = codeReferences(value.files);
-  const findings = findingDetails(value.findings);
   const meta: string[] = [];
   let title = "Result";
   let text = string(value.summary) || string(value.text);
-  let details = findings;
+  const details: AgentMessageDetail[] = [];
   let sections: AgentMessageSection[] = [];
 
-  if (kind === "edit") {
-    title = "Edit proposal";
-    if (changes.length) meta.push(count(changes.length, "file"));
-    if (!text) text = string(patch?.title);
-  } else if (kind === "agent") {
+  if (kind === "agent") {
     title = "Agent";
     if (changes.length) meta.push(count(changes.length, "file"));
-    if (references.length) meta.push(count(references.length, "reference"));
-  } else if (kind === "review") {
-    title = "Review";
-    const state = status(value.status);
-    if (state) meta.push(state);
-    if (findings.length) meta.push(count(findings.length, "finding"));
-  } else if (kind === "explain") {
-    title = "Explanation";
     if (references.length) meta.push(count(references.length, "reference"));
   } else if (kind === "apply") {
     title = "Apply changes";
@@ -194,31 +168,16 @@ export function presentAgentMessage(raw: string): AgentMessagePresentation {
     title = "Patch";
     text = string(value.title) || text;
     if (changes.length) meta.push(count(changes.length, "file"));
+  } else if (kind === "ask") {
+    title = "Ask";
   } else if (kind === "plan") {
     title = "Plan";
-    text = string(value.title) || text;
-    details = array(value.steps).flatMap((item) => {
-      const step = record(item);
-      const stepTitle = string(step?.title);
-      const detail = string(step?.detail);
-      const state = status(step?.status);
-      return stepTitle ? [{ text: detail ? `${stepTitle}: ${detail}` : stepTitle, tone: "info" as const, meta: state }] : [];
-    });
-    if (details.length) meta.push(count(details.length, "step"));
-  } else if (kind === "code") {
-    title = "Generated code";
-    text = string(value.title) || "Code generation completed.";
-    const language = string(value.language);
-    if (language) meta.push(language);
-    sections = section("Code", value.code, { code: true });
-  } else if (kind === "chat") {
-    title = "Response";
+  } else if (kind === "skill") {
+    title = "Skill";
   } else if (kind === "print") {
     title = "Printed output";
     const label = string(value.label);
     if (label) meta.push(label);
-  } else if (kind === "text") {
-    title = "Text result";
   } else if (kind === "mcpRaw") {
     title = "MCP result";
     text = string(value.content) || JSON.stringify(value.structured ?? {}, null, 2);

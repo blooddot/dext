@@ -1,15 +1,17 @@
 import type { FieldDefinition, RegisteredCallable } from "./types.js";
+import { nodeBuiltinResultType } from "./builtinResultTypes.js";
 
 function literal(value: string): string {
   return JSON.stringify(value);
 }
 
 function scalarType(type: FieldDefinition["type"], field: FieldDefinition): string {
+  if ((type === "object" || type === "list") && field.shapeType) return field.shapeType;
   if (type === "result" && field.resultType) return field.resultType;
   if (type === "object") return field.properties?.length
     ? `{ ${field.properties.map(formatMethodParameter).join(", ")} }`
     : "dict[str, object]";
-  if (type === "list") return "list[object]";
+  if (type === "list") return `list[${field.items ? scalarType(field.items.type, field.items) : "object"}]`;
   if (type !== "enum") return type;
   const values = field.values ?? [];
   return values.length ? values.map(literal).join(" | ") : "string";
@@ -41,7 +43,8 @@ export function formatMethodParameter(field: FieldDefinition): string {
 }
 
 /** Resolve the named result type exposed by an API. */
-export function methodResultType(method: Pick<RegisteredCallable, "output">): string {
+export function methodResultType(method: Pick<RegisteredCallable, "id" | "output">): string {
+  if (method.output.kind === "node") return nodeBuiltinResultType(method.id);
   return method.output.resultType
     ?? `${method.output.kind.slice(0, 1).toUpperCase()}${method.output.kind.slice(1)}Result`;
 }

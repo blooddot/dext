@@ -1,23 +1,10 @@
-import type { CallableDefinition } from "./types.js";
+import type { CallableDefinition, FieldDefinition } from "./types.js";
 import { builtinCliFields, CLI_BUILTIN_IDS } from "./builtinCli.js";
+import { NODE_BUILTIN_METHODS } from "./generated/nodeBuiltinCatalog.js";
 
 const CONTEXTS = ["selection", "activeFile", "file", "symbol"] as const;
 
 const METHODS: readonly CallableDefinition[] = [
-  {
-    id: "create",
-    title: "Create",
-    description: "Create an API, MCP configuration, rule, or skill from a description or URL.",
-    kind: "command",
-    version: "1.0.0",
-    input: [
-      { name: "type", type: "enum", values: ["api", "mcp", "rule", "skill"], required: true, description: "What to create: an API, MCP configuration, rule, or skill." },
-      { name: "input", type: "string", required: true, description: "Description or documentation/registry URL used to create the resource." },
-      { name: "scope", type: "enum", values: ["project", "global"], default: "project", description: "Where to save it: the current project or Dext global storage." }
-    ],
-    output: { kind: "chat" },
-    executor: { kind: "deterministic", handler: "createResource" }
-  },
   {
     id: "ask",
     title: "Ask",
@@ -30,7 +17,7 @@ const METHODS: readonly CallableDefinition[] = [
       { name: "rules", type: "string", multiple: true, internal: true, description: "Optional .dext/rules-relative files loaded only for this Ask call." },
       { name: "workspace", type: "dir", description: "Optional workspace directory; defaults to the current project root." }
     ],
-    output: { kind: "chat" },
+    output: { kind: "ask" },
     context: [...CONTEXTS],
     executor: { kind: "deterministic", handler: "askRespond" }
   },
@@ -46,7 +33,7 @@ const METHODS: readonly CallableDefinition[] = [
       { name: "rules", type: "string", multiple: true, internal: true, description: "Optional .dext/rules-relative files loaded only for this Plan call." },
       { name: "workspace", type: "dir", description: "Optional workspace directory; defaults to the current project root." },
     ],
-    output: { kind: "chat" },
+    output: { kind: "plan" },
     context: [...CONTEXTS],
     executor: { kind: "deterministic", handler: "askRespond" }
   },
@@ -108,6 +95,7 @@ const METHODS: readonly CallableDefinition[] = [
     input: [
       { name: "command", type: "string", required: true, description: "Command passed to the platform default shell." },
       { name: "cwd", type: "string", default: ".", description: "Workspace-contained working directory." },
+      { name: "env", type: "object", default: {}, description: "Optional string environment variables available to the command." },
       { name: "timeout_ms", type: "number", default: 120000, description: "Timeout in milliseconds, up to 600000." }
     ],
     output: { kind: "terminal" },
@@ -125,12 +113,12 @@ const METHODS: readonly CallableDefinition[] = [
       { name: "input", type: "string", required: true, description: "Direct task input for the skill." },
       { name: "workspace", type: "dir", description: "Optional workspace directory; defaults to the current project root." }
     ],
-    output: { kind: "chat" },
+    output: { kind: "skill" },
     executor: { kind: "deterministic", handler: "runSkill" }
   }
 ];
 
-export const BUILTIN_METHODS: readonly CallableDefinition[] = METHODS.map((method) =>
+export const BUILTIN_METHODS: readonly CallableDefinition[] = [...METHODS, ...NODE_BUILTIN_METHODS].map((method) =>
   CLI_BUILTIN_IDS.has(method.id) ? { ...method, input: [...method.input, ...builtinCliFields()] } : method
 );
 
@@ -147,32 +135,59 @@ function uiDefinition(action: "select" | "radio" | "checkbox" | "input" | "confi
   }
   if (action === "input") { field("placeholder", "string", ""); field("multiline", "boolean", false); }
   if (action === "confirm" || action === "alert") field("message", "string");
-  if (action === "confirm") { field("confirm_label", "string", "Continue"); field("cancel_label", "string", "Cancel"); }
+  if (action === "confirm") {
+    field("confirm_label", "string", "Continue"); field("cancel_label", "string", "Cancel");
+    input.push({ name: "on_cancel", type: "enum", values: ["return", "abort"], default: "return", description: "Whether cancellation returns a result or aborts the current workflow." });
+  }
   if (action === "alert") field("acknowledge_label", "string", "OK");
   if (action === "form") {
     field("title", "string");
-    input.push({ name: "fields", type: "list", required: true, properties: uiFieldProperties(), description: "Declarative select, radio, checkbox or input fields." });
+    input.push({ name: "fields", type: "list", required: true, items: uiFieldDefinition(), description: "Declarative select, radio, checkbox or input fields." });
     field("description", "string", ""); field("submit_label", "string", "Submit");
     field("cancel_label", "string", "Cancel"); field("show_cancel", "boolean", true);
+    input.push({ name: "on_cancel", type: "enum", values: ["return", "abort"], default: "return", description: "Whether cancellation returns a result or aborts the current workflow." });
   }
   input.push({ name: "presentation", type: "enum", values: ["inline", "dialog"], default: action === "form" ? "inline" : "dialog", description: "Interaction container." });
   return { id: `ui.${action}`, title: action, description: `Request ${action} interaction and wait for the user's response.`,
     kind: "command", version: "1.0.0", input, output: { kind: "ui", resultType: `Ui${action[0]!.toUpperCase()}${action.slice(1)}Result`, fields: uiOutputFields(action) }, executor: { kind: "deterministic", handler: `ui${action[0]!.toUpperCase()}${action.slice(1)}` } };
 }
 
-function uiFieldProperties(): CallableDefinition["input"] {
-  return [
+function uiFieldDefinition(): FieldDefinition {
+  const common: FieldDefinition[] = [
     { name: "id", type: "string", required: true },
     { name: "type", type: "enum", values: ["select", "radio", "checkbox", "input"], required: true },
     { name: "label", type: "string", required: true },
-    { name: "description", type: "string" }, { name: "required", type: "boolean", default: true },
-    { name: "default", type: "string", accepts: ["list"] },
-    { name: "options", type: "list", description: "String options or objects with value, label and description." },
-    { name: "multiple", type: "boolean", description: "Only select supports multiple." },
-    { name: "allow_custom", type: "boolean", description: "Only radio and checkbox support custom answers." },
-    { name: "custom_placeholder", type: "string" }, { name: "placeholder", type: "string" }, { name: "multiline", type: "boolean" }
+    { name: "description", type: "string" }, { name: "required", type: "boolean", default: true }
   ];
+  const optionFields: FieldDefinition[] = [
+    { name: "options", type: "list", items: uiOptionDefinition(), required: true },
+    { name: "default", type: "list", items: { name: "option", type: "string" } }
+  ];
+  return {
+    name: "field", type: "object", shapeType: "ui.Field", properties: common,
+    discriminator: {
+      name: "type",
+      variants: [
+        { value: "select", properties: [...optionFields, { name: "multiple", type: "boolean", default: false }, { name: "placeholder", type: "string" }] },
+        { value: "radio", properties: [...optionFields, { name: "allow_custom", type: "boolean", default: false }, { name: "custom_placeholder", type: "string" }] },
+        { value: "checkbox", properties: [...optionFields, { name: "allow_custom", type: "boolean", default: false }, { name: "custom_placeholder", type: "string" }] },
+        { value: "input", properties: [{ name: "default", type: "string" }, { name: "placeholder", type: "string" }, { name: "multiline", type: "boolean", default: false }] }
+      ]
+    }
+  };
 }
+
+function uiOptionDefinition(): FieldDefinition {
+  return {
+    name: "option", type: "string", accepts: ["object"], shapeType: "ui.Option",
+    properties: [
+      { name: "value", type: "string", required: true },
+      { name: "label", type: "string", required: true },
+      { name: "description", type: "string" }
+    ]
+  };
+}
+
 export function uiOutputFields(action: string): CallableDefinition["input"] {
   const fields: CallableDefinition["input"] = [{ name: "kind", type: "enum", values: ["ui"] }, { name: "type", type: "enum", values: [action] }];
   if (["select", "radio", "checkbox"].includes(action)) fields.push({ name: "selected", type: "list", items: { name: "option", type: "string" } });

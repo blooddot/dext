@@ -1,41 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { agentMessageCopyText, presentAgentMessage } from "../src/agentMessagePresentation.js";
+import { presentAgentMessage } from "../src/agentMessagePresentation.js";
 
 describe("Agent message presentation", () => {
-  it("turns an edit result into a compact human-readable summary", () => {
-    const raw = JSON.stringify({
-      kind: "edit",
-      summary: "Complete hello_world and invoke it.",
-      patch: {
-        kind: "patch",
-        title: "Complete hello_world",
-        changes: [{
-          uri: "target-1/temp.py",
-          before: "def hello_world():\n    pass",
-          after: 'def hello_world():\n    return "hello world"',
-          contentHash: "internal"
-        }]
-      },
-      files: []
-    });
-
-    const presentation = presentAgentMessage(raw);
-    expect(presentation).toMatchObject({
-      structured: true,
-      kind: "edit",
-      title: "Edit proposal",
-      text: "Complete hello_world and invoke it.",
-      meta: ["1 file"],
-      changes: [{
-        uri: "target-1/temp.py",
-        before: "def hello_world():\n    pass",
-        after: 'def hello_world():\n    return "hello world"'
-      }]
-    });
-    expect(agentMessageCopyText(presentation)).not.toContain("contentHash");
-    expect(agentMessageCopyText(presentation)).not.toContain('"kind"');
-  });
-
   it("keeps an agent patch available for the same diff presentation", () => {
     const presentation = presentAgentMessage(JSON.stringify({
       kind: "agent",
@@ -70,8 +36,8 @@ describe("Agent message presentation", () => {
   });
 
   it("keeps referenced code and terminal fields as readable sections", () => {
-    const explanation = presentAgentMessage(JSON.stringify({
-      kind: "explain",
+    const agent = presentAgentMessage(JSON.stringify({
+      kind: "agent",
       text: "Uses the selected helper.",
       files: [{
         kind: "codeRef",
@@ -82,7 +48,7 @@ describe("Agent message presentation", () => {
         contentHash: "internal"
       }]
     }));
-    expect(explanation.references).toEqual([{
+    expect(agent.references).toEqual([{
       uri: "file:///src/helper.py",
       location: "Lines 5-8",
       symbol: "helper",

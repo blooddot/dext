@@ -5,13 +5,13 @@ import { loadCustomApis } from "../src/core/customApi.js";
 import { recordWorkflow, recordedApiName, type RecordedTurn } from "../src/core/workflowRecorder.js";
 import type { InputExecutionResponse } from "../src/core/types.js";
 
-function response(method: string, kind: "chat" | "agent", confirmMessages: string[] = []): InputExecutionResponse {
+function response(method: string, kind: "ask" | "agent", confirmMessages: string[] = []): InputExecutionResponse {
   const executions = [
     ...confirmMessages.map((message) => ({
       invocation: {
         kind: "invocation" as const,
         method: "ui.confirm",
-        source: "chat" as const,
+        source: "ask" as const,
         arguments: [{ name: "message", value: message }]
       },
       method: { id: "ui.confirm", title: "Confirm", version: "1.0.0" },
@@ -19,10 +19,10 @@ function response(method: string, kind: "chat" | "agent", confirmMessages: strin
       context: []
     })),
     {
-      invocation: { kind: "invocation" as const, method, source: "chat" as const, arguments: [] },
+      invocation: { kind: "invocation" as const, method, source: "ask" as const, arguments: [] },
       method: { id: method, title: method, version: "1.0.0" },
-      result: kind === "chat"
-        ? { kind: "chat" as const, text: "answer" }
+      result: kind === "ask"
+        ? { kind: "ask" as const, text: "answer" }
         : { kind: "agent" as const, text: "done" },
       context: []
     }
@@ -48,7 +48,7 @@ describe("recording a conversation as a .dx workflow", () => {
   it("turns each successful turn into a step and returns the last one", async () => {
     const turns: RecordedTurn[] = [
       { input: "Add a health endpoint", mode: "agent", response: response("agent", "agent") },
-      { input: "Explain what changed", mode: "ask", response: response("ask", "chat") }
+      { input: "Explain what changed", mode: "ask", response: response("ask", "ask") }
     ];
     const recorded = recordWorkflow(turns);
     expect(recorded.fileName).toBe("add_a_health_endpoint.dx");
@@ -56,7 +56,7 @@ describe("recording a conversation as a .dx workflow", () => {
     expect(recorded.source).toContain('step_1 = agent(input="Add a health endpoint", apply=False)');
     expect(recorded.source).toContain('step_2 = ask(input="Explain what changed")');
     // The declared return type follows the last step's real result kind.
-    expect(recorded.source).toContain("-> ChatResult:");
+    expect(recorded.source).toContain("-> AskResult:");
     expect(recorded.source).toContain("return step_2");
     const loaded = await load(recorded.source, recorded.fileName);
     expect(loaded.diagnostics).toEqual([]);
@@ -66,7 +66,7 @@ describe("recording a conversation as a .dx workflow", () => {
   it("lifts a prompt reused across turns into a main() parameter", async () => {
     const turns: RecordedTurn[] = [
       { input: "Run the migration", mode: "agent", response: response("agent", "agent") },
-      { input: "Something else entirely", mode: "ask", response: response("ask", "chat") },
+      { input: "Something else entirely", mode: "ask", response: response("ask", "ask") },
       { input: "Run the migration", mode: "agent", response: response("agent", "agent") }
     ];
     const recorded = recordWorkflow(turns);
@@ -95,8 +95,8 @@ describe("recording a conversation as a .dx workflow", () => {
 
   it("leaves a Code-mode turn as a comment instead of rewriting it as an agent call", async () => {
     const recorded = recordWorkflow([
-      { input: 'answer = ask(input="hi")\nprint(text=answer.text)', mode: "code", response: response("ask", "chat") },
-      { input: "Summarize the result", mode: "ask", response: response("ask", "chat") }
+      { input: 'answer = ask(input="hi")\nprint(text=answer.text)', mode: "code", response: response("ask", "ask") },
+      { input: "Summarize the result", mode: "ask", response: response("ask", "ask") }
     ]);
     expect(recorded.source).toContain('# answer = ask(input="hi")');
     expect(recorded.source).toContain("# print(text=answer.text)");
@@ -109,7 +109,7 @@ describe("recording a conversation as a .dx workflow", () => {
     const recorded = recordWorkflow([{
       input: 'Review this:\nconst path = "C:\\\\tmp";',
       mode: "ask",
-      response: response("ask", "chat")
+      response: response("ask", "ask")
     }]);
     expect(recorded.source).toContain('"""');
     const loaded = await load(recorded.source, recorded.fileName);

@@ -1,20 +1,17 @@
 import { f, type AxSignature } from "@ax-llm/ax";
 import { z, type ZodType } from "zod";
 import {
-  codeResultSchema,
-  chatResultSchema,
+  askResultSchema,
   agentResultSchema,
   dextResultSchema,
-  editResultSchema,
-  explainResultSchema,
   applyResultSchema,
   patchResultSchema,
-  planResultSchema,
   printResultSchema,
-  reviewResultSchema,
+  planResultSchema,
+  skillResultSchema,
   terminalResultSchema,
-  textResultSchema,
   uiResultSchema,
+  nodeResultSchema,
   mcpRawResultSchema
 } from "./schemas.js";
 import type {
@@ -132,32 +129,26 @@ function outputSchema(output: CallableDefinition["output"]): ZodType {
     return z.object(shape).strict();
   }
   switch (output.kind) {
-    case "chat":
-      return chatResultSchema;
+    case "ask":
+      return askResultSchema;
+    case "plan":
+      return planResultSchema;
     case "agent":
       return agentResultSchema;
-    case "explain":
-      return explainResultSchema;
-    case "edit":
-      return editResultSchema;
     case "apply":
       return applyResultSchema;
     case "terminal":
       return terminalResultSchema;
     case "print":
       return printResultSchema;
-    case "text":
-      return textResultSchema;
-    case "code":
-      return codeResultSchema;
-    case "review":
-      return reviewResultSchema;
-    case "plan":
-      return planResultSchema;
+    case "skill":
+      return skillResultSchema;
     case "patch":
       return patchResultSchema;
     case "ui":
       return uiResultSchema;
+    case "node":
+      return nodeResultSchema;
     case "mcpRaw":
       return mcpRawResultSchema;
     default:

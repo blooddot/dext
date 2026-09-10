@@ -1,4 +1,5 @@
 import { publicInteractionState } from "./uiInteractionPresentation.js";
+import { normalizeHistoryResponse } from "./historyResponse.js";
 import type * as vscode from "vscode";
 import type { AgentStreamEvent, AgentTodoItem, InputExecutionResponse, PlanExecutionOutcome } from "./core/types.js";
 import { normalizeInputReferenceSource } from "./core/fileReference.js";
@@ -102,13 +103,17 @@ function isSession(value: DextHistoryRecord | DextHistorySession): value is Dext
 }
 
 function normalizeSessions(stored: readonly (DextHistoryRecord | DextHistorySession)[]): DextHistorySession[] {
+  const normalizeTurn = (turn: DextHistoryRecord): DextHistoryRecord => ({
+    ...turn, input: normalizeInputReferenceSource(turn.input),
+    ...(turn.response ? { response: normalizeHistoryResponse(turn.response, turn.mode) } : {})
+  });
   return stored.flatMap((item) => isSession(item)
-    ? [{ ...item, turns: item.turns.map((turn) => ({ ...turn, input: normalizeInputReferenceSource(turn.input) })) }]
+    ? [{ ...item, turns: item.turns.map(normalizeTurn) }]
     : [{
         id: `legacy-${item.id}`,
         createdAt: item.createdAt,
         updatedAt: item.createdAt,
-        turns: [{ ...item, input: normalizeInputReferenceSource(item.input) }]
+        turns: [normalizeTurn(item)]
       }]
   );
 }

@@ -28,7 +28,7 @@ describe("DextLanguageService workflow features", () => {
   });
 
   it("offers private .dx helpers, signatures, hover and result fields while editing", () => {
-    const header = `def summarize(value: ChatResult, label: str = "summary") -> PrintResult:
+    const header = `def summarize(value: AskResult, label: str = "summary") -> PrintResult:
     return print(text=value.text, label=label)
 
 def main(input: str) -> PrintResult:
@@ -37,13 +37,42 @@ def main(input: str) -> PrintResult:
     const call = `${header}    report = summarize(value=answer, label=`;
     expect(service.apiCompletions(`${header}    sum`).map((item) => item.label)).toContain("summarize");
     expect(service.apiSignature(call)).toMatchObject({
-      label: 'summarize(value: ChatResult, label?: string = "summary") -> PrintResult', activeParameter: 1
+      label: 'summarize(value: AskResult, label?: string = "summary") -> PrintResult', activeParameter: 1
     });
     const complete = `${header}    report = summarize(value=answer)\n    report.`;
     expect(service.apiCompletions(complete).map((item) => item.label)).toEqual(["text", "label"]);
-    expect(service.apiHover(call, call.lastIndexOf("summarize") + 2)?.label).toContain("summarize(value: ChatResult");
+    expect(service.apiHover(call, call.lastIndexOf("summarize") + 2)?.label).toContain("summarize(value: AskResult");
     expect(service.documentCompletions(`${header}    sum`).map((item) => item.label)).not.toContain("summarize");
     expect(service.apiCompletions("sum")).toEqual([]);
+  });
+
+  it("shows a concise built-in result shape when hovering a type annotation", () => {
+    const source = "def main(context: PrintResult) -> AgentResult:\n    return print(text=context.text)";
+    expect(service.apiHover(source, source.indexOf("PrintResult") + 2)).toMatchObject({
+      label: 'PrintResult { kind: "print"; text: string; label?: string }'
+    });
+    expect(service.apiHover(source, source.indexOf("AgentResult") + 2)?.documentation).toContain("Go to Definition");
+  });
+
+  it("exposes a concrete result type for a Node bridge", () => {
+    const source = 'parsed = node.url.parse(url="https://example.com/task")';
+    expect(service.documentHover(source, source.indexOf("parsed") + 2)).toMatchObject({
+      label: "parsed: NodeUrlParseResult"
+    });
+  });
+
+  it("hovers concrete UI result annotations exposed by built-in APIs", () => {
+    const source = "def main() -> UiFormResult:\n    ...";
+    expect(service.documentHover(source, source.indexOf("UiFormResult") + 2)).toMatchObject({
+      label: expect.stringContaining("UiFormResult")
+    });
+  });
+
+  it("hovers namespaced type references in generated documents", () => {
+    const source = "options: list[string | ui.Option]";
+    expect(service.documentHover(source, source.indexOf("Option") + 2)).toMatchObject({
+      label: expect.stringContaining("ui.Option")
+    });
   });
 
   describe("project API imports", () => {
@@ -166,6 +195,15 @@ def main(input: str) -> PrintResult:
     expect(service.documentCompletions('reply = ui.form(title="Form", fields=[])\nreply.answers["x"].').map((item) => item.label)).toEqual(expect.arrayContaining(["selected", "value", "type"]));
     expect(service.documentSignature('ui.radio(label=')).toMatchObject({ label: expect.stringContaining("UiRadioResult") });
     expect(service.documentSignature('ui.choose(label=')).toBeUndefined();
+  });
+
+  it("narrows form field properties after selecting its discriminator", () => {
+    expect(service.documentCompletions('ui.form(title="Form", fields=[{').map((item) => item.label))
+      .toEqual(expect.arrayContaining(["id", "type", "label"]));
+    const radioProperties = service.documentCompletions('ui.form(title="Form", fields=[{"type": "radio", ')
+      .map((item) => item.label);
+    expect(radioProperties).toEqual(expect.arrayContaining(["options", "allow_custom", "custom_placeholder"]));
+    expect(radioProperties).not.toContain("multiline");
   });
 
   it("completes ui APIs", () => {

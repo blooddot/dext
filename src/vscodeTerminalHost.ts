@@ -34,6 +34,20 @@ function timeoutValue(value: unknown): number {
   return timeout;
 }
 
+function environmentValue(value: unknown): Record<string, string> {
+  if (value === undefined) return {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("terminal env must be an object of string values.");
+  }
+  const environment: Record<string, string> = {};
+  for (const [name, entry] of Object.entries(value)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) throw new Error(`terminal env has an invalid variable name: ${name}.`);
+    if (typeof entry !== "string") throw new Error(`terminal env '${name}' must be a string.`);
+    environment[name] = entry;
+  }
+  return environment;
+}
+
 function trustedWorkspaceRoot(): string {
   if (!vscode.workspace.isTrusted) {
     throw new Error("terminal requires a trusted workspace.");
@@ -66,7 +80,7 @@ function appendLimited(current: string, chunk: Buffer): string {
   return chunk.length > remaining ? `${current}${value}\n[output truncated]` : current + value;
 }
 
-function execute(command: string, cwd: string, timeoutMs: number): Promise<TerminalResult> {
+function execute(command: string, cwd: string, timeoutMs: number, environmentOverrides: Readonly<Record<string, string>>): Promise<TerminalResult> {
   return new Promise((complete, reject) => {
     const started = performance.now();
     const environment = {
@@ -75,6 +89,7 @@ function execute(command: string, cwd: string, timeoutMs: number): Promise<Termi
       FORCE_COLOR: process.env.FORCE_COLOR ?? "1",
       CLICOLOR_FORCE: process.env.CLICOLOR_FORCE ?? "1",
       GIT_PAGER: "cat",
+      ...environmentOverrides,
       ...( /^\s*git(?:\s|$)/i.test(command)
         ? {
             GIT_CONFIG_COUNT: "1",
@@ -144,5 +159,5 @@ export const terminalRunHandler: DeterministicHandler = async ({ arguments: args
   const root = trustedWorkspaceRoot();
   const cwd = workspaceCwd(root, args.cwd);
   const timeoutMs = timeoutValue(args.timeout_ms);
-  return execute(command, cwd, timeoutMs);
+  return execute(command, cwd, timeoutMs, environmentValue(args.env));
 };

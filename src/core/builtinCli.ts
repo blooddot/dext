@@ -12,6 +12,7 @@ export function builtinCliFields(profiles: readonly AgentProfile[] = []): FieldD
     { name: "cli", type: "enum", values: ["codex", "claude", "deepseek-harness"], description: "CLI for this call. When set, omitted model options use CLI defaults, not Input settings. Omit both cli and model to use the current Input selection." },
     {
       name: "model", type: "enum", values: ["sonnet", "opus"], accepts: ["object"],
+      shapeType: "agent.ModelOptions",
       description: 'Claude: "sonnet" or "opus". Codex: {"model": "model-id", "reasoning": "high", "speed": "standard"}. Harness: {"model": "opaque-option-id", "reasoning": "high"}. Optional; without cli, uses the CLI selected in Input.',
       properties: [
         { name: "model", type: models.length ? "enum" : "string", ...(models.length ? { values: models } : {}), required: true, description: "Model ID from the Codex model list." },

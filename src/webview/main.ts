@@ -1,4 +1,5 @@
 import { uiResultText } from "../uiInteractionPresentation.js";
+import { readHistoryResponse } from "../historyResponse.js";
 import type { UiFormAnswers } from "../core/uiForm.js";
 import "../../media/styles.css";
 import MarkdownIt from "markdown-it";
@@ -15,7 +16,7 @@ import type {
   RuntimeResponse,
   WorkflowStepResponse
 } from "../core/types.js";
-import { formatMethodSignature } from "../core/methodSignature.js";
+import { formatFieldType, methodResultType } from "../core/methodSignature.js";
 import type { ConversationSummary, SidebarState, WebviewRequest, WebviewResponse } from "../webviewProtocol.js";
 import { ClipboardClient } from "./clipboardClient.js";
 import { FileSearchClient } from "./fileSearchClient.js";
@@ -90,6 +91,17 @@ const elements = {
   mcpAssistantScopeLabel: element<HTMLElement>("mcp-assistant-scope-label"),
   mcpAssistantGenerate: element<HTMLButtonElement>("mcp-assistant-generate"),
   mcpAssistantSave: element<HTMLButtonElement>("mcp-assistant-save"),
+  createResource: element<HTMLButtonElement>("create-resource"),
+  resourceCreatorDialog: element<HTMLDialogElement>("resource-creator-dialog"),
+  resourceCreatorClose: element<HTMLButtonElement>("resource-creator-close"),
+  resourceCreatorType: element<HTMLSelectElement>("resource-creator-type"),
+  resourceCreatorScope: element<HTMLSelectElement>("resource-creator-scope"),
+  resourceCreatorInput: element<HTMLTextAreaElement>("resource-creator-input"),
+  resourceCreatorStatus: element<HTMLElement>("resource-creator-status"),
+  resourceCreatorPreviewLabel: element<HTMLElement>("resource-creator-preview-label"),
+  resourceCreatorPreview: element<HTMLTextAreaElement>("resource-creator-preview"),
+  resourceCreatorGenerate: element<HTMLButtonElement>("resource-creator-generate"),
+  resourceCreatorSave: element<HTMLButtonElement>("resource-creator-save"),
   uiDialog: element<HTMLDialogElement>("ui-dialog"),
   uiDialogForm: element<HTMLFormElement>("ui-dialog-form"),
   uiDialogTitle: element<HTMLElement>("ui-dialog-title"),
@@ -802,6 +814,47 @@ let mcpAssistantProcessStartedAt: number | undefined;
 let mcpAssistantProcessCount = 0;
 let mcpAssistantProcessTokens: number | undefined;
 let mcpAssistantPendingTools: string[] | undefined;
+let resourceCreatorSessionId = "";
+let resourceCreatorDraftId: string | undefined;
+let resourceCreatorRequestId: string | undefined;
+
+function openResourceCreatorDialog(): void {
+  resourceCreatorSessionId = crypto.randomUUID();
+  resourceCreatorDraftId = undefined;
+  resourceCreatorRequestId = undefined;
+  elements.resourceCreatorInput.value = "";
+  elements.resourceCreatorPreview.value = "";
+  elements.resourceCreatorPreview.hidden = true;
+  elements.resourceCreatorPreviewLabel.hidden = true;
+  elements.resourceCreatorSave.hidden = true;
+  elements.resourceCreatorGenerate.disabled = false;
+  elements.resourceCreatorStatus.textContent = "";
+  elements.resourceCreatorDialog.showModal();
+  elements.resourceCreatorInput.focus();
+}
+
+function draftResource(): void {
+  const input = elements.resourceCreatorInput.value.trim();
+  if (!input) { elements.resourceCreatorStatus.textContent = "Describe the resource first."; return; }
+  const requestId = crypto.randomUUID();
+  resourceCreatorRequestId = requestId;
+  resourceCreatorDraftId = undefined;
+  elements.resourceCreatorGenerate.disabled = true;
+  elements.resourceCreatorSave.hidden = true;
+  elements.resourceCreatorStatus.textContent = "Dext is preparing a draft…";
+  vscode.postMessage({
+    type: "draftResource", requestId, sessionId: resourceCreatorSessionId,
+    resourceType: elements.resourceCreatorType.value as "api" | "mcp" | "rule" | "skill",
+    scope: elements.resourceCreatorScope.value as "project" | "global", input
+  });
+}
+
+function saveResource(): void {
+  if (!resourceCreatorDraftId) return;
+  elements.resourceCreatorSave.disabled = true;
+  elements.resourceCreatorStatus.textContent = "Saving resource…";
+  vscode.postMessage({ type: "saveResource", draftId: resourceCreatorDraftId });
+}
 
 function resetMcpAssistantProcess(): void {
   mcpAssistantProcessStartedAt = undefined;
@@ -957,27 +1010,37 @@ function renderMcpToolChoices(tools: Array<{ name: string; description?: string 
   elements.mcpAssistantSave.disabled = false;
 }
 
-function defaultValue(field: FieldDefinition): string {
-  if (field.multiple) return `[${defaultValue({ ...field, multiple: false })}]`;
-  if (field.default !== undefined) {
-    if (typeof field.default === "string") return `"${field.default}"`;
-    if (typeof field.default === "object") return JSON.stringify(field.default);
-    return String(field.default);
-  }
-  if (field.type === "context") return "@selection";
-  if (field.type === "result") return "edit_result";
-  if (field.type === "number") return "0";
-  if (field.type === "boolean") return "False";
-  if (field.type === "enum") return `"${field.values?.[0] ?? ""}"`;
-  if (field.type === "object") return "{}";
-  return '""';
+function methodDefaultText(field: FieldDefinition): string {
+  if (typeof field.default === "string") return JSON.stringify(field.default);
+  if (typeof field.default === "boolean") return field.default ? "True" : "False";
+  return typeof field.default === "object" ? JSON.stringify(field.default) : String(field.default);
 }
 
-function methodTemplate(method: SidebarState["methods"][number]): string {
-  const args = method.input
-    .filter((field) => field.required && field.default === undefined)
-    .map((field) => `${field.name}=${defaultValue(field)}`);
-  return `${method.id}(${args.join(", ")})`;
+function signatureToken(parent: HTMLElement, className: string, text: string): void {
+  const token = document.createElement("span");
+  token.className = className;
+  token.textContent = text;
+  parent.append(token);
+}
+
+/** Compact syntax highlighting for API signatures in the methods dialog. */
+function renderMethodSignature(signature: HTMLElement, method: SidebarState["methods"][number], displayId: string): void {
+  const fields = (["agent", "ask", "plan"].includes(method.id) ? method.input : method.input.filter((field) => !field.internal));
+  signature.setAttribute("aria-label", `${displayId} API signature`);
+  signatureToken(signature, "method-token-function", displayId);
+  signatureToken(signature, "method-token-punctuation", "(");
+  fields.forEach((field, index) => {
+    if (index) signatureToken(signature, "method-token-punctuation", ", ");
+    signatureToken(signature, "method-token-parameter", `${field.name}${field.required ? "" : "?"}`);
+    signatureToken(signature, "method-token-punctuation", ": ");
+    signatureToken(signature, "method-token-type", formatFieldType(field));
+    if (field.default !== undefined) {
+      signatureToken(signature, "method-token-punctuation", " = ");
+      signatureToken(signature, "method-token-literal", methodDefaultText(field));
+    }
+  });
+  signatureToken(signature, "method-token-punctuation", ") → ");
+  signatureToken(signature, "method-token-type", methodResultType(method));
 }
 
 function renderMethods(state: SidebarState): void {
@@ -1026,10 +1089,10 @@ function renderMethods(state: SidebarState): void {
       parent.append(group);
     }
     for (const method of node.methods) {
-      const row = document.createElement("button");
-      row.type = "button";
+      const row = document.createElement(method.source === "builtin" ? "button" : "div");
+      if (row instanceof HTMLButtonElement) row.type = "button";
       row.className = "method-row";
-      row.title = method.description;
+      row.title = method.source === "builtin" ? `Open ${method.id} definition` : method.description;
       const identity = document.createElement("span");
       identity.className = "method-identity";
       const name = document.createElement("span");
@@ -1037,10 +1100,7 @@ function renderMethods(state: SidebarState): void {
       name.textContent = method.id.split(".").at(-1) ?? method.id;
       const signature = document.createElement("span");
       signature.className = "method-signature";
-      signature.textContent = formatMethodSignature({
-        ...method,
-        id: method.id.split(".").at(-1) ?? method.id
-      }, { includeInternal: ["agent", "ask", "plan"].includes(method.id) });
+      renderMethodSignature(signature, method, method.id.split(".").at(-1) ?? method.id);
       if (!prefix) {
         const source = document.createElement("span");
         source.className = "method-source-inline";
@@ -1049,13 +1109,17 @@ function renderMethods(state: SidebarState): void {
       } else {
         identity.append(name, signature);
       }
-      const insert = document.createElement("i");
-      insert.className = "codicon codicon-add";
-      row.append(identity, insert);
-      row.addEventListener("click", () => {
-        editor.insertInvocation(methodTemplate(method));
-        closeMethodsDialog();
-      });
+      row.append(identity);
+      if (method.source === "builtin") {
+        const open = document.createElement("i");
+        open.className = "method-open-definition codicon codicon-go-to-file";
+        open.setAttribute("aria-hidden", "true");
+        row.append(open);
+        row.addEventListener("click", () => {
+          vscode.postMessage({ type: "openBuiltinApiDefinition", id: method.id });
+          closeMethodsDialog();
+        });
+      }
       parent.append(row);
     }
   }
@@ -1780,8 +1844,8 @@ function copyButton(text: string): HTMLButtonElement {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "icon-button compact output-copy";
-  button.title = "Copy output";
-  button.setAttribute("aria-label", "Copy output");
+  button.title = "Copy";
+  button.setAttribute("aria-label", "Copy");
   const icon = document.createElement("i");
   icon.className = "codicon codicon-copy";
   button.append(icon);
@@ -1796,13 +1860,10 @@ function copyButton(text: string): HTMLButtonElement {
   return button;
 }
 
-function markdownCopyToolbar(text: string, label = "Copy Markdown"): HTMLElement {
+function markdownCopyToolbar(text: string): HTMLElement {
   const toolbar = document.createElement("div");
   toolbar.className = "markdown-copy-toolbar";
-  const button = copyButton(text);
-  button.title = label;
-  button.setAttribute("aria-label", button.title);
-  toolbar.append(button);
+  toolbar.append(copyButton(text));
   return toolbar;
 }
 
@@ -1833,7 +1894,7 @@ function jsonOutput(content: string): HTMLElement {
   // needed to preserve JSON whitespace while still letting Markdown own the
   // surrounding layout and code-block styling.
   body.innerHTML = markdown.render("```json\n" + formatted + "\n```");
-  wrapper.append(markdownCopyToolbar(formatted, "Copy JSON"), body);
+  wrapper.append(markdownCopyToolbar(formatted), body);
   return wrapper;
 }
 
@@ -2590,15 +2651,12 @@ function renderExecution(response: RuntimeResponse, reviewTurnId?: string): Docu
   const fragment = document.createDocumentFragment();
   fragment.append(resultHeading(response));
   const result = response.result;
-  if (result.kind === "chat" || result.kind === "text") {
+  if (result.kind === "ask" || result.kind === "plan" || result.kind === "skill") {
     fragment.append(copyableText(result.text));
-    if (result.kind === "chat" && result.planPath) fragment.append(planActions(result.planPath));
-  } else if (result.kind === "explain") {
-    fragment.append(copyableText(result.text));
-  } else if (result.kind === "edit" || result.kind === "agent") {
-    const summary = result.kind === "agent" ? result.text : result.summary;
-    if (summary) fragment.append(copyableText(summary));
-    const changes = result.kind === "agent" ? result.patch?.changes ?? [] : result.patch.changes;
+    if (result.kind === "plan" && result.planPath) fragment.append(planActions(result.planPath));
+  } else if (result.kind === "agent") {
+    if (result.text) fragment.append(copyableText(result.text));
+    const changes = result.patch?.changes ?? [];
     for (const change of changes) {
       fragment.append(fileChangeDisclosure(change, "agent-file-change execution-file-change", reviewTurnId));
     }
@@ -2631,43 +2689,6 @@ function renderExecution(response: RuntimeResponse, reviewTurnId?: string): Docu
     if (result.stderr) body.append(terminalBlock(result.stderr, "terminal-output terminal-stderr"));
     disclosure.append(body);
     fragment.append(disclosure);
-  } else if (result.kind === "code") {
-    if (result.title) {
-      const title = document.createElement("div");
-      title.className = "output-title";
-      title.textContent = result.title;
-      fragment.append(title);
-    }
-    fragment.append(codeBlock(result.code));
-  } else if (result.kind === "review") {
-    fragment.append(copyableText(result.summary));
-    for (const finding of result.findings) {
-      const item = document.createElement("div");
-      item.className = `finding ${finding.severity} with-icon`;
-      const icon = document.createElement("i");
-      icon.className = `codicon codicon-${finding.severity}`;
-      const content = document.createElement("span");
-      content.textContent = finding.message;
-      item.append(icon, content);
-      fragment.append(item);
-    }
-  } else if (result.kind === "plan") {
-    const title = document.createElement("div");
-    title.className = "output-title";
-    title.textContent = result.title;
-    const list = document.createElement("ol");
-    list.className = "plan-list";
-    for (const step of result.steps) {
-      const item = document.createElement("li");
-      item.textContent = step.title;
-      if (step.detail) {
-        const detail = document.createElement("small");
-        detail.textContent = step.detail;
-        item.append(detail);
-      }
-      list.append(item);
-    }
-    fragment.append(title, list);
   } else if (result.kind === "patch") {
     const title = document.createElement("div");
     title.className = "output-title";
@@ -2950,7 +2971,10 @@ function createAgentToolCommand(
   const code = document.createElement("code");
   body.append(code);
   const copy = copyButton(event.text);
-  command.append(body, copy);
+  const content = document.createElement("div");
+  content.className = "agent-trace-command-content";
+  content.append(body, copy);
+  command.append(content);
   container.append(command);
   const item: AgentToolCommand = {
     body,
@@ -3116,7 +3140,6 @@ function renderAgentEvent(event: AgentStreamEvent): void {
 function renderAgentFileChanges(entries: readonly WorkflowStepResponse[]): void {
   const changes = entries.flatMap((step): PatchChange[] => {
     const result = step.response?.result;
-    if (result?.kind === "edit") return result.patch.changes;
     if (result?.kind === "patch") return result.changes;
     return [];
   }).filter((change) => change.before !== change.after);
@@ -3228,13 +3251,7 @@ function withIsolatedAgentTrace(turn: OutputTurnElements, render: () => void): v
 }
 
 function storedResponse(record: DextHistoryRecord): InputExecutionResponse | undefined {
-  if (record.response) return record.response;
-  try {
-    const parsed = JSON.parse(record.output) as InputExecutionResponse;
-    return parsed?.kind === "workflow" && Array.isArray(parsed.executions) ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
+  return readHistoryResponse(record);
 }
 
 /** Populate a history turn only when its disclosure is opened.  The shell
@@ -3253,8 +3270,8 @@ function renderStoredTurn(record: DextHistoryRecord, turn: OutputTurnElements): 
   // Plan turns use a more useful title once their response has been parsed.
   // Keep that JSON parse off the tab-switch path and update the lightweight
   // summary only after deferred hydration completes.
-  const planExecution = response?.executions.find((item) => item.result.kind === "chat" && item.result.executePlan);
-  const planResult = planExecution?.result.kind === "chat" ? planExecution.result : undefined;
+  const planExecution = response?.executions.find((item) => item.result.kind === "plan" && item.result.executePlan);
+  const planResult = planExecution?.result.kind === "plan" ? planExecution.result : undefined;
   if (record.executePlan || planResult?.executePlan) {
     if (turn.planExecutionStatus) {
       turn.planExecutionStatus.hidden = false;
@@ -3608,6 +3625,10 @@ function requestCloseMcpAssistant(): void {
 elements.mcpAssistantClose.addEventListener("click", requestCloseMcpAssistant);
 elements.mcpAssistantGenerate.addEventListener("click", generateMcpAssistant);
 elements.mcpAssistantSave.addEventListener("click", saveMcpAssistant);
+elements.createResource.addEventListener("click", () => vscode.postMessage({ type: "openResourceCreator" }));
+elements.resourceCreatorClose.addEventListener("click", () => elements.resourceCreatorDialog.close());
+elements.resourceCreatorGenerate.addEventListener("click", draftResource);
+elements.resourceCreatorSave.addEventListener("click", saveResource);
 elements.mcpAssistantDialog.addEventListener("click", (event) => {
   if (event.target === elements.mcpAssistantDialog) requestCloseMcpAssistant();
 });
@@ -3811,6 +3832,22 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   }
   if (message.type === "openMethods") openMethodsDialog();
   if (message.type === "openMcp") openMcpDialog();
+  if (message.type === "resourceCreatorOpened") openResourceCreatorDialog();
+  if (message.type === "resourceDraft" && message.requestId === resourceCreatorRequestId) {
+    resourceCreatorDraftId = message.draft.id;
+    elements.resourceCreatorPreview.value = `# ${message.draft.type}: ${message.draft.name}\n# Scope: ${message.draft.scope}\n\n${message.draft.content}`;
+    elements.resourceCreatorPreview.hidden = false;
+    elements.resourceCreatorPreviewLabel.hidden = false;
+    elements.resourceCreatorGenerate.disabled = false;
+    elements.resourceCreatorSave.hidden = false;
+    elements.resourceCreatorSave.disabled = false;
+    elements.resourceCreatorStatus.textContent = "Review the generated draft, refine the request if needed, then confirm.";
+  }
+  if (message.type === "resourceSaved" && message.draftId === resourceCreatorDraftId) {
+    elements.resourceCreatorStatus.textContent = message.message;
+    elements.resourceCreatorDialog.close();
+    resourceCreatorDraftId = undefined;
+  }
   if (message.type === "mcpAssistant") openMcpAssistantDialog();
   if (message.type === "mcpProgress" && message.requestId === mcpAssistantRequestId) {
     renderMcpAssistantEvent(message.event);
@@ -3849,8 +3886,8 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   }
   if (message.type === "execution" && message.sessionId === activeConversationId) {
     selectOutputTurn(message.turnId);
-    const planResult = message.response.executions.find((execution) => execution.result.kind === "chat" && execution.result.executePlan)?.result;
-    if (activeTurn?.planExecutionStatus && !activeTurn.planExecutionStatus.hidden) activeTurn.planExecutionStatus.textContent = planExecutionLabel([], undefined, planResult?.kind === "chat" ? planResult.planOutcome : undefined);
+    const planResult = message.response.executions.find((execution) => execution.result.kind === "plan" && execution.result.executePlan)?.result;
+    if (activeTurn?.planExecutionStatus && !activeTurn.planExecutionStatus.hidden) activeTurn.planExecutionStatus.textContent = planExecutionLabel([], undefined, planResult?.kind === "plan" ? planResult.planOutcome : undefined);
     renderResult(message.response, message.reviewPatch ? message.turnId : undefined);
   }
   if (message.type === "patchResolved" && message.sessionId === activeConversationId) {

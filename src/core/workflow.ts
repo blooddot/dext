@@ -61,7 +61,9 @@ interface EnvironmentEntry {
 }
 
 const RESULT_TYPES: Readonly<Record<string, ValueType>> = {
-  chat: result("ChatResult", { text: { kind: "string" } }),
+  ask: result("AskResult", { text: { kind: "string" } }),
+  plan: result("PlanResult", { text: { kind: "string" } }),
+  skill: result("SkillResult", { text: { kind: "string" } }),
   agent: result("AgentResult", {
     text: { kind: "string" },
     summary: { kind: "string" },
@@ -89,9 +91,6 @@ const RESULT_TYPES: Readonly<Record<string, ValueType>> = {
     text: { kind: "string" },
     label: { kind: "string" }
   }),
-  text: result("TextResult", { text: { kind: "string" } }),
-  code: result("CodeResult", { code: { kind: "string" }, language: { kind: "string" } }),
-  plan: result("PlanResult", {}),
   patch: result("PatchResult", {
     title: { kind: "string" },
     changes: { kind: "list", item: { kind: "unknown" } }
@@ -289,6 +288,7 @@ class Compiler {
     if (node.name === "ExpressionStatement") return this.compileExpressionStatement(node);
     if (node.name === "IfStatement") return this.compileIf(node);
     if (node.name === "ForStatement") return this.compileFor(node);
+    if (node.name === "WhileStatement") return this.compileWhile(node);
     if (node.name === "TryStatement") return this.compileTry(node);
     if (node.name === "ReturnStatement") {
       if (!this.options.allowReturn) {
@@ -329,7 +329,8 @@ class Compiler {
       return undefined;
     }
     const name = text(this.source, variable);
-    if (this.environment.has(name)) {
+    const existing = this.environment.get(name);
+    if (existing && this.loopDepth === 0) {
       this.error(`Variable '${name}' cannot be reassigned.`, variable.from, variable.to);
       return undefined;
     }
@@ -337,6 +338,10 @@ class Compiler {
     if (callNode) {
       const compiled = this.compileCall(callNode);
       if (!compiled) return undefined;
+      if (existing && typeName(existing.type) !== typeName(compiled.type)) {
+        this.error(`Loop variable '${name}' must keep type ${typeName(existing.type)}.`, variable.from, variable.to);
+        return undefined;
+      }
       this.environment.set(name, { type: compiled.type, from: variable.from });
       return { kind: "step", assignment: name, call: compiled.call, from: node.from, to: node.to };
     }
@@ -376,6 +381,10 @@ class Compiler {
         return undefined;
       }
       type = declared;
+    }
+    if (existing && typeName(existing.type) !== typeName(type)) {
+      this.error(`Loop variable '${name}' must keep type ${typeName(existing.type)}.`, variable.from, variable.to);
+      return undefined;
     }
     this.environment.set(name, { type, from: variable.from, value: compiled.expression });
     if (valueNode.name === "VariableName" || valueNode.name === "MemberExpression") {
@@ -430,6 +439,24 @@ class Compiler {
       from: node.from,
       to: node.to
     };
+  }
+
+  private compileWhile(node: SyntaxNode): WorkflowStatement | undefined {
+    const parts = children(node);
+    const conditionNode = parts.find((child) => child.name === "BinaryExpression" || child.name === "Boolean" || child.name === "MemberExpression");
+    const bodyNode = parts.find((child) => child.name === "Body");
+    if (!conditionNode || !bodyNode) {
+      this.error("A while statement requires a condition and body.", node.from, node.to);
+      return undefined;
+    }
+    const condition = this.compileCondition(conditionNode);
+    if (!condition) return undefined;
+    const before = new Map(this.environment);
+    this.loopDepth += 1;
+    const body = this.compileStatements(bodyNode);
+    this.loopDepth -= 1;
+    this.restore(before);
+    return { kind: "while", condition, body, from: node.from, to: node.to };
   }
 
   /** `try`/`except` replaces the all-or-nothing default: a failing step hands
@@ -991,6 +1018,7 @@ class Compiler {
 
   returnExpression: WorkflowExpression | undefined;
   returnType: ValueType | undefined;
+  private loopDepth = 0;
 }
 
 function contextReferenceFromToken(value: string): ContextReference {

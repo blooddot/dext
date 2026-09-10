@@ -1,10 +1,12 @@
 import type { MethodRegistry } from "./registry.js";
 import type { FieldDefinition, RegisteredCallable } from "./types.js";
-import { formatFieldType, formatMethodParameter, formatMethodSignature } from "./methodSignature.js";
+import { formatFieldType, formatMethodParameter, formatMethodSignature, methodResultType } from "./methodSignature.js";
 import { compileWorkflow, parseWorkflowImports } from "./workflow.js";
 import { functionDefinitions } from "./customApi.js";
 import type { SkillDescriptor } from "./skillCatalog.js";
 import { specializeBuiltinCli } from "./builtinCli.js";
+import { builtinTypeDefinition, builtinTypeSignature, builtinResultFieldType } from "./builtinTypeDefinitions.js";
+import { builtinTypeDefinitionTarget, builtinTypeReferenceTarget } from "./apiNavigation.js";
 
 export interface CompletionItem {
   label: string;
@@ -154,12 +156,20 @@ function callCli(body: string): string | undefined {
 }
 
 function objectCompletions(field: FieldDefinition, value: string, source: string, cursor: number): CompletionItem[] {
-  if (!value.startsWith("{") || !field.properties) return [];
+  const shape = field.type === "list" ? field.items : field;
+  if (!value.startsWith("{") || !shape?.properties) return [];
   const body = value.slice(1);
   const segment = activeArgument(body).trimStart();
+  const discriminator = shape.discriminator;
+  const selected = discriminator
+    ? new RegExp(`["']${discriminator.name}["']\\s*:\\s*["']([^"']+)["']`).exec(body)?.[1]
+    : undefined;
+  const variant = selected ? discriminator?.variants.find((candidate) => candidate.value === selected) : undefined;
+  const properties = [...shape.properties, ...(variant?.properties ?? [])]
+    .filter((property, index, all) => all.findIndex((candidate) => candidate.name === property.name) === index);
   const assignment = /^["']([^"']+)["']\s*:\s*([\s\S]*)$/.exec(segment);
   if (assignment) {
-    const property = field.properties.find((item) => item.name === assignment[1]);
+    const property = properties.find((item) => item.name === assignment[1]);
     const raw = assignment[2] ?? "";
     const fragment = raw.replace(/^["']/, "");
     return (property?.values ?? []).filter((option) => option.startsWith(fragment)).map((option) => ({
@@ -170,7 +180,7 @@ function objectCompletions(field: FieldDefinition, value: string, source: string
   }
   const fragment = segment.replace(/^["']/, "");
   const used = new Set([...body.matchAll(/["']([^"']+)["']\s*:/g)].map((match) => match[1]));
-  return field.properties.filter((property) => !used.has(property.name) && property.name.startsWith(fragment)).map((property) => ({
+  return properties.filter((property) => !used.has(property.name) && property.name.startsWith(fragment)).map((property) => ({
     label: property.name, insertText: `${JSON.stringify(property.name)}: `,
     detail: formatMethodParameter(property), kind: "parameter",
     replaceStart: cursor - segment.length,
@@ -179,35 +189,15 @@ function objectCompletions(field: FieldDefinition, value: string, source: string
 }
 
 const RESULT_FIELDS: Readonly<Record<string, readonly string[]>> = {
-  chat: ["text"],
+  ask: ["text"],
+  plan: ["text", "planPath", "executePlan", "planOutcome"],
   agent: ["text", "summary", "patch", "files"],
-  explain: ["text", "files"],
-  edit: ["summary", "patch", "files"],
-  review: ["status", "summary", "findings"],
   apply: ["status", "summary", "files"],
   terminal: ["status", "command", "cwd", "exit_code", "stdout", "stderr", "duration_ms"],
   print: ["text", "label"],
-  text: ["text"],
-  code: ["code", "language", "title"],
-  plan: ["title", "steps"],
+  skill: ["text"],
   patch: ["title", "changes"],
   ui: ["type", "selected", "custom", "confirmed", "value"]
-};
-
-const RESULT_FIELD_TYPES: Readonly<Record<string, Readonly<Record<string, string>>>> = {
-  chat: { text: "string" },
-  agent: { text: "string", summary: "string | undefined", patch: "PatchResult | undefined", files: "CodeRef[] | undefined" },
-  explain: { text: "string", files: "CodeRef[]" },
-  edit: { summary: "string", patch: "PatchResult", files: "CodeRef[]" },
-  review: { status: '"pass" | "warning" | "fail"', summary: "string", findings: "ReviewFinding[]" },
-  apply: { status: '"applied" | "unchanged" | "conflict"', summary: "string", files: "CodeRef[]" },
-  terminal: { status: '"succeeded" | "failed" | "timed_out"', command: "string", cwd: "string", exit_code: "number", stdout: "string", stderr: "string", duration_ms: "number" },
-  print: { text: "string", label: "string | undefined" },
-  text: { text: "string" },
-  code: { code: "string", language: "string", title: "string | undefined" },
-  plan: { title: "string", steps: "PlanStep[]" },
-  patch: { title: "string", changes: "PatchChange[]" },
-  ui: { type: '"select" | "radio" | "checkbox" | "confirm" | "input" | "form" | "alert"', selected: "string[]", custom: "string | undefined", confirmed: "boolean", value: "string | undefined" }
 };
 
 function resultTypeName(output: string): string {
@@ -322,7 +312,7 @@ export class DextLanguageService {
       replaceEnd
     });
     if (/:\s*[A-Za-z_]*$/.test(before)) {
-      const types = ["Context", "Result", "list", "Literal", "ChatResult", "AgentResult", "ApplyResult", "TerminalResult", "PrintResult", "McpRawResult", "TextResult", "CodeResult", "PlanResult", "PatchResult"];
+      const types = ["Context", "Result", "list", "Literal", "AskResult", "PlanResult", "AgentResult", "ApplyResult", "TerminalResult", "PrintResult", "SkillResult", "McpRawResult", "PatchResult"];
       const typeFragment = /[A-Za-z_]*$/.exec(before)?.[0] ?? "";
       return types.filter((type) => type.startsWith(typeFragment)).map((type) => item(type, type, "Dext type", "value"));
     }
@@ -416,12 +406,10 @@ export class DextLanguageService {
         "m"
       ).exec(source);
       const output = assignment ? this.resolveMethod(source, assignment[1] ?? "", customApisAreGlobal)?.output.kind : undefined;
-      if (output === "review" || output === "apply" || output === "terminal") {
-        const values = output === "review"
-          ? ["pass", "warning", "fail"]
-          : output === "apply"
-            ? ["applied", "unchanged", "conflict"]
-            : ["succeeded", "failed", "timed_out"];
+      if (output === "apply" || output === "terminal") {
+        const values = output === "apply"
+          ? ["applied", "unchanged", "conflict"]
+          : ["succeeded", "failed", "timed_out"];
         const fragment = statusComparison[2] ?? statusComparison[3] ?? "";
         const hasQuote = /["']$/.test(before);
         const valueStart = hasQuote ? cursor - fragment.length - 1 : cursor - fragment.length;
@@ -464,7 +452,7 @@ export class DextLanguageService {
           const field = method.input.find((candidate) => candidate.name === assignment[1]);
           const value = assignment[2]?.trimStart() ?? "";
           const valueStart = cursor - value.length;
-          if (field?.name === "fields" && field.properties && value.startsWith("[")) {
+          if (field?.name === "fields" && field.items?.properties && value.startsWith("[")) {
             const brace = value.lastIndexOf("{");
             if (brace >= 0) return objectCompletions(field, value.slice(brace), source, cursor);
           }
@@ -615,6 +603,16 @@ export class DextLanguageService {
   }
 
   documentHover(source: string, cursor: number, customApisAreGlobal = true): LanguageHover | undefined {
+    const typeTarget = builtinTypeDefinitionTarget(source, cursor) ?? builtinTypeReferenceTarget(source, cursor);
+    const typeDefinition = typeTarget && builtinTypeDefinition(typeTarget.name);
+    if (typeTarget && typeDefinition) {
+      return {
+        rangeStart: typeTarget.originFrom,
+        rangeEnd: typeTarget.originTo,
+        label: builtinTypeSignature(typeDefinition),
+        documentation: `${typeDefinition.description} Use Go to Definition to inspect the complete built-in type document.`
+      };
+    }
     const pattern = /[A-Za-z_][A-Za-z0-9_.-]*/g;
     for (const match of source.matchAll(pattern)) {
       const from = match.index ?? 0;
@@ -636,24 +634,24 @@ export class DextLanguageService {
         const field = outputFields(outputMethod).find((candidate) => candidate.name === member[2]);
         const type = outputMethod?.output.fields
           ? field ? formatFieldType(field) : undefined
-          : outputMethod ? RESULT_FIELD_TYPES[outputMethod.output.kind]?.[member[2] ?? ""] : undefined;
+          : outputMethod ? builtinResultFieldType(outputMethod.output.kind, member[2] ?? "") : undefined;
         if (outputMethod && type) {
           return {
             rangeStart: from,
             rangeEnd: to,
             label: `${member[0]}: ${type}`,
-            documentation: `${outputMethod.output.resultType ?? resultTypeName(outputMethod.output.kind)} field returned by ${assignment?.[1] ?? outputMethod.output.kind}.`
+            documentation: `${methodResultType(outputMethod)} field returned by ${assignment?.[1] ?? outputMethod.output.kind}.`
           };
         }
       }
       const variableAssignment = new RegExp(`^\\s*${match[0]}\\s*=\\s*([A-Za-z_][A-Za-z0-9_.-]*)\\(`, "m").exec(source);
       if (variableAssignment) {
-        const output = this.resolveMethod(source, variableAssignment[1] ?? "", customApisAreGlobal)?.output.kind;
-        if (output) {
+        const outputMethod = this.resolveMethod(source, variableAssignment[1] ?? "", customApisAreGlobal);
+        if (outputMethod) {
           return {
             rangeStart: from,
             rangeEnd: to,
-            label: `${match[0]}: ${resultTypeName(output)}`,
+            label: `${match[0]}: ${methodResultType(outputMethod)}`,
             documentation: `Result returned by ${variableAssignment[1]}.`
           };
         }

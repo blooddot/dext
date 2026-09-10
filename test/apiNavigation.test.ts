@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { apiDefinitionTarget, apiFunctionDefinition } from "../src/core/apiNavigation.js";
+import { apiDefinitionTarget, apiFunctionDefinition, builtinApiDefinitionTarget, builtinTypeDefinitionTarget, builtinTypeReferenceTarget } from "../src/core/apiNavigation.js";
 
 describe(".dx definition navigation", () => {
   it.each([
@@ -56,5 +56,47 @@ other()
     }
     const fakeImport = 'text = """\nfrom playground import verify\n"""\nverify()';
     expect(apiDefinitionTarget(fakeImport, fakeImport.lastIndexOf("verify") + 1)).toBeUndefined();
+  });
+
+  it("resolves built-in result types only in annotations", () => {
+    const source = `# PrintResult
+def main(context: PrintResult) -> AgentResult:
+    return print(text="PrintResult")`;
+    for (const name of ["PrintResult", "AgentResult"]) {
+      const offset = source.indexOf(name, source.indexOf("def main")) + 2;
+      expect(builtinTypeDefinitionTarget(source, offset)).toMatchObject({ name });
+    }
+    expect(builtinTypeDefinitionTarget(source, source.indexOf("PrintResult") + 2)).toBeUndefined();
+    expect(builtinTypeDefinitionTarget(source, source.lastIndexOf("PrintResult") + 2)).toBeUndefined();
+  });
+
+  it("resolves namespaced structural types in annotations", () => {
+    const source = "def main(fields: list[ui.Field]) -> UiFormResult:\n    ...";
+    const offset = source.indexOf("ui.Field") + 4;
+    expect(builtinTypeDefinitionTarget(source, offset)).toMatchObject({ name: "ui.Field" });
+  });
+
+  it("resolves nested type references in the generated type document", () => {
+    const source = "interface AgentResult {\n  patch?: PatchResult\n}";
+    expect(builtinTypeReferenceTarget(source, source.indexOf("PatchResult") + 2)).toMatchObject({ name: "PatchResult" });
+  });
+
+  it("resolves qualified types and nested type class declarations", () => {
+    const qualified = "options: list[string | ui.Option]";
+    expect(builtinTypeReferenceTarget(qualified, qualified.indexOf("Option") + 2)).toMatchObject({ name: "ui.Option" });
+    const declaration = "# Type: ui.Field\nclass Field:\n    ...";
+    expect(builtinTypeReferenceTarget(declaration, declaration.indexOf("Field:") + 2)).toMatchObject({ name: "ui.Field" });
+  });
+
+  it("resolves built-in APIs only at their call sites", () => {
+    const source = `# node.url.parse(url="ignore")
+parsed = node.url.parse(url=input)
+label = "node.path.basename"`;
+    const call = source.indexOf("node.url.parse", source.indexOf("parsed"));
+    expect(builtinApiDefinitionTarget(source, call + 1)).toMatchObject({ id: "node" });
+    expect(builtinApiDefinitionTarget(source, call + 6)).toMatchObject({ id: "node.url" });
+    expect(builtinApiDefinitionTarget(source, call + 11)).toMatchObject({ id: "node.url.parse" });
+    expect(builtinApiDefinitionTarget(source, source.indexOf("node.url.parse") + 6)).toBeUndefined();
+    expect(builtinApiDefinitionTarget(source, source.lastIndexOf("node.path.basename") + 6)).toBeUndefined();
   });
 });

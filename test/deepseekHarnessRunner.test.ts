@@ -118,7 +118,7 @@ describe("Harness runner", { timeout: 15000 }, () => {
     const req: AgentExecutionRequest = { profile: request().profile, cwd: process.cwd(), method, metadata: {}, contract: new AxAdapter().compile(method), resolved: {
       method, arguments: { input: "hello" }, context: [], metadata: {}, invocation: { kind: "invocation", method: "ask", source: "code", arguments: [] }
     } };
-    expect(await runner().run(req)).toEqual({ kind: "chat", text: "typed answer" });
+    expect(await runner().run(req)).toEqual({ kind: "ask", text: "typed answer" });
     req.resolved.arguments.input = "bad-json";
     await expect(runner().run(req)).rejects.toThrow("not retried");
   });

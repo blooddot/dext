@@ -43,11 +43,11 @@ describe("Dext package manifest", () => {
     expect(bindings).toEqual([
       {
         command: "copyFilePath", key: "ctrl+c", mac: "cmd+c",
-        when: "config.dext.copyFilePathOnCopy && !inputFocus && (filesExplorerFocus || openEditorsFocus || (editorAreaFocus && resourceScheme != untitled))"
+        when: "config.dext.copyFilePathOnCopy && !editorHoverVisible && !inputFocus && (filesExplorerFocus || openEditorsFocus || (editorAreaFocus && resourceScheme != untitled))"
       },
       {
         command: "copyFilePath", key: "ctrl+c", mac: "cmd+c",
-        when: "config.dext.copyFilePathOnCopy && editorTextFocus && !editorHasSelection && resourceScheme != untitled"
+        when: "config.dext.copyFilePathOnCopy && !editorHoverVisible && editorTextFocus && !editorHasSelection && resourceScheme != untitled"
       }
     ]);
     expect(value.contributes?.configuration?.properties?.["dext.copyFilePathOnCopy"])

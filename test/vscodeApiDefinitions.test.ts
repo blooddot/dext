@@ -3,16 +3,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const openTextDocument = vi.hoisted(() => vi.fn());
 vi.mock("vscode", () => ({
-  Uri: { file: (path: string) => ({ fsPath: path }) },
+  Uri: { file: (path: string) => ({ fsPath: path }), parse: (path: string) => ({ path }) },
   Range: class { constructor(readonly start: VSCode.Position, readonly end: VSCode.Position) {} },
+  Position: class { constructor(readonly line: number, readonly character: number) {} },
   workspace: { openTextDocument }
 }));
 
 import { DextApiDefinitionProvider } from "../src/vscodeApiDefinitions.js";
 
-function document(source: string, path: string): VSCode.TextDocument {
+function document(source: string, path: string, scheme?: string): VSCode.TextDocument {
   return {
-    uri: { fsPath: path },
+    uri: { fsPath: path, scheme },
     getText: () => source,
     offsetAt: (position: VSCode.Position) => position.character,
     positionAt: (offset: number) => ({ line: 0, character: offset })
@@ -64,6 +65,44 @@ describe("VS Code .dx definition provider", () => {
     expect(await provider.provideDefinition(current, position, token)).toBeUndefined();
     openTextDocument.mockClear();
     expect(await provider.provideDefinition(current, position, { isCancellationRequested: true } as VSCode.CancellationToken)).toBeUndefined();
+    expect(openTextDocument).not.toHaveBeenCalled();
+  });
+
+  it("opens the virtual built-in type document for a result annotation", async () => {
+    const source = "def main(context: PrintResult) -> AgentResult:\n    return print(text=context.text)";
+    const current = document(source, "C:/project/develop.dx");
+    const provider = new DextApiDefinitionProvider(() => undefined);
+    const links = await provider.provideDefinition(current, current.positionAt(source.indexOf("PrintResult") + 2), token);
+    expect(links?.[0]?.targetUri).toMatchObject({ path: "dext-types:/builtin-types.dx" });
+    expect(links?.[0]?.targetSelectionRange?.start.line).toBeGreaterThan(0);
+    expect(openTextDocument).not.toHaveBeenCalled();
+  });
+
+  it("allows nested types in the virtual document to navigate as well", async () => {
+    const source = "interface AgentResult {\n  patch?: PatchResult\n}";
+    const current = document(source, "dext-types:/builtin-types.dx", "dext-types");
+    const provider = new DextApiDefinitionProvider(() => undefined);
+    const links = await provider.provideDefinition(current, current.positionAt(source.indexOf("PatchResult") + 2), token);
+    expect(links?.[0]?.targetUri).toMatchObject({ path: "dext-types:/builtin-types.dx" });
+    expect(openTextDocument).not.toHaveBeenCalled();
+  });
+
+  it("opens the virtual built-in API document for a Node bridge call", async () => {
+    const source = "parsed = node.url.parse(url=input)";
+    const current = document(source, "C:/project/develop.dx");
+    const provider = new DextApiDefinitionProvider(() => undefined);
+    const links = await provider.provideDefinition(current, current.positionAt(source.indexOf("node.url.parse") + 6), token);
+    expect(links?.[0]?.targetUri).toMatchObject({ path: "dext-builtins:/builtin-apis.dx" });
+    expect(links?.[0]?.targetSelectionRange?.start.line).toBeGreaterThan(0);
+    expect(openTextDocument).not.toHaveBeenCalled();
+  });
+
+  it("opens a concrete built-in result type from the virtual API document", async () => {
+    const source = "def form() -> UiFormResult:\n    ...";
+    const current = document(source, "dext-builtins:/builtin-apis.dx", "dext-builtins");
+    const provider = new DextApiDefinitionProvider(() => undefined);
+    const links = await provider.provideDefinition(current, current.positionAt(source.indexOf("UiFormResult") + 2), token);
+    expect(links?.[0]?.targetUri).toMatchObject({ path: "dext-types:/builtin-types.dx" });
     expect(openTextDocument).not.toHaveBeenCalled();
   });
 });

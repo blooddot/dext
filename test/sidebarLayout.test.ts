@@ -39,6 +39,20 @@ describe("sidebar panel layout", () => {
     expect(html.match(/class="icon-button panel-fullscreen"/g)).toHaveLength(2);
   });
 
+  it("creates resources from a dedicated draft-and-confirm dialog", async () => {
+    const html = await source("src/sidebarProvider.ts");
+    const main = await source("src/webview/main.ts");
+    expect(html).toContain('id="create-resource"');
+    expect(html).toContain('id="resource-creator-dialog"');
+    expect(html).toContain('<option value="api">Custom API</option><option value="mcp">MCP configuration</option><option value="rule">Rule</option><option value="skill">Skill</option>');
+    expect(html).toContain('id="resource-creator-scope"');
+    expect(html).toContain('id="resource-creator-preview"');
+    expect(main).toContain('type: "openResourceCreator"');
+    expect(main).toContain('type: "draftResource"');
+    expect(main).toContain('type: "saveResource"');
+    expect(main).toContain('resourceCreatorDialog.showModal()');
+  });
+
   it("uses the shared mouse and keyboard disclosure behavior", async () => {
     const main = await source("src/webview/main.ts");
     expect(main).toContain('inputHeading: element<HTMLElement>("input-heading")');
@@ -97,7 +111,7 @@ describe("sidebar panel layout", () => {
     expect(main).toMatch(/renderComposerMenu\(elements\.modeMenu, \[[\s\S]*?\["plan", "Plan", "codicon-checklist"\]/);
     expect(main).toContain('plan: "Plan"');
     // A plan turn ends in a file, so the result offers the file and the handoff.
-    expect(main).toMatch(/if \(result\.kind === "chat" && result\.planPath\) fragment\.append\(planActions\(result\.planPath\)\)/);
+    expect(main).toMatch(/if \(result\.kind === "plan" && result\.planPath\) fragment\.append\(planActions\(result\.planPath\)\)/);
     expect(main).toMatch(/function planActions[\s\S]*?type: "openFileReference", reference: planPath/);
     expect(main).toMatch(/function planActions[\s\S]*?type: "buildPlan", planPath/);
     expect(builtins).toMatch(/id: "plan",\s*title: "Plan",/);
@@ -115,7 +129,7 @@ describe("sidebar panel layout", () => {
     expect(sidebar).toMatch(/private async buildPlan[\s\S]*?await this\.run\("plan", \[/);
     expect(sidebar).toContain('].join("\\n"), undefined, true);');
     // History replays the document link but not the handoff button.
-    expect(history).toMatch(/result\.kind === "chat" && result\.planPath/);
+    expect(history).toMatch(/result\.kind === "plan" && result\.planPath/);
     expect(history).not.toContain('type: "buildPlan"');
   });
 
@@ -587,7 +601,7 @@ describe("sidebar panel layout", () => {
     expect(main).toMatch(/if \(!options\.length\)[\s\S]*?No models discovered\.[\s\S]*?Dext: Configure Agent/);
   });
 
-  it("opens the complete API list in a dialog and keeps method insertion intact", async () => {
+  it("opens the complete API list in a dialog with built-in definition links", async () => {
     const html = await source("src/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
     const css = await source("media/styles.css");
@@ -596,7 +610,11 @@ describe("sidebar panel layout", () => {
     expect(html).toContain('id="reload-methods"');
     expect(main).toMatch(/elements\.reloadMethods\.addEventListener\("click"[\s\S]*?type: "reload"/);
     expect(main).toMatch(/function setMethodsReloading[\s\S]*?codicon-modifier-spin/);
-    expect(main).toMatch(/row\.addEventListener\("click", \(\) => \{[\s\S]*?editor\.insertInvocation[\s\S]*?closeMethodsDialog\(\)/);
+    expect(main).toMatch(/row\.addEventListener\("click", \(\) => \{[\s\S]*?type: "openBuiltinApiDefinition", id: method\.id[\s\S]*?closeMethodsDialog\(\)/);
+    expect(main).not.toContain("editor.insertInvocation(methodTemplate(method))");
+    expect(main).toContain("function renderMethodSignature");
+    expect(css).toContain(".method-open-definition");
+    expect(css).toContain(".method-token-function");
     expect(css).toContain('.methods-dialog {');
     expect(css).toContain('.methods-dialog-body {');
   });

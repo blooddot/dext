@@ -82,6 +82,3 @@ assert.match(mainStyles, /\.cm-lint-marker-error::before\s*\{[^}]*rotate\(45deg\
 assert.match(mainStyles, /\.cm-lint-marker-error::after\s*\{[^}]*rotate\(-45deg\)/i);
 assert.match(mainStyles, /\.cm-lint-marker-warning::before\s*\{[^}]*content:\s*["']!["']/i);
 assert.match(mainStyles, /\.cm-lint-marker-info::before\s*\{[^}]*content:\s*["']i["']/i);
-assert.match(mainStyles, /\.finding\s*\{[^}]*display:\s*block/);
-assert.match(mainStyles, /\.finding\.with-icon\s*\{[^}]*display:\s*grid/);
-assert.ok(mainBundle.includes("with-icon"), "Review findings must opt into the icon grid layout.");

@@ -81,7 +81,7 @@ Save reusable APIs as `.dx` files under `.dext/api/`. For example, create `.dext
 ```python
 from common import ask
 
-def main(input: str) -> ChatResult:
+def main(input: str) -> AskResult:
     return ask(input=input)
 ```
 

@@ -13,7 +13,7 @@ describe("Plan execution task initialization", () => {
     const response: InputExecutionResponse = { kind: "workflow", executions: [{
       invocation: { kind: "invocation", method: "plan", arguments: [], source: "chat" },
       method: { id: "plan", title: "Plan", kind: "command", source: "builtin" }, durationMs: 1,
-      result: { kind: "chat", executePlan: true, planPath: "old.plan.md", text: 'Checked. <!-- dext-todo: {"updates":[{"id":"plan-1","status":"completed"}]} -->' }
+      result: { kind: "plan", executePlan: true, planPath: "old.plan.md", text: 'Checked. <!-- dext-todo: {"updates":[{"id":"plan-1","status":"completed"}]} -->' }
     }] };
     const execute = vi.fn(async (_mode: string, _source: string, metadata: ExecutionMetadata) => {
       const roundResponse = structuredClone(response);

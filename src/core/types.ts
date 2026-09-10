@@ -2,19 +2,16 @@ import type { UiFormDefinition, UiFormResult, UiInteractionState } from "./uiFor
 export type MethodKind = "command" | "skill";
 export type MethodSource = "builtin" | "global" | "project";
 export type BuiltinOutputKind =
-  | "chat"
+  | "ask"
+  | "plan"
   | "agent"
-  | "explain"
-  | "edit"
-  | "review"
   | "apply"
   | "terminal"
   | "print"
-  | "text"
-  | "code"
-  | "plan"
+  | "skill"
   | "patch"
   | "ui"
+  | "node"
   | "mcpRaw";
 
 /** Custom .dx TypedDict results use their Literal kind without adding a new
@@ -159,6 +156,14 @@ export type WorkflowStatement =
     to: number;
   }
   | {
+    /** A sequential retry loop. The runtime enforces a finite iteration limit. */
+    kind: "while";
+    condition: WorkflowCondition;
+    body: WorkflowStatement[];
+    from: number;
+    to: number;
+  }
+  | {
     kind: "try";
     body: WorkflowStatement[];
     handler: WorkflowStatement[];
@@ -202,6 +207,8 @@ export type FieldType = "string" | "number" | "boolean" | "object" | "list" | "e
 export interface FieldDefinition {
   name: string;
   type: FieldType;
+  /** Named structural type for an object or list element, e.g. `ui.Field`. */
+  shapeType?: string;
   /** Concrete Dext result annotation used by .dx function parameters. */
   resultType?: string;
   /** Whether the field may explicitly contain JSON null. */
@@ -217,6 +224,11 @@ export interface FieldDefinition {
   /** Nested contract information for structured MCP results. */
   properties?: FieldDefinition[];
   items?: FieldDefinition;
+  /** Object variants selected by a literal discriminator property. */
+  discriminator?: {
+    name: string;
+    variants: { value: string; properties: FieldDefinition[] }[];
+  };
 }
 
 export interface CallableDefinition {
@@ -264,35 +276,20 @@ export interface RegisteredCallable extends CallableDefinition {
   source: MethodSource;
 }
 
-export interface TextResult extends DextResultBase {
-  kind: "text";
-  text: string;
-}
-
-export interface CodeResult extends DextResultBase {
-  kind: "code";
-  code: string;
-  language: string;
-  title?: string;
-}
-
-export interface ReviewFinding {
-  severity: "error" | "warning" | "info";
-  message: string;
-  uri?: string;
-  line?: number;
-}
-
-export type ReviewStatus = "pass" | "warning" | "fail";
-
 export interface PlanExecutionOutcome {
   status: "completed" | "incomplete" | "blocked" | "cancelled";
   reason: string;
   rounds: number;
 }
 
-export interface ChatResult extends DextResultBase {
-  kind: "chat";
+export interface AskResult extends DextResultBase {
+  kind: "ask";
+  text: string;
+}
+
+/** Plan text plus host-owned state for the saved or executed plan document. */
+export interface PlanResult extends DextResultBase {
+  kind: "plan";
   text: string;
   /** Workspace-relative path of the saved plan document, set only by Plan mode. */
   planPath?: string;
@@ -300,6 +297,11 @@ export interface ChatResult extends DextResultBase {
    * send the implementation request directly instead of creating a new plan. */
   executePlan?: boolean;
   planOutcome?: PlanExecutionOutcome;
+}
+
+export interface SkillResult extends DextResultBase {
+  kind: "skill";
+  text: string;
 }
 
 /** Result of a continuous agent task. A patch is present when the Agent
@@ -310,26 +312,6 @@ export interface AgentResult extends DextResultBase {
   summary?: string;
   patch?: PatchResult;
   files?: CodeRef[];
-}
-
-export interface ExplainResult extends DextResultBase {
-  kind: "explain";
-  text: string;
-  files: CodeRef[];
-}
-
-export interface EditResult extends DextResultBase {
-  kind: "edit";
-  summary: string;
-  patch: PatchResult;
-  files: CodeRef[];
-}
-
-export interface WorkflowReviewResult extends DextResultBase {
-  kind: "review";
-  status: ReviewStatus;
-  summary: string;
-  findings: ReviewFinding[];
 }
 
 export interface ApplyResult extends DextResultBase {
@@ -396,16 +378,11 @@ export interface McpRawResult extends DextResultBase {
   structured?: Record<string, unknown>;
 }
 
-export interface PlanStep {
-  title: string;
-  detail?: string;
-  status: "pending" | "ready";
-}
-
-export interface PlanResult extends DextResultBase {
-  kind: "plan";
-  title: string;
-  steps: PlanStep[];
+/** Serializable value returned by a whitelisted node.* capability. */
+export interface NodeResult extends DextResultBase {
+  kind: "node";
+  value?: InvocationValue | null;
+  [field: string]: unknown;
 }
 
 export interface PatchChange {
@@ -430,19 +407,16 @@ export interface McpTypedResult extends DextResultBase {
 }
 
 export type DextResult = McpTypedResult
-  | ChatResult
+  | AskResult
+  | PlanResult
   | AgentResult
-  | ExplainResult
-  | EditResult
-  | WorkflowReviewResult
   | ApplyResult
   | TerminalResult
   | PrintResult
-  | TextResult
-  | CodeResult
-  | PlanResult
+  | SkillResult
   | PatchResult
   | UiResult
+  | NodeResult
   | McpRawResult;
 
 export interface ResolvedInvocation {

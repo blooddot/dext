@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { DextApiDefinitionProvider } from "./vscodeApiDefinitions.js";
+import { DextApiDefinitionProvider, DextBuiltinApisContentProvider, DextBuiltinTypesContentProvider } from "./vscodeApiDefinitions.js";
 import { DextApplication } from "./application.js";
 import { DextSidebarProvider } from "./sidebarProvider.js";
 import { DEFAULT_HISTORY_LIMITS, DextHistoryStore } from "./historyStore.js";
@@ -29,6 +29,7 @@ import {
   DEXT_SEMANTIC_TOKEN_MODIFIERS,
   DEXT_SEMANTIC_TOKEN_TYPES
 } from "./dextSemanticTokens.js";
+import { pythonHoverCode } from "./vscodeHover.js";
 
 let activeApplication: DextApplication | undefined;
 
@@ -699,19 +700,31 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       " "
     ),
     vscode.languages.registerDefinitionProvider(
-      { language: "dext-api", scheme: "file" },
+      [{ language: "dext-api", scheme: "file" }, { scheme: "dext-types" }, { scheme: "dext-builtins" }],
       new DextApiDefinitionProvider((id) => application.customApiSourcePath(id))
     ),
+    vscode.workspace.registerTextDocumentContentProvider("dext-types", new DextBuiltinTypesContentProvider()),
+    vscode.workspace.registerTextDocumentContentProvider("dext-builtins", new DextBuiltinApisContentProvider()),
     vscode.languages.registerHoverProvider(
-      { language: "dext-api", scheme: "file" },
+      [{ language: "dext-api", scheme: "file" }, { scheme: "dext-types" }, { scheme: "dext-builtins" }],
       {
         provideHover(document, position) {
           const source = document.getText();
           const cursor = document.offsetAt(position);
-          const hover = application.language.apiHover(source, cursor);
+          const hover = document.uri.scheme === "file"
+            ? application.language.apiHover(source, cursor)
+            : application.language.documentHover(source, cursor);
           if (!hover) return undefined;
+          // Markdown bold renders signatures as plain text.  A Python fenced
+          // block uses VS Code's built-in grammar, which is also what Dext's
+          // .dx grammar inherits, so types, keywords and literals retain the
+          // familiar editor colours in hovers.
+          const contents = new vscode.MarkdownString();
+          contents.appendCodeblock(pythonHoverCode(hover.label), "python");
+          contents.appendMarkdown("\n\n");
+          contents.appendText(hover.documentation);
           return new vscode.Hover(
-            new vscode.MarkdownString(`**${hover.label}**\n\n${hover.documentation}`),
+            contents,
             new vscode.Range(document.positionAt(hover.rangeStart), document.positionAt(hover.rangeEnd))
           );
         }
@@ -736,7 +749,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       "(", ","
     ),
     vscode.languages.registerDocumentSemanticTokensProvider(
-      { language: "dext-api", scheme: "file" },
+      [{ language: "dext-api", scheme: "file" }, { scheme: "dext-types" }, { scheme: "dext-builtins" }],
       {
         provideDocumentSemanticTokens(document) {
           const builder = new vscode.SemanticTokensBuilder(semanticLegend);

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
+import { readHistoryResponse } from "../src/historyResponse.js";
 
 const main = readFileSync("src/webview/main.ts", "utf8");
 const renderer = ts.transpileModule([
@@ -38,6 +39,7 @@ function harness() {
     pendingAgentEventBatches: [{ sessionId: "session", events: [{ phase: "message", text: "live delta" }] }], agentEventBatchFrame: 2
   };
   const context = {
+    readHistoryResponse,
     ...state, turn, record, executing: true, activeConversationId: "session", forceInitialConversationScroll: false,
     outputTurns: new Map<string, unknown>(), HTMLDetailsElement: Disclosure,
     event: { target: turn.disclosure },
@@ -57,6 +59,30 @@ function harness() {
 }
 
 describe("expanding history while a turn is streaming", () => {
+  it("renders the body of an old Agent chat result after reopening a turn", () => {
+    const { context, turn } = harness();
+    context.record.output = JSON.stringify({ kind: "workflow", executions: [{
+      method: { id: "agent" }, result: { kind: "chat", text: "Recovered **answer**" }, durationMs: 1
+    }] });
+    const fragments: unknown[] = [];
+    Object.assign(context, {
+      document: {
+        ...context.document,
+        createDocumentFragment: () => ({ append: (...nodes: unknown[]) => fragments.push(...nodes) })
+      },
+      resultHeading: () => "agent",
+      copyableText: (text: string) => text,
+      renderResult: (response: { executions: unknown[] }) => {
+        const code = main.slice(main.indexOf("function renderExecution("), main.indexOf("function patchReviewHeader("));
+        runInNewContext(ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
+          + "\nrenderExecution(execution);", { ...context, execution: response.executions[0] });
+      }
+    });
+    runInNewContext("hydrateOutputTurnOnOpen(event)", context);
+    expect(fragments).toEqual(["agent", "Recovered **answer**"]);
+    expect(turn.hydrated).toBe(true);
+  });
+
   it("hydrates Input, Process and Output immediately and preserves all live state", () => {
     const { context, state, turn } = harness();
     context.renderAgentEvent.mockImplementation(() => { context.agentStream = { live: false }; });

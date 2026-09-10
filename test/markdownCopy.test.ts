@@ -8,7 +8,7 @@ describe("Markdown code copy", () => {
     const html = markdown.render("before\n\n```ts\nconst x = 1;\n```\n\nbetween\n\n    indented\n\nafter");
     expect(html).toContain('data-copy="const x = 1;\n"');
     expect(html).toContain('data-copy="indented\n"');
-    expect(html.match(/title="Copy code block"/g)).toHaveLength(2);
+    expect(html.match(/title="Copy"/g)).toHaveLength(2);
     expect(html).toContain('<pre><code class="language-ts">const x = 1;\n</code></pre>');
     expect(html).not.toContain('data-copy="before');
   });

@@ -1,4 +1,5 @@
 import { uiResultText } from "./uiInteractionPresentation.js";
+import { readHistoryResponse } from "./historyResponse.js";
 import { parser } from "@lezer/python";
 import { classHighlighter, highlightCode } from "@lezer/highlight";
 import MarkdownIt from "markdown-it";
@@ -53,12 +54,12 @@ function contextAttribute(context: Record<string, string | boolean>): string {
   return `data-vscode-context='${escapeHtml(JSON.stringify(context)).replaceAll("'", "&#39;")}'`;
 }
 
-function copyButton(value: string, label = "Copy"): string {
-  return `<button class="copy-button codicon codicon-copy" type="button" data-copy="${escapeHtml(value)}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}"></button>`;
+function copyButton(value: string): string {
+  return `<button class="copy-button codicon codicon-copy" type="button" data-copy="${escapeHtml(value)}" title="Copy" aria-label="Copy"></button>`;
 }
 
 function markdownOutput(text: string): string {
-  return `<div class="output-text-copyable"><div class="markdown-copy-toolbar">${copyButton(text, "Copy Markdown")}</div><div class="markdown-body">${renderProcessMarkdown(text)}</div></div>`;
+  return `<div class="output-text-copyable"><div class="markdown-copy-toolbar">${copyButton(text)}</div><div class="markdown-body">${renderProcessMarkdown(text)}</div></div>`;
 }
 
 /** High-frequency conversation actions stay visible on hover; the complete
@@ -311,18 +312,16 @@ function renderedInputSource(source: string): string {
 }
 
 function resultText(result: DextResult): string {
-  if (result.kind === "chat" || result.kind === "text" || result.kind === "explain" || result.kind === "print" || result.kind === "agent") return result.text;
-  if (result.kind === "edit" || result.kind === "review" || result.kind === "apply") return result.summary;
+  if (result.kind === "ask" || result.kind === "plan" || result.kind === "skill" || result.kind === "print" || result.kind === "agent") return result.text;
+  if (result.kind === "apply") return result.summary;
   if (result.kind === "terminal") return [result.stdout, result.stderr].filter(Boolean).join("\n");
-  if (result.kind === "code") return result.code;
   if (result.kind === "patch") return result.changes.map((change) => `${change.uri}\n- ${change.before}\n+ ${change.after}`).join("\n\n");
-  if (result.kind === "plan") return result.steps.map((step) => `${step.title}${step.detail ? `: ${step.detail}` : ""}`).join("\n");
   return uiResultText(result);
 }
 
 function resultBody(result: DextResult): string {
-  if (result.kind === "chat" || result.kind === "text" || result.kind === "explain") {
-    return `${markdownOutput(result.text)}${result.kind === "chat" && result.planPath ? planLink(result.planPath) : ""}`;
+  if (result.kind === "ask" || result.kind === "plan" || result.kind === "skill") {
+    return `${markdownOutput(result.text)}${result.kind === "plan" && result.planPath ? planLink(result.planPath) : ""}`;
   }
   if (result.kind === "terminal") {
     const output = [
@@ -331,21 +330,14 @@ function resultBody(result: DextResult): string {
     ].join("");
     return `<details class="history-disclosure terminal-result"><summary>${chevron()}<span>${escapeHtml(result.command)}</span><span class="history-meta">${escapeHtml(result.status)} · exit ${result.exit_code}</span></summary><div class="disclosure-body"><div class="history-meta">${escapeHtml(result.cwd)}</div>${output}</div></details>`;
   }
-  if (result.kind === "edit" || result.kind === "patch") {
-    const changes = result.kind === "edit" ? result.patch.changes : result.changes;
-    const summary = result.kind === "edit" ? `<p>${escapeHtml(result.summary)}</p>` : "";
-    return `${summary}${changes.map(renderFileChange).join("")}`;
+  if (result.kind === "patch") {
+    return result.changes.map(renderFileChange).join("");
   }
   if (result.kind === "agent") {
     const changes = result.patch?.changes ?? [];
     return `${result.text ? markdownOutput(result.text) : ""}${changes.map(renderFileChange).join("")}`;
   }
-  if (result.kind === "review") {
-    return `<p>${escapeHtml(result.summary)}</p>${result.findings.map((finding) => `<div class="finding ${finding.severity}">${escapeHtml(finding.message)}</div>`).join("")}`;
-  }
   if (result.kind === "apply") return `<p><span class="result-state">${escapeHtml(result.status)}</span>: ${escapeHtml(result.summary)}</p>`;
-  if (result.kind === "plan") return `<ol>${result.steps.map((step) => `<li>${escapeHtml(step.title)}${step.detail ? `<small>${escapeHtml(step.detail)}</small>` : ""}</li>`).join("")}</ol>`;
-  if (result.kind === "code") return `<pre class="code-text">${escapeHtml(result.code)}</pre>`;
   const text = resultText(result);
   const body = text ? `<p>${escapeHtml(text)}</p>` : "";
   return body;
@@ -467,13 +459,7 @@ function inputHistory(events: readonly AgentStreamEvent[]): string {
 }
 
 function parsedResponse(record: DextHistoryRecord): InputExecutionResponse | undefined {
-  if (record.response) return record.response;
-  try {
-    const value = JSON.parse(record.output) as InputExecutionResponse;
-    return value?.kind === "workflow" && Array.isArray(value.executions) ? value : undefined;
-  } catch {
-    return undefined;
-  }
+  return readHistoryResponse(record);
 }
 
 function dateLabel(timestamp: number): string {
@@ -485,9 +471,9 @@ const SESSION_ACTION_HINT = "Right-click for conversation actions";
 
 export function historyTurnTitle(record: DextHistoryRecord): string {
   if (record.title) return record.title;
-  const planExecution = parsedResponse(record)?.executions.find((item) => item.result.kind === "chat" && item.result.executePlan);
+  const planExecution = parsedResponse(record)?.executions.find((item) => item.result.kind === "plan" && item.result.executePlan);
   const planPath = (record.executePlan ? record.planPath : undefined)
-    ?? (planExecution?.result.kind === "chat" ? planExecution.result.planPath : undefined);
+    ?? (planExecution?.result.kind === "plan" ? planExecution.result.planPath : undefined);
   return planPath
     ? `Plan: ${planPath.split("/").pop() ?? planPath}`
     : inputReferenceDisplayText(normalizeInputReferenceSource(record.input)).split(/\r?\n/, 1)[0]!.slice(0, 140);
@@ -496,7 +482,7 @@ export function historyTurnTitle(record: DextHistoryRecord): string {
 export function renderHistoryRecord(record: DextHistoryRecord, sessionId?: string): string {
   const input = normalizeInputReferenceSource(record.input);
   const response = parsedResponse(record);
-  const planExecution = response?.executions.find((item) => item.result.kind === "chat" && item.result.executePlan);
+  const planExecution = response?.executions.find((item) => item.result.kind === "plan" && item.result.executePlan);
   const executePlan = record.executePlan || !!planExecution;
   const firstLine = historyTurnTitle(record);
   const duration = response?.executions.reduce((total, item) => total + item.durationMs, 0) ?? 0;
@@ -519,7 +505,7 @@ export function renderHistoryRecord(record: DextHistoryRecord, sessionId?: strin
   const modeTitle = record.mode ? `Submitted in ${turnModeLabel(record.mode)} mode` : "Mode was not recorded for this turn";
   const modeLabel = `<span class="turn-mode" data-mode="${escapeHtml(record.mode ?? "unknown")}" title="${escapeHtml(modeTitle)}">${turnModeLabel(record.mode)}</span>`;
   const inputHtml = executePlan ? "" : `<details class="history-disclosure"><summary>${chevron()}<span>Input</span>${modeLabel}${copyButton(input)}</summary><pre class="dext-source">${renderedInputSource(input)}</pre></details>`;
-  const planOutcome = record.planOutcome ?? (planExecution?.result.kind === "chat" ? planExecution.result.planOutcome : undefined);
+  const planOutcome = record.planOutcome ?? (planExecution?.result.kind === "plan" ? planExecution.result.planOutcome : undefined);
   const planStatusHtml = executePlan ? `<span class="plan-status">${planExecutionLabel(record.process, record.error, planOutcome)}</span>` : "";
   return `<details class="history-record"${target}${context}><summary${hint}>${chevron()}<span class="history-summary-input${record.title ? " named" : ""}">${escapeHtml(firstLine)}</span>${planStatusHtml}<span class="history-meta">${duration ? formatDuration(duration) : ""}</span><span class="history-meta history-record-time">${escapeHtml(dateLabel(record.createdAt))}</span>${sessionId ? historyTurnActions(sessionId, record.id) : ""}</summary><div class="history-record-body">${inputHtml}${todoHtml}${processHtml ? `<details class="history-disclosure"><summary>${chevron()}<span>Process</span></summary><div class="disclosure-body">${processHtml}</div></details>` : ""}<details class="history-disclosure" open><summary>${chevron()}<span>Output</span>${copyButton(outputCopy)}</summary><div class="disclosure-body">${outputHtml}</div></details></div></details>`;
 }

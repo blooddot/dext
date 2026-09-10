@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { InputExecutionResponse } from "../src/core/types.js";
 import type { DextHistoryRecord } from "../src/historyStore.js";
 import { planExecutionLabel } from "../src/agentTodoPresentation.js";
+import { readHistoryResponse } from "../src/historyResponse.js";
 
 // Exercise the actual deferred renderer without bootstrapping the editor or VS Code.
 const main = readFileSync("src/webview/main.ts", "utf8");
@@ -24,7 +25,7 @@ function hydrate(record: DextHistoryRecord) {
   const renderResult = vi.fn();
   const renderOutputError = vi.fn();
   runInNewContext(`${hydration}\nhydrateStoredTurn(record, turn);`, {
-    record, turn, planExecutionLabel, activeTurn: undefined, agentStream: undefined, agentRunStartedAt: undefined,
+    record, turn, planExecutionLabel, readHistoryResponse, activeTurn: undefined, agentStream: undefined, agentRunStartedAt: undefined,
     resetAgentTrace: vi.fn(), renderAgentEvent: vi.fn(), syncResultToggle: vi.fn(),
     withIsolatedAgentTrace: (_turn: unknown, render: () => void) => render(),
     document: { createElement: () => ({ append: vi.fn() }) }, copyButton: vi.fn(),
@@ -37,13 +38,21 @@ function response(executePlan: boolean): InputExecutionResponse {
   return { kind: "workflow", executions: [{
     invocation: { kind: "invocation", method: "plan", arguments: [], source: "chat" },
     method: { id: "plan", title: "Plan", kind: "command", source: "builtin" }, durationMs: 1,
-    result: { kind: "chat", executePlan, planPath: "plans/build.plan.md", text: "Finished" }
+    result: { kind: "plan", executePlan, planPath: "plans/build.plan.md", text: "Finished" }
   }] };
 }
 
 const base: DextHistoryRecord = { id: "turn", createdAt: 1, input: "internal prompt", process: [], output: "", mode: "plan" };
 
 describe("stored Plan turn hydration", () => {
+  it.each(["response", "serialized"])("hydrates legacy chat results with Plan links and outcomes (%s)", (format) => {
+    const legacy = JSON.parse(JSON.stringify(response(true)).replace('"kind":"plan"', '"kind":"chat"')) as InputExecutionResponse;
+    const view = hydrate({ ...base, ...(format === "response" ? { response: legacy } : { output: JSON.stringify(legacy) }) });
+    expect(view.renderResult).toHaveBeenCalledWith(response(true));
+    expect(view.turn.title.setPlanPath).toHaveBeenCalledWith("plans/build.plan.md");
+    expect(view.turn.input).toBeUndefined();
+  });
+
   it.each(["blocked", "incomplete", "completed", "cancelled"] as const)("restores the persisted %s execution outcome", (status) => {
     const view = hydrate({ ...base, executePlan: true, planOutcome: { status, reason: "fixture", rounds: 3 }, response: response(true) });
     expect(view.turn.planExecutionStatus.textContent).toBe({ blocked: "Blocked", incomplete: "Incomplete", completed: "Completed", cancelled: "Stopped" }[status]);

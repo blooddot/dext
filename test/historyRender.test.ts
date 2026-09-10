@@ -144,9 +144,9 @@ describe("Dext history rendering", () => {
       response: {
         kind: "workflow",
         executions: [{
-          invocation: { kind: "invocation", method: "chat", source: "code", arguments: [] },
-          method: { id: "chat", title: "Chat", kind: "command", source: "builtin" },
-          result: { kind: "chat", text: "hello" },
+          invocation: { kind: "invocation", method: "ask", source: "code", arguments: [] },
+          method: { id: "ask", title: "Ask", kind: "command", source: "builtin" },
+          result: { kind: "ask", text: "hello" },
           durationMs: 10
         }]
       }
@@ -348,49 +348,20 @@ describe("Dext history rendering", () => {
     expect(html.indexOf("rg greeting")).toBeLessThan(html.indexOf("Apply the smallest change"));
   });
 
-  it("renders structured agent results as readable thought summaries instead of JSON", () => {
-    const structured = JSON.stringify({
-      kind: "review",
-      status: "pass",
-      summary: "The change correctly returns hello world.",
-      findings: []
-    });
-    const record: DextHistoryRecord = {
-      id: "structured-thought",
-      createdAt: 1,
-      input: "code.review(target=edit_result)",
-      process: [{ phase: "message", text: structured }],
-      output: ""
-    };
-
-    const html = renderHistoryRecord(record);
-    expect(html).toContain("process-result-review");
-    expect(html).toContain("Review");
-    expect(html).toContain("Passed");
-    expect(html).toContain("The change correctly returns hello world.");
-    expect(html).not.toContain("&quot;kind&quot;");
-    expect(html).not.toContain("findings");
-  });
-
   it("keeps patch details and both diff layouts in structured thoughts", () => {
     const structured = JSON.stringify({
-      kind: "edit",
-      summary: "Complete hello_world.",
-      patch: {
-        kind: "patch",
-        title: "Complete hello_world",
-        changes: [{
-          uri: "target-1/temp.py",
-          before: "def hello_world():\n    pass",
-          after: 'def hello_world():\n    return "hello world"'
-        }]
-      },
-      files: []
+      kind: "patch",
+      title: "Complete hello_world",
+      changes: [{
+        uri: "target-1/temp.py",
+        before: "def hello_world():\n    pass",
+        after: 'def hello_world():\n    return "hello world"'
+      }]
     });
     const record: DextHistoryRecord = {
       id: "structured-patch",
       createdAt: 1,
-      input: "code.edit(target=ref.selection, instruction=\"complete it\")",
+      input: "agent(input=\"complete it\", apply=False)",
       process: [{ phase: "message", text: structured }],
       output: ""
     };
@@ -447,9 +418,9 @@ describe("Dext history rendering", () => {
       response: {
         kind: "workflow",
         executions: [{
-          invocation: { kind: "invocation", method: "chat", source: "code", arguments: [] },
-          method: { id: "chat", title: "Chat", kind: "command", source: "builtin" },
-          result: { kind: "chat", text: "hello" },
+          invocation: { kind: "invocation", method: "ask", source: "code", arguments: [] },
+          method: { id: "ask", title: "Ask", kind: "command", source: "builtin" },
+          result: { kind: "ask", text: "hello" },
           durationMs: 40_499
         }]
       }
@@ -509,11 +480,9 @@ describe("Dext history rendering", () => {
   });
 
   it("highlights Dext call names and keyword arguments distinctly", () => {
-    const html = highlightDext('create(type="mcp", input="https://example.test", scope="project")');
-    expect(html).toContain('<span class="tok-function">create</span>');
-    expect(html).toContain('<span class="tok-propertyName">type</span>');
+    const html = highlightDext('ask(input="https://example.test")');
+    expect(html).toContain('<span class="tok-function">ask</span>');
     expect(html).toContain('<span class="tok-propertyName">input</span>');
-    expect(html).toContain('<span class="tok-propertyName">scope</span>');
   });
 
   it("renders image attachments as ordinary file reference Chips", () => {

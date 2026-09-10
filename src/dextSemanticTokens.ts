@@ -72,6 +72,8 @@ export function dextSemanticTokens(source: string): DextSemanticToken[] {
       const index = siblings.findIndex((candidate) => sameNode(candidate, node));
       if (parent.name === "TypeDef") {
         add(node, "type");
+      } else if (parent.name === "ClassDefinition" && sameNode(siblings.find((child) => child.name === "VariableName"), node)) {
+        add(node, "type", true);
       } else if (parent.name === "FunctionDefinition" && sameNode(siblings.find((child) => child.name === "VariableName"), node)) {
         add(node, "function", true);
       } else if (parent.name === "ParamList") {

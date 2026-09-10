@@ -15,7 +15,7 @@ function harness(error?: string) {
     return { kind: "workflow", executions: [{
       invocation: { kind: "invocation", method: "plan", arguments: [], source: "chat" },
       method: { id: "plan", title: "Plan", kind: "command", source: "builtin" }, durationMs: 1,
-      result: { kind: "chat", executePlan: !!metadata.executePlan, planPath: metadata.planPath ?? "new.plan.md", text: metadata.executePlan
+      result: { kind: "plan", executePlan: !!metadata.executePlan, planPath: metadata.planPath ?? "new.plan.md", text: metadata.executePlan
         ? 'Done <!-- dext-todo: {"updates":[{"id":"plan-1","status":"completed"}],"verification":"passed"} -->' : "Done" }
     }] };
   });

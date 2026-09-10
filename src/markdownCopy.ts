@@ -9,7 +9,7 @@ export function markdownCodeCopy(markdown: MarkdownIt): void {
       const token = tokens[index]!;
       const language = token.info.trim().split(/\s+/, 1)[0] || "text";
       const escape = (value: string): string => markdown.utils.escapeHtml(value);
-      return `<div class="markdown-code-block"><div class="markdown-code-toolbar"><span>${escape(language)}</span><button class="markdown-code-copy codicon codicon-copy" type="button" data-copy="${escape(token.content)}" title="Copy code block" aria-label="Copy code block"></button></div>${render(tokens, index, options, env, renderer)}</div>`;
+      return `<div class="markdown-code-block"><div class="markdown-code-toolbar"><span>${escape(language)}</span><button class="markdown-code-copy codicon codicon-copy" type="button" data-copy="${escape(token.content)}" title="Copy" aria-label="Copy"></button></div>${render(tokens, index, options, env, renderer)}</div>`;
     };
   }
 }

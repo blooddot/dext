@@ -1,2 +1,2 @@
-def main(input: str) -> ChatResult:
+def main(input: str) -> AskResult:
     return ask(input=input)

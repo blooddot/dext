@@ -2,6 +2,19 @@ import { describe, expect, it } from "vitest";
 import { webviewRequestSchema } from "../src/webviewProtocol.js";
 
 describe("Webview protocol", () => {
+  it("accepts bounded resource-creation drafts and save confirmations", () => {
+    const draft = { type: "draftResource", requestId: "request", sessionId: "session", resourceType: "skill", scope: "global", input: "Add release-check guidance." };
+    expect(webviewRequestSchema.parse(draft)).toEqual(draft);
+    expect(webviewRequestSchema.safeParse({ ...draft, resourceType: "plugin" }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({ ...draft, input: "" }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({ type: "saveResource", draftId: "draft" }).success).toBe(true);
+  });
+
+  it("accepts only well-formed built-in API definition requests", () => {
+    expect(webviewRequestSchema.safeParse({ type: "openBuiltinApiDefinition", id: "node.url.parse" }).success).toBe(true);
+    expect(webviewRequestSchema.safeParse({ type: "openBuiltinApiDefinition", id: "node/url/parse" }).success).toBe(false);
+  });
+
   it("requires conversation ownership and bounds agent question answers", () => {
     const request = { type: "agentInputResponse", sessionId: "session", turnId: "turn", requestId: "request", answers: { q: { answers: ["Yes"] } } };
     expect(webviewRequestSchema.parse(request)).toEqual(request);

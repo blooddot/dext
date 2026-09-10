@@ -7,7 +7,7 @@ describe("method signatures", () => {
   it("renders the complete public signature for a built-in API", () => {
     const agent = BUILTIN_METHODS.find((method) => method.id === "agent");
     expect(agent).toBeDefined();
-    const cliParameters = ', cli?: "codex" | "claude" | "deepseek-harness", model?: "sonnet" | "opus" | { model: string, reasoning?: "low" | "medium" | "high" | "xhigh" | "max" | "ultra", speed?: "standard" | "fast" }';
+    const cliParameters = ', cli?: "codex" | "claude" | "deepseek-harness", model?: "sonnet" | "opus" | agent.ModelOptions';
     expect(formatMethodSignature(agent!)).toBe(
       `agent(input: string, apply?: boolean = True, workspace?: dir${cliParameters}) -> AgentResult`
     );
@@ -32,12 +32,12 @@ describe("method signatures", () => {
       kind: "command",
       version: "1.0.0",
       input: [field],
-      output: { kind: "text" },
+      output: { kind: "print" },
       executor: { kind: "deterministic", handler: "sample" }
     };
     expect(formatFieldType(field)).toBe('"safe" | "fast" | result | ("safe" | "fast" | result)[]');
     expect(formatMethodSignature(api)).toBe(
-      'sample.run(mode?: "safe" | "fast" | result | ("safe" | "fast" | result)[] = "safe") -> TextResult'
+      'sample.run(mode?: "safe" | "fast" | result | ("safe" | "fast" | result)[] = "safe") -> PrintResult'
     );
   });
 
@@ -53,6 +53,11 @@ describe("method signatures", () => {
       executor: { kind: "custom", apiId: "docs.read" }
     };
     expect(formatMethodSignature(api)).toBe("docs.read() -> DocumentResult");
+  });
+
+  it("renders named shapes rather than expanding complex object parameters", () => {
+    const form = BUILTIN_METHODS.find((method) => method.id === "ui.form");
+    expect(formatMethodSignature(form!)).toContain("fields: list[ui.Field]");
   });
 
 });

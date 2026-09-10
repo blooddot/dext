@@ -67,7 +67,7 @@ lines.on("line", async (line) => {
         { content: "Inspect", status: "completed", priority: "high" },
         { content: "Verify", status: "in_progress", priority: "medium" }
       ] });
-      if (text.includes("Dext JSON payload:")) answer = text.includes("bad-json") ? "invalid" : JSON.stringify({ kind: "chat", text: "typed answer" });
+      if (text.includes("Dext JSON payload:")) answer = text.includes("bad-json") ? "invalid" : JSON.stringify({ kind: "ask", text: "typed answer" });
       update(p.sessionId, { sessionUpdate: "agent_message_chunk", messageId: "final", content: { type: "text", text: answer } });
       return result({ stopReason: "end_turn" });
     }

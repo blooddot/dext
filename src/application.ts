@@ -9,7 +9,7 @@ import { MethodRegistry } from "./core/registry.js";
 import { DextRuntime } from "./core/runtime.js";
 import { compileWorkflow, parseWorkflowImports } from "./core/workflow.js";
 import { DEFAULT_MAX_CONCURRENCY, WorkflowRuntime } from "./core/workflowRuntime.js";
-import type { CallableDefinition, DextResult, ExecutionMetadata, InputExecutionResponse } from "./core/types.js";
+import type { CallableDefinition, ExecutionMetadata, InputExecutionResponse } from "./core/types.js";
 import type { GlobalResourceItem, GlobalResources, SidebarState } from "./webviewProtocol.js";
 import { VsCodeContextHost } from "./vscodeContextHost.js";
 import { terminalRunHandler } from "./vscodeTerminalHost.js";
@@ -28,6 +28,15 @@ import { DefaultAgentRunner } from "./core/agentRouter.js";
 import { DEFAULT_AGENT_TIMEOUT_MS, DEFAULT_AGENT_IDLE_TIMEOUT_MS, MAX_AGENT_TIMEOUT_MS } from "./core/agentTimeout.js";
 import { listHarnessPresets } from "./core/harnessPresets.js";
 import { SkillCatalog } from "./core/skillCatalog.js";
+
+export type ResourceKind = "api" | "mcp" | "rule" | "skill";
+export interface ResourceDraft {
+  type: ResourceKind;
+  scope: "project" | "global";
+  name: string;
+  content: string;
+  mcpServer?: McpServerConfig;
+}
 import { McpToolRegistry, type McpServerConfig, type McpToolConfig, type McpDiscoveredTool } from "./core/mcpRegistry.js";
 import { McpAccessTokenStore } from "./core/mcpSecrets.js";
 import { parseMcpManifest } from "./core/mcpManifest.js";
@@ -136,7 +145,6 @@ export class DextApplication {
     this.runtime.setMcpCaller((tool, input, onProcessEvent) => this.mcp.call(tool, input, {
       ...(onProcessEvent ? { onProcessEvent } : {})
     }));
-    this.runtime.setCreateHandler(({ arguments: args, metadata }) => this.createResource(args, metadata));
   }
 
   async reload(): Promise<void> {
@@ -494,7 +502,7 @@ export class DextApplication {
       const url = new URL(trimmed);
       if (["http:", "https:"].includes(url.protocol)) documentUrl = trimmed;
     } catch {
-      // Natural-language MCP descriptions are also accepted by create().
+      // Natural-language MCP descriptions are also accepted by the resource creator.
     }
     let documentation = "";
     if (documentUrl) {
@@ -517,7 +525,7 @@ export class DextApplication {
       ...(selection.profileId ? { agent: selection.profileId } : {}),
       ...metadata
     });
-    if (response.result.kind !== "chat") throw new Error("The selected Agent did not return text.");
+    if (response.result.kind !== "ask") throw new Error("The selected Agent did not return text.");
     const raw = response.result.text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
     let value: unknown;
     try { value = JSON.parse(raw); } catch { throw new Error("The Agent returned invalid JSON. Try again or paste a direct MCP configuration."); }
@@ -550,17 +558,12 @@ export class DextApplication {
     throw new Error("The Agent returned an unsupported MCP configuration shape.");
   }
 
-  private async createResource(args: Record<string, unknown>, metadata: Readonly<ExecutionMetadata>): Promise<DextResult> {
-    const type = args.type;
-    const input = args.input;
-    const scope = args.scope === "global" ? "global" : "project";
-    if (!["api", "mcp", "rule", "skill"].includes(String(type))) throw new Error("create type must be 'api', 'mcp', 'rule', or 'skill'.");
-    if (typeof input !== "string" || !input.trim()) throw new Error("create input must be a non-empty string.");
+  async draftResource(type: ResourceKind, scope: "project" | "global", input: string, metadata: Readonly<ExecutionMetadata> = {}): Promise<ResourceDraft> {
+    if (!input.trim()) throw new Error("Describe the resource to create.");
     if (scope === "project" && !this.workspaceTrusted) throw new Error("Project resource creation requires a trusted local workspace.");
     if (type === "mcp") {
       const server = await this.generateMcpManifest(input, metadata);
-      await this.createMcpManifest(server, scope);
-      return { kind: "chat", text: `Created MCP configuration '${server.name}' (${scope}).` };
+      return { type, scope, name: server.name, content: `${JSON.stringify(server, null, 2)}\n`, mcpServer: server };
     }
     const response = await this.runtime.executeConversation("ask", [
       type === "api" ? "Generate one Dext custom API file." : type === "rule" ? "Generate one Dext rule markdown file." : "Generate one Dext SKILL.md package.",
@@ -572,7 +575,7 @@ export class DextApplication {
           : "name must be a safe skill directory name without path separators; content must be a complete SKILL.md.",
       "The resource should implement this request:", input.trim()
     ].join("\n"), metadata);
-    if (response.result.kind !== "chat") throw new Error("The selected Agent did not return resource text.");
+    if (response.result.kind !== "ask") throw new Error("The selected Agent did not return resource text.");
     let value: unknown;
     try { value = JSON.parse(response.result.text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim()); }
     catch { throw new Error("The Agent returned invalid resource JSON."); }
@@ -585,6 +588,24 @@ export class DextApplication {
       const compiled = compileWorkflow(content, this.registry, { allowImports: true, aliases: parseWorkflowImports(content), customApiIds: this.customApiIds, requireCustomApiImports: false });
       if (!compiled.program || compiled.diagnostics.some((item) => item.severity === "error")) throw new Error(`The Agent returned invalid Dext API source: ${compiled.diagnostics.map((item) => item.message).join("\\n")}`);
     } else if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(name) || !content) throw new Error("The Agent returned an unsupported resource shape.");
+    return { type, scope, name, content };
+  }
+
+  async saveResource(draft: ResourceDraft): Promise<string> {
+    const { type, scope, name, content } = draft;
+    if (scope === "project" && !this.workspaceTrusted) throw new Error("Project resource creation requires a trusted local workspace.");
+    if (type === "mcp") {
+      if (!draft.mcpServer) throw new Error("The MCP draft is no longer available. Generate it again.");
+      await this.createMcpManifest(draft.mcpServer, scope);
+      return `Created MCP configuration '${draft.mcpServer.name}' (${scope}).`;
+    }
+    if (type === "api") {
+      if (!/^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)*$/.test(name) || !content.includes("def main")) throw new Error("The draft has an unsupported API shape.");
+      const compiled = compileWorkflow(content, this.registry, { allowImports: true, aliases: parseWorkflowImports(content), customApiIds: this.customApiIds, requireCustomApiImports: false });
+      if (!compiled.program || compiled.diagnostics.some((item) => item.severity === "error")) throw new Error(`The draft is not valid Dext API source: ${compiled.diagnostics.map((item) => item.message).join("\n")}`);
+    } else if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(name) || !content) {
+      throw new Error("The draft has an unsupported resource shape.");
+    }
     const folder = vscode.workspace.workspaceFolders?.[0];
     if (scope === "project" && (!folder || folder.uri.scheme !== "file")) throw new Error("Project resources require a local workspace.");
     const root = scope === "global"
@@ -599,7 +620,7 @@ export class DextApplication {
     await vscode.workspace.fs.createDirectory(directory);
     await vscode.workspace.fs.writeFile(file, new TextEncoder().encode(`${content}\n`));
     await this.reload();
-    return { kind: "chat", text: `Created ${String(type)} '${name}' (${scope}).` };
+    return `Created ${type} '${name}' (${scope}).`;
   }
 
   /** The webview cannot read configuration itself, so the settings it renders
@@ -748,7 +769,7 @@ export class DextApplication {
    * in the chat beside the file reference. */
   private async savePlan(input: string, response: InputExecutionResponse["executions"][number], existingPath?: string): Promise<InputExecutionResponse["executions"][number]> {
     const result = response.result;
-    if (result.kind !== "chat" || !result.text.trim()) return response;
+    if (result.kind !== "plan" || !result.text.trim()) return response;
     const plan = splitPlanResponse(result.text);
     if (!plan.document) return response;
     const workspaceStorage = this.storage.location() === "workspace";

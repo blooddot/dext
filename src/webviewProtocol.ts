@@ -60,6 +60,7 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
     purpose: z.enum(["code", "text"])
   }),
   z.object({ type: z.literal("openFileReference"), reference: z.string().min(1) }),
+  z.object({ type: z.literal("openBuiltinApiDefinition"), id: z.string().regex(/^[A-Za-z][A-Za-z0-9_.-]*$/) }),
   z.object({ type: z.literal("openExternalLink"), url: z.string().min(1) }),
   z.object({
     type: z.literal("searchFiles"),
@@ -86,6 +87,16 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("reload") }),
   z.object({ type: z.literal("openMcp") }),
   z.object({ type: z.literal("addMcp") }),
+  z.object({ type: z.literal("openResourceCreator") }),
+  z.object({
+    type: z.literal("draftResource"),
+    requestId: z.string().min(1).max(128),
+    sessionId: z.string().min(1).max(128),
+    resourceType: z.enum(["api", "mcp", "rule", "skill"]),
+    scope: z.enum(["project", "global"]),
+    input: z.string().min(1).max(80_000)
+  }),
+  z.object({ type: z.literal("saveResource"), draftId: z.string().min(1).max(128) }),
   z.object({ type: z.literal("generateMcp"), requestId: z.string().min(1), document: z.string().min(1).max(80000) }),
   z.object({
     type: z.literal("createMcp"),
@@ -165,6 +176,15 @@ export interface GlobalResources {
   skills: GlobalResourceItem[];
 }
 
+export type ResourceKind = "api" | "mcp" | "rule" | "skill";
+export interface ResourceDraftPreview {
+  id: string;
+  type: ResourceKind;
+  scope: "project" | "global";
+  name: string;
+  content: string;
+}
+
 export interface SidebarState {
   theme?: EditorTokenTheme;
   methods: Pick<
@@ -207,6 +227,9 @@ export type WebviewResponse =
     hostInitiated?: true;
   }
   | { type: "planContext"; path?: string; status: PlanStatus }
+  | { type: "resourceCreatorOpened" }
+  | { type: "resourceDraft"; requestId: string; draft: ResourceDraftPreview }
+  | { type: "resourceSaved"; draftId: string; message: string }
   | {
     type: "conversations";
     sessions: ConversationSummary[];

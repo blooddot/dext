@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { AxAdapter } from "../src/core/axAdapter.js";
 import { BUILTIN_METHODS } from "../src/core/builtins.js";
 import { ContextResolver, type ContextHost } from "../src/core/contextResolver.js";
@@ -39,13 +43,79 @@ function setup() {
 }
 
 describe("Dext workflow runtime", () => {
+  it("limits node.fs to a trusted workspace and rejects traversal", async () => {
+    const root = await mkdtemp(join(tmpdir(), "dext-node-"));
+    try {
+      const { runtime } = setup();
+      runtime.setWorkspaceRoot(root);
+      runtime.setWorkspaceTrusted(true);
+      await runtime.execute({ kind: "invocation", method: "node.fs.writeFile", source: "code", arguments: [{ name: "path", value: "state.txt" }, { name: "content", value: "ok" }] });
+      expect(await readFile(join(root, "state.txt"), "utf8")).toBe("ok");
+      await expect(runtime.execute({ kind: "invocation", method: "node.fs.readFile", source: "code", arguments: [{ name: "path", value: "../outside.txt" }] }))
+        .rejects.toThrow("workspace");
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it("uses node.http.request for bounded, serializable local HTTP responses", async () => {
+    const server = createServer((request, response) => {
+      response.setHeader("content-type", "text/plain");
+      response.end(`${request.method}:${request.url}`);
+    });
+    await new Promise<void>((resolveServer) => server.listen(0, "127.0.0.1", resolveServer));
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("Expected TCP test server.");
+      const { runtime } = setup();
+      runtime.setWorkspaceTrusted(true);
+      const response = await runtime.execute({ kind: "invocation", method: "node.http.request", source: "code", arguments: [{ name: "url", value: `http://127.0.0.1:${address.port}/health` }] });
+      expect(response.result).toMatchObject({ kind: "node", status: 200, body: "GET:/health" });
+    } finally { await new Promise<void>((resolveServer, rejectServer) => server.close((error) => error ? rejectServer(error) : resolveServer())); }
+  });
+  it("passes terminal environment variables through the generic terminal API", async () => {
+    const registry = new MethodRegistry();
+    registry.registerMany(BUILTIN_METHODS, "builtin");
+    let received: Record<string, unknown> | undefined;
+    const runtime = new DextRuntime(registry, new ContextResolver(host), undefined, {
+      terminalRun: async ({ arguments: args }) => {
+        received = args as Record<string, unknown>;
+        return { kind: "terminal", status: "succeeded", command: typeof args.command === "string" ? args.command : "", cwd: ".", exit_code: 0, stdout: "", stderr: "", duration_ms: 0 };
+      }
+    });
+    await runtime.execute({
+      kind: "invocation",
+      method: "terminal",
+      source: "code",
+      arguments: [
+        { name: "command", value: "tool run" },
+        { name: "env", value: { TASK_TITLE: "Login fails" } }
+      ]
+    });
+    expect(received).toMatchObject({ command: "tool run", env: { TASK_TITLE: "Login fails" } });
+  });
+
+  it("extracts the final path segment with whitelisted Node URL and path APIs", async () => {
+    const { runtime } = setup();
+    const parsed = await runtime.execute({
+      kind: "invocation",
+      method: "node.url.parse",
+      source: "code",
+      arguments: [{ name: "url", value: "https://www.teambition.com/task/6a9c21511d7b3a0050e59a0e?from=notice" }]
+    });
+    const response = await runtime.execute({
+      kind: "invocation", method: "node.path.basename", source: "code",
+      arguments: [{ name: "path", value: (parsed.result as unknown as { pathname: string }).pathname }]
+    });
+    expect(response.result).toEqual({ kind: "node", value: "6a9c21511d7b3a0050e59a0e" });
+  });
+
+
   it("keeps Harness Ask and plan generation read-only while permitting explicit execution", async () => {
     const { runtime } = setup();
     const requests: AgentConversationRequest[] = [];
     runtime.setAgentProfiles([{ id: "deepseek-harness", provider: "deepseek-harness", command: "dsh", label: "Harness", models: [] }]);
     runtime.setAgentSelection({ profileId: "deepseek-harness", permission: "full-access" });
     runtime.setWorkspaceTrusted(true);
-    runtime.setAgentRunner({ run: async () => ({ kind: "chat", text: "typed" }), runConversation: async (request) => { requests.push(request); return "answer"; } });
+    runtime.setAgentRunner({ run: async () => ({ kind: "ask", text: "typed" }), runConversation: async (request) => { requests.push(request); return "answer"; } });
     await runtime.executeConversation("ask", "explain");
     await runtime.executeConversation("plan", "plan it");
     await runtime.executeConversation("plan", "build it", { executePlan: true });
@@ -144,7 +214,7 @@ print(text=answer.text)`, registry);
     expect(compiled.diagnostics).toEqual([]);
     const result = await workflow.execute(compiled.program!);
     expect(result.executions.map((item) => item.method.id)).toEqual(["ask", "agent", "print"]);
-    expect(result.executions.map((item) => item.result.kind)).toEqual(["chat", "agent", "print"]);
+    expect(result.executions.map((item) => item.result.kind)).toEqual(["ask", "agent", "print"]);
   });
 
   it("returns immediately from a custom workflow branch", async () => {
@@ -448,7 +518,7 @@ print(text=answer.text)`, registry);
     let invoked = false;
     runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
     runtime.setAgentSelection({ profileId: "codex" });
-    runtime.setAgentRunner({ run: async () => { invoked = true; return { kind: "chat", text: "agent" }; } });
+    runtime.setAgentRunner({ run: async () => { invoked = true; return { kind: "ask", text: "agent" }; } });
     await expect(runtime.execute({ kind: "invocation", method: "terminal", source: "code", arguments: [{ name: "command", value: "echo test" }] }))
       .resolves.toMatchObject({ result: { kind: "terminal" } });
     expect(invoked).toBe(false);
@@ -458,9 +528,9 @@ print(text=answer.text)`, registry);
     const { runtime } = setup();
     runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
     runtime.setAgentSelection({ profileId: "codex" });
-    runtime.setAgentRunner({ run: async () => ({ kind: "chat", text: "agent response" }) });
+    runtime.setAgentRunner({ run: async () => ({ kind: "ask", text: "agent response" }) });
     await expect(runtime.execute({ kind: "invocation", method: "ask", source: "code", arguments: [{ name: "input", value: "hello" }] }))
-      .resolves.toMatchObject({ result: { kind: "chat", text: "agent response" } });
+      .resolves.toMatchObject({ result: { kind: "ask", text: "agent response" } });
   });
 
   it("loads selected skills before ordered rules from .dext", async () => {
@@ -523,7 +593,7 @@ print(text=answer.text)`, registry);
     runtime.setAgentSelection({ profileId: "codex" });
     const requests: { mode: string; input: string; permission?: string; allowWorkspaceWrite: boolean }[] = [];
     runtime.setAgentRunner({
-      run: async () => ({ kind: "chat", text: "unused" }),
+      run: async () => ({ kind: "ask", text: "unused" }),
       runConversation: async (request) => {
         requests.push(request);
         return `reply: ${request.input}`;
@@ -531,9 +601,9 @@ print(text=answer.text)`, registry);
     });
 
     await expect(runtime.executeConversation("agent", "Update this module"))
-      .resolves.toMatchObject({ result: { kind: "chat", text: "reply: Update this module" } });
+      .resolves.toMatchObject({ result: { kind: "agent", text: "reply: Update this module" } });
     await expect(runtime.executeConversation("ask", "Explain this module"))
-      .resolves.toMatchObject({ result: { kind: "chat", text: "reply: Explain this module" } });
+      .resolves.toMatchObject({ result: { kind: "ask", text: "reply: Explain this module" } });
     expect(requests).toEqual([
       expect.objectContaining({ mode: "agent", input: "Update this module", allowWorkspaceWrite: true }),
       expect.objectContaining({ mode: "ask", input: "Explain this module", allowWorkspaceWrite: false })
@@ -547,7 +617,7 @@ print(text=answer.text)`, registry);
     runtime.setRuleLoader(async () => undefined);
     const requests: { mode: string; permission?: string; allowWorkspaceWrite: boolean }[] = [];
     runtime.setAgentRunner({
-      run: async () => ({ kind: "chat", text: "unused" }),
+      run: async () => ({ kind: "ask", text: "unused" }),
       runConversation: async (request) => {
         requests.push(request);
         return "done";
@@ -573,7 +643,7 @@ print(text=answer.text)`, registry);
     runtime.setAgentCliArguments({ codex: ["--profile", "audit"], claude: ["--add-dir", "/tmp"] });
     const requests: { cliArguments?: readonly string[] }[] = [];
     runtime.setAgentRunner({
-      run: async () => ({ kind: "chat", text: "unused" }),
+      run: async () => ({ kind: "ask", text: "unused" }),
       runConversation: async (request) => {
         requests.push(request);
         return "done";
@@ -597,7 +667,7 @@ print(text=answer.text)`, registry);
     runtime.setDefaultAgentPermission("full-access");
     let permission: string | undefined;
     runtime.setAgentRunner({
-      run: async () => ({ kind: "chat", text: "unused" }),
+      run: async () => ({ kind: "ask", text: "unused" }),
       runConversation: async (request) => {
         permission = request.permission;
         return "done";
@@ -620,7 +690,7 @@ print(text=answer.text)`, registry);
     runtime.setRuleLoader(async () => undefined);
     const requests: { mode: string; input: string; permission?: string; allowWorkspaceWrite: boolean }[] = [];
     runtime.setAgentRunner({
-      run: async () => ({ kind: "chat", text: "unused" }),
+      run: async () => ({ kind: "ask", text: "unused" }),
       runConversation: async (request) => {
         requests.push(request);
         return "# Plan\n\n## Goal\nShip it.";
@@ -628,7 +698,7 @@ print(text=answer.text)`, registry);
     });
 
     await expect(runtime.executeConversation("plan", "Add a cache"))
-      .resolves.toMatchObject({ method: { id: "plan" }, result: { kind: "chat" } });
+      .resolves.toMatchObject({ method: { id: "plan" }, result: { kind: "plan" } });
     const request = requests[0]!;
     expect(request.allowWorkspaceWrite).toBe(true);
     expect(request.permission).toBe("workspace-write");
@@ -646,7 +716,7 @@ print(text=answer.text)`, registry);
     runtime.setAgentSelection({ profileId: "codex", permission: "full-access" });
     let request: { mode: string; input: string; permission?: string; allowWorkspaceWrite: boolean } | undefined;
     runtime.setAgentRunner({
-      run: async () => ({ kind: "chat", text: "unused" }),
+      run: async () => ({ kind: "ask", text: "unused" }),
       runConversation: async (value) => {
         request = value;
         return "Implemented.";
@@ -675,7 +745,7 @@ print(text=answer.text)`, registry);
     });
     let sent = "";
     runtime.setAgentRunner({
-      run: async () => ({ kind: "chat", text: "unused" }),
+      run: async () => ({ kind: "ask", text: "unused" }),
       runConversation: async (request) => {
         sent = request.input;
         return "# Plan";
@@ -700,7 +770,7 @@ print(text=answer.text)`, registry);
     });
     let sent = "";
     runtime.setAgentRunner({
-      run: async () => ({ kind: "chat", text: "unused" }),
+      run: async () => ({ kind: "ask", text: "unused" }),
       runConversation: async (request) => {
         sent = request.input;
         return "# Plan";
@@ -790,7 +860,7 @@ answer = ask(input=printed.text)`, registry);
     expect(compiled.diagnostics).toEqual([]);
     const result = await workflow.execute(compiled.program!);
     expect(result.executions[0]?.result).toEqual({ kind: "print", text: "hello", label: "Build" });
-    expect(result.executions[1]?.result).toEqual({ kind: "chat", text: "hello" });
+    expect(result.executions[1]?.result).toEqual({ kind: "ask", text: "hello" });
     const terminal = new AxAdapter().compile(registry.get("terminal")!);
     expect(terminal.outputJsonSchema).toMatchObject({
       properties: { status: { enum: ["succeeded", "failed", "timed_out"] } }
@@ -948,14 +1018,14 @@ answer = ask(input=printed.text)`, registry);
       run: async (request) => {
         models.push(request.model);
         return request.method.id === "ask"
-          ? { kind: "chat", text: "valid" }
+          ? { kind: "ask", text: "valid" }
           : { kind: "agent", text: "invalid", extra: true };
       }
     });
 
     await expect(runtime.execute({
       kind: "invocation", method: "ask", source: "code", arguments: [{ name: "input", value: "hello" }]
-    })).resolves.toMatchObject({ result: { kind: "chat", text: "valid" } });
+    })).resolves.toMatchObject({ result: { kind: "ask", text: "valid" } });
     await expect(runtime.execute({
       kind: "invocation", method: "agent", source: "code",
       arguments: [{ name: "input", value: "preview" }, { name: "apply", value: false }]
@@ -985,6 +1055,27 @@ answer = ask(input=printed.text)`, registry);
 });
 
 describe("formal UI workflows", () => {
+  it("aborts the enclosing workflow when ui.form opts into on_cancel=abort", async () => {
+    const { registry, workflow } = setup();
+    const compiled = compileWorkflow('ui.form(title="Confirm", fields=[], on_cancel="abort")\nprint(text="must not run")', registry);
+    expect(compiled.diagnostics).toEqual([]);
+    await expect(workflow.execute(compiled.program!, [], { ui: { form: async () => ({ kind: "ui", type: "form", status: "cancelled", answers: {} }) } }))
+      .resolves.toMatchObject({ steps: [{ state: "cancelled" }, { state: "skipped" }] });
+  });
+  it("retries an interactive while step until the user confirms", async () => {
+    const { registry, workflow } = setup();
+    const compiled = compileWorkflow(`reply = ui.confirm(message="Continue?")
+while reply.confirmed != True:
+    reply = ui.confirm(message="Continue?")
+print(text="done")`, registry);
+    expect(compiled.diagnostics).toEqual([]);
+    let calls = 0;
+    const response = await workflow.execute(compiled.program!, [], {
+      ui: { form: async () => ({ kind: "ui", type: "form", status: calls++ === 0 ? "cancelled" : "submitted", answers: {} }) }
+    });
+    expect(response.executions.map((execution) => execution.method.id)).toEqual(["ui.confirm", "ui.confirm", "print"]);
+  });
+
   it.each(["select", "radio", "checkbox", "input", "confirm", "alert", "form"])("executes ui.%s as one step", async (action) => {
     const { registry, workflow } = setup();
     const args = ["select", "radio", "checkbox"].includes(action) ? 'label="Pick", options=["a", "b"]'
