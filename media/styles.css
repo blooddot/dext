@@ -958,22 +958,8 @@ main {
   font-size: 11px;
 }
 
-.history-view .finding {
-  padding: 4px 0;
-  border-top: 0;
-}
-
-.history-view .finding.error,
 .history-view .error {
   color: var(--vscode-errorForeground);
-}
-
-.history-view .finding.warning {
-  color: var(--vscode-editorWarning-foreground);
-}
-
-.history-view .finding.info {
-  color: var(--vscode-editorInfo-foreground);
 }
 
 .result-state {
@@ -1696,23 +1682,6 @@ main {
   letter-spacing: 0.04em;
 }
 
-.finding {
-  display: block;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-}
-
-.finding.with-icon {
-  display: grid;
-  grid-template-columns: 16px minmax(0, 1fr);
-  gap: 4px;
-  align-items: start;
-}
-
-.finding.error {
-  color: var(--vscode-errorForeground);
-}
-
 .error-output {
   max-height: 260px;
   margin: 0 0 8px;
@@ -1727,10 +1696,6 @@ main {
   line-height: 1.4;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-}
-
-.finding.warning {
-  color: var(--vscode-editorWarning-foreground);
 }
 
 .action-row {
@@ -2800,15 +2765,9 @@ button.primary.stopping {
   position: relative;
 }
 
-.output-turn-input > .output-copy {
-  position: absolute;
-  top: 2px;
-  right: 2px;
-}
-
 .output-turn-input > .dext-source {
   margin: 0;
-  padding: 6px 30px 6px 0;
+  padding: 0 30px 0 0;
   border: 0;
   background: transparent;
   white-space: pre-wrap;
@@ -2943,9 +2902,52 @@ button.primary.stopping {
   color: var(--vscode-descriptionForeground);
 }
 
-.markdown-copy-toolbar > .output-copy,
-.markdown-copy-toolbar > .copy-button {
+/* Input, Output and Process share the same copy control and focus treatment. */
+.output-copy.icon-button,
+.markdown-copy-toolbar > .copy-button,
+.markdown-code-copy.codicon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
   opacity: 1;
+}
+
+.output-copy.icon-button:hover,
+.markdown-copy-toolbar > .copy-button:hover,
+.markdown-code-copy:hover {
+  color: var(--vscode-descriptionForeground);
+  background: var(--vscode-toolbar-hoverBackground);
+}
+
+.output-copy.icon-button:focus-visible,
+.markdown-copy-toolbar > .copy-button:focus-visible,
+.markdown-code-copy:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+/* Whole-message copy controls must not create an empty row before the text. */
+.output-turn-input > .output-copy,
+.output-text-copyable > .markdown-copy-toolbar {
+  position: absolute;
+  top: 0;
+  right: 0;
+  min-height: 24px;
+}
+
+.output-text-copyable > .markdown-body {
+  padding-right: 30px;
 }
 
 .markdown-body .markdown-code-block {
@@ -2965,28 +2967,7 @@ button.primary.stopping {
 }
 
 .markdown-code-copy.codicon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   flex: 0 0 auto;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: 0;
-  border-radius: 4px;
-  color: inherit;
-  background: transparent;
-  cursor: pointer;
-}
-
-.markdown-code-copy:hover {
-  color: var(--vscode-foreground);
-  background: var(--vscode-toolbar-hoverBackground);
-}
-
-.markdown-code-copy:focus-visible {
-  outline: 1px solid var(--vscode-focusBorder);
-  outline-offset: -1px;
 }
 
 .tok-keyword { color: var(--vscode-symbolIcon-keywordForeground, #c586c0); }
@@ -3098,7 +3079,7 @@ pre {
  * block margins space paragraphs; pre-wrap would double every blank line. */
 .agent-trace-message > .agent-stream-text {
   margin: 0;
-  padding: 0 28px 0 0;
+  padding: 0 30px 0 0;
   color: var(--vscode-foreground);
   font-family: var(--vscode-font-family);
   font-size: var(--vscode-font-size, 13px);
@@ -3178,10 +3159,15 @@ pre {
   opacity: 0.75;
 }
 
+.agent-trace-command-content {
+  position: relative;
+  margin: 3px 0 6px 18px;
+}
+
 .agent-trace-command-body {
   max-height: 320px;
-  margin: 3px 0 6px 18px;
-  padding: 8px 10px;
+  margin: 0;
+  padding: 8px 34px 8px 10px;
   overflow: auto;
   border: 1px solid var(--vscode-widget-border);
   border-radius: 4px;
@@ -3191,17 +3177,10 @@ pre {
   white-space: pre-wrap;
 }
 
-.agent-trace-command > .output-copy {
+.agent-trace-command-content > .output-copy {
   position: absolute;
-  right: 8px;
-  bottom: 10px;
-  color: var(--vscode-descriptionForeground);
-  opacity: 0;
-}
-
-.agent-trace-command:hover > .output-copy,
-.agent-trace-command:focus-within > .output-copy {
-  opacity: 1;
+  right: 4px;
+  top: 4px;
 }
 
 .agent-file-changes {
@@ -3539,27 +3518,6 @@ pre {
 .ansi-bright-cyan { color: var(--vscode-terminal-ansiBrightCyan, #29b8db); }
 .ansi-bright-white { color: var(--vscode-terminal-ansiBrightWhite, #ffffff); }
 
-.finding {
-  padding: 6px 0;
-  border-top: 1px solid var(--vscode-widget-border);
-}
-
-.plan-list {
-  margin: 5px 0 8px;
-  padding-left: 24px;
-}
-
-.plan-list li {
-  padding: 3px 0;
-}
-
-.plan-list small {
-  display: block;
-  margin-top: 2px;
-  color: var(--vscode-descriptionForeground);
-  overflow-wrap: anywhere;
-}
-
 .patch-file {
   margin-bottom: 10px;
 }
@@ -3579,18 +3537,26 @@ pre {
   min-height: 52px;
   padding: 5px 6px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 18px;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 6px;
   align-items: center;
   text-align: left;
   border: 0;
   border-radius: 3px;
   background: transparent;
+  color: inherit;
+}
+
+button.method-row {
   cursor: pointer;
 }
 
-.method-row:hover {
+button.method-row:hover {
   background: var(--vscode-list-hoverBackground);
+}
+
+.method-open-definition {
+  color: var(--vscode-descriptionForeground);
 }
 
 .resource-category {
@@ -3618,7 +3584,7 @@ pre {
 .resource-category-label { font-weight: 600; flex: 1; }
 .resource-category-count { color: var(--vscode-descriptionForeground); font-size: 11px; }
 .resource-category-body { padding: 2px 4px 5px; }
-.resource-row { min-height: 44px; grid-template-columns: minmax(0, 1fr); cursor: default; }
+.resource-row { min-height: 44px; padding: 5px 6px; grid-template-columns: minmax(0, 1fr); cursor: default; }
 .resource-empty { padding: 8px 10px 9px 25px; color: var(--vscode-descriptionForeground); font-size: 11px; }
 
 .method-group {
@@ -3734,9 +3700,11 @@ details[open] > summary > .disclosure-chevron {
   font-weight: 400;
 }
 
-.method-row > i {
-  color: var(--vscode-descriptionForeground);
-}
+.method-token-function { color: var(--vscode-symbolIcon-functionForeground, var(--vscode-charts-blue)); }
+.method-token-parameter { color: var(--vscode-symbolIcon-variableForeground, var(--vscode-foreground)); }
+.method-token-type { color: var(--vscode-symbolIcon-classForeground, var(--vscode-charts-yellow)); }
+.method-token-literal { color: var(--vscode-debugTokenExpression-string, var(--vscode-charts-orange)); }
+.method-token-punctuation { color: var(--vscode-descriptionForeground); }
 
 .output-copyable,
 .output-text-copyable {
@@ -3768,8 +3736,8 @@ details[open] > summary > .disclosure-chevron {
 
 .agent-stream-item > .output-copy {
   position: absolute;
-  right: 4px;
-  bottom: 5px;
+  right: 0;
+  top: 0;
 }
 
 .agent-stream-item {
