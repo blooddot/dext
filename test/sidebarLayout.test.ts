@@ -7,6 +7,23 @@ async function source(path: string): Promise<string> {
 }
 
 describe("sidebar panel layout", () => {
+  it("uses prose typography and compact refs for sent Input without changing composer chips", async () => {
+    const css = await source("media/styles.css");
+    expect(css).not.toContain("--dext-input-line-height");
+    expect(css).toMatch(/\.code-editor \.cm-scroller \{[^}]*line-height: 24px;/);
+    expect(css).toMatch(/\.attachment-chip \{[^}]*height: 24px;/);
+    expect(css).toMatch(/\.output-turn-input > pre\.dext-source,\s*\.markdown-body \{\s*font: var\(--vscode-font-size, 13px\)\/1.5 var\(--vscode-font-family\);/);
+    expect(css).toMatch(/\.output-turn-input \.attachment-chip \{\s*height: 20px;\s*margin-block: 2px;/);
+    expect(css).toMatch(/\.output-turn-input \.attachment-open \{\s*height: 18px;\s*font: inherit;/);
+  });
+
+  it("shares title-to-body spacing across Input, Process, and Output without stacking first-item gaps", async () => {
+    const css = await source("media/styles.css");
+    expect(css).toMatch(/\.turn-section > \.turn-section-body \{\s*padding: 8px 4px 8px 18px;/);
+    expect(css).toMatch(/\.turn-section-body > :first-child,\s*\.turn-section-body > \.execution-result:first-child > :first-child,\s*\.turn-section-body > \.agent-stream-panel > :first-child \{\s*margin-top: 0;/);
+    expect(css).toMatch(/\.turn-section-body > \.agent-stream-panel \{\s*padding-top: 0;/);
+  });
+
   it("starts background Harness model discovery when the sidebar opens or Harness is selected", async () => {
     const sidebar = await source("src/sidebarProvider.ts");
     expect(sidebar).toContain("private harnessModelsDiscovered = false;");

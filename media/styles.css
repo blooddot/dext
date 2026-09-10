@@ -2737,7 +2737,18 @@ button.primary.stopping {
 }
 
 .turn-section > .turn-section-body {
-  padding: 0 4px 8px 18px;
+  padding: 8px 4px 8px 18px;
+}
+
+/* The section owns the title-to-content gap, not the first result or message. */
+.turn-section-body > :first-child,
+.turn-section-body > .execution-result:first-child > :first-child,
+.turn-section-body > .agent-stream-panel > :first-child {
+  margin-top: 0;
+}
+
+.turn-section-body > .agent-stream-panel {
+  padding-top: 0;
 }
 
 .output-turn-input {
@@ -2750,7 +2761,21 @@ button.primary.stopping {
   border: 0;
   background: transparent;
   white-space: pre-wrap;
-  font: 12px/1.45 var(--vscode-editor-font-family);
+}
+
+/* Read-only refs fit the prose rhythm; composer chips keep their larger targets. */
+.output-turn-input .attachment-chip {
+  height: 20px;
+  margin-block: 2px;
+}
+
+.output-turn-input .attachment-open {
+  height: 18px;
+  font: inherit;
+}
+
+.output-turn-input .attachment-open .codicon {
+  font-size: 14px;
 }
 
 .result-meta {
@@ -2862,10 +2887,19 @@ button.primary.stopping {
   margin: 0 0 12px;
   padding: 0;
   min-width: 0;
-  font-family: var(--vscode-font-family);
-  font-size: var(--vscode-font-size);
   background: transparent;
   overflow-wrap: anywhere;
+}
+
+/* Sent Input is prose too, not another instance of the input editor. */
+.output-turn-input > pre.dext-source,
+.markdown-body {
+  font: var(--vscode-font-size, 13px)/1.5 var(--vscode-font-family);
+}
+
+/* Code-mode submissions still need a monospace source display. */
+.turn-section:has(> summary > .turn-mode[data-mode="code"]) .dext-source {
+  font-family: var(--vscode-editor-font-family);
 }
 
 .markdown-body > :first-child { margin-top: 0; }
