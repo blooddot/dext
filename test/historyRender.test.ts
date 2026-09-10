@@ -158,6 +158,26 @@ describe("Dext history rendering", () => {
     expect(html).not.toContain('&quot;kind&quot;: &quot;workflow&quot;');
   });
 
+  it("keeps elapsed time in Process and leaves Output to its result body", () => {
+    const record: DextHistoryRecord = {
+      id: "timing", createdAt: 1, input: "ask(input=\"hello\")", process: [], output: "",
+      response: {
+        kind: "workflow",
+        executions: [{
+          invocation: { kind: "invocation", method: "ask", source: "code", arguments: [] },
+          method: { id: "ask", title: "Ask", kind: "command", source: "builtin" },
+          result: { kind: "ask", text: "hello" }, durationMs: 1_234
+        }]
+      }
+    };
+    const html = renderHistoryRecord(record);
+    expect(html).toContain('Worked for 1s234ms');
+    const output = html.slice(html.indexOf('data-turn-section="output"'));
+    expect(output).not.toContain("1s234ms");
+    expect(output.slice(0, output.indexOf("</summary>"))).not.toContain("button");
+    expect(output.match(/data-copy="hello"/g)).toHaveLength(1);
+  });
+
   it("recovers structured data from legacy JSON history records", () => {
     const record: DextHistoryRecord = {
       id: "legacy",
@@ -231,7 +251,7 @@ describe("Dext history rendering", () => {
     };
 
     const html = renderHistoryRecord(record);
-    expect(html).toContain('class="process-message"');
+    expect(html).toContain('class="process-message agent-stream-item agent-trace-message"');
     expect(html).toContain("I will inspect the selected implementation first.");
   });
 
@@ -245,7 +265,7 @@ describe("Dext history rendering", () => {
     };
 
     const html = renderHistoryRecord(record);
-    expect(html).toContain('class="process-text markdown-body"');
+    expect(html).toContain('class="agent-stream-text"><div class="markdown-body"');
     expect(html).toContain("<p>First line<br>");
     expect(html).toContain("<ul>");
     expect(html).toContain("<li>one</li>");
@@ -267,7 +287,7 @@ describe("Dext history rendering", () => {
     expect(html).toContain("Inspecting the workspace");
     expect(html).toContain("git status");
     expect(html).not.toContain("Ran 1 command");
-    expect(html).toContain('class="process-message"');
+    expect(html).toContain('class="process-message agent-stream-item agent-trace-message"');
     expect(html).toMatch(/class="history-disclosure process-event(?: process-command-group)?"/);
   });
 

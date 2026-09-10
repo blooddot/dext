@@ -3,6 +3,8 @@ import { runInNewContext } from "node:vm";
 import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
 import { readHistoryResponse } from "../src/historyResponse.js";
+import { presentTurn } from "../src/turnPresentation.js";
+import { renderTurnInput, renderTurnResult, turnDomAdapter } from "../src/turnComponents.js";
 
 const main = readFileSync("src/webview/main.ts", "utf8");
 const renderer = ts.transpileModule([
@@ -24,7 +26,7 @@ function harness() {
   const turn = {
     input: { childElementCount: 0, append: vi.fn() },
     disclosure: new Disclosure(),
-    processDisclosure: { open: true }, outputDisclosure: { open: false },
+    processDisclosure: { open: true }, processMeta: { textContent: "" }, outputDisclosure: { open: false },
     todos: { setRunning: vi.fn() }, output: { append: vi.fn() }, hydrated: false
   };
   const record = { input: "Historical input", output: "Historical answer", process: [{ phase: "message", id: "shared", text: "Historical trace" }] };
@@ -39,11 +41,11 @@ function harness() {
     pendingAgentEventBatches: [{ sessionId: "session", events: [{ phase: "message", text: "live delta" }] }], agentEventBatchFrame: 2
   };
   const context = {
-    readHistoryResponse,
+    readHistoryResponse, presentTurn, renderTurnInput, renderTurnResult, turnDomAdapter,
     ...state, turn, record, executing: true, activeConversationId: "session", forceInitialConversationScroll: false,
     outputTurns: new Map<string, unknown>(), HTMLDetailsElement: Disclosure,
     event: { target: turn.disclosure },
-    document: { createElement: () => ({ append: vi.fn() }) },
+    document: { createElement: () => ({ append: vi.fn(), setAttribute: vi.fn() }) },
     renderedInputSource: vi.fn(), copyButton: vi.fn(), jsonOutput: vi.fn((text: string) => text),
     renderAgentEvent: vi.fn(), renderAgentMessageItem: vi.fn(),
     updateAgentProgress: vi.fn(), syncResultToggle: vi.fn(), syncJumpToLatest: vi.fn(),
@@ -70,8 +72,8 @@ describe("expanding history while a turn is streaming", () => {
         ...context.document,
         createDocumentFragment: () => ({ append: (...nodes: unknown[]) => fragments.push(...nodes) })
       },
-      resultHeading: () => "agent",
       copyableText: (text: string) => text,
+      terminalBlock: vi.fn(), fileChangeDisclosure: vi.fn(), planActions: vi.fn(),
       renderResult: (response: { executions: unknown[] }) => {
         const code = main.slice(main.indexOf("function renderExecution("), main.indexOf("function patchReviewHeader("));
         runInNewContext(ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
@@ -79,7 +81,8 @@ describe("expanding history while a turn is streaming", () => {
       }
     });
     runInNewContext("hydrateOutputTurnOnOpen(event)", context);
-    expect(fragments).toEqual(["agent", "Recovered **answer**"]);
+    expect(fragments).toEqual(["Recovered **answer**"]);
+    expect(turn.processMeta.textContent).toBe("Worked for 1ms");
     expect(turn.hydrated).toBe(true);
   });
 

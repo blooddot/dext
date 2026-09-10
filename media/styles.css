@@ -816,26 +816,6 @@ main {
   padding: 2px 0 6px;
 }
 
-.execution-heading {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--vscode-descriptionForeground);
-  font-size: 11px;
-}
-
-.history-execution {
-  padding: 8px 4px;
-  border-bottom: 1px solid var(--vscode-panel-border);
-}
-
-.history-execution p {
-  margin: 7px 0;
-  line-height: 1.45;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
 .history-execution > .history-disclosure {
   margin: 4px 0;
 }
@@ -1003,7 +983,6 @@ main {
 }
 
 .history-disclosure > summary:hover .copy-button,
-.execution-heading:hover .copy-button,
 .history-view .copy-button:focus-visible {
   opacity: 1;
 }
@@ -1013,12 +992,12 @@ main {
   background: var(--vscode-toolbar-hoverBackground);
 }
 
-.history-view ol {
+.history-view ol:not(.markdown-body ol) {
   margin: 6px 0;
   padding-left: 24px;
 }
 
-.history-view li small {
+.history-view li small:not(.markdown-body small) {
   display: block;
   color: var(--vscode-descriptionForeground);
 }
@@ -2745,7 +2724,7 @@ button.primary.stopping {
   padding: 0 0 10px 14px;
 }
 
-.output-turn-section.execution-disclosure {
+.turn-section {
   margin: 0;
   border: 0;
   border-top: 1px solid var(--vscode-widget-border);
@@ -2753,11 +2732,11 @@ button.primary.stopping {
   background: transparent;
 }
 
-.output-turn-section:first-child {
+.turn-section:first-child {
   border-top: 0;
 }
 
-.output-turn-section-body.execution-disclosure-body {
+.turn-section > .turn-section-body {
   padding: 0 4px 8px 18px;
 }
 
@@ -2765,32 +2744,17 @@ button.primary.stopping {
   position: relative;
 }
 
-.output-turn-input > .dext-source {
+.output-turn-input > pre.dext-source {
   margin: 0;
   padding: 0 30px 0 0;
   border: 0;
   background: transparent;
   white-space: pre-wrap;
+  font: 12px/1.45 var(--vscode-editor-font-family);
 }
 
 .result-meta {
   margin-bottom: 8px;
-}
-
-.execution-heading {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.execution-heading > .output-copy {
-  margin-left: auto;
-  opacity: 0;
-}
-
-.execution-heading:hover > .output-copy,
-.execution-heading:focus-within > .output-copy {
-  opacity: 1;
 }
 
 .execution-disclosure {
@@ -2816,6 +2780,31 @@ button.primary.stopping {
   display: none;
 }
 
+/* Both render adapters produce these classes; spacing is owned here once. */
+.turn-section > summary {
+  min-height: 28px;
+  padding: 6px 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--vscode-foreground);
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+
+.turn-section > summary::-webkit-details-marker { display: none; }
+.turn-section > summary:hover { background: var(--vscode-list-hoverBackground); }
+.turn-section-meta { color: var(--vscode-descriptionForeground); font-size: 11px; }
+.turn-section .disclosure-chevron { flex: 0 0 12px; width: 12px; font-size: 12px; }
+.turn-section[open] > summary > .disclosure-chevron { transform: rotate(90deg); }
+.output-turn-input > .copy-button,
+.output-turn-input > .output-copy {
+  position: absolute;
+  top: -2px;
+  right: 0;
+}
+
 .execution-disclosure > summary:hover {
   background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.06));
 }
@@ -2838,13 +2827,18 @@ button.primary.stopping {
 
 .turn-mode {
   flex: 0 0 auto;
+  display: inline-flex;
+  align-self: center;
+  align-items: center;
   padding: 0 5px;
   border-radius: 4px;
   color: var(--vscode-descriptionForeground);
   background: color-mix(in srgb, var(--vscode-foreground) 7%, transparent);
   font-size: 11px;
   font-weight: 400;
-  line-height: 18px;
+  height: 18px;
+  box-sizing: border-box;
+  line-height: 1;
 }
 
 .turn-mode[data-mode="ask"] {
@@ -2904,6 +2898,8 @@ button.primary.stopping {
 
 /* Input, Output and Process share the same copy control and focus treatment. */
 .output-copy.icon-button,
+.output-turn-input > .copy-button,
+.agent-stream-item > .copy-button,
 .markdown-copy-toolbar > .copy-button,
 .markdown-code-copy.codicon {
   display: inline-flex;
@@ -2938,10 +2934,11 @@ button.primary.stopping {
 }
 
 /* Whole-message copy controls must not create an empty row before the text. */
-.output-turn-input > .output-copy,
 .output-text-copyable > .markdown-copy-toolbar {
   position: absolute;
-  top: 0;
+  /* Center the 24px control on the first text line rather than letting its
+     lower edge sit below the opening paragraph. */
+  top: -2px;
   right: 0;
   min-height: 24px;
 }
@@ -3734,10 +3731,11 @@ details[open] > summary > .disclosure-chevron {
   opacity: 1;
 }
 
-.agent-stream-item > .output-copy {
+.agent-stream-item > .output-copy,
+.agent-stream-item > .copy-button {
   position: absolute;
   right: 0;
-  top: 0;
+  top: -2px;
 }
 
 .agent-stream-item {

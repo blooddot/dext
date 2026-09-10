@@ -6,6 +6,8 @@ import type { InputExecutionResponse } from "../src/core/types.js";
 import type { DextHistoryRecord } from "../src/historyStore.js";
 import { planExecutionLabel } from "../src/agentTodoPresentation.js";
 import { readHistoryResponse } from "../src/historyResponse.js";
+import { presentTurn } from "../src/turnPresentation.js";
+import { renderTurnInput, turnDomAdapter } from "../src/turnComponents.js";
 
 // Exercise the actual deferred renderer without bootstrapping the editor or VS Code.
 const main = readFileSync("src/webview/main.ts", "utf8");
@@ -19,16 +21,17 @@ function hydrate(record: DextHistoryRecord) {
   const turn = {
     planExecutionStatus: { hidden: true, textContent: "" },
     input, title: { setPlanPath: vi.fn() }, todos: { setRunning: vi.fn() },
-    processDisclosure: { open: true }, outputDisclosure: { open: false }, output: { append: vi.fn() }
+    processDisclosure: { open: true }, processMeta: { textContent: "" }, outputDisclosure: { open: false }, output: { append: vi.fn() }
   };
   const renderedInputSource = vi.fn();
   const renderResult = vi.fn();
   const renderOutputError = vi.fn();
   runInNewContext(`${hydration}\nhydrateStoredTurn(record, turn);`, {
-    record, turn, planExecutionLabel, readHistoryResponse, activeTurn: undefined, agentStream: undefined, agentRunStartedAt: undefined,
+    record, turn, planExecutionLabel, readHistoryResponse, presentTurn, renderTurnInput, turnDomAdapter,
+    activeTurn: undefined, agentStream: undefined, agentRunStartedAt: undefined,
     resetAgentTrace: vi.fn(), renderAgentEvent: vi.fn(), syncResultToggle: vi.fn(),
     withIsolatedAgentTrace: (_turn: unknown, render: () => void) => render(),
-    document: { createElement: () => ({ append: vi.fn() }) }, copyButton: vi.fn(),
+    document: { createElement: () => ({ append: vi.fn(), setAttribute: vi.fn() }) }, copyButton: vi.fn(),
     renderedInputSource, renderResult, renderOutputError, jsonOutput: vi.fn()
   });
   return { turn, remove, renderedInputSource, renderResult, renderOutputError };
@@ -68,6 +71,7 @@ describe("stored Plan turn hydration", () => {
     expect(view.turn.processDisclosure.open).toBe(false);
     expect(view.turn.outputDisclosure.open).toBe(true);
     expect(view.turn.planExecutionStatus).toEqual({ hidden: false, textContent: "Incomplete" });
+    expect(view.turn.processMeta.textContent).toBe("Worked for 1ms");
   });
 
   it.each(["Cancelled", "Agent failed"])("keeps Input hidden when the Plan has no response (%s)", (error) => {

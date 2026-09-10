@@ -1,5 +1,7 @@
 import { uiResultText } from "./uiInteractionPresentation.js";
 import { readHistoryResponse } from "./historyResponse.js";
+import { renderTurnSection, renderTurnInput, renderTurnMarkdown, renderTurnResult, renderTurnMessage, turnHtmlAdapter } from "./turnComponents.js";
+import { formatJsonOutput } from "./webview/jsonOutput.js";
 import { parser } from "@lezer/python";
 import { classHighlighter, highlightCode } from "@lezer/highlight";
 import MarkdownIt from "markdown-it";
@@ -8,11 +10,12 @@ import { latestAgentTodos, renderAgentTodos, planExecutionLabel } from "./agentT
 import type { AgentStreamEvent, DextResult, InputExecutionResponse, RuntimeResponse, WorkflowStepResponse } from "./core/types.js";
 import type { EditorTokenTheme } from "./vscodeTheme.js";
 import type { DextHistoryRecord, DextHistorySession } from "./historyStore.js";
-import { formatDuration } from "./webview/duration.js";
-import { TURN_RENAME_ACTION, TURN_FORK_ACTION, TURN_COPY_ACTION, TURN_DELETE_ACTION, turnModeLabel } from "./turnPresentation.js";
-import { presentAgentMessage } from "./agentMessagePresentation.js";
+import {
+  TURN_RENAME_ACTION, TURN_FORK_ACTION, TURN_COPY_ACTION, TURN_DELETE_ACTION, presentTurn,
+  type TurnSectionPresentation
+} from "./turnPresentation.js";
+import { agentMessageCopyText, presentAgentMessage } from "./agentMessagePresentation.js";
 import { presentDiff } from "./diffPresentation.js";
-import type { AgentMessagePresentation } from "./agentMessagePresentation.js";
 import type { PatchChange } from "./core/types.js";
 import { dextHighlightClass, dextHighlightRanges } from "./dextHighlight.js";
 import {
@@ -58,8 +61,24 @@ function copyButton(value: string): string {
   return `<button class="copy-button codicon codicon-copy" type="button" data-copy="${escapeHtml(value)}" title="Copy" aria-label="Copy"></button>`;
 }
 
+/** Thin host adapter; shared components own section structure and result dispatch. */
+function historyTurnSection(section: TurnSectionPresentation, body: string, options: { open?: boolean } = {}): string {
+  return renderTurnSection(turnHtmlAdapter, section, [{ html: body }], options.open).disclosure.html;
+}
+
 function markdownOutput(text: string): string {
-  return `<div class="output-text-copyable"><div class="markdown-copy-toolbar">${copyButton(text)}</div><div class="markdown-body">${renderProcessMarkdown(text)}</div></div>`;
+  return renderTurnMarkdown(turnHtmlAdapter,
+    { html: `<div class="markdown-body">${renderProcessMarkdown(text)}</div>` },
+    { html: copyButton(text) }
+  ).html;
+}
+
+function jsonOutput(text: string): string {
+  const formatted = formatJsonOutput(text);
+  if (!formatted) return markdownOutput(text);
+  return renderTurnMarkdown(turnHtmlAdapter,
+    { html: `<div class="markdown-body">${renderProcessMarkdown("```json\n" + formatted + "\n```")}</div>` },
+    { html: copyButton(formatted) }).html;
 }
 
 /** High-frequency conversation actions stay visible on hover; the complete
@@ -320,27 +339,14 @@ function resultText(result: DextResult): string {
 }
 
 function resultBody(result: DextResult): string {
-  if (result.kind === "ask" || result.kind === "plan" || result.kind === "skill") {
-    return `${markdownOutput(result.text)}${result.kind === "plan" && result.planPath ? planLink(result.planPath) : ""}`;
-  }
-  if (result.kind === "terminal") {
-    const output = [
-      result.stdout ? `<pre class="terminal-text">${highlightTerminal(result.stdout)}</pre>` : "",
-      result.stderr ? `<pre class="terminal-text terminal-stderr">${highlightTerminal(result.stderr)}</pre>` : ""
-    ].join("");
-    return `<details class="history-disclosure terminal-result"><summary>${chevron()}<span>${escapeHtml(result.command)}</span><span class="history-meta">${escapeHtml(result.status)} · exit ${result.exit_code}</span></summary><div class="disclosure-body"><div class="history-meta">${escapeHtml(result.cwd)}</div>${output}</div></details>`;
-  }
-  if (result.kind === "patch") {
-    return result.changes.map(renderFileChange).join("");
-  }
-  if (result.kind === "agent") {
-    const changes = result.patch?.changes ?? [];
-    return `${result.text ? markdownOutput(result.text) : ""}${changes.map(renderFileChange).join("")}`;
-  }
-  if (result.kind === "apply") return `<p><span class="result-state">${escapeHtml(result.status)}</span>: ${escapeHtml(result.summary)}</p>`;
-  const text = resultText(result);
-  const body = text ? `<p>${escapeHtml(text)}</p>` : "";
-  return body;
+  return renderTurnResult({
+    ...turnHtmlAdapter,
+    markdown: (text) => ({ html: markdownOutput(text) }),
+    json: (text) => ({ html: jsonOutput(text) }),
+    terminal: (text, stderr) => ({ html: `<pre class="terminal-text${stderr ? " terminal-stderr" : ""}">${highlightTerminal(text)}</pre>` }),
+    patch: (change) => ({ html: renderFileChange(change) }),
+    plan: (path) => ({ html: planLink(path) })
+  }, result).map((node) => node.html).join("");
 }
 
 // History opens the plan document; building it belongs to the live composer.
@@ -351,8 +357,7 @@ function planLink(planPath: string): string {
 }
 
 function execution(response: RuntimeResponse): string {
-  const raw = resultText(response.result);
-  return `<section class="history-execution"><div class="execution-heading"><span>${escapeHtml(response.method.id)}</span><span class="history-meta">${formatDuration(response.durationMs)}</span>${raw ? copyButton(raw) : ""}</div>${resultBody(response.result)}</section>`;
+  return `<section class="history-execution execution-result">${resultBody(response.result)}</section>`;
 }
 
 function steps(response: InputExecutionResponse): WorkflowStepResponse[] {
@@ -371,29 +376,12 @@ function outputText(response: InputExecutionResponse): string {
 }
 
 function processMessage(text: string): string {
-  const presentation = presentAgentMessage(text);
-  if (!presentation.structured) return `<div class="process-text markdown-body">${renderProcessMarkdown(text)}</div>`;
-  const meta = presentation.meta.length
-    ? `<span class="process-result-meta">${escapeHtml(presentation.meta.join(" · "))}</span>`
-    : "";
-  const body = presentation.text
-    ? `<div class="process-result-text markdown-body">${renderProcessMarkdown(presentation.text)}</div>`
-    : "";
-  const details = presentation.details.map((detail) =>
-    `<div class="process-result-detail ${detail.tone}">${detail.meta ? `<span class="process-result-detail-meta">${escapeHtml(detail.meta)}</span>` : ""}${escapeHtml(detail.text)}</div>`
-  ).join("");
-  return `<section class="process-result process-result-${presentation.kind}"><div class="process-result-heading"><span class="process-result-title">${escapeHtml(presentation.title)}</span>${meta}</div>${body}${details}${renderPresentationExtras(presentation)}</section>`;
-}
-
-function renderPresentationExtras(presentation: AgentMessagePresentation): string {
-  const changes = presentation.changes.map(renderFileChange).join("");
-  const references = presentation.references.map((reference) => {
-    const name = reference.uri.replaceAll("\\", "/").split("/").pop() ?? reference.uri;
-    const meta = [reference.location, reference.symbol].filter(Boolean).join(" · ");
-    return `<details class="history-disclosure process-reference"><summary>${chevron()}<span>${escapeHtml(name)}</span>${meta ? `<span class="history-meta">${escapeHtml(meta)}</span>` : ""}</summary><div class="file-path">${escapeHtml(reference.uri)}</div>${reference.content ? `<pre>${escapeHtml(reference.content)}</pre>` : ""}</details>`;
-  }).join("");
-  const sections = presentation.sections.map((item) => `<details class="history-disclosure process-section ${item.tone}"><summary>${chevron()}<span>${escapeHtml(item.title)}</span></summary><div class="disclosure-body">${item.code ? `<pre>${escapeHtml(item.text)}</pre>` : `<div class="process-text">${escapeHtml(item.text)}</div>`}</div></details>`).join("");
-  return changes + references + sections;
+  return renderTurnMessage({
+    ...turnHtmlAdapter,
+    prose: (text) => ({ html: `<div class="markdown-body">${renderProcessMarkdown(text)}</div>` }),
+    code: (text) => ({ html: `<pre>${escapeHtml(text)}</pre>` }),
+    patch: (change) => ({ html: renderFileChange(change) })
+  }, presentAgentMessage(text)).map((node) => node.html).join("");
 }
 
 function commandLabel(event: AgentStreamEvent): string {
@@ -434,7 +422,7 @@ function process(events: readonly AgentStreamEvent[]): string {
       continue;
     }
     flushTools();
-    html.push(`<section class="process-message">${processMessage(event.text)}</section>`);
+    html.push(`<section class="process-message agent-stream-item agent-trace-message"><div class="agent-stream-text">${processMessage(event.text)}</div>${copyButton(agentMessageCopyText(presentAgentMessage(event.text)))}</section>`);
   }
   flushTools();
   return html.join("");
@@ -486,12 +474,12 @@ export function renderHistoryRecord(record: DextHistoryRecord, sessionId?: strin
   const executePlan = record.executePlan || !!planExecution;
   const firstLine = historyTurnTitle(record);
   const duration = response?.executions.reduce((total, item) => total + item.durationMs, 0) ?? 0;
+  const turn = presentTurn({ source: input, mode: record.mode, hideInput: executePlan, durationMs: duration });
   const processHtml = process(record.process);
   const todoHtml = renderAgentTodos(latestAgentTodos(record.process)) + inputHistory(record.process);
   const outputHtml = record.error
     ? `<pre class="error">${escapeHtml(record.error)}</pre>`
     : response ? output(response) : `<pre>${escapeHtml(record.output)}</pre>`;
-  const outputCopy = record.error || (response ? outputText(response) : record.output);
   const context = sessionId
     ? ` ${contextAttribute({
       webviewSection: "turn",
@@ -502,12 +490,16 @@ export function renderHistoryRecord(record: DextHistoryRecord, sessionId?: strin
     : "";
   const hint = sessionId ? ` title="${TURN_ACTION_HINT}"` : "";
   const target = sessionId ? ` data-session-id="${escapeHtml(sessionId)}" data-turn-id="${escapeHtml(record.id)}"` : "";
-  const modeTitle = record.mode ? `Submitted in ${turnModeLabel(record.mode)} mode` : "Mode was not recorded for this turn";
-  const modeLabel = `<span class="turn-mode" data-mode="${escapeHtml(record.mode ?? "unknown")}" title="${escapeHtml(modeTitle)}">${turnModeLabel(record.mode)}</span>`;
-  const inputHtml = executePlan ? "" : `<details class="history-disclosure"><summary>${chevron()}<span>Input</span>${modeLabel}${copyButton(input)}</summary><pre class="dext-source">${renderedInputSource(input)}</pre></details>`;
+  const inputHtml = turn.input
+    ? historyTurnSection(turn.input, renderTurnInput(turnHtmlAdapter,
+      { html: `<pre class="dext-source">${renderedInputSource(turn.input.source)}</pre>` },
+      { html: copyButton(turn.input.source) }).html)
+    : "";
   const planOutcome = record.planOutcome ?? (planExecution?.result.kind === "plan" ? planExecution.result.planOutcome : undefined);
   const planStatusHtml = executePlan ? `<span class="plan-status">${planExecutionLabel(record.process, record.error, planOutcome)}</span>` : "";
-  return `<details class="history-record"${target}${context}><summary${hint}>${chevron()}<span class="history-summary-input${record.title ? " named" : ""}">${escapeHtml(firstLine)}</span>${planStatusHtml}<span class="history-meta">${duration ? formatDuration(duration) : ""}</span><span class="history-meta history-record-time">${escapeHtml(dateLabel(record.createdAt))}</span>${sessionId ? historyTurnActions(sessionId, record.id) : ""}</summary><div class="history-record-body">${inputHtml}${todoHtml}${processHtml ? `<details class="history-disclosure"><summary>${chevron()}<span>Process</span></summary><div class="disclosure-body">${processHtml}</div></details>` : ""}<details class="history-disclosure" open><summary>${chevron()}<span>Output</span>${copyButton(outputCopy)}</summary><div class="disclosure-body">${outputHtml}</div></details></div></details>`;
+  const processSummary = historyTurnSection(turn.process, processHtml);
+  const outputSection = historyTurnSection(turn.output, outputHtml, { open: true });
+  return `<details class="history-record"${target}${context}><summary${hint}>${chevron()}<span class="history-summary-input${record.title ? " named" : ""}">${escapeHtml(firstLine)}</span>${planStatusHtml}<span class="history-meta history-record-time">${escapeHtml(dateLabel(record.createdAt))}</span>${sessionId ? historyTurnActions(sessionId, record.id) : ""}</summary><div class="history-record-body">${inputHtml}${todoHtml}${processSummary}${outputSection}</div></details>`;
 }
 
 /** The name a conversation carries until the user renames it: the opening line

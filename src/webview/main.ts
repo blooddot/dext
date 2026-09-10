@@ -1,5 +1,5 @@
-import { uiResultText } from "../uiInteractionPresentation.js";
 import { readHistoryResponse } from "../historyResponse.js";
+import { renderTurnSection, renderTurnInput, renderTurnMarkdown, renderTurnResult, renderTurnMessage, turnDomAdapter } from "../turnComponents.js";
 import type { UiFormAnswers } from "../core/uiForm.js";
 import "../../media/styles.css";
 import MarkdownIt from "markdown-it";
@@ -25,10 +25,13 @@ import { DextCodeEditor } from "./codeEditor.js";
 import { LanguageRequestBroker } from "./languageClient.js";
 import { formatDuration } from "./duration.js";
 import { agentMessageCopyText, presentAgentMessage } from "../agentMessagePresentation.js";
-import type { AgentMessagePresentation } from "../agentMessagePresentation.js";
 import { presentDiff } from "../diffPresentation.js";
 import type { DextHistoryRecord, DextHistorySession } from "../historyStore.js";
-import { TURN_EDIT_ACTION, TURN_RENAME_ACTION, TURN_RETRY_ACTION, TURN_FORK_ACTION, TURN_COPY_ACTION, TURN_DELETE_ACTION, TurnTitle, turnModeLabel } from "../turnPresentation.js";
+import {
+  TURN_EDIT_ACTION, TURN_RENAME_ACTION, TURN_RETRY_ACTION, TURN_FORK_ACTION,
+  TURN_COPY_ACTION, TURN_DELETE_ACTION, TurnTitle, presentTurn,
+  type TurnSectionPresentation
+} from "../turnPresentation.js";
 import { groupMethodsForDisplay, isSyntheticBuiltinGroup } from "./methodGroups.js";
 import {
   compactFileReferenceLabel,
@@ -281,6 +284,7 @@ interface OutputTurnElements {
   input?: HTMLElement;
   process: HTMLElement;
   processDisclosure: HTMLDetailsElement;
+  processMeta?: HTMLElement;
   todos: AgentTodoView;
   questions: AgentInputView;
   output: HTMLElement;
@@ -1826,20 +1830,6 @@ function toggleComposerMenu(menu: HTMLElement): void {
   }
 }
 
-function resultHeading(response: RuntimeResponse): HTMLElement {
-  const heading = document.createElement("div");
-  heading.className = "result-meta execution-heading";
-  heading.textContent = `${response.method.id} | ${formatDuration(response.durationMs)}`;
-  let copyText: string;
-  try {
-    copyText = JSON.stringify(response.result, null, 2);
-  } catch {
-    copyText = "Unable to serialize execution output.";
-  }
-  heading.append(copyButton(copyText));
-  return heading;
-}
-
 function copyButton(text: string): HTMLButtonElement {
   const button = document.createElement("button");
   button.type = "button";
@@ -1858,13 +1848,6 @@ function copyButton(text: string): HTMLButtonElement {
     });
   });
   return button;
-}
-
-function markdownCopyToolbar(text: string): HTMLElement {
-  const toolbar = document.createElement("div");
-  toolbar.className = "markdown-copy-toolbar";
-  toolbar.append(copyButton(text));
-  return toolbar;
 }
 
 function copyableContent(content: string, className = ""): HTMLElement {
@@ -1886,15 +1869,14 @@ function codeBlock(content: string): HTMLElement {
 function jsonOutput(content: string): HTMLElement {
   const formatted = formatJsonOutput(content);
   if (!formatted) return copyableText(content);
-  const wrapper = document.createElement("div");
-  wrapper.className = "output-text-copyable json-output";
   const body = document.createElement("div");
   body.className = "markdown-body";
   // Keep one shared Markdown rendering path for every output. The fence is
   // needed to preserve JSON whitespace while still letting Markdown own the
   // surrounding layout and code-block styling.
   body.innerHTML = markdown.render("```json\n" + formatted + "\n```");
-  wrapper.append(markdownCopyToolbar(formatted), body);
+  const wrapper = renderTurnMarkdown(turnDomAdapter(document), body, copyButton(formatted));
+  wrapper.classList.add("json-output");
   return wrapper;
 }
 
@@ -2075,13 +2057,10 @@ function terminalBlock(content: string, className = "terminal-output"): HTMLElem
 }
 
 function copyableText(content: string): HTMLElement {
-  const wrapper = document.createElement("div");
-  wrapper.className = "output-text-copyable";
   const body = document.createElement("div");
   body.className = "markdown-body";
   body.innerHTML = markdown.render(content);
-  wrapper.append(markdownCopyToolbar(content), body);
-  return wrapper;
+  return renderTurnMarkdown(turnDomAdapter(document), body, copyButton(content));
 }
 
 function disclosureSummary(label: string, detail: string): HTMLElement {
@@ -2097,15 +2076,15 @@ function disclosureSummary(label: string, detail: string): HTMLElement {
   return summary;
 }
 
-function outputTurnSection(label: string, open: boolean): { disclosure: HTMLDetailsElement; body: HTMLElement } {
-  const disclosure = document.createElement("details");
-  disclosure.className = "output-turn-section execution-disclosure";
-  disclosure.open = open;
-  disclosure.append(disclosureSummary(label, ""));
-  const body = document.createElement("div");
-  body.className = "output-turn-section-body execution-disclosure-body";
-  disclosure.append(body);
-  return { disclosure, body };
+function outputTurnSection(section: TurnSectionPresentation, open: boolean): {
+  disclosure: HTMLDetailsElement;
+  body: HTMLElement;
+  meta: HTMLElement;
+} {
+  const view = renderTurnSection(turnDomAdapter(document), section, [], open);
+  // Legacy hooks still identify cached turns and scope patch-review interactions.
+  view.disclosure.classList.add("output-turn-section");
+  return { ...view, disclosure: view.disclosure as HTMLDetailsElement };
 }
 
 function referenceIcon(kind: "file" | "dir" | "symbol" | "selection" | "activeFile"): string {
@@ -2248,6 +2227,7 @@ function createOutputTurn(
 ): OutputTurnElements {
   source = normalizeInputReferenceSource(source);
   const lazy = options.lazy === true;
+  const turnPresentation = presentTurn({ source, mode: options.mode, hideInput: options.executePlan });
   for (const turn of outputTurns.values()) turn.disclosure.open = false;
   const disclosure = document.createElement("details");
   disclosure.className = "output-turn";
@@ -2314,28 +2294,18 @@ function createOutputTurn(
   planExecutionStatus.textContent = "Running";
   summary.append(chevron, title, planExecutionStatus, time, actions);
   let inputBody: HTMLElement | undefined;
-  if (!options.executePlan) {
-    // Keep the shared disclosure construction recognizable; lazy history
-    // turns close it immediately after creating the lightweight shell.
-    const input = outputTurnSection("Input", true);
-    const modeLabel = document.createElement("span");
-    modeLabel.className = "turn-mode";
-    modeLabel.dataset.mode = options.mode ?? "unknown";
-    modeLabel.textContent = turnModeLabel(options.mode);
-    modeLabel.title = options.mode ? `Submitted in ${turnModeLabel(options.mode)} mode` : "Mode was not recorded for this turn";
-    input.disclosure.querySelector(".disclosure-meta")?.replaceWith(modeLabel);
+  if (turnPresentation.input) {
+    const input = outputTurnSection(turnPresentation.input, true);
     input.disclosure.open = !lazy;
     inputBody = input.body;
     if (!lazy) {
       const inputText = renderedInputSource(source);
-      const inputCopy = document.createElement("div");
-      inputCopy.className = "output-turn-input";
-      inputCopy.append(inputText, copyButton(source));
+      const inputCopy = renderTurnInput(turnDomAdapter(document), inputText, copyButton(source));
       input.body.append(inputCopy);
     }
     body.append(input.disclosure);
   }
-  const process = outputTurnSection("Process", !lazy);
+  const process = outputTurnSection(turnPresentation.process, !lazy);
   const todos = new AgentTodoView();
   const questionSessionId = activeConversationId;
   const questions = new AgentInputView((requestId, answers) => {
@@ -2352,7 +2322,7 @@ function createOutputTurn(
       vscode.setState({ interactionDrafts: Object.fromEntries(entries) });
     }
   });
-  const output = outputTurnSection("Output", !lazy);
+  const output = outputTurnSection(turnPresentation.output, !lazy);
   body.append(todos.element, questions.element, process.disclosure, output.disclosure);
   disclosure.append(summary, body);
   elements.result.append(disclosure);
@@ -2363,6 +2333,7 @@ function createOutputTurn(
     ...(inputBody ? { input: inputBody } : {}),
     process: process.body,
     processDisclosure: process.disclosure,
+    processMeta: process.meta,
     todos,
     questions,
     output: output.body,
@@ -2585,48 +2556,6 @@ function patchReviewOutcome(status: "applied" | "rejected" | "unchanged"): HTMLE
   outcome.append(glyph, label);
   return outcome;
 }
-
-function appendAgentPresentationExtras(container: HTMLElement, presentation: AgentMessagePresentation): void {
-  for (const detail of presentation.details) {
-    const element = document.createElement("div");
-    element.className = `agent-result-detail ${detail.tone}`;
-    if (detail.meta) {
-      const meta = document.createElement("span");
-      meta.className = "agent-result-detail-meta";
-      meta.textContent = detail.meta;
-      element.append(meta);
-    }
-    element.append(document.createTextNode(detail.text));
-    container.append(element);
-  }
-  for (const change of presentation.changes) {
-    container.append(fileChangeDisclosure(change, "agent-file-change agent-result-change"));
-  }
-  for (const reference of presentation.references) {
-    const disclosure = document.createElement("details");
-    disclosure.className = "agent-result-reference";
-    const name = reference.uri.replaceAll("\\", "/").split("/").pop() ?? reference.uri;
-    const meta = [reference.location, reference.symbol].filter(Boolean).join(" · ");
-    disclosure.append(disclosureSummary(name, meta));
-    const path = document.createElement("div");
-    path.className = "agent-file-path";
-    path.textContent = reference.uri;
-    disclosure.append(path);
-    if (reference.content) disclosure.append(codeBlock(reference.content));
-    container.append(disclosure);
-  }
-  for (const section of presentation.sections) {
-    const disclosure = document.createElement("details");
-    disclosure.className = `agent-result-section ${section.tone}`;
-    disclosure.append(disclosureSummary(section.title, ""));
-    const body = document.createElement("div");
-    body.className = "agent-result-section-body";
-    body.append(section.code ? codeBlock(section.text) : copyableText(section.text));
-    disclosure.append(body);
-    container.append(disclosure);
-  }
-}
-
 /** A plan result links back to its saved document for review or editing. */
 function planActions(planPath: string): HTMLElement {
   const row = document.createElement("div");
@@ -2649,55 +2578,14 @@ function planActions(planPath: string): HTMLElement {
 
 function renderExecution(response: RuntimeResponse, reviewTurnId?: string): DocumentFragment {
   const fragment = document.createDocumentFragment();
-  fragment.append(resultHeading(response));
-  const result = response.result;
-  if (result.kind === "ask" || result.kind === "plan" || result.kind === "skill") {
-    fragment.append(copyableText(result.text));
-    if (result.kind === "plan" && result.planPath) fragment.append(planActions(result.planPath));
-  } else if (result.kind === "agent") {
-    if (result.text) fragment.append(copyableText(result.text));
-    const changes = result.patch?.changes ?? [];
-    for (const change of changes) {
-      fragment.append(fileChangeDisclosure(change, "agent-file-change execution-file-change", reviewTurnId));
-    }
-  } else if (result.kind === "apply") {
-    fragment.append(copyableText(`${result.status}: ${result.summary}`));
-  } else if (result.kind === "print") {
-    if (result.label) {
-      const label = document.createElement("div");
-      label.className = "output-title";
-      label.textContent = result.label;
-      fragment.append(label);
-    }
-    // Structured print values are formatted and highlighted as JSON; non-JSON
-    // text continues through the normal Markdown renderer.
-    fragment.append(jsonOutput(result.text));
-  } else if (result.kind === "terminal") {
-    const disclosure = document.createElement("details");
-    disclosure.className = "execution-disclosure terminal-disclosure";
-    disclosure.append(disclosureSummary(
-      result.command,
-      `${result.status} | exit ${result.exit_code} | ${formatDuration(result.duration_ms)}`
-    ));
-    const body = document.createElement("div");
-    body.className = "execution-disclosure-body";
-    const cwd = document.createElement("div");
-    cwd.className = "result-meta";
-    cwd.textContent = result.cwd;
-    body.append(cwd);
-    if (result.stdout) body.append(terminalBlock(result.stdout));
-    if (result.stderr) body.append(terminalBlock(result.stderr, "terminal-output terminal-stderr"));
-    disclosure.append(body);
-    fragment.append(disclosure);
-  } else if (result.kind === "patch") {
-    const title = document.createElement("div");
-    title.className = "output-title";
-    title.textContent = result.title;
-    fragment.append(title);
-    for (const change of result.changes) fragment.append(fileChangeDisclosure(change, "agent-file-change execution-file-change"));
-  } else if (result.kind === "ui") {
-    fragment.append(copyableText(uiResultText(result)));
-  }
+  fragment.append(...renderTurnResult({
+    ...turnDomAdapter(document),
+    markdown: copyableText,
+    json: jsonOutput,
+    terminal: (text, stderr) => terminalBlock(text, stderr ? "terminal-output terminal-stderr" : "terminal-output"),
+    patch: (change) => fileChangeDisclosure(change, "agent-file-change execution-file-change", reviewTurnId),
+    plan: planActions
+  }, response.result));
   return fragment;
 }
 
@@ -2854,7 +2742,7 @@ function agentStreamPanel(): HTMLElement {
   agentStream = panel;
   // Process already owns the first-level disclosure. Put live run metadata in
   // its title instead of nesting a second disclosure around the timeline.
-  agentProgress = activeTurn?.processDisclosure.querySelector<HTMLElement>(".disclosure-meta") ?? undefined;
+  agentProgress = activeTurn?.processMeta;
   updateAgentProgress(agentProgressState);
   return panel;
 }
@@ -2903,7 +2791,7 @@ function createAgentEventItem(event: AgentStreamEvent): HTMLElement {
   const message = document.createElement("section");
   message.className = `agent-stream-item agent-trace-message agent-trace-${kind}`;
   const body = document.createElement("div");
-  body.className = "agent-stream-text markdown-body";
+  body.className = "agent-stream-text";
   message.append(body);
   return message;
 }
@@ -3019,33 +2907,21 @@ function agentToolGroupFor(
 
 function renderAgentMessageItem(item: HTMLElement, body: HTMLElement): void {
   if (!body.isConnected) return;
-  const raw = body.dataset.raw ?? "";
-  const presentation = presentAgentMessage(raw);
-  const copyText = agentMessageCopyText(presentation);
+  const presentation = presentAgentMessage(body.dataset.raw ?? "");
   body.classList.toggle("agent-stream-result", presentation.structured);
-  if (presentation.structured) {
-    const heading = document.createElement("div");
-    heading.className = "agent-result-heading";
-    const title = document.createElement("span");
-    title.className = "agent-result-title";
-    title.textContent = presentation.title;
-    heading.append(title);
-    if (presentation.meta.length) {
-      const meta = document.createElement("span");
-      meta.className = "agent-result-meta";
-      meta.textContent = presentation.meta.join(" · ");
-      heading.append(meta);
-    }
-    const content = document.createElement("div");
-    content.className = "agent-result-content markdown-body";
-    content.innerHTML = presentation.text ? markdown.render(presentation.text) : "";
-    body.replaceChildren(heading, ...(presentation.text ? [content] : []));
-    appendAgentPresentationExtras(body, presentation);
-  } else {
-    body.innerHTML = markdown.render(raw);
-  }
+  body.replaceChildren(...renderTurnMessage({
+    ...turnDomAdapter(document),
+    prose: (text) => {
+      const content = document.createElement("div");
+      content.className = "markdown-body";
+      content.innerHTML = markdown.render(text);
+      return content;
+    },
+    code: codeBlock,
+    patch: (change) => fileChangeDisclosure(change, "agent-file-change agent-result-change")
+  }, presentation));
   const outputCopy = item.querySelector<HTMLButtonElement>(".output-copy");
-  if (outputCopy) outputCopy.replaceWith(copyButton(copyText));
+  if (outputCopy) outputCopy.replaceWith(copyButton(agentMessageCopyText(presentation)));
 }
 
 function scheduleAgentMessageRender(item: HTMLElement): void {
@@ -3287,13 +3163,15 @@ function renderStoredTurn(record: DextHistoryRecord, turn: OutputTurnElements): 
 
   agentRunStartedAt = Date.now();
   if (turn.input && turn.input.childElementCount === 0) {
-    const inputCopy = document.createElement("div");
-    inputCopy.className = "output-turn-input";
-    inputCopy.append(renderedInputSource(record.input), copyButton(record.input));
+    const inputCopy = renderTurnInput(turnDomAdapter(document), renderedInputSource(record.input), copyButton(record.input));
     turn.input.append(inputCopy);
   }
   for (const event of record.process) renderAgentEvent(event);
   if (agentStream) finishAgentProgress();
+  const duration = response?.executions.reduce((total, item) => total + item.durationMs, 0) ?? 0;
+  if (turn.processMeta) turn.processMeta.textContent = presentTurn({
+    source: record.input, mode: record.mode, durationMs: duration
+  }).process.detail ?? "";
   turn.todos.setRunning(false);
   turn.processDisclosure.open = false;
   if (record.error) renderOutputError(record.error);

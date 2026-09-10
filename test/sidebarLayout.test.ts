@@ -57,7 +57,7 @@ describe("sidebar panel layout", () => {
     const main = await source("src/webview/main.ts");
     expect(main).toContain('inputHeading: element<HTMLElement>("input-heading")');
     expect(main).toContain('inputBody: element<HTMLElement>("input-body")');
-    expect(main).toContain('const input = outputTurnSection("Input", true);');
+    expect(main).toContain('const input = outputTurnSection(turnPresentation.input, true);');
     expect(main).toMatch(/elements\.inputHeading\.addEventListener\("click",[\s\S]*toggleSection\(elements\.inputHeading, elements\.inputBody\)/);
     expect(main).toMatch(/elements\.inputHeading\.addEventListener\("keydown",[\s\S]*event\.key === "Enter" \|\| event\.key === " "[\s\S]*toggleSection\(elements\.inputHeading, elements\.inputBody\)/);
   });
@@ -111,7 +111,7 @@ describe("sidebar panel layout", () => {
     expect(main).toMatch(/renderComposerMenu\(elements\.modeMenu, \[[\s\S]*?\["plan", "Plan", "codicon-checklist"\]/);
     expect(main).toContain('plan: "Plan"');
     // A plan turn ends in a file, so the result offers the file and the handoff.
-    expect(main).toMatch(/if \(result\.kind === "plan" && result\.planPath\) fragment\.append\(planActions\(result\.planPath\)\)/);
+    expect(main).toContain('plan: planActions');
     expect(main).toMatch(/function planActions[\s\S]*?type: "openFileReference", reference: planPath/);
     expect(main).toMatch(/function planActions[\s\S]*?type: "buildPlan", planPath/);
     expect(builtins).toMatch(/id: "plan",\s*title: "Plan",/);
@@ -129,7 +129,7 @@ describe("sidebar panel layout", () => {
     expect(sidebar).toMatch(/private async buildPlan[\s\S]*?await this\.run\("plan", \[/);
     expect(sidebar).toContain('].join("\\n"), undefined, true);');
     // History replays the document link but not the handoff button.
-    expect(history).toMatch(/result\.kind === "plan" && result\.planPath/);
+    expect(history).toContain('plan: (path) => ({ html: planLink(path) })');
     expect(history).not.toContain('type: "buildPlan"');
   });
 
@@ -289,7 +289,7 @@ describe("sidebar panel layout", () => {
   it("keeps Process as the only disclosure around the live agent timeline", async () => {
     const main = await source("src/webview/main.ts");
     const css = await source("media/styles.css");
-    expect(main).toMatch(/function agentStreamPanel[\s\S]*?activeTurn\?\.process[\s\S]*?processDisclosure\.querySelector/);
+    expect(main).toMatch(/function agentStreamPanel[\s\S]*?activeTurn\?\.process[\s\S]*?activeTurn\?\.processMeta/);
     expect(main).not.toContain('trace.className = "agent-run-disclosure"');
     expect(css).not.toContain(".agent-run-disclosure");
   });
@@ -440,7 +440,7 @@ describe("sidebar panel layout", () => {
     expect(main).toMatch(/function renderAgentEvent[\s\S]*?agentToolGroup = undefined;[\s\S]*?panel\.append\(item\);/);
     expect(main).toMatch(/function updateAgentToolGroupLabel[\s\S]*?Ran \$\{count\} command/);
     expect(main).toMatch(/function createAgentToolCommand[\s\S]*?document\.createElement\("details"\)[\s\S]*?terminalText\(raw\)/);
-    expect(main).toMatch(/function renderAgentMessageItem[\s\S]*?body\.innerHTML = markdown\.render\(raw\)/);
+    expect(main).toMatch(/function renderAgentMessageItem[\s\S]*?body\.replaceChildren\(\.\.\.renderTurnMessage/);
     expect(css).toMatch(/\.terminal-output \{[\s\S]*?max-height: 360px;[\s\S]*?overflow: auto;[\s\S]*?white-space: pre-wrap;/);
     expect(main).not.toContain("const order = { reasoning: 0, work: 1, files: 2, tool: 3 }");
   });
