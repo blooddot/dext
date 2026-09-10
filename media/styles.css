@@ -9,10 +9,20 @@
   --dext-plan-label: #e0c34c;
   /* Keep Full access distinct from Plan's warm gold. */
   --dext-full-access-accent: #a9675c;
+  --dext-row-action-background: #252526;
 }
 
 body.vscode-light {
   --dext-plan-label: #806b00;
+}
+
+body.vscode-light,
+body.vscode-high-contrast-light {
+  --dext-row-action-background: #ffffff;
+}
+
+body.vscode-high-contrast {
+  --dext-row-action-background: #000000;
 }
 
 body.vscode-high-contrast,
@@ -741,7 +751,8 @@ main {
 }
 
 .history-session-actions,
-.history-turn-actions {
+.history-turn-actions,
+.output-turn-actions {
   position: absolute;
   z-index: 1;
   right: 4px;
@@ -750,12 +761,16 @@ main {
   display: flex;
   align-items: center;
   gap: 2px;
-  padding: 2px 0 2px 14px;
+  padding: 2px 4px;
+  border: 1px solid var(--vscode-contrastBorder, var(--vscode-widget-border, color-mix(in srgb, var(--vscode-foreground) 25%, transparent)));
+  border-radius: 5px;
+  /* Theme hover colors can be translucent. Composite the widget surface onto
+     an opaque base so timestamps and counts never show through the buttons. */
   background: linear-gradient(
-    to right,
-    transparent,
-    var(--vscode-list-hoverBackground, rgba(37, 37, 38, 0.96)) 14px
-  );
+    var(--vscode-editorWidget-background, transparent),
+    var(--vscode-editorWidget-background, transparent)
+  ), var(--dext-row-action-background);
+  box-shadow: 0 2px 8px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.3));
   opacity: 0;
   pointer-events: none;
   transition: opacity 80ms ease-out;
@@ -776,7 +791,7 @@ main {
   height: 22px;
   padding: 0;
   border: 0;
-  color: var(--vscode-descriptionForeground);
+  color: var(--vscode-icon-foreground, var(--vscode-foreground));
   background: transparent;
   cursor: pointer;
 }
@@ -2680,28 +2695,6 @@ button.primary.stopping {
   color: var(--vscode-descriptionForeground);
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.output-turn-actions {
-  position: absolute;
-  z-index: 1;
-  right: 4px;
-  top: 50%;
-  transform: translateY(-50%);
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 2px 0 2px 14px;
-  background: linear-gradient(
-    to right,
-    transparent,
-    var(--vscode-list-hoverBackground, rgba(37, 37, 38, 0.96)) 14px
-  );
-  /* Revealed on hover so the turn header stays quiet while reading, matching
-     the way VS Code treats row actions in its own lists. */
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 80ms ease-out;
 }
 
 .output-turn > summary:hover .output-turn-actions,
