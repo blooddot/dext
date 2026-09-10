@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -54,6 +54,36 @@ describe("Dext workflow runtime", () => {
       await expect(runtime.execute({ kind: "invocation", method: "node.fs.readFile", source: "code", arguments: [{ name: "path", value: "../outside.txt" }] }))
         .rejects.toThrow("workspace");
     } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it.each(["physical", "symlink"])("keeps node.fs inside a %s workspace root", async (rootKind) => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), "dext-node-links-")));
+    try {
+      const root = join(base, "workspace");
+      const outside = join(base, "workspace-outside");
+      const alias = join(base, "workspace-alias");
+      await mkdir(join(root, "data"), { recursive: true });
+      await mkdir(outside);
+      await writeFile(join(outside, "secret.txt"), "outside");
+      await symlink(root, alias, "junction");
+      await symlink(join(root, "data"), join(root, "inside-link"), "junction");
+      await symlink(outside, join(root, "outside-link"), "junction");
+      const { runtime } = setup();
+      runtime.setWorkspaceRoot(rootKind === "symlink" ? alias : root);
+      runtime.setWorkspaceTrusted(true);
+      const write = (path: string) => runtime.execute({ kind: "invocation", method: "node.fs.writeFile", source: "code", arguments: [{ name: "path", value: path }, { name: "content", value: "ok" }] });
+      const read = (path: string) => runtime.execute({ kind: "invocation", method: "node.fs.readFile", source: "code", arguments: [{ name: "path", value: path }] });
+
+      await write("inside-link/state.txt");
+      expect((await read("inside-link/state.txt")).result).toMatchObject({ value: "ok" });
+      expect(await readFile(join(root, "data", "state.txt"), "utf8")).toBe("ok");
+      await expect(read("../workspace-outside/secret.txt")).rejects.toThrow("workspace");
+      await expect(read("outside-link/secret.txt")).rejects.toThrow("symbolic link");
+      await expect(write("outside-link/secret.txt")).rejects.toThrow("symbolic link");
+      await expect(write("outside-link/new.txt")).rejects.toThrow("symbolic link");
+      expect(await readFile(join(outside, "secret.txt"), "utf8")).toBe("outside");
+      await expect(readFile(join(outside, "new.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+    } finally { await rm(base, { recursive: true, force: true }); }
   });
 
   it("uses node.http.request for bounded, serializable local HTTP responses", async () => {

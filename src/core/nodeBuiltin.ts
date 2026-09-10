@@ -16,13 +16,16 @@ async function workspacePath(root: string, value: unknown): Promise<string> {
   if (typeof value !== "string" || !value.trim() || isAbsolute(value)) throw new Error("node.fs paths must be non-empty workspace-relative paths.");
   const candidate = resolve(root, value);
   if (!contained(root, candidate)) throw new Error("node.fs path must stay inside the workspace.");
+  // The workspace itself may be opened through a symlink (including macOS
+  // /var -> /private/var). Compare physical targets with its physical root.
+  const physicalRoot = await realpath(root);
   // Existing files are resolved to their physical target, preventing symlink
   // escapes. For new files validate the nearest existing parent instead.
   let probe = candidate;
   while (true) {
     try {
       const physical = await realpath(probe);
-      if (!contained(root, physical)) throw new Error("node.fs path escapes the workspace through a symbolic link.");
+      if (!contained(physicalRoot, physical)) throw new Error("node.fs path escapes the workspace through a symbolic link.");
       break;
     } catch (error) {
       if (error instanceof Error && error.message.includes("symbolic link")) throw error;
