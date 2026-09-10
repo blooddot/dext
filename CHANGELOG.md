@@ -10,6 +10,8 @@ All notable changes to Dext are documented in this file.
 
 ## Unreleased
 
+- Default Dext to the Secondary Side Bar while preserving user-customized view locations. Require VS Code 1.106 or newer for the native view container contribution.
+
 - Simplify completion to its active generation/cancellation interface; remove unused result conversion and editor/runtime helpers. Enable TypeScript checks for unused locals and parameters.
 
 - Remove ChatGPT-authenticated Tab completion, its login commands, settings and dedicated runtime. Preserve sidebar Codex conversations and API Key/Ollama completion. Clean up the unreleased preview settings locally and remove the temporary ChatGPT Tab migration code; retain CLI authentication compatibility and existing HTTP settings and credentials.

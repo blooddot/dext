@@ -34,7 +34,9 @@ Dext supports **Codex CLI, Claude CLI, and DeepSeek Harness**. You can also conf
 
 ## Installation
 
-Requires **VS Code 1.105 or newer**. For AI tasks, install and authenticate one of the supported Agent CLIs; Dext uses that CLI's credentials.
+Requires **VS Code 1.106 or newer**. For AI tasks, install and authenticate one of the supported Agent CLIs; Dext uses that CLI's credentials.
+
+Dext defaults to the Secondary Side Bar, on the right in VS Code's default layout. New installations and updates use this location unless you have moved Dext manually; VS Code preserves your chosen position. If Dext still appears elsewhere, right-click its title and move it to the Secondary Side Bar.
 
 ### Install from the Marketplace
 

@@ -29,7 +29,7 @@
   },
   "homepage": "https://github.com/blooddot/dext#readme",
   "engines": {
-    "vscode": "^1.105.0"
+    "vscode": "^1.106.0"
   },
   "dext": {
     "mcpProtocolVersions": {
@@ -801,7 +801,7 @@
       ]
     },
     "viewsContainers": {
-      "activitybar": [
+      "secondarySidebar": [
         {
           "id": "dext",
           "title": "Dext",
