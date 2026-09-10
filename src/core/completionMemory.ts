@@ -34,11 +34,11 @@ export class CompletionMemoryEpochs implements CompletionEpochs {
       await mkdir(this.directory, { recursive: true });
       if (this.disposed) return;
       this.watcher = watch(this.directory, { persistent: false }, (_event, file) => {
-        this.revision++;
         const key = file?.toString().replace(/\.epoch$/, "");
         // Temporary writes are not a published clear. Loading a previously
         // unknown root must not cancel an otherwise valid completion either.
         if (file?.toString().endsWith(".tmp")) return;
+        this.revision++;
         const changed = key && /^[a-f0-9]{24}$/.test(key) ? this.values.delete(key) : this.values.size > 0;
         if (!key || !/^[a-f0-9]{24}$/.test(key)) this.values.clear();
         if (changed) for (const listener of this.listeners) listener();
@@ -52,29 +52,41 @@ export class CompletionMemoryEpochs implements CompletionEpochs {
   }
   prepare(root: string): Promise<void> {
     const key = fingerprint(root);
-    if (this.disposed || this.values.has(key)) return Promise.resolve();
+    if (this.disposed) return Promise.resolve();
     const pending = this.pending.get(key); if (pending) return pending;
     if (this.pending.size >= 8) return Promise.resolve();
-    const promise = this.load(key).catch(() => { this.values.delete(key); }).finally(() => { this.pending.delete(key); });
+    // Watch events can be delayed or lost. Revalidate on use in the background,
+    // coalescing concurrent requests instead of caching an epoch indefinitely.
+    const promise = this.load(key).catch(() => {
+      if (this.values.delete(key)) for (const listener of this.listeners) listener();
+    }).finally(() => { this.pending.delete(key); });
     this.pending.set(key, promise); return promise;
   }
   private async load(key: string): Promise<void> {
     await this.initialize(); if (this.disposed) return;
     const revision = this.revision;
     const path = join(this.directory, key + ".epoch");
-    try {
-      const file = await open(path, "wx", 0o600);
-      try { await file.writeFile(randomUUID()); } finally { await file.close(); }
-    } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
-    const file = await open(path, "r");
+    let file;
+    try { file = await open(path, "r"); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      try {
+        const created = await open(path, "wx", 0o600);
+        try { await created.writeFile(randomUUID()); } finally { await created.close(); }
+      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+      file = await open(path, "r");
+    }
     let value: string;
     try {
-      if ((await file.stat()).size > 128) return;
+      if ((await file.stat()).size > 128) throw new Error("Invalid completion memory epoch.");
       value = await file.readFile("utf8");
     } finally { await file.close(); }
-    if (!this.disposed && revision === this.revision && /^[a-f0-9-]{36}$/.test(value)) {
+    if (!/^[a-f0-9-]{36}$/.test(value)) throw new Error("Invalid completion memory epoch.");
+    if (!this.disposed && revision === this.revision) {
+      const previous = this.values.get(key);
       this.values.set(key, value);
       while (this.values.size > 8) this.values.delete(this.values.keys().next().value!);
+      if (previous !== undefined && previous !== value) for (const listener of this.listeners) listener();
     }
   }
   async clear(root: string): Promise<string> {
@@ -85,6 +97,9 @@ export class CompletionMemoryEpochs implements CompletionEpochs {
     try { await file.writeFile(epoch); } finally { await file.close(); }
     try { await rename(temporary, join(this.directory, key + ".epoch")); }
     finally { await unlink(temporary).catch(() => undefined); }
+    // An older in-flight read must not restore the pre-clear epoch even if the
+    // filesystem watcher has not delivered the rename notification yet.
+    this.revision++;
     // Verify the winner if two windows clear concurrently.
     this.values.delete(key); await this.load(key);
     for (const listener of this.listeners) listener();
