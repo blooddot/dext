@@ -1255,6 +1255,17 @@ main {
   border-color: var(--vscode-editorHoverWidget-border, var(--vscode-widget-border));
 }
 
+/* Hover/signature cards use the editor-hover palette. Completion lists keep
+   the suggest-widget palette above, just as they do in VS Code itself. */
+.code-editor .cm-tooltip:has(.dext-hover-tooltip),
+.code-editor .cm-tooltip:has(.dext-signature-tooltip) {
+  color: var(--vscode-editorHoverWidget-foreground, var(--vscode-foreground));
+  background: var(--vscode-editorHoverWidget-background, var(--vscode-editor-background));
+  border-color: var(--vscode-editorHoverWidget-border, var(--vscode-widget-border));
+  border-radius: 6px;
+  box-shadow: 0 4px 12px var(--vscode-widget-shadow);
+}
+
 .code-editor .cm-tooltip-lint .cm-diagnostic {
   color: inherit;
   background: transparent;
@@ -1295,15 +1306,29 @@ main {
 
 .dext-hover-tooltip,
 .dext-signature-tooltip {
-  max-width: min(420px, calc(100vw - 32px));
-  padding: 6px 8px;
-  line-height: 1.35;
+  /* Match the Python extension's hover card: a readable code block with a
+     little breathing room, rather than a narrow one-line browser tooltip. */
+  max-width: min(500px, calc(100vw - 32px));
+  padding: 8px 10px;
+  line-height: 1.4;
   overflow-wrap: anywhere;
 }
 
 .dext-hover-tooltip code,
 .dext-signature-tooltip code {
+  display: block;
+  font-size: var(--vscode-editor-font-size, 13px);
+  tab-size: 4;
+}
+
+.dext-hover-tooltip code,
+.dext-signature-tooltip code {
   font-family: var(--vscode-editor-font-family);
+}
+
+.dext-hover-tooltip code {
+  /* Hovers render Python declarations, so preserve their line breaks. */
+  white-space: pre-wrap;
 }
 
 .dext-signature-tooltip code strong {
@@ -3772,7 +3797,7 @@ details[open] > summary > .disclosure-chevron {
 .json-output .markdown-body pre { max-height: 480px; }
 .agent-inputs[hidden] { display: none; }
 .agent-inputs { display: grid; gap: 10px; margin: 10px 0; }
-.agent-input-card { padding: 12px; border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); border-radius: 8px; background: var(--vscode-editor-background); }
+.agent-input-card { position: relative; padding: 12px; border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); border-radius: 8px; background: var(--vscode-editor-background); }
 .agent-input-header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; margin-bottom: 10px; }
 .agent-input-status { font-size: 11px; color: var(--vscode-descriptionForeground); }
 .agent-input-question { min-width: 0; margin: 0 0 12px; padding: 0; border: 0; }
@@ -3791,28 +3816,45 @@ details[open] > summary > .disclosure-chevron {
 .agent-input-actions button:disabled { opacity: .5; cursor: default; }
 .agent-input-answer { margin: 4px 0 0; color: var(--vscode-descriptionForeground); white-space: pre-wrap; overflow-wrap: anywhere; }
 /* Shared workflow and Agent fields. Scoped selectors leave MCP controls intact. */
-.interaction-form { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.interaction-form { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 .interaction-form h3, .interaction-form p { margin: 0; overflow-wrap: anywhere; }
+.interaction-head { display: flex; flex-direction: column; gap: 6px; padding-right: 26px; }
+.interaction-head h3 { font-size: 14px; font-weight: 600; }
+/* Descriptions carry whole agent reports, so they wrap and scroll instead of stretching the dialog. */
+.interaction-description { max-height: 34vh; overflow: auto; color: var(--vscode-descriptionForeground); font-size: 12px; line-height: 1.6; white-space: pre-wrap; }
 .interaction-field { border: 0; padding: 0; margin: 0; min-width: 0; }
-.interaction-field legend { font-weight: 600; padding: 0; margin-bottom: 6px; overflow-wrap: anywhere; max-width: 100%; }
+.interaction-field legend { font-weight: 600; font-size: 12px; padding: 0; margin-bottom: 8px; overflow-wrap: anywhere; max-width: 100%; }
 .interaction-field p, .interaction-option small, .interaction-select-popup small { display: block; color: var(--vscode-descriptionForeground); font-size: 12px; }
-.interaction-options { display: flex; flex-direction: column; gap: 6px; }
-.interaction-option { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; overflow-wrap: anywhere; }
-.interaction-option input { flex: 0 0 auto; margin-top: 3px; width: auto; }
-.interaction-option span { min-width: 0; }
-.interaction-form input:not([type=radio]):not([type=checkbox]), .interaction-form textarea { box-sizing: border-box; width: 100%; min-width: 0; padding: 7px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, var(--vscode-widget-border)); border-radius: 4px; font: inherit; }
-.interaction-form textarea { min-height: 90px; resize: vertical; }
-.interaction-form :focus-visible, .interaction-select-popup :focus-visible { outline: 2px solid var(--vscode-focusBorder); outline-offset: 1px; }
-.interaction-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+.interaction-field > p { margin-bottom: 8px; }
+.interaction-options { display: flex; flex-direction: column; gap: 4px; }
+.interaction-option { display: flex; align-items: flex-start; gap: 9px; padding: 8px 10px; border: 1px solid transparent; border-radius: 6px; cursor: pointer; overflow-wrap: anywhere; }
+.interaction-option:hover { background: var(--vscode-list-hoverBackground); }
+.interaction-option:has(input:checked) { border-color: var(--vscode-focusBorder); background: var(--vscode-list-inactiveSelectionBackground); }
+.interaction-option input { flex: 0 0 auto; margin: 2px 0 0; width: auto; accent-color: var(--vscode-focusBorder); }
+.interaction-option span { min-width: 0; line-height: 1.45; }
+.interaction-option small { margin-top: 3px; }
+.interaction-form input:not([type=radio]):not([type=checkbox]), .interaction-form textarea { box-sizing: border-box; width: 100%; min-width: 0; padding: 7px 9px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, var(--vscode-widget-border)); border-radius: 6px; font: inherit; }
+.interaction-form input:not([type=radio]):not([type=checkbox]):focus, .interaction-form textarea:focus { border-color: var(--vscode-focusBorder); }
+.interaction-form textarea { min-height: 84px; line-height: 1.5; resize: vertical; }
+.interaction-form :focus-visible, .interaction-select-popup :focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
+.interaction-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; padding-top: 12px; border-top: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); }
 .interaction-form button, .interaction-close { cursor: pointer; white-space: normal; overflow-wrap: anywhere; }
 .interaction-form button { padding: 5px 9px; border: 1px solid var(--vscode-widget-border); border-radius: 4px; background: var(--vscode-button-secondaryBackground, var(--vscode-input-background)); color: var(--vscode-button-secondaryForeground, var(--vscode-foreground)); }
-.interaction-actions button[type=submit] { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+.interaction-actions .interaction-button { padding: 6px 14px; border-radius: 6px; font-weight: 500; }
+.interaction-actions .interaction-button:hover { background: var(--vscode-button-secondaryHoverBackground, var(--vscode-list-hoverBackground)); }
+.interaction-actions .interaction-primary { border-color: transparent; background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+.interaction-actions .interaction-primary:hover { background: var(--vscode-button-hoverBackground, var(--vscode-button-background)); }
 .interaction-form button:disabled { opacity: 0.6; cursor: default; }
-.interaction-error { color: var(--vscode-errorForeground); font-size: 12px; }
+.interaction-form button:disabled:hover { background: var(--vscode-button-secondaryBackground, var(--vscode-input-background)); }
+.interaction-actions .interaction-primary:disabled:hover { background: var(--vscode-button-background); }
+.interaction-error { padding: 7px 10px; border: 1px solid var(--vscode-inputValidation-errorBorder, var(--vscode-errorForeground)); border-radius: 6px; background: var(--vscode-inputValidation-errorBackground, transparent); color: var(--vscode-errorForeground); font-size: 12px; }
 .interaction-error:empty { display: none; }
-.interaction-dialog { box-sizing: border-box; width: min(480px, calc(100vw - 24px)); max-height: calc(100vh - 24px); padding: 18px; border: 1px solid var(--vscode-widget-border); border-radius: 6px; background: var(--vscode-editor-background); color: var(--vscode-foreground); overflow: auto; }
-.interaction-dialog::backdrop { background: rgb(0 0 0 / 30%); }
-.interaction-close { float: right; position: relative; z-index: 1; }
+.interaction-dialog { position: relative; box-sizing: border-box; width: min(520px, calc(100vw - 32px)); max-height: calc(100vh - 32px); padding: 0; border: 1px solid var(--vscode-widget-border); border-radius: 10px; background: var(--vscode-editor-background); color: var(--vscode-foreground); box-shadow: 0 16px 40px rgb(0 0 0 / 36%); overflow: hidden; }
+/* The form scrolls, not the dialog, so the close button stays pinned to the corner. */
+.interaction-dialog .interaction-form { box-sizing: border-box; max-height: calc(100vh - 32px); padding: 18px 20px 16px; overflow: auto; }
+.interaction-dialog::backdrop { background: rgb(0 0 0 / 45%); }
+.interaction-close { position: absolute; top: 10px; right: 10px; z-index: 1; display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--vscode-descriptionForeground); font-size: 15px; line-height: 1; }
+.interaction-close:hover { background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground)); color: var(--vscode-foreground); }
 .interaction-select { display: flex; gap: 6px; }
 .interaction-select > button:first-child { min-width: 0; flex: 1; text-align: left; }
 .interaction-select-popup { box-sizing: border-box; position: fixed; margin: 0; padding: 4px; overflow-y: auto; border: 1px solid var(--vscode-widget-border); border-radius: 4px; background: var(--vscode-editor-background); color: var(--vscode-foreground); }

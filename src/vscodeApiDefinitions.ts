@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { apiDefinitionTarget, apiFunctionDefinition, builtinApiDefinitionTarget, builtinTypeDefinitionTarget, builtinTypeReferenceTarget } from "./core/apiNavigation.js";
 import { builtinTypeDocument } from "./core/builtinTypeDefinitions.js";
 import { builtinApiDocument, builtinApiReferenceTarget } from "./core/builtinApiDefinitions.js";
+import { builtinMemberDefinitionTarget } from "./core/builtinMemberNavigation.js";
 
 const BUILTIN_TYPES_SCHEME = "dext-types";
 const BUILTIN_TYPES_PATH = "/builtin-types.dx";
@@ -53,11 +54,14 @@ export class DextApiDefinitionProvider implements vscode.DefinitionProvider {
     if (token.isCancellationRequested) return undefined;
     const source = document.getText();
     const cursor = document.offsetAt(position);
-    const builtinType = document.uri.scheme === BUILTIN_TYPES_SCHEME
+    const builtinType = (document.uri.scheme === BUILTIN_TYPES_SCHEME
       ? builtinTypeReferenceTarget(source, cursor)
-      : builtinTypeDefinitionTarget(source, cursor);
+      : builtinTypeDefinitionTarget(source, cursor)) ?? builtinMemberDefinitionTarget(source, cursor);
     if (builtinType) {
-      const definition = builtinTypeDocument().ranges.get(builtinType.name);
+      const typeDocument = builtinTypeDocument();
+      const definition = "field" in builtinType && typeof builtinType.field === "string"
+        ? typeDocument.fieldRanges.get(`${builtinType.name}.${builtinType.field}`)
+        : typeDocument.ranges.get(builtinType.name);
       if (!definition) return undefined;
       const targetUri = builtinTypesUri();
       return [{

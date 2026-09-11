@@ -4,6 +4,7 @@ import type { UiFormDefinition, UiFormResult, UiInteractionState } from "./core/
 export function agentInputForm(request: AgentInputRequest): UiFormDefinition {
   return { title: "Question", description: request.blocking ? "Waiting for your answer" : "You can answer while the agent works",
     presentation: "inline", submit_label: "Submit answer", cancel_label: "Skip", show_cancel: true,
+    actions: [{ id: "submit", label: "Submit answer", primary: true, requires: [] }],
     fields: request.questions.map((question) => question.options.length
       ? { id: question.id, type: "radio", label: question.question, required: true, allow_custom: true,
         secret: question.isSecret === true, custom_placeholder: "Or type your own answer…",
@@ -35,7 +36,8 @@ export function uiResultText(value: unknown): string {
   if (result.type === "input") return typeof result.value === "string" ? result.value.slice(0, 20000) : "No input";
   if (result.type === "alert") return result.status === "acknowledged" ? "Acknowledged" : "Dismissed";
   if (result.type === "form" && result.answers && typeof result.answers === "object") {
-    return [String(result.status), ...Object.entries(result.answers).map(([id, answer]) => `${id}: ${uiResultText(answer)}`)].join("\n").slice(0, 20000);
+    const status = typeof result.action === "string" && result.action ? `${String(result.status)} (${result.action})` : String(result.status);
+    return [status, ...Object.entries(result.answers).map(([id, answer]) => `${id}: ${uiResultText(answer)}`)].join("\n").slice(0, 20000);
   }
   try { return (JSON.stringify(value, null, 2) ?? "").slice(0, 20000); } catch { return "Unavailable result"; }
 }

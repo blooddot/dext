@@ -3,7 +3,7 @@ import { readHistoryResponse } from "./historyResponse.js";
 import { renderTurnSection, renderTurnInput, renderTurnMarkdown, renderTurnResult, renderTurnMessage, turnHtmlAdapter } from "./turnComponents.js";
 import { formatJsonOutput } from "./webview/jsonOutput.js";
 import { parser } from "@lezer/python";
-import { classHighlighter, highlightCode } from "@lezer/highlight";
+import { highlightCode } from "@lezer/highlight";
 import MarkdownIt from "markdown-it";
 import { markdownCodeCopy } from "./markdownCopy.js";
 import { latestAgentTodos, renderAgentTodos, planExecutionLabel } from "./agentTodoPresentation.js";
@@ -17,7 +17,7 @@ import {
 import { agentMessageCopyText, presentAgentMessage } from "./agentMessagePresentation.js";
 import { presentDiff } from "./diffPresentation.js";
 import type { PatchChange } from "./core/types.js";
-import { dextHighlightClass, dextHighlightRanges } from "./dextHighlight.js";
+import { dextClassHighlighter, dextTokenStyles, shouldHighlightInput } from "./dextTokenTheme.js";
 import {
   compactFileReferenceLabel,
   inputReferenceDisplayParts,
@@ -142,18 +142,14 @@ function renderFileChange(change: Pick<PatchChange, "uri" | "before" | "after">)
 
 export function highlightDext(source: string): string {
   let html = "";
-  let offset = 0;
-  const ranges = dextHighlightRanges(source);
   highlightCode(
     source,
     parser.parse(source),
-    classHighlighter,
+    dextClassHighlighter,
     (text, classes) => {
-      const highlighted = dextHighlightClass(classes, offset, text, ranges);
-      html += highlighted ? `<span class="${highlighted}">${escapeHtml(text)}</span>` : escapeHtml(text);
-      offset += text.length;
+      html += classes ? `<span class="${classes}">${escapeHtml(text)}</span>` : escapeHtml(text);
     },
-    () => { html += "\n"; offset += 1; }
+    () => { html += "\n"; }
   );
   return html;
 }
@@ -292,13 +288,6 @@ function inputReferenceChip(reference: ContextReferenceOccurrence): string {
   return `<span class="attachment-chip history-file-reference" title="${title}"><button class="attachment-open" type="button" title="Open ${escapeHtml(label)}" aria-label="Open ${escapeHtml(label)}"${open}><i class="codicon codicon-${referenceIcon(reference)}"></i><span class="attachment-label">${escapeHtml(label)}</span></button></span>`;
 }
 
-/** History does not persist the composer mode, so avoid applying the Dext
- * (Python) highlighter to ordinary conversational prose. */
-function looksLikeDextCode(source: string): boolean {
-  const first = source.trimStart();
-  return /^(?:(?:await|const|let|var)\s+)?[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*\s*(?:\(|=)/.test(first);
-}
-
 function plainInputSource(source: string): string {
   return inputReferenceDisplayParts(source).map((part) => part.kind === "ref"
     ? inputReferenceChip(part.reference)
@@ -306,9 +295,9 @@ function plainInputSource(source: string): string {
   ).join("");
 }
 
-function renderedInputSource(source: string): string {
+function renderedInputSource(source: string, mode?: DextHistoryRecord["mode"]): string {
   const normalized = normalizeInputReferenceSource(source);
-  if (!looksLikeDextCode(normalized)) return plainInputSource(normalized);
+  if (!shouldHighlightInput(normalized, mode)) return plainInputSource(normalized);
   const parts = inputReferenceDisplayParts(normalized);
   const references = parts.filter((part): part is Extract<typeof part, { kind: "ref" }> => part.kind === "ref");
   if (!references.length) return highlightDext(normalized);
@@ -492,7 +481,7 @@ export function renderHistoryRecord(record: DextHistoryRecord, sessionId?: strin
   const target = sessionId ? ` data-session-id="${escapeHtml(sessionId)}" data-turn-id="${escapeHtml(record.id)}"` : "";
   const inputHtml = turn.input
     ? historyTurnSection(turn.input, renderTurnInput(turnHtmlAdapter,
-      { html: `<pre class="dext-source">${renderedInputSource(turn.input.source)}</pre>` },
+      { html: `<pre class="dext-source">${renderedInputSource(turn.input.source, record.mode)}</pre>` },
       { html: copyButton(turn.input.source) }).html)
     : "";
   const planOutcome = record.planOutcome ?? (planExecution?.result.kind === "plan" ? planExecution.result.planOutcome : undefined);
@@ -563,10 +552,6 @@ export function conversationMarkdown(session: DextHistorySession): string {
   return [`# Dext conversation — ${dateLabel(session.createdAt)}`, ...turns].join("\n\n");
 }
 
-function color(value: string | undefined, fallback: string): string {
-  return value ?? fallback;
-}
-
 export function historyTokenStyles(theme?: EditorTokenTheme): string {
-  return `.tok-keyword{color:${color(theme?.keyword, "var(--vscode-symbolIcon-keywordForeground, #c586c0)")}}.tok-string,.tok-string2{color:${color(theme?.string, "var(--vscode-symbolIcon-stringForeground, #ce9178)")}}.tok-number{color:${color(theme?.number, "var(--vscode-symbolIcon-numberForeground, #b5cea8)")}}.tok-bool,.tok-atom{color:${color(theme?.boolean, "var(--vscode-symbolIcon-booleanForeground, #569cd6)")}}.tok-comment{color:${color(theme?.comment, "var(--vscode-descriptionForeground)")}}.tok-variableName,.tok-definition{color:${color(theme?.variable, "var(--vscode-editor-foreground)")}}.tok-propertyName{color:${color(theme?.property, "var(--vscode-symbolIcon-propertyForeground, #9cdcfe)")}}.tok-function{color:${color(theme?.function, "var(--vscode-symbolIcon-methodForeground, #dcdcaa)")}}.tok-typeName,.tok-className{color:${color(theme?.type, "var(--vscode-symbolIcon-classForeground, #4ec9b0)")}}.tok-operator{color:${color(theme?.operator, "var(--vscode-editor-foreground)")}}.tok-punctuation{color:${color(theme?.punctuation, "var(--vscode-editor-foreground)")}}`;
+  return dextTokenStyles(theme);
 }

@@ -10,6 +10,7 @@ vi.mock("vscode", () => ({
 }));
 
 import { DextApiDefinitionProvider } from "../src/vscodeApiDefinitions.js";
+import { builtinTypeDocument } from "../src/core/builtinTypeDefinitions.js";
 
 function document(source: string, path: string, scheme?: string): VSCode.TextDocument {
   return {
@@ -25,6 +26,19 @@ const source = "from playground import verify\nverify()";
 
 describe("VS Code .dx definition provider", () => {
   beforeEach(() => { openTextDocument.mockReset(); });
+
+  it("jumps to the exact field declaration in the virtual result type", async () => {
+    const source = 'def main(input: str):\n    parsed_url = node.url.parse(url=input)\n    task_id = node.path.basename(path=parsed_url.pathname)';
+    const current = document(source, "C:/project/develop.dx", "file");
+    const provider = new DextApiDefinitionProvider(() => undefined);
+    const links = await provider.provideDefinition(current, current.positionAt(source.indexOf("pathname") + 2), token);
+    expect(links?.[0]?.targetUri).toMatchObject({ path: "dext-types:/builtin-types.dx" });
+    const selection = links![0]!.targetSelectionRange!;
+    const declaration = builtinTypeDocument().text.split("\n")[selection.start.line]!;
+    expect(declaration.slice(selection.start.character, selection.end.character)).toBe("pathname");
+    expect(declaration).toContain("pathname: str");
+    expect(openTextDocument).not.toHaveBeenCalled();
+  });
 
   it("uses the registered source path and the live target document's main position", async () => {
     const path = "C:/global storage/api/playground/verify.dx";

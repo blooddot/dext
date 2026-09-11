@@ -657,9 +657,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         || event.affectsConfiguration("editor.tokenColorCustomizations")
       ) {
         await sidebar.refresh();
+        historyPanel.refresh();
       }
     }),
-    vscode.window.onDidChangeActiveColorTheme(() => sidebar.refresh()),
+    vscode.window.onDidChangeActiveColorTheme(async () => {
+      await sidebar.refresh();
+      historyPanel.refresh();
+    }),
     vscode.workspace.onDidGrantWorkspaceTrust(async () => {
       updateTrustContext();
       await application.reload();
@@ -720,7 +724,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           // .dx grammar inherits, so types, keywords and literals retain the
           // familiar editor colours in hovers.
           const contents = new vscode.MarkdownString();
-          contents.appendCodeblock(pythonHoverCode(hover.label), "python");
+          contents.appendCodeblock(pythonHoverCode(hover.label, hover.kind), "python");
           contents.appendMarkdown("\n\n");
           contents.appendText(hover.documentation);
           return new vscode.Hover(

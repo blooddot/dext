@@ -273,7 +273,10 @@ function uiHandler(action: UiAction): DeterministicHandler {
     const form = uiCallForm(action, formArguments);
     const result = uiFormResultSchema.parse(await metadata.ui.form(form, metadata.signal));
     if (metadata.signal?.aborted) throw new ExecutionCancelledError();
-    if (result.status === "submitted") result.answers = validateUiAnswers(form, result.answers);
+    if (result.status === "submitted") {
+      result.action ??= form.actions[0]!.id;
+      result.answers = validateUiAnswers(form, result.answers, result.action);
+    }
     if (on_cancel === "abort" && result.status !== "submitted") {
       throw new ExecutionCancelledError("User cancelled the UI step.");
     }

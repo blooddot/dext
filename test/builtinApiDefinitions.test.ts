@@ -18,4 +18,15 @@ describe("built-in API definitions", () => {
     expect(builtinApiReferenceTarget(document.text, urlClass + 7)).toMatchObject({ id: "node.url" });
     expect(builtinApiReferenceTarget(document.text, document.text.indexOf("def parse", urlClass) + 5)).toMatchObject({ id: "node.url.parse" });
   });
+
+  it("annotates generated signatures with Python types", () => {
+    const document = builtinApiDocument();
+    expect(document.text).not.toContain("?:");
+    expect(document.text).not.toContain("[]");
+    const range = document.ranges.get("ui.select")!;
+    const signature = document.text.slice(range.from, range.to);
+    expect(signature).toContain("options: list[str],");
+    expect(signature).toContain("multiple: bool = False,");
+    expect(signature).toContain('#   type: "select"');
+  });
 });

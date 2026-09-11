@@ -29,7 +29,7 @@ import { BUILTIN_METHODS } from "../src/core/builtins.js";
 import { AxAdapter } from "../src/core/axAdapter.js";
 import { serializeResultForAgent } from "../src/core/resultSerialization.js";
 import type { AgentProfile } from "../src/agentProfiles.js";
-import type { RegisteredCallable } from "../src/core/types.js";
+import type { AgentStreamEvent, RegisteredCallable } from "../src/core/types.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -159,6 +159,60 @@ describe("CLI command resolution", () => {
       JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "Done" }] } }),
       JSON.stringify({ type: "result", subtype: "success", structured_output: { kind: "agent", text: "Done" } })
     ].join("\n"))).toEqual({ kind: "agent", text: "Done" });
+  });
+
+  it("keeps interleaved Claude messages separate and replaces their streamed text", () => {
+    const messageIds = new Map<string, string>();
+    const parse = (event: unknown) => parseClaudeStreamLine(JSON.stringify(event), messageIds);
+    const stream = (event: unknown, parent_tool_use_id?: string) => parse({ type: "stream_event", event, parent_tool_use_id });
+    stream({ type: "message_start", message: { id: "parent" } });
+    stream({ type: "message_start", message: { id: "child" } }, "tool-agent");
+    expect(stream({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Parent" } }))
+      .toMatchObject({ id: "parent", text: "Parent" });
+    expect(stream({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Child" } }, "tool-agent"))
+      .toMatchObject({ id: "child", text: "Child" });
+    expect(stream({ type: "content_block_delta", index: 1, delta: { type: "text_delta", text: " text" } }))
+      .toMatchObject({ id: "parent", text: " text" });
+    stream({ type: "message_stop" });
+    expect(parse({ type: "assistant", message: { id: "parent", content: [{ type: "text", text: "Parent text" }] } }))
+      .toMatchObject({ id: "parent", text: "Parent text", replace: true, done: true });
+    stream({ type: "message_start", message: { id: "next" } });
+    expect(stream({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Parent text" } }))
+      .toMatchObject({ id: "next", text: "Parent text" });
+    expect(parse({ type: "assistant", message: { id: "snapshot-only", content: [{ type: "text", text: "No deltas" }] } }))
+      .toMatchObject({ id: "snapshot-only", text: "No deltas", done: true });
+  });
+
+  it.each(["api", "conversation"])("deduplicates Claude progress through the %s runner across stdout chunks", async (kind) => {
+    const events: AgentStreamEvent[] = [];
+    const transcript = [...["first", "second"].flatMap((id) => [
+      { type: "stream_event", event: { type: "message_start", message: { id } } },
+      { type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Inspecting " } } },
+      { type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "files" } } },
+      { type: "stream_event", event: { type: "message_stop" } },
+      { type: "assistant", message: { id, content: [{ type: "text", text: "Inspecting files." }] } }
+    ]), { type: "result", result: "Done", ...(kind === "api" ? { structured_output: { kind: "ask", text: "Done" } } : {}) }];
+    const stdout = transcript.map((event) => JSON.stringify(event)).join("\n");
+    const runner = new CliAgentRunner(1_000, async (_command, _args, _input, _cwd, _signal, onStdout) => {
+      for (let offset = 0; offset < stdout.length; offset += 37) onStdout?.(stdout.slice(offset, offset + 37));
+      return { stdout, stderr: "", code: 0 };
+    });
+    const profile: AgentProfile = { id: "claude", label: "Claude", provider: "claude", command: process.execPath, models: [] };
+    const onEvent = (event: AgentStreamEvent) => events.push(event);
+    if (kind === "api") {
+      await expect(runner.run({ ...request(), profile, cwd: process.cwd(), onEvent })).resolves.toEqual({ kind: "ask", text: "Done" });
+    } else {
+      await expect(runner.runConversation({ ...conversationRequest("hello", "claude-dedup"), profile, onEvent }))
+        .resolves.toBe("Done");
+    }
+    // These are the append/replace semantics used by Process and history replay.
+    const messages = new Map<string, string>();
+    for (const event of events.filter((event) => event.phase === "message")) {
+      expect(event.id).toBeDefined();
+      messages.set(event.id!, event.replace ? event.text : (messages.get(event.id!) ?? "") + event.text);
+    }
+    expect([...messages]).toEqual([["first", "Inspecting files."], ["second", "Inspecting files."]]);
+    expect(events.filter((event) => event.done)).toHaveLength(2);
   });
 
   it("uses Claude Code's non-interactive structured streaming flags", () => {

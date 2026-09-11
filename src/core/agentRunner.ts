@@ -464,7 +464,7 @@ function claudeToolText(block: Record<string, unknown>): string {
 }
 
 /** Parse the public `stream-json` events emitted by Claude Code's print mode. */
-export function parseClaudeStreamLine(line: string): AgentStreamEvent | undefined {
+export function parseClaudeStreamLine(line: string, messageIds?: Map<string, string>): AgentStreamEvent | undefined {
   const parsed = extractJson(line);
   const event = record(parsed);
   if (!event) return undefined;
@@ -478,13 +478,23 @@ export function parseClaudeStreamLine(line: string): AgentStreamEvent | undefine
   if (eventType === "stream_event") {
     const stream = record(event.event);
     const streamType = typeof stream?.type === "string" ? stream.type : "";
+    // Block indexes restart for each message. Keep the provider message ID so
+    // the final assistant snapshot replaces its streamed text, including when
+    // a subagent's events are interleaved with the parent conversation.
+    const scope = typeof event.parent_tool_use_id === "string" ? event.parent_tool_use_id : "";
+    if (streamType === "message_start") {
+      const message = record(stream?.message);
+      if (typeof message?.id === "string") messageIds?.set(scope, message.id);
+      else messageIds?.delete(scope);
+      return undefined;
+    }
     if (streamType === "content_block_delta") {
       const delta = record(stream?.delta);
       if (delta?.type === "thinking_delta" || typeof delta?.thinking === "string") return undefined;
       const text = typeof delta?.text === "string" ? delta.text : undefined;
       if (!text) return undefined;
       const index = typeof stream?.index === "number" ? stream.index : 0;
-      return { id: `claude-stream-${index}`, phase: "message", text, eventType };
+      return { id: messageIds?.get(scope) ?? `claude-stream-${index}`, phase: "message", text, eventType };
     }
     if (streamType === "content_block_start") {
       const block = record(stream?.content_block);
@@ -511,7 +521,7 @@ export function parseClaudeStreamLine(line: string): AgentStreamEvent | undefine
     const text = claudeContentText(message?.content);
     if (!text || isStructuredAgentResult(text)) return undefined;
     const id = typeof message?.id === "string" ? message.id : undefined;
-    return { ...(id ? { id } : {}), phase: "message", text, eventType, done: true };
+    return { ...(id ? { id } : {}), phase: "message", text, eventType, replace: true, done: true };
   }
   if (eventType === "user") {
     const result = blocks.map(record).find((block) => block?.type === "tool_result");
@@ -525,7 +535,7 @@ export function parseClaudeStreamLine(line: string): AgentStreamEvent | undefine
 
 /** A Claude message can carry a task call alongside ordinary tool or text
  * blocks. Emit both the snapshot and the remaining process content. */
-export function parseClaudeStreamEvents(line: string, todos: ClaudeTodoTracker): AgentStreamEvent[] {
+export function parseClaudeStreamEvents(line: string, todos: ClaudeTodoTracker, messageIds?: Map<string, string>): AgentStreamEvent[] {
   const event = record(extractJson(line));
   if (!event) return [];
   const message = record(event.message);
@@ -537,7 +547,7 @@ export function parseClaudeStreamEvents(line: string, todos: ClaudeTodoTracker):
     }) : undefined;
   const todo = todos.consume(event);
   const process = content?.length === 0 ? undefined
-    : parseClaudeStreamLine(content ? JSON.stringify({ ...event, message: { ...message, content } }) : line);
+    : parseClaudeStreamLine(content ? JSON.stringify({ ...event, message: { ...message, content } }) : line, messageIds);
   return [...(todo ? [todo] : []), ...(process ? [process] : [])];
 }
 
@@ -865,9 +875,10 @@ export class CliAgentRunner implements AgentRunner {
         if (event) request.onEvent?.(event);
       };
       const claudeTodos = new ClaudeTodoTracker();
+      const claudeMessageIds = new Map<string, string>();
       const emitClaudeLine = (line: string): void => {
         trackCliToolActivity("claude", line, timeout);
-        for (const event of parseClaudeStreamEvents(line, claudeTodos)) request.onEvent?.(event);
+        for (const event of parseClaudeStreamEvents(line, claudeTodos, claudeMessageIds)) request.onEvent?.(event);
       };
       const onStdout = request.profile.provider === "codex" || request.profile.provider === "claude"
         ? (chunk: string): void => {
@@ -964,6 +975,7 @@ export class CliAgentRunner implements AgentRunner {
     let eventBuffer = "";
     const streamPhases = new Map<string, AgentStreamPhase>();
     const claudeTodos = new ClaudeTodoTracker();
+    const claudeMessageIds = new Map<string, string>();
     const onStdout = (chunk: string): void => {
       eventBuffer += chunk;
       const lines = eventBuffer.split(/\r?\n/);
@@ -981,7 +993,7 @@ export class CliAgentRunner implements AgentRunner {
           const event = parseCodexStreamLine(line, streamPhases);
           if (event) request.onEvent?.(event);
         } else {
-          for (const event of parseClaudeStreamEvents(line, claudeTodos)) request.onEvent?.(event);
+          for (const event of parseClaudeStreamEvents(line, claudeTodos, claudeMessageIds)) request.onEvent?.(event);
         }
       }
     };
@@ -1004,7 +1016,7 @@ export class CliAgentRunner implements AgentRunner {
           const event = parseCodexStreamLine(eventBuffer, streamPhases);
           if (event) request.onEvent?.(event);
         } else {
-          for (const event of parseClaudeStreamEvents(eventBuffer, claudeTodos)) request.onEvent?.(event);
+          for (const event of parseClaudeStreamEvents(eventBuffer, claudeTodos, claudeMessageIds)) request.onEvent?.(event);
         }
       }
       if (result.code !== 0) {

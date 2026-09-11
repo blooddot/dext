@@ -197,6 +197,60 @@ def main(input: str) -> PrintResult:
     expect(service.documentSignature('ui.choose(label=')).toBeUndefined();
   });
 
+  it("distinguishes the form result, answer mapping, and indexed answer fields", () => {
+    const source = 'confirmation = ui.form(title="Confirm", fields=[])\nif confirmation.answers["decision"].selected[0] == "yes":\n    print(text="ok")';
+    for (const [symbol, label] of [
+      ["confirmation.answers", "confirmation: UiFormResult"],
+      ["answers", "confirmation.answers: dict[str, UiFieldAnswer]"],
+      ["selected", 'confirmation.answers["decision"].selected: list[string] | undefined']
+    ]) {
+      const from = source.indexOf(symbol!);
+      const hover = service.apiHover(source, from + 2)!;
+      expect(hover.label).toBe(label);
+      expect(source.slice(hover.rangeStart, hover.rangeEnd)).toBe(symbol!.split(".")[0]);
+    }
+    expect(service.documentCompletions('confirmation = ui.form(title="Confirm", fields=[])\nconfirmation.answers.'))
+      .toEqual([]);
+  });
+
+  it("resolves keyword arguments to their call's parameters before same-named builtins", () => {
+    const source = 'diagnosis = agent(input=print(text="apply").text, apply=False)';
+    const from = source.indexOf("apply=False");
+    expect(service.apiHover(source, from + 2)).toMatchObject({
+      kind: "parameter", label: "apply?: boolean = True",
+      documentation: expect.stringContaining("Allow trusted workspace changes"),
+      rangeStart: from, rangeEnd: from + 5
+    });
+    expect(service.apiHover('agent(apply=', 8)).toMatchObject({ kind: "parameter", label: "apply?: boolean = True" });
+    expect(service.apiHover('unknown(apply=False)', 10)).toBeUndefined();
+    expect(service.apiHover('apply(result=diagnosis)', 2)?.label).toMatch(/^apply\(/);
+  });
+
+  it("keeps parameters, local variables, and sibling function scopes distinct", () => {
+    const source = `def first() -> PrintResult:
+    confirmation = print(text="unrelated")
+    return confirmation
+
+def second(apply: bool, context: PrintResult) -> UiFormResult:
+    confirmation = ui.form(title=context.text, fields=[])
+    agent(input=context.text, apply=apply)
+    return confirmation`;
+    expect(service.apiHover(source, source.lastIndexOf("confirmation") + 2)?.label).toBe("confirmation: UiFormResult");
+    expect(service.apiHover(source, source.indexOf("context.text") + 9)?.label).toBe("context.text: string");
+    expect(service.apiHover(source, source.indexOf("apply: bool") + 2)).toMatchObject({ kind: "parameter", label: "apply: bool" });
+    expect(service.apiHover(source, source.lastIndexOf("apply)") + 2)).toMatchObject({ kind: "parameter", label: "apply: bool" });
+    const reassigned = 'confirmation = ui.form(title="Confirm", fields=[])\nconfirmation = print(text="done")\nconfirmation.text';
+    expect(service.apiHover(reassigned, reassigned.lastIndexOf("confirmation") + 2)?.label).toBe("confirmation: PrintResult");
+    expect(service.apiHover('apply = False\nprint(text=apply)', 27)?.label).toBe("apply: boolean");
+  });
+
+  it("does not show method or type hovers inside strings and comments", () => {
+    for (const source of ['print(text="apply UiFormResult")', '# apply UiFormResult']) {
+      expect(service.apiHover(source, source.indexOf("apply") + 2)).toBeUndefined();
+      expect(service.apiHover(source, source.indexOf("UiFormResult") + 2)).toBeUndefined();
+    }
+  });
+
   it("narrows form field properties after selecting its discriminator", () => {
     expect(service.documentCompletions('ui.form(title="Form", fields=[{').map((item) => item.label))
       .toEqual(expect.arrayContaining(["id", "type", "label"]));

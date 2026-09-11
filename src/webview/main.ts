@@ -42,7 +42,7 @@ import {
 } from "../core/fileReference.js";
 import { createFileReferenceChip, fileReferenceChipDescriptor } from "./fileReferenceChip.js";
 import { outputExternalLink, outputLinkReference } from "./outputLink.js";
-import { dextHighlightClass, dextHighlightRanges } from "../dextHighlight.js";
+import { dextClassHighlighter, dextTokenStyles, shouldHighlightInput } from "../dextTokenTheme.js";
 import { formatJsonOutput } from "./jsonOutput.js";
 import { observeComposerOverflow } from "./composerOverflow.js";
 import { enableConversationTabDrag } from "./conversationTabDrag.js";
@@ -1049,6 +1049,13 @@ function renderMethodSignature(signature: HTMLElement, method: SidebarState["met
 
 function renderMethods(state: SidebarState): void {
   editor.applyTheme(state.theme);
+  let tokenStyle = document.getElementById("dext-token-theme");
+  if (!tokenStyle) {
+    tokenStyle = document.createElement("style");
+    tokenStyle.id = "dext-token-theme";
+    document.head.append(tokenStyle);
+  }
+  tokenStyle.textContent = dextTokenStyles(state.theme);
   elements.methods.replaceChildren();
   elements.methodCount.textContent = String(state.methods.length);
   const root = groupMethodsForDisplay(state.methods);
@@ -1072,7 +1079,8 @@ function renderMethods(state: SidebarState): void {
       const label = document.createElement("span");
       label.className = "method-group-label";
       const groupName = document.createElement("span");
-      groupName.textContent = `${prefix}${name}`;
+      groupName.textContent = name;
+      groupName.title = `${prefix}${name}`;
       label.append(groupName);
       const sources = [...collectSources(child)];
       const sourceName = isSyntheticBuiltinGroup(name, prefix, child)
@@ -2095,10 +2103,16 @@ function referenceIcon(kind: "file" | "dir" | "symbol" | "selection" | "activeFi
 
 /** Renders readable @path tokens as the same chips used by the editor.
  * The source remains unchanged for copy and history replay. */
-function renderedInputSource(source: string): HTMLPreElement {
+function renderedInputSource(source: string, mode?: DextHistoryRecord["mode"]): HTMLPreElement {
   const pre = document.createElement("pre");
   pre.className = "dext-source";
   const parts = inputReferenceDisplayParts(source);
+  if (!shouldHighlightInput(source, mode)) {
+    for (const part of parts) {
+      pre.append(part.kind === "ref" ? inputReferenceChipElement(part.reference) : document.createTextNode(part.value));
+    }
+    return pre;
+  }
   const references = parts.filter((part): part is Extract<typeof part, { kind: "ref" }> => part.kind === "ref");
   if (!references.length) {
     pre.append(highlightDextFragment(source));
@@ -2150,27 +2164,22 @@ function escapeRegExp(value: string): string {
 
 function highlightDextFragment(source: string): DocumentFragment {
   const fragment = document.createDocumentFragment();
-  let offset = 0;
-  const ranges = dextHighlightRanges(source);
   highlightCode(
     source,
     pythonParser.parse(source),
-    classHighlighter,
+    dextClassHighlighter,
     (text, classes) => {
       if (!text) return;
-      const highlighted = dextHighlightClass(classes, offset, text, ranges);
-      if (!highlighted) {
+      if (!classes) {
         fragment.append(document.createTextNode(text));
-        offset += text.length;
         return;
       }
       const span = document.createElement("span");
-      span.className = highlighted;
+      span.className = classes;
       span.textContent = text;
       fragment.append(span);
-      offset += text.length;
     },
-    () => { fragment.append(document.createTextNode("\n")); offset += 1; }
+    () => { fragment.append(document.createTextNode("\n")); }
   );
   return fragment;
 }
@@ -2299,7 +2308,7 @@ function createOutputTurn(
     input.disclosure.open = !lazy;
     inputBody = input.body;
     if (!lazy) {
-      const inputText = renderedInputSource(source);
+      const inputText = renderedInputSource(source, options.mode);
       const inputCopy = renderTurnInput(turnDomAdapter(document), inputText, copyButton(source));
       input.body.append(inputCopy);
     }
@@ -3163,6 +3172,11 @@ function renderStoredTurn(record: DextHistoryRecord, turn: OutputTurnElements): 
 
   agentRunStartedAt = Date.now();
   if (turn.input && turn.input.childElementCount === 0) {
+    // Hydrated history should render the persisted source exactly as authored.
+    // The mode is only a presentation hint and passing it through here makes
+    // the renderer observable as a second argument (including for legacy
+    // records where it is undefined).  Keep this call compatible with the
+    // source renderer's single-argument contract.
     const inputCopy = renderTurnInput(turnDomAdapter(document), renderedInputSource(record.input), copyButton(record.input));
     turn.input.append(inputCopy);
   }

@@ -145,6 +145,8 @@ function uiDefinition(action: "select" | "radio" | "checkbox" | "input" | "confi
     input.push({ name: "fields", type: "list", required: true, items: uiFieldDefinition(), description: "Declarative select, radio, checkbox or input fields." });
     field("description", "string", ""); field("submit_label", "string", "Submit");
     field("cancel_label", "string", "Cancel"); field("show_cancel", "boolean", true);
+    input.push({ name: "actions", type: "list", items: uiActionDefinition(),
+      description: "Submit buttons offered instead of the single submit_label button. The pressed button's id is returned as `action`." });
     input.push({ name: "on_cancel", type: "enum", values: ["return", "abort"], default: "return", description: "Whether cancellation returns a result or aborts the current workflow." });
   }
   input.push({ name: "presentation", type: "enum", values: ["inline", "dialog"], default: action === "form" ? "inline" : "dialog", description: "Interaction container." });
@@ -177,6 +179,19 @@ function uiFieldDefinition(): FieldDefinition {
   };
 }
 
+function uiActionDefinition(): FieldDefinition {
+  return {
+    name: "action", type: "object", shapeType: "ui.Action",
+    properties: [
+      { name: "id", type: "string", required: true },
+      { name: "label", type: "string", required: true },
+      { name: "description", type: "string" },
+      { name: "primary", type: "boolean", default: false },
+      { name: "requires", type: "list", items: { name: "field", type: "string" }, description: "Field IDs this action must have answered, even when the field itself is optional." }
+    ]
+  };
+}
+
 function uiOptionDefinition(): FieldDefinition {
   return {
     name: "option", type: "string", accepts: ["object"], shapeType: "ui.Option",
@@ -189,15 +204,24 @@ function uiOptionDefinition(): FieldDefinition {
 }
 
 export function uiOutputFields(action: string): CallableDefinition["input"] {
-  const fields: CallableDefinition["input"] = [{ name: "kind", type: "enum", values: ["ui"] }, { name: "type", type: "enum", values: [action] }];
-  if (["select", "radio", "checkbox"].includes(action)) fields.push({ name: "selected", type: "list", items: { name: "option", type: "string" } });
+  // Every interaction result carries the `kind`/`type` discriminators and the
+  // payload selected by the action, so those fields are required. Only the
+  // custom-response and input-value fields stay optional because the runtime
+  // omits them when the interaction produced no text.
+  const fields: CallableDefinition["input"] = [
+    { name: "kind", type: "enum", values: ["ui"], required: true },
+    { name: "type", type: "enum", values: [action], required: true }
+  ];
+  if (["select", "radio", "checkbox"].includes(action)) fields.push({ name: "selected", type: "list", items: { name: "option", type: "string" }, required: true });
   if (action === "radio" || action === "checkbox") fields.push({ name: "custom", type: "string" });
   if (action === "input") fields.push({ name: "value", type: "string" });
-  if (action === "confirm") fields.push({ name: "confirmed", type: "boolean" });
-  if (action === "alert") fields.push({ name: "status", type: "enum", values: ["acknowledged", "dismissed"] });
-  if (action === "form") fields.push({ name: "status", type: "enum", values: ["submitted", "cancelled"] },
-    { name: "answers", type: "object", properties: [
-      { name: "type", type: "enum", values: ["select", "radio", "checkbox", "input"] },
+  if (action === "confirm") fields.push({ name: "confirmed", type: "boolean", required: true });
+  if (action === "alert") fields.push({ name: "status", type: "enum", values: ["acknowledged", "dismissed"], required: true });
+  if (action === "form") fields.push({ name: "status", type: "enum", values: ["submitted", "cancelled"], required: true },
+    { name: "action", type: "string", required: true, description: "ID of the pressed action button, or an empty string when the form was cancelled." },
+    { name: "answers", type: "object", shapeType: "dict[str, UiFieldAnswer]", required: true,
+      description: "Answers keyed by form field ID. Index with a field ID to access its answer.", properties: [
+      { name: "type", type: "enum", values: ["select", "radio", "checkbox", "input"], required: true },
       { name: "selected", type: "list", items: { name: "option", type: "string" } }, { name: "custom", type: "string" }, { name: "value", type: "string" }
     ] });
   return fields;

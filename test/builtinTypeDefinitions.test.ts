@@ -20,4 +20,24 @@ describe("built-in Dext type definitions", () => {
     expect(document.text).toContain("class ui:");
     expect(builtinTypeDefinition("agent.ModelOptions")?.fields.map((field) => field.name)).toContain("model");
   });
+
+  it("renders every member as a Python annotation", () => {
+    const document = builtinTypeDocument();
+    expect(document.text).not.toContain("?:");
+    const formRange = document.ranges.get("UiFormResult")!;
+    const form = document.text.slice(formRange.from, formRange.to);
+    // The runtime always sets the discriminators and the interaction payload.
+    expect(form).toContain('type: "form"');
+    expect(form).not.toContain('type: "form" | None');
+    expect(form).toContain('status: "submitted" | "cancelled"');
+    expect(form).toContain('answers: dict[str, UiFieldAnswer]');
+    const answerRange = document.ranges.get("UiFieldAnswer")!;
+    const answer = document.text.slice(answerRange.from, answerRange.to);
+    expect(answer).toContain('type: "select" | "radio" | "checkbox" | "input"');
+    expect(answer).toContain('selected: list[str] | None');
+    const selectRange = document.ranges.get("UiSelectResult")!;
+    const select = document.text.slice(selectRange.from, selectRange.to);
+    expect(select).toContain('type: "select"');
+    expect(select).not.toContain("| None");
+  });
 });

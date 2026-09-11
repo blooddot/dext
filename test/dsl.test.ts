@@ -221,4 +221,10 @@ describe("UI field diagnostics", () => {
     const compiled = compileWorkflow('fields = [{"id":"x","type":"radio","label":"X","options":["a"],"multiple":True}]\nui.form(title="Form", fields=fields)', registry);
     expect(compiled.diagnostics.some((diagnostic) => diagnostic.message.includes("multiple"))).toBe(true);
   });
+  it("accepts declared actions and exposes the pressed one", () => {
+    const source = 'reply = ui.form(title="Form", fields=[{"id":"note","type":"input","label":"Note","required":False}],'
+      + ' actions=[{"id":"revise","label":"Revise","requires":["note"]},{"id":"approve","label":"Approve","primary":True}])\n'
+      + 'if reply.action == "approve":\n    print(text="done")';
+    expect(compileWorkflow(source, registry).diagnostics).toEqual([]);
+  });
 });

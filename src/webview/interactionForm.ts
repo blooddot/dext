@@ -10,15 +10,27 @@ export class InteractionForm {
     draft: UiFormAnswers = {}, private readonly saveDraft: (draft: UiFormAnswers) => void = () => {}) {
     this.element.className = "interaction-form";
     this.element.noValidate = true;
-    const title = document.createElement("h3"); title.textContent = definition.title; this.element.append(title);
-    if (definition.description) { const description = document.createElement("p"); description.textContent = definition.description; this.element.append(description); }
+    const head = document.createElement("div"); head.className = "interaction-head";
+    const title = document.createElement("h3"); title.textContent = definition.title; head.append(title);
+    if (definition.description) { const description = document.createElement("p"); description.className = "interaction-description"; description.textContent = definition.description; head.append(description); }
+    this.element.append(head);
     const error = document.createElement("p"); error.className = "interaction-error"; error.setAttribute("role", "alert");
-    const submit = document.createElement("button"); submit.type = "submit"; submit.textContent = definition.submit_label;
+    // The error only reports on the action the user actually pressed: showing every
+    // unmet requirement up front made an untouched form look broken.
+    let attempted: string | undefined;
+    const reason = (cause: unknown): string => cause instanceof Error ? cause.message : "Check your answers.";
     const refresh = (): void => {
       const answers = this.read();
       this.saveDraft(this.publicDraft(answers));
-      try { validateUiAnswers(definition, answers); submit.disabled = this.sent; error.textContent = ""; }
-      catch (cause) { submit.disabled = true; error.textContent = cause instanceof Error ? cause.message : "Check your answers."; }
+      if (attempted === undefined) return;
+      try { validateUiAnswers(definition, answers, attempted); error.textContent = ""; }
+      catch (cause) { error.textContent = reason(cause); }
+    };
+    const submit = (action: string): void => {
+      if (this.sent) return;
+      attempted = action;
+      try { this.send({ kind: "ui", type: "form", status: "submitted", action, answers: validateUiAnswers(definition, this.read(), action) }); }
+      catch (cause) { error.textContent = reason(cause); }
     };
     for (const field of definition.fields) {
       const fieldset = document.createElement("fieldset"); fieldset.className = "interaction-field";
@@ -39,14 +51,28 @@ export class InteractionForm {
     }
     const actions = document.createElement("div"); actions.className = "interaction-actions";
     if (definition.show_cancel) {
-      const cancel = document.createElement("button"); cancel.type = "button"; cancel.textContent = definition.cancel_label;
+      const cancel = document.createElement("button"); cancel.type = "button";
+      cancel.className = "interaction-button interaction-cancel"; cancel.textContent = definition.cancel_label;
       cancel.addEventListener("click", () => this.cancel()); actions.append(cancel);
     }
-    actions.append(submit); this.element.append(error, actions);
+    // Primary last so it reads as the rightmost choice, and the only submit button
+    // so Enter always resolves to it rather than to whichever button comes first.
+    let primary: string | undefined;
+    for (const action of [...definition.actions].sort((left, right) => Number(left.primary) - Number(right.primary))) {
+      const promoted = action.primary && primary === undefined;
+      if (promoted) primary = action.id;
+      const button = document.createElement("button");
+      button.type = promoted ? "submit" : "button";
+      button.className = `interaction-button${promoted ? " interaction-primary" : ""}`;
+      button.textContent = action.label;
+      if (action.description) button.title = action.description;
+      if (!promoted) button.addEventListener("click", () => submit(action.id));
+      actions.append(button);
+    }
+    this.element.append(error, actions);
     this.element.addEventListener("submit", (event) => {
-      event.preventDefault(); if (this.sent) return;
-      try { this.send({ kind: "ui", type: "form", status: "submitted", answers: validateUiAnswers(definition, this.read()) }); }
-      catch (cause) { error.textContent = cause instanceof Error ? cause.message : "Check your answers."; }
+      event.preventDefault();
+      submit(primary ?? definition.actions[0]!.id);
     });
     refresh();
   }

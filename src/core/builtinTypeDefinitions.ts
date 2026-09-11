@@ -6,6 +6,7 @@
 import { NODE_BUILTIN_CATALOG } from "./generated/nodeBuiltinCatalog.js";
 import { BUILTIN_METHODS } from "./builtins.js";
 import { formatFieldType } from "./methodSignature.js";
+import { pythonType } from "./pythonType.js";
 import { nodeBuiltinResultType } from "./builtinResultTypes.js";
 export interface BuiltinTypeField {
   name: string;
@@ -50,7 +51,8 @@ const staticTypes: readonly BuiltinTypeDefinition[] = [
   ] },
   { name: "UiResult", description: "Result returned by a Dext UI interaction.", fields: [
     { name: "kind", type: '"ui"' }, { name: "type", type: '"select" | "radio" | "checkbox" | "confirm" | "input" | "form" | "alert"' },
-    { name: "selected", type: "string[]" }, { name: "custom", type: "string", optional: true }, { name: "confirmed", type: "boolean" }, { name: "value", type: "string", optional: true }
+    { name: "selected", type: "string[]" }, { name: "custom", type: "string", optional: true }, { name: "confirmed", type: "boolean" }, { name: "value", type: "string", optional: true },
+    { name: "action", type: "string", optional: true, description: "Form only: the pressed action button's ID." }
   ] },
   { name: "CodeRef", description: "Reference to a code location and its captured content.", fields: [
     { name: "kind", type: '"codeRef"' }, { name: "uri", type: "string" }, { name: "range", type: "Range", optional: true }, { name: "symbol", type: "string", optional: true },
@@ -68,6 +70,11 @@ const staticTypes: readonly BuiltinTypeDefinition[] = [
   ] },
   { name: "ui.Option", description: "A labelled option accepted by a selection field.", fields: [
     { name: "value", type: "string" }, { name: "label", type: "string" }, { name: "description", type: "string", optional: true }
+  ] },
+  { name: "ui.Action", description: "A submit button. The pressed button's ID is returned as the result's `action`.", fields: [
+    { name: "id", type: "string" }, { name: "label", type: "string" }, { name: "description", type: "string", optional: true },
+    { name: "primary", type: "boolean", optional: true, description: "Highlighted button and the one Enter submits. Defaults to the first action." },
+    { name: "requires", type: "list[string]", optional: true, description: "Field IDs this action must have answered, even when the field itself is optional." }
   ] },
   { name: "ui.Field", description: "Base form field. The `type` discriminator selects a concrete field variant.", fields: [
     { name: "id", type: "string" }, { name: "type", type: '"select" | "radio" | "checkbox" | "input"' }, { name: "label", type: "string" },
@@ -123,7 +130,16 @@ const declaredOutputTypes: readonly BuiltinTypeDefinition[] = BUILTIN_METHODS
     }))
   }));
 
-const types: readonly BuiltinTypeDefinition[] = [...staticTypes, ...declaredOutputTypes, ...nodeTypes];
+const answerFields = BUILTIN_METHODS.find((method) => method.id === "ui.form")!
+  .output.fields!.find((field) => field.name === "answers")!.properties!;
+
+const types: readonly BuiltinTypeDefinition[] = [...staticTypes, ...declaredOutputTypes, ...nodeTypes, {
+  name: "UiFieldAnswer",
+  description: "Answer for one form field. Selection fields expose selected; input fields expose value. Radio and checkbox fields may also expose custom.",
+  fields: answerFields.map((field) => ({
+    name: field.name, type: formatFieldType(field), ...(field.required ? {} : { optional: true })
+  }))
+}];
 
 const byName = new Map(types.map((definition) => [definition.name, definition]));
 
@@ -145,12 +161,14 @@ export function builtinResultFieldType(kind: string, fieldName: string): string 
 export interface BuiltinTypeDocument {
   text: string;
   ranges: ReadonlyMap<string, { from: number; to: number; nameFrom: number; nameTo: number }>;
+  fieldRanges: ReadonlyMap<string, { from: number; to: number; nameFrom: number; nameTo: number }>;
 }
 
 /** Render the read-only document used by Go to Definition and Peek Definition. */
 export function builtinTypeDocument(): BuiltinTypeDocument {
   let text = "# Dext Built-in Types\n\n";
   const ranges = new Map<string, { from: number; to: number; nameFrom: number; nameTo: number }>();
+  const fieldRanges = new Map<string, { from: number; to: number; nameFrom: number; nameTo: number }>();
   const render = (definition: BuiltinTypeDefinition, name: string, depth: number): void => {
     const from = text.length;
     const indent = "    ".repeat(depth);
@@ -159,12 +177,15 @@ export function builtinTypeDocument(): BuiltinTypeDocument {
     const nameFrom = text.length + indent.length + "class ".length;
     text += `${indent}class ${name}:\n`;
     for (const field of definition.fields) {
-      const type = field.type
-        .replace(/\bstring\b/g, "str")
-        .replace(/\bboolean\b/g, "bool")
-        .replace(/\bobject\b/g, "dict")
-        .replace(/\bstr\[\]/g, "list[str]");
-      text += `${"    ".repeat(depth + 1)}${field.name}: ${field.optional ? `${type} | None` : type}\n`;
+      // The document is presented as Python, so nested object shapes must use
+      // Python annotations (`x: str | None`) instead of TypeScript (`x?: string`).
+      const type = pythonType(field.type);
+      const fieldFrom = text.length;
+      const fieldNameFrom = fieldFrom + 4 * (depth + 1);
+      text += `${"    ".repeat(depth + 1)}${field.name}: ${type}${field.optional ? " | None" : ""}\n`;
+      fieldRanges.set(`${definition.name}.${field.name}`, {
+        from: fieldFrom, to: text.length - 1, nameFrom: fieldNameFrom, nameTo: fieldNameFrom + field.name.length
+      });
     }
     text += "\n";
     ranges.set(definition.name, { from, to: text.length - 1, nameFrom, nameTo: nameFrom + name.length });
@@ -185,5 +206,5 @@ export function builtinTypeDocument(): BuiltinTypeDocument {
     text += "\n";
     ranges.set(namespace, { from, to: text.length - 1, nameFrom, nameTo: nameFrom + namespace.length });
   }
-  return { text, ranges };
+  return { text, ranges, fieldRanges };
 }

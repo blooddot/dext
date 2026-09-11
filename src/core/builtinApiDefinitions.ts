@@ -1,5 +1,6 @@
 import { BUILTIN_METHODS } from "./builtins.js";
 import { formatFieldType, methodResultType } from "./methodSignature.js";
+import { pythonType } from "./pythonType.js";
 import type { FieldDefinition, RegisteredCallable } from "./types.js";
 
 const byId = new Map(BUILTIN_METHODS.map((definition) => [definition.id, { ...definition, source: "builtin" as const }]));
@@ -31,15 +32,11 @@ interface NamespaceNode {
 function describeField(field: FieldDefinition): string {
   const optional = field.required ? "" : " (optional)";
   const defaultValue = field.default === undefined ? "" : `; default: ${JSON.stringify(field.default)}`;
-  return `#   ${field.name}: ${formatFieldType(field)}${optional}${defaultValue}${field.description ? ` — ${field.description}` : ""}`;
+  return `#   ${field.name}: ${pythonType(formatFieldType(field))}${optional}${defaultValue}${field.description ? ` — ${field.description}` : ""}`;
 }
 
 function definitionType(field: FieldDefinition): string {
-  return formatFieldType(field)
-    .replace(/\bstring\b/g, "str")
-    .replace(/\bboolean\b/g, "bool")
-    .replace(/\bobject\b/g, "dict")
-    .replace(/\bstr\[\]/g, "list[str]");
+  return pythonType(formatFieldType(field));
 }
 
 function definitionDefault(field: FieldDefinition): string {

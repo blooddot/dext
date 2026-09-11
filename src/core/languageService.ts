@@ -1,12 +1,11 @@
 import type { MethodRegistry } from "./registry.js";
 import type { FieldDefinition, RegisteredCallable } from "./types.js";
-import { formatFieldType, formatMethodParameter, formatMethodSignature, methodResultType } from "./methodSignature.js";
+import { formatFieldType, formatMethodParameter, formatMethodSignature } from "./methodSignature.js";
 import { compileWorkflow, parseWorkflowImports } from "./workflow.js";
 import { functionDefinitions } from "./customApi.js";
 import type { SkillDescriptor } from "./skillCatalog.js";
 import { specializeBuiltinCli } from "./builtinCli.js";
-import { builtinTypeDefinition, builtinTypeSignature, builtinResultFieldType } from "./builtinTypeDefinitions.js";
-import { builtinTypeDefinitionTarget, builtinTypeReferenceTarget } from "./apiNavigation.js";
+import { documentSymbolHover } from "./languageHover.js";
 
 export interface CompletionItem {
   label: string;
@@ -35,6 +34,7 @@ export interface SignatureHelp {
 }
 
 export interface LanguageHover {
+  kind?: "parameter";
   rangeStart: number;
   rangeEnd: number;
   label: string;
@@ -210,8 +210,9 @@ function outputFields(method: RegisteredCallable | undefined): readonly FieldDef
   return (RESULT_FIELDS[method.output.kind] ?? []).map((name) => ({ name, type: "string" }));
 }
 
-function childFields(field: FieldDefinition | undefined): readonly FieldDefinition[] {
+function childFields(field: FieldDefinition | undefined, indexed = false): readonly FieldDefinition[] {
   if (!field) return [];
+  if (field.shapeType?.startsWith("dict[") && !indexed) return [];
   // A dot after an array-valued field addresses its element shape. This keeps
   // completion useful for MCP responses such as `result: [{ id, content }]`.
   if (field.type === "list") return childFields(field.items);
@@ -289,9 +290,13 @@ export class DextLanguageService {
       const loop = [...source.matchAll(new RegExp(`^\\s*for\\s+${root}\\s+in\\s+([A-Za-z_]\\w*(?:\\.[A-Za-z_]\\w*)*)\\s*:`, "gm"))].at(-1);
       if (loop?.[1] && loop[1] !== root) fields = this.expressionFields(source, loop[1], customApisAreGlobal);
     }
+    let field: FieldDefinition | undefined;
     for (const part of parts) {
-      if (part.startsWith("[")) continue;
-      const field = fields.find((candidate) => candidate.name === part);
+      if (part.startsWith("[")) {
+        fields = childFields(field, true);
+        continue;
+      }
+      field = fields.find((candidate) => candidate.name === part);
       fields = childFields(field);
     }
     return fields;
@@ -603,61 +608,7 @@ export class DextLanguageService {
   }
 
   documentHover(source: string, cursor: number, customApisAreGlobal = true): LanguageHover | undefined {
-    const typeTarget = builtinTypeDefinitionTarget(source, cursor) ?? builtinTypeReferenceTarget(source, cursor);
-    const typeDefinition = typeTarget && builtinTypeDefinition(typeTarget.name);
-    if (typeTarget && typeDefinition) {
-      return {
-        rangeStart: typeTarget.originFrom,
-        rangeEnd: typeTarget.originTo,
-        label: builtinTypeSignature(typeDefinition),
-        documentation: `${typeDefinition.description} Use Go to Definition to inspect the complete built-in type document.`
-      };
-    }
-    const pattern = /[A-Za-z_][A-Za-z0-9_.-]*/g;
-    for (const match of source.matchAll(pattern)) {
-      const from = match.index ?? 0;
-      const to = from + match[0].length;
-      if (cursor < from || cursor > to) continue;
-      const method = this.resolveMethod(source, match[0], customApisAreGlobal);
-      if (method) {
-        return {
-          rangeStart: from,
-          rangeEnd: to,
-          label: formatMethodSignature(method, signatureOptions(method)),
-          documentation: method.description
-        };
-      }
-      const member = /^([A-Za-z_]\w*)\.([A-Za-z_]\w*)$/.exec(match[0]);
-      if (member) {
-        const assignment = new RegExp(`^\\s*${member[1]}\\s*=\\s*([A-Za-z_][A-Za-z0-9_.-]*)\\(`, "m").exec(source);
-        const outputMethod = assignment ? this.resolveMethod(source, assignment[1] ?? "", customApisAreGlobal) : undefined;
-        const field = outputFields(outputMethod).find((candidate) => candidate.name === member[2]);
-        const type = outputMethod?.output.fields
-          ? field ? formatFieldType(field) : undefined
-          : outputMethod ? builtinResultFieldType(outputMethod.output.kind, member[2] ?? "") : undefined;
-        if (outputMethod && type) {
-          return {
-            rangeStart: from,
-            rangeEnd: to,
-            label: `${member[0]}: ${type}`,
-            documentation: `${methodResultType(outputMethod)} field returned by ${assignment?.[1] ?? outputMethod.output.kind}.`
-          };
-        }
-      }
-      const variableAssignment = new RegExp(`^\\s*${match[0]}\\s*=\\s*([A-Za-z_][A-Za-z0-9_.-]*)\\(`, "m").exec(source);
-      if (variableAssignment) {
-        const outputMethod = this.resolveMethod(source, variableAssignment[1] ?? "", customApisAreGlobal);
-        if (outputMethod) {
-          return {
-            rangeStart: from,
-            rangeEnd: to,
-            label: `${match[0]}: ${methodResultType(outputMethod)}`,
-            documentation: `Result returned by ${variableAssignment[1]}.`
-          };
-        }
-      }
-    }
-    return undefined;
+    return documentSymbolHover(source, cursor, (name) => this.resolveMethod(source, name, customApisAreGlobal));
   }
 
   apiSignature(source: string, cursor = source.length): SignatureHelp | undefined {

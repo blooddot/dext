@@ -11,8 +11,10 @@ import {
   type CompletionResult
 } from "@codemirror/autocomplete";
 import { python } from "@codemirror/lang-python";
-import { defaultHighlightStyle, HighlightStyle, syntaxHighlighting } from "@codemirror/language";
-import { tags, type Tag } from "@lezer/highlight";
+import { HighlightStyle, syntaxHighlighting, syntaxTree } from "@codemirror/language";
+import { dextClassHighlighter, dextTokenRules } from "../dextTokenTheme.js";
+import { highlightTree } from "@lezer/highlight";
+import { pythonHoverCode } from "../vscodeHover.js";
 import {
   defaultKeymap,
   history,
@@ -30,6 +32,7 @@ import {
 } from "@codemirror/state";
 import { lintGutter, setDiagnostics, type Diagnostic } from "@codemirror/lint";
 import {
+  closeHoverTooltips,
   drawSelection,
   EditorView,
   highlightSpecialChars,
@@ -94,28 +97,8 @@ async function browserClipboardText(): Promise<string | undefined> {
 }
 
 const signatureEffect = StateEffect.define<Tooltip | null>();
-const tokenTags: Readonly<Record<keyof EditorTokenTheme, readonly Tag[]>> = {
-  keyword: [tags.keyword, tags.controlKeyword],
-  string: [tags.string, tags.special(tags.string)],
-  number: [tags.number],
-  boolean: [tags.bool, tags.null],
-  comment: [tags.comment, tags.docComment],
-  function: [tags.function(tags.variableName), tags.function(tags.propertyName)],
-  property: [tags.propertyName, tags.attributeName],
-  variable: [tags.variableName, tags.definition(tags.variableName)],
-  type: [tags.typeName, tags.className],
-  operator: [tags.operator, tags.operatorKeyword],
-  punctuation: [tags.punctuation, tags.bracket]
-};
-
 function themeExtension(theme?: EditorTokenTheme): Extension {
-  if (!theme) return syntaxHighlighting(defaultHighlightStyle);
-  const rules = (Object.entries(theme) as [keyof EditorTokenTheme, string | undefined][])
-    .filter((entry): entry is [keyof EditorTokenTheme, string] => Boolean(entry[1]))
-    .map(([name, color]) => ({ tag: tokenTags[name], color }));
-  return rules.length
-    ? syntaxHighlighting(HighlightStyle.define(rules))
-    : syntaxHighlighting(defaultHighlightStyle);
+  return syntaxHighlighting(HighlightStyle.define(dextTokenRules(theme).map(({ tag, color }) => ({ tag, color }))));
 }
 const signatureField = StateField.define<Tooltip | null>({
   create: () => null,
@@ -170,6 +153,39 @@ function signatureDom(document: Document, signature: SignatureHelp): HTMLElement
   return dom;
 }
 
+/** Render a Python declaration with the same token classes used by the editor.
+ *
+ * VS Code's Python extension puts hover declarations in a fenced Python block,
+ * which gives keywords, types, strings, and punctuation their normal editor
+ * colours. CodeMirror tooltips do not run Markdown through a renderer, so do
+ * the small equivalent here using the Python parser and our shared highlighter.
+ */
+function pythonCodeDom(document: Document, source: string): HTMLElement {
+  const code = document.createElement("code");
+  const state = EditorState.create({ doc: source, extensions: [python()] });
+  const tree = syntaxTree(state);
+  let cursor = 0;
+  const appendText = (from: number, to: number, className?: string): void => {
+    if (to <= from) return;
+    const text = source.slice(from, to);
+    if (!className) code.append(document.createTextNode(text));
+    else {
+      const token = document.createElement("span");
+      token.className = className;
+      token.textContent = text;
+      code.append(token);
+    }
+  };
+  highlightTree(tree, dextClassHighlighter, (from, to, className) => {
+    appendText(cursor, from);
+    appendText(from, to, className);
+    cursor = to;
+  });
+  appendText(cursor, source.length);
+  return code;
+}
+
+
 function completionApply(item: { insertText: string }): Completion["apply"] {
   if (!item.insertText.includes('""')) return item.insertText;
   return snippet(item.insertText.replace('""', '"${}"'));
@@ -197,6 +213,7 @@ export class DextCodeEditor {
   private placeholderText = "";
   private diagnosticsTimer: ReturnType<typeof setTimeout> | undefined;
   private signatureTimer: ReturnType<typeof setTimeout> | undefined;
+  private hoverRequest = 0;
   private diagnostics: Diagnostic[] = [];
   private languageEnabled = true;
   private submitOnEnter = true;
@@ -258,6 +275,10 @@ export class DextCodeEditor {
       }),
       EditorView.updateListener.of((update) => this.updated(update)),
       EditorView.domEventHandlers({
+        mousedown: (_event, view) => {
+          view.dispatch({ effects: closeHoverTooltips });
+          return false;
+        },
         copy: (event) => {
           event.preventDefault();
           void this.copy();
@@ -606,10 +627,19 @@ export class DextCodeEditor {
 
   private async hover(view: EditorView, position: number): Promise<Tooltip | null> {
     if (!this.languageEnabled) return null;
+    // Hover requests are asynchronous. CodeMirror can start a new request
+    // while the pointer is moving, so an older response must never be shown
+    // for the newer target (it commonly makes every symbol appear to have
+    // the tooltip of the last symbol visited).
+    const hoverRequest = ++this.hoverRequest;
     const source = view.state.doc.toString();
     const response = await this.options.broker.request(source, position, undefined, "all");
-    if (!response?.hover || !sourceSnapshotMatches(view.state.doc.toString(), source)) return null;
+    if (hoverRequest !== this.hoverRequest || !response?.hover || !sourceSnapshotMatches(view.state.doc.toString(), source)) return null;
     const hover = response.hover;
+    // Only show a hover when the pointer is over the symbol's range. The
+    // language service can otherwise resolve whitespace to a nearby symbol,
+    // which feels unlike VS Code.
+    if (position < hover.rangeStart || position >= hover.rangeEnd) return null;
     return {
       pos: hover.rangeStart,
       end: hover.rangeEnd,
@@ -617,9 +647,7 @@ export class DextCodeEditor {
       create(currentView) {
         const dom = currentView.dom.ownerDocument.createElement("div");
         dom.className = "dext-hover-tooltip";
-        const label = currentView.dom.ownerDocument.createElement("code");
-        label.textContent = hover.label;
-        dom.append(label);
+        dom.append(pythonCodeDom(currentView.dom.ownerDocument, pythonHoverCode(hover.label, hover.kind)));
         if (hover.documentation) {
           const detail = currentView.dom.ownerDocument.createElement("div");
           detail.className = "dext-tooltip-detail";

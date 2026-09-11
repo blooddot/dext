@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Memento } from "vscode";
-import type { DextApplication as DextApplicationType } from "../src/application.js";
+// Load the application during test collection. Its dependency graph can take
+// longer than a hook's timeout to transform during a parallel packaging run.
+import { DextApplication } from "../src/application.js";
 
 /** A stand-in for the configuration tree. VS Code builds it by splitting keys on
  * dots, so `dext.completion` is a node whose value is assembled from whatever
@@ -12,7 +14,7 @@ const store = vi.hoisted(() => ({
   workspace: new Map<string, unknown>()
 }));
 
-const CONFIGURATION_TARGET = { Global: 1, Workspace: 2, WorkspaceFolder: 3 };
+const CONFIGURATION_TARGET = vi.hoisted(() => ({ Global: 1, Workspace: 2, WorkspaceFolder: 3 }));
 
 function node(scope: Map<string, unknown>, section: string): unknown {
   if (scope.has(section)) return scope.get(section);
@@ -59,8 +61,6 @@ vi.mock("vscode", () => ({
   }
 }));
 
-let DextApplication: new (globalState?: Memento) => DextApplicationType;
-
 function memento(): Memento {
   const values = new Map<string, unknown>();
   return {
@@ -74,10 +74,9 @@ function memento(): Memento {
 }
 
 describe("completion settings migration", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     store.user.clear();
     store.workspace.clear();
-    ({ DextApplication } = await import("../src/application.js"));
   });
 
   it("moves the values out of the old object and removes it", async () => {

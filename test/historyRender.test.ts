@@ -494,7 +494,7 @@ describe("Dext history rendering", () => {
     };
 
     const html = renderHistoryRecord(record);
-    expect(html).toContain('class="tok-propertyName"');
+    expect(html).toContain('<span class="tok-function">select</span>');
     expect(html).toContain('class="tok-string"');
     expect(html).toContain('class="tok-bool"');
   });
@@ -502,7 +502,24 @@ describe("Dext history rendering", () => {
   it("highlights Dext call names and keyword arguments distinctly", () => {
     const html = highlightDext('ask(input="https://example.test")');
     expect(html).toContain('<span class="tok-function">ask</span>');
-    expect(html).toContain('<span class="tok-propertyName">input</span>');
+    expect(html).toContain('<span class="tok-variableName">input</span>');
+  });
+
+  it("matches input-editor token kinds for namespaced calls and result properties", () => {
+    const html = highlightDext('parsed_url = node.url.parse(url="https://example.test")\ntask_id = node.path.basename(path=parsed_url.pathname)');
+    for (const name of ["parse", "basename"]) expect(html).toContain(`<span class="tok-function">${name}</span>`);
+    for (const name of ["url", "path", "pathname"]) expect(html).toContain(`<span class="tok-propertyName">${name}</span>`);
+    expect(html).toContain('<span class="tok-variableName">parsed_url</span>');
+    expect(html).toContain('<span class="tok-string">&quot;https://example.test&quot;</span>');
+  });
+
+  it("uses the recorded Code mode for comment-led code and keeps Ask input as prose", () => {
+    const record: DextHistoryRecord = { id: "turn", createdAt: 1, mode: "code", input: '# comment\nif True:\n    print(text="<ok>")', process: [], output: "" };
+    const code = renderHistoryRecord(record);
+    expect(code).toContain('<span class="tok-comment"># comment</span>');
+    expect(code).toContain('<span class="tok-keyword">if</span>');
+    const prose = renderHistoryRecord({ ...record, mode: "ask", input: 'print(text="Please explain")' });
+    expect(prose).not.toContain('class="tok-');
   });
 
   it("renders image attachments as ordinary file reference Chips", () => {

@@ -1,9 +1,11 @@
 import { z } from "zod";
 import type { UiResult } from "./types.js";
 
-export const UI_LIMITS = { fields: 32, options: 200, text: 20000, label: 2000, bytes: 200000 } as const;
+export const UI_LIMITS = { fields: 32, actions: 8, options: 200, text: 20000, label: 2000, bytes: 200000 } as const;
 export type UiPresentation = "inline" | "dialog";
 export interface UiOption { value: string; label: string; description?: string | undefined }
+/** One submit button. The pressed button's id comes back as the result's `action`. */
+export interface UiFormAction { id: string; label: string; description?: string | undefined; primary: boolean; requires: string[] }
 interface UiFieldBase { id: string; label: string; description?: string | undefined; required: boolean }
 export interface UiSelectionField extends UiFieldBase {
   type: "select" | "radio" | "checkbox";
@@ -26,13 +28,15 @@ export type UiField = UiSelectionField | UiInputField;
 export interface UiFormDefinition {
   title: string; fields: UiField[]; description: string; submit_label: string;
   cancel_label: string; show_cancel: boolean; presentation: UiPresentation;
+  /** Always nonempty: a form without declared actions gets one built from submit_label. */
+  actions: UiFormAction[];
 }
 export type UiFieldAnswer =
   | { type: "select"; selected: string[] }
   | { type: "radio" | "checkbox"; selected: string[]; custom?: string | undefined }
   | { type: "input"; value: string };
 export type UiFormAnswers = Record<string, UiFieldAnswer>;
-export interface UiFormResult { kind: "ui"; type: "form"; status: "submitted" | "cancelled"; answers: UiFormAnswers }
+export interface UiFormResult { kind: "ui"; type: "form"; status: "submitted" | "cancelled"; answers: UiFormAnswers; action?: string | undefined }
 export interface UiInteractionState {
   sessionId: string; turnId: string; requestId: string; form: UiFormDefinition;
   status: "waiting" | "submitted" | "cancelled" | "closed";
@@ -53,9 +57,15 @@ export const uiFieldSchema = z.discriminatedUnion("type", [
   z.object({ ...selection, ...custom, type: z.literal("checkbox") }).strict(),
   z.object({ ...base, type: z.literal("input"), default: text.optional(), placeholder: text.optional(), multiline: z.boolean().default(false) }).strict()
 ]);
+const identifier = z.string().min(1).max(128);
+const actionSchema = z.object({
+  id: identifier, label, description: text.optional(), primary: z.boolean().default(false),
+  requires: z.array(identifier).max(UI_LIMITS.fields).default([])
+}).strict();
 export const uiFormDefinitionSchema = z.object({
   title: label, fields: z.array(uiFieldSchema).max(UI_LIMITS.fields), description: text.default(""),
   submit_label: label.default("Submit"), cancel_label: label.default("Cancel"),
+  actions: z.array(actionSchema).max(UI_LIMITS.actions).default([]),
   show_cancel: z.boolean().default(true), presentation: z.enum(["inline", "dialog"]).default("inline")
 }).strict();
 export const uiFieldAnswerSchema = z.discriminatedUnion("type", [
@@ -68,8 +78,10 @@ export const uiFormAnswersSchema = z.record(z.string().max(128), uiFieldAnswerSc
   (answers) => Object.keys(answers).length <= UI_LIMITS.fields, "Too many field answers"
 );
 export const uiFormResultSchema = z.object({
-  kind: z.literal("ui"), type: z.literal("form"), status: z.enum(["submitted", "cancelled"]), answers: uiFormAnswersSchema
-}).strict().refine((result) => result.status !== "cancelled" || Object.keys(result.answers).length === 0, "Cancelled forms must have no answers");
+  kind: z.literal("ui"), type: z.literal("form"), status: z.enum(["submitted", "cancelled"]), answers: uiFormAnswersSchema,
+  action: identifier.optional()
+}).strict().refine((result) => result.status !== "cancelled" || (Object.keys(result.answers).length === 0 && result.action === undefined),
+  "Cancelled forms must have no answers");
 
 function checkSize(value: unknown): void {
   if (new TextEncoder().encode(JSON.stringify(value)).byteLength > UI_LIMITS.bytes) throw new Error("UI interaction exceeds the size limit.");
@@ -94,24 +106,42 @@ export function parseUiForm(value: unknown): UiFormDefinition {
     if (field.required && field.default !== undefined && !defaults.length) throw new Error(`Invalid empty default in ${field.id}`);
     return normalized;
   });
-  return { ...parsed, fields };
+  return { ...parsed, fields, actions: parseUiActions(parsed, ids) };
+}
+/** A declared action replaces the implicit submit button and may demand fields the field list leaves optional. */
+function parseUiActions(parsed: z.output<typeof uiFormDefinitionSchema>, fieldIds: Set<string>): UiFormAction[] {
+  const ids = new Set<string>();
+  const actions = parsed.actions.map((action) => {
+    if (ids.has(action.id) || ["__proto__", "constructor", "prototype"].includes(action.id)) throw new Error(`Invalid or duplicate action id: ${action.id}`);
+    ids.add(action.id);
+    const required = new Set(action.requires);
+    if (required.size !== action.requires.length) throw new Error(`Duplicate required field in action ${action.id}`);
+    for (const field of action.requires) if (!fieldIds.has(field)) throw new Error(`Unknown required field in action ${action.id}: ${field}`);
+    return action;
+  });
+  if (!actions.length) return [{ id: "submit", label: parsed.submit_label, primary: true, requires: [] }];
+  if (!actions.some((action) => action.primary)) actions[0]!.primary = true;
+  return actions;
 }
 export function isMultiField(field: UiSelectionField): boolean {
   return field.type === "checkbox" || (field.type === "select" && field.multiple === true);
 }
-export function validateUiAnswers(form: UiFormDefinition, value: unknown): UiFormAnswers {
+export function validateUiAnswers(form: UiFormDefinition, value: unknown, actionId?: string): UiFormAnswers {
   checkSize(value);
   const answers = uiFormAnswersSchema.parse(value);
+  const action = actionId === undefined ? undefined : form.actions.find((candidate) => candidate.id === actionId);
+  if (actionId !== undefined && !action) throw new Error(`Unknown form action: ${actionId}`);
   const ids = new Set(form.fields.map((field) => field.id));
   if (Object.keys(answers).some((id) => !ids.has(id))) throw new Error("Unknown form field in answer.");
   const normalized: UiFormAnswers = {};
   for (const field of form.fields) {
+    const required = field.required || action?.requires.includes(field.id) === true;
     const answer = Object.hasOwn(answers, field.id) ? answers[field.id] : undefined;
-    if (!answer) { if (field.required) throw new Error(`${field.label}: an answer is required.`); continue; }
+    if (!answer) { if (required) throw new Error(`${field.label}: an answer is required.`); continue; }
     if (answer.type !== field.type) throw new Error(`${field.label}: wrong answer type.`);
     if (field.type === "input" && answer.type === "input") {
       if (!answer.value.trim() && !field.preserveEmpty) {
-        if (field.required) throw new Error(`${field.label}: enter a value.`);
+        if (required) throw new Error(`${field.label}: enter a value.`);
         continue;
       }
       normalized[field.id] = answer;
@@ -125,7 +155,7 @@ export function validateUiAnswers(form: UiFormDefinition, value: unknown): UiFor
     if ("custom" in answer && answer.custom !== undefined && !field.allow_custom) throw new Error(`${field.label}: custom answers are not allowed.`);
     if (field.type === "radio" && customValue && answer.selected.length) throw new Error(`${field.label}: custom answers and options are exclusive.`);
     if (!answer.selected.length && !customValue) {
-      if (field.required) throw new Error(`${field.label}: select an option.`);
+      if (required) throw new Error(`${field.label}: select an option.`);
       continue;
     }
     normalized[field.id] = field.type === "select"
@@ -159,7 +189,7 @@ export function uiCallForm(action: UiAction, args: Record<string, unknown>): UiF
   return form;
 }
 export function uiCallResult(action: UiAction, result: UiFormResult): UiResult {
-  if (action === "form") return result;
+  if (action === "form") return { ...result, action: result.action ?? "" };
   if (action === "confirm") return { kind: "ui", type: "confirm", confirmed: result.status === "submitted" };
   if (action === "alert") return { kind: "ui", type: "alert", status: result.status === "submitted" ? "acknowledged" : "dismissed" };
   const answer = result.answers.answer;

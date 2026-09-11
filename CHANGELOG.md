@@ -10,6 +10,14 @@ All notable changes to Dext are documented in this file.
 
 ## Unreleased
 
+- Let `ui.form` declare several submit buttons through `actions`, each with its own `id`, optional `primary` highlight and `requires` list of fields it needs answered; the pressed button comes back as `action`. A decision that used to need a radio field plus a conditional text box is now one button per outcome, and the form no longer reports unmet requirements before the user has pressed anything.
+
+- Restyle workflow and Agent interaction cards and dialogs: scrollable descriptions, selectable option rows, a pinned borderless close button, a separated action bar and a distinct primary button.
+
+- Show the Claude CLI default model in the composer instead of "CLI setting" when it is configured through `env.ANTHROPIC_MODEL` in `settings.json`, and display configured model slugs such as `claude-opus-5` under their composer alias ("Opus").
+
+- Render the built-in type/API reference documents and editor hovers as valid Python: use `X | None` instead of the unsupported `?:`, `list[T]` instead of `T[]`, and treat always-present interaction fields such as `UiFormResult.type` as required.
+
 - Default Dext to the Secondary Side Bar while preserving user-customized view locations. Require VS Code 1.106 or newer for the native view container contribution.
 
 - Simplify completion to its active generation/cancellation interface; remove unused result conversion and editor/runtime helpers. Enable TypeScript checks for unused locals and parameters.

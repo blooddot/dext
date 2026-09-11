@@ -104,17 +104,33 @@ function configuredDefaults(provider: AgentProvider, workspaceRoot?: string): Ag
   }
   if (provider !== "claude") return undefined;
   let settings: Record<string, unknown> = {};
+  let settingsEnv: Record<string, unknown> = {};
   const paths = [join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "settings.json"),
     ...(workspaceRoot ? [join(workspaceRoot, ".claude", "settings.json"), join(workspaceRoot, ".claude", "settings.local.json")] : [])];
   for (const path of paths) {
-    try { settings = { ...settings, ...JSON.parse(optionalText(path)) as Record<string, unknown> }; } catch { /* Optional settings. */ }
+    try {
+      const parsed = JSON.parse(optionalText(path)) as Record<string, unknown>;
+      settings = { ...settings, ...parsed };
+      // Merge `env` key by key so a workspace file can override one variable
+      // without discarding the rest of the global block.
+      if (parsed.env && typeof parsed.env === "object") settingsEnv = { ...settingsEnv, ...parsed.env as Record<string, unknown> };
+    } catch { /* Optional settings. */ }
   }
-  const model = process.env.ANTHROPIC_MODEL || settings.model;
-  const effort = process.env.CLAUDE_CODE_EFFORT_LEVEL || settings.effortLevel;
+  // Claude Code exports settings `env` into the CLI process, so ANTHROPIC_MODEL
+  // declared there is the default model just as much as a top-level `model` is.
+  const model = process.env.ANTHROPIC_MODEL || settings.model || settingsEnv.ANTHROPIC_MODEL;
+  const effort = process.env.CLAUDE_CODE_EFFORT_LEVEL || settings.effortLevel || settingsEnv.CLAUDE_CODE_EFFORT_LEVEL;
   return {
-    ...(typeof model === "string" && model ? { model } : {}),
+    ...(typeof model === "string" && model ? { model: claudeModelAlias(model) } : {}),
     ...(typeof effort === "string" && effort ? { reasoningEffort: effort } : {})
   };
+}
+
+/** Configured ids are full model slugs ("claude-opus-5"); the composer lists the
+ * aliases the CLI accepts, so fold a slug onto its alias when one matches. */
+function claudeModelAlias(model: string): string {
+  const segments = new Set(model.toLowerCase().split(/[-_.]/));
+  return CLAUDE_MODELS.find((option) => segments.has(option.id))?.id ?? model;
 }
 
 function configuredCodexModel(): string | undefined {

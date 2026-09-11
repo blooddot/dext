@@ -72,11 +72,51 @@ describe("public interaction contract", () => {
   });
 });
 
+const feedback = { id: "feedback", type: "input", label: "Feedback", required: false, multiline: true };
+const branching = (actions: unknown[]) => parseUiForm({ title: "Review", fields: [feedback], actions });
+describe("form actions", () => {
+  it("falls back to a single submit action so existing forms keep working", () => {
+    expect(form().actions).toEqual([{ id: "submit", label: "Submit", primary: true, requires: [] }]);
+    expect(parseUiForm({ title: "Settings", fields: [], submit_label: "Go" }).actions[0]).toMatchObject({ id: "submit", label: "Go" });
+    expect(uiCallForm("confirm", { message: "Sure?", confirm_label: "Do it" }).actions).toEqual([{ id: "submit", label: "Do it", primary: true, requires: [] }]);
+  });
+  it("promotes the first action when the caller marks none as primary", () => {
+    const declared = branching([{ id: "revise", label: "Revise" }, { id: "approve", label: "Approve" }]);
+    expect(declared.actions.map((action) => action.primary)).toEqual([true, false]);
+    expect(branching([{ id: "revise", label: "Revise" }, { id: "approve", label: "Approve", primary: true }])
+      .actions.map((action) => action.primary)).toEqual([false, true]);
+  });
+  it("requires a field for the action that asks for it and leaves the others alone", () => {
+    const definition = branching([{ id: "revise", label: "Revise", requires: ["feedback"] }, { id: "approve", label: "Approve", primary: true }]);
+    expect(() => validateUiAnswers(definition, { feedback: { type: "input", value: " " } }, "revise")).toThrow("enter a value");
+    expect(() => validateUiAnswers(definition, {}, "revise")).toThrow("required");
+    expect(validateUiAnswers(definition, {}, "approve")).toEqual({});
+    expect(validateUiAnswers(definition, { feedback: { type: "input", value: "why" } }, "revise")).toEqual({ feedback: { type: "input", value: "why" } });
+    expect(validateUiAnswers(definition, {})).toEqual({});
+    expect(() => validateUiAnswers(definition, {}, "unknown")).toThrow("Unknown form action");
+  });
+  it.each([
+    [[{ id: "a", label: "A" }, { id: "a", label: "Again" }]],
+    [[{ id: "__proto__", label: "A" }]],
+    [[{ id: "a", label: "A", requires: ["missing"] }]],
+    [[{ id: "a", label: "A", requires: ["feedback", "feedback"] }]],
+    [[{ id: "a", label: "A", style: "primary" }]],
+    [Array.from({ length: 9 }, (_, index) => ({ id: String(index), label: "A" }))]
+  ])("rejects invalid action lists: %j", (actions) => { expect(() => branching(actions)).toThrow(); });
+  it("reports the pressed action and keeps cancellation empty", () => {
+    const cancelled = { kind: "ui", type: "form", status: "cancelled", answers: {} } as const;
+    expect(uiCallResult("form", cancelled)).toEqual({ ...cancelled, action: "" });
+    expect(uiCallResult("form", { kind: "ui", type: "form", status: "submitted", answers: {}, action: "approve" }))
+      .toMatchObject({ action: "approve" });
+    expect(uiResultSchema.safeParse({ ...cancelled, action: "approve" }).success).toBe(false);
+  });
+});
+
 it("does not let completion metadata relax executable UI output validation", () => {
   const ax = new AxAdapter(); const radio = ax.compile(BUILTIN_METHODS.find((method) => method.id === "ui.radio")!);
   expect(radio.outputSchema.safeParse({ kind: "ui", type: "checkbox", selected: [] }).success).toBe(false);
   expect(radio.outputSchema.safeParse({ kind: "ui", type: "radio", selected: ["a", "b"] }).success).toBe(false);
   const form = ax.compile(BUILTIN_METHODS.find((method) => method.id === "ui.form")!);
-  expect(form.outputSchema.safeParse({ kind: "ui", type: "form", status: "submitted", answers: { selected: { type: "radio", selected: ["a"] } } }).success).toBe(true);
-  expect(form.outputSchema.safeParse({ kind: "ui", type: "form", status: "submitted", answers: { x: { type: "boolean", value: true } } }).success).toBe(false);
+  expect(form.outputSchema.safeParse({ kind: "ui", type: "form", status: "submitted", action: "submit", answers: { selected: { type: "radio", selected: ["a"] } } }).success).toBe(true);
+  expect(form.outputSchema.safeParse({ kind: "ui", type: "form", status: "submitted", action: "submit", answers: { x: { type: "boolean", value: true } } }).success).toBe(false);
 });
