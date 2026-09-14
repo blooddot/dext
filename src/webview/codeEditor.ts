@@ -1,68 +1,21 @@
-import {
-  acceptCompletion,
-  autocompletion,
-  closeBrackets,
-  closeBracketsKeymap,
-  completionKeymap,
-  snippet,
-  startCompletion,
-  type Completion,
-  type CompletionContext,
-  type CompletionResult
-} from "@codemirror/autocomplete";
-import { python } from "@codemirror/lang-python";
-import { HighlightStyle, syntaxHighlighting, syntaxTree } from "@codemirror/language";
-import { dextClassHighlighter, dextTokenRules } from "../dextTokenTheme.js";
-import { highlightTree } from "@lezer/highlight";
-import { pythonHoverCode } from "../vscodeHover.js";
-import {
-  defaultKeymap,
-  history,
-  historyKeymap,
-  indentWithTab,
-  insertNewlineAndIndent,
-  redo
-} from "@codemirror/commands";
-import {
-  Compartment,
-  EditorState,
-  StateEffect,
-  StateField,
-  type Extension
-} from "@codemirror/state";
-import { lintGutter, setDiagnostics, type Diagnostic } from "@codemirror/lint";
-import {
-  closeHoverTooltips,
-  drawSelection,
-  EditorView,
-  highlightSpecialChars,
-  hoverTooltip,
-  lineNumbers,
-  keymap,
-  placeholder,
-  showTooltip,
-  type Tooltip,
-  type ViewUpdate
-} from "@codemirror/view";
-import type { SignatureHelp } from "../core/languageService.js";
-import type { ClipboardClient, ClipboardReadResult } from "./clipboardClient.js";
+import { monaco, initializeMonacoWorkers } from "./monacoEnvironment.js";
+import { applyMonacoTheme } from "./monacoTheme.js";
+import { registerMonacoLanguage } from "./monacoLanguage.js";
+import { ReferenceProjection, referenceDecorations } from "./monacoReferences.js";
+import type { ClipboardClient } from "./clipboardClient.js";
 import type { FileSearchClient } from "./fileSearchClient.js";
+import type { LanguageRequestBroker } from "./languageClient.js";
 import { codeReferencePasteText } from "./codeReferencePaste.js";
 import { bindFileDropTarget, droppedFilePaths, isFileDrag } from "./fileDrop.js";
-import { fileReferenceDecorations, fileReferenceRemovalEdit } from "./fileReferenceDecorations.js";
-import { inputReferenceProjections, normalizeInputReferenceSource } from "../core/fileReference.js";
-import type { ContextReferenceOccurrence } from "../core/fileReference.js";
-import { sourceSnapshotMatches } from "./languageClient.js";
-import type { LanguageRequestBroker } from "./languageClient.js";
-import {
-  fileReferenceInsertion,
-  invocationInsertion
-} from "./inputInsertion.js";
+import { fileReferenceRemovalEdit } from "./fileReferenceDecorations.js";
+import { inputReferenceProjections, normalizeInputReferenceSource, type ContextReferenceOccurrence } from "../core/fileReference.js";
+import { fileReferenceInsertion, invocationInsertion } from "./inputInsertion.js";
 import type { EditorTokenTheme } from "../vscodeTheme.js";
 
 export interface CodeEditorOptions {
   parent: HTMLElement;
   dropTarget?: HTMLElement;
+  workerUri?: string;
   broker: LanguageRequestBroker;
   clipboard: ClipboardClient;
   files: FileSearchClient;
@@ -74,762 +27,282 @@ export interface CodeEditorOptions {
   onSourceChanged?(): void;
   onError(error: unknown): void;
 }
-
 export function pasteEventText(event: Pick<ClipboardEvent, "clipboardData">): string | undefined {
-  const clipboardData = event.clipboardData;
-  if (!clipboardData) return undefined;
-  const plainTextType = [...clipboardData.types]
-    .find((type) => type.toLowerCase() === "text/plain");
-  return plainTextType ? clipboardData.getData(plainTextType) : undefined;
+  const data = event.clipboardData;
+  const type = data && [...data.types].find(type => type.toLowerCase() === "text/plain");
+  return type && data ? data.getData(type) : undefined;
 }
-
-/** Read the browser clipboard as a fallback for keyboard paste. In a VS Code
- * webview the host clipboard is normally preferred (it can carry a structured
- * workspace reference), but browser paste events are not guaranteed to expose
- * their data and host reads can be unavailable in restricted environments. */
 async function browserClipboardText(): Promise<string | undefined> {
-  try {
-    if (typeof navigator === "undefined" || !navigator.clipboard?.readText) return undefined;
-    return await navigator.clipboard.readText();
-  } catch {
-    return undefined;
-  }
+  try { return await navigator.clipboard?.readText(); } catch { return undefined; }
 }
+let nextModel = 0;
+type ComposerEditorMode = "chat" | "code";
 
-const signatureEffect = StateEffect.define<Tooltip | null>();
-function themeExtension(theme?: EditorTokenTheme): Extension {
-  return syntaxHighlighting(HighlightStyle.define(dextTokenRules(theme).map(({ tag, color }) => ({ tag, color }))));
-}
-const signatureField = StateField.define<Tooltip | null>({
-  create: () => null,
-  update(value, transaction) {
-    if (transaction.docChanged || transaction.selection) value = null;
-    for (const effect of transaction.effects) {
-      if (effect.is(signatureEffect)) value = effect.value;
-    }
-    return value;
-  },
-  provide: (field) => showTooltip.from(field)
-});
-
-function completionType(kind: string): string {
-  if (kind === "namespace") return "namespace";
-  if (kind === "method") return "method";
-  if (kind === "parameter") return "property";
-  if (kind === "reference") return "variable";
-  return "value";
-}
-
-function diagnosticMarkClass(severity: Diagnostic["severity"]): string {
-  return `dext-diagnostic-${severity === "hint" ? "info" : severity}`;
-}
-
-function signatureDom(document: Document, signature: SignatureHelp): HTMLElement {
-  const dom = document.createElement("div");
-  dom.className = "dext-signature-tooltip";
-  const code = document.createElement("code");
-  const active = signature.parameters[signature.activeParameter]?.label;
-  if (!active) {
-    code.textContent = signature.label;
-  } else {
-    const offset = signature.label.indexOf(active);
-    if (offset < 0) code.textContent = signature.label;
-    else {
-      code.append(document.createTextNode(signature.label.slice(0, offset)));
-      const emphasized = document.createElement("strong");
-      emphasized.textContent = active;
-      code.append(emphasized, document.createTextNode(signature.label.slice(offset + active.length)));
-    }
-  }
-  dom.append(code);
-  const documentation = signature.parameters[signature.activeParameter]?.documentation
-    || signature.documentation;
-  if (documentation) {
-    const detail = document.createElement("div");
-    detail.className = "dext-tooltip-detail";
-    detail.textContent = documentation;
-    dom.append(detail);
-  }
-  return dom;
-}
-
-/** Render a Python declaration with the same token classes used by the editor.
- *
- * VS Code's Python extension puts hover declarations in a fenced Python block,
- * which gives keywords, types, strings, and punctuation their normal editor
- * colours. CodeMirror tooltips do not run Markdown through a renderer, so do
- * the small equivalent here using the Python parser and our shared highlighter.
- */
-function pythonCodeDom(document: Document, source: string): HTMLElement {
-  const code = document.createElement("code");
-  const state = EditorState.create({ doc: source, extensions: [python()] });
-  const tree = syntaxTree(state);
-  let cursor = 0;
-  const appendText = (from: number, to: number, className?: string): void => {
-    if (to <= from) return;
-    const text = source.slice(from, to);
-    if (!className) code.append(document.createTextNode(text));
-    else {
-      const token = document.createElement("span");
-      token.className = className;
-      token.textContent = text;
-      code.append(token);
-    }
-  };
-  highlightTree(tree, dextClassHighlighter, (from, to, className) => {
-    appendText(cursor, from);
-    appendText(from, to, className);
-    cursor = to;
-  });
-  appendText(cursor, source.length);
-  return code;
-}
-
-
-function completionApply(item: { insertText: string }): Completion["apply"] {
-  if (!item.insertText.includes('""')) return item.insertText;
-  return snippet(item.insertText.replace('""', '"${}"'));
-}
-
-function selectionMatches(
-  view: EditorView,
-  source: string,
-  anchor: number,
-  head: number
-): boolean {
-  const current = view.state.selection.main;
-  return sourceSnapshotMatches(view.state.doc.toString(), source)
-    && current.anchor === anchor
-    && current.head === head;
-}
-
+/** The public source contract is always the complete readable Dext document.
+ * Monaco's private model contains atomic reference characters, never persisted. */
 export class DextCodeEditor {
-  readonly view: EditorView;
-  private readonly theme = new Compartment();
-  private readonly language = new Compartment();
-  private readonly lineWrapping = new Compartment();
-  private readonly submitKeymap = new Compartment();
-  private readonly placeholderConfig = new Compartment();
-  private placeholderText = "";
-  private diagnosticsTimer: ReturnType<typeof setTimeout> | undefined;
-  private signatureTimer: ReturnType<typeof setTimeout> | undefined;
-  private hoverRequest = 0;
-  private diagnostics: Diagnostic[] = [];
+  readonly view: monaco.editor.IStandaloneCodeEditor;
+  readonly model: monaco.editor.ITextModel;
+  readonly projection = new ReferenceProjection();
+  private readonly decorations: monaco.editor.IEditorDecorationsCollection;
+  private readonly disposables: Array<{ dispose(): void }> = [];
+  private readonly chatEnter: monaco.editor.IContextKey<boolean>;
   private languageEnabled = true;
   private submitOnEnter = true;
   private dropRevision = 0;
+  private destroyed = false;
+  private diagnosticsTimer?: ReturnType<typeof setTimeout>;
+  private theme?: EditorTokenTheme;
   private removeFileDropListeners?: () => void;
+  private transforming = false;
+  private pendingReferenceProjection = false;
 
   constructor(private readonly options: CodeEditorOptions) {
-    const extensions: Extension[] = [
-      history(),
-      this.language.of(python()),
-      this.lineWrapping.of([]),
-      this.theme.of(themeExtension()),
-      this.placeholderConfig.of([]),
-      // Ahead of the main keymap so that a chat-mode Enter is claimed before
-      // the default binding turns it into a newline.
-      this.submitKeymap.of(this.submitKeymapExtension()),
-      lineNumbers(),
-      lintGutter(),
-      highlightSpecialChars(),
-      drawSelection(),
-      closeBrackets(),
-      signatureField,
-      fileReferenceDecorations({
-        onOpen: (reference) => options.onOpenReference(reference)
-      }),
-      autocompletion({
-        override: [
-          (context) => this.fileCompletions(context),
-          (context) => this.completions(context)
-        ],
-        activateOnTyping: true,
-        // Keep the list responsive without querying the language service on
-        // every single key event. This is short enough to feel immediate while
-        // avoiding a request for half-typed identifiers.
-        activateOnTypingDelay: 180,
-        activateOnCompletion: (completion) => ["namespace", "method", "property"].includes(completion.type ?? ""),
-        // Keep CodeMirror's built-in completion keymap at high precedence so
-        // ArrowUp/ArrowDown (and Enter/Escape) control the suggestion widget
-        // the same way they do in VS Code. Custom bindings below still add
-        // Tab acceptance and the composer-specific submit behavior.
-        defaultKeymap: true,
-        icons: true,
-        // Keep the list compact so the signature/help text and editor remain
-        // visible; scrolling is still available for methods with many fields.
-        maxRenderedOptions: 8
-      }),
-      hoverTooltip((view, position) => this.hover(view, position), {
-        hoverTime: 300,
-        hideOnChange: true
-      }),
-      EditorState.languageData.of(() => [{
-        closeBrackets: { brackets: ["(", "[", '"'] }
-      }]),
-      EditorView.contentAttributes.of({
-        "aria-label": "Dext input",
-        spellcheck: "false",
-        autocapitalize: "off",
-        autocomplete: "off"
-      }),
-      EditorView.updateListener.of((update) => this.updated(update)),
-      EditorView.domEventHandlers({
-        mousedown: (_event, view) => {
-          view.dispatch({ effects: closeHoverTooltips });
-          return false;
-        },
-        copy: (event) => {
-          event.preventDefault();
-          void this.copy();
-          return true;
-        },
-        cut: (event) => {
-          event.preventDefault();
-          void this.cut();
-          return true;
-        },
-        paste: (event) => {
-          event.preventDefault();
-          void this.paste(pasteEventText(event));
-          return true;
-        }
-      }),
-      keymap.of([
-        // Tab accepts the selected suggestion when a list is open. Returning
-        // false with no list lets the normal indentation binding handle it.
-        { key: "Tab", run: (view) => acceptCompletion(view) },
-        indentWithTab,
-        { key: "Mod-c", run: () => { void this.copy(); return true; } },
-        { key: "Mod-x", run: () => { void this.cut(); return true; } },
-        { key: "Mod-v", run: () => { void this.paste(); return true; } },
-        { key: "Mod-Shift-v", run: () => { void this.pasteRaw(); return true; } },
-        // CodeMirror's history keymap does not consistently provide the
-        // Ctrl/Cmd+Shift+Z convention across platforms. Register it
-        // explicitly so redo mirrors the usual editor shortcut.
-        // Mark the binding as handled so the browser's native editing history
-        // does not also consume the shortcut (which can leave CodeMirror's
-        // redo branch out of sync after the first invocation).
-        { key: "Mod-Shift-z", run: redo, preventDefault: true },
-        { key: "Alt-/", run: () => { startCompletion(this.view); return true; } },
-        { key: "Mod-Space", run: () => { startCompletion(this.view); return true; } },
-        { key: "Mod-Shift-Space", run: () => { void this.updateSignature(); return true; } },
-        { key: "Mod-Enter", run: () => { this.options.onRun(); return true; } },
-        { key: "F8", run: () => this.navigateDiagnostic(1) },
-        { key: "Shift-F8", run: () => this.navigateDiagnostic(-1) },
-        ...closeBracketsKeymap,
-        ...completionKeymap,
-        ...historyKeymap,
-        ...defaultKeymap
-      ])
-    ];
-    this.view = new EditorView({
-      parent: options.parent,
-      state: EditorState.create({ doc: "", extensions })
-    });
-    this.removeFileDropListeners = bindFileDropTarget(options.dropTarget ?? options.parent, {
-      dragover: (event) => this.fileDragOver(event),
-      drop: (event) => this.fileDrop(event),
-      leave: () => this.setFileDragActive(false)
-    });
-    this.scheduleDiagnostics(0);
-  }
-
-  get source(): string {
-    return this.view.state.doc.toString();
-  }
-
-  /** Chat modes treat the composer as a message box, so Enter sends and
-   * Shift+Enter breaks the line. Code mode is a real editor: Enter must always
-   * add a line there and Mod-Enter stays the way to run. */
-  private submitKeymapExtension(): Extension {
-    if (this.languageEnabled || !this.submitOnEnter) return [];
-    return keymap.of([
-      {
-        key: "Enter",
-        run: (view) => {
-          // An open completion list owns Enter first, otherwise picking a file
-          // from the @ menu would send the message instead.
-          if (acceptCompletion(view)) return true;
-          this.options.onRun();
-          return true;
-        }
-      },
-      { key: "Shift-Enter", run: insertNewlineAndIndent }
-    ]);
-  }
-
-  private refreshSubmitKeymap(): void {
-    this.view.dispatch({
-      effects: this.submitKeymap.reconfigure(this.submitKeymapExtension())
-    });
-  }
-
-  setSubmitOnEnter(enabled: boolean): void {
-    if (this.submitOnEnter === enabled) return;
-    this.submitOnEnter = enabled;
-    this.refreshSubmitKeymap();
-  }
-
-  setPlaceholder(text: string): void {
-    if (this.placeholderText === text) return;
-    this.placeholderText = text;
-    this.view.dispatch({ effects: this.placeholderConfig.reconfigure(text ? placeholder(text) : []) });
-  }
-
-  focus(): void {
-    this.view.focus();
-  }
-
-  setValue(value: string, cursor = value.length): void {
-    // Also invalidate when switching between conversations with identical drafts.
-    this.dropRevision++;
-    const normalized = normalizeInputReferenceSource(value);
-    this.view.dispatch({
-      changes: { from: 0, to: this.view.state.doc.length, insert: normalized },
-      selection: { anchor: Math.max(0, Math.min(cursor, normalized.length)) },
-      scrollIntoView: true,
-      userEvent: "input"
-    });
-    this.focus();
-  }
-
-  insertFileReferences(expressions: readonly string[], position?: number): void {
-    const normalized = normalizeInputReferenceSource(this.source);
-    if (normalized !== this.source) {
-      this.setValue(normalized, this.view.state.selection.main.head);
-    }
-    const selection = this.view.state.selection.main;
-    const from = position === undefined
-      ? selection.from
-      : Math.max(0, Math.min(position, this.view.state.doc.length));
-    const to = position === undefined ? selection.to : from;
-    const insertion = fileReferenceInsertion(this.source, from, to, expressions);
-    this.view.dispatch({
-      changes: { from: insertion.from, to: insertion.to, insert: insertion.text },
-      selection: { anchor: insertion.from + insertion.cursorOffset },
-      scrollIntoView: true,
-      userEvent: "input"
-    });
-    this.focus();
-  }
-
-  private setFileDragActive(active: boolean): void {
-    this.view.dom.classList.toggle("file-drop-active", active);
-  }
-
-  private fileDragOver(event: DragEvent): boolean {
-    const active = isFileDrag(event);
-    this.setFileDragActive(active);
-    if (!active) return false;
-    event.preventDefault();
-    event.dataTransfer!.dropEffect = "copy";
-    return true;
-  }
-
-  private fileDrop(event: DragEvent): boolean {
-    this.setFileDragActive(false);
-    if (!isFileDrag(event)) return false;
-    // Read synchronously: the browser clears DataTransfer after the event returns.
-    const paths = droppedFilePaths(event.dataTransfer);
-    if (!paths.length) {
-      if (![...event.dataTransfer!.types].some((type) => type.toLowerCase() === "files")) return false;
-      event.preventDefault();
-      event.stopPropagation();
-      this.options.onError(new Error("The dropped files did not include paths. Hold Shift and drag files from the VS Code Explorer into the input."));
-      return true;
-    }
-    event.preventDefault();
-    event.stopPropagation();
-    const position = this.view.posAtCoords({ x: event.clientX, y: event.clientY })
-      ?? this.view.state.selection.main.head;
-    const revision = this.dropRevision;
-    void this.options.resolveDroppedFiles(paths).then((expressions) => {
-      if (revision !== this.dropRevision || !expressions.length) return;
-      this.insertFileReferences(expressions, position);
-    }).catch((error: unknown) => {
-      if (revision === this.dropRevision) this.options.onError(error);
-    });
-    return true;
-  }
-
-  removeFileReference(payload: string): void {
-    const projection = inputReferenceProjections(this.source).find(
-      (candidate) => candidate.reference.payload === payload
-    );
-    if (!projection) return;
-    const removal = fileReferenceRemovalEdit(this.source, projection);
-    this.view.dispatch({
-      changes: {
-        from: removal.from,
-        to: removal.to,
-        insert: removal.insert
-      },
-      selection: { anchor: removal.from + removal.insert.length },
-      scrollIntoView: true,
-      userEvent: "delete"
-    });
-    this.focus();
-  }
-
-  insertInvocation(text: string): void {
-    this.insert(text, undefined, invocationInsertion);
-  }
-
-  private insert(
-    text: string,
-    position: number | undefined,
-    edit: typeof invocationInsertion
-  ): void {
-    const selection = this.view.state.selection.main;
-    const from = position === undefined
-      ? selection.from
-      : Math.max(0, Math.min(position, this.view.state.doc.length));
-    const to = position === undefined ? selection.to : from;
-    const insertion = edit(this.source, from, to, text);
-    this.view.dispatch({
-      changes: { from, to, insert: insertion.text },
-      selection: { anchor: from + insertion.cursorOffset },
-      scrollIntoView: true,
-      userEvent: "input"
-    });
-    this.focus();
-  }
-
-  triggerSuggest(): void {
-    // Host messages can arrive after focus has moved to another editor or input.
-    if (!this.view.hasFocus) return;
-    startCompletion(this.view);
-  }
-
-  triggerParameterHints(): void {
-    if (!this.view.hasFocus) return;
-    void this.updateSignature();
-  }
-
-  applyTheme(theme?: EditorTokenTheme): void {
-    this.view.dispatch({ effects: this.theme.reconfigure(themeExtension(theme)) });
-  }
-
-  goToFirstDiagnostic(): boolean {
-    return this.navigateDiagnostic(1, true);
-  }
-
-  refreshLanguageState(): void {
-    if (!this.languageEnabled) return;
-    this.scheduleDiagnostics(0);
-  }
-
-  setLanguageEnabled(enabled: boolean): void {
-    if (this.languageEnabled === enabled) return;
-    this.languageEnabled = enabled;
-    this.view.dispatch({
-      effects: [
-        this.language.reconfigure(enabled ? python() : []),
-        this.lineWrapping.reconfigure(enabled ? [] : EditorView.lineWrapping),
-        this.submitKeymap.reconfigure(this.submitKeymapExtension())
-      ]
-    });
-    if (enabled) {
-      this.refreshLanguageState();
-      return;
-    }
-    if (this.diagnosticsTimer) clearTimeout(this.diagnosticsTimer);
-    if (this.signatureTimer) clearTimeout(this.signatureTimer);
-    this.diagnostics = [];
-    this.view.dispatch(setDiagnostics(this.view.state, []));
-    this.view.dispatch({ effects: signatureEffect.of(null) });
-    this.options.onDiagnosticsChanged({ errors: 0, warnings: 0 });
-  }
-
-  destroy(): void {
-    this.dropRevision++;
-    this.removeFileDropListeners?.();
-    if (this.diagnosticsTimer) clearTimeout(this.diagnosticsTimer);
-    if (this.signatureTimer) clearTimeout(this.signatureTimer);
-    this.view.destroy();
-  }
-
-  /** The `@` picker is deliberately independent of the language service: chat
-   * modes turn that service off, and attaching a file is exactly the thing the
-   * composer needs there. */
-  private async fileCompletions(context: CompletionContext): Promise<CompletionResult | null> {
-    const token = context.matchBefore(/@[^\s@#"'`(){}[\],]*/);
-    if (!token) return null;
-    const source = context.state.doc.toString();
-    // An `@` glued to a word is an email or a decorator argument, never a
-    // reference the user is starting to type.
-    if (/[\p{L}\p{N}_.+-]/u.test(source[token.from - 1] ?? "")) return null;
-    const files = await this.options.files.search(token.text.slice(1));
-    if (context.aborted || !files.length) return null;
-    return {
-      from: token.from,
-      to: token.to,
-      // The host already ranked these; re-filtering here would drop matches
-      // that span directory boundaries.
-      filter: false,
-      options: files.map((path) => {
-        const directory = path.slice(0, Math.max(0, path.lastIndexOf("/")));
-        return {
-          label: `@${path}`,
-          ...(directory ? { detail: directory } : {}),
-          type: "file",
-          apply: (view: EditorView, _completion: Completion, from: number, to: number) => {
-            // The trailing space closes the reference chip so the next keystroke
-            // is not absorbed into the path.
-            const insert = `@${path} `;
-            view.dispatch({
-              changes: { from, to, insert },
-              selection: { anchor: from + insert.length },
-              scrollIntoView: true,
-              userEvent: "input.complete"
-            });
-          }
-        };
-      })
-    };
-  }
-
-  private async completions(context: CompletionContext): Promise<CompletionResult | null> {
-    if (!this.languageEnabled) return null;
-    const source = context.state.doc.toString();
-    const response = await this.options.broker.request(source, context.pos, {
-      get isCancellationRequested() { return context.aborted; },
-      onCancellationRequested(listener) {
-        context.addEventListener("abort", listener, { onDocChange: true });
-        return { dispose() {} };
-      }
-    }, "completion");
-    if (!response || context.aborted || context.state.doc.toString() !== source) return null;
-    const first = response.completions[0];
-    if (!first) return null;
-    // Keep parameter completions visible alongside signature help. The tooltip
-    // explains the active argument, while this list lets users discover and
-    // insert the next argument without memorising API fields.
-    return {
-      from: first.replaceStart,
-      to: first.replaceEnd,
-      options: response.completions.map((item, index) => {
-        const apply = completionApply(item);
-        return {
-          label: item.label,
-          detail: item.detail,
-          type: completionType(item.kind),
-          // CodeMirror otherwise falls back to alphabetical ordering. The
-          // language service emits fields in declaration order, so keep that
-          // order visible in the completion widget.
-          sortText: item.sortText ?? String(index).padStart(4, "0"),
-          ...(apply ? { apply } : {})
-        };
-      })
-    };
-  }
-
-  private async hover(view: EditorView, position: number): Promise<Tooltip | null> {
-    if (!this.languageEnabled) return null;
-    // Hover requests are asynchronous. CodeMirror can start a new request
-    // while the pointer is moving, so an older response must never be shown
-    // for the newer target (it commonly makes every symbol appear to have
-    // the tooltip of the last symbol visited).
-    const hoverRequest = ++this.hoverRequest;
-    const source = view.state.doc.toString();
-    const response = await this.options.broker.request(source, position, undefined, "all");
-    if (hoverRequest !== this.hoverRequest || !response?.hover || !sourceSnapshotMatches(view.state.doc.toString(), source)) return null;
-    const hover = response.hover;
-    // Only show a hover when the pointer is over the symbol's range. The
-    // language service can otherwise resolve whitespace to a nearby symbol,
-    // which feels unlike VS Code.
-    if (position < hover.rangeStart || position >= hover.rangeEnd) return null;
-    return {
-      pos: hover.rangeStart,
-      end: hover.rangeEnd,
-      above: true,
-      create(currentView) {
-        const dom = currentView.dom.ownerDocument.createElement("div");
-        dom.className = "dext-hover-tooltip";
-        dom.append(pythonCodeDom(currentView.dom.ownerDocument, pythonHoverCode(hover.label, hover.kind)));
-        if (hover.documentation) {
-          const detail = currentView.dom.ownerDocument.createElement("div");
-          detail.className = "dext-tooltip-detail";
-          detail.textContent = hover.documentation;
-          dom.append(detail);
-        }
-        return { dom };
-      }
-    };
-  }
-
-  private updated(update: ViewUpdate): void {
-    if (!update.docChanged && !update.selectionSet) return;
-    if (update.docChanged) {
+    const uri = options.workerUri ?? document.querySelector<HTMLMetaElement>('meta[name="dext-editor-worker"]')?.content;
+    if (uri) this.disposables.push(initializeMonacoWorkers(uri));
+    this.model = monaco.editor.createModel("", "python", monaco.Uri.parse(`dext-input:/composer-${++nextModel}.dx`));
+    this.model.setEOL(monaco.editor.EndOfLineSequence.LF);
+    // VS Code forwards Webview clipboard commands through document.execCommand.
+    // Monaco's textarea input supports that bridge; Chromium EditContext does not.
+    this.view = monaco.editor.create(options.parent, { model: this.model, automaticLayout: true, editContext: false, ariaLabel: "Dext input",
+      fontSize: 13, lineHeight: 24, minimap: { enabled: false }, scrollBeyondLastLine: false, wordWrap: "off",
+      wordWrapBreakAfterCharacters: " \t", wordWrapBreakBeforeCharacters: "", wordBreak: "keepAll", wrappingIndent: "none",
+      lineNumbersMinChars: 3, glyphMargin: false, folding: false, fixedOverflowWidgets: true,
+      padding: { top: 8, bottom: 8 }, quickSuggestions: { other: true, strings: true, comments: false },
+      wordBasedSuggestions: "off", unicodeHighlight: { ambiguousCharacters: false, invisibleCharacters: false, nonBasicASCII: false },
+      parameterHints: { enabled: true }, hover: { delay: 300 }, renderValidationDecorations: "on" });
+    this.decorations = this.view.createDecorationsCollection();
+    const composing = this.view.createContextKey<boolean>("dextInputComposing", false);
+    // The native IME textarea contains private reference tokens, not chip labels.
+    // Keep Monaco's projected line visible while the textarea receives composition.
+    this.disposables.push(this.view.onDidCompositionStart(() => {
+      composing.set(true);
+      options.parent.classList.toggle("dext-reference-composition", this.projection.references(this.model.getValue()).length > 0);
+    }));
+    this.disposables.push(this.view.onDidCompositionEnd(() => {
+      composing.set(false);
+      options.parent.classList.remove("dext-reference-composition");
+      queueMicrotask(() => { if (!this.destroyed && this.pendingReferenceProjection) this.projectTypedReferences(); });
+    }));
+    this.disposables.push({ dispose: () => options.parent.classList.remove("dext-reference-composition") });
+    this.disposables.push(this.view.onDidLayoutChange(() => this.renderReferences()));
+    this.disposables.push(this.view.onDidChangeConfiguration(event => { if (event.hasChanged(monaco.editor.EditorOption.fontInfo)) this.renderReferences(); }));
+    // Monaco's suggest widget otherwise consumes the first Escape while
+    // parameter help remains open. Dismiss both through their native commands;
+    // leave the event available for snippet/find cancellation as well.
+    this.disposables.push(this.view.onKeyDown(event => { if (event.keyCode === monaco.KeyCode.Escape) this.dismissAssistance(); }));
+    this.chatEnter = this.view.createContextKey<boolean>("dextChatEnter", false);
+    this.disposables.push(registerMonacoLanguage({ model: this.model, editor: this.view, projection: this.projection,
+      broker: options.broker, files: options.files, source: () => this.source, enabled: () => this.languageEnabled,
+      revision: () => this.dropRevision, range: (from, to) => this.sourceRange(from, to) }));
+    this.disposables.push(this.model.onDidChangeContent(event => {
+      if (this.transforming) return;
       this.dropRevision++;
-      // Input mode can disable language services, but the composer still needs
-      // to react immediately when its text changes.
+      this.renderReferences();
       this.options.onSourceChanged?.();
-      const source = this.source;
-      const normalized = normalizeInputReferenceSource(source);
-      if (normalized !== source) {
-        const selection = this.view.state.selection.main;
-        queueMicrotask(() => {
-          if (this.source !== source) return;
-          this.view.dispatch({
-            changes: { from: 0, to: source.length, insert: normalized },
-            selection: { anchor: Math.min(selection.anchor, normalized.length), head: Math.min(selection.head, normalized.length) },
-            userEvent: "input.migrate"
-          });
-        });
-        return;
+      this.scheduleDiagnostics();
+      // Close a manually typed reference only at a separator. Do not rewrite
+      // undo/redo events: the original projected edit belongs to native history.
+      if (!event.isUndoing && !event.isRedoing && event.changes.some(change => /[\s"')]/.test(change.text))) {
+        queueMicrotask(() => { if (!this.destroyed) this.projectTypedReferences(); });
       }
-      if (this.languageEnabled) {
-        this.scheduleDiagnostics(120);
+    }));
+    const action = (id: string, keys: number[], run: () => void, precondition = "editorTextFocus") => this.disposables.push(this.view.addAction({ id, label: id, keybindings: keys, precondition, run }));
+    action("dext.run", [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter], () => options.onRun(), "editorTextFocus && !dextInputComposing");
+    action("dext.send", [monaco.KeyCode.Enter], () => options.onRun(), "editorTextFocus && dextChatEnter && !suggestWidgetVisible && !inSnippetMode && !dextInputComposing");
+    // lineBreakInsert deliberately leaves the cursor before the new line.
+    // Native typing advances every cursor and retains indentation/undo behavior.
+    action("dext.newline", [monaco.KeyMod.Shift | monaco.KeyCode.Enter], () => this.view.trigger("keyboard", "type", { text: "\n" }), "editorTextFocus && !dextInputComposing");
+    action("dext.suggest", [monaco.KeyMod.Alt | monaco.KeyCode.Slash], () => this.triggerSuggest());
+    action("dext.openReference", [monaco.KeyMod.Alt | monaco.KeyCode.Enter], () => {
+      const offset = this.model.getOffsetAt(this.view.getPosition()!);
+      const ref = this.projection.references(this.model.getValue()).find(ref => ref.viewFrom === offset || ref.viewTo === offset);
+      if (ref) options.onOpenReference(ref.reference);
+    });
+    action("dext.pasteRaw", [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyV], () => { void this.paste(undefined, true); });
+    // Let the browser dispatch Ctrl+V so image paste still reaches the parent.
+    const copy = (event: ClipboardEvent): boolean => {
+      if (!this.view.hasTextFocus()) return false;
+      event.preventDefault(); event.stopImmediatePropagation();
+      const text = this.selectedSource();
+      if (text) { event.clipboardData?.setData("text/plain", text); void options.clipboard.write(text); }
+      return true;
+    };
+    const cut = (event: ClipboardEvent) => { if (copy(event)) this.view.trigger("keyboard", "cut", {}); };
+    const paste = (event: ClipboardEvent) => { if (event.defaultPrevented || !this.view.hasTextFocus()) return; event.preventDefault(); event.stopImmediatePropagation(); void this.paste(pasteEventText(event)); };
+    let pointerStart: { x: number; y: number; index: number; close: boolean } | undefined;
+    const pointerDown = (event: MouseEvent) => {
+      const chip = event.target instanceof Element ? event.target.closest('.dext-ref-chip') : null;
+      const index = chip?.className.match(/ref-open-(\d+)/)?.[1]; pointerStart = undefined;
+      if (index === undefined || !chip?.firstChild) return;
+      const range = document.createRange(), close = chip.textContent.lastIndexOf('×');
+      range.setStart(chip.firstChild, close); range.setEnd(chip.firstChild, close + 1);
+      const box = range.getBoundingClientRect();
+      pointerStart = { x: event.clientX, y: event.clientY, index: Number(index), close: event.clientX >= box.left - 3 && event.clientX <= box.right + 3 };
+    };
+    const pointer = (event: MouseEvent) => {
+      if (pointerStart && Math.hypot(event.clientX - pointerStart.x, event.clientY - pointerStart.y) < 4) this.referencePointer(event, pointerStart.index, pointerStart.close);
+      pointerStart = undefined;
+    };
+    options.parent.addEventListener("copy", copy, true); options.parent.addEventListener("cut", cut, true);
+    options.parent.addEventListener("paste", paste, true); options.parent.addEventListener("mousedown", pointerDown, true); options.parent.addEventListener("mouseup", pointer, true);
+    this.disposables.push({ dispose: () => { options.parent.removeEventListener("copy", copy, true); options.parent.removeEventListener("cut", cut, true);
+      options.parent.removeEventListener("paste", paste, true); options.parent.removeEventListener("mousedown", pointerDown, true); options.parent.removeEventListener("mouseup", pointer, true); } });
+    this.removeFileDropListeners = bindFileDropTarget(options.dropTarget ?? options.parent, {
+      dragover: event => this.fileDragOver(event), drop: event => this.fileDrop(event), leave: () => this.setFileDragActive(false)
+    });
+    const themeObserver = new MutationObserver(() => this.applyTheme(this.theme));
+    themeObserver.observe(document.body, { attributes: true, attributeFilter: ["class", "style"] });
+    this.disposables.push({ dispose: () => themeObserver.disconnect() });
+    this.applyTheme(); this.scheduleDiagnostics();
+  }
+
+  get source(): string { return this.projection.decode(this.model.getValue()); }
+  private sourceRange(from: number, to: number): monaco.Range {
+    const text = this.model.getValue();
+    return monaco.Range.fromPositions(this.model.getPositionAt(this.projection.toView(text, from)), this.model.getPositionAt(this.projection.toView(text, to, "right")));
+  }
+  private selection() {
+    const value = this.model.getValue(), selected = this.view.getSelection()!;
+    return { from: this.projection.toSource(value, this.model.getOffsetAt(selected.getStartPosition())),
+      to: this.projection.toSource(value, this.model.getOffsetAt(selected.getEndPosition())) };
+  }
+  focus(): void { this.view.focus(); }
+  setSubmitOnEnter(enabled: boolean): void { this.submitOnEnter = enabled; this.chatEnter.set(!this.languageEnabled && enabled); }
+  setPlaceholder(text: string): void { this.view.updateOptions({ placeholder: text }); }
+  setValue(value: string, cursor = value.length): void {
+    this.dropRevision++;
+    this.pendingReferenceProjection = false;
+    this.dismissAssistance();
+    const source = normalizeInputReferenceSource(value.replace(/\r\n?/g, "\n"));
+    // setValue establishes a new draft boundary and clears another conversation's undo stack.
+    this.projection.reset(); this.model.setValue(this.projection.encode(source)); this.model.setEOL(monaco.editor.EndOfLineSequence.LF);
+    this.view.setPosition(this.model.getPositionAt(this.projection.toView(this.model.getValue(), Math.min(cursor, source.length), "right")));
+    this.renderReferences(); this.scheduleDiagnostics(); this.focus();
+  }
+  private edit(from: number, to: number, text: string, cursor = text.length): void {
+    const projected = this.projection.encode(normalizeInputReferenceSource(text.replace(/\r\n?/g, "\n")));
+    const range = this.sourceRange(from, to);
+    this.view.pushUndoStop();
+    this.view.executeEdits("dext", [{ range, text: projected }]);
+    const position = this.model.getPositionAt(this.projection.toView(this.model.getValue(), from + cursor, "right"));
+    this.view.setPosition(position); this.view.revealPositionInCenterIfOutsideViewport(position); this.view.pushUndoStop(); this.focus();
+  }
+  insertFileReferences(expressions: readonly string[], position?: number): void {
+    const selection = this.selection(); const from = position ?? selection.from, to = position ?? selection.to;
+    const edit = fileReferenceInsertion(this.source, from, to, expressions); this.edit(edit.from, edit.to, edit.text, edit.cursorOffset);
+  }
+  insertInvocation(text: string): void { const selection = this.selection(); const edit = invocationInsertion(this.source, selection.from, selection.to, text); this.edit(selection.from, selection.to, edit.text, edit.cursorOffset); }
+  removeFileReference(payload: string): void {
+    const ref = inputReferenceProjections(this.source).find(ref => ref.reference.payload === payload);
+    if (!ref) return; const edit = fileReferenceRemovalEdit(this.source, ref); this.edit(edit.from, edit.to, edit.insert);
+  }
+  private renderReferences(): void {
+    const font = this.view.getOption(monaco.editor.EditorOption.fontInfo) as { typicalHalfwidthCharacterWidth: number };
+    const columns = Math.max(4, Math.min(20, Math.floor(this.view.getLayoutInfo().contentWidth / font.typicalHalfwidthCharacterWidth) - 6));
+    this.decorations.set(referenceDecorations(this.projection, this.model, columns));
+  }
+  private projectTypedReferences(): void {
+    if (this.view.inComposition) { this.pendingReferenceProjection = true; return; }
+    this.pendingReferenceProjection = false;
+    const value = this.model.getValue();
+    const edits = inputReferenceProjections(value).map(ref => ({ range: monaco.Range.fromPositions(this.model.getPositionAt(ref.interpolationStart), this.model.getPositionAt(ref.interpolationEnd)), text: this.projection.encode(ref.reference.expression) }));
+    if (!edits.length) return;
+    this.transforming = true; this.view.executeEdits("dext.project", edits); this.transforming = false; this.renderReferences();
+  }
+  private referencePointer(event: MouseEvent, index: number, close: boolean): void {
+    const ref = this.projection.references(this.model.getValue())[index]; if (!ref) return;
+    event.preventDefault(); event.stopImmediatePropagation();
+    if (close) {
+      const edit = fileReferenceRemovalEdit(this.source, { reference: ref.reference, interpolationStart: ref.sourceFrom, interpolationEnd: ref.sourceTo });
+      this.edit(edit.from, edit.to, edit.insert);
+    } else this.options.onOpenReference(ref.reference);
+  }
+  private selectedSource(): string {
+    const selections = [...(this.view.getSelections() ?? [])].sort((left, right) => monaco.Range.compareRangesUsingStarts(left, right));
+    const values: string[] = [];
+    let previousLine = 0;
+    for (const selection of selections) {
+      if (!selection.isEmpty()) values.push(this.projection.decode(this.model.getValueInRange(selection)));
+      else if (this.view.getOption(monaco.editor.EditorOption.emptySelectionClipboard) && selection.startLineNumber !== previousLine) {
+        values.push(this.projection.decode(this.model.getLineContent(selection.startLineNumber)) + "\n");
       }
+      previousLine = selection.startLineNumber;
     }
-    if (!this.languageEnabled) return;
-    if (this.signatureTimer) clearTimeout(this.signatureTimer);
-    this.signatureTimer = setTimeout(() => void this.updateSignature(), 60);
+    return values.join("\n");
   }
-
-  private scheduleDiagnostics(delay: number): void {
-    if (this.diagnosticsTimer) clearTimeout(this.diagnosticsTimer);
-    this.diagnosticsTimer = setTimeout(() => void this.updateDiagnostics(), delay);
+  private replaceSelections(text: string): void {
+    this.view.pushUndoStop();
+    this.view.executeEdits("dext.paste", (this.view.getSelections() ?? []).map(range => ({ range, text: this.projection.encode(text.replace(/\r\n?/g, "\n")) })));
+    this.view.pushUndoStop(); this.focus();
   }
-
-  private async updateDiagnostics(): Promise<void> {
-    if (!this.languageEnabled) return;
-    const source = this.source;
-    if (!source.trim()) {
-      this.diagnostics = [];
-      this.view.dispatch(setDiagnostics(this.view.state, []));
-      this.options.onDiagnosticsChanged({ errors: 0, warnings: 0 });
-      return;
-    }
-    const response = await this.options.broker.request(source, source.length, undefined, "diagnostics");
-    if (!response || !sourceSnapshotMatches(this.source, source)) return;
-    this.options.onInputKindChanged(response.inputKind);
-    const diagnostics: Diagnostic[] = response.diagnostics.map((diagnostic) => {
-      const offset = Math.max(0, Math.min(source.length, diagnostic.from ?? diagnostic.offset));
-      return {
-        from: offset,
-        to: Math.max(offset, Math.min(source.length, diagnostic.to ?? offset + 1)),
-        severity: diagnostic.severity,
-        message: diagnostic.message,
-        markClass: diagnosticMarkClass(diagnostic.severity)
-      };
-    });
-    this.diagnostics = diagnostics;
-    this.view.dispatch(setDiagnostics(this.view.state, diagnostics));
-    this.options.onDiagnosticsChanged({
-      errors: response.diagnostics.filter(({ severity }) => severity === "error").length,
-      warnings: response.diagnostics.filter(({ severity }) => severity === "warning").length
-    });
+  private async paste(eventText?: string, raw = false): Promise<void> {
+    const source = this.source, revision = this.dropRevision, selection = this.selection(), selections = JSON.stringify(this.view.getSelections());
+    const result = await this.options.clipboard.read(raw ? "text" : "code");
+    let text: string;
+    try { text = !raw && result && (result.codeReference || result.fileReferences?.length)
+      ? codeReferencePasteText(source, selection.from, selection.to, result)
+      : eventText ?? result?.text ?? await browserClipboardText() ?? ""; }
+    catch (error) { this.options.onError(error); return; }
+    if (this.destroyed || !this.view.hasTextFocus() || revision !== this.dropRevision || JSON.stringify(this.view.getSelections()) !== selections) return;
+    if (text) this.replaceSelections(text);
   }
-
-  private navigateDiagnostic(direction: 1 | -1, fromStart = false): boolean {
-    if (!this.diagnostics.length) return false;
-    const cursor = fromStart ? -1 : this.view.state.selection.main.head;
-    const ordered = [...this.diagnostics].sort((left, right) => left.from - right.from);
-    const target = direction === 1
-      ? ordered.find((diagnostic) => diagnostic.from > cursor) ?? ordered[0]
-      : [...ordered].reverse().find((diagnostic) => diagnostic.from < cursor) ?? ordered.at(-1);
-    if (!target) return false;
-    this.view.dispatch({
-      selection: { anchor: target.from, head: target.to },
-      scrollIntoView: true
-    });
-    this.focus();
+  private setFileDragActive(active: boolean): void { this.options.parent.classList.toggle("file-drop-active", active); }
+  private fileDragOver(event: DragEvent): boolean { const active = isFileDrag(event); this.setFileDragActive(active); if (!active) return false; event.preventDefault(); event.dataTransfer!.dropEffect = "copy"; return true; }
+  private fileDrop(event: DragEvent): boolean {
+    this.setFileDragActive(false); if (!isFileDrag(event)) return false;
+    const paths = droppedFilePaths(event.dataTransfer);
+    if (!paths.length) { if (![...event.dataTransfer!.types].some(type => type.toLowerCase() === "files")) return false;
+      event.preventDefault(); event.stopPropagation(); this.options.onError(new Error("The dropped files did not include paths. Hold Shift and drag files from the VS Code Explorer into the input.")); return true; }
+    event.preventDefault(); event.stopPropagation();
+    const hit = this.view.getTargetAtClientPoint(event.clientX, event.clientY)?.position ?? this.view.getPosition()!;
+    const position = this.projection.toSource(this.model.getValue(), this.model.getOffsetAt(hit)), revision = this.dropRevision;
+    void this.options.resolveDroppedFiles(paths).then(expressions => { if (!this.destroyed && revision === this.dropRevision && expressions.length) this.insertFileReferences(expressions, position); })
+      .catch((error: unknown) => { if (!this.destroyed && revision === this.dropRevision) this.options.onError(error); });
     return true;
   }
-
-  private async updateSignature(): Promise<void> {
-    if (!this.languageEnabled) return;
-    const source = this.source;
-    const cursor = this.view.state.selection.main.head;
-    const response = await this.options.broker.request(source, cursor);
-    if (!response || !sourceSnapshotMatches(this.source, source)
-      || this.view.state.selection.main.head !== cursor) return;
-    const tooltip: Tooltip | null = response.signature ? {
-      pos: cursor,
-      above: true,
-      create: (view) => ({ dom: signatureDom(view.dom.ownerDocument, response.signature!) })
-    } : null;
-    this.view.dispatch({ effects: signatureEffect.of(tooltip) });
+  triggerSuggest(): void { if (this.view.hasTextFocus()) this.view.trigger("dext", "editor.action.triggerSuggest", {}); }
+  triggerParameterHints(): void { if (this.view.hasTextFocus() && this.languageEnabled) this.view.trigger("dext", "editor.action.triggerParameterHints", {}); }
+  private dismissAssistance(): void { for (const action of ["hideSuggestWidget", "closeParameterHints", "editor.action.hideHover"]) this.view.trigger("dext", action, {}); }
+  applyTheme(theme?: EditorTokenTheme): void {
+    if (theme) this.theme = theme; applyMonacoTheme(this.theme);
+    const css = getComputedStyle(document.body);
+    this.view.updateOptions({ fontFamily: css.getPropertyValue("--vscode-editor-font-family").trim() || "Consolas, monospace",
+      fontSize: parseFloat(css.getPropertyValue("--vscode-editor-font-size")) || 13 });
   }
-
-  private async copy(): Promise<void> {
-    const selection = this.view.state.selection.main;
-    if (selection.empty) return;
-    await this.options.clipboard.write(this.view.state.sliceDoc(selection.from, selection.to));
-    this.focus();
-  }
-
-  private async cut(): Promise<void> {
-    const source = this.source;
-    const selection = this.view.state.selection.main;
-    if (selection.empty) return;
-    const copied = await this.options.clipboard.write(
-      this.view.state.sliceDoc(selection.from, selection.to)
-    );
-    if (!copied || !selectionMatches(this.view, source, selection.anchor, selection.head)) return;
-    this.replaceSelection("", "delete.cut");
-  }
-
-  private async paste(eventText?: string): Promise<void> {
-    const source = this.source;
-    const selection = this.view.state.selection.main;
-    const result = await this.options.clipboard.read("code");
-    if (!selectionMatches(this.view, source, selection.anchor, selection.head)) return;
-    if (!result) {
-      const text = eventText ?? await browserClipboardText();
-      if (text) this.replaceSelection(text, "input.paste");
-      return;
-    }
-    let text: string;
-    try {
-      // Browser paste data is useful as a fallback, but the host clipboard is
-      // authoritative when it can recover a structured workspace reference.
-      text = result.codeReference || result.fileReferences?.length
-        ? this.pasteText(source, selection.from, selection.to, result)
-        : eventText || result.text || await browserClipboardText() || "";
-    } catch (error) {
-      this.options.onError(error);
-      return;
-    }
-    if (text) this.replaceSelection(text, "input.paste");
-  }
-
-  /** Ctrl+Shift+V deliberately bypasses Dext's selection-to-reference lookup
-   * so the exact clipboard text lands in the composer. */
-  private async pasteRaw(eventText?: string): Promise<void> {
-    const source = this.source;
-    const selection = this.view.state.selection.main;
-    const result = await this.options.clipboard.read("text");
-    if (!selectionMatches(this.view, source, selection.anchor, selection.head)) return;
-    const text = eventText || result?.text || await browserClipboardText() || "";
-    if (text) this.replaceSelection(text, "input.paste");
-  }
-
-  private pasteText(
-    source: string,
-    selectionStart: number,
-    selectionEnd: number,
-    result: ClipboardReadResult
-  ): string {
-    return codeReferencePasteText(source, selectionStart, selectionEnd, result);
-  }
-
-  private replaceSelection(text: string, userEvent: string): void {
-    // Clipboard text may use Windows-style CRLF (or legacy CR) line endings.
-    // CodeMirror documents use `\n` as their line separator; normalize before
-    // calculating the new caret position so pasted multiline text remains
-    // multiline and the selection does not land at an incorrect offset.
-    const normalizedText = text.replace(/\r\n?/g, "\n");
-    const selection = this.view.state.selection.main;
-    this.view.dispatch({
-      changes: { from: selection.from, to: selection.to, insert: normalizedText },
-      selection: { anchor: selection.from + normalizedText.length },
-      scrollIntoView: true,
-      userEvent
+  setMode(mode: ComposerEditorMode): void {
+    const enabled = mode === "code";
+    if (enabled === this.languageEnabled) return;
+    this.dropRevision++; this.dismissAssistance(); this.languageEnabled = enabled;
+    monaco.editor.setModelLanguage(this.model, enabled ? "python" : "plaintext");
+    // Chat modes are plain text and use the compact Cursor-like surface;
+    // Code keeps the full editor gutter and language affordances.
+    this.view.updateOptions({
+      wordWrap: enabled ? "off" : "on",
+      lineNumbers: enabled ? "on" : "off",
+      renderLineHighlight: enabled ? "all" : "none",
+      parameterHints: { enabled },
+      renderValidationDecorations: enabled ? "on" : "off"
     });
-    this.focus();
+    this.chatEnter.set(!enabled && this.submitOnEnter); this.scheduleDiagnostics();
   }
+  refreshLanguageState(): void { this.dropRevision++; this.scheduleDiagnostics(); }
+  private scheduleDiagnostics(): void { if (this.diagnosticsTimer) clearTimeout(this.diagnosticsTimer); this.diagnosticsTimer = setTimeout(() => { void this.updateDiagnostics(); }, 120); }
+  private async updateDiagnostics(): Promise<void> {
+    if (this.destroyed) return;
+    const source = this.source, revision = this.dropRevision;
+    const result = this.languageEnabled && source.trim() ? await this.options.broker.request(source, source.length, undefined, "diagnostics") : undefined;
+    if (this.destroyed || revision !== this.dropRevision) return;
+    const diagnostics = result?.diagnostics ?? [];
+    monaco.editor.setModelMarkers(this.model, "dext", diagnostics.map(d => ({ ...this.sourceRange(d.from ?? d.offset, d.to ?? d.offset + 1),
+      message: d.message, severity: d.severity === "error" ? monaco.MarkerSeverity.Error : monaco.MarkerSeverity.Warning })));
+    this.options.onDiagnosticsChanged({ errors: diagnostics.filter(d => d.severity === "error").length, warnings: diagnostics.filter(d => d.severity === "warning").length });
+    this.options.onInputKindChanged(result?.inputKind ?? (source.trim() ? "workflow" : "empty"));
+  }
+  goToFirstDiagnostic(): boolean {
+    const marker = monaco.editor.getModelMarkers({ resource: this.model.uri, owner: "dext" })[0]; if (!marker) return false;
+    this.view.setSelection(marker); this.view.revealRangeInCenterIfOutsideViewport(marker); this.focus(); return true;
+  }
+  destroy(): void { this.destroyed = true; this.dropRevision++; if (this.diagnosticsTimer) clearTimeout(this.diagnosticsTimer);
+    this.removeFileDropListeners?.(); for (const item of this.disposables) item.dispose(); this.view.dispose(); this.model.dispose(); }
 }

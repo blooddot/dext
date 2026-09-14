@@ -4,7 +4,7 @@ import {
   inputReferenceProjections,
   normalizeInputReferenceSource
 } from "../src/core/fileReference.js";
-import { inputReferenceProjectionDecorations } from "../src/webview/fileReferenceDecorations.js";
+import { ReferenceProjection } from "../src/webview/monacoReferences.js";
 import { fileReferenceRemovalEdit } from "../src/webview/fileReferenceDecorations.js";
 
 describe("@ file reference decorations", () => {
@@ -14,9 +14,8 @@ describe("@ file reference decorations", () => {
     const projection = inputReferenceProjections(source);
     expect(projection).toMatchObject([{ reference: { kind: "file", payload: "src/pathx.py#L55,1-L66,32" } }]);
     const ranges: Array<{ from: number; to: number }> = [];
-    inputReferenceProjectionDecorations(source, () => {}).between(0, source.length, (from, to) => {
-      ranges.push({ from, to });
-    });
+    const model = new ReferenceProjection();
+    for (const ref of model.references(model.encode(source))) ranges.push({ from: ref.sourceFrom, to: ref.sourceTo });
     expect(ranges).toEqual([{ from: source.indexOf(token), to: source.indexOf(token) + token.length }]);
     expect(fileReferenceRemovalEdit(source, projection[0]!)).toEqual({
       from: source.indexOf(" " + token),
@@ -31,9 +30,8 @@ describe("@ file reference decorations", () => {
     // second represents a space the user typed after the reference.
     const source = `agent(input="${token}  后续")`;
     const ranges: Array<{ from: number; to: number }> = [];
-    inputReferenceProjectionDecorations(source, () => {}).between(0, source.length, (from, to) => {
-      ranges.push({ from, to });
-    });
+    const model = new ReferenceProjection();
+    for (const ref of model.references(model.encode(source))) ranges.push({ from: ref.sourceFrom, to: ref.sourceTo });
     expect(ranges).toEqual([{
       from: source.indexOf(token),
       to: source.indexOf(token) + token.length
@@ -49,9 +47,8 @@ describe("@ file reference decorations", () => {
     ];
     const source = `agent(input="${references.join(" ")}")`;
     const ranges: Array<{ from: number; to: number }> = [];
-    inputReferenceProjectionDecorations(source, () => {}).between(0, source.length, (from, to) => {
-      ranges.push({ from, to });
-    });
+    const model = new ReferenceProjection();
+    for (const ref of model.references(model.encode(source))) ranges.push({ from: ref.sourceFrom, to: ref.sourceTo });
     expect(ranges).toEqual(references.map((reference) => ({
       from: source.indexOf(reference),
       to: source.indexOf(reference) + reference.length
@@ -85,6 +82,13 @@ describe("@ file reference decorations", () => {
       expression: "@src/components/",
       payload: "src/components"
     });
+  });
+
+  it("recognizes root directories without treating ordinary mentions as references", () => {
+    const references = atReferenceOccurrences('@scripts/ @src/ @目录/ @mention @../secret/');
+    expect(references.map(ref => [ref.kind, ref.expression, ref.payload])).toEqual([
+      ['dir', '@scripts/', 'scripts'], ['dir', '@src/', 'src'], ['dir', '@目录/', '目录']
+    ]);
   });
 
   it("removes an initial chip and its separator without leaving a leading blank", () => {

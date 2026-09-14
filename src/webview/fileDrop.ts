@@ -1,6 +1,6 @@
 const uriListTypes = ["application/vnd.code.uri-list", "text/uri-list"];
 
-/** Capture on the whole composer before CodeMirror filters widget events or
+/** Capture on the whole composer before Monaco filters widget events or
  * consumes drops. Its domEventHandlers only listen on the editable content. */
 export function bindFileDropTarget(target: HTMLElement, handlers: {
   dragover(event: DragEvent): boolean;
@@ -47,9 +47,11 @@ function paths(text: string, uriList = false): string[] {
     ? [...new Set(lines)] : [];
 }
 
-/** During dragover the browser exposes types, but keeps payloads protected. */
-export function isFileDrag(event: Pick<DragEvent, "shiftKey" | "dataTransfer">): boolean {
-  return event.shiftKey && !!event.dataTransfer && [...event.dataTransfer.types].some((type) =>
+/** During dragover the browser exposes types, but keeps payloads protected.
+ * A path-bearing transfer is unambiguously a file drop; ordinary text drops
+ * do not match these types and remain available to Monaco. */
+export function isFileDrag(event: Pick<DragEvent, "dataTransfer">): boolean {
+  return !!event.dataTransfer && [...event.dataTransfer.types].some((type) =>
     [...uriListTypes, "resourceurls", "text/plain", "files"].includes(type.toLowerCase()));
 }
 

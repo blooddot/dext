@@ -5,48 +5,34 @@ import { compileWorkflow } from "../src/core/workflow.js";
 import { DextCodeEditor } from "../src/webview/codeEditor.js";
 import { inputReferenceProjections } from "../src/webview/fileReferenceDecorations.js";
 
-interface EditorChange {
-  from: number;
-  to: number;
-  insert: string;
-}
-
+vi.mock('../src/webview/monacoEnvironment.js', () => ({ monaco: {
+  Range: { fromPositions: (from: {column:number}, to: {column:number}) => ({ startColumn:from.column,endColumn:to.column }) },
+  editor:{EndOfLineSequence:{LF:0}}
+} }));
+import { ReferenceProjection } from '../src/webview/monacoReferences.js';
 function dropHarness(source: string, selection = 0) {
-  let current = source;
-  const focus = vi.fn();
-  const document = {
-    get length() { return current.length; },
-    toString: () => current
-  };
-  const view = {
-    dom: { classList: { toggle: vi.fn() } },
-    posAtCoords: vi.fn(() => selection),
-    destroy: vi.fn(),
-    state: {
-      selection: { main: { from: selection, to: selection, head: selection } },
-      doc: document
-    },
-    dispatch(spec: unknown) {
-      const change = (spec as { changes: EditorChange }).changes;
-      current = `${current.slice(0, change.from)}${change.insert}${current.slice(change.to)}`;
-    }
-  };
-  const editor = Object.create(DextCodeEditor.prototype) as DextCodeEditor;
-  Object.defineProperties(editor, {
-    view: { value: view },
-    focus: { value: focus }
-  });
-  Object.assign(editor, { dropRevision: 0 });
-  return { editor, focus, toggle: view.dom.classList.toggle, posAtCoords: view.posAtCoords };
+  const projection = new ReferenceProjection(); let current = projection.encode(source);
+  const focus = vi.fn(), toggle=vi.fn();
+  const position=(offset:number)=>({lineNumber:1,column:offset+1});
+  const getTargetAtClientPoint=vi.fn(()=>({position:position(selection)}));
+  const model={getValue:()=>current,setValue:(value:string)=>{current=value;},setEOL:vi.fn(),dispose:vi.fn(),getPositionAt:position,getOffsetAt:(p:{column:number})=>p.column-1};
+  const view={getTargetAtClientPoint,dispose:vi.fn(),trigger:vi.fn(),pushUndoStop:vi.fn(),setPosition:vi.fn(),revealPositionInCenterIfOutsideViewport:vi.fn(),getPosition:()=>position(selection),
+    getSelection:()=>({getStartPosition:()=>position(selection),getEndPosition:()=>position(selection)}),
+    executeEdits:(_source:string,edits:Array<{range:{startColumn:number;endColumn:number};text:string}>)=>{
+      for(const edit of edits)current=current.slice(0,edit.range.startColumn-1)+edit.text+current.slice(edit.range.endColumn-1);
+    }};
+  const editor=Object.create(DextCodeEditor.prototype) as DextCodeEditor;
+  Object.assign(editor,{view,model,projection,focus,dropRevision:0,disposables:[],scheduleDiagnostics:vi.fn(),renderReferences:vi.fn(),options:{parent:{classList:{toggle}}}});
+  return {editor,focus,toggle,posAtCoords:getTargetAtClientPoint};
 }
 
-describe("CodeMirror file-reference drop", () => {
+describe("Monaco file-reference drop", () => {
   function eventHarness(source = "解释代码", selection = 2) {
     const { editor, focus, toggle, posAtCoords } = dropHarness(source, selection);
     const resolveDroppedFiles = vi.fn<(paths: string[]) => Promise<string[]>>()
       .mockResolvedValue(["@src/a.ts", "@src/b.ts"]);
     const onError = vi.fn();
-    Object.assign(editor, { options: { resolveDroppedFiles, onError } });
+    Object.assign(editor, { options: { parent: { classList: { toggle } }, resolveDroppedFiles, onError } });
     const event = {
       shiftKey: true, clientX: 20, clientY: 30,
       preventDefault: vi.fn(), stopPropagation: vi.fn(),
@@ -62,7 +48,7 @@ describe("CodeMirror file-reference drop", () => {
     return { editor, focus, event, handlers, resolveDroppedFiles, onError, toggle, posAtCoords };
   }
 
-  it("accepts Shift dragover and inserts multiple refs at the drop coordinates", async () => {
+  it("accepts a file dragover without Shift and inserts multiple refs at the drop coordinates", async () => {
     const { editor, event, handlers, resolveDroppedFiles, toggle, posAtCoords } = eventHarness();
     expect(handlers.fileDragOver(event)).toBe(true);
     expect(event.dataTransfer.dropEffect).toBe("copy");
@@ -74,16 +60,14 @@ describe("CodeMirror file-reference drop", () => {
     expect(resolveDroppedFiles).toHaveBeenCalledWith(["file:///repo/src/a.ts", "file:///repo/src/b.ts"]);
     await Promise.resolve();
     expect(editor.source).toContain("解释 @src/a.ts @src/b.ts 代码");
-    expect(posAtCoords).toHaveBeenCalledWith({ x: 20, y: 30 });
+    expect(posAtCoords).toHaveBeenCalledWith(20, 30);
     expect(inputReferenceProjections(editor.source)).toHaveLength(2);
     expect(toggle).toHaveBeenLastCalledWith("file-drop-active", false);
   });
 
-  it("leaves non-Shift drags and ordinary text to CodeMirror", () => {
+  it("leaves ordinary text drags to Monaco", () => {
     const { event, handlers, resolveDroppedFiles } = eventHarness();
     event.shiftKey = false;
-    expect(handlers.fileDrop(event)).toBe(false);
-    event.shiftKey = true;
     event.dataTransfer.types = ["text/plain"];
     event.dataTransfer.getData.mockReturnValue("ordinary text");
     expect(handlers.fileDrop(event)).toBe(false);

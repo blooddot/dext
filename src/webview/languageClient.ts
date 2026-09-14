@@ -1,4 +1,5 @@
 import type { WebviewRequest, WebviewResponse } from "../webviewProtocol.js";
+import type { InputDefinition } from "../webviewProtocol.js";
 
 export type LanguageResponse = Extract<WebviewResponse, { type: "language" }>;
 
@@ -7,7 +8,7 @@ export interface CancellationLike {
   onCancellationRequested(listener: () => void): { dispose(): void };
 }
 
-export type LanguageRequestPurpose = "all" | "completion" | "diagnostics" | "inputKind" | "signature";
+export type LanguageRequestPurpose = "all" | "completion" | "diagnostics" | "inputKind" | "signature" | "hover";
 
 interface PendingRequest {
   resolve(response: LanguageResponse | undefined): void;
@@ -17,6 +18,19 @@ interface PendingRequest {
 export class LanguageRequestBroker {
   private requestId = 0;
   private readonly pending = new Map<number, PendingRequest>();
+  private readonly definitions = new Map<number, (target: InputDefinition | undefined) => void>();
+
+  definition(source: string, cursor: number, cancellation?: CancellationLike): Promise<InputDefinition | undefined> {
+    if (cancellation?.isCancellationRequested) return Promise.resolve(undefined);
+    const requestId = ++this.requestId;
+    return new Promise(resolve => {
+      const listener = cancellation?.onCancellationRequested(() => this.definitions.get(requestId)?.(undefined));
+      this.definitions.set(requestId, target => { this.definitions.delete(requestId); listener?.dispose(); resolve(target); });
+      this.post({ type: "inputDefinition", requestId, source, cursor });
+    });
+  }
+
+  openDefinition(source: string, cursor: number): void { this.post({ type: "openInputDefinition", source, cursor }); }
 
   constructor(private readonly post: (request: WebviewRequest) => void) {}
 
@@ -42,6 +56,7 @@ export class LanguageRequestBroker {
   }
 
   accept(message: WebviewResponse): boolean {
+    if (message.type === "inputDefinition") { this.definitions.get(message.requestId)?.(message.target); this.definitions.delete(message.requestId); return true; }
     if (message.type !== "language") return false;
     const pending = this.pending.get(message.requestId);
     if (!pending) return false;
@@ -52,6 +67,8 @@ export class LanguageRequestBroker {
   }
 
   dispose(): void {
+    for (const resolve of this.definitions.values()) resolve(undefined);
+    this.definitions.clear();
     for (const pending of this.pending.values()) {
       pending.cancellation?.dispose();
       pending.resolve(undefined);

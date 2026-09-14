@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+vi.mock('../src/webview/monacoEnvironment.js', () => ({ monaco: {} }));
 import { pasteEventText } from "../src/webview/codeEditor.js";
 
 describe("editor paste events", () => {

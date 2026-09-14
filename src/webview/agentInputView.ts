@@ -9,7 +9,7 @@ export interface InteractionDraftStore {
   set(key: string, draft: UiFormAnswers): void;
 }
 interface Card {
-  id: string; status: string; form: UiFormDefinition; answers?: UiFormAnswers;
+  id: string; status: string; form: UiFormDefinition; answers?: UiFormAnswers; action?: string | undefined;
   element: HTMLElement; control?: InteractionForm; dialog?: InteractionDialog;
   send: (result: UiFormResult) => void;
 }
@@ -38,7 +38,7 @@ export class AgentInputView {
       element: document.createElement("section"), send: (result) => this.respond(state.id, agentFormAnswers(result)) });
   }
   updateUi(state: UiInteractionState): void {
-    this.put({ id: `ui:${state.requestId}`, status: state.status, form: state.form, ...(state.answers ? { answers: state.answers } : {}),
+    this.put({ id: `ui:${state.requestId}`, status: state.status, form: state.form, action: state.action, ...(state.answers ? { answers: state.answers } : {}),
       element: document.createElement("section"), send: (result) => this.respondUi(state, result) });
   }
   private put(card: Card): void {
@@ -56,6 +56,14 @@ export class AgentInputView {
     for (const card of this.cards.values()) if (card.status === "waiting") this.render(card);
   }
   suspend(): void { for (const card of this.cards.values()) { card.control?.suspend(); card.dialog?.close(); } }
+  focusRequest(kind: "agent" | "ui", requestId: string): boolean {
+    const card = this.cards.get(`${kind}:${requestId}`);
+    if (!this.running || card?.status !== "waiting" || !card.control) return false;
+    card.element.scrollIntoView({ block: "center" });
+    card.dialog?.open();
+    card.control.element.querySelector<HTMLElement>("input:not(:disabled), textarea:not(:disabled), select:not(:disabled), button:not(:disabled)")?.focus({ preventScroll: true });
+    return true;
+  }
   resume(): void { if (this.running) for (const card of this.cards.values()) card.dialog?.open(); }
   private render(card: Card): void {
     card.dialog?.close(); card.control?.disable();
@@ -64,7 +72,12 @@ export class AgentInputView {
     const key = `${this.scope}:${card.id}`;
     if (this.running && card.status === "waiting") {
       const save = (draft: UiFormAnswers): void => { this.drafts.set(key, draft); this.store?.set(key, draft); };
-      const form = new InteractionForm(card.form, (result) => { card.send(result); card.dialog?.close(); }, this.drafts.get(key) ?? this.store?.get(key) ?? {}, save);
+      const form = new InteractionForm(card.form, (result) => {
+        card.send(result);
+        const answers = { ...result.answers };
+        for (const field of card.form.fields) if (field.secret) delete answers[field.id];
+        this.put({ ...card, status: result.status, answers, action: result.action, element: document.createElement("section") });
+      }, this.drafts.get(key) ?? this.store?.get(key) ?? {}, save);
       card.control = form;
       if (card.form.presentation === "dialog") {
         const dialog = new InteractionDialog(form); card.dialog = dialog;
@@ -80,7 +93,8 @@ export class AgentInputView {
       return;
     }
     card.element.onkeydown = null;
-    const title = document.createElement("strong"); title.textContent = `${card.form.title} — ${card.status === "submitted" ? "Submitted" : "Closed"}`;
+    const action = card.form.actions.find((action) => action.id === card.action);
+    const title = document.createElement("strong"); title.textContent = `${card.form.title} — ${card.status === "submitted" ? "Submitted" : "Closed"}${action ? ` (${action.label})` : ""}`;
     card.element.append(title);
     for (const field of card.form.fields) {
       const answer = document.createElement("p");

@@ -80,12 +80,11 @@ describe("file drag payloads", () => {
   it.each(["explain this", "src/a.ts", "https://example.com", "C:\\repo\\a.ts\nexplain this"])("preserves ordinary text and links: %s", (text) => {
     expect(droppedFilePaths(transfer({ "text/plain": text }))).toEqual([]);
   });
-  it("reads only types during Shift dragover while payloads are protected", () => {
+  it("recognizes file dragover types without reading protected payloads", () => {
     const data = transfer({ "text/uri-list": "file:///repo/a.ts" });
     const getData = vi.fn(() => { throw new Error("protected"); });
     data.getData = getData;
-    expect(isFileDrag({ shiftKey: true, dataTransfer: data })).toBe(true);
-    expect(isFileDrag({ shiftKey: false, dataTransfer: data })).toBe(false);
+    expect(isFileDrag({ dataTransfer: data })).toBe(true);
     expect(getData).not.toHaveBeenCalled();
   });
 });
