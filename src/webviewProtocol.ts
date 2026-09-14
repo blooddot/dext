@@ -1,3 +1,4 @@
+import type { ResourceSession } from "./resourceSession.js";
 import { uiFormResultSchema } from "./core/uiForm.js";
 import { z } from "zod";
 import type {
@@ -14,12 +15,14 @@ import type { McpDiscoveredTool, McpServerConfig } from "./core/mcpRegistry.js";
 
 export const webviewRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ready") }),
+  z.object({ type: z.literal("inputDefinition"), requestId: z.number().int().nonnegative(), source: z.string(), cursor: z.number().int().nonnegative() }),
+  z.object({ type: z.literal("openInputDefinition"), source: z.string(), cursor: z.number().int().nonnegative() }),
   z.object({
     type: z.literal("language"),
     requestId: z.number().int().nonnegative(),
     source: z.string(),
     cursor: z.number().int().nonnegative(),
-    purpose: z.enum(["all", "completion", "diagnostics", "inputKind", "signature"]).optional()
+    purpose: z.enum(["all", "completion", "diagnostics", "inputKind", "signature", "hover"]).optional()
   }),
   z.object({
     type: z.literal("executeInput"),
@@ -88,15 +91,10 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("openMcp") }),
   z.object({ type: z.literal("addMcp") }),
   z.object({ type: z.literal("openResourceCreator") }),
-  z.object({
-    type: z.literal("draftResource"),
-    requestId: z.string().min(1).max(128),
-    sessionId: z.string().min(1).max(128),
-    resourceType: z.enum(["api", "mcp", "rule", "skill"]),
-    scope: z.enum(["project", "global"]),
-    input: z.string().min(1).max(80_000)
-  }),
-  z.object({ type: z.literal("saveResource"), draftId: z.string().min(1).max(128) }),
+  z.object({ type: z.literal("resourceOptions"), sessionId: z.string().min(1), resourceType: z.enum(["api", "mcp", "rule", "skill"]), scope: z.enum(["project", "global"]) }),
+  z.object({ type: z.literal("chooseResource"), sessionId: z.string().min(1) }),
+  z.object({ type: z.literal("previewResource"), sessionId: z.string().min(1) }),
+  z.object({ type: z.literal("saveResource"), sessionId: z.string().min(1) }),
   z.object({ type: z.literal("generateMcp"), requestId: z.string().min(1), document: z.string().min(1).max(80000) }),
   z.object({
     type: z.literal("createMcp"),
@@ -176,15 +174,6 @@ export interface GlobalResources {
   skills: GlobalResourceItem[];
 }
 
-export type ResourceKind = "api" | "mcp" | "rule" | "skill";
-export interface ResourceDraftPreview {
-  id: string;
-  type: ResourceKind;
-  scope: "project" | "global";
-  name: string;
-  content: string;
-}
-
 export interface SidebarState {
   theme?: EditorTokenTheme;
   methods: Pick<
@@ -201,9 +190,11 @@ export interface SidebarState {
   mcpServers: McpServerConfig[];
   globalDiagnostics: string[];
   globalResources?: GlobalResources;
+  resourceRoots?: { project?: string; global: string };
 }
 
 export type WebviewResponse =
+  | { type: "inputDefinition"; requestId: number; target?: InputDefinition }
   | { type: "state"; state: SidebarState }
   | {
     type: "language";
@@ -223,13 +214,12 @@ export type WebviewResponse =
     selection: AgentSelection;
     planPath?: string;
     planStatus: PlanStatus;
+    resource?: ResourceSession;
     switchId?: number;
     hostInitiated?: true;
   }
   | { type: "planContext"; path?: string; status: PlanStatus }
-  | { type: "resourceCreatorOpened" }
-  | { type: "resourceDraft"; requestId: string; draft: ResourceDraftPreview }
-  | { type: "resourceSaved"; draftId: string; message: string }
+  | { type: "resourceContext"; sessionId: string; resource: ResourceSession; busy?: boolean }
   | {
     type: "conversations";
     sessions: ConversationSummary[];
@@ -239,6 +229,7 @@ export type WebviewResponse =
     selection?: AgentSelection;
     planPath?: string;
     planStatus?: PlanStatus;
+    resource?: ResourceSession;
     switchId?: number;
     hostInitiated?: true;
   }
@@ -262,6 +253,7 @@ export type WebviewResponse =
     message: string;
   }
   | { type: "agentEvent"; sessionId: string; event: AgentStreamEvent }
+  | { type: "focusAgentInput"; sessionId: string; turnId: string; requestId: string; kind: "agent" | "ui" }
   | { type: "agentEvents"; sessionId: string; events: AgentStreamEvent[]; switchId?: number }
   | { type: "executing"; sessionId: string; value: boolean; turnId: string; source?: string; mode?: "agent" | "ask" | "plan" | "code"; planPath?: string; executePlan?: boolean; startedAt?: number; switchId?: number; hostInitiated?: true }
   | { type: "inputKind"; kind: "empty" | "workflow" | "invalid" }
@@ -283,5 +275,13 @@ export type WebviewResponse =
   | { type: "focusInput" }
   | { type: "triggerSuggest" }
   | { type: "triggerParameterHints" }
-  | { type: "error"; message: string }
+  | { type: "error"; message: string; sessionId?: string }
   | { type: "focusEditor" };
+
+export interface InputDefinition {
+  uri: string;
+  content?: string;
+  originFrom: number;
+  originTo: number;
+  range: { startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number };
+}

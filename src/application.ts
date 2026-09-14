@@ -29,14 +29,7 @@ import { DEFAULT_AGENT_TIMEOUT_MS, DEFAULT_AGENT_IDLE_TIMEOUT_MS, MAX_AGENT_TIME
 import { listHarnessPresets } from "./core/harnessPresets.js";
 import { SkillCatalog } from "./core/skillCatalog.js";
 
-export type ResourceKind = "api" | "mcp" | "rule" | "skill";
-export interface ResourceDraft {
-  type: ResourceKind;
-  scope: "project" | "global";
-  name: string;
-  content: string;
-  mcpServer?: McpServerConfig;
-}
+import { RESOURCE_DIRECTORIES, resourceFileName, resourcePathSegments, resourcePrompt, type ResourceSession, type ResourceDocument, type ResourceTarget, type ResourceKind, type ResourceScope } from "./resourceSession.js";
 import { McpToolRegistry, type McpServerConfig, type McpToolConfig, type McpDiscoveredTool } from "./core/mcpRegistry.js";
 import { McpAccessTokenStore } from "./core/mcpSecrets.js";
 import { parseMcpManifest } from "./core/mcpManifest.js";
@@ -75,6 +68,7 @@ export class DextApplication {
   private workspaceRoot = process.cwd();
   private workspaceUri: vscode.Uri | undefined;
   private workspaceTrusted = false;
+  private resourceWrite: Promise<void> = Promise.resolve();
   private globalResources: GlobalResources = { apis: [], mcps: [], rules: [], skills: [] };
   private globalDiagnostics: string[] = [];
   readonly skills = new SkillCatalog();
@@ -422,6 +416,10 @@ export class DextApplication {
       mcpServers: this.mcp.listServers(),
       globalDiagnostics: this.globalDiagnostics,
       globalResources: this.globalResources,
+      resourceRoots: {
+        global: this.storage.globalStorageUri.fsPath,
+        ...(this.workspaceTrusted && vscode.workspace.workspaceFolders?.[0] ? { project: vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri, ".dext").fsPath } : {})
+      },
       agentProfiles: this.agentProfiles(),
       agentSelection: this.agents.currentSelection(),
       settings: this.webviewSettings()
@@ -558,69 +556,119 @@ export class DextApplication {
     throw new Error("The Agent returned an unsupported MCP configuration shape.");
   }
 
-  async draftResource(type: ResourceKind, scope: "project" | "global", input: string, metadata: Readonly<ExecutionMetadata> = {}): Promise<ResourceDraft> {
-    if (!input.trim()) throw new Error("Describe the resource to create.");
-    if (scope === "project" && !this.workspaceTrusted) throw new Error("Project resource creation requires a trusted local workspace.");
-    if (type === "mcp") {
-      const server = await this.generateMcpManifest(input, metadata);
-      return { type, scope, name: server.name, content: `${JSON.stringify(server, null, 2)}\n`, mcpServer: server };
+  resourceRoot(type: ResourceKind, scope: ResourceScope): vscode.Uri {
+    if (scope === "global") return vscode.Uri.joinPath(this.storage.globalStorageUri, RESOURCE_DIRECTORIES[type]);
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    if (!folder || folder.uri.scheme !== "file" || !this.workspaceTrusted) throw new Error("Project resources require a trusted local workspace.");
+    return vscode.Uri.joinPath(folder.uri, ".dext", RESOURCE_DIRECTORIES[type]);
+  }
+
+  async listResources(type: ResourceKind): Promise<Array<{ name: string; path: string; scope: ResourceScope }>> {
+    const items: Array<{ name: string; path: string; scope: ResourceScope }> = [];
+    for (const scope of ["project", "global"] as const) {
+      if (scope === "project" && (!vscode.workspace.workspaceFolders?.[0] || !this.workspaceTrusted)) continue;
+      const root = this.resourceRoot(type, scope);
+      const visit = async (directory: vscode.Uri, prefix = "", depth = 0): Promise<void> => {
+        if (depth > 12 || items.length >= 2000) return;
+        let entries: [string, vscode.FileType][];
+        try { entries = await vscode.workspace.fs.readDirectory(directory); }
+        catch (error) { if (error instanceof vscode.FileSystemError && error.code === "FileNotFound") return; throw error; }
+        for (const [name, kind] of entries) {
+          const path = `${prefix}${name}`;
+          if (kind === vscode.FileType.Directory && type !== "mcp") await visit(vscode.Uri.joinPath(directory, name), `${path}/`, depth + 1);
+          if (kind !== vscode.FileType.File) continue;
+          try { resourcePathSegments(type, path); } catch { continue; }
+          const label = type === "api" ? path.slice(0, -3).replaceAll("/", ".") : type === "skill" ? path.split("/").at(-2)! : name.replace(/\.(?:md|jsonc?)$/, "");
+          items.push({ name: label, path, scope });
+        }
+      };
+      await visit(root);
     }
-    const response = await this.runtime.executeConversation("ask", [
-      type === "api" ? "Generate one Dext custom API file." : type === "rule" ? "Generate one Dext rule markdown file." : "Generate one Dext SKILL.md package.",
-      "Return exactly one JSON object with fields name and content, with no markdown fences or commentary.",
-      type === "api"
-        ? "name must be a dotted API id using letters, numbers, underscores, and dots; content must be valid Dext .dx containing def main(...)."
-        : type === "rule"
-          ? "name must be a safe markdown filename without path separators; content must be concise policy markdown."
-          : "name must be a safe skill directory name without path separators; content must be a complete SKILL.md.",
-      "The resource should implement this request:", input.trim()
-    ].join("\n"), metadata);
+    return items.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  async readResource(type: ResourceKind, scope: ResourceScope, path: string, name: string): Promise<ResourceTarget> {
+    const uri = vscode.Uri.joinPath(this.resourceRoot(type, scope), ...resourcePathSegments(type, path));
+    const content = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
+    if (content.length > 200_000) throw new Error("This resource is too large to edit in a conversation.");
+    // MCP manifest names can differ from their filenames.
+    const manifest = type === "mcp" ? parseMcpManifest(content, path) : undefined;
+    return { name: manifest?.server?.name ?? name, path, content };
+  }
+
+  private async validateResource(type: ResourceKind, draft: ResourceDocument): Promise<void> {
+    if (!draft.content.trim() || draft.content.length > 200_000) throw new Error("The resource draft is empty or too large.");
+    if (type === "api") {
+      if (!draft.content.includes("def main")) throw new Error("The API must define main(...).");
+      const registry = new MethodRegistry();
+      for (const method of this.registry.list()) {
+        if (method.id === draft.name) {
+          if (method.source === "builtin") throw new Error(`API '${draft.name}' is built in. Choose another name.`);
+        } else registry.register(method, method.source);
+      }
+      const root = "/resource-draft";
+      const path = `${root}/${resourceFileName("api", draft.name)}`;
+      const loaded = await loadCustomApis(true, [root], () => Promise.resolve([path]), () => Promise.resolve(draft.content), registry);
+      if (!loaded.plans.has(draft.name) || loaded.diagnostics.length) throw new Error(`Invalid API source: ${loaded.diagnostics.join("\n")}`);
+    } else if (type === "mcp") {
+      const manifest = parseMcpManifest(draft.content, draft.name);
+      const server = manifest.server;
+      if (!server || manifest.diagnostics.length) throw new Error(`Invalid MCP manifest: ${manifest.diagnostics.join("\n")}`);
+      if (server.name !== draft.name) throw new Error("The MCP manifest name must match the resource name.");
+      const diagnostics = new McpToolRegistry().setServers([server]);
+      if (diagnostics.length) throw new Error(`Invalid MCP configuration: ${diagnostics.join("\n")}`);
+    }
+  }
+
+  async draftResource(resource: ResourceSession, input: string, metadata: Readonly<ExecutionMetadata> = {}): Promise<{ draft: ResourceDocument; response: InputExecutionResponse }> {
+    if (!input.trim()) throw new Error("Describe the resource or the changes to make.");
+    this.resourceRoot(resource.type, resource.scope);
+    const response = await this.runtime.executeConversation("ask", resourcePrompt(resource, this.storage.attachmentPrompt(input)), metadata);
     if (response.result.kind !== "ask") throw new Error("The selected Agent did not return resource text.");
     let value: unknown;
     try { value = JSON.parse(response.result.text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim()); }
-    catch { throw new Error("The Agent returned invalid resource JSON."); }
+    catch { throw new Error("The Agent returned invalid resource JSON. Refine the request and try again."); }
     if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("The Agent returned an invalid resource object.");
     const candidate = value as Record<string, unknown>;
-    const name = typeof candidate.name === "string" ? candidate.name.trim() : "";
-    const content = typeof candidate.content === "string" ? candidate.content.trim() : "";
-    if (type === "api") {
-      if (!/^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)*$/.test(name) || !content.includes("def main")) throw new Error("The Agent returned an unsupported API shape.");
-      const compiled = compileWorkflow(content, this.registry, { allowImports: true, aliases: parseWorkflowImports(content), customApiIds: this.customApiIds, requireCustomApiImports: false });
-      if (!compiled.program || compiled.diagnostics.some((item) => item.severity === "error")) throw new Error(`The Agent returned invalid Dext API source: ${compiled.diagnostics.map((item) => item.message).join("\\n")}`);
-    } else if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(name) || !content) throw new Error("The Agent returned an unsupported resource shape.");
-    return { type, scope, name, content };
+    if (typeof candidate.name !== "string" || typeof candidate.content !== "string") throw new Error("The resource needs a name and content.");
+    const draft = { name: resource.target?.name ?? candidate.name.trim(), content: candidate.content };
+    if (!resource.target) resourceFileName(resource.type, draft.name);
+    await this.validateResource(resource.type, draft);
+    // Keep generated JSON out of the final conversation response; show the actual document.
+    const fence = "`".repeat(Math.max(3, ...Array.from(draft.content.matchAll(/`+/g), (match) => match[0].length + 1)));
+    response.result.text = `Draft: ${draft.name}\n\n${fence}${resource.type === "api" ? "python" : resource.type === "mcp" ? "jsonc" : "markdown"}\n${draft.content}\n${fence}\n\nReview the draft, then save or describe further changes.`;
+    return { draft, response: { kind: "workflow", executions: [response] } };
   }
 
-  async saveResource(draft: ResourceDraft): Promise<string> {
-    const { type, scope, name, content } = draft;
-    if (scope === "project" && !this.workspaceTrusted) throw new Error("Project resource creation requires a trusted local workspace.");
-    if (type === "mcp") {
-      if (!draft.mcpServer) throw new Error("The MCP draft is no longer available. Generate it again.");
-      await this.createMcpManifest(draft.mcpServer, scope);
-      return `Created MCP configuration '${draft.mcpServer.name}' (${scope}).`;
+  saveResource(resource: ResourceSession): Promise<ResourceTarget> {
+    const snapshot = structuredClone(resource);
+    const operation = this.resourceWrite.then(() => this.writeResource(snapshot));
+    this.resourceWrite = operation.then(() => undefined, () => undefined);
+    return operation;
+  }
+
+  private async writeResource(resource: ResourceSession): Promise<ResourceTarget> {
+    if (!resource.draft) throw new Error("Generate a resource draft first.");
+    const { type, scope, draft, target } = resource;
+    await this.validateResource(type, draft);
+    const path = target?.path ?? resourceFileName(type, draft.name);
+    const root = this.resourceRoot(type, scope);
+    const segments = resourcePathSegments(type, path);
+    const uri = vscode.Uri.joinPath(root, ...segments);
+    if ((vscode.workspace.textDocuments ?? []).some((document) => document.uri.toString() === uri.toString() && document.isDirty)) {
+      throw new Error("This resource has unsaved editor changes. Save them and select the resource again before updating it.");
     }
-    if (type === "api") {
-      if (!/^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)*$/.test(name) || !content.includes("def main")) throw new Error("The draft has an unsupported API shape.");
-      const compiled = compileWorkflow(content, this.registry, { allowImports: true, aliases: parseWorkflowImports(content), customApiIds: this.customApiIds, requireCustomApiImports: false });
-      if (!compiled.program || compiled.diagnostics.some((item) => item.severity === "error")) throw new Error(`The draft is not valid Dext API source: ${compiled.diagnostics.map((item) => item.message).join("\n")}`);
-    } else if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(name) || !content) {
-      throw new Error("The draft has an unsupported resource shape.");
+    if (target) {
+      const current = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
+      if (current !== target.content) throw new Error("This resource changed on disk. Select it again to load the latest version before saving.");
+    } else {
+      try { await vscode.workspace.fs.stat(uri); throw new Error(`Resource '${draft.name}' already exists. Select it to edit, or choose a different name.`); }
+      catch (error) { if (!(error instanceof vscode.FileSystemError && error.code === "FileNotFound")) throw error; }
     }
-    const folder = vscode.workspace.workspaceFolders?.[0];
-    if (scope === "project" && (!folder || folder.uri.scheme !== "file")) throw new Error("Project resources require a local workspace.");
-    const root = scope === "global"
-      ? vscode.Uri.joinPath(this.storage.globalStorageUri, type === "api" ? "api" : type === "rule" ? "rules" : "skills")
-      : vscode.Uri.joinPath(folder!.uri, ".dext", type === "api" ? "api" : type === "rule" ? "rules" : "skills");
-    const segments = type === "api" ? name.split(".") : [name];
-    const fileName = segments.pop()!;
-    const directory = vscode.Uri.joinPath(root, ...segments, ...(type === "skill" ? [fileName] : []));
-    const file = vscode.Uri.joinPath(directory, type === "skill" ? "SKILL.md" : `${fileName}${type === "rule" ? ".md" : ".dx"}`);
-    try { await vscode.workspace.fs.stat(file); throw new Error(`${String(type)} '${name}' already exists.`); }
-    catch (error) { if (!(error instanceof vscode.FileSystemError && error.code === "FileNotFound")) throw error; }
-    await vscode.workspace.fs.createDirectory(directory);
-    await vscode.workspace.fs.writeFile(file, new TextEncoder().encode(`${content}\n`));
-    await this.reload();
-    return `Created ${type} '${name}' (${scope}).`;
+    const content = draft.content.endsWith("\n") ? draft.content : `${draft.content}\n`;
+    await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(root, ...segments.slice(0, -1)));
+    await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(content));
+    return { name: draft.name, path, content };
   }
 
   /** The webview cannot read configuration itself, so the settings it renders

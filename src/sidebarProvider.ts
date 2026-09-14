@@ -1,3 +1,4 @@
+import { RESOURCE_LABELS, resourceFileName, type ResourceSession } from "./resourceSession.js";
 import { UiInteractionBroker } from "./uiInteractionBroker.js";
 import { readHistoryResponse } from "./historyResponse.js";
 import { publicInteractionState } from "./uiInteractionPresentation.js";
@@ -5,7 +6,8 @@ import { randomBytes } from "node:crypto";
 import { relative, sep } from "node:path";
 import * as vscode from "vscode";
 import { AgentInputBroker } from "./agentInputBroker.js";
-import type { DextApplication, ResourceDraft } from "./application.js";
+import { InputNotifications, type InputNotificationTarget } from "./inputNotifications.js";
+import type { DextApplication } from "./application.js";
 import type { AgentInputRequest, AgentStreamEvent, ApplyResult, InputExecutionResponse, McpProcessEvent, PatchResult, UiInteraction } from "./core/types.js";
 import { applyPatchHandler } from "./vscodePatchHost.js";
 import {
@@ -29,9 +31,9 @@ import { planTodoItems, planTodoInstruction, stripPlanTodoProgress } from "./cor
 import { PlanExecution, resumePlanTodos } from "./core/planExecution.js";
 import type { PlanExecutionOutcome } from "./core/types.js";
 import { openDextFileReference, openExternalLink } from "./vscodeContextHost.js";
-import { openBuiltinApiDefinition } from "./vscodeApiDefinitions.js";
+import { openBuiltinApiDefinition, DextApiDefinitionProvider } from "./vscodeApiDefinitions.js";
 import { webviewRequestSchema } from "./webviewProtocol.js";
-import type { ConversationSummary, ResourceDraftPreview, WebviewResponse } from "./webviewProtocol.js";
+import type { ConversationSummary, WebviewResponse } from "./webviewProtocol.js";
 import type { AgentSelection } from "./agentProfiles.js";
 import { copyHarnessPreset, harnessPresetFile } from "./core/harnessPresets.js";
 import type { DextHistoryRecord, DextHistorySession, DextHistoryStore } from "./historyStore.js";
@@ -164,6 +166,8 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   private mcpAssistantExecution: { requestId: string; controller: AbortController } | undefined;
   private readonly pendingAttachmentDeletes = new Set<string>();
   private readonly postedSessionSignatures = new Map<string, string>();
+  private pendingAgentEvents = new Map<string, AgentStreamEvent>();
+  private agentEventFlushTimer: ReturnType<typeof setTimeout> | undefined;
   private layoutWriteTimer: ReturnType<typeof setTimeout> | undefined;
   private layoutWriteInFlight: Promise<void> | undefined;
   private layoutWritePending = false;
@@ -173,12 +177,15 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   // turn so two turns in the same conversation cannot resolve each other's
   // files, and so a rejected file simply disappears from the entry.
   private readonly pendingPatches = new Map<string, PatchResult>();
-  private readonly resourceDrafts = new Map<string, ResourceDraft>();
+  private readonly resourceOperations = new Set<string>();
+  private readonly resourcePreviews = new Map<string, string>();
+  private resourcePreviewProvider: vscode.Disposable | undefined;
   private readonly uiInputs = new UiInteractionBroker();
   private readonly agentInputs = new AgentInputBroker();
+  private inputNotifications?: InputNotifications;
+  private pendingInputFocus: InputNotificationTarget | undefined;
   private fileIndex: { paths: string[]; loadedAt: number } | undefined;
   private fileIndexLoading: Promise<readonly string[]> | undefined;
-  private latestLanguageRequestId = -1;
   private latestFileSearchRequestId = -1;
 
   private hydrateSessions(): void {
@@ -286,6 +293,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         ?? this.application.state().agentSelection,
       ...(this.activeSession.activePlanPath ? { planPath: this.activeSession.activePlanPath } : {}),
       planStatus: this.activeSession.planStatus ?? "new",
+      ...(this.activeSession.resource ? { resource: this.activeSession.resource } : {}),
       ...(switchId !== undefined ? { switchId } : {}),
       ...(hostInitiated ? { hostInitiated: true as const } : {})
     } satisfies WebviewResponse;
@@ -323,6 +331,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       selection,
       ...(session.activePlanPath ? { planPath: session.activePlanPath } : {}),
       planStatus: session.planStatus ?? "new",
+      ...(session.resource ? { resource: session.resource } : {}),
       ...(switchId !== undefined ? { switchId } : {}),
       ...(hostInitiated ? { hostInitiated: true as const } : {})
     });
@@ -356,25 +365,28 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
 
   // A new conversation opens its own tab, while clearing replaces the
   // conversation shown in the tab that is already active.
-  private async startConversation(replaceActiveTab = false): Promise<void> {
+  private async startConversation(replaceActiveTab = false, resource?: ResourceSession): Promise<void> {
+    const previousSelection = this.conversationSelections.get(this.activeSession.id) ?? this.application.state().agentSelection;
     const index = replaceActiveTab ? this.openConversations.indexOf(this.activeSession.id) : -1;
     if (replaceActiveTab) this.application.endAgentSession(this.activeSession.id);
-    this.activeSession = outputSession();
-    this.sessions.set(this.activeSession.id, this.activeSession);
-    const previousSelection = this.conversationSelections.get(
-      replaceActiveTab ? (this.openConversations[index] ?? "") : this.activeSession.id
-    ) ?? this.application.state().agentSelection;
-    const selection = defaultConversationSelection(previousSelection);
-    this.conversationSelections.set(this.activeSession.id, selection);
+    const session = outputSession();
+    if (resource) session.resource = resource;
+    this.activeSession = session;
+    this.sessions.set(session.id, session);
+    const selection = resource ? { ...defaultConversationSelection(previousSelection), mode: "ask" as const, agentPreset: "standard" } : defaultConversationSelection(previousSelection);
+    this.conversationSelections.set(session.id, selection);
     this.application.setAgentSelection(selection);
-    await this.preferences.setConversationSelection(this.activeSession.id, selection);
-    if (index === -1) this.openConversations.push(this.activeSession.id);
-    else this.openConversations[index] = this.activeSession.id;
+    if (index === -1) this.openConversations.push(session.id);
+    else this.openConversations[index] = session.id;
+    await this.preferences.setConversationSelection(session.id, selection);
+    if (resource) await this.history.updateResourceContext(session.id, resource);
     await this.persistConversationLayout();
+    // Another tab can be opened while preferences/history are being written.
+    if (this.activeSession.id !== session.id) return;
     this.updateRunningContext();
     await this.postConversationState(undefined, true);
     await this.refresh();
-    await this.post({ type: "outputSession", session: this.activeSession, hostInitiated: true });
+    if (this.activeSession.id === session.id) await this.post({ type: "outputSession", session, hostInitiated: true });
   }
 
   // Closing a tab only hides the conversation; history keeps it so that the
@@ -516,6 +528,62 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     const picked = await vscode.window.showQuickPick(items, { title: "Select a Dext plan", placeHolder: "Choose a plan to edit or start a new one" });
     if (!picked) return;
     await this.setActivePlan(picked.reference);
+  }
+
+  private async persistResource(session: DextHistorySession): Promise<void> {
+    if (!session.resource) return;
+    await this.history.updateResourceContext(session.id, session.resource);
+    await this.post({ type: "resourceContext", sessionId: session.id, resource: session.resource, busy: this.resourceOperations.has(session.id) });
+    await this.postConversationState();
+  }
+
+  private async resourceAction(sessionId: string, action: (session: DextHistorySession, resource: ResourceSession) => Promise<void>): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session?.resource) throw new Error("This resource conversation is no longer available.");
+    if (this.activeExecutions.has(sessionId) || this.resourceOperations.has(sessionId)) throw new Error("Wait for the current resource operation to finish.");
+    this.resourceOperations.add(sessionId);
+    try { await action(session, session.resource); }
+    finally {
+      this.resourceOperations.delete(sessionId);
+      await this.post({ type: "resourceContext", sessionId, resource: session.resource });
+    }
+  }
+
+  private async chooseResource(session: DextHistorySession, resource: ResourceSession): Promise<void> {
+    const available = await this.application.listResources(resource.type);
+    const items = [
+      { label: "$(add) New resource", description: `Create a new ${RESOURCE_LABELS[resource.type]}`, value: undefined as typeof available[number] | undefined },
+      ...available.map((item) => ({ label: item.name, description: `${item.scope === "project" ? "Project" : "Global"} · ${item.path}`, value: item }))
+    ];
+    const selected = await vscode.window.showQuickPick(items, { title: `Select ${RESOURCE_LABELS[resource.type]}`, placeHolder: "Choose a resource to edit or create a new one" });
+    if (!selected) return;
+    const next: ResourceSession = { type: resource.type, scope: selected.value?.scope ?? resource.scope };
+    if (selected.value) next.target = await this.application.readResource(next.type, next.scope, selected.value.path, selected.value.name);
+    session.resource = next;
+    await this.persistResource(session);
+  }
+
+  private async previewResource(resource: ResourceSession): Promise<void> {
+    const draft = resource.draft ?? resource.target;
+    if (!draft) throw new Error("Generate a draft or select a resource first.");
+    this.resourcePreviewProvider ??= vscode.Disposable.from(
+      vscode.workspace.registerTextDocumentContentProvider("dext-resource-preview", {
+        provideTextDocumentContent: (uri) => this.resourcePreviews.get(uri.toString()) ?? ""
+      }),
+      vscode.workspace.onDidCloseTextDocument((document) => this.resourcePreviews.delete(document.uri.toString()))
+    );
+    const name = resource.target?.path ?? resourceFileName(resource.type, draft.name);
+    const uri = (label: string, content: string): vscode.Uri => {
+      const value = vscode.Uri.from({ scheme: "dext-resource-preview", path: `/${randomBytes(12).toString("hex")}/${label}/${name}` });
+      this.resourcePreviews.set(value.toString(), content);
+      return value;
+    };
+    if (resource.draft && resource.target) {
+      await vscode.commands.executeCommand("vscode.diff", uri("saved", resource.target.content), uri("draft", draft.content), `${draft.name} — Resource changes`);
+    } else {
+      const document = await vscode.workspace.openTextDocument(uri("preview", draft.content));
+      await vscode.window.showTextDocument(document, { preview: true });
+    }
   }
 
   focusEditor(): void {
@@ -798,6 +866,8 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
 
   dispose(): void {
     this.disposed = true;
+    this.inputNotifications?.dispose();
+    this.pendingInputFocus = undefined;
     if (this.layoutWriteTimer) clearTimeout(this.layoutWriteTimer);
     this.layoutWriteTimer = undefined;
     // Do not lose the latest tab layout when the extension is disposed during
@@ -810,6 +880,8 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     }
     this.mcpAssistantExecution?.controller.abort();
     this.mcpAssistantExecution = undefined;
+    this.resourcePreviewProvider?.dispose();
+    this.resourcePreviews.clear();
     this.attachments.dispose();
     this.uiInputs.dispose();
     this.agentInputs.dispose();
@@ -837,8 +909,6 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           break;
         }
         case "language": {
-          if (request.requestId < this.latestLanguageRequestId) break;
-          this.latestLanguageRequestId = request.requestId;
           const purpose = request.purpose ?? "all";
           const needsDiagnostics = purpose === "all" || purpose === "diagnostics" || purpose === "inputKind";
           const diagnostics = needsDiagnostics && request.source.trim()
@@ -847,13 +917,12 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           const signature = purpose === "all" || purpose === "signature"
             ? this.application.language.documentSignature(request.source, request.cursor)
             : undefined;
-          const hover = purpose === "all"
+          const hover = purpose === "all" || purpose === "hover"
             ? this.application.language.documentHover(request.source, request.cursor)
             : undefined;
           const completions = purpose === "all" || purpose === "completion"
             ? this.application.language.documentCompletions(request.source, request.cursor)
             : [];
-          if (request.requestId !== this.latestLanguageRequestId) break;
           await this.post({
             type: "language",
             requestId: request.requestId,
@@ -867,31 +936,62 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           });
           break;
         }
+        case "inputDefinition":
+        case "openInputDefinition": {
+          const cancellation = new vscode.CancellationTokenSource();
+          try {
+            const definition = (await new DextApiDefinitionProvider(id => this.application.customApiSourcePath(id), this.application.registry)
+              .resolve(request.source, request.cursor, vscode.Uri.parse("dext-input:/composer.dx"), cancellation.token))?.[0];
+            if (request.type === "inputDefinition") {
+              const offset = (position: vscode.Position): number => request.source.split("\n").slice(0, position.line).reduce((sum, line) => sum + line.length + 1, 0) + position.character;
+              const range = definition?.targetSelectionRange ?? definition?.targetRange;
+              const content = definition && definition.targetUri.scheme !== "dext-input"
+                ? (await vscode.workspace.openTextDocument(definition.targetUri)).getText() : undefined;
+              await this.post({ type: "inputDefinition", requestId: request.requestId, ...(definition && range ? { target: {
+                uri: definition.targetUri.toString(), ...(content !== undefined ? { content } : {}), originFrom: offset(definition.originSelectionRange!.start), originTo: offset(definition.originSelectionRange!.end),
+                range: { startLineNumber: range.start.line + 1, startColumn: range.start.character + 1, endLineNumber: range.end.line + 1, endColumn: range.end.character + 1 }
+              } } : {}) });
+            } else if (definition && definition.targetUri.scheme !== "dext-input") {
+              await vscode.window.showTextDocument(definition.targetUri, { preview: true, selection: definition.targetSelectionRange ?? definition.targetRange });
+            }
+          } finally { cancellation.dispose(); }
+          break;
+        }
         case "executeInput":
           await this.run(request.mode, request.source, request.planPath);
           break;
         case "openResourceCreator":
-          await this.post({ type: "resourceCreatorOpened" });
+          this.hydrateSessions();
+          await this.startConversation(false, { type: "api", scope: this.application.state().resourceRoots?.project ? "project" : "global" });
           break;
-        case "draftResource": {
-          const draft = await this.application.draftResource(request.resourceType, request.scope, request.input, {
-            agentSessionId: `resource-create:${request.sessionId}`
+        case "resourceOptions":
+          await this.resourceAction(request.sessionId, async (session, resource) => {
+            if (resource.type !== request.resourceType) {
+              session.resource = { type: request.resourceType, scope: request.scope };
+            } else if (resource.scope !== request.scope) {
+              // Changing destination makes an explicit copy; it never moves or overwrites the source.
+              const document = resource.draft ?? resource.target;
+              session.resource = { type: resource.type, scope: request.scope,
+                ...(document ? { draft: { name: document.name, content: document.content } } : {}) };
+            }
+            await this.persistResource(session);
           });
-          const id = randomBytes(12).toString("hex");
-          this.resourceDrafts.set(id, draft);
-          const preview: ResourceDraftPreview = { id, type: draft.type, scope: draft.scope, name: draft.name, content: draft.content };
-          await this.post({ type: "resourceDraft", requestId: request.requestId, draft: preview });
           break;
-        }
-        case "saveResource": {
-          const draft = this.resourceDrafts.get(request.draftId);
-          if (!draft) throw new Error("The resource draft expired. Generate it again.");
-          const message = await this.application.saveResource(draft);
-          this.resourceDrafts.delete(request.draftId);
-          await this.refresh();
-          await this.post({ type: "resourceSaved", draftId: request.draftId, message });
+        case "chooseResource":
+          await this.resourceAction(request.sessionId, (session, resource) => this.chooseResource(session, resource));
           break;
-        }
+        case "previewResource":
+          await this.resourceAction(request.sessionId, (_session, resource) => this.previewResource(resource));
+          break;
+        case "saveResource":
+          await this.resourceAction(request.sessionId, async (session, resource) => {
+            const target = await this.application.saveResource(resource);
+            session.resource = { type: resource.type, scope: resource.scope, target, saved: true };
+            await this.persistResource(session);
+            await this.application.reload();
+            await this.refresh();
+          });
+          break;
         case "agentInputResponse":
           this.agentInputs.respond(request.sessionId, request.turnId, request.requestId, request.answers);
           break;
@@ -986,7 +1086,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
             throw new Error("Choose an Agent preset in a new conversation. This conversation keeps its original preset.");
           }
           const selection = {
-            mode: request.selection.mode,
+            mode: this.activeSession.resource ? "ask" : request.selection.mode,
             permission: request.selection.permission,
             profileId: request.selection.profileId,
             model: request.selection.model,
@@ -1260,6 +1360,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     } catch (error) {
       await this.post({
         type: "error",
+        ...("sessionId" in request && request.sessionId ? { sessionId: request.sessionId } : {}),
         message: error instanceof Error ? error.message : String(error)
       });
     }
@@ -1354,6 +1455,10 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private async run(mode: "agent" | "ask" | "plan" | "code", source: string, planPath?: string, executePlan = false): Promise<void> {
+    if (this.activeSession.resource) {
+      mode = "ask";
+      if (this.resourceOperations.has(this.activeSession.id)) throw new Error("Wait for the resource operation to finish.");
+    }
     source = normalizeInputReferenceSource(source);
     const events: AgentStreamEvent[] = [];
     const turnId = randomBytes(12).toString("hex");
@@ -1379,8 +1484,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     try {
       if (todoProgress) {
         const initial = todoProgress.initial();
-        events.push(initial);
-        this.postAgentEvent(sessionId, initial);
+        this.appendAgentEvent(sessionId, events, initial);
       }
       const priorConversation = conversationContext(session.turns);
       const selection = this.conversationSelections.get(sessionId) ?? this.application.state().agentSelection;
@@ -1400,8 +1504,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           planRun?.observe(event);
           const scoped = planRun ? { ...event, id: `plan-round-${planRun.rounds}:${event.id ?? "stream"}` } : event;
           for (const update of todoProgress ? todoProgress.consume(scoped) : [event]) {
-            events.push({ ...update });
-            this.postAgentEvent(sessionId, update);
+            this.appendAgentEvent(sessionId, events, { ...update });
           }
         },
         onMcpEvent: (event: McpProcessEvent) => {
@@ -1412,8 +1515,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
             title: `MCP ${event.source}`,
             text: event.text
           };
-          events.push(processEvent);
-          this.postAgentEvent(sessionId, processEvent);
+          this.appendAgentEvent(sessionId, events, processEvent);
         },
         onAgentSessionId: (provider: string, providerSessionId: string) => {
           session.providerSessions = { ...(session.providerSessions ?? {}), [provider]: providerSessionId };
@@ -1423,7 +1525,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       let response: InputExecutionResponse;
       let roundSource = todoProgress ? `${source}\n\nCurrent host task state (takes precedence over the document's unchecked boxes):\n${planTodoInstruction(todoProgress.snapshot())}` : source;
       for (;;) {
-        if (controller.signal.aborted) throw new Error("Plan execution stopped by user.");
+        if (controller.signal.aborted) throw new Error(session.resource ? "Resource generation stopped by user." : "Plan execution stopped by user.");
         planRun?.beginRound();
         const providerSession = profile ? session.providerSessions?.[profile.provider] : undefined;
         const forkFrom = providerSession ? undefined : profile ? session.forkProviderSessions?.[profile.provider] : undefined;
@@ -1436,11 +1538,19 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           ...(forkFrom ? { conversationForkFrom: forkFrom } : {}) };
         if (planRun?.verifying) roundSource = planRun.prompt(source);
         try {
-          response = mode === "code"
-            ? await this.application.executeInput(roundSource, roundMetadata)
-            : await this.application.executeConversation(mode, roundSource, roundMetadata);
+          if (session.resource) {
+            const generated = await this.application.draftResource(session.resource, roundSource, roundMetadata);
+            if (controller.signal.aborted) throw new Error("Resource generation stopped by user.");
+            session.resource = { ...session.resource, draft: generated.draft, saved: false };
+            await this.persistResource(session);
+            response = generated.response;
+          } else {
+            response = mode === "code"
+              ? await this.application.executeInput(roundSource, roundMetadata)
+              : await this.application.executeConversation(mode, roundSource, roundMetadata);
+          }
         } finally { acceptingEvents = false; }
-        if (controller.signal.aborted) throw new Error("Plan execution stopped by user.");
+        if (controller.signal.aborted) throw new Error(session.resource ? "Resource generation stopped by user." : "Plan execution stopped by user.");
         if (!planRun || !todoProgress || !planExecution) break;
         const answers: string[] = [];
         for (const [index, execution] of response.executions.entries()) {
@@ -1448,7 +1558,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           // Some providers only include the final task report in their return value.
           const report: AgentStreamEvent = { phase: "message", id: `plan-round-${planRun.rounds}:final-${index}`, text: execution.result.text, done: true };
           for (const update of todoProgress.consume(report)) {
-            if (update.phase === "todo") { events.push(update); this.postAgentEvent(sessionId, update); }
+            if (update.phase === "todo") this.appendAgentEvent(sessionId, events, update);
           }
           execution.result.text = stripPlanTodoProgress(execution.result.text);
           answers.push(execution.result.text);
@@ -1459,7 +1569,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           await this.history.updatePlanProgress(sessionId, executionPlanPath, session.planProgress.todos);
           await this.persistProviderSessions(session);
         }
-        if (controller.signal.aborted) throw new Error("Plan execution stopped by user.");
+        if (controller.signal.aborted) throw new Error(session.resource ? "Resource generation stopped by user." : "Plan execution stopped by user.");
         if (outcome) {
           planExecution.planOutcome = outcome;
           for (const execution of response.executions) if (execution.result.kind === "plan") {
@@ -1471,7 +1581,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         const notice: AgentStreamEvent = { phase: "message", id: `plan-round-${planRun.rounds}:continuation`, text: planRun.verifying
           ? "Dext: all tasks are reported complete; running final verification."
           : `Dext: ${todoProgress.snapshot().filter((item) => item.status !== "completed").length} tasks remain; continuing the plan.`, done: true };
-        events.push(notice); this.postAgentEvent(sessionId, notice);
+          this.appendAgentEvent(sessionId, events, notice);
         roundSource = planRun.prompt(source, answers.join("\n"));
       }
       // The webview creates the visible row as soon as execution starts. Keep
@@ -1526,8 +1636,11 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         message: error instanceof Error ? error.message : String(error)
       });
     } finally {
+      this.flushPendingAgentEvents();
       const active = this.activeExecutions.get(sessionId);
       if (active?.turnId === turnId) this.activeExecutions.delete(sessionId);
+      this.inputNotifications?.clearTurn(sessionId, turnId);
+      if (this.pendingInputFocus?.sessionId === sessionId && this.pendingInputFocus.turnId === turnId) this.pendingInputFocus = undefined;
       if (mode === "plan" && session.planStatus === "running") {
         if (planExecution?.planOutcome?.status === "completed") {
           delete session.activePlanPath;
@@ -1612,18 +1725,68 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   private uiInteraction(sessionId: string, turnId: string, events: AgentStreamEvent[]): UiInteraction {
     return { form: (form, signal) => this.uiInputs.request(sessionId, turnId, form, signal, (state) => {
       const event: AgentStreamEvent = { phase: "input", id: state.requestId, text: "", uiInteraction: publicInteractionState(state) };
-      events.push(event);
-      this.postAgentEvent(sessionId, event);
+      this.appendAgentEvent(sessionId, events, event);
     }) };
   }
 
+  /** Keep one logical tool event while a provider streams its stdout chunks. */
+  private appendAgentEvent(sessionId: string, events: AgentStreamEvent[], event: AgentStreamEvent): void {
+    const previous = events.at(-1);
+    let update = event;
+    if (event.phase === "tool" && event.id && previous?.phase === "tool" && previous.id === event.id) {
+      update = { ...event, text: event.replace ? event.text : `${previous.text}${event.text}`, replace: true };
+      events[events.length - 1] = update;
+    } else events.push(event);
+    this.postAgentEvent(sessionId, update);
+  }
+
   private postAgentEvent(sessionId: string, event: AgentStreamEvent): void {
+    const pendingEvents = this.pendingAgentEvents ?? (this.pendingAgentEvents = new Map());
+    const execution = this.activeExecutions.get(sessionId);
+    if (!this.disposed && execution && (event.userInput || event.uiInteraction)) {
+      this.inputNotifications ??= new InputNotifications(
+        async () => await vscode.window.showInformationMessage(
+          "Dext: AI needs your response. Choose an option or enter an answer.", "View question"
+        ) === "View question",
+        async (target) => {
+          await vscode.commands.executeCommand("dext.sidebar.focus");
+          if (!this.inputNotifications?.isWaiting(target) || this.disposed
+            || this.activeExecutions.get(target.sessionId)?.turnId !== target.turnId) return;
+          const session = this.sessions.get(target.sessionId);
+          if (!session) return;
+          this.pendingInputFocus = target;
+          await this.openConversation(session);
+        }
+      );
+      if (event.userInput) this.inputNotifications.observe({
+        sessionId, turnId: execution.turnId, requestId: event.userInput.id, kind: "agent"
+      }, event.userInput.status === "waiting");
+      if (event.uiInteraction && event.uiInteraction.turnId === execution.turnId) this.inputNotifications.observe({
+        sessionId, turnId: execution.turnId, requestId: event.uiInteraction.requestId, kind: "ui"
+      }, event.uiInteraction.status === "waiting");
+    }
     // Keep collecting events for background conversations so they can be
     // replayed when the user returns, but do not flood the Webview IPC queue
     // while another tab is visible.  The active conversation is restored via
     // postActiveExecution(), which sends the buffered events as one batch.
     if (this.activeSession.id !== sessionId) return;
-    this.postWhenReady({ type: "agentEvent", sessionId, event });
+    const key = event.phase === "tool" && event.id ? `${sessionId}:${event.id}` : `${sessionId}:${randomBytes(8).toString("hex")}`;
+    const previous = pendingEvents.get(key);
+    pendingEvents.set(key, previous && event.phase === "tool"
+      ? { ...event, text: event.replace ? event.text : `${previous.text}${event.text}`, replace: true }
+      : event);
+    if (this.agentEventFlushTimer === undefined) this.agentEventFlushTimer = setTimeout(() => this.flushPendingAgentEvents(), 16);
+  }
+
+  private flushPendingAgentEvents(): void {
+    if (this.agentEventFlushTimer !== undefined) clearTimeout(this.agentEventFlushTimer);
+    this.agentEventFlushTimer = undefined;
+    const pendingEvents = this.pendingAgentEvents ?? new Map<string, AgentStreamEvent>();
+    for (const [pendingKey, pending] of pendingEvents) {
+      const separator = pendingKey.indexOf(":");
+      this.postWhenReady({ type: "agentEvent", sessionId: pendingKey.slice(0, separator), event: pending });
+    }
+    pendingEvents.clear();
   }
 
   private async postActiveExecution(sessionId: string, switchId?: number, hostInitiated = false): Promise<void> {
@@ -1650,6 +1813,11 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       // A tab restore can contain dozens of buffered events. Send one IPC
       // message instead of awaiting one Webview post per event.
       await this.post({ type: "agentEvents", sessionId, events: replayEvents, ...(switchId !== undefined ? { switchId } : {}) });
+    }
+    const focus = this.pendingInputFocus;
+    if (focus?.sessionId === sessionId && focus.turnId === execution.turnId && this.activeSession.id === sessionId) {
+      this.pendingInputFocus = undefined;
+      if (this.inputNotifications?.isWaiting(focus)) this.postWhenReady({ type: "focusAgentInput", ...focus });
     }
   }
 
@@ -1750,7 +1918,8 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource}; style-src ${webview.cspSource} 'unsafe-inline'; font-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} https: data:; style-src ${webview.cspSource} 'unsafe-inline'; font-src ${webview.cspSource}; script-src 'nonce-${nonce}'; worker-src blob:; connect-src ${webview.cspSource};">
+  <meta name="dext-editor-worker" content="${webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "dist", "webview", "editor.worker.js")).toString()}">
   <link rel="stylesheet" href="${codicons.toString()}">
   <link rel="stylesheet" href="${webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "dist", "markdown", "github-markdown.css")).toString()}">
   <link rel="stylesheet" href="${style.toString()}">
@@ -1787,6 +1956,15 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           </div>
           <span id="plan-status" class="plan-status">New plan</span>
           <button id="plan-build" class="primary plan-build" type="button" title="Build the active plan" aria-label="Build the active plan"><i class="codicon codicon-play" aria-hidden="true"></i><span>Build</span></button>
+        </div>
+        <div id="resource-toolbar" class="plan-toolbar resource-toolbar" hidden>
+          <div class="plan-target-group">
+            <button id="resource-target" class="plan-target" type="button" title="Select a resource"><i class="codicon codicon-file-code"></i><span id="resource-target-label">New resource</span></button>
+            <button id="resource-choose" class="plan-choose" type="button" title="Select a resource" aria-label="Select a resource"><i class="codicon codicon-chevron-down"></i></button>
+          </div>
+          <span id="resource-status" class="plan-status" aria-live="polite"></span>
+          <button id="resource-preview" class="resource-preview" type="button">Preview</button>
+          <button id="resource-save" class="primary resource-save" type="button">Save</button>
         </div>
         <section id="input-shell" class="input-panel unified-input">
           <div id="code-editor" class="code-editor" aria-label="Dext input"></div>
@@ -1847,26 +2025,6 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           <div id="methods"></div>
         </div>
       </div>
-    </dialog>
-    <dialog id="resource-creator-dialog" class="ui-dialog mcp-assistant-dialog" aria-labelledby="resource-creator-title">
-      <form class="ui-dialog-surface" method="dialog">
-        <header class="methods-dialog-header">
-          <div id="resource-creator-title" class="methods-dialog-title"><i class="codicon codicon-sparkle"></i><span>Create resource</span></div>
-          <button id="resource-creator-close" class="icon-button" type="button" title="Cancel" aria-label="Cancel"><i class="codicon codicon-close"></i></button>
-        </header>
-        <div class="mcp-assistant-body">
-          <div class="mcp-assistant-message">Describe what you want to create. Continue refining the request and Dext keeps the creation conversation open until you confirm the generated draft.</div>
-          <label class="mcp-assistant-label" for="resource-creator-type">Resource</label>
-          <select id="resource-creator-type" class="ui-dialog-input"><option value="api">Custom API</option><option value="mcp">MCP configuration</option><option value="rule">Rule</option><option value="skill">Skill</option></select>
-          <label class="mcp-assistant-label" for="resource-creator-scope">Save to</label>
-          <select id="resource-creator-scope" class="ui-dialog-input"><option value="project">Project</option><option value="global">Dext global storage</option></select>
-          <textarea id="resource-creator-input" class="ui-dialog-input mcp-assistant-input" rows="5" placeholder="Describe the resource, or refine the existing draft"></textarea>
-          <div id="resource-creator-status" class="mcp-assistant-status" aria-live="polite"></div>
-          <label id="resource-creator-preview-label" class="mcp-assistant-label" for="resource-creator-preview" hidden>Preview</label>
-          <textarea id="resource-creator-preview" class="ui-dialog-input mcp-assistant-preview" rows="12" readonly hidden></textarea>
-        </div>
-        <footer class="ui-dialog-actions"><button id="resource-creator-generate" type="button">Generate draft</button><button id="resource-creator-save" type="button" hidden>Confirm and save</button></footer>
-      </form>
     </dialog>
     <dialog id="mcp-dialog" class="methods-dialog" aria-labelledby="mcp-dialog-title">
       <div class="methods-dialog-surface">

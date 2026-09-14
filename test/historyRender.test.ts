@@ -11,8 +11,17 @@ import {
   renderHistorySession
 } from "../src/historyRender.js";
 import type { DextHistoryRecord } from "../src/historyStore.js";
+import { parseUiForm } from "../src/core/uiForm.js";
 
 describe("Dext history rendering", () => {
+  it("shows the selected form action in restored history", () => {
+    const form = parseUiForm({ title: "Review", fields: [], actions: [{ id: "revise", label: "Revise <analysis>" }, { id: "approve", label: "Approve" }] });
+    const html = renderHistoryRecord({ id: "turn", createdAt: 1, input: "Review", output: "Done", process: [
+      { phase: "input", text: "", uiInteraction: { sessionId: "s", turnId: "turn", requestId: "r", form, status: "submitted", action: "revise", answers: {} } }
+    ] });
+    expect(html).toContain("Submitted (Revise &lt;analysis&gt;)");
+    expect(html).not.toContain("Submitted (Approve)");
+  });
   it("renders the latest answer above Process without replaying editable forms or secret answers", () => {
     const question = { id: "question-1", blocking: true, questions: [{ id: "q", header: "", question: "Which <option>?", options: [] },
       { id: "secret", header: "", question: "Secret?", options: [], isSecret: true }] };

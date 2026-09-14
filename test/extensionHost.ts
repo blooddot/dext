@@ -16,12 +16,14 @@ import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { DextCompletionContext } from "../src/vscodeCompletionContext.js";
 import type * as Esbuild from "esbuild";
+import { DextApiDefinitionProvider } from "../src/vscodeApiDefinitions.js";
 
 export async function run(): Promise<void> {
   const extension = vscode.extensions.getExtension("blooddot.dext");
   assert.ok(extension, "Dext extension is discoverable.");
   await extension.activate();
   assert.equal(extension.isActive, true, "Dext extension activates.");
+  await monacoWebviewHostTest(extension.extensionUri);
 
   assert.deepEqual(vscode.workspace.getConfiguration("dext").inspect<string[]>("agentCli")?.defaultValue, ["codex", "claude", "deepseek-harness"]);
   const commands = await vscode.commands.getCommands(true);
@@ -188,6 +190,117 @@ export async function run(): Promise<void> {
   await verifyCompletionEditing(folder);
   await verifyCompletionMemoryWindows(extension.extensionPath, folder);
   if (process.env.DEXT_COMPLETION_PERFORMANCE === "1") await verifyCompletionPerformance(extension.extensionPath, folder);
+}
+
+/** Run the production component with real VS Code resource URLs, CSP and workers. */
+async function monacoWebviewHostTest(extensionUri: vscode.Uri): Promise<void> {
+  const require = createRequire(join(extensionUri.fsPath, "package.json"));
+  const esbuild = require("esbuild") as typeof Esbuild;
+  const directory = await mkdtemp(join(tmpdir(), "dext-monaco-host-"));
+  const panel = vscode.window.createWebviewPanel("dext.monaco-test", "Dext editor verification", vscode.ViewColumn.Active, {
+    enableScripts: true, localResourceRoots: [vscode.Uri.file(directory), vscode.Uri.joinPath(extensionUri, "dist")]
+  });
+  try {
+    await esbuild.build({ absWorkingDir: extensionUri.fsPath, stdin: { resolveDir: extensionUri.fsPath, contents: `
+      import { DextCodeEditor } from './src/webview/codeEditor.ts';
+      import { monaco } from './src/webview/monacoEnvironment.ts';
+      import './media/styles.css';
+      const vscode=acquireVsCodeApi();
+      const check=(condition,label)=>{if(!condition)throw new Error(label);};
+      window.addEventListener('error',event=>vscode.postMessage({error:event.message}));
+      window.addEventListener('unhandledrejection',event=>vscode.postMessage({error:String(event.reason)}));
+      window.addEventListener('securitypolicyviolation',event=>vscode.postMessage({error:'CSP: '+event.violatedDirective+' '+event.blockedURI}));
+      (async()=>{
+        let workerReplies=0;
+        const editor=new DextCodeEditor({parent:document.getElementById('editor'),
+          broker:{request:async()=>({diagnostics:[],completions:[],inputKind:'workflow'}),definition:async()=>undefined},
+          clipboard:{write:async()=>true,read:async()=>({text:'',contextAttached:false})},files:{search:async()=>[]},resolveDroppedFiles:async()=>['@scripts/','@src/dropped.ts'],
+          onRun(){},onOpenReference(){},onDiagnosticsChanged(){},onInputKindChanged(){},onError(error){throw error;}});
+        const getWorker=globalThis.MonacoEnvironment.getWorker;
+        globalThis.MonacoEnvironment.getWorker=async(...args)=>{const worker=await getWorker(...args);worker.addEventListener('message',()=>workerReplies++);return worker;};
+        const source='agent(input="@src/a.ts#L1,1-L2,2")';editor.setValue(source);
+        await new Promise(r=>setTimeout(r,200));
+        check(editor.source===source,'source round trip');
+        check(document.querySelectorAll('.dext-ref-chip').length===1,'reference rendered');
+        editor.removeFileReference('src/a.ts#L1,1-L2,2');editor.view.trigger('test','undo',{});
+        check(editor.source===source,'reference undo');
+        const previousClipboard=await Promise.all((await navigator.clipboard.read()).map(async item=>new ClipboardItem(Object.fromEntries(await Promise.all(item.types.map(async type=>[type,await item.getType(type)]))))));
+        let pastedImage;
+        const imagePaste=event=>{const item=[...event.clipboardData.items].find(item=>item.kind==='file'&&item.type.startsWith('image/'));if(item){pastedImage=item.getAsFile();event.preventDefault();event.stopPropagation();}};
+        document.body.addEventListener('paste',imagePaste,true);
+        try {
+          editor.setMode("chat");editor.setValue('');
+          await navigator.clipboard.writeText('@src/pasted.ts');
+          editor.focus();document.execCommand('paste');
+          await new Promise(r=>setTimeout(r,200));
+          check(editor.source==='@src/pasted.ts','Webview chat paste keeps source: '+JSON.stringify(editor.source));
+          check(document.querySelectorAll('.dext-ref-chip').length===1,'Webview chat paste renders reference');
+          editor.view.trigger('test','undo',{});check(editor.source==='','Webview chat paste undo');
+          editor.view.trigger('test','redo',{});check(editor.source==='@src/pasted.ts','Webview chat paste redo');
+          const canvas=document.createElement('canvas');canvas.width=1;canvas.height=1;
+          const png=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));
+          await navigator.clipboard.write([new ClipboardItem({'image/png':png})]);
+          editor.focus();document.execCommand('paste');
+          await new Promise(r=>setTimeout(r,200));
+          check(pastedImage?.type==='image/png'&&pastedImage.size>0,'Webview image paste reaches the attachment handler');
+          check(editor.source==='@src/pasted.ts','image paste does not insert clipboard fallback text');
+          editor.insertFileReferences(['@.dext-global/attachments/pasted.png']);
+          await new Promise(r=>setTimeout(r,100));
+          check(document.querySelectorAll('.dext-ref-chip').length===2,'attachment response renders an image reference');
+          editor.setValue('');
+          const transfer=new DataTransfer();transfer.setData('application/vnd.code.uri-list','file:///C:/project/scripts');
+          const input=document.querySelector('#editor textarea'),box=input.getBoundingClientRect();
+          input.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,shiftKey:true,dataTransfer:transfer,clientX:box.left+2,clientY:box.top+2}));
+          await new Promise(r=>setTimeout(r,200));
+          check(editor.source==='@scripts/ @src/dropped.ts ','Webview Shift-drop keeps full paths');
+          check(document.querySelectorAll('.dext-ref-chip').length===2,'Webview Shift-drop renders root directory and file references');
+        } finally {
+          document.body.removeEventListener('paste',imagePaste,true);
+          if(previousClipboard.length)await navigator.clipboard.write(previousClipboard);else await navigator.clipboard.writeText('');
+        }
+        editor.setMode("code");
+        editor.setValue('alphabet alphabet\\nalp');editor.view.updateOptions({wordBasedSuggestions:'currentDocument'});editor.triggerSuggest();
+        for(let i=0;i<60&&!workerReplies;i++)await new Promise(r=>setTimeout(r,100));
+        check(workerReplies>0,'bundled worker replies over real Webview resource URLs');
+        monaco.editor.setModelMarkers(editor.view.getModel(),'host-test',[{severity:monaco.MarkerSeverity.Error,message:'Host diagnostic',startLineNumber:1,startColumn:1,endLineNumber:1,endColumn:4}]);
+        await new Promise(r=>setTimeout(r,200));
+        const squiggle=document.querySelector('.monaco-editor .squiggly-error');
+        check(squiggle&&getComputedStyle(squiggle).backgroundImage.includes('data:image/svg+xml'),'native diagnostic image renders under Webview CSP');
+        editor.destroy();vscode.postMessage({passed:true,workerReplies});
+      })().catch(error=>vscode.postMessage({error:String(error.stack||error)}));
+    ` }, bundle: true, outdir: directory, entryNames: "check", format: "iife", platform: "browser", loader: { ".ttf": "file" }, logLevel: "silent" });
+    const asset = (path: vscode.Uri) => panel.webview.asWebviewUri(path).toString();
+    const result = new Promise<{ passed?: boolean; error?: string }>((resolve, reject) => {
+      const timer = setTimeout(() => { listener.dispose(); reject(new Error("Monaco Webview verification timed out")); }, 30000);
+      const listener = panel.webview.onDidReceiveMessage((message: { passed?: boolean; error?: string }) => {
+        if (message.passed || message.error) { clearTimeout(timer); listener.dispose(); resolve(message); }
+      });
+    });
+    panel.webview.html = `<!doctype html><html><head>
+      <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${panel.webview.cspSource} https: data:; script-src 'nonce-monaco-test'; style-src ${panel.webview.cspSource} 'unsafe-inline'; font-src ${panel.webview.cspSource}; connect-src ${panel.webview.cspSource}; worker-src blob:;">
+      <meta name="dext-editor-worker" content="${asset(vscode.Uri.joinPath(extensionUri, "dist", "webview", "editor.worker.js"))}">
+      <link rel="stylesheet" href="${asset(vscode.Uri.file(join(directory, "check.css")))}"></head>
+      <body><div id="editor" class="code-editor" style="width:320px;height:280px"></div><script nonce="monaco-test" src="${asset(vscode.Uri.file(join(directory, "check.js")))}"></script></body></html>`;
+    const outcome = await result;
+    assert.equal(outcome.error, undefined, outcome.error);
+    assert.equal(outcome.passed, true, "Monaco runs inside an actual VS Code Webview");
+    panel.dispose();
+    const cancellation = new vscode.CancellationTokenSource();
+    try {
+      const provider = new DextApiDefinitionProvider(() => undefined);
+      const source = "node.url.parse(url=\"https://example.com\")";
+      const target = (await provider.resolve(source, 10, vscode.Uri.parse("dext-input:/composer.dx"), cancellation.token))?.[0];
+      assert.ok(target, "Input built-in definition resolves");
+      const editor = await vscode.window.showTextDocument(target.targetUri, { selection: target.targetSelectionRange ?? target.targetRange });
+      assert.equal(editor.document.uri.scheme, "dext-builtins");
+      assert.equal(editor.document.getText(editor.selection), "parse");
+      await vscode.commands.executeCommand("workbench.action.closeActiveEditor");
+    } finally { cancellation.dispose(); }
+  } finally {
+    panel.dispose();
+    assert.ok(directory.startsWith(join(tmpdir(), "dext-monaco-host-")));
+    await rm(directory, { recursive: true, force: true });
+  }
 }
 
 async function verifyCompletionPerformance(extensionPath: string, folder: vscode.WorkspaceFolder): Promise<void> {

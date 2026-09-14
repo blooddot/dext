@@ -1,3 +1,4 @@
+import type { ResourceSession } from "./resourceSession.js";
 import { publicInteractionState } from "./uiInteractionPresentation.js";
 import { normalizeHistoryResponse } from "./historyResponse.js";
 import type * as vscode from "vscode";
@@ -48,6 +49,7 @@ export interface DextHistorySession {
    * matching entry when its first turn is sent. */
   forkProviderSessions?: Record<string, string>;
   /** Explicit Plan target and lifecycle, kept with the conversation tab. */
+  resource?: ResourceSession;
   activePlanPath?: string;
   planStatus?: PlanStatus;
   planProgress?: { path: string; todos: AgentTodoItem[] };
@@ -195,6 +197,19 @@ export class DextHistoryStore {
     });
   }
 
+  async updateResourceContext(sessionId: string, resource: ResourceSession): Promise<void> {
+    await this.mutate(async () => {
+      const sessions = this.all();
+      let session = sessions.find((item) => item.id === sessionId);
+      if (!session) {
+        session = { id: sessionId, createdAt: Date.now(), updatedAt: Date.now(), turns: [] };
+        sessions.push(session);
+      }
+      session.resource = structuredClone(resource);
+      await this.state.update(HISTORY_KEY, sessions);
+    });
+  }
+
   async updatePlanContext(sessionId: string, activePlanPath: string | undefined, planStatus: PlanStatus): Promise<void> {
     await this.mutate(async () => {
       const sessions = this.all();
@@ -233,7 +248,7 @@ export class DextHistoryStore {
         session.providerSessions = { ...session.providerSessions, ...providerSessions };
       }
       session.turns.splice(index, 1);
-      if (!session.turns.length && !Object.keys(session.providerSessions ?? {}).length
+      if (!session.resource && !session.turns.length && !Object.keys(session.providerSessions ?? {}).length
         && !Object.keys(session.forkProviderSessions ?? {}).length) {
         const sessionIndex = sessions.indexOf(session);
         if (sessionIndex >= 0) sessions.splice(sessionIndex, 1);

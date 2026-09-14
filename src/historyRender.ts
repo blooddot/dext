@@ -18,6 +18,7 @@ import { agentMessageCopyText, presentAgentMessage } from "./agentMessagePresent
 import { presentDiff } from "./diffPresentation.js";
 import type { PatchChange } from "./core/types.js";
 import { dextClassHighlighter, dextTokenStyles, shouldHighlightInput } from "./dextTokenTheme.js";
+import { mergeAgentMessageDeltas } from "./core/agentTraceReplay.js";
 import {
   compactFileReferenceLabel,
   inputReferenceDisplayParts,
@@ -383,6 +384,10 @@ function commandRow(event: AgentStreamEvent, className = "process-command"): str
 
 function process(events: readonly AgentStreamEvent[]): string {
   const html: string[] = [];
+  // Providers stream prose in small deltas. The live view coalesces those
+  // deltas by event id; persisted history can contain records without a stable
+  // id, so coalesce adjacent message chunks before creating one row per event.
+  const replayEvents = mergeAgentMessageDeltas(events);
   let tools: AgentStreamEvent[] = [];
   let groupId: string | undefined;
   const flushTools = (): void => {
@@ -397,7 +402,7 @@ function process(events: readonly AgentStreamEvent[]): string {
     tools = [];
     groupId = undefined;
   };
-  for (const event of events) {
+  for (const event of replayEvents) {
     if (event.phase === "status" || event.phase === "todo" || event.phase === "input") continue;
     if (event.phase === "tool") {
       if (event.solo) {
@@ -411,17 +416,29 @@ function process(events: readonly AgentStreamEvent[]): string {
       continue;
     }
     flushTools();
-    html.push(`<section class="process-message agent-stream-item agent-trace-message"><div class="agent-stream-text">${processMessage(event.text)}</div>${copyButton(agentMessageCopyText(presentAgentMessage(event.text)))}</section>`);
+    html.push(`<section class="process-message agent-stream-item agent-trace-message"><div class="agent-stream-text">${processMessage(event.text)}</div></section>`);
   }
   flushTools();
-  return html.join("");
+  const content = html.join("");
+  if (!content) return "";
+  const copyText = replayEvents
+    .filter((event) => event.phase !== "status" && event.phase !== "todo" && event.phase !== "input")
+    .map((event) => event.phase === "tool"
+      ? event.text
+      : agentMessageCopyText(presentAgentMessage(event.text)))
+    .filter(Boolean)
+    .join("\n\n");
+  // Keep the toolbar visually pinned to the top with CSS while placing it
+  // after the content in the serialized markup.
+  return `<div class="output-text-copyable"><div class="process-content">${content}</div><div class="markdown-copy-toolbar">${copyButton(copyText)}</div></div>`;
 }
 
 function inputHistory(events: readonly AgentStreamEvent[]): string {
   const interactions = new Map(events.flatMap((event) => event.uiInteraction ? [[event.uiInteraction.requestId, event.uiInteraction] as const] : []));
   const forms = [...interactions.values()].map((state) => {
+    const action = state.form.actions?.find((action) => action.id === state.action);
     const fields = state.form.fields.map((field) => `<p><strong>${escapeHtml(field.label)}</strong>: ${escapeHtml(field.secret ? "Answer hidden" : uiResultText(state.answers?.[field.id]))}</p>`).join("");
-    return `<section class="agent-input-card"><strong>${escapeHtml(state.form.title)} — ${state.status === "submitted" ? "Submitted" : "Closed"}</strong>${fields}</section>`;
+    return `<section class="agent-input-card"><strong>${escapeHtml(state.form.title)} — ${state.status === "submitted" ? "Submitted" : "Closed"}${action ? ` (${escapeHtml(action.label)})` : ""}</strong>${fields}</section>`;
   }).join("");
   const requests = new Map(events.flatMap((event) => event.userInput ? [[event.userInput.id, event.userInput] as const] : []));
   return forms + [...requests.values()].map((request) => {
@@ -494,6 +511,7 @@ export function renderHistoryRecord(record: DextHistoryRecord, sessionId?: strin
 /** The name a conversation carries until the user renames it: the opening line
  * of its first message, with @ references spelled out. */
 export function conversationTitle(session: DextHistorySession): string {
+  if (session.resource) return session.resource.draft?.name ?? session.resource.target?.name ?? "New resource";
   const first = session.turns[0];
   if (!first) return "New conversation";
   const line = inputReferenceDisplayText(normalizeInputReferenceSource(first.input))

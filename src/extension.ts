@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { DextApiDefinitionProvider, DextBuiltinApisContentProvider, DextBuiltinTypesContentProvider } from "./vscodeApiDefinitions.js";
+import { DextApiDefinitionProvider, DextBuiltinApisContentProvider, DextBuiltinTypesContentProvider, DextMcpApisContentProvider } from "./vscodeApiDefinitions.js";
 import { DextApplication } from "./application.js";
 import { DextSidebarProvider } from "./sidebarProvider.js";
 import { DEFAULT_HISTORY_LIMITS, DextHistoryStore } from "./historyStore.js";
@@ -704,11 +704,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       " "
     ),
     vscode.languages.registerDefinitionProvider(
-      [{ language: "dext-api", scheme: "file" }, { scheme: "dext-types" }, { scheme: "dext-builtins" }],
-      new DextApiDefinitionProvider((id) => application.customApiSourcePath(id))
+      [{ language: "dext-api", scheme: "file" }, { scheme: "dext-types" }, { scheme: "dext-builtins" }, { scheme: "dext-mcp" }],
+      new DextApiDefinitionProvider((id) => application.customApiSourcePath(id), application.registry)
     ),
     vscode.workspace.registerTextDocumentContentProvider("dext-types", new DextBuiltinTypesContentProvider()),
     vscode.workspace.registerTextDocumentContentProvider("dext-builtins", new DextBuiltinApisContentProvider()),
+    vscode.workspace.registerTextDocumentContentProvider("dext-mcp", new DextMcpApisContentProvider(application.registry)),
     vscode.languages.registerHoverProvider(
       [{ language: "dext-api", scheme: "file" }, { scheme: "dext-types" }, { scheme: "dext-builtins" }],
       {
@@ -753,7 +754,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       "(", ","
     ),
     vscode.languages.registerDocumentSemanticTokensProvider(
-      [{ language: "dext-api", scheme: "file" }, { scheme: "dext-types" }, { scheme: "dext-builtins" }],
+      [{ language: "dext-api", scheme: "file" }, { scheme: "dext-types" }, { scheme: "dext-builtins" }, { scheme: "dext-mcp" }],
       {
         provideDocumentSemanticTokens(document) {
           const builder = new vscode.SemanticTokensBuilder(semanticLegend);

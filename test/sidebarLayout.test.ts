@@ -10,7 +10,7 @@ describe("sidebar panel layout", () => {
   it("uses prose typography and compact refs for sent Input without changing composer chips", async () => {
     const css = await source("media/styles.css");
     expect(css).not.toContain("--dext-input-line-height");
-    expect(css).toMatch(/\.code-editor \.cm-scroller \{[^}]*line-height: 24px;/);
+    expect(await source('src/webview/codeEditor.ts')).toContain('lineHeight: 24');
     expect(css).toMatch(/\.attachment-chip \{[^}]*height: 24px;/);
     expect(css).toMatch(/\.output-turn-input > pre\.dext-source,\s*\.markdown-body \{\s*font: var\(--vscode-font-size, 13px\)\/1.5 var\(--vscode-font-family\);/);
     expect(css).toMatch(/\.output-turn-input \.attachment-chip \{\s*height: 20px;\s*margin-block: 2px;/);
@@ -56,18 +56,17 @@ describe("sidebar panel layout", () => {
     expect(html.match(/class="icon-button panel-fullscreen"/g)).toHaveLength(2);
   });
 
-  it("creates resources from a dedicated draft-and-confirm dialog", async () => {
+  it("creates resources in the shared conversation composer with resource controls", async () => {
     const html = await source("src/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
     expect(html).toContain('id="create-resource"');
-    expect(html).toContain('id="resource-creator-dialog"');
-    expect(html).toContain('<option value="api">Custom API</option><option value="mcp">MCP configuration</option><option value="rule">Rule</option><option value="skill">Skill</option>');
-    expect(html).toContain('id="resource-creator-scope"');
-    expect(html).toContain('id="resource-creator-preview"');
+    expect(html).not.toContain('id="resource-creator-dialog"');
+    expect(html).toContain('id="resource-toolbar"');
+    expect(html).toContain('id="resource-preview"');
+    expect(html).toContain('id="resource-save"');
     expect(main).toContain('type: "openResourceCreator"');
-    expect(main).toContain('type: "draftResource"');
-    expect(main).toContain('type: "saveResource"');
-    expect(main).toContain('resourceCreatorDialog.showModal()');
+    expect(main).toContain('renderResourceControls()');
+    expect(main).not.toContain('resourceCreatorDialog');
   });
 
   it("uses the shared mouse and keyboard disclosure behavior", async () => {
@@ -91,13 +90,13 @@ describe("sidebar panel layout", () => {
     expect(html).toContain('id="model-submenu" class="composer-popover composer-model-popover composer-model-submenu"');
     expect(html).not.toContain('id="agent-profile"');
     expect(main).toContain('type InputMode = "agent" | "ask" | "plan" | "code"');
-    expect(main).toContain('editor.setLanguageEnabled(inputMode === "code")');
+    expect(main).toContain('editor.setMode(inputMode === "code" ? "code" : "chat")');
     expect(main).toContain('elements.inputShell.classList.toggle("conversation-mode", !codeMode)');
-    expect(main).toContain('elements.inputSection.dataset.mode = inputMode');
+    expect(main).toContain('elements.inputSection.dataset.mode = resource ? "resource" : inputMode');
     expect(main).toContain('elements.modeControlIcon.className = `codicon ${modeIcon[inputMode]}`');
-    expect(editor).toContain('this.lineWrapping.reconfigure(enabled ? [] : EditorView.lineWrapping)');
-    expect(css).toContain('.input-shell.conversation-mode .cm-gutters');
-    expect(css).toMatch(/\.code-file-reference \{[\s\S]*?margin: 0;/);
+    expect(editor).toContain('wordWrap: enabled ? "off" : "on"');
+    expect(editor).toContain('lineNumbers: enabled ? "on" : "off"');
+    expect(css).toContain('.monaco-editor .view-line .dext-ref-chip');
     expect(css).toContain('.input-section[data-mode="ask"] #mode-control');
     expect(css).toContain('.input-section[data-mode="plan"] #mode-control');
     expect(css).toContain('.input-section[data-mode="code"] #mode-control');
@@ -226,8 +225,8 @@ describe("sidebar panel layout", () => {
     expect(css).toMatch(/#run \{[\s\S]*?color: var\(--composer-accent-foreground, var\(--vscode-button-foreground\)\);[\s\S]*?background: var\(--composer-accent-fill, var\(--vscode-button-background\)\);/);
     expect(css).toMatch(/#run:hover:not\(:disabled\) \{[\s\S]*?color-mix\([\s\S]*?var\(--composer-accent-fill/);
     // The mode control reads the same accent rather than repeating the colors.
-    expect(css).toMatch(/\.input-section\[data-mode="code"\] #mode-control \{[\s\S]*?border-color: color-mix\(in srgb, var\(--composer-accent\) 68%[\s\S]*?color: var\(--composer-accent\);[\s\S]*?background: color-mix\(in srgb, var\(--composer-accent\) 14%/);
-    expect(css).toMatch(/\.input-section\[data-mode="code"\] #mode-control:focus-visible \{[\s\S]*?outline: 1px solid var\(--composer-accent\);/);
+    expect(css).toMatch(/\.input-section\[data-mode="code"\] #mode-control,\s*\.input-section\[data-mode="resource"\] #mode-control \{[\s\S]*?border-color: color-mix\(in srgb, var\(--composer-accent\) 68%[\s\S]*?color: var\(--composer-accent\);[\s\S]*?background: color-mix\(in srgb, var\(--composer-accent\) 14%/);
+    expect(css).toMatch(/\.input-section\[data-mode="code"\] #mode-control:focus-visible,\s*\.input-section\[data-mode="resource"\] #mode-control:focus-visible \{[\s\S]*?outline: 1px solid var\(--composer-accent\);/);
     expect(css).not.toMatch(/\.input-section\[data-mode="(?:ask|plan|code)"\] #mode-control \{[\s\S]*?border-color: color-mix\(in srgb, var\(--vscode-focusBorder\)/);
   });
 
@@ -325,20 +324,10 @@ describe("sidebar panel layout", () => {
   it("offers the @ file picker in every mode and inserts the same chip as a drop", async () => {
     const editor = await source("src/webview/codeEditor.ts");
     const sidebar = await source("src/sidebarProvider.ts");
-    const picker = editor.slice(
-      editor.indexOf("private async fileCompletions"),
-      editor.indexOf("private async completions")
-    );
-    // Chat modes switch the language service off, so this source must not be
-    // gated on it the way completions() is.
-    expect(picker).not.toContain("this.languageEnabled");
-    expect(editor).toMatch(/override: \[\s*\(context\) => this\.fileCompletions\(context\),\s*\(context\) => this\.completions\(context\)/);
-    expect(editor).toMatch(/private async completions[\s\S]*?if \(!this\.languageEnabled\) return null;/);
-    expect(picker).toContain("context.matchBefore(/@[^\\s@#\"'`(){}[\\],]*/)");
-    // An email address must not open the picker.
-    expect(picker).toContain("if (/[\\p{L}\\p{N}_.+-]/u.test(source[token.from - 1] ?? \"\")) return null;");
-    expect(picker).toContain("filter: false");
-    expect(picker).toContain("const insert = `@${path} `;");
+    const language = await source('src/webview/monacoLanguage.ts');
+    expect(language).toContain('registerCompletionItemProvider');
+    expect(language.indexOf('c.files.search')).toBeLessThan(language.indexOf('if (!c.enabled())'));
+    expect(editor).toContain('registerMonacoLanguage');
     expect(sidebar).toMatch(/case "searchFiles":[\s\S]*?const fileIndex = await this\.workspaceFileIndex\(\)[\s\S]*?rankFileMatches\(\s*fileIndex/);
     expect(sidebar).toMatch(/private async workspaceFileIndex[\s\S]*?vscode\.workspace\.findFiles\("\*\*\/\*", FILE_INDEX_EXCLUDE, MAX_INDEXED_FILES\)/);
     // A failed listing must not raise the composer's error banner.
@@ -347,23 +336,11 @@ describe("sidebar panel layout", () => {
 
   it("sends on Enter in chat modes and keeps Enter as a newline in Code mode", async () => {
     const editor = await source("src/webview/codeEditor.ts");
-    const submit = editor.slice(
-      editor.indexOf("private submitKeymapExtension"),
-      editor.indexOf("setSubmitOnEnter")
-    );
-    // Code mode is a real editor, so the compartment resolves to nothing there
-    // and Mod-Enter stays the only way to run.
-    expect(submit).toContain("if (this.languageEnabled || !this.submitOnEnter) return [];");
-    expect(submit).toMatch(/key: "Enter"[\s\S]*?if \(acceptCompletion\(view\)\) return true;[\s\S]*?this\.options\.onRun\(\);/);
-    expect(submit).toContain('{ key: "Shift-Enter", run: insertNewlineAndIndent }');
-    expect(editor).toContain("this.submitKeymap.of(this.submitKeymapExtension())");
-    // Switching modes is what flips the binding, so the compartment has to be
-    // reconfigured alongside the language and wrapping ones.
-    expect(editor).toMatch(/setLanguageEnabled\(enabled: boolean\)[\s\S]*?this\.submitKeymap\.reconfigure\(this\.submitKeymapExtension\(\)\)/);
-    expect(editor).toContain('{ key: "Mod-Enter", run: () => { this.options.onRun(); return true; } }');
-    expect(editor).toContain('{ key: "Mod-Shift-v", run: () => { void this.pasteRaw(); return true; } }');
-    // The compartment has to outrank the default Enter binding below it.
-    expect(editor.indexOf("this.submitKeymap.of(")).toBeLessThan(editor.indexOf("...defaultKeymap"));
+    expect(editor).toContain('dextChatEnter && !suggestWidgetVisible');
+    expect(editor).toContain('this.chatEnter.set(!enabled && this.submitOnEnter)');
+    expect(editor).toContain('monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter');
+    expect(editor).toContain('monaco.KeyMod.Shift | monaco.KeyCode.Enter');
+
   });
 
   it("refreshes Send state when conversation text changes with language services disabled", async () => {
@@ -376,7 +353,7 @@ describe("sidebar panel layout", () => {
   it("keeps the composer visible while allowing the history, editor, and attachments to shrink", async () => {
     const css = await source("media/styles.css");
     expect(css).toMatch(/\.input-section \{[\s\S]*?--input-editor-height: clamp\(112px, 24vh, 240px\);[\s\S]*?flex: 0 0 auto;[\s\S]*?max-height: min\(58%, 360px\);[\s\S]*?overflow: hidden;[\s\S]*?\}/);
-    expect(css).toMatch(/\.input-panel \{[\s\S]*?height: var\(--input-editor-height\);[\s\S]*?flex: 1 1 var\(--input-editor-height\);/);
+    expect(css).toMatch(/\.input-panel \{[\s\S]*?height: var\(--input-editor-height\);[\s\S]*?flex: 0 0 var\(--input-editor-height\);/);
     expect(css).toMatch(/\.code-editor \{[\s\S]*?height: 100%;[\s\S]*?min-height: 0;[\s\S]*?\}/);
     expect(css).toMatch(/\.attachment-bar \{[\s\S]*?max-height: 76px;[\s\S]*?overflow: auto;[\s\S]*?\}/);
     expect(css).toMatch(/\.input-section\.section-collapsed,[\s\S]*?\.result-section\.section-collapsed \{[\s\S]*?flex: 0 0 auto;/);
@@ -553,9 +530,8 @@ describe("sidebar panel layout", () => {
     expect(main).toMatch(/message\.type === "agentEvent" && message\.sessionId === activeConversationId/);
     expect(main).toMatch(/const existingTurn = outputTurns\.get\(message\.turnId\)/);
     // Codicons declares `.codicon[class*='codicon-'] { display: inline-block }`.
-    // The idle rule needs matching specificity so the activity icon does not
-    // appear on every newly opened conversation.
-    expect(css).toMatch(/\.conversation-tab \.conversation-tab-activity \{[\s\S]*?display: none/);
+    // The idle rule must outrank even a later Monaco codicon rule.
+    expect(css).toMatch(/\.conversation-tab \.conversation-tab-activity\.codicon \{[\s\S]*?display: none/);
     expect(css).toMatch(/\.conversation-tab\.running \.conversation-tab-activity[\s\S]*?display: inline-block/);
   });
 

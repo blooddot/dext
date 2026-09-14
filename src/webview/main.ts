@@ -1,4 +1,6 @@
+import { RESOURCE_LABELS, RESOURCE_ICONS, RESOURCE_DIRECTORIES, type ResourceSession, type ResourceKind, type ResourceScope } from "../resourceSession.js";
 import { readHistoryResponse } from "../historyResponse.js";
+import { mergeAgentMessageDeltas, replayableHistoryEvents } from "../core/agentTraceReplay.js";
 import { renderTurnSection, renderTurnInput, renderTurnMarkdown, renderTurnResult, renderTurnMessage, turnDomAdapter } from "../turnComponents.js";
 import type { UiFormAnswers } from "../core/uiForm.js";
 import "../../media/styles.css";
@@ -95,16 +97,13 @@ const elements = {
   mcpAssistantGenerate: element<HTMLButtonElement>("mcp-assistant-generate"),
   mcpAssistantSave: element<HTMLButtonElement>("mcp-assistant-save"),
   createResource: element<HTMLButtonElement>("create-resource"),
-  resourceCreatorDialog: element<HTMLDialogElement>("resource-creator-dialog"),
-  resourceCreatorClose: element<HTMLButtonElement>("resource-creator-close"),
-  resourceCreatorType: element<HTMLSelectElement>("resource-creator-type"),
-  resourceCreatorScope: element<HTMLSelectElement>("resource-creator-scope"),
-  resourceCreatorInput: element<HTMLTextAreaElement>("resource-creator-input"),
-  resourceCreatorStatus: element<HTMLElement>("resource-creator-status"),
-  resourceCreatorPreviewLabel: element<HTMLElement>("resource-creator-preview-label"),
-  resourceCreatorPreview: element<HTMLTextAreaElement>("resource-creator-preview"),
-  resourceCreatorGenerate: element<HTMLButtonElement>("resource-creator-generate"),
-  resourceCreatorSave: element<HTMLButtonElement>("resource-creator-save"),
+  resourceToolbar: element<HTMLElement>("resource-toolbar"),
+  resourceTarget: element<HTMLButtonElement>("resource-target"),
+  resourceChoose: element<HTMLButtonElement>("resource-choose"),
+  resourceTargetLabel: element<HTMLElement>("resource-target-label"),
+  resourceStatus: element<HTMLElement>("resource-status"),
+  resourcePreview: element<HTMLButtonElement>("resource-preview"),
+  resourceSave: element<HTMLButtonElement>("resource-save"),
   uiDialog: element<HTMLDialogElement>("ui-dialog"),
   uiDialogForm: element<HTMLFormElement>("ui-dialog-form"),
   uiDialogTitle: element<HTMLElement>("ui-dialog-title"),
@@ -213,6 +212,10 @@ let lastSidebarState: SidebarState | undefined;
 let renderedMethodsKey: string | undefined;
 let renderedMcpKey: string | undefined;
 let activeConversationId: string | undefined;
+const resourceSessions = new Map<string, ResourceSession>();
+const resourcePending = new Set<string>();
+const resourceErrors = new Map<string, string>();
+function activeResource(): ResourceSession | undefined { return resourceSessions.get(activeConversationId ?? ""); }
 // Monotonically identifies the latest tab click. Host responses can be
 // delayed by the Webview IPC queue, so stale responses must not overwrite a
 // newer local selection.
@@ -446,6 +449,7 @@ markdown.validateLink = (url: string): boolean =>
 
 const editor = new DextCodeEditor({
   parent: elements.codeEditor,
+  workerUri: document.querySelector<HTMLMetaElement>('meta[name="dext-editor-worker"]')!.content,
   dropTarget: elements.inputShell,
   broker,
   clipboard,
@@ -495,7 +499,7 @@ function openOutputLink(event: MouseEvent): void {
 }
 
 function composerSelectionLocked(): boolean {
-  return executing || runningConversationIds.has(activeConversationId ?? "");
+  return executing || runningConversationIds.has(activeConversationId ?? "") || resourcePending.has(activeConversationId ?? "");
 }
 
 function updateRunState(): void {
@@ -507,16 +511,19 @@ function updateRunState(): void {
     for (const button of menu.querySelectorAll<HTMLButtonElement>("button")) button.disabled = selectionLocked || button.dataset.presetDisabled === "true";
   }
   if (selectionLocked) closeComposerMenus();
-  const codeMode = inputMode === "code";
+  const codeMode = !activeResource() && inputMode === "code";
   const selection = sidebarState?.agentSelection;
   const preset = selection?.profileId === "deepseek-harness"
     ? sidebarState?.agentProfiles.find((profile) => profile.id === selection.profileId)?.presets?.find((item) => item.id === selection.agentPreset) : undefined;
   const presetRestriction = preset?.requiresFullAccess && (inputMode !== "agent" || agentPermission !== "full-access")
     ? "This preset requires Full access in Agent mode." : preset?.error;
-  elements.inputSection.dataset.mode = inputMode;
+  const resource = activeResource();
+  elements.inputSection.dataset.mode = resource ? "resource" : inputMode;
+  if (resource) elements.inputSection.dataset.resourceType = resource.type;
+  else delete elements.inputSection.dataset.resourceType;
   elements.run.disabled = executing
     ? stopping || !activeTurnId
-    : !editor.source.trim() || Boolean(presetRestriction) || (codeMode && (hasErrors || inputKind === "invalid"));
+    : resourcePending.has(activeConversationId ?? "") || !editor.source.trim() || Boolean(presetRestriction) || (codeMode && (hasErrors || inputKind === "invalid"));
   elements.runLabel.textContent = executing ? (stopping ? "Stopping" : "Stop") : codeMode ? "Run" : "Send";
   elements.run.title = !executing && presetRestriction ? presetRestriction : elements.runLabel.textContent;
   elements.run.setAttribute("aria-label", elements.runLabel.textContent);
@@ -538,11 +545,17 @@ function updateRunState(): void {
   elements.problems.classList.toggle("hidden", !codeMode);
   elements.inputShell.classList.toggle("conversation-mode", !codeMode);
   renderPlanToolbar();
+  renderResourceToolbar();
   syncTurnActions();
 }
 
 function renderPlanToolbar(): void {
-  const visible = inputMode === "plan";
+  if (activeResource()) {
+    elements.planToolbar.hidden = true;
+    renderResourceToolbar();
+    return;
+  }
+  const visible = !activeResource() && inputMode === "plan";
   editor.setPlaceholder(visible
     ? activePlanPath ? "Describe changes to the selected plan…" : "Describe a new plan…"
     : "");
@@ -818,46 +831,85 @@ let mcpAssistantProcessStartedAt: number | undefined;
 let mcpAssistantProcessCount = 0;
 let mcpAssistantProcessTokens: number | undefined;
 let mcpAssistantPendingTools: string[] | undefined;
-let resourceCreatorSessionId = "";
-let resourceCreatorDraftId: string | undefined;
-let resourceCreatorRequestId: string | undefined;
-
-function openResourceCreatorDialog(): void {
-  resourceCreatorSessionId = crypto.randomUUID();
-  resourceCreatorDraftId = undefined;
-  resourceCreatorRequestId = undefined;
-  elements.resourceCreatorInput.value = "";
-  elements.resourceCreatorPreview.value = "";
-  elements.resourceCreatorPreview.hidden = true;
-  elements.resourceCreatorPreviewLabel.hidden = true;
-  elements.resourceCreatorSave.hidden = true;
-  elements.resourceCreatorGenerate.disabled = false;
-  elements.resourceCreatorStatus.textContent = "";
-  elements.resourceCreatorDialog.showModal();
-  elements.resourceCreatorInput.focus();
+function sendResourceAction(type: "chooseResource" | "previewResource" | "saveResource"): void {
+  if (!activeConversationId || composerSelectionLocked()) return;
+  resourceErrors.delete(activeConversationId);
+  clearInputError();
+  resourcePending.add(activeConversationId);
+  vscode.postMessage({ type, sessionId: activeConversationId });
+  updateRunState();
 }
 
-function draftResource(): void {
-  const input = elements.resourceCreatorInput.value.trim();
-  if (!input) { elements.resourceCreatorStatus.textContent = "Describe the resource first."; return; }
-  const requestId = crypto.randomUUID();
-  resourceCreatorRequestId = requestId;
-  resourceCreatorDraftId = undefined;
-  elements.resourceCreatorGenerate.disabled = true;
-  elements.resourceCreatorSave.hidden = true;
-  elements.resourceCreatorStatus.textContent = "Dext is preparing a draft…";
-  vscode.postMessage({
-    type: "draftResource", requestId, sessionId: resourceCreatorSessionId,
-    resourceType: elements.resourceCreatorType.value as "api" | "mcp" | "rule" | "skill",
-    scope: elements.resourceCreatorScope.value as "project" | "global", input
-  });
+function changeResourceOptions(resourceType: ResourceKind, scope: ResourceScope): void {
+  const sessionId = activeConversationId;
+  const resource = activeResource();
+  if (!sessionId || !resource || composerSelectionLocked()) return;
+  closeComposerMenus();
+  const submit = (): void => {
+    resourceErrors.delete(sessionId);
+    resourcePending.add(sessionId);
+    vscode.postMessage({ type: "resourceOptions", sessionId, resourceType, scope });
+    updateRunState();
+  };
+  if (resourceType !== resource.type && resource.draft) {
+    openConfirmationDialog("Discard the current resource draft and change its type?", submit);
+  } else submit();
 }
 
-function saveResource(): void {
-  if (!resourceCreatorDraftId) return;
-  elements.resourceCreatorSave.disabled = true;
-  elements.resourceCreatorStatus.textContent = "Saving resource…";
-  vscode.postMessage({ type: "saveResource", draftId: resourceCreatorDraftId });
+function renderResourceControls(): void {
+  const resource = activeResource();
+  elements.modeControl.querySelector(".composer-control-label")!.textContent = resource ? "Resource" : "Mode";
+  elements.permissionControl.querySelector(".composer-control-label")!.textContent = resource ? "Save to" : "Permission";
+  elements.modeControl.title = resource ? "Resource type" : "Mode";
+  elements.permissionControl.title = resource ? resourceDirectory(resource.scope, resource.type) : "Permission";
+  if (!resource) return;
+  elements.modeControlValue.textContent = RESOURCE_LABELS[resource.type];
+  elements.modeControlIcon.className = `codicon codicon-${RESOURCE_ICONS[resource.type]}`;
+  elements.permissionMenuShell.hidden = false;
+  elements.permissionControlValue.textContent = resource.scope === "project" ? "Project" : "Global";
+  elements.permissionControlIcon.className = "codicon codicon-folder";
+  elements.permissionControl.classList.remove("is-full-access");
+  renderComposerMenu(elements.modeMenu, (Object.entries(RESOURCE_LABELS) as Array<[ResourceKind, string]>).map(([type, label]) => [type, label, `codicon-${RESOURCE_ICONS[type]}`]), resource.type,
+    (type) => changeResourceOptions(type as ResourceKind, resource.scope));
+  for (const [index, button] of Array.from(elements.modeMenu.querySelectorAll("button")).entries()) {
+    button.dataset.resourceType = Object.keys(RESOURCE_LABELS)[index]!;
+  }
+  const scopes: ResourceScope[] = sidebarState?.resourceRoots?.project ? ["project", "global"] : ["global"];
+  renderComposerMenu(elements.permissionMenu, scopes.map((scope) => [scope,
+    `${resource.target && resource.scope !== scope ? "Save as · " : ""}${scope === "project" ? "Project" : "Global"}`, "codicon-folder"]), resource.scope,
+    (scope) => changeResourceOptions(resource.type, scope as ResourceScope));
+  for (const [index, button] of Array.from(elements.permissionMenu.querySelectorAll("button")).entries()) {
+    const path = resourceDirectory(scopes[index]!, resource.type);
+    button.title = path;
+    const detail = document.createElement("small");
+    detail.className = "resource-directory";
+    detail.textContent = path;
+    button.querySelector("span")?.append(detail);
+  }
+}
+
+function resourceDirectory(scope: ResourceScope, type: ResourceKind): string {
+  return `${sidebarState?.resourceRoots?.[scope] ?? (scope === "project" ? ".dext" : ".dext-global")}/${RESOURCE_DIRECTORIES[type]}`;
+}
+
+function renderResourceToolbar(): void {
+  const resource = activeResource();
+  elements.resourceToolbar.hidden = !resource;
+  if (!resource) return;
+  const locked = composerSelectionLocked();
+  const document = resource.draft ?? resource.target;
+  elements.resourceTargetLabel.textContent = document?.name ?? "New resource";
+  elements.resourceTarget.querySelector(".codicon")!.className = `codicon codicon-${RESOURCE_ICONS[resource.type]}`;
+  elements.resourceTarget.title = resource.target ? `${resourceDirectory(resource.scope, resource.type)}/${resource.target.path}` : "Select a resource";
+  elements.resourceTarget.disabled = locked;
+  elements.resourceChoose.disabled = locked;
+  elements.resourcePreview.disabled = locked || !document;
+  elements.resourcePreview.textContent = resource.draft && resource.target ? "View changes" : "Preview";
+  elements.resourceSave.disabled = locked || !resource.draft;
+  elements.resourceSave.textContent = resource.target ? "Save changes" : "Create";
+  elements.resourceStatus.dataset.state = resourceErrors.has(activeConversationId ?? "") ? "error" : !locked && !resource.draft && resource.saved ? "saved" : "idle";
+  elements.resourceStatus.textContent = resourceErrors.get(activeConversationId ?? "") ?? (resourcePending.has(activeConversationId ?? "") ? "Working…" : executing ? "Generating…" : resource.draft ? "Unsaved draft" : resource.saved ? "Saved" : resource.target ? "Editing" : "New resource");
+  editor.setPlaceholder(resource.target ? `Describe changes to ${resource.target.name}…` : `Describe the ${RESOURCE_LABELS[resource.type]} to create…`);
 }
 
 function resetMcpAssistantProcess(): void {
@@ -1223,12 +1275,12 @@ function renderAgentControls(state: SidebarState): void {
   sidebarState = state;
   // A tab with no stored mode is a fresh conversation and must use Agent. Do
   // not retain the previous tab's mode in the webview-local fallback.
-  inputMode = state.agentSelection.mode ?? "agent";
+  inputMode = activeResource() ? "ask" : state.agentSelection.mode ?? "agent";
   if (state.settings) {
     defaultDiffMode = state.settings.diffView;
     editor.setSubmitOnEnter(state.settings.submitOnEnter);
   }
-  editor.setLanguageEnabled(inputMode === "code");
+  editor.setMode(inputMode === "code" ? "code" : "chat");
   const selected = state.agentProfiles.find((item) => item.id === state.agentSelection.profileId)
     ?? state.agentProfiles[0];
   const effective = presentAgentSelection(selected, state.agentSelection);
@@ -1284,6 +1336,7 @@ function renderAgentControls(state: SidebarState): void {
       agentPreset: state.agentSelection.agentPreset ?? (profileId === "deepseek-harness" && !outputTurns.size ? "standard" : "") });
   });
   renderModelMenu(state, options, selectedModel);
+  renderResourceControls();
   updateRunState();
 }
 
@@ -1592,6 +1645,7 @@ function selectConversation(sessionId: string): void {
   // below an already-selected tab.
   persistComposerDraft();
   activeConversationId = sessionId;
+  if (sidebarState) renderAgentControls(sidebarState);
   scheduleComposerDraftRestore(sessionId, switchId);
   for (const tab of elements.conversationTabs.querySelectorAll<HTMLElement>(".conversation-tab")) {
     const active = tab.dataset.sessionId === sessionId;
@@ -3180,7 +3234,11 @@ function renderStoredTurn(record: DextHistoryRecord, turn: OutputTurnElements): 
     const inputCopy = renderTurnInput(turnDomAdapter(document), renderedInputSource(record.input), copyButton(record.input));
     turn.input.append(inputCopy);
   }
-  for (const event of record.process) renderAgentEvent(event);
+  const replaySource = typeof mergeAgentMessageDeltas === "undefined"
+    ? record.process
+    : mergeAgentMessageDeltas(record.process);
+  const replay = typeof replayableHistoryEvents === "undefined" ? replaySource : replayableHistoryEvents(replaySource);
+  for (const event of replay) renderAgentEvent(event);
   if (agentStream) finishAgentProgress();
   const duration = response?.executions.reduce((total, item) => total + item.durationMs, 0) ?? 0;
   if (turn.processMeta) turn.processMeta.textContent = presentTurn({
@@ -3518,9 +3576,14 @@ elements.mcpAssistantClose.addEventListener("click", requestCloseMcpAssistant);
 elements.mcpAssistantGenerate.addEventListener("click", generateMcpAssistant);
 elements.mcpAssistantSave.addEventListener("click", saveMcpAssistant);
 elements.createResource.addEventListener("click", () => vscode.postMessage({ type: "openResourceCreator" }));
-elements.resourceCreatorClose.addEventListener("click", () => elements.resourceCreatorDialog.close());
-elements.resourceCreatorGenerate.addEventListener("click", draftResource);
-elements.resourceCreatorSave.addEventListener("click", saveResource);
+elements.resourceTarget.addEventListener("click", () => sendResourceAction(activeResource()?.draft || activeResource()?.target ? "previewResource" : "chooseResource"));
+elements.resourceChoose.addEventListener("click", () => {
+  const choose = (): void => sendResourceAction("chooseResource");
+  if (activeResource()?.draft) openConfirmationDialog("Discard the current resource draft and select another resource?", choose);
+  else choose();
+});
+elements.resourcePreview.addEventListener("click", () => sendResourceAction("previewResource"));
+elements.resourceSave.addEventListener("click", () => sendResourceAction("saveResource"));
 elements.mcpAssistantDialog.addEventListener("click", (event) => {
   if (event.target === elements.mcpAssistantDialog) requestCloseMcpAssistant();
 });
@@ -3694,6 +3757,8 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
       clearVisibleConversation();
     }
     activeConversationId = message.activeId;
+    if (message.resource) resourceSessions.set(message.activeId, message.resource);
+    else resourceSessions.delete(message.activeId);
     for (const tab of elements.conversationTabs.querySelectorAll<HTMLElement>(".conversation-tab")) {
       const active = tab.dataset.sessionId === message.activeId;
       tab.classList.toggle("active", active);
@@ -3707,6 +3772,8 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   if (message.type === "conversations") {
     if (message.switchId !== undefined && message.switchId !== conversationSwitchId) return;
     if (!message.hostInitiated && message.switchId === undefined && activeConversationId && message.activeId !== activeConversationId) return;
+    if (message.resource) resourceSessions.set(message.activeId, message.resource);
+    else resourceSessions.delete(message.activeId);
     renderConversations(message.sessions, message.activeId);
     if (message.selection && lastSidebarState) {
       renderAgentControls({ ...lastSidebarState, agentSelection: message.selection });
@@ -3724,21 +3791,11 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   }
   if (message.type === "openMethods") openMethodsDialog();
   if (message.type === "openMcp") openMcpDialog();
-  if (message.type === "resourceCreatorOpened") openResourceCreatorDialog();
-  if (message.type === "resourceDraft" && message.requestId === resourceCreatorRequestId) {
-    resourceCreatorDraftId = message.draft.id;
-    elements.resourceCreatorPreview.value = `# ${message.draft.type}: ${message.draft.name}\n# Scope: ${message.draft.scope}\n\n${message.draft.content}`;
-    elements.resourceCreatorPreview.hidden = false;
-    elements.resourceCreatorPreviewLabel.hidden = false;
-    elements.resourceCreatorGenerate.disabled = false;
-    elements.resourceCreatorSave.hidden = false;
-    elements.resourceCreatorSave.disabled = false;
-    elements.resourceCreatorStatus.textContent = "Review the generated draft, refine the request if needed, then confirm.";
-  }
-  if (message.type === "resourceSaved" && message.draftId === resourceCreatorDraftId) {
-    elements.resourceCreatorStatus.textContent = message.message;
-    elements.resourceCreatorDialog.close();
-    resourceCreatorDraftId = undefined;
+  if (message.type === "resourceContext") {
+    resourceSessions.set(message.sessionId, message.resource);
+    if (message.busy) resourcePending.add(message.sessionId);
+    else resourcePending.delete(message.sessionId);
+    if (message.sessionId === activeConversationId && sidebarState) renderAgentControls(sidebarState);
   }
   if (message.type === "mcpAssistant") openMcpAssistantDialog();
   if (message.type === "mcpProgress" && message.requestId === mcpAssistantRequestId) {
@@ -3809,6 +3866,18 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     && message.sessionId === activeConversationId) {
     queueAgentEvents(message.sessionId, message.events);
   }
+  if (message.type === "focusAgentInput" && message.sessionId === activeConversationId) {
+    if (agentEventBatchFrame !== undefined) cancelAnimationFrame(agentEventBatchFrame);
+    flushAgentEventBatches();
+    const turn = outputTurns.get(message.turnId);
+    if (turn) {
+      if (fullscreenPanel === "input") toggleFullscreen("input");
+      setSectionOpen(elements.resultHeading, elements.resultBody, true);
+      turn.hydrate?.();
+      turn.disclosure.open = true;
+      turn.questions.focusRequest(message.kind, message.requestId);
+    }
+  }
   if (message.type === "executing"
     && (message.switchId === undefined || message.switchId === conversationSwitchId)
     && (
@@ -3878,6 +3947,12 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     updateRunState();
   }
   if (message.type === "error") {
+    if (message.sessionId && resourceSessions.has(message.sessionId)) {
+      resourcePending.delete(message.sessionId);
+      resourceErrors.set(message.sessionId, message.message);
+      if (message.sessionId !== activeConversationId) return;
+      updateRunState();
+    }
     renderInputError(message.message);
     if (elements.mcpAssistantDialog.open) {
       elements.mcpAssistantStatus.textContent = message.message;
