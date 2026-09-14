@@ -1,6 +1,6 @@
 import { parser } from "@lezer/python";
 import type { SyntaxNode } from "@lezer/common";
-import { parseWorkflowImports } from "./workflow.js";
+import { parseWorkflowImports, parserCompatibleSource } from "./workflow.js";
 import { builtinTypeDefinition } from "./builtinTypeDefinitions.js";
 import { isBuiltinApiTarget } from "./builtinApiDefinitions.js";
 
@@ -29,6 +29,19 @@ export interface BuiltinApiTarget {
   originFrom: number;
   originTo: number;
   id: string;
+}
+
+/** MCP identifiers may contain hyphens; match only actual call sites. */
+export function mcpApiDefinitionTarget(source: string, cursor: number): BuiltinApiTarget | undefined {
+  const root = parser.parse(parserCompatibleSource(source)).topNode;
+  const token = [root.resolveInner(cursor, -1), root.resolveInner(cursor, 1)]
+    .find((node) => ["VariableName", "PropertyName"].includes(node.name) && node.from <= cursor && cursor < node.to);
+  if (!token) return undefined;
+  let callee = token;
+  while (callee.parent?.name === "MemberExpression") callee = callee.parent;
+  if (callee.parent?.name !== "CallExpression" || callee.parent.firstChild?.from !== callee.from) return undefined;
+  const id = source.slice(callee.from, callee.to).replace(/\s+/g, "");
+  return id.startsWith("mcp.") ? { id, originFrom: callee.from, originTo: callee.to } : undefined;
 }
 
 function children(node: SyntaxNode): SyntaxNode[] {

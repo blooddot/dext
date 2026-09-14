@@ -16,6 +16,8 @@ manifests take precedence when a server name collides. The `inputSchema` is
 required; `outputSchema` is optional, but enables typed fields from MCP
 `structuredContent`.
 
+Hover over MCP methods, parameters, or structured result fields to see signatures, types, and descriptions, including names with hyphens such as `teambition-user`. In the `.dx` editor, Ctrl+click (Cmd+click on macOS) or F12 opens a read-only virtual definition generated from the loaded manifests, with parameters and return fields. Navigating again after a manifest reload opens the latest definition.
+
 ```jsonc
 // .dext/mcp/docs.jsonc
 {

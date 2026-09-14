@@ -7,6 +7,7 @@ import { builtinTypeDefinitionTarget, builtinTypeReferenceTarget } from "./apiNa
 import { formatFieldType, formatMethodParameter, formatMethodSignature, methodResultType } from "./methodSignature.js";
 import { splitTopLevel } from "./pythonType.js";
 import { specializeBuiltinCli } from "./builtinCli.js";
+import { parserCompatibleSource } from "./workflow.js";
 
 interface ValueType {
   type: string;
@@ -33,7 +34,7 @@ function children(node: SyntaxNode): SyntaxNode[] {
 export function documentSymbolHover(
   source: string, cursor: number, resolveMethod: (name: string) => RegisteredCallable | undefined
 ): LanguageHover | undefined {
-  const root = parser.parse(source).topNode;
+  const root = parser.parse(parserCompatibleSource(source)).topNode;
   const token = [root.resolveInner(cursor, 1), root.resolveInner(cursor, -1)]
     .find((node) => ["VariableName", "PropertyName"].includes(node.name) && node.from <= cursor && cursor < node.to);
   if (!token) return undefined;

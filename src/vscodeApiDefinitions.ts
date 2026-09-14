@@ -1,13 +1,26 @@
 import * as vscode from "vscode";
-import { apiDefinitionTarget, apiFunctionDefinition, builtinApiDefinitionTarget, builtinTypeDefinitionTarget, builtinTypeReferenceTarget } from "./core/apiNavigation.js";
+import { apiDefinitionTarget, apiFunctionDefinition, builtinApiDefinitionTarget, builtinTypeDefinitionTarget, builtinTypeReferenceTarget, mcpApiDefinitionTarget } from "./core/apiNavigation.js";
 import { builtinTypeDocument } from "./core/builtinTypeDefinitions.js";
-import { builtinApiDocument, builtinApiReferenceTarget } from "./core/builtinApiDefinitions.js";
+import { builtinApiDocument, builtinApiReferenceTarget, callableApiDocument } from "./core/builtinApiDefinitions.js";
 import { builtinMemberDefinitionTarget } from "./core/builtinMemberNavigation.js";
+import type { MethodRegistry } from "./core/registry.js";
 
 const BUILTIN_TYPES_SCHEME = "dext-types";
 const BUILTIN_TYPES_PATH = "/builtin-types.dx";
 const BUILTIN_APIS_SCHEME = "dext-builtins";
 const BUILTIN_APIS_PATH = "/builtin-apis.dx";
+const MCP_APIS_SCHEME = "dext-mcp";
+
+function mcpApiDocument(registry: MethodRegistry) {
+  return callableApiDocument(registry.list().filter((method) => method.id.startsWith("mcp.")), "Dext MCP APIs");
+}
+
+export class DextMcpApisContentProvider implements vscode.TextDocumentContentProvider {
+  constructor(private readonly registry: MethodRegistry) {}
+  provideTextDocumentContent(): string {
+    return mcpApiDocument(this.registry).text;
+  }
+}
 
 function builtinTypesUri(): vscode.Uri {
   return vscode.Uri.parse(`${BUILTIN_TYPES_SCHEME}:${BUILTIN_TYPES_PATH}`);
@@ -44,7 +57,8 @@ export async function openBuiltinApiDefinition(id: string): Promise<void> {
 }
 
 export class DextApiDefinitionProvider implements vscode.DefinitionProvider {
-  constructor(private readonly sourcePath: (apiId: string) => string | undefined) {}
+  constructor(private readonly sourcePath: (apiId: string) => string | undefined,
+    private readonly registry?: MethodRegistry) {}
 
   async provideDefinition(
     document: vscode.TextDocument,
@@ -52,8 +66,25 @@ export class DextApiDefinitionProvider implements vscode.DefinitionProvider {
     token: vscode.CancellationToken
   ): Promise<vscode.DefinitionLink[] | undefined> {
     if (token.isCancellationRequested) return undefined;
-    const source = document.getText();
-    const cursor = document.offsetAt(position);
+    return this.resolve(document.getText(), document.offsetAt(position), document.uri, token);
+  }
+
+  async resolve(source: string, cursor: number, uri: vscode.Uri, token: vscode.CancellationToken): Promise<vscode.DefinitionLink[] | undefined> {
+    if (token.isCancellationRequested || cursor < 0 || cursor > source.length) return undefined;
+    const document = { uri, getText: () => source, positionAt: (offset: number) => offsetPosition(offset, source) };
+    const mcpApi = mcpApiDefinitionTarget(source, cursor);
+    if (mcpApi && this.registry?.get(mcpApi.id)) {
+      const reference = mcpApiDocument(this.registry);
+      const definition = reference.ranges.get(mcpApi.id);
+      if (!definition) return undefined;
+      return [{
+        originSelectionRange: new vscode.Range(document.positionAt(mcpApi.originFrom), document.positionAt(mcpApi.originTo)),
+        // A refreshed registry must not reopen VS Code's cached schema document.
+        targetUri: vscode.Uri.parse(`${MCP_APIS_SCHEME}:/mcp-apis.dx?revision=${this.registry.version}`),
+        targetRange: new vscode.Range(offsetPosition(definition.from, reference.text), offsetPosition(definition.to, reference.text)),
+        targetSelectionRange: new vscode.Range(offsetPosition(definition.nameFrom, reference.text), offsetPosition(definition.nameTo, reference.text))
+      }];
+    }
     const builtinType = (document.uri.scheme === BUILTIN_TYPES_SCHEME
       ? builtinTypeReferenceTarget(source, cursor)
       : builtinTypeDefinitionTarget(source, cursor)) ?? builtinMemberDefinitionTarget(source, cursor);

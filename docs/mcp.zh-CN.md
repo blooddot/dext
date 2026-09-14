@@ -10,6 +10,8 @@
 
 MCP 清单位于 `<workspace>/.dext/mcp/*.jsonc` 或 Dext 全局存储中。每个文件声明一个服务器和显式工具白名单。启用的工具会成为 `mcp.<server>.<tool>(...)` API，支持补全、参数提示、必填参数校验和结构化结果字段补全。
 
+悬浮在 MCP 方法、参数或结构化结果字段上可查看签名、类型和说明，支持 `teambition-user` 等带连字符的名称。在 `.dx` 编辑器中按住 Ctrl 点击方法（macOS 使用 Cmd），或按 F12，可打开由已加载清单生成的只读虚拟定义，查看参数和返回字段；清单重载后再次跳转会打开最新定义。
+
 同名时项目清单优先。`inputSchema` 必填；`outputSchema` 可选，用于为 MCP 的 `structuredContent` 提供类型信息。下面的命令名是示例，需要替换为实际安装的 MCP 服务器命令：
 
 ```jsonc

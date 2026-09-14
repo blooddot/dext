@@ -9,8 +9,10 @@ vi.mock("vscode", () => ({
   workspace: { openTextDocument }
 }));
 
-import { DextApiDefinitionProvider } from "../src/vscodeApiDefinitions.js";
+import { DextApiDefinitionProvider, DextMcpApisContentProvider } from "../src/vscodeApiDefinitions.js";
 import { builtinTypeDocument } from "../src/core/builtinTypeDefinitions.js";
+import { MethodRegistry } from "../src/core/registry.js";
+import { BUILTIN_METHODS } from "../src/core/builtins.js";
 
 function document(source: string, path: string, scheme?: string): VSCode.TextDocument {
   return {
@@ -25,7 +27,38 @@ const token = { isCancellationRequested: false } as VSCode.CancellationToken;
 const source = "from playground import verify\nverify()";
 
 describe("VS Code .dx definition provider", () => {
+  it("resolves Input source without creating an untitled document or opening an editor", async () => {
+    const provider = new DextApiDefinitionProvider(() => undefined);
+    const text = '# @src/a.ts\ndef helper():\n    pass\nhelper()';
+    const uri = { scheme: "dext-input" } as VSCode.Uri;
+    const target = (await provider.resolve(text, text.lastIndexOf("helper") + 1, uri, token))?.[0];
+    expect(target?.targetUri).toBe(uri);
+    expect(target?.targetSelectionRange?.start).toMatchObject({ line: 1, character: 4 });
+    expect(openTextDocument).not.toHaveBeenCalled();
+    expect(await provider.resolve(text, text.length + 1, uri, token)).toBeUndefined();
+  });
   beforeEach(() => { openTextDocument.mockReset(); });
+
+  it("navigates registered MCP calls to a read-only schema and refreshes its URI after reload", async () => {
+    const registry = new MethodRegistry();
+    const method = { ...BUILTIN_METHODS[0]!, id: "mcp.teambition-user.queryTaskV3", description: "Task details" };
+    registry.register(method, "project");
+    const provider = new DextApiDefinitionProvider(() => undefined, registry);
+    const content = new DextMcpApisContentProvider(registry);
+    const source = 'mcp.teambition-user.queryTaskV3(taskId="123")';
+    const current = document(source, "C:/project/fix.dx", "file");
+    const position = current.positionAt(source.indexOf("queryTaskV3") + 2);
+    const links = await provider.provideDefinition(current, position, token);
+    expect(links?.[0]?.targetUri).toMatchObject({ path: "dext-mcp:/mcp-apis.dx?revision=1" });
+    const selection = links![0]!.targetSelectionRange!;
+    expect(content.provideTextDocumentContent().split("\n")[selection.start.line]!.slice(selection.start.character, selection.end.character)).toBe("queryTaskV3");
+    registry.register({ ...method, description: "Updated schema" }, "project");
+    expect((await provider.provideDefinition(current, position, token))?.[0]?.targetUri).toMatchObject({ path: "dext-mcp:/mcp-apis.dx?revision=2" });
+    expect(content.provideTextDocumentContent()).toContain("Updated schema");
+    registry.clearExternal();
+    expect(await provider.provideDefinition(current, position, token)).toBeUndefined();
+    expect(openTextDocument).not.toHaveBeenCalled();
+  });
 
   it("jumps to the exact field declaration in the virtual result type", async () => {
     const source = 'def main(input: str):\n    parsed_url = node.url.parse(url=input)\n    task_id = node.path.basename(path=parsed_url.pathname)';
@@ -63,7 +96,7 @@ describe("VS Code .dx definition provider", () => {
     const provider = new DextApiDefinitionProvider(() => undefined);
     const links = await provider.provideDefinition(current, current.positionAt(source.indexOf("report") + 2), token);
     expect(links?.[0]?.targetUri).toBe(current.uri);
-    expect(links?.[0]?.targetSelectionRange?.start.character).toBe(source.lastIndexOf("report"));
+    expect(links?.[0]?.targetSelectionRange?.start).toMatchObject({ line: 3, character: 4 });
     expect(openTextDocument).not.toHaveBeenCalled();
   });
 

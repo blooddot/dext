@@ -8,7 +8,7 @@ function pythonValue(value: string): string {
 
 /** Convert one `name?: type = default` parameter to Python. */
 function pythonParameter(parameter: string): string {
-  const match = /^\s*([A-Za-z_]\w*)(\?)?: ([\s\S]*?)(?: = ([\s\S]*))?\s*$/.exec(parameter);
+  const match = /^\s*([A-Za-z_][\w-]*)(\?)?: ([\s\S]*?)(?: = ([\s\S]*))?\s*$/.exec(parameter);
   if (!match) return parameter.trim();
   const optional = Boolean(match[2]);
   const annotation = `${match[1]}: ${pythonType(match[3]!)}${optional && match[4] === undefined ? " | None" : ""}`;
@@ -48,7 +48,7 @@ export function pythonHoverCode(label: string, kind?: "parameter"): string {
   }
   const shape = /^([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*) \{ ([\s\S]*) \}$/.exec(label);
   if (shape) return pythonClass(shape[1]!, pythonShapeMembers(shape[2]!));
-  const call = /^([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\(([\s\S]*)\) -> ([\s\S]*)$/.exec(label);
+  const call = /^([A-Za-z_][\w-]*(?:\.[A-Za-z_][\w-]*)*)\(([\s\S]*)\) -> ([\s\S]*)$/.exec(label);
   if (call) {
     const parameters = splitTopLevel(call[2]!, ",").map(pythonParameter).join(", ");
     return pythonCallable(call[1]!, parameters, pythonType(call[3]!));
