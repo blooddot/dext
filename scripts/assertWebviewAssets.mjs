@@ -10,10 +10,10 @@ const files = await Promise.all(
 );
 const fileNames = files.filter((file) => file.size > 0).map((file) => file.entry);
 
-for (const required of ["main.js", "main.css"]) {
+for (const required of ["main.js", "main.css", "editor.worker.js"]) {
   assert.ok(fileNames.includes(required), `Missing Webview build asset '${required}'.`);
 }
-assert.deepEqual(fileNames.filter((file) => file.endsWith(".worker.js")), []);
+assert.ok(fileNames.includes("editor.worker.js"));
 assert.ok((await stat(resolve("dist", "codicons", "codicon.ttf"))).size > 0, "Missing VS Code codicon font.");
 const mainBundle = await readFile(resolve(output, "main.js"), "utf8");
 const extensionBundle = await readFile(resolve("dist", "extension.js"), "utf8");
@@ -25,6 +25,7 @@ for (const required of [
   "media/styles.css",
   "dist/webview/main.css",
   "dist/webview/main.js",
+  "dist/webview/editor.worker.js",
   "dist/codicons/codicon.css",
   "dist/codicons/codicon.ttf",
   "dist/markdown/github-markdown.css",
@@ -47,8 +48,8 @@ assert.ok(
   "The extension bundle contains jsonc-parser's UMD entry. Import jsonc-parser/lib/esm/main.js explicitly; the UMD wrapper leaves unresolved relative requires in the VS Code extension host."
 );
 for (const action of [
-  "code-file-reference",
-  "dext-signature-tooltip",
+  "dext-ref-chip",
+  "editor.action.triggerParameterHints",
   "Dext input",
   "insertFileReferences",
   "executeInput",
@@ -56,29 +57,10 @@ for (const action of [
 ]) {
   assert.ok(mainBundle.includes(action), `Missing required Webview behavior '${action}' from the bundle.`);
 }
-for (const diagnosticStyle of [
-  "dext-diagnostic-error",
-  "dext-diagnostic-warning",
-  "dext-diagnostic-info",
-  "cm-tooltip-lint",
-  "--vscode-editorError-foreground"
-]) {
-  assert.ok(
-    mainStyles.includes(diagnosticStyle),
-    `Missing required diagnostic style '${diagnosticStyle}' from the Webview CSS.`
-  );
+
+for (const style of ['.monaco-editor', '.squiggly-error', '.squiggly-warning', '.parameter-hints-widget', '.dext-ref-chip']) {
+  assert.ok(mainStyles.includes(style), 'Missing Monaco style '+style);
 }
-assert.match(
-  mainStyles,
-  /\.cm-lint-marker-error[^{}]*\{[^}]*content:\s*none\s*!important[^}]*position:\s*relative/i,
-  "Diagnostic markers must clear CodeMirror's data-image replacement content."
-);
-assert.match(
-  mainStyles,
-  /\.cm-lint-marker-error::before[^{}]*\.cm-lint-marker-error::after\s*\{[^}]*content:\s*["']{2}/i,
-  "The error marker must render as CSS lines instead of a font glyph."
-);
-assert.match(mainStyles, /\.cm-lint-marker-error::before\s*\{[^}]*rotate\(45deg\)/i);
-assert.match(mainStyles, /\.cm-lint-marker-error::after\s*\{[^}]*rotate\(-45deg\)/i);
-assert.match(mainStyles, /\.cm-lint-marker-warning::before\s*\{[^}]*content:\s*["']!["']/i);
-assert.match(mainStyles, /\.cm-lint-marker-info::before\s*\{[^}]*content:\s*["']i["']/i);
+for (const font of fileNames.filter(name=>name.endsWith('.ttf'))) assert.ok(packagedFiles.has('dist/webview/'+font), 'Missing Monaco font '+font);
+assert.ok(!mainBundle.includes('@codemirror/'), 'Old editor code must not be bundled');
+assert.ok(!mainStyles.includes('.cm-editor'), 'Old editor styles must not be bundled');

@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { ExecutionCancelledError } from "./core/executionErrors.js";
-import { uiFormResultSchema, validateUiAnswers, type UiFormDefinition, type UiFormResult, type UiInteractionState } from "./core/uiForm.js";
+import { validateUiFormResult, type UiFormDefinition, type UiFormResult, type UiInteractionState } from "./core/uiForm.js";
 
 /** Only a matching live request may consume a response. Answers are validated
  * against the host's definition, never a definition supplied by the Webview. */
@@ -18,7 +18,7 @@ export class UiInteractionBroker {
         if (!this.pending.delete(key)) return;
         signal?.removeEventListener("abort", abort);
         try {
-          onState({ ...state, status: result?.status ?? "closed", ...(result ? { answers: result.answers } : {}) });
+          onState({ ...state, status: result?.status ?? "closed", ...(result ? { answers: result.answers, action: result.action } : {}) });
         } catch (error) {
           reject(result ? (error instanceof Error ? error : new Error("Unable to publish interaction state.", { cause: error })) : new ExecutionCancelledError());
           return;
@@ -38,8 +38,7 @@ export class UiInteractionBroker {
     const pending = this.pending.get(JSON.stringify([sessionId, turnId, requestId]));
     if (!pending) return false;
     try {
-      const result = uiFormResultSchema.parse(value);
-      if (result.status === "submitted") result.answers = validateUiAnswers(pending.state.form, result.answers);
+      const result = validateUiFormResult(pending.state.form, value);
       pending.finish(result);
       return true;
     } catch { return false; }

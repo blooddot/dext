@@ -10,6 +10,11 @@
   /* Keep Full access distinct from Plan's warm gold. */
   --dext-full-access-accent: #a9675c;
   --dext-row-action-background: #252526;
+  --resource-api-accent: #79b8ff;
+  --resource-mcp-accent: #c2a3ff;
+  --resource-rule-accent: #dfb45c;
+  --resource-skill-accent: #63c9b6;
+  --resource-button-foreground: #121212;
 }
 
 body.vscode-light {
@@ -19,6 +24,11 @@ body.vscode-light {
 body.vscode-light,
 body.vscode-high-contrast-light {
   --dext-row-action-background: #ffffff;
+  --resource-api-accent: #1769b5;
+  --resource-mcp-accent: #7546b6;
+  --resource-rule-accent: #886000;
+  --resource-skill-accent: #08796d;
+  --resource-button-foreground: #ffffff;
 }
 
 body.vscode-high-contrast {
@@ -123,7 +133,6 @@ body {
 .plan-target:disabled,
 .plan-choose:disabled { opacity: 0.5; cursor: default; }
 .plan-status { flex: 0 0 auto; color: var(--vscode-descriptionForeground); font-size: 0.9em; white-space: nowrap; }
-.code-editor .cm-placeholder { color: var(--vscode-input-placeholderForeground, var(--vscode-descriptionForeground)); }
 button.primary.plan-build {
   /* Add to the toolbar's 6px gap for 8px after the plan status. */
   margin-left: 2px;
@@ -166,7 +175,9 @@ button.primary.plan-build {
   border-radius: 5px;
 }
 .agent-todo-item > .codicon { flex: 0 0 16px; margin-top: 2px; color: var(--vscode-descriptionForeground); }
-.agent-todo-text { flex: 1; min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.agent-todo-text.markdown-body { flex: 1; min-width: 0; margin: 0; color: inherit; font-size: inherit; overflow-wrap: anywhere; white-space: normal; }
+.agent-todo-text.markdown-body > :not(:last-child) { margin-bottom: 6px; }
+.agent-todo-text.markdown-body pre { overflow-x: auto; }
 .agent-todo-status { flex: 0 0 auto; font-size: 11px; color: var(--vscode-descriptionForeground); }
 .agent-todo-item.active {
   --todo-accent: var(--vscode-progressBar-background, var(--vscode-focusBorder));
@@ -267,7 +278,9 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .agent-todo-item.act
   max-width: 128px;
 }
 
-.conversation-tab .conversation-tab-activity {
+/* Monaco also bundles a later .codicon[class*='codicon-'] display rule.
+   Keep tab visibility more specific than that shared icon baseline. */
+.conversation-tab .conversation-tab-activity.codicon {
   display: none;
   flex: 0 0 auto;
   color: var(--vscode-progressBar-background, var(--vscode-focusBorder));
@@ -808,10 +821,43 @@ main {
 
 .history-session-body {
   padding: 2px 0 14px 16px;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .history-record-body {
   padding: 2px 0 12px 16px;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* History uses the same turn renderer as the live conversation, but its turns
+   live inside nested details rather than the conversation flex column. Keep
+   every layer shrinkable and give the rendered body the available width;
+   otherwise Chromium can resolve the Markdown column to its min-content width
+   and wrap CJK prose one character per line. */
+.history-record-body > .turn-section,
+.history-record-body > .turn-section > .turn-section-body,
+.history-record-body .agent-stream-text,
+.history-record-body .markdown-body {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Restored process messages can sit inside several nested details elements.
+   Keep the message row a full-width block at every nesting level; otherwise
+   Chromium may shrink the section to its min-content width and wrap CJK text
+   one glyph per line. */
+.history-record-body .agent-stream-item,
+.history-record-body .process-message,
+.history-record-body .agent-stream-text {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .history-disclosure {
@@ -1047,7 +1093,7 @@ main {
 .input-panel {
   min-height: 64px;
   height: var(--input-editor-height);
-  flex: 1 1 var(--input-editor-height);
+  flex: 0 0 var(--input-editor-height);
   position: relative;
   overflow: hidden;
 }
@@ -1070,273 +1116,42 @@ main {
   background: var(--vscode-editor-background);
 }
 
-.code-editor .cm-editor {
-  height: 100%;
-  color: var(--vscode-editor-foreground);
-  background: transparent;
-  font-family: var(--vscode-editor-font-family);
-  font-size: var(--vscode-editor-font-size, 12px);
+/* Chat composers start as a real multi-line editing surface. A shrinkable
+   flex item could collapse this to one line in a short sidebar, leaving no
+   second row for mouse selection. */
+.input-section[data-mode="agent"] .input-panel,
+.input-section[data-mode="ask"] .input-panel,
+.input-section[data-mode="plan"] .input-panel {
+  min-height: 112px;
+  flex-basis: var(--input-editor-height);
 }
 
-.code-editor .cm-editor.cm-focused {
-  outline: 0;
+/* Monaco owns editing widgets; only Dext reference chips need custom colors. */
+.code-editor.file-drop-active { box-shadow: inset 0 0 0 2px var(--vscode-focusBorder); }
+.monaco-editor .view-line .dext-ref-source { display: none !important; }
+/* IME's textarea paints raw reference tokens over injected labels. Let the
+   projected line and its cursor paint while native composition keeps focus. */
+.dext-reference-composition .monaco-editor .inputarea.ime-input { opacity: 0; }
+.dext-reference-composition .monaco-editor .cursors-layer > .cursor { visibility: visible !important; }
+.monaco-editor .view-line .dext-ref-chip {
+  color: var(--vscode-textLink-foreground, #173e67);
+  background: var(--vscode-textCodeBlock-background, #e3effb);
+  border: 1px solid var(--vscode-widget-border, #6686aa);
+  border-radius: 4px;
+  cursor: pointer;
 }
-
-.code-editor .cm-editor.file-drop-active {
-  box-shadow: inset 0 0 0 2px var(--vscode-focusBorder);
-  background: var(--vscode-list-dropBackground, var(--vscode-editor-background));
+body.vscode-dark .monaco-editor .view-line .dext-ref-chip {
+  color: var(--vscode-textLink-foreground, #c2e1ff);
+  background: var(--vscode-textCodeBlock-background, #26415f);
 }
-
-.code-editor .cm-scroller {
-  overflow: auto;
-  font-family: inherit;
-  line-height: 24px;
-}
-
-.code-editor .cm-content {
-  min-height: 100%;
-  padding: 8px;
-  caret-color: var(--vscode-editorCursor-foreground);
+body.vscode-high-contrast .monaco-editor .view-line .dext-ref-chip,
+body.vscode-high-contrast-light .monaco-editor .view-line .dext-ref-chip {
+  border-color: var(--vscode-contrastBorder, var(--vscode-focusBorder));
 }
 
 .input-shell.conversation-mode .code-editor {
   border-radius: 6px;
   background: var(--vscode-input-background, var(--vscode-editor-background));
-}
-
-.input-shell.conversation-mode .cm-gutters {
-  display: none;
-}
-
-.input-shell.conversation-mode .cm-scroller {
-  overflow-x: hidden;
-}
-
-.input-shell.conversation-mode .cm-content {
-  padding-right: 40px;
-}
-
-.code-editor .cm-gutters {
-  border-right: 1px solid var(--vscode-editorGroup-border, var(--vscode-widget-border));
-  color: var(--vscode-editorLineNumber-foreground);
-  background: var(--vscode-editorGutter-background, var(--vscode-editor-background));
-}
-
-.code-editor .cm-activeLineGutter {
-  color: var(--vscode-editorLineNumber-activeForeground);
-  background: var(--vscode-editorGutter-background, var(--vscode-editor-background));
-}
-
-.code-editor .cm-gutterElement {
-  min-width: 0;
-}
-
-.code-editor .cm-lineNumbers {
-  min-width: 42px;
-}
-
-.code-editor .cm-lineNumbers .cm-gutterElement {
-  width: 42px;
-  min-width: 42px;
-  padding: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  font-family: var(--vscode-editor-font-family);
-  font-size: var(--vscode-editor-font-size, 12px);
-  line-height: inherit;
-}
-
-.code-editor .cm-lint-marker-error,
-.code-editor .cm-lint-marker-warning,
-.code-editor .cm-lint-marker-info {
-  display: flex !important;
-  width: 18px;
-  height: 18px;
-  margin: 0 1px;
-  align-items: center;
-  justify-content: center;
-  border-radius: 0;
-  background-color: transparent !important;
-  background-image: none !important;
-  content: none !important;
-  font-size: 0;
-  position: relative;
-}
-
-.code-editor .cm-lint-marker-warning::before,
-.code-editor .cm-lint-marker-info::before {
-  font-family: var(--vscode-editor-font-family);
-  font-size: 14px;
-  font-weight: 700;
-  line-height: 1;
-}
-
-.code-editor .cm-lint-marker-error::before,
-.code-editor .cm-lint-marker-error::after {
-  width: 10px;
-  height: 2px;
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  border-radius: 1px;
-  background-color: var(--vscode-editorError-foreground);
-  content: "";
-}
-
-.code-editor .cm-lint-marker-error::before {
-  transform: translate(-50%, -50%) rotate(45deg);
-}
-
-.code-editor .cm-lint-marker-error::after {
-  transform: translate(-50%, -50%) rotate(-45deg);
-}
-
-.code-editor .cm-lint-marker-warning::before {
-  color: var(--vscode-editorWarning-foreground);
-  content: "!";
-}
-
-.code-editor .cm-lint-marker-info::before {
-  color: var(--vscode-editorInfo-foreground);
-  content: "i";
-}
-
-.code-editor .cm-lintRange {
-  background-image: none !important;
-  text-decoration-line: underline;
-  text-decoration-style: wavy;
-  text-decoration-thickness: 1px;
-  text-decoration-skip-ink: none;
-  text-underline-offset: 2px;
-}
-
-.code-editor .dext-diagnostic-error {
-  text-decoration-color: var(--vscode-editorError-foreground);
-}
-
-.code-editor .dext-diagnostic-warning {
-  text-decoration-color: var(--vscode-editorWarning-foreground);
-}
-
-.code-editor .dext-diagnostic-info {
-  text-decoration-color: var(--vscode-editorInfo-foreground);
-}
-
-.code-editor .cm-line {
-  min-height: 24px;
-  padding: 0;
-}
-
-.code-editor .cm-cursor,
-.code-editor .cm-dropCursor {
-  border-left-color: var(--vscode-editorCursor-foreground);
-}
-
-.code-editor .cm-selectionBackground,
-.code-editor .cm-content ::selection {
-  background: var(--vscode-editor-selectionBackground) !important;
-}
-
-.code-editor .cm-tooltip {
-  max-width: calc(100% - 12px);
-  overflow: hidden;
-  border: 1px solid var(--vscode-editorSuggestWidget-border, var(--vscode-widget-border));
-  border-radius: 3px;
-  color: var(--vscode-editorSuggestWidget-foreground, var(--vscode-foreground));
-  background: var(--vscode-editorSuggestWidget-background, var(--vscode-editor-background));
-  box-shadow: 0 2px 8px var(--vscode-widget-shadow);
-}
-
-.code-editor .cm-tooltip.cm-tooltip-lint {
-  color: var(--vscode-editorHoverWidget-foreground, var(--vscode-foreground));
-  background: var(--vscode-editorHoverWidget-background, var(--vscode-editor-background));
-  border-color: var(--vscode-editorHoverWidget-border, var(--vscode-widget-border));
-}
-
-/* Hover/signature cards use the editor-hover palette. Completion lists keep
-   the suggest-widget palette above, just as they do in VS Code itself. */
-.code-editor .cm-tooltip:has(.dext-hover-tooltip),
-.code-editor .cm-tooltip:has(.dext-signature-tooltip) {
-  color: var(--vscode-editorHoverWidget-foreground, var(--vscode-foreground));
-  background: var(--vscode-editorHoverWidget-background, var(--vscode-editor-background));
-  border-color: var(--vscode-editorHoverWidget-border, var(--vscode-widget-border));
-  border-radius: 6px;
-  box-shadow: 0 4px 12px var(--vscode-widget-shadow);
-}
-
-.code-editor .cm-tooltip-lint .cm-diagnostic {
-  color: inherit;
-  background: transparent;
-}
-
-.code-editor .cm-tooltip-lint .cm-diagnostic-error {
-  border-left-color: var(--vscode-editorError-foreground);
-}
-
-.code-editor .cm-tooltip-lint .cm-diagnostic-warning {
-  border-left-color: var(--vscode-editorWarning-foreground);
-}
-
-.code-editor .cm-tooltip-lint .cm-diagnostic-info,
-.code-editor .cm-tooltip-lint .cm-diagnostic-hint {
-  border-left-color: var(--vscode-editorInfo-foreground);
-}
-
-.code-editor .cm-tooltip-autocomplete > ul {
-  max-height: 128px;
-  font-family: var(--vscode-editor-font-family);
-}
-
-.code-editor .cm-tooltip-autocomplete > ul > li {
-  min-height: 22px;
-  padding: 2px 6px;
-}
-
-.code-editor .cm-tooltip-autocomplete > ul > li[aria-selected] {
-  color: var(--vscode-editorSuggestWidget-selectedForeground, var(--vscode-list-activeSelectionForeground));
-  background: var(--vscode-editorSuggestWidget-selectedBackground, var(--vscode-list-activeSelectionBackground));
-}
-
-.code-editor .cm-completionDetail {
-  color: var(--vscode-editorSuggestWidget-foreground, var(--vscode-descriptionForeground));
-  opacity: 0.75;
-}
-
-.dext-hover-tooltip,
-.dext-signature-tooltip {
-  /* Match the Python extension's hover card: a readable code block with a
-     little breathing room, rather than a narrow one-line browser tooltip. */
-  max-width: min(500px, calc(100vw - 32px));
-  padding: 8px 10px;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
-}
-
-.dext-hover-tooltip code,
-.dext-signature-tooltip code {
-  display: block;
-  font-size: var(--vscode-editor-font-size, 13px);
-  tab-size: 4;
-}
-
-.dext-hover-tooltip code,
-.dext-signature-tooltip code {
-  font-family: var(--vscode-editor-font-family);
-}
-
-.dext-hover-tooltip code {
-  /* Hovers render Python declarations, so preserve their line breaks. */
-  white-space: pre-wrap;
-}
-
-.dext-signature-tooltip code strong {
-  padding: 0 2px;
-  border-radius: 2px;
-  color: var(--vscode-editorSuggestWidget-selectedForeground, var(--vscode-list-activeSelectionForeground));
-  background: var(--vscode-editorSuggestWidget-selectedBackground, var(--vscode-list-activeSelectionBackground));
-  font-weight: inherit;
 }
 
 .dext-tooltip-detail {
@@ -1394,16 +1209,6 @@ main {
     var(--vscode-textLink-foreground, #3794ff) 24%,
     var(--vscode-editorWidget-background, var(--vscode-editor-background, #1e1e1e))
   );
-}
-
-.code-file-reference {
-  /* CodeMirror replaces the source separators around a reference with this
-   * widget. The source separators already provide its inline breathing room;
-   * adding a chip margin here makes pasted attachments visibly too far from
-   * the surrounding text. */
-  margin: 0;
-  font-family: var(--vscode-font-family);
-  font-size: var(--vscode-font-size);
 }
 
 .history-file-reference {
@@ -1909,7 +1714,8 @@ main {
 
 .input-section[data-mode="ask"] #mode-control,
 .input-section[data-mode="plan"] #mode-control,
-.input-section[data-mode="code"] #mode-control {
+.input-section[data-mode="code"] #mode-control,
+.input-section[data-mode="resource"] #mode-control {
   height: 32px;
   border-color: color-mix(in srgb, var(--composer-accent) 68%, var(--vscode-widget-border));
   color: var(--composer-accent);
@@ -1919,13 +1725,15 @@ main {
 
 .input-section[data-mode="ask"] #mode-control > #mode-control-icon,
 .input-section[data-mode="plan"] #mode-control > #mode-control-icon,
-.input-section[data-mode="code"] #mode-control > #mode-control-icon {
+.input-section[data-mode="code"] #mode-control > #mode-control-icon,
+.input-section[data-mode="resource"] #mode-control > #mode-control-icon {
   color: var(--composer-accent);
 }
 
 .input-section[data-mode="ask"] #mode-control:focus-visible,
 .input-section[data-mode="plan"] #mode-control:focus-visible,
-.input-section[data-mode="code"] #mode-control:focus-visible {
+.input-section[data-mode="code"] #mode-control:focus-visible,
+.input-section[data-mode="resource"] #mode-control:focus-visible {
   outline: 1px solid var(--composer-accent);
   outline-offset: -1px;
 }
@@ -1935,7 +1743,9 @@ main {
 .input-section[data-mode="plan"] #mode-control:hover,
 .input-section[data-mode="plan"] #mode-control[aria-expanded="true"],
 .input-section[data-mode="code"] #mode-control:hover,
-.input-section[data-mode="code"] #mode-control[aria-expanded="true"] {
+.input-section[data-mode="code"] #mode-control[aria-expanded="true"],
+.input-section[data-mode="resource"] #mode-control:hover,
+.input-section[data-mode="resource"] #mode-control[aria-expanded="true"] {
   border-color: var(--composer-accent);
   background: color-mix(in srgb, var(--composer-accent) 26%, var(--vscode-editor-background));
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--composer-accent) 20%, transparent);
@@ -2756,6 +2566,10 @@ button.primary.stopping {
 
 .turn-section > .turn-section-body {
   padding: 8px 4px 8px 18px;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 /* The section owns the title-to-content gap, not the first result or message. */
@@ -2999,6 +2813,10 @@ button.primary.stopping {
   padding-right: 30px;
 }
 
+.output-text-copyable > .process-content {
+  padding-right: 30px;
+}
+
 .markdown-body .markdown-code-block {
   margin: 0 0 16px;
 }
@@ -3239,6 +3057,11 @@ pre {
 .agent-stream-item {
   margin: 4px 0;
   color: var(--vscode-foreground);
+  display: block;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 /* Command groups sit inline with the surrounding prose as quiet rows rather than
@@ -3283,6 +3106,10 @@ pre {
 .agent-stream-text {
   margin: 0;
   padding: 6px 8px;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
   color: inherit;
   background: transparent !important;
   border: 0;
@@ -3543,7 +3370,11 @@ pre {
 }
 
 .terminal-stderr {
-  color: var(--vscode-editorError-foreground, var(--vscode-errorForeground));
+  /* stderr is a stream, not an error-colored text block. Preserve the
+   * terminal's normal foreground and let explicit ANSI SGR sequences (or the
+   * small plain-output fallback classes) carry the semantic colors. PowerShell
+   * and other shells commonly write neutral diagnostic context to stderr. */
+  color: var(--vscode-terminal-foreground, var(--vscode-editor-foreground));
 }
 
 .ansi-bold { font-weight: 700; }
@@ -3817,11 +3648,14 @@ details[open] > summary > .disclosure-chevron {
 .agent-input-answer { margin: 4px 0 0; color: var(--vscode-descriptionForeground); white-space: pre-wrap; overflow-wrap: anywhere; }
 /* Shared workflow and Agent fields. Scoped selectors leave MCP controls intact. */
 .interaction-form { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
-.interaction-form h3, .interaction-form p { margin: 0; overflow-wrap: anywhere; }
-.interaction-head { display: flex; flex-direction: column; gap: 6px; padding-right: 26px; }
-.interaction-head h3 { font-size: 14px; font-weight: 600; }
+.interaction-form > p, .interaction-head > h3, .interaction-field p { margin: 0; overflow-wrap: anywhere; }
+.interaction-head { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.interaction-head > h3 { font-size: 14px; font-weight: 600; }
+.interaction-dialog .interaction-head > h3 { padding-right: 26px; }
 /* Descriptions carry whole agent reports, so they wrap and scroll instead of stretching the dialog. */
-.interaction-description { max-height: 34vh; overflow: auto; color: var(--vscode-descriptionForeground); font-size: 12px; line-height: 1.6; white-space: pre-wrap; }
+.interaction-description.markdown-body { max-height: 50vh; overflow: auto; margin: 0; color: var(--vscode-foreground); font-size: 12px; line-height: 1.6; white-space: normal; }
+.interaction-description img { display: block; margin: 8px 0; border-radius: 4px; }
+.interaction-image-error { display: block; padding: 8px; border: 1px dashed var(--vscode-widget-border); color: var(--vscode-descriptionForeground); }
 .interaction-field { border: 0; padding: 0; margin: 0; min-width: 0; }
 .interaction-field legend { font-weight: 600; font-size: 12px; padding: 0; margin-bottom: 8px; overflow-wrap: anywhere; max-width: 100%; }
 .interaction-field p, .interaction-option small, .interaction-select-popup small { display: block; color: var(--vscode-descriptionForeground); font-size: 12px; }
@@ -3837,6 +3671,9 @@ details[open] > summary > .disclosure-chevron {
 .interaction-form input:not([type=radio]):not([type=checkbox]):focus, .interaction-form textarea:focus { border-color: var(--vscode-focusBorder); }
 .interaction-form textarea { min-height: 84px; line-height: 1.5; resize: vertical; }
 .interaction-form :focus-visible, .interaction-select-popup :focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
+/* Keep keyboard focus on the option row instead of boxing the selection dot. */
+.interaction-option input:is([type=radio], [type=checkbox]):focus { outline: none; box-shadow: none; }
+.interaction-option:has(input:focus-visible) { border-color: var(--vscode-focusBorder); }
 .interaction-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; padding-top: 12px; border-top: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); }
 .interaction-form button, .interaction-close { cursor: pointer; white-space: normal; overflow-wrap: anywhere; }
 .interaction-form button { padding: 5px 9px; border: 1px solid var(--vscode-widget-border); border-radius: 4px; background: var(--vscode-button-secondaryBackground, var(--vscode-input-background)); color: var(--vscode-button-secondaryForeground, var(--vscode-foreground)); }
@@ -3849,7 +3686,7 @@ details[open] > summary > .disclosure-chevron {
 .interaction-actions .interaction-primary:disabled:hover { background: var(--vscode-button-background); }
 .interaction-error { padding: 7px 10px; border: 1px solid var(--vscode-inputValidation-errorBorder, var(--vscode-errorForeground)); border-radius: 6px; background: var(--vscode-inputValidation-errorBackground, transparent); color: var(--vscode-errorForeground); font-size: 12px; }
 .interaction-error:empty { display: none; }
-.interaction-dialog { position: relative; box-sizing: border-box; width: min(520px, calc(100vw - 32px)); max-height: calc(100vh - 32px); padding: 0; border: 1px solid var(--vscode-widget-border); border-radius: 10px; background: var(--vscode-editor-background); color: var(--vscode-foreground); box-shadow: 0 16px 40px rgb(0 0 0 / 36%); overflow: hidden; }
+.interaction-dialog { position: fixed; box-sizing: border-box; width: min(520px, calc(100vw - 32px)); max-height: calc(100vh - 32px); padding: 0; border: 1px solid var(--vscode-widget-border); border-radius: 10px; background: var(--vscode-editor-background); color: var(--vscode-foreground); box-shadow: 0 16px 40px rgb(0 0 0 / 36%); overflow: hidden; }
 /* The form scrolls, not the dialog, so the close button stays pinned to the corner. */
 .interaction-dialog .interaction-form { box-sizing: border-box; max-height: calc(100vh - 32px); padding: 18px 20px 16px; overflow: auto; }
 .interaction-dialog::backdrop { background: rgb(0 0 0 / 45%); }
@@ -3861,3 +3698,75 @@ details[open] > summary > .disclosure-chevron {
 .interaction-select-popup button { display: block; width: 100%; border: 0; padding: 7px; color: inherit; background: transparent; text-align: left; white-space: normal; overflow-wrap: anywhere; }
 .interaction-select-popup [aria-selected=true] { background: var(--vscode-list-inactiveSelectionBackground); box-shadow: inset 3px 0 var(--vscode-focusBorder); }
 @media (forced-colors: active) { .interaction-select-popup [aria-selected=true] { border: 2px solid Highlight; } }
+
+.resource-toolbar { flex-wrap: wrap; }
+.resource-toolbar .plan-target-group { flex: 1; min-width: 100px; }
+.resource-toolbar .plan-status { white-space: normal; overflow-wrap: anywhere; }
+.resource-preview { background: transparent; color: var(--vscode-foreground); border: 1px solid var(--vscode-button-border, var(--vscode-widget-border)); border-radius: 4px; padding: 3px 8px; }
+.resource-directory { display: block; max-width: 300px; white-space: normal; overflow-wrap: anywhere; color: var(--vscode-descriptionForeground); font-size: 11px; margin-top: 3px; }
+
+/* Resource identity is separate from the read-only engine used to generate it. */
+[data-resource-type="api"] { --resource-accent: var(--resource-api-accent); }
+[data-resource-type="mcp"] { --resource-accent: var(--resource-mcp-accent); }
+[data-resource-type="rule"] { --resource-accent: var(--resource-rule-accent); }
+[data-resource-type="skill"] { --resource-accent: var(--resource-skill-accent); }
+
+.input-section[data-mode="resource"] {
+  --composer-accent: var(--resource-accent);
+  --composer-accent-fill: var(--resource-accent);
+  --composer-accent-foreground: var(--resource-button-foreground);
+}
+
+#resource-target { color: var(--vscode-foreground); }
+#resource-target > .codicon { color: var(--resource-accent); }
+#resource-target:hover:not(:disabled) { background: var(--vscode-toolbar-hoverBackground); }
+
+button.primary.resource-save {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 60px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  white-space: nowrap;
+  color: var(--composer-accent-foreground);
+  background: var(--composer-accent-fill);
+}
+button.primary.resource-save:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--composer-accent-fill) 86%, var(--vscode-editor-foreground, var(--vscode-foreground)));
+}
+
+.composer-menu-option[data-resource-type] { color: var(--resource-accent); }
+.composer-menu-option[data-resource-type][aria-checked="true"] {
+  background: color-mix(in srgb, var(--resource-accent) 12%, var(--vscode-menu-background, var(--vscode-editor-background)));
+}
+.composer-menu-option[data-resource-type]:hover,
+.composer-menu-option[data-resource-type]:focus-visible {
+  color: var(--resource-accent);
+  background: color-mix(in srgb, var(--resource-accent) 22%, var(--vscode-menu-background, var(--vscode-editor-background)));
+}
+.composer-menu-option[data-resource-type]:focus-visible { outline: 1px solid var(--resource-accent); outline-offset: -1px; }
+
+#resource-status[data-state="saved"] { color: var(--vscode-testing-iconPassed, var(--vscode-terminal-ansiGreen, #73c991)); }
+#resource-status[data-state="error"] { color: var(--vscode-errorForeground, #f48771); }
+
+/* Disabled actions are neutral, irrespective of the selected resource type. */
+.input-section[data-mode="resource"] #run:disabled,
+button.primary.resource-save:disabled {
+  color: var(--vscode-disabledForeground, var(--vscode-descriptionForeground));
+  background: color-mix(in srgb, var(--vscode-foreground) 10%, var(--vscode-editor-background));
+  opacity: 1;
+}
+.resource-preview:disabled { color: var(--vscode-disabledForeground, var(--vscode-descriptionForeground)); cursor: default; }
+
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .input-section[data-mode="resource"] {
+  --composer-accent-fill: var(--vscode-button-background);
+  --composer-accent-foreground: var(--vscode-button-foreground);
+}
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .input-section[data-mode="resource"] #mode-control,
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) button.primary.resource-save,
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .composer-menu-option[data-resource-type][aria-checked="true"] {
+  outline: 1px solid var(--vscode-contrastBorder, var(--vscode-foreground));
+  outline-offset: -1px;
+}

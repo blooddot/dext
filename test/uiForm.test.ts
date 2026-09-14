@@ -106,6 +106,8 @@ describe("form actions", () => {
   it("reports the pressed action and keeps cancellation empty", () => {
     const cancelled = { kind: "ui", type: "form", status: "cancelled", answers: {} } as const;
     expect(uiCallResult("form", cancelled)).toEqual({ ...cancelled, action: "" });
+    expect(uiResultSchema.safeParse(uiCallResult("form", cancelled)).success).toBe(true);
+    expect(uiResultSchema.safeParse({ ...cancelled, status: "submitted", action: "" }).success).toBe(false);
     expect(uiCallResult("form", { kind: "ui", type: "form", status: "submitted", answers: {}, action: "approve" }))
       .toMatchObject({ action: "approve" });
     expect(uiResultSchema.safeParse({ ...cancelled, action: "approve" }).success).toBe(false);

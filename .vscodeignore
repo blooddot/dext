@@ -10,8 +10,7 @@ docs/**
 coverage/**
 release/**
 dist/extensionHostTest.js
-# Legacy bundled font; current webviews load dist/codicons/codicon.css.
-dist/webview/assets/codicon-*.ttf
+# Monaco and shared controls each package their own referenced codicon font.
 # Keep media/styles.css for History, including pages open during an update.
 node_modules/**
 .npm-cache/**

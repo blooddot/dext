@@ -1,4 +1,8 @@
 import type { AgentStreamEvent, AgentTodoItem, PlanExecutionOutcome } from "./core/types.js";
+import MarkdownIt from "markdown-it";
+
+// Live Todo rows and restored history use the same Markdown interpretation.
+const todoMarkdown = new MarkdownIt({ html: false, breaks: true, linkify: true });
 
 export function planExecutionLabel(events: readonly AgentStreamEvent[], error?: string, outcome?: PlanExecutionOutcome): string {
   if (outcome?.status === "cancelled") return "Stopped";
@@ -7,10 +11,6 @@ export function planExecutionLabel(events: readonly AgentStreamEvent[], error?: 
   const items = latestAgentTodos(events);
   return items.length && items.every((item) => item.status === "completed") ? "Completed" : "Incomplete";
 }
-
-const escape = (text: string): string => text.replace(/[&<>"']/g, (char) => ({
-  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
-})[char]!);
 
 export function latestAgentTodos(events: readonly AgentStreamEvent[]): readonly AgentTodoItem[] {
   for (let index = events.length - 1; index >= 0; index--) {
@@ -36,7 +36,7 @@ export function agentTodoRows(items: readonly AgentTodoItem[], running: boolean)
       : item.status === "in_progress" ? "Paused" : "Pending";
     const icon = item.status === "completed" ? "check" : active ? "loading codicon-modifier-spin"
       : item.status === "in_progress" ? "debug-pause" : "circle-large-outline";
-    return `<li class="agent-todo-item${active ? " active" : ""}" data-status="${item.status}"><i class="codicon codicon-${icon}" aria-hidden="true"></i><span class="agent-todo-text">${escape(item.text)}</span><span class="agent-todo-status">${label}</span></li>`;
+    return `<li class="agent-todo-item${active ? " active" : ""}" data-status="${item.status}"><i class="codicon codicon-${icon}" aria-hidden="true"></i><div class="agent-todo-text markdown-body">${todoMarkdown.render(item.text)}</div><span class="agent-todo-status">${label}</span></li>`;
   }).join("");
 }
 

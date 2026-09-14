@@ -1,10 +1,9 @@
 import * as esbuild from "esbuild";
-import { copyFile, mkdir, rm } from "node:fs/promises";
+import { copyFile, mkdir } from "node:fs/promises";
 import { buildMarkdownStyles } from "./scripts/buildMarkdownStyles.mjs";
 
 const watch = process.argv.includes("--watch");
 await buildMarkdownStyles();
-await rm("dist/webview/editor.worker.js", { force: true });
 const contexts = await Promise.all([
   esbuild.context({
     entryPoints: {
@@ -21,12 +20,15 @@ const contexts = await Promise.all([
     logLevel: "info"
   }),
   esbuild.context({
-    entryPoints: { main: "src/webview/main.ts" },
+    entryPoints: { main: "src/webview/main.ts", "editor.worker": "node_modules/monaco-editor/esm/vs/editor/editor.worker.js" },
     bundle: true,
     outdir: "dist/webview",
     platform: "browser",
     format: "iife",
     target: "es2022",
+    loader: { ".ttf": "file" },
+    assetNames: "assets/[name]-[hash]",
+    minify: true,
     logLevel: "info"
   })
 ]);

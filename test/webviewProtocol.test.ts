@@ -2,12 +2,24 @@ import { describe, expect, it } from "vitest";
 import { webviewRequestSchema } from "../src/webviewProtocol.js";
 
 describe("Webview protocol", () => {
-  it("accepts bounded resource-creation drafts and save confirmations", () => {
-    const draft = { type: "draftResource", requestId: "request", sessionId: "session", resourceType: "skill", scope: "global", input: "Add release-check guidance." };
-    expect(webviewRequestSchema.parse(draft)).toEqual(draft);
-    expect(webviewRequestSchema.safeParse({ ...draft, resourceType: "plugin" }).success).toBe(false);
-    expect(webviewRequestSchema.safeParse({ ...draft, input: "" }).success).toBe(false);
-    expect(webviewRequestSchema.safeParse({ type: "saveResource", draftId: "draft" }).success).toBe(true);
+  it("separates definition discovery from opening and validates source offsets", () => {
+    const query = { type: "inputDefinition", requestId: 3, source: "agent()", cursor: 2 };
+    expect(webviewRequestSchema.parse(query)).toEqual(query);
+    expect(webviewRequestSchema.safeParse({ ...query, cursor: -1 }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({ ...query, requestId: "3" }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({ type: "openInputDefinition", source: "agent()", cursor: 2 }).success).toBe(true);
+    expect(webviewRequestSchema.safeParse({ type: "openInputDefinition", uri: "file:/arbitrary" }).success).toBe(false);
+  });
+  it("scopes resource controls and saves to their conversation", () => {
+    const options = { type: "resourceOptions", sessionId: "session", resourceType: "skill", scope: "global" };
+    expect(webviewRequestSchema.parse(options)).toEqual(options);
+    expect(webviewRequestSchema.safeParse({ ...options, resourceType: "plugin" }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({ ...options, scope: "arbitrary" }).success).toBe(false);
+    for (const type of ["saveResource", "chooseResource", "previewResource"]) {
+      expect(webviewRequestSchema.safeParse({ type, sessionId: "session" }).success).toBe(true);
+      expect(webviewRequestSchema.safeParse({ type, sessionId: "" }).success).toBe(false);
+      expect(webviewRequestSchema.safeParse({ type, draftId: "draft" }).success).toBe(false);
+    }
   });
 
   it("accepts only well-formed built-in API definition requests", () => {

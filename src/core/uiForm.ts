@@ -41,6 +41,7 @@ export interface UiInteractionState {
   sessionId: string; turnId: string; requestId: string; form: UiFormDefinition;
   status: "waiting" | "submitted" | "cancelled" | "closed";
   answers?: UiFormAnswers;
+  action?: string | undefined;
 }
 
 const label = z.string().min(1).max(UI_LIMITS.label);
@@ -79,9 +80,21 @@ export const uiFormAnswersSchema = z.record(z.string().max(128), uiFieldAnswerSc
 );
 export const uiFormResultSchema = z.object({
   kind: z.literal("ui"), type: z.literal("form"), status: z.enum(["submitted", "cancelled"]), answers: uiFormAnswersSchema,
-  action: identifier.optional()
-}).strict().refine((result) => result.status !== "cancelled" || (Object.keys(result.answers).length === 0 && result.action === undefined),
-  "Cancelled forms must have no answers");
+  action: z.string().max(128).optional()
+}).strict().refine((result) => result.status === "cancelled"
+  ? Object.keys(result.answers).length === 0 && (result.action === undefined || result.action === "")
+  : result.action !== "", "Cancelled forms must have no answers or action; submitted actions must be nonempty");
+
+export function validateUiFormResult(form: UiFormDefinition, value: unknown): UiFormResult {
+  checkSize(value);
+  const result = uiFormResultSchema.parse(value);
+  if (result.status === "submitted") {
+    const action = result.action ?? (form.actions.length === 1 ? form.actions[0]!.id : undefined);
+    if (action === undefined) throw new Error("Choose a form action.");
+    result.answers = validateUiAnswers(form, result.answers, action);
+  }
+  return result;
+}
 
 function checkSize(value: unknown): void {
   if (new TextEncoder().encode(JSON.stringify(value)).byteLength > UI_LIMITS.bytes) throw new Error("UI interaction exceeds the size limit.");

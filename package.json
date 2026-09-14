@@ -1130,13 +1130,6 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
-    "@codemirror/autocomplete": "^6.20.3",
-    "@codemirror/commands": "^6.10.4",
-    "@codemirror/lang-python": "^6.2.1",
-    "@codemirror/language": "^6.12.4",
-    "@codemirror/lint": "^6.9.7",
-    "@codemirror/state": "^6.7.1",
-    "@codemirror/view": "^6.43.8",
     "@eslint/js": "9.39.1",
     "@lezer/common": "^1.2.3",
     "@lezer/highlight": "^1.2.1",
@@ -1150,6 +1143,7 @@
     "esbuild": "0.25.12",
     "eslint": "9.39.1",
     "github-markdown-css": "5.9.0",
+    "monaco-editor": "0.56.0",
     "typescript": "5.9.3",
     "typescript-eslint": "8.48.1",
     "vitest": "4.1.10"

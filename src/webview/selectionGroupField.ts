@@ -31,6 +31,12 @@ export function selectionGroupField(field: UiSelectionField, draft: UiFieldAnswe
     custom.addEventListener("input", () => { if (field.type === "radio") for (const input of inputs) input.checked = false; change(); });
     element.append(custom);
   }
+  if (field.type === "radio" && !field.required) {
+    const clear = document.createElement("button"); clear.type = "button"; clear.textContent = "Clear";
+    clear.setAttribute("aria-label", `Clear ${field.label}`);
+    clear.addEventListener("click", () => { for (const input of inputs) input.checked = false; custom.value = ""; change(); });
+    element.append(clear);
+  }
   return { element, read: () => ({ type: field.type === "checkbox" ? "checkbox" : "radio",
     selected: inputs.filter((input) => input.checked).map((input) => input.value),
     ...(field.allow_custom && custom.value.trim() ? { custom: custom.value } : {}) }),

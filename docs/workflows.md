@@ -10,6 +10,12 @@ Compose calls in Code mode and save repeated workflows as project APIs. This ref
 
 ## Workflow language
 
+Input uses Monaco in its existing panel, with the Code selector and footer controls in the same positions. Enter inserts a line in Code and Ctrl/Cmd+Enter runs it. Chat modes retain the configured send behavior; Shift+Enter inserts a line. An open completion list takes priority over sending.
+
+Completion, hover, parameter help and diagnostics use native editor widgets. Call trigger characters start parameter help, Escape dismisses it, and Ctrl/Cmd+Shift+Space requests it explicitly. F12 or Ctrl/Cmd+click opens API definitions, including declarations from the current MCP registry.
+
+File and image chips support atomic selection, deletion and undo. Copying, saved drafts and execution retain complete `@path` source. Long labels are shortened; hover shows the full path. Alt+Enter beside a chip opens the reference, and Ctrl/Cmd+Shift+V pastes literal text. Replace a chip to change its path. Native Find searches ordinary editing text, not the full paths hidden inside chips.
+
 In Code mode, natural language belongs in an API string argument; arbitrary text is a compile error.
 
 ```python
@@ -38,7 +44,7 @@ Execution is sequential apart from comprehension fan-out; unselected and downstr
 
 ## Built-in API
 
-- Create APIs, MCP configurations, rules, and skills from the **Create resource** button in the sidebar. It keeps a dedicated creation conversation open, previews the generated file, and writes only after confirmation.
+- **Create resource** opens a dedicated tab using the same Conversation and Input layout. Choose **API / MCP / Rule / Skill**, then **Project / Global** (the menu shows the destination directory). Select **New resource** or an existing resource, describe your changes, and review the draft or diff before saving. Saving keeps the tab open for further revisions; changing an existing resource’s destination creates a copy. Resource targets, drafts, and conversations are restored from History.
 - `ask(input, skills?, rules?, workspace?) -> AskResult`
 - `plan(input, skills?, rules?, workspace?) -> PlanResult`
 - `agent(input, apply=true, skills?, rules?, workspace?) -> AgentResult`
@@ -251,6 +257,8 @@ if reply.status == "submitted":
     if reply.answers["run_tests"].selected[0] == "yes":
         print(text="Run the selected checks")
 ```
+
+The form-level `description` renders Markdown, including headings, lists, code, tables and HTTPS images (`![caption](https://...)`), in both inline and dialog presentations. Images fit the available width and link to the original; failed loads show a fallback link (signed attachment URLs can expire). Raw HTML is displayed as text. Titles, field labels and field descriptions remain plain text. Pass task notes directly as `description`; no extra image field is needed.
 
 Fields have a unique `id`, `label`, optional `description`, `required` (default `True`) and `default`. Without an explicit default, form fields start unanswered. Choice defaults are arrays of option values; input defaults are strings. Default values must satisfy the field contract. Options are nonempty lists of strings or `{value, label, description?}` objects with unique string values. A string option is its own value. `radio` and `checkbox` do not accept `multiple`; only `select` supports it. Dropdowns do not accept custom text. Radio custom text excludes predefined options; checkbox custom text may accompany selections.
 

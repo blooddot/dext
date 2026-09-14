@@ -90,7 +90,7 @@ export function parseFileReference(value: string): ParsedFileReference {
   return { path: value.slice(0, match.index), range };
 }
 
-function validFileReferencePath(path: string): boolean {
+function validFileReferencePath(path: string, directory = false): boolean {
   if (!path) return false;
   // External files are represented as encoded file URIs so spaces and other
   // path characters cannot split an inline @ token.
@@ -99,9 +99,9 @@ function validFileReferencePath(path: string): boolean {
   const segments = path.split("/");
   if (segments.some((segment) => !segment || segment === "." || segment === ".." || !/^[\p{L}\p{N}_.-]+$/u.test(segment))) return false;
   const name = segments.at(-1)!;
-  // This rejects plain @mentions while allowing a root-level filename and a
-  // nested workspace path. Dext attachments always point at a file.
-  return segments.length > 1 || /\.[\p{L}\p{N}_-]+$/u.test(name);
+  // A trailing slash already distinguishes a root directory from @mentions.
+  // Files still require a root-level extension or a nested workspace path.
+  return directory || segments.length > 1 || /\.[\p{L}\p{N}_-]+$/u.test(name);
 }
 
 /** Finds legal readable @path#range references. A trailing slash identifies a
@@ -130,7 +130,7 @@ export function atReferenceOccurrences(source: string): ContextReferenceOccurren
     } catch {
       continue;
     }
-    if (!validFileReferencePath(parsed.path)) continue;
+    if (!validFileReferencePath(parsed.path, directory)) continue;
     // Do not silently chip only the path portion of a malformed #range.
     if (source[start + expression.length] === "#") continue;
     values.push({ kind: directory ? "dir" : "file", start, end: start + expression.length, expression, payload });

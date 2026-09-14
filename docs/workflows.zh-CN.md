@@ -10,6 +10,12 @@
 
 ## 工作流语言
 
+Input 使用 Monaco，Code 模式入口和底部工具栏保持原位。Code 中 Enter 换行，Ctrl/Cmd+Enter 执行；聊天模式沿用发送设置，Shift+Enter 换行。补全列表打开时 Enter 接受建议。
+
+补全、悬浮说明、参数提示和诊断使用编辑器原生控件。输入调用触发字符可显示参数提示，Esc 关闭提示，Ctrl/Cmd+Shift+Space 手动唤起。F12 或 Ctrl/Cmd+点击跳转到 API 定义；MCP 定义显示当前注册的工具声明。
+
+文件与图片标签可整体选择、删除及撤销，复制、保存草稿和执行时保留完整 `@路径`。标签过长会缩短显示，可悬浮查看完整路径；光标在标签旁时 Alt+Enter 打开引用，Ctrl/Cmd+Shift+V 粘贴原文。引用是整体对象，修改路径时删除后重新插入；原生查找针对普通编辑文本，不搜索标签内隐藏的完整路径。
+
 在 Code 模式中，自然语言需要写在 API 的字符串参数中，直接输入普通文本会产生编译错误。
 
 ```python
@@ -39,7 +45,7 @@ if preview.patch:
 
 ## 内置 API
 
-- 通过侧栏的“Create resource”按钮创建 API、MCP 配置、规则和 Skill；它会保持专用创建对话、预览生成文件，并在确认后写入。
+- 点击侧栏的 **Create resource**，打开复用 Conversation 和 Input 布局的专用 Tab。底部选择 **API / MCP / Rule / Skill** 和 **Project / Global**（菜单显示保存目录）。可以选择 **New resource** 新建，或选择已有资源描述修改；预览草稿或差异后保存。保存后保留 Tab，方便继续修改；更改已有资源的保存位置表示另存一份。资源目标、草稿和对话会随历史记录恢复。
 - `ask(input, skills?, rules?, workspace?) -> AskResult`：只读解释和分析。
 - `plan(input, skills?, rules?, workspace?) -> PlanResult`：创建、维护和执行实施计划。
 - `agent(input, apply=true, skills?, rules?, workspace?) -> AgentResult`：执行持续性任务。
@@ -230,6 +236,8 @@ if reply.status == "submitted":
     if reply.answers["run_tests"].selected[0] == "yes":
         print(text="Run the selected checks")
 ```
+
+表单级 `description` 在内联和弹窗中均按 Markdown 渲染，支持标题、列表、代码、表格和 HTTPS 图片（`![说明](https://...)`）。图片自适应宽度，点击可打开原图；加载失败时显示备用链接提示（带签名的附件地址可能过期）。原始 HTML 按文本显示。标题、字段标签和字段说明仍为纯文本。任务备注可直接传入 `description`，无需增加图片字段。
 
 字段具有唯一 `id`、`label`、可选 `description`、`required`（默认 `True`）和 `default`。表单未配置默认值时不预选。选择字段的默认值为选项值数组，输入默认值为字符串，均须通过字段校验。选项使用非空字符串列表或 `{value, label, description?}` 对象，稳定值是唯一字符串；字符串选项的值等于自身。
 

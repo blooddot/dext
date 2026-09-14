@@ -1085,6 +1085,24 @@ answer = ask(input=printed.text)`, registry);
 });
 
 describe("formal UI workflows", () => {
+  it.each(["select", "radio", "checkbox", "input", "confirm", "alert", "form"])("returns ordinary ui.%s cancellation and continues the workflow", async (action) => {
+    const { registry, workflow } = setup();
+    const args = ["select", "radio", "checkbox"].includes(action) ? 'label="Pick", options=["a", "b"]'
+      : action === "input" ? 'label="Text"' : action === "form" ? 'title="Form", fields=[]' : 'message="Continue?"';
+    const compiled = compileWorkflow(`ui.${action}(${args})\nprint(text="continued")`, registry);
+    expect(compiled.diagnostics).toEqual([]);
+    const response = await workflow.execute(compiled.program!, [], { ui: { form: async () => ({ kind: "ui", type: "form", status: "cancelled", answers: {} }) } });
+    expect(response.executions.map((execution) => execution.method.id)).toEqual([`ui.${action}`, "print"]);
+    if (action === "form") expect(response.executions[0]?.result).toMatchObject({ status: "cancelled", action: "", answers: {} });
+  });
+  it("rejects missing actions from alternate hosts instead of choosing the first branch", async () => {
+    const { registry, workflow } = setup();
+    const compiled = compileWorkflow('ui.form(title="Review", fields=[], actions=[{"id":"approve","label":"Approve"},{"id":"revise","label":"Revise"}])\nprint(text="must not run")', registry);
+    expect(compiled.diagnostics).toEqual([]);
+    const response = await workflow.execute(compiled.program!, [], { ui: { form: async () => ({ kind: "ui", type: "form", status: "submitted", answers: {} }) } });
+    expect(response.executions).toEqual([]);
+    expect(response.steps?.[0]).toMatchObject({ state: "failed", error: "Choose a form action." });
+  });
   it("aborts the enclosing workflow when ui.form opts into on_cancel=abort", async () => {
     const { registry, workflow } = setup();
     const compiled = compileWorkflow('ui.form(title="Confirm", fields=[], on_cancel="abort")\nprint(text="must not run")', registry);

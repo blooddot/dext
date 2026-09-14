@@ -1,10 +1,13 @@
 import { validateUiAnswers, type UiFormAnswers, type UiFormDefinition, type UiFormResult } from "../core/uiForm.js";
 import { selectionGroupField, type FieldControl } from "./selectionGroupField.js";
 import { selectField } from "./selectField.js";
+import { interactionMarkdown } from "./interactionMarkdown.js";
 
 export class InteractionForm {
   readonly element = document.createElement("form");
   private sent = false;
+  private inactive = false;
+  private refresh = (): void => {};
   private readonly controls = new Map<string, FieldControl>();
   constructor(readonly definition: UiFormDefinition, private readonly respond: (result: UiFormResult) => void,
     draft: UiFormAnswers = {}, private readonly saveDraft: (draft: UiFormAnswers) => void = () => {}) {
@@ -12,22 +15,28 @@ export class InteractionForm {
     this.element.noValidate = true;
     const head = document.createElement("div"); head.className = "interaction-head";
     const title = document.createElement("h3"); title.textContent = definition.title; head.append(title);
-    if (definition.description) { const description = document.createElement("p"); description.className = "interaction-description"; description.textContent = definition.description; head.append(description); }
+    if (definition.description) head.append(interactionMarkdown(definition.description));
     this.element.append(head);
     const error = document.createElement("p"); error.className = "interaction-error"; error.setAttribute("role", "alert");
     // The error only reports on the action the user actually pressed: showing every
     // unmet requirement up front made an untouched form look broken.
     let attempted: string | undefined;
+    const actionButtons = new Map<string, HTMLButtonElement>();
     const reason = (cause: unknown): string => cause instanceof Error ? cause.message : "Check your answers.";
     const refresh = (): void => {
+      if (this.sent || this.inactive) return;
       const answers = this.read();
       this.saveDraft(this.publicDraft(answers));
+      for (const [action, button] of actionButtons) {
+        try { validateUiAnswers(definition, answers, action); button.disabled = this.sent; }
+        catch { button.disabled = true; }
+      }
       if (attempted === undefined) return;
       try { validateUiAnswers(definition, answers, attempted); error.textContent = ""; }
       catch (cause) { error.textContent = reason(cause); }
     };
     const submit = (action: string): void => {
-      if (this.sent) return;
+      if (this.sent || this.inactive) return;
       attempted = action;
       try { this.send({ kind: "ui", type: "form", status: "submitted", action, answers: validateUiAnswers(definition, this.read(), action) }); }
       catch (cause) { error.textContent = reason(cause); }
@@ -67,6 +76,7 @@ export class InteractionForm {
       button.textContent = action.label;
       if (action.description) button.title = action.description;
       if (!promoted) button.addEventListener("click", () => submit(action.id));
+      actionButtons.set(action.id, button);
       actions.append(button);
     }
     this.element.append(error, actions);
@@ -74,6 +84,7 @@ export class InteractionForm {
       event.preventDefault();
       submit(primary ?? definition.actions[0]!.id);
     });
+    this.refresh = refresh;
     refresh();
   }
   private read(): UiFormAnswers { return Object.fromEntries([...this.controls].map(([id, control]) => [id, control.read()])); }
@@ -82,14 +93,16 @@ export class InteractionForm {
   }
   cancel(): void { this.send({ kind: "ui", type: "form", status: "cancelled", answers: {} }); }
   private send(result: UiFormResult): void {
-    if (this.sent) return; this.sent = true; this.saveDraft({});
+    if (this.sent || this.inactive) return; this.sent = true; this.saveDraft({});
     this.disable(); this.respond(result);
   }
   disable(): void {
+    this.inactive = true;
     for (const input of this.element.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLTextAreaElement>("input,button,textarea")) input.disabled = true;
     this.suspend();
   }
   suspend(): void {
     for (const control of this.controls.values()) control.clearSecret();
+    this.refresh();
   }
 }

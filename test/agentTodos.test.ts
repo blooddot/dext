@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { agentTodoEvent, ClaudeTodoTracker, normalizeAgentTodos } from "../src/core/agentTodoTracking.js";
 import { CliAgentRunner, parseClaudeStreamEvents, parseCodexStreamLine } from "../src/core/agentRunner.js";
 import type { AgentStreamEvent } from "../src/core/types.js";
-import { agentTodoProgress, agentTodoRows, latestAgentTodos } from "../src/agentTodoPresentation.js";
+import { agentTodoProgress, agentTodoRows, latestAgentTodos, renderAgentTodos } from "../src/agentTodoPresentation.js";
 import { DextHistoryStore } from "../src/historyStore.js";
 import { renderHistoryRecord } from "../src/historyRender.js";
 
@@ -115,6 +115,30 @@ describe("agent task progress", () => {
     expect(agentTodoRows(items, false)).not.toContain("codicon-modifier-spin");
     expect(agentTodoRows(items, false)).not.toContain("<script>");
     expect(agentTodoProgress(items, false)).toEqual({ label: "0/1 completed · Incomplete", complete: false });
+  });
+
+  it("renders Todo Markdown consistently in live rows and restored history", () => {
+    const items = [{ id: "markdown", status: "in_progress" as const,
+      text: '**验证源码一致性。** 检查 `DextCodeEditor` 和 [文档](https://example.com/docs)。\n保留换行。\n\n- 覆盖选择\n- 验证撤销\n\n```ts\nconst ready = true;\n```' }];
+    for (const html of [agentTodoRows(items, true), renderAgentTodos(items)]) {
+      expect(html).toContain('<div class="agent-todo-text markdown-body">');
+      expect(html).toContain("<strong>验证源码一致性。</strong>");
+      expect(html).toContain("<code>DextCodeEditor</code>");
+      expect(html).toContain('<a href="https://example.com/docs">文档</a>');
+      expect(html).toContain("<br>\n保留换行。");
+      expect(html).toContain("<li>覆盖选择</li>");
+      expect(html).toContain('<pre><code class="language-ts">const ready = true;');
+      expect(html).not.toContain("**验证源码一致性。**");
+    }
+  });
+
+  it("keeps raw HTML and executable links inert in Todo Markdown", () => {
+    const html = agentTodoRows([{ id: "untrusted", status: "pending",
+      text: '<img src=x onerror="alert(1)"> [unsafe](javascript:alert(1)) **Safe bold**' }], true);
+    expect(html).not.toContain("<img");
+    expect(html).not.toContain('href="javascript:');
+    expect(html).toContain("&lt;img");
+    expect(html).toContain("<strong>Safe bold</strong>");
   });
 
   it("persists interrupted progress and renders the last snapshot above Process after reloading", async () => {

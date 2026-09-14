@@ -19,7 +19,8 @@ export class InteractionDialog {
     this.element.showModal();
   }
   close(): void {
-    if (this.element.open) this.element.close();
+    if (!this.element.open) return;
+    this.element.close();
     if (this.previousFocus?.isConnected) this.previousFocus.focus();
   }
 }
