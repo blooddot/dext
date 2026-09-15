@@ -64,7 +64,7 @@ MCP 初始化从 `package.json` 读取客户端名称和版本。协议版本分
 
 长期项目知识与单次运行记录分别存放，互不混用：
 
-- `src/projectStore.ts` 只写入 `.dext/project.json`、`.dext/objects/<id>.json` 和 `.dext/architecture.json`，是已接受对象的唯一写入方；它缓存最近一次项目定义，使发送路径可以同步读取预设。并发写入按版本拒绝（`conflict`），不做合并。
+- `src/projectStore.ts` 负责 `.dext/project.json`、AI 生成的 intent/diagram 文件、已接受的 `.dext/objects/<id>.json` 以及 `.dext/architecture.json`；它是已接受对象的唯一写入方，并缓存最近一次项目定义，使发送路径可以同步读取预设。并发写入按版本拒绝（`conflict`），不做合并。
 - `src/turnReviewStore.ts` 以 `sessionId:turnId:runId` 为键保存运行附件，容量超限时按创建时间淘汰最早的记录。`deleteSession` 与 `clear` 不会触碰项目文件，清理对话不会删除长期知识。
 - `src/core/projectKnowledge.ts` 负责命名、稳定 ID，以及来源／确认／有效性／归属四个相互独立的维度。旧的 `status` 字段在读取时迁移；代码发生变化时，已接受对象保持已接受，同时标记为 `needs_verification`。
 - `src/core/turnReview.ts` 与 `src/core/planReview.ts` 定义运行契约。Plan Review 在运行 ID 之上再绑定计划内容版本与本次 Build 运行 ID，后续 Build 无法复用旧的接受状态。

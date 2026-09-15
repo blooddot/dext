@@ -64,7 +64,7 @@ MCP initialization reads the client name and version from `package.json`. Protoc
 
 Long-term project knowledge and single-run records are deliberately separate stores:
 
-- `src/projectStore.ts` writes only `.dext/project.json`, `.dext/objects/<id>.json`, and `.dext/architecture.json`. It is the only writer of accepted objects, and it caches the last definition so a send can read the preset synchronously. Concurrent writes are rejected by version (`conflict`), never merged.
+- `src/projectStore.ts` owns `.dext/project.json`, generated intent/diagram files, accepted `.dext/objects/<id>.json` objects, and `.dext/architecture.json`. It is the only writer of accepted objects, and it caches the last definition so a send can read the preset synchronously. Concurrent writes are rejected by version (`conflict`), never merged.
 - `src/turnReviewStore.ts` keys run attachments by `sessionId:turnId:runId` with oldest-first eviction. `deleteSession` and `clear` never touch project files, and clearing a conversation cannot remove accepted knowledge.
 - `src/core/projectKnowledge.ts` keeps naming, stable ids, and the independent source/confirmation/validity/ownership dimensions. A legacy `status` field is migrated on read; an accepted object whose code changed stays accepted and additionally becomes `needs_verification`.
 - `src/core/turnReview.ts` and `src/core/planReview.ts` own the run contracts. A Plan review adds a plan content version and a Build run id on top of the run id, so a later Build cannot reuse an older acceptance.
