@@ -1,8 +1,15 @@
-import { RESOURCE_LABELS, resourceFileName, type ResourceSession } from "./resourceSession.js";
+import { RESOURCE_LABELS, resourceFileName, type ResourceKind, type ResourceScope, type ResourceSession } from "./resourceSession.js";
+import { captureTurnPreset, presetForRun, resolveReviewPreset, type CapturedTurnPreset, type ReviewPreset, type TurnPresetSelection } from "./core/projectContext.js";
+import { buildTurnReview, reviewChangesFromPatch } from "./core/turnReviewBuilder.js";
+import { TurnReviewController, type ReviewKnowledgeSink } from "./turnReviewController.js";
+import type { KnowledgeSuggestion } from "./core/projectKnowledgeReview.js";
+import { TurnReviewStore } from "./turnReviewStore.js";
+import { appendPlanReviewRun, buildPlanReview, finalizePlanReview, type PlanReview } from "./core/planReview.js";
+import type { TurnReview } from "./core/turnReview.js";
 import { UiInteractionBroker } from "./uiInteractionBroker.js";
 import { readHistoryResponse } from "./historyResponse.js";
 import { publicInteractionState } from "./uiInteractionPresentation.js";
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHash } from "node:crypto";
 import { relative, sep } from "node:path";
 import * as vscode from "vscode";
 import { AgentInputBroker } from "./agentInputBroker.js";
@@ -160,6 +167,44 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     controller: AbortController;
     events: AgentStreamEvent[];
   }>();
+  // The Review preset is frozen per run so a later project change or a retry cannot rewrite the
+  // preset that was in force when the turn was sent. Review state is created on first use, so a
+  // provider built without running its constructor still has working stores.
+  private turnPresetStore: Map<string, CapturedTurnPreset> | undefined;
+  private presetOverrideStore: Map<string, ReviewPreset> | undefined;
+  private reviewStore: TurnReviewStore | undefined;
+  private planReviewStore: Map<string, PlanReview> | undefined;
+  private runSuggestionStore: Map<string, KnowledgeSuggestion[]> | undefined;
+  private projectPreset: (() => ReviewPreset) | undefined;
+  private reviewKnowledge: ReviewKnowledgeSink | undefined;
+
+  private get turnPresets(): Map<string, CapturedTurnPreset> {
+    return (this.turnPresetStore ??= new Map());
+  }
+
+  private get sessionPresetOverrides(): Map<string, ReviewPreset> {
+    return (this.presetOverrideStore ??= new Map());
+  }
+
+  /** Per-run Review attachments. They are conversation-scoped and never project knowledge. */
+  private get reviews(): TurnReviewStore {
+    return (this.reviewStore ??= new TurnReviewStore());
+  }
+
+  private get reviewController(): TurnReviewController {
+    return new TurnReviewController(this.reviews, this.reviewKnowledge);
+  }
+
+  /** One Plan Build accumulates every executed round for the same plan version. */
+  private get planReviews(): Map<string, PlanReview> {
+    return (this.planReviewStore ??= new Map());
+  }
+
+  /** Knowledge drafts offered by one run. Adopting them is separate from accepting the code. */
+  private get runSuggestions(): Map<string, KnowledgeSuggestion[]> {
+    return (this.runSuggestionStore ??= new Map());
+  }
+
   // MCP manifest generation is an Agent-backed operation too, but it is not a
   // conversation turn and therefore does not belong in activeExecutions.
   // Keeping its controller separately lets the shared Stop button cancel it.
@@ -437,6 +482,30 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     private readonly preferences: DextConversationPreferences
   ) {}
 
+  /** Supplies the project's default Review preset. Without it the built-in default is used. */
+  setProjectPresetSource(source: () => ReviewPreset): void {
+    this.projectPreset = source;
+  }
+
+  /**
+   * Supplies the long-term project sink used by the adoption bridge. Adopting a Knowledge
+   * suggestion writes one project object; accepting the code review never does.
+   */
+  setReviewKnowledgeSink(sink: ReviewKnowledgeSink): void {
+    this.reviewKnowledge = sink;
+  }
+
+  /** Sets a conversation-level Review preset override; the Send path freezes it for the next run. */
+  setPresetOverride(sessionId: string, preset: ReviewPreset | undefined): void {
+    if (preset) this.sessionPresetOverrides.set(sessionId, preset);
+    else this.sessionPresetOverrides.delete(sessionId);
+  }
+
+  /** The preset frozen for one run, or undefined once the run has been reclaimed. */
+  capturedPreset(sessionId: string, turnId: string): CapturedTurnPreset | undefined {
+    return this.turnPresets.get(`${sessionId}:${turnId}`);
+  }
+
   resolveWebviewView(view: vscode.WebviewView): void {
     this.view = view;
     this.postedSessionSignatures.clear();
@@ -602,12 +671,16 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     this.postWhenReady({ type: "focusInput" });
   }
 
-  viewApis(): void {
-    this.postWhenReady({ type: "openMethods" });
+  /** Inserts reference expressions into the composer, keeping the migrated resource pages working. */
+  insertReferences(expressions: readonly string[]): void {
+    if (!expressions.length) return;
+    this.showChat();
+    this.postWhenReady({ type: "insertFileReferences", expressions: [...expressions] });
   }
 
-  viewMcp(): void {
-    this.postWhenReady({ type: "openMcp" });
+  /** Routes a resource tab action into the existing edit/creation conversation flow. */
+  async editResource(type: ResourceKind, scope: ResourceScope): Promise<void> {
+    await this.startConversation(false, { type, scope });
   }
 
   addMcp(): void {
@@ -1073,6 +1146,48 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         case "harnessPresetAction":
           await this.manageHarnessPreset(request.action);
           break;
+        case "reviewDecision": {
+          const result = this.reviewController.submitFeedback(request.sessionId, request.turnId, request.runId, request.decision);
+          if (result.status === "not_found") throw new Error("That review is no longer available.");
+          await this.post({
+            type: "turnReviewDecision",
+            sessionId: request.sessionId,
+            turnId: request.turnId,
+            runId: request.runId,
+            status: result.status
+          });
+          break;
+        }
+        case "adoptKnowledgeSuggestion": {
+          const suggestion = this.runSuggestions.get(`${request.sessionId}:${request.turnId}`)
+            ?.find((candidate) => candidate.id === request.suggestionId);
+          if (!suggestion) throw new Error("That knowledge suggestion is no longer available.");
+          const adopted = await this.reviewController.adoptKnowledgeSuggestion(suggestion, "accepted");
+          await this.post({
+            type: "knowledgeSuggestionDecision",
+            sessionId: request.sessionId,
+            turnId: request.turnId,
+            suggestionId: request.suggestionId,
+            status: adopted.status === "adopted" ? "adopted" : adopted.status === "stale" ? "stale" : "not_applicable",
+            ...(adopted.object ? { objectId: adopted.object.id } : {})
+          });
+          break;
+        }
+        case "planReviewDecision": {
+          const review = this.planReviews.get(`${request.sessionId}:${request.planVersion}`);
+          if (!review || review.runId !== request.runId) throw new Error("That build review is no longer available.");
+          const finalized = finalizePlanReview(review, request.decision);
+          this.planReviews.set(`${request.sessionId}:${request.planVersion}`, finalized);
+          // The user's decision is recorded on the Build review; no turn review is rewritten.
+          await this.post({
+            type: "planReviewDecision",
+            sessionId: request.sessionId,
+            planVersion: request.planVersion,
+            runId: request.runId,
+            status: finalized.acceptance === "accepted" ? "accepted" : "rejected"
+          });
+          break;
+        }
         case "agentSelection":
           {
           // Reject late menu clicks after execution has already started.
@@ -1275,9 +1390,6 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           await this.application.reload();
           await this.refresh();
           break;
-        case "openMcp":
-          await this.post({ type: "openMcp" });
-          break;
         case "addMcp":
           // Keep the entire add flow in the conversation webview so the user
           // gets a multiline, chat-like composer instead of an editor-level
@@ -1454,6 +1566,85 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     ].join("\n"), undefined, true);
   }
 
+  /**
+   * Builds the per-run Review from the sources Dext actually has: the files the run touched and the
+   * preset frozen at send time. It never infers a pass from the agent's prose, and an Ask turn or a
+   * turn with nothing to review produces no card.
+   */
+  private async postTurnReview(
+    sessionId: string,
+    turnId: string,
+    mode: "agent" | "ask" | "plan" | "code",
+    response: InputExecutionResponse,
+    executePlan: boolean
+  ): Promise<void> {
+    // Writing a plan is not implementing it, so a plan-authoring turn produces no implementation
+    // review at all; only a Build creates an execution review.
+    if (mode === "plan" && !executePlan) return;
+    const captured = this.turnPresets.get(`${sessionId}:${turnId}`);
+    const changes = reviewChangesFromPatch(
+      response.executions.flatMap((execution) =>
+        execution.result.kind === "agent" && execution.result.patch ? execution.result.patch.changes : [])
+    );
+    // Suggestions come from the project service only when it produced drafts for this run. Without
+    // a source the review simply reports no suggestions instead of inventing any.
+    const suggestions = this.reviewKnowledge?.suggestions ? await this.reviewKnowledge.suggestions(sessionId, turnId) : [];
+    if (suggestions.length) this.runSuggestions.set(`${sessionId}:${turnId}`, [...suggestions]);
+    const review = buildTurnReview({
+      runId: turnId,
+      sessionId,
+      turnId,
+      mode,
+      attempt: captured?.attempt ?? 1,
+      changes,
+      semanticSuggestions: suggestions.map((suggestion) => suggestion.reason || suggestion.kind)
+    });
+    this.reviews.put(review);
+    const preset: TurnPresetSelection | undefined = presetForRun(captured, {
+      sessionId, turnId, runId: turnId, attempt: captured?.attempt ?? 1
+    });
+    await this.post({
+      type: "turnReview",
+      sessionId,
+      turnId,
+      review,
+      ...(preset ? { preset: preset.preset } : {}),
+      ...(suggestions.length ? { knowledgeSuggestions: [...suggestions] } : {})
+    });
+    if (mode === "plan") await this.accumulatePlanReview(sessionId, review, this.activeSession.activePlanPath);
+  }
+
+  /**
+   * Adds one executed round to the Build review for the current plan version. Intermediate rounds
+   * never block the Build; only the user's decision on the final review does.
+   */
+  private async accumulatePlanReview(sessionId: string, review: TurnReview, planPath: string | undefined): Promise<void> {
+    const planVersion = await this.readPlanVersion(planPath);
+    const key = `${sessionId}:${planVersion}`;
+    const existing = this.planReviews.get(key);
+    const accumulated = existing
+      ? appendPlanReviewRun(existing, review)
+      : buildPlanReview(review.runId, planVersion, [review]);
+    this.planReviews.set(key, accumulated);
+    await this.post({ type: "planReview", sessionId, review: accumulated });
+  }
+
+  /** The plan's current content version. An unreadable plan reports itself instead of a stale hash. */
+  private async readPlanVersion(planPath: string | undefined): Promise<string> {
+    if (!planPath) return "no-plan";
+    try {
+      const folder = vscode.workspace.workspaceFolders?.[0];
+      const target = this.application.planUri(planPath)
+        ?? (folder ? vscode.Uri.joinPath(folder.uri, ...planPathSegments(planPath)) : undefined);
+      if (!target) return "unreadable";
+      const text = new TextDecoder().decode(await vscode.workspace.fs.readFile(target));
+      return createHash("sha256").update(text).digest("hex").slice(0, 16);
+    } catch {
+      // A plan that cannot be read or hashed must not fail the Build that just succeeded.
+      return "unreadable";
+    }
+  }
+
   private async run(mode: "agent" | "ask" | "plan" | "code", source: string, planPath?: string, executePlan = false): Promise<void> {
     if (this.activeSession.resource) {
       mode = "ask";
@@ -1464,6 +1655,21 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     const turnId = randomBytes(12).toString("hex");
     const session = this.activeSession;
     const sessionId = session.id;
+    // Freeze the Review preset for this run before anything can change the project default.
+    const presetSelection = resolveReviewPreset({
+      projectDefault: { preset: this.projectPreset?.() ?? "engineering" },
+      override: this.sessionPresetOverrides.get(sessionId),
+      mode
+    });
+    // A new run in this conversation supersedes the previous run's frozen preset, which was already
+    // consumed when that turn's Review was built.
+    for (const key of [...this.turnPresets.keys()]) {
+      if (key.startsWith(`${sessionId}:`)) this.turnPresets.delete(key);
+    }
+    this.turnPresets.set(
+      `${sessionId}:${turnId}`,
+      captureTurnPreset({ sessionId, turnId, runId: turnId, attempt: 1 }, presetSelection, mode)
+    );
     const executionPlanPath = executePlan ? planPath ?? session.activePlanPath : planPath;
     const previousPlan = executePlan ? [...session.turns].reverse().find((turn) => turn.executePlan && turn.planPath === executionPlanPath) : undefined;
     const previousTodos = session.planProgress && session.planProgress.path === executionPlanPath ? session.planProgress.todos
@@ -1611,6 +1817,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         response,
         ...(reviewable ? { reviewPatch: true } : {})
       });
+      await this.postTurnReview(sessionId, turnId, mode, response, executePlan);
     } catch (error) {
       if (todoProgress && executionPlanPath) {
         session.planProgress = { path: executionPlanPath, todos: todoProgress.snapshot() };
@@ -2010,39 +2217,6 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     </section>
 
     </main>
-    <dialog id="methods-dialog" class="methods-dialog" aria-labelledby="methods-dialog-title">
-      <div class="methods-dialog-surface">
-        <header class="methods-dialog-header">
-          <div class="methods-dialog-title"><i class="codicon codicon-symbol-method"></i><span id="methods-dialog-title">APIs</span><span id="method-count" class="count"></span></div>
-          <div class="methods-dialog-actions">
-            <button id="reload-methods" class="icon-button compact" type="button" title="Reload APIs" aria-label="Reload APIs"><i class="codicon codicon-refresh"></i></button>
-            <button id="methods-toggle" class="icon-button compact" type="button" title="Collapse API namespaces" aria-label="Collapse API namespaces"><i class="codicon codicon-collapse-all"></i></button>
-            <button id="close-methods" class="icon-button" type="button" title="Close APIs" aria-label="Close APIs"><i class="codicon codicon-close"></i></button>
-          </div>
-        </header>
-        <div id="methods-dialog-body" class="methods-dialog-body">
-          <div id="config-errors" class="config-errors"></div>
-          <div id="methods"></div>
-        </div>
-      </div>
-    </dialog>
-    <dialog id="mcp-dialog" class="methods-dialog" aria-labelledby="mcp-dialog-title">
-      <div class="methods-dialog-surface">
-        <header class="methods-dialog-header">
-          <div class="methods-dialog-title"><i class="codicon codicon-server"></i><span id="mcp-dialog-title">Global Resources</span><span id="mcp-count" class="count"></span></div>
-          <div class="methods-dialog-actions">
-            <button id="mcp-toggle" class="icon-button compact" type="button" title="Collapse resource categories" aria-label="Collapse resource categories"><i class="codicon codicon-collapse-all"></i></button>
-            <button id="close-mcp" class="icon-button" type="button" title="Close global resources" aria-label="Close global resources"><i class="codicon codicon-close"></i></button>
-          </div>
-        </header>
-        <div id="mcp-dialog-body" class="methods-dialog-body">
-          <input id="mcp-search" class="resource-search" type="search" placeholder="Search global resources" aria-label="Search global resources">
-          <div id="mcp-errors" class="config-errors"></div>
-          <div id="mcp-servers"></div>
-          <div id="mcp-empty" class="empty-state" hidden>No MCP servers configured.</div>
-        </div>
-      </div>
-    </dialog>
     <dialog id="mcp-assistant-dialog" class="ui-dialog mcp-assistant-dialog" aria-labelledby="mcp-assistant-title">
       <form class="ui-dialog-surface" method="dialog">
         <header class="methods-dialog-header">

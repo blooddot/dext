@@ -9,7 +9,6 @@ import { markdownCodeCopy } from "../markdownCopy.js";
 import { parser as pythonParser } from "@lezer/python";
 import { classHighlighter, highlightCode } from "@lezer/highlight";
 import type {
-  FieldDefinition,
   AgentStreamEvent,
   AgentToolKind,
   AgentTokenUsage,
@@ -18,7 +17,6 @@ import type {
   RuntimeResponse,
   WorkflowStepResponse
 } from "../core/types.js";
-import { formatFieldType, methodResultType } from "../core/methodSignature.js";
 import type { ConversationSummary, SidebarState, WebviewRequest, WebviewResponse } from "../webviewProtocol.js";
 import { ClipboardClient } from "./clipboardClient.js";
 import { FileSearchClient } from "./fileSearchClient.js";
@@ -28,13 +26,19 @@ import { LanguageRequestBroker } from "./languageClient.js";
 import { formatDuration } from "./duration.js";
 import { agentMessageCopyText, presentAgentMessage } from "../agentMessagePresentation.js";
 import { presentDiff } from "../diffPresentation.js";
+import type { TurnReview } from "../core/turnReview.js";
+import type { PlanReview } from "../core/planReview.js";
+import type { KnowledgeSuggestion } from "../core/projectKnowledgeReview.js";
+import type { ReviewPreset } from "../core/projectContext.js";
+import { renderTurnReview } from "./turnReviewView.js";
+import { renderPlanReview } from "./planReviewView.js";
 import type { DextHistoryRecord, DextHistorySession } from "../historyStore.js";
 import {
   TURN_EDIT_ACTION, TURN_RENAME_ACTION, TURN_RETRY_ACTION, TURN_FORK_ACTION,
   TURN_COPY_ACTION, TURN_DELETE_ACTION, TurnTitle, presentTurn,
   type TurnSectionPresentation
 } from "../turnPresentation.js";
-import { groupMethodsForDisplay, isSyntheticBuiltinGroup } from "./methodGroups.js";
+
 import {
   compactFileReferenceLabel,
   inputReferenceDisplayParts,
@@ -53,6 +57,7 @@ import { AgentInputView } from "./agentInputView.js";
 import { planExecutionLabel } from "../agentTodoPresentation.js";
 import { CLI_SPEEDS } from "../core/builtinCli.js";
 import { presentAgentSelection } from "../agentSelectionDefaults.js";
+import type { HarnessPresetOption } from "../agentProfiles.js";
 
 interface VsCodeApi {
   postMessage(message: WebviewRequest): void;
@@ -73,16 +78,6 @@ const vscode = acquireVsCodeApi();
 const elements = {
   main: element<HTMLElement>("dext-main"),
   conversationTabs: element<HTMLElement>("conversation-tabs"),
-  methodsDialog: element<HTMLDialogElement>("methods-dialog"),
-  closeMethods: element<HTMLButtonElement>("close-methods"),
-  mcpDialog: element<HTMLDialogElement>("mcp-dialog"),
-  closeMcp: element<HTMLButtonElement>("close-mcp"),
-  mcpToggle: element<HTMLButtonElement>("mcp-toggle"),
-  mcpServers: element<HTMLElement>("mcp-servers"),
-  mcpSearch: element<HTMLInputElement>("mcp-search"),
-  mcpCount: element<HTMLElement>("mcp-count"),
-  mcpErrors: element<HTMLElement>("mcp-errors"),
-  mcpEmpty: element<HTMLElement>("mcp-empty"),
   mcpAssistantDialog: element<HTMLDialogElement>("mcp-assistant-dialog"),
   mcpAssistantClose: element<HTMLButtonElement>("mcp-assistant-close"),
   mcpAssistantInput: element<HTMLTextAreaElement>("mcp-assistant-input"),
@@ -142,11 +137,6 @@ const elements = {
   resultSection: element<HTMLElement>("result-section"),
   resultHeading: element<HTMLElement>("result-heading"),
   resultBody: element<HTMLElement>("result-body"),
-  methods: element<HTMLElement>("methods"),
-  methodCount: element<HTMLElement>("method-count"),
-  methodsToggle: element<HTMLButtonElement>("methods-toggle"),
-  reloadMethods: element<HTMLButtonElement>("reload-methods"),
-  configErrors: element<HTMLElement>("config-errors"),
   result: element<HTMLElement>("result"),
   resultToggle: element<HTMLButtonElement>("result-toggle"),
   inputFullscreen: element<HTMLButtonElement>("input-fullscreen"),
@@ -206,11 +196,11 @@ const PERMISSION_ICON: Record<AgentPermission, string> = {
 let agentPermission: AgentPermission = "workspace-write";
 let sidebarState: SidebarState | undefined;
 let lastSidebarState: SidebarState | undefined;
-// The API/resource trees are independent of the active conversation. Keep a
-// compact signature so switching tabs only updates the composer controls
-// instead of rebuilding both trees on every state message.
-let renderedMethodsKey: string | undefined;
-let renderedMcpKey: string | undefined;
+// The theme is independent of the active conversation. Keep a compact signature so switching tabs
+// only updates the composer controls instead of rebuilding the document styles again.
+let renderedThemeKey: string | undefined;
+/** Reviews received for the visible conversation, keyed by session, turn and run. */
+const lastTurnReviews = new Map<string, { review: TurnReview; preset?: ReviewPreset; suggestions?: KnowledgeSuggestion[] }>();
 let activeConversationId: string | undefined;
 const resourceSessions = new Map<string, ResourceSession>();
 const resourcePending = new Set<string>();
@@ -502,6 +492,19 @@ function composerSelectionLocked(): boolean {
   return executing || runningConversationIds.has(activeConversationId ?? "") || resourcePending.has(activeConversationId ?? "");
 }
 
+/** A preset that runs outside the Harness sandbox needs Full access on every
+ * writable turn. Read-only turns substitute a confined preset, so only the turns
+ * that apply the selection as-is are blocked. */
+function fullAccessPresetRestriction(writableTurn: boolean): string | undefined {
+  const selection = sidebarState?.agentSelection;
+  const preset = selection?.profileId === "deepseek-harness"
+    ? sidebarState?.agentProfiles.find((profile) => profile.id === selection.profileId)?.presets?.find((item) => item.id === selection.agentPreset)
+    : undefined;
+  if (!preset || !writableTurn) return undefined;
+  return preset.error ?? (preset.requiresFullAccess && agentPermission !== "full-access"
+    ? "This preset requires Full access in Agent or Plan mode." : undefined);
+}
+
 function updateRunState(): void {
   const selectionLocked = composerSelectionLocked();
   for (const control of [elements.modeControl, elements.permissionControl, elements.agentControl, elements.modelControl]) {
@@ -512,11 +515,9 @@ function updateRunState(): void {
   }
   if (selectionLocked) closeComposerMenus();
   const codeMode = !activeResource() && inputMode === "code";
-  const selection = sidebarState?.agentSelection;
-  const preset = selection?.profileId === "deepseek-harness"
-    ? sidebarState?.agentProfiles.find((profile) => profile.id === selection.profileId)?.presets?.find((item) => item.id === selection.agentPreset) : undefined;
-  const presetRestriction = preset?.requiresFullAccess && (inputMode !== "agent" || agentPermission !== "full-access")
-    ? "This preset requires Full access in Agent mode." : preset?.error;
+  // Agent and Code send a writable turn, so they apply the preset as-is. Ask and
+  // Plan's Send are read-only and substitute a confined preset instead.
+  const presetRestriction = fullAccessPresetRestriction(inputMode === "agent" || codeMode);
   const resource = activeResource();
   elements.inputSection.dataset.mode = resource ? "resource" : inputMode;
   if (resource) elements.inputSection.dataset.resourceType = resource.type;
@@ -576,16 +577,19 @@ function renderPlanToolbar(): void {
   // new plan, the target button is itself a chooser and must be locked too.
   elements.planTarget.disabled = planLocked && !activePlanPath;
   const planBuildRunning = planStatus === "running" && executing;
-  elements.planBuild.disabled = planBuildRunning
+  // Building runs a writable turn, so it applies the selected preset as-is; the
+  // host rejects a preset that needs Full access when the tier is not selected.
+  const buildRestriction = fullAccessPresetRestriction(true);
+  elements.planBuild.disabled = Boolean(buildRestriction) || (planBuildRunning
     ? stopping || !activeTurnId
-    : executing || planStatus === "running" || !activePlanPath;
+    : executing || planStatus === "running" || !activePlanPath);
   elements.planBuild.classList.toggle("executing", planBuildRunning);
   elements.planBuild.classList.toggle("stopping", planBuildRunning && stopping);
   const buildLabel = elements.planBuild.querySelector("span");
   if (buildLabel) buildLabel.textContent = planBuildRunning ? "Stop" : planStatus === "completed" ? "Rebuild" : "Build";
-  elements.planBuild.title = planBuildRunning
+  elements.planBuild.title = buildRestriction ?? (planBuildRunning
     ? stopping ? "Stopping the active plan" : "Stop building the active plan"
-    : planStatus === "completed" ? "Rebuild the active plan" : "Build the active plan";
+    : planStatus === "completed" ? "Rebuild the active plan" : "Build the active plan");
   elements.planBuild.setAttribute("aria-label", elements.planBuild.title);
   const buildIcon = elements.planBuild.querySelector<HTMLElement>("i");
   if (buildIcon) buildIcon.className = `codicon codicon-${planBuildRunning ? "debug-stop" : "play"}`;
@@ -658,47 +662,6 @@ function toggleFullscreen(name: PanelName): void {
   syncFullscreenButtons();
 }
 
-function setMethodsReloading(reloading: boolean): void {
-  elements.reloadMethods.disabled = reloading;
-  elements.reloadMethods.querySelector(".codicon")
-    ?.classList.toggle("codicon-modifier-spin", reloading);
-}
-
-function openMethodsDialog(): void {
-  closeComposerMenus();
-  if (!elements.methodsDialog.open) elements.methodsDialog.showModal();
-}
-
-function closeMethodsDialog(): void {
-  if (elements.methodsDialog.open) elements.methodsDialog.close();
-}
-
-function openMcpDialog(): void {
-  closeComposerMenus();
-  if (!elements.mcpDialog.open) elements.mcpDialog.showModal();
-}
-
-function closeMcpDialog(): void {
-  if (elements.mcpDialog.open) elements.mcpDialog.close();
-}
-
-function syncResourceToggle(): void {
-  const groups = [...elements.mcpServers.querySelectorAll<HTMLDetailsElement>("details.resource-category")];
-  const open = groups.length === 0 || groups.every((group) => group.open);
-  const icon = elements.mcpToggle.querySelector("i");
-  if (icon) icon.className = `codicon codicon-${open ? "collapse-all" : "expand-all"}`;
-  const title = open ? "Collapse resource categories" : "Expand resource categories";
-  elements.mcpToggle.title = title;
-  elements.mcpToggle.setAttribute("aria-label", title);
-}
-
-function toggleResourceCategories(): void {
-  const groups = [...elements.mcpServers.querySelectorAll<HTMLDetailsElement>("details.resource-category")];
-  const open = groups.some((group) => !group.open);
-  groups.forEach((group) => { group.open = open; });
-  syncResourceToggle();
-}
-
 function openMcpAssistantDialog(): void {
   closeComposerMenus();
   if (!elements.mcpAssistantDialog.open) elements.mcpAssistantDialog.showModal();
@@ -739,88 +702,6 @@ function uiButton(label: string, secondary: boolean, onClick: () => void): HTMLB
   if (secondary) button.className = "secondary";
   button.addEventListener("click", onClick);
   return button;
-}
-
-function renderMcp(state: SidebarState): void {
-  const resources = state.globalResources ?? {
-    apis: [],
-    mcps: state.mcpServers.map((server) => ({ name: server.name, detail: server.transport })),
-    rules: [],
-    skills: []
-  };
-  elements.mcpServers.replaceChildren();
-  const query = elements.mcpSearch.value.trim().toLowerCase();
-  const matches = (item: { name: string; detail?: string }): boolean =>
-    !query || `${item.name} ${item.detail ?? ""}`.toLowerCase().includes(query);
-  const categories = [
-    ["APIs", "symbol-method", resources.apis.filter(matches)],
-    ["MCP", "server", resources.mcps.filter(matches)],
-    ["Rules", "law", resources.rules.filter(matches)],
-    ["Skills", "sparkle", resources.skills.filter(matches)]
-  ] as const;
-  const total = categories.reduce((sum, [, , items]) => sum + items.length, 0);
-  elements.mcpCount.textContent = String(total);
-  elements.mcpEmpty.hidden = total !== 0;
-  for (const [title, icon, items] of categories) {
-    const group = document.createElement("details");
-    group.className = "resource-category";
-    group.open = true;
-    const summary = document.createElement("summary");
-    const chevron = document.createElement("i");
-    // Keep resource categories in step with API groups: closed categories use
-    // an explicit right chevron and open categories use a down chevron. Using
-    // the generic disclosure chevron here applies a rotation transform that
-    // makes the closed state point left instead.
-    chevron.className = "method-chevron codicon codicon-chevron-down";
-    const categoryIcon = document.createElement("i");
-    categoryIcon.className = `resource-category-icon codicon codicon-${icon}`;
-    const label = document.createElement("span");
-    label.className = "resource-category-label";
-    label.textContent = title;
-    const count = document.createElement("span");
-    count.className = "resource-category-count";
-    count.textContent = String(items.length);
-    summary.append(chevron, categoryIcon, label, count);
-    const body = document.createElement("div");
-    body.className = "resource-category-body";
-    if (!items.length) {
-      const empty = document.createElement("div");
-      empty.className = "resource-empty";
-      empty.textContent = `No global ${title.toLowerCase()} found.`;
-      body.append(empty);
-    }
-    for (const resource of items) {
-      const row = document.createElement("div");
-      row.className = "method-row resource-row";
-      const identity = document.createElement("span");
-      identity.className = "method-identity";
-      const name = document.createElement("span");
-      name.className = "method-name";
-      name.textContent = resource.name;
-      identity.append(name);
-      if (resource.detail) {
-        const detail = document.createElement("span");
-        detail.className = "method-signature";
-        detail.textContent = resource.detail;
-        identity.append(detail);
-      }
-      row.append(identity);
-      body.append(row);
-    }
-    group.append(summary, body);
-    group.addEventListener("toggle", syncResourceToggle);
-    group.addEventListener("toggle", () => {
-      chevron.className = `method-chevron codicon codicon-chevron-${group.open ? "down" : "right"}`;
-    });
-    elements.mcpServers.append(group);
-  }
-  syncResourceToggle();
-  elements.mcpErrors.replaceChildren();
-  for (const diagnostic of state.globalDiagnostics) {
-    const item = document.createElement("div");
-    item.textContent = diagnostic;
-    elements.mcpErrors.append(item);
-  }
 }
 
 let mcpAssistantRequestId: string | undefined;
@@ -1066,40 +947,8 @@ function renderMcpToolChoices(tools: Array<{ name: string; description?: string 
   elements.mcpAssistantSave.disabled = false;
 }
 
-function methodDefaultText(field: FieldDefinition): string {
-  if (typeof field.default === "string") return JSON.stringify(field.default);
-  if (typeof field.default === "boolean") return field.default ? "True" : "False";
-  return typeof field.default === "object" ? JSON.stringify(field.default) : String(field.default);
-}
-
-function signatureToken(parent: HTMLElement, className: string, text: string): void {
-  const token = document.createElement("span");
-  token.className = className;
-  token.textContent = text;
-  parent.append(token);
-}
-
-/** Compact syntax highlighting for API signatures in the methods dialog. */
-function renderMethodSignature(signature: HTMLElement, method: SidebarState["methods"][number], displayId: string): void {
-  const fields = (["agent", "ask", "plan"].includes(method.id) ? method.input : method.input.filter((field) => !field.internal));
-  signature.setAttribute("aria-label", `${displayId} API signature`);
-  signatureToken(signature, "method-token-function", displayId);
-  signatureToken(signature, "method-token-punctuation", "(");
-  fields.forEach((field, index) => {
-    if (index) signatureToken(signature, "method-token-punctuation", ", ");
-    signatureToken(signature, "method-token-parameter", `${field.name}${field.required ? "" : "?"}`);
-    signatureToken(signature, "method-token-punctuation", ": ");
-    signatureToken(signature, "method-token-type", formatFieldType(field));
-    if (field.default !== undefined) {
-      signatureToken(signature, "method-token-punctuation", " = ");
-      signatureToken(signature, "method-token-literal", methodDefaultText(field));
-    }
-  });
-  signatureToken(signature, "method-token-punctuation", ") → ");
-  signatureToken(signature, "method-token-type", methodResultType(method));
-}
-
-function renderMethods(state: SidebarState): void {
+/** Applies the editor theme and Dext token styles to the sidebar document. */
+function applySidebarTheme(state: SidebarState): void {
   editor.applyTheme(state.theme);
   let tokenStyle = document.getElementById("dext-token-theme");
   if (!tokenStyle) {
@@ -1108,116 +957,7 @@ function renderMethods(state: SidebarState): void {
     document.head.append(tokenStyle);
   }
   tokenStyle.textContent = dextTokenStyles(state.theme);
-  elements.methods.replaceChildren();
-  elements.methodCount.textContent = String(state.methods.length);
-  const root = groupMethodsForDisplay(state.methods);
-  const collectSources = (node: typeof root): Set<string> => {
-    const sources = new Set<string>(node.methods.map((method) => method.source === "builtin" ? "builtin" : "project"));
-    for (const child of node.children.values()) {
-      for (const source of collectSources(child)) sources.add(source);
-    }
-    return sources;
-  };
-  const renderNode = (node: typeof root, parent: HTMLElement, prefix = ""): void => {
-    for (const [name, child] of [...node.children].sort(([a], [b]) => a.localeCompare(b))) {
-      const group = document.createElement("details");
-      group.className = "method-group";
-      group.open = true;
-      group.addEventListener("toggle", syncMethodToggle);
-      const summary = document.createElement("summary");
-      summary.className = "method-group-summary";
-      const chevron = document.createElement("i");
-      chevron.className = "method-chevron codicon codicon-chevron-down";
-      const label = document.createElement("span");
-      label.className = "method-group-label";
-      const groupName = document.createElement("span");
-      groupName.textContent = name;
-      groupName.title = `${prefix}${name}`;
-      label.append(groupName);
-      const sources = [...collectSources(child)];
-      const sourceName = isSyntheticBuiltinGroup(name, prefix, child)
-        ? undefined
-        : sources.length === 1 ? sources[0] : undefined;
-      if (sourceName) {
-        const source = document.createElement("span");
-        source.className = "method-source";
-        source.textContent = sourceName;
-        label.append(source);
-      }
-      summary.append(chevron, label);
-      group.append(summary);
-      group.addEventListener("toggle", () => {
-        chevron.className = `method-chevron codicon codicon-chevron-${group.open ? "down" : "right"}`;
-      });
-      renderNode(child, group, `${prefix}${name}.`);
-      parent.append(group);
-    }
-    for (const method of node.methods) {
-      const row = document.createElement(method.source === "builtin" ? "button" : "div");
-      if (row instanceof HTMLButtonElement) row.type = "button";
-      row.className = "method-row";
-      row.title = method.source === "builtin" ? `Open ${method.id} definition` : method.description;
-      const identity = document.createElement("span");
-      identity.className = "method-identity";
-      const name = document.createElement("span");
-      name.className = "method-name";
-      name.textContent = method.id.split(".").at(-1) ?? method.id;
-      const signature = document.createElement("span");
-      signature.className = "method-signature";
-      renderMethodSignature(signature, method, method.id.split(".").at(-1) ?? method.id);
-      if (!prefix) {
-        const source = document.createElement("span");
-        source.className = "method-source-inline";
-        source.textContent = method.source === "builtin" ? "builtin" : "project";
-        identity.append(name, source, signature);
-      } else {
-        identity.append(name, signature);
-      }
-      row.append(identity);
-      if (method.source === "builtin") {
-        const open = document.createElement("i");
-        open.className = "method-open-definition codicon codicon-go-to-file";
-        open.setAttribute("aria-hidden", "true");
-        row.append(open);
-        row.addEventListener("click", () => {
-          vscode.postMessage({ type: "openBuiltinApiDefinition", id: method.id });
-          closeMethodsDialog();
-        });
-      }
-      parent.append(row);
-    }
-  }
-  renderNode(root, elements.methods);
-  syncMethodToggle();
-  elements.configErrors.replaceChildren();
-  for (const diagnostic of state.diagnostics) {
-    const item = document.createElement("div");
-    item.textContent = diagnostic;
-    elements.configErrors.append(item);
-  }
   editor.refreshLanguageState();
-}
-
-function setMethodGroupsOpen(open: boolean): void {
-  elements.methods.querySelectorAll<HTMLDetailsElement>("details.method-group").forEach((group) => {
-    group.open = open;
-  });
-  syncMethodToggle();
-}
-
-function syncMethodToggle(): void {
-  const groups = [...elements.methods.querySelectorAll<HTMLDetailsElement>("details.method-group")];
-  const open = groups.length === 0 || groups.every((group) => group.open);
-  const icon = elements.methodsToggle.querySelector("i");
-  if (icon) icon.className = `codicon codicon-${open ? "collapse-all" : "expand-all"}`;
-  const title = open ? "Collapse API groups" : "Expand API groups";
-  elements.methodsToggle.title = title;
-  elements.methodsToggle.setAttribute("aria-label", title);
-}
-
-function toggleMethodGroups(): void {
-  const groups = [...elements.methods.querySelectorAll<HTMLDetailsElement>("details.method-group")];
-  setMethodGroupsOpen(groups.some((group) => !group.open));
 }
 
 function setResultDetailsOpen(open: boolean): void {
@@ -1485,7 +1225,11 @@ function renderHarnessPresetChoices(state: SidebarState): void {
   const profile = state.agentProfiles.find((item) => item.id === "deepseek-harness");
   const current = state.agentSelection.agentPreset ?? "";
   const locked = outputTurns.size > 0;
-  const fullAccess = state.agentSelection.permission === "full-access" && inputMode === "agent";
+  // Agent turns are always writable, and a Plan conversation applies the preset
+  // when the plan builds. Ask is read-only and Code carries its own per-call
+  // permission, so neither mode can decide a preset that needs Full access.
+  const writable = inputMode === "agent" || inputMode === "plan";
+  const fullAccess = state.agentSelection.permission === "full-access" && writable;
   const menu = elements.modelSubmenu;
   renderModelChoices(menu, "Agent preset", [], current, () => undefined);
   if (locked) {
@@ -1494,7 +1238,7 @@ function renderHarnessPresetChoices(state: SidebarState): void {
     note.textContent = "This conversation keeps its preset. Start a new conversation to change it.";
     menu.append(note);
   }
-  const presets = [{ id: "", label: "ACP default", description: "Use the existing ACP profile configuration.", error: undefined, requiresFullAccess: false }, ...(profile?.presets ?? [])];
+  const presets: HarnessPresetOption[] = [{ id: "", label: "ACP default", description: "Use the existing ACP profile configuration.", builtin: false, requiresFullAccess: false, writableTurnsOnly: false }, ...(profile?.presets ?? [])];
   for (const preset of presets) {
     const button = document.createElement("button");
     button.type = "button";
@@ -1503,11 +1247,13 @@ function renderHarnessPresetChoices(state: SidebarState): void {
     button.setAttribute("role", "menuitemradio");
     button.setAttribute("aria-checked", String(preset.id === current));
     const restriction = preset.requiresFullAccess && !fullAccess;
+    const buildOnly = !restriction && Boolean(preset.writableTurnsOnly) && writable && inputMode === "plan";
     button.disabled = locked || Boolean(preset.error) || restriction;
     button.dataset.presetDisabled = String(button.disabled);
-    button.title = preset.error || (restriction ? "Requires Full access in Agent mode." : preset.description);
+    button.title = preset.error || (restriction ? "Requires Full access in Agent or Plan mode."
+      : buildOnly ? "Planning turns stay read-only; this preset runs when the plan builds." : preset.description);
     const label = document.createElement("span");
-    label.textContent = `${preset.label}${preset.error ? " (unavailable)" : restriction ? " (Full access)" : ""}`;
+    label.textContent = `${preset.label}${preset.error ? " (unavailable)" : restriction ? " (Full access)" : buildOnly ? " (Build only)" : ""}`;
     const check = document.createElement("i");
     check.className = `codicon codicon-${preset.id === current ? "check" : "blank"}`;
     button.append(label, check);
@@ -2673,8 +2419,42 @@ function patchReviewHeader(turnId: string, entries: readonly WorkflowStepRespons
   return header;
 }
 
-function renderResult(response: InputExecutionResponse, reviewTurnId?: string): void {
-  const target = activeTurn?.output ?? elements.result;
+/** Renders one Build's accumulated Plan review. A later round replaces the previous card. */
+function renderPlanReviewCard(sessionId: string, review: PlanReview): void {
+  const host = elements.result.querySelector<HTMLElement>(`[data-plan-review-host="${sessionId}"]`) ?? document.createElement("div");
+  host.dataset.planReviewHost = sessionId;
+  host.dataset.reviewSession = sessionId;
+  host.dataset.planVersion = review.planVersion;
+  // The renderer escapes every value it interpolates, so this only assembles its own markup.
+  host.innerHTML = renderPlanReview(review);
+  const turn = [...outputTurns.values()].at(-1);
+  (turn?.output ?? elements.result).append(host);
+}
+
+/** Renders one run's Review into its turn. A later decision for the same run replaces the card. */
+function renderTurnReviewCard(
+  sessionId: string,
+  turnId: string,
+  review: TurnReview,
+  preset?: ReviewPreset,
+  knowledgeSuggestions?: KnowledgeSuggestion[]
+): void {
+  const target = outputTurns.get(turnId)?.output ?? elements.result;
+  target.querySelector(`[data-turn-review-host="${turnId}"]`)?.remove();
+  const html = renderTurnReview(review, {
+    ...(preset ? { preset } : {}),
+    ...(knowledgeSuggestions?.length ? { knowledgeSuggestions } : {})
+  });
+  if (!html) return;
+  const host = document.createElement("div");
+  host.dataset.turnReviewHost = turnId;
+  host.dataset.reviewSession = sessionId;
+  // The renderer escapes every value it interpolates, so this only assembles its own markup.
+  host.innerHTML = html;
+  target.append(host);
+}
+
+function renderResult(response: InputExecutionResponse, reviewTurnId?: string): void {  const target = activeTurn?.output ?? elements.result;
   target.replaceChildren();
   const entries: WorkflowStepResponse[] = response.steps ?? response.executions.map((execution) => ({
     method: execution.method.id,
@@ -3394,6 +3174,11 @@ function renderOutputSessionRef(sessionId: string, signature: string, switchId?:
   conversationViewCache.set(sessionId, cached);
   renderedConversationId = sessionId;
   renderedConversationSignature = signature;
+  // Reviews are kept outside the cached DOM, so a restored conversation re-attaches its own cards.
+  for (const [key, entry] of lastTurnReviews) {
+    if (!key.startsWith(`${sessionId}:`)) continue;
+    renderTurnReviewCard(sessionId, entry.review.turnId, entry.review, entry.preset, entry.suggestions);
+  }
   elements.resultSection.classList.remove("hidden");
   finishConversationLoading();
   syncResultToggle();
@@ -3540,23 +3325,52 @@ jumpToLatest.addEventListener("click", () => {
   elements.resultBody.focus({ preventScroll: true });
 });
 elements.problems.addEventListener("click", () => editor.goToFirstDiagnostic());
-elements.methodsToggle.addEventListener("click", toggleMethodGroups);
-elements.reloadMethods.addEventListener("click", () => {
-  // Reloading an unchanged API set would otherwise look like nothing happened.
-  setMethodsReloading(true);
-  vscode.postMessage({ type: "reload" });
-});
-elements.closeMethods.addEventListener("click", closeMethodsDialog);
-elements.methodsDialog.addEventListener("click", (event) => {
-  if (event.target === elements.methodsDialog) closeMethodsDialog();
-});
-elements.closeMcp.addEventListener("click", closeMcpDialog);
-elements.mcpToggle.addEventListener("click", toggleResourceCategories);
-elements.mcpSearch.addEventListener("input", () => {
-  if (lastSidebarState) renderMcp(lastSidebarState);
-});
-elements.mcpDialog.addEventListener("click", (event) => {
-  if (event.target === elements.mcpDialog) closeMcpDialog();
+// Review cards live inside the turn output, so one delegated listener covers every turn.
+elements.result.addEventListener("click", (event) => {
+  const target = event.target instanceof Element ? event.target : null;
+  const element = target?.closest<HTMLElement>(
+    "[data-review-accept],[data-review-reject],[data-review-diff],[data-plan-review-accept],[data-plan-review-reject],[data-adopt-suggestion]"
+  );
+  if (!element) return;
+  const suggestionId = element.getAttribute("data-adopt-suggestion");
+  if (suggestionId) {
+    const host = element.closest<HTMLElement>("[data-turn-review-host]");
+    const sessionId = host?.dataset.reviewSession;
+    const turnId = host?.dataset.turnReviewHost;
+    if (!sessionId || !turnId) return;
+    vscode.postMessage({ type: "adoptKnowledgeSuggestion", sessionId, turnId, suggestionId });
+    return;
+  }
+  const diff = element.getAttribute("data-review-diff");
+  if (diff) {
+    vscode.postMessage({ type: "openFileReference", reference: diff });
+    return;
+  }
+  const planReview = element.closest<HTMLElement>("[data-plan-review-host]");
+  if (planReview) {
+    const sessionId = planReview.dataset.reviewSession;
+    const planVersion = planReview.dataset.planVersion;
+    const accept = element.hasAttribute("data-plan-review-accept");
+    const runId = element.getAttribute(accept ? "data-plan-review-accept" : "data-plan-review-reject");
+    if (!sessionId || !planVersion || !runId) return;
+    vscode.postMessage({
+      type: "planReviewDecision",
+      sessionId,
+      planVersion,
+      runId,
+      decision: accept ? "accepted" : "rejected"
+    });
+    return;
+  }
+  const host = element.closest<HTMLElement>("[data-turn-review-host]");
+  if (!host) return;
+  const sessionId = host.dataset.reviewSession;
+  const turnId = host.dataset.turnReviewHost;
+  if (!sessionId || !turnId) return;
+  const accept = element.hasAttribute("data-review-accept");
+  const runId = element.getAttribute(accept ? "data-review-accept" : "data-review-reject");
+  if (!runId) return;
+  vscode.postMessage({ type: "reviewDecision", sessionId, turnId, runId, decision: accept ? "accepted" : "rejected" });
 });
 function requestCloseMcpAssistant(): void {
   if (mcpAssistantRunningRequestId) {
@@ -3682,26 +3496,12 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   }
   if (message.type === "state") {
     lastSidebarState = message.state;
-    setMethodsReloading(false);
-    const methodsKey = JSON.stringify([
-      message.state.theme,
-      message.state.methods,
-      message.state.diagnostics
-    ]);
-    if (methodsKey !== renderedMethodsKey) {
-      renderedMethodsKey = methodsKey;
-      renderMethods(message.state);
+    const themeKey = JSON.stringify([message.state.theme, message.state.diagnostics]);
+    if (themeKey !== renderedThemeKey) {
+      renderedThemeKey = themeKey;
+      applySidebarTheme(message.state);
     }
-    const mcpKey = JSON.stringify([
-      message.state.mcpServers,
-      message.state.globalDiagnostics,
-      message.state.globalResources
-    ]);
-    if (mcpKey !== renderedMcpKey) {
-      renderedMcpKey = mcpKey;
-      renderMcp(message.state);
-    }
-    // Controls are conversation-scoped, unlike the API/resource trees above.
+    // Controls are conversation-scoped, unlike the theme above.
     renderAgentControls(message.state);
   }
   if (message.type === "inputKind") {
@@ -3786,8 +3586,6 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     planStatus = message.status;
     renderPlanToolbar();
   }
-  if (message.type === "openMethods") openMethodsDialog();
-  if (message.type === "openMcp") openMcpDialog();
   if (message.type === "resourceContext") {
     resourceSessions.set(message.sessionId, message.resource);
     if (message.busy) resourcePending.add(message.sessionId);
@@ -3823,7 +3621,6 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   if (message.type === "mcpCreated") {
     elements.mcpAssistantStatus.textContent = `MCP '${message.name}' was added and its tools are ready.`;
     elements.mcpAssistantDialog.close();
-    openMcpDialog();
   }
   if (message.type === "execution") {
     // A background turn changes the session while its DOM may be cached.
@@ -3838,6 +3635,46 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   }
   if (message.type === "patchResolved" && message.sessionId === activeConversationId) {
     applyPatchResolution(message.turnId, message.uris, message.status, message.message);
+  }
+  if (message.type === "turnReview") {
+    const entry = {
+      review: message.review,
+      ...(message.preset ? { preset: message.preset } : {}),
+      ...(message.knowledgeSuggestions ? { suggestions: message.knowledgeSuggestions } : {})
+    };
+    lastTurnReviews.set(`${message.sessionId}:${message.turnId}:${message.review.runId}`, entry);
+    if (message.sessionId === activeConversationId) {
+      renderTurnReviewCard(message.sessionId, message.turnId, message.review, message.preset, message.knowledgeSuggestions);
+    }
+  }
+  if (message.type === "knowledgeSuggestionDecision") {
+    const button = elements.result.querySelector<HTMLButtonElement>(
+      `[data-adopt-suggestion="${message.suggestionId}"]`
+    );
+    if (button) {
+      button.dataset.suggestionStatus = message.status;
+      button.disabled = true;
+      button.textContent = message.status === "adopted" ? "Adopted" : message.status === "stale" ? "Out of date" : "Unavailable";
+    }
+  }
+  if (message.type === "turnReviewDecision") {
+    const host = elements.result.querySelector<HTMLElement>(`[data-turn-review-host="${message.turnId}"]`);
+    const card = host?.querySelector<HTMLElement>("[data-turn-review]");
+    if (card) {
+      card.dataset.reviewDecision = message.status;
+      card.querySelector(".turn-review-actions")?.remove();
+    }
+  }
+  if (message.type === "planReview") {
+    if (message.sessionId === activeConversationId) renderPlanReviewCard(message.sessionId, message.review);
+  }
+  if (message.type === "planReviewDecision") {
+    const host = elements.result.querySelector<HTMLElement>(`[data-plan-review-host="${message.sessionId}"]`);
+    const card = host?.querySelector<HTMLElement>("[data-plan-review]");
+    if (card) {
+      card.dataset.reviewDecision = message.status;
+      card.querySelector(".plan-review-actions")?.remove();
+    }
   }
   if (message.type === "executionFailed") {
     conversationViewCache.delete(message.sessionId);

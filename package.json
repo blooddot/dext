@@ -195,19 +195,29 @@
         "title": "Close"
       },
       {
+        "command": "dext.openProject",
+        "title": "Dext: Open Project",
+        "icon": "$(book)"
+      },
+      {
         "command": "dext.viewApis",
         "title": "Dext: View APIs",
         "icon": "$(symbol-method)"
       },
       {
-        "command": "dext.viewMcp",
-        "title": "Dext: View Global Resources",
+        "command": "dext.viewResources",
+        "title": "Dext: View Resources",
         "icon": "$(server)"
       },
       {
         "command": "dext.addMcp",
         "title": "Dext: Add MCP Server",
         "icon": "$(add)"
+      },
+      {
+        "command": "dext.editResource",
+        "title": "Dext: Edit Resource",
+        "icon": "$(edit)"
       },
       {
         "command": "dext.openWorkspaceTrust",
@@ -525,10 +535,6 @@
           "when": "false"
         },
         {
-          "command": "dext.viewMcp",
-          "when": "false"
-        },
-        {
           "command": "dext.addMcp",
           "when": "false"
         },
@@ -667,14 +673,19 @@
           "group": "navigation@2"
         },
         {
-          "command": "dext.viewApis",
+          "command": "dext.openProject",
           "when": "view == dext.sidebar",
           "group": "navigation@3"
         },
         {
-          "command": "dext.viewMcp",
+          "command": "dext.viewApis",
           "when": "view == dext.sidebar",
           "group": "navigation@4"
+        },
+        {
+          "command": "dext.viewResources",
+          "when": "view == dext.sidebar",
+          "group": "navigation@5"
         }
       ],
       "webview/context": [
@@ -1147,8 +1158,5 @@
     "typescript": "5.9.3",
     "typescript-eslint": "8.48.1",
     "vitest": "4.1.10"
-  },
-  "volta": {
-    "node": "22.23.2"
   }
 }

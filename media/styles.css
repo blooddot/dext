@@ -1080,6 +1080,13 @@ main {
   max-height: min(58%, 360px);
   flex-direction: column;
   overflow: hidden;
+  /* Keep the composer above host-provided views when attachments make the
+     editor taller. The section remains in the flex flow while sticking to
+     the bottom edge of the webview viewport. */
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  background: var(--vscode-sideBar-background, var(--vscode-editor-background));
 }
 
 .input-body {
@@ -3770,3 +3777,31 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .composer-menu-optio
   outline: 1px solid var(--vscode-contrastBorder, var(--vscode-foreground));
   outline-offset: -1px;
 }
+
+/* Per-run Review cards. They live inside a turn and never replace the patch review controls. */
+.turn-review { margin: 8px 0; border: 1px solid var(--vscode-panel-border); border-radius: 4px; padding: 6px 8px; }
+.turn-review > summary { cursor: pointer; font-weight: 600; }
+.turn-review-emphasis { margin: 6px 0 2px; color: var(--vscode-descriptionForeground); }
+.turn-review-highlights { margin: 0 0 6px 18px; padding: 0; color: var(--vscode-descriptionForeground); }
+.turn-review section { margin-top: 6px; }
+.turn-review h4 { margin: 0 0 2px; font-size: 1em; }
+.turn-review ul { margin: 0 0 0 18px; padding: 0; }
+.turn-review-change button, .turn-review-change { text-align: left; }
+.turn-review-change button { background: none; border: 0; color: var(--vscode-textLink-foreground); cursor: pointer; padding: 0; }
+.turn-review-actions { display: flex; gap: 8px; margin-top: 8px; }
+.turn-review[data-review-decision="accepted"] { border-color: var(--vscode-testing-iconPassed, var(--vscode-panel-border)); }
+.turn-review[data-review-decision="rejected"] { border-color: var(--vscode-testing-iconFailed, var(--vscode-panel-border)); }
+.turn-review-empty { color: var(--vscode-descriptionForeground); }
+.review-module { margin-left: 6px; color: var(--vscode-descriptionForeground); }
+
+/* Plan Build review. Intermediate rounds accumulate here; only the final decision is blocking. */
+.plan-review { margin: 8px 0; border: 1px solid var(--vscode-panel-border); border-radius: 4px; padding: 6px 8px; }
+.plan-review > summary { cursor: pointer; font-weight: 600; }
+.plan-review section { margin-top: 6px; }
+.plan-review h3, .plan-review h4 { margin: 0 0 2px; font-size: 1em; }
+.plan-review ul { margin: 0 0 0 18px; padding: 0; }
+.plan-review li button { background: none; border: 0; color: var(--vscode-textLink-foreground); cursor: pointer; padding: 0; text-align: left; }
+.plan-review-actions { display: flex; gap: 8px; margin-top: 8px; }
+.plan-review[data-review-decision="accepted"] { border-color: var(--vscode-testing-iconPassed, var(--vscode-panel-border)); }
+.plan-review[data-review-decision="rejected"] { border-color: var(--vscode-testing-iconFailed, var(--vscode-panel-border)); }
+.plan-review-empty, .plan-review-decision { color: var(--vscode-descriptionForeground); }

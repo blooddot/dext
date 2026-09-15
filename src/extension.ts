@@ -30,6 +30,20 @@ import {
   DEXT_SEMANTIC_TOKEN_TYPES
 } from "./dextSemanticTokens.js";
 import { pythonHoverCode } from "./vscodeHover.js";
+import { EditorTabManager, createVscodeEditorTabHost, wrapVscodeWebviewPanel, type EditorTabPanelHandle } from "./editorTabManager.js";
+import { EditorTabRestorer } from "./editorTabSerializer.js";
+import { EDITOR_TAB_VIEW_TYPES } from "./editorTabTypes.js";
+import { restoreEditorTabState } from "./editorTabState.js";
+import { ProjectEditorProvider } from "./projectEditorProvider.js";
+import { ApiEditorProvider } from "./apiEditorProvider.js";
+import { GlobalResourcesEditorProvider } from "./globalResourcesEditorProvider.js";
+import { createSidebarResourceDataSource, renderResourceError } from "./resourceDocuments.js";
+import type { ResourceScope } from "./resourceSession.js";
+import { parseEditorTabKey } from "./editorTabTypes.js";
+import type { VscodeWebviewPanelLike } from "./editorTabManager.js";
+import { ProjectStore } from "./projectStore.js";
+import { VscodeProjectFileHost, createProjectPanelDataSource, scanWorkspaceProject } from "./vscodeProjectHost.js";
+import { renderEditorTabHtml } from "./editorTabHtml.js";
 
 let activeApplication: DextApplication | undefined;
 
@@ -59,6 +73,204 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const preferences = new DextConversationPreferences(context.workspaceState);
   const historyPanel = new DextHistoryPanel(context.extensionUri, history, preferences, application.storage);
   const sidebar = new DextSidebarProvider(context.extensionUri, application, history, preferences);
+  // Unified editor tabs: Project, API, Global Resources, and History all go through one manager so
+  // a stable key can never open twice, whichever recovery path runs first.
+  const editors: {
+    project?: ProjectEditorProvider;
+    api?: ApiEditorProvider;
+    globalResources?: GlobalResourcesEditorProvider;
+  } = {};
+  const renderEditorHtml = (panel: VscodeWebviewPanelLike, body: string): string => {
+    const webview = (panel as vscode.WebviewPanel).webview;
+    return renderEditorTabHtml(body,
+      webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "media", "editorTabs.css")).toString(),
+      webview.cspSource);
+  };
+  const editorTabs = new EditorTabManager(
+    createVscodeEditorTabHost(vscode.window, { localResourceRoots: [context.extensionUri], renderHtml: renderEditorHtml }),
+    (key, message) => {
+      const kind = parseEditorTabKey(key)?.kind;
+      const provider = kind === "project" ? editors.project : kind === "api" ? editors.api : kind === "globalResources" ? editors.globalResources : undefined;
+      void reportCommandError(() => provider?.handleMessage(key, message) ?? Promise.resolve());
+    }
+  );
+  const editorTabRestorer = new EditorTabRestorer(editorTabs);
+  context.subscriptions.push({ dispose: () => editorTabs.dispose() });
+  const projectHost = folder?.uri.scheme === "file" ? new VscodeProjectFileHost(folder.uri) : undefined;
+  if (projectHost && folder) {
+    const projectStore = new ProjectStore(projectHost);
+    // Freezing the Review preset at send time needs a synchronous read, so the last known project
+    // definition is cached as soon as the store is first read.
+    void projectStore.readDefinition().catch(() => undefined);
+    sidebar.setProjectPresetSource(() => projectStore.presetDefault());
+    const scanProjectSources = async () => {
+      const definition = await projectStore.readDefinition();
+      return scanWorkspaceProject(folder.uri, definition.scan);
+    };
+    editors.project = new ProjectEditorProvider({
+      manager: editorTabs,
+      restorer: editorTabRestorer,
+      dataSource: createProjectPanelDataSource({
+        scan: scanProjectSources,
+        name: folder.name,
+        root: ".",
+        store: {
+          readObjects: () => projectStore.readObjects(),
+          readArchitecture: () => projectStore.readArchitecture(),
+          readDefinition: () => projectStore.readDefinition(),
+          writeDefinition: (next, expectedVersion) => projectStore.writeDefinition(next, expectedVersion)
+        }
+      }),
+      chooseScanRoots: async () => {
+        const selected = await vscode.window.showOpenDialog({
+          canSelectFiles: false,
+          canSelectFolders: true,
+          canSelectMany: true,
+          defaultUri: folder.uri,
+          openLabel: "Use as Project scan folder"
+        });
+        if (!selected?.length) return;
+        const roots = selected
+          .map((uri) => vscode.workspace.asRelativePath(uri, false).replaceAll("\\", "/"))
+          .filter((path) => path && path !== "." && !path.startsWith(".."));
+        const definition = await projectStore.readDefinition();
+        const result = await projectStore.writeDefinition({
+          ...definition,
+          scan: { ...definition.scan, roots }
+        }, definition.version);
+        if (result.status === "conflict") {
+          vscode.window.showWarningMessage("Project settings changed before scan folders could be saved. Please choose them again.");
+        }
+      }
+    });
+    context.subscriptions.push(
+      // The adoption bridge: adopting a Knowledge draft writes one long-term object and navigates
+      // to it. Accepting the code review stays a separate action and never writes project knowledge.
+      (() => {
+        sidebar.setReviewKnowledgeSink({
+          load: async (objectId) => (await projectStore.readObjects()).find((object) => object.id === objectId),
+          save: (object) => projectStore.writeObject(object),
+          remove: (objectId) => projectStore.deleteObject(objectId),
+          navigate: async (objectId) => { await editors.project?.show("knowledge", objectId); }
+        });
+        return { dispose: () => undefined };
+      })(),
+      vscode.window.registerWebviewPanelSerializer(EDITOR_TAB_VIEW_TYPES.project, {
+        deserializeWebviewPanel: async (panel, state) => {
+          const key = restoreEditorTabState(state).state?.key ?? "dext.editor:project";
+          const adopted: EditorTabPanelHandle = wrapVscodeWebviewPanel(panel, {
+            onDispose: () => { editorTabs.close(key); },
+            onMessage: (message) => { editorTabs.receive(key, message); }
+          }, renderEditorHtml);
+          const outcome = editorTabRestorer.adoptRestored(state, () => adopted);
+          if (outcome.status !== "opened") return;
+          await editors.project?.show("overview");
+        }
+      })
+    );
+  }
+  const textDecoderForResources = new TextDecoder();
+  const resourceDataSource = createSidebarResourceDataSource({
+    state: () => application.state(),
+    readFile: async (entry) => {
+      const path = entry.source.path;
+      if (!path) return undefined;
+      try {
+        return textDecoderForResources.decode(await vscode.workspace.fs.readFile(vscode.Uri.file(path)));
+      } catch {
+        // A missing resource file falls back to the generated summary.
+        return undefined;
+      }
+    }
+  });
+  const resourceCommandFor = (scope: ResourceScope) =>
+    async (command: string, payload: { id?: string; kind?: string; path?: string }): Promise<void> => {
+      if (command.endsWith(".newResource")) {
+        const kind = payload.kind;
+        if (kind !== "api" && kind !== "mcp" && kind !== "rule" && kind !== "skill") {
+          throw new Error(`Unknown resource type '${payload.kind ?? ""}'.`);
+        }
+        await sidebar.editResource(kind, scope);
+        return;
+      }
+      if (command.endsWith(".openResourceSource")) {
+        if (!payload.path) throw new Error("This resource has no readable source file.");
+        await vscode.window.showTextDocument(vscode.Uri.file(payload.path));
+        return;
+      }
+      if (command.endsWith(".insertResourceReference")) {
+        const entry = payload.id ? await resourceDataSource.definition(payload.id) : undefined;
+        if (!entry) throw new Error("Select a resource before inserting a reference.");
+        if (entry.entry.kind === "api") sidebar.insertReferences([`${entry.entry.name}()`]);
+        else await sidebar.editResource(entry.entry.kind, entry.entry.scope);
+        return;
+      }
+      await vscode.commands.executeCommand(command);
+    };
+  editors.api = new ApiEditorProvider({
+    manager: editorTabs,
+    restorer: editorTabRestorer,
+    dataSource: resourceDataSource,
+    scope: "project",
+    onCommand: resourceCommandFor("project")
+  });
+  editors.globalResources = new GlobalResourcesEditorProvider({
+    manager: editorTabs,
+    restorer: editorTabRestorer,
+    dataSource: resourceDataSource,
+    scope: "global",
+    availableScopes: () => application.state().resourceRoots?.project ? ["global", "project"] : ["global"],
+    onCommand: (command, payload) => resourceCommandFor(payload.scope === "project" ? "project" : "global")(command, payload)
+  }, ["api", "mcp", "rule", "skill"]);
+  const resourceSerializer = (provider: () => ApiEditorProvider | GlobalResourcesEditorProvider | undefined) => ({
+    deserializeWebviewPanel: async (panel: vscode.WebviewPanel, state: unknown): Promise<void> => {
+      const active = provider();
+      const restoredState = restoreEditorTabState(state).state;
+      const resourceId = restoredState?.resourceId ?? parseEditorTabKey(restoredState?.key ?? "")?.resourceId;
+      // Migrate old API detail tabs into the single API browser when restoring a window.
+      const key = active instanceof ApiEditorProvider ? active.listTabKey : restoredState?.key ?? "";
+      const adopted: EditorTabPanelHandle = wrapVscodeWebviewPanel(panel as unknown as VscodeWebviewPanelLike, {
+        onDispose: () => { editorTabs.close(key); },
+        onMessage: (message) => { editorTabs.receive(key, message); }
+      }, renderEditorHtml);
+      const outcome = editorTabRestorer.adoptRestored(restoredState && active instanceof ApiEditorProvider ? { ...restoredState, key } : state, () => adopted);
+      if (outcome.status !== "opened") return;
+      if (!active) return;
+      try {
+        if (resourceId) await active.showDetail(resourceId);
+        else await active.showList();
+      } catch (error) {
+        // A resource that disappeared keeps its stable key and shows a recoverable error.
+        adopted.setHtml?.(renderResourceError(resourceId ?? key, error instanceof Error ? error.message : String(error)));
+      }
+    }
+  });
+  context.subscriptions.push(
+    vscode.commands.registerCommand("dext.openProject", () => reportCommandError(async () => {
+      if (editors.project) await editors.project.show("overview");
+      else await vscode.window.showInformationMessage("Open a local project folder to use Dext Project.");
+    })),
+    vscode.commands.registerCommand("dext.viewApis", () =>
+      reportCommandError(() => editors.api?.showList() ?? Promise.resolve(undefined))
+    ),
+    vscode.commands.registerCommand("dext.viewResources", () =>
+      reportCommandError(() => editors.globalResources?.showList() ?? Promise.resolve(undefined))
+    ),
+    vscode.commands.registerCommand("dext.openResourceSource", (path?: string) =>
+      reportCommandError(() => resourceCommandFor("project")("dext.openResourceSource", typeof path === "string" ? { path } : {}))
+    ),
+    vscode.commands.registerCommand("dext.insertResourceReference", (id?: string) =>
+      reportCommandError(() => resourceCommandFor("project")("dext.insertResourceReference", typeof id === "string" ? { id } : {}))
+    ),
+    vscode.commands.registerCommand("dext.editResource", (kind?: string, scope?: string) =>
+      reportCommandError(() => sidebar.editResource(
+        (kind === "api" || kind === "mcp" || kind === "rule" || kind === "skill") ? kind : "rule",
+        scope === "global" ? "global" : "project"
+      ))
+    ),
+    vscode.window.registerWebviewPanelSerializer(EDITOR_TAB_VIEW_TYPES.api, resourceSerializer(() => editors.api)),
+    vscode.window.registerWebviewPanelSerializer(EDITOR_TAB_VIEW_TYPES.globalResources, resourceSerializer(() => editors.globalResources))
+  );
   if (folder?.uri.scheme === "file") {
     const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(folder, ".dext/mcp/**/*.jsonc"));
     const refreshMcpManifests = async (): Promise<void> => {
@@ -435,8 +647,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("dext.tab.closeConversation", (context?: ConversationContext) =>
       reportCommandError(() => sidebar.closeTab(tabSessionId(context)))
     ),
-    vscode.commands.registerCommand("dext.viewApis", () => sidebar.viewApis()),
-    vscode.commands.registerCommand("dext.viewMcp", () => sidebar.viewMcp()),
     vscode.commands.registerCommand("dext.addMcp", () => sidebar.addMcp()),
     vscode.commands.registerCommand("dext.newConversation", () =>
       reportCommandError(() => sidebar.newConversation())
