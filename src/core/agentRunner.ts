@@ -14,6 +14,7 @@ import { cliCompletion } from "./cliCompletion.js";
 import { agentTimeout, DEFAULT_AGENT_TIMEOUT_MS, DEFAULT_AGENT_IDLE_TIMEOUT_MS } from "./agentTimeout.js";
 import { trackCliToolActivity } from "./agentToolActivity.js";
 import { runCodexConversation } from "./codexConversationRunner.js";
+import { stripPlanDocument } from "./planResponse.js";
 
 export interface AgentExecutionRequest {
   agentPreset?: string;
@@ -114,10 +115,9 @@ function windowsCommandCandidates(
     .split(";")
     .map((extension) => extension.trim().toLowerCase())
     .filter(Boolean);
-  // A bare Volta shim (for example `dsh`) is a Unix shell script beside the
-  // Windows `.cmd` shim. `spawn()` cannot execute that bare file on Windows,
-  // so always prefer a PATHEXT-qualified command when the user did not name
-  // an extension explicitly.
+  // A Unix shell shim may sit beside a Windows `.cmd` shim. `spawn()` cannot
+  // execute that bare file on Windows, so prefer a PATHEXT-qualified command
+  // when the user did not name an extension explicitly.
   const names = extname(trimmed)
     ? [trimmed]
     : [...extensions.map((extension) => `${trimmed}${extension}`), trimmed];
@@ -384,6 +384,20 @@ export function parseCodexStreamLine(
     : undefined;
   const eventItemId = typeof event.item_id === "string" ? event.item_id : undefined;
   const itemType = typeof item?.type === "string" ? item.type : undefined;
+  // Codex echoes the request as a `user_message` item in its JSONL stream.
+  // That payload can contain the entire Plan prompt and current document; it
+  // is input, rather than agent progress, so never surface it in Process. A
+  // few CLI versions put the item kind in the envelope's `type` instead of
+  // `item.type`, so cover both shapes while keeping agent messages visible.
+  const isInputMessageType = (value: string | undefined): boolean => {
+    const kind = value?.replace(/^item[._-]/i, "").replace(/[-_]/g, "").toLowerCase();
+    return kind === "usermessage" || kind === "developermessage";
+  };
+  if (isInputMessageType(itemType) || isInputMessageType(eventType)) {
+    // Preserve token accounting if a CLI version attaches usage metadata to
+    // the echoed request envelope, while still omitting its prompt text.
+    return usage ? { phase: "status", text: "", eventType, usage } : undefined;
+  }
   if (itemType === "todo_list") {
     const todos = normalizeAgentTodos(item?.items, "codex");
     return todos ? agentTodoEvent(todos) : undefined;
@@ -399,7 +413,8 @@ export function parseCodexStreamLine(
   if (eventId && (eventType === "item.started" || itemType)) streamPhases.set(eventId, phase);
   const command = typeof item?.command === "string" ? item.command : undefined;
   const aggregatedOutput = typeof item?.aggregated_output === "string" ? item.aggregated_output : undefined;
-  const statusText = phase === "tool" ? (aggregatedOutput || command || text || "") : (text ?? "");
+  const statusText = phase === "tool" ? (aggregatedOutput || command || text || "")
+    : stripPlanDocument(text ?? "", eventType === "item.updated" || eventType === "item.completed");
   if ((!statusText && !usage) || (phase === "message" && isStructuredAgentResult(statusText))) return undefined;
   return {
     ...(eventId ? { id: eventId } : {}),
@@ -494,7 +509,7 @@ export function parseClaudeStreamLine(line: string, messageIds?: Map<string, str
       const text = typeof delta?.text === "string" ? delta.text : undefined;
       if (!text) return undefined;
       const index = typeof stream?.index === "number" ? stream.index : 0;
-      return { id: messageIds?.get(scope) ?? `claude-stream-${index}`, phase: "message", text, eventType };
+      return { id: messageIds?.get(scope) ?? `claude-stream-${index}`, phase: "message", text: stripPlanDocument(text), eventType };
     }
     if (streamType === "content_block_start") {
       const block = record(stream?.content_block);
@@ -521,7 +536,7 @@ export function parseClaudeStreamLine(line: string, messageIds?: Map<string, str
     const text = claudeContentText(message?.content);
     if (!text || isStructuredAgentResult(text)) return undefined;
     const id = typeof message?.id === "string" ? message.id : undefined;
-    return { ...(id ? { id } : {}), phase: "message", text, eventType, replace: true, done: true };
+    return { ...(id ? { id } : {}), phase: "message", text: stripPlanDocument(text), eventType, replace: true, done: true };
   }
   if (eventType === "user") {
     const result = blocks.map(record).find((block) => block?.type === "tool_result");

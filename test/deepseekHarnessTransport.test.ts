@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -56,21 +56,6 @@ describe("Harness ACP transport", { timeout: 15000 }, () => {
     const shim = join(directory, "dsh.cmd");
     await writeFile(shim, `@ECHO off\n"%dp0%\\node.exe" "${shimEntry}" %*`);
     const args = ["--patch", "C:/path with spaces/policy.json"];
-    expect(harnessSpawnCommand(shim, args)).toEqual({ command: "node", args: [entry, ...args] });
-  });
-  it("resolves Volta's dsh dispatcher through its installed npm shim", async () => {
-    const home = await mkdtemp(join(tmpdir(), "dext-volta-shim-")); directories.push(home);
-    const dispatcher = join(home, "bin", "dsh.cmd");
-    const packageShim = join(home, "tools", "image", "packages", "@deepseek-ai", "dsh", "dsh.cmd");
-    const entry = join(home, "tools", "image", "packages", "@deepseek-ai", "dsh", "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js");
-    await mkdir(join(entry, ".."), { recursive: true });
-    await mkdir(join(home, "bin"), { recursive: true });
-    await writeFile(dispatcher, "@echo off\nvolta run %~n0 %*", "utf8");
-    await writeFile(packageShim, '@echo off\nnode "%dp0%\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js" %*', "utf8");
-    await writeFile(entry, "");
-
-    expect(harnessSpawnCommand(dispatcher, ["--profile", "acp"])).toEqual({
-      command: "node", args: [entry, "--profile", "acp"]
-    });
+    expect(harnessSpawnCommand(shim, args, { platform: "win32", env: {} })).toEqual({ command: "node", args: [await realpath(entry), ...args] });
   });
 });

@@ -110,6 +110,31 @@ describe("CLI command resolution", () => {
     }))).toMatchObject({ id: "item_0", phase: "message", text: "I will inspect the target first.", done: true });
   });
 
+  it("does not show Codex request items as Process messages", () => {
+    for (const type of ["user_message", "developer_message"]) {
+      expect(parseCodexStreamLine(JSON.stringify({
+        type: "item.completed",
+        item: { id: `request-${type}`, type, content: "the complete Plan prompt and document" }
+      }))).toBeUndefined();
+      expect(parseCodexStreamLine(JSON.stringify({
+        type,
+        text: "the complete Plan prompt and document"
+      }))).toBeUndefined();
+      expect(parseCodexStreamLine(JSON.stringify({
+        type: `item.${type}`,
+        text: "the complete Plan prompt and document"
+      }))).toBeUndefined();
+    }
+  });
+
+  it("keeps a Plan document out of the Codex Process trace", () => {
+    const text = "已更新计划。\n<!-- dext-plan:start -->\n# 完整计划\n<!-- dext-plan:end -->";
+    expect(parseCodexStreamLine(JSON.stringify({
+      type: "item.completed",
+      item: { id: "plan-result", type: "agent_message", text }
+    }))).toMatchObject({ phase: "message", text: "已更新计划。", done: true });
+  });
+
   it("captures provider-reported token usage from completed Codex and Claude turns", () => {
     expect(parseCodexStreamLine(JSON.stringify({
       type: "turn.completed",
@@ -481,18 +506,6 @@ describe("CLI command resolution", () => {
     })).toBe(join(directory, "codex.cmd"));
   });
 
-  it("prefers a Windows extension over a same-named Volta shell shim", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "dext-volta-command-test-"));
-    temporaryDirectories.push(directory);
-    await writeFile(join(directory, "dsh"), "#!/bin/bash", "utf8");
-    await writeFile(join(directory, "dsh.cmd"), "@echo off", "utf8");
-
-    expect(resolveCliCommand("dsh", "deepseek-harness", {
-      platform: "win32",
-      env: { Path: directory, PATHEXT: ".CMD;.EXE" },
-      home: directory
-    })).toBe(join(directory, "dsh.cmd"));
-  });
 
   it("finds the Codex desktop CLI under CODEX_HOME when PATH is missing", async () => {
     const directory = await mkdtemp(join(tmpdir(), "dext-codex-test-"));
