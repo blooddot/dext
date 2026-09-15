@@ -1,0 +1,5 @@
+{
+  "repository": "https://github.com/tt-a1i/archify",
+  "revision": "d673e8300df60a5c8166abe78787fdc78f6b8000",
+  "integration": "unmodified local CLI runtime; invoked by Project adapter; no skill installed"
+}
