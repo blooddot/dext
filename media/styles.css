@@ -1129,10 +1129,10 @@ main {
 /* Monaco owns editing widgets; only Dext reference chips need custom colors. */
 .code-editor.file-drop-active { box-shadow: inset 0 0 0 2px var(--vscode-focusBorder); }
 .monaco-editor .view-line .dext-ref-source { display: none !important; }
-/* IME's textarea paints raw reference tokens over injected labels. Let the
-   projected line and its cursor paint while native composition keeps focus. */
-.dext-reference-composition .monaco-editor .inputarea.ime-input { opacity: 0; }
-.dext-reference-composition .monaco-editor .cursors-layer > .cursor { visibility: visible !important; }
+/* Chat wrapping can clip the native IME textarea to a 1px stripe; references
+   also expose raw tokens. Keep native focus and let the editor paint instead. */
+.dext-projected-composition .monaco-editor .inputarea.ime-input { opacity: 0; }
+.dext-projected-composition .monaco-editor .cursors-layer > .cursor { visibility: visible !important; }
 .monaco-editor .view-line .dext-ref-chip {
   color: var(--vscode-textLink-foreground, #173e67);
   background: var(--vscode-textCodeBlock-background, #e3effb);

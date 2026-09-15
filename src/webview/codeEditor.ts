@@ -73,18 +73,19 @@ export class DextCodeEditor {
       parameterHints: { enabled: true }, hover: { delay: 300 }, renderValidationDecorations: "on" });
     this.decorations = this.view.createDecorationsCollection();
     const composing = this.view.createContextKey<boolean>("dextInputComposing", false);
-    // The native IME textarea contains private reference tokens, not chip labels.
-    // Keep Monaco's projected line visible while the textarea receives composition.
+    // Chat soft wraps can leave Monaco's IME textarea only 1px tall, painting
+    // clipped text across the line. It also contains raw reference tokens.
+    // Let the editor paint chat/reference text while native IME retains focus.
     this.disposables.push(this.view.onDidCompositionStart(() => {
       composing.set(true);
-      options.parent.classList.toggle("dext-reference-composition", this.projection.references(this.model.getValue()).length > 0);
+      options.parent.classList.toggle("dext-projected-composition", !this.languageEnabled || this.projection.references(this.model.getValue()).length > 0);
     }));
     this.disposables.push(this.view.onDidCompositionEnd(() => {
       composing.set(false);
-      options.parent.classList.remove("dext-reference-composition");
+      options.parent.classList.remove("dext-projected-composition");
       queueMicrotask(() => { if (!this.destroyed && this.pendingReferenceProjection) this.projectTypedReferences(); });
     }));
-    this.disposables.push({ dispose: () => options.parent.classList.remove("dext-reference-composition") });
+    this.disposables.push({ dispose: () => options.parent.classList.remove("dext-projected-composition") });
     this.disposables.push(this.view.onDidLayoutChange(() => this.renderReferences()));
     this.disposables.push(this.view.onDidChangeConfiguration(event => { if (event.hasChanged(monaco.editor.EditorOption.fontInfo)) this.renderReferences(); }));
     // Monaco's suggest widget otherwise consumes the first Escape while
