@@ -151,13 +151,6 @@ export function builtinTypeSignature(definition: BuiltinTypeDefinition): string 
   return `${definition.name} { ${definition.fields.map((field) => `${field.name}${field.optional ? "?" : ""}: ${field.type}`).join("; ")} }`;
 }
 
-/** Type of a field on a standard command result, including undefined for optional fields. */
-export function builtinResultFieldType(kind: string, fieldName: string): string | undefined {
-  const definition = builtinTypeDefinition(`${kind.slice(0, 1).toUpperCase()}${kind.slice(1)}Result`);
-  const field = definition?.fields.find((candidate) => candidate.name === fieldName);
-  return field ? `${field.type}${field.optional ? " | undefined" : ""}` : undefined;
-}
-
 export interface BuiltinTypeDocument {
   text: string;
   ranges: ReadonlyMap<string, { from: number; to: number; nameFrom: number; nameTo: number }>;

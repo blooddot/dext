@@ -604,7 +604,6 @@ describe("sidebar panel layout", () => {
     expect(main).toMatch(/elements\.reloadMethods\.addEventListener\("click"[\s\S]*?type: "reload"/);
     expect(main).toMatch(/function setMethodsReloading[\s\S]*?codicon-modifier-spin/);
     expect(main).toMatch(/row\.addEventListener\("click", \(\) => \{[\s\S]*?type: "openBuiltinApiDefinition", id: method\.id[\s\S]*?closeMethodsDialog\(\)/);
-    expect(main).not.toContain("editor.insertInvocation(methodTemplate(method))");
     expect(main).toContain("function renderMethodSignature");
     expect(css).toContain(".method-open-definition");
     expect(css).toContain(".method-token-function");

@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { builtinResultFieldType, builtinTypeDefinition, builtinTypeDocument, builtinTypeSignature } from "../src/core/builtinTypeDefinitions.js";
+import { builtinTypeDefinition, builtinTypeDocument, builtinTypeSignature } from "../src/core/builtinTypeDefinitions.js";
 
 describe("built-in Dext type definitions", () => {
   it("renders result shapes and stable navigation ranges from one catalog", () => {
     const definition = builtinTypeDefinition("AgentResult")!;
     expect(builtinTypeSignature(definition)).toContain("patch?: PatchResult");
-    expect(builtinResultFieldType("agent", "summary")).toBe("string | undefined");
-    expect(builtinResultFieldType("print", "label")).toBe("string | undefined");
+    expect(definition.fields.find((field) => field.name === "summary")).toMatchObject({ type: "string", optional: true });
+    expect(builtinTypeDefinition("PrintResult")?.fields.find((field) => field.name === "label")).toMatchObject({ type: "string", optional: true });
     const document = builtinTypeDocument();
     const range = document.ranges.get("PrintResult")!;
     expect(document.text.slice(range.nameFrom, range.nameTo)).toBe("PrintResult");

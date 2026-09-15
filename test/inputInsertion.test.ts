@@ -3,8 +3,7 @@ import { inputReferenceProjections } from "../src/core/fileReference.js";
 import {
   coreInputReferenceInsertion,
   fileReferenceInsertion,
-  inlineInsertion,
-  invocationInsertion
+  inlineInsertion
 } from "../src/webview/inputInsertion.js";
 
 describe("@ reference insertion", () => {
@@ -12,8 +11,6 @@ describe("@ reference insertion", () => {
     expect(inlineInsertion("target=value", 12, 12, 'ref.file("src/a.ts")')).toEqual({
       text: ' ref.file("src/a.ts")', cursorOffset: 21
     });
-    expect(invocationInsertion('ask(input="first")', 18, 18, 'ask(input="next")'))
-      .toEqual({ text: '\nask(input="next")', cursorOffset: 18 });
   });
 
   it("stores a dragged input reference as a readable @ token", () => {

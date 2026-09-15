@@ -5,7 +5,6 @@ import { NODE_HTTP_DEFAULT_TIMEOUT_MS, NODE_HTTP_MAX_BYTES, NODE_HTTP_MAX_REDIRE
 import type { DextResult, ResolvedInvocation } from "./types.js";
 
 const entries = new Map(NODE_BUILTIN_CATALOG.map((entry) => [entry.method.id, entry]));
-const SENSITIVE_HEADER = /^(authorization|cookie|proxy-authorization|x-.*token.*)$/i;
 
 function contained(root: string, candidate: string): boolean {
   const path = relative(resolve(root), resolve(candidate));
@@ -95,14 +94,6 @@ async function httpRequest(args: Record<string, unknown>): Promise<Record<string
     }
     throw new Error("HTTP request exceeded the redirect limit.");
   } finally { clearTimeout(timer); }
-}
-
-export function redactNodeArguments(arguments_: Record<string, unknown>): Record<string, unknown> {
-  const copy = { ...arguments_ };
-  if (typeof copy.headers === "object" && copy.headers !== null && !Array.isArray(copy.headers)) {
-    copy.headers = Object.fromEntries(Object.entries(copy.headers as Record<string, unknown>).map(([name, value]) => [name, SENSITIVE_HEADER.test(name) ? "[REDACTED]" : value]));
-  }
-  return copy;
 }
 
 export async function executeNodeBuiltin(invocation: ResolvedInvocation, workspaceRoot: string, trusted: boolean): Promise<DextResult> {

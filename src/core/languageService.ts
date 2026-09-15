@@ -41,10 +41,6 @@ export interface LanguageHover {
   documentation: string;
 }
 
-export interface WorkflowDocumentState {
-  kind: "empty" | "workflow" | "invalid";
-}
-
 export interface ApiCompletionContext {
   namespace: string;
   imported: string[];
@@ -362,11 +358,6 @@ export class DextLanguageService {
       if (!rest.includes(".") && rest.startsWith(fragment)) names.set(rest, method);
     }
     return [...names].map(([label, method]) => item(label, label, formatMethodSignature(method, signatureOptions(method)), "method"));
-  }
-
-  inputDocument(source: string): WorkflowDocumentState {
-    if (!source.trim()) return { kind: "empty" };
-    return { kind: this.compiled(source).program ? "workflow" : "invalid" };
   }
 
   private compiled(source: string): ReturnType<typeof compileWorkflow> {

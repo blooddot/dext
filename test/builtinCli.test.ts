@@ -198,11 +198,11 @@ describe("per-call built-in CLI options", () => {
   it("refreshes model choices when configured profiles change", () => {
     const { runtime, language } = setup();
     const source = 'ask(input="x", cli="codex", model={"model":"new-model"})';
-    expect(language.inputDocument(source).kind).toBe("invalid");
+    expect(language.documentDiagnostics(source)).not.toEqual([]);
     runtime.setAgentProfiles([{ ...profiles[0]!, models: ["new-model"] }]);
     expect(language.documentCompletions('ask(cli="codex", model={"model": ').map((item) => item.label)).toEqual(["new-model"]);
-    expect(language.inputDocument(source).kind).toBe("workflow");
+    expect(language.documentDiagnostics(source)).toEqual([]);
     runtime.setAgentProfiles(profiles);
-    expect(language.inputDocument(source).kind).toBe("invalid");
+    expect(language.documentDiagnostics(source)).not.toEqual([]);
   });
 });

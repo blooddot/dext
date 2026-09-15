@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { WebviewRequest, WebviewResponse } from "../src/webviewProtocol.js";
-import {
-  LanguageRequestBroker,
-  sourceSnapshotMatches
-} from "../src/webview/languageClient.js";
+import { LanguageRequestBroker } from "../src/webview/languageClient.js";
 
 class Cancellation {
   isCancellationRequested = false;
@@ -51,8 +48,4 @@ describe("Webview language request broker", () => {
     expect(broker.accept(languageResponse(requestId))).toBe(false);
   });
 
-  it("rejects an outdated source snapshot", () => {
-    expect(sourceSnapshotMatches("ask(input=", "ask(input=")).toBe(true);
-    expect(sourceSnapshotMatches("ask(input=\"next\"", "ask(input=")).toBe(false);
-  });
 });

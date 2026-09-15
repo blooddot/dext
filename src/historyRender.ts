@@ -18,7 +18,7 @@ import { agentMessageCopyText, presentAgentMessage } from "./agentMessagePresent
 import { presentDiff } from "./diffPresentation.js";
 import type { PatchChange } from "./core/types.js";
 import { dextClassHighlighter, dextTokenStyles, shouldHighlightInput } from "./dextTokenTheme.js";
-import { mergeAgentMessageDeltas } from "./core/agentTraceReplay.js";
+import { prepareHistoryTrace } from "./core/agentTraceReplay.js";
 import {
   compactFileReferenceLabel,
   inputReferenceDisplayParts,
@@ -384,10 +384,8 @@ function commandRow(event: AgentStreamEvent, className = "process-command"): str
 
 function process(events: readonly AgentStreamEvent[]): string {
   const html: string[] = [];
-  // Providers stream prose in small deltas. The live view coalesces those
-  // deltas by event id; persisted history can contain records without a stable
-  // id, so coalesce adjacent message chunks before creating one row per event.
-  const replayEvents = mergeAgentMessageDeltas(events);
+  // Use the same stable-id replay that Conversation history restoration uses.
+  const replayEvents = prepareHistoryTrace(events);
   let tools: AgentStreamEvent[] = [];
   let groupId: string | undefined;
   const flushTools = (): void => {

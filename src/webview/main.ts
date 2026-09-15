@@ -1,6 +1,6 @@
 import { RESOURCE_LABELS, RESOURCE_ICONS, RESOURCE_DIRECTORIES, type ResourceSession, type ResourceKind, type ResourceScope } from "../resourceSession.js";
 import { readHistoryResponse } from "../historyResponse.js";
-import { mergeAgentMessageDeltas, replayableHistoryEvents } from "../core/agentTraceReplay.js";
+import { prepareHistoryTrace } from "../core/agentTraceReplay.js";
 import { renderTurnSection, renderTurnInput, renderTurnMarkdown, renderTurnResult, renderTurnMessage, turnDomAdapter } from "../turnComponents.js";
 import type { UiFormAnswers } from "../core/uiForm.js";
 import "../../media/styles.css";
@@ -3234,10 +3234,7 @@ function renderStoredTurn(record: DextHistoryRecord, turn: OutputTurnElements): 
     const inputCopy = renderTurnInput(turnDomAdapter(document), renderedInputSource(record.input), copyButton(record.input));
     turn.input.append(inputCopy);
   }
-  const replaySource = typeof mergeAgentMessageDeltas === "undefined"
-    ? record.process
-    : mergeAgentMessageDeltas(record.process);
-  const replay = typeof replayableHistoryEvents === "undefined" ? replaySource : replayableHistoryEvents(replaySource);
+  const replay = typeof prepareHistoryTrace === "undefined" ? record.process : prepareHistoryTrace(record.process);
   for (const event of replay) renderAgentEvent(event);
   if (agentStream) finishAgentProgress();
   const duration = response?.executions.reduce((total, item) => total + item.durationMs, 0) ?? 0;

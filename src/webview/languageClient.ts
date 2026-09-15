@@ -76,7 +76,3 @@ export class LanguageRequestBroker {
     this.pending.clear();
   }
 }
-
-export function sourceSnapshotMatches(currentSource: string, snapshotSource: string): boolean {
-  return currentSource === snapshotSource;
-}

@@ -9,11 +9,10 @@ describe("Strict workflow document", () => {
   const service = new DextLanguageService(registry);
 
   it("does not classify free text as chat", () => {
-    expect(service.inputDocument("Please explain this").kind).toBe("invalid");
     expect(service.documentDiagnostics("Please explain this")).not.toEqual([]);
   });
 
   it("accepts explicit chat code", () => {
-    expect(service.inputDocument('ask(input="Please explain this")').kind).toBe("workflow");
+    expect(service.documentDiagnostics('ask(input="Please explain this")')).toEqual([]);
   });
 });

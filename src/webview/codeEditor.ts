@@ -9,7 +9,7 @@ import { codeReferencePasteText } from "./codeReferencePaste.js";
 import { bindFileDropTarget, droppedFilePaths, isFileDrag } from "./fileDrop.js";
 import { fileReferenceRemovalEdit } from "./fileReferenceDecorations.js";
 import { inputReferenceProjections, normalizeInputReferenceSource, type ContextReferenceOccurrence } from "../core/fileReference.js";
-import { fileReferenceInsertion, invocationInsertion } from "./inputInsertion.js";
+import { fileReferenceInsertion } from "./inputInsertion.js";
 import type { EditorTokenTheme } from "../vscodeTheme.js";
 
 export interface CodeEditorOptions {
@@ -192,7 +192,6 @@ export class DextCodeEditor {
     const selection = this.selection(); const from = position ?? selection.from, to = position ?? selection.to;
     const edit = fileReferenceInsertion(this.source, from, to, expressions); this.edit(edit.from, edit.to, edit.text, edit.cursorOffset);
   }
-  insertInvocation(text: string): void { const selection = this.selection(); const edit = invocationInsertion(this.source, selection.from, selection.to, text); this.edit(selection.from, selection.to, edit.text, edit.cursorOffset); }
   removeFileReference(payload: string): void {
     const ref = inputReferenceProjections(this.source).find(ref => ref.reference.payload === payload);
     if (!ref) return; const edit = fileReferenceRemovalEdit(this.source, ref); this.edit(edit.from, edit.to, edit.insert);
