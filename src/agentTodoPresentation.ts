@@ -43,5 +43,5 @@ export function agentTodoRows(items: readonly AgentTodoItem[], running: boolean)
 export function renderAgentTodos(items: readonly AgentTodoItem[]): string {
   if (!items.length) return "";
   const progress = agentTodoProgress(items, false);
-  return `<details class="history-disclosure agent-todos"${progress.complete ? "" : " open"}><summary><i class="disclosure-chevron codicon codicon-chevron-right"></i><span>Todo</span><span class="disclosure-meta">${progress.label}</span></summary><ul class="agent-todo-list">${agentTodoRows(items, false)}</ul></details>`;
+  return `<details class="turn-section agent-todos"${progress.complete ? "" : " open"}><summary><i class="disclosure-chevron codicon codicon-chevron-right"></i><span>Todo</span><span class="turn-section-meta disclosure-meta">${progress.label}</span></summary><ul class="turn-section-body agent-todo-list">${agentTodoRows(items, false)}</ul></details>`;
 }

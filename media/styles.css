@@ -162,17 +162,14 @@ button.primary.plan-build {
 }
 
 .agent-todos[hidden] { display: none; }
-.agent-todos > summary { display: flex; align-items: center; gap: 6px; }
 .agent-todos .disclosure-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.agent-todo-list { list-style: none; margin: 0; padding: 6px 8px 8px; }
+.agent-todo-list { list-style: none; margin: 0; padding: 0; }
 .agent-todo-item {
   display: flex;
   align-items: flex-start;
   gap: 8px;
   margin: 3px 0;
-  padding: 6px 8px;
-  border-inline-start: 2px solid transparent;
-  border-radius: 5px;
+  padding: 6px 0;
 }
 .agent-todo-item > .codicon { flex: 0 0 16px; margin-top: 2px; color: var(--vscode-descriptionForeground); }
 .agent-todo-text.markdown-body { flex: 1; min-width: 0; margin: 0; color: inherit; font-size: inherit; overflow-wrap: anywhere; white-space: normal; }
@@ -181,18 +178,9 @@ button.primary.plan-build {
 .agent-todo-status { flex: 0 0 auto; font-size: 11px; color: var(--vscode-descriptionForeground); }
 .agent-todo-item.active {
   --todo-accent: var(--vscode-progressBar-background, var(--vscode-focusBorder));
-  border-inline-start-color: color-mix(in srgb, var(--todo-accent) 65%, transparent);
-  background: linear-gradient(90deg,
-    color-mix(in srgb, var(--todo-accent) 9%, transparent),
-    color-mix(in srgb, var(--todo-accent) 3%, transparent));
 }
 .agent-todo-item.active > .codicon { color: var(--todo-accent); }
 .agent-todo-item.active .agent-todo-status { color: color-mix(in srgb, var(--todo-accent) 65%, var(--vscode-foreground)); }
-body:is(.vscode-high-contrast, .vscode-high-contrast-light) .agent-todo-item.active {
-  background: transparent;
-  outline: 1px solid var(--vscode-contrastBorder, var(--vscode-foreground));
-  border-inline-start-color: var(--vscode-focusBorder, var(--vscode-foreground));
-}
 body:is(.vscode-high-contrast, .vscode-high-contrast-light) .agent-todo-item.active .agent-todo-status { color: var(--vscode-foreground); }
 .agent-todo-item[data-status="completed"] > .codicon { color: var(--vscode-testing-iconPassed, var(--vscode-foreground)); }
 .agent-todo-item[data-status="completed"] .agent-todo-text { color: var(--vscode-descriptionForeground); }

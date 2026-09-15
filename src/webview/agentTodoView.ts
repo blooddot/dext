@@ -12,17 +12,17 @@ export class AgentTodoView {
   private complete = false;
 
   constructor() {
-    this.element.className = "output-turn-section execution-disclosure agent-todos";
+    this.element.className = "output-turn-section turn-section agent-todos";
     this.element.hidden = true;
     const summary = document.createElement("summary");
     const chevron = document.createElement("i");
     chevron.className = "disclosure-chevron codicon codicon-chevron-right";
     const title = document.createElement("span");
     title.textContent = "Todo";
-    this.meta.className = "disclosure-meta";
+    this.meta.className = "turn-section-meta disclosure-meta";
     this.meta.setAttribute("role", "status");
     this.meta.setAttribute("aria-live", "polite");
-    this.list.className = "agent-todo-list";
+    this.list.className = "turn-section-body agent-todo-list";
     summary.append(chevron, title, this.meta);
     this.element.append(summary, this.list);
   }
