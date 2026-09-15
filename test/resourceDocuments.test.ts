@@ -7,6 +7,7 @@ import { DextApplication } from "../src/application.js";
 import { BUILTIN_METHODS } from "../src/core/builtins.js";
 import { MethodRegistry } from "../src/core/registry.js";
 import { resourceFileName, resourcePathSegments, resourcePrompt, type ResourceSession } from "../src/resourceSession.js";
+import { buildResourceList, renderResourceList, type ResourceEntry } from "../src/resourceDocuments.js";
 
 vi.mock("vscode", () => {
   class FileSystemError extends Error { code = "FileNotFound"; }
@@ -45,6 +46,20 @@ beforeEach(async () => {
 afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 
 describe("resource documents", () => {
+  it("keeps Top level APIs separate from node and ui namespaces", () => {
+    const entry = (name: string): ResourceEntry => ({
+      id: `api:global:${name}`, kind: "api", scope: "global", name, path: `${name.replaceAll(".", "/")}.dx`,
+      group: name.includes(".") ? name.slice(0, name.lastIndexOf(".")) : ".", source: { kind: "directory", label: "builtin" }
+    });
+    const html = renderResourceList(buildResourceList({ kind: "api", scope: "global", entries: [entry("ask"), entry("node.path"), entry("ui.input")] }), { apiTree: true });
+    expect(html).toMatch(/data-resource-node="\."[\s\S]*Top level[\s\S]*ask/);
+    expect(html).toMatch(/data-resource-node="node"/);
+    expect(html).toMatch(/data-resource-node="ui"/);
+    expect(html.indexOf('data-resource-node="node"')).toBeGreaterThan(html.indexOf('data-resource-node="."'));
+    const top = html.slice(html.indexOf('data-resource-node="."'), html.indexOf('data-resource-node="node"'));
+    expect(top).not.toContain("node.path");
+  });
+
   it.each([
     ["api", "team.lookup", "team/lookup.dx"], ["mcp", "server", "server.jsonc"],
     ["rule", "review.md", "review.md"], ["skill", "release", "release/SKILL.md"]
