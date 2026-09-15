@@ -188,6 +188,7 @@ export async function run(): Promise<void> {
   await vscode.commands.executeCommand("dext.focus");
   await new Promise((resolve) => setTimeout(resolve, 300));
   await verifyCompletionEditing(folder);
+  await verifyEditorTabs();
   await verifyCompletionMemoryWindows(extension.extensionPath, folder);
   if (process.env.DEXT_COMPLETION_PERFORMANCE === "1") await verifyCompletionPerformance(extension.extensionPath, folder);
 }
@@ -479,8 +480,58 @@ async function verifyCompletionMemoryWindows(extensionPath: string, folder: vsco
   }
 }
 
-async function verifyCompletionEditing(folder: vscode.WorkspaceFolder): Promise<void> {
-  const name = `completion-host-${Date.now()}.ts`;
+/**
+ * Verifies the migrated editor tabs against a real VS Code window: each directory opens as its own
+ * webview tab, reopening reuses the page, closing releases it, and the Review UI ships in the bundle.
+ */
+async function verifyEditorTabs(): Promise<void> {
+  const commands = await vscode.commands.getCommands(true);
+  for (const command of ["dext.openProject", "dext.viewApis", "dext.viewResources", "dext.editResource"]) {
+    assert.ok(commands.includes(command), `${command} is registered.`);
+  }
+  const group = vscode.window.tabGroups.activeTabGroup;
+  const before = group.tabs.length;
+  const openAndAwait = async (command: string, viewTypeSuffix: string): Promise<vscode.Tab> => {
+    await vscode.commands.executeCommand(command);
+    const deadline = performance.now() + 15_000;
+    while (performance.now() < deadline) {
+      const tab = vscode.window.tabGroups.activeTabGroup.activeTab;
+      if (tab?.input instanceof vscode.TabInputWebview && tab.input.viewType.endsWith(viewTypeSuffix)) return tab;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error(`${command} did not open a ${viewTypeSuffix} webview tab.`);
+  };
+  const apis = await openAndAwait("dext.viewApis", "dext.api");
+  assert.equal(apis.label, "Dext APIs", "The API directory opens as its own tab.");
+  const apiCount = vscode.window.tabGroups.activeTabGroup.tabs.length;
+  // Reopening the same target must reveal the existing page instead of creating a second one.
+  await vscode.commands.executeCommand("dext.viewApis");
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  assert.equal(vscode.window.tabGroups.activeTabGroup.tabs.length, apiCount, "Reopening APIs reuses the open page.");
+  await openAndAwait("dext.viewResources", "dext.globalResources");
+  await openAndAwait("dext.openProject", "dext.project");
+  const projectTab = vscode.window.tabGroups.activeTabGroup.activeTab!;
+  assert.equal(projectTab.label, "Dext Project", "The Project tab has a clear title.");
+  assert.equal(
+    vscode.window.tabGroups.activeTabGroup.tabs.length,
+    before + 3,
+    "Project, APIs, and Global Resources each contribute exactly one tab."
+  );
+  for (let index = 0; index < 3; index++) {
+    await vscode.commands.executeCommand("workbench.action.closeActiveEditor");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(vscode.window.tabGroups.activeTabGroup.tabs.length, before, "Closing the migrated tabs releases them.");
+  // The packaged conversation bundle must carry the Review UI, and Assets cannot be silently missing.
+  const bundle = await readFile(join(vscode.extensions.getExtension("blooddot.dext")!.extensionPath, "dist", "webview", "main.js"), "utf8");
+  for (const marker of ["data-turn-review", "data-plan-review", "data-adopt-suggestion", "adoptKnowledgeSuggestion"]) {
+    assert.ok(bundle.includes(marker), `The packaged conversation bundle includes '${marker}'.`);
+  }
+  console.log("Editor tabs: Project, APIs, and Global Resources open, reuse, and close in a live VS Code window.");
+}
+
+async function verifyCompletionEditing(folder: vscode.WorkspaceFolder): Promise<void> {  const name = `completion-host-${Date.now()}.ts`;
   const uri = vscode.Uri.joinPath(folder.uri, "test", "fixtures", name);
   const before = 'const userName = "A";\nconsole.log(usName);';
   await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(before));
@@ -518,3 +569,4 @@ async function verifyCompletionEditing(folder: vscode.WorkspaceFolder): Promise<
     await vscode.workspace.fs.delete(uri);
   }
 }
+

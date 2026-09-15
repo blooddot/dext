@@ -23,6 +23,7 @@ const mainStyles = await readFile(resolve(output, "main.css"), "utf8");
 const packagedFiles = new Set((await listFiles()).map((file) => file.replaceAll("\\", "/")));
 for (const required of [
   "media/styles.css",
+  "media/editorTabs.css",
   "dist/webview/main.css",
   "dist/webview/main.js",
   "dist/webview/editor.worker.js",
@@ -53,9 +54,20 @@ for (const action of [
   "Dext input",
   "insertFileReferences",
   "executeInput",
-  "chooseFiles"
+  "chooseFiles",
+  // Per-run Review ships in the conversation bundle.
+  "data-turn-review",
+  "data-plan-review",
+  "data-adopt-suggestion"
 ]) {
   assert.ok(mainBundle.includes(action), `Missing required Webview behavior '${action}' from the bundle.`);
+}
+// The migrated editor-tab pages are rendered by the host, so they live in the extension bundle.
+for (const action of ["data-resource-open", "data-resource-search", "data-project-page", "data-architecture"]) {
+  assert.ok(extensionBundle.includes(action), `Missing migrated editor-tab behavior '${action}' from the extension bundle.`);
+}
+for (const style of [".turn-review", ".plan-review"]) {
+  assert.ok(mainStyles.includes(style), `Missing Review style '${style}'.`);
 }
 
 for (const style of ['.monaco-editor', '.squiggly-error', '.squiggly-warning', '.parameter-hints-widget', '.dext-ref-chip']) {

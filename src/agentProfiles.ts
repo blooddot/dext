@@ -48,6 +48,11 @@ export interface HarnessPresetOption {
   description: string;
   builtin: boolean;
   requiresFullAccess: boolean;
+  /** The preset's tools run outside the Harness sandbox, so the host only hands
+   * it to a writable turn: a read-only turn falls back to a confined preset.
+   * Absent on profiles persisted before this flag existed; treat it as
+   * `requiresFullAccess`. */
+  writableTurnsOnly?: boolean;
   error?: string;
 }
 

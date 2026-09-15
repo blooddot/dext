@@ -1,12 +1,11 @@
 import { execFile } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
 import type { AgentPermission, AgentProfile, HarnessPresetOption } from "../agentProfiles.js";
-import { resolveCliCommand } from "./agentRunner.js";
-import { harnessSpawnCommand } from "./deepseekHarnessTransport.js";
+import { harnessSpawnCommand } from "./harnessCommand.js";
 
 const run = promisify(execFile);
 export const HARNESS_PRESET_AGENT_ROWS = [
@@ -22,11 +21,9 @@ export function harnessPresetHelper(): string {
   return existsSync(packaged) ? packaged : join(__dirname, "..", "..", "media", "harness-presets.mjs");
 }
 
-export function harnessInstallation(command: string): { node: string; entry: string; acpModule: string } {
-  const resolved = resolveCliCommand(command, "deepseek-harness");
-  if (!resolved) throw new Error("DeepSeek Harness was not found. Configure its dsh executable first.");
-  const invocation = harnessSpawnCommand(realpathSync(resolved), []);
-  const entry = invocation.args[0] && /\.[cm]?js$/i.test(invocation.args[0]) ? invocation.args[0] : realpathSync(resolved);
+export function harnessInstallation(command: string, cwd = process.cwd()): { node: string; entry: string; acpModule: string } {
+  const invocation = harnessSpawnCommand(command, [], { cwd });
+  const entry = invocation.args[0] && /\.[cm]?js$/i.test(invocation.args[0]) ? invocation.args[0] : invocation.command;
   try {
     const acpModule = createRequire(entry).resolve("@deepseek-ai/dsh-acp");
     return { node: invocation.args.length ? invocation.command : "node", entry, acpModule };
@@ -36,47 +33,53 @@ export function harnessInstallation(command: string): { node: string; entry: str
 interface NativePreset { id: string; name?: string; description?: string; trust: string; path: string; broken?: string }
 const LABELS: Record<string, string> = { standard: "Standard", ptc: "PTC", minimal: "Minimal", cordis: "Create" };
 
-async function presetCommand(profile: AgentProfile, action: string, args: string[] = []): Promise<unknown> {
-  const install = harnessInstallation(profile.command);
+async function presetCommand(profile: AgentProfile, action: string, args: string[] = [], cwd = process.cwd()): Promise<unknown> {
+  const install = harnessInstallation(profile.command, cwd);
   const result = await run(install.node, [harnessPresetHelper(), install.entry, action, ...args], {
-    windowsHide: true, timeout: 30_000, maxBuffer: 2 * 1024 * 1024
+    cwd, windowsHide: true, timeout: 30_000, maxBuffer: 2 * 1024 * 1024
   });
   return JSON.parse(result.stdout) as unknown;
 }
 
-export async function listHarnessPresets(profile: AgentProfile): Promise<HarnessPresetOption[]> {
-  const rows = await presetCommand(profile, "list") as NativePreset[];
-  return rows.map((row) => ({
-    id: row.id, label: row.trust === "system" ? LABELS[row.id] ?? row.name ?? row.id : row.name ?? row.id,
-    description: row.description ?? "", builtin: row.trust === "system",
-    ...(row.broken ? { error: row.broken } : {}),
+export async function listHarnessPresets(profile: AgentProfile, cwd = process.cwd()): Promise<HarnessPresetOption[]> {
+  const rows = await presetCommand(profile, "list", [], cwd) as NativePreset[];
+  return rows.map((row) => {
     // Minimal's native terminal/fs and Create's runtime plugin loader are not confined
     // by the host sandbox. User-authored plugin code has the same process access.
-    requiresFullAccess: row.trust !== "system" || !["standard", "ptc"].includes(row.id)
-  }));
+    // Those presets therefore need Full access, and because the sandbox policy cannot
+    // confine them they are only applied to a writable turn.
+    const unconfined = row.trust !== "system" || !["standard", "ptc"].includes(row.id);
+    return {
+      id: row.id, label: row.trust === "system" ? LABELS[row.id] ?? row.name ?? row.id : row.name ?? row.id,
+      description: row.description ?? "", builtin: row.trust === "system",
+      ...(row.broken ? { error: row.broken } : {}),
+      requiresFullAccess: unconfined,
+      writableTurnsOnly: unconfined
+    };
+  });
 }
 
-export async function copyHarnessPreset(profile: AgentProfile, source: string, id: string): Promise<string> {
-  const result = await presetCommand(profile, "copy", [source, id]) as { path: string };
+export async function copyHarnessPreset(profile: AgentProfile, source: string, id: string, cwd = process.cwd()): Promise<string> {
+  const result = await presetCommand(profile, "copy", [source, id], cwd) as { path: string };
   return join(result.path, "agent.cordis.yml");
 }
 
-export async function harnessPresetFile(profile: AgentProfile, id: string): Promise<string> {
-  const rows = await presetCommand(profile, "list") as NativePreset[];
+export async function harnessPresetFile(profile: AgentProfile, id: string, cwd = process.cwd()): Promise<string> {
+  const rows = await presetCommand(profile, "list", [], cwd) as NativePreset[];
   const row = rows.find((candidate) => candidate.id === id);
   if (!row || row.trust === "system") throw new Error("Copy a built-in preset before editing it.");
   return row.path;
 }
 
 export async function harnessPresetPatch(profile: AgentProfile, id: string, permission: AgentPermission,
-  acp: Record<string, unknown> = {}): Promise<unknown[]> {
-  const option = (await listHarnessPresets(profile)).find((row) => row.id === id);
+  acp: Record<string, unknown> = {}, cwd = process.cwd()): Promise<unknown[]> {
+  const option = (await listHarnessPresets(profile, cwd)).find((row) => row.id === id);
   if (!option) throw new Error(`Harness preset '${id}' is unavailable. Refresh presets or choose another preset in a new conversation.`);
   if (option.error) throw new Error(`Harness preset '${id}': ${option.error}`);
   if (option.requiresFullAccess && permission !== "full-access") {
     throw new Error(`Harness preset '${option.label}' requires Full access because it can run plugins or tools outside the Harness sandbox. Choose Standard/PTC for restricted access.`);
   }
-  const install = harnessInstallation(profile.command);
+  const install = harnessInstallation(profile.command, cwd);
   return [
     ...HARNESS_PRESET_AGENT_ROWS.map((row) => ({ id: row, disabled: true })),
     { id: "acp", disabled: true },

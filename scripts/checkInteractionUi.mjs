@@ -208,7 +208,7 @@ try {
   assert.equal(await evaluate(`document.activeElement===nextFocus`), true, "closing an already closed dialog does not steal focus");
   await evaluate(`focusDialog.element.remove();nextFocus.remove();`);
   const sidebar = await readFile("src/sidebarProvider.ts", "utf8");
-  for (const id of ["mcp-dialog", "mcp-assistant-dialog"]) {
+  for (const id of ["mcp-assistant-dialog"]) {
     const template = sidebar.match(new RegExp(`<dialog id="${id}"[\\s\\S]*?</dialog>`))?.[0];
     assert.ok(template, `${id} template exists`);
     await evaluate(`document.body.insertAdjacentHTML('beforeend',${JSON.stringify(template)});document.getElementById(${JSON.stringify(id)}).showModal();`);

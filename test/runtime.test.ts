@@ -154,6 +154,46 @@ describe("Dext workflow runtime", () => {
     expect(requests[1]?.input).toContain("dext-plan:start");
     expect(requests[2]?.input).toBe("build it");
   });
+
+  it("keeps a sandbox-escaping preset off read-only turns and applies it when the turn is writable", async () => {
+    const { runtime } = setup();
+    const conversations: AgentConversationRequest[] = [];
+    const invocations: { allowWorkspaceWrite: boolean | undefined; agentPreset: string | undefined }[] = [];
+    runtime.setWorkspaceRoot(process.cwd());
+    runtime.setWorkspaceTrusted(true);
+    runtime.setAgentProfiles([{
+      id: "deepseek-harness", provider: "deepseek-harness", command: "dsh", label: "Harness", models: [],
+      presets: [
+        { id: "standard", label: "Standard", description: "", builtin: true, requiresFullAccess: false, writableTurnsOnly: false },
+        { id: "minimal", label: "Minimal", description: "", builtin: true, requiresFullAccess: true, writableTurnsOnly: true }
+      ]
+    }]);
+    runtime.setAgentSelection({ profileId: "deepseek-harness", permission: "full-access", agentPreset: "minimal" });
+    runtime.setAgentRunner({
+      run: async (request) => {
+        invocations.push({ allowWorkspaceWrite: request.allowWorkspaceWrite, agentPreset: request.agentPreset });
+        return { kind: "agent", text: "done" };
+      },
+      runConversation: async (request) => {
+        conversations.push(request);
+        return "answer";
+      }
+    });
+
+    // Plan generation and Ask are read-only; building a plan and Agent are writable.
+    await runtime.executeConversation("ask", "explain");
+    await runtime.executeConversation("plan", "plan it");
+    await runtime.executeConversation("plan", "build it", { executePlan: true });
+    await runtime.executeConversation("agent", "implement");
+    expect(conversations.map((item) => item.agentPreset)).toEqual(["standard", "standard", "minimal", "minimal"]);
+
+    await runtime.execute({
+      kind: "invocation", method: "agent", source: "code",
+      arguments: [{ name: "input", value: "preview" }, { name: "apply", value: false }]
+    });
+    await runtime.execute({ kind: "invocation", method: "agent", source: "code", arguments: [{ name: "input", value: "write" }] });
+    expect(invocations.map((item) => item.agentPreset)).toEqual(["standard", "minimal"]);
+  });
   it("accepts JSON object content for typed MCP results when structuredContent is omitted", async () => {
     const registry = new MethodRegistry();
     registry.registerMany(BUILTIN_METHODS, "builtin");

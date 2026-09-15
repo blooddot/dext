@@ -68,7 +68,7 @@ export class DeepSeekHarnessRunner implements AgentRunner {
     if (request.signal?.aborted) throw new ExecutionCancelledError();
     const permission = request.allowWorkspaceWrite ? request.permission ?? "workspace-write" : "read-only";
     const presetPatch = request.agentPreset
-      ? await harnessPresetPatch(request.profile, request.agentPreset, permission, settings?.defaultModel ? { ...settings.defaultModel } : {}) : [];
+      ? await harnessPresetPatch(request.profile, request.agentPreset, permission, settings?.defaultModel ? { ...settings.defaultModel } : {}, request.cwd) : [];
     const policy = await createHarnessPolicy(permission, request.cwd, settings, presetPatch);
     let session: Session | undefined;
     let transport: DeepSeekHarnessTransport | undefined;

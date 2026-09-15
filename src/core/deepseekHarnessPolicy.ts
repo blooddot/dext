@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { parse } from "yaml";
 import type { AgentPermission } from "../agentProfiles.js";
 
-export const HARNESS_VERSION = "0.1.2-rc.1";
+export const HARNESS_VERSION = "0.1.5-rc.1";
 export const harnessMode = (permission: AgentPermission): string => permission === "full-access" ? "danger-full-access" : permission;
 export interface HarnessDefaultModel { provider: string; model: string }
 export interface HarnessLaunchSettings {

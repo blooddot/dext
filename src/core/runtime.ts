@@ -155,6 +155,9 @@ const AGENT_METHODS = new Set(["ask", "plan", "agent", "skill"]);
 /** The methods that take free-form input plus skills, rules, and a workspace,
  * as opposed to `skill`, which builds its instruction from the skill itself. */
 const CONVERSATION_METHODS = new Set(["ask", "plan", "agent"]);
+/** Dext's own confined preset. A read-only turn that asks for a preset running
+ * outside the Harness sandbox is downgraded to this one instead of failing. */
+const CONFINED_HARNESS_PRESET = "standard";
 
 function defaultWorkspace(root: string): DirRef {
   return { kind: "dirRef", uri: pathToFileURL(root).toString(), path: "." };
@@ -349,6 +352,18 @@ export class DextRuntime {
 
   private agentPermission(): WritableAgentPermission {
     return this.agentSelection.permission ?? this.defaultAgentPermission;
+  }
+
+  /** A preset whose tools run outside the Harness sandbox cannot be applied to a
+   * read-only turn: the sandbox policy would not confine it. Substitute the
+   * confined built-in so plan generation, and typed previews, stay read-only,
+   * while the writable turn (Agent, building a plan, or an applying API call)
+   * gets the preset the user selected. */
+  private harnessPreset(profile: AgentProfile, requested: string, readOnly: boolean): string {
+    if (!readOnly || !requested) return requested;
+    const selected = profile.presets?.find((preset) => preset.id === requested);
+    if (!(selected?.writableTurnsOnly ?? selected?.requiresFullAccess)) return requested;
+    return profile.presets?.some((preset) => preset.id === CONFINED_HARNESS_PRESET) ? CONFINED_HARNESS_PRESET : "";
   }
 
   /** Extra CLI arguments are an escape hatch into the provider process, so an
@@ -548,7 +563,7 @@ export class DextRuntime {
         }
         const raw = await this.agentRunner.run({
           profile,
-          ...(profile.provider === "deepseek-harness" ? { agentPreset: metadata.agentPreset ?? this.agentSelection.agentPreset ?? "" } : {}),
+          ...(profile.provider === "deepseek-harness" ? { agentPreset: this.harnessPreset(profile, metadata.agentPreset ?? this.agentSelection.agentPreset ?? "", !agentWriteEnabled) } : {}),
           ...(metadata.model || this.agentSelection.model ? { model: metadata.model ?? this.agentSelection.model } : {}),
           ...((metadata.reasoningEffort ?? this.agentSelection.reasoningEffort) ? { reasoningEffort: metadata.reasoningEffort ?? this.agentSelection.reasoningEffort } : {}),
           ...((metadata.speed ?? this.agentSelection.speed) ? { speed: metadata.speed ?? this.agentSelection.speed } : {}),
@@ -619,7 +634,7 @@ export class DextRuntime {
       : undefined;
     const response = await this.agentRunner.runConversation({
       profile,
-      ...(profile.provider === "deepseek-harness" ? { agentPreset: metadata.agentPreset ?? this.agentSelection.agentPreset ?? "" } : {}),
+      ...(profile.provider === "deepseek-harness" ? { agentPreset: this.harnessPreset(profile, metadata.agentPreset ?? this.agentSelection.agentPreset ?? "", readOnly) } : {}),
       ...(metadata.model || this.agentSelection.model ? { model: metadata.model ?? this.agentSelection.model } : {}),
       ...((metadata.reasoningEffort ?? this.agentSelection.reasoningEffort) ? { reasoningEffort: metadata.reasoningEffort ?? this.agentSelection.reasoningEffort } : {}),
       ...((metadata.speed ?? this.agentSelection.speed) ? { speed: metadata.speed ?? this.agentSelection.speed } : {}),

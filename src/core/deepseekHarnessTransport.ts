@@ -1,37 +1,14 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
 import { Readable, Writable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
-import { ClientSideConnection, ndJsonStream, PROTOCOL_VERSION, type Client, type InitializeResponse } from "@agentclientprotocol/sdk";
-import { resolveCliCommand } from "./agentRunner.js";
-
-/** Resolve npm's Windows shim to its Node entry; never put model input through cmd.exe. */
-export function harnessSpawnCommand(command: string, args: readonly string[]): { command: string; args: string[] } {
-  if (/\.(?:m?js)$/i.test(command)) return { command: "node", args: [command, ...args] };
-  if (!/\.(cmd|bat)$/i.test(command)) return { command, args: [...args] };
-  const script = readFileSync(command, "utf8");
-  // Volta's bin directory deliberately contains a tiny `dsh.cmd` dispatcher.
-  // Unlike an npm shim it has no Node entry itself, but its installed package
-  // has the ordinary npm shim we can launch without invoking cmd.exe.
-  if (/\bvolta\s+run\s+%~n0\b/i.test(script)) {
-    const packageShim = join(
-      dirname(dirname(command)), "tools", "image", "packages", "@deepseek-ai", "dsh", "dsh.cmd"
-    );
-    if (existsSync(packageShim)) return harnessSpawnCommand(packageShim, args);
-    return { command: "volta", args: ["run", command.replace(/^.*[\\/]/, "").replace(/\.(cmd|bat)$/i, ""), ...args] };
-  }
-  const relative = /["']?%[~]?dp0%?[\\/]([^"\r\n]*?\.(?:m?js))["']/i.exec(script)?.[1]
-    ?? /["']?%dp0%[\\/]([^"\r\n]*?\.(?:m?js))["']/i.exec(script)?.[1];
-  // Shim paths use Windows separators even when inspected on another platform.
-  const entry = relative ? join(dirname(command), ...relative.split(/[\\/]/)) : join(dirname(command), "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js");
-  if (!existsSync(entry)) throw new Error("Cannot resolve this Harness command shim. Configure the dsh Node entry or executable path.");
-  const node = join(dirname(command), "node.exe");
-  return { command: existsSync(node) ? node : "node", args: [entry, ...args] };
-}
+import { client as createClient, methods, ndJsonStream, PROTOCOL_VERSION, type Client, type ClientConnection, type ClientContext, type InitializeRequest, type InitializeResponse, type NewSessionRequest, type NewSessionResponse, type ResumeSessionRequest, type ResumeSessionResponse, type CloseSessionRequest, type CloseSessionResponse, type SetSessionConfigOptionRequest, type SetSessionConfigOptionResponse, type PromptRequest, type PromptResponse, type CancelNotification } from "@agentclientprotocol/sdk";
+import { harnessSpawnCommand } from "./harnessCommand.js";
+import { HARNESS_VERSION } from "./deepseekHarnessPolicy.js";
+export { harnessSpawnCommand } from "./harnessCommand.js";
 
 export class DeepSeekHarnessTransport {
-  readonly connection: ClientSideConnection;
+  readonly connection: HarnessConnection;
+  private readonly clientConnection: ClientConnection;
   private readonly child: ChildProcessWithoutNullStreams;
   private stderr = "";
   private stopped = false;
@@ -42,19 +19,21 @@ export class DeepSeekHarnessTransport {
   onActivity?: (() => void) | undefined;
 
   constructor(command: string, args: readonly string[], cwd: string, client: Client) {
-    const resolved = resolveCliCommand(command, "deepseek-harness");
-    if (!resolved) throw new Error(`DeepSeek Harness command '${command}' was not found. Install @deepseek-ai/dsh or configure its executable path.`);
-    const invocation = harnessSpawnCommand(resolved, args);
+    const invocation = harnessSpawnCommand(command, args, { cwd });
     this.child = spawn(invocation.command, invocation.args, { cwd, windowsHide: true, stdio: "pipe", shell: false });
     this.child.stderr.on("data", (chunk: Buffer) => {
       if (chunk.length) this.onActivity?.();
       this.stderr = (this.stderr + chunk.toString()).slice(-16000);
     });
     this.exited = new Promise((resolve) => { this.child.once("exit", () => resolve()); this.child.once("error", () => resolve()); });
-    this.connection = new ClientSideConnection(() => client, ndJsonStream(
+    const app = createClient({ name: "dext" })
+      .onRequest(methods.client.session.requestPermission, ({ params }) => client.requestPermission(params))
+      .onNotification(methods.client.session.update, ({ params }) => client.sessionUpdate(params));
+    this.clientConnection = app.connect(ndJsonStream(
       Writable.toWeb(this.child.stdin) as WritableStream<Uint8Array>,
       Readable.toWeb(this.child.stdout) as ReadableStream<Uint8Array>
     ));
+    this.connection = new HarnessConnection(this.clientConnection.agent, this.clientConnection);
     this.failure = new Promise((_, reject) => {
       const fail = (detail: string): void => reject(new Error(`DeepSeek Harness ${detail}${this.stderr ? `: ${this.stderr}` : ""}`));
       // The SDK tolerates malformed lines. A process backend must fail visibly
@@ -93,7 +72,7 @@ export class DeepSeekHarnessTransport {
   async initialize(): Promise<void> {
     this.capabilities = await this.wait(this.connection.initialize({ protocolVersion: PROTOCOL_VERSION, clientInfo: { name: "dext", version: "1" }, clientCapabilities: {} }));
     if (this.capabilities.protocolVersion !== PROTOCOL_VERSION || !this.capabilities.agentCapabilities?.sessionCapabilities?.resume) {
-      throw new Error("This Harness version lacks the required ACP session capabilities. Use 0.1.2-rc.1.");
+      throw new Error(`This Harness version lacks the required ACP session capabilities. Use ${HARNESS_VERSION}.`);
     }
   }
 
@@ -116,5 +95,39 @@ export class DeepSeekHarnessTransport {
       } else this.child.kill("SIGKILL");
     }
     this.child.stdout.destroy(); this.child.stderr.destroy(); this.child.stdin.destroy();
+  }
+}
+
+/** Small compatibility facade over SDK 1.4's ClientContext. Keeping this
+ * facade lets the runner retain explicit lifecycle calls while all wire access
+ * uses the typed client context API. */
+export class HarnessConnection {
+  constructor(private readonly agent: ClientContext, private readonly owner: ClientConnection) {}
+  get signal(): AbortSignal { return this.owner.signal; }
+  get closed(): Promise<void> { return this.owner.closed; }
+  close(error?: unknown): void { this.owner.close(error); }
+  initialize(params: InitializeRequest): Promise<InitializeResponse> {
+    return this.agent.request(methods.agent.initialize, params);
+  }
+  newSession(params: NewSessionRequest): Promise<NewSessionResponse> {
+    return this.agent.request(methods.agent.session.new, params);
+  }
+  loadSession(params: Parameters<ClientContext["request"]>[1]): ReturnType<ClientContext["request"]> {
+    return this.agent.request(methods.agent.session.load, params as never);
+  }
+  resumeSession(params: ResumeSessionRequest): Promise<ResumeSessionResponse> {
+    return this.agent.request(methods.agent.session.resume, params);
+  }
+  closeSession(params: CloseSessionRequest): Promise<CloseSessionResponse> {
+    return this.agent.request(methods.agent.session.close, params);
+  }
+  setSessionConfigOption(params: SetSessionConfigOptionRequest): Promise<SetSessionConfigOptionResponse> {
+    return this.agent.request(methods.agent.session.setConfigOption, params);
+  }
+  prompt(params: PromptRequest): Promise<PromptResponse> {
+    return this.agent.request(methods.agent.session.prompt, params);
+  }
+  cancel(params: CancelNotification): Promise<void> {
+    return this.agent.notify(methods.agent.session.cancel, params);
   }
 }
