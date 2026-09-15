@@ -632,13 +632,22 @@ export class DextRuntime {
     const sessionId = metadata.agentSessionId
       ? `${metadata.agentSessionId}\u0000conversation`
       : undefined;
+    // A project may explicitly select a different CLI from the composer. In
+    // that case, don't carry the active conversation's model, reasoning, speed,
+    // or Harness preset into the selected profile.
+    const sameSelectedAgent = metadata.agent === undefined || metadata.agent === this.agentSelection.profileId;
+    const selectedModel = metadata.model ?? (sameSelectedAgent ? this.agentSelection.model : undefined);
+    const selectedReasoning = metadata.reasoningEffort ?? (sameSelectedAgent ? this.agentSelection.reasoningEffort : undefined);
+    const selectedSpeed = metadata.speed ?? (sameSelectedAgent ? this.agentSelection.speed : undefined);
+    const selectedServiceTier = metadata.serviceTier ?? (sameSelectedAgent ? this.agentSelection.serviceTier : undefined);
+    const selectedPreset = metadata.agentPreset ?? (sameSelectedAgent ? this.agentSelection.agentPreset : undefined);
     const response = await this.agentRunner.runConversation({
       profile,
-      ...(profile.provider === "deepseek-harness" ? { agentPreset: this.harnessPreset(profile, metadata.agentPreset ?? this.agentSelection.agentPreset ?? "", readOnly) } : {}),
-      ...(metadata.model || this.agentSelection.model ? { model: metadata.model ?? this.agentSelection.model } : {}),
-      ...((metadata.reasoningEffort ?? this.agentSelection.reasoningEffort) ? { reasoningEffort: metadata.reasoningEffort ?? this.agentSelection.reasoningEffort } : {}),
-      ...((metadata.speed ?? this.agentSelection.speed) ? { speed: metadata.speed ?? this.agentSelection.speed } : {}),
-      ...((metadata.serviceTier ?? this.agentSelection.serviceTier) ? { serviceTier: metadata.serviceTier ?? this.agentSelection.serviceTier } : {}),
+      ...(profile.provider === "deepseek-harness" ? { agentPreset: this.harnessPreset(profile, selectedPreset ?? "", readOnly) } : {}),
+      ...(selectedModel ? { model: selectedModel } : {}),
+      ...(selectedReasoning ? { reasoningEffort: selectedReasoning } : {}),
+      ...(selectedSpeed ? { speed: selectedSpeed } : {}),
+      ...(selectedServiceTier ? { serviceTier: selectedServiceTier } : {}),
       cwd: this.workspaceRoot,
       input: mode === "plan" && !metadata.executePlan
         ? `${await this.planInstruction()}\n\n${PLAN_RESPONSE_FORMAT_INSTRUCTION}\n\n---\n\nGoal:\n\n${text}`
