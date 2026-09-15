@@ -214,6 +214,28 @@ export function fileReferenceInsertion(
 ): SourceReplacement {
   const semantic = coreInputReferenceInsertion(source, from, to, expressions);
   if (semantic) return semantic;
+  // A file drop at the argument of ref.file() must supply the path payload,
+  // just like a clipboard paste.  This is especially important for external
+  // files, whose expression is an @file:/// URI and cannot be nested inside
+  // the ref.file call.
+  if (expressions.length === 1) {
+    const expression = expressions[0]!;
+    const payload = expression.startsWith("@") ? expression.slice(1) : expression;
+    const call = /\bref\.file\s*\(\s*(["'])([^"']*)\1/g;
+    for (const match of source.matchAll(call)) {
+      const start = match.index ?? 0;
+      const quoteOffset = match[0].indexOf(match[1]!);
+      const bodyStart = start + quoteOffset + 1;
+      const bodyEnd = bodyStart + match[2]!.length;
+      if (from >= bodyStart && to <= bodyEnd) {
+        return { from, to, text: payload, cursorOffset: payload.length };
+      }
+    }
+    const incomplete = /\bref\.file\s*\(\s*$/.exec(source.slice(0, from));
+    if (incomplete && source.slice(from, to || from).length === 0 && source.slice(to).match(/^\s*\)/)) {
+      return { from, to, text: `"${payload}"`, cursorOffset: payload.length + 2 };
+    }
+  }
   const inline = inlineInsertion(source, from, to, inputReferenceText(expressions));
   const separator = to === source.length && expressions.some((expression) => expression.startsWith("@")) ? " " : "";
   return {

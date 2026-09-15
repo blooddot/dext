@@ -62,4 +62,14 @@ describe("@ reference insertion", () => {
       interpolationEnd: 33
     }]);
   });
+
+  it("drops an external file payload into ref.file", () => {
+    const source = 'ref.file("")';
+    const cursor = source.indexOf('""') + 1;
+    const edit = fileReferenceInsertion(source, cursor, cursor, ["@file:///tmp/My%20File.ts"]);
+    expect(edit.text).toBe("file:///tmp/My%20File.ts");
+    expect(`${source.slice(0, edit.from)}${edit.text}${source.slice(edit.to)}`).toBe(
+      'ref.file("file:///tmp/My%20File.ts")'
+    );
+  });
 });
