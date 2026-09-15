@@ -52,9 +52,9 @@ Dext 默认使用 `dext.agent.timeoutMs: 0`（不限制总时长）和 `dext.age
 
 ### 安装与模型
 
-运行 `npm install -g @deepseek-ai/dsh@0.1.2-rc.1` 安装已验证版本，在 Harness 中配置模型凭据，再在 Dext 选择 **DeepSeek Harness**。**Dext: Configure Agent** 可配置可执行文件路径并通过 ACP 发现模型和推理选项；首次选择也会发现模型。模型留空时使用 Harness 默认值。Dext 在扩展启动时读取一次 `$DSH_HOME/settings.yaml` 中的 `llm-pi-ai.providers` 和 `agent-default-model` 路由；首次选择 Harness 或运行配置命令时刷新，并把缓存结果用于临时 ACP 覆盖层；不会复制或修改用户的 profile 文件或 `.credentials.yaml`。安装和凭据由 Harness 管理。
+使用仓库 `mise.toml` 运行 `mise install` 安装已验证版本（`@deepseek-ai/dsh@0.1.5-rc.1`），在 Harness 中配置模型凭据，再在 Dext 选择 **DeepSeek Harness**。**Dext: Configure Agent** 可配置可执行文件路径并通过 ACP 发现模型和推理选项；首次选择也会发现模型。模型留空时使用 Harness 默认值。Dext 在扩展启动时读取一次 `$DSH_HOME/settings.yaml` 中的 `llm-pi-ai.providers` 和 `agent-default-model` 路由；首次选择 Harness 或运行配置命令时刷新，并把缓存结果用于临时 ACP 覆盖层；不会复制或修改用户的 profile 文件或 `.credentials.yaml`。安装和凭据由 Harness 管理。
 
-发布包 `0.1.2-rc.1` 使用 ACP SDK `1.4.0`，Dext 固定使用同一 SDK 版本。已核对实际发布包的握手、创建/恢复/关闭会话、模型配置、执行及取消接口；入口为[官方 CLI](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/cli/README.md) 的 `dsh --profile acp`。新安装默认显示三个后端，可通过 `dext.agentCli` 限定列表。
+发布包 `0.1.5-rc.1` 使用 ACP SDK `1.4.0`，Dext 固定使用同一 SDK 版本。已核对实际发布包的握手、创建/恢复/关闭会话、模型配置、执行及取消接口；入口为[官方 CLI](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/cli/README.md) 的 `dsh --profile acp`。新安装默认显示三个后端，可通过 `dext.agentCli` 限定列表。
 
 ### 预设与自定义
 

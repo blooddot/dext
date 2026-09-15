@@ -10,6 +10,26 @@ All notable changes to Dext are documented in this file.
 
 ## Unreleased
 
+- Separate long-term project knowledge from per-run conversation Review. Project knowledge lives in `.dext/project.json`, `.dext/objects/*.json`, and `.dext/architecture.json`, and every object now carries independent source, confirmation, validity, and ownership dimensions; the legacy `status` field is migrated on read. Review is keyed by session, turn, and run, and records the project version, plan version, and Build run it was produced against, so feedback can never land on another run or an older attempt.
+
+- Unify Project, API, Global Resources, and History editor tabs behind stable keys, versioned state, and a restore path with a claim guard that prevents a serializer restore and a proactive restore from double-opening a tab. The Project tab exposes only Overview, Knowledge, and Architecture.
+
+- Improve architecture scanning coverage: Python relative imports, `__init__`, and namespace packages resolve; Rust scanning strips comments and string literals before matching, resolves module-tree and `use` relations, and reports conditional compilation and macros as uncertain; `Cargo.toml` description and dependencies are read without running Cargo, optionally enriched by `cargo metadata` with an explicit fallback. `Cargo.toml` is now part of the scanned file set, so a local `use <crate>::x` resolves to that package's `src/lib.rs` or `src/main.rs` instead of being reported unresolved, and the Architecture page lists scan coverage notes, such as an unresolved `Cargo.lock`, separately from unresolved paths.
+
+- Add engineering and experience review presets that change what a review emphasizes, and a local-SVG architecture view that keeps manually declared relations such as a Tauri IPC contract separate from statically detected ones.
+
+- Add `docs/project-development.md` and `docs/project-development.zh-CN.md` describing the project-knowledge and conversation-Review model.
+
+- Show every development turn's Review inside its conversation: the files the run changed, the script facts and coverage it recorded, knowledge drafts, and accept or request-changes actions. A review is bound to its session, turn, and run, an Ask turn or a turn with no change produces no card, and writing a plan produces no implementation review.
+
+- Accumulate Plan builds into one review bound to the plan content version and Build run. Proven task associations are grouped by task ID, while shared and unattributed changes are listed separately instead of being inferred from the agent's task checkmarks, and the final acceptance waits for the user instead of letting the Agent continue.
+
+- Add a knowledge adoption bridge: each pending draft has its own **Adopt** action that writes one long-term object and opens it in Project. Accepting the code review stays a separate action and writes no project knowledge.
+
+- Move the API directory and Global Resources out of sidebar dialogs into editor tabs. Search, namespace grouping, detail, reference insertion, source jumps, categories, and refresh are preserved, and reopening the same target reveals the existing page. `dext.editResource` opens the existing resource edit flow for a kind and scope.
+
+- Read the plan's Review preset default synchronously from the cached project definition, so a send freezes the effective preset without waiting on file I/O.
+
 - Let `ui.form` declare several submit buttons through `actions`, each with its own `id`, optional `primary` highlight and `requires` list of fields it needs answered; the pressed button comes back as `action`. A decision that used to need a radio field plus a conditional text box is now one button per outcome, and the form no longer reports unmet requirements before the user has pressed anything.
 
 - Restyle workflow and Agent interaction cards and dialogs: scrollable descriptions, selectable option rows, a pinned borderless close button, a separated action bar and a distinct primary button.

@@ -6,7 +6,7 @@ English | [简体中文](workflows.zh-CN.md)
 
 Compose calls in Code mode and save repeated workflows as project APIs. This reference covers syntax, built-in APIs, code references, custom APIs, Skills, and conversation history.
 
-[Workflow language](#workflow-language) · [Built-in API](#built-in-api) · [File and selection references](#file-and-selection-references) · [Custom APIs and Skills](#custom-apis-and-skills) · [Conversation history and workflow recording](#conversation-history-and-workflow-recording) · [Imports, Skills, and rules](#imports-skills-and-rules) · [Custom result types](#custom-result-types) · [Execution and previews](#execution-and-previews)
+[Workflow language](#workflow-language) · [Built-in API](#built-in-api) · [File and selection references](#file-and-selection-references) · [Custom APIs and Skills](#custom-apis-and-skills) · [Conversation history and workflow recording](#conversation-history-and-workflow-recording) · [Turn and Build review](#turn-and-build-review) · [Imports, Skills, and rules](#imports-skills-and-rules) · [Custom result types](#custom-result-types) · [Execution and previews](#execution-and-previews)
 
 ## Workflow language
 
@@ -183,6 +183,25 @@ Code, but are not shared with other projects.
 History turns offer rename, fork, copy as Markdown, and delete from Dext, in that order, in both their toolbar and context menu. The live Conversation toolbar places edit input and retry before these four actions. History's parent conversation toolbar offers continue, rename, fork, copy, favorite, archive, and delete. Shared actions use consistent icons and relative order, with delete last. Turn titles are saved separately from the original input; clearing a title restores its default.
 
 Deleting a turn removes Dext's saved input/output record only. It does not erase CLI messages or undo file changes, and continuing the bound CLI session may still use the deleted turn's context. Dext retains CLI session IDs, including an empty conversation after its final displayed turn is deleted, so it can request the same session on restart. Resuming still requires that provider session to remain available. Retry appends a new execution to the conversation and can repeat write actions.
+
+## Turn and Build review
+
+Every development turn ends with a collapsible **Review** in Output. It lists the files the run touched, classified as created, modified, or deleted, and links each entry to a file reference you can open. The review is attached to one `sessionId + turnId + runId`, so a retry, a fork, or a later Build never inherits the previous acceptance.
+
+A review also carries whatever the run genuinely recorded: script facts with their coverage, semantic suggestions, and Hook results, but only when the Agent or CLI exposed a hook identity and an outcome. Ordinary terminal output and Agent prose are never relabelled as hooks, and a successful tool exit is not reported as business acceptance. When the protocol exposes no hook information, no hook section is rendered at all.
+
+Two presets change the emphasis without changing the operation mode:
+
+- **Engineering review** highlights design decisions, module boundaries, code differences, and dependency changes.
+- **Experience acceptance** highlights behavior change, manual scenarios, user feedback, and open acceptance items.
+
+The project sets the default preset in `.dext/project.json`; a per-conversation override wins over it. The effective preset is frozen when you send, so changing the project default afterwards does not rewrite an earlier turn. Ask stays read-only under either preset and produces no acceptance card, as does a turn with no development change.
+
+Accepting a review and adopting a Knowledge draft are separate actions. **Accept review** records your decision on the code for that run and writes nothing to project knowledge. Each pending Knowledge draft has its own **Adopt** action, which writes one long-term object and navigates to it in the Project tab; rejected drafts for the same base version are not offered again.
+
+Plan execution reuses the same component with an additional Build binding: the plan content version plus the Build run ID. Intermediate rounds accumulate into one review and never block continuation. Changes that can be attributed to a task are grouped by task ID, changes owned by more than one task appear under **Shared across tasks**, and anything without a proven owner stays under **Unattributed changes** instead of being guessed from the agent's task checkmarks. The final acceptance waits for your decision rather than letting the Agent spin; later feedback starts a new execution record.
+
+Writing a plan is not implementing it, so a plan-authoring turn produces no implementation review at all.
 
 ## Imports, Skills, and rules
 

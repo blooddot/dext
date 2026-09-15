@@ -10,7 +10,7 @@ Run Dext from source, validate changes, and build a VSIX installer.
 
 ## Development
 
-Use the Node.js version pinned in `package.json` under `volta` (currently **22.23.2**) and VS Code 1.105 or newer.
+Use the Node.js and DeepSeek Harness versions pinned in `mise.toml` and VS Code 1.105 or newer.
 
 ```bash
 git clone https://github.com/blooddot/dext.git
@@ -59,3 +59,17 @@ MCP initialization reads the client name and version from `package.json`. Protoc
 - `src/core/completionProvider.ts`: fill-in-the-middle backend, cache, and secret-stored key.
 - `src/core/workflowRecorder.ts`: History conversation to `.dx` skeleton.
 - `src/webview/codeEditor.ts`: CodeMirror Python language integration.
+
+### Project knowledge, runs, and editor tabs
+
+Long-term project knowledge and single-run records are deliberately separate stores:
+
+- `src/projectStore.ts` writes only `.dext/project.json`, `.dext/objects/<id>.json`, and `.dext/architecture.json`. It is the only writer of accepted objects, and it caches the last definition so a send can read the preset synchronously. Concurrent writes are rejected by version (`conflict`), never merged.
+- `src/turnReviewStore.ts` keys run attachments by `sessionId:turnId:runId` with oldest-first eviction. `deleteSession` and `clear` never touch project files, and clearing a conversation cannot remove accepted knowledge.
+- `src/core/projectKnowledge.ts` keeps naming, stable ids, and the independent source/confirmation/validity/ownership dimensions. A legacy `status` field is migrated on read; an accepted object whose code changed stays accepted and additionally becomes `needs_verification`.
+- `src/core/turnReview.ts` and `src/core/planReview.ts` own the run contracts. A Plan review adds a plan content version and a Build run id on top of the run id, so a later Build cannot reuse an older acceptance.
+- `src/sidebarProvider.ts` freezes the Review preset at send time, builds one review per run from the patch changes the run reported, and accumulates Plan rounds into one Build review. A plan-authoring turn produces no review.
+- `src/turnReviewController.ts` submits feedback, lists diff targets, and is the adoption bridge. `submitFeedback` only touches the run store; `adoptKnowledgeSuggestion` is the only path that writes a project object, and it navigates to it. Accepting code never adopts knowledge.
+- `src/core/projectArchitecture*.ts` is one scan model shared by TypeScript, Python, and Rust. Each parser reports unresolved and ambiguous structures as `unsupported` with a reason instead of guessing, and Rust metadata degrades with an explicit coverage note when `cargo metadata` is unavailable.
+- `src/editorTabManager.ts` owns panel creation, reuse, disposal, and message routing for every editor tab. `src/editorTabSerializer.ts` deduplicates restores so a serializer callback and a proactive restore cannot open the same page twice, and `src/projectEditorProvider.ts` reuses the same stable key.
+- `src/resourceDocuments.ts` builds the API and Global Resources pages from the sidebar state, so search, grouping, detail, reference insertion, and source jumps survive the move out of the sidebar dialogs.

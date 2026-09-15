@@ -10,7 +10,7 @@
 
 ## 开发
 
-使用 `package.json` 中 `volta` 固定的 Node.js 版本（目前为 **22.23.2**）以及 VS Code 1.105 或更新版本。
+使用 `mise.toml` 固定的 Node.js 与 DeepSeek Harness 版本，以及 VS Code 1.105 或更新版本。
 
 ```bash
 git clone https://github.com/blooddot/dext.git
@@ -59,3 +59,17 @@ MCP 初始化从 `package.json` 读取客户端名称和版本。协议版本分
 - `src/core/completionProvider.ts`：FIM 补全后端、缓存和密钥管理。
 - `src/core/workflowRecorder.ts`：从对话生成 `.dx` 工作流骨架。
 - `src/webview/codeEditor.ts`：基于 CodeMirror 的 Python 语法编辑器。
+
+### 项目知识、对话运行与编辑器 Tab
+
+长期项目知识与单次运行记录分别存放，互不混用：
+
+- `src/projectStore.ts` 只写入 `.dext/project.json`、`.dext/objects/<id>.json` 和 `.dext/architecture.json`，是已接受对象的唯一写入方；它缓存最近一次项目定义，使发送路径可以同步读取预设。并发写入按版本拒绝（`conflict`），不做合并。
+- `src/turnReviewStore.ts` 以 `sessionId:turnId:runId` 为键保存运行附件，容量超限时按创建时间淘汰最早的记录。`deleteSession` 与 `clear` 不会触碰项目文件，清理对话不会删除长期知识。
+- `src/core/projectKnowledge.ts` 负责命名、稳定 ID，以及来源／确认／有效性／归属四个相互独立的维度。旧的 `status` 字段在读取时迁移；代码发生变化时，已接受对象保持已接受，同时标记为 `needs_verification`。
+- `src/core/turnReview.ts` 与 `src/core/planReview.ts` 定义运行契约。Plan Review 在运行 ID 之上再绑定计划内容版本与本次 Build 运行 ID，后续 Build 无法复用旧的接受状态。
+- `src/sidebarProvider.ts` 在发送时固定 Review 预设，依据本轮上报的补丁变更生成单轮 Review，并把 Plan 的多个轮次累计到同一份 Build Review。仅编写 Plan 的轮次不生成 Review。
+- `src/turnReviewController.ts` 负责提交反馈、列出差异目标，并实现采用桥接。`submitFeedback` 只修改运行存储；只有 `adoptKnowledgeSuggestion` 会写入项目对象并导航到它。接受代码不会采用任何知识建议。
+- `src/core/projectArchitecture*.ts` 为 TypeScript、Python、Rust 提供同一套扫描模型。各解析器把无法解析或存在歧义的结构记录为 `unsupported` 并给出原因，而不是猜测；`cargo metadata` 不可用时，Rust 元数据降级并显式说明覆盖范围。
+- `src/editorTabManager.ts` 统一管理所有编辑器 Tab 的创建、复用、销毁和消息路由。`src/editorTabSerializer.ts` 对恢复去重，避免 serializer 回调与主动恢复重复打开同一页面；`src/projectEditorProvider.ts` 复用同一个稳定键。
+- `src/resourceDocuments.ts` 由侧边栏状态生成 API 与 Global Resources 页面，使搜索、分组、详情、引用插入和源码跳转在移出弹窗后保持一致。
