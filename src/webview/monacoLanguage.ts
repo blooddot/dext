@@ -1,6 +1,7 @@
 import { monaco } from "./monacoEnvironment.js";
 import type { LanguageRequestBroker } from "./languageClient.js";
 import type { FileSearchClient } from "./fileSearchClient.js";
+import type { ProjectReferenceClient } from "./projectReferenceClient.js";
 import type { ReferenceProjection } from "./monacoReferences.js";
 import { pythonHoverCode } from "../vscodeHover.js";
 import { parser } from "@lezer/python";
@@ -11,6 +12,7 @@ export interface MonacoLanguageContext {
   projection: ReferenceProjection;
   broker: LanguageRequestBroker;
   files: FileSearchClient;
+  projects?: ProjectReferenceClient;
   source(): string;
   enabled(): boolean;
   revision(): number;
@@ -25,10 +27,20 @@ export function registerMonacoLanguage(c: MonacoLanguageContext): { dispose(): v
   const targets = new Map<string, { source: string; cursor: number }>();
   const previews = new Map<string, monaco.editor.ITextModel>();
   registrations.push(monaco.languages.registerCompletionItemProvider(selectors, {
-    triggerCharacters: [".", "@", "(", ","],
+    triggerCharacters: [".", "@", "#", "(", ","],
     async provideCompletionItems(model, position, _context, token) {
       if (model !== c.model) return undefined;
       const valid = snapshot(), source = c.source(), cursor = offset(position);
+      const project = /#[\p{L}\p{N}_.%-]*$/u.exec(source.slice(0, cursor));
+      if (project && c.projects && !/[\p{L}\p{N}_./@#%+-]/u.test(source[project.index - 1] ?? "")) {
+        const items = await c.projects.search(project[0].slice(1));
+        if (!valid() || token.isCancellationRequested) return undefined;
+        return { suggestions: items.map((item, i) => ({
+          label: `#${item.canonicalName}`, detail: `${item.displayName ?? item.canonicalName} · ${item.kind}`,
+          kind: monaco.languages.CompletionItemKind.Module, range: c.range(project.index, cursor),
+          insertText: c.projection.encode(item.token), filterText: project[0], sortText: String(i).padStart(5, "0")
+        })) };
+      }
       const file = /@[^\s@#"'`(){}[\],]*$/.exec(source.slice(0, cursor));
       if (file && !/[\p{L}\p{N}_.+-]/u.test(source[file.index - 1] ?? "")) {
         const files = await c.files.search(file[0].slice(1));

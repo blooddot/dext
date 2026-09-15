@@ -4,6 +4,7 @@ import { registerMonacoLanguage } from "./monacoLanguage.js";
 import { ReferenceProjection, referenceDecorations } from "./monacoReferences.js";
 import type { ClipboardClient } from "./clipboardClient.js";
 import type { FileSearchClient } from "./fileSearchClient.js";
+import type { ProjectReferenceClient } from "./projectReferenceClient.js";
 import type { LanguageRequestBroker } from "./languageClient.js";
 import { codeReferencePasteText } from "./codeReferencePaste.js";
 import { bindFileDropTarget, droppedFilePaths, isFileDrag } from "./fileDrop.js";
@@ -19,6 +20,7 @@ export interface CodeEditorOptions {
   broker: LanguageRequestBroker;
   clipboard: ClipboardClient;
   files: FileSearchClient;
+  projects?: ProjectReferenceClient;
   resolveDroppedFiles(paths: string[]): Promise<string[]>;
   onRun(): void;
   onOpenReference(reference: ContextReferenceOccurrence): void;
@@ -64,13 +66,15 @@ export class DextCodeEditor {
     this.model.setEOL(monaco.editor.EndOfLineSequence.LF);
     // VS Code forwards Webview clipboard commands through document.execCommand.
     // Monaco's textarea input supports that bridge; Chromium EditContext does not.
-    this.view = monaco.editor.create(options.parent, { model: this.model, automaticLayout: true, editContext: false, ariaLabel: "Dext input",
+    this.view = monaco.editor.create(options.parent, {
+      model: this.model, automaticLayout: true, editContext: false, ariaLabel: "Dext input",
       fontSize: 13, lineHeight: 24, minimap: { enabled: false }, scrollBeyondLastLine: false, wordWrap: "off",
       wordWrapBreakAfterCharacters: " \t", wordWrapBreakBeforeCharacters: "", wordBreak: "keepAll", wrappingIndent: "none",
       lineNumbersMinChars: 3, glyphMargin: false, folding: false, fixedOverflowWidgets: true,
       padding: { top: 8, bottom: 8 }, quickSuggestions: { other: true, strings: true, comments: false },
       wordBasedSuggestions: "off", unicodeHighlight: { ambiguousCharacters: false, invisibleCharacters: false, nonBasicASCII: false },
-      parameterHints: { enabled: true }, hover: { delay: 300 }, renderValidationDecorations: "on" });
+      parameterHints: { enabled: true }, hover: { delay: 300 }, renderValidationDecorations: "on"
+    });
     this.decorations = this.view.createDecorationsCollection();
     const composing = this.view.createContextKey<boolean>("dextInputComposing", false);
     // Chat soft wraps can leave Monaco's IME textarea only 1px tall, painting
@@ -93,9 +97,12 @@ export class DextCodeEditor {
     // leave the event available for snippet/find cancellation as well.
     this.disposables.push(this.view.onKeyDown(event => { if (event.keyCode === monaco.KeyCode.Escape) this.dismissAssistance(); }));
     this.chatEnter = this.view.createContextKey<boolean>("dextChatEnter", false);
-    this.disposables.push(registerMonacoLanguage({ model: this.model, editor: this.view, projection: this.projection,
+    this.disposables.push(registerMonacoLanguage({
+      model: this.model, editor: this.view, projection: this.projection,
       broker: options.broker, files: options.files, source: () => this.source, enabled: () => this.languageEnabled,
-      revision: () => this.dropRevision, range: (from, to) => this.sourceRange(from, to) }));
+      ...(options.projects ? { projects: options.projects } : {}),
+      revision: () => this.dropRevision, range: (from, to) => this.sourceRange(from, to)
+    }));
     this.disposables.push(this.model.onDidChangeContent(event => {
       if (this.transforming) return;
       this.dropRevision++;
@@ -147,8 +154,12 @@ export class DextCodeEditor {
     };
     options.parent.addEventListener("copy", copy, true); options.parent.addEventListener("cut", cut, true);
     options.parent.addEventListener("paste", paste, true); options.parent.addEventListener("mousedown", pointerDown, true); options.parent.addEventListener("mouseup", pointer, true);
-    this.disposables.push({ dispose: () => { options.parent.removeEventListener("copy", copy, true); options.parent.removeEventListener("cut", cut, true);
-      options.parent.removeEventListener("paste", paste, true); options.parent.removeEventListener("mousedown", pointerDown, true); options.parent.removeEventListener("mouseup", pointer, true); } });
+    this.disposables.push({
+      dispose: () => {
+        options.parent.removeEventListener("copy", copy, true); options.parent.removeEventListener("cut", cut, true);
+        options.parent.removeEventListener("paste", paste, true); options.parent.removeEventListener("mousedown", pointerDown, true); options.parent.removeEventListener("mouseup", pointer, true);
+      }
+    });
     this.removeFileDropListeners = bindFileDropTarget(options.dropTarget ?? options.parent, {
       dragover: event => this.fileDragOver(event), drop: event => this.fileDrop(event), leave: () => this.setFileDragActive(false)
     });
@@ -165,8 +176,10 @@ export class DextCodeEditor {
   }
   private selection() {
     const value = this.model.getValue(), selected = this.view.getSelection()!;
-    return { from: this.projection.toSource(value, this.model.getOffsetAt(selected.getStartPosition())),
-      to: this.projection.toSource(value, this.model.getOffsetAt(selected.getEndPosition())) };
+    return {
+      from: this.projection.toSource(value, this.model.getOffsetAt(selected.getStartPosition())),
+      to: this.projection.toSource(value, this.model.getOffsetAt(selected.getEndPosition()))
+    };
   }
   focus(): void { this.view.focus(); }
   setSubmitOnEnter(enabled: boolean): void { this.submitOnEnter = enabled; this.chatEnter.set(!this.languageEnabled && enabled); }
@@ -240,9 +253,11 @@ export class DextCodeEditor {
     const source = this.source, revision = this.dropRevision, selection = this.selection(), selections = JSON.stringify(this.view.getSelections());
     const result = await this.options.clipboard.read(raw ? "text" : "code");
     let text: string;
-    try { text = !raw && result && (result.codeReference || result.fileReferences?.length)
-      ? codeReferencePasteText(source, selection.from, selection.to, result)
-      : eventText ?? result?.text ?? await browserClipboardText() ?? ""; }
+    try {
+      text = !raw && result && (result.codeReference || result.fileReferences?.length)
+        ? codeReferencePasteText(source, selection.from, selection.to, result)
+        : eventText ?? result?.text ?? await browserClipboardText() ?? "";
+    }
     catch (error) { this.options.onError(error); return; }
     if (this.destroyed || !this.view.hasTextFocus() || revision !== this.dropRevision || JSON.stringify(this.view.getSelections()) !== selections) return;
     if (text) this.replaceSelections(text);
@@ -252,8 +267,10 @@ export class DextCodeEditor {
   private fileDrop(event: DragEvent): boolean {
     this.setFileDragActive(false); if (!isFileDrag(event)) return false;
     const paths = droppedFilePaths(event.dataTransfer);
-    if (!paths.length) { if (![...event.dataTransfer!.types].some(type => type.toLowerCase() === "files")) return false;
-      event.preventDefault(); event.stopPropagation(); this.options.onError(new Error("The dropped files did not include paths. Hold Shift and drag files from the VS Code Explorer into the input.")); return true; }
+    if (!paths.length) {
+      if (![...event.dataTransfer!.types].some(type => type.toLowerCase() === "files")) return false;
+      event.preventDefault(); event.stopPropagation(); this.options.onError(new Error("The dropped files did not include paths. Hold Shift and drag files from the VS Code Explorer into the input.")); return true;
+    }
     event.preventDefault(); event.stopPropagation();
     const hit = this.view.getTargetAtClientPoint(event.clientX, event.clientY)?.position ?? this.view.getPosition()!;
     const position = this.projection.toSource(this.model.getValue(), this.model.getOffsetAt(hit)), revision = this.dropRevision;
@@ -267,8 +284,10 @@ export class DextCodeEditor {
   applyTheme(theme?: EditorTokenTheme): void {
     if (theme) this.theme = theme; applyMonacoTheme(this.theme);
     const css = getComputedStyle(document.body);
-    this.view.updateOptions({ fontFamily: css.getPropertyValue("--vscode-editor-font-family").trim() || "Consolas, monospace",
-      fontSize: parseFloat(css.getPropertyValue("--vscode-editor-font-size")) || 13 });
+    this.view.updateOptions({
+      fontFamily: css.getPropertyValue("--vscode-editor-font-family").trim() || "Consolas, monospace",
+      fontSize: parseFloat(css.getPropertyValue("--vscode-editor-font-size")) || 13
+    });
   }
   setMode(mode: ComposerEditorMode): void {
     const enabled = mode === "code";
@@ -280,7 +299,8 @@ export class DextCodeEditor {
     this.view.updateOptions({
       wordWrap: enabled ? "off" : "on",
       lineNumbers: enabled ? "on" : "off",
-      renderLineHighlight: enabled ? "all" : "none",
+      lineDecorationsWidth: 10,
+      renderLineHighlight: "none",
       parameterHints: { enabled },
       renderValidationDecorations: enabled ? "on" : "off"
     });
@@ -294,8 +314,10 @@ export class DextCodeEditor {
     const result = this.languageEnabled && source.trim() ? await this.options.broker.request(source, source.length, undefined, "diagnostics") : undefined;
     if (this.destroyed || revision !== this.dropRevision) return;
     const diagnostics = result?.diagnostics ?? [];
-    monaco.editor.setModelMarkers(this.model, "dext", diagnostics.map(d => ({ ...this.sourceRange(d.from ?? d.offset, d.to ?? d.offset + 1),
-      message: d.message, severity: d.severity === "error" ? monaco.MarkerSeverity.Error : monaco.MarkerSeverity.Warning })));
+    monaco.editor.setModelMarkers(this.model, "dext", diagnostics.map(d => ({
+      ...this.sourceRange(d.from ?? d.offset, d.to ?? d.offset + 1),
+      message: d.message, severity: d.severity === "error" ? monaco.MarkerSeverity.Error : monaco.MarkerSeverity.Warning
+    })));
     this.options.onDiagnosticsChanged({ errors: diagnostics.filter(d => d.severity === "error").length, warnings: diagnostics.filter(d => d.severity === "warning").length });
     this.options.onInputKindChanged(result?.inputKind ?? (source.trim() ? "workflow" : "empty"));
   }
@@ -303,6 +325,8 @@ export class DextCodeEditor {
     const marker = monaco.editor.getModelMarkers({ resource: this.model.uri, owner: "dext" })[0]; if (!marker) return false;
     this.view.setSelection(marker); this.view.revealRangeInCenterIfOutsideViewport(marker); this.focus(); return true;
   }
-  destroy(): void { this.destroyed = true; this.dropRevision++; if (this.diagnosticsTimer) clearTimeout(this.diagnosticsTimer);
-    this.removeFileDropListeners?.(); for (const item of this.disposables) item.dispose(); this.view.dispose(); this.model.dispose(); }
+  destroy(): void {
+    this.destroyed = true; this.dropRevision++; if (this.diagnosticsTimer) clearTimeout(this.diagnosticsTimer);
+    this.removeFileDropListeners?.(); for (const item of this.disposables) item.dispose(); this.view.dispose(); this.model.dispose();
+  }
 }

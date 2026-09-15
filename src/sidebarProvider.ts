@@ -47,6 +47,7 @@ import type { DextHistoryRecord, DextHistorySession, DextHistoryStore } from "./
 import type { DextConversationPreferences } from "./conversationPreferences.js";
 import { conversationTitle, historyTurnTitle } from "./historyRender.js";
 import { normalizeInputReferenceSource } from "./core/fileReference.js";
+import type { ProjectReferenceCandidate } from "./core/projectReference.js";
 import type { McpServerConfig } from "./core/mcpRegistry.js";
 
 /** An `agent(apply=False)` step proposes changes and writes nothing, so its
@@ -176,6 +177,10 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   private planReviewStore: Map<string, PlanReview> | undefined;
   private runSuggestionStore: Map<string, KnowledgeSuggestion[]> | undefined;
   private projectPreset: (() => ReviewPreset) | undefined;
+  private projectReferences?: {
+    search(query: string): Promise<ProjectReferenceCandidate[]> | ProjectReferenceCandidate[];
+    open(objectId: string): Promise<void>;
+  };
   private reviewKnowledge: ReviewKnowledgeSink | undefined;
 
   private get turnPresets(): Map<string, CapturedTurnPreset> {
@@ -485,6 +490,11 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   /** Supplies the project's default Review preset. Without it the built-in default is used. */
   setProjectPresetSource(source: () => ReviewPreset): void {
     this.projectPreset = source;
+  }
+
+  /** Data for explicit # completion/navigation only. This provider never participates in send. */
+  setProjectReferenceSource(source: NonNullable<DextSidebarProvider["projectReferences"]>): void {
+    this.projectReferences = source;
   }
 
   /**
@@ -1233,6 +1243,19 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           }
         case "openFileReference":
           await openDextFileReference(request.reference, this.application.storage);
+          break;
+        case "searchProjectReferences": {
+          try {
+            const items = this.projectReferences ? await this.projectReferences.search(request.query) : [];
+            await this.post({ type: "projectReferenceSearchResult", requestId: request.requestId, items });
+          } catch (error) {
+            await this.post({ type: "projectReferenceSearchResult", requestId: request.requestId, items: [], error: error instanceof Error ? error.message : String(error) });
+          }
+          break;
+        }
+        case "openProjectReference":
+          if (!this.projectReferences) throw new Error("Project knowledge is not available in this workspace.");
+          await this.projectReferences.open(request.objectId);
           break;
         case "openBuiltinApiDefinition":
           await openBuiltinApiDefinition(request.id);

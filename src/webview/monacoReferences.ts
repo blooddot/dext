@@ -1,5 +1,5 @@
 import type * as Monaco from "monaco-editor";
-import { atReferenceOccurrences, compactFileReferenceLabel, type ContextReferenceOccurrence } from "../core/fileReference.js";
+import { contextReferenceOccurrences, contextReferenceLabel, type ContextReferenceOccurrence } from "../core/fileReference.js";
 
 export interface ProjectedReference {
   viewFrom: number;
@@ -34,7 +34,7 @@ export class ReferenceProjection {
   }
 
   encode(source: string): string {
-    const refs = atReferenceOccurrences(source);
+    const refs = contextReferenceOccurrences(source);
     let result = "", from = 0;
     for (const ref of refs) {
       result += this.literal(source.slice(from, ref.start), source);
@@ -78,7 +78,7 @@ export class ReferenceProjection {
     for (let i = 0; i < view.length; i++) {
       const expression = this.values.get(view[i]!);
       if (expression) {
-        const reference = atReferenceOccurrences(expression)[0];
+        const reference = contextReferenceOccurrences(expression)[0];
         if (reference) result.push({ viewFrom: i, viewTo: i + 1, sourceFrom: source, sourceTo: source + expression.length,
           reference: { ...reference, start: source, end: source + expression.length } });
       }
@@ -91,7 +91,7 @@ export class ReferenceProjection {
 export function referenceDecorations(projection: ReferenceProjection, model: Monaco.editor.ITextModel, columns = 20): Monaco.editor.IModelDeltaDecoration[] {
   return projection.references(model.getValue()).map((ref, index) => {
     const from = model.getPositionAt(ref.viewFrom), to = model.getPositionAt(ref.viewTo);
-    const full = compactFileReferenceLabel(ref.reference.payload);
+    const full = contextReferenceLabel(ref.reference);
     // A bounded label fits a narrow sidebar. The hover always exposes the full path.
     const characters = Array.from(full), width = (character: string) => character.codePointAt(0)! > 255 ? 2 : 1;
     const take = (values: string[], maximum: number) => { let total = 0; return values.filter(character => (total += width(character)) <= maximum); };

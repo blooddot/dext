@@ -20,6 +20,7 @@ import type {
 import type { ConversationSummary, SidebarState, WebviewRequest, WebviewResponse } from "../webviewProtocol.js";
 import { ClipboardClient } from "./clipboardClient.js";
 import { FileSearchClient } from "./fileSearchClient.js";
+import { ProjectReferenceClient } from "./projectReferenceClient.js";
 import { FileDropClient } from "./fileDropClient.js";
 import { DextCodeEditor } from "./codeEditor.js";
 import { LanguageRequestBroker } from "./languageClient.js";
@@ -40,7 +41,7 @@ import {
 } from "../turnPresentation.js";
 
 import {
-  compactFileReferenceLabel,
+  contextReferenceLabel,
   inputReferenceDisplayParts,
   inputReferenceDisplayText,
   normalizeInputReferenceSource,
@@ -169,6 +170,7 @@ let pendingConfirmation: (() => void) | undefined;
 const broker = new LanguageRequestBroker((request) => vscode.postMessage(request));
 const clipboard = new ClipboardClient((request) => vscode.postMessage(request));
 const fileSearch = new FileSearchClient((request) => vscode.postMessage(request));
+const projectReferences = new ProjectReferenceClient((request) => vscode.postMessage(request), (message) => renderError(new Error(message)));
 const fileDrop = new FileDropClient((request) => vscode.postMessage(request));
 let executing = false;
 let stopping = false;
@@ -444,6 +446,7 @@ const editor = new DextCodeEditor({
   broker,
   clipboard,
   files: fileSearch,
+  projects: projectReferences,
   resolveDroppedFiles: (paths) => fileDrop.resolve(paths),
   onRun: run,
   onOpenReference: openInputReference,
@@ -465,6 +468,10 @@ const editor = new DextCodeEditor({
 });
 
 function openInputReference(reference: ContextReferenceOccurrence): void {
+  if (reference.kind === "project") {
+    vscode.postMessage({ type: "openProjectReference", objectId: reference.payload });
+    return;
+  }
   if (reference.kind === "file") {
     vscode.postMessage({ type: "openFileReference", reference: reference.payload });
   }
@@ -1895,7 +1902,8 @@ function outputTurnSection(section: TurnSectionPresentation, open: boolean): {
   return { ...view, disclosure: view.disclosure as HTMLDetailsElement };
 }
 
-function referenceIcon(kind: "file" | "dir" | "symbol" | "selection" | "activeFile"): string {
+function referenceIcon(kind: ContextReferenceOccurrence["kind"]): string {
+  if (kind === "project") return "symbol-module";
   if (kind === "dir") return "folder";
   if (kind === "symbol") return "symbol-method";
   return "file";
@@ -1986,7 +1994,7 @@ function highlightDextFragment(source: string): DocumentFragment {
 
 function inputReferenceChipElement(reference: ContextReferenceOccurrence): HTMLElement {
   const descriptor = fileReferenceChipDescriptor(
-    compactFileReferenceLabel(reference.payload),
+    contextReferenceLabel(reference),
     reference.payload
   );
   return createFileReferenceChip({
@@ -1994,7 +2002,7 @@ function inputReferenceChipElement(reference: ContextReferenceOccurrence): HTMLE
     ...descriptor,
     modifierClass: "output-file-reference",
     icon: referenceIcon(reference.kind),
-    ...(reference.kind === "file"
+    ...(reference.kind === "file" || reference.kind === "project"
       ? { onOpen: () => openInputReference(reference) }
       : {})
   });
@@ -3487,7 +3495,7 @@ elements.inputShell.addEventListener("paste", (event) => {
 
 window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   const message = event.data;
-  if (broker.accept(message) || clipboard.accept(message) || fileSearch.accept(message) || fileDrop.accept(message)) return;
+  if (broker.accept(message) || clipboard.accept(message) || fileSearch.accept(message) || projectReferences.accept(message) || fileDrop.accept(message)) return;
   if (message.type === "turnRenamed") {
     if (renderedConversationId === message.sessionId) {
       outputTurns.get(message.turnId)?.title.rename(message.title, message.displayTitle);

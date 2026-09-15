@@ -2,6 +2,18 @@ import { describe, expect, it } from "vitest";
 import { ReferenceProjection } from "../src/webview/monacoReferences.js";
 
 describe("Monaco reference source mapping", () => {
+  it("projects mixed @ and # tokens atomically without expanding Project knowledge", () => {
+    const source = 'agent(input="修改 #TaskQuery[module%3Aone]，参考 @src/a.ts#L2,1-L3,2")';
+    const projection = new ReferenceProjection();
+    const view = projection.encode(source);
+    const references = projection.references(view);
+    expect(references.map((item) => item.reference.kind)).toEqual(["project", "file"]);
+    expect(references[0]?.reference).toMatchObject({ payload: "module:one", label: "#TaskQuery" });
+    expect(projection.decode(view)).toBe(source);
+    const first = references[0]!;
+    expect(projection.decode(view.slice(0, first.viewFrom) + view.slice(first.viewTo))).toBe(source.replace("#TaskQuery[module%3Aone]", ""));
+    expect(projection.decode(view)).toBe(source); // Native undo restores the original token.
+  });
   const source = 'agent(input="中😀 @src/界面/main.ts#L12,5-L20,6 和 @other/main.ts\n@.dext-global/attachments/test.png")';
   it("round trips Unicode, ranges and identical filenames without persisting view markers", () => {
     const projection = new ReferenceProjection(); const view = projection.encode(source);

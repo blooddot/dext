@@ -96,6 +96,8 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
     query: z.string().max(120)
   }),
   z.object({ type: z.literal("chooseFiles") }),
+  z.object({ type: z.literal("searchProjectReferences"), requestId: z.string().min(1), query: z.string().max(200) }),
+  z.object({ type: z.literal("openProjectReference"), objectId: z.string().min(1).max(256) }),
   z.object({
     type: z.literal("resolveDroppedFiles"),
     requestId: z.number().int().nonnegative(),
@@ -326,6 +328,7 @@ export type WebviewResponse =
     fileReferences?: Array<{ expression: string; payload: string }>;
   }
   | { type: "searchFilesResult"; requestId: number; files: string[] }
+  | { type: "projectReferenceSearchResult"; requestId: string; items: Array<{ objectId: string; canonicalName: string; displayName?: string; aliases: string[]; kind: string; token: string }>; error?: string }
   | { type: "resolveDroppedFilesResult"; requestId: number; expressions: string[]; error?: string }
   | { type: "setInput"; source: string }
   | { type: "focusInput" }

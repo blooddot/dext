@@ -20,7 +20,7 @@ import type { PatchChange } from "./core/types.js";
 import { dextClassHighlighter, dextTokenStyles, shouldHighlightInput } from "./dextTokenTheme.js";
 import { prepareHistoryTrace } from "./core/agentTraceReplay.js";
 import {
-  compactFileReferenceLabel,
+  contextReferenceLabel,
   inputReferenceDisplayParts,
   inputReferenceDisplayText,
   normalizeInputReferenceSource,
@@ -273,6 +273,7 @@ export function highlightTerminal(source: string): string {
 }
 
 function referenceIcon(reference: ContextReferenceOccurrence): string {
+  if (reference.kind === "project") return "symbol-module";
   if (reference.kind === "dir") return "folder";
   if (reference.kind === "symbol") return "symbol-method";
   return "file";
@@ -281,7 +282,7 @@ function referenceIcon(reference: ContextReferenceOccurrence): string {
 /** History keeps readable source for copy/replay and renders @path tokens as
  * Chips in the rendered view. */
 function inputReferenceChip(reference: ContextReferenceOccurrence): string {
-  const label = compactFileReferenceLabel(reference.payload);
+  const label = contextReferenceLabel(reference);
   const title = escapeHtml(reference.payload);
   const open = reference.kind === "file"
     ? ` data-open-file-reference="${title}"`

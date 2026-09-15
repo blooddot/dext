@@ -1,4 +1,5 @@
 import type { Range } from "./types.js";
+import { projectReferenceOccurrences } from "./projectReference.js";
 
 export interface DextFileReference {
   expression: string;
@@ -18,7 +19,8 @@ export interface FileReferenceOccurrence {
 }
 
 export interface ContextReferenceOccurrence extends FileReferenceOccurrence {
-  kind: "file" | "dir" | "symbol" | "selection" | "activeFile";
+  kind: "file" | "dir" | "symbol" | "selection" | "activeFile" | "project";
+  label?: string;
 }
 
 /** A reference token is a readable file path. Workspace files use a relative
@@ -140,11 +142,24 @@ export function atReferenceOccurrences(source: string): ContextReferenceOccurren
 
 /** @deprecated Kept as a stable editor integration name. */
 export function inputReferenceProjections(source: string): InputReferenceProjection[] {
-  return atReferenceOccurrences(source).map((reference) => ({
+  return contextReferenceOccurrences(source).map((reference) => ({
     reference,
     interpolationStart: reference.start,
     interpolationEnd: reference.end
   }));
+}
+
+/** Editor-only union. File attachment/CLI resolution continues to use atReferenceOccurrences. */
+export function contextReferenceOccurrences(source: string): ContextReferenceOccurrence[] {
+  const projects: ContextReferenceOccurrence[] = projectReferenceOccurrences(source).map((item) => ({
+    kind: "project", start: item.start, end: item.end, expression: item.expression,
+    payload: item.reference.objectId, label: `#${item.reference.canonicalName}`
+  }));
+  return [...atReferenceOccurrences(source), ...projects].sort((left, right) => left.start - right.start);
+}
+
+export function contextReferenceLabel(reference: ContextReferenceOccurrence): string {
+  return reference.kind === "project" ? reference.label ?? `#${reference.payload}` : compactFileReferenceLabel(reference.payload);
 }
 
 /** Presentation extracts real @tokens from readable source. Historical marker
@@ -154,7 +169,7 @@ export function inputReferenceDisplayParts(source: string): InputReferenceDispla
   const normalized = normalizeInputReferenceSource(source);
   const parts: InputReferenceDisplayPart[] = [];
   let cursor = 0;
-  for (const occurrence of atReferenceOccurrences(normalized)) {
+  for (const occurrence of contextReferenceOccurrences(normalized)) {
     if (cursor < occurrence.start) parts.push({ kind: "text", value: normalized.slice(cursor, occurrence.start) });
     parts.push({ kind: "ref", reference: occurrence });
     cursor = occurrence.end;
@@ -165,7 +180,7 @@ export function inputReferenceDisplayParts(source: string): InputReferenceDispla
 
 export function inputReferenceDisplayText(source: string): string {
   return inputReferenceDisplayParts(source)
-    .map((part) => part.kind === "text" ? part.value : compactFileReferenceLabel(part.reference.payload))
+    .map((part) => part.kind === "text" ? part.value : contextReferenceLabel(part.reference))
     .join("");
 }
 
