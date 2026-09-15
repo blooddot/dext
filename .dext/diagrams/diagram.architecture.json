@@ -1,0 +1,289 @@
+{
+  "schemaVersion": 1,
+  "id": "diagram.architecture",
+  "title": "Dext high-level architecture",
+  "kind": "architecture",
+  "nodes": [
+    {
+      "id": "n.application",
+      "label": "Dext application",
+      "role": "system",
+      "description": "Extension coordinator and project AI bridge.",
+      "semanticIds": [
+        "ctx.application_runtime"
+      ],
+      "evidence": [
+        {
+          "path": "src/application.ts",
+          "symbol": "constructor",
+          "line": 91,
+          "contentHash": "e145277615e1406626c14aafcbba35328acb69c6ffc0510e70172c9547f545d2"
+        }
+      ],
+      "confidence": 0.95,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "n.language",
+      "label": "Language and workflow services",
+      "role": "context",
+      "description": "Registry, language service, context resolver, compiler, and workflow runtime.",
+      "semanticIds": [
+        "ctx.language_workflow",
+        "cap.dext_execution"
+      ],
+      "evidence": [
+        {
+          "path": "src/application.ts",
+          "line": 4,
+          "contentHash": "e145277615e1406626c14aafcbba35328acb69c6ffc0510e70172c9547f545d2"
+        }
+      ],
+      "confidence": 0.9,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "n.runtime",
+      "label": "Dext runtime",
+      "role": "service",
+      "description": "Executes Dext conversations and callable methods.",
+      "semanticIds": [
+        "term.dext_runtime"
+      ],
+      "evidence": [
+        {
+          "path": "src/application.ts",
+          "line": 9,
+          "contentHash": "e145277615e1406626c14aafcbba35328acb69c6ffc0510e70172c9547f545d2"
+        }
+      ],
+      "confidence": 0.88,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "n.agent",
+      "label": "Agent routing and runners",
+      "role": "service",
+      "description": "Routes requests to Codex, Claude, or DeepSeek Harness.",
+      "semanticIds": [
+        "ctx.agent_execution",
+        "cap.agent_conversations"
+      ],
+      "evidence": [
+        {
+          "path": "src/core/agentRouter.ts",
+          "line": 3,
+          "contentHash": "620edcd5d0407505b28f5d77b1d692c91106fef6af6434f1c4ef2a56d735267e"
+        }
+      ],
+      "confidence": 0.95,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "n.profiles",
+      "label": "Agent profiles",
+      "role": "container",
+      "description": "Provider, model, permission, and preset configuration.",
+      "semanticIds": [
+        "term.agent_profile",
+        "term.agent_permission",
+        "term.conversation_selection"
+      ],
+      "evidence": [
+        {
+          "path": "src/agentProfiles.ts",
+          "line": 9,
+          "contentHash": "f51891284903e5f73ad314350da697d496e25bc45c924934d06ab932ea511230"
+        }
+      ],
+      "confidence": 0.94,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "n.resources",
+      "label": "Project resources",
+      "role": "container",
+      "description": "MCP, skills, rules, and custom API loading.",
+      "semanticIds": [
+        "cap.project_resources"
+      ],
+      "evidence": [
+        {
+          "path": "src/application.ts",
+          "symbol": "reload",
+          "line": 184,
+          "contentHash": "e145277615e1406626c14aafcbba35328acb69c6ffc0510e70172c9547f545d2"
+        }
+      ],
+      "confidence": 0.88,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "n.vscode",
+      "label": "VS Code UI and persistence",
+      "role": "boundary",
+      "description": "Webviews, forms, history preferences, storage, and attachments.",
+      "semanticIds": [
+        "ctx.vscode_persistence",
+        "cap.conversation_state"
+      ],
+      "evidence": [
+        {
+          "path": "src/conversationPreferences.ts",
+          "symbol": "DextConversationPreferences",
+          "line": 40,
+          "contentHash": "68a9546ad33538f074f904a76c147ac3e2738442f861c3ca9043f0d5808ced75"
+        }
+      ],
+      "confidence": 0.88,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "n.developer",
+      "label": "Developer",
+      "role": "actor",
+      "description": "Uses VS Code to request assistance and manage conversations.",
+      "semanticIds": [],
+      "evidence": [
+        {
+          "path": "src/application.ts",
+          "symbol": "projectAiProvider",
+          "line": 56,
+          "contentHash": "e145277615e1406626c14aafcbba35328acb69c6ffc0510e70172c9547f545d2"
+        }
+      ],
+      "confidence": 0.8,
+      "review": "draft",
+      "freshness": "current"
+    }
+  ],
+  "relations": [
+    {
+      "id": "rel.app-language",
+      "from": "n.application",
+      "to": "n.language",
+      "kind": "depends_on",
+      "evidence": [
+        {
+          "path": "src/application.ts",
+          "line": 4,
+          "contentHash": "e145277615e1406626c14aafcbba35328acb69c6ffc0510e70172c9547f545d2"
+        }
+      ],
+      "confidence": 0.9,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "rel.app-runtime",
+      "from": "n.application",
+      "to": "n.runtime",
+      "kind": "depends_on",
+      "evidence": [
+        {
+          "path": "src/application.ts",
+          "line": 9,
+          "contentHash": "e145277615e1406626c14aafcbba35328acb69c6ffc0510e70172c9547f545d2"
+        }
+      ],
+      "confidence": 0.92,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "rel.runtime-agent",
+      "from": "n.runtime",
+      "to": "n.agent",
+      "kind": "calls",
+      "evidence": [
+        {
+          "path": "src/application.ts",
+          "symbol": "projectAiProvider",
+          "line": 58,
+          "contentHash": "e145277615e1406626c14aafcbba35328acb69c6ffc0510e70172c9547f545d2"
+        }
+      ],
+      "confidence": 0.9,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "rel.agent-profiles",
+      "from": "n.agent",
+      "to": "n.profiles",
+      "kind": "depends_on",
+      "evidence": [
+        {
+          "path": "src/core/agentRouter.ts",
+          "line": 1,
+          "contentHash": "620edcd5d0407505b28f5d77b1d692c91106fef6af6434f1c4ef2a56d735267e"
+        }
+      ],
+      "confidence": 0.9,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "rel.app-resources",
+      "from": "n.application",
+      "to": "n.resources",
+      "kind": "calls",
+      "evidence": [
+        {
+          "path": "src/application.ts",
+          "symbol": "reload",
+          "line": 184,
+          "contentHash": "e145277615e1406626c14aafcbba35328acb69c6ffc0510e70172c9547f545d2"
+        }
+      ],
+      "confidence": 0.9,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "rel.app-vscode",
+      "from": "n.application",
+      "to": "n.vscode",
+      "kind": "depends_on",
+      "evidence": [
+        {
+          "path": "src/application.ts",
+          "line": 44,
+          "contentHash": "e145277615e1406626c14aafcbba35328acb69c6ffc0510e70172c9547f545d2"
+        }
+      ],
+      "confidence": 0.84,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "rel.developer-app",
+      "from": "n.developer",
+      "to": "n.application",
+      "kind": "calls",
+      "evidence": [
+        {
+          "path": "src/application.ts",
+          "symbol": "projectAiProvider",
+          "line": 56,
+          "contentHash": "e145277615e1406626c14aafcbba35328acb69c6ffc0510e70172c9547f545d2"
+        }
+      ],
+      "confidence": 0.8,
+      "review": "draft",
+      "freshness": "current"
+    }
+  ],
+  "version": 0,
+  "updatedAt": 1789501630754,
+  "confidence": 0.9,
+  "review": "draft",
+  "freshness": "current"
+}

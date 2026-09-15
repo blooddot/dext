@@ -1,0 +1,222 @@
+{
+  "schemaVersion": 1,
+  "id": "diagram.agent-sequence",
+  "title": "Agent conversation sequence",
+  "kind": "sequence",
+  "nodes": [
+    {
+      "id": "q.developer",
+      "label": "Developer request",
+      "role": "actor",
+      "description": "Requests project AI assistance.",
+      "semanticIds": [],
+      "evidence": [
+        {
+          "path": "src/application.ts",
+          "symbol": "projectAiProvider",
+          "line": 56,
+          "contentHash": "e145277615e1406626c14aafcbba35328acb69c6ffc0510e70172c9547f545d2"
+        }
+      ],
+      "confidence": 0.8,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "q.application",
+      "label": "DextApplication.projectAiProvider",
+      "role": "step",
+      "description": "Starts an Ask-mode conversation.",
+      "semanticIds": [
+        "ctx.application_runtime"
+      ],
+      "evidence": [
+        {
+          "path": "src/application.ts",
+          "symbol": "projectAiProvider",
+          "line": 56,
+          "contentHash": "e145277615e1406626c14aafcbba35328acb69c6ffc0510e70172c9547f545d2"
+        }
+      ],
+      "confidence": 0.95,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "q.runtime",
+      "label": "Dext runtime",
+      "role": "step",
+      "description": "Executes the conversation request.",
+      "semanticIds": [
+        "term.dext_runtime"
+      ],
+      "evidence": [
+        {
+          "path": "src/application.ts",
+          "symbol": "projectAiProvider",
+          "line": 58,
+          "contentHash": "e145277615e1406626c14aafcbba35328acb69c6ffc0510e70172c9547f545d2"
+        }
+      ],
+      "confidence": 0.9,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "q.router",
+      "label": "DefaultAgentRunner",
+      "role": "step",
+      "description": "Selects provider-specific runner.",
+      "semanticIds": [
+        "ctx.agent_execution"
+      ],
+      "evidence": [
+        {
+          "path": "src/core/agentRouter.ts",
+          "symbol": "DefaultAgentRunner",
+          "line": 3,
+          "contentHash": "620edcd5d0407505b28f5d77b1d692c91106fef6af6434f1c4ef2a56d735267e"
+        }
+      ],
+      "confidence": 0.95,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "q.provider",
+      "label": "CLI or Harness provider",
+      "role": "service",
+      "description": "Runs the provider conversation.",
+      "semanticIds": [
+        "cap.agent_conversations"
+      ],
+      "evidence": [
+        {
+          "path": "src/core/agentRouter.ts",
+          "symbol": "runner",
+          "line": 6,
+          "contentHash": "620edcd5d0407505b28f5d77b1d692c91106fef6af6434f1c4ef2a56d735267e"
+        }
+      ],
+      "confidence": 0.9,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "q.result",
+      "label": "Assistant text",
+      "role": "step",
+      "description": "Application returns text and optional model metadata.",
+      "semanticIds": [
+        "cap.agent_conversations"
+      ],
+      "evidence": [
+        {
+          "path": "src/application.ts",
+          "symbol": "projectAiProvider",
+          "line": 80,
+          "contentHash": "e145277615e1406626c14aafcbba35328acb69c6ffc0510e70172c9547f545d2"
+        }
+      ],
+      "confidence": 0.92,
+      "review": "draft",
+      "freshness": "current"
+    }
+  ],
+  "relations": [
+    {
+      "id": "seq-1",
+      "from": "q.developer",
+      "to": "q.application",
+      "kind": "flows_to",
+      "order": 0,
+      "evidence": [
+        {
+          "path": "src/application.ts",
+          "symbol": "projectAiProvider",
+          "line": 56,
+          "contentHash": "e145277615e1406626c14aafcbba35328acb69c6ffc0510e70172c9547f545d2"
+        }
+      ],
+      "confidence": 0.8,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "seq-2",
+      "from": "q.application",
+      "to": "q.runtime",
+      "kind": "calls",
+      "order": 1,
+      "evidence": [
+        {
+          "path": "src/application.ts",
+          "symbol": "projectAiProvider",
+          "line": 58,
+          "contentHash": "e145277615e1406626c14aafcbba35328acb69c6ffc0510e70172c9547f545d2"
+        }
+      ],
+      "confidence": 0.95,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "seq-3",
+      "from": "q.runtime",
+      "to": "q.router",
+      "kind": "calls",
+      "order": 2,
+      "evidence": [
+        {
+          "path": "src/core/agentRouter.ts",
+          "line": 3,
+          "contentHash": "620edcd5d0407505b28f5d77b1d692c91106fef6af6434f1c4ef2a56d735267e"
+        }
+      ],
+      "confidence": 0.88,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "seq-4",
+      "from": "q.router",
+      "to": "q.provider",
+      "kind": "calls",
+      "order": 3,
+      "evidence": [
+        {
+          "path": "src/core/agentRouter.ts",
+          "symbol": "runner",
+          "line": 6,
+          "contentHash": "620edcd5d0407505b28f5d77b1d692c91106fef6af6434f1c4ef2a56d735267e"
+        }
+      ],
+      "confidence": 0.95,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "seq-5",
+      "from": "q.provider",
+      "to": "q.result",
+      "kind": "flows_to",
+      "order": 4,
+      "evidence": [
+        {
+          "path": "src/application.ts",
+          "symbol": "projectAiProvider",
+          "line": 80,
+          "contentHash": "e145277615e1406626c14aafcbba35328acb69c6ffc0510e70172c9547f545d2"
+        }
+      ],
+      "confidence": 0.9,
+      "review": "draft",
+      "freshness": "current"
+    }
+  ],
+  "version": 0,
+  "updatedAt": 1789501630754,
+  "confidence": 0.91,
+  "review": "draft",
+  "freshness": "current"
+}

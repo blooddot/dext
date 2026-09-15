@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "version": 10,
+  "preset": {
+    "default": "engineering"
+  },
+  "knowledge": {
+    "enabled": true,
+    "initialized": true
+  },
+  "ai": {
+    "cli": "codex",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "ultra",
+    "speed": "fast"
+  },
+  "scan": {
+    "roots": [
+      "src"
+    ],
+    "includeTests": false,
+    "extraExcludes": []
+  },
+  "updatedAt": 1789501630776
+}
