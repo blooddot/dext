@@ -62,7 +62,6 @@ export function harnessSpawnCommand(command: string, args: readonly string[], op
     finally { closeSync(fd); }
     const target = basename(canonical).replace(/\.exe$/i, "");
     const manager = target === "mise" || script.includes("__MISE_SHIM_PATH") || /[/\\]mise[/\\]shims[/\\]/i.test(path) || /\bmise(?:\.exe)?["']?\s+(?:x|exec)\b/.test(script) ? "mise"
-      : target === "volta" || /\bvolta(?:\.exe)?["']?\s+run\b/i.test(script) || script.includes("VOLTA_HOME") ? "volta"
       : /\basdf\b[^\r\n]*\bexec\b/.test(script) ? "asdf" : undefined;
     if (manager) {
       const name = basename(path).replace(/\.(?:exe|cmd|bat)$/i, "");
@@ -99,10 +98,6 @@ export function harnessSpawnCommand(command: string, args: readonly string[], op
               if (existsSync(shim)) return unwrap(shim, miseNode);
             } catch { /* Keep searching installed versions. */ }
           }
-        }
-        if (manager === "volta") {
-          const shim = join(dirname(dirname(path)), "tools", "image", "packages", "@deepseek-ai", "dsh", windows ? "dsh.cmd" : "dsh");
-          if (existsSync(shim)) return unwrap(shim);
         }
         throw error;
       }
