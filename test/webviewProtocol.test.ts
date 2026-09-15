@@ -27,6 +27,16 @@ describe("Webview protocol", () => {
     expect(webviewRequestSchema.safeParse({ type: "openBuiltinApiDefinition", id: "node/url/parse" }).success).toBe(false);
   });
 
+  it("binds a Review decision to one run and one of two outcomes", () => {
+    const request = { type: "reviewDecision", sessionId: "session", turnId: "turn", runId: "run", decision: "accepted" };
+    expect(webviewRequestSchema.parse(request)).toEqual(request);
+    expect(webviewRequestSchema.safeParse({ ...request, decision: "rejected" }).success).toBe(true);
+    // A decision without a run could land on a later retry, so every key is required.
+    expect(webviewRequestSchema.safeParse({ ...request, runId: undefined }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({ ...request, runId: "" }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({ ...request, decision: "pending" }).success).toBe(false);
+  });
+
   it("requires conversation ownership and bounds agent question answers", () => {
     const request = { type: "agentInputResponse", sessionId: "session", turnId: "turn", requestId: "request", answers: { q: { answers: ["Yes"] } } };
     expect(webviewRequestSchema.parse(request)).toEqual(request);

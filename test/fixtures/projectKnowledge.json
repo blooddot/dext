@@ -1,0 +1,76 @@
+{
+  "project": {
+    "name": "react-tauri-fixture",
+    "root": "fixtures/desktop",
+    "languages": ["typescript", "python", "rust"],
+    "preset": "engineering"
+  },
+  "objects": [
+    {
+      "id": "ui.dashboard",
+      "canonicalName": "DashboardView",
+      "displayName": "仪表盘视图",
+      "aliases": ["Dashboard", "仪表盘"],
+      "kind": "module",
+      "description": "React view that renders task statistics.",
+      "behavior": ["Renders the current task summary", "Delegates transport to the IPC bridge"],
+      "paths": ["src/ui/Dashboard.tsx"],
+      "relatedIds": ["task.query"],
+      "source": "user",
+      "confirmation": "accepted",
+      "validity": "current",
+      "ownership": "owned",
+      "confidence": 1,
+      "evidence": [{ "path": "src/ui/Dashboard.tsx", "symbol": "DashboardView" }],
+      "version": 1
+    },
+    {
+      "id": "task.query",
+      "canonicalName": "TaskQuery",
+      "displayName": "任务查询",
+      "aliases": ["TaskQuery", "任务查询"],
+      "kind": "feature",
+      "description": "Reads task rows from the Rust command layer.",
+      "behavior": ["Returns tasks ordered by creation time"],
+      "paths": ["src-tauri/src/tasks.rs"],
+      "relatedIds": ["ui.dashboard"],
+      "source": "ai",
+      "confirmation": "draft",
+      "validity": "needs_verification",
+      "ownership": "candidate",
+      "confidence": 0.6,
+      "evidence": [{ "path": "src-tauri/src/tasks.rs", "symbol": "list_tasks" }],
+      "version": 1
+    },
+    {
+      "id": "legacy.report",
+      "canonicalName": "LegacyReport",
+      "kind": "module",
+      "description": "Python report helper migrated to the fixture.",
+      "behavior": [],
+      "paths": ["tools/report.py"],
+      "relatedIds": [],
+      "source": "code",
+      "confirmation": "accepted",
+      "validity": "stale",
+      "ownership": "unassigned",
+      "confidence": 0.9,
+      "evidence": [],
+      "version": 1,
+      "status": "stale"
+    }
+  ],
+  "architecture": {
+    "modules": [
+      { "id": "src/ui", "name": "ui", "language": "typescript", "paths": ["src/ui/Dashboard.tsx"], "source": "detected" },
+      { "id": "src-tauri", "name": "src-tauri", "language": "rust", "paths": ["src-tauri/src/main.rs", "src-tauri/src/tasks.rs"], "source": "detected" },
+      { "id": "tools", "name": "tools", "language": "python", "paths": ["tools/report.py"], "source": "detected" }
+    ],
+    "relations": [
+      { "from": "src/ui", "to": "ipc", "source": "declared", "confidence": 1, "reason": "Tauri IPC contract" },
+      { "from": "src/ui", "to": "src-tauri", "source": "detected", "confidence": 0.8, "file": "src/ui/Dashboard.tsx", "line": 3 }
+    ],
+    "rules": [{ "id": "no-ui-db", "type": "deny", "from": "src/ui", "to": "src-tauri", "reason": "The UI reaches storage only through IPC." }],
+    "decisions": [{ "id": "ipc-only", "title": "IPC-only boundary", "detail": "React never opens the database directly." }]
+  }
+}

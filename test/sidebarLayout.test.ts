@@ -40,16 +40,21 @@ describe("sidebar panel layout", () => {
     expect(css).toContain(".composer-model-group-heading {");
   });
 
-  it("keeps API out of the main flow and exposes it from the view title bar", async () => {
+  it("moves API and Global Resources out of the sidebar into editor tabs", async () => {
     const html = await source("src/sidebarProvider.ts");
     const manifest = await source("package.json");
+    const extension = await source("src/extension.ts");
     expect(html).toContain('<section id="input-section" class="input-section">');
     expect(html).toContain('id="input-heading" class="section-heading collapsible-heading" role="button" tabindex="0" aria-expanded="true"');
     expect(html).not.toContain('id="view-methods"');
     expect(manifest).toContain('"command": "dext.viewApis"');
-    expect(html).toMatch(/viewApis\(\): void \{\r?\n[ ]{4}this\.postWhenReady\(\{ type: "openMethods" \}\);/);
-    expect(html).toContain('<dialog id="methods-dialog" class="methods-dialog"');
-    expect(html).toContain('id="close-methods"');
+    // The directory dialogs are gone; the commands open editor tabs instead.
+    expect(html).not.toContain('<dialog id="methods-dialog"');
+    expect(html).not.toContain('<dialog id="mcp-dialog"');
+    expect(html).not.toMatch(/viewApis\(\): void \{\r?\n[ ]{4}this\.postWhenReady\(\{ type: "openMethods" \}\);/);
+    expect(extension).toContain('vscode.commands.registerCommand("dext.viewApis"');
+    expect(extension).toContain("editors.api?.showList()");
+    expect(extension).toContain("editors.globalResources?.showList()");
     expect(html).not.toContain('id="methods-section"');
     expect(html.indexOf('id="result-section"')).toBeLessThan(html.indexOf('id="input-section"'));
     expect(html).toMatch(/id="input-body" class="collapsible-body input-body"[\s\S]*id="input-shell"[\s\S]*id="attachment-bar"[\s\S]*class="action-row"/);
@@ -180,6 +185,23 @@ describe("sidebar panel layout", () => {
     // A narrow sidebar has to fall back to one column rather than squeeze.
     expect(css).toMatch(/\.fan-out \{[\s\S]*?grid-template-columns: repeat\(auto-fit, minmax\(/);
     expect(application).toContain('this.workflowRuntime.setMaxConcurrency(positive("workflow.maxConcurrency"');
+  });
+
+  it("offers sandbox-escaping presets in Agent and Plan and marks them Build-only in Plan", async () => {
+    const main = await source("src/webview/main.ts");
+    // Plan applies the preset when the plan builds, so it may choose one that needs
+    // Full access; Ask stays read-only and Code carries its own per-call permission.
+    expect(main).toContain('const writable = inputMode === "agent" || inputMode === "plan";');
+    expect(main).toContain('const fullAccess = state.agentSelection.permission === "full-access" && writable;');
+    expect(main).toContain('const buildOnly = !restriction && Boolean(preset.writableTurnsOnly) && writable && inputMode === "plan";');
+    expect(main).toContain('" (Build only)"');
+    // Sending an Agent or Code turn applies the preset as-is; Plan's Send and Ask
+    // are read-only, and building a plan is the writable turn that must check it.
+    expect(main).toContain("function fullAccessPresetRestriction(writableTurn: boolean)");
+    expect(main).toContain('const presetRestriction = fullAccessPresetRestriction(inputMode === "agent" || codeMode);');
+    expect(main).toContain("This preset requires Full access in Agent or Plan mode.");
+    expect(main).toContain("const buildRestriction = fullAccessPresetRestriction(true);");
+    expect(main).toContain("elements.planBuild.disabled = Boolean(buildRestriction)");
   });
 
   it("shows writable permission tiers for Agent and Plan modes", async () => {
@@ -594,20 +616,36 @@ describe("sidebar panel layout", () => {
     expect(main).toMatch(/if \(!options\.length\)[\s\S]*?No models discovered\.[\s\S]*?Dext: Configure Agent/);
   });
 
-  it("opens the complete API list in a dialog with built-in definition links", async () => {
+  it("opens the complete API list in an editor tab with search, grouping and detail", async () => {
     const html = await source("src/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
-    const css = await source("media/styles.css");
-    expect(main).toMatch(/function openMethodsDialog[\s\S]*?methodsDialog\.showModal\(\)/);
-    expect(main).toMatch(/function closeMethodsDialog[\s\S]*?methodsDialog\.close\(\)/);
-    expect(html).toContain('id="reload-methods"');
-    expect(main).toMatch(/elements\.reloadMethods\.addEventListener\("click"[\s\S]*?type: "reload"/);
-    expect(main).toMatch(/function setMethodsReloading[\s\S]*?codicon-modifier-spin/);
-    expect(main).toMatch(/row\.addEventListener\("click", \(\) => \{[\s\S]*?type: "openBuiltinApiDefinition", id: method\.id[\s\S]*?closeMethodsDialog\(\)/);
-    expect(main).toContain("function renderMethodSignature");
-    expect(css).toContain(".method-open-definition");
-    expect(css).toContain(".method-token-function");
-    expect(css).toContain('.methods-dialog {');
-    expect(css).toContain('.methods-dialog-body {');
+    const documents = await source("src/resourceDocuments.ts");
+    // The sidebar dialog is gone: the API list is an editor tab now.
+    expect(html).not.toContain('id="reload-methods"');
+    expect(main).not.toContain("renderMethods");
+    expect(main).not.toContain("methodsDialog");
+    expect(documents).toContain("renderResourceList");
+    expect(documents).toContain("data-resource-search");
+    expect(documents).toContain("data-resource-group");
+    expect(documents).toContain("data-resource-open");
+    expect(documents).toContain("openResourceSource");
+    expect(documents).toContain("insertResourceReference");
+    expect(documents).toContain("groupResourceEntries");
+  });
+
+  it("binds a Build review to its plan version, build run and the user's decision", async () => {
+    const sidebar = await source("src/sidebarProvider.ts");
+    const main = await source("src/webview/main.ts");
+    // Writing a plan is not a Build, so it must not create an implementation review.
+    expect(sidebar).toMatch(/if \(mode === "plan" && !executePlan\) return;/);
+    // One Build accumulates every round of the same plan version.
+    expect(sidebar).toMatch(/const key = `\$\{sessionId\}:\$\{planVersion\}`;/);
+    expect(sidebar).toContain("appendPlanReviewRun(existing, review)");
+    expect(sidebar).toContain("buildPlanReview(review.runId, planVersion, [review])");
+    // The decision is refused when it does not belong to this Build.
+    expect(sidebar).toMatch(/if \(!review \|\| review\.runId !== request\.runId\) throw new Error\("That build review is no longer available\."\);/);
+    expect(sidebar).toContain("finalizePlanReview(review, request.decision)");
+    expect(main).toContain("data-plan-review-host");
+    expect(main).toContain('type: "planReviewDecision"');
   });
 });

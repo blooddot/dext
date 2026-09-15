@@ -142,8 +142,9 @@ describe("Dext package manifest", () => {
     ).toEqual([
       ["dext.newConversation", "navigation@1"],
       ["dext.openHistory", "navigation@2"],
-      ["dext.viewApis", "navigation@3"],
-      ["dext.viewMcp", "navigation@4"]
+      ["dext.openProject", "navigation@3"],
+      ["dext.viewApis", "navigation@4"],
+      ["dext.viewResources", "navigation@5"]
     ]);
     // Reloading APIs belongs with the API list it refreshes, and History is the
     // single place that reopens a past conversation.
@@ -408,3 +409,4 @@ describe("Dext package manifest", () => {
     expect(properties["dext.mcpTools"]).toBeUndefined();
   });
 });
+
