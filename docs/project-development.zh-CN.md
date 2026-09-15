@@ -11,13 +11,15 @@ Dext 把两类理解严格分开：**项目知识**长期存在、属于仓库�
 
 ## 项目文件
 
-项目数据位于工作区的 `.dext/` 下，由三类文件承担：
+项目数据位于工作区的 `.dext/` 下：
 
 | 路径 | 内容 |
 | --- | --- |
 | `.dext/project.json` | schema 版本、乐观锁 `version`、默认 Review 预设、知识开关 |
+| `.dext/project-intent.json` | 初始化时 AI 生成的项目简介和语义知识 |
 | `.dext/objects/<id>.json` | 每个文件一个已确认的长期对象 |
 | `.dext/architecture.json` | 人工声明的模块关系、规则与设计决策 |
+| `.dext/diagrams/<id>.json` | 与渲染器无关的 AI 架构图 IR，每张图一个文件 |
 
 `ProjectStore` 通过一个极小的文件宿主机读写这些文件，因此同一套逻辑可运行在扩展、worker 或内存测试替身中。每次写入都携带期望的 `version`；并发修改返回 `{ status: "conflict" }` 而不会覆盖。`project.json` 缺失或损坏时回退默认值，绝不阻塞开发。
 
@@ -79,6 +81,29 @@ Dext 把两类理解严格分开：**项目知识**长期存在、属于仓库�
 - **Rust** 在匹配前先剥离注释、文档与字符串字面量，因此注释或字符串里的 `use` 永远不会被当作依赖。`crate`/`self`/`super` 路径、分组与再导出的 `use`、以及 `mod` 声明都会解析到已扫描模块。`#[cfg]`、宏与 include 记为不确定。`parseCargoManifest` 无需运行 Cargo 即可读取 `Cargo.toml` 的描述与依赖名；`readRustProjectMetadata` 可选地沿用调用方既有权限调用 `cargo metadata` 补充，进程不可用时降级为清单并明确说明覆盖范围。
 
 Tauri IPC 契约等人工关系标记为 `declared`，在架构视图中与 `detected` 关系分开呈现；视图在本地渲染 SVG，不依赖浏览器地址。
+
+## Diagram adapter
+
+Project 的语义模型和 `ProjectDiagram` IR 是唯一事实来源。外部绘图工具只通过
+`ProjectDiagramAdapter` 读取 IR、生成预览/导出物并返回验证收据；外部格式不会写入
+Project 持久化模型。
+
+| Adapter | 主要用途 | 适合的图表 | 主要输出/编辑能力 |
+| --- | --- | --- | --- |
+| Archify | 交互式语义图 | Architecture、Workflow、Sequence、Data Flow、Lifecycle | HTML/SVG 预览、路径探针和证据下钻（当前通过 bridge） |
+| drawio-skill | 人工维护的可编辑模型 | 五类图表 | `.drawio` XML、手工布局和增量漂移比较 |
+| Mermaid | 文档和轻量分享 | Architecture、Workflow、Sequence（其余按能力降级） | Mermaid 文本或 Markdown，不承诺交互和手工布局 |
+| Structurizr | C4 architecture-as-code | Architecture 的 System/Container/Component | Structurizr DSL/Markdown，适合版本控制 |
+
+默认顺序按图表类型选择：Architecture 为 Structurizr → Archify → draw.io，其余图表为
+Archify → draw.io → Mermaid。用户可以对每种图表设置 `auto` 或指定 adapter；不可用时
+按顺序回退并保留上一份 last-good 结果。draw.io 的布局作为独立 overlay 保存，不能覆盖
+Project 的语义节点和关系。
+
+依赖策略：Archify 和 drawio-skill 以固定提交随扩展提供，并通过受控本地进程调用；Mermaid
+和 Structurizr 由 Dext 内部 adapter 生成文本产物。当前没有稳定的外部模块 API，因此不声明
+optional module dependency，也不在 Project 内复制另一套兼容 renderer。若上游提供稳定 API，
+后续仍可在不改变 Project IR 的前提下替换对应 adapter。
 
 ## 校验
 

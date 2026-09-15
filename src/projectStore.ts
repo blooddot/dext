@@ -1,6 +1,9 @@
 import { z } from "zod";
 import { normalizeProjectObject, projectObjectSchema, type ProjectObject } from "./core/projectKnowledge.js";
 import { reviewPresetSchema, type ReviewPreset } from "./core/projectContext.js";
+import { projectIntentSchema, type ProjectIntent } from "./core/projectIntent.js";
+import { ProjectDiagramHistory, type ProjectDiagramHistoryState } from "./core/projectDiagramHistory.js";
+import { validateProjectDiagram, type ProjectDiagram } from "./core/projectDiagram.js";
 
 /**
  * Long-term project files live under `.dext/` and are deliberately separate from conversation
@@ -8,9 +11,17 @@ import { reviewPresetSchema, type ReviewPreset } from "./core/projectContext.js"
  */
 export const PROJECT_DEFINITION_PATH = ".dext/project.json";
 export const PROJECT_ARCHITECTURE_PATH = ".dext/architecture.json";
+export const PROJECT_INTENT_PATH = ".dext/project-intent.json";
+export const PROJECT_DIAGRAM_PREFERENCES_PATH = ".dext/diagram-adapters.json";
+export const PROJECT_DIAGRAM_HISTORY_PATH = ".dext/diagram-history.json";
+export const PROJECT_DIAGRAMS_DIRECTORY = ".dext/diagrams";
 
 export function projectObjectPath(id: string): string {
   return `.dext/objects/${id}.json`;
+}
+
+export function projectDiagramPath(id: string): string {
+  return `${PROJECT_DIAGRAMS_DIRECTORY}/${encodeURIComponent(id)}.json`;
 }
 
 export const projectKnowledgeConfigSchema = z.object({
@@ -31,6 +42,14 @@ export const projectDefinitionSchema = z.object({
   version: z.number().int().nonnegative().default(0),
   preset: z.object({ default: reviewPresetSchema.default("engineering") }).strict().default({ default: "engineering" }),
   knowledge: projectKnowledgeConfigSchema.default({ enabled: false, initialized: false }),
+  /** Project-only AI CLI. Omitted means use the current Input selection. */
+  /** Project-only Agent CLI and optional model override. */
+  ai: z.object({
+    cli: z.enum(["codex", "claude", "deepseek-harness"]).optional(),
+    model: z.string().min(1).optional(),
+    reasoningEffort: z.string().min(1).optional(),
+    speed: z.string().min(1).optional()
+  }).strict().default({}),
   scan: projectScanConfigSchema.default({ roots: [], includeTests: false, extraExcludes: [] }),
   updatedAt: z.number().int().nonnegative().default(0)
 }).strict();
@@ -45,7 +64,7 @@ export const projectArchitectureSchema = z.object({
 export type ProjectArchitectureDocument = z.infer<typeof projectArchitectureSchema>;
 
 export function defaultProjectDefinition(now = Date.now()): ProjectDefinition {
-  return { schemaVersion: 1, version: 0, preset: { default: "engineering" }, knowledge: { enabled: false, initialized: false }, scan: { roots: [], includeTests: false, extraExcludes: [] }, updatedAt: now };
+  return { schemaVersion: 1, version: 0, preset: { default: "engineering" }, knowledge: { enabled: false, initialized: false }, ai: {}, scan: { roots: [], includeTests: false, extraExcludes: [] }, updatedAt: now };
 }
 
 /** Minimal file host so the store works with VS Code, a worker, or an in-memory test double. */
@@ -105,6 +124,60 @@ export class ProjectStore {
 
   async readPresetDefault(): Promise<ReviewPreset> {
     return (await this.readDefinition()).preset.default;
+  }
+
+  async readIntent(): Promise<ProjectIntent | undefined> {
+    const raw = await this.host.readFile(PROJECT_INTENT_PATH);
+    if (!raw) return undefined;
+    try { return projectIntentSchema.parse(JSON.parse(raw)); } catch { return undefined; }
+  }
+
+  async writeIntent(intent: ProjectIntent): Promise<void> {
+    await this.host.writeFile(PROJECT_INTENT_PATH, `${JSON.stringify(projectIntentSchema.parse(intent), null, 2)}\n`);
+  }
+
+  async readDiagramAdapterPreferences(): Promise<unknown> {
+    const raw = await this.host.readFile(PROJECT_DIAGRAM_PREFERENCES_PATH);
+    if (!raw) return undefined;
+    try { return JSON.parse(raw) as unknown; } catch { return undefined; }
+  }
+
+  async writeDiagramAdapterPreferences(preferences: unknown): Promise<void> {
+    await this.host.writeFile(PROJECT_DIAGRAM_PREFERENCES_PATH, `${JSON.stringify(preferences, null, 2)}\n`);
+  }
+
+  async readDiagramHistory(): Promise<ProjectDiagramHistory> {
+    const history = new ProjectDiagramHistory();
+    const raw = await this.host.readFile(PROJECT_DIAGRAM_HISTORY_PATH);
+    if (!raw) return history;
+    try { history.importState(JSON.parse(raw) as ProjectDiagramHistoryState); } catch { /* damaged history must not erase live knowledge */ }
+    return history;
+  }
+
+  async writeDiagramHistory(history: ProjectDiagramHistory): Promise<void> {
+    await this.host.writeFile(PROJECT_DIAGRAM_HISTORY_PATH, `${JSON.stringify(history.exportState(), null, 2)}\n`);
+  }
+
+  async readDiagrams(): Promise<ProjectDiagram[]> {
+    const names = await this.host.listDirectory(PROJECT_DIAGRAMS_DIRECTORY);
+    const diagrams: ProjectDiagram[] = [];
+    for (const name of names.filter((item) => item.endsWith(".json"))) {
+      const raw = await this.host.readFile(`${PROJECT_DIAGRAMS_DIRECTORY}/${name}`);
+      if (!raw) continue;
+      try {
+        const diagram = JSON.parse(raw) as ProjectDiagram;
+        if (diagram.schemaVersion !== 1 || !diagram.id || validateProjectDiagram(diagram).some((issue) => issue.severity === "error")) continue;
+        diagrams.push(diagram);
+      } catch { /* Ignore a damaged diagram; other project knowledge remains usable. */ }
+    }
+    return diagrams.sort((left, right) => left.id.localeCompare(right.id));
+  }
+
+  async writeDiagram(diagram: ProjectDiagram): Promise<void> {
+    if (diagram.schemaVersion !== 1 || validateProjectDiagram(diagram).some((issue) => issue.severity === "error")) {
+      throw new Error(`Invalid project diagram '${diagram.id}'.`);
+    }
+    await this.host.writeFile(projectDiagramPath(diagram.id), `${JSON.stringify(diagram, null, 2)}\n`);
   }
 
   async readObjects(): Promise<ProjectObject[]> {

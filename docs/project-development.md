@@ -14,13 +14,15 @@ the repository. **Conversation review** describes one run and is never written i
 
 ## Project files
 
-Project data lives under `.dext/` in the workspace and is owned by three files:
+Project data lives under `.dext/` in the workspace:
 
 | Path | Contents |
 | --- | --- |
 | `.dext/project.json` | Schema version, optimistic `version`, default review preset, knowledge settings |
+| `.dext/project-intent.json` | AI-generated project brief and semantic knowledge from initialization |
 | `.dext/objects/<id>.json` | One accepted long-term object per file |
 | `.dext/architecture.json` | Declared module relations, rules, and design decisions |
+| `.dext/diagrams/<id>.json` | Canonical AI-generated diagram IR (renderer-neutral, one file per diagram) |
 
 `ProjectStore` reads and writes these files through a small file host, so the same logic runs in the
 extension, a worker, or an in-memory test double. Every write takes the expected `version`; a
@@ -119,6 +121,29 @@ with `cancelled: true` instead of throwing.
 
 Manual relations such as a Tauri IPC contract are marked `declared` and stay separate from
 `detected` relations in the architecture view, which renders a local SVG without a browser address.
+
+## Diagram adapters
+
+Project's semantic model and `ProjectDiagram` IR are the source of truth. External tools consume
+that IR through `ProjectDiagramAdapter`, produce previews or exports, and return validation receipts;
+their formats are never persisted as Project facts.
+
+| Adapter | Primary use | Diagram coverage | Output/editing |
+| --- | --- | --- | --- |
+| Archify | Interactive semantic diagrams | Architecture, Workflow, Sequence, Data Flow, Lifecycle | HTML/SVG preview, path probing, evidence drill-down (bridge integration) |
+| drawio-skill | Human-maintained editable model | All five diagram kinds | `.drawio` XML, manual layout, incremental drift comparison |
+| Mermaid | Documentation and lightweight sharing | Architecture, Workflow, Sequence (capability fallback for others) | Mermaid text/Markdown; no interactive editing guarantee |
+| Structurizr | C4 architecture-as-code | Architecture System/Container/Component | Structurizr DSL/Markdown, version-control friendly |
+
+Default order is Structurizr → Archify → draw.io for Architecture and Archify → draw.io → Mermaid
+for other kinds. Users may override each kind or restore `auto`; unavailable adapters fall back while
+the last-good result remains visible. draw.io layout is stored as an overlay and cannot replace the
+semantic Project model.
+
+Dependency strategy: Archify and drawio-skill are pinned vendor runtimes invoked through controlled local
+processes; Mermaid and Structurizr are implemented as in-process text adapters. No stable external module
+API is assumed, so Project does not declare optional module dependencies or duplicate a second compatibility
+renderer. A future stable upstream API can replace an adapter without changing the Project IR.
 
 ## Checks
 

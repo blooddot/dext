@@ -133,17 +133,27 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .project-facts dt { color: var(--vscode-descriptionForeground); }
 .project-facts dd { margin: 0; overflow-wrap: anywhere; }
 .project-help { max-width: 760px; color: var(--vscode-descriptionForeground); }
+.project-ai-cli, .project-ai-model { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin: 12px 0; color: var(--vscode-foreground); }
+.project-ai-cli select, .project-ai-model select, .architecture-tools select, .diagram-adapter-controls select {
+  min-width: 220px; max-width: min(100%, 420px); min-height: 30px; padding: 4px 28px 4px 9px;
+  border: 1px solid var(--vscode-dropdown-border, var(--vscode-widget-border)); border-radius: 5px;
+  color: var(--vscode-dropdown-foreground, var(--vscode-foreground)); background: var(--vscode-dropdown-background, var(--vscode-input-background));
+}
+.project-ai-model-details { flex-basis: 100%; margin-left: 0; color: var(--vscode-descriptionForeground); font-size: 12px; }
 .project-initialize { margin: 4px 0 16px; }
 .project-scan-progress { display: flex; align-items: center; gap: 8px; margin: -8px 0 16px; color: var(--vscode-descriptionForeground); }
-.project-scan-progress span { width: 110px; height: 3px; overflow: hidden; background: var(--vscode-panel-border); border-radius: 3px; position: relative; }
-.project-scan-progress span::after { content: ""; position: absolute; inset: 0 auto 0 -45%; width: 45%; background: var(--vscode-focusBorder); animation: project-scan-progress 1.1s ease-in-out infinite; }
-@keyframes project-scan-progress { from { left: -45%; } to { left: 100%; } }
+.project-scan-progress-track { flex: 0 0 150px; width: 150px; height: 4px; overflow: hidden; background: var(--vscode-panel-border); border-radius: 999px; }
+.project-scan-progress-fill { display: block; height: 100%; border-radius: inherit; background: var(--vscode-focusBorder); transition: width 180ms ease-out; }
+.project-scan-progress-label { min-width: 0; }
+.project-scan-progress-label strong { color: var(--vscode-foreground); font-weight: 600; }
 .project-scan-folders { margin: 12px 0 16px; }
 .project-object, .project-draft, .architecture-relation, .architecture-decision { padding: 12px; margin-bottom: 8px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; overflow-wrap: anywhere; }
 .object-kind, .object-state, .draft-kind, .relation-source, .relation-evidence, .relation-reason { display: block; color: var(--vscode-descriptionForeground); font-size: 12px; }
 .draft-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .project-object-focus { outline: 1px solid var(--vscode-focusBorder); }
 .architecture-graph-section { overflow: auto; }
+.architecture-graph-scroll { overflow: auto; max-height: 72vh; padding: 8px 0 12px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; background: var(--vscode-editor-background); }
+.architecture-summary { color: var(--vscode-descriptionForeground); margin: -8px 0 10px; }
 .architecture-graph-empty { min-height: 96px; display: grid; place-items: center; padding: 24px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; color: var(--vscode-descriptionForeground); text-align: center; }
 .architecture-graph { display: block; max-width: none; height: auto; }
 .architecture-graph-note { color: var(--vscode-descriptionForeground); margin: 8px 0 0; }
@@ -151,8 +161,282 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .architecture-node text { fill: var(--vscode-foreground); font-size: 12px; }
 .architecture-edge { stroke: var(--vscode-descriptionForeground); }
 .architecture-edge.manual { stroke-dasharray: 5 3; }
+.diagram-adapter-controls, .architecture-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 12px; }
+.diagram-adapter-controls { padding: 10px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; background: var(--vscode-editor-background); }
+.diagram-adapter-controls select, .architecture-tools select, .architecture-tools input { min-width: 150px; }
+.diagram-adapter-recommendation, .diagram-adapter-fallback { color: var(--vscode-descriptionForeground); font-size: 12px; }
+.diagram-adapter-fallback { flex-basis: 100%; margin: 0; }
+.diagram-versions { margin-top: 16px; }
+.diagram-node-hidden { opacity: 0.18; }
+.project-knowledge-brief { margin-bottom: 20px; }
+.project-knowledge-brief > ul { padding-left: 20px; }
+.project-knowledge-brief li { margin: 7px 0; }
 @media (max-width: 480px) {
   body { padding: 16px; }
   .project-facts { grid-template-columns: minmax(0, 1fr); gap: 4px; }
   .project-facts dd { margin-bottom: 12px; }
+}
+
+/* Project controls use the same compact, layered rhythm as the composer while
+   remaining scoped to the Project editor. Native selects stay native so they
+   retain VS Code's keyboard and accessibility behaviour. */
+.project-panel {
+  --project-card-border: color-mix(in srgb, var(--vscode-panel-border) 78%, transparent);
+  --project-card-fill: color-mix(in srgb, var(--vscode-editor-background) 88%, var(--vscode-input-background));
+}
+.project-nav {
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--project-card-border);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--vscode-editor-background) 92%, var(--vscode-input-background));
+}
+.project-nav button {
+  border: 0;
+  border-radius: 5px;
+  padding: 7px 14px;
+  line-height: 1.25;
+  transition: color 100ms ease, background 100ms ease;
+}
+.project-nav button:hover { color: var(--vscode-foreground); background: var(--vscode-list-hoverBackground); }
+.project-nav button[aria-selected="true"] {
+  color: var(--vscode-foreground);
+  background: var(--vscode-list-activeSelectionBackground);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--vscode-focusBorder) 48%, transparent);
+}
+.project-help { max-width: 780px; margin-top: 0; line-height: 1.6; }
+.project-ai-cli, .project-ai-model {
+  display: grid;
+  grid-template-columns: minmax(8.5rem, 14rem) minmax(0, 1fr);
+  align-items: center;
+  gap: 6px 14px;
+  max-width: 680px;
+  margin: 0;
+  color: var(--vscode-foreground);
+  font-weight: 500;
+}
+.project-ai-cli { margin-top: 14px; }
+.project-ai-model { margin-top: 8px; }
+.project-control-label { min-width: 0; color: var(--vscode-descriptionForeground); font-size: 12px; font-weight: 500; }
+.project-ai-cli select, .project-ai-model select,
+.diagram-adapter-controls select, .architecture-tools select,
+.architecture-tools input {
+  width: 100%;
+  min-width: 0;
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+  border-radius: 4px;
+  color: var(--vscode-input-foreground, var(--vscode-foreground));
+  background: var(--vscode-input-background);
+}
+.project-ai-cli select:hover, .project-ai-model select:hover,
+.diagram-adapter-controls select:hover, .architecture-tools select:hover,
+.architecture-tools input:hover { border-color: var(--vscode-focusBorder); }
+.project-ai-model-details {
+  grid-column: 2;
+  margin-top: -2px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.project-initialize { margin-top: 18px; }
+.project-facts {
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid var(--project-card-border);
+}
+.project-facts dd { color: var(--vscode-foreground); }
+.project-object, .project-draft, .architecture-relation, .architecture-decision {
+  border-color: var(--project-card-border);
+  background: var(--project-card-fill);
+  border-radius: 6px;
+}
+.project-object:hover, .project-draft:hover, .architecture-relation:hover, .architecture-decision:hover {
+  border-color: color-mix(in srgb, var(--vscode-focusBorder) 55%, var(--project-card-border));
+}
+.diagram-adapter-controls {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 14px;
+  border-color: var(--project-card-border);
+  border-radius: 7px;
+  background: var(--project-card-fill);
+}
+.diagram-adapter-controls > label {
+  display: grid;
+  grid-template-columns: max-content minmax(120px, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+  font-weight: 500;
+}
+.diagram-adapter-controls > button { white-space: nowrap; }
+.diagram-adapter-recommendation, .diagram-adapter-fallback {
+  grid-column: 1 / -1;
+  margin: 0;
+  line-height: 1.4;
+}
+.diagram-adapter-fallback { padding-top: 2px; }
+.architecture-tools {
+  display: grid;
+  grid-template-columns: minmax(200px, 1fr) auto auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  margin-bottom: 18px;
+  border: 1px solid var(--project-card-border);
+  border-radius: 7px;
+  background: var(--project-card-fill);
+}
+.architecture-tools > label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+  font-weight: 500;
+}
+.architecture-tools > label:first-child input { flex: 1 1 auto; }
+.architecture-tools > label select { min-width: 112px; }
+.architecture-graph-section { margin-top: 4px; }
+.architecture-graph-section h2 { margin-bottom: 8px; }
+.architecture-graph-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.architecture-fullscreen-button { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; white-space: nowrap; }
+.architecture-graph-section:fullscreen,
+.architecture-graph-section.architecture-graph-is-fullscreen {
+  position: fixed; inset: 0; z-index: 1000; box-sizing: border-box; overflow: auto;
+  margin: 0; padding: 24px; background: var(--vscode-editor-background);
+}
+.architecture-graph-section:fullscreen .architecture-graph-scroll,
+.architecture-graph-section.architecture-graph-is-fullscreen .architecture-graph-scroll {
+  max-height: calc(100vh - 130px);
+}
+.architecture-graph-scroll {
+  padding: 14px;
+  border-color: var(--project-card-border);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--vscode-editor-background) 94%, var(--vscode-input-background));
+}
+.architecture-relation-section, .architecture-rules, .architecture-decisions, .architecture-coverage, .diagram-versions {
+  margin-top: 24px;
+}
+.architecture-relation-section h3, .architecture-rules h3, .architecture-decisions h3, .architecture-coverage h3, .diagram-versions h3 { margin-bottom: 10px; }
+
+@media (max-width: 700px) {
+  .project-ai-cli, .project-ai-model { grid-template-columns: 1fr; gap: 4px; }
+  .project-ai-model-details { grid-column: 1; }
+  .diagram-adapter-controls, .architecture-tools { grid-template-columns: 1fr; }
+  .diagram-adapter-controls > label, .architecture-tools > label { grid-template-columns: max-content minmax(0, 1fr); }
+  .diagram-adapter-recommendation, .diagram-adapter-fallback { grid-column: 1; }
+  .architecture-tools > button { justify-self: start; }
+}
+
+/* Keep the Project tabs light and close to VS Code's editor-tab treatment. */
+.project-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid var(--vscode-panel-border);
+  border-radius: 0;
+  background: transparent;
+}
+.project-nav button {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  padding: 8px 12px;
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+  box-shadow: none;
+  transition: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.project-nav button:hover,
+.project-nav button:active,
+.project-nav button:focus,
+.project-nav button:focus-visible { color: var(--vscode-foreground); background: transparent; }
+.project-nav button[aria-selected="true"] {
+  color: var(--vscode-foreground);
+  border-bottom-color: var(--vscode-focusBorder);
+  background: transparent;
+  box-shadow: none;
+}
+
+/* Labels are short controls; keep them on one line while allowing the value
+   column to shrink on narrow editor widths. */
+.project-ai-cli, .project-ai-model {
+  grid-template-columns: minmax(240px, 300px) minmax(220px, 420px);
+}
+.project-ai-cli, .project-ai-model,
+.diagram-adapter-controls > label, .architecture-tools > label { white-space: nowrap; }
+.project-ai-model-control { position: relative; min-width: 0; }
+.project-model-trigger {
+  width: 100%; min-width: 0; max-width: none; height: 28px; padding: 4px 8px; display: grid;
+  grid-template-columns: minmax(0, 1fr) 16px; gap: 8px; align-items: center;
+  border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+  border-radius: 4px; color: var(--vscode-input-foreground, var(--vscode-foreground));
+  background: var(--vscode-input-background); font: inherit; cursor: pointer; text-align: left;
+  transition: border-color 100ms ease, background-color 100ms ease, box-shadow 100ms ease;
+}
+.project-model-trigger > span { display: none; }
+.project-model-trigger:hover, .project-model-trigger[aria-expanded="true"] { border-color: var(--vscode-focusBorder); background: var(--vscode-input-background); box-shadow: none; }
+.project-model-trigger strong, .project-model-category strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; }
+.project-model-trigger .codicon { flex: 0 0 auto; color: var(--vscode-descriptionForeground); font-size: 12px; }
+.project-model-popover {
+  position: absolute; z-index: 20; top: auto; bottom: 34px; left: 0; width: min(216px, calc(100vw - 24px));
+  padding: 5px; border: 1px solid var(--vscode-menu-border, var(--vscode-widget-border)); border-radius: 6px;
+  background: var(--vscode-menu-background, var(--vscode-editorWidget-background)); box-shadow: 0 8px 24px var(--vscode-widget-shadow);
+}
+.project-model-popover[hidden], .project-model-submenu[hidden] { display: none; }
+.project-model-category, .project-model-choice {
+  width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) minmax(56px, auto) 14px; align-items: center; gap: 6px;
+  min-height: 27px; padding: 3px 6px; border: 0; border-radius: 2px; color: var(--vscode-menu-foreground); background: transparent; text-align: left; font-size: 12px;
+}
+.project-model-category:hover:not(:disabled), .project-model-choice:hover { background: var(--vscode-list-hoverBackground); }
+.project-model-category:disabled { opacity: .55; cursor: default; }
+.project-model-category > span { color: var(--vscode-descriptionForeground); }
+.project-model-category-value { color: var(--vscode-descriptionForeground); font-size: 11px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-model-submenu { position: absolute; top: 0; left: calc(100% + 4px); width: min(216px, calc(100vw - 24px)); max-height: 310px; overflow: auto; padding: 4px; border: 1px solid var(--vscode-menu-border, var(--vscode-widget-border)); border-radius: 8px; background: var(--vscode-menu-background, var(--vscode-editorWidget-background)); box-shadow: 0 4px 14px var(--vscode-widget-shadow, rgba(0,0,0,.35)); }
+.project-model-submenu[data-submenu-side="left"] { right: calc(100% + 4px); left: auto; }
+.project-model-submenu[data-submenu-side="above"] { top: auto; bottom: calc(100% + 4px); left: 0; }
+.project-model-submenu-heading { min-height: 28px; padding: 3px 6px; display: flex; align-items: center; border-bottom: 1px solid var(--vscode-menu-separatorBackground, var(--vscode-widget-border)); color: var(--vscode-descriptionForeground); font-size: 11px; }
+.project-model-group-heading { padding: 8px 6px 3px; color: var(--vscode-descriptionForeground); font-size: 11px; font-weight: 600; }
+.project-model-choice { grid-template-columns: minmax(0, 1fr) 14px; }
+.project-model-choice .codicon-blank { visibility: hidden; }
+.project-ai-model-control.is-disabled { opacity: .7; }
+.project-ai-model { margin-bottom: 14px; }
+.project-model-capabilities { display: block; margin-top: 4px; color: var(--vscode-descriptionForeground); font-size: 11px; line-height: 1.3; white-space: normal; }
+.project-scan-progress { width: 100%; max-width: 680px; clear: both; margin: 18px 0 16px; }
+.project-scan-progress-warning { color: var(--vscode-testing-iconFailed, var(--vscode-errorForeground)); }
+.project-initialization-result { max-width: 680px; margin: -4px 0 16px; color: var(--vscode-terminal-ansiGreen, var(--vscode-testing-iconPassed)); font-size: 12px; }
+.project-initialization-error { max-width: 680px; margin: -4px 0 16px; color: var(--vscode-errorForeground); font-size: 12px; }
+.project-initialization-error summary { cursor: pointer; }
+.project-initialization-log { max-width: 680px; margin: -4px 0 16px; color: var(--vscode-descriptionForeground); font-size: 12px; }
+.project-initialization-log summary { cursor: pointer; }
+.project-initialization-log pre { max-height: 180px; margin: 6px 0 0; padding: 8px; overflow: auto; white-space: pre-wrap; background: var(--vscode-textCodeBlock-background); border-radius: 4px; }
+.project-initialization-error pre { max-height: 180px; margin: 6px 0 0; padding: 8px; overflow: auto; white-space: pre-wrap; color: var(--vscode-errorForeground); background: color-mix(in srgb, var(--vscode-errorForeground) 8%, var(--vscode-editor-background)); border-radius: 4px; }
+.project-scan-progress-line { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.project-scan-progress-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-initialization-elapsed { flex: 0 0 auto; color: var(--vscode-descriptionForeground); font-size: 11px; white-space: nowrap; }
+.project-scan-progress-meter { flex: 0 0 180px; width: 180px; height: 8px; accent-color: var(--vscode-focusBorder); }
+.project-initialization-output { max-height: 150px; margin: 8px 0 0; padding: 8px; overflow: auto; white-space: pre-wrap; color: var(--vscode-descriptionForeground); background: var(--vscode-textCodeBlock-background); border: 1px solid var(--vscode-panel-border); border-radius: 4px; font-size: 11px; line-height: 1.35; }
+.project-initialization-output[hidden] { display: none; }
+@media (max-width: 700px) { .project-scan-progress-line { align-items: stretch; flex-direction: column; gap: 5px; } .project-scan-progress-meter { flex-basis: auto; width: 100%; } }
+.architecture-tools > label:first-child { min-width: 0; }
+.architecture-tools > label:first-child input { min-width: 180px; }
+.architecture-tools > label:nth-of-type(2) { min-width: 260px; }
+@media (max-width: 700px) {
+  .project-ai-cli, .project-ai-model { grid-template-columns: 1fr; }
+  .project-model-popover, .project-model-submenu { width: min(216px, calc(100vw - 32px)); }
+  .project-ai-cli, .project-ai-model, .diagram-adapter-controls > label, .architecture-tools > label { white-space: normal; }
+  .architecture-tools > label:first-child input, .architecture-tools > label:nth-of-type(2) { min-width: 0; }
 }

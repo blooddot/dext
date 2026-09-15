@@ -26,6 +26,8 @@ export interface ArchitectureScanResult {
   parserVersions: Partial<Record<ProjectLanguage, string>>;
   /** Scan-wide limitations, such as project metadata that could not be resolved. */
   coverage?: string[];
+  /** Bounded source excerpts retained by workspace hosts for optional AI evidence generation. */
+  files?: readonly { path: string; content: string }[];
 }
 
 export interface ArchitectureRule {

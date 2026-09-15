@@ -51,6 +51,22 @@ describe("project panel", () => {
     expect(html).toContain('data-draft-action="accept"');
   });
 
+  it("keeps the initialization progress indicator visible after a page refresh", () => {
+    const html = renderProjectPanel("overview", {
+      ...data,
+      overview: {
+        ...data.overview,
+        initialization: { status: "running", aiAvailable: true, scannedFiles: 7, phase: "generating", progress: 1, progressTotal: 3 }
+      }
+    });
+    expect(html).toContain("project-scan-progress-running");
+    expect(html).toContain("Initializing project knowledge");
+    expect(html).toContain("7 files scanned");
+    expect(html).toContain('aria-valuenow="1"');
+    expect(html).toContain("1/3");
+    expect(html).not.toContain('class="project-initialize"');
+  });
+
   it("renders a local SVG and separates manual from static relations", () => {
     const html = renderProjectPanel("architecture", data);
     expect(html).toContain("<svg class=\"architecture-graph\"");
@@ -67,8 +83,61 @@ describe("project panel", () => {
     expect(html).toContain("acquireVsCodeApi()");
     expect(html).toContain('type:"projectPage"');
     expect(html).toContain('type:"projectDraft"');
+    // The panel root also has data-project-page; only tab buttons may trigger
+    // navigation so native selects remain open long enough to choose an option.
+    expect(html).toContain('button[data-project-page]');
     // The client never requests conversation runs or Hook output.
     expect(html).not.toContain("review");
+  });
+
+  it("renders the project AI CLI selector and forwards changes", () => {
+    const html = renderProjectPanel("overview", {
+      ...data,
+      overview: {
+        ...data.overview,
+        aiCli: [{ id: "codex", label: "Codex CLI" }, { id: "claude", label: "Claude CLI" }],
+        selectedAiCli: "claude"
+      }
+    });
+    expect(html).toContain('data-project-ai-cli');
+    expect(html).toContain('value="claude" selected');
+    expect(html).toContain("type:'projectAiCli'");
+  });
+
+  it("renders models for the selected project AI CLI", () => {
+    const html = renderProjectPanel("overview", {
+      ...data,
+      overview: {
+        ...data.overview,
+        aiCli: [{ id: "codex", label: "Codex CLI", models: [{ id: "o4-mini", label: "o4-mini" }] }],
+        selectedAiCli: "codex",
+        selectedAiModel: "o4-mini"
+      }
+    });
+    expect(html).toContain('data-project-ai-model');
+    expect(html).toContain('composer-model-popover');
+    expect(html).toContain('composer-menu-category');
+    expect(html).toContain('data-project-model-submenu');
+    expect(html).toContain('value="o4-mini" selected');
+    expect(html).toContain("type:'projectAiModel'");
+  });
+
+  it("shows Input model capabilities below the project model selector", () => {
+    const html = renderProjectPanel("overview", {
+      ...data,
+      overview: {
+        ...data.overview,
+        aiCli: [{ id: "codex", label: "Codex CLI", models: [{
+          id: "o4", label: "o4", reasoningEfforts: ["medium", "high"], speedTiers: ["standard", "fast"]
+        }] }],
+        selectedAiCli: "codex",
+        selectedAiModel: "o4"
+      }
+    });
+    expect(html).toContain("Reasoning: medium / high");
+    expect(html).toContain("Speed: standard / fast");
+    expect(html).toContain("project-model-capabilities");
+    expect(html).toContain("data-project-ai-model-details");
   });
 
   it("marks and scrolls to the object an adopted suggestion wrote", () => {
@@ -77,5 +146,47 @@ describe("project panel", () => {
     expect(html).toContain("project-object-focus");
     // Without a focus the page is unchanged, so a plain navigation stays quiet.
     expect(renderProjectPanel("knowledge", data)).not.toContain('data-project-focus="');
+  });
+
+  it("renders semantic knowledge sections when supplied", () => {
+    const html = renderProjectPanel("knowledge", {
+      ...data,
+      knowledge: {
+        brief: "A task management workspace.",
+        contexts: [{ id: "ctx-tasks", name: "Task management", description: "Owns task state." }],
+        terms: [{ id: "term-task", canonical: "Task", aliases: ["Work item"], definition: "A unit of work." }],
+        flows: [{ id: "flow-create", name: "Create task", steps: ["Validate input", "Persist task"] }],
+        evidence: [{ id: "ev-1", path: "src/tasks.ts", line: 4 }]
+      }
+    });
+    expect(html).toContain("Project Brief");
+    expect(html).toContain("Task management");
+    expect(html).toContain("Work item");
+    expect(html).toContain("Create task");
+    expect(html).toContain("src/tasks.ts:4");
+  });
+
+  it("renders adapter controls and explicit diagram actions", () => {
+    const html = renderProjectPanel("architecture", {
+      ...data,
+      architecture: {
+        ...data.architecture,
+        diagramKind: "architecture",
+        adapter: {
+          currentId: "structurizr",
+          choices: [
+            { id: "structurizr", version: "1", available: true, supported: true, preferred: true, formats: ["structurizr"] },
+            { id: "mermaid", available: true, supported: false, preferred: false, formats: ["mermaid"], reason: "No interactive support" }
+          ],
+          fallback: ["structurizr", "archify", "drawio"],
+          recommendation: "Use C4 for architecture overview."
+        }
+      }
+    });
+    expect(html).toContain("data-project-adapter-select");
+    expect(html).toContain("Use recommended");
+    expect(html).toContain("No interactive support");
+    expect(html).toContain("projectAdapterPreference");
+    expect(html).toContain("projectDiagramAction");
   });
 });

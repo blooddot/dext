@@ -42,8 +42,16 @@ import type { ResourceScope } from "./resourceSession.js";
 import { parseEditorTabKey } from "./editorTabTypes.js";
 import type { VscodeWebviewPanelLike } from "./editorTabManager.js";
 import { ProjectStore } from "./projectStore.js";
+import { searchProjectReferences } from "./core/projectContext.js";
 import { VscodeProjectFileHost, createProjectPanelDataSource, scanWorkspaceProject } from "./vscodeProjectHost.js";
 import { renderEditorTabHtml } from "./editorTabHtml.js";
+import { ProjectDiagramAdapterRegistry } from "./core/projectDiagramRegistry.js";
+import { ArchifyAdapter } from "./core/archifyAdapter.js";
+import { DrawioAdapter } from "./core/drawioAdapter.js";
+import { MermaidAdapter } from "./core/mermaidAdapter.js";
+import { StructurizrAdapter } from "./core/structurizrAdapter.js";
+import type { ProjectDiagram, ProjectDiagramKind } from "./core/projectDiagram.js";
+import type { DiagramArtifactFormat } from "./core/projectDiagramAdapter.js";
 
 let activeApplication: DextApplication | undefined;
 
@@ -99,13 +107,41 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const projectHost = folder?.uri.scheme === "file" ? new VscodeProjectFileHost(folder.uri) : undefined;
   if (projectHost && folder) {
     const projectStore = new ProjectStore(projectHost);
+    const diagramRegistry = new ProjectDiagramAdapterRegistry();
+    diagramRegistry.register(new ArchifyAdapter());
+    diagramRegistry.register(new DrawioAdapter());
+    diagramRegistry.register(new MermaidAdapter());
+    diagramRegistry.register(new StructurizrAdapter());
+    void projectStore.readDiagramAdapterPreferences().then((stored) => { if (stored) { try { diagramRegistry.importPreferences(stored); } catch { /* ignore corrupt preference files */ } } });
+    context.subscriptions.push({ dispose: () => diagramRegistry.dispose() });
     // Freezing the Review preset at send time needs a synchronous read, so the last known project
     // definition is cached as soon as the store is first read.
     void projectStore.readDefinition().catch(() => undefined);
     sidebar.setProjectPresetSource(() => projectStore.presetDefault());
-    const scanProjectSources = async () => {
+    sidebar.setProjectReferenceSource({
+      search: async (query) => { const intent = await projectStore.readIntent(); return searchProjectReferences({ objects: await projectStore.readObjects(), query, ...(intent ? { intent } : {}) }); },
+      open: async (objectId) => { await editors.project?.show("knowledge", objectId); }
+    });
+    const scanProjectSources = async (...args: Parameters<NonNullable<Parameters<typeof createProjectPanelDataSource>[0]["scan"]>>) => {
       const definition = await projectStore.readDefinition();
-      return scanWorkspaceProject(folder.uri, definition.scan);
+      return scanWorkspaceProject(folder.uri, definition.scan, ...args);
+    };
+    const exportProjectDiagram = async (kind: string, format?: string): Promise<void> => {
+      if (!Object.keys({ architecture: 1, workflow: 1, sequence: 1, data_flow: 1, lifecycle: 1 }).includes(kind)) throw new Error(`Unsupported diagram kind '${kind}'.`);
+      const scan = await scanProjectSources();
+      const diagram: ProjectDiagram = {
+        schemaVersion: 1, id: `scan-${kind}`, title: `${folder.name} ${kind}`, kind: kind as ProjectDiagramKind,
+        version: 1, updatedAt: Date.now(), nodes: scan.modules.slice(0, 200).map((module) => ({ id: module.id, label: module.name, role: "module" as const, semanticIds: [], evidence: module.paths.slice(0, 3).map((path) => ({ path })) })),
+        relations: scan.relations.slice(0, 400).map((relation, index) => ({ id: `relation-${index}`, from: relation.from, to: relation.to, kind: "depends_on" as const, evidence: relation.file ? [{ path: relation.file, ...(relation.line ? { line: relation.line } : {}) }] : [] }))
+      };
+      const selectedFormat = format as DiagramArtifactFormat | undefined;
+      const outcome = await diagramRegistry.export(diagram, { ...(selectedFormat ? { format: selectedFormat } : {}), allowFallback: true });
+      if (outcome.status !== "rendered" || !outcome.artifact) throw new Error(outcome.receipt.issues.map((item) => item.message).join("; ") || "No adapter could export this diagram.");
+      const suffix = outcome.artifact.format === "drawio" ? "drawio" : outcome.artifact.format === "mermaid" ? "md" : outcome.artifact.format === "structurizr" ? "dsl" : outcome.artifact.format;
+      const target = await vscode.window.showSaveDialog({ defaultUri: vscode.Uri.joinPath(folder.uri, `${folder.name}.${suffix}`), saveLabel: "Export Project diagram" });
+      if (!target) return;
+      const bytes = typeof outcome.artifact.content === "string" ? new TextEncoder().encode(outcome.artifact.content) : outcome.artifact.content;
+      await vscode.workspace.fs.writeFile(target, bytes);
     };
     editors.project = new ProjectEditorProvider({
       manager: editorTabs,
@@ -119,7 +155,30 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           readArchitecture: () => projectStore.readArchitecture(),
           readDefinition: () => projectStore.readDefinition(),
           writeDefinition: (next, expectedVersion) => projectStore.writeDefinition(next, expectedVersion)
-        }
+        },
+        diagramRegistry,
+        readDiagramAdapterPreferences: () => projectStore.readDiagramAdapterPreferences(),
+        writeDiagramAdapterPreferences: (value) => projectStore.writeDiagramAdapterPreferences(value),
+        projectAiProvider: application.projectAiProvider(),
+        aiCli: application.agentProfiles().map((profile) => ({
+          id: profile.id,
+          label: profile.label,
+          models: profile.modelOptions?.length
+            ? profile.modelOptions.map((model) => ({
+              id: model.id,
+              label: model.label,
+              ...(model.group ? { group: model.group } : {}),
+              ...(model.reasoningEfforts.length ? { reasoningEfforts: model.reasoningEfforts } : {}),
+              ...(model.speedTiers.length ? { speedTiers: model.speedTiers } : {}),
+              ...(model.serviceTiers.length ? { serviceTiers: model.serviceTiers } : {})
+            }))
+            : profile.models.map((id) => ({ id, label: id }))
+        })),
+        readIntent: () => projectStore.readIntent(),
+        writeIntent: (intent) => projectStore.writeIntent(intent),
+        readDiagrams: () => projectStore.readDiagrams(),
+        writeDiagrams: async (diagrams) => { for (const diagram of diagrams) await projectStore.writeDiagram(diagram); }
+        ,exportDiagram: exportProjectDiagram
       }),
       chooseScanRoots: async () => {
         const selected = await vscode.window.showOpenDialog({

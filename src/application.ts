@@ -42,6 +42,7 @@ import {
 import { DEFAULT_PLAN_DIRECTORY, planFileName, planPathSegments } from "./core/planFile.js";
 import { splitPlanResponse } from "./core/planResponse.js";
 import { DextStorage } from "./dextStorage.js";
+import type { ProjectAiProvider } from "./core/projectAiGeneration.js";
 
 /** Global rather than per-workspace: the object form is rewritten in the user
  * settings file, so once is once for every window. */
@@ -79,6 +80,38 @@ export class DextApplication {
   private readonly completionSecrets: CompletionKeyStore | undefined;
   private readonly globalState: vscode.Memento | undefined;
   readonly storage: DextStorage;
+
+  /** Project-only model bridge. It uses the selected CLI in read-only Ask mode and never alters composer input. */
+  projectAiProvider(): ProjectAiProvider {
+    return {
+      id: "selected-agent",
+      generate: async (request, signal) => {
+        const response = await this.runtime.executeConversation("ask", request.prompt, {
+          signal,
+          ...(request.agent ? { agent: request.agent } : {}),
+          ...(request.model ? { model: request.model } : {}),
+          ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {}),
+          ...(request.speed ? { speed: request.speed } : {}),
+          ...(request.onEvent ? { onAgentEvent: (event) => {
+            if (event.phase !== "status" && event.phase !== "message" && event.phase !== "tool") return;
+            request.onEvent?.({
+              phase: event.phase, text: event.text,
+              ...(event.id !== undefined ? { id: event.id } : {}),
+              ...(event.title !== undefined ? { title: event.title } : {}),
+              ...(event.replace !== undefined ? { replace: event.replace } : {}),
+              ...(event.done !== undefined ? { done: event.done } : {}),
+              ...(event.usage !== undefined ? { usage: event.usage } : {})
+            });
+          } } : {})
+        });
+        const model = request.agent
+          ? request.model ?? this.agents.list().find((profile) => profile.id === request.agent)?.defaults?.model
+          : this.agents.currentSelection().model;
+        const text = response.result.kind === "ask" ? response.result.text : JSON.stringify(response.result);
+        return { text, ...(model ? { model } : {}) };
+      }
+    };
+  }
 
   constructor(globalState?: vscode.Memento, secretStorage?: vscode.SecretStorage, globalStorageUri?: vscode.Uri) {
     this.globalState = globalState;
@@ -782,20 +815,13 @@ export class DextApplication {
     if (mode === "plan" && metadata.planPath && !metadata.executePlan) {
       const target = this.planUri(metadata.planPath);
       if (!target) throw new Error(`Plan '${metadata.planPath}' is no longer available.`);
-      let current: string;
-      try {
-        current = new TextDecoder().decode(await vscode.workspace.fs.readFile(target));
-      } catch {
-        throw new Error(`Plan '${metadata.planPath}' is no longer available.`);
-      }
+      try { await vscode.workspace.fs.stat(target); }
+      catch { throw new Error(`Plan '${metadata.planPath}' is no longer available.`); }
       prompt = [
         "Revise the selected plan document according to the user's request.",
         "Keep the plan complete and internally consistent after applying the requested changes.",
-        "",
-        "Current plan document:",
-        "---",
-        current.trim(),
-        "---",
+        `Read the current plan from this file before revising it: ${target.fsPath}`,
+        "Do not edit that file directly; return the complete revised plan in the required response format so Dext can save it.",
         "",
         "Requested changes:",
         prompt

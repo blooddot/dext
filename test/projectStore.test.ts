@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { ProjectStore, defaultProjectDefinition, type ProjectFileHost } from "../src/projectStore.js";
+import { ProjectStore, defaultProjectDefinition, projectDiagramPath, type ProjectFileHost } from "../src/projectStore.js";
+import type { ProjectDiagram } from "../src/core/projectDiagram.js";
 import { projectObjectSchema } from "../src/core/projectKnowledge.js";
 
 class MemoryHost implements ProjectFileHost {
@@ -15,6 +16,20 @@ class MemoryHost implements ProjectFileHost {
 
 const object = (id: string, canonicalName: string) => projectObjectSchema.parse({
   id, canonicalName, kind: "module", source: "user", confirmation: "accepted"
+});
+
+const diagram = (id = "architecture"): ProjectDiagram => ({
+  schemaVersion: 1,
+  id,
+  title: "Architecture",
+  kind: "architecture",
+  version: 1,
+  updatedAt: 42,
+  nodes: [
+    { id: "app", label: "App", role: "module", semanticIds: [], evidence: [] },
+    { id: "db", label: "Database", role: "store", semanticIds: [], evidence: [] }
+  ],
+  relations: [{ id: "app-db", from: "app", to: "db", kind: "writes", evidence: [] }]
 });
 
 describe("project store", () => {
@@ -59,5 +74,30 @@ describe("project store", () => {
     for (const path of [...host.files.keys()].filter((item) => item.startsWith(".dext/cache/runs/"))) host.files.delete(path);
     const objects = await store.readObjects();
     expect(objects.map((item) => item.id)).toEqual(["one", "two"]);
+  });
+
+  it("persists generated diagrams under .dext/diagrams and reloads them", async () => {
+    const host = new MemoryHost();
+    const store = new ProjectStore(host);
+    const generated = diagram("architecture/v1");
+
+    await store.writeDiagram(generated);
+
+    expect(host.files.has(projectDiagramPath(generated.id))).toBe(true);
+    expect(await store.readDiagrams()).toEqual([generated]);
+  });
+
+  it("rejects invalid diagrams and ignores damaged files without hiding valid ones", async () => {
+    const host = new MemoryHost();
+    const store = new ProjectStore(host);
+    await store.writeDiagram(diagram("valid"));
+    host.files.set(".dext/diagrams/damaged.json", "{not json");
+    host.files.set(".dext/diagrams/dangling.json", JSON.stringify({
+      ...diagram("dangling"),
+      relations: [{ id: "bad", from: "missing", to: "app", kind: "writes", evidence: [] }]
+    }));
+
+    await expect(store.writeDiagram({ ...diagram("invalid"), relations: [{ id: "bad", from: "missing", to: "app", kind: "writes", evidence: [] }] })).rejects.toThrow("Invalid project diagram");
+    expect((await store.readDiagrams()).map((item) => item.id)).toEqual(["valid"]);
   });
 });

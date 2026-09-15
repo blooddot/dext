@@ -35,9 +35,36 @@ describe("project initialization", () => {
     expect(scanStarted).toBe(2);
   });
 
+  it("keeps a cancellation during AI generation cancelled", async () => {
+    let release: (() => void) | undefined;
+    const service = new ProjectInitializationService({
+      scan: async () => emptyScan,
+      generate: async (_scan, signal) => await new Promise((resolve, reject) => {
+        release = () => resolve({});
+        signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      })
+    });
+    const task = service.start();
+    await Promise.resolve();
+    task.cancel();
+    release?.();
+    await expect(task.promise).resolves.toMatchObject({ status: "cancelled" });
+  });
+
   it("reports a failing scan as failed without throwing to the caller", async () => {
     const service = new ProjectInitializationService({ scan: async () => { throw new Error("boom"); } });
     await expect(service.start().promise).resolves.toMatchObject({ status: "failed", error: "boom" });
+  });
+
+  it("runs semantic generation after scanning and reports generated assets", async () => {
+    const queue = new KnowledgeDraftQueue();
+    const service = new ProjectInitializationService({
+      scan: async () => ({ ...emptyScan, modules: [{ id: "src/a", name: "a", language: "typescript" as const, paths: ["src/a.ts"], source: "detected" as const }] }),
+      generate: async () => ({ drafts: [draft("semantic")], intent: {} as never, diagrams: [{} as never] })
+    }, queue);
+    await expect(service.start().promise).resolves.toMatchObject({
+      status: "completed", aiAvailable: true, drafts: 1, scannedFiles: 1, intentGenerated: true, diagramsGenerated: 1
+    });
   });
 });
 
