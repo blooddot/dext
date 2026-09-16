@@ -54,7 +54,7 @@ try {
     ], returnType: 'AgentResult'
   };
   entries[1].api = { signature: 'node.fs.readFile(path: string) -> NodeFsReadFileResult', parameters: [{ name: 'path', type: 'string', required: true }], returnType: 'NodeFsReadFileResult' };
-  const project = { overview: { name: 'Dext', root: 'C:/github/blooddot/dext', languages: ['TypeScript'], objects: 0, accepted: 0, drafts: 0, needsVerification: 0, initialization: { status: 'uninitialized', aiAvailable: false, scannedFiles: 0 } }, objects: [], architecture: { modules: [], relations: [] } };
+  const project = { overview: { name: 'Dext', root: 'C:/github/blooddot/dext', objects: 0, accepted: 0, drafts: 0, needsVerification: 0, initialization: { status: 'uninitialized', drafts: 0 }, aiCli: [{ id: 'codex', label: 'Codex', models: [] }] }, objects: [], architecture: { diagrams: [] } };
   const artifacts = resolve('.tmp-tb/editor-tabs-ui'); await mkdir(artifacts, { recursive: true });
   async function load(body) {
     pageHtml = ui.renderEditorTabHtml('<script>window.messages=[];window.acquireVsCodeApi=()=>({postMessage:message=>messages.push(message)});</script>' + body, `${origin}/style.css`, origin);
@@ -121,9 +121,18 @@ try {
       await writeFile(join(artifacts, `resources-${themeName}-${width}.png`), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
       await load(ui.renderProjectPanel('overview', project));
       assert.equal(await evaluate(`getComputedStyle(document.querySelector('.project-facts')).display`), 'grid');
+      assert.equal(await evaluate(`document.querySelector('[data-project-initialization-state]').getAttribute('data-project-initialization-state')`), 'uninitialized');
+      assert.equal(await evaluate(`!!document.querySelector('[data-project-initialize]')`), true);
       assert.equal(await evaluate(`document.documentElement.scrollWidth <= innerWidth`), true);
+      // This select shared its rule with the retired scan/renderer controls, so the surviving
+      // declarations are asserted here instead of only being eyeballed in a screenshot. min-width is
+      // width-dependent (the narrow layout relaxes it), so the stable declarations are used.
+      assert.equal(await evaluate(`getComputedStyle(document.querySelector('.project-ai-cli select')).minHeight`), '28px');
+      assert.equal(await evaluate(`getComputedStyle(document.querySelector('.project-ai-cli select')).borderRadius`), '4px');
       await evaluate(`document.querySelector('button[data-project-page="knowledge"]').click()`);
       assert.equal(await evaluate(`messages[0].page`), 'knowledge');
+      await load(ui.renderProjectPanel('knowledge', project));
+      assert.equal(await evaluate(`document.querySelectorAll('.architecture-tools, .diagram-adapter-controls, .architecture-graph, .project-scan-folders, .diagram-versions, .architecture-relations').length`), 0);
       await writeFile(join(artifacts, `project-${themeName}-${width}.png`), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
     }
   }
