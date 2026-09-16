@@ -97,15 +97,38 @@ export class DeepSeekHarnessRunner implements AgentRunner {
       const saved = request.metadata.conversationProviderSessionId ? decodeHarnessSession(request.metadata.conversationProviderSessionId) : undefined;
       const resume = saved?.binding === binding && !request.metadata.conversationForkFrom ? saved.id : undefined;
       if (request.signal?.aborted) throw new ExecutionCancelledError();
-      const response = resume
-        ? await transport.wait(transport.connection.resumeSession({ sessionId: resume, cwd: request.cwd, mcpServers: [] }))
-        : await transport.wait(transport.connection.newSession({ cwd: request.cwd, mcpServers: [] }));
-      const id = resume ?? (response as { sessionId: string }).sessionId;
-      session = { id, binding, transport, policy, options: response.configOptions ?? [], defaults: new Map(), messages: new Map(), tools: new Map(), fresh: !resume };
+      const opened = await this.openSession(transport, request, resume);
+      session = { ...opened, binding, transport, policy, defaults: new Map(), messages: new Map(), tools: new Map() };
       for (const option of session.options) if (option.type === "select") session.defaults.set(option.id, option.currentValue);
       return session;
     } catch (error) { await transport?.close(); await policy.dispose(); throw error; }
     finally { request.signal?.removeEventListener("abort", onAbort); }
+  }
+
+  /** Restore the stored session when the Harness still holds it, and start a fresh one
+   * when it does not. A refusal that fails the turn would strand the conversation on a
+   * session the user cannot see or fix; a new session keeps the turn alive, and the
+   * `fresh` flag makes its prompt carry Dext's own conversation context instead. */
+  private async openSession(transport: DeepSeekHarnessTransport, request: Request, resume: string | undefined):
+    Promise<{ id: string; options: SessionConfigOption[]; fresh: boolean }> {
+    const create = async (): Promise<{ id: string; options: SessionConfigOption[]; fresh: boolean }> => {
+      const response = await transport.wait(transport.connection.newSession({ cwd: request.cwd, mcpServers: [] }));
+      return { id: response.sessionId, options: response.configOptions ?? [], fresh: true };
+    };
+    if (!resume) return create();
+    let refused: string;
+    try {
+      const response = await transport.wait(transport.connection.resumeSession({ sessionId: resume, cwd: request.cwd, mcpServers: [] }));
+      return { id: resume, options: response.configOptions ?? [], fresh: false };
+    } catch (error) {
+      // An aborted turn is a cancellation, not a refusal: keep reporting it as one.
+      if (request.signal?.aborted) throw error;
+      refused = error instanceof Error ? error.message : String(error);
+    }
+    const opened = await create();
+    request.onEvent?.({ id: `harness-session:${resume}`, phase: "message", group: "work-log",
+      text: `Dext could not restore Harness session ${resume} (${refused}). Continuing in a new session with this conversation's context.` });
+    return opened;
   }
 
   private update(session: Session, event: SessionNotification): void {

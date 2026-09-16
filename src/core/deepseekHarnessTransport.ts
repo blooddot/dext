@@ -15,6 +15,36 @@ export interface HarnessClient extends Client {
   harnessQuestion?(request: HarnessQuestionRequest): Promise<HarnessQuestionOutcome>;
 }
 
+function boundedText(value: string, limit = 2000): string | undefined {
+  const text = value.trim();
+  return !text || text === "{}" ? undefined : text.length > limit ? `…${text.slice(-limit)}` : text;
+}
+
+/** A Harness handler that throws answers with the protocol's generic `-32603 Internal
+ * error` and parks the real cause in the error's `data`. Read that payload, since the
+ * message alone never names the failure the model backend or a plugin actually hit. */
+function harnessCause(error: unknown): string | undefined {
+  if (!(error instanceof Error)) return undefined;
+  const acp = error as Error & { code?: unknown; data?: unknown };
+  if (typeof acp.data === "string") return boundedText(acp.data);
+  const details = typeof acp.data === "object" && acp.data !== null ? (acp.data as { details?: unknown }).details : undefined;
+  if (typeof details === "string" && details.trim()) return boundedText(details);
+  // Only the generic internal error needs its whole payload: an ACP message carrying any
+  // other code already names its own problem.
+  if (acp.code !== -32603) return undefined;
+  try { return boundedText(JSON.stringify(acp.data) ?? ""); } catch { return undefined; }
+}
+
+/** Keep the received message — a placeholder stays recognizable in reports — and append
+ * the cause plus the diagnostics the process printed while failing. A rejection that
+ * already explains itself, or carries no cause at all, passes through untouched. */
+function describeHarnessError(error: unknown, stderr: string): unknown {
+  const cause = harnessCause(error);
+  if (!cause || !(error instanceof Error) || cause === error.message) return error;
+  const diagnostics = boundedText(stderr);
+  return new Error(`DeepSeek Harness ${error.message}: ${cause}${diagnostics ? `\nHarness stderr:\n${diagnostics}` : ""}`, { cause: error });
+}
+
 export class DeepSeekHarnessTransport {
   readonly connection: HarnessConnection;
   private readonly clientConnection: ClientConnection;
@@ -90,9 +120,15 @@ export class DeepSeekHarnessTransport {
 
   async wait<T>(operation: Promise<T>, timeoutMs = 30000): Promise<T> {
     let timer: ReturnType<typeof setTimeout> | undefined;
-    try { return await Promise.race([operation, this.failure, new Promise<never>((_, reject) => {
-      if (timeoutMs > 0) timer = setTimeout(() => reject(new Error("DeepSeek Harness operation timed out.")), timeoutMs);
-    })]); } finally { if (timer) clearTimeout(timer); }
+    try { return await Promise.race([
+      // Only the request's own rejection is rewritten: a transport failure and the
+      // watchdog already describe themselves.
+      operation.catch((error: unknown): never => { throw describeHarnessError(error, this.stderr); }),
+      this.failure,
+      new Promise<never>((_, reject) => {
+        if (timeoutMs > 0) timer = setTimeout(() => reject(new Error("DeepSeek Harness operation timed out.")), timeoutMs);
+      })
+    ]); } finally { if (timer) clearTimeout(timer); }
   }
 
   async initialize(): Promise<void> {

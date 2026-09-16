@@ -40,6 +40,18 @@ describe("Harness ACP transport", { timeout: 15000 }, () => {
   it("fails on malformed protocol output", async () => {
     await expect(connection(["--malformed"]).initialize()).rejects.toThrow(/protocol|closed/);
   });
+  it("reports the cause and stderr behind a generic ACP internal error", async () => {
+    const transport = connection(["--internal-error"]); await transport.initialize();
+    const failure = transport.wait(transport.connection.newSession({ cwd: process.cwd(), mcpServers: [] }));
+    await expect(failure).rejects.toThrow(/^DeepSeek Harness Internal error: Cannot read properties of undefined \(reading 'session'\)/);
+    await expect(failure).rejects.toThrow(/Harness stderr:\nfixture diagnostic/);
+    await expect(failure).rejects.toMatchObject({ cause: { message: "Internal error" } });
+  });
+  it("leaves an ACP error that already names its cause untouched", async () => {
+    const transport = connection(); await transport.initialize();
+    await expect(transport.wait(transport.connection.resumeSession({ sessionId: "missing", cwd: process.cwd(), mcpServers: [] })))
+      .rejects.toThrow(/^not resumable$/);
+  });
   it("reports an unavailable executable", async () => {
     let transport: DeepSeekHarnessTransport | undefined;
     await expect((async () => {

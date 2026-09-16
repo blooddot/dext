@@ -54,7 +54,10 @@ lines.on("line", async (line) => {
       process.stderr.write("fixture diagnostic\n");
       return result({ protocolVersion: 1, agentCapabilities: { sessionCapabilities: { resume: {}, close: {}, list: {} } }, authMethods: [],
         _meta: { clientCapabilities: p.clientCapabilities ?? null } });
-    case "session/new": { const id = randomUUID(); sessions.set(id, options()); return result({ sessionId: id, configOptions: options() }); }
+    case "session/new": {
+      if (process.argv.includes("--internal-error")) return send({ id: message.id, error: { code: -32603, message: "Internal error", data: { details: "Cannot read properties of undefined (reading 'session')" } } });
+      const id = randomUUID(); sessions.set(id, options()); return result({ sessionId: id, configOptions: options() });
+    }
     case "session/resume":
       if (p.sessionId === "missing") return send({ id: message.id, error: { code: -32602, message: "not resumable" } });
       sessions.set(p.sessionId, options()); return result({ configOptions: options() });

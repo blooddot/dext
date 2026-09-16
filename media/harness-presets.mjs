@@ -21,9 +21,9 @@ export async function apply(ctx, config) {
   const agents = ctx.agents;
   const presets = ctx.agentPresets;
   const preset = await presets.resolveMountable(config.preset);
-  const setup = (original) => async (agentCtx) => {
-    await presets.mount(agentCtx, preset.id);
-    await original?.(agentCtx);
+  const setup = (original) => async (...args) => {
+    await presets.mount(args[0], preset.id);
+    await original?.(...args);
   };
   const factory = {
     get: (id) => agents.get(id),

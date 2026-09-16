@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { DeepSeekHarnessRunner } from "../src/core/deepseekHarnessRunner.js";
 import { DeepSeekHarnessTransport } from "../src/core/deepseekHarnessTransport.js";
 import type { AgentInputRequest, AgentStreamEvent } from "../src/core/types.js";
-import { decodeHarnessSession } from "../src/core/deepseekHarnessPolicy.js";
+import { decodeHarnessSession, encodeHarnessSession } from "../src/core/deepseekHarnessPolicy.js";
 import type { AgentConversationRequest, AgentExecutionRequest } from "../src/core/agentRunner.js";
 import { BUILTIN_METHODS } from "../src/core/builtins.js";
 import { AxAdapter } from "../src/core/axAdapter.js";
@@ -72,6 +72,21 @@ describe("Harness runner", { timeout: 15000 }, () => {
   it("forks into a fresh session using Dext context", async () => {
     const text = await runner().runConversation({ ...request("new task"), metadata: { agentSessionId: "fork", conversationForkFrom: "source", conversationContext: "earlier task" } });
     expect(text).toContain("earlier task"); expect(text).toContain("new task");
+  });
+  it("continues in a new session when the Harness refuses to restore the stored one", async () => {
+    const first = runner(), save = vi.fn();
+    await first.runConversation({ ...request("first"), metadata: { agentSessionId: "restore", onAgentSessionId: save } });
+    const stored = decodeHarnessSession(save.mock.calls[0]![1] as string);
+    await first.dispose();
+    const events: AgentStreamEvent[] = [];
+    const text = await runner().runConversation({ ...request("second"), onEvent: (event) => events.push(event), metadata: {
+      agentSessionId: "restore", conversationContext: "earlier task", onAgentSessionId: save,
+      conversationProviderSessionId: encodeHarnessSession("missing", stored.binding)
+    } });
+    // The refused id is replaced and the turn still carries Dext's own context forward.
+    expect(text).toContain("second"); expect(text).toContain("earlier task");
+    expect(decodeHarnessSession(save.mock.calls[1]![1] as string).id).not.toBe("missing");
+    expect(events.map((event) => event.text).join("\n")).toContain("could not restore Harness session missing");
   });
   it("discovers models and reasoning without submitting prompts", async () => {
     const options = await runner().discoverModels(request().profile, process.cwd());
