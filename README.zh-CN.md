@@ -78,6 +78,8 @@ print(text=answer.text)
 
 工作流使用 Python 的一小部分语法，由 Dext 自行解析和校验，**不需要 Python 解释器**。API 参数和结果字段都支持补全与类型检查。
 
+字符串是一等值：可以用 `+` 拼接，用 f-string 组合文本（`f"{answer.text} ({checked.exit_code})"`），也可以使用 Dext 自行编译的 Python 字符串方法和纯函数（`split`、`join`、`replace`、`upper`、`len`、`sorted`、`range`，以及 `text[::-1]` 这类切片）。详见[文本与取值表达式](docs/workflows.zh-CN.md#文本与取值表达式)。
+
 可复用的 API 以 `.dx` 文件保存在 `.dext/api/` 中。例如，创建 `.dext/api/team/analyze.dx`：
 
 ```python
@@ -120,16 +122,16 @@ print(text=answer.text)
 | [Agent 配置](docs/agents.zh-CN.md) | CLI 配置、模型覆盖、DeepSeek Harness 预设与权限 |
 | [MCP 配置](docs/mcp.zh-CN.md) | 工具清单、类型化结果、传输方式和凭据 |
 | [行内补全](docs/completion.zh-CN.md) | 模型配置、接口格式和调优 |
-| [项目知识与 Review](docs/project-development.zh-CN.md) | 项目文件、知识维度、对话 Review、编辑器标签和架构扫描 |
+| [项目知识与 Review](docs/project-development.zh-CN.md) | 项目文件、知识维度、对话 Review、编辑器标签和图表 |
 | [开发与发布](docs/development.zh-CN.md) | 本地开发、检查、打包、发布和架构 |
 
 ## 项目知识、编辑器标签与 Review
 
-Project、API、Global Resources 和 History 都作为编辑器标签打开：同一目标只保留一个页面，重载后会恢复上次的选择。Project 只展示长期内容——Overview、Knowledge 和 Architecture，不显示 Hook 日志、任务清单或单次执行记录。
+Project、API、Global Resources 和 History 都作为编辑器标签打开：同一目标只保留一个页面，重载后会恢复同一个页面。Project 只展示长期内容——Overview、Knowledge 和 Diagrams，不显示 Hook 日志、任务清单或单次执行记录。
 
 每个开发轮次结束时，对话中会出现可折叠的 Review：本轮改动的文件、记录到的脚本事实与覆盖范围、知识草稿，以及你的接受或退回决定。Review 绑定 `sessionId + turnId + runId`，因此重试或后续 Build 不会继承上一次的接受状态。工程审查与体验验收只改变呈现重点，都可以直接在对话中完成。Ask 保持只读且不生成验收卡片；编写 Plan 不会产生实现 Review。
 
-Plan 执行额外绑定计划内容版本与本次 Build，把多个轮次累计到同一份 Review。能证明归属的变更按任务分组，共享与无法归属的变更单列，不做猜测。接受代码 Review 与采用知识草稿是两个独立动作：采用一条草稿会写入一条长期对象并在 Project 中打开它。文件布局、知识维度和扫描覆盖限制见[项目知识与 Review](docs/project-development.zh-CN.md)。
+Plan 执行额外绑定计划内容版本与本次 Build，把多个轮次累计到同一份 Review。能证明归属的变更按任务分组，共享与无法归属的变更单列，不做猜测。接受代码 Review 与采用知识草稿是两个独立动作：采用一条草稿会写入一条长期对象并在 Project 中打开它。文件布局、知识维度和图表生成见[项目知识与 Review](docs/project-development.zh-CN.md)。
 
 ## 补全：API 模型、上下文与项目经验
 

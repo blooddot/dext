@@ -10,13 +10,35 @@ All notable changes to Dext are documented in this file.
 
 ## Unreleased
 
+- Fix Harness session restore, which failed every resumed conversation with the protocol's generic `Internal error`: Dext's preset plugin forwarded only the agent-context argument to the deepseek Harness agent factory's `setup`, dropping the agent the resume path composes its model selection from.
+
+- Report the cause behind a generic Harness `Internal error` — the ACP error's `data` payload plus the process's stderr tail — instead of the placeholder, and continue in a new session whose prompt carries this conversation's own context when the Harness refuses to restore a stored one, saying so in Process.
+
+- **Breaking:** the Harness **Agent preset** menu now lists exactly the installed Harness catalog, with no Dext-only **ACP default** entry: every Harness conversation mounts a preset, and an unset or previously empty selection runs Standard instead of the profile's own agent composition.
+
+- Add text and value expressions to the workflow language: string concatenation with `+`, Python f-strings with conversions (`!r`), format specs (`.2f`, `,`, `>8`), nested specs and `{value=}`, `%` formatting, `str.format`, indexing and slicing (`text[1:4]`, `text[::-1]`), membership tests, ordering comparisons, `and`/`or`/`not`, Python string methods, and the pure helpers `len`, `str`, `repr`, `int`, `float`, `bool`, `abs`, `round`, `min`, `max`, `sorted`, `sum`, `range`, `list`, `reversed`, `any`, and `all`. A value the compiler can determine is folded while compiling, so `"a" + "b"` behaves exactly like `"ab"` in every check; everything else stays a pure runtime expression with no API round trip. `elif` chains now keep every condition instead of quietly running the first body.
+
+- Accept Python tuple syntax as list syntax: `("a", 1)`, `(value,)`, `()` and the bare `1, 2` all compile to a list, so `startswith((".md", ".txt"))`, `"%s %d" % ("total", 3)` and `"%s" % (items,)` can be written exactly as in Python. There is still one sequence type: a tuple is not fixed-length and `(1, 2) == [1, 2]` is true, and unpacking stays unsupported (`a, b = pair` reports that Dext assigns one variable at a time).
+
+- **Breaking:** reject assignment shapes that used to compile by dropping part of the statement: `a, b = value` lost the extra name, and `a = b = 1` bound only `a`. Each now reports the shape it does not support. `x = 1, 2` used to silently bind only `1`; it now compiles as the tuple Python sees, which is a list.
+
+- Parse Codex `config.toml` with `smol-toml` instead of line regexes, so comments, sections, and string escapes no longer break CLI path and model defaults.
+
+- Add `agent(patch=false)` for text-only previews that report conclusions without producing a patch; route Agent result parsing through one tolerant boundary with one bounded ax-driven repair attempt, and return the harness final message instead of throwing "returned invalid JSON" so failures stay diagnosable.
+
 - Separate long-term project knowledge from per-run conversation Review. Project knowledge lives in `.dext/project.json`, `.dext/objects/*.json`, and `.dext/architecture.json`, and every object now carries independent source, confirmation, validity, and ownership dimensions; the legacy `status` field is migrated on read. Review is keyed by session, turn, and run, and records the project version, plan version, and Build run it was produced against, so feedback can never land on another run or an older attempt.
 
-- Unify Project, API, Global Resources, and History editor tabs behind stable keys, versioned state, and a restore path with a claim guard that prevents a serializer restore and a proactive restore from double-opening a tab. The Project tab exposes only Overview, Knowledge, and Architecture.
+- Unify Project, API, Global Resources, and History editor tabs behind stable keys, versioned state, and a restore path that keeps one panel per key. A page persists its own state, so reopening a window restores the same page and target, and a panel restored without usable state is rendered or dropped instead of being left blank. The Project tab exposes only Overview, Knowledge, and Diagrams.
 
-- Improve architecture scanning coverage: Python relative imports, `__init__`, and namespace packages resolve; Rust scanning strips comments and string literals before matching, resolves module-tree and `use` relations, and reports conditional compilation and macros as uncertain; `Cargo.toml` description and dependencies are read without running Cargo, optionally enriched by `cargo metadata` with an explicit fallback. `Cargo.toml` is now part of the scanned file set, so a local `use <crate>::x` resolves to that package's `src/lib.rs` or `src/main.rs` instead of being reported unresolved, and the Architecture page lists scan coverage notes, such as an unresolved `Cargo.lock`, separately from unresolved paths.
+- **Breaking:** remove the source scanner (TypeScript/JavaScript, Python, Rust and `Cargo.toml`) and the per-format diagram adapters (draw.io, Mermaid, Structurizr). Project knowledge now comes from an explicit, user-triggered AI initialization over a bounded, redacted evidence package, and one pinned Archify runtime renders all five diagram kinds from Project's own semantic IR. HTML and SVG are the only export formats.
 
-- Add engineering and experience review presets that change what a review emphasizes, and a local-SVG architecture view that keeps manually declared relations such as a Tauri IPC contract separate from statically detected ones.
+- Add a **Diagrams** page that embeds the rendered Archify viewer in a sandboxed frame: select a saved diagram, generate or update one from a requirement, refresh, export HTML/SVG and go fullscreen, with validation, version and evidence coverage in a collapsed section. A failed render keeps the same diagram's last successful result visible and labels which version is on screen.
+
+- Add declared architecture rules: `.dext/architecture.json` may carry `diagramId` and `rules` (`deny`, `allow`, `no_cycles`) over stable Project node ids, and the Diagrams page lists those rules with the violations the saved diagram currently has. Rules that cannot be evaluated against a diagram are reported instead of being applied to a guess.
+
+- Persist the last successful render of each diagram in `.dext/diagram-history.json`, newest first and bounded in size, so a later failed render can still show the previous result after a window reload instead of only within one session.
+
+- Add engineering and experience review presets that change what a review emphasizes.
 
 - Add `docs/project-development.md` and `docs/project-development.zh-CN.md` describing the project-knowledge and conversation-Review model.
 
