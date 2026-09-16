@@ -1,5 +1,6 @@
 import { RESOURCE_DIRECTORIES, RESOURCE_LABELS, type ResourceKind, type ResourceScope } from "./resourceSession.js";
 import { editorTabKey } from "./editorTabTypes.js";
+import type { EditorTabState } from "./editorTabState.js";
 import { describeEditorTab, type EditorTabManager } from "./editorTabManager.js";
 import type { EditorTabRestorer } from "./editorTabSerializer.js";
 import type { SidebarState } from "./webviewProtocol.js";
@@ -122,6 +123,8 @@ export interface ResourcePanelOptions {
   collapsed?: readonly string[];
   apiTree?: boolean;
   navigation?: { canGoBack: boolean; canGoForward: boolean; label?: string; scrollTop: number };
+  /** Tab state persisted through `setState`, so a reload restores this exact page. */
+  tabState?: EditorTabState;
 }
 
 function renderResourceNavigation(options: ResourcePanelOptions): string {
@@ -208,9 +211,10 @@ function renderApiTree(document: ResourceListDocument, collapsed: Set<string>): 
 /**
  * Filter the loaded list in place so typing keeps focus; forward open and toolbar commands.
  */
-export function resourceClientScript(): string {
+export function resourceClientScript(state?: EditorTabState): string {
+  const restore = state ? `api.setState(${JSON.stringify(state)});` : "";
   return `<script>(function(){
-    var api=acquireVsCodeApi();
+    var api=window.__dextApi||(window.__dextApi=acquireVsCodeApi());${restore}
     var collapsed=new Set((document.body.dataset.resourceCollapsed||'').split('\\u001f').filter(Boolean));
     function nodes(){return Array.from(document.querySelectorAll('[data-resource-node]'));}
     function search(){return document.querySelector('[data-resource-search]');}
@@ -304,7 +308,7 @@ export function renderResourceList(document: ResourceListDocument, options: Reso
     + `</header>`
     + (groups || `<p class="resource-empty">No ${escapeResourceHtml(RESOURCE_LABELS[document.kind])} resources found.</p>`)
     + `<p class="resource-empty" data-resource-no-results hidden>No matching resources.</p>`
-    + `</div><script>document.body.dataset.resourceCollapsed=${JSON.stringify([...collapsed].join("\u001f"))};</script>${resourceClientScript()}`;
+    + `</div><script>document.body.dataset.resourceCollapsed=${JSON.stringify([...collapsed].join("\u001f"))};</script>${resourceClientScript(options.tabState)}`;
 }
 
 /** A resource that disappeared keeps its stable key and shows a recoverable error instead. */
@@ -313,7 +317,7 @@ export function renderResourceError(id: string, message: string, options: Resour
   return `<div class="resource-panel resource-error" data-resource-id="${escapeResourceHtml(id)}" data-resource-error="1">`
     + renderResourceNavigation(options)
     + `<p>${escapeResourceHtml(message)}</p>`
-    + resourceRefreshButton(prefix) + `</div>${resourceClientScript()}`;
+    + resourceRefreshButton(prefix) + `</div>${resourceClientScript(options.tabState)}`;
 }
 
 /** Renders one resource definition with its originating file for the source jump. */export function renderResourceDefinition(document: ResourceDefinitionDocument, options: ResourcePanelOptions = {}): string {
@@ -332,7 +336,7 @@ export function renderResourceError(id: string, message: string, options: Resour
     + `<header class="resource-toolbar"><h2>${escapeResourceHtml(entry.name)}</h2>`
     + (entry.source.path ? `<button type="button" data-resource-command="${prefix}.openResourceSource" data-resource-path="${escapeResourceHtml(entry.source.path)}">Open source</button>` : "")
     + `<button type="button" data-resource-command="${prefix}.insertResourceReference" data-resource-id="${escapeResourceHtml(resourceEntryId(entry))}">Insert reference</button>`
-    + `</header>${apiDetails}<h3 class="resource-source-heading">Source</h3><pre class="resource-content" data-resource-source="${escapeResourceHtml(document.content)}"><code>${highlightResourceSource(document.content)}</code></pre></div>${resourceClientScript()}`;
+    + `</header>${apiDetails}<h3 class="resource-source-heading">Source</h3><pre class="resource-content" data-resource-source="${escapeResourceHtml(document.content)}"><code>${highlightResourceSource(document.content)}</code></pre></div>${resourceClientScript(options.tabState)}`;
 }
 
 export interface ResourceEditorDataSource {

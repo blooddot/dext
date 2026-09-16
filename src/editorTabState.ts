@@ -20,13 +20,16 @@ export function normalizePage(kind: EditorTabKind, page: string | undefined): st
   return defaultPageFor(kind);
 }
 
-export function createEditorTabState(key: string, options: { page?: string; filters?: Record<string, string> } = {}): EditorTabState | undefined {
+export function createEditorTabState(key: string, options: { page?: string; resourceId?: string; filters?: Record<string, string> } = {}): EditorTabState | undefined {
   const parsed = parseEditorTabKey(key);
   if (!parsed) return undefined;
+  // One tab can show several targets (an API browser lists and opens definitions), so the caller may
+  // record which target is on screen even when the key itself carries no resource id.
+  const resourceId = options.resourceId ?? parsed.resourceId;
   return {
     key,
     page: normalizePage(parsed.kind, options.page),
-    ...(parsed.resourceId ? { resourceId: parsed.resourceId } : {}),
+    ...(resourceId ? { resourceId } : {}),
     filters: options.filters ?? {},
     restoreVersion: EDITOR_TAB_RESTORE_VERSION
   };
@@ -41,5 +44,10 @@ export function restoreEditorTabState(input: unknown): { state?: EditorTabState;
   if (!parsed) return { error: "Unknown editor tab key." };
   const result = editorTabStateSchema.safeParse(input);
   if (!result.success) return { error: "Invalid editor tab state." };
+  // A state written by a newer build may describe pages this build does not have, so it is skipped
+  // rather than normalized into today's vocabulary. Older states keep their documented defaults.
+  if (result.data.restoreVersion > EDITOR_TAB_RESTORE_VERSION) {
+    return { error: `Editor tab state version ${result.data.restoreVersion} is newer than this build supports.` };
+  }
   return { state: { ...result.data, page: normalizePage(parsed.kind, result.data.page) } };
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { editorTabKey, editorTabTitle, isRecoverableEditorTabKey, parseEditorTabKey } from "../src/editorTabTypes.js";
+import { EDITOR_TAB_RESTORE_VERSION, editorTabKey, editorTabTitle, isRecoverableEditorTabKey, parseEditorTabKey } from "../src/editorTabTypes.js";
 import { createEditorTabState, normalizePage, restoreEditorTabState } from "../src/editorTabState.js";
 
 describe("editor tab keys", () => {
@@ -39,5 +39,26 @@ describe("editor tab state", () => {
   it("reports an invalid state instead of opening an unrelated page", () => {
     expect(restoreEditorTabState({ key: "nope" })).toEqual({ error: "Unknown editor tab key." });
     expect(restoreEditorTabState({ key: "dext.editor:project", page: 3 }).error).toBe("Invalid editor tab state.");
+  });
+
+  it("records the on-screen target of a tab that holds several of them", () => {
+    // The API browser keeps one key for the list and every definition, so the shown resource has to
+    // be part of the persisted state.
+    const state = createEditorTabState("dext.editor:api", { page: "detail", resourceId: "Task.Query" });
+    expect(state).toMatchObject({ key: "dext.editor:api", page: "detail", resourceId: "Task.Query" });
+    expect(restoreEditorTabState(state).state?.resourceId).toBe("Task.Query");
+
+    const list = createEditorTabState("dext.editor:api", { page: "list" });
+    expect(list).not.toHaveProperty("resourceId");
+    expect(list?.page).toBe("list");
+  });
+
+  it("skips a state written by a newer build instead of treating it as the current format", () => {
+    const future = restoreEditorTabState({ key: "dext.editor:project", page: "overview", restoreVersion: EDITOR_TAB_RESTORE_VERSION + 1 });
+    expect(future.state).toBeUndefined();
+    expect(future.error).toContain("newer");
+    // An older state stays readable: missing fields keep their defaults.
+    expect(restoreEditorTabState({ key: "dext.editor:project", page: "knowledge", restoreVersion: 1 }).state)
+      .toMatchObject({ key: "dext.editor:project", page: "knowledge", filters: {} });
   });
 });

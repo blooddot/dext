@@ -74,6 +74,25 @@ describe("editor tab manager", () => {
     expect(manager.activeKeys).toEqual([]);
   });
 
+  it("keeps the live tab when a panel that adoption replaced reports its own dispose", () => {
+    const host = new FakeHost();
+    const manager = new EditorTabManager(host);
+    const descriptor = describeEditorTab("project", "dext.editor:project", EDITOR_TAB_VIEW_TYPES.project);
+    const live = manager.open(descriptor);
+    // A restored panel for an already-open key is disposed by `adopt`, which must not close the
+    // registered one through its own dispose callback.
+    const restored = new FakePanel();
+    const adopted = manager.adopt(descriptor.key, descriptor, restored);
+    expect(restored.disposed).toBe(true);
+    restored.dispose(); // the panel notifies VS Code's onDidDispose
+    expect(manager.closeIfCurrent(descriptor.key, restored)).toBe(false);
+    expect(manager.has(descriptor.key)).toBe(true);
+    expect((live.panel as FakePanel).disposed).toBe(false);
+    expect(manager.closeIfCurrent(descriptor.key, live.panel)).toBe(true);
+    expect(manager.has(descriptor.key)).toBe(false);
+    expect(adopted.created).toBe(false);
+  });
+
   it("adapts a VS Code window and wires dispose callbacks", () => {
     const disposeListeners: Array<() => void> = [];
     const reveal = vi.fn();

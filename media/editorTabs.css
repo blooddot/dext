@@ -92,7 +92,7 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .resource-group h2 { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; font-size: 13px; }
 .resource-count, .resource-source { color: var(--vscode-descriptionForeground); font-size: 11px; font-weight: 400; }
 .resource-count { border-radius: 10px; padding: 0 6px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
-.resource-group ul, .project-objects, .project-drafts, .architecture-relations { list-style: none; padding: 0; margin: 0; }
+.resource-group ul, .project-objects, .project-drafts { list-style: none; padding: 0; margin: 0; }
 .resource-api-node > ul { padding-left: 16px; }
 .resource-api-node > summary { font-size: 13px; }
 .resource-entry > button { display: block; width: 100%; padding: 8px 10px; text-align: left; border-color: transparent; color: inherit; background: transparent; }
@@ -134,7 +134,7 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .project-facts dd { margin: 0; overflow-wrap: anywhere; }
 .project-help { max-width: 760px; color: var(--vscode-descriptionForeground); }
 .project-ai-cli, .project-ai-model { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin: 12px 0; color: var(--vscode-foreground); }
-.project-ai-cli select, .project-ai-model select, .architecture-tools select, .diagram-adapter-controls select {
+.project-ai-cli select, .project-ai-model select {
   min-width: 220px; max-width: min(100%, 420px); min-height: 30px; padding: 4px 28px 4px 9px;
   border: 1px solid var(--vscode-dropdown-border, var(--vscode-widget-border)); border-radius: 5px;
   color: var(--vscode-dropdown-foreground, var(--vscode-foreground)); background: var(--vscode-dropdown-background, var(--vscode-input-background));
@@ -142,32 +142,12 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .project-ai-model-details { flex-basis: 100%; margin-left: 0; color: var(--vscode-descriptionForeground); font-size: 12px; }
 .project-initialize { margin: 4px 0 16px; }
 .project-scan-progress { display: flex; align-items: center; gap: 8px; margin: -8px 0 16px; color: var(--vscode-descriptionForeground); }
-.project-scan-progress-track { flex: 0 0 150px; width: 150px; height: 4px; overflow: hidden; background: var(--vscode-panel-border); border-radius: 999px; }
-.project-scan-progress-fill { display: block; height: 100%; border-radius: inherit; background: var(--vscode-focusBorder); transition: width 180ms ease-out; }
 .project-scan-progress-label { min-width: 0; }
 .project-scan-progress-label strong { color: var(--vscode-foreground); font-weight: 600; }
-.project-scan-folders { margin: 12px 0 16px; }
-.project-object, .project-draft, .architecture-relation, .architecture-decision { padding: 12px; margin-bottom: 8px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; overflow-wrap: anywhere; }
-.object-kind, .object-state, .draft-kind, .relation-source, .relation-evidence, .relation-reason { display: block; color: var(--vscode-descriptionForeground); font-size: 12px; }
+.project-object, .project-draft, .architecture-decision { padding: 12px; margin-bottom: 8px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; overflow-wrap: anywhere; }
+.object-kind, .object-state, .draft-kind { display: block; color: var(--vscode-descriptionForeground); font-size: 12px; }
 .draft-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .project-object-focus { outline: 1px solid var(--vscode-focusBorder); }
-.architecture-graph-section { overflow: auto; }
-.architecture-graph-scroll { overflow: auto; max-height: 72vh; padding: 8px 0 12px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; background: var(--vscode-editor-background); }
-.architecture-summary { color: var(--vscode-descriptionForeground); margin: -8px 0 10px; }
-.architecture-graph-empty { min-height: 96px; display: grid; place-items: center; padding: 24px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; color: var(--vscode-descriptionForeground); text-align: center; }
-.architecture-graph { display: block; max-width: none; height: auto; }
-.architecture-graph-note { color: var(--vscode-descriptionForeground); margin: 8px 0 0; }
-.architecture-node rect { fill: var(--vscode-input-background); stroke: var(--vscode-focusBorder); }
-.architecture-node text { fill: var(--vscode-foreground); font-size: 12px; }
-.architecture-edge { stroke: var(--vscode-descriptionForeground); }
-.architecture-edge.manual { stroke-dasharray: 5 3; }
-.diagram-adapter-controls, .architecture-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 12px; }
-.diagram-adapter-controls { padding: 10px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; background: var(--vscode-editor-background); }
-.diagram-adapter-controls select, .architecture-tools select, .architecture-tools input { min-width: 150px; }
-.diagram-adapter-recommendation, .diagram-adapter-fallback { color: var(--vscode-descriptionForeground); font-size: 12px; }
-.diagram-adapter-fallback { flex-basis: 100%; margin: 0; }
-.diagram-versions { margin-top: 16px; }
-.diagram-node-hidden { opacity: 0.18; }
 .project-knowledge-brief { margin-bottom: 20px; }
 .project-knowledge-brief > ul { padding-left: 20px; }
 .project-knowledge-brief li { margin: 7px 0; }
@@ -218,9 +198,7 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .project-ai-cli { margin-top: 14px; }
 .project-ai-model { margin-top: 8px; }
 .project-control-label { min-width: 0; color: var(--vscode-descriptionForeground); font-size: 12px; font-weight: 500; }
-.project-ai-cli select, .project-ai-model select,
-.diagram-adapter-controls select, .architecture-tools select,
-.architecture-tools input {
+.project-ai-cli select, .project-ai-model select {
   width: 100%;
   min-width: 0;
   min-height: 28px;
@@ -230,9 +208,7 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
   color: var(--vscode-input-foreground, var(--vscode-foreground));
   background: var(--vscode-input-background);
 }
-.project-ai-cli select:hover, .project-ai-model select:hover,
-.diagram-adapter-controls select:hover, .architecture-tools select:hover,
-.architecture-tools input:hover { border-color: var(--vscode-focusBorder); }
+.project-ai-cli select:hover, .project-ai-model select:hover { border-color: var(--vscode-focusBorder); }
 .project-ai-model-details {
   grid-column: 2;
   margin-top: -2px;
@@ -248,94 +224,25 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
   border-top: 1px solid var(--project-card-border);
 }
 .project-facts dd { color: var(--vscode-foreground); }
-.project-object, .project-draft, .architecture-relation, .architecture-decision {
+.project-object, .project-draft, .architecture-decision {
   border-color: var(--project-card-border);
   background: var(--project-card-fill);
   border-radius: 6px;
 }
-.project-object:hover, .project-draft:hover, .architecture-relation:hover, .architecture-decision:hover {
+.project-object:hover, .project-draft:hover, .architecture-decision:hover {
   border-color: color-mix(in srgb, var(--vscode-focusBorder) 55%, var(--project-card-border));
 }
-.diagram-adapter-controls {
-  display: grid;
-  grid-template-columns: minmax(220px, 1fr) auto auto auto;
-  align-items: center;
-  gap: 10px;
-  padding: 13px 14px;
-  border-color: var(--project-card-border);
-  border-radius: 7px;
-  background: var(--project-card-fill);
-}
-.diagram-adapter-controls > label {
-  display: grid;
-  grid-template-columns: max-content minmax(120px, 1fr);
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  color: var(--vscode-descriptionForeground);
-  font-size: 12px;
-  font-weight: 500;
-}
-.diagram-adapter-controls > button { white-space: nowrap; }
-.diagram-adapter-recommendation, .diagram-adapter-fallback {
-  grid-column: 1 / -1;
-  margin: 0;
-  line-height: 1.4;
-}
-.diagram-adapter-fallback { padding-top: 2px; }
-.architecture-tools {
-  display: grid;
-  grid-template-columns: minmax(200px, 1fr) auto auto auto;
-  align-items: center;
-  gap: 8px;
-  padding: 10px;
-  margin-bottom: 18px;
-  border: 1px solid var(--project-card-border);
-  border-radius: 7px;
-  background: var(--project-card-fill);
-}
-.architecture-tools > label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  color: var(--vscode-descriptionForeground);
-  font-size: 12px;
-  font-weight: 500;
-}
-.architecture-tools > label:first-child input { flex: 1 1 auto; }
-.architecture-tools > label select { min-width: 112px; }
-.architecture-graph-section { margin-top: 4px; }
-.architecture-graph-section h2 { margin-bottom: 8px; }
-.architecture-graph-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-.architecture-fullscreen-button { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; white-space: nowrap; }
-.architecture-graph-section:fullscreen,
-.architecture-graph-section.architecture-graph-is-fullscreen {
-  position: fixed; inset: 0; z-index: 1000; box-sizing: border-box; overflow: auto;
-  margin: 0; padding: 24px; background: var(--vscode-editor-background);
-}
-.architecture-graph-section:fullscreen .architecture-graph-scroll,
-.architecture-graph-section.architecture-graph-is-fullscreen .architecture-graph-scroll {
-  max-height: calc(100vh - 130px);
-}
-.architecture-graph-scroll {
-  padding: 14px;
-  border-color: var(--project-card-border);
-  border-radius: 7px;
-  background: color-mix(in srgb, var(--vscode-editor-background) 94%, var(--vscode-input-background));
-}
-.architecture-relation-section, .architecture-rules, .architecture-decisions, .architecture-coverage, .diagram-versions {
+.architecture-relation-section, .architecture-rules, .architecture-decisions {
   margin-top: 24px;
 }
-.architecture-relation-section h3, .architecture-rules h3, .architecture-decisions h3, .architecture-coverage h3, .diagram-versions h3 { margin-bottom: 10px; }
+.architecture-relation-section h3, .architecture-rules h3, .architecture-decisions h3 { margin-bottom: 10px; }
+.architecture-rule code { margin-right: 6px; }
+.architecture-violations li { margin: 4px 0; color: var(--vscode-errorForeground, var(--vscode-foreground)); }
+.architecture-rules h4 { margin: 12px 0 6px; }
 
 @media (max-width: 700px) {
   .project-ai-cli, .project-ai-model { grid-template-columns: 1fr; gap: 4px; }
   .project-ai-model-details { grid-column: 1; }
-  .diagram-adapter-controls, .architecture-tools { grid-template-columns: 1fr; }
-  .diagram-adapter-controls > label, .architecture-tools > label { grid-template-columns: max-content minmax(0, 1fr); }
-  .diagram-adapter-recommendation, .diagram-adapter-fallback { grid-column: 1; }
-  .architecture-tools > button { justify-self: start; }
 }
 
 /* Keep the Project tabs light and close to VS Code's editor-tab treatment. */
@@ -376,8 +283,7 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .project-ai-cli, .project-ai-model {
   grid-template-columns: minmax(240px, 300px) minmax(220px, 420px);
 }
-.project-ai-cli, .project-ai-model,
-.diagram-adapter-controls > label, .architecture-tools > label { white-space: nowrap; }
+.project-ai-cli, .project-ai-model { white-space: nowrap; }
 .project-ai-model-control { position: relative; min-width: 0; }
 .project-model-trigger {
   width: 100%; min-width: 0; max-width: none; height: 28px; padding: 4px 8px; display: grid;
@@ -431,12 +337,64 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .project-initialization-output { max-height: 150px; margin: 8px 0 0; padding: 8px; overflow: auto; white-space: pre-wrap; color: var(--vscode-descriptionForeground); background: var(--vscode-textCodeBlock-background); border: 1px solid var(--vscode-panel-border); border-radius: 4px; font-size: 11px; line-height: 1.35; }
 .project-initialization-output[hidden] { display: none; }
 @media (max-width: 700px) { .project-scan-progress-line { align-items: stretch; flex-direction: column; gap: 5px; } .project-scan-progress-meter { flex-basis: auto; width: 100%; } }
-.architecture-tools > label:first-child { min-width: 0; }
-.architecture-tools > label:first-child input { min-width: 180px; }
-.architecture-tools > label:nth-of-type(2) { min-width: 260px; }
 @media (max-width: 700px) {
   .project-ai-cli, .project-ai-model { grid-template-columns: 1fr; }
   .project-model-popover, .project-model-submenu { width: min(216px, calc(100vw - 32px)); }
-  .project-ai-cli, .project-ai-model, .diagram-adapter-controls > label, .architecture-tools > label { white-space: normal; }
-  .architecture-tools > label:first-child input, .architecture-tools > label:nth-of-type(2) { min-width: 0; }
+  .project-ai-cli, .project-ai-model { white-space: normal; }
+}
+
+/* --- Project diagrams: native Archify viewer ------------------------------------------------ */
+.project-init { display: grid; gap: 8px; margin: 18px 0; }
+.project-init-uninitialized { padding: 16px; border: 1px solid var(--vscode-panel-border); border-radius: 6px; background: var(--vscode-editor-background); }
+.project-init-uninitialized .project-help { margin: 0; }
+.project-init-completed .project-initialization-result { color: var(--vscode-foreground); }
+.project-initialization-result { margin: 0; }
+.project-scan-progress-error { color: var(--vscode-errorForeground, var(--vscode-foreground)); }
+.project-scan-progress-warning { color: var(--vscode-editorWarning-foreground, var(--vscode-foreground)); }
+.project-initialization-elapsed { color: var(--vscode-descriptionForeground); font-variant-numeric: tabular-nums; }
+.project-initialization-output { max-height: 220px; overflow: auto; margin: 4px 0 0; padding: 8px; border-radius: 4px; background: var(--vscode-textCodeBlock-background, var(--vscode-input-background)); font-size: 12px; white-space: pre-wrap; }
+.project-initialization-error pre { white-space: pre-wrap; }
+
+.project-diagram-knowledge-note { margin: 0 0 12px; padding: 8px 12px; border-left: 3px solid var(--vscode-editorWarning-foreground, var(--vscode-focusBorder)); background: var(--vscode-input-background); color: var(--vscode-descriptionForeground); }
+.project-diagram-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 12px; }
+.project-diagram-toolbar label { display: flex; align-items: center; gap: 6px; color: var(--vscode-foreground); }
+.project-diagram-toolbar select { min-width: 160px; max-width: 360px; }
+.project-diagram-engine-error { flex-basis: 100%; margin: 0; color: var(--vscode-errorForeground, var(--vscode-foreground)); }
+.project-diagram-stage { position: relative; display: grid; min-height: 320px; border: 1px solid var(--vscode-panel-border); border-radius: 6px; overflow: hidden; background: var(--vscode-editor-background); }
+.project-diagram-stage:fullscreen { min-height: 100vh; border: 0; border-radius: 0; }
+.project-diagram-stage:fullscreen .project-diagram-frame { height: 100vh; }
+.project-diagram-stage-fullscreen .project-diagram-frame { height: 90vh; }
+.project-diagram-frame { width: 100%; height: min(72vh, 760px); border: 0; background: var(--vscode-editor-background); }
+.project-diagram-loading { position: absolute; inset: 0; display: grid; place-items: center; color: var(--vscode-descriptionForeground); background: color-mix(in srgb, var(--vscode-editor-background) 82%, transparent); }
+.project-diagram-loading[hidden] { display: none; }
+.project-diagram-empty { display: grid; place-content: center; gap: 6px; min-height: 260px; padding: 24px; text-align: center; color: var(--vscode-descriptionForeground); }
+.project-diagram-empty p { margin: 0; max-width: 560px; }
+.project-diagram-render-status { margin: 0; padding: 8px 12px; border-top: 1px solid var(--vscode-panel-border); color: var(--vscode-descriptionForeground); }
+.project-diagram-render-status.error { color: var(--vscode-errorForeground, var(--vscode-foreground)); }
+.project-diagram-render-status.warning { color: var(--vscode-editorWarning-foreground, var(--vscode-foreground)); }
+.project-diagram-details { margin: 12px 0; border: 1px solid var(--vscode-panel-border); border-radius: 6px; padding: 8px 12px; }
+.project-diagram-details summary { cursor: pointer; color: var(--vscode-foreground); }
+.project-diagram-details dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 18px; margin: 12px 0 4px; }
+.project-diagram-details dt { color: var(--vscode-descriptionForeground); }
+.project-diagram-details dd { margin: 0; overflow-wrap: anywhere; }
+.project-diagram-issues, .project-diagram-coverage { list-style: none; margin: 8px 0 0; padding: 0; }
+.project-diagram-issues li, .project-diagram-coverage li { padding: 6px 8px; margin-bottom: 6px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; overflow-wrap: anywhere; }
+.project-diagram-render-error { margin: 8px 0 0; color: var(--vscode-errorForeground, var(--vscode-foreground)); }
+.project-diagram-generate { margin: 20px 0; padding: 14px; border: 1px solid var(--vscode-panel-border); border-radius: 6px; }
+.project-diagram-generate h3 { margin-top: 0; }
+.project-diagram-generate label { display: grid; gap: 6px; margin-bottom: 10px; }
+.project-diagram-generate textarea { width: 100%; min-height: 68px; resize: vertical; }
+.project-diagram-generate-row { display: flex; flex-wrap: wrap; align-items: end; gap: 8px 12px; }
+.project-diagram-generate-row label { margin-bottom: 0; }
+.project-diagram-generating { color: var(--vscode-descriptionForeground); }
+.project-diagram-generate-error { margin: 10px 0 0; color: var(--vscode-errorForeground, var(--vscode-foreground)); }
+.project-diagram-inventory ul { list-style: none; margin: 0; padding: 0; }
+.project-diagram-inventory li { padding: 8px 10px; margin-bottom: 6px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; overflow-wrap: anywhere; }
+
+@media (max-width: 560px) {
+  .project-diagram-toolbar label { flex-basis: 100%; }
+  .project-diagram-toolbar select { flex: 1; min-width: 0; max-width: none; }
+  .project-diagram-frame { height: 60vh; }
+  .project-diagram-details dl { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .project-diagram-details dd { margin-bottom: 8px; }
 }

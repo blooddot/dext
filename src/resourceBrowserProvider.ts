@@ -1,4 +1,5 @@
 import { ResourceEditorProvider, buildResourceDefinition, buildResourceList, renderResourceError, type ResourceEditorProviderOptions, type ResourceEditorShowResult, type ResourcePanelOptions } from "./resourceDocuments.js";
+import { createEditorTabState } from "./editorTabState.js";
 import { describeEditorTab } from "./editorTabManager.js";
 import { renderApiDetail, renderApiList } from "./webview/apiPanel.js";
 import type { ResourceScope } from "./resourceSession.js";
@@ -107,9 +108,15 @@ export class ResourceBrowserProvider extends ResourceEditorProvider {
       this.position = this.history.length - 1;
     }
     const result = this.options.manager.open(describeEditorTab(this.tabKind, this.listTabKey, this.viewType()));
+    // Persisting the target means a reload restores this page instead of an empty tab.
+    const tabState = createEditorTabState(this.listTabKey, {
+      page: location.id ? "detail" : "list",
+      ...(location.id ? { resourceId: location.id } : {})
+    });
     result.panel.setHtml?.(render({
       ...(this.options.commandPrefix ? { commandPrefix: this.options.commandPrefix } : {}),
       ...(this.tabKind === "globalResources" ? { title: "Resources", createKinds: this.listKinds(), scope: location.scope, availableScopes: this.options.availableScopes?.() ?? ["global", "project"] } : {}),
+      ...(tabState ? { tabState } : {}),
       collapsed: this.history[this.position]!.collapsed,
       navigation: {
         canGoBack: this.position > 0,

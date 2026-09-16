@@ -111,6 +111,17 @@ export class EditorTabManager {
     return true;
   }
 
+  /**
+   * Closes a key only while `panel` is the one registered for it. A panel VS Code restored passes
+   * its own dispose callback through {@link adopt}, and adopting a key that is already open disposes
+   * that incoming panel; without this guard the callback would then close the live tab.
+   */
+  closeIfCurrent(key: string, panel: EditorTabPanelHandle): boolean {
+    const record = this.tabs.get(key);
+    if (!record || record.panel !== panel) return false;
+    return this.close(key);
+  }
+
   closeAll(): void {
     for (const key of [...this.tabs.keys()]) this.close(key);
   }
