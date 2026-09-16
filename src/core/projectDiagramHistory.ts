@@ -1,5 +1,5 @@
 import type { DiagramAdapterArtifact } from "./projectDiagramAdapter.js";
-import { validateProjectDiagram, type DiagramValidationIssue, type DiagramValidationReceipt, type ProjectDiagram, type ProjectDiagramEvidence, type ProjectDiagramLayoutOverlay } from "./projectDiagram.js";
+import { validateProjectDiagram, type DiagramValidationIssue, type DiagramValidationReceipt, type ProjectDiagram, type ProjectDiagramEvidence } from "./projectDiagram.js";
 
 /** Geometry reported by a renderer, separate from a user's manual layout overlay. */
 export interface ProjectDiagramRenderedLayout {
@@ -12,8 +12,7 @@ export interface ProjectDiagramSnapshot {
   artifact: DiagramAdapterArtifact;
   receipt: DiagramValidationReceipt;
   renderedAt: number;
-  /** User-authored coordinates belong to a render snapshot, never the semantic IR. */
-  layoutOverlay?: ProjectDiagramLayoutOverlay;
+  /** Geometry measured by the renderer; presentation-only and never persisted as Project truth. */
   renderedLayout?: ProjectDiagramRenderedLayout;
 }
 
@@ -46,7 +45,6 @@ export interface ProjectDiagramDelta {
     metadataChanged: boolean;
   };
   evidence: readonly DiagramEvidenceDelta[];
-  manualLayout: DiagramLayoutDelta & { adapterChanged: boolean };
   renderedLayout: DiagramLayoutDelta;
   artifact: {
     contentChanged: boolean;
@@ -158,10 +156,6 @@ export function compareDiagramSnapshots(before: ProjectDiagramSnapshot | undefin
     ...evidenceChanges("node", before?.diagram.nodes ?? [], after.diagram.nodes),
     ...evidenceChanges("relation", before?.diagram.relations ?? [], after.diagram.relations)
   ];
-  const manualLayout = {
-    ...layoutDelta(before?.layoutOverlay, after.layoutOverlay),
-    adapterChanged: before?.layoutOverlay?.adapterId !== after.layoutOverlay?.adapterId
-  };
   const renderedLayout = layoutDelta(before?.renderedLayout, after.renderedLayout);
   const artifact = {
     contentChanged: stable(before?.artifact.content) !== stable(after.artifact.content),
@@ -172,14 +166,10 @@ export function compareDiagramSnapshots(before: ProjectDiagramSnapshot | undefin
   };
   const changed = hasEntityChanges(semantic.nodes) || hasEntityChanges(semantic.relations)
     || semantic.titleChanged || semantic.kindChanged || semantic.metadataChanged || evidence.length > 0
-    || hasEntityChanges(manualLayout.nodes) || hasEntityChanges(manualLayout.routes) || manualLayout.adapterChanged
     || hasEntityChanges(renderedLayout.nodes) || hasEntityChanges(renderedLayout.routes)
     || Object.values(artifact).some(Boolean);
-  return { ...(before ? { before: structuredClone(before) } : {}), delta: { semantic, evidence, manualLayout, renderedLayout, artifact, changed }, after: structuredClone(after) };
+  return { ...(before ? { before: structuredClone(before) } : {}), delta: { semantic, evidence, renderedLayout, artifact, changed }, after: structuredClone(after) };
 }
-
-/** Alias for consumers displaying Before / Delta / After. */
-export const diffProjectDiagrams = compareDiagramSnapshots;
 
 /** A failed receipt or mismatched artifact cannot be promoted, even if the caller bypassed a registry. */
 export function isUsableDiagramSnapshot(snapshot: ProjectDiagramSnapshot): boolean {
@@ -200,8 +190,16 @@ export function isUsableDiagramSnapshot(snapshot: ProjectDiagramSnapshot): boole
   } catch { return false; }
 }
 
-export function createDiagramSnapshot(diagram: ProjectDiagram, artifact: DiagramAdapterArtifact, receipt: DiagramValidationReceipt, options: { renderedAt?: number; renderedLayout?: ProjectDiagramRenderedLayout; layoutOverlay?: ProjectDiagramLayoutOverlay } = {}): ProjectDiagramSnapshot {
-  const snapshot: ProjectDiagramSnapshot = { diagram, artifact, receipt, renderedAt: options.renderedAt ?? Date.now(), ...(options.renderedLayout ? { renderedLayout: options.renderedLayout } : {}), ...(options.layoutOverlay ? { layoutOverlay: options.layoutOverlay } : {}) };
+/** Only an Archify artifact for the expected diagram/version may restore a preview. */
+export function isArchifySnapshot(snapshot: ProjectDiagramSnapshot, expected?: { diagramId?: string; version?: number }): boolean {
+  return snapshot.artifact.adapterId === "archify"
+    && isUsableDiagramSnapshot(snapshot)
+    && (!expected?.diagramId || snapshot.diagram.id === expected.diagramId)
+    && (expected?.version === undefined || snapshot.diagram.version === expected.version);
+}
+
+export function createDiagramSnapshot(diagram: ProjectDiagram, artifact: DiagramAdapterArtifact, receipt: DiagramValidationReceipt, options: { renderedAt?: number; renderedLayout?: ProjectDiagramRenderedLayout } = {}): ProjectDiagramSnapshot {
+  const snapshot: ProjectDiagramSnapshot = { diagram, artifact, receipt, renderedAt: options.renderedAt ?? Date.now(), ...(options.renderedLayout ? { renderedLayout: options.renderedLayout } : {}) };
   if (!isUsableDiagramSnapshot(snapshot)) throw new Error("Only a validated diagram and matching artifact can become last-good.");
   return structuredClone(snapshot);
 }
