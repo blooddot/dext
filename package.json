@@ -1128,6 +1128,7 @@
     "test:host": "npm run build && node scripts/runExtensionTest.mjs",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
+    "check:ui": "node scripts/checkComposerLayoutUi.mjs && node scripts/checkStreamJumpUi.mjs && node scripts/checkEditorTabsUi.mjs && node scripts/checkProjectDiagramsUi.mjs",
     "check": "npm run generate:node-builtins -- --check && npm run lint && npm run typecheck && npm run test && npm run build && npm run test:build-assets",
     "package": "node -e \"require('node:fs').mkdirSync('release', { recursive: true })\" && vsce package --out release/",
     "vscode:prepublish": "npm run check"
@@ -1137,6 +1138,7 @@
     "@ax-llm/ax": "23.0.11",
     "jsonc-parser": "^3.3.1",
     "markdown-it": "^14.1.0",
+    "smol-toml": "1.8.0",
     "yaml": "2.8.1",
     "zod": "4.4.3"
   },
