@@ -571,6 +571,8 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .agent-todo-item.act
     width: min(1120px, calc(100% - 32px));
     margin: 0 auto;
   }
+
+  body.panel-maximized .app-shell { width: calc(100% - 32px); }
 }
 
 button {
@@ -2370,6 +2372,7 @@ button.primary.stopping {
 }
 
 #result-body {
+  flex: 1 1 0;
   /* A zero flex basis keeps long, expanded disclosures inside this scroll
      port. Without it, their intrinsic height can escape the sidebar layout. */
   flex-basis: 0;
@@ -2379,12 +2382,9 @@ button.primary.stopping {
      keeps Markdown lines and disclosure headers from shifting horizontally
      when a turn becomes scrollable. */
   scrollbar-gutter: stable;
-}
-
-#result-body {
-  flex: 1 1 auto;
   padding-left: 16px;
 }
+
 
 /* A restored conversation is initially painted as an empty viewport while
    its latest turn is hydrated on the next frame. Do not expose a dead
@@ -3616,8 +3616,9 @@ details[open] > summary > .disclosure-chevron {
 
 .json-output .markdown-body pre { max-height: 480px; }
 .agent-inputs[hidden] { display: none; }
-.agent-inputs { display: grid; gap: 10px; margin: 10px 0; }
-.agent-input-card { position: relative; padding: 12px; border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); border-radius: 8px; background: var(--vscode-editor-background); }
+/* Reports and code blocks must not set the grid's intrinsic column width. */
+.agent-inputs { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: 10px; margin: 10px 0; }
+.agent-input-card { position: relative; min-width: 0; padding: 12px; border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); border-radius: 8px; background: var(--vscode-editor-background); }
 .agent-input-header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; margin-bottom: 10px; }
 .agent-input-status { font-size: 11px; color: var(--vscode-descriptionForeground); }
 .agent-input-question { min-width: 0; margin: 0 0 12px; padding: 0; border: 0; }

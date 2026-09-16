@@ -640,6 +640,7 @@ let fullscreenPanel: PanelName | undefined;
 let fullscreenSnapshot: Record<PanelName, boolean> | undefined;
 
 function syncFullscreenButtons(): void {
+  document.body.classList.toggle("panel-maximized", fullscreenPanel !== undefined);
   for (const [name, panel] of Object.entries(panels) as [PanelName, typeof panels[PanelName]][]) {
     const active = fullscreenPanel === name;
     const title = active ? `Restore ${panel.label}` : `Maximize ${panel.label}`;
@@ -2648,7 +2649,10 @@ function updateAgentProgress(label: string): void {
     agentEditedUris.size ? `Edited ${agentEditedUris.size} file${agentEditedUris.size === 1 ? "" : "s"}` : "",
     agentCommandIds.size ? `Ran ${agentCommandIds.size} command${agentCommandIds.size === 1 ? "" : "s"}` : ""
   ].filter(Boolean);
-  agentProgress.textContent = `${agentProgressState} for ${formatDuration(elapsed)}${details.length ? ` · ${details.join(" · ")}` : ""}`;
+  const text = `${agentProgressState} for ${formatDuration(elapsed)}${details.length ? ` · ${details.join(" · ")}` : ""}`;
+  // The timer polls faster than the displayed duration changes. Keep the text
+  // node stable between changes instead of invalidating layout on every tick.
+  if (agentProgress.textContent !== text) agentProgress.textContent = text;
 }
 
 function startAgentProgress(startedAt = Date.now()): void {
