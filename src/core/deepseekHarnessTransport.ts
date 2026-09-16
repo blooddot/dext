@@ -1,15 +1,25 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { Readable, Writable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
-import { client as createClient, methods, ndJsonStream, PROTOCOL_VERSION, type Client, type ClientConnection, type ClientContext, type InitializeRequest, type InitializeResponse, type NewSessionRequest, type NewSessionResponse, type ResumeSessionRequest, type ResumeSessionResponse, type CloseSessionRequest, type CloseSessionResponse, type SetSessionConfigOptionRequest, type SetSessionConfigOptionResponse, type PromptRequest, type PromptResponse, type CancelNotification } from "@agentclientprotocol/sdk";
+import { client as createClient, methods, ndJsonStream, PROTOCOL_VERSION, type Client, type ClientConnection, type ClientContext, type CreateElicitationRequest, type CreateElicitationResponse, type InitializeRequest, type InitializeResponse, type NewSessionRequest, type NewSessionResponse, type ResumeSessionRequest, type ResumeSessionResponse, type CloseSessionRequest, type CloseSessionResponse, type SetSessionConfigOptionRequest, type SetSessionConfigOptionResponse, type PromptRequest, type PromptResponse, type CancelNotification } from "@agentclientprotocol/sdk";
 import { harnessSpawnCommand } from "./harnessCommand.js";
+import { HARNESS_BRIDGE_ENV, HARNESS_BRIDGE_TOKEN_ENV, HarnessBridge } from "./harnessBridge.js";
+import type { HarnessQuestionOutcome, HarnessQuestionRequest } from "./harnessQuestions.js";
 import { HARNESS_VERSION } from "./deepseekHarnessPolicy.js";
 export { harnessSpawnCommand } from "./harnessCommand.js";
+
+/** The client surface Dext gives the Harness: ACP callbacks that arrive over
+ * stdio, plus the private question channel that fills the `user-questions` gap. */
+export interface HarnessClient extends Client {
+  createElicitation?(params: CreateElicitationRequest): CreateElicitationResponse | Promise<CreateElicitationResponse>;
+  harnessQuestion?(request: HarnessQuestionRequest): Promise<HarnessQuestionOutcome>;
+}
 
 export class DeepSeekHarnessTransport {
   readonly connection: HarnessConnection;
   private readonly clientConnection: ClientConnection;
   private readonly child: ChildProcessWithoutNullStreams;
+  private readonly bridge: HarnessBridge;
   private stderr = "";
   private stopped = false;
   private readonly failure: Promise<never>;
@@ -18,17 +28,33 @@ export class DeepSeekHarnessTransport {
   capabilities?: InitializeResponse;
   onActivity?: (() => void) | undefined;
 
-  constructor(command: string, args: readonly string[], cwd: string, client: Client) {
+  constructor(command: string, args: readonly string[], cwd: string, private readonly client: HarnessClient) {
     const invocation = harnessSpawnCommand(command, args, { cwd });
-    this.child = spawn(invocation.command, invocation.args, { cwd, windowsHide: true, stdio: "pipe", shell: false });
+    // Dext's private question channel listens before the spawn, so the Harness
+    // overlay plugin can connect as soon as it loads. stdout stays JSON-RPC only.
+    this.bridge = new HarnessBridge((request) => client.harnessQuestion?.(request) ?? Promise.resolve({ status: "unavailable" as const }));
+    try {
+      this.child = spawn(invocation.command, invocation.args, {
+        cwd, windowsHide: true, stdio: "pipe", shell: false,
+        env: { ...process.env, [HARNESS_BRIDGE_ENV]: this.bridge.endpoint, [HARNESS_BRIDGE_TOKEN_ENV]: this.bridge.token }
+      });
+    } catch (error) {
+      this.bridge.dispose();
+      throw error;
+    }
     this.child.stderr.on("data", (chunk: Buffer) => {
       if (chunk.length) this.onActivity?.();
       this.stderr = (this.stderr + chunk.toString()).slice(-16000);
     });
     this.exited = new Promise((resolve) => { this.child.once("exit", () => resolve()); this.child.once("error", () => resolve()); });
+    // The SDK dispatches inbound frames concurrently, each handler chain costing
+    // one await per earlier registration. Registering the notification first keeps
+    // an agent's `session/update` applied before any request that follows it —
+    // which is what the Harness guarantees when it drains updates before asking.
     const app = createClient({ name: "dext" })
+      .onNotification(methods.client.session.update, ({ params }) => client.sessionUpdate(params))
       .onRequest(methods.client.session.requestPermission, ({ params }) => client.requestPermission(params))
-      .onNotification(methods.client.session.update, ({ params }) => client.sessionUpdate(params));
+      .onRequest(methods.client.elicitation.create, ({ params }) => client.createElicitation?.(params) ?? { action: "decline" });
     this.clientConnection = app.connect(ndJsonStream(
       Writable.toWeb(this.child.stdin) as WritableStream<Uint8Array>,
       Readable.toWeb(this.child.stdout) as ReadableStream<Uint8Array>
@@ -70,7 +96,8 @@ export class DeepSeekHarnessTransport {
   }
 
   async initialize(): Promise<void> {
-    this.capabilities = await this.wait(this.connection.initialize({ protocolVersion: PROTOCOL_VERSION, clientInfo: { name: "dext", version: "1" }, clientCapabilities: {} }));
+    this.capabilities = await this.wait(this.connection.initialize({ protocolVersion: PROTOCOL_VERSION, clientInfo: { name: "dext", version: "1" },
+      clientCapabilities: { ...(this.client.createElicitation ? { elicitation: { form: {} } } : {}) } }));
     if (this.capabilities.protocolVersion !== PROTOCOL_VERSION || !this.capabilities.agentCapabilities?.sessionCapabilities?.resume) {
       throw new Error(`This Harness version lacks the required ACP session capabilities. Use ${HARNESS_VERSION}.`);
     }
@@ -82,6 +109,7 @@ export class DeepSeekHarnessTransport {
 
   private async shutdown(): Promise<void> {
     this.stopped = true;
+    this.bridge.dispose();
     this.child.stdin.end();
     let timer: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([this.exited, new Promise<void>((resolve) => { timer = setTimeout(resolve, 1500); })]);

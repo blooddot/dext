@@ -30,9 +30,11 @@ export class AgentInputView {
     const answers: UiFormAnswers = {};
     for (const question of state.questions) {
       if (question.isSecret) continue;
-      const value = state.answers?.[question.id]?.answers[0];
-      if (value !== undefined) answers[question.id] = question.options.length
-        ? { type: "radio", selected: [], custom: value } : { type: "input", value };
+      const values = state.answers?.[question.id]?.answers;
+      if (!values?.length) continue;
+      answers[question.id] = question.options.length
+        ? question.multiSelect ? { type: "checkbox", selected: values } : { type: "radio", selected: [], custom: values[0]! }
+        : { type: "input", value: values[0]! };
     }
     this.put({ id: `agent:${state.id}`, status: state.status === "answered" ? "submitted" : state.status === "dismissed" ? "cancelled" : "waiting", form, answers,
       element: document.createElement("section"), send: (result) => this.respond(state.id, agentFormAnswers(result)) });

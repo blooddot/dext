@@ -8,6 +8,7 @@ import type { AgentProfile } from "../src/agentProfiles.js";
 import { copyHarnessPreset, harnessInstallation, harnessPresetFile, harnessPresetPatch, listHarnessPresets } from "../src/core/harnessPresets.js";
 import { createHarnessPolicy } from "../src/core/deepseekHarnessPolicy.js";
 import { DeepSeekHarnessTransport } from "../src/core/deepseekHarnessTransport.js";
+import type { HarnessQuestionRequest } from "../src/core/harnessQuestions.js";
 
 // Opt-in native integration: no model prompts or API charges. All generated
 // profiles, sessions and custom presets belong to this temporary Harness home.
@@ -81,6 +82,37 @@ describe.skipIf(!process.env.DEXT_TEST_DSH)("installed Harness presets", { timeo
         if (preset === "ptc") expect(observation.tools).toContain("run_code");
         if (preset === "cordis") expect(observation.tools.some((tool) => tool.includes("cordis"))).toBe(true);
       }
+    } finally { await transport.close(); await policy.dispose(); }
+  });
+
+  it("answers the Harness user-questions seam from Dext's card", async () => {
+    const output = join(directory, "questions.jsonl");
+    const patch = await harnessPresetPatch(profile, "standard", "read-only");
+    patch.push({ insert: [{ id: "dext-question-probe", name: pathToFileURL(resolve("test/fixtures/harnessQuestionProbe.mjs")).href, config: { output } }] });
+    const policy = await createHarnessPolicy("read-only", process.cwd(), undefined, patch);
+    const asked: HarnessQuestionRequest[] = [];
+    const transport = new DeepSeekHarnessTransport(profile.command,
+      ["--profile", "acp", "--patch", policy.path], process.cwd(), {
+        sessionUpdate: async () => undefined,
+        requestPermission: async () => ({ outcome: { outcome: "cancelled" as const } }),
+        harnessQuestion: async (request) => {
+          asked.push(request);
+          return { status: "answered" as const, answer: { answers: [{ id: "q", selected: ["B"] }] } };
+        }
+      });
+    try {
+      await transport.initialize();
+      const session = await transport.wait(transport.connection.newSession({ cwd: process.cwd(), mcpServers: [] }));
+      await transport.wait(transport.connection.closeSession({ sessionId: session.sessionId }));
+      let recorded: { ok?: boolean; answer?: unknown; code?: string; message?: string }[] = [];
+      for (let attempt = 0; attempt < 60 && !recorded.some((line) => line.ok !== undefined); attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        recorded = (await readFile(output, "utf8").catch(() => "")).trim().split("\n").filter(Boolean)
+          .map((line) => JSON.parse(line) as { ok?: boolean });
+      }
+      expect(asked[0]?.questions[0]).toMatchObject({ id: "q", question: "Which one?", header: "Confirm",
+        options: [{ label: "A" }, { label: "B", description: "Second" }] });
+      expect(recorded.at(-1)).toEqual({ ok: true, answer: { answers: [{ id: "q", selected: ["B"] }] } });
     } finally { await transport.close(); await policy.dispose(); }
   });
 });

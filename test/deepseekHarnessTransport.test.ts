@@ -11,6 +11,10 @@ function connection(args: string[] = []) {
   const result = new DeepSeekHarnessTransport(process.execPath, [fixture, ...args], process.cwd(), client);
   connections.push(result); return result;
 }
+/** The client capabilities the fixture echoed back from `initialize`. */
+function advertised(transport: DeepSeekHarnessTransport): Record<string, unknown> {
+  return (transport.capabilities?._meta ?? {}) as Record<string, unknown>;
+}
 afterEach(async () => {
   await Promise.all(connections.splice(0).map((item) => item.close()));
   await Promise.all(directories.splice(0).map((item) => rm(item, { recursive: true, force: true })));
@@ -43,6 +47,41 @@ describe("Harness ACP transport", { timeout: 15000 }, () => {
       await transport.initialize();
     })()).rejects.toThrow(/found|ENOENT/);
     await transport?.close();
+  });
+  it("advertises elicitation only when Dext can render the card", async () => {
+    const plain = connection(); await plain.initialize();
+    expect(advertised(plain).clientCapabilities).toEqual({});
+    const capable = new DeepSeekHarnessTransport(process.execPath, [fixture], process.cwd(), {
+      ...client, createElicitation: async () => ({ action: "decline" as const })
+    });
+    connections.push(capable); await capable.initialize();
+    expect(advertised(capable).clientCapabilities).toEqual({ elicitation: { form: {} } });
+  });
+  it("routes ACP elicitation and the private bridge to Dext's client surface", async () => {
+    const elicitations: { mode: string; message: string }[] = [];
+    const messages: string[] = [];
+    const transport = new DeepSeekHarnessTransport(process.execPath, [fixture], process.cwd(), {
+      sessionUpdate: (event) => {
+        const update = event.update;
+        if (update.sessionUpdate === "agent_message_chunk" && update.content.type === "text") messages.push(update.content.text);
+      },
+      requestPermission: async () => ({ outcome: { outcome: "cancelled" as const } }),
+      createElicitation: (params) => {
+        elicitations.push({ mode: params.mode, message: params.message });
+        return { action: "accept" as const, content: { scope: "user", notes: "typed" } };
+      },
+      harnessQuestion: async () => ({ status: "answered" as const, answer: { answers: [{ id: "q", selected: ["B"] }] } })
+    });
+    connections.push(transport);
+    await transport.initialize();
+    const session = await transport.wait(transport.connection.newSession({ cwd: process.cwd(), mcpServers: [] }));
+    await transport.wait(transport.connection.prompt({ sessionId: session.sessionId, prompt: [{ type: "text", text: "elicitation" }] }));
+    await transport.wait(transport.connection.prompt({ sessionId: session.sessionId, prompt: [{ type: "text", text: "bridge-question" }] }));
+    expect(elicitations).toEqual([{ mode: "form", message: "Which scope?" }]);
+    expect(messages).toEqual([
+      "Inspecting", JSON.stringify({ action: "accept", content: { scope: "user", notes: "typed" } }),
+      "Inspecting", JSON.stringify({ id: "fixture-question-1", status: "answered", answer: { answers: [{ id: "q", selected: ["B"] }] } })
+    ]);
   });
   it.each([
     "%dp0%\\node_modules\\@deepseek-ai\\dsh\\custom dir\\entry.mjs",

@@ -3,10 +3,11 @@ import { readFile } from "node:fs/promises";
 import { AgentProfileStore } from "../src/agentProfiles.js";
 import { DextConversationPreferences } from "../src/conversationPreferences.js";
 import { createHarnessPolicy, harnessBinding } from "../src/core/deepseekHarnessPolicy.js";
+import { DEFAULT_HARNESS_PRESET, harnessPresetOrDefault } from "../src/core/harnessPresetDefault.js";
 import { webviewRequestSchema } from "../src/webviewProtocol.js";
 
 describe("Harness preset selection", () => {
-  it("preserves each conversation's preset and explicit ACP default", async () => {
+  it("preserves each conversation's preset and reads an unset one as the Harness default", async () => {
     const values = new Map<string, unknown>();
     const state = { get: (key: string, fallback?: unknown) => values.get(key) ?? fallback,
       update: (key: string, value: unknown) => { values.set(key, value); return Promise.resolve(); } };
@@ -18,7 +19,12 @@ describe("Harness preset selection", () => {
     await preferences.setConversationSelection("two", { profileId: "deepseek-harness", agentPreset: "" });
     const restored = new DextConversationPreferences(state as never);
     expect(restored.conversationSelection("one")?.agentPreset).toBe("ptc");
+    // A selection persisted before presets were mandatory still round-trips as
+    // empty; every reader resolves it to the Harness default.
     expect(restored.conversationSelection("two")?.agentPreset).toBe("");
+    expect(harnessPresetOrDefault(restored.conversationSelection("two")?.agentPreset)).toBe(DEFAULT_HARNESS_PRESET);
+    expect(harnessPresetOrDefault(undefined)).toBe("standard");
+    expect(harnessPresetOrDefault("ptc")).toBe("ptc");
   });
 
   it("accepts bounded preset selections and only supported management actions", () => {

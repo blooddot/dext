@@ -43,6 +43,7 @@ import { webviewRequestSchema } from "./webviewProtocol.js";
 import type { ConversationSummary, WebviewResponse } from "./webviewProtocol.js";
 import type { AgentSelection } from "./agentProfiles.js";
 import { copyHarnessPreset, harnessPresetFile } from "./core/harnessPresets.js";
+import { harnessPresetOrDefault } from "./core/harnessPresetDefault.js";
 import type { DextHistoryRecord, DextHistorySession, DextHistoryStore } from "./historyStore.js";
 import type { DextConversationPreferences } from "./conversationPreferences.js";
 import { conversationTitle, historyTurnTitle } from "./historyRender.js";
@@ -112,7 +113,7 @@ function conversationContext(turns: readonly DextHistoryRecord[]): string | unde
 // New tabs always start in Agent mode, while keeping the provider/model
 // controls the user was using in the tab they came from.
 function defaultConversationSelection(previous: AgentSelection): AgentSelection {
-  return { ...previous, mode: "agent", ...(previous.profileId === "deepseek-harness" ? { agentPreset: previous.agentPreset ?? "standard" } : {}) };
+  return { ...previous, mode: "agent", ...(previous.profileId === "deepseek-harness" ? { agentPreset: harnessPresetOrDefault(previous.agentPreset) } : {}) };
 }
 
 // The picker ranks paths in the host, so the index has to be broad enough to
@@ -1205,9 +1206,18 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
             await this.refresh();
             break;
           }
-          const previousProfileId = this.conversationSelections.get(this.activeSession.id)?.profileId;
-          const previousPreset = this.conversationSelections.get(this.activeSession.id)?.agentPreset ?? "";
-          if (this.activeSession.turns.length && (request.selection.agentPreset ?? previousPreset) !== previousPreset) {
+          const previousSelection = this.conversationSelections.get(this.activeSession.id);
+          const previousProfileId = previousSelection?.profileId;
+          // The Harness preset catalog is the only source of preset choices, so
+          // an unset preset reads as the default it will run as. Only a Harness
+          // conversation holds a preset: switching another provider's
+          // conversation to the Harness starts it on that default, which is not
+          // the preset change this guard rejects.
+          const previousPreset = previousProfileId === "deepseek-harness" ? harnessPresetOrDefault(previousSelection?.agentPreset) : undefined;
+          const requestedPreset = request.selection.profileId === "deepseek-harness"
+            ? harnessPresetOrDefault(request.selection.agentPreset)
+            : request.selection.agentPreset ?? "";
+          if (this.activeSession.turns.length && previousPreset !== undefined && requestedPreset !== previousPreset) {
             throw new Error("Choose an Agent preset in a new conversation. This conversation keeps its original preset.");
           }
           const selection = {
@@ -1215,7 +1225,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
             permission: request.selection.permission,
             profileId: request.selection.profileId,
             model: request.selection.model,
-            ...(request.selection.agentPreset !== undefined || previousPreset ? { agentPreset: request.selection.agentPreset ?? previousPreset } : {}),
+            ...(request.selection.agentPreset !== undefined || previousSelection?.agentPreset ? { agentPreset: requestedPreset } : {}),
             reasoningEffort: request.selection.reasoningEffort,
             speed: request.selection.speed,
             serviceTier: request.selection.serviceTier
@@ -1721,7 +1731,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         ?? this.application.agentProfiles()[0];
       const metadata = {
         agentSessionId: sessionId,
-        agentPreset: selection.agentPreset ?? "",
+        agentPreset: harnessPresetOrDefault(selection.agentPreset),
         ...(priorConversation ? { conversationContext: priorConversation } : {}),
         signal: controller.signal,
         ui: this.uiInteraction(sessionId, turnId, events),

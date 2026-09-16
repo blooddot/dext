@@ -22,11 +22,17 @@ export class AgentInputBroker {
       if (Object.keys(answers).length !== request.questions.length) return;
       for (const question of request.questions) {
         const entry = Object.hasOwn(answers, question.id) ? answers[question.id] : undefined;
-        if (!entry || entry.answers.length !== 1 || !entry.answers[0]?.trim()) return;
-        const value = entry.answers[0].trim();
-        fields[question.id] = question.options.length ? question.options.some((option) => option.label === value)
-          ? { type: "radio", selected: [value] } : { type: "radio", selected: [], custom: value }
-          : { type: "input", value };
+        const values = entry?.answers.map((value) => value.trim()).filter(Boolean) ?? [];
+        if (!values.length || (!question.multiSelect && values.length !== 1)) return;
+        if (!question.options.length) { fields[question.id] = { type: "input", value: values[0]! }; continue; }
+        const labels = new Set(question.options.map((option) => option.label));
+        const selected = values.filter((value) => labels.has(value));
+        const custom = values.filter((value) => !labels.has(value));
+        if (custom.length > 1) return;
+        // A multi-select question reports every chosen label; single-select keeps
+        // the original radio shape, where a custom answer excludes the options.
+        fields[question.id] = question.multiSelect ? { type: "checkbox", selected, ...(custom.length ? { custom: custom[0]! } : {}) }
+          : selected.length ? { type: "radio", selected } : { type: "radio", selected: [], custom: custom[0]! };
       }
     }
     this.broker.respond(sessionId, turnId, requestId, { kind: "ui", type: "form", status: answers ? "submitted" : "cancelled", answers: fields });

@@ -1,4 +1,5 @@
 import type { AgentProfile, AgentSelection } from "../agentProfiles.js";
+import { harnessPresetOrDefault } from "./harnessPresetDefault.js";
 import type { CallableDefinition, ExecutionMetadata, FieldDefinition } from "./types.js";
 
 export const CLI_BUILTIN_IDS = new Set(["agent", "ask", "plan", "skill", "create"]);
@@ -84,7 +85,7 @@ export function builtinCliMetadata(
   const inherit = !explicitCli && sameSelection && model === inheritedModel;
   return {
     ...metadata, agent: profile.id, model,
-    agentPreset: profile.provider === "deepseek-harness" && !explicitCli && sameSelection ? selection.agentPreset ?? "" : "",
+    agentPreset: profile.provider === "deepseek-harness" && !explicitCli && sameSelection ? harnessPresetOrDefault(selection.agentPreset) : "",
     reasoningEffort: reasoning ?? (inherit ? selection.reasoningEffort ?? "" : ""),
     speed: speed ?? (inherit ? selection.speed ?? "" : ""),
     serviceTier: speed ? "" : inherit ? selection.serviceTier ?? "" : ""

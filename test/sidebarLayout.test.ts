@@ -204,6 +204,18 @@ describe("sidebar panel layout", () => {
     expect(main).toContain("elements.planBuild.disabled = Boolean(buildRestriction)");
   });
 
+  it("offers exactly the installed Harness preset catalog and defaults to its own default", async () => {
+    const main = await source("src/webview/main.ts");
+    const defaults = await source("src/core/harnessPresetDefault.ts");
+    // Dext no longer invents an "ACP default" entry: the catalog is the only
+    // source of preset choices, and an unset selection runs the Harness default.
+    expect(main).not.toContain("ACP default");
+    expect(main).toContain("const presets: readonly HarnessPresetOption[] = profile?.presets ?? [];");
+    expect(main).toContain("const selectedPreset = harnessPresetOrDefault(current.agentPreset);");
+    expect(main).toContain("No Harness presets found. Refresh presets or check the installed Harness.");
+    expect(defaults).toContain('export const DEFAULT_HARNESS_PRESET = "standard";');
+  });
+
   it("shows writable permission tiers for Agent and Plan modes", async () => {
     const html = await source("src/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
@@ -374,8 +386,8 @@ describe("sidebar panel layout", () => {
 
   it("keeps the composer visible while allowing the history, editor, and attachments to shrink", async () => {
     const css = await source("media/styles.css");
-    expect(css).toMatch(/\.input-section \{[\s\S]*?--input-editor-height: clamp\(112px, 24vh, 240px\);[\s\S]*?flex: 0 0 auto;[\s\S]*?max-height: min\(58%, 360px\);[\s\S]*?overflow: hidden;[\s\S]*?\}/);
-    expect(css).toMatch(/\.input-panel \{[\s\S]*?height: var\(--input-editor-height\);[\s\S]*?flex: 0 0 var\(--input-editor-height\);/);
+    expect(css).toMatch(/\.input-section \{[\s\S]*?--input-editor-height: clamp\(112px, 24vh, 240px\);[\s\S]*?flex: 0 0 auto;[\s\S]*?max-height: calc\(100% - 44px\);[\s\S]*?overflow: hidden;[\s\S]*?\}/);
+    expect(css).toMatch(/\.input-panel \{[\s\S]*?height: var\(--input-editor-height\);[\s\S]*?flex: 0 1 var\(--input-editor-height\);/);
     expect(css).toMatch(/\.code-editor \{[\s\S]*?height: 100%;[\s\S]*?min-height: 0;[\s\S]*?\}/);
     expect(css).toMatch(/\.attachment-bar \{[\s\S]*?max-height: 76px;[\s\S]*?overflow: auto;[\s\S]*?\}/);
     expect(css).toMatch(/\.input-section\.section-collapsed,[\s\S]*?\.result-section\.section-collapsed \{[\s\S]*?flex: 0 0 auto;/);
@@ -384,6 +396,20 @@ describe("sidebar panel layout", () => {
     expect(css).toMatch(/#result-body \{[\s\S]*?scrollbar-gutter: stable;/);
     expect(css).toMatch(/@media \(max-height: 480px\)[\s\S]*?\.input-section \{[\s\S]*?--input-editor-height: clamp\(56px, 20vh, 96px\);/);
     expect(css).toMatch(/main\.workspace-fullscreen > \.panel-expanded \{[\s\S]*?max-height: none;/);
+  });
+
+  it("keeps the jump-to-latest control clear of the host scrollbar", async () => {
+    const css = await source("media/styles.css");
+    const main = await source("src/webview/main.ts");
+    // The host owns the webview scrollbar width (VS Code paints a 10px slider,
+    // Chromium a wider one). A fixed offset can land the floating control on the
+    // track, which hides the thumb exactly where the reader drags it to reach the
+    // end of the output, so the control uses the gutter main.ts measures.
+    expect(css).toMatch(/\.stream-jump-latest \{[\s\S]*?right: calc\(var\(--dext-result-scroll-gutter, \d+px\) \+ \d+px\);/);
+    expect(css).not.toMatch(/\.stream-jump-latest \{[\s\S]*?right: 28px;/);
+    expect(main).toMatch(/function syncResultScrollGutter\(\): void \{[\s\S]*?body\.offsetWidth - body\.clientWidth/);
+    expect(main).toMatch(/elements\.resultSection\.append\(jumpToLatest\);\s*syncResultScrollGutter\(\);/);
+    expect(main).toMatch(/addEventListener\("resize", syncResultScrollGutter/);
   });
 
   it("offers edit-and-resend and retry on every output turn", async () => {

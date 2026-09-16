@@ -59,6 +59,7 @@ import { planExecutionLabel } from "../agentTodoPresentation.js";
 import { CLI_SPEEDS } from "../core/builtinCli.js";
 import { presentAgentSelection } from "../agentSelectionDefaults.js";
 import type { HarnessPresetOption } from "../agentProfiles.js";
+import { DEFAULT_HARNESS_PRESET, harnessPresetOrDefault } from "../core/harnessPresetDefault.js";
 
 interface VsCodeApi {
   postMessage(message: WebviewRequest): void;
@@ -164,6 +165,12 @@ jumpToLatest.hidden = true;
 // Keep the control in the result panel's viewport layer instead of inside the
 // scrollable output. This keeps it visible while the reader inspects history.
 elements.resultSection.append(jumpToLatest);
+syncResultScrollGutter();
+window.addEventListener("resize", syncResultScrollGutter, { passive: true });
+if (typeof ResizeObserver === "function") {
+  // Docked, collapsed, and resized panels all change the scrollbar gutter.
+  new ResizeObserver(() => syncResultScrollGutter()).observe(elements.resultBody);
+}
 
 let pendingConfirmation: (() => void) | undefined;
 
@@ -504,8 +511,10 @@ function composerSelectionLocked(): boolean {
  * that apply the selection as-is are blocked. */
 function fullAccessPresetRestriction(writableTurn: boolean): string | undefined {
   const selection = sidebarState?.agentSelection;
+  // An unset preset blocks the turn when the Harness default it will run as does.
+  const selectedPreset = harnessPresetOrDefault(selection?.agentPreset);
   const preset = selection?.profileId === "deepseek-harness"
-    ? sidebarState?.agentProfiles.find((profile) => profile.id === selection.profileId)?.presets?.find((item) => item.id === selection.agentPreset)
+    ? sidebarState?.agentProfiles.find((profile) => profile.id === selection.profileId)?.presets?.find((item) => item.id === selectedPreset)
     : undefined;
   if (!preset || !writableTurn) return undefined;
   return preset.error ?? (preset.requiresFullAccess && agentPermission !== "full-access"
@@ -1080,7 +1089,7 @@ function renderAgentControls(state: SidebarState): void {
   }, ["full-access"]);
   renderComposerMenu(elements.agentMenu, state.agentProfiles.map((item) => [item.id, item.label, "codicon-account"]), selected?.id ?? "", (profileId) => {
     submitAgentSelection({ profileId, model: "", reasoningEffort: "", speed: "", serviceTier: "",
-      agentPreset: state.agentSelection.agentPreset ?? (profileId === "deepseek-harness" && !outputTurns.size ? "standard" : "") });
+      agentPreset: state.agentSelection.agentPreset ?? (profileId === "deepseek-harness" && !outputTurns.size ? DEFAULT_HARNESS_PRESET : "") });
   });
   renderModelMenu(state, options, selectedModel);
   renderResourceControls();
@@ -1166,7 +1175,10 @@ function renderModelMenu(
     title.textContent = "Agent preset";
     const value = document.createElement("span");
     value.className = "composer-menu-category-value";
-    value.textContent = profile.presets?.find((preset) => preset.id === current.agentPreset)?.label || current.agentPreset || "ACP default";
+    // The catalog is the only source of preset choices; an unset selection is
+    // shown as the Harness default it will run as.
+    const selectedPreset = harnessPresetOrDefault(current.agentPreset);
+    value.textContent = profile.presets?.find((preset) => preset.id === selectedPreset)?.label ?? selectedPreset;
     const chevron = document.createElement("i");
     chevron.className = "codicon codicon-chevron-right";
     button.append(title, value, chevron);
@@ -1230,7 +1242,10 @@ function appendHarnessPresetManagementMenu(state: SidebarState): void {
 
 function renderHarnessPresetChoices(state: SidebarState): void {
   const profile = state.agentProfiles.find((item) => item.id === "deepseek-harness");
-  const current = state.agentSelection.agentPreset ?? "";
+  // Dext offers exactly the installed Harness catalog, and an unset selection
+  // reads as the Harness default it will run as.
+  const presets: readonly HarnessPresetOption[] = profile?.presets ?? [];
+  const current = harnessPresetOrDefault(state.agentSelection.agentPreset);
   const locked = outputTurns.size > 0;
   // Agent turns are always writable, and a Plan conversation applies the preset
   // when the plan builds. Ask is read-only and Code carries its own per-call
@@ -1245,7 +1260,12 @@ function renderHarnessPresetChoices(state: SidebarState): void {
     note.textContent = "This conversation keeps its preset. Start a new conversation to change it.";
     menu.append(note);
   }
-  const presets: HarnessPresetOption[] = [{ id: "", label: "ACP default", description: "Use the existing ACP profile configuration.", builtin: false, requiresFullAccess: false, writableTurnsOnly: false }, ...(profile?.presets ?? [])];
+  if (!presets.length) {
+    const missing = document.createElement("div");
+    missing.className = "composer-menu-empty";
+    missing.textContent = "No Harness presets found. Refresh presets or check the installed Harness.";
+    menu.append(missing);
+  }
   for (const preset of presets) {
     const button = document.createElement("button");
     button.type = "button";
@@ -1267,7 +1287,7 @@ function renderHarnessPresetChoices(state: SidebarState): void {
     button.addEventListener("click", (event) => { event.stopPropagation(); submitAgentSelection({ agentPreset: preset.id }); });
     menu.append(button);
   }
-  if (current && !presets.some((preset) => preset.id === current)) {
+  if (presets.length && !presets.some((preset) => preset.id === current)) {
     const missing = document.createElement("div");
     missing.className = "composer-menu-empty";
     missing.textContent = `Preset '${current}' is unavailable. Refresh presets or choose another in a new conversation.`;
@@ -1381,7 +1401,7 @@ function submitAgentSelection(change: Partial<SidebarState["agentSelection"]>): 
       permission: change.permission ?? agentPermission,
       profileId: change.profileId ?? selection?.profileId ?? "",
       model: change.model ?? selection?.model ?? "",
-      agentPreset: change.agentPreset ?? selection?.agentPreset ?? "",
+      agentPreset: harnessPresetOrDefault(change.agentPreset ?? selection?.agentPreset),
       reasoningEffort: change.reasoningEffort ?? selection?.reasoningEffort ?? "",
       speed: change.speed ?? selection?.speed ?? "",
       serviceTier: change.serviceTier ?? selection?.serviceTier ?? ""
@@ -2554,6 +2574,20 @@ function syncJumpToLatest(): void {
   jumpToLatest.hidden = resultIsNearBottom();
 }
 
+/** #result-body owns the vertical scrollbar while the floating control is
+ * positioned against the section, so the button needs the measured gutter.
+ * Hosts pick that width themselves (VS Code paints a 10px slider, Chromium a
+ * wider one). A control placed on a guessed width can land on the track, which
+ * hides the thumb exactly where the reader drags it to reach the output end. */
+function syncResultScrollGutter(): void {
+  const body = elements.resultBody;
+  const scrollbar = Math.max(0, body.offsetWidth - body.clientWidth);
+  const padding = elements.resultSection.getBoundingClientRect().right - body.getBoundingClientRect().right;
+  const gutter = padding + scrollbar;
+  // Leave the stylesheet fallback in place until the panel has been laid out.
+  if (gutter > 0) elements.resultSection.style.setProperty("--dext-result-scroll-gutter", `${gutter}px`);
+}
+
 function followResultIfNeeded(shouldFollow: boolean): void {
   if (!shouldFollow) {
     cancelScheduledResultScroll();
@@ -3210,6 +3244,7 @@ function addImageAttachment(relativePath: string, webviewUri: string, name: stri
   remove.addEventListener("click", () => {
     chip.remove();
     imageAttachments.delete(relativePath);
+    elements.attachmentBar.classList.toggle("hidden", imageAttachments.size === 0);
     activeImageAttachmentMetadata.delete(relativePath);
     editor.removeFileReference(relativePath);
     vscode.postMessage({ type: "deleteImageAttachment", relativePath });

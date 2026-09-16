@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolve } from "node:path";
 import { DeepSeekHarnessRunner } from "../src/core/deepseekHarnessRunner.js";
 import { DeepSeekHarnessTransport } from "../src/core/deepseekHarnessTransport.js";
-import type { AgentStreamEvent } from "../src/core/types.js";
+import type { AgentInputRequest, AgentStreamEvent } from "../src/core/types.js";
 import { decodeHarnessSession } from "../src/core/deepseekHarnessPolicy.js";
 import type { AgentConversationRequest, AgentExecutionRequest } from "../src/core/agentRunner.js";
 import { BUILTIN_METHODS } from "../src/core/builtins.js";
@@ -16,6 +16,12 @@ function runner(timeout = 15000) {
 }
 function request(input = "hello", key = "conversation"): AgentConversationRequest {
   return { profile: { id: "deepseek-harness", provider: "deepseek-harness", label: "Harness", command: process.execPath, models: [] }, cwd: process.cwd(), input, mode: "ask", allowWorkspaceWrite: false, metadata: { agentSessionId: key } };
+}
+function executionRequest(input: string): AgentExecutionRequest {
+  const method = { ...BUILTIN_METHODS.find((item) => item.id === "ask")!, source: "builtin" as const };
+  return { profile: request().profile, cwd: process.cwd(), method, metadata: {}, contract: new AxAdapter().compile(method), resolved: {
+    method, arguments: { input }, context: [], metadata: {}, invocation: { kind: "invocation", method: "ask", source: "code", arguments: [] }
+  } };
 }
 afterEach(async () => { await Promise.all(runners.splice(0).map((value) => value.dispose())); });
 
@@ -88,6 +94,37 @@ describe("Harness runner", { timeout: 15000 }, () => {
     const text = await runner().runConversation({ ...req, allowWorkspaceWrite: true, permission: "full-access", metadata: { ...req.metadata, ui: { form: confirm } } });
     expect(text).toContain('"optionId":"allow"'); expect(confirm).toHaveBeenCalledOnce();
   });
+  it("renders an ACP elicitation in Dext's own card and answers it in the schema's values", async () => {
+    const asked: AgentInputRequest[] = [];
+    const requestAgentInput = vi.fn(async (input: AgentInputRequest) => {
+      asked.push(input);
+      return Object.fromEntries(input.questions.map((question) => [question.id, { answers: [question.options.at(-1)?.label ?? "typed"] }]));
+    });
+    const req = request("elicitation");
+    const text = await runner().runConversation({ ...req, metadata: { ...req.metadata, requestAgentInput } });
+    expect(JSON.parse(text)).toEqual({ action: "accept", content: { scope: "user", notes: "typed" } });
+    expect(asked[0]?.questions.map((question) => question.id)).toEqual(["scope", "notes"]);
+    expect(asked[0]?.questions[0]?.options.map((option) => option.label)).toEqual(["Workspace", "User"]);
+    expect(asked[0]?.questions[0]?.detail).toBe("Where to apply it");
+  });
+  it("declines an elicitation schema Dext cannot render instead of half-rendering it", async () => {
+    const requestAgentInput = vi.fn();
+    const req = request("elicitation-unsupported");
+    const text = await runner().runConversation({ ...req, metadata: { ...req.metadata, requestAgentInput } });
+    expect(JSON.parse(text)).toEqual({ action: "decline" });
+    expect(requestAgentInput).not.toHaveBeenCalled();
+  });
+  it("answers the Harness user-questions bridge from the same Dext card", async () => {
+    const requestAgentInput = vi.fn(async () => ({ q: { answers: ["B"] } }));
+    const req = request("bridge-question");
+    const text = await runner().runConversation({ ...req, metadata: { ...req.metadata, requestAgentInput } });
+    expect(JSON.parse(text)).toEqual({ id: "fixture-question-1", status: "answered", answer: { answers: [{ id: "q", selected: ["B"] }] } });
+    expect(requestAgentInput).toHaveBeenCalledOnce();
+  });
+  it("leaves a Harness question to the shipped fail-closed path when no card owns it", async () => {
+    const text = await runner().runConversation(request("bridge-question"));
+    expect(JSON.parse(text)).toMatchObject({ id: "fixture-question-1", status: "unavailable" });
+  });
   it("cancels a running turn and rejects a timed-out turn", async () => {
     const r = runner(), controller = new AbortController(), onEvent = vi.fn();
     await r.runConversation(request());
@@ -113,13 +150,14 @@ describe("Harness runner", { timeout: 15000 }, () => {
     await expect(r.runConversation(request(input))).resolves.toBe(input);
     await expect(r.runConversation(request("hang"))).rejects.toThrow("without process activity");
   });
-  it("parses only final JSON and does not rerun invalid structured output", async () => {
-    const method = { ...BUILTIN_METHODS.find((item) => item.id === "ask")!, source: "builtin" as const };
-    const req: AgentExecutionRequest = { profile: request().profile, cwd: process.cwd(), method, metadata: {}, contract: new AxAdapter().compile(method), resolved: {
-      method, arguments: { input: "hello" }, context: [], metadata: {}, invocation: { kind: "invocation", method: "ask", source: "code", arguments: [] }
-    } };
-    expect(await runner().run(req)).toEqual({ kind: "ask", text: "typed answer" });
-    req.resolved.arguments.input = "bad-json";
-    await expect(runner().run(req)).rejects.toThrow("not retried");
+  it("passes the final text through and does not rerun invalid structured output", async () => {
+    expect(await runner().run(executionRequest("hello"))).toBe(JSON.stringify({ kind: "ask", text: "typed answer" }));
+    // Invalid output is no longer retried or thrown here; the runtime boundary
+    // diagnoses it and may repair it through the predictor channel.
+    expect(await runner().run(executionRequest("bad-json"))).toBe("invalid");
+  });
+  it("passes wrapped results through for the shared boundary", async () => {
+    const raw = "分析完成（未修改任何文件）。\n\n```json\n" + JSON.stringify({ kind: "ask", text: "typed answer" }) + "\n```";
+    expect(await runner().run(executionRequest("wrapped-json"))).toBe(raw);
   });
 });

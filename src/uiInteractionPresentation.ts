@@ -6,16 +6,20 @@ export function agentInputForm(request: AgentInputRequest): UiFormDefinition {
     presentation: "inline", submit_label: "Submit answer", cancel_label: "Skip", show_cancel: true,
     actions: [{ id: "submit", label: "Submit answer", primary: true, requires: [] }],
     fields: request.questions.map((question) => question.options.length
-      ? { id: question.id, type: "radio", label: question.question, required: true, allow_custom: true,
+      ? { id: question.id, type: question.multiSelect ? "checkbox" : "radio", label: question.question, required: true, allow_custom: true,
         secret: question.isSecret === true, custom_placeholder: "Or type your own answer…",
+        ...(question.detail ? { description: question.detail } : {}),
         options: question.options.map((option) => ({ value: option.label, label: option.label, description: option.description })) }
-      : { id: question.id, type: "input", label: question.question, required: true, secret: question.isSecret === true, placeholder: "Type your answer…" }) };
+      : { id: question.id, type: "input", label: question.question, required: true, secret: question.isSecret === true,
+        ...(question.detail ? { description: question.detail } : {}), placeholder: "Type your answer…" }) };
 }
+/** Multi-select answers keep every selection; single-select answers stay one value
+ * so existing Codex and API callers see the same shape they always did. */
 export function agentFormAnswers(result: UiFormResult): AgentInputAnswers | null {
   if (result.status === "cancelled") return null;
-  return Object.fromEntries(Object.entries(result.answers).map(([id, answer]) => [id, { answers: [
-    answer.type === "input" ? answer.value.trim() : (("custom" in answer ? answer.custom : undefined) || answer.selected[0] || "").trim()
-  ] }]));
+  return Object.fromEntries(Object.entries(result.answers).map(([id, answer]) => [id, { answers: answer.type === "input"
+    ? [answer.value.trim()]
+    : [...answer.selected, ...("custom" in answer && answer.custom ? [answer.custom] : [])].map((value) => value.trim()) }]));
 }
 export function publicInteractionState(state: UiInteractionState): UiInteractionState {
   const answers = { ...state.answers };

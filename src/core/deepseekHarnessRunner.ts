@@ -1,14 +1,16 @@
 import { uiCallForm } from "./uiForm.js";
 import { randomUUID } from "node:crypto";
-import type { SessionConfigOption, SessionNotification, RequestPermissionRequest, RequestPermissionResponse, ToolCallUpdate } from "@agentclientprotocol/sdk";
+import type { CreateElicitationRequest, CreateElicitationResponse, SessionConfigOption, SessionNotification, RequestPermissionRequest, RequestPermissionResponse, ToolCallUpdate } from "@agentclientprotocol/sdk";
 import type { AgentModelOption, AgentPermission, AgentProfile } from "../agentProfiles.js";
 import { agentPayload, bootstrappedConversationInput, type AgentRunner, type AgentConversationRequest, type AgentExecutionRequest } from "./agentRunner.js";
 import { ExecutionCancelledError } from "./executionErrors.js";
 import { createHarnessPolicy, decodeHarnessSession, encodeHarnessSession, harnessBinding, readHarnessLaunchSettings, type HarnessLaunchSettings } from "./deepseekHarnessPolicy.js";
 import { DeepSeekHarnessTransport } from "./deepseekHarnessTransport.js";
 import { agentTodoEvent, normalizeAgentTodos } from "./agentTodoTracking.js";
+import { elicitationQuestions, elicitationResponse, harnessInputQuestions, harnessQuestionAnswer, type HarnessQuestionOutcome, type HarnessQuestionRequest } from "./harnessQuestions.js";
 import { harnessPresetPatch } from "./harnessPresets.js";
 import { agentTimeout, DEFAULT_AGENT_TIMEOUT_MS, DEFAULT_AGENT_IDLE_TIMEOUT_MS } from "./agentTimeout.js";
+import type { AgentInputAnswers, AgentInputQuestion } from "./types.js";
 
 type Request = AgentConversationRequest;
 interface Session {
@@ -38,6 +40,16 @@ export function harnessModelOptions(options: readonly SessionConfigOption[], def
     speedTiers: [], serviceTiers: [] }));
 }
 
+/**
+ * ACP capability gap: `PromptRequest` (`@agentclientprotocol/sdk`
+ * `types.gen.d.ts:5140-5169`) has no output-schema field, so the harness cannot
+ * be constrained natively the way claude/codex are with `--json-schema` /
+ * `--output-schema`. Dext therefore relies on prompt hardening plus the shared
+ * result boundary (and, for claude/codex only, the bounded repair predictor).
+ * To re-probe after an upstream upgrade, inspect `session.options` from
+ * newSession/resumeSession for a new output-format config option; this round
+ * deliberately does not send a `_meta` experiment.
+ */
 export class DeepSeekHarnessRunner implements AgentRunner {
   private readonly sessions = new Map<string, Session>();
   private readonly queues = new Map<string, Promise<unknown>>();
@@ -77,7 +89,9 @@ export class DeepSeekHarnessRunner implements AgentRunner {
     try {
       transport = this.transportFactory(request.profile.command, this.arguments(request.cliArguments ?? [], policy.path), request.cwd, {
         sessionUpdate: (event) => { if (session && event.sessionId === session.id) this.update(session, event); },
-        requestPermission: (event) => session ? this.permission(session, event, permission) : Promise.resolve({ outcome: { outcome: "cancelled" } })
+        requestPermission: (event) => session ? this.permission(session, event, permission) : Promise.resolve({ outcome: { outcome: "cancelled" } }),
+        createElicitation: (event) => session ? this.elicitation(session, event) : Promise.resolve({ action: "decline" as const }),
+        harnessQuestion: (event) => session ? this.harnessQuestion(session, event) : Promise.resolve({ status: "unavailable" as const })
       });
       await transport.initialize();
       const saved = request.metadata.conversationProviderSessionId ? decodeHarnessSession(request.metadata.conversationProviderSessionId) : undefined;
@@ -139,6 +153,51 @@ export class DeepSeekHarnessRunner implements AgentRunner {
     return answer.status === "submitted" && allow ? { outcome: { outcome: "selected", optionId: allow.optionId } } : reject();
   }
 
+  /**
+   * ACP elicitation is the protocol's own channel for asking a human, and the
+   * Harness does not use it yet: its `user-questions` seam has no answerer under
+   * `dsh --profile acp`, so `ask_user_question` fails closed there. Dext already
+   * answers the method, so a Harness release that bridges the two needs no
+   * change here; `harnessQuestion` below covers the gap until then.
+   */
+  private async elicitation(session: Session, event: CreateElicitationRequest): Promise<CreateElicitationResponse> {
+    const request = session.request;
+    if (!request || request.signal?.aborted || ("sessionId" in event && event.sessionId !== session.id)) return { action: "cancelled" };
+    const questions = elicitationQuestions(event);
+    if (!questions) return { action: "decline" };
+    const answers = await this.ask(session, request, randomUUID(), questions);
+    return answers === undefined ? { action: "decline" } : elicitationResponse(event, answers);
+  }
+
+  /** Dext's private bridge carries the Harness `user-questions` seam, which the
+   * ACP profile otherwise leaves unanswered. Answers land in the same Dext card
+   * Codex App Server questions use. */
+  private async harnessQuestion(session: Session, event: HarnessQuestionRequest): Promise<HarnessQuestionOutcome> {
+    const request = session.request;
+    if (!request || request.signal?.aborted) return { status: "unavailable" };
+    const questions = harnessInputQuestions(event.questions);
+    if (!questions.length) return { status: "unavailable" };
+    const answers = await this.ask(session, request, event.id, questions);
+    if (answers === undefined) return { status: "unavailable" };
+    const answer = harnessQuestionAnswer(questions, answers);
+    return answer ? { status: "answered", answer } : { status: "cancelled" };
+  }
+
+  /** Route one question batch through Dext's shared UI. `undefined` reports that
+   * no Dext surface owned the card, which the caller answers by delegating
+   * rather than by inventing a reply. */
+  private async ask(session: Session, request: Request, id: string, questions: AgentInputQuestion[]): Promise<AgentInputAnswers | null | undefined> {
+    const respond = request.metadata.requestAgentInput;
+    if (!respond) return undefined;
+    const signal = request.signal ?? new AbortController().signal;
+    // The question parks the turn, so idle detection has to pause with it.
+    const key = `user-questions:${id}`;
+    session.timeout?.toolStarted(key);
+    try { return await respond({ id, questions, blocking: true }, signal); }
+    catch { return undefined; }
+    finally { session.timeout?.toolFinished(key); }
+  }
+
   private async select(session: Session, request: Request): Promise<void> {
     const model = request.model || session.defaults.get("model");
     if (model) {
@@ -198,12 +257,20 @@ export class DeepSeekHarnessRunner implements AgentRunner {
   }
 
   async run(request: AgentExecutionRequest): Promise<unknown> {
-    const input = `${request.allowWorkspaceWrite ? "Execute the API within the workspace and include an auditable patch when possible." : "This is a read-only API call. For requested changes return a complete applicable patch without editing files."}\nReturn only a JSON object matching this schema as your final message:\n${JSON.stringify(request.contract.outputJsonSchema)}\nDext JSON payload:\n${agentPayload(request)}`;
+    const includePatch = request.includePatch !== false;
+    const patchInstruction = request.allowWorkspaceWrite
+      ? includePatch
+        ? "Execute the API within the workspace and include an auditable patch when possible."
+        : "Execute the API within the workspace. Do not include a patch; report conclusions in text only."
+      : includePatch
+        ? "This is a read-only API call. For requested changes return a complete applicable patch without editing files."
+        : "This is a read-only API call. Do not include a patch; report conclusions in text only.";
+    // Keep the JSON-only contract after the payload so it is the last thing the
+    // model reads; the shared result boundary owns tolerant parsing.
+    const input = `${patchInstruction}\nDext JSON payload:\n${agentPayload(request)}\nReturn only a JSON object matching this schema as your final message: ${JSON.stringify(request.contract.outputJsonSchema)}\nNo markdown fence, no text before or after the object.`;
     const metadata = { ...request.metadata };
     delete metadata.agentSessionId; delete metadata.conversationProviderSessionId; delete metadata.conversationForkFrom; delete metadata.onAgentSessionId;
-    const text = await this.runConversation({ ...request, input, mode: "ask", allowWorkspaceWrite: Boolean(request.allowWorkspaceWrite), metadata });
-    try { return JSON.parse(text.trim()); }
-    catch { throw new Error("Harness completed the task but returned invalid JSON. The task was not retried; inspect its execution log before retrying."); }
+    return this.runConversation({ ...request, input, mode: "ask", allowWorkspaceWrite: Boolean(request.allowWorkspaceWrite), metadata });
   }
 
   runConversation(request: Request): Promise<string> {
