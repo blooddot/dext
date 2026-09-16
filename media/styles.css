@@ -1065,7 +1065,9 @@ main {
   min-height: 34px;
   display: flex;
   flex: 0 0 auto;
-  max-height: min(58%, 360px);
+  /* Extra toolbar/attachment rows grow upward into the conversation space.
+     Reserve only its heading and our top margin when the viewport is short. */
+  max-height: calc(100% - 44px);
   flex-direction: column;
   overflow: hidden;
   /* Keep the composer above host-provided views when attachments make the
@@ -1086,9 +1088,9 @@ main {
 }
 
 .input-panel {
-  min-height: 64px;
+  min-height: 48px;
   height: var(--input-editor-height);
-  flex: 0 0 var(--input-editor-height);
+  flex: 0 1 var(--input-editor-height);
   position: relative;
   overflow: hidden;
 }
@@ -1109,16 +1111,6 @@ main {
   border: 1px solid var(--vscode-input-border, transparent);
   border-radius: 3px;
   background: var(--vscode-editor-background);
-}
-
-/* Chat composers start as a real multi-line editing surface. A shrinkable
-   flex item could collapse this to one line in a short sidebar, leaving no
-   second row for mouse selection. */
-.input-section[data-mode="agent"] .input-panel,
-.input-section[data-mode="ask"] .input-panel,
-.input-section[data-mode="plan"] .input-panel {
-  min-height: 112px;
-  flex-basis: var(--input-editor-height);
 }
 
 /* Monaco owns editing widgets; only Dext reference chips need custom colors. */
@@ -1399,6 +1391,7 @@ body.vscode-high-contrast-light .monaco-editor .view-line .dext-ref-chip {
   max-height: 76px;
   min-height: 0;
   display: flex;
+  flex: 0 0 auto;
   flex-wrap: wrap;
   gap: 6px;
   padding: 6px 8px;
@@ -2274,13 +2267,9 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) button.primary.circu
 
   .input-section {
     --input-editor-height: clamp(56px, 20vh, 96px);
-    max-height: 66%;
+    max-height: calc(100% - 32px);
     margin-top: 4px;
     padding-bottom: 4px;
-  }
-
-  .input-panel {
-    min-height: 56px;
   }
 
   .attachment-bar {
@@ -2435,7 +2424,12 @@ button.primary.stopping {
 
 .stream-jump-latest {
   position: absolute;
-  right: 14px;
+  /* Clear #result-body's vertical scrollbar. The host decides how wide that
+     scrollbar is (VS Code paints a 10px slider, Chromium a wider one), so
+     main.ts republishes the measured gutter; the fallback covers the
+     section padding plus a typical 10px slider. A control that lands on the
+     track hides the thumb and blocks it from reaching the end of the output. */
+  right: calc(var(--dext-result-scroll-gutter, 20px) + 8px);
   bottom: 14px;
   z-index: 3;
   width: 28px;
