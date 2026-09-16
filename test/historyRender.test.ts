@@ -12,6 +12,7 @@ import {
 } from "../src/historyRender.js";
 import type { DextHistoryRecord } from "../src/historyStore.js";
 import { parseUiForm } from "../src/core/uiForm.js";
+import { PLAN_DOCUMENT_END, PLAN_DOCUMENT_START } from "../src/core/planResponse.js";
 
 describe("Dext history rendering", () => {
   it("shows the selected form action in restored history", () => {
@@ -262,6 +263,22 @@ describe("Dext history rendering", () => {
     const html = renderHistoryRecord(record);
     expect(html).toContain('class="process-message agent-stream-item agent-trace-message"');
     expect(html).toContain("I will inspect the selected implementation first.");
+  });
+
+  it("keeps a persisted Plan document out of restored history Process", () => {
+    const record: DextHistoryRecord = {
+      id: "plan-trace",
+      createdAt: 1,
+      mode: "plan",
+      input: "plan a migration",
+      process: [{ phase: "message", id: "plan-1", replace: true, text: `Brief.\n${PLAN_DOCUMENT_START}\n# Full plan\n${PLAN_DOCUMENT_END}` }],
+      output: "Brief."
+    };
+
+    const html = renderHistoryRecord(record);
+    expect(html).toContain("Brief.");
+    expect(html).not.toContain("dext-plan");
+    expect(html).not.toContain("Full plan");
   });
 
   it("uses Markdown paragraph and line-break rules for history Process messages", () => {

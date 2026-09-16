@@ -30,4 +30,16 @@ describe("persisted agent trace replay", () => {
       { phase: "message", text: "B" }
     ]);
   });
+
+  it("replays legacy traces through the Plan document guard", () => {
+    expect(prepareHistoryTrace([
+      { phase: "message", id: "m", text: "Brief. " },
+      { phase: "message", id: "m", text: "<!-- dext-plan:start -->" },
+      { phase: "message", id: "m", text: "\n# Plan\n" },
+      { phase: "message", id: "m", text: "<!-- dext-plan:end -->" },
+      { phase: "message", id: "m", text: "Brief. <!-- dext-plan:start -->\n# Plan\n<!-- dext-plan:end -->", replace: true, done: true }
+    ])).toEqual([
+      { phase: "message", id: "m", text: "Brief.", replace: true, done: true }
+    ]);
+  });
 });
