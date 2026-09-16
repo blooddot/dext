@@ -3,16 +3,15 @@ import type {
   ProjectDiagram,
   ProjectDiagramKind
 } from "./projectDiagram.js";
-import type { ProjectDiagramLayoutOverlay } from "./projectDiagram.js";
 
-/** Output formats an adapter can produce. */
-export type DiagramArtifactFormat = "html" | "svg" | "png" | "drawio" | "mermaid" | "structurizr" | "markdown";
+/** Output formats the Archify viewer can produce. HTML and SVG are the only product formats. */
+export type DiagramArtifactFormat = "html" | "svg";
 
 export interface DiagramAdapterCapability {
   kind: ProjectDiagramKind;
   formats: readonly DiagramArtifactFormat[];
-  /** Human-readable feature flags used by Project's picker and diagnostics. */
-  features: readonly ("interactive" | "editable" | "deterministic" | "validation" | "incremental" | "manual_layout" | "path_probe" | "evidence_links")[];
+  /** Human-readable feature flags used by Project's diagnostics. */
+  features: readonly ("interactive" | "deterministic" | "validation" | "path_probe" | "evidence_links")[];
 }
 
 export interface DiagramAdapterArtifact {
@@ -40,7 +39,6 @@ export interface DiagramAdapterRenderOptions {
   /** Stable operation id so Project can cancel a single in-flight operation. */
   operationId?: string;
   signal?: AbortSignal;
-  layoutOverlay?: ProjectDiagramLayoutOverlay;
 }
 
 export interface DiagramAdapterExportOptions extends DiagramAdapterRenderOptions {
@@ -49,8 +47,8 @@ export interface DiagramAdapterExportOptions extends DiagramAdapterRenderOptions
 }
 
 /**
- * Common contract for Archify, drawio-skill, Mermaid, Structurizr and future adapters.
- * Project owns the semantic IR; adapters own only conversion and presentation.
+ * Common contract for Archify and any future adapter. Project owns the semantic IR; the adapter
+ * owns only conversion, validation and presentation.
  */
 export interface ProjectDiagramAdapter {
   readonly id: string;
