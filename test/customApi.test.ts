@@ -8,7 +8,7 @@ import { MethodRegistry } from "../src/core/registry.js";
 import { DextRuntime } from "../src/core/runtime.js";
 import { AxAdapter } from "../src/core/axAdapter.js";
 import { ExecutionCancelledError } from "../src/core/executionErrors.js";
-import type { UiInteraction } from "../src/core/types.js";
+import type { AgentResult, UiInteraction } from "../src/core/types.js";
 
 const files = new Map([
   ["C:/workspace/.dext/api/team/explain.dx", `def main(input: str) -> AskResult:\n    return ask(input=input)\n`],
@@ -286,6 +286,37 @@ def inspect() -> PrintResult:
     });
     expect(loaded.diagnostics).toEqual([]);
     expect((await execute("develop")).result).toMatchObject({ text: "Result field 'patch' is unavailable." });
+  });
+
+  it("compiles and runs a text-only agent preview with patch=False", async () => {
+    const { loaded, execute } = await loadSources({
+      develop: `def main(input: str) -> AgentResult:
+    preview = agent(input=input, apply=False, patch=False)
+    return preview
+`
+    });
+    expect(loaded.diagnostics).toEqual([]);
+    const result = (await execute("develop", { input: "preview only" })).result as AgentResult;
+    expect(result.kind).toBe("agent");
+    expect(result.text).toBe("preview only");
+    expect(result).not.toHaveProperty("patch");
+
+    const usedPatch = await loadSources({
+      develop: `def main(input: str) -> PrintResult:
+    preview = agent(input=input, apply=False, patch=False)
+    return print(text=preview.patch.changes)
+`
+    });
+    expect(usedPatch.loaded.diagnostics).toEqual([]);
+    await expect(usedPatch.execute("develop", { input: "preview" }))
+      .rejects.toThrow("Result field 'patch' is unavailable.");
+
+    const invalid = await loadSources({
+      develop: `def main(input: str) -> AgentResult:
+    return agent(input=input, apply=False, patch="yes")
+`
+    });
+    expect(invalid.loaded.diagnostics.join(" ")).toContain("patch");
   });
 
   it.each([

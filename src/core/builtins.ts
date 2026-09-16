@@ -46,6 +46,7 @@ const METHODS: readonly CallableDefinition[] = [
     input: [
       { name: "input", type: "string", required: true, description: "Task request. Use @workspace/path tokens for attached code references." },
       { name: "apply", type: "boolean", default: true, description: "Allow trusted workspace changes. Set false to require a preview-only patch." },
+      { name: "patch", type: "boolean", default: true, description: "Include a patch in the result. Set false to report conclusions as text without producing a patch." },
       { name: "skills", type: "string", multiple: true, internal: true, description: "Optional Dext skill identifiers loaded only for this Agent call." },
       { name: "rules", type: "string", multiple: true, internal: true, description: "Optional .dext/rules-relative files loaded only for this Agent call." },
       { name: "workspace", type: "dir", description: "Optional workspace directory; defaults to the current project root." }

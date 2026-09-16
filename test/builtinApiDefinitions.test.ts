@@ -12,6 +12,7 @@ describe("built-in API definitions", () => {
     expect(document.text).toContain("class url:");
     expect(document.text).toContain("def parse(");
     expect(document.text).toContain("def agent(");
+    expect(document.text).toContain("patch: bool = True");
     expect(document.text).toContain(") -> AgentResult:\n    ...");
     expect(builtinApiReferenceTarget(document.text, document.text.indexOf("node.url.parse") + 6)).toMatchObject({ id: "node.url.parse" });
     const urlClass = document.text.indexOf("class url");

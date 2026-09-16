@@ -9,10 +9,10 @@ describe("method signatures", () => {
     expect(agent).toBeDefined();
     const cliParameters = ', cli?: "codex" | "claude" | "deepseek-harness", model?: "sonnet" | "opus" | agent.ModelOptions';
     expect(formatMethodSignature(agent!)).toBe(
-      `agent(input: string, apply?: boolean = True, workspace?: dir${cliParameters}) -> AgentResult`
+      `agent(input: string, apply?: boolean = True, patch?: boolean = True, workspace?: dir${cliParameters}) -> AgentResult`
     );
     expect(formatMethodSignature(agent!, { includeInternal: true })).toBe(
-      `agent(input: string, apply?: boolean = True, skills?: string | string[], rules?: string | string[], workspace?: dir${cliParameters}) -> AgentResult`
+      `agent(input: string, apply?: boolean = True, patch?: boolean = True, skills?: string | string[], rules?: string | string[], workspace?: dir${cliParameters}) -> AgentResult`
     );
   });
 

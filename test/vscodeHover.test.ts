@@ -4,6 +4,7 @@ import { pythonHoverCode } from "../src/vscodeHover.js";
 describe("Python hover presentation", () => {
   it("presents call arguments as parameters and preserves indexed field annotations", () => {
     expect(pythonHoverCode("apply?: boolean = True", "parameter")).toBe("(parameter) apply: bool = True");
+    expect(pythonHoverCode("patch?: boolean = True", "parameter")).toBe("(parameter) patch: bool = True");
     expect(pythonHoverCode("confirmation.answers: dict[str, UiFieldAnswer]")).toBe("confirmation.answers: dict[str, UiFieldAnswer]");
     expect(pythonHoverCode('confirmation.answers["decision"].selected: list[string] | undefined'))
       .toBe('confirmation.answers["decision"].selected: list[str] | None');

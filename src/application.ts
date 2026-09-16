@@ -7,6 +7,12 @@ import { ContextResolver } from "./core/contextResolver.js";
 import { DextLanguageService } from "./core/languageService.js";
 import { MethodRegistry } from "./core/registry.js";
 import { DextRuntime } from "./core/runtime.js";
+import { REPAIR_OUTPUT_FIELD } from "./core/axAdapter.js";
+import { agentResultCandidates, parseAgentResult } from "./core/resultBoundary.js";
+import { createResultRepair } from "./core/resultRepair.js";
+import { runSingleTurnCli } from "./core/agentRunner.js";
+import { isIgnored, parseIgnoreRules, type IgnoreRule } from "./core/ignoreRules.js";
+import type { AgentAssertionSnapshot } from "./core/agentAssertions.js";
 import { compileWorkflow, parseWorkflowImports } from "./core/workflow.js";
 import { DEFAULT_MAX_CONCURRENCY, WorkflowRuntime } from "./core/workflowRuntime.js";
 import type { CallableDefinition, ExecutionMetadata, InputExecutionResponse } from "./core/types.js";
@@ -172,6 +178,67 @@ export class DextApplication {
     this.runtime.setMcpCaller((tool, input, onProcessEvent) => this.mcp.call(tool, input, {
       ...(onProcessEvent ? { onProcessEvent } : {})
     }));
+    // Single result boundary: tolerant parse plus one bounded read-only repair
+    // attempt. The transport is chosen here per profile; the core predictor
+    // itself stays hostless.
+    this.runtime.setResultRepair({
+      parse: parseAgentResult,
+      repair: async (request) => {
+        if (request.profile.provider !== "codex" && request.profile.provider !== "claude") {
+          return { diagnostics: `Result repair is not available for '${request.profile.label}'.` };
+        }
+        const snapshot = await this.resultRepairSnapshot();
+        return createResultRepair({
+          contract: request.contract,
+          outputField: REPAIR_OUTPUT_FIELD,
+          transport: (prompt, signal) => runSingleTurnCli({
+            profile: request.profile,
+            cwd: request.cwd,
+            prompt,
+            timeoutMs: 60_000,
+            ...(signal ? { signal } : {})
+          })
+        }).repair({ ...request, snapshot });
+      }
+    });
+  }
+
+  /** Workspace facts for the preview-result assertions. Read at repair time so
+   * the conflict checks see the current disk state. */
+  private async resultRepairSnapshot(): Promise<AgentAssertionSnapshot> {
+    const root = this.workspaceUri ?? vscode.Uri.file(this.workspaceRoot);
+    const rules: IgnoreRule[] = [];
+    for (const name of [".gitignore", ".dextignore"]) {
+      try {
+        const bytes = await vscode.workspace.fs.readFile(vscode.Uri.joinPath(root, name));
+        rules.push(...parseIgnoreRules(new TextDecoder().decode(bytes)));
+      } catch {
+        // A missing ignore file is the normal case.
+      }
+    }
+    return {
+      // Result repair is always read-only, so the hard workspace checks run.
+      apply: false,
+      resolve: (uri) => {
+        try {
+          const parsed = vscode.Uri.parse(uri, true);
+          if (parsed.scheme !== "file" || !vscode.workspace.getWorkspaceFolder(parsed)) return undefined;
+          const relativePath = vscode.workspace.asRelativePath(parsed, false).replaceAll("\\", "/");
+          return relativePath.startsWith("../") || isAbsolute(relativePath) ? undefined : relativePath;
+        } catch {
+          return undefined;
+        }
+      },
+      read: async (relativePath) => {
+        try {
+          const bytes = await vscode.workspace.fs.readFile(vscode.Uri.joinPath(root, ...relativePath.split("/")));
+          return new TextDecoder().decode(bytes);
+        } catch {
+          return undefined;
+        }
+      },
+      isIgnored: (relativePath) => isIgnored(rules, relativePath)
+    };
   }
 
   async reload(): Promise<void> {
@@ -658,13 +725,10 @@ export class DextApplication {
     this.resourceRoot(resource.type, resource.scope);
     const response = await this.runtime.executeConversation("ask", resourcePrompt(resource, this.storage.attachmentPrompt(input)), metadata);
     if (response.result.kind !== "ask") throw new Error("The selected Agent did not return resource text.");
-    let value: unknown;
-    try { value = JSON.parse(response.result.text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim()); }
-    catch { throw new Error("The Agent returned invalid resource JSON. Refine the request and try again."); }
-    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("The Agent returned an invalid resource object.");
-    const candidate = value as Record<string, unknown>;
-    if (typeof candidate.name !== "string" || typeof candidate.content !== "string") throw new Error("The resource needs a name and content.");
-    const draft = { name: resource.target?.name ?? candidate.name.trim(), content: candidate.content };
+    const value = agentResultCandidates(response.result.text)[0]?.value;
+    if (value === undefined) throw new Error("The Agent returned invalid resource JSON. Refine the request and try again.");
+    if (typeof value.name !== "string" || typeof value.content !== "string") throw new Error("The resource needs a name and content.");
+    const draft = { name: resource.target?.name ?? value.name.trim(), content: value.content };
     if (!resource.target) resourceFileName(resource.type, draft.name);
     await this.validateResource(resource.type, draft);
     // Keep generated JSON out of the final conversation response; show the actual document.

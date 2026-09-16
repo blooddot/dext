@@ -1,5 +1,6 @@
 import { f, type AxSignature } from "@ax-llm/ax";
 import { z, type ZodType } from "zod";
+import { formatDiagnostics } from "./resultBoundary.js";
 import {
   askResultSchema,
   agentResultSchema,
@@ -161,16 +162,29 @@ function matchesResultAnnotation(value: { kind: string }, name: string): boolean
   return value.kind === "ui" && "type" in value && typeof value.type === "string" && `Ui${value.type}Result`.toLowerCase() === name.toLowerCase();
 }
 
+/** The single output field every ax-backed repair signature uses. */
+export const REPAIR_OUTPUT_FIELD = "structuredOutput";
+
+/** Signature for the bounded, single-retry result repair predictor. It carries
+ * the raw agent text plus zod diagnostics and produces the typed result object
+ * the contract expects. */
+export function repairSignature(output: ZodType): AxSignature {
+  return f()
+    .input("agentOutput", z.string())
+    .input("diagnostics", z.string())
+    .output(REPAIR_OUTPUT_FIELD, output)
+    .description("Convert a raw agent result and its validation diagnostics into the required Dext result.")
+    .useStructured()
+    .build();
+}
+
 export class AxAdapter {
   compile(definition: CallableDefinition): AxMethodContract {
     const input = inputSchema(definition);
     const output = outputSchema(definition.output);
     const signature = f()
-      .input("invocationArguments", input.describe("Typed Dext invocation arguments."))
-      .output(
-        "structuredOutput",
-        output.describe(definition.output.description ?? "Typed Dext result.")
-      )
+      .input("invocationArguments", input)
+      .output("structuredOutput", output)
       .description(definition.description)
       .useStructured()
       .build();
@@ -188,9 +202,21 @@ export class AxAdapter {
     contract.inputSchema.parse(value);
   }
 
+  /** Non-throwing validation for callers that report diagnostics instead of
+   * raising (workflowRuntime). The returned result copies the existing
+   * validateOutput semantics, including the builtin-result narrowing. */
+  inspectOutput(contract: AxMethodContract, result: unknown):
+    | { success: true; data: DextResult }
+    | { success: false; diagnostics: string } {
+    const parsed = contract.outputSchema.safeParse(result);
+    if (!parsed.success) return { success: false, diagnostics: formatDiagnostics(parsed.error) };
+    const builtin = dextResultSchema.safeParse(parsed.data);
+    return { success: true, data: (builtin.success ? builtin.data : parsed.data) as DextResult };
+  }
+
   validateOutput(contract: AxMethodContract, result: DextResult): DextResult {
-    const parsed = contract.outputSchema.parse(result);
-    const builtin = dextResultSchema.safeParse(parsed);
-    return (builtin.success ? builtin.data : parsed) as DextResult;
+    const inspected = this.inspectOutput(contract, result);
+    if (!inspected.success) throw new Error(inspected.diagnostics);
+    return inspected.data;
   }
 }

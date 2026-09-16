@@ -32,7 +32,7 @@ const staticTypes: readonly BuiltinTypeDefinition[] = [
   { name: "SkillResult", description: "Text returned after executing a skill.", fields: [
     { name: "kind", type: '"skill"' }, { name: "text", type: "string" }
   ] },
-  { name: "AgentResult", description: "Result of a continuous Agent task; preview-only edits may include a patch.", fields: [
+  { name: "AgentResult", description: "Result of a continuous Agent task; preview-only edits may include a patch, while patch=false returns text only.", fields: [
     { name: "kind", type: '"agent"' }, { name: "text", type: "string" }, { name: "summary", type: "string", optional: true },
     { name: "patch", type: "PatchResult", optional: true }, { name: "files", type: "CodeRef[]", optional: true }
   ] },
