@@ -5,14 +5,34 @@ import type { SyntaxNode } from "@lezer/common";
 import type { MethodRegistry } from "./registry.js";
 import { normalizeInputReferenceSource } from "./fileReference.js";
 import { CLI_BUILTIN_IDS, specializeBuiltinCli } from "./builtinCli.js";
+import {
+  PURE_FUNCTIONS,
+  STRING_METHODS,
+  formatReplacement,
+  pythonArithmetic,
+  pythonCompare,
+  pythonIndex,
+  pythonSlice,
+  pythonTruthy,
+  pureFunction,
+  stringMethod,
+  type ArithmeticOperator,
+  type CompareOperator,
+  type FormatConversion,
+  type LogicalOperator,
+  type PureReturn,
+  type PureSignature
+} from "./pythonStrings.js";
 import type {
   CallableDefinition,
   ContextReference,
   DirectoryReference,
   FieldDefinition,
+  WorkflowArgument,
   WorkflowCall,
   WorkflowCondition,
   WorkflowExpression,
+  WorkflowFormatPart,
   WorkflowProgram,
   WorkflowStatement
 } from "./types.js";
@@ -42,6 +62,75 @@ type ValueType =
   | { kind: "unknown" };
 
 export type WorkflowValueType = ValueType;
+
+interface Compiled {
+  expression: WorkflowExpression;
+  type: ValueType;
+}
+
+const COMPARE_OPERATORS: readonly CompareOperator[] = ["==", "!=", "<", "<=", ">", ">=", "in", "not in"];
+
+/** Lists longer than this stay runtime values instead of becoming AST nodes. */
+const MAX_FOLDED_ITEMS = 100;
+
+function isCompareOperator(operator: string): operator is CompareOperator {
+  return (COMPARE_OPERATORS as readonly string[]).includes(operator);
+}
+
+function pureValueType(returns: PureReturn): ValueType {
+  if (returns.kind === "list") return { kind: "list", item: pureValueType({ kind: returns.item ?? "unknown" }) };
+  return { kind: returns.kind };
+}
+
+/** `sorted(items)` and friends keep the element type they were given. */
+function pureElementValueType(type: ValueType): ValueType {
+  if (type.kind === "list") return { kind: "list", item: type.item };
+  return { kind: "list", item: { kind: "unknown" } };
+}
+
+/** An `else` branch always runs when reached, so its condition is trivially true. */
+function trueCondition(node: SyntaxNode): WorkflowCondition {
+  return {
+    kind: "boolean",
+    value: { kind: "literal", value: true, from: node.from, to: node.from + 1 },
+    from: node.from,
+    to: node.from + 1
+  };
+}
+
+/** The item type of a list or tuple literal: the shared type of its entries. */
+function sequenceItemType(values: readonly Compiled[]): ValueType {
+  const first = values[0]?.type ?? { kind: "unknown" as const };
+  return values.every((value) => typeName(value.type) === typeName(first)) ? first : { kind: "unknown" };
+}
+
+function argumentOf(value: Compiled, name: string | undefined): WorkflowArgument {  return {
+    ...(name ? { name } : {}),
+    value: value.expression,
+    from: value.expression.from,
+    to: value.expression.to
+  };
+}
+
+/** Joins neighboring text pieces so an f-string with escapes stays one run. */
+function mergeTextParts(parts: readonly WorkflowFormatPart[]): WorkflowFormatPart[] {
+  const merged: WorkflowFormatPart[] = [];
+  for (const part of parts) {
+    const previous = merged.at(-1);
+    if (part.kind === "text" && previous?.kind === "text") {
+      merged[merged.length - 1] = { kind: "text", text: previous.text + part.text };
+      continue;
+    }
+    merged.push(part);
+  }
+  return merged;
+}
+
+function arityText(signature: PureSignature): string {
+  if (signature.maximum === Infinity) return `at least ${signature.required} argument${signature.required === 1 ? "" : "s"}`;
+  if (signature.required === signature.maximum) return `${signature.required} argument${signature.required === 1 ? "" : "s"}`;
+  return `${signature.required} to ${signature.maximum} arguments`;
+}
 
 export interface WorkflowCompileOptions {
   allowReturn?: boolean;
@@ -150,17 +239,83 @@ function text(source: string, node: SyntaxNode): string {
   return source.slice(node.from, node.to);
 }
 
-function decodeString(value: string): string {
-  const quote = value.startsWith('"""') || value.startsWith("'''") ? value.slice(0, 3) : value.slice(0, 1);
-  const body = value.slice(quote.length, -quote.length);
-  return body.replace(/\\([\\'"nrt])/g, (_match, escaped: string) => ({
-    "\\": "\\",
-    "'": "'",
-    '"': '"',
-    n: "\n",
-    r: "\r",
-    t: "\t"
-  })[escaped] ?? escaped);
+interface StringLiteralShape {
+  prefix: string;
+  quote: string;
+  body: string;
+  raw: boolean;
+  formatted: boolean;
+  bytes: boolean;
+}
+
+/** Splits a Python string literal into prefix, quote, and body. */
+function parseStringLiteral(value: string): StringLiteralShape | undefined {
+  const match = /^([A-Za-z]*)("""|'''|"|')/.exec(value);
+  if (!match) return undefined;
+  const prefix = match[1] ?? "";
+  const quote = match[2]!;
+  if (!value.endsWith(quote) || value.length < prefix.length + quote.length * 2) return undefined;
+  return {
+    prefix,
+    quote,
+    body: value.slice(prefix.length + quote.length, value.length - quote.length),
+    raw: /r/i.test(prefix),
+    formatted: /f/i.test(prefix),
+    bytes: /b/i.test(prefix)
+  };
+}
+
+const SIMPLE_ESCAPES: Readonly<Record<string, string>> = {
+  "\\": "\\",
+  "'": "'",
+  '"': '"',
+  n: "\n",
+  r: "\r",
+  t: "\t",
+  a: "\x07",
+  b: "\b",
+  f: "\f",
+  v: "\v",
+  "0": "\0"
+};
+
+/** Decodes Python escape sequences. Unknown escapes stay as they were written,
+ * which matches Python's behavior outside of a SyntaxWarning. */
+function decodeEscapes(value: string): string {
+  return value.replace(/\\(x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|[0-7]{1,3}|.)/gs, (whole, escaped: string) => {
+    if (escaped.startsWith("x")) return String.fromCodePoint(parseInt(escaped.slice(1), 16));
+    if (escaped.startsWith("u")) return String.fromCodePoint(parseInt(escaped.slice(1), 16));
+    if (escaped.startsWith("U")) return String.fromCodePoint(parseInt(escaped.slice(1), 16));
+    if (/^[0-7]+$/.test(escaped)) return String.fromCodePoint(parseInt(escaped, 8));
+    return SIMPLE_ESCAPES[escaped] ?? whole;
+  });
+}
+
+function decodeStringBody(value: string, raw: boolean): string {
+  return raw ? value : decodeEscapes(value);
+}
+
+/** Decodes one plain string literal node's source text. */
+function decodeStringLiteral(value: string): string | undefined {
+  const literal = parseStringLiteral(value);
+  if (!literal || literal.formatted || literal.bytes) return undefined;
+  return decodeStringBody(literal.body, literal.raw);
+}
+
+/** Text between f-string replacement fields: `{{`/`}}` are the escapes, and a
+ * non-raw f-string decodes backslashes as well. */
+function decodeFormatText(value: string, raw: boolean): string {
+  const unbraced = value.replace(/\{\{/g, "{").replace(/\}\}/g, "}");
+  return raw ? unbraced : decodeEscapes(unbraced);
+}
+
+/** Python number literals: underscores, hex/octal/binary prefixes, and floats. */
+function numberLiteral(value: string): number {
+  const normalized = value.replaceAll("_", "");
+  if (/^[+-]?0[xX]/.test(normalized)) return Number.parseInt(normalized.replace(/^[+-]?0[xX]/, ""), 16) * (normalized.startsWith("-") ? -1 : 1);
+  if (/^[+-]?0[oO]/.test(normalized)) return Number.parseInt(normalized.replace(/^[+-]?0[oO]/, ""), 8) * (normalized.startsWith("-") ? -1 : 1);
+  if (/^[+-]?0[bB]/.test(normalized)) return Number.parseInt(normalized.replace(/^[+-]?0[bB]/, ""), 2) * (normalized.startsWith("-") ? -1 : 1);
+  return Number(normalized);
 }
 
 function memberPath(source: string, node: SyntaxNode): string | undefined {
@@ -313,6 +468,18 @@ class Compiler {
       if (!this.returnType) this.returnType = value.type;
       return { kind: "return", expression: value.expression, from: node.from, to: node.to };
     }
+    if (node.name === "UpdateStatement") {
+      // Python's `+=` mutates in place. A Dext workflow names values instead, so
+      // repeated text is built from a list rather than appended to a variable.
+      const operator = children(node).find((child) => child.name === "UpdateOp");
+      this.error(
+        `Dext does not support '${operator ? text(this.source, operator) : "augmented assignment"}'. `
+        + 'Collect the values in a list and join them, for example "\\n".join(lines).',
+        node.from,
+        node.to
+      );
+      return undefined;
+    }
     this.error(
       `${node.name.replace(/Statement$/, "")} is not allowed in Dext workflows.`,
       node.from,
@@ -323,46 +490,22 @@ class Compiler {
 
   private compileAssignment(node: SyntaxNode): WorkflowStatement | undefined {
     const parts = namedChildren(node);
-    const variable = parts.find((child) => child.name === "VariableName");
-    if (!variable) {
-      this.error("Assignments must name a variable.", node.from, node.to);
-      return undefined;
-    }
+    // One target, one value. `a, b = value` and `x = 1, 2` parse as ordinary
+    // assignment statements, so without this check the extra names and values
+    // would silently disappear.
+    const shape = this.assignmentShape(parts, node);
+    if (!shape) return undefined;
+    const { variable, values } = shape;
     const name = text(this.source, variable);
     const existing = this.environment.get(name);
     if (existing && this.loopDepth === 0) {
       this.error(`Variable '${name}' cannot be reassigned.`, variable.from, variable.to);
       return undefined;
     }
-    const callNode = parts.find((child) => child.name === "CallExpression");
-    if (callNode) {
-      const compiled = this.compileCall(callNode);
-      if (!compiled) return undefined;
-      if (existing && typeName(existing.type) !== typeName(compiled.type)) {
-        this.error(`Loop variable '${name}' must keep type ${typeName(existing.type)}.`, variable.from, variable.to);
-        return undefined;
-      }
-      this.environment.set(name, { type: compiled.type, from: variable.from });
-      return { kind: "step", assignment: name, call: compiled.call, from: node.from, to: node.to };
-    }
-    const comprehensionNode = parts.find((child) => child.name === "ArrayComprehensionExpression");
-    if (comprehensionNode) {
-      const compiled = this.compileComprehension(comprehensionNode);
-      if (!compiled) return undefined;
-      // No `value` on the entry: a comprehension runs API calls, so it cannot be
-      // folded into a compile-time constant the way a list literal is.
-      this.environment.set(name, { type: compiled.type, from: variable.from });
-      return { kind: "assign", assignment: name, expression: compiled.expression, from: node.from, to: node.to };
-    }
-    const valueNode = parts.find((child) =>
-      child.from > variable.to
-      && ["String", "Number", "Boolean", "ArrayExpression", "DictionaryExpression", "VariableName", "MemberExpression"].includes(child.name)
-    );
-    if (!valueNode) {
-      this.error("Assignments must bind the result of a Dext API call or a literal value.", node.from, node.to);
-      return undefined;
-    }
-    const compiled = this.compileExpression(valueNode);
+    // `x = 1, 2` is a tuple in Python, so it is a list here.
+    const compiled = values.length === 1
+      ? this.assignmentExpression(values[0]!)
+      : this.compileSequence(values, node);
     if (!compiled) return undefined;
     const typeDef = parts.find((child) => child.name === "TypeDef");
     let type = compiled.type;
@@ -386,16 +529,98 @@ class Compiler {
       this.error(`Loop variable '${name}' must keep type ${typeName(existing.type)}.`, variable.from, variable.to);
       return undefined;
     }
-    this.environment.set(name, { type, from: variable.from, value: compiled.expression });
-    if (valueNode.name === "VariableName" || valueNode.name === "MemberExpression") {
+    if (compiled.expression.kind === "call") {
       this.environment.set(name, { type, from: variable.from });
-      return { kind: "assign", assignment: name, expression: compiled.expression, from: node.from, to: node.to };
+      return { kind: "step", assignment: name, call: compiled.expression.call, from: node.from, to: node.to };
     }
-    return undefined;
+    // A value Dext can compute while compiling never reaches the runtime; it is
+    // stored and inlined where the variable is used, exactly like a literal.
+    if (this.inlineable(compiled.expression)) {
+      this.environment.set(name, { type, from: variable.from, value: compiled.expression });
+      return undefined;
+    }
+    this.environment.set(name, { type, from: variable.from });
+    return { kind: "assign", assignment: name, expression: compiled.expression, from: node.from, to: node.to };
   }
 
-  private compileExpressionStatement(node: SyntaxNode): WorkflowStatement | undefined {
-    const callNode = namedChildren(node).find((child) => child.name === "CallExpression");
+  /** The right-hand side of an assignment: a Dext API call stays the step it has
+   * always been, while a pure expression (including string methods and helpers)
+   * compiles as a value. */
+  private assignmentExpression(valueNode: SyntaxNode): Compiled | undefined {
+    if (valueNode.name === "CallExpression") return this.compileCallAsExpression(valueNode);
+    return this.compileExpression(valueNode);
+  }
+
+  /** Resolves a call in value position: a pure helper or string method first,
+   * then a Dext API call. */
+  private compileCallAsExpression(node: SyntaxNode): Compiled | undefined {
+    const parts = namedChildren(node);
+    const callee = parts[0];
+    const args = parts.find((child) => child.name === "ArgList");
+    if (!callee || !args) {
+      this.error("Invalid API call.", node.from, node.to);
+      return undefined;
+    }
+    const pure = this.compilePureCall(callee, args, node);
+    if (pure === null) return undefined;
+    if (pure) return this.foldConstant(pure);
+    const call = this.compileCall(node);
+    return call
+      ? { expression: { kind: "call", call: call.call, from: node.from, to: node.to }, type: call.type }
+      : undefined;
+  }
+
+  /** Literal containers are inlined the way they always were, and any expression
+   * the compiler could evaluate joins them: it is cheaper to substitute the
+   * value than to emit a step that only copies it. Anything the runtime has to
+   * compute (a variable, a member read, a computed string) becomes a step. */
+  private inlineable(expression: WorkflowExpression): boolean {
+    if (["literal", "list", "object"].includes(expression.kind)) return true;
+    return this.safeConstantValue(expression) !== undefined;
+  }
+
+  /** Constant folding for checks that only care whether a value is known. */
+  private safeConstantValue(expression: WorkflowExpression): unknown {
+    try {
+      return this.constantValue(expression)?.value;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Validates the `name = value` shape and returns its two ends. A tuple on the
+   * right is allowed: `x = 1, 2` binds one list. */
+  private assignmentShape(
+    parts: readonly SyntaxNode[],
+    node: SyntaxNode
+  ): { variable: SyntaxNode; values: SyntaxNode[] } | undefined {
+    const assignIndex = parts.findIndex((child) => child.name === "AssignOp");
+    if (assignIndex < 0) {
+      this.error("Assignments must use '='.", node.from, node.to);
+      return undefined;
+    }
+    if (parts.filter((child) => child.name === "AssignOp").length > 1) {
+      this.error("Dext assigns one variable at a time; chained assignment is not supported.", node.from, node.to);
+      return undefined;
+    }
+    const targets = parts.slice(0, assignIndex).filter((child) => child.name !== "TypeDef" && child.name !== "Comment");
+    const values = parts.slice(assignIndex + 1).filter((child) => child.name !== "Comment");
+    if (targets.length !== 1 || targets[0]!.name !== "VariableName") {
+      this.error(
+        "Dext assigns one variable at a time; unpacking such as 'a, b = value' is not supported.",
+        node.from,
+        node.to
+      );
+      return undefined;
+    }
+    if (!values.length) {
+      this.error("Assignments must bind the result of a Dext API call or a value expression.", node.from, node.to);
+      return undefined;
+    }
+    return { variable: targets[0]!, values };
+  }
+
+  private compileExpressionStatement(node: SyntaxNode): WorkflowStatement | undefined {    const callNode = namedChildren(node).find((child) => child.name === "CallExpression");
     if (!callNode) {
       this.error("Only Dext API calls may be used as expression statements.", node.from, node.to);
       return undefined;
@@ -406,25 +631,48 @@ class Compiler {
       : undefined;
   }
 
+  /** `if`/`elif`/`else`. Branches are compiled independently and only bindings
+   * every surviving branch agrees on escape, because at compile time it is not
+   * known which one runs. */
   private compileIf(node: SyntaxNode): WorkflowStatement | undefined {
-    const parts = children(node);
-    const conditionNode = parts.find((child) => child.name === "BinaryExpression" || child.name === "Boolean" || child.name === "MemberExpression");
-    const bodies = parts.filter((child) => child.name === "Body");
-    if (!conditionNode || !bodies[0]) {
+    const branches = this.ifBranches(node);
+    if (!branches) {
       this.error("An if statement requires a condition and body.", node.from, node.to);
       return undefined;
     }
-    const condition = this.compileCondition(conditionNode);
-    if (!condition) return undefined;
+    return this.compileBranch(branches, 0, node);
+  }
+
+  private compileBranch(
+    branches: readonly { condition?: SyntaxNode; body: SyntaxNode }[],
+    index: number,
+    node: SyntaxNode
+  ): WorkflowStatement | undefined {
+    const branch = branches[index]!;
     const before = new Map(this.environment);
-    const consequent = this.compileStatements(bodies[0]);
+    const condition = branch.condition ? this.compileCondition(branch.condition) : undefined;
+    if (branch.condition && !condition) return undefined;
+    const consequent = this.compileStatements(branch.body);
     const afterConsequent = new Map(this.environment);
-    this.environment.clear();
-    for (const entry of before) this.environment.set(...entry);
-    const alternate = bodies[1] ? this.compileStatements(bodies[1]) : [];
+    // The last branch has nothing to reconcile with: an `else` binds
+    // unconditionally, while an `if` without `else` leaves a path that binds
+    // nothing at all.
+    if (index + 1 >= branches.length) {
+      if (branch.condition !== undefined) this.restore(before);
+      return {
+        kind: "if",
+        condition: condition ?? trueCondition(node),
+        consequent,
+        alternate: [],
+        from: node.from,
+        to: node.to
+      };
+    }
+    this.restore(before);
+    const alternate = [this.compileBranch(branches, index + 1, node)]
+      .filter((item): item is WorkflowStatement => item !== undefined);
     const afterAlternate = new Map(this.environment);
-    this.environment.clear();
-    for (const entry of before) this.environment.set(...entry);
+    this.restore(before);
     for (const [name, entry] of afterConsequent) {
       const alternateEntry = afterAlternate.get(name);
       if (alternateEntry && typeName(entry.type) === typeName(alternateEntry.type)) {
@@ -433,7 +681,7 @@ class Compiler {
     }
     return {
       kind: "if",
-      condition,
+      condition: condition ?? trueCondition(node),
       consequent,
       alternate,
       from: node.from,
@@ -441,9 +689,39 @@ class Compiler {
     };
   }
 
+  /** Splits `if`/`elif`/`else` into one branch per condition plus a final
+   * unconditional `else`, so an `elif` chain keeps every condition instead of
+   * collapsing into the first body. */
+  private ifBranches(node: SyntaxNode): { condition?: SyntaxNode; body: SyntaxNode }[] | undefined {
+    const parts = children(node);
+    const branches: { condition?: SyntaxNode; body: SyntaxNode }[] = [];
+    let index = 0;
+    while (index < parts.length) {
+      const part = parts[index]!;
+      if (part.name === "if" || part.name === "elif") {
+        const condition = parts[index + 1];
+        const body = parts[index + 2];
+        if (!condition || body?.name !== "Body") return undefined;
+        branches.push({ condition, body });
+        index += 3;
+        continue;
+      }
+      if (part.name === "else") {
+        const body = parts[index + 1];
+        if (body?.name !== "Body") return undefined;
+        branches.push({ body });
+        index += 2;
+        continue;
+      }
+      index += 1;
+    }
+    return branches.length ? branches : undefined;
+  }
+
   private compileWhile(node: SyntaxNode): WorkflowStatement | undefined {
     const parts = children(node);
-    const conditionNode = parts.find((child) => child.name === "BinaryExpression" || child.name === "Boolean" || child.name === "MemberExpression");
+    const keyword = parts.findIndex((child) => child.name === "while");
+    const conditionNode = keyword >= 0 ? parts[keyword + 1] : undefined;
     const bodyNode = parts.find((child) => child.name === "Body");
     if (!conditionNode || !bodyNode) {
       this.error("A while statement requires a condition and body.", node.from, node.to);
@@ -573,51 +851,179 @@ class Compiler {
     };
   }
 
+  /** Conditions support comparisons (`==`, `!=`, `<`, `<=`, `>`, `>=`, `in`,
+   * `not in`), `and`/`or`/`not`, and any boolean expression. */
   private compileCondition(node: SyntaxNode): WorkflowCondition | undefined {
-    if (node.name === "BinaryExpression") {
-      const parts = namedChildren(node);
-      const operator = children(node).find((child) => child.name === "CompareOp");
-      if (!operator || !["==", "!="].includes(text(this.source, operator))) {
-        this.error("Dext conditions currently support only == and !=.", node.from, node.to);
-        return undefined;
+    const inner = this.unwrap(node);
+    if (inner.name === "UnaryExpression") {
+      const parts = children(inner);
+      const operator = parts.find((child) => child.name === "not");
+      const valueNode = parts.find((child) => child.name !== "not");
+      if (operator && valueNode) {
+        const value = this.compileCondition(valueNode);
+        return value ? { kind: "not", value, from: inner.from, to: inner.to } : undefined;
       }
-      const left = parts[0] ? this.compileExpression(parts[0]) : undefined;
-      const right = parts.at(-1) ? this.compileExpression(parts.at(-1)!) : undefined;
-      if (!left || !right) return undefined;
-      if (!typesOverlap(left.type, right.type)) {
-        this.error(
-          `Cannot compare ${typeName(left.type)} with ${typeName(right.type)}.`,
-          right.expression.from,
-          right.expression.to
-        );
-      } else {
-        validateStringLiteralComparison(left.type, right.expression, this.diagnostics);
-        validateStringLiteralComparison(right.type, left.expression, this.diagnostics);
-      }
-      return {
-        kind: "comparison",
-        operator: text(this.source, operator) as "==" | "!=",
-        left: left.expression,
-        right: right.expression,
-        from: node.from,
-        to: node.to
-      };
     }
-    const value = this.compileExpression(node);
+    if (inner.name === "BinaryExpression") {
+      const operator = this.binaryOperator(inner);
+      if (operator === "and" || operator === "or") {
+        const operands = this.binaryOperands(inner);
+        if (!operands) return undefined;
+        const values: WorkflowCondition[] = [];
+        for (const operand of operands) {
+          if (operand.node.name === "BinaryExpression" && this.binaryOperator(operand.node) === operator) {
+            // `a and b and c` parses left-nested; flatten it into one condition.
+            const nested = this.compileCondition(operand.node);
+            if (!nested) return undefined;
+            values.push(...(nested.kind === "logic" && nested.operator === operator ? nested.values : [nested]));
+            continue;
+          }
+          const compiled = this.compileCondition(operand.node);
+          if (!compiled) return undefined;
+          values.push(compiled);
+        }
+        return { kind: "logic", operator, values, from: inner.from, to: inner.to };
+      }
+      if (operator && isCompareOperator(operator)) {
+        const operands = this.binaryOperands(inner);
+        if (this.chainedComparison(inner) || !operands || operands.length !== 2) {
+          if (this.chainedComparison(inner)) {
+            this.error("Dext does not chain comparisons; write 'a < b and b < c'.", inner.from, inner.to);
+          } else {
+            this.error("A Dext condition compares exactly two values.", inner.from, inner.to);
+          }
+          return undefined;
+        }
+        const left = this.compileExpression(operands[0]!);
+        const right = this.compileExpression(operands[1]!);
+        if (!left || !right) return undefined;
+        this.validateComparison(operator, left, right, inner);
+        return {
+          kind: "comparison",
+          operator,
+          left: left.expression,
+          right: right.expression,
+          from: inner.from,
+          to: inner.to
+        };
+      }
+      if (operator) {
+        // Another operator (`+`, `*`, ...) still compiles; the boolean check
+        // below reports that the condition itself is not a condition.
+        const value = this.compileExpression(inner);
+        if (!value) return undefined;
+        if (value.type.kind !== "boolean" && value.type.kind !== "unknown") {
+          this.error("An if condition must be boolean.", inner.from, inner.to);
+        }
+        return { kind: "boolean", value: value.expression, from: inner.from, to: inner.to };
+      }
+    }
+    const value = this.compileExpression(inner);
     if (!value) return undefined;
-    if (value.type.kind !== "boolean") {
-      this.error("An if condition must be boolean.", node.from, node.to);
+    if (value.type.kind !== "boolean" && value.type.kind !== "unknown") {
+      this.error(
+        `An if condition must be boolean, not ${typeName(value.type)}. Compare it or wrap it with bool(value).`,
+        inner.from,
+        inner.to
+      );
     }
-    return { kind: "boolean", value: value.expression, from: node.from, to: node.to };
+    return { kind: "boolean", value: value.expression, from: inner.from, to: inner.to };
+  }
+
+  /** Type checks shared by conditions and comparison expressions. */
+  private validateComparison(
+    operator: CompareOperator,
+    left: { expression: WorkflowExpression; type: ValueType },
+    right: { expression: WorkflowExpression; type: ValueType },
+    node: SyntaxNode
+  ): void {
+    if (operator === "in" || operator === "not in") {
+      const container = right.type;
+      if (container.kind === "string" || container.kind === "object" || container.kind === "unknown") return;
+      if (container.kind === "list") {
+        const item = container.item;
+        if (item.kind === "unknown" || left.type.kind === "unknown" || typesOverlap(item, left.type)) return;
+        this.error(
+          `${typeName(left.type)} is never found in a ${typeName(container)}.`,
+          left.expression.from,
+          left.expression.to
+        );
+        return;
+      }
+      this.error(`'in' needs a string, list, or dictionary on the right, not ${typeName(container)}.`, node.from, node.to);
+      return;
+    }
+    if (!typesOverlap(left.type, right.type)) {
+      this.error(
+        `Cannot compare ${typeName(left.type)} with ${typeName(right.type)}.`,
+        right.expression.from,
+        right.expression.to
+      );
+      return;
+    }
+    if (["<", "<=", ">", ">="].includes(operator)) {
+      const kind = left.type.kind;
+      if (kind !== "number" && kind !== "string" && kind !== "unknown") {
+        this.error(`Cannot order ${typeName(left.type)} values; only strings and numbers are orderable.`, node.from, node.to);
+        return;
+      }
+    }
+    validateStringLiteralComparison(left.type, right.expression, this.diagnostics);
+    validateStringLiteralComparison(right.type, left.expression, this.diagnostics);
+  }
+
+  private unwrap(node: SyntaxNode): SyntaxNode {
+    if (node.name !== "ParenthesizedExpression") return node;
+    const inner = children(node).find((child) => child.name !== "(" && child.name !== ")");
+    return inner ? this.unwrap(inner) : node;
+  }
+
+  /** The operator of a binary expression, or undefined when it holds none. */
+  private binaryOperator(node: SyntaxNode): CompareOperator | ArithmeticOperator | LogicalOperator | undefined {
+    const operator = children(node)
+      .filter((child) => ["ArithOp", "CompareOp", "in", "not", "and", "or"].includes(child.name))
+      .map((child) => text(this.source, child))
+      .join(" ");
+    return operator ? operator as CompareOperator | ArithmeticOperator | LogicalOperator : undefined;
+  }
+
+  private binaryOperands(node: SyntaxNode): SyntaxNode[] | undefined {
+    const operands = children(node).filter((child) =>
+      !["Comment", "(", ")", "ArithOp", "CompareOp", "in", "and", "or"].includes(child.name)
+      && !(child.name === "not")
+    );
+    return operands.length ? operands : undefined;
+  }
+
+  /** `a < b < c` parses as a nested binary expression, but means a chained
+   * comparison Python evaluates pairwise. Dext rejects it instead of quietly
+   * comparing a boolean with `c`. */
+  private chainedComparison(node: SyntaxNode): boolean {
+    const operator = this.binaryOperator(node);
+    if (!operator || !isCompareOperator(operator)) return false;
+    const left = children(node)[0];
+    if (left?.name !== "BinaryExpression") return false;
+    const inner = this.binaryOperator(left);
+    return inner !== undefined && isCompareOperator(inner);
   }
 
   private compileCall(node: SyntaxNode): { call: WorkflowCall; type: ValueType } | undefined {
     const parts = namedChildren(node);
     const callee = parts[0];
     const args = parts.find((child) => child.name === "ArgList");
-    const rawMethod = callee ? memberPath(this.source, callee) : undefined;
+    if (!callee || !args) {
+      this.error("Invalid API call.", node.from, node.to);
+      return undefined;
+    }
+    const pure = this.compilePureCall(callee, args, node);
+    if (pure === null) return undefined;
+    if (pure) {
+      this.error("Only Dext API calls may be used as expression statements.", node.from, node.to);
+      return undefined;
+    }
+    const rawMethod = memberPath(this.source, callee);
     const method = rawMethod ? resolveAlias(rawMethod, this.options.aliases) : undefined;
-    if (!method || !args) {
+    if (!method) {
       this.error("Invalid API call.", node.from, node.to);
       return undefined;
     }
@@ -672,7 +1078,7 @@ class Compiler {
       if (compiled) {
         if (definition.id === "ui.form" && name === "fields") {
           if (containsUiCall(compiled.expression)) this.error("Form fields must be declarative data, not UI API calls.", valueNode.from, valueNode.to);
-          const data = literalData(compiled.expression);
+          const data = this.safeConstantValue(compiled.expression);
           if (data !== undefined) {
             try { parseUiForm({ title: "Form", fields: data }); }
             catch (error) { this.error(error instanceof Error ? error.message : "Invalid form fields.", valueNode.from, valueNode.to); }
@@ -851,17 +1257,8 @@ class Compiler {
     // A call is the whole point of a comprehension, so it is compiled directly
     // rather than going through the nested-call gate that keeps calls out of
     // ordinary expressions.
-    const compiledCall = bodyNode.name === "CallExpression" ? this.compileCall(bodyNode) : undefined;
-    const body = compiledCall
-      ? {
-        expression: {
-          kind: "call" as const,
-          call: compiledCall.call,
-          from: bodyNode.from,
-          to: bodyNode.to
-        },
-        type: compiledCall.type
-      }
+    const body = bodyNode.name === "CallExpression"
+      ? this.compileCallAsExpression(bodyNode)
       : this.compileExpression(bodyNode);
     this.restore(before);
     if (!body) return undefined;
@@ -878,16 +1275,59 @@ class Compiler {
     };
   }
 
-  private compileExpression(node: SyntaxNode): { expression: WorkflowExpression; type: ValueType } | undefined {
+  private compileExpression(node: SyntaxNode): Compiled | undefined {
+    const compiled = this.compileExpressionNode(node);
+    return compiled ? this.foldConstant(compiled) : undefined;
+  }
+
+  /** A list literal or a tuple literal. Dext has one sequence type, so a tuple
+   * `(a, b)` — and the bare `a, b` form — is a list written the Python way. The
+   * item type is the shared type of the entries, or unknown when they differ. */
+  private compileSequence(nodes: readonly SyntaxNode[], node: SyntaxNode): Compiled | undefined {
+    const compiled: Compiled[] = [];
+    for (const child of nodes) {
+      const value = this.compileExpression(child);
+      if (!value) return undefined;
+      compiled.push(value);
+    }
+    return {
+      expression: { kind: "list", values: compiled.map((value) => value.expression), from: node.from, to: node.to },
+      type: { kind: "list", item: sequenceItemType(compiled) }
+    };
+  }
+
+  private compileExpressionNode(node: SyntaxNode): Compiled | undefined {
+    if (node.name === "ParenthesizedExpression") {
+      const inner = children(node).find((child) => child.name !== "(" && child.name !== ")");
+      return inner ? this.compileExpression(inner) : undefined;
+    }
     if (node.name === "String") {
+      const raw = text(this.source, node);
+      const literal = parseStringLiteral(raw);
+      if (!literal) {
+        this.error("Invalid string literal.", node.from, node.to);
+        return undefined;
+      }
+      if (literal.bytes) {
+        this.error("Bytes literals are not supported in Dext workflows.", node.from, node.to);
+        return undefined;
+      }
+      if (literal.formatted) return this.compileFormatString(node);
       return {
-        expression: { kind: "literal", value: decodeString(text(this.source, node)), from: node.from, to: node.to },
+        expression: { kind: "literal", value: decodeStringBody(literal.body, literal.raw), from: node.from, to: node.to },
         type: { kind: "string" }
       };
     }
+    if (node.name === "FormatString") return this.compileFormatString(node);
+    if (node.name === "ContinuedString") return this.compileContinuedString(node);
     if (node.name === "Number") {
+      const value = numberLiteral(text(this.source, node));
+      if (Number.isNaN(value)) {
+        this.error(`Invalid number literal '${text(this.source, node)}'.`, node.from, node.to);
+        return undefined;
+      }
       return {
-        expression: { kind: "literal", value: Number(text(this.source, node)), from: node.from, to: node.to },
+        expression: { kind: "literal", value, from: node.from, to: node.to },
         type: { kind: "number" }
       };
     }
@@ -897,17 +1337,8 @@ class Compiler {
         type: { kind: "boolean" }
       };
     }
-    if (node.name === "ArrayExpression") {
-      const compiled = namedChildren(node).map((child) => this.compileExpression(child)).filter((value) => value !== undefined);
-      const first = compiled[0]?.type ?? { kind: "unknown" as const };
-      const item = compiled.every((value) => typeName(value.type) === typeName(first))
-        ? first
-        : { kind: "unknown" as const };
-      return {
-        expression: { kind: "list", values: compiled.map((value) => value.expression), from: node.from, to: node.to },
-        type: { kind: "list", item }
-      };
-    }
+    if (node.name === "ArrayExpression") return this.compileSequence(namedChildren(node), node);
+    if (node.name === "TupleExpression") return this.compileSequence(namedChildren(node), node);
     if (node.name === "ArrayComprehensionExpression") return this.compileComprehension(node);
     if (node.name === "DictionaryExpression") {
       const entries: Extract<WorkflowExpression, { kind: "object" }>['entries'] = [];
@@ -919,7 +1350,11 @@ class Compiler {
         const colon = parts[index + 1];
         const value = parts[index + 2];
         if (colon?.name !== ":" || !value) continue;
-        const name = decodeString(text(this.source, key));
+        const name = decodeStringLiteral(text(this.source, key));
+        if (name === undefined) {
+          this.error("Dext dictionary keys must be plain strings.", key.from, key.to);
+          continue;
+        }
         if (seen.has(name)) this.error(`Dictionary key '${name}' is provided more than once.`, key.from, key.to);
         seen.add(name);
         const compiled = this.compileExpression(value);
@@ -937,7 +1372,15 @@ class Compiler {
       const name = text(this.source, node);
       const entry = this.environment.get(name);
       if (!entry) {
-        this.error(`Unknown variable '${name}'.`, node.from, node.to);
+        // `ref.*` was removed in favour of readable @path tokens, so a stale
+        // reference gets the replacement instead of a bare unknown name.
+        this.error(
+          name === "ref"
+            ? "Unknown variable 'ref'. Write file and selection references as @path tokens."
+            : `Unknown variable '${name}'.`,
+          node.from,
+          node.to
+        );
         return undefined;
       }
       if (entry.value) {
@@ -945,64 +1388,729 @@ class Compiler {
       }
       return { expression: { kind: "variable", name, from: node.from, to: node.to }, type: entry.type };
     }
-    if (node.name === "MemberExpression") {
-      const parts = children(node);
-      const objectNode = parts.find((child) => child.name === "MemberExpression" || child.name === "VariableName" || child.name === "CallExpression" || child.name === "ArrayExpression" || child.name === "DictionaryExpression");
-      const object = objectNode ? this.compileExpression(objectNode) : undefined;
-      if (!object) return undefined;
-      const dot = parts.findIndex((child) => child.name === ".");
-      if (dot >= 0) {
-        const propertyNode = parts[dot + 1];
-        const property = propertyNode ? text(this.source, propertyNode) : "";
-        if (object.type.kind !== "result" && object.type.kind !== "object" && object.type.kind !== "unknown") {
-          this.error(`Cannot read field '${property}' from ${typeName(object.type)}.`, node.from, node.to);
-          return undefined;
-        }
-        const type = object.type.kind === "result" ? (object.type.fields[property] ?? { kind: "unknown" as const }) : { kind: "unknown" as const };
-        return { expression: { kind: "member", object: object.expression, property, from: node.from, to: node.to }, type };
-      }
-      const open = parts.findIndex((child) => child.name === "[");
-      const indexNode = open >= 0 ? parts[open + 1] : undefined;
-      if (!indexNode) {
-        this.error("Invalid member access.", node.from, node.to);
-        return undefined;
-      }
-      const index = this.compileExpression(indexNode);
-      if (!index) return undefined;
-      const type = object.type.kind === "list" ? object.type.item : object.type.kind === "object" ? object.type.item ?? { kind: "unknown" as const } : { kind: "unknown" as const };
-      return { expression: { kind: "index", object: object.expression, index: index.expression, from: node.from, to: node.to }, type };
+    if (node.name === "MemberExpression") return this.compileMemberExpression(node);
+    if (node.name === "BinaryExpression") return this.compileBinaryExpression(node);
+    if (node.name === "UnaryExpression") return this.compileUnaryExpression(node);
+    if (node.name === "TupleExpression") {
+      this.error("Dext has no tuples; write a list with [ ] instead.", node.from, node.to);
+      return undefined;
     }
     if (node.name === "CallExpression") {
-      const path = memberPath(this.source, namedChildren(node)[0]!);
-      const args = namedChildren(node).find((child) => child.name === "ArgList");
-      if (this.options.allowNestedCalls && args) {
-        const method = path ? resolveAlias(path, this.options.aliases) : undefined;
-        const definition = method ? this.registry.get(method) : undefined;
-        if (!method || !definition) {
-          this.error(`Unknown Dext API '${path ?? ""}'.`, node.from, node.to);
-          return undefined;
-        }
-        if (
-          definition.executor.kind === "custom"
-          && this.options.customApiIds?.has(method)
-          && this.options.requireCustomApiImports !== false
-          && !this.options.aliases?.has(path ?? "")
-          && !this.options.aliases?.has(path?.split(".")[0] ?? "")
-        ) {
-          this.error(`Custom API '${method}' must be imported before use.`, node.from, node.to);
-          return undefined;
-        }
-        const values = this.compileArguments(args, definition);
-        return {
-          expression: { kind: "call", call: { kind: "call", method, arguments: values, from: node.from, to: node.to }, from: node.from, to: node.to },
-          type: outputType(definition)
-        };
+      const parts = namedChildren(node);
+      const callee = parts[0];
+      const args = parts.find((child) => child.name === "ArgList");
+      if (!callee || !args) {
+        this.error("Invalid API call.", node.from, node.to);
+        return undefined;
       }
-      this.error("Nested API calls are not allowed in this context.", node.from, node.to);
+      const pure = this.compilePureCall(callee, args, node);
+      if (pure === null) return undefined;
+      if (pure) return pure;
+      const path = memberPath(this.source, callee);
+      const method = path ? resolveAlias(path, this.options.aliases) : undefined;
+      const definition = method ? this.registry.get(method) : undefined;
+      if (!method || !definition) {
+        this.error(`Unknown Dext API '${path ?? ""}'.`, node.from, node.to);
+        return undefined;
+      }
+      if (!this.options.allowNestedCalls) {
+        this.error("Nested API calls are not allowed in this context.", node.from, node.to);
+        return undefined;
+      }
+      if (
+        definition.executor.kind === "custom"
+        && this.options.customApiIds?.has(method)
+        && this.options.requireCustomApiImports !== false
+        && !this.options.aliases?.has(path ?? "")
+        && !this.options.aliases?.has(path?.split(".")[0] ?? "")
+      ) {
+        this.error(`Custom API '${method}' must be imported before use.`, node.from, node.to);
+        return undefined;
+      }
+      const values = this.compileArguments(args, definition);
+      return {
+        expression: { kind: "call", call: { kind: "call", method, arguments: values, from: node.from, to: node.to }, from: node.from, to: node.to },
+        type: outputType(definition)
+      };
+    }
+    if (node.name === "ComprehensionExpression") {
+      // A parenthesized generator looks like a tuple but fans out like `[...]`.
+      this.error(
+        "Dext comprehensions use square brackets: [call(...) for name in list].",
+        node.from,
+        node.to
+      );
       return undefined;
     }
     this.error(`Expression '${node.name}' is not allowed in Dext workflows.`, node.from, node.to);
     return undefined;
+  }
+
+  /** `a.b`, `a[b]`, and slices: `a[1:]`, `a[::-1]`. */
+  private compileMemberExpression(node: SyntaxNode): Compiled | undefined {
+    const parts = children(node);
+    const objectNode = parts[0];
+    const object = objectNode ? this.compileExpression(objectNode) : undefined;
+    if (!object) return undefined;
+    const dot = parts.findIndex((child) => child.name === ".");
+    if (dot >= 0) {
+      const propertyNode = parts[dot + 1];
+      const property = propertyNode ? text(this.source, propertyNode) : "";
+      if (object.type.kind !== "result" && object.type.kind !== "object" && object.type.kind !== "unknown") {
+        this.error(
+          `Cannot read field '${property}' from ${typeName(object.type)}.`,
+          node.from,
+          node.to
+        );
+        return undefined;
+      }
+      const type = object.type.kind === "result" ? (object.type.fields[property] ?? { kind: "unknown" as const }) : { kind: "unknown" as const };
+      return { expression: { kind: "member", object: object.expression, property, from: node.from, to: node.to }, type };
+    }
+    const open = parts.findIndex((child) => child.name === "[");
+    if (open < 0) {
+      this.error("Invalid member access.", node.from, node.to);
+      return undefined;
+    }
+    const closing = parts.length - 1;
+    const colon = parts.findIndex((child, index) => child.name === ":" && index > open && index < closing);
+    if (colon >= 0) return this.compileSlice(node, parts, open, closing, object);
+    const indexNode = parts[open + 1];
+    if (!indexNode) {
+      this.error("Invalid member access.", node.from, node.to);
+      return undefined;
+    }
+    const index = this.compileExpression(indexNode);
+    if (!index) return undefined;
+    if (["number", "boolean", "context", "dir"].includes(object.type.kind)) {
+      this.error(`Cannot index ${typeName(object.type)}.`, node.from, node.to);
+      return undefined;
+    }
+    const type = object.type.kind === "string"
+      ? { kind: "string" as const }
+      : object.type.kind === "list"
+        ? object.type.item
+        : object.type.kind === "object"
+          ? object.type.item ?? { kind: "unknown" as const }
+          : { kind: "unknown" as const };
+    return { expression: { kind: "index", object: object.expression, index: index.expression, from: node.from, to: node.to }, type };
+  }
+
+  private compileSlice(
+    node: SyntaxNode,
+    parts: readonly SyntaxNode[],
+    open: number,
+    closing: number,
+    object: Compiled
+  ): Compiled | undefined {
+    if (object.type.kind !== "string" && object.type.kind !== "list" && object.type.kind !== "unknown") {
+      this.error(`Cannot slice ${typeName(object.type)}.`, node.from, node.to);
+      return undefined;
+    }
+    const segments: SyntaxNode[][] = [[]];
+    for (let index = open + 1; index < closing; index += 1) {
+      const part = parts[index]!;
+      if (part.name === ":") {
+        segments.push([]);
+        continue;
+      }
+      segments.at(-1)!.push(part);
+    }
+    if (segments.length > 3) {
+      this.error("A slice takes at most start, stop, and step.", node.from, node.to);
+      return undefined;
+    }
+    const compiled = segments.map((segment) => segment[0] ? this.compileExpression(segment[0]) : undefined);
+    if (compiled.some((value, index) => segments[index]!.length && !value)) return undefined;
+    const [start, stop, step] = compiled;
+    return {
+      expression: {
+        kind: "slice",
+        object: object.expression,
+        ...(start ? { start: start.expression } : {}),
+        ...(stop ? { stop: stop.expression } : {}),
+        ...(step ? { step: step.expression } : {}),
+        from: node.from,
+        to: node.to
+      },
+      type: object.type
+    };
+  }
+
+  private compileBinaryExpression(node: SyntaxNode): Compiled | undefined {
+    if (this.chainedComparison(node)) {
+      this.error("Dext does not chain comparisons; write 'a < b and b < c'.", node.from, node.to);
+      return undefined;
+    }
+    const operator = this.binaryOperator(node);
+    const operands = this.binaryOperands(node);
+    if (!operator || !operands || operands.length !== 2) {
+      this.error("Dext supports one operator between two values.", node.from, node.to);
+      return undefined;
+    }
+    const left = this.compileExpression(operands[0]!);
+    const right = this.compileExpression(operands[1]!);
+    if (!left || !right) return undefined;
+    if (operator === "and" || operator === "or") {
+      for (const operand of [left, right]) {
+        if (operand.type.kind !== "boolean" && operand.type.kind !== "unknown") {
+          this.error(
+            `'${operator}' needs boolean values; use bool(value) to convert ${typeName(operand.type)}.`,
+            operand.expression.from,
+            operand.expression.to
+          );
+        }
+      }
+      const values: WorkflowExpression[] = [];
+      for (const operand of [left, right]) {
+        // `a and b and c` parses left-nested, so equal operators flatten into
+        // one node and short-circuit together.
+        if (operand.expression.kind === "logic" && operand.expression.operator === operator) values.push(...operand.expression.values);
+        else values.push(operand.expression);
+      }
+      return { expression: { kind: "logic", operator, values, from: node.from, to: node.to }, type: { kind: "boolean" } };
+    }
+    if (isCompareOperator(operator)) {
+      this.validateComparison(operator, left, right, node);
+      return {
+        expression: { kind: "compare", operator, left: left.expression, right: right.expression, from: node.from, to: node.to },
+        type: { kind: "boolean" }
+      };
+    }
+    const type = this.arithmeticType(operator, left, right, node);
+    return {
+      expression: { kind: "binary", operator, left: left.expression, right: right.expression, from: node.from, to: node.to },
+      type
+    };
+  }
+
+  /** `+` concatenates strings and adds numbers, `*` repeats strings and
+   * multiplies numbers, and `%` formats a string or takes a remainder. */
+  private arithmeticType(
+    operator: ArithmeticOperator,
+    left: Compiled,
+    right: Compiled,
+    node: SyntaxNode
+  ): ValueType {
+    const leftKind = left.type.kind;
+    const rightKind = right.type.kind;
+    const unknown = leftKind === "unknown" || rightKind === "unknown";
+    if (operator === "+" && (leftKind === "string" || rightKind === "string") && !unknown) {
+      if (leftKind === "string" && rightKind === "string") return { kind: "string" };
+      const textSide = leftKind === "string" ? left : right;
+      const other = leftKind === "string" ? right : left;
+      this.error(
+        `Cannot add ${typeName(textSide.type)} and ${typeName(other.type)}. Use an f-string (f"{value}") or str(value) to build text.`,
+        node.from,
+        node.to
+      );
+      return { kind: "string" };
+    }
+    if (operator === "*" && (leftKind === "string" || rightKind === "string") && !unknown) {
+      const count = leftKind === "string" ? right : left;
+      if (count.type.kind !== "number") {
+        this.error(`A string can only be repeated a number of times, not ${typeName(count.type)}.`, node.from, node.to);
+      }
+      return { kind: "string" };
+    }
+    if (operator === "%" && leftKind === "string") return { kind: "string" };
+    if (!unknown && (leftKind !== "number" || rightKind !== "number")) {
+      this.error(
+        `'${operator}' needs numbers, not ${typeName(left.type)} and ${typeName(right.type)}.`,
+        node.from,
+        node.to
+      );
+    }
+    return { kind: "number" };
+  }
+
+  private compileUnaryExpression(node: SyntaxNode): Compiled | undefined {
+    const parts = children(node);
+    const operatorNode = parts.find((child) => child.name === "ArithOp" || child.name === "not");
+    const valueNode = parts.find((child) => child !== operatorNode && child.name !== "Comment");
+    if (!operatorNode || !valueNode) {
+      this.error("Unsupported unary expression.", node.from, node.to);
+      return undefined;
+    }
+    const operator = text(this.source, operatorNode);
+    const value = this.compileExpression(valueNode);
+    if (!value) return undefined;
+    if (operator === "not") {
+      if (value.type.kind !== "boolean" && value.type.kind !== "unknown") {
+        this.error(`'not' needs a boolean value; use bool(value) to convert ${typeName(value.type)}.`, node.from, node.to);
+      }
+      return { expression: { kind: "unary", operator: "not", value: value.expression, from: node.from, to: node.to }, type: { kind: "boolean" } };
+    }
+    if (operator !== "-" && operator !== "+") {
+      this.error(`Unary '${operator}' is not allowed in Dext workflows.`, node.from, node.to);
+      return undefined;
+    }
+    if (value.type.kind !== "number" && value.type.kind !== "unknown") {
+      this.error(`Unary '${operator}' needs a number, not ${typeName(value.type)}.`, node.from, node.to);
+    }
+    return { expression: { kind: "unary", operator, value: value.expression, from: node.from, to: node.to }, type: { kind: "number" } };
+  }
+
+  /** `f"...{value!r:>10}..."`. Text between replacement fields is decoded here
+   * because the grammar only reports the fields, not the literal runs. */
+  private compileFormatString(node: SyntaxNode): Compiled | undefined {
+    const raw = text(this.source, node);
+    const literal = parseStringLiteral(raw);
+    if (!literal) {
+      this.error("Invalid f-string.", node.from, node.to);
+      return undefined;
+    }
+    if (literal.bytes) {
+      this.error("Bytes literals are not supported in Dext workflows.", node.from, node.to);
+      return undefined;
+    }
+    const bodyStart = node.from + literal.prefix.length + literal.quote.length;
+    const bodyEnd = node.to - literal.quote.length;
+    const parts: WorkflowFormatPart[] = [];
+    let cursor = bodyStart;
+    for (const child of children(node)) {
+      if (child.name !== "FormatReplacement") continue;
+      if (child.from > cursor) parts.push({ kind: "text", text: decodeFormatText(this.source.slice(cursor, child.from), literal.raw) });
+      const replacement = this.compileFormatReplacement(child, literal.raw);
+      if (!replacement) return undefined;
+      parts.push(...replacement);
+      cursor = child.to;
+    }
+    if (cursor < bodyEnd) parts.push({ kind: "text", text: decodeFormatText(this.source.slice(cursor, bodyEnd), literal.raw) });
+    return { expression: { kind: "format", parts: mergeTextParts(parts), from: node.from, to: node.to }, type: { kind: "string" } };
+  }
+
+  private compileFormatReplacement(node: SyntaxNode, raw: boolean): WorkflowFormatPart[] | undefined {
+    const parts = children(node);
+    const expressionNode = parts.find((child) =>
+      !["{", "}", "FormatConversion", "FormatSpec", "FormatSelfDoc", "Comment"].includes(child.name)
+    );
+    if (!expressionNode) {
+      this.error("An f-string replacement must contain a value.", node.from, node.to);
+      return undefined;
+    }
+    const compiled = this.compileExpression(expressionNode);
+    if (!compiled) return undefined;
+    const conversionNode = parts.find((child) => child.name === "FormatConversion");
+    const specNode = parts.find((child) => child.name === "FormatSpec");
+    const selfDoc = parts.find((child) => child.name === "FormatSelfDoc");
+    let conversion = conversionNode
+      ? text(this.source, conversionNode).replace(/^!/, "") as FormatConversion
+      : undefined;
+    if (conversion !== undefined && !["s", "r", "a"].includes(conversion)) {
+      this.error(`Unknown f-string conversion '!${conversion}'.`, conversionNode!.from, conversionNode!.to);
+      return undefined;
+    }
+    let spec = "";
+    let specParts: WorkflowFormatPart[] | undefined;
+    if (specNode) {
+      const nested = children(specNode).filter((child) => child.name === "FormatReplacement");
+      if (nested.length) {
+        const built: WorkflowFormatPart[] = [];
+        let cursor = specNode.from + 1;
+        for (const child of nested) {
+          if (child.from > cursor) built.push({ kind: "text", text: this.source.slice(cursor, child.from) });
+          const replacement = this.compileFormatReplacement(child, raw);
+          if (!replacement) return undefined;
+          built.push(...replacement);
+          cursor = child.to;
+        }
+        if (cursor < specNode.to) built.push({ kind: "text", text: this.source.slice(cursor, specNode.to) });
+        specParts = mergeTextParts(built);
+      } else {
+        spec = this.source.slice(specNode.from + 1, specNode.to);
+      }
+    }
+    // `f"{value=}"` prints the source text of the field and repr()s the value,
+    // unless a format spec asks for something else.
+    if (selfDoc && !conversion && !specNode) conversion = "r";
+    const result: WorkflowFormatPart[] = [];
+    if (selfDoc) result.push({ kind: "text", text: this.source.slice(node.from + 1, selfDoc.to) });
+    result.push({
+      kind: "expression",
+      expression: compiled.expression,
+      ...(conversion ? { conversion } : {}),
+      ...(specParts ? { specParts } : { spec })
+    });
+    return result;
+  }
+
+  /** Adjacent literals (`"a" f"{b}"`) concatenate in Python, so they compile to
+   * one text value. */
+  private compileContinuedString(node: SyntaxNode): Compiled | undefined {
+    const parts: WorkflowFormatPart[] = [];
+    for (const child of children(node)) {
+      if (child.name === "Comment") continue;
+      const compiled = this.compileExpression(child);
+      if (!compiled) return undefined;
+      if (compiled.expression.kind === "literal" && typeof compiled.expression.value === "string") {
+        parts.push({ kind: "text", text: compiled.expression.value });
+        continue;
+      }
+      if (compiled.expression.kind === "format") {
+        parts.push(...compiled.expression.parts);
+        continue;
+      }
+      this.error("Only strings can be written next to each other.", child.from, child.to);
+      return undefined;
+    }
+    return { expression: { kind: "format", parts: mergeTextParts(parts), from: node.from, to: node.to }, type: { kind: "string" } };
+  }
+
+  /** Pure helpers (`len`, `str`, `range`) and string methods (`text.upper()`)
+   * compile without an API call. Returns undefined when the callee is not one of
+   * them, and null when it is one but did not compile. */
+  private compilePureCall(callee: SyntaxNode, args: SyntaxNode, node: SyntaxNode): Compiled | null | undefined {
+    if (callee.name === "VariableName") {
+      const name = text(this.source, callee);
+      if (this.registry.get(name)) return undefined;
+      const signature = PURE_FUNCTIONS[name];
+      if (!signature) return undefined;
+      return this.compileFunctionCall(name, signature, args, node) ?? null;
+    }
+    if (callee.name !== "MemberExpression") return undefined;
+    const parts = children(callee);
+    const objectNode = parts[0];
+    const methodNode = parts.at(-1);
+    if (!objectNode || methodNode?.name !== "PropertyName") return undefined;
+    const method = text(this.source, methodNode);
+    const path = memberPath(this.source, callee);
+    // A registered API id always wins over a same-named helper.
+    if (path && this.registry.get(resolveAlias(path, this.options.aliases))) return undefined;
+    const signature = STRING_METHODS[method];
+    if (!signature) {
+      if (objectNode.name === "VariableName" && !this.environment.has(text(this.source, objectNode))) return undefined;
+      const receiver = this.compileExpression(objectNode);
+      if (!receiver) return null;
+      this.error(
+        receiver.type.kind === "string" || receiver.type.kind === "unknown"
+          ? `String has no method '${method}'.`
+          : `${typeName(receiver.type)} has no method '${method}'.`,
+        node.from,
+        node.to
+      );
+      return null;
+    }
+    if (objectNode.name === "VariableName" && !this.environment.has(text(this.source, objectNode))) return undefined;
+    return this.compileMethodCall(objectNode, method, signature, args, node);
+  }
+
+  private compileMethodCall(
+    receiverNode: SyntaxNode,
+    method: string,
+    signature: PureSignature,
+    args: SyntaxNode,
+    node: SyntaxNode
+  ): Compiled | null {
+    const receiver = this.compileExpression(receiverNode);
+    if (!receiver) return null;
+    if (receiver.type.kind !== "string" && receiver.type.kind !== "unknown") {
+      this.error(
+        method === "join" && receiver.type.kind === "list"
+          ? "Write separator.join(list) — for example ','.join(items)."
+          : `'${method}()' is a string method, but ${typeName(receiver.type)} was given.`,
+        node.from,
+        node.to
+      );
+      return null;
+    }
+    const parsed = this.pureArguments(args, signature, `str.${method}()`);
+    if (!parsed) return null;
+    if (parsed.values.length < signature.required || parsed.values.length > signature.maximum) {
+      this.error(`str.${method}() takes ${arityText(signature)} but ${parsed.values.length} were given.`, node.from, node.to);
+      return null;
+    }
+    if (!this.validateListArgument(parsed, signature, `str.${method}()`, node)) return null;
+    return {
+      expression: {
+        kind: "method",
+        receiver: receiver.expression,
+        method,
+        arguments: parsed.values.map((value, index) => argumentOf(value, signature.parameters?.[index])),
+        keywords: parsed.keywords,
+        from: node.from,
+        to: node.to
+      },
+      type: pureValueType(signature.returns)
+    };
+  }
+
+  private compileFunctionCall(
+    name: string,
+    signature: PureSignature,
+    args: SyntaxNode,
+    node: SyntaxNode
+  ): Compiled | undefined {
+    const parsed = this.pureArguments(args, signature, `${name}()`);
+    if (!parsed) return undefined;
+    if (parsed.values.length < signature.required || parsed.values.length > signature.maximum) {
+      this.error(`${name}() takes ${arityText(signature)} but ${parsed.values.length} were given.`, node.from, node.to);
+      return undefined;
+    }
+    if (!this.validateListArgument(parsed, signature, `${name}()`, node)) return undefined;
+    const type = name === "min" || name === "max" || name === "sorted" || name === "reversed"
+      ? pureElementValueType(parsed.values[0]?.type ?? { kind: "unknown" })
+      : pureValueType(signature.returns);
+    return {
+      expression: {
+        kind: "function",
+        name,
+        arguments: parsed.values.map((value) => value.expression),
+        keywords: parsed.keywords,
+        from: node.from,
+        to: node.to
+      },
+      type
+    };
+  }
+
+  private validateListArgument(
+    parsed: { values: Compiled[] },
+    signature: PureSignature,
+    label: string,
+    node: SyntaxNode
+  ): boolean {
+    if (signature.listArgument === undefined) return true;
+    const argument = parsed.values[signature.listArgument];
+    if (!argument || argument.type.kind === "list" || argument.type.kind === "unknown") return true;
+    this.error(`${label} expects a list but ${typeName(argument.type)} was given.`, node.from, node.to);
+    return false;
+  }
+
+  /** Positional and keyword arguments for a pure helper. Keyword arguments are
+   * accepted when the signature names its parameters; they must keep the
+   * declared order, because Dext never silently reorders a call. */
+  private pureArguments(
+    node: SyntaxNode,
+    signature: PureSignature,
+    label: string
+  ): { values: Compiled[]; keywords: { name: string; value: WorkflowExpression; from: number; to: number }[] } | undefined {
+    const parts = children(node);
+    const values: Compiled[] = [];
+    const keywords: { name: string; compiled: Compiled; from: number; to: number }[] = [];
+    for (let index = 0; index < parts.length; index += 1) {
+      const part = parts[index]!;
+      if (["(", ")", ",", "Comment", "AssignOp"].includes(part.name)) continue;
+      if (part.name === "VariableName" && parts[index + 1]?.name === "AssignOp") {
+        const valueNode = parts[index + 2];
+        if (!valueNode) continue;
+        const compiled = this.compileExpression(valueNode);
+        if (!compiled) return undefined;
+        keywords.push({ name: text(this.source, part), compiled, from: part.from, to: valueNode.to });
+        index += 2;
+        continue;
+      }
+      const compiled = this.compileExpression(part);
+      if (!compiled) return undefined;
+      values.push(compiled);
+    }
+    const collected: { name: string; value: WorkflowExpression; from: number; to: number }[] = [];
+    for (const keyword of keywords) {
+      if (signature.keywords) {
+        collected.push({ name: keyword.name, value: keyword.compiled.expression, from: keyword.from, to: keyword.to });
+        continue;
+      }
+      const position = (signature.parameters ?? []).indexOf(keyword.name);
+      if (position < 0) {
+        this.error(`Unknown argument '${keyword.name}' for ${label}.`, keyword.from, keyword.to);
+        return undefined;
+      }
+      if (position !== values.length) {
+        this.error(`Argument '${keyword.name}' would have to be reordered; Dext keeps the order you write.`, keyword.from, keyword.to);
+        return undefined;
+      }
+      values.push(keyword.compiled);
+    }
+    return { values, keywords: collected };
+  }
+
+  /** Replaces an expression the compiler can evaluate with its value, so
+   * `"a" + "b"` behaves exactly like `"ab"` everywhere, including in
+   * compile-time checks such as UI form validation. */
+  private foldConstant(compiled: Compiled): Compiled {
+    const { expression, type } = compiled;
+    if (["literal", "list", "object"].includes(expression.kind)) return compiled;
+    if (type.kind !== "string" && type.kind !== "number" && type.kind !== "boolean" && type.kind !== "list") return compiled;
+    let constant: { value: unknown } | undefined;
+    try {
+      constant = this.constantValue(expression);
+    } catch (error) {
+      this.error(error instanceof Error ? error.message : String(error), expression.from, expression.to);
+      return compiled;
+    }
+    if (!constant) return compiled;
+    const folded = this.literalExpression(constant.value, expression.from, expression.to);
+    return folded ? { expression: folded, type } : compiled;
+  }
+
+  /** Turns a computed constant back into a literal expression, so the common
+   * `"a,b".split(",")` or `sorted([...])` shape stops being a runtime step. */
+  private literalExpression(value: unknown, from: number, to: number): WorkflowExpression | undefined {
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      return { kind: "literal", value, from, to };
+    }
+    if (Array.isArray(value)) {
+      // A huge folded list would bloat the program without helping anyone.
+      if (value.length > MAX_FOLDED_ITEMS) return undefined;
+      const values: WorkflowExpression[] = [];
+      for (const item of value) {
+        const folded = this.literalExpression(item, from, to);
+        if (!folded) return undefined;
+        values.push(folded);
+      }
+      return { kind: "list", values, from, to };
+    }
+    if (typeof value === "object" && value !== null) {
+      const entries: Extract<WorkflowExpression, { kind: "object" }>["entries"] = [];
+      for (const [key, item] of Object.entries(value)) {
+        const folded = this.literalExpression(item, from, to);
+        if (!folded) return undefined;
+        entries.push({ key, value: folded, from, to });
+      }
+      return { kind: "object", entries, from, to };
+    }
+    return undefined;
+  }
+
+  /** Evaluates an expression that depends on nothing but its own literals.
+   * Throws for a genuine Python error such as division by zero. */
+  private constantValue(expression: WorkflowExpression): { value: unknown } | undefined {
+    switch (expression.kind) {
+      case "literal": return { value: expression.value };
+      case "list": {
+        const values: unknown[] = [];
+        for (const item of expression.values) {
+          const constant = this.constantValue(item);
+          if (!constant) return undefined;
+          values.push(constant.value);
+        }
+        return { value: values };
+      }
+      case "object": {
+        const entries: [string, unknown][] = [];
+        for (const entry of expression.entries) {
+          const constant = this.constantValue(entry.value);
+          if (!constant) return undefined;
+          entries.push([entry.key, constant.value]);
+        }
+        return { value: Object.fromEntries(entries) };
+      }
+      case "format": {
+        const value = this.formatText(expression.parts);
+        return value === undefined ? undefined : { value };
+      }
+      case "binary": {
+        const left = this.constantValue(expression.left);
+        const right = this.constantValue(expression.right);
+        if (!left || !right) return undefined;
+        return { value: pythonArithmetic(expression.operator, left.value, right.value) };
+      }
+      case "unary": {
+        const value = this.constantValue(expression.value);
+        if (!value) return undefined;
+        if (expression.operator === "not") return { value: !pythonTruthy(value.value) };
+        const number = typeof value.value === "boolean" ? Number(value.value) : value.value;
+        if (typeof number !== "number") throw new Error(`Unary '${expression.operator}' needs a number.`);
+        return { value: expression.operator === "-" ? -number : number };
+      }
+      case "compare": {
+        const left = this.constantValue(expression.left);
+        const right = this.constantValue(expression.right);
+        if (!left || !right) return undefined;
+        return { value: pythonCompare(expression.operator, left.value, right.value) };
+      }
+      case "logic": {
+        const values: unknown[] = [];
+        for (const item of expression.values) {
+          const constant = this.constantValue(item);
+          if (!constant) return undefined;
+          values.push(constant.value);
+        }
+        return {
+          value: expression.operator === "and"
+            ? values.every(pythonTruthy)
+            : values.some(pythonTruthy)
+        };
+      }
+      case "slice": {
+        const object = this.constantValue(expression.object);
+        if (!object) return undefined;
+        const parts = [expression.start, expression.stop, expression.step].map((part) => {
+          if (!part) return undefined;
+          const constant = this.constantValue(part);
+          if (!constant) throw new Error("Unsupported slice bound.");
+          return constant.value;
+        });
+        return { value: pythonSlice(object.value, parts[0], parts[1], parts[2]) };
+      }
+      case "index": {
+        const object = this.constantValue(expression.object);
+        const index = this.constantValue(expression.index);
+        if (!object || !index) return undefined;
+        return { value: pythonIndex(object.value, index.value) };
+      }
+      case "member": {
+        const object = this.constantValue(expression.object);
+        if (!object || typeof object.value !== "object" || object.value === null) return undefined;
+        const value = (object.value as Record<string, unknown>)[expression.property];
+        return value === undefined ? undefined : { value };
+      }
+      case "method": {
+        const receiver = this.constantValue(expression.receiver);
+        if (!receiver || typeof receiver.value !== "string") return undefined;
+        const values = this.constantValues(expression.arguments.map((argument) => argument.value));
+        if (!values) return undefined;
+        const keywords = this.constantKeywords(expression.keywords);
+        if (!keywords) return undefined;
+        return { value: stringMethod(receiver.value, expression.method, values, keywords) };
+      }
+      case "function": {
+        const values = this.constantValues(expression.arguments);
+        if (!values) return undefined;
+        const keywords = this.constantKeywords(expression.keywords);
+        if (!keywords) return undefined;
+        return { value: pureFunction(expression.name, values, keywords) };
+      }
+      default: return undefined;
+    }
+  }
+
+  private constantValues(expressions: readonly WorkflowExpression[]): unknown[] | undefined {
+    const values: unknown[] = [];
+    for (const expression of expressions) {
+      const constant = this.constantValue(expression);
+      if (!constant) return undefined;
+      values.push(constant.value);
+    }
+    return values;
+  }
+
+  private constantKeywords(
+    keywords: readonly { name: string; value: WorkflowExpression }[]
+  ): Record<string, unknown> | undefined {
+    const values: Record<string, unknown> = {};
+    for (const keyword of keywords) {
+      const constant = this.constantValue(keyword.value);
+      if (!constant) return undefined;
+      values[keyword.name] = constant.value;
+    }
+    return values;
+  }
+
+  private formatText(parts: readonly WorkflowFormatPart[]): string | undefined {
+    let result = "";
+    for (const part of parts) {
+      if (part.kind === "text") {
+        result += part.text;
+        continue;
+      }
+      const constant = this.constantValue(part.expression);
+      if (!constant) return undefined;
+      const spec = part.specParts ? this.formatText(part.specParts) : part.spec ?? "";
+      if (spec === undefined) return undefined;
+      result += formatReplacement(constant.value, part.conversion, spec);
+    }
+    return result;
   }
 
   private error(message: string, from: number, to: number): void {
@@ -1155,17 +2263,28 @@ export function parseWorkflowImports(source: string): Map<string, string> {
 }
 
 function containsUiCall(expression: WorkflowExpression): boolean {
-  if (expression.kind === "call") return expression.call.method.startsWith("ui.") || expression.call.arguments.some((argument) => containsUiCall(argument.value));
-  if (expression.kind === "list") return expression.values.some(containsUiCall);
-  if (expression.kind === "object") return expression.entries.some((entry) => containsUiCall(entry.value));
-  if (expression.kind === "comprehension") return containsUiCall(expression.body) || containsUiCall(expression.iterable);
-  return false;
-}
-function literalData(expression: WorkflowExpression): unknown {
-  if (expression.kind === "literal") return expression.value;
-  if (expression.kind === "list") { const values = expression.values.map(literalData); return values.some((value) => value === undefined) ? undefined : values; }
-  if (expression.kind === "object") { const values = expression.entries.map((entry) => [entry.key, literalData(entry.value)] as const); return values.some((entry) => entry[1] === undefined) ? undefined : Object.fromEntries(values); }
-  return undefined;
+  const nested = (values: readonly WorkflowExpression[]): boolean => values.some(containsUiCall);
+  switch (expression.kind) {
+    case "call": return expression.call.method.startsWith("ui.") || expression.call.arguments.some((argument) => containsUiCall(argument.value));
+    case "list": return nested(expression.values);
+    case "object": return expression.entries.some((entry) => containsUiCall(entry.value));
+    case "comprehension": return containsUiCall(expression.body) || containsUiCall(expression.iterable);
+    case "format": return expression.parts.some((part) => part.kind === "expression" && (
+      containsUiCall(part.expression) || Boolean(part.specParts?.some((nested) => nested.kind === "expression" && containsUiCall(nested.expression)))
+    ));
+    case "binary": case "compare": return containsUiCall(expression.left) || containsUiCall(expression.right);
+    case "unary": return containsUiCall(expression.value);
+    case "logic": return nested(expression.values);
+    case "method": return containsUiCall(expression.receiver)
+      || expression.arguments.some((argument) => containsUiCall(argument.value))
+      || expression.keywords.some((keyword) => containsUiCall(keyword.value));
+    case "function": return nested(expression.arguments) || expression.keywords.some((keyword) => containsUiCall(keyword.value));
+    case "slice": return containsUiCall(expression.object)
+      || [expression.start, expression.stop, expression.step].some((part) => part !== undefined && containsUiCall(part));
+    case "index": return containsUiCall(expression.object) || containsUiCall(expression.index);
+    case "member": return containsUiCall(expression.object);
+    default: return false;
+  }
 }
 
 function isUiResultType(type: ValueType): boolean {

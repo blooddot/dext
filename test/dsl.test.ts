@@ -38,19 +38,19 @@ choice = ui.radio(label="Pick", options=["one", "two"])`);
       .toContain("Unknown Dext API 'mcp'");
   });
 
-  it("migrates legacy input f-string references but rejects arbitrary f-strings", () => {
+  it("migrates legacy input f-string references and accepts ordinary f-strings", () => {
     expect(compile('ask(input=f"look at {ref.file(\'src/a.ts\')}")').diagnostics).toEqual([]);
     expect(compile('agent(input=f"change {ref.dir(\'src\')}")').diagnostics).toEqual([]);
-    expect(compile('ask(input=f"bad {1 + 2}")').diagnostics.map((item) => item.message).join("\n"))
-      .toContain("FormatString");
+    expect(compile('ask(input=f"total {1 + 2}")').diagnostics).toEqual([]);
     expect(compile('print(text=f"bad {ref.selection}")').diagnostics.map((item) => item.message).join("\n"))
-      .toContain("FormatString");
+      .toContain("Write file and selection references as @path tokens");
   });
 
-  it("accepts editor-generated @ input and still rejects a raw string/reference binary expression", () => {
+  it("accepts editor-generated @ input and string concatenation", () => {
     expect(compile('ask(input="Review @docs/drag-drop.md")').diagnostics).toEqual([]);
+    expect(compile('ask(input="Review " + "docs/drag-drop.md")').diagnostics).toEqual([]);
     expect(compile('ask(input="Review " + ref.file("docs/drag-drop.md"))').diagnostics.map((item) => item.message).join("\n"))
-      .toContain("BinaryExpression");
+      .toContain("Unknown Dext API 'ref.file'");
   });
 
   it("rejects all removed public APIs", () => {

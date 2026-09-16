@@ -26,11 +26,53 @@ preview = agent(
     apply=False,
 )
 
+# Report conclusions as text without producing a patch.
+summary = agent(
+    input="Summarize the refactoring plan",
+    apply=False,
+    patch=False,
+)
+
 if preview.patch:
     applied = apply(result=preview)
 ```
 
-The input workflow language supports assignment, keyword-only API calls, strings (including triple-quoted strings), numbers, booleans, homogeneous lists, result member access, comments, `if`/`else` with `==` or `!=`, `for name in list:` over a homogeneous list, and `while` for sequential retry flows. A `while` loop is capped at 100 iterations; bindings created inside it do not escape, while existing bindings may be updated with the same type.
+The input workflow language supports assignment, keyword-only API calls, strings (including triple-quoted strings), numbers, booleans, homogeneous lists, result member access, comments, `if`/`elif`/`else`, `for name in list:` over a homogeneous list, and `while` for sequential retry flows. A `while` loop is capped at 100 iterations; bindings created inside it do not escape, while existing bindings may be updated with the same type.
+
+### Text and value expressions
+
+Dext evaluates pure expressions itself — no API round trip, no Python interpreter. A value the compiler can determine is folded while compiling, so `"a" + "b"` behaves exactly like `"ab"` everywhere, including in checks such as UI form validation.
+
+| Form | Example | Notes |
+| --- | --- | --- |
+| Concatenation | `"Review: " + answer.text` | Both sides must be strings |
+| Repetition | `"-" * 3` | `---` |
+| Arithmetic | `2 + 3 * 4`, `7 // 2`, `2 ** 8` | Numbers only |
+| f-string | `f"{answer.text} ({checked.exit_code})"` | Replacement fields, conversions, and format specs |
+| `%` formatting | `"%s: %d" % [name, count]` | The arguments are a list or a tuple |
+| Tuple | `("a", 1)`, `(value,)`, `1, 2` | A tuple literal, which is a list |
+| `str.format` | `"{} and {}".format("a", "b")` | Also `{0}`, `{name}`, and `{0[name]}` |
+| Indexing and slicing | `text[0]`, `text[1:4]`, `text[::-1]` | Negative offsets count from the end; lists work the same way |
+| Membership | `"done" in answer.text` | Strings, lists, and dictionaries |
+| Comparisons | `a == b`, `a != b`, `a < b`, `a <= b`, `a > b`, `a >= b` | Ordering needs two strings or two numbers |
+| Boolean logic | `a and b`, `a or b`, `not a` | Operands must be boolean; use `bool(value)` to convert |
+
+An f-string field takes an optional conversion and format spec: `f"{value!r}"`, `f"{count:,}"`, `f"{ratio:.1%}"`, `f"{width:>8}"`, `f"{value=}"`, and nested specs such as `f"{value:{width}}"`. Doubled braces (`{{`) print a literal brace.
+
+String methods are available on any string value: `upper`, `lower`, `casefold`, `capitalize`, `title`, `swapcase`, `strip`, `lstrip`, `rstrip`, `removeprefix`, `removesuffix`, `replace`, `split`, `rsplit`, `splitlines`, `join`, `startswith`, `endswith`, `find`, `rfind`, `index`, `rindex`, `count`, `partition`, `rpartition`, `center`, `ljust`, `rjust`, `zfill`, `expandtabs`, `format`, and the `is*` predicates (`isalnum`, `isalpha`, `isdigit`, `isnumeric`, `isspace`, `isupper`, `islower`, `istitle`, `isidentifier`, `isascii`).
+
+These pure helpers are compiled the same way: `len`, `str`, `repr`, `int`, `float`, `bool`, `abs`, `round`, `min`, `max`, `sorted`, `sum`, `range`, `list`, `reversed`, `any`, `all`. `range(3)` is a list of numbers, so `for index in range(3):` works; `sorted(names)` keeps the element type it was given. `range` is capped at 100000 values.
+
+Dext keeps Python semantics for these operations, with four deliberate differences:
+
+- `+` on a string requires another string. Write `f"{value}"` or `str(value)` to append a number.
+- Tuples are written the Python way but are lists: `("a", 1)`, `(value,)`, `()`, and the bare `1, 2` all produce a list, so `(1, 2) == [1, 2]` is true and the length is not fixed. Unpacking stays unsupported, because a name binds once and a list has no fixed arity: `a, b = pair` and `for key, value in items:` are rejected. Read the entries instead (`pair[0]`, `pair[1]`), or iterate `for item in items:` when each item is an object with named fields. Dictionary keys are strings, so a tuple cannot be a key.
+- `%` takes its arguments as a list: `"%s %d" % ["total", 3]` or `"%s %d" % ("total", 3)`. To format a list value itself, wrap it the way Python wraps a single-element tuple: `"%s" % (items,)`.
+- Conditions must be boolean. `if answer.text:` is rejected; write `if bool(answer.text):`, or compare the value.
+- Bytes literals (`b"..."`) are rejected; Dext text is UTF-8 strings throughout.
+- There is no augmented assignment. `text += line` is rejected; a name is bound once, so repeated text is collected in a list and joined with `"\n".join(lines)`.
+
+A value that is not a compile-time constant becomes its own `=` step in Output, exactly like `text = answer.text` always did.
 
 A list comprehension, `[call(...) for name in list]`, is the one construct that runs concurrently: its branches cannot see one another, so Dext fans them out up to `dext.workflow.maxConcurrency` and collects the results in list order. One `for` clause, no `if` filter.
 
@@ -47,7 +89,7 @@ Execution is sequential apart from comprehension fan-out; unselected and downstr
 - **Create resource** opens a dedicated tab using the same Conversation and Input layout. Choose **API / MCP / Rule / Skill**, then **Project / Global** (the menu shows the destination directory). Select **New resource** or an existing resource, describe your changes, and review the draft or diff before saving. Saving keeps the tab open for further revisions; changing an existing resource’s destination creates a copy. Resource targets, drafts, and conversations are restored from History.
 - `ask(input, skills?, rules?, workspace?) -> AskResult`
 - `plan(input, skills?, rules?, workspace?) -> PlanResult`
-- `agent(input, apply=true, skills?, rules?, workspace?) -> AgentResult`
+- `agent(input, apply=true, patch=true, skills?, rules?, workspace?) -> AgentResult` — `patch=false` reports conclusions as text without producing a patch.
 - `apply(result) -> ApplyResult`
 - `terminal(command, cwd=".", env={}, timeout_ms=120000) -> TerminalResult` — runs an arbitrary command in the platform shell. `env` supplies string environment variables to that command.
 - `skill(skill, input, workspace?) -> SkillResult`

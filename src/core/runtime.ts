@@ -3,7 +3,9 @@ import { performance } from "node:perf_hooks";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { AxAdapter } from "./axAdapter.js";
+import { AxAdapter, type AxMethodContract } from "./axAdapter.js";
+import { parseAgentResult } from "./resultBoundary.js";
+import type { ResultRepairEvent, ResultRepairOutcome } from "./resultRepair.js";
 import { builtinCliFields, builtinCliMetadata, CLI_BUILTIN_IDS, specializeBuiltinCli } from "./builtinCli.js";
 import type { ContextResolver } from "./contextResolver.js";
 import type { MethodRegistry } from "./registry.js";
@@ -15,8 +17,11 @@ import { patchResultFrom } from "./patch.js";
 import type { AgentPermission, AgentProfile, AgentProvider, AgentSelection, WritableAgentPermission } from "../agentProfiles.js";
 import { DefaultAgentRunner } from "./agentRouter.js";
 import type { AgentRunner } from "./agentRunner.js";
+import { DEFAULT_HARNESS_PRESET, harnessPresetOrDefault } from "./harnessPresetDefault.js";
+import { guardPlanDocumentEvents } from "./planDocumentStream.js";
 import { PLAN_DOCUMENT_END, PLAN_DOCUMENT_START } from "./planResponse.js";
 import type {
+  AgentStreamEvent,
   CodeRef,
   DextResult,
   ExecutionMetadata,
@@ -155,10 +160,6 @@ const AGENT_METHODS = new Set(["ask", "plan", "agent", "skill"]);
 /** The methods that take free-form input plus skills, rules, and a workspace,
  * as opposed to `skill`, which builds its instruction from the skill itself. */
 const CONVERSATION_METHODS = new Set(["ask", "plan", "agent"]);
-/** Dext's own confined preset. A read-only turn that asks for a preset running
- * outside the Harness sandbox is downgraded to this one instead of failing. */
-const CONFINED_HARNESS_PRESET = "standard";
-
 function defaultWorkspace(root: string): DirRef {
   return { kind: "dirRef", uri: pathToFileURL(root).toString(), path: "." };
 }
@@ -286,6 +287,30 @@ function uiHandler(action: UiAction): DeterministicHandler {
   };
 }
 
+/** Everything the runtime knows about the failed result repair request. The
+ * application adds the workspace snapshot and the read-only CLI transport,
+ * because only the host can resolve URIs and load ignore rules. */
+export interface RuntimeResultRepairRequest {
+  kind: string;
+  raw: string;
+  diagnostics: string;
+  contract: AxMethodContract;
+  profile: AgentProfile;
+  cwd: string;
+  signal?: AbortSignal;
+  /** Result repair is always read-only. */
+  allowWorkspaceWrite: false;
+  includePatch: boolean;
+  model?: string;
+  onEvent?: (event: ResultRepairEvent) => void;
+}
+
+export interface RuntimeResultRepair {
+  /** Overrides the default tolerant parser. Must not throw. */
+  parse?: (kind: string, raw: unknown) => Record<string, unknown> | undefined;
+  repair?: (request: RuntimeResultRepairRequest) => Promise<ResultRepairOutcome>;
+}
+
 export class DextRuntime {
   private readonly handlers: Readonly<Record<string, DeterministicHandler>>;
   private readonly customPlans = new Map<string, CustomApiPlan>();
@@ -303,6 +328,7 @@ export class DextRuntime {
     input: Record<string, unknown>,
     onProcessEvent?: ExecutionMetadata["onMcpEvent"]
   ) => Promise<McpRawResult>) | undefined;
+  private resultRepair: RuntimeResultRepair | undefined;
 
   constructor(
     private readonly registry: MethodRegistry,
@@ -354,16 +380,22 @@ export class DextRuntime {
     return this.agentSelection.permission ?? this.defaultAgentPermission;
   }
 
-  /** A preset whose tools run outside the Harness sandbox cannot be applied to a
+  /** Every Harness conversation runs a preset from the installed catalog. A
+   * preset whose tools run outside the Harness sandbox cannot be applied to a
    * read-only turn: the sandbox policy would not confine it. Substitute the
-   * confined built-in so plan generation, and typed previews, stay read-only,
-   * while the writable turn (Agent, building a plan, or an applying API call)
-   * gets the preset the user selected. */
+   * confined Harness default so plan generation, and typed previews, stay
+   * read-only, while the writable turn (Agent, building a plan, or an applying
+   * API call) gets the preset the user selected. */
   private harnessPreset(profile: AgentProfile, requested: string, readOnly: boolean): string {
-    if (!readOnly || !requested) return requested;
-    const selected = profile.presets?.find((preset) => preset.id === requested);
-    if (!(selected?.writableTurnsOnly ?? selected?.requiresFullAccess)) return requested;
-    return profile.presets?.some((preset) => preset.id === CONFINED_HARNESS_PRESET) ? CONFINED_HARNESS_PRESET : "";
+    const presets = profile.presets ?? [];
+    // An installed Harness without the preset catalog has no preset to mount,
+    // and its own ACP profile composition is the only configuration left.
+    if (!presets.length) return "";
+    const selected = harnessPresetOrDefault(requested);
+    if (!readOnly) return selected;
+    const option = presets.find((preset) => preset.id === selected);
+    if (!(option?.writableTurnsOnly ?? option?.requiresFullAccess)) return selected;
+    return presets.some((preset) => preset.id === DEFAULT_HARNESS_PRESET) ? DEFAULT_HARNESS_PRESET : "";
   }
 
   /** Extra CLI arguments are an escape hatch into the provider process, so an
@@ -400,6 +432,15 @@ export class DextRuntime {
     onProcessEvent?: ExecutionMetadata["onMcpEvent"]
   ) => Promise<McpRawResult>): void {
     this.mcpCaller = caller;
+  }
+
+  /**
+   * Installs the single result boundary: tolerant parsing plus an optional
+   * bounded repair predictor. Without it the runtime still parses wrappers but
+   * reports a structured validation error instead of repairing.
+   */
+  setResultRepair(repair: RuntimeResultRepair): void {
+    this.resultRepair = repair;
   }
 
   async execute(
@@ -561,6 +602,11 @@ export class DextRuntime {
             ].join("\n\n")
           };
         }
+        const onEvent = runnerMetadata.onAgentEvent ? guardPlanDocumentEvents(runnerMetadata.onAgentEvent) : undefined;
+        const cwd = CONVERSATION_METHODS.has(method.id)
+          ? workspaceCwd(this.workspaceRoot, resolved.arguments.workspace)
+          : this.workspaceRoot;
+        const includePatch = resolved.arguments.patch !== false;
         const raw = await this.agentRunner.run({
           profile,
           ...(profile.provider === "deepseek-harness" ? { agentPreset: this.harnessPreset(profile, metadata.agentPreset ?? this.agentSelection.agentPreset ?? "", !agentWriteEnabled) } : {}),
@@ -568,19 +614,29 @@ export class DextRuntime {
           ...((metadata.reasoningEffort ?? this.agentSelection.reasoningEffort) ? { reasoningEffort: metadata.reasoningEffort ?? this.agentSelection.reasoningEffort } : {}),
           ...((metadata.speed ?? this.agentSelection.speed) ? { speed: metadata.speed ?? this.agentSelection.speed } : {}),
           ...((metadata.serviceTier ?? this.agentSelection.serviceTier) ? { serviceTier: metadata.serviceTier ?? this.agentSelection.serviceTier } : {}),
-          cwd: CONVERSATION_METHODS.has(method.id)
-            ? workspaceCwd(this.workspaceRoot, resolved.arguments.workspace)
-            : this.workspaceRoot,
+          cwd,
           method,
           resolved,
           contract,
-          metadata: runnerMetadata,
+          metadata: onEvent ? { ...runnerMetadata, onAgentEvent: onEvent } : runnerMetadata,
           allowWorkspaceWrite: agentWriteEnabled,
+          includePatch,
           ...(this.extraCliArguments(profile).length ? { cliArguments: this.extraCliArguments(profile) } : {}),
           ...(metadata.signal ? { signal: metadata.signal } : {}),
-          ...(runnerMetadata.onAgentEvent ? { onEvent: runnerMetadata.onAgentEvent } : {})
+          ...(onEvent ? { onEvent } : {})
         });
-        result = normalizeAgentResult(method.output.kind, raw);
+        result = await this.resolveAgentResult({
+          kind: method.output.kind,
+          raw,
+          contract,
+          profile,
+          cwd,
+          allowWorkspaceWrite: agentWriteEnabled,
+          includePatch,
+          ...(metadata.signal ? { signal: metadata.signal } : {}),
+          ...((metadata.model ?? this.agentSelection.model) ? { model: metadata.model ?? this.agentSelection.model } : {}),
+          ...(onEvent ? { onEvent } : {})
+        });
       } else {
         const handler = this.handlers[method.executor.handler];
         if (!handler) {
@@ -602,6 +658,105 @@ export class DextRuntime {
       durationMs: performance.now() - started,
       ...(metadata.instruction ? { instruction: metadata.instruction } : {})
     };
+  }
+
+  private canAttemptRepair(context: { allowWorkspaceWrite: boolean; signal?: AbortSignal }, rawText: string): boolean {
+    return !context.signal?.aborted
+      && context.allowWorkspaceWrite !== true
+      && rawText.length <= 20_000;
+  }
+
+  private failAgentResult(kind: string, rawText: string, diagnostics: string): never {
+    const snippet = rawText.slice(0, 200);
+    throw new Error(
+      `Agent output for '${kind}' failed validation.\n${diagnostics}\n`
+      + `Raw output (first 200 characters):\n${snippet || "(empty)"}`
+    );
+  }
+
+  private repairEventSink(onEvent: (event: AgentStreamEvent) => void): (event: ResultRepairEvent) => void {
+    return (event) => {
+      onEvent({
+        phase: "status",
+        text: "",
+        title: `Result repair: ${event.calls} call(s) in ${Math.round(event.durationMs)}ms`,
+        ...(event.usage ? { usage: event.usage } : {})
+      });
+    };
+  }
+
+  /**
+   * Parses, validates, and (when configured) repairs one Agent result. The
+   * repair channel is bounded: at most one attempt per execution, only for
+   * results the boundary could not accept, only when the turn did not write to
+   * the workspace, and only for a reasonably sized raw output.
+   */
+  private async resolveAgentResult(context: {
+    kind: string;
+    raw: unknown;
+    contract: AxMethodContract;
+    profile: AgentProfile;
+    cwd: string;
+    allowWorkspaceWrite: boolean;
+    includePatch: boolean;
+    signal?: AbortSignal;
+    model?: string;
+    onEvent?: (event: AgentStreamEvent) => void;
+  }): Promise<DextResult> {
+    // A missing payload is reported as empty text rather than the literal string "undefined".
+    const rawText = typeof context.raw === "string"
+      ? context.raw
+      : context.raw === undefined || context.raw === null
+        ? ""
+        : JSON.stringify(context.raw) ?? "";
+    const parse = this.resultRepair?.parse ?? parseAgentResult;
+    const parsed = parse(context.kind, context.raw);
+    let diagnostics: string;
+    if (parsed === undefined) {
+      diagnostics = `No '${context.kind}' JSON object could be extracted from the Agent output.`;
+    } else {
+      let normalized: DextResult | undefined;
+      let normalizeError: string | undefined;
+      try {
+        normalized = normalizeAgentResult(context.kind, parsed);
+      } catch (error) {
+        // A result of the wrong kind is exactly what the predictor can fix, so it stays
+        // on the same path as a missing or schema-invalid object instead of failing here.
+        normalizeError = error instanceof Error ? error.message : String(error);
+      }
+      if (normalized) {
+        const inspected = this.ax.inspectOutput(context.contract, normalized);
+        if (inspected.success) return inspected.data;
+        diagnostics = inspected.diagnostics;
+      } else {
+        diagnostics = normalizeError ?? `Agent output for '${context.kind}' could not be normalized.`;
+      }
+    }
+    const repair = this.resultRepair?.repair;
+    if (!repair || !this.canAttemptRepair(context, rawText)) {
+      return this.failAgentResult(context.kind, rawText, diagnostics);
+    }
+    const repaired = await repair({
+      kind: context.kind,
+      raw: rawText,
+      diagnostics,
+      contract: context.contract,
+      profile: context.profile,
+      cwd: context.cwd,
+      allowWorkspaceWrite: false,
+      includePatch: context.includePatch,
+      ...(context.signal ? { signal: context.signal } : {}),
+      ...(context.model ? { model: context.model } : {}),
+      ...(context.onEvent ? { onEvent: this.repairEventSink(context.onEvent) } : {})
+    });
+    if (repaired.result) {
+      const inspected = this.ax.inspectOutput(context.contract, repaired.result);
+      if (inspected.success) return inspected.data;
+      diagnostics = `${diagnostics}\nRepair returned invalid output: ${inspected.diagnostics}`;
+    } else if (repaired.diagnostics) {
+      diagnostics = `${diagnostics}\nRepair failed: ${repaired.diagnostics}`;
+    }
+    return this.failAgentResult(context.kind, rawText, diagnostics);
   }
 
   /** Runs a normal Agent, Ask, or Plan turn without compiling it as Dext code
@@ -641,6 +796,7 @@ export class DextRuntime {
     const selectedSpeed = metadata.speed ?? (sameSelectedAgent ? this.agentSelection.speed : undefined);
     const selectedServiceTier = metadata.serviceTier ?? (sameSelectedAgent ? this.agentSelection.serviceTier : undefined);
     const selectedPreset = metadata.agentPreset ?? (sameSelectedAgent ? this.agentSelection.agentPreset : undefined);
+    const onEvent = metadata.onAgentEvent ? guardPlanDocumentEvents(metadata.onAgentEvent) : undefined;
     const response = await this.agentRunner.runConversation({
       profile,
       ...(profile.provider === "deepseek-harness" ? { agentPreset: this.harnessPreset(profile, selectedPreset ?? "", readOnly) } : {}),
@@ -653,12 +809,16 @@ export class DextRuntime {
         ? `${await this.planInstruction()}\n\n${PLAN_RESPONSE_FORMAT_INSTRUCTION}\n\n---\n\nGoal:\n\n${text}`
         : text,
       mode,
-      metadata: { ...metadata, ...(sessionId ? { agentSessionId: sessionId } : {}) },
+      metadata: {
+        ...metadata,
+        ...(sessionId ? { agentSessionId: sessionId } : {}),
+        ...(onEvent ? { onAgentEvent: onEvent } : {})
+      },
       allowWorkspaceWrite,
       permission,
       ...(this.extraCliArguments(profile).length ? { cliArguments: this.extraCliArguments(profile) } : {}),
       ...(metadata.signal ? { signal: metadata.signal } : {}),
-      ...(metadata.onAgentEvent ? { onEvent: metadata.onAgentEvent } : {})
+      ...(onEvent ? { onEvent } : {})
     });
     return {
       invocation: {

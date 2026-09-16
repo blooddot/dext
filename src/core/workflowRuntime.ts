@@ -1,6 +1,7 @@
 import type { DextRuntime } from "./runtime.js";
 import { ExecutionCancelledError } from "./executionErrors.js";
 import { AxAdapter } from "./axAdapter.js";
+import { formatReplacement, pythonArithmetic, pythonCompare, pythonIndex, pythonSlice, pythonTruthy, pureFunction, stringMethod } from "./pythonStrings.js";
 import type {
   DextResult,
   CodeRef,
@@ -9,6 +10,7 @@ import type {
   WorkflowCondition,
   ExecutionMetadata,
   WorkflowExpression,
+  WorkflowFormatPart,
   WorkflowProgram,
   WorkflowStatement,
   WorkflowStepResponse
@@ -49,10 +51,12 @@ export class WorkflowRuntime {
     const runtime = new WorkflowRuntime(this.runtime, this.functions, [...this.callStack, invocation.method]);
     runtime.setMaxConcurrency(this.maxConcurrency);
     const value = await runtime.executeValue(fn.program, Object.entries(argumentsByName), metadata);
+    const inspected = ax.inspectOutput(contract, value);
+    if (!inspected.success) throw new Error(inspected.diagnostics);
     return {
       invocation,
       method: { id: fn.definition.id, title: fn.definition.title, kind: fn.definition.kind, source: "project" },
-      result: ax.validateOutput(contract, value),
+      result: inspected.data,
       durationMs: Math.max(0, performance.now() - started)
     };
   }
@@ -370,18 +374,62 @@ export class WorkflowRuntime {
     if (expression.kind === "index") {
       const object = this.evaluate(expression.object, environment);
       const index = this.evaluate(expression.index, environment);
-      if (Array.isArray(object)) {
-        if (typeof index !== "number" || !Number.isInteger(index)) throw new Error("Array index must be an integer.");
-        const value = object[index];
-        if (value === undefined) throw new Error(`Array index ${index} is out of range.`);
-        return value;
+      return pythonIndex(object, index) as RuntimeValue;
+    }
+    if (expression.kind === "slice") {
+      return pythonSlice(
+        this.evaluate(expression.object, environment),
+        expression.start ? this.evaluate(expression.start, environment) : undefined,
+        expression.stop ? this.evaluate(expression.stop, environment) : undefined,
+        expression.step ? this.evaluate(expression.step, environment) : undefined
+      ) as RuntimeValue;
+    }
+    if (expression.kind === "format") return this.formatParts(expression.parts, environment);
+    if (expression.kind === "binary") {
+      return pythonArithmetic(
+        expression.operator,
+        this.evaluate(expression.left, environment),
+        this.evaluate(expression.right, environment)
+      );
+    }
+    if (expression.kind === "unary") {
+      const value = this.evaluate(expression.value, environment);
+      if (expression.operator === "not") return !pythonTruthy(value);
+      const number = typeof value === "boolean" ? Number(value) : value;
+      if (typeof number !== "number") throw new Error(`Unary '${expression.operator}' needs a number.`);
+      return expression.operator === "-" ? -number : number;
+    }
+    if (expression.kind === "compare") {
+      return pythonCompare(
+        expression.operator,
+        this.evaluate(expression.left, environment),
+        this.evaluate(expression.right, environment)
+      );
+    }
+    if (expression.kind === "logic") {
+      // Python short-circuits, so a later operand is never evaluated once the
+      // result is already decided.
+      if (expression.operator === "and") {
+        return expression.values.every((value) => pythonTruthy(this.evaluate(value, environment)));
       }
-      if (typeof object === "object" && object !== null && (typeof index === "string" || typeof index === "number")) {
-        const value = (object as Record<string, RuntimeValue>)[String(index)];
-        if (value === undefined) throw new Error(`Object field '${String(index)}' is unavailable.`);
-        return value;
-      }
-      throw new Error("Cannot index this value.");
+      return expression.values.some((value) => pythonTruthy(this.evaluate(value, environment)));
+    }
+    if (expression.kind === "method") {
+      const receiver = this.evaluate(expression.receiver, environment);
+      if (typeof receiver !== "string") throw new Error(`'${expression.method}()' needs a string value.`);
+      return stringMethod(
+        receiver,
+        expression.method,
+        expression.arguments.map((argument) => this.evaluate(argument.value, environment)),
+        Object.fromEntries(expression.keywords.map((keyword) => [keyword.name, this.evaluate(keyword.value, environment)]))
+      ) as RuntimeValue;
+    }
+    if (expression.kind === "function") {
+      return pureFunction(
+        expression.name,
+        expression.arguments.map((argument) => this.evaluate(argument, environment)),
+        Object.fromEntries(expression.keywords.map((keyword) => [keyword.name, this.evaluate(keyword.value, environment)]))
+      ) as RuntimeValue;
     }
     if (expression.kind === "call" || expression.kind === "comprehension") {
       throw new Error("Nested API calls must be evaluated asynchronously.");
@@ -396,6 +444,39 @@ export class WorkflowRuntime {
     const value = (object as unknown as Record<string, RuntimeValue>)[expression.property];
     if (value === undefined) throw new Error(`Result field '${expression.property}' is unavailable.`);
     return value;
+  }
+
+  /** Renders an f-string or format template, including specs that hold fields. */
+  private formatParts(parts: readonly WorkflowFormatPart[], environment: Map<string, RuntimeValue>): string {
+    let result = "";
+    for (const part of parts) {
+      if (part.kind === "text") {
+        result += part.text;
+        continue;
+      }
+      const value = this.evaluate(part.expression, environment);
+      const spec = part.specParts ? this.formatParts(part.specParts, environment) : part.spec ?? "";
+      result += formatReplacement(value, part.conversion, spec);
+    }
+    return result;
+  }
+
+  private async formatPartsAsync(
+    parts: readonly WorkflowFormatPart[],
+    environment: Map<string, RuntimeValue>,
+    metadata: Readonly<ExecutionMetadata>
+  ): Promise<string> {
+    let result = "";
+    for (const part of parts) {
+      if (part.kind === "text") {
+        result += part.text;
+        continue;
+      }
+      const value = await this.evaluateAsync(part.expression, environment, metadata);
+      const spec = part.specParts ? await this.formatPartsAsync(part.specParts, environment, metadata) : part.spec ?? "";
+      result += formatReplacement(value, part.conversion, spec);
+    }
+    return result;
   }
 
   private async evaluateAsync(
@@ -428,18 +509,59 @@ export class WorkflowRuntime {
     if (expression.kind === "index") {
       const object = await this.evaluateAsync(expression.object, environment, metadata);
       const index = await this.evaluateAsync(expression.index, environment, metadata);
-      if (Array.isArray(object)) {
-        if (typeof index !== "number" || !Number.isInteger(index)) throw new Error("Array index must be an integer.");
-        const value = object[index];
-        if (value === undefined) throw new Error(`Array index ${index} is out of range.`);
-        return value;
+      return pythonIndex(object, index) as RuntimeValue;
+    }
+    if (expression.kind === "slice") {
+      return pythonSlice(
+        await this.evaluateAsync(expression.object, environment, metadata),
+        expression.start ? await this.evaluateAsync(expression.start, environment, metadata) : undefined,
+        expression.stop ? await this.evaluateAsync(expression.stop, environment, metadata) : undefined,
+        expression.step ? await this.evaluateAsync(expression.step, environment, metadata) : undefined
+      ) as RuntimeValue;
+    }
+    if (expression.kind === "format") return this.formatPartsAsync(expression.parts, environment, metadata);
+    if (expression.kind === "binary") {
+      const left = await this.evaluateAsync(expression.left, environment, metadata);
+      const right = await this.evaluateAsync(expression.right, environment, metadata);
+      return pythonArithmetic(expression.operator, left, right);
+    }
+    if (expression.kind === "unary") {
+      const value = await this.evaluateAsync(expression.value, environment, metadata);
+      if (expression.operator === "not") return !pythonTruthy(value);
+      const number = typeof value === "boolean" ? Number(value) : value;
+      if (typeof number !== "number") throw new Error(`Unary '${expression.operator}' needs a number.`);
+      return expression.operator === "-" ? -number : number;
+    }
+    if (expression.kind === "compare") {
+      return pythonCompare(
+        expression.operator,
+        await this.evaluateAsync(expression.left, environment, metadata),
+        await this.evaluateAsync(expression.right, environment, metadata)
+      );
+    }
+    if (expression.kind === "logic") {
+      for (const value of expression.values) {
+        const resolved = pythonTruthy(await this.evaluateAsync(value, environment, metadata));
+        if (expression.operator === "and" && !resolved) return false;
+        if (expression.operator === "or" && resolved) return true;
       }
-      if (typeof object === "object" && object !== null && (typeof index === "string" || typeof index === "number")) {
-        const value = (object as Record<string, RuntimeValue>)[String(index)];
-        if (value === undefined) throw new Error(`Object field '${String(index)}' is unavailable.`);
-        return value;
-      }
-      throw new Error("Cannot index this value.");
+      return expression.operator === "and";
+    }
+    if (expression.kind === "method") {
+      const receiver = await this.evaluateAsync(expression.receiver, environment, metadata);
+      if (typeof receiver !== "string") throw new Error(`'${expression.method}()' needs a string value.`);
+      const values: unknown[] = [];
+      for (const argument of expression.arguments) values.push(await this.evaluateAsync(argument.value, environment, metadata));
+      const keywords: Record<string, unknown> = {};
+      for (const keyword of expression.keywords) keywords[keyword.name] = await this.evaluateAsync(keyword.value, environment, metadata);
+      return stringMethod(receiver, expression.method, values, keywords) as RuntimeValue;
+    }
+    if (expression.kind === "function") {
+      const values: unknown[] = [];
+      for (const argument of expression.arguments) values.push(await this.evaluateAsync(argument, environment, metadata));
+      const keywords: Record<string, unknown> = {};
+      for (const keyword of expression.keywords) keywords[keyword.name] = await this.evaluateAsync(keyword.value, environment, metadata);
+      return pureFunction(expression.name, values, keywords) as RuntimeValue;
     }
     if (expression.kind === "comprehension") return this.evaluateComprehension(expression, environment, metadata);
     if (expression.kind === "list") {
@@ -554,9 +676,15 @@ export class WorkflowRuntime {
 
   private evaluateCondition(condition: WorkflowCondition, environment: Map<string, RuntimeValue>): boolean {
     if (condition.kind === "boolean") return this.evaluate(condition.value, environment) === true;
+    if (condition.kind === "logic") {
+      return condition.operator === "and"
+        ? condition.values.every((value) => this.evaluateCondition(value, environment))
+        : condition.values.some((value) => this.evaluateCondition(value, environment));
+    }
+    if (condition.kind === "not") return !this.evaluateCondition(condition.value, environment);
     const left = this.evaluate(condition.left, environment);
     const right = this.evaluate(condition.right, environment);
-    return condition.operator === "==" ? left === right : left !== right;
+    return pythonCompare(condition.operator, left, right);
   }
 
   private markSkipped(statements: readonly WorkflowStatement[], steps: WorkflowStepResponse[]): void {

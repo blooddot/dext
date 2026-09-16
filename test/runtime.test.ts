@@ -7,14 +7,16 @@ import { AxAdapter } from "../src/core/axAdapter.js";
 import { BUILTIN_METHODS } from "../src/core/builtins.js";
 import { ContextResolver, type ContextHost } from "../src/core/contextResolver.js";
 import { MethodRegistry } from "../src/core/registry.js";
-import { DextRuntime } from "../src/core/runtime.js";
+import { DextRuntime, type RuntimeResultRepairRequest } from "../src/core/runtime.js";
+import { parseAgentResult } from "../src/core/resultBoundary.js";
 import { compileWorkflow } from "../src/core/workflow.js";
 import { WorkflowRuntime } from "../src/core/workflowRuntime.js";
 import { parseMcpManifest } from "../src/core/mcpManifest.js";
 import { fileReferenceInsertion } from "../src/webview/inputInsertion.js";
 import { ExecutionCancelledError } from "../src/core/executionErrors.js";
 import type { AgentConversationRequest } from "../src/core/agentRunner.js";
-import type { AgentResult, PatchResult, TerminalResult } from "../src/core/types.js";
+import type { AgentResult, AgentStreamEvent, PatchResult, TerminalResult } from "../src/core/types.js";
+import { prepareHistoryTrace } from "../src/core/agentTraceReplay.js";
 
 const host: ContextHost = {
   selection: async () => ({ uri: "file:///x.ts", content: "const x = 1;", version: 1 }),
@@ -40,6 +42,22 @@ function setup() {
     })
   });
   return { registry, runtime, workflow: new WorkflowRuntime(runtime) };
+}
+
+function agentCall(apply: boolean | undefined, input = "work") {
+  return {
+    kind: "invocation" as const,
+    method: "agent",
+    source: "code" as const,
+    arguments: apply === undefined
+      ? [{ name: "input", value: input }]
+      : [{ name: "input", value: input }, { name: "apply", value: apply }]
+  };
+}
+
+function selectFakeAgent(runtime: DextRuntime): void {
+  runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
+  runtime.setAgentSelection({ profileId: "codex" });
 }
 
 describe("Dext workflow runtime", () => {
@@ -193,6 +211,48 @@ describe("Dext workflow runtime", () => {
     });
     await runtime.execute({ kind: "invocation", method: "agent", source: "code", arguments: [{ name: "input", value: "write" }] });
     expect(invocations.map((item) => item.agentPreset)).toEqual(["standard", "minimal"]);
+  });
+
+  it("runs the Harness default preset for a conversation that never chose one", async () => {
+    const { runtime } = setup();
+    const conversations: AgentConversationRequest[] = [];
+    runtime.setWorkspaceRoot(process.cwd());
+    runtime.setWorkspaceTrusted(true);
+    runtime.setAgentProfiles([{
+      id: "deepseek-harness", provider: "deepseek-harness", command: "dsh", label: "Harness", models: [],
+      presets: [
+        { id: "standard", label: "Standard", description: "", builtin: true, requiresFullAccess: false, writableTurnsOnly: false },
+        { id: "ptc", label: "PTC", description: "", builtin: true, requiresFullAccess: false, writableTurnsOnly: false }
+      ]
+    }]);
+    // An unset selection - a new conversation, or one persisted before presets
+    // were mandatory - mounts the Harness default, never the raw ACP profile
+    // composition that Dext no longer offers.
+    runtime.setAgentSelection({ profileId: "deepseek-harness", permission: "workspace-write", agentPreset: "" });
+    runtime.setAgentRunner({
+      run: async () => ({ kind: "agent", text: "done" }),
+      runConversation: async (request) => { conversations.push(request); return "answer"; }
+    });
+
+    await runtime.executeConversation("ask", "explain");
+    await runtime.executeConversation("agent", "implement");
+    expect(conversations.map((item) => item.agentPreset)).toEqual(["standard", "standard"]);
+  });
+
+  it("keeps an installed Harness without a preset catalog on its own ACP composition", async () => {
+    const { runtime } = setup();
+    const conversations: AgentConversationRequest[] = [];
+    runtime.setWorkspaceRoot(process.cwd());
+    runtime.setWorkspaceTrusted(true);
+    runtime.setAgentProfiles([{ id: "deepseek-harness", provider: "deepseek-harness", command: "dsh", label: "Harness", models: [], presets: [] }]);
+    runtime.setAgentSelection({ profileId: "deepseek-harness", permission: "workspace-write", agentPreset: "" });
+    runtime.setAgentRunner({
+      run: async () => ({ kind: "agent", text: "done" }),
+      runConversation: async (request) => { conversations.push(request); return "answer"; }
+    });
+
+    await runtime.executeConversation("agent", "implement");
+    expect(conversations.map((item) => item.agentPreset)).toEqual([""]);
   });
   it("accepts JSON object content for typed MCP results when structuredContent is omitted", async () => {
     const registry = new MethodRegistry();
@@ -779,6 +839,40 @@ print(text=answer.text)`, registry);
     expect(request.input.endsWith("Goal:\n\nAdd a cache")).toBe(true);
   });
 
+  it("keeps a streamed Plan document out of Process while returning the full reply", async () => {
+    const { runtime } = setup();
+    runtime.setWorkspaceTrusted(true);
+    runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
+    runtime.setAgentSelection({ profileId: "codex" });
+    runtime.setRuleLoader(async () => undefined);
+    const reply = "Brief.\n<!-- dext-plan:start -->\n# Plan\n<!-- dext-plan:end -->\nTail.";
+    runtime.setAgentRunner({
+      run: async () => ({ kind: "ask", text: "unused" }),
+      runConversation: async (request) => {
+        // Every provider emits the same AgentStreamEvent contract: text
+        // deltas, optionally followed by an authoritative snapshot.
+        const onEvent = request.onEvent;
+        if (!onEvent) throw new Error("Expected the runtime to install an event sink.");
+        onEvent({ id: "m1", phase: "message", text: "Brief.\n" });
+        onEvent({ id: "m1", phase: "message", text: "<!-- dext-plan:start -->" });
+        onEvent({ id: "m1", phase: "message", text: "\n# Plan\n" });
+        onEvent({ id: "m1", phase: "message", text: "<!-- dext-plan:end -->" });
+        onEvent({ id: "m1", phase: "message", text: reply, replace: true, done: true });
+        return reply;
+      }
+    });
+    const events: AgentStreamEvent[] = [];
+    const response = await runtime.executeConversation("plan", "Add a cache", {
+      onAgentEvent: (event) => events.push(event)
+    });
+
+    // savePlan still receives the complete document from the reply text.
+    expect(response.result).toMatchObject({ kind: "plan", text: reply });
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.every((event) => !(event.text ?? "").includes("dext-plan"))).toBe(true);
+    expect(prepareHistoryTrace(events).map((event) => event.text)).toEqual(["Brief.\n\nTail."]);
+  });
+
   it("executes a saved Plan in Plan mode with its selected write tier", async () => {
     const { runtime } = setup();
     runtime.setWorkspaceTrusted(true);
@@ -1198,5 +1292,148 @@ if reply.status == "submitted":
     expect(response.executions).toEqual([]);
     expect(response.steps?.map((step) => step.state)).toEqual(["cancelled", "skipped"]);
     expect(calls).toBe(1);
+  });
+
+  it("parses a fenced Agent result with surrounding narration", async () => {
+    const { runtime } = setup();
+    selectFakeAgent(runtime);
+    runtime.setAgentRunner({
+      run: async () => ["Here is the result:", "```json", JSON.stringify({ kind: "agent", text: "done" }), "```", "That is all."].join("\n\n")
+    });
+
+    await expect(runtime.execute(agentCall(false))).resolves.toMatchObject({
+      result: { kind: "agent", text: "done" }
+    });
+  });
+
+  it("repairs an invalid Agent result once with the full invocation context", async () => {
+    const { runtime } = setup();
+    selectFakeAgent(runtime);
+    runtime.setAgentRunner({
+      run: async () => ({ kind: "agent", text: "needs repair", extra: true })
+    });
+    const requests: RuntimeResultRepairRequest[] = [];
+    runtime.setResultRepair({
+      parse: parseAgentResult,
+      repair: async (request) => {
+        requests.push(request);
+        return { result: { kind: "agent", text: "repaired" } };
+      }
+    });
+
+    await expect(runtime.execute(agentCall(false))).resolves.toMatchObject({
+      result: { kind: "agent", text: "repaired" }
+    });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({
+      kind: "agent",
+      allowWorkspaceWrite: false,
+      includePatch: true,
+      profile: { id: "codex" }
+    });
+    expect(requests[0]!.diagnostics).not.toBe("");
+    expect(requests[0]!.diagnostics).toMatch(/extra/i);
+    expect(requests[0]!.raw).toContain("needs repair");
+  });
+
+  it("repairs a result whose kind does not match the invoked method", async () => {
+    const { runtime } = setup();
+    selectFakeAgent(runtime);
+    // A tolerant parser may hand back an envelope for another method; that is repairable, so it must
+    // reach the predictor instead of failing immediately.
+    runtime.setAgentRunner({
+      run: async () => JSON.stringify({ kind: "ask", text: "answered the wrong method" })
+    });
+    const requests: RuntimeResultRepairRequest[] = [];
+    runtime.setResultRepair({
+      parse: () => ({ kind: "ask", text: "answered the wrong method" }),
+      repair: async (request) => {
+        requests.push(request);
+        return { result: { kind: "agent", text: "converted" } };
+      }
+    });
+
+    await expect(runtime.execute(agentCall(false))).resolves.toMatchObject({
+      result: { kind: "agent", text: "converted" }
+    });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.diagnostics).toMatch(/does not match/i);
+  });
+
+  it("does not repair a write-enabled Agent turn", async () => {
+    const { runtime } = setup();
+    selectFakeAgent(runtime);
+    runtime.setWorkspaceRoot(process.cwd());
+    runtime.setWorkspaceTrusted(true);
+    runtime.setAgentRunner({
+      run: async () => ({ kind: "agent", text: "wrote files", extra: true })
+    });
+    let repaired = false;
+    runtime.setResultRepair({
+      parse: parseAgentResult,
+      repair: async () => { repaired = true; return { result: { kind: "agent", text: "repaired" } }; }
+    });
+
+    await expect(runtime.execute(agentCall(undefined))).rejects.toThrow();
+    expect(repaired).toBe(false);
+  });
+
+  it("reports diagnostics and the raw snippet when repair is not configured", async () => {
+    const { runtime } = setup();
+    selectFakeAgent(runtime);
+    runtime.setAgentRunner({
+      run: async () => ({ kind: "agent", text: "unparseable", extra: true })
+    });
+
+    await expect(runtime.execute(agentCall(false))).rejects.toThrow(/Raw output \(first 200 characters\):[\s\S]*unparseable/);
+    await expect(runtime.execute(agentCall(false))).rejects.toThrow(/extra/i);
+  });
+
+  it("passes the cancellation signal through to the repair predictor", async () => {
+    const { runtime } = setup();
+    selectFakeAgent(runtime);
+    runtime.setAgentRunner({
+      run: async () => ({ kind: "agent", text: "bad", extra: true })
+    });
+    let received: AbortSignal | undefined;
+    runtime.setResultRepair({
+      parse: parseAgentResult,
+      repair: async (request) => {
+        received = request.signal;
+        return { diagnostics: "repair failed" };
+      }
+    });
+    const controller = new AbortController();
+
+    await expect(runtime.execute(agentCall(false), [], { signal: controller.signal }))
+      .rejects.toThrow(/Repair failed: repair failed/);
+    expect(received).toBe(controller.signal);
+  });
+
+  it("does not repair raw output above the 20k character budget", async () => {
+    const { runtime } = setup();
+    selectFakeAgent(runtime);
+    runtime.setAgentRunner({ run: async () => "x".repeat(20_001) });
+    let repaired = false;
+    runtime.setResultRepair({
+      parse: parseAgentResult,
+      repair: async () => { repaired = true; return { result: { kind: "agent", text: "repaired" } }; }
+    });
+
+    await expect(runtime.execute(agentCall(false))).rejects.toThrow(/No 'agent' JSON object could be extracted/);
+    expect(repaired).toBe(false);
+  });
+
+  it("diagnoses harness-style invalid final text instead of rethrowing provider errors", async () => {
+    const { runtime } = setup();
+    selectFakeAgent(runtime);
+    runtime.setAgentRunner({ run: async () => "invalid" });
+    runtime.setResultRepair({
+      parse: parseAgentResult,
+      repair: async () => ({ diagnostics: "not available" })
+    });
+
+    await expect(runtime.execute(agentCall(false)))
+      .rejects.toThrow(/No 'agent' JSON object could be extracted[\s\S]*invalid/);
   });
 });

@@ -26,6 +26,13 @@ preview = agent(
     apply=False,
 )
 
+# 只以文本汇报结论，不产出补丁。
+summary = agent(
+    input="总结重构方案",
+    apply=False,
+    patch=False,
+)
+
 if preview.patch:
     applied = apply(result=preview)
 ```
@@ -33,11 +40,46 @@ if preview.patch:
 输入工作流支持以下语法：
 
 - 赋值、仅使用关键字参数的 API 调用、字符串（包括三引号字符串）、数字、布尔值、同类型元素列表、结果字段访问和注释。
-- `if` / `else` 分支，以及 `==`、`!=` 比较。
+- `if` / `elif` / `else` 分支，以及 `==`、`!=`、`<`、`<=`、`>`、`>=`、`in`、`not in` 比较和 `and`、`or`、`not` 逻辑运算。
 - `for name in list:` 顺序循环；列表元素必须类型一致，循环变量仅在循环体中有效。
 - `while` 顺序重试循环；最多执行 100 次。循环中新建变量不会泄漏到外部，已有变量可在保持相同类型的前提下更新。
 - `[call(...) for name in list]` 列表推导式；这是支持并发执行的结构，各分支互不可见，并发上限由 `dext.workflow.maxConcurrency` 控制，结果保持输入顺序。仅支持一个 `for` 子句，不支持 `if` 过滤。
 - `try` / `except` 和可选的 `finally`；某一步失败后可以进入处理分支并继续工作流。`except Exception as name:` 将错误消息绑定为仅在处理分支内可见的字符串。不支持按具体异常类型区分处理，用户停止执行也不会被捕获。
+
+### 文本与取值表达式
+
+纯表达式由 Dext 自行求值，不经过 API 调用，也不需要 Python 解释器。编译期就能确定的值会在编译时折叠，因此 `"a" + "b"` 与 `"ab"` 完全等价，UI 表单校验等静态检查同样适用。
+
+| 形式 | 示例 | 说明 |
+| --- | --- | --- |
+| 字符串拼接 | `"Review: " + answer.text` | 两侧都必须是字符串 |
+| 重复 | `"-" * 3` | 结果为 `---` |
+| 数值运算 | `2 + 3 * 4`、`7 // 2`、`2 ** 8` | 仅限数字 |
+| f-string | `f"{answer.text} ({checked.exit_code})"` | 支持替换字段、转换和格式说明符 |
+| `%` 格式化 | `"%s: %d" % [name, count]` | 参数用列表或元组表示 |
+| 元组 | `("a", 1)`、`(value,)`、`1, 2` | 元组字面量，本质是列表 |
+| `str.format` | `"{} and {}".format("a", "b")` | 也支持 `{0}`、`{name}`、`{0[name]}` |
+| 索引与切片 | `text[0]`、`text[1:4]`、`text[::-1]` | 负数下标从末尾计算；列表同理 |
+| 成员判断 | `"done" in answer.text` | 支持字符串、列表和字典 |
+| 比较 | `a == b`、`a != b`、`a < b`、`a <= b`、`a > b`、`a >= b` | 大小比较要求两侧同为字符串或同为数字 |
+| 逻辑运算 | `a and b`、`a or b`、`not a` | 操作数必须是布尔值，可用 `bool(value)` 转换 |
+
+f-string 的替换字段可带转换和格式说明符：`f"{value!r}"`、`f"{count:,}"`、`f"{ratio:.1%}"`、`f"{width:>8}"`、`f"{value=}"`，以及 `f"{value:{width}}"` 这类嵌套说明符。双写花括号（`{{`）输出一个字面花括号。
+
+任意字符串值都可以调用这些字符串方法：`upper`、`lower`、`casefold`、`capitalize`、`title`、`swapcase`、`strip`、`lstrip`、`rstrip`、`removeprefix`、`removesuffix`、`replace`、`split`、`rsplit`、`splitlines`、`join`、`startswith`、`endswith`、`find`、`rfind`、`index`、`rindex`、`count`、`partition`、`rpartition`、`center`、`ljust`、`rjust`、`zfill`、`expandtabs`、`format`，以及 `is*` 判断（`isalnum`、`isalpha`、`isdigit`、`isnumeric`、`isspace`、`isupper`、`islower`、`istitle`、`isidentifier`、`isascii`）。
+
+以下纯函数同样由 Dext 直接计算：`len`、`str`、`repr`、`int`、`float`、`bool`、`abs`、`round`、`min`、`max`、`sorted`、`sum`、`range`、`list`、`reversed`、`any`、`all`。`range(3)` 就是数字列表，因此 `for index in range(3):` 可用；`sorted(names)` 会保留原有元素类型。`range` 最多生成 100000 个值。
+
+这些操作遵循 Python 语义，只有四处有意不同：
+
+- 字符串的 `+` 另一侧也必须是字符串。要拼接数字请使用 `f"{value}"` 或 `str(value)`。
+- 元组按 Python 写法书写，但本质是列表：`("a", 1)`、`(value,)`、`()` 以及不带括号的 `1, 2` 都会生成列表，因此 `(1, 2) == [1, 2]` 为真，长度也不固定。解包仍然不支持：变量只绑定一次、列表没有固定长度，所以 `a, b = pair` 和 `for key, value in items:` 都会被拒绝。请改用 `pair[0]`、`pair[1]` 读取，或在元素是带字段名对象时用 `for item in items:` 遍历。字典键必须是字符串，因此元组不能作为键。
+- `%` 的参数用列表表示：`"%s %d" % ["total", 3]` 或 `"%s %d" % ("total", 3)`。若要格式化列表本身，按 Python 单元素元组的写法包一层：`"%s" % (items,)`。
+- 条件必须是布尔值。`if answer.text:` 会被拒绝，请改写为 `if bool(answer.text):` 或直接比较。
+- 不支持字节字面量（`b"..."`）；Dext 的文本始终是 UTF-8 字符串。
+- 不支持增强赋值。`text += line` 会被拒绝：变量只绑定一次，需要拼接多段文本时请收集到列表后用 `"\n".join(lines)` 组合。
+
+不是编译期常量的取值会和 `text = answer.text` 一样，在 Output 中显示为一个独立的 `=` 步骤。
 
 `.dx` API 文件还支持带类型声明的 `main()` 入口、同文件内带类型声明的辅助函数、显式导入和有上限的 `while` 重试循环。辅助函数仅在当前文件可见；不支持嵌套定义或递归调用。输入工作流不支持自定义函数或类、无限制的重复赋值、`eval`、`exec` 或任意系统、文件、网络 API；相关操作需通过 Dext 提供的 API 完成。循环仅可更新同类型的已有变量。除列表推导式外，执行按顺序进行；未选中的步骤及因上游失败未执行的后续步骤会标记为 `skipped`。
 
@@ -48,7 +90,7 @@ if preview.patch:
 - 点击侧栏的 **Create resource**，打开复用 Conversation 和 Input 布局的专用 Tab。底部选择 **API / MCP / Rule / Skill** 和 **Project / Global**（菜单显示保存目录）。可以选择 **New resource** 新建，或选择已有资源描述修改；预览草稿或差异后保存。保存后保留 Tab，方便继续修改；更改已有资源的保存位置表示另存一份。资源目标、草稿和对话会随历史记录恢复。
 - `ask(input, skills?, rules?, workspace?) -> AskResult`：只读解释和分析。
 - `plan(input, skills?, rules?, workspace?) -> PlanResult`：创建、维护和执行实施计划。
-- `agent(input, apply=true, skills?, rules?, workspace?) -> AgentResult`：执行持续性任务。
+- `agent(input, apply=true, patch=true, skills?, rules?, workspace?) -> AgentResult`：执行持续性任务；`patch=false` 时只以 text 汇报结论，不产出补丁。
 - `apply(result) -> ApplyResult`：应用 `AgentResult` 中存在的补丁。
 - `terminal(command, cwd=".", env={}, timeout_ms=120000) -> TerminalResult`：在平台 Shell 中运行任意终端命令；`env` 可传入仅对此命令有效的字符串环境变量。
 - `skill(skill, input, workspace?) -> SkillResult`：使用指定 Skill 执行任务。

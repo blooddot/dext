@@ -76,6 +76,25 @@ export type InvocationValue =
 
 export type WorkflowScalar = string | number | boolean;
 
+export type ArithmeticOperator = "+" | "-" | "*" | "/" | "//" | "%" | "**";
+
+export type CompareOperator = "==" | "!=" | "<" | "<=" | ">" | ">=" | "in" | "not in";
+
+export type FormatConversion = "s" | "r" | "a";
+
+/** One piece of an f-string, a `%`-format, or a `.format()` template. Text is
+ * literal; an expression carries its optional `!conversion` and `:spec`. A spec
+ * with nested fields keeps them as parts so `{value:{width}}` still works. */
+export type WorkflowFormatPart =
+  | { kind: "text"; text: string }
+  | {
+    kind: "expression";
+    expression: WorkflowExpression;
+    conversion?: FormatConversion;
+    spec?: string;
+    specParts?: WorkflowFormatPart[];
+  };
+
 export type WorkflowExpression =
   | { kind: "literal"; value: WorkflowScalar; from: number; to: number }
   | { kind: "list"; values: WorkflowExpression[]; from: number; to: number }
@@ -84,6 +103,15 @@ export type WorkflowExpression =
   | { kind: "variable"; name: string; from: number; to: number }
   | { kind: "member"; object: WorkflowExpression; property: string; from: number; to: number }
   | { kind: "index"; object: WorkflowExpression; index: WorkflowExpression; from: number; to: number }
+  | {
+    kind: "slice";
+    object: WorkflowExpression;
+    start?: WorkflowExpression;
+    stop?: WorkflowExpression;
+    step?: WorkflowExpression;
+    from: number;
+    to: number;
+  }
   | { kind: "call"; call: WorkflowCall; from: number; to: number }
   | {
     /** A list comprehension. Because the body cannot see anything the other
@@ -98,10 +126,67 @@ export type WorkflowExpression =
   }
   | {
     kind: "format";
-    parts: ({ kind: "text"; text: string } | { kind: "expression"; expression: WorkflowExpression })[];
+    parts: WorkflowFormatPart[];
+    from: number;
+    to: number;
+  }
+  | {
+    kind: "binary";
+    operator: ArithmeticOperator;
+    left: WorkflowExpression;
+    right: WorkflowExpression;
+    from: number;
+    to: number;
+  }
+  | {
+    kind: "unary";
+    operator: "-" | "+" | "not";
+    value: WorkflowExpression;
+    from: number;
+    to: number;
+  }
+  | {
+    kind: "compare";
+    operator: CompareOperator;
+    left: WorkflowExpression;
+    right: WorkflowExpression;
+    from: number;
+    to: number;
+  }
+  | {
+    kind: "logic";
+    operator: "and" | "or";
+    values: WorkflowExpression[];
+    from: number;
+    to: number;
+  }
+  | {
+    /** A pure string method such as `text.upper()`. Dext evaluates it itself,
+     * without an API round trip and without touching the environment. */
+    kind: "method";
+    receiver: WorkflowExpression;
+    method: string;
+    arguments: WorkflowArgument[];
+    keywords: { name: string; value: WorkflowExpression; from: number; to: number }[];
+    from: number;
+    to: number;
+  }
+  | {
+    /** A pure helper such as `len(text)` or `range(3)`. */
+    kind: "function";
+    name: string;
+    arguments: WorkflowExpression[];
+    keywords: { name: string; value: WorkflowExpression; from: number; to: number }[];
     from: number;
     to: number;
   };
+
+export interface WorkflowArgument {
+  name?: string;
+  value: WorkflowExpression;
+  from: number;
+  to: number;
+}
 
 
 export interface WorkflowCall {
@@ -115,13 +200,21 @@ export interface WorkflowCall {
 export type WorkflowCondition =
   | {
     kind: "comparison";
-    operator: "==" | "!=";
+    operator: CompareOperator;
     left: WorkflowExpression;
     right: WorkflowExpression;
     from: number;
     to: number;
   }
-  | { kind: "boolean"; value: WorkflowExpression; from: number; to: number };
+  | { kind: "boolean"; value: WorkflowExpression; from: number; to: number }
+  | {
+    kind: "logic";
+    operator: "and" | "or";
+    values: WorkflowCondition[];
+    from: number;
+    to: number;
+  }
+  | { kind: "not"; value: WorkflowCondition; from: number; to: number };
 
 export type WorkflowStatement =
   | {
@@ -476,6 +569,10 @@ export interface AgentInputQuestion {
   question: string;
   options: { label: string; description: string }[];
   isSecret?: boolean;
+  /** Supporting detail shown with the question, kept out of the option labels. */
+  detail?: string;
+  /** More than one option may be selected. Answers then carry every selection. */
+  multiSelect?: boolean;
 }
 
 export interface AgentInputRequest {
