@@ -1,74 +1,191 @@
 import * as vscode from "vscode";
+import { isAbsolute, resolve } from "node:path";
 import type { ProjectFileHost, ProjectDefinition, ProjectSaveResult } from "./projectStore.js";
 import type { ProjectEditorDataSource } from "./projectEditorProvider.js";
-import type { KnowledgeSuggestion } from "./core/projectKnowledgeReview.js";
-import type { ProjectInitializationState, ProjectInitializationProgressListener, ProjectInitializationProgress } from "./projectService.js";
-import type { ProjectPanelData } from "./webview/projectPanel.js";
-import type { ArchitectureScanResult } from "./core/projectArchitecture.js";
-import { runArchitectureScan } from "./core/projectArchitectureWorker.js";
+import { KnowledgeDraftQueue } from "./core/projectKnowledgeReview.js";
+import type { ProjectInitializationState, ProjectInitializationProgressListener } from "./projectService.js";
 import { ProjectInitializationService } from "./projectService.js";
-import { buildProjectEvidencePackage, ProjectAiGenerationService, type ProjectAiProvider, type ProjectAiActivityEvent } from "./core/projectAiGeneration.js";
-import type { ProjectIntent } from "./core/projectIntent.js";
-import type { ProjectDiagram, ProjectDiagramKind } from "./core/projectDiagram.js";
+import {
+  buildProjectEvidencePackage,
+  isExcludedProjectEvidencePath,
+  isProjectEvidencePath,
+  ProjectAiGenerationService,
+  type ProjectAiActivityEvent,
+  type ProjectAiProvider,
+  type ProjectEvidenceFileInput,
+  type ProjectEvidencePackage,
+  type ProjectKnowledgeReference
+} from "./core/projectAiGeneration.js";
+import { validateProjectDiagram, type ProjectDiagram, type ProjectDiagramKind } from "./core/projectDiagram.js";
+import { validateProjectIntent, type ProjectIntent } from "./core/projectIntent.js";
+import type { ProjectObject } from "./core/projectKnowledge.js";
+import type { ArchifyIdMapping, ArchifyRepository } from "./core/archifyAdapter.js";
 import type { ProjectDiagramAdapterRegistry } from "./core/projectDiagramRegistry.js";
+import type { ProjectArchitectureDecision, ProjectDiagramSummary } from "./webview/projectArchitectureView.js";
+import { architectureRuleReport, type ArchitectureRule } from "./core/projectArchitecture.js";
+import type { ProjectPanelData } from "./webview/projectPanel.js";
+import type { DiagramValidationIssue } from "./core/projectDiagram.js";
+import { DiagramTaskRegistry, isAllowedEvidencePath, isDiagramExportPayload, resolveDiagramTarget } from "./projectDiagramViewer.js";
 
 const textDecoder = new TextDecoder();
 const textEncoder = new TextEncoder();
 
-// VS Code glob patterns do not support nested brace alternatives.
-export const PROJECT_SOURCE_GLOB = "**/*.{ts,tsx,cts,mts,js,jsx,cjs,mjs,py,rs}";
-export const PROJECT_MANIFEST_GLOB = "**/{Cargo.toml,Cargo.lock}";
-/**
- * Project architecture is about production modules by default. Tests and generated fixtures can
- * contain imports that make the graph noisy, so they are opt-in through a future scan profile.
- */
-export const PROJECT_SCAN_EXCLUDE = "**/{node_modules,out,dist,build,.git,target,coverage,.vscode-test,.npm-cache,.tmp-tb,test,tests,__tests__,fixtures}/**";
+export const PROJECT_EVIDENCE_EXCLUDE = "**/{node_modules,out,dist,build,.git,target,coverage,.vscode-test,.npm-cache,.tmp-tb}/**";
+export const PROJECT_README_GLOB = "**/{README,README.md,README.txt,readme,readme.md,readme.txt}";
+export const PROJECT_DOCUMENT_GLOB = "**/*.{md,mdx,rst,txt}";
+export const PROJECT_MANIFEST_GLOB = "**/{package.json,Cargo.toml,Cargo.lock,pyproject.toml,go.mod,pom.xml}";
+export const PROJECT_SOURCE_GLOB = "**/*.{ts,tsx,cts,mts,js,jsx,cjs,mjs,py,rs,go,java,kt,kts,rb,cs,php,swift,c,h,cpp,hpp}";
 
-export async function scanWorkspaceProject(root: vscode.Uri, config?: ProjectDefinition["scan"], onProgress?: ProjectInitializationProgressListener, signal?: AbortSignal): Promise<ArchitectureScanResult> {
-  onProgress?.({ phase: "scanning", message: "Discovering source files…" });
-  const limit = 2000;
-  const roots = config?.roots?.length ? config.roots : ["."];
-  const excluded = config?.includeTests
-    ? PROJECT_SCAN_EXCLUDE.replace("test,tests,__tests__,fixtures/", "")
-    : PROJECT_SCAN_EXCLUDE;
-  const extra = config?.extraExcludes?.length ? `{${config.extraExcludes.join(",")}}` : "";
-  const exclude = extra ? `${excluded},${extra}/**` : excluded;
-  const groups = await Promise.all(roots.flatMap((scanRoot) => [PROJECT_SOURCE_GLOB, PROJECT_MANIFEST_GLOB].map((pattern) => {
-    const prefix = scanRoot === "." ? "" : `${scanRoot.replace(/\/$/, "")}/`;
-    return vscode.workspace.findFiles(new vscode.RelativePattern(root, `${prefix}${pattern}`), exclude, limit + 1);
-  })));
-  const found = [...new Map(groups.flat().map((uri) => [uri.path, uri])).values()].sort((a, b) => a.path.localeCompare(b.path));
-  const pending = found.slice(0, limit);
+export interface ProjectEvidenceReadOptions {
+  requirement?: string;
+  /** Total evidence files; the AI evidence package applies its own stricter budget afterwards. */
+  maxFiles?: number;
+  /** Source-text candidates read after documentation and manifests. */
+  maxSourceFiles?: number;
+  maxFileBytes?: number;
+}
+
+function relativePath(root: vscode.Uri, uri: vscode.Uri): string | undefined {
+  const prefix = root.path.replace(/\/$/, "") + "/";
+  if (!uri.path.startsWith(prefix)) return undefined;
+  return decodeURIComponent(uri.path.slice(prefix.length));
+}
+
+/**
+ * Reads only bounded documentation, manifests and source text when the user explicitly starts
+ * initialization or diagram generation. It never constructs an AST, runs a parser or scans files
+ * in the background, and it keeps the same exclusion/path/size/cancellation guarantees.
+ */
+export async function readWorkspaceEvidence(
+  root: vscode.Uri,
+  knowledge: { objects?: readonly ProjectObject[]; intent?: ProjectIntent },
+  options: ProjectEvidenceReadOptions,
+  onProgress?: ProjectInitializationProgressListener,
+  signal?: AbortSignal
+): Promise<ProjectEvidencePackage> {
+  const maxFiles = Math.max(1, options.maxFiles ?? 80);
+  const maxSourceFiles = Math.max(0, options.maxSourceFiles ?? 60);
+  const maxFileBytes = Math.max(1024, options.maxFileBytes ?? 262_144);
+  const excluded = PROJECT_EVIDENCE_EXCLUDE;
+  onProgress?.({ phase: "preparing", message: "Searching README, documentation, manifests and necessary source…" });
+  const documentPatterns = [PROJECT_README_GLOB, PROJECT_DOCUMENT_GLOB, PROJECT_MANIFEST_GLOB];
+  const foundDocuments: vscode.Uri[] = [];
+  for (const pattern of documentPatterns) {
+    if (signal?.aborted) throw new Error("Project initialization was cancelled.");
+    const uris = await vscode.workspace.findFiles(new vscode.RelativePattern(root, pattern), excluded, maxFiles + 1);
+    for (const uri of uris) if (!foundDocuments.some((candidate) => candidate.path === uri.path)) foundDocuments.push(uri);
+  }
+  if (signal?.aborted) throw new Error("Project initialization was cancelled.");
+  const sources = await vscode.workspace.findFiles(new vscode.RelativePattern(root, PROJECT_SOURCE_GLOB), excluded, maxSourceFiles + 1);
+  const pending = [
+    ...foundDocuments.sort((left, right) => left.path.localeCompare(right.path)),
+    ...sources.filter((uri) => !foundDocuments.some((candidate) => candidate.path === uri.path)).sort((left, right) => left.path.localeCompare(right.path))
+  ].slice(0, maxFiles);
+  const files: ProjectEvidenceFileInput[] = [];
+  const coverage: string[] = [];
   let processed = 0;
-  onProgress?.({ phase: "scanning", completed: 0, total: pending.length, message: "Reading source files…" });
-  const files: Array<{ path: string; content: string }> = [];
-  const unsupported: ArchitectureScanResult["unsupported"] = [];
+  onProgress?.({ phase: "preparing", completed: 0, total: pending.length, message: "Reading bounded text evidence…" });
   for (const uri of pending) {
-    if (signal?.aborted) throw new Error("Project scan was cancelled.");
-    const path = uri.path.slice(root.path.replace(/\/$/, "").length + 1);
+    if (signal?.aborted) throw new Error("Project initialization was cancelled.");
+    const path = relativePath(root, uri);
+    processed += 1;
     try {
+      if (!path || !isProjectEvidencePath(path) || isExcludedProjectEvidencePath(path)) continue;
       const stat = await vscode.workspace.fs.stat(uri);
-      if (stat.size > 262144) {
-        unsupported.push({ path, reason: "File size limit exceeded." });
-        continue;
-      }
-      files.push({ path, content: textDecoder.decode(await vscode.workspace.fs.readFile(uri)) });
+      if (stat.size > maxFileBytes) { coverage.push(`${path}: exceeds the per-file read limit; skipped.`); continue; }
+      const content = textDecoder.decode(await vscode.workspace.fs.readFile(uri));
+      files.push({ path, content });
     } catch {
-      unsupported.push({ path, reason: "File could not be read." });
+      if (path) coverage.push(`${path}: could not be read; skipped.`);
     } finally {
-      processed += 1;
-      onProgress?.({ phase: "scanning", completed: processed, total: pending.length, message: `Read ${processed} of ${pending.length} files · ${path}` });
+      onProgress?.({ phase: "preparing", completed: processed, total: pending.length, message: `Read ${processed} / ${pending.length} files` });
     }
   }
-  if (signal?.aborted) throw new Error("Project scan was cancelled.");
-  onProgress?.({ phase: "scanning", message: `Analyzing module relationships across ${files.length} readable files…` });
-  const result = runArchitectureScan(files, { maxFiles: limit, maxFileBytes: 262144 }, signal).result;
-  // Keep the already bounded source excerpts available to the optional Project AI pass. The
-  // generation service redacts secrets and applies a stricter evidence budget before prompting.
-  result.files = files;
-  result.unsupported.push(...unsupported);
-  if (found.length > limit) result.coverage = [...(result.coverage ?? []), "File limit exceeded: only the first 2000 files were scanned."];
-  return result;
+  if (foundDocuments.length > maxFiles) coverage.push(`Document count exceeds the limit: only the first ${maxFiles} files were read.`);
+  if (sources.length > maxSourceFiles) coverage.push(`Source text exceeds the limit: only the first ${maxSourceFiles} candidates were read.`);
+  const knowledgeReferences = buildKnowledgeReferences(knowledge);
+  return buildProjectEvidencePackage({
+    projectName: root.path.split("/").filter(Boolean).pop() ?? "Project",
+    files,
+    ...(knowledge.objects ? { objects: knowledge.objects } : {}),
+    knowledge: knowledgeReferences,
+    ...(options.requirement ? { requirement: options.requirement } : {}),
+    coverage
+  });
+}
+
+function buildKnowledgeReferences(knowledge: { objects?: readonly ProjectObject[]; intent?: ProjectIntent }): ProjectKnowledgeReference[] {
+  const references: ProjectKnowledgeReference[] = [];
+  for (const object of knowledge.objects ?? []) {
+    if (object.confirmation !== "accepted") continue;
+    references.push({ id: object.id, kind: "object", name: object.canonicalName, ...(object.description ? { description: object.description } : {}) });
+  }
+  const intent = knowledge.intent;
+  if (intent) {
+    const add = (kind: ProjectKnowledgeReference["kind"], items: readonly unknown[]): void => {
+      for (const raw of items) {
+        if (!raw || typeof raw !== "object") continue;
+        const item = raw as { id?: unknown; canonicalName?: unknown; displayName?: unknown; description?: unknown; purpose?: unknown; summary?: unknown };
+        if (typeof item.id !== "string" || !item.id) continue;
+        const name = typeof item.displayName === "string" ? item.displayName : typeof item.canonicalName === "string" ? item.canonicalName : item.id;
+        const description = [item.description, item.purpose, item.summary].find((value): value is string => typeof value === "string" && value.length > 0);
+        references.push({ id: item.id, kind, name, ...(description ? { description } : {}) });
+      }
+    };
+    add("capability", intent.capabilities);
+    add("context", intent.contexts);
+    add("flow", intent.flows);
+    add("term", intent.terms);
+    add("constraint", intent.constraints);
+    add("decision", intent.decisions);
+  }
+  return references;
+}
+
+/** Resolves a pinned git revision and remote URL locally; no parser or source scan is involved. */
+export async function discoverArchifyRepository(root: vscode.Uri): Promise<ArchifyRepository | undefined> {
+  try {
+    const dotGit = vscode.Uri.joinPath(root, ".git");
+    let gitDirectory: vscode.Uri;
+    try {
+      const stat = await vscode.workspace.fs.stat(dotGit);
+      if (stat.type === vscode.FileType.File) {
+        const pointer = textDecoder.decode(await vscode.workspace.fs.readFile(dotGit));
+        const match = /gitdir:\s*(.+)/i.exec(pointer);
+        if (!match) return undefined;
+        const target = match[1]!.trim();
+        gitDirectory = vscode.Uri.file(isAbsolute(target) ? target : resolve(root.fsPath, target));
+      } else {
+        gitDirectory = dotGit;
+      }
+    } catch { return undefined; }
+    const head = (await vscode.workspace.fs.readFile(vscode.Uri.joinPath(gitDirectory, "HEAD"))).toString().trim();
+    let revision: string;
+    if (head.startsWith("ref:")) {
+      const ref = head.slice(4).trim();
+      try {
+        revision = (await vscode.workspace.fs.readFile(vscode.Uri.joinPath(gitDirectory, ...ref.split("/")))).toString().trim();
+      } catch {
+        const packed = textDecoder.decode(await vscode.workspace.fs.readFile(vscode.Uri.joinPath(gitDirectory, "packed-refs")));
+        const line = packed.split(/\r?\n/).find((entry) => entry.endsWith(` ${ref}`));
+        revision = line?.split(" ")[0] ?? "";
+      }
+    } else {
+      revision = head;
+    }
+    if (!/^[a-fA-F0-9]{40}$/.test(revision)) return undefined;
+    let remote: string | undefined;
+    try {
+      const config = textDecoder.decode(await vscode.workspace.fs.readFile(vscode.Uri.joinPath(gitDirectory, "config")));
+      const match = /\[remote\s+"origin"\][\s\S]*?url\s*=\s*(\S+)/i.exec(config);
+      remote = match?.[1]?.trim();
+    } catch { /* no remote configured */ }
+    if (!remote) return undefined;
+    const provider = /github\.com/i.test(remote) ? "github" as const : /gitee\.com/i.test(remote) ? "gitee" as const : undefined;
+    return { root: root.fsPath, url: remote, revision, ...(provider ? { provider } : {}) };
+  } catch {
+    return undefined;
+  }
 }
 
 /** Implements {@link ProjectFileHost} over the VS Code file system rooted at the workspace folder. */
@@ -115,23 +232,24 @@ export class VscodeProjectFileHost implements ProjectFileHost {
 }
 
 export interface ProjectPanelDataSourceOptions {
-  store: {
-    readObjects(): Promise<ProjectPanelData["objects"]>;
-    readArchitecture(): Promise<{ decisions: Array<{ id: string; title: string; detail: string }> }>;
-    readDefinition?(): Promise<ProjectDefinition>;
-    writeDefinition?(next: ProjectDefinition, expectedVersion: number): Promise<ProjectSaveResult<ProjectDefinition>>;
-  };
-  scan(onProgress?: ProjectInitializationProgressListener, signal?: AbortSignal): Promise<ArchitectureScanResult>;
   name: string;
   root: string;
-  languages?: () => Promise<readonly string[]>;
-  drafts?: () => readonly KnowledgeSuggestion[];
-  initialization?: () => ProjectInitializationState;
-  status?: () => ProjectInitializationState["status"];
+  rootUri: vscode.Uri;
+  store: {
+    readObjects(): Promise<ProjectObject[]>;
+    /** Only the fields the panel reads; a partial store double stays valid. */
+  readArchitecture(): Promise<{ decisions: ProjectArchitectureDecision[]; diagramId?: string | undefined; rules?: readonly ArchitectureRule[] | undefined }>;
+    readDefinition?(): Promise<ProjectDefinition>;
+    writeDefinition?(next: ProjectDefinition, expectedVersion: number): Promise<ProjectSaveResult<ProjectDefinition>>;
+    readIntent?(): Promise<ProjectIntent | undefined>;
+    writeIntent?(intent: ProjectIntent): Promise<void>;
+    readDiagrams?(): Promise<readonly ProjectDiagram[]>;
+    writeDiagram?(diagram: ProjectDiagram): Promise<void>;
+    readInitialization?(): Promise<{ markedInitialized: boolean; hasIntent: boolean; diagramCount: number }>;
+  };
+  /** Reads bounded text evidence only when the user explicitly initializes or generates a diagram. */
+  readEvidence(options: { requirement?: string }, signal: AbortSignal, onProgress: ProjectInitializationProgressListener): Promise<ProjectEvidencePackage>;
   diagramRegistry?: ProjectDiagramAdapterRegistry;
-  readDiagramAdapterPreferences?: () => Promise<unknown>;
-  writeDiagramAdapterPreferences?: (preferences: unknown) => Promise<void>;
-  exportDiagram?: (kind: string, format?: string) => Promise<void>;
   projectAiProvider?: ProjectAiProvider;
   aiCli?: readonly { id: string; label: string; models?: readonly {
     id: string;
@@ -141,15 +259,54 @@ export interface ProjectPanelDataSourceOptions {
     speedTiers?: readonly string[];
     serviceTiers?: readonly string[];
   }[] }[];
-  readIntent?: () => Promise<ProjectIntent | undefined>;
-  writeDiagrams?: (diagrams: readonly ProjectDiagram[]) => Promise<void>;
-  readDiagrams?: () => Promise<readonly ProjectDiagram[]>;
-  writeIntent?: (intent: ProjectIntent) => Promise<void>;
+  openEvidence?: (path: string, line?: number) => Promise<void>;
+  now?: () => number;
+}
+
+export interface ProjectPanelMessage { type: string;[key: string]: unknown }
+
+const DIAGRAM_KIND_RANK: Record<ProjectDiagramKind, number> = {
+  architecture: 0, workflow: 1, sequence: 2, data_flow: 3, lifecycle: 4
+};
+
+export function describeProjectDiagram(diagram: ProjectDiagram): ProjectDiagramSummary {
+  return {
+    id: diagram.id,
+    title: diagram.title,
+    kind: diagram.kind,
+    version: diagram.version,
+    updatedAt: diagram.updatedAt,
+    ...(diagram.review ? { review: diagram.review } : {})
+  };
+}
+
+function sortProjectDiagrams(diagrams: readonly ProjectDiagram[]): ProjectDiagram[] {
+  return [...diagrams].sort((left, right) => DIAGRAM_KIND_RANK[left.kind] - DIAGRAM_KIND_RANK[right.kind]
+    || right.updatedAt - left.updatedAt
+    || left.title.localeCompare(right.title));
+}
+
+function safeFileName(title: string): string {
+  const sanitized = [...title].map((character) => /[\\/:*?"<>|]/.test(character) || character.charCodeAt(0) < 32 ? "-" : character).join("");
+  return sanitized.trim().slice(0, 80) || "diagram";
+}
+
+function activityLine(event: ProjectAiActivityEvent): string {
+  const value = event.text ?? "";
+  const title = event.title ?? "";
+  return value || title ? `${title && value ? `${title}: ` : title}${value}\n` : "";
+}
+
+function mappingOf(document: unknown): ArchifyIdMapping | undefined {
+  if (!document || typeof document !== "object") return undefined;
+  const payload = (document as { payload?: unknown }).payload;
+  if (!payload || typeof payload !== "object") return undefined;
+  return (payload as { mapping?: ArchifyIdMapping }).mapping;
 }
 
 /**
- * Builds the Project tab data from long-term files and a bounded scan. Conversation runs, Hook
- * output, and single-run Review are never read or exposed here.
+ * Builds the Project tab data from long-term files and explicit user actions. Opening or refreshing
+ * the page never enumerates source files, runs a parser, calls AI or writes `.dext`.
  */
 export function createProjectPanelDataSource(options: ProjectPanelDataSourceOptions): ProjectEditorDataSource {
   let generatedIntent: ProjectIntent | undefined;
@@ -157,6 +314,27 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
   let selectedAiModel: string | undefined;
   let selectedAiReasoning: string | undefined;
   let selectedAiSpeed: string | undefined;
+  let hydrated = false;
+  let generating = false;
+  let generationError: string | undefined;
+  const tasks = new DiagramTaskRegistry();
+  const draftQueue = new KnowledgeDraftQueue();
+  const listeners = new Set<(message: ProjectPanelMessage) => void>();
+  const post = (message: ProjectPanelMessage): void => { for (const listener of listeners) listener(message); };
+  interface RenderedDiagram { version: number; engineVersion: string; html: string; mapping?: ArchifyIdMapping; receipt: { status: string; issues: readonly DiagramValidationIssue[] } }
+  /** HTML artifacts are hundreds of kilobytes each, so only the most recently used renders stay
+   * cached instead of accumulating one entry per diagram in the project. */
+  const MAX_CACHED_RENDERS = 6;
+  const rendered = new Map<string, RenderedDiagram>();
+  const cacheRender = (diagramId: string, entry: RenderedDiagram): void => {
+    rendered.delete(diagramId);
+    rendered.set(diagramId, entry);
+    while (rendered.size > MAX_CACHED_RENDERS) {
+      const oldest = rendered.keys().next().value;
+      if (oldest === undefined) break;
+      rendered.delete(oldest);
+    }
+  };
   const projectAiProvider = options.projectAiProvider ? {
     id: options.projectAiProvider.id,
     generate: (request: Parameters<ProjectAiProvider["generate"]>[0], signal: AbortSignal) => options.projectAiProvider!.generate({
@@ -167,233 +345,327 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
       ...(selectedAiSpeed ? { speed: selectedAiSpeed } : {})
     }, signal)
   } satisfies ProjectAiProvider : undefined;
-  // Reuse the most recent architecture scan across page changes and the
-  // initialization flow.  A page change must not start a second scan while
-  // initialization is still working.
-  let latestScan: ArchitectureScanResult | undefined;
-  let scanInFlight: Promise<ArchitectureScanResult> | undefined;
-  let latestScanProgress: ProjectInitializationProgress | undefined;
-  const scanListeners = new Set<ProjectInitializationProgressListener>();
-  const getLatestScan = (onProgress?: ProjectInitializationProgressListener, signal?: AbortSignal): Promise<ArchitectureScanResult> => {
-    if (latestScan) {
-      const count = latestScan.files?.length ?? latestScan.modules.length;
-      onProgress?.({ phase: "scanning", completed: count, total: count, message: `Using the completed scan of ${count} files.` });
-      return Promise.resolve(latestScan);
-    }
-    if (onProgress) {
-      scanListeners.add(onProgress);
-      if (latestScanProgress) onProgress(latestScanProgress);
-    }
-    if (!scanInFlight) {
-      scanInFlight = options.scan((progress) => {
-        latestScanProgress = progress;
-        for (const listener of scanListeners) listener(progress);
-      }, signal).then((scan) => {
-        latestScan = scan;
-        return scan;
-      }).finally(() => { scanInFlight = undefined; scanListeners.clear(); latestScanProgress = undefined; });
-    }
-    return scanInFlight;
-  };
+
   const initializationService = new ProjectInitializationService({
-    scan: getLatestScan,
-    generate: async (scan, signal, _onProgress, _onOutput, onEvent) => {
-      if (!projectAiProvider) throw new Error("Project AI provider unavailable.");
-      const evidence = buildProjectEvidencePackage({ projectName: options.name, scan, files: scan.files ?? [] });
-      return new ProjectAiGenerationService(projectAiProvider).generate(evidence, { signal, onEvent: (event: ProjectAiActivityEvent) => { onEvent?.(event); } });
+    prepareEvidence: (signal, onProgress) => options.readEvidence({}, signal, onProgress),
+    generate: async (evidence, signal, _onProgress, onOutput) => {
+      if (!projectAiProvider) throw new Error("Project AI is unavailable: enable and select an available AI CLI in the input area first.");
+      const service = new ProjectAiGenerationService(projectAiProvider);
+      // `onOutput` is the single text sink: one activity event becomes exactly one output line.
+      return service.generate(evidence, {
+        signal,
+        onEvent: (event) => onOutput(activityLine(event))
+      });
     },
-    persist: async (result, signal, onProgress) => {
-      if (result.intent && !options.writeIntent) throw new Error("Project Intent storage is unavailable.");
-      if (result.diagrams?.length && !options.writeDiagrams) throw new Error("Project diagram storage is unavailable.");
+    persist: async (output, signal, onProgress) => {
+      const intent = output.intent;
+      const diagrams = output.diagrams ?? [];
+      if (!intent && !diagrams.length) throw new Error("AI did not return a savable project semantic model.");
+      if (intent) {
+        const intentErrors = validateProjectIntent(intent);
+        if (intentErrors.length) throw new Error(`Generated Project Intent is invalid: ${intentErrors.slice(0, 3).map((issue) => `${issue.path}: ${issue.message}`).join("; ")}`);
+      }
+      for (const diagram of diagrams) {
+        const errors = validateProjectDiagram(diagram).filter((issue) => issue.severity === "error");
+        if (errors.length) throw new Error(`Generated diagram '${diagram.id}' is invalid: ${errors.slice(0, 3).map((issue) => issue.message).join("; ")}`);
+      }
       const canSaveDefinition = options.store.readDefinition !== undefined && options.store.writeDefinition !== undefined;
-      const total = Number(Boolean(result.intent)) + (result.diagrams?.length ?? 0) + Number(canSaveDefinition);
+      const total = Number(Boolean(intent)) + diagrams.length + Number(canSaveDefinition);
       let completed = 0;
+      const saved = (label: string): void => { completed += 1; onProgress({ phase: "saving", completed, total, message: `Saved ${label}` }); };
       const checkActive = (): void => { if (signal.aborted) throw new Error("Project initialization was cancelled."); };
-      const saved = (path: string): void => {
-        completed += 1;
-        onProgress({ phase: "saving", completed, total, message: `Saved ${path}` });
-      };
-      onProgress({ phase: "saving", completed, total, message: `Saving ${total} generated project files…` });
+      onProgress({ phase: "saving", completed, total, message: `Saving ${total} generated file${total === 1 ? "" : "s"}…` });
       checkActive();
-      if (result.intent) {
-        await options.writeIntent!(result.intent);
-        generatedIntent = result.intent;
+      if (intent) {
+        if (!options.store.writeIntent) throw new Error("Project Intent storage is unavailable.");
+        await options.store.writeIntent(intent);
+        generatedIntent = intent;
         saved(".dext/project-intent.json");
       }
-      for (const diagram of result.diagrams ?? []) {
+      for (const diagram of diagrams) {
         checkActive();
-        await options.writeDiagrams!([diagram]);
-        saved(`.dext/diagrams/${encodeURIComponent(diagram.id)}.json`);
+        if (!options.store.writeDiagram) throw new Error("Project diagram storage is unavailable.");
+        await options.store.writeDiagram(diagram);
+        saved(`.dext/diagrams/${diagram.id}.json`);
       }
       if (canSaveDefinition) {
         checkActive();
         const definition = await options.store.readDefinition!();
-        const outcome = await options.store.writeDefinition!({
+        const result = await options.store.writeDefinition!({
           ...definition,
-          knowledge: { ...definition.knowledge, enabled: true, ...(result.intent ? { initialized: true } : {}) }
+          knowledge: { ...definition.knowledge, enabled: true, ...(intent ? { initialized: true } : {}) }
         }, definition.version);
-        if (outcome.status === "conflict") throw new Error("Project settings changed during initialization. Please retry.");
+        if (result.status === "conflict") throw new Error("Project settings changed during initialization. Please retry.");
         saved(".dext/project.json");
       }
-    }
-  });
-  const codeObjects = (scan: ArchitectureScanResult): ProjectPanelData["objects"] => {
-    const groups = new Map<string, typeof scan.modules>();
-    for (const module of scan.modules) {
-      const path = module.paths[0] ?? module.id;
-      const parts = path.split("/");
-      const area = parts.length > 2 ? parts.slice(0, 2).join("/") : (parts[0] ?? "project");
-      groups.set(area, [...(groups.get(area) ?? []), module]);
-    }
-    return [...groups.entries()].map(([area, modules]) => ({
-    id: `code-${area.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "") || "module"}`,
-    canonicalName: area.replace(/[^A-Za-z0-9._-]/g, "-") || "project",
-    displayName: area,
-    aliases: [],
-    kind: "module" as const,
-    description: `${modules.length} source modules in the ${area} area.`,
-    behavior: [],
-    paths: modules.flatMap((module) => module.paths),
-    relatedIds: [],
-    source: "code" as const,
-    confirmation: "accepted" as const,
-    validity: "current" as const,
-    ownership: "owned" as const,
-    confidence: 1,
-    evidence: modules.flatMap((module) => module.paths).slice(0, 5).map((path) => ({ path })),
-    version: 0
-    }));
-  };
-  const load = async (scanned?: ArchitectureScanResult): Promise<ProjectPanelData> => {
-      if (scanned) latestScan = scanned;
-      const scanPromise = scanned ? Promise.resolve(scanned) : getLatestScan();
-      const [storedObjects, architecture, scan, definition, persistedIntent, persistedDiagrams] = await Promise.all([
-        options.store.readObjects(),
-        options.store.readArchitecture(),
-        scanPromise,
-        options.store.readDefinition?.(),
-        options.readIntent?.(),
-        options.readDiagrams?.()
-      ]);
-      if (!generatedIntent && persistedIntent) generatedIntent = persistedIntent;
-      const objects = storedObjects.length ? storedObjects : generatedIntent ? [] : codeObjects(scan);
-      const persistedArchitecture = persistedDiagrams?.find((diagram) => diagram.kind === "architecture");
-      // A valid AI response may contain an intent without an explicit architecture diagram.
-      // Keep the Architecture tab semantic in that case by projecting its bounded contexts and
-      // dependency declarations into a readable map instead of silently falling back to imports.
-      const semanticArchitecture = persistedArchitecture ?? (persistedIntent ? {
-        confidence: 0,
-        nodes: persistedIntent.contexts.map((context) => ({ id: context.id, label: context.displayName ?? context.canonicalName, evidence: context.evidence })),
-        relations: persistedIntent.contexts.flatMap((context) => context.dependsOn.map((dependency, index) => ({ id: `${dependency}-${context.id}-${index}`, from: dependency, to: context.id, label: "depends on", confidence: context.confidence, evidence: context.evidence })))
-      } : undefined);
-      const architectureModules = semanticArchitecture
-        ? semanticArchitecture.nodes.map((node) => ({
-          id: node.id,
-          name: node.label,
-          language: "unknown" as const,
-          paths: node.evidence.map((entry) => entry.path),
-          source: "inferred" as const
-        }))
-        : scan.modules;
-      const architectureRelations = semanticArchitecture
-        ? semanticArchitecture.relations.map((relation) => ({
-          from: relation.from,
-          to: relation.to,
-          source: "inferred" as const,
-          confidence: relation.confidence ?? semanticArchitecture.confidence ?? 0,
-          ...(relation.label ? { reason: relation.label } : {}),
-          ...(relation.evidence[0]?.path ? { file: relation.evidence[0].path } : {}),
-          ...(relation.evidence[0]?.line ? { line: relation.evidence[0].line } : {})
-        }))
-        : scan.relations;
-      const snapshot = options.initialization?.() ?? initializationService.snapshot;
-      // The in-memory service starts idle on every extension activation. A
-      // project that was already initialized must still render as completed
-      // until a new run starts; otherwise the button briefly reappears and a
-      // completed project can look like it was never scanned.
-      const persistedSemanticModel = Boolean(persistedIntent || persistedDiagrams?.length);
-      const initialization = snapshot.status === "idle" && (definition?.knowledge.initialized || persistedSemanticModel)
-        ? { ...snapshot, status: "completed" as const, aiAvailable: persistedSemanticModel, intentGenerated: Boolean(persistedIntent), diagramsGenerated: persistedDiagrams?.length ?? 0, scannedFiles: snapshot.scannedFiles || scan.modules.length, phase: "saving" as const }
-        : snapshot;
-      selectedAiCli = definition?.ai.cli && (options.aiCli ?? []).some((candidate) => candidate.id === definition.ai.cli)
-        ? definition.ai.cli
-        : undefined;
-      const selectedProfile = (options.aiCli ?? []).find((candidate) => candidate.id === selectedAiCli);
-      selectedAiModel = definition?.ai.model && selectedProfile?.models?.some((model) => model.id === definition.ai.model)
-        ? definition.ai.model
-        : undefined;
-      const selectedModel = selectedProfile?.models?.find((model) => model.id === selectedAiModel);
-      selectedAiReasoning = definition?.ai.reasoningEffort && selectedModel?.reasoningEfforts?.includes(definition.ai.reasoningEffort)
-        ? definition.ai.reasoningEffort : undefined;
-      selectedAiSpeed = definition?.ai.speed && selectedModel?.speedTiers?.includes(definition.ai.speed)
-        ? definition.ai.speed : undefined;
-      return {
-        overview: {
-          name: options.name,
-          root: options.root,
-          languages: (await options.languages?.()) ?? [...new Set(scan.modules.map((module) => module.language))],
-          objects: objects.length,
-          accepted: objects.filter((object) => object.confirmation === "accepted").length,
-          drafts: objects.filter((object) => object.confirmation === "draft").length,
-          needsVerification: objects.filter((object) => object.validity !== "current").length,
-          initialization: {
-            status: initialization.status,
-            aiAvailable: initialization.aiAvailable,
-            ...(initialization.error ? { error: initialization.error } : {}),
-            ...(initialization.phase ? { phase: initialization.phase } : {}),
-            ...(initialization.progress !== undefined ? { progress: initialization.progress } : {}),
-            ...(initialization.progressTotal !== undefined ? { progressTotal: initialization.progressTotal } : {}),
-            ...(initialization.message ? { message: initialization.message } : {}),
-            ...(initialization.output ? { output: initialization.output } : {}),
-            ...(initialization.startedAt !== undefined ? { startedAt: initialization.startedAt } : {}),
-            ...(initialization.finishedAt !== undefined ? { finishedAt: initialization.finishedAt } : {}),
-            ...(initialization.intentGenerated !== undefined ? { intentGenerated: initialization.intentGenerated } : {}),
-            ...(initialization.diagramsGenerated !== undefined ? { diagramsGenerated: initialization.diagramsGenerated } : {}),
-            // An idle panel can show the already loaded architecture scan,
-            // while a running/completed initialization must report its own
-            // count (including a legitimate value of zero).
-            scannedFiles: initialization.status === "idle" ? (initialization.scannedFiles || scan.modules.length) : initialization.scannedFiles
-          },
-          scanRoots: definition?.scan.roots ?? [],
-          ...(options.aiCli?.length ? {
-            aiCli: options.aiCli,
-            ...(selectedAiCli ? { selectedAiCli } : {}),
-            ...(selectedAiModel ? { selectedAiModel } : {})
-            ,...(selectedAiReasoning ? { selectedAiReasoning } : {})
-            ,...(selectedAiSpeed ? { selectedAiSpeed } : {})
-          } : {})
-        },
-        objects,
-        drafts: options.drafts?.() ?? [],
-        ...(generatedIntent ? { knowledge: { brief: generatedIntent.brief.summary, contexts: generatedIntent.contexts.map((item) => ({ id: item.id, name: item.displayName ?? item.canonicalName, description: item.purpose, evidence: item.evidence.map((entry) => entry.path) })), terms: generatedIntent.terms.map((item) => ({ id: item.id, canonical: item.canonicalName, aliases: item.aliases, definition: item.definition })), flows: generatedIntent.flows.map((item) => ({ id: item.id, name: item.displayName ?? item.canonicalName, steps: item.steps.map((step) => step.label) })) } } : {}),
-          architecture: {
-          semanticSource: semanticArchitecture ? "ai" : "code",
-          modules: architectureModules,
-          relations: architectureRelations,
-          decisions: architecture.decisions,
-          ...(options.diagramRegistry ? {
-            diagramKind: "architecture" as ProjectDiagramKind,
-            adapter: {
-              ...(options.diagramRegistry.select("architecture") ? { currentId: options.diagramRegistry.select("architecture")!.id } : {}),
-              choices: options.diagramRegistry.choices("architecture"),
-              fallback: options.diagramRegistry.defaults("architecture"),
-              recommendation: "Structurizr 用于 C4 文档，Archify 用于交互探索，draw.io 用于人工编辑。"
-            }
-          } : {}),
-            ...(scan.coverage?.length || scan.unsupported.length
-              ? { coverage: [...(scan.coverage ?? []), ...scan.unsupported.map((entry) => `${entry.path}: ${entry.reason}`)] }
-            : {}),
-            ...(persistedDiagrams?.length ? { diagramVersions: persistedDiagrams.map((diagram) => ({ id: diagram.id, adapterId: "project", version: diagram.version, status: diagram.review ?? "draft", updatedAt: diagram.updatedAt })) } : {})
+    },
+    ...(options.now ? { now: options.now } : {})
+  }, draftQueue);
+
+  const readDiagrams = async (): Promise<ProjectDiagram[]> => sortProjectDiagrams(await (options.store.readDiagrams?.() ?? []));
+
+  const renderDiagram = async (diagramId: string, version?: number, renderOptions: { refresh?: boolean } = {}): Promise<void> => {
+    try {
+      const diagrams = await readDiagrams();
+      const diagram = diagrams.find((candidate) => candidate.id === diagramId);
+      if (!diagram) { post({ type: "projectDiagramRenderFailed", diagramId, error: "The diagram no longer exists." }); return; }
+      if (version !== undefined && diagram.version !== version) {
+        post({ type: "projectDiagramRenderFailed", diagramId, requestedVersion: version, actualVersion: diagram.version, error: "The diagram version changed. Select it again." });
+        return;
+      }
+      const registry = options.diagramRegistry;
+      if (!registry) { post({ type: "projectDiagramRenderFailed", diagramId, error: "Archify runtime is not registered." }); return; }
+      if (renderOptions.refresh) { rendered.delete(diagramId); registry.cancel(diagramId); }
+      const engine = await registry.engineInfo();
+      if (!engine.available) { post({ type: "projectDiagramRenderFailed", diagramId, error: engine.reason ?? "Archify runtime is unavailable." }); return; }
+      const cached = rendered.get(diagramId);
+      if (cached && cached.version === diagram.version && cached.engineVersion === engine.version && !renderOptions.refresh) {
+        post({ type: "projectDiagramRendered", diagramId, requestedVersion: version, displayedVersion: cached.version, usedLastGood: false, html: cached.html, mapping: cached.mapping, receipt: cached.receipt, updatedAt: diagram.updatedAt });
+        return;
+      }
+      const outcome = await registry.render(diagram, { format: "html" });
+      if (outcome.status === "cancelled") return;
+      if (outcome.status === "failed" || !outcome.artifact) {
+        if (outcome.usedLastGood && outcome.snapshot && outcome.artifact) {
+          // Show the same diagram's last successful render, clearly labelled with its actual version.
+          const snapshotDiagram = outcome.snapshot.diagram;
+          let mapping: ArchifyIdMapping | undefined;
+          try {
+            const adapter = registry.list()[0];
+            if (adapter) mapping = mappingOf(await adapter.transform(snapshotDiagram));
+          } catch { mapping = undefined; }
+          post({
+            type: "projectDiagramRendered",
+            diagramId,
+            requestedVersion: diagram.version,
+            displayedVersion: snapshotDiagram.version,
+            usedLastGood: true,
+            html: outcome.artifact.content,
+            mapping,
+            receipt: { status: outcome.receipt.status, issues: outcome.receipt.issues },
+            updatedAt: snapshotDiagram.updatedAt,
+            error: outcome.error
+          });
+          return;
         }
-      };
+        post({ type: "projectDiagramRenderFailed", diagramId, requestedVersion: diagram.version, error: outcome.error ?? "Archify rendering failed.", issues: outcome.receipt.issues });
+        return;
+      }
+      let mapping: ArchifyIdMapping | undefined;
+      try {
+        const adapter = registry.list()[0];
+        if (adapter) mapping = mappingOf(await adapter.transform(diagram));
+      } catch { mapping = undefined; }
+      const receipt = { status: outcome.receipt.status, issues: outcome.receipt.issues };
+      const cachedEntry: RenderedDiagram = { version: diagram.version, engineVersion: engine.version, html: outcome.artifact.content as string, receipt };
+      if (mapping) cachedEntry.mapping = mapping;
+      cacheRender(diagramId, cachedEntry);
+      post({ type: "projectDiagramRendered", diagramId, requestedVersion: version, displayedVersion: diagram.version, usedLastGood: false, html: outcome.artifact.content, mapping, receipt, updatedAt: diagram.updatedAt });
+    } catch (error) {
+      post({ type: "projectDiagramRenderFailed", diagramId, error: error instanceof Error ? error.message : String(error) });
+    }
+  };
+
+  const generateDiagram = async (request: { requirement: string; kind?: string; diagramId?: string }): Promise<void> => {
+    if (generating) { post({ type: "projectDiagramGenerateFailed", error: "A diagram generation task is already running." }); return; }
+    const requirement = request.requirement.trim();
+    if (!requirement) { post({ type: "projectDiagramGenerateFailed", error: "Describe the business requirement for the diagram first." }); return; }
+    const kind = request.kind && (["architecture", "workflow", "sequence", "data_flow", "lifecycle"] as string[]).includes(request.kind)
+      ? request.kind as ProjectDiagramKind : undefined;
+    if (!projectAiProvider) { post({ type: "projectDiagramGenerateFailed", error: "Project AI is unavailable: select an available AI CLI first." }); return; }
+    generating = true;
+    generationError = undefined;
+    const signal = tasks.begin("generate");
+    post({ type: "projectDiagramGenerating", active: true, message: "Reading bounded evidence…" });
+    try {
+      const diagrams = await readDiagrams();
+      const target = request.diagramId ? diagrams.find((candidate) => candidate.id === request.diagramId) : undefined;
+      if (request.diagramId && !target) throw new Error("The diagram to update does not exist.");
+      const evidence = await options.readEvidence({ requirement }, signal, (progress) => {
+        post({ type: "projectDiagramProgress", message: progress.message ?? "Preparing evidence…", phase: progress.phase });
+      });
+      post({ type: "projectDiagramProgress", message: "Calling the AI to generate the diagram…" });
+      const service = new ProjectAiGenerationService(projectAiProvider);
+      const result = await service.generateDiagram(evidence, {
+        requirement,
+        ...(kind ? { kind } : {}),
+        ...(target ? { target: { id: target.id, title: target.title, kind: target.kind, version: target.version } } : {})
+      }, {
+        signal: signal,
+        onEvent: (event) => post({ type: "projectDiagramProgress", message: activityLine(event).trim() || "Generating diagram…" })
+      });
+      let diagram = result.diagram;
+      if (!target) {
+        const used = new Set(diagrams.map((candidate) => candidate.id));
+        if (used.has(diagram.id)) {
+          let suffix = 2;
+          while (used.has(`${diagram.id}-${suffix}`)) suffix += 1;
+          diagram = { ...diagram, id: `${diagram.id}-${suffix}` };
+        }
+      }
+      if (!options.store.writeDiagram) throw new Error("Project diagram storage is unavailable.");
+      await options.store.writeDiagram(diagram);
+      post({ type: "projectDiagramGenerated", diagram: describeProjectDiagram(diagram), updated: Boolean(target) });
+      await renderDiagram(diagram.id, diagram.version, { refresh: true });
+    } catch (error) {
+      generationError = error instanceof Error ? error.message : String(error);
+      post({ type: "projectDiagramGenerateFailed", error: generationError });
+    } finally {
+      generating = false;
+      tasks.finish("generate", signal);
+      post({ type: "projectDiagramGenerating", active: false });
+    }
+  };
+
+  const exportDiagram = async (request: { diagramId: string; version?: number; format?: string; content?: string }): Promise<void> => {
+    try {
+      const format = request.format === "svg" ? "svg" as const : request.format === "html" ? "html" as const : undefined;
+      if (!format) { post({ type: "projectDiagramExportFailed", error: `Unsupported export format '${request.format ?? ""}'.` }); return; }
+      const resolved = resolveDiagramTarget(await readDiagrams(), request.diagramId, request.version);
+      if (!resolved.ok || !resolved.diagram) { post({ type: "projectDiagramExportFailed", error: resolved.reason ?? "The diagram no longer exists." }); return; }
+      const diagram = resolved.diagram;
+      const cached = rendered.get(diagram.id);
+      let content: string;
+      if (format === "html") {
+        if (!cached || cached.version !== diagram.version) { post({ type: "projectDiagramExportFailed", error: "Render the current diagram version successfully before exporting." }); return; }
+        content = cached.html;
+      } else {
+        if (!cached || !isDiagramExportPayload("svg", request.content, request.version, cached.version)) { post({ type: "projectDiagramExportFailed", error: "The exported content does not match the displayed diagram version." }); return; }
+        content = request.content as string;
+        if (new TextEncoder().encode(content).byteLength > 16 * 1024 * 1024) { post({ type: "projectDiagramExportFailed", error: "The SVG export exceeds the 16 MiB limit." }); return; }
+      }
+      if (format === "html" && !isDiagramExportPayload("html", content, request.version, cached?.version)) { post({ type: "projectDiagramExportFailed", error: "The HTML export content is incomplete." }); return; }
+      const target = await vscode.window.showSaveDialog({
+        defaultUri: vscode.Uri.joinPath(options.rootUri, `${safeFileName(diagram.title)}.${format}`),
+        saveLabel: format === "html" ? "Export standalone HTML" : "Export full SVG"
+      });
+      if (!target) { post({ type: "projectDiagramExported", format, cancelled: true }); return; }
+      await vscode.workspace.fs.writeFile(target, textEncoder.encode(content));
+      post({ type: "projectDiagramExported", format, fileName: target.fsPath.split(/[\\/]/).pop() ?? "" });
+    } catch (error) {
+      post({ type: "projectDiagramExportFailed", error: error instanceof Error ? error.message : String(error) });
+    }
+  };
+
+  const focusDiagramNode = async (diagramId: string, nodeId: string): Promise<void> => {
+    try {
+      const diagrams = await readDiagrams();
+      const diagram = diagrams.find((candidate) => candidate.id === diagramId);
+      const node = diagram?.nodes.find((candidate) => candidate.id === nodeId);
+      if (!node || !options.openEvidence) return;
+      const evidence = node.evidence.find((entry) => entry.path && isAllowedEvidencePath(entry.path));
+      if (!evidence) return;
+      await options.openEvidence(evidence.path, evidence.line);
+    } catch {
+      // Opening evidence is best effort; an unreadable path never breaks the viewer.
+    }
+  };
+
+  const load = async (): Promise<ProjectPanelData> => {
+    const [objects, architecture, definition, persistedIntent, persistedDiagrams] = await Promise.all([
+      options.store.readObjects(),
+      options.store.readArchitecture(),
+      options.store.readDefinition?.(),
+      options.store.readIntent?.(),
+      options.store.readDiagrams?.()
+    ]);
+    if (!hydrated) {
+      hydrated = true;
+      const hydration = options.store.readInitialization
+        ? await options.store.readInitialization()
+        : { markedInitialized: false, hasIntent: Boolean(persistedIntent), diagramCount: persistedDiagrams?.length ?? 0 };
+      initializationService.hydrate(hydration);
+    }
+    if (persistedIntent) generatedIntent = persistedIntent;
+    const intent = generatedIntent ?? persistedIntent;
+    const diagrams = sortProjectDiagrams(persistedDiagrams ?? []);
+    const initialization = initializationService.snapshot;
+    const engine = options.diagramRegistry ? await options.diagramRegistry.engineInfo() : undefined;
+    const selected = diagrams.find((diagram) => diagram.kind === "architecture") ?? diagrams[0];
+    const ruleReport = architectureRuleReport(diagrams, { ...(architecture.diagramId ? { diagramId: architecture.diagramId } : {}), rules: architecture.rules ?? [] });
+    selectedAiCli = definition?.ai.cli && (options.aiCli ?? []).some((candidate) => candidate.id === definition.ai.cli)
+      ? definition.ai.cli : undefined;
+    const selectedProfile = (options.aiCli ?? []).find((candidate) => candidate.id === selectedAiCli);
+    selectedAiModel = definition?.ai.model && selectedProfile?.models?.some((model) => model.id === definition.ai.model)
+      ? definition.ai.model : undefined;
+    const selectedModel = selectedProfile?.models?.find((model) => model.id === selectedAiModel);
+    selectedAiReasoning = definition?.ai.reasoningEffort && selectedModel?.reasoningEfforts?.includes(definition.ai.reasoningEffort)
+      ? definition.ai.reasoningEffort : undefined;
+    selectedAiSpeed = definition?.ai.speed && selectedModel?.speedTiers?.includes(definition.ai.speed)
+      ? definition.ai.speed : undefined;
+    return {
+      overview: {
+        name: options.name,
+        root: options.root,
+        objects: objects.length,
+        accepted: objects.filter((object) => object.confirmation === "accepted").length,
+        drafts: objects.filter((object) => object.confirmation === "draft").length,
+        needsVerification: objects.filter((object) => object.validity !== "current").length,
+        initialization,
+        ...(options.aiCli?.length ? {
+          aiCli: options.aiCli,
+          ...(selectedAiCli ? { selectedAiCli } : {}),
+          ...(selectedAiModel ? { selectedAiModel } : {}),
+          ...(selectedAiReasoning ? { selectedAiReasoning } : {}),
+          ...(selectedAiSpeed ? { selectedAiSpeed } : {})
+        } : {})
+      },
+      objects,
+      drafts: draftQueue.list(),
+      ...(intent ? {
+        knowledge: {
+          brief: intent.brief.summary,
+          contexts: intent.contexts.map((item) => ({ id: item.id, name: item.displayName ?? item.canonicalName, description: item.purpose, evidence: item.evidence.map((entry) => entry.path) })),
+          terms: intent.terms.map((item) => ({ id: item.id, canonical: item.canonicalName, aliases: item.aliases, definition: item.definition })),
+          flows: intent.flows.map((item) => ({ id: item.id, name: item.displayName ?? item.canonicalName, steps: item.steps.map((step) => step.label) }))
+        }
+      } : {}),
+      architecture: {
+        diagrams: diagrams.map(describeProjectDiagram),
+        ...(selected ? { selected: describeProjectDiagram(selected) } : {}),
+        knowledgeUninitialized: initialization.status === "uninitialized",
+        ...(engine ? { engine } : {}),
+        ...(generating ? { generating: true } : {}),
+        ...(generationError ? { generationError } : {}),
+        decisions: architecture.decisions,
+        // Declared rules are evaluated against the saved diagram they were authored for, so the page
+        // can show boundaries that the diagram currently breaks (and why nothing was evaluated).
+        ...(ruleReport ? {
+          rules: ruleReport.rules,
+          violations: ruleReport.violations,
+          ...(ruleReport.note ? { rulesNote: ruleReport.note } : {})
+        } : {})
+      }
     };
+  };
+
   return {
     load,
+    subscribe: (listener: (message: ProjectPanelMessage) => void): (() => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
     initialization: () => initializationService.snapshot,
     onInitializationChange: (listener: (state: ProjectInitializationState) => void): (() => void) => initializationService.subscribe(listener),
-    invalidateScan: (): void => {
-      latestScan = undefined;
-      scanInFlight = undefined;
+    renderDiagram,
+    generateDiagram,
+    exportDiagram,
+    focusDiagramNode,
+    cancelDiagramWork: (): void => {
+      options.diagramRegistry?.cancelAll();
+      tasks.cancelAll();
+    },
+    initialize: async (): Promise<ProjectPanelData> => {
+      // Start synchronously so the editor can render the running snapshot before this async method
+      // reaches its first await.
+      const task = initializationService.start();
+      // Keep a rejection handler attached even if the optimistic running render fails before the
+      // normal await below.
+      void task.promise.catch(() => undefined);
+      const state = await task.promise;
+      if (state.status === "cancelled") throw new Error("Project initialization was cancelled.");
+      if (state.status !== "completed") throw new Error(state.error ?? "Project initialization failed.");
+      return load();
     },
     ...(options.store.readDefinition && options.store.writeDefinition ? {
       setAiCli: async (cli?: string): Promise<void> => {
@@ -449,26 +721,6 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
         const saved = await options.store.writeDefinition!({ ...definition, ai }, definition.version);
         if (saved.status === "conflict") throw new Error("Project settings changed before speed could be saved. Please retry.");
         selectedAiSpeed = speed;
-      }
-    } : {}),
-    ...(options.diagramRegistry ? {
-      setDiagramAdapter: async (kind: string, adapterId?: string): Promise<void> => {
-        if (!(["architecture", "workflow", "sequence", "data_flow", "lifecycle"] as string[]).includes(kind)) throw new Error(`Unsupported diagram kind '${kind}'.`);
-        options.diagramRegistry!.setPreference(kind as ProjectDiagramKind, adapterId);
-        await options.writeDiagramAdapterPreferences?.(options.diagramRegistry!.exportPreferences());
-      }
-    } : {}),
-    ...(options.exportDiagram ? { exportDiagram: options.exportDiagram } : {}),
-    ...(options.store.readDefinition && options.store.writeDefinition ? {
-      initialize: async (): Promise<ProjectPanelData> => {
-        // Start synchronously so the editor can render the running snapshot
-        // before this async method reaches its first await. `load()` has
-        // already hydrated the project choice in normal panel interaction.
-        const task = initializationService.start();
-        const state = await task.promise;
-        if (state.status === "failed") throw new Error(state.error ?? "Project initialization failed.");
-        const scan = await getLatestScan();
-        return load(scan);
       }
     } : {})
   };

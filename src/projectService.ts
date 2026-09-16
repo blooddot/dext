@@ -1,10 +1,14 @@
-import type { ArchitectureScanResult } from "./core/projectArchitecture.js";
+import type { ProjectEvidencePackage } from "./core/projectAiGeneration.js";
 import { KnowledgeDraftQueue, type KnowledgeSuggestion } from "./core/projectKnowledgeReview.js";
 import type { ProjectIntent } from "./core/projectIntent.js";
 import type { ProjectDiagram } from "./core/projectDiagram.js";
 
-export type ProjectInitializationStatus = "idle" | "running" | "completed" | "cancelled" | "failed";
-export type ProjectInitializationPhase = "scanning" | "generating" | "saving";
+/**
+ * Knowledge initialization states. `uninitialized` is deliberately distinct from `failed` and
+ * `cancelled`: only a valid saved intent/diagram result can become `completed`.
+ */
+export type ProjectInitializationStatus = "uninitialized" | "running" | "completed" | "cancelled" | "failed";
+export type ProjectInitializationPhase = "preparing" | "generating" | "saving";
 
 export interface ProjectInitializationProgress {
   phase: ProjectInitializationPhase;
@@ -19,10 +23,6 @@ export interface ProjectInitializationState {
   status: ProjectInitializationStatus;
   startedAt?: number;
   finishedAt?: number;
-  /** False when the AI proposer was unavailable; the project still works without drafts. */
-  aiAvailable: boolean;
-  drafts: number;
-  scannedFiles: number;
   /** The operation currently executing, including persistence before completion. */
   phase?: ProjectInitializationPhase;
   /** Actual completed work units in the current phase, never an estimated percentage. */
@@ -35,6 +35,8 @@ export interface ProjectInitializationState {
   intentGenerated?: boolean;
   /** Number of diagram kinds generated for this run. */
   diagramsGenerated?: number;
+  /** Draft suggestions queued by a legacy propose hook; the AI flow typically produces none. */
+  drafts: number;
   error?: string;
 }
 
@@ -44,13 +46,28 @@ export interface ProjectInitializationOutput {
   diagrams?: ProjectDiagram[];
 }
 
+export interface ProjectInitializationHydration {
+  /** A valid saved Project Intent exists. */
+  hasIntent: boolean;
+  /** Number of valid saved diagrams; diagrams stay viewable without a knowledge initialization. */
+  diagramCount: number;
+  /** Legacy `.dext/project.json` flag. Never sufficient on its own. */
+  markedInitialized?: boolean;
+}
+
 export interface ProjectInitializationDependencies {
-  scan(onProgress?: ProjectInitializationProgressListener, signal?: AbortSignal): Promise<ArchitectureScanResult>;
-  propose?(scan: ArchitectureScanResult): Promise<KnowledgeSuggestion[]>;
-  /** Optional semantic generation hook. Persistence is deliberately owned by the host/store. */
-  generate?(scan: ArchitectureScanResult, signal: AbortSignal, onProgress: ProjectInitializationProgressListener, onOutput: (text: string) => void, onEvent?: (event: unknown) => void): Promise<ProjectInitializationOutput>;
+  /** Reads a bounded text evidence package only when the user starts initialization. */
+  prepareEvidence(signal: AbortSignal, onProgress: ProjectInitializationProgressListener): Promise<ProjectEvidencePackage>;
+  /** AI generation; must throw with a clear reason when no provider is available. */
+  generate(
+    evidence: ProjectEvidencePackage,
+    signal: AbortSignal,
+    onProgress: ProjectInitializationProgressListener,
+    /** Sole text sink for provider activity; the host formats its own structured events into it. */
+    onOutput: (text: string) => void
+  ): Promise<ProjectInitializationOutput>;
   /** Persists every artifact before the initialization can become completed. */
-  persist?(output: ProjectInitializationOutput, signal: AbortSignal, onProgress: ProjectInitializationProgressListener): Promise<void>;
+  persist(output: ProjectInitializationOutput, signal: AbortSignal, onProgress: ProjectInitializationProgressListener): Promise<void>;
   now?: () => number;
 }
 
@@ -68,14 +85,23 @@ function initializationErrorMessage(error: unknown): string {
 }
 
 /**
- * Runs the non-blocking `Initialize Knowledge` flow: index and scan sources, then queue AI drafts.
- * Cancelling, failing, or missing AI never blocks development; a retry starts a clean run.
+ * Runs the explicit `Initialize Knowledge` flow: prepare bounded evidence, generate with AI,
+ * validate, then save. Cancelling, failing, or a missing AI never fakes success and never blocks
+ * development; a retry starts a clean run whose late predecessor cannot overwrite state.
  */
 export class ProjectInitializationService {
-  private state: ProjectInitializationState = { status: "idle", aiAvailable: true, drafts: 0, scannedFiles: 0 };
+  private state: ProjectInitializationState = { status: "uninitialized", drafts: 0 };
   private controller: AbortController | undefined;
   private activeTask: ProjectInitializationTask | undefined;
   private readonly listeners = new Set<(state: ProjectInitializationState) => void>();
+  private readonly now: () => number;
+
+  constructor(
+    private readonly dependencies: ProjectInitializationDependencies,
+    private readonly queue: KnowledgeDraftQueue = new KnowledgeDraftQueue()
+  ) {
+    this.now = dependencies.now ?? Date.now;
+  }
 
   subscribe(listener: (state: ProjectInitializationState) => void): () => void {
     this.listeners.add(listener);
@@ -92,25 +118,49 @@ export class ProjectInitializationService {
     this.state = next;
     this.publish();
   }
-  private readonly now: () => number;
-
-  constructor(
-    private readonly dependencies: ProjectInitializationDependencies,
-    private readonly queue: KnowledgeDraftQueue = new KnowledgeDraftQueue()
-  ) {
-    this.now = dependencies.now ?? Date.now;
-  }
 
   get snapshot(): ProjectInitializationState {
     return { ...this.state };
   }
 
-  /** Idempotent while running: the same in-flight task is returned instead of a second scan. */
+  /**
+   * Restores state from persisted data after a restart. A legacy `initialized` flag or scan data
+   * alone never counts as success; only a valid intent makes the knowledge model completed.
+   */
+  hydrate(input: ProjectInitializationHydration): void {
+    if (this.state.status === "running") return;
+    const diagramCount = Math.max(0, input.diagramCount);
+    if (input.hasIntent) {
+      this.replaceState({
+        status: "completed",
+        finishedAt: this.now(),
+        intentGenerated: true,
+        diagramsGenerated: diagramCount,
+        drafts: this.queue.list().length
+      });
+      return;
+    }
+    this.replaceState({
+      status: "uninitialized",
+      intentGenerated: false,
+      diagramsGenerated: diagramCount,
+      drafts: this.queue.list().length,
+      ...(!input.hasIntent && diagramCount > 0 ? { message: "Saved diagrams remain viewable; project knowledge is not initialized yet." } : {})
+    });
+  }
+
+  /** Idempotent while running: the same in-flight task is returned instead of a second run. */
   start(): ProjectInitializationTask {
     if (this.activeTask && this.state.status === "running") return this.activeTask;
     const controller = new AbortController();
     this.controller = controller;
-    this.replaceState({ status: "running", startedAt: this.now(), aiAvailable: true, drafts: 0, scannedFiles: 0, phase: "scanning", message: "Discovering source files…", intentGenerated: false, diagramsGenerated: 0 });
+    this.replaceState({
+      status: "running",
+      startedAt: this.now(),
+      drafts: this.queue.list().length,
+      phase: "preparing",
+      message: "Preparing bounded text evidence…"
+    });
     const promise = this.run(controller.signal);
     this.activeTask = { promise, cancel: () => { if (this.controller === controller) this.cancel(); } };
     return this.activeTask;
@@ -139,16 +189,8 @@ export class ProjectInitializationService {
         ...previous,
         phase: update.phase,
         ...(measured ? { progress: Math.max(0, Math.min(update.completed!, update.total!)), progressTotal: update.total } : {}),
-        ...(update.message ? { message: update.message } : {}),
-        ...(update.phase === "scanning" && update.completed !== undefined ? { scannedFiles: update.completed } : {})
+        ...(update.message ? { message: update.message } : {})
       });
-    };
-    const onEvent = (event: unknown): void => {
-      if (!event || typeof event !== "object") return;
-      const value = "text" in event && typeof event.text === "string" ? event.text : "";
-      const title = "title" in event && typeof event.title === "string" ? event.title : "";
-      const line = value || title ? `${title && value ? `${title}: ` : title}${value}` : "";
-      if (line) onOutput(`${line}\n`);
     };
     const onOutput = (text: string): void => {
       if (!current() || signal.aborted || !text) return;
@@ -158,25 +200,20 @@ export class ProjectInitializationService {
       if (signal.aborted || !current()) throw new Error("Project initialization was cancelled.");
     };
     try {
-      const scan = await this.dependencies.scan(onProgress, signal);
+      const evidence = await this.dependencies.prepareEvidence(signal, onProgress);
       assertActive();
-      this.replaceState({ ...this.state, scannedFiles: scan.files?.length ?? scan.modules.length });
-      onProgress({ phase: "generating", message: "Waiting for AI analysis…" });
-      let output: ProjectInitializationOutput = {};
-      if (this.dependencies.generate) output = await this.dependencies.generate(scan, signal, onProgress, onOutput, onEvent);
-      else if (this.dependencies.propose) output = { drafts: await this.dependencies.propose(scan) };
+      onProgress({ phase: "generating", message: "Calling the project AI to generate the semantic model…" });
+      const output = await this.dependencies.generate(evidence, signal, onProgress, onOutput);
       assertActive();
-      if (this.dependencies.persist) {
-        onProgress({ phase: "saving", message: "Preparing generated files for saving…" });
-        await this.dependencies.persist(output, signal, onProgress);
-        assertActive();
-      }
+      onProgress({ phase: "saving", message: "Validating and saving the generated result…" });
+      await this.dependencies.persist(output, signal, onProgress);
+      assertActive();
       for (const draft of output.drafts ?? []) this.queue.enqueue(draft);
       this.replaceState({
         ...this.state,
         status: "completed",
         finishedAt: this.now(),
-        aiAvailable: this.dependencies.generate !== undefined || this.dependencies.propose !== undefined,
+        phase: "saving",
         drafts: this.queue.list().length,
         intentGenerated: output.intent !== undefined,
         diagramsGenerated: output.diagrams?.length ?? 0
@@ -184,87 +221,15 @@ export class ProjectInitializationService {
       return this.snapshot;
     } catch (error) {
       // A cancelled older run may finish after its retry; it must never overwrite the new run.
-      if (!current()) return { status: "cancelled", aiAvailable: false, drafts: 0, scannedFiles: 0 };
-      const legacyProposerFailure = this.dependencies.generate === undefined && this.dependencies.propose !== undefined && !signal.aborted;
+      if (!current()) return { status: "cancelled", drafts: 0, intentGenerated: false, diagramsGenerated: 0 };
       this.replaceState({
         ...this.state,
-        status: signal.aborted ? "cancelled" : legacyProposerFailure ? "completed" : "failed",
+        status: signal.aborted ? "cancelled" : "failed",
         finishedAt: this.now(),
-        aiAvailable: false,
         drafts: this.queue.list().length,
         ...(signal.aborted ? {} : { error: initializationErrorMessage(error) })
       });
       return this.snapshot;
     }
-  }
-}
-
-export interface ProjectScanSchedulerOptions {
-  /** File events within this window are merged into one scan. */
-  debounceMs?: number;
-  /** Upper bound on scans started per window, so keystrokes cannot start a model request each time. */
-  maxRequestsPerWindow?: number;
-  windowMs?: number;
-}
-
-/**
- * Coalesces file events and rate-limits scans. A late scan result is rejected when a newer input
- * version already exists, so an older result can never overwrite newer knowledge.
- */
-export class ProjectScanScheduler {
-  private readonly pending = new Set<string>();
-  private lastScanAt = Number.NEGATIVE_INFINITY;
-  private version = 0;
-  private scansInWindow = 0;
-  private windowStartedAt = Number.NEGATIVE_INFINITY;
-  private readonly debounceMs: number;
-  private readonly maxRequestsPerWindow: number;
-  private readonly windowMs: number;
-
-  constructor(options: ProjectScanSchedulerOptions = {}) {
-    this.debounceMs = options.debounceMs ?? 500;
-    this.maxRequestsPerWindow = options.maxRequestsPerWindow ?? 4;
-    this.windowMs = options.windowMs ?? 60_000;
-  }
-
-  get inputVersion(): number {
-    return this.version;
-  }
-
-  get pendingPaths(): string[] {
-    return [...this.pending].sort();
-  }
-
-  /** Records a file event. Returns the new input version. */
-  notify(path: string, now = Date.now()): number {
-    this.pending.add(path.replaceAll("\\", "/"));
-    this.version += 1;
-    this.lastScanAt = now;
-    return this.version;
-  }
-
-  /** Returns the coalesced paths once the debounce window passed and the rate limit allows a scan. */
-  drain(now = Date.now()): string[] | undefined {
-    if (!this.pending.size) return undefined;
-    if (now - this.lastScanAt < this.debounceMs) return undefined;
-    if (now - this.windowStartedAt >= this.windowMs) {
-      this.windowStartedAt = now;
-      this.scansInWindow = 0;
-    }
-    if (this.scansInWindow >= this.maxRequestsPerWindow) return undefined;
-    this.scansInWindow += 1;
-    const paths = this.pendingPaths;
-    this.pending.clear();
-    return paths;
-  }
-
-  /** Begins a scan over the current input version. */
-  begin(): number {
-    return this.version;
-  }
-
-  /** True only when no newer file event arrived while the scan was running. */
-  acceptResult(scannedVersion: number): boolean {
-    return scannedVersion === this.version;
   }
 }

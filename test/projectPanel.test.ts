@@ -1,192 +1,127 @@
 import { describe, expect, it } from "vitest";
+import { renderProjectPanel, type ProjectPanelData } from "../src/webview/projectPanel.js";
 import { projectObjectSchema } from "../src/core/projectKnowledge.js";
-import { PROJECT_PANEL_PAGES, renderProjectPanel, type ProjectPanelData } from "../src/webview/projectPanel.js";
-import { relationSourceLabel } from "../src/webview/projectArchitectureView.js";
+import type { KnowledgeSuggestion } from "../src/core/projectKnowledgeReview.js";
+import type { ProjectInitializationState } from "../src/projectService.js";
 
-const object = projectObjectSchema.parse({
-  id: "TaskQuery", canonicalName: "TaskQuery", displayName: "任务查询", kind: "feature",
-  source: "user", confirmation: "accepted", validity: "needs_verification", description: "Runs a query."
+const initialization = (status: ProjectInitializationState["status"], extra: Partial<ProjectInitializationState> = {}): ProjectInitializationState => ({ status, drafts: 0, ...extra });
+
+const data = (overrides: Partial<ProjectPanelData> = {}, state: ProjectInitializationState = initialization("uninitialized")): ProjectPanelData => ({
+  overview: { name: "Fixture", root: "C:/ws", objects: 0, accepted: 0, drafts: 0, needsVerification: 0, initialization: state },
+  objects: [],
+  architecture: { diagrams: [] },
+  ...overrides
 });
 
-const data: ProjectPanelData = {
-  overview: {
-    name: "Fixture", root: "C:/ws", languages: ["typescript", "python", "rust"],
-    objects: 1, accepted: 1, drafts: 0, needsVerification: 1,
-    initialization: { status: "completed", aiAvailable: true, scannedFiles: 12 }
-  },
-  objects: [object],
-  drafts: [{ id: "d1", kind: "update", proposed: { description: "draft" }, evidence: [], reason: "AI saw a change", source: "ai", baseVersion: 1 }],
-  architecture: {
-    modules: [{ id: "src/app", name: "app", language: "typescript", paths: ["src/app.ts"], source: "detected" }],
-    relations: [
-      { from: "src/app", to: "src/lib", source: "detected", confidence: 1, file: "src/app.ts", line: 2 },
-      { from: "ui/index", to: "tauri/commands", source: "declared", confidence: 1, reason: "Tauri IPC contract" }
-    ],
-    rules: [{ id: "no-ui-db", type: "deny", from: "ui", to: "db" }],
-    decisions: [{ id: "d1", title: "Local SVG", detail: "Rendered without a browser address." }]
-  }
-};
-
 describe("project panel", () => {
-  it("exposes only Overview, Knowledge, and Architecture", () => {
-    expect(PROJECT_PANEL_PAGES).toEqual(["overview", "knowledge", "architecture"]);
-    const html = renderProjectPanel("overview", data);
-    expect(html).toContain('data-project-page="overview"');
-    expect(html).not.toMatch(/data-project-page="(hooks|review|tasks|logs)"/);
+  it("shows an explicit uninitialized state with a deliberate initialization entry", () => {
+    const html = renderProjectPanel("overview", data());
+    expect(html).toContain('data-project-initialization-state="uninitialized"');
+    expect(html).toContain("data-project-initialize");
+    expect(html).toContain("Initialize project knowledge");
+    expect(html).not.toContain("data-project-choose-roots");
+    expect(html).not.toContain("Choose scan folders");
+    expect(html).not.toContain("code-derived");
+    expect(html).not.toContain("Language");
   });
 
-  it("never emits conversation runs, hook logs, or single-run Review", () => {
-    const html = PROJECT_PANEL_PAGES.map((page) => renderProjectPanel(page, data)).join("\n");
-    expect(html).not.toMatch(/data-project-section="(hooks|review|logs)"/);
-    expect(html.toLowerCase()).not.toContain("execution log");
-    expect(html.toLowerCase()).not.toContain("hook");
+  it("distinguishes running, failed, cancelled and completed-but-missing-diagram states", () => {
+    const running = renderProjectPanel("overview", data({}, initialization("running", { phase: "generating", progress: 1, progressTotal: 2, message: "generating" })));
+    expect(running).toContain("project-init-running");
+    expect(running).toContain("1/2");
+
+    const failed = renderProjectPanel("overview", data({}, initialization("failed", { error: "AI unavailable" })));
+    expect(failed).toContain("AI unavailable");
+    expect(failed).toContain("Retry initialization");
+
+    const cancelled = renderProjectPanel("overview", data({}, initialization("cancelled")));
+    expect(cancelled).toContain("Initialization cancelled");
+
+    const completed = renderProjectPanel("overview", data({}, initialization("completed", { phase: "saving", intentGenerated: true, diagramsGenerated: 0 })));
+    expect(completed).toContain('data-project-initialization-state="completed"');
+    expect(completed).toContain("no diagram is saved yet");
   });
 
-  it("shows long-term knowledge with independent confirmation and validity", () => {
-    const html = renderProjectPanel("knowledge", data);
-    expect(html).toContain('data-object-id="TaskQuery"');
-    expect(html).toContain('data-confirmation="accepted"');
-    expect(html).toContain('data-validity="needs_verification"');
-    expect(html).toContain("任务查询");
-    expect(html).toContain('data-draft-action="accept"');
+  it("keeps the diagrams page free of the removed multi-engine and self-drawn canvas controls", () => {
+    const diagrams = [
+      { id: "a", title: "Architecture", kind: "architecture" as const, version: 2, updatedAt: 1 },
+      { id: "w", title: "Flow", kind: "workflow" as const, version: 1, updatedAt: 1 }
+    ];
+    const html = renderProjectPanel("architecture", data({ architecture: { diagrams, selected: diagrams[0]! } }));
+    expect(html).toContain("data-diagram-select");
+    expect(html).toContain("data-diagram-generate-new");
+    expect(html).toContain("data-diagram-generate-update");
+    expect(html).toContain('data-diagram-action="refresh"');
+    expect(html).toContain('data-diagram-action="export"');
+    expect(html).toContain('data-diagram-action="fullscreen"');
+    expect(html).toContain("data-diagram-frame");
+    expect(html).toContain("dext-diagram-command");
+    expect(html).toContain("projectDiagramRender");
+    expect(html).toContain("projectDiagramExport");
+    expect(html).not.toContain("data-project-adapter-select");
+    expect(html).not.toContain("Use recommended");
+    expect(html).not.toContain("architecture-graph");
+    expect(html).not.toContain(">Architecture</button>");
+    expect(html).toContain(">Diagrams<");
   });
 
-  it("keeps the initialization progress indicator visible after a page refresh", () => {
-    const html = renderProjectPanel("overview", {
-      ...data,
-      overview: {
-        ...data.overview,
-        initialization: { status: "running", aiAvailable: true, scannedFiles: 7, phase: "generating", progress: 1, progressTotal: 3 }
-      }
+  it("explains that saved diagrams stay viewable while knowledge is uninitialized", () => {
+    const html = renderProjectPanel("architecture", data({ architecture: { diagrams: [], knowledgeUninitialized: true } }));
+    expect(html).toContain("Project knowledge is not initialized");
+    expect(html).toContain("No diagram generated yet");
+  });
+
+  it("lists all five diagram kinds with their English labels", () => {
+    const kinds = ["architecture", "workflow", "sequence", "data_flow", "lifecycle"] as const;
+    const diagrams = kinds.map((kind, index) => ({ id: kind, title: `${kind} title`, kind, version: index + 1, updatedAt: index }));
+    const html = renderProjectPanel("architecture", data({ architecture: { diagrams, selected: diagrams[0]! } }));
+    for (const label of ["Architecture", "Workflow", "Sequence", "Data flow", "Lifecycle"]) expect(html).toContain(label);
+  });
+
+  it("updates the knowledge page copy to the explicit initialization flow", () => {
+    const html = renderProjectPanel("knowledge", data());
+    expect(html).toContain("Project knowledge is not initialized yet");
+    expect(html).not.toContain("code-derived source areas");
+  });
+
+  it("keeps the knowledge page controls and the object focus marker", () => {
+    const object = projectObjectSchema.parse({
+      id: "TaskQuery", canonicalName: "TaskQuery", displayName: "任务查询", kind: "feature",
+      source: "user", confirmation: "accepted", validity: "needs_verification", description: "Runs a query."
     });
-    expect(html).toContain("project-scan-progress-running");
-    expect(html).toContain("Initializing project knowledge");
-    expect(html).toContain("7 files scanned");
-    expect(html).toContain('aria-valuenow="1"');
-    expect(html).toContain("1/3");
-    expect(html).not.toContain('class="project-initialize"');
+    const suggestion: KnowledgeSuggestion = { id: "s1", objectId: object.id, kind: "update", proposed: { description: "Runs a query." }, evidence: [], reason: "More precise", source: "ai" };
+    const html = renderProjectPanel("knowledge", { ...data(), objects: [object], drafts: [suggestion] }, { focusObjectId: object.id });
+    // These markers are the page's contract with the host script; the assertions for them were
+    // deleted with the old page tests while the controls stayed in the markup.
+    expect(html).toContain(`data-object-id="${object.id}"`);
+    expect(html).toContain("data-draft-action");
+    expect(html).toContain("data-confirmation=");
+    expect(html).toContain("data-validity=");
+    expect(html).toContain(`data-project-focus="${object.id}"`);
+    // The AI CLI selector is overview markup that only exists when the host supplies CLIs; asserting
+    // it here keeps the check on the element rather than on the page script that queries it.
+    const withCli = renderProjectPanel("overview", data({ overview: { ...data().overview, aiCli: [{ id: "codex", label: "Codex", models: [] }] } }));
+    expect(withCli).toContain("data-project-ai-cli");
+    expect(renderProjectPanel("overview", data())).not.toContain("<select data-project-ai-cli");
   });
 
-  it("renders a local SVG and separates manual from static relations", () => {
-    const html = renderProjectPanel("architecture", data);
-    expect(html).toContain("<svg class=\"architecture-graph\"");
-    expect(relationSourceLabel("declared")).toBe("Manual (declared)");
-    expect(relationSourceLabel("detected")).toBe("Static detection");
-    expect(html).toContain('data-source="declared"');
-    expect(html).toContain('data-source="detected"');
-    expect(html).toContain("Design decisions");
-    expect(html).toContain("no-ui-db");
+  it("acquires the VS Code API once per document, however many page scripts are emitted", () => {
+    const html = renderProjectPanel("architecture", data({ architecture: { diagrams: [] } }));
+    const calls = [...html.matchAll(/acquireVsCodeApi\(\)/g)];
+    expect(calls.length).toBeGreaterThan(0);
+    // A second unguarded call throws inside a VS Code webview, which would leave the diagram bridge
+    // (registered by the later script) dead.
+    for (const call of calls) {
+      const prefix = html.slice(Math.max(0, call.index - 30), call.index).replace(/\s+/g, "");
+      expect(prefix, `call at ${call.index}`).toContain("window.__dextApi=");
+    }
   });
 
-  it("forwards page navigation and draft decisions to the host", () => {
-    const html = renderProjectPanel("knowledge", data);
-    expect(html).toContain("acquireVsCodeApi()");
-    expect(html).toContain('type:"projectPage"');
-    expect(html).toContain('type:"projectDraft"');
-    // The panel root also has data-project-page; only tab buttons may trigger
-    // navigation so native selects remain open long enough to choose an option.
-    expect(html).toContain('button[data-project-page]');
-    // The client never requests conversation runs or Hook output.
-    expect(html).not.toContain("review");
-  });
-
-  it("renders the project AI CLI selector and forwards changes", () => {
-    const html = renderProjectPanel("overview", {
-      ...data,
-      overview: {
-        ...data.overview,
-        aiCli: [{ id: "codex", label: "Codex CLI" }, { id: "claude", label: "Claude CLI" }],
-        selectedAiCli: "claude"
-      }
-    });
-    expect(html).toContain('data-project-ai-cli');
-    expect(html).toContain('value="claude" selected');
-    expect(html).toContain("type:'projectAiCli'");
-  });
-
-  it("renders models for the selected project AI CLI", () => {
-    const html = renderProjectPanel("overview", {
-      ...data,
-      overview: {
-        ...data.overview,
-        aiCli: [{ id: "codex", label: "Codex CLI", models: [{ id: "o4-mini", label: "o4-mini" }] }],
-        selectedAiCli: "codex",
-        selectedAiModel: "o4-mini"
-      }
-    });
-    expect(html).toContain('data-project-ai-model');
-    expect(html).toContain('composer-model-popover');
-    expect(html).toContain('composer-menu-category');
-    expect(html).toContain('data-project-model-submenu');
-    expect(html).toContain('value="o4-mini" selected');
-    expect(html).toContain("type:'projectAiModel'");
-  });
-
-  it("shows Input model capabilities below the project model selector", () => {
-    const html = renderProjectPanel("overview", {
-      ...data,
-      overview: {
-        ...data.overview,
-        aiCli: [{ id: "codex", label: "Codex CLI", models: [{
-          id: "o4", label: "o4", reasoningEfforts: ["medium", "high"], speedTiers: ["standard", "fast"]
-        }] }],
-        selectedAiCli: "codex",
-        selectedAiModel: "o4"
-      }
-    });
-    expect(html).toContain("Reasoning: medium / high");
-    expect(html).toContain("Speed: standard / fast");
-    expect(html).toContain("project-model-capabilities");
-    expect(html).toContain("data-project-ai-model-details");
-  });
-
-  it("marks and scrolls to the object an adopted suggestion wrote", () => {
-    const html = renderProjectPanel("knowledge", data, { focusObjectId: "TaskQuery" });
-    expect(html).toContain('data-project-focus="TaskQuery"');
-    expect(html).toContain("project-object-focus");
-    // Without a focus the page is unchanged, so a plain navigation stays quiet.
-    expect(renderProjectPanel("knowledge", data)).not.toContain('data-project-focus="');
-  });
-
-  it("renders semantic knowledge sections when supplied", () => {
-    const html = renderProjectPanel("knowledge", {
-      ...data,
-      knowledge: {
-        brief: "A task management workspace.",
-        contexts: [{ id: "ctx-tasks", name: "Task management", description: "Owns task state." }],
-        terms: [{ id: "term-task", canonical: "Task", aliases: ["Work item"], definition: "A unit of work." }],
-        flows: [{ id: "flow-create", name: "Create task", steps: ["Validate input", "Persist task"] }],
-        evidence: [{ id: "ev-1", path: "src/tasks.ts", line: 4 }]
-      }
-    });
-    expect(html).toContain("Project Brief");
-    expect(html).toContain("Task management");
-    expect(html).toContain("Work item");
-    expect(html).toContain("Create task");
-    expect(html).toContain("src/tasks.ts:4");
-  });
-
-  it("renders adapter controls and explicit diagram actions", () => {
-    const html = renderProjectPanel("architecture", {
-      ...data,
-      architecture: {
-        ...data.architecture,
-        diagramKind: "architecture",
-        adapter: {
-          currentId: "structurizr",
-          choices: [
-            { id: "structurizr", version: "1", available: true, supported: true, preferred: true, formats: ["structurizr"] },
-            { id: "mermaid", available: true, supported: false, preferred: false, formats: ["mermaid"], reason: "No interactive support" }
-          ],
-          fallback: ["structurizr", "archify", "drawio"],
-          recommendation: "Use C4 for architecture overview."
-        }
-      }
-    });
-    expect(html).toContain("data-project-adapter-select");
-    expect(html).toContain("Use recommended");
-    expect(html).toContain("No interactive support");
-    expect(html).toContain("projectAdapterPreference");
-    expect(html).toContain("projectDiagramAction");
+  it("persists its own tab state so a reload restores the same page", () => {
+    const state = { key: "dext.editor:project", page: "architecture", filters: {}, restoreVersion: 1 };
+    const html = renderProjectPanel("architecture", data(), { state });
+    expect(html).toContain(`api.setState(${JSON.stringify(state)})`);
+    // Pages rendered without a key (tests, previews) must not claim a state they cannot identify.
+    expect(renderProjectPanel("overview", data())).not.toContain("api.setState(");
   });
 });

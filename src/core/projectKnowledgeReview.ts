@@ -52,10 +52,19 @@ export class KnowledgeDraftQueue {
     return [...this.suggestions.values()].map((suggestion) => structuredClone(suggestion));
   }
 
+  /**
+   * The decision recorded for a draft. Decisions are keyed by draft id plus base version, so a
+   * draft that left the queue (a rejected one) is still found by its id: the most recently recorded
+   * decision wins, which is the one a newer base version would have replaced.
+   */
   decisionFor(suggestionId: string): KnowledgeDecisionRecord | undefined {
     const suggestion = this.suggestions.get(suggestionId);
-    if (!suggestion) return this.decisions.get(suggestionId);
-    return this.decisions.get(decisionKey(suggestion));
+    if (suggestion) return this.decisions.get(decisionKey(suggestion));
+    const direct = this.decisions.get(suggestionId);
+    if (direct) return direct;
+    let latest: KnowledgeDecisionRecord | undefined;
+    for (const record of this.decisions.values()) if (record.suggestionId === suggestionId) latest = record;
+    return latest;
   }
 
   decide(suggestionId: string, decision: KnowledgeDecision, now = Date.now(), edited?: KnowledgeSuggestion["proposed"]): KnowledgeDecisionRecord | undefined {

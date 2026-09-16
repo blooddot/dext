@@ -1,121 +1,112 @@
 import { describe, expect, it } from "vitest";
-import { KnowledgeDraftQueue, type KnowledgeSuggestion } from "../src/core/projectKnowledgeReview.js";
-import { ProjectInitializationService, ProjectScanScheduler } from "../src/projectService.js";
+import { buildProjectEvidencePackage } from "../src/core/projectAiGeneration.js";
+import { ProjectInitializationService, type ProjectInitializationPhase } from "../src/projectService.js";
 
-const emptyScan = { modules: [], relations: [], unsupported: [], parserVersions: {} };
-const draft = (id: string, baseVersion = 1): KnowledgeSuggestion => ({
-  id, kind: "create", proposed: { canonicalName: `Obj${id}` }, evidence: [], reason: "ai", source: "ai", baseVersion
-});
+const evidence = () => buildProjectEvidencePackage({ projectName: "Example", files: [] });
+const promptIntent = { schemaVersion: 1 as const, brief: { name: "Example", summary: "Summary", evidence: [{ path: "README.md", line: 1 }] }, updatedAt: 1 };
 
-describe("project initialization", () => {
-  it("completes from facts even when the AI proposer is unavailable", async () => {
-    const queue = new KnowledgeDraftQueue();
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => { resolve = resolvePromise; reject = rejectPromise; });
+  return { promise, resolve, reject };
+}
+
+describe("Project initialization state machine", () => {
+  it("starts uninitialized and never treats an old flag or diagrams alone as success", () => {
     const service = new ProjectInitializationService({
-      scan: async () => ({ ...emptyScan, modules: [{ id: "src/a", name: "a", language: "typescript" as const, paths: ["src/a.ts"], source: "detected" as const }] }),
-      propose: async () => { throw new Error("AI offline"); }
-    }, queue);
+      prepareEvidence: async () => evidence(),
+      generate: async () => ({}),
+      persist: async () => undefined
+    });
+    expect(service.snapshot.status).toBe("uninitialized");
+    service.hydrate({ hasIntent: false, diagramCount: 0, markedInitialized: true });
+    expect(service.snapshot.status).toBe("uninitialized");
+    service.hydrate({ hasIntent: false, diagramCount: 2, markedInitialized: true });
+    expect(service.snapshot.status).toBe("uninitialized");
+    expect(service.snapshot.diagramsGenerated).toBe(2);
+    expect(service.snapshot.message).toContain("not initialized");
+    service.hydrate({ hasIntent: true, diagramCount: 1 });
+    expect(service.snapshot.status).toBe("completed");
+    expect(service.snapshot.intentGenerated).toBe(true);
+  });
+
+  it("runs prepare → generate → persist and only completes after saving", async () => {
+    const phases: ProjectInitializationPhase[] = [];
+    let persisted = false;
+    const service = new ProjectInitializationService({
+      prepareEvidence: async (_signal, onProgress) => { onProgress({ phase: "preparing", completed: 1, total: 2, message: "reading" }); return evidence(); },
+      generate: async () => ({ intent: promptIntent as never, diagrams: [] }),
+      persist: async (_output, _signal, onProgress) => { onProgress({ phase: "saving", completed: 1, total: 1, message: "saved" }); persisted = true; }
+    });
+    service.subscribe((state) => { if (state.phase) phases.push(state.phase); });
     const state = await service.start().promise;
-    expect(state).toMatchObject({ status: "completed", aiAvailable: false, drafts: 0, scannedFiles: 1 });
+    expect(state.status).toBe("completed");
+    expect(persisted).toBe(true);
+    expect(state.intentGenerated).toBe(true);
+    expect(phases).toContain("preparing");
+    expect(phases).toContain("generating");
+    expect(phases).toContain("saving");
+    expect(state.message).toBe("saved");
   });
 
-  it("supports cancel and retry without blocking development", async () => {
-    const queue = new KnowledgeDraftQueue();
-    let scanStarted = 0;
+  it("fails with a clear reason when no AI provider is available and saves nothing", async () => {
+    let persisted = false;
     const service = new ProjectInitializationService({
-      scan: async () => { scanStarted += 1; return emptyScan; },
-      propose: async () => [draft("s1")]
-    }, queue);
-    const task = service.start();
-    task.cancel();
-    const cancelled = await task.promise;
-    expect(cancelled.status).toBe("cancelled");
-    const retried = await service.retry().promise;
-    expect(retried.status).toBe("completed");
-    expect(retried.drafts).toBe(1);
-    expect(scanStarted).toBe(2);
+      prepareEvidence: async () => evidence(),
+      generate: async () => { throw new Error("项目 AI 不可用：请先启用并选择一个可用的 AI CLI。"); },
+      persist: async () => { persisted = true; }
+    });
+    const state = await service.start().promise;
+    expect(state.status).toBe("failed");
+    expect(state.error).toContain("AI 不可用");
+    expect(persisted).toBe(false);
   });
 
-  it("keeps a cancellation during AI generation cancelled", async () => {
-    let release: (() => void) | undefined;
+  it("reports a failed partial save instead of success", async () => {
     const service = new ProjectInitializationService({
-      scan: async () => emptyScan,
-      generate: async (_scan, signal) => await new Promise((resolve, reject) => {
-        release = () => resolve({});
-        signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
-      })
+      prepareEvidence: async () => evidence(),
+      generate: async () => ({ intent: promptIntent as never }),
+      persist: async () => { throw new Error("写入第二个文件失败"); }
+    });
+    const state = await service.start().promise;
+    expect(state.status).toBe("failed");
+    expect(state.error).toContain("第二个文件");
+  });
+
+  it("cancels a running prepare and ignores its late completion", async () => {
+    const pending = deferred<ReturnType<typeof evidence>>();
+    const service = new ProjectInitializationService({
+      prepareEvidence: () => pending.promise,
+      generate: async () => ({}),
+      persist: async () => undefined
     });
     const task = service.start();
-    await Promise.resolve();
-    task.cancel();
-    release?.();
-    await expect(task.promise).resolves.toMatchObject({ status: "cancelled" });
+    expect(service.snapshot.status).toBe("running");
+    service.cancel();
+    expect(service.snapshot.status).toBe("cancelled");
+    pending.resolve(evidence());
+    await task.promise;
+    expect(service.snapshot.status).toBe("cancelled");
   });
 
-  it("reports a failing scan as failed without throwing to the caller", async () => {
-    const service = new ProjectInitializationService({ scan: async () => { throw new Error("boom"); } });
-    await expect(service.start().promise).resolves.toMatchObject({ status: "failed", error: "boom" });
-  });
-
-  it("runs semantic generation after scanning and reports generated assets", async () => {
-    const queue = new KnowledgeDraftQueue();
+  it("keeps the retry result when a stale earlier run finishes late", async () => {
+    const first = deferred<ReturnType<typeof evidence>>();
+    const second = deferred<ReturnType<typeof evidence>>();
+    let calls = 0;
     const service = new ProjectInitializationService({
-      scan: async () => ({ ...emptyScan, modules: [{ id: "src/a", name: "a", language: "typescript" as const, paths: ["src/a.ts"], source: "detected" as const }] }),
-      generate: async () => ({ drafts: [draft("semantic")], intent: {} as never, diagrams: [{} as never] })
-    }, queue);
-    await expect(service.start().promise).resolves.toMatchObject({
-      status: "completed", aiAvailable: true, drafts: 1, scannedFiles: 1, intentGenerated: true, diagramsGenerated: 1
+      prepareEvidence: () => (++calls === 1 ? first.promise : second.promise),
+      generate: async () => ({ intent: promptIntent as never }),
+      persist: async () => undefined
     });
-  });
-});
-
-describe("knowledge draft queue", () => {
-  it("does not resurface a rejected suggestion for the same base version", () => {
-    const queue = new KnowledgeDraftQueue();
-    expect(queue.enqueue(draft("s1"))).toBe(true);
-    queue.decide("s1", "rejected", 2);
-    expect(queue.enqueue(draft("s1"))).toBe(false);
-    expect(queue.list()).toEqual([]);
-    // A newer base version is a genuinely new proposal.
-    expect(queue.enqueue(draft("s1", 2))).toBe(true);
-  });
-
-  it("merges and splits drafts", () => {
-    const queue = new KnowledgeDraftQueue();
-    queue.enqueue(draft("a"));
-    queue.enqueue(draft("b"));
-    const merged = queue.merge(["a", "b"], { id: "m", proposed: { description: "both" }, reason: "merge" });
-    expect(merged?.evidence).toEqual([]);
-    expect(queue.list().map((item) => item.id)).toEqual(["m"]);
-    const parts = queue.split("m", [{ id: "p1", proposed: { behavior: ["x"] }, reason: "split" }, { id: "p2", proposed: { behavior: ["y"] }, reason: "split" }]);
-    expect(parts.map((item) => item.id)).toEqual(["p1", "p2"]);
-    expect(queue.list().map((item) => item.id)).toEqual(["p1", "p2"]);
-  });
-});
-
-describe("background scan scheduler", () => {
-  it("coalesces file events inside the debounce window", () => {
-    const scheduler = new ProjectScanScheduler({ debounceMs: 100 });
-    scheduler.notify("src/a.ts", 0);
-    scheduler.notify("src\\b.ts", 10);
-    expect(scheduler.drain(50)).toBeUndefined();
-    expect(scheduler.drain(200)).toEqual(["src/a.ts", "src/b.ts"]);
-    expect(scheduler.pendingPaths).toEqual([]);
-  });
-
-  it("limits how many scans start inside a window", () => {
-    const scheduler = new ProjectScanScheduler({ debounceMs: 0, maxRequestsPerWindow: 1, windowMs: 10_000 });
-    scheduler.notify("a", 0);
-    expect(scheduler.drain(1)).toEqual(["a"]);
-    scheduler.notify("b", 2);
-    expect(scheduler.drain(3)).toBeUndefined();
-  });
-
-  it("rejects a late result once a newer input version exists", () => {
-    const scheduler = new ProjectScanScheduler({ debounceMs: 0 });
-    scheduler.notify("a", 0);
-    const version = scheduler.begin();
-    scheduler.notify("b", 1);
-    expect(scheduler.acceptResult(version)).toBe(false);
-    expect(scheduler.acceptResult(scheduler.inputVersion)).toBe(true);
+    const firstTask = service.start();
+    service.cancel();
+    const secondTask = service.retry();
+    second.resolve(evidence());
+    const state = await secondTask.promise;
+    expect(state.status).toBe("completed");
+    first.resolve(evidence());
+    await firstTask.promise;
+    expect(service.snapshot.status).toBe("completed");
   });
 });

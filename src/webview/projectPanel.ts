@@ -1,7 +1,8 @@
 import type { KnowledgeSuggestion } from "../core/projectKnowledgeReview.js";
 import type { ProjectObject } from "../core/projectKnowledge.js";
+import type { EditorTabState } from "../editorTabState.js";
 import type { ProjectInitializationState } from "../projectService.js";
-import { renderArchitectureView, type ArchitectureViewInput } from "./projectArchitectureView.js";
+import { renderArchitectureView, projectDiagramScript, type ArchitectureViewInput } from "./projectArchitectureView.js";
 
 export type ProjectPanelPage = "overview" | "knowledge" | "architecture";
 
@@ -16,13 +17,11 @@ function escapeHtml(value: string): string {
 export interface ProjectOverviewData {
   name: string;
   root: string;
-  languages: readonly string[];
   objects: number;
   accepted: number;
   drafts: number;
   needsVerification: number;
-  initialization: Pick<ProjectInitializationState, "status" | "aiAvailable" | "scannedFiles" | "phase" | "progress" | "progressTotal" | "intentGenerated" | "diagramsGenerated" | "error" | "message" | "output" | "startedAt" | "finishedAt">;
-  scanRoots?: readonly string[];
+  initialization: ProjectInitializationState;
   /** Available Agent CLI profiles and the project-specific selection. */
   aiCli?: readonly { id: string; label: string; models?: readonly {
     id: string;
@@ -50,12 +49,11 @@ export interface ProjectPanelData {
     contexts?: readonly { id: string; name: string; description?: string; evidence?: readonly string[] }[];
     terms?: readonly { id: string; canonical: string; aliases?: readonly string[]; definition?: string }[];
     flows?: readonly { id: string; name: string; steps: readonly string[] }[];
-    diagramVersions?: readonly { id: string; adapterId: string; version: number; status: string; updatedAt?: number }[];
     evidence?: readonly { id: string; path: string; line?: number; note?: string }[];
   };
 }
 
-const PAGE_LABELS: Record<ProjectPanelPage, string> = { overview: "Overview", knowledge: "Knowledge", architecture: "Architecture" };
+const PAGE_LABELS: Record<ProjectPanelPage, string> = { overview: "Overview", knowledge: "Knowledge", architecture: "Diagrams" };
 
 function renderProjectModelControl(models: readonly NonNullable<NonNullable<ProjectOverviewData["aiCli"]>[number]["models"]>[number][], selected: string | undefined, reasoning: string | undefined, speed: string | undefined, disabled: boolean): string {
   const selectedModel = models.find((model) => model.id === selected);
@@ -74,40 +72,64 @@ export function renderProjectNav(page: ProjectPanelPage): string {
   return `<nav class="project-nav" role="tablist" aria-label="Project views">${items}</nav>`;
 }
 
-function renderOverview(overview: ProjectOverviewData): string {
-  const initialization = overview.initialization;
-  const renderProgress = (): string => {
+const PHASE_LABELS: Record<string, string> = {
+  preparing: "Preparing bounded text evidence",
+  generating: "AI generation",
+  saving: "Validating and saving"
+};
+
+function renderInitialization(initialization: ProjectInitializationState): string {
+  const phaseLabel = PHASE_LABELS[initialization.phase ?? ""] ?? "Preparing";
+  const aiControls = "";
+  if (initialization.status === "running") {
     const hasCount = initialization.progress !== undefined && initialization.progressTotal !== undefined && initialization.progressTotal > 0;
     const completed = hasCount ? Math.max(0, Math.min(initialization.progress!, initialization.progressTotal!)) : 0;
     const total = hasCount ? initialization.progressTotal! : 0;
-    const phaseLabel = initialization.phase === "generating" ? "AI semantic analysis" : initialization.phase === "saving" ? "Saving project knowledge" : "Scanning project files";
-    const progress = hasCount ? `<progress class="project-scan-progress-meter project-scan-progress-indicator" value="${completed}" max="${total}" aria-valuenow="${completed}" aria-valuemin="0" aria-valuemax="${total}" aria-label="${escapeHtml(phaseLabel)} progress"></progress><strong data-project-progress-count>${completed}/${total}</strong>` : `<progress class="project-scan-progress-meter project-scan-progress-indicator" aria-label="${escapeHtml(phaseLabel)} in progress"></progress>`;
-    const output = initialization.output ? `<pre class="project-initialization-output" data-project-init-output>${escapeHtml(initialization.output)}</pre>` : `<pre class="project-initialization-output" data-project-init-output hidden></pre>`;
-    return `<div class="project-scan-progress project-scan-progress-running" data-project-scan-progress data-project-init-progress${initialization.startedAt !== undefined ? ` data-project-init-started-at="${initialization.startedAt}"` : ""} role="status" aria-live="polite"><div class="project-scan-progress-line"><span class="project-scan-progress-label" data-project-progress-label>Initializing project knowledge · ${escapeHtml(phaseLabel)}${initialization.message ? ` · ${escapeHtml(initialization.message)}` : ""}</span><span class="project-initialization-elapsed" data-project-init-elapsed></span>${progress}</div>${output}</div>`;
-  };
-  const retryable = initialization.status === "idle" || initialization.status === "failed" || initialization.status === "cancelled" || (initialization.status === "completed" && !initialization.aiAvailable);
-  const initializationControl = retryable
-    ? `${initialization.status === "failed" ? `<p class="project-scan-progress" role="status">Initialization failed. Try again.${initialization.error ? ` ${escapeHtml(initialization.error)}` : ""}</p>` : initialization.status === "cancelled" ? `<p class="project-scan-progress" role="status">Initialization cancelled.</p>` : initialization.status === "completed" && !initialization.aiAvailable ? `<p class="project-scan-progress project-scan-progress-warning" role="status">AI analysis was not saved. ${initialization.error ? escapeHtml(initialization.error) : "Check the selected CLI and retry."}</p>` : ""}<button type="button" class="project-initialize" data-project-initialize>${initialization.status === "idle" ? "Initialize project knowledge" : "Retry initialization"}</button><div class="project-scan-progress" data-project-scan-progress data-project-init-progress hidden role="status"><div class="project-scan-progress-line"><span class="project-scan-progress-label" data-project-progress-label>Scanning project files…</span><progress class="project-scan-progress-meter project-scan-progress-indicator"></progress></div><pre class="project-initialization-output" data-project-init-output hidden></pre></div>`
-    : initialization.status === "running"
-      ? renderProgress()
-      : "";
-  const outputSummary = initialization.status === "completed" && initialization.aiAvailable
-    ? `<p class="project-initialization-result" role="status">AI semantic analysis saved${initialization.intentGenerated ? " · project intent" : ""}${initialization.diagramsGenerated ? ` · ${initialization.diagramsGenerated} architecture diagram${initialization.diagramsGenerated === 1 ? "" : "s"}` : ""}.</p>${initialization.output ? `<details class="project-initialization-log"><summary>Initialization output</summary><pre>${escapeHtml(initialization.output)}</pre></details>` : ""}`
-    : initialization.error ? `<details class="project-initialization-error" open><summary>Initialization failed</summary><pre>${escapeHtml(initialization.error)}${initialization.output ? `\n\n${escapeHtml(initialization.output)}` : ""}</pre></details>` : "";
+    const progress = hasCount
+      ? `<progress class="project-scan-progress-meter" value="${completed}" max="${total}" aria-label="${escapeHtml(phaseLabel)} progress"></progress><strong data-project-progress-count>${completed}/${total}</strong>`
+      : `<progress class="project-scan-progress-meter" aria-label="${escapeHtml(phaseLabel)} in progress"></progress>`;
+    return `<div class="project-init project-init-running" data-project-init-progress data-project-init-started-at="${initialization.startedAt ?? ""}" role="status" aria-live="polite">`
+      + `<div class="project-scan-progress-line"><span class="project-scan-progress-label" data-project-progress-label>Initializing project knowledge · ${escapeHtml(phaseLabel)}${initialization.message ? ` · ${escapeHtml(initialization.message)}` : ""}</span><span class="project-initialization-elapsed" data-project-init-elapsed></span>${progress}</div>`
+      + `<pre class="project-initialization-output" data-project-init-output${initialization.output ? "" : " hidden"}>${escapeHtml(initialization.output ?? "")}</pre></div>`;
+  }
+  if (initialization.status === "completed") {
+    const missingDiagram = (initialization.diagramsGenerated ?? 0) === 0;
+    return `<div class="project-init project-init-completed" data-project-initialization-state="completed" role="status">`
+      + `<p class="project-initialization-result">Project knowledge initialized${initialization.intentGenerated ? " · valid project intent" : ""}${initialization.diagramsGenerated ? ` · ${initialization.diagramsGenerated} diagram${initialization.diagramsGenerated === 1 ? "" : "s"}` : ""}.</p>`
+      + (missingDiagram ? `<p class="project-scan-progress project-scan-progress-warning">Knowledge is initialized, but no diagram is saved yet. Use <strong>Diagrams</strong> to generate one for the evidenced semantics.</p>` : "")
+      + (initialization.output ? `<details class="project-initialization-log"><summary>Initialization output</summary><pre>${escapeHtml(initialization.output)}</pre></details>` : "")
+      + `</div>`;
+  }
+  const failed = initialization.status === "failed";
+  const cancelled = initialization.status === "cancelled";
+  const errorDetails = initialization.error || initialization.output
+    ? `<details class="project-initialization-error"${failed ? " open" : ""}><summary>${failed ? "Initialization failed" : "Last initialization output"}</summary><pre>${escapeHtml(initialization.error ?? "")}${initialization.output ? `\n\n${escapeHtml(initialization.output)}` : ""}</pre></details>`
+    : "";
+  const status = failed
+    ? `<p class="project-scan-progress project-scan-progress-error" role="status">Initialization failed: ${escapeHtml(initialization.error ?? "Unknown reason.")}</p>`
+    : cancelled
+      ? `<p class="project-scan-progress" role="status">Initialization cancelled. The previous saved knowledge is unchanged.</p>`
+      : `<p class="project-help"><strong>Not initialized.</strong> No valid saved semantic model was found. Initialize project knowledge to let AI read bounded README, documentation, manifest and source text, then validate and save the result.${initialization.diagramsGenerated ? " Saved diagrams remain viewable." : ""}</p>`;
+  return `<div class="project-init project-init-uninitialized" data-project-initialization-state="${failed ? "failed" : cancelled ? "cancelled" : "uninitialized"}">`
+    + status
+    + `<button type="button" class="project-initialize" data-project-initialize>${failed || cancelled ? "Retry initialization" : "Initialize project knowledge"}</button>`
+    + errorDetails + aiControls
+    + `<div class="project-scan-progress" data-project-init-progress hidden role="status"><div class="project-scan-progress-line"><span class="project-scan-progress-label" data-project-progress-label>Preparing bounded text evidence…</span><progress class="project-scan-progress-meter"></progress></div><pre class="project-initialization-output" data-project-init-output hidden></pre></div>`
+    + `</div>`;
+}
+
+function renderOverview(overview: ProjectOverviewData): string {
+  const initialization = overview.initialization;
   return `<section class="project-overview" data-project-section="overview">`
     + `<h2>${escapeHtml(overview.name)}</h2>`
-    + `<p class="project-help">Project uses the opened workspace folder as its root. It scans production source files and skips dependencies, build output, tests, fixtures, coverage, and temporary folders by default. Use <strong>Knowledge</strong> for accepted project facts and <strong>Architecture</strong> for detected module dependencies. Add or change source files, then reopen Project to refresh the scan.</p>`
+    + `<p class="project-help">Project uses the opened workspace folder as its root. Opening, restoring or switching this page only reads saved project files; source text is read in bounded form when you initialize knowledge or generate a diagram.</p>`
     + (overview.aiCli?.length ? `<label class="project-ai-cli">AI CLI for Project initialization <select data-project-ai-cli${initialization.status === "running" ? " disabled" : ""}><option value=""${overview.selectedAiCli ? "" : " selected"}>Use current Input selection</option>${overview.aiCli.map((cli) => `<option value="${escapeHtml(cli.id)}"${cli.id === overview.selectedAiCli ? " selected" : ""} data-models="${escapeHtml(JSON.stringify(cli.models ?? []))}">${escapeHtml(cli.label)}</option>`).join("")}</select></label>`
       + (overview.selectedAiCli ? (() => { const cli = overview.aiCli.find((item) => item.id === overview.selectedAiCli); const models = cli?.models ?? []; return models.length ? renderProjectModelControl(models, overview.selectedAiModel, overview.selectedAiReasoning, overview.selectedAiSpeed, initialization.status === "running") : ""; })() : "") : "")
-    + initializationControl
-    + outputSummary
+    + renderInitialization(initialization)
     + `<dl class="project-facts">`
     + `<dt>Workspace</dt><dd>${escapeHtml(overview.root)}</dd>`
-    + `<dt>Scan folders</dt><dd>${overview.scanRoots?.length ? escapeHtml(overview.scanRoots.join(", ")) : ". (workspace root)"}</dd>`
-    + `<dt>Languages</dt><dd>${overview.languages.length ? escapeHtml(overview.languages.join(", ")) : "Not detected yet"}</dd>`
     + `<dt>Objects</dt><dd>${overview.objects} (${overview.accepted} accepted, ${overview.drafts} drafts, ${overview.needsVerification} need verification)</dd>`
-    + `<dt>Initialization</dt><dd>${escapeHtml(initialization.status)}; ${initialization.aiAvailable ? "AI analysis available" : "code-derived facts only"}; ${initialization.scannedFiles} files scanned${initialization.error ? `; ${escapeHtml(initialization.error)}` : ""}</dd>`
-    + `<button type="button" class="project-scan-folders" data-project-choose-roots>Choose scan folders</button>`
+    + `<dt>Initialization</dt><dd>${escapeHtml(initialization.status)}${initialization.error ? `; ${escapeHtml(initialization.error)}` : ""}</dd>`
     + `</dl></section>`;
 }
 
@@ -138,18 +160,19 @@ function renderKnowledge(objects: readonly ProjectObject[], drafts: readonly Kno
   return `<section class="project-knowledge" data-project-section="knowledge">`
     + semantic
     + `<h2>Knowledge</h2>`
-    + (!knowledge ? `<p class="project-help">AI initialization has not produced a semantic project model yet. The entries below are code-derived source areas and will be replaced by human-readable project concepts after initialization.</p>` : "")
+    + (!knowledge ? `<p class="project-help">Project knowledge is not initialized yet. Open <strong>Overview</strong> and choose <em>Initialize project knowledge</em>; initialization never runs automatically. The entries below are long-term objects saved on disk.</p>` : "")
     + `<h3>Objects</h3>${rows ? `<ul class="project-objects">${rows}</ul>` : `<p class="project-empty">No accepted knowledge yet. Development from Input does not require it.</p>`}`
     + `<h3>AI drafts</h3>${draftRows ? `<ul class="project-drafts">${draftRows}</ul>` : `<p class="project-empty">No pending AI drafts.</p>`}`
     + `</section>`;
 }
 
-/**
- * Client script for the Project panel. It only forwards page navigation and draft decisions to the
- * host; all project data is rendered by the host and no conversation run state is requested.
- */
-export function projectPanelScript(): string {
-  return "<script>(function(){var api=acquireVsCodeApi();"
+export function projectPanelScript(state?: EditorTabState): string {
+  // acquireVsCodeApi may only be called once per webview document, and the diagram
+  // bridge script shares this document, so the handle is cached on the window.
+  // setState is what a webview serializer receives on reload: without it a restored
+  // Project tab has no key and could never render.
+  const restore = state ? `api.setState(${JSON.stringify(state)});` : "";
+  return "<script>(function(){var api=window.__dextApi||(window.__dextApi=acquireVsCodeApi());" + restore
     + "function closeModelMenu(){var menu=document.querySelector('[data-project-model-menu]');var trigger=document.querySelector('[data-project-model-trigger]');if(menu)menu.hidden=true;if(trigger)trigger.setAttribute('aria-expanded','false');var sub=document.querySelector('[data-project-model-submenu]');if(sub)sub.hidden=true;}"
     + "function positionModelSubmenu(){var sub=document.querySelector('[data-project-model-submenu]'),menu=document.querySelector('[data-project-model-menu]');if(!sub||!menu)return;var r=menu.getBoundingClientRect(),w=Math.min(216,(document.documentElement.clientWidth||window.innerWidth)-24),gap=4;sub.style.width=w+'px';sub.dataset.submenuSide=(window.innerWidth-r.right-gap>=w?'right':r.left-gap>=w?'left':'above');}"
     + "function showModelChoices(category){var sub=document.querySelector('[data-project-model-submenu]');if(!sub)return;var items=[];try{items=JSON.parse(category.getAttribute('data-items')||'[]');}catch(_){}var selected=category.getAttribute('data-selected')||'';var title=category.querySelector('span').textContent;var html='<div class=\"project-model-submenu-heading\">'+title+'</div>';var prior='';items.forEach(function(item){if(item.group&&item.group!==prior){html+='<div class=\"project-model-group-heading\">'+item.group+'</div>';prior=item.group;}html+='<button type=\"button\" class=\"project-model-choice composer-menu-option\" role=\"menuitemradio\" aria-checked=\"'+String(item.id===selected)+'\" data-project-model-choice=\"'+String(item.id).replace(/&/g,'&amp;').replace(/\\\"/g,'&quot;')+'\"><span>'+item.label+'</span><i class=\"codicon codicon-'+(item.id===selected?'check':'blank')+'\"></i></button>';});sub.innerHTML=html;sub.hidden=false;positionModelSubmenu();}"
@@ -159,16 +182,16 @@ export function projectPanelScript(): string {
     // navigation clicks to the actual tab buttons; otherwise clicking any child
     // control (especially a native <select>) bubbles to the root, posts a page
     // message, and the host replaces the document while the popup is opening.
-    + "var element=target&&target.closest?target.closest(\"button[data-project-page],[data-draft-action],[data-project-initialize],[data-project-choose-roots]\"):null;"
+    + "var element=target&&target.closest?target.closest(\"button[data-project-page],[data-draft-action],[data-project-initialize]\"):null;"
     + "if(!element)return;var page=element.getAttribute(\"data-project-page\");"
     + "if(page){api.postMessage({type:\"projectPage\",page:page});return;}"
-    + "if(element.hasAttribute('data-project-initialize')){var b=element;b.disabled=true;b.textContent='Scanning…';var p=document.querySelector('[data-project-scan-progress]');if(p)p.hidden=false;api.postMessage({type:'projectInitialize'});return;}"
-    + "if(element.hasAttribute('data-project-choose-roots')){api.postMessage({type:'projectChooseRoots'});return;}"
+    + "if(element.hasAttribute('data-project-initialize')){var b=element;b.disabled=true;b.textContent='Initializing…';api.postMessage({type:'projectInitialize'});return;}"
+    + ""
     + "var action=element.getAttribute(\"data-draft-action\");"
     + "if(action){api.postMessage({type:\"projectDraft\",action:action,id:element.getAttribute(\"data-draft-id\")});}});"
     + "document.addEventListener('change',function(event){var target=event.target;if(!target||!target.matches)return;if(target.matches('[data-project-ai-cli]')){var option=target.options[target.selectedIndex],models=[];try{models=JSON.parse(option.getAttribute('data-models')||'[]');}catch(_){}var old=document.querySelector('.project-ai-model');if(old)old.remove();if(models.length&&target.value){var wrap=document.createElement('div');wrap.innerHTML='<label class=\"project-ai-model\">Model for Project initialization <div class=\"project-ai-model-control\"><button type=\"button\" class=\"project-model-trigger\" data-project-ai-model data-project-model-trigger aria-expanded=\"false\"><span>Model</span><strong data-project-model-value=\"model\">Use CLI default</strong><i class=\"codicon codicon-chevron-down\"></i></button><small class=\"project-model-capabilities\" data-project-model-capabilities hidden></small><div class=\"project-model-popover composer-model-popover\" data-project-model-menu hidden></div></div></label>';var control=wrap.firstElementChild;var menu=control.querySelector('[data-project-model-menu]');var make=function(id,label,items,disabled){return '<button type=\"button\" class=\"project-model-category composer-menu-option composer-menu-category\" data-project-model-category=\"'+id+'\" data-selected=\"\" data-items=\"'+JSON.stringify(items).replace(/\"/g,'&quot;')+'\"'+(disabled?' disabled':'')+'><span>'+label+'</span><span class=\"project-model-category-value\" data-project-model-value=\"'+id+'\">CLI setting</span><i class=\"codicon codicon-chevron-right\"></i></button>';};menu.innerHTML=make('model','Model',[{id:'',label:'Use CLI default'}].concat(models.map(function(m){return {id:m.id,label:m.label,group:m.group||'',reasoningEfforts:m.reasoningEfforts||[],speedTiers:m.speedTiers||[]};})),false)+make('reasoning','Reasoning',[],true)+make('speed','Speed',[],true)+'<div class=\"project-model-submenu composer-model-submenu\" data-project-model-submenu hidden></div>';target.closest('.project-ai-cli').insertAdjacentElement('afterend',control);}api.postMessage({type:'projectAiCli',cli:target.value||undefined});}});"
     + "var elapsedTimer=0;function updateElapsed(){var box=document.querySelector('[data-project-init-progress]'),node=box&&box.querySelector('[data-project-init-elapsed]'),started=box&&Number(box.getAttribute('data-project-init-started-at'));if(!node||!started)return;var seconds=Math.max(0,Math.floor((Date.now()-started)/1000)),minutes=Math.floor(seconds/60);node.textContent='· '+(minutes?minutes+'m '+(seconds%60)+'s':seconds+'s');}updateElapsed();if(document.querySelector('[data-project-init-progress][data-project-init-started-at]'))elapsedTimer=window.setInterval(updateElapsed,1000);"
-    + "window.addEventListener('message',function(event){var message=event&&event.data;if(!message||message.type!=='projectInitializationProgress')return;var state=message.state||{},box=document.querySelector('[data-project-init-progress]');if(!box)return;if(state.startedAt!==undefined)box.setAttribute('data-project-init-started-at',String(state.startedAt));if(state.status!=='running'&&elapsedTimer){window.clearInterval(elapsedTimer);elapsedTimer=0;}var label=box.querySelector('[data-project-progress-label]'),meter=box.querySelector('progress'),count=box.querySelector('[data-project-progress-count]'),output=box.querySelector('[data-project-init-output]');var phase=state.phase==='generating'?'AI semantic analysis':state.phase==='saving'?'Saving project knowledge':'Scanning project files';if(label)label.textContent='Initializing project knowledge · '+phase+(state.message?' · '+state.message:'');updateElapsed();if(meter){if(state.progress!==undefined&&state.progressTotal){meter.max=state.progressTotal;meter.value=state.progress;}else{meter.removeAttribute('value');}}if(count){if(state.progress!==undefined&&state.progressTotal){count.hidden=false;count.textContent=state.progress+'/'+state.progressTotal;}else{count.hidden=true;}}if(output){if(state.output){output.hidden=false;output.textContent=state.output;}else if(state.status==='running'){output.hidden=true;}}});"
+    + "window.addEventListener('message',function(event){var message=event&&event.data;if(!message||message.type!=='projectInitializationProgress')return;var state=message.state||{},box=document.querySelector('[data-project-init-progress]');if(!box)return;if(state.startedAt!==undefined)box.setAttribute('data-project-init-started-at',String(state.startedAt));if(state.status!=='running'&&elapsedTimer){window.clearInterval(elapsedTimer);elapsedTimer=0;}var label=box.querySelector('[data-project-progress-label]'),meter=box.querySelector('progress'),count=box.querySelector('[data-project-progress-count]'),output=box.querySelector('[data-project-init-output]');var phase=state.phase==='generating'?'AI generation':state.phase==='saving'?'Validating and saving':'Preparing bounded text evidence';if(label)label.textContent='Initializing project knowledge · '+phase+(state.message?' · '+state.message:'');updateElapsed();if(meter){if(state.progress!==undefined&&state.progressTotal){meter.max=state.progressTotal;meter.value=state.progress;}else{meter.removeAttribute('value');}}if(count){if(state.progress!==undefined&&state.progressTotal){count.hidden=false;count.textContent=state.progress+'/'+state.progressTotal;}else{count.hidden=true;}}if(output){if(state.output){output.hidden=false;output.textContent=state.output;}else if(state.status==='running'){output.hidden=true;}}});"
     // Navigating from an adopted suggestion marks the object it wrote.
     + "var focus=document.querySelector('[data-project-focus]');"
     + "if(focus){var id=focus.getAttribute('data-project-focus');"
@@ -179,15 +202,15 @@ export function projectPanelScript(): string {
 }
 
 /**
- * Renders one Project page. Only long-term objects, architecture rules, and design decisions are
- * emitted; conversation execution logs, Hook output, and single-run Review never appear here.
+ * Renders one Project page. Only long-term objects and saved semantic diagrams are emitted;
+ * conversation execution logs, Hook output, and single-run Review never appear here.
  */
-export function renderProjectPanel(page: ProjectPanelPage, data: ProjectPanelData, options: { focusObjectId?: string } = {}): string {
+export function renderProjectPanel(page: ProjectPanelPage, data: ProjectPanelData, options: { focusObjectId?: string; state?: EditorTabState } = {}): string {
   const body = page === "overview" ? renderOverview(data.overview)
     : page === "knowledge" ? renderKnowledge(data.objects, data.drafts ?? [], data.knowledge)
       : renderArchitectureView(data.architecture);
   const focus = options.focusObjectId
     ? `<span class="project-focus" data-project-focus="${escapeHtml(options.focusObjectId)}"></span>`
     : "";
-  return `<div class="project-panel" data-project-page="${page}">${renderProjectNav(page)}<main class="project-body">${focus}${body}</main></div>${projectPanelScript()}`;
+  return `<div class="project-panel" data-project-page="${page}">${renderProjectNav(page)}<main class="project-body">${focus}${body}</main></div>${projectPanelScript(options.state)}${projectDiagramScript()}`;
 }

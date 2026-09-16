@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ProjectStore, defaultProjectDefinition, projectDiagramPath, type ProjectFileHost } from "../src/projectStore.js";
+import { ProjectStore, defaultProjectDefinition, projectDiagramPath, PROJECT_ARCHITECTURE_PATH, type ProjectFileHost } from "../src/projectStore.js";
 import type { ProjectDiagram } from "../src/core/projectDiagram.js";
 import { projectObjectSchema } from "../src/core/projectKnowledge.js";
 
@@ -99,5 +99,86 @@ describe("project store", () => {
 
     await expect(store.writeDiagram({ ...diagram("invalid"), relations: [{ id: "bad", from: "missing", to: "app", kind: "writes", evidence: [] }] })).rejects.toThrow("Invalid project diagram");
     expect((await store.readDiagrams()).map((item) => item.id)).toEqual(["valid"]);
+  });
+});
+
+describe("legacy project data and initialization recovery", () => {
+  it("loads legacy scan and engine fields without rewriting or deleting them", async () => {
+    const host = new MemoryHost();
+    host.files.set(".dext/project.json", JSON.stringify({
+      schemaVersion: 1,
+      version: 3,
+      preset: { default: "experience" },
+      knowledge: { enabled: true, initialized: true },
+      ai: { cli: "codex" },
+      scan: { roots: ["src"], includeTests: true, extraExcludes: ["vendor"] },
+      diagramAdapters: { byKind: { architecture: "drawio" }, byDiagram: { legacy: "mermaid" } },
+      updatedAt: 1
+    }));
+    const store = new ProjectStore(host);
+    const definition = await store.readDefinition();
+    expect(definition.preset.default).toBe("experience");
+    expect((definition as Record<string, unknown>).scan).toEqual({ roots: ["src"], includeTests: true, extraExcludes: ["vendor"] });
+
+    const before = host.files.get(".dext/project.json");
+    await store.readDefinition();
+    await store.readInitialization();
+    await store.readDiagrams();
+    expect(host.files.get(".dext/project.json")).toBe(before);
+
+    const saved = await store.writeDefinition({ ...definition, preset: { default: "engineering" } }, definition.version);
+    expect(saved.status).toBe("applied");
+    const written = JSON.parse(host.files.get(".dext/project.json")!) as Record<string, unknown>;
+    expect(written["preset"]).toEqual({ default: "engineering" });
+    expect(written["scan"]).toEqual({ roots: ["src"], includeTests: true, extraExcludes: ["vendor"] });
+    expect(written["diagramAdapters"]).toEqual({ byKind: { architecture: "drawio" }, byDiagram: { legacy: "mermaid" } });
+  });
+
+  it("requires a valid saved intent for initialization recovery", async () => {
+    const host = new MemoryHost();
+    host.files.set(".dext/project.json", JSON.stringify({ ...defaultProjectDefinition(1), knowledge: { enabled: true, initialized: true } }));
+    await new ProjectStore(host).writeDiagram(diagram("arch"));
+    const store = new ProjectStore(host);
+    expect(await store.readInitialization()).toEqual({ markedInitialized: true, hasIntent: false, diagramCount: 1 });
+    await store.writeIntent({
+      schemaVersion: 1,
+      brief: { name: "Example", summary: "Summary", evidence: [] },
+      updatedAt: 1
+    } as never);
+    expect(await store.readInitialization()).toMatchObject({ hasIntent: true, diagramCount: 1 });
+  });
+
+  it("reads and writes declared architecture rules with their diagram", async () => {
+    const host = new MemoryHost();
+    host.files.set(PROJECT_ARCHITECTURE_PATH, JSON.stringify({
+      schemaVersion: 1, version: 2, updatedAt: 5,
+      decisions: [{ id: "d1", title: "Use queues", detail: "Async by default." }],
+      diagramId: "arch",
+      rules: [
+        { id: "no-ui-db", type: "deny", from: "ui", to: "db", reason: "UI writes through the API." },
+        { id: "acyclic", type: "no_cycles", from: "*" }
+      ]
+    }));
+    const store = new ProjectStore(host);
+    const architecture = await store.readArchitecture();
+    expect(architecture.diagramId).toBe("arch");
+    expect(architecture.rules).toHaveLength(2);
+    expect(architecture.decisions).toHaveLength(1);
+
+    const saved = await store.writeArchitecture({ ...architecture, decisions: [...architecture.decisions, { id: "d2", title: "Second", detail: "" }] }, architecture.version);
+    expect(saved.status).toBe("applied");
+    const written = JSON.parse(host.files.get(PROJECT_ARCHITECTURE_PATH)!) as { rules: unknown[]; diagramId: string; version: number };
+    expect(written.rules).toHaveLength(2);
+    expect(written.diagramId).toBe("arch");
+    expect(written.version).toBe(3);
+  });
+
+  it("falls back to defaults when the rules file is damaged instead of leaking a partial document", async () => {
+    const host = new MemoryHost();
+    // A typo in a rule type must not be silently accepted.
+    host.files.set(PROJECT_ARCHITECTURE_PATH, JSON.stringify({ schemaVersion: 1, version: 1, updatedAt: 0, decisions: [], rules: [{ id: "r", type: "forbid", from: "a" }] }));
+    const architecture = await new ProjectStore(host).readArchitecture();
+    expect(architecture.rules).toEqual([]);
+    expect(architecture.version).toBe(0);
   });
 });

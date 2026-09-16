@@ -4,10 +4,12 @@ import { describeEditorTab, type EditorTabManager } from "./editorTabManager.js"
 import type { EditorTabRestorer } from "./editorTabSerializer.js";
 import { renderProjectPanel, type ProjectPanelData, type ProjectPanelPage } from "./webview/projectPanel.js";
 import type { ProjectInitializationState } from "./projectService.js";
+import type { ProjectPanelMessage } from "./vscodeProjectHost.js";
+
 export interface ProjectEditorDataSource {
   load(): Promise<ProjectPanelData>;
-  /** Drop cached source data after the user changes scan folders. */
-  invalidateScan?(): void | Promise<void>;
+  /** Host → webview messages (render results, generation progress, export status). */
+  subscribe?(listener: (message: ProjectPanelMessage) => void): () => void;
   initialize?(): Promise<ProjectPanelData>;
   initialization?(): ProjectInitializationState;
   onInitializationChange?(listener: (state: ProjectInitializationState) => void): () => void;
@@ -15,11 +17,15 @@ export interface ProjectEditorDataSource {
   setAiModel?(model?: string): Promise<void> | void;
   setAiReasoning?(reasoningEffort?: string): Promise<void> | void;
   setAiSpeed?(speed?: string): Promise<void> | void;
-  setDiagramAdapter?(kind: string, adapterId?: string): Promise<void> | void;
-  regenerateDiagram?(kind: string): Promise<void> | void;
-  exportDiagram?(kind: string, format?: string): Promise<void> | void;
-  showDiagramValidation?(kind: string): Promise<void> | void;
-  focusDiagramNode?(kind: string, objectId: string): Promise<void> | void;
+  /** Renders one saved diagram by stable id; `refresh` distinguishes re-render from AI update. */
+  renderDiagram?(diagramId: string, version?: number, options?: { refresh?: boolean }): Promise<void> | void;
+  /** On-demand AI generation/update of one diagram; other diagrams and knowledge stay untouched. */
+  generateDiagram?(request: { requirement: string; kind?: string; diagramId?: string }): Promise<void> | void;
+  /** Host-owned saving of the exact rendered result (HTML artifact or live SVG serialization). */
+  exportDiagram?(request: { diagramId: string; version?: number; format?: string; content?: string }): Promise<void> | void;
+  focusDiagramNode?(diagramId: string, nodeId: string): Promise<void> | void;
+  /** Cancels in-flight render/generation work when the page closes or the diagram changes. */
+  cancelDiagramWork?(): void;
 }
 
 export interface ProjectEditorProviderOptions {
@@ -28,7 +34,6 @@ export interface ProjectEditorProviderOptions {
   dataSource: ProjectEditorDataSource;
   /** Main workspace root. The first version keeps a single root. */
   scope?: string;
-  chooseScanRoots?: () => Promise<void>;
 }
 
 export interface ProjectEditorShowResult {
@@ -38,8 +43,8 @@ export interface ProjectEditorShowResult {
 }
 
 /**
- * Project editor tab. It exposes only Overview, Knowledge, and Architecture; there is deliberately
- * no Hooks, Review, or task-execution page and no run metadata in the data it loads.
+ * Project editor tab. It exposes only Overview, Knowledge, and Diagrams; there is deliberately
+ * no Hooks, Review, scan-folder or renderer-preference control.
  */
 export class ProjectEditorProvider {
   private readonly pages = new Map<string, ProjectPanelPage>();
@@ -47,11 +52,14 @@ export class ProjectEditorProvider {
   private initializing = false;
   private activePanel: ReturnType<EditorTabManager["open"]>["panel"] | undefined;
   private lastData: ProjectPanelData | undefined;
+  private readonly unsubscribeMessages: (() => void) | undefined;
+  private readonly unsubscribeInitialization: (() => void) | undefined;
   readonly key: string;
 
   constructor(private readonly options: ProjectEditorProviderOptions) {
     this.key = editorTabKey("project", options.scope ? { scope: options.scope } : {});
-    options.dataSource.onInitializationChange?.((state) => this.activePanel?.postMessage?.({ type: "projectInitializationProgress", state }));
+    this.unsubscribeInitialization = options.dataSource.onInitializationChange?.((state) => this.activePanel?.postMessage?.({ type: "projectInitializationProgress", state }));
+    this.unsubscribeMessages = options.dataSource.subscribe?.((message) => this.activePanel?.postMessage?.(message));
   }
 
   get page(): ProjectPanelPage {
@@ -59,11 +67,18 @@ export class ProjectEditorProvider {
   }
 
   private render(page: ProjectPanelPage, data: ProjectPanelData): string {
-    return renderProjectPanel(page, data, this.focusObjectId ? { focusObjectId: this.focusObjectId } : {});
+    // The page script persists this exact state so a reload restores the same page.
+    const state = createEditorTabState(this.key, { page });
+    return renderProjectPanel(page, data, {
+      ...(this.focusObjectId ? { focusObjectId: this.focusObjectId } : {}),
+      ...(state ? { state } : {})
+    });
   }
 
   /** Opens a page. A focus id marks the long-term object an adopted suggestion wrote. */
   async show(page: ProjectPanelPage = "overview", focusObjectId?: string): Promise<ProjectEditorShowResult> {
+    const previous = this.pages.get(this.key);
+    if (previous && previous !== page) this.options.dataSource.cancelDiagramWork?.();
     this.pages.set(this.key, page);
     this.focusObjectId = focusObjectId;
     const data = await this.options.dataSource.load();
@@ -89,39 +104,43 @@ export class ProjectEditorProvider {
     return outcome.status;
   }
 
+  /** Releases message listeners and cancels diagram work when the tab is disposed. */
+  dispose(): void {
+    this.options.dataSource.cancelDiagramWork?.();
+    this.unsubscribeMessages?.();
+    this.unsubscribeInitialization?.();
+    // Dropping the reference keeps a disposed panel from being posted to afterwards.
+    this.activePanel = undefined;
+  }
+
   /** Handles webview messages routed by the shared manager. */
   async handleMessage(key: string, message: unknown): Promise<void> {
     if (key !== this.key) return;
-    const payload = message as { type?: unknown; page?: unknown; kind?: unknown; adapterId?: unknown; action?: unknown; format?: unknown; objectId?: unknown; cli?: unknown; model?: unknown; reasoningEffort?: unknown; speed?: unknown };
+    const payload = message as {
+      type?: unknown; page?: unknown; diagramId?: unknown; version?: unknown; kind?: unknown;
+      requirement?: unknown; format?: unknown; content?: unknown; nodeId?: unknown; refresh?: unknown;
+      cli?: unknown; model?: unknown; reasoningEffort?: unknown; speed?: unknown;
+    };
     if (payload?.type === "projectInitialize" && this.options.dataSource.initialize && !this.initializing) {
       this.initializing = true;
-      // Start the task before awaiting it so a tab switch can immediately reload the
-      // running snapshot. The running render is intentionally independent of the
-      // completion render below; otherwise replacing the webview while initialization
-      // is in flight makes the progress indicator disappear.
+      // Start the task before awaiting it so a tab switch can immediately reload the running
+      // snapshot. The running render is intentionally independent of the completion render.
       const task = this.options.dataSource.initialize();
-      // Keep a rejection handler attached even if the optimistic running render
-      // fails before we reach the normal await below.
       void task.catch(() => undefined);
       try {
-        // Progress events are pushed to the existing webview immediately. Waiting for `load()`
-        // here would wait for the complete source scan and hide the real scan progress.
         if (this.lastData) {
-          const state = this.options.dataSource.initialization?.() ?? { ...this.lastData.overview.initialization, status: "running" as const, phase: "scanning" as const };
+          const state = this.options.dataSource.initialization?.() ?? { ...this.lastData.overview.initialization, status: "running" as const, phase: "preparing" as const };
           const runningData = { ...this.lastData, overview: { ...this.lastData.overview, initialization: state } };
           this.activePanel?.setHtml?.(this.render(this.page, runningData));
         }
         const data = await task;
-        // Keep whichever page the user selected while the initialization task was
-        // running. Replacing it with Overview made a tab switch feel lost.
         const completedPanel = this.options.manager.open(describeEditorTab("project", this.key, "dext.project"));
         this.activePanel = completedPanel.panel;
         this.lastData = data;
         completedPanel.panel.setHtml?.(this.render(this.page, data));
       } catch {
-        // A failed run is represented by the persisted initialization snapshot. Keep
-        // the panel usable and let the next click retry instead of leaving a rejected
-        // webview message promise behind.
+        // A failed run is represented by the persisted initialization snapshot. Keep the panel
+        // usable and let the next click retry instead of leaving a rejected message promise behind.
         try {
           const data = await this.options.dataSource.load();
           const opened = this.options.manager.open(describeEditorTab("project", this.key, "dext.project"));
@@ -129,22 +148,11 @@ export class ProjectEditorProvider {
           this.lastData = data;
           opened.panel.setHtml?.(this.render(this.page, data));
         } catch {
-          // Loading a failure snapshot is best effort; the original initialization
-          // error has already been reflected by the service state.
+          // Loading a failure snapshot is best effort.
         }
       } finally {
         this.initializing = false;
       }
-      return;
-    }
-    if (payload?.type === "projectChooseRoots" && this.options.chooseScanRoots && !this.initializing) {
-      await this.options.chooseScanRoots();
-      await this.options.dataSource.invalidateScan?.();
-      const data = await this.options.dataSource.load();
-      const opened = this.options.manager.open(describeEditorTab("project", this.key, "dext.project"));
-      this.activePanel = opened.panel;
-      this.lastData = data;
-      opened.panel.setHtml?.(this.render("overview", data));
       return;
     }
     if (payload?.type === "projectAiCli" && this.options.dataSource.setAiCli && !this.initializing) {
@@ -163,33 +171,38 @@ export class ProjectEditorProvider {
       await this.options.dataSource.setAiSpeed(typeof payload.speed === "string" && payload.speed ? payload.speed : undefined);
       return;
     }
-    if (payload?.type === "projectAdapterPreference" && typeof payload.kind === "string" && this.options.dataSource.setDiagramAdapter) {
-      await this.options.dataSource.setDiagramAdapter(payload.kind, typeof payload.adapterId === "string" ? payload.adapterId : undefined);
-      // Keep the existing webview alive while the native select is open. A
-      // full setHtml rerender closes the popup and makes the choice flash away.
+    if (payload?.type === "projectDiagramRender" && typeof payload.diagramId === "string") {
+      await this.options.dataSource.renderDiagram?.(payload.diagramId, typeof payload.version === "number" ? payload.version : undefined, payload.refresh === true ? { refresh: true } : {});
       return;
     }
-    if (payload?.type === "projectDiagramAction" && typeof payload.kind === "string") {
-      const action = payload.action;
-      if (action === "regenerate") await this.options.dataSource.regenerateDiagram?.(payload.kind);
-      else if (action === "receipt") await this.options.dataSource.showDiagramValidation?.(payload.kind);
-      else if (action === "export") await this.options.dataSource.exportDiagram?.(payload.kind, typeof payload.format === "string" ? payload.format : undefined);
-      else if (action === "auto") await this.options.dataSource.setDiagramAdapter?.(payload.kind, undefined);
-      if (action !== "auto") {
-        const data = await this.options.dataSource.load();
-        const opened = this.options.manager.open(describeEditorTab("project", this.key, "dext.project"));
-        this.activePanel = opened.panel;
-        this.lastData = data;
-        opened.panel.setHtml?.(this.render(this.page, data));
-      }
+    if (payload?.type === "projectDiagramGenerate" && typeof payload.requirement === "string") {
+      await this.options.dataSource.generateDiagram?.({
+        requirement: payload.requirement,
+        ...(typeof payload.kind === "string" && payload.kind ? { kind: payload.kind } : {}),
+        ...(typeof payload.diagramId === "string" && payload.diagramId ? { diagramId: payload.diagramId } : {})
+      });
       return;
     }
-    if (payload?.type === "projectDiagramFocus" && typeof payload.kind === "string" && typeof payload.objectId === "string") {
-      await this.options.dataSource.focusDiagramNode?.(payload.kind, payload.objectId);
+    if (payload?.type === "projectDiagramExport" && typeof payload.diagramId === "string") {
+      await this.options.dataSource.exportDiagram?.({
+        diagramId: payload.diagramId,
+        ...(typeof payload.version === "number" ? { version: payload.version } : {}),
+        ...(typeof payload.format === "string" ? { format: payload.format } : {}),
+        ...(typeof payload.content === "string" ? { content: payload.content } : {})
+      });
+      return;
+    }
+    if (payload?.type === "projectDiagramFocus" && typeof payload.diagramId === "string" && typeof payload.nodeId === "string") {
+      await this.options.dataSource.focusDiagramNode?.(payload.diagramId, payload.nodeId);
+      return;
+    }
+    if (payload?.type === "projectDiagramCancel") {
+      this.options.dataSource.cancelDiagramWork?.();
       return;
     }
     const page = payload?.type === "projectPage" ? payload.page : payload?.page;
     if (typeof page === "string" && (page === "overview" || page === "knowledge" || page === "architecture")) {
+      if (this.page !== page) this.options.dataSource.cancelDiagramWork?.();
       this.pages.set(this.key, page);
       this.focusObjectId = undefined;
       const data = await this.options.dataSource.load();

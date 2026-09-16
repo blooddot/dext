@@ -1,78 +1,137 @@
 import { describe, expect, it } from "vitest";
-import { evaluateArchitectureRules, type ArchitectureScanResult } from "../src/core/projectArchitecture.js";
-import { scanProjectArchitecture } from "../src/core/projectArchitectureScanner.js";
-import { runArchitectureScan } from "../src/core/projectArchitectureWorker.js";
+import { architectureRuleReport, evaluateArchitectureRules } from "../src/core/projectArchitecture.js";
+import type { ProjectDiagram } from "../src/core/projectDiagram.js";
 import { renderArchitectureView } from "../src/webview/projectArchitectureView.js";
 
+function semanticDiagram(): ProjectDiagram {
+  const evidence = [{ path: "src/a.ts", line: 1 }];
+  return {
+    schemaVersion: 1, id: "arch", title: "Architecture", kind: "architecture", version: 1, updatedAt: 1,
+    nodes: [
+      { id: "a", label: "A", role: "system", semanticIds: [], evidence },
+      { id: "b", label: "B", role: "service", semanticIds: [], evidence },
+      { id: "c", label: "C", role: "store", semanticIds: [], evidence }
+    ],
+    relations: [
+      { id: "ab", from: "a", to: "b", kind: "depends_on", evidence },
+      { id: "ba", from: "b", to: "a", kind: "depends_on", evidence },
+      { id: "ac", from: "a", to: "c", kind: "depends_on", evidence }
+    ]
+  };
+}
+
 describe("architecture rules", () => {
-  it("detects a cycle and denied relation", () => {
-    const result: ArchitectureScanResult = { modules: [{ id: "a", name: "a", language: "typescript", paths: ["a.ts"], source: "detected" }, { id: "b", name: "b", language: "typescript", paths: ["b.ts"], source: "detected" }], relations: [{ from: "a", to: "b", source: "detected", confidence: 1 }, { from: "b", to: "a", source: "detected", confidence: 1 }], unsupported: [], parserVersions: {} };
-    expect(evaluateArchitectureRules(result, [{ id: "cycle", type: "no_cycles", from: "*" }, { id: "deny", type: "deny", from: "a", to: "b" }])).toHaveLength(2);
+  it("detects a cycle and a denied relation on the explicit semantic diagram", () => {
+    const violations = evaluateArchitectureRules(semanticDiagram(), [
+      { id: "cycle", type: "no_cycles", from: "*" },
+      { id: "deny", type: "deny", from: "a", to: "b" }
+    ]);
+    expect(violations.map((violation) => violation.ruleId).sort()).toEqual(["cycle", "deny"]);
+    expect(violations.every((violation) => violation.nodeIds.length >= 2)).toBe(true);
+  });
+
+  it("flags dependencies outside an allowed boundary and keeps to a stable direction", () => {
+    const violations = evaluateArchitectureRules(semanticDiagram(), [{ id: "allow", type: "allow", from: "a", to: "b", reason: "A may only use B." }]);
+    expect(violations).toHaveLength(1);
+    expect(violations[0]).toMatchObject({ ruleId: "allow", nodeIds: ["a", "c"] });
+  });
+
+  it("returns no violations for a matching rule set", () => {
+    expect(evaluateArchitectureRules(semanticDiagram(), [{ id: "deny", type: "deny", from: "c", to: "a" }])).toEqual([]);
+  });
+
+  it("picks the diagram declared rules belong to and explains when it cannot", () => {
+    const architecture = semanticDiagram();
+    // The workflow has different edges, so the evaluated diagram is identifiable from the result.
+    const workflow: ProjectDiagram = { ...architecture, id: "flow", kind: "workflow", relations: [{ id: "bc", from: "b", to: "c", kind: "calls", evidence: [] }] };
+    const deny = { id: "deny", type: "deny" as const, from: "a", to: "b" };
+
+    // No rules: nothing to evaluate, so the page shows no section at all.
+    expect(architectureRuleReport([architecture], { rules: [] })).toBeUndefined();
+
+    // A declared diagram wins, even when it is not the architecture kind.
+    expect(architectureRuleReport([architecture, workflow], { diagramId: "flow", rules: [deny] })).toMatchObject({ diagramId: "flow", diagramVersion: 1, violations: [] });
+    expect(architectureRuleReport([architecture], { diagramId: "arch", rules: [deny] })?.violations.map((violation) => violation.ruleId)).toEqual(["deny"]);
+
+    // A single architecture diagram is the default target.
+    const report = architectureRuleReport([architecture, workflow], { rules: [deny] });
+    expect(report).toMatchObject({ diagramId: "arch", diagramVersion: 1 });
+    expect(report?.violations.map((violation) => violation.ruleId)).toEqual(["deny"]);
+
+    // Two candidates are ambiguous rather than evaluated against a guess.
+    const second: ProjectDiagram = { ...architecture, id: "arch2" };
+    const ambiguous = architectureRuleReport([architecture, second], { rules: [deny] });
+    expect(ambiguous?.violations).toEqual([]);
+    expect(ambiguous?.note).toContain("diagramId");
+
+    expect(architectureRuleReport([workflow], { rules: [deny] })?.note).toContain("no architecture diagram");
+    expect(architectureRuleReport([architecture], { diagramId: "missing", rules: [deny] })?.note).toContain("missing");
   });
 });
 
-describe("architecture scan coverage", () => {
-  const desktopProject = [
-    { path: "native/Cargo.toml", content: '[package]\nname = "fixture"\nversion = "0.1.0"' },
-    { path: "native/Cargo.lock", content: "# lockfile" },
-    { path: "native/src/lib.rs", content: "pub fn run() {}" },
-    { path: "native/src/tasks.rs", content: "use fixture::run;" },
-    { path: "src/ui/Dashboard.tsx", content: 'import { api } from "../api.js";' },
-    { path: "src/api.ts", content: "export const api = 1;" }
+describe("diagrams page", () => {
+  const summaries = [
+    { id: "d1", title: "订单流程", kind: "workflow" as const, version: 3, updatedAt: 1 },
+    { id: "d2", title: "示例架构", kind: "architecture" as const, version: 1, updatedAt: 2 }
   ];
 
-  it("reads the Cargo manifest so a local crate path resolves in the real scan", () => {
-    const result = scanProjectArchitecture(desktopProject);
-    expect(result.relations.some((relation) => relation.from === "native/src/tasks" && relation.to === "native/src/lib")).toBe(true);
-    // A manifest is scan context: it is never reported as an unsupported file.
-    expect(result.unsupported.some((entry) => entry.path.endsWith("Cargo.toml"))).toBe(false);
-    expect(result.coverage?.some((note) => note.includes("Cargo.lock was not resolved"))).toBe(true);
+  it("lists saved diagrams with per-diagram actions and no renderer preferences", () => {
+    const html = renderArchitectureView({ diagrams: summaries, selected: summaries[1]!, engine: { id: "archify", version: "2.17.0-dev.1+d673e830", available: true } });
+    expect(html).toContain("data-diagram-select");
+    expect(html).toContain('data-diagram-action="refresh"');
+    expect(html).toContain('data-diagram-action="export"');
+    expect(html).toContain('data-diagram-action="fullscreen"');
+    expect(html).toContain("Workflow");
+    expect(html).not.toContain("data-project-adapter-select");
+    expect(html).not.toContain("Use recommended");
+    expect(html).not.toContain("Fallback:");
   });
 
-  it("carries the manifest limitation into the worker coverage notes", () => {
-    const outcome = runArchitectureScan(desktopProject, { maxFiles: 10, maxFileBytes: 4096 });
-    expect(outcome.coverage.limitReached).toBe(false);
-    expect(outcome.coverage.notes.some((note) => note.includes("Cargo.lock was not resolved"))).toBe(true);
-    expect(new Set(outcome.result.modules.map((module) => module.language))).toEqual(new Set(["rust", "typescript"]));
+  it("shows an empty state and a generation entry instead of a fake diagram", () => {
+    const html = renderArchitectureView({ diagrams: [] });
+    expect(html).toContain("No diagram generated yet");
+    expect(html).toContain("data-diagram-generate-new");
+    expect(html).toContain("data-diagram-empty");
+    expect(html).not.toContain("architecture-graph-scroll");
+    expect(html).not.toContain("data-module-id");
   });
-});
 
-describe("semantic architecture controls", () => {
-  it("uses stable module ids for search and adapter selection", () => {
+  it("labels a last-good render with the version actually shown", () => {
     const html = renderArchitectureView({
-      modules: [{ id: "ctx.tasks", name: "Tasks", language: "typescript", paths: ["src/tasks.ts"], source: "detected" }],
-      relations: [],
-      diagramKind: "architecture",
-      adapter: {
-        currentId: "structurizr",
-        choices: [{ id: "structurizr", version: "1", available: true, supported: true, preferred: true, formats: ["structurizr"] }]
-      }
+      diagrams: summaries,
+      selected: summaries[1]!,
+      render: { diagramId: "d2", requestedVersion: 2, displayedVersion: 1, usedLastGood: true, status: "failed", issues: [] }
     });
-    expect(html).toContain('data-module-id="ctx.tasks"');
-    expect(html).toContain("data-project-diagram-search");
-    expect(html).toContain("data-project-adapter-select");
-    expect(html).toContain("projectAdapterPreference");
-    expect(html).toContain('data-project-diagram-action="fullscreen"');
-    expect(html).toContain("requestFullscreen");
+    expect(html).toContain("v1");
+    expect(html).toContain("last successful result");
   });
 
-  it("keeps the first and last map nodes inside the SVG viewport", () => {
-    const modules = ["a", "b", "c", "d"].map((id) => ({
-      id, name: id.toUpperCase(), language: "typescript" as const, paths: [`${id}.ts`], source: "detected" as const
-    }));
-    const html = renderArchitectureView({ modules, relations: [] });
-    const viewBox = html.match(/viewBox="0 0 (\d+(?:\.\d+)?) (\d+(?:\.\d+)?)"/);
-    expect(viewBox).not.toBeNull();
-    const width = Number(viewBox?.[1]);
-    const height = Number(viewBox?.[2]);
-    for (const match of html.matchAll(/<rect x="([\d.-]+)" y="([\d.-]+)" width="([\d.-]+)"/g)) {
-      const x = Number(match[1]);
-      const y = Number(match[2]);
-      const nodeWidth = Number(match[3]);
-      expect(x).toBeGreaterThanOrEqual(0);
-      expect(x + nodeWidth).toBeLessThanOrEqual(width);
-      expect(y).toBeGreaterThanOrEqual(0);
-      expect(y + 36).toBeLessThanOrEqual(height);
-    }
+  it("marks an uninitialized knowledge model without hiding saved diagrams", () => {
+    const html = renderArchitectureView({ diagrams: summaries, selected: summaries[1]!, knowledgeUninitialized: true });
+    expect(html).toContain("Project knowledge is not initialized");
+    expect(html).toContain("data-diagram-frame");
+  });
+
+  it("reports declared rules and their violations without claiming a baseline", () => {
+    const rules = [{ id: "no-ui-db", type: "deny" as const, from: "ui", to: "db", reason: "UI writes through the API." }];
+    const violations = [{ ruleId: "no-ui-db", nodeIds: ["ui", "db"], reason: "Denied architecture dependency." }];
+
+    const current = renderArchitectureView({ diagrams: summaries, selected: summaries[1]!, rules, violations });
+    expect(current).toContain("architecture-rules");
+    expect(current).toContain("no-ui-db");
+    expect(current).toContain("Violations (1)");
+    // Nothing was accepted as a baseline, so the current violations are not labelled as new ones.
+    expect(current).not.toContain("New violations");
+
+    const withBaseline = renderArchitectureView({ diagrams: summaries, selected: summaries[1]!, rules, violations, baselineViolations: violations });
+    expect(withBaseline).toContain("New violations (1)");
+    expect(withBaseline).toContain("Existing baseline violations (1)");
+
+    const noted = renderArchitectureView({ diagrams: [], rules, rulesNote: "Rules are declared but no architecture diagram is saved yet." });
+    expect(noted).toContain("no architecture diagram is saved yet");
+    expect(noted).not.toContain("architecture-violations");
+
+    // No rules, no violations and no note: the section is left out entirely.
+    expect(renderArchitectureView({ diagrams: summaries })).not.toContain("architecture-rules");
   });
 });

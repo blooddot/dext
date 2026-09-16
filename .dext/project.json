@@ -6,7 +6,7 @@
   },
   "knowledge": {
     "enabled": true,
-    "initialized": true
+    "initialized": false
   },
   "ai": {
     "cli": "codex",

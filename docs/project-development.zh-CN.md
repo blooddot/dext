@@ -7,7 +7,7 @@
 Dext 把两类理解严格分开：**项目知识**长期存在、属于仓库；**对话 Review**只描述某一次运行，永不写回项目。
 
 [项目文件](#项目文件) · [知识维度](#知识维度) · [对话 Review](#对话-review) ·
-[Review 预设](#review-预设) · [编辑器标签](#编辑器标签) · [架构扫描](#架构扫描) · [校验](#校验)
+[Review 预设](#review-预设) · [编辑器标签](#编辑器标签) · [主动初始化](#主动初始化) · [系统图与-archify](#系统图与-archify) · [校验](#校验)
 
 ## 项目文件
 
@@ -18,7 +18,7 @@ Dext 把两类理解严格分开：**项目知识**长期存在、属于仓库�
 | `.dext/project.json` | schema 版本、乐观锁 `version`、默认 Review 预设、知识开关 |
 | `.dext/project-intent.json` | 初始化时 AI 生成的项目简介和语义知识 |
 | `.dext/objects/<id>.json` | 每个文件一个已确认的长期对象 |
-| `.dext/architecture.json` | 人工声明的模块关系、规则与设计决策 |
+| `.dext/architecture.json` | 人工声明的设计决策与架构规则；规则针对其指定的已保存图求值，不依赖源码扫描 |
 | `.dext/diagrams/<id>.json` | 与渲染器无关的 AI 架构图 IR，每张图一个文件 |
 
 `ProjectStore` 通过一个极小的文件宿主机读写这些文件，因此同一套逻辑可运行在扩展、worker 或内存测试替身中。每次写入都携带期望的 `version`；并发修改返回 `{ status: "conflict" }` 而不会覆盖。`project.json` 缺失或损坏时回退默认值，绝不阻塞开发。
@@ -70,40 +70,61 @@ Dext 把两类理解严格分开：**项目知识**长期存在、属于仓库�
 - `editorTabManager` 对每个键最多创建一个面板，支持 reveal/close，并使用注入的宿主机，便于脱离 VS Code 测试。
 - `editorTabSerializer` 提供与 `WebviewPanelSerializer` 兼容的恢复路径，并带占用守卫，因此序列化恢复与主动恢复不会重复打开同一标签。
 
-项目标签只暴露 **概览**、**知识**、**架构**三页；不设 Hook、Review 或任务执行页，也不会向其加载任何运行元数据。
+项目标签暴露 **概览**、**知识**、**系统图**三页，内部页面键仍为 architecture 以兼容标签恢复。不设 Hook、Review、扫描目录或渲染器偏好控件。
 
-## 架构扫描
+## 主动初始化
 
-`runArchitectureScan` / `startArchitectureScan` 按文件数、文件大小与时长限制扫描，并报告跳过文件的覆盖率。取消是协作式的：返回带 `cancelled: true` 的部分结果，而不是抛错。
+打开、恢复、切换或刷新项目标签只读取已经保存在 `.dext` 中的数据。Dext 不会在后台枚举源码、运行解析器、调用 AI 或写入 `.dext`。只有在用户主动选择 **初始化项目知识** 或生成图时，才会读取受限的 README、文档、清单和必要源码文本。
 
-- **TypeScript/JavaScript** 使用解析器事实。
-- **Python** 解析 `from .mod import x` 相对导入、`__init__` 与命名空间包；歧义、未解析或动态导入记入 unsupported，绝不猜测。
-- **Rust** 在匹配前先剥离注释、文档与字符串字面量，因此注释或字符串里的 `use` 永远不会被当作依赖。`crate`/`self`/`super` 路径、分组与再导出的 `use`、以及 `mod` 声明都会解析到已扫描模块。`#[cfg]`、宏与 include 记为不确定。`parseCargoManifest` 无需运行 Cargo 即可读取 `Cargo.toml` 的描述与依赖名；`readRustProjectMetadata` 可选地沿用调用方既有权限调用 `cargo metadata` 补充，进程不可用时降级为清单并明确说明覆盖范围。
+初始化状态机分为三个阶段：
 
-Tauri IPC 契约等人工关系标记为 `declared`，在架构视图中与 `detected` 关系分开呈现；视图在本地渲染 SVG，不依赖浏览器地址。
+1. **准备证据** —— 读取受预算约束的证据包：README／文档、清单与必要源码文本；同时应用文件数、单文件大小、总字符数、排除规则、路径校验和脱敏限制。不构造 AST、不提取导入关系、不运行语言解析器。
+2. **AI 生成** —— 所选项目 AI CLI 返回一份严格 JSON，包含 Project Intent 和零到多张图。证据、稳定 ID 引用和各类图所需的语义结构都会先对照本次受限输入校验，再进入保存阶段。
+3. **校验与保存** —— 先写入 Intent 和每张图；只有全部写入成功后才把 `.dext/project.json` 标记为 `initialized`。失败或取消的运行绝不显示成功，较早运行的迟到响应也不能覆盖新状态。
 
-## Diagram adapter
+没有有效已存 Intent 的项目显示 **未初始化** 和主动初始化入口。旧 `initialized` 标记、旧扫描数据或引擎偏好文件都不算成功。
+运行中、失败、取消及缺少图会分别显示；
+重启后从有效 Intent、已存图和初始化记录恢复状态，只有图的项目仍可查看图，并单独提示知识尚未初始化。
 
-Project 的语义模型和 `ProjectDiagram` IR 是唯一事实来源。外部绘图工具只通过
-`ProjectDiagramAdapter` 读取 IR、生成预览/导出物并返回验证收据；外部格式不会写入
-Project 持久化模型。
+## 系统图与 Archify
 
-| Adapter | 主要用途 | 适合的图表 | 主要输出/编辑能力 |
-| --- | --- | --- | --- |
-| Archify | 交互式语义图 | Architecture、Workflow、Sequence、Data Flow、Lifecycle | HTML/SVG 预览、路径探针和证据下钻（当前通过 bridge） |
-| drawio-skill | 人工维护的可编辑模型 | 五类图表 | `.drawio` XML、手工布局和增量漂移比较 |
-| Mermaid | 文档和轻量分享 | Architecture、Workflow、Sequence（其余按能力降级） | Mermaid 文本或 Markdown，不承诺交互和手工布局 |
-| Structurizr | C4 architecture-as-code | Architecture 的 System/Container/Component | Structurizr DSL/Markdown，适合版本控制 |
+Project 的语义模型和 `ProjectDiagram` IR 是唯一事实来源，由唯一固定引擎 Archify `2.17.0-dev.1+d673e830` 渲染。运行时位于 `vendor/project-diagrams/archify`，由 `context.extensionUri` 定位（不再依赖 `process.cwd()`），无需安装 skill、Python 或在线渲染服务。
 
-默认顺序按图表类型选择：Architecture 为 Structurizr → Archify → draw.io，其余图表为
-Archify → draw.io → Mermaid。用户可以对每种图表设置 `auto` 或指定 adapter；不可用时
-按顺序回退并保留上一份 last-good 结果。draw.io 的布局作为独立 overlay 保存，不能覆盖
-Project 的语义节点和关系。
+五类图共享节点、关系和证据结构，并按类型增加可选的渲染器中性语义：
 
-依赖策略：Archify 和 drawio-skill 以固定提交随扩展提供，并通过受控本地进程调用；Mermaid
-和 Structurizr 由 Dext 内部 adapter 生成文本产物。当前没有稳定的外部模块 API，因此不声明
-optional module dependency，也不在 Project 内复制另一套兼容 renderer。若上游提供稳定 API，
-后续仍可在不改变 Project IR 的前提下替换对应 adapter。
+| 类型 | 可选语义结构 |
+| --- | --- |
+| 架构图 | 边界分组与依赖方向 |
+| 工作流图 | 泳道、显式顺序、分支条件、异常路径、分组布局 |
+| 时序图 | 有序参与者与调用／返回消息 |
+| 数据流图 | 2–5 个阶段与节点 `stageId` |
+| 状态机／生命周期图 | 初始／普通／终态、事件、条件与转换 |
+
+Archify 转换分别映射五份上游 Schema（含 `data_flow → dataflow` 与 workflow v2 的 0–5 列），维护 Project ID 与 Archify ID 双向映射，在上游 Schema 支持时传递源码证据，并对仅布局类诊断执行有上限的修复；语义错误保留可理解诊断。
+
+**系统图** 页在沙箱 iframe 中嵌入完整 Archify HTML，保留原生视觉、搜索、缩放与探索能力。父页面持有 VS Code API；iframe 消息校验来源窗口与会话，操作以 `diagramId` 和语义版本定位。页面提供图选择、生成／更新、刷新、导出与全屏，校验、版本和证据覆盖详情放在折叠区域。
+
+### 声明的架构规则
+
+`.dext/architecture.json` 可以针对某一张已保存图的**稳定 Project 节点 id** 声明规则，因此 Archify id 或布局变化不会让规则失效：
+
+```json
+{
+  "schemaVersion": 1, "version": 0, "updatedAt": 0,
+  "decisions": [],
+  "diagramId": "architecture",
+  "rules": [
+    { "id": "no-ui-db", "type": "deny", "from": "ui", "to": "db", "reason": "UI 只能经 API 写库" },
+    { "id": "api-only", "type": "allow", "from": "api", "to": "db", "reason": "只有 API 可以访问数据库" },
+    { "id": "acyclic", "type": "no_cycles", "from": "*" }
+  ]
+}
+```
+
+`deny` 命中确实存在的关系，`allow` 命中所有从 `from` 出发但目标不是 `to` 的关系，`no_cycles` 命中依赖环。系统图页会列出规则以及当前图违反的条目；当声明了规则却无法求值（未写 `diagramId` 但存在多张架构图、`diagramId` 指向不存在的图、或还没有架构图）时，页面会明确说明而不是猜一张图。规则写错会让整个文件不可用并回退默认值，不会被静默忽略。
+
+正式导出仅 **HTML** 与 **SVG**，都读取当前显示的同一次成功渲染结果。HTML 可独立打开；SVG 通过桥接取得原生序列化结果（保留样式、字体和背景），由扩展宿主保存。新版本渲染失败时展示同图最近成功版本并标明实际版本，因此导出与所见一致；切图、关闭页面或启动更新会取消过期任务。
+
 
 ## 校验
 
@@ -111,5 +132,17 @@ optional module dependency，也不在 Project 内复制另一套兼容 renderer
 npm run check      # tsc --noEmit、eslint 与生产构建
 npm run test:host  # VS Code 激活冒烟测试
 ```
+
+浏览器检查在本地 Chromium 或 Edge 中运行，并且刻意不并入 `npm run check`，以免标准门禁依赖本机浏览器：
+
+```bash
+npm run check:ui                        # 依次运行下面四项
+node scripts/checkComposerLayoutUi.mjs  # 输入区附件向上生长、底栏对齐、窄视口
+node scripts/checkStreamJumpUi.mjs      # 跳到底部控件不遮挡对话滚动条
+node scripts/checkEditorTabsUi.mjs      # 编辑器外壳、Project 各页、CSP 与主题
+node scripts/checkProjectDiagramsUi.mjs # 五种原生图表、未初始化／空状态、桥接与导出
+```
+
+assertWebviewAssets.mjs 依据 esbuild 依赖清单证明运行包不含 TypeScript 编译器或旧扫描／引擎实现，确认适配器引用的 Archify 入口、五份 Schema 与五个渲染器存在，且 `vendor/project-diagrams/drawio` 未进入分发包；其余 vendor 内容随包分发由 `.vscodeignore` 未排除 `vendor/**` 保证。
 
 项目层单元测试可运行：`npx vitest run test/project*.test.ts test/editorTab*.test.ts test/turnReview*.test.ts`。

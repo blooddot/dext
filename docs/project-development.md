@@ -9,8 +9,8 @@ the repository. **Conversation review** describes one run and is never written i
 
 [Project files](#project-files) · [Knowledge dimensions](#knowledge-dimensions) ·
 [Conversation review](#conversation-review) · [Review presets](#review-presets) ·
-[Editor tabs](#editor-tabs) · [Architecture scanning](#architecture-scanning) ·
-[Checks](#checks)
+[Editor tabs](#editor-tabs) · [Explicit initialization](#explicit-initialization) ·
+[Diagrams and Archify](#diagrams-and-archify) · [Checks](#checks)
 
 ## Project files
 
@@ -18,10 +18,10 @@ Project data lives under `.dext/` in the workspace:
 
 | Path | Contents |
 | --- | --- |
-| `.dext/project.json` | Schema version, optimistic `version`, default review preset, knowledge settings |
+| `.dext/project.json` | Schema version, optimistic `version`, default review preset, knowledge settings and AI CLI selection. Legacy `scan` and engine-preference fields stay readable and are preserved on write, but are no longer used. |
 | `.dext/project-intent.json` | AI-generated project brief and semantic knowledge from initialization |
 | `.dext/objects/<id>.json` | One accepted long-term object per file |
-| `.dext/architecture.json` | Declared module relations, rules, and design decisions |
+| `.dext/architecture.json` | Declared design decisions and architecture rules. Rules are evaluated against the saved diagram they name, never against a source scan. |
 | `.dext/diagrams/<id>.json` | Canonical AI-generated diagram IR (renderer-neutral, one file per diagram) |
 
 `ProjectStore` reads and writes these files through a small file host, so the same logic runs in the
@@ -99,57 +99,117 @@ Project, API, Global Resources, and History open as editor tabs and share one la
 - `editorTabSerializer` registers a `WebviewPanelSerializer`-compatible restore path with a claim
   guard, so a serializer restore and a proactive restore never double-open the same tab.
 
-The Project tab exposes only **Overview**, **Knowledge**, and **Architecture**. There is deliberately
-no Hooks, Review, or task-execution page, and no run metadata is loaded into it.
+The Project tab exposes **Overview**, **Knowledge**, and **Diagrams**. The page key stays `architecture`
+so restored tabs keep working, while the visible name describes what the page contains. There is
+deliberately no Hooks, Review, scan-folder or renderer-preference control, and no run metadata is
+loaded into it.
 
-## Architecture scanning
+## Explicit initialization
 
-`runArchitectureScan` / `startArchitectureScan` bound a scan by file count, file size, and duration,
-and report coverage for skipped files. Cancellation is cooperative: the partial result is returned
-with `cancelled: true` instead of throwing.
+Opening, restoring, switching or refreshing the Project tab only reads saved `.dext` data. Dext never
+enumerates source files, runs a parser, calls AI, or writes `.dext` in the background. Source text is
+read only after the user chooses **Initialize project knowledge** or generates a diagram.
 
-- **TypeScript/JavaScript** uses parser facts.
-- **Python** resolves `from .mod import x` relative imports, `__init__` and namespace packages, and
-  records ambiguous, unresolved, or dynamic imports as unsupported instead of guessing.
-- **Rust** strips comments, documentation, and string literals before matching, so a `use` inside a
-  comment or string is never a dependency. `crate`/`self`/`super` paths, grouped and re-exported
-  `use` items, and `mod` declarations resolve against scanned modules. `#[cfg]`, macros, and
-  includes are reported as uncertain. `parseCargoManifest` reads the description and dependency
-  names from `Cargo.toml` without running Cargo; `readRustProjectMetadata` optionally enriches that
-  with `cargo metadata` using the caller's existing permissions, and degrades to the manifest with
-  an explicit coverage note when the process is unavailable.
+The initialization service uses three phases:
 
-Manual relations such as a Tauri IPC contract are marked `declared` and stay separate from
-`detected` relations in the architecture view, which renders a local SVG without a browser address.
+1. **Preparing** — read a bounded evidence package: README/documentation, manifests and the necessary
+   source text, capped by file count, per-file size, total characters, exclusion rules, path validation
+   and secret redaction. No AST, import graph or language parser is constructed.
+2. **Generating** — the selected Project AI CLI returns one strict JSON document containing the Project
+   Intent and zero or more diagrams. Evidence, stable-id references and kind-specific diagram semantics
+   are validated against the exact bounded input before anything is saved.
+3. **Saving** — the intent and every diagram are written first; `.dext/project.json` is marked
+   `initialized` only after all writes succeed. A failed or cancelled run never reports success, and a
+   late response from an older run cannot overwrite a newer state.
 
-## Diagram adapters
+A project with no valid saved intent shows **Not initialized** and an explicit initialization entry.
+A legacy `initialized` flag, old scan data or an engine-preference file alone never counts as success.
+Running, failed, cancelled, and initialized-but-missing-diagram states are shown separately. On restart,
+state is recovered from the saved intent, saved diagrams and the initialization record: a project with
+only diagrams keeps them viewable and reports that the knowledge model still needs initialization.
 
-Project's semantic model and `ProjectDiagram` IR are the source of truth. External tools consume
-that IR through `ProjectDiagramAdapter`, produce previews or exports, and return validation receipts;
-their formats are never persisted as Project facts.
+## Diagrams and Archify
 
-| Adapter | Primary use | Diagram coverage | Output/editing |
-| --- | --- | --- | --- |
-| Archify | Interactive semantic diagrams | Architecture, Workflow, Sequence, Data Flow, Lifecycle | HTML/SVG preview, path probing, evidence drill-down (bridge integration) |
-| drawio-skill | Human-maintained editable model | All five diagram kinds | `.drawio` XML, manual layout, incremental drift comparison |
-| Mermaid | Documentation and lightweight sharing | Architecture, Workflow, Sequence (capability fallback for others) | Mermaid text/Markdown; no interactive editing guarantee |
-| Structurizr | C4 architecture-as-code | Architecture System/Container/Component | Structurizr DSL/Markdown, version-control friendly |
+Project's semantic model and `ProjectDiagram` IR are the source of truth. One pinned engine renders
+them: Archify `2.17.0-dev.1+d673e830`, shipped in `vendor/project-diagrams/archify` and located from
+`context.extensionUri` at runtime (never from `process.cwd()`). No skill installation, Python runtime
+or online rendering service is required.
 
-Default order is Structurizr → Archify → draw.io for Architecture and Archify → draw.io → Mermaid
-for other kinds. Users may override each kind or restore `auto`; unavailable adapters fall back while
-the last-good result remains visible. draw.io layout is stored as an overlay and cannot replace the
-semantic Project model.
+Five kinds share the common node/relation/evidence structures and add optional, renderer-neutral
+semantics:
 
-Dependency strategy: Archify and drawio-skill are pinned vendor runtimes invoked through controlled local
-processes; Mermaid and Structurizr are implemented as in-process text adapters. No stable external module
-API is assumed, so Project does not declare optional module dependencies or duplicate a second compatibility
-renderer. A future stable upstream API can replace an adapter without changing the Project IR.
+| Kind | Optional semantic structures |
+| --- | --- |
+| Architecture | Boundaries that group existing nodes; dependency direction on relations |
+| Workflow | Lanes and `laneId` on nodes, explicit relation order, branch conditions, exception paths, phases/groups for grouped layout |
+| Sequence | Ordered participants and call/return messages covering every relation |
+| Data flow | Two to five stages with `stageId` on every node |
+| Lifecycle | Explicit initial/normal/terminal states, events, conditions and transitions |
+
+Archify conversion maps each kind to its own upstream schema (including `data_flow → dataflow` and
+workflow schema v2 columns 0–5), keeps a bidirectional Project-id/Archify-id mapping, passes source
+evidence where the upstream schema supports it, and repairs layout-only diagnostics within a bounded
+number of attempts. Semantic diagnostics are returned with their messages instead of being rewritten.
+
+### Declared architecture rules
+
+`.dext/architecture.json` may declare rules over the **stable Project node ids** of one saved diagram,
+so a rule keeps working when Archify ids or the layout change:
+
+```json
+{
+  "schemaVersion": 1, "version": 0, "updatedAt": 0,
+  "decisions": [],
+  "diagramId": "architecture",
+  "rules": [
+    { "id": "no-ui-db", "type": "deny", "from": "ui", "to": "db", "reason": "The UI writes through the API." },
+    { "id": "api-only", "type": "allow", "from": "api", "to": "db", "reason": "Only the API may reach the database." },
+    { "id": "acyclic", "type": "no_cycles", "from": "*" }
+  ]
+}
+```
+
+`deny` flags a relation that exists, `allow` every relation leaving `from` that does not go to `to`,
+and `no_cycles` any dependency cycle. The Diagrams page lists the rules and the violations the saved
+diagram currently has; when rules exist but no diagram can be evaluated (`diagramId` is missing while
+several architecture diagrams are saved, names a diagram that is not saved, or no architecture
+diagram exists), the page says so instead of guessing. A rule typo makes the file unusable and the
+page reports the defaults, so a broken rule is never silently ignored.
+
+The **Diagrams** page embeds the complete Archify HTML in a sandboxed iframe, so the native visuals,
+search, zoom and exploration controls stay available. The parent page owns the VS Code API; iframe
+messages are validated by source window and session token, and actions are addressed by `diagramId`
+plus semantic version. The page provides diagram selection, generate/update, refresh, export and
+fullscreen; validation, version and evidence coverage details live in a collapsed section.
+
+Exports are **HTML** and **SVG** only, and both use the currently displayed successful render. HTML can
+be opened standalone; SVG is the native serialization of the live viewer (styles, fonts and background
+preserved) captured through the bridge, then saved by the extension host. If a newer render fails, the
+page shows the same diagram's last successful version and labels which version is displayed, so
+exporting matches what is on screen. Switching diagrams, closing the page, or starting a newer
+operation cancels stale work.
 
 ## Checks
 
 ```bash
 npm run check      # tsc --noEmit, eslint, and the production build
-npm run test:host  # VS Code activation smoke test
+npm run test:host  # VS Code activation smoke test (see README for environment requirements)
+```
+
+Browser checks run in a local Chromium or Edge, and are kept out of `npm run check` so the standard
+gate does not depend on one being installed:
+
+```bash
+npm run check:ui                        # all four checks below
+node scripts/checkComposerLayoutUi.mjs  # composer attachment growth, footer alignment, narrow viewports
+node scripts/checkStreamJumpUi.mjs      # jump-to-latest control never covers the conversation scrollbar
+node scripts/checkEditorTabsUi.mjs      # shared editor shell, Project pages, CSP and themes
+node scripts/checkProjectDiagramsUi.mjs # five native diagram kinds, uninitialized/empty states, bridge, exports
 ```
 
 Unit tests for the project layer run with `npx vitest run test/project*.test.ts test/editorTab*.test.ts test/turnReview*.test.ts`.
+`scripts/assertWebviewAssets.mjs` additionally proves from the esbuild dependency manifest that the
+runtime bundle contains neither the TypeScript compiler nor the removed scan/engine implementations,
+that the Archify entry point, five schemas and five renderers the adapter names are present, and that
+`vendor/project-diagrams/drawio` is not packaged. The rest of the vendored runtime is distributed
+because `.vscodeignore` does not exclude `vendor/**`.

@@ -2,7 +2,7 @@ import { z } from "zod";
 import { normalizeProjectObject, projectObjectSchema, type ProjectObject } from "./core/projectKnowledge.js";
 import { reviewPresetSchema, type ReviewPreset } from "./core/projectContext.js";
 import { projectIntentSchema, type ProjectIntent } from "./core/projectIntent.js";
-import { ProjectDiagramHistory, type ProjectDiagramHistoryState } from "./core/projectDiagramHistory.js";
+import type { ProjectDiagramHistoryState } from "./core/projectDiagramHistory.js";
 import { validateProjectDiagram, type ProjectDiagram } from "./core/projectDiagram.js";
 
 /**
@@ -12,7 +12,6 @@ import { validateProjectDiagram, type ProjectDiagram } from "./core/projectDiagr
 export const PROJECT_DEFINITION_PATH = ".dext/project.json";
 export const PROJECT_ARCHITECTURE_PATH = ".dext/architecture.json";
 export const PROJECT_INTENT_PATH = ".dext/project-intent.json";
-export const PROJECT_DIAGRAM_PREFERENCES_PATH = ".dext/diagram-adapters.json";
 export const PROJECT_DIAGRAM_HISTORY_PATH = ".dext/diagram-history.json";
 export const PROJECT_DIAGRAMS_DIRECTORY = ".dext/diagrams";
 
@@ -27,14 +26,7 @@ export function projectDiagramPath(id: string): string {
 export const projectKnowledgeConfigSchema = z.object({
   enabled: z.boolean().default(false),
   initialized: z.boolean().default(false)
-}).strict();
-
-/** Optional scan profile reserved for explicit project-specific scope overrides. */
-export const projectScanConfigSchema = z.object({
-  roots: z.array(z.string().min(1)).default([]),
-  includeTests: z.boolean().default(false),
-  extraExcludes: z.array(z.string().min(1)).default([])
-}).strict();
+}).passthrough();
 export type ProjectKnowledgeConfig = z.infer<typeof projectKnowledgeConfigSchema>;
 
 export const projectDefinitionSchema = z.object({
@@ -49,22 +41,37 @@ export const projectDefinitionSchema = z.object({
     model: z.string().min(1).optional(),
     reasoningEffort: z.string().min(1).optional(),
     speed: z.string().min(1).optional()
-  }).strict().default({}),
-  scan: projectScanConfigSchema.default({ roots: [], includeTests: false, extraExcludes: [] }),
+  }).passthrough().default({}),
   updatedAt: z.number().int().nonnegative().default(0)
-}).strict();
+})
+  // Legacy scan profiles and unknown engine settings stay on disk untouched. The product no longer
+  // reads or writes them, and parsing must not fail merely because an old field exists.
+  .passthrough();
 export type ProjectDefinition = z.infer<typeof projectDefinitionSchema>;
+
+export const projectArchitectureRuleSchema = z.object({
+  id: z.string().min(1),
+  type: z.enum(["allow", "deny", "no_cycles"]),
+  /** Stable Project node id from the saved diagram; `*` is accepted by `no_cycles`. */
+  from: z.string().min(1),
+  to: z.string().min(1).optional(),
+  reason: z.string().min(1).optional()
+}).strict();
 
 export const projectArchitectureSchema = z.object({
   schemaVersion: z.literal(1),
   version: z.number().int().nonnegative().default(0),
   decisions: z.array(z.object({ id: z.string().min(1), title: z.string().min(1), detail: z.string().default("") }).strict()).default([]),
+  /** Diagram the declared rules were authored against; omitted selects the only architecture diagram. */
+  diagramId: z.string().min(1).optional(),
+  /** Declared architecture rules over stable Project node ids. */
+  rules: z.array(projectArchitectureRuleSchema).default([]),
   updatedAt: z.number().int().nonnegative().default(0)
 }).strict();
 export type ProjectArchitectureDocument = z.infer<typeof projectArchitectureSchema>;
 
 export function defaultProjectDefinition(now = Date.now()): ProjectDefinition {
-  return { schemaVersion: 1, version: 0, preset: { default: "engineering" }, knowledge: { enabled: false, initialized: false }, ai: {}, scan: { roots: [], includeTests: false, extraExcludes: [] }, updatedAt: now };
+  return { schemaVersion: 1, version: 0, preset: { default: "engineering" }, knowledge: { enabled: false, initialized: false }, ai: {}, updatedAt: now };
 }
 
 /** Minimal file host so the store works with VS Code, a worker, or an in-memory test double. */
@@ -136,26 +143,27 @@ export class ProjectStore {
     await this.host.writeFile(PROJECT_INTENT_PATH, `${JSON.stringify(projectIntentSchema.parse(intent), null, 2)}\n`);
   }
 
-  async readDiagramAdapterPreferences(): Promise<unknown> {
-    const raw = await this.host.readFile(PROJECT_DIAGRAM_PREFERENCES_PATH);
+  /**
+   * The raw `.dext/diagram-history.json` document. It stays raw so the diagram registry can validate
+   * and import it itself; a damaged file reports `undefined` instead of erasing live last-good state.
+   */
+  async readDiagramHistoryState(): Promise<unknown> {
+    const raw = await this.host.readFile(PROJECT_DIAGRAM_HISTORY_PATH);
     if (!raw) return undefined;
     try { return JSON.parse(raw) as unknown; } catch { return undefined; }
   }
 
-  async writeDiagramAdapterPreferences(preferences: unknown): Promise<void> {
-    await this.host.writeFile(PROJECT_DIAGRAM_PREFERENCES_PATH, `${JSON.stringify(preferences, null, 2)}\n`);
+  async writeDiagramHistoryState(state: ProjectDiagramHistoryState): Promise<void> {
+    await this.host.writeFile(PROJECT_DIAGRAM_HISTORY_PATH, `${JSON.stringify(state, null, 2)}\n`);
   }
 
-  async readDiagramHistory(): Promise<ProjectDiagramHistory> {
-    const history = new ProjectDiagramHistory();
-    const raw = await this.host.readFile(PROJECT_DIAGRAM_HISTORY_PATH);
-    if (!raw) return history;
-    try { history.importState(JSON.parse(raw) as ProjectDiagramHistoryState); } catch { /* damaged history must not erase live knowledge */ }
-    return history;
-  }
-
-  async writeDiagramHistory(history: ProjectDiagramHistory): Promise<void> {
-    await this.host.writeFile(PROJECT_DIAGRAM_HISTORY_PATH, `${JSON.stringify(history.exportState(), null, 2)}\n`);
+  /**
+   * Restores initialization state from persisted data. A legacy flag or leftover scan data alone
+   * never counts as success; only a valid intent/diagram makes the knowledge model usable.
+   */
+  async readInitialization(): Promise<{ markedInitialized: boolean; hasIntent: boolean; diagramCount: number }> {
+    const [definition, intent, diagrams] = await Promise.all([this.readDefinition(), this.readIntent(), this.readDiagrams()]);
+    return { markedInitialized: definition.knowledge.initialized, hasIntent: intent !== undefined, diagramCount: diagrams.length };
   }
 
   async readDiagrams(): Promise<ProjectDiagram[]> {
@@ -206,11 +214,13 @@ export class ProjectStore {
 
   async readArchitecture(): Promise<ProjectArchitectureDocument> {
     const raw = await this.host.readFile(PROJECT_ARCHITECTURE_PATH);
-    if (!raw) return { schemaVersion: 1, version: 0, decisions: [], updatedAt: 0 };
+    if (!raw) return { schemaVersion: 1, version: 0, decisions: [], rules: [], updatedAt: 0 };
     try {
       return projectArchitectureSchema.parse(JSON.parse(raw));
     } catch {
-      return { schemaVersion: 1, version: 0, decisions: [], updatedAt: 0 };
+      // A rule typo must be visible rather than silently ignored, but it must not take the decisions
+      // with it: the caller reports a damaged file and the defaults keep the page readable.
+      return { schemaVersion: 1, version: 0, decisions: [], rules: [], updatedAt: 0 };
     }
   }
 

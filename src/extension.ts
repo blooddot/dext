@@ -33,8 +33,9 @@ import { pythonHoverCode } from "./vscodeHover.js";
 import { EditorTabManager, createVscodeEditorTabHost, wrapVscodeWebviewPanel, type EditorTabPanelHandle } from "./editorTabManager.js";
 import { EditorTabRestorer } from "./editorTabSerializer.js";
 import { EDITOR_TAB_VIEW_TYPES } from "./editorTabTypes.js";
-import { restoreEditorTabState } from "./editorTabState.js";
+import { createEditorTabState, restoreEditorTabState } from "./editorTabState.js";
 import { ProjectEditorProvider } from "./projectEditorProvider.js";
+import { PROJECT_PANEL_PAGES, type ProjectPanelPage } from "./webview/projectPanel.js";
 import { ApiEditorProvider } from "./apiEditorProvider.js";
 import { GlobalResourcesEditorProvider } from "./globalResourcesEditorProvider.js";
 import { createSidebarResourceDataSource, renderResourceError } from "./resourceDocuments.js";
@@ -43,17 +44,18 @@ import { parseEditorTabKey } from "./editorTabTypes.js";
 import type { VscodeWebviewPanelLike } from "./editorTabManager.js";
 import { ProjectStore } from "./projectStore.js";
 import { searchProjectReferences } from "./core/projectContext.js";
-import { VscodeProjectFileHost, createProjectPanelDataSource, scanWorkspaceProject } from "./vscodeProjectHost.js";
+import { VscodeProjectFileHost, createProjectPanelDataSource, discoverArchifyRepository, readWorkspaceEvidence } from "./vscodeProjectHost.js";
 import { renderEditorTabHtml } from "./editorTabHtml.js";
 import { ProjectDiagramAdapterRegistry } from "./core/projectDiagramRegistry.js";
 import { ArchifyAdapter } from "./core/archifyAdapter.js";
-import { DrawioAdapter } from "./core/drawioAdapter.js";
-import { MermaidAdapter } from "./core/mermaidAdapter.js";
-import { StructurizrAdapter } from "./core/structurizrAdapter.js";
-import type { ProjectDiagram, ProjectDiagramKind } from "./core/projectDiagram.js";
-import type { DiagramArtifactFormat } from "./core/projectDiagramAdapter.js";
-
+import { isExcludedProjectEvidencePath, isProjectEvidencePath } from "./core/projectAiGeneration.js";
+import type { ProjectInitializationProgressListener } from "./projectService.js";
 let activeApplication: DextApplication | undefined;
+
+/** Narrows a restored page to one the Project tab can actually render. */
+function isProjectPanelPage(value: string | undefined): value is ProjectPanelPage {
+  return value !== undefined && (PROJECT_PANEL_PAGES as readonly string[]).includes(value);
+}
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const application = new DextApplication(context.globalState, context.secrets, context.globalStorageUri);
@@ -90,9 +92,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   } = {};
   const renderEditorHtml = (panel: VscodeWebviewPanelLike, body: string): string => {
     const webview = (panel as vscode.WebviewPanel).webview;
+    // Only the Project diagrams page embeds the sandboxed Archify viewer; its srcdoc inherits this
+    // policy, so the relaxed frame/font/image sources stay scoped to that document.
     return renderEditorTabHtml(body,
       webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "media", "editorTabs.css")).toString(),
-      webview.cspSource);
+      webview.cspSource,
+      { embedFrames: body.includes("data-diagram-frame") });
   };
   const editorTabs = new EditorTabManager(
     createVscodeEditorTabHost(vscode.window, { localResourceRoots: [context.extensionUri], renderHtml: renderEditorHtml }),
@@ -107,12 +112,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const projectHost = folder?.uri.scheme === "file" ? new VscodeProjectFileHost(folder.uri) : undefined;
   if (projectHost && folder) {
     const projectStore = new ProjectStore(projectHost);
-    const diagramRegistry = new ProjectDiagramAdapterRegistry();
-    diagramRegistry.register(new ArchifyAdapter());
-    diagramRegistry.register(new DrawioAdapter());
-    diagramRegistry.register(new MermaidAdapter());
-    diagramRegistry.register(new StructurizrAdapter());
-    void projectStore.readDiagramAdapterPreferences().then((stored) => { if (stored) { try { diagramRegistry.importPreferences(stored); } catch { /* ignore corrupt preference files */ } } });
+    // Last-good diagram snapshots are persisted so they survive a window reload; the registry owns
+    // validation and the size budget, this only moves the document.
+    const diagramRegistry = new ProjectDiagramAdapterRegistry({
+      load: () => projectStore.readDiagramHistoryState(),
+      save: (state) => projectStore.writeDiagramHistoryState(state)
+    });
+    const archifyRoot = vscode.Uri.joinPath(context.extensionUri, "vendor", "project-diagrams", "archify").fsPath;
+    diagramRegistry.register(new ArchifyAdapter(archifyRoot, () => discoverArchifyRepository(folder.uri)));
     context.subscriptions.push({ dispose: () => diagramRegistry.dispose() });
     // Freezing the Review preset at send time needs a synchronous read, so the last known project
     // definition is cached as soon as the store is first read.
@@ -122,43 +129,53 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       search: async (query) => { const intent = await projectStore.readIntent(); return searchProjectReferences({ objects: await projectStore.readObjects(), query, ...(intent ? { intent } : {}) }); },
       open: async (objectId) => { await editors.project?.show("knowledge", objectId); }
     });
-    const scanProjectSources = async (...args: Parameters<NonNullable<Parameters<typeof createProjectPanelDataSource>[0]["scan"]>>) => {
-      const definition = await projectStore.readDefinition();
-      return scanWorkspaceProject(folder.uri, definition.scan, ...args);
+    const readProjectEvidence = async (
+      request: { requirement?: string },
+      signal: AbortSignal,
+      onProgress: ProjectInitializationProgressListener
+    ) => {
+      const [objects, intent] = await Promise.all([projectStore.readObjects(), projectStore.readIntent()]);
+      return readWorkspaceEvidence(
+        folder.uri,
+        { objects, ...(intent ? { intent } : {}) },
+        { ...(request.requirement ? { requirement: request.requirement } : {}) },
+        onProgress,
+        signal
+      );
     };
-    const exportProjectDiagram = async (kind: string, format?: string): Promise<void> => {
-      if (!Object.keys({ architecture: 1, workflow: 1, sequence: 1, data_flow: 1, lifecycle: 1 }).includes(kind)) throw new Error(`Unsupported diagram kind '${kind}'.`);
-      const scan = await scanProjectSources();
-      const diagram: ProjectDiagram = {
-        schemaVersion: 1, id: `scan-${kind}`, title: `${folder.name} ${kind}`, kind: kind as ProjectDiagramKind,
-        version: 1, updatedAt: Date.now(), nodes: scan.modules.slice(0, 200).map((module) => ({ id: module.id, label: module.name, role: "module" as const, semanticIds: [], evidence: module.paths.slice(0, 3).map((path) => ({ path })) })),
-        relations: scan.relations.slice(0, 400).map((relation, index) => ({ id: `relation-${index}`, from: relation.from, to: relation.to, kind: "depends_on" as const, evidence: relation.file ? [{ path: relation.file, ...(relation.line ? { line: relation.line } : {}) }] : [] }))
-      };
-      const selectedFormat = format as DiagramArtifactFormat | undefined;
-      const outcome = await diagramRegistry.export(diagram, { ...(selectedFormat ? { format: selectedFormat } : {}), allowFallback: true });
-      if (outcome.status !== "rendered" || !outcome.artifact) throw new Error(outcome.receipt.issues.map((item) => item.message).join("; ") || "No adapter could export this diagram.");
-      const suffix = outcome.artifact.format === "drawio" ? "drawio" : outcome.artifact.format === "mermaid" ? "md" : outcome.artifact.format === "structurizr" ? "dsl" : outcome.artifact.format;
-      const target = await vscode.window.showSaveDialog({ defaultUri: vscode.Uri.joinPath(folder.uri, `${folder.name}.${suffix}`), saveLabel: "Export Project diagram" });
-      if (!target) return;
-      const bytes = typeof outcome.artifact.content === "string" ? new TextEncoder().encode(outcome.artifact.content) : outcome.artifact.content;
-      await vscode.workspace.fs.writeFile(target, bytes);
+    const openProjectEvidence = async (path: string, line?: number): Promise<void> => {
+      // Stable-ID evidence navigation: the host validates the relative path before opening.
+      if (!isProjectEvidencePath(path) || isExcludedProjectEvidencePath(path)) return;
+      const uri = vscode.Uri.joinPath(folder.uri, ...path.split("/").filter(Boolean));
+      if (!vscode.workspace.getWorkspaceFolder(uri)) return;
+      const document = await vscode.workspace.openTextDocument(uri);
+      const editor = await vscode.window.showTextDocument(document, { preview: true });
+      if (line && line > 0) {
+        const position = new vscode.Position(Math.min(line - 1, Math.max(0, document.lineCount - 1)), 0);
+        editor.selection = new vscode.Selection(position, position);
+        editor.revealRange(new vscode.Range(position, position));
+      }
     };
     editors.project = new ProjectEditorProvider({
       manager: editorTabs,
       restorer: editorTabRestorer,
       dataSource: createProjectPanelDataSource({
-        scan: scanProjectSources,
         name: folder.name,
         root: ".",
+        rootUri: folder.uri,
         store: {
           readObjects: () => projectStore.readObjects(),
           readArchitecture: () => projectStore.readArchitecture(),
           readDefinition: () => projectStore.readDefinition(),
-          writeDefinition: (next, expectedVersion) => projectStore.writeDefinition(next, expectedVersion)
+          writeDefinition: (next, expectedVersion) => projectStore.writeDefinition(next, expectedVersion),
+          readIntent: () => projectStore.readIntent(),
+          writeIntent: (intent) => projectStore.writeIntent(intent),
+          readDiagrams: () => projectStore.readDiagrams(),
+          writeDiagram: (diagram) => projectStore.writeDiagram(diagram),
+          readInitialization: () => projectStore.readInitialization()
         },
+        readEvidence: readProjectEvidence,
         diagramRegistry,
-        readDiagramAdapterPreferences: () => projectStore.readDiagramAdapterPreferences(),
-        writeDiagramAdapterPreferences: (value) => projectStore.writeDiagramAdapterPreferences(value),
         projectAiProvider: application.projectAiProvider(),
         aiCli: application.agentProfiles().map((profile) => ({
           id: profile.id,
@@ -174,34 +191,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             }))
             : profile.models.map((id) => ({ id, label: id }))
         })),
-        readIntent: () => projectStore.readIntent(),
-        writeIntent: (intent) => projectStore.writeIntent(intent),
-        readDiagrams: () => projectStore.readDiagrams(),
-        writeDiagrams: async (diagrams) => { for (const diagram of diagrams) await projectStore.writeDiagram(diagram); }
-        ,exportDiagram: exportProjectDiagram
-      }),
-      chooseScanRoots: async () => {
-        const selected = await vscode.window.showOpenDialog({
-          canSelectFiles: false,
-          canSelectFolders: true,
-          canSelectMany: true,
-          defaultUri: folder.uri,
-          openLabel: "Use as Project scan folder"
-        });
-        if (!selected?.length) return;
-        const roots = selected
-          .map((uri) => vscode.workspace.asRelativePath(uri, false).replaceAll("\\", "/"))
-          .filter((path) => path && path !== "." && !path.startsWith(".."));
-        const definition = await projectStore.readDefinition();
-        const result = await projectStore.writeDefinition({
-          ...definition,
-          scan: { ...definition.scan, roots }
-        }, definition.version);
-        if (result.status === "conflict") {
-          vscode.window.showWarningMessage("Project settings changed before scan folders could be saved. Please choose them again.");
-        }
-      }
+        openEvidence: openProjectEvidence
+      })
     });
+    context.subscriptions.push({ dispose: () => editors.project?.dispose() });
     context.subscriptions.push(
       // The adoption bridge: adopting a Knowledge draft writes one long-term object and navigates
       // to it. Accepting the code review stays a separate action and never writes project knowledge.
@@ -216,14 +209,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       })(),
       vscode.window.registerWebviewPanelSerializer(EDITOR_TAB_VIEW_TYPES.project, {
         deserializeWebviewPanel: async (panel, state) => {
-          const key = restoreEditorTabState(state).state?.key ?? "dext.editor:project";
+          // The page script persists its own state, so this is normally present. A tab saved by an
+          // older build carries none: it is still adopted under the project key and rendered rather
+          // than left blank, which is what the previous `return` on a non-opened outcome did.
+          const provider = editors.project;
+          const restored = restoreEditorTabState(state).state
+            ?? (provider ? createEditorTabState(provider.key, { page: "overview" }) : undefined);
+          if (!provider || !restored) { panel.dispose(); return; }
           const adopted: EditorTabPanelHandle = wrapVscodeWebviewPanel(panel, {
-            onDispose: () => { editorTabs.close(key); },
-            onMessage: (message) => { editorTabs.receive(key, message); }
+            // The callback belongs to this panel only; a panel `adopt` disposed must not close the live tab.
+            onDispose: () => { editorTabs.closeIfCurrent(restored.key, adopted); },
+            onMessage: (message) => { editorTabs.receive(restored.key, message); }
           }, renderEditorHtml);
-          const outcome = editorTabRestorer.adoptRestored(state, () => adopted);
+          const outcome = editorTabRestorer.adoptRestored(restored, () => adopted);
+          if (outcome.status === "invalid") { adopted.dispose(); return; }
           if (outcome.status !== "opened") return;
-          await editors.project?.show("overview");
+          await provider.show(isProjectPanelPage(restored.page) ? restored.page : "overview");
         }
       })
     );
@@ -286,15 +287,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const active = provider();
       const restoredState = restoreEditorTabState(state).state;
       const resourceId = restoredState?.resourceId ?? parseEditorTabKey(restoredState?.key ?? "")?.resourceId;
-      // Migrate old API detail tabs into the single API browser when restoring a window.
+      // Migrate old API detail tabs into the single API browser when restoring a window. The browser
+      // keeps one stable key, so a panel restored without usable state can still be adopted.
       const key = active instanceof ApiEditorProvider ? active.listTabKey : restoredState?.key ?? "";
+      if (!active || !key) { panel.dispose(); return; }
       const adopted: EditorTabPanelHandle = wrapVscodeWebviewPanel(panel as unknown as VscodeWebviewPanelLike, {
-        onDispose: () => { editorTabs.close(key); },
+        onDispose: () => { editorTabs.closeIfCurrent(key, adopted); },
         onMessage: (message) => { editorTabs.receive(key, message); }
       }, renderEditorHtml);
-      const outcome = editorTabRestorer.adoptRestored(restoredState && active instanceof ApiEditorProvider ? { ...restoredState, key } : state, () => adopted);
+      const outcome = editorTabRestorer.adoptRestored({ ...(restoredState ?? {}), key }, () => adopted);
+      if (outcome.status === "invalid") { adopted.dispose(); return; }
       if (outcome.status !== "opened") return;
-      if (!active) return;
       try {
         if (resourceId) await active.showDetail(resourceId);
         else await active.showList();
