@@ -1,7 +1,8 @@
 import type * as vscode from "vscode";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { parseToml, tomlString } from "./core/toml.js";
 
 export type AgentProvider = "codex" | "claude" | "deepseek-harness";
 
@@ -71,24 +72,39 @@ export interface AgentSelection {
 const STORAGE_KEY = "dext.agentProfiles";
 const SELECTION_KEY = "dext.agentSelection";
 
+const CODEX_CONFIG_KEYS = ["model", "model_reasoning_effort", "service_tier", "profile"] as const;
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function stringFields(value: unknown): Record<string, string> {
+  const table = record(value);
+  if (!table) return {};
+  return Object.fromEntries(CODEX_CONFIG_KEYS.flatMap((key) => {
+    const item = table[key];
+    return typeof item === "string" && item ? [[key, item]] : [];
+  }));
+}
+
 /** Read only the quoted scalar settings used by the composer. Section values
  * must not leak into root defaults (for example a different Codex profile). */
 export function codexConfiguredDefaults(sources: readonly string[]): NonNullable<AgentProfile["defaults"]> {
-  const sections = new Map<string, Record<string, string>>();
+  let root: Record<string, string> = {};
+  const profiles: Record<string, Record<string, string>> = {};
   for (const source of sources) {
-    let section = "";
-    for (const line of source.split(/\r?\n/)) {
-      const header = /^\s*\[([^\]]+)\]/.exec(line);
-      if (header) { section = header[1]!.replace(/["']/g, ""); continue; }
-      const scalar = /^\s*(model|model_reasoning_effort|service_tier|profile)\s*=\s*(["'])(.*?)\2\s*(?:#.*)?$/.exec(line);
-      if (!scalar) continue;
-      const values = sections.get(section) ?? {};
-      values[scalar[1]!] = scalar[3]!;
-      sections.set(section, values);
+    const parsed = parseToml(source);
+    if (!parsed) continue;
+    root = { ...root, ...stringFields(parsed) };
+    const parsedProfiles = record(parsed.profiles);
+    if (!parsedProfiles) continue;
+    for (const [name, value] of Object.entries(parsedProfiles)) {
+      profiles[name] = { ...profiles[name], ...stringFields(value) };
     }
   }
-  const root = sections.get("") ?? {};
-  const values = { ...root, ...(root.profile ? sections.get(`profiles.${root.profile}`) : {}) };
+  const values = { ...root, ...(root.profile ? profiles[root.profile] : undefined) };
   return {
     ...(values.model ? { model: values.model } : {}),
     ...(values.model_reasoning_effort ? { reasoningEffort: values.model_reasoning_effort } : {}),
@@ -140,14 +156,7 @@ function claudeModelAlias(model: string): string {
 
 function configuredCodexModel(): string | undefined {
   const codexHome = process.env.CODEX_HOME || join(homedir(), ".codex");
-  const configPath = join(codexHome, "config.toml");
-  if (!existsSync(configPath)) return undefined;
-  try {
-    const content = readFileSync(configPath, "utf8");
-    return /^\s*model\s*=\s*["']([^"']+)["']\s*$/m.exec(content)?.[1];
-  } catch {
-    return undefined;
-  }
+  return tomlString(parseToml(optionalText(join(codexHome, "config.toml"))), "model");
 }
 
 export function modelOptionsFromCodexCache(models: unknown): AgentModelOption[] {
