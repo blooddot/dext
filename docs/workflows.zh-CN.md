@@ -164,8 +164,6 @@ result = agent(input="实现所需的修改")
 
 ```python
 # .dext/api/team/analyze.dx -> team.analyze
-from common import ask
-
 def main(input: str) -> AskResult:
     return ask(input=input)
 ```
@@ -191,6 +189,18 @@ def main() -> PrintResult:
 辅助函数可以放在 `main()` 前后，也可以调用其他辅助函数或已导入的 API。每次调用都有独立的参数和局部变量。参数必须声明类型，通过命名参数传入；有字面量默认值的参数可以省略。每个函数都要声明并返回 Dext 结果，例如 `AskResult`、`PlanResult`、`SkillResult`、`AgentResult`、`TerminalResult` 或 `PrintResult`；目前不支持直接返回字符串、布尔值或列表，可通过 `return print(text=value)` 返回摘要或集合。
 
 `if`、`try`、`except` 中均可提前 `return`；除取消执行外，返回前会先执行 `finally`。实际执行到函数末尾却没有返回时，会报告运行错误。只有 `main()` 对外导出，辅助函数不能被其他文件导入；递归调用、与 API 或导入名称冲突的辅助函数会被拒绝。`.dx` 编辑器提供辅助函数调用、参数及结果字段补全，以及签名和悬浮提示。
+
+### API 诊断
+
+Dext 用运行 `.dx` 的同一套加载逻辑做检查，因此错误在写下的位置就会暴露，而不是等到调用该 API 时才发现。
+
+- 编辑时 **Problems** 面板列出每个 `.dx` 错误，条目包含文件、行、列、稳定错误码（`dext/compile`、`dext/must-return`、`dext/unknown-api`、`dext/reassign`、`dext/missing-rule`、`dext/signature`、`dext/syntax`、`dext/cycle`、`dext/duplicate-api`、`dext/mcp` 等）以及所属 API id。同一文件里相互独立的错误会全部报出，一个文件失败不再掩盖其他文件。
+- **Dext: Check All APIs** 一次检查整个项目，把明细和 `N error / M warning` 汇总写入 **Dext API Check** 输出通道，同时填充同一个 Problems 集合，每条诊断都可跳转到对应文件。
+- **Dext: Reload APIs** 重新加载 API，并报告同一批诊断。
+
+检查范围包括 `.dext/api/**/*.dx`、`.vscode/settings.json` 中 `dext.apiDirs` 指向的根目录、已加载 MCP 工具的参数与返回类型，以及解析到 `.dext/rules` 之下的字面量 `rules=[...]` 路径。
+
+自定义 API 调用失败时，报错会说明原因，而不只是"API 不可用"：包含文件、函数、原因和行号；如果是因为清单里声明的 MCP 工具没有注册，还会指出是哪个 server。循环依赖只会标在实际构成循环的 API 上，而不是所有已加载的 API。
 
 ## 对话历史与工作流录制
 
@@ -223,7 +233,7 @@ Plan 执行复用同一组件并额外绑定计划内容版本与本次 Build �
 
 ## 导入、Skills 与规则
 
-`.dx` 使用显式导入：通过 `common` 导入内置 API，自定义导入则引用 `.dext/api` 文件。只有工作区被 VS Code 标记为受信任后，才会读取外部文件。
+`.dx` 使用受限的 Python 风格语法，由 Dext 自行解析，不会启动 Python 解释器。内置 API 始终可用，`import` 用于引用 `.dext/api` 中的自定义 API。只有工作区被 VS Code 标记为受信任后，才会读取外部文件。
 
 嵌套的 `agent(...)`、`ask(...)`、`plan(...)` 可以指定 `skills=["name"]` 和 `rules=["path.md"]`。规则路径仅在 `<workspace>/.dext/rules` 下解析。Dext 先加载所选 Skills，再按顺序加载规则，将内容注入 Agent 指令；这些参数也会出现在签名和补全中。
 

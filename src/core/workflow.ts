@@ -38,6 +38,7 @@ import type {
 } from "./types.js";
 
 export interface WorkflowDiagnostic {
+  code?: string;
   message: string;
   severity: "error" | "warning";
   from: number;
@@ -451,9 +452,12 @@ class Compiler {
         return undefined;
       }
       const expressionNode = namedChildren(node).at(-1);
+      const reported = this.diagnostics.length;
       const value = expressionNode ? this.compileExpression(expressionNode) : undefined;
       if (!value) {
-        this.error("A custom API function must return a value.", node.from, node.to);
+        // A failed expression already reported the actionable error. Repeating
+        // it as "must return a value" would only be cascade noise in Problems.
+        if (this.diagnostics.length === reported) this.error("A custom API function must return a value.", node.from, node.to);
         return undefined;
       }
       if (this.returnType && typeName(this.returnType) !== typeName(value.type) && !(isUiResultType(this.returnType) && isUiResultType(value.type))) {
@@ -499,7 +503,7 @@ class Compiler {
     const name = text(this.source, variable);
     const existing = this.environment.get(name);
     if (existing && this.loopDepth === 0) {
-      this.error(`Variable '${name}' cannot be reassigned.`, variable.from, variable.to);
+      this.error(`Variable '${name}' cannot be reassigned.`, variable.from, variable.to, "dext/reassign");
       return undefined;
     }
     // `x = 1, 2` is a tuple in Python, so it is a list here.
@@ -1029,7 +1033,7 @@ class Compiler {
     }
     const definition = this.registry.get(method);
     if (!definition) {
-      this.error(`Unknown Dext API '${method}'.`, callee?.from ?? node.from, callee?.to ?? node.to);
+      this.error(`Unknown Dext API '${method}'.`, callee?.from ?? node.from, callee?.to ?? node.to, "dext/unknown-api");
       return undefined;
     }
     if (
@@ -1410,7 +1414,9 @@ class Compiler {
       const method = path ? resolveAlias(path, this.options.aliases) : undefined;
       const definition = method ? this.registry.get(method) : undefined;
       if (!method || !definition) {
-        this.error(`Unknown Dext API '${path ?? ""}'.`, node.from, node.to);
+        // Point at the callee rather than the whole call so the squiggle covers
+        // the unresolved name instead of its argument list.
+        this.error(`Unknown Dext API '${path ?? ""}'.`, callee.from, callee.to, "dext/unknown-api");
         return undefined;
       }
       if (!this.options.allowNestedCalls) {
@@ -1777,6 +1783,11 @@ class Compiler {
     const path = memberPath(this.source, callee);
     // A registered API id always wins over a same-named helper.
     if (path && this.registry.get(resolveAlias(path, this.options.aliases))) return undefined;
+    // `mcp.<server>.<tool>` is only ever an API path. Falling through to the
+    // receiver branch below would compile the `mcp` root as a variable and
+    // report "Unknown variable 'mcp'"; letting the API path resolve instead
+    // names the tool that is actually missing.
+    if (path?.startsWith("mcp.")) return undefined;
     const signature = STRING_METHODS[method];
     if (!signature) {
       if (objectNode.name === "VariableName" && !this.environment.has(text(this.source, objectNode))) return undefined;
@@ -2113,8 +2124,8 @@ class Compiler {
     return result;
   }
 
-  private error(message: string, from: number, to: number): void {
-    this.diagnostics.push({ message, severity: "error", from, to: Math.max(from + 1, to) });
+  private error(message: string, from: number, to: number, code = "dext/compile"): void {
+    this.diagnostics.push({ message, severity: "error", from, to: Math.max(from + 1, to), code });
   }
 
   private validImport(raw: string): boolean {

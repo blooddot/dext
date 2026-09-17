@@ -83,11 +83,11 @@ print(text=answer.text)
 可复用的 API 以 `.dx` 文件保存在 `.dext/api/` 中。例如，创建 `.dext/api/team/analyze.dx`：
 
 ```python
-from common import ask
-
 def main(input: str) -> AskResult:
     return ask(input=input)
 ```
+
+`ask`、`print`、`terminal` 等内置 API 始终可用，只有自定义 API 才需要 `import`。
 
 在 Code 模式中，可以直接调用 `team.analyze(input="...")`，也可以导入后使用简短名称：
 
@@ -99,6 +99,8 @@ print(text=answer.text)
 ```
 
 项目 API 需要受信任的工作区。你也可以右键 History 条目，选择 **Record Conversation as Dext Workflow**，生成起始文件后继续编辑。组合调用、Skills、规则和交互确认见[工作流与 API 参考](docs/workflows.zh-CN.md)。
+
+`.dx` 文件在编辑时会把诊断写入 **Problems** 面板，**Dext: Check All APIs** 可一次检查整个项目。自定义 API 调用失败时，报错会带上导致编译失败的文件、函数、原因与行号，而不再只是提示 API 不可用。详见 [API 诊断](docs/workflows.zh-CN.md#api-诊断)。
 
 ![Code 模式调用 Playground API 后，输入 checked. 时显示 TerminalResult 字段补全](docs/images/dext-workflow-completion.png)
 

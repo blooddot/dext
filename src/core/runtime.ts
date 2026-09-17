@@ -12,6 +12,7 @@ import type { MethodRegistry } from "./registry.js";
 import type { AgentResult, CustomApiPlan, DirRef, McpRawResult } from "./types.js";
 import { WorkflowRuntime } from "./workflowRuntime.js";
 import { ExecutionCancelledError } from "./executionErrors.js";
+import { formatDiagnostic, type DextDiagnostic } from "./apiDiagnostic.js";
 import { executeNodeBuiltin } from "./nodeBuiltin.js";
 import { patchResultFrom } from "./patch.js";
 import type { AgentPermission, AgentProfile, AgentProvider, AgentSelection, WritableAgentPermission } from "../agentProfiles.js";
@@ -329,6 +330,11 @@ export class DextRuntime {
     onProcessEvent?: ExecutionMetadata["onMcpEvent"]
   ) => Promise<McpRawResult>) | undefined;
   private resultRepair: RuntimeResultRepair | undefined;
+  /** Why a registered custom API has no compiled plan, by API id. */
+  private customApiDiagnostics: ReadonlyMap<string, readonly DextDiagnostic[]> = new Map();
+  /** MCP tool ids a manifest declares, whether or not their server is running. */
+  private declaredMcpTools: ReadonlySet<string> = new Set();
+  private customApisBlocked = false;
 
   constructor(
     private readonly registry: MethodRegistry,
@@ -343,6 +349,82 @@ export class DextRuntime {
   setCustomPlans(plans: ReadonlyMap<string, CustomApiPlan>): void {
     this.customPlans.clear();
     for (const [id, plan] of plans) this.customPlans.set(id, plan);
+  }
+
+  /**
+   * The loader registers a custom API's method before it compiles its function
+   * body, so a compile failure leaves a callable id with no plan. Keeping the
+   * loader's diagnostics here is what lets that call report its real cause
+   * instead of a bare "is not available".
+   */
+  setCustomApiDiagnostics(diagnostics: readonly DextDiagnostic[], blocked: boolean): void {
+    const grouped = new Map<string, DextDiagnostic[]>();
+    for (const diagnostic of diagnostics) {
+      if (!diagnostic.apiId) continue;
+      const group = grouped.get(diagnostic.apiId) ?? [];
+      group.push(diagnostic);
+      grouped.set(diagnostic.apiId, group);
+    }
+    this.customApiDiagnostics = grouped;
+    this.customApisBlocked = blocked;
+  }
+
+  /** Every MCP tool a loaded manifest declares, including ones whose server is
+   * not connected; that difference is what separates "unknown name" from
+   * "server is down". */
+  setDeclaredMcpTools(ids: readonly string[]): void {
+    this.declaredMcpTools = new Set(ids);
+  }
+
+  /** A method id that is not registered at all. */
+  private missingMethodMessage(id: string): string {
+    const mcp = /^mcp\.([^.]+)\./.exec(id);
+    if (mcp && this.declaredMcpTools.has(id) && !this.registry.get(id)) {
+      return `MCP server '${mcp[1]}' is not connected or the tool is not registered: unknown Dext API '${id}'.`;
+    }
+    if (this.customApisBlocked) {
+      return `Unknown method '${id}'. Custom .dext/api files are disabled because this workspace is untrusted, so it was not registered. Trust the workspace and run "Dext: Reload APIs".`;
+    }
+    return `Unknown method '${id}'.`;
+  }
+
+  /**
+   * A registered custom API with no plan is a compile failure, a disabled
+   * workspace, or an incomplete load — never "not available" on its own. Every
+   * recorded diagnostic is reported with its file position, and a diagnostic
+   * that names a declared MCP tool also says which server is missing.
+   */
+  private async customApiFailure(apiId: string): Promise<string> {
+    if (this.customApisBlocked) {
+      return `Custom API '${apiId}' is not available: custom .dext/api files are disabled because this workspace is untrusted. Trust the workspace and run "Dext: Reload APIs".`;
+    }
+    const diagnostics = this.customApiDiagnostics.get(apiId) ?? [];
+    const sources = new Map<string, string | undefined>();
+    const sourceOf = async (path: string): Promise<string | undefined> => {
+      if (!sources.has(path)) {
+        try { sources.set(path, await readFile(path, "utf8")); } catch { sources.set(path, undefined); }
+      }
+      return sources.get(path);
+    };
+    const details: string[] = [];
+    for (const diagnostic of diagnostics) details.push(formatDiagnostic(diagnostic, await sourceOf(diagnostic.path)));
+    const missingMcp = [...new Set(diagnostics
+      .filter((diagnostic) => diagnostic.code === "dext/unknown-api")
+      .flatMap((diagnostic) => [...diagnostic.message.matchAll(/Unknown Dext API '([^']+)'/g)].map((match) => match[1]!))
+      .filter((id) => /^mcp\./.test(id) && this.declaredMcpTools.has(id) && !this.registry.get(id)))];
+    const advice = missingMcp.map((id) => {
+      const server = /^mcp\.([^.]+)\./.exec(id)?.[1] ?? "";
+      const tool = id.slice(`mcp.${server}.`.length);
+      return `MCP server '${server}' is not connected or '${tool}' is not registered on it. Connect the server and run "Dext: Reload APIs".`;
+    });
+    if (!details.length && !advice.length) {
+      return `Custom API '${apiId}' is registered but its function body has no compiled plan. Run "Dext: Check All APIs" for the current diagnostics.`;
+    }
+    return [
+      `Custom API '${apiId}' is registered but its function body failed to compile:`,
+      ...details,
+      ...advice
+    ].join("\n");
   }
 
   setAgentProfiles(profiles: readonly AgentProfile[]): void {
@@ -452,7 +534,7 @@ export class DextRuntime {
     const started = performance.now();
     let method = this.registry.get(invocation.method);
     if (!method) {
-      throw new Error(`Unknown method '${invocation.method}'.`);
+      throw new Error(this.missingMethodMessage(invocation.method));
     }
     const argumentNames = new Set<string>();
     for (const argument of invocation.arguments) {
@@ -488,7 +570,7 @@ export class DextRuntime {
     let result: DextResult;
     if (method.executor.kind === "custom") {
       const plan = this.customPlans.get(method.executor.apiId);
-      if (!plan) throw new Error(`Custom API '${method.executor.apiId}' is not available.`);
+      if (!plan) throw new Error(await this.customApiFailure(method.executor.apiId));
       const customMetadata: ExecutionMetadata = {
         ...metadata,
         ...(plan.agent ? { agent: plan.agent } : {}),

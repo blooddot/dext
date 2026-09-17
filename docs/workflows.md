@@ -174,8 +174,6 @@ Custom APIs live in `.dext/api/**/*.dx`. Directory segments become namespaces an
 
 ```python
 # .dext/api/team/analyze.dx -> team.analyze
-from common import ask
-
 def main(input: str) -> AskResult:
     return ask(input=input)
 ```
@@ -214,6 +212,32 @@ helpers cannot be imported from another file. Recursive calls and helper names
 that conflict with APIs or imports are rejected. Helper calls, parameters, and
 result fields have completion and signature/hover assistance in `.dx` files.
 
+### API diagnostics
+
+Dext validates `.dx` files with the same loader it uses to run them, so an error
+surfaces where it is written rather than only when the API is called.
+
+- **Problems** lists every `.dx` error as you type. Each entry carries the file,
+  line, column, the stable code (`dext/compile`, `dext/must-return`,
+  `dext/unknown-api`, `dext/reassign`, `dext/missing-rule`, `dext/signature`,
+  `dext/syntax`, `dext/cycle`, `dext/duplicate-api`, `dext/mcp`, …), and the API
+  id it belongs to. Every independent error in a file is reported; one failing
+  file no longer hides the others.
+- **Dext: Check All APIs** checks the whole project at once, writes the details
+  and an `N error / M warning` summary to the **Dext API Check** output channel,
+  and fills the same Problems collection so every diagnostic jumps to its file.
+- **Dext: Reload APIs** reloads the APIs and reports the same diagnostics.
+
+Checks cover `.dext/api/**/*.dx`, the `dext.apiDirs` roots in
+`.vscode/settings.json`, the parameters and result types of loaded MCP tools, and
+literal `rules=[...]` paths resolved below `.dext/rules`.
+
+A failed custom API call names its cause instead of reporting only that the API
+is unavailable: the file, the function, the reason, and the line, plus why a
+declared MCP tool is missing when that is what stopped the file from compiling.
+A dependency cycle is named on the APIs that actually form it, not on every
+loaded API.
+
 ## Conversation history and workflow recording
 
 A conversation can be turned into a starting point instead of being written from scratch: right-click a Dext History entry and choose **Record Conversation as Dext Workflow**. Each successful turn becomes a step, a prompt repeated across turns becomes a `main()` parameter, a confirmation the conversation went through becomes a `ui.confirm` call, and a Code-mode turn is left as a comment. The file is written under `.dext/api` and opened for editing; it is a skeleton to revise, not a finished API.
@@ -247,7 +271,7 @@ Writing a plan is not implementing it, so a plan-authoring turn produces no impl
 
 ## Imports, Skills, and rules
 
-`.dx` uses a restricted Python-like syntax. It is parsed by Dext and never starts a Python interpreter. Imports are explicit; built-ins are available through `common`, and custom imports refer to `.dext/api` files. External files are not read until VS Code marks the workspace as trusted. A nested `agent(...)`, `ask(...)`, or `plan(...)` call may set `skills=["name"]` and `rules=["path.md"]`. Skills are explicit packages, while rules are ordered policy files. Rule paths are resolved only below `<workspace>/.dext/rules`; skill discovery follows the order described below. Dext loads selected skills first and rules last, so the API's narrow rules constrain the general skill workflow. These parameters appear in Dext signatures and completion; their contents are injected into the Agent instruction rather than forwarded as control fields to the provider.
+`.dx` uses a restricted Python-like syntax. It is parsed by Dext and never starts a Python interpreter. Built-in APIs are always in scope, and `import` refers to custom `.dext/api` files. External files are not read until VS Code marks the workspace as trusted. A nested `agent(...)`, `ask(...)`, or `plan(...)` call may set `skills=["name"]` and `rules=["path.md"]`. Skills are explicit packages, while rules are ordered policy files. Rule paths are resolved only below `<workspace>/.dext/rules`; skill discovery follows the order described below. Dext loads selected skills first and rules last, so the API's narrow rules constrain the general skill workflow. These parameters appear in Dext signatures and completion; their contents are injected into the Agent instruction rather than forwarded as control fields to the provider.
 
 Standard skills are discovered in `<workspace>/.dext/skills`, then Dext global
 storage, then `dext.skillDirs`; earlier directories win duplicate names. `create`

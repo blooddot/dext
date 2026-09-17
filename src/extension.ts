@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { DextApiDefinitionProvider, DextBuiltinApisContentProvider, DextBuiltinTypesContentProvider, DextMcpApisContentProvider } from "./vscodeApiDefinitions.js";
 import { DextApplication } from "./application.js";
+import { DextApiDiagnostics } from "./vscodeApiDiagnostics.js";
 import { DextSidebarProvider } from "./sidebarProvider.js";
 import { DEFAULT_HISTORY_LIMITS, DextHistoryStore } from "./historyStore.js";
 import type { DextHistoryRecord, DextHistorySession } from "./historyStore.js";
@@ -65,6 +66,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   if (folder) application.runtime.setWorkspaceRoot(folder.uri.fsPath);
   application.runtime.setWorkspaceTrusted(vscode.workspace.isTrusted && folder?.uri.scheme === "file");
   await application.reload();
+  const apiDiagnostics = new DextApiDiagnostics(() => (vscode.workspace.workspaceFolders ?? [])
+    .filter((workspace) => workspace.uri.scheme === "file")
+    .map((workspace) => ({
+      workspace: workspace.uri.fsPath,
+      apiDirs: vscode.workspace.getConfiguration("dext", workspace.uri).get<string[]>("apiDirs", []),
+      globalStorage: context.globalStorageUri.fsPath,
+      readSettings: false
+    })));
+  application.onApiReload = () => apiDiagnostics.schedule();
+  context.subscriptions.push(apiDiagnostics);
   // Conversation history belongs to the active workspace. Using globalState
   // here makes every project share the same sessions, so reopening VS Code (or
   // switching projects) can restore a conversation from an unrelated project.
@@ -723,6 +734,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("dext.reloadMethods", async () => {
       await application.reload();
       await sidebar.refresh();
+      // The reload already scheduled a check; an explicit reload also reveals
+      // the details it produced instead of leaving one aggregate line behind.
+      await apiDiagnostics.check(true);
     }),
     vscode.commands.registerCommand("dext.openWorkspaceTrust", openWorkspaceTrust),
     vscode.commands.registerCommand("dext.workspaceTrustedStatus", openWorkspaceTrust),

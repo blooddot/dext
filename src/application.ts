@@ -55,6 +55,7 @@ import type { ProjectAiProvider } from "./core/projectAiGeneration.js";
 const COMPLETION_MIGRATION_KEY = "dext.completion.migrated";
 
 export class DextApplication {
+  onApiReload: (() => void) | undefined;
   readonly registry = new MethodRegistry();
   readonly language = new DextLanguageService(this.registry);
   private readonly contextResolver = new ContextResolver(new VsCodeContextHost());
@@ -264,6 +265,10 @@ export class DextApplication {
       mcpManifests.methods.filter((method) => activeMcpTools.has(method.id.slice("mcp.".length))),
       "project"
     );
+    // A manifest method whose server is not connected is deliberately not
+    // registered. Remembering the declared set lets a later failure say
+    // "server not connected" instead of "unknown name".
+    this.runtime.setDeclaredMcpTools(mcpManifests.methods.map((method) => method.id));
     try {
       await this.skills.reload(this.workspaceRoot, skillDirs, vscode.Uri.joinPath(this.storage.globalStorageUri, "skills").fsPath);
     } catch (error) {
@@ -306,6 +311,8 @@ export class DextApplication {
       "project"
     );
     this.runtime.setCustomPlans(loaded.plans);
+    this.runtime.setCustomApiDiagnostics(loaded.diagnosticDetails, loaded.blocked);
+    this.onApiReload?.();
     this.customApiSources.clear();
     const registered = new Set(loaded.methods.map(({ definition }) => definition));
     for (const file of loaded.files) {

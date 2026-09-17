@@ -83,11 +83,11 @@ Strings are first-class values: concatenate with `+`, build text with f-strings 
 Save reusable APIs as `.dx` files under `.dext/api/`. For example, create `.dext/api/team/analyze.dx`:
 
 ```python
-from common import ask
-
 def main(input: str) -> AskResult:
     return ask(input=input)
 ```
+
+Built-in APIs such as `ask`, `print`, and `terminal` are always in scope; only custom APIs need an `import`.
 
 In Code mode, call `team.analyze(input="...")` directly, or import a shorter name:
 
@@ -99,6 +99,8 @@ print(text=answer.text)
 ```
 
 Project APIs require a trusted workspace. You can also right-click a History entry and choose **Record Conversation as Dext Workflow** to generate a starting point for editing. See the [workflow and API reference](docs/workflows.md) for composition, Skills, rules, and UI confirmations.
+
+`.dx` files report diagnostics in the **Problems** panel as you type, and **Dext: Check All APIs** checks the whole project at once. A failing custom API call also names the file, function, reason, and line that stopped it from compiling instead of only reporting that the API is unavailable. See [API diagnostics](docs/workflows.md#api-diagnostics).
 
 <p align="center">
   <a href="docs/images/dext-workflow-completion.png"><img src="docs/images/dext-workflow-completion.png" alt="Code mode offering TerminalResult fields while typing checked. after a Playground API call" width="560"></a>

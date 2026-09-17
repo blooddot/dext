@@ -55,6 +55,9 @@ MCP 初始化从 `package.json` 读取客户端名称和版本。协议版本分
 - `src/core/axAdapter.ts`：Ax / Zod / JSON Schema 契约适配。
 - `src/core/runtime.ts`：确定性执行器白名单。
 - `src/core/customApi.ts`：`.dx` API 加载、导入、签名和自定义计划。
+- `src/core/apiCheck.ts`：编辑器诊断背后的 `.dx`、MCP 与规则检查。
+- `src/vscodeApiDiagnostics.ts`：`.dx` 的 Problems 集合、文件监听和 `dext.checkApis` 命令。
+- `src/core/apiDiagnostic.ts`：共享的诊断结构、`path:line:column` 文本渲染，以及把函数体偏移映射回文件坐标的边界表。
 - `src/core/agentRunner.ts`：Codex / Claude CLI 的结构化执行适配。
 - `src/core/completionProvider.ts`：FIM 补全后端、缓存和密钥管理。
 - `src/core/workflowRecorder.ts`：从对话生成 `.dx` 工作流骨架。

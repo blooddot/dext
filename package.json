@@ -65,6 +65,10 @@
         "icon": "$(terminal)"
       },
       {
+        "command": "dext.checkApis",
+        "title": "Dext: Check All APIs"
+      },
+      {
         "command": "dext.reloadMethods",
         "title": "Dext: Reload APIs",
         "icon": "$(refresh)"

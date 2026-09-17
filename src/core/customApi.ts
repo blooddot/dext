@@ -3,6 +3,7 @@ import type { SyntaxNode } from "@lezer/common";
 import { MethodRegistry } from "./registry.js";
 import { compileWorkflow, fieldType, type WorkflowCompileOptions, type WorkflowValueType } from "./workflow.js";
 import type { CallableDefinition, CustomApiPlan, FieldDefinition, MethodSource } from "./types.js";
+import { ApiSourceError, apiBodySource, formatDiagnostic, type DextDiagnostic } from "./apiDiagnostic.js";
 
 export interface CustomApiFile {
   path: string;
@@ -21,6 +22,7 @@ export interface CustomApiLoadResult {
   plans: Map<string, CustomApiPlan>;
   methods: { definition: CallableDefinition; source: MethodSource }[];
   diagnostics: string[];
+  diagnosticDetails: DextDiagnostic[];
   blocked: boolean;
 }
 
@@ -198,13 +200,6 @@ function parseImports(source: string, root: SyntaxNode): Map<string, string> {
   return imports;
 }
 
-function dedent(value: string): string {
-  const lines = value.replace(/^\s*:\s*\r?\n/, "").split(/\r?\n/);
-  const nonEmpty = lines.filter((line) => line.trim().length > 0);
-  const indent = nonEmpty.length ? Math.min(...nonEmpty.map((line) => line.match(/^\s*/)?.[0].length ?? 0)) : 0;
-  return lines.map((line) => line.slice(indent)).join("\n").trim();
-}
-
 function decoratorStringOption(options: string, name: string): string | undefined {
   const match = new RegExp(`\\b${name}\\s*=\\s*["']([^"']+)["']`).exec(options);
   return match?.[1];
@@ -230,7 +225,7 @@ export function functionDefinitions(source: string, tolerant = false): { definit
         input: signature.inputs, output: signature.output, executor: { kind: "custom", apiId: id }
       } });
     } catch (error) {
-      if (!tolerant) throw error;
+      if (!tolerant) throw new ApiSourceError(error instanceof Error ? error.message : String(error), node.from, source.indexOf("\n", node.from) < 0 ? node.to : source.indexOf("\n", node.from));
     }
   }
   return functions;
@@ -245,24 +240,41 @@ function calledMethods(value: unknown): string[] {
   ];
 }
 
-function checkCycles(graph: ReadonlyMap<string, readonly string[]>, label: string): void {
+/** Returns the ids on the first cycle found, or undefined when the graph is acyclic. */
+function findCycle(graph: ReadonlyMap<string, readonly string[]>): string[] | undefined {
   const visiting = new Set<string>();
   const visited = new Set<string>();
-  const visit = (id: string): void => {
-    if (visiting.has(id)) throw new Error(`${label} at '${id}'.`);
-    if (visited.has(id)) return;
+  const stack: string[] = [];
+  const search = (id: string): string[] | undefined => {
+    if (visiting.has(id)) return [...stack.slice(stack.indexOf(id)), id];
+    if (visited.has(id)) return undefined;
     visiting.add(id);
-    for (const dependency of graph.get(id) ?? []) visit(dependency);
+    stack.push(id);
+    for (const dependency of graph.get(id) ?? []) {
+      const cycle = search(dependency);
+      if (cycle) return cycle;
+    }
+    stack.pop();
     visiting.delete(id);
     visited.add(id);
+    return undefined;
   };
-  for (const id of graph.keys()) visit(id);
+  for (const id of graph.keys()) {
+    const cycle = search(id);
+    if (cycle) return cycle;
+  }
+  return undefined;
+}
+
+function checkCycles(graph: ReadonlyMap<string, readonly string[]>, label: string): void {
+  const cycle = findCycle(graph);
+  if (cycle) throw new Error(`${label} at '${cycle[0]}'.`);
 }
 
 function parseHeader(path: string, source: string, root?: string): CustomApiFile {
   const tree = parser.parse(source);
   const validateSyntax = (node: SyntaxNode): void => {
-    if (node.type.isError) throw new Error(`Invalid .dx syntax near offset ${node.from}.`);
+    if (node.type.isError) throw new ApiSourceError(`Invalid .dx syntax near offset ${node.from}.`, node.from, node.to, "dext/syntax");
     for (const child of children(node)) validateSyntax(child);
   };
   validateSyntax(tree.topNode);
@@ -320,47 +332,74 @@ export async function loadCustomApis(
   registry: MethodRegistry,
   source: MethodSource = "project"
 ): Promise<CustomApiLoadResult> {
-  if (!trusted) return { files: [], plans: new Map(), methods: [], diagnostics: ["Custom .dext/api files are disabled in an untrusted workspace."], blocked: true };
+  if (!trusted) return { files: [], plans: new Map(), methods: [], diagnostics: ["Custom .dext/api files are disabled in an untrusted workspace."], diagnosticDetails: [], blocked: true };
   const diagnostics: string[] = [];
+  const diagnosticDetails: DextDiagnostic[] = [];
+  // `diagnostics` stays the flat, human-readable view every consumer already
+  // reads; `diagnosticDetails` is the same data with its file coordinates, so a
+  // consumer that needs a squiggle never has to re-parse a message.
+  const report = (path: string, error: unknown, file?: CustomApiFile, code = "dext/api", source = file?.source): void => {
+    const message = error instanceof Error ? error.message : String(error);
+    const diagnostic: DextDiagnostic = {
+      path, ...(file ? { apiId: file.id } : {}), severity: "error", message,
+      code: error instanceof ApiSourceError ? error.code : code,
+      from: error instanceof ApiSourceError ? error.from : file?.functionNode.from ?? 0,
+      to: error instanceof ApiSourceError ? error.to : (file?.functionNode.from ?? 0) + 1
+    };
+    diagnosticDetails.push(diagnostic);
+    diagnostics.push(formatDiagnostic(diagnostic, source));
+  };
   const files: CustomApiFile[] = [];
+  const seenPaths = new Set<string>();
   for (const root of roots) {
     let paths: string[] = [];
     try { paths = await listFiles(root); } catch (error) {
-      diagnostics.push(`${root}: ${error instanceof Error ? error.message : String(error)}`);
+      report(root, error, undefined, "dext/read");
       continue;
     }
     for (const path of paths.filter((candidate) => candidate.toLowerCase().endsWith(".dx"))) {
+      if (seenPaths.has(path)) continue;
+      seenPaths.add(path);
+      let content: string | undefined;
       try {
-        const content = await readFile(path);
+        content = await readFile(path);
         if (content === undefined) continue;
         files.push(parseHeader(path, content, root));
       } catch (error) {
-        diagnostics.push(`${path}: ${error instanceof Error ? error.message : String(error)}`);
+        // A signature error has no authored position, so the position comes
+        // from the file text this read already produced.
+        report(path, error, undefined, "dext/api", content);
       }
     }
   }
   const methods: CustomApiLoadResult["methods"] = [];
-  const registeredIds = new Set<string>();
+  const registeredFiles = new Set<CustomApiFile>();
   for (const file of files) {
     if (registry.get(file.id)) {
-      diagnostics.push(`${file.path}: API '${file.id}' is already defined.`);
+      report(file.path, `API '${file.id}' is already defined.`, file, "dext/duplicate-api");
       continue;
     }
     registry.register(file.definition, source);
-    registeredIds.add(file.id);
+    registeredFiles.add(file);
     methods.push({ definition: file.definition, source });
   }
   const plans = new Map<string, CustomApiPlan>();
   const dependencyGraph = new Map<string, string[]>();
   for (const file of files) {
-    if (!registeredIds.has(file.id)) continue;
+    if (!registeredFiles.has(file)) continue;
     try {
       const scope = new MethodRegistry();
       for (const method of registry.list()) scope.register(method, method.source);
       const aliases = new Map<string, string>();
       for (const [alias, imported] of file.imports) {
         const isNamespace = registry.list().some((candidate) => candidate.id.startsWith(`${imported}.`));
-        if (!registry.get(imported) && !isNamespace) throw new Error(`Imported API '${imported}' is not defined.`);
+        if (!registry.get(imported) && !isNamespace) {
+          // `from common import ask` comes from an older example. Built-in APIs are
+          // always in scope and never need an import, so point at the direct call.
+          const builtin = imported.startsWith("common.") ? imported.slice("common.".length) : "";
+          const hint = builtin && registry.get(builtin)?.source === "builtin" ? ` Built-in APIs are always in scope; call ${builtin}() directly.` : "";
+          throw new Error(`Imported API '${imported}' is not defined.${hint}`);
+        }
         aliases.set(alias, imported);
       }
       for (const fn of file.functions) {
@@ -373,11 +412,11 @@ export async function loadCustomApis(
       const localNames = new Set(file.functions.map((fn) => fn.definition.id));
       const localGraph = new Map<string, string[]>();
       const dependencies: string[] = [];
-      const compileFunction = (definition: CallableDefinition, node: SyntaxNode): CustomApiPlan => {
+      const compileFunction = (definition: CallableDefinition, node: SyntaxNode): CustomApiPlan | undefined => {
         const name = definition.id === file.id ? "main" : definition.id;
         const body = children(node).find((child) => child.name === "Body");
         if (!body) throw new Error(`${name}() requires a function body.`);
-        const bodySource = dedent(file.source.slice(body.from, body.to));
+        const bodySource = apiBodySource(file.source.slice(body.from, body.to), body.from);
         const options: WorkflowCompileOptions = {
           allowReturn: true,
           allowNestedCalls: true,
@@ -386,27 +425,37 @@ export async function loadCustomApis(
           initialVariables: initialTypes({ ...file, definition }),
           customApiIds: new Set(files.map((candidate) => candidate.id))
         };
-        const compiled = compileWorkflow(bodySource, scope, options);
+        const compiled = compileWorkflow(bodySource.source, scope, options);
+        for (const diagnostic of compiled.diagnostics) {
+          // The compiler only knows the function body it was handed, so the
+          // enclosing function is named here: "which function in this file" is
+          // the first thing a reader of the error needs.
+          const message = diagnostic.message.includes(`${name}()`)
+            ? diagnostic.message
+            : `${name}(): ${diagnostic.message}`;
+          const detail: DextDiagnostic = { ...diagnostic, message, code: diagnostic.code ?? "dext/compile", path: file.path, apiId: file.id, from: bodySource.offset(diagnostic.from), to: bodySource.offset(diagnostic.to) };
+          diagnosticDetails.push(detail);
+          diagnostics.push(formatDiagnostic(detail, file.source));
+        }
+        if (compiled.diagnostics.some((diagnostic) => diagnostic.severity === "error")) return undefined;
         const outputType = compiled.returnType;
         if (!compiled.program || !compiled.program.returnExpression || !outputType) {
-          const details = compiled.diagnostics
-            .filter((diagnostic) => diagnostic.severity === "error")
-            .map((diagnostic) => diagnostic.message)
-            .join(" ");
-          throw new Error(`${name}() must return a Dext result.${details ? ` ${details}` : ""}`);
+          report(file.path, new ApiSourceError(`${name}() must return a Dext result.`, node.from, body.from, "dext/must-return"), file);
+          return undefined;
         }
         const expected = definition.output.kind;
         if (definition.output.resultType && !definition.output.fields && (outputType.kind !== "result" || outputType.name !== definition.output.resultType)) {
-          throw new Error(`${name}() must return ${definition.output.resultType}.`);
+          report(file.path, new ApiSourceError(`${name}() must return ${definition.output.resultType}.`, node.from, body.from, "dext/return-type"), file);
+          return undefined;
         }
         if (
           !definition.output.fields
-          && (outputType.kind !== "result" || (outputType.name.toLowerCase() !== `${expected}result` && !(expected === "ui" && /^Ui(?:Select|Radio|Checkbox|Input|Confirm|Alert|Form)Result$/.test(outputType.name))))
+          // Result kinds are camelCase (`mcpRaw`) while result type names are
+          // PascalCase (`McpRawResult`), so compare the two case-insensitively.
+          && (outputType.kind !== "result" || (outputType.name.toLowerCase() !== `${expected}result`.toLowerCase() && !(expected === "ui" && /^Ui(?:Select|Radio|Checkbox|Input|Confirm|Alert|Form)Result$/.test(outputType.name))))
         ) {
-          throw new Error(`${name}() must return ${expected} result.`);
-        }
-        if (compiled.diagnostics.some((diagnostic) => diagnostic.severity === "error")) {
-          throw new Error(compiled.diagnostics.map((diagnostic) => diagnostic.message).join(" "));
+          report(file.path, new ApiSourceError(`${name}() must return ${expected} result.`, node.from, body.from, "dext/return-type"), file);
+          return undefined;
         }
         const calls = calledMethods(compiled.program);
         localGraph.set(name, calls.filter((id) => localNames.has(id)));
@@ -422,19 +471,27 @@ export async function loadCustomApis(
         };
       };
       const plan = compileFunction(file.definition, file.functionNode);
-      const functions = file.functions.map((fn) => ({ definition: fn.definition, program: compileFunction(fn.definition, fn.node).program }));
+      const functions: NonNullable<CustomApiPlan["functions"]> = [];
+      for (const fn of file.functions) {
+        const compiled = compileFunction(fn.definition, fn.node);
+        if (compiled) functions.push({ definition: fn.definition, program: compiled.program });
+      }
+      if (!plan || functions.length !== file.functions.length) continue;
       checkCycles(localGraph, "Recursive local function call detected");
       dependencyGraph.set(file.id, dependencies);
       plans.set(file.id, { ...plan, ...(functions.length ? { functions } : {}) });
     } catch (error) {
-      diagnostics.push(`${file.path}: ${error instanceof Error ? error.message : String(error)}`);
+      report(file.path, error, file);
     }
   }
-  try {
-    checkCycles(dependencyGraph, "Circular custom API call detected");
-  } catch (error) {
-    diagnostics.push(error instanceof Error ? error.message : String(error));
+  // Report a dependency cycle only on the APIs it involves: blaming every loaded
+  // API would put the same error on files that are perfectly fine.
+  const cycle = findCycle(dependencyGraph);
+  if (cycle) {
+    const message = `Circular custom API call detected: ${cycle.join(" -> ")}.`;
+    const members = new Set(cycle);
+    for (const file of registeredFiles) if (members.has(file.id)) report(file.path, message, file, "dext/cycle");
     plans.clear();
   }
-  return { files, plans, methods, diagnostics, blocked: false };
+  return { files, plans, methods, diagnostics, diagnosticDetails, blocked: false };
 }

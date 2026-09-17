@@ -10,6 +10,18 @@ All notable changes to Dext are documented in this file.
 
 ## Unreleased
 
+- Show the Dext question card for a DeepSeek Harness `ask_user_question`, and for ACP elicitation. The Harness runner asked Dext's UI for the answer but never published the `waiting` / `answered` / `dismissed` input event the Codex runner uses to render and close that card, so the tool call parked the turn with nothing on screen to answer - even though the private question channel and the preset overlay were wired correctly. Secret answers are still never echoed into the transcript.
+
+- Report `.dx` problems where they are written. The loader no longer joins its errors into one positionless string: each diagnostic keeps its file, line, column, stable code (`dext/compile`, `dext/must-return`, `dext/unknown-api`, `dext/reassign`, `dext/missing-rule`, `dext/signature`, `dext/syntax`, `dext/cycle`, `dext/duplicate-api`, `dext/mcp`, …), and API id, every independent error in a file is reported instead of just the first, and one failing file no longer hides the rest. `.dx` files now write to the **Problems** panel as you type (debounced), including from an unsaved buffer; **Dext: Check All APIs** checks the whole project into the same collection and the **Dext API Check** output channel with an `N error / M warning` summary; **Reload APIs** reports the same details; and entry is cleared when its file is deleted, even while its editor tab is still open. Each diagnostic also names the function it is in. A dependency cycle is named on the APIs that actually form it instead of being repeated on every loaded API.
+
+- Name the missing MCP tool instead of its root. A call to an unregistered `mcp.<server>.<tool>(...)` compiled the `mcp` root as a variable and reported `Unknown variable 'mcp'.`, which hid which tool was missing; the API path now resolves and reports `Unknown Dext API 'mcp.<server>.<tool>'`.
+
+- Report why a custom API call failed. A registered API whose function body did not compile used to fail with a bare `Custom API 'dev.fix' is not available.`; it now names the file, the function, the reason, and the line, says the method is registered but its body failed to compile, and distinguishes a declared MCP tool whose server is not connected from a plain unknown name and from an untrusted workspace that disabled custom APIs.
+
+- Fix the `.dx` examples in the README and the workflow reference: built-in APIs are always in scope, so `from common import ask` never resolved and the copied example failed to load. The `Imported API 'common.ask' is not defined.` error now names the direct call to write instead.
+
+- Fix `def main() -> McpRawResult` being rejected with "must return mcpRaw result": the return-kind check compared a camelCase kind (`mcpRaw`) against a lowercased PascalCase type name (`mcprawresult`). The unresolved-name squiggle in expression position also now covers the callee instead of its argument list, and a failed return expression no longer repeats itself as "A custom API function must return a value."
+
 - Fix Harness session restore, which failed every resumed conversation with the protocol's generic `Internal error`: Dext's preset plugin forwarded only the agent-context argument to the deepseek Harness agent factory's `setup`, dropping the agent the resume path composes its model selection from.
 
 - Report the cause behind a generic Harness `Internal error` — the ACP error's `data` payload plus the process's stderr tail — instead of the placeholder, and continue in a new session whose prompt carries this conversation's own context when the Harness refuses to restore a stored one, saying so in Process.

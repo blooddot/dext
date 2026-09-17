@@ -55,6 +55,9 @@ MCP initialization reads the client name and version from `package.json`. Protoc
 - `src/core/axAdapter.ts`: Ax/Zod/JSON Schema contract boundary.
 - `src/core/runtime.ts`: deterministic executor allowlist.
 - `src/core/customApi.ts`: `.dext/api` loader, imports, signatures, and custom plans.
+- `src/core/apiCheck.ts`: `.dx`, MCP, and rule checks behind the editor diagnostics.
+- `src/vscodeApiDiagnostics.ts`: the `.dx` Problems collection, its file watchers, and the `dext.checkApis` command.
+- `src/core/apiDiagnostic.ts`: the shared diagnostic shape, its `path:line:column` text rendering, and the function-body boundary map that keeps positions in file coordinates.
 - `src/core/agentRunner.ts`: structured Codex/Claude CLI adapter boundary.
 - `src/core/completionProvider.ts`: fill-in-the-middle backend, cache, and secret-stored key.
 - `src/core/workflowRecorder.ts`: History conversation to `.dx` skeleton.
