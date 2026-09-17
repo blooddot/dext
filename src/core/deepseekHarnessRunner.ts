@@ -10,7 +10,7 @@ import { agentTodoEvent, normalizeAgentTodos } from "./agentTodoTracking.js";
 import { elicitationQuestions, elicitationResponse, harnessInputQuestions, harnessQuestionAnswer, type HarnessQuestionOutcome, type HarnessQuestionRequest } from "./harnessQuestions.js";
 import { harnessPresetPatch } from "./harnessPresets.js";
 import { agentTimeout, DEFAULT_AGENT_TIMEOUT_MS, DEFAULT_AGENT_IDLE_TIMEOUT_MS } from "./agentTimeout.js";
-import type { AgentInputAnswers, AgentInputQuestion } from "./types.js";
+import type { AgentInputAnswers, AgentInputQuestion, AgentInputRequest, AgentInputState } from "./types.js";
 
 type Request = AgentConversationRequest;
 interface Session {
@@ -208,16 +208,36 @@ export class DeepSeekHarnessRunner implements AgentRunner {
 
   /** Route one question batch through Dext's shared UI. `undefined` reports that
    * no Dext surface owned the card, which the caller answers by delegating
-   * rather than by inventing a reply. */
+   * rather than by inventing a reply.
+   *
+   * The card is published as a `waiting` input event and closed with its
+   * outcome, the way the Codex runner does. `metadata.requestAgentInput` only
+   * carries the answer back; without these events the question parks the turn
+   * with nothing on screen to answer it. */
   private async ask(session: Session, request: Request, id: string, questions: AgentInputQuestion[]): Promise<AgentInputAnswers | null | undefined> {
     const respond = request.metadata.requestAgentInput;
     if (!respond) return undefined;
     const signal = request.signal ?? new AbortController().signal;
+    const input: AgentInputRequest = { id, questions, blocking: true };
+    // Secret answers are never echoed back into the transcript.
+    const publish = (status: AgentInputState["status"], answers?: AgentInputAnswers): void => {
+      const visible = answers ? Object.fromEntries(questions.filter((question) => !question.isSecret && answers[question.id]).map((question) => [question.id, answers[question.id]!])) : undefined;
+      request.onEvent?.({ phase: "input", text: "", userInput: { ...input, status, ...(visible ? { answers: visible } : {}) } });
+    };
     // The question parks the turn, so idle detection has to pause with it.
     const key = `user-questions:${id}`;
     session.timeout?.toolStarted(key);
-    try { return await respond({ id, questions, blocking: true }, signal); }
-    catch { return undefined; }
+    let published = false;
+    try {
+      // Register the host callback before publishing the card, so fast replies are safe.
+      const reply = respond(input, signal);
+      published = true;
+      publish("waiting");
+      const answers = await reply;
+      if (signal.aborted) { publish("dismissed"); return undefined; }
+      publish(answers ? "answered" : "dismissed", answers ?? undefined);
+      return answers;
+    } catch { if (published) publish("dismissed"); return undefined; }
     finally { session.timeout?.toolFinished(key); }
   }
 

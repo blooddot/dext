@@ -136,6 +136,33 @@ describe("Harness runner", { timeout: 15000 }, () => {
     expect(JSON.parse(text)).toEqual({ id: "fixture-question-1", status: "answered", answer: { answers: [{ id: "q", selected: ["B"] }] } });
     expect(requestAgentInput).toHaveBeenCalledOnce();
   });
+  it("publishes the Dext card a Harness question needs, then closes it with the answer", async () => {
+    const events: AgentStreamEvent[] = [];
+    const requestAgentInput = vi.fn(async () => ({ q: { answers: ["B"] } }));
+    const req = request("bridge-question");
+    await runner().runConversation({ ...req, onEvent: (event) => events.push(event), metadata: { ...req.metadata, requestAgentInput } });
+    const inputs = events.filter((event) => event.userInput).map((event) => event.userInput!);
+    expect(inputs.map((input) => input.status)).toEqual(["waiting", "answered"]);
+    expect(inputs[0]?.blocking).toBe(true);
+    expect(inputs[0]?.questions.map((question) => question.question)).toEqual(["Which one?"]);
+    expect(inputs[1]?.answers).toEqual({ q: { answers: ["B"] } });
+  });
+  it("closes the Dext card when the user gives no answer", async () => {
+    const events: AgentStreamEvent[] = [];
+    const requestAgentInput = vi.fn(async () => null);
+    const req = request("bridge-question");
+    const text = await runner().runConversation({ ...req, onEvent: (event) => events.push(event), metadata: { ...req.metadata, requestAgentInput } });
+    expect(JSON.parse(text)).toMatchObject({ status: "cancelled" });
+    expect(events.filter((event) => event.userInput).map((event) => event.userInput!.status)).toEqual(["waiting", "dismissed"]);
+  });
+  it("publishes the card for an ACP elicitation too", async () => {
+    const events: AgentStreamEvent[] = [];
+    const requestAgentInput = vi.fn(async (input: AgentInputRequest) =>
+      Object.fromEntries(input.questions.map((question) => [question.id, { answers: [question.options.at(-1)?.label ?? "typed"] }])));
+    const req = request("elicitation");
+    await runner().runConversation({ ...req, onEvent: (event) => events.push(event), metadata: { ...req.metadata, requestAgentInput } });
+    expect(events.filter((event) => event.userInput).map((event) => event.userInput!.status)).toEqual(["waiting", "answered"]);
+  });
   it("leaves a Harness question to the shipped fail-closed path when no card owns it", async () => {
     const text = await runner().runConversation(request("bridge-question"));
     expect(JSON.parse(text)).toMatchObject({ id: "fixture-question-1", status: "unavailable" });
