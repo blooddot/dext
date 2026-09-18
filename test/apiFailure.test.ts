@@ -122,6 +122,19 @@ describe("custom API runtime failures", () => {
     expect(message).not.toContain("is not connected");
   });
 
+  it("explains why a rejected MCP server was dropped instead of only 'not connected'", async () => {
+    await put("dev/fix.dx", 'def main() -> McpRawResult:\n    return mcp.dingtalk_doc.get_document_content(nodeId="x")\n');
+    const { runtime } = await load();
+    runtime.setDeclaredMcpTools(["mcp.dingtalk_doc.get_document_content"]);
+    runtime.setMcpServerDiagnostics(["MCP server 'dingtalk_doc' url must not contain a query string."]);
+
+    const message = await invoke(runtime, "dev.fix").then(() => "", (error: unknown) => (error as Error).message);
+    expect(message).toContain("MCP server 'dingtalk_doc' was rejected: url must not contain a query string.");
+
+    const direct = await invoke(runtime, "mcp.dingtalk_doc.get_document_content").then(() => "", (error: unknown) => (error as Error).message);
+    expect(direct).toContain("MCP server 'dingtalk_doc' was rejected: url must not contain a query string.");
+  });
+
   it("calls an untrusted workspace disabled rather than unavailable", async () => {
     await put("dev/fix.dx", 'def main() -> PrintResult:\n    return print(text="ok")\n');
     const { loaded, runtime } = await load(false);

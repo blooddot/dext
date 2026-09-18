@@ -41,6 +41,14 @@ const options = (model = "model-a", effort = "high") => [
 ];
 const update = (sessionId, event) => send({ method: "session/update", params: { sessionId, update: event } });
 const pending = new Map();
+/** A model that ignores the JSON envelope and answers with Markdown. */
+const MARKDOWN_RESULT = [
+  "[DEV_PLAN_TASKLIST] T1,T2,T4",
+  "",
+  "| ID | Task | Status |",
+  "| --- | --- | --- |",
+  "| T1 | Load rules | pending |"
+].join("\n");
 if (process.argv.includes("--malformed")) process.stdout.write("not json\n");
 const lines = createInterface({ input: process.stdin });
 lines.on("close", () => { if (process.argv.includes("--hang-on-close")) setInterval(() => {}, 1000); else process.exit(); });
@@ -125,7 +133,10 @@ lines.on("line", async (line) => {
         answer = text.includes("bad-json") ? "invalid"
           : text.includes("wrapped-json")
             ? "分析完成（未修改任何文件）。\n\n```json\n" + JSON.stringify({ kind: "ask", text: "typed answer" }) + "\n```"
-            : JSON.stringify({ kind: "ask", text: "typed answer" });
+            : text.includes("plain-markdown") ? MARKDOWN_RESULT
+              // Echo the whole prompt so a test can assert the envelope Dext built.
+              : text.includes("echo-prompt") ? text
+                : JSON.stringify({ kind: "ask", text: "typed answer" });
       }
       update(p.sessionId, { sessionUpdate: "agent_message_chunk", messageId: "final", content: { type: "text", text: answer } });
       return result({ stopReason: "end_turn" });

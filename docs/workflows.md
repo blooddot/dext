@@ -37,7 +37,7 @@ if preview.patch:
     applied = apply(result=preview)
 ```
 
-The input workflow language supports assignment, keyword-only API calls, strings (including triple-quoted strings), numbers, booleans, homogeneous lists, result member access, comments, `if`/`elif`/`else`, `for name in list:` over a homogeneous list, and `while` for sequential retry flows. A `while` loop is capped at 100 iterations; bindings created inside it do not escape, while existing bindings may be updated with the same type.
+The input workflow language supports assignment, keyword-only API calls, strings (including triple-quoted strings), numbers, booleans, homogeneous lists, result member access, comments, `if`/`elif`/`else`, `for name in list:` over a homogeneous list, and `while` for sequential retry flows. A variable may be reassigned anywhere, including in plain sequential code, as long as it keeps the type it was first bound to. A `while` loop is capped at 100 iterations, and a binding created inside a loop body does not escape it.
 
 ### Text and value expressions
 
@@ -70,9 +70,9 @@ Dext keeps Python semantics for these operations, with four deliberate differenc
 - `%` takes its arguments as a list: `"%s %d" % ["total", 3]` or `"%s %d" % ("total", 3)`. To format a list value itself, wrap it the way Python wraps a single-element tuple: `"%s" % (items,)`.
 - Conditions must be boolean. `if answer.text:` is rejected; write `if bool(answer.text):`, or compare the value.
 - Bytes literals (`b"..."`) are rejected; Dext text is UTF-8 strings throughout.
-- There is no augmented assignment. `text += line` is rejected; a name is bound once, so repeated text is collected in a list and joined with `"\n".join(lines)`.
+- There is no augmented assignment. `text += line` is rejected; write `text = text + line` instead, or collect repeated text in a list and join it with `"\n".join(lines)`.
 
-A value that is not a compile-time constant becomes its own `=` step in Output, exactly like `text = answer.text` always did.
+A value that is not a compile-time constant becomes its own `=` step in Output, exactly like `text = answer.text` always did. A reassigned name does too, even when its value is a constant: the runtime has to hold the current value so later reads see the assignment that last ran.
 
 A list comprehension, `[call(...) for name in list]`, is the one construct that runs concurrently: its branches cannot see one another, so Dext fans them out up to `dext.workflow.maxConcurrency` and collects the results in list order. One `for` clause, no `if` filter.
 
@@ -80,7 +80,7 @@ A list comprehension, `[call(...) for name in list]`, is the one construct that 
 
 `ask` and `agent` accept ordinary strings. File selections and attachments can be inserted as readable `@workspace/path#Lstart,end-Lend,end` tokens; the editor, Output, and History render that token as an atomic Chip while copy and execution retain the same readable string. Dext never inlines file contents into the prompt.
 
-`.dx` API files additionally support a typed `main()` entry point, file-private typed helper functions, explicit imports, and bounded `while` retry loops. Function definitions in the input composer, nested functions, recursive calls, classes, unrestricted reassignment, `eval`, `exec`, and system/file/network APIs are rejected. A loop may only update an existing variable when its type stays unchanged.
+`.dx` API files additionally support a typed `main()` entry point, file-private typed helper functions, explicit imports, and bounded `while` retry loops. Function definitions in the input composer, nested functions, recursive calls, classes, reassignment that changes a variable's type, `eval`, `exec`, and system/file/network APIs are rejected.
 
 Execution is sequential apart from comprehension fan-out; unselected and downstream steps are reported as `skipped`.
 

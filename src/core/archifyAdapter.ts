@@ -500,9 +500,227 @@ function lifecycleLaneId(value: string, used: Set<string>): string {
   return archifyId(value, used);
 }
 
+/**
+ * The vendored lifecycle renderer draws a fixed three-band grid: phase states sit at
+ * `phase.y` on `phase.xs`, every non-main/non-terminal lane shares the event band, and the
+ * terminal lane owns the outcome band (see `renderers/lifecycle/README.md`). Dext has to
+ * author geometry inside that grid: the columns, the 32px side margin, the 10px state gap,
+ * the 32px minimum transition length and label clearances are all validated by the
+ * renderer and are not repairable upstream.
+ */
+const LIFECYCLE = {
+  width: 980,
+  margin: 32,
+  bottomReserve: 122,
+  rowGap: 76,
+  minEdge: 32,
+  /** Phase columns are 154px apart, so two 120px states still leave a 34px rail edge. */
+  railWidth: 120,
+  minWidth: 118,
+  maxWidth: 260,
+  /** Width estimates the renderer itself applies to state labels and transition labels. */
+  stateUnit: 6.2,
+  labelUnit: 4.9,
+  phase: { y: 126, height: 62, xs: [94, 248, 402, 556, 710] },
+  event: { y: 278, height: 58, xs: [402, 556, 710] },
+  outcome: { y: 450, height: 58, xs: [402, 556, 710] }
+} as const;
+
+type LifecycleBandName = "phase" | "event" | "outcome";
+
+interface LifecycleBand { readonly y: number; readonly height: number; readonly xs: readonly number[]; }
+
+interface LifecycleBox {
+  id: string;
+  band: LifecycleBandName;
+  col: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  cx: number;
+  cy: number;
+}
+
+interface LifecycleRoute { fromSide: string; toSide: string; via?: number[][]; }
+
+interface LifecycleLabelRect { x: number; y: number; width: number; height: number; }
+
+function lifecycleBandFor(lane: string): LifecycleBandName {
+  if (lane === "main") return "phase";
+  if (lane === "terminal") return "outcome";
+  return "event";
+}
+
+function lifecycleBandGeometry(band: LifecycleBandName): LifecycleBand {
+  if (band === "phase") return LIFECYCLE.phase;
+  if (band === "event") return LIFECYCLE.event;
+  return LIFECYCLE.outcome;
+}
+
+/** CJK-aware unit count, shared with the renderer's own width estimates. */
+function textUnits(value: string): number {
+  let units = 0;
+  for (const character of value) units += character.codePointAt(0)! > 0x2e80 ? 2 : 1;
+  return units;
+}
+
+/** Keeps a state label inside the width its band can actually give it. */
+function lifecycleStateLabel(label: string, width: number): string {
+  if (textUnits(label) * LIFECYCLE.stateUnit <= width + 6) return label;
+  const characters = [...label];
+  while (characters.length && (textUnits(characters.join("")) + 1) * LIFECYCLE.stateUnit > width + 6) characters.pop();
+  return characters.length ? `${characters.join("")}…` : label.slice(0, 1);
+}
+
+function lifecycleAnchor(box: LifecycleBox, side: string): number[] {
+  switch (side) {
+    case "left": return [box.x, box.cy];
+    case "right": return [box.x + box.width, box.cy];
+    case "top": return [box.cx, box.y];
+    default: return [box.cx, box.y + box.height];
+  }
+}
+
+function lifecycleRectsOverlap(a: LifecycleLabelRect | LifecycleBox, b: LifecycleLabelRect | LifecycleBox): boolean {
+  return !(a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y);
+}
+
+function lifecycleSegmentsCross(a: number[], b: number[], c: number[], d: number[]): boolean {
+  const denominator = (b[0]! - a[0]!) * (d[1]! - c[1]!) - (b[1]! - a[1]!) * (d[0]! - c[0]!);
+  if (Math.abs(denominator) < 1e-9) return false;
+  const t = ((c[0]! - a[0]!) * (d[1]! - c[1]!) - (c[1]! - a[1]!) * (d[0]! - c[0]!)) / denominator;
+  const u = ((c[0]! - a[0]!) * (b[1]! - a[1]!) - (c[1]! - a[1]!) * (b[0]! - a[0]!)) / denominator;
+  return t >= 0 && t <= 1 && u >= 0 && u <= 1;
+}
+
+/** Mirrors the renderer's clean-flow obstacle test: 2px clearance around every other state. */
+function lifecycleSegmentHitsBox(a: number[], b: number[], box: LifecycleBox, clearance = 2): boolean {
+  const x1 = box.x - clearance;
+  const y1 = box.y - clearance;
+  const x2 = box.x + box.width + clearance;
+  const y2 = box.y + box.height + clearance;
+  const inside = (point: number[]) => point[0]! >= x1 && point[0]! <= x2 && point[1]! >= y1 && point[1]! <= y2;
+  if (inside(a) || inside(b)) return true;
+  return lifecycleSegmentsCross(a, b, [x1, y1], [x2, y1])
+    || lifecycleSegmentsCross(a, b, [x2, y1], [x2, y2])
+    || lifecycleSegmentsCross(a, b, [x2, y2], [x1, y2])
+    || lifecycleSegmentsCross(a, b, [x1, y2], [x1, y1]);
+}
+
+function lifecycleRouteCandidates(from: LifecycleBox, to: LifecycleBox, channels: readonly number[]): LifecycleRoute[] {
+  const candidates: LifecycleRoute[] = [];
+  const bottom = (box: LifecycleBox) => box.y + box.height;
+  if (from.id === to.id) {
+    // A self-transition has no valid automatic route: the renderer's endpoint gate demands a
+    // first segment that leaves the inferred source side and a last segment that enters the
+    // inferred target side, and no pair of anchors on one rectangle satisfies both. An
+    // authored `via` is authoritative and is the only form the gate accepts.
+    candidates.push({
+      fromSide: "right",
+      toSide: "top",
+      via: [[from.x + from.width + 22, from.cy], [from.x + from.width + 22, from.y - 34], [from.cx, from.y - 34]]
+    });
+    return candidates;
+  }
+  if (from.band === "phase" && to.band === "phase" && from.cy === to.cy) {
+    if (to.col === from.col + 1) candidates.push({ fromSide: "right", toSide: "left" });
+    if (to.col === from.col - 1) candidates.push({ fromSide: "left", toSide: "right" });
+  }
+  for (const channel of channels) {
+    if (channel > bottom(from) + 8 && channel < to.y - 8) candidates.push({ fromSide: "bottom", toSide: "top", via: [[from.cx, channel], [to.cx, channel]] });
+    if (channel > bottom(to) + 8) candidates.push({ fromSide: "bottom", toSide: "bottom", via: [[from.cx, channel], [to.cx, channel]] });
+    if (channel < from.y - 8 && channel > bottom(to) + 8) candidates.push({ fromSide: "top", toSide: "bottom", via: [[from.cx, channel], [to.cx, channel]] });
+  }
+  if (from.y > 96 && to.y > 96) candidates.push({ fromSide: "top", toSide: "top", via: [[from.cx, 86], [to.cx, 86]] });
+  candidates.push({ fromSide: "left", toSide: "left", via: [[20, from.cy], [20, to.cy]] });
+  candidates.push({ fromSide: "right", toSide: "right", via: [[LIFECYCLE.width - 20, from.cy], [LIFECYCLE.width - 20, to.cy]] });
+  candidates.push(from.cx <= to.cx ? { fromSide: "right", toSide: "left" } : { fromSide: "left", toSide: "right" });
+  return candidates;
+}
+
+function lifecycleRoutePoints(from: LifecycleBox, to: LifecycleBox, route: LifecycleRoute): number[][] {
+  return [lifecycleAnchor(from, route.fromSide), ...(route.via ?? []), lifecycleAnchor(to, route.toSide)];
+}
+
+function lifecycleRouteValid(from: LifecycleBox, to: LifecycleBox, points: readonly number[][], boxes: readonly LifecycleBox[]): boolean {
+  const start = points[0]!;
+  const end = points[points.length - 1]!;
+  if (Math.hypot(end[0]! - start[0]!, end[1]! - start[1]!) < LIFECYCLE.minEdge) return false;
+  for (const box of boxes) {
+    if (box.id === from.id || box.id === to.id) continue;
+    for (let index = 0; index < points.length - 1; index += 1) {
+      if (lifecycleSegmentHitsBox(points[index]!, points[index + 1]!, box)) return false;
+    }
+  }
+  return true;
+}
+
+/** Corridor a route leans on, used to spread a fan-out over separate channels. */
+function lifecycleRouteChannel(route: LifecycleRoute): number | undefined {
+  const via = route.via;
+  if (!via || !via.length) return undefined;
+  const first = via[0]!;
+  const last = via[via.length - 1]!;
+  return first[1] === last[1] ? first[1] : first[0];
+}
+
+/**
+ * Places one transition label at the first candidate that clears every state and every label
+ * already placed. Returns undefined when the fixed bands leave no room, so the caller can omit
+ * the label instead of shipping a collision the renderer rejects.
+ */
+function lifecycleLabelPlacement(
+  points: readonly number[][],
+  label: string,
+  note: string | undefined,
+  boxes: readonly LifecycleBox[],
+  placed: readonly LifecycleLabelRect[],
+  midX: number,
+  maxBottom: number,
+  viewBoxHeight: number
+): { lx: number; ly: number; rect: LifecycleLabelRect } | undefined {
+  const width = Math.max(32, Math.max(textUnits(label), textUnits(note ?? "")) * LIFECYCLE.labelUnit + 12);
+  const height = note ? 27 : 16;
+  const clampX = (value: number) => Math.min(LIFECYCLE.width - 8 - width / 2, Math.max(8 + width / 2, value));
+  const fits = (rect: LifecycleLabelRect) => {
+    if (rect.x < 8 || rect.x + rect.width > LIFECYCLE.width - 8 || rect.y < 8 || rect.y + rect.height > viewBoxHeight - 8) return false;
+    for (const box of boxes) if (lifecycleRectsOverlap(rect, box)) return false;
+    for (const other of placed) if (lifecycleRectsOverlap(rect, other)) return false;
+    return true;
+  };
+  const candidates: Array<[number, number]> = [];
+  const segments: Array<[number[], number[]]> = [];
+  for (let index = 0; index < points.length - 1; index += 1) segments.push([points[index]!, points[index + 1]!]);
+  const ordered = [...segments.filter((_, index) => index > 0 && index < segments.length - 1), ...segments];
+  for (const [a, b] of ordered) {
+    const horizontal = Math.abs(a[1]! - b[1]!) <= 0.5;
+    const mx = (a[0]! + b[0]!) / 2;
+    const my = (a[1]! + b[1]!) / 2;
+    if (horizontal) {
+      candidates.push([mx, a[1]! + 5 - height]);
+      candidates.push([mx, a[1]! + 17]);
+    } else {
+      candidates.push([a[0]! + 8 + width / 2, my - height / 2 + 11]);
+      candidates.push([a[0]! - 8 - width / 2, my - height / 2 + 11]);
+    }
+  }
+  // Rows the fixed bands leave free: above the rail and inside both inter-band gaps.
+  for (const row of [205, 233, 365, 393, 96]) candidates.push([midX, row - height / 2 + 11]);
+  candidates.push([midX, maxBottom + 12 + 11]);
+  for (const [lx, ly] of candidates) {
+    const centerX = clampX(lx);
+    const rect: LifecycleLabelRect = { x: centerX - width / 2, y: ly - 11, width, height };
+    if (fits(rect)) return { lx: centerX, ly, rect };
+  }
+  return undefined;
+}
+
 function stateType(node: ProjectDiagramNode, kind: "initial" | "terminal" | "normal", outcome?: "success" | "failure"): string {
   if (kind === "initial") return "start";
-  if (kind === "terminal") return outcome === "failure" ? "failure" : "success";
+  // A terminal without an explicit success outcome is a non-completion exit (Stopped, Blocked,
+  // Incomplete); rendering it as `success` would contradict the documented lifecycle.
+  if (kind === "terminal") return outcome === "success" ? "success" : "failure";
   if (node.role === "store") return "waiting";
   if (node.role === "actor") return "external";
   if (node.role === "event") return "neutral";
@@ -545,79 +763,129 @@ function buildLifecycle(project: ProjectDiagram, repository: ArchifyRepository |
   const overflowRanks: number[] = [];
   mainOrder.forEach((rank) => { if (mainColumn.size < 5) mainColumn.set(rank, mainColumn.size); else overflowRanks.push(rank); });
   const overflowIndex = new Map(overflowRanks.map((rank, index) => [rank, index]));
+  // Rows stack inside a band, so occupancy is keyed by band and column: event lanes share one
+  // band even though they carry different lane ids.
   const occupancy = new Map<string, number>();
+  const capacity = (band: LifecycleBandName): number => {
+    const geometry = lifecycleBandGeometry(band);
+    const nextTop = band === "phase" ? LIFECYCLE.event.y : band === "outcome" ? Number.POSITIVE_INFINITY : LIFECYCLE.outcome.y;
+    if (!Number.isFinite(nextTop)) return Number.POSITIVE_INFINITY;
+    return Math.max(1, Math.floor((nextTop - 10 - geometry.y - geometry.height) / LIFECYCLE.rowGap) + 1);
+  };
+  const terminalNodes = project.nodes.filter((node) => stateByNode.get(node.id)?.kind === "terminal");
+  const boxes: LifecycleBox[] = [];
   const states = project.nodes.map((node) => {
     const id = mapNode(mapping, node, usedNodes);
     const definition = stateByNode.get(node.id);
+    const kind = definition?.kind ?? "normal";
     const rank = ranks.get(node.id) ?? 0;
     let lane = "main";
     let col = 0;
-    if (definition?.kind === "terminal") {
+    if (kind === "terminal") {
       lane = hasTerminal ? "terminal" : "main";
-      const terminalIndex = stateDefinitions.filter((state) => state.kind === "terminal").findIndex((state) => state.nodeId === node.id);
-      col = terminalIndex % 3;
-      const key = `${lane}:${col}`;
-      const count = occupancy.get(key) ?? 0;
-      occupancy.set(key, count + 1);
-      return {
-        id,
-        type: stateType(node, definition.kind, definition.outcome),
-        label: node.label,
-        lane,
-        col,
-        width: Math.max(118, Math.min(260, labelWidth(node.label) + 36)),
-        ...(count ? { yOffset: count * 72 } : {})
-      };
-    }
-    if (definition?.kind === "initial") {
+      const terminalIndex = terminalNodes.findIndex((entry) => entry.id === node.id);
+      col = Math.max(0, terminalIndex) % LIFECYCLE.outcome.xs.length;
+    } else if (kind === "initial") {
       lane = "main";
       col = mainColumn.get(rank) ?? 0;
     } else if (overflowIndex.has(rank)) {
       const index = overflowIndex.get(rank)!;
-      lane = eventLaneIds[Math.floor(index / 3) % Math.max(1, eventLaneIds.length)] ?? "main";
-      col = index % 3;
+      lane = eventLaneIds[Math.floor(index / LIFECYCLE.event.xs.length) % Math.max(1, eventLaneIds.length)] ?? "main";
+      col = index % LIFECYCLE.event.xs.length;
     } else {
       lane = "main";
       col = mainColumn.get(rank) ?? 0;
     }
-    const key = `${lane}:${col}`;
-    const count = occupancy.get(key) ?? 0;
-    occupancy.set(key, count + 1);
+    const band = lifecycleBandFor(lane);
+    const geometry = lifecycleBandGeometry(band);
+    if (col >= geometry.xs.length) col = geometry.xs.length - 1;
+    const key = `${band}:${col}`;
+    const row = occupancy.get(key) ?? 0;
+    if (row >= capacity(band)) {
+      throw new Error(`Lifecycle diagram has more states than the fixed phase and event bands can hold around '${node.id}'.`);
+    }
+    occupancy.set(key, row + 1);
+    const cx = geometry.xs[col]!;
+    const envelope = Math.min(cx - LIFECYCLE.margin, LIFECYCLE.width - LIFECYCLE.margin - cx);
+    const cap = band === "phase" ? Math.min(LIFECYCLE.railWidth, envelope * 2) : Math.min(LIFECYCLE.maxWidth, envelope * 2);
+    const desired = Math.max(LIFECYCLE.minWidth, Math.round(textUnits(node.label) * LIFECYCLE.stateUnit) + 12);
+    const width = Math.max(1, Math.min(desired, cap));
+    const yOffset = row * LIFECYCLE.rowGap;
+    const box: LifecycleBox = { id, band, col, x: cx - width / 2, y: geometry.y + yOffset, width, height: geometry.height, cx, cy: geometry.y + yOffset + geometry.height / 2 };
+    boxes.push(box);
     return {
       id,
-      type: stateType(node, definition?.kind ?? "normal", definition?.outcome),
-      label: node.label,
+      type: stateType(node, kind, definition?.outcome),
+      label: lifecycleStateLabel(node.label, width),
       lane,
       col,
-      width: Math.max(118, Math.min(260, labelWidth(node.label) + 36)),
-      ...(count ? { yOffset: count * 72 } : {})
+      width,
+      ...(yOffset ? { yOffset } : {})
     };
   });
-  const transitions = transitionRelations.flatMap((relation) => {
-    if (!mapping.ids[relation.from] || !mapping.ids[relation.to]) return [];
+  const boxById = new Map(boxes.map((box) => [box.id, box]));
+  const maxBottom = boxes.reduce((bottom, box) => Math.max(bottom, box.y + box.height), LIFECYCLE.outcome.y + LIFECYCLE.outcome.height);
+  // Corridors the fixed bands leave free, plus channels under the deepest outcome row.
+  const channels: number[] = [200, 232, 264, 348, 380, 412];
+  for (let index = 0; index < 4; index += 1) channels.push(maxBottom + 14 + index * 32);
+  const channelUsage = new Map<number, number>();
+  const routes: Array<{ relation: ProjectDiagramRelation; route: LifecycleRoute; points: number[][] }> = [];
+  for (const relation of transitionRelations) {
+    const from = boxById.get(mapping.ids[relation.from] ?? "");
+    const to = boxById.get(mapping.ids[relation.to] ?? "");
+    if (!from || !to) continue;
+    const candidates = lifecycleRouteCandidates(from, to, channels);
+    let best: { route: LifecycleRoute; points: number[][]; score: number } | undefined;
+    for (const [index, route] of candidates.entries()) {
+      const points = lifecycleRoutePoints(from, to, route);
+      if (!lifecycleRouteValid(from, to, points, boxes)) continue;
+      const channel = lifecycleRouteChannel(route);
+      const score = (channel === undefined ? 0 : channelUsage.get(channel) ?? 0) * 100 + index;
+      if (!best || score < best.score) best = { route, points, score };
+    }
+    if (!best) {
+      // Every candidate crossed another state. Keep the most specific route so the bounded
+      // repair loop still sees a concrete geometry to adjust instead of an empty transition.
+      const route = candidates[candidates.length - 1]!;
+      best = { route, points: lifecycleRoutePoints(from, to, route), score: Number.MAX_SAFE_INTEGER };
+    }
+    const channel = lifecycleRouteChannel(best.route);
+    if (channel !== undefined) channelUsage.set(channel, (channelUsage.get(channel) ?? 0) + 1);
+    routes.push({ relation, route: best.route, points: best.points });
+  }
+  const viewBoxHeight = Math.max(660, maxBottom + LIFECYCLE.bottomReserve);
+  const placedLabels: LifecycleLabelRect[] = [];
+  const transitions = routes.map(({ relation, route, points }) => {
     const definition = transitionByRelation.get(relation.id);
-    const source = states.find((state) => state.id === mapping.ids[relation.from]);
-    const target = states.find((state) => state.id === mapping.ids[relation.to]);
     const id = mapRelation(mapping, relation, usedRelations);
     const label = definition?.event ?? relation.label;
     const note = definition?.condition ?? relation.condition;
-    return [{
+    const transition: Record<string, unknown> = {
       id,
-      from: mapping.ids[relation.from],
-      to: mapping.ids[relation.to],
-      ...(label ? { label: truncate(label, 60) } : {}),
-      ...(note ? { note: truncate(note, 200) } : {}),
-      ...(source?.lane === "main" && target?.lane !== "main" ? { route: "drop" } : {})
-    }];
+      from: mapping.ids[relation.from]!,
+      to: mapping.ids[relation.to]!,
+      fromSide: route.fromSide,
+      toSide: route.toSide,
+      ...(route.via ? { via: route.via } : { route: "straight" })
+    };
+    if (label) {
+      const midX = points.reduce((sum, point) => sum + point[0]!, 0) / points.length;
+      const placement = lifecycleLabelPlacement(points, label, note, boxes, placedLabels, midX, maxBottom, viewBoxHeight);
+      if (placement) {
+        transition["label"] = truncate(label, 60);
+        if (note) transition["note"] = truncate(note, 200);
+        transition["labelAt"] = [Math.round(placement.lx * 10) / 10, Math.round(placement.ly * 10) / 10];
+        placedLabels.push(placement.rect);
+      }
+    }
+    return transition;
   });
-  const maxStack = Math.max(0, ...[...occupancy.values()].map((count) => count - 1));
-  const viewBoxHeight = Math.max(660, 566 + maxStack * 72);
   return {
     mapping,
     ir: {
       schema_version: 1,
       diagram_type: "lifecycle",
-      meta: baseMeta(project, repository, attached, { viewBox: [980, viewBoxHeight] }),
+      meta: baseMeta(project, repository, attached, { viewBox: [LIFECYCLE.width, viewBoxHeight] }),
       lanes,
       states,
       transitions
@@ -744,21 +1012,45 @@ function repairIr(input: Record<string, unknown>, diagnostics: readonly string[]
   if (type === "lifecycle") {
     const transitions = Array.isArray(ir["transitions"]) ? ir["transitions"] as Record<string, unknown>[] : [];
     const states = Array.isArray(ir["states"]) ? ir["states"] as Record<string, unknown>[] : [];
+    const meta = { ...(ir["meta"] as Record<string, unknown> ?? {}) };
+    const current = Array.isArray(meta["viewBox"]) ? meta["viewBox"] as number[] : [LIFECYCLE.width, 660];
+    let viewWidth = current[0] ?? LIFECYCLE.width;
+    const viewHeight = current[1] ?? 660;
+    // A state outside the horizontal envelope cannot be rescued by a wider viewBox when it is the
+    // left/right margin itself, so shrink the over-wide states and only then grow the viewBox.
+    if (text.includes("horizontal bounds")) {
+      ir["states"] = states.map((state) => ({
+        ...state,
+        width: Math.max(48, Math.round(Number(state["width"] ?? LIFECYCLE.minWidth) * 0.8))
+      }));
+      viewWidth = Math.min(1400, viewWidth + attempt * 60);
+    }
     if (text.includes("label") && (text.includes("overlap") || text.includes("collid"))) {
-      ir["transitions"] = transitions.map((transition) => { const next = { ...transition }; delete next["label"]; return next; });
+      // Drop only the labels the diagnostics name, so one collision does not strip every label.
+      const named = new Set([...text.matchAll(/label "([^"]+)"/g)].map((match) => match[1]!.toLowerCase()));
+      ir["transitions"] = transitions.map((transition) => {
+        const next = { ...transition };
+        const label = typeof next["label"] === "string" ? next["label"].toLowerCase() : "";
+        if (!named.size || (label && named.has(label))) { delete next["label"]; delete next["note"]; delete next["labelAt"]; }
+        return next;
+      });
     }
     if (text.includes("less than 10px") || text.includes("overlap")) {
       ir["states"] = states.map((state) => ({ ...state, ...(typeof state["yOffset"] === "number" ? { yOffset: Number(state["yOffset"]) + attempt * 36 } : {}) }));
     }
-    if (text.includes("wider than")) {
-      ir["states"] = states.map((state) => ({ ...state, width: Math.max(Number(state["width"] ?? 118), 180 + attempt * 40) }));
-    }
     if (text.includes("too short") || text.includes("endpoint-side") || text.includes("edge-through-node")) {
-      ir["transitions"] = transitions.map((transition) => ({ ...transition, route: typeof transition["route"] === "string" ? transition["route"] : "drop" }));
+      // Fan-out exits need separate corridors; one shared channel is what merges them.
+      const deepest = states.reduce((bottom, state) => {
+        const yOffset = typeof state["yOffset"] === "number" ? Number(state["yOffset"]) : 0;
+        return Math.max(bottom, LIFECYCLE.outcome.y + yOffset + LIFECYCLE.outcome.height);
+      }, LIFECYCLE.outcome.y + LIFECYCLE.outcome.height);
+      ir["transitions"] = transitions.map((transition, index) => ({
+        ...transition,
+        route: "bottom-channel",
+        channelY: deepest + 14 + index * 32 + attempt * 24
+      }));
     }
-    const meta = { ...(ir["meta"] as Record<string, unknown> ?? {}) };
-    const current = Array.isArray(meta["viewBox"]) ? meta["viewBox"] as number[] : [980, 660];
-    meta["viewBox"] = [Math.max(980, current[0] ?? 0), Math.min(1600, Math.max(660, (current[1] ?? 660) + attempt * 120))];
+    meta["viewBox"] = [viewWidth, Math.min(1600, Math.max(660, viewHeight + attempt * 120))];
     ir["meta"] = meta;
   }
   return ir;

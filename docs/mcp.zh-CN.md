@@ -60,4 +60,22 @@ MCP 调用需要受信任的本地工作区，支持本地 `stdio` 和 Streamabl
 
 通过 **Dext: Set MCP Access Token** 保存令牌。HTTP 服务器使用 bearer 令牌；stdio 服务器声明 `auth: {"type":"token","env":"ENV_NAME"}` 后，Dext 会将 SecretStorage 中的令牌注入子进程对应的环境变量。令牌按服务器和清单范围区分：项目令牌属于当前工作区，全局令牌使用全局范围。不要把凭据放进清单或 stdio 参数。
 
-**Dext: Clear MCP Access Token** 删除所选凭据；**Dext: Verify MCP Server** 执行带认证的 HTTP 初始化检查。编辑、新建或删除清单后，对应 API 会自动重新加载。
+**Dext: Clear MCP Access Token** 删除所选凭据；**Dext: Verify MCP Server** 对任意已配置的服务器（HTTP 或 stdio）执行带认证的初始化检查。编辑、新建或删除清单后，对应 API 会自动重新加载。
+
+## 查询参数认证
+
+部分托管网关只接受把凭据放在 URL 查询参数里，例如钉钉的 `https://mcp-gw.dingtalk.com/server/<实例ID>?key=<key>`。清单仍然保持 URL 不含凭据、不含查询字符串：只声明参数名，再用 **Dext: Set MCP Access Token** 保存令牌。
+
+```jsonc
+// .dext/mcp/dingtalk_doc.jsonc
+{
+  "name": "dingtalk_doc",
+  "transport": "http",
+  "url": "https://mcp-gw.dingtalk.com/server/<实例ID>",
+  "auth": { "type": "query", "name": "key" },
+  "tools": []
+}
+```
+
+请求时 Dext 从 SecretStorage 读取令牌，拼接为 `?key=<已编码的令牌>`；清单里的 `url` 始终不含凭据。所有输出路径（日志、诊断、选择列表）只显示脱敏后的 URL（`?key=***`），令牌只存在于请求链路上。必须使用 HTTPS；由于 URL 比请求头更容易被代理或访问日志记录，请只对可信端点使用。服务器支持 Authorization 请求头时应优先使用 `auth: {"type":"bearer"}`。执行 **Dext: Set MCP Access Token** 时选择 **HTTP · Query parameter**，查询参数凭据会使用独立的存储键，已有的 bearer 令牌不受影响。
+

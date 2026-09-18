@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { name, version, dext } from "../package.json";
-import { HttpMcpTransport, McpToolRegistry, StdioMcpTransport, type McpFetch, type McpTransport } from "../src/core/mcpRegistry.js";
+import { HttpMcpTransport, McpToolRegistry, StdioMcpTransport, authDiagnostic, mcpCredentialKind, mcpRequestUrl, redactedMcpUrl, redactedUrlQuery, type McpFetch, type McpTransport } from "../src/core/mcpRegistry.js";
 
 function jsonResponse(value: unknown, sessionId?: string): Response {
   return new Response(JSON.stringify(value), {
@@ -129,6 +129,91 @@ describe("McpToolRegistry", () => {
       command: "npx",
       auth: { type: "token", env: "not-valid-name" }
     }])).toEqual(["MCP server 'user-mcp' auth must be { type: 'token', env: '<environment variable name>' } for stdio."]);
+  });
+
+  it("validates the bearer and query auth shapes directly", () => {
+    expect(authDiagnostic(undefined)).toBeUndefined();
+    expect(authDiagnostic({ type: "bearer" })).toBeUndefined();
+    expect(authDiagnostic({ type: "query", name: "key" })).toBeUndefined();
+    expect(authDiagnostic({ type: "query", name: "k".repeat(65) })).toContain("query parameter name");
+    expect(authDiagnostic({ type: "query" })).toContain("query parameter name");
+    expect(authDiagnostic({ type: "query", name: "not valid" })).toContain("query parameter name");
+    expect(authDiagnostic({ type: "query", name: "key", token: "leak" })).toContain("unsupported field 'token'");
+    expect(authDiagnostic({ type: "bearer", name: "key" })).toBe("auth must be exactly { type: 'bearer' }.");
+    expect(authDiagnostic({ type: "token", env: "X" })).toContain("type: 'query'");
+  });
+
+  it("keeps query auth on the server and rejects a credential-bearing URL", () => {
+    const registry = new McpToolRegistry({ call: async () => ({}) });
+    expect(registry.setServers([
+      { name: "gateway", transport: "http", url: "https://mcp.example.test/server/abc", auth: { type: "query", name: "key" } },
+      { name: "token-url", transport: "http", url: "https://mcp.example.test/server/abc?key=secret" },
+      { name: "bad-type", transport: "http", url: "https://mcp.example.test/v1", auth: { type: "query" } },
+      { name: "extra", transport: "http", url: "https://mcp.example.test/v1", auth: { type: "query", name: "key", token: "leak" } }
+    ])).toEqual([
+      "MCP server 'token-url' url must not contain a query string.",
+      "MCP server 'bad-type' auth must be { type: 'query', name: '<query parameter name>' } with a name such as 'key'.",
+      "MCP server 'extra' auth with type 'query' has unsupported field 'token'."
+    ]);
+    expect(registry.getServer("gateway")).toMatchObject({
+      url: "https://mcp.example.test/server/abc",
+      auth: { type: "query", name: "key" }
+    });
+  });
+
+  it.each([
+    ["http without auth", { name: "h", transport: "http" as const, url: "https://mcp.example.test/mcp" }, "bearer"],
+    ["http bearer", { name: "h", transport: "http" as const, url: "https://mcp.example.test/mcp", auth: { type: "bearer" as const } }, "bearer"],
+    ["http query", { name: "h", transport: "http" as const, url: "https://mcp.example.test/mcp", auth: { type: "query" as const, name: "key" } }, "query"],
+    ["stdio without auth", { name: "s", transport: "stdio" as const, command: "npx" }, "token"],
+    ["stdio token", { name: "s", transport: "stdio" as const, command: "npx", auth: { type: "token" as const, env: "E" } }, "token"]
+  ])("maps %s to the %s credential kind", (_label, server, expected) => {
+    expect(mcpCredentialKind(server)).toBe(expected);
+  });
+
+  it("builds a credential-bearing request URL only for query auth and masks it for display", () => {
+    const query = { name: "gateway", transport: "http" as const, url: "https://mcp.example.test/server/abc", auth: { type: "query" as const, name: "key" } };
+    expect(mcpRequestUrl(query, "a&b=c")).toBe("https://mcp.example.test/server/abc?key=a%26b%3Dc");
+    expect(mcpRequestUrl(query, undefined)).toBe("https://mcp.example.test/server/abc");
+    expect(mcpRequestUrl({ name: "bearer", transport: "http", url: "https://mcp.example.test/v1", auth: { type: "bearer" } }, "token"))
+      .toBe("https://mcp.example.test/v1");
+    const redacted = redactedMcpUrl(query);
+    expect(redacted).toBe("https://mcp.example.test/server/abc?key=***");
+    expect(redacted).not.toContain("a&b=c");
+    // A url that wrongly embeds a credential must not leak it through display.
+    expect(redactedUrlQuery("https://mcp.example.test/server/abc?key=secret&other=1"))
+      .toBe("https://mcp.example.test/server/abc?key=***&other=***");
+    expect(redactedUrlQuery("https://mcp.example.test/server/abc")).toBe("https://mcp.example.test/server/abc");
+  });
+
+  it("sends a query credential on every request without an Authorization header", async () => {
+    const requests: Array<{ url: string; method: string; authorization: string | null }> = [];
+    const fetcher: McpFetch = async (url, init) => {
+      const headers = new Headers(init?.headers);
+      const message = init?.method === "POST" ? requestMessage(init) : undefined;
+      requests.push({ url, method: init?.method ?? "GET", authorization: headers.get("authorization") });
+      if (init?.method === "DELETE") return new Response(null, { status: 204 });
+      if (message?.method === "initialize") return jsonResponse({ jsonrpc: "2.0", id: message.id, result: {} }, "session-q");
+      if (message?.method === "notifications/initialized") return new Response(null, { status: 202 });
+      return jsonResponse({ jsonrpc: "2.0", id: message?.id, result: { content: [{ type: "text", text: "ok" }] } });
+    };
+    const registry = new McpToolRegistry(new HttpMcpTransport(fetcher));
+    registry.setServers([{ name: "gateway", transport: "http", url: "https://mcp.example.test/server/abc", auth: { type: "query", name: "key" } }]);
+    registry.setTools([{ server: "gateway", tool: "read" }]);
+    registry.setAccessTokenProvider(async () => "a&b=c");
+
+    await expect(registry.call("gateway.read", {})).resolves.toMatchObject({ content: "ok" });
+    expect(requests.map((entry) => entry.method)).toEqual(["POST", "POST", "POST", "DELETE"]);
+    expect(requests.map((entry) => entry.url)).toEqual(Array.from({ length: 4 }, () => "https://mcp.example.test/server/abc?key=a%26b%3Dc"));
+    expect(requests.map((entry) => entry.authorization)).toEqual([null, null, null, null]);
+  });
+
+  it("points a query-authenticated call at the credential command when no token is stored", async () => {
+    const registry = new McpToolRegistry({ call: async () => ({}) });
+    registry.setServers([{ name: "gateway", transport: "http", url: "https://mcp.example.test/server/abc", auth: { type: "query", name: "key" } }]);
+    registry.setTools([{ server: "gateway", tool: "read" }]);
+    registry.setAccessTokenProvider(async () => undefined);
+    await expect(registry.call("gateway.read", {})).rejects.toThrow("Run 'Dext: Set MCP Access Token'");
   });
 
   it("uses Streamable HTTP initialize, initialized notification, tools/call, and session termination", async () => {

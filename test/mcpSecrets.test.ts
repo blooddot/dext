@@ -52,4 +52,21 @@ describe("McpAccessTokenStore", () => {
     expect(requested[1]).toMatch(/^dext\.mcp\.bearer\.[a-f0-9]{64}$/);
     expect(requested[0]).not.toEqual(requested[1]);
   });
+
+  it("stores a query credential under its own kind without reusing a bearer entry", async () => {
+    const requested: string[] = [];
+    const secrets: SecretStorageLike = {
+      get: async (key) => { requested.push(key); return undefined; },
+      store: async () => {},
+      delete: async () => {}
+    };
+    const store = new McpAccessTokenStore(secrets, () => "file:///workspace");
+
+    await store.get("gateway", "workspace", "query");
+    await store.get("gateway", "workspace", "bearer");
+
+    expect(requested[0]).toMatch(/^dext\.mcp\.query\.[a-f0-9]{64}$/);
+    expect(requested[1]).toMatch(/^dext\.mcp\.bearer\.[a-f0-9]{64}$/);
+    expect(requested[0]).not.toEqual(requested[1]);
+  });
 });

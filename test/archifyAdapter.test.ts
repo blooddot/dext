@@ -110,6 +110,52 @@ const lifecycle: ProjectDiagram = {
   }
 };
 
+/**
+ * The shape every real Plan/Build lifecycle produces: one hub state, a self-transition, and a
+ * fan-out into four terminal exits (two of them sharing a target). The vendored renderer uses a
+ * fixed three-band grid, so this is the case that used to exhaust the bounded repair budget.
+ */
+const fanOutLifecycle: ProjectDiagram = {
+  schemaVersion: 1, id: "demo-lifecycle-fan-out", title: "Plan Build execution and documented outcomes", kind: "lifecycle", version: 1, updatedAt: 1,
+  nodes: [
+    node("plan", "Final plan selected", "state"),
+    node("hub", "Build executing", "state"),
+    node("done", "Completed", "state"),
+    node("stopped", "Stopped", "state"),
+    node("blocked", "Blocked", "state"),
+    node("incomplete", "Incomplete", "state")
+  ],
+  relations: [
+    relation("t-start", "plan", "hub", "transitions", { label: "Click Build", order: 1 }),
+    relation("t-continue", "hub", "hub", "transitions", { label: "Continue another round", order: 2 }),
+    relation("t-done", "hub", "done", "transitions", { label: "Verification passes", order: 3 }),
+    relation("t-stop", "hub", "stopped", "transitions", { label: "User cancels", order: 4 }),
+    relation("t-block", "hub", "blocked", "transitions", { label: "Externally blocked", order: 5 }),
+    relation("t-stall", "hub", "incomplete", "transitions", { label: "No progress", order: 6 }),
+    relation("t-ceiling", "hub", "incomplete", "transitions", { label: "Ceiling reached", order: 7 })
+  ],
+  semantics: {
+    lanes: [{ id: "main", label: "Stages", evidence: evidence("plan") }, { id: "terminal", label: "Result", evidence: evidence("done") }],
+    states: [
+      { nodeId: "plan", kind: "initial", evidence: evidence("plan") },
+      { nodeId: "hub", kind: "normal", evidence: evidence("hub") },
+      { nodeId: "done", kind: "terminal", outcome: "success", evidence: evidence("done") },
+      { nodeId: "stopped", kind: "terminal", evidence: evidence("stopped") },
+      { nodeId: "blocked", kind: "terminal", evidence: evidence("blocked") },
+      { nodeId: "incomplete", kind: "terminal", evidence: evidence("incomplete") }
+    ],
+    transitions: [
+      { relationId: "t-start", event: "Developer clicks Build.", condition: "A final plan is selected in Plan mode.", evidence: evidence("t-start") },
+      { relationId: "t-continue", event: "Dext checks task progress after an Agent response.", condition: "Unfinished actionable work remains and no stopping condition applies.", evidence: evidence("t-continue") },
+      { relationId: "t-done", event: "Separate final verification passes.", condition: "All tasks have been reported complete.", evidence: evidence("t-done") },
+      { relationId: "t-stop", event: "User cancels execution.", evidence: evidence("t-stop") },
+      { relationId: "t-block", event: "All remaining tasks externally blocked", evidence: evidence("t-block") },
+      { relationId: "t-stall", event: "Three rounds without progress", evidence: evidence("t-stall") },
+      { relationId: "t-ceiling", event: "Execution ceiling reached", evidence: evidence("t-ceiling") }
+    ]
+  }
+};
+
 const fixtures: readonly ProjectDiagram[] = [architecture, workflow, sequence, dataFlow, lifecycle];
 
 /**
@@ -246,6 +292,35 @@ describe("ArchifyAdapter", () => {
     };
     expect((await adapter.render(await adapter.transform(longWorkflow))).content.length).toBeGreaterThan(0);
     expect((await adapter.render(await adapter.transform(lifecycle))).content.length).toBeGreaterThan(0);
+    adapter.dispose();
+  }, 120_000);
+
+  it("renders a lifecycle with a self-transition and a four-way terminal fan-out", async () => {
+    const adapter = new ArchifyAdapter(runtimeRoot);
+    const document = await adapter.transform(fanOutLifecycle);
+    const ir = (document.payload as { ir: Record<string, unknown> }).ir;
+    const states = ir["states"] as Array<Record<string, unknown>>;
+    const transitions = ir["transitions"] as Array<Record<string, unknown>>;
+    // A terminal without an explicit success outcome is a non-completion exit, never `success`.
+    expect(states.find((state) => state["id"] === "done")?.["type"]).toBe("success");
+    for (const id of ["stopped", "blocked", "incomplete"]) {
+      expect(states.find((state) => state["id"] === id)?.["type"], `${id} type`).toBe("failure");
+    }
+    // Every transition carries authored geometry, and the self-transition carries explicit via points.
+    expect(transitions.every((transition) => typeof transition["fromSide"] === "string" && typeof transition["toSide"] === "string")).toBe(true);
+    expect(Array.isArray(transitions.find((transition) => transition["id"] === "t-continue")?.["via"])).toBe(true);
+    expect(transitions.every((transition) => transition["label"] !== undefined)).toBe(true);
+    // The two exits that share the Incomplete target must not share one corridor.
+    const duplicated = transitions.filter((transition) => transition["to"] === "incomplete");
+    expect(duplicated).toHaveLength(2);
+    expect(new Set(duplicated.map((transition) => JSON.stringify(transition["via"]))).size).toBe(2);
+
+    const artifact = await adapter.render(document);
+    const html = String(artifact.content);
+    for (const entry of fanOutLifecycle.nodes) expect(html).toContain(`data-node-id="${entry.id}"`);
+    for (const entry of fanOutLifecycle.nodes) expect(html).toContain(entry.label);
+    const receipt = await adapter.validate(document);
+    expect(receipt.status, JSON.stringify(receipt.issues)).not.toBe("failed");
     adapter.dispose();
   }, 120_000);
 

@@ -23,7 +23,10 @@ export interface ProjectEditorDataSource {
   generateDiagram?(request: { requirement: string; kind?: string; diagramId?: string }): Promise<void> | void;
   /** Host-owned saving of the exact rendered result (HTML artifact or live SVG serialization). */
   exportDiagram?(request: { diagramId: string; version?: number; format?: string; content?: string }): Promise<void> | void;
-  focusDiagramNode?(diagramId: string, nodeId: string): Promise<void> | void;
+  /** Opens one evidence entry the clicked node declares; a card click alone never opens a file. */
+  openDiagramEvidence?(diagramId: string, nodeId: string, path: string, line?: number): Promise<void> | void;
+  /** Opens one file the last evidence record lists, so the reader can inspect what was read. */
+  openEvidencePath?(path: string): Promise<void> | void;
   /** Cancels in-flight render/generation work when the page closes or the diagram changes. */
   cancelDiagramWork?(): void;
 }
@@ -118,7 +121,7 @@ export class ProjectEditorProvider {
     if (key !== this.key) return;
     const payload = message as {
       type?: unknown; page?: unknown; diagramId?: unknown; version?: unknown; kind?: unknown;
-      requirement?: unknown; format?: unknown; content?: unknown; nodeId?: unknown; refresh?: unknown;
+      requirement?: unknown; format?: unknown; content?: unknown; nodeId?: unknown; path?: unknown; line?: unknown; refresh?: unknown;
       cli?: unknown; model?: unknown; reasoningEffort?: unknown; speed?: unknown;
     };
     if (payload?.type === "projectInitialize" && this.options.dataSource.initialize && !this.initializing) {
@@ -192,8 +195,17 @@ export class ProjectEditorProvider {
       });
       return;
     }
-    if (payload?.type === "projectDiagramFocus" && typeof payload.diagramId === "string" && typeof payload.nodeId === "string") {
-      await this.options.dataSource.focusDiagramNode?.(payload.diagramId, payload.nodeId);
+    if (payload?.type === "projectDiagramEvidence" && typeof payload.diagramId === "string" && typeof payload.nodeId === "string" && typeof payload.path === "string") {
+      await this.options.dataSource.openDiagramEvidence?.(
+        payload.diagramId,
+        payload.nodeId,
+        payload.path,
+        typeof payload.line === "number" ? payload.line : undefined
+      );
+      return;
+    }
+    if (payload?.type === "projectEvidenceOpen" && typeof payload.path === "string") {
+      await this.options.dataSource.openEvidencePath?.(payload.path);
       return;
     }
     if (payload?.type === "projectDiagramCancel") {

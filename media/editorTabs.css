@@ -363,8 +363,33 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .project-diagram-stage { position: relative; display: grid; min-height: 320px; border: 1px solid var(--vscode-panel-border); border-radius: 6px; overflow: hidden; background: var(--vscode-editor-background); }
 .project-diagram-stage:fullscreen { min-height: 100vh; border: 0; border-radius: 0; }
 .project-diagram-stage:fullscreen .project-diagram-frame { height: 100vh; }
-.project-diagram-stage-fullscreen .project-diagram-frame { height: 90vh; }
 .project-diagram-frame { width: 100%; height: min(72vh, 760px); border: 0; background: var(--vscode-editor-background); }
+.project-diagram-exit { position: absolute; top: 10px; right: 10px; z-index: 40; padding: 4px 10px; border: 1px solid var(--vscode-button-border, transparent); border-radius: 4px; color: var(--vscode-button-foreground, #ffffff); background: var(--vscode-button-background, #0e639c); }
+.project-diagram-exit:hover { background: var(--vscode-button-hoverBackground, #1177bb); }
+.project-diagram-exit[hidden] { display: none; }
+/* The webview host refuses the browser Fullscreen API, so focus mode fills the whole webview. */
+body.diagram-focus { overflow: hidden; }
+body.diagram-focus .project-diagram-stage { position: fixed; inset: 0; z-index: 30; min-height: 0; border: 0; border-radius: 0; }
+body.diagram-focus .project-diagram-frame { height: 100%; }
+body.diagram-focus .project-nav,
+body.diagram-focus .project-diagram-toolbar,
+body.diagram-focus .project-diagram-details,
+body.diagram-focus .project-diagram-generate,
+body.diagram-focus .project-diagram-inventory,
+body.diagram-focus .project-diagram-knowledge-note,
+body.diagram-focus .architecture-rules,
+body.diagram-focus .architecture-decisions { display: none; }
+.project-diagram-node { margin: 12px 0; padding: 12px 14px; border: 1px solid var(--vscode-panel-border); border-radius: 6px; background: var(--vscode-editor-background); }
+.project-diagram-node[hidden] { display: none; }
+.project-diagram-node-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.project-diagram-node-description { margin: 8px 0 0; color: var(--vscode-foreground); overflow-wrap: anywhere; }
+.project-diagram-node-meta { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 16px; margin: 8px 0 0; }
+.project-diagram-node-meta dt { color: var(--vscode-descriptionForeground); }
+.project-diagram-node-meta dd { margin: 0; overflow-wrap: anywhere; }
+.project-diagram-node-evidence { display: flex; flex-wrap: wrap; gap: 6px 8px; margin-top: 10px; }
+.project-diagram-node-evidence button { max-width: 100%; overflow-wrap: anywhere; text-align: left; }
+body.diagram-focus .project-diagram-node { display: block; position: fixed; left: 12px; bottom: 12px; z-index: 40; max-width: min(440px, 70vw); max-height: 52%; overflow: auto; box-shadow: 0 4px 16px rgb(0 0 0 / 40%); }
+body.diagram-focus .project-diagram-node[hidden] { display: none; }
 .project-diagram-loading { position: absolute; inset: 0; display: grid; place-items: center; color: var(--vscode-descriptionForeground); background: color-mix(in srgb, var(--vscode-editor-background) 82%, transparent); }
 .project-diagram-loading[hidden] { display: none; }
 .project-diagram-empty { display: grid; place-content: center; gap: 6px; min-height: 260px; padding: 24px; text-align: center; color: var(--vscode-descriptionForeground); }
@@ -379,6 +404,14 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .project-diagram-details dd { margin: 0; overflow-wrap: anywhere; }
 .project-diagram-issues, .project-diagram-coverage { list-style: none; margin: 8px 0 0; padding: 0; }
 .project-diagram-issues li, .project-diagram-coverage li { padding: 6px 8px; margin-bottom: 6px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; overflow-wrap: anywhere; }
+.project-diagram-evidence { margin: 12px 0; border: 1px solid var(--vscode-panel-border); border-radius: 6px; padding: 8px 12px; }
+.project-diagram-evidence summary { cursor: pointer; color: var(--vscode-foreground); }
+.project-diagram-evidence h4 { margin: 12px 0 4px; }
+.project-evidence-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 18px; margin: 12px 0 4px; }
+.project-evidence-facts dt { color: var(--vscode-descriptionForeground); }
+.project-evidence-facts dd { margin: 0; overflow-wrap: anywhere; }
+.project-evidence-paths { display: flex; flex-wrap: wrap; gap: 4px 6px; max-height: 200px; overflow: auto; }
+.project-evidence-paths button { max-width: 100%; overflow-wrap: anywhere; text-align: left; font-family: var(--vscode-editor-font-family, monospace); font-size: 12px; }
 .project-diagram-render-error { margin: 8px 0 0; color: var(--vscode-errorForeground, var(--vscode-foreground)); }
 .project-diagram-generate { margin: 20px 0; padding: 14px; border: 1px solid var(--vscode-panel-border); border-radius: 6px; }
 .project-diagram-generate h3 { margin-top: 0; }
@@ -395,6 +428,7 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
   .project-diagram-toolbar label { flex-basis: 100%; }
   .project-diagram-toolbar select { flex: 1; min-width: 0; max-width: none; }
   .project-diagram-frame { height: 60vh; }
+  body.diagram-focus .project-diagram-node { max-width: none; right: 12px; max-height: 40%; }
   .project-diagram-details dl { grid-template-columns: minmax(0, 1fr); gap: 2px; }
   .project-diagram-details dd { margin-bottom: 8px; }
 }

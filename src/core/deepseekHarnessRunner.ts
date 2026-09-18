@@ -9,6 +9,7 @@ import { DeepSeekHarnessTransport } from "./deepseekHarnessTransport.js";
 import { agentTodoEvent, normalizeAgentTodos } from "./agentTodoTracking.js";
 import { elicitationQuestions, elicitationResponse, harnessInputQuestions, harnessQuestionAnswer, type HarnessQuestionOutcome, type HarnessQuestionRequest } from "./harnessQuestions.js";
 import { harnessPresetPatch } from "./harnessPresets.js";
+import { harnessResultEnvelope } from "./harnessPresetDefault.js";
 import { agentTimeout, DEFAULT_AGENT_TIMEOUT_MS, DEFAULT_AGENT_IDLE_TIMEOUT_MS } from "./agentTimeout.js";
 import type { AgentInputAnswers, AgentInputQuestion, AgentInputRequest, AgentInputState } from "./types.js";
 
@@ -212,17 +213,23 @@ export class DeepSeekHarnessRunner implements AgentRunner {
    *
    * The card is published as a `waiting` input event and closed with its
    * outcome, the way the Codex runner does. `metadata.requestAgentInput` only
-   * carries the answer back; without these events the question parks the turn
-   * with nothing on screen to answer it. */
+   * carries the answer back, so both halves — the answer callback and the event
+   * sink that renders the card — are required; with either missing the question
+   * parks the turn with nothing on screen to answer it. */
   private async ask(session: Session, request: Request, id: string, questions: AgentInputQuestion[]): Promise<AgentInputAnswers | null | undefined> {
     const respond = request.metadata.requestAgentInput;
-    if (!respond) return undefined;
+    const emit = request.onEvent;
+    // The card IS the pair of input events below: without the sink there is no
+    // question on screen, and waiting for an answer nobody can give would park
+    // the turn until it is cancelled. Report no Dext surface instead, so the
+    // caller fails closed with an error the model can read.
+    if (!respond || !emit) return undefined;
     const signal = request.signal ?? new AbortController().signal;
     const input: AgentInputRequest = { id, questions, blocking: true };
     // Secret answers are never echoed back into the transcript.
     const publish = (status: AgentInputState["status"], answers?: AgentInputAnswers): void => {
       const visible = answers ? Object.fromEntries(questions.filter((question) => !question.isSecret && answers[question.id]).map((question) => [question.id, answers[question.id]!])) : undefined;
-      request.onEvent?.({ phase: "input", text: "", userInput: { ...input, status, ...(visible ? { answers: visible } : {}) } });
+      emit({ phase: "input", text: "", userInput: { ...input, status, ...(visible ? { answers: visible } : {}) } });
     };
     // The question parks the turn, so idle detection has to pause with it.
     const key = `user-questions:${id}`;
@@ -308,9 +315,13 @@ export class DeepSeekHarnessRunner implements AgentRunner {
       : includePatch
         ? "This is a read-only API call. For requested changes return a complete applicable patch without editing files."
         : "This is a read-only API call. Do not include a patch; report conclusions in text only.";
-    // Keep the JSON-only contract after the payload so it is the last thing the
-    // model reads; the shared result boundary owns tolerant parsing.
-    const input = `${patchInstruction}\nDext JSON payload:\n${agentPayload(request)}\nReturn only a JSON object matching this schema as your final message: ${JSON.stringify(request.contract.outputJsonSchema)}\nNo markdown fence, no text before or after the object.`;
+    // The JSON-only contract is stated on both sides of the payload. Project
+    // rules are carried in the payload's `instruction` field, ahead of it and in
+    // a stronger voice, so a trailing-only reminder loses that conflict in a
+    // long session and the model answers in Markdown. The shared result boundary
+    // still owns tolerant parsing.
+    const schema = JSON.stringify(request.contract.outputJsonSchema);
+    const input = `${harnessResultEnvelope(request.contract.outputJsonSchema)}\n\n${patchInstruction}\nDext JSON payload:\n${agentPayload(request)}\nReturn only a JSON object matching this schema as your final message: ${schema}\nNo markdown fence, no text before or after the object.`;
     const metadata = { ...request.metadata };
     delete metadata.agentSessionId; delete metadata.conversationProviderSessionId; delete metadata.conversationForkFrom; delete metadata.onAgentSessionId;
     return this.runConversation({ ...request, input, mode: "ask", allowWorkspaceWrite: Boolean(request.allowWorkspaceWrite), metadata });

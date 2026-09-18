@@ -86,20 +86,32 @@ describe("project editor tab", () => {
       renderDiagram: (diagramId, version, options) => { calls.push({ op: "render", diagramId, version, options }); },
       generateDiagram: (request) => { calls.push({ op: "generate", ...request }); },
       exportDiagram: (request) => { calls.push({ op: "export", ...request }); },
-      focusDiagramNode: (diagramId, nodeId) => { calls.push({ op: "focus", diagramId, nodeId }); }
+      openDiagramEvidence: (diagramId, nodeId, path, line) => { calls.push({ op: "evidence", diagramId, nodeId, path, line }); }
     });
     await provider.show("architecture");
     await provider.handleMessage(provider.key, { type: "projectDiagramRender", diagramId: "view", version: 3, refresh: true });
     await provider.handleMessage(provider.key, { type: "projectDiagramGenerate", requirement: "更新订单流程", kind: "workflow", diagramId: "view" });
     await provider.handleMessage(provider.key, { type: "projectDiagramExport", diagramId: "view", version: 3, format: "svg", content: "<svg/>" });
-    await provider.handleMessage(provider.key, { type: "projectDiagramFocus", diagramId: "view", nodeId: "node-1" });
+    await provider.handleMessage(provider.key, { type: "projectDiagramEvidence", diagramId: "view", nodeId: "node-1", path: "README.md", line: 25 });
     await provider.handleMessage(provider.key, { type: "projectDiagramCancel" });
     expect(calls).toEqual([
       { op: "render", diagramId: "view", version: 3, options: { refresh: true } },
       { op: "generate", requirement: "更新订单流程", kind: "workflow", diagramId: "view" },
       { op: "export", diagramId: "view", version: 3, format: "svg", content: "<svg/>" },
-      { op: "focus", diagramId: "view", nodeId: "node-1" }
+      { op: "evidence", diagramId: "view", nodeId: "node-1", path: "README.md", line: 25 }
     ]);
+  });
+
+  it("never opens a file for a card click and only opens evidence the node declares", async () => {
+    const calls: unknown[] = [];
+    const { provider } = setup({
+      openDiagramEvidence: (diagramId, nodeId, path, line) => { calls.push({ diagramId, nodeId, path, line }); }
+    });
+    await provider.show("architecture");
+    // A node selection message that carries no evidence target must not open anything.
+    await provider.handleMessage(provider.key, { type: "projectDiagramFocus", diagramId: "view", nodeId: "node-1" });
+    await provider.handleMessage(provider.key, { type: "projectDiagramEvidence", diagramId: "view", nodeId: "node-1" });
+    expect(calls).toEqual([]);
   });
 
   it("ignores removed scan and multi-engine message entries", async () => {

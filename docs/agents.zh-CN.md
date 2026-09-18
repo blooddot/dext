@@ -48,7 +48,7 @@ Dext 默认使用 `dext.agent.timeoutMs: 0`（不限制总时长）和 `dext.age
 
 工具执行保留提供方自身的时限。报告工具正在执行不代表进程一定正常：工具卡死或缺少结束事件可能让空闲检测持续暂停，仍可手动停止或设置整轮硬时限。提供方未报告带有调用 ID 的工具开始事件时，仍按普通空闲超时处理。
 
-任一值设为 `0` 可关闭对应限制。已显式配置的正数 `dext.agent.timeoutMs` 仍是硬性总时限，不因输出而延长；要只按活动计时，请删除旧覆盖值或改为 `0`。设置对新一轮执行生效，仍可随时点击停止。提供方的网络超时和单个工具的超时独立生效。
+任一值设为 `0` 可关闭对应限制。已显式配置的正数 `dext.agent.timeoutMs` 仍是硬性总时限，不因输出而延长；要只按活动计时，请删除旧覆盖值或改为 `0`。设置对新一轮执行生效，仍可随时点击停止。提供方的网络超时和单个工具的超时独立生效。同一组限制也用于约束「结果修复」（某一轮的最终消息不是合法结果时，Dext 补跑的那次只读调用），它没有额外的内部固定上限。
 
 ## Claude Code
 
@@ -86,7 +86,7 @@ Ask、预览调用和计划生成使用只读权限；Agent 和明确的计划�
 
 ### 提问
 
-Harness 的提问显示在与 Codex 相同的 Dext 卡片中（位于 Process 上方），回答会直接返回给工具。发布包的 `dsh-acp` 只桥接了 `approval/request`，没有为 `user-questions/request` 注册应答者，因此 `dsh --profile acp` 下 `ask_user_question` 会按失败关闭原则直接报错。协议自带的替代方案是 ACP elicitation：Dext 已声明 `elicitation.form` 能力并实现 `elicitation/create`，上游一旦把该接缝桥接到 elicitation，Dext 无需改动。在此之前 Dext 通过自己的预设覆盖层注册应答者，经一次性令牌命名的回环端点与扩展通信，且只对该 Harness 进程开放。当没有 Dext 卡片接管问题时，应答者会转交下一个监听者，保持原有失败关闭行为。
+Harness 的提问显示在与 Codex 相同的 Dext 卡片中（位于 Process 上方），回答会直接返回给工具。由于卡片位于 Process 时间线上方，而长时间运行的回合会把该时间线撑得远超视口，因此当回合处于等待状态时新出现的提问会自动滚动到视野内，并暂停自动跟随，直到回答完毕；**Jump to latest** 可回到最新输出。发布包的 `dsh-acp` 只桥接了 `approval/request`，没有为 `user-questions/request` 注册应答者，因此 `dsh --profile acp` 下 `ask_user_question` 会按失败关闭原则直接报错。协议自带的替代方案是 ACP elicitation：Dext 已声明 `elicitation.form` 能力并实现 `elicitation/create`，上游一旦把该接缝桥接到 elicitation，Dext 无需改动。在此之前 Dext 通过自己的预设覆盖层注册应答者，经一次性令牌命名的回环端点与扩展通信，且只对该 Harness 进程开放。当没有 Dext 卡片接管问题时，应答者会转交下一个监听者，保持原有失败关闭行为。
 
 ### 高级配置与兼容性
 

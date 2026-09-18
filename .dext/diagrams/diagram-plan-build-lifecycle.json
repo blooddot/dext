@@ -1,0 +1,442 @@
+{
+  "schemaVersion": 1,
+  "id": "diagram-plan-build-lifecycle",
+  "title": "Plan Build execution and documented outcomes",
+  "kind": "lifecycle",
+  "nodes": [
+    {
+      "id": "state-plan-selected",
+      "label": "Final plan selected",
+      "role": "state",
+      "description": "The developer has selected an implementation plan that can be executed with Build.",
+      "semanticIds": [
+        "term-plan",
+        "step-plan-select"
+      ],
+      "evidence": [
+        {
+          "path": "README.md",
+          "line": 64,
+          "contentHash": "ebd8b83d78d0f4ac65bc6a93a40fa153d1ee1ddc02fc46a266bc322fc25974c7"
+        }
+      ],
+      "confidence": 0.96,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "state-build-active",
+      "label": "Build executing",
+      "role": "state",
+      "description": "Execution assesses Agent responses, saves round checkpoints, continues actionable tasks, and requests separate final verification after all tasks are reported complete.",
+      "semanticIds": [
+        "ctx-plan-execution",
+        "term-build",
+        "term-round-checkpoint",
+        "step-plan-round",
+        "step-plan-verify"
+      ],
+      "evidence": [
+        {
+          "path": "README.md",
+          "line": 25,
+          "contentHash": "ebd8b83d78d0f4ac65bc6a93a40fa153d1ee1ddc02fc46a266bc322fc25974c7"
+        },
+        {
+          "path": "README.md",
+          "line": 27,
+          "contentHash": "ebd8b83d78d0f4ac65bc6a93a40fa153d1ee1ddc02fc46a266bc322fc25974c7"
+        }
+      ],
+      "confidence": 0.96,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "state-build-completed",
+      "label": "Completed",
+      "role": "state",
+      "description": "The Build has passed its separate final verification after all tasks were reported complete.",
+      "semanticIds": [
+        "step-plan-completed",
+        "constraint-plan-completion"
+      ],
+      "evidence": [
+        {
+          "path": "README.zh-CN.md",
+          "line": 25,
+          "contentHash": "3fb6bef239c6118768aafc81adc420902a4e61e980afad5714ff31452a40dbbd"
+        },
+        {
+          "path": "README.md",
+          "line": 27,
+          "note": "Verification depends on Agent inspection and does not independently prove correctness.",
+          "contentHash": "ebd8b83d78d0f4ac65bc6a93a40fa153d1ee1ddc02fc46a266bc322fc25974c7"
+        }
+      ],
+      "confidence": 0.99,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "state-build-stopped",
+      "label": "Stopped",
+      "role": "state",
+      "description": "The user cancelled the Build.",
+      "semanticIds": [
+        "step-plan-stopped"
+      ],
+      "evidence": [
+        {
+          "path": "README.md",
+          "line": 27,
+          "contentHash": "ebd8b83d78d0f4ac65bc6a93a40fa153d1ee1ddc02fc46a266bc322fc25974c7"
+        }
+      ],
+      "confidence": 0.99,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "state-build-blocked",
+      "label": "Blocked",
+      "role": "state",
+      "description": "Explicit external blockers cover every remaining task.",
+      "semanticIds": [
+        "step-plan-blocked"
+      ],
+      "evidence": [
+        {
+          "path": "README.md",
+          "line": 27,
+          "contentHash": "ebd8b83d78d0f4ac65bc6a93a40fa153d1ee1ddc02fc46a266bc322fc25974c7"
+        }
+      ],
+      "confidence": 0.99,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "state-build-incomplete",
+      "label": "Incomplete",
+      "role": "state",
+      "description": "Execution stopped because of repeated lack of progress or the round ceiling; the plan is preserved.",
+      "semanticIds": [
+        "step-plan-incomplete"
+      ],
+      "evidence": [
+        {
+          "path": "README.md",
+          "line": 27,
+          "contentHash": "ebd8b83d78d0f4ac65bc6a93a40fa153d1ee1ddc02fc46a266bc322fc25974c7"
+        }
+      ],
+      "confidence": 0.99,
+      "review": "draft",
+      "freshness": "current"
+    }
+  ],
+  "relations": [
+    {
+      "id": "transition-build-start",
+      "from": "state-plan-selected",
+      "to": "state-build-active",
+      "kind": "transitions",
+      "label": "Click Build",
+      "condition": "A final plan is selected in Plan mode.",
+      "evidence": [
+        {
+          "path": "README.md",
+          "line": 64,
+          "contentHash": "ebd8b83d78d0f4ac65bc6a93a40fa153d1ee1ddc02fc46a266bc322fc25974c7"
+        },
+        {
+          "path": "README.md",
+          "line": 25,
+          "note": "A subsequent Build can restore matching tasks from the same plan.",
+          "contentHash": "ebd8b83d78d0f4ac65bc6a93a40fa153d1ee1ddc02fc46a266bc322fc25974c7"
+        }
+      ],
+      "confidence": 0.98,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "transition-build-continue",
+      "from": "state-build-active",
+      "to": "state-build-active",
+      "kind": "transitions",
+      "label": "Continue another round",
+      "condition": "Unfinished actionable work remains and no documented stopping condition applies.",
+      "evidence": [
+        {
+          "path": "README.md",
+          "line": 25,
+          "contentHash": "ebd8b83d78d0f4ac65bc6a93a40fa153d1ee1ddc02fc46a266bc322fc25974c7"
+        },
+        {
+          "path": "README.md",
+          "line": 27,
+          "contentHash": "ebd8b83d78d0f4ac65bc6a93a40fa153d1ee1ddc02fc46a266bc322fc25974c7"
+        }
+      ],
+      "confidence": 0.97,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "transition-build-complete",
+      "from": "state-build-active",
+      "to": "state-build-completed",
+      "kind": "transitions",
+      "label": "Separate final verification passes",
+      "condition": "All tasks are reported complete and the separate final verification passes.",
+      "evidence": [
+        {
+          "path": "README.md",
+          "line": 25,
+          "contentHash": "ebd8b83d78d0f4ac65bc6a93a40fa153d1ee1ddc02fc46a266bc322fc25974c7"
+        },
+        {
+          "path": "README.zh-CN.md",
+          "line": 25,
+          "contentHash": "3fb6bef239c6118768aafc81adc420902a4e61e980afad5714ff31452a40dbbd"
+        }
+      ],
+      "confidence": 0.99,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "transition-build-cancel",
+      "from": "state-build-active",
+      "to": "state-build-stopped",
+      "kind": "transitions",
+      "label": "User cancellation",
+      "condition": "The user cancels execution.",
+      "exception": true,
+      "evidence": [
+        {
+          "path": "README.md",
+          "line": 27,
+          "contentHash": "ebd8b83d78d0f4ac65bc6a93a40fa153d1ee1ddc02fc46a266bc322fc25974c7"
+        }
+      ],
+      "confidence": 0.99,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "transition-build-blocked",
+      "from": "state-build-active",
+      "to": "state-build-blocked",
+      "kind": "transitions",
+      "label": "All remaining tasks externally blocked",
+      "condition": "Explicit external blockers cover every remaining task.",
+      "exception": true,
+      "evidence": [
+        {
+          "path": "README.md",
+          "line": 27,
+          "contentHash": "ebd8b83d78d0f4ac65bc6a93a40fa153d1ee1ddc02fc46a266bc322fc25974c7"
+        }
+      ],
+      "confidence": 0.99,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "transition-build-stagnation",
+      "from": "state-build-active",
+      "to": "state-build-incomplete",
+      "kind": "transitions",
+      "label": "Three rounds without progress",
+      "condition": "Three consecutive rounds without new completed tasks or new tool activity.",
+      "exception": true,
+      "evidence": [
+        {
+          "path": "README.md",
+          "line": 27,
+          "contentHash": "ebd8b83d78d0f4ac65bc6a93a40fa153d1ee1ddc02fc46a266bc322fc25974c7"
+        }
+      ],
+      "confidence": 0.99,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "transition-build-ceiling",
+      "from": "state-build-active",
+      "to": "state-build-incomplete",
+      "kind": "transitions",
+      "label": "Execution ceiling reached",
+      "condition": "The Build reaches the 64-round execution ceiling.",
+      "exception": true,
+      "evidence": [
+        {
+          "path": "README.md",
+          "line": 27,
+          "contentHash": "ebd8b83d78d0f4ac65bc6a93a40fa153d1ee1ddc02fc46a266bc322fc25974c7"
+        }
+      ],
+      "confidence": 0.99,
+      "review": "draft",
+      "freshness": "current"
+    }
+  ],
+  "semantics": {
+    "states": [
+      {
+        "nodeId": "state-plan-selected",
+        "kind": "initial",
+        "evidence": [
+          {
+            "path": "README.md",
+            "line": 64,
+            "note": "The documented execution entry is a selected final plan."
+          }
+        ]
+      },
+      {
+        "nodeId": "state-build-active",
+        "kind": "normal",
+        "evidence": [
+          {
+            "path": "README.md",
+            "line": 25
+          }
+        ]
+      },
+      {
+        "nodeId": "state-build-completed",
+        "kind": "terminal",
+        "outcome": "success",
+        "evidence": [
+          {
+            "path": "README.zh-CN.md",
+            "line": 25
+          }
+        ]
+      },
+      {
+        "nodeId": "state-build-stopped",
+        "kind": "terminal",
+        "evidence": [
+          {
+            "path": "README.md",
+            "line": 27
+          }
+        ]
+      },
+      {
+        "nodeId": "state-build-blocked",
+        "kind": "terminal",
+        "evidence": [
+          {
+            "path": "README.md",
+            "line": 27
+          }
+        ]
+      },
+      {
+        "nodeId": "state-build-incomplete",
+        "kind": "terminal",
+        "evidence": [
+          {
+            "path": "README.md",
+            "line": 27
+          }
+        ]
+      }
+    ],
+    "transitions": [
+      {
+        "relationId": "transition-build-start",
+        "event": "Developer clicks Build.",
+        "condition": "A final plan is selected in Plan mode.",
+        "evidence": [
+          {
+            "path": "README.md",
+            "line": 64
+          }
+        ]
+      },
+      {
+        "relationId": "transition-build-continue",
+        "event": "Dext checks task progress after an Agent response.",
+        "condition": "Unfinished actionable work remains and no stopping condition applies.",
+        "evidence": [
+          {
+            "path": "README.md",
+            "line": 25
+          },
+          {
+            "path": "README.md",
+            "line": 27
+          }
+        ]
+      },
+      {
+        "relationId": "transition-build-complete",
+        "event": "Separate final verification passes.",
+        "condition": "All tasks have been reported complete.",
+        "evidence": [
+          {
+            "path": "README.zh-CN.md",
+            "line": 25
+          }
+        ]
+      },
+      {
+        "relationId": "transition-build-cancel",
+        "event": "User cancels execution.",
+        "evidence": [
+          {
+            "path": "README.md",
+            "line": 27
+          }
+        ]
+      },
+      {
+        "relationId": "transition-build-blocked",
+        "condition": "Explicit external blockers cover every remaining task.",
+        "evidence": [
+          {
+            "path": "README.md",
+            "line": 27
+          }
+        ]
+      },
+      {
+        "relationId": "transition-build-stagnation",
+        "condition": "Three consecutive rounds without new completed tasks or new tool activity.",
+        "evidence": [
+          {
+            "path": "README.md",
+            "line": 27
+          }
+        ]
+      },
+      {
+        "relationId": "transition-build-ceiling",
+        "condition": "The 64-round execution ceiling is reached.",
+        "evidence": [
+          {
+            "path": "README.md",
+            "line": 27
+          }
+        ]
+      }
+    ]
+  },
+  "version": 0,
+  "updatedAt": 1789703780781,
+  "confidence": 0.95,
+  "review": "draft",
+  "freshness": "current",
+  "metadata": {
+    "origin": "inferred",
+    "scope": "One Build execution, including its final verification. A later Build is a new execution that can restore matching task progress.",
+    "uncertainty": "This is a documentation-based lifecycle abstraction. Internal execution states, termination precedence, and unsuccessful final-verification routing are not established by the excerpts."
+  }
+}

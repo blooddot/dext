@@ -3,8 +3,7 @@ import {
   compactFileReferenceLabel,
   formatDextDirectoryReference,
   formatDextFileReference,
-  parseFileReference,
-  atReferenceOccurrences
+  parseFileReference
 } from "../src/core/fileReference.js";
 
 describe("Dext file references", () => {
@@ -49,13 +48,5 @@ describe("Dext file references", () => {
       .toBe("FundGridStrategy.py 395");
     expect(compactFileReferenceLabel("bext/strategy/FundGridStrategy.py"))
       .toBe("FundGridStrategy.py");
-  });
-
-  it("recognizes explicitly attached external files as file URI references", () => {
-    const [reference] = atReferenceOccurrences("Inspect @file:///C:/Users/me/My%20File.ts now");
-    expect(reference).toMatchObject({
-      kind: "file",
-      payload: "file:///C:/Users/me/My%20File.ts"
-    });
   });
 });

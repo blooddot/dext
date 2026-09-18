@@ -7,7 +7,7 @@ import { DextApplication } from "../src/application.js";
 import { BUILTIN_METHODS } from "../src/core/builtins.js";
 import { MethodRegistry } from "../src/core/registry.js";
 import { resourceFileName, resourcePathSegments, resourcePrompt, type ResourceSession } from "../src/resourceSession.js";
-import { buildResourceList, renderResourceList, type ResourceEntry } from "../src/resourceDocuments.js";
+import { buildResourceList, isMcpApiId, renderResourceList, resourceCategory, type ResourceEntry } from "../src/resourceDocuments.js";
 
 vi.mock("vscode", () => {
   class FileSystemError extends Error { code = "FileNotFound"; }
@@ -58,6 +58,20 @@ describe("resource documents", () => {
     expect(html.indexOf('data-resource-node="node"')).toBeGreaterThan(html.indexOf('data-resource-node="."'));
     const top = html.slice(html.indexOf('data-resource-node="."'), html.indexOf('data-resource-node="node"'));
     expect(top).not.toContain("node.path");
+  });
+
+  it("files MCP tool APIs under the MCP category", () => {
+    const api = (name: string, kind: ResourceEntry["kind"] = "api"): ResourceEntry => ({
+      id: `${kind}:project:${name}`, kind, scope: "project", name, path: `${name}.dx`, group: ".",
+      source: { kind: "project", label: "Project" }
+    });
+    expect(resourceCategory(api("mcp.files.read"))).toBe("mcp");
+    expect(resourceCategory(api("mcp.files.read", "mcp"))).toBe("mcp");
+    expect(resourceCategory(api("dev.feat"))).toBe("api");
+    // `mcp` on its own is an ordinary namespace, not an MCP tool id.
+    expect(resourceCategory(api("mcp.files"))).toBe("api");
+    expect(isMcpApiId("mcp.files.read")).toBe(true);
+    expect(isMcpApiId("mcpx.files.read")).toBe(false);
   });
 
   it.each([

@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { DextApiDefinitionProvider, DextBuiltinApisContentProvider, DextBuiltinTypesContentProvider, DextMcpApisContentProvider } from "./vscodeApiDefinitions.js";
 import { DextApplication } from "./application.js";
+import { redactedMcpUrl } from "./core/mcpRegistry.js";
 import { DextApiDiagnostics } from "./vscodeApiDiagnostics.js";
 import { DextSidebarProvider } from "./sidebarProvider.js";
 import { DEFAULT_HISTORY_LIMITS, DextHistoryStore } from "./historyStore.js";
@@ -45,7 +46,8 @@ import { parseEditorTabKey } from "./editorTabTypes.js";
 import type { VscodeWebviewPanelLike } from "./editorTabManager.js";
 import { ProjectStore } from "./projectStore.js";
 import { searchProjectReferences } from "./core/projectContext.js";
-import { VscodeProjectFileHost, createProjectPanelDataSource, discoverArchifyRepository, readWorkspaceEvidence } from "./vscodeProjectHost.js";
+import { VscodeProjectFileHost, createProjectPanelDataSource, discoverArchifyRepository, legacyScanInclude, readWorkspaceEvidence } from "./vscodeProjectHost.js";
+import { projectAiLimits, projectEvidenceLimits } from "./projectAiLimits.js";
 import { renderEditorTabHtml } from "./editorTabHtml.js";
 import { ProjectDiagramAdapterRegistry } from "./core/projectDiagramRegistry.js";
 import { ArchifyAdapter } from "./core/archifyAdapter.js";
@@ -145,11 +147,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       signal: AbortSignal,
       onProgress: ProjectInitializationProgressListener
     ) => {
-      const [objects, intent] = await Promise.all([projectStore.readObjects(), projectStore.readIntent()]);
+      const [objects, intent, definition] = await Promise.all([
+        projectStore.readObjects(),
+        projectStore.readIntent(),
+        projectStore.readDefinition()
+      ]);
+      const limits = projectEvidenceLimits();
+      // The removed scanner profile still names the folders this reader cares about, so it keeps
+      // acting as the evidence scope until `dext.project.evidenceInclude` says otherwise.
+      const retiredRoots = limits.include.length ? [] : legacyScanInclude(definition);
       return readWorkspaceEvidence(
         folder.uri,
         { objects, ...(intent ? { intent } : {}) },
-        { ...(request.requirement ? { requirement: request.requirement } : {}) },
+        {
+          // Read per run so a settings change applies to the next initialization or diagram.
+          ...(request.requirement ? { requirement: request.requirement } : {}),
+          ...limits,
+          ...(retiredRoots.length ? { include: retiredRoots } : {})
+        },
         onProgress,
         signal
       );
@@ -183,7 +198,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           writeIntent: (intent) => projectStore.writeIntent(intent),
           readDiagrams: () => projectStore.readDiagrams(),
           writeDiagram: (diagram) => projectStore.writeDiagram(diagram),
-          readInitialization: () => projectStore.readInitialization()
+          readInitialization: () => projectStore.readInitialization(),
+          readEvidenceSummary: () => projectStore.readEvidenceSummary(),
+          writeEvidenceSummary: (summary) => projectStore.writeEvidenceSummary(summary)
         },
         readEvidence: readProjectEvidence,
         diagramRegistry,
@@ -202,7 +219,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             }))
             : profile.models.map((id) => ({ id, label: id }))
         })),
-        openEvidence: openProjectEvidence
+        openEvidence: openProjectEvidence,
+        projectAiLimits: () => projectAiLimits()
       })
     });
     context.subscriptions.push({ dispose: () => editors.project?.dispose() });
@@ -494,24 +512,46 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await vscode.window.showErrorMessage("MCP credentials require a trusted local workspace.");
       return undefined;
     }
-    const transports = verifyOnly
-      ? { transport: "http" as const }
-      : await vscode.window.showQuickPick([
-        { label: "HTTP · Bearer", description: "Send Authorization: Bearer ..." , transport: "http" as const },
-        { label: "stdio · Environment token", description: "Inject the token into the configured child-process environment variable", transport: "stdio" as const }
-      ], { placeHolder: "Choose MCP credential type" });
-    if (!transports) return undefined;
-    const servers = application.mcpCredentialServers(transports.transport);
+    if (verifyOnly) {
+      // Verification is a read-only handshake, so any configured server is a
+      // candidate — including stdio and servers a rejected manifest dropped.
+      const choices = application.mcpServerChoices();
+      if (!choices.length) {
+        await vscode.window.showErrorMessage("No MCP servers are configured in .dext/mcp.");
+        return undefined;
+      }
+      const picked = await vscode.window.showQuickPick(
+        choices.map((choice) => ({
+          label: choice.name,
+          description: choice.reason ? "rejected configuration" : choice.detail
+        })),
+        { placeHolder: "Choose an MCP server to verify" }
+      );
+      if (!picked) return undefined;
+      const choice = choices.find((candidate) => candidate.name === picked.label);
+      if (choice?.reason) {
+        await vscode.window.showErrorMessage(`MCP server '${picked.label}' was rejected: ${choice.reason}`);
+        return undefined;
+      }
+      return picked.label;
+    }
+    const credential = await vscode.window.showQuickPick([
+      { label: "HTTP · Bearer", description: "Send Authorization: Bearer ...", transport: "http" as const, credentialKind: "bearer" as const },
+      { label: "HTTP · Query parameter", description: "Send the token as a URL query parameter (?name=...); the configured URL stays credential-free", transport: "http" as const, credentialKind: "query" as const },
+      { label: "stdio · Environment token", description: "Inject the token into the configured child-process environment variable", transport: "stdio" as const, credentialKind: "token" as const }
+    ], { placeHolder: "Choose MCP credential type" });
+    if (!credential) return undefined;
+    const servers = application.mcpCredentialServers(credential.transport, credential.credentialKind);
     if (!servers.length) {
-      await vscode.window.showErrorMessage(`No token-authenticated ${transports.transport} MCP servers are configured in .dext/mcp.`);
+      await vscode.window.showErrorMessage(`No ${credential.label} MCP servers are configured in .dext/mcp.`);
       return undefined;
     }
     const picked = await vscode.window.showQuickPick(
       servers.map((server) => ({
         label: server.name,
-        description: server.transport === "http" ? server.url : `${server.command} ${(server.args ?? []).join(" ")}`
+        description: server.transport === "http" ? redactedMcpUrl(server) : `${server.command} ${(server.args ?? []).join(" ")}`
       })),
-      { placeHolder: `Choose a ${transports.transport} MCP server` }
+      { placeHolder: `Choose an MCP server (${credential.label})` }
     );
     return picked?.label;
   };

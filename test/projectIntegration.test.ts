@@ -42,7 +42,7 @@ function providerFor(config: { initialize?: unknown; diagram?: unknown }): Proje
   return {
     id: "mock",
     generate: async (request) => {
-      const value = request.promptVersion === "project-knowledge-2" ? config.initialize : config.diagram;
+      const value = request.promptVersion === "project-knowledge-4" ? config.initialize : config.diagram;
       return { text: JSON.stringify(value) };
     }
   };

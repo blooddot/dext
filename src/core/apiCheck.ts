@@ -6,6 +6,7 @@ import { loadCustomApis } from "./customApi.js";
 import type { DextDiagnostic } from "./apiDiagnostic.js";
 import { apiRuleDiagnostics } from "./apiRuleDiagnostics.js";
 import { parseMcpManifest } from "./mcpManifest.js";
+import { McpToolRegistry, type McpServerConfig, type McpToolConfig } from "./mcpRegistry.js";
 import { MethodRegistry } from "./registry.js";
 
 export interface ApiCheckOptions {
@@ -70,6 +71,8 @@ export async function checkApis(options: ApiCheckOptions): Promise<ApiCheckResul
   const registry = new MethodRegistry();
   registry.registerMany(BUILTIN_METHODS, "builtin");
   const servers = new Set<string>();
+  const serverConfigs: Array<{ config: McpServerConfig; path: string }> = [];
+  const toolConfigs: Array<{ config: McpToolConfig; path: string }> = [];
   for (const root of [join(workspace, ".dext", "mcp"), ...(options.globalStorage ? [resolve(options.globalStorage, "mcp")] : [])]) {
     try {
       let names: string[];
@@ -79,12 +82,35 @@ export async function checkApis(options: ApiCheckOptions): Promise<ApiCheckResul
         try {
           const manifest = parseMcpManifest(await read(path) ?? "", path);
           if (manifest.server && servers.has(manifest.server.name)) continue;
-          if (manifest.server) servers.add(manifest.server.name);
+          if (manifest.server) {
+            servers.add(manifest.server.name);
+            serverConfigs.push({ config: manifest.server, path });
+          }
+          for (const tool of manifest.tools) toolConfigs.push({ config: tool, path });
           for (const message of manifest.diagnostics) report(path, message, "dext/mcp");
           registry.registerMany(manifest.methods, "project");
         } catch (error) { report(path, String(error), "dext/read"); }
       }
     } catch (error) { report(root, String(error), "dext/read"); }
+  }
+  // Mirrors the runtime registry so a manifest that Dext will reject at load
+  // time (bad url/auth, duplicate server) is reported per file here too,
+  // instead of staying invisible until an API call fails.
+  const mcpRegistry = new McpToolRegistry({ call: () => Promise.resolve({}) });
+  const mcpDiagnostics = [
+    ...mcpRegistry.setServers(serverConfigs.map((entry) => entry.config)),
+    ...mcpRegistry.setTools(toolConfigs
+      .filter((entry) => mcpRegistry.getServer(entry.config.server))
+      .map((entry) => entry.config))
+  ];
+  const pathOfServer = new Map(serverConfigs.map((entry) => [entry.config.name, entry.path]));
+  for (const message of mcpDiagnostics) {
+    const serverName = /^MCP server '([^']+)'/.exec(message)?.[1];
+    const toolKey = /^MCP tool '([^']+)'/.exec(message)?.[1];
+    const path = serverName !== undefined
+      ? pathOfServer.get(serverName)
+      : toolConfigs.find((entry) => `${entry.config.server}.${entry.config.tool}` === toolKey)?.path;
+    if (path) report(path, message, "dext/mcp");
   }
   const list = async (root: string): Promise<string[]> => {
     const paths = new Set<string>();

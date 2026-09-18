@@ -4,55 +4,19 @@ import {
   inputReferenceProjections,
   normalizeInputReferenceSource
 } from "../src/core/fileReference.js";
-import { ReferenceProjection } from "../src/webview/monacoReferences.js";
-import { fileReferenceRemovalEdit } from "../src/webview/fileReferenceDecorations.js";
+import { inputReferenceProjectionDecorations } from "../src/webview/fileReferenceDecorations.js";
 
 describe("@ file reference decorations", () => {
-  it("projects a readable @path token as one atomic Chip range without consuming its separators", () => {
+  it("projects a readable @path token as one atomic Chip range", () => {
     const token = "@src/pathx.py#L55,1-L66,32";
     const source = 'agent(input="说明 ' + token + ' 后续")';
     const projection = inputReferenceProjections(source);
     expect(projection).toMatchObject([{ reference: { kind: "file", payload: "src/pathx.py#L55,1-L66,32" } }]);
     const ranges: Array<{ from: number; to: number }> = [];
-    const model = new ReferenceProjection();
-    for (const ref of model.references(model.encode(source))) ranges.push({ from: ref.sourceFrom, to: ref.sourceTo });
-    expect(ranges).toEqual([{ from: source.indexOf(token), to: source.indexOf(token) + token.length }]);
-    expect(fileReferenceRemovalEdit(source, projection[0]!)).toEqual({
-      from: source.indexOf(" " + token),
-      to: source.indexOf(token) + token.length + 1,
-      insert: " "
+    inputReferenceProjectionDecorations(source, () => {}).between(0, source.length, (from, to) => {
+      ranges.push({ from, to });
     });
-  });
-
-  it("keeps source spaces around a Chip outside its atomic range", () => {
-    const token = "@src/pathx.py";
-    // The first space is the automatically inserted path separator. The
-    // second represents a space the user typed after the reference.
-    const source = `agent(input="${token}  后续")`;
-    const ranges: Array<{ from: number; to: number }> = [];
-    const model = new ReferenceProjection();
-    for (const ref of model.references(model.encode(source))) ranges.push({ from: ref.sourceFrom, to: ref.sourceTo });
-    expect(ranges).toEqual([{
-      from: source.indexOf(token),
-      to: source.indexOf(token) + token.length
-    }]);
-  });
-
-  it("uses the same separator rule for code, directory, image, and terminal references", () => {
-    const references = [
-      "@src/pathx.py#L55,1-L66,32",
-      "@src/components/",
-      "@.dext/attachments/0123456789abcdef01234567.png",
-      "@.dext-global/attachments/terminal-0123456789abcdef01234567.log"
-    ];
-    const source = `agent(input="${references.join(" ")}")`;
-    const ranges: Array<{ from: number; to: number }> = [];
-    const model = new ReferenceProjection();
-    for (const ref of model.references(model.encode(source))) ranges.push({ from: ref.sourceFrom, to: ref.sourceTo });
-    expect(ranges).toEqual(references.map((reference) => ({
-      from: source.indexOf(reference),
-      to: source.indexOf(reference) + reference.length
-    })));
+    expect(ranges).toEqual([{ from: source.indexOf(token), to: source.indexOf(token) + token.length }]);
   });
 
   it("only recognizes workspace-relative paths with valid ranges", () => {
@@ -65,42 +29,6 @@ describe("@ file reference decorations", () => {
       "@../secret.ts"
     ].join(" "));
     expect(values.map((item) => item.payload)).toEqual(["src/a.ts"]);
-  });
-
-  it("recognizes attachment references adjacent to prose without a separator", () => {
-    const [reference] = atReferenceOccurrences("打包错误了@.dext-global/attachments/terminal-0123456789abcdef01234567.log");
-    expect(reference).toMatchObject({
-      kind: "file",
-      payload: ".dext-global/attachments/terminal-0123456789abcdef01234567.log"
-    });
-  });
-
-  it("recognizes trailing-slash directory references as folder Chips", () => {
-    const [directory] = atReferenceOccurrences('agent(input="Inspect @src/components/")');
-    expect(directory).toMatchObject({
-      kind: "dir",
-      expression: "@src/components/",
-      payload: "src/components"
-    });
-  });
-
-  it("recognizes root directories without treating ordinary mentions as references", () => {
-    const references = atReferenceOccurrences('@scripts/ @src/ @目录/ @mention @../secret/');
-    expect(references.map(ref => [ref.kind, ref.expression, ref.payload])).toEqual([
-      ['dir', '@scripts/', 'scripts'], ['dir', '@src/', 'src'], ['dir', '@目录/', '目录']
-    ]);
-  });
-
-  it("removes an initial chip and its separator without leaving a leading blank", () => {
-    const token = "@.dext/attachments/0123456789abcdef01234567.png";
-    const source = `ask(input="${token} 后续文字")`;
-    const [projection] = inputReferenceProjections(source);
-    expect(projection).toBeDefined();
-    expect(fileReferenceRemovalEdit(source, projection!)).toEqual({
-      from: source.indexOf(token),
-      to: source.indexOf(token) + token.length + 1,
-      insert: ""
-    });
   });
 
   it("migrates legacy marker, f-string, and broken nested input to readable @ tokens", () => {

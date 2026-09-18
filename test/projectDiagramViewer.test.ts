@@ -9,7 +9,7 @@ import {
   isViewerCommand,
   resolveDiagramTarget
 } from "../src/projectDiagramViewer.js";
-import { projectDiagramScript } from "../src/webview/projectArchitectureView.js";
+import { projectDiagramScript, evidenceSummaryHtml } from "../src/webview/projectArchitectureView.js";
 import type { ProjectDiagram } from "../src/core/projectDiagram.js";
 
 const diagram = (id: string, version: number): ProjectDiagram => ({
@@ -80,6 +80,33 @@ describe("viewer message validation", () => {
     const script = projectDiagramScript();
     expect(script).toContain(isTrustedViewerMessage.toString());
     expect(script).toContain(isTrustedHostMessage.toString());
+  });
+
+  it("shows clicked node details in the page and opens evidence only on request", () => {
+    const script = projectDiagramScript();
+    expect(script).toContain("showNodeDetails");
+    expect(script).toContain("data-diagram-evidence-path");
+    expect(script).toContain('type: "projectDiagramEvidence"');
+    // A card click must never ask the host to open a file on its own.
+    expect(script).not.toContain("projectDiagramFocus");
+  });
+
+  it("falls back to in-view focus mode when the webview refuses the Fullscreen API", () => {
+    const script = projectDiagramScript();
+    expect(script).toContain("requestFullscreen");
+    expect(script).toContain("diagram-focus");
+    expect(script).toContain("syncFullscreenControls");
+    expect(script).toContain("fullscreenchange");
+    expect(script).not.toContain("project-diagram-stage-fullscreen");
+  });
+
+  it("updates the evidence record live and opens a listed path only when clicked", () => {
+    const script = projectDiagramScript();
+    // The same renderer runs on the server and in the page, so a live update cannot drift.
+    expect(script).toContain(evidenceSummaryHtml.toString());
+    expect(script).toContain('message.type === "projectEvidenceSummary"');
+    expect(script).toContain('type: "projectEvidenceOpen"');
+    expect(script).toContain("data-evidence-path");
   });
 });
 

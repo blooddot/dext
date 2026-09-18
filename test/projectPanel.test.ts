@@ -25,6 +25,26 @@ describe("project panel", () => {
     expect(html).not.toContain("Language");
   });
 
+  it("tells the reader when a removed scan profile is still sitting in .dext/project.json", () => {
+    const clear = renderProjectPanel("overview", data());
+    expect(clear).not.toContain("data-project-legacy-scan");
+
+    const note = renderProjectPanel("overview", data({
+      overview: { ...data().overview, legacyScanRoots: ["src", "lib"] }
+    }));
+    expect(note).toContain("data-project-legacy-scan");
+    expect(note).toContain("scan");
+    // The notice states the exact scope the retired roots still apply, not just that they exist.
+    expect(note).toContain("<code>src/**</code>");
+    expect(note).toContain("<code>lib/**</code>");
+    expect(note).toContain("dext.project.evidenceInclude");
+    // The roots come from a project file, so they are escaped like any other untrusted value.
+    const escaped = renderProjectPanel("overview", data({
+      overview: { ...data().overview, legacyScanRoots: ["<img src=x onerror=1>"] }
+    }));
+    expect(escaped).not.toContain("<img src=x");
+  });
+
   it("distinguishes running, failed, cancelled and completed-but-missing-diagram states", () => {
     const running = renderProjectPanel("overview", data({}, initialization("running", { phase: "generating", progress: 1, progressTotal: 2, message: "generating" })));
     expect(running).toContain("project-init-running");

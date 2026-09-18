@@ -2382,6 +2382,11 @@ button.primary.stopping {
      keeps Markdown lines and disclosure headers from shifting horizontally
      when a turn becomes scrollable. */
   scrollbar-gutter: stable;
+  /* Markdown is re-rendered from the accumulated stream text on every batch,
+     which removes the node Chromium had picked as its scroll anchor. Its
+     re-anchoring moved the view off the newest output while the reader was
+     following it; main.ts pins the end explicitly instead. */
+  overflow-anchor: none;
   padding-left: 16px;
 }
 

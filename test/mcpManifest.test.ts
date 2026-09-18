@@ -127,6 +127,23 @@ describe("MCP manifests", () => {
     expect(loaded.methods[0]?.id).toBe("mcp.docs.read");
   });
 
+  it("compiles the tools of a query-authenticated HTTP gateway manifest", () => {
+    const loaded = parseMcpManifest(JSON.stringify({
+      name: "dingtalk_doc", transport: "http",
+      url: "https://mcp-gw.dingtalk.com/server/abc", auth: { type: "query", name: "key" },
+      tools: [{
+        name: "get_document_content",
+        inputSchema: { type: "object", properties: { nodeId: { type: "string" } }, required: ["nodeId"] }
+      }]
+    }), ".dext/mcp/dingtalk_doc.jsonc");
+    expect(loaded.diagnostics).toEqual([]);
+    expect(loaded.server).toMatchObject({ auth: { type: "query", name: "key" } });
+    const registry = new MethodRegistry();
+    registry.registerMany(BUILTIN_METHODS, "builtin");
+    registry.registerMany(loaded.methods, "project");
+    expect(compileWorkflow('result = mcp.dingtalk_doc.get_document_content(nodeId="x")', registry).diagnostics).toEqual([]);
+  });
+
   it("offers and compiles MCP APIs when a server name contains hyphens", () => {
     const source = manifest
       .replaceAll('"github"', '"teambition-user"')

@@ -25,7 +25,11 @@ export class AgentInputView {
     this.element.className = "agent-inputs"; this.element.hidden = true;
     this.element.setAttribute("aria-label", "Questions and interactions");
   }
-  update(state: AgentInputState): void {
+  /** Returns whether this state newly put an answerable card on screen. The
+   * caller uses that to bring a request the reader has never seen into view;
+   * a repeated state is not new, so a reader who deliberately scrolled away is
+   * not dragged back on every replayed event. */
+  update(state: AgentInputState): boolean {
     const form = agentInputForm(state);
     const answers: UiFormAnswers = {};
     for (const question of state.questions) {
@@ -36,21 +40,22 @@ export class AgentInputView {
         ? question.multiSelect ? { type: "checkbox", selected: values } : { type: "radio", selected: [], custom: values[0]! }
         : { type: "input", value: values[0]! };
     }
-    this.put({ id: `agent:${state.id}`, status: state.status === "answered" ? "submitted" : state.status === "dismissed" ? "cancelled" : "waiting", form, answers,
+    return this.put({ id: `agent:${state.id}`, status: state.status === "answered" ? "submitted" : state.status === "dismissed" ? "cancelled" : "waiting", form, answers,
       element: document.createElement("section"), send: (result) => this.respond(state.id, agentFormAnswers(result)) });
   }
-  updateUi(state: UiInteractionState): void {
-    this.put({ id: `ui:${state.requestId}`, status: state.status, form: state.form, action: state.action, ...(state.answers ? { answers: state.answers } : {}),
+  updateUi(state: UiInteractionState): boolean {
+    return this.put({ id: `ui:${state.requestId}`, status: state.status, form: state.form, action: state.action, ...(state.answers ? { answers: state.answers } : {}),
       element: document.createElement("section"), send: (result) => this.respondUi(state, result) });
   }
-  private put(card: Card): void {
+  private put(card: Card): boolean {
     const previous = this.cards.get(card.id);
     // Replayed or delayed waiting events cannot revive a terminal request.
-    if (previous && previous.status !== "waiting") return;
-    if (previous?.status === card.status) { previous.dialog?.open(); return; }
+    if (previous && previous.status !== "waiting") return false;
+    if (previous?.status === card.status) { previous.dialog?.open(); return false; }
     previous?.dialog?.close(); previous?.control?.disable();
     if (previous) previous.element.replaceWith(card.element); else this.element.append(card.element);
     this.cards.set(card.id, card); this.element.hidden = false; this.render(card);
+    return card.status === "waiting";
   }
   setRunning(running: boolean): void {
     if (this.running === running) { if (running) this.resume(); return; }

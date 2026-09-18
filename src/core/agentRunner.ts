@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { homedir } from "node:os";
 import { delimiter, extname, isAbsolute, join } from "node:path";
 import { isDextResult, serializeResultForAgent } from "./resultSerialization.js";
-import { jsonCandidates } from "./resultBoundary.js";
+import { jsonCandidates, stripNullProperties } from "./resultBoundary.js";
 import { ExecutionCancelledError } from "./executionErrors.js";
 import type { AgentPermission, AgentProfile } from "../agentProfiles.js";
 import type { AxMethodContract } from "./axAdapter.js";
@@ -330,16 +330,6 @@ function extractJson(value: string): unknown {
   const candidate = jsonCandidates(value)[0];
   if (candidate === undefined) return undefined;
   try { return JSON.parse(candidate); } catch { return undefined; }
-}
-
-function stripNullProperties(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stripNullProperties);
-  if (typeof value !== "object" || value === null) return value;
-  return Object.fromEntries(
-    Object.entries(value)
-      .filter(([, child]) => child !== null)
-      .map(([key, child]) => [key, stripNullProperties(child)])
-  );
 }
 
 export function extractClaudeResult(output: string): unknown {

@@ -5,7 +5,8 @@ import {
   formatDiagnostics,
   jsonCandidates,
   parseAgentResult,
-  safeValidate
+  safeValidate,
+  stripNullProperties
 } from "../src/core/resultBoundary.js";
 
 const agent = (text: string, extra: Record<string, unknown> = {}): string =>
@@ -78,6 +79,26 @@ describe("parseAgentResult", () => {
   it("passes already-parsed objects through unchanged", () => {
     const value = { kind: "agent", text: "raw" };
     expect(parseAgentResult("agent", value)).toBe(value);
+  });
+});
+
+describe("stripNullProperties", () => {
+  it("drops null properties and keeps the rest", () => {
+    expect(stripNullProperties({ kind: "agent", text: "done", patch: null, files: null }))
+      .toEqual({ kind: "agent", text: "done" });
+  });
+
+  it("recurses into nested objects and arrays", () => {
+    expect(stripNullProperties({
+      patch: { changes: [{ uri: "file:///x.ts", range: null, contentHash: null }], title: "t" },
+      files: null
+    })).toEqual({ patch: { changes: [{ uri: "file:///x.ts" }], title: "t" } });
+  });
+
+  it("passes non-object values through unchanged", () => {
+    expect(stripNullProperties(null)).toBeNull();
+    expect(stripNullProperties("text")).toBe("text");
+    expect(stripNullProperties(3)).toBe(3);
   });
 });
 

@@ -35,7 +35,7 @@ Dext defaults to `dext.agent.timeoutMs: 0` (no total time limit) and `dext.agent
 
 Tool execution retains its provider-specific limits. A reported active tool is not proof that its process is healthy: a hung tool or a missing completion event can keep idle detection paused. Stop and an explicitly configured total time limit remain effective. If a provider does not report an identifiable tool start, the ordinary idle timeout still applies.
 
-Set either value to `0` to disable that limit. An explicitly configured positive `dext.agent.timeoutMs` remains a hard limit regardless of output; remove an old override or set it to `0` to use activity-based timing alone. Changes apply to new turns, and Stop remains available. Provider network timeouts and individual tool timeouts remain independent.
+Set either value to `0` to disable that limit. An explicitly configured positive `dext.agent.timeoutMs` remains a hard limit regardless of output; remove an old override or set it to `0` to use activity-based timing alone. Changes apply to new turns, and Stop remains available. Provider network timeouts and individual tool timeouts remain independent. The same two limits also budget the one-shot result repair Dext runs when a turn's final message is not a valid result, so no separate internal cap applies to it.
 
 ## Claude Code
 
@@ -73,7 +73,7 @@ Ask, preview calls and Plan generation run read-only. Agent and explicit plan ex
 
 ### Questions
 
-Harness questions appear in the same Dext card Codex questions use, above Process, and the answer returns to the tool. The published `dsh-acp` bridge answers `approval/request` but registers no answerer for the `user-questions/request` seam, so `ask_user_question` fails closed under `dsh --profile acp`. ACP elicitation is the protocol's own replacement: Dext advertises `elicitation.form` and answers `elicitation/create`, so a Harness release that bridges the seam needs no Dext change. Until then Dext registers the answerer through its own preset overlay, which reaches the extension over a loopback endpoint named by a one-time token and opened only for that Harness process. When no Dext card owns a question the answerer delegates, which preserves the shipped fail-closed behavior.
+Harness questions appear in the same Dext card Codex questions use, above Process, and the answer returns to the tool. Because the card sits above a Process timeline a long turn can grow past the viewport, a question that newly appears while the turn is waiting scrolls itself into view and pauses the auto-follow until it is answered; **Jump to latest** returns to the live end. The published `dsh-acp` bridge answers `approval/request` but registers no answerer for the `user-questions/request` seam, so `ask_user_question` fails closed under `dsh --profile acp`. ACP elicitation is the protocol's own replacement: Dext advertises `elicitation.form` and answers `elicitation/create`, so a Harness release that bridges the seam needs no Dext change. Until then Dext registers the answerer through its own preset overlay, which reaches the extension over a loopback endpoint named by a one-time token and opened only for that Harness process. When no Dext card owns a question the answerer delegates, which preserves the shipped fail-closed behavior.
 
 ### Advanced configuration and compatibility
 

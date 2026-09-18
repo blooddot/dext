@@ -116,7 +116,7 @@ describe("Harness runner", { timeout: 15000 }, () => {
       return Object.fromEntries(input.questions.map((question) => [question.id, { answers: [question.options.at(-1)?.label ?? "typed"] }]));
     });
     const req = request("elicitation");
-    const text = await runner().runConversation({ ...req, metadata: { ...req.metadata, requestAgentInput } });
+    const text = await runner().runConversation({ ...req, onEvent: () => {}, metadata: { ...req.metadata, requestAgentInput } });
     expect(JSON.parse(text)).toEqual({ action: "accept", content: { scope: "user", notes: "typed" } });
     expect(asked[0]?.questions.map((question) => question.id)).toEqual(["scope", "notes"]);
     expect(asked[0]?.questions[0]?.options.map((option) => option.label)).toEqual(["Workspace", "User"]);
@@ -132,7 +132,7 @@ describe("Harness runner", { timeout: 15000 }, () => {
   it("answers the Harness user-questions bridge from the same Dext card", async () => {
     const requestAgentInput = vi.fn(async () => ({ q: { answers: ["B"] } }));
     const req = request("bridge-question");
-    const text = await runner().runConversation({ ...req, metadata: { ...req.metadata, requestAgentInput } });
+    const text = await runner().runConversation({ ...req, onEvent: () => {}, metadata: { ...req.metadata, requestAgentInput } });
     expect(JSON.parse(text)).toEqual({ id: "fixture-question-1", status: "answered", answer: { answers: [{ id: "q", selected: ["B"] }] } });
     expect(requestAgentInput).toHaveBeenCalledOnce();
   });
@@ -166,6 +166,15 @@ describe("Harness runner", { timeout: 15000 }, () => {
   it("leaves a Harness question to the shipped fail-closed path when no card owns it", async () => {
     const text = await runner().runConversation(request("bridge-question"));
     expect(JSON.parse(text)).toMatchObject({ id: "fixture-question-1", status: "unavailable" });
+  });
+  it("refuses a question no Dext card can render instead of parking the turn", async () => {
+    // An answer callback with no event sink is exactly the shape that parks a
+    // turn forever: nothing renders the question, so nobody can ever answer it.
+    const requestAgentInput = vi.fn(async () => ({ q: { answers: ["B"] } }));
+    const req = request("bridge-question");
+    const text = await runner().runConversation({ ...req, metadata: { ...req.metadata, requestAgentInput } });
+    expect(JSON.parse(text)).toMatchObject({ id: "fixture-question-1", status: "unavailable" });
+    expect(requestAgentInput).not.toHaveBeenCalled();
   });
   it("cancels a running turn and rejects a timed-out turn", async () => {
     const r = runner(), controller = new AbortController(), onEvent = vi.fn();
@@ -201,5 +210,18 @@ describe("Harness runner", { timeout: 15000 }, () => {
   it("passes wrapped results through for the shared boundary", async () => {
     const raw = "分析完成（未修改任何文件）。\n\n```json\n" + JSON.stringify({ kind: "ask", text: "typed answer" }) + "\n```";
     expect(await runner().run(executionRequest("wrapped-json"))).toBe(raw);
+  });
+  it("states the JSON envelope before and after the payload, with the escaping spelled out", async () => {
+    const prompt = String(await runner().run(executionRequest("echo-prompt")));
+    expect(prompt.startsWith("Your final message must be exactly one JSON object matching this schema:")).toBe(true);
+    expect(prompt).toContain("Put your entire answer inside the object's \"text\" field");
+    expect(prompt).toContain("Escape every newline as \\n and every double quote as \\\"");
+    expect(prompt).toContain("Return only a JSON object matching this schema as your final message:");
+    expect(prompt.trimEnd().endsWith("No markdown fence, no text before or after the object.")).toBe(true);
+  });
+  it("passes a Markdown final message through for the runtime to wrap", async () => {
+    const markdown = String(await runner().run(executionRequest("plain-markdown")));
+    expect(markdown.startsWith("[DEV_PLAN_TASKLIST] T1,T2,T4")).toBe(true);
+    expect(markdown).toContain("| T1 | Load rules | pending |");
   });
 });

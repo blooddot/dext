@@ -203,6 +203,27 @@ describe("Webview protocol", () => {
     expect(webviewRequestSchema.safeParse({ type: "searchFiles", query: "src" }).success).toBe(false);
   });
 
+  it("accepts bearer and query HTTP credentials on MCP requests but never inline secrets", () => {
+    const base = { name: "gateway", transport: "http", url: "https://mcp.example.test/server/abc" };
+    const prepare = (auth: unknown) => webviewRequestSchema.safeParse({
+      type: "prepareMcp",
+      requestId: "request",
+      server: { ...base, ...(auth === undefined ? {} : { auth }) }
+    });
+    expect(prepare(undefined).success).toBe(true);
+    expect(prepare({ type: "bearer" }).success).toBe(true);
+    expect(prepare({ type: "query", name: "key" }).success).toBe(true);
+    expect(prepare({ type: "query" }).success).toBe(false);
+    expect(prepare({ type: "query", name: "not valid" }).success).toBe(false);
+    expect(prepare({ type: "query", name: "key", token: "leak" }).success).toBe(false);
+    expect(prepare({ type: "bearer", name: "key" }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({
+      type: "createMcp",
+      selectedTools: [],
+      server: { ...base, auth: { type: "query", name: "key" } }
+    }).success).toBe(true);
+  });
+
   it("rejects old mode-specific execution shapes", () => {
     expect(webviewRequestSchema.safeParse({ type: "executeChat", message: "hello" }).success)
       .toBe(false);

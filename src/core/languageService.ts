@@ -2,18 +2,13 @@ import type { MethodRegistry } from "./registry.js";
 import type { FieldDefinition, RegisteredCallable } from "./types.js";
 import { formatFieldType, formatMethodParameter, formatMethodSignature } from "./methodSignature.js";
 import { compileWorkflow, parseWorkflowImports } from "./workflow.js";
-import { functionDefinitions } from "./customApi.js";
 import type { SkillDescriptor } from "./skillCatalog.js";
-import { specializeBuiltinCli } from "./builtinCli.js";
-import { documentSymbolHover } from "./languageHover.js";
 
 export interface CompletionItem {
   label: string;
   insertText: string;
   detail: string;
   kind: "namespace" | "method" | "parameter" | "value" | "reference";
-  /** Stable ordering hint for clients whose completion widget sorts labels. */
-  sortText?: string;
   replaceStart: number;
   replaceEnd: number;
 }
@@ -34,11 +29,14 @@ export interface SignatureHelp {
 }
 
 export interface LanguageHover {
-  kind?: "parameter";
   rangeStart: number;
   rangeEnd: number;
   label: string;
   documentation: string;
+}
+
+export interface WorkflowDocumentState {
+  kind: "empty" | "workflow" | "invalid";
 }
 
 export interface ApiCompletionContext {
@@ -54,18 +52,6 @@ interface OpenCall {
 interface VisibleMethod {
   name: string;
   method: RegisteredCallable;
-}
-
-const CONVERSATION_METHODS = new Set(["agent", "ask", "plan"]);
-
-function inputFields(method: RegisteredCallable): readonly FieldDefinition[] {
-  return CONVERSATION_METHODS.has(method.id)
-    ? method.input
-    : method.input.filter((field) => !field.internal);
-}
-
-function signatureOptions(method: RegisteredCallable): { includeInternal: true } | undefined {
-  return CONVERSATION_METHODS.has(method.id) ? { includeInternal: true } : undefined;
 }
 
 function openCall(source: string, cursor: number): OpenCall | undefined {
@@ -94,7 +80,7 @@ function openCall(source: string, cursor: number): OpenCall | undefined {
   }
   const open = stack.at(-1);
   if (open === undefined) return undefined;
-  const method = /[A-Za-z_][A-Za-z0-9_.-]*$/.exec(source.slice(0, open))?.[0];
+  const method = /[A-Za-z_][A-Za-z0-9_.]*$/.exec(source.slice(0, open))?.[0];
   return method ? { method, body: source.slice(open + 1, cursor) } : undefined;
 }
 
@@ -110,90 +96,43 @@ function activeArgument(body: string): string {
       else if (character === "\\") escaped = true;
       else if (character === quote) quote = undefined;
     } else if (character === "'" || character === '"') quote = character;
-    else if (character === "(" || character === "[" || character === "{") depth += 1;
-    else if (character === ")" || character === "]" || character === "}") depth -= 1;
+    else if (character === "(" || character === "[") depth += 1;
+    else if (character === ")" || character === "]") depth -= 1;
     else if (character === "," && depth === 0) start = offset + 1;
   }
   return body.slice(start);
 }
 
-function topLevelCommaCount(body: string): number {
-  let commas = 0;
-  let depth = 0;
-  let quote: "'" | '"' | undefined;
-  let escaped = false;
-  for (const character of body) {
-    if (quote) {
-      if (escaped) escaped = false;
-      else if (character === "\\") escaped = true;
-      else if (character === quote) quote = undefined;
-      continue;
-    }
-    if (character === "'" || character === '"') quote = character;
-    else if (character === "(" || character === "[" || character === "{") depth += 1;
-    else if (character === ")" || character === "]" || character === "}") depth -= 1;
-    else if (character === "," && depth === 0) commas += 1;
-  }
-  return commas;
-}
-
-function callCli(body: string): string | undefined {
-  // Reuse the quote/bracket-aware argument scanner so text inside input or a
-  // model dictionary cannot masquerade as a CLI argument.
-  let remaining = body;
-  while (remaining) {
-    const segment = activeArgument(remaining);
-    const match = /^\s*cli\s*=\s*["'](codex|claude|deepseek-harness)["']\s*$/.exec(segment);
-    if (match) return match[1];
-    if (segment.length === remaining.length) break;
-    remaining = remaining.slice(0, remaining.length - segment.length - 1);
-  }
-  return undefined;
-}
-
-function objectCompletions(field: FieldDefinition, value: string, source: string, cursor: number): CompletionItem[] {
-  const shape = field.type === "list" ? field.items : field;
-  if (!value.startsWith("{") || !shape?.properties) return [];
-  const body = value.slice(1);
-  const segment = activeArgument(body).trimStart();
-  const discriminator = shape.discriminator;
-  const selected = discriminator
-    ? new RegExp(`["']${discriminator.name}["']\\s*:\\s*["']([^"']+)["']`).exec(body)?.[1]
-    : undefined;
-  const variant = selected ? discriminator?.variants.find((candidate) => candidate.value === selected) : undefined;
-  const properties = [...shape.properties, ...(variant?.properties ?? [])]
-    .filter((property, index, all) => all.findIndex((candidate) => candidate.name === property.name) === index);
-  const assignment = /^["']([^"']+)["']\s*:\s*([\s\S]*)$/.exec(segment);
-  if (assignment) {
-    const property = properties.find((item) => item.name === assignment[1]);
-    const raw = assignment[2] ?? "";
-    const fragment = raw.replace(/^["']/, "");
-    return (property?.values ?? []).filter((option) => option.startsWith(fragment)).map((option) => ({
-      label: option, insertText: JSON.stringify(option), detail: property?.description ?? "enum value", kind: "value",
-      replaceStart: cursor - raw.length,
-      replaceEnd: cursor + ((raw.startsWith('"') || raw.startsWith("'")) && source[cursor] === raw[0] ? 1 : 0)
-    }));
-  }
-  const fragment = segment.replace(/^["']/, "");
-  const used = new Set([...body.matchAll(/["']([^"']+)["']\s*:/g)].map((match) => match[1]));
-  return properties.filter((property) => !used.has(property.name) && property.name.startsWith(fragment)).map((property) => ({
-    label: property.name, insertText: `${JSON.stringify(property.name)}: `,
-    detail: formatMethodParameter(property), kind: "parameter",
-    replaceStart: cursor - segment.length,
-    replaceEnd: cursor + ((segment.startsWith('"') || segment.startsWith("'")) && source[cursor] === segment[0] ? 1 : 0)
-  }));
-}
-
 const RESULT_FIELDS: Readonly<Record<string, readonly string[]>> = {
-  ask: ["text"],
-  plan: ["text", "planPath", "executePlan", "planOutcome"],
+  chat: ["text"],
   agent: ["text", "summary", "patch", "files"],
+  explain: ["text", "files"],
+  edit: ["summary", "patch", "files"],
+  review: ["status", "summary", "findings"],
   apply: ["status", "summary", "files"],
   terminal: ["status", "command", "cwd", "exit_code", "stdout", "stderr", "duration_ms"],
   print: ["text", "label"],
-  skill: ["text"],
+  text: ["text"],
+  code: ["code", "language", "title"],
+  plan: ["title", "steps"],
   patch: ["title", "changes"],
   ui: ["type", "selected", "custom", "confirmed", "value"]
+};
+
+const RESULT_FIELD_TYPES: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  chat: { text: "string" },
+  agent: { text: "string", summary: "string | undefined", patch: "PatchResult | undefined", files: "CodeRef[] | undefined" },
+  explain: { text: "string", files: "CodeRef[]" },
+  edit: { summary: "string", patch: "PatchResult", files: "CodeRef[]" },
+  review: { status: '"pass" | "warning" | "fail"', summary: "string", findings: "ReviewFinding[]" },
+  apply: { status: '"applied" | "unchanged" | "conflict"', summary: "string", files: "CodeRef[]" },
+  terminal: { status: '"succeeded" | "failed" | "timed_out"', command: "string", cwd: "string", exit_code: "number", stdout: "string", stderr: "string", duration_ms: "number" },
+  print: { text: "string", label: "string | undefined" },
+  text: { text: "string" },
+  code: { code: "string", language: "string", title: "string | undefined" },
+  plan: { title: "string", steps: "PlanStep[]" },
+  patch: { title: "string", changes: "PatchChange[]" },
+  ui: { type: '"choice" | "confirm" | "input"', selected: "string[]", custom: "string | undefined", confirmed: "boolean", value: "string | undefined" }
 };
 
 function resultTypeName(output: string): string {
@@ -206,34 +145,14 @@ function outputFields(method: RegisteredCallable | undefined): readonly FieldDef
   return (RESULT_FIELDS[method.output.kind] ?? []).map((name) => ({ name, type: "string" }));
 }
 
-function childFields(field: FieldDefinition | undefined, indexed = false): readonly FieldDefinition[] {
-  if (!field) return [];
-  if (field.shapeType?.startsWith("dict[") && !indexed) return [];
-  // A dot after an array-valued field addresses its element shape. This keeps
-  // completion useful for MCP responses such as `result: [{ id, content }]`.
-  if (field.type === "list") return childFields(field.items);
-  return field.properties ?? [];
-}
-
-/** Split a member expression while treating numeric (or computed) indexes as
- * transparent traversal through an array element, e.g. `files[0].content`. */
-function expressionParts(expression: string): string[] {
-  return expression.match(/[A-Za-z_]\w*|\[[^\]]*\]/g) ?? [];
-}
-
 export class DextLanguageService {
   private customApiIds = new Set<string>();
   private skills: SkillDescriptor[] = [];
-  private compiledSource: string | undefined;
-  private compiledState: ReturnType<typeof compileWorkflow> | undefined;
-  private compiledRegistryVersion: number | undefined;
 
   constructor(private readonly registry: MethodRegistry) {}
 
   setCustomApiIds(ids: ReadonlySet<string>): void {
     this.customApiIds = new Set(ids);
-    this.compiledSource = undefined;
-    this.compiledState = undefined;
   }
 
   setSkillCompletions(skills: readonly SkillDescriptor[]): void {
@@ -242,65 +161,31 @@ export class DextLanguageService {
 
   private visibleMethodEntries(source: string, customApisAreGlobal = true): VisibleMethod[] {
     const imports = parseWorkflowImports(source);
-    const entries = new Map<string, RegisteredCallable>();
-    const methods = this.registry.list();
-    for (const method of methods) {
-      if (!this.customApiIds.has(method.id) || customApisAreGlobal) {
-        entries.set(method.id, method);
+    const entries: VisibleMethod[] = [];
+    for (const method of this.registry.list()) {
+      if (!this.customApiIds.has(method.id)) {
+        entries.push({ name: method.id, method });
+        continue;
       }
-    }
-    // Code accepts qualified custom API calls as well as explicit imports.
-    // Apply aliases in both editors, with imports taking precedence over globals.
-    for (const method of methods) {
-      if (!this.customApiIds.has(method.id)) continue;
+      if (customApisAreGlobal) {
+        entries.push({ name: method.id, method });
+        continue;
+      }
       for (const [alias, imported] of imports) {
-        if (method.id === imported) entries.set(alias, method);
-        else if (method.id.startsWith(`${imported}.`)) entries.set(`${alias}${method.id.slice(imported.length)}`, method);
+        if (method.id === imported) entries.push({ name: alias, method });
+        else if (method.id.startsWith(`${imported}.`)) entries.push({ name: `${alias}${method.id.slice(imported.length)}`, method });
       }
     }
-    if (!customApisAreGlobal) {
-      try {
-        for (const { definition } of functionDefinitions(source, true)) {
-          if (definition.id !== "main") entries.set(definition.id, { ...definition, source: "project" });
-        }
-      } catch { /* An incomplete declaration must not break editor assistance. */ }
-    }
-    return [...entries].map(([name, method]) => ({ name, method }));
+    return entries;
   }
 
   private resolveMethod(source: string, name: string, customApisAreGlobal = true): RegisteredCallable | undefined {
     return this.visibleMethodEntries(source, customApisAreGlobal).find((entry) => entry.name === name)?.method;
   }
 
-  /** Fields exposed by a variable or a dotted expression rooted at a result. */
-  private expressionFields(source: string, expression: string, customApisAreGlobal = true): readonly FieldDefinition[] {
-    const parts = expression.split(".").flatMap(expressionParts);
-    const root = parts.shift();
-    if (!root) return [];
-    let fields: readonly FieldDefinition[] = [];
-    const assignment = new RegExp(`^\\s*${root}\\s*=\\s*([A-Za-z_][A-Za-z0-9_.-]*)\\(`, "m").exec(source);
-    if (assignment) {
-      fields = outputFields(this.resolveMethod(source, assignment[1] ?? "", customApisAreGlobal));
-    } else {
-      // Loop variables inherit the element type of the iterable expression.
-      const loop = [...source.matchAll(new RegExp(`^\\s*for\\s+${root}\\s+in\\s+([A-Za-z_]\\w*(?:\\.[A-Za-z_]\\w*)*)\\s*:`, "gm"))].at(-1);
-      if (loop?.[1] && loop[1] !== root) fields = this.expressionFields(source, loop[1], customApisAreGlobal);
-    }
-    let field: FieldDefinition | undefined;
-    for (const part of parts) {
-      if (part.startsWith("[")) {
-        fields = childFields(field, true);
-        continue;
-      }
-      field = fields.find((candidate) => candidate.name === part);
-      fields = childFields(field);
-    }
-    return fields;
-  }
-
   apiCompletions(source: string, cursor = source.length, apiId?: string): CompletionItem[] {
     const before = source.slice(0, cursor);
-    const word = /[A-Za-z_][A-Za-z0-9_.-]*$/.exec(before)?.[0] ?? "";
+    const word = /[A-Za-z_][A-Za-z0-9_.]*$/.exec(before)?.[0] ?? "";
     const fragment = word.split(".").at(-1) ?? "";
     const replaceStart = cursor - fragment.length;
     const replaceEnd = cursor;
@@ -312,26 +197,29 @@ export class DextLanguageService {
       replaceStart,
       replaceEnd
     });
+    if (/\bfrom\s+[A-Za-z_][A-Za-z0-9_.]*\s+import\s+[A-Za-z_]*$/.test(before)) {
+      return this.apiImportItems(before, item);
+    }
+    if (/\bfrom\s+[A-Za-z_][A-Za-z0-9_.]*$/.test(before)) {
+      return this.apiNamespaceItems(before, item);
+    }
+    if (/\bimport\s+[A-Za-z_][A-Za-z0-9_.]*$/.test(before)) {
+      return this.apiNamespaceItems(before, item);
+    }
     if (/:\s*[A-Za-z_]*$/.test(before)) {
-      const types = ["Context", "Result", "list", "Literal", "AskResult", "PlanResult", "AgentResult", "ApplyResult", "TerminalResult", "PrintResult", "SkillResult", "McpRawResult", "PatchResult"];
+      const types = ["Context", "Result", "list", "Literal", "ChatResult", "AgentResult", "ApplyResult", "TerminalResult", "PrintResult", "McpRawResult", "TextResult", "CodeResult", "PlanResult", "PatchResult"];
       const typeFragment = /[A-Za-z_]*$/.exec(before)?.[0] ?? "";
       return types.filter((type) => type.startsWith(typeFragment)).map((type) => item(type, type, "Dext type", "value"));
     }
     if (/\bmain\([^)]*$/.test(before)) {
       const definition = apiId ? this.registry.get(apiId) : undefined;
-      if (definition) {
-        return inputFields(definition)
-          .map((field, index) => ({
-            ...item(field.name, `${field.name}: `, formatMethodParameter(field), "parameter"),
-            sortText: String(index).padStart(4, "0")
-          }));
-      }
+      if (definition) return definition.input.map((field) => item(field.name, `${field.name}: `, formatMethodParameter(field), "parameter"));
     }
     return this.documentCompletions(source, cursor, false);
   }
 
   private apiNamespaceItems(source: string, item: (label: string, insertText: string, detail: string, kind: CompletionItem["kind"]) => CompletionItem): CompletionItem[] {
-    const match = /\b(?:from|import)\s+([A-Za-z_][A-Za-z0-9_.-]*)$/.exec(source);
+    const match = /\b(?:from|import)\s+([A-Za-z_][A-Za-z0-9_.]*)$/.exec(source);
     const prefix = match?.[1] ?? "";
     const base = prefix.endsWith(".") ? prefix.slice(0, -1) : prefix;
     const partial = prefix.endsWith(".") ? "" : base.split(".").at(-1) ?? "";
@@ -348,7 +236,7 @@ export class DextLanguageService {
   }
 
   private apiImportItems(source: string, item: (label: string, insertText: string, detail: string, kind: CompletionItem["kind"]) => CompletionItem): CompletionItem[] {
-    const match = /\bfrom\s+([A-Za-z_][A-Za-z0-9_.-]*)\s+import\s+([A-Za-z_]*)$/.exec(source);
+    const match = /\bfrom\s+([A-Za-z_][A-Za-z0-9_.]*)\s+import\s+([A-Za-z_]*)$/.exec(source);
     const namespace = match?.[1] ?? "";
     const fragment = match?.[2] ?? "";
     const names = new Map<string, RegisteredCallable>();
@@ -357,26 +245,24 @@ export class DextLanguageService {
       const rest = method.id.slice(namespace.length + 1);
       if (!rest.includes(".") && rest.startsWith(fragment)) names.set(rest, method);
     }
-    return [...names].map(([label, method]) => item(label, label, formatMethodSignature(method, signatureOptions(method)), "method"));
+    return [...names].map(([label, method]) => item(label, label, formatMethodSignature(method), "method"));
   }
 
-  private compiled(source: string): ReturnType<typeof compileWorkflow> {
-    if (this.compiledSource === source && this.compiledState && this.compiledRegistryVersion === this.registry.version) return this.compiledState;
-    const state = compileWorkflow(source, this.registry, {
-      allowImports: true,
-      aliases: parseWorkflowImports(source),
-      customApiIds: this.customApiIds,
-      requireCustomApiImports: false
-    });
-    this.compiledSource = source;
-    this.compiledState = state;
-    this.compiledRegistryVersion = this.registry.version;
-    return state;
+  inputDocument(source: string): WorkflowDocumentState {
+    if (!source.trim()) return { kind: "empty" };
+    return {
+      kind: compileWorkflow(source, this.registry, {
+        allowImports: true,
+        aliases: parseWorkflowImports(source),
+        customApiIds: this.customApiIds,
+        requireCustomApiImports: false
+      }).program ? "workflow" : "invalid"
+    };
   }
 
   documentCompletions(source: string, cursor = source.length, customApisAreGlobal = true): CompletionItem[] {
     const before = source.slice(0, cursor);
-    const word = /[A-Za-z_][A-Za-z0-9_.-]*$/.exec(before)?.[0] ?? "";
+    const word = /[A-Za-z_][A-Za-z0-9_.]*$/.exec(before)?.[0] ?? "";
     const fragmentStart = word.lastIndexOf(".") + 1;
     const replaceStart = cursor - (word.length - fragmentStart);
     const replaceEnd = cursor + (/^[A-Za-z0-9_]*/.exec(source.slice(cursor))?.[0].length ?? 0);
@@ -387,25 +273,19 @@ export class DextLanguageService {
       kind: CompletionItem["kind"]
     ): CompletionItem => ({ label, insertText, detail, kind, replaceStart, replaceEnd });
 
-    const line = before.slice(before.lastIndexOf("\n") + 1);
-    if (/^\s*from\s+[A-Za-z_][A-Za-z0-9_.-]*\s+import\s+[A-Za-z_]*$/.test(line)) {
-      return this.apiImportItems(line, item);
-    }
-    if (/^\s*(?:from|import)\s+[A-Za-z_][A-Za-z0-9_.-]*$/.test(line)) {
-      return this.apiNamespaceItems(line, item);
-    }
-
     const statusComparison = /([A-Za-z_][A-Za-z0-9_]*)\.status\s*(?:==|!=)\s*(?:["']([^"']*)$|([A-Za-z_][A-Za-z0-9_]*)$|)$/.exec(before);
     if (statusComparison) {
       const assignment = new RegExp(
-        `^\\s*${statusComparison[1]}\\s*=\\s*([A-Za-z_][A-Za-z0-9_.-]*)\\(`,
+        `^\\s*${statusComparison[1]}\\s*=\\s*([A-Za-z_][A-Za-z0-9_.]*)\\(`,
         "m"
       ).exec(source);
       const output = assignment ? this.resolveMethod(source, assignment[1] ?? "", customApisAreGlobal)?.output.kind : undefined;
-      if (output === "apply" || output === "terminal") {
-        const values = output === "apply"
-          ? ["applied", "unchanged", "conflict"]
-          : ["succeeded", "failed", "timed_out"];
+      if (output === "review" || output === "apply" || output === "terminal") {
+        const values = output === "review"
+          ? ["pass", "warning", "fail"]
+          : output === "apply"
+            ? ["applied", "unchanged", "conflict"]
+            : ["succeeded", "failed", "timed_out"];
         const fragment = statusComparison[2] ?? statusComparison[3] ?? "";
         const hasQuote = /["']$/.test(before);
         const valueStart = hasQuote ? cursor - fragment.length - 1 : cursor - fragment.length;
@@ -420,42 +300,30 @@ export class DextLanguageService {
       }
     }
 
-    const member = /([A-Za-z_]\w*(?:(?:\.[A-Za-z_]\w*)|(?:\[\s*[^\]]+\s*\]))*)\.([A-Za-z_]*)$/.exec(before);
+    const member = /([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_]*)$/.exec(before);
     if (member) {
-      const fields = this.expressionFields(source, member[1] ?? "", customApisAreGlobal);
-      const root = (member[1] ?? "").split(".")[0] ?? "";
-      const method = this.resolveMethod(
-        source,
-        new RegExp(`^\\s*${root}\\s*=\\s*([A-Za-z_][A-Za-z0-9_.-]*)\\(`, "m").exec(source)?.[1] ?? "",
-        customApisAreGlobal
-      );
-      if (fields.length) {
-        return fields
+      const assignment = new RegExp(
+        `^\\s*${member[1]}\\s*=\\s*([A-Za-z_][A-Za-z0-9_.]*)\\(`,
+        "m"
+      ).exec(source);
+      const method = assignment ? this.resolveMethod(source, assignment[1] ?? "", customApisAreGlobal) : undefined;
+      if (method) {
+        return outputFields(method)
           .filter((field) => field.name.startsWith(member[2] ?? ""))
-          .map((field) => item(field.name, field.name, `${method?.output.resultType ?? resultTypeName(method?.output.kind ?? "result")} field`, "parameter"));
+          .map((field) => item(field.name, field.name, `${method.output.resultType ?? resultTypeName(method.output.kind)} field`, "parameter"));
       }
     }
 
     const call = openCall(source, cursor);
     if (call) {
-      const resolvedMethod = this.resolveMethod(source, call.method, customApisAreGlobal);
-      const cli = callCli(call.body);
-      const method = resolvedMethod ? specializeBuiltinCli(resolvedMethod, cli) : undefined;
+      const method = this.resolveMethod(source, call.method, customApisAreGlobal);
       if (method) {
         const segment = activeArgument(call.body);
-        const assignment = /^\s*([A-Za-z_][A-Za-z0-9_-]*)\s*=([\s\S]*)$/.exec(segment);
+        const assignment = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=([\s\S]*)$/.exec(segment);
         if (assignment) {
           const field = method.input.find((candidate) => candidate.name === assignment[1]);
           const value = assignment[2]?.trimStart() ?? "";
           const valueStart = cursor - value.length;
-          if (field?.name === "fields" && field.items?.properties && value.startsWith("[")) {
-            const brace = value.lastIndexOf("{");
-            if (brace >= 0) return objectCompletions(field, value.slice(brace), source, cursor);
-          }
-          if (field?.properties && value.startsWith("{")) return objectCompletions(field, value, source, cursor);
-          if (field?.type === "object" && field.properties && !value) {
-            return [{ label: "{ model, reasoning, speed }", insertText: '{"model": ""}', detail: formatFieldType(field), kind: "value", replaceStart: valueStart, replaceEnd: cursor }];
-          }
           if (field?.type === "context") {
             const fragment = /(?:^|\[\s*|,\s*)(@?[A-Za-z_.]*)$/.exec(value)?.[1] ?? "";
             const references = [
@@ -471,8 +339,8 @@ export class DextLanguageService {
               replaceEnd: cursor
             }));
             if (!field.accepts?.includes("result")) return referenceItems;
-            const resultVariables = [...source.matchAll(/^\s*([A-Za-z_]\w*)\s*=\s*([A-Za-z_][A-Za-z0-9_.-]*)\(/gm)]
-            .map((match) => ({ name: match[1]!, output: this.resolveMethod(source, match[2]!, customApisAreGlobal)?.output.kind }))
+            const resultVariables = [...source.matchAll(/^\s*([A-Za-z_]\w*)\s*=\s*([A-Za-z_][A-Za-z0-9_.]*)\(/gm)]
+              .map((match) => ({ name: match[1]!, output: this.resolveMethod(source, match[2]!, customApisAreGlobal)?.output.kind }))
               .filter((entry) => entry.output !== undefined)
               .map((entry) => ({ name: entry.name, output: entry.output! }));
             return [
@@ -489,7 +357,7 @@ export class DextLanguageService {
           }
           if (field?.type === "result" || field?.accepts?.includes("result")) {
             const fragment = /(?:^|(?:\[|,)\s*)([A-Za-z_]\w*)$/.exec(value)?.[1] ?? "";
-            const variables = [...source.matchAll(/^\s*([A-Za-z_]\w*)\s*=\s*([A-Za-z_][A-Za-z0-9_.-]*)\(/gm)]
+            const variables = [...source.matchAll(/^\s*([A-Za-z_]\w*)\s*=\s*([A-Za-z_][A-Za-z0-9_.]*)\(/gm)]
               .map((match) => ({ name: match[1]!, output: this.resolveMethod(source, match[2]!, customApisAreGlobal)?.output.kind }))
               .filter((entry) => entry.output !== undefined)
               .map((entry) => ({ name: entry.name, output: entry.output! }));
@@ -537,32 +405,15 @@ export class DextLanguageService {
           return [];
         }
         const used = new Set(
-          [...call.body.matchAll(/([A-Za-z_][A-Za-z0-9_-]*)\s*=/g)].map((match) => match[1])
+          [...call.body.matchAll(/([A-Za-z_][A-Za-z0-9_]*)\s*=/g)].map((match) => match[1])
         );
         const fragment = /[A-Za-z_][A-Za-z0-9_]*$/.exec(segment)?.[0] ?? "";
-        const parameters = inputFields(method);
-        // Prefer the first unused parameter at the current positional slot.
-        // This makes the common `foo(first=..., ` flow surface the next field
-        // immediately, while keeping declaration order for the rest.
-        const argumentIndex = parameters.length
-          ? Math.min(topLevelCommaCount(call.body), parameters.length - 1)
-          : 0;
-        const expected = parameters.slice(argumentIndex).find((field) => !used.has(field.name))
-          ?? parameters.find((field) => !used.has(field.name));
-        const candidates = parameters
-          .filter((field) => !used.has(field.name) && field.name.startsWith(fragment));
-        const expectedIndex = candidates.findIndex((field) => field.name === expected?.name);
-        const ordered = expectedIndex > 0
-          ? [candidates[expectedIndex]!, ...candidates.slice(0, expectedIndex), ...candidates.slice(expectedIndex + 1)]
-          : candidates;
-        return ordered.map((field, index) => ({
-          ...item(field.name, `${field.name}=`, formatMethodParameter(field), "parameter"),
-          sortText: String(index).padStart(4, "0")
-        }));
+        return method.input
+          .filter((field) => !used.has(field.name) && field.name.startsWith(fragment))
+          .map((field) => item(field.name, `${field.name}=`, formatMethodParameter(field), "parameter"));
       }
     }
 
-    if (!word) return [];
     const methods = this.visibleMethodEntries(source, customApisAreGlobal);
     const path = word.split(".");
     const fragment = path.pop() ?? "";
@@ -585,7 +436,12 @@ export class DextLanguageService {
 
   documentDiagnostics(source: string): LanguageDiagnostic[] {
     if (!source.trim()) return [];
-    return this.compiled(source).diagnostics.map((diagnostic) => ({
+    return compileWorkflow(source, this.registry, {
+      allowImports: true,
+      aliases: parseWorkflowImports(source),
+      customApiIds: this.customApiIds,
+      requireCustomApiImports: false
+    }).diagnostics.map((diagnostic) => ({
       message: diagnostic.message,
       severity: diagnostic.severity,
       offset: diagnostic.from,
@@ -599,7 +455,51 @@ export class DextLanguageService {
   }
 
   documentHover(source: string, cursor: number, customApisAreGlobal = true): LanguageHover | undefined {
-    return documentSymbolHover(source, cursor, (name) => this.resolveMethod(source, name, customApisAreGlobal));
+    const pattern = /[A-Za-z_][A-Za-z0-9_.]*/g;
+    for (const match of source.matchAll(pattern)) {
+      const from = match.index ?? 0;
+      const to = from + match[0].length;
+      if (cursor < from || cursor > to) continue;
+      const method = this.resolveMethod(source, match[0], customApisAreGlobal);
+      if (method) {
+        return {
+          rangeStart: from,
+          rangeEnd: to,
+          label: formatMethodSignature(method),
+          documentation: method.description
+        };
+      }
+      const member = /^([A-Za-z_]\w*)\.([A-Za-z_]\w*)$/.exec(match[0]);
+      if (member) {
+        const assignment = new RegExp(`^\\s*${member[1]}\\s*=\\s*([A-Za-z_][A-Za-z0-9_.]*)\\(`, "m").exec(source);
+        const outputMethod = assignment ? this.resolveMethod(source, assignment[1] ?? "", customApisAreGlobal) : undefined;
+        const field = outputFields(outputMethod).find((candidate) => candidate.name === member[2]);
+        const type = outputMethod?.output.fields
+          ? field ? formatFieldType(field) : undefined
+          : outputMethod ? RESULT_FIELD_TYPES[outputMethod.output.kind]?.[member[2] ?? ""] : undefined;
+        if (outputMethod && type) {
+          return {
+            rangeStart: from,
+            rangeEnd: to,
+            label: `${member[0]}: ${type}`,
+            documentation: `${outputMethod.output.resultType ?? resultTypeName(outputMethod.output.kind)} field returned by ${assignment?.[1] ?? outputMethod.output.kind}.`
+          };
+        }
+      }
+      const variableAssignment = new RegExp(`^\\s*${match[0]}\\s*=\\s*([A-Za-z_][A-Za-z0-9_.]*)\\(`, "m").exec(source);
+      if (variableAssignment) {
+        const output = this.resolveMethod(source, variableAssignment[1] ?? "", customApisAreGlobal)?.output.kind;
+        if (output) {
+          return {
+            rangeStart: from,
+            rangeEnd: to,
+            label: `${match[0]}: ${resultTypeName(output)}`,
+            documentation: `Result returned by ${variableAssignment[1]}.`
+          };
+        }
+      }
+    }
+    return undefined;
   }
 
   apiSignature(source: string, cursor = source.length): SignatureHelp | undefined {
@@ -607,26 +507,18 @@ export class DextLanguageService {
   }
 
   documentSignature(source: string, cursor = source.length, customApisAreGlobal = true): SignatureHelp | undefined {
-    const call = /([A-Za-z_][A-Za-z0-9_.-]*)\(([^()]*)$/.exec(source.slice(0, cursor));
-    const resolvedMethod = call ? this.resolveMethod(source, call[1] ?? "", customApisAreGlobal) : undefined;
-    const cli = callCli(call?.[2] ?? "");
-    const method = resolvedMethod ? specializeBuiltinCli(resolvedMethod, cli) : undefined;
+    const call = /([A-Za-z_][A-Za-z0-9_.]*)\(([^()]*)$/.exec(source.slice(0, cursor));
+    const method = call ? this.resolveMethod(source, call[1] ?? "", customApisAreGlobal) : undefined;
     if (!call || !method) return undefined;
-    const parameters = inputFields(method);
-    const body = call[2] ?? "";
-    const segment = activeArgument(body);
-    const named = /^\s*([A-Za-z_][A-Za-z0-9_-]*)\s*=/.exec(segment)?.[1];
-    const positionalIndex = Math.min(
-      topLevelCommaCount(body),
-      Math.max(0, parameters.length - 1)
+    const activeParameter = Math.min(
+      call[2]?.match(/,/g)?.length ?? 0,
+      Math.max(0, method.input.length - 1)
     );
-    const namedIndex = named ? parameters.findIndex((field) => field.name === named) : -1;
-    const activeParameter = namedIndex >= 0 ? namedIndex : positionalIndex;
     return {
-      label: formatMethodSignature(method, signatureOptions(method)),
+      label: formatMethodSignature(method),
       documentation: method.description,
       activeParameter,
-      parameters: parameters.map((field) => ({
+      parameters: method.input.map((field) => ({
         label: formatMethodParameter(field),
         documentation: field.description ?? ""
       }))

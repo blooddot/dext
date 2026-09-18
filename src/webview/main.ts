@@ -169,7 +169,12 @@ syncResultScrollGutter();
 window.addEventListener("resize", syncResultScrollGutter, { passive: true });
 if (typeof ResizeObserver === "function") {
   // Docked, collapsed, and resized panels all change the scrollbar gutter.
-  new ResizeObserver(() => syncResultScrollGutter()).observe(elements.resultBody);
+  // A following reader also expects the newest output to stay in view when the
+  // composer grows or the panel is maximized under the same conversation.
+  new ResizeObserver(() => {
+    syncResultScrollGutter();
+    pinResultToBottom();
+  }).observe(elements.resultBody);
 }
 
 let pendingConfirmation: (() => void) | undefined;
@@ -225,6 +230,16 @@ let conversationSwitchId = 0;
 // the user is trying to read it.
 let resultScrollFrame: number | undefined;
 let resultScrollGeneration = 0;
+// Whether the conversation follows its newest output. Only the reader's own
+// gestures change this. A scroll event the browser emits on its own - a clamp
+// after a disclosure shrank, a scroll-anchored adjustment, or our own
+// scrollTop write - must never release it: one stale frame would otherwise
+// strand the reader above the output for the rest of the turn, because every
+// later batch would measure "not at the end" and stop following too.
+let followResultEnd = true;
+// The reader is holding a scrollbar thumb or dragging on a touch screen, so the
+// stream must not pull the view back while the gesture is in progress.
+let resultScrollGesture = false;
 // A restored running conversation receives its live row and buffered events
 // after the cached/history DOM has been painted. Force one final bottom snap
 // for that replay; otherwise adding the running row makes the old bottom look
@@ -364,6 +379,10 @@ function clearVisibleConversation(): void {
   conversationRenderGeneration += 1;
   cancelScheduledResultScroll();
   forceInitialConversationScroll = false;
+  // The next conversation opens at its newest reply, whatever position the
+  // reader had left the previous one in.
+  followResultEnd = true;
+  resultScrollGesture = false;
   cacheRenderedConversation();
   if (agentRunTimer) clearInterval(agentRunTimer);
   agentRunTimer = undefined;
@@ -908,8 +927,16 @@ function saveMcpAssistant(): void {
   if ((server.transport !== "http" && server.transport !== "stdio") || typeof server.name !== "string") {
     elements.mcpAssistantStatus.textContent = "Configuration needs a name and a supported transport."; return;
   }
+  const rawAuth = server.auth && typeof server.auth === "object" ? server.auth as Record<string, unknown> : undefined;
+  if (rawAuth?.type === "query" && (typeof rawAuth.name !== "string" || !/^[A-Za-z_][A-Za-z0-9_.-]*$/.test(rawAuth.name))) {
+    elements.mcpAssistantStatus.textContent = "Query authentication needs a parameter name such as 'key'.";
+    return;
+  }
+  const httpAuth = rawAuth?.type === "query"
+    ? { type: "query" as const, name: rawAuth.name as string }
+    : rawAuth ? { type: "bearer" as const } : undefined;
   const candidate = server.transport === "http"
-    ? { name: server.name, transport: "http" as const, url: typeof server.url === "string" ? server.url : "", ...(server.auth ? { auth: { type: "bearer" as const } } : {}) }
+    ? { name: server.name, transport: "http" as const, url: typeof server.url === "string" ? server.url : "", ...(httpAuth ? { auth: httpAuth } : {}) }
     : {
       name: server.name,
       transport: "stdio" as const,
@@ -1009,6 +1036,10 @@ function setSectionOpen(heading: HTMLElement, body: HTMLElement, open: boolean):
   heading.parentElement?.classList.toggle("section-collapsed", !open);
   const icon = heading.querySelector<HTMLElement>(".section-chevron");
   if (icon) icon.className = `section-chevron codicon codicon-chevron-${open ? "down" : "right"}`;
+  // A collapsed body is display:none, which drops the scroll offset. Reopening
+  // the conversation while following its output has to end at the newest reply
+  // again rather than at the top of the earliest turn.
+  if (open && body === elements.resultBody) pinResultToBottom();
 }
 
 function toggleSection(heading: HTMLElement, body: HTMLElement): void {
@@ -2560,11 +2591,21 @@ function renderError(message: unknown): void {
   renderInputError(message);
 }
 
-/** Keep a live Agent trace in view only while the reader is already at its
- * end. Scrolling upward to inspect an earlier event must remain stable. */
+/** Distance from the end that still counts as "the reader is at the end". A
+ * single streamed batch is routinely taller than this, so this measurement
+ * alone cannot decide whether to keep following - see followResultEnd. */
+const RESULT_END_TOLERANCE = 24;
+/** How close to the track's end a released scrollbar drag must be to count as
+ * "show me the newest output" rather than "stop at this earlier position". */
+const RESULT_TRACK_END_TOLERANCE = 6;
+
+/** Whether the port currently sits at its end, within a tolerance that absorbs
+ * the sub-pixel differences hosts report. Reader gestures use this to decide
+ * where they left the view; it is not what keeps the stream followed - see
+ * followResultEnd. */
 function resultIsNearBottom(): boolean {
   const { scrollTop, scrollHeight, clientHeight } = elements.resultBody;
-  return scrollHeight - scrollTop - clientHeight <= 24;
+  return scrollHeight - scrollTop - clientHeight <= RESULT_END_TOLERANCE;
 }
 
 function syncJumpToLatest(): void {
@@ -2589,19 +2630,42 @@ function syncResultScrollGutter(): void {
   if (gutter > 0) elements.resultSection.style.setProperty("--dext-result-scroll-gutter", `${gutter}px`);
 }
 
-function followResultIfNeeded(shouldFollow: boolean): void {
-  if (!shouldFollow) {
-    cancelScheduledResultScroll();
-    return;
-  }
+/** Write the live end into the scroll port. A scrollbar drag and a deferred
+ * follow both act on heights measured in an earlier frame, so the assignment
+ * has to read scrollHeight itself instead of trusting a remembered maximum. */
+function snapResultToBottom(): void {
+  const body = elements.resultBody;
+  const end = Math.max(0, body.scrollHeight - body.clientHeight);
+  if (body.scrollTop !== end) body.scrollTop = end;
+  syncJumpToLatest();
+}
+
+/** A batch of output has been rendered: keep a reader who is following at the
+ * end. The pin runs in the frame after the batch so the deferred Markdown pass
+ * cannot leave the view above the message that just grew. */
+function pinResultToBottom(): void {
+  if (!followResultEnd) return;
   cancelScheduledResultScroll();
   const generation = resultScrollGeneration;
-  resultScrollFrame = requestAnimationFrame(() => {
-    resultScrollFrame = undefined;
-    if (generation !== resultScrollGeneration) return;
-    elements.resultBody.scrollTop = elements.resultBody.scrollHeight;
-    syncJumpToLatest();
-  });
+  const pin = (settle: boolean): void => {
+    resultScrollFrame = requestAnimationFrame(() => {
+      resultScrollFrame = undefined;
+      if (generation !== resultScrollGeneration || !followResultEnd) return;
+      snapResultToBottom();
+      // Opening a disclosure or hydrating a stored turn can still add height
+      // after this frame; one settle pass keeps the newest output in view.
+      if (settle && !resultIsNearBottom()) pin(false);
+    });
+  };
+  pin(true);
+}
+
+/** The reader asked for the newest output: the jump control, a drag released
+ * against the track's end, or a conversation that opens at its latest reply. */
+function followResultToBottom(): void {
+  followResultEnd = true;
+  snapResultToBottom();
+  pinResultToBottom();
 }
 
 /** Selecting a conversation should open at its latest reply, like a chat
@@ -2609,13 +2673,14 @@ function followResultIfNeeded(shouldFollow: boolean): void {
  * so scrollHeight reflects the complete session. */
 function scrollResultToBottom(): void {
   cancelScheduledResultScroll();
+  followResultEnd = true;
   const generation = resultScrollGeneration;
   resultScrollFrame = requestAnimationFrame(() => {
     resultScrollFrame = requestAnimationFrame(() => {
       resultScrollFrame = undefined;
-      if (generation !== resultScrollGeneration || !activeConversationId || activeConversationId !== renderedConversationId) return;
-      elements.resultBody.scrollTop = elements.resultBody.scrollHeight;
-      syncJumpToLatest();
+      if (generation !== resultScrollGeneration || !followResultEnd) return;
+      if (!activeConversationId || activeConversationId !== renderedConversationId) return;
+      snapResultToBottom();
     });
   });
 }
@@ -2833,10 +2898,28 @@ function flushAgentMessageRenders(): void {
   }
 }
 
+/** Bring a request the reader has never seen into view. A question card sits
+ * above the Process timeline, and a live turn grows that timeline far past the
+ * viewport while the reader follows the newest output, so a published card can
+ * be thousands of pixels off screen while the turn waits for an answer nobody
+ * can see. Revealing it also releases the follow, because the pin that runs
+ * after the next streamed batch would otherwise push it straight back out. */
+function revealWaitingCard(kind: "agent" | "ui", requestId: string, blocking: boolean): void {
+  // A question the agent answers in parallel does not park the turn; leaving
+  // the reader where they were is the honest behaviour for it.
+  if (!blocking || !activeTurn?.questions.focusRequest(kind, requestId)) return;
+  followResultEnd = false;
+  syncJumpToLatest();
+}
+
 function renderAgentEvent(event: AgentStreamEvent): void {
   if (event.phase === "input") {
-    if (event.userInput) activeTurn?.questions?.update(event.userInput);
-    if (event.uiInteraction) activeTurn?.questions?.updateUi(event.uiInteraction);
+    if (event.userInput && activeTurn?.questions?.update(event.userInput)) {
+      revealWaitingCard("agent", event.userInput.id, event.userInput.blocking);
+    }
+    if (event.uiInteraction && activeTurn?.questions?.updateUi(event.uiInteraction)) {
+      revealWaitingCard("ui", event.uiInteraction.requestId, true);
+    }
     return;
   }
   if (event.phase === "todo") {
@@ -2958,7 +3041,6 @@ function flushAgentEventBatches(): void {
   agentEventBatchFrame = undefined;
   const batches = pendingAgentEventBatches;
   pendingAgentEventBatches = [];
-  const shouldFollow = resultIsNearBottom();
   const events = batches
     .filter((batch) => batch.sessionId === activeConversationId)
     .flatMap((batch) => batch.events);
@@ -2968,7 +3050,7 @@ function flushAgentEventBatches(): void {
     forceInitialConversationScroll = false;
     scrollResultToBottom();
   } else {
-    followResultIfNeeded(shouldFollow);
+    pinResultToBottom();
   }
   syncJumpToLatest();
 }
@@ -3084,6 +3166,9 @@ function hydrateOutputTurnOnOpen(event: Event): void {
   const turn = outputTurns.get(turnId);
   if (!turn?.hydrate) return;
   turn.hydrate();
+  // A hydrated turn can be far taller than its collapsed row. Following the
+  // output has to survive that growth; a reader who scrolled away is unaffected.
+  pinResultToBottom();
 }
 
 function renderOutputSession(session: DextHistorySession): void {
@@ -3360,15 +3445,79 @@ elements.resultToggle.addEventListener("click", (event) => {
 });
 elements.result.addEventListener("toggle", hydrateOutputTurnOnOpen, true);
 elements.result.addEventListener("toggle", syncResultToggle, true);
+// Expanding a command's output or a stored turn changes the height under the
+// reader. A following reader keeps the newest output in view; one who scrolled
+// away is left where they are.
+elements.result.addEventListener("toggle", pinResultToBottom, true);
 elements.resultBody.addEventListener("scroll", () => {
-  // A manual wheel/touch scroll takes precedence over any deferred follow
-  // request left by a stream update or a previous tab switch.
-  cancelScheduledResultScroll();
+  // A gesture in progress decides where the view lands when it ends, so the
+  // scroll events it produces are not the reader's final word.
+  if (resultScrollGesture) {
+    syncJumpToLatest();
+    return;
+  }
+  // Reaching the end - by wheel, keyboard, or our own correction - resumes
+  // following. Leaving it by hand stops the stream from pulling the view back,
+  // which is what lets an earlier event be read in peace. A scroll the reader
+  // did not start (a clamp after a disclosure shrank, or a correction one frame
+  // behind its content) must not cancel a pin that is still on its way, or the
+  // newest output stays stranded below the viewport with no way back except the
+  // jump control.
+  if (resultIsNearBottom()) followResultEnd = true;
+  else followResultEnd = false;
   syncJumpToLatest();
 }, { passive: true });
+// A pointer press on the scrollbar strip never reaches the track itself, so the
+// gesture is recognized by its position inside #result-body's measured gutter.
+elements.resultBody.addEventListener("pointerdown", (event) => {
+  const body = elements.resultBody;
+  const scrollbar = body.offsetWidth - body.clientWidth;
+  if (scrollbar <= 0) return;
+  if (event.clientX < body.getBoundingClientRect().right - scrollbar) return;
+  resultScrollGesture = true;
+  // The reader is choosing a position by hand, so the stream must not pull the
+  // view back while the thumb is held.
+  followResultEnd = false;
+}, { passive: true });
+const endResultScrollGesture = (event: PointerEvent): void => {
+  if (!resultScrollGesture) return;
+  resultScrollGesture = false;
+  const body = elements.resultBody;
+  // A drag whose height was measured before the last batch can stop short of
+  // the real end. Releasing against the track's end still means "newest
+  // output", so snap with the height of this frame instead of the one the drag
+  // was computed from.
+  const releasedAtTrackEnd = event.clientY >= body.getBoundingClientRect().bottom - RESULT_TRACK_END_TOLERANCE;
+  if (releasedAtTrackEnd || resultIsNearBottom()) followResultToBottom();
+};
+// On the window: a drag that ends outside the panel must still end the gesture.
+window.addEventListener("pointerup", endResultScrollGesture, { passive: true });
+window.addEventListener("pointercancel", endResultScrollGesture, { passive: true });
+elements.resultBody.addEventListener("wheel", (event) => {
+  // Wheeling up is a deliberate move into earlier output. Wheeling down is
+  // handled by the scroll handler, so returning to the end resumes following.
+  if (event.deltaY < 0) followResultEnd = false;
+}, { passive: true });
+elements.resultBody.addEventListener("touchstart", () => {
+  resultScrollGesture = true;
+  followResultEnd = false;
+}, { passive: true });
+elements.resultBody.addEventListener("touchend", () => {
+  if (!resultScrollGesture) return;
+  resultScrollGesture = false;
+  if (resultIsNearBottom()) followResultToBottom();
+}, { passive: true });
+// #result-body is focusable so the jump control can hand the reader a keyboard
+// scroller; these are the keys that move it.
+elements.resultBody.addEventListener("keydown", (event) => {
+  if (event.key === "End" || event.key === "PageDown" || event.key === "ArrowDown") {
+    followResultToBottom();
+    return;
+  }
+  if (event.key === "Home" || event.key === "PageUp" || event.key === "ArrowUp") followResultEnd = false;
+});
 jumpToLatest.addEventListener("click", () => {
-  elements.resultBody.scrollTop = elements.resultBody.scrollHeight;
-  syncJumpToLatest();
+  followResultToBottom();
   elements.resultBody.focus({ preventScroll: true });
 });
 elements.problems.addEventListener("click", () => editor.goToFirstDiagnostic());
@@ -3732,13 +3881,12 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     renderOutputError(message.message);
   }
   if (message.type === "agentEvent" && message.sessionId === activeConversationId) {
-    const shouldFollow = resultIsNearBottom();
     renderAgentEvent(message.event);
     if (forceInitialConversationScroll) {
       forceInitialConversationScroll = false;
       scrollResultToBottom();
     } else {
-      followResultIfNeeded(shouldFollow);
+      pinResultToBottom();
     }
     syncJumpToLatest();
   }
@@ -3756,7 +3904,10 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
       setSectionOpen(elements.resultHeading, elements.resultBody, true);
       turn.hydrate?.();
       turn.disclosure.open = true;
-      turn.questions.focusRequest(message.kind, message.requestId);
+      // The host is asking the reader to answer a card, and focusRequest brings
+      // that card to the middle of the viewport. Following the stream would
+      // pull the view straight back to the end, away from the question.
+      if (turn.questions.focusRequest(message.kind, message.requestId)) followResultEnd = false;
     }
   }
   if (message.type === "executing"
@@ -3812,7 +3963,6 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
       syncJumpToLatest();
     } else {
       forceInitialConversationScroll = false;
-      const shouldFollow = resultIsNearBottom();
       if (activeTurnId === message.turnId) activeTurnId = undefined;
       if (activeExecutionSessionId === message.sessionId) activeExecutionSessionId = undefined;
       stopping = false;
@@ -3821,7 +3971,9 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
       if (activeTurn) {
         activeTurn.processDisclosure.open = false;
         activeTurn.outputDisclosure.open = true;
-        followResultIfNeeded(shouldFollow);
+        // Collapsing the process timeline and opening the stored output change
+        // the height around the reader; a following reader keeps the reply end.
+        pinResultToBottom();
       }
       syncJumpToLatest();
     }

@@ -2,6 +2,7 @@ import type { ArchitectureRule, ArchitectureViolation } from "../core/projectArc
 import { archifyViewerBridgeScript, isTrustedHostMessage, isTrustedViewerMessage } from "../projectDiagramViewer.js";
 export { archifyViewerBridgeScript };
 import type { ProjectDiagramKind } from "../core/projectDiagram.js";
+import type { ProjectEvidenceSummary } from "../core/projectAiGeneration.js";
 
 export interface ProjectArchitectureDecision {
   id: string;
@@ -29,6 +30,22 @@ export interface DiagramRenderDetails {
   error?: string;
 }
 
+/**
+ * One diagram node as the page shows it after a click. Selecting a card never opens a file by
+ * itself: the page renders these details and the reader chooses an evidence entry to open.
+ */
+export interface ProjectDiagramNodeDetail {
+  id: string;
+  label: string;
+  description?: string;
+  role?: string;
+  semanticIds?: readonly string[];
+  evidence: readonly { path: string; line?: number; note?: string }[];
+  confidence?: number;
+  review?: string;
+  freshness?: string;
+}
+
 export interface ArchitectureViewInput {
   /** Everything the Archify viewer can display, architecture first. */
   diagrams: readonly ProjectDiagramSummary[];
@@ -47,6 +64,33 @@ export interface ArchitectureViewInput {
   /** Why declared rules could not be evaluated against a diagram. */
   rulesNote?: string;
   coverage?: readonly string[];
+  /** What the last evidence read actually handed the model. */
+  evidence?: ProjectEvidenceSummary;
+}
+
+/**
+ * Self-contained on purpose: the same function renders the section on the server and inside the page
+ * bridge, so a live update can never drift from the rendered page.
+ */
+export function evidenceSummaryHtml(summary: ProjectEvidenceSummary | undefined): string {
+  if (!summary) return "";
+  const esc = (value: unknown): string => String(value).replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" } as Record<string, string>)[character] ?? character);
+  const counts = (byKind: Record<string, number>): string => Object.keys(byKind).sort().map((kind) => `${kind} ${byKind[kind]}`).join(" · ");
+  const paths = (entries: readonly string[], limit: number): string => entries.slice(0, limit)
+    .map((path) => `<button type="button" data-evidence-path="${esc(path)}">${esc(path)}</button>`).join("");
+  const scope = summary.selection.scope.length ? summary.selection.scope.join(", ") : "built-in (README, documentation, manifests, source)";
+  const read = new Set(summary.excerpted);
+  const listedOnly = summary.paths.filter((path) => !read.has(path));
+  return `<summary>Evidence read · ${esc(summary.trigger)} · ${esc(new Date(summary.generatedAt).toLocaleString())}</summary>`
+    + `<p class="project-help" data-evidence-scope>Depth ${esc(summary.selection.preset ?? "custom")} · scope: ${esc(scope)} · budgets: ${summary.selection.evidenceChars} chars, ${summary.selection.files} files, ${summary.selection.fileChars} chars per file</p>`
+    + `<dl class="project-evidence-facts">`
+    + `<dt>Inventory</dt><dd>${summary.inventory.total} candidates (${esc(counts(summary.inventory.byKind))}); ${summary.inventory.withSymbols} with declared symbols</dd>`
+    + `<dt>Excerpts</dt><dd>${summary.excerpts.total} files (${esc(counts(summary.excerpts.byKind))}); ${summary.excerpts.truncated} truncated</dd>`
+    + `<dt>No excerpt</dt><dd>${summary.omitted.files} candidates listed by path only</dd>`
+    + `</dl>`
+    + (summary.coverage.length ? `<ul class="project-diagram-coverage">${summary.coverage.map((note) => `<li>${esc(note)}</li>`).join("")}</ul>` : "")
+    + `<h4>Read in full or in part (${summary.excerpted.length})</h4><div class="project-evidence-paths" data-evidence-excerpted>${paths(summary.excerpted, 120)}</div>`
+    + `<h4>Listed without an excerpt (${listedOnly.length})</h4><div class="project-evidence-paths" data-evidence-listed>${paths(listedOnly, 200)}</div>`;
 }
 
 const KIND_LABELS: Record<ProjectDiagramKind, string> = {
@@ -143,6 +187,20 @@ function renderEmpty(input: ArchitectureViewInput): string {
   return "";
 }
 
+/**
+ * The node panel stays in the page so choosing a card does not yank the reader into a file. It
+ * floats over the stage while the diagram is focused.
+ */
+function renderNodePanel(): string {
+  return `<section class="project-diagram-node" data-diagram-node hidden>`
+    + `<div class="project-diagram-node-head"><strong data-diagram-node-label></strong>`
+    + `<button type="button" data-diagram-action="close-node">Close</button></div>`
+    + `<p class="project-diagram-node-description" data-diagram-node-description hidden></p>`
+    + `<dl class="project-diagram-node-meta" data-diagram-node-meta hidden></dl>`
+    + `<div class="project-diagram-node-evidence" data-diagram-node-evidence></div>`
+    + `</section>`;
+}
+
 /** Renders the Diagrams page: diagram selection, native Archify viewer and generation controls. */
 export function renderArchitectureView(input: ArchitectureViewInput): string {
   const selected = input.selected;
@@ -154,10 +212,14 @@ export function renderArchitectureView(input: ArchitectureViewInput): string {
     + knowledgeNote
     + renderToolbar(input)
     + `<div class="project-diagram-stage" data-diagram-stage>`
-    + `<iframe class="project-diagram-frame" data-diagram-frame sandbox="allow-scripts" title="Archify diagram" hidden></iframe>`
+    // The viewer runs in a scripts-only sandbox, so it needs the fullscreen permission explicitly.
+    + `<iframe class="project-diagram-frame" data-diagram-frame sandbox="allow-scripts" allow="fullscreen" allowfullscreen title="Archify diagram" hidden></iframe>`
+    + `<button type="button" class="project-diagram-exit" data-diagram-action="exit-fullscreen" hidden>Exit fullscreen</button>`
     + `<div class="project-diagram-loading" data-diagram-loading${selected ? "" : " hidden"}>Rendering Archify diagram…</div>`
     + renderEmpty(input)
     + `</div>`
+    + renderNodePanel()
+    + `<details class="project-diagram-evidence" data-diagram-evidence${input.evidence ? "" : " hidden"}>${evidenceSummaryHtml(input.evidence)}</details>`
     + renderDetails(input)
     + renderGenerateForm(input)
     + `<section class="architecture-relation-section project-diagram-inventory"><h3>Saved diagrams (${input.diagrams.length})</h3>`
@@ -210,6 +272,7 @@ function parentBridgeScript(): string {
     // shipped bridge cannot drift from what the unit tests cover.
     var isTrustedViewerMessage = ${isTrustedViewerMessage.toString()};
     var isTrustedHostMessage = ${isTrustedHostMessage.toString()};
+    var evidenceSummaryHtml = ${evidenceSummaryHtml.toString()};
     var scriptNonce = document.currentScript && document.currentScript.nonce ? document.currentScript.nonce : "";
     var frame = root.querySelector('[data-diagram-frame]');
     var stage = root.querySelector('[data-diagram-stage]');
@@ -219,6 +282,99 @@ function parentBridgeScript(): string {
     var displayedVersion = null;
     var nodeMap = null;
     var pendingExport = null;
+    var nodeDetails = [];
+    var nodeById = {};
+    var activeNodeId = "";
+    /**
+     * The webview host refuses the browser Fullscreen API, so the button first tries the native
+     * path and otherwise fills the whole webview with the stage. Either way the same button and
+     * Escape leave the mode again.
+     */
+    function diagramFocusOn() { return document.body.classList.contains("diagram-focus"); }
+    function syncFullscreenControls() {
+      var active = diagramFocusOn() || document.fullscreenElement === stage;
+      var button = root.querySelector("[data-diagram-action=fullscreen]");
+      if (button) button.textContent = active ? "Exit fullscreen" : "Fullscreen";
+      var exit = root.querySelector("[data-diagram-action=exit-fullscreen]");
+      if (exit) exit.hidden = !active;
+    }
+    function setDiagramFocus(on) {
+      document.body.classList.toggle("diagram-focus", Boolean(on));
+      syncFullscreenControls();
+    }
+    function exitDiagramFullscreen() {
+      if (document.fullscreenElement === stage) { if (document.exitFullscreen) document.exitFullscreen(); return; }
+      if (diagramFocusOn()) setDiagramFocus(false);
+    }
+    function toggleDiagramFullscreen() {
+      if (!stage) return;
+      if (document.fullscreenElement === stage || diagramFocusOn()) { exitDiagramFullscreen(); return; }
+      try {
+        var request = stage.requestFullscreen ? stage.requestFullscreen() : null;
+        if (request && typeof request.then === "function") { request.then(syncFullscreenControls, function () { setDiagramFocus(true); }); return; }
+      } catch (error) {
+        // A rejected Fullscreen API is expected inside VS Code; the in-view focus mode replaces it.
+      }
+      setDiagramFocus(true);
+    }
+    function hideNodeDetails() {
+      var panel = root.querySelector("[data-diagram-node]");
+      if (panel) panel.hidden = true;
+      activeNodeId = "";
+    }
+    function nodeText(tag, className, text) {
+      var node = document.createElement(tag);
+      if (className) node.className = className;
+      node.textContent = text;
+      return node;
+    }
+    function showNodeDetails(nodeId) {
+      var panel = root.querySelector("[data-diagram-node]");
+      if (!panel) return;
+      var detail = nodeById[nodeId];
+      if (!detail) { hideNodeDetails(); return; }
+      activeNodeId = nodeId;
+      var label = panel.querySelector("[data-diagram-node-label]");
+      if (label) label.textContent = detail.label || nodeId;
+      var description = panel.querySelector("[data-diagram-node-description]");
+      if (description) { description.textContent = detail.description || ""; description.hidden = !detail.description; }
+      var meta = panel.querySelector("[data-diagram-node-meta]");
+      if (meta) {
+        meta.textContent = "";
+        var rows = [];
+        if (detail.role) rows.push(["Role", String(detail.role)]);
+        if (detail.semanticIds && detail.semanticIds.length) rows.push(["Semantics", detail.semanticIds.join(", ")]);
+        if (typeof detail.confidence === "number") rows.push(["Confidence", Math.round(detail.confidence * 100) + "%"]);
+        if (detail.review) rows.push(["Review", String(detail.review)]);
+        if (detail.freshness) rows.push(["Freshness", String(detail.freshness)]);
+        for (var index = 0; index < rows.length; index += 1) {
+          meta.appendChild(nodeText("dt", "", rows[index][0]));
+          meta.appendChild(nodeText("dd", "", rows[index][1]));
+        }
+        meta.hidden = rows.length === 0;
+      }
+      var evidence = panel.querySelector("[data-diagram-node-evidence]");
+      if (evidence) {
+        evidence.textContent = "";
+        var entries = detail.evidence || [];
+        if (!entries.length) evidence.appendChild(nodeText("p", "project-help", "This node declares no evidence file."));
+        for (var entryIndex = 0; entryIndex < entries.length; entryIndex += 1) {
+          var entry = entries[entryIndex] || {};
+          var button = document.createElement("button");
+          button.type = "button";
+          button.setAttribute("data-diagram-evidence-path", entry.path || "");
+          if (entry.line) button.setAttribute("data-diagram-evidence-line", String(entry.line));
+          button.textContent = "Open " + (entry.path || "") + (entry.line ? ":" + entry.line : "") + (entry.note ? " — " + entry.note : "");
+          evidence.appendChild(button);
+        }
+      }
+      panel.hidden = false;
+      // A tall diagram can push the panel below the fold, so bring it into view without moving the
+      // reader away from the card they clicked. Focus mode floats the panel instead.
+      if (!diagramFocusOn() && panel.scrollIntoView) {
+        try { panel.scrollIntoView({ block: "nearest" }); } catch (error) { panel.scrollIntoView(false); }
+      }
+    }
     function selectedKind() {
       var option = root.querySelector('[data-diagram-select] option:checked');
       var id = option ? option.value : "";
@@ -288,6 +444,12 @@ function parentBridgeScript(): string {
       var select = root.querySelector("[data-diagram-select]");
       if (select) for (var index = 0; index < select.options.length; index += 1) if (select.options[index].value === selectedId) select.selectedIndex = index;
       nodeMap = message.mapping ? message.mapping.reverseIds : null;
+      nodeDetails = Array.isArray(message.nodes) ? message.nodes : [];
+      nodeById = {};
+      for (var nodeIndex = 0; nodeIndex < nodeDetails.length; nodeIndex += 1) {
+        if (nodeDetails[nodeIndex] && nodeDetails[nodeIndex].id) nodeById[nodeDetails[nodeIndex].id] = nodeDetails[nodeIndex];
+      }
+      hideNodeDetails();
       root.querySelector("[data-diagram-empty]") && root.querySelector("[data-diagram-empty]").setAttribute("hidden", "");
       if (loading) loading.hidden = false;
       try { frame.srcdoc = buildSrcdoc(String(message.html || "")); } catch (error) { setStatus("Unable to load diagram: " + String(error && error.message || error), "error"); }
@@ -318,7 +480,8 @@ function parentBridgeScript(): string {
         return;
       }
       if (message.type === "dext-diagram-node" && typeof message.nodeId === "string") {
-        post({ type: "projectDiagramFocus", diagramId: selectedId, nodeId: message.nodeId });
+        // Selecting a card reports the node in place; opening its evidence stays an explicit choice.
+        showNodeDetails(message.nodeId);
         return;
       }
       if (message.type === "dext-diagram-ready") {
@@ -326,6 +489,14 @@ function parentBridgeScript(): string {
         return;
       }
       if (typeof message.type !== "string") return;
+      if (message.type === "projectEvidenceSummary") {
+        var evidence = root.querySelector("[data-diagram-evidence]");
+        if (evidence) {
+          evidence.innerHTML = evidenceSummaryHtml(message.summary);
+          evidence.hidden = false;
+        }
+        return;
+      }
       if (message.type === "projectDiagramRendered") { showDiagram(message); return; }
       if (message.type === "projectDiagramRenderFailed") {
         if (loading) loading.hidden = true;
@@ -376,6 +547,7 @@ function parentBridgeScript(): string {
         var option = target.options[target.selectedIndex];
         selectedId = target.value;
         displayedVersion = option ? Number(option.getAttribute("data-diagram-version")) : undefined;
+        hideNodeDetails();
         root.querySelector("[data-diagram-empty]") && root.querySelector("[data-diagram-empty]").setAttribute("hidden", "");
         if (loading) loading.hidden = false;
         setStatus("", "");
@@ -385,6 +557,19 @@ function parentBridgeScript(): string {
     root.addEventListener("click", function (event) {
       var target = event.target && event.target.closest ? event.target.closest("button, [data-diagram-action]") : null;
       if (!target) return;
+      var summaryPath = target.getAttribute("data-evidence-path");
+      if (summaryPath) {
+        post({ type: "projectEvidenceOpen", path: summaryPath });
+        return;
+      }
+      var evidencePath = target.getAttribute("data-diagram-evidence-path");
+      if (evidencePath) {
+        var evidenceLine = Number(target.getAttribute("data-diagram-evidence-line") || 0);
+        var evidencePayload = { type: "projectDiagramEvidence", diagramId: selectedId, nodeId: activeNodeId, path: evidencePath };
+        if (evidenceLine > 0) evidencePayload.line = evidenceLine;
+        post(evidencePayload);
+        return;
+      }
       var action = target.getAttribute("data-diagram-action");
       if (target.hasAttribute("data-diagram-generate-new") || target.hasAttribute("data-diagram-generate-update")) {
         var requirement = (root.querySelector("[data-diagram-requirement]") || {}).value || "";
@@ -411,13 +596,9 @@ function parentBridgeScript(): string {
         else post({ type: "projectDiagramExport", diagramId: selectedId, version: displayedVersion, format: "html" });
         return;
       }
-      if (action === "fullscreen") {
-        if (!stage) return;
-        if (document.fullscreenElement === stage) { if (document.exitFullscreen) document.exitFullscreen(); }
-        else if (stage.requestFullscreen) stage.requestFullscreen().catch(function () { stage.classList.toggle("project-diagram-stage-fullscreen"); });
-        else stage.classList.toggle("project-diagram-stage-fullscreen");
-        return;
-      }
+      if (action === "fullscreen") { toggleDiagramFullscreen(); return; }
+      if (action === "exit-fullscreen") { exitDiagramFullscreen(); return; }
+      if (action === "close-node") { hideNodeDetails(); return; }
     });
     var select = root.querySelector("[data-diagram-select]");
     if (select && select.value) {
@@ -426,6 +607,11 @@ function parentBridgeScript(): string {
       displayedVersion = option ? Number(option.getAttribute("data-diagram-version")) : undefined;
       post({ type: "projectDiagramRender", diagramId: selectedId, version: displayedVersion });
     }
+    document.addEventListener("fullscreenchange", syncFullscreenControls);
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape" && diagramFocusOn()) setDiagramFocus(false);
+    });
+    syncFullscreenControls();
     window.addEventListener("pagehide", function () { post({ type: "projectDiagramCancel" }); });
   })();`;
 }

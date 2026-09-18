@@ -18,7 +18,7 @@ const valid = 'def main() -> PrintResult:\n    return print(text="ok")\n';
 describe("API project checks", () => {
   it.each(["\n", "\r\n"])("maps helper errors to original file offsets with %j line endings", async (newline) => {
     const source = [
-      "# 中文 😀", "", "def helper() -> PrintResult:", "", "    value = 1", "    value = 2",
+      "# 中文 😀", "", "def helper() -> PrintResult:", "", "    value = 1", '    value = "two"',
       '    return print(text="ok")', "", "def main() -> PrintResult:", "    return missing()", ""
     ].join(newline);
     const path = await put(".dext/api/broken.dx", source);
@@ -26,7 +26,8 @@ describe("API project checks", () => {
     const result = await checkApis({ workspace });
     expect(result.files).toHaveLength(2);
     const reassign = result.diagnostics.find((item) => item.code === "dext/reassign");
-    expect(reassign).toMatchObject({ path, apiId: "broken", from: source.indexOf("value = 2"), to: source.indexOf("value = 2") + 5 });
+    const target = source.indexOf('value = "two"');
+    expect(reassign).toMatchObject({ path, apiId: "broken", from: target, to: target + 5 });
     expect(result.diagnostics.find((item) => item.code === "dext/unknown-api")).toMatchObject({ from: source.indexOf("missing()"), to: source.indexOf("missing()") + 7 });
     expect(result.errors).toBe(2);
   });
@@ -113,5 +114,28 @@ describe("API project checks", () => {
     }));
     await put(".dext/api/use.dx", "def main() -> McpRawResult:\n    return mcp.test.fetch()\n");
     expect((await checkApis({ workspace })).diagnostics).toEqual([]);
+  });
+
+  it("accepts a query-authenticated HTTP manifest and keeps its url credential-free", async () => {
+    await put(".dext/mcp/gateway.jsonc", JSON.stringify({
+      name: "gateway", transport: "http", url: "https://mcp.example.test/server/abc",
+      auth: { type: "query", name: "key" },
+      tools: [{ name: "read", inputSchema: { type: "object", properties: {} } }]
+    }));
+    expect((await checkApis({ workspace })).diagnostics).toEqual([]);
+  });
+
+  it("reports a manifest the registry would reject when the APIs load", async () => {
+    const path = await put(".dext/mcp/gateway.jsonc", JSON.stringify({
+      name: "gateway", transport: "http", url: "https://mcp.example.test/server/abc?key=secret",
+      tools: [{ name: "read", inputSchema: { type: "object", properties: {} } }]
+    }));
+    expect((await checkApis({ workspace })).diagnostics).toEqual([
+      expect.objectContaining({
+        path,
+        code: "dext/mcp",
+        message: "MCP server 'gateway' url must not contain a query string."
+      })
+    ]);
   });
 });

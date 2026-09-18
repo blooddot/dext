@@ -25,7 +25,7 @@ function peer(bridge: HarnessBridge) {
 }
 
 describe("Harness private bridge", () => {
-  it("answers each framed question and ignores unusable frames", async () => {
+  it("answers each framed question and refuses the ones it cannot render", async () => {
     const seen: string[] = [];
     const bridge = new HarnessBridge(async (request): Promise<HarnessQuestionOutcome> => {
       seen.push(request.id);
@@ -36,10 +36,15 @@ describe("Harness private bridge", () => {
       await client.ready;
       client.write({ token: bridge.token });
       client.write("not json");
+      // A frame Dext cannot render still has to be answered: the Harness
+      // answerer waits on this socket, so silence parks the whole turn.
       client.write({ id: "bad", questions: [] });
+      client.write({ id: "bad-options", questions: [{ id: "q", question: "Which?", options: [{}] }] });
       client.write({ id: "one", questions: [question] });
       client.write({ id: "two", questions: [question] });
-      expect(await client.settle(2)).toEqual([
+      expect(await client.settle(4)).toEqual([
+        { id: "bad", status: "unavailable" },
+        { id: "bad-options", status: "unavailable" },
         { id: "one", status: "answered", answer: { answers: [{ id: "q", selected: ["A"] }] } },
         { id: "two", status: "answered", answer: { answers: [{ id: "q", selected: ["A"] }] } }
       ]);

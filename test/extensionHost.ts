@@ -238,7 +238,7 @@ async function verifyApiDiagnostics(folder: vscode.WorkspaceFolder): Promise<voi
 
     // An unsaved edit must be checked from the buffer, not from disk.
     const bodyStart = brokenSource.indexOf("    return helper(");
-    await editor.edit((edit) => edit.insert(document.positionAt(bodyStart), "    value = 1\n    value = 2\n"));
+    await editor.edit((edit) => edit.insert(document.positionAt(bodyStart), '    value = 1\n    value = "two"\n'));
     assert.equal(document.isDirty, true, "The verification edit is unsaved.");
     await eventually(async () => vscode.languages.getDiagnostics(broken).some((entry) => entry.code === "dext/reassign"), "unsaved-buffer .dx diagnostics");
     await vscode.commands.executeCommand("workbench.action.revertAndCloseActiveEditor");

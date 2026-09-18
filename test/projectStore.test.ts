@@ -33,6 +33,30 @@ const diagram = (id = "architecture"): ProjectDiagram => ({
 });
 
 describe("project store", () => {
+  it("round-trips the evidence record and tolerates a damaged one", async () => {
+    const host = new MemoryHost();
+    const store = new ProjectStore(host);
+    const summary = {
+      version: 1 as const, trigger: "diagram" as const, generatedAt: 5, inputHash: "hash",
+      selection: { scope: ["src/**"], preset: "deep", files: 800, fileChars: 20_000, evidenceChars: 900_000 },
+      inventory: { total: 10, withSymbols: 7, byKind: { source: 10 } },
+      excerpts: { total: 4, truncated: 1, byKind: { source: 4 } },
+      omitted: { files: 6, objects: 0, knowledge: 0 },
+      coverage: ["Source text exceeds the limit."],
+      paths: ["src/app.ts"],
+      excerpted: ["src/app.ts"]
+    };
+    expect(await store.readEvidenceSummary()).toBeUndefined();
+    await store.writeEvidenceSummary(summary);
+    expect(await store.readEvidenceSummary()).toEqual(summary);
+
+    // A damaged or future-schema record is ignored instead of blocking the page.
+    host.files.set(".dext/evidence.json", "{ not json");
+    expect(await store.readEvidenceSummary()).toBeUndefined();
+    host.files.set(".dext/evidence.json", JSON.stringify({ version: 2, trigger: "diagram" }));
+    expect(await store.readEvidenceSummary()).toBeUndefined();
+  });
+
   it("saves project definitions and reports concurrent edits as conflicts", async () => {
     const store = new ProjectStore(new MemoryHost());
     const initial = await store.readDefinition();

@@ -543,9 +543,24 @@ describe("sidebar panel layout", () => {
 
   it("keeps live Process output visible without disrupting manual scrolling", async () => {
     const main = await source("src/webview/main.ts");
-    expect(main).toMatch(/function resultIsNearBottom[\s\S]*?scrollHeight - scrollTop - clientHeight <= 24/);
-    expect(main).toMatch(/function followResultIfNeeded[\s\S]*?requestAnimationFrame[\s\S]*?scrollTop = elements\.resultBody\.scrollHeight/);
-    expect(main).toMatch(/message\.type === "agentEvent" && message\.sessionId === activeConversationId[\s\S]*?const shouldFollow = resultIsNearBottom\(\);[\s\S]*?renderAgentEvent\(message\.event\);[\s\S]*?followResultIfNeeded\(shouldFollow\);/);
+    // Following the stream is reader intent, not a per-batch measurement. A
+    // batch taller than the tolerance used to make every later batch measure
+    // "not at the end" and stop following for the rest of the turn.
+    expect(main).toMatch(/let followResultEnd = true;/);
+    expect(main).toMatch(/function resultIsNearBottom[\s\S]*?scrollHeight - scrollTop - clientHeight <= RESULT_END_TOLERANCE/);
+    expect(main).toMatch(/function snapResultToBottom[\s\S]*?body\.scrollHeight - body\.clientHeight/);
+    expect(main).toMatch(/function pinResultToBottom[\s\S]*?requestAnimationFrame[\s\S]*?snapResultToBottom\(\)/);
+    expect(main).toMatch(/message\.type === "agentEvent" && message\.sessionId === activeConversationId[\s\S]*?renderAgentEvent\(message\.event\);[\s\S]*?pinResultToBottom\(\);/);
+    // A scroll the app did not start - a clamp after a disclosure shrank, a
+    // scroll-anchored adjustment, or the correction's own scrollTop write -
+    // must not cancel the pin that keeps the newest output in view.
+    const scrollListener = main.slice(
+      main.indexOf('elements.resultBody.addEventListener("scroll"'),
+      main.indexOf('elements.resultBody.addEventListener("pointerdown"')
+    );
+    expect(scrollListener).not.toContain("cancelScheduledResultScroll");
+    expect(main).toMatch(/addEventListener\("pointerup", endResultScrollGesture[\s\S]*?followResultToBottom\(\)/);
+    expect((await source("media/styles.css"))).toMatch(/#result-body \{[\s\S]*?overflow-anchor: none;/);
   });
 
   it("supports shared panel fullscreen and stop execution interactions", async () => {

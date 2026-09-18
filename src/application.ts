@@ -36,8 +36,8 @@ import { listHarnessPresets } from "./core/harnessPresets.js";
 import { SkillCatalog } from "./core/skillCatalog.js";
 
 import { RESOURCE_DIRECTORIES, resourceFileName, resourcePathSegments, resourcePrompt, type ResourceSession, type ResourceDocument, type ResourceTarget, type ResourceKind, type ResourceScope } from "./resourceSession.js";
-import { McpToolRegistry, type McpServerConfig, type McpToolConfig, type McpDiscoveredTool } from "./core/mcpRegistry.js";
-import { McpAccessTokenStore } from "./core/mcpSecrets.js";
+import { McpToolRegistry, authDiagnostic, mcpCredentialKind, redactedMcpUrl, redactedUrlQuery, type McpServerConfig, type McpToolConfig, type McpDiscoveredTool } from "./core/mcpRegistry.js";
+import { McpAccessTokenStore, type McpCredentialKind } from "./core/mcpSecrets.js";
 import { parseMcpManifest } from "./core/mcpManifest.js";
 import {
   COMPLETION_FIELDS,
@@ -53,6 +53,19 @@ import type { ProjectAiProvider } from "./core/projectAiGeneration.js";
 /** Global rather than per-workspace: the object form is rewritten in the user
  * settings file, so once is once for every window. */
 const COMPLETION_MIGRATION_KEY = "dext.completion.migrated";
+
+/** Registry diagnostics name the server they rejected. Keeping the reason lets
+ * a later "unknown API" explain the real cause instead of only "not connected". */
+function mcpRejectionReasons(diagnostics: readonly string[]): Map<string, string> {
+  const reasons = new Map<string, string>();
+  for (const message of diagnostics) {
+    const match = /^MCP server '([^']+)' (.+)$/.exec(message);
+    const name = match?.[1];
+    const reason = match?.[2];
+    if (name && reason) reasons.set(name, reason);
+  }
+  return reasons;
+}
 
 export class DextApplication {
   onApiReload: (() => void) | undefined;
@@ -79,10 +92,18 @@ export class DextApplication {
   private resourceWrite: Promise<void> = Promise.resolve();
   private globalResources: GlobalResources = { apis: [], mcps: [], rules: [], skills: [] };
   private globalDiagnostics: string[] = [];
+  /** Why a configured server was dropped, by server name; a rejected server is
+   * absent from the registry, so this is the only place that reason survives. */
+  private mcpServerRejections = new Map<string, string>();
   readonly skills = new SkillCatalog();
   readonly mcp = new McpToolRegistry();
   readonly agents: AgentProfileStore;
   private readonly agentRunner: DefaultAgentRunner;
+  /** The normalized `dext.agent.*` limits. Kept in fields because the one-shot
+   * result repair budgets itself from the same settings as any other turn
+   * rather than from a private constant. */
+  private agentTimeoutMs = DEFAULT_AGENT_TIMEOUT_MS;
+  private agentIdleTimeoutMs = DEFAULT_AGENT_IDLE_TIMEOUT_MS;
   private readonly mcpSecrets: McpAccessTokenStore | undefined;
   private readonly completionSecrets: CompletionKeyStore | undefined;
   private readonly globalState: vscode.Memento | undefined;
@@ -143,7 +164,7 @@ export class DextApplication {
       this.mcp.setAccessTokenProvider(async (server) => mcpSecrets.get(
         server.name,
         server.scope === "global" ? "global" : "workspace",
-        server.transport === "http" ? "bearer" : "token"
+        mcpCredentialKind(server)
       ));
       this.completionSecrets = new CompletionKeyStore(secretStorage, () => this.workspaceUri?.toString());
     }
@@ -196,7 +217,12 @@ export class DextApplication {
             profile: request.profile,
             cwd: request.cwd,
             prompt,
-            timeoutMs: 60_000,
+            // A repair is budgeted exactly like the turn it is repairing: the
+            // limits the user configured, not a hardcoded cap. With the default
+            // unlimited total limit it is bounded by the idle limit and by the
+            // outer turn's cancellation signal instead.
+            timeoutMs: this.agentTimeoutMs,
+            idleTimeoutMs: this.agentIdleTimeoutMs,
             ...(signal ? { signal } : {})
           })
         }).repair({ ...request, snapshot });
@@ -259,6 +285,8 @@ export class DextApplication {
       ...this.mcp.setServers(mcpManifests.servers),
       ...this.mcp.setTools(mcpManifests.tools)
     ];
+    this.mcpServerRejections = mcpRejectionReasons(mcpRegistryDiagnostics);
+    this.runtime.setMcpServerDiagnostics(mcpRegistryDiagnostics);
     diagnostics.push(...mcpManifests.diagnostics, ...mcpRegistryDiagnostics);
     const activeMcpTools = new Set(this.mcp.list().map((tool) => `${tool.server}.${tool.tool}`));
     this.registry.registerMany(
@@ -383,7 +411,7 @@ export class DextApplication {
         if (manifest.server) mcps.push({
           name: manifest.server.name,
           detail: manifest.server.transport === "http"
-            ? manifest.server.url
+            ? redactedUrlQuery(manifest.server.url)
             : manifest.server.command
         });
       } catch {
@@ -406,9 +434,11 @@ export class DextApplication {
       const value = configuration.get<number>(key, fallback);
       return Number.isInteger(value) && value >= 0 && value <= MAX_AGENT_TIMEOUT_MS ? value : fallback;
     };
+    this.agentTimeoutMs = timeout("agent.timeoutMs", DEFAULT_AGENT_TIMEOUT_MS);
+    this.agentIdleTimeoutMs = timeout("agent.idleTimeoutMs", DEFAULT_AGENT_IDLE_TIMEOUT_MS);
     this.agentRunner.setTimeouts({
-      agentTimeoutMs: timeout("agent.timeoutMs", DEFAULT_AGENT_TIMEOUT_MS),
-      agentIdleTimeoutMs: timeout("agent.idleTimeoutMs", DEFAULT_AGENT_IDLE_TIMEOUT_MS)
+      agentTimeoutMs: this.agentTimeoutMs,
+      agentIdleTimeoutMs: this.agentIdleTimeoutMs
     });
     this.workflowRuntime.setMaxConcurrency(positive("workflow.maxConcurrency", DEFAULT_MAX_CONCURRENCY));
   }
@@ -622,7 +652,7 @@ export class DextApplication {
     const response = await this.runtime.executeConversation("ask", [
       "You generate Dext MCP configuration.",
       "Read the MCP documentation or interpret the user's description and return exactly one JSON object, with no markdown fences or commentary.",
-      "Allowed shape: {name, transport:'http', url, auth?:{type:'bearer'}, timeoutMs?} or {name, transport:'stdio', command, args?, auth?:{type:'token',env:'ENV_NAME'}, timeoutMs?}.",
+      "Allowed shape: {name, transport:'http', url, auth?:{type:'bearer'}|{type:'query',name:'key'}, timeoutMs?} or {name, transport:'stdio', command, args?, auth?:{type:'token',env:'ENV_NAME'}, timeoutMs?}.",
       "Use the actual MCP endpoint or install command from the documentation; do not invent credentials.",
       documentUrl ? `Documentation URL: ${documentUrl}` : `User description: ${trimmed}`,
       documentation ? `Documentation content:\n${documentation}` : "No documentation was fetched; infer only what the URL or user description supports."
@@ -637,9 +667,14 @@ export class DextApplication {
     if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("The Agent returned an invalid MCP configuration.");
     const candidate = value as Record<string, unknown>;
     if (candidate.transport === "http" && typeof candidate.name === "string" && typeof candidate.url === "string") {
+      const auth = candidate.auth && typeof candidate.auth === "object" && !authDiagnostic(candidate.auth)
+        ? (candidate.auth as Record<string, unknown>).type === "query"
+          ? { type: "query" as const, name: (candidate.auth as Record<string, unknown>).name as string }
+          : { type: "bearer" as const }
+        : undefined;
       return {
         name: candidate.name, transport: "http", url: candidate.url,
-        ...(candidate.auth && typeof candidate.auth === "object" ? { auth: { type: "bearer" as const } } : {}),
+        ...(auth ? { auth } : {}),
         ...(typeof candidate.timeoutMs === "number" ? { timeoutMs: candidate.timeoutMs } : {})
       };
     }
@@ -946,11 +981,27 @@ export class DextApplication {
     return this.workspaceTrusted;
   }
 
-  mcpCredentialServers(transport?: "http" | "stdio"): McpServerConfig[] {
+  mcpCredentialServers(transport?: "http" | "stdio", kind?: McpCredentialKind): McpServerConfig[] {
     return this.mcp.listServers().filter((server) => {
       if (!server.auth || (transport && server.transport !== transport)) return false;
-      return true;
+      return kind === undefined || mcpCredentialKind(server) === kind;
     });
+  }
+
+  /** Every configured server plus the ones a rejected manifest dropped, so
+   * Verify can select any server and explain a rejection instead of hiding it. */
+  mcpServerChoices(): Array<{ name: string; detail: string; reason?: string }> {
+    const choices: Array<{ name: string; detail: string; reason?: string }> = this.mcp.listServers().map((server) => ({
+      name: server.name,
+      detail: server.transport === "http"
+        ? redactedMcpUrl(server)
+        : `${server.command} ${(server.args ?? []).join(" ")}`.trim()
+    }));
+    for (const [name, reason] of this.mcpServerRejections) {
+      if (choices.some((choice) => choice.name === name)) continue;
+      choices.push({ name, detail: "rejected configuration", reason });
+    }
+    return choices.sort((left, right) => left.name.localeCompare(right.name));
   }
 
   async setMcpAccessToken(serverName: string, token: string): Promise<void> {
@@ -960,7 +1011,7 @@ export class DextApplication {
       serverName,
       token,
       server.scope === "global" ? "global" : "workspace",
-      server.transport === "http" ? "bearer" : "token"
+      mcpCredentialKind(server)
     );
   }
 
@@ -1015,7 +1066,7 @@ export class DextApplication {
     await this.mcpSecrets.delete(
       serverName,
       server.scope === "global" ? "global" : "workspace",
-      server.transport === "http" ? "bearer" : "token"
+      mcpCredentialKind(server)
     );
   }
 
@@ -1123,21 +1174,23 @@ export class DextApplication {
   }
 
   async verifyMcpServer(serverName: string): Promise<void> {
-    this.assertBearerHttpServer(serverName);
-    await this.mcp.verifyServer(serverName);
-  }
-
-  private assertBearerHttpServer(serverName: string): void {
     if (!this.workspaceTrusted) throw new Error("MCP credentials require a trusted local workspace.");
-    const server = this.mcp.getServer(serverName);
-    if (server?.transport !== "http" || server.auth?.type !== "bearer") {
-      throw new Error(`MCP server '${serverName}' is not a bearer-authenticated HTTP server.`);
+    if (!this.mcp.getServer(serverName)) {
+      const rejection = this.mcpServerRejections.get(serverName);
+      throw new Error(rejection
+        ? `MCP server '${serverName}' was rejected: ${rejection}`
+        : `MCP server '${serverName}' is not configured.`);
     }
+    await this.mcp.verifyServer(serverName);
   }
 
   private assertCredentialServer(serverName: string): McpServerConfig {
     if (!this.workspaceTrusted) throw new Error("MCP credentials require a trusted local workspace.");
     const server = this.mcp.getServer(serverName);
+    if (!server) {
+      const rejection = this.mcpServerRejections.get(serverName);
+      if (rejection) throw new Error(`MCP server '${serverName}' was rejected: ${rejection}`);
+    }
     if (!server?.auth) throw new Error(`MCP server '${serverName}' does not declare a token credential.`);
     return server;
   }

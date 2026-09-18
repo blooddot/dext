@@ -1,9 +1,14 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { name, version, dext } from "../../package.json";
+import type { McpCredentialKind } from "./mcpSecrets.js";
 import type { McpProcessEvent, McpRawResult } from "./types.js";
 
 const IDENTIFIER = /^[A-Za-z0-9_.-]+$/;
 const DEFAULT_TIMEOUT_MS = 30_000;
+/** Query parameter names stay conservative so a manifest cannot smuggle an
+ * arbitrary URL or credential into the request line. */
+const QUERY_PARAMETER_NAME = /^[A-Za-z_][A-Za-z0-9_.-]*$/;
+const MAX_QUERY_PARAMETER_NAME = 64;
 // Bundled from the extension manifest; independent of the user's workspace.
 const MCP_PROTOCOL_VERSIONS = dext.mcpProtocolVersions;
 
@@ -37,11 +42,17 @@ export interface StdioMcpServerConfig {
   timeoutMs?: number;
 }
 
+export interface HttpQueryAuth {
+  type: "query";
+  /** Query parameter name the SecretStorage token is attached under at request time. */
+  name: string;
+}
+
 export interface HttpMcpServerConfig {
   name: string;
   transport: "http";
   url: string;
-  auth?: { type: "bearer" };
+  auth?: { type: "bearer" } | HttpQueryAuth;
   /** Set by Dext when loading a project/global manifest; not persisted by the manifest writer. */
   scope?: "project" | "global";
   timeoutMs?: number;
@@ -226,12 +237,60 @@ function configurationKeysDiagnostic(config: Record<string, unknown>, allowed: r
   return unexpected ? `has unsupported configuration field '${unexpected}'.` : undefined;
 }
 
-function authDiagnostic(value: unknown): string | undefined {
+const AUTH_SHAPE_DIAGNOSTIC = "auth must be exactly { type: 'bearer' } or { type: 'query', name: '<query parameter name>' }.";
+
+export function authDiagnostic(value: unknown): string | undefined {
   if (value === undefined) return undefined;
-  if (!isRecord(value) || value.type !== "bearer" || Object.keys(value).some((key) => key !== "type")) {
-    return "auth must be exactly { type: 'bearer' }.";
+  if (!isRecord(value)) return AUTH_SHAPE_DIAGNOSTIC;
+  if (value.type === "bearer") {
+    return Object.keys(value).some((key) => key !== "type") ? "auth must be exactly { type: 'bearer' }." : undefined;
   }
-  return undefined;
+  if (value.type === "query") {
+    const unexpected = Object.keys(value).find((key) => key !== "type" && key !== "name");
+    if (unexpected) return `auth with type 'query' has unsupported field '${unexpected}'.`;
+    return typeof value.name === "string" && value.name.length <= MAX_QUERY_PARAMETER_NAME && QUERY_PARAMETER_NAME.test(value.name)
+      ? undefined
+      : "auth must be { type: 'query', name: '<query parameter name>' } with a name such as 'key'.";
+  }
+  return AUTH_SHAPE_DIAGNOSTIC;
+}
+
+/** The SecretStorage entry an HTTP/stdio server reads its token from. Bearer
+ * stays the default for an HTTP server without an explicit auth block so
+ * existing stored credentials keep working. */
+export function mcpCredentialKind(server: McpServerConfig): McpCredentialKind {
+  if (server.transport !== "http") return "token";
+  return server.auth?.type === "query" ? "query" : "bearer";
+}
+
+/** The URL a request is actually sent to. A query-authenticated server keeps
+ * `server.url` credential-free and has its token attached here, encoded as a
+ * query parameter, so it can only ever appear on the wire. */
+export function mcpRequestUrl(server: HttpMcpServerConfig, accessToken?: string): string {
+  if (server.auth?.type !== "query") return server.url;
+  if (!accessToken) return server.url;
+  const url = new URL(server.url);
+  url.searchParams.set(server.auth.name, accessToken);
+  return url.toString();
+}
+
+/** Display form of any HTTP URL: a query value never survives, even when a
+ * hand-written manifest wrongly embedded a credential straight in the url. */
+export function redactedUrlQuery(value: string): string {
+  let url: URL;
+  try { url = new URL(value); } catch { return value; }
+  if (!url.search) return value;
+  for (const name of [...url.searchParams.keys()]) url.searchParams.set(name, "***");
+  return url.toString();
+}
+
+/** Display form of a server URL that never carries a credential: a
+ * query-authenticated URL renders its parameter name with a masked value. */
+export function redactedMcpUrl(server: HttpMcpServerConfig): string {
+  if (server.auth?.type !== "query") return redactedUrlQuery(server.url);
+  const url = new URL(server.url);
+  url.searchParams.set(server.auth.name, "***");
+  return url.toString();
 }
 
 function stdioAuthDiagnostic(value: unknown): string | undefined {
@@ -609,7 +668,7 @@ class StreamableHttpMcpClient {
       Accept: "application/json, text/event-stream",
       "MCP-Protocol-Version": MCP_PROTOCOL_VERSIONS.http
     });
-    if (this.accessToken) headers.set("Authorization", `Bearer ${this.accessToken}`);
+    if (this.accessToken && this.server.auth?.type !== "query") headers.set("Authorization", `Bearer ${this.accessToken}`);
     return headers;
   }
 
@@ -631,7 +690,9 @@ class StreamableHttpMcpClient {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutFor(this.server));
     try {
-      return await this.fetchImpl(this.server.url, { ...init, redirect: "manual", signal: controller.signal });
+      // Every request — including the DELETE that terminates the session — goes
+      // to the same final URL so a query credential is never dropped mid-session.
+      return await this.fetchImpl(mcpRequestUrl(this.server, this.accessToken), { ...init, redirect: "manual", signal: controller.signal });
     } catch {
       if (controller.signal.aborted) {
         throw new Error(`MCP server '${this.server.name}' timed out after ${timeoutFor(this.server)}ms.`);
@@ -801,7 +862,11 @@ export class McpToolRegistry {
         name,
         transport,
         url: value.url as string,
-        ...(value.auth !== undefined ? { auth: { type: "bearer" as const } } : {}),
+        ...(isRecord(value.auth)
+          ? { auth: value.auth.type === "query"
+            ? { type: "query" as const, name: value.auth.name as string }
+            : { type: "bearer" as const } }
+          : {}),
         ...(value.scope === "project" || value.scope === "global" ? { scope: value.scope } : {}),
         ...(timeoutMs !== undefined ? { timeoutMs } : {})
       });

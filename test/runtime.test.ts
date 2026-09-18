@@ -1218,6 +1218,41 @@ answer = ask(input=printed.text)`, registry);
 
 });
 
+describe("workflow variable reassignment", () => {
+  function prints(response: Awaited<ReturnType<WorkflowRuntime["execute"]>>): string[] {
+    return response.executions
+      .filter((execution) => execution.method.id === "print")
+      .map((execution) => (execution.result as { text: string }).text);
+  }
+
+  it("runs a counter loop instead of folding the value it started with", async () => {
+    const { registry, workflow } = setup();
+    const compiled = compileWorkflow(`count = 0
+while count < 3:
+    print(text=str(count))
+    count = count + 1`, registry);
+    expect(compiled.diagnostics).toEqual([]);
+    expect(prints(await workflow.execute(compiled.program!))).toEqual(["0", "1", "2"]);
+  });
+
+  it("reassigns a variable in straight-line code", async () => {
+    const { registry, workflow } = setup();
+    const compiled = compileWorkflow(`text = "first"
+text = "second"
+print(text=text)`, registry);
+    expect(compiled.diagnostics).toEqual([]);
+    expect(prints(await workflow.execute(compiled.program!))).toEqual(["second"]);
+  });
+
+  it("keeps a name at one type", () => {
+    const { registry } = setup();
+    const compiled = compileWorkflow('value = 1\nvalue = "two"', registry);
+    expect(compiled.diagnostics).toMatchObject([
+      { code: "dext/reassign", message: "Variable 'value' must keep type number; it cannot be reassigned to string." }
+    ]);
+  });
+});
+
 describe("formal UI workflows", () => {
   it.each(["select", "radio", "checkbox", "input", "confirm", "alert", "form"])("returns ordinary ui.%s cancellation and continues the workflow", async (action) => {
     const { registry, workflow } = setup();
@@ -1413,14 +1448,16 @@ if reply.status == "submitted":
   it("does not repair raw output above the 20k character budget", async () => {
     const { runtime } = setup();
     selectFakeAgent(runtime);
-    runtime.setAgentRunner({ run: async () => "x".repeat(20_001) });
+    // A schema-invalid object, not plain text: plain `agent` text now wraps as a
+    // valid result before repair is ever considered.
+    runtime.setAgentRunner({ run: async () => JSON.stringify({ kind: "agent", text: "x".repeat(20_001), extra: true }) });
     let repaired = false;
     runtime.setResultRepair({
       parse: parseAgentResult,
       repair: async () => { repaired = true; return { result: { kind: "agent", text: "repaired" } }; }
     });
 
-    await expect(runtime.execute(agentCall(false))).rejects.toThrow(/No 'agent' JSON object could be extracted/);
+    await expect(runtime.execute(agentCall(false))).rejects.toThrow(/extra/i);
     expect(repaired).toBe(false);
   });
 
@@ -1433,7 +1470,114 @@ if reply.status == "submitted":
       repair: async () => ({ diagnostics: "not available" })
     });
 
-    await expect(runtime.execute(agentCall(false)))
-      .rejects.toThrow(/No 'agent' JSON object could be extracted[\s\S]*invalid/);
+    // The `agent` kind is the one that wraps plain text; every other kind keeps
+    // the old diagnose-and-repair path.
+    await expect(runtime.execute({
+      kind: "invocation",
+      method: "ask",
+      source: "code",
+      arguments: [{ name: "input", value: "hi" }]
+    })).rejects.toThrow(/No 'ask' JSON object could be extracted[\s\S]*Repair failed: not available/);
+  });
+
+  it("treats explicitly null optional fields as absent instead of repairing", async () => {
+    const { runtime } = setup();
+    selectFakeAgent(runtime);
+    // Dext's Codex schema marks the optional result fields required-but-nullable, so the model
+    // answers `"patch": null` to mean "there is no patch". That must validate, not fail.
+    runtime.setAgentRunner({
+      run: async () => JSON.stringify({ kind: "agent", text: "分析完成", summary: null, patch: null, files: null })
+    });
+    let repaired = false;
+    runtime.setResultRepair({
+      parse: parseAgentResult,
+      repair: async () => { repaired = true; return { result: { kind: "agent", text: "repaired" } }; }
+    });
+
+    await expect(runtime.execute(agentCall(false))).resolves.toMatchObject({
+      result: { kind: "agent", text: "分析完成" }
+    });
+    expect(repaired).toBe(false);
+  });
+
+  it("drops nested nulls so a Codex patch result still validates", async () => {
+    const { runtime } = setup();
+    selectFakeAgent(runtime);
+    runtime.setAgentRunner({
+      run: async () => JSON.stringify({
+        kind: "agent",
+        text: "patched",
+        patch: {
+          kind: "patch",
+          title: "edit",
+          changes: [{ uri: "file:///x.ts", before: "a", after: "b", range: null, documentVersion: null, contentHash: null }]
+        },
+        files: null
+      })
+    });
+
+    const response = await runtime.execute(agentCall(false));
+    expect(response.result).toMatchObject({
+      kind: "agent",
+      patch: { kind: "patch", title: "edit", changes: [{ uri: "file:///x.ts", before: "a", after: "b" }] }
+    });
+    expect(JSON.stringify(response.result)).not.toContain("null");
+  });
+
+  it("wraps a plain-Markdown agent result as its text instead of discarding the turn", async () => {
+    const { runtime } = setup();
+    selectFakeAgent(runtime);
+    const markdown = [
+      "[DEV_PLAN_TASKLIST] T1,T2,T4",
+      "",
+      "| ID | Task | Status |",
+      "| --- | --- | --- |",
+      "| T1 | Load rules | pending |"
+    ].join("\n");
+    runtime.setAgentRunner({ run: async () => markdown });
+    const events: AgentStreamEvent[] = [];
+
+    const response = await runtime.execute(agentCall(false), [], { onAgentEvent: (event) => events.push(event) });
+
+    expect(response.result).toEqual({ kind: "agent", text: markdown });
+    expect(events.some((event) => event.title?.includes("fell back to plain-text wrapping"))).toBe(true);
+  });
+
+  it("leaves a valid agent JSON envelope on the normal path", async () => {
+    const { runtime } = setup();
+    selectFakeAgent(runtime);
+    runtime.setAgentRunner({ run: async () => JSON.stringify({ kind: "agent", text: "typed" }) });
+    const events: AgentStreamEvent[] = [];
+
+    const response = await runtime.execute(agentCall(false), [], { onAgentEvent: (event) => events.push(event) });
+
+    expect(response.result).toEqual({ kind: "agent", text: "typed" });
+    expect(events.some((event) => event.title?.includes("fell back to plain-text wrapping"))).toBe(false);
+  });
+
+  it("does not wrap a plain-text result for a non-agent kind", async () => {
+    const { runtime } = setup();
+    selectFakeAgent(runtime);
+    runtime.setAgentRunner({ run: async () => "plain text without any envelope" });
+
+    await expect(runtime.execute({
+      kind: "invocation",
+      method: "ask",
+      source: "code",
+      arguments: [{ name: "input", value: "hi" }]
+    })).rejects.toThrow(/No 'ask' JSON object could be extracted/);
+  });
+
+  it("does not wrap a plain-text result on a write-enabled Agent turn", async () => {
+    const { runtime } = setup();
+    selectFakeAgent(runtime);
+    runtime.setWorkspaceRoot(process.cwd());
+    runtime.setWorkspaceTrusted(true);
+    runtime.setAgentRunner({ run: async () => "edited files\n\n| a | b |" });
+    const events: AgentStreamEvent[] = [];
+
+    await expect(runtime.execute(agentCall(undefined), [], { onAgentEvent: (event) => events.push(event) }))
+      .rejects.toThrow(/No 'agent' JSON object could be extracted/);
+    expect(events.some((event) => event.title?.includes("fell back to plain-text wrapping"))).toBe(false);
   });
 });

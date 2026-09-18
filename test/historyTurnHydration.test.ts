@@ -49,7 +49,7 @@ function harness() {
     renderedInputSource: vi.fn(), copyButton: vi.fn(), jsonOutput: vi.fn((text: string) => text),
     renderAgentEvent: vi.fn(), renderAgentMessageItem: vi.fn(),
     updateAgentProgress: vi.fn(), syncResultToggle: vi.fn(), syncJumpToLatest: vi.fn(),
-    resultIsNearBottom: () => false, followResultIfNeeded: vi.fn(),
+    resultIsNearBottom: () => false, pinResultToBottom: vi.fn(), followResultToBottom: vi.fn(),
     requestAnimationFrame: (callback: () => void) => { const id = ++nextFrame; frames.set(id, callback); return id; },
     cancelAnimationFrame: vi.fn((id: number) => frames.delete(id)), clearInterval: vi.fn()
   };

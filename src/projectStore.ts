@@ -3,6 +3,7 @@ import { normalizeProjectObject, projectObjectSchema, type ProjectObject } from 
 import { reviewPresetSchema, type ReviewPreset } from "./core/projectContext.js";
 import { projectIntentSchema, type ProjectIntent } from "./core/projectIntent.js";
 import type { ProjectDiagramHistoryState } from "./core/projectDiagramHistory.js";
+import type { ProjectEvidenceSummary } from "./core/projectAiGeneration.js";
 import { validateProjectDiagram, type ProjectDiagram } from "./core/projectDiagram.js";
 
 /**
@@ -14,6 +15,8 @@ export const PROJECT_ARCHITECTURE_PATH = ".dext/architecture.json";
 export const PROJECT_INTENT_PATH = ".dext/project-intent.json";
 export const PROJECT_DIAGRAM_HISTORY_PATH = ".dext/diagram-history.json";
 export const PROJECT_DIAGRAMS_DIRECTORY = ".dext/diagrams";
+/** What the last evidence read handed to the model, so a later diagram can be explained. */
+export const PROJECT_EVIDENCE_PATH = ".dext/evidence.json";
 
 export function projectObjectPath(id: string): string {
   return `.dext/objects/${id}.json`;
@@ -69,6 +72,30 @@ export const projectArchitectureSchema = z.object({
   updatedAt: z.number().int().nonnegative().default(0)
 }).strict();
 export type ProjectArchitectureDocument = z.infer<typeof projectArchitectureSchema>;
+
+/**
+ * The evidence record is a diagnostic, not knowledge: it stays readable when a field is unknown and
+ * a damaged file must never block initialization or diagram generation.
+ */
+export const projectEvidenceSummarySchema = z.object({
+  version: z.literal(1),
+  trigger: z.enum(["initialize", "diagram"]),
+  generatedAt: z.number().int().nonnegative(),
+  inputHash: z.string(),
+  selection: z.object({
+    scope: z.array(z.string()).default([]),
+    preset: z.string().optional(),
+    files: z.number().int().nonnegative(),
+    fileChars: z.number().int().nonnegative(),
+    evidenceChars: z.number().int().nonnegative()
+  }).passthrough(),
+  inventory: z.object({ total: z.number().int().nonnegative(), withSymbols: z.number().int().nonnegative(), byKind: z.record(z.string(), z.number().int().nonnegative()).default({}) }).passthrough(),
+  excerpts: z.object({ total: z.number().int().nonnegative(), truncated: z.number().int().nonnegative(), byKind: z.record(z.string(), z.number().int().nonnegative()).default({}) }).passthrough(),
+  omitted: z.object({ files: z.number().int().nonnegative(), objects: z.number().int().nonnegative(), knowledge: z.number().int().nonnegative() }),
+  coverage: z.array(z.string()).default([]),
+  paths: z.array(z.string()).default([]),
+  excerpted: z.array(z.string()).default([])
+}).passthrough();
 
 export function defaultProjectDefinition(now = Date.now()): ProjectDefinition {
   return { schemaVersion: 1, version: 0, preset: { default: "engineering" }, knowledge: { enabled: false, initialized: false }, ai: {}, updatedAt: now };
@@ -137,6 +164,17 @@ export class ProjectStore {
     const raw = await this.host.readFile(PROJECT_INTENT_PATH);
     if (!raw) return undefined;
     try { return projectIntentSchema.parse(JSON.parse(raw)); } catch { return undefined; }
+  }
+
+  /** The last evidence record. `undefined` means the guess-and-check file is missing or damaged. */
+  async readEvidenceSummary(): Promise<ProjectEvidenceSummary | undefined> {
+    const raw = await this.host.readFile(PROJECT_EVIDENCE_PATH);
+    if (!raw) return undefined;
+    try { return projectEvidenceSummarySchema.parse(JSON.parse(raw)) as ProjectEvidenceSummary; } catch { return undefined; }
+  }
+
+  async writeEvidenceSummary(summary: ProjectEvidenceSummary): Promise<void> {
+    await this.host.writeFile(PROJECT_EVIDENCE_PATH, `${JSON.stringify(projectEvidenceSummarySchema.parse(summary), null, 2)}\n`);
   }
 
   async writeIntent(intent: ProjectIntent): Promise<void> {

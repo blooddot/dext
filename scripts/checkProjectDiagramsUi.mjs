@@ -96,9 +96,16 @@ try {
 
   let panelPage = "";
   let probePage = "";
-  server = createServer((request, response) => {
+  server = createServer(async (request, response) => {
+    const url = request.url ?? "/";
+    // The page stylesheet is a real asset: serving it here is what makes the layout assertions count.
+    if (url.startsWith("/editorTabs.css")) {
+      response.setHeader("Content-Type", "text/css; charset=utf-8");
+      response.end(await readFile(resolve("media/editorTabs.css"), "utf8"));
+      return;
+    }
     response.setHeader("Content-Type", "text/html; charset=utf-8");
-    response.end(request.url?.startsWith("/probe") ? probePage : panelPage);
+    response.end(url.startsWith("/probe") ? probePage : panelPage);
   });
   await new Promise((done) => server.listen(0, "127.0.0.1", done));
   const origin = `http://127.0.0.1:${server.address().port}`;
@@ -163,7 +170,13 @@ try {
   // 3. Rendered HTML bridge: fonts, explorer, export, version banner
   const postRendered = async (kind, options = {}) => {
     const value = fixtures[kind];
-    await evaluate(`window.postMessage({type:"projectDiagramRendered",diagramId:${JSON.stringify(value.id)},requestedVersion:${options.requestedVersion ?? value.version},displayedVersion:${options.displayedVersion ?? value.version},usedLastGood:${Boolean(options.usedLastGood)},html:${JSON.stringify(htmlByKind[kind])},mapping:{reverseIds:{"n-1":"${value.nodes[0].id}"}},receipt:{status:"passed",issues:[]},updatedAt:Date.now()${options.error ? `,error:${JSON.stringify(options.error)}` : ""}},"*")`);
+    // The host sends one detail record per node so a card click can render in place.
+    const nodes = value.nodes.map((entry) => ({
+      id: entry.id, label: entry.label, role: entry.role, semanticIds: [],
+      description: `描述 ${entry.id}`,
+      evidence: [{ path: `src/${entry.id}.ts`, line: 1 }]
+    }));
+    await evaluate(`window.postMessage({type:"projectDiagramRendered",diagramId:${JSON.stringify(value.id)},requestedVersion:${options.requestedVersion ?? value.version},displayedVersion:${options.displayedVersion ?? value.version},usedLastGood:${Boolean(options.usedLastGood)},html:${JSON.stringify(htmlByKind[kind])},mapping:{reverseIds:{"n-1":"${value.nodes[0].id}"}},nodes:${JSON.stringify(nodes)},receipt:{status:"passed",issues:[]},updatedAt:Date.now()${options.error ? `,error:${JSON.stringify(options.error)}` : ""}},"*")`);
     await waitForFrameMessage('message && message.type === "dext-diagram-ready"', `ready for ${kind}`);
     const ready = await evaluate('window.__fromFrame.find(function(message){return message.type==="dext-diagram-ready";})');
     assert.equal(ready.archify, true, `${kind}: Archify global`);
@@ -171,6 +184,64 @@ try {
   };
   await postRendered("architecture");
   assert.equal(await evaluate('!document.querySelector("[data-diagram-frame]").hidden'), true);
+
+  // 3b. Fullscreen: the webview host refuses the Fullscreen API, so focus mode must fill the view
+  // and always offer a way back out.
+  assert.equal(await evaluate('document.querySelector("[data-diagram-frame]").getAttribute("allow")'), "fullscreen");
+  await evaluate('document.querySelector("[data-diagram-action=fullscreen]").click()');
+  await sleep(200);
+  assert.equal(await evaluate('document.querySelector("[data-diagram-action=fullscreen]").textContent'), "Exit fullscreen", "fullscreen label");
+  assert.equal(await evaluate('!document.querySelector("[data-diagram-action=exit-fullscreen]").hidden'), true, "in-view exit control");
+  const focused = await evaluate('document.body.classList.contains("diagram-focus") || document.fullscreenElement !== null');
+  assert.equal(focused, true, "fullscreen mode engaged");
+  // The exit control must be legible and clickable on top of the viewer, not just present in the DOM.
+  assert.equal(await evaluate('(function(){var b=document.querySelector("[data-diagram-action=exit-fullscreen]");var r=b.getBoundingClientRect();var top=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);var s=getComputedStyle(b);return top===b && r.width>0 && r.height>0 && s.color!=="rgba(0, 0, 0, 0)" && s.backgroundColor!=="rgba(0, 0, 0, 0)";})()'), true, "exit control is hit-testable");
+  await writeFile(join(artifacts, "architecture-fullscreen.png"), Buffer.from((await send("Page.captureScreenshot")).data, "base64"));
+  await evaluate('document.querySelector("[data-diagram-action=exit-fullscreen]").click()');
+  await sleep(200);
+  assert.equal(await evaluate('document.querySelector("[data-diagram-action=fullscreen]").textContent'), "Fullscreen", "fullscreen label restored");
+  assert.equal(await evaluate('document.body.classList.contains("diagram-focus") || document.fullscreenElement !== null'), false, "fullscreen mode left");
+
+  // 3c. Clicking a card shows node details in the page; opening a file stays an explicit choice.
+  await evaluate('window.postMessage({type:"dext-diagram-node",nodeId:"web"},"*")');
+  await sleep(100);
+  assert.equal(await evaluate('!document.querySelector("[data-diagram-node]").hidden'), true, "node panel visible");
+  assert.equal(await evaluate('document.querySelector("[data-diagram-node-label]").textContent'), "Web 前端");
+  assert.equal(await evaluate('document.querySelector("[data-diagram-node]").textContent.includes("描述 web")'), true);
+  assert.equal(await evaluate('document.querySelectorAll("[data-diagram-evidence-path]").length'), 1);
+  const nodeClip = await evaluate('(function(){var r=document.querySelector("[data-diagram-node]").getBoundingClientRect();return {x:Math.max(0,r.x+scrollX),y:Math.max(0,r.y+scrollY),width:r.width,height:r.height};})()');
+  await writeFile(join(artifacts, "architecture-node.png"), Buffer.from((await send("Page.captureScreenshot", { clip: { ...nodeClip, scale: 1 } })).data, "base64"));
+  assert.equal(await evaluate('window.messages.some(function(message){return message.type==="projectDiagramFocus";})'), false, "a card click never opens a file");
+  await evaluate('document.querySelector("[data-diagram-evidence-path]").click()');
+  await waitForHostMessage('message.type === "projectDiagramEvidence" && message.path === "src/web.ts"', "evidence action");
+  assert.equal(await evaluate('document.querySelector("[data-diagram-action=close-node]").click(); document.querySelector("[data-diagram-node]").hidden'), true, "node panel closes");
+
+  // 3d. The evidence record is inspectable, and a listed path opens only when the reader clicks it.
+  const evidenceRecord = {
+    version: 1, trigger: "initialize", generatedAt: Date.now(), inputHash: "hash",
+    selection: { scope: [], preset: "standard", files: 600, fileChars: 16000, evidenceChars: 600000 },
+    inventory: { total: 3, withSymbols: 2, byKind: { source: 3 } },
+    excerpts: { total: 2, truncated: 1, byKind: { source: 2 } },
+    omitted: { files: 1, objects: 0, knowledge: 0 },
+    coverage: ["Source text exceeds the limit."],
+    paths: ["src/web.ts", "src/api.ts", "src/db.ts"],
+    excerpted: ["src/web.ts", "src/api.ts"]
+  };
+  assert.equal(await evaluate('document.querySelector("[data-diagram-evidence]").hidden'), true, "no record before a run");
+  await evaluate(`window.postMessage({type:"projectEvidenceSummary",summary:${JSON.stringify(evidenceRecord)}},"*")`);
+  await sleep(100);
+  assert.equal(await evaluate('!document.querySelector("[data-diagram-evidence]").hidden'), true, "evidence record shows");
+  assert.equal(await evaluate('document.body.textContent.includes("Read in full or in part (2)")'), true, "excerpt count");
+  assert.equal(await evaluate('document.body.textContent.includes("Listed without an excerpt (1)")'), true, "listed-only count");
+  assert.equal(await evaluate('document.querySelectorAll("[data-evidence-path]").length'), 3);
+  assert.equal(await evaluate('window.messages.some(function(message){return message.type==="projectEvidenceOpen";})'), false, "a listed path opens nothing on its own");
+  await evaluate('document.querySelector("[data-evidence-path=\\"src/db.ts\\"]").click()');
+  await waitForHostMessage('message.type === "projectEvidenceOpen" && message.path === "src/db.ts"', "evidence path open");
+  await evaluate('document.querySelector("[data-diagram-evidence]").open = true');
+  await sleep(100);
+  assert.equal(await evaluate('document.querySelector("[data-evidence-scope]").textContent.includes("Depth standard") && document.querySelector("[data-evidence-scope]").textContent.includes("600000 chars")'), true, "scope and budgets shown");
+  assert.equal(await evaluate('document.querySelector("[data-diagram-evidence]").textContent.includes("3 candidates (source 3)")'), true, "inventory facts shown");
+  await writeFile(join(artifacts, "architecture-evidence.png"), Buffer.from((await send("Page.captureScreenshot")).data, "base64"));
   await evaluate('document.querySelector("[data-diagram-export-format]").value="svg";document.querySelector("[data-diagram-action=export]").click()');
   await waitForHostMessage('message.type === "projectDiagramExport" && message.format === "svg"', "SVG export");
   const svgExport = await evaluate('window.messages.find(function(message){return message.type==="projectDiagramExport"&&message.format==="svg";})');
@@ -245,7 +316,7 @@ try {
   assert.equal(resetResult.zoom, probeReady.zoom, "native reset restores the initial scale");
   await writeFile(join(artifacts, "native-viewer.png"), Buffer.from((await send("Page.captureScreenshot")).data, "base64"));
 
-  console.log("PASS: five native Archify diagram kinds under the webview CSP; uninitialized/empty states; diagram selection; native fonts, finder, zoom and reset; HTML/SVG export bridge; last-good version labelling; narrow layout. Screenshots: .tmp-tb/project-diagrams-ui");
+  console.log("PASS: five native Archify diagram kinds under the webview CSP; uninitialized/empty states; diagram selection; fullscreen focus mode; in-place node details with explicit evidence actions; native fonts, finder, zoom and reset; HTML/SVG export bridge; last-good version labelling; narrow layout. Screenshots: .tmp-tb/project-diagrams-ui");
 } finally {
   server?.close();
   try { await shutdown?.(); } catch {}

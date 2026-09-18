@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   buildProjectEvidencePackage,
+  compareProjectEvidencePaths,
   parseProjectAiResponse,
   parseProjectDiagramResponse,
   ProjectAiGenerationError,
   ProjectAiGenerationService,
+  projectEvidenceFileRank,
+  summarizeProjectEvidence,
   validateDiagramSemantics,
   validateProjectAiModel,
   type ProjectAiActivityEvent,
@@ -74,6 +77,113 @@ describe("Project evidence package", () => {
 
   it("rejects invalid limits instead of silently changing the contract", () => {
     expect(() => buildProjectEvidencePackage({ projectName: "Example", files }, { maxFiles: 0 })).toThrowError(ProjectAiGenerationError);
+  });
+
+  it("summarizes one evidence read so a later diagram can be explained", () => {
+    const files = [
+      { path: "README.md", content: "# Example\nA task application." },
+      { path: "package.json", content: '{"name":"example"}' },
+      { path: "src/app.ts", content: "export class App {}\n" },
+      { path: "src/core/deep.ts", content: `${"// filler line\n".repeat(600)}export class Deep {}\n` }
+    ];
+    const packaged = buildProjectEvidencePackage({ projectName: "Example", files, scope: ["src/**"], preset: "deep" }, { maxTotalChars: 20_000, maxFileChars: 1_000, maxFiles: 3 });
+    const summary = summarizeProjectEvidence(packaged, { trigger: "diagram", generatedAt: 42 });
+    expect(summary).toMatchObject({ version: 1, trigger: "diagram", generatedAt: 42, inputHash: packaged.inputHash });
+    expect(summary.selection).toEqual({ scope: ["src/**"], preset: "deep", files: 3, fileChars: 1_000, evidenceChars: 20_000 });
+    expect(summary.inventory.total).toBe(4);
+    expect(summary.inventory.byKind).toMatchObject({ source: 2, readme: 1, manifest: 1 });
+    expect(summary.inventory.withSymbols).toBeGreaterThan(0);
+    expect(summary.excerpts.total).toBe(packaged.files.length);
+    // Every candidate stays inspectable, and the excerpt list marks which claims can carry a line.
+    expect(summary.paths).toHaveLength(4);
+    expect(summary.excerpted).toEqual(packaged.files.map((file) => file.path));
+    expect(summary.excerpted.length).toBeLessThan(summary.paths.length);
+  });
+
+  it("orders evidence by ownership and kind so a docs tree cannot outrank the project it documents", () => {
+    expect(projectEvidenceFileRank("src/core/agentRunner.ts")).toBe(0);
+    expect(projectEvidenceFileRank("docs/development.md")).toBe(1);
+    expect(projectEvidenceFileRank("test/archifyAdapter.test.ts")).toBe(2);
+    expect(projectEvidenceFileRank("vendor/project-diagrams/archify/renderers/lifecycle/README.md")).toBe(3);
+    const ordered = ["vendor/pkg/README.md", "docs/guide.md", "src/core/a.ts", "README.md", "test/a.test.ts"].sort(compareProjectEvidencePaths);
+    expect(ordered).toEqual(["src/core/a.ts", "README.md", "docs/guide.md", "test/a.test.ts", "vendor/pkg/README.md"]);
+  });
+
+  it("reserves evidence budget for project source when documentation is abundant", () => {
+    const many = [
+      ...Array.from({ length: 40 }, (_, index) => ({ path: `docs/guide-${index}.md`, content: "d".repeat(4_000) })),
+      ...Array.from({ length: 10 }, (_, index) => ({ path: `vendor/pkg-${index}/README.md`, content: "v".repeat(4_000) })),
+      { path: "README.md", content: "r".repeat(4_000) },
+      { path: "package.json", content: '{"name":"example"}' },
+      ...Array.from({ length: 10 }, (_, index) => ({ path: `src/core/module-${index}.ts`, content: "s".repeat(4_000) }))
+    ];
+    // Explicit limits keep the budget tight, so the reserve has to do real work instead of
+    // everything fitting and the vendored filler surviving on leftover room.
+    const packaged = buildProjectEvidencePackage({ projectName: "Example", files: many }, { maxTotalChars: 120_000, maxFileChars: 8_000 });
+    const kinds = packaged.files.map((file) => file.kind);
+    // Documentation is still evidence, but code has to survive for structure diagrams to exist.
+    expect(kinds).toContain("readme");
+    expect(kinds).toContain("source");
+    expect(packaged.files.some((file) => file.path.startsWith("src/"))).toBe(true);
+    expect(packaged.files.some((file) => file.path.startsWith("vendor/"))).toBe(false);
+  });
+
+  it("lists every candidate in the inventory even when the text budget only covers a few", () => {
+    const many = Array.from({ length: 30 }, (_, index) => ({
+      path: `src/mod-${index}/service.ts`,
+      content: `export class Service${index} {}\n${"// filler line for the excerpt budget\n".repeat(200)}`
+    }));
+    const packaged = buildProjectEvidencePackage({ projectName: "Example", files: many }, { maxTotalChars: 40_000, maxFileChars: 4_000 });
+    // The inventory names the whole module surface; the excerpt half stays bounded.
+    expect(packaged.inventory).toHaveLength(30);
+    expect(packaged.files.length).toBeLessThan(30);
+    expect(packaged.inventory[0]).toMatchObject({ path: "src/mod-0/service.ts", kind: "source" });
+    expect(packaged.inventory[0]?.symbols).toContain("Service0");
+    expect(packaged.inventory.every((entry) => entry.lines > 1)).toBe(true);
+    expect(JSON.stringify(packaged).length).toBeLessThanOrEqual(40_000);
+  });
+
+  it("accepts a path-only citation for an inventory entry and rejects a line it never read", () => {
+    const files = [
+      { path: "README.md", content: "# Example\nA task application." },
+      { path: "package.json", content: '{"name":"example"}' },
+      { path: "src/app.ts", content: "export class App {}\n" },
+      ...Array.from({ length: 5 }, (_, index) => ({ path: `src/core/part-${index}.ts`, content: `export class Part${index} {}\n` })),
+      // Ranked last inside its directory, so the excerpt budget runs out before it.
+      { path: "src/core/zz-big.ts", content: `${"// filler line\n".repeat(600)}export class Deep {}\n` }
+    ];
+    // Three excerpts only: README, the manifest and the first source, so the tail is inventory-only.
+    const input = buildProjectEvidencePackage({ projectName: "Example", files }, { maxTotalChars: 20_000, maxFileChars: 1_000, maxFiles: 3 });
+    expect(input.inventory.map((entry) => entry.path)).toContain("src/core/zz-big.ts");
+    expect(input.files.map((file) => file.path)).not.toContain("src/core/zz-big.ts");
+
+    const model = validModel(input);
+    model.diagrams[0]!.nodes[0]!.evidence = [{ path: "src/core/zz-big.ts" }];
+    expect(validateProjectAiModel(model, input).filter((error) => error.includes("zz-big.ts"))).toEqual([]);
+
+    // A line number is a claim about text the model was given, so it must be inside the excerpt.
+    model.diagrams[0]!.nodes[0]!.evidence = [{ path: "src/core/zz-big.ts", line: 400 }];
+    expect(validateProjectAiModel(model, input).some((error) => error.includes("outside the supplied excerpt"))).toBe(true);
+  });
+
+  it("reads entry points first and samples every source directory instead of one folder", () => {
+    const files = [
+      { path: "src/core/alpha.ts", content: "export class Alpha {}\n" },
+      { path: "src/core/beta.ts", content: "export class Beta {}\n" },
+      { path: "src/core/gamma.ts", content: "export class Gamma {}\n" },
+      { path: "src/core/delta.ts", content: "export class Delta {}\n" },
+      { path: "src/web/one.ts", content: "export class One {}\n" },
+      { path: "src/web/two.ts", content: "export class Two {}\n" },
+      { path: "src/extension.ts", content: "export function activate() {}\n" }
+    ];
+    const ranked = buildProjectEvidencePackage({ projectName: "Example", files });
+    expect(ranked.inventory[0]?.path).toBe("src/extension.ts");
+
+    // Alphabetical order would spend the whole excerpt budget inside src/core.
+    const tight = buildProjectEvidencePackage({ projectName: "Example", files }, { maxTotalChars: 8_000, maxFileChars: 2_000, maxObjects: 0, maxKnowledge: 0 });
+    const directories = new Set(tight.files.filter((file) => file.kind === "source").map((file) => file.path.split("/").slice(0, -1).join("/")));
+    expect(directories.size).toBeGreaterThan(1);
+    expect(tight.files.some((file) => file.path.startsWith("src/web/"))).toBe(true);
   });
 });
 
@@ -178,7 +288,7 @@ describe("Project AI generation service", () => {
     const result = await new ProjectAiGenerationService(provider, { timeoutMs: 2_000, now: () => 42 }).generate(input);
     expect(calls).toBe(2);
     expect(result.metadata.attempts).toBe(2);
-    expect(result.metadata.promptVersion).toBe("project-knowledge-2");
+    expect(result.metadata.promptVersion).toBe("project-knowledge-4");
     expect(result.intent.brief.origin).toBe("inferred");
     expect(result.intent.brief.review).toBe("draft");
     expect(result.intent.generatedAt).toBe(42);
@@ -237,7 +347,7 @@ describe("Project AI generation service", () => {
     expect(result.diagram.id).toBe("architecture");
     expect(result.diagram.kind).toBe("architecture");
     expect(result.diagram.version).toBe(0);
-    expect(result.metadata.promptVersion).toBe("project-diagram-1");
+    expect(result.metadata.promptVersion).toBe("project-diagram-2");
   });
 
   it("accepts a requirement the evidence package truncated to its own budget", async () => {

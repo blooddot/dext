@@ -2177,7 +2177,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           <button id="result-fullscreen" class="icon-button panel-fullscreen" type="button" title="Maximize Conversation" aria-label="Maximize Conversation"><i class="codicon codicon-screen-full"></i></button>
         </div>
       </div>
-      <div id="result-body" class="collapsible-body result-body"><div id="result"></div></div>
+      <div id="result-body" class="collapsible-body result-body" tabindex="-1"><div id="result"></div></div>
     </section>
 
     <section id="input-section" class="input-section">

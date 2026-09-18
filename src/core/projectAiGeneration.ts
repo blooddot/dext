@@ -6,8 +6,8 @@ import { projectIntentSchema, validateProjectIntent, type ProjectIntent, type Pr
 import { validateProjectDiagram, type ProjectDiagram, type ProjectDiagramEvidence, type ProjectDiagramKind } from "./projectDiagram.js";
 import type { AgentTokenUsage } from "./types.js";
 
-export const PROJECT_AI_PROMPT_VERSION = "project-knowledge-2";
-export const PROJECT_DIAGRAM_PROMPT_VERSION = "project-diagram-1";
+export const PROJECT_AI_PROMPT_VERSION = "project-knowledge-4";
+export const PROJECT_DIAGRAM_PROMPT_VERSION = "project-diagram-2";
 
 export interface ProjectEvidenceFileInput {
   /** Workspace-relative file path. Absolute paths and traversal are never sent. */
@@ -34,6 +34,10 @@ export interface ProjectEvidenceInput {
   requirement?: string;
   /** Host-provided coverage notes, such as file limits or skipped directories. */
   coverage?: readonly string[];
+  /** Scope globs the host actually applied; empty means the built-in set. */
+  scope?: readonly string[];
+  /** Depth preset the host applied, when it configured one. */
+  preset?: string;
 }
 
 export interface ProjectEvidenceLimits {
@@ -44,6 +48,7 @@ export interface ProjectEvidenceLimits {
   maxKnowledge?: number;
   maxRequirementChars?: number;
   maxSymbolsPerFile?: number;
+  maxInventoryEntries?: number;
 }
 
 export interface ProjectEvidenceFile {
@@ -58,10 +63,26 @@ export interface ProjectEvidenceFile {
   symbols: string[];
 }
 
+/**
+ * The cheap half of the evidence: every candidate is listed by path, kind, size and declared
+ * symbols, so the model knows the whole module surface, while only the excerpt half spends the text
+ * budget. A path is citable on its own; a line number still requires a supplied excerpt.
+ */
+export interface ProjectEvidenceInventoryEntry {
+  path: string;
+  kind: NonNullable<ProjectEvidenceFileInput["kind"]>;
+  lines: number;
+  symbols?: readonly string[];
+}
+
 export interface ProjectEvidencePackage {
   schemaVersion: 2;
   projectName: string;
   files: ProjectEvidenceFile[];
+  /** Every candidate the host handed over, including files without an excerpt. */
+  inventory: ProjectEvidenceInventoryEntry[];
+  /** What the host chose to read, so one run stays reproducible and explainable. */
+  selection: ProjectEvidenceSelection;
   /** Accepted knowledge objects, bounded and redacted. */
   objects: Array<Pick<ProjectObject, "id" | "canonicalName" | "displayName" | "aliases" | "description" | "confirmation" | "version" | "evidence">>;
   /** Existing semantic ids that diagrams may reference without redefining them. */
@@ -69,10 +90,75 @@ export interface ProjectEvidencePackage {
   /** User requirement for on-demand diagram generation. */
   requirement?: string;
   coverage: string[];
+  /** `files` counts candidates that received no excerpt, not candidates missing from the inventory. */
   omitted: { files: number; objects: number; knowledge: number };
   inputHash: string;
   /** Serialized character count, including package metadata, for budget enforcement. */
   characterCount: number;
+}
+
+/** The scope and budgets one evidence read used. */
+export interface ProjectEvidenceSelection {
+  /** Explicit scope globs; empty means the built-in README/documentation/manifest/source set. */
+  scope: string[];
+  preset?: string;
+  files: number;
+  fileChars: number;
+  evidenceChars: number;
+}
+
+/**
+ * The persisted, bounded record of one evidence read: enough for a reader to see what the model was
+ * given, and for a later run to explain a different diagram.
+ */
+export interface ProjectEvidenceSummary {
+  version: 1;
+  trigger: "initialize" | "diagram";
+  generatedAt: number;
+  inputHash: string;
+  selection: ProjectEvidenceSelection;
+  inventory: { total: number; withSymbols: number; byKind: Record<string, number> };
+  excerpts: { total: number; truncated: number; byKind: Record<string, number> };
+  omitted: { files: number; objects: number; knowledge: number };
+  coverage: string[];
+  /** Ranked candidates, so the surface the model was told about stays inspectable. */
+  paths: string[];
+  /** Candidates that received text, so the reader knows which claims can carry line numbers. */
+  excerpted: string[];
+}
+
+function countByKind(entries: readonly { kind: string }[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const entry of entries) counts[entry.kind] = (counts[entry.kind] ?? 0) + 1;
+  return counts;
+}
+
+/** Pure summary of one package; the host persists it and the page renders it. */
+export function summarizeProjectEvidence(
+  packaged: ProjectEvidencePackage,
+  meta: { trigger: "initialize" | "diagram"; generatedAt: number }
+): ProjectEvidenceSummary {
+  return {
+    version: 1,
+    trigger: meta.trigger,
+    generatedAt: meta.generatedAt,
+    inputHash: packaged.inputHash,
+    selection: packaged.selection,
+    inventory: {
+      total: packaged.inventory.length,
+      withSymbols: packaged.inventory.filter((entry) => (entry.symbols?.length ?? 0) > 0).length,
+      byKind: countByKind(packaged.inventory)
+    },
+    excerpts: {
+      total: packaged.files.length,
+      truncated: packaged.files.filter((file) => file.truncated).length,
+      byKind: countByKind(packaged.files)
+    },
+    omitted: { ...packaged.omitted },
+    coverage: [...packaged.coverage],
+    paths: packaged.inventory.map((entry) => entry.path),
+    excerpted: packaged.files.map((file) => file.path)
+  };
 }
 
 export class ProjectAiGenerationError extends Error {
@@ -112,12 +198,109 @@ function boundedInteger(value: number | undefined, fallback: number, minimum: nu
   return value;
 }
 
-function fileKind(file: ProjectEvidenceFileInput): ProjectEvidenceFile["kind"] {
-  if (file.kind) return file.kind;
-  if (/(?:^|\/)readme(?:\.[^/]*)?$/i.test(file.path)) return "readme";
-  if (/(?:^|\/)(?:package\.json|cargo\.(?:toml|lock)|pyproject\.toml|go\.mod|pom\.xml|.*\.csproj)$/i.test(file.path)) return "manifest";
-  if (/\.(?:md|mdx|rst|txt)$/i.test(file.path)) return "document";
+const MANIFEST_PATH = /(?:^|\/)(?:package\.json|cargo\.(?:toml|lock)|pyproject\.toml|go\.mod|pom\.xml|.*\.csproj)$/i;
+const README_PATH = /(?:^|\/)readme(?:\.[^/]*)?$/i;
+const DOCUMENT_PATH = /\.(?:md|mdx|rst|txt)$/i;
+
+/** Path-only classification, so a host can order candidates before reading them. */
+export function projectEvidenceFileKind(path: string): ProjectEvidenceFile["kind"] {
+  if (README_PATH.test(path)) return "readme";
+  if (MANIFEST_PATH.test(path)) return "manifest";
+  if (DOCUMENT_PATH.test(path)) return "document";
   return "source";
+}
+
+function fileKind(file: ProjectEvidenceFileInput): ProjectEvidenceFile["kind"] {
+  return file.kind ?? projectEvidenceFileKind(file.path);
+}
+
+/**
+ * Vendored code and generated bundles are legitimate evidence, but a third-party README must never
+ * outrank the project's own files: a documentation-heavy workspace previously filled the whole
+ * evidence budget with `vendor/**` readmes and left the model without a single source excerpt.
+ */
+const THIRD_PARTY_EVIDENCE = /(?:^|\/)(?:vendor|vendors|third[_-]?party|thirdparty|external|extern|deps|subprojects|bower_components|jspm_packages|site-packages|\.venv|venv)(?:\/|$)/i;
+/** Tooling, fixtures and tests describe the project but are not its product code. */
+const TOOLING_EVIDENCE = /(?:^|\/)(?:tests?|specs?|__tests__|__mocks__|e2e|scripts?|examples?|samples?|benchmarks?|fixtures?|demo|demos)(?:\/|$)/i;
+/** Conventional product-code roots, checked before tooling inside an unrouted package. */
+const PRODUCT_EVIDENCE = /^(?:src|lib|app|apps|packages|internal|server|client|core|modules|cmd|pkg|plugin|extension)\//i;
+
+/**
+ * Stable evidence priority for one path: 0 product code, 1 other project files, 2 tooling and
+ * fixtures, 3 third-party or vendored content. Used for ordering only; never to exclude a file.
+ */
+export function projectEvidenceFileRank(path: string): number {
+  if (THIRD_PARTY_EVIDENCE.test(path)) return 3;
+  if (TOOLING_EVIDENCE.test(path)) return 2;
+  return PRODUCT_EVIDENCE.test(path) ? 0 : 1;
+}
+
+const EVIDENCE_KIND_ORDER: Record<ProjectEvidenceFile["kind"], number> = { readme: 0, manifest: 1, document: 2, source: 3 };
+
+/**
+ * Entry points are what a reader opens first, and naming them keeps a deep architecture diagram
+ * grounded in the file the product actually starts from.
+ */
+const ENTRY_POINT_FILE = /(?:^|\/)(?:index|main|mod|app|cli|extension|server|__main__|__init__)\.(?:[cm]?[jt]sx?|py|rs|go|rb|java|kt|cs|c|h|cpp)$/i;
+const ENTRY_POINT_DIRECTORY = /^(?:cmd|bin|src\/bin)\//i;
+
+export function isProjectEntryPoint(path: string): boolean {
+  return ENTRY_POINT_FILE.test(path) || ENTRY_POINT_DIRECTORY.test(path);
+}
+
+/**
+ * One ordering contract for both the host read window and the package budget. Ownership, entry
+ * points and kind all outrank the path, so a `docs/` tree can never push the project README,
+ * manifest or entry point out of the window just because its name sorts earlier.
+ */
+export function compareProjectEvidencePaths(leftPath: string, rightPath: string): number {
+  return projectEvidenceFileRank(leftPath) - projectEvidenceFileRank(rightPath)
+    || Number(isProjectEntryPoint(rightPath)) - Number(isProjectEntryPoint(leftPath))
+    || EVIDENCE_KIND_ORDER[projectEvidenceFileKind(leftPath)] - EVIDENCE_KIND_ORDER[projectEvidenceFileKind(rightPath)]
+    || leftPath.localeCompare(rightPath);
+}
+
+/**
+ * Round-robin across directories so a text budget samples the whole tree instead of the first
+ * alphabetically complete folder. The ranking still decides the order of visits inside one folder.
+ */
+function diversifyByDirectory(files: readonly ProjectEvidenceFileInput[]): ProjectEvidenceFileInput[] {
+  const groups = new Map<string, ProjectEvidenceFileInput[]>();
+  for (const file of files) {
+    const separator = file.path.lastIndexOf("/");
+    const directory = separator < 0 ? "" : file.path.slice(0, separator);
+    const bucket = groups.get(directory);
+    if (bucket) bucket.push(file);
+    else groups.set(directory, [file]);
+  }
+  const queues = [...groups.values()];
+  const ordered: ProjectEvidenceFileInput[] = [];
+  for (let index = 0; ordered.length < files.length; index += 1) {
+    let added = false;
+    for (const queue of queues) {
+      const next = queue[index];
+      if (next) { ordered.push(next); added = true; }
+    }
+    if (!added) break;
+  }
+  return ordered;
+}
+
+/**
+ * Cheap declaration names for the inventory. This is deliberately not a parser: it names what a
+ * reader greps for, and any symbol the model cites is still checked against the entry.
+ */
+const DECLARATION = /^[ \t]*(?:export\s+)?(?:declare\s+|abstract\s+|public\s+|private\s+|protected\s+|static\s+|async\s+|final\s+)*(?:class|interface|type|enum|struct|trait|def|func|function|fn|namespace|module)\s+([A-Za-z_$][\w$]*)/gm;
+const SYMBOL_SCAN_CHARS = 64_000;
+
+function declaredSymbols(text: string, limit: number): string[] {
+  const symbols = new Set<string>();
+  if (limit <= 0) return [];
+  for (const match of text.slice(0, SYMBOL_SCAN_CHARS).matchAll(DECLARATION)) {
+    if (match[1]) symbols.add(match[1]);
+    if (symbols.size >= limit) break;
+  }
+  return [...symbols];
 }
 
 /**
@@ -126,18 +309,27 @@ function fileKind(file: ProjectEvidenceFileInput): ProjectEvidenceFile["kind"] {
  * before serialization, with omission counts retained instead of hiding incomplete coverage.
  */
 export function buildProjectEvidencePackage(input: ProjectEvidenceInput, limits: ProjectEvidenceLimits = {}): ProjectEvidencePackage {
-  const maxFiles = boundedInteger(limits.maxFiles, 80, 1, 1000);
-  const maxFileChars = boundedInteger(limits.maxFileChars, 12_000, 64, 262_144);
-  const maxTotalChars = boundedInteger(limits.maxTotalChars, 120_000, 2048, 2_000_000);
+  const maxFiles = boundedInteger(limits.maxFiles, 600, 1, 1000);
+  const maxFileChars = boundedInteger(limits.maxFileChars, 16_000, 64, 262_144);
+  const maxTotalChars = boundedInteger(limits.maxTotalChars, 600_000, 2048, 2_000_000);
   const maxObjects = boundedInteger(limits.maxObjects, 80, 0, 1000);
   const maxKnowledge = boundedInteger(limits.maxKnowledge, 160, 0, 2000);
   const maxRequirementChars = boundedInteger(limits.maxRequirementChars, 4000, 0, 20_000);
   const maxSymbols = boundedInteger(limits.maxSymbolsPerFile, 100, 0, 1000);
+  const maxInventoryEntries = boundedInteger(limits.maxInventoryEntries, 2000, 0, 10_000);
   const requirement = (input.requirement ?? "").trim().slice(0, maxRequirementChars);
   const result: ProjectEvidencePackage = {
     schemaVersion: 2,
     projectName: (input.projectName ?? "Project").slice(0, 200),
     files: [],
+    inventory: [],
+    selection: {
+      scope: [...(input.scope ?? [])],
+      ...(input.preset ? { preset: input.preset } : {}),
+      files: maxFiles,
+      fileChars: maxFileChars,
+      evidenceChars: maxTotalChars
+    },
     objects: [],
     knowledge: [],
     ...(requirement ? { requirement: redact(requirement) } : {}),
@@ -147,27 +339,81 @@ export function buildProjectEvidencePackage(input: ProjectEvidenceInput, limits:
     characterCount: maxTotalChars
   };
   const fits = (): boolean => JSON.stringify(result).length <= maxTotalChars;
-  const rank = { readme: 0, manifest: 1, document: 2, source: 3 };
-  const files = [...input.files].sort((left, right) => rank[fileKind(left)] - rank[fileKind(right)] || left.path.localeCompare(right.path));
+  const ranked = [...input.files].sort((left, right) => compareProjectEvidencePaths(left.path, right.path));
+  /**
+   * The inventory is the cheap half of the evidence: every candidate is listed by path, kind, size
+   * and declared symbols so the model knows the module surface it cannot afford to read. It is
+   * bounded to a share of the budget, because a path list must never crowd out the excerpts that
+   * make a claim checkable.
+   */
+  const inventoryBudget = Math.floor(maxTotalChars * 0.15);
+  const inventoryPaths = new Set<string>();
+  let inventoryChars = 0;
+  for (const file of ranked) {
+    if (result.inventory.length >= maxInventoryEntries) break;
+    if (!isProjectEvidencePath(file.path) || isExcludedProjectEvidencePath(file.path) || inventoryPaths.has(file.path)) continue;
+    const kind = fileKind(file);
+    const lines = file.content ? file.content.split("\n").length : 0;
+    const symbols = kind === "source" ? declaredSymbols(file.content, Math.min(maxSymbols, 6)) : [];
+    // A path is the part that must survive: when symbols no longer fit, the entry still lists the
+    // module so the model knows it exists, it just cannot name what is inside it.
+    let entry: ProjectEvidenceInventoryEntry = { path: file.path, kind, lines, ...(symbols.length ? { symbols } : {}) };
+    let size = JSON.stringify(entry).length + 1;
+    if (inventoryChars + size > inventoryBudget && symbols.length) {
+      entry = { path: file.path, kind, lines };
+      size = JSON.stringify(entry).length + 1;
+    }
+    // The ranking is the priority order, so the first entry that does not fit ends the listing.
+    if (inventoryChars + size > inventoryBudget) break;
+    result.inventory.push(entry);
+    inventoryPaths.add(file.path);
+    inventoryChars += size;
+  }
+  /**
+   * Architecture, workflow and sequence diagrams are grounded in source text, so documentation may
+   * not consume the whole file budget. Half of it is reserved for code, and a source excerpt is a
+   * quarter of the documentation cap so the budget covers a module inventory instead of a handful
+   * of very large files.
+   */
+  const fileBudget = Math.floor(maxTotalChars * 0.6);
+  const sourceBudget = Math.floor(fileBudget * 0.5);
+  const documentBudget = fileBudget - sourceBudget;
+  const sourceFileChars = Math.min(maxFileChars, Math.max(2_000, Math.round(maxFileChars / 4)));
   let fileChars = 0;
+  let sourceChars = 0;
+  let skippedSource = false;
+  const hadSourceCandidate = input.files.some((file) => fileKind(file) === "source");
   const seenPaths = new Set<string>();
-  for (const file of files) {
+  // Sources are visited directory by directory so one deep folder cannot monopolize the budget.
+  const textOrder = [
+    ...ranked.filter((file) => fileKind(file) !== "source"),
+    ...diversifyByDirectory(ranked.filter((file) => fileKind(file) === "source"))
+  ];
+  for (const file of textOrder) {
     if (result.files.length >= maxFiles || !isProjectEvidencePath(file.path) || isExcludedProjectEvidencePath(file.path) || seenPaths.has(file.path)) continue;
-    const available = Math.min(maxFileChars, Math.floor(maxTotalChars * 0.6) - fileChars);
-    if (available < 64) continue;
+    const kind = fileKind(file);
+    const budget = kind === "source" ? sourceBudget : documentBudget;
+    const used = kind === "source" ? sourceChars : fileChars - sourceChars;
+    const available = Math.min(kind === "source" ? sourceFileChars : maxFileChars, budget - used, fileBudget - fileChars);
+    if (available < 64) { if (kind === "source") skippedSource = true; continue; }
     // Keep complete lines when possible. No line references are allowed beyond this excerpt.
     let text = redact(file.content.slice(0, available));
     if (file.content.length > available && text.lastIndexOf("\n") > 0) text = text.slice(0, text.lastIndexOf("\n"));
     const item: ProjectEvidenceFile = {
-      path: file.path, kind: fileKind(file), text, contentHash: hash(file.content), startLine: 1,
+      path: file.path, kind, text, contentHash: hash(file.content), startLine: 1,
       endLine: text ? text.split("\n").length : 0, totalLines: file.content ? file.content.split("\n").length : 0,
       truncated: text.length < file.content.length,
       symbols: [...new Set(file.symbols ?? [])].slice(0, maxSymbols).map((name) => name.slice(0, 160))
     };
     result.files.push(item);
     if (!fits()) { result.files.pop(); continue; }
-    fileChars += JSON.stringify(item).length; seenPaths.add(file.path); result.omitted.files -= 1;
+    const size = JSON.stringify(item).length;
+    fileChars += size;
+    if (kind === "source") sourceChars += size;
+    seenPaths.add(file.path); result.omitted.files -= 1;
   }
+  // Silence about a starved diagram cannot be recovered from the omitted counter alone.
+  if (skippedSource && hadSourceCandidate && sourceChars === 0) result.coverage.push("No source excerpt fitted the reserved evidence budget, so structure diagrams have only documentation to cite.");
   for (const item of [...(input.objects ?? [])].sort((a, b) => a.id.localeCompare(b.id))) {
     if (result.objects.length >= maxObjects || item.confirmation !== "accepted") continue;
     result.objects.push({
@@ -378,6 +624,15 @@ interface EvidenceChecker {
 function createEvidenceChecker(input: ProjectEvidencePackage): EvidenceChecker {
   const errors: string[] = [];
   const knownFiles = new Map(input.files.map((file) => [file.path, file]));
+  // Inventory-only files are citable by path: the model may name a module it saw listed without
+  // claiming a line it never read, and their `endLine` of zero rejects any line number.
+  for (const entry of input.inventory ?? []) {
+    if (knownFiles.has(entry.path)) continue;
+    knownFiles.set(entry.path, {
+      path: entry.path, kind: entry.kind, text: "", contentHash: "", startLine: 1, endLine: 0,
+      totalLines: entry.lines, truncated: false, symbols: [...(entry.symbols ?? [])]
+    });
+  }
   const check = (owner: string, entries: readonly (ProjectEvidence | ProjectDiagramEvidence)[], required = true): void => {
     if (required && !entries.length) { errors.push(`${owner}: Source evidence is required.`); return; }
     for (const entry of entries) {
@@ -470,7 +725,7 @@ function parseJson(text: string): unknown {
   return value;
 }
 
-export function parseProjectAiResponse(text: string, evidence: ProjectEvidencePackage, maxOutputChars = 160_000): ProjectAiGeneratedModel {
+export function parseProjectAiResponse(text: string, evidence: ProjectEvidencePackage, maxOutputChars = 240_000): ProjectAiGeneratedModel {
   if (text.length > maxOutputChars) throw new ProjectAiGenerationError("budget_exceeded", "Project AI response exceeded the output budget.");
   const parsed = projectAiResponseSchema.safeParse(normalizeProjectAiResponse(parseJson(text)));
   if (!parsed.success) throw new ProjectAiGenerationError("invalid_output", "Project AI returned an invalid semantic model.", parsed.error.issues.slice(0, 20).map((issue) => `${issue.path.join(".")}: ${issue.message}`));
@@ -482,7 +737,7 @@ export function parseProjectAiResponse(text: string, evidence: ProjectEvidencePa
   return model;
 }
 
-export function parseProjectDiagramResponse(text: string, evidence: ProjectEvidencePackage, maxOutputChars = 160_000): ProjectAiGeneratedDiagram {
+export function parseProjectDiagramResponse(text: string, evidence: ProjectEvidencePackage, maxOutputChars = 240_000): ProjectAiGeneratedDiagram {
   if (text.length > maxOutputChars) throw new ProjectAiGenerationError("budget_exceeded", "Project AI response exceeded the output budget.");
   const parsed = projectDiagramResponseSchema.safeParse(parseJson(text));
   if (!parsed.success) throw new ProjectAiGenerationError("invalid_output", "Project AI returned an invalid diagram.", parsed.error.issues.slice(0, 20).map((issue) => `${issue.path.join(".")}: ${issue.message}`));
@@ -554,6 +809,9 @@ export interface ProjectDiagramGenerationRequest {
   target?: { id: string; title: string; kind: ProjectDiagramKind; version: number };
 }
 
+/** The two evidence tiers, so a model never invents a line for a file it only saw listed. */
+const EVIDENCE_TIER_GUIDANCE = "Evidence comes in two tiers. Each file listed in `files` carries an excerpt with visible lines: cite a line only inside that excerpt. `inventory` lists every candidate by path, kind, line count and declared symbols, including files with no excerpt: such a path may be cited without a line when it has no excerpt, but never invent a line for it.";
+
 function buildKindGuidance(): string {
   return [
     "Required kind semantics:",
@@ -569,8 +827,11 @@ function buildInitializationPrompt(evidence: ProjectEvidencePackage, schema: Rea
   return [
     "Generate a Project knowledge model for a human developer. Return ONLY one JSON object conforming to the response schema.",
     "First identify the project purpose, business capabilities, responsibility boundaries, canonical terms and end-to-end behavior; then describe diagrams using those semantics.",
-    "Choose only the diagram kinds the evidence supports: architecture, workflow, sequence, data_flow or lifecycle. Returning a single diagram is valid; never force all five.",
+    // Coverage is expected, not forced: every kind that the excerpts can ground is worth describing,
+    // and a kind the evidence cannot support is still worse than an honest omission.
+    "Choose every diagram kind the evidence actually supports: architecture, workflow, sequence, data_flow or lifecycle. Describe each grounded view instead of stopping at the first, but never force a kind whose semantics the excerpts cannot support.",
     "All semantic conclusions, flow steps, diagram nodes, relations and semantic structures require evidence from the supplied file excerpts. Cite exact relative paths and valid visible line numbers or symbols. Do not cite omitted files and do not assume dynamic calls from imports.",
+    EVIDENCE_TIER_GUIDANCE,
     "Use stable ids. Existing knowledge ids in the evidence package may be referenced directly; every other referenced id must be defined in this response.",
     buildKindGuidance(),
     "Do not return renderer payloads, HTML, SVG, coordinates, layout or adapter documents.",
@@ -593,6 +854,7 @@ function buildDiagramPrompt(evidence: ProjectEvidencePackage, request: ProjectDi
     target,
     `Requirement: ${request.requirement}`,
     "Ground every node, relation and semantic structure in the supplied file excerpts. Cite exact relative paths and valid visible line numbers or symbols.",
+    EVIDENCE_TIER_GUIDANCE,
     "Use stable ids. Existing knowledge ids in the evidence package may be referenced directly; every other referenced id must be defined in this response.",
     buildKindGuidance(),
     "Do not overwrite unrelated knowledge or other diagrams and do not return renderer payloads, HTML, SVG, coordinates, layout or adapter documents.",
@@ -618,9 +880,12 @@ export class ProjectAiGenerationService {
 
   constructor(private readonly provider: ProjectAiProvider | undefined, options: ProjectAiGenerationOptions = {}) {
     this.maxAttempts = boundedInteger(options.maxAttempts, 2, 1, 4);
-    this.maxInputChars = boundedInteger(options.maxInputChars, 240_000, 1024, 2_000_000);
-    this.maxOutputChars = boundedInteger(options.maxOutputChars, 160_000, 128, 2_000_000);
-    this.maxOutputTokens = boundedInteger(options.maxOutputTokens, 24_000, 64, 100_000);
+    // Evidence is delivered over stdin, so the prompt budget is the model's context limit rather
+    // than an operating-system command-line limit. It still has to cover the evidence package plus
+    // the response schema and instructions.
+    this.maxInputChars = boundedInteger(options.maxInputChars, 400_000, 1024, 2_000_000);
+    this.maxOutputChars = boundedInteger(options.maxOutputChars, 240_000, 128, 2_000_000);
+    this.maxOutputTokens = boundedInteger(options.maxOutputTokens, 32_000, 64, 100_000);
     // Project generation is backed by a CLI that can legitimately spend many minutes on a large
     // workspace; follow the agent runtime's activity/idle timeout instead of a hidden wall clock.
     this.timeoutMs = boundedInteger(options.timeoutMs, 0, 0, 600_000);

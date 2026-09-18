@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
-  "version": 10,
+  "version": 11,
   "preset": {
     "default": "engineering"
   },
   "knowledge": {
     "enabled": true,
-    "initialized": false
+    "initialized": true
   },
   "ai": {
     "cli": "codex",
@@ -14,12 +14,12 @@
     "reasoningEffort": "ultra",
     "speed": "fast"
   },
+  "updatedAt": 1789703780800,
   "scan": {
     "roots": [
       "src"
     ],
     "includeTests": false,
     "extraExcludes": []
-  },
-  "updatedAt": 1789501630776
+  }
 }

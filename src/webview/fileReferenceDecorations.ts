@@ -1,42 +1,112 @@
-import type { InputReferenceProjection } from "../core/fileReference.js";
-export { inputReferenceProjections } from "../core/fileReference.js";
+import type { Extension } from "@codemirror/state";
+import {
+  Decoration,
+  type DecorationSet,
+  EditorView,
+  ViewPlugin,
+  type ViewUpdate,
+  WidgetType
+} from "@codemirror/view";
+import {
+  compactFileReferenceLabel,
+  inputReferenceProjections,
+  type ContextReferenceOccurrence,
+  type InputReferenceProjection
+} from "../core/fileReference.js";
+import {
+  createFileReferenceChip,
+  fileReferenceChipDescriptor
+} from "./fileReferenceChip.js";
 
-export interface FileReferenceRemovalEdit {
-  from: number;
-  to: number;
-  insert: string;
+export {
+  inputReferenceProjections
+} from "../core/fileReference.js";
+
+export interface FileReferenceDecorationOptions {
+  onOpen(reference: ContextReferenceOccurrence): void;
 }
 
-function whitespaceBefore(source: string, offset: number): number {
-  while (offset > 0 && /[ \t]/.test(source[offset - 1] ?? "")) offset -= 1;
-  return offset;
-}
-
-function whitespaceAfter(source: string, offset: number, maximum = Number.POSITIVE_INFINITY): number {
-  let count = 0;
-  while (offset < source.length && count < maximum && /[ \t]/.test(source[offset] ?? "")) {
-    offset += 1;
-    count += 1;
+class FileReferenceWidget extends WidgetType {
+  constructor(
+    private readonly projection: InputReferenceProjection,
+    private readonly onOpen: (reference: ContextReferenceOccurrence) => void
+  ) {
+    super();
   }
-  return offset;
+
+  override eq(other: FileReferenceWidget): boolean {
+    return this.projection.interpolationStart === other.projection.interpolationStart
+      && this.projection.interpolationEnd === other.projection.interpolationEnd
+      && this.projection.reference.kind === other.projection.reference.kind
+      && this.projection.reference.payload === other.projection.reference.payload;
+  }
+
+  override toDOM(view: EditorView): HTMLElement {
+    const descriptor = fileReferenceChipDescriptor(
+      compactFileReferenceLabel(this.projection.reference.payload),
+      this.projection.reference.payload
+    );
+    return createFileReferenceChip({
+      document: view.dom.ownerDocument,
+      ...descriptor,
+      modifierClass: "code-file-reference",
+      suppressPointerDown: true,
+      onOpen: () => this.onOpen(this.projection.reference),
+      onRemove: () => {
+        view.dispatch({
+          changes: {
+            from: this.projection.interpolationStart,
+            to: this.projection.interpolationEnd
+          },
+          selection: { anchor: this.projection.interpolationStart },
+          scrollIntoView: true,
+          userEvent: "delete"
+        });
+        view.focus();
+      }
+    });
+  }
+
+  override ignoreEvent(): boolean {
+    return true;
+  }
 }
 
-function hasAdjacentText(source: string, offset: number, direction: -1 | 1): boolean {
-  const character = source[offset + (direction < 0 ? -1 : 0)] ?? "";
-  // Quotes and Dext syntax delimiters frame an input value but are not user
-  // text; retaining a space beside them after a chip removal is just noise.
-  return Boolean(character) && !/[ \t\r\n"'`()\x5B\x5D{},=]/.test(character);
-}
-
-/** Removes a chip and its artificial separators. Text on both sides keeps one
- * ordinary space, so deleting an attachment cannot join the following words. */
-export function fileReferenceRemovalEdit(
+export function inputReferenceProjectionDecorations(
   source: string,
-  projection: InputReferenceProjection
-): FileReferenceRemovalEdit {
-  const from = whitespaceBefore(source, projection.interpolationStart);
-  const to = whitespaceAfter(source, projection.interpolationEnd);
-  const hasTextBefore = hasAdjacentText(source, from, -1);
-  const hasTextAfter = hasAdjacentText(source, to, 1);
-  return { from, to, insert: hasTextBefore && hasTextAfter ? " " : "" };
+  onOpen: (reference: ContextReferenceOccurrence) => void
+): DecorationSet {
+  const projections = inputReferenceProjections(source);
+  return Decoration.set([
+    ...projections.map((projection) => (
+      Decoration.replace({
+        widget: new FileReferenceWidget(projection, onOpen),
+        inclusive: false
+      }).range(projection.interpolationStart, projection.interpolationEnd)
+    ))
+  ], true);
+}
+
+export function fileReferenceDecorations(options: FileReferenceDecorationOptions): Extension {
+  const onOpen = (reference: ContextReferenceOccurrence): void => options.onOpen(reference);
+  const plugin = ViewPlugin.fromClass(class {
+    decorations: DecorationSet;
+
+    constructor(view: EditorView) {
+      this.decorations = inputReferenceProjectionDecorations(view.state.doc.toString(), onOpen);
+    }
+
+    update(update: ViewUpdate): void {
+      if (update.docChanged) {
+        this.decorations = inputReferenceProjectionDecorations(update.view.state.doc.toString(), onOpen);
+      }
+    }
+  }, {
+    decorations: (value) => value.decorations
+  });
+
+  return [
+    plugin,
+    EditorView.atomicRanges.of((view) => view.plugin(plugin)?.decorations ?? Decoration.none)
+  ];
 }

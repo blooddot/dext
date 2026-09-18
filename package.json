@@ -948,6 +948,50 @@
           "minimum": 1000,
           "description": "Characters kept per stored input, process event, and serialized output before history truncates it."
         },
+        "dext.project.evidenceDepth": {
+          "type": "string",
+          "default": "standard",
+          "enum": [
+            "standard",
+            "deep",
+            "whole"
+          ],
+          "enumDescriptions": [
+            "All READMEs, manifests and documentation plus a broad slice of product source. Keeps the prompt near 100k tokens.",
+            "More files and larger excerpts, near 150k tokens of prompt. For CLIs with a comfortable context margin.",
+            "The largest evidence Dext will send, near 200k tokens of prompt. Only for models with the biggest context windows."
+          ],
+          "description": "How much of the project the AI may read for Project knowledge and diagrams. The individual evidence limits below override this preset when set explicitly."
+        },
+        "dext.project.evidenceChars": {
+          "type": "integer",
+          "default": 600000,
+          "minimum": 20000,
+          "maximum": 1200000,
+          "description": "Characters of bounded evidence (README, documentation, manifests and source excerpts) sent to the AI for Project knowledge initialization and diagram generation. Overrides dext.project.evidenceDepth. The default keeps a prompt near 100k tokens, which leaves room in a 200k-token CLI context; raising it sends more of your code, costs more time, and can exceed the selected CLI's context window."
+        },
+        "dext.project.evidenceFiles": {
+          "type": "integer",
+          "default": 600,
+          "minimum": 1,
+          "maximum": 1000,
+          "description": "Evidence files read for Project knowledge initialization and diagram generation. Overrides dext.project.evidenceDepth. Documentation keeps precedence, with half of this window reserved for source; leftover slots go to source so the inventory can name as many modules as the window allows."
+        },
+        "dext.project.evidenceFileChars": {
+          "type": "integer",
+          "default": 16000,
+          "minimum": 512,
+          "maximum": 262144,
+          "description": "Characters read from one evidence file before it is truncated. Overrides dext.project.evidenceDepth. Source excerpts are capped at a quarter of this value so the budget still covers many modules; evidence beyond the visible lines cannot be cited."
+        },
+        "dext.project.evidenceInclude": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Workspace-relative globs that limit Project evidence to matching files, for example [\"src/**\"] to read source only, or [\"src/**\", \"docs/**\"]. Empty reads the built-in set: README, documentation and manifests first, then source. This is the replacement for the removed scan.roots setting in .dext/project.json, which only keeps applying while this setting is empty."
+        },
         "dext.agentPermission": {
           "type": "string",
           "default": "workspace-write",
@@ -1007,7 +1051,7 @@
           "default": 0,
           "minimum": 0,
           "maximum": 2147483647,
-          "description": "Maximum total duration of a Codex, Claude, or DeepSeek Harness turn in milliseconds, even while it is producing output. 0 disables this limit. Use dext.agent.idleTimeoutMs to stop stalled turns. Changes apply to new turns."
+          "description": "Maximum total duration of a Codex, Claude, or DeepSeek Harness turn in milliseconds, even while it is producing output. The same limit bounds the one-shot result repair a turn falls back to when its final message is not a valid result. 0 disables this limit. Use dext.agent.idleTimeoutMs to stop stalled turns. Changes apply to new turns."
         },
         "dext.agent.idleTimeoutMs": {
           "type": "integer",
@@ -1132,7 +1176,7 @@
     "test:host": "npm run build && node scripts/runExtensionTest.mjs",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "check:ui": "node scripts/checkComposerLayoutUi.mjs && node scripts/checkStreamJumpUi.mjs && node scripts/checkEditorTabsUi.mjs && node scripts/checkProjectDiagramsUi.mjs",
+    "check:ui": "node scripts/checkComposerLayoutUi.mjs && node scripts/checkStreamJumpUi.mjs && node scripts/checkConversationScrollUi.mjs && node scripts/checkQuestionVisibilityUi.mjs && node scripts/checkEditorTabsUi.mjs && node scripts/checkProjectDiagramsUi.mjs",
     "check": "npm run generate:node-builtins -- --check && npm run lint && npm run typecheck && npm run test && npm run build && npm run test:build-assets",
     "package": "node -e \"require('node:fs').mkdirSync('release', { recursive: true })\" && vsce package --out release/",
     "vscode:prepublish": "npm run check"

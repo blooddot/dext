@@ -368,6 +368,20 @@ describe("Dext package manifest", () => {
     expect(properties["dext.diff.defaultView"]?.enum).toEqual(["inline", "split"]);
     expect(properties["dext.history.maxTurns"]).toMatchObject({ type: "integer", default: 100 });
     expect(properties["dext.history.maxOutputLength"]).toMatchObject({ type: "integer", default: 200000 });
+    // Project evidence budgets are user-tunable: the right size depends on the selected CLI.
+    expect(properties["dext.project.evidenceChars"]).toMatchObject({ type: "integer", default: 600000, minimum: 20000, maximum: 1200000 });
+    expect(properties["dext.project.evidenceChars"]?.description).toContain("sent to the AI");
+    expect(properties["dext.project.evidenceFiles"]).toMatchObject({ type: "integer", default: 600, minimum: 1, maximum: 1000 });
+    expect(properties["dext.project.evidenceFiles"]?.description).toContain("source");
+    expect(properties["dext.project.evidenceFileChars"]).toMatchObject({ type: "integer", default: 16000, minimum: 512, maximum: 262144 });
+    expect(properties["dext.project.evidenceInclude"]).toMatchObject({ type: "array", default: [] });
+    // The removed scanner profile must not look like it still selects evidence.
+    expect(properties["dext.project.evidenceInclude"]?.description).toContain("scan.roots");
+    // Depth is the interface; the numbers below it are explicit overrides.
+    expect(properties["dext.project.evidenceDepth"]).toMatchObject({ type: "string", default: "standard" });
+    expect(properties["dext.project.evidenceDepth"]?.enum).toEqual(["standard", "deep", "whole"]);
+    expect(properties["dext.project.evidenceDepth"]?.description).toContain("override this preset");
+    expect(properties["dext.project.evidenceChars"]?.description).toContain("Overrides dext.project.evidenceDepth");
     // Fan-out width has a ceiling because every branch can start its own process.
     const concurrency = properties["dext.workflow.maxConcurrency"];
     expect(concurrency).toMatchObject({ type: "integer", default: 4, minimum: 1 });

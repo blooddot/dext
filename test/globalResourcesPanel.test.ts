@@ -79,6 +79,34 @@ describe("global resources panel", () => {
     expect(html).toContain("dext.newResource");
   });
 
+  it("files MCP tool APIs under MCP and nests each category like the API page", () => {
+    const api = (name: string, group: string): ResourceEntry => ({
+      ...entry("api", name),
+      scope: "project",
+      group,
+      api: { signature: `${name}() -> AskResult`, parameters: [], returnType: "AskResult" }
+    });
+    const document = buildResourceList({
+      kind: "api",
+      scope: "project",
+      groupBy: "kind",
+      entries: [api("dev.feat", "dev"), api("dev.fix", "dev"), api("dev.plan", "dev"), api("mcp.files.read", "mcp.files")]
+    });
+    const html = renderGlobalResources(document, { createKinds: ["api", "mcp", "rule", "skill"], title: "Resources" });
+    const apiCategory = html.slice(html.indexOf('data-resource-group="API"'), html.indexOf('data-resource-group="MCP"'));
+    const mcpCategory = html.slice(html.indexOf('data-resource-group="MCP"'));
+    // dev is the first level and feat/fix/plan are its second level instead of one flat API list.
+    expect(apiCategory).toContain('data-resource-node="API.dev"');
+    expect(apiCategory).toContain(">feat<");
+    expect(apiCategory).toContain(">fix<");
+    expect(apiCategory).toContain(">plan<");
+    // An MCP tool is a callable API, but it is listed under MCP rather than under API.
+    expect(apiCategory).not.toContain("mcp.files.read");
+    expect(mcpCategory).toContain('data-resource-node="MCP.files"');
+    expect(mcpCategory).toContain("mcp.files.read");
+    expect(mcpCategory).toContain(">read<");
+  });
+
   it("maps sidebar methods and global resources into one searchable data source", async () => {
     const dataSource = createSidebarResourceDataSource({
       state: () => ({

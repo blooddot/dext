@@ -81,6 +81,13 @@ describe("diagrams page", () => {
     expect(html).toContain('data-diagram-action="refresh"');
     expect(html).toContain('data-diagram-action="export"');
     expect(html).toContain('data-diagram-action="fullscreen"');
+    // The sandboxed viewer needs the fullscreen permission, and focus mode needs its own exit.
+    expect(html).toContain('allow="fullscreen"');
+    expect(html).toContain('data-diagram-action="exit-fullscreen"');
+    // A card click shows node details in place instead of jumping into an evidence file.
+    expect(html).toContain("data-diagram-node");
+    expect(html).toContain("data-diagram-node-evidence");
+    expect(html).toContain('data-diagram-action="close-node"');
     expect(html).toContain("Workflow");
     expect(html).not.toContain("data-project-adapter-select");
     expect(html).not.toContain("Use recommended");
@@ -94,6 +101,30 @@ describe("diagrams page", () => {
     expect(html).toContain("data-diagram-empty");
     expect(html).not.toContain("architecture-graph-scroll");
     expect(html).not.toContain("data-module-id");
+  });
+
+  it("renders what the last evidence read handed the model, with clickable paths", () => {
+    const evidence = {
+      version: 1 as const, trigger: "initialize" as const, generatedAt: 1_700_000_000_000, inputHash: "hash",
+      selection: { scope: [], preset: "standard", files: 600, fileChars: 16_000, evidenceChars: 600_000 },
+      inventory: { total: 3, withSymbols: 2, byKind: { source: 3 } },
+      excerpts: { total: 2, truncated: 1, byKind: { source: 2 } },
+      omitted: { files: 1, objects: 0, knowledge: 0 },
+      coverage: ["Source text exceeds the limit."],
+      paths: ["src/app.ts", "src/core/deep.ts", "src/other.ts"],
+      excerpted: ["src/app.ts", "src/core/deep.ts"]
+    };
+    const html = renderArchitectureView({ diagrams: summaries, selected: summaries[1]!, evidence });
+    expect(html).toContain("data-diagram-evidence");
+    expect(html).toContain("data-evidence-scope");
+    expect(html).toContain("standard");
+    expect(html).toContain("built-in (README, documentation, manifests, source)");
+    expect(html).toContain("Read in full or in part (2)");
+    expect(html).toContain("Listed without an excerpt (1)");
+    expect(html).toContain('data-evidence-path="src/other.ts"');
+    expect(html).toContain("Source text exceeds the limit.");
+    // Without a record the section stays hidden instead of claiming a run that never happened.
+    expect(renderArchitectureView({ diagrams: summaries })).toContain('data-diagram-evidence hidden');
   });
 
   it("labels a last-good render with the version actually shown", () => {

@@ -382,6 +382,9 @@ export function parserCompatibleSource(source: string): string {
 class Compiler {
   private readonly diagnostics: WorkflowDiagnostic[] = [];
   private readonly environment = new Map<string, EnvironmentEntry>();
+  /** Names bound by more than one assignment, and therefore materialized at
+   * runtime instead of inlined. Filled from the whole source before compiling. */
+  private readonly reassignedNames = new Set<string>();
 
   constructor(
     private readonly source: string,
@@ -402,6 +405,7 @@ class Compiler {
     }
     const tree = parser.parse(parserCompatibleSource(this.source));
     this.collectSyntaxErrors(tree.topNode);
+    this.collectReassignedNames(tree.topNode);
     const statements = this.compileStatements(tree.topNode);
     if (this.diagnostics.some((diagnostic) => diagnostic.severity === "error")) {
       return { diagnostics: this.diagnostics };
@@ -418,6 +422,32 @@ class Compiler {
       this.error("Invalid Python syntax.", node.from, Math.max(node.from + 1, node.to));
     }
     for (const child of children(node)) this.collectSyntaxErrors(child);
+  }
+
+  /** A name written twice is reassigned: every read of it has to see the value
+   * the runtime holds at that point. A loop or a branch compiles its body once
+   * but runs it many times, so such a name cannot be inlined — the constant
+   * folded into the body would stay the first value on every later pass. */
+  private collectReassignedNames(root: SyntaxNode): void {
+    const counts = new Map<string, number>();
+    const visit = (node: SyntaxNode): void => {
+      // A nested function has its own scope, and Dext rejects one anyway.
+      if (node !== root && node.name === "FunctionDefinition") return;
+      if (node.name === "AssignStatement") {
+        const parts = children(node);
+        const assignIndex = parts.findIndex((child) => child.name === "AssignOp");
+        const targets = assignIndex > 0 ? parts.slice(0, assignIndex).filter((child) => child.name === "VariableName") : [];
+        if (targets.length === 1) {
+          const name = text(this.source, targets[0]!);
+          counts.set(name, (counts.get(name) ?? 0) + 1);
+        }
+      }
+      for (const child of children(node)) visit(child);
+    };
+    visit(root);
+    for (const [name, count] of counts) {
+      if (count > 1) this.reassignedNames.add(name);
+    }
   }
 
   private compileStatements(container: SyntaxNode): WorkflowStatement[] {
@@ -473,12 +503,13 @@ class Compiler {
       return { kind: "return", expression: value.expression, from: node.from, to: node.to };
     }
     if (node.name === "UpdateStatement") {
-      // Python's `+=` mutates in place. A Dext workflow names values instead, so
-      // repeated text is built from a list rather than appended to a variable.
+      // Python's `+=` mutates in place. A Dext assignment writes a value to a
+      // name, so the same effect is an ordinary reassignment.
       const operator = children(node).find((child) => child.name === "UpdateOp");
       this.error(
         `Dext does not support '${operator ? text(this.source, operator) : "augmented assignment"}'. `
-        + 'Collect the values in a list and join them, for example "\\n".join(lines).',
+        + "Write the reassignment out (for example 'total = total + item'), "
+        + 'or collect the values in a list and join them, for example "\\n".join(lines).',
         node.from,
         node.to
       );
@@ -502,10 +533,6 @@ class Compiler {
     const { variable, values } = shape;
     const name = text(this.source, variable);
     const existing = this.environment.get(name);
-    if (existing && this.loopDepth === 0) {
-      this.error(`Variable '${name}' cannot be reassigned.`, variable.from, variable.to, "dext/reassign");
-      return undefined;
-    }
     // `x = 1, 2` is a tuple in Python, so it is a list here.
     const compiled = values.length === 1
       ? this.assignmentExpression(values[0]!)
@@ -530,7 +557,15 @@ class Compiler {
       type = declared;
     }
     if (existing && typeName(existing.type) !== typeName(type)) {
-      this.error(`Loop variable '${name}' must keep type ${typeName(existing.type)}.`, variable.from, variable.to);
+      // Reassignment is ordinary control flow, but a name keeps its type: a
+      // variable that changed type would make every later read, branch merge,
+      // and API argument check depend on which path actually ran.
+      this.error(
+        `Variable '${name}' must keep type ${typeName(existing.type)}; it cannot be reassigned to ${typeName(type)}.`,
+        variable.from,
+        variable.to,
+        "dext/reassign"
+      );
       return undefined;
     }
     if (compiled.expression.kind === "call") {
@@ -539,7 +574,10 @@ class Compiler {
     }
     // A value Dext can compute while compiling never reaches the runtime; it is
     // stored and inlined where the variable is used, exactly like a literal.
-    if (this.inlineable(compiled.expression)) {
+    // A reassigned name is the exception: it keeps a runtime slot so a later
+    // read — a loop condition, a branch, or simply the next statement — sees
+    // the value written by the last assignment that ran.
+    if (!this.reassignedNames.has(name) && this.inlineable(compiled.expression)) {
       this.environment.set(name, { type, from: variable.from, value: compiled.expression });
       return undefined;
     }
@@ -734,9 +772,7 @@ class Compiler {
     const condition = this.compileCondition(conditionNode);
     if (!condition) return undefined;
     const before = new Map(this.environment);
-    this.loopDepth += 1;
     const body = this.compileStatements(bodyNode);
-    this.loopDepth -= 1;
     this.restore(before);
     return { kind: "while", condition, body, from: node.from, to: node.to };
   }
@@ -2137,7 +2173,6 @@ class Compiler {
 
   returnExpression: WorkflowExpression | undefined;
   returnType: ValueType | undefined;
-  private loopDepth = 0;
 }
 
 function contextReferenceFromToken(value: string): ContextReference {

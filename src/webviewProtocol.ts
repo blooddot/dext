@@ -17,6 +17,17 @@ import type { EditorTokenTheme } from "./vscodeTheme.js";
 import type { DextHistorySession, PlanStatus } from "./historyStore.js";
 import type { McpDiscoveredTool, McpServerConfig } from "./core/mcpRegistry.js";
 
+/** HTTP MCP credentials are never written to a manifest: bearer uses the
+ * SecretStorage token in an Authorization header, query attaches it to the
+ * request URL under the declared parameter name. */
+const mcpHttpAuthSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("bearer") }).strict(),
+  z.object({
+    type: z.literal("query"),
+    name: z.string().min(1).max(64).regex(/^[A-Za-z_][A-Za-z0-9_.-]*$/)
+  }).strict()
+]);
+
 export const webviewRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ready") }),
   z.object({ type: z.literal("inputDefinition"), requestId: z.number().int().nonnegative(), source: z.string(), cursor: z.number().int().nonnegative() }),
@@ -135,7 +146,7 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
       }).strict(),
       z.object({
         name: z.string().min(1).max(80), transport: z.literal("http"),
-        url: z.string().min(1).max(2048), auth: z.object({ type: z.literal("bearer") }).optional(),
+        url: z.string().min(1).max(2048), auth: mcpHttpAuthSchema.optional(),
         timeoutMs: z.number().int().min(1000).max(120000).optional()
       }).strict()
     ])
@@ -144,7 +155,7 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
     type: z.literal("prepareMcp"), requestId: z.string().min(1), scope: z.enum(["project", "global"]).optional(),
     server: z.discriminatedUnion("transport", [
       z.object({ name: z.string().min(1).max(80), transport: z.literal("stdio"), command: z.string().min(1).max(512), args: z.array(z.string().max(512)).max(32).optional(), auth: z.object({ type: z.literal("token"), env: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/) }).optional(), timeoutMs: z.number().int().min(1000).max(120000).optional() }).strict(),
-      z.object({ name: z.string().min(1).max(80), transport: z.literal("http"), url: z.string().min(1).max(2048), auth: z.object({ type: z.literal("bearer") }).optional(), timeoutMs: z.number().int().min(1000).max(120000).optional() }).strict()
+      z.object({ name: z.string().min(1).max(80), transport: z.literal("http"), url: z.string().min(1).max(2048), auth: mcpHttpAuthSchema.optional(), timeoutMs: z.number().int().min(1000).max(120000).optional() }).strict()
     ])
   }),
   z.object({ type: z.literal("newConversation") }),

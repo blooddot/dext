@@ -36,6 +36,8 @@ export interface ProjectOverviewData {
   selectedAiModel?: string;
   selectedAiReasoning?: string;
   selectedAiSpeed?: string;
+  /** Removed scanner profile still present in `.dext/project.json`; it never affects evidence. */
+  legacyScanRoots?: readonly string[];
 }
 
 export interface ProjectPanelData {
@@ -120,9 +122,15 @@ function renderInitialization(initialization: ProjectInitializationState): strin
 
 function renderOverview(overview: ProjectOverviewData): string {
   const initialization = overview.initialization;
+  const retiredScan = overview.legacyScanRoots?.length
+    ? `<p class="project-scan-progress project-scan-progress-warning" role="status" data-project-legacy-scan>`
+      + `The removed <code>scan</code> settings in <code>.dext/project.json</code> still limit Project evidence to: ${overview.legacyScanRoots.map((root) => `<code>${escapeHtml(root)}/**</code>`).join(", ")}. `
+      + `They apply while <code>dext.project.evidenceInclude</code> is empty; migrate them to that setting to keep this scope.</p>`
+    : "";
   return `<section class="project-overview" data-project-section="overview">`
     + `<h2>${escapeHtml(overview.name)}</h2>`
     + `<p class="project-help">Project uses the opened workspace folder as its root. Opening, restoring or switching this page only reads saved project files; source text is read in bounded form when you initialize knowledge or generate a diagram.</p>`
+    + retiredScan
     + (overview.aiCli?.length ? `<label class="project-ai-cli">AI CLI for Project initialization <select data-project-ai-cli${initialization.status === "running" ? " disabled" : ""}><option value=""${overview.selectedAiCli ? "" : " selected"}>Use current Input selection</option>${overview.aiCli.map((cli) => `<option value="${escapeHtml(cli.id)}"${cli.id === overview.selectedAiCli ? " selected" : ""} data-models="${escapeHtml(JSON.stringify(cli.models ?? []))}">${escapeHtml(cli.label)}</option>`).join("")}</select></label>`
       + (overview.selectedAiCli ? (() => { const cli = overview.aiCli.find((item) => item.id === overview.selectedAiCli); const models = cli?.models ?? []; return models.length ? renderProjectModelControl(models, overview.selectedAiModel, overview.selectedAiReasoning, overview.selectedAiSpeed, initialization.status === "running") : ""; })() : "") : "")
     + renderInitialization(initialization)

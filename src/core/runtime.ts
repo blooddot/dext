@@ -4,7 +4,7 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { AxAdapter, type AxMethodContract } from "./axAdapter.js";
-import { parseAgentResult } from "./resultBoundary.js";
+import { parseAgentResult, stripNullProperties } from "./resultBoundary.js";
 import type { ResultRepairEvent, ResultRepairOutcome } from "./resultRepair.js";
 import { builtinCliFields, builtinCliMetadata, CLI_BUILTIN_IDS, specializeBuiltinCli } from "./builtinCli.js";
 import type { ContextResolver } from "./contextResolver.js";
@@ -78,10 +78,32 @@ function normalizeAgentResult(kind: string, value: unknown): DextResult {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("Agent output must be a JSON object.");
   }
-  const record = value as Record<string, unknown>;
+  // Every Agent-method result passes through here, and no built-in result has a
+  // nullable field: an explicit JSON null therefore means "absent". That is also
+  // the only way a Codex model can express an omitted optional field, because the
+  // strict schema Dext sends it marks those fields required-but-nullable, so the
+  // nulls are dropped before zod decides they are a type error. The raw envelope
+  // keeps its nulls for the diagnostics and the repair prompt.
+  const record = stripNullProperties(value) as Record<string, unknown>;
   if (record.kind === undefined) return { kind, ...record } as DextResult;
   if (record.kind !== kind) throw new Error(`Agent output kind '${typeof record.kind === "string" ? record.kind : "unknown"}' does not match '${kind}'.`);
   return record as unknown as DextResult;
+}
+
+/**
+ * `agent.text` is free-form by contract, so a whole turn that answers in
+ * Markdown without the JSON envelope has still produced a valid Agent result.
+ * This builds that envelope and is deliberately narrow: only the text-shaped
+ * `agent` kind, only a non-empty raw string, and never a turn that wrote to the
+ * workspace, whose result must stay an auditable structured patch. Every other
+ * kind (`apply`, `codeRef`, ...) keeps failing exactly as before, and the
+ * wrapped object still has to pass the same contract, so a text-only result
+ * cannot satisfy a declaration that requires `patch` or `files`.
+ */
+function plainTextAgentResult(kind: string, raw: unknown, allowWorkspaceWrite: boolean): DextResult | undefined {
+  if (kind !== "agent" || allowWorkspaceWrite === true) return undefined;
+  if (typeof raw !== "string" || !raw) return undefined;
+  return { kind: "agent", text: raw };
 }
 
 function isMcpRawResult(value: DextResult): value is McpRawResult {
@@ -334,6 +356,8 @@ export class DextRuntime {
   private customApiDiagnostics: ReadonlyMap<string, readonly DextDiagnostic[]> = new Map();
   /** MCP tool ids a manifest declares, whether or not their server is running. */
   private declaredMcpTools: ReadonlySet<string> = new Set();
+  /** Why a configured MCP server was rejected during the last reload, by name. */
+  private mcpServerReasons: ReadonlyMap<string, readonly string[]> = new Map();
   private customApisBlocked = false;
 
   constructor(
@@ -376,10 +400,34 @@ export class DextRuntime {
     this.declaredMcpTools = new Set(ids);
   }
 
+  /** Registry diagnostics from the last reload. A rejected server is absent
+   * from the registry, so these reasons are the only trace that it ever
+   * existed; keeping them turns "not connected" into "rejected because ...". */
+  setMcpServerDiagnostics(diagnostics: readonly string[]): void {
+    const reasons = new Map<string, string[]>();
+    for (const message of diagnostics) {
+      const match = /^MCP server '([^']+)' (.+)$/.exec(message);
+      const name = match?.[1];
+      const reason = match?.[2];
+      if (!name || !reason) continue;
+      const group = reasons.get(name) ?? [];
+      group.push(reason);
+      reasons.set(name, group);
+    }
+    this.mcpServerReasons = reasons;
+  }
+
+  private mcpRejectionAdvice(server: string): string | undefined {
+    const reasons = this.mcpServerReasons.get(server);
+    return reasons?.length ? `MCP server '${server}' was rejected: ${reasons.join(" ")}` : undefined;
+  }
+
   /** A method id that is not registered at all. */
   private missingMethodMessage(id: string): string {
     const mcp = /^mcp\.([^.]+)\./.exec(id);
     if (mcp && this.declaredMcpTools.has(id) && !this.registry.get(id)) {
+      const rejection = this.mcpRejectionAdvice(mcp[1]!);
+      if (rejection) return `Unknown Dext API '${id}'. ${rejection}`;
       return `MCP server '${mcp[1]}' is not connected or the tool is not registered: unknown Dext API '${id}'.`;
     }
     if (this.customApisBlocked) {
@@ -412,10 +460,12 @@ export class DextRuntime {
       .filter((diagnostic) => diagnostic.code === "dext/unknown-api")
       .flatMap((diagnostic) => [...diagnostic.message.matchAll(/Unknown Dext API '([^']+)'/g)].map((match) => match[1]!))
       .filter((id) => /^mcp\./.test(id) && this.declaredMcpTools.has(id) && !this.registry.get(id)))];
-    const advice = missingMcp.map((id) => {
+    const advice = missingMcp.flatMap((id) => {
       const server = /^mcp\.([^.]+)\./.exec(id)?.[1] ?? "";
       const tool = id.slice(`mcp.${server}.`.length);
-      return `MCP server '${server}' is not connected or '${tool}' is not registered on it. Connect the server and run "Dext: Reload APIs".`;
+      const notConnected = `MCP server '${server}' is not connected or '${tool}' is not registered on it. Connect the server and run "Dext: Reload APIs".`;
+      const rejection = this.mcpRejectionAdvice(server);
+      return rejection ? [notConnected, rejection] : [notConnected];
     });
     if (!details.length && !advice.length) {
       return `Custom API '${apiId}' is registered but its function body has no compiled plan. Run "Dext: Check All APIs" for the current diagnostics.`;
@@ -796,6 +846,22 @@ export class DextRuntime {
     let diagnostics: string;
     if (parsed === undefined) {
       diagnostics = `No '${context.kind}' JSON object could be extracted from the Agent output.`;
+      const wrapped = plainTextAgentResult(context.kind, context.raw, context.allowWorkspaceWrite);
+      if (wrapped) {
+        // A missing envelope is common enough to be worth counting, and this
+        // status event is the visible diagnostic that reports it. The fallback
+        // is a real result, so it still has to pass the contract below.
+        context.onEvent?.({
+          phase: "status",
+          text: "",
+          title: "Agent result fell back to plain-text wrapping: the Agent returned no JSON envelope, so its full message became the result text."
+        });
+        const inspected = this.ax.inspectOutput(context.contract, wrapped);
+        if (inspected.success) return inspected.data;
+        // Keep the original parse diagnostic too: the fallback must never hide
+        // why the object was missing in the first place.
+        diagnostics = `${diagnostics}\nPlain-text wrapping failed validation: ${inspected.diagnostics}`;
+      }
     } else {
       let normalized: DextResult | undefined;
       let normalizeError: string | undefined;

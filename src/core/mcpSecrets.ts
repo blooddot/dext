@@ -6,7 +6,7 @@ export interface SecretStorageLike {
   delete(key: string): PromiseLike<void>;
 }
 
-export type McpCredentialKind = "bearer" | "token";
+export type McpCredentialKind = "bearer" | "token" | "query";
 export type McpCredentialScope = "workspace" | "global";
 
 /** MCP credentials stay in VS Code's encrypted SecretStorage. The key records

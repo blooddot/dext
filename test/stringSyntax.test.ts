@@ -355,8 +355,17 @@ describe("interaction with existing checks", () => {
     expect(messages('prompt: int = "a" + "b"')).toContain("declared as number but assigned string");
   });
 
-  it("still rejects reassignment outside a loop", () => {
-    expect(messages('text = "a"\ntext = "b"')).toContain("cannot be reassigned");
+  it("reassigns a variable in ordinary sequential code", () => {
+    expect(compile('text = "a"\ntext = "b"').diagnostics).toEqual([]);
+    // A name written twice keeps a runtime slot, so later reads see the last
+    // value instead of the constant that was folded first.
+    expect(program('text = "a"\ntext = "b"\nprint(text=text)').statements.map((statement) => statement.kind))
+      .toEqual(["assign", "assign", "step"]);
+  });
+
+  it("still rejects a reassignment that changes the type", () => {
+    expect(messages('text = "a"\ntext = 1')).toContain("must keep type string");
+    expect(messages('text = "a"\ntext = 1')).toContain("cannot be reassigned to number");
   });
 
   it("rejects the shapes that would otherwise drop a name or value", () => {
@@ -371,6 +380,7 @@ describe("interaction with existing checks", () => {
   it("explains why += is not available and what to write instead", () => {
     const message = messages('text = "a"\ntext += "b"');
     expect(message).toContain("does not support '+='");
+    expect(message).toContain("total = total + item");
     expect(message).toContain("join");
   });
 

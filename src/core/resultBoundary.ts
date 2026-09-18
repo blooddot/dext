@@ -72,6 +72,28 @@ function parseObject(candidate: string): Record<string, unknown> | undefined {
   }
 }
 
+/**
+ * Drops object properties whose value is `null`, recursively.
+ *
+ * Dext's structured-output schema for Codex must mark every property required,
+ * so the optional result fields (`patch`, `files`, and the optional fields
+ * inside them) are sent as required-but-nullable. A model therefore answers
+ * `"patch": null` to mean "absent", which the zod result schemas — where those
+ * fields are merely `.optional()` — reject with
+ * `expected object, received null`. Normalizing the null away restores the
+ * intended meaning before validation. No built-in Dext result has a nullable
+ * field, so this can only turn invalid input into valid input.
+ */
+export function stripNullProperties(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripNullProperties);
+  if (typeof value !== "object" || value === null) return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, child]) => child !== null)
+      .map(([key, child]) => [key, stripNullProperties(child)])
+  );
+}
+
 /** All JSON objects found in the text, in candidate order and without
  * duplicates. */
 export function agentResultCandidates(raw: string): AgentResultCandidate[] {

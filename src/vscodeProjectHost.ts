@@ -7,13 +7,17 @@ import type { ProjectInitializationState, ProjectInitializationProgressListener 
 import { ProjectInitializationService } from "./projectService.js";
 import {
   buildProjectEvidencePackage,
+  compareProjectEvidencePaths,
   isExcludedProjectEvidencePath,
   isProjectEvidencePath,
+  projectEvidenceFileKind,
   ProjectAiGenerationService,
+  summarizeProjectEvidence,
   type ProjectAiActivityEvent,
   type ProjectAiProvider,
   type ProjectEvidenceFileInput,
   type ProjectEvidencePackage,
+  type ProjectEvidenceSummary,
   type ProjectKnowledgeReference
 } from "./core/projectAiGeneration.js";
 import { validateProjectDiagram, type ProjectDiagram, type ProjectDiagramKind } from "./core/projectDiagram.js";
@@ -21,7 +25,8 @@ import { validateProjectIntent, type ProjectIntent } from "./core/projectIntent.
 import type { ProjectObject } from "./core/projectKnowledge.js";
 import type { ArchifyIdMapping, ArchifyRepository } from "./core/archifyAdapter.js";
 import type { ProjectDiagramAdapterRegistry } from "./core/projectDiagramRegistry.js";
-import type { ProjectArchitectureDecision, ProjectDiagramSummary } from "./webview/projectArchitectureView.js";
+import type { ProjectArchitectureDecision, ProjectDiagramNodeDetail, ProjectDiagramSummary } from "./webview/projectArchitectureView.js";
+import type { ProjectAiLimits } from "./projectAiLimits.js";
 import { architectureRuleReport, type ArchitectureRule } from "./core/projectArchitecture.js";
 import type { ProjectPanelData } from "./webview/projectPanel.js";
 import type { DiagramValidationIssue } from "./core/projectDiagram.js";
@@ -43,6 +48,18 @@ export interface ProjectEvidenceReadOptions {
   /** Source-text candidates read after documentation and manifests. */
   maxSourceFiles?: number;
   maxFileBytes?: number;
+  /** Characters per file handed to the AI evidence package. */
+  maxFileChars?: number;
+  /** Total characters the AI evidence package may serialize. */
+  maxEvidenceChars?: number;
+  /**
+   * Workspace-relative globs that limit which files are evidence. Empty keeps the built-in set
+   * (README, documentation, manifests, then source). This is the replacement for the removed
+   * `scan.roots` profile: a reader who configured `["src"]` there can now write `["src/**"]`.
+   */
+  include?: readonly string[];
+  /** Depth preset the host applied, recorded in the evidence summary. */
+  preset?: string;
 }
 
 function relativePath(root: vscode.Uri, uri: vscode.Uri): string | undefined {
@@ -63,26 +80,55 @@ export async function readWorkspaceEvidence(
   onProgress?: ProjectInitializationProgressListener,
   signal?: AbortSignal
 ): Promise<ProjectEvidencePackage> {
-  const maxFiles = Math.max(1, options.maxFiles ?? 80);
-  const maxSourceFiles = Math.max(0, options.maxSourceFiles ?? 60);
+  const maxFiles = Math.max(1, options.maxFiles ?? 600);
+  const maxSourceFiles = Math.max(0, options.maxSourceFiles ?? 600);
   const maxFileBytes = Math.max(1024, options.maxFileBytes ?? 262_144);
   const excluded = PROJECT_EVIDENCE_EXCLUDE;
-  onProgress?.({ phase: "preparing", message: "Searching README, documentation, manifests and necessary source…" });
-  const documentPatterns = [PROJECT_README_GLOB, PROJECT_DOCUMENT_GLOB, PROJECT_MANIFEST_GLOB];
-  const foundDocuments: vscode.Uri[] = [];
-  for (const pattern of documentPatterns) {
-    if (signal?.aborted) throw new Error("Project initialization was cancelled.");
-    const uris = await vscode.workspace.findFiles(new vscode.RelativePattern(root, pattern), excluded, maxFiles + 1);
-    for (const uri of uris) if (!foundDocuments.some((candidate) => candidate.path === uri.path)) foundDocuments.push(uri);
-  }
-  if (signal?.aborted) throw new Error("Project initialization was cancelled.");
-  const sources = await vscode.workspace.findFiles(new vscode.RelativePattern(root, PROJECT_SOURCE_GLOB), excluded, maxSourceFiles + 1);
-  const pending = [
-    ...foundDocuments.sort((left, right) => left.path.localeCompare(right.path)),
-    ...sources.filter((uri) => !foundDocuments.some((candidate) => candidate.path === uri.path)).sort((left, right) => left.path.localeCompare(right.path))
-  ].slice(0, maxFiles);
   const files: ProjectEvidenceFileInput[] = [];
   const coverage: string[] = [];
+  // A configured scope replaces the built-in globs instead of extending them: that is how a reader
+  // says "only this part of the tree is evidence". Invalid entries are dropped so a scope can never
+  // escape the workspace root.
+  const include = (options.include ?? [])
+    .filter((pattern): pattern is string => typeof pattern === "string")
+    .map((pattern) => pattern.trim())
+    .filter((pattern) => {
+      const normalized = pattern.replace(/^\*\*\//, "").replace(/\/\*\*$/, "");
+      return normalized === "" || isProjectEvidencePath(normalized);
+    })
+    .slice(0, 20);
+  const patterns = include.length
+    ? include
+    : [PROJECT_README_GLOB, PROJECT_DOCUMENT_GLOB, PROJECT_MANIFEST_GLOB, PROJECT_SOURCE_GLOB];
+  onProgress?.({ phase: "preparing", message: include.length ? "Reading the configured evidence scope…" : "Searching README, documentation, manifests and necessary source…" });
+  // Listing candidates is cheap; reading them is not. A wide window is ordered by project evidence
+  // rank before the read limit applies, so vendored readmes or tooling folders cannot occupy the
+  // slots the project's own documentation and code need.
+  const candidateLimit = Math.min(4_000, Math.max(maxFiles, maxSourceFiles) * 8);
+  const pathOf = (uri: vscode.Uri): string => relativePath(root, uri) ?? uri.path;
+  const byEvidenceRank = (left: vscode.Uri, right: vscode.Uri): number => compareProjectEvidencePaths(pathOf(left), pathOf(right));
+  const found: vscode.Uri[] = [];
+  for (const pattern of patterns) {
+    if (signal?.aborted) throw new Error("Project initialization was cancelled.");
+    const uris = await vscode.workspace.findFiles(new vscode.RelativePattern(root, pattern), excluded, candidateLimit);
+    for (const uri of uris) if (!found.some((candidate) => candidate.path === uri.path)) found.push(uri);
+  }
+  if (signal?.aborted) throw new Error("Project initialization was cancelled.");
+  const foundDocuments = found.filter((uri) => projectEvidenceFileKind(pathOf(uri)) !== "source");
+  const sources = found.filter((uri) => projectEvidenceFileKind(pathOf(uri)) === "source");
+  // Documentation keeps its precedence, but a source reserve protects code when documentation
+  // fills the window. Once documentation is satisfied the remaining slots go to source, so the
+  // inventory can name every module the window can afford instead of stopping at half.
+  const sourceReserve = Math.min(sources.length, maxSourceFiles, Math.max(0, Math.floor(maxFiles / 2)));
+  const documentSlots = Math.min(foundDocuments.length, Math.max(0, maxFiles - sourceReserve));
+  const sourceSlots = Math.min(sources.length, maxSourceFiles, Math.max(0, maxFiles - documentSlots));
+  const pending = [
+    ...foundDocuments.sort(byEvidenceRank).slice(0, documentSlots),
+    ...sources.sort(byEvidenceRank).slice(0, sourceSlots)
+  ];
+  const readSourceCount = pending.filter((uri) => projectEvidenceFileKind(pathOf(uri)) === "source").length;
+  if (foundDocuments.length > pending.length - readSourceCount) coverage.push(`Documentation exceeds the limit: only ${pending.length - readSourceCount} of ${foundDocuments.length} documentation candidates were read.`);
+  if (sources.length > readSourceCount) coverage.push(`Source text exceeds the limit: only ${readSourceCount} of ${sources.length} source candidates were read.`);
   let processed = 0;
   onProgress?.({ phase: "preparing", completed: 0, total: pending.length, message: "Reading bounded text evidence…" });
   for (const uri of pending) {
@@ -101,8 +147,6 @@ export async function readWorkspaceEvidence(
       onProgress?.({ phase: "preparing", completed: processed, total: pending.length, message: `Read ${processed} / ${pending.length} files` });
     }
   }
-  if (foundDocuments.length > maxFiles) coverage.push(`Document count exceeds the limit: only the first ${maxFiles} files were read.`);
-  if (sources.length > maxSourceFiles) coverage.push(`Source text exceeds the limit: only the first ${maxSourceFiles} candidates were read.`);
   const knowledgeReferences = buildKnowledgeReferences(knowledge);
   return buildProjectEvidencePackage({
     projectName: root.path.split("/").filter(Boolean).pop() ?? "Project",
@@ -110,7 +154,13 @@ export async function readWorkspaceEvidence(
     ...(knowledge.objects ? { objects: knowledge.objects } : {}),
     knowledge: knowledgeReferences,
     ...(options.requirement ? { requirement: options.requirement } : {}),
+    ...(include.length ? { scope: include } : {}),
+    ...(options.preset ? { preset: options.preset } : {}),
     coverage
+  }, {
+    ...(options.maxFiles !== undefined ? { maxFiles: options.maxFiles } : {}),
+    ...(options.maxFileChars !== undefined ? { maxFileChars: options.maxFileChars } : {}),
+    ...(options.maxEvidenceChars !== undefined ? { maxTotalChars: options.maxEvidenceChars } : {})
   });
 }
 
@@ -246,6 +296,9 @@ export interface ProjectPanelDataSourceOptions {
     readDiagrams?(): Promise<readonly ProjectDiagram[]>;
     writeDiagram?(diagram: ProjectDiagram): Promise<void>;
     readInitialization?(): Promise<{ markedInitialized: boolean; hasIntent: boolean; diagramCount: number }>;
+    /** The last evidence record, so a reloaded page still explains what the model was given. */
+    readEvidenceSummary?(): Promise<ProjectEvidenceSummary | undefined>;
+    writeEvidenceSummary?(summary: ProjectEvidenceSummary): Promise<void>;
   };
   /** Reads bounded text evidence only when the user explicitly initializes or generates a diagram. */
   readEvidence(options: { requirement?: string }, signal: AbortSignal, onProgress: ProjectInitializationProgressListener): Promise<ProjectEvidencePackage>;
@@ -260,6 +313,8 @@ export interface ProjectPanelDataSourceOptions {
     serviceTiers?: readonly string[];
   }[] }[];
   openEvidence?: (path: string, line?: number) => Promise<void>;
+  /** Live AI budgets, read per run so a settings change applies without reloading the window. */
+  projectAiLimits?: () => ProjectAiLimits;
   now?: () => number;
 }
 
@@ -286,6 +341,27 @@ function sortProjectDiagrams(diagrams: readonly ProjectDiagram[]): ProjectDiagra
     || left.title.localeCompare(right.title));
 }
 
+/**
+ * The removed source scanner left a `scan` profile behind in `.dext/project.json`. It is preserved
+ * on disk but never read by the scanner, so a reader who configured `scan.roots` is told that the
+ * roots now act as the evidence scope until `dext.project.evidenceInclude` replaces them.
+ */
+export function legacyScanRoots(definition: ProjectDefinition | undefined): string[] {
+  const scan = (definition as { scan?: { roots?: unknown } } | undefined)?.scan;
+  const roots = scan && typeof scan === "object" ? scan.roots : undefined;
+  return Array.isArray(roots)
+    ? roots.filter((root): root is string => typeof root === "string" && root.trim().length > 0).slice(0, 10)
+    : [];
+}
+
+/** The retired roots as evidence globs, so an old configuration keeps meaning what it said. */
+export function legacyScanInclude(definition: ProjectDefinition | undefined): string[] {
+  return legacyScanRoots(definition).map((root) => {
+    const trimmed = root.trim().replace(/\/+$/, "");
+    return trimmed === "" || trimmed === "." ? "**" : `${trimmed}/**`;
+  });
+}
+
 function safeFileName(title: string): string {
   const sanitized = [...title].map((character) => /[\\/:*?"<>|]/.test(character) || character.charCodeAt(0) < 32 ? "-" : character).join("");
   return sanitized.trim().slice(0, 80) || "diagram";
@@ -295,6 +371,29 @@ function activityLine(event: ProjectAiActivityEvent): string {
   const value = event.text ?? "";
   const title = event.title ?? "";
   return value || title ? `${title && value ? `${title}: ` : title}${value}\n` : "";
+}
+
+/** A card click shows these details in the page, so each payload stays small and self-describing. */
+function diagramNodeDetails(diagram: ProjectDiagram): ProjectDiagramNodeDetail[] {
+  return diagram.nodes.slice(0, 200).map((node) => ({
+    id: node.id,
+    label: node.label,
+    ...(node.description ? { description: clipText(node.description, 400) } : {}),
+    ...(node.role ? { role: node.role } : {}),
+    ...(node.semanticIds.length ? { semanticIds: node.semanticIds.slice(0, 12) } : {}),
+    evidence: node.evidence.slice(0, 6).map((entry) => ({
+      path: entry.path,
+      ...(entry.line ? { line: entry.line } : {}),
+      ...(entry.note ? { note: clipText(entry.note, 200) } : {})
+    })),
+    ...(typeof node.confidence === "number" ? { confidence: node.confidence } : {}),
+    ...(node.review ? { review: node.review } : {}),
+    ...(node.freshness ? { freshness: node.freshness } : {})
+  }));
+}
+
+function clipText(value: string, max: number): string {
+  return value.length > max ? `${value.slice(0, max - 1)}…` : value;
 }
 
 function mappingOf(document: unknown): ArchifyIdMapping | undefined {
@@ -317,6 +416,8 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
   let hydrated = false;
   let generating = false;
   let generationError: string | undefined;
+  /** Last evidence record of this session, so the page can explain a run without a reload. */
+  let lastEvidence: ProjectEvidenceSummary | undefined;
   const tasks = new DiagramTaskRegistry();
   const draftQueue = new KnowledgeDraftQueue();
   const listeners = new Set<(message: ProjectPanelMessage) => void>();
@@ -335,6 +436,21 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
       rendered.delete(oldest);
     }
   };
+  /**
+   * Records what one evidence read handed over, posts it to the page and persists it so the next
+   * session can still explain why a diagram looks the way it does.
+   */
+  const captureEvidence = async (trigger: "initialize" | "diagram", packaged: ProjectEvidencePackage): Promise<void> => {
+    const summary = summarizeProjectEvidence(packaged, { trigger, generatedAt: (options.now ?? Date.now)() });
+    lastEvidence = summary;
+    post({ type: "projectEvidenceSummary", summary });
+    try {
+      await options.store.writeEvidenceSummary?.(summary);
+    } catch {
+      // The record is a diagnostic; failing to store it must never fail the run that produced it.
+    }
+  };
+
   const projectAiProvider = options.projectAiProvider ? {
     id: options.projectAiProvider.id,
     generate: (request: Parameters<ProjectAiProvider["generate"]>[0], signal: AbortSignal) => options.projectAiProvider!.generate({
@@ -347,10 +463,14 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
   } satisfies ProjectAiProvider : undefined;
 
   const initializationService = new ProjectInitializationService({
-    prepareEvidence: (signal, onProgress) => options.readEvidence({}, signal, onProgress),
+    prepareEvidence: async (signal, onProgress) => {
+      const packaged = await options.readEvidence({}, signal, onProgress);
+      await captureEvidence("initialize", packaged);
+      return packaged;
+    },
     generate: async (evidence, signal, _onProgress, onOutput) => {
       if (!projectAiProvider) throw new Error("Project AI is unavailable: enable and select an available AI CLI in the input area first.");
-      const service = new ProjectAiGenerationService(projectAiProvider);
+      const service = new ProjectAiGenerationService(projectAiProvider, options.projectAiLimits?.() ?? {});
       // `onOutput` is the single text sink: one activity event becomes exactly one output line.
       return service.generate(evidence, {
         signal,
@@ -420,7 +540,7 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
       if (!engine.available) { post({ type: "projectDiagramRenderFailed", diagramId, error: engine.reason ?? "Archify runtime is unavailable." }); return; }
       const cached = rendered.get(diagramId);
       if (cached && cached.version === diagram.version && cached.engineVersion === engine.version && !renderOptions.refresh) {
-        post({ type: "projectDiagramRendered", diagramId, requestedVersion: version, displayedVersion: cached.version, usedLastGood: false, html: cached.html, mapping: cached.mapping, receipt: cached.receipt, updatedAt: diagram.updatedAt });
+        post({ type: "projectDiagramRendered", diagramId, requestedVersion: version, displayedVersion: cached.version, usedLastGood: false, html: cached.html, mapping: cached.mapping, nodes: diagramNodeDetails(diagram), receipt: cached.receipt, updatedAt: diagram.updatedAt });
         return;
       }
       const outcome = await registry.render(diagram, { format: "html" });
@@ -442,6 +562,7 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
             usedLastGood: true,
             html: outcome.artifact.content,
             mapping,
+            nodes: diagramNodeDetails(snapshotDiagram),
             receipt: { status: outcome.receipt.status, issues: outcome.receipt.issues },
             updatedAt: snapshotDiagram.updatedAt,
             error: outcome.error
@@ -460,7 +581,7 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
       const cachedEntry: RenderedDiagram = { version: diagram.version, engineVersion: engine.version, html: outcome.artifact.content as string, receipt };
       if (mapping) cachedEntry.mapping = mapping;
       cacheRender(diagramId, cachedEntry);
-      post({ type: "projectDiagramRendered", diagramId, requestedVersion: version, displayedVersion: diagram.version, usedLastGood: false, html: outcome.artifact.content, mapping, receipt, updatedAt: diagram.updatedAt });
+      post({ type: "projectDiagramRendered", diagramId, requestedVersion: version, displayedVersion: diagram.version, usedLastGood: false, html: outcome.artifact.content, mapping, nodes: diagramNodeDetails(diagram), receipt, updatedAt: diagram.updatedAt });
     } catch (error) {
       post({ type: "projectDiagramRenderFailed", diagramId, error: error instanceof Error ? error.message : String(error) });
     }
@@ -484,8 +605,9 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
       const evidence = await options.readEvidence({ requirement }, signal, (progress) => {
         post({ type: "projectDiagramProgress", message: progress.message ?? "Preparing evidence…", phase: progress.phase });
       });
+      await captureEvidence("diagram", evidence);
       post({ type: "projectDiagramProgress", message: "Calling the AI to generate the diagram…" });
-      const service = new ProjectAiGenerationService(projectAiProvider);
+      const service = new ProjectAiGenerationService(projectAiProvider, options.projectAiLimits?.() ?? {});
       const result = await service.generateDiagram(evidence, {
         requirement,
         ...(kind ? { kind } : {}),
@@ -547,28 +669,49 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
     }
   };
 
-  const focusDiagramNode = async (diagramId: string, nodeId: string): Promise<void> => {
+  /**
+   * Opens one evidence entry the clicked node itself declares. The webview can never name an
+   * arbitrary path, and the reader chooses when to leave the diagram.
+   */
+  const openDiagramEvidence = async (diagramId: string, nodeId: string, path: string, line?: number): Promise<void> => {
     try {
       const diagrams = await readDiagrams();
       const diagram = diagrams.find((candidate) => candidate.id === diagramId);
       const node = diagram?.nodes.find((candidate) => candidate.id === nodeId);
       if (!node || !options.openEvidence) return;
-      const evidence = node.evidence.find((entry) => entry.path && isAllowedEvidencePath(entry.path));
+      const evidence = node.evidence.find((entry) => entry.path === path && isAllowedEvidencePath(entry.path));
       if (!evidence) return;
-      await options.openEvidence(evidence.path, evidence.line);
+      await options.openEvidence(evidence.path, line && line > 0 ? line : evidence.line);
     } catch {
       // Opening evidence is best effort; an unreadable path never breaks the viewer.
     }
   };
 
+  /**
+   * Opens a file the evidence record actually lists. The page can never name an arbitrary path: the
+   * reader clicks a path the model was given, and only then does Dext leave for the editor.
+   */
+  const openEvidencePath = async (path: string): Promise<void> => {
+    try {
+      if (!options.openEvidence || !lastEvidence) return;
+      const known = lastEvidence.paths.includes(path) || lastEvidence.excerpted.includes(path);
+      if (!known || !isAllowedEvidencePath(path)) return;
+      await options.openEvidence(path);
+    } catch {
+      // Opening a file is best effort; an unreadable path never breaks the page.
+    }
+  };
+
   const load = async (): Promise<ProjectPanelData> => {
-    const [objects, architecture, definition, persistedIntent, persistedDiagrams] = await Promise.all([
+    const [objects, architecture, definition, persistedIntent, persistedDiagrams, persistedEvidence] = await Promise.all([
       options.store.readObjects(),
       options.store.readArchitecture(),
       options.store.readDefinition?.(),
       options.store.readIntent?.(),
-      options.store.readDiagrams?.()
+      options.store.readDiagrams?.(),
+      options.store.readEvidenceSummary?.()
     ]);
+    lastEvidence = persistedEvidence ?? lastEvidence;
     if (!hydrated) {
       hydrated = true;
       const hydration = options.store.readInitialization
@@ -593,6 +736,7 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
       ? definition.ai.reasoningEffort : undefined;
     selectedAiSpeed = definition?.ai.speed && selectedModel?.speedTiers?.includes(definition.ai.speed)
       ? definition.ai.speed : undefined;
+    const retiredScanRoots = legacyScanRoots(definition);
     return {
       overview: {
         name: options.name,
@@ -602,6 +746,7 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
         drafts: objects.filter((object) => object.confirmation === "draft").length,
         needsVerification: objects.filter((object) => object.validity !== "current").length,
         initialization,
+        ...(retiredScanRoots.length ? { legacyScanRoots: retiredScanRoots } : {}),
         ...(options.aiCli?.length ? {
           aiCli: options.aiCli,
           ...(selectedAiCli ? { selectedAiCli } : {}),
@@ -623,6 +768,7 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
       architecture: {
         diagrams: diagrams.map(describeProjectDiagram),
         ...(selected ? { selected: describeProjectDiagram(selected) } : {}),
+        ...(lastEvidence ? { evidence: lastEvidence } : {}),
         knowledgeUninitialized: initialization.status === "uninitialized",
         ...(engine ? { engine } : {}),
         ...(generating ? { generating: true } : {}),
@@ -650,7 +796,8 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
     renderDiagram,
     generateDiagram,
     exportDiagram,
-    focusDiagramNode,
+    openDiagramEvidence,
+    openEvidencePath,
     cancelDiagramWork: (): void => {
       options.diagramRegistry?.cancelAll();
       tasks.cancelAll();

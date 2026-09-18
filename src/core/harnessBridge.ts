@@ -71,7 +71,16 @@ export class HarnessBridge {
         continue;
       }
       const request = parseHarnessQuestionRequest(parsed);
-      if (!request) continue;
+      if (!request) {
+        // Never swallow a frame. The Harness answerer waits for a reply on this
+        // socket, so a request Dext cannot render has to be answered, or
+        // `ask_user_question` parks the whole turn with nothing on screen. The
+        // echoed id is enough to report "no Dext surface owns this", which the
+        // caller turns into its own visible fail-closed error.
+        const id = parsed && typeof parsed === "object" ? (parsed as { id?: unknown }).id : undefined;
+        if (typeof id === "string" && id) this.send(socket, { id, status: "unavailable" });
+        continue;
+      }
       void this.answer(request).then(
         (outcome) => this.send(socket, { id: request.id, ...outcome }),
         () => this.send(socket, { id: request.id, status: "unavailable" })
