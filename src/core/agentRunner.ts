@@ -32,8 +32,11 @@ export interface AgentExecutionRequest {
   resolved: ResolvedInvocation;
   contract: AxMethodContract;
   metadata: Readonly<ExecutionMetadata>;
-  /** Only agent(apply=true) may receive a trusted workspace-write sandbox. */
+  /** Only agent(apply=true) may receive a trusted writable sandbox. */
   allowWorkspaceWrite?: boolean;
+  /** The composer-selected write tier. The write gate above still controls
+   * whether this value can take effect. */
+  permission?: AgentPermission;
   /** When false, the Agent reports conclusions in text and must not produce a
    * patch (agent(patch=false)). Defaults to true. */
   includePatch?: boolean;
@@ -674,10 +677,14 @@ function claudeFailure(output: string): string | undefined {
   return undefined;
 }
 
-/** A boolean write flag is the DSL's vocabulary: `agent(apply=...)` can reach
- * the workspace or not, and never asks for more than that. */
-export function permissionForWrite(allowWorkspaceWrite: boolean | undefined): AgentPermission {
-  return allowWorkspaceWrite === true ? "workspace-write" : "read-only";
+/** Resolve the provider tier for a typed Agent call. The apply flag is the
+ * hard write gate; a full-access tier is honored only when that gate is open. */
+export function permissionForWrite(
+  allowWorkspaceWrite: boolean | undefined,
+  requestedPermission?: AgentPermission
+): AgentPermission {
+  if (allowWorkspaceWrite !== true) return "read-only";
+  return requestedPermission === "full-access" ? "full-access" : "workspace-write";
 }
 
 /** Claude names the tiers after what it will do without asking. `plan` refuses
@@ -1306,9 +1313,7 @@ export class CliAgentRunner implements AgentRunner {
           : `Read the Dext JSON payload from stdin. Values tagged kind=dext-result are prior typed API results; inspect their value field. Execute the requested API without modifying workspace files, installing packages, or running state-changing commands. ${progressInstruction}`;
     const serviceTier = request.speed === "fast" ? "priority" : request.speed === "standard" ? "default" : request.serviceTier || undefined;
     const processEnv = await this.processEnvironment(command, request);
-    // The typed API path stays a two-state world: `agent(apply=...)` never asks
-    // for full access, whatever the composer's own selector says.
-    const permission = permissionForWrite(request.allowWorkspaceWrite);
+    const permission = permissionForWrite(request.allowWorkspaceWrite, request.permission);
     const extraArguments = request.cliArguments ?? [];
     const args: string[] = request.profile.provider === "codex"
       ? codexCliArguments(request, schemaPath, permission, serviceTier, extraArguments)

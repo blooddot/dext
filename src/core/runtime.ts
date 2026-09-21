@@ -752,6 +752,7 @@ export class DextRuntime {
           contract,
           metadata: onEvent ? { ...runnerMetadata, onAgentEvent: onEvent } : runnerMetadata,
           allowWorkspaceWrite: agentWriteEnabled,
+          permission: agentWriteEnabled ? metadata.agentPermission ?? this.agentPermission() : "read-only",
           includePatch,
           ...(this.extraCliArguments(profile).length ? { cliArguments: this.extraCliArguments(profile) } : {}),
           ...(metadata.signal ? { signal: metadata.signal } : {}),

@@ -12,7 +12,7 @@ const waiting: AgentStreamEvent = {
   phase: "input", text: "", userInput: { id: "question", status: "waiting", blocking: false, questions: [] }
 };
 
-function harness() {
+function harness(options: { visible?: boolean } = {}) {
   let choose!: (action?: string) => void;
   host.showInformationMessage.mockImplementation(() => new Promise<string | undefined>((resolve) => { choose = resolve; }));
   const sidebar = Object.create(DextSidebarProvider.prototype) as DextSidebarProvider & {
@@ -26,6 +26,9 @@ function harness() {
   Object.assign(sidebar, {
     activeSession: { id: "foreground" }, activeExecutions: executions,
     sessions: new Map([[session.id, session]]), post, postWhenReady: post,
+    // The provider reads the view's live visibility to decide whether Dext
+    // still has to be revealed, so the harness stands in for that WebviewView.
+    view: options.visible === undefined ? undefined : { visible: options.visible },
     publish: Reflect.get(sidebar, "postAgentEvent"), restore: Reflect.get(sidebar, "postActiveExecution")
   });
   const open = vi.spyOn(sidebar, "openConversation").mockImplementation(async (next) => {
@@ -49,6 +52,20 @@ describe("sidebar input notifications", () => {
       type: "focusAgentInput", sessionId: "background", turnId: "turn", requestId: "question", kind: "agent"
     }));
     expect(host.executeCommand).toHaveBeenCalledWith("dext.sidebar.focus");
+    expect(h.messages.map((message) => message.type)).toEqual(["executing", "agentEvents", "focusAgentInput"]);
+  });
+
+  it("keeps the display state of an on-screen Dext instead of revealing it again", async () => {
+    const h = harness({ visible: true });
+    h.sidebar.publish("background", waiting);
+    expect(host.showInformationMessage).toHaveBeenCalledOnce();
+    h.choose("View question");
+    await vi.waitFor(() => expect(h.messages.at(-1)).toEqual({
+      type: "focusAgentInput", sessionId: "background", turnId: "turn", requestId: "question", kind: "agent"
+    }));
+    // Revealing a view that is already on screen is what collapses a maximized
+    // Secondary Side Bar back to its docked width, so nothing may be focused.
+    expect(host.executeCommand).not.toHaveBeenCalled();
     expect(h.messages.map((message) => message.type)).toEqual(["executing", "agentEvents", "focusAgentInput"]);
   });
 

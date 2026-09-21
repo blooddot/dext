@@ -1077,10 +1077,10 @@ answer = ask(input=printed.text)`, registry);
     runtime.setWorkspaceRoot(process.cwd());
     runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: ["gpt-test"] }]);
     runtime.setAgentSelection({ profileId: "codex", model: "gpt-test" });
-    const requests: { allowWorkspaceWrite: boolean | undefined; cwd: string }[] = [];
+    const requests: { allowWorkspaceWrite: boolean | undefined; permission: string | undefined; cwd: string }[] = [];
     runtime.setAgentRunner({
       run: async (request) => {
-        requests.push({ allowWorkspaceWrite: request.allowWorkspaceWrite, cwd: request.cwd });
+        requests.push({ allowWorkspaceWrite: request.allowWorkspaceWrite, permission: request.permission, cwd: request.cwd });
         return { kind: "agent", text: "done" };
       }
     });
@@ -1089,7 +1089,7 @@ answer = ask(input=printed.text)`, registry);
       kind: "invocation", method: "agent", source: "code",
       arguments: [{ name: "input", value: "preview" }, { name: "apply", value: false }]
     })).resolves.toMatchObject({ result: { kind: "agent", text: "done" } });
-    expect(requests).toEqual([{ allowWorkspaceWrite: false, cwd: process.cwd() }]);
+    expect(requests).toEqual([{ allowWorkspaceWrite: false, permission: "read-only", cwd: process.cwd() }]);
 
     await expect(runtime.execute({
       kind: "invocation", method: "agent", source: "code", arguments: [{ name: "input", value: "write" }]
@@ -1100,7 +1100,18 @@ answer = ask(input=printed.text)`, registry);
     await runtime.execute({
       kind: "invocation", method: "agent", source: "code", arguments: [{ name: "input", value: "write" }]
     });
-    expect(requests[1]).toEqual({ allowWorkspaceWrite: true, cwd: process.cwd() });
+    expect(requests[1]).toEqual({ allowWorkspaceWrite: true, permission: "workspace-write", cwd: process.cwd() });
+
+    runtime.setAgentSelection({ profileId: "codex", permission: "full-access" });
+    await runtime.execute({
+      kind: "invocation", method: "agent", source: "code", arguments: [{ name: "input", value: "full access preview" }, { name: "apply", value: false }]
+    });
+    expect(requests[2]).toEqual({ allowWorkspaceWrite: false, permission: "read-only", cwd: process.cwd() });
+
+    await runtime.execute({
+      kind: "invocation", method: "agent", source: "code", arguments: [{ name: "input", value: "full access write" }]
+    }, [], { agentPermission: "full-access" });
+    expect(requests[3]).toEqual({ allowWorkspaceWrite: true, permission: "full-access", cwd: process.cwd() });
   });
 
   it("passes the workflow cancellation signal to the selected Agent runner", async () => {

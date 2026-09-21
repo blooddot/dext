@@ -158,6 +158,7 @@ describe("shared History and Conversation actions", () => {
         },
         executeInput: async (_input: string, metadata: ExecutionMetadata) => {
           expect(mode).toBe("code");
+          expect(metadata.agentPermission).toBe("full-access");
           return execute(metadata);
         }
       }

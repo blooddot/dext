@@ -1732,6 +1732,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       const metadata = {
         agentSessionId: sessionId,
         agentPreset: harnessPresetOrDefault(selection.agentPreset),
+        ...(mode === "code" ? { agentPermission: "full-access" as const } : {}),
         ...(priorConversation ? { conversationContext: priorConversation } : {}),
         signal: controller.signal,
         ui: this.uiInteraction(sessionId, turnId, events),
@@ -1989,7 +1990,12 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           "Dext: AI needs your response. Choose an option or enter an answer.", "View question"
         ) === "View question",
         async (target) => {
-          await vscode.commands.executeCommand("dext.sidebar.focus");
+          // Asking the host to focus a view that is already on screen rewrites
+          // the layout the reader chose: a maximized Secondary Side Bar drops
+          // back to its docked width. Only a Dext the reader cannot see is
+          // revealed here; an on-screen one keeps the display state it has and
+          // still takes focus, because the Webview focuses the question field.
+          if (this.view?.visible !== true) await vscode.commands.executeCommand("dext.sidebar.focus");
           if (!this.inputNotifications?.isWaiting(target) || this.disposed
             || this.activeExecutions.get(target.sessionId)?.turnId !== target.turnId) return;
           const session = this.sessions.get(target.sessionId);

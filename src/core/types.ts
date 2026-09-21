@@ -1,4 +1,5 @@
 import type { UiFormDefinition, UiFormResult, UiInteractionState } from "./uiForm.js";
+import type { WritableAgentPermission } from "../agentProfiles.js";
 export type MethodKind = "command" | "skill";
 export type MethodSource = "builtin" | "global" | "project";
 export type BuiltinOutputKind =
@@ -522,6 +523,9 @@ export interface ResolvedInvocation {
 
 export interface ExecutionMetadata {
   agentPreset?: string;
+  /** Host-selected permission for typed Agent calls in a mode without its own
+   * permission picker, such as Code. */
+  agentPermission?: WritableAgentPermission;
   instruction?: string;
   /** Explicit Plan document selected by the host for a revise turn. */
   planPath?: string;

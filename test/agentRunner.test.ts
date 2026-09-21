@@ -455,9 +455,12 @@ describe("CLI command resolution", () => {
       .toEqual(expect.arrayContaining(["--sandbox", "danger-full-access", "--skip-git-repo-check"]));
     expect(claudeConversationArguments({ permission: "full-access" }))
       .toEqual(expect.arrayContaining(["--permission-mode", "bypassPermissions"]));
-    // The DSL only ever knows about writing or not, so it can never reach the
-    // top tier however the composer is configured.
+    // The apply flag remains the hard gate, while an explicit composer tier
+    // can now reach the provider's top sandbox.
     expect(permissionForWrite(true)).toBe("workspace-write");
+    expect(permissionForWrite(true, "full-access")).toBe("full-access");
+    expect(permissionForWrite(true, "read-only")).toBe("workspace-write");
+    expect(permissionForWrite(false, "full-access")).toBe("read-only");
     expect(permissionForWrite(false)).toBe("read-only");
     expect(permissionForWrite(undefined)).toBe("read-only");
   });
@@ -494,6 +497,9 @@ describe("CLI command resolution", () => {
     ]));
     expect(codexCliArguments({}, "output-schema.json", "workspace-write")).toEqual(expect.arrayContaining([
       "--sandbox", "workspace-write", "--skip-git-repo-check"
+    ]));
+    expect(codexCliArguments({}, "output-schema.json", "full-access")).toEqual(expect.arrayContaining([
+      "--sandbox", "danger-full-access", "--skip-git-repo-check"
     ]));
     expect(claudeCliArguments({ permission: "workspace-write" }, { type: "object" }))
       .toEqual(expect.arrayContaining(["--permission-mode", "acceptEdits"]));
