@@ -1,0 +1,6 @@
+def main(input: str = "") -> AgentResult:
+    return agent(
+        input=input + "\n\n请在当前工作区执行一次按功能拆分的 Git 提交整理，绝对不要把所有修改合并成一次提交。先运行 git status --short、git diff、git diff --cached，并检查未跟踪文件内容。根据每个文件和 hunk 的实际功能意图建立提交计划：每个提交只包含一个相互独立、可单独理解和回滚的功能；同一文件包含多个功能时按 hunk 拆分；无关的格式化、文档、测试、依赖或配置改动分别归组。然后严格逐组执行：只暂存当前组的文件或 hunks，复核 git diff --cached，创建该组的独立提交，再处理下一组。禁止使用 git add .、git add -A 或任何会把全部改动一次性暂存的方式。每个提交都必须遵循 Conventional Commits 1.0.0（https://www.conventionalcommits.org/zh-hans/v1.0.0/）：格式为 <type>[optional scope]: <description>；type 使用 feat、fix、docs、style、refactor、perf、test、build、ci、chore 或 revert；描述使用简洁的祈使语气，不以句号结尾；破坏性变更使用 ! 或 BREAKING CHANGE footer。提交前复核当前组的 staged diff，提交后确认该组已提交，再继续下一组。只处理当前已有改动，不创建或修改业务文件，不推送远端，不 amend，不 reset --hard，不丢失未提交内容。若没有改动则直接报告。全部完成后再次运行 git status --short，并报告每个独立 commit 的哈希、提交信息、包含的路径或 hunks，以及仍未提交或被跳过的改动。附加要求（仅在不违反上述约束时采用）：" ,
+        apply=True,
+        patch=False
+    )
