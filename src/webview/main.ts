@@ -162,19 +162,41 @@ jumpToLatest.append(jumpToLatestIcon);
 jumpToLatest.setAttribute("aria-label", "Jump to latest output");
 jumpToLatest.title = "Jump to latest output";
 jumpToLatest.hidden = true;
+const jumpToTop = document.createElement("button");
+jumpToTop.type = "button";
+jumpToTop.className = "stream-jump-top";
+const jumpToTopIcon = document.createElement("i");
+jumpToTopIcon.className = "codicon codicon-arrow-up";
+jumpToTopIcon.setAttribute("aria-hidden", "true");
+jumpToTop.append(jumpToTopIcon);
+jumpToTop.setAttribute("aria-label", "Jump to top");
+jumpToTop.title = "Jump to top";
+jumpToTop.hidden = true;
 // Keep the control in the result panel's viewport layer instead of inside the
 // scrollable output. This keeps it visible while the reader inspects history.
+elements.resultSection.append(jumpToTop);
 elements.resultSection.append(jumpToLatest);
 syncResultScrollGutter();
 window.addEventListener("resize", syncResultScrollGutter, { passive: true });
 if (typeof ResizeObserver === "function") {
   // Docked, collapsed, and resized panels all change the scrollbar gutter.
   // A following reader also expects the newest output to stay in view when the
-  // composer grows or the panel is maximized under the same conversation.
-  new ResizeObserver(() => {
+  // composer grows or the panel is maximized under the same conversation. The
+  // result itself is observed as well: streamed Markdown, fonts, and hydrated
+  // disclosures can grow the scrollHeight without changing the scroll port's
+  // own size.
+  const syncResultLayout = (): void => {
     syncResultScrollGutter();
+    syncJumpToLatest();
+    if (!followResultEnd || measuredResultScrollHeight < 0) {
+      measuredResultScrollHeight = elements.resultBody.scrollHeight;
+      measuredResultClientHeight = elements.resultBody.clientHeight;
+    }
     pinResultToBottom();
-  }).observe(elements.resultBody);
+  };
+  const resultLayoutObserver = new ResizeObserver(syncResultLayout);
+  resultLayoutObserver.observe(elements.resultBody);
+  resultLayoutObserver.observe(elements.result);
 }
 
 let pendingConfirmation: (() => void) | undefined;
@@ -230,6 +252,11 @@ let conversationSwitchId = 0;
 // the user is trying to read it.
 let resultScrollFrame: number | undefined;
 let resultScrollGeneration = 0;
+// The browser can emit a scroll event when content or the scroll port changes
+// size. Keep the last laid-out dimensions so that event is not mistaken for a
+// reader dragging away from the live end.
+let measuredResultScrollHeight = -1;
+let measuredResultClientHeight = -1;
 // Whether the conversation follows its newest output. Only the reader's own
 // gestures change this. A scroll event the browser emits on its own - a clamp
 // after a disclosure shrank, a scroll-anchored adjustment, or our own
@@ -2614,6 +2641,7 @@ function syncJumpToLatest(): void {
   // panel) made it disappear as soon as a response finished, even when the
   // reader had scrolled away from the newest output.
   jumpToLatest.hidden = resultIsNearBottom();
+  jumpToTop.hidden = elements.resultBody.scrollTop <= 1;
 }
 
 /** #result-body owns the vertical scrollbar while the floating control is
@@ -2637,20 +2665,29 @@ function snapResultToBottom(): void {
   const body = elements.resultBody;
   const end = Math.max(0, body.scrollHeight - body.clientHeight);
   if (body.scrollTop !== end) body.scrollTop = end;
+  measuredResultScrollHeight = body.scrollHeight;
+  measuredResultClientHeight = body.clientHeight;
   syncJumpToLatest();
+}
+
+/** A running turn follows its Process timeline only while that timeline is
+ * visible. Keeping the disclosure closed is an explicit reader choice; new
+ * events must not reopen it or pull the reader back to the live end. */
+function resultFollowAllowed(): boolean {
+  return !executing || !activeTurn?.processDisclosure || activeTurn.processDisclosure.open;
 }
 
 /** A batch of output has been rendered: keep a reader who is following at the
  * end. The pin runs in the frame after the batch so the deferred Markdown pass
  * cannot leave the view above the message that just grew. */
 function pinResultToBottom(): void {
-  if (!followResultEnd) return;
+  if (!followResultEnd || !resultFollowAllowed()) return;
   cancelScheduledResultScroll();
   const generation = resultScrollGeneration;
   const pin = (settle: boolean): void => {
     resultScrollFrame = requestAnimationFrame(() => {
       resultScrollFrame = undefined;
-      if (generation !== resultScrollGeneration || !followResultEnd) return;
+      if (generation !== resultScrollGeneration || !followResultEnd || !resultFollowAllowed()) return;
       snapResultToBottom();
       // Opening a disclosure or hydrating a stored turn can still add height
       // after this frame; one settle pass keeps the newest output in view.
@@ -2673,12 +2710,13 @@ function followResultToBottom(): void {
  * so scrollHeight reflects the complete session. */
 function scrollResultToBottom(): void {
   cancelScheduledResultScroll();
+  if (!resultFollowAllowed()) return;
   followResultEnd = true;
   const generation = resultScrollGeneration;
   resultScrollFrame = requestAnimationFrame(() => {
     resultScrollFrame = requestAnimationFrame(() => {
       resultScrollFrame = undefined;
-      if (generation !== resultScrollGeneration || !followResultEnd) return;
+      if (generation !== resultScrollGeneration || !followResultEnd || !resultFollowAllowed()) return;
       if (!activeConversationId || activeConversationId !== renderedConversationId) return;
       snapResultToBottom();
     });
@@ -3449,6 +3487,21 @@ elements.result.addEventListener("toggle", syncResultToggle, true);
 // reader. A following reader keeps the newest output in view; one who scrolled
 // away is left where they are.
 elements.result.addEventListener("toggle", pinResultToBottom, true);
+elements.result.addEventListener("toggle", (event) => {
+  const process = event.target instanceof HTMLDetailsElement
+    && event.target.classList.contains("output-turn-section")
+    && event.target.dataset.turnSection === "process"
+    ? event.target
+    : undefined;
+  if (!process || process !== activeTurn?.processDisclosure || !executing) return;
+  if (process.open) {
+    followResultEnd = true;
+    pinResultToBottom();
+  } else {
+    followResultEnd = false;
+    cancelScheduledResultScroll();
+  }
+}, true);
 elements.resultBody.addEventListener("scroll", () => {
   // A gesture in progress decides where the view lands when it ends, so the
   // scroll events it produces are not the reader's final word.
@@ -3457,14 +3510,15 @@ elements.resultBody.addEventListener("scroll", () => {
     return;
   }
   // Reaching the end - by wheel, keyboard, or our own correction - resumes
-  // following. Leaving it by hand stops the stream from pulling the view back,
-  // which is what lets an earlier event be read in peace. A scroll the reader
-  // did not start (a clamp after a disclosure shrank, or a correction one frame
-  // behind its content) must not cancel a pin that is still on its way, or the
-  // newest output stays stranded below the viewport with no way back except the
-  // jump control.
+  // following. A scroll event away from the end is not enough to release the
+  // follow: content growth, a font reflow, and the browser's own clamping can
+  // all emit one while the reader is still following the newest output. The
+  // explicit wheel/touch/keyboard/track handlers above are the user intent
+  // signals that release it.
+  const layoutChanged = measuredResultScrollHeight !== elements.resultBody.scrollHeight
+    || measuredResultClientHeight !== elements.resultBody.clientHeight;
   if (resultIsNearBottom()) followResultEnd = true;
-  else followResultEnd = false;
+  else if (!layoutChanged) followResultEnd = false;
   syncJumpToLatest();
 }, { passive: true });
 // A pointer press on the scrollbar strip never reaches the track itself, so the
@@ -3472,8 +3526,12 @@ elements.resultBody.addEventListener("scroll", () => {
 elements.resultBody.addEventListener("pointerdown", (event) => {
   const body = elements.resultBody;
   const scrollbar = body.offsetWidth - body.clientWidth;
-  if (scrollbar <= 0) return;
-  if (event.clientX < body.getBoundingClientRect().right - scrollbar) return;
+  const rect = body.getBoundingClientRect();
+  // Overlay scrollbars report no width through offsetWidth/clientWidth, even
+  // though their thumb still receives pointer input. Keep a narrow fallback
+  // hit strip so releasing that thumb at the track end gets a fresh snap.
+  const hitWidth = scrollbar > 0 ? scrollbar : 16;
+  if (event.clientX < rect.right - hitWidth) return;
   resultScrollGesture = true;
   // The reader is choosing a position by hand, so the stream must not pull the
   // view back while the thumb is held.
@@ -3518,6 +3576,13 @@ elements.resultBody.addEventListener("keydown", (event) => {
 });
 jumpToLatest.addEventListener("click", () => {
   followResultToBottom();
+  elements.resultBody.focus({ preventScroll: true });
+});
+jumpToTop.addEventListener("click", () => {
+  followResultEnd = false;
+  cancelScheduledResultScroll();
+  elements.resultBody.scrollTop = 0;
+  syncJumpToLatest();
   elements.resultBody.focus({ preventScroll: true });
 });
 elements.problems.addEventListener("click", () => editor.goToFirstDiagnostic());

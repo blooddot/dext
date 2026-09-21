@@ -89,6 +89,48 @@ await runLabChecks(async ({ evaluate, settle, send, click, key, artifacts }) => 
   assert.equal(current.overflowAnchor, 'none', 'the scroll port disables browser scroll anchoring');
   console.log('PASS a streamed batch keeps a following reader at the newest output');
 
+  const processSelector = 'details.output-turn-section[data-turn-section="process"]';
+  await evaluate(`document.querySelector(${JSON.stringify(processSelector)}).open=false`);
+  await settle();
+  const collapsedPosition = (await state()).top;
+  // Keep a real scroll range outside Process so a mistaken automatic pin is
+  // observable even though the hidden timeline no longer contributes height.
+  await evaluate(`{const extra=document.createElement('div');extra.id='collapsed-process-layout';
+    extra.style.height='1200px';document.getElementById('result').append(extra);}`);
+  await settle();
+  await evaluate(`stream(25)`);
+  await settle();
+  assert.equal(await evaluate(`document.querySelector(${JSON.stringify(processSelector)}).open`), false,
+    'a collapsed Process stays collapsed while events arrive');
+  current = await state();
+  assert.ok(current.gap > 24, 'the collapsed Process check has room to detect an unwanted scroll');
+  assert.equal(current.top, collapsedPosition, 'layout growth and streamed events do not scroll a collapsed Process');
+  await evaluate(`document.getElementById('collapsed-process-layout').remove()`);
+  await evaluate(`document.querySelector(${JSON.stringify(processSelector)}).open=true`);
+  await settle();
+  current = await state();
+  assert.ok(current.gap <= 24, `opening Process resumes following at the live end, got ${JSON.stringify(current)}`);
+  console.log('PASS a collapsed Process does not reopen or auto-follow until expanded');
+
+  // Content can grow after the stream batch has already been pinned (for
+  // example when Markdown/fonts finish laying out). The scroll port must use
+  // the new scrollHeight instead of leaving the thumb at the old maximum.
+  await evaluate(`{const late=document.createElement('div');late.style.height='260px';late.textContent='late layout';document.getElementById('result').append(late);}`);
+  await settle();
+  current = await state();
+  assert.equal(current.gap, 0, `a late content resize keeps the thumb and content at the end, got ${JSON.stringify(current)}`);
+  console.log('PASS a late content resize re-syncs the scrollbar end');
+
+  // Shrinking the viewport changes the maximum scrollTop without changing the
+  // content. The body resize path must move the content with the thumb.
+  await evaluate(`{const b=document.getElementById('result-body');b.style.flex='0 0 auto';b.style.height=Math.max(80,b.clientHeight-120)+'px';}`);
+  await settle();
+  current = await state();
+  assert.equal(current.gap, 0, `a viewport resize keeps the content at the scrollbar end, got ${JSON.stringify(current)}`);
+  await evaluate(`{const b=document.getElementById('result-body');b.style.removeProperty('height');b.style.removeProperty('flex');}`);
+  await settle();
+  console.log('PASS a viewport resize re-syncs the scrollbar end');
+
   // Command output is the other half of a live turn: its panel caps its own
   // height, so expanding it while the reader follows must still land at the end.
   await evaluate(`tool(25)`);

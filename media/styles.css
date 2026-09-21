@@ -2427,6 +2427,7 @@ button.primary.stopping {
   padding-right: 4px;
 }
 
+.stream-jump-top,
 .stream-jump-latest {
   position: absolute;
   /* Clear #result-body's vertical scrollbar. The host decides how wide that
@@ -2461,6 +2462,12 @@ button.primary.stopping {
   transition: color 120ms ease, background 120ms ease, border-color 120ms ease, opacity 120ms ease;
 }
 
+.stream-jump-top {
+  bottom: 48px;
+}
+
+.stream-jump-top:hover,
+.stream-jump-top:focus-visible,
 .stream-jump-latest:hover,
 .stream-jump-latest:focus-visible {
   color: var(--vscode-foreground);
@@ -2469,15 +2476,18 @@ button.primary.stopping {
   opacity: 1;
 }
 
+.stream-jump-top:focus-visible,
 .stream-jump-latest:focus-visible {
   outline: 1px solid var(--vscode-focusBorder);
   outline-offset: 2px;
 }
 
+.stream-jump-top .codicon,
 .stream-jump-latest .codicon {
   font-size: 14px;
 }
 
+.stream-jump-top[hidden],
 .stream-jump-latest[hidden] {
   display: none;
 }
