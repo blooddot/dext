@@ -61,7 +61,7 @@ function selectFakeAgent(runtime: DextRuntime): void {
 }
 
 describe("Dext workflow runtime", () => {
-  it("limits node.fs to a trusted workspace and rejects traversal", async () => {
+  it("reads relative and absolute paths in a trusted workspace and rejects relative traversal", async () => {
     const root = await mkdtemp(join(tmpdir(), "dext-node-"));
     try {
       const { runtime } = setup();
@@ -69,12 +69,19 @@ describe("Dext workflow runtime", () => {
       runtime.setWorkspaceTrusted(true);
       await runtime.execute({ kind: "invocation", method: "node.fs.writeFile", source: "code", arguments: [{ name: "path", value: "state.txt" }, { name: "content", value: "ok" }] });
       expect(await readFile(join(root, "state.txt"), "utf8")).toBe("ok");
+      const absoluteRead = await runtime.execute({ kind: "invocation", method: "node.fs.readFile", source: "code", arguments: [{ name: "path", value: join(root, "state.txt") }] });
+      expect(absoluteRead.result).toMatchObject({ kind: "node", value: "ok" });
+      await expect(runtime.execute({ kind: "invocation", method: "node.fs.readFile", source: "code", arguments: [{ name: "path", value: join(root, "missing.txt") }] }))
+        .rejects.toMatchObject({ code: "ENOENT" });
       await expect(runtime.execute({ kind: "invocation", method: "node.fs.readFile", source: "code", arguments: [{ name: "path", value: "../outside.txt" }] }))
         .rejects.toThrow("workspace");
+      runtime.setWorkspaceTrusted(false);
+      await expect(runtime.execute({ kind: "invocation", method: "node.fs.readFile", source: "code", arguments: [{ name: "path", value: join(root, "state.txt") }] }))
+        .rejects.toThrow("trusted workspace");
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
-  it.each(["physical", "symlink"])("keeps node.fs inside a %s workspace root", async (rootKind) => {
+  it.each(["physical", "symlink"])("bounds relative node.fs paths while allowing absolute reads from a %s workspace root", async (rootKind) => {
     const base = await realpath(await mkdtemp(join(tmpdir(), "dext-node-links-")));
     try {
       const root = join(base, "workspace");
@@ -94,6 +101,10 @@ describe("Dext workflow runtime", () => {
 
       await write("inside-link/state.txt");
       expect((await read("inside-link/state.txt")).result).toMatchObject({ value: "ok" });
+      expect((await read(join(root, "data", "state.txt"))).result).toMatchObject({ value: "ok" });
+      expect((await read(join(alias, "data", "state.txt"))).result).toMatchObject({ value: "ok" });
+      expect((await read(join(outside, "secret.txt"))).result).toMatchObject({ value: "outside" });
+      expect((await read(join(root, "outside-link", "secret.txt"))).result).toMatchObject({ value: "outside" });
       expect(await readFile(join(root, "data", "state.txt"), "utf8")).toBe("ok");
       await expect(read("../workspace-outside/secret.txt")).rejects.toThrow("workspace");
       await expect(read("outside-link/secret.txt")).rejects.toThrow("symbolic link");
@@ -101,6 +112,8 @@ describe("Dext workflow runtime", () => {
       await expect(write("outside-link/new.txt")).rejects.toThrow("symbolic link");
       expect(await readFile(join(outside, "secret.txt"), "utf8")).toBe("outside");
       await expect(readFile(join(outside, "new.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+      runtime.setWorkspaceTrusted(false);
+      await expect(read(join(outside, "secret.txt"))).rejects.toThrow("trusted workspace");
     } finally { await rm(base, { recursive: true, force: true }); }
   });
 

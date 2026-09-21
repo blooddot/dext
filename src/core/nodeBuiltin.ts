@@ -106,6 +106,9 @@ export async function executeNodeBuiltin(invocation: ResolvedInvocation, workspa
   if (typeof fn !== "function") throw new Error(`${entry.module}.${entry.exportName} is unavailable in this Node runtime.`);
   const args = await Promise.all(entry.argumentOrder.map(async (name) => {
     const value = invocation.arguments[name];
+    // Explicit absolute reads use Node's native path handling, including files
+    // outside the workspace. Relative paths remain workspace-relative.
+    if (entry.method.id === "node.fs.readFile" && name === "path" && typeof value === "string" && isAbsolute(value)) return value;
     if (entry.capability === "fs" && /(^path$|Path$)/.test(name)) return workspacePath(workspaceRoot, value);
     return value;
   }));
