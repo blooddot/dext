@@ -321,7 +321,14 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .project-ai-model-control.is-disabled { opacity: .7; }
 .project-ai-model { margin-bottom: 14px; }
 .project-model-capabilities { display: block; margin-top: 4px; color: var(--vscode-descriptionForeground); font-size: 11px; line-height: 1.3; white-space: normal; }
-.project-scan-progress { width: 100%; max-width: 680px; clear: both; margin: 18px 0 16px; }
+.project-scan-progress {
+  /* Status messages can contain text nodes and inline <code> elements. Keep
+     the container block-level; flex belongs only to the progress-line below.
+     Otherwise every anonymous text run becomes its own flex item and a
+     warning wraps one word at a time. */
+  display: block;
+  width: 100%; max-width: 680px; clear: both; margin: 18px 0 16px;
+}
 .project-scan-progress-warning { color: var(--vscode-testing-iconFailed, var(--vscode-errorForeground)); }
 .project-initialization-result { max-width: 680px; margin: -4px 0 16px; color: var(--vscode-terminal-ansiGreen, var(--vscode-testing-iconPassed)); font-size: 12px; }
 .project-initialization-error { max-width: 680px; margin: -4px 0 16px; color: var(--vscode-errorForeground); font-size: 12px; }
