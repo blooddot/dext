@@ -101,8 +101,12 @@ f-string 的替换字段可带转换和格式说明符：`f"{value!r}"`、`f"{co
 `on_cancel="abort"`，在用户取消时终止当前自定义 API，无需额外的
 `workflow.*` 控制 API。Node 标准库能力仅通过白名单 `node.*` 提供：
 `node.url`、`node.path`、`node.querystring`、可安全映射的 `node.util`、
-受工作区边界限制的 `node.fs` 与 `node.http.request`。函数名保持 Node
+`node.fs` 与 `node.http.request`。函数名保持 Node
 原生 camelCase。文件和 HTTP 调用需要受信任工作区；命令仍使用 `terminal`。
+
+`node.fs.readFile(path, encoding="utf8")` 支持绝对路径，按 Node 原生逻辑读取，
+也可以读取工作区外的文件。相对路径以工作区根目录为基准，路径及符号链接目标
+必须位于工作区内。其他 `node.fs` 调用仍要求使用不越出工作区的相对路径。
 
 `node:crypto`、`node:zlib`、`node:timers/promises` 与包含环境信息的
 `node:os` 仅作为后续候选模块记录，当前不能调用。原始进程、socket、流、
@@ -127,7 +131,7 @@ if confirmation.confirmed == True:
 
 所有 API 输出都实现统一的 `Result` 契约。Agent CLI 接收的前序结果是带版本号的 `dext-result` JSON 数据，而不是直接插入字符串。`agent_result: AgentResult`、`agent_result.patch: PatchResult` 等结果变量和字段支持补全及悬停说明。
 
-`ask` 始终只读。`agent` 和 `plan` 使用输入区域选择的写入范围；在受信任的本地工作区中，`Workspace write` 将编辑限制在所选工作区。Dext 可以在自身管理的全局存储中保存计划文档。两者的 `workspace` 都默认为当前项目根目录。
+`ask` 始终只读。`agent` 和 `plan` 使用输入区域选择的写入范围；在受信任的本地工作区中，`Workspace write` 将编辑限制在所选工作区。Code 模式没有权限选择器，因此其中的 `agent(apply=true)` 调用默认使用 `Full access`。Dext 可以在自身管理的全局存储中保存计划文档。两者的 `workspace` 都默认为当前项目根目录。
 
 ```python
 answer = ask(input="解释这段代码：")

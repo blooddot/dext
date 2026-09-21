@@ -100,10 +100,16 @@ Only these top-level APIs are built in. UI interactions live under `ui.*`; a
 confirmation or form can use `on_cancel="abort"` to cancel the current custom
 API without a separate workflow-control API. Node standard-library access is
 provided only under the whitelisted `node.*` namespace: `node.url`,
-`node.path`, `node.querystring`, compatible `node.util` exports, workspace
-bounded `node.fs`, and `node.http.request`. Node function names retain their
+`node.path`, `node.querystring`, compatible `node.util` exports,
+`node.fs`, and `node.http.request`. Node function names retain their
 native camelCase spelling. File and HTTP calls require a trusted workspace;
 commands continue to use `terminal`.
+
+`node.fs.readFile(path, encoding="utf8")` accepts absolute paths, including
+files outside the workspace, using Node's native path handling. Relative paths
+resolve from the workspace root and must stay inside it, including through
+symbolic links. Other `node.fs` calls require workspace-relative paths that
+stay inside the workspace.
 
 `node:crypto`, `node:zlib`, `node:timers/promises`, and environment-sensitive
 `node:os` calls are catalogued as future candidates, not callable APIs. Raw
@@ -138,7 +144,7 @@ Output and History after the interaction completes.
 
 Every API output implements the shared `Result` contract. `ask` handles read-only explanation and analysis; `agent` handles free-form continuous tasks; `plan` creates, maintains, and executes implementation plans. `apply(result=...)` applies an `AgentResult` patch when one is present. Agent CLIs receive prior results as versioned `dext-result` JSON envelopes instead of interpolated strings. Result variables and fields such as `agent_result: AgentResult` and `agent_result.patch: PatchResult` are available to completion and hover.
 
-`ask` is always read-only. `agent` and `plan` use the composer's `Workspace write` or `Full access` scope; in a trusted local workspace, `Workspace write` limits edits to the selected workspace. Dext itself can always persist Plan documents in its managed global storage. Both APIs default `workspace` to the current project root.
+`ask` is always read-only. `agent` and `plan` use the composer's `Workspace write` or `Full access` scope; in a trusted local workspace, `Workspace write` limits edits to the selected workspace. Code mode has no permission picker, so typed `agent(apply=true)` calls use `Full access` by default. Dext itself can always persist Plan documents in its managed global storage. Both APIs default `workspace` to the current project root.
 
 ```python
 answer = ask(input="Explain this code:")
