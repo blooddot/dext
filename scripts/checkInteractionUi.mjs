@@ -177,6 +177,33 @@ try {
   }
   assert.ok(imageRequests.includes(signedImage), "signed image query reaches the server unchanged");
   await send("Fetch.disable");
+  const diagrams = [
+    '```mermaid\nflowchart TD\n A[打开宠物] --> B{数据有效?}\n B -->|是| C[刷新属性]\n B -->|否| D[忽略]\n click A "javascript:alert(1)"\n```',
+    '```mermaid\nflowchart TD\n A[unfinished\n```',
+    '```mermaid\nclassDiagram\n class PetData {\n +int petId\n +Refresh() void\n }\n PetData <|-- PetDetail\n```',
+    '```ts\nconst untouched = "flowchart TD";\n```',
+  ].join('\n\n');
+  for (const [presentation, themeClass] of [["inline", "vscode-dark"], ["dialog", "vscode-light"]]) {
+    await theme(themeClass === 'vscode-light' ? '#ffffff' : '#181818', themeClass === 'vscode-light' ? '#222222' : '#dddddd', '#4488cc');
+    await evaluate(`document.body.className='${themeClass}';window.diagramState=state('diagrams-${presentation}',InteractionUI.parseUiForm({title:'流程图与类图',presentation:'${presentation}',description:${JSON.stringify(diagrams)},fields:[]}));view.updateUi(diagramState);window.description=document.querySelector('.interaction-description');`);
+    assert.equal(await evaluate(`new Promise(resolve=>{const deadline=Date.now()+15000;const check=()=>{if(description.querySelectorAll('[data-diagram-state]').length===3)resolve(true);else if(Date.now()>deadline)resolve(false);else setTimeout(check,50);};check();})`), true, `${presentation}: all diagrams finish under Webview CSP`);
+    assert.equal(await evaluate(`description.querySelectorAll('[data-diagram-state=ready] svg').length`), 2, `${presentation}: flowchart and class diagram render despite invalid sibling`);
+    assert.equal(await evaluate(`description.querySelector('[data-diagram-state=ready] svg').textContent.includes('刷新属性')`), true);
+    assert.equal(await evaluate(`description.querySelectorAll('[data-diagram-state=ready] svg')[1].textContent.includes('PetData')`), true);
+    assert.equal(await evaluate(`description.querySelectorAll('[data-diagram-state=ready] details:not([open])').length`), 2);
+    assert.equal(await evaluate(`description.querySelector('[data-diagram-state=error] details').open`), true);
+    assert.equal(await evaluate(`description.querySelector('[data-diagram-state=error] code').textContent`), 'flowchart TD\n A[unfinished\n');
+    assert.equal(await evaluate(`description.querySelector('code.language-ts').textContent`), 'const untouched = "flowchart TD";\n');
+    assert.equal(await evaluate(`document.querySelectorAll('.markdown-diagram-staging').length`), 0, "rendering scratch DOM is cleaned up on success and error");
+    assert.equal(await evaluate(`description.querySelectorAll('svg script, svg a[href^="javascript:"], svg [onclick]').length`), 0);
+    assert.equal(await evaluate(`Array.from(description.querySelectorAll('svg')).every(svg=>svg.getBoundingClientRect().height>20)`), true);
+    assert.equal(await evaluate(`document.documentElement.scrollWidth<=innerWidth`), true, "diagrams do not widen a narrow viewport");
+    await evaluate(`description.scrollTop=0;description.querySelector('summary').click();`);
+    assert.equal(await evaluate(`description.querySelector('details').open`), true, "diagram source can be expanded");
+    await evaluate(`description.querySelector('summary').click();`);
+    const screenshot = await send("Page.captureScreenshot"); await writeFile(join(artifacts, `diagrams-${presentation}.png`), Buffer.from(screenshot.data, "base64"));
+    await evaluate(`view.updateUi({...diagramState,status:'cancelled'});`);
+  }
   await evaluate(`window.optionalRadio=state('optional-radio',InteractionUI.parseUiForm({title:'Optional choice',fields:[{id:'pick',type:'radio',label:'Optional',required:false,options:['a','b']}]}));view.updateUi(optionalRadio);view.element.querySelector('input[type=radio]').click();view.element.querySelector('button[aria-label="Clear Optional"]').click();view.element.querySelector('form').requestSubmit();`);
   assert.deepEqual(await evaluate(`replies.at(-1).result.answers`), {}, "optional radio can return to unanswered");
   await evaluate(`window.notice=state('notice',InteractionUI.uiCallForm('alert',{message:'Read this'}));view.updateUi(notice);`);
@@ -219,7 +246,7 @@ try {
     await key("Escape", 27); assert.equal(await evaluate(`document.getElementById('${id}').open`), false);
     await evaluate(`document.getElementById('${id}').remove()`);
   }
-  console.log("PASS: shared fields, dropdown keyboard and bounds, radio/checkbox keyboard, forms, action requirements in inline/dialog forms, Markdown reports and HTTPS images under CSP, duplicate submission, draft reconstruction, modal Escape/focus, native answers/secrets, 320px dark/light/contrast, MCP dialog. Screenshots: .tmp-tb/interaction-ui");
+  console.log("PASS: shared fields, dropdown keyboard and bounds, radio/checkbox keyboard, forms, action requirements in inline/dialog forms, Markdown reports and HTTPS images under CSP, Mermaid flowcharts/classes and error recovery under CSP, duplicate submission, draft reconstruction, modal Escape/focus, native answers/secrets, 320px dark/light/contrast, MCP dialog. Screenshots: .tmp-tb/interaction-ui");
 } finally {
   try { await shutdown?.(); } catch {}
   socket?.close(); browser.kill();

@@ -1,4 +1,5 @@
 import MarkdownIt from "markdown-it";
+import { renderMarkdownDiagrams } from "./markdownDiagrams.js";
 
 const markdown = new MarkdownIt({ html: false, breaks: true, linkify: true });
 const renderImage = markdown.renderer.rules.image!;
@@ -35,5 +36,6 @@ export function interactionMarkdown(source: string): HTMLDivElement {
       image.replaceWith(fallback);
     }, { once: true });
   }
+  renderMarkdownDiagrams(body);
   return body;
 }
