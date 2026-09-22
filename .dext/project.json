@@ -1,20 +1,19 @@
 {
   "schemaVersion": 1,
-  "version": 11,
+  "version": 14,
   "preset": {
     "default": "engineering"
   },
   "knowledge": {
     "enabled": true,
-    "initialized": true
+    "initialized": false
   },
   "ai": {
-    "cli": "codex",
-    "model": "gpt-6-astra",
-    "reasoningEffort": "ultra",
-    "speed": "fast"
+    "cli": "deepseek-harness",
+    "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+    "reasoningEffort": "max"
   },
-  "updatedAt": 1789703780800,
+  "updatedAt": 1790045426138,
   "scan": {
     "roots": [
       "src"
