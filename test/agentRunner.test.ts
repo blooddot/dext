@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -24,7 +24,8 @@ import {
   resolveCliCommand,
   runProcess,
   type AgentConversationRequest,
-  type AgentExecutionRequest
+  type AgentExecutionRequest,
+  type AgentStructuredRequest
 } from "../src/core/agentRunner.js";
 import { BUILTIN_METHODS } from "../src/core/builtins.js";
 import { AxAdapter } from "../src/core/axAdapter.js";
@@ -771,3 +772,106 @@ describe("CLI command resolution", () => {
     } finally { vi.useRealTimers(); }
   });
 });
+
+describe("native structured output", () => {
+  const projectSchema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      title: { type: "string" },
+      note: { type: "string" },
+      nodes: { type: "array", items: { type: "object", additionalProperties: false, properties: { id: { type: "string" } }, required: ["id"] } }
+    },
+    required: ["title"]
+  };
+
+  function structuredRequest(overrides: Partial<AgentStructuredRequest> = {}): AgentStructuredRequest {
+    return {
+      profile: { id: "codex", label: "Codex", provider: "codex", command: process.execPath, models: [] },
+      cwd: process.cwd(),
+      input: "Generate the project model.",
+      outputSchema: projectSchema,
+      ...overrides
+    };
+  }
+
+  it("carries the schema through Codex's own output-schema channel and makes optionals nullable", async () => {
+    let schemaDocument = "";
+    let stdin = "";
+    let args: readonly string[] = [];
+    const runner = new CliAgentRunner(1_000, async (_command, received, input) => {
+      if (received[0] === "login") return { stdout: "", stderr: "", code: 1 };
+      args = received;
+      stdin = input;
+      schemaDocument = await readFile(received[received.indexOf("--output-schema") + 1]!, "utf8");
+      const text = JSON.stringify({ title: "One", note: null, nodes: [{ id: "n1" }] });
+      return { stdout: JSON.stringify({ type: "item.completed", item: { type: "agent_message", text } }), stderr: "", code: 0 };
+    });
+
+    const text = await runner.runStructured(structuredRequest());
+
+    // The prompt reaches the CLI unchanged: the schema travels out of band.
+    expect(stdin).toBe("Generate the project model.");
+    expect(args).toContain("--output-schema");
+    // Codex strict structured output requires every object property, so the
+    // optional ones are sent required-but-nullable.
+    const schema = JSON.parse(schemaDocument) as { required: string[]; properties: Record<string, { type: unknown }> };
+    expect(schema.required).toEqual(["title", "note", "nodes"]);
+    expect(schema.properties.note!.type).toEqual(["string", "null"]);
+    expect(schema.properties.nodes!.type).toEqual(["array", "null"]);
+    // ...and the null the model answers with is restored to "absent" for zod.
+    expect(JSON.parse(text)).toEqual({ title: "One", nodes: [{ id: "n1" }] });
+  });
+
+  it("sends Claude the schema unchanged and normalizes its structured_output", async () => {
+    let args: readonly string[] = [];
+    const runner = new CliAgentRunner(1_000, async (_command, received) => {
+      args = received;
+      return {
+        stdout: `${JSON.stringify({ type: "result", subtype: "success", structured_output: { title: "Two", note: null } })}\n`,
+        stderr: "",
+        code: 0
+      };
+    });
+
+    const text = await runner.runStructured(structuredRequest({
+      profile: { id: "claude", label: "Claude Code", provider: "claude", command: process.execPath, models: [] }
+    }));
+
+    expect(args).toContain("--json-schema");
+    expect(args[args.indexOf("--json-schema") + 1]).toBe(JSON.stringify(projectSchema));
+    // Claude is not told every property is required, so the schema document is
+    // the caller's; only the answer is normalized.
+    expect(JSON.parse(text)).toEqual({ title: "Two" });
+  });
+
+  it("passes the model, reasoning effort and speed tier to the provider", async () => {
+    let args: readonly string[] = [];
+    const runner = new CliAgentRunner(1_000, async (_command, received) => {
+      if (received[0] === "login") return { stdout: "", stderr: "", code: 1 };
+      args = received;
+      return {
+        stdout: JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ title: "T" }) } }),
+        stderr: "", code: 0
+      };
+    });
+    await runner.runStructured(structuredRequest({ model: "gpt-test", reasoningEffort: "high", speed: "fast" }));
+    expect(args).toEqual(expect.arrayContaining(["--model", "gpt-test", 'model_reasoning_effort="high"', "--config", 'service_tier="priority"']));
+  });
+
+  it("reports a provider that fails as a provider failure, not as an invalid answer", async () => {
+    const runner = new CliAgentRunner(1_000, async (_command, args) => {
+      if (args[0] === "login") return { stdout: "", stderr: "", code: 1 };
+      return { stdout: "", stderr: "Unknown schema keyword: $schema", code: 2 };
+    });
+    await expect(runner.runStructured(structuredRequest())).rejects.toThrow(/Codex exited with code 2[\s\S]*Unknown schema keyword/);
+  });
+
+  it("refuses a provider that has no native output-schema channel", async () => {
+    const runner = new CliAgentRunner(1_000, async () => ({ stdout: "", stderr: "", code: 0 }));
+    await expect(runner.runStructured(structuredRequest({
+      profile: { id: "deepseek-harness", label: "DeepSeek Harness", provider: "deepseek-harness", command: process.execPath, models: [] }
+    }))).rejects.toThrow(/native structured output/);
+  });
+});
+

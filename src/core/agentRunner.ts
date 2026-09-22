@@ -69,9 +69,34 @@ export interface AgentConversationRequest {
   signal?: AbortSignal;
 }
 
+/**
+ * One read-only turn whose answer is constrained by the provider's own
+ * structured-output channel (`codex --output-schema`, `claude --json-schema`).
+ * Unlike `run`, the caller owns the contract, so the result is the raw
+ * schema-conforming message text rather than a value parsed as a Dext result.
+ * A provider without such a channel cannot serve this request.
+ */
+export interface AgentStructuredRequest {
+  profile: AgentProfile;
+  cwd: string;
+  /** Complete prompt text; the transport owns no other context. */
+  input: string;
+  /** The JSON schema the answer must conform to. */
+  outputSchema: object;
+  model?: string;
+  reasoningEffort?: string;
+  speed?: string;
+  serviceTier?: string;
+  /** Extra provider CLI arguments from `dext.agentCliArgs`, already filtered. */
+  cliArguments?: readonly string[];
+  onEvent?: (event: AgentStreamEvent) => void;
+  signal?: AbortSignal;
+}
+
 export interface AgentRunner {
   run(request: AgentExecutionRequest): Promise<unknown>;
   runConversation?(request: AgentConversationRequest): Promise<string>;
+  runStructured?(request: AgentStructuredRequest): Promise<string>;
   endSession?(sessionId: string): void;
   dispose?(): void | Promise<void>;
 }
@@ -388,6 +413,25 @@ export function extractConversationText(output: string, provider: AgentProfile["
   }
   const result = extractClaudeResult(output);
   return typeof result === "string" ? result : JSON.stringify(result, null, 2);
+}
+
+/**
+ * Restores the intended "absent" meaning in a native structured answer.
+ *
+ * Codex strict structured output requires every object property to be required,
+ * so the schema Dext sends marks the optional ones nullable and the model answers
+ * `null` where it means "omitted". Dext's contracts declare those fields as
+ * merely optional, which rejects null, so drop null properties before the caller
+ * validates. No Dext or Project contract has a nullable field, so this can only
+ * turn an invalid answer into a valid one. Text that is not JSON is returned
+ * unchanged, so a caller still sees what the model actually produced.
+ */
+function normalizeStructuredAnswer(text: string): string {
+  try {
+    return JSON.stringify(stripNullProperties(JSON.parse(text)));
+  } catch {
+    return text;
+  }
 }
 
 export function bootstrappedConversationInput(context: string | undefined, input: string): string {
@@ -1319,58 +1363,141 @@ export class CliAgentRunner implements AgentRunner {
       ? codexCliArguments(request, schemaPath, permission, serviceTier, extraArguments)
       : claudeCliArguments({ ...request, permission }, outputSchema, extraArguments);
     try {
-      const controller = new AbortController();
-      const timeout = agentTimeout(controller, this.timeoutMs, this.idleTimeoutMs);
-      const cancel = (): void => controller.abort(new ExecutionCancelledError());
-      request.signal?.addEventListener("abort", cancel, { once: true });
-      if (request.signal?.aborted) cancel();
-      let eventBuffer = "";
-      const streamPhases = new Map<string, AgentStreamPhase>();
-      const emitCodexLine = (line: string): void => {
-        trackCliToolActivity("codex", line, timeout);
-        const event = parseCodexStreamLine(line, streamPhases);
-        if (event) request.onEvent?.(event);
-      };
-      const claudeTodos = new ClaudeTodoTracker();
-      const claudeMessageIds = new Map<string, string>();
-      const emitClaudeLine = (line: string): void => {
-        trackCliToolActivity("claude", line, timeout);
-        for (const event of parseClaudeStreamEvents(line, claudeTodos, claudeMessageIds)) request.onEvent?.(event);
-      };
-      const onStdout = request.profile.provider === "codex" || request.profile.provider === "claude"
-        ? (chunk: string): void => {
-            eventBuffer += chunk;
-            const lines = eventBuffer.split(/\r?\n/);
-            eventBuffer = lines.pop() ?? "";
-            for (const line of lines) {
-              if (request.profile.provider === "codex") emitCodexLine(line);
-              else emitClaudeLine(line);
-            }
-          }
-        : undefined;
       const stdin = request.profile.provider === "codex"
         ? `${prompt}\n\n${input}`
         : `${prompt}\n\nDext JSON payload:\n${input}`;
-      let result: ProcessResult;
-      try {
-        result = await this.processRunner(command, args, stdin, request.cwd, controller.signal, onStdout, processEnv,
-          { consume: cliCompletion(request.profile.provider) }, timeout.activity);
-      } finally {
-        timeout.dispose();
-        request.signal?.removeEventListener("abort", cancel);
-      }
-      if (eventBuffer && request.profile.provider === "codex") emitCodexLine(eventBuffer);
-      if (eventBuffer && request.profile.provider === "claude") emitClaudeLine(eventBuffer);
-      if (result.code !== 0) {
-        const structuredFailure = request.profile.provider === "codex"
-          ? codexFailure(result.stdout)
-          : request.profile.provider === "claude" ? claudeFailure(result.stdout) : undefined;
-        const details = structuredFailure ?? [result.stderr.trim(), result.stdout.trim()].filter(Boolean).join("\n");
-        throw new Error(`${request.profile.label} exited with code ${result.code ?? "unknown"}${details ? `:\n${details}` : ""}`);
-      }
+      const result = await this.runStreamingCli({
+        provider: request.profile.provider,
+        label: request.profile.label,
+        command,
+        args,
+        stdin,
+        cwd: request.cwd,
+        ...(processEnv ? { env: processEnv } : {}),
+        ...(request.signal ? { signal: request.signal } : {}),
+        ...(request.onEvent ? { onEvent: request.onEvent } : {})
+      });
       const value = extractAgentValue(result.stdout, request.profile.provider);
       if (value === undefined || value === "") throw new Error(`${request.profile.label} returned no structured result.`);
       return value;
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+
+  /**
+   * Shared provider-stream plumbing for one CLI turn: abort and idle/timeout
+   * wiring, the JSONL line dispatch that turns raw provider output into Dext
+   * stream events, and the provider-specific process failure text. Both the
+   * typed execution path above and the schema-carrying path below use it so
+   * their timeout, cancellation and progress behavior cannot drift apart.
+   */
+  private async runStreamingCli(options: {
+    provider: "codex" | "claude";
+    label: string;
+    command: string;
+    args: readonly string[];
+    stdin: string;
+    cwd: string;
+    env?: NodeJS.ProcessEnv;
+    signal?: AbortSignal;
+    onEvent?: (event: AgentStreamEvent) => void;
+  }): Promise<ProcessResult> {
+    const { provider } = options;
+    const controller = new AbortController();
+    const timeout = agentTimeout(controller, this.timeoutMs, this.idleTimeoutMs);
+    const cancel = (): void => controller.abort(new ExecutionCancelledError());
+    options.signal?.addEventListener("abort", cancel, { once: true });
+    if (options.signal?.aborted) cancel();
+    let eventBuffer = "";
+    const streamPhases = new Map<string, AgentStreamPhase>();
+    const claudeTodos = new ClaudeTodoTracker();
+    const claudeMessageIds = new Map<string, string>();
+    const emitLine = (line: string): void => {
+      trackCliToolActivity(provider, line, timeout);
+      if (provider === "codex") {
+        const event = parseCodexStreamLine(line, streamPhases);
+        if (event) options.onEvent?.(event);
+        return;
+      }
+      for (const event of parseClaudeStreamEvents(line, claudeTodos, claudeMessageIds)) options.onEvent?.(event);
+    };
+    const onStdout = (chunk: string): void => {
+      eventBuffer += chunk;
+      const lines = eventBuffer.split(/\r?\n/);
+      eventBuffer = lines.pop() ?? "";
+      for (const line of lines) emitLine(line);
+    };
+    try {
+      const result = await this.processRunner(options.command, [...options.args], options.stdin, options.cwd, controller.signal,
+        onStdout, options.env, { consume: cliCompletion(provider) }, timeout.activity);
+      if (eventBuffer) emitLine(eventBuffer);
+      if (result.code !== 0) {
+        const structuredFailure = provider === "codex"
+          ? codexFailure(result.stdout)
+          : provider === "claude" ? claudeFailure(result.stdout) : undefined;
+        const details = structuredFailure ?? [result.stderr.trim(), result.stdout.trim()].filter(Boolean).join("\n");
+        throw new Error(`${options.label} exited with code ${result.code ?? "unknown"}${details ? `:\n${details}` : ""}`);
+      }
+      return result;
+    } finally {
+      timeout.dispose();
+      options.signal?.removeEventListener("abort", cancel);
+    }
+  }
+
+  /**
+   * One read-only turn constrained by the provider's own structured-output
+   * channel. The schema is written for Codex and inlined for Claude, exactly as
+   * a typed Dext call is, but the answer comes back as text so the caller keeps
+   * its own contract, repair loop and evidence checks.
+   */
+  async runStructured(request: AgentStructuredRequest): Promise<string> {
+    const provider = request.profile.provider;
+    if (provider !== "codex" && provider !== "claude") {
+      throw new Error(`Agent '${request.profile.label}' does not support the provider's native structured output.`);
+    }
+    if (!request.profile.command?.trim()) throw new Error(`Agent '${request.profile.label}' has no CLI command configured.`);
+    if (request.signal?.aborted) throw new ExecutionCancelledError();
+    const configuredCommand = request.profile.command.trim();
+    const command = resolveCliCommand(configuredCommand, provider);
+    if (!command) {
+      throw new Error(
+        `Unable to start '${configuredCommand}': command was not found. `
+        + `Install ${request.profile.label} or use "Dext: Configure Agent CLI" to set its executable path.`
+      );
+    }
+    const serviceTier = request.speed === "fast" ? "priority" : request.speed === "standard" ? "default" : request.serviceTier || undefined;
+    const extraArguments = request.cliArguments ?? [];
+    const directory = await mkdtemp(join(tmpdir(), "dext-structured-"));
+    const schemaPath = join(directory, "output-schema.json");
+    // Codex strict structured output requires every object property to be
+    // required, so the two providers do not receive the same document.
+    const outputSchema = provider === "codex" ? codexOutputSchema(request.outputSchema) : request.outputSchema;
+    await writeFile(schemaPath, JSON.stringify(outputSchema), "utf8");
+    const cliOptions = {
+      ...(request.model ? { model: request.model } : {}),
+      ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {})
+    };
+    const args = provider === "codex"
+      ? codexCliArguments(cliOptions, schemaPath, "read-only", serviceTier, extraArguments)
+      : claudeCliArguments({ ...cliOptions, permission: "read-only" }, outputSchema, extraArguments);
+    const processEnv = await this.processEnvironment(command, request);
+    try {
+      const result = await this.runStreamingCli({
+        provider,
+        label: request.profile.label,
+        command,
+        args,
+        stdin: request.input,
+        cwd: request.cwd,
+        ...(processEnv ? { env: processEnv } : {}),
+        ...(request.signal ? { signal: request.signal } : {}),
+        ...(request.onEvent ? { onEvent: request.onEvent } : {})
+      });
+      const text = extractConversationText(result.stdout, provider).trim();
+      if (!text) throw new Error(`${request.profile.label} returned no structured result.`);
+      return normalizeStructuredAnswer(text);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

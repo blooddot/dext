@@ -14,7 +14,7 @@ import { WorkflowRuntime } from "../src/core/workflowRuntime.js";
 import { parseMcpManifest } from "../src/core/mcpManifest.js";
 import { fileReferenceInsertion } from "../src/webview/inputInsertion.js";
 import { ExecutionCancelledError } from "../src/core/executionErrors.js";
-import type { AgentConversationRequest } from "../src/core/agentRunner.js";
+import type { AgentConversationRequest, AgentStructuredRequest } from "../src/core/agentRunner.js";
 import type { AgentResult, AgentStreamEvent, PatchResult, TerminalResult } from "../src/core/types.js";
 import { prepareHistoryTrace } from "../src/core/agentTraceReplay.js";
 
@@ -184,6 +184,57 @@ describe("Dext workflow runtime", () => {
     expect(requests.map((item) => item.permission)).toEqual(["read-only", "read-only", "full-access", "full-access"]);
     expect(requests[1]?.input).toContain("dext-plan:start");
     expect(requests[2]?.input).toBe("build it");
+  });
+
+  it("carries a caller-owned schema through the provider's native structured channel", async () => {
+    const { runtime } = setup();
+    const structured: AgentStructuredRequest[] = [];
+    runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
+    runtime.setAgentSelection({ profileId: "codex", model: "gpt-selected" });
+    runtime.setWorkspaceRoot("C:/workspace");
+    runtime.setAgentRunner({
+      run: async () => ({ kind: "ask", text: "typed" }),
+      runStructured: async (request) => {
+        structured.push(request);
+        return '{"title":"Model"}';
+      }
+    });
+    const schema = { type: "object", properties: { title: { type: "string" } }, required: ["title"] };
+
+    const result = await runtime.executeStructuredJson("Generate the model.", schema);
+
+    expect(result).toEqual({ text: '{"title":"Model"}', model: "gpt-selected" });
+    expect(structured).toHaveLength(1);
+    expect(structured[0]?.profile.id).toBe("codex");
+    expect(structured[0]?.input).toBe("Generate the model.");
+    expect(structured[0]?.outputSchema).toBe(schema);
+    // The selection the composer shows is what a Project turn runs under.
+    expect(structured[0]?.model).toBe("gpt-selected");
+  });
+
+  it("keeps a Project turn's workspace-trust gate on extra CLI arguments", async () => {
+    const { runtime } = setup();
+    const structured: AgentStructuredRequest[] = [];
+    runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
+    runtime.setAgentSelection({ profileId: "codex" });
+    runtime.setAgentCliArguments({ codex: ["--dangerously-bypass"] });
+    runtime.setAgentRunner({ run: async () => ({ kind: "ask", text: "typed" }), runStructured: async (request) => { structured.push(request); return "{}"; } });
+
+    await runtime.executeStructuredJson("prompt", { type: "object" });
+    runtime.setWorkspaceTrusted(true);
+    await runtime.executeStructuredJson("prompt", { type: "object" });
+
+    expect(structured[0]?.cliArguments).toBeUndefined();
+    expect(structured[1]?.cliArguments).toEqual(["--dangerously-bypass"]);
+  });
+
+  it("rejects native structured output on a backend that has no schema channel", async () => {
+    const { runtime } = setup();
+    runtime.setAgentProfiles([{ id: "deepseek-harness", label: "Harness", provider: "deepseek-harness", command: "dsh", models: [] }]);
+    runtime.setAgentSelection({ profileId: "deepseek-harness" });
+    runtime.setAgentRunner({ run: async () => ({ kind: "ask", text: "typed" }) });
+    await expect(runtime.executeStructuredJson("prompt", { type: "object" }))
+      .rejects.toThrow(/native structured output/);
   });
 
   it("keeps a sandbox-escaping preset off read-only turns and applies it when the turn is writable", async () => {

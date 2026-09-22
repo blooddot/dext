@@ -117,7 +117,15 @@ The initialization service uses three phases:
    and secret redaction. No AST, import graph or language parser is constructed.
 2. **Generating** — the selected Project AI CLI returns one strict JSON document containing the Project
    Intent and zero or more diagrams. Evidence, stable-id references and kind-specific diagram semantics
-   are validated against the exact bounded input before anything is saved.
+   are validated against the exact bounded input before anything is saved. Codex and Claude receive the
+   response schema through their own structured-output channel (`--output-schema` / `--json-schema`), so
+   the answer is constrained by the provider rather than only asked for in the prompt; a CLI that refuses
+   the schema, or fails to start, falls back to the conversation transport for that attempt and reports
+   why. The shared ax predictor owns the answer envelope and one bounded repair attempt: the strict
+   contract parse and the evidence checks run as its validation step, a rejected answer is re-prompted
+   with those diagnostics, and a key the contract never declares is dropped before validation instead of
+   failing an otherwise verifiable run. DeepSeek Harness has no schema field in ACP, so it always uses the
+   conversation transport.
 3. **Saving** — the intent and every diagram are written first; `.dext/project.json` is marked
    `initialized` only after all writes succeed. A failed or cancelled run never reports success, and a
    late response from an older run cannot overwrite a newer state.

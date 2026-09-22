@@ -987,6 +987,51 @@ export class DextRuntime {
     };
   }
 
+  /**
+   * One read-only, single-turn call that carries its JSON schema through the
+   * provider's own structured-output channel instead of a conversation: Codex
+   * `--output-schema`, Claude `--json-schema`, applied by the provider rather
+   * than merely described in the prompt. The returned text is the
+   * schema-conforming message, not a parsed Dext result, so the caller keeps its
+   * own contract validation, evidence checks and repair loop.
+   */
+  async executeStructuredJson(
+    input: string,
+    outputSchema: object,
+    metadata: Readonly<ExecutionMetadata> = {}
+  ): Promise<{ text: string; model?: string }> {
+    if (metadata.signal?.aborted) throw new ExecutionCancelledError();
+    const text = input.trim();
+    if (!text) throw new Error("Enter a message before sending it.");
+    const profileId = metadata.agent ?? this.agentSelection.profileId ?? this.agents.keys().next().value;
+    const profile = profileId ? this.agents.get(profileId) : undefined;
+    if (!profile) throw new Error("Choose an Agent before starting a conversation.");
+    if (!this.agentRunner.runStructured) {
+      throw new Error(`Agent '${profile.label}' does not support the provider's native structured output.`);
+    }
+    // The same selection rules as a conversation: a project that explicitly
+    // picks another CLI does not inherit the active conversation's overrides.
+    const sameSelectedAgent = metadata.agent === undefined || metadata.agent === this.agentSelection.profileId;
+    const selectedModel = metadata.model ?? (sameSelectedAgent ? this.agentSelection.model : undefined);
+    const selectedReasoning = metadata.reasoningEffort ?? (sameSelectedAgent ? this.agentSelection.reasoningEffort : undefined);
+    const selectedSpeed = metadata.speed ?? (sameSelectedAgent ? this.agentSelection.speed : undefined);
+    const selectedServiceTier = metadata.serviceTier ?? (sameSelectedAgent ? this.agentSelection.serviceTier : undefined);
+    const extraArguments = this.extraCliArguments(profile);
+    const response = await this.agentRunner.runStructured({
+      profile,
+      cwd: this.workspaceRoot,
+      input: text,
+      outputSchema,
+      ...(selectedModel ? { model: selectedModel } : {}),
+      ...(selectedReasoning ? { reasoningEffort: selectedReasoning } : {}),
+      ...(selectedSpeed ? { speed: selectedSpeed } : {}),
+      ...(selectedServiceTier ? { serviceTier: selectedServiceTier } : {}),
+      ...(extraArguments.length ? { cliArguments: extraArguments } : {}),
+      ...(metadata.signal ? { signal: metadata.signal } : {})
+    });
+    return { text: response, ...(selectedModel ? { model: selectedModel } : {}) };
+  }
+
   /** Plan mode owns the plan document's shape, so the instruction is part of
    * the prompt rather than the user's message. A project can replace that
    * document instruction through `.dext/rules/plan.md`; Dext's response
