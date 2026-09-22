@@ -35,7 +35,7 @@ describe("viewer message validation", () => {
   });
 
   it("allows only the bounded viewer command set", () => {
-    for (const command of ["map", "theme", "export-svg", "search", "zoom-in", "zoom-out", "reset"]) expect(isViewerCommand(command)).toBe(true);
+    for (const command of ["map", "theme", "fullscreen", "export-svg", "search", "zoom-in", "zoom-out", "reset"]) expect(isViewerCommand(command)).toBe(true);
     for (const command of ["eval", "reload", "", 1, null]) expect(isViewerCommand(command)).toBe(false);
   });
 

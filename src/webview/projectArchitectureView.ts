@@ -297,6 +297,7 @@ function parentBridgeScript(): string {
       if (button) button.textContent = active ? "Exit fullscreen" : "Fullscreen";
       var exit = root.querySelector("[data-diagram-action=exit-fullscreen]");
       if (exit) exit.hidden = !active;
+      sendToFrame({ type: "dext-diagram-command", command: "fullscreen", active: active });
     }
     function setDiagramFocus(on) {
       document.body.classList.toggle("diagram-focus", Boolean(on));
@@ -486,6 +487,7 @@ function parentBridgeScript(): string {
       }
       if (message.type === "dext-diagram-ready") {
         sendToFrame({ type: "dext-diagram-command", command: "map", nodes: nodeMap || {} });
+        syncFullscreenControls();
         return;
       }
       if (typeof message.type !== "string") return;

@@ -23,6 +23,7 @@ export function archifyViewerBridgeScript(session: string, theme: "light" | "dar
     var pendingSvg = null;
     var blobByUrl = new Map();
     var archifyToProject = {};
+    var presentationBeforeFullscreen = null;
     function post(message) { try { window.parent.postMessage(Object.assign({ __dext: session }, message), "*"); } catch (error) {} }
     function themeNow() { return document.documentElement.getAttribute("data-theme"); }
     function applyTheme(next) {
@@ -77,6 +78,18 @@ export function archifyViewerBridgeScript(session: string, theme: "light" | "dar
         switch (data.command) {
           case "map": archifyToProject = data.nodes || {}; post({ type: "dext-diagram-result", requestId: requestId, ok: true }); return;
           case "theme": applyTheme(data.theme); post({ type: "dext-diagram-state", requestId: requestId, theme: themeNow() }); return;
+          case "fullscreen": {
+            if (!window.Archify || !Archify.presentation) throw new Error("Archify presentation is unavailable");
+            if (data.active) {
+              if (presentationBeforeFullscreen === null) presentationBeforeFullscreen = Archify.presentation.active();
+              Archify.presentation.enter();
+            } else if (presentationBeforeFullscreen !== null) {
+              if (presentationBeforeFullscreen) Archify.presentation.enter();
+              else Archify.presentation.exit();
+              presentationBeforeFullscreen = null;
+            }
+            break;
+          }
           case "export-svg": {
             if (!window.Archify || !Archify.exportMenu) throw new Error("Archify export is unavailable");
             pendingSvg = requestId || "export";
@@ -123,7 +136,7 @@ export function archifyViewerBridgeScript(session: string, theme: "light" | "dar
   })();`;
 }
 
-export const VIEWER_COMMANDS = ["map", "theme", "export-svg", "search", "zoom-in", "zoom-out", "reset"] as const;
+export const VIEWER_COMMANDS = ["map", "theme", "fullscreen", "export-svg", "search", "zoom-in", "zoom-out", "reset"] as const;
 export type ViewerCommand = typeof VIEWER_COMMANDS[number];
 
 /** The iframe may only send bridge messages after both the source window and session token match. */
