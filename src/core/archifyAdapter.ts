@@ -547,6 +547,34 @@ function buildWorkflow(project: ProjectDiagram, repository: ArchifyRepository | 
   };
 }
 
+/**
+ * The sequence renderer grants each participant a box derived from the canvas:
+ * `participantW = clamp((viewBox[0] - 124) / n - 24, 86, 190)` under
+ * `column_fit: "spread"`, and message rows must stay inside
+ * `[160, viewBox[1] - 83]`. Dext has to size the canvas for the diagram it built;
+ * the default 920x760 squeezes seven participants into 90px boxes no real label
+ * fits, and pushes the later messages past the readable timeline.
+ */
+const SEQUENCE = {
+  sideMargin: 62,
+  minBox: 86,
+  maxBox: 190,
+  baseWidth: 920,
+  baseHeight: 760,
+  labelUnit: 6.8,
+  sublabelUnit: 6,
+  firstMessageY: 190,
+  messageGap: 70,
+  /** lifelineTop (142) + 18 + the legend reserve below the timeline + 18. */
+  topMessageLimit: 160,
+  bottomReserve: 90
+} as const;
+
+/** Participant box width the renderer derives from a canvas width. */
+function sequenceBoxWidth(viewWidth: number, participantCount: number): number {
+  return Math.max(SEQUENCE.minBox, Math.min(SEQUENCE.maxBox, Math.round((viewWidth - SEQUENCE.sideMargin * 2) / participantCount) - 24));
+}
+
 function buildSequence(project: ProjectDiagram, repository: ArchifyRepository | undefined, attached: boolean): BuiltIr {
   const semantics = project.semantics ?? {};
   const participantNodes = [...(semantics.participants ?? [])].sort((left, right) => left.order - right.order);
@@ -555,24 +583,32 @@ function buildSequence(project: ProjectDiagram, repository: ArchifyRepository | 
   const usedNodes = new Set<string>();
   const usedRelations = new Set<string>();
   const nodeById = new Map(project.nodes.map((node) => [node.id, node]));
-  const participants = participantNodes.flatMap((participant) => {
+  const ordered = participantNodes.flatMap((participant) => {
     const node = nodeById.get(participant.nodeId);
-    if (!node) return [];
+    return node ? [node] : [];
+  });
+  if (ordered.length < 2) throw new Error("Sequence diagram participants do not reference existing nodes.");
+  // Size the canvas so the widest label gets a box it fits in, then truncate
+  // whatever is still too wide for the box the canvas actually grants.
+  const widestLabel = Math.max(...ordered.map((node) => textUnits(node.label) * SEQUENCE.labelUnit));
+  const desiredBox = Math.min(SEQUENCE.maxBox, Math.max(SEQUENCE.minBox, Math.round(widestLabel) - 6));
+  const viewWidth = Math.max(SEQUENCE.baseWidth, Math.round((desiredBox + 24) * ordered.length + SEQUENCE.sideMargin * 2));
+  const boxWidth = sequenceBoxWidth(viewWidth, ordered.length);
+  const participants = ordered.map((node) => {
     const id = mapNode(mapping, node, usedNodes);
     const sources = evidenceSources(node, repository, attached);
-    return [{
+    return {
       id,
       type: componentType(node),
-      label: node.label,
-      ...(node.description ? { sublabel: truncate(node.description, 80) } : {}),
+      label: fitText(node.label, fitLabelUnits(boxWidth, SEQUENCE.labelUnit, 6)),
+      ...(node.description ? { sublabel: fitText(node.description, fitSublabelUnits(boxWidth)) } : {}),
       ...(sources ? { sources } : {})
-    }];
+    };
   });
-  if (participants.length < 2) throw new Error("Sequence diagram participants do not reference existing nodes.");
   const messageOrder = new Map((semantics.messages ?? []).map((message) => [message.relationId, message.order]));
-  const ordered = sortedRelations(project, Object.fromEntries(messageOrder));
+  const sorted = sortedRelations(project, Object.fromEntries(messageOrder));
   const messageKinds = new Map((semantics.messages ?? []).map((message) => [message.relationId, message.kind]));
-  const messages = ordered
+  const messages = sorted
     .filter((relation) => mapping.ids[relation.from] && mapping.ids[relation.to])
     .map((relation, index) => {
       const id = mapRelation(mapping, relation, usedRelations);
@@ -581,19 +617,20 @@ function buildSequence(project: ProjectDiagram, repository: ArchifyRepository | 
         id,
         from: mapping.ids[relation.from],
         to: mapping.ids[relation.to],
-        y: 200 + index * 70,
+        y: SEQUENCE.firstMessageY + index * SEQUENCE.messageGap,
         label: truncate(relationLabel(relation), 120),
         ...(kind === "return" || relation.kind === "returns" ? { variant: "return" } : {}),
         ...(relation.condition ? { note: truncate(relation.condition, 200) } : {})
       };
     });
-  const longest = Math.max(0, ...project.nodes.map((node) => node.label.length));
+  const viewHeight = Math.max(SEQUENCE.baseHeight,
+    SEQUENCE.firstMessageY + Math.max(0, messages.length - 1) * SEQUENCE.messageGap + SEQUENCE.bottomReserve);
   return {
     mapping,
     ir: {
       schema_version: 1,
       diagram_type: "sequence",
-      meta: baseMeta(project, repository, attached, longest > 12 ? { column_fit: "spread" } : {}),
+      meta: baseMeta(project, repository, attached, { viewBox: [viewWidth, viewHeight], column_fit: "spread" }),
       participants,
       messages
     }
@@ -1172,9 +1209,30 @@ function repairIr(input: Record<string, unknown>, diagnostics: readonly string[]
     }
   }
   if (type === "sequence") {
-    const messages = Array.isArray(ir["messages"]) ? ir["messages"] as Record<string, unknown>[] : [];
-    ir["messages"] = messages.map((message, index) => ({ ...message, y: 200 + index * (70 + attempt * 45) }));
-    const meta = { ...(ir["meta"] as Record<string, unknown> ?? {}), column_fit: "spread" };
+    const meta = { ...(ir["meta"] as Record<string, unknown> ?? {}) };
+    const currentView = Array.isArray(meta["viewBox"]) ? meta["viewBox"] as number[] : [SEQUENCE.baseWidth, SEQUENCE.baseHeight];
+    const participants = Array.isArray(ir["participants"]) ? ir["participants"] as Record<string, unknown>[] : [];
+    // Re-space on the builder's own grid: widening the gap is what pushed the tail
+    // of a long sequence outside the readable timeline the renderer validates.
+    const messages = (Array.isArray(ir["messages"]) ? ir["messages"] as Record<string, unknown>[] : [])
+      .map((message, index) => ({ ...message, y: SEQUENCE.firstMessageY + index * SEQUENCE.messageGap }));
+    ir["messages"] = messages;
+    const boxWidth = sequenceBoxWidth(currentView[0] ?? SEQUENCE.baseWidth, Math.max(2, participants.length));
+    if (text.includes("wider than") || text.includes("sublabel") || text.includes("participant box")) {
+      ir["participants"] = participants.map((participant) => ({
+        ...participant,
+        label: typeof participant["label"] === "string"
+          ? fitText(participant["label"], fitLabelUnits(boxWidth, SEQUENCE.labelUnit, 6)) : participant["label"],
+        ...(typeof participant["sublabel"] === "string"
+          ? { sublabel: fitText(participant["sublabel"], fitSublabelUnits(boxWidth)) } : {})
+      }));
+    }
+    if (text.includes("timeline") || text.includes("viewbox")) {
+      meta["viewBox"] = [currentView[0] ?? SEQUENCE.baseWidth,
+        Math.max(currentView[1] ?? SEQUENCE.baseHeight,
+          SEQUENCE.firstMessageY + Math.max(0, messages.length - 1) * SEQUENCE.messageGap + SEQUENCE.bottomReserve)];
+    }
+    meta["column_fit"] = "spread";
     ir["meta"] = meta;
   }
   if (type === "dataflow") {
