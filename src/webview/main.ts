@@ -188,6 +188,7 @@ if (typeof ResizeObserver === "function") {
   const syncResultLayout = (): void => {
     syncResultScrollGutter();
     syncJumpToLatest();
+    reportStaleResultRange();
     if (!followResultEnd || measuredResultScrollHeight < 0) {
       measuredResultScrollHeight = elements.resultBody.scrollHeight;
       measuredResultClientHeight = elements.resultBody.clientHeight;
@@ -2644,6 +2645,56 @@ function syncJumpToLatest(): void {
   jumpToTop.hidden = elements.resultBody.scrollTop <= 1;
 }
 
+/** How far the port's range may exceed the content it paints before the
+ * difference stops being a rounding artifact. */
+const RESULT_RANGE_TOLERANCE = 32;
+// One report per rendered conversation: a host-specific layout quirk that keeps
+// space the port never paints must not repeat on every frame, and a reader who
+// reloads the view gets one fresh answer instead of none.
+let reportedScrollRangeFor: string | undefined;
+
+/** A scroll range larger than the content makes the scrollbar lie: the thumb
+ * stops short of the newest output, and the end of the track is blank space.
+ * Repeated attempts to fix that by moving the scroll position cannot help,
+ * because the position was never the problem - so measure the port against
+ * what it paints and name the box that owns the difference. */
+function reportStaleResultRange(): void {
+  const body = elements.resultBody;
+  const result = elements.result;
+  if (!result.childElementCount) return;
+  const bodyRect = body.getBoundingClientRect();
+  // A conversation shorter than its viewport does not make the port scrollable,
+  // so the range never starts below the viewport's own height.
+  const contentBottom = Math.max(
+    body.clientHeight,
+    result.getBoundingClientRect().bottom - bodyRect.top + body.scrollTop
+  );
+  const excess = body.scrollHeight - contentBottom;
+  if (excess <= RESULT_RANGE_TOLERANCE) return;
+  const conversation = renderedConversationId ?? "unknown";
+  if (reportedScrollRangeFor === conversation) return;
+  reportedScrollRangeFor = conversation;
+  // Lowest boxes win: the length the port scrolls into is the union of them.
+  const boxes: Array<{ bottom: number; label: string }> = [];
+  for (const element of result.querySelectorAll<HTMLElement>("*")) {
+    const rect = element.getBoundingClientRect();
+    if (!rect.height && !rect.width) continue;
+    boxes.push({
+      bottom: rect.bottom - bodyRect.top + body.scrollTop - contentBottom,
+      label: `${element.tagName.toLowerCase()}.${String(element.className || "?").slice(0, 48)}`
+    });
+  }
+  boxes.sort((left, right) => right.bottom - left.bottom);
+  const summary = [
+    `port ${body.clientHeight}px view / ${body.scrollHeight}px range`,
+    `content ${Math.round(contentBottom)}px`,
+    `closed sections ${result.querySelectorAll("details:not([open])").length}`,
+    ...boxes.slice(0, 3).map((box) => `${Math.round(box.bottom)}px past content: ${box.label}`)
+  ].join(" · ");
+  console.warn(`dext scroll range: ${summary}`);
+  renderInputError(`Dext scroll diagnostic — ${summary}`);
+}
+
 /** #result-body owns the vertical scrollbar while the floating control is
  * positioned against the section, so the button needs the measured gutter.
  * Hosts pick that width themselves (VS Code paints a 10px slider, Chromium a
@@ -3520,6 +3571,7 @@ elements.resultBody.addEventListener("scroll", () => {
   if (resultIsNearBottom()) followResultEnd = true;
   else if (!layoutChanged) followResultEnd = false;
   syncJumpToLatest();
+  reportStaleResultRange();
 }, { passive: true });
 // A pointer press on the scrollbar strip never reaches the track itself, so the
 // gesture is recognized by its position inside #result-body's measured gutter.

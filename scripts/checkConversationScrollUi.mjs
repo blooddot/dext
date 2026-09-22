@@ -250,6 +250,46 @@ await runLabChecks(async ({ evaluate, settle, send, click, key, artifacts }) => 
   assert.equal(current.gap, 0, `following resumes after End, got ${JSON.stringify(current)}`);
   console.log('PASS the keyboard scroller follows the same rules');
 
+  // The scrollbar may only describe space the reader can see. Two things can
+  // break that: a box inside a closed disclosure stays laid out (Chromium lays
+  // a closed <details> out and merely stops painting it), or a descendant
+  // escapes #result and lengthens the port behind the painted content. Both
+  // left the reader dragging a thumb that could not reach the newest output.
+  await evaluate(`window.range=()=>{
+    const body=document.getElementById('result-body');
+    const result=document.getElementById('result');
+    const bodyRect=body.getBoundingClientRect();
+    const contentBottom=Math.max(body.clientHeight,result.getBoundingClientRect().bottom-bodyRect.top+body.scrollTop);
+    const closedBoxes=[...body.querySelectorAll('details:not([open]) > :not(summary)')]
+      .filter((el)=>el.getBoundingClientRect().height>0||el.getBoundingClientRect().width>0).length;
+    return {clientHeight:body.clientHeight,scrollHeight:Math.round(body.scrollHeight),
+      contentBottom:Math.round(contentBottom),excess:Math.round(body.scrollHeight-contentBottom),closedBoxes};};`);
+  await click('.stream-jump-latest');
+  await settle();
+  let range = await evaluate('range()');
+  assert.equal(range.closedBoxes, 0,
+    `a closed disclosure must not keep its content in the layout, got ${JSON.stringify(range)}`);
+  assert.ok(range.excess <= 8,
+    `the scroll range must end with the content it paints, got ${JSON.stringify(range)}`);
+  console.log('PASS the scroll range matches the painted conversation');
+
+  // Collapsing the Process timeline must remove its height from the range: it
+  // is the reader's own control over how much of the transcript is in play.
+  const processSelectorRange = 'details.output-turn-section[data-turn-section="process"]';
+  const openRange = await evaluate('range()');
+  await evaluate(`document.querySelector(${JSON.stringify(processSelectorRange)}).open=false`);
+  await settle();
+  const closedRange = await evaluate('range()');
+  assert.ok(closedRange.scrollHeight < openRange.scrollHeight - 40,
+    `a collapsed Process removes its height from the range, got ${JSON.stringify({ openRange, closedRange })}`);
+  assert.equal(closedRange.closedBoxes, 0,
+    `collapsing Process leaves no laid-out content behind, got ${JSON.stringify(closedRange)}`);
+  assert.ok(closedRange.excess <= 8,
+    `a collapsed Process still ends the range with the content it paints, got ${JSON.stringify(closedRange)}`);
+  await evaluate(`document.querySelector(${JSON.stringify(processSelectorRange)}).open=true`);
+  await settle();
+  console.log('PASS a collapsed Process owns no scroll range');
+
   const shot = await send('Page.captureScreenshot');
   await writeFile(join(artifacts, 'conversation-scroll.png'), Buffer.from(shot.data, 'base64'));
 }, false);

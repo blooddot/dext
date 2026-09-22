@@ -45,6 +45,12 @@ body.vscode-high-contrast-light {
 html,
 body {
   height: 100%;
+  /* The conversation is the only thing that scrolls vertically. VS Code sizes
+     the Webview View to its host, so a page-level vertical scrollbar can only
+     appear when something escapes the app shell - and then the reader is
+     handed a second slider next to #result-body's that scrolls nothing they
+     are looking at. Horizontal scrolling stays available for narrow hosts. */
+  overflow-y: hidden;
 }
 
 * {
@@ -2248,6 +2254,19 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) button.primary.circu
 }
 
 .collapsible-body.collapsed {
+  display: none;
+}
+
+/* A closed disclosure must not keep its content in the layout. Chromium lays
+   the content of a closed <details> out and only stops painting it, so a
+   collapsed Process timeline (measured at 25 941 px of boxes inside
+   #result-body on VS Code 1.138 / Chromium 148) still owned its full height
+   without ever being drawn. Whatever a host does with that box, the scroll
+   range then describes space the reader cannot see: the thumb stops short of
+   the end of the output, and a thumb dragged to the track's end walks into
+   blank space. Hiding the content the way a closed disclosure behaved before
+   Chromium 131 keeps the port's range exactly equal to what it paints. */
+details:not([open]) > :not(summary) {
   display: none;
 }
 
