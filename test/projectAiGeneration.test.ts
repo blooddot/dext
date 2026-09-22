@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   buildProjectEvidencePackage,
   compareProjectEvidencePaths,
-  parseProjectAiResponse,
-  parseProjectDiagramResponse,
+  PROJECT_AI_PROMPT_VERSION,
+  PROJECT_DIAGRAM_PROMPT_VERSION,
   ProjectAiGenerationError,
   ProjectAiGenerationService,
   projectEvidenceFileRank,
@@ -50,6 +50,13 @@ const architectureDiagram = (): ProjectDiagram => ({
 });
 
 const validModel = (input: ProjectEvidencePackage): ProjectAiGeneratedModel => ({ intent: intent(input), diagrams: [architectureDiagram()] });
+
+/** Drives the real ax-backed service with one fixed CLI answer, so parsing is never tested twice. */
+const answerWith = (text: string): ProjectAiProvider => ({ id: "mock", generate: async () => ({ text }) });
+const generateModel = (text: string, input: ProjectEvidencePackage) =>
+  new ProjectAiGenerationService(answerWith(text), { maxAttempts: 1 }).generate(input);
+const generateDiagram = (text: string, input: ProjectEvidencePackage, requirement: string) =>
+  new ProjectAiGenerationService(answerWith(text), { maxAttempts: 1 }).generateDiagram(input, { requirement });
 
 describe("Project evidence package", () => {
   it("bounds files, redacts secrets and keeps a deterministic hash without any scan contract", () => {
@@ -243,6 +250,30 @@ describe("Project AI response validation", () => {
     expect(validateProjectAiModel(validModel(input), input)).toEqual([]);
   });
 
+  it("accepts legacy and short source module ids when they are backed by the evidence inventory", () => {
+    const input = buildProjectEvidencePackage({
+      projectName: "Example",
+      files: [
+        { path: "README.md", content: "# Example" },
+        { path: "src/app.ts", content: "export function start() {}\n" },
+        { path: "src/core/builtins.ts", content: "export function ask() {}\n" },
+        { path: "src/webview/main.ts", content: "export function render() {}\n" },
+        { path: "src/editorTabManager.ts", content: "export function openTab() {}\n" }
+      ]
+    });
+    const model = validModel(input);
+    const context = model.intent.contexts[0];
+    if (!context) throw new Error("Expected a context in the fixture.");
+    model.intent.contexts[0] = {
+      ...context,
+      moduleIds: ["src/core/builtins", "mod.builtins", "mod.webview", "mod.editorTabs"]
+    };
+    expect(validateProjectAiModel(model, input)).toEqual([]);
+
+    model.intent.contexts[0] = { ...context, moduleIds: ["mod.missing"] };
+    expect(validateProjectAiModel(model, input).some((error) => error.includes("Unknown semantic reference 'mod.missing'"))).toBe(true);
+  });
+
   it("rejects unknown semantic ids, missing evidence, dangling relations and incomplete kind semantics", () => {
     const input = evidence();
     const model = validModel(input);
@@ -262,20 +293,113 @@ describe("Project AI response validation", () => {
     expect(validateProjectAiModel(workflow, input).some((error) => error.includes("lane"))).toBe(true);
   });
 
-  it("parses plain, explained and intent-shaped JSON output", () => {
+  it("keeps a sound model whose objects carry an undocumented descriptive key", async () => {
+    const input = evidence();
+    const diagram = architectureDiagram();
+    // Providers accept the response schema but never enforce it, so a model may decorate a node
+    // with a free-text `note`. The key has no Project meaning and the answer is otherwise
+    // verifiable, so it must not cost the generation and a retry.
+    const model = {
+      ...validModel(input),
+      intent: { ...intent(input), brief: { ...intent(input).brief, note: "explained in the README" } },
+      diagrams: [{ ...diagram, nodes: [{ ...diagram.nodes[0]!, note: "entry point" }] }]
+    };
+    const result = await generateModel(JSON.stringify(model), input);
+    expect(result.metadata.attempts).toBe(1);
+    expect(result.diagrams[0]!.id).toBe("architecture");
+    expect(result.intent.brief.name).toBe("Example");
+    expect("note" in result.diagrams[0]!.nodes[0]!).toBe(false);
+    expect("note" in result.intent.brief).toBe(false);
+  });
+
+  it("accepts ordinary prose in every array-of-strings field", async () => {
+    const input = evidence();
+    // Regression: ax walks a schema attached to its output field and JSON.parses the elements of
+    // every array-typed leaf, so `goals: ["Author Dext …"]` used to fail inside ax with
+    // "Invalid JSON … in field 'goals'" before the contract was ever checked. The model below
+    // fills every string array the contract has.
+    const model = {
+      intent: {
+        ...intent(input),
+        brief: {
+          ...intent(input).brief,
+          goals: ["Author Dext runs AI coding tasks."],
+          runtime: ["Node.js"],
+          audiences: ["Extension developers"]
+        },
+        contexts: [{
+          id: "task.context", canonicalName: "TaskApplication", purpose: "Application boundary",
+          responsibilities: ["Owns the task lifecycle."], moduleIds: [], entryPoints: [], dependsOn: [], relatedContextIds: [],
+          evidence: [{ path: "src/app.ts", line: 1 }]
+        }],
+        capabilities: [{
+          id: "task.run", canonicalName: "TaskRun", description: "Runs a task.", outcomes: ["A task finishes."],
+          contextIds: ["task.context"], moduleIds: [], evidence: [{ path: "src/app.ts", line: 1 }]
+        }],
+        terms: [{
+          id: "term.task", canonicalName: "task", aliases: ["job"], forbiddenNames: ["work item"],
+          definition: "A unit of work.", contextIds: ["task.context"], evidence: [{ path: "src/app.ts", line: 1 }]
+        }],
+        constraints: [{ id: "constraint.one", statement: "One task at a time.", rationale: "Simplicity.", scope: ["task.run"], evidence: [{ path: "src/app.ts", line: 1 }] }],
+        decisions: [{ id: "decision.one", title: "Queue tasks", decision: "Queue them.", alternatives: ["Run them in parallel."], consequences: ["Slower but predictable."], evidence: [{ path: "src/app.ts", line: 1 }] }]
+      },
+      diagrams: [{
+        ...architectureDiagram(),
+        nodes: [{ ...architectureDiagram().nodes[0]!, semanticIds: ["task.context", "task.run"] }]
+      }]
+    };
+    const result = await generateModel(JSON.stringify(model), input);
+    expect(result.metadata.attempts).toBe(1);
+    expect(result.intent.brief.goals).toEqual(["Author Dext runs AI coding tasks."]);
+    expect(result.intent.terms[0]!.aliases).toEqual(["job"]);
+    expect(result.intent.decisions[0]!.alternatives).toEqual(["Run them in parallel."]);
+  });
+
+  it("reports every documented rule that an undocumented key cannot satisfy", async () => {
+    const input = evidence();
+    const diagram = architectureDiagram();
+    const invalidRole = { intent: intent(input), diagrams: [{ ...diagram, nodes: [{ ...diagram.nodes[0]!, role: "microservice", note: "entry point" }] }] };
+    await expect(generateModel(JSON.stringify(invalidRole), input)).rejects.toMatchObject({
+      code: "invalid_output",
+      message: "Project AI returned an invalid semantic model."
+    });
+    // Pruning drops the extra key; it never stands in for a missing documented field.
+    const missingLabel = { intent: intent(input), diagrams: [{ ...diagram, nodes: [{ id: "app", role: "system", semanticIds: [], evidence: [{ path: "src/app.ts", line: 1 }], note: "entry point" }] }] };
+    await expect(generateModel(JSON.stringify(missingLabel), input)).rejects.toMatchObject({ code: "invalid_output" });
+    // A contract-valid model with an unprovable claim keeps its own message and diagnostics.
+    const unknownReference = { ...validModel(input), intent: { ...intent(input), contexts: [{ ...intent(input).contexts[0]!, moduleIds: ["mod.missing"] }] } };
+    await expect(generateModel(JSON.stringify(unknownReference), input)).rejects.toMatchObject({
+      code: "invalid_output",
+      message: "Project AI evidence or references could not be verified.",
+      diagnostics: [expect.stringContaining("Unknown semantic reference 'mod.missing'")]
+    });
+  });
+
+  it("parses plain, explained and intent-shaped JSON output", async () => {
     const input = evidence();
     const model = validModel(input);
     const json = JSON.stringify(model);
-    expect(parseProjectAiResponse(`Here is the model:\n\n${json}`, input).diagrams[0]!.id).toBe("architecture");
-    expect(parseProjectAiResponse(`\`\`\`json\n${json}\n\`\`\``, input).intent.brief.name).toBe("Example");
-    expect(parseProjectAiResponse(JSON.stringify({ ...model.intent, diagrams: model.diagrams }), input).intent.contexts[0]!.id).toBe("task.context");
-    expect(() => parseProjectAiResponse("not json", input)).toThrowError(ProjectAiGenerationError);
+    expect((await generateModel(`Here is the model:\n\n${json}`, input)).diagrams[0]!.id).toBe("architecture");
+    expect((await generateModel(`\`\`\`json\n${json}\n\`\`\``, input)).intent.brief.name).toBe("Example");
+    expect((await generateModel(JSON.stringify({ ...model.intent, diagrams: model.diagrams }), input)).intent.contexts[0]!.id).toBe("task.context");
+    await expect(generateModel("not json", input)).rejects.toMatchObject({ code: "invalid_output" });
   });
 
-  it("parses a single on-demand diagram response", () => {
+  it("parses a single on-demand diagram response", async () => {
     const input = evidence("Show the architecture");
-    const parsed = parseProjectDiagramResponse(JSON.stringify({ diagram: architectureDiagram() }), input);
+    const parsed = await generateDiagram(JSON.stringify({ diagram: architectureDiagram() }), input, "Show the architecture");
     expect(parsed.diagram.id).toBe("architecture");
+  });
+
+  it("keeps an on-demand diagram that carries an undocumented key", async () => {
+    const input = evidence("Show the architecture");
+    const diagram = architectureDiagram();
+    const parsed = await generateDiagram(JSON.stringify({
+      diagram: { ...diagram, nodes: [{ ...diagram.nodes[0]!, note: "entry point" }] },
+      notes: "outside the diagram envelope"
+    }), input, "Show the architecture");
+    expect(parsed.diagram.id).toBe("architecture");
+    expect("note" in parsed.diagram.nodes[0]!).toBe(false);
   });
 });
 
@@ -288,11 +412,28 @@ describe("Project AI generation service", () => {
     const result = await new ProjectAiGenerationService(provider, { timeoutMs: 2_000, now: () => 42 }).generate(input);
     expect(calls).toBe(2);
     expect(result.metadata.attempts).toBe(2);
-    expect(result.metadata.promptVersion).toBe("project-knowledge-4");
+    expect(result.metadata.promptVersion).toBe(PROJECT_AI_PROMPT_VERSION);
     expect(result.intent.brief.origin).toBe("inferred");
     expect(result.intent.brief.review).toBe("draft");
     expect(result.intent.generatedAt).toBe(42);
     expect(result.diagrams[0]!.version).toBe(0);
+  });
+
+  it("spends the retry budget on a provider failure and reports it when every attempt fails", async () => {
+    const input = evidence();
+    const value = validModel(input);
+    let calls = 0;
+    // A CLI that failed to start is worth one more attempt with the same bounded evidence.
+    const transient: ProjectAiProvider = {
+      id: "mock",
+      generate: async () => (++calls === 1 ? { text: "CLI failed to start.", finishReason: "error" as const } : { text: JSON.stringify(value) })
+    };
+    const recovered = await new ProjectAiGenerationService(transient).generate(input);
+    expect(calls).toBe(2);
+    expect(recovered.metadata.attempts).toBe(2);
+
+    const dead: ProjectAiProvider = { id: "mock", generate: async () => ({ text: "CLI auth expired.", finishReason: "error" as const }) };
+    await expect(new ProjectAiGenerationService(dead).generate(input)).rejects.toMatchObject({ code: "provider_error", diagnostics: ["CLI auth expired."] });
   });
 
   it("keeps the confidence the model reported for each statement", async () => {
@@ -347,7 +488,7 @@ describe("Project AI generation service", () => {
     expect(result.diagram.id).toBe("architecture");
     expect(result.diagram.kind).toBe("architecture");
     expect(result.diagram.version).toBe(0);
-    expect(result.metadata.promptVersion).toBe("project-diagram-2");
+    expect(result.metadata.promptVersion).toBe(PROJECT_DIAGRAM_PROMPT_VERSION);
   });
 
   it("accepts a requirement the evidence package truncated to its own budget", async () => {

@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ProjectStore, type ProjectFileHost } from "../src/projectStore.js";
 import { ProjectInitializationService } from "../src/projectService.js";
-import { buildProjectEvidencePackage, ProjectAiGenerationService, type ProjectAiProvider } from "../src/core/projectAiGeneration.js";
+import { buildProjectEvidencePackage, PROJECT_AI_PROMPT_VERSION, ProjectAiGenerationService, type ProjectAiProvider } from "../src/core/projectAiGeneration.js";
 import { projectIntentSchema } from "../src/core/projectIntent.js";
 import type { ProjectDiagram } from "../src/core/projectDiagram.js";
 import { ProjectDiagramAdapterRegistry } from "../src/core/projectDiagramRegistry.js";
@@ -42,7 +42,7 @@ function providerFor(config: { initialize?: unknown; diagram?: unknown }): Proje
   return {
     id: "mock",
     generate: async (request) => {
-      const value = request.promptVersion === "project-knowledge-4" ? config.initialize : config.diagram;
+      const value = request.promptVersion === PROJECT_AI_PROMPT_VERSION ? config.initialize : config.diagram;
       return { text: JSON.stringify(value) };
     }
   };

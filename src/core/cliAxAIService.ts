@@ -32,6 +32,11 @@ export interface CliAxAIServiceOptions {
   outputField: string;
   transport: CliAxTransport;
   model?: string;
+  /** Treats the outermost recovered JSON object as the answer instead of searching for a
+   * Dext-shaped one. Required whenever the answer legitimately contains nested objects that
+   * carry their own `kind` (a project model's diagrams do), which the Dext-result search
+   * would otherwise mistake for the result itself. */
+  preferOutermostObject?: boolean;
 }
 
 function emptyLatency(): AxAIServiceMetrics["latency"]["chat"] {
@@ -98,17 +103,16 @@ function modelUsage(serviceId: string, model: string | undefined, usage: AgentTo
   };
 }
 
-function envelope(raw: string, outputField: string): string {
+function envelope(raw: string, outputField: string, preferOutermostObject: boolean): string {
   const candidates = agentResultCandidates(raw);
-  // Prefer an explicit envelope, then the first Dext-shaped object (this keeps
-  // the outer object when the result contains nested objects), then the first
-  // recoverable object at all.
+  // Prefer an explicit envelope. Otherwise a Dext-shaped object wins, which keeps the outer
+  // object when the result contains nested objects; a consumer whose answer cannot be
+  // recognized by shape asks for the outermost object instead.
   const match = candidates.find((candidate) => Object.hasOwn(candidate.value, outputField))
-    ?? candidates.find((candidate) => typeof candidate.value.kind === "string")
-    ?? candidates[0];
+    ?? (preferOutermostObject ? candidates[0] : candidates.find((candidate) => typeof candidate.value.kind === "string") ?? candidates[0]);
   if (!match) return raw;
-  const content = Object.hasOwn(match.value, outputField) ? match.value : { [outputField]: match.value };
-  return JSON.stringify(content);
+  const value = Object.hasOwn(match.value, outputField) ? match.value[outputField] : match.value;
+  return JSON.stringify({ [outputField]: value });
 }
 
 /** Minimal `AxAIService` implementation backed by Dext's one-shot read-only CLI
@@ -188,7 +192,7 @@ export class CliAxAIService implements AxAIService {
     try {
       const prompt = renderChatPrompt(req.chatPrompt);
       const response = await this.perform(prompt, options);
-      const content = envelope(response.text, this.config.outputField);
+      const content = envelope(response.text, this.config.outputField, this.config.preferOutermostObject ?? false);
       const result: AxChatResponseResult = { index: 0, content };
       if (req.modelConfig) this.lastUsedModelConfig = req.modelConfig;
       const usage = modelUsage(this.config.id, this.model, response.usage);

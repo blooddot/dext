@@ -62,6 +62,20 @@ describe("CliAxAIService.chat", () => {
     expect(contentText(response)).toBe("no json here");
   });
 
+  it("prefers the outermost object when the answer contains its own kind-bearing objects", async () => {
+    // A project model has no top-level `kind`, while every diagram inside it does, so the
+    // Dext-result search would otherwise hand ax a diagram instead of the model.
+    const text = JSON.stringify({ intent: { brief: { name: "Example" } }, diagrams: [{ id: "d", kind: "architecture", nodes: [] }] });
+    const outer = new CliAxAIService({ id: "outer", label: "Outer", outputField: OUTPUT_FIELD, transport: async () => ({ text }), preferOutermostObject: true });
+    expect(contentOf(await outer.chat(request([{ role: "user", content: "go" }])))).toEqual({
+      [OUTPUT_FIELD]: { intent: { brief: { name: "Example" } }, diagrams: [{ id: "d", kind: "architecture", nodes: [] }] }
+    });
+    // The default keeps the Dext-result search the repair path depends on.
+    expect(contentOf(await service(async () => ({ text })).chat(request([{ role: "user", content: "go" }])))).toEqual({
+      [OUTPUT_FIELD]: { id: "d", kind: "architecture", nodes: [] }
+    });
+  });
+
   it("ignores functions and responseFormat while rendering the prompt", async () => {
     let prompt = "";
     const transport: CliAxTransport = async (value) => { prompt = value; return { text: "{}" }; };
