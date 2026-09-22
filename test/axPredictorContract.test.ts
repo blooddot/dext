@@ -1,10 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { AxGenerateError, ax, type AxAIServiceOptions, type AxChatRequest } from "@ax-llm/ax";
-import { z } from "zod";
 import { REPAIR_OUTPUT_FIELD, repairSignature } from "../src/core/axAdapter.js";
 import { CliAxAIService, type CliAxTransport } from "../src/core/cliAxAIService.js";
-
-const SCHEMA = z.object({ value: z.string() });
 
 function envelope(value: unknown): string {
   return JSON.stringify({ [REPAIR_OUTPUT_FIELD]: value });
@@ -20,8 +17,7 @@ function service(transport: CliAxTransport): CliAxAIService {
 }
 
 function program() {
-  const signature = repairSignature(SCHEMA);
-  return ax(signature);
+  return ax(repairSignature());
 }
 
 class ObservingService extends CliAxAIService {
@@ -65,16 +61,18 @@ class RawService extends CliAxAIService {
 const inputs = { agentOutput: "raw output", diagnostics: "value: invalid" };
 
 describe("ax predictor contract (23.0.11)", () => {
-  it("accepts only the output-field envelope", async () => {
+  it("hands the output envelope through, because the contract is no longer ax's field", async () => {
     const good = service(async () => ({ text: envelope({ value: "ok" }) }));
     await expect(program().forward(good, inputs, { maxRetries: 0 })).resolves.toEqual({
       [REPAIR_OUTPUT_FIELD]: { value: "ok" }
     });
 
-    // CliAxAIService wraps bare transport objects, so exercise the raw ax
-    // service path to prove the envelope itself is mandatory.
-    const bad = new RawService(JSON.stringify({ value: "ok" }));
-    await expect(program().forward(bad, inputs, { maxRetries: 0 })).rejects.toThrow(/Structured Output/);
+    // The envelope itself is built by CliAxAIService from the first recovered object. ax does not
+    // validate the value against a contract any more: that check lives in ResultRepair, which is
+    // what lets a `list[str]` contract be repaired at all. A content object without the field is
+    // therefore accepted here and rejected there.
+    const bare = new RawService(JSON.stringify({ value: "ok" }));
+    await expect(program().forward(bare, inputs, { maxRetries: 0 })).resolves.toEqual({});
   });
 
   it("delivers addAssert fixing instructions in the retry prompt", async () => {
@@ -117,23 +115,35 @@ describe("ax predictor contract (23.0.11)", () => {
       [REPAIR_OUTPUT_FIELD]: { value: "ok" }
     });
     // Measured behavior: ax requests a prompt-mode function call instead of a
-    // native json_schema response. The envelope is still mandatory, and Dext's
-    // service must declare `structuredOutputs: true` for the native path.
+    // native json_schema response, and Dext's service must declare
+    // `structuredOutputs: true` for the native path.
     expect(observing.requests[0]?.functions?.map((fn) => fn.name)).toContain("__finalResult");
     expect(observing.requests[0]?.responseFormat).toBeUndefined();
-    const bare = new RawService(JSON.stringify({ value: "ok" }), false);
-    await expect(program().forward(bare, inputs, { maxRetries: 0 })).rejects.toThrow(/Structured Output/);
   });
 
-  it("spends at most 1 + maxRetries calls", async () => {
-    const chat = vi.fn(async () => ({ text: "not json at all" }));
-    await expect(program().forward(service(chat), inputs, { maxRetries: 1 })).rejects.toBeInstanceOf(AxGenerateError);
+  it("spends at most 1 + maxRetries calls while the answer is never accepted", async () => {
+    const chat = vi.fn(async () => ({ text: envelope({ value: "wrong" }) }));
+    const instance = program();
+    // ResultRepair answers an unusable value with the contract's diagnostics, which is the same
+    // path a malformed answer takes now that ax no longer validates the field.
+    instance.addAssert(() => "value: invalid");
+    await expect(instance.forward(service(chat), inputs, { maxRetries: 1 })).rejects.toBeInstanceOf(AxGenerateError);
     expect(chat).toHaveBeenCalledTimes(2);
+  });
+
+  it("hands the answer through untouched so a string-array contract can be repaired", async () => {
+    // The field is opaque on purpose: a contract attached here makes ax JSON.parse the elements of
+    // every string-array leaf (`list[str]`, `UiResult.selected`), which rejects an answer that
+    // already satisfies the contract. ResultRepair validates with the contract instead.
+    const text = JSON.stringify({ kind: "agent", text: "done", tags: ["Plain sentence.", "Second one."] });
+    await expect(program().forward(service(async () => ({ text })), inputs, { maxRetries: 0 })).resolves.toEqual({
+      [REPAIR_OUTPUT_FIELD]: { kind: "agent", text: "done", tags: ["Plain sentence.", "Second one."] }
+    });
   });
 
   it("keeps the repair output field constant aligned across adapter and service", () => {
     expect(REPAIR_OUTPUT_FIELD).toBe("structuredOutput");
-    const signature = repairSignature(SCHEMA);
+    const signature = repairSignature();
     expect(signature.getOutputFields().map((field) => field.name)).toEqual([REPAIR_OUTPUT_FIELD]);
   });
 });

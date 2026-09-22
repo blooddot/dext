@@ -3,6 +3,7 @@ import { performance } from "node:perf_hooks";
 import { REPAIR_OUTPUT_FIELD, repairSignature, type AxMethodContract } from "./axAdapter.js";
 import { evaluate, type AgentAssertionSnapshot } from "./agentAssertions.js";
 import { CliAxAIService, type CliAxTransport } from "./cliAxAIService.js";
+import { formatDiagnostics } from "./resultBoundary.js";
 import type { AgentTokenUsage, DextResult } from "./types.js";
 
 /** Call accounting surfaced through the existing agent status event. */
@@ -107,11 +108,18 @@ export class ResultRepair {
         ...(request.model ? { model: request.model } : {})
       });
     }
-    const program = ax(repairSignature(contract.outputSchema));
+    const program = ax(repairSignature());
+    /** The contract-validated result of the attempt ax accepted. */
+    let repaired: DextResult | undefined;
     program.addAssert(async (values: Record<string, unknown>) => {
-      const { hard, soft } = await evaluate(values[outputField], request.snapshot);
+      // The contract is checked here rather than by ax's output field, which cannot hold a contract
+      // with string-array leaves. A contract violation is repair instructions, not a hard stop.
+      const parsed = contract.outputSchema.safeParse(values[outputField]);
+      if (!parsed.success) return formatDiagnostics(parsed.error);
+      const { hard, soft } = await evaluate(parsed.data, request.snapshot);
       // A hard failure throws: ax aborts immediately with zero retries.
       if (hard.length) throw new Error(hard.join("\n"));
+      repaired = parsed.data as DextResult;
       // A soft suggestion is returned as fixing instructions for one retry.
       return soft.length ? soft.join("\n") : true;
     });
@@ -122,7 +130,7 @@ export class ResultRepair {
       ? "\nDo not include a patch: report the conclusion in text only."
       : "";
     try {
-      const output = await program.forward(
+      await program.forward(
         service,
         { agentOutput: request.raw, diagnostics: `${request.diagnostics || "No additional diagnostics."}${instruction}` },
         {
@@ -131,10 +139,10 @@ export class ResultRepair {
           ...(request.signal ? { abortSignal: request.signal } : {})
         }
       );
-      const result = (output as Record<string, unknown>)[outputField];
+      const result = repaired;
       this.report(request, usages, calls, started);
       if (result === undefined) return { diagnostics: "Repair produced no structured output." };
-      return { result: enforcePatchContract(result as DextResult, request.includePatch) };
+      return { result: enforcePatchContract(result, request.includePatch) };
     } catch (error) {
       this.report(request, usages, calls, started);
       // A cancelled outer run must stay cancelled; every other ax failure

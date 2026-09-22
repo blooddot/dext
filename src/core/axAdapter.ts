@@ -170,12 +170,18 @@ export const REPAIR_OUTPUT_FIELD = "structuredOutput";
 
 /** Signature for the bounded, single-retry result repair predictor. It carries
  * the raw agent text plus zod diagnostics and produces the typed result object
- * the contract expects. */
-export function repairSignature(output: ZodType): AxSignature {
+ * the contract expects.
+ *
+ * The output field is deliberately opaque. Attaching the contract makes ax walk it and JSON.parse
+ * the elements of every string-array leaf, so a contract that declares `list[str]` (or
+ * `UiResult.selected`) rejects an answer that already satisfies it, and the repair can never
+ * succeed. `ResultRepair` validates the answer with `contract.outputSchema` instead and hands that
+ * diagnostic back to ax's own fixing loop. */
+export function repairSignature(): AxSignature {
   return f()
     .input("agentOutput", z.string())
     .input("diagnostics", z.string())
-    .output(REPAIR_OUTPUT_FIELD, output)
+    .output(REPAIR_OUTPUT_FIELD, z.unknown())
     .description("Convert a raw agent result and its validation diagnostics into the required Dext result.")
     .useStructured()
     .build();

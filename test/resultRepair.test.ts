@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { AxAdapter, REPAIR_OUTPUT_FIELD } from "../src/core/axAdapter.js";
 import { createResultRepair, type ResultRepairRequest } from "../src/core/resultRepair.js";
 import type { AgentAssertionSnapshot } from "../src/core/agentAssertions.js";
@@ -122,6 +123,29 @@ describe("result repair predictor", () => {
     expect(prompts.join("\n")).toContain("Do not include a patch");
     expect(outcome.result).toMatchObject({ kind: "agent", text: "preview" });
     expect(outcome.result).not.toHaveProperty("patch");
+  });
+
+  it("repairs a contract that declares a string array", async () => {
+    // A `list[str]` output used to be impossible to repair: the contract was attached to ax's
+    // output field, so ax JSON.parsed every element of the array and rejected an answer that
+    // already satisfied the contract ("Invalid JSON ... in field 'tags'").
+    const listContract = new AxAdapter().compileOutput(
+      BUILTIN_METHODS.find((method) => method.id === "agent")!,
+      z.object({ kind: z.literal("agent"), text: z.string(), tags: z.array(z.string()) }).strict()
+    );
+    const transport = vi.fn(async () => ({ text: JSON.stringify({ kind: "agent", text: "done", tags: ["Plain sentence.", "Second one."] }) }));
+    const outcome = await createResultRepair({ contract: listContract, outputField: REPAIR_OUTPUT_FIELD, transport }).repair(request("raw"));
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect(outcome.result).toMatchObject({ kind: "agent", text: "done", tags: ["Plain sentence.", "Second one."] });
+  });
+
+  it("retries once when the answer breaks the contract and then succeeds", async () => {
+    const transport = vi.fn()
+      .mockResolvedValueOnce({ text: JSON.stringify({ kind: "agent" }) })
+      .mockResolvedValueOnce({ text: agentResult("repaired") });
+    const outcome = await createResultRepair({ contract, outputField: REPAIR_OUTPUT_FIELD, transport }).repair(request("raw"));
+    expect(transport).toHaveBeenCalledTimes(2);
+    expect(outcome.result).toMatchObject({ kind: "agent", text: "repaired" });
   });
 
   it("keeps a patch when the caller asked for one", async () => {
