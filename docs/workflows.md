@@ -382,8 +382,8 @@ Typed results use Python's standard `TypedDict`, `Literal`, and `NotRequired` an
 ```python
 from typing import Literal, NotRequired, TypedDict
 
-class DocumentResult(TypedDict):
-    kind: Literal["document"]
+class ReviewResult(TypedDict):
+    kind: Literal["review"]
     uri: str
     content: str
     title: NotRequired[str]

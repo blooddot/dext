@@ -346,8 +346,8 @@ Skill 按以下顺序查找，同名时靠前的位置优先：
 ```python
 from typing import Literal, NotRequired, TypedDict
 
-class DocumentResult(TypedDict):
-    kind: Literal["document"]
+class ReviewResult(TypedDict):
+    kind: Literal["review"]
     uri: str
     content: str
     title: NotRequired[str]
