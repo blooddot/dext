@@ -92,8 +92,29 @@ describe("Harness ACP transport", { timeout: 15000 }, () => {
     expect(elicitations).toEqual([{ mode: "form", message: "Which scope?" }]);
     expect(messages).toEqual([
       "Inspecting", JSON.stringify({ action: "accept", content: { scope: "user", notes: "typed" } }),
-      "Inspecting", JSON.stringify({ id: "fixture-question-1", status: "answered", answer: { answers: [{ id: "q", selected: ["B"] }] } })
+      "Inspecting", JSON.stringify({ id: "fixture-call-1", status: "answered", answer: { answers: [{ id: "q", selected: ["B"] }] } })
     ]);
+  });
+  it("publishes the result tool and routes a model submission to Dext's validator", async () => {
+    const submitted: unknown[] = [];
+    const transport = new DeepSeekHarnessTransport(process.execPath, [fixture], process.cwd(), {
+      sessionUpdate: async () => {},
+      requestPermission: async () => ({ outcome: { outcome: "cancelled" as const } }),
+      harnessResult: async (request) => { submitted.push(request.args); return { status: "accepted" as const }; }
+    });
+    connections.push(transport);
+    await transport.initialize();
+    const session = await transport.wait(transport.connection.newSession({ cwd: process.cwd(), mcpServers: [] }));
+    expect(await transport.publishResultTool({ name: "dext_submit_result", description: "Submit.", parameters: { type: "object", properties: {} } })).toBe(true);
+    await transport.wait(transport.connection.prompt({ sessionId: session.sessionId, prompt: [{ type: "text", text: "submit-result" }] }));
+    expect(submitted).toEqual([{ kind: "ask", text: "submitted answer" }]);
+  });
+  it("gives up on a publication the plugin never answers instead of stalling the turn", async () => {
+    const transport = connection(); await transport.initialize();
+    const controller = new AbortController();
+    const published = transport.publishResultTool({ name: "dext_submit_result", description: "Submit.", parameters: {} }, controller.signal);
+    controller.abort();
+    expect(await published).toBe(false);
   });
   it.each([
     "%dp0%\\node_modules\\@deepseek-ai\\dsh\\custom dir\\entry.mjs",

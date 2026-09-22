@@ -10,15 +10,25 @@ import { agentTodoEvent, normalizeAgentTodos } from "./agentTodoTracking.js";
 import { elicitationQuestions, elicitationResponse, harnessInputQuestions, harnessQuestionAnswer, type HarnessQuestionOutcome, type HarnessQuestionRequest } from "./harnessQuestions.js";
 import { harnessPresetPatch } from "./harnessPresets.js";
 import { harnessResultEnvelope } from "./harnessPresetDefault.js";
+import { formatDiagnostics } from "./resultBoundary.js";
+import { harnessResultInstruction, harnessResultTool, type HarnessResultOutcome, type HarnessResultRequest } from "./harnessResultTool.js";
+import type { AxMethodContract } from "./axAdapter.js";
 import { agentTimeout, DEFAULT_AGENT_TIMEOUT_MS, DEFAULT_AGENT_IDLE_TIMEOUT_MS } from "./agentTimeout.js";
 import type { AgentInputAnswers, AgentInputQuestion, AgentInputRequest, AgentInputState } from "./types.js";
 
-type Request = AgentConversationRequest;
+/** A Harness turn plus the Dext contract its answer must satisfy. `run()` knows
+ * the contract; the conversation shape deliberately carries none, so the result
+ * tool is offered exactly where a structured answer is required. */
+interface TurnRequest extends AgentConversationRequest { contract?: AxMethodContract }
+type Request = TurnRequest;
 interface Session {
   id: string; binding: string; transport: DeepSeekHarnessTransport;
   policy: Awaited<ReturnType<typeof createHarnessPolicy>>;
   options: SessionConfigOption[]; defaults: Map<string, string>;
   request?: Request | undefined; messages: Map<string, string>; tools: Map<string, ToolCallUpdate>; fresh: boolean;
+  /** The contract-validated value the model submitted through Dext's result
+   * tool this turn, as JSON. Preferred over the final message when present. */
+  submitted?: string | undefined;
   timeout?: ReturnType<typeof agentTimeout> | undefined;
 }
 
@@ -45,11 +55,25 @@ export function harnessModelOptions(options: readonly SessionConfigOption[], def
  * ACP capability gap: `PromptRequest` (`@agentclientprotocol/sdk`
  * `types.gen.d.ts:5140-5169`) has no output-schema field, so the harness cannot
  * be constrained natively the way claude/codex are with `--json-schema` /
- * `--output-schema`. Dext therefore relies on prompt hardening plus the shared
- * result boundary (and, for claude/codex only, the bounded repair predictor).
+ * `--output-schema`.
+ *
+ * What ACP does not carry, Dext's own preset overlay plugin can: before each
+ * contract-bearing turn this runner publishes a first-class result tool whose
+ * argument schema is the call's contract, and every model submission is
+ * validated here and answered with the contract's own diagnostics. The model
+ * therefore repairs its answer inside the turn, and the turn reads the
+ * validated value instead of parsing the final message.
+ *
+ * The prompt keeps its JSON envelope and schema as the fallback, because a
+ * preset may restrict the tool away (Minimal allows two tools) and because a
+ * turn whose model simply never calls the tool must still work exactly as it did
+ * before. Prompt hardening and the shared result boundary therefore stay as the
+ * second line of defence, and Harness turns are no longer the only provider
+ * without one.
+ *
  * To re-probe after an upstream upgrade, inspect `session.options` from
- * newSession/resumeSession for a new output-format config option; this round
- * deliberately does not send a `_meta` experiment.
+ * newSession/resumeSession for an output-format config option; a native field
+ * would make this channel unnecessary.
  */
 export class DeepSeekHarnessRunner implements AgentRunner {
   private readonly sessions = new Map<string, Session>();
@@ -92,7 +116,8 @@ export class DeepSeekHarnessRunner implements AgentRunner {
         sessionUpdate: (event) => { if (session && event.sessionId === session.id) this.update(session, event); },
         requestPermission: (event) => session ? this.permission(session, event, permission) : Promise.resolve({ outcome: { outcome: "cancelled" } }),
         createElicitation: (event) => session ? this.elicitation(session, event) : Promise.resolve({ action: "decline" as const }),
-        harnessQuestion: (event) => session ? this.harnessQuestion(session, event) : Promise.resolve({ status: "unavailable" as const })
+        harnessQuestion: (event) => session ? this.harnessQuestion(session, event) : Promise.resolve({ status: "unavailable" as const }),
+        harnessResult: (event) => Promise.resolve(session ? this.submitResult(session, event) : { status: "unavailable" as const })
       });
       await transport.initialize();
       const saved = request.metadata.conversationProviderSessionId ? decodeHarnessSession(request.metadata.conversationProviderSessionId) : undefined;
@@ -205,6 +230,28 @@ export class DeepSeekHarnessRunner implements AgentRunner {
     if (answers === undefined) return { status: "unavailable" };
     const answer = harnessQuestionAnswer(questions, answers);
     return answer ? { status: "answered", answer } : { status: "cancelled" };
+  }
+
+  /**
+   * Validate one model submission against the turn's contract.
+   *
+   * A rejection is not a failure: its diagnostics travel back as the tool's own
+   * error result, which the Harness shows the model as `Error: <diagnostics>`
+   * without ending the turn, so the model corrects its answer and submits again
+   * for free. Only the accepted value is kept, and the workspace assertions and
+   * the one bounded repair still run afterwards on the value this returns, so
+   * the layers below see exactly what a well-formed final message would have
+   * produced.
+   */
+  private submitResult(session: Session, request: HarnessResultRequest): HarnessResultOutcome {
+    const active = session.request;
+    if (!active || active.signal?.aborted) return { status: "unavailable" };
+    const contract = active.contract;
+    if (!contract) return { status: "unavailable" };
+    const parsed = contract.outputSchema.safeParse(request.args);
+    if (!parsed.success) return { status: "rejected", diagnostics: formatDiagnostics(parsed.error) };
+    session.submitted = JSON.stringify(parsed.data);
+    return { status: "accepted" };
   }
 
   /** Route one question batch through Dext's shared UI. `undefined` reports that
@@ -346,6 +393,7 @@ export class DeepSeekHarnessRunner implements AgentRunner {
     const active = { ...request, signal: controller.signal };
     let session: Session | undefined;
     let prompting = false;
+    let registered = false;
     const abortTransport = (): void => { if (!prompting) void session?.transport.close(); };
     controller.signal.addEventListener("abort", abortTransport, { once: true });
     try {
@@ -361,13 +409,19 @@ export class DeepSeekHarnessRunner implements AgentRunner {
       session.transport.onActivity = timeout.activity;
       session.timeout = timeout;
       if (controller.signal.aborted) throw controller.signal.reason;
-      session.request = active; session.messages.clear(); session.tools.clear();
+      session.request = active; session.messages.clear(); session.tools.clear(); session.submitted = undefined;
       await this.select(session, active);
       if (controller.signal.aborted) throw controller.signal.reason;
       request.metadata.onAgentSessionId?.("deepseek-harness", encodeHarnessSession(session.id, binding));
-      const input = session.fresh ? bootstrappedConversationInput(request.metadata.conversationContext, request.input) : request.input;
-      session.fresh = false;
       const current = session;
+      // Publish the turn's result tool before the prompt so the model's first
+      // request already carries it, and only where the call has a contract: a
+      // conversation turn has none to submit against.
+      const tool = active.contract ? harnessResultTool(active.contract.outputJsonSchema) : undefined;
+      registered = tool !== undefined && await session.transport.publishResultTool(tool, controller.signal);
+      const turnInput = session.fresh ? bootstrappedConversationInput(request.metadata.conversationContext, request.input) : request.input;
+      session.fresh = false;
+      const input = registered ? `${harnessResultInstruction()}\n\n${turnInput}` : turnInput;
       let abortListener: (() => void) | undefined;
       try {
         prompting = true;
@@ -386,7 +440,10 @@ export class DeepSeekHarnessRunner implements AgentRunner {
         ]);
         if (result.stopReason === "cancelled") throw new ExecutionCancelledError();
         if (result.stopReason !== "end_turn") throw new Error(`Harness stopped before completion: ${result.stopReason}`);
-        const text = [...session.messages.values()].at(-1)?.trim();
+        // A submission is the answer the model actually certified against the
+        // contract, so it outranks whatever prose it wrote afterwards. The final
+        // message is the fallback for a model that never called the tool.
+        const text = session.submitted ?? [...session.messages.values()].at(-1)?.trim();
         if (!text) throw new Error("DeepSeek Harness returned no text response.");
         return text;
       } finally { prompting = false; if (abortListener) controller.signal.removeEventListener("abort", abortListener); }
@@ -396,7 +453,13 @@ export class DeepSeekHarnessRunner implements AgentRunner {
     } finally {
       timeout.dispose(); this.controllers.delete(controller); request.signal?.removeEventListener("abort", cancel);
       controller.signal.removeEventListener("abort", abortTransport);
-      if (session) { session.request = undefined; session.transport.onActivity = undefined; session.timeout = undefined; }
+      // Withdraw the tool with the turn: a leftover registration would offer the
+      // next turn a contract Dext is no longer validating against. Awaited
+      // because this session is usually closed right after, and a clear still in
+      // flight would die with the socket; publishes and clears share one socket,
+      // so the next turn's registration can never be overtaken by this one.
+      if (registered && session) await session.transport.publishResultTool(undefined).catch(() => false);
+      if (session) { session.request = undefined; session.transport.onActivity = undefined; session.timeout = undefined; session.submitted = undefined; }
       if (session && !request.metadata.agentSessionId) { await this.close(session); this.sessions.delete(key); }
     }
   }

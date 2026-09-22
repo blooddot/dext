@@ -85,6 +85,39 @@ describe.skipIf(!process.env.DEXT_TEST_DSH)("installed Harness presets", { timeo
     } finally { await transport.close(); await policy.dispose(); }
   });
 
+  it("registers Dext's result tool as a first-class tool the agent's model sees", async () => {
+    const output = join(directory, "result-tool.jsonl");
+    const install = harnessInstallation(profile.command);
+    const patch = await harnessPresetPatch(profile, "standard", "read-only");
+    patch.push({ insert: [{ id: "dext-preset-probe", name: pathToFileURL(resolve("test/fixtures/harnessPresetProbe.mjs")).href, config: {
+      output, scopeModule: createRequire(install.entry).resolve("@deepseek-ai/dsh-scope")
+    } }] });
+    patch.push({ id: "dext-acp-presets", inject: ["acpAppStartup", "dextPresetProbeReady"] });
+    const policy = await createHarnessPolicy("read-only", process.cwd(), undefined, patch);
+    const transport = new DeepSeekHarnessTransport(profile.command,
+      ["--profile", "acp", "--patch", policy.path], process.cwd(), {
+        sessionUpdate: async () => undefined,
+        requestPermission: async () => ({ outcome: { outcome: "cancelled" as const } })
+      });
+    try {
+      await transport.initialize();
+      // The overlay plugin must accept a raw JSON-Schema tool definition: the
+      // registry validates only the declared output, and the call's contract
+      // travels as `parameters`.
+      expect(await transport.publishResultTool({
+        name: "dext_submit_result",
+        description: "Submit the final structured result for the current Dext call.",
+        parameters: { type: "object", properties: { text: { type: "string" } }, required: ["text"], additionalProperties: false }
+      })).toBe(true);
+      const session = await transport.wait(transport.connection.newSession({ cwd: process.cwd(), mcpServers: [] }));
+      await transport.wait(transport.connection.closeSession({ sessionId: session.sessionId }));
+      const observation = JSON.parse((await readFile(output, "utf8")).trim().split("\n").at(-1)!) as { tools: string[] };
+      expect(observation.tools).toContain("dext_submit_result");
+      // Withdrawing the turn's tool leaves the registry without it.
+      expect(await transport.publishResultTool(undefined)).toBe(true);
+    } finally { await transport.close(); await policy.dispose(); }
+  });
+
   it("answers the Harness user-questions seam from Dext's card", async () => {
     const output = join(directory, "questions.jsonl");
     const patch = await harnessPresetPatch(profile, "standard", "read-only");

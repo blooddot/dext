@@ -63,7 +63,9 @@ For customization, use **Let Agent create a preset** to open a Create conversati
 
 ### Code calls
 
-Code workflows can use `ask(input="Explain this repository", cli="deepseek-harness")`. An optional model object takes `model` (the opaque ACP option value) and `reasoning`; use the composer for human-readable model names. Speed and service-tier controls are unavailable. Typed calls require a final JSON object and are validated by Dext. Invalid output reports failure without automatically repeating work that may already have changed files.
+Code workflows can use `ask(input="Explain this repository", cli="deepseek-harness")`. An optional model object takes `model` (the opaque ACP option value) and `reasoning`; use the composer for human-readable model names. Speed and service-tier controls are unavailable. Invalid output reports failure without automatically repeating work that may already have changed files.
+
+ACP's `PromptRequest` has no output-schema field, so a typed Harness call cannot use a native schema the way Codex (`--output-schema`) and Claude (`--json-schema`) do. Dext fills that gap through its own preset overlay: before the prompt it registers one first-class tool, `dext_submit_result`, whose argument schema is the call's own output contract, and the model submits the result by calling it. Arguments arrive as losslessly materialized JSON — no fence, no envelope, no escaped string — and Dext validates every submission against the contract, returning the exact errors as the tool's result so the model fixes its answer inside the same turn instead of the turn failing. The prompt still carries the schema and the final-message form as the fallback, so a preset that restricts the tool away, or a model that never calls it, behaves exactly as before. The tool is registered per typed call and withdrawn with it.
 
 ### Sessions and permissions
 

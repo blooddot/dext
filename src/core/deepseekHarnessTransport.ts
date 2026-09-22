@@ -5,14 +5,17 @@ import { client as createClient, methods, ndJsonStream, PROTOCOL_VERSION, type C
 import { harnessSpawnCommand } from "./harnessCommand.js";
 import { HARNESS_BRIDGE_ENV, HARNESS_BRIDGE_TOKEN_ENV, HarnessBridge } from "./harnessBridge.js";
 import type { HarnessQuestionOutcome, HarnessQuestionRequest } from "./harnessQuestions.js";
+import type { HarnessResultOutcome, HarnessResultRequest, HarnessResultTool } from "./harnessResultTool.js";
 import { HARNESS_VERSION } from "./deepseekHarnessPolicy.js";
 export { harnessSpawnCommand } from "./harnessCommand.js";
 
 /** The client surface Dext gives the Harness: ACP callbacks that arrive over
- * stdio, plus the private question channel that fills the `user-questions` gap. */
+ * stdio, plus the private channel that fills the `user-questions` gap and
+ * carries the result tool ACP has no field for. */
 export interface HarnessClient extends Client {
   createElicitation?(params: CreateElicitationRequest): CreateElicitationResponse | Promise<CreateElicitationResponse>;
   harnessQuestion?(request: HarnessQuestionRequest): Promise<HarnessQuestionOutcome>;
+  harnessResult?(request: HarnessResultRequest): Promise<HarnessResultOutcome>;
 }
 
 function boundedText(value: string, limit = 2000): string | undefined {
@@ -60,9 +63,12 @@ export class DeepSeekHarnessTransport {
 
   constructor(command: string, args: readonly string[], cwd: string, private readonly client: HarnessClient) {
     const invocation = harnessSpawnCommand(command, args, { cwd });
-    // Dext's private question channel listens before the spawn, so the Harness
-    // overlay plugin can connect as soon as it loads. stdout stays JSON-RPC only.
-    this.bridge = new HarnessBridge((request) => client.harnessQuestion?.(request) ?? Promise.resolve({ status: "unavailable" as const }));
+    // Dext's private channel listens before the spawn, so the Harness overlay
+    // plugin can connect as soon as it loads. stdout stays JSON-RPC only.
+    this.bridge = new HarnessBridge(
+      (request) => client.harnessQuestion?.(request) ?? Promise.resolve({ status: "unavailable" as const }),
+      (request) => client.harnessResult?.(request) ?? Promise.resolve({ status: "unavailable" as const })
+    );
     try {
       this.child = spawn(invocation.command, invocation.args, {
         cwd, windowsHide: true, stdio: "pipe", shell: false,
@@ -137,6 +143,13 @@ export class DeepSeekHarnessTransport {
     if (this.capabilities.protocolVersion !== PROTOCOL_VERSION || !this.capabilities.agentCapabilities?.sessionCapabilities?.resume) {
       throw new Error(`This Harness version lacks the required ACP session capabilities. Use ${HARNESS_VERSION}.`);
     }
+  }
+
+  /** Offer the turn's result tool to the overlay plugin, or withdraw it with
+   * `undefined`. `false` means the plugin is absent or did not register it, and
+   * the caller keeps the prompt-carried answer form. */
+  publishResultTool(tool: HarnessResultTool | undefined, signal?: AbortSignal): Promise<boolean> {
+    return this.bridge.publishResultTool(tool, signal);
   }
 
   close(): Promise<void> {

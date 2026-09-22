@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolve } from "node:path";
+import { mkdtemp, rm } from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { DeepSeekHarnessRunner } from "../src/core/deepseekHarnessRunner.js";
 import { DeepSeekHarnessTransport } from "../src/core/deepseekHarnessTransport.js";
 import type { AgentInputRequest, AgentStreamEvent } from "../src/core/types.js";
@@ -133,7 +136,7 @@ describe("Harness runner", { timeout: 15000 }, () => {
     const requestAgentInput = vi.fn(async () => ({ q: { answers: ["B"] } }));
     const req = request("bridge-question");
     const text = await runner().runConversation({ ...req, onEvent: () => {}, metadata: { ...req.metadata, requestAgentInput } });
-    expect(JSON.parse(text)).toEqual({ id: "fixture-question-1", status: "answered", answer: { answers: [{ id: "q", selected: ["B"] }] } });
+    expect(JSON.parse(text)).toEqual({ id: "fixture-call-1", status: "answered", answer: { answers: [{ id: "q", selected: ["B"] }] } });
     expect(requestAgentInput).toHaveBeenCalledOnce();
   });
   it("publishes the Dext card a Harness question needs, then closes it with the answer", async () => {
@@ -165,7 +168,7 @@ describe("Harness runner", { timeout: 15000 }, () => {
   });
   it("leaves a Harness question to the shipped fail-closed path when no card owns it", async () => {
     const text = await runner().runConversation(request("bridge-question"));
-    expect(JSON.parse(text)).toMatchObject({ id: "fixture-question-1", status: "unavailable" });
+    expect(JSON.parse(text)).toMatchObject({ id: "fixture-call-1", status: "unavailable" });
   });
   it("refuses a question no Dext card can render instead of parking the turn", async () => {
     // An answer callback with no event sink is exactly the shape that parks a
@@ -173,7 +176,7 @@ describe("Harness runner", { timeout: 15000 }, () => {
     const requestAgentInput = vi.fn(async () => ({ q: { answers: ["B"] } }));
     const req = request("bridge-question");
     const text = await runner().runConversation({ ...req, metadata: { ...req.metadata, requestAgentInput } });
-    expect(JSON.parse(text)).toMatchObject({ id: "fixture-question-1", status: "unavailable" });
+    expect(JSON.parse(text)).toMatchObject({ id: "fixture-call-1", status: "unavailable" });
     expect(requestAgentInput).not.toHaveBeenCalled();
   });
   it("cancels a running turn and rejects a timed-out turn", async () => {
@@ -213,7 +216,10 @@ describe("Harness runner", { timeout: 15000 }, () => {
   });
   it("states the JSON envelope before and after the payload, with the escaping spelled out", async () => {
     const prompt = String(await runner().run(executionRequest("echo-prompt")));
-    expect(prompt.startsWith("Your final message must be exactly one JSON object matching this schema:")).toBe(true);
+    // The result tool is the primary channel; the envelope below stays as the
+    // fallback for a preset that restricts the tool away.
+    expect(prompt.startsWith("Submit the result by calling the `dext_submit_result` tool")).toBe(true);
+    expect(prompt).toContain("Your final message must be exactly one JSON object matching this schema:");
     expect(prompt).toContain("Put your entire answer inside the object's \"text\" field");
     expect(prompt).toContain("Escape every newline as \\n and every double quote as \\\"");
     expect(prompt).toContain("Return only a JSON object matching this schema as your final message:");
@@ -223,5 +229,42 @@ describe("Harness runner", { timeout: 15000 }, () => {
     const markdown = String(await runner().run(executionRequest("plain-markdown")));
     expect(markdown.startsWith("[DEV_PLAN_TASKLIST] T1,T2,T4")).toBe(true);
     expect(markdown).toContain("| T1 | Load rules | pending |");
+  });
+  it("publishes the call's output contract as the result tool's argument schema", async () => {
+    const published = JSON.parse(String(await runner().run(executionRequest("received-tool")))) as {
+      name: string; description: string; parameters: Record<string, unknown>;
+    };
+    expect(published.name).toBe("dext_submit_result");
+    expect(published.parameters).toMatchObject({ type: "object", properties: { kind: { const: "ask" }, text: { type: "string" } } });
+    expect(published.parameters).not.toHaveProperty("$schema");
+  });
+  it("takes the validated submission over the prose the model writes afterwards", async () => {
+    const text = await runner().run(executionRequest("submit-result"));
+    expect(text).toBe(JSON.stringify({ kind: "ask", text: "submitted answer" }));
+  });
+  it("returns a rejected submission's diagnostics to the model and keeps the repaired value", async () => {
+    const events: AgentStreamEvent[] = [];
+    const text = await runner().run({ ...executionRequest("submit-repair"), onEvent: (event) => events.push(event) });
+    expect(text).toBe(JSON.stringify({ kind: "ask", text: "typed answer" }));
+    const verdict = events.map((event) => event.text).find((value) => value.includes("\"status\":\"rejected\""));
+    expect(verdict).toContain("kind");
+    expect(verdict).toContain("text");
+  });
+  it("withdraws the result tool with the turn that registered it", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "dext-tool-log-"));
+    const log = join(directory, "tool.jsonl");
+    process.env.DEXT_TEST_HARNESS_TOOL_LOG = log;
+    let frames: { published: boolean }[];
+    try {
+      await runner().run(executionRequest("submit-result"));
+      frames = readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { published: boolean });
+    } finally {
+      delete process.env.DEXT_TEST_HARNESS_TOOL_LOG;
+      await rm(directory, { recursive: true, force: true });
+    }
+    expect(frames).toEqual([{ published: true }, { published: false }]);
+  });
+  it("offers no result tool to a conversation turn, which carries no contract", async () => {
+    expect(await runner().runConversation(request("received-tool"))).toBe("null");
   });
 });

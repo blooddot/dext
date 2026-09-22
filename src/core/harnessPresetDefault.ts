@@ -14,14 +14,16 @@ export function harnessPresetOrDefault(preset: string | undefined): string {
 /**
  * The structured-result envelope every Harness Agent API call must obey.
  *
- * The Harness has no native output schema (ACP `PromptRequest` has no
- * output-schema field), so Dext states the contract in the prompt instead of
- * relying on the provider. The project's own rule text travels in the payload's
- * `instruction` field, above the payload and in a stronger voice, so a
- * trailing-only reminder loses that conflict in a long session and the model
- * answers in Markdown; the same constraint is therefore restated before and
- * after the payload. Escaping is spelled out because the whole answer has to
- * survive as one JSON string.
+ * ACP's `PromptRequest` has no output-schema field, so Dext's primary structured
+ * channel is the result tool its own preset overlay registers
+ * (`harnessResultTool.ts`). This envelope is the fallback for a turn where that
+ * tool is unavailable — a preset that restricts it away, or a model that never
+ * calls it — and it states the contract in the prompt instead of relying on the
+ * provider. The project's own rule text travels in the payload's `instruction`
+ * field, above the payload and in a stronger voice, so a trailing-only reminder
+ * loses that conflict in a long session and the model answers in Markdown; the
+ * same constraint is therefore restated before and after the payload. Escaping
+ * is spelled out because the whole answer has to survive as one JSON string.
  */
 export function harnessResultEnvelope(outputJsonSchema: unknown): string {
   return [

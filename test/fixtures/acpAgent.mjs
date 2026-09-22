@@ -1,37 +1,55 @@
 import { createInterface } from "node:readline";
 import { connect as netConnect } from "node:net";
+import { appendFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 const net = { connect: netConnect };
 const sessions = new Map();
 const send = (value) => process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", ...value })}\n`);
-/** Dext's private question socket, as the real overlay plugin uses it. */
-function questionChannel() {
+/** Dext's private bridge, as the real overlay plugin uses it: questions out, and
+ * the per-turn result tool registered in both directions. */
+function dextChannel() {
   const endpoint = process.env.DEXT_HARNESS_BRIDGE;
   if (!endpoint) return undefined;
   const socket = net.connect(endpoint);
   const awaiting = new Map();
   let buffer = "";
+  const send = (frame) => socket.write(`${JSON.stringify(frame)}\n`);
   socket.on("connect", () => socket.write(`${JSON.stringify({ token: process.env.DEXT_HARNESS_BRIDGE_TOKEN })}\n`));
   socket.on("data", (chunk) => {
     buffer += chunk.toString("utf8");
     const lines = buffer.split("\n"); buffer = lines.pop() ?? "";
     for (const line of lines) {
       if (!line.trim()) continue;
-      const reply = JSON.parse(line);
-      awaiting.get(reply.id)?.(reply);
-      awaiting.delete(reply.id);
+      const frame = JSON.parse(line);
+      // Dext publishes (or withdraws) the result tool before each contract turn.
+      if (frame.kind === "tool") {
+        tool = frame.tool;
+        // The turn's clear is awaited before Dext closes the session, so a log
+        // written here is the deterministic record of the tool's lifetime.
+        if (toolLog) appendFileSync(toolLog, `${JSON.stringify({ published: Boolean(frame.tool) })}\n`);
+        send({ id: frame.id, status: "ready" });
+        continue;
+      }
+      awaiting.get(frame.id)?.(frame);
+      awaiting.delete(frame.id);
     }
   });
   socket.on("error", () => { for (const settle of awaiting.values()) settle(undefined); awaiting.clear(); });
   socket.on("close", () => { for (const settle of awaiting.values()) settle(undefined); awaiting.clear(); });
   let sequence = 0;
-  return (questions) => new Promise((resolve) => {
-    const id = `fixture-question-${++sequence}`;
+  const request = (body) => new Promise((resolve) => {
+    const id = `fixture-call-${++sequence}`;
     awaiting.set(id, resolve);
-    socket.write(`${JSON.stringify({ id, questions })}\n`);
+    send({ id, ...body });
   });
+  return { ask: (questions) => request({ questions }), submit: (args) => request({ kind: "submit", args }) };
 }
-const askDext = questionChannel();
+/** The result tool Dext published for the current turn, if any. */
+let tool;
+/** Optional path recording every publish and withdrawal, for lifetime tests. */
+const toolLog = process.env.DEXT_TEST_HARNESS_TOOL_LOG;
+const channel = dextChannel();
+const askDext = channel?.ask;
 const options = (model = "model-a", effort = "high") => [
   { id: "model", name: "Model", type: "select", currentValue: model, options: [
     { group: "deepseek", name: "DeepSeek", options: [{ value: "model-a", name: "Model A" }] },
@@ -137,6 +155,19 @@ lines.on("line", async (line) => {
               // Echo the whole prompt so a test can assert the envelope Dext built.
               : text.includes("echo-prompt") ? text
                 : JSON.stringify({ kind: "ask", text: "typed answer" });
+      }
+      // The result tool replaces the final message as the answer channel: the
+      // submission is what Dext validates, and prose written afterwards must not
+      // win over it.
+      if (channel && text.includes("submit-repair")) {
+        const rejected = await channel.submit({ nope: true });
+        update(p.sessionId, { sessionUpdate: "agent_message_chunk", messageId: "verdict", content: { type: "text", text: JSON.stringify(rejected) } });
+        await channel.submit({ kind: "ask", text: "typed answer" });
+        answer = "repaired after the tool's diagnostics";
+      } else if (channel && text.includes("submit-result")) {
+        answer = `final message prose: ${JSON.stringify(await channel.submit({ kind: "ask", text: "submitted answer" }))}`;
+      } else if (text.includes("received-tool")) {
+        answer = JSON.stringify(tool ?? null);
       }
       update(p.sessionId, { sessionUpdate: "agent_message_chunk", messageId: "final", content: { type: "text", text: answer } });
       return result({ stopReason: "end_turn" });

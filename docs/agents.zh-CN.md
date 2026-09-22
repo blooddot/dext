@@ -76,7 +76,9 @@ Claude 对话使用 CLI 的双向控制协议：`--input-format stream-json` 打
 
 ### Code 调用
 
-Code 模式支持 `ask(input="解释项目", cli="deepseek-harness")`；可选模型对象包含 `model`（ACP 返回的不透明选项值）和 `reasoning`。界面展示可读模型名称，不展示速度或服务等级。类型化调用要求最终消息为 JSON 对象，由 Dext 校验；格式错误会报告失败，不自动重跑可能已经修改文件的任务。
+Code 模式支持 `ask(input="解释项目", cli="deepseek-harness")`；可选模型对象包含 `model`（ACP 返回的不透明选项值）和 `reasoning`。界面展示可读模型名称，不展示速度或服务等级。格式错误会报告失败，不自动重跑可能已经修改文件的任务。
+
+ACP 的 `PromptRequest` 没有输出 schema 字段，因此 Harness 的类型化调用无法像 Codex（`--output-schema`）和 Claude（`--json-schema`）那样使用原生 schema。Dext 通过自己的 preset 覆盖插件补上这一环：在提示词之前注册一个一等工具 `dext_submit_result`，其参数 schema 就是本次调用自己的输出契约，模型通过调用它提交结果。参数以无损 JSON 到达——没有围栏、没有信封、没有转义字符串——Dext 按契约校验每次提交，并把确切的错误作为工具结果返回，模型因此在同一轮内修正答案，而不是让整轮失败。提示词中仍保留 schema 和"最终消息即 JSON 对象"的形式作为回退，因此被 preset 限制掉的工具、或压根不调用工具的模型，行为与之前完全一致。该工具按类型化调用注册，并随调用结束一并撤销。
 
 ### 会话与权限
 

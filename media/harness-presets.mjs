@@ -16,8 +16,13 @@ const BRIDGE_TOKEN_ENV = 'DEXT_HARNESS_BRIDGE_TOKEN';
 /** Scope the factory adapter to ACP; child agents keep Harness's own factory. */
 export async function apply(ctx, config) {
   // Installed before the awaits below: the answerer must exist as soon as the
-  // plugin is applied, not once preset resolution finishes.
-  installQuestionBridge(ctx);
+  // plugin is applied, not once preset resolution finishes. The result tool is
+  // registered later, when Dext publishes a contract over the same channel.
+  const channel = dextChannel();
+  if (channel) {
+    installQuestionBridge(ctx, channel);
+    installResultTool(ctx, channel);
+  }
   const agents = ctx.agents;
   const presets = ctx.agentPresets;
   const preset = await presets.resolveMountable(config.preset);
@@ -66,33 +71,40 @@ function wireQuestion(question) {
 }
 
 /**
- * Dext's private question channel, newline-delimited JSON over a loopback socket
- * Dext listens on.
+ * Dext's private channel to the Harness process, newline-delimited JSON over a
+ * loopback socket Dext listens on.
  *
  * The published ACP bridge answers `approval/request` but registers no answerer
  * for `user-questions/request`, so `ask_user_question` fails closed under
  * `dsh --profile acp`. ACP elicitation is the standard replacement and Dext
  * already answers it, but the Harness does not emit it yet, so this channel
- * carries the gap. stdout stays exclusively JSON-RPC either way.
+ * carries the gap. It carries the result tool for the same reason: ACP's
+ * `PromptRequest` has no output-schema field, so Dext publishes the turn's
+ * contract here and the model submits through a real tool instead of writing
+ * JSON into its final message.
+ *
+ * stdout stays exclusively JSON-RPC either way.
  */
-function questionBridge() {
+function dextChannel() {
   const endpoint = process.env[BRIDGE_ENV];
   if (!endpoint) return undefined;
   let socket;
   try { socket = connect(endpoint); } catch { return undefined; }
-  const pending = new Map();
+  const awaiting = new Map();
+  const handlers = new Map();
   let buffer = '';
   let open = true;
   const settle = (id, reply) => {
-    const finish = pending.get(id);
+    const finish = awaiting.get(id);
     if (finish === undefined) return;
-    pending.delete(id);
+    awaiting.delete(id);
     finish(reply);
   };
   const close = () => {
     open = false;
-    for (const id of [...pending.keys()]) settle(id, undefined);
+    for (const id of [...awaiting.keys()]) settle(id, undefined);
   };
+  const send = (frame) => { if (open) socket.write(`${JSON.stringify(frame)}\n`); };
   socket.on('connect', () => {
     socket.write(`${JSON.stringify({ token: process.env[BRIDGE_TOKEN_ENV] })}\n`);
   });
@@ -103,29 +115,41 @@ function questionBridge() {
     buffer = lines.pop() ?? '';
     for (const line of lines) {
       if (!line.trim()) continue;
-      let reply;
-      try { reply = JSON.parse(line); } catch { continue; }
-      if (reply && typeof reply.id === 'string') settle(reply.id, reply);
+      let frame;
+      try { frame = JSON.parse(line); } catch { continue; }
+      if (!frame || typeof frame.id !== 'string') continue;
+      // A reply to a frame this plugin sent is settled here; Dext's own requests
+      // carry a `kind` and are answered by their registered handler.
+      if (awaiting.has(frame.id)) { settle(frame.id, frame); continue; }
+      const handler = typeof frame.kind === 'string' ? handlers.get(frame.kind) : undefined;
+      if (!handler) continue;
+      Promise.resolve().then(() => handler(frame)).then(
+        (status) => send({ id: frame.id, status }),
+        () => send({ id: frame.id, status: 'unavailable' })
+      );
     }
   });
   socket.on('error', close);
   socket.on('close', close);
   let sequence = 0;
-  return {
-    ask(items, signal) {
-      if (!open) return Promise.resolve(undefined);
-      const id = `dext-question-${++sequence}`;
-      return new Promise((resolve) => {
-        const abort = () => settle(id, undefined);
-        pending.set(id, (reply) => {
-          signal?.removeEventListener('abort', abort);
-          resolve(reply);
-        });
-        if (signal?.aborted) { abort(); return; }
-        signal?.addEventListener('abort', abort, { once: true });
-        socket.write(`${JSON.stringify({ id, questions: items })}\n`);
+  const request = (body, signal) => {
+    if (!open) return Promise.resolve(undefined);
+    const id = `dext-call-${++sequence}`;
+    return new Promise((resolve) => {
+      const abort = () => settle(id, undefined);
+      awaiting.set(id, (reply) => {
+        signal?.removeEventListener('abort', abort);
+        resolve(reply);
       });
-    }
+      if (signal?.aborted) { abort(); return; }
+      signal?.addEventListener('abort', abort, { once: true });
+      send({ id, ...body });
+    });
+  };
+  return {
+    on(kind, handler) { handlers.set(kind, handler); },
+    ask(items, signal) { return request({ questions: items }, signal); },
+    submit(args, signal) { return request({ kind: 'submit', args }, signal); }
   };
 }
 
@@ -133,9 +157,7 @@ function questionBridge() {
  * Answer `ask_user_question` from Dext's own card. When no Dext surface owns the
  * request the listener delegates, which keeps the shipped fail-closed path.
  */
-function installQuestionBridge(ctx) {
-  const bridge = questionBridge();
-  if (!bridge) return;
+function installQuestionBridge(ctx, bridge) {
   // Owned by the root fiber: the waterfall is dispatched from the user-questions
   // service's context, and a listener owned by this plugin's own fiber sits on a
   // sibling branch that the dispatch never visits.
@@ -147,6 +169,47 @@ function installQuestionBridge(ctx) {
     if (reply?.status === 'unavailable' || reply === undefined) return next();
     if (reply.status === 'cancelled') throw userQuestionError('the user cancelled ask_user_question', 'ASK_CANCELLED');
     return { answers: reply.answer.answers };
+  });
+}
+
+/**
+ * Dext's normalized-output channel.
+ *
+ * Dext publishes the current call's output contract before prompting, this
+ * registers one first-class tool whose argument schema IS that contract, and
+ * every call is forwarded to Dext for validation. Arguments arrive here as
+ * losslessly materialized JSON — no fence, no envelope, no escaped string — and
+ * a rejection throws, which the Harness turns into the model-visible
+ * `Error: <diagnostics>` result, so the model repairs its own answer inside the
+ * turn instead of the turn failing on prose.
+ *
+ * The tool is registered per turn and withdrawn with it, because the contract
+ * changes from call to call. `ctx.get('tools')` is opportunistic on purpose: a
+ * composition without the registry leaves the prompt-carried answer form intact
+ * instead of failing the whole overlay, and a preset that restricts the tool
+ * away leaves it intact too.
+ */
+function installResultTool(ctx, bridge) {
+  let dispose;
+  bridge.on('tool', (frame) => {
+    if (dispose) { dispose(); dispose = undefined; }
+    if (!frame.tool) return 'ready';
+    const tools = ctx.get('tools');
+    if (!tools) return 'unavailable';
+    const { name, description, parameters } = frame.tool;
+    dispose = tools.register({
+      name,
+      description,
+      parameters,
+      output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+      async execute(args, exec) {
+        const verdict = await bridge.submit(args, exec.signal);
+        if (verdict?.status === 'accepted') return 'accepted';
+        if (verdict?.status === 'rejected') throw new Error(verdict.diagnostics || 'the result did not match the required schema');
+        throw new Error('Dext is not waiting for a result for this call.');
+      }
+    });
+    return 'ready';
   });
 }
 
