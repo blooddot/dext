@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { bindFileDropTarget, droppedFilePaths, isFileDrag } from "../src/webview/fileDrop.js";
+import { bindFileDropTarget, droppedFilePaths, fileSelectionDropEffect, isFileDrag } from "../src/webview/fileDrop.js";
 import { FileDropClient } from "../src/webview/fileDropClient.js";
 
 function transfer(values: Record<string, string>): DataTransfer {
@@ -59,6 +59,12 @@ describe("composer file drop listeners", () => {
 });
 
 describe("file drag payloads", () => {
+  it("chooses an effect accepted by the drag source", () => {
+    expect(fileSelectionDropEffect("copyMove")).toBe("copy");
+    expect(fileSelectionDropEffect("move")).toBe("move");
+    expect(fileSelectionDropEffect("none")).toBe("none");
+  });
+
   it("reads URIs with empty DataTransfer.files, ignoring comments and duplicates", () => {
     expect(droppedFilePaths(transfer({ "text/uri-list": "# files\r\nfile:///C:/repo/%E4%B8%AD%20%E6%96%87.ts\r\nfile:///C:/repo/a.ts\r\nfile:///C:/repo/a.ts\r\n" })))
       .toEqual(["file:///C:/repo/%E4%B8%AD%20%E6%96%87.ts", "file:///C:/repo/a.ts"]);

@@ -21,6 +21,7 @@ import type { ConversationSummary, SidebarState, WebviewRequest, WebviewResponse
 import { ClipboardClient } from "./clipboardClient.js";
 import { FileSearchClient } from "./fileSearchClient.js";
 import { ProjectReferenceClient } from "./projectReferenceClient.js";
+import { bindFileDropTarget, droppedFilePaths, fileSelectionDropEffect, isFileDrag } from "./fileDrop.js";
 import { FileDropClient } from "./fileDropClient.js";
 import { DextCodeEditor } from "./codeEditor.js";
 import { LanguageRequestBroker } from "./languageClient.js";
@@ -626,7 +627,7 @@ function renderPlanToolbar(): void {
   elements.planToolbar.hidden = !visible;
   if (!visible) return;
   elements.planTargetLabel.textContent = activePlanPath?.split("/").pop() ?? "New plan";
-  elements.planTarget.title = activePlanPath ? `Open ${activePlanPath}` : "Select a plan";
+  elements.planTarget.title = activePlanPath ? `Open ${activePlanPath}` : "Select a plan (or hold Shift and drop a file)";
   const labels = { new: "New plan", active: "Active", running: "Running", completed: "Completed", failed: "Failed" };
   elements.planStatus.textContent = labels[planStatus];
   elements.planStatus.hidden = !activePlanPath;
@@ -851,7 +852,7 @@ function renderResourceToolbar(): void {
   const document = resource.draft ?? resource.target;
   elements.resourceTargetLabel.textContent = document?.name ?? "New resource";
   elements.resourceTarget.querySelector(".codicon")!.className = `codicon codicon-${RESOURCE_ICONS[resource.type]}`;
-  elements.resourceTarget.title = resource.target ? `${resourceDirectory(resource.scope, resource.type)}/${resource.target.path}` : "Select a resource";
+  elements.resourceTarget.title = resource.target ? `${resourceDirectory(resource.scope, resource.type)}/${resource.target.path}` : "Select a resource (or hold Shift and drop a file)";
   elements.resourceTarget.disabled = locked;
   elements.resourceChoose.disabled = locked;
   elements.resourcePreview.disabled = locked || !document;
@@ -3714,6 +3715,60 @@ elements.resourceChoose.addEventListener("click", () => {
 });
 elements.resourcePreview.addEventListener("click", () => sendResourceAction("previewResource"));
 elements.resourceSave.addEventListener("click", () => sendResourceAction("saveResource"));
+
+// Target selection owns drops only on the Plan/Resource target controls.
+// The editor itself keeps handling file drops as references in the input.
+const planTargetGroup = elements.planTarget.closest<HTMLElement>(".plan-target-group");
+const resourceTargetGroup = elements.resourceTarget.closest<HTMLElement>(".plan-target-group");
+function targetSelectionLocked(): boolean {
+  return composerSelectionLocked() || (!activeResource() && planStatus === "running");
+}
+function bindTargetFileSelection(target: HTMLElement | null, kind: "plan" | "resource"): (() => void) | undefined {
+  if (!target) return undefined;
+  const canSelect = (): boolean => kind === "resource" ? !!activeResource() : !activeResource() && inputMode === "plan";
+  return bindFileDropTarget(target, {
+    dragover: (event) => {
+      if (!canSelect() || !isFileDrag(event)) return false;
+      event.preventDefault();
+      const effect = targetSelectionLocked() ? "none" : fileSelectionDropEffect(event.dataTransfer!.effectAllowed);
+      event.dataTransfer!.dropEffect = effect;
+      target.classList.toggle("file-drop-shift", event.shiftKey && effect !== "none");
+      return true;
+    },
+    drop: (event) => {
+      target.classList.remove("file-drop-shift");
+      if (!canSelect() || !isFileDrag(event)) return false;
+      event.preventDefault();
+      // Dropping without Shift on the target control is intentionally a no-op.
+      if (!event.shiftKey || targetSelectionLocked()) return true;
+      const paths = droppedFilePaths(event.dataTransfer);
+      if (paths.length !== 1) {
+        renderError(new Error(paths.length ? "Drop one target file at a time." : "The dropped file did not include a path. Drag a file from the VS Code Explorer."));
+        return true;
+      }
+      const resource = activeResource();
+      const sessionId = activeConversationId;
+      if (kind === "resource" && !sessionId) return true;
+      const submit = (): void => {
+        if (kind === "resource" && (activeConversationId !== sessionId || activeResource() !== resource)) return;
+        if (targetSelectionLocked()) return;
+        clearInputError();
+        if (kind === "resource" && sessionId) {
+          resourceErrors.delete(sessionId);
+          resourcePending.add(sessionId);
+        }
+        vscode.postMessage({ type: "selectDroppedFile", target: kind, path: paths[0]!, ...(sessionId ? { sessionId } : {}) });
+        updateRunState();
+      };
+      if (resource?.draft) openConfirmationDialog("Discard the current resource draft and select another resource?", submit);
+      else submit();
+      return true;
+    },
+    leave: () => target.classList.remove("file-drop-shift")
+  });
+}
+const removePlanTargetFileDrop = bindTargetFileSelection(planTargetGroup, "plan");
+const removeResourceTargetFileDrop = bindTargetFileSelection(resourceTargetGroup, "resource");
 elements.mcpAssistantDialog.addEventListener("click", (event) => {
   if (event.target === elements.mcpAssistantDialog) requestCloseMcpAssistant();
 });
@@ -4127,6 +4182,8 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
 });
 
 window.addEventListener("unload", () => {
+  removePlanTargetFileDrop?.();
+  removeResourceTargetFileDrop?.();
   broker.dispose();
   clipboard.dispose();
   fileDrop.dispose();

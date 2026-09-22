@@ -1097,6 +1097,18 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
             await this.persistResource(session);
           });
           break;
+        case "selectDroppedFile": {
+          const uri = /^vscode-remote:\/\//i.test(request.path) || /^file:\/\//i.test(request.path)
+            ? vscode.Uri.parse(request.path, true)
+            : vscode.Uri.file(request.path);
+          if (request.target === "plan") {
+            await this.setActivePlanFromUri(uri);
+          } else {
+            if (!request.sessionId) throw new Error("The resource conversation is no longer available.");
+            await this.resourceAction(request.sessionId, (session, resource) => this.selectResourceFile(session, resource, uri));
+          }
+          break;
+        }
         case "chooseResource":
           await this.resourceAction(request.sessionId, (session, resource) => this.chooseResource(session, resource));
           break;

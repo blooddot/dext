@@ -1,7 +1,18 @@
 const uriListTypes = ["application/vnd.code.uri-list", "text/uri-list"];
 
-/** Capture on the whole composer before Monaco filters widget events or
- * consumes drops. Its domEventHandlers only listen on the editable content. */
+/** The browser rejects drops whose effect is not allowed by the source.
+ * Explorer commonly offers copyMove, which explicitly excludes link. */
+export function fileSelectionDropEffect(allowed: DataTransfer["effectAllowed"]): DataTransfer["dropEffect"] {
+  switch (allowed) {
+    case "none": return "none";
+    case "move": case "linkMove": return "move";
+    case "link": return "link";
+    default: return "copy";
+  }
+}
+
+/** Capture drops on a dedicated target control before child controls consume
+ * them. Returning true lets the caller claim the event. */
 export function bindFileDropTarget(target: HTMLElement, handlers: {
   dragover(event: DragEvent): boolean;
   drop(event: DragEvent): boolean;

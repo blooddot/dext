@@ -115,6 +115,12 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
     paths: z.array(z.string().min(1).max(8192).regex(/^[^\r\n]+$/)).min(1).max(100)
   }),
   z.object({
+    type: z.literal("selectDroppedFile"),
+    target: z.enum(["plan", "resource"]),
+    sessionId: z.string().min(1).optional(),
+    path: z.string().min(1).max(8192).regex(/^[^\r\n]+$/)
+  }),
+  z.object({
     type: z.literal("pasteImage"),
     data: z.string().min(1),
     mimeType: z.string().min(1)
