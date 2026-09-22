@@ -89,6 +89,37 @@ const KIND_LABELS: Record<string, string> = {
   publishes: "publishes", subscribes: "subscribes", transitions: "transitions", flows_to: "flows to", unknown: "related"
 };
 
+/**
+ * Every renderer draws a node's label and sublabel as one unwrapped line and
+ * rejects the diagram outright when the text still needs more width than the box
+ * has at its legible minimum — `renderers/shared/text-fit.mjs` uses a 6px
+ * minimum font, 0.6px of advance per text unit and 8px of horizontal padding.
+ * Dext therefore authors each box from the text it has to hold and truncates
+ * whatever is wider, because shrink-to-fit is a rescue for ordinary overruns and
+ * a rejected diagram renders nothing at all.
+ */
+const MIN_TEXT_FONT = 6;
+const TEXT_WIDTH_FACTOR = 0.6;
+const TEXT_PADDING = 8;
+
+/** Truncate to what a box can still render, keeping the ellipsis inside the budget. */
+function fitText(value: string, maxUnits: number): string {
+  if (textUnits(value) <= maxUnits) return value;
+  const characters = [...value];
+  while (characters.length && textUnits(`${characters.join("")}…`) > maxUnits) characters.pop();
+  return characters.length ? `${characters.join("")}…` : value.slice(0, 1);
+}
+
+/** Longest single-line label a box of `width` may keep, per renderer metric. */
+function fitLabelUnits(width: number, perUnit: number, slack: number): number {
+  return Math.max(1, Math.floor((width + slack) / perUnit));
+}
+
+/** Longest sublabel a box of `width` can render at its legible minimum. */
+function fitSublabelUnits(width: number): number {
+  return Math.max(1, Math.floor((width - TEXT_PADDING) / (MIN_TEXT_FONT * TEXT_WIDTH_FACTOR)));
+}
+
 /** CJK-aware text width estimate used only for layout hints, never for semantic decisions. */
 function labelWidth(label: string, perUnit = 7): number {
   let units = 0;
@@ -247,23 +278,115 @@ function baseMeta(project: ProjectDiagram, repository: ArchifyRepository | undef
   };
 }
 
+/**
+ * Architecture boxes are authored to the text they hold — every renderer rejects
+ * a label that does not fit at its legible minimum — and placed on a layered grid
+ * of explicit coordinates.
+ *
+ * The IR's own grid mode cannot be used unmodified: it steps by `cellW`/`cellH`
+ * regardless of a component's declared `size`, so boxes wider than the cell
+ * overlap. Overlapping boxes are what leave the automatic router with no clear
+ * dogleg, and its documented fallback then returns a route that violates the side
+ * the validator infers from the relative positions. The grid is therefore sized
+ * from the widest box, and the nodes are ordered by graph rank first so that
+ * related components land in neighbouring cells instead of in the model's own
+ * listing order.
+ */
+const ARCHITECTURE = {
+  labelUnit: 6.6,
+  minWidth: 200,
+  maxWidth: 380,
+  height: 72,
+  gapX: 90,
+  gapY: 110,
+  /** The upstream grid's own origin (`renderers/architecture/grid.mjs`). */
+  origin: [40, 80],
+  widthFor(label: string): number {
+    return Math.max(ARCHITECTURE.minWidth, Math.min(ARCHITECTURE.maxWidth, Math.round(textUnits(label) * ARCHITECTURE.labelUnit) + 40));
+  }
+} as const;
+
+interface ArchitectureCell {
+  col: number;
+  row: number;
+  width: number;
+}
+
+/**
+ * The right edge of a cell, the channel to the right of its column, and the channel
+ * below its row. Components never occupy a gutter, so an authored route that stays in
+ * them cannot be rejected for crossing an unrelated component — which is exactly what
+ * the automatic router runs into: its two dogleg candidates travel along the
+ * endpoints' own centre lines, and in a grid those lines pass straight through the
+ * cells between them.
+ */
+function architectureGeometry(cell: ArchitectureCell): { exitX: number; cy: number; columnGutter: number; rowChannel: number } {
+  const pitchX = cell.width + ARCHITECTURE.gapX;
+  const pitchY = ARCHITECTURE.height + ARCHITECTURE.gapY;
+  const x = ARCHITECTURE.origin[0] + cell.col * pitchX;
+  const y = ARCHITECTURE.origin[1] + cell.row * pitchY;
+  return {
+    exitX: x + cell.width,
+    cy: y + ARCHITECTURE.height / 2,
+    columnGutter: x + cell.width + ARCHITECTURE.gapX / 2,
+    rowChannel: y + ARCHITECTURE.height + ARCHITECTURE.gapY / 2
+  };
+}
+
+/**
+ * Route one connection out of the source's right side, along the gutters, and into
+ * the target's right side. The authored `fromSide`/`toSide` and the endpoint segments
+ * agree by construction, and every middle segment stays in a channel no component
+ * occupies.
+ */
+function architectureVia(from: ArchitectureCell, to: ArchitectureCell): { fromSide: string; toSide: string; via: number[][] } {
+  const a = architectureGeometry(from);
+  const b = architectureGeometry(to);
+  const channel = Math.max(a.rowChannel, b.rowChannel);
+  return {
+    fromSide: "right",
+    toSide: "right",
+    via: [
+      [a.columnGutter, a.cy],
+      [a.columnGutter, channel],
+      [b.columnGutter, channel],
+      [b.columnGutter, b.cy]
+    ]
+  };
+}
+
 function buildArchitecture(project: ProjectDiagram, repository: ArchifyRepository | undefined, attached: boolean): BuiltIr {
   const mapping = emptyMapping();
   const usedNodes = new Set<string>();
   const usedRelations = new Set<string>();
-  const count = Math.max(1, project.nodes.length);
+  const ranks = rankNodes(project.nodes, flowEdges(project));
+  const ranked = [...project.nodes].sort((left, right) =>
+    (ranks.get(left.id) ?? 0) - (ranks.get(right.id) ?? 0)
+    || project.nodes.indexOf(left) - project.nodes.indexOf(right));
+  const count = Math.max(1, ranked.length);
   const columns = Math.max(1, Math.min(6, Math.ceil(Math.sqrt(count))));
-  const components = project.nodes.map((node, index) => {
+  // Every component takes the cell's width. The router infers an endpoint side from
+  // the boxes' relative centres (`defaultFromSide`), so two components stacked in one
+  // column with different widths are inferred as left/right of each other and neither
+  // of the router's two doglegs can satisfy that side; with equal widths their centres
+  // coincide and the inference is the vertical one their actual relationship matches.
+  const cellWidth = Math.max(ARCHITECTURE.minWidth, Math.min(ARCHITECTURE.maxWidth,
+    ...ranked.map((node) => ARCHITECTURE.widthFor(node.label))));
+  const cellByNodeId = new Map<string, ArchitectureCell>();
+  const components = ranked.map((node, index) => {
     const id = mapNode(mapping, node, usedNodes);
     const sources = evidenceSources(node, repository, attached);
+    const row = Math.floor(index / columns);
+    const col = index % columns;
+    cellByNodeId.set(node.id, { col, row, width: cellWidth });
     return {
       id,
       type: componentType(node),
-      label: node.label,
-      ...(node.description ? { sublabel: truncate(node.description, 80) } : {}),
-      row: Math.floor(index / columns),
-      col: index % columns,
-      size: [Math.max(220, Math.min(380, labelWidth(node.label) + 48)), 72],
+      label: fitText(node.label, fitLabelUnits(cellWidth, ARCHITECTURE.labelUnit, 8)),
+      ...(node.description ? { sublabel: fitText(node.description, fitSublabelUnits(cellWidth)) } : {}),
+      row,
+      col,
+      size: [cellWidth, ARCHITECTURE.height],
       ...(sources ? { sources } : {})
     };
   });
@@ -271,15 +394,25 @@ function buildArchitecture(project: ProjectDiagram, repository: ArchifyRepositor
     const wraps = boundary.nodeIds.map((id) => mapping.ids[id]).filter((id): id is string => Boolean(id));
     return wraps.length ? [{ kind: boundary.kind ?? "region", label: boundary.label, wraps }] : [];
   });
-  const connections = project.relations.map((relation) => {
+  const connections = project.relations.flatMap((relation) => {
+    const from = mapping.ids[relation.from];
+    const to = mapping.ids[relation.to];
+    const fromCell = cellByNodeId.get(relation.from);
+    const toCell = cellByNodeId.get(relation.to);
+    if (!from || !to || !fromCell || !toCell) return [];
     const id = mapRelation(mapping, relation, usedRelations);
-    return {
+    return [{
       id,
-      from: mapping.ids[relation.from],
-      to: mapping.ids[relation.to],
+      from,
+      to,
       label: relationLabel(relation),
+      ...architectureVia(fromCell, toCell),
+      // Ride the authoring corridor with the label: the default segment is the
+      // endpoint stub, whose midpoint sits inside the component row and collides
+      // with whatever the neighbouring columns hold.
+      labelSegment: 2,
       ...(relation.exception ? { variant: "dashed" } : {})
-    };
+    }];
   });
   return {
     mapping,
@@ -287,7 +420,9 @@ function buildArchitecture(project: ProjectDiagram, repository: ArchifyRepositor
       schema_version: 1,
       diagram_type: "architecture",
       meta: baseMeta(project, repository, attached),
-      layout: { mode: "grid", cols: columns, gapX: 140, gapY: 140 },
+      layout: { mode: "grid", cols: columns, gapX: ARCHITECTURE.gapX, gapY: ARCHITECTURE.gapY,
+        cellW: Math.max(...components.map((component) => component.size[0] ?? 0)),
+        cellH: Math.max(...components.map((component) => component.size[1] ?? 0)) },
       components,
       ...(boundaries.length ? { boundaries } : {}),
       connections
@@ -970,15 +1105,30 @@ function repairIr(input: Record<string, unknown>, diagnostics: readonly string[]
   const type = typeof ir["diagram_type"] === "string" ? ir["diagram_type"] : "";
   if (type === "architecture") {
     const components = Array.isArray(ir["components"]) ? ir["components"] as Record<string, unknown>[] : [];
-    const previousCols = typeof (ir["layout"] as Record<string, unknown> | undefined)?.["cols"] === "number"
-      ? Number((ir["layout"] as Record<string, unknown>)["cols"]) : 3;
-    const cols = attempt <= 1 ? Math.max(1, Math.min(3, previousCols)) : Math.max(1, previousCols - 1);
-    ir["layout"] = { mode: "grid", cols, gapX: 140 + attempt * 60, gapY: 140 + attempt * 60 };
-    ir["components"] = components.map((component, index) => {
-      const next: Record<string, unknown> = { ...component, row: Math.floor(index / cols), col: index % cols };
-      delete next["pos"];
-      return next;
-    });
+    const previous = (ir["layout"] as Record<string, unknown> | undefined) ?? {};
+    const cols = Math.max(1, Math.min(6, Math.round(Number(previous["cols"] ?? Math.ceil(Math.sqrt(components.length)))) || 1));
+    const sizeOf = (component: Record<string, unknown>, axis: number): number =>
+      Array.isArray(component["size"]) ? Number((component["size"] as unknown[])[axis]) || 0 : 0;
+    // The grid steps by cellW/cellH and never by a component's own size
+    // (`renderers/architecture/grid.mjs`), so a repair only widens the cell and the
+    // gaps. Collapsing the column count is what turned a 22-node diagram into an
+    // 11-row canvas whose edges crossed every component between their endpoints.
+    ir["layout"] = {
+      mode: "grid",
+      cols,
+      gapX: ARCHITECTURE.gapX * (1 + attempt),
+      gapY: ARCHITECTURE.gapY * (1 + attempt),
+      cellW: Math.max(Number(previous["cellW"]) || 0, ...components.map((component) => sizeOf(component, 0))),
+      cellH: Math.max(Number(previous["cellH"]) || 0, ...components.map((component) => sizeOf(component, 1)))
+    };
+    ir["components"] = components.map((component, index) => ({
+      ...component,
+      ...(text.includes("wider than") || text.includes("sublabel")
+        ? { label: typeof component["label"] === "string" ? fitText(component["label"], fitLabelUnits(sizeOf(component, 0), ARCHITECTURE.labelUnit, 8)) : component["label"] }
+        : {}),
+      row: Math.floor(index / cols),
+      col: index % cols
+    }));
   }
   if (type === "workflow") {
     // Groups and phases are presentation containers: drop them before touching semantic edges.
