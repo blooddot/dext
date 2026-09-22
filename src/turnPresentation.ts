@@ -4,6 +4,7 @@ import { formatDuration } from "./webview/duration.js";
 export const TURN_EDIT_ACTION = { icon: "edit", label: "Edit input in Dext" } as const;
 export const TURN_RENAME_ACTION = { icon: "rename", label: "Rename turn" } as const;
 export const TURN_RETRY_ACTION = { icon: "debug-restart", label: "Retry this turn" } as const;
+export const TURN_CONTINUE_ACTION = { icon: "play-circle", label: "Continue from the failed Code step" } as const;
 export const TURN_FORK_ACTION = { icon: "repo-forked", label: "Fork from this turn" } as const;
 export const TURN_COPY_ACTION = { icon: "copy", label: "Copy turn as Markdown" } as const;
 export const TURN_DELETE_ACTION = { icon: "trash", label: "Delete turn from Dext" } as const;

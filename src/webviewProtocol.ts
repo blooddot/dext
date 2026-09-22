@@ -54,6 +54,7 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
     })).nullable()
   }),
   z.object({ type: z.literal("retryTurn"), turnId: z.string().min(1), sessionId: z.string().min(1).optional() }),
+  z.object({ type: z.literal("continueTurn"), turnId: z.string().min(1), sessionId: z.string().min(1).optional() }),
   z.object({ type: z.literal("forkFromTurn"), turnId: z.string().min(1), sessionId: z.string().min(1).optional() }),
   z.object({ type: z.literal("renameTurn"), sessionId: z.string().min(1), turnId: z.string().min(1) }),
   z.object({ type: z.literal("deleteTurn"), turnId: z.string().min(1), sessionId: z.string().min(1).optional() }),

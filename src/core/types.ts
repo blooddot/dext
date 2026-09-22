@@ -1,11 +1,13 @@
 import type { UiFormDefinition, UiFormResult, UiInteractionState } from "./uiForm.js";
 import type { WritableAgentPermission } from "../agentProfiles.js";
+import type { WorkflowCheckpoint } from "./workflowCheckpoint.js";
 export type MethodKind = "command" | "skill";
 export type MethodSource = "builtin" | "global" | "project";
 export type BuiltinOutputKind =
   | "ask"
   | "plan"
   | "agent"
+  | "template"
   | "apply"
   | "terminal"
   | "print"
@@ -561,7 +563,16 @@ export interface ExecutionMetadata {
   requestAgentInput?: (request: AgentInputRequest, signal: AbortSignal) => Promise<AgentInputAnswers | null>;
   /** Process output emitted while an MCP tool is running. */
   onMcpEvent?: (event: McpProcessEvent) => void;
+  /** Called when a Code workflow stops at a failed step. The continuation
+   * retries that step with the values produced by earlier steps intact. */
+  onWorkflowFailure?: (continuation: WorkflowContinuation) => void;
+  /** Internal execution tree for resuming Code and nested custom APIs. */
+  workflowCheckpoint?: WorkflowCheckpoint;
   ui?: UiInteraction;
+}
+
+export interface WorkflowContinuation {
+  resume(metadata?: Readonly<ExecutionMetadata>): Promise<InputExecutionResponse>;
 }
 
 export type McpProcessEventSource = "stdout" | "stderr" | "progress";

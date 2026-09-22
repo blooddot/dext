@@ -1,4 +1,5 @@
 import type { DextRuntime } from "./runtime.js";
+import { WorkflowCheckpoint } from "./workflowCheckpoint.js";
 import { ExecutionCancelledError } from "./executionErrors.js";
 import { AxAdapter } from "./axAdapter.js";
 import { formatReplacement, pythonArithmetic, pythonCompare, pythonIndex, pythonSlice, pythonTruthy, pureFunction, stringMethod } from "./pythonStrings.js";
@@ -40,6 +41,28 @@ export class WorkflowRuntime {
     context: readonly CodeRef[] = [],
     metadata: Readonly<ExecutionMetadata> = {}
   ): Promise<RuntimeResponse> {
+    const parent = metadata.workflowCheckpoint;
+    if (!parent) return this.executeInvocationUncached(invocation, context, metadata);
+    if (metadata.signal?.aborted) throw new ExecutionCancelledError();
+    const call = parent.child(`call:${parent.cursor++}`);
+    call.bind(JSON.stringify(invocation));
+    if (call.response) return structuredClone(call.response);
+    // The response this call caches and the program it runs are two different
+    // identities — the invocation decides which response to replay, the program
+    // source whether the API that produced it is still the one on disk — so they
+    // get two nodes. Binding both on one node made every custom API call look
+    // like changed code.
+    const program = call.child("program");
+    const response = await this.executeInvocationUncached(invocation, context, { ...metadata, workflowCheckpoint: program });
+    call.response = structuredClone(response);
+    return response;
+  }
+
+  private async executeInvocationUncached(
+    invocation: InvocationAst,
+    context: readonly CodeRef[] = [],
+    metadata: Readonly<ExecutionMetadata> = {}
+  ): Promise<RuntimeResponse> {
     const fn = this.functions.find((candidate) => candidate.definition.id === invocation.method);
     if (!fn) return this.runtime.execute(invocation, context, metadata);
     if (metadata.signal?.aborted) throw new ExecutionCancelledError();
@@ -70,9 +93,17 @@ export class WorkflowRuntime {
     supplementalContext: readonly CodeRef[] = [],
     metadata: Readonly<ExecutionMetadata> = {}
   ): Promise<InputExecutionResponse> {
+    const checkpoint = metadata.workflowCheckpoint ?? (metadata.onWorkflowFailure ? new WorkflowCheckpoint() : undefined);
+    checkpoint?.bind(program.source);
+    const scoped = checkpoint ? { ...metadata, workflowCheckpoint: checkpoint } : metadata;
     const environment = new Map<string, RuntimeValue>();
     const steps: WorkflowStepResponse[] = [];
-    await this.executeStatements(program.statements, environment, steps, metadata, supplementalContext);
+    const flow = await this.executeStatements(program.statements, environment, steps, scoped, supplementalContext);
+    if (flow === false && checkpoint) {
+      metadata.onWorkflowFailure?.({
+        resume: (nextMetadata = {}) => this.execute(program, supplementalContext, { ...nextMetadata, workflowCheckpoint: checkpoint })
+      });
+    }
     return {
       kind: "workflow",
       executions: steps.flatMap((step) => step.response ? [step.response] : []),
@@ -85,6 +116,7 @@ export class WorkflowRuntime {
     initial: readonly (readonly [string, RuntimeValue])[] = [],
     metadata: Readonly<ExecutionMetadata> = {}
   ): Promise<DextResult> {
+    metadata.workflowCheckpoint?.bind(program.source);
     const environment = new Map<string, RuntimeValue>(initial);
     const steps: WorkflowStepResponse[] = [];
     const flow = await this.executeStatements(program.statements, environment, steps, metadata);
@@ -102,6 +134,42 @@ export class WorkflowRuntime {
   }
 
   private async executeStatements(
+    statements: readonly WorkflowStatement[],
+    environment: Map<string, RuntimeValue>,
+    steps: WorkflowStepResponse[],
+    metadata: Readonly<ExecutionMetadata> = {},
+    supplementalContext: readonly CodeRef[] = []
+  ): Promise<ExecutionFlow> {
+    if (!metadata.workflowCheckpoint) return this.executeStatementsUncached(statements, environment, steps, metadata, supplementalContext);
+    for (const [index, statement] of statements.entries()) {
+      const checkpoint = metadata.workflowCheckpoint.child(`statement:${index}:${statement.from}:${statement.to}`);
+      const start = steps.length;
+      let flow: ExecutionFlow;
+      if (metadata.signal?.aborted) {
+        steps.push({ method: statement.kind === "step" ? statement.call.method : statement.kind, state: "cancelled", error: "Execution cancelled." });
+        flow = false;
+      } else if (checkpoint.completed) {
+        const restored = structuredClone(checkpoint.completed);
+        environment.clear();
+        for (const entry of restored.environment) environment.set(...entry);
+        steps.push(...restored.steps);
+        flow = restored.flow;
+      } else {
+        try {
+          flow = await this.executeStatementsUncached([statement], environment, steps, { ...metadata, workflowCheckpoint: checkpoint }, supplementalContext);
+          if (flow !== false) checkpoint.completed = structuredClone({ environment: [...environment], steps: steps.slice(start), flow });
+        } catch (error) {
+          steps.push({ method: statement.kind === "step" ? statement.call.method : statement.kind,
+            state: error instanceof ExecutionCancelledError ? "cancelled" : "failed", error: error instanceof Error ? error.message : String(error) });
+          flow = false;
+        }
+      }
+      if (flow !== true) { this.markSkipped(statements.slice(index + 1), steps); return flow; }
+    }
+    return true;
+  }
+
+  private async executeStatementsUncached(
     statements: readonly WorkflowStatement[],
     environment: Map<string, RuntimeValue>,
     steps: WorkflowStepResponse[],
@@ -313,9 +381,10 @@ export class WorkflowRuntime {
     const had = environment.has(statement.variable);
     const previous = environment.get(statement.variable);
     try {
-      for (const item of items) {
+      for (const [iteration, item] of items.entries()) {
         environment.set(statement.variable, item as RuntimeValue);
-        const flow = await this.executeStatements(statement.body, environment, steps, metadata, supplementalContext);
+        const scoped = metadata.workflowCheckpoint ? { ...metadata, workflowCheckpoint: metadata.workflowCheckpoint.child(`iteration:${iteration}`) } : metadata;
+        const flow = await this.executeStatements(statement.body, environment, steps, scoped, supplementalContext);
         if (flow !== true) {
           return flow;
         }
@@ -347,7 +416,8 @@ export class WorkflowRuntime {
           return false;
         }
         if (!condition) return true;
-        const flow = await this.executeStatements(statement.body, environment, steps, metadata, supplementalContext);
+        const scoped = metadata.workflowCheckpoint ? { ...metadata, workflowCheckpoint: metadata.workflowCheckpoint.child(`iteration:${iteration}`) } : metadata;
+        const flow = await this.executeStatements(statement.body, environment, steps, scoped, supplementalContext);
         if (flow !== true) return flow;
       }
       steps.push({ method: "while", state: "failed", error: `while exceeded the ${MAX_WHILE_ITERATIONS} iteration limit.` });
@@ -614,6 +684,11 @@ export class WorkflowRuntime {
         branchSteps[index] = step;
         try {
           if (expression.body.kind === "call") {
+            // Branches run concurrently, so each one gets the checkpoint named after its
+            // own index. Sharing one cursor would key a cached response by the order the
+            // branches happened to reach the call, and a resume that interleaves them
+            // differently would then bind that response to another item.
+            const branch = metadata.workflowCheckpoint?.child(`branch:${index}`);
             const response = await this.executeInvocation({
               kind: "invocation",
               method: expression.body.call.method,
@@ -622,7 +697,7 @@ export class WorkflowRuntime {
                 name: argument.name,
                 value: await this.evaluateAsync(argument.value, scope, metadata) as InvocationValue
               })))
-            }, [], metadata);
+            }, [], branch ? { ...metadata, workflowCheckpoint: branch } : metadata);
             step.response = response;
             results[index] = response.result;
           } else {

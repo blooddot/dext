@@ -15,7 +15,7 @@ import * as vscode from "vscode";
 import { AgentInputBroker } from "./agentInputBroker.js";
 import { InputNotifications, type InputNotificationTarget } from "./inputNotifications.js";
 import type { DextApplication } from "./application.js";
-import type { AgentInputRequest, AgentStreamEvent, ApplyResult, InputExecutionResponse, McpProcessEvent, PatchResult, UiInteraction } from "./core/types.js";
+import type { AgentInputRequest, AgentStreamEvent, ApplyResult, InputExecutionResponse, McpProcessEvent, PatchResult, UiInteraction, WorkflowContinuation } from "./core/types.js";
 import { applyPatchHandler } from "./vscodePatchHost.js";
 import {
   AttachmentStore,
@@ -169,6 +169,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     controller: AbortController;
     events: AgentStreamEvent[];
   }>();
+  /** Live Code continuations. They intentionally stay in memory because they
+   * carry the runtime environment produced by earlier steps. */
+  private readonly workflowContinuations = new Map<string, WorkflowContinuation>();
   // The Review preset is frozen per run so a later project change or a retry cannot rewrite the
   // preset that was in force when the turn was sent. Review state is created on first use, so a
   // provider built without running its constructor still has working stores.
@@ -877,6 +880,25 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     await this.run(turn.mode ?? this.application.state().agentSelection.mode ?? "agent", turn.input);
   }
 
+  async continueTurn(sessionId: string, turnId: string): Promise<void> {
+    this.hydrateSessions();
+    if (this.activeExecutions.has(sessionId)) throw new Error("Stop this Dext turn before continuing a conversation turn.");
+    const continuation = this.workflowContinuations.get(`${sessionId}:${turnId}`);
+    if (!continuation) throw new Error("This Code turn cannot be continued after the extension was reloaded. Retry it instead.");
+    const session = this.sessions.get(sessionId) ?? this.history.list(true).find((item) => item.id === sessionId);
+    const turn = session?.turns.find((item) => item.id === turnId);
+    if (!session || !turn || turn.mode !== "code") throw new Error("Conversation Code turn not found.");
+    this.workflowContinuations.delete(`${sessionId}:${turnId}`);
+    if (session.archivedAt) {
+      await this.history.setArchived(sessionId, false);
+      delete session.archivedAt;
+    }
+    await vscode.commands.executeCommand("dext.sidebar.focus");
+    this.showChat();
+    await this.openConversation(session);
+    await this.run("code", turn.input, undefined, false, continuation);
+  }
+
   async deleteTurn(turnId: string, sessionId = this.activeSession.id): Promise<void> {
     this.hydrateSessions();
     if (this.activeExecutions.has(sessionId)) {
@@ -1144,6 +1166,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           await vscode.commands.executeCommand("dext.history.retryTurn", {
             sessionId: request.sessionId ?? this.activeSession.id, turnId: request.turnId
           });
+          break;
+        case "continueTurn":
+          await this.continueTurn(request.sessionId ?? this.activeSession.id, request.turnId);
           break;
         case "forkFromTurn":
           await vscode.commands.executeCommand("dext.history.forkFromTurn", {
@@ -1726,7 +1751,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async run(mode: "agent" | "ask" | "plan" | "code", source: string, planPath?: string, executePlan = false): Promise<void> {
+  private async run(mode: "agent" | "ask" | "plan" | "code", source: string, planPath?: string, executePlan = false, workflowContinuation?: WorkflowContinuation): Promise<void> {
     if (this.activeSession.resource) {
       mode = "ask";
       if (this.resourceOperations.has(this.activeSession.id)) throw new Error("Wait for the resource operation to finish.");
@@ -1759,6 +1784,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     const todoProgress = planRun?.progress;
     const planExecution: { executePlan: boolean; planPath?: string; planOutcome?: PlanExecutionOutcome } | undefined = executePlan
       ? { executePlan: true, ...(executionPlanPath ? { planPath: executionPlanPath } : {}) } : undefined;
+    let failedWorkflowContinuation: WorkflowContinuation | undefined;
     if (this.activeExecutions.has(sessionId)) {
       throw new Error("Wait for this conversation's current Dext turn to finish before running another one.");
     }
@@ -1805,6 +1831,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           };
           this.appendAgentEvent(sessionId, events, processEvent);
         },
+        onWorkflowFailure: (value: WorkflowContinuation) => { failedWorkflowContinuation = value; },
         onAgentSessionId: (provider: string, providerSessionId: string) => {
           session.providerSessions = { ...(session.providerSessions ?? {}), [provider]: providerSessionId };
           void this.history.setProviderSession(sessionId, provider, providerSessionId);
@@ -1834,7 +1861,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
             response = generated.response;
           } else {
             response = mode === "code"
-              ? await this.application.executeInput(roundSource, roundMetadata)
+              ? workflowContinuation
+                ? await workflowContinuation.resume(roundMetadata)
+                : await this.application.executeInput(roundSource, roundMetadata)
               : await this.application.executeConversation(mode, roundSource, roundMetadata);
           }
         } finally { acceptingEvents = false; }
@@ -1876,6 +1905,11 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       // that id when persisting the result so retry/delete actions still point
       // at the stored turn after success or cancellation.
       const turn = await this.history.addSuccess(source, events, response, sessionId, mode, turnId, planExecution);
+      const canContinue = mode === "code"
+        && response.steps?.some((step) => step.state === "failed")
+        && response.steps.some((step) => step.state === "skipped")
+        && failedWorkflowContinuation;
+      if (canContinue) this.workflowContinuations.set(`${sessionId}:${turnId}`, failedWorkflowContinuation!);
       await this.persistProviderSessions(session);
       if (mode === "plan" && !executePlan && response.executions.some((execution) => execution.result.kind === "plan" && execution.result.planPath)) {
         const savedPath = response.executions.find((execution) => execution.result.kind === "plan" && execution.result.planPath)?.result;

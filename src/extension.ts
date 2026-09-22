@@ -680,6 +680,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         historyPanel.refresh();
       })
     ),
+    vscode.commands.registerCommand("dext.history.continueTurn", (context?: ConversationContext) =>
+      reportCommandError(async () => {
+        if (!context?.sessionId || !context.turnId) throw new Error("Conversation turn not found.");
+        await sidebar.continueTurn(context.sessionId, context.turnId);
+        historyPanel.refresh();
+      })
+    ),
     vscode.commands.registerCommand("dext.history.deleteTurn", (context?: ConversationContext) =>
       reportCommandError(async () => {
         const session = historySession(context);
