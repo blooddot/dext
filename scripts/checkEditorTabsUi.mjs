@@ -70,7 +70,7 @@ try {
   }
   for (const [themeName, background, foreground, input, accent] of [['dark', '#1e1e1e', '#ccc', '#313131', '#007acc'], ['light', '#fff', '#333', '#eee', '#005fb8'], ['contrast', '#000', '#fff', '#000', '#ffff00']]) {
     themeClass = themeName === 'contrast' ? 'vscode-high-contrast' : `vscode-${themeName}`;
-    themeCss = `:root{--vscode-font-family:Segoe UI,sans-serif;--vscode-font-size:13px;--vscode-editor-background:${background};--vscode-foreground:${foreground};--vscode-descriptionForeground:${foreground};--vscode-input-background:${input};--vscode-input-foreground:${foreground};--vscode-input-placeholderForeground:${foreground};--vscode-input-border:${foreground};--vscode-focusBorder:${accent};--vscode-button-secondaryBackground:${input};--vscode-button-secondaryForeground:${foreground};--vscode-panel-border:${input};--vscode-widget-border:${input};--vscode-badge-background:${input};--vscode-badge-foreground:${foreground};--vscode-list-hoverBackground:${input}}`;
+    themeCss = `:root{--vscode-font-family:Segoe UI,sans-serif;--vscode-font-size:13px;--vscode-editor-background:${background};--vscode-foreground:${foreground};--vscode-descriptionForeground:${foreground};--vscode-input-background:${input};--vscode-input-foreground:${foreground};--vscode-input-placeholderForeground:${foreground};--vscode-input-border:${foreground};--vscode-focusBorder:${accent};--vscode-button-secondaryBackground:${input};--vscode-button-secondaryForeground:${foreground};--vscode-panel-border:${input};--vscode-widget-border:${input};--vscode-badge-background:${input};--vscode-badge-foreground:${foreground};--vscode-list-hoverBackground:${input};--vscode-editorWarning-foreground:#cca700}`;
     // Simulate VS Code's default inline-code background so the regression is visible here.
     themeCss += 'code{background:#383838;padding:2px 4px;border-radius:3px;}';
     for (const width of [320, 1000]) {
@@ -148,7 +148,38 @@ try {
       await writeFile(join(artifacts, `project-${themeName}-${width}.png`), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
     }
   }
-  console.log('PASS: editor styles load under CSP; APIs, Global Resources and Project in dark/light/contrast at 320/1000px; search focus and filtering; category creation and page navigation. Screenshots: .tmp-tb/editor-tabs-ui');
+  // Match the populated Overview from the reported screenshot, including inline code
+  // in the legacy warning and the custom model picker (not just the native CLI select).
+  const populated = { ...project, overview: { ...project.overview,
+    legacyScanRoots: ['src'], selectedAiCli: 'codex', selectedAiModel: 'gpt-6-astra',
+    selectedAiReasoning: 'ultra', selectedAiSpeed: 'fast',
+    initialization: { status: 'completed', drafts: 0, intentGenerated: true, diagramsGenerated: 1 },
+    aiCli: [{ id: 'codex', label: 'Codex CLI', models: [{ id: 'gpt-6-astra', label: 'GPT-6-Astra', reasoningEfforts: ['high', 'ultra'], speedTiers: ['standard', 'fast'] }] }]
+  } };
+  for (const width of [320, 701, 792, 1000, 1132]) {
+    await send('Emulation.setDeviceMetricsOverride', { width, height: 600, deviceScaleFactor: 1, mobile: false });
+    await load(ui.renderProjectPanel('overview', populated));
+    await writeFile(join(artifacts, `project-populated-${width}.png`), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
+    assert.equal(await evaluate(`document.documentElement.scrollWidth <= innerWidth`), true, `populated Overview fits ${width}px`);
+    assert.equal(await evaluate(`Array.from(document.querySelectorAll('[data-project-legacy-scan] code')).every(code => code.getClientRects().length === 1)`), true, 'warning code stays inline');
+    // Help text, status lines and the AI control rows used to end at 780, 680 and 734 px
+    // inside the same 1040 px panel, so the Overview showed three right edges and read as
+    // clipped text at a narrow capture. They now share one measure.
+    const edges = await evaluate(`['.project-help','[data-project-legacy-scan]','.project-ai-cli','.project-ai-model','.project-initialization-result'].map(selector => { const node = document.querySelector(selector); return node ? Math.round(node.getBoundingClientRect().right) : -1; })`);
+    assert.equal(new Set(edges).size, 1, `Overview text shares one right edge at ${width}px: ${JSON.stringify(edges)}`);
+    assert.ok(edges[0] >= 0 && edges[0] <= width - 24, `Overview text stays inside the page at ${width}px: ${edges[0]}`);
+    // The legacy-scan notice is advisory: its text keeps the normal foreground and only
+    // the left rule carries the warning colour. Painting the whole paragraph in Dark+'s
+    // #CCA700 was reported as "why is every word yellow" and turned the code chips gold too.
+    const notice = await evaluate(`(() => { const style = getComputedStyle(document.querySelector('[data-project-legacy-scan]')); return { color: style.color, body: getComputedStyle(document.body).color, border: style.borderLeftColor, width: style.borderLeftWidth }; })()`);
+    assert.equal(notice.color, notice.body, `notice text keeps the normal foreground: ${JSON.stringify(notice)}`);
+    assert.equal(notice.border, 'rgb(204, 167, 0)', `notice keeps the warning accent: ${JSON.stringify(notice)}`);
+    assert.equal(notice.width, '3px', `notice shows the warning rule: ${JSON.stringify(notice)}`);
+    await evaluate(`document.querySelector('[data-project-model-trigger]').click(); document.querySelector('[data-project-model-category="model"]').click()`);
+    const bounds = await evaluate(`Array.from(document.querySelectorAll('[data-project-model-menu], [data-project-model-submenu]')).map(el => { const r = el.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom }; })`);
+    assert.ok(bounds.every(r => r.left >= 0 && r.right <= width && r.top >= 0 && r.bottom <= 600), `model menus fit ${width}px: ${JSON.stringify(bounds)}`);
+  }
+  console.log('PASS: editor styles and navigation under CSP; populated Project Overview and model menus at 320/701/792/1000/1132px. Screenshots: .tmp-tb/editor-tabs-ui');
 } finally {
   server?.close();
   try { await shutdown?.(); } catch {}

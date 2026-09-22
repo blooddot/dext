@@ -132,7 +132,7 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .project-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 12px 20px; }
 .project-facts dt { color: var(--vscode-descriptionForeground); }
 .project-facts dd { margin: 0; overflow-wrap: anywhere; }
-.project-help { max-width: 760px; color: var(--vscode-descriptionForeground); }
+.project-help { max-width: var(--project-measure, 760px); color: var(--vscode-descriptionForeground); }
 .project-ai-cli, .project-ai-model { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin: 12px 0; color: var(--vscode-foreground); }
 .project-ai-cli select, .project-ai-model select {
   min-width: 220px; max-width: min(100%, 420px); min-height: 30px; padding: 4px 28px 4px 9px;
@@ -163,6 +163,15 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .project-panel {
   --project-card-border: color-mix(in srgb, var(--vscode-panel-border) 78%, transparent);
   --project-card-fill: color-mix(in srgb, var(--vscode-editor-background) 88%, var(--vscode-input-background));
+  /* One measure shared by the help text, every status line and the AI control rows.
+     They used to end at 780, 680 and 734 px in the same 1040 px panel, so the page
+     showed three right edges and its text stopped short of the panel border, which
+     reads as clipped text in a narrow window. The control row is the widest of them,
+     so its columns define the value. */
+  --project-control-label: 300px;
+  --project-control-gap: 14px;
+  --project-control-value: 420px;
+  --project-measure: calc(var(--project-control-label) + var(--project-control-gap) + var(--project-control-value));
 }
 .project-nav {
   gap: 2px;
@@ -184,13 +193,13 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
   background: var(--vscode-list-activeSelectionBackground);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--vscode-focusBorder) 48%, transparent);
 }
-.project-help { max-width: 780px; margin-top: 0; line-height: 1.6; }
+.project-help { max-width: var(--project-measure, 760px); margin-top: 0; line-height: 1.6; }
 .project-ai-cli, .project-ai-model {
   display: grid;
   grid-template-columns: minmax(8.5rem, 14rem) minmax(0, 1fr);
   align-items: center;
   gap: 6px 14px;
-  max-width: 680px;
+  max-width: var(--project-measure, 680px);
   margin: 0;
   color: var(--vscode-foreground);
   font-weight: 500;
@@ -281,7 +290,7 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 /* Labels are short controls; keep them on one line while allowing the value
    column to shrink on narrow editor widths. */
 .project-ai-cli, .project-ai-model {
-  grid-template-columns: minmax(240px, 300px) minmax(220px, 420px);
+  grid-template-columns: minmax(240px, var(--project-control-label, 300px)) minmax(220px, var(--project-control-value, 420px));
 }
 .project-ai-cli, .project-ai-model { white-space: nowrap; }
 .project-ai-model-control { position: relative; min-width: 0; }
@@ -327,13 +336,12 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
      Otherwise every anonymous text run becomes its own flex item and a
      warning wraps one word at a time. */
   display: block;
-  width: 100%; max-width: 680px; clear: both; margin: 18px 0 16px;
+  width: 100%; max-width: var(--project-measure, 680px); clear: both; margin: 18px 0 16px;
 }
-.project-scan-progress-warning { color: var(--vscode-testing-iconFailed, var(--vscode-errorForeground)); }
-.project-initialization-result { max-width: 680px; margin: -4px 0 16px; color: var(--vscode-terminal-ansiGreen, var(--vscode-testing-iconPassed)); font-size: 12px; }
-.project-initialization-error { max-width: 680px; margin: -4px 0 16px; color: var(--vscode-errorForeground); font-size: 12px; }
+.project-initialization-result { max-width: var(--project-measure, 680px); margin: -4px 0 16px; color: var(--vscode-terminal-ansiGreen, var(--vscode-testing-iconPassed)); font-size: 12px; }
+.project-initialization-error { max-width: var(--project-measure, 680px); margin: -4px 0 16px; color: var(--vscode-errorForeground); font-size: 12px; }
 .project-initialization-error summary { cursor: pointer; }
-.project-initialization-log { max-width: 680px; margin: -4px 0 16px; color: var(--vscode-descriptionForeground); font-size: 12px; }
+.project-initialization-log { max-width: var(--project-measure, 680px); margin: -4px 0 16px; color: var(--vscode-descriptionForeground); font-size: 12px; }
 .project-initialization-log summary { cursor: pointer; }
 .project-initialization-log pre { max-height: 180px; margin: 6px 0 0; padding: 8px; overflow: auto; white-space: pre-wrap; background: var(--vscode-textCodeBlock-background); border-radius: 4px; }
 .project-initialization-error pre { max-height: 180px; margin: 6px 0 0; padding: 8px; overflow: auto; white-space: pre-wrap; color: var(--vscode-errorForeground); background: color-mix(in srgb, var(--vscode-errorForeground) 8%, var(--vscode-editor-background)); border-radius: 4px; }
@@ -357,7 +365,16 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .project-init-completed .project-initialization-result { color: var(--vscode-foreground); }
 .project-initialization-result { margin: 0; }
 .project-scan-progress-error { color: var(--vscode-errorForeground, var(--vscode-foreground)); }
-.project-scan-progress-warning { color: var(--vscode-editorWarning-foreground, var(--vscode-foreground)); }
+/* An advisory notice is marked by its rule, not by colouring every word. Painting the
+   whole paragraph with --vscode-editorWarning-foreground (Dark+ #CCA700) reads as an
+   error, and it also dragged the inline <code> chips into the same gold. The warning
+   colour now stays on the left rule, the way VS Code marks a notice. */
+.project-scan-progress-warning {
+  padding: 8px 12px;
+  border-left: 3px solid var(--vscode-editorWarning-foreground, var(--vscode-focusBorder));
+  background: var(--vscode-input-background);
+  color: var(--vscode-foreground);
+}
 .project-initialization-elapsed { color: var(--vscode-descriptionForeground); font-variant-numeric: tabular-nums; }
 .project-initialization-output { max-height: 220px; overflow: auto; margin: 4px 0 0; padding: 8px; border-radius: 4px; background: var(--vscode-textCodeBlock-background, var(--vscode-input-background)); font-size: 12px; white-space: pre-wrap; }
 .project-initialization-error pre { white-space: pre-wrap; }
