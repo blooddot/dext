@@ -120,13 +120,6 @@ function fitSublabelUnits(width: number): number {
   return Math.max(1, Math.floor((width - TEXT_PADDING) / (MIN_TEXT_FONT * TEXT_WIDTH_FACTOR)));
 }
 
-/** CJK-aware text width estimate used only for layout hints, never for semantic decisions. */
-function labelWidth(label: string, perUnit = 7): number {
-  let units = 0;
-  for (const character of label) units += character.codePointAt(0)! > 0x2e80 ? 2 : 1;
-  return Math.round(units * perUnit);
-}
-
 function truncate(value: string, max: number): string {
   return value.length > max ? `${value.slice(0, Math.max(0, max - 1))}…` : value;
 }
@@ -637,6 +630,31 @@ function buildSequence(project: ProjectDiagram, repository: ArchifyRepository | 
   };
 }
 
+/**
+ * The data-flow renderer fixes its stage columns: `stageX(i) = 100 + i * 215`
+ * with a node centred on each column and at most five rows
+ * (`renderers/dataflow/render-dataflow.mjs`). Dext therefore caps a node to what
+ * the pitch can hold instead of letting a wide box spill into the neighbouring
+ * stage, where the flows that cross it are rejected as `clean-flow` violations.
+ */
+const DATAFLOW = {
+  labelUnit: 6.2,
+  columnPitch: 215,
+  leftX: 100,
+  stageWidth: 168,
+  stageY: 46,
+  stageHeight: 36,
+  stageBottomPad: 74,
+  nodeHeight: 58,
+  rowYs: [128, 242, 356, 470, 584],
+  minWidth: 120,
+  /** `leftX - width / 2 >= 24` for the first stage, and half the pitch on each side. */
+  maxWidth: 150,
+  widthFor(label: string): number {
+    return Math.max(DATAFLOW.minWidth, Math.min(DATAFLOW.maxWidth, Math.round(textUnits(label) * DATAFLOW.labelUnit) + 40));
+  }
+} as const;
+
 function buildDataFlow(project: ProjectDiagram, repository: ArchifyRepository | undefined, attached: boolean): BuiltIr {
   const semantics = project.semantics ?? {};
   const stages = [...(semantics.stages ?? [])].sort((left, right) => left.order - right.order);
@@ -651,33 +669,61 @@ function buildDataFlow(project: ProjectDiagram, repository: ArchifyRepository | 
     const stage = node.stageId !== undefined ? stageIndex.get(node.stageId) : undefined;
     if (stage === undefined) throw new Error(`Data-flow node '${node.id}' is missing an evidenced processing stage.`);
     const row = rowByStage.get(stage) ?? 0;
+    if (row >= DATAFLOW.rowYs.length) {
+      throw new Error(`Data-flow stage '${stages[stage]!.id}' holds more than ${DATAFLOW.rowYs.length} nodes; the renderer's row grid is fixed.`);
+    }
     rowByStage.set(stage, row + 1);
     const sources = evidenceSources(node, repository, attached);
+    const width = DATAFLOW.widthFor(node.label);
     return {
       id,
       type: componentType(node),
-      label: node.label,
-      ...(node.description ? { sublabel: truncate(node.description, 80) } : {}),
-      width: Math.max(140, Math.min(340, labelWidth(node.label) + 32)),
+      label: fitText(node.label, fitLabelUnits(width, DATAFLOW.labelUnit, 6)),
+      ...(node.description ? { sublabel: fitText(node.description, fitSublabelUnits(width)) } : {}),
+      width,
       stage,
       row,
       ...(sources ? { sources } : {})
     };
   });
+  const stageOfNode = new Map(nodes.map((node) => [node.id, node.stage]));
+  const rowOfNode = new Map(nodes.map((node) => [node.id, node.row]));
+  const placement = new Map<string, number>();
   const flows = project.relations.map((relation) => {
     const id = mapRelation(mapping, relation, usedRelations);
     const label = relation.condition ? `${relationLabel(relation)}（${relation.condition}）` : relationLabel(relation);
+    const fromStage = stageOfNode.get(mapping.ids[relation.from] ?? "");
+    const toStage = stageOfNode.get(mapping.ids[relation.to] ?? "");
+    const fromRow = rowOfNode.get(mapping.ids[relation.from] ?? "") ?? 0;
+    const toRow = rowOfNode.get(mapping.ids[relation.to] ?? "") ?? 0;
+    if (fromStage === undefined || toStage === undefined) {
+      return { id, from: mapping.ids[relation.from], to: mapping.ids[relation.to], label, ...(relation.exception ? { variant: "dashed" } : {}) };
+    }
+    // Labels are authored into the free corridor under the deepest row the flow touches:
+    // the renderer's default puts them just above the route's first corner, which in a
+    // fixed stage grid is inside the node the flow starts from. Each row's corridor is
+    // consumed in order, so no two labels in it can share a line.
+    const row = Math.min(Math.max(fromRow, toRow), DATAFLOW.rowYs.length - 1);
+    const stack = placement.get(String(row)) ?? 0;
+    placement.set(String(row), stack + 1);
+    const center = (stage: number): number => DATAFLOW.leftX + stage * DATAFLOW.columnPitch;
     return {
       id,
       from: mapping.ids[relation.from],
       to: mapping.ids[relation.to],
       label,
+      labelAt: [
+        Math.round((center(fromStage) + center(toStage)) / 2),
+        DATAFLOW.rowYs[row]! + DATAFLOW.nodeHeight + 12 + stack * 18
+      ],
       ...(relation.exception ? { variant: "dashed" } : {})
     };
   });
-  const viewBoxWidth = Math.max(760, stages.length * 320 + 160);
+  const lastStageX = DATAFLOW.leftX + (stages.length - 1) * DATAFLOW.columnPitch;
+  const viewBoxWidth = Math.max(760, Math.ceil(lastStageX + DATAFLOW.stageWidth / 2 + 64));
   const maxRows = Math.max(1, ...[...rowByStage.values()]);
-  const viewBoxHeight = Math.max(520, 320 + maxRows * 120);
+  const lastRowY = DATAFLOW.rowYs[Math.min(maxRows - 1, DATAFLOW.rowYs.length - 1)]!;
+  const viewBoxHeight = Math.max(560, Math.ceil(lastRowY + DATAFLOW.nodeHeight + DATAFLOW.stageBottomPad + 24));
   return {
     mapping,
     ir: {
