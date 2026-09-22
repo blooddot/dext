@@ -819,7 +819,9 @@ function renderResourceControls(): void {
   for (const [index, button] of Array.from(elements.modeMenu.querySelectorAll("button")).entries()) {
     button.dataset.resourceType = Object.keys(RESOURCE_LABELS)[index]!;
   }
-  const scopes: ResourceScope[] = sidebarState?.resourceRoots?.project ? ["project", "global"] : ["global"];
+  const scopes: ResourceScope[] = resource.type === "file"
+    ? (sidebarState?.resourceRoots?.project ? ["project"] : [])
+    : sidebarState?.resourceRoots?.project ? ["project", "global"] : ["global"];
   renderComposerMenu(elements.permissionMenu, scopes.map((scope) => [scope,
     `${resource.target && resource.scope !== scope ? "Save as · " : ""}${scope === "project" ? "Project" : "Global"}`, "codicon-folder"]), resource.scope,
     (scope) => changeResourceOptions(resource.type, scope as ResourceScope));
@@ -834,6 +836,10 @@ function renderResourceControls(): void {
 }
 
 function resourceDirectory(scope: ResourceScope, type: ResourceKind): string {
+  if (type === "file" && scope === "project") {
+    const dextRoot = sidebarState?.resourceRoots?.project;
+    if (dextRoot) return dextRoot.replace(/[\\/]\.dext$/, "") || ".";
+  }
   return `${sidebarState?.resourceRoots?.[scope] ?? (scope === "project" ? ".dext" : ".dext-global")}/${RESOURCE_DIRECTORIES[type]}`;
 }
 

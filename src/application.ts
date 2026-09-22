@@ -748,6 +748,13 @@ export class DextApplication {
   }
 
   resourceRoot(type: ResourceKind, scope: ResourceScope): vscode.Uri {
+    if (type === "file") {
+      const folder = vscode.workspace.workspaceFolders?.[0];
+      if (scope !== "project" || !folder || folder.uri.scheme !== "file" || !this.workspaceTrusted) {
+        throw new Error("File resources require a trusted local workspace and Project scope.");
+      }
+      return folder.uri;
+    }
     if (scope === "global") return vscode.Uri.joinPath(this.storage.globalStorageUri, RESOURCE_DIRECTORIES[type]);
     const folder = vscode.workspace.workspaceFolders?.[0];
     if (!folder || folder.uri.scheme !== "file" || !this.workspaceTrusted) throw new Error("Project resources require a trusted local workspace.");
@@ -766,10 +773,10 @@ export class DextApplication {
         catch (error) { if (error instanceof vscode.FileSystemError && error.code === "FileNotFound") return; throw error; }
         for (const [name, kind] of entries) {
           const path = `${prefix}${name}`;
-          if (kind === vscode.FileType.Directory && type !== "mcp") await visit(vscode.Uri.joinPath(directory, name), `${path}/`, depth + 1);
+          if (kind === vscode.FileType.Directory && type !== "mcp" && type !== "file") await visit(vscode.Uri.joinPath(directory, name), `${path}/`, depth + 1);
           if (kind !== vscode.FileType.File) continue;
           try { resourcePathSegments(type, path); } catch { continue; }
-          const label = type === "api" ? path.slice(0, -3).replaceAll("/", ".") : type === "skill" ? path.split("/").at(-2)! : name.replace(/\.(?:md|jsonc?)$/, "");
+          const label = type === "file" ? path : type === "api" ? path.slice(0, -3).replaceAll("/", ".") : type === "skill" ? path.split("/").at(-2)! : name.replace(/\.(?:md|jsonc?)$/, "");
           items.push({ name: label, path, scope });
         }
       };
@@ -824,7 +831,7 @@ export class DextApplication {
     await this.validateResource(resource.type, draft);
     // Keep generated JSON out of the final conversation response; show the actual document.
     const fence = "`".repeat(Math.max(3, ...Array.from(draft.content.matchAll(/`+/g), (match) => match[0].length + 1)));
-    response.result.text = `Draft: ${draft.name}\n\n${fence}${resource.type === "api" ? "python" : resource.type === "mcp" ? "jsonc" : "markdown"}\n${draft.content}\n${fence}\n\nReview the draft, then save or describe further changes.`;
+    response.result.text = `Draft: ${draft.name}\n\n${fence}${resource.type === "api" ? "python" : resource.type === "mcp" ? "jsonc" : "text"}\n${draft.content}\n${fence}\n\nReview the draft, then save or describe further changes.`;
     return { draft, response: { kind: "workflow", executions: [response] } };
   }
 

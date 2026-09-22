@@ -10,7 +10,7 @@ import { UiInteractionBroker } from "./uiInteractionBroker.js";
 import { readHistoryResponse } from "./historyResponse.js";
 import { publicInteractionState } from "./uiInteractionPresentation.js";
 import { randomBytes, createHash } from "node:crypto";
-import { relative, sep } from "node:path";
+import { basename, relative, sep } from "node:path";
 import * as vscode from "vscode";
 import { AgentInputBroker } from "./agentInputBroker.js";
 import { InputNotifications, type InputNotificationTarget } from "./inputNotifications.js";
@@ -630,6 +630,18 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private async chooseResource(session: DextHistorySession, resource: ResourceSession): Promise<void> {
+    if (resource.type === "file") {
+      const picked = await vscode.window.showOpenDialog({
+        canSelectFiles: true,
+        canSelectFolders: false,
+        canSelectMany: false,
+        openLabel: "Select file",
+        ...(vscode.workspace.workspaceFolders?.[0] ? { defaultUri: vscode.workspace.workspaceFolders[0].uri } : {})
+      });
+      if (!picked?.[0]) return;
+      await this.selectResourceFile(session, resource, picked[0]);
+      return;
+    }
     const available = await this.application.listResources(resource.type);
     const items = [
       { label: "$(add) New resource", description: `Create a new ${RESOURCE_LABELS[resource.type]}`, value: undefined as typeof available[number] | undefined },
@@ -640,6 +652,29 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     const next: ResourceSession = { type: resource.type, scope: selected.value?.scope ?? resource.scope };
     if (selected.value) next.target = await this.application.readResource(next.type, next.scope, selected.value.path, selected.value.name);
     session.resource = next;
+    await this.persistResource(session);
+  }
+
+  private async selectResourceFile(session: DextHistorySession, resource: ResourceSession, uri: vscode.Uri): Promise<void> {
+    const stat = await vscode.workspace.fs.stat(uri);
+    if ((stat.type & vscode.FileType.Directory) !== 0) throw new Error("Choose a file, not a directory.");
+    if (resource.type !== "file") {
+      const root = this.application.resourceRoot(resource.type, resource.scope).fsPath.replace(/[\\/]$/, "");
+      const candidate = uri.fsPath.replace(/[\\/]$/, "");
+      const path = relative(root, candidate).replaceAll("\\", "/");
+      if (!path || path === ".." || path.startsWith(`../`) || /^[A-Za-z]:/.test(path)) {
+        throw new Error(`Select a file inside the ${RESOURCE_LABELS[resource.type]} directory.`);
+      }
+      const target = await this.application.readResource(resource.type, resource.scope, path, basename(path));
+      session.resource = { type: resource.type, scope: resource.scope, target };
+      await this.persistResource(session);
+      return;
+    }
+    const folder = vscode.workspace.getWorkspaceFolder(uri);
+    if (!folder || folder.uri.scheme !== "file") throw new Error("File resources must be inside the current workspace.");
+    const path = vscode.workspace.asRelativePath(uri, false).replaceAll("\\", "/");
+    const target = await this.application.readResource("file", "project", path, basename(path));
+    session.resource = { type: "file", scope: "project", target };
     await this.persistResource(session);
   }
 
@@ -1050,12 +1085,13 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           break;
         case "resourceOptions":
           await this.resourceAction(request.sessionId, async (session, resource) => {
+            const requestedScope = request.resourceType === "file" ? "project" : request.scope;
             if (resource.type !== request.resourceType) {
-              session.resource = { type: request.resourceType, scope: request.scope };
-            } else if (resource.scope !== request.scope) {
+              session.resource = { type: request.resourceType, scope: requestedScope };
+            } else if (resource.scope !== requestedScope) {
               // Changing destination makes an explicit copy; it never moves or overwrites the source.
               const document = resource.draft ?? resource.target;
-              session.resource = { type: resource.type, scope: request.scope,
+              session.resource = { type: resource.type, scope: requestedScope,
                 ...(document ? { draft: { name: document.name, content: document.content } } : {}) };
             }
             await this.persistResource(session);

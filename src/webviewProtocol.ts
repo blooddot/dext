@@ -128,7 +128,7 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("reload") }),
   z.object({ type: z.literal("addMcp") }),
   z.object({ type: z.literal("openResourceCreator") }),
-  z.object({ type: z.literal("resourceOptions"), sessionId: z.string().min(1), resourceType: z.enum(["api", "mcp", "rule", "skill"]), scope: z.enum(["project", "global"]) }),
+  z.object({ type: z.literal("resourceOptions"), sessionId: z.string().min(1), resourceType: z.enum(["api", "mcp", "rule", "skill", "file"]), scope: z.enum(["project", "global"]) }),
   z.object({ type: z.literal("chooseResource"), sessionId: z.string().min(1) }),
   z.object({ type: z.literal("previewResource"), sessionId: z.string().min(1) }),
   z.object({ type: z.literal("saveResource"), sessionId: z.string().min(1) }),
