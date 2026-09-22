@@ -430,6 +430,13 @@ function buildArchitecture(project: ProjectDiagram, repository: ArchifyRepositor
   };
 }
 
+/** Workflow node label width metric and column budget, from the compiler's own lints. */
+const WORKFLOW = {
+  labelUnit: 6.8,
+  /** Columns a lane holds before the rail continues in a continuation lane. */
+  columns: 6
+} as const;
+
 function buildWorkflow(project: ProjectDiagram, repository: ArchifyRepository | undefined, attached: boolean): BuiltIr {
   const semantics = project.semantics ?? {};
   const declaredLanes = semantics.lanes ?? [];
@@ -447,32 +454,49 @@ function buildWorkflow(project: ProjectDiagram, repository: ArchifyRepository | 
     lanes.push({ id, label: lane.label, variant: lane.variant === "exception" ? "exception" : "normal" });
   }
   const ranks = rankNodes(project.nodes, flowEdges(project));
+  // Columns are consumed per lane in rank order. Two nodes that share a rank must
+  // not share a cell: `col = rank % 6` put them on the same column centre, and the
+  // compiler reports the collision as "less than 8px apart in lane …" and refuses
+  // the diagram. Ordering by rank first keeps the left-to-right reading order.
+  const railPosition = new Map<ProjectDiagramNode, number>();
+  const laneCursor = new Map<string, number>();
+  [...project.nodes]
+    .sort((left, right) => (ranks.get(left.id) ?? 0) - (ranks.get(right.id) ?? 0)
+      || project.nodes.indexOf(left) - project.nodes.indexOf(right))
+    .forEach((node) => {
+      const declared = node.laneId && laneById.has(node.laneId) ? node.laneId : declaredLanes[0]!.id;
+      const baseLane = archifyLaneByProjectLane.get(declared)!;
+      const next = laneCursor.get(baseLane) ?? 0;
+      laneCursor.set(baseLane, next + 1);
+      railPosition.set(node, next);
+    });
   const pickLane = (node: ProjectDiagramNode): { lane: string; col: number } => {
     const declared = node.laneId && laneById.has(node.laneId) ? node.laneId : declaredLanes[0]!.id;
-    const rank = ranks.get(node.id) ?? 0;
-    const band = Math.floor(rank / 6);
     const baseLane = archifyLaneByProjectLane.get(declared)!;
-    if (band === 0) return { lane: baseLane, col: rank % 6 };
+    const next = railPosition.get(node) ?? 0;
+    const band = Math.floor(next / WORKFLOW.columns);
+    if (band === 0) return { lane: baseLane, col: next % WORKFLOW.columns };
     const continuationId = `${baseLane}-cont-${band}`;
     if (!usedLanes.has(continuationId)) {
       usedLanes.add(continuationId);
       const source = laneById.get(declared)!;
       lanes.push({ id: continuationId, label: `${source.label} (cont. ${band + 1})`, variant: source.variant === "exception" ? "exception" : "normal" });
     }
-    return { lane: continuationId, col: rank % 6 };
+    return { lane: continuationId, col: next % WORKFLOW.columns };
   };
   const nodes = project.nodes.map((node) => {
     const id = mapNode(mapping, node, usedNodes);
     const placement = pickLane(node);
     const sources = evidenceSources(node, repository, attached);
+    const width = Math.max(92, Math.min(360, Math.round(textUnits(node.label) * WORKFLOW.labelUnit) + 24));
     return {
       id,
       lane: placement.lane,
       col: placement.col,
       type: componentType(node),
-      label: node.label,
-      width: Math.max(92, Math.min(360, labelWidth(node.label) + 24)),
-      ...(node.description ? { sublabel: truncate(node.description, 80) } : {}),
+      label: fitText(node.label, fitLabelUnits(width, WORKFLOW.labelUnit, 6)),
+      width,
+      ...(node.description ? { sublabel: fitText(node.description, fitSublabelUnits(width)) } : {}),
       ...(sources ? { sources } : {})
     };
   });
