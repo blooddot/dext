@@ -25,9 +25,36 @@ try {
   await new Promise((done, reject) => { socket.addEventListener("open", done, { once: true }); socket.addEventListener("error", reject, { once: true }); });
   let nextId = 0; const pending = new Map();
   socket.addEventListener("message", ({ data }) => { const message = JSON.parse(data); const request = pending.get(message.id); if (request) { pending.delete(message.id); message.error ? request.reject(new Error(JSON.stringify(message.error))) : request.resolve(message.result); } });
-  const send = (method, params = {}) => new Promise((done, reject) => { const id = ++nextId; pending.set(id, { resolve: done, reject }); socket.send(JSON.stringify({ id, method, params })); });
+  const send = (method, params = {}, sessionId) => new Promise((done, reject) => { const id = ++nextId; pending.set(id, { resolve: done, reject }); socket.send(JSON.stringify({ id, method, params, sessionId })); });
   shutdown = () => send("Browser.close");
   const evaluate = async (expression) => { const result = await send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }); if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails)); return result.result.value; };
+  const evaluateViewer = async (expression) => {
+    const { frameTree } = await send("Page.getFrameTree");
+    let result;
+    if (frameTree.childFrames?.length) {
+      const { executionContextId } = await send("Page.createIsolatedWorld", { frameId: frameTree.childFrames[0].frame.id, worldName: "diagram-layout-check" });
+      result = await send("Runtime.evaluate", { expression, contextId: executionContextId, returnByValue: true });
+    } else {
+      // Sandboxed srcdoc can run in a separate renderer process.
+      const { targetInfos } = await send("Target.getTargets");
+      const target = targetInfos.find((entry) => entry.type === "iframe");
+      assert.ok(target, "sandboxed viewer target exists");
+      const { sessionId } = await send("Target.attachToTarget", { targetId: target.targetId, flatten: true });
+      try { result = await send("Runtime.evaluate", { expression, returnByValue: true }, sessionId); }
+      finally { await send("Target.detachFromTarget", { sessionId }); }
+    }
+    if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails));
+    return result.result.value;
+  };
+  const viewerLayout = () => evaluateViewer(`(function(){
+    var canvas = document.querySelector('.diagram-container').getBoundingClientRect();
+    var svg = document.querySelector('.diagram-container > svg');
+    var bounds = svg.getBoundingClientRect();
+    var box = svg.viewBox.baseVal;
+    return { present: document.documentElement.getAttribute('data-present') === 'true',
+      width: innerWidth, height: innerHeight, canvasWidth: canvas.width, canvasHeight: canvas.height,
+      scale: Math.min(bounds.width / box.width, bounds.height / box.height) };
+  })()`);
 
   const bundle = await build({
     stdin: {
@@ -170,6 +197,7 @@ try {
   // 3. Rendered HTML bridge: fonts, explorer, export, version banner
   const postRendered = async (kind, options = {}) => {
     const value = fixtures[kind];
+    await evaluate('window.__fromFrame = []');
     // The host sends one detail record per node so a card click can render in place.
     const nodes = value.nodes.map((entry) => ({
       id: entry.id, label: entry.label, role: entry.role, semanticIds: [],
@@ -187,6 +215,10 @@ try {
 
   // 3b. Fullscreen: the webview host refuses the Fullscreen API, so focus mode must fill the view
   // and always offer a way back out.
+  await send("Emulation.setDeviceMetricsOverride", { width: 2048, height: 1080, deviceScaleFactor: 1, mobile: false });
+  await sleep(200);
+  const normalLayout = await viewerLayout();
+  await evaluate('document.querySelector("[data-diagram-stage]").requestFullscreen = function(){return Promise.reject(new Error("Fullscreen is unavailable in the webview"));}');
   assert.equal(await evaluate('document.querySelector("[data-diagram-frame]").getAttribute("allow")'), "fullscreen");
   await evaluate('document.querySelector("[data-diagram-action=fullscreen]").click()');
   await sleep(200);
@@ -194,6 +226,14 @@ try {
   assert.equal(await evaluate('!document.querySelector("[data-diagram-action=exit-fullscreen]").hidden'), true, "in-view exit control");
   const focused = await evaluate('document.body.classList.contains("diagram-focus") || document.fullscreenElement !== null');
   assert.equal(focused, true, "fullscreen mode engaged");
+  const fullscreenLayout = await viewerLayout();
+  assert.equal(fullscreenLayout.present, true, "fullscreen also expands the inner renderer");
+  assert.ok(fullscreenLayout.canvasWidth > fullscreenLayout.width * 0.95, "diagram canvas fills the wide viewport");
+  assert.ok(fullscreenLayout.canvasHeight > fullscreenLayout.height * 0.8, "diagram canvas uses the available height");
+  assert.ok(fullscreenLayout.scale > normalLayout.scale, "the diagram itself grows, not only its iframe");
+  await postRendered("architecture");
+  await sleep(200);
+  assert.equal((await viewerLayout()).present, true, "reloaded diagram keeps the fullscreen layout");
   // The exit control must be legible and clickable on top of the viewer, not just present in the DOM.
   assert.equal(await evaluate('(function(){var b=document.querySelector("[data-diagram-action=exit-fullscreen]");var r=b.getBoundingClientRect();var top=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);var s=getComputedStyle(b);return top===b && r.width>0 && r.height>0 && s.color!=="rgba(0, 0, 0, 0)" && s.backgroundColor!=="rgba(0, 0, 0, 0)";})()'), true, "exit control is hit-testable");
   await writeFile(join(artifacts, "architecture-fullscreen.png"), Buffer.from((await send("Page.captureScreenshot")).data, "base64"));
@@ -201,6 +241,8 @@ try {
   await sleep(200);
   assert.equal(await evaluate('document.querySelector("[data-diagram-action=fullscreen]").textContent'), "Fullscreen", "fullscreen label restored");
   assert.equal(await evaluate('document.body.classList.contains("diagram-focus") || document.fullscreenElement !== null'), false, "fullscreen mode left");
+  assert.equal((await viewerLayout()).present, false, "ordinary reader layout restored on exit");
+  await send("Emulation.clearDeviceMetricsOverride");
 
   // 3c. Clicking a card shows node details in the page; opening a file stays an explicit choice.
   await evaluate('window.postMessage({type:"dext-diagram-node",nodeId:"web"},"*")');
