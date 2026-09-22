@@ -7,8 +7,8 @@ import { projectIntentSchema, validateProjectIntent, type ProjectIntent, type Pr
 import { validateProjectDiagram, type ProjectDiagram, type ProjectDiagramEvidence, type ProjectDiagramKind } from "./projectDiagram.js";
 import type { AgentTokenUsage } from "./types.js";
 
-export const PROJECT_AI_PROMPT_VERSION = "project-knowledge-5";
-export const PROJECT_DIAGRAM_PROMPT_VERSION = "project-diagram-3";
+export const PROJECT_AI_PROMPT_VERSION = "project-knowledge-6";
+export const PROJECT_DIAGRAM_PROMPT_VERSION = "project-diagram-4";
 
 export interface ProjectEvidenceFileInput {
   /** Workspace-relative file path. Absolute paths and traversal are never sent. */
@@ -886,6 +886,14 @@ export interface ProjectDiagramGenerationRequest {
 /** The two evidence tiers, so a model never invents a line for a file it only saw listed. */
 const EVIDENCE_TIER_GUIDANCE = "Evidence comes in two tiers. Each file listed in `files` carries an excerpt with visible lines: cite a line only inside that excerpt. `inventory` lists every candidate by path, kind, line count and declared symbols, including files with no excerpt: such a path may be cited without a line when it has no excerpt, but never invent a line for it.";
 
+/**
+ * The renderers lay these kinds out on fixed grids, so the kind guidance states the shape
+ * each one can hold rather than only its semantics. The lifecycle wording follows the
+ * renderer's own contract (`renderers/lifecycle/README.md`: one rail for the primary
+ * lifecycle, lower lanes only for interruptions, recovery and terminal exits, and terminal
+ * exits dropping from their source event) and the `object-lifecycle` recipe that ships with
+ * the diagram skill.
+ */
 function buildKindGuidance(): string {
   return [
     "Required kind semantics:",
@@ -893,7 +901,7 @@ function buildKindGuidance(): string {
     "- workflow: at least one lane, laneId on every node, explicit order on every relation, branch conditions and exception paths.",
     "- sequence: at least two participants and explicit call/return messages covering every relation.",
     "- data_flow: two to five evidenced stages and a stageId on every node.",
-    "- lifecycle: at least one initial and one terminal state plus event/condition transitions."
+    "- lifecycle: at least one initial and one terminal state plus event/condition transitions. Model it as a phase map, not a dense state-transition graph: put the start and progress states on one rail in lane 'main' in the order they occur, use a second lane for wait, retry and interruption states, and a 'terminal' lane for the outcomes. Keep it to about five progress states, three wait/retry states and three terminal states, and have each terminal be entered from the wait/retry state it follows rather than straight from the rail. Label every transition with its event, and never omit an ending; describe remaining detail in node labels instead of adding more states."
   ].join("\n");
 }
 

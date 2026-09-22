@@ -509,6 +509,38 @@ describe("Project AI generation service", () => {
       .rejects.toMatchObject({ code: "invalid_output" });
   });
 
+  it("states the lifecycle shape the renderer can lay out", async () => {
+    const entry = [{ path: "src/app.ts", line: 1 }];
+    const diagram: ProjectDiagram = {
+      schemaVersion: 1, id: "lifecycle", title: "Lifecycle", kind: "lifecycle", version: 0, updatedAt: 1,
+      nodes: [
+        { id: "a", label: "Start", role: "state", semanticIds: [], evidence: entry },
+        { id: "b", label: "Done", role: "state", semanticIds: [], evidence: entry }
+      ],
+      relations: [{ id: "t", from: "a", to: "b", kind: "transitions", evidence: entry }],
+      semantics: {
+        lanes: [{ id: "main", label: "Stages", evidence: entry }, { id: "terminal", label: "Result", evidence: entry }],
+        states: [
+          { nodeId: "a", kind: "initial", evidence: entry },
+          { nodeId: "b", kind: "terminal", outcome: "success", evidence: entry }
+        ],
+        transitions: [{ relationId: "t", event: "finish", evidence: entry }]
+      }
+    };
+    let prompt = "";
+    const provider: ProjectAiProvider = {
+      id: "mock",
+      generate: async (request) => { prompt = request.prompt; return { text: JSON.stringify({ diagram }) }; }
+    };
+    await new ProjectAiGenerationService(provider).generateDiagram(evidence("展示发布生命周期"), { requirement: "展示发布生命周期", kind: "lifecycle" });
+    // The renderer fixes its three bands and only reaches a terminal down a column no
+    // event state occupies, so the instruction has to ask for that shape explicitly.
+    expect(prompt).toContain("phase map, not a dense state-transition graph");
+    expect(prompt).toContain("one rail in lane 'main'");
+    expect(prompt).toContain("wait, retry and interruption states");
+    expect(prompt).toContain("entered from the wait/retry state it follows rather than straight from the rail");
+  });
+
   it("updates a target diagram by stable id and version while rejecting kind/id changes", async () => {
     const requirement = "更新架构图";
     const input = evidence(requirement);
