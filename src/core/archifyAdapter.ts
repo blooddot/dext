@@ -758,6 +758,17 @@ const LIFECYCLE = {
   minEdge: 32,
   /** Phase columns are 154px apart, so two 120px states still leave a 34px rail edge. */
   railWidth: 120,
+  /** Rows Dext puts on the phase rail. The renderer's own capacity is two, but a
+   * state on the second row blocks every vertical corridor out of the row above. */
+  phaseRows: 1,
+  /** Offsets of the event band's two rows, from `renderers/lifecycle/README.md`: the
+   * renderer's own 76px row pitch leaves only an 18px gap, which is below the 32px a
+   * transition needs, so the second row is pushed clear of the first. */
+  eventRowOffsets: [0, 100] as const,
+  /** The event and outcome bands share the same 154px pitch as the phase rail, and the
+   * renderer requires 10px between neighbouring states, so a band state is capped below
+   * the pitch rather than at the widest label it could otherwise carry. */
+  bandWidth: 140,
   minWidth: 118,
   maxWidth: 260,
   /** Width estimates the renderer itself applies to state labels and transition labels. */
@@ -848,6 +859,29 @@ function lifecycleSegmentHitsBox(a: number[], b: number[], box: LifecycleBox, cl
     || lifecycleSegmentsCross(a, b, [x2, y1], [x2, y2])
     || lifecycleSegmentsCross(a, b, [x2, y2], [x1, y2])
     || lifecycleSegmentsCross(a, b, [x1, y2], [x1, y1]);
+}
+
+/**
+ * The route `renderers/lifecycle/README.md` asks for when nothing else fits: an exit
+ * that leaves the rail downwards, runs along the empty gap between the phase band and
+ * the event band, around the outer margin, and back in below the outcome band.
+ *
+ * `outcomeXs` and `eventXs` are the same three coordinates, so a rail state that feeds
+ * a terminal frequently has no straight corridor left — the renderer's own candidates
+ * then fall through to a diagonal that the endpoint gate rejects. Authored `via` points
+ * are authoritative (`render-lifecycle.mjs` returns them before any preset), so Dext can
+ * state the corridor itself instead of guessing.
+ */
+function lifecycleOutsideRoute(from: LifecycleBox, to: LifecycleBox, maxBottom: number): LifecycleRoute | undefined {
+  if (from.band !== "phase" || to.band !== "outcome") return undefined;
+  const gapY = Math.round((LIFECYCLE.phase.y + LIFECYCLE.phase.height + LIFECYCLE.event.y) / 2);
+  const marginX = LIFECYCLE.width - 24;
+  const belowY = maxBottom + 22;
+  return {
+    fromSide: "bottom",
+    toSide: "bottom",
+    via: [[from.cx, gapY], [marginX, gapY], [marginX, belowY], [to.cx, belowY]]
+  };
 }
 
 function lifecycleRouteCandidates(from: LifecycleBox, to: LifecycleBox, channels: readonly number[]): LifecycleRoute[] {
@@ -999,60 +1033,125 @@ function buildLifecycle(project: ProjectDiagram, repository: ArchifyRepository |
     lanes.push({ id: "events", label: "Events" });
   }
   const ranks = rankNodes(project.nodes, transitionRelations.map((relation) => ({ from: relation.from, to: relation.to })));
-  // Main rail gets explicit columns in rank order; overflow continues in event bands.
-  const mainOrder = [...new Set(project.nodes.map((node) => ranks.get(node.id) ?? 0))].sort((left, right) => left - right);
-  const mainColumn = new Map<number, number>();
-  const overflowRanks: number[] = [];
-  mainOrder.forEach((rank) => { if (mainColumn.size < 5) mainColumn.set(rank, mainColumn.size); else overflowRanks.push(rank); });
-  const overflowIndex = new Map(overflowRanks.map((rank, index) => [rank, index]));
-  // Rows stack inside a band, so occupancy is keyed by band and column: event lanes share one
-  // band even though they carry different lane ids.
-  const occupancy = new Map<string, number>();
-  const capacity = (band: LifecycleBandName): number => {
-    const geometry = lifecycleBandGeometry(band);
-    const nextTop = band === "phase" ? LIFECYCLE.event.y : band === "outcome" ? Number.POSITIVE_INFINITY : LIFECYCLE.outcome.y;
-    if (!Number.isFinite(nextTop)) return Number.POSITIVE_INFINITY;
-    return Math.max(1, Math.floor((nextTop - 10 - geometry.y - geometry.height) / LIFECYCLE.rowGap) + 1);
-  };
   const terminalNodes = project.nodes.filter((node) => stateByNode.get(node.id)?.kind === "terminal");
+  const stateKind = (node: ProjectDiagramNode): "initial" | "terminal" | "normal" => stateByNode.get(node.id)?.kind ?? "normal";
+  const nodeStateType = (node: ProjectDiagramNode): string => stateType(node, stateKind(node), stateByNode.get(node.id)?.outcome);
+  // `renderers/lifecycle/README.md` states the contract Dext has to place into: the main
+  // rail carries the start and active states left to right, the lower lanes carry
+  // "interruptions, recovery, and terminal exits", and "terminal exits should drop
+  // vertically from their source event whenever possible". The bands are fixed, so the
+  // allocation below follows that shape rather than placing by index.
+  const railOrder = [...project.nodes]
+    .filter((node) => stateKind(node) !== "terminal")
+    .sort((left, right) => (ranks.get(left.id) ?? 0) - (ranks.get(right.id) ?? 0)
+      || project.nodes.indexOf(left) - project.nodes.indexOf(right));
+  const phaseColumnByRank = new Map<number, number>();
+  for (const rank of [...new Set(railOrder
+    .filter((node) => nodeStateType(node) !== "waiting")
+    .map((node) => ranks.get(node.id) ?? 0))].sort((left, right) => left - right).slice(0, LIFECYCLE.phase.xs.length)) {
+    phaseColumnByRank.set(rank, phaseColumnByRank.size);
+  }
+  const railRow = new Map<number, number>();
+  const slotByNode = new Map<string, { lane: string; col: number; yOffset: number }>();
+  const eventQueue: ProjectDiagramNode[] = [];
+  for (const node of railOrder) {
+    const column = nodeStateType(node) === "waiting" ? undefined : phaseColumnByRank.get(ranks.get(node.id) ?? 0);
+    if (column !== undefined) {
+      const row = railRow.get(column) ?? 0;
+      if (row < LIFECYCLE.phaseRows) {
+        railRow.set(column, row + 1);
+        slotByNode.set(node.id, { lane: "main", col: column, yOffset: row * LIFECYCLE.rowGap });
+        continue;
+      }
+    }
+    eventQueue.push(node);
+  }
+  // A terminal is entered straight down from the state above it, which only works when
+  // that state is the *only* one in its column: `outcomeXs` and `eventXs` are the same
+  // three coordinates, so any other event state in that column sits across the drop.
+  // States that exit into a terminal therefore take a column of their own in the event
+  // band's first row, which is also the row tall enough to leave from.
+  const terminalPredecessors = new Map<string, string[]>(terminalNodes.map((node) => [node.id, []]));
+  for (const relation of transitionRelations) terminalPredecessors.get(relation.to)?.push(relation.from);
+  const exitsIntoTerminal = new Set(eventQueue
+    .filter((node) => [...terminalPredecessors.values()].some((list) => list.includes(node.id)))
+    .map((node) => node.id));
+  const eventPlacement = new Map<string, { col: number; yOffset: number }>();
+  const sharedSlots: Array<{ col: number; yOffset: number }> = [];
+  for (const node of eventQueue.filter((entry) => exitsIntoTerminal.has(entry.id))) {
+    eventPlacement.set(node.id, { col: eventPlacement.size, yOffset: 0 });
+  }
+  const reservedColumns = eventPlacement.size;
+  for (let col = reservedColumns; col < LIFECYCLE.event.xs.length; col += 1) {
+    for (const yOffset of LIFECYCLE.eventRowOffsets) sharedSlots.push({ col, yOffset });
+  }
+  // Last resort: the second row of a reserved column, which does cross that column's
+  // terminal exit. Better than refusing a diagram whose states do fit the bands.
+  for (let col = 0; col < reservedColumns; col += 1) {
+    for (const yOffset of LIFECYCLE.eventRowOffsets.slice(1)) sharedSlots.push({ col, yOffset });
+  }
+  for (const node of eventQueue.filter((entry) => !exitsIntoTerminal.has(entry.id))) {
+    const slot = sharedSlots.shift();
+    if (!slot) {
+      throw new Error("Lifecycle diagram has more states than the fixed phase and event bands can hold. Split it into two lifecycle diagrams.");
+    }
+    eventPlacement.set(node.id, slot);
+  }
+  for (const [nodeId, slot] of eventPlacement) slotByNode.set(nodeId, { lane: eventLaneIds[0] ?? "main", ...slot });
+  const eventColumnCounts = new Map<number, number>();
+  const loneEventColumn = new Map<string, number>();
+  for (const [nodeId, slot] of eventPlacement) {
+    eventColumnCounts.set(slot.col, (eventColumnCounts.get(slot.col) ?? 0) + 1);
+    if (slot.yOffset === 0) loneEventColumn.set(nodeId, slot.col);
+  }
+  // Terminals: below the event state that exits into them when there is one (a straight
+  // drop), otherwise in a column no event state occupies, otherwise wherever is left.
+  const terminalColumn = new Map<string, number>();
+  const terminalRow = new Map<string, number>();
+  const takenTerminalColumns = new Set<number>();
+  const terminalRowCount = new Map<number, number>();
+  for (const node of terminalNodes) {
+    const eventSource = (terminalPredecessors.get(node.id) ?? [])
+      .map((id) => loneEventColumn.get(id))
+      .find((col) => col !== undefined && eventColumnCounts.get(col) === 1);
+    const column = eventSource
+      ?? [0, 1, 2].find((col) => !eventColumnCounts.has(col) && !takenTerminalColumns.has(col))
+      ?? [0, 1, 2].find((col) => !takenTerminalColumns.has(col))
+      ?? terminalColumn.size % LIFECYCLE.outcome.xs.length;
+    takenTerminalColumns.add(column);
+    terminalColumn.set(node.id, column);
+    const row = terminalRowCount.get(column) ?? 0;
+    terminalRowCount.set(column, row + 1);
+    terminalRow.set(node.id, row);
+  }
   const boxes: LifecycleBox[] = [];
   const states = project.nodes.map((node) => {
     const id = mapNode(mapping, node, usedNodes);
     const definition = stateByNode.get(node.id);
     const kind = definition?.kind ?? "normal";
-    const rank = ranks.get(node.id) ?? 0;
-    let lane = "main";
-    let col = 0;
+    let lane: string;
+    let col: number;
+    let yOffset: number;
     if (kind === "terminal") {
       lane = hasTerminal ? "terminal" : "main";
-      const terminalIndex = terminalNodes.findIndex((entry) => entry.id === node.id);
-      col = Math.max(0, terminalIndex) % LIFECYCLE.outcome.xs.length;
-    } else if (kind === "initial") {
-      lane = "main";
-      col = mainColumn.get(rank) ?? 0;
-    } else if (overflowIndex.has(rank)) {
-      const index = overflowIndex.get(rank)!;
-      lane = eventLaneIds[Math.floor(index / LIFECYCLE.event.xs.length) % Math.max(1, eventLaneIds.length)] ?? "main";
-      col = index % LIFECYCLE.event.xs.length;
+      col = terminalColumn.get(node.id) ?? 0;
+      // A column holds one terminal; only a fourth outcome reuses a column, and its
+      // deeper row is then the one nothing else sits below.
+      yOffset = (terminalRow.get(node.id) ?? 0) * LIFECYCLE.rowGap;
     } else {
-      lane = "main";
-      col = mainColumn.get(rank) ?? 0;
+      const slot = slotByNode.get(node.id)!;
+      lane = slot.lane;
+      col = slot.col;
+      yOffset = slot.yOffset;
     }
     const band = lifecycleBandFor(lane);
     const geometry = lifecycleBandGeometry(band);
     if (col >= geometry.xs.length) col = geometry.xs.length - 1;
-    const key = `${band}:${col}`;
-    const row = occupancy.get(key) ?? 0;
-    if (row >= capacity(band)) {
-      throw new Error(`Lifecycle diagram has more states than the fixed phase and event bands can hold around '${node.id}'.`);
-    }
-    occupancy.set(key, row + 1);
     const cx = geometry.xs[col]!;
     const envelope = Math.min(cx - LIFECYCLE.margin, LIFECYCLE.width - LIFECYCLE.margin - cx);
-    const cap = band === "phase" ? Math.min(LIFECYCLE.railWidth, envelope * 2) : Math.min(LIFECYCLE.maxWidth, envelope * 2);
+    const cap = band === "phase" ? Math.min(LIFECYCLE.railWidth, envelope * 2) : Math.min(LIFECYCLE.bandWidth, envelope * 2);
     const desired = Math.max(LIFECYCLE.minWidth, Math.round(textUnits(node.label) * LIFECYCLE.stateUnit) + 12);
     const width = Math.max(1, Math.min(desired, cap));
-    const yOffset = row * LIFECYCLE.rowGap;
     const box: LifecycleBox = { id, band, col, x: cx - width / 2, y: geometry.y + yOffset, width, height: geometry.height, cx, cy: geometry.y + yOffset + geometry.height / 2 };
     boxes.push(box);
     return {
@@ -1077,6 +1176,10 @@ function buildLifecycle(project: ProjectDiagram, repository: ArchifyRepository |
     const to = boxById.get(mapping.ids[relation.to] ?? "");
     if (!from || !to) continue;
     const candidates = lifecycleRouteCandidates(from, to, channels);
+    // The authored outer corridor is tried last: it is always clear of states, but a
+    // shorter route from the renderer's own candidates reads better when one fits.
+    const outside = lifecycleOutsideRoute(from, to, maxBottom);
+    if (outside) candidates.push(outside);
     let best: { route: LifecycleRoute; points: number[][]; score: number } | undefined;
     for (const [index, route] of candidates.entries()) {
       const points = lifecycleRoutePoints(from, to, route);
@@ -1086,9 +1189,10 @@ function buildLifecycle(project: ProjectDiagram, repository: ArchifyRepository |
       if (!best || score < best.score) best = { route, points, score };
     }
     if (!best) {
-      // Every candidate crossed another state. Keep the most specific route so the bounded
-      // repair loop still sees a concrete geometry to adjust instead of an empty transition.
-      const route = candidates[candidates.length - 1]!;
+      // Every candidate crossed another state. Prefer the authored outer corridor when
+      // there is one — it honours the endpoint sides — so the bounded repair loop sees
+      // concrete geometry instead of the renderer's diagonal last resort.
+      const route = outside ?? candidates[candidates.length - 1]!;
       best = { route, points: lifecycleRoutePoints(from, to, route), score: Number.MAX_SAFE_INTEGER };
     }
     const channel = lifecycleRouteChannel(best.route);
@@ -1313,25 +1417,48 @@ function repairIr(input: Record<string, unknown>, diagnostics: readonly string[]
         return next;
       });
     }
-    if (text.includes("less than 10px") || text.includes("overlap")) {
-      ir["states"] = states.map((state) => ({ ...state, ...(typeof state["yOffset"] === "number" ? { yOffset: Number(state["yOffset"]) + attempt * 36 } : {}) }));
+    // States in one band are validated to be at least 10px apart, and the event band's
+    // columns are 154px apart, so a state wider than that overlaps its neighbour.
+    if (text.includes("less than 10px")) {
+      ir["states"] = states.map((state) => ({
+        ...state,
+        width: Math.max(48, Math.min(Number(state["width"] ?? LIFECYCLE.minWidth), LIFECYCLE.bandWidth))
+      }));
     }
     if (text.includes("too short") || text.includes("endpoint-side") || text.includes("edge-through-node")) {
-      // Fan-out exits need separate corridors; one shared channel is what merges them.
-      const deepest = states.reduce((bottom, state) => {
-        const yOffset = typeof state["yOffset"] === "number" ? Number(state["yOffset"]) : 0;
-        return Math.max(bottom, LIFECYCLE.outcome.y + yOffset + LIFECYCLE.outcome.height);
-      }, LIFECYCLE.outcome.y + LIFECYCLE.outcome.height);
-      ir["transitions"] = transitions.map((transition, index) => ({
-        ...transition,
-        route: "bottom-channel",
-        channelY: deepest + 14 + index * 32 + attempt * 24
-      }));
+      // Exits that cannot find a corridor are routed by the authored outer channel rather
+      // than by a shared bottom channel: a `channelY` inside the outcome band crosses the
+      // states it is meant to avoid.
+      ir["transitions"] = transitions.map((transition) => {
+        const next = { ...transition };
+        delete next["channelY"];
+        delete next["channelX"];
+        return next;
+      });
     }
     meta["viewBox"] = [viewWidth, Math.min(1600, Math.max(660, viewHeight + attempt * 120))];
     ir["meta"] = meta;
   }
   return ir;
+}
+
+/** The bounded repair loop only rewrites geometry Dext authored, so when a diagram
+ * still fails the reason is usually that it does not fit the renderer's fixed grid.
+ * Naming that in the error is what tells the reader whether to shrink the diagram or
+ * report a bug: `renderers/lifecycle/README.md` calls the lifecycle a phase map, and
+ * its three bands hold five phases, three event states, and the terminal exits. */
+function layoutBudgetHint(diagramType: string, diagnostics: readonly string[]): string {
+  if (diagramType !== "lifecycle" || !diagnostics.length) return "";
+  return " The lifecycle renderer draws a fixed three-band grid (five phase columns, three event columns,"
+    + " and the terminal exits), and a terminal can only be reached down a column no event state occupies."
+    + " Reduce the number of states or transitions, or split the diagram in two.";
+}
+
+function layoutError(diagramType: string, diagnostics: readonly string[]): ArchifyLayoutError {
+  return new ArchifyLayoutError(
+    `Archify could not lay out this diagram within the bounded repair budget.${layoutBudgetHint(diagramType, diagnostics)}`,
+    diagnostics
+  );
 }
 
 export class ArchifyAdapter implements ProjectDiagramAdapter {
@@ -1521,7 +1648,7 @@ export class ArchifyAdapter implements ProjectDiagramAdapter {
         if (deliverVerdict === "failed-semantic") throw new ArchifyLayoutError("Archify rejected the diagram semantics.", lines);
         ir = repairIr(ir, lines, attempt + 1);
       }
-      throw new ArchifyLayoutError("Archify could not lay out this diagram within the bounded repair budget.", diagnostics);
+      throw layoutError(String(ir["diagram_type"]), diagnostics);
     } finally {
       options.signal?.removeEventListener("abort", cancel);
       if (this.active.get(operationId) === controller) this.active.delete(operationId);
