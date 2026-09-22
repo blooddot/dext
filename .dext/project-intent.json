@@ -1,0 +1,3231 @@
+{
+  "schemaVersion": 1,
+  "brief": {
+    "name": "Dext",
+    "summary": "Dext is a VS Code extension that runs a readable, Python-shaped Dext document as a typed program: the composer document is compiled into a workflow whose steps call built-in APIs or external coding-agent CLIs (codex, claude, DeepSeek Harness), and the structured results, diffs, todo progress, traces and project knowledge are rendered back inside VS Code webviews.",
+    "goals": [
+      "Let a developer author and run an AI task as a readable Dext document instead of free-form chat.",
+      "Execute Dext documents as typed workflows with deterministic built-ins, patches, plans and checkpoints.",
+      "Route every agent call to the configured provider and keep it observable, cancellable and bounded by timeouts.",
+      "Treat provider output as untrusted text and enforce a declared result contract before anything is applied.",
+      "Persist conversations, attachments, plans and project knowledge so a turn can be replayed, reviewed and accepted.",
+      "Generate and maintain a project knowledge model (intent, capabilities, contexts, flows, terms, constraints, decisions) together with grounded diagrams."
+    ],
+    "runtime": [
+      "VS Code extension host (Node.js)",
+      "VS Code webview sandbox (browser, postMessage RPC only)",
+      "Monaco editor instance inside the webview",
+      "Child processes for the codex and claude CLIs",
+      "DeepSeek Harness reached over its ACP-style transport",
+      "Workspace files under .dext plus VS Code globalStorage"
+    ],
+    "audiences": [
+      "VS Code extension developers working on Dext",
+      "Developers authoring Dext documents, workflows and APIs",
+      "Maintainers reviewing the project knowledge model and its diagrams"
+    ],
+    "origin": "inferred",
+    "review": "draft",
+    "freshness": "current",
+    "confidence": 0.78,
+    "evidence": [
+      {
+        "path": "src/extension.ts",
+        "symbol": "activate",
+        "contentHash": "2f4eaa893987a74560066d1a513b47d0b6fced6eb7e8da99bc77bdb0f7f5b226",
+        "line": 63,
+        "note": "Extension activation entry point; the rest of the file registers providers, panels and commands."
+      },
+      {
+        "path": "src/application.ts",
+        "symbol": "DextApplication",
+        "contentHash": "be7ce6e090a3513a715b0495d1cc32904188782bafb3783a9fbfef51168d2308",
+        "note": "Host-side application that wires the registry, runtime, agent runner and stores together."
+      },
+      {
+        "path": "src/core/builtins.ts",
+        "contentHash": "c029914ddb3903da650f360370b9bafa34e28356357dc04c28976dbb7f737dfb",
+        "line": 7,
+        "note": "METHODS declares the built-in ask, plan, agent and template callables with typed fields."
+      },
+      {
+        "path": "src/core/agentRouter.ts",
+        "contentHash": "4b9fdddcfc2dac4630dc8ab10d4fc12c50510a8481879a6aab3b455d1b1956f8",
+        "line": 3,
+        "note": "DefaultAgentRunner dispatches one request to the CLI runner or the Harness runner."
+      },
+      {
+        "path": "src/webview/main.ts",
+        "symbol": "VsCodeApi",
+        "contentHash": "6f368d44152ed95b1a64a023a352985d9a19f0924abad7d1cf38283ff6037cd5",
+        "note": "The webview can only reach the extension host through postMessage."
+      },
+      {
+        "path": "src/core/archifyAdapter.ts",
+        "contentHash": "cd02066da0a2a92fa278cafd8413977349d900096f577463f7a616607ce0b146",
+        "line": 22,
+        "note": "The diagram adapter declares the five diagram kinds dext supports."
+      }
+    ],
+    "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+    "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+    "generatedAt": 1790078119161,
+    "promptVersion": "project-knowledge-5",
+    "schemaVersion": "2"
+  },
+  "capabilities": [
+    {
+      "id": "cap.composer-authoring",
+      "canonicalName": "composer-authoring",
+      "displayName": "Dext Composer Authoring",
+      "description": "The webview composer lets a developer write a Dext document in a Monaco editor with Dext token theming, inline @ references rendered as atomic chips, clipboard-context paste, file search and file drops.",
+      "outcomes": [
+        "A readable Dext document that can be submitted as a run request.",
+        "Inline references (@file, code refs, dropped paths) that survive editing and removal."
+      ],
+      "contextIds": [
+        "ctx.webview-ui",
+        "ctx.attachments-storage"
+      ],
+      "moduleIds": [
+        "src/webview/codeEditor",
+        "src/webview/inputInsertion",
+        "src/webview/codeReferencePaste",
+        "src/webview/fileReferenceChip",
+        "src/webview/fileReferenceDecorations",
+        "src/webview/fileDrop",
+        "src/webview/fileDropClient",
+        "src/webview/fileSearchClient",
+        "src/webview/clipboardClient",
+        "src/webview/monacoReferences",
+        "src/dextSemanticTokens",
+        "src/dextTokenTheme"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.82,
+      "evidence": [
+        {
+          "path": "src/webview/codeEditor.ts",
+          "symbol": "DextCodeEditor",
+          "contentHash": "5140f9b4c8b35fbafa6edfcee22db9600d24e361d89d9472b969c6258979737c",
+          "note": "Composer editor with a public Dext document contract and a private projection of reference characters."
+        },
+        {
+          "path": "src/webview/codeReferencePaste.ts",
+          "symbol": "codeReferencePasteText",
+          "contentHash": "5e76b59a658c087bfaa9c0b4fd19c67475d8721169e1f0c6edaeb897a6416f0c",
+          "note": "Paste logic that keeps reference payloads readable inside Dext call arguments."
+        },
+        {
+          "path": "src/webview/fileDrop.ts",
+          "symbol": "droppedFilePaths",
+          "contentHash": "776907bf7c25f955e2c12160f7dba67403b68f4d955c59330565fadca8874b78",
+          "note": "Dropped VS Code URIs are converted to workspace paths before they become references."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "cap.workflow-execution",
+      "canonicalName": "workflow-execution",
+      "displayName": "Dext Workflow Execution",
+      "description": "A Dext document is compiled into a workflow of steps and executed by the workflow runtime over a registry of built-in, custom and MCP-backed callables.",
+      "outcomes": [
+        "Deterministic built-in steps plus agent-backed steps executed in order with checkpoints.",
+        "A recorded workflow that can be replayed for a selected API."
+      ],
+      "contextIds": [
+        "ctx.core-execution"
+      ],
+      "moduleIds": [
+        "src/core/workflow",
+        "src/core/workflowRuntime",
+        "src/core/workflowRecorder",
+        "src/core/workflowCheckpoint",
+        "src/core/registry",
+        "src/core/runtime",
+        "src/core/builtins",
+        "src/core/builtinApiDefinitions"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.8,
+      "evidence": [
+        {
+          "path": "src/core/builtins.ts",
+          "contentHash": "c029914ddb3903da650f360370b9bafa34e28356357dc04c28976dbb7f737dfb",
+          "line": 7,
+          "note": "Built-in callables declare kind, input fields, output kind and a deterministic handler."
+        },
+        {
+          "path": "src/application.ts",
+          "contentHash": "be7ce6e090a3513a715b0495d1cc32904188782bafb3783a9fbfef51168d2308",
+          "line": 17,
+          "note": "The host wires the workflow runtime and the compile entry point from the core."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "cap.agent-orchestration",
+      "canonicalName": "agent-orchestration",
+      "displayName": "Agent Backend Orchestration",
+      "description": "One request is routed by the selected agent profile provider to either the codex/claude CLI runner or the DeepSeek Harness runner, with streaming events, todo tracking, tool-activity tracking and idle/total timeouts.",
+      "outcomes": [
+        "A single typed entry point for agent runs, conversations and provider-native structured output.",
+        "A live turn that pauses idle detection while tools run and aborts on limits or cancellation."
+      ],
+      "contextIds": [
+        "ctx.agent-backends"
+      ],
+      "moduleIds": [
+        "src/core/agentRunner",
+        "src/core/agentRouter",
+        "src/core/agentTimeout",
+        "src/core/agentTodoTracking",
+        "src/core/agentToolActivity",
+        "src/core/deepseekHarnessRunner",
+        "src/core/deepseekHarnessTransport",
+        "src/core/harnessBridge",
+        "src/core/codexConversationRunner",
+        "src/core/codexConversationConnection",
+        "src/core/codexConversationEvents"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.85,
+      "evidence": [
+        {
+          "path": "src/core/agentRouter.ts",
+          "contentHash": "4b9fdddcfc2dac4630dc8ab10d4fc12c50510a8481879a6aab3b455d1b1956f8",
+          "line": 15,
+          "note": "Private runner() selects the backend and rejects unknown providers."
+        },
+        {
+          "path": "src/core/agentTimeout.ts",
+          "contentHash": "65c7ce85699c29fbedd103d8d3b06c3afdcf1c8348afc5927eac6c09cda4512f",
+          "line": 15,
+          "note": "agentTimeout implements a total limit plus an idle interval that tool activity pauses."
+        },
+        {
+          "path": "src/core/agentTodoTracking.ts",
+          "symbol": "normalizeAgentTodos",
+          "contentHash": "76c79542fd78eeff84bc16ba4c02cc461640c6485fdbd79d6e0dbbce2ac550c4",
+          "note": "Incomplete todo snapshots are rejected instead of deleting earlier tasks."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "cap.result-contract",
+      "canonicalName": "result-contract",
+      "displayName": "Agent Result Contract",
+      "description": "Agent text is parsed at a boundary into candidate objects, validated against the declared result kind, repaired with a bounded retry and only then presented, asserted, applied or recorded.",
+      "outcomes": [
+        "A Dext result value or a repaired replacement instead of raw provider prose.",
+        "Deterministic hard/soft assertions before a patch is applied and a diff presentation for review."
+      ],
+      "contextIds": [
+        "ctx.result-review"
+      ],
+      "moduleIds": [
+        "src/core/resultBoundary",
+        "src/core/resultSerialization",
+        "src/core/resultRepair",
+        "src/core/agentAssertions",
+        "src/core/schemas",
+        "src/core/axAdapter",
+        "src/diffPresentation",
+        "src/agentMessagePresentation"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.8,
+      "evidence": [
+        {
+          "path": "src/core/agentAssertions.ts",
+          "symbol": "AgentAssertionResult",
+          "contentHash": "8a2dc2cd7b543b20e09d2e8848823e2abae8e72991d0a1c30316a336e6fa7903",
+          "note": "Hard violations are deterministic and must not be retried by the repair predictor; soft ones ask for a smaller edit."
+        },
+        {
+          "path": "src/agentMessagePresentation.ts",
+          "symbol": "presentAgentMessage",
+          "contentHash": "99dd7b221db6ce018e10f725052f03bfa6fd7fec0f2741f0c3bb1a68c96e528b",
+          "note": "A structured dext-result envelope is unwrapped for presentation, otherwise raw text is shown."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "cap.project-knowledge-model",
+      "canonicalName": "project-knowledge-model",
+      "displayName": "Project Knowledge Model",
+      "description": "Workspace evidence is collected under limits, used to generate project intent objects (capabilities, contexts, flows, terms, constraints, decisions), then reviewed, decided, validated against the workspace and persisted.",
+      "outcomes": [
+        "A reviewable set of knowledge suggestions with explicit accept/edit/reject decisions.",
+        "Knowledge objects whose facts are validated against the current workspace before they are trusted."
+      ],
+      "contextIds": [
+        "ctx.project-knowledge"
+      ],
+      "moduleIds": [
+        "src/core/projectAiGeneration",
+        "src/core/projectIntent",
+        "src/core/projectKnowledge",
+        "src/core/projectKnowledgeReview",
+        "src/core/projectKnowledgeValidation",
+        "src/core/projectSemanticReview",
+        "src/core/projectArchitecture",
+        "src/core/projectContext",
+        "src/projectStore",
+        "src/projectService",
+        "src/projectAiLimits",
+        "src/vscodeProjectHost"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.72,
+      "evidence": [
+        {
+          "path": "src/core/projectIntent.ts",
+          "symbol": "ProjectCapability",
+          "note": "The knowledge model has first-class capability and architecture-context shapes."
+        },
+        {
+          "path": "src/core/projectKnowledgeReview.ts",
+          "symbol": "KnowledgeSuggestion",
+          "note": "Suggestions carry decisions and a safety check against accepted objects."
+        },
+        {
+          "path": "src/core/projectKnowledgeValidation.ts",
+          "symbol": "validateProjectObjectFacts",
+          "note": "Facts of project objects are validated through a host port."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "cap.diagram-generation",
+      "canonicalName": "diagram-generation",
+      "displayName": "Project Diagram Generation",
+      "description": "Project diagram documents of the five supported kinds are mapped through an adapter registry to an external renderer, bounded by layout repairs, and their artifacts and history are kept for the viewer.",
+      "outcomes": [
+        "Rendered architecture, workflow, sequence, data-flow and lifecycle views with evidence receipts.",
+        "A diagram history with entity, evidence and layout deltas."
+      ],
+      "contextIds": [
+        "ctx.project-knowledge"
+      ],
+      "moduleIds": [
+        "src/core/projectDiagram",
+        "src/core/projectDiagramAdapter",
+        "src/core/projectDiagramRegistry",
+        "src/core/projectDiagramProcess",
+        "src/core/projectDiagramHistory",
+        "src/core/archifyAdapter",
+        "src/projectDiagramViewer",
+        "src/webview/projectArchitectureView",
+        "src/webview/markdownDiagrams"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.75,
+      "evidence": [
+        {
+          "path": "src/core/archifyAdapter.ts",
+          "contentHash": "cd02066da0a2a92fa278cafd8413977349d900096f577463f7a616607ce0b146",
+          "line": 22,
+          "note": "KINDS fixes the supported vocabulary: architecture, workflow, sequence, data_flow, lifecycle."
+        },
+        {
+          "path": "src/core/archifyAdapter.ts",
+          "contentHash": "cd02066da0a2a92fa278cafd8413977349d900096f577463f7a616607ce0b146",
+          "line": 26,
+          "note": "MAX_LAYOUT_REPAIRS bounds how often a failed layout is retried."
+        },
+        {
+          "path": "src/core/projectDiagramRegistry.ts",
+          "symbol": "ProjectDiagramAdapterRegistry",
+          "note": "Adapters are registered per diagram kind and report engine information."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "cap.conversation-history",
+      "canonicalName": "conversation-history",
+      "displayName": "Conversation History and Restore",
+      "description": "Turns and their responses are serialized into bounded history records, ordered and filtered by user preferences, replayed through the same guard as live traces, and reopened through stable editor tab keys.",
+      "outcomes": [
+        "A conversation list with pinning, favourites, titles and sorting that survives reloads.",
+        "A history renderer that shows the same turn sections as the live sidebar."
+      ],
+      "contextIds": [
+        "ctx.history-sessions",
+        "ctx.extension-host"
+      ],
+      "moduleIds": [
+        "src/historyStore",
+        "src/historyRender",
+        "src/historyResponse",
+        "src/historyEditorProvider",
+        "src/conversationPreferences",
+        "src/core/agentTraceReplay",
+        "src/turnPresentation",
+        "src/turnComponents"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.78,
+      "evidence": [
+        {
+          "path": "src/core/agentTraceReplay.ts",
+          "symbol": "prepareHistoryTrace",
+          "contentHash": "c12ef6515e14ad64ae116d9400abaff760d53be42d307b4df052f570df6029df",
+          "note": "Persisted traces are replayed through the live plan-document guard before rendering."
+        },
+        {
+          "path": "src/conversationPreferences.ts",
+          "symbol": "orderHistorySessions",
+          "contentHash": "68a9546ad33538f074f904a76c147ac3e2738442f861c3ca9043f0d5808ced75",
+          "note": "Favourites, archived and sort order decide what history shows."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "cap.resource-catalog",
+      "canonicalName": "resource-catalog",
+      "displayName": "API and Resource Catalog",
+      "description": "Built-in APIs, custom Dext API files, MCP servers and tools, skills and rules are discovered, registered, validated with diagnostics, and browsed in editor tabs with completion, hover and navigation.",
+      "outcomes": [
+        "A checked API surface with positioned diagnostics for signatures, config and rules.",
+        "A navigable, read-only generated reference for built-in and MCP callables."
+      ],
+      "contextIds": [
+        "ctx.resources-api"
+      ],
+      "moduleIds": [
+        "src/core/apiCheck",
+        "src/core/apiDiagnostic",
+        "src/core/apiRuleDiagnostics",
+        "src/core/apiNavigation",
+        "src/core/builtinMemberNavigation",
+        "src/core/customApi",
+        "src/core/mcpRegistry",
+        "src/core/mcpManifest",
+        "src/core/mcpSecrets",
+        "src/core/skillCatalog",
+        "src/core/ignoreRules",
+        "src/core/languageService",
+        "src/vscodeApiDefinitions",
+        "src/vscodeApiDiagnostics"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.78,
+      "evidence": [
+        {
+          "path": "src/core/apiDiagnostic.ts",
+          "symbol": "formatDiagnostic",
+          "contentHash": "7bce0e5574f6dddc1bae08b5b9aa560a871042645d3d91a03a36d500d0da09cd",
+          "note": "One plain-text rendering keeps a position for Problems, Output and resource validation."
+        },
+        {
+          "path": "src/core/builtinApiDefinitions.ts",
+          "symbol": "callableApiDocument",
+          "contentHash": "7523d1183ae2463e3b08717335d06f85f7678ff706ea61786e869664aaddc640",
+          "note": "The same reference generator serves built-ins and registered MCP tools."
+        },
+        {
+          "path": "src/core/apiCheck.ts",
+          "symbol": "checkApis",
+          "contentHash": "89762fd77b0dec2f915f4e31f3a304489afe48e98b2a18667107d1d2e37c349a",
+          "note": "Workspace, global storage and configured API directories are all scanned."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "cap.inline-completion",
+      "canonicalName": "inline-completion",
+      "displayName": "Inline Completion",
+      "description": "A completion host gathers editor context, calls the configured completion backend, scores candidates, and feeds accepted or rejected outcomes back into a persistent memory used for evaluation.",
+      "outcomes": [
+        "Context-aware single-line or multi-line completions inside the Dext document.",
+        "A measurable completion quality loop from feedback and evaluation cases."
+      ],
+      "contextIds": [
+        "ctx.completion"
+      ],
+      "moduleIds": [
+        "src/core/completionProvider",
+        "src/core/completionBackend",
+        "src/core/completionContext",
+        "src/core/completionCandidate",
+        "src/core/completionMemory",
+        "src/core/completionFeedback",
+        "src/core/completionEvaluation",
+        "src/core/completionAdaptation",
+        "src/core/completionProfiles",
+        "src/vscodeCompletionHost",
+        "src/vscodeCompletionContext",
+        "src/vscodeCompletionEvaluation",
+        "src/vscodeCompletionSetup"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.68,
+      "evidence": [
+        {
+          "path": "src/extension.ts",
+          "contentHash": "2f4eaa893987a74560066d1a513b47d0b6fced6eb7e8da99bc77bdb0f7f5b226",
+          "line": 15,
+          "note": "The completion host and its context are built during extension activation."
+        },
+        {
+          "path": "src/core/completionProvider.ts",
+          "symbol": "CompletionSettings",
+          "note": "Completion settings and API keys are normalized and stored by the provider module."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "cap.ui-interaction",
+      "canonicalName": "ui-interaction",
+      "displayName": "Agent Questions and UI Interactions",
+      "description": "Agent questions and host UI requests share one form vocabulary: a broker registers a pending request, the webview renders a card or modal dialog, and the answer is adapted back into typed agent input answers.",
+      "outcomes": [
+        "A pending question that a developer can answer, cancel or leave waiting without reviving stale requests.",
+        "One control set for both native agent questions and API-driven UI forms."
+      ],
+      "contextIds": [
+        "ctx.webview-ui",
+        "ctx.result-review"
+      ],
+      "moduleIds": [
+        "src/agentInputBroker",
+        "src/uiInteractionBroker",
+        "src/uiInteractionPresentation",
+        "src/webview/agentInputView",
+        "src/webview/interactionForm",
+        "src/webview/interactionDialog",
+        "src/core/uiForm",
+        "src/core/elicitationForm",
+        "src/core/harnessQuestions"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.8,
+      "evidence": [
+        {
+          "path": "src/agentInputBroker.ts",
+          "symbol": "AgentInputBroker",
+          "contentHash": "3fc819876b7594940cd41445ebd6a75bde8d13fd0655b2232e53bd01489a2c38",
+          "note": "Answers are validated against the original questions before they reach the broker."
+        },
+        {
+          "path": "src/webview/agentInputView.ts",
+          "symbol": "AgentInputView",
+          "contentHash": "2410df3f811bb1aab986ced484e8b02ab0568a712c9e459618d753689e225823",
+          "note": "Replayed or delayed waiting events cannot revive a terminal request card."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "cap.editor-tabs",
+      "canonicalName": "editor-tabs",
+      "displayName": "Editor Tab Identity and Restore",
+      "description": "Project, API, Global Resources and History pages are opened in webview editor tabs identified by a stable key derived from the page kind and an optional resource id, with one panel per key and a deduplicated restore path.",
+      "outcomes": [
+        "Reopening the same target reveals the existing tab instead of creating a duplicate.",
+        "A serializer restore and a proactive restore can race without double-opening a page."
+      ],
+      "contextIds": [
+        "ctx.extension-host"
+      ],
+      "moduleIds": [
+        "src/editorTabTypes",
+        "src/editorTabState",
+        "src/editorTabManager",
+        "src/editorTabSerializer",
+        "src/editorTabHtml",
+        "src/projectEditorProvider",
+        "src/apiEditorProvider",
+        "src/globalResourcesEditorProvider",
+        "src/historyEditorProvider",
+        "src/resourceBrowserProvider"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.85,
+      "evidence": [
+        {
+          "path": "src/editorTabTypes.ts",
+          "contentHash": "9bef91ee5c92b776c4667d944562bd8a4c3ff8af7d300e04ab92c1621a6e12fa",
+          "line": 7,
+          "note": "EditorTabKind names the four tab families that share the key scheme."
+        },
+        {
+          "path": "src/editorTabManager.ts",
+          "contentHash": "a2af4c437bccc5ab9ca1f7649f0e7ea077ea3caf8e2249e15d3acfbb394b541a",
+          "line": 42,
+          "note": "The manager owns one webview panel per stable key and reveals instead of duplicating."
+        },
+        {
+          "path": "src/editorTabSerializer.ts",
+          "symbol": "EditorTabRestorer",
+          "contentHash": "2590c699385f9890cb2d54c36cea39b2488233e1c350dbff93f235da78ce48f0",
+          "note": "Restore returns opened/reused/skipped/invalid and claims keys to avoid double opens."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    }
+  ],
+  "contexts": [
+    {
+      "id": "ctx.extension-host",
+      "canonicalName": "extension-host",
+      "displayName": "VS Code Extension Host",
+      "purpose": "Boot Dext inside VS Code and adapt every host-specific capability (workspace, webviews, storage, secrets, terminals, patches, theming) behind ports that the hostless core can call.",
+      "responsibilities": [
+        "Activate and dispose the extension together with its providers, panels and commands.",
+        "Own the sidebar conversation provider and the Project, API, Global Resources and History editor tabs.",
+        "Translate webview requests into core calls and core events into webview responses.",
+        "Supply workspace files, ignore rules, context snapshots, patch application, terminals and token themes."
+      ],
+      "moduleIds": [
+        "src/extension",
+        "src/application",
+        "src/sidebarProvider",
+        "src/editorTabManager",
+        "src/editorTabSerializer",
+        "src/editorTabState",
+        "src/editorTabHtml",
+        "src/projectEditorProvider",
+        "src/apiEditorProvider",
+        "src/globalResourcesEditorProvider",
+        "src/historyEditorProvider",
+        "src/vscodeProjectHost",
+        "src/vscodeContextHost",
+        "src/vscodePatchHost",
+        "src/vscodeTerminalHost",
+        "src/vscodeApiDefinitions",
+        "src/vscodeApiDiagnostics",
+        "src/vscodeTheme"
+      ],
+      "entryPoints": [
+        "activate / deactivate (src/extension.ts)",
+        "DextApplication (src/application.ts)",
+        "DextSidebarProvider (src/sidebarProvider.ts)"
+      ],
+      "dependsOn": [
+        "ctx.core-execution",
+        "ctx.webview-ui",
+        "ctx.agent-backends"
+      ],
+      "relatedContextIds": [
+        "ctx.history-sessions",
+        "ctx.resources-api",
+        "ctx.attachments-storage"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.85,
+      "evidence": [
+        {
+          "path": "src/extension.ts",
+          "contentHash": "2f4eaa893987a74560066d1a513b47d0b6fced6eb7e8da99bc77bdb0f7f5b226",
+          "line": 63,
+          "note": "activate() receives the extension context and builds the application."
+        },
+        {
+          "path": "src/extension.ts",
+          "contentHash": "2f4eaa893987a74560066d1a513b47d0b6fced6eb7e8da99bc77bdb0f7f5b226",
+          "line": 35,
+          "note": "Editor tab management, resource documents and project hosts are imported into the activation module."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "ctx.webview-ui",
+      "canonicalName": "webview-ui",
+      "displayName": "Dext Webview UI",
+      "purpose": "Render the composer, conversation, todo, input and panel surfaces inside the VS Code webview sandbox and speak to the extension host only through the webview protocol.",
+      "responsibilities": [
+        "Own the Monaco-based composer and its Dext reference decorations.",
+        "Render turns, results, diffs, todos, reviews and structured output.",
+        "Host the small RPC clients for clipboard, file search, file drops, project references and language requests.",
+        "Keep per-turn UI state such as disclosure choices and interaction drafts."
+      ],
+      "moduleIds": [
+        "src/webview/main",
+        "src/webview/codeEditor",
+        "src/webview/agentTodoView",
+        "src/webview/agentInputView",
+        "src/webview/turnReviewView",
+        "src/webview/planReviewView",
+        "src/webview/projectPanel",
+        "src/webview/projectArchitectureView",
+        "src/webview/apiPanel",
+        "src/webview/globalResourcesPanel",
+        "src/webview/jsonOutput",
+        "src/webview/outputLink",
+        "src/webview/composerOverflow",
+        "src/webview/conversationTabDrag",
+        "src/webview/duration",
+        "src/webview/languageClient",
+        "src/webview/selectField",
+        "src/webview/selectionGroupField"
+      ],
+      "entryPoints": [
+        "acquireVsCodeApi (src/webview/main.ts)",
+        "DextCodeEditor (src/webview/codeEditor.ts)",
+        "AgentInputView (src/webview/agentInputView.ts)",
+        "AgentTodoView (src/webview/agentTodoView.ts)"
+      ],
+      "dependsOn": [
+        "ctx.extension-host"
+      ],
+      "relatedContextIds": [
+        "ctx.attachments-storage",
+        "ctx.history-sessions"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.84,
+      "evidence": [
+        {
+          "path": "src/webview/main.ts",
+          "contentHash": "6f368d44152ed95b1a64a023a352985d9a19f0924abad7d1cf38283ff6037cd5",
+          "line": 71,
+          "note": "The webview entry declares acquireVsCodeApi, the only host channel."
+        },
+        {
+          "path": "src/editorTabHtml.ts",
+          "symbol": "renderEditorTabHtml",
+          "contentHash": "756f5571b37bb302e2b4e426ecb84d955bf02186b25b6042a05bd6b4b862088f",
+          "note": "Every panel document is served with a nonce-based content security policy."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "ctx.core-execution",
+      "canonicalName": "core-execution",
+      "displayName": "Hostless Dext Core",
+      "purpose": "Provide the provider-agnostic execution engine: the registry of callables, the Dext document compiler, the workflow runtime and the deterministic built-in handlers.",
+      "responsibilities": [
+        "Register built-in, custom and MCP-backed callables and resolve their signatures.",
+        "Compile a Dext document into typed statements and steps.",
+        "Execute steps with concurrency limits, checkpoints and recorded workflows.",
+        "Stay free of VS Code imports so it can be reasoned about and tested independently."
+      ],
+      "moduleIds": [
+        "src/core/types",
+        "src/core/registry",
+        "src/core/runtime",
+        "src/core/workflow",
+        "src/core/workflowRuntime",
+        "src/core/workflowRecorder",
+        "src/core/workflowCheckpoint",
+        "src/core/builtins",
+        "src/core/builtinApiDefinitions",
+        "src/core/builtinCli",
+        "src/core/builtinTypeDefinitions",
+        "src/core/methodSignature",
+        "src/core/contextResolver",
+        "src/core/customApi",
+        "src/core/executionErrors"
+      ],
+      "entryPoints": [
+        "MethodRegistry (src/core/registry.ts)",
+        "DextRuntime (src/core/runtime.ts)",
+        "compileWorkflow (src/core/workflow.ts)",
+        "WorkflowRuntime (src/core/workflowRuntime.ts)"
+      ],
+      "dependsOn": [
+        "ctx.agent-backends",
+        "ctx.result-review"
+      ],
+      "relatedContextIds": [
+        "ctx.resources-api"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.8,
+      "evidence": [
+        {
+          "path": "src/core/agentAssertions.ts",
+          "contentHash": "8a2dc2cd7b543b20e09d2e8848823e2abae8e72991d0a1c30316a336e6fa7903",
+          "line": 5,
+          "note": "The module comment states that the core stays hostless and application.ts implements the port."
+        },
+        {
+          "path": "src/application.ts",
+          "contentHash": "be7ce6e090a3513a715b0495d1cc32904188782bafb3783a9fbfef51168d2308",
+          "line": 4,
+          "note": "The host imports core built-ins, runtime and workflow modules and drives them."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "ctx.agent-backends",
+      "canonicalName": "agent-backends",
+      "displayName": "Agent Provider Backends",
+      "purpose": "Turn one typed agent request into a provider process or transport session and stream back text, reasoning, tool, todo and usage events under time and idle limits.",
+      "responsibilities": [
+        "Select the backend from the profile provider and reject unsupported combinations.",
+        "Spawn and supervise the codex and claude CLIs, including sandbox and permission flags.",
+        "Drive the DeepSeek Harness transport, its presets, questions and result tool.",
+        "Track tool activity and per-turn todo lists and enforce idle and total timeouts."
+      ],
+      "moduleIds": [
+        "src/core/agentRunner",
+        "src/core/agentRouter",
+        "src/core/agentTimeout",
+        "src/core/agentTodoTracking",
+        "src/core/agentToolActivity",
+        "src/agentProfiles",
+        "src/agentSelectionDefaults",
+        "src/core/deepseekHarnessRunner",
+        "src/core/deepseekHarnessTransport",
+        "src/core/deepseekHarnessPolicy",
+        "src/core/harnessBridge",
+        "src/core/harnessCommand",
+        "src/core/harnessPresets",
+        "src/core/harnessPresetDefault",
+        "src/core/harnessQuestions",
+        "src/core/harnessResultTool",
+        "src/core/codexConversationRunner",
+        "src/core/codexConversationConnection",
+        "src/core/codexConversationEvents",
+        "src/core/cliAxAIService",
+        "src/core/cliCompletion"
+      ],
+      "entryPoints": [
+        "DefaultAgentRunner (src/core/agentRouter.ts)",
+        "CliAgentRunner / runSingleTurnCli (src/core/agentRunner.ts)",
+        "DeepSeekHarnessRunner (src/core/deepseekHarnessRunner.ts)",
+        "agentTimeout (src/core/agentTimeout.ts)"
+      ],
+      "dependsOn": [
+        "ctx.core-execution",
+        "ctx.result-review"
+      ],
+      "relatedContextIds": [
+        "ctx.completion"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.83,
+      "evidence": [
+        {
+          "path": "src/core/agentRouter.ts",
+          "contentHash": "4b9fdddcfc2dac4630dc8ab10d4fc12c50510a8481879a6aab3b455d1b1956f8",
+          "line": 16,
+          "note": "The Harness backend is chosen only for the deepseek-harness provider."
+        },
+        {
+          "path": "src/core/agentRunner.ts",
+          "symbol": "AgentExecutionRequest",
+          "contentHash": "89ffd05fcd77dc7cad107233ae261fbf8c010bab663a64dfb7874c9e327ff85d",
+          "note": "The request carries profile, contract, permission, patch flag and CLI arguments."
+        },
+        {
+          "path": "src/core/agentToolActivity.ts",
+          "symbol": "trackCliToolActivity",
+          "contentHash": "d791fb0d8c93b11debea138bcab89f6f3271462281e75f1be2ef6e55cf63d517",
+          "note": "Codex and Claude lifecycle events drive toolStarted/toolFinished on the watchdog."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "ctx.result-review",
+      "canonicalName": "result-review",
+      "displayName": "Result Boundary and Review",
+      "purpose": "Decide what a finished agent turn actually produced, enforce the declared contract, and present it as a reviewable turn with diffs, hook summaries and acceptance feedback.",
+      "responsibilities": [
+        "Parse candidates out of provider text and normalize them into Dext result values.",
+        "Repair results that do not satisfy the contract, within a bounded number of attempts.",
+        "Assert workspace consistency for patches and expose hard versus soft violations.",
+        "Build turn and plan reviews, aggregate plan changes and drive acceptance feedback."
+      ],
+      "moduleIds": [
+        "src/core/resultBoundary",
+        "src/core/resultSerialization",
+        "src/core/resultRepair",
+        "src/core/agentAssertions",
+        "src/core/schemas",
+        "src/core/axAdapter",
+        "src/core/turnReview",
+        "src/core/turnReviewBuilder",
+        "src/turnReviewController",
+        "src/turnReviewStore",
+        "src/core/planReview",
+        "src/core/planResponse",
+        "src/core/planDocumentStream",
+        "src/diffPresentation",
+        "src/agentMessagePresentation",
+        "src/core/patch"
+      ],
+      "entryPoints": [
+        "parseAgentResult / agentResultCandidates (src/core/resultBoundary.ts)",
+        "createResultRepair (src/core/resultRepair.ts)",
+        "buildTurnReview (src/core/turnReviewBuilder.ts)",
+        "presentAgentMessage (src/agentMessagePresentation.ts)"
+      ],
+      "dependsOn": [
+        "ctx.core-execution",
+        "ctx.agent-backends"
+      ],
+      "relatedContextIds": [
+        "ctx.project-knowledge",
+        "ctx.history-sessions"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.79,
+      "evidence": [
+        {
+          "path": "src/core/axAdapter.ts",
+          "symbol": "AxMethodContract",
+          "contentHash": "20c03982dd4c4a6343f9b74acdab8a6429e4f70a9a09af20fd7ff54591ea5306",
+          "note": "Each callable compiles to a signature plus input and output schemas that define the contract."
+        },
+        {
+          "path": "src/diffPresentation.ts",
+          "symbol": "presentDiff",
+          "contentHash": "e38952768afb4b71304e60f501beac7c378ee2fd87ba2a2fa605e32d817d44a2",
+          "note": "Before/after text becomes a row model with added and removed counts."
+        },
+        {
+          "path": "src/agentMessagePresentation.ts",
+          "symbol": "AgentMessagePresentation",
+          "contentHash": "99dd7b221db6ce018e10f725052f03bfa6fd7fec0f2741f0c3bb1a68c96e528b",
+          "note": "Presentation separates title, meta, details, changes, references and sections."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "ctx.project-knowledge",
+      "canonicalName": "project-knowledge",
+      "displayName": "Project Knowledge and Diagrams",
+      "purpose": "Maintain a durable, evidence-backed model of the project: how it is intended to work, which capabilities and contexts exist, how flows behave, and which diagrams describe them.",
+      "responsibilities": [
+        "Collect workspace evidence under configurable limits and exclusions.",
+        "Generate intent, capability, context, flow, term, constraint and decision objects.",
+        "Queue knowledge suggestions for review and record accept/edit/reject decisions.",
+        "Validate object facts, evaluate declared architecture rules and persist project objects.",
+        "Render diagram documents of the supported kinds and keep their history."
+      ],
+      "moduleIds": [
+        "src/core/projectAiGeneration",
+        "src/core/projectIntent",
+        "src/core/projectKnowledge",
+        "src/core/projectKnowledgeReview",
+        "src/core/projectKnowledgeValidation",
+        "src/core/projectSemanticReview",
+        "src/core/projectArchitecture",
+        "src/core/projectContext",
+        "src/core/projectChanges",
+        "src/core/projectReference",
+        "src/projectStore",
+        "src/projectService",
+        "src/projectAiLimits",
+        "src/core/projectDiagram",
+        "src/core/projectDiagramAdapter",
+        "src/core/projectDiagramRegistry",
+        "src/core/projectDiagramProcess",
+        "src/core/projectDiagramHistory",
+        "src/core/archifyAdapter",
+        "src/vscodeProjectHost",
+        "src/projectDiagramViewer"
+      ],
+      "entryPoints": [
+        "ProjectStore (src/projectStore.ts)",
+        "ArchifyAdapter (src/core/archifyAdapter.ts)",
+        "ProjectDiagramAdapterRegistry (src/core/projectDiagramRegistry.ts)",
+        "readWorkspaceEvidence (src/vscodeProjectHost.ts)"
+      ],
+      "dependsOn": [
+        "ctx.agent-backends",
+        "ctx.extension-host"
+      ],
+      "relatedContextIds": [
+        "ctx.result-review"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.74,
+      "evidence": [
+        {
+          "path": "src/extension.ts",
+          "contentHash": "2f4eaa893987a74560066d1a513b47d0b6fced6eb7e8da99bc77bdb0f7f5b226",
+          "line": 52,
+          "note": "The diagram adapter registry and the Archify adapter are constructed in activation."
+        },
+        {
+          "path": "src/core/projectDiagram.ts",
+          "symbol": "ProjectDiagramNode",
+          "note": "Diagram documents carry nodes, relations and evidence with a fixed kind vocabulary."
+        },
+        {
+          "path": "src/projectStore.ts",
+          "symbol": "projectObjectPath",
+          "note": "Project objects and diagrams get deterministic paths in the project store."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "ctx.history-sessions",
+      "canonicalName": "history-sessions",
+      "displayName": "History and Conversation Sessions",
+      "purpose": "Persist each conversation turn and its response, apply user ordering and naming preferences, and replay stored traces into the same renderers the live view uses.",
+      "responsibilities": [
+        "Serialize bounded history records and sessions to the extension state.",
+        "Order, filter, pin, favourite and rename conversations.",
+        "Replay persisted traces through the live plan-document guard.",
+        "Render history turns with the shared turn presentation components."
+      ],
+      "moduleIds": [
+        "src/historyStore",
+        "src/historyRender",
+        "src/historyResponse",
+        "src/historyEditorProvider",
+        "src/conversationPreferences",
+        "src/core/agentTraceReplay",
+        "src/turnPresentation",
+        "src/turnComponents",
+        "src/agentTodoPresentation"
+      ],
+      "entryPoints": [
+        "DextHistoryStore (src/historyStore.ts)",
+        "DextConversationPreferences (src/conversationPreferences.ts)",
+        "prepareHistoryTrace (src/core/agentTraceReplay.ts)",
+        "readHistoryResponse (src/historyResponse.ts)"
+      ],
+      "dependsOn": [
+        "ctx.extension-host",
+        "ctx.result-review"
+      ],
+      "relatedContextIds": [
+        "ctx.webview-ui"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.78,
+      "evidence": [
+        {
+          "path": "src/core/agentTraceReplay.ts",
+          "symbol": "prepareHistoryTrace",
+          "contentHash": "c12ef6515e14ad64ae116d9400abaff760d53be42d307b4df052f570df6029df",
+          "note": "Deltas from the same provider stream id are merged into one historical row."
+        },
+        {
+          "path": "src/agentTodoPresentation.ts",
+          "symbol": "latestAgentTodos",
+          "contentHash": "41ee60fb28110fe499368999b77edc9320f593268abb338bd07ac2e9f35d3bdc",
+          "note": "Live todo rows and restored history read the last todo event the same way."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "ctx.resources-api",
+      "canonicalName": "resources-api",
+      "displayName": "APIs, MCP and Resources",
+      "purpose": "Discover and validate everything that can be called or loaded: built-in APIs, custom Dext API files, MCP servers and tools, skills and rules, with diagnostics and navigation.",
+      "responsibilities": [
+        "Scan workspace, global storage and configured API and MCP directories.",
+        "Parse custom API files and MCP manifests into registered callables with typed fields.",
+        "Report positioned diagnostics for config, signature and known rule violations.",
+        "Serve completion, hover, definition navigation and generated read-only references."
+      ],
+      "moduleIds": [
+        "src/core/apiCheck",
+        "src/core/apiDiagnostic",
+        "src/core/apiRuleDiagnostics",
+        "src/core/apiNavigation",
+        "src/core/builtinMemberNavigation",
+        "src/core/customApi",
+        "src/core/mcpRegistry",
+        "src/core/mcpManifest",
+        "src/core/mcpSecrets",
+        "src/core/skillCatalog",
+        "src/core/ignoreRules",
+        "src/core/languageService",
+        "src/core/languageHover",
+        "src/core/registry",
+        "src/vscodeApiDefinitions",
+        "src/vscodeApiDiagnostics",
+        "src/resourceDocuments",
+        "src/resourceSession"
+      ],
+      "entryPoints": [
+        "checkApis (src/core/apiCheck.ts)",
+        "McpToolRegistry (src/core/mcpRegistry.ts)",
+        "SkillCatalog (src/core/skillCatalog.ts)",
+        "DextLanguageService (src/core/languageService.ts)"
+      ],
+      "dependsOn": [
+        "ctx.core-execution"
+      ],
+      "relatedContextIds": [
+        "ctx.extension-host"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.77,
+      "evidence": [
+        {
+          "path": "src/core/apiCheck.ts",
+          "symbol": "ApiCheckResult",
+          "contentHash": "89762fd77b0dec2f915f4e31f3a304489afe48e98b2a18667107d1d2e37c349a",
+          "note": "A check reports files, diagnostics and error and warning counts."
+        },
+        {
+          "path": "src/core/apiRuleDiagnostics.ts",
+          "symbol": "apiRuleDiagnostics",
+          "contentHash": "34919ac9e20753a7aca24c178db7e1a6a1ac127700702c2e7c2bb32a4232a75f",
+          "note": "Only statically known rules on built-ins are checked; dynamic paths stay runtime checks."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "ctx.completion",
+      "canonicalName": "completion",
+      "displayName": "Inline Completion Pipeline",
+      "purpose": "Provide AI completions inside the Dext document by assembling local context, calling a configurable backend and learning from what the developer accepts.",
+      "responsibilities": [
+        "Assemble completion context and snippets around the caret.",
+        "Call OpenAI-compatible or chat completion backends with a bounded budget.",
+        "Score, adapt and rank candidate completions.",
+        "Record feedback and evaluation cases into a persistent completion memory."
+      ],
+      "moduleIds": [
+        "src/core/completionProvider",
+        "src/core/completionBackend",
+        "src/core/completionContext",
+        "src/core/completionCandidate",
+        "src/core/completionMemory",
+        "src/core/completionFeedback",
+        "src/core/completionEvaluation",
+        "src/core/completionAdaptation",
+        "src/core/completionProfiles",
+        "src/vscodeCompletionHost",
+        "src/vscodeCompletionContext",
+        "src/vscodeCompletionEvaluation",
+        "src/vscodeCompletionSetup",
+        "src/webview/composerOverflow"
+      ],
+      "entryPoints": [
+        "DextCompletionHost (src/vscodeCompletionHost.ts)",
+        "HttpCompletionBackend (src/core/completionBackend.ts)",
+        "CompletionMemoryStore (src/core/completionMemory.ts)"
+      ],
+      "dependsOn": [
+        "ctx.extension-host"
+      ],
+      "relatedContextIds": [
+        "ctx.agent-backends"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.66,
+      "evidence": [
+        {
+          "path": "src/core/completionMemory.ts",
+          "symbol": "CompletionMemoryEpochs",
+          "note": "Completion memory is epoch-based so old feedback can be invalidated."
+        },
+        {
+          "path": "src/core/completionEvaluation.ts",
+          "symbol": "evaluateCompletionCase",
+          "note": "Quality cases are evaluated to measure candidate quality."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "ctx.attachments-storage",
+      "canonicalName": "attachments-storage",
+      "displayName": "Attachments and Dext Storage",
+      "purpose": "Move selected text, clipboard content, terminal logs and images into Dext-owned storage and hand the agent a resolvable path while history keeps a compact reference token.",
+      "responsibilities": [
+        "Stage clipboard content with an expiry and match it back to the copied text.",
+        "Enforce attachment size limits and file-count limits.",
+        "Resolve global and workspace storage references safely without path traversal.",
+        "Rewrite attachment tokens into real on-disk paths for the agent prompt."
+      ],
+      "moduleIds": [
+        "src/attachmentStore",
+        "src/dextStorage",
+        "src/core/fileReference",
+        "src/vscodeAttachments",
+        "src/vscodeClipboardFiles",
+        "src/vscodeSelectionActions",
+        "src/core/fileSearch"
+      ],
+      "entryPoints": [
+        "AttachmentStore (src/attachmentStore.ts)",
+        "DextStorage (src/dextStorage.ts)",
+        "selectionAttachment (src/vscodeAttachments.ts)"
+      ],
+      "dependsOn": [
+        "ctx.extension-host"
+      ],
+      "relatedContextIds": [
+        "ctx.webview-ui",
+        "ctx.history-sessions"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.8,
+      "evidence": [
+        {
+          "path": "src/attachmentStore.ts",
+          "symbol": "AttachmentStore",
+          "contentHash": "10d1d00f78b783a224353b50f699480c6d51233ed56cb7c26023eea9444d4479",
+          "note": "Clipboard entries expire and must match the copied text exactly before a reference is released."
+        },
+        {
+          "path": "src/dextStorage.ts",
+          "symbol": "DextStorage",
+          "contentHash": "37c7a168e14f8e6e4ce57fb378d1844842845d63eb47db9b22a6bb5c029f831c",
+          "note": "Global and workspace references resolve independently so changing the setting never strands a file."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    }
+  ],
+  "flows": [
+    {
+      "id": "flow.turn-execution",
+      "canonicalName": "turn-execution",
+      "displayName": "Agent Turn Execution",
+      "description": "A composer document becomes a typed workflow run: the backend is selected, events stream with todo and tool tracking, the result is parsed, repaired and asserted, then applied, recorded and rendered.",
+      "trigger": "The developer submits the composer document from the webview.",
+      "steps": [
+        {
+          "id": "tx.submit",
+          "label": "Developer submits the Dext document from the composer",
+          "actor": "Developer",
+          "contextId": "ctx.webview-ui",
+          "moduleId": "src/webview/codeEditor",
+          "nextStepIds": [
+            "tx.dispatch"
+          ],
+          "evidence": [
+            {
+              "path": "src/webview/codeEditor.ts",
+              "symbol": "DextCodeEditor",
+              "contentHash": "5140f9b4c8b35fbafa6edfcee22db9600d24e361d89d9472b969c6258979737c",
+              "note": "The editor exposes onRun and the current Dext document to the caller."
+            }
+          ]
+        },
+        {
+          "id": "tx.dispatch",
+          "label": "Webview posts the run request over the webview protocol",
+          "actor": "Webview",
+          "contextId": "ctx.webview-ui",
+          "moduleId": "src/webviewProtocol",
+          "nextStepIds": [
+            "tx.execute"
+          ],
+          "evidence": [
+            {
+              "path": "src/webview/main.ts",
+              "contentHash": "6f368d44152ed95b1a64a023a352985d9a19f0924abad7d1cf38283ff6037cd5",
+              "line": 66,
+              "note": "postMessage is the only request channel available to the webview."
+            }
+          ]
+        },
+        {
+          "id": "tx.execute",
+          "label": "Extension host compiles the document and runs the workflow",
+          "actor": "Extension host",
+          "contextId": "ctx.extension-host",
+          "moduleId": "src/application",
+          "nextStepIds": [
+            "tx.route"
+          ],
+          "evidence": [
+            {
+              "path": "src/application.ts",
+              "contentHash": "be7ce6e090a3513a715b0495d1cc32904188782bafb3783a9fbfef51168d2308",
+              "line": 17,
+              "note": "The application compiles the document and drives the workflow runtime."
+            }
+          ]
+        },
+        {
+          "id": "tx.route",
+          "label": "DefaultAgentRunner selects the backend from profile.provider",
+          "actor": "Dext core",
+          "contextId": "ctx.agent-backends",
+          "moduleId": "src/core/agentRouter",
+          "nextStepIds": [
+            "tx.stream"
+          ],
+          "evidence": [
+            {
+              "path": "src/core/agentRouter.ts",
+              "contentHash": "4b9fdddcfc2dac4630dc8ab10d4fc12c50510a8481879a6aab3b455d1b1956f8",
+              "line": 15,
+              "note": "runner() maps deepseek-harness to the Harness and codex/claude to the CLI runner."
+            }
+          ]
+        },
+        {
+          "id": "tx.stream",
+          "label": "Provider process or Harness session streams turn events",
+          "actor": "Agent provider",
+          "contextId": "ctx.agent-backends",
+          "moduleId": "src/core/agentRunner",
+          "nextStepIds": [
+            "tx.record",
+            "tx.boundary"
+          ],
+          "evidence": [
+            {
+              "path": "src/core/agentRunner.ts",
+              "symbol": "AgentExecutionRequest",
+              "contentHash": "89ffd05fcd77dc7cad107233ae261fbf8c010bab663a64dfb7874c9e327ff85d",
+              "note": "onEvent and signal carry streamed events back to the caller for the whole turn."
+            }
+          ]
+        },
+        {
+          "id": "tx.guard",
+          "label": "Idle and total watchdog supervise the turn while tools run",
+          "actor": "Dext core",
+          "contextId": "ctx.agent-backends",
+          "moduleId": "src/core/agentTimeout",
+          "nextStepIds": [
+            "tx.boundary"
+          ],
+          "evidence": [
+            {
+              "path": "src/core/agentTimeout.ts",
+              "contentHash": "65c7ce85699c29fbedd103d8d3b06c3afdcf1c8348afc5927eac6c09cda4512f",
+              "line": 15,
+              "note": "agentTimeout combines a total limit with an idle interval that reported tools pause."
+            },
+            {
+              "path": "src/core/agentToolActivity.ts",
+              "symbol": "trackCliToolActivity",
+              "contentHash": "d791fb0d8c93b11debea138bcab89f6f3271462281e75f1be2ef6e55cf63d517",
+              "note": "Provider lifecycle events drive toolStarted and toolFinished on the watchdog."
+            }
+          ]
+        },
+        {
+          "id": "tx.boundary",
+          "label": "Result candidates are parsed at the result boundary",
+          "actor": "Dext core",
+          "contextId": "ctx.result-review",
+          "moduleId": "src/core/resultBoundary",
+          "nextStepIds": [
+            "tx.record",
+            "tx.assert"
+          ],
+          "evidence": [
+            {
+              "path": "src/core/resultBoundary.ts",
+              "symbol": "AgentResultCandidate",
+              "note": "Provider text is reduced to candidate result objects before anything is trusted."
+            }
+          ]
+        },
+        {
+          "id": "tx.assert",
+          "label": "Patch assertions are evaluated against the workspace",
+          "actor": "Dext core",
+          "contextId": "ctx.result-review",
+          "moduleId": "src/core/agentAssertions",
+          "nextStepIds": [
+            "tx.record"
+          ],
+          "evidence": [
+            {
+              "path": "src/core/agentAssertions.ts",
+              "symbol": "AgentAssertionSnapshot",
+              "contentHash": "8a2dc2cd7b543b20e09d2e8848823e2abae8e72991d0a1c30316a336e6fa7903",
+              "note": "The host port supplies apply mode, path resolution, file reads and ignore rules."
+            }
+          ]
+        },
+        {
+          "id": "tx.record",
+          "label": "Turn, trace and response are recorded in history",
+          "actor": "Extension host",
+          "contextId": "ctx.history-sessions",
+          "moduleId": "src/historyStore",
+          "nextStepIds": [
+            "tx.render"
+          ],
+          "evidence": [
+            {
+              "path": "src/core/workflowRecorder.ts",
+              "symbol": "RecordedTurn",
+              "note": "A recorded turn keeps the call, its result and any confirmation it needed."
+            }
+          ]
+        },
+        {
+          "id": "tx.render",
+          "label": "Turn, diff, todo and review are rendered in the webview",
+          "actor": "Webview",
+          "contextId": "ctx.webview-ui",
+          "moduleId": "src/webview/main",
+          "nextStepIds": [],
+          "evidence": [
+            {
+              "path": "src/webview/main.ts",
+              "contentHash": "6f368d44152ed95b1a64a023a352985d9a19f0924abad7d1cf38283ff6037cd5",
+              "line": 29,
+              "note": "The webview entry imports presentAgentMessage and presentDiff for the output views."
+            }
+          ]
+        }
+      ],
+      "outcomes": [
+        "A recorded turn with a validated result, an applied or previewed patch and a reviewable presentation.",
+        "A cancelled or timed-out turn that is still recorded with its failure reason."
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.76,
+      "evidence": [
+        {
+          "path": "src/core/agentRouter.ts",
+          "contentHash": "4b9fdddcfc2dac4630dc8ab10d4fc12c50510a8481879a6aab3b455d1b1956f8",
+          "line": 20,
+          "note": "run() delegates to the selected runner for the whole turn."
+        },
+        {
+          "path": "src/core/agentTimeout.ts",
+          "contentHash": "65c7ce85699c29fbedd103d8d3b06c3afdcf1c8348afc5927eac6c09cda4512f",
+          "line": 2,
+          "note": "The default idle limit is ten minutes while the total limit defaults to disabled."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "flow.project-knowledge-generation",
+      "canonicalName": "project-knowledge-generation",
+      "displayName": "Project Knowledge Generation",
+      "description": "Workspace evidence is collected and filtered, sent to a project AI provider, turned into knowledge objects, reviewed and decided by a human, validated against the workspace and stored.",
+      "trigger": "Project initialization or a refresh request from the Project tab.",
+      "steps": [
+        {
+          "id": "pk.evidence",
+          "label": "Workspace evidence and inventory are read",
+          "actor": "Extension host",
+          "contextId": "ctx.project-knowledge",
+          "moduleId": "src/vscodeProjectHost",
+          "nextStepIds": [
+            "pk.filter"
+          ],
+          "evidence": [
+            {
+              "path": "src/extension.ts",
+              "contentHash": "2f4eaa893987a74560066d1a513b47d0b6fced6eb7e8da99bc77bdb0f7f5b226",
+              "line": 49,
+              "note": "readWorkspaceEvidence and the project file host produce the evidence package for generation."
+            }
+          ]
+        },
+        {
+          "id": "pk.filter",
+          "label": "Evidence limits and excluded paths are applied",
+          "actor": "Extension host",
+          "contextId": "ctx.project-knowledge",
+          "moduleId": "src/projectAiLimits",
+          "nextStepIds": [
+            "pk.generate"
+          ],
+          "evidence": [
+            {
+              "path": "src/extension.ts",
+              "contentHash": "2f4eaa893987a74560066d1a513b47d0b6fced6eb7e8da99bc77bdb0f7f5b226",
+              "line": 54,
+              "note": "isProjectEvidencePath and isExcludedProjectEvidencePath filter which files count as evidence."
+            }
+          ]
+        },
+        {
+          "id": "pk.generate",
+          "label": "A project AI provider generates intent and knowledge objects",
+          "actor": "Project AI",
+          "contextId": "ctx.project-knowledge",
+          "moduleId": "src/core/projectAiGeneration",
+          "nextStepIds": [
+            "pk.review"
+          ],
+          "evidence": [
+            {
+              "path": "src/core/projectAiGeneration.ts",
+              "symbol": "ProjectEvidenceInput",
+              "note": "Generation consumes an evidence package with files, inventory and limits."
+            }
+          ]
+        },
+        {
+          "id": "pk.review",
+          "label": "Knowledge suggestions are queued and decided",
+          "actor": "Developer",
+          "contextId": "ctx.project-knowledge",
+          "moduleId": "src/core/projectKnowledgeReview",
+          "nextStepIds": [
+            "pk.validate"
+          ],
+          "evidence": [
+            {
+              "path": "src/core/projectKnowledgeReview.ts",
+              "symbol": "KnowledgeDecision",
+              "note": "Each suggestion receives an explicit decision record rather than being auto-applied."
+            }
+          ]
+        },
+        {
+          "id": "pk.validate",
+          "label": "Object facts are validated against the current workspace",
+          "actor": "Dext core",
+          "contextId": "ctx.project-knowledge",
+          "moduleId": "src/core/projectKnowledgeValidation",
+          "nextStepIds": [
+            "pk.persist"
+          ],
+          "evidence": [
+            {
+              "path": "src/core/projectKnowledgeValidation.ts",
+              "symbol": "FactSnapshot",
+              "note": "Validation compares stored facts with a snapshot supplied by the project host."
+            }
+          ]
+        },
+        {
+          "id": "pk.persist",
+          "label": "Accepted objects are written to the project store",
+          "actor": "Extension host",
+          "contextId": "ctx.project-knowledge",
+          "moduleId": "src/projectStore",
+          "nextStepIds": [],
+          "evidence": [
+            {
+              "path": "src/projectStore.ts",
+              "symbol": "ProjectDefinition",
+              "note": "The project store holds the definition, architecture document and object paths."
+            }
+          ]
+        }
+      ],
+      "outcomes": [
+        "Project objects that a human decided on and whose facts still match the workspace.",
+        "Skipped or rejected suggestions recorded as decisions instead of silently applied knowledge."
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.7,
+      "evidence": [
+        {
+          "path": "src/core/projectKnowledgeReview.ts",
+          "symbol": "isSuggestionSafeForAcceptedObject",
+          "note": "Safety of a suggestion against an already accepted object is decided explicitly."
+        },
+        {
+          "path": "src/core/projectSemanticReview.ts",
+          "symbol": "SemanticUpdateProposal",
+          "note": "Semantic changes are proposed for review rather than written directly."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "flow.diagram-render",
+      "canonicalName": "diagram-render",
+      "displayName": "Diagram Render and Export",
+      "description": "A project diagram document is mapped through the adapter registry to a diagram kind, handed to the external renderer process with its assets verified, repaired a bounded number of times and returned as an artifact with a receipt.",
+      "trigger": "The Project tab requests a diagram view for a project diagram document.",
+      "steps": [
+        {
+          "id": "dg.document",
+          "label": "A project diagram document is selected from the store",
+          "actor": "Extension host",
+          "contextId": "ctx.project-knowledge",
+          "moduleId": "src/core/projectDiagram",
+          "nextStepIds": [
+            "dg.adapter"
+          ],
+          "evidence": [
+            {
+              "path": "src/core/projectDiagram.ts",
+              "symbol": "ProjectDiagramKind",
+              "note": "The document declares its kind, nodes, relations, evidence and optional lane or stage semantics."
+            }
+          ]
+        },
+        {
+          "id": "dg.adapter",
+          "label": "The registry resolves the adapter for the diagram kind",
+          "actor": "Dext core",
+          "contextId": "ctx.project-knowledge",
+          "moduleId": "src/core/projectDiagramRegistry",
+          "nextStepIds": [
+            "dg.render"
+          ],
+          "evidence": [
+            {
+              "path": "src/core/projectDiagramRegistry.ts",
+              "symbol": "ProjectDiagramAdapterRegistry",
+              "note": "Adapters report their supported kinds and engine information."
+            }
+          ]
+        },
+        {
+          "id": "dg.render",
+          "label": "The external renderer runs with verified assets and schema",
+          "actor": "Diagram engine",
+          "contextId": "ctx.project-knowledge",
+          "moduleId": "src/core/archifyAdapter",
+          "nextStepIds": [
+            "dg.artifact"
+          ],
+          "evidence": [
+            {
+              "path": "src/core/archifyAdapter.ts",
+              "contentHash": "cd02066da0a2a92fa278cafd8413977349d900096f577463f7a616607ce0b146",
+              "line": 27,
+              "note": "ASSET_CHECKS verifies the CLI, template, per-kind renderers and schemas before rendering."
+            }
+          ]
+        },
+        {
+          "id": "dg.artifact",
+          "label": "An artifact and validation receipt are returned to the viewer",
+          "actor": "Dext core",
+          "contextId": "ctx.project-knowledge",
+          "moduleId": "src/core/projectDiagramProcess",
+          "nextStepIds": [
+            "dg.history"
+          ],
+          "evidence": [
+            {
+              "path": "src/core/projectDiagramProcess.ts",
+              "symbol": "diagramReceipt",
+              "note": "A render returns a receipt describing the outcome and any validation issues."
+            }
+          ]
+        },
+        {
+          "id": "dg.history",
+          "label": "The snapshot joins the diagram history with deltas",
+          "actor": "Dext core",
+          "contextId": "ctx.project-knowledge",
+          "moduleId": "src/core/projectDiagramHistory",
+          "nextStepIds": [],
+          "evidence": [
+            {
+              "path": "src/core/projectDiagramHistory.ts",
+              "symbol": "ProjectDiagramDelta",
+              "note": "History compares entity, evidence and layout between diagram snapshots."
+            }
+          ]
+        }
+      ],
+      "outcomes": [
+        "A rendered diagram artifact with a receipt and an updated history entry.",
+        "A failed render reported as a receipt instead of a silent empty view."
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.68,
+      "evidence": [
+        {
+          "path": "src/core/archifyAdapter.ts",
+          "contentHash": "cd02066da0a2a92fa278cafd8413977349d900096f577463f7a616607ce0b146",
+          "line": 26,
+          "note": "Layout repair attempts are bounded before the render is reported as failed."
+        },
+        {
+          "path": "src/core/projectDiagramRegistry.ts",
+          "symbol": "ProjectDiagramRenderOutcome",
+          "note": "A render outcome carries either a receipt or a failure receipt."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "flow.api-diagnostics",
+      "canonicalName": "api-diagnostics",
+      "displayName": "API Authoring and Diagnostics",
+      "description": "The workspace, global storage and configured API directories are scanned for custom APIs and MCP manifests, registered as callables, checked for config and signature problems and for statically known rule violations, then published as diagnostics.",
+      "trigger": "A Dext API file or MCP manifest is opened, saved or reloaded.",
+      "steps": [
+        {
+          "id": "ad.scan",
+          "label": "API and MCP roots are scanned, including unsaved editor buffers",
+          "actor": "Extension host",
+          "contextId": "ctx.resources-api",
+          "moduleId": "src/core/apiCheck",
+          "nextStepIds": [
+            "ad.register"
+          ],
+          "evidence": [
+            {
+              "path": "src/core/apiCheck.ts",
+              "symbol": "ApiCheckOptions",
+              "contentHash": "89762fd77b0dec2f915f4e31f3a304489afe48e98b2a18667107d1d2e37c349a",
+              "note": "Editor documents override disk and can even contribute files that are not saved yet."
+            }
+          ]
+        },
+        {
+          "id": "ad.register",
+          "label": "Built-ins, custom APIs and MCP tools are registered as callables",
+          "actor": "Dext core",
+          "contextId": "ctx.resources-api",
+          "moduleId": "src/core/registry",
+          "nextStepIds": [
+            "ad.check"
+          ],
+          "evidence": [
+            {
+              "path": "src/core/apiCheck.ts",
+              "symbol": "checkApis",
+              "contentHash": "89762fd77b0dec2f915f4e31f3a304489afe48e98b2a18667107d1d2e37c349a",
+              "note": "Built-ins are registered first, then custom API files and MCP tools are added to the same registry."
+            }
+          ]
+        },
+        {
+          "id": "ad.check",
+          "label": "Config, signature and static rule problems become positioned diagnostics",
+          "actor": "Dext core",
+          "contextId": "ctx.resources-api",
+          "moduleId": "src/core/apiRuleDiagnostics",
+          "nextStepIds": [
+            "ad.publish"
+          ],
+          "evidence": [
+            {
+              "path": "src/core/apiRuleDiagnostics.ts",
+              "symbol": "apiRuleDiagnostics",
+              "contentHash": "34919ac9e20753a7aca24c178db7e1a6a1ac127700702c2e7c2bb32a4232a75f",
+              "note": "Rule literals are decoded through the language's own string parsing, never by evaluating code."
+            }
+          ]
+        },
+        {
+          "id": "ad.publish",
+          "label": "Diagnostics are shown in Problems and in the generated references",
+          "actor": "Extension host",
+          "contextId": "ctx.resources-api",
+          "moduleId": "src/vscodeApiDiagnostics",
+          "nextStepIds": [],
+          "evidence": [
+            {
+              "path": "src/core/apiDiagnostic.ts",
+              "symbol": "DextDiagnostic",
+              "contentHash": "7bce0e5574f6dddc1bae08b5b9aa560a871042645d3d91a03a36d500d0da09cd",
+              "note": "Diagnostics carry path, optional apiId, severity, code, message and a UTF-16 offset range."
+            }
+          ]
+        }
+      ],
+      "outcomes": [
+        "Positioned, de-duplicated diagnostics with a single plain-text rendering.",
+        "A refreshed registry so completion, hover and navigation see the new API surface."
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.75,
+      "evidence": [
+        {
+          "path": "src/core/apiDiagnostic.ts",
+          "symbol": "diagnosticKey",
+          "contentHash": "7bce0e5574f6dddc1bae08b5b9aa560a871042645d3d91a03a36d500d0da09cd",
+          "note": "A stable key de-duplicates diagnostics produced by several roots."
+        },
+        {
+          "path": "src/core/apiNavigation.ts",
+          "symbol": "apiDefinitionTarget",
+          "contentHash": "aa6dfba458d451fdf239ff208f7b64e7473c6d4e77be3144fc541c3b4654536e",
+          "note": "Navigation resolves only import names and call sites, never text inside prompts or comments."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "flow.interaction-request",
+      "canonicalName": "interaction-request",
+      "displayName": "Agent Question Round Trip",
+      "description": "A running turn asks the developer a question: the broker registers the request, the shared form vocabulary renders it in the webview, the answer is validated against the original questions and adapted back into agent input answers.",
+      "trigger": "An agent turn requests user input or the host issues a UI interaction.",
+      "steps": [
+        {
+          "id": "ir.request",
+          "label": "The turn requests input and the broker registers the pending request",
+          "actor": "Agent turn",
+          "contextId": "ctx.webview-ui",
+          "moduleId": "src/agentInputBroker",
+          "nextStepIds": [
+            "ir.form"
+          ],
+          "evidence": [
+            {
+              "path": "src/agentInputBroker.ts",
+              "symbol": "AgentInputBroker",
+              "contentHash": "3fc819876b7594940cd41445ebd6a75bde8d13fd0655b2232e53bd01489a2c38",
+              "note": "A duplicate request for the same session, turn and request id is refused."
+            }
+          ]
+        },
+        {
+          "id": "ir.form",
+          "label": "The request is converted into a shared UI form definition",
+          "actor": "Dext core",
+          "contextId": "ctx.webview-ui",
+          "moduleId": "src/uiInteractionPresentation",
+          "nextStepIds": [
+            "ir.render"
+          ],
+          "evidence": [
+            {
+              "path": "src/uiInteractionPresentation.ts",
+              "symbol": "agentInputForm",
+              "note": "Agent questions and API UI requests share one form definition and two answer adapters."
+            }
+          ]
+        },
+        {
+          "id": "ir.render",
+          "label": "The webview renders an answerable card or modal dialog",
+          "actor": "Webview",
+          "contextId": "ctx.webview-ui",
+          "moduleId": "src/webview/agentInputView",
+          "nextStepIds": [
+            "ir.answer"
+          ],
+          "evidence": [
+            {
+              "path": "src/webview/agentInputView.ts",
+              "symbol": "AgentInputView",
+              "contentHash": "2410df3f811bb1aab986ced484e8b02ab0568a712c9e459618d753689e225823",
+              "note": "The view reports whether a state newly put an answerable card on screen."
+            }
+          ]
+        },
+        {
+          "id": "ir.answer",
+          "label": "The developer answers or cancels the request",
+          "actor": "Developer",
+          "contextId": "ctx.webview-ui",
+          "moduleId": "src/webview/interactionForm",
+          "nextStepIds": [
+            "ir.validate"
+          ],
+          "evidence": [
+            {
+              "path": "src/webview/interactionDialog.ts",
+              "symbol": "InteractionDialog",
+              "contentHash": "ea64648be77bd3eb47c687ae090e58e4db9b2f562d6bbf13016f25f58e5b60ff",
+              "note": "Each request owns its dialog and restores focus to where the reader was."
+            }
+          ]
+        },
+        {
+          "id": "ir.validate",
+          "label": "Answers are validated against the original questions",
+          "actor": "Extension host",
+          "contextId": "ctx.webview-ui",
+          "moduleId": "src/agentInputBroker",
+          "nextStepIds": [],
+          "evidence": [
+            {
+              "path": "src/agentInputBroker.ts",
+              "symbol": "AgentInputBroker",
+              "contentHash": "3fc819876b7594940cd41445ebd6a75bde8d13fd0655b2232e53bd01489a2c38",
+              "note": "Answers are rejected unless every question is answered in the shape the question allows."
+            }
+          ]
+        }
+      ],
+      "outcomes": [
+        "Typed agent input answers delivered back to the waiting turn, or null when cancelled.",
+        "A terminal request card that replayed events cannot revive."
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.78,
+      "evidence": [
+        {
+          "path": "src/uiInteractionBroker.ts",
+          "symbol": "UiInteractionBroker",
+          "note": "One broker owns the pending interaction for a given session, turn and request."
+        },
+        {
+          "path": "src/webview/agentInputView.ts",
+          "contentHash": "2410df3f811bb1aab986ced484e8b02ab0568a712c9e459618d753689e225823",
+          "line": 2,
+          "note": "The shared form vocabulary (UiFormDefinition, UiFormAnswers, UiFormResult) is imported by the question view."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "flow.editor-tab-restore",
+      "canonicalName": "editor-tab-restore",
+      "displayName": "Editor Tab Open and Restore",
+      "description": "A stable tab key is parsed into a descriptor, an existing panel is revealed or a new one created, and a restored state from VS Code or from the proactive path is deduplicated before it can double-open a page.",
+      "trigger": "Opening a Project, API, Global Resources or History page, or restoring tabs after a reload.",
+      "steps": [
+        {
+          "id": "et.key",
+          "label": "The tab key is parsed into a kind and optional resource id",
+          "actor": "Extension host",
+          "contextId": "ctx.extension-host",
+          "moduleId": "src/editorTabTypes",
+          "nextStepIds": [
+            "et.descriptor"
+          ],
+          "evidence": [
+            {
+              "path": "src/editorTabTypes.ts",
+              "contentHash": "9bef91ee5c92b776c4667d944562bd8a4c3ff8af7d300e04ab92c1621a6e12fa",
+              "line": 1,
+              "note": "The key is derived from the page kind plus an optional resource id, never from a title or index."
+            }
+          ]
+        },
+        {
+          "id": "et.descriptor",
+          "label": "A descriptor with view type and title is resolved, or the state is rejected",
+          "actor": "Extension host",
+          "contextId": "ctx.extension-host",
+          "moduleId": "src/editorTabSerializer",
+          "nextStepIds": [
+            "et.open"
+          ],
+          "evidence": [
+            {
+              "path": "src/editorTabSerializer.ts",
+              "symbol": "descriptorForKey",
+              "contentHash": "2590c699385f9890cb2d54c36cea39b2488233e1c350dbff93f235da78ce48f0",
+              "note": "Unknown keys and unsupported restore versions are rejected instead of normalized."
+            }
+          ]
+        },
+        {
+          "id": "et.open",
+          "label": "The manager opens the panel, or reveals the registered one",
+          "actor": "Extension host",
+          "contextId": "ctx.extension-host",
+          "moduleId": "src/editorTabManager",
+          "nextStepIds": [
+            "et.state"
+          ],
+          "evidence": [
+            {
+              "path": "src/editorTabManager.ts",
+              "contentHash": "a2af4c437bccc5ab9ca1f7649f0e7ea077ea3caf8e2249e15d3acfbb394b541a",
+              "line": 42,
+              "note": "One panel per stable key; opening the same key again reveals the existing panel."
+            }
+          ]
+        },
+        {
+          "id": "et.state",
+          "label": "The visible page, resource and filters are persisted as tab state",
+          "actor": "Extension host",
+          "contextId": "ctx.extension-host",
+          "moduleId": "src/editorTabState",
+          "nextStepIds": [],
+          "evidence": [
+            {
+              "path": "src/editorTabState.ts",
+              "symbol": "createEditorTabState",
+              "contentHash": "c540090cc59599f07cf8d18a161f80c41a47a6389ef28dedf27d922b071ad509",
+              "note": "State records which target is on screen even when the key carries no resource id."
+            }
+          ]
+        }
+      ],
+      "outcomes": [
+        "A single panel for the requested target, created or revealed.",
+        "A restore that is opened, reused, skipped or reported invalid, never duplicated."
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.8,
+      "evidence": [
+        {
+          "path": "src/editorTabSerializer.ts",
+          "symbol": "EditorTabRestoreResult",
+          "contentHash": "2590c699385f9890cb2d54c36cea39b2488233e1c350dbff93f235da78ce48f0",
+          "note": "Restore status is one of opened, reused, skipped or invalid."
+        },
+        {
+          "path": "src/editorTabManager.ts",
+          "symbol": "closeIfCurrent",
+          "contentHash": "a2af4c437bccc5ab9ca1f7649f0e7ea077ea3caf8e2249e15d3acfbb394b541a",
+          "note": "A restored panel's dispose callback cannot close a live tab it no longer owns."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    }
+  ],
+  "terms": [
+    {
+      "id": "term.dext-document",
+      "canonicalName": "Dext document",
+      "displayName": "Dext Document",
+      "aliases": [
+        "Dext input",
+        "composer document"
+      ],
+      "forbiddenNames": [],
+      "definition": "The readable, Python-shaped source a developer writes in the composer. It is the public source contract; the editor's private model may hold atomic reference characters that are never persisted.",
+      "contextIds": [
+        "ctx.webview-ui",
+        "ctx.core-execution"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.85,
+      "evidence": [
+        {
+          "path": "src/webview/codeEditor.ts",
+          "symbol": "DextCodeEditor",
+          "contentHash": "5140f9b4c8b35fbafa6edfcee22db9600d24e361d89d9472b969c6258979737c",
+          "note": "The class comment states the public source contract is always the complete readable Dext document."
+        },
+        {
+          "path": "src/core/builtins.ts",
+          "contentHash": "c029914ddb3903da650f360370b9bafa34e28356357dc04c28976dbb7f737dfb",
+          "line": 11,
+          "note": "Built-in descriptions refer to inline Dext references inside the input string."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "term.callable",
+      "canonicalName": "Dext API callable",
+      "displayName": "Dext API",
+      "aliases": [
+        "API",
+        "method",
+        "registered callable"
+      ],
+      "forbiddenNames": [],
+      "definition": "A registered callable with an id, title, typed input fields, an output kind, a context list and an executor. Built-ins, custom API files and MCP tools all become callables in the same registry.",
+      "contextIds": [
+        "ctx.core-execution",
+        "ctx.resources-api"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.85,
+      "evidence": [
+        {
+          "path": "src/core/builtins.ts",
+          "contentHash": "c029914ddb3903da650f360370b9bafa34e28356357dc04c28976dbb7f737dfb",
+          "line": 7,
+          "note": "Built-ins declare id, title, description, kind, version, input, output, context and executor."
+        },
+        {
+          "path": "src/core/builtinApiDefinitions.ts",
+          "symbol": "builtinApiDefinition",
+          "contentHash": "7523d1183ae2463e3b08717335d06f85f7678ff706ea61786e869664aaddc640",
+          "note": "Registered callables are looked up by id and namespaced by their dotted id."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "term.agent-turn",
+      "canonicalName": "agent turn",
+      "displayName": "Agent Turn",
+      "aliases": [
+        "turn",
+        "run"
+      ],
+      "forbiddenNames": [],
+      "definition": "One execution of an agent-backed call: a request with a profile, contract and permission, a streamed event sequence, tool activity, todo progress and a terminal result or failure.",
+      "contextIds": [
+        "ctx.agent-backends",
+        "ctx.history-sessions"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.8,
+      "evidence": [
+        {
+          "path": "src/core/agentRunner.ts",
+          "symbol": "AgentExecutionRequest",
+          "contentHash": "89ffd05fcd77dc7cad107233ae261fbf8c010bab663a64dfb7874c9e327ff85d",
+          "note": "The request carries the profile, contract, metadata, permission and streaming callback."
+        },
+        {
+          "path": "src/core/agentTimeout.ts",
+          "contentHash": "65c7ce85699c29fbedd103d8d3b06c3afdcf1c8348afc5927eac6c09cda4512f",
+          "line": 12,
+          "note": "A live turn can outlast the idle interval because output restarts the idle clock."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "term.agent-profile",
+      "canonicalName": "agent profile",
+      "displayName": "Agent Profile",
+      "aliases": [
+        "CLI profile",
+        "provider profile"
+      ],
+      "forbiddenNames": [],
+      "definition": "The configuration of one agent backend: id, label, provider, command, models, presets and default model, reasoning effort and speed. The id is also what the dext.agentCli setting accepts.",
+      "contextIds": [
+        "ctx.agent-backends"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.85,
+      "evidence": [
+        {
+          "path": "src/agentProfiles.ts",
+          "symbol": "AgentProfile",
+          "contentHash": "004acf481d8d2a7379ceab4c52f92f89aa9ab08d94ddf10edd35d80db02dc1f3",
+          "note": "Profile fields include id, label, provider, command, models, presets and defaults."
+        },
+        {
+          "path": "src/agentProfiles.ts",
+          "symbol": "AgentProvider",
+          "contentHash": "004acf481d8d2a7379ceab4c52f92f89aa9ab08d94ddf10edd35d80db02dc1f3",
+          "note": "The provider union is codex, claude or deepseek-harness."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "term.permission",
+      "canonicalName": "agent permission",
+      "displayName": "Write Scope",
+      "aliases": [
+        "permission",
+        "write scope"
+      ],
+      "forbiddenNames": [],
+      "definition": "The access tier of a turn: read-only, workspace-write or full-access. Agent and Plan expose the writable scopes only, Ask is the dedicated read-only mode, and the workspace write gate remains the single control on writes.",
+      "contextIds": [
+        "ctx.agent-backends"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.85,
+      "evidence": [
+        {
+          "path": "src/agentProfiles.ts",
+          "symbol": "WritableAgentPermission",
+          "contentHash": "004acf481d8d2a7379ceab4c52f92f89aa9ab08d94ddf10edd35d80db02dc1f3",
+          "note": "Only workspace-write and full-access are offered as writable scopes."
+        },
+        {
+          "path": "src/core/agentRunner.ts",
+          "symbol": "AgentExecutionRequest",
+          "contentHash": "89ffd05fcd77dc7cad107233ae261fbf8c010bab663a64dfb7874c9e327ff85d",
+          "note": "Only agent(apply=true) may receive a trusted writable sandbox."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "term.dext-result",
+      "canonicalName": "Dext result",
+      "displayName": "Dext Result",
+      "aliases": [
+        "result envelope",
+        "dext-result"
+      ],
+      "forbiddenNames": [],
+      "definition": "The structured value a callable returns. Agent text is only accepted after candidate extraction, validation against the declared kind and, if needed, a bounded repair attempt.",
+      "contextIds": [
+        "ctx.result-review"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.8,
+      "evidence": [
+        {
+          "path": "src/agentMessagePresentation.ts",
+          "symbol": "presentAgentMessage",
+          "contentHash": "99dd7b221db6ce018e10f725052f03bfa6fd7fec0f2741f0c3bb1a68c96e528b",
+          "note": "A parsed envelope with kind dext-result is unwrapped before presentation."
+        },
+        {
+          "path": "src/core/resultSerialization.ts",
+          "symbol": "isDextResult",
+          "note": "Results are recognized by a shared guard before they are serialized for an agent."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "term.patch",
+      "canonicalName": "patch",
+      "displayName": "Patch",
+      "aliases": [
+        "changes",
+        "diff"
+      ],
+      "forbiddenNames": [],
+      "definition": "A set of before/after file changes a turn proposes. A preview run keeps the patch applicable, while an applying run writes it under the write gate and asserts workspace consistency.",
+      "contextIds": [
+        "ctx.result-review"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.8,
+      "evidence": [
+        {
+          "path": "src/core/agentAssertions.ts",
+          "symbol": "patchChanges",
+          "contentHash": "8a2dc2cd7b543b20e09d2e8848823e2abae8e72991d0a1c30316a336e6fa7903",
+          "note": "Patch changes are read from result.patch.changes with uri, before and after."
+        },
+        {
+          "path": "src/diffPresentation.ts",
+          "symbol": "presentDiff",
+          "contentHash": "e38952768afb4b71304e60f501beac7c378ee2fd87ba2a2fa605e32d817d44a2",
+          "note": "A change is presented as context, removed and added rows with counts."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "term.plan",
+      "canonicalName": "plan",
+      "displayName": "Plan",
+      "aliases": [
+        "Plan mode"
+      ],
+      "forbiddenNames": [],
+      "definition": "A mode that generates and executes an implementation plan with the selected Plan write scope, keeping plan tasks and their progress separate from ordinary conversation text.",
+      "contextIds": [
+        "ctx.core-execution",
+        "ctx.result-review"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.78,
+      "evidence": [
+        {
+          "path": "src/core/builtins.ts",
+          "contentHash": "c029914ddb3903da650f360370b9bafa34e28356357dc04c28976dbb7f737dfb",
+          "line": 25,
+          "note": "The plan built-in declares input, the plan output kind and the same deterministic handler family."
+        },
+        {
+          "path": "src/core/agentTraceReplay.ts",
+          "symbol": "visibleTrace",
+          "contentHash": "c12ef6515e14ad64ae116d9400abaff760d53be42d307b4df052f570df6029df",
+          "note": "Replayed traces pass through the live plan-document guard so history and live views agree."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "term.project-knowledge-object",
+      "canonicalName": "project knowledge object",
+      "displayName": "Project Knowledge Object",
+      "aliases": [
+        "knowledge object",
+        "knowledge suggestion"
+      ],
+      "forbiddenNames": [],
+      "definition": "A reviewed, evidence-backed statement about the project: a capability, context, flow, term, constraint or decision. Objects carry origin, review state, freshness, confidence and evidence, and are validated against the workspace.",
+      "contextIds": [
+        "ctx.project-knowledge"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.75,
+      "evidence": [
+        {
+          "path": "src/core/projectIntent.ts",
+          "symbol": "ProjectIntentProvenance",
+          "note": "Objects track provenance, review state and freshness explicitly."
+        },
+        {
+          "path": "src/core/projectKnowledge.ts",
+          "symbol": "KnowledgeValidity",
+          "note": "Knowledge carries a validity notion separate from its content."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "term.project-diagram",
+      "canonicalName": "project diagram",
+      "displayName": "Project Diagram",
+      "aliases": [
+        "diagram document",
+        "diagram"
+      ],
+      "forbiddenNames": [],
+      "definition": "A grounded view of the project in one of five kinds: architecture, workflow, sequence, data_flow or lifecycle. A diagram carries nodes, relations, evidence and kind-specific semantics such as lanes, stages, participants, messages or states.",
+      "contextIds": [
+        "ctx.project-knowledge"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.8,
+      "evidence": [
+        {
+          "path": "src/core/archifyAdapter.ts",
+          "contentHash": "cd02066da0a2a92fa278cafd8413977349d900096f577463f7a616607ce0b146",
+          "line": 22,
+          "note": "The supported kind vocabulary is fixed at five entries."
+        },
+        {
+          "path": "src/core/projectDiagramHistory.ts",
+          "symbol": "ProjectDiagramSnapshot",
+          "note": "Snapshots of a diagram are kept so entity, evidence and layout changes can be diffed."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "term.evidence",
+      "canonicalName": "evidence",
+      "displayName": "Evidence",
+      "aliases": [
+        "citation",
+        "evidence item"
+      ],
+      "forbiddenNames": [],
+      "definition": "The path, optional symbol, line and note that justify a knowledge statement or a diagram node and relation. Knowledge without evidence is not asserted.",
+      "contextIds": [
+        "ctx.project-knowledge"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.8,
+      "evidence": [
+        {
+          "path": "src/core/projectDiagram.ts",
+          "symbol": "ProjectDiagramEvidence",
+          "note": "Diagram nodes and relations carry their own evidence entries."
+        },
+        {
+          "path": "src/core/projectKnowledge.ts",
+          "symbol": "ProjectEvidence",
+          "note": "Project knowledge records evidence as a first-class field."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "term.attachment",
+      "canonicalName": "attachment",
+      "displayName": "Attachment",
+      "aliases": [
+        "context attachment",
+        "clipboard attachment"
+      ],
+      "forbiddenNames": [],
+      "definition": "Content Dext persists for a turn, such as selected text copied with context, a terminal log or an image. History keeps a compact reference token while the agent receives the on-disk path.",
+      "contextIds": [
+        "ctx.attachments-storage"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.82,
+      "evidence": [
+        {
+          "path": "src/dextStorage.ts",
+          "symbol": "DextStorage",
+          "contentHash": "37c7a168e14f8e6e4ce57fb378d1844842845d63eb47db9b22a6bb5c029f831c",
+          "note": "Attachment references resolve to global or workspace storage paths."
+        },
+        {
+          "path": "src/attachmentStore.ts",
+          "symbol": "MAX_ATTACHMENT_BYTES",
+          "contentHash": "10d1d00f78b783a224353b50f699480c6d51233ed56cb7c26023eea9444d4479",
+          "note": "Attachments have a byte ceiling with a separate configurable maximum."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "term.editor-tab-key",
+      "canonicalName": "editor tab key",
+      "displayName": "Editor Tab Key",
+      "aliases": [
+        "tab key",
+        "stable key"
+      ],
+      "forbiddenNames": [],
+      "definition": "The stable identity of a Dext editor page: the page kind plus an optional resource id and workspace scope. It is never derived from a document title or an array index, so the same target resolves to the same tab across reloads.",
+      "contextIds": [
+        "ctx.extension-host"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.85,
+      "evidence": [
+        {
+          "path": "src/editorTabTypes.ts",
+          "contentHash": "9bef91ee5c92b776c4667d944562bd8a4c3ff8af7d300e04ab92c1621a6e12fa",
+          "line": 1,
+          "note": "The module comment states keys come from the page kind plus an optional resource id."
+        },
+        {
+          "path": "src/editorTabState.ts",
+          "symbol": "parseEditorTabKey",
+          "contentHash": "c540090cc59599f07cf8d18a161f80c41a47a6389ef28dedf27d922b071ad509",
+          "note": "State restoration rejects unknown keys instead of opening an unrelated page."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "term.skill",
+      "canonicalName": "Dext skill",
+      "displayName": "Skill",
+      "aliases": [
+        "skill identifier"
+      ],
+      "forbiddenNames": [],
+      "definition": "An optional capability loaded only for one call through the internal skills field of ask, plan, agent and template, resolved from a skill catalog.",
+      "contextIds": [
+        "ctx.resources-api"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.72,
+      "evidence": [
+        {
+          "path": "src/core/builtins.ts",
+          "contentHash": "c029914ddb3903da650f360370b9bafa34e28356357dc04c28976dbb7f737dfb",
+          "line": 16,
+          "note": "The skills field is internal and loaded only for that Ask call."
+        },
+        {
+          "path": "src/core/skillCatalog.ts",
+          "symbol": "SkillDescriptor",
+          "note": "Skills are described and resolved by the skill catalog."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "term.rule",
+      "canonicalName": "Dext rule",
+      "displayName": "Rule",
+      "aliases": [
+        "rule file"
+      ],
+      "forbiddenNames": [],
+      "definition": "An optional .dext/rules-relative file loaded only for a single call through the internal rules field, and also a static check the API diagnostics can validate.",
+      "contextIds": [
+        "ctx.resources-api"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.7,
+      "evidence": [
+        {
+          "path": "src/core/builtins.ts",
+          "contentHash": "c029914ddb3903da650f360370b9bafa34e28356357dc04c28976dbb7f737dfb",
+          "line": 17,
+          "note": "The rules field is an internal list of .dext/rules-relative files for that call only."
+        },
+        {
+          "path": "src/core/apiRuleDiagnostics.ts",
+          "symbol": "apiRuleDiagnostics",
+          "contentHash": "34919ac9e20753a7aca24c178db7e1a6a1ac127700702c2e7c2bb32a4232a75f",
+          "note": "Rule literals passed to a built-in with a rules field are checked statically."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "term.mcp-server",
+      "canonicalName": "MCP server",
+      "displayName": "MCP Server",
+      "aliases": [
+        "MCP tool",
+        "MCP manifest"
+      ],
+      "forbiddenNames": [],
+      "definition": "An external tool server registered from .dext/mcp or global storage. Its discovered tools become callables with generated fields and result types, and its credentials are stored in secret storage with redacted URLs in diagnostics.",
+      "contextIds": [
+        "ctx.resources-api"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.75,
+      "evidence": [
+        {
+          "path": "src/core/apiCheck.ts",
+          "symbol": "checkApis",
+          "contentHash": "89762fd77b0dec2f915f4e31f3a304489afe48e98b2a18667107d1d2e37c349a",
+          "note": "MCP manifests are discovered under .dext/mcp and in global storage."
+        },
+        {
+          "path": "src/application.ts",
+          "contentHash": "be7ce6e090a3513a715b0495d1cc32904188782bafb3783a9fbfef51168d2308",
+          "line": 39,
+          "note": "The host builds the MCP registry, credential store and manifest parser."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    }
+  ],
+  "constraints": [
+    {
+      "id": "con.hostless-core",
+      "statement": "Modules under src/core must not depend on the VS Code API; host capabilities are reached through ports implemented by the extension host.",
+      "rationale": "Keeps the execution engine testable and portable, and confines host-specific behaviour to the adapters that implement the ports.",
+      "scope": [
+        "ctx.core-execution",
+        "ctx.result-review",
+        "ctx.agent-backends"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.85,
+      "evidence": [
+        {
+          "path": "src/core/agentAssertions.ts",
+          "contentHash": "8a2dc2cd7b543b20e09d2e8848823e2abae8e72991d0a1c30316a336e6fa7903",
+          "line": 5,
+          "note": "The snapshot port exists precisely because the core module stays hostless."
+        },
+        {
+          "path": "src/application.ts",
+          "contentHash": "be7ce6e090a3513a715b0495d1cc32904188782bafb3783a9fbfef51168d2308",
+          "line": 4,
+          "note": "The host owns the wiring that connects core modules to VS Code."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "con.result-contract",
+      "statement": "Agent output is untrusted text: it must pass candidate extraction and the declared result contract before it is presented, applied or recorded.",
+      "rationale": "Providers can return prose, partial JSON or a whole-file rewrite; the boundary and assertions decide what is actually accepted.",
+      "scope": [
+        "ctx.result-review"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.82,
+      "evidence": [
+        {
+          "path": "src/core/agentAssertions.ts",
+          "symbol": "AgentAssertionResult",
+          "contentHash": "8a2dc2cd7b543b20e09d2e8848823e2abae8e72991d0a1c30316a336e6fa7903",
+          "note": "Hard violations are deterministic and must not be retried by the repair predictor."
+        },
+        {
+          "path": "src/agentMessagePresentation.ts",
+          "symbol": "presentAgentMessage",
+          "contentHash": "99dd7b221db6ce018e10f725052f03bfa6fd7fec0f2741f0c3bb1a68c96e528b",
+          "note": "Unparseable text falls back to a plain message presentation instead of a result."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "con.write-gate",
+      "statement": "Only an agent call with apply=true may receive a trusted writable sandbox; the workspace write gate remains the single control over writes.",
+      "rationale": "Preview runs must produce an applicable patch without touching the workspace, so consistency assertions run in preview mode.",
+      "scope": [
+        "ctx.agent-backends",
+        "ctx.extension-host"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.85,
+      "evidence": [
+        {
+          "path": "src/core/agentRunner.ts",
+          "symbol": "AgentExecutionRequest",
+          "contentHash": "89ffd05fcd77dc7cad107233ae261fbf8c010bab663a64dfb7874c9e327ff85d",
+          "note": "The interface documents that only agent(apply=true) may receive a trusted writable sandbox."
+        },
+        {
+          "path": "src/core/agentAssertions.ts",
+          "symbol": "AgentAssertionSnapshot",
+          "contentHash": "8a2dc2cd7b543b20e09d2e8848823e2abae8e72991d0a1c30316a336e6fa7903",
+          "note": "Hard assertions are enabled only for preview runs, where apply would otherwise fail later."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "con.provider-structured-output",
+      "statement": "Provider-native structured output is only available on backends that actually expose it; the Harness is rejected for such requests rather than silently downgraded to a text prompt.",
+      "rationale": "A silent downgrade would change what the caller can rely on without any visible signal.",
+      "scope": [
+        "ctx.agent-backends"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.8,
+      "evidence": [
+        {
+          "path": "src/core/agentRouter.ts",
+          "symbol": "DefaultAgentRunner",
+          "contentHash": "4b9fdddcfc2dac4630dc8ab10d4fc12c50510a8481879a6aab3b455d1b1956f8",
+          "note": "runStructured throws when the selected runner has no native structured output channel."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "con.idle-timeout-tool-pause",
+      "statement": "Idle detection pauses while reported tools are executing and resumes when the last one finishes; an explicitly configured total limit stays independent of activity.",
+      "rationale": "A long-running tool is not an idle turn, while a total limit must remain a hard ceiling.",
+      "scope": [
+        "ctx.agent-backends"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.82,
+      "evidence": [
+        {
+          "path": "src/core/agentTimeout.ts",
+          "contentHash": "65c7ce85699c29fbedd103d8d3b06c3afdcf1c8348afc5927eac6c09cda4512f",
+          "line": 12,
+          "note": "The comment describes paused idle detection and the independent total limit."
+        },
+        {
+          "path": "src/core/agentToolActivity.ts",
+          "symbol": "trackCliToolActivity",
+          "contentHash": "d791fb0d8c93b11debea138bcab89f6f3271462281e75f1be2ef6e55cf63d517",
+          "note": "Only recognized lifecycle events move the watchdog, so unknown events do not suspend it."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "con.tab-identity",
+      "statement": "Editor tab identity must come from the page kind plus an optional resource id, never from a document title or an array index.",
+      "rationale": "Titles change while a turn runs and indexes shift with the list, either of which would detach a tab from its target.",
+      "scope": [
+        "ctx.extension-host"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.85,
+      "evidence": [
+        {
+          "path": "src/editorTabTypes.ts",
+          "contentHash": "9bef91ee5c92b776c4667d944562bd8a4c3ff8af7d300e04ab92c1621a6e12fa",
+          "line": 4,
+          "note": "The comment states the key is derived from the kind plus a resource id, never a title or index."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "con.single-panel-per-key",
+      "statement": "At most one panel may exist per stable tab key, and a restore racing another restore must reuse or skip rather than double-open.",
+      "rationale": "Serializer restore and proactive restore can both fire for the same key, and a duplicate page would show conflicting state.",
+      "scope": [
+        "ctx.extension-host"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.85,
+      "evidence": [
+        {
+          "path": "src/editorTabManager.ts",
+          "contentHash": "a2af4c437bccc5ab9ca1f7649f0e7ea077ea3caf8e2249e15d3acfbb394b541a",
+          "line": 42,
+          "note": "The manager owns one panel per key and reveals the existing panel on reopen."
+        },
+        {
+          "path": "src/editorTabSerializer.ts",
+          "symbol": "EditorTabRestorer",
+          "contentHash": "2590c699385f9890cb2d54c36cea39b2488233e1c350dbff93f235da78ce48f0",
+          "note": "A claimed key makes a concurrent restore report skipped."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "con.attachment-limits",
+      "statement": "Attachment content is bounded by a byte limit that falls back to the default when the configured value is out of range, and storage file names must not contain path traversal.",
+      "rationale": "Protects the extension host and keeps a mistyped setting from disabling the feature entirely.",
+      "scope": [
+        "ctx.attachments-storage"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.8,
+      "evidence": [
+        {
+          "path": "src/attachmentStore.ts",
+          "symbol": "attachmentByteLimit",
+          "contentHash": "10d1d00f78b783a224353b50f699480c6d51233ed56cb7c26023eea9444d4479",
+          "note": "Out-of-range configured limits fall back to MAX_ATTACHMENT_BYTES."
+        },
+        {
+          "path": "src/dextStorage.ts",
+          "symbol": "safeSegments",
+          "contentHash": "37c7a168e14f8e6e4ce57fb378d1844842845d63eb47db9b22a6bb5c029f831c",
+          "note": "Unsafe segments reject the reference before any path is built."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "con.diagram-kind-vocabulary",
+      "statement": "Project diagrams are limited to the five supported kinds, and each kind must satisfy its own semantic shape before it can be rendered.",
+      "rationale": "A view without its required semantics would render something the evidence does not support.",
+      "scope": [
+        "ctx.project-knowledge"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.78,
+      "evidence": [
+        {
+          "path": "src/core/archifyAdapter.ts",
+          "contentHash": "cd02066da0a2a92fa278cafd8413977349d900096f577463f7a616607ce0b146",
+          "line": 22,
+          "note": "The adapter lists exactly architecture, workflow, sequence, data_flow and lifecycle."
+        },
+        {
+          "path": "src/core/projectDiagramProcess.ts",
+          "symbol": "assertDiagramDocument",
+          "note": "A diagram document is asserted before it is handed to the renderer."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "con.credential-redaction",
+      "statement": "MCP credentials are stored in secret storage and URLs are redacted before they appear in diagnostics or user-visible text.",
+      "rationale": "Diagnostics and settings surfaces are not an acceptable place to leak tokens.",
+      "scope": [
+        "ctx.resources-api"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.72,
+      "evidence": [
+        {
+          "path": "src/extension.ts",
+          "contentHash": "2f4eaa893987a74560066d1a513b47d0b6fced6eb7e8da99bc77bdb0f7f5b226",
+          "line": 4,
+          "note": "redactedMcpUrl is imported by the activation module that reports MCP state."
+        },
+        {
+          "path": "src/core/mcpSecrets.ts",
+          "symbol": "McpAccessTokenStore",
+          "note": "Credentials are kept in a secret-storage-like store keyed by kind and scope."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    }
+  ],
+  "decisions": [
+    {
+      "id": "dec.provider-router",
+      "title": "One runner facade over several agent backends",
+      "decision": "A single DefaultAgentRunner implements the AgentRunner interface and selects the CLI runner or the Harness runner from profile.provider, rejecting unknown providers.",
+      "alternatives": [
+        "Let every caller construct its own provider process.",
+        "Downgrade unsupported requests to a text prompt."
+      ],
+      "consequences": [
+        "Callers depend on one interface and one set of timeouts.",
+        "Provider-specific capabilities stay visible as explicit errors instead of silent substitutions."
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.8,
+      "evidence": [
+        {
+          "path": "src/core/agentRouter.ts",
+          "contentHash": "4b9fdddcfc2dac4630dc8ab10d4fc12c50510a8481879a6aab3b455d1b1956f8",
+          "line": 15,
+          "note": "runner() maps each provider to a backend and throws for anything else."
+        },
+        {
+          "path": "src/core/agentRouter.ts",
+          "contentHash": "4b9fdddcfc2dac4630dc8ab10d4fc12c50510a8481879a6aab3b455d1b1956f8",
+          "line": 5,
+          "note": "setTimeouts applies the same limits to both backends."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "dec.result-boundary-and-repair",
+      "title": "Treat provider output as untrusted and repair it",
+      "decision": "Parse result candidates out of the provider text at a boundary, validate them against the declared kind, and run a bounded repair attempt when the contract is not satisfied instead of accepting the raw answer.",
+      "alternatives": [
+        "Trust the provider's own JSON output.",
+        "Fail the turn on the first malformed envelope."
+      ],
+      "consequences": [
+        "Malformed turns can still produce a usable result.",
+        "Repair attempts carry usage and are bounded so they cannot loop forever."
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.75,
+      "evidence": [
+        {
+          "path": "src/core/resultBoundary.ts",
+          "symbol": "jsonCandidates",
+          "note": "Several candidate objects can be extracted from one text answer."
+        },
+        {
+          "path": "src/core/resultRepair.ts",
+          "symbol": "aggregateUsage",
+          "note": "Repair usage is aggregated, so the extra attempts are accounted for."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "dec.hostless-core-with-ports",
+      "title": "Hostless core with host-implemented ports",
+      "decision": "Keep src/core free of VS Code imports and express host needs as interfaces such as the agent assertion snapshot that application.ts implements.",
+      "alternatives": [
+        "Import vscode directly wherever workspace or storage data is needed."
+      ],
+      "consequences": [
+        "Core logic is testable without an editor host.",
+        "Every new host need adds an explicit port instead of a hidden global dependency."
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.8,
+      "evidence": [
+        {
+          "path": "src/core/agentAssertions.ts",
+          "contentHash": "8a2dc2cd7b543b20e09d2e8848823e2abae8e72991d0a1c30316a336e6fa7903",
+          "line": 5,
+          "note": "The port is documented as the boundary the host implements."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "dec.stable-tab-keys",
+      "title": "Stable editor tab keys with a deduplicated restore",
+      "decision": "Identify every Dext editor page by a key built from the page kind and an optional resource id, register one panel per key, and let both the serializer restore and the proactive restore claim keys so neither can double-open a page.",
+      "alternatives": [
+        "Key tabs by their visible title.",
+        "Let each restore path open unconditionally."
+      ],
+      "consequences": [
+        "A target always resolves to the same tab even while titles change.",
+        "Restore results are explicit: opened, reused, skipped or invalid."
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.82,
+      "evidence": [
+        {
+          "path": "src/editorTabManager.ts",
+          "symbol": "adopt",
+          "contentHash": "a2af4c437bccc5ab9ca1f7649f0e7ea077ea3caf8e2249e15d3acfbb394b541a",
+          "note": "Adopting a key that is already open disposes the incoming panel and reveals the live one."
+        },
+        {
+          "path": "src/editorTabState.ts",
+          "symbol": "restoreEditorTabState",
+          "contentHash": "c540090cc59599f07cf8d18a161f80c41a47a6389ef28dedf27d922b071ad509",
+          "note": "A state from a newer build is skipped rather than normalized into today's vocabulary."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "dec.external-diagram-renderer",
+      "title": "Render diagrams through an external pinned renderer",
+      "decision": "Map project diagram documents through an adapter registry to an external renderer whose CLI, templates, per-kind renderers and schemas are verified up front, with a bounded number of layout repairs and an explicit receipt.",
+      "alternatives": [
+        "Render diagrams inside the extension host.",
+        "Retry layout indefinitely until it succeeds."
+      ],
+      "consequences": [
+        "Rendering failures are reported as receipts with diagnostics rather than as unexplained blanks.",
+        "The renderer's asset set and version become part of the deployment contract."
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.72,
+      "evidence": [
+        {
+          "path": "src/core/archifyAdapter.ts",
+          "contentHash": "cd02066da0a2a92fa278cafd8413977349d900096f577463f7a616607ce0b146",
+          "line": 27,
+          "note": "Every required asset is checked before a render is attempted."
+        },
+        {
+          "path": "src/core/archifyAdapter.ts",
+          "contentHash": "cd02066da0a2a92fa278cafd8413977349d900096f577463f7a616607ce0b146",
+          "line": 26,
+          "note": "The number of layout repairs is capped."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    },
+    {
+      "id": "dec.todo-correlation-by-tool-id",
+      "title": "Correlate CLI task updates by tool-use id",
+      "decision": "Track Claude task tools by their tool-use ids and consume results only for calls this tracker owns, so failed calls and other sessions cannot rewrite the conversation's todo list.",
+      "alternatives": [
+        "Count create calls to infer which tasks exist.",
+        "Accept any task event that arrives."
+      ],
+      "consequences": [
+        "A failed tool call cannot delete or duplicate tasks.",
+        "Subagent task ids, which live in another namespace, are ignored."
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0.78,
+      "evidence": [
+        {
+          "path": "src/core/agentTodoTracking.ts",
+          "symbol": "ClaudeTodoTracker",
+          "contentHash": "76c79542fd78eeff84bc16ba4c02cc461640c6485fdbd79d6e0dbbce2ac550c4",
+          "note": "One tracker per CLI turn correlates task results by tool-use id."
+        },
+        {
+          "path": "src/core/agentTodoTracking.ts",
+          "symbol": "normalizeAgentTodos",
+          "contentHash": "76c79542fd78eeff84bc16ba4c02cc461640c6485fdbd79d6e0dbbce2ac550c4",
+          "note": "An incomplete snapshot is rejected instead of deleting earlier tasks."
+        }
+      ],
+      "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+      "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+      "generatedAt": 1790078119161,
+      "promptVersion": "project-knowledge-5",
+      "schemaVersion": "2"
+    }
+  ],
+  "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
+  "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
+  "generatedAt": 1790078119161,
+  "updatedAt": 1790078119161
+}

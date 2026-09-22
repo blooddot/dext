@@ -1,0 +1,415 @@
+{
+  "schemaVersion": 1,
+  "id": "diagram.project-knowledge-data-flow",
+  "title": "Project knowledge generation data flow",
+  "kind": "data_flow",
+  "nodes": [
+    {
+      "id": "df.files",
+      "label": "Workspace files and inventory",
+      "role": "store",
+      "description": "Candidate source files together with their kind, line count and declared symbols.",
+      "semanticIds": [
+        "ctx.project-knowledge",
+        "term.evidence"
+      ],
+      "stageId": "df.stage.evidence",
+      "evidence": [
+        {
+          "path": "src/extension.ts",
+          "line": 49,
+          "note": "Workspace evidence is read by readWorkspaceEvidence in the activation module.",
+          "contentHash": "2f4eaa893987a74560066d1a513b47d0b6fced6eb7e8da99bc77bdb0f7f5b226"
+        }
+      ],
+      "confidence": 0.75,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "df.filter",
+      "label": "Exclusion and limit filter",
+      "role": "step",
+      "description": "Only included paths, within the configured depth and character budget, become evidence.",
+      "semanticIds": [
+        "ctx.project-knowledge"
+      ],
+      "stageId": "df.stage.evidence",
+      "evidence": [
+        {
+          "path": "src/extension.ts",
+          "line": 54,
+          "note": "isProjectEvidencePath and isExcludedProjectEvidencePath decide what counts.",
+          "contentHash": "2f4eaa893987a74560066d1a513b47d0b6fced6eb7e8da99bc77bdb0f7f5b226"
+        },
+        {
+          "path": "src/projectAiLimits.ts",
+          "symbol": "ProjectEvidenceLimits",
+          "note": "Evidence depth and size limits are configured and bounded."
+        }
+      ],
+      "confidence": 0.78,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "df.package",
+      "label": "Evidence package handed to the project AI",
+      "role": "step",
+      "description": "The filtered excerpts, inventory and references are the only input the generator sees.",
+      "semanticIds": [
+        "cap.project-knowledge-model"
+      ],
+      "stageId": "df.stage.generate",
+      "evidence": [
+        {
+          "path": "src/core/projectAiGeneration.ts",
+          "symbol": "ProjectEvidenceInput",
+          "note": "Generation consumes an evidence input holding the files, inventory and limits."
+        }
+      ],
+      "confidence": 0.75,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "df.objects",
+      "label": "Generated intent and knowledge objects",
+      "role": "step",
+      "description": "Capabilities, contexts, flows, terms, constraints and decisions with provenance and confidence.",
+      "semanticIds": [
+        "term.project-knowledge-object"
+      ],
+      "stageId": "df.stage.generate",
+      "evidence": [
+        {
+          "path": "src/core/projectIntent.ts",
+          "symbol": "ProjectIntentOrigin",
+          "note": "Generated objects carry origin, review state, freshness and confidence."
+        }
+      ],
+      "confidence": 0.72,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "df.suggestions",
+      "label": "Review suggestions queue",
+      "role": "step",
+      "description": "Generated items become suggestions that a human must decide on.",
+      "semanticIds": [
+        "cap.project-knowledge-model"
+      ],
+      "stageId": "df.stage.review",
+      "evidence": [
+        {
+          "path": "src/core/projectKnowledgeReview.ts",
+          "symbol": "KnowledgeDraftQueue",
+          "note": "Drafts are queued and safety-checked before they can touch accepted objects."
+        }
+      ],
+      "confidence": 0.75,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "df.decisions",
+      "label": "Accept, edit or reject decisions",
+      "role": "step",
+      "description": "Every suggestion receives a recorded decision instead of being applied silently.",
+      "semanticIds": [
+        "ctx.project-knowledge"
+      ],
+      "stageId": "df.stage.review",
+      "evidence": [
+        {
+          "path": "src/core/projectKnowledgeReview.ts",
+          "symbol": "KnowledgeDecisionRecord",
+          "note": "Decisions are recorded as their own artifact."
+        }
+      ],
+      "confidence": 0.72,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "df.validation",
+      "label": "Fact validation against the workspace",
+      "role": "step",
+      "description": "Stored facts are validated against a current snapshot, and affected objects are identified.",
+      "semanticIds": [
+        "ctx.project-knowledge"
+      ],
+      "stageId": "df.stage.validate",
+      "evidence": [
+        {
+          "path": "src/core/projectKnowledgeValidation.ts",
+          "symbol": "validateProjectObjectFacts",
+          "note": "Validation is performed through a host-supplied fact snapshot."
+        },
+        {
+          "path": "src/core/projectArchitecture.ts",
+          "symbol": "evaluateArchitectureRules",
+          "note": "Declared architecture rules are evaluated against the model."
+        }
+      ],
+      "confidence": 0.72,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "df.store",
+      "label": "Project store",
+      "role": "store",
+      "description": "Project definition, knowledge objects and architecture document on disk.",
+      "semanticIds": [
+        "ctx.project-knowledge"
+      ],
+      "stageId": "df.stage.persist",
+      "evidence": [
+        {
+          "path": "src/projectStore.ts",
+          "symbol": "ProjectArchitectureDocument",
+          "note": "The store holds the architecture document beside the project definition."
+        }
+      ],
+      "confidence": 0.78,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "df.diagram",
+      "label": "Diagram documents for the adapters",
+      "role": "step",
+      "description": "Persisted diagrams are fed to the adapter registry for rendering.",
+      "semanticIds": [
+        "cap.diagram-generation",
+        "term.project-diagram"
+      ],
+      "stageId": "df.stage.persist",
+      "evidence": [
+        {
+          "path": "src/projectStore.ts",
+          "symbol": "projectDiagramPath",
+          "note": "Each diagram gets a deterministic path in the project store."
+        },
+        {
+          "path": "src/core/projectDiagramRegistry.ts",
+          "symbol": "ProjectDiagramAdapterRegistry",
+          "note": "The registry maps a stored diagram to a renderer."
+        }
+      ],
+      "confidence": 0.75,
+      "review": "draft",
+      "freshness": "current"
+    }
+  ],
+  "relations": [
+    {
+      "id": "df.r1",
+      "from": "df.files",
+      "to": "df.filter",
+      "kind": "flows_to",
+      "label": "candidate evidence files",
+      "evidence": [
+        {
+          "path": "src/extension.ts",
+          "line": 49,
+          "note": "readWorkspaceEvidence is the host entry that produces candidate workspace evidence.",
+          "contentHash": "2f4eaa893987a74560066d1a513b47d0b6fced6eb7e8da99bc77bdb0f7f5b226"
+        }
+      ],
+      "confidence": 0.75,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "df.r2",
+      "from": "df.filter",
+      "to": "df.package",
+      "kind": "flows_to",
+      "label": "included excerpts and inventory",
+      "evidence": [
+        {
+          "path": "src/core/projectAiGeneration.ts",
+          "symbol": "ProjectEvidenceInventoryEntry",
+          "note": "The inventory carries every candidate including files without an excerpt."
+        }
+      ],
+      "confidence": 0.75,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "df.r3",
+      "from": "df.package",
+      "to": "df.objects",
+      "kind": "flows_to",
+      "label": "generated model content",
+      "evidence": [
+        {
+          "path": "src/core/projectAiGeneration.ts",
+          "symbol": "ProjectKnowledgeReference",
+          "note": "Generated content references knowledge objects it proposes."
+        }
+      ],
+      "confidence": 0.7,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "df.r4",
+      "from": "df.objects",
+      "to": "df.suggestions",
+      "kind": "flows_to",
+      "label": "items awaiting a human decision",
+      "evidence": [
+        {
+          "path": "src/core/projectKnowledgeReview.ts",
+          "symbol": "KnowledgeSuggestion",
+          "note": "Generated items become suggestions rather than accepted objects."
+        }
+      ],
+      "confidence": 0.72,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "df.r5",
+      "from": "df.suggestions",
+      "to": "df.decisions",
+      "kind": "flows_to",
+      "label": "decision per suggestion",
+      "evidence": [
+        {
+          "path": "src/core/projectKnowledgeReview.ts",
+          "symbol": "decisionKey",
+          "note": "A stable key identifies the decision belonging to a suggestion."
+        }
+      ],
+      "confidence": 0.72,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "df.r6",
+      "from": "df.decisions",
+      "to": "df.validation",
+      "kind": "flows_to",
+      "label": "accepted objects to verify",
+      "evidence": [
+        {
+          "path": "src/core/projectKnowledgeValidation.ts",
+          "symbol": "affectedProjectObjectIds",
+          "note": "Validation reports which accepted objects a fact change affects."
+        }
+      ],
+      "confidence": 0.7,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "df.r7",
+      "from": "df.validation",
+      "to": "df.store",
+      "kind": "writes",
+      "label": "validated objects",
+      "evidence": [
+        {
+          "path": "src/projectStore.ts",
+          "symbol": "projectObjectPath",
+          "note": "Validated objects are written to their deterministic store path."
+        }
+      ],
+      "confidence": 0.72,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "df.r8",
+      "from": "df.store",
+      "to": "df.diagram",
+      "kind": "reads",
+      "label": "stored diagram documents",
+      "evidence": [
+        {
+          "path": "src/core/projectDiagram.ts",
+          "symbol": "ProjectDiagramNode",
+          "note": "Stored diagram documents carry nodes and relations that a renderer consumes."
+        }
+      ],
+      "confidence": 0.7,
+      "review": "draft",
+      "freshness": "current"
+    }
+  ],
+  "semantics": {
+    "stages": [
+      {
+        "id": "df.stage.evidence",
+        "label": "Evidence collection and filtering",
+        "order": 0,
+        "evidence": [
+          {
+            "path": "src/extension.ts",
+            "line": 49,
+            "note": "Workspace evidence for the project model is produced during activation wiring."
+          }
+        ]
+      },
+      {
+        "id": "df.stage.generate",
+        "label": "AI generation of model objects",
+        "order": 1,
+        "evidence": [
+          {
+            "path": "src/core/projectAiGeneration.ts",
+            "symbol": "ProjectKnowledgeReference",
+            "note": "Generation emits references to the knowledge objects it proposes."
+          }
+        ]
+      },
+      {
+        "id": "df.stage.review",
+        "label": "Human review and decision",
+        "order": 2,
+        "evidence": [
+          {
+            "path": "src/core/projectKnowledgeReview.ts",
+            "symbol": "KnowledgeSuggestion",
+            "note": "Suggestions exist so a person decides what becomes knowledge."
+          }
+        ]
+      },
+      {
+        "id": "df.stage.validate",
+        "label": "Fact validation",
+        "order": 3,
+        "evidence": [
+          {
+            "path": "src/core/projectKnowledgeValidation.ts",
+            "symbol": "FactValidation",
+            "note": "Each fact validation is reported individually."
+          }
+        ]
+      },
+      {
+        "id": "df.stage.persist",
+        "label": "Persistence and diagram hand-off",
+        "order": 4,
+        "evidence": [
+          {
+            "path": "src/projectStore.ts",
+            "symbol": "ProjectDefinition",
+            "note": "The project definition and its objects are persisted by the store."
+          }
+        ]
+      }
+    ]
+  },
+  "version": 0,
+  "updatedAt": 1790078119161,
+  "confidence": 0.7,
+  "review": "draft",
+  "freshness": "current"
+}

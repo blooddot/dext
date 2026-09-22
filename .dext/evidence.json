@@ -1,8 +1,8 @@
 {
   "version": 1,
   "trigger": "initialize",
-  "generatedAt": 1790066000550,
-  "inputHash": "d3210f87b3e0368350c5e445281f09d97b91e9e99117385b6ef02810a32b8c97",
+  "generatedAt": 1790077692995,
+  "inputHash": "6369149edd48ff597c0cc8a4a7dcfca18abcf8752cf9996f7bcaacefe56c4b8b",
   "selection": {
     "scope": [
       "src/**"
@@ -13,10 +13,10 @@
     "evidenceChars": 600000
   },
   "inventory": {
-    "total": 193,
-    "withSymbols": 191,
+    "total": 194,
+    "withSymbols": 192,
     "byKind": {
-      "source": 193
+      "source": 194
     }
   },
   "excerpts": {
@@ -27,7 +27,7 @@
     }
   },
   "omitted": {
-    "files": 137,
+    "files": 138,
     "objects": 0,
     "knowledge": 0
   },
@@ -92,6 +92,7 @@
     "src/core/harnessPresetDefault.ts",
     "src/core/harnessPresets.ts",
     "src/core/harnessQuestions.ts",
+    "src/core/harnessResultTool.ts",
     "src/core/ignoreRules.ts",
     "src/core/languageHover.ts",
     "src/core/languageService.ts",

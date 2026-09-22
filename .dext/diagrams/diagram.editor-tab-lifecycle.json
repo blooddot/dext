@@ -1,0 +1,634 @@
+{
+  "schemaVersion": 1,
+  "id": "diagram.editor-tab-lifecycle",
+  "title": "Editor tab lifecycle",
+  "kind": "lifecycle",
+  "nodes": [
+    {
+      "id": "ls.absent",
+      "label": "No panel open for the key",
+      "role": "state",
+      "description": "Starting point before an open or restore request.",
+      "semanticIds": [
+        "cap.editor-tabs"
+      ],
+      "evidence": [
+        {
+          "path": "src/editorTabManager.ts",
+          "line": 42,
+          "note": "The manager tracks open tabs in a map keyed by the stable key.",
+          "contentHash": "a2af4c437bccc5ab9ca1f7649f0e7ea077ea3caf8e2249e15d3acfbb394b541a"
+        }
+      ],
+      "confidence": 0.82,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "ls.keyKnown",
+      "label": "Key parsed and descriptor resolved",
+      "role": "state",
+      "description": "The key maps to a known tab kind and a descriptor with a view type and title.",
+      "semanticIds": [
+        "term.editor-tab-key"
+      ],
+      "evidence": [
+        {
+          "path": "src/editorTabTypes.ts",
+          "line": 7,
+          "note": "Only the declared tab kinds can produce a valid key.",
+          "contentHash": "9bef91ee5c92b776c4667d944562bd8a4c3ff8af7d300e04ab92c1621a6e12fa"
+        },
+        {
+          "path": "src/editorTabSerializer.ts",
+          "symbol": "descriptorForKey",
+          "note": "An unparsable key yields no descriptor.",
+          "contentHash": "2590c699385f9890cb2d54c36cea39b2488233e1c350dbff93f235da78ce48f0"
+        }
+      ],
+      "confidence": 0.85,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "ls.opened",
+      "label": "Panel created and registered",
+      "role": "state",
+      "description": "A new webview panel exists for the key and the manager owns it.",
+      "semanticIds": [
+        "cap.editor-tabs"
+      ],
+      "evidence": [
+        {
+          "path": "src/editorTabManager.ts",
+          "line": 50,
+          "note": "open() creates the panel when the key is not registered.",
+          "contentHash": "a2af4c437bccc5ab9ca1f7649f0e7ea077ea3caf8e2249e15d3acfbb394b541a"
+        }
+      ],
+      "confidence": 0.85,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "ls.reused",
+      "label": "Existing panel revealed",
+      "role": "state",
+      "description": "The key was already open, so the existing panel is revealed instead of duplicated.",
+      "semanticIds": [
+        "con.single-panel-per-key"
+      ],
+      "evidence": [
+        {
+          "path": "src/editorTabManager.ts",
+          "line": 52,
+          "note": "An existing record causes reveal() and created:false.",
+          "contentHash": "a2af4c437bccc5ab9ca1f7649f0e7ea077ea3caf8e2249e15d3acfbb394b541a"
+        }
+      ],
+      "confidence": 0.85,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "ls.pending",
+      "label": "Restore claimed the key",
+      "role": "state",
+      "description": "A restore path owns the key while it creates or adopts the panel.",
+      "semanticIds": [
+        "cap.editor-tabs"
+      ],
+      "evidence": [
+        {
+          "path": "src/editorTabSerializer.ts",
+          "symbol": "EditorTabRestorer",
+          "note": "claim() reserves a key that is neither open nor busy.",
+          "contentHash": "2590c699385f9890cb2d54c36cea39b2488233e1c350dbff93f235da78ce48f0"
+        }
+      ],
+      "confidence": 0.8,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "ls.adopted",
+      "label": "Restored panel adopted",
+      "role": "state",
+      "description": "A panel VS Code already restored is registered under the same key.",
+      "semanticIds": [
+        "cap.editor-tabs"
+      ],
+      "evidence": [
+        {
+          "path": "src/editorTabSerializer.ts",
+          "symbol": "adoptRestored",
+          "note": "An adopted panel goes through the same manager registration.",
+          "contentHash": "2590c699385f9890cb2d54c36cea39b2488233e1c350dbff93f235da78ce48f0"
+        }
+      ],
+      "confidence": 0.78,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "ls.skipped",
+      "label": "Duplicate restore skipped",
+      "role": "state",
+      "description": "The second restore for the same key reports skipped so no page is created twice.",
+      "semanticIds": [
+        "con.single-panel-per-key"
+      ],
+      "evidence": [
+        {
+          "path": "src/editorTabSerializer.ts",
+          "symbol": "EditorTabRestoreResult",
+          "note": "skipped is one of the four documented restore statuses.",
+          "contentHash": "2590c699385f9890cb2d54c36cea39b2488233e1c350dbff93f235da78ce48f0"
+        }
+      ],
+      "confidence": 0.8,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "ls.invalid",
+      "label": "Restore rejected",
+      "role": "state",
+      "description": "Unknown keys, invalid state and states from a newer build are refused rather than normalized.",
+      "semanticIds": [
+        "con.tab-identity"
+      ],
+      "evidence": [
+        {
+          "path": "src/editorTabState.ts",
+          "symbol": "restoreEditorTabState",
+          "note": "A newer restoreVersion is reported as an error instead of being rewritten.",
+          "contentHash": "c540090cc59599f07cf8d18a161f80c41a47a6389ef28dedf27d922b071ad509"
+        }
+      ],
+      "confidence": 0.82,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "ls.closed",
+      "label": "Panel disposed and key released",
+      "role": "state",
+      "description": "Closing removes the record and disposes the panel without touching stored data.",
+      "semanticIds": [
+        "cap.editor-tabs"
+      ],
+      "evidence": [
+        {
+          "path": "src/editorTabManager.ts",
+          "symbol": "closeIfCurrent",
+          "note": "A dispose callback only closes the key while its own panel is still registered.",
+          "contentHash": "a2af4c437bccc5ab9ca1f7649f0e7ea077ea3caf8e2249e15d3acfbb394b541a"
+        }
+      ],
+      "confidence": 0.82,
+      "review": "draft",
+      "freshness": "current"
+    }
+  ],
+  "relations": [
+    {
+      "id": "ls.t1",
+      "from": "ls.absent",
+      "to": "ls.keyKnown",
+      "kind": "transitions",
+      "label": "open or restore requested",
+      "evidence": [
+        {
+          "path": "src/editorTabState.ts",
+          "symbol": "createEditorTabState",
+          "note": "An open request turns a key into validated tab state.",
+          "contentHash": "c540090cc59599f07cf8d18a161f80c41a47a6389ef28dedf27d922b071ad509"
+        }
+      ],
+      "confidence": 0.8,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "ls.t2",
+      "from": "ls.keyKnown",
+      "to": "ls.opened",
+      "kind": "transitions",
+      "label": "create the panel",
+      "evidence": [
+        {
+          "path": "src/editorTabManager.ts",
+          "line": 50,
+          "note": "A key that is not registered leads to panel creation.",
+          "contentHash": "a2af4c437bccc5ab9ca1f7649f0e7ea077ea3caf8e2249e15d3acfbb394b541a"
+        }
+      ],
+      "confidence": 0.85,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "ls.t3",
+      "from": "ls.keyKnown",
+      "to": "ls.reused",
+      "kind": "transitions",
+      "label": "reveal the registered panel",
+      "evidence": [
+        {
+          "path": "src/editorTabManager.ts",
+          "line": 52,
+          "note": "A registered key short-circuits to reveal().",
+          "contentHash": "a2af4c437bccc5ab9ca1f7649f0e7ea077ea3caf8e2249e15d3acfbb394b541a"
+        }
+      ],
+      "confidence": 0.85,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "ls.t4",
+      "from": "ls.keyKnown",
+      "to": "ls.invalid",
+      "kind": "transitions",
+      "label": "refuse the state",
+      "evidence": [
+        {
+          "path": "src/editorTabState.ts",
+          "symbol": "restoreEditorTabState",
+          "note": "Unknown keys and unsupported versions return an error instead of a state.",
+          "contentHash": "c540090cc59599f07cf8d18a161f80c41a47a6389ef28dedf27d922b071ad509"
+        }
+      ],
+      "confidence": 0.8,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "ls.t5",
+      "from": "ls.keyKnown",
+      "to": "ls.pending",
+      "kind": "transitions",
+      "label": "claim the key for a restore",
+      "evidence": [
+        {
+          "path": "src/editorTabSerializer.ts",
+          "symbol": "claim",
+          "note": "A claim succeeds only when the key is neither open nor already busy.",
+          "contentHash": "2590c699385f9890cb2d54c36cea39b2488233e1c350dbff93f235da78ce48f0"
+        }
+      ],
+      "confidence": 0.78,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "ls.t6",
+      "from": "ls.pending",
+      "to": "ls.opened",
+      "kind": "transitions",
+      "label": "proactive restore creates the panel",
+      "evidence": [
+        {
+          "path": "src/editorTabSerializer.ts",
+          "symbol": "restore",
+          "note": "The restore path opens the descriptor through the manager.",
+          "contentHash": "2590c699385f9890cb2d54c36cea39b2488233e1c350dbff93f235da78ce48f0"
+        }
+      ],
+      "confidence": 0.78,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "ls.t7",
+      "from": "ls.pending",
+      "to": "ls.adopted",
+      "kind": "transitions",
+      "label": "adopt the panel VS Code restored",
+      "evidence": [
+        {
+          "path": "src/editorTabSerializer.ts",
+          "symbol": "adoptRestored",
+          "note": "The serializer hands its restored panel to the manager as an adoption.",
+          "contentHash": "2590c699385f9890cb2d54c36cea39b2488233e1c350dbff93f235da78ce48f0"
+        }
+      ],
+      "confidence": 0.78,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "ls.t8",
+      "from": "ls.pending",
+      "to": "ls.skipped",
+      "kind": "transitions",
+      "label": "another restore already owns the key",
+      "evidence": [
+        {
+          "path": "src/editorTabSerializer.ts",
+          "symbol": "busy",
+          "note": "A busy key makes the competing restore return skipped.",
+          "contentHash": "2590c699385f9890cb2d54c36cea39b2488233e1c350dbff93f235da78ce48f0"
+        }
+      ],
+      "confidence": 0.78,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "ls.t9",
+      "from": "ls.opened",
+      "to": "ls.closed",
+      "kind": "transitions",
+      "label": "dispose the panel",
+      "evidence": [
+        {
+          "path": "src/editorTabManager.ts",
+          "symbol": "close",
+          "note": "Closing removes the record and disposes the panel.",
+          "contentHash": "a2af4c437bccc5ab9ca1f7649f0e7ea077ea3caf8e2249e15d3acfbb394b541a"
+        }
+      ],
+      "confidence": 0.82,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "ls.t10",
+      "from": "ls.adopted",
+      "to": "ls.closed",
+      "kind": "transitions",
+      "label": "dispose the adopted panel",
+      "evidence": [
+        {
+          "path": "src/editorTabManager.ts",
+          "symbol": "closeIfCurrent",
+          "note": "The guard ensures only the panel that currently owns the key can close it.",
+          "contentHash": "a2af4c437bccc5ab9ca1f7649f0e7ea077ea3caf8e2249e15d3acfbb394b541a"
+        }
+      ],
+      "confidence": 0.78,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "ls.t11",
+      "from": "ls.reused",
+      "to": "ls.closed",
+      "kind": "transitions",
+      "label": "close all tabs during deactivate",
+      "evidence": [
+        {
+          "path": "src/editorTabManager.ts",
+          "symbol": "closeAll",
+          "note": "Deactivation closes every registered key.",
+          "contentHash": "a2af4c437bccc5ab9ca1f7649f0e7ea077ea3caf8e2249e15d3acfbb394b541a"
+        }
+      ],
+      "confidence": 0.75,
+      "review": "draft",
+      "freshness": "current"
+    }
+  ],
+  "semantics": {
+    "states": [
+      {
+        "nodeId": "ls.absent",
+        "kind": "initial",
+        "evidence": [
+          {
+            "path": "src/editorTabManager.ts",
+            "line": 42,
+            "note": "Before any open call the key is absent from the manager."
+          }
+        ]
+      },
+      {
+        "nodeId": "ls.keyKnown",
+        "kind": "normal",
+        "evidence": [
+          {
+            "path": "src/editorTabTypes.ts",
+            "line": 7,
+            "note": "A valid key resolves to one of the declared tab kinds."
+          }
+        ]
+      },
+      {
+        "nodeId": "ls.opened",
+        "kind": "normal",
+        "evidence": [
+          {
+            "path": "src/editorTabManager.ts",
+            "line": 50,
+            "note": "A created panel is registered under the key."
+          }
+        ]
+      },
+      {
+        "nodeId": "ls.reused",
+        "kind": "normal",
+        "evidence": [
+          {
+            "path": "src/editorTabManager.ts",
+            "line": 52,
+            "note": "An already registered key is revealed."
+          }
+        ]
+      },
+      {
+        "nodeId": "ls.pending",
+        "kind": "normal",
+        "evidence": [
+          {
+            "path": "src/editorTabSerializer.ts",
+            "symbol": "claim",
+            "note": "The pending set marks keys currently being restored."
+          }
+        ]
+      },
+      {
+        "nodeId": "ls.adopted",
+        "kind": "normal",
+        "evidence": [
+          {
+            "path": "src/editorTabSerializer.ts",
+            "symbol": "adoptRestored",
+            "note": "A restored panel becomes a managed tab."
+          }
+        ]
+      },
+      {
+        "nodeId": "ls.skipped",
+        "kind": "normal",
+        "evidence": [
+          {
+            "path": "src/editorTabSerializer.ts",
+            "symbol": "EditorTabRestoreResult",
+            "note": "skipped is a documented non-error outcome."
+          }
+        ]
+      },
+      {
+        "nodeId": "ls.invalid",
+        "kind": "terminal",
+        "outcome": "failure",
+        "evidence": [
+          {
+            "path": "src/editorTabState.ts",
+            "symbol": "restoreEditorTabState",
+            "note": "An invalid or too-new state ends the restore with an error."
+          }
+        ]
+      },
+      {
+        "nodeId": "ls.closed",
+        "kind": "terminal",
+        "outcome": "success",
+        "evidence": [
+          {
+            "path": "src/editorTabManager.ts",
+            "symbol": "close",
+            "note": "Closing releases the key and disposes the panel without touching data."
+          }
+        ]
+      }
+    ],
+    "transitions": [
+      {
+        "relationId": "ls.t1",
+        "event": "open or restore request for the key",
+        "evidence": [
+          {
+            "path": "src/editorTabState.ts",
+            "symbol": "createEditorTabState",
+            "note": "State is created from the key and optional page, resource and filters."
+          }
+        ]
+      },
+      {
+        "relationId": "ls.t2",
+        "event": "manager.open(descriptor)",
+        "condition": "the key is not registered and no restore owns it",
+        "evidence": [
+          {
+            "path": "src/editorTabManager.ts",
+            "line": 50,
+            "note": "open() creates the panel for an unregistered key."
+          }
+        ]
+      },
+      {
+        "relationId": "ls.t3",
+        "event": "manager.open(descriptor)",
+        "condition": "a panel is already registered for the key",
+        "evidence": [
+          {
+            "path": "src/editorTabManager.ts",
+            "line": 52,
+            "note": "The existing panel is revealed and created is false."
+          }
+        ]
+      },
+      {
+        "relationId": "ls.t4",
+        "event": "restoreEditorTabState(input)",
+        "condition": "unknown key, invalid state or a restore version newer than this build",
+        "evidence": [
+          {
+            "path": "src/editorTabState.ts",
+            "symbol": "restoreEditorTabState",
+            "note": "Each rejection reason is reported explicitly."
+          }
+        ]
+      },
+      {
+        "relationId": "ls.t5",
+        "event": "restorer.claim(key)",
+        "condition": "the key is neither open nor busy",
+        "evidence": [
+          {
+            "path": "src/editorTabSerializer.ts",
+            "symbol": "claim",
+            "note": "A successful claim adds the key to the pending set."
+          }
+        ]
+      },
+      {
+        "relationId": "ls.t6",
+        "event": "restore(state, origin)",
+        "condition": "the restore path creates the panel first",
+        "evidence": [
+          {
+            "path": "src/editorTabSerializer.ts",
+            "symbol": "restore",
+            "note": "A created panel may also receive the restored html."
+          }
+        ]
+      },
+      {
+        "relationId": "ls.t7",
+        "event": "adoptRestored(state, create)",
+        "condition": "VS Code restored the panel before the proactive path",
+        "evidence": [
+          {
+            "path": "src/editorTabSerializer.ts",
+            "symbol": "adoptRestored",
+            "note": "The created handle is adopted into the manager."
+          }
+        ]
+      },
+      {
+        "relationId": "ls.t8",
+        "event": "restore(state, origin)",
+        "condition": "the key is already claimed by the other restore path",
+        "evidence": [
+          {
+            "path": "src/editorTabSerializer.ts",
+            "symbol": "busy",
+            "note": "A busy key short-circuits to skipped."
+          }
+        ]
+      },
+      {
+        "relationId": "ls.t9",
+        "event": "panel dispose callback",
+        "evidence": [
+          {
+            "path": "src/editorTabManager.ts",
+            "symbol": "closeIfCurrent",
+            "note": "Only the panel that currently owns the key may close it."
+          }
+        ]
+      },
+      {
+        "relationId": "ls.t10",
+        "event": "panel dispose callback for an adopted tab",
+        "evidence": [
+          {
+            "path": "src/editorTabManager.ts",
+            "symbol": "adopt",
+            "note": "An adopted panel is disposed and the live panel is revealed when the key was taken."
+          }
+        ]
+      },
+      {
+        "relationId": "ls.t11",
+        "event": "deactivate or close all",
+        "evidence": [
+          {
+            "path": "src/editorTabManager.ts",
+            "symbol": "closeAll",
+            "note": "Every registered key is closed in turn."
+          }
+        ]
+      }
+    ]
+  },
+  "version": 0,
+  "updatedAt": 1790078119161,
+  "confidence": 0.8,
+  "review": "draft",
+  "freshness": "current"
+}

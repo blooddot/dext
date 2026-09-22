@@ -1,0 +1,496 @@
+{
+  "schemaVersion": 1,
+  "id": "diagram.agent-call-sequence",
+  "title": "Typed agent call across the webview boundary",
+  "kind": "sequence",
+  "nodes": [
+    {
+      "id": "sq.webview",
+      "label": "Dext Webview (composer)",
+      "role": "actor",
+      "description": "Collects the request and later renders the turn.",
+      "semanticIds": [
+        "ctx.webview-ui"
+      ],
+      "evidence": [
+        {
+          "path": "src/webview/main.ts",
+          "line": 71,
+          "note": "The webview holds only the postMessage handle.",
+          "contentHash": "6f368d44152ed95b1a64a023a352985d9a19f0924abad7d1cf38283ff6037cd5"
+        }
+      ],
+      "confidence": 0.8,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "sq.sidebar",
+      "label": "Conversation provider (host)",
+      "role": "component",
+      "description": "Receives webview requests and owns the conversation turn.",
+      "semanticIds": [
+        "ctx.extension-host"
+      ],
+      "evidence": [
+        {
+          "path": "src/sidebarProvider.ts",
+          "note": "The provider module implements the sidebar conversation surface on the host side."
+        }
+      ],
+      "confidence": 0.7,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "sq.runtime",
+      "label": "WorkflowRuntime",
+      "role": "component",
+      "description": "Executes the compiled steps of the document.",
+      "semanticIds": [
+        "cap.workflow-execution"
+      ],
+      "evidence": [
+        {
+          "path": "src/core/workflowRuntime.ts",
+          "symbol": "WorkflowRuntime",
+          "note": "The runtime executes the compiled workflow with a concurrency limit."
+        }
+      ],
+      "confidence": 0.78,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "sq.router",
+      "label": "DefaultAgentRunner",
+      "role": "component",
+      "description": "Chooses and invokes the backend for the turn.",
+      "semanticIds": [
+        "cap.agent-orchestration"
+      ],
+      "evidence": [
+        {
+          "path": "src/core/agentRouter.ts",
+          "line": 15,
+          "note": "The router resolves the provider to a runner.",
+          "contentHash": "4b9fdddcfc2dac4630dc8ab10d4fc12c50510a8481879a6aab3b455d1b1956f8"
+        }
+      ],
+      "confidence": 0.85,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "sq.cli",
+      "label": "codex / claude CLI",
+      "role": "service",
+      "description": "External provider process that produces the answer text.",
+      "semanticIds": [
+        "ctx.agent-backends"
+      ],
+      "evidence": [
+        {
+          "path": "src/core/agentRouter.ts",
+          "line": 17,
+          "note": "The CLI runner serves codex and claude.",
+          "contentHash": "4b9fdddcfc2dac4630dc8ab10d4fc12c50510a8481879a6aab3b455d1b1956f8"
+        }
+      ],
+      "confidence": 0.82,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "sq.harness",
+      "label": "DeepSeek Harness",
+      "role": "service",
+      "description": "Alternative provider session used when the profile selects it.",
+      "semanticIds": [
+        "ctx.agent-backends"
+      ],
+      "evidence": [
+        {
+          "path": "src/core/agentRouter.ts",
+          "line": 16,
+          "note": "The Harness runner serves the deepseek-harness provider.",
+          "contentHash": "4b9fdddcfc2dac4630dc8ab10d4fc12c50510a8481879a6aab3b455d1b1956f8"
+        }
+      ],
+      "confidence": 0.8,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "sq.history",
+      "label": "History store",
+      "role": "store",
+      "description": "Persists the finished turn and its response.",
+      "semanticIds": [
+        "cap.conversation-history"
+      ],
+      "evidence": [
+        {
+          "path": "src/historyStore.ts",
+          "symbol": "DextHistorySession",
+          "note": "Sessions group the recorded turns of one conversation."
+        }
+      ],
+      "confidence": 0.78,
+      "review": "draft",
+      "freshness": "current"
+    }
+  ],
+  "relations": [
+    {
+      "id": "sq.r1",
+      "from": "sq.webview",
+      "to": "sq.sidebar",
+      "kind": "calls",
+      "label": "postMessage(WebviewRequest)",
+      "evidence": [
+        {
+          "path": "src/webview/main.ts",
+          "line": 66,
+          "note": "The webview posts a typed request to the host.",
+          "contentHash": "6f368d44152ed95b1a64a023a352985d9a19f0924abad7d1cf38283ff6037cd5"
+        },
+        {
+          "path": "src/webviewProtocol.ts",
+          "symbol": "WebviewRequest",
+          "note": "The request union is the contract of this call."
+        }
+      ],
+      "confidence": 0.85,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "sq.r2",
+      "from": "sq.sidebar",
+      "to": "sq.runtime",
+      "kind": "calls",
+      "label": "execute the compiled workflow",
+      "evidence": [
+        {
+          "path": "src/application.ts",
+          "line": 17,
+          "note": "The host compiles the document and runs it through the workflow runtime.",
+          "contentHash": "be7ce6e090a3513a715b0495d1cc32904188782bafb3783a9fbfef51168d2308"
+        }
+      ],
+      "confidence": 0.78,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "sq.r3",
+      "from": "sq.runtime",
+      "to": "sq.router",
+      "kind": "calls",
+      "label": "run(AgentExecutionRequest)",
+      "evidence": [
+        {
+          "path": "src/core/agentRouter.ts",
+          "line": 20,
+          "note": "run() delegates to the runner selected from the profile provider.",
+          "contentHash": "4b9fdddcfc2dac4630dc8ab10d4fc12c50510a8481879a6aab3b455d1b1956f8"
+        }
+      ],
+      "confidence": 0.82,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "sq.r4",
+      "from": "sq.router",
+      "to": "sq.cli",
+      "kind": "calls",
+      "label": "spawn the provider CLI with the composed prompt",
+      "evidence": [
+        {
+          "path": "src/core/agentRunner.ts",
+          "line": 1,
+          "note": "The CLI runner spawns a child process for the provider.",
+          "contentHash": "89ffd05fcd77dc7cad107233ae261fbf8c010bab663a64dfb7874c9e327ff85d"
+        }
+      ],
+      "confidence": 0.8,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "sq.r5",
+      "from": "sq.cli",
+      "to": "sq.router",
+      "kind": "returns",
+      "label": "streamed events and final answer text",
+      "evidence": [
+        {
+          "path": "src/core/agentRunner.ts",
+          "symbol": "AgentExecutionRequest",
+          "note": "onEvent carries the streamed provider events, and the call resolves with the turn's answer text.",
+          "contentHash": "89ffd05fcd77dc7cad107233ae261fbf8c010bab663a64dfb7874c9e327ff85d"
+        }
+      ],
+      "confidence": 0.72,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "sq.r6",
+      "from": "sq.router",
+      "to": "sq.harness",
+      "kind": "calls",
+      "label": "Harness turn for the deepseek-harness provider",
+      "evidence": [
+        {
+          "path": "src/core/agentRouter.ts",
+          "line": 16,
+          "note": "Only the Harness provider reaches this participant.",
+          "contentHash": "4b9fdddcfc2dac4630dc8ab10d4fc12c50510a8481879a6aab3b455d1b1956f8"
+        }
+      ],
+      "confidence": 0.78,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "sq.r7",
+      "from": "sq.harness",
+      "to": "sq.router",
+      "kind": "returns",
+      "label": "Harness turn result and drain of the session",
+      "evidence": [
+        {
+          "path": "src/core/deepseekHarnessTransport.ts",
+          "symbol": "DeepSeekHarnessTransport",
+          "note": "The transport returns the collected Harness output to the runner."
+        }
+      ],
+      "confidence": 0.7,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "sq.r8",
+      "from": "sq.router",
+      "to": "sq.runtime",
+      "kind": "returns",
+      "label": "raw result payload to be parsed at the boundary",
+      "evidence": [
+        {
+          "path": "src/core/resultBoundary.ts",
+          "symbol": "AgentResultCandidate",
+          "note": "The runtime receives text and must still extract a candidate result from it."
+        }
+      ],
+      "confidence": 0.72,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "sq.r9",
+      "from": "sq.runtime",
+      "to": "sq.history",
+      "kind": "writes",
+      "label": "record the turn and its serialized response",
+      "evidence": [
+        {
+          "path": "src/historyStore.ts",
+          "symbol": "serializeResponse",
+          "note": "The response is serialized within the configured history limits."
+        }
+      ],
+      "confidence": 0.75,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "sq.r10",
+      "from": "sq.sidebar",
+      "to": "sq.webview",
+      "kind": "returns",
+      "label": "WebviewResponse with the updated state",
+      "evidence": [
+        {
+          "path": "src/webviewProtocol.ts",
+          "symbol": "WebviewResponse",
+          "note": "The response union carries state back to the webview."
+        },
+        {
+          "path": "src/webview/main.ts",
+          "line": 29,
+          "note": "The webview turns the returned state into the rendered turn.",
+          "contentHash": "6f368d44152ed95b1a64a023a352985d9a19f0924abad7d1cf38283ff6037cd5"
+        }
+      ],
+      "confidence": 0.75,
+      "review": "draft",
+      "freshness": "current"
+    }
+  ],
+  "semantics": {
+    "participants": [
+      {
+        "nodeId": "sq.webview",
+        "order": 0
+      },
+      {
+        "nodeId": "sq.sidebar",
+        "order": 1
+      },
+      {
+        "nodeId": "sq.runtime",
+        "order": 2
+      },
+      {
+        "nodeId": "sq.router",
+        "order": 3
+      },
+      {
+        "nodeId": "sq.cli",
+        "order": 4
+      },
+      {
+        "nodeId": "sq.harness",
+        "order": 5
+      },
+      {
+        "nodeId": "sq.history",
+        "order": 6
+      }
+    ],
+    "messages": [
+      {
+        "relationId": "sq.r1",
+        "order": 0,
+        "kind": "call",
+        "evidence": [
+          {
+            "path": "src/webview/main.ts",
+            "line": 66,
+            "note": "The request is posted from the webview."
+          }
+        ]
+      },
+      {
+        "relationId": "sq.r2",
+        "order": 1,
+        "kind": "call",
+        "evidence": [
+          {
+            "path": "src/application.ts",
+            "line": 17,
+            "note": "The host calls into the workflow runtime."
+          }
+        ]
+      },
+      {
+        "relationId": "sq.r3",
+        "order": 2,
+        "kind": "call",
+        "evidence": [
+          {
+            "path": "src/core/agentRouter.ts",
+            "line": 20,
+            "note": "The runtime calls run() on the router."
+          }
+        ]
+      },
+      {
+        "relationId": "sq.r4",
+        "order": 3,
+        "kind": "call",
+        "condition": "provider is codex or claude",
+        "evidence": [
+          {
+            "path": "src/core/agentRouter.ts",
+            "line": 17,
+            "note": "The CLI runner is selected for these providers."
+          }
+        ]
+      },
+      {
+        "relationId": "sq.r5",
+        "order": 4,
+        "kind": "return",
+        "condition": "the CLI turn produced output",
+        "evidence": [
+          {
+            "path": "src/core/agentRunner.ts",
+            "symbol": "AgentExecutionRequest",
+            "note": "Streamed events and the turn's answer text return through the same request contract."
+          }
+        ]
+      },
+      {
+        "relationId": "sq.r6",
+        "order": 5,
+        "kind": "call",
+        "condition": "provider is deepseek-harness",
+        "evidence": [
+          {
+            "path": "src/core/agentRouter.ts",
+            "line": 16,
+            "note": "The Harness runner is selected for this provider."
+          }
+        ]
+      },
+      {
+        "relationId": "sq.r7",
+        "order": 6,
+        "kind": "return",
+        "condition": "the Harness session ended",
+        "evidence": [
+          {
+            "path": "src/core/deepseekHarnessRunner.ts",
+            "symbol": "DeepSeekHarnessRunner",
+            "note": "The runner returns the collected Harness turn output."
+          }
+        ]
+      },
+      {
+        "relationId": "sq.r8",
+        "order": 7,
+        "kind": "return",
+        "evidence": [
+          {
+            "path": "src/core/agentRouter.ts",
+            "line": 20,
+            "note": "run() resolves with the payload the caller must still validate."
+          }
+        ]
+      },
+      {
+        "relationId": "sq.r9",
+        "order": 8,
+        "kind": "call",
+        "evidence": [
+          {
+            "path": "src/historyStore.ts",
+            "symbol": "DextHistoryRecord",
+            "note": "The finished turn is written to history."
+          }
+        ]
+      },
+      {
+        "relationId": "sq.r10",
+        "order": 9,
+        "kind": "return",
+        "evidence": [
+          {
+            "path": "src/webviewProtocol.ts",
+            "symbol": "WebviewResponse",
+            "note": "The state returns to the webview after the turn."
+          }
+        ]
+      }
+    ]
+  },
+  "version": 0,
+  "updatedAt": 1790078119161,
+  "confidence": 0.72,
+  "review": "draft",
+  "freshness": "current"
+}

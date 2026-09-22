@@ -1,0 +1,950 @@
+{
+  "schemaVersion": 1,
+  "id": "diagram.turn-workflow",
+  "title": "Agent turn execution workflow",
+  "kind": "workflow",
+  "nodes": [
+    {
+      "id": "wf.submit",
+      "label": "Developer submits the Dext document",
+      "role": "step",
+      "description": "The composer hands the current document to the run path.",
+      "semanticIds": [
+        "flow.turn-execution",
+        "cap.composer-authoring"
+      ],
+      "laneId": "lane.author",
+      "evidence": [
+        {
+          "path": "src/webview/codeEditor.ts",
+          "symbol": "CodeEditorOptions",
+          "note": "The editor options expose onRun to the surrounding view.",
+          "contentHash": "5140f9b4c8b35fbafa6edfcee22db9600d24e361d89d9472b969c6258979737c"
+        }
+      ],
+      "confidence": 0.8,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "wf.references",
+      "label": "Inline references and attachments are resolved",
+      "role": "step",
+      "description": "Reference tokens and dropped files become the source text the host receives.",
+      "semanticIds": [
+        "cap.composer-authoring",
+        "term.attachment"
+      ],
+      "laneId": "lane.author",
+      "evidence": [
+        {
+          "path": "src/webview/inputInsertion.ts",
+          "symbol": "inlineInsertion",
+          "note": "Inserted references keep the surrounding Dext syntax valid.",
+          "contentHash": "efb3b503248ae290d656cc6d051358752510e4468f4873d9f9e3d054f51c0475"
+        },
+        {
+          "path": "src/webview/fileDrop.ts",
+          "symbol": "droppedFilePaths",
+          "note": "Dropped paths are normalized before they become references.",
+          "contentHash": "776907bf7c25f955e2c12160f7dba67403b68f4d955c59330565fadca8874b78"
+        }
+      ],
+      "confidence": 0.75,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "wf.compile",
+      "label": "Document compiled into a workflow",
+      "role": "step",
+      "description": "Statements become typed steps against registered callables.",
+      "semanticIds": [
+        "cap.workflow-execution"
+      ],
+      "laneId": "lane.core",
+      "evidence": [
+        {
+          "path": "src/core/workflow.ts",
+          "note": "The compiler turns a Dext document into executable statements."
+        },
+        {
+          "path": "src/core/builtins.ts",
+          "line": 7,
+          "note": "The callables the compiler resolves are declared as built-ins.",
+          "contentHash": "c029914ddb3903da650f360370b9bafa34e28356357dc04c28976dbb7f737dfb"
+        }
+      ],
+      "confidence": 0.75,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "wf.validate",
+      "label": "Signature, contract and settings validated",
+      "role": "step",
+      "description": "A callable contract plus the resolved profile decides whether the call can run.",
+      "semanticIds": [
+        "cap.result-contract",
+        "term.agent-profile"
+      ],
+      "laneId": "lane.core",
+      "evidence": [
+        {
+          "path": "src/core/axAdapter.ts",
+          "symbol": "AxMethodContract",
+          "note": "The contract carries the signature and the input and output schemas.",
+          "contentHash": "20c03982dd4c4a6343f9b74acdab8a6429e4f70a9a09af20fd7ff54591ea5306"
+        },
+        {
+          "path": "src/agentSelectionDefaults.ts",
+          "symbol": "presentAgentSelection",
+          "note": "Inherited model, reasoning effort and speed are resolved before the call.",
+          "contentHash": "be65a67ac12a64ffa26bbe3c84f668fceeaeb3bf76410630a525c14671a34626"
+        }
+      ],
+      "confidence": 0.75,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "wf.route",
+      "label": "Backend selected from the profile provider",
+      "role": "step",
+      "description": "One router decides between the CLI runner and the Harness runner.",
+      "semanticIds": [
+        "cap.agent-orchestration"
+      ],
+      "laneId": "lane.core",
+      "evidence": [
+        {
+          "path": "src/core/agentRouter.ts",
+          "line": 15,
+          "note": "runner() maps the provider to a backend and rejects anything unknown.",
+          "contentHash": "4b9fdddcfc2dac4630dc8ab10d4fc12c50510a8481879a6aab3b455d1b1956f8"
+        }
+      ],
+      "confidence": 0.85,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "wf.spawn",
+      "label": "Provider CLI process spawned",
+      "role": "step",
+      "description": "The CLI backend receives the prompt, workspace and permissions it is allowed to use.",
+      "semanticIds": [
+        "ctx.agent-backends",
+        "term.permission"
+      ],
+      "laneId": "lane.provider",
+      "evidence": [
+        {
+          "path": "src/core/agentRunner.ts",
+          "symbol": "AgentExecutionRequest",
+          "note": "The request decides sandbox, permission, patch flag and extra CLI arguments.",
+          "contentHash": "89ffd05fcd77dc7cad107233ae261fbf8c010bab663a64dfb7874c9e327ff85d"
+        }
+      ],
+      "confidence": 0.8,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "wf.acp",
+      "label": "Harness turn started over the transport",
+      "role": "step",
+      "description": "The Harness backend runs the turn through its own session and transport.",
+      "semanticIds": [
+        "ctx.agent-backends"
+      ],
+      "laneId": "lane.provider",
+      "evidence": [
+        {
+          "path": "src/core/agentRouter.ts",
+          "line": 16,
+          "note": "deepseek-harness is dispatched to the Harness runner.",
+          "contentHash": "4b9fdddcfc2dac4630dc8ab10d4fc12c50510a8481879a6aab3b455d1b1956f8"
+        },
+        {
+          "path": "src/core/deepseekHarnessRunner.ts",
+          "symbol": "DeepSeekHarnessRunner",
+          "note": "The runner owns Harness sessions and model choices."
+        }
+      ],
+      "confidence": 0.78,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "wf.stream",
+      "label": "Stream events, todos and tool activity",
+      "role": "event",
+      "description": "Message, reasoning, tool and todo events are emitted as the turn proceeds.",
+      "semanticIds": [
+        "cap.agent-orchestration"
+      ],
+      "laneId": "lane.provider",
+      "evidence": [
+        {
+          "path": "src/core/agentTodoTracking.ts",
+          "symbol": "agentTodoEvent",
+          "note": "Todo snapshots are emitted as replace-style stream events.",
+          "contentHash": "76c79542fd78eeff84bc16ba4c02cc461640c6485fdbd79d6e0dbbce2ac550c4"
+        },
+        {
+          "path": "src/core/agentToolActivity.ts",
+          "symbol": "trackCliToolActivity",
+          "note": "Tool lifecycle events are read before presentation filters them.",
+          "contentHash": "d791fb0d8c93b11debea138bcab89f6f3271462281e75f1be2ef6e55cf63d517"
+        }
+      ],
+      "confidence": 0.85,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "wf.watch",
+      "label": "Watchdog armed; tool activity pauses it",
+      "role": "step",
+      "description": "The idle clock is refreshed by output and suspended while tools run.",
+      "semanticIds": [
+        "ctx.agent-backends"
+      ],
+      "laneId": "lane.core",
+      "evidence": [
+        {
+          "path": "src/core/agentTimeout.ts",
+          "line": 15,
+          "note": "The watchdog exposes activity, toolStarted, toolFinished and dispose.",
+          "contentHash": "65c7ce85699c29fbedd103d8d3b06c3afdcf1c8348afc5927eac6c09cda4512f"
+        }
+      ],
+      "confidence": 0.82,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "wf.boundary",
+      "label": "Result candidates parsed at the boundary",
+      "role": "step",
+      "description": "Provider text is reduced to candidate objects before any value is trusted.",
+      "semanticIds": [
+        "cap.result-contract",
+        "term.dext-result"
+      ],
+      "laneId": "lane.core",
+      "evidence": [
+        {
+          "path": "src/core/resultBoundary.ts",
+          "symbol": "jsonCandidates",
+          "note": "Candidate JSON objects are extracted from the answer text."
+        },
+        {
+          "path": "src/agentMessagePresentation.ts",
+          "symbol": "presentAgentMessage",
+          "note": "A dext-result envelope is unwrapped, otherwise the text stays a message.",
+          "contentHash": "99dd7b221db6ce018e10f725052f03bfa6fd7fec0f2741f0c3bb1a68c96e528b"
+        }
+      ],
+      "confidence": 0.82,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "wf.repair",
+      "label": "Contract violation repaired",
+      "role": "step",
+      "description": "A bounded repair attempt asks the provider for a conforming result.",
+      "semanticIds": [
+        "cap.result-contract"
+      ],
+      "laneId": "lane.core",
+      "evidence": [
+        {
+          "path": "src/core/resultRepair.ts",
+          "symbol": "ResultRepairRequest",
+          "note": "A repair request carries the offending result and the field to repair."
+        }
+      ],
+      "confidence": 0.7,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "wf.assert",
+      "label": "Preview assertions evaluated",
+      "role": "step",
+      "description": "Hard and soft workspace-consistency violations are separated deterministically.",
+      "semanticIds": [
+        "cap.result-contract",
+        "con.result-contract"
+      ],
+      "laneId": "lane.core",
+      "evidence": [
+        {
+          "path": "src/core/agentAssertions.ts",
+          "symbol": "AgentAssertionResult",
+          "note": "Hard violations are preview-only and must not be retried; soft ones ask for a minimal edit.",
+          "contentHash": "8a2dc2cd7b543b20e09d2e8848823e2abae8e72991d0a1c30316a336e6fa7903"
+        }
+      ],
+      "confidence": 0.8,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "wf.apply",
+      "label": "Accepted patch applied to the workspace",
+      "role": "step",
+      "description": "Only an applying turn with no hard violation writes the change.",
+      "semanticIds": [
+        "term.patch",
+        "con.write-gate"
+      ],
+      "laneId": "lane.host",
+      "evidence": [
+        {
+          "path": "src/vscodePatchHost.ts",
+          "symbol": "validatedChange",
+          "note": "The host validates a change before it is applied to a document."
+        }
+      ],
+      "confidence": 0.75,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "wf.record",
+      "label": "Turn, trace and response recorded",
+      "role": "store",
+      "description": "The finished turn is written to history with its response and usage.",
+      "semanticIds": [
+        "cap.conversation-history"
+      ],
+      "laneId": "lane.host",
+      "evidence": [
+        {
+          "path": "src/historyStore.ts",
+          "symbol": "DextHistoryRecord",
+          "note": "A record keeps the request and its serialized response within limits."
+        },
+        {
+          "path": "src/core/workflowRecorder.ts",
+          "symbol": "RecordedTurn",
+          "note": "Recorded turns preserve call, result and confirmations for replay."
+        }
+      ],
+      "confidence": 0.8,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "wf.render",
+      "label": "Turn, diff, todo and review rendered",
+      "role": "step",
+      "description": "The webview shows the result with its diff, todo progress and review card.",
+      "semanticIds": [
+        "ctx.webview-ui"
+      ],
+      "laneId": "lane.author",
+      "evidence": [
+        {
+          "path": "src/webview/main.ts",
+          "line": 29,
+          "note": "The webview entry imports the agent message and diff presentations.",
+          "contentHash": "6f368d44152ed95b1a64a023a352985d9a19f0924abad7d1cf38283ff6037cd5"
+        },
+        {
+          "path": "src/webview/turnReviewView.ts",
+          "symbol": "renderTurnReview",
+          "note": "Turn reviews are rendered as their own view."
+        }
+      ],
+      "confidence": 0.8,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "wf.timeout",
+      "label": "Turn aborted by the idle or total limit",
+      "role": "event",
+      "description": "The controller aborts with a message naming the limit that fired.",
+      "semanticIds": [
+        "con.idle-timeout-tool-pause"
+      ],
+      "laneId": "lane.failure",
+      "evidence": [
+        {
+          "path": "src/core/agentTimeout.ts",
+          "line": 2,
+          "note": "The idle default is ten minutes; a total limit is only used when configured.",
+          "contentHash": "65c7ce85699c29fbedd103d8d3b06c3afdcf1c8348afc5927eac6c09cda4512f"
+        }
+      ],
+      "confidence": 0.8,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "wf.cancel",
+      "label": "Turn cancelled by the developer",
+      "role": "event",
+      "description": "A user stop aborts the running turn through its signal.",
+      "semanticIds": [
+        "ctx.agent-backends"
+      ],
+      "laneId": "lane.failure",
+      "evidence": [
+        {
+          "path": "src/core/executionErrors.ts",
+          "symbol": "ExecutionCancelledError",
+          "note": "Cancellation has its own error type so it is not confused with a failure."
+        }
+      ],
+      "confidence": 0.75,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "wf.reject",
+      "label": "Request rejected before or after the run",
+      "role": "event",
+      "description": "Unknown backends, unsupported structured output and hard assertion violations end the turn instead of producing a result.",
+      "semanticIds": [
+        "con.provider-structured-output"
+      ],
+      "laneId": "lane.failure",
+      "evidence": [
+        {
+          "path": "src/core/agentRouter.ts",
+          "line": 18,
+          "note": "An unsupported backend raises an explicit error.",
+          "contentHash": "4b9fdddcfc2dac4630dc8ab10d4fc12c50510a8481879a6aab3b455d1b1956f8"
+        },
+        {
+          "path": "src/core/agentAssertions.ts",
+          "symbol": "AgentAssertionSnapshot",
+          "note": "Hard violations mean the preview would be rejected by apply.",
+          "contentHash": "8a2dc2cd7b543b20e09d2e8848823e2abae8e72991d0a1c30316a336e6fa7903"
+        }
+      ],
+      "confidence": 0.78,
+      "review": "draft",
+      "freshness": "current"
+    }
+  ],
+  "relations": [
+    {
+      "id": "wf.r1",
+      "from": "wf.submit",
+      "to": "wf.references",
+      "kind": "flows_to",
+      "label": "document plus references",
+      "order": 0,
+      "evidence": [
+        {
+          "path": "src/webview/codeEditor.ts",
+          "symbol": "DextCodeEditor",
+          "note": "The composer owns the document that carries the references.",
+          "contentHash": "5140f9b4c8b35fbafa6edfcee22db9600d24e361d89d9472b969c6258979737c"
+        }
+      ],
+      "confidence": 0.75,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "wf.r2",
+      "from": "wf.references",
+      "to": "wf.compile",
+      "kind": "flows_to",
+      "label": "resolved source text",
+      "order": 1,
+      "evidence": [
+        {
+          "path": "src/webview/inputInsertion.ts",
+          "symbol": "InsertionEdit",
+          "note": "Reference insertions keep the edited source as valid Dext syntax.",
+          "contentHash": "efb3b503248ae290d656cc6d051358752510e4468f4873d9f9e3d054f51c0475"
+        }
+      ],
+      "confidence": 0.7,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "wf.r3",
+      "from": "wf.compile",
+      "to": "wf.validate",
+      "kind": "flows_to",
+      "label": "typed statements",
+      "order": 2,
+      "evidence": [
+        {
+          "path": "src/core/workflow.ts",
+          "note": "Compilation produces the statements the runtime validates and executes."
+        }
+      ],
+      "confidence": 0.7,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "wf.r4",
+      "from": "wf.validate",
+      "to": "wf.route",
+      "kind": "flows_to",
+      "label": "accepted call",
+      "order": 3,
+      "condition": "signature valid and agent settings resolved",
+      "evidence": [
+        {
+          "path": "src/agentSelectionDefaults.ts",
+          "symbol": "presentAgentSelection",
+          "note": "Selection resolution completes before the backend is chosen.",
+          "contentHash": "be65a67ac12a64ffa26bbe3c84f668fceeaeb3bf76410630a525c14671a34626"
+        }
+      ],
+      "confidence": 0.72,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "wf.r5",
+      "from": "wf.validate",
+      "to": "wf.reject",
+      "kind": "flows_to",
+      "label": "rejected call",
+      "order": 4,
+      "condition": "unknown callable, unconfigured CLI or unsupported structured output",
+      "exception": true,
+      "evidence": [
+        {
+          "path": "src/core/agentRouter.ts",
+          "line": 18,
+          "note": "Unsupported providers are rejected with an explicit error.",
+          "contentHash": "4b9fdddcfc2dac4630dc8ab10d4fc12c50510a8481879a6aab3b455d1b1956f8"
+        },
+        {
+          "path": "src/core/builtinCli.ts",
+          "symbol": "builtinCliMetadata",
+          "note": "An unconfigured CLI id raises rather than falling back silently.",
+          "contentHash": "c621f63d3d62482e9985ac6e5db9bdb8ba979acf3229cf3ebf88b54813a0259d"
+        }
+      ],
+      "confidence": 0.75,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "wf.r6",
+      "from": "wf.route",
+      "to": "wf.spawn",
+      "kind": "calls",
+      "label": "spawn CLI turn",
+      "order": 5,
+      "condition": "provider is codex or claude",
+      "evidence": [
+        {
+          "path": "src/core/agentRouter.ts",
+          "line": 17,
+          "note": "codex and claude route to the CLI runner.",
+          "contentHash": "4b9fdddcfc2dac4630dc8ab10d4fc12c50510a8481879a6aab3b455d1b1956f8"
+        }
+      ],
+      "confidence": 0.85,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "wf.r7",
+      "from": "wf.route",
+      "to": "wf.acp",
+      "kind": "calls",
+      "label": "start Harness turn",
+      "order": 6,
+      "condition": "provider is deepseek-harness",
+      "evidence": [
+        {
+          "path": "src/core/agentRouter.ts",
+          "line": 16,
+          "note": "The Harness runner is selected for deepseek-harness.",
+          "contentHash": "4b9fdddcfc2dac4630dc8ab10d4fc12c50510a8481879a6aab3b455d1b1956f8"
+        }
+      ],
+      "confidence": 0.85,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "wf.r8",
+      "from": "wf.spawn",
+      "to": "wf.stream",
+      "kind": "publishes",
+      "label": "provider event stream",
+      "order": 7,
+      "evidence": [
+        {
+          "path": "src/core/agentRunner.ts",
+          "symbol": "AgentExecutionRequest",
+          "note": "onEvent receives the streamed events of the run.",
+          "contentHash": "89ffd05fcd77dc7cad107233ae261fbf8c010bab663a64dfb7874c9e327ff85d"
+        }
+      ],
+      "confidence": 0.8,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "wf.r9",
+      "from": "wf.acp",
+      "to": "wf.stream",
+      "kind": "publishes",
+      "label": "Harness session events",
+      "order": 8,
+      "evidence": [
+        {
+          "path": "src/core/deepseekHarnessTransport.ts",
+          "symbol": "HarnessConnection",
+          "note": "The transport surfaces Harness messages to the runner as events."
+        }
+      ],
+      "confidence": 0.72,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "wf.r10",
+      "from": "wf.stream",
+      "to": "wf.watch",
+      "kind": "publishes",
+      "label": "activity and tool lifecycle",
+      "order": 9,
+      "evidence": [
+        {
+          "path": "src/core/agentToolActivity.ts",
+          "symbol": "trackCliToolActivity",
+          "note": "Recognized tool events start and finish watchdog tools.",
+          "contentHash": "d791fb0d8c93b11debea138bcab89f6f3271462281e75f1be2ef6e55cf63d517"
+        }
+      ],
+      "confidence": 0.8,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "wf.r11",
+      "from": "wf.watch",
+      "to": "wf.timeout",
+      "kind": "transitions",
+      "label": "abort the turn",
+      "order": 10,
+      "condition": "idle interval elapses with no tool active, or the total limit is reached",
+      "exception": true,
+      "evidence": [
+        {
+          "path": "src/core/agentTimeout.ts",
+          "line": 30,
+          "note": "The idle timer aborts the controller with the limit in the message.",
+          "contentHash": "65c7ce85699c29fbedd103d8d3b06c3afdcf1c8348afc5927eac6c09cda4512f"
+        }
+      ],
+      "confidence": 0.82,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "wf.r12",
+      "from": "wf.stream",
+      "to": "wf.boundary",
+      "kind": "flows_to",
+      "label": "final answer text",
+      "order": 11,
+      "evidence": [
+        {
+          "path": "src/core/resultBoundary.ts",
+          "symbol": "AgentResultCandidate",
+          "note": "Candidates are extracted from the final text of the turn."
+        }
+      ],
+      "confidence": 0.8,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "wf.r13",
+      "from": "wf.boundary",
+      "to": "wf.repair",
+      "kind": "flows_to",
+      "label": "contract violation",
+      "order": 12,
+      "condition": "no candidate satisfies the declared result kind",
+      "exception": true,
+      "evidence": [
+        {
+          "path": "src/application.ts",
+          "line": 12,
+          "note": "The host imports createResultRepair, so a contract violation can be repaired before the result is accepted.",
+          "contentHash": "be7ce6e090a3513a715b0495d1cc32904188782bafb3783a9fbfef51168d2308"
+        },
+        {
+          "path": "src/core/resultRepair.ts",
+          "symbol": "ResultRepairRequest",
+          "note": "A repair request names the offending result and the field to repair."
+        }
+      ],
+      "confidence": 0.72,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "wf.r14",
+      "from": "wf.repair",
+      "to": "wf.boundary",
+      "kind": "flows_to",
+      "label": "re-parse the repaired answer",
+      "order": 13,
+      "condition": "the repair attempt produced new text",
+      "evidence": [
+        {
+          "path": "src/core/resultRepair.ts",
+          "symbol": "ResultRepairOutcome",
+          "note": "A repair outcome reports whether the second attempt satisfied the contract."
+        }
+      ],
+      "confidence": 0.68,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "wf.r15",
+      "from": "wf.boundary",
+      "to": "wf.assert",
+      "kind": "flows_to",
+      "label": "typed result",
+      "order": 14,
+      "condition": "a candidate parses as a Dext result",
+      "evidence": [
+        {
+          "path": "src/core/resultSerialization.ts",
+          "symbol": "isDextResult",
+          "note": "The result guard decides whether a parsed value is a Dext result."
+        }
+      ],
+      "confidence": 0.78,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "wf.r16",
+      "from": "wf.assert",
+      "to": "wf.apply",
+      "kind": "flows_to",
+      "label": "apply the patch",
+      "order": 15,
+      "condition": "apply=true, a patch is present and no hard violation was found",
+      "evidence": [
+        {
+          "path": "src/core/agentRunner.ts",
+          "symbol": "AgentExecutionRequest",
+          "note": "Only an applying call may have a writable sandbox.",
+          "contentHash": "89ffd05fcd77dc7cad107233ae261fbf8c010bab663a64dfb7874c9e327ff85d"
+        }
+      ],
+      "confidence": 0.75,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "wf.r17",
+      "from": "wf.assert",
+      "to": "wf.reject",
+      "kind": "flows_to",
+      "label": "reject the preview",
+      "order": 16,
+      "condition": "a hard violation makes the preview unacceptable",
+      "exception": true,
+      "evidence": [
+        {
+          "path": "src/core/agentAssertions.ts",
+          "symbol": "AgentAssertionResult",
+          "note": "Hard violations mean apply would fail later, so the result must not be presented as applicable.",
+          "contentHash": "8a2dc2cd7b543b20e09d2e8848823e2abae8e72991d0a1c30316a336e6fa7903"
+        }
+      ],
+      "confidence": 0.75,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "wf.r18",
+      "from": "wf.apply",
+      "to": "wf.record",
+      "kind": "flows_to",
+      "label": "applied changes",
+      "order": 17,
+      "evidence": [
+        {
+          "path": "src/application.ts",
+          "line": 22,
+          "note": "The host imports applyPatchHandler, which applies validated changes to the workspace.",
+          "contentHash": "be7ce6e090a3513a715b0495d1cc32904188782bafb3783a9fbfef51168d2308"
+        },
+        {
+          "path": "src/vscodePatchHost.ts",
+          "symbol": "validatedChange",
+          "note": "Each change is validated before it is applied."
+        }
+      ],
+      "confidence": 0.7,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "wf.r19",
+      "from": "wf.boundary",
+      "to": "wf.record",
+      "kind": "writes",
+      "label": "result and trace",
+      "order": 18,
+      "evidence": [
+        {
+          "path": "src/core/workflowRecorder.ts",
+          "symbol": "RecordedTurn",
+          "note": "The recorded turn stores the call result for later replay."
+        }
+      ],
+      "confidence": 0.7,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "wf.r20",
+      "from": "wf.record",
+      "to": "wf.render",
+      "kind": "flows_to",
+      "label": "serialized turn state",
+      "order": 19,
+      "evidence": [
+        {
+          "path": "src/webview/main.ts",
+          "line": 29,
+          "note": "The webview renders the presented agent message from the turn state.",
+          "contentHash": "6f368d44152ed95b1a64a023a352985d9a19f0924abad7d1cf38283ff6037cd5"
+        }
+      ],
+      "confidence": 0.75,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "wf.r21",
+      "from": "wf.cancel",
+      "to": "wf.record",
+      "kind": "flows_to",
+      "label": "record the cancelled turn",
+      "order": 20,
+      "condition": "the developer stops a running turn",
+      "exception": true,
+      "evidence": [
+        {
+          "path": "src/core/executionErrors.ts",
+          "symbol": "ExecutionCancelledError",
+          "note": "Cancellation is carried as its own error so the turn can still be recorded with its reason."
+        }
+      ],
+      "confidence": 0.68,
+      "review": "draft",
+      "freshness": "current"
+    }
+  ],
+  "semantics": {
+    "lanes": [
+      {
+        "id": "lane.author",
+        "label": "Composer and review (webview)",
+        "variant": "normal",
+        "evidence": [
+          {
+            "path": "src/webview/codeEditor.ts",
+            "symbol": "DextCodeEditor",
+            "note": "The composer is where the document is written and the run is started."
+          }
+        ]
+      },
+      {
+        "id": "lane.host",
+        "label": "Extension host",
+        "variant": "normal",
+        "evidence": [
+          {
+            "path": "src/application.ts",
+            "symbol": "DextApplication",
+            "note": "The host drives execution and owns storage writes."
+          }
+        ]
+      },
+      {
+        "id": "lane.core",
+        "label": "Dext core runtime",
+        "variant": "normal",
+        "evidence": [
+          {
+            "path": "src/core/workflowRuntime.ts",
+            "symbol": "WorkflowRuntime",
+            "note": "Compilation, routing and result handling live in the core."
+          }
+        ]
+      },
+      {
+        "id": "lane.provider",
+        "label": "Agent provider",
+        "variant": "normal",
+        "evidence": [
+          {
+            "path": "src/core/agentRouter.ts",
+            "line": 3,
+            "note": "Provider work happens behind the selected runner."
+          }
+        ]
+      },
+      {
+        "id": "lane.failure",
+        "label": "Timeout, cancellation and rejection",
+        "variant": "exception",
+        "evidence": [
+          {
+            "path": "src/core/agentTimeout.ts",
+            "line": 2,
+            "note": "Limits abort a running turn and end it outside the happy path."
+          },
+          {
+            "path": "src/core/executionErrors.ts",
+            "symbol": "ExecutionCancelledError",
+            "note": "Cancellation is an explicit exception path."
+          }
+        ]
+      }
+    ],
+    "mainPath": [
+      "wf.submit",
+      "wf.references",
+      "wf.compile",
+      "wf.validate",
+      "wf.route",
+      "wf.spawn",
+      "wf.stream",
+      "wf.boundary",
+      "wf.assert",
+      "wf.apply",
+      "wf.record",
+      "wf.render"
+    ]
+  },
+  "version": 0,
+  "updatedAt": 1790078119161,
+  "confidence": 0.75,
+  "review": "draft",
+  "freshness": "current"
+}

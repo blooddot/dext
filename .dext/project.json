@@ -1,19 +1,19 @@
 {
   "schemaVersion": 1,
-  "version": 14,
+  "version": 15,
   "preset": {
     "default": "engineering"
   },
   "knowledge": {
     "enabled": true,
-    "initialized": false
+    "initialized": true
   },
   "ai": {
     "cli": "deepseek-harness",
     "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
     "reasoningEffort": "max"
   },
-  "updatedAt": 1790045426138,
+  "updatedAt": 1790078119348,
   "scan": {
     "roots": [
       "src"

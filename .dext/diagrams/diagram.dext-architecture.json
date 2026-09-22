@@ -1,0 +1,809 @@
+{
+  "schemaVersion": 1,
+  "id": "diagram.dext-architecture",
+  "title": "Dext layered architecture",
+  "kind": "architecture",
+  "nodes": [
+    {
+      "id": "arch.developer",
+      "label": "Developer",
+      "role": "actor",
+      "description": "Writes a Dext document, runs it and reviews the result.",
+      "semanticIds": [
+        "cap.composer-authoring",
+        "flow.turn-execution"
+      ],
+      "evidence": [
+        {
+          "path": "src/webview/main.ts",
+          "line": 71,
+          "note": "The webview entry is the interactive surface the developer works in.",
+          "contentHash": "6f368d44152ed95b1a64a023a352985d9a19f0924abad7d1cf38283ff6037cd5"
+        }
+      ],
+      "confidence": 0.8,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "arch.webview",
+      "label": "Dext Webview",
+      "role": "container",
+      "description": "Sandboxed browser document that hosts the composer, conversation and panels.",
+      "semanticIds": [
+        "ctx.webview-ui"
+      ],
+      "evidence": [
+        {
+          "path": "src/webview/main.ts",
+          "symbol": "VsCodeApi",
+          "note": "The webview only holds a postMessage handle to the extension host.",
+          "contentHash": "6f368d44152ed95b1a64a023a352985d9a19f0924abad7d1cf38283ff6037cd5"
+        }
+      ],
+      "confidence": 0.85,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "arch.composer",
+      "label": "Composer (DextCodeEditor)",
+      "role": "component",
+      "description": "Monaco editor instance holding the readable Dext document.",
+      "parentId": "arch.webview",
+      "semanticIds": [
+        "cap.composer-authoring",
+        "term.dext-document"
+      ],
+      "evidence": [
+        {
+          "path": "src/webview/codeEditor.ts",
+          "symbol": "DextCodeEditor",
+          "note": "The composer creates a Monaco model and a standalone code editor.",
+          "contentHash": "5140f9b4c8b35fbafa6edfcee22db9600d24e361d89d9472b969c6258979737c"
+        }
+      ],
+      "confidence": 0.85,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "arch.conversation",
+      "label": "Turn, todo and interaction views",
+      "role": "component",
+      "description": "Renders turns, todo progress, diffs, reviews and question cards.",
+      "parentId": "arch.webview",
+      "semanticIds": [
+        "ctx.webview-ui",
+        "cap.ui-interaction"
+      ],
+      "evidence": [
+        {
+          "path": "src/webview/agentTodoView.ts",
+          "symbol": "AgentTodoView",
+          "note": "Todo rows keep per-turn state and the user's disclosure choice.",
+          "contentHash": "efecb02e91c66d56339b8a155b90ee182b01334e6b1cbaed27856e81598557b9"
+        },
+        {
+          "path": "src/webview/agentInputView.ts",
+          "symbol": "AgentInputView",
+          "note": "Agent questions and API forms share one card implementation.",
+          "contentHash": "2410df3f811bb1aab986ced484e8b02ab0568a712c9e459618d753689e225823"
+        }
+      ],
+      "confidence": 0.82,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "arch.panels",
+      "label": "Project / API / Resources panels",
+      "role": "component",
+      "description": "Rendered documents for the Project, API, Global Resources and History editor tabs.",
+      "parentId": "arch.webview",
+      "semanticIds": [
+        "cap.editor-tabs",
+        "cap.resource-catalog"
+      ],
+      "evidence": [
+        {
+          "path": "src/webview/apiPanel.ts",
+          "line": 7,
+          "note": "The API list page reuses the shared resource list renderer.",
+          "contentHash": "9745ec54b4e7fd90d176482ef95a83a763601ae1e7e418e9add0146c57371846"
+        },
+        {
+          "path": "src/webview/globalResourcesPanel.ts",
+          "symbol": "renderGlobalResources",
+          "note": "Global Resources groups its categories the same way the API page does.",
+          "contentHash": "e7caa9a8617c4ba11d31e9c12dd69664ed5baece126c7fa33891490662954c97"
+        }
+      ],
+      "confidence": 0.78,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "arch.clients",
+      "label": "Webview RPC clients",
+      "role": "component",
+      "description": "Small request/response clients for clipboard, file search, dropped files, project references and language requests.",
+      "parentId": "arch.webview",
+      "semanticIds": [
+        "cap.composer-authoring",
+        "ctx.webview-ui"
+      ],
+      "evidence": [
+        {
+          "path": "src/webview/clipboardClient.ts",
+          "symbol": "ClipboardClient",
+          "note": "Pending clipboard requests are correlated by request id.",
+          "contentHash": "34046b8bd31259f87889b90c858fcedab25a57d7dd75dd12923fdc9ae5ecc401"
+        },
+        {
+          "path": "src/webview/fileDropClient.ts",
+          "symbol": "FileDropClient",
+          "note": "Dropped file resolution is bounded and timed out.",
+          "contentHash": "5cf081696e5e1d70c9fdc76274cb11e7026f9d5c0841acac0fb9ad4bf83cb1d8"
+        },
+        {
+          "path": "src/webview/fileSearchClient.ts",
+          "symbol": "FileSearchClient",
+          "note": "Only the newest file query is kept.",
+          "contentHash": "b491f682f617e0f4e09bb656c4fcf023086aee6034b472774609f689e1126453"
+        }
+      ],
+      "confidence": 0.8,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "arch.host",
+      "label": "Dext Extension Host",
+      "role": "container",
+      "description": "Node.js side of the extension: activation, providers, panels, commands and host adapters.",
+      "semanticIds": [
+        "ctx.extension-host"
+      ],
+      "evidence": [
+        {
+          "path": "src/extension.ts",
+          "line": 63,
+          "note": "activate() is the host entry point and builds the application.",
+          "contentHash": "2f4eaa893987a74560066d1a513b47d0b6fced6eb7e8da99bc77bdb0f7f5b226"
+        }
+      ],
+      "confidence": 0.85,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "arch.app",
+      "label": "DextApplication",
+      "role": "component",
+      "description": "Wires the registry, runtime, agent runner, storage and project services.",
+      "parentId": "arch.host",
+      "semanticIds": [
+        "ctx.core-execution",
+        "ctx.extension-host"
+      ],
+      "evidence": [
+        {
+          "path": "src/application.ts",
+          "line": 4,
+          "note": "The application imports the core built-ins, runtime and workflow modules.",
+          "contentHash": "be7ce6e090a3513a715b0495d1cc32904188782bafb3783a9fbfef51168d2308"
+        }
+      ],
+      "confidence": 0.8,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "arch.sidebar",
+      "label": "Conversation provider",
+      "role": "component",
+      "description": "Sidebar webview provider that owns conversations, turns and the composer host side.",
+      "parentId": "arch.host",
+      "semanticIds": [
+        "ctx.extension-host",
+        "ctx.history-sessions"
+      ],
+      "evidence": [
+        {
+          "path": "src/sidebarProvider.ts",
+          "note": "The provider module is imported by src/extension.ts as DextSidebarProvider."
+        }
+      ],
+      "confidence": 0.7,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "arch.tabs",
+      "label": "Editor tab manager and restorer",
+      "role": "component",
+      "description": "One webview panel per stable key with a deduplicated restore path.",
+      "parentId": "arch.host",
+      "semanticIds": [
+        "cap.editor-tabs"
+      ],
+      "evidence": [
+        {
+          "path": "src/editorTabManager.ts",
+          "line": 42,
+          "note": "Opening an already open key reveals the existing panel.",
+          "contentHash": "a2af4c437bccc5ab9ca1f7649f0e7ea077ea3caf8e2249e15d3acfbb394b541a"
+        }
+      ],
+      "confidence": 0.85,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "arch.hostAdapters",
+      "label": "VS Code host adapters",
+      "role": "component",
+      "description": "Ports for context snapshots, patch application, terminals, project files, API definitions and token themes.",
+      "parentId": "arch.host",
+      "semanticIds": [
+        "ctx.extension-host"
+      ],
+      "evidence": [
+        {
+          "path": "src/application.ts",
+          "line": 20,
+          "note": "The host adapters are imported where the application is assembled.",
+          "contentHash": "be7ce6e090a3513a715b0495d1cc32904188782bafb3783a9fbfef51168d2308"
+        }
+      ],
+      "confidence": 0.78,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "arch.core",
+      "label": "Hostless Dext Core",
+      "role": "container",
+      "description": "Provider-agnostic engine: registry, compiler, runtime, agent routing, result boundary and project knowledge.",
+      "semanticIds": [
+        "ctx.core-execution"
+      ],
+      "evidence": [
+        {
+          "path": "src/core/agentAssertions.ts",
+          "line": 5,
+          "note": "Core modules stay hostless; the host implements the ports they declare.",
+          "contentHash": "8a2dc2cd7b543b20e09d2e8848823e2abae8e72991d0a1c30316a336e6fa7903"
+        }
+      ],
+      "confidence": 0.85,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "arch.registry",
+      "label": "Method registry and built-ins",
+      "role": "component",
+      "description": "Typed callables from built-ins, custom API files and MCP tools.",
+      "parentId": "arch.core",
+      "semanticIds": [
+        "cap.resource-catalog",
+        "term.callable"
+      ],
+      "evidence": [
+        {
+          "path": "src/core/builtins.ts",
+          "line": 7,
+          "note": "Built-in callables are declared with typed fields and output kinds.",
+          "contentHash": "c029914ddb3903da650f360370b9bafa34e28356357dc04c28976dbb7f737dfb"
+        },
+        {
+          "path": "src/core/builtinApiDefinitions.ts",
+          "symbol": "builtinApiNamespace",
+          "note": "A namespace exists when at least one built-in API is below it.",
+          "contentHash": "7523d1183ae2463e3b08717335d06f85f7678ff706ea61786e869664aaddc640"
+        }
+      ],
+      "confidence": 0.85,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "arch.workflow",
+      "label": "Workflow compiler and runtime",
+      "role": "component",
+      "description": "Compiles a Dext document and executes its steps with checkpoints and recording.",
+      "parentId": "arch.core",
+      "semanticIds": [
+        "cap.workflow-execution"
+      ],
+      "evidence": [
+        {
+          "path": "src/core/workflow.ts",
+          "note": "The workflow module exposes the compiler and import parsing used by the host."
+        },
+        {
+          "path": "src/core/workflowRuntime.ts",
+          "symbol": "WorkflowRuntime",
+          "note": "The runtime executes compiled workflows with a default concurrency limit."
+        }
+      ],
+      "confidence": 0.78,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "arch.agentEngine",
+      "label": "Agent router, runners and watchdogs",
+      "role": "component",
+      "description": "Routes one request to a backend and supervises it with todo, tool and timeout tracking.",
+      "parentId": "arch.core",
+      "semanticIds": [
+        "cap.agent-orchestration"
+      ],
+      "evidence": [
+        {
+          "path": "src/core/agentRouter.ts",
+          "line": 15,
+          "note": "The router selects the backend from the profile provider.",
+          "contentHash": "4b9fdddcfc2dac4630dc8ab10d4fc12c50510a8481879a6aab3b455d1b1956f8"
+        },
+        {
+          "path": "src/core/agentTimeout.ts",
+          "line": 15,
+          "note": "The watchdog combines total and idle limits.",
+          "contentHash": "65c7ce85699c29fbedd103d8d3b06c3afdcf1c8348afc5927eac6c09cda4512f"
+        }
+      ],
+      "confidence": 0.85,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "arch.resultBoundary",
+      "label": "Result boundary, repair and review",
+      "role": "component",
+      "description": "Parses candidates, enforces the contract, asserts patches and builds turn reviews.",
+      "parentId": "arch.core",
+      "semanticIds": [
+        "cap.result-contract"
+      ],
+      "evidence": [
+        {
+          "path": "src/core/resultBoundary.ts",
+          "symbol": "parseObject",
+          "note": "Candidate objects are parsed at the boundary."
+        },
+        {
+          "path": "src/core/resultRepair.ts",
+          "symbol": "enforcePatchContract",
+          "note": "The repair path enforces the patch contract explicitly."
+        }
+      ],
+      "confidence": 0.78,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "arch.knowledge",
+      "label": "Project knowledge and diagrams",
+      "role": "component",
+      "description": "Evidence, knowledge objects, review decisions, validation and diagram adapters.",
+      "parentId": "arch.core",
+      "semanticIds": [
+        "cap.project-knowledge-model",
+        "cap.diagram-generation"
+      ],
+      "evidence": [
+        {
+          "path": "src/core/projectKnowledge.ts",
+          "symbol": "KnowledgeSource",
+          "note": "Knowledge objects record where they came from."
+        },
+        {
+          "path": "src/core/projectDiagramRegistry.ts",
+          "symbol": "ProjectDiagramAdapterRegistry",
+          "note": "Diagram adapters are resolved per diagram kind."
+        }
+      ],
+      "confidence": 0.75,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "arch.completion",
+      "label": "Completion pipeline",
+      "role": "component",
+      "description": "Context assembly, backend calls, candidate scoring and completion memory.",
+      "parentId": "arch.core",
+      "semanticIds": [
+        "cap.inline-completion"
+      ],
+      "evidence": [
+        {
+          "path": "src/core/completionProvider.ts",
+          "symbol": "CompletionRequest",
+          "note": "Completion requests are described and normalized in the core provider module."
+        }
+      ],
+      "confidence": 0.65,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "arch.cli",
+      "label": "codex and claude CLI processes",
+      "role": "service",
+      "description": "Child processes spawned for the CLI agent backends.",
+      "semanticIds": [
+        "ctx.agent-backends"
+      ],
+      "evidence": [
+        {
+          "path": "src/core/agentRunner.ts",
+          "line": 1,
+          "note": "The runner module imports spawn from node:child_process.",
+          "contentHash": "89ffd05fcd77dc7cad107233ae261fbf8c010bab663a64dfb7874c9e327ff85d"
+        },
+        {
+          "path": "src/core/agentRouter.ts",
+          "line": 17,
+          "note": "codex and claude are served by the CLI runner.",
+          "contentHash": "4b9fdddcfc2dac4630dc8ab10d4fc12c50510a8481879a6aab3b455d1b1956f8"
+        }
+      ],
+      "confidence": 0.85,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "arch.harness",
+      "label": "DeepSeek Harness",
+      "role": "service",
+      "description": "External harness reached over an ACP-style transport with presets, questions and a result tool.",
+      "semanticIds": [
+        "ctx.agent-backends"
+      ],
+      "evidence": [
+        {
+          "path": "src/core/agentRouter.ts",
+          "line": 16,
+          "note": "The deepseek-harness provider is served by the Harness runner.",
+          "contentHash": "4b9fdddcfc2dac4630dc8ab10d4fc12c50510a8481879a6aab3b455d1b1956f8"
+        },
+        {
+          "path": "src/core/deepseekHarnessTransport.ts",
+          "symbol": "DeepSeekHarnessTransport",
+          "note": "The transport owns the connection to the Harness."
+        }
+      ],
+      "confidence": 0.8,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "arch.mcp",
+      "label": "MCP servers",
+      "role": "service",
+      "description": "External tool servers whose discovered tools become callables in the registry.",
+      "semanticIds": [
+        "term.mcp-server"
+      ],
+      "evidence": [
+        {
+          "path": "src/application.ts",
+          "line": 39,
+          "note": "The host builds the MCP registry, secret store and manifest parser.",
+          "contentHash": "be7ce6e090a3513a715b0495d1cc32904188782bafb3783a9fbfef51168d2308"
+        }
+      ],
+      "confidence": 0.75,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "arch.storage",
+      "label": "Project and global storage",
+      "role": "store",
+      "description": "Workspace .dext files, global storage for attachments and plans, history records and MCP secrets.",
+      "semanticIds": [
+        "ctx.attachments-storage",
+        "ctx.history-sessions"
+      ],
+      "evidence": [
+        {
+          "path": "src/dextStorage.ts",
+          "symbol": "DextStorage",
+          "note": "Dext-owned files resolve either to global storage or to the workspace .dext directory.",
+          "contentHash": "37c7a168e14f8e6e4ce57fb378d1844842845d63eb47db9b22a6bb5c029f831c"
+        },
+        {
+          "path": "src/historyStore.ts",
+          "symbol": "DextHistoryRecord",
+          "note": "History records are serialized with explicit limits."
+        }
+      ],
+      "confidence": 0.8,
+      "review": "draft",
+      "freshness": "current"
+    }
+  ],
+  "relations": [
+    {
+      "id": "arch.r.developer-webview",
+      "from": "arch.developer",
+      "to": "arch.webview",
+      "kind": "calls",
+      "label": "writes, runs and answers inside the composer",
+      "evidence": [
+        {
+          "path": "src/webview/main.ts",
+          "line": 71,
+          "note": "The webview is the developer-facing document.",
+          "contentHash": "6f368d44152ed95b1a64a023a352985d9a19f0924abad7d1cf38283ff6037cd5"
+        }
+      ],
+      "confidence": 0.75,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "arch.r.webview-host",
+      "from": "arch.webview",
+      "to": "arch.host",
+      "kind": "calls",
+      "label": "postMessage request and response over the webview protocol",
+      "evidence": [
+        {
+          "path": "src/webview/main.ts",
+          "line": 66,
+          "note": "postMessage is the webview's only outbound channel.",
+          "contentHash": "6f368d44152ed95b1a64a023a352985d9a19f0924abad7d1cf38283ff6037cd5"
+        },
+        {
+          "path": "src/webviewProtocol.ts",
+          "symbol": "WebviewRequest",
+          "note": "The request union defines every host operation the webview may ask for."
+        }
+      ],
+      "confidence": 0.85,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "arch.r.clients-host",
+      "from": "arch.clients",
+      "to": "arch.host",
+      "kind": "calls",
+      "label": "clipboard, file search, file drop, project reference and language requests",
+      "evidence": [
+        {
+          "path": "src/webview/clipboardClient.ts",
+          "symbol": "ClipboardClient",
+          "note": "Each client posts a typed request and awaits a correlated response.",
+          "contentHash": "34046b8bd31259f87889b90c858fcedab25a57d7dd75dd12923fdc9ae5ecc401"
+        }
+      ],
+      "confidence": 0.8,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "arch.r.panels-host",
+      "from": "arch.panels",
+      "to": "arch.host",
+      "kind": "reads",
+      "label": "renders resource and project documents supplied by the host",
+      "evidence": [
+        {
+          "path": "src/webview/apiPanel.ts",
+          "line": 7,
+          "note": "Panel renderers consume documents built by the host resource services.",
+          "contentHash": "9745ec54b4e7fd90d176482ef95a83a763601ae1e7e418e9add0146c57371846"
+        }
+      ],
+      "confidence": 0.72,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "arch.r.host-core",
+      "from": "arch.host",
+      "to": "arch.core",
+      "kind": "depends_on",
+      "label": "extension host invokes the hostless core",
+      "evidence": [
+        {
+          "path": "src/application.ts",
+          "line": 4,
+          "note": "The application imports core built-ins, runtime and workflow modules.",
+          "contentHash": "be7ce6e090a3513a715b0495d1cc32904188782bafb3783a9fbfef51168d2308"
+        },
+        {
+          "path": "src/application.ts",
+          "line": 17,
+          "note": "The workflow runtime is constructed and driven by the host.",
+          "contentHash": "be7ce6e090a3513a715b0495d1cc32904188782bafb3783a9fbfef51168d2308"
+        }
+      ],
+      "confidence": 0.85,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "arch.r.core-cli",
+      "from": "arch.agentEngine",
+      "to": "arch.cli",
+      "kind": "calls",
+      "label": "spawn a provider CLI process with the composed prompt",
+      "evidence": [
+        {
+          "path": "src/core/agentRouter.ts",
+          "line": 17,
+          "note": "codex and claude requests are served by the CLI runner.",
+          "contentHash": "4b9fdddcfc2dac4630dc8ab10d4fc12c50510a8481879a6aab3b455d1b1956f8"
+        },
+        {
+          "path": "src/core/agentRunner.ts",
+          "line": 1,
+          "note": "The CLI runner spawns child processes.",
+          "contentHash": "89ffd05fcd77dc7cad107233ae261fbf8c010bab663a64dfb7874c9e327ff85d"
+        }
+      ],
+      "confidence": 0.85,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "arch.r.core-harness",
+      "from": "arch.agentEngine",
+      "to": "arch.harness",
+      "kind": "calls",
+      "label": "start a Harness turn over the ACP-style transport",
+      "evidence": [
+        {
+          "path": "src/core/agentRouter.ts",
+          "line": 16,
+          "note": "The Harness runner serves the deepseek-harness provider.",
+          "contentHash": "4b9fdddcfc2dac4630dc8ab10d4fc12c50510a8481879a6aab3b455d1b1956f8"
+        }
+      ],
+      "confidence": 0.8,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "arch.r.registry-mcp",
+      "from": "arch.registry",
+      "to": "arch.mcp",
+      "kind": "depends_on",
+      "label": "MCP tools are registered as callables",
+      "evidence": [
+        {
+          "path": "src/application.ts",
+          "line": 39,
+          "note": "The MCP registry is built alongside the method registry.",
+          "contentHash": "be7ce6e090a3513a715b0495d1cc32904188782bafb3783a9fbfef51168d2308"
+        }
+      ],
+      "confidence": 0.72,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "arch.r.host-storage",
+      "from": "arch.hostAdapters",
+      "to": "arch.storage",
+      "kind": "writes",
+      "label": "attachments, plans, history and secrets are persisted",
+      "evidence": [
+        {
+          "path": "src/dextStorage.ts",
+          "symbol": "DextStorage",
+          "note": "Storage location is chosen per kind and resolved without path traversal.",
+          "contentHash": "37c7a168e14f8e6e4ce57fb378d1844842845d63eb47db9b22a6bb5c029f831c"
+        }
+      ],
+      "confidence": 0.78,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "arch.r.knowledge-harness",
+      "from": "arch.knowledge",
+      "to": "arch.agentEngine",
+      "kind": "depends_on",
+      "label": "project knowledge generation is driven by a project AI provider over the agent layer",
+      "evidence": [
+        {
+          "path": "src/vscodeProjectHost.ts",
+          "symbol": "ProjectAiProvider",
+          "note": "Generation is expressed as a project AI provider contract consumed by the project services."
+        },
+        {
+          "path": "src/extension.ts",
+          "line": 54,
+          "note": "Evidence filtering from the generation module is used during activation.",
+          "contentHash": "2f4eaa893987a74560066d1a513b47d0b6fced6eb7e8da99bc77bdb0f7f5b226"
+        }
+      ],
+      "confidence": 0.62,
+      "review": "draft",
+      "freshness": "current"
+    }
+  ],
+  "semantics": {
+    "boundaries": [
+      {
+        "id": "arch.b.webview",
+        "label": "Webview sandbox (postMessage only, nonce CSP)",
+        "kind": "security-group",
+        "nodeIds": [
+          "arch.webview",
+          "arch.composer",
+          "arch.conversation",
+          "arch.panels",
+          "arch.clients"
+        ],
+        "evidence": [
+          {
+            "path": "src/editorTabHtml.ts",
+            "symbol": "renderEditorTabHtml",
+            "note": "Panel documents are served with default-src none and a nonce script policy."
+          },
+          {
+            "path": "src/webview/main.ts",
+            "symbol": "VsCodeApi",
+            "note": "The only host handle exposed to the webview is postMessage."
+          }
+        ]
+      },
+      {
+        "id": "arch.b.host",
+        "label": "VS Code extension host process",
+        "kind": "region",
+        "nodeIds": [
+          "arch.host",
+          "arch.app",
+          "arch.sidebar",
+          "arch.tabs",
+          "arch.hostAdapters"
+        ],
+        "evidence": [
+          {
+            "path": "src/extension.ts",
+            "line": 63,
+            "note": "Everything in this boundary is created from activate()."
+          }
+        ]
+      },
+      {
+        "id": "arch.b.core",
+        "label": "Hostless core (no VS Code imports)",
+        "kind": "region",
+        "nodeIds": [
+          "arch.core",
+          "arch.registry",
+          "arch.workflow",
+          "arch.agentEngine",
+          "arch.resultBoundary",
+          "arch.knowledge",
+          "arch.completion"
+        ],
+        "evidence": [
+          {
+            "path": "src/core/agentAssertions.ts",
+            "line": 5,
+            "note": "Core modules stay hostless and rely on ports implemented by application.ts."
+          }
+        ]
+      }
+    ]
+  },
+  "version": 0,
+  "updatedAt": 1790078119161,
+  "confidence": 0.78,
+  "review": "draft",
+  "freshness": "current"
+}

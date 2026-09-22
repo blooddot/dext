@@ -1,0 +1,352 @@
+{
+  "schemaVersion": 1,
+  "id": "diagram.interaction-sequence",
+  "title": "Agent question round trip",
+  "kind": "sequence",
+  "nodes": [
+    {
+      "id": "iq.turn",
+      "label": "Agent turn (core)",
+      "role": "component",
+      "description": "The running turn that needs an answer before it can continue.",
+      "semanticIds": [
+        "term.agent-turn",
+        "cap.ui-interaction"
+      ],
+      "evidence": [
+        {
+          "path": "src/agentInputBroker.ts",
+          "symbol": "AgentInputBroker",
+          "note": "The broker is the turn's entry point for asking questions.",
+          "contentHash": "3fc819876b7594940cd41445ebd6a75bde8d13fd0655b2232e53bd01489a2c38"
+        }
+      ],
+      "confidence": 0.78,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "iq.inputBroker",
+      "label": "AgentInputBroker",
+      "role": "component",
+      "description": "Registers the pending question, adapts the answer and returns typed agent input answers.",
+      "semanticIds": [
+        "cap.ui-interaction"
+      ],
+      "evidence": [
+        {
+          "path": "src/agentInputBroker.ts",
+          "symbol": "AgentInputBroker",
+          "note": "request() and respond() are the two halves of the round trip.",
+          "contentHash": "3fc819876b7594940cd41445ebd6a75bde8d13fd0655b2232e53bd01489a2c38"
+        }
+      ],
+      "confidence": 0.82,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "iq.uiBroker",
+      "label": "UiInteractionBroker",
+      "role": "component",
+      "description": "Owns the shared UI interaction for the session, turn and request id.",
+      "semanticIds": [
+        "cap.ui-interaction"
+      ],
+      "evidence": [
+        {
+          "path": "src/uiInteractionBroker.ts",
+          "symbol": "UiInteractionBroker",
+          "note": "One broker holds the pending UI interaction."
+        }
+      ],
+      "confidence": 0.75,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "iq.view",
+      "label": "AgentInputView (webview)",
+      "role": "component",
+      "description": "Renders the question card or dialog and reports the answer back to the host.",
+      "semanticIds": [
+        "ctx.webview-ui"
+      ],
+      "evidence": [
+        {
+          "path": "src/webview/agentInputView.ts",
+          "symbol": "AgentInputView",
+          "note": "The view keeps one card per request and refuses to revive terminal ones.",
+          "contentHash": "2410df3f811bb1aab986ced484e8b02ab0568a712c9e459618d753689e225823"
+        }
+      ],
+      "confidence": 0.82,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "iq.developer",
+      "label": "Developer",
+      "role": "actor",
+      "description": "Answers, cancels or ignores the question.",
+      "semanticIds": [
+        "cap.ui-interaction"
+      ],
+      "evidence": [
+        {
+          "path": "src/webview/interactionDialog.ts",
+          "symbol": "InteractionDialog",
+          "note": "The dialog owns its close control, which cancels the request.",
+          "contentHash": "ea64648be77bd3eb47c687ae090e58e4db9b2f562d6bbf13016f25f58e5b60ff"
+        }
+      ],
+      "confidence": 0.75,
+      "review": "draft",
+      "freshness": "current"
+    }
+  ],
+  "relations": [
+    {
+      "id": "iq.r1",
+      "from": "iq.turn",
+      "to": "iq.inputBroker",
+      "kind": "calls",
+      "label": "request(sessionId, turnId, request, signal)",
+      "evidence": [
+        {
+          "path": "src/agentInputBroker.ts",
+          "symbol": "AgentInputBroker",
+          "note": "The turn awaits the broker for its answer.",
+          "contentHash": "3fc819876b7594940cd41445ebd6a75bde8d13fd0655b2232e53bd01489a2c38"
+        }
+      ],
+      "confidence": 0.82,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "iq.r2",
+      "from": "iq.inputBroker",
+      "to": "iq.uiBroker",
+      "kind": "calls",
+      "label": "broker.request(...) with the shared form definition",
+      "evidence": [
+        {
+          "path": "src/agentInputBroker.ts",
+          "symbol": "AgentInputBroker",
+          "note": "The agent broker delegates to the UI broker with agentInputForm(request).",
+          "contentHash": "3fc819876b7594940cd41445ebd6a75bde8d13fd0655b2232e53bd01489a2c38"
+        }
+      ],
+      "confidence": 0.8,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "iq.r3",
+      "from": "iq.uiBroker",
+      "to": "iq.view",
+      "kind": "calls",
+      "label": "post the interaction state to the webview",
+      "evidence": [
+        {
+          "path": "src/webview/agentInputView.ts",
+          "symbol": "AgentInputView",
+          "note": "The view consumes interaction state and renders a card.",
+          "contentHash": "2410df3f811bb1aab986ced484e8b02ab0568a712c9e459618d753689e225823"
+        }
+      ],
+      "confidence": 0.72,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "iq.r4",
+      "from": "iq.developer",
+      "to": "iq.view",
+      "kind": "calls",
+      "label": "submit or cancel the form",
+      "evidence": [
+        {
+          "path": "src/webview/interactionForm.ts",
+          "symbol": "InteractionForm",
+          "note": "The form control owns submit and cancel and reports the resulting form value."
+        }
+      ],
+      "confidence": 0.72,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "iq.r5",
+      "from": "iq.view",
+      "to": "iq.uiBroker",
+      "kind": "returns",
+      "label": "respondUi(state, result)",
+      "evidence": [
+        {
+          "path": "src/webview/agentInputView.ts",
+          "symbol": "AgentInputView",
+          "note": "The card's send callback forwards the submitted result to the host.",
+          "contentHash": "2410df3f811bb1aab986ced484e8b02ab0568a712c9e459618d753689e225823"
+        }
+      ],
+      "confidence": 0.75,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "iq.r6",
+      "from": "iq.uiBroker",
+      "to": "iq.inputBroker",
+      "kind": "returns",
+      "label": "UiFormResult adapted into agent input answers",
+      "evidence": [
+        {
+          "path": "src/uiInteractionPresentation.ts",
+          "symbol": "agentFormAnswers",
+          "note": "The result is adapted back into the agent's answer shape."
+        }
+      ],
+      "confidence": 0.75,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "iq.r7",
+      "from": "iq.inputBroker",
+      "to": "iq.turn",
+      "kind": "returns",
+      "label": "AgentInputAnswers or null when cancelled",
+      "evidence": [
+        {
+          "path": "src/agentInputBroker.ts",
+          "symbol": "AgentInputBroker",
+          "note": "request() resolves with answers or null and clears the pending entry.",
+          "contentHash": "3fc819876b7594940cd41445ebd6a75bde8d13fd0655b2232e53bd01489a2c38"
+        }
+      ],
+      "confidence": 0.82,
+      "review": "draft",
+      "freshness": "current"
+    }
+  ],
+  "semantics": {
+    "participants": [
+      {
+        "nodeId": "iq.turn",
+        "order": 0
+      },
+      {
+        "nodeId": "iq.inputBroker",
+        "order": 1
+      },
+      {
+        "nodeId": "iq.uiBroker",
+        "order": 2
+      },
+      {
+        "nodeId": "iq.view",
+        "order": 3
+      },
+      {
+        "nodeId": "iq.developer",
+        "order": 4
+      }
+    ],
+    "messages": [
+      {
+        "relationId": "iq.r1",
+        "order": 0,
+        "kind": "call",
+        "condition": "the turn needs a decision it cannot make itself",
+        "evidence": [
+          {
+            "path": "src/agentInputBroker.ts",
+            "symbol": "AgentInputBroker",
+            "note": "The request is registered before any UI appears."
+          }
+        ]
+      },
+      {
+        "relationId": "iq.r2",
+        "order": 1,
+        "kind": "call",
+        "evidence": [
+          {
+            "path": "src/agentInputBroker.ts",
+            "symbol": "AgentInputBroker",
+            "note": "The agent request is expressed as a shared UI form."
+          }
+        ]
+      },
+      {
+        "relationId": "iq.r3",
+        "order": 2,
+        "kind": "call",
+        "evidence": [
+          {
+            "path": "src/webview/agentInputView.ts",
+            "symbol": "AgentInputView",
+            "note": "The webview is told to show the pending interaction."
+          }
+        ]
+      },
+      {
+        "relationId": "iq.r4",
+        "order": 3,
+        "kind": "call",
+        "condition": "the developer answers or dismisses the card",
+        "evidence": [
+          {
+            "path": "src/webview/interactionForm.ts",
+            "symbol": "InteractionForm",
+            "note": "Submit and cancel both end the pending form."
+          }
+        ]
+      },
+      {
+        "relationId": "iq.r5",
+        "order": 4,
+        "kind": "return",
+        "evidence": [
+          {
+            "path": "src/webview/agentInputView.ts",
+            "symbol": "AgentInputView",
+            "note": "The view sends the submitted result to the host."
+          }
+        ]
+      },
+      {
+        "relationId": "iq.r6",
+        "order": 5,
+        "kind": "return",
+        "evidence": [
+          {
+            "path": "src/uiInteractionPresentation.ts",
+            "symbol": "agentFormAnswers",
+            "note": "The generic form result is translated into agent answers."
+          }
+        ]
+      },
+      {
+        "relationId": "iq.r7",
+        "order": 6,
+        "kind": "return",
+        "condition": "the answers passed validation, otherwise null",
+        "evidence": [
+          {
+            "path": "src/agentInputBroker.ts",
+            "symbol": "AgentInputBroker",
+            "note": "An invalid answer set is refused and the request resolves as unanswered."
+          }
+        ]
+      }
+    ]
+  },
+  "version": 0,
+  "updatedAt": 1790078119161,
+  "confidence": 0.75,
+  "review": "draft",
+  "freshness": "current"
+}
