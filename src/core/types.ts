@@ -408,6 +408,15 @@ export interface AgentResult extends DextResultBase {
   files?: CodeRef[];
 }
 
+/** Text rendered from a Dext template file. The model only supplied the field
+ * values; the heading structure, section order and list markers come from the
+ * template, so a non-compliant model cannot change them. Nothing is written:
+ * the caller decides whether and where to save `text`. */
+export interface TemplateResult extends DextResultBase {
+  kind: "template";
+  text: string;
+}
+
 export interface ApplyResult extends DextResultBase {
   kind: "apply";
   status: "applied" | "unchanged" | "conflict";
@@ -504,6 +513,7 @@ export type DextResult = McpTypedResult
   | AskResult
   | PlanResult
   | AgentResult
+  | TemplateResult
   | ApplyResult
   | TerminalResult
   | PrintResult

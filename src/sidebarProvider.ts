@@ -90,7 +90,7 @@ function conversationContext(turns: readonly DextHistoryRecord[]): string | unde
   // larger than a provider's practical prompt window.
   for (const turn of [...turns].reverse()) {
     const responseText = readHistoryResponse(turn)?.executions
-      .map((execution) => execution.result.kind === "ask" || execution.result.kind === "plan" || execution.result.kind === "skill" || execution.result.kind === "agent"
+      .map((execution) => execution.result.kind === "ask" || execution.result.kind === "plan" || execution.result.kind === "skill" || execution.result.kind === "agent" || execution.result.kind === "template"
         ? execution.result.text
         : JSON.stringify(execution.result))
       .filter(Boolean)

@@ -4,6 +4,7 @@ import { formatDiagnostics } from "./resultBoundary.js";
 import {
   askResultSchema,
   agentResultSchema,
+  templateResultSchema,
   dextResultSchema,
   applyResultSchema,
   patchResultSchema,
@@ -136,6 +137,8 @@ function outputSchema(output: CallableDefinition["output"]): ZodType {
       return planResultSchema;
     case "agent":
       return agentResultSchema;
+    case "template":
+      return templateResultSchema;
     case "apply":
       return applyResultSchema;
     case "terminal":
@@ -180,8 +183,17 @@ export function repairSignature(output: ZodType): AxSignature {
 
 export class AxAdapter {
   compile(definition: CallableDefinition): AxMethodContract {
+    return this.compileOutput(definition, outputSchema(definition.output));
+  }
+
+  /**
+   * Compiles a call whose output contract is supplied by the caller instead of
+   * the definition. `template` uses this: the template file decides which fields
+   * the model must return, so the CLI's native structured-output schema is the
+   * template's field schema rather than a fixed built-in result.
+   */
+  compileOutput(definition: CallableDefinition, output: ZodType): AxMethodContract {
     const input = inputSchema(definition);
-    const output = outputSchema(definition.output);
     const signature = f()
       .input("invocationArguments", input)
       .output("structuredOutput", output)

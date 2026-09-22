@@ -18,7 +18,7 @@ Agent 配置保存在 VS Code 扩展全局存储中。输入区域根据后端�
 
 `.dx` 文件可以通过 `@api(agent="codex", model="...")` 覆盖 Agent 和模型，否则使用输入区域的选择。**Dext: Configure Agent** 用于编辑可执行命令和自定义模型名称，不处理登录凭据。
 
-内置的 `agent`、`ask`、`plan`、`skill`、`create` 还支持单次调用的 `cli` 和 `model` 参数：
+内置的 `agent`、`ask`、`plan`、`template`、`skill`、`create` 还支持单次调用的 `cli` 和 `model` 参数：
 
 - `cli` 为 `"codex"`、`"claude"` 或 `"deepseek-harness"`；Harness 的模型对象见下方说明。
 - Claude 的 `model` 为 `"sonnet"` 或 `"opus"`。

@@ -322,7 +322,7 @@ function renderedInputSource(source: string, mode?: DextHistoryRecord["mode"]): 
 }
 
 function resultText(result: DextResult): string {
-  if (result.kind === "ask" || result.kind === "plan" || result.kind === "skill" || result.kind === "print" || result.kind === "agent") return result.text;
+  if (result.kind === "ask" || result.kind === "plan" || result.kind === "skill" || result.kind === "print" || result.kind === "agent" || result.kind === "template") return result.text;
   if (result.kind === "apply") return result.summary;
   if (result.kind === "terminal") return [result.stdout, result.stderr].filter(Boolean).join("\n");
   if (result.kind === "patch") return result.changes.map((change) => `${change.uri}\n- ${change.before}\n+ ${change.after}`).join("\n\n");

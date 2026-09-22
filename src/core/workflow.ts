@@ -163,6 +163,9 @@ const RESULT_TYPES: Readonly<Record<string, ValueType>> = {
     }),
     files: { kind: "list", item: { kind: "context" } }
   }),
+  template: result("TemplateResult", {
+    text: { kind: "string" }
+  }),
   apply: result("ApplyResult", {
     status: { kind: "string", literals: ["applied", "unchanged", "conflict"] },
     summary: { kind: "string" },

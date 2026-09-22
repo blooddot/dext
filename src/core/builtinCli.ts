@@ -2,7 +2,7 @@ import type { AgentProfile, AgentSelection } from "../agentProfiles.js";
 import { harnessPresetOrDefault } from "./harnessPresetDefault.js";
 import type { CallableDefinition, ExecutionMetadata, FieldDefinition } from "./types.js";
 
-export const CLI_BUILTIN_IDS = new Set(["agent", "ask", "plan", "skill", "create"]);
+export const CLI_BUILTIN_IDS = new Set(["agent", "ask", "plan", "template", "skill", "create"]);
 export const CODEX_REASONING = ["low", "medium", "high", "xhigh", "max", "ultra"];
 export const CLI_SPEEDS = ["standard", "fast"];
 

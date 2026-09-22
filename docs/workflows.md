@@ -6,7 +6,7 @@ English | [简体中文](workflows.zh-CN.md)
 
 Compose calls in Code mode and save repeated workflows as project APIs. This reference covers syntax, built-in APIs, code references, custom APIs, Skills, and conversation history.
 
-[Workflow language](#workflow-language) · [Built-in API](#built-in-api) · [File and selection references](#file-and-selection-references) · [Custom APIs and Skills](#custom-apis-and-skills) · [Conversation history and workflow recording](#conversation-history-and-workflow-recording) · [Turn and Build review](#turn-and-build-review) · [Imports, Skills, and rules](#imports-skills-and-rules) · [Custom result types](#custom-result-types) · [Execution and previews](#execution-and-previews)
+[Workflow language](#workflow-language) · [Built-in API](#built-in-api) · [Templates](#templates) · [File and selection references](#file-and-selection-references) · [Custom APIs and Skills](#custom-apis-and-skills) · [Conversation history and workflow recording](#conversation-history-and-workflow-recording) · [Turn and Build review](#turn-and-build-review) · [Imports, Skills, and rules](#imports-skills-and-rules) · [Custom result types](#custom-result-types) · [Execution and previews](#execution-and-previews)
 
 ## Workflow language
 
@@ -90,6 +90,7 @@ Execution is sequential apart from comprehension fan-out; unselected and downstr
 - `ask(input, skills?, rules?, workspace?) -> AskResult`
 - `plan(input, skills?, rules?, workspace?) -> PlanResult`
 - `agent(input, apply=true, patch=true, skills?, rules?, workspace?) -> AgentResult` — `patch=false` reports conclusions as text without producing a patch.
+- `template(input, source, values={}, skills?, rules?, workspace?) -> TemplateResult` — renders text from a template file ([templates](#templates)).
 - `apply(result) -> ApplyResult`
 - `terminal(command, cwd=".", env={}, timeout_ms=120000) -> TerminalResult` — runs an arbitrary command in the platform shell. `env` supplies string environment variables to that command.
 - `skill(skill, input, workspace?) -> SkillResult`
@@ -116,6 +117,95 @@ stay inside the workspace.
 process, socket, stream, worker, VM, module-loader, and server-listening APIs
 remain outside `.dx`.
 - UI interactions: `ui.select`, `ui.radio`, `ui.checkbox`, `ui.input`, `ui.confirm`, `ui.alert`, `ui.form`.
+
+### Templates
+
+A rule can only ask a model to follow a template, so a model that drifts changes the output's structure. `template` removes that: the model fills the template's fields, and Dext renders the headings, the section order and the list markers from the template file itself. A model can therefore never add, rename, reorder or drop a section.
+
+A template is a text file whose YAML front matter declares the required `format` and one entry per field, followed by the body that places those fields with `{{field}}` placeholders. A field entry is either a description string or a mapping:
+
+```markdown
+---
+dext-template:
+  format: markdown
+  number: Four-digit record number, for example "0081"
+  title: Short title naming the decision
+  status:
+    type: enum
+    values: [accepted, rejected, deprecated]
+    description: Decision status
+  positive:
+    type: lines
+    description: One benefit per line
+  sources:
+    type: lines
+    optional: true
+    description: External sources; leave empty for a purely local decision
+---
+
+# ADR-{{number}}: {{title}}
+
+## Status
+
+{{status}}
+
+## Consequences
+
+### Positive
+
+- {{positive}}
+
+## References
+
+- {{sources}}
+```
+
+- `format` is required, and is `markdown`, `text`, `json`, `toml` or `yaml`. It belongs to the template rather than to the call, and it is read when the template is loaded, so a missing or misspelled one is reported there instead of being guessed from the file name. Markdown owns the section rules described below; every other format is rendered literally. `json`, `toml` and `yaml` are parsed after rendering, so an answer that does not produce a valid document is rejected and asked for once more with the parser's own error. `format` is reserved: no field may take its name.
+- `type` is `string` (default), `lines` or `enum`. An `enum` needs `values`, and the field's value is validated against them.
+- A `lines` field is a newline-separated list. Every item repeats the placeholder's line, so the template's own `- ` prefix becomes the bullet. List markers a model adds anyway are stripped in a Markdown template only; in every other format they are part of the value. `separator` is inserted *between* those repeats — the indentation stays the placeholder line's own, so a JSON array needs `separator: ",\n"` and no trailing comma on the line.
+- `optional: true` lets a field come back empty. The placeholder's line disappears, and if that leaves the section with no content its heading disappears too — that is how `sources` above vanishes for a purely local decision.
+- Every declared field must appear in the body and every placeholder must be declared; a mismatch is reported when the template is read.
+- `values` pins fields Dext owns. Those fields are excluded from the model's contract and win over anything the model returns, which keeps a counter or a module name out of the model's hands. Its entries are validated against the template.
+- The call returns `text` and writes nothing. Deciding whether the result becomes a file, and where, is the caller's job: `node.fs.writeFile(path=..., content=created.text)`. A field the file name should follow is the caller's own value — pass it in `values` and reuse the same variable in the path, so the name and the text can never disagree.
+
+The same template contract renders any text format, so a JSON artifact is a template too:
+
+```markdown
+---
+dext-template:
+  format: json
+  name: Package name, kebab-case
+  version: Version, for example 0.1.0
+  keywords:
+    type: lines
+    separator: ",\n"
+    description: One item per line, each written as a quoted JSON string
+---
+
+{
+  "name": "{{name}}",
+  "version": "{{version}}",
+  "keywords": [
+    {{keywords}}
+  ]
+}
+```
+
+A field value is inserted verbatim where its placeholder sits, so the field's `description` is where a template states the quoting a position needs; the structure around it, including the comma between array items, comes from the template. For a parsed format the render is part of the model's contract: an answer whose render does not parse fails validation and gets the same single repair, with the parser's error as the diagnostic, while `z.toJSONSchema` still sends Codex and Claude the plain field schema. `format` is a reserved option and never a field, so it is never offered to the model.
+
+The call returns the rendered text and nothing else, so the workflow decides what to do with it — here `number` and `slug` come from the workflow's own scope, ride into the template through `values`, and name the file the same way the heading names the record:
+
+```python
+created = template(
+    input="Record the decision we just made about medoid selection.",
+    source=".agents/skills/adr/references/adr-template.md",
+    values={"module": "optimize", "number": number, "slug": slug},
+    skills=["adr"],
+)
+node.fs.writeFile(path=f"docs/decisions/{number}-{slug}.md", content=created.text)
+```
+
+The call is read-only: it never edits the workspace, so it can always be repaired when its output does not match the template, including a render that does not parse as the declared format. It also never chooses a destination, so the same template can render to any path — and a name that must follow a field is composed by the caller from the value it supplied. Codex and Claude receive the template's fields as their native structured-output schema; DeepSeek Harness has no schema field in ACP, so its answer is validated against the same contract in Dext instead. The template must live inside a trusted workspace, because its content becomes part of the Agent instruction.
 
 Project APIs live as `.dx` files under `.dext/api/`, and their directory becomes
 the namespace, so `.dext/api/workflow/feature.dx` registers `workflow.feature`.

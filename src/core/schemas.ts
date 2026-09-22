@@ -33,6 +33,13 @@ export const agentResultSchema = z.object({
   patch: z.lazy(() => patchResultSchema).optional(),
   files: z.array(codeRefResultSchema).optional()
 }).strict();
+/** The text Dext rendered from a template. Both the text and the absence of a
+ * destination are deliberate: `template` never writes, so the caller decides
+ * whether and where the text lands. */
+export const templateResultSchema = z.object({
+  kind: z.literal("template"),
+  text: z.string()
+}).strict();
 export const applyResultSchema = z.object({
   kind: z.literal("apply"),
   status: z.enum(["applied", "unchanged", "conflict"]),
@@ -92,6 +99,7 @@ const builtinDextResultSchema = z.discriminatedUnion("kind", [
   askResultSchema,
   planResultSchema,
   agentResultSchema,
+  templateResultSchema,
   patchResultSchema,
   applyResultSchema,
   terminalResultSchema,

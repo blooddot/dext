@@ -59,6 +59,27 @@ const METHODS: readonly CallableDefinition[] = [
     executor: { kind: "deterministic", handler: "agentRespond" }
   },
   {
+    id: "template",
+    title: "Render Template",
+    description: "Render text from a Dext template. The template declares the fields and the model only supplies their values, so the structure, section order and list markers always come from the template; the rendered output is validated as markdown, text, json, toml or yaml. It returns text only and writes nothing: call node.fs.writeFile to save it.",
+    kind: "command",
+    version: "1.0.0",
+    input: [
+      { name: "input", type: "string", required: true, description: "What the rendered text should say. Use @workspace/path tokens for attached code references." },
+      { name: "source", type: "string", required: true, description: "Workspace-relative path of the template: YAML front matter declaring dext-template fields and the required format, then a body using {{field}} placeholders." },
+      { name: "values", type: "object", default: {}, description: "Field values Dext supplies itself. Those fields are excluded from the model contract and always win over the model's output." },
+      { name: "skills", type: "string", multiple: true, internal: true, description: "Optional Dext skill identifiers loaded only for this template call." },
+      { name: "rules", type: "string", multiple: true, internal: true, description: "Optional .dext/rules-relative files loaded only for this template call." },
+      { name: "workspace", type: "dir", description: "Optional workspace directory; defaults to the current project root." }
+    ],
+    output: {
+      kind: "template",
+      description: "Text rendered by Dext from the template. It is not written anywhere: decide the destination and call node.fs.writeFile yourself."
+    },
+    context: [...CONTEXTS],
+    executor: { kind: "deterministic", handler: "templateRender" }
+  },
+  {
     id: "apply",
     title: "Apply Patch",
     description: "Validate and apply a typed edit result to the current trusted workspace.",

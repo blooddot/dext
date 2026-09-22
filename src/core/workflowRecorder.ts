@@ -25,6 +25,7 @@ const RESULT_TYPES: Record<string, string> = {
   ask: "AskResult",
   plan: "PlanResult",
   agent: "AgentResult",
+  template: "TemplateResult",
   terminal: "TerminalResult",
   apply: "ApplyResult",
   print: "PrintResult",

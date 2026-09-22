@@ -4,6 +4,7 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { AxAdapter, type AxMethodContract } from "./axAdapter.js";
+import { parseTemplate, renderTemplateText, templateInstruction, templateOutputSchema, templatePreset, templateValues, type TemplatePreset, type TemplateSpec } from "./templateRender.js";
 import { parseAgentResult, stripNullProperties } from "./resultBoundary.js";
 import type { ResultRepairEvent, ResultRepairOutcome } from "./resultRepair.js";
 import { builtinCliFields, builtinCliMetadata, CLI_BUILTIN_IDS, specializeBuiltinCli } from "./builtinCli.js";
@@ -179,10 +180,10 @@ const PLAN_RESPONSE_FORMAT_INSTRUCTION = [
   "- Do not put the delimiters inside a Markdown code fence."
 ].join("\n");
 
-const AGENT_METHODS = new Set(["ask", "plan", "agent", "skill"]);
+const AGENT_METHODS = new Set(["ask", "plan", "agent", "skill", "template"]);
 /** The methods that take free-form input plus skills, rules, and a workspace,
  * as opposed to `skill`, which builds its instruction from the skill itself. */
-const CONVERSATION_METHODS = new Set(["ask", "plan", "agent"]);
+const CONVERSATION_METHODS = new Set(["ask", "plan", "agent", "template"]);
 function defaultWorkspace(root: string): DirRef {
   return { kind: "dirRef", uri: pathToFileURL(root).toString(), path: "." };
 }
@@ -279,6 +280,9 @@ export const DEFAULT_HANDLERS: Readonly<Record<string, DeterministicHandler>> = 
   uiForm: uiHandler("form"),
   runSkill: () => {
     throw new Error("skill requires a configured Agent profile.");
+  },
+  templateRender: () => {
+    throw new Error("template requires a configured Agent profile: Dext renders the template, but a model has to fill its fields.");
   }
 };
 
@@ -603,8 +607,9 @@ export class DextRuntime {
       const provider = typeof profileId === "string" ? this.agents.get(profileId)?.provider : undefined;
       method = specializeBuiltinCli(method, rawArguments.cli ?? provider);
     }
-    const contract = this.ax.compile(method);
-    this.ax.validateInput(contract, rawArguments);
+    const baseContract = this.ax.compile(method);
+    this.ax.validateInput(baseContract, rawArguments);
+    let contract = baseContract;
     if (CLI_BUILTIN_IDS.has(method.id)) {
       metadata = builtinCliMetadata(rawArguments, [...this.agents.values()], this.agentSelection, metadata);
     }
@@ -614,9 +619,14 @@ export class DextRuntime {
       context: mergeContext(resolvedInvocation.context, supplementalContext),
       metadata
     };
-    if (["skill", "ask", "agent"].includes(method.id) && !resolved.arguments.workspace) {
+    if (["skill", "ask", "agent", "template"].includes(method.id) && !resolved.arguments.workspace) {
       resolved.arguments.workspace = defaultWorkspace(this.workspaceRoot);
     }
+    // A template call replaces the built-in result contract with the fields its
+    // template declares, so the CLI's native structured-output schema is the
+    // template itself rather than a fixed Dext result.
+    const template = method.id === "template" ? await this.loadTemplate(resolved.arguments) : undefined;
+    if (template) contract = this.ax.compileOutput(method, templateOutputSchema(template.spec, template.preset));
     let result: DextResult;
     if (method.executor.kind === "custom") {
       const plan = this.customPlans.get(method.executor.apiId);
@@ -701,9 +711,12 @@ export class DextRuntime {
               }
             }
           }
+          // The template's own format requirement goes last: it is the API's
+          // hard output contract, so a project rule cannot restate it away.
           const callInstruction = combineInstructions(
             combineInstructions(undefined, ...skillInstructions),
-            ...ruleInstructions
+            ...ruleInstructions,
+            template ? templateInstruction(template.spec) : undefined
           );
           const instruction = combineInstructions(metadata.instruction, callInstruction);
           if (instruction) runnerMetadata = { ...metadata, instruction };
@@ -738,7 +751,7 @@ export class DextRuntime {
         const cwd = CONVERSATION_METHODS.has(method.id)
           ? workspaceCwd(this.workspaceRoot, resolved.arguments.workspace)
           : this.workspaceRoot;
-        const includePatch = resolved.arguments.patch !== false;
+        const includePatch = method.id !== "template" && resolved.arguments.patch !== false;
         const raw = await this.agentRunner.run({
           profile,
           ...(profile.provider === "deepseek-harness" ? { agentPreset: this.harnessPreset(profile, metadata.agentPreset ?? this.agentSelection.agentPreset ?? "", !agentWriteEnabled) } : {}),
@@ -770,6 +783,17 @@ export class DextRuntime {
           ...((metadata.model ?? this.agentSelection.model) ? { model: metadata.model ?? this.agentSelection.model } : {}),
           ...(onEvent ? { onEvent } : {})
         });
+        if (template) {
+          // The model answered with field values only. Dext renders the text
+          // from the template, then restores the built-in contract so the
+          // rendered result is validated like any other Dext result.
+          const values = templateValues(template.spec, result as unknown as Record<string, unknown>, template.preset.values);
+          result = {
+            kind: "template",
+            text: renderTemplateText(template.spec, values)
+          };
+          contract = baseContract;
+        }
       } else {
         const handler = this.handlers[method.executor.handler];
         if (!handler) {
@@ -791,6 +815,29 @@ export class DextRuntime {
       durationMs: performance.now() - started,
       ...(metadata.instruction ? { instruction: metadata.instruction } : {})
     };
+  }
+
+  /**
+   * Reads and compiles the template a `template` call renders from. The file
+   * must live inside the workspace: its content becomes part of the Agent
+   * instruction, so an untrusted workspace never gets to supply one.
+   */
+  private async loadTemplate(
+    args: Record<string, unknown>
+  ): Promise<{ spec: TemplateSpec; preset: TemplatePreset }> {
+    if (!this.workspaceTrusted) throw new Error("template requires a trusted local workspace.");
+    const source = args.source;
+    if (typeof source !== "string" || !source.trim()) throw new Error("template requires a template path.");
+    const absolute = isAbsolute(source) ? source : resolve(this.workspaceRoot, source);
+    if (!insideWorkspace(this.workspaceRoot, absolute)) throw new Error("The template must stay inside the workspace.");
+    let content: string;
+    try {
+      content = await readFile(absolute, "utf8");
+    } catch (error) {
+      throw new Error(`Unable to read the template '${source}': ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const spec = parseTemplate(content, source);
+    return { spec, preset: templatePreset(spec, args.values) };
   }
 
   private canAttemptRepair(context: { allowWorkspaceWrite: boolean; signal?: AbortSignal }, rawText: string): boolean {

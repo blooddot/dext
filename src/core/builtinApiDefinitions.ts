@@ -4,7 +4,7 @@ import { pythonType } from "./pythonType.js";
 import type { FieldDefinition, RegisteredCallable } from "./types.js";
 
 const byId = new Map(BUILTIN_METHODS.map((definition) => [definition.id, { ...definition, source: "builtin" as const }]));
-const CONVERSATION_METHODS = new Set(["agent", "ask", "plan"]);
+const CONVERSATION_METHODS = new Set(["agent", "ask", "plan", "template"]);
 
 export function builtinApiDefinition(id: string): RegisteredCallable | undefined {
   return byId.get(id);

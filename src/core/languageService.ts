@@ -56,7 +56,7 @@ interface VisibleMethod {
   method: RegisteredCallable;
 }
 
-const CONVERSATION_METHODS = new Set(["agent", "ask", "plan"]);
+const CONVERSATION_METHODS = new Set(["agent", "ask", "plan", "template"]);
 
 function inputFields(method: RegisteredCallable): readonly FieldDefinition[] {
   return CONVERSATION_METHODS.has(method.id)
@@ -313,7 +313,7 @@ export class DextLanguageService {
       replaceEnd
     });
     if (/:\s*[A-Za-z_]*$/.test(before)) {
-      const types = ["Context", "Result", "list", "Literal", "AskResult", "PlanResult", "AgentResult", "ApplyResult", "TerminalResult", "PrintResult", "SkillResult", "McpRawResult", "PatchResult"];
+      const types = ["Context", "Result", "list", "Literal", "AskResult", "PlanResult", "AgentResult", "TemplateResult", "ApplyResult", "TerminalResult", "PrintResult", "SkillResult", "McpRawResult", "PatchResult"];
       const typeFragment = /[A-Za-z_]*$/.exec(before)?.[0] ?? "";
       return types.filter((type) => type.startsWith(typeFragment)).map((type) => item(type, type, "Dext type", "value"));
     }

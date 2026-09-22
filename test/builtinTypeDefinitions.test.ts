@@ -19,6 +19,7 @@ describe("built-in Dext type definitions", () => {
     expect(document.text.slice(fieldRange.from, fieldRange.to)).toContain("options:");
     expect(document.text).toContain("class ui:");
     expect(builtinTypeDefinition("agent.ModelOptions")?.fields.map((field) => field.name)).toContain("model");
+    expect(builtinTypeDefinition("TemplateResult")?.fields.map((field) => field.name)).toEqual(["kind", "text"]);
   });
 
   it("renders every member as a Python annotation", () => {

@@ -47,7 +47,7 @@ export interface TurnResultAdapter<E> extends TurnRenderAdapter<E> {
  * (open a plan, review a patch, copy output) remain callbacks on the adapters. */
 export function renderTurnResult<E>(adapter: TurnResultAdapter<E>, result: DextResult): E[] {
   const title = (text: string): E => adapter.element("div", { class: "output-title" }, [text]);
-  if (result.kind === "ask" || result.kind === "plan" || result.kind === "skill") {
+  if (result.kind === "ask" || result.kind === "plan" || result.kind === "skill" || result.kind === "template") {
     return [adapter.markdown(result.text), ...(result.kind === "plan" && result.planPath ? [adapter.plan(result.planPath)] : [])];
   }
   if (result.kind === "agent") return [

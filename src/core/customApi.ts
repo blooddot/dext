@@ -103,7 +103,7 @@ function outputKind(value: string): CallableDefinition["output"]["kind"] | undef
   const name = value.replace(/\s+/g, "");
   if (name === "McpRawResult") return "mcpRaw";
   if (/^Ui(?:Select|Radio|Checkbox|Input|Confirm|Alert|Form)Result$/.test(name)) return "ui";
-  const match = /^(Ask|Plan|Skill|Agent|Apply|Terminal|Print|Patch|Ui)Result$/.exec(name);
+  const match = /^(Ask|Plan|Skill|Agent|Template|Apply|Terminal|Print|Patch|Ui)Result$/.exec(name);
   return match?.[1]?.toLowerCase() as CallableDefinition["output"]["kind"] | undefined;
 }
 

@@ -6,7 +6,7 @@
 
 在 Code 模式中组合调用，再将重复流程保存为项目 API。本文包含语法、内置 API、代码引用、自定义 API、Skills 和对话历史的详细说明。
 
-[工作流语言](#工作流语言) · [内置 API](#内置-api) · [文件与选区引用](#文件与选区引用) · [自定义 API 与 Skills](#自定义-api-与-skills) · [对话历史与工作流录制](#对话历史与工作流录制) · [导入、Skills 与规则](#导入skills-与规则) · [自定义结果类型](#自定义结果类型) · [执行与预览](#执行与预览)
+[工作流语言](#工作流语言) · [内置 API](#内置-api) · [模板](#模板) · [文件与选区引用](#文件与选区引用) · [自定义 API 与 Skills](#自定义-api-与-skills) · [对话历史与工作流录制](#对话历史与工作流录制) · [导入、Skills 与规则](#导入skills-与规则) · [自定义结果类型](#自定义结果类型) · [执行与预览](#执行与预览)
 
 ## 工作流语言
 
@@ -91,6 +91,7 @@ f-string 的替换字段可带转换和格式说明符：`f"{value!r}"`、`f"{co
 - `ask(input, skills?, rules?, workspace?) -> AskResult`：只读解释和分析。
 - `plan(input, skills?, rules?, workspace?) -> PlanResult`：创建、维护和执行实施计划。
 - `agent(input, apply=true, patch=true, skills?, rules?, workspace?) -> AgentResult`：执行持续性任务；`patch=false` 时只以 text 汇报结论，不产出补丁。
+- `template(input, source, values={}, skills?, rules?, workspace?) -> TemplateResult`：按模板文件渲染文本（见[模板](#模板)）。
 - `apply(result) -> ApplyResult`：应用 `AgentResult` 中存在的补丁。
 - `terminal(command, cwd=".", env={}, timeout_ms=120000) -> TerminalResult`：在平台 Shell 中运行任意终端命令；`env` 可传入仅对此命令有效的字符串环境变量。
 - `skill(skill, input, workspace?) -> SkillResult`：使用指定 Skill 执行任务。
@@ -112,6 +113,95 @@ f-string 的替换字段可带转换和格式说明符：`f"{value!r}"`、`f"{co
 `node:os` 仅作为后续候选模块记录，当前不能调用。原始进程、socket、流、
 worker、VM、模块加载和 HTTP 服务监听能力不向 `.dx` 开放。
 - UI 交互：`ui.select`、`ui.radio`、`ui.checkbox`、`ui.input`、`ui.confirm`、`ui.alert`、`ui.form`。
+
+### 模板
+
+rules 只能"请求"模型遵守模板，模型一旦漂移，输出结构就跟着变。`template` 消除了这一点：模型只填模板声明的字段，标题层级、章节顺序和列表符号都由 Dext 依据模板文件渲染。模型因此无法新增、改名、重排或删除章节。
+
+模板是带 YAML front matter 的文本文件：必须声明 `format`，再逐字段声明，正文用 `{{字段}}` 占位。字段可以只写一句说明，也可以写成映射：
+
+```markdown
+---
+dext-template:
+  format: markdown
+  number: 四位数字编号，例如 "0081"
+  title: 简短标题，体现决策内容
+  status:
+    type: enum
+    values: [accepted, rejected, deprecated]
+    description: 决策状态
+  positive:
+    type: lines
+    description: 正面后果，每条一行
+  sources:
+    type: lines
+    optional: true
+    description: 外部来源；纯项目决策留空
+---
+
+# ADR-{{number}}: {{title}}
+
+## 状态
+
+{{status}}
+
+## 后果
+
+### 正面
+
+- {{positive}}
+
+## 参考资料
+
+- {{sources}}
+```
+
+- `format` 必填，取 `markdown`、`text`、`json`、`toml` 或 `yaml`，属于模板而不是调用参数。它在读取模板时就被解析，所以写错或漏写会在这里直接报错，而不是靠文件名去猜。markdown 才启用下面那套章节规则，其余格式按字面渲染。`json`、`toml`、`yaml` 会在渲染后再解析一次，因此渲染结果不是合法文档的答案会被拒绝，并带着解析器自己的报错再问一次。`format` 是保留名，字段不能占用。
+- `type` 取 `string`（默认）、`lines` 或 `enum`。`enum` 必须给出 `values`，取值按此校验。
+- `lines` 字段是换行分隔的列表。每个条目重复占位符所在的那一行，所以模板里的 `- ` 前缀就是列表符号；模型多加的列表符号只在 markdown 模板里会被去掉，其他格式里它属于值本身。`separator` 插在这些重复行**之间**，缩进仍由占位符所在行自带，所以 JSON 数组写 `separator: ",\n"`，行末不要再写逗号。
+- `optional: true` 允许字段为空：占位符所在行消失；若该章节因此没有内容（markdown 模板），标题也一并消失——上面 `sources` 就是这样在纯项目决策里整节不出现。
+- 声明的字段必须都在正文出现，正文的占位符也必须都已声明，不一致会在读取模板时直接报错。
+- `values` 固定由 Dext 掌握字段：这些字段不会出现在模型契约里，且始终覆盖模型返回值，因此编号、模块名这类事实不会交给模型决定。取值同样按模板校验。
+- 调用只返回 `text`，不写任何文件。要不要落盘、落到哪里，由调用方决定：`node.fs.writeFile(path=..., content=created.text)`。如果文件名要跟着某个字段走，那个字段就是调用方自己的值——用 `values` 传进去，并在路径里复用同一个变量，这样文件名和正文不可能不一致。
+
+同一套模板契约也能渲染任意文本格式，所以 JSON 产物同样是模板：
+
+```markdown
+---
+dext-template:
+  format: json
+  name: 包名，kebab-case
+  version: 版本号，例如 0.1.0
+  keywords:
+    type: lines
+    separator: ",\n"
+    description: 每行一个关键词，每个写成带双引号的 JSON 字符串
+---
+
+{
+  "name": "{{name}}",
+  "version": "{{version}}",
+  "keywords": [
+    {{keywords}}
+  ]
+}
+```
+
+字段值是**原样**插到占位符位置上的，所以某个位置需要什么引号、什么标点，由该字段的 `description` 说明；而周围的骨架（包括数组元素之间的逗号）来自模板。声明了解析格式后，渲染本身就成了模型契约的一部分：渲染结果解析失败即校验失败，走同一次自动修复，诊断就是解析器的报错；而 `z.toJSONSchema` 仍然只把普通字段 schema 发给 Codex 和 Claude。`format` 是保留的选项而非字段，永远不会作为字段交给模型。
+
+调用只返回渲染出的文本，所以怎么用它由工作流决定——下面 `number`、`slug` 来自工作流自己的作用域，经 `values` 进入模板，并让文件名和正文里的编号保持一致：
+
+```python
+created = template(
+    input="记录我们刚确定的 medoid 选择决策。",
+    source=".agents/skills/adr/references/adr-template.md",
+    values={"module": "optimize", "number": number, "slug": slug},
+    skills=["adr"],
+)
+node.fs.writeFile(path=f"docs/decisions/{number}-{slug}.md", content=created.text)
+```
+
+该调用是只读的：它不会改动工作区，因此输出不符合模板（包括渲染结果不是合法的 json/toml/yaml）时总能走一次自动修复；它也从不决定落盘位置，所以同一个模板可以渲染到任意路径——需要跟着字段走的文件名，由调用方用它自己传入的值拼出来。Codex 和 Claude 会直接拿到模板字段作为原生结构化输出 schema；DeepSeek Harness 的 ACP 协议没有 schema 字段，其输出改由 Dext 按同一契约校验。模板内容会进入 Agent 指令，因此必须位于受信任工作区内。
 
 上面的 `?` 表示可选参数，是文档记法。
 

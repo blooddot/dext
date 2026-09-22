@@ -36,6 +36,9 @@ const staticTypes: readonly BuiltinTypeDefinition[] = [
     { name: "kind", type: '"agent"' }, { name: "text", type: "string" }, { name: "summary", type: "string", optional: true },
     { name: "patch", type: "PatchResult", optional: true }, { name: "files", type: "CodeRef[]", optional: true }
   ] },
+  { name: "TemplateResult", description: "Text rendered by Dext from a template; the model supplied only the field values. Nothing is written, so the caller saves it with node.fs.writeFile.", fields: [
+    { name: "kind", type: '"template"' }, { name: "text", type: "string" }
+  ] },
   { name: "ApplyResult", description: "Outcome of applying a patch.", fields: [
     { name: "kind", type: '"apply"' }, { name: "status", type: '"applied" | "unchanged" | "conflict"' }, { name: "summary", type: "string" }, { name: "files", type: "CodeRef[]" }
   ] },

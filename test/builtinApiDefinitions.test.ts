@@ -30,4 +30,14 @@ describe("built-in API definitions", () => {
     expect(signature).toContain("multiple: bool = False,");
     expect(signature).toContain('#   type: "select"');
   });
+
+  it("exposes template rendering under its own id and result type", () => {
+    expect(builtinApiDefinition("template")).toMatchObject({ output: { kind: "template" } });
+    const document = builtinApiDocument();
+    const range = document.ranges.get("template")!;
+    const signature = document.text.slice(range.from, range.to);
+    expect(signature).toContain("def template(");
+    expect(signature).toContain("source: str,");
+    expect(signature).toContain(") -> TemplateResult:");
+  });
 });
