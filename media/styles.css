@@ -3656,6 +3656,13 @@ details[open] > summary > .disclosure-chevron {
 /* Reports and code blocks must not set the grid's intrinsic column width. */
 .agent-inputs { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: 10px; margin: 10px 0; }
 .agent-input-card { position: relative; min-width: 0; padding: 12px; border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); border-radius: 8px; background: var(--vscode-editor-background); }
+.agent-input-disclosure > summary { display: flex; align-items: baseline; gap: 6px; min-width: 0; cursor: pointer; list-style: none; }
+.agent-input-disclosure > summary::-webkit-details-marker { display: none; }
+.agent-input-disclosure > summary:hover { color: var(--vscode-textLink-foreground); }
+.agent-input-disclosure-body { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; min-width: 0; }
+.agent-input-field { min-width: 0; padding-top: 8px; border-top: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); }
+.agent-input-field p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.agent-input-disclosure-body .interaction-description { margin: 0; }
 .agent-input-header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; margin-bottom: 10px; }
 .agent-input-status { font-size: 11px; color: var(--vscode-descriptionForeground); }
 .agent-input-question { min-width: 0; margin: 0 0 12px; padding: 0; border: 0; }

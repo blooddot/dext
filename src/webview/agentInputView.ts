@@ -3,6 +3,7 @@ import type { UiFormAnswers, UiFormDefinition, UiFormResult, UiInteractionState 
 import { agentInputForm, agentFormAnswers, uiResultText } from "../uiInteractionPresentation.js";
 import { InteractionForm } from "./interactionForm.js";
 import { InteractionDialog } from "./interactionDialog.js";
+import { interactionMarkdown } from "./interactionMarkdown.js";
 
 export interface InteractionDraftStore {
   get(key: string): UiFormAnswers | undefined;
@@ -101,13 +102,20 @@ export class AgentInputView {
     }
     card.element.onkeydown = null;
     const action = card.form.actions.find((action) => action.id === card.action);
+    const disclosure = document.createElement("details"); disclosure.className = "agent-input-disclosure";
+    const summary = document.createElement("summary");
+    const chevron = document.createElement("i"); chevron.className = "disclosure-chevron codicon codicon-chevron-right";
     const title = document.createElement("strong"); title.textContent = `${card.form.title} — ${card.status === "submitted" ? "Submitted" : "Closed"}${action ? ` (${action.label})` : ""}`;
-    card.element.append(title);
+    summary.append(chevron, title); disclosure.append(summary);
+    const body = document.createElement("div"); body.className = "agent-input-disclosure-body";
+    if (card.form.description) body.append(interactionMarkdown(card.form.description));
     for (const field of card.form.fields) {
+      const fieldBody = document.createElement("div"); fieldBody.className = "agent-input-field";
       const answer = document.createElement("p");
       answer.textContent = `${field.label}: ${field.secret ? "Answer hidden" : card.answers?.[field.id] ? uiResultText(card.answers[field.id]) : "No answer submitted"}`;
-      card.element.append(answer);
+      fieldBody.append(answer); body.append(fieldBody);
     }
+    disclosure.append(body); card.element.append(disclosure);
     if (card.status !== "waiting") { this.drafts.delete(key); this.store?.set(key, {}); }
   }
 }

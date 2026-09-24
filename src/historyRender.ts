@@ -437,7 +437,8 @@ function inputHistory(events: readonly AgentStreamEvent[]): string {
   const forms = [...interactions.values()].map((state) => {
     const action = state.form.actions?.find((action) => action.id === state.action);
     const fields = state.form.fields.map((field) => `<p><strong>${escapeHtml(field.label)}</strong>: ${escapeHtml(field.secret ? "Answer hidden" : uiResultText(state.answers?.[field.id]))}</p>`).join("");
-    return `<section class="agent-input-card"><strong>${escapeHtml(state.form.title)} — ${state.status === "submitted" ? "Submitted" : "Closed"}${action ? ` (${escapeHtml(action.label)})` : ""}</strong>${fields}</section>`;
+    const description = state.form.description ? `<div class="interaction-description markdown-body">${renderProcessMarkdown(state.form.description)}</div>` : "";
+    return `<section class="agent-input-card"><details class="agent-input-disclosure"><summary>${chevron()}<strong>${escapeHtml(state.form.title)} — ${state.status === "submitted" ? "Submitted" : "Closed"}${action ? ` (${escapeHtml(action.label)})` : ""}</strong></summary><div class="agent-input-disclosure-body">${description}${fields}</div></details></section>`;
   }).join("");
   const requests = new Map(events.flatMap((event) => event.userInput ? [[event.userInput.id, event.userInput] as const] : []));
   return forms + [...requests.values()].map((request) => {

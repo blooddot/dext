@@ -23,6 +23,17 @@ describe("Dext history rendering", () => {
     expect(html).toContain("Submitted (Revise &lt;analysis&gt;)");
     expect(html).not.toContain("Submitted (Approve)");
   });
+  it("keeps submitted form details behind a disclosure", () => {
+    const form = parseUiForm({ title: "Review", description: "Detailed **context**", fields: [
+      { id: "notes", type: "input", label: "Notes", required: false }
+    ] });
+    const html = renderHistoryRecord({ id: "turn", createdAt: 1, input: "Review", output: "Done", process: [
+      { phase: "input", text: "", uiInteraction: { sessionId: "s", turnId: "turn", requestId: "r", form, status: "submitted", action: "submit", answers: {} } }
+    ] });
+    expect(html).toContain('<details class="agent-input-disclosure">');
+    expect(html).toContain("Detailed <strong>context</strong>");
+    expect(html).toContain("Notes");
+  });
   it("renders the latest answer above Process without replaying editable forms or secret answers", () => {
     const question = { id: "question-1", blocking: true, questions: [{ id: "q", header: "", question: "Which <option>?", options: [] },
       { id: "secret", header: "", question: "Secret?", options: [], isSecret: true }] };
