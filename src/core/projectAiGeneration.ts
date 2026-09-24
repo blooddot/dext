@@ -7,8 +7,8 @@ import { projectIntentSchema, validateProjectIntent, type ProjectIntent, type Pr
 import { validateProjectDiagram, type ProjectDiagram, type ProjectDiagramEvidence, type ProjectDiagramKind } from "./projectDiagram.js";
 import type { AgentTokenUsage } from "./types.js";
 
-export const PROJECT_AI_PROMPT_VERSION = "project-knowledge-6";
-export const PROJECT_DIAGRAM_PROMPT_VERSION = "project-diagram-4";
+export const PROJECT_AI_PROMPT_VERSION = "project-knowledge-7";
+export const PROJECT_DIAGRAM_PROMPT_VERSION = "project-diagram-5";
 
 export interface ProjectEvidenceFileInput {
   /** Workspace-relative file path. Absolute paths and traversal are never sent. */
@@ -498,6 +498,49 @@ export const projectGeneratedDiagramSchema = z.object({
 export const projectAiResponseSchema = z.object({ intent: projectIntentSchema, diagrams: z.array(projectGeneratedDiagramSchema).max(20) }).strict();
 /** On-demand diagram generation never rewrites the project intent or unrelated diagrams. */
 export const projectDiagramResponseSchema = z.object({ diagram: projectGeneratedDiagramSchema }).strict();
+
+// Native structured output requires objects with fixed keys. Carry metadata as
+// entries on the wire, then restore the dictionary used by saved Project data.
+const metadataEntriesSchema = z.array(z.object({
+  key: z.string().max(100),
+  value: z.union([z.string().max(2000), z.number().finite(), z.boolean()])
+}).strict());
+const generatedDiagramWireSchema = projectGeneratedDiagramSchema.extend({
+  metadata: metadataEntriesSchema.optional(),
+  nodes: z.array(diagramNodeSchema.extend({ metadata: metadataEntriesSchema.optional() })).min(1).max(200),
+  relations: z.array(diagramRelationSchema.extend({ metadata: metadataEntriesSchema.optional() })).max(500)
+});
+const projectAiWireSchema = projectAiResponseSchema.extend({ diagrams: z.array(generatedDiagramWireSchema).max(20) });
+const projectDiagramWireSchema = projectDiagramResponseSchema.extend({ diagram: generatedDiagramWireSchema });
+
+function restoreDiagramMetadata(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const diagram = value as Record<string, unknown>;
+  const restore = (item: unknown): unknown => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+    const record = item as Record<string, unknown>;
+    if (!Array.isArray(record.metadata)) return item;
+    const entries = metadataEntriesSchema.safeParse(record.metadata);
+    // Leave malformed or duplicate entries for the contract to reject.
+    if (!entries.success || new Set(entries.data.map((entry) => entry.key)).size !== entries.data.length) return item;
+    return { ...record, metadata: Object.fromEntries(entries.data.map(({ key, value }) => [key, value])) };
+  };
+  return {
+    ...restore(diagram) as Record<string, unknown>,
+    ...(Array.isArray(diagram.nodes) ? { nodes: diagram.nodes.map(restore) } : {}),
+    ...(Array.isArray(diagram.relations) ? { relations: diagram.relations.map(restore) } : {})
+  };
+}
+
+function restoreResponseMetadata(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const response = value as Record<string, unknown>;
+  return {
+    ...response,
+    ...(Array.isArray(response.diagrams) ? { diagrams: response.diagrams.map(restoreDiagramMetadata) } : {}),
+    ...(Object.hasOwn(response, "diagram") ? { diagram: restoreDiagramMetadata(response.diagram) } : {})
+  };
+}
 export interface ProjectAiGeneratedModel { intent: ProjectIntent; diagrams: ProjectDiagram[] }
 export interface ProjectAiGeneratedDiagram { diagram: ProjectDiagram }
 
@@ -804,7 +847,7 @@ function contractErrors(error: z.ZodError): string[] {
 
 /** Folds the equivalent intent-at-the-root shape, drops undocumented keys, then validates. */
 function parseProjectModel(value: unknown, evidence: ProjectEvidencePackage): ProjectAiValidation<ProjectAiGeneratedModel> {
-  const parsed = projectAiResponseSchema.safeParse(pruneUnrecognizedKeys(projectAiResponseSchema, normalizeProjectAiResponse(value)));
+  const parsed = projectAiResponseSchema.safeParse(pruneUnrecognizedKeys(projectAiResponseSchema, restoreResponseMetadata(normalizeProjectAiResponse(value))));
   if (!parsed.success) return { ok: false, message: INVALID_MODEL_MESSAGE, errors: contractErrors(parsed.error) };
   // All optionals emitted by zod can be undefined; JSON round-trip omits those keys so the
   // result conforms to Project's exact optional property convention.
@@ -814,7 +857,7 @@ function parseProjectModel(value: unknown, evidence: ProjectEvidencePackage): Pr
 }
 
 function parseProjectDiagram(value: unknown, evidence: ProjectEvidencePackage): ProjectAiValidation<ProjectAiGeneratedDiagram> {
-  const parsed = projectDiagramResponseSchema.safeParse(pruneUnrecognizedKeys(projectDiagramResponseSchema, value));
+  const parsed = projectDiagramResponseSchema.safeParse(pruneUnrecognizedKeys(projectDiagramResponseSchema, restoreResponseMetadata(value)));
   if (!parsed.success) return { ok: false, message: INVALID_DIAGRAM_MESSAGE, errors: contractErrors(parsed.error) };
   const diagram = JSON.parse(JSON.stringify(parsed.data.diagram)) as ProjectDiagram;
   const existingIds = new Set([...evidence.objects.map((object) => object.id), ...evidence.knowledge.map((item) => item.id)]);
@@ -1147,7 +1190,7 @@ export class ProjectAiGenerationService {
   }
 
   async generate(evidence: ProjectEvidencePackage, options: { signal?: AbortSignal; onEvent?: (event: ProjectAiActivityEvent) => void } = {}): Promise<ProjectAiGenerationResult> {
-    const schema = z.toJSONSchema(projectAiResponseSchema) as Readonly<Record<string, unknown>>;
+    const schema = z.toJSONSchema(projectAiWireSchema) as Readonly<Record<string, unknown>>;
     const run = await this.runPrompt<ProjectAiGeneratedModel>({
       instructions: buildInitializationPrompt(evidence, schema),
       outputField: PROJECT_AI_OUTPUT_FIELD,
@@ -1200,7 +1243,7 @@ export class ProjectAiGenerationService {
     if (packaged === undefined || !(packaged === expected || expected.startsWith(packaged) || requirement.startsWith(packaged))) {
       throw new ProjectAiGenerationError("invalid_output", "The diagram requirement must be part of the bounded evidence package.");
     }
-    const schema = z.toJSONSchema(projectDiagramResponseSchema) as Readonly<Record<string, unknown>>;
+    const schema = z.toJSONSchema(projectDiagramWireSchema) as Readonly<Record<string, unknown>>;
     const run = await this.runPrompt<ProjectAiGeneratedDiagram>({
       instructions: buildDiagramPrompt(evidence, { ...request, requirement }, schema),
       outputField: PROJECT_AI_OUTPUT_FIELD,
