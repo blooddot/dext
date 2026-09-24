@@ -32,6 +32,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     if (scenario === "error-notification") { notify("error", { error: diagnosticError, willRetry: false }); continue; }
     if (scenario === "failed-turn") { notify("turn/completed", { turn: { id: "turn-1", status: "failed", error: diagnosticError } }); continue; }
     if (scenario === "retry-error") { notify("error", { error: diagnosticError, willRetry: true }); finish("retry succeeded"); continue; }
+    if (scenario === "slow") { setTimeout(() => finish("slow"), 120); continue; }
     if (scenario === "config") { finish(JSON.stringify({ config, input: params.input })); continue; }
     if (scenario === "exit") { process.exit(2); }
     if (scenario === "async" || scenario === "expires" || scenario === "steer-fails") {

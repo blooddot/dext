@@ -1179,6 +1179,9 @@ export class CliAgentRunner implements AgentRunner {
   /** Dext owns the stable UI conversation key; Codex owns the resumable thread
    * UUID. This map joins them while the extension host is alive. */
   private readonly codexConversationSessions = new Map<string, string>();
+  /** App-server permits one active writer per thread. Keep turns for one Dext
+   * conversation ordered even though separate UI events can arrive together. */
+  private readonly codexConversationQueues = new Map<string, Promise<void>>();
   /** Claude's session UUID is likewise kept separate from Dext's conversation
    * id so a provider-native fork can target the source session. */
   private readonly claudeConversationSessions = new Map<string, string>();
@@ -1390,6 +1393,24 @@ export class CliAgentRunner implements AgentRunner {
   }
 
   async runConversation(request: AgentConversationRequest): Promise<string> {
+    if (request.profile.provider !== "codex") return this.runConversationNow(request);
+    const queueKey = request.metadata.agentSessionId ?? request.metadata.conversationProviderSessionId;
+    if (!queueKey) return this.runConversationNow(request);
+    const previous = this.codexConversationQueues.get(queueKey) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const queued = previous.catch(() => undefined).then(() => gate);
+    this.codexConversationQueues.set(queueKey, queued);
+    await previous.catch(() => undefined);
+    try {
+      return await this.runConversationNow(request);
+    } finally {
+      release();
+      if (this.codexConversationQueues.get(queueKey) === queued) this.codexConversationQueues.delete(queueKey);
+    }
+  }
+
+  private async runConversationNow(request: AgentConversationRequest): Promise<string> {
     if (request.profile.provider !== "codex" && request.profile.provider !== "claude") {
       throw new Error("This provider requires its own Agent runner.");
     }

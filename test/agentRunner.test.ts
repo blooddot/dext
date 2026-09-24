@@ -29,6 +29,7 @@ import {
 import { BUILTIN_METHODS } from "../src/core/builtins.js";
 import { AxAdapter } from "../src/core/axAdapter.js";
 import { serializeResultForAgent } from "../src/core/resultSerialization.js";
+import { CodexConversationConnection } from "../src/core/codexConversationConnection.js";
 import type { AgentProfile } from "../src/agentProfiles.js";
 import type { AgentStreamEvent, RegisteredCallable } from "../src/core/types.js";
 
@@ -749,6 +750,26 @@ describe("native structured output", () => {
     await expect(runner.runStructured(structuredRequest())).rejects.toThrow(/Selected model is at capacity[\s\S]*httpStatusCode[\s\S]*503[\s\S]*request=req-jsonl/);
   });
 
+
+  it("serializes Codex app-server turns for one conversation", async () => {
+    // Reuse the deterministic app-server fixture while measuring the runner's
+    // ordering contract rather than the provider implementation.
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    const originalStart = CodexConversationConnection.prototype.start;
+    vi.spyOn(CodexConversationConnection.prototype, "start").mockImplementation(function (this: CodexConversationConnection, _command, _args, cwd) {
+      return originalStart.call(this, process.execPath, [join("test", "fixtures", "codexConversationServer.mjs")], cwd, { ...process.env, DEXT_QUESTION_TEST: "slow" });
+    });
+    const runner = new CliAgentRunner(10_000, async () => ({ stdout: "", stderr: "", code: 1 }));
+    const base = { ...conversationRequest("first", "same-conversation"), metadata: {
+      agentSessionId: "same-conversation",
+      requestAgentInput: async () => ({})
+    } };
+    const started = Date.now();
+    const first = runner.runConversation(base);
+    const second = runner.runConversation({ ...base, input: "second" });
+    await expect(Promise.all([first, second])).resolves.toEqual(["Received: slow", "Received: slow"]);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(200);
+  });
 
   it("refuses a provider that has no native output-schema channel", async () => {
     const runner = new CliAgentRunner(1_000, async () => ({ stdout: "", stderr: "", code: 0 }));
