@@ -1,9 +1,8 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
+import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { homedir } from "node:os";
 import { delimiter, extname, isAbsolute, join } from "node:path";
 import { isDextResult, serializeResultForAgent } from "./resultSerialization.js";
 import { jsonCandidates, stripNullProperties } from "./resultBoundary.js";
@@ -18,7 +17,6 @@ import { cliCompletion } from "./cliCompletion.js";
 import { agentTimeout, DEFAULT_AGENT_TIMEOUT_MS, DEFAULT_AGENT_IDLE_TIMEOUT_MS } from "./agentTimeout.js";
 import { trackCliToolActivity } from "./agentToolActivity.js";
 import { runCodexConversation } from "./codexConversationRunner.js";
-import { parseToml, tomlString } from "./toml.js";
 
 export interface AgentExecutionRequest {
   agentPreset?: string;
@@ -112,7 +110,6 @@ type ProcessRunner = typeof runProcess;
 interface CommandResolutionOptions {
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
-  home?: string;
 }
 
 export function agentProcessEnvironment(
@@ -127,100 +124,8 @@ export function agentProcessEnvironment(
   return env;
 }
 
-/** Windows-only Codex CLI fallbacks, tried after PATH lookups. Explicit user
- * overrides sit at the front; the sandbox copy sits at the back because it
- * ships without `codex-code-mode-host.exe`. */
-function codexCliLocations(options: Required<CommandResolutionOptions>): string[] {
-  const codexHome = options.env.CODEX_HOME || join(options.home, ".codex");
-  const localAppData = options.env.LOCALAPPDATA;
-  const locations: string[] = [];
-  if (localAppData) {
-    locations.push(...desktopCodexInstalls(join(localAppData, "OpenAI", "Codex", "bin")));
-    // Legacy desktop install location, a junction into the standalone package.
-    locations.push(join(localAppData, "Programs", "OpenAI", "Codex", "bin", "codex.exe"));
-  }
-  if (options.env.APPDATA) {
-    // `npm i -g @openai/codex` exposes its shim here even when the npm prefix
-    // never made it into the extension host's PATH.
-    locations.push(join(options.env.APPDATA, "npm", "codex.cmd"));
-  }
-  // Package slot the desktop updater links to, then the sandbox copy.
-  locations.push(join(codexHome, "packages", "standalone", "current", "bin", "codex.exe"));
-  locations.push(join(codexHome, ".sandbox-bin", "codex.exe"));
-  return locations;
-}
-
-/**
- * The desktop app downloads toolchains into content-addressed directories,
- * `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\`, and leaves old versions behind.
- * An install that ships `codex-code-mode-host.exe` next to the CLI is complete;
- * among equally complete installs, prefer the most recently written one.
- */
-function desktopCodexInstalls(bin: string): string[] {
-  return readDirectory(bin)
-    .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
-    .flatMap((entry): { candidate: string; complete: boolean; mtimeMs: number }[] => {
-      const candidate = join(bin, entry.name, "codex.exe");
-      try {
-        const stats = statSync(candidate);
-        if (!stats.isFile()) return [];
-        return [{
-          candidate,
-          complete: existsSync(join(bin, entry.name, "codex-code-mode-host.exe")),
-          mtimeMs: stats.mtimeMs
-        }];
-      } catch {
-        return [];
-      }
-    })
-    .sort((left, right) => Number(right.complete) - Number(left.complete) || right.mtimeMs - left.mtimeMs)
-    .map((install) => install.candidate);
-}
-
-function readDirectory(path: string): Dirent[] {
-  try {
-    return readdirSync(path, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-}
-
-/** Explicit path overrides: the `CODEX_CLI_PATH` environment variable Codex
- * itself exports to its children, then the legacy `config.toml` entry earlier
- * Dext builds read with a regex. */
-function codexCliOverrides(options: Required<CommandResolutionOptions>): string[] {
-  const configured = options.env.CODEX_CLI_PATH?.trim() || configuredCodexCliPath(options);
-  return configured ? [configured] : [];
-}
-
-function configuredCodexCliPath(options: Required<CommandResolutionOptions>): string | undefined {
-  const codexHome = options.env.CODEX_HOME || join(options.home, ".codex");
-  const configPath = join(codexHome, "config.toml");
-  if (!existsSync(configPath)) return undefined;
-  try {
-    return codexCliPathFromConfig(readFileSync(configPath, "utf8"));
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Read the CLI path users pinned in `config.toml`.
- *
- * `CODEX_CLI_PATH` is not part of Codex's config schema: Codex treats it as an
- * environment variable, and `[shell_environment_policy.set]` is how a user
- * exports it to the shells Codex spawns. Dext honors that table (and a
- * top-level entry) as an explicit override.
- */
-export function codexCliPathFromConfig(content: string): string | undefined {
-  const parsed = parseToml(content);
-  return tomlString(parsed, "CODEX_CLI_PATH")
-    ?? tomlString(parsed, "shell_environment_policy", "set", "CODEX_CLI_PATH");
-}
-
 function windowsCommandCandidates(
   command: string,
-  provider: AgentProfile["provider"],
   options: Required<CommandResolutionOptions>
 ): string[] {
   const trimmed = command.trim();
@@ -231,42 +136,29 @@ function windowsCommandCandidates(
   // A Unix shell shim may sit beside a Windows `.cmd` shim. `spawn()` cannot
   // execute that bare file on Windows, so prefer a PATHEXT-qualified command
   // when the user did not name an extension explicitly.
-  const names = extname(trimmed)
-    ? [trimmed]
-    : [...extensions.map((extension) => `${trimmed}${extension}`), trimmed];
+  const names = options.platform === "win32" && !extname(trimmed)
+    ? [...extensions.map((extension) => `${trimmed}${extension}`), trimmed]
+    : [trimmed];
 
-  if (provider === "codex" && trimmed.toLowerCase() === "codex") {
-    names.unshift(...codexCliOverrides(options));
-    names.push(...codexCliLocations(options));
-  }
-  if (provider === "claude" && trimmed.toLowerCase() === "claude") {
-    names.push(join(options.home, ".local", "bin", "claude.exe"));
-    if (options.env.APPDATA) names.push(join(options.env.APPDATA, "npm", "claude.cmd"));
-  }
   return [...new Set(names)];
 }
 
 /**
- * Resolve a configured CLI without requiring the extension host to inherit the
- * same PATH as the user's terminal. Windows CLI installs commonly expose a
- * `.cmd` shim; Codex Desktop and Claude Code's native installer also have
- * provider-specific executable locations.
+ * Resolve a configured CLI from the current process environment. Windows CLI
+ * installs commonly expose a `.cmd` shim, so PATHEXT is honored explicitly.
  */
 export function resolveCliCommand(
   command: string,
-  provider: AgentProfile["provider"],
+  _provider: AgentProfile["provider"],
   input: CommandResolutionOptions = {}
 ): string | undefined {
   const trimmed = command.trim();
   if (!trimmed) return undefined;
   const options: Required<CommandResolutionOptions> = {
     platform: input.platform ?? process.platform,
-    env: input.env ?? process.env,
-    home: input.home ?? homedir()
+    env: input.env ?? process.env
   };
-  if (options.platform !== "win32") return trimmed;
-
-  for (const candidate of windowsCommandCandidates(trimmed, provider, options)) {
+  for (const candidate of windowsCommandCandidates(trimmed, options)) {
     if (isAbsolute(candidate) && existsSync(candidate)) return candidate;
     if (isAbsolute(candidate)) continue;
     for (const directory of (options.env.Path ?? options.env.PATH ?? "").split(delimiter)) {
@@ -1240,10 +1132,7 @@ export async function runSingleTurnCli(request: SingleTurnCliRequest): Promise<{
   const configuredCommand = request.profile.command.trim();
   const command = resolveCliCommand(configuredCommand, provider);
   if (!command) {
-    throw new Error(
-      `Unable to start '${configuredCommand}': command was not found. `
-      + `Install ${request.profile.label} or use "Dext: Configure Agent CLI" to set its executable path.`
-    );
+    throw new Error(`CLI '${configuredCommand}' is not installed or not available on PATH. Install ${request.profile.label}.`);
   }
   const extraArguments = request.cliArguments ?? [];
   const args = provider === "codex"
@@ -1336,10 +1225,7 @@ export class CliAgentRunner implements AgentRunner {
     const configuredCommand = request.profile.command.trim();
     const command = resolveCliCommand(configuredCommand, request.profile.provider);
     if (!command) {
-      throw new Error(
-        `Unable to start '${configuredCommand}': command was not found. `
-        + `Install ${request.profile.label} or use "Dext: Configure Agent CLI" to set its executable path.`
-      );
+      throw new Error(`CLI '${configuredCommand}' is not installed or not available on PATH. Install ${request.profile.label}.`);
     }
     const directory = await mkdtemp(join(tmpdir(), "dext-agent-"));
     const schemaPath = join(directory, "output-schema.json");
@@ -1464,10 +1350,7 @@ export class CliAgentRunner implements AgentRunner {
     const configuredCommand = request.profile.command.trim();
     const command = resolveCliCommand(configuredCommand, provider);
     if (!command) {
-      throw new Error(
-        `Unable to start '${configuredCommand}': command was not found. `
-        + `Install ${request.profile.label} or use "Dext: Configure Agent CLI" to set its executable path.`
-      );
+      throw new Error(`CLI '${configuredCommand}' is not installed or not available on PATH. Install ${request.profile.label}.`);
     }
     const serviceTier = request.speed === "fast" ? "priority" : request.speed === "standard" ? "default" : request.serviceTier || undefined;
     const extraArguments = request.cliArguments ?? [];
@@ -1513,10 +1396,7 @@ export class CliAgentRunner implements AgentRunner {
     if (request.signal?.aborted) throw new ExecutionCancelledError();
     const command = resolveCliCommand(request.profile.command.trim(), request.profile.provider);
     if (!command) {
-      throw new Error(
-        `Unable to start '${request.profile.command.trim()}': command was not found. `
-        + `Install ${request.profile.label} or use "Dext: Configure Agent CLI" to set its executable path.`
-      );
+      throw new Error(`CLI '${request.profile.command.trim()}' is not installed or not available on PATH. Install ${request.profile.label}.`);
     }
     const serviceTier = request.speed === "fast" ? "priority" : request.speed === "standard" ? "default" : request.serviceTier || undefined;
     // A tier that would write is only honoured when the caller also opened the

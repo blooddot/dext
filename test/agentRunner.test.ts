@@ -1,6 +1,6 @@
-import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   agentPayload,
@@ -11,7 +11,6 @@ import {
   CliAgentRunner,
   codexConversationArguments,
   codexCliArguments,
-  codexCliPathFromConfig,
   codexOutputSchema,
   codexSandbox,
   permissionForWrite,
@@ -551,160 +550,30 @@ describe("CLI command resolution", () => {
     expect(resolveCliCommand("codex", "codex", {
       platform: "win32",
       env: { Path: directory, PATHEXT: ".CMD;.EXE" },
-      home: directory
     })).toBe(join(directory, "codex.cmd"));
   });
 
 
-  it("finds the Codex desktop CLI under CODEX_HOME when PATH is missing", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "dext-codex-test-"));
-    temporaryDirectories.push(directory);
-    const bin = join(directory, ".sandbox-bin");
-    await mkdir(bin, { recursive: true });
-    await writeFile(join(bin, "codex.exe"), "binary", "utf8");
-
+  it("returns no command when Codex is not on PATH", () => {
     expect(resolveCliCommand("codex", "codex", {
-      platform: "win32",
-      env: { CODEX_HOME: directory, Path: "" },
-      home: directory
-    })).toBe(join(bin, "codex.exe"));
+      platform: "win32", env: { Path: "", CODEX_CLI_PATH: "C:\\stale\\codex.exe" }
+    })).toBeUndefined();
   });
 
-  it("prefers CODEX_CLI_PATH from the Codex config over an older sandbox binary", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "dext-codex-config-test-"));
+  it("returns no command when Claude is not on PATH", () => {
+    expect(resolveCliCommand("claude", "claude", { platform: "win32", env: { Path: "" } })).toBeUndefined();
+  });
+
+  it("returns no command when a non-Windows CLI is not on PATH", () => {
+    expect(resolveCliCommand("codex", "codex", { platform: "linux", env: {} })).toBeUndefined();
+  });
+
+  it("resolves a non-Windows CLI from PATH", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "dext-agent-unix-test-"));
     temporaryDirectories.push(directory);
-    const configured = join(directory, "codex.exe");
-    await writeFile(configured, "binary", "utf8");
-    await writeFile(
-      join(directory, "config.toml"),
-      `[shell_environment_policy.set]\nCODEX_CLI_PATH = '${configured}' # keep this comment\n`,
-      "utf8"
-    );
+    await writeFile(join(directory, "codex"), "#!/bin/sh", "utf8");
 
-    expect(resolveCliCommand("codex", "codex", {
-      platform: "win32",
-      env: { CODEX_HOME: directory, Path: "" },
-      home: directory
-    })).toBe(configured);
-  });
-
-  it("reads CODEX_CLI_PATH through TOML rules instead of one anchored line", () => {
-    const content = [
-      "# CODEX_CLI_PATH = 'C:\\stale\\codex.exe'",
-      "model = \"gpt-5\"",
-      "[shell_environment_policy.set]",
-      "CODEX_CLI_PATH = \"C:\\\\tools\\\\codex.exe\" # exported to shells",
-      ""
-    ].join("\n");
-    expect(codexCliPathFromConfig(content)).toBe("C:\\tools\\codex.exe");
-    // Literal strings keep their backslashes; unrelated sections are not a match.
-    expect(codexCliPathFromConfig("CODEX_CLI_PATH = 'C:\\literal\\codex.exe'\n")).toBe("C:\\literal\\codex.exe");
-    expect(codexCliPathFromConfig("[features]\nCODEX_CLI_PATH = 'C:\\ignored\\codex.exe'\n")).toBeUndefined();
-  });
-
-  it("prefers the Codex desktop install that ships the code-mode host", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "dext-codex-desktop-test-"));
-    temporaryDirectories.push(directory);
-    const bin = join(directory, "OpenAI", "Codex", "bin");
-    const complete = join(bin, "complete");
-    const incomplete = join(bin, "incomplete");
-    await mkdir(complete, { recursive: true });
-    await mkdir(incomplete, { recursive: true });
-    await writeFile(join(complete, "codex.exe"), "binary", "utf8");
-    await writeFile(join(complete, "codex-code-mode-host.exe"), "binary", "utf8");
-    // Written last, so it is the newest install, but it lacks the host binary.
-    await writeFile(join(incomplete, "codex.exe"), "binary", "utf8");
-
-    expect(resolveCliCommand("codex", "codex", {
-      platform: "win32",
-      env: { LOCALAPPDATA: directory, Path: "" },
-      home: directory
-    })).toBe(join(complete, "codex.exe"));
-  });
-
-  it("falls back to the newest Codex desktop install", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "dext-codex-desktop-newest-test-"));
-    temporaryDirectories.push(directory);
-    const bin = join(directory, "OpenAI", "Codex", "bin");
-    const older = join(bin, "older");
-    const newer = join(bin, "newer");
-    await mkdir(older, { recursive: true });
-    await mkdir(newer, { recursive: true });
-    await writeFile(join(older, "codex.exe"), "binary", "utf8");
-    await writeFile(join(newer, "codex.exe"), "binary", "utf8");
-    const past = new Date("2020-01-01T00:00:00Z");
-    const present = new Date("2024-01-01T00:00:00Z");
-    await utimes(join(older, "codex.exe"), past, past);
-    await utimes(join(newer, "codex.exe"), present, present);
-
-    expect(resolveCliCommand("codex", "codex", {
-      platform: "win32",
-      env: { LOCALAPPDATA: directory, Path: "" },
-      home: directory
-    })).toBe(join(newer, "codex.exe"));
-  });
-
-  it("prefers CODEX_CLI_PATH from the environment over PATH and desktop installs", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "dext-codex-env-test-"));
-    temporaryDirectories.push(directory);
-    const fromEnv = join(directory, "env", "codex.exe");
-    const onPath = join(directory, "on-path", "codex.cmd");
-    const desktop = join(directory, "OpenAI", "Codex", "bin", "desktop", "codex.exe");
-    for (const file of [fromEnv, onPath, desktop]) {
-      await mkdir(dirname(file), { recursive: true });
-      await writeFile(file, "binary", "utf8");
-    }
-
-    expect(resolveCliCommand("codex", "codex", {
-      platform: "win32",
-      env: {
-        CODEX_CLI_PATH: fromEnv,
-        LOCALAPPDATA: directory,
-        Path: dirname(onPath),
-        PATHEXT: ".CMD;.EXE"
-      },
-      home: directory
-    })).toBe(fromEnv);
-
-    // Without the override, PATH stays ahead of the desktop installs.
-    expect(resolveCliCommand("codex", "codex", {
-      platform: "win32",
-      env: { LOCALAPPDATA: directory, Path: dirname(onPath), PATHEXT: ".CMD;.EXE" },
-      home: directory
-    })).toBe(onPath);
-  });
-
-  it("finds the npm global Codex shim when PATH does not include it", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "dext-codex-npm-test-"));
-    temporaryDirectories.push(directory);
-    const npm = join(directory, "npm");
-    await mkdir(npm, { recursive: true });
-    await writeFile(join(npm, "codex.cmd"), "@echo off", "utf8");
-
-    expect(resolveCliCommand("codex", "codex", {
-      platform: "win32",
-      env: { APPDATA: directory, Path: "" },
-      home: directory
-    })).toBe(join(npm, "codex.cmd"));
-  });
-
-  it("finds Claude Code's native Windows installation when PATH is missing", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "dext-claude-test-"));
-    temporaryDirectories.push(directory);
-    const bin = join(directory, ".local", "bin");
-    await mkdir(bin, { recursive: true });
-    const executable = join(bin, "claude.exe");
-    await writeFile(executable, "binary", "utf8");
-
-    expect(resolveCliCommand("claude", "claude", {
-      platform: "win32",
-      env: { Path: "" },
-      home: directory
-    })).toBe(executable);
-  });
-
-  it("returns a configured non-Windows command without probing the local filesystem", () => {
-    expect(resolveCliCommand("codex", "codex", { platform: "linux", env: {}, home: "/tmp" })).toBe("codex");
+    expect(resolveCliCommand("codex", "codex", { platform: "linux", env: { PATH: directory } })).toBe(join(directory, "codex"));
   });
 
   it("terminates a running CLI process when its execution signal is aborted", async () => {
