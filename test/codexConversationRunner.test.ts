@@ -96,6 +96,22 @@ describe("Codex interactive conversations over stdio", () => {
   it("surfaces process failure instead of leaving an empty Output", async () => {
     await expect(setup("exit").run()).rejects.toThrow(/exited/);
   });
+  it.each(["error-notification", "failed-turn", "rpc-error"])("preserves provider diagnostics from %s over the real transport", async (scenario) => {
+    const error = await setup(scenario).run().then(() => { throw new Error("Expected Codex to fail"); }, (error: unknown) => error);
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toMatch(/^Selected model is at capacity\. Please try a different model\.\n\nCodex error details:\n/);
+    const details = JSON.parse(message.split("Codex error details:\n")[1]!) as Record<string, unknown>;
+    const providerError = scenario === "rpc-error" ? details.data : details;
+    expect(providerError).toMatchObject({
+      codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 503 } },
+      additionalDetails: "request_id=req-fixture; retry after 30s"
+    });
+    if (scenario === "rpc-error") expect(details.code).toBe(-32000);
+  });
+  it("allows retryable errors to recover without failing the conversation", async () => {
+    expect(await setup("retry-error").run()).toBe("Received: retry succeeded");
+  });
   it("allows config flags but rejects flags that would break the stdio connection", () => {
     expect(codexAppServerArguments(["-c", 'foo="bar"', "--enable", "feature"])).toEqual(["app-server", "-c", 'foo="bar"', "--enable", "feature"]);
     expect(() => codexAppServerArguments(["--listen", "ws://localhost:9000"])).toThrow("do not support");

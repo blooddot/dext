@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { codexErrorMessage } from "./codexError.js";
 
 export interface CodexRpcMessage { id?: string | number | undefined; method: string; params: Record<string, unknown> }
 
@@ -74,8 +75,8 @@ export class CodexConversationConnection {
           const pending = this.pending.get(value.id);
           if (!pending) continue;
           this.pending.delete(value.id); clearTimeout(pending.timer);
-          const error = value.error as { message?: string } | undefined;
-          if (error) pending.reject(new Error(error.message ?? "Codex rejected the request."));
+          const error = value.error;
+          if (error) pending.reject(new Error(codexErrorMessage(error, "Codex rejected the request.")));
           else pending.resolve(value.result as Record<string, unknown> ?? {});
         }
       } catch { this.fail(new Error("Invalid Codex App Server message.")); return; }

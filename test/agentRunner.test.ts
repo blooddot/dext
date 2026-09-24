@@ -736,6 +736,20 @@ describe("native structured output", () => {
     await expect(runner.runStructured(structuredRequest())).rejects.toThrow(/Codex exited with code 2[\s\S]*Unknown schema keyword/);
   });
 
+  it("preserves Codex JSONL failure diagnostics", async () => {
+    const runner = new CliAgentRunner(1_000, async (_command, args) => {
+      if (args[0] === "login") return { stdout: "", stderr: "", code: 1 };
+      return {
+        stdout: JSON.stringify({ type: "turn.failed", error: {
+          message: "Selected model is at capacity. Please try a different model.",
+          codexErrorInfo: { httpStatusCode: 503 }, additionalDetails: "request=req-jsonl"
+        } }), stderr: "", code: 2
+      };
+    });
+    await expect(runner.runStructured(structuredRequest())).rejects.toThrow(/Selected model is at capacity[\s\S]*httpStatusCode[\s\S]*503[\s\S]*request=req-jsonl/);
+  });
+
+
   it("refuses a provider that has no native output-schema channel", async () => {
     const runner = new CliAgentRunner(1_000, async () => ({ stdout: "", stderr: "", code: 0 }));
     await expect(runner.runStructured(structuredRequest({

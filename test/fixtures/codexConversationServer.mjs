@@ -2,6 +2,11 @@ import { createInterface } from "node:readline";
 const scenario = process.env.DEXT_QUESTION_TEST ?? "blocking";
 const send = (value) => process.stdout.write(JSON.stringify(value) + "\n");
 const notify = (method, params) => send({ method, params: { threadId: "thread-1", turnId: "turn-1", ...params } });
+const diagnosticError = {
+  message: "Selected model is at capacity. Please try a different model.",
+  codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 503 } },
+  additionalDetails: "request_id=req-fixture; retry after 30s"
+};
 const finish = (answer) => {
   notify("item/completed", { item: { type: "agentMessage", id: "final", text: `Received: ${answer}`, phase: "final_answer" } });
   notify("turn/completed", { turn: { id: "turn-1", status: "completed" } });
@@ -17,10 +22,16 @@ for await (const line of createInterface({ input: process.stdin })) {
   if (!method || id === undefined) continue;
   if (method === "initialize") send({ id, result: {} });
   else if (["thread/start", "thread/resume", "thread/fork"].includes(method)) {
+    if (scenario === "rpc-error") {
+      send({ id, error: { code: -32000, message: diagnosticError.message, data: diagnosticError } }); continue;
+    }
     config = { method, ...params }; send({ id, result: { thread: { id: "thread-1" } } });
   } else if (method === "turn/start") {
     notify("turn/started", { turn: { id: "turn-1", status: "inProgress" } });
     send({ id, result: { turn: { id: "turn-1" } } });
+    if (scenario === "error-notification") { notify("error", { error: diagnosticError, willRetry: false }); continue; }
+    if (scenario === "failed-turn") { notify("turn/completed", { turn: { id: "turn-1", status: "failed", error: diagnosticError } }); continue; }
+    if (scenario === "retry-error") { notify("error", { error: diagnosticError, willRetry: true }); finish("retry succeeded"); continue; }
     if (scenario === "config") { finish(JSON.stringify({ config, input: params.input })); continue; }
     if (scenario === "exit") { process.exit(2); }
     if (scenario === "async" || scenario === "expires" || scenario === "steer-fails") {

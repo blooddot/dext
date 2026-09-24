@@ -5,6 +5,7 @@ import { agentTimeout } from "./agentTimeout.js";
 import { ExecutionCancelledError } from "./executionErrors.js";
 import { CodexConversationConnection, type CodexRpcMessage } from "./codexConversationConnection.js";
 import { codexConversationEvent, codexInputQuestions, object } from "./codexConversationEvents.js";
+import { codexErrorMessage } from "./codexError.js";
 const stringValue = (value: unknown): string => typeof value === "string" ? value : "";
 
 export function codexAppServerArguments(extra: readonly string[]): string[] {
@@ -103,10 +104,10 @@ export async function runCodexConversation(request: AgentConversationRequest, op
     if (method === "turn/completed") {
       const turn = object(params.turn);
       if (turnId && turn.id !== turnId) return;
-      if (turn.status !== "completed") { fail(new Error(stringValue(object(turn.error).message) || `Codex turn ${stringValue(turn.status) || "failed"}.`)); return; }
+      if (turn.status !== "completed") { fail(new Error(codexErrorMessage(turn.error, `Codex turn ${stringValue(turn.status) || "failed"}.`))); return; }
       finished = true; clearInputs(); resolveTurn(finalText || lastMessage); return;
     }
-    if (method === "error" && params.willRetry !== true) { fail(new Error(stringValue(object(params.error).message) || "Codex turn failed.")); return; }
+    if (method === "error" && params.willRetry !== true) { fail(new Error(codexErrorMessage(params.error, "Codex turn failed."))); return; }
     const item = object(params.item);
     if (item.type === "agentMessage" && item.delivery === "async") asyncItems.add(String(item.id));
     if (method === "item/agentMessage/delta" && asyncItems.has(String(params.itemId))) return;

@@ -17,6 +17,7 @@ import { cliCompletion } from "./cliCompletion.js";
 import { agentTimeout, DEFAULT_AGENT_TIMEOUT_MS, DEFAULT_AGENT_IDLE_TIMEOUT_MS } from "./agentTimeout.js";
 import { trackCliToolActivity } from "./agentToolActivity.js";
 import { runCodexConversation } from "./codexConversationRunner.js";
+import { codexErrorMessage } from "./codexError.js";
 
 export interface AgentExecutionRequest {
   agentPreset?: string;
@@ -594,9 +595,9 @@ function codexFailure(output: string): string | undefined {
   for (const line of output.split(/\r?\n/)) {
     const parsed = extractJson(line);
     if (!parsed || typeof parsed !== "object") continue;
-    const event = parsed as { type?: unknown; message?: unknown; error?: { message?: unknown } };
-    if (event.type === "turn.failed" && typeof event.error?.message === "string") message = event.error.message;
-    else if (event.type === "error" && typeof event.message === "string") message = event.message;
+    const event = parsed as Record<string, unknown>;
+    if (event.type === "turn.failed") message = codexErrorMessage(event.error, "Codex turn failed.");
+    else if (event.type === "error") message = codexErrorMessage(event.error ?? event, "Codex turn failed.");
   }
   return message;
 }
