@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": 15,
+  "version": 22,
   "preset": {
     "default": "engineering"
   },
@@ -8,12 +8,31 @@
     "enabled": true,
     "initialized": true
   },
-  "ai": {
-    "cli": "deepseek-harness",
-    "model": "[\"deepseek-official\",\"deepseek-v4-flash-vision-exp\"]",
-    "reasoningEffort": "max"
+  "evidence": {
+    "depth": "whole",
+    "include": [
+      "src/**"
+    ]
   },
-  "updatedAt": 1790078119348,
+  "paths": {
+    "planDirectory": ".dext/plans",
+    "apiDirs": [
+      ".dext/api"
+    ],
+    "skillDirs": [
+      ".dext/skills"
+    ],
+    "mcpDirs": [
+      ".dext/mcp"
+    ]
+  },
+  "ai": {
+    "cli": "codex",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "high",
+    "speed": "fast"
+  },
+  "updatedAt": 1790245658567,
   "scan": {
     "roots": [
       "src"
