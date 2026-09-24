@@ -1,6 +1,6 @@
 # 项目知识与对话 Review
 
-项目配置位于 **Project > Overview > Project configuration**，包括默认 Review 预设、工作区 Plan 目录，以及项目相对的额外 API、Skill 和 MCP 目录。**Project settings** 负责 Standard、Deep、Whole 三档证据读取；展开 Advanced 可配置文件数量、字符预算和工作区相对路径范围。保存后写入 `.dext/project.json`，并应用于新的对话、Plan 文件、API/Skill/MCP 重载、项目初始化和生成图。项目尚未保存对应值时，旧的 VS Code 设置仍作为兼容回退。Whole 仍有 1000 个文件上限，证据数字字段留空则跟随所选档位。
+Project 设置位于 **Project > Overview** 的一个可折叠区域，包括初始化选项、默认 Review 预设、工作区 Plan 目录，以及项目相对的 API、Skill 和 MCP 目录。资源目录输入框直接显示当前的 `.dext/api`、`.dext/skills` 和 `.dext/mcp`，多个工作区相对目录用逗号分隔。证据读取的 Standard、Deep、Whole 三档也合并在这里；展开 **Advanced reading settings** 可配置文件数量、字符预算和工作区相对路径范围。改动会自动写入 `.dext/project.json`，并应用于新的对话、Plan 文件、资源重载、项目初始化和生成图。项目尚未保存对应值时，旧的 VS Code 设置仍作为兼容回退。Whole 仍有 1000 个文件上限，证据数字字段留空则跟随所选档位。
 
 [English](project-development.md) | 简体中文
 
