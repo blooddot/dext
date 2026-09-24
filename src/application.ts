@@ -49,6 +49,7 @@ import { DEFAULT_PLAN_DIRECTORY, planFileName, planPathSegments } from "./core/p
 import { splitPlanResponse } from "./core/planResponse.js";
 import { DextStorage } from "./dextStorage.js";
 import type { ProjectAiActivityEvent, ProjectAiProvider, ProjectAiRequest } from "./core/projectAiGeneration.js";
+import type { ProjectWorkspaceSettings } from "./core/projectSettings.js";
 
 /** Global rather than per-workspace: the object form is rewritten in the user
  * settings file, so once is once for every window. */
@@ -89,6 +90,7 @@ export class DextApplication {
   private workspaceRoot = process.cwd();
   private workspaceUri: vscode.Uri | undefined;
   private workspaceTrusted = false;
+  private projectWorkspaceSettings: ProjectWorkspaceSettings | undefined;
   private resourceWrite: Promise<void> = Promise.resolve();
   private globalResources: GlobalResources = { apis: [], mcps: [], rules: [], skills: [] };
   private globalDiagnostics: string[] = [];
@@ -131,6 +133,11 @@ export class DextApplication {
         return { text, ...(model ? { model } : {}) };
       }
     };
+  }
+
+  /** Applies the project-owned paths before the next resource reload or turn. */
+  setProjectWorkspaceSettings(settings: ProjectWorkspaceSettings): void {
+    this.projectWorkspaceSettings = settings;
   }
 
   /** Public Project activity is the agent stream event minus the private phases. */
@@ -328,7 +335,9 @@ export class DextApplication {
     this.runtime.setWorkspaceTrusted(this.workspaceTrusted);
     this.applyTimeoutSettings();
     this.applyAgentPermissionSettings();
-    const skillDirs = vscode.workspace.getConfiguration("dext").get<string[]>("skillDirs", []);
+    const configuredSkillDirs = vscode.workspace.getConfiguration("dext").get<string[]>("skillDirs", []);
+    const projectSkillDirs = this.projectWorkspaceSettings?.skillDirs;
+    const skillDirs = projectSkillDirs ?? [];
     const mcpManifests = await this.loadMcpManifests(folder);
     const mcpRegistryDiagnostics = [
       ...this.mcp.setServers(mcpManifests.servers),
@@ -347,7 +356,7 @@ export class DextApplication {
     // "server not connected" instead of "unknown name".
     this.runtime.setDeclaredMcpTools(mcpManifests.methods.map((method) => method.id));
     try {
-      await this.skills.reload(this.workspaceRoot, skillDirs, vscode.Uri.joinPath(this.storage.globalStorageUri, "skills").fsPath);
+      await this.skills.reload(this.workspaceRoot, skillDirs, vscode.Uri.joinPath(this.storage.globalStorageUri, "skills").fsPath, projectSkillDirs ? [] : configuredSkillDirs);
     } catch (error) {
       diagnostics.push(`Skill discovery: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -492,14 +501,17 @@ export class DextApplication {
     this.workflowRuntime.setMaxConcurrency(positive("workflow.maxConcurrency", DEFAULT_MAX_CONCURRENCY));
   }
 
-  /** Project APIs are searched first, then global APIs; `dext.apiDirs` adds to
-   * the shared roots. Relative entries resolve from the workspace, and the
-   * project directory stays first so a global API cannot shadow it. */
+  /** Project APIs are searched first, then global APIs. Project configuration
+   * owns additional roots; `dext.apiDirs` remains a legacy fallback. */
   private apiDirectories(folder: vscode.WorkspaceFolder | undefined): string[] {
     const roots = folder ? [vscode.Uri.joinPath(folder.uri, ".dext", "api").fsPath] : [];
+    const projectApiDirs = this.projectWorkspaceSettings?.apiDirs;
+    if (projectApiDirs) {
+      for (const entry of projectApiDirs) roots.push(vscode.Uri.joinPath(folder?.uri ?? vscode.Uri.file(this.workspaceRoot), entry).fsPath);
+    }
     roots.push(vscode.Uri.joinPath(this.storage.globalStorageUri, "api").fsPath);
     if (!folder) return roots;
-    const configured = vscode.workspace.getConfiguration("dext").get<string[]>("apiDirs", []) ?? [];
+    const configured = projectApiDirs ? [] : vscode.workspace.getConfiguration("dext").get<string[]>("apiDirs", []) ?? [];
     for (const entry of configured) {
       const value = typeof entry === "string" ? entry.trim() : "";
       if (!value) continue;
@@ -521,6 +533,9 @@ export class DextApplication {
   }> {
     const directories: Array<{ uri: vscode.Uri; scope: "project" | "global" }> = [];
     if (folder?.uri.scheme === "file") directories.push({ uri: vscode.Uri.joinPath(folder.uri, ".dext", "mcp"), scope: "project" });
+    if (folder?.uri.scheme === "file") {
+      for (const entry of this.projectWorkspaceSettings?.mcpDirs ?? []) directories.push({ uri: vscode.Uri.joinPath(folder.uri, entry), scope: "project" });
+    }
     if (includeGlobal) directories.push({ uri: vscode.Uri.joinPath(this.storage.globalStorageUri, "mcp"), scope: "global" });
     const servers: McpServerConfig[] = [];
     const tools: McpToolConfig[] = [];
@@ -1010,7 +1025,8 @@ export class DextApplication {
     if (!plan.document) return response;
     const workspaceStorage = this.storage.location() === "workspace";
     if (workspaceStorage && (!this.workspaceTrusted || !this.workspaceUri)) return response;
-    const configured = vscode.workspace.getConfiguration("dext").get<string>("plan.directory", DEFAULT_PLAN_DIRECTORY).trim();
+    const configured = (this.projectWorkspaceSettings?.planDirectory
+      ?? vscode.workspace.getConfiguration("dext").get<string>("plan.directory", DEFAULT_PLAN_DIRECTORY)).trim();
     const segments = workspaceStorage ? planPathSegments(configured || DEFAULT_PLAN_DIRECTORY) : [];
     const directory = workspaceStorage
       ? vscode.Uri.joinPath(this.workspaceUri!, ...segments)
@@ -1026,7 +1042,11 @@ export class DextApplication {
   }
 
   planUri(reference: string): vscode.Uri | undefined {
-    return this.storage.uriForReference("plans", reference);
+    const stored = this.storage.uriForReference("plans", reference);
+    if (stored) return stored;
+    if (this.storage.location() !== "workspace" || !this.workspaceUri) return undefined;
+    try { return vscode.Uri.joinPath(this.workspaceUri, ...planPathSegments(reference)); }
+    catch { return undefined; }
   }
 
   endAgentSession(sessionId: string): void {
@@ -1079,6 +1099,9 @@ export class DextApplication {
     const folder = vscode.workspace.workspaceFolders?.[0];
     const directories: Array<{ uri: vscode.Uri; scope: "project" | "global" }> = [];
     if (folder?.uri.scheme === "file") directories.push({ uri: vscode.Uri.joinPath(folder.uri, ".dext", "mcp"), scope: "project" });
+    if (folder?.uri.scheme === "file") {
+      for (const entry of this.projectWorkspaceSettings?.mcpDirs ?? []) directories.push({ uri: vscode.Uri.joinPath(folder.uri, entry), scope: "project" });
+    }
     directories.push({ uri: vscode.Uri.joinPath(this.storage.globalStorageUri, "mcp"), scope: "global" });
     for (const { uri: directory, scope } of directories) {
       if (server.scope && server.scope !== scope) continue;

@@ -292,7 +292,7 @@ Dext 用运行 `.dx` 的同一套加载逻辑做检查，因此错误在写下�
 - **Dext: Check All APIs** 一次检查整个项目，把明细和 `N error / M warning` 汇总写入 **Dext API Check** 输出通道，同时填充同一个 Problems 集合，每条诊断都可跳转到对应文件。
 - **Dext: Reload APIs** 重新加载 API，并报告同一批诊断。
 
-检查范围包括 `.dext/api/**/*.dx`、`.vscode/settings.json` 中 `dext.apiDirs` 指向的根目录、已加载 MCP 工具的参数与返回类型，以及解析到 `.dext/rules` 之下的字面量 `rules=[...]` 路径。
+检查范围包括 `.dext/api/**/*.dx`、**Project > Overview > Project configuration** 中的项目 API 目录（项目尚未保存时回退到旧的 `dext.apiDirs`）、项目 MCP 目录、已加载 MCP 工具的参数与返回类型，以及解析到 `.dext/rules` 之下的字面量 `rules=[...]` 路径。
 
 自定义 API 调用失败时，报错会说明原因，而不只是"API 不可用"：包含文件、函数、原因和行号；如果是因为清单里声明的 MCP 工具没有注册，还会指出是哪个 server。循环依赖只会标在实际构成循环的 API 上，而不是所有已加载的 API。
 
@@ -334,8 +334,10 @@ Plan 执行复用同一组件并额外绑定计划内容版本与本次 Build �
 Skill 按以下顺序查找，同名时靠前的位置优先：
 
 1. `<workspace>/.dext/skills`。
-2. Dext 全局存储。
-3. 用户配置的 `dext.skillDirs`。
+2. Project 配置中的项目 Skill 目录。
+3. Dext 全局存储。
+
+项目尚未保存 Skill 目录时，使用用户配置的 `dext.skillDirs` 作为回退。
 
 `create` 可以在项目或全局范围创建 Skill。`skill` 的 `workspace` 默认为当前项目，并将所选 `SKILL.md` 注入当前 Agent 任务。`ui.*` 等待用户回答后继续同一个工作流。
 

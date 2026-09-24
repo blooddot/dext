@@ -17,6 +17,8 @@ export interface ProjectEditorDataSource {
   setAiModel?(model?: string): Promise<void> | void;
   setAiReasoning?(reasoningEffort?: string): Promise<void> | void;
   setAiSpeed?(speed?: string): Promise<void> | void;
+  setEvidenceSettings?(settings: unknown, version: number): Promise<void>;
+  setWorkspaceSettings?(settings: unknown, version: number): Promise<void>;
   /** Renders one saved diagram by stable id; `refresh` distinguishes re-render from AI update. */
   renderDiagram?(diagramId: string, version?: number, options?: { refresh?: boolean }): Promise<void> | void;
   /** On-demand AI generation/update of one diagram; other diagrams and knowledge stay untouched. */
@@ -46,8 +48,8 @@ export interface ProjectEditorShowResult {
 }
 
 /**
- * Project editor tab. It exposes only Overview, Knowledge, and Diagrams; there is deliberately
- * no Hooks, Review, scan-folder or renderer-preference control.
+ * Project editor tab. It exposes only Overview, Knowledge, and Diagrams; hooks and renderer
+ * preference controls remain outside the project editor.
  */
 export class ProjectEditorProvider {
   private readonly pages = new Map<string, ProjectPanelPage>();
@@ -116,6 +118,12 @@ export class ProjectEditorProvider {
     this.activePanel = undefined;
   }
 
+  private async publishDefinitionVersion(): Promise<void> {
+    const data = await this.options.dataSource.load();
+    this.lastData = data;
+    if (data.overview.evidenceSettingsVersion !== undefined) this.activePanel?.postMessage?.({ type: "projectDefinitionVersion", version: data.overview.evidenceSettingsVersion });
+  }
+
   /** Handles webview messages routed by the shared manager. */
   async handleMessage(key: string, message: unknown): Promise<void> {
     if (key !== this.key) return;
@@ -123,7 +131,34 @@ export class ProjectEditorProvider {
       type?: unknown; page?: unknown; diagramId?: unknown; version?: unknown; kind?: unknown;
       requirement?: unknown; format?: unknown; content?: unknown; nodeId?: unknown; path?: unknown; line?: unknown; refresh?: unknown;
       cli?: unknown; model?: unknown; reasoningEffort?: unknown; speed?: unknown;
+      settings?: unknown;
     };
+    if (payload?.type === "projectWorkspaceSettings" && this.options.dataSource.setWorkspaceSettings) {
+      try {
+        if (this.initializing) throw new Error("Wait for initialization to finish before saving settings.");
+        if (typeof payload.version !== "number" || !Number.isInteger(payload.version) || payload.version < 0) throw new Error("Reopen Overview before saving settings.");
+        await this.options.dataSource.setWorkspaceSettings(payload.settings, payload.version);
+        const data = await this.options.dataSource.load();
+        this.lastData = data;
+        this.activePanel?.postMessage?.({ type: "projectWorkspaceSettingsSaved", version: data.overview.workspaceSettingsVersion });
+      } catch (error) {
+        this.activePanel?.postMessage?.({ type: "projectWorkspaceSettingsSaved", error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+    if (payload?.type === "projectEvidenceSettings" && this.options.dataSource.setEvidenceSettings) {
+      try {
+        if (this.initializing) throw new Error("Wait for initialization to finish before saving settings.");
+        if (typeof payload.version !== "number" || !Number.isInteger(payload.version) || payload.version < 0) throw new Error("Reopen Overview before saving settings.");
+        await this.options.dataSource.setEvidenceSettings(payload.settings, payload.version);
+        const data = await this.options.dataSource.load();
+        this.lastData = data;
+        this.activePanel?.postMessage?.({ type: "projectEvidenceSettingsSaved", version: data.overview.evidenceSettingsVersion });
+      } catch (error) {
+        this.activePanel?.postMessage?.({ type: "projectEvidenceSettingsSaved", error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
     if (payload?.type === "projectInitialize" && this.options.dataSource.initialize && !this.initializing) {
       this.initializing = true;
       // Start the task before awaiting it so a tab switch can immediately reload the running
@@ -160,18 +195,22 @@ export class ProjectEditorProvider {
     }
     if (payload?.type === "projectAiCli" && this.options.dataSource.setAiCli && !this.initializing) {
       await this.options.dataSource.setAiCli(typeof payload.cli === "string" && payload.cli ? payload.cli : undefined);
+      await this.publishDefinitionVersion();
       return;
     }
     if (payload?.type === "projectAiModel" && this.options.dataSource.setAiModel && !this.initializing) {
       await this.options.dataSource.setAiModel(typeof payload.model === "string" && payload.model ? payload.model : undefined);
+      await this.publishDefinitionVersion();
       return;
     }
     if (payload?.type === "projectAiReasoning" && this.options.dataSource.setAiReasoning && !this.initializing) {
       await this.options.dataSource.setAiReasoning(typeof payload.reasoningEffort === "string" && payload.reasoningEffort ? payload.reasoningEffort : undefined);
+      await this.publishDefinitionVersion();
       return;
     }
     if (payload?.type === "projectAiSpeed" && this.options.dataSource.setAiSpeed && !this.initializing) {
       await this.options.dataSource.setAiSpeed(typeof payload.speed === "string" && payload.speed ? payload.speed : undefined);
+      await this.publishDefinitionVersion();
       return;
     }
     if (payload?.type === "projectDiagramRender" && typeof payload.diagramId === "string") {

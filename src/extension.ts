@@ -46,8 +46,11 @@ import { parseEditorTabKey } from "./editorTabTypes.js";
 import type { VscodeWebviewPanelLike } from "./editorTabManager.js";
 import { ProjectStore } from "./projectStore.js";
 import { searchProjectReferences } from "./core/projectContext.js";
-import { VscodeProjectFileHost, createProjectPanelDataSource, discoverArchifyRepository, legacyScanInclude, readWorkspaceEvidence } from "./vscodeProjectHost.js";
-import { projectAiLimits, projectEvidenceLimits } from "./projectAiLimits.js";
+import { VscodeProjectFileHost, createProjectPanelDataSource, discoverArchifyRepository, effectiveProjectEvidenceSettings, effectiveProjectWorkspaceSettings, readWorkspaceEvidence } from "./vscodeProjectHost.js";
+import { legacyProjectEvidenceSettings } from "./projectAiLimits.js";
+import { resolveProjectEvidenceSettings } from "./core/projectEvidenceSettings.js";
+import { DEFAULT_PLAN_DIRECTORY } from "./core/planFile.js";
+import type { ProjectWorkspaceSettings } from "./core/projectSettings.js";
 import { renderEditorTabHtml } from "./editorTabHtml.js";
 import { ProjectDiagramAdapterRegistry } from "./core/projectDiagramRegistry.js";
 import { ArchifyAdapter } from "./core/archifyAdapter.js";
@@ -67,12 +70,35 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const folder = vscode.workspace.workspaceFolders?.[0];
   if (folder) application.runtime.setWorkspaceRoot(folder.uri.fsPath);
   application.runtime.setWorkspaceTrusted(vscode.workspace.isTrusted && folder?.uri.scheme === "file");
+  const projectHost = folder?.uri.scheme === "file" ? new VscodeProjectFileHost(folder.uri) : undefined;
+  const projectStore = projectHost ? new ProjectStore(projectHost) : undefined;
+  let projectApiDirs: readonly string[] | undefined;
+  let projectMcpDirs: readonly string[] | undefined;
+  const legacyWorkspaceSettings = (): ProjectWorkspaceSettings => {
+    const configuration = vscode.workspace.getConfiguration("dext", folder?.uri);
+    return {
+      reviewPreset: "engineering",
+      planDirectory: configuration.get<string>("plan.directory", DEFAULT_PLAN_DIRECTORY),
+      apiDirs: configuration.get<string[]>("apiDirs", []) ?? [],
+      skillDirs: configuration.get<string[]>("skillDirs", []) ?? [],
+      mcpDirs: []
+    };
+  };
+  if (projectStore) {
+    const definition = await projectStore.readDefinition();
+    const legacy = legacyWorkspaceSettings();
+    projectApiDirs = definition.paths?.apiDirs;
+    projectMcpDirs = definition.paths?.mcpDirs;
+    if (definition.paths) application.setProjectWorkspaceSettings(effectiveProjectWorkspaceSettings(definition, legacy));
+  }
   await application.reload();
   const apiDiagnostics = new DextApiDiagnostics(() => (vscode.workspace.workspaceFolders ?? [])
     .filter((workspace) => workspace.uri.scheme === "file")
     .map((workspace) => ({
       workspace: workspace.uri.fsPath,
       apiDirs: vscode.workspace.getConfiguration("dext", workspace.uri).get<string[]>("apiDirs", []),
+      ...(workspace === folder && projectApiDirs !== undefined ? { projectApiDirs } : {}),
+      ...(workspace === folder && projectMcpDirs !== undefined ? { projectMcpDirs } : {}),
       globalStorage: context.globalStorageUri.fsPath,
       readSettings: false
     })));
@@ -122,9 +148,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
   const editorTabRestorer = new EditorTabRestorer(editorTabs);
   context.subscriptions.push({ dispose: () => editorTabs.dispose() });
-  const projectHost = folder?.uri.scheme === "file" ? new VscodeProjectFileHost(folder.uri) : undefined;
-  if (projectHost && folder) {
-    const projectStore = new ProjectStore(projectHost);
+  if (projectHost && folder && projectStore) {
     // Last-good diagram snapshots are persisted so they survive a window reload; the registry owns
     // validation and the size budget, this only moves the document.
     const diagramRegistry = new ProjectDiagramAdapterRegistry({
@@ -152,18 +176,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         projectStore.readIntent(),
         projectStore.readDefinition()
       ]);
-      const limits = projectEvidenceLimits();
-      // The removed scanner profile still names the folders this reader cares about, so it keeps
-      // acting as the evidence scope until `dext.project.evidenceInclude` says otherwise.
-      const retiredRoots = limits.include.length ? [] : legacyScanInclude(definition);
+      const limits = resolveProjectEvidenceSettings(effectiveProjectEvidenceSettings(definition, legacyProjectEvidenceSettings()));
       return readWorkspaceEvidence(
         folder.uri,
         { objects, ...(intent ? { intent } : {}) },
         {
           // Read per run so a settings change applies to the next initialization or diagram.
           ...(request.requirement ? { requirement: request.requirement } : {}),
-          ...limits,
-          ...(retiredRoots.length ? { include: retiredRoots } : {})
+          ...limits
         },
         onProgress,
         signal
@@ -220,7 +240,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             : profile.models.map((id) => ({ id, label: id }))
         })),
         openEvidence: openProjectEvidence,
-        projectAiLimits: () => projectAiLimits()
+        legacyEvidenceSettings: () => legacyProjectEvidenceSettings(),
+        legacyWorkspaceSettings,
+        onWorkspaceSettingsChanged: async (settings) => {
+          projectApiDirs = settings.apiDirs;
+          projectMcpDirs = settings.mcpDirs;
+          application.setProjectWorkspaceSettings(settings);
+          await application.reload();
+          await sidebar.refresh();
+        }
       })
     });
     context.subscriptions.push({ dispose: () => editors.project?.dispose() });

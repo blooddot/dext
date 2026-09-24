@@ -3,6 +3,10 @@ import type { ProjectObject } from "../core/projectKnowledge.js";
 import type { EditorTabState } from "../editorTabState.js";
 import type { ProjectInitializationState } from "../projectService.js";
 import { renderArchitectureView, projectDiagramScript, type ArchitectureViewInput } from "./projectArchitectureView.js";
+import type { ProjectEvidenceSettings } from "../core/projectEvidenceSettings.js";
+import { renderProjectEvidenceSettings, projectEvidenceSettingsScript } from "./projectEvidenceSettingsView.js";
+import type { ProjectWorkspaceSettings } from "../core/projectSettings.js";
+import { renderProjectWorkspaceSettings, projectWorkspaceSettingsScript } from "./projectWorkspaceSettingsView.js";
 
 export type ProjectPanelPage = "overview" | "knowledge" | "architecture";
 
@@ -22,6 +26,10 @@ export interface ProjectOverviewData {
   drafts: number;
   needsVerification: number;
   initialization: ProjectInitializationState;
+  evidenceSettings?: ProjectEvidenceSettings;
+  evidenceSettingsVersion?: number;
+  workspaceSettings?: ProjectWorkspaceSettings;
+  workspaceSettingsVersion?: number;
   /** Available Agent CLI profiles and the project-specific selection. */
   aiCli?: readonly { id: string; label: string; models?: readonly {
     id: string;
@@ -125,7 +133,7 @@ function renderOverview(overview: ProjectOverviewData): string {
   const retiredScan = overview.legacyScanRoots?.length
     ? `<p class="project-scan-progress project-scan-progress-warning" role="status" data-project-legacy-scan>`
       + `The removed <code>scan</code> settings in <code>.dext/project.json</code> still limit Project evidence to: ${overview.legacyScanRoots.map((root) => `<code>${escapeHtml(root)}/**</code>`).join(", ")}. `
-      + `They apply while <code>dext.project.evidenceInclude</code> is empty; migrate them to that setting to keep this scope.</p>`
+      + `These roots are included in Project settings below. Save those settings to manage the scope here.</p>`
     : "";
   return `<section class="project-overview" data-project-section="overview">`
     + `<h2>${escapeHtml(overview.name)}</h2>`
@@ -134,6 +142,8 @@ function renderOverview(overview: ProjectOverviewData): string {
     + (overview.aiCli?.length ? `<label class="project-ai-cli">AI CLI for Project initialization <select data-project-ai-cli${initialization.status === "running" ? " disabled" : ""}><option value=""${overview.selectedAiCli ? "" : " selected"}>Use current Input selection</option>${overview.aiCli.map((cli) => `<option value="${escapeHtml(cli.id)}"${cli.id === overview.selectedAiCli ? " selected" : ""} data-models="${escapeHtml(JSON.stringify(cli.models ?? []))}">${escapeHtml(cli.label)}</option>`).join("")}</select></label>`
       + (overview.selectedAiCli ? (() => { const cli = overview.aiCli.find((item) => item.id === overview.selectedAiCli); const models = cli?.models ?? []; return models.length ? renderProjectModelControl(models, overview.selectedAiModel, overview.selectedAiReasoning, overview.selectedAiSpeed, initialization.status === "running") : ""; })() : "") : "")
     + renderInitialization(initialization)
+    + (overview.workspaceSettings ? renderProjectWorkspaceSettings(overview.workspaceSettings, overview.workspaceSettingsVersion ?? 0, initialization.status === "running") : "")
+    + (overview.evidenceSettings ? renderProjectEvidenceSettings(overview.evidenceSettings, overview.evidenceSettingsVersion ?? 0, initialization.status === "running") : "")
     + `<dl class="project-facts">`
     + `<dt>Workspace</dt><dd>${escapeHtml(overview.root)}</dd>`
     + `<dt>Objects</dt><dd>${overview.objects} (${overview.accepted} accepted, ${overview.drafts} drafts, ${overview.needsVerification} need verification)</dd>`
@@ -181,6 +191,8 @@ export function projectPanelScript(state?: EditorTabState): string {
   // Project tab has no key and could never render.
   const restore = state ? `api.setState(${JSON.stringify(state)});` : "";
   return "<script>(function(){var api=window.__dextApi||(window.__dextApi=acquireVsCodeApi());" + restore
+    + projectWorkspaceSettingsScript()
+    + projectEvidenceSettingsScript()
     + "function closeModelMenu(){var menu=document.querySelector('[data-project-model-menu]');var trigger=document.querySelector('[data-project-model-trigger]');if(menu)menu.hidden=true;if(trigger)trigger.setAttribute('aria-expanded','false');var sub=document.querySelector('[data-project-model-submenu]');if(sub)sub.hidden=true;}"
     + "function positionModelSubmenu(){var sub=document.querySelector('[data-project-model-submenu]'),menu=document.querySelector('[data-project-model-menu]');if(!sub||!menu)return;var r=menu.getBoundingClientRect(),w=Math.min(216,(document.documentElement.clientWidth||window.innerWidth)-24),gap=4;sub.style.width=w+'px';sub.dataset.submenuSide=(window.innerWidth-r.right-gap>=w?'right':r.left-gap>=w?'left':'above');}"
     + "function showModelChoices(category){var sub=document.querySelector('[data-project-model-submenu]');if(!sub)return;var items=[];try{items=JSON.parse(category.getAttribute('data-items')||'[]');}catch(_){}var selected=category.getAttribute('data-selected')||'';var title=category.querySelector('span').textContent;var html='<div class=\"project-model-submenu-heading\">'+title+'</div>';var prior='';items.forEach(function(item){if(item.group&&item.group!==prior){html+='<div class=\"project-model-group-heading\">'+item.group+'</div>';prior=item.group;}html+='<button type=\"button\" class=\"project-model-choice composer-menu-option\" role=\"menuitemradio\" aria-checked=\"'+String(item.id===selected)+'\" data-project-model-choice=\"'+String(item.id).replace(/&/g,'&amp;').replace(/\\\"/g,'&quot;')+'\"><span>'+item.label+'</span><i class=\"codicon codicon-'+(item.id===selected?'check':'blank')+'\"></i></button>';});sub.innerHTML=html;sub.hidden=false;positionModelSubmenu();}"

@@ -131,7 +131,11 @@ try {
       await evaluate(`document.querySelector('button[data-resource-kind="skill"]').click()`);
       assert.equal(await evaluate(`messages[0].kind`), 'skill');
       await writeFile(join(artifacts, `resources-${themeName}-${width}.png`), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
-      await load(ui.renderProjectPanel('overview', project));
+      await load(ui.renderProjectPanel('overview', { ...project, overview: { ...project.overview,
+        workspaceSettings: { reviewPreset: 'experience', planDirectory: '.project/plans', apiDirs: ['tools/api'], skillDirs: ['tools/skills'], mcpDirs: ['tools/mcp'] },
+        workspaceSettingsVersion: 3,
+        evidenceSettings: { depth: 'standard', include: ['src/**'], files: 234 }, evidenceSettingsVersion: 3
+      } }));
       assert.equal(await evaluate(`getComputedStyle(document.querySelector('.project-facts')).display`), 'grid');
       assert.equal(await evaluate(`document.querySelector('[data-project-initialization-state]').getAttribute('data-project-initialization-state')`), 'uninitialized');
       assert.equal(await evaluate(`!!document.querySelector('[data-project-initialize]')`), true);
@@ -141,6 +145,28 @@ try {
       // width-dependent (the narrow layout relaxes it), so the stable declarations are used.
       assert.equal(await evaluate(`getComputedStyle(document.querySelector('.project-ai-cli select')).minHeight`), '28px');
       assert.equal(await evaluate(`getComputedStyle(document.querySelector('.project-ai-cli select')).borderRadius`), '4px');
+      assert.equal(await evaluate(`document.querySelector('[data-project-workspace-settings] details').open`), false);
+      await evaluate(`document.querySelector('[data-project-workspace-settings] summary').click()`);
+      assert.equal(await evaluate(`document.querySelector('[data-project-workspace-settings] details').open`), true);
+      await evaluate(`document.querySelector('[data-project-directory-add]').click(); document.querySelectorAll('input[name="apiDirs"]')[1].value='more/api'; document.querySelectorAll('input[name="apiDirs"]')[1].dispatchEvent(new Event('input',{bubbles:true})); new Promise(resolve=>setTimeout(resolve,650))`);
+      assert.deepEqual(await evaluate(`messages.at(-1)`), { type: 'projectWorkspaceSettings', settings: { reviewPreset: 'experience', planDirectory: '.project/plans', apiDirs: ['tools/api', 'more/api'], skillDirs: ['tools/skills'], mcpDirs: ['tools/mcp'] }, version: 3 });
+      await evaluate(`window.dispatchEvent(new MessageEvent('message',{data:{type:'projectWorkspaceSettingsSaved',version:4}}))`);
+      await evaluate(`document.querySelector('.project-evidence-settings details').open=true; document.querySelector('[name="depth"]').value='whole'; document.querySelector('[name="depth"]').dispatchEvent(new Event('change',{bubbles:true}));`);
+      assert.equal(await evaluate(`document.querySelector('[name="chars"]').placeholder`), '1200000');
+      assert.equal(await evaluate(`document.querySelector('[name="files"]').value`), '234', 'explicit overrides remain visible');
+      await evaluate(`document.querySelector('[data-evidence-use-preset]').click(); document.querySelector('[name="include"]').value='src/**\\ndocs/**'; document.querySelector('[name="include"]').dispatchEvent(new Event('input',{bubbles:true})); new Promise(resolve=>setTimeout(resolve,650))`);
+      assert.deepEqual(await evaluate(`messages.at(-1)`), { type: 'projectEvidenceSettings', settings: { depth: 'whole', include: ['src/**', 'docs/**'] }, version: 3 });
+      assert.equal(await evaluate(`document.querySelector('.project-evidence-settings fieldset').disabled`), true);
+      await evaluate(`window.dispatchEvent(new MessageEvent('message',{data:{type:'projectEvidenceSettingsSaved',error:'Save failed'}}))`);
+      assert.equal(await evaluate(`document.querySelector('.project-evidence-settings fieldset').disabled`), false);
+      assert.equal(await evaluate(`document.querySelector('[name="depth"]').value`), 'whole');
+      assert.match(await evaluate(`document.querySelector('[data-evidence-settings-status]').textContent`), /Save failed/);
+      await evaluate(`document.querySelector('[data-project-evidence-settings]').dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})); new Promise(resolve=>setTimeout(resolve,650)); window.dispatchEvent(new MessageEvent('message',{data:{type:'projectEvidenceSettingsSaved',version:4}}))`);
+      assert.equal(await evaluate(`document.querySelector('[data-project-evidence-settings]').dataset.version`), '4');
+      assert.equal(await evaluate(`document.documentElement.scrollWidth <= innerWidth`), true, 'expanded settings fit the viewport');
+      await evaluate(`document.querySelector('.project-evidence-settings').scrollIntoView({block:'start'})`);
+      await writeFile(join(artifacts, `project-settings-${themeName}-${width}.png`), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
+      await evaluate(`messages=[]`);
       await evaluate(`document.querySelector('button[data-project-page="knowledge"]').click()`);
       assert.equal(await evaluate(`messages[0].page`), 'knowledge');
       await load(ui.renderProjectPanel('knowledge', project));
@@ -153,6 +179,8 @@ try {
   const populated = { ...project, overview: { ...project.overview,
     legacyScanRoots: ['src'], selectedAiCli: 'codex', selectedAiModel: 'gpt-6-astra',
     selectedAiReasoning: 'ultra', selectedAiSpeed: 'fast',
+    workspaceSettings: { reviewPreset: 'experience', planDirectory: '.project/plans', apiDirs: ['tools/api'], skillDirs: ['tools/skills'], mcpDirs: ['tools/mcp'] },
+    workspaceSettingsVersion: 3,
     initialization: { status: 'completed', drafts: 0, intentGenerated: true, diagramsGenerated: 1 },
     aiCli: [{ id: 'codex', label: 'Codex CLI', models: [{ id: 'gpt-6-astra', label: 'GPT-6-Astra', reasoningEfforts: ['high', 'ultra'], speedTiers: ['standard', 'fast'] }] }]
   } };

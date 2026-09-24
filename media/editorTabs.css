@@ -456,3 +456,25 @@ body.diagram-focus .project-diagram-node[hidden] { display: none; }
   .project-diagram-details dl { grid-template-columns: minmax(0, 1fr); gap: 2px; }
   .project-diagram-details dd { margin-bottom: 8px; }
 }
+.project-evidence-settings { margin: 20px 0; max-width: 760px; }
+.project-workspace-settings { margin: 20px 0; max-width: 760px; }
+.project-workspace-settings details { border: 1px solid var(--vscode-panel-border); }
+.project-workspace-settings summary { display: flex; flex-wrap: wrap; gap: 8px 12px; padding: 12px; cursor: pointer; list-style-position: inside; }
+.project-workspace-settings summary span { color: var(--vscode-descriptionForeground); font-weight: normal; }
+.project-workspace-settings-body { padding: 0 12px 12px; }
+.project-workspace-settings label, .project-directory-field { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; }
+.project-field-label { color: var(--vscode-foreground); }
+.project-workspace-settings input, .project-workspace-settings select { box-sizing: border-box; width: 100%; min-width: 0; padding: 6px 8px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, transparent); font: inherit; }
+.project-directory-items { display: grid; gap: 6px; }
+.project-directory-row { display: flex; gap: 6px; align-items: center; }
+.project-directory-row input { flex: 1 1 auto; }
+.project-directory-row button, .project-directory-add { flex: 0 0 auto; padding: 5px 9px; color: var(--vscode-button-secondaryForeground, var(--vscode-foreground)); background: var(--vscode-button-secondaryBackground, var(--vscode-input-background)); border: 1px solid var(--vscode-button-border, var(--vscode-input-border, transparent)); font: inherit; cursor: pointer; }
+.project-directory-add { align-self: flex-start; margin-top: 2px; }
+.project-evidence-settings fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.project-evidence-settings label { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; }
+.project-evidence-settings input, .project-evidence-settings select, .project-evidence-settings textarea { box-sizing: border-box; width: 100%; min-width: 0; padding: 6px 8px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, transparent); font: inherit; }
+.project-evidence-settings textarea { resize: vertical; }
+.project-evidence-settings details { margin: 12px 0; }
+.project-evidence-settings summary { cursor: pointer; }
+.project-evidence-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+.project-evidence-settings button { margin: 8px 0; }

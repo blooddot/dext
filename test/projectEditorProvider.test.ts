@@ -48,6 +48,37 @@ const setup = (overrides: Partial<ProjectEditorDataSource> = {}) => {
 };
 
 describe("project editor tab", () => {
+  it("acknowledges settings saves and failures without replacing the user's form", async () => {
+    const saves: unknown[] = [];
+    const { host, provider } = setup({
+      setEvidenceSettings: async (settings, version) => {
+        if (version !== 0) throw new Error("Project settings changed");
+        saves.push(settings);
+      },
+      load: async () => ({ ...data, overview: { ...data.overview, evidenceSettingsVersion: 1 } })
+    });
+    await provider.show();
+    const panel = host.created[0]!.panel;
+    const html = panel.html;
+    await provider.handleMessage(provider.key, { type: "projectEvidenceSettings", settings: { depth: "whole", include: [] }, version: 0 });
+    expect(saves).toEqual([{ depth: "whole", include: [] }]);
+    expect(panel.messages.at(-1)).toEqual({ type: "projectEvidenceSettingsSaved", version: 1 });
+    await provider.handleMessage(provider.key, { type: "projectEvidenceSettings", settings: {}, version: 1 });
+    expect(panel.messages.at(-1)).toEqual({ type: "projectEvidenceSettingsSaved", error: "Project settings changed" });
+    expect(panel.html).toBe(html);
+  });
+
+  it("routes project workspace settings through the data source", async () => {
+    const saved: unknown[] = [];
+    const { host, provider } = setup({
+      setWorkspaceSettings: async (settings, version) => { saved.push({ settings, version }); },
+      load: async () => ({ ...data, overview: { ...data.overview, workspaceSettingsVersion: 2 } })
+    });
+    await provider.show();
+    await provider.handleMessage(provider.key, { type: "projectWorkspaceSettings", settings: { reviewPreset: "experience" }, version: 1 });
+    expect(saved).toEqual([{ settings: { reviewPreset: "experience" }, version: 1 }]);
+    expect(host.created[0]!.panel.messages.at(-1)).toEqual({ type: "projectWorkspaceSettingsSaved", version: 2 });
+  });
   it("creates one tab, reuses it and labels the third page as diagrams", async () => {
     const { host, provider } = setup();
     expect((await provider.show()).created).toBe(true);

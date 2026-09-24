@@ -31,6 +31,8 @@ import { architectureRuleReport, type ArchitectureRule } from "./core/projectArc
 import type { ProjectPanelData } from "./webview/projectPanel.js";
 import type { DiagramValidationIssue } from "./core/projectDiagram.js";
 import { DiagramTaskRegistry, isAllowedEvidencePath, isDiagramExportPayload, resolveDiagramTarget } from "./projectDiagramViewer.js";
+import { projectEvidenceSettingsSchema, projectPromptLimits, type ProjectEvidenceSettings } from "./core/projectEvidenceSettings.js";
+import { projectWorkspaceSettingsFromDefinition, projectWorkspaceSettingsSchema, type ProjectWorkspaceSettings } from "./core/projectSettings.js";
 
 const textDecoder = new TextDecoder();
 const textEncoder = new TextEncoder();
@@ -315,6 +317,9 @@ export interface ProjectPanelDataSourceOptions {
   openEvidence?: (path: string, line?: number) => Promise<void>;
   /** Live AI budgets, read per run so a settings change applies without reloading the window. */
   projectAiLimits?: () => ProjectAiLimits;
+  legacyEvidenceSettings?: () => ProjectEvidenceSettings;
+  legacyWorkspaceSettings?: () => Partial<ProjectWorkspaceSettings>;
+  onWorkspaceSettingsChanged?: (settings: ProjectWorkspaceSettings) => Promise<void> | void;
   now?: () => number;
 }
 
@@ -360,6 +365,16 @@ export function legacyScanInclude(definition: ProjectDefinition | undefined): st
     const trimmed = root.trim().replace(/\/+$/, "");
     return trimmed === "" || trimmed === "." ? "**" : `${trimmed}/**`;
   });
+}
+
+export function effectiveProjectEvidenceSettings(definition: ProjectDefinition | undefined, legacy?: ProjectEvidenceSettings): ProjectEvidenceSettings {
+  if (definition?.evidence) return definition.evidence;
+  const fallback = legacy ?? { depth: "standard", include: [] };
+  return { ...fallback, include: fallback.include.length ? fallback.include : legacyScanInclude(definition) };
+}
+
+export function effectiveProjectWorkspaceSettings(definition: ProjectDefinition | undefined, legacy: Partial<ProjectWorkspaceSettings> = {}): ProjectWorkspaceSettings {
+  return projectWorkspaceSettingsFromDefinition(definition, legacy);
 }
 
 function safeFileName(title: string): string {
@@ -470,7 +485,7 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
     },
     generate: async (evidence, signal, _onProgress, onOutput) => {
       if (!projectAiProvider) throw new Error("Project AI is unavailable: enable and select an available AI CLI in the input area first.");
-      const service = new ProjectAiGenerationService(projectAiProvider, options.projectAiLimits?.() ?? {});
+      const service = new ProjectAiGenerationService(projectAiProvider, { ...options.projectAiLimits?.(), ...projectPromptLimits(evidence.selection.evidenceChars) });
       // `onOutput` is the single text sink: one activity event becomes exactly one output line.
       return service.generate(evidence, {
         signal,
@@ -607,7 +622,7 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
       });
       await captureEvidence("diagram", evidence);
       post({ type: "projectDiagramProgress", message: "Calling the AI to generate the diagram…" });
-      const service = new ProjectAiGenerationService(projectAiProvider, options.projectAiLimits?.() ?? {});
+      const service = new ProjectAiGenerationService(projectAiProvider, { ...options.projectAiLimits?.(), ...projectPromptLimits(evidence.selection.evidenceChars) });
       const result = await service.generateDiagram(evidence, {
         requirement,
         ...(kind ? { kind } : {}),
@@ -736,7 +751,8 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
       ? definition.ai.reasoningEffort : undefined;
     selectedAiSpeed = definition?.ai.speed && selectedModel?.speedTiers?.includes(definition.ai.speed)
       ? definition.ai.speed : undefined;
-    const retiredScanRoots = legacyScanRoots(definition);
+    const retiredScanRoots = definition?.evidence ? [] : legacyScanRoots(definition);
+    const workspaceSettings = effectiveProjectWorkspaceSettings(definition, options.legacyWorkspaceSettings?.());
     return {
       overview: {
         name: options.name,
@@ -746,6 +762,8 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
         drafts: objects.filter((object) => object.confirmation === "draft").length,
         needsVerification: objects.filter((object) => object.validity !== "current").length,
         initialization,
+        ...(options.store.writeDefinition ? { evidenceSettings: effectiveProjectEvidenceSettings(definition, options.legacyEvidenceSettings?.()), evidenceSettingsVersion: definition?.version ?? 0 } : {}),
+        ...(options.store.writeDefinition ? { workspaceSettings, workspaceSettingsVersion: definition?.version ?? 0 } : {}),
         ...(retiredScanRoots.length ? { legacyScanRoots: retiredScanRoots } : {}),
         ...(options.aiCli?.length ? {
           aiCli: options.aiCli,
@@ -815,6 +833,27 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
       return load();
     },
     ...(options.store.readDefinition && options.store.writeDefinition ? {
+      setWorkspaceSettings: async (settings: unknown, version: number): Promise<void> => {
+        if (generating || initializationService.snapshot.status === "running") throw new Error("Wait for Project generation to finish before saving settings.");
+        const next = projectWorkspaceSettingsSchema.parse(settings);
+        const definition = await options.store.readDefinition!();
+        if (definition.version !== version) throw new Error("Project settings changed. Reopen Overview before saving again.");
+        const saved = await options.store.writeDefinition!({
+          ...definition,
+          preset: { ...definition.preset, default: next.reviewPreset },
+          paths: { planDirectory: next.planDirectory, apiDirs: next.apiDirs, skillDirs: next.skillDirs, mcpDirs: next.mcpDirs }
+        }, version);
+        if (saved.status === "conflict") throw new Error("Project settings changed. Reopen Overview before saving again.");
+        await options.onWorkspaceSettingsChanged?.(next);
+      },
+      setEvidenceSettings: async (settings: unknown, version: number): Promise<void> => {
+        if (generating || initializationService.snapshot.status === "running") throw new Error("Wait for Project generation to finish before saving settings.");
+        const evidence = projectEvidenceSettingsSchema.parse(settings);
+        const definition = await options.store.readDefinition!();
+        if (definition.version !== version) throw new Error("Project settings changed. Reopen Overview before saving again.");
+        const saved = await options.store.writeDefinition!({ ...definition, evidence }, version);
+        if (saved.status === "conflict") throw new Error("Project settings changed. Reopen Overview before saving again.");
+      },
       setAiCli: async (cli?: string): Promise<void> => {
         const definition = await options.store.readDefinition!();
         const valid = !cli || (options.aiCli ?? []).some((candidate) => candidate.id === cli);

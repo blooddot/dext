@@ -324,8 +324,8 @@ surfaces where it is written rather than only when the API is called.
   and fills the same Problems collection so every diagnostic jumps to its file.
 - **Dext: Reload APIs** reloads the APIs and reports the same diagnostics.
 
-Checks cover `.dext/api/**/*.dx`, the `dext.apiDirs` roots in
-`.vscode/settings.json`, the parameters and result types of loaded MCP tools, and
+Checks cover `.dext/api/**/*.dx`, the project API directories in **Project >
+Overview > Project configuration** (with legacy `dext.apiDirs` as a fallback), project MCP directories, the parameters and result types of loaded MCP tools, and
 literal `rules=[...]` paths resolved below `.dext/rules`.
 
 A failed custom API call names its cause instead of reporting only that the API
@@ -369,8 +369,10 @@ Writing a plan is not implementing it, so a plan-authoring turn produces no impl
 
 `.dx` uses a restricted Python-like syntax. It is parsed by Dext and never starts a Python interpreter. Built-in APIs are always in scope, and `import` refers to custom `.dext/api` files. External files are not read until VS Code marks the workspace as trusted. A nested `agent(...)`, `ask(...)`, or `plan(...)` call may set `skills=["name"]` and `rules=["path.md"]`. Skills are explicit packages, while rules are ordered policy files. Rule paths are resolved only below `<workspace>/.dext/rules`; skill discovery follows the order described below. Dext loads selected skills first and rules last, so the API's narrow rules constrain the general skill workflow. These parameters appear in Dext signatures and completion; their contents are injected into the Agent instruction rather than forwarded as control fields to the provider.
 
-Standard skills are discovered in `<workspace>/.dext/skills`, then Dext global
-storage, then `dext.skillDirs`; earlier directories win duplicate names. `create`
+Standard skills are discovered in `<workspace>/.dext/skills`, then the project
+Skill directories in **Project > Overview > Project configuration**, then Dext
+global storage. Legacy `dext.skillDirs` remains a fallback until project values
+are saved; earlier directories win duplicate names. `create`
 can place a skill in either scope. `skill` defaults `workspace` to the current
 project and injects the selected `SKILL.md` into the current Agent task.
 `ui.*` waits for a semantic user answer and resumes the same workflow.

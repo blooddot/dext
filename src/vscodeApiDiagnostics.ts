@@ -44,6 +44,8 @@ export class DextApiDiagnostics implements vscode.Disposable {
     for (const option of this.options()) {
       patterns.add(resolve(option.workspace, ".dext"));
       for (const path of option.apiDirs ?? []) patterns.add(resolve(option.workspace, path));
+      for (const path of option.projectApiDirs ?? []) patterns.add(resolve(option.workspace, path));
+      for (const path of option.projectMcpDirs ?? []) patterns.add(resolve(option.workspace, path));
       if (option.globalStorage) patterns.add(resolve(option.globalStorage));
     }
     for (const root of patterns) {

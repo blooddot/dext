@@ -871,6 +871,7 @@
           "description": "Capture selections from any workspace text file, including Markdown, plain text, logs, and CSV, as Dext file references when copying with Ctrl+C or Cmd+C. The clipboard still receives the exact selected text. Disable this to use VS Code's native copy behavior."
         },
         "dext.skillDirs": {
+          "deprecationMessage": "Configure project-relative Skill directories in Project > Overview > Project configuration. This setting remains as a global fallback until the project saves its own directories.",
           "type": "array",
           "default": [],
           "items": {
@@ -879,6 +880,7 @@
           "description": "Additional skill directories. Relative paths resolve from the current workspace; earlier directories take priority for duplicate skill names."
         },
         "dext.apiDirs": {
+          "deprecationMessage": "Configure project-relative API directories in Project > Overview > Project configuration. This setting remains as a global fallback until the project saves its own directories.",
           "type": "array",
           "default": [],
           "items": {
@@ -914,6 +916,7 @@
           "description": "Maximum size in bytes for a pasted image, copied terminal output, or clipboard context that Dext stores. Workspace @file references are not size-limited."
         },
         "dext.plan.directory": {
+          "deprecationMessage": "Configure the project Plan directory in Project > Overview > Project configuration. This setting remains as a fallback until the project saves its own directory.",
           "type": "string",
           "default": ".dext/plans",
           "description": "Workspace-relative directory where Plan mode saves its documents when dext.storage.location is workspace. Must stay inside the workspace."
@@ -949,6 +952,7 @@
           "description": "Characters kept per stored input, process event, and serialized output before history truncates it."
         },
         "dext.project.evidenceDepth": {
+          "deprecationMessage": "Configure this in Project > Overview > Project settings. Existing values are used only until settings are saved for that project.",
           "type": "string",
           "default": "standard",
           "enum": [
@@ -964,6 +968,7 @@
           "description": "How much of the project the AI may read for Project knowledge and diagrams. The individual evidence limits below override this preset when set explicitly."
         },
         "dext.project.evidenceChars": {
+          "deprecationMessage": "Configure this in Project > Overview > Project settings. Existing values are used only until settings are saved for that project.",
           "type": "integer",
           "default": 600000,
           "minimum": 20000,
@@ -971,6 +976,7 @@
           "description": "Characters of bounded evidence (README, documentation, manifests and source excerpts) sent to the AI for Project knowledge initialization and diagram generation. Overrides dext.project.evidenceDepth. The default keeps a prompt near 100k tokens, which leaves room in a 200k-token CLI context; raising it sends more of your code, costs more time, and can exceed the selected CLI's context window."
         },
         "dext.project.evidenceFiles": {
+          "deprecationMessage": "Configure this in Project > Overview > Project settings. Existing values are used only until settings are saved for that project.",
           "type": "integer",
           "default": 600,
           "minimum": 1,
@@ -978,6 +984,7 @@
           "description": "Evidence files read for Project knowledge initialization and diagram generation. Overrides dext.project.evidenceDepth. Documentation keeps precedence, with half of this window reserved for source; leftover slots go to source so the inventory can name as many modules as the window allows."
         },
         "dext.project.evidenceFileChars": {
+          "deprecationMessage": "Configure this in Project > Overview > Project settings. Existing values are used only until settings are saved for that project.",
           "type": "integer",
           "default": 16000,
           "minimum": 512,
@@ -985,6 +992,7 @@
           "description": "Characters read from one evidence file before it is truncated. Overrides dext.project.evidenceDepth. Source excerpts are capped at a quarter of this value so the budget still covers many modules; evidence beyond the visible lines cannot be cited."
         },
         "dext.project.evidenceInclude": {
+          "deprecationMessage": "Configure this in Project > Overview > Project settings. Existing values are used only until settings are saved for that project.",
           "type": "array",
           "items": {
             "type": "string"

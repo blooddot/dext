@@ -25,9 +25,24 @@ describe("project panel", () => {
     expect(html).not.toContain("Language");
   });
 
+  it("renders project-owned review, plan, API and Skill settings", () => {
+    const html = renderProjectPanel("overview", data({ overview: {
+      ...data().overview,
+      workspaceSettings: { reviewPreset: "experience", planDirectory: ".project/plans", apiDirs: ["tools/api"], skillDirs: ["tools/skills"], mcpDirs: ["tools/mcp"] },
+      workspaceSettingsVersion: 4
+    } }));
+    expect(html).toContain('data-project-workspace-settings');
+    expect(html).toContain('value=".project/plans"');
+    expect(html).toContain("tools/api");
+    expect(html).toContain("tools/skills");
+    expect(html).toContain("tools/mcp");
+    expect(html).toContain('value="experience" selected');
+    expect(html).toContain('data-version="4"');
+  });
+
   it("tells the reader when a removed scan profile is still sitting in .dext/project.json", () => {
     const clear = renderProjectPanel("overview", data());
-    expect(clear).not.toContain("data-project-legacy-scan");
+    expect(clear.split("<script>")[0]).not.toContain("data-project-legacy-scan");
 
     const note = renderProjectPanel("overview", data({
       overview: { ...data().overview, legacyScanRoots: ["src", "lib"] }
@@ -37,7 +52,7 @@ describe("project panel", () => {
     // The notice states the exact scope the retired roots still apply, not just that they exist.
     expect(note).toContain("<code>src/**</code>");
     expect(note).toContain("<code>lib/**</code>");
-    expect(note).toContain("dext.project.evidenceInclude");
+    expect(note).toContain("Project settings below");
     // The roots come from a project file, so they are escaped like any other untrusted value.
     const escaped = renderProjectPanel("overview", data({
       overview: { ...data().overview, legacyScanRoots: ["<img src=x onerror=1>"] }

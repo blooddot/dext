@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { projectEvidenceSettingsSchema } from "./core/projectEvidenceSettings.js";
+import { projectWorkspaceSettingsSchema } from "./core/projectSettings.js";
 import { normalizeProjectObject, projectObjectSchema, type ProjectObject } from "./core/projectKnowledge.js";
 import { reviewPresetSchema, type ReviewPreset } from "./core/projectContext.js";
 import { projectIntentSchema, type ProjectIntent } from "./core/projectIntent.js";
@@ -37,6 +39,9 @@ export const projectDefinitionSchema = z.object({
   version: z.number().int().nonnegative().default(0),
   preset: z.object({ default: reviewPresetSchema.default("engineering") }).strict().default({ default: "engineering" }),
   knowledge: projectKnowledgeConfigSchema.default({ enabled: false, initialized: false }),
+  evidence: projectEvidenceSettingsSchema.optional(),
+  /** Project-owned paths and the default review emphasis. */
+  paths: projectWorkspaceSettingsSchema.omit({ reviewPreset: true }).optional(),
   /** Project-only AI CLI. Omitted means use the current Input selection. */
   /** Project-only Agent CLI and optional model override. */
   ai: z.object({
@@ -153,6 +158,7 @@ export class ProjectStore {
     if (current.version !== expectedVersion) return { status: "conflict", current };
     const value = projectDefinitionSchema.parse({ ...next, version: current.version + 1, updatedAt: options.now ?? Date.now() });
     await this.host.writeFile(PROJECT_DEFINITION_PATH, `${JSON.stringify(value, null, 2)}\n`);
+    this.remember(value);
     return { status: "applied", value };
   }
 

@@ -1,5 +1,7 @@
 # Project knowledge and review
 
+Project configuration lives in **Project > Overview > Project configuration**. It includes the default Review preset, the workspace Plan directory, and project-relative extra API, Skill, and MCP directories. **Project settings** contains the Standard, Deep, or Whole evidence depth; expand its Advanced section for file and character limits and workspace-relative scope patterns. Saving persists the values in `.dext/project.json` and applies them to new turns, Plan documents, API/Skill/MCP reloads, initialization, and diagram generation. Before a project saves its own value, the old VS Code settings remain a compatibility fallback. Whole still has a 1,000-file limit, and blank evidence numeric fields follow the selected depth.
+
 English | [简体中文](project-development.zh-CN.md)
 
 [Back to README](../README.md)
@@ -18,7 +20,7 @@ Project data lives under `.dext/` in the workspace:
 
 | Path | Contents |
 | --- | --- |
-| `.dext/project.json` | Schema version, optimistic `version`, default review preset, knowledge settings and AI CLI selection. Legacy `scan` and engine-preference fields stay readable and are preserved on write, but are no longer used. |
+| `.dext/project.json` | Schema version, optimistic `version`, default review preset, project paths (`planDirectory`, `apiDirs`, `skillDirs`, and `mcpDirs`), evidence settings and AI CLI selection. Legacy `scan` and engine-preference fields stay readable and are preserved on write, but are no longer used. |
 | `.dext/project-intent.json` | AI-generated project brief and semantic knowledge from initialization |
 | `.dext/objects/<id>.json` | One accepted long-term object per file |
 | `.dext/architecture.json` | Declared design decisions and architecture rules. Rules are evaluated against the saved diagram they name, never against a source scan. |

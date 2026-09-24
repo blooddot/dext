@@ -12,6 +12,10 @@ import { MethodRegistry } from "./registry.js";
 export interface ApiCheckOptions {
   workspace: string;
   apiDirs?: readonly string[];
+  /** Project-owned directories replace the legacy workspace setting while remaining separately validated. */
+  projectApiDirs?: readonly string[];
+  /** Additional project MCP manifest directories. */
+  projectMcpDirs?: readonly string[];
   globalStorage?: string;
   /** Editor buffers override disk, and can include new unsaved files. */
   documents?: ReadonlyMap<string, string>;
@@ -58,7 +62,9 @@ export async function checkApis(options: ApiCheckOptions): Promise<ApiCheckResul
       for (const error of errors) report(path, "Invalid workspace settings JSONC.", "dext/config", error.offset, error.offset + error.length);
       const dirs: unknown = settings && typeof settings === "object" ? (settings as Record<string, unknown>)["dext.apiDirs"] : undefined;
       if (dirs !== undefined) {
-        if (Array.isArray(dirs) && dirs.every((value): value is string => typeof value === "string")) configured.push(...dirs);
+        if (Array.isArray(dirs) && dirs.every((value): value is string => typeof value === "string")) {
+          if (options.projectApiDirs === undefined) configured.push(...dirs);
+        }
         else report(path, "dext.apiDirs must be an array of paths.", "dext/config");
       }
     }
@@ -66,14 +72,18 @@ export async function checkApis(options: ApiCheckOptions): Promise<ApiCheckResul
   const roots = [...new Set([
     join(workspace, ".dext", "api"),
     ...(options.globalStorage ? [resolve(options.globalStorage, "api")] : []),
-    ...configured.concat([...(options.apiDirs ?? [])]).filter((path) => path.trim()).map((path) => resolve(workspace, path.trim()))
+    ...configured.concat([...(options.projectApiDirs ?? options.apiDirs ?? [])]).filter((path) => path.trim()).map((path) => resolve(workspace, path.trim()))
   ])];
   const registry = new MethodRegistry();
   registry.registerMany(BUILTIN_METHODS, "builtin");
   const servers = new Set<string>();
   const serverConfigs: Array<{ config: McpServerConfig; path: string }> = [];
   const toolConfigs: Array<{ config: McpToolConfig; path: string }> = [];
-  for (const root of [join(workspace, ".dext", "mcp"), ...(options.globalStorage ? [resolve(options.globalStorage, "mcp")] : [])]) {
+  for (const root of [
+    join(workspace, ".dext", "mcp"),
+    ...(options.projectMcpDirs ?? []).map((directory) => resolve(workspace, directory)),
+    ...(options.globalStorage ? [resolve(options.globalStorage, "mcp")] : [])
+  ]) {
     try {
       let names: string[];
       try { names = await readdir(root); } catch (error) { if (missing(error)) continue; throw error; }

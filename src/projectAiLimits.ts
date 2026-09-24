@@ -1,4 +1,6 @@
 import * as vscode from "vscode";
+import { PROJECT_EVIDENCE_DEPTHS, projectPromptLimits, type ProjectEvidenceDepth, type ProjectEvidenceSettings } from "./core/projectEvidenceSettings.js";
+export { PROJECT_EVIDENCE_DEPTHS, type ProjectEvidenceDepth } from "./core/projectEvidenceSettings.js";
 
 /**
  * Project knowledge sends bounded documentation, manifests and source excerpts to the selected AI
@@ -20,19 +22,8 @@ export const DEFAULT_PROJECT_EVIDENCE_FILE_CHARS = 16_000;
  * `standard` keeps a prompt near 100k tokens, `deep` near 150k, and `whole` near 200k, which only
  * the largest-context CLIs can hold together with the schema and the response.
  */
-export const PROJECT_EVIDENCE_DEPTHS = {
-  standard: { chars: 600_000, files: 600, fileChars: 16_000 },
-  deep: { chars: 900_000, files: 800, fileChars: 20_000 },
-  whole: { chars: 1_200_000, files: 1_000, fileChars: 24_000 }
-} as const;
-export type ProjectEvidenceDepth = keyof typeof PROJECT_EVIDENCE_DEPTHS;
 export const DEFAULT_PROJECT_EVIDENCE_DEPTH: ProjectEvidenceDepth = "standard";
 
-/** Room for the instructions and the response schema on top of the evidence package. */
-const PROMPT_OVERHEAD_CHARS = 160_000;
-const DEFAULT_PROMPT_CHARS = 400_000;
-const DEFAULT_OUTPUT_CHARS = 240_000;
-const DEFAULT_OUTPUT_TOKENS = 32_000;
 
 export interface ProjectEvidenceLimits {
   maxFiles: number;
@@ -98,9 +89,18 @@ export function projectEvidenceLimits(configuration: ConfigurationLike = vscode.
 /** The prompt budget follows the evidence budget so raising one never strands the other. */
 export function projectAiLimits(configuration: ConfigurationLike = vscode.workspace.getConfiguration("dext")): ProjectAiLimits {
   const evidenceChars = projectEvidenceLimits(configuration).maxEvidenceChars;
+  return projectPromptLimits(evidenceChars);
+}
+
+/** Compatibility only: Project saves its own settings after the first explicit save. */
+export function legacyProjectEvidenceSettings(configuration: ConfigurationLike = vscode.workspace.getConfiguration("dext")): ProjectEvidenceSettings {
+  const limits = projectEvidenceLimits(configuration);
+  const depth = evidenceDepth(configuration);
+  const preset = PROJECT_EVIDENCE_DEPTHS[depth];
   return {
-    maxInputChars: Math.max(DEFAULT_PROMPT_CHARS, evidenceChars + PROMPT_OVERHEAD_CHARS),
-    maxOutputChars: DEFAULT_OUTPUT_CHARS,
-    maxOutputTokens: DEFAULT_OUTPUT_TOKENS
+    depth, include: limits.include,
+    ...(limits.maxFiles !== preset.files ? { files: limits.maxFiles } : {}),
+    ...(limits.maxFileChars !== preset.fileChars ? { fileChars: limits.maxFileChars } : {}),
+    ...(limits.maxEvidenceChars !== preset.chars ? { chars: limits.maxEvidenceChars } : {})
   };
 }

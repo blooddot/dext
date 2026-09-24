@@ -1,5 +1,7 @@
 # 项目知识与对话 Review
 
+项目配置位于 **Project > Overview > Project configuration**，包括默认 Review 预设、工作区 Plan 目录，以及项目相对的额外 API、Skill 和 MCP 目录。**Project settings** 负责 Standard、Deep、Whole 三档证据读取；展开 Advanced 可配置文件数量、字符预算和工作区相对路径范围。保存后写入 `.dext/project.json`，并应用于新的对话、Plan 文件、API/Skill/MCP 重载、项目初始化和生成图。项目尚未保存对应值时，旧的 VS Code 设置仍作为兼容回退。Whole 仍有 1000 个文件上限，证据数字字段留空则跟随所选档位。
+
 [English](project-development.md) | 简体中文
 
 [返回 README](../README.zh-CN.md)
@@ -15,7 +17,7 @@ Dext 把两类理解严格分开：**项目知识**长期存在、属于仓库�
 
 | 路径 | 内容 |
 | --- | --- |
-| `.dext/project.json` | schema 版本、乐观锁 `version`、默认 Review 预设、知识开关 |
+| `.dext/project.json` | schema 版本、乐观锁 `version`、默认 Review 预设、项目路径（`planDirectory`、`apiDirs`、`skillDirs`、`mcpDirs`）、知识设置和 AI CLI 选择 |
 | `.dext/project-intent.json` | 初始化时 AI 生成的项目简介和语义知识 |
 | `.dext/objects/<id>.json` | 每个文件一个已确认的长期对象 |
 | `.dext/architecture.json` | 人工声明的设计决策与架构规则；规则针对其指定的已保存图求值，不依赖源码扫描 |

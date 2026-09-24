@@ -54,6 +54,20 @@ describe("API project checks", () => {
     expect(result.diagnostics).toEqual([]);
   });
 
+  it("uses project API directories in place of legacy workspace roots", async () => {
+    await put(".dext/api/main.dx", valid);
+    await put("project-api/project.dx", valid);
+    await put("legacy-api/legacy.dx", 'def main() -> PrintResult:\n    return unknown()\n');
+    await put(".vscode/settings.json", '{ "dext.apiDirs": ["legacy-api"] }');
+    const result = await checkApis({ workspace, projectApiDirs: ["project-api"] });
+    expect(result.files.map((path) => path.replaceAll("\\", "/"))).toEqual([
+      expect.stringContaining(".dext/api/main.dx"),
+      expect.stringContaining("project-api/project.dx")
+    ]);
+    expect(result.files.some((path) => path.includes("legacy-api"))).toBe(false);
+    expect(result.diagnostics).toEqual([]);
+  });
+
   it("does not let a duplicate definition overwrite the first plan", async () => {
     await put(".dext/api/main.dx", valid);
     await put("extra/main.dx", 'def main() -> PrintResult:\n    return unknown()\n');
