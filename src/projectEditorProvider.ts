@@ -17,6 +17,7 @@ export interface ProjectEditorDataSource {
   setAiModel?(model?: string): Promise<void> | void;
   setAiReasoning?(reasoningEffort?: string): Promise<void> | void;
   setAiSpeed?(speed?: string): Promise<void> | void;
+  setProjectSettings?(settings: unknown, version: number): Promise<void>;
   setEvidenceSettings?(settings: unknown, version: number): Promise<void>;
   setWorkspaceSettings?(settings: unknown, version: number): Promise<void>;
   /** Renders one saved diagram by stable id; `refresh` distinguishes re-render from AI update. */
@@ -133,6 +134,19 @@ export class ProjectEditorProvider {
       cli?: unknown; model?: unknown; reasoningEffort?: unknown; speed?: unknown;
       settings?: unknown;
     };
+    if (payload?.type === "projectSettings" && this.options.dataSource.setProjectSettings) {
+      try {
+        if (this.initializing) throw new Error("Wait for initialization to finish before saving settings.");
+        if (typeof payload.version !== "number" || !Number.isInteger(payload.version) || payload.version < 0) throw new Error("Reopen Overview before saving settings.");
+        await this.options.dataSource.setProjectSettings(payload.settings, payload.version);
+        const data = await this.options.dataSource.load();
+        this.lastData = data;
+        this.activePanel?.postMessage?.({ type: "projectSettingsSaved", version: data.overview.workspaceSettingsVersion ?? data.overview.evidenceSettingsVersion });
+      } catch (error) {
+        this.activePanel?.postMessage?.({ type: "projectSettingsSaved", error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
     if (payload?.type === "projectWorkspaceSettings" && this.options.dataSource.setWorkspaceSettings) {
       try {
         if (this.initializing) throw new Error("Wait for initialization to finish before saving settings.");

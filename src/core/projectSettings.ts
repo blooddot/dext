@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { DEFAULT_PLAN_DIRECTORY } from "./planFile.js";
 import { reviewPresetSchema, type ReviewPreset } from "./projectContext.js";
+import { projectEvidenceSettingsSchema, type ProjectEvidenceSettings } from "./projectEvidenceSettings.js";
 
 /** Project-owned settings that affect files and behavior shared by the repository. */
 export const projectPathSchema = z.string().trim().min(1).max(512).refine((path) => {
@@ -17,6 +18,16 @@ export const projectWorkspaceSettingsSchema = z.object({
   mcpDirs: z.array(projectPathSchema).max(20).default([])
 }).strict();
 export type ProjectWorkspaceSettings = z.infer<typeof projectWorkspaceSettingsSchema>;
+
+/** The single Project settings document edited by the Overview panel. */
+export const projectSettingsSchema = z.object({
+  workspace: projectWorkspaceSettingsSchema,
+  evidence: projectEvidenceSettingsSchema
+}).strict();
+export type ProjectSettings = {
+  workspace: ProjectWorkspaceSettings;
+  evidence: ProjectEvidenceSettings;
+};
 
 export const DEFAULT_PROJECT_WORKSPACE_SETTINGS: ProjectWorkspaceSettings = {
   reviewPreset: "engineering",

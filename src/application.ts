@@ -502,21 +502,23 @@ export class DextApplication {
   }
 
   /** Project APIs are searched first, then global APIs. Project configuration
-   * owns additional roots; `dext.apiDirs` remains a legacy fallback. */
+   * owns the project roots; `dext.apiDirs` remains a legacy fallback. */
   private apiDirectories(folder: vscode.WorkspaceFolder | undefined): string[] {
-    const roots = folder ? [vscode.Uri.joinPath(folder.uri, ".dext", "api").fsPath] : [];
+    const roots: string[] = [];
+    const addRoot = (root: string): void => { if (!roots.includes(root)) roots.push(root); };
+    if (folder) addRoot(vscode.Uri.joinPath(folder.uri, ".dext", "api").fsPath);
     const projectApiDirs = this.projectWorkspaceSettings?.apiDirs;
     if (projectApiDirs) {
-      for (const entry of projectApiDirs) roots.push(vscode.Uri.joinPath(folder?.uri ?? vscode.Uri.file(this.workspaceRoot), entry).fsPath);
+      for (const entry of projectApiDirs) addRoot(vscode.Uri.joinPath(folder?.uri ?? vscode.Uri.file(this.workspaceRoot), entry).fsPath);
     }
-    roots.push(vscode.Uri.joinPath(this.storage.globalStorageUri, "api").fsPath);
+    addRoot(vscode.Uri.joinPath(this.storage.globalStorageUri, "api").fsPath);
     if (!folder) return roots;
     const configured = projectApiDirs ? [] : vscode.workspace.getConfiguration("dext").get<string[]>("apiDirs", []) ?? [];
     for (const entry of configured) {
       const value = typeof entry === "string" ? entry.trim() : "";
       if (!value) continue;
       const uri = isAbsolute(value) ? vscode.Uri.file(value) : vscode.Uri.joinPath(folder.uri, value);
-      if (!roots.includes(uri.fsPath)) roots.push(uri.fsPath);
+      addRoot(uri.fsPath);
     }
     return roots;
   }
@@ -537,6 +539,7 @@ export class DextApplication {
       for (const entry of this.projectWorkspaceSettings?.mcpDirs ?? []) directories.push({ uri: vscode.Uri.joinPath(folder.uri, entry), scope: "project" });
     }
     if (includeGlobal) directories.push({ uri: vscode.Uri.joinPath(this.storage.globalStorageUri, "mcp"), scope: "global" });
+    const uniqueDirectories = directories.filter((item, index, all) => all.findIndex((candidate) => candidate.scope === item.scope && candidate.uri.fsPath === item.uri.fsPath) === index);
     const servers: McpServerConfig[] = [];
     const tools: McpToolConfig[] = [];
     const methods: CallableDefinition[] = [];
@@ -544,7 +547,7 @@ export class DextApplication {
     const projectDiagnostics: string[] = [];
     const globalDiagnostics: string[] = [];
     const seenServerNames = new Set<string>();
-    for (const { uri: directory, scope } of directories) {
+    for (const { uri: directory, scope } of uniqueDirectories) {
       let entries: [string, vscode.FileType][];
       try { entries = await vscode.workspace.fs.readDirectory(directory); }
       catch (error) {

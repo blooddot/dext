@@ -4,9 +4,8 @@ import type { EditorTabState } from "../editorTabState.js";
 import type { ProjectInitializationState } from "../projectService.js";
 import { renderArchitectureView, projectDiagramScript, type ArchitectureViewInput } from "./projectArchitectureView.js";
 import type { ProjectEvidenceSettings } from "../core/projectEvidenceSettings.js";
-import { renderProjectEvidenceSettings, projectEvidenceSettingsScript } from "./projectEvidenceSettingsView.js";
 import type { ProjectWorkspaceSettings } from "../core/projectSettings.js";
-import { renderProjectWorkspaceSettings, projectWorkspaceSettingsScript } from "./projectWorkspaceSettingsView.js";
+import { renderProjectSettings, projectSettingsScript } from "./projectSettingsView.js";
 
 export type ProjectPanelPage = "overview" | "knowledge" | "architecture";
 
@@ -76,6 +75,13 @@ function renderProjectModelControl(models: readonly NonNullable<NonNullable<Proj
   return `<label class="project-ai-model">Model for Project initialization <div class="project-ai-model-control${disabled ? " is-disabled" : ""}"><button type="button" class="project-model-trigger" data-project-ai-model data-project-model-trigger aria-expanded="false"${disabled ? " disabled" : ""} value="${escapeHtml(selected ?? "")}"><span>Model</span><strong data-project-model-value="model">${escapeHtml(selectedModel ? `${selectedModel.label}${selectedModel.group ? ` · ${selectedModel.group}` : ""}` : "Use CLI default")}</strong><i class="codicon codicon-chevron-down" aria-hidden="true"></i></button>${capabilitySummary ? `<small class="project-model-capabilities" data-project-model-capabilities>${escapeHtml(capabilitySummary)}</small>` : ""}<input type="hidden" value="${escapeHtml(selected ?? "")}"${selected ? " selected" : ""}><small class="project-ai-model-details" data-project-ai-model-details hidden>${escapeHtml(legacyDetails)}</small><div class="project-model-popover composer-model-popover" data-project-model-menu hidden>${category("model", "Model", selectedModel ? `${selectedModel.label}${selectedModel.group ? ` · ${selectedModel.group}` : ""}` : "Use CLI default", modelItems)}${category("reasoning", "Reasoning", reasoning ?? "CLI setting", reasoningItems)}${category("speed", "Speed", speed ?? "CLI setting", speedItems)}<div class="project-model-submenu composer-model-submenu" data-project-model-submenu hidden></div></div></div></label>`;
 }
 
+function renderProjectInitializationSettings(overview: ProjectOverviewData): string {
+  const initialization = overview.initialization;
+  if (!overview.aiCli?.length) return "";
+  return `<label class="project-ai-cli">AI CLI for Project initialization <select data-project-ai-cli${initialization.status === "running" ? " disabled" : ""}><option value=""${overview.selectedAiCli ? "" : " selected"}>Use current Input selection</option>${overview.aiCli.map((cli) => `<option value="${escapeHtml(cli.id)}"${cli.id === overview.selectedAiCli ? " selected" : ""} data-models="${escapeHtml(JSON.stringify(cli.models ?? []))}">${escapeHtml(cli.label)}</option>`).join("")}</select></label>`
+    + (overview.selectedAiCli ? (() => { const cli = overview.aiCli.find((item) => item.id === overview.selectedAiCli); const models = cli?.models ?? []; return models.length ? renderProjectModelControl(models, overview.selectedAiModel, overview.selectedAiReasoning, overview.selectedAiSpeed, initialization.status === "running") : ""; })() : "");
+}
+
 export function renderProjectNav(page: ProjectPanelPage): string {
   const items = PROJECT_PANEL_PAGES.map((item) =>
     `<button type="button" role="tab" data-project-page="${item}" aria-selected="${item === page}">${PAGE_LABELS[item]}</button>`).join("");
@@ -133,17 +139,16 @@ function renderOverview(overview: ProjectOverviewData): string {
   const retiredScan = overview.legacyScanRoots?.length
     ? `<p class="project-scan-progress project-scan-progress-warning" role="status" data-project-legacy-scan>`
       + `The removed <code>scan</code> settings in <code>.dext/project.json</code> still limit Project evidence to: ${overview.legacyScanRoots.map((root) => `<code>${escapeHtml(root)}/**</code>`).join(", ")}. `
-      + `These roots are included in Project settings below. Save those settings to manage the scope here.</p>`
+      + `These roots are included in Project settings below. Change the reading scope there to manage them.</p>`
     : "";
   return `<section class="project-overview" data-project-section="overview">`
     + `<h2>${escapeHtml(overview.name)}</h2>`
     + `<p class="project-help">Project uses the opened workspace folder as its root. Opening, restoring or switching this page only reads saved project files; source text is read in bounded form when you initialize knowledge or generate a diagram.</p>`
     + retiredScan
-    + (overview.aiCli?.length ? `<label class="project-ai-cli">AI CLI for Project initialization <select data-project-ai-cli${initialization.status === "running" ? " disabled" : ""}><option value=""${overview.selectedAiCli ? "" : " selected"}>Use current Input selection</option>${overview.aiCli.map((cli) => `<option value="${escapeHtml(cli.id)}"${cli.id === overview.selectedAiCli ? " selected" : ""} data-models="${escapeHtml(JSON.stringify(cli.models ?? []))}">${escapeHtml(cli.label)}</option>`).join("")}</select></label>`
-      + (overview.selectedAiCli ? (() => { const cli = overview.aiCli.find((item) => item.id === overview.selectedAiCli); const models = cli?.models ?? []; return models.length ? renderProjectModelControl(models, overview.selectedAiModel, overview.selectedAiReasoning, overview.selectedAiSpeed, initialization.status === "running") : ""; })() : "") : "")
+    + (overview.workspaceSettings && overview.evidenceSettings
+      ? renderProjectSettings(overview.workspaceSettings, overview.evidenceSettings, Math.max(overview.workspaceSettingsVersion ?? 0, overview.evidenceSettingsVersion ?? 0), initialization.status === "running", renderProjectInitializationSettings(overview))
+      : renderProjectInitializationSettings(overview))
     + renderInitialization(initialization)
-    + (overview.workspaceSettings ? renderProjectWorkspaceSettings(overview.workspaceSettings, overview.workspaceSettingsVersion ?? 0, initialization.status === "running") : "")
-    + (overview.evidenceSettings ? renderProjectEvidenceSettings(overview.evidenceSettings, overview.evidenceSettingsVersion ?? 0, initialization.status === "running") : "")
     + `<dl class="project-facts">`
     + `<dt>Workspace</dt><dd>${escapeHtml(overview.root)}</dd>`
     + `<dt>Objects</dt><dd>${overview.objects} (${overview.accepted} accepted, ${overview.drafts} drafts, ${overview.needsVerification} need verification)</dd>`
@@ -191,8 +196,7 @@ export function projectPanelScript(state?: EditorTabState): string {
   // Project tab has no key and could never render.
   const restore = state ? `api.setState(${JSON.stringify(state)});` : "";
   return "<script>(function(){var api=window.__dextApi||(window.__dextApi=acquireVsCodeApi());" + restore
-    + projectWorkspaceSettingsScript()
-    + projectEvidenceSettingsScript()
+    + projectSettingsScript()
     + "function closeModelMenu(){var menu=document.querySelector('[data-project-model-menu]');var trigger=document.querySelector('[data-project-model-trigger]');if(menu)menu.hidden=true;if(trigger)trigger.setAttribute('aria-expanded','false');var sub=document.querySelector('[data-project-model-submenu]');if(sub)sub.hidden=true;}"
     + "function positionModelSubmenu(){var sub=document.querySelector('[data-project-model-submenu]'),menu=document.querySelector('[data-project-model-menu]');if(!sub||!menu)return;var r=menu.getBoundingClientRect(),w=Math.min(216,(document.documentElement.clientWidth||window.innerWidth)-24),gap=4;sub.style.width=w+'px';sub.dataset.submenuSide=(window.innerWidth-r.right-gap>=w?'right':r.left-gap>=w?'left':'above');}"
     + "function showModelChoices(category){var sub=document.querySelector('[data-project-model-submenu]');if(!sub)return;var items=[];try{items=JSON.parse(category.getAttribute('data-items')||'[]');}catch(_){}var selected=category.getAttribute('data-selected')||'';var title=category.querySelector('span').textContent;var html='<div class=\"project-model-submenu-heading\">'+title+'</div>';var prior='';items.forEach(function(item){if(item.group&&item.group!==prior){html+='<div class=\"project-model-group-heading\">'+item.group+'</div>';prior=item.group;}html+='<button type=\"button\" class=\"project-model-choice composer-menu-option\" role=\"menuitemradio\" aria-checked=\"'+String(item.id===selected)+'\" data-project-model-choice=\"'+String(item.id).replace(/&/g,'&amp;').replace(/\\\"/g,'&quot;')+'\"><span>'+item.label+'</span><i class=\"codicon codicon-'+(item.id===selected?'check':'blank')+'\"></i></button>';});sub.innerHTML=html;sub.hidden=false;positionModelSubmenu();}"

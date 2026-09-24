@@ -79,6 +79,18 @@ describe("project editor tab", () => {
     expect(saved).toEqual([{ settings: { reviewPreset: "experience" }, version: 1 }]);
     expect(host.created[0]!.panel.messages.at(-1)).toEqual({ type: "projectWorkspaceSettingsSaved", version: 2 });
   });
+  it("routes the unified project settings form as one save", async () => {
+    const saved: unknown[] = [];
+    const { host, provider } = setup({
+      setProjectSettings: async (settings, version) => { saved.push({ settings, version }); },
+      load: async () => ({ ...data, overview: { ...data.overview, workspaceSettingsVersion: 3, evidenceSettingsVersion: 3 } })
+    });
+    await provider.show();
+    const settings = { workspace: { reviewPreset: "experience" }, evidence: { depth: "deep", include: [] } };
+    await provider.handleMessage(provider.key, { type: "projectSettings", settings, version: 2 });
+    expect(saved).toEqual([{ settings, version: 2 }]);
+    expect(host.created[0]!.panel.messages.at(-1)).toEqual({ type: "projectSettingsSaved", version: 3 });
+  });
   it("creates one tab, reuses it and labels the third page as diagrams", async () => {
     const { host, provider } = setup();
     expect((await provider.show()).created).toBe(true);

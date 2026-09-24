@@ -28,16 +28,38 @@ describe("project panel", () => {
   it("renders project-owned review, plan, API and Skill settings", () => {
     const html = renderProjectPanel("overview", data({ overview: {
       ...data().overview,
-      workspaceSettings: { reviewPreset: "experience", planDirectory: ".project/plans", apiDirs: ["tools/api"], skillDirs: ["tools/skills"], mcpDirs: ["tools/mcp"] },
+      workspaceSettings: { reviewPreset: "experience", planDirectory: ".project/plans", apiDirs: ["tools/api", "tools/api/team"], skillDirs: ["tools/skills"], mcpDirs: ["tools/mcp"] },
+      evidenceSettings: { depth: "standard", include: [] },
       workspaceSettingsVersion: 4
     } }));
-    expect(html).toContain('data-project-workspace-settings');
+    expect(html).toContain('data-project-settings');
     expect(html).toContain('value=".project/plans"');
-    expect(html).toContain("tools/api");
-    expect(html).toContain("tools/skills");
-    expect(html).toContain("tools/mcp");
+    expect(html).toContain('value=".dext/api, tools/api, tools/api/team"');
+    expect(html).toContain('value=".dext/skills, tools/skills"');
+    expect(html).toContain('value=".dext/mcp, tools/mcp"');
+    expect(html).toContain("API directories");
+    expect(html).toContain("Skill directories");
+    expect(html).toContain("MCP directories");
+    expect(html).not.toContain("Additional project");
     expect(html).toContain('value="experience" selected');
     expect(html).toContain('data-version="4"');
+    expect(html).toContain("Click to expand");
+    expect(html).toContain("File limits and scope patterns");
+    expect(html).not.toContain("Add directory");
+    expect(html).not.toContain("data-project-directory-remove");
+    expect(html).toContain('.split(",")');
+  });
+
+  it("shows the built-in resource directories when no project overrides are saved", () => {
+    const html = renderProjectPanel("overview", data({ overview: {
+      ...data().overview,
+      workspaceSettings: { reviewPreset: "engineering", planDirectory: ".dext/plans", apiDirs: [], skillDirs: [], mcpDirs: [] },
+      evidenceSettings: { depth: "standard", include: [] },
+      workspaceSettingsVersion: 1
+    } }));
+    expect(html).toContain('value=".dext/api"');
+    expect(html).toContain('value=".dext/skills"');
+    expect(html).toContain('value=".dext/mcp"');
   });
 
   it("tells the reader when a removed scan profile is still sitting in .dext/project.json", () => {

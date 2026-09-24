@@ -32,7 +32,7 @@ import type { ProjectPanelData } from "./webview/projectPanel.js";
 import type { DiagramValidationIssue } from "./core/projectDiagram.js";
 import { DiagramTaskRegistry, isAllowedEvidencePath, isDiagramExportPayload, resolveDiagramTarget } from "./projectDiagramViewer.js";
 import { projectEvidenceSettingsSchema, projectPromptLimits, type ProjectEvidenceSettings } from "./core/projectEvidenceSettings.js";
-import { projectWorkspaceSettingsFromDefinition, projectWorkspaceSettingsSchema, type ProjectWorkspaceSettings } from "./core/projectSettings.js";
+import { projectSettingsSchema, projectWorkspaceSettingsFromDefinition, projectWorkspaceSettingsSchema, type ProjectSettings, type ProjectWorkspaceSettings } from "./core/projectSettings.js";
 
 const textDecoder = new TextDecoder();
 const textEncoder = new TextEncoder();
@@ -845,6 +845,20 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
         }, version);
         if (saved.status === "conflict") throw new Error("Project settings changed. Reopen Overview before saving again.");
         await options.onWorkspaceSettingsChanged?.(next);
+      },
+      setProjectSettings: async (settings: unknown, version: number): Promise<void> => {
+        if (generating || initializationService.snapshot.status === "running") throw new Error("Wait for Project generation to finish before saving settings.");
+        const next = projectSettingsSchema.parse(settings) as ProjectSettings;
+        const definition = await options.store.readDefinition!();
+        if (definition.version !== version) throw new Error("Project settings changed. Reopen Overview before saving again.");
+        const saved = await options.store.writeDefinition!({
+          ...definition,
+          preset: { ...definition.preset, default: next.workspace.reviewPreset },
+          paths: { planDirectory: next.workspace.planDirectory, apiDirs: next.workspace.apiDirs, skillDirs: next.workspace.skillDirs, mcpDirs: next.workspace.mcpDirs },
+          evidence: next.evidence
+        }, version);
+        if (saved.status === "conflict") throw new Error("Project settings changed. Reopen Overview before saving again.");
+        await options.onWorkspaceSettingsChanged?.(next.workspace);
       },
       setEvidenceSettings: async (settings: unknown, version: number): Promise<void> => {
         if (generating || initializationService.snapshot.status === "running") throw new Error("Wait for Project generation to finish before saving settings.");

@@ -14,7 +14,7 @@ export interface ApiCheckOptions {
   apiDirs?: readonly string[];
   /** Project-owned directories replace the legacy workspace setting while remaining separately validated. */
   projectApiDirs?: readonly string[];
-  /** Additional project MCP manifest directories. */
+  /** Project-owned MCP manifest directories. */
   projectMcpDirs?: readonly string[];
   globalStorage?: string;
   /** Editor buffers override disk, and can include new unsaved files. */
