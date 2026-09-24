@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { closeSync, existsSync, openSync, readFileSync, readSync, realpathSync, readdirSync } from "node:fs";
+import { closeSync, existsSync, openSync, readSync, realpathSync } from "node:fs";
 import { basename, delimiter, dirname, extname, isAbsolute, join, resolve } from "node:path";
 
 interface CommandOptions {
@@ -41,12 +41,12 @@ export function harnessSpawnCommand(command: string, args: readonly string[], op
         if (found) return found;
       }
     } catch { /* Report an actionable error without leaking manager diagnostics. */ }
-    throw new Error(`Cannot resolve '${name}' using ${manager}. Check its selected version in the workspace or configure the dsh Node entry.`);
+    throw new Error(`DeepSeek Harness CLI '${name}' could not be resolved using ${manager}. Reinstall @deepseek-ai/dsh.`);
   };
   const visited = new Set<string>();
   const unwrap = (input: string, selectedNode?: string): { command: string; args: string[] } => {
     const path = locate(input);
-    if (!path) throw new Error(`DeepSeek Harness command '${input}' was not found. Install @deepseek-ai/dsh or configure its executable path.`);
+    if (!path) throw new Error(`DeepSeek Harness CLI '${input}' was not found on PATH. Install @deepseek-ai/dsh.`);
     if (visited.has(path) || visited.size >= 8) throw new Error("Cannot resolve a recursive Harness command shim.");
     visited.add(path);
     const canonical = realpathSync(path);
@@ -65,51 +65,16 @@ export function harnessSpawnCommand(command: string, args: readonly string[], op
       : /\basdf\b[^\r\n]*\bexec\b/.test(script) ? "asdf" : undefined;
     if (manager) {
       const name = basename(path).replace(/\.(?:exe|cmd|bat)$/i, "");
-      let miseNode: string | undefined;
-      if (manager === "mise") {
-        miseNode = (() => {
-          try {
-            const nodeRoot = join(dirname(path), "..", "installs", "node");
-            const versions = readdirSync(nodeRoot, { withFileTypes: true }).filter((item) => item.isDirectory()).map((item) => item.name).sort().reverse();
-            const candidate = versions.map((version) => join(nodeRoot, version, "node.exe")).find((item) => existsSync(item));
-            return candidate;
-          } catch { return undefined; }
-        })();
-        const roots = [join(dirname(path), "..", "installs", "npm-deepseek-ai-dsh"), join(dirname(dirname(path)), "installs", "npm-deepseek-ai-dsh")];
-        try {
-          for (const root of roots) for (const version of readdirSync(root, { withFileTypes: true }).filter((item) => item.isDirectory()).map((item) => item.name)) {
-            const manifest = JSON.parse(readFileSync(join(root, version, "package.json"), "utf8")) as { dependencies?: Record<string, unknown> };
-            if (manifest.dependencies?.["@deepseek-ai/dsh"] !== "0.1.5-rc.1") continue;
-            const shim = join(root, version, "node_modules", ".bin", windows ? "dsh.cmd" : "dsh");
-            if (existsSync(shim)) return unwrap(shim, miseNode);
-          }
-        } catch { /* Fall through to the manager's public resolver. */ }
-      }
-      try { return unwrap(which(manager, name), which(manager, "node")); } catch (error) {
-        // Test doubles and older manager shims may not expose `which`; inspect
-        // only the manager-owned sibling installation as a final fallback.
-        if (manager === "mise") {
-          const roots = [join(dirname(path), "..", "installs", "npm-deepseek-ai-dsh"), join(dirname(dirname(path)), "installs", "npm-deepseek-ai-dsh")];
-          for (const root of roots) for (const version of readdirSync(root, { withFileTypes: true }).filter((item) => item.isDirectory()).map((item) => item.name)) {
-            try {
-              const manifest = JSON.parse(readFileSync(join(root, version, "package.json"), "utf8")) as { dependencies?: Record<string, unknown> };
-              if (manifest.dependencies?.["@deepseek-ai/dsh"] !== "0.1.5-rc.1") continue;
-              const shim = join(root, version, "node_modules", ".bin", windows ? "dsh.cmd" : "dsh");
-              if (existsSync(shim)) return unwrap(shim, miseNode);
-            } catch { /* Keep searching installed versions. */ }
-          }
-        }
-        throw error;
-      }
+      return unwrap(which(manager, name), which(manager, "node"));
     }
     const relative = /["']%(?:~dp0|dp0%)[\\/]*([^"'\r\n]*?\.[cm]?js)/i.exec(script)?.[1]
       ?? /["']\$(?:basedir|\{basedir\})\/([^"'\r\n]*?\.[cm]?js)/.exec(script)?.[1];
     if (relative) {
       const entry = resolve(dirname(path), ...relative.split(/[\\/]/));
       if (existsSync(entry)) return { command: node, args: [realpathSync(entry), ...args] };
-      throw new Error("Cannot resolve this Harness command shim: its Node entry is missing. Reinstall dsh or configure its Node entry.");
+      throw new Error("DeepSeek Harness CLI shim is incomplete. Reinstall @deepseek-ai/dsh.");
     }
-    if (/\.(?:cmd|bat)$/i.test(path)) throw new Error("Cannot resolve this Harness command shim. Configure the dsh Node entry or executable path.");
+    if (/\.(?:cmd|bat)$/i.test(path)) throw new Error("DeepSeek Harness CLI shim is incomplete. Reinstall @deepseek-ai/dsh.");
     return { command: path, args: [...args] };
   };
   return unwrap(command.trim());

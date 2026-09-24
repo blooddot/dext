@@ -27,7 +27,7 @@ export function harnessInstallation(command: string, cwd = process.cwd()): { nod
   try {
     const acpModule = createRequire(entry).resolve("@deepseek-ai/dsh-acp");
     return { node: invocation.args.length ? invocation.command : "node", entry, acpModule };
-  } catch { throw new Error("Cannot locate Harness preset packages. Configure the installed dsh Node entry or npm executable."); }
+  } catch { throw new Error("Cannot locate DeepSeek Harness preset packages. Reinstall @deepseek-ai/dsh."); }
 }
 
 interface NativePreset { id: string; name?: string; description?: string; trust: string; path: string; broken?: string }
