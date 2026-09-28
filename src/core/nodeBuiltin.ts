@@ -115,6 +115,11 @@ export async function executeNodeBuiltin(invocation: ResolvedInvocation, workspa
   let value: unknown;
   if (entry.method.id === "node.path.join") value = Reflect.apply(fn, imported, Array.isArray(invocation.arguments.paths) ? invocation.arguments.paths : []);
   else if (entry.method.id === "node.util.parseArgs") value = Reflect.apply(fn, imported, [{ args: invocation.arguments.args }]);
+  // fs.rm is (path, options). The catalog keeps the two flags flat so a
+  // workflow writes rm(path=..., recursive=True) instead of an options dict.
+  else if (entry.method.id === "node.fs.rm") value = await Reflect.apply(fn, imported, [args[0], { recursive: invocation.arguments.recursive === true, force: invocation.arguments.force === true }]);
   else value = await Reflect.apply(fn, imported, args);
-  return output(entry, value);
+  // Node returns class instances where .dx carries plain values only, so an
+  // entry may narrow its own result before the shared serializable() check.
+  return output(entry, entry.project ? entry.project(value) : value);
 }

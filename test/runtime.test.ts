@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { format as formatPath, join, relative as relativePath } from "node:path";
 import { AxAdapter } from "../src/core/axAdapter.js";
 import { BUILTIN_METHODS } from "../src/core/builtins.js";
 import { ContextResolver, type ContextHost } from "../src/core/contextResolver.js";
@@ -15,7 +15,7 @@ import { parseMcpManifest } from "../src/core/mcpManifest.js";
 import { fileReferenceInsertion } from "../src/webview/inputInsertion.js";
 import { ExecutionCancelledError } from "../src/core/executionErrors.js";
 import type { AgentConversationRequest, AgentStructuredRequest } from "../src/core/agentRunner.js";
-import type { AgentResult, AgentStreamEvent, PatchResult, TerminalResult } from "../src/core/types.js";
+import type { AgentResult, AgentStreamEvent, InvocationValue, PatchResult, TerminalResult } from "../src/core/types.js";
 import { prepareHistoryTrace } from "../src/core/agentTraceReplay.js";
 
 const host: ContextHost = {
@@ -110,11 +110,76 @@ describe("Dext workflow runtime", () => {
       await expect(read("outside-link/secret.txt")).rejects.toThrow("symbolic link");
       await expect(write("outside-link/secret.txt")).rejects.toThrow("symbolic link");
       await expect(write("outside-link/new.txt")).rejects.toThrow("symbolic link");
+      // A directory listing resolves its target too, so it cannot enumerate a
+      // linked directory the read and write paths already refuse.
+      const list = (path: string) => runtime.execute({ kind: "invocation", method: "node.fs.readdir", source: "code", arguments: [{ name: "path", value: path }] });
+      expect((await list("inside-link")).result).toMatchObject({ value: ["state.txt"] });
+      await expect(list("outside-link")).rejects.toThrow("symbolic link");
       expect(await readFile(join(outside, "secret.txt"), "utf8")).toBe("outside");
       await expect(readFile(join(outside, "new.txt"))).rejects.toMatchObject({ code: "ENOENT" });
       runtime.setWorkspaceTrusted(false);
       await expect(read(join(outside, "secret.txt"))).rejects.toThrow("trusted workspace");
     } finally { await rm(base, { recursive: true, force: true }); }
+  });
+
+  it("lists, inspects, copies and removes workspace entries through node.fs", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "dext-node-surface-")));
+    try {
+      const { runtime } = setup();
+      runtime.setWorkspaceRoot(root);
+      runtime.setWorkspaceTrusted(true);
+      const call = (method: string, args: Record<string, InvocationValue>) =>
+        runtime.execute({ kind: "invocation", method, source: "code", arguments: Object.entries(args).map(([name, value]) => ({ name, value })) });
+      await mkdir(join(root, "docs", "nested"), { recursive: true });
+      await writeFile(join(root, "docs", "a.md"), "a");
+      await writeFile(join(root, "docs", "b.md"), "b");
+
+      const listing = await call("node.fs.readdir", { path: "docs" });
+      expect((listing.result as { value: string[] }).value.sort()).toEqual(["a.md", "b.md", "nested"]);
+
+      const file = await call("node.fs.stat", { path: "docs/a.md" });
+      expect(file.result).toMatchObject({ kind: "node", size: 1, mtime_ms: expect.any(Number), is_file: true, is_directory: false });
+      expect((await call("node.fs.stat", { path: "docs/nested" })).result).toMatchObject({ is_file: false, is_directory: true });
+
+      expect((await call("node.fs.access", { path: "docs/a.md" })).result).toMatchObject({ value: true });
+      await expect(call("node.fs.access", { path: "docs/missing.md" })).rejects.toMatchObject({ code: "ENOENT" });
+      expect((await call("node.fs.realpath", { path: "docs" })).result).toMatchObject({ value: await realpath(join(root, "docs")) });
+
+      await call("node.fs.copyFile", { sourcePath: "docs/a.md", destinationPath: "docs/copy.md" });
+      expect(await readFile(join(root, "docs", "copy.md"), "utf8")).toBe("a");
+
+      // A directory needs an explicit recursive flag and a missing path an
+      // explicit force flag, so rm cannot quietly widen what it deletes.
+      await expect(call("node.fs.rm", { path: "docs/nested" })).rejects.toMatchObject({ code: "ERR_FS_EISDIR" });
+      expect((await call("node.fs.stat", { path: "docs/nested" })).result).toMatchObject({ is_directory: true });
+      await expect(call("node.fs.rm", { path: "docs/missing.md" })).rejects.toMatchObject({ code: "ENOENT" });
+      expect((await call("node.fs.rm", { path: "docs/copy.md" })).result).toMatchObject({ value: true });
+      await expect(readFile(join(root, "docs", "copy.md"))).rejects.toMatchObject({ code: "ENOENT" });
+      await call("node.fs.rm", { path: "docs/nested", recursive: true });
+      await expect(call("node.fs.stat", { path: "docs/nested" })).rejects.toMatchObject({ code: "ENOENT" });
+
+      // The new methods inherit node.fs path containment and workspace trust.
+      for (const [method, args] of [
+        ["node.fs.readdir", { path: "../outside" }],
+        ["node.fs.stat", { path: "../outside" }],
+        ["node.fs.access", { path: "../outside" }],
+        ["node.fs.realpath", { path: "../outside" }],
+        ["node.fs.copyFile", { sourcePath: "../outside.txt", destinationPath: "docs/x.md" }],
+        ["node.fs.rm", { path: "../outside" }]
+      ] as const) await expect(call(method, args)).rejects.toThrow("workspace");
+      runtime.setWorkspaceTrusted(false);
+      await expect(call("node.fs.readdir", { path: "docs" })).rejects.toThrow("trusted workspace");
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it("bridges both node.path.relative arguments and node.path.format", async () => {
+    const { runtime } = setup();
+    const call = (method: string, args: Record<string, InvocationValue>) =>
+      runtime.execute({ kind: "invocation", method, source: "code", arguments: Object.entries(args).map(([name, value]) => ({ name, value })) });
+    expect((await call("node.path.relative", { from: "docs/a.md", to: "docs/b.md" })).result)
+      .toMatchObject({ value: relativePath("docs/a.md", "docs/b.md") });
+    expect((await call("node.path.format", { pathObject: { dir: "docs", name: "a", ext: ".md" } })).result)
+      .toMatchObject({ value: formatPath({ dir: "docs", name: "a", ext: ".md" }) });
   });
 
   it("uses node.http.request for bounded, serializable local HTTP responses", async () => {
