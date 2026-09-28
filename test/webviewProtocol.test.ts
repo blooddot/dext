@@ -43,6 +43,11 @@ describe("Webview protocol", () => {
     expect(webviewRequestSchema.safeParse({ ...request, sessionId: "" }).success).toBe(false);
     expect(webviewRequestSchema.safeParse({ ...request, answers: { q: { answers: [] } } }).success).toBe(false);
     expect(webviewRequestSchema.safeParse({ ...request, answers: { q: { answers: ["x".repeat(20001)] } } }).success).toBe(false);
+    // A multi-select question keeps every chosen label in one answer array, so
+    // more than one value per question is valid up to the option bound.
+    const multi = { ...request, answers: { q: { answers: ["A", "B", "C"] } } };
+    expect(webviewRequestSchema.parse(multi)).toEqual(multi);
+    expect(webviewRequestSchema.safeParse({ ...request, answers: { q: { answers: Array(202).fill("A") } } }).success).toBe(false);
     expect(webviewRequestSchema.safeParse({ ...request, answers: null }).success).toBe(true);
   });
   it("bounds dropped file requests and rejects embedded line breaks", () => {

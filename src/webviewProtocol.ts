@@ -1,5 +1,5 @@
 import type { ResourceSession } from "./resourceSession.js";
-import { uiFormResultSchema } from "./core/uiForm.js";
+import { UI_LIMITS, uiFormResultSchema } from "./core/uiForm.js";
 import { z } from "zod";
 import type {
   CompletionItem,
@@ -49,8 +49,11 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("agentInputResponse"),
     sessionId: z.string().min(1), turnId: z.string().min(1), requestId: z.string().min(1),
+    // A multi-select question reports every chosen label, and a single-select
+    // question can carry one chosen option plus a custom answer, so one answer
+    // per question is wrong: the bound matches the checkbox answer shape.
     answers: z.record(z.string().min(1).max(256), z.object({
-      answers: z.array(z.string().min(1).max(20000)).length(1)
+      answers: z.array(z.string().min(1).max(20000)).min(1).max(UI_LIMITS.options + 1)
     })).nullable()
   }),
   z.object({ type: z.literal("retryTurn"), turnId: z.string().min(1), sessionId: z.string().min(1).optional() }),
