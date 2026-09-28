@@ -1,4 +1,4 @@
-import { uiResultText } from "./uiInteractionPresentation.js";
+import { answerChoices, uiFieldChoices, uiResultText, type AnswerChoice } from "./uiInteractionPresentation.js";
 import { readHistoryResponse } from "./historyResponse.js";
 import { renderTurnSection, renderTurnInput, renderTurnMarkdown, renderTurnResult, renderTurnMessage, turnHtmlAdapter } from "./turnComponents.js";
 import { formatJsonOutput } from "./webview/jsonOutput.js";
@@ -432,11 +432,29 @@ function process(events: readonly AgentStreamEvent[]): string {
   return `<div class="output-text-copyable"><div class="process-content">${content}</div><div class="markdown-copy-toolbar">${copyButton(copyText)}</div></div>`;
 }
 
+/** A restored card keeps every choice the question offered, with the picked ones
+ * marked, so an answer still reads in the context of its alternatives once the
+ * form itself is gone. A field without options keeps its answer as plain text. */
+function answerField(label: string, choices: readonly AnswerChoice[], answer: string): string {
+  const head = `<strong>${escapeHtml(label)}</strong>`;
+  if (!choices.length) return `${head}<p class="agent-input-answer">${escapeHtml(answer)}</p>`;
+  const options = choices.map((choice) => `<li class="agent-input-choice${choice.selected ? " selected" : ""}${choice.custom ? " custom" : ""}">`
+    + `<i class="codicon codicon-${choice.selected ? "check" : "blank"}" aria-hidden="true"></i><span>`
+    + `${choice.custom ? '<small class="agent-input-choice-source">Other</small>' : ""}${escapeHtml(choice.label)}`
+    + `${choice.description ? `<small>${escapeHtml(choice.description)}</small>` : ""}</span></li>`).join("");
+  return `${head}<ul class="agent-input-choices">${options}</ul>`;
+}
+
 function inputHistory(events: readonly AgentStreamEvent[]): string {
   const interactions = new Map(events.flatMap((event) => event.uiInteraction ? [[event.uiInteraction.requestId, event.uiInteraction] as const] : []));
   const forms = [...interactions.values()].map((state) => {
     const action = state.form.actions?.find((action) => action.id === state.action);
-    const fields = state.form.fields.map((field) => `<p><strong>${escapeHtml(field.label)}</strong>: ${escapeHtml(field.secret ? "Answer hidden" : uiResultText(state.answers?.[field.id]))}</p>`).join("");
+    const fields = state.form.fields.map((field) => {
+      const answer = state.answers?.[field.id];
+      const text = field.secret ? "Answer hidden" : answer ? uiResultText(answer) : "No answer submitted";
+      const choices = field.secret ? [] : uiFieldChoices(field, answer);
+      return `<div class="agent-input-field">${answerField(field.label, choices, text)}</div>`;
+    }).join("");
     const description = state.form.description ? `<div class="interaction-description markdown-body">${renderProcessMarkdown(state.form.description)}</div>` : "";
     return `<section class="agent-input-card"><details class="agent-input-disclosure"><summary>${chevron()}<strong>${escapeHtml(state.form.title)} — ${state.status === "submitted" ? "Submitted" : "Closed"}${action ? ` (${escapeHtml(action.label)})` : ""}</strong></summary><div class="agent-input-disclosure-body">${description}${fields}</div></details></section>`;
   }).join("");
@@ -444,9 +462,10 @@ function inputHistory(events: readonly AgentStreamEvent[]): string {
   return forms + [...requests.values()].map((request) => {
     const status = request.status === "answered" ? "Answered" : "Closed";
     const questions = request.questions.map((question) => {
-      const answer = request.status === "answered" ? question.isSecret ? "Answer submitted"
-        : request.answers?.[question.id]?.answers.join(", ") ?? "Answer submitted" : "No answer submitted";
-      return `<div class="agent-input-question"><strong>${escapeHtml(question.question)}</strong><p class="agent-input-answer">${escapeHtml(answer)}</p></div>`;
+      const answers = request.status === "answered" ? request.answers?.[question.id]?.answers ?? [] : [];
+      const answer = question.isSecret ? "Answer submitted" : answers.join(", ") || (request.status === "answered" ? "Answer submitted" : "No answer submitted");
+      const choices = question.isSecret ? [] : answerChoices(question.options, answers);
+      return `<div class="agent-input-question">${answerField(question.question, choices, answer)}</div>`;
     }).join("");
     return `<section class="agent-input-card"><div class="agent-input-header"><strong>Question</strong><span class="agent-input-status">${status}</span></div>${questions}</section>`;
   }).join("");

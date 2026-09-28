@@ -11,8 +11,14 @@ import {
   renderHistorySession
 } from "../src/historyRender.js";
 import type { DextHistoryRecord } from "../src/historyStore.js";
-import { parseUiForm } from "../src/core/uiForm.js";
+import { parseUiForm, type UiFormDefinition } from "../src/core/uiForm.js";
 import { PLAN_DOCUMENT_END, PLAN_DOCUMENT_START } from "../src/core/planResponse.js";
+
+/** Choice rows a submitted question card rendered, as [extra classes, icon]. */
+function choiceRows(html: string): [string, string][] {
+  return [...html.matchAll(/<li class="agent-input-choice([^"]*)"><i class="codicon codicon-([a-z]+)"/g)]
+    .map((match) => [match[1]!.trim(), match[2]!]);
+}
 
 describe("Dext history rendering", () => {
   it("shows the selected form action in restored history", () => {
@@ -48,6 +54,65 @@ describe("Dext history rendering", () => {
     expect(html).not.toContain("private-value");
     expect(html).not.toContain("<form");
     expect(html.indexOf("agent-input-card")).toBeLessThan(html.indexOf("<span>Process</span>"));
+  });
+  it("keeps every choice a submitted form offered, marking what was picked", () => {
+    const form = parseUiForm({ title: "Question", fields: [{
+      id: "where", type: "checkbox", label: "Where should the body land?",
+      options: [
+        { value: "index", label: "Index only", description: "Cheapest to keep in sync." },
+        { value: "files", label: "Files" },
+        { value: "both", label: "Both" }
+      ]
+    }] });
+    const html = renderHistoryRecord({ id: "turn", createdAt: 1, input: "Ask", output: "Done", process: [
+      { phase: "input", text: "", uiInteraction: { sessionId: "s", turnId: "turn", requestId: "r", form, status: "submitted", action: "submit",
+        answers: { where: { type: "checkbox", selected: ["index", "both"] } } } }
+    ] });
+    expect(html).toContain("Index only");
+    expect(html).toContain("Cheapest to keep in sync.");
+    expect(html).toContain("Files");
+    expect(choiceRows(html)).toEqual([["selected", "check"], ["", "blank"], ["selected", "check"]]);
+  });
+  it("keeps a typed answer as its own selected choice beside the options it ignored", () => {
+    const form = parseUiForm({ title: "Question", fields: [{
+      id: "where", type: "radio", label: "Where?", allow_custom: true,
+      options: [{ value: "index", label: "Index only" }, { value: "files", label: "Files" }]
+    }] });
+    const html = renderHistoryRecord({ id: "turn", createdAt: 1, input: "Ask", output: "Done", process: [
+      { phase: "input", text: "", uiInteraction: { sessionId: "s", turnId: "turn", requestId: "r", form, status: "submitted", action: "submit",
+        answers: { where: { type: "radio", selected: [], custom: "Derive it instead" } } } }
+    ] });
+    expect(html).toContain("Index only");
+    expect(html).toContain("Files");
+    expect(html).toContain("Derive it instead");
+    expect(choiceRows(html)).toEqual([["", "blank"], ["", "blank"], ["selected custom", "check"]]);
+  });
+  it("lists the options an Agent question offered next to the answer", () => {
+    const question = { id: "question-1", blocking: true, questions: [{
+      id: "q", header: "", question: "Which?", options: [{ label: "First", description: "The first one." }, { label: "Second", description: "The other one." }]
+    }] };
+    const html = renderHistoryRecord({ id: "turn", createdAt: 1, input: "Input", output: "Done", process: [
+      { phase: "input", text: "", userInput: { ...question, status: "answered", answers: { q: { answers: ["Second"] } } } }
+    ] });
+    expect(html).toContain("The first one.");
+    expect(html).toContain("The other one.");
+    expect(html).not.toContain("Second, ");
+    expect(choiceRows(html)).toEqual([["", "blank"], ["selected", "check"]]);
+  });
+  it("keeps an input answer as text and a secret answer hidden", () => {
+    const form: UiFormDefinition = { title: "Question", description: "", submit_label: "Submit", cancel_label: "Skip", show_cancel: true, presentation: "inline",
+      actions: [{ id: "submit", label: "Submit", primary: true, requires: [] }], fields: [
+        { id: "notes", type: "input", label: "Notes", required: false },
+        { id: "token", type: "input", label: "Token", required: false, secret: true }
+      ] };
+    const html = renderHistoryRecord({ id: "turn", createdAt: 1, input: "Ask", output: "Done", process: [
+      { phase: "input", text: "", uiInteraction: { sessionId: "s", turnId: "turn", requestId: "r", form, status: "submitted", action: "submit",
+        answers: { notes: { type: "input", value: "Straight text" }, token: { type: "input", value: "hidden-value" } } } }
+    ] });
+    expect(html).toContain("Straight text");
+    expect(html).toContain("Answer hidden");
+    expect(html).not.toContain("hidden-value");
+    expect(html).not.toContain("<ul");
   });
   it.each([undefined, "Cancelled", "Agent failed"])("hides internal Plan input with execution metadata (%s)", (error) => {
     const record: DextHistoryRecord = {
