@@ -114,4 +114,40 @@ await runLabChecks(async ({ evaluate, settle }) => {
   current = await evaluate('box()');
   assert.equal(current.visible, true, `a waiting API form is revealed too, got ${JSON.stringify(current)}`);
   console.log('PASS a waiting API form is revealed');
+
+  // A settled card has to keep the choices the question offered, not just the
+  // answer: reopening a conversation is the only way to see what was on the
+  // table, and the picked row has to be the marked one.
+  const choices = () => evaluate(`(function(){const card=[...document.querySelectorAll('.agent-input-card')].at(-1);
+    return [...card.querySelectorAll('.agent-input-choice')].map(row=>({selected:row.classList.contains('selected'),
+      custom:row.classList.contains('custom'),label:row.querySelector('span').textContent.trim()}));})()`);
+  await evaluate(`ask(${JSON.stringify({ ...question, id: 'dext-question-4', status: 'answered',
+    answers: { test: { answers: ['按任务生成 TC 用例骨架 md'] } } })})`);
+  await settle();
+  let rows = await choices();
+  assert.deepEqual(rows.map(row => [row.selected, row.custom]), [[false, false], [true, false], [false, false]],
+    `the picked option is the only marked row, got ${JSON.stringify(rows)}`);
+  assert.ok(rows[1].label.startsWith('按任务生成 TC 用例骨架 md'), `every option keeps its label, got ${JSON.stringify(rows)}`);
+  assert.ok(rows[0].label.includes('只生成 test/README.md 占位说明（推荐）'), `every option is rendered, got ${JSON.stringify(rows)}`);
+  console.log('PASS a settled question keeps its options and marks the answer');
+
+  // A reply that names no option is shown as its own choice, so it cannot be
+  // mistaken for one of the offered rows.
+  await evaluate(`ask(${JSON.stringify({ ...question, id: 'dext-question-5', status: 'answered',
+    answers: { test: { answers: ['自己算出来'] } } })})`);
+  await settle();
+  rows = await choices();
+  assert.deepEqual(rows.map(row => [row.selected, row.custom]), [[false, false], [false, false], [false, false], [true, true]],
+    `a typed answer is its own marked row, got ${JSON.stringify(rows)}`);
+  console.log('PASS a typed answer joins the options as its own choice');
+
+  // API forms settle into the same card, so their options survive the same way.
+  await evaluate(`form({sessionId:'active',turnId:'t1',requestId:'call-2',status:'submitted',action:'submit',answers:{pick:{type:'radio',selected:['files']}},
+    form:{title:'Where?',presentation:'inline',show_cancel:true,cancel_label:'Cancel',actions:[{id:'submit',label:'Continue',primary:true,requires:[]}],
+      fields:[{id:'pick',type:'radio',label:'Where?',required:true,options:[{value:'index',label:'Index only'},{value:'files',label:'Files'}]}]}})`);
+  await settle();
+  rows = await choices();
+  assert.deepEqual(rows.map(row => [row.selected, row.custom]), [[false, false], [true, false]],
+    `a settled API form keeps its options, got ${JSON.stringify(rows)}`);
+  console.log('PASS a settled API form keeps its options');
 }, false);
