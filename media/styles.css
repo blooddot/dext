@@ -3661,7 +3661,17 @@ details[open] > summary > .disclosure-chevron {
 .agent-input-disclosure > summary:hover { color: var(--vscode-textLink-foreground); }
 .agent-input-disclosure-body { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; min-width: 0; }
 .agent-input-field { min-width: 0; padding-top: 8px; border-top: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); }
+.agent-input-field > strong { display: block; overflow-wrap: anywhere; }
 .agent-input-field p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* A settled card lists the whole set of choices with the picked ones marked, so
+   the answer is readable against the alternatives it was chosen from. */
+.agent-input-choices { display: flex; flex-direction: column; gap: 2px; margin: 6px 0 0; padding: 0; list-style: none; }
+.agent-input-choice { display: flex; align-items: flex-start; gap: 6px; padding: 3px 6px; border-radius: 4px; color: var(--vscode-descriptionForeground); overflow-wrap: anywhere; }
+.agent-input-choice > .codicon { flex: 0 0 auto; margin-top: 2px; font-size: 12px; opacity: 0; }
+.agent-input-choice.selected { color: var(--vscode-foreground); background: var(--vscode-list-inactiveSelectionBackground); }
+.agent-input-choice.selected > .codicon { opacity: 1; color: var(--vscode-charts-green, var(--vscode-focusBorder)); }
+.agent-input-choice small { display: block; margin-top: 2px; color: var(--vscode-descriptionForeground); font-size: 12px; }
+.agent-input-choice small.agent-input-choice-source { margin: 0 0 2px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
 .agent-input-disclosure-body .interaction-description { margin: 0; }
 .agent-input-header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; margin-bottom: 10px; }
 .agent-input-status { font-size: 11px; color: var(--vscode-descriptionForeground); }

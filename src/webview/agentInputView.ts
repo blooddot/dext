@@ -1,6 +1,6 @@
 import type { AgentInputAnswers, AgentInputState } from "../core/types.js";
-import type { UiFormAnswers, UiFormDefinition, UiFormResult, UiInteractionState } from "../core/uiForm.js";
-import { agentInputForm, agentFormAnswers, uiResultText } from "../uiInteractionPresentation.js";
+import type { UiField, UiFormAnswers, UiFormDefinition, UiFormResult, UiInteractionState } from "../core/uiForm.js";
+import { agentInputForm, agentFormAnswers, uiFieldChoices, uiResultText, type AnswerChoice } from "../uiInteractionPresentation.js";
 import { InteractionForm } from "./interactionForm.js";
 import { InteractionDialog } from "./interactionDialog.js";
 import { interactionMarkdown } from "./interactionMarkdown.js";
@@ -114,13 +114,45 @@ export class AgentInputView {
     summary.append(chevron, title); disclosure.append(summary);
     const body = document.createElement("div"); body.className = "agent-input-disclosure-body";
     if (card.form.description) body.append(interactionMarkdown(card.form.description));
-    for (const field of card.form.fields) {
-      const fieldBody = document.createElement("div"); fieldBody.className = "agent-input-field";
-      const answer = document.createElement("p");
-      answer.textContent = `${field.label}: ${field.secret ? "Answer hidden" : card.answers?.[field.id] ? uiResultText(card.answers[field.id]) : "No answer submitted"}`;
-      fieldBody.append(answer); body.append(fieldBody);
-    }
+    for (const field of card.form.fields) body.append(this.field(card, field));
     disclosure.append(body); card.element.append(disclosure);
     if (card.status !== "waiting") { this.drafts.delete(key); this.store?.set(key, {}); }
+  }
+  /** A settled card keeps every choice the question offered and marks the picked
+   * ones, so the answer still reads against its alternatives once the form is
+   * gone. Fields without options keep their answer as plain text. */
+  private field(card: Card, field: UiField): HTMLElement {
+    const fieldBody = document.createElement("div"); fieldBody.className = "agent-input-field";
+    const label = document.createElement("strong"); label.textContent = field.label; fieldBody.append(label);
+    const answer = card.answers?.[field.id];
+    const text = field.secret ? "Answer hidden" : answer ? uiResultText(answer) : "No answer submitted";
+    const choices = field.secret ? [] : uiFieldChoices(field, answer);
+    if (!choices.length) {
+      const value = document.createElement("p"); value.className = "agent-input-answer"; value.textContent = text;
+      fieldBody.append(value);
+      return fieldBody;
+    }
+    const list = document.createElement("ul"); list.className = "agent-input-choices";
+    for (const choice of choices) list.append(this.choice(choice));
+    fieldBody.append(list);
+    return fieldBody;
+  }
+  private choice(choice: AnswerChoice): HTMLElement {
+    const item = document.createElement("li");
+    item.className = `agent-input-choice${choice.selected ? " selected" : ""}${choice.custom ? " custom" : ""}`;
+    const mark = document.createElement("i");
+    mark.className = `codicon codicon-${choice.selected ? "check" : "blank"}`; mark.setAttribute("aria-hidden", "true");
+    const text = document.createElement("span");
+    if (choice.custom) {
+      const source = document.createElement("small"); source.className = "agent-input-choice-source"; source.textContent = "Other";
+      text.append(source);
+    }
+    text.append(choice.label);
+    if (choice.description) {
+      const description = document.createElement("small"); description.textContent = choice.description;
+      text.append(description);
+    }
+    item.append(mark, text);
+    return item;
   }
 }
