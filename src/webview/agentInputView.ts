@@ -37,9 +37,14 @@ export class AgentInputView {
       if (question.isSecret) continue;
       const values = state.answers?.[question.id]?.answers;
       if (!values?.length) continue;
-      answers[question.id] = question.options.length
-        ? question.multiSelect ? { type: "checkbox", selected: values } : { type: "radio", selected: [], custom: values[0]! }
-        : { type: "input", value: values[0]! };
+      if (!question.options.length) { answers[question.id] = { type: "input", value: values[0]! }; continue; }
+      // An Agent answer is a flat list of labels, so a value that names an option
+      // is a picked option and anything else is the reply the reader typed. The
+      // split is what lets the settled card mark the right row.
+      const labels = question.options.map((option) => option.label);
+      const typed = values.filter((value) => !labels.includes(value));
+      answers[question.id] = { type: question.multiSelect ? "checkbox" : "radio",
+        selected: values.filter((value) => labels.includes(value)), ...(typed.length ? { custom: typed.join(", ") } : {}) };
     }
     return this.put({ id: `agent:${state.id}`, status: state.status === "answered" ? "submitted" : state.status === "dismissed" ? "cancelled" : "waiting", form, answers,
       element: document.createElement("section"), send: (result) => this.respond(state.id, agentFormAnswers(result)) });
