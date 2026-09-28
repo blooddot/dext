@@ -112,6 +112,16 @@ resolve from the workspace root and must stay inside it, including through
 symbolic links. Other `node.fs` calls require workspace-relative paths that
 stay inside the workspace.
 
+Reading and inspecting: `readFile`, `readdir(path, encoding="utf8") ->
+list[str]`, `stat(path) -> { size, mtime_ms, is_file, is_directory }`,
+`access(path)`, which returns true or raises the Node error, and `realpath`.
+Writing and managing: `writeFile`, `appendFile`, `copyFile(sourcePath,
+destinationPath)`, `mkdir`, `rename(oldPath, newPath)`, and `rm(path,
+recursive=false, force=false)`, which refuses a directory unless `recursive` is
+set. `readdir` reports the directory's own order; sort the list when the order
+matters. `node.path.relative(from, to)` takes both paths, and
+`node.path.format(pathObject)` accepts a `node.path.parse` result.
+
 `node:crypto`, `node:zlib`, `node:timers/promises`, and environment-sensitive
 `node:os` calls are catalogued as future candidates, not callable APIs. Raw
 process, socket, stream, worker, VM, module-loader, and server-listening APIs

@@ -109,6 +109,16 @@ f-string 的替换字段可带转换和格式说明符：`f"{value!r}"`、`f"{co
 也可以读取工作区外的文件。相对路径以工作区根目录为基准，路径及符号链接目标
 必须位于工作区内。其他 `node.fs` 调用仍要求使用不越出工作区的相对路径。
 
+`node.fs` 分两半桥接 Node 的文件 API。读取与查看：`readFile`、
+`readdir(path, encoding="utf8") -> list[str]`、`stat(path) -> { size,
+mtime_ms, is_file, is_directory }`、`access(path)`（可达时返回 true，否则抛出
+Node 自身的错误）与 `realpath`。写入与维护：`writeFile`、`appendFile`、
+`copyFile(sourcePath, destinationPath)`、`mkdir`、`rename(oldPath, newPath)`
+与 `rm(path, recursive=false, force=false)`——不带 `recursive` 时拒绝删除目录，
+不带 `force` 时拒绝静默跳过不存在的路径。`readdir` 返回目录自身的顺序，需要
+固定顺序时自行排序。`node.path.relative(from, to)` 同时接收两个路径，
+`node.path.format(pathObject)` 接收 `node.path.parse` 的结果。
+
 `node:crypto`、`node:zlib`、`node:timers/promises` 与包含环境信息的
 `node:os` 仅作为后续候选模块记录，当前不能调用。原始进程、socket、流、
 worker、VM、模块加载和 HTTP 服务监听能力不向 `.dx` 开放。
