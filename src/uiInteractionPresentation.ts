@@ -1,5 +1,5 @@
 import type { AgentInputAnswers, AgentInputRequest } from "./core/types.js";
-import type { UiFormDefinition, UiFormResult, UiInteractionState } from "./core/uiForm.js";
+import type { UiField, UiFieldAnswer, UiFormDefinition, UiFormResult, UiInteractionState } from "./core/uiForm.js";
 
 export function agentInputForm(request: AgentInputRequest): UiFormDefinition {
   return { title: "Question", description: request.blocking ? "Waiting for your answer" : "You can answer while the agent works",
@@ -25,6 +25,34 @@ export function publicInteractionState(state: UiInteractionState): UiInteraction
   const answers = { ...state.answers };
   for (const field of state.form.fields) if (field.secret) delete answers[field.id];
   return { ...state, ...(state.answers ? { answers } : {}) };
+}
+
+/** One choice a submitted question offered, with whether the answer picked it. */
+export interface AnswerChoice { label: string; description?: string | undefined; selected: boolean; custom?: boolean | undefined }
+
+/** A submitted card shows the alternatives that were on the table, not only the
+ * answer, so a reader can see what was chosen from what. An answer no option
+ * covers — a typed reply — becomes its own selected row. */
+export function answerChoices(options: readonly { label: string; value?: string | undefined; description?: string | undefined }[],
+  answers: readonly (string | undefined)[]): AnswerChoice[] {
+  const chosen: string[] = [];
+  for (const answer of answers) { const value = answer?.trim(); if (value && !chosen.includes(value)) chosen.push(value); }
+  const covered = (option: { label: string; value?: string | undefined }): boolean =>
+    chosen.includes(option.label) || (option.value !== undefined && chosen.includes(option.value));
+  return [
+    ...options.map((option) => ({ label: option.label, ...(option.description ? { description: option.description } : {}), selected: covered(option) })),
+    ...chosen.filter((value) => !options.some((option) => option.label === value || option.value === value))
+      .map((value) => ({ label: value, selected: true, custom: true }))
+  ];
+}
+
+/** The choices one form field offered. Input fields have none: their answer is
+ * the value itself, and a secret keeps it out of the card entirely. */
+export function uiFieldChoices(field: UiField, answer: UiFieldAnswer | undefined): AnswerChoice[] {
+  if (field.type === "input") return [];
+  const selection = answer && answer.type !== "input" ? answer.selected : [];
+  const custom = answer && answer.type !== "input" && "custom" in answer ? answer.custom : undefined;
+  return answerChoices(field.options, [...selection, custom]);
 }
 
 /** Used by both live output and history, including results unknown to this version. */
