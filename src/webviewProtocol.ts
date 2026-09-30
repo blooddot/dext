@@ -242,16 +242,18 @@ export interface SidebarState {
 }
 
 export type WebviewResponse =
-  | { type: "inputDefinition"; requestId: number; target?: InputDefinition }
   | { type: "state"; state: SidebarState }
+  /** The generated `dext` declaration, so Monaco's TypeScript worker completes
+   * and diagnoses `import { ask } from "dext"` in the composer — plus the workspace's
+   * own API modules, because Monaco has no filesystem and cannot read `.dext/api`.
+   * `apiPaths` is the generated project's `dext/api/*` mapping, `path` is where each
+   * module lives under the virtual `.dext` root the mapping resolves against, and
+   * `specifier` is the `dext/api/<id>` the module answers to. */
   | {
-    type: "language";
-    requestId: number;
-    completions: CompletionItem[];
-    diagnostics: LanguageDiagnostic[];
-    inputKind: "empty" | "workflow" | "invalid";
-    signature?: SignatureHelp;
-    hover?: LanguageHover;
+    type: "dextTypes";
+    declaration: string;
+    apiPaths: string[];
+    modules: { path: string; specifier: string; content: string }[];
   }
   | { type: "outputSession"; session: DextHistorySession; switchId?: number; hostInitiated?: true }
   | { type: "turnRenamed"; sessionId: string; turnId: string; title?: string; displayTitle: string }
