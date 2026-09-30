@@ -41,7 +41,7 @@ describe("resource documents", () => {
 
   it("escapes resource content and names", () => {
     // The page's own client script is expected; the resource name must not become markup.
-    const list = renderResourceList(buildResourceList({ kind: "api", scope: "project", entries: [entry("<script>", "Task/X.dx")] }))
+    const list = renderResourceList(buildResourceList({ kind: "api", scope: "project", entries: [entry("<script>", "Task/X.ts")] }))
       .replace(/<script>[\s\S]*?<\/script>/g, "");
     expect(list).not.toContain("<script>");
     expect(list).toContain("&lt;script&gt;");

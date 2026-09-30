@@ -42,18 +42,17 @@ try {
   await new Promise(done => server.listen(0, '127.0.0.1', done));
   const origin = `http://127.0.0.1:${server.address().port}`;
   const entries = [
-    { kind: 'api', scope: 'global', name: 'agent', path: 'agent.dx', group: '.', description: 'Run an agent task', source: { kind: 'directory', label: 'builtin' } },
-    { kind: 'api', scope: 'global', name: 'node.fs.readFile', path: 'node/fs/readFile.dx', group: 'node.fs', description: 'Read file contents', source: { kind: 'directory', label: 'builtin' } }
+    { kind: 'api', scope: 'global', name: 'agent', path: 'agent.ts', group: '.', description: 'Run an agent task', source: { kind: 'directory', label: 'builtin' } },
+    { kind: 'api', scope: 'project', name: 'dev.readFile', path: 'dev/readFile.ts', group: 'dev', description: 'Read a file through the project API', source: { kind: 'project', label: 'project' } }
   ];
+  // Signatures are TypeScript now: the detail page's tokens are the ones a `.ts` API has.
   entries[0].api = {
-    signature: 'agent(input: string, apply?: boolean = True, cli?: "codex" | "claude") -> AgentResult',
+    signature: 'agent(options: { input: string; apply?: boolean; cli?: "codex" | "claude" }): Promise<AgentResult>',
     parameters: [
-      { name: 'input', type: 'string', required: true },
-      { name: 'apply', type: 'boolean', required: false, defaultValue: 'true' },
-      { name: 'cli', type: '"codex" | "claude"', required: false }
-    ], returnType: 'AgentResult'
+      { name: 'options', type: '{ input: string; apply?: boolean; cli?: "codex" | "claude" }', required: true }
+    ], returnType: 'Promise<AgentResult>'
   };
-  entries[1].api = { signature: 'node.fs.readFile(path: string) -> NodeFsReadFileResult', parameters: [{ name: 'path', type: 'string', required: true }], returnType: 'NodeFsReadFileResult' };
+  entries[1].api = { signature: 'main(input?: string): Promise<AskResult>', parameters: [{ name: 'input', type: 'string', required: false }], returnType: 'Promise<AskResult>' };
   const project = { overview: { name: 'Dext', root: 'C:/github/blooddot/dext', objects: 0, accepted: 0, drafts: 0, needsVerification: 0, initialization: { status: 'uninitialized', drafts: 0 }, aiCli: [{ id: 'codex', label: 'Codex', models: [] }] }, objects: [], architecture: { diagrams: [] } };
   const artifacts = resolve('.tmp-tb/editor-tabs-ui'); await mkdir(artifacts, { recursive: true });
   async function load(body) {
@@ -98,16 +97,16 @@ try {
       assert.equal(await evaluate(`messages.length`), 1);
       assert.equal(await evaluate(`messages[0].type`), 'resourceOpen');
       await writeFile(join(artifacts, `apis-${themeName}-${width}.png`), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
-      await load(ui.renderResourceDefinition(ui.buildResourceDefinition(entries[0], 'def main(input: str):\n    return agent(input=input)')));
+      await load(ui.renderResourceDefinition(ui.buildResourceDefinition(entries[0], 'export async function main(input: string): Promise<AgentResult> {\n  return await agent({ input });\n}')));
       assert.equal(await evaluate(`getComputedStyle(document.querySelector('.resource-api-signature code')).backgroundColor`), 'rgba(0, 0, 0, 0)');
       assert.equal(await evaluate(`getComputedStyle(document.querySelector('dt .tok-propertyName')).color !== getComputedStyle(document.querySelector('dt .tok-typeName')).color`), true);
       await writeFile(join(artifacts, `api-detail-${themeName}-${width}.png`), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
       // The Resources page must file MCP tools under MCP and nest every category the way the API
       // page does: `dev` holds `feat`, and the tool server holds its own tools.
       const resourceEntries = [
-        { kind: 'api', scope: 'project', name: 'dev.feat', path: 'dev/feat.dx', group: 'dev', description: 'Plan a feature', source: { kind: 'project', label: 'project' } },
-        { kind: 'api', scope: 'project', name: 'dev.fix', path: 'dev/fix.dx', group: 'dev', description: 'Fix a defect', source: { kind: 'project', label: 'project' } },
-        { kind: 'api', scope: 'project', name: 'mcp.files.readFile', path: 'mcp/files/readFile.dx', group: 'mcp.files', description: 'Read a file', source: { kind: 'project', label: 'project' } }
+        { kind: 'api', scope: 'project', name: 'dev.feat', path: 'dev/feat.ts', group: 'dev', description: 'Plan a feature', source: { kind: 'project', label: 'project' } },
+        { kind: 'api', scope: 'project', name: 'dev.fix', path: 'dev/fix.ts', group: 'dev', description: 'Fix a defect', source: { kind: 'project', label: 'project' } },
+        { kind: 'api', scope: 'project', name: 'mcp.files.readFile', path: 'mcp/files/readFile.ts', group: 'mcp.files', description: 'Read a file', source: { kind: 'project', label: 'project' } }
       ];
       await load(ui.renderGlobalResources(ui.buildResourceList({ kind: 'api', scope: 'project', entries: resourceEntries, groupBy: 'kind' }), { title: 'Resources', createKinds: ['api','mcp','rule','skill'] }));
       assert.equal(await evaluate(`document.querySelectorAll('.resource-group:not(.resource-api-node)').length`), 4);
@@ -116,8 +115,8 @@ try {
       assert.equal(await evaluate(`document.querySelector('[data-resource-node="API.dev"] .resource-name').textContent`), 'feat');
       assert.equal(await evaluate(`document.querySelector('[data-resource-node="API"]').querySelectorAll('.resource-entry').length`), 2);
       assert.equal(await evaluate(`document.querySelector('[data-resource-node="MCP.files"] .resource-name').textContent`), 'readFile');
-      assert.equal(await evaluate(`!!document.querySelector('[data-resource-node="API"]').querySelector('[data-resource-id="api:project:mcp/files/readFile.dx"]')`), false);
-      assert.equal(await evaluate(`!!document.querySelector('[data-resource-node="MCP"]').querySelector('[data-resource-id="api:project:mcp/files/readFile.dx"]')`), true);
+      assert.equal(await evaluate(`!!document.querySelector('[data-resource-node="API"]').querySelector('[data-resource-id="api:project:mcp/files/readFile.ts"]')`), false);
+      assert.equal(await evaluate(`!!document.querySelector('[data-resource-node="MCP"]').querySelector('[data-resource-id="api:project:mcp/files/readFile.ts"]')`), true);
       await evaluate(`document.querySelector('[data-resource-group-target="API"] svg path').dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true}))`);
       assert.equal(await evaluate(`document.querySelector('[data-resource-node="API"]').open`), false);
       assert.equal(await evaluate(`document.querySelector('[data-resource-node="MCP"]').open`), true);

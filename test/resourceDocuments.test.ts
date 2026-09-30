@@ -82,7 +82,7 @@ describe("resource documents", () => {
   });
 
   it("rejects traversal, mismatched types, and unsafe names", () => {
-    for (const path of ["../outside.md", "C:/outside.md", "safe/../outside.md", "safe\\outside.md", "rule.dx"]) {
+    for (const path of ["../outside.md", "C:/outside.md", "safe/../outside.md", "safe\\outside.md", "rule.ts"]) {
       expect(() => resourcePathSegments("rule", path)).toThrow();
     }
     expect(() => resourceFileName("skill", "../bad")).toThrow();

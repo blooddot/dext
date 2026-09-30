@@ -23,8 +23,8 @@ class FakeHost {
 }
 
 const apiEntry = (name: string): ResourceEntry => ({
-  id: `api:project:${name}`, kind: "api", scope: "project", name, path: `${name}.dx`, group: ".",
-  source: { kind: "project", label: "Project", path: `.dext/api/${name}.dx` }
+  id: `api:project:${name}`, kind: "api", scope: "project", name, path: `${name}.ts`, group: ".",
+  source: { kind: "project", label: "Project", path: `.dext/api/${name}.ts` }
 });
 
 const dataSource = (): ResourceEditorDataSource => ({

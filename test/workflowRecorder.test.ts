@@ -50,10 +50,12 @@ describe("recording a conversation as a TypeScript API", () => {
     expect(recorded.source).toContain('const step_2 = await ask({ input: "Explain what changed" });');
     // The declared return type follows the last step's real result kind.
     expect(recorded.source).toContain("return step_2;");
-    // No Python-era leftovers survive into the TypeScript module.
+    // No Python-era leftovers survive into the TypeScript module: the removed print API,
+    // the `def` entry point and the old `.dx` return annotation are all gone.
     expect(recorded.source).not.toContain("def main");
-    expect(recorded.source).not.toContain(".dx");
+    expect(recorded.source).not.toContain("print(");
     expect(recorded.source).not.toContain("PrintResult");
+    expect(recorded.source).not.toContain("-> ");
     assertErasable(recorded.source);
   });
 
