@@ -29,28 +29,17 @@ export interface DextStreamStep {
   text: string;
 }
 
-/** A diagnostic the kernel reports about the run itself — a call the run left in
- * flight, say. It is neither user output nor an API result, so it is neither a stream
- * (the report is not the program's own stderr, and the run has not failed) nor a card:
- * Output shows it at its own level. */
-export interface DextNoticeStep {
-  level: "warning" | "info";
-  text: string;
-}
-
 export type DextStepState = "success" | "failed" | "cancelled";
 
 /**
  * One recorded step. `response` is a `RuntimeResponse` produced by the parent's
- * runtime; `stream` is process output; `notice` is a diagnostic the kernel has about
- * the run itself. Exactly one of the three is present.
+ * runtime and `stream` is process output; at most one of the two is present.
  */
 export interface DextWireStep {
   method: string;
   state: DextStepState;
   response?: unknown;
   stream?: DextStreamStep;
-  notice?: DextNoticeStep;
   error?: string;
   assignment?: string;
 }
