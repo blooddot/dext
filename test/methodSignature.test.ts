@@ -32,27 +32,27 @@ describe("method signatures", () => {
       kind: "command",
       version: "1.0.0",
       input: [field],
-      output: { kind: "print" },
+      output: { kind: "terminal" },
       executor: { kind: "deterministic", handler: "sample" }
     };
     expect(formatFieldType(field)).toBe('"safe" | "fast" | result | ("safe" | "fast" | result)[]');
     expect(formatMethodSignature(api)).toBe(
-      'sample.run(mode?: "safe" | "fast" | result | ("safe" | "fast" | result)[] = "safe") -> PrintResult'
+      'sample.run(mode?: "safe" | "fast" | result | ("safe" | "fast" | result)[] = "safe") -> TerminalResult'
     );
   });
 
-  it("uses a declared custom result type", () => {
+  it("uses a declared result type when the method declares one", () => {
     const api: CallableDefinition = {
-      id: "docs.read",
-      title: "Read",
-      description: "Read documents",
+      id: "mcp.team.query",
+      title: "Query",
+      description: "Query the team manifest",
       kind: "command",
       version: "1.0.0",
       input: [],
-      output: { kind: "document", resultType: "DocumentResult" },
-      executor: { kind: "custom", apiId: "docs.read" }
+      output: { kind: "mcp.team.query", resultType: "DocumentResult" },
+      executor: { kind: "deterministic", handler: "mcpTool" }
     };
-    expect(formatMethodSignature(api)).toBe("docs.read() -> DocumentResult");
+    expect(formatMethodSignature(api)).toBe("mcp.team.query() -> DocumentResult");
   });
 
   it("renders named shapes rather than expanding complex object parameters", () => {

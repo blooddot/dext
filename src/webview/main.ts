@@ -3082,9 +3082,10 @@ function renderAgentEvent(event: AgentStreamEvent): void {
 }
 
 function renderAgentFileChanges(entries: readonly WorkflowStepResponse[]): void {
+  // Only an Agent result carries a patch now; `patch` is no longer an API output kind.
   const changes = entries.flatMap((step): PatchChange[] => {
     const result = step.response?.result;
-    if (result?.kind === "patch") return result.changes;
+    if (result?.kind === "agent") return result.patch?.changes ?? [];
     return [];
   }).filter((change) => change.before !== change.after);
   for (const change of changes) {

@@ -1906,11 +1906,6 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       // that id when persisting the result so retry/delete actions still point
       // at the stored turn after success or cancellation.
       const turn = await this.history.addSuccess(source, events, response, sessionId, mode, turnId, planExecution);
-      const canContinue = mode === "code"
-        && response.steps?.some((step) => step.state === "failed")
-        && response.steps.some((step) => step.state === "skipped")
-        && failedWorkflowContinuation;
-      if (canContinue) this.workflowContinuations.set(`${sessionId}:${turnId}`, failedWorkflowContinuation!);
       await this.persistProviderSessions(session);
       if (mode === "plan" && !executePlan && response.executions.some((execution) => execution.result.kind === "plan" && execution.result.planPath)) {
         const savedPath = response.executions.find((execution) => execution.result.kind === "plan" && execution.result.planPath)?.result;

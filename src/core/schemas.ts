@@ -56,11 +56,6 @@ export const terminalResultSchema = z.object({
   stderr: z.string(),
   duration_ms: z.number().nonnegative()
 });
-export const printResultSchema = z.object({
-  kind: z.literal("print"),
-  text: z.string(),
-  label: z.string().optional()
-}).strict();
 const uiSelections = z.array(z.string().max(2000)).max(200).refine((items) => new Set(items).size === items.length, "Duplicate selections");
 export const uiResultSchema = z.discriminatedUnion("type", [
   z.object({ kind: z.literal("ui"), type: z.literal("select"), selected: uiSelections }).strict(),
@@ -79,7 +74,7 @@ export const mcpRawResultSchema = z.object({
   content: z.string().optional(),
   structured: z.record(z.string(), z.unknown()).optional()
 }).strict();
-export const nodeResultSchema = z.object({ kind: z.literal("node") }).passthrough();
+/** `AgentResult.patch` and a turn review's changes; not an API output kind. */
 export const patchResultSchema = z.object({
   kind: z.literal("patch"),
   title: z.string(),
@@ -100,13 +95,10 @@ const builtinDextResultSchema = z.discriminatedUnion("kind", [
   planResultSchema,
   agentResultSchema,
   templateResultSchema,
-  patchResultSchema,
   applyResultSchema,
   terminalResultSchema,
-  printResultSchema,
   skillResultSchema,
   uiResultSchema,
-  nodeResultSchema,
   mcpRawResultSchema
 ]);
 
@@ -119,3 +111,29 @@ const typedMcpResultSchema = z.object({
 }).passthrough();
 
 export const dextResultSchema = z.union([builtinDextResultSchema, typedMcpResultSchema]);
+
+export const executionStateSchema = z.enum(["success", "failed", "cancelled"]);
+
+/**
+ * A step as the kernel reports it: an API response, process output, or a
+ * failure. Exactly one of `response` and `stream` may be present, and a stream
+ * step always belongs to `stdout` or `stderr` under the name it prints to.
+ */
+export const dextWireStepSchema = z.object({
+  method: z.string().min(1),
+  state: executionStateSchema,
+  response: z.unknown().optional(),
+  stream: z.object({
+    channel: z.enum(["stdout", "stderr"]),
+    text: z.string()
+  }).strict().optional(),
+  error: z.string().optional(),
+  assignment: z.string().optional()
+}).strict().superRefine((step, context) => {
+  if (step.response !== undefined && step.stream !== undefined) {
+    context.addIssue({ code: "custom", message: "A step carries either a response or a stream, never both." });
+  }
+  if (step.stream && (step.method !== step.stream.channel || step.state !== "success")) {
+    context.addIssue({ code: "custom", message: "A stream step is named after its channel and always succeeds." });
+  }
+});

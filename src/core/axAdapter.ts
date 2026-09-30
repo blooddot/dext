@@ -7,13 +7,10 @@ import {
   templateResultSchema,
   dextResultSchema,
   applyResultSchema,
-  patchResultSchema,
-  printResultSchema,
   planResultSchema,
   skillResultSchema,
   terminalResultSchema,
   uiResultSchema,
-  nodeResultSchema,
   mcpRawResultSchema
 } from "./schemas.js";
 import type {
@@ -143,25 +140,21 @@ function outputSchema(output: CallableDefinition["output"]): ZodType {
       return applyResultSchema;
     case "terminal":
       return terminalResultSchema;
-    case "print":
-      return printResultSchema;
     case "skill":
       return skillResultSchema;
-    case "patch":
-      return patchResultSchema;
-    case "ui":
-      return uiResultSchema;
-    case "node":
-      return nodeResultSchema;
     case "mcpRaw":
       return mcpRawResultSchema;
-    default:
-      throw new Error(`Output kind '${output.kind}' requires a TypedDict result declaration.`);
   }
+  // A typed `mcp.<server>.<tool>` result always declares its fields, so the
+  // branch above handles it; reaching here means a method declares an MCP kind
+  // without the fields that give it meaning.
+  throw new Error(`Output kind '${output.kind}' declares no result fields.`);
 }
 
+/** `resultType` narrows a contract to a named result. Only MCP typed results and
+ * `ui.*` still carry one: a custom API is an ordinary TypeScript module whose
+ * return value is a plain value, not a declared result annotation. */
 function matchesResultAnnotation(value: { kind: string }, name: string): boolean {
-  if (`${value.kind}Result`.toLowerCase() === name.toLowerCase()) return true;
   return value.kind === "ui" && "type" in value && typeof value.type === "string" && `Ui${value.type}Result`.toLowerCase() === name.toLowerCase();
 }
 
@@ -221,7 +214,7 @@ export class AxAdapter {
   }
 
   /** Non-throwing validation for callers that report diagnostics instead of
-   * raising (workflowRuntime). The returned result copies the existing
+   * raising (the old interpreter). The returned result copies the existing
    * validateOutput semantics, including the builtin-result narrowing. */
   inspectOutput(contract: AxMethodContract, result: unknown):
     | { success: true; data: DextResult }
