@@ -37,4 +37,4 @@ API 密钥保存在 VS Code 的加密 SecretStorage 中，不会写入设置；�
 
 遇到 HTTP 429 时，Dext 会自动增加请求间隔；限流持续时继续退避，恢复后逐步缩短间隔，并优先遵守服务端的 `Retry-After`。如果需要减少首次触发限流的概率，可以调高 `dext.completion.debounceMs`。
 
-建议被截断时，可以增大 `dext.completion.maxTokens`，但可能增加延迟。默认跳过 `.gitignore` 排除的文件，工作区根目录的 `.dextignore` 会追加规则，也可以重新包含被排除的路径。`.dx` 文件使用类型化 API 补全。状态栏开关仅关闭当前窗口的行内补全，不修改持久设置，便于与其他补全扩展一起使用。
+建议被截断时，可以增大 `dext.completion.maxTokens`，但可能增加延迟。默认跳过 `.gitignore` 排除的文件，工作区根目录的 `.dextignore` 会追加规则，也可以重新包含被排除的路径。状态栏开关仅关闭当前窗口的行内补全，不修改持久设置，便于与其他补全扩展一起使用。
