@@ -486,7 +486,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       } catch {
         break;
       }
-      file = vscode.Uri.joinPath(directory, `${recorded.apiId}_${suffix}.dx`);
+      file = vscode.Uri.joinPath(directory, `${recorded.apiId}_${suffix}.ts`);
     }
     await vscode.workspace.fs.writeFile(file, new TextEncoder().encode(recorded.source));
     await application.reload();

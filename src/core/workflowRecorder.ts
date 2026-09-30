@@ -10,9 +10,9 @@ export interface RecordedTurn {
 }
 
 export interface RecordedWorkflow {
-  /** Suggested file name below `.dext/api`, including the `.dx` extension. */
+  /** Suggested file name below `.dext/api`, including the `.ts` extension. */
   fileName: string;
-  /** The dotted API id the file will register as once it is saved. */
+  /** The dotted API id the file is addressed by: `import { main } from "dext/api/<id>"`. */
   apiId: string;
   source: string;
 }
@@ -28,9 +28,7 @@ const RESULT_TYPES: Record<string, string> = {
   template: "TemplateResult",
   terminal: "TerminalResult",
   apply: "ApplyResult",
-  print: "PrintResult",
-  skill: "SkillResult",
-  patch: "PatchResult"
+  skill: "SkillResult"
 };
 
 /** The name is derived from the first turn so the generated file lands somewhere
@@ -49,11 +47,7 @@ export function recordedApiName(turns: readonly RecordedTurn[]): string {
 }
 
 function quote(value: string): string {
-  const escaped = value.replaceAll("\\", "\\\\");
-  // A multi-line prompt keeps its shape in a triple-quoted string rather than
-  // being flattened into one unreadable line.
-  if (!value.includes("\n")) return `"${escaped.replaceAll('"', '\\"')}"`;
-  return `"""\n${escaped.replaceAll('"""', '\\"\\"\\"')}\n"""`;
+  return JSON.stringify(value);
 }
 
 function lastResult(turn: RecordedTurn): DextResult | undefined {
@@ -96,9 +90,9 @@ function methodFor(turn: RecordedTurn): string {
   return "agent";
 }
 
-/** Builds a `.dx` skeleton from a recorded conversation. The result is meant to
- * be edited, not run as-is: the point is skipping the blank file, so a turn that
- * cannot be expressed is left as a comment rather than dropped or guessed at. */
+/** Builds a TypeScript skeleton from a recorded conversation. The result is meant
+ * to be edited, not run as-is: the point is skipping the blank file, so a turn
+ * that cannot be expressed is left as a comment rather than dropped or guessed at. */
 export function recordWorkflow(turns: readonly RecordedTurn[]): RecordedWorkflow {
   const usable = turns.filter((turn) => turn.input.trim() && !turn.error);
   if (!usable.length) {
@@ -106,11 +100,12 @@ export function recordWorkflow(turns: readonly RecordedTurn[]): RecordedWorkflow
   }
   const name = recordedApiName(usable);
   const shared = sharedParameters(usable);
-  const parameters = [...new Set(shared.values())].map((parameter) => `${parameter}: str`);
+  const parameters = [...new Set(shared.values())].map((parameter) => `${parameter}: string`);
   const lines: string[] = [];
   const body: string[] = [];
   let lastVariable = "";
   let returnType = "AskResult";
+  const used = new Set<string>(["ask", "ui"]);
   for (const [index, turn] of usable.entries()) {
     const text = turn.input.trim();
     for (const [order, message] of confirmations(turn).entries()) {
@@ -118,34 +113,42 @@ export function recordWorkflow(turns: readonly RecordedTurn[]): RecordedWorkflow
       // of the workflow: a skeleton that compiles is more useful than one that
       // guesses which steps the answer was meant to guard.
       const gate = `gate_${index + 1}_${order + 1}`;
-      body.push(`${gate} = ui.confirm(message=${quote(message)})`);
-      body.push(`# Gate the step below on ${gate}.confirmed once you decide what a No should skip.`);
+      body.push(`const ${gate} = await ui.confirm({ message: ${quote(message)} });`);
+      body.push(`// Gate the step below on ${gate}.confirmed once you decide what No should skip.`);
     }
     if (turn.mode === "code") {
-      // A Code-mode turn was already a workflow; re-wrapping it in an agent call
+      // A Code-mode turn was already TypeScript; re-wrapping it in an agent call
       // would change what it does, so its source is left for the author to paste.
-      body.push(`# Code-mode turn ${index + 1} ran this workflow directly:`);
-      for (const line of text.split("\n")) body.push(`# ${line}`);
+      body.push(`// Code-mode turn ${index + 1} ran this directly:`);
+      for (const line of text.split("\n")) body.push(`// ${line}`);
       continue;
     }
     const variable = `step_${index + 1}`;
     const argument = shared.get(text) ?? quote(text);
     const method = methodFor(turn);
-    body.push(`${variable} = ${method}(input=${argument}${method === "agent" ? ", apply=False" : ""})`);
+    used.add(method);
+    body.push(`const ${variable} = await ${method}({ input: ${argument}${method === "agent" ? ", apply: false" : ""} });`);
     lastVariable = variable;
     const kind = lastResult(turn)?.kind;
     returnType = (kind && RESULT_TYPES[kind]) ?? (method === "agent" ? "AgentResult" : "AskResult");
   }
   if (!lastVariable) {
     // Every turn was Code mode, so there is nothing to return but a note.
-    body.push('return print(text="Fill in the steps above.")');
-    returnType = "PrintResult";
+    body.push('console.log("Fill in the steps above.");');
+    returnType = "void";
   } else {
-    body.push(`return ${lastVariable}`);
+    body.push(`return ${lastVariable};`);
   }
-  lines.push(`# Recorded from a Dext conversation on ${new Date().toISOString().slice(0, 10)}.`);
-  lines.push("# Edit the steps below, then save to register this file as a reusable API.");
-  lines.push(`def main(${parameters.join(", ")}) -> ${returnType}:`);
-  for (const line of body) lines.push(`    ${line}`);
-  return { fileName: `${name}.dx`, apiId: name, source: `${lines.join("\n")}\n` };
+  // A result interface is exported by the `dext` module, not a global, so the
+  // skeleton imports it as a type — `Promise<AskResult>` alone would not compile.
+  const typeImports = returnType === "void" ? [] : [`type ${returnType}`];
+  const imports = [...[...used].sort(), ...typeImports].join(", ");
+  lines.push(`// Recorded from a Dext conversation on ${new Date().toISOString().slice(0, 10)}.`);
+  lines.push("// Edit the steps below, then save to register this file as a reusable API.");
+  lines.push(`import { ${imports} } from "dext";`);
+  lines.push("");
+  lines.push(`export async function main(${parameters.join(", ")}): Promise<${returnType}> {`);
+  for (const line of body) lines.push(`  ${line}`);
+  lines.push("}");
+  return { fileName: `${name}.ts`, apiId: name, source: `${lines.join("\n")}\n` };
 }
