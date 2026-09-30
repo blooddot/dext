@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { displayName, name, version } from "../package.json";
 import { runCodexConversation, codexAppServerArguments } from "../src/core/codexConversationRunner.js";
 import { CodexConversationConnection } from "../src/core/codexConversationConnection.js";
 import type { AgentConversationRequest } from "../src/core/agentRunner.js";
@@ -111,6 +112,14 @@ describe("Codex interactive conversations over stdio", () => {
   });
   it("allows retryable errors to recover without failing the conversation", async () => {
     expect(await setup("retry-error").run()).toBe("Received: retry succeeded");
+  });
+  it("names this extension and its own manifest version in the handshake", async () => {
+    const handshake = vi.spyOn(CodexConversationConnection.prototype, "request");
+    await setup().run();
+    const initialize = handshake.mock.calls.find(([method]) => method === "initialize")?.[1] as { clientInfo?: unknown } | undefined;
+    // The client version is the manifest's, so a release cannot leave a stale literal
+    // behind in the App Server handshake.
+    expect(initialize?.clientInfo).toEqual({ name, title: displayName, version });
   });
   it("allows config flags but rejects flags that would break the stdio connection", () => {
     expect(codexAppServerArguments(["-c", 'foo="bar"', "--enable", "feature"])).toEqual(["app-server", "-c", 'foo="bar"', "--enable", "feature"]);

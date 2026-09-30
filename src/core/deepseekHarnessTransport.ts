@@ -7,6 +7,9 @@ import { HARNESS_BRIDGE_ENV, HARNESS_BRIDGE_TOKEN_ENV, HarnessBridge } from "./h
 import type { HarnessQuestionOutcome, HarnessQuestionRequest } from "./harnessQuestions.js";
 import type { HarnessResultOutcome, HarnessResultRequest, HarnessResultTool } from "./harnessResultTool.js";
 import { HARNESS_VERSION } from "./deepseekHarnessPolicy.js";
+// The ACP handshake names this extension as the client, so the version reported is the
+// manifest's — the same number the Extensions view shows — instead of a literal.
+import { name as packageName, version as packageVersion } from "../../package.json";
 export { harnessSpawnCommand } from "./harnessCommand.js";
 
 /** The client surface Dext gives the Harness: ACP callbacks that arrive over
@@ -138,7 +141,7 @@ export class DeepSeekHarnessTransport {
   }
 
   async initialize(): Promise<void> {
-    this.capabilities = await this.wait(this.connection.initialize({ protocolVersion: PROTOCOL_VERSION, clientInfo: { name: "dext", version: "1" },
+    this.capabilities = await this.wait(this.connection.initialize({ protocolVersion: PROTOCOL_VERSION, clientInfo: { name: packageName, version: packageVersion },
       clientCapabilities: { ...(this.client.createElicitation ? { elicitation: { form: {} } } : {}) } }));
     if (this.capabilities.protocolVersion !== PROTOCOL_VERSION || !this.capabilities.agentCapabilities?.sessionCapabilities?.resume) {
       throw new Error(`This Harness version lacks the required ACP session capabilities. Use ${HARNESS_VERSION}.`);

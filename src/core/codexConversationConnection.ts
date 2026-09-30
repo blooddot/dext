@@ -1,4 +1,9 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+// The client the App Server is told about is this extension, so its name, title and
+// version come from the manifest a user reads in the Extensions view rather than from a
+// literal that has to be remembered on every release. `src/core/mcpRegistry.ts` does the
+// same for its own handshake.
+import { displayName, name as packageName, version as packageVersion } from "../../package.json";
 import { codexErrorMessage } from "./codexError.js";
 
 export interface CodexRpcMessage { id?: string | number | undefined; method: string; params: Record<string, unknown> }
@@ -31,7 +36,7 @@ export class CodexConversationConnection {
     child.on("exit", () => this.fail(new Error("Codex App Server exited before completing the turn.")));
     child.stdin.on("error", () => this.fail(new Error("Codex App Server input pipe closed.")));
     await this.request("initialize", {
-      clientInfo: { name: "dext", title: "Dext", version: "0.1.2" },
+      clientInfo: { name: packageName, title: displayName, version: packageVersion },
       capabilities: { experimentalApi: true }
     });
     this.write({ method: "initialized", params: {} });
