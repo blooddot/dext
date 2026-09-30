@@ -2,6 +2,22 @@ import * as vscode from "vscode";
 import type { DextFileReference } from "./core/fileReference.js";
 import { directoryAttachment, fileAttachment } from "./vscodeAttachments.js";
 
+/** Explorer Copy Path, kept compatible with VS Code's own file copy. Copy Path
+ * writes the path text Dext reads, but an Explorer paste reads VS Code's file
+ * list, so the text is handed back to the caller and the file list is put on
+ * the clipboard last. Returns the path text Copy Path wrote. */
+export async function copyFilePathKeepingFiles(): Promise<string> {
+  await vscode.commands.executeCommand("copyFilePath");
+  const text = await vscode.env.clipboard.readText();
+  try {
+    await vscode.commands.executeCommand("filesExplorer.copy");
+  } catch {
+    // A VS Code without that built-in keeps the text-only clipboard: Dext Input
+    // still resolves the paths, only pasting the files into an Explorer is lost.
+  }
+  return text;
+}
+
 /** Editor Copy Path with nothing selected, kept compatible with VS Code's own
  * copy-line behavior. The line copy runs last and the text it leaves behind is
  * what the staged path belongs to. */

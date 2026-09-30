@@ -41,12 +41,21 @@ describe("Dext package manifest", () => {
   it("copies file paths only in resource views or file editors without a selection", async () => {
     const value = await manifest();
     const bindings = value.contributes?.keybindings?.filter((item) => item.command === "copyFilePath");
+    // Open Editors and the editor tab area have no copy shortcut of their own,
+    // so the path text replaces nothing there.
     expect(bindings).toEqual([
       {
         command: "copyFilePath", key: "ctrl+c", mac: "cmd+c",
-        when: "config.dext.copyFilePathOnCopy && !editorHoverVisible && !inputFocus && (filesExplorerFocus || openEditorsFocus || (editorAreaFocus && resourceScheme != untitled))"
+        when: "config.dext.copyFilePathOnCopy && !editorHoverVisible && !inputFocus && !filesExplorerFocus && (openEditorsFocus || (editorAreaFocus && resourceScheme != untitled))"
       }
     ]);
+    // The two copies VS Code owns: an Explorer copy keeps its file list, so the
+    // files stay pasteable, and a file editor with nothing selected keeps its
+    // copy-line behavior. Both only hand the paths to Dext.
+    expect(value.contributes?.keybindings).toContainEqual({
+      command: "dext.copyFilePathWithFiles", key: "ctrl+c", mac: "cmd+c",
+      when: "config.dext.copyFilePathOnCopy && !editorHoverVisible && !inputFocus && filesExplorerFocus"
+    });
     expect(value.contributes?.keybindings).toContainEqual({
       command: "dext.copyFilePathWithLine", key: "ctrl+c", mac: "cmd+c",
       when: "config.dext.copyFilePathOnCopy && !editorHoverVisible && editorTextFocus && !editorHasSelection && resourceScheme != untitled"
@@ -330,7 +339,9 @@ describe("Dext package manifest", () => {
     // is currently covering. These exist for alt+/ and the parameter hint chord.
     expect(hidden).toContain("dext.triggerSuggest");
     expect(hidden).toContain("dext.triggerParameterHints");
-    // Copy Path is a shortcut, not a command anyone looks up.
+    // Explorer Copy Path is a shortcut, not a command anyone looks up: it only
+    // makes sense while a file is selected in the Explorer.
+    expect(hidden).toContain("dext.copyFilePathWithFiles");
     expect(hidden).toContain("dext.copyFilePathWithLine");
     // The view contributes an automatic focus command whose generated title has
     // a gap where the unnamed view should be. `dext.focus` does the same thing

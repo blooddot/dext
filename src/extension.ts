@@ -872,6 +872,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("dext.copyTerminalSelectionWithContext", () =>
       reportCommandError(() => sidebar.copyTerminalSelectionWithContext())
     ),
+    vscode.commands.registerCommand("dext.copyFilePathWithFiles", () =>
+      reportCommandError(() => sidebar.copyFilePathWithFiles())
+    ),
     vscode.commands.registerCommand("dext.copyFilePathWithLine", () =>
       reportCommandError(() => sidebar.copyFilePathWithLine())
     ),

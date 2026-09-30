@@ -33,7 +33,7 @@ import {
   type SelectionTarget
 } from "./vscodeAttachments.js";
 import { ReadyMessageQueue } from "./readyMessageQueue.js";
-import { clipboardFileReferences, copyFilePathKeepingLine } from "./vscodeClipboardFiles.js";
+import { clipboardFileReferences, copyFilePathKeepingFiles, copyFilePathKeepingLine } from "./vscodeClipboardFiles.js";
 import { rankFileMatches } from "./core/fileSearch.js";
 import { planPathSegments } from "./core/planFile.js";
 import { planTodoItems, planTodoInstruction, stripPlanTodoProgress } from "./core/planTodoProgress.js";
@@ -1032,6 +1032,13 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       this.attachments.clearClipboard();
     }
     return copiedText;
+  }
+
+  /** Explorer Copy Path. Dext Input paste turns the path text into references,
+   * but an Explorer paste reads VS Code's file list instead, so the files stay
+   * pasteable while the paths wait here for the Dext paste that consumes them. */
+  async copyFilePathWithFiles(): Promise<void> {
+    this.attachments.stageFileCopy(await copyFilePathKeepingFiles());
   }
 
   /** Editor Copy Path with nothing selected. VS Code keeps its copy-line

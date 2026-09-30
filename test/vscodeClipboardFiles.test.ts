@@ -27,7 +27,7 @@ const vscode = vi.hoisted(() => {
 
 vi.mock("vscode", () => vscode);
 import { AttachmentStore } from "../src/attachmentStore.js";
-import { clipboardFileReferences, copyFilePathKeepingLine } from "../src/vscodeClipboardFiles.js";
+import { clipboardFileReferences, copyFilePathKeepingFiles, copyFilePathKeepingLine } from "../src/vscodeClipboardFiles.js";
 import { DextSidebarProvider } from "../src/sidebarProvider.js";
 import { FileDropClient } from "../src/webview/fileDropClient.js";
 
@@ -122,6 +122,21 @@ describe("Explorer Copy Path and VS Code's file list", () => {
     await (sidebar as unknown as { receive(request: unknown): Promise<void> })
       .receive({ type: "clipboardRead", requestId: 7, purpose });
   }
+
+  it("reads the path text first and restores the file list last", async () => {
+    vscode.env.clipboard.readText.mockResolvedValue("C:\\repo\\index.html");
+    await expect(copyFilePathKeepingFiles()).resolves.toBe("C:\\repo\\index.html");
+    expect(vscode.commands.executeCommand.mock.calls)
+      .toEqual([["copyFilePath"], ["filesExplorer.copy"]]);
+  });
+
+  it("keeps the path text when VS Code has no file-list command to run", async () => {
+    vscode.env.clipboard.readText.mockResolvedValue("/repo/index.html");
+    vscode.commands.executeCommand.mockImplementation(async (command: string) => {
+      if (command === "filesExplorer.copy") throw new Error("command not found");
+    });
+    await expect(copyFilePathKeepingFiles()).resolves.toBe("/repo/index.html");
+  });
 
   it("returns the line VS Code left behind for a copy with nothing selected", async () => {
     vscode.env.clipboard.readText

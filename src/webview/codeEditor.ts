@@ -296,7 +296,9 @@ export class DextCodeEditor {
     try {
       text = !raw && result && (result.codeReference || result.fileReferences?.length)
         ? codeReferencePasteText(source, selection.from, selection.to, result)
-        : eventText ?? result?.text ?? await browserClipboardText() ?? "";
+        // An Explorer copy puts VS Code's file list on the clipboard, which the
+        // browser may report as empty text: fall through to what the host kept.
+        : eventText || result?.text || await browserClipboardText() || "";
     }
     catch (error) { this.options.onError(error); return; }
     if (this.destroyed || !this.view.hasTextFocus() || revision !== this.dropRevision || JSON.stringify(this.view.getSelections()) !== selections) return;

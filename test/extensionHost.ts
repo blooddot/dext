@@ -47,6 +47,7 @@ export async function run(): Promise<void> {
   assert.ok(commands.includes("dext.triggerParameterHints"), "Parameter hints command is registered.");
   assert.ok(commands.includes("dext.addSelectionToChat"), "Selection attachment command is registered.");
   assert.ok(commands.includes("dext.copySelectionWithContext"), "Context copy command is registered.");
+  assert.ok(commands.includes("dext.copyFilePathWithFiles"), "Explorer file copy command is registered.");
   assert.ok(commands.includes("dext.copyFilePathWithLine"), "Editor file copy command is registered.");
   assert.ok(commands.includes("dext.addFileToChat"), "File attachment command is registered.");
   assert.ok(commands.includes("dext.setMcpAccessToken"), "Set MCP access token command is registered.");

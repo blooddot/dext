@@ -266,6 +266,11 @@
         "icon": "$(terminal)"
       },
       {
+        "command": "dext.copyFilePathWithFiles",
+        "title": "Dext: Copy File Path",
+        "icon": "$(copy)"
+      },
+      {
         "command": "dext.copyFilePathWithLine",
         "title": "Dext: Copy File Path with Line",
         "icon": "$(copy)"
@@ -334,16 +339,22 @@
     ],
     "keybindings": [
       {
-        "command": "copyFilePath",
+        "command": "dext.copyFilePathWithFiles",
         "key": "ctrl+c",
         "mac": "cmd+c",
-        "when": "config.dext.copyFilePathOnCopy && !editorHoverVisible && !inputFocus && (filesExplorerFocus || openEditorsFocus || (editorAreaFocus && resourceScheme != untitled))"
+        "when": "config.dext.copyFilePathOnCopy && !editorHoverVisible && !inputFocus && filesExplorerFocus"
       },
       {
         "command": "dext.copyFilePathWithLine",
         "key": "ctrl+c",
         "mac": "cmd+c",
         "when": "config.dext.copyFilePathOnCopy && !editorHoverVisible && editorTextFocus && !editorHasSelection && resourceScheme != untitled"
+      },
+      {
+        "command": "copyFilePath",
+        "key": "ctrl+c",
+        "mac": "cmd+c",
+        "when": "config.dext.copyFilePathOnCopy && !editorHoverVisible && !inputFocus && !filesExplorerFocus && (openEditorsFocus || (editorAreaFocus && resourceScheme != untitled))"
       },
       {
         "command": "dext.triggerSuggest",
@@ -408,6 +419,10 @@
         },
         {
           "command": "dext.triggerParameterHints",
+          "when": "false"
+        },
+        {
+          "command": "dext.copyFilePathWithFiles",
           "when": "false"
         },
         {
@@ -850,7 +865,7 @@
         "dext.copyFilePathOnCopy": {
           "type": "boolean",
           "default": true,
-          "description": "Copy file paths with Ctrl+C or Cmd+C in Explorer, Open Editors, editor tabs, or a file editor without a text selection. Paste into Dext Input to insert references to the original files, including images. A visible editor hover keeps VS Code's content-copy shortcut. This replaces Explorer's file copy and the editor's copy-line behavior; disable it to restore those native shortcuts."
+          "description": "Copy file paths with Ctrl+C or Cmd+C in Explorer, Open Editors, editor tabs, or a file editor without a text selection, then paste into Dext Input to insert references to the original files, including images. VS Code's own copy still happens wherever it has one: Explorer keeps its files pasteable and a file editor without a selection keeps its copy-line behavior. A visible editor hover keeps VS Code's content-copy shortcut. Disable this to stop staging file paths on copy."
         },
         "dext.captureSelectionOnCopy": {
           "type": "boolean",

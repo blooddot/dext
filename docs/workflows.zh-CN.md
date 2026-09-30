@@ -238,7 +238,7 @@ const result = await agent({ input: "实现所需的修改" });
 
 选中工作区代码并短暂停顿后，活动光标附近会出现 **Add to Dext** 悬浮入口。浮层覆盖在编辑器上，不插入额外行、不挤动代码，也不会抢走键盘焦点；点击即可把该段代码的位置引用加入 Input。浮层的样式和位置由 VS Code 控制，可能与符号提示共用同一个浮层。在设置中切换 `dext.selectionActions.enabled` 可立即显示或隐藏该入口。正文、文件列表和文件标签的右键入口统一为 **Add to Dext**，不受选区入口开关影响。
 
-在资源管理器、“打开的编辑器”列表、文件标签或没有文字选区的文件正文中按 Ctrl+C（macOS 为 Cmd+C），再到 Dext Input 按 Ctrl+V，即可插入原文件路径的引用。支持多文件和图片文件，不会生成附件。编辑器悬浮提示显示时，Ctrl+C 保留 VS Code 原本的内容复制行为。Ctrl+Shift+V 按原文粘贴路径。将 `dext.copyFilePathOnCopy` 设为 `false`，可恢复资源管理器原生的文件复制和编辑器的整行复制快捷键。
+在资源管理器、“打开的编辑器”列表、文件标签或没有文字选区的文件正文中按 Ctrl+C（macOS 为 Cmd+C），再到 Dext Input 按 Ctrl+V，即可插入原文件路径的引用。支持多文件和图片文件，不会生成附件。编辑器悬浮提示显示时，Ctrl+C 保留 VS Code 原本的内容复制行为。Ctrl+Shift+V 粘贴纯文本而不是引用。凡是 VS Code 自己有复制行为的地方都保持原样：资源管理器里复制后仍可把文件本身粘贴到资源管理器——同一窗口或另一个窗口都行，文件正文没有选区时仍复制整行；只有“打开的编辑器”和编辑区标签这类本身没有复制快捷键的位置才只写入路径文本。将 `dext.copyFilePathOnCopy` 设为 `false`，可停止复制时暂存文件路径。
 
 选中终端输出后按 Ctrl+Shift+C（macOS 为 Cmd+C）会复制并把这段输出附加到 Dext Input；Ctrl+C 仍交给 shell，因此仍能中断正在运行的命令。
 
