@@ -10,12 +10,14 @@ import { UiInteractionBroker } from "./uiInteractionBroker.js";
 import { readHistoryResponse } from "./historyResponse.js";
 import { publicInteractionState } from "./uiInteractionPresentation.js";
 import { randomBytes, createHash } from "node:crypto";
+import { statSync } from "node:fs";
 import { basename, relative, sep } from "node:path";
 import * as vscode from "vscode";
 import { AgentInputBroker } from "./agentInputBroker.js";
 import { InputNotifications, type InputNotificationTarget } from "./inputNotifications.js";
 import type { DextApplication } from "./application.js";
-import type { AgentInputRequest, AgentStreamEvent, ApplyResult, InputExecutionResponse, McpProcessEvent, PatchResult, UiInteraction, WorkflowContinuation } from "./core/types.js";
+import type { AgentInputRequest, AgentStreamEvent, ApplyResult, InputExecutionResponse, McpProcessEvent, PatchResult, UiInteraction } from "./core/types.js";
+import type { DextReplayEntry } from "./runner/dextResumeCache.js";
 import { applyPatchHandler } from "./vscodePatchHost.js";
 import {
   AttachmentStore,
@@ -2232,26 +2234,43 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  /**
+   * The cache key for the Webview's own assets: the bundle's modification time.
+   *
+   * A version number is not enough — reinstalling the same version is exactly the case
+   * where the renderer keeps serving the old `main.js` — so the timestamp of the file
+   * the editor runs from is what makes a rebuilt bundle a different URL.
+   */
+  private assetStamp(): string {
+    try {
+      return String(statSync(vscode.Uri.joinPath(this.extensionUri, "dist", "webview", "main.js").fsPath).mtimeMs);
+    } catch {
+      // Only reachable for a virtual or remote extension host, where `asWebviewUri`
+      // already gives each asset a unique URL.
+      return "0";
+    }
+  }
+
   private html(webview: vscode.Webview): string {
     const nonce = randomBytes(16).toString("base64");
-    const script = webview.asWebviewUri(
-      vscode.Uri.joinPath(this.extensionUri, "dist", "webview", "main.js")
-    );
-    const style = webview.asWebviewUri(
-      vscode.Uri.joinPath(this.extensionUri, "dist", "webview", "main.css")
-    );
-    const codicons = webview.asWebviewUri(
-      vscode.Uri.joinPath(this.extensionUri, "dist", "codicons", "codicon.css")
-    );
+    // Every asset URL carries the bundle's timestamp, so a rebuilt `dist/` is a *new*
+    // URL. Without it a Webview can be served the previous `main.js` from the renderer's
+    // cache — the extension changes, the editor does not, and nothing says why.
+    const stamp = this.assetStamp();
+    const asset = (...parts: string[]): vscode.Uri =>
+      webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, ...parts)).with({ query: `v=${stamp}` });
+    const script = asset("dist", "webview", "main.js");
+    const style = asset("dist", "webview", "main.css");
+    const codicons = asset("dist", "codicons", "codicon.css");
     return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} https: data:; style-src ${webview.cspSource} 'unsafe-inline'; font-src ${webview.cspSource}; script-src 'nonce-${nonce}'; worker-src blob:; connect-src ${webview.cspSource};">
-  <meta name="dext-editor-worker" content="${webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "dist", "webview", "editor.worker.js")).toString()}">
+  <meta name="dext-editor-worker" content="${asset("dist", "webview", "editor.worker.js").toString()}">
   <link rel="stylesheet" href="${codicons.toString()}">
-  <link rel="stylesheet" href="${webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "dist", "markdown", "github-markdown.css")).toString()}">
+  <link rel="stylesheet" href="${asset("dist", "markdown", "github-markdown.css").toString()}">
   <link rel="stylesheet" href="${style.toString()}">
   <title>Dext</title>
 </head>
