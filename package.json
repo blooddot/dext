@@ -1147,14 +1147,15 @@
           "default": 4,
           "minimum": 1,
           "maximum": 16,
-          "description": "Branches a list comprehension runs at once in Code mode. Each branch can start its own agent process, so raising this multiplies both throughput and machine load. Everything outside a comprehension stays sequential."
+          "description": "API dispatch concurrency for Code mode. A run may call Dext APIs concurrently (for example with Promise.all), so this caps how many of those calls are in flight at once to bound throughput and machine load. Calls beyond the limit wait in a queue."
         }
       }
     }
   },
   "scripts": {
-    "generate:node-builtins": "node scripts/generateNodeBuiltinCatalog.mjs",
-    "build": "npm run generate:node-builtins && node esbuild.mjs",
+    "build": "node esbuild.mjs",
+    "generate:dext-types": "node scripts/generateDextTypes.mjs",
+    "generate:api-reference": "node scripts/generateApiReference.mjs",
     "test:build-assets": "node scripts/assertWebviewAssets.mjs",
     "watch": "node esbuild.mjs --watch",
     "lint": "eslint src test",
@@ -1163,7 +1164,7 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "check:ui": "node scripts/checkComposerLayoutUi.mjs && node scripts/checkStreamJumpUi.mjs && node scripts/checkConversationScrollUi.mjs && node scripts/checkQuestionVisibilityUi.mjs && node scripts/checkEditorTabsUi.mjs && node scripts/checkProjectDiagramsUi.mjs",
-    "check": "npm run generate:node-builtins -- --check && npm run lint && npm run typecheck && npm run test && npm run build && npm run test:build-assets",
+    "check": "npm run lint && npm run typecheck && npm run test && npm run build && npm run generate:dext-types --check && node scripts/generateApiReference.mjs --check && node scripts/generateDextTypes.mjs --workspace . --check && npm run test:build-assets",
     "package": "node -e \"require('node:fs').mkdirSync('release', { recursive: true })\" && vsce package --out release/",
     "vscode:prepublish": "npm run check"
   },
