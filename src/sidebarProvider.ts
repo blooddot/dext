@@ -171,7 +171,8 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   }>();
   /** Live Code continuations. They intentionally stay in memory because they
    * carry the runtime environment produced by earlier steps. */
-  private readonly workflowContinuations = new Map<string, WorkflowContinuation>();
+  /** Recorded API calls of a failed Code turn, so Continue can replay them. */
+  private readonly codeContinuations = new Map<string, readonly DextReplayEntry[]>();
   // The Review preset is frozen per run so a later project change or a retry cannot rewrite the
   // preset that was in force when the turn was sent. Review state is created on first use, so a
   // provider built without running its constructor still has working stores.
@@ -883,12 +884,12 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   async continueTurn(sessionId: string, turnId: string): Promise<void> {
     this.hydrateSessions();
     if (this.activeExecutions.has(sessionId)) throw new Error("Stop this Dext turn before continuing a conversation turn.");
-    const continuation = this.workflowContinuations.get(`${sessionId}:${turnId}`);
+    const continuation = this.codeContinuations.get(`${sessionId}:${turnId}`);
     if (!continuation) throw new Error("This Code turn cannot be continued after the extension was reloaded. Retry it instead.");
     const session = this.sessions.get(sessionId) ?? this.history.list(true).find((item) => item.id === sessionId);
     const turn = session?.turns.find((item) => item.id === turnId);
     if (!session || !turn || turn.mode !== "code") throw new Error("Conversation Code turn not found.");
-    this.workflowContinuations.delete(`${sessionId}:${turnId}`);
+    this.codeContinuations.delete(`${sessionId}:${turnId}`);
     if (session.archivedAt) {
       await this.history.setArchived(sessionId, false);
       delete session.archivedAt;
@@ -1751,7 +1752,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async run(mode: "agent" | "ask" | "plan" | "code", source: string, planPath?: string, executePlan = false, workflowContinuation?: WorkflowContinuation): Promise<void> {
+  private async run(mode: "agent" | "ask" | "plan" | "code", source: string, planPath?: string, executePlan = false, codeContinuation?: readonly DextReplayEntry[]): Promise<void> {
     if (this.activeSession.resource) {
       mode = "ask";
       if (this.resourceOperations.has(this.activeSession.id)) throw new Error("Wait for the resource operation to finish.");
@@ -1784,7 +1785,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     const todoProgress = planRun?.progress;
     const planExecution: { executePlan: boolean; planPath?: string; planOutcome?: PlanExecutionOutcome } | undefined = executePlan
       ? { executePlan: true, ...(executionPlanPath ? { planPath: executionPlanPath } : {}) } : undefined;
-    let failedWorkflowContinuation: WorkflowContinuation | undefined;
+    let codeCallLog: readonly DextReplayEntry[] | undefined;
     if (this.activeExecutions.has(sessionId)) {
       throw new Error("Wait for this conversation's current Dext turn to finish before running another one.");
     }
@@ -1831,7 +1832,6 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           };
           this.appendAgentEvent(sessionId, events, processEvent);
         },
-        onWorkflowFailure: (value: WorkflowContinuation) => { failedWorkflowContinuation = value; },
         onAgentSessionId: (provider: string, providerSessionId: string) => {
           session.providerSessions = { ...(session.providerSessions ?? {}), [provider]: providerSessionId };
           void this.history.setProviderSession(sessionId, provider, providerSessionId);
@@ -1861,9 +1861,10 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
             response = generated.response;
           } else {
             response = mode === "code"
-              ? workflowContinuation
-                ? await workflowContinuation.resume(roundMetadata)
-                : await this.application.executeInput(roundSource, roundMetadata)
+              ? await this.application.executeInput(roundSource, roundMetadata, {
+                ...(codeContinuation ? { resume: codeContinuation } : {}),
+                onCallLog: (entries) => { codeCallLog = entries; }
+              })
               : await this.application.executeConversation(mode, roundSource, roundMetadata);
           }
         } finally { acceptingEvents = false; }
@@ -1946,6 +1947,12 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         await this.postPlanContext();
       }
       const turn = await this.history.addFailure(source, events, error, sessionId, mode, turnId, planExecution);
+      // A failed Code turn keeps the calls it managed to make, so Continue replays
+      // them instead of repeating work that already succeeded. A stop is not a
+      // failure to continue from: the user asked for it to end.
+      if (mode === "code" && !controller.signal.aborted && codeCallLog?.length) {
+        this.codeContinuations.set(`${sessionId}:${turnId}`, codeCallLog);
+      }
       await this.persistProviderSessions(session);
       session.turns.push(turn);
       session.updatedAt = turn.createdAt;
