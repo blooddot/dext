@@ -4,7 +4,7 @@
 
 [返回 README](../README.zh-CN.md)
 
-在 Code 模式中组合调用，再将重复流程保存为项目 API。本文包含语法、内置 API、代码引用、自定义 API、Skills 和对话历史的详细说明。
+在 Code 模式中组合调用，再将重复流程保存为项目 API。本文包含 Code 轮次运行的 TypeScript 模块、内置 API、代码引用、自定义 API、Skills 和对话历史的详细说明。
 
 [工作流语言](#工作流语言) · [内置 API](#内置-api) · [模板](#模板) · [文件与选区引用](#文件与选区引用) · [自定义 API 与 Skills](#自定义-api-与-skills) · [对话历史与工作流录制](#对话历史与工作流录制) · [导入、Skills 与规则](#导入skills-与规则) · [自定义结果类型](#自定义结果类型) · [执行与预览](#执行与预览)
 
@@ -12,117 +12,95 @@
 
 Input 使用 Monaco，Code 模式入口和底部工具栏保持原位。Code 中 Enter 换行，Ctrl/Cmd+Enter 执行；聊天模式沿用发送设置，Shift+Enter 换行。补全列表打开时 Enter 接受建议。
 
-补全、悬浮说明、参数提示和诊断使用编辑器原生控件。输入调用触发字符可显示参数提示，Esc 关闭提示，Ctrl/Cmd+Shift+Space 手动唤起。F12 或 Ctrl/Cmd+点击跳转到 API 定义；MCP 定义显示当前注册的工具声明。
+补全、悬浮说明、参数提示和诊断由 Monaco 的 TypeScript 服务提供，且**只在 Code 模式**生效:Agent、Chat、Plan 模式编辑的是纯文本,输入提示词不会出现任何 TypeScript 符号建议。在 Code 模式下,输入调用触发字符可显示参数提示,Esc 关闭提示,Ctrl/Cmd+Shift+Space 手动唤起。F12 或 Ctrl/Cmd+点击跳转到生成的 `dext` 声明。
 
-文件与图片标签可整体选择、删除及撤销，复制、保存草稿和执行时保留完整 `@路径`。标签过长会缩短显示，可悬浮查看完整路径；光标在标签旁时 Alt+Enter 打开引用，Ctrl/Cmd+Shift+V 粘贴原文。引用是整体对象，修改路径时删除后重新插入；原生查找针对普通编辑文本，不搜索标签内隐藏的完整路径。
+文件与图片标签可整体选择、删除及撤销，复制、保存草稿和执行时保留完整 `@path`。标签过长会缩短显示，可悬浮查看完整路径；光标在标签旁时 Alt+Enter 打开引用，Ctrl/Cmd+Shift+V 粘贴原文。引用是整体对象，修改路径时删除后重新插入；原生查找针对普通编辑文本，不搜索标签内隐藏的完整路径。
 
-在 Code 模式中，自然语言需要写在 API 的字符串参数中，直接输入普通文本会产生编译错误。
+在 Code 模式中，自然语言需要写在 API 的字符串参数中；无法通过 TypeScript 编译的普通文本会产生编译错误。
 
-```python
-analysis = ask(input="解释这段实现，并提出重构要求：")
+```ts
+import { agent, apply, ask } from "dext";
 
-preview = agent(
-    input="实现所需的重构",
-    apply=False,
-)
+const analysis = await ask({ input: "解释这段实现，并提出重构要求：" });
 
-# 只以文本汇报结论，不产出补丁。
-summary = agent(
-    input="总结重构方案",
-    apply=False,
-    patch=False,
-)
+const preview = await agent({
+  input: "实现所需的重构",
+  apply: false,
+});
 
-if preview.patch:
-    applied = apply(result=preview)
+// 只以文本汇报结论，不产出补丁。
+const summary = await agent({
+  input: "总结重构方案",
+  apply: false,
+  patch: false,
+});
+
+if (preview.patch) {
+  const applied = await apply({ result: preview });
+}
 ```
 
-输入工作流支持以下语法：
+一个 Code 轮次就是普通的 ES 模块。完整 TypeScript 语言都可用：变量、函数、类、`if`/`for`/`while`、`try`/`catch`、`async`/`await`、标准库，以及工作区能解析的任意 Node 内置模块或 npm 包。入口文件按 ESM 导入，因此顶层 `await` 可用。
 
-- 赋值、仅使用关键字参数的 API 调用、字符串（包括三引号字符串）、数字、布尔值、同类型元素列表、结果字段访问和注释。
-- `if` / `elif` / `else` 分支，以及 `==`、`!=`、`<`、`<=`、`>`、`>=`、`in`、`not in` 比较和 `and`、`or`、`not` 逻辑运算。
-- `for name in list:` 顺序循环；列表元素必须类型一致，循环变量仅在循环体中有效。
-- `while` 顺序重试循环；最多执行 100 次。循环中新建的变量不会泄漏到外部，已有变量可直接重新赋值。变量在任意位置都能重复赋值（无需包一层循环），但类型必须与首次绑定一致。
-- `[call(...) for name in list]` 列表推导式；这是支持并发执行的结构，各分支互不可见，并发上限由 `dext.workflow.maxConcurrency` 控制，结果保持输入顺序。仅支持一个 `for` 子句，不支持 `if` 过滤。
-- `try` / `except` 和可选的 `finally`；某一步失败后可以进入处理分支并继续工作流。`except Exception as name:` 将错误消息绑定为仅在处理分支内可见的字符串。不支持按具体异常类型区分处理，用户停止执行也不会被捕获。
+Dext 把文件放在每个工作区一个长期存活的 Node 子进程中运行；在 VS Code 内该进程由 Electron 二进制以 `ELECTRON_RUN_AS_NODE=1` 启动。每次运行都会用新的 generation 重新注册模块加载器，因此工作区模块都会重新求值，模块级状态不会在运行之间泄漏。取消轮次会终止内核，下次运行会启动新的内核；用户代码崩溃不会影响扩展宿主。一次运行可以并发调用 Dext API（例如使用 `Promise.all`），`dext.workflow.maxConcurrency`（默认 4，最大 16）限制同时在途的调用数，超出的调用排队等待。
+
+不再有独立的工作流语言，也没有需要学习的解释器。旧 Python 风格 `.dx` 语言的文件不会被读取：可用 `node scripts/migrateDxToTs.mjs <file.dx>` 迁移，它会改写能确定的部分，并报告需要人工完成的部分。
+
+一次运行只要还在等待 Dext API 就不算结束。没有写 `await` 的调用（`commit()` 而不是 `await commit()`）同样会让轮次保持开启，直到它返回；它失败则整次运行失败——这样调用启动的 agent 不会在面板已经停止更新之后还在后台继续跑。这类未 await 的调用数量会写在运行的 Output 里，因为它们的返回值不会进入你自己的代码；需要读取结果就写 `await`。
 
 ### 文本与取值表达式
 
-纯表达式由 Dext 自行求值，不经过 API 调用，也不需要 Python 解释器。编译期就能确定的值会在编译时折叠，因此 `"a" + "b"` 与 `"ab"` 完全等价，UI 表单校验等静态检查同样适用。
+表达式就是普通 TypeScript。Dext 不参与求值：整个模块由内核执行，因此任何 JavaScript 表达式的行为都和在 Node 中完全一致。
 
 | 形式 | 示例 | 说明 |
 | --- | --- | --- |
-| 字符串拼接 | `"Review: " + answer.text` | 两侧都必须是字符串 |
-| 重复 | `"-" * 3` | 结果为 `---` |
-| 数值运算 | `2 + 3 * 4`、`7 // 2`、`2 ** 8` | 仅限数字 |
-| f-string | `f"{answer.text} ({checked.exit_code})"` | 支持替换字段、转换和格式说明符 |
-| `%` 格式化 | `"%s: %d" % [name, count]` | 参数用列表或元组表示 |
-| 元组 | `("a", 1)`、`(value,)`、`1, 2` | 元组字面量，本质是列表 |
-| `str.format` | `"{} and {}".format("a", "b")` | 也支持 `{0}`、`{name}`、`{0[name]}` |
-| 索引与切片 | `text[0]`、`text[1:4]`、`text[::-1]` | 负数下标从末尾计算；列表同理 |
-| 成员判断 | `"done" in answer.text` | 支持字符串、列表和字典 |
-| 比较 | `a == b`、`a != b`、`a < b`、`a <= b`、`a > b`、`a >= b` | 大小比较要求两侧同为字符串或同为数字 |
-| 逻辑运算 | `a and b`、`a or b`、`not a` | 操作数必须是布尔值，可用 `bool(value)` 转换 |
+| 模板字符串 | `` `${answer.text} (${checked.exit_code})` `` | 可插入任意表达式 |
+| 字符串拼接与数值运算 | `"Review: " + text`、`2 + 3 * 4`、`7 / 2`、`2 ** 8` | `7 / 2` 为 `3.5`；整除请用 `Math.floor(7 / 2)` |
+| 数组与对象 | `["a", "b"]`、`{ id, label }` | 字面量、展开和解构都正常可用 |
+| 索引与切片 | `text[0]`、`text.slice(1, 4)`、`[...text].reverse()` | `slice` 的结束下标不包含在内；字符串不可变 |
+| 成员判断与查找 | `text.includes("done")`、`list.indexOf(value)`、`"key" in record` | 按值自身支持的方法使用 |
+| 相等比较 | `a === b`、`a !== b` | 严格相等；`==` 会做类型转换 |
+| 大小与逻辑运算 | `a < b`、`a && b`、`a \|\| b`、`!a`、`a ?? b` | 操作数遵循 JavaScript 常规规则 |
+| 可选链 | `result.patch?.title ?? ""` | 值存在时才读取字段 |
 
-f-string 的替换字段可带转换和格式说明符：`f"{value!r}"`、`f"{count:,}"`、`f"{ratio:.1%}"`、`f"{width:>8}"`、`f"{value=}"`，以及 `f"{value:{width}}"` 这类嵌套说明符。双写花括号（`{{`）输出一个字面花括号。
+`Math`、`JSON`、`Number`、`String`、`Array`、`Object`、`Date` 都是标准内置对象，Dext 不再维护自己的字符串方法或纯函数清单。旧语言的部分写法没有直接对应：f-string 和 `%` 格式化改用模板字符串，`//` 改用 `Math.floor`，元组改用数组，`int(value)` / `float(value)` 改用 `Number(value)`。
 
-任意字符串值都可以调用这些字符串方法：`upper`、`lower`、`casefold`、`capitalize`、`title`、`swapcase`、`strip`、`lstrip`、`rstrip`、`removeprefix`、`removesuffix`、`replace`、`split`、`rsplit`、`splitlines`、`join`、`startswith`、`endswith`、`find`、`rfind`、`index`、`rindex`、`count`、`partition`、`rpartition`、`center`、`ljust`、`rjust`、`zfill`、`expandtabs`、`format`，以及 `is*` 判断（`isalnum`、`isalpha`、`isdigit`、`isnumeric`、`isspace`、`isupper`、`islower`、`istitle`、`isidentifier`、`isascii`）。
+普通赋值不是工作流步骤。Output 中每次 Dext API 调用对应一个步骤；`console.log`、`console.error` 会额外产生进程输出步骤，只携带文本，没有调用信息，也没有耗时。
 
-以下纯函数同样由 Dext 直接计算：`len`、`str`、`repr`、`int`、`float`、`bool`、`abs`、`round`、`min`、`max`、`sorted`、`sum`、`range`、`list`、`reversed`、`any`、`all`。`range(3)` 就是数字列表，因此 `for index in range(3):` 可用；`sorted(names)` 会保留原有元素类型。`range` 最多生成 100000 个值。
-
-这些操作遵循 Python 语义，只有四处有意不同：
-
-- 字符串的 `+` 另一侧也必须是字符串。要拼接数字请使用 `f"{value}"` 或 `str(value)`。
-- 元组按 Python 写法书写，但本质是列表：`("a", 1)`、`(value,)`、`()` 以及不带括号的 `1, 2` 都会生成列表，因此 `(1, 2) == [1, 2]` 为真，长度也不固定。解包仍然不支持：Dext 一次只绑定一个变量、列表也没有固定长度，所以 `a, b = pair` 和 `for key, value in items:` 都会被拒绝。请改用 `pair[0]`、`pair[1]` 读取，或在元素是带字段名对象时用 `for item in items:` 遍历。字典键必须是字符串，因此元组不能作为键。
-- `%` 的参数用列表表示：`"%s %d" % ["total", 3]` 或 `"%s %d" % ("total", 3)`。若要格式化列表本身，按 Python 单元素元组的写法包一层：`"%s" % (items,)`。
-- 条件必须是布尔值。`if answer.text:` 会被拒绝，请改写为 `if bool(answer.text):` 或直接比较。
-- 不支持字节字面量（`b"..."`）；Dext 的文本始终是 UTF-8 字符串。
-- 不支持增强赋值。`text += line` 会被拒绝：Dext 里请写成 `text = text + line`（变量可重复赋值，但类型必须保持不变），需要拼接多段文本时也可以收集到列表后用 `"\n".join(lines)` 组合。
-
-不是编译期常量的取值会和 `text = answer.text` 一样，在 Output 中显示为一个独立的 `=` 步骤。被重复赋值的变量也是如此，即使它的值本身是常量：运行时必须持有当前值，后续读取才能看到最后执行的那次赋值。
-
-`.dx` API 文件还支持带类型声明的 `main()` 入口、同文件内带类型声明的辅助函数、显式导入和有上限的 `while` 重试循环。辅助函数仅在当前文件可见；不支持嵌套定义或递归调用。输入工作流不支持自定义函数或类、会改变变量类型的重复赋值、`eval`、`exec` 或任意系统、文件、网络 API；相关操作需通过 Dext 提供的 API 完成。除列表推导式外，执行按顺序进行；未选中的步骤及因上游失败未执行的后续步骤会标记为 `skipped`。
-
-`ask` 和 `agent` 接受普通字符串。文件选区和附件会以可读的 `@workspace/path#Lstart,end-Lend,end` 标记插入；编辑器、Output 和 History 将其显示为引用块，复制和执行时保留可读标记。Dext 不把文件内容直接展开进提示词。
+旧解释器的资源上限（`while` 迭代次数、`range` 大小、折叠元素数量、导入深度）随解释器一起移除，改用 Node 和 TypeScript 自身的限制。
 
 ## 内置 API
 
 - 点击侧栏的 **Create resource**，打开复用 Conversation 和 Input 布局的专用 Tab。底部选择 **API / MCP / Rule / Skill** 和 **Project / Global**（菜单显示保存目录）。可以选择 **New resource** 新建，或选择已有资源描述修改；预览草稿或差异后保存。保存后保留 Tab，方便继续修改；更改已有资源的保存位置表示另存一份。资源目标、草稿和对话会随历史记录恢复。
-- `ask(input, skills?, rules?, workspace?) -> AskResult`：只读解释和分析。
-- `plan(input, skills?, rules?, workspace?) -> PlanResult`：创建、维护和执行实施计划。
-- `agent(input, apply=true, patch=true, skills?, rules?, workspace?) -> AgentResult`：执行持续性任务；`patch=false` 时只以 text 汇报结论，不产出补丁。
-- `template(input, source, values={}, skills?, rules?, workspace?) -> TemplateResult`：按模板文件渲染文本（见[模板](#模板)）。
-- `apply(result) -> ApplyResult`：应用 `AgentResult` 中存在的补丁。
-- `terminal(command, cwd=".", env={}, timeout_ms=120000) -> TerminalResult`：在平台 Shell 中运行任意终端命令；`env` 可传入仅对此命令有效的字符串环境变量。
-- `skill(skill, input, workspace?) -> SkillResult`：使用指定 Skill 执行任务。
-- `mcp.<server>.<tool>(...)`：由 MCP 清单生成的类型化工具 API。
-- `print(text, label?) -> PrintResult`：在 Dext 中展示结果。
+- `ask({ input, workspace?, cli?, model? }) -> AskResult`：只读解释和分析。
+- `plan({ input, workspace?, cli?, model? }) -> PlanResult`：创建、维护和执行实施计划。
+- `agent({ input, apply=true, patch=true, workspace?, cli?, model? }) -> AgentResult`：执行持续性任务；`patch=false` 时只以 text 汇报结论，不产出补丁。
+- `template({ input, source, values={}, workspace?, cli?, model? }) -> TemplateResult`：按模板文件渲染文本（见[模板](#模板)）。
+- `apply({ result }) -> ApplyResult`：应用 `AgentResult` 中存在的补丁。
+- `terminal({ command, cwd=".", env={}, timeout_ms=120000 }) -> TerminalResult`：在平台 Shell 中运行任意终端命令；`env` 可传入仅对此命令有效的字符串环境变量。
+- `skill({ skill, input, workspace?, cli?, model? }) -> SkillResult`：使用指定 Skill 执行任务。
+- `mcp.<server>.<tool>({...})`：调用已配置的 MCP 工具。
+- `ui.select | ui.radio | ui.checkbox | ui.input | ui.confirm | ui.alert | ui.form`：见 [UI 交互与表单](#ui-交互与表单)。
 
-顶级内置 API 仅限上述列表。交互能力位于 `ui.*`；确认框或表单可传
-`on_cancel="abort"`，在用户取消时终止当前自定义 API，无需额外的
-`workflow.*` 控制 API。Node 标准库能力仅通过白名单 `node.*` 提供：
-`node.url`、`node.path`、`node.querystring`、可安全映射的 `node.util`、
-`node.fs` 与 `node.http.request`。函数名保持 Node
-原生 camelCase。文件和 HTTP 调用需要受信任工作区；命令仍使用 `terminal`。
+它们都是 `dext` 模块的导出：
 
-`node.fs.readFile(path, encoding="utf8")` 支持绝对路径，按 Node 原生逻辑读取，
-也可以读取工作区外的文件。相对路径以工作区根目录为基准，路径及符号链接目标
-必须位于工作区内。其他 `node.fs` 调用仍要求使用不越出工作区的相对路径。
+```ts
+import { ask, agent, ui } from "dext";
+```
 
-`node.fs` 分两半桥接 Node 的文件 API。读取与查看：`readFile`、
-`readdir(path, encoding="utf8") -> list[str]`、`stat(path) -> { size,
-mtime_ms, is_file, is_directory }`、`access(path)`（可达时返回 true，否则抛出
-Node 自身的错误）与 `realpath`。写入与维护：`writeFile`、`appendFile`、
-`copyFile(sourcePath, destinationPath)`、`mkdir`、`rename(oldPath, newPath)`
-与 `rm(path, recursive=false, force=false)`——不带 `recursive` 时拒绝删除目录，
-不带 `force` 时拒绝静默跳过不存在的路径。`readdir` 返回目录自身的顺序，需要
-固定顺序时自行排序。`node.path.relative(from, to)` 同时接收两个路径，
-`node.path.format(pathObject)` 接收 `node.path.parse` 的结果。
+每次调用只接收一个命名参数对象，返回可 JSON 序列化的 Promise 值。`cli`、`model`、`reasoning`、`speed` 仍可逐次覆盖：
 
-`node:crypto`、`node:zlib`、`node:timers/promises` 与包含环境信息的
-`node:os` 仅作为后续候选模块记录，当前不能调用。原始进程、socket、流、
-worker、VM、模块加载和 HTTP 服务监听能力不向 `.dx` 开放。
-- UI 交互：`ui.select`、`ui.radio`、`ui.checkbox`、`ui.input`、`ui.confirm`、`ui.alert`、`ui.form`。
+```ts
+const answer = await ask({ input: "解释这段代码", cli: "claude", model: "sonnet" });
+```
+
+Node 内置模块和工作区依赖可以直接使用，因为代码运行在真正的 Node 进程中：`import fs from "node:fs/promises"`、`import path from "node:path"` 与在任何其他 Node 程序里完全一致。没有能力闸门，也没有 `node.*` 或 `js.*` 命名空间：内核中由模型编写的代码拥有用户的完整权限。`terminal` 和 `apply` 不再有确认弹窗；现有的工作区信任检查仍然存在，但已不再是安全边界。
+
+**Dext: View APIs** 在可调用 API 之外，还列出只读的 **node** 与 **js** 参考：每个 Node 内置模块一条（`node:fs/promises`、`node:path`、`node:url`…），Node 或 ECMAScript 提供的每个全局量一条（`process`、`Buffer`、`fetch`、`setTimeout`、`JSON`、`Array`、`Intl`…）。这份参考直接由声明文件生成——`@types/node` 与 TypeScript 自带的 `lib.es*.d.ts`——因此每个签名都是编辑器与内核真正解析到的那个签名，每段说明都是声明里原本的 JSDoc，没有任何说明是手写的。打开条目会列出它的全部成员及其签名、参数、返回值和文档，模块名一行的 **Copy** 按钮会复制精确的模块标识符。这些条目说明的是代码可以 `import` 或作为全局量读取的内容；它们不是 Dext API，因此没有 Insert reference 操作，也不能以 `node.*` 或 `js.*` 的形式调用。
+
+`print` 已移除。`console.log(...)`、`console.error(...)` 会被捕获为进程输出步骤并转发到真实输出流，但它们不是 Dext 结果：没有调用信息，也没有耗时。需要类型化结果时请返回值或调用 API。
+
+跨 Dext API 边界的值必须可 JSON 序列化，因为内核与扩展宿主之间通过 JSON 通信。函数、Symbol、`Map`、`Set`、`Buffer`、类型化数组、类实例（除非实现了 `toJSON()`）和循环引用都无法传递，`Date` 会转换为 ISO 字符串。报错会指出具体路径和替代写法：`{ createdAt: new Date() }` 会变成 ISO 字符串，而 `{ cache: new Map() }` 会在 `cache` 处报错。用户代码内部可以使用任意值——只有交给 Dext API 的值、以及 API 模块返回的值会被检查。
 
 ### 模板
 
@@ -172,7 +150,7 @@ dext-template:
 - `optional: true` 允许字段为空：占位符所在行消失；若该章节因此没有内容（markdown 模板），标题也一并消失——上面 `sources` 就是这样在纯项目决策里整节不出现。
 - 声明的字段必须都在正文出现，正文的占位符也必须都已声明，不一致会在读取模板时直接报错。
 - `values` 固定由 Dext 掌握字段：这些字段不会出现在模型契约里，且始终覆盖模型返回值，因此编号、模块名这类事实不会交给模型决定。取值同样按模板校验。
-- 调用只返回 `text`，不写任何文件。要不要落盘、落到哪里，由调用方决定：`node.fs.writeFile(path=..., content=created.text)`。如果文件名要跟着某个字段走，那个字段就是调用方自己的值——用 `values` 传进去，并在路径里复用同一个变量，这样文件名和正文不可能不一致。
+- 调用只返回 `text`，不写任何文件。要不要落盘、落到哪里，由调用方决定：`fs.writeFile(path, created.text)`。如果文件名要跟着某个字段走，那个字段就是调用方自己的值——用 `values` 传进去，并在路径里复用同一个变量，这样文件名和正文不可能不一致。
 
 同一套模板契约也能渲染任意文本格式，所以 JSON 产物同样是模板：
 
@@ -201,114 +179,131 @@ dext-template:
 
 调用只返回渲染出的文本，所以怎么用它由工作流决定——下面 `number`、`slug` 来自工作流自己的作用域，经 `values` 进入模板，并让文件名和正文里的编号保持一致：
 
-```python
-created = template(
-    input="记录我们刚确定的 medoid 选择决策。",
-    source=".agents/skills/adr/references/adr-template.md",
-    values={"module": "optimize", "number": number, "slug": slug},
-    skills=["adr"],
-)
-node.fs.writeFile(path=f"docs/decisions/{number}-{slug}.md", content=created.text)
+```ts
+import { template } from "dext";
+import fs from "node:fs/promises";
+
+const number = "0081";
+const slug = "medoid-selection";
+
+const created = await template({
+  input: "记录我们刚确定的 medoid 选择决策。",
+  source: ".agents/skills/adr/references/adr-template.md",
+  values: { module: "optimize", number, slug },
+});
+await fs.writeFile(`docs/decisions/${number}-${slug}.md`, created.text);
 ```
 
 该调用是只读的：它不会改动工作区，因此输出不符合模板（包括渲染结果不是合法的 json/toml/yaml）时总能走一次自动修复；它也从不决定落盘位置，所以同一个模板可以渲染到任意路径——需要跟着字段走的文件名，由调用方用它自己传入的值拼出来。Codex 和 Claude 会直接拿到模板字段作为原生结构化输出 schema；DeepSeek Harness 的 ACP 协议没有 schema 字段，其输出改由 Dext 按同一契约校验。模板内容会进入 Agent 指令，因此必须位于受信任工作区内。
 
 上面的 `?` 表示可选参数，是文档记法。
 
-项目 API 以 `.dx` 文件存放在 `.dext/api/` 中，目录会成为命名空间。例如 `.dext/api/workflow/feature.dx` 注册为 `workflow.feature`。全局 API 存放在 Dext 全局存储中，可供所有工作区使用；同名项目 API 优先。
+项目 API 以 TypeScript 模块存放在 `.dext/api/` 中。模块按其在 `.dext/api` 下的路径导入，例如 `.dext/api/workflow/feature.ts` 对应 `import { main } from "dext/api/workflow/feature"`。全局 API 存放在 Dext 全局存储中，可供所有工作区使用；同名项目 API 优先。`dext.apiDirs` 可以增加更多 API 目录，`.dext/api` 始终最先查找。
 
-项目 API 可以直接组合类型化 MCP、`agent` 和 UI 调用。例如，功能开发工作流可以先读取上下文、制定计划，经 `ui.confirm` 确认后实现，再确认并验证。通过声明可选的 `mcp_tool`、`mcp_input` 参数，也可以在首个 Agent 阶段前调用已注册的文本 MCP 工具。规则存放在 `.dext/rules/`，由各 Agent 阶段显式指定使用顺序。
+项目 API 可以直接组合类型化 MCP、`agent` 和 UI 调用，不需要导入中间阶段 API。例如，功能开发工作流可以先读取上下文、制定计划，经 `ui.confirm` 确认后实现，再确认并验证。规则存放在 `.dext/rules/`，由各 Agent 阶段显式指定使用顺序；代码生成、提交这类需要确认的操作仍然是显式的 UI 闸门。
 
 UI API 返回结果后会继续执行工作流，不需要注册单独的回调。后续步骤需要结果时，先赋值：
 
-```python
-confirmation = ui.confirm(message="应用这次修改吗？")
-if confirmation.confirmed == True:
-    print(text="继续执行")
+```ts
+import { ui } from "dext";
+
+const confirmation = await ui.confirm({ message: "应用这次修改吗？" });
+if (confirmation.confirmed) {
+  console.log("继续执行");
+}
 ```
 
 交互完成后，所选值、确认状态或输入文本也会出现在 Output 和 History 中。
 
-所有 API 输出都实现统一的 `Result` 契约。Agent CLI 接收的前序结果是带版本号的 `dext-result` JSON 数据，而不是直接插入字符串。`agent_result: AgentResult`、`agent_result.patch: PatchResult` 等结果变量和字段支持补全及悬停说明。
+所有 API 输出都实现统一的 `Result` 契约。结果类型恰好九种——`ask`、`plan`、`agent`、`template`、`apply`、`terminal`、`skill`、`ui` 和 `mcpRaw`——外加结构化 MCP 工具生成的 `mcp.<server>.<tool>`。`ask`、`skill`、`template` 是同一种 `{ kind, text }` 形状的三个名字；`PatchResult` 不是结果类型，而是 `AgentResult.patch` 的形状。结果变量和字段（如 `AgentResult.patch`）由生成的声明提供类型，因此补全和悬停说明在输入区与 `.dext/api/*.ts` 中都能工作。Agent CLI 接收的前序结果是带版本号的 `dext-result` JSON 数据，而不是直接插入字符串。
 
-`ask` 始终只读。`agent` 和 `plan` 使用输入区域选择的写入范围；在受信任的本地工作区中，`Workspace write` 将编辑限制在所选工作区。Code 模式没有权限选择器，因此其中的 `agent(apply=true)` 调用默认使用 `Full access`。Dext 可以在自身管理的全局存储中保存计划文档。两者的 `workspace` 都默认为当前项目根目录。
+`ask` 始终只读。`agent` 和 `plan` 使用输入区域选择的写入范围；在受信任的本地工作区中，`Workspace write` 将编辑限制在所选工作区。Code 模式没有权限选择器，因此其中的 `agent({ apply: true })` 调用默认使用 `Full access`。Dext 可以在自身管理的全局存储中保存计划文档。两者的 `workspace` 都默认为当前项目根目录。
 
-```python
-answer = ask(input="解释这段代码：")
-result = agent(input="实现所需的修改")
+```ts
+const answer = await ask({ input: "解释这段代码：" });
+const result = await agent({ input: "实现所需的修改" });
 ```
 
-`terminal` 仅适用于受信任的本地 `file` 工作区。`cwd` 必须位于工作区内，每条命令都需要 VS Code 弹窗确认，超时上限为 10 分钟，捕获的输出大小也有限制。返回状态为 `"succeeded"`、`"failed"` 或 `"timed_out"`；非零退出码会返回类型化的失败结果，拒绝确认则取消该工作流步骤并跳过后续步骤。
+`terminal` 仅适用于受信任的本地 `file` 工作区。`cwd` 必须位于工作区内，超时上限为 10 分钟，捕获的输出大小也有限制。它不会弹出确认，因此由工作流决定哪些命令可以安全运行。返回状态为 `"succeeded"`、`"failed"` 或 `"timed_out"`；非零退出码会返回类型化的失败结果。
 
-`print` 只在 Dext Output 中展示内容，不会写入集成终端。字符串和基本类型显示为文本，列表、字典及 API 结果显示为 JSON。
+`console.log` 和 `console.error` 会在 Dext Output 中展示内容，并转发到进程输出流，但不会写入集成终端。字符串和基本类型显示为文本，对象及 API 结果显示为 JSON。
 
 ## 文件与选区引用
 
-可用的上下文引用包括：
+上下文通过 API 字符串参数中的可读 `@path` 标记附加：
 
-- `ref.selection`：当前编辑器选区。
-- `ref.active_file`：当前活动编辑器的完整文件。
-- `ref.file("path")`：工作区文件，也可以指定行列范围。
-- `ref.dir("path")`：工作区内的目录引用，不读取或展开目录内容。
-- `ref.symbol("name")`：通过 VS Code 工作区符号提供器查找声明及源码范围。
-
-复制 VS Code 选区或选择文件、文件夹时，会在普通字符串中插入可读的 `@path` 引用。引用块可以整体删除，并支持撤销和重做。加载旧数据时，原有的标记、f-string 和嵌套引号引用形式会迁移为此形式。
+- 复制 VS Code 选区，或选择文件、文件夹时，会插入 `@workspace/path` 标记；选区还会带上 `#Lstart,startChar-Lend,endChar` 范围。
+- 目录标记以斜杠结尾，只引用目录，不读取或展开目录内容。
+- 标记会渲染为整体引用块，可整体删除，并支持撤销和重做。加载旧数据时，原有的标记、f-string 和嵌套引号引用形式会迁移为此形式。
 
 选中工作区代码并短暂停顿后，活动光标附近会出现 **Add to Dext** 悬浮入口。浮层覆盖在编辑器上，不插入额外行、不挤动代码，也不会抢走键盘焦点；点击即可把该段代码的位置引用加入 Input。浮层的样式和位置由 VS Code 控制，可能与符号提示共用同一个浮层。在设置中切换 `dext.selectionActions.enabled` 可立即显示或隐藏该入口。正文、文件列表和文件标签的右键入口统一为 **Add to Dext**，不受选区入口开关影响。
 
 在资源管理器、“打开的编辑器”列表、文件标签或没有文字选区的文件正文中按 Ctrl+C（macOS 为 Cmd+C），再到 Dext Input 按 Ctrl+V，即可插入原文件路径的引用。支持多文件和图片文件，不会生成附件。编辑器悬浮提示显示时，Ctrl+C 保留 VS Code 原本的内容复制行为。Ctrl+Shift+V 按原文粘贴路径。将 `dext.copyFilePathOnCopy` 设为 `false`，可恢复资源管理器原生的文件复制和编辑器的整行复制快捷键。
 
-编辑器使用 CodeMirror 的 Python 语法能力提供高亮、缩进和括号匹配，Dext 在此基础上提供 API、关键字参数及结果字段补全、参数提示、悬停文档和编译诊断。
+标记在提交的输入中保持可读文本，Dext 不会把文件内容展开进提示词，由 Agent 自行读取引用的文件。`ask`、`agent`、`plan`、`template` 的 `input` 都接受这些标记。
+
+输入区使用 Monaco 的 TypeScript 编辑器，高亮、缩进、括号匹配和原生编辑行为都来自 TypeScript 语法。Code 模式就是普通 TypeScript，不多做别的事：Dext 会把生成的 `dext` 声明和工作区自己的 `.dext/api` 模块作为 extra lib 注入，并沿用生成工程给 VS Code 的那套 `dext/api/*` 映射；此后补全、自动导入、参数提示、悬浮文档、转到定义和诊断都由编辑器自身的 TypeScript 服务提供。因此 `import { main } from "dext/api/git/commit"` 在输入区能解析、能类型检查，模块说明符和具名导出也像其他模块一样补全。还没导入的导出会连同绑定它的 import 一起补全——输入 `ask` 会给出 `ask` 和 `import { ask } from "dext";`，输入 `commi` 会给出工作区 API 自己的 `commit` 和 `import { commit } from "dext/api/git/commit";`；在 `import { … } from "…"` 里面则只给该模块的导出、不带额外编辑。这些名字都是从声明和 API 源码里读出来的，绝不按名字形状猜：`git` 是目录而不是导出，所以输入它没有任何提示，旧 `.dx` 那种限定调用也不会被翻译。运行里仍然用了这些名字却没有导入时，报错会直接给出该写的导入：`git is not defined` 后面跟着 `use: import { main as commit } from "dext/api/git/commit";`。
 
 ## 自定义 API 与 Skills
 
-自定义 API 位于 `.dext/api/**/*.dx`，目录片段构成命名空间，每个文件通过 `main()` 导出一个 API。Code 输入区可以直接调用 `playground.verify()`，也可以导入后调用 `verify()`；`.dx` 文件中的自定义 API 调用需要显式导入。两种调用形式都支持补全、参数提示和悬停说明。
+自定义 API 位于 `.dext/api/**/*.ts`。目录片段构成命名空间，每个文件都是普通的 ES 模块：
 
-例如：
+```ts
+// .dext/api/team/analyze.ts -> "dext/api/team/analyze"
+import { ask, type AskResult } from "dext";
 
-```python
-# .dext/api/team/analyze.dx -> team.analyze
-def main(input: str) -> AskResult:
-    return ask(input=input)
+export async function main(input: string): Promise<AskResult> {
+  return await ask({ input });
+}
 ```
 
-`from playground import verify` 导入的是 `.dext/api/playground/verify.dx` 的 `main()` 入口，随后通过 `verify()` 调用。也支持 `from playground import verify as check` 这样的别名。被导入的 API 必须存在并成功加载。
+按 `.dext/api` 下的路径导入：
 
-较长的 API 可以拆成同文件内带类型声明的辅助函数：
+```ts
+import { main as analyze } from "dext/api/team/analyze";
 
-```python
-# .dext/api/playground/develop.dx
-from playground import verify
-
-def report(checked: TerminalResult) -> PrintResult:
-    if checked.status != "succeeded":
-        return print(text=checked.stderr, label="检查失败")
-    return print(text=checked.stdout, label="检查通过")
-
-def main() -> PrintResult:
-    checked = verify()
-    return report(checked=checked)
+const answer = await analyze("解释任务筛选逻辑和相关测试");
+console.log(answer.text);
 ```
 
-辅助函数可以放在 `main()` 前后，也可以调用其他辅助函数或已导入的 API。每次调用都有独立的参数和局部变量。参数必须声明类型，通过命名参数传入；有字面量默认值的参数可以省略。每个函数都要声明并返回 Dext 结果，例如 `AskResult`、`PlanResult`、`SkillResult`、`AgentResult`、`TerminalResult` 或 `PrintResult`；目前不支持直接返回字符串、布尔值或列表，可通过 `return print(text=value)` 返回摘要或集合。
+导出 `main` 只是当模块本身作为运行入口时 Dext 会查找的约定；由导入方决定如何调用。除此之外导出没有特殊含义——模块导出的任何内容导入方都可以使用。
 
-`if`、`try`、`except` 中均可提前 `return`；除取消执行外，返回前会先执行 `finally`。实际执行到函数末尾却没有返回时，会报告运行错误。只有 `main()` 对外导出，辅助函数不能被其他文件导入；递归调用、与 API 或导入名称冲突的辅助函数会被拒绝。`.dx` 编辑器提供辅助函数调用、参数及结果字段补全，以及签名和悬浮提示。
+较长的 API 可以用普通函数拆分：
 
-### API 诊断
+```ts
+// .dext/api/playground/develop.ts
+import type { TerminalResult } from "dext";
+import { main as verify } from "dext/api/playground/verify";
 
-Dext 用运行 `.dx` 的同一套加载逻辑做检查，因此错误在写下的位置就会暴露，而不是等到调用该 API 时才发现。
+function report(checked: TerminalResult): void {
+  if (checked.status !== "succeeded") console.error(checked.stderr);
+  else console.log(checked.stdout);
+}
 
-- 编辑时 **Problems** 面板列出每个 `.dx` 错误，条目包含文件、行、列、稳定错误码（`dext/compile`、`dext/must-return`、`dext/unknown-api`、`dext/reassign`、`dext/missing-rule`、`dext/signature`、`dext/syntax`、`dext/cycle`、`dext/duplicate-api`、`dext/mcp` 等）以及所属 API id。同一文件里相互独立的错误会全部报出，一个文件失败不再掩盖其他文件。
-- **Dext: Check All APIs** 一次检查整个项目，把明细和 `N error / M warning` 汇总写入 **Dext API Check** 输出通道，同时填充同一个 Problems 集合，每条诊断都可跳转到对应文件。
-- **Dext: Reload APIs** 重新加载 API，并报告同一批诊断。
+export async function main(): Promise<void> {
+  report(await verify());
+}
+```
 
-检查范围包括 `.dext/api/**/*.dx`、**Project > Overview > Project configuration** 中的项目 API 目录（项目尚未保存时回退到旧的 `dext.apiDirs`）、项目 MCP 目录、已加载 MCP 工具的参数与返回类型，以及解析到 `.dext/rules` 之下的字面量 `rules=[...]` 路径。
+辅助函数就是普通函数：一个模块可以导出任意多个值，其他模块可以导入其中任意一个；递归、类、泛型和 npm 包都能使用。没有强制的返回类型——`main` 可以返回 Dext 结果、普通值，也可以不返回。`.dext/api/*.ts` 中的补全、参数提示和悬浮说明由 VS Code 的 TypeScript 服务依据生成的声明提供。
 
-自定义 API 调用失败时，报错会说明原因，而不只是"API 不可用"：包含文件、函数、原因和行号；如果是因为清单里声明的 MCP 工具没有注册，还会指出是哪个 server。循环依赖只会标在实际构成循环的 API 上，而不是所有已加载的 API。
+### 生成的类型
+
+Dext 为工作区生成一套编辑器用的 `dext` 工程，这个工程由项目提交。每次 API 重新加载都会写入，而且文件里所有路径都是相对路径——同一套文件换到别的机器和 CI 上都能用：
+
+- `.dext/api/dext.d.ts`——`dext` 模块：全部内置 API、`ui` 分组、`mcp` 分组、所有结果接口、JSON 边界规则，以及本项目自己的 `.dext/mcp/*.jsonc` 清单所声明的 MCP 工具。**打开内置 API 定义** 与 F12 打开的就是这个文件。
+- `.dext/tsconfig.json`——严格的 `nodenext` 工程，把 `dext` 映射到 `./api/dext.d.ts`、把 `dext/api/<id>` 映射到 API 模块本身（`dext/api/team/analyze` 对应 `api/team/analyze.ts`，与内核 loader 的查找顺序一致，项目通过 `apiDirs` 增加的目录同样在内），并包含 `api/**/*.ts`。它设置 `erasableSyntaxOnly: true`，因此 Node 类型擦除无法处理的语法——`enum`、`namespace`、参数属性和装饰器——在编辑器中就是错误；内核会以 `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX` 拒绝它。
+- `.dext/package.json`——把该目录标记为 ESM，使 TypeScript 服务按内核的加载方式对待 `.dext/api/*.ts`，包括顶层 `await`。它属于 Dext，请不要在此放置自己的 `package.json`。
+
+这三个文件都是生成物：改了它们，下一次重新加载就会改回来；`npm run check` 里的 `--workspace . --check` 会证明本仓库提交的那一份仍与 registry 一致。完全不写 API 模块的工作区一个文件都不会生成。另有两类 API 源因为提交的文件无法指向它们而保持无类型：`dext.apiDirs` 设置与 Dext 全局存储里的 API 都是本机相关的；全局 MCP 清单同样不会进入声明（见 [MCP 配置](mcp.zh-CN.md)）。
+
+构建时还会写出 `dist/dext.d.ts`——同一份声明，但不含任何项目的 MCP 工具。它**不在运行时读取**：`npm run check` 用它跑 `generate:dext-types --check`，证明内置 API 表面仍与 registry 一致，同时它随 VSIX 发布，便于直接从安装包里查看 API 表面。
+
+随后由 VS Code 自身的 TypeScript 服务在 `.dext/api/*.ts` 中提供补全、悬停、F12 和诊断；输入区则由 Monaco 直接使用同一份内存声明。不再有独立的 API 检查器：**Dext: Reload APIs** 会刷新声明并重新加载注册表。
 
 ## 对话历史与工作流录制
 
-右键 Dext History 条目并选择 **Record Conversation as Dext Workflow**，可以从已有对话生成起始工作流：成功的轮次会转成步骤，重复提示词会成为 `main()` 参数，确认操作会转成 `ui.confirm`，Code 模式的轮次会保留为注释。文件写入 `.dext/api` 后自动打开，需要继续检查和调整。
+右键 Dext History 条目并选择 **Record Conversation as Dext Workflow**，可以从已有对话生成起始工作流：成功的轮次会转成步骤，重复提示词会成为 `main()` 参数，确认操作会转成 `ui.confirm`，Code 模式的轮次会保留为注释。文件写入 `.dext/api` 后自动打开；它是需要继续修改的 TypeScript 骨架，而不是完成品。
 
 Dext History 按 VS Code 工作区隔离。对话、收藏、名称和已打开的对话标签页会在重启后恢复，不会在不同项目之间共享。
 
@@ -337,97 +332,111 @@ Plan 执行复用同一组件并额外绑定计划内容版本与本次 Build �
 
 ## 导入、Skills 与规则
 
-`.dx` 使用受限的 Python 风格语法，由 Dext 自行解析，不会启动 Python 解释器。内置 API 始终可用，`import` 用于引用 `.dext/api` 中的自定义 API。只有工作区被 VS Code 标记为受信任后，才会读取外部文件。
+内置 API 从 `dext` 模块导入，始终可用；`import` 就是普通 ESM，因此也可以引入 Node 内置模块、工作区文件、以 `dext/api/<id>` 导入的自定义 API 和 npm 包。只有工作区被 VS Code 标记为受信任后，才会读取外部文件。
 
-嵌套的 `agent(...)`、`ask(...)`、`plan(...)` 可以指定 `skills=["name"]` 和 `rules=["path.md"]`。规则路径仅在 `<workspace>/.dext/rules` 下解析。Dext 先加载所选 Skills，再按顺序加载规则，将内容注入 Agent 指令；这些参数也会出现在签名和补全中。
+Skill 是显式的包。`skill({ skill: "name", input })` 加载指定的 `SKILL.md` 并注入当前 Agent 任务。查找顺序为 `<workspace>/.dext/skills`、**Project > Overview > Project configuration** 中的项目 Skill 目录、Dext 全局存储；项目尚未保存 Skill 目录时回退到旧的 `dext.skillDirs`，同名时靠前的位置优先。`create` 可以在项目或全局范围创建 Skill。
 
-Skill 按以下顺序查找，同名时靠前的位置优先：
-
-1. `<workspace>/.dext/skills`。
-2. Project 配置中的项目 Skill 目录。
-3. Dext 全局存储。
-
-项目尚未保存 Skill 目录时，使用用户配置的 `dext.skillDirs` 作为回退。
-
-`create` 可以在项目或全局范围创建 Skill。`skill` 的 `workspace` 默认为当前项目，并将所选 `SKILL.md` 注入当前 Agent 任务。`ui.*` 等待用户回答后继续同一个工作流。
+规则是 `.dext/rules/` 下的有序策略文件，规则路径只会在该目录下解析。`.dext/rules/plan.md` 会替换 Plan 模式默认的计划文档指令。`agent`、`ask`、`plan`、`template` 也可以为单次调用指定 `skills` 和 `rules`；两者都是内部选项，不会出现在生成的声明中。Dext 先加载所选 Skills，再按顺序加载规则，因此调用的窄规则会约束通用的 Skill 流程；这些内容注入 Agent 指令，而不会作为控制字段转发给提供方。`ui.*` 等待用户回答后继续同一个工作流。
 
 ## 自定义结果类型
 
-类型化结果使用 Python 标准的 `TypedDict`、`Literal` 和 `NotRequired` 注解。`kind` 必须声明为单个 `Literal` 字符串，字段会转成 API 输出的 JSON Schema 和成员补全。目前不支持 TypedDict 继承、`Protocol` 或复杂泛型。
+Dext API 返回的每个值都是已声明的结果类型之一：`AskResult`、`PlanResult`、`AgentResult`、`TemplateResult`、`ApplyResult`、`TerminalResult`、`SkillResult`、`Ui*Result` 各变体以及 `McpRawResult`。自定义 API 像返回普通值一样返回其中之一，不需要编写按文件声明。`ask`、`skill`、`template` 共用 `{ kind, text }` 形状，`PatchResult` 是 `AgentResult.patch` 的类型，而不是独立的结果类型。
 
-```python
-from typing import Literal, NotRequired, TypedDict
+模块内部使用的值可以自由声明接口和类型——它们就是普通 TypeScript。只有跨 Dext API 边界的值必须保持可 JSON 序列化，也只有已声明的结果类型可以交给 `apply`：
 
-class ReviewResult(TypedDict):
-    kind: Literal["review"]
-    uri: str
-    content: str
-    title: NotRequired[str]
+```ts
+import type { AgentResult } from "dext";
+
+interface ReviewSummary {
+  title: string;
+  files: string[];
+}
+
+function summarize(result: AgentResult): ReviewSummary {
+  return {
+    title: result.summary ?? result.text,
+    files: (result.files ?? []).map((file) => file.uri),
+  };
+}
 ```
 
 ## 执行与预览
 
-没有配置 Agent 时，Dext 可以校验工作流结构、解析不可变的代码引用，并生成类型化的确定性结果预览。选择 Agent 配置后，相同的类型化 API 契约会交给对应 CLI 执行，其结构化输出会在展示前校验。预览不代表 AI 已执行任务。
+Code 运行会在 Node 内核中立即执行。每次 Dext API 调用都会派发到扩展宿主，无论是否选择 Agent 配置，都应用相同的类型化契约和结果校验。`terminal`、`apply`、`ui.*` 始终由 Dext 自身处理。
+
+没有配置 Agent 时，`ask`、`plan` 和 `agent` 返回输入的确定性回显，不改动工作区；`skill` 和 `template` 会报告需要配置 Agent。预览不代表 AI 已执行任务。选择 Agent 配置后，调用会交给对应 CLI，其结构化输出会在展示前校验。
+
+## 继续失败的 Code 运行
+
+失败的 Code 轮次会提供 **继续（Continue）**。Dext 记录了失败那次尝试发出的每一次 Dext API 调用——顺序、参数与响应；继续时按同样的顺序重放：仍然匹配的调用直接返回之前记录的结果，因此已经成功的工作不会重复，运行从第一个新调用继续。`console.log`/`console.error` 的输出不是被记录的调用，也不会影响对齐。
+
+重放要么完全一致，要么立即停止。Dext 会比较调用序号、方法与参数，第一处差异意味着代码或某个记录看不到的值（`Date.now()`、`Math.random()`、环境变量，或 Dext 调用之外的直接文件读取）让第二次尝试走上了另一条路径。此时 Dext 不会把旧响应套用到别的调用上，而是明确报出「记录的调用已不再对应」并允许从头重试。被停止（Stop）的轮次不作为继续点：停止即结束。
+
+旧版本 `.dx` 的 checkpoint 不会被读取，也无法继续；Code 文件与其轮次都从头开始。
 
 ## UI 交互与表单
 
-所有 UI API 都等待用户回答，每次调用只记录一个工作流步骤。`presentation="inline"` 在所属对话的 Process 上方展示卡片，`"dialog"` 使用弹窗。等待只暂停所属工作流，停止任务会中断等待并跳过后续步骤。
+所有 UI API 都等待用户回答，每次调用只记录一个工作流步骤。`presentation: "inline"` 在所属对话的 Process 上方展示卡片，`"dialog"` 使用弹窗。等待只暂停所属工作流，停止任务会中断等待并跳过后续步骤。
 
-```text
-ui.select(label, options, multiple=False, placeholder="Select…", presentation="dialog")
-ui.radio(label, options, allow_custom=False, custom_placeholder="", presentation="dialog")
-ui.checkbox(label, options, allow_custom=False, custom_placeholder="", presentation="dialog")
-ui.input(label, placeholder="", multiline=False, presentation="dialog")
-ui.confirm(message, confirm_label="Continue", cancel_label="Cancel", presentation="dialog")
-ui.alert(message, acknowledge_label="OK", presentation="dialog")
-ui.form(title, fields, description="", submit_label="Submit", cancel_label="Cancel", show_cancel=True, presentation="inline")
+```ts
+ui.select(options: { label: string; options: string[]; multiple?: boolean; placeholder?: string; presentation?: "inline" | "dialog" }): Promise<UiSelectResult>
+ui.radio(options: { label: string; options: string[]; allow_custom?: boolean; custom_placeholder?: string; presentation?: "inline" | "dialog" }): Promise<UiRadioResult>
+ui.checkbox(options: { label: string; options: string[]; allow_custom?: boolean; custom_placeholder?: string; presentation?: "inline" | "dialog" }): Promise<UiCheckboxResult>
+ui.input(options: { label: string; placeholder?: string; multiline?: boolean; presentation?: "inline" | "dialog" }): Promise<UiInputResult>
+ui.confirm(options: { message: string; confirm_label?: string; cancel_label?: string; presentation?: "inline" | "dialog" }): Promise<UiConfirmResult>
+ui.alert(options: { message: string; acknowledge_label?: string; presentation?: "inline" | "dialog" }): Promise<UiAlertResult>
+ui.form(options: { title: string; fields: UiField[]; description?: string; submit_label?: string; cancel_label?: string; show_cancel?: boolean; presentation?: "inline" | "dialog" }): Promise<UiFormResult>
 ```
 
 | API / 字段 | 控件 | 返回内容 |
 | --- | --- | --- |
-| `ui.select` / `select` | 折叠式单选或多选下拉框 | `type="select"`、`selected` 数组 |
-| `ui.radio` / `radio` | 展开的互斥单选组 | `type="radio"`、`selected` 和可选 `custom` |
-| `ui.checkbox` / `checkbox` | 展开的独立复选框组 | `type="checkbox"`、`selected` 和可选 `custom` |
-| `ui.input` / `input` | 单行或多行文本 | `type="input"`、字符串 `value` |
-| `ui.confirm` | 确认、取消按钮 | `type="confirm"`、布尔值 `confirmed` |
-| `ui.alert` | 阅读信息后关闭 | `type="alert"`、`status="acknowledged"` 或 `"dismissed"` |
-| `ui.form` | 整组字段统一提交 | `type="form"`、`status="submitted"` 或 `"cancelled"`、按字段 ID 保存的 `answers` |
+| `ui.select` / `select` | 折叠式单选或多选下拉框 | `type: "select"`、`selected` 数组 |
+| `ui.radio` / `radio` | 展开的互斥单选组 | `type: "radio"`、`selected` 和可选 `custom` |
+| `ui.checkbox` / `checkbox` | 展开的独立复选框组 | `type: "checkbox"`、`selected` 和可选 `custom` |
+| `ui.input` / `input` | 单行或多行文本 | `type: "input"`、字符串 `value` |
+| `ui.confirm` | 确认、取消按钮 | `type: "confirm"`、布尔值 `confirmed` |
+| `ui.alert` | 阅读信息后关闭 | `type: "alert"`、`status: "acknowledged"` 或 `"dismissed"` |
+| `ui.form` | 整组字段统一提交 | `type: "form"`、`status: "submitted"` 或 `"cancelled"`、按字段 ID 保存的 `answers` |
 
-API 结果带有 `kind="ui"`。`answers` 中的字段答案只包含 `type` 及对应值。字段描述仅为数据，可以保存到变量复用；不要在 `fields` 中调用交互 API。
+API 结果带有 `kind: "ui"`。`answers` 中的字段答案只包含 `type` 及对应值。字段描述仅为数据，可以保存到变量复用；不要在 `fields` 中调用交互 API。
 
-```python
-fields = [
-    {"id": "environment", "type": "select", "label": "Environment", "options": [
-        {"value": "dev", "label": "Development", "description": "Local environment"},
-        {"value": "test", "label": "Testing"}
-    ]},
-    {"id": "approach", "type": "radio", "label": "Approach", "options": ["inspect", "change"], "allow_custom": True},
-    {"id": "checks", "type": "checkbox", "label": "Checks", "options": ["types", "tests", "build"], "required": False},
-    {"id": "details", "type": "input", "label": "Details", "multiline": True, "required": False},
-    {"id": "run_tests", "type": "radio", "label": "Run tests?", "options": [
-        {"value": "yes", "label": "Yes"}, {"value": "no", "label": "No"}
-    ]}
-]
-reply = ui.form(title="Settings", fields=fields, submit_label="Apply settings")
-if reply.status == "submitted":
-    if reply.answers["run_tests"].selected[0] == "yes":
-        print(text="Run the selected checks")
+```ts
+import { ui, type UiField } from "dext";
+
+const fields: UiField[] = [
+  { id: "environment", type: "select", label: "Environment", options: [
+    { value: "dev", label: "Development", description: "Local environment" },
+    { value: "test", label: "Testing" }
+  ] },
+  { id: "approach", type: "radio", label: "Approach", options: ["inspect", "change"], allow_custom: true },
+  { id: "checks", type: "checkbox", label: "Checks", options: ["types", "tests", "build"], required: false },
+  { id: "details", type: "input", label: "Details", multiline: true, required: false },
+  { id: "run_tests", type: "radio", label: "Run tests?", options: [
+    { value: "yes", label: "Yes" }, { value: "no", label: "No" }
+  ] }
+];
+const reply = await ui.form({ title: "Settings", fields, submit_label: "Apply settings" });
+if (reply.status === "submitted") {
+  if (reply.answers["run_tests"]?.selected?.[0] === "yes") {
+    console.log("Run the selected checks");
+  }
+}
 ```
 
 表单级 `description` 在内联和弹窗中均按 Markdown 渲染，支持标题、列表、代码、表格和 HTTPS 图片（`![说明](https://...)`）。图片自适应宽度，点击可打开原图；加载失败时显示备用链接提示（带签名的附件地址可能过期）。原始 HTML 按文本显示。标题、字段标签和字段说明仍为纯文本。任务备注可直接传入 `description`，无需增加图片字段。
 
-字段具有唯一 `id`、`label`、可选 `description`、`required`（默认 `True`）和 `default`。表单未配置默认值时不预选。选择字段的默认值为选项值数组，输入默认值为字符串，均须通过字段校验。选项使用非空字符串列表或 `{value, label, description?}` 对象，稳定值是唯一字符串；字符串选项的值等于自身。
+字段具有唯一 `id`、`label`、可选 `description`、`required`（默认 `true`）和 `default`。表单未配置默认值时不预选。选择字段的默认值为选项值数组，输入默认值为字符串，均须通过字段校验。选项使用非空字符串列表或 `{value, label, description?}` 对象，稳定值是唯一字符串；字符串选项的值等于自身。
 
 只有 `select` 支持 `multiple`，`radio`、`checkbox` 不接受该参数。下拉不支持自定义文本；单选的自定义答案与预设选项互斥，复选框允许两者同时提交。必填选择字段至少有一个选择或有效自定义答案。输入按裁剪后的文本判断是否为空，提交时保留原文。可选且为空的字段不进入答案映射。
 
-是／否问题使用普通 radio，`selected=["no"]` 是正常提交的答案，不等于取消，也不自动转换为布尔值；后续分支应显式比较字符串。
+是／否问题使用普通 radio，`["no"]` 是正常提交的答案，不等于取消，也不自动转换为布尔值；后续分支应显式比较字符串。
 
-选择快捷 API 接受字符串选项列表：`ui.radio` 默认选中首项，`ui.checkbox` 默认不选且允许空提交，`ui.select` 初始显示占位提示且提交前必须选择。对象选项、默认值、必填配置使用 `ui.form`。`ui.input` 提交空字符串时保留 `value=""`，取消时省略 `value`。选择快捷入口取消时返回对应类型和 `selected=[]`，不返回自定义草稿；需要区分取消与主动空提交时使用 `ui.form`。
+选择快捷 API 接受字符串选项列表：`ui.radio` 默认选中首项，`ui.checkbox` 默认不选且允许空提交，`ui.select` 初始显示占位提示且提交前必须选择。对象选项、默认值、必填配置使用 `ui.form`。`ui.input` 提交空字符串时保留 `value: ""`，取消时省略 `value`。选择快捷入口取消时返回对应类型和 `selected: []`，不返回自定义草稿；需要区分取消与主动空提交时使用 `ui.form`。
 
-取消或关闭表单返回 `status="cancelled", answers={}`；空字段表单提交返回 `status="submitted", answers={}`。`fields=[]` 可表达纯确认或告知。`show_cancel=False` 只隐藏取消按钮，仍可关闭交互或停止任务。确认关闭返回 `confirmed=False`；告知主按钮返回已读，关闭按钮或 Esc 返回已关闭，点击遮罩不会关闭告知。已读不代表授权后续操作。
+取消或关闭表单返回 `status: "cancelled", answers: {}`；空字段表单提交返回 `status: "submitted", answers: {}`。`fields: []` 可表达纯确认或告知。`show_cancel: false` 只隐藏取消按钮，仍可关闭交互或停止任务。确认关闭返回 `confirmed: false`；告知主按钮返回已读，关闭按钮或 Esc 返回已关闭，点击遮罩不会关闭告知。已读不代表授权后续操作。
 
 Esc 先关闭下拉弹层，再关闭外层容器。单选支持方向键，复选框支持 Space，弹窗关闭后恢复焦点。宿主执行仍存活时，切换对话或重建 Webview 可恢复请求及非秘密草稿。完成后的交互显示只读摘要，宿主重启后的历史请求显示为已关闭。
 
 工作流与 Agent 共用控件。Agent 仍按每题一个答案回传，保留异步回答、跳过及秘密输入语义；秘密输入提交后清空，不写入草稿或历史。公共字段不开放密码输入。
 
-限制为每张表单 32 个字段、每字段 200 个选项、标签和选项值最多 2,000 字符、文本最多 20,000 字符，表单和答案各最多 200,000 UTF-8 字节。不支持的类型或属性、重复 ID、重复选项值、重复选择、与原始请求不符的答案均被拒绝。未知历史结果通过有大小限制、转义后的文本或 JSON 只读展示，不能恢复执行。搜索、远程选项、自由创建、虚拟列表、条件字段和嵌套分组不在本版范围；普通输出使用 `print`，进度使用 Process/Todo。
+限制为每张表单 32 个字段、每字段 200 个选项、标签和选项值最多 2,000 字符、文本最多 20,000 字符，表单和答案各最多 200,000 UTF-8 字节。不支持的类型或属性、重复 ID、重复选项值、重复选择、与原始请求不符的答案均被拒绝。未知历史结果通过有大小限制、转义后的文本或 JSON 只读展示，不能恢复执行。搜索、远程选项、自由创建、虚拟列表、条件字段和嵌套分组不在本版范围；普通输出使用 `console.log`，进度使用 Process/Todo。

@@ -4,7 +4,7 @@ English | [简体中文](workflows.zh-CN.md)
 
 [Back to README](../README.md)
 
-Compose calls in Code mode and save repeated workflows as project APIs. This reference covers syntax, built-in APIs, code references, custom APIs, Skills, and conversation history.
+Compose calls in Code mode and save repeated workflows as project APIs. This reference covers the TypeScript module a Code turn runs, built-in APIs, code references, custom APIs, Skills, and conversation history.
 
 [Workflow language](#workflow-language) · [Built-in API](#built-in-api) · [Templates](#templates) · [File and selection references](#file-and-selection-references) · [Custom APIs and Skills](#custom-apis-and-skills) · [Conversation history and workflow recording](#conversation-history-and-workflow-recording) · [Turn and Build review](#turn-and-build-review) · [Imports, Skills, and rules](#imports-skills-and-rules) · [Custom result types](#custom-result-types) · [Execution and previews](#execution-and-previews)
 
@@ -12,121 +12,95 @@ Compose calls in Code mode and save repeated workflows as project APIs. This ref
 
 Input uses Monaco in its existing panel, with the Code selector and footer controls in the same positions. Enter inserts a line in Code and Ctrl/Cmd+Enter runs it. Chat modes retain the configured send behavior; Shift+Enter inserts a line. An open completion list takes priority over sending.
 
-Completion, hover, parameter help and diagnostics use native editor widgets. Call trigger characters start parameter help, Escape dismisses it, and Ctrl/Cmd+Shift+Space requests it explicitly. F12 or Ctrl/Cmd+click opens API definitions, including declarations from the current MCP registry.
+Completion, hover, parameter help and diagnostics come from Monaco's TypeScript service, in Code mode only: Agent, Chat and Plan compose plain text, so a prompt there offers no TypeScript symbols at all. In Code, call trigger characters start parameter help, Escape dismisses it, and Ctrl/Cmd+Shift+Space requests it explicitly. F12 or Ctrl/Cmd+click opens the generated `dext` declaration.
 
 File and image chips support atomic selection, deletion and undo. Copying, saved drafts and execution retain complete `@path` source. Long labels are shortened; hover shows the full path. Alt+Enter beside a chip opens the reference, and Ctrl/Cmd+Shift+V pastes literal text. Replace a chip to change its path. Native Find searches ordinary editing text, not the full paths hidden inside chips.
 
-In Code mode, natural language belongs in an API string argument; arbitrary text is a compile error.
+In Code mode, natural language belongs in an API string argument; text that is not valid TypeScript is a compile error.
 
-```python
-analysis = ask(input="Explain this implementation and give refactoring requirements:")
+```ts
+import { agent, apply, ask } from "dext";
 
-preview = agent(
-    input="Implement the requested refactoring",
-    apply=False,
-)
+const analysis = await ask({ input: "Explain this implementation and give refactoring requirements:" });
 
-# Report conclusions as text without producing a patch.
-summary = agent(
-    input="Summarize the refactoring plan",
-    apply=False,
-    patch=False,
-)
+const preview = await agent({
+  input: "Implement the requested refactoring",
+  apply: false,
+});
 
-if preview.patch:
-    applied = apply(result=preview)
+// Report conclusions as text without producing a patch.
+const summary = await agent({
+  input: "Summarize the refactoring plan",
+  apply: false,
+  patch: false,
+});
+
+if (preview.patch) {
+  const applied = await apply({ result: preview });
+}
 ```
 
-The input workflow language supports assignment, keyword-only API calls, strings (including triple-quoted strings), numbers, booleans, homogeneous lists, result member access, comments, `if`/`elif`/`else`, `for name in list:` over a homogeneous list, and `while` for sequential retry flows. A variable may be reassigned anywhere, including in plain sequential code, as long as it keeps the type it was first bound to. A `while` loop is capped at 100 iterations, and a binding created inside a loop body does not escape it.
+A Code turn is an ordinary ES module. The whole TypeScript language is available — variables, functions, classes, `if`/`for`/`while`, `try`/`catch`, `async`/`await`, the standard library, and any Node built-in or npm package the workspace can resolve. Top-level `await` works because the entry file is imported as ESM.
+
+Dext runs the file in one long-lived Node child process per workspace, started from VS Code's Electron binary with `ELECTRON_RUN_AS_NODE=1`. Every run re-registers the module loader with a fresh generation, so every workspace module is evaluated again and module-level state cannot leak between runs. Cancelling a turn kills the kernel, and the next run starts a fresh one; a crash in user code cannot take the extension host down. A run may call Dext APIs concurrently — for example with `Promise.all` — and `dext.workflow.maxConcurrency` (default 4, maximum 16) caps how many calls are in flight at once; calls beyond the limit wait in a queue.
+
+A run is not finished while it is waiting for a Dext API. A call written without `await` — `commit()` rather than `await commit()` — still keeps the turn open until it answers, and its failure fails the run, so the agent it started cannot keep working after the panel has stopped listening; the run's Output says how many calls were not awaited, because their results never reach your own code. Write `await` to read a result.
+
+There is no separate workflow language and no interpreter to learn. Files from the old Python-like `.dx` language are not read: migrate one with `node scripts/migrateDxToTs.mjs <file.dx>`, which rewrites what it can and reports what it could not convert for a human to finish.
 
 ### Text and value expressions
 
-Dext evaluates pure expressions itself — no API round trip, no Python interpreter. A value the compiler can determine is folded while compiling, so `"a" + "b"` behaves exactly like `"ab"` everywhere, including in checks such as UI form validation.
+Expressions are ordinary TypeScript. Dext is not involved: the kernel evaluates the whole module, so any JavaScript expression behaves exactly as it does anywhere else in Node.
 
 | Form | Example | Notes |
 | --- | --- | --- |
-| Concatenation | `"Review: " + answer.text` | Both sides must be strings |
-| Repetition | `"-" * 3` | `---` |
-| Arithmetic | `2 + 3 * 4`, `7 // 2`, `2 ** 8` | Numbers only |
-| f-string | `f"{answer.text} ({checked.exit_code})"` | Replacement fields, conversions, and format specs |
-| `%` formatting | `"%s: %d" % [name, count]` | The arguments are a list or a tuple |
-| Tuple | `("a", 1)`, `(value,)`, `1, 2` | A tuple literal, which is a list |
-| `str.format` | `"{} and {}".format("a", "b")` | Also `{0}`, `{name}`, and `{0[name]}` |
-| Indexing and slicing | `text[0]`, `text[1:4]`, `text[::-1]` | Negative offsets count from the end; lists work the same way |
-| Membership | `"done" in answer.text` | Strings, lists, and dictionaries |
-| Comparisons | `a == b`, `a != b`, `a < b`, `a <= b`, `a > b`, `a >= b` | Ordering needs two strings or two numbers |
-| Boolean logic | `a and b`, `a or b`, `not a` | Operands must be boolean; use `bool(value)` to convert |
+| Template literal | `` `${answer.text} (${checked.exit_code})` `` | Interpolates any expression |
+| Concatenation and arithmetic | `"Review: " + text`, `2 + 3 * 4`, `7 / 2`, `2 ** 8` | `7 / 2` is `3.5`; use `Math.floor(7 / 2)` for integer division |
+| Arrays and objects | `["a", "b"]`, `{ id, label }` | Literals, spread and destructuring work normally |
+| Indexing and slicing | `text[0]`, `text.slice(1, 4)`, `[...text].reverse()` | `slice`'s end is exclusive; strings are immutable |
+| Membership and search | `text.includes("done")`, `list.indexOf(value)`, `"key" in record` | Use whichever the value supports |
+| Equality | `a === b`, `a !== b` | Strict equality; `==` applies type conversion |
+| Comparison and logic | `a < b`, `a && b`, `a \|\| b`, `!a`, `a ?? b` | Operands follow normal JavaScript rules |
+| Optional chaining | `result.patch?.title ?? ""` | Reads a field only when the value is present |
 
-An f-string field takes an optional conversion and format spec: `f"{value!r}"`, `f"{count:,}"`, `f"{ratio:.1%}"`, `f"{width:>8}"`, `f"{value=}"`, and nested specs such as `f"{value:{width}}"`. Doubled braces (`{{`) print a literal brace.
+`Math`, `JSON`, `Number`, `String`, `Array`, `Object` and `Date` are the standard built-ins, and there is no Dext-specific list of methods or helpers to learn. A few forms from the removed language have no direct equivalent: use a template literal instead of an f-string or `%` formatting, `Math.floor` instead of `//`, an array instead of a tuple, and `Number(value)` instead of `int(value)` or `float(value)`.
 
-String methods are available on any string value: `upper`, `lower`, `casefold`, `capitalize`, `title`, `swapcase`, `strip`, `lstrip`, `rstrip`, `removeprefix`, `removesuffix`, `replace`, `split`, `rsplit`, `splitlines`, `join`, `startswith`, `endswith`, `find`, `rfind`, `index`, `rindex`, `count`, `partition`, `rpartition`, `center`, `ljust`, `rjust`, `zfill`, `expandtabs`, `format`, and the `is*` predicates (`isalnum`, `isalpha`, `isdigit`, `isnumeric`, `isspace`, `isupper`, `islower`, `istitle`, `isidentifier`, `isascii`).
+A plain assignment is not a workflow step. Output shows one step per Dext API call; `console.log` and `console.error` add process-output steps that carry text only, with no invocation and no duration.
 
-These pure helpers are compiled the same way: `len`, `str`, `repr`, `int`, `float`, `bool`, `abs`, `round`, `min`, `max`, `sorted`, `sum`, `range`, `list`, `reversed`, `any`, `all`. `range(3)` is a list of numbers, so `for index in range(3):` works; `sorted(names)` keeps the element type it was given. `range` is capped at 100000 values.
-
-Dext keeps Python semantics for these operations, with four deliberate differences:
-
-- `+` on a string requires another string. Write `f"{value}"` or `str(value)` to append a number.
-- Tuples are written the Python way but are lists: `("a", 1)`, `(value,)`, `()`, and the bare `1, 2` all produce a list, so `(1, 2) == [1, 2]` is true and the length is not fixed. Unpacking stays unsupported, because a name binds once and a list has no fixed arity: `a, b = pair` and `for key, value in items:` are rejected. Read the entries instead (`pair[0]`, `pair[1]`), or iterate `for item in items:` when each item is an object with named fields. Dictionary keys are strings, so a tuple cannot be a key.
-- `%` takes its arguments as a list: `"%s %d" % ["total", 3]` or `"%s %d" % ("total", 3)`. To format a list value itself, wrap it the way Python wraps a single-element tuple: `"%s" % (items,)`.
-- Conditions must be boolean. `if answer.text:` is rejected; write `if bool(answer.text):`, or compare the value.
-- Bytes literals (`b"..."`) are rejected; Dext text is UTF-8 strings throughout.
-- There is no augmented assignment. `text += line` is rejected; write `text = text + line` instead, or collect repeated text in a list and join it with `"\n".join(lines)`.
-
-A value that is not a compile-time constant becomes its own `=` step in Output, exactly like `text = answer.text` always did. A reassigned name does too, even when its value is a constant: the runtime has to hold the current value so later reads see the assignment that last ran.
-
-A list comprehension, `[call(...) for name in list]`, is the one construct that runs concurrently: its branches cannot see one another, so Dext fans them out up to `dext.workflow.maxConcurrency` and collects the results in list order. One `for` clause, no `if` filter.
-
-`try`/`except` with an optional `finally` replaces the default all-or-nothing behavior: a failing step inside the body hands control to the handler and the workflow keeps going. `except Exception as name:` binds the failure message as a string, visible only inside the handler. There is one failure channel, so a named exception type is rejected rather than silently ignored, and stopping a run is never caught — cancellation passes through and the handler does not run.
-
-`ask` and `agent` accept ordinary strings. File selections and attachments can be inserted as readable `@workspace/path#Lstart,end-Lend,end` tokens; the editor, Output, and History render that token as an atomic Chip while copy and execution retain the same readable string. Dext never inlines file contents into the prompt.
-
-`.dx` API files additionally support a typed `main()` entry point, file-private typed helper functions, explicit imports, and bounded `while` retry loops. Function definitions in the input composer, nested functions, recursive calls, classes, reassignment that changes a variable's type, `eval`, `exec`, and system/file/network APIs are rejected.
-
-Execution is sequential apart from comprehension fan-out; unselected and downstream steps are reported as `skipped`.
+The old interpreter's resource limits (`while` iteration count, `range` size, folded items, import depth) went with the interpreter. Standard Node and TypeScript limits apply.
 
 ## Built-in API
 
-- **Create resource** opens a dedicated tab using the same Conversation and Input layout. Choose **API / MCP / Rule / Skill**, then **Project / Global** (the menu shows the destination directory). Select **New resource** or an existing resource, describe your changes, and review the draft or diff before saving. Saving keeps the tab open for further revisions; changing an existing resource’s destination creates a copy. Resource targets, drafts, and conversations are restored from History.
-- `ask(input, skills?, rules?, workspace?) -> AskResult`
-- `plan(input, skills?, rules?, workspace?) -> PlanResult`
-- `agent(input, apply=true, patch=true, skills?, rules?, workspace?) -> AgentResult` — `patch=false` reports conclusions as text without producing a patch.
-- `template(input, source, values={}, skills?, rules?, workspace?) -> TemplateResult` — renders text from a template file ([templates](#templates)).
-- `apply(result) -> ApplyResult`
-- `terminal(command, cwd=".", env={}, timeout_ms=120000) -> TerminalResult` — runs an arbitrary command in the platform shell. `env` supplies string environment variables to that command.
-- `skill(skill, input, workspace?) -> SkillResult`
-- MCP tools are exposed as typed `mcp.<server>.<tool>(...)` APIs generated from manifests.
-- `print(text, label?) -> PrintResult`
+- **Create resource** opens a dedicated tab using the same Conversation and Input layout. Choose **API / MCP / Rule / Skill**, then **Project / Global** (the menu shows the destination directory). Select **New resource** or an existing resource, describe your changes, and review the draft or diff before saving. Saving keeps the tab open for further revisions; changing an existing resource's destination creates a copy. Resource targets, drafts, and conversations are restored from History.
+- `ask({ input, workspace?, cli?, model? }) -> AskResult`
+- `plan({ input, workspace?, cli?, model? }) -> PlanResult`
+- `agent({ input, apply=true, patch=true, workspace?, cli?, model? }) -> AgentResult` — `patch=false` reports conclusions as text without producing a patch.
+- `template({ input, source, values={}, workspace?, cli?, model? }) -> TemplateResult` — renders text from a template file ([templates](#templates)).
+- `apply({ result }) -> ApplyResult`
+- `terminal({ command, cwd=".", env={}, timeout_ms=120000 }) -> TerminalResult` — runs an arbitrary command in the platform shell. `env` supplies string environment variables to that command.
+- `skill({ skill, input, workspace?, cli?, model? }) -> SkillResult`
+- `mcp.<server>.<tool>({...})` — calls a configured MCP tool.
+- `ui.select | ui.radio | ui.checkbox | ui.input | ui.confirm | ui.alert | ui.form` — see [UI interactions and forms](#ui-interactions-and-forms).
 
-Only these top-level APIs are built in. UI interactions live under `ui.*`; a
-confirmation or form can use `on_cancel="abort"` to cancel the current custom
-API without a separate workflow-control API. Node standard-library access is
-provided only under the whitelisted `node.*` namespace: `node.url`,
-`node.path`, `node.querystring`, compatible `node.util` exports,
-`node.fs`, and `node.http.request`. Node function names retain their
-native camelCase spelling. File and HTTP calls require a trusted workspace;
-commands continue to use `terminal`.
+Every one of them is an export of the `dext` module:
 
-`node.fs.readFile(path, encoding="utf8")` accepts absolute paths, including
-files outside the workspace, using Node's native path handling. Relative paths
-resolve from the workspace root and must stay inside it, including through
-symbolic links. Other `node.fs` calls require workspace-relative paths that
-stay inside the workspace.
+```ts
+import { ask, agent, ui } from "dext";
+```
 
-Reading and inspecting: `readFile`, `readdir(path, encoding="utf8") ->
-list[str]`, `stat(path) -> { size, mtime_ms, is_file, is_directory }`,
-`access(path)`, which returns true or raises the Node error, and `realpath`.
-Writing and managing: `writeFile`, `appendFile`, `copyFile(sourcePath,
-destinationPath)`, `mkdir`, `rename(oldPath, newPath)`, and `rm(path,
-recursive=false, force=false)`, which refuses a directory unless `recursive` is
-set. `readdir` reports the directory's own order; sort the list when the order
-matters. `node.path.relative(from, to)` takes both paths, and
-`node.path.format(pathObject)` accepts a `node.path.parse` result.
+Each call takes exactly one object of named arguments and returns a promise of a JSON-serializable value. `cli`, `model`, `reasoning` and `speed` remain per-call overrides:
 
-`node:crypto`, `node:zlib`, `node:timers/promises`, and environment-sensitive
-`node:os` calls are catalogued as future candidates, not callable APIs. Raw
-process, socket, stream, worker, VM, module-loader, and server-listening APIs
-remain outside `.dx`.
-- UI interactions: `ui.select`, `ui.radio`, `ui.checkbox`, `ui.input`, `ui.confirm`, `ui.alert`, `ui.form`.
+```ts
+const answer = await ask({ input: "Explain this code", cli: "claude", model: "sonnet" });
+```
+
+Node built-ins and workspace packages work directly, because the code runs in a real Node process: `import fs from "node:fs/promises"` and `import path from "node:path"` behave exactly as they do in any other Node program. There is no capability gate and no `node.*` or `js.*` namespace: model-written code in the kernel has the user's full permissions. `terminal` and `apply` have no confirmation dialog; the existing workspace-trust checks remain, but they are no longer a security boundary.
+
+**Dext: View APIs** lists the callable APIs and, beside them, a read-only **node** and **js** reference: one entry per Node built-in module (`node:fs/promises`, `node:path`, `node:url`, …) and per global Node or ECMAScript provides (`process`, `Buffer`, `fetch`, `setTimeout`, `JSON`, `Array`, `Intl`, …). The reference is generated from the declaration files themselves — `@types/node` and TypeScript's own `lib.es*.d.ts` — so every signature is the one the editor and the kernel resolve and every description is the JSDoc the declaration carries; no description is written by hand. Opening an entry lists every member with its signature, parameters, return value and documentation, and the specifier line copies the exact module specifier. These entries document what code may `import` or read as a global; they are not Dext APIs, so they offer no Insert reference action and cannot be called as `node.*` or `js.*`.
+
+`print` is gone. `console.log(...)` and `console.error(...)` are captured as process-output steps and forwarded to the real streams, but they are not Dext results: they carry no invocation and no duration. Return a value, or call an API, when the run needs a typed result.
+
+Values that cross a Dext API boundary must be JSON-serializable, because the kernel and the extension host exchange JSON. Functions, symbols, `Map`, `Set`, `Buffer`, typed arrays, class instances (unless they have a `toJSON()` method) and circular references cannot be sent, and a `Date` is converted to an ISO string. The error names the path and the replacement, so `{ createdAt: new Date() }` becomes an ISO string while `{ cache: new Map() }` is reported at `cache`. User code may use anything inside itself — only what it hands to a Dext API, or returns from an API module, is checked.
 
 ### Templates
 
@@ -176,7 +150,7 @@ dext-template:
 - `optional: true` lets a field come back empty. The placeholder's line disappears, and if that leaves the section with no content its heading disappears too — that is how `sources` above vanishes for a purely local decision.
 - Every declared field must appear in the body and every placeholder must be declared; a mismatch is reported when the template is read.
 - `values` pins fields Dext owns. Those fields are excluded from the model's contract and win over anything the model returns, which keeps a counter or a module name out of the model's hands. Its entries are validated against the template.
-- The call returns `text` and writes nothing. Deciding whether the result becomes a file, and where, is the caller's job: `node.fs.writeFile(path=..., content=created.text)`. A field the file name should follow is the caller's own value — pass it in `values` and reuse the same variable in the path, so the name and the text can never disagree.
+- The call returns `text` and writes nothing. Deciding whether the result becomes a file, and where, is the caller's job: `fs.writeFile(path, created.text)`. A field the file name should follow is the caller's own value — pass it in `values` and reuse the same variable in the path, so the name and the text can never disagree.
 
 The same template contract renders any text format, so a JSON artifact is a template too:
 
@@ -205,148 +179,130 @@ A field value is inserted verbatim where its placeholder sits, so the field's `d
 
 The call returns the rendered text and nothing else, so the workflow decides what to do with it — here `number` and `slug` come from the workflow's own scope, ride into the template through `values`, and name the file the same way the heading names the record:
 
-```python
-created = template(
-    input="Record the decision we just made about medoid selection.",
-    source=".agents/skills/adr/references/adr-template.md",
-    values={"module": "optimize", "number": number, "slug": slug},
-    skills=["adr"],
-)
-node.fs.writeFile(path=f"docs/decisions/{number}-{slug}.md", content=created.text)
+```ts
+import { template } from "dext";
+import fs from "node:fs/promises";
+
+const number = "0081";
+const slug = "medoid-selection";
+
+const created = await template({
+  input: "Record the decision we just made about medoid selection.",
+  source: ".agents/skills/adr/references/adr-template.md",
+  values: { module: "optimize", number, slug },
+});
+await fs.writeFile(`docs/decisions/${number}-${slug}.md`, created.text);
 ```
 
 The call is read-only: it never edits the workspace, so it can always be repaired when its output does not match the template, including a render that does not parse as the declared format. It also never chooses a destination, so the same template can render to any path — and a name that must follow a field is composed by the caller from the value it supplied. Codex and Claude receive the template's fields as their native structured-output schema; DeepSeek Harness has no schema field in ACP, so its answer is validated against the same contract in Dext instead. The template must live inside a trusted workspace, because its content becomes part of the Agent instruction.
 
-Project APIs live as `.dx` files under `.dext/api/`, and their directory becomes
-the namespace, so `.dext/api/workflow/feature.dx` registers `workflow.feature`.
-Global APIs are stored in Dext global storage and are available in every
-workspace; a project API with the same id takes precedence.
+Project APIs live as TypeScript modules under `.dext/api/`. A module is imported by its path below that directory, so `.dext/api/workflow/feature.ts` is `import { main } from "dext/api/workflow/feature"`. Global APIs are stored in Dext global storage and are available in every workspace; a project API with the same id takes precedence. `dext.apiDirs` adds further API directories, and `.dext/api` is always searched first.
 
-A project-local API composes typed MCP, `agent`, and UI APIs directly
-rather than importing intermediate phase APIs. A typical feature workflow reads
-context, makes a plan, gates on `ui.confirm`, implements, gates again, then
-validates. Declaring optional `mcp_tool` and `mcp_input` parameters lets a
-registered textual MCP tool run before the first Agent phase. Rules live under
-`.dext/rules/`; every Agent phase declares the ordered rules it uses, and
-confirmable actions such as code generation and commit stay explicit UI gates.
+A project-local API composes typed MCP, `agent`, and UI calls directly rather than importing intermediate phase APIs. A typical feature workflow reads context, makes a plan, gates on `ui.confirm`, implements, gates again, then validates. Rules live under `.dext/rules/`; every Agent phase declares the ordered rules it uses, and confirmable actions such as code generation and commit stay explicit UI gates.
 
-UI APIs return a result and resume the current workflow; they do not require a
-separate callback registration. Assign the result when later steps need it:
+UI APIs return a result and resume the current workflow; they do not require a separate callback registration. Assign the result when later steps need it:
 
-```python
-confirmation = ui.confirm(message="Apply this change?")
-if confirmation.confirmed == True:
-    print(text="Continue")
+```ts
+import { ui } from "dext";
+
+const confirmation = await ui.confirm({ message: "Apply this change?" });
+if (confirmation.confirmed) {
+  console.log("Continue");
+}
 ```
 
-The selected value, confirmation state, or input text is also rendered in
-Output and History after the interaction completes.
+The selected value, confirmation state, or input text is also rendered in Output and History after the interaction completes.
 
-Every API output implements the shared `Result` contract. `ask` handles read-only explanation and analysis; `agent` handles free-form continuous tasks; `plan` creates, maintains, and executes implementation plans. `apply(result=...)` applies an `AgentResult` patch when one is present. Agent CLIs receive prior results as versioned `dext-result` JSON envelopes instead of interpolated strings. Result variables and fields such as `agent_result: AgentResult` and `agent_result.patch: PatchResult` are available to completion and hover.
+Every API output implements the shared `Result` contract. The result kinds are exactly nine — `ask`, `plan`, `agent`, `template`, `apply`, `terminal`, `skill`, `ui` and `mcpRaw` — plus the generated `mcp.<server>.<tool>` kind for structured MCP tools. `ask`, `skill` and `template` are three names for the same `{ kind, text }` shape, and `PatchResult` is not a result kind: it is the shape of `AgentResult.patch`. Result variables and fields such as `AgentResult.patch` are typed by the generated declaration, so completion and hover work in the composer and in `.dext/api/*.ts`. Agent CLIs receive prior results as versioned `dext-result` JSON envelopes instead of interpolated strings.
 
-`ask` is always read-only. `agent` and `plan` use the composer's `Workspace write` or `Full access` scope; in a trusted local workspace, `Workspace write` limits edits to the selected workspace. Code mode has no permission picker, so typed `agent(apply=true)` calls use `Full access` by default. Dext itself can always persist Plan documents in its managed global storage. Both APIs default `workspace` to the current project root.
+`ask` is always read-only. `agent` and `plan` use the composer's `Workspace write` or `Full access` scope; in a trusted local workspace, `Workspace write` limits edits to the selected workspace. Code mode has no permission picker, so typed `agent({ apply: true })` calls use `Full access` by default. Dext itself can always persist Plan documents in its managed global storage. Both APIs default `workspace` to the current project root.
 
-```python
-answer = ask(input="Explain this code:")
-result = agent(input="Implement the requested change")
+```ts
+const answer = await ask({ input: "Explain this code:" });
+const result = await agent({ input: "Implement the requested change" });
 ```
 
-`terminal` is available only in a trusted local `file` workspace. Its `cwd` must stay inside the workspace, every command requires a VS Code modal confirmation, the timeout is capped at 10 minutes, and captured output is bounded. It returns `TerminalStatus = "succeeded" | "failed" | "timed_out"`; a nonzero exit code is a typed failed result, while rejecting the confirmation cancels that workflow step and skips downstream steps.
+`terminal` is available only in a trusted local `file` workspace. Its `cwd` must stay inside the workspace, the timeout is capped at 10 minutes, and captured output is bounded. It runs without a confirmation prompt, so the workflow decides what is safe to run. It returns `TerminalStatus = "succeeded" | "failed" | "timed_out"`; a nonzero exit code is a typed failed result.
 
-`print` renders values only in Dext Output and never writes to the integrated terminal. Strings and primitive values are
-shown as text; lists, dictionaries, and API results are rendered as JSON.
+`console.log` and `console.error` render values in Dext Output and are forwarded to the process streams; they never write to the integrated terminal. Strings and primitive values are
+shown as text; objects and API results are rendered as JSON.
 
 ## File and selection references
 
-Context values are `ref.selection`, `ref.active_file`, `ref.file("path")`, `ref.dir("path")`, and `ref.symbol("name")`:
+Context is attached through readable `@path` tokens inside an API string argument:
 
-- `ref.selection` resolves the current selection in the active editor.
-- `ref.active_file` resolves the complete active editor file.
-- `ref.file("path")` resolves a workspace file or an optional line/column range.
-- `ref.dir("path")` resolves a workspace-contained directory without reading or expanding its contents.
-- `ref.symbol("name")` asks VS Code's workspace symbol provider for a declaration and its source range.
-
-Copying a VS Code selection or choosing a file or folder inserts a readable `@path` token in the normal quoted input text. The token is rendered as an atomic Chip, can be removed atomically, and participates in undo/redo. Existing legacy marker, f-string, and nested-quote reference forms are migrated to this representation when loaded.
+- Copying a VS Code selection or choosing a file or folder inserts an `@workspace/path` token; a selection carries its range as `#Lstart,startChar-Lend,endChar`.
+- A directory token ends with a slash and references the directory without reading or expanding its contents.
+- The token is rendered as an atomic Chip, can be removed atomically, and participates in undo/redo. Existing legacy marker, f-string, and nested-quote reference forms are migrated to this representation when loaded.
 
 Selecting workspace code shows **Add to Dext** in a floating editor hover near the active selection cursor after a brief pause. The hover overlays the editor without adding a row or shifting code, and keeps keyboard focus in the editor. Click it to add the selected file range to Input. VS Code controls the hover's appearance and placement; symbol information may share the same hover. Toggle `dext.selectionActions.enabled` in Settings to show or hide this action immediately. Editor, file list, and file tab context menus use the same **Add to Dext** label and remain available when the selection action is disabled.
 
 Press Ctrl+C (Cmd+C on macOS) on files in Explorer/Open Editors, an editor tab, or inside a file with no text selected, then Ctrl+V in Dext Input to insert references to the original paths. Multiple files and image files are supported without creating attachments. A visible editor hover keeps VS Code's normal content-copy shortcut. Ctrl+Shift+V pastes the path text as-is. Set `dext.copyFilePathOnCopy` to `false` to restore Explorer's native file copy and the editor's copy-line shortcut.
 
-The editor uses CodeMirror's Python grammar for syntax highlighting, indentation, bracket matching, and native editor behavior. Dext adds API completion, keyword and result-field completion, signature help, hover documentation, exact compiler diagnostics, and a lint gutter.
+The token stays readable text in the submitted input, and Dext never inlines file contents into the prompt: the Agent reads the referenced file itself. `ask`, `agent`, `plan` and `template` all accept these tokens in `input`.
+
+The composer is Monaco's TypeScript editor, so highlighting, indentation, bracket matching and native editing behavior come from the TypeScript grammar. Code mode is plain TypeScript and nothing more: Dext adds the generated `dext` declaration and the workspace's own `.dext/api` modules as extra libraries, resolved by the same `dext/api/*` mapping the generated project gives VS Code, and then completion, auto-import, signature help, hover, Go to Definition and diagnostics are the editor's own. `import { main } from "dext/api/git/commit"` therefore resolves and type-checks in the composer, and its import specifier and named exports complete like any other module's. An export that is not imported yet is completed together with the import that binds it — typing `ask` offers `ask` with `import { ask } from "dext";`, and typing `commi` offers the workspace API's own `commit` with its `import { commit } from "dext/api/git/commit";`; inside `import { … } from "…"` the module's exports are offered without any edit. The names are read out of the declaration and the API sources, never guessed from a name's shape: `git` is a directory, not an export, so typing it offers nothing and `.dx`-style qualified calls are not translated. A run that still used one of those names without importing it fails with the import to write: `git is not defined` is followed by `use: import { main as commit } from "dext/api/git/commit";`.
 
 ## Custom APIs and Skills
 
-Custom APIs live in `.dext/api/**/*.dx`. Directory segments become namespaces and each file exports one API through `main()`. The Code input accepts qualified calls such as `playground.verify()` without imports, or imported names such as `verify()`. Inside `.dx` files, custom API calls require explicit imports. Both forms support completion, signature help, and hover information.
+Custom APIs live in `.dext/api/**/*.ts`. Directory segments become namespaces and each file is an ordinary ES module:
 
-```python
-# .dext/api/team/analyze.dx -> team.analyze
-def main(input: str) -> AskResult:
-    return ask(input=input)
+```ts
+// .dext/api/team/analyze.ts -> "dext/api/team/analyze"
+import { ask, type AskResult } from "dext";
+
+export async function main(input: string): Promise<AskResult> {
+  return await ask({ input });
+}
 ```
 
-`from playground import verify` imports the `main()` entry point of
-`.dext/api/playground/verify.dx`; call it as `verify()`. An alias such as
-`from playground import verify as check` is also supported. The imported API
-must exist and load successfully.
+Import one by its path below `.dext/api`:
 
-Split a longer API into typed helper functions in the same file:
+```ts
+import { main as analyze } from "dext/api/team/analyze";
 
-```python
-# .dext/api/playground/develop.dx
-from playground import verify
-
-def report(checked: TerminalResult) -> PrintResult:
-    if checked.status != "succeeded":
-        return print(text=checked.stderr, label="Checks failed")
-    return print(text=checked.stdout, label="Checks passed")
-
-def main() -> PrintResult:
-    checked = verify()
-    return report(checked=checked)
+const answer = await analyze("Explain task filtering and its tests");
+console.log(answer.text);
 ```
 
-Helpers may appear before or after `main()` and call other helpers or imported
-APIs. Each call has its own parameters and local variables. Parameters require
-type annotations; calls use keyword arguments and may omit parameters with
-literal defaults. Every function declares and returns a Dext result, such as
-`AskResult`, `PlanResult`, `SkillResult`, `AgentResult`, `TerminalResult`, or `PrintResult`; returning a bare
-string, boolean, or list is not supported. Use `return print(text=value)` to
-return a summary or collection. `return` works inside `if`, `try`, and `except`;
-`finally` runs before the return completes, except on cancellation. A path that
-reaches the end without returning fails at runtime. Only `main()` is exported;
-helpers cannot be imported from another file. Recursive calls and helper names
-that conflict with APIs or imports are rejected. Helper calls, parameters, and
-result fields have completion and signature/hover assistance in `.dx` files.
+The module exports `main` as a convention Dext looks for when the module is itself the run's entry point; an importer decides how to call it. The export is not special otherwise — anything the module exports is available to the importer.
 
-### API diagnostics
+Split a longer API into helpers the ordinary way:
 
-Dext validates `.dx` files with the same loader it uses to run them, so an error
-surfaces where it is written rather than only when the API is called.
+```ts
+// .dext/api/playground/develop.ts
+import type { TerminalResult } from "dext";
+import { main as verify } from "dext/api/playground/verify";
 
-- **Problems** lists every `.dx` error as you type. Each entry carries the file,
-  line, column, the stable code (`dext/compile`, `dext/must-return`,
-  `dext/unknown-api`, `dext/reassign`, `dext/missing-rule`, `dext/signature`,
-  `dext/syntax`, `dext/cycle`, `dext/duplicate-api`, `dext/mcp`, …), and the API
-  id it belongs to. Every independent error in a file is reported; one failing
-  file no longer hides the others.
-- **Dext: Check All APIs** checks the whole project at once, writes the details
-  and an `N error / M warning` summary to the **Dext API Check** output channel,
-  and fills the same Problems collection so every diagnostic jumps to its file.
-- **Dext: Reload APIs** reloads the APIs and reports the same diagnostics.
+function report(checked: TerminalResult): void {
+  if (checked.status !== "succeeded") console.error(checked.stderr);
+  else console.log(checked.stdout);
+}
 
-Checks cover `.dext/api/**/*.dx`, the project API directories in **Project >
-Overview > Project configuration** (with legacy `dext.apiDirs` as a fallback), project MCP directories, the parameters and result types of loaded MCP tools, and
-literal `rules=[...]` paths resolved below `.dext/rules`.
+export async function main(): Promise<void> {
+  report(await verify());
+}
+```
 
-A failed custom API call names its cause instead of reporting only that the API
-is unavailable: the file, the function, the reason, and the line, plus why a
-declared MCP tool is missing when that is what stopped the file from compiling.
-A dependency cycle is named on the APIs that actually form it, not on every
-loaded API.
+Helpers are ordinary functions: a module may export as many values as it likes, another module imports any of them, and recursion, classes, generics and npm packages all work. There is no required result type — `main` may return a Dext result, a plain value, or nothing. Completion, signature help and hover in `.dext/api/*.ts` come from VS Code's TypeScript service against the generated declaration.
+
+### Generated types
+
+Dext generates the `dext` project a workspace's editor reads, and the workspace commits it. It is written on every API reload, and every path in it is relative, so the same files work on another machine and in CI:
+
+- `.dext/api/dext.d.ts` — the `dext` module: every built-in API, the `ui` group, the `mcp` group, every result interface, the JSON-boundary rule, and the MCP tools this project's own `.dext/mcp/*.jsonc` manifests declare. **Open built-in API definition** and F12 open this file.
+- `.dext/tsconfig.json` — a strict `nodenext` project that maps `dext` at `./api/dext.d.ts` and `dext/api/<id>` at the API module itself (`dext/api/team/analyze` names `api/team/analyze.ts`, the same search order the kernel loader uses, including any directory the project adds to `apiDirs`), and includes `api/**/*.ts`. It sets `erasableSyntaxOnly: true`, so syntax Node's type stripping cannot erase — `enum`, `namespace`, parameter properties and decorators — is an editor error; the kernel refuses it with `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`.
+- `.dext/package.json` — marks that directory as ESM, so the TypeScript service treats `.dext/api/*.ts` the way the kernel loads it, top-level `await` included. It belongs to Dext; do not put a `package.json` of your own there.
+
+All three are generated: edit one and the next reload puts it back, and `npm run check`'s `--workspace . --check` proves the files this repository commits still match the registry. A workspace that never writes an API module gets none of them. Two API sources stay untyped because a committed file cannot name them: the `dext.apiDirs` setting and APIs in Dext's global storage are machine-local, and a global MCP manifest is likewise absent from the declaration (see [MCP configuration](mcp.md)).
+
+The build also writes `dist/dext.d.ts` — the same declaration without any project's MCP tools. It is not read at runtime: `npm run check` runs `generate:dext-types --check` against it to prove the built-in surface still matches the registry, and it ships in the VSIX so the API surface can be inspected from the package.
+
+VS Code's own TypeScript service then gives completion, hover, F12 and diagnostics in `.dext/api/*.ts`, and Monaco is handed the same declaration in memory for the composer. There is no separate API checker: **Dext: Reload APIs** refreshes the declaration and reloads the registry.
 
 ## Conversation history and workflow recording
 
-A conversation can be turned into a starting point instead of being written from scratch: right-click a Dext History entry and choose **Record Conversation as Dext Workflow**. Each successful turn becomes a step, a prompt repeated across turns becomes a `main()` parameter, a confirmation the conversation went through becomes a `ui.confirm` call, and a Code-mode turn is left as a comment. The file is written under `.dext/api` and opened for editing; it is a skeleton to revise, not a finished API.
+A conversation can be turned into a starting point instead of being written from scratch: right-click a Dext History entry and choose **Record Conversation as Dext Workflow**. Each successful turn becomes a step, a prompt repeated across turns becomes a `main()` parameter, a confirmation the conversation went through becomes a `ui.confirm` call, and a Code-mode turn is left as a comment. The file is written under `.dext/api` and opened for editing; it is a TypeScript skeleton to revise, not a finished API.
 
 Dext History is scoped to the current VS Code workspace. Conversations,
 favorites, names, and open conversation tabs are restored after restarting VS
@@ -377,92 +333,109 @@ Writing a plan is not implementing it, so a plan-authoring turn produces no impl
 
 ## Imports, Skills, and rules
 
-`.dx` uses a restricted Python-like syntax. It is parsed by Dext and never starts a Python interpreter. Built-in APIs are always in scope, and `import` refers to custom `.dext/api` files. External files are not read until VS Code marks the workspace as trusted. A nested `agent(...)`, `ask(...)`, or `plan(...)` call may set `skills=["name"]` and `rules=["path.md"]`. Skills are explicit packages, while rules are ordered policy files. Rule paths are resolved only below `<workspace>/.dext/rules`; skill discovery follows the order described below. Dext loads selected skills first and rules last, so the API's narrow rules constrain the general skill workflow. These parameters appear in Dext signatures and completion; their contents are injected into the Agent instruction rather than forwarded as control fields to the provider.
+Built-in APIs are imported from the `dext` module and are always available; `import` is ordinary ESM, so it also brings in Node built-ins, workspace files, custom APIs as `dext/api/<id>`, and npm packages. External files are not read until VS Code marks the workspace as trusted.
 
-Standard skills are discovered in `<workspace>/.dext/skills`, then the project
-Skill directories in **Project > Overview > Project configuration**, then Dext
-global storage. Legacy `dext.skillDirs` remains a fallback until project values
-are saved; earlier directories win duplicate names. `create`
-can place a skill in either scope. `skill` defaults `workspace` to the current
-project and injects the selected `SKILL.md` into the current Agent task.
-`ui.*` waits for a semantic user answer and resumes the same workflow.
+Skills are explicit packages. `skill({ skill: "name", input })` loads the named `SKILL.md` and injects it into the current Agent task. Discovery order is `<workspace>/.dext/skills`, then the project Skill directories in **Project > Overview > Project configuration**, then Dext global storage; legacy `dext.skillDirs` remains a fallback until project values are saved, and earlier directories win duplicate names. `create` can place a skill in either scope.
+
+Rules are ordered policy files under `.dext/rules/`, and a rule path is resolved only below that directory. `.dext/rules/plan.md` replaces the default plan-document instruction used by Plan mode. `agent`, `ask`, `plan` and `template` can also be scoped with `skills` and `rules` for a single call; both are internal options, so they do not appear in the generated declaration. Dext loads selected skills first and rules last, so the call's narrow rules constrain the general skill workflow, and their contents are injected into the Agent instruction rather than forwarded as control fields to the provider. `ui.*` waits for a semantic user answer and resumes the same workflow.
 
 ## Custom result types
 
-Typed results use Python's standard `TypedDict`, `Literal`, and `NotRequired` annotations rather than Dext-specific classes. The declared `kind` must be one `Literal` string; fields become the API output JSON Schema and member completions. TypedDict inheritance, `Protocol`, and complex generic types are intentionally unsupported.
+Every value a Dext API returns is one of the declared result types: `AskResult`, `PlanResult`, `AgentResult`, `TemplateResult`, `ApplyResult`, `TerminalResult`, `SkillResult`, the `Ui*Result` variants, and `McpRawResult`. A custom API returns one of them like any other value, and there is no per-file result declaration to write. `ask`, `skill` and `template` share the `{ kind, text }` shape, and `PatchResult` is the type of `AgentResult.patch` rather than a result kind of its own.
 
-```python
-from typing import Literal, NotRequired, TypedDict
+Declare your own interfaces and types freely for the values a module uses internally — they are ordinary TypeScript. Only the values that cross a Dext API boundary must stay JSON-serializable, and only the declared result types can be handed to `apply`:
 
-class ReviewResult(TypedDict):
-    kind: Literal["review"]
-    uri: str
-    content: str
-    title: NotRequired[str]
+```ts
+import type { AgentResult } from "dext";
+
+interface ReviewSummary {
+  title: string;
+  files: string[];
+}
+
+function summarize(result: AgentResult): ReviewSummary {
+  return {
+    title: result.summary ?? result.text,
+    files: (result.files ?? []).map((file) => file.uri),
+  };
+}
 ```
-
 
 ## Execution and previews
 
-Without an Agent profile, Dext validates workflow structure, resolves immutable code references, and produces typed deterministic result previews. With a profile selected, the same typed API contract is sent to the CLI and its structured output is validated before display. A preview does not mean an AI task has run.
+A Code run executes immediately in the Node kernel. Every Dext API call is dispatched to the extension host, where the same typed contract and result validation apply whether or not an Agent profile is selected. `terminal`, `apply` and `ui.*` are always handled by Dext itself.
+
+Without an Agent profile, `ask`, `plan` and `agent` return a deterministic echo of their input and make no workspace changes, and `skill` and `template` report that they need a profile. A preview does not mean an AI task has run. With a profile selected, the call goes to the selected CLI and its structured output is validated before display.
+
+## Continuing a failed Code run
+
+A failed Code turn offers **Continue**. Dext recorded every Dext API call the failed attempt made — in order, with the arguments it used — and Continue replays them: a call that still matches returns the response it produced before, so the work that already succeeded is not repeated, and the run resumes at the first call that is new. `console.log`/`console.error` output is not a recorded call and never affects the alignment.
+
+Replay is exact or it stops. Dext compares the call index, the method and the arguments; the first difference means the code — or a value the recording cannot see, such as `Date.now()`, `Math.random()`, an environment variable or a file read outside a Dext call — sent the second attempt down another path. Rather than attaching an old response to a different call, the run stops with an explicit "the recorded calls no longer line up" error and the turn can be retried from the start. A stopped turn is not a continuation point: Stop ends it.
+
+Old `.dx` checkpoints from earlier versions are not read and cannot be resumed; Code files and their turns start fresh.
 
 ## UI interactions and forms
 
-All UI calls wait for the user's answer and produce one workflow step. `presentation="inline"` places the interaction above Process in its conversation; `"dialog"` uses a dialog. Waiting pauses only the calling workflow. Stopping the task interrupts the wait and skips subsequent steps.
+All UI calls wait for the user's answer and produce one workflow step. `presentation: "inline"` places the interaction above Process in its conversation; `"dialog"` uses a dialog. Waiting pauses only the calling workflow. Stopping the task interrupts the wait and skips subsequent steps.
 
-```text
-ui.select(label, options, multiple=False, placeholder="Select…", presentation="dialog")
-ui.radio(label, options, allow_custom=False, custom_placeholder="", presentation="dialog")
-ui.checkbox(label, options, allow_custom=False, custom_placeholder="", presentation="dialog")
-ui.input(label, placeholder="", multiline=False, presentation="dialog")
-ui.confirm(message, confirm_label="Continue", cancel_label="Cancel", presentation="dialog")
-ui.alert(message, acknowledge_label="OK", presentation="dialog")
-ui.form(title, fields, description="", submit_label="Submit", cancel_label="Cancel", show_cancel=True, presentation="inline")
+```ts
+ui.select(options: { label: string; options: string[]; multiple?: boolean; placeholder?: string; presentation?: "inline" | "dialog" }): Promise<UiSelectResult>
+ui.radio(options: { label: string; options: string[]; allow_custom?: boolean; custom_placeholder?: string; presentation?: "inline" | "dialog" }): Promise<UiRadioResult>
+ui.checkbox(options: { label: string; options: string[]; allow_custom?: boolean; custom_placeholder?: string; presentation?: "inline" | "dialog" }): Promise<UiCheckboxResult>
+ui.input(options: { label: string; placeholder?: string; multiline?: boolean; presentation?: "inline" | "dialog" }): Promise<UiInputResult>
+ui.confirm(options: { message: string; confirm_label?: string; cancel_label?: string; presentation?: "inline" | "dialog" }): Promise<UiConfirmResult>
+ui.alert(options: { message: string; acknowledge_label?: string; presentation?: "inline" | "dialog" }): Promise<UiAlertResult>
+ui.form(options: { title: string; fields: UiField[]; description?: string; submit_label?: string; cancel_label?: string; show_cancel?: boolean; presentation?: "inline" | "dialog" }): Promise<UiFormResult>
 ```
 
 | API / field | Control | Result payload |
 | --- | --- | --- |
-| `ui.select` / `select` | Collapsed single or multiple dropdown | `type="select"`, `selected` array |
-| `ui.radio` / `radio` | Expanded mutually exclusive options | `type="radio"`, `selected` array and optional `custom` |
-| `ui.checkbox` / `checkbox` | Expanded independent checkboxes | `type="checkbox"`, `selected` array and optional `custom` |
-| `ui.input` / `input` | Single or multiline text | `type="input"`, string `value` |
-| `ui.confirm` | Confirm / cancel buttons | `type="confirm"`, boolean `confirmed` |
-| `ui.alert` | Acknowledge information | `type="alert"`, `status="acknowledged"` or `"dismissed"` |
-| `ui.form` | Submit all fields together | `type="form"`, `status="submitted"` or `"cancelled"`, `answers` keyed by field ID |
+| `ui.select` / `select` | Collapsed single or multiple dropdown | `type: "select"`, `selected` array |
+| `ui.radio` / `radio` | Expanded mutually exclusive options | `type: "radio"`, `selected` array and optional `custom` |
+| `ui.checkbox` / `checkbox` | Expanded independent checkboxes | `type: "checkbox"`, `selected` array and optional `custom` |
+| `ui.input` / `input` | Single or multiline text | `type: "input"`, string `value` |
+| `ui.confirm` | Confirm / cancel buttons | `type: "confirm"`, boolean `confirmed` |
+| `ui.alert` | Acknowledge information | `type: "alert"`, `status: "acknowledged"` or `"dismissed"` |
+| `ui.form` | Submit all fields together | `type: "form"`, `status: "submitted"` or `"cancelled"`, `answers` keyed by field ID |
 
-API results include `kind="ui"`. Field answers inside `answers` contain only `type` and their value properties. A field description creates no interaction itself; never put executing API calls inside `fields`.
+API results include `kind: "ui"`. Field answers inside `answers` contain only `type` and their value properties. A field description creates no interaction itself; never put executing API calls inside `fields`.
 
-```python
-fields = [
-    {"id": "environment", "type": "select", "label": "Environment", "options": [
-        {"value": "dev", "label": "Development", "description": "Local environment"},
-        {"value": "test", "label": "Testing"}
-    ]},
-    {"id": "approach", "type": "radio", "label": "Approach", "options": ["inspect", "change"], "allow_custom": True},
-    {"id": "checks", "type": "checkbox", "label": "Checks", "options": ["types", "tests", "build"], "required": False},
-    {"id": "details", "type": "input", "label": "Details", "multiline": True, "required": False},
-    {"id": "run_tests", "type": "radio", "label": "Run tests?", "options": [
-        {"value": "yes", "label": "Yes"}, {"value": "no", "label": "No"}
-    ]}
-]
-reply = ui.form(title="Settings", fields=fields, submit_label="Apply settings")
-if reply.status == "submitted":
-    if reply.answers["run_tests"].selected[0] == "yes":
-        print(text="Run the selected checks")
+```ts
+import { ui, type UiField } from "dext";
+
+const fields: UiField[] = [
+  { id: "environment", type: "select", label: "Environment", options: [
+    { value: "dev", label: "Development", description: "Local environment" },
+    { value: "test", label: "Testing" }
+  ] },
+  { id: "approach", type: "radio", label: "Approach", options: ["inspect", "change"], allow_custom: true },
+  { id: "checks", type: "checkbox", label: "Checks", options: ["types", "tests", "build"], required: false },
+  { id: "details", type: "input", label: "Details", multiline: true, required: false },
+  { id: "run_tests", type: "radio", label: "Run tests?", options: [
+    { value: "yes", label: "Yes" }, { value: "no", label: "No" }
+  ] }
+];
+const reply = await ui.form({ title: "Settings", fields, submit_label: "Apply settings" });
+if (reply.status === "submitted") {
+  if (reply.answers["run_tests"]?.selected?.[0] === "yes") {
+    console.log("Run the selected checks");
+  }
+}
 ```
 
 The form-level `description` renders Markdown, including headings, lists, code, tables and HTTPS images (`![caption](https://...)`), in both inline and dialog presentations. Images fit the available width and link to the original; failed loads show a fallback link (signed attachment URLs can expire). Raw HTML is displayed as text. Titles, field labels and field descriptions remain plain text. Pass task notes directly as `description`; no extra image field is needed.
 
-Fields have a unique `id`, `label`, optional `description`, `required` (default `True`) and `default`. Without an explicit default, form fields start unanswered. Choice defaults are arrays of option values; input defaults are strings. Default values must satisfy the field contract. Options are nonempty lists of strings or `{value, label, description?}` objects with unique string values. A string option is its own value. `radio` and `checkbox` do not accept `multiple`; only `select` supports it. Dropdowns do not accept custom text. Radio custom text excludes predefined options; checkbox custom text may accompany selections.
+Fields have a unique `id`, `label`, optional `description`, `required` (default `true`) and `default`. Without an explicit default, form fields start unanswered. Choice defaults are arrays of option values; input defaults are strings. Default values must satisfy the field contract. Options are nonempty lists of strings or `{value, label, description?}` objects with unique string values. A string option is its own value. `radio` and `checkbox` do not accept `multiple`; only `select` supports it. Dropdowns do not accept custom text. Radio custom text excludes predefined options; checkbox custom text may accompany selections.
 
-Required choices need a selection or allowed custom answer. Required input uses trimmed text to check emptiness, but preserves the submitted text. Optional empty fields are omitted. A yes/no question is an ordinary radio: `selected=["no"]` is a submitted answer, never cancellation or a boolean. Use explicit string comparison in workflow branches.
+Required choices need a selection or allowed custom answer. Required input uses trimmed text to check emptiness, but preserves the submitted text. Optional empty fields are omitted. A yes/no question is an ordinary radio: `["no"]` is a submitted answer, never cancellation or a boolean. Use explicit string comparison in workflow branches.
 
-Shortcuts accept string option lists. `ui.radio` preselects the first item, `ui.checkbox` starts empty and permits an empty submission, and `ui.select` starts at its placeholder and requires a selection. `ui.input` preserves empty strings (`value=""`) on submission; cancellation omits `value`. Cancelled selection shortcuts return their own result type with `selected=[]` and no custom draft. Use `ui.form` to distinguish cancellation from an empty submission.
+Shortcuts accept string option lists. `ui.radio` preselects the first item, `ui.checkbox` starts empty and permits an empty submission, and `ui.select` starts at its placeholder and requires a selection. `ui.input` preserves empty strings (`value: ""`) on submission; cancellation omits `value`. Cancelled selection shortcuts return their own result type with `selected: []` and no custom draft. Use `ui.form` to distinguish cancellation from an empty submission.
 
-Cancelling or closing a form returns `status="cancelled", answers={}`; submitting an empty-field form returns `status="submitted", answers={}`. `fields=[]` can express confirmation or information-only dialogs. `show_cancel=False` hides the cancel button, while the close action and stopping the task remain available. Confirm closes as `confirmed=False`. Alert's main button acknowledges; its close button or Escape dismisses. Clicking the backdrop does not dismiss an alert. Acknowledging information does not grant permission for a subsequent operation.
+Cancelling or closing a form returns `status: "cancelled", answers: {}`; submitting an empty-field form returns `status: "submitted", answers: {}`. `fields: []` can express confirmation or information-only dialogs. `show_cancel: false` hides the cancel button, while the close action and stopping the task remain available. Confirm closes as `confirmed: false`. Alert's main button acknowledges; its close button or Escape dismisses. Clicking the backdrop does not dismiss an alert. Acknowledging information does not grant permission for a subsequent operation.
 
 Dropdown Escape closes the option popup first; another Escape closes the container. Radio supports arrow keys, checkboxes support Space, and dialogs restore focus. Pending requests and non-secret drafts survive conversation switches and Webview reconstruction while the host execution remains live. Completed requests show read-only summaries. Historical requests after a host restart are closed.
 
 Workflow and Agent inputs share controls. Native Agent questions still return one answer per question, preserve asynchronous answering and Skip, and clear secret input on submission without storing it in drafts or history. Public fields do not expose secret inputs.
 
-Limits: 32 fields, 200 options per field, 2,000 characters per label/value, 20,000 per text, and 200,000 UTF-8 bytes per form or answer payload. Unsupported fields/attributes, duplicate IDs/options/selections and answers not matching the live request are rejected. Unknown historical results use bounded, escaped read-only text/JSON; they never resume execution. Search, remote options, free creation, virtual lists, conditional fields and nested groups are outside this API version. Ordinary output uses `print`; progress remains in Process/Todo.
+Limits: 32 fields, 200 options per field, 2,000 characters per label/value, 20,000 per text, and 200,000 UTF-8 bytes per form or answer payload. Unsupported fields/attributes, duplicate IDs/options/selections and answers not matching the live request are rejected. Unknown historical results use bounded, escaped read-only text/JSON; they never resume execution. Search, remote options, free creation, virtual lists, conditional fields and nested groups are outside this API version. Ordinary output uses `console.log`; progress remains in Process/Todo.
