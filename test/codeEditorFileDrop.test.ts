@@ -1,9 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { BUILTIN_METHODS } from "../src/core/builtins.js";
-import { MethodRegistry } from "../src/core/registry.js";
-import { compileWorkflow } from "../src/core/workflow.js";
 import { DextCodeEditor } from "../src/webview/codeEditor.js";
 import { inputReferenceProjections } from "../src/webview/fileReferenceDecorations.js";
+import { fileReferenceInsertion } from "../src/webview/inputInsertion.js";
 
 vi.mock('../src/webview/monacoEnvironment.js', () => ({ monaco: {
   Range: { fromPositions: (from: {column:number}, to: {column:number}) => ({ startColumn:from.column,endColumn:to.column }) },
@@ -103,12 +101,6 @@ describe("Monaco file-reference drop", () => {
     expect(editor.source).toBe("解释代码");
   });
 
-  function expectCompiled(source: string): void {
-    const registry = new MethodRegistry();
-    registry.registerMany(BUILTIN_METHODS, "builtin");
-    expect(compileWorkflow(source, registry).diagnostics).toEqual([]);
-  }
-
   it("inserts at the current selection outside an agent input", () => {
     const source = 'input = """这段代码是什么含义\n"""\nagent(input=input)';
     const cursor = source.indexOf("\n");
@@ -118,7 +110,9 @@ describe("Monaco file-reference drop", () => {
 
     expect(editor.source).toContain('input = """这段代码是什么含义 @src/pathx.py#L55,1-L66,32\n"""');
     expect(editor.source).toContain("agent(input=input)");
-    expectCompiled(editor.source);
+    // The drop delegates to the shared insertion helper rather than re-rendering.
+    expect(fileReferenceInsertion(source, cursor, cursor, ['@src/pathx.py#L55,1-L66,32']))
+      .toMatchObject({ from: cursor, to: cursor });
     expect(editor.source).not.toContain('f"');
     expect(editor.source).not.toContain('ref.file(');
     const [projection] = inputReferenceProjections(editor.source);
@@ -136,6 +130,9 @@ describe("Monaco file-reference drop", () => {
     expect(editor.source).toMatch(/^agent\(input="这段代码是什么含义，/);
     expect(editor.source).not.toContain('f"');
     expect(editor.source).not.toContain("ref.file(");
-    expectCompiled(editor.source);
+    const edit = fileReferenceInsertion(source, position, position, ['@src/pathx.py#L55,1-L66,32']);
+    const rebuilt = `${source.slice(0, edit.from)}${edit.text}${source.slice(edit.to)}`;
+    expect(rebuilt).toMatch(/^agent\(input="这段代码是什么含义，/);
+    expect(rebuilt).toContain("@src/pathx.py#L55,1-L66,32");
   });
 });

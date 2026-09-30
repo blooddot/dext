@@ -1,6 +1,5 @@
 import type { UiFormDefinition, UiFormResult, UiInteractionState } from "./uiForm.js";
 import type { WritableAgentPermission } from "../agentProfiles.js";
-import type { WorkflowCheckpoint } from "./workflowCheckpoint.js";
 export type MethodKind = "command" | "skill";
 export type MethodSource = "builtin" | "global" | "project";
 export type BuiltinOutputKind =
@@ -10,16 +9,13 @@ export type BuiltinOutputKind =
   | "template"
   | "apply"
   | "terminal"
-  | "print"
   | "skill"
-  | "patch"
   | "ui"
-  | "node"
   | "mcpRaw";
 
-/** Custom .dx TypedDict results use their Literal kind without adding a new
- * language keyword or pretending their values are class instances. */
-export type OutputKind = BuiltinOutputKind | (string & {});
+/** A structured MCP tool declares its own `mcp.<server>.<tool>` kind, which is the
+ * one non-builtin kind the runtime still produces. */
+export type OutputKind = BuiltinOutputKind | `mcp.${string}`;
 
 /** Common structural contract shared by every value returned from a Dext API. */
 export interface DextResultBase {
@@ -77,215 +73,6 @@ export type InvocationValue =
   | InvocationValue[]
   | { [key: string]: InvocationValue };
 
-export type WorkflowScalar = string | number | boolean;
-
-export type ArithmeticOperator = "+" | "-" | "*" | "/" | "//" | "%" | "**";
-
-export type CompareOperator = "==" | "!=" | "<" | "<=" | ">" | ">=" | "in" | "not in";
-
-export type FormatConversion = "s" | "r" | "a";
-
-/** One piece of an f-string, a `%`-format, or a `.format()` template. Text is
- * literal; an expression carries its optional `!conversion` and `:spec`. A spec
- * with nested fields keeps them as parts so `{value:{width}}` still works. */
-export type WorkflowFormatPart =
-  | { kind: "text"; text: string }
-  | {
-    kind: "expression";
-    expression: WorkflowExpression;
-    conversion?: FormatConversion;
-    spec?: string;
-    specParts?: WorkflowFormatPart[];
-  };
-
-export type WorkflowExpression =
-  | { kind: "literal"; value: WorkflowScalar; from: number; to: number }
-  | { kind: "list"; values: WorkflowExpression[]; from: number; to: number }
-  | { kind: "object"; entries: { key: string; value: WorkflowExpression; from: number; to: number }[]; from: number; to: number }
-  | { kind: "reference"; reference: ContextReference | DirectoryReference; from: number; to: number }
-  | { kind: "variable"; name: string; from: number; to: number }
-  | { kind: "member"; object: WorkflowExpression; property: string; from: number; to: number }
-  | { kind: "index"; object: WorkflowExpression; index: WorkflowExpression; from: number; to: number }
-  | {
-    kind: "slice";
-    object: WorkflowExpression;
-    start?: WorkflowExpression;
-    stop?: WorkflowExpression;
-    step?: WorkflowExpression;
-    from: number;
-    to: number;
-  }
-  | { kind: "call"; call: WorkflowCall; from: number; to: number }
-  | {
-    /** A list comprehension. Because the body cannot see anything the other
-     * items produce, every item is independent and the runtime fans them out
-     * concurrently instead of running them one after another. */
-    kind: "comprehension";
-    variable: string;
-    iterable: WorkflowExpression;
-    body: WorkflowExpression;
-    from: number;
-    to: number;
-  }
-  | {
-    kind: "format";
-    parts: WorkflowFormatPart[];
-    from: number;
-    to: number;
-  }
-  | {
-    kind: "binary";
-    operator: ArithmeticOperator;
-    left: WorkflowExpression;
-    right: WorkflowExpression;
-    from: number;
-    to: number;
-  }
-  | {
-    kind: "unary";
-    operator: "-" | "+" | "not";
-    value: WorkflowExpression;
-    from: number;
-    to: number;
-  }
-  | {
-    kind: "compare";
-    operator: CompareOperator;
-    left: WorkflowExpression;
-    right: WorkflowExpression;
-    from: number;
-    to: number;
-  }
-  | {
-    kind: "logic";
-    operator: "and" | "or";
-    values: WorkflowExpression[];
-    from: number;
-    to: number;
-  }
-  | {
-    /** A pure string method such as `text.upper()`. Dext evaluates it itself,
-     * without an API round trip and without touching the environment. */
-    kind: "method";
-    receiver: WorkflowExpression;
-    method: string;
-    arguments: WorkflowArgument[];
-    keywords: { name: string; value: WorkflowExpression; from: number; to: number }[];
-    from: number;
-    to: number;
-  }
-  | {
-    /** A pure helper such as `len(text)` or `range(3)`. */
-    kind: "function";
-    name: string;
-    arguments: WorkflowExpression[];
-    keywords: { name: string; value: WorkflowExpression; from: number; to: number }[];
-    from: number;
-    to: number;
-  };
-
-export interface WorkflowArgument {
-  name?: string;
-  value: WorkflowExpression;
-  from: number;
-  to: number;
-}
-
-
-export interface WorkflowCall {
-  kind: "call";
-  method: string;
-  arguments: { name: string; value: WorkflowExpression; from: number; to: number }[];
-  from: number;
-  to: number;
-}
-
-export type WorkflowCondition =
-  | {
-    kind: "comparison";
-    operator: CompareOperator;
-    left: WorkflowExpression;
-    right: WorkflowExpression;
-    from: number;
-    to: number;
-  }
-  | { kind: "boolean"; value: WorkflowExpression; from: number; to: number }
-  | {
-    kind: "logic";
-    operator: "and" | "or";
-    values: WorkflowCondition[];
-    from: number;
-    to: number;
-  }
-  | { kind: "not"; value: WorkflowCondition; from: number; to: number };
-
-export type WorkflowStatement =
-  | {
-    kind: "step";
-    assignment?: string;
-    call: WorkflowCall;
-    from: number;
-    to: number;
-  }
-  | {
-    kind: "assign";
-    assignment: string;
-    expression: WorkflowExpression;
-    from: number;
-    to: number;
-  }
-  | {
-    kind: "if";
-    condition: WorkflowCondition;
-    consequent: WorkflowStatement[];
-    alternate: WorkflowStatement[];
-    from: number;
-    to: number;
-  }
-  | {
-    kind: "for";
-    /** The loop variable, scoped to the body and gone once the loop ends. */
-    variable: string;
-    iterable: WorkflowExpression;
-    body: WorkflowStatement[];
-    from: number;
-    to: number;
-  }
-  | {
-    /** A sequential retry loop. The runtime enforces a finite iteration limit. */
-    kind: "while";
-    condition: WorkflowCondition;
-    body: WorkflowStatement[];
-    from: number;
-    to: number;
-  }
-  | {
-    kind: "try";
-    body: WorkflowStatement[];
-    handler: WorkflowStatement[];
-    /** Name bound to the failure message inside the handler, from `except ... as
-     * name`. Only the handler can see it. */
-    error?: string;
-    /** Runs whether or not the body failed, so cleanup is not skipped. */
-    finalizer: WorkflowStatement[];
-    from: number;
-    to: number;
-  }
-  | {
-    /** Return from a custom API immediately with the evaluated result. */
-    kind: "return";
-    expression: WorkflowExpression;
-    from: number;
-    to: number;
-  };
-
-export interface WorkflowProgram {
-  kind: "workflow";
-  source: string;
-  statements: WorkflowStatement[];
-  returnExpression?: WorkflowExpression;
-}
-
 export interface InvocationArgument {
   name: string;
   value: InvocationValue;
@@ -305,7 +92,7 @@ export interface FieldDefinition {
   type: FieldType;
   /** Named structural type for an object or list element, e.g. `ui.Field`. */
   shapeType?: string;
-  /** Concrete Dext result annotation used by .dx function parameters. */
+  /** Named result type a declared output uses, for MCP typed results and `ui.*`. */
   resultType?: string;
   /** Whether the field may explicitly contain JSON null. */
   nullable?: boolean;
@@ -342,30 +129,12 @@ export interface CallableDefinition {
     resultType?: string;
   };
   context?: ContextReference["kind"][];
+  /** Every API is deterministic now: a custom API is an ordinary TypeScript
+   * module the kernel imports, not a plan the extension host interprets. */
   executor: {
     kind: "deterministic";
     handler: string;
-  } | {
-    kind: "custom";
-    apiId: string;
   };
-}
-
-export interface CustomApiPlan {
-  id: string;
-  sourcePath: string;
-  parameters: string[];
-  program: WorkflowProgram;
-  returnExpression: WorkflowExpression;
-  agent?: string;
-  model?: string;
-  /** File-private helpers. Only main is registered as a public API. */
-  functions?: LocalWorkflowFunction[];
-}
-
-export interface LocalWorkflowFunction {
-  definition: CallableDefinition;
-  program: WorkflowProgram;
 }
 
 export interface RegisteredCallable extends CallableDefinition {
@@ -439,12 +208,6 @@ export interface TerminalResult extends DextResultBase {
   duration_ms: number;
 }
 
-export interface PrintResult extends DextResultBase {
-  kind: "print";
-  text: string;
-  label?: string;
-}
-
 export interface UiSelectResult extends DextResultBase {
   kind: "ui"; type: "select"; selected: string[];
 }
@@ -483,13 +246,6 @@ export interface McpRawResult extends DextResultBase {
   structured?: Record<string, unknown>;
 }
 
-/** Serializable value returned by a whitelisted node.* capability. */
-export interface NodeResult extends DextResultBase {
-  kind: "node";
-  value?: InvocationValue | null;
-  [field: string]: unknown;
-}
-
 export interface PatchChange {
   uri: string;
   before: string;
@@ -511,6 +267,8 @@ export interface McpTypedResult extends DextResultBase {
   [key: string]: unknown;
 }
 
+/** `PatchResult` is not an API output kind: it is the shape of `AgentResult.patch`
+ * and of a turn review's changes. */
 export type DextResult = McpTypedResult
   | AskResult
   | PlanResult
@@ -518,11 +276,8 @@ export type DextResult = McpTypedResult
   | TemplateResult
   | ApplyResult
   | TerminalResult
-  | PrintResult
   | SkillResult
-  | PatchResult
   | UiResult
-  | NodeResult
   | McpRawResult;
 
 export interface ResolvedInvocation {
@@ -563,16 +318,7 @@ export interface ExecutionMetadata {
   requestAgentInput?: (request: AgentInputRequest, signal: AbortSignal) => Promise<AgentInputAnswers | null>;
   /** Process output emitted while an MCP tool is running. */
   onMcpEvent?: (event: McpProcessEvent) => void;
-  /** Called when a Code workflow stops at a failed step. The continuation
-   * retries that step with the values produced by earlier steps intact. */
-  onWorkflowFailure?: (continuation: WorkflowContinuation) => void;
-  /** Internal execution tree for resuming Code and nested custom APIs. */
-  workflowCheckpoint?: WorkflowCheckpoint;
   ui?: UiInteraction;
-}
-
-export interface WorkflowContinuation {
-  resume(metadata?: Readonly<ExecutionMetadata>): Promise<InputExecutionResponse>;
 }
 
 export type McpProcessEventSource = "stdout" | "stderr" | "progress";
@@ -670,13 +416,20 @@ export interface InputExecutionResponse {
   steps?: WorkflowStepResponse[];
 }
 
-export type ExecutionState = "success" | "failed" | "skipped" | "cancelled";
+export type ExecutionState = "success" | "failed" | "cancelled";
 
 export interface WorkflowStepResponse {
   assignment?: string;
   method: string;
   state: ExecutionState;
   response?: RuntimeResponse;
+  /** Process output written by user code (`console.log` / `console.error`). It is
+   * not an API result, so it never carries `invocation` or `durationMs` and is
+   * mutually exclusive with `response`. */
+  stream?: {
+    channel: "stdout" | "stderr";
+    text: string;
+  };
   error?: string;
   /** Zero-based index of a comprehension branch, so concurrent fan-out steps can
    * be told apart and grouped in Output. Absent for ordinary sequential steps. */

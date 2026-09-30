@@ -33,7 +33,6 @@ function applicationWithStubs() {
   const setTimeouts = vi.fn();
   Object.assign(application as unknown as Record<string, unknown>, {
     agentRunner: { setTimeouts },
-    workflowRuntime: { setMaxConcurrency: vi.fn() }
   });
   return { application, setTimeouts };
 }

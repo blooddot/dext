@@ -1,44 +1,57 @@
 import { describe, expect, it } from "vitest";
-import { builtinTypeDefinition, builtinTypeDocument, builtinTypeSignature } from "../src/core/builtinTypeDefinitions.js";
+import { builtinTypeDefinition } from "../src/core/builtinTypeDefinitions.js";
 
 describe("built-in Dext type definitions", () => {
-  it("renders result shapes and stable navigation ranges from one catalog", () => {
-    const definition = builtinTypeDefinition("AgentResult")!;
-    expect(builtinTypeSignature(definition)).toContain("patch?: PatchResult");
-    expect(definition.fields.find((field) => field.name === "summary")).toMatchObject({ type: "string", optional: true });
-    expect(builtinTypeDefinition("PrintResult")?.fields.find((field) => field.name === "label")).toMatchObject({ type: "string", optional: true });
-    const document = builtinTypeDocument();
-    const range = document.ranges.get("PrintResult")!;
-    expect(document.text.slice(range.nameFrom, range.nameTo)).toBe("PrintResult");
-    expect(document.text).toContain("class AgentResult:");
-    const nodeRange = document.ranges.get("NodeUrlParseResult")!;
-    expect(document.text.slice(nodeRange.from, nodeRange.to)).toContain("pathname: str");
-    const formRange = document.ranges.get("UiFormResult")!;
-    expect(document.text.slice(formRange.from, formRange.to)).toContain("answers:");
-    const fieldRange = document.ranges.get("ui.Field")!;
-    expect(document.text.slice(fieldRange.from, fieldRange.to)).toContain("options:");
-    expect(document.text).toContain("class ui:");
-    expect(builtinTypeDefinition("agent.ModelOptions")?.fields.map((field) => field.name)).toContain("model");
-    expect(builtinTypeDefinition("TemplateResult")?.fields.map((field) => field.name)).toEqual(["kind", "text"]);
+  it("exposes the result shapes the runtime returns", () => {
+    expect(builtinTypeDefinition("AgentResult")).toMatchObject({
+      name: "AgentResult",
+      fields: [
+        { name: "kind", type: '"agent"' },
+        { name: "text", type: "string" },
+        { name: "summary", type: "string", optional: true },
+        { name: "patch", type: "PatchResult", optional: true },
+        { name: "files", type: "CodeRef[]", optional: true }
+      ]
+    });
+    expect(builtinTypeDefinition("TerminalResult")?.fields.map((field) => field.name)).toEqual([
+      "kind", "status", "command", "cwd", "exit_code", "stdout", "stderr", "duration_ms"
+    ]);
+    expect(builtinTypeDefinition("TerminalResult")?.fields.find((field) => field.name === "status"))
+      .toMatchObject({ type: '"succeeded" | "failed" | "timed_out"' });
   });
 
-  it("renders every member as a Python annotation", () => {
-    const document = builtinTypeDocument();
-    expect(document.text).not.toContain("?:");
-    const formRange = document.ranges.get("UiFormResult")!;
-    const form = document.text.slice(formRange.from, formRange.to);
+  it("marks only the fields the runtime can omit as optional", () => {
+    const agent = builtinTypeDefinition("AgentResult")!;
+    const field = (name: string) => agent.fields.find((candidate) => candidate.name === name)!;
+    expect(field("text")).toMatchObject({ type: "string" });
+    expect(field("text").optional).toBeUndefined();
+    expect(field("summary").optional).toBe(true);
+    expect(field("patch").optional).toBe(true);
+    expect(builtinTypeDefinition("TemplateResult")?.fields.map((candidate) => candidate.name)).toEqual(["kind", "text"]);
+  });
+
+  it("describes the form result and each answer", () => {
+    const form = builtinTypeDefinition("UiFormResult")!;
     // The runtime always sets the discriminators and the interaction payload.
-    expect(form).toContain('type: "form"');
-    expect(form).not.toContain('type: "form" | None');
-    expect(form).toContain('status: "submitted" | "cancelled"');
-    expect(form).toContain('answers: dict[str, UiFieldAnswer]');
-    const answerRange = document.ranges.get("UiFieldAnswer")!;
-    const answer = document.text.slice(answerRange.from, answerRange.to);
-    expect(answer).toContain('type: "select" | "radio" | "checkbox" | "input"');
-    expect(answer).toContain('selected: list[str] | None');
-    const selectRange = document.ranges.get("UiSelectResult")!;
-    const select = document.text.slice(selectRange.from, selectRange.to);
-    expect(select).toContain('type: "select"');
-    expect(select).not.toContain("| None");
+    expect(form.fields.every((field) => !field.optional)).toBe(true);
+    expect(form.fields.find((field) => field.name === "type")).toMatchObject({ type: '"form"' });
+    expect(form.fields.find((field) => field.name === "status")).toMatchObject({ type: '"submitted" | "cancelled"' });
+    expect(form.fields.find((field) => field.name === "answers")).toMatchObject({ type: "dict[str, UiFieldAnswer]" });
+    expect(builtinTypeDefinition("UiFieldAnswer")?.fields.map((field) => field.name))
+      .toEqual(["type", "selected", "custom", "value"]);
+  });
+
+  it("keeps PatchResult as an AgentResult payload and never exposes PrintResult", () => {
+    const patch = builtinTypeDefinition("AgentResult")!.fields.find((field) => field.name === "patch")!;
+    expect(patch).toMatchObject({ type: "PatchResult", optional: true });
+    expect(builtinTypeDefinition("PrintResult")).toBeUndefined();
+    expect(builtinTypeDefinition("print")).toBeUndefined();
+  });
+
+  it("covers the model option dictionary and form field shapes", () => {
+    expect(builtinTypeDefinition("agent.ModelOptions")?.fields.map((field) => field.name))
+      .toEqual(["model", "reasoning", "speed"]);
+    expect(builtinTypeDefinition("ui.Field")?.fields.find((field) => field.name === "options"))
+      .toMatchObject({ type: "list[string | ui.Option]", optional: true });
   });
 });

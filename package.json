@@ -65,10 +65,6 @@
         "icon": "$(terminal)"
       },
       {
-        "command": "dext.checkApis",
-        "title": "Dext: Check All APIs"
-      },
-      {
         "command": "dext.reloadMethods",
         "title": "Dext: Reload APIs",
         "icon": "$(refresh)"
@@ -352,7 +348,7 @@
       {
         "command": "editor.action.triggerSuggest",
         "key": "alt+/",
-        "when": "editorTextFocus && editorLangId == dext-api && !editorReadonly"
+        "when": "editorTextFocus && !editorReadonly"
       },
       {
         "command": "dext.focus",
@@ -834,24 +830,6 @@
         }
       ]
     },
-    "languages": [
-      {
-        "id": "dext-api",
-        "extensions": [
-          ".dx"
-        ],
-        "aliases": [
-          "Dext API"
-        ]
-      }
-    ],
-    "grammars": [
-      {
-        "language": "dext-api",
-        "scopeName": "source.dext-api",
-        "path": "./syntaxes/dext-api.tmLanguage.json"
-      }
-    ],
     "configuration": {
       "title": "Dext",
       "properties": {
@@ -886,7 +864,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Additional directories searched for .dx API files. Relative paths resolve from the current workspace. The workspace's own .dext/api is always searched first, so a configured directory cannot shadow a project API."
+          "description": "Additional directories searched for API modules (.ts files exporting main). Relative paths resolve from the current workspace. The workspace's own .dext/api is always searched first, so a configured directory cannot shadow a project API."
         },
         "dext.storage.location": {
           "type": "string",
@@ -1201,9 +1179,6 @@
   },
   "devDependencies": {
     "@eslint/js": "9.39.1",
-    "@lezer/common": "^1.2.3",
-    "@lezer/highlight": "^1.2.1",
-    "@lezer/python": "^1.1.18",
     "@types/markdown-it": "^14.2.0",
     "@types/node": "24.10.1",
     "@types/vscode": "1.105.0",

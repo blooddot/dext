@@ -38,7 +38,6 @@ import { planTodoItems, planTodoInstruction, stripPlanTodoProgress } from "./cor
 import { PlanExecution, resumePlanTodos } from "./core/planExecution.js";
 import type { PlanExecutionOutcome } from "./core/types.js";
 import { openDextFileReference, openExternalLink } from "./vscodeContextHost.js";
-import { openBuiltinApiDefinition, DextApiDefinitionProvider } from "./vscodeApiDefinitions.js";
 import { webviewRequestSchema } from "./webviewProtocol.js";
 import type { ConversationSummary, WebviewResponse } from "./webviewProtocol.js";
 import type { AgentSelection } from "./agentProfiles.js";

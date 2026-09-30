@@ -227,9 +227,6 @@ export class DextCompletionHost implements vscode.InlineCompletionItemProvider {
     if (this.disposed) return finish("completion host is closed");
     if (!settings.enabled) return finish("the backend is not configured or is turned off in settings");
     if (this.disabledForSession) return finish("completion is switched off for this window");
-    // `.dx` has a typed API completion provider of its own; a FIM model guessing
-    // at the same position would only fight it.
-    if (document.languageId === "dext-api") return finish("a .dx file is left to the typed API provider");
     if (document.uri.scheme !== "file") return finish(`the document scheme is '${document.uri.scheme}', not 'file'`);
     // Ignored automatic requests must not supersede a manual request during debounce.
     const invocation = ++this.invocation;

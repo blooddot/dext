@@ -6,8 +6,6 @@ import type { UiFormAnswers } from "../core/uiForm.js";
 import "../../media/styles.css";
 import MarkdownIt from "markdown-it";
 import { markdownCodeCopy } from "../markdownCopy.js";
-import { parser as pythonParser } from "@lezer/python";
-import { classHighlighter, highlightCode } from "@lezer/highlight";
 import type {
   AgentStreamEvent,
   AgentToolKind,
@@ -24,7 +22,6 @@ import { ProjectReferenceClient } from "./projectReferenceClient.js";
 import { bindFileDropTarget, droppedFilePaths, fileSelectionDropEffect, isFileDrag } from "./fileDrop.js";
 import { FileDropClient } from "./fileDropClient.js";
 import { DextCodeEditor } from "./codeEditor.js";
-import { LanguageRequestBroker } from "./languageClient.js";
 import { formatDuration } from "./duration.js";
 import { agentMessageCopyText, presentAgentMessage } from "../agentMessagePresentation.js";
 import { presentDiff } from "../diffPresentation.js";
@@ -447,15 +444,6 @@ function restoreCachedAgentRenders(cached: ConversationViewCache): void {
   cached.pendingAgentItems = [];
 }
 
-function escapeHtml(value: string): string {
-  return value.replace(/[&<>"]/g, (character) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    "\"": "&quot;"
-  })[character] ?? character);
-}
-
 const markdown = new MarkdownIt({
   html: false,
   breaks: true,
@@ -463,26 +451,10 @@ const markdown = new MarkdownIt({
   // `[label](url)` form. Turn those into anchors as well, so the shared
   // output-link handler can hand them to the extension host.
   linkify: true,
-  highlight(source, language) {
-    const normalized = language.trim().toLowerCase();
-    if (normalized !== "python" && normalized !== "py") return "";
-    try {
-      let html = "";
-      highlightCode(
-        source,
-        pythonParser.parse(source),
-        classHighlighter,
-        (text, classes) => {
-          html += classes
-            ? `<span class="${classes}">${escapeHtml(text)}</span>`
-            : escapeHtml(text);
-        },
-        () => { html += "\n"; }
-      );
-      return html;
-    } catch {
-      return "";
-    }
+  // Dext output is reproduced as written: the editor's own TypeScript service is
+  // what colours source now, and this renderer only ever saw fenced blocks.
+  highlight() {
+    return "";
   }
 });
 
@@ -498,7 +470,6 @@ const editor = new DextCodeEditor({
   parent: elements.codeEditor,
   workerUri: document.querySelector<HTMLMetaElement>('meta[name="dext-editor-worker"]')!.content,
   dropTarget: elements.inputShell,
-  broker,
   clipboard,
   files: fileSearch,
   projects: projectReferences,
@@ -1039,7 +1010,6 @@ function applySidebarTheme(state: SidebarState): void {
     tokenStyle.id = "dext-token-theme";
     document.head.append(tokenStyle);
   }
-  tokenStyle.textContent = dextTokenStyles(state.theme);
   editor.refreshLanguageState();
 }
 
@@ -2005,86 +1975,15 @@ function referenceIcon(kind: ContextReferenceOccurrence["kind"]): string {
 }
 
 /** Renders readable @path tokens as the same chips used by the editor.
- * The source remains unchanged for copy and history replay. */
-function renderedInputSource(source: string, mode?: DextHistoryRecord["mode"]): HTMLPreElement {
+ * The source remains unchanged for copy and history replay. Dext owns no
+ * language any more, so there are no token classes to apply. */
+function renderedInputSource(source: string): HTMLPreElement {
   const pre = document.createElement("pre");
   pre.className = "dext-source";
-  const parts = inputReferenceDisplayParts(source);
-  if (!shouldHighlightInput(source, mode)) {
-    for (const part of parts) {
-      pre.append(part.kind === "ref" ? inputReferenceChipElement(part.reference) : document.createTextNode(part.value));
-    }
-    return pre;
+  for (const part of inputReferenceDisplayParts(source)) {
+    pre.append(part.kind === "ref" ? inputReferenceChipElement(part.reference) : document.createTextNode(part.value));
   }
-  const references = parts.filter((part): part is Extract<typeof part, { kind: "ref" }> => part.kind === "ref");
-  if (!references.length) {
-    pre.append(highlightDextFragment(source));
-    return pre;
-  }
-
-  // Highlight the complete source with valid identifiers in place of @path
-  // tokens, then swap those identifiers for their interactive Chips. This
-  // keeps strings and multiline calls in one parse tree instead of attempting
-  // to highlight incomplete fragments around each reference.
-  const placeholders = references.map((_, index) => {
-    let value = `__dext_reference_${index}__`;
-    while (source.includes(value)) value = `_${value}_`;
-    return value;
-  });
-  const highlightedSource = parts.map((part) => part.kind === "ref"
-    ? placeholders[references.indexOf(part)]!
-    : part.value
-  ).join("");
-  const highlighted = highlightDextFragment(highlightedSource);
-  const walker = document.createTreeWalker(highlighted, NodeFilter.SHOW_TEXT);
-  const textNodes: Text[] = [];
-  let node: Node | null;
-  while ((node = walker.nextNode())) textNodes.push(node as Text);
-  for (const textNode of textNodes) {
-    const value = textNode.nodeValue ?? "";
-    const marker = new RegExp(`(${placeholders.map(escapeRegExp).join("|")})`, "g");
-    if (!marker.test(value)) continue;
-    marker.lastIndex = 0;
-    const replacement = document.createDocumentFragment();
-    let cursor = 0;
-    for (const match of value.matchAll(marker)) {
-      const index = match.index ?? 0;
-      if (index > cursor) replacement.append(document.createTextNode(value.slice(cursor, index)));
-      const referenceIndex = placeholders.indexOf(match[0]);
-      if (referenceIndex >= 0) replacement.append(inputReferenceChipElement(references[referenceIndex]!.reference));
-      cursor = index + match[0].length;
-    }
-    if (cursor < value.length) replacement.append(document.createTextNode(value.slice(cursor)));
-    textNode.replaceWith(replacement);
-  }
-  pre.append(highlighted);
   return pre;
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function highlightDextFragment(source: string): DocumentFragment {
-  const fragment = document.createDocumentFragment();
-  highlightCode(
-    source,
-    pythonParser.parse(source),
-    dextClassHighlighter,
-    (text, classes) => {
-      if (!text) return;
-      if (!classes) {
-        fragment.append(document.createTextNode(text));
-        return;
-      }
-      const span = document.createElement("span");
-      span.className = classes;
-      span.textContent = text;
-      fragment.append(span);
-    },
-    () => { fragment.append(document.createTextNode("\n")); }
-  );
-  return fragment;
 }
 
 function inputReferenceChipElement(reference: ContextReferenceOccurrence): HTMLElement {
@@ -2211,7 +2110,7 @@ function createOutputTurn(
     input.disclosure.open = !lazy;
     inputBody = input.body;
     if (!lazy) {
-      const inputText = renderedInputSource(source, options.mode);
+      const inputText = renderedInputSource(source);
       const inputCopy = renderTurnInput(turnDomAdapter(document), inputText, copyButton(source));
       input.body.append(inputCopy);
     }
@@ -3877,7 +3776,7 @@ elements.inputShell.addEventListener("paste", (event) => {
 
 window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   const message = event.data;
-  if (broker.accept(message) || clipboard.accept(message) || fileSearch.accept(message) || projectReferences.accept(message) || fileDrop.accept(message)) return;
+  if (clipboard.accept(message) || fileSearch.accept(message) || projectReferences.accept(message) || fileDrop.accept(message)) return;
   if (message.type === "turnRenamed") {
     if (renderedConversationId === message.sessionId) {
       outputTurns.get(message.turnId)?.title.rename(message.title, message.displayTitle);
@@ -4200,7 +4099,6 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
 window.addEventListener("unload", () => {
   removePlanTargetFileDrop?.();
   removeResourceTargetFileDrop?.();
-  broker.dispose();
   clipboard.dispose();
   fileDrop.dispose();
   editor.destroy();

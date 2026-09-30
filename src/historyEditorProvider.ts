@@ -4,7 +4,6 @@ import type { DextHistoryStore } from "./historyStore.js";
 import type { DextConversationPreferences } from "./conversationPreferences.js";
 import { orderHistorySessions } from "./conversationPreferences.js";
 import { historyTokenStyles, historyTurnTitle, renderHistorySession, renderHistorySessionBody } from "./historyRender.js";
-import { loadEditorTokenTheme } from "./vscodeTheme.js";
 import { openDextFileReference } from "./vscodeContextHost.js";
 import type { DextStorage } from "./dextStorage.js";
 
@@ -151,7 +150,7 @@ export class DextHistoryPanel implements vscode.Disposable {
   <link rel="stylesheet" href="${codicons.toString()}">
   <link rel="stylesheet" href="${markdownStyle.toString()}">
   <link rel="stylesheet" href="${style.toString()}">
-  <style>${historyTokenStyles(loadEditorTokenTheme())}</style>
+  <style>${historyTokenStyles()}</style>
   <title>Dext History</title>
 </head>
 <body>

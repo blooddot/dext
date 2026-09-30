@@ -7,7 +7,7 @@ const entry = (name: string, path: string, kind: ResourceEntry["kind"] = "api"):
   source: { kind: "project", label: "Project", path: `.dext/${kind}/${path}` }
 });
 
-const entries = [entry("Task.Query", "Task/Query.dx"), entry("Task.Stats", "Task/Stats.dx"), entry("User.Get", "User/Get.dx")];
+const entries = [entry("Task.Query", "Task/Query.ts"), entry("Task.Stats", "Task/Stats.ts"), entry("User.Get", "User/Get.ts")];
 
 describe("resource documents", () => {
   it("groups entries by directory and searches by name", () => {
@@ -25,11 +25,11 @@ describe("resource documents", () => {
     const list = renderResourceList(buildResourceList({ kind: "api", scope: "project", entries }));
     expect(list).toContain('data-resource-search');
     expect(list).toContain('data-resource-group="Task"');
-    expect(list).toContain('data-resource-open="api:project:Task/Query.dx"');
-    const detail = renderResourceDefinition(buildResourceDefinition(entries[0]!, "def main() -> AskResult:\n  pass"));
+    expect(list).toContain('data-resource-open="api:project:Task/Query.ts"');
+    const detail = renderResourceDefinition(buildResourceDefinition(entries[0]!, "export async function main(): Promise<AskResult> { ... }"));
     expect(detail).toContain("openResourceSource");
     expect(detail).toContain("insertResourceReference");
-    expect(detail).toContain("def main()");
+    expect(detail).toContain("export async function main()");
   });
 
   it("reports a concurrent edit as a conflict instead of overwriting", () => {

@@ -1,12 +1,6 @@
 import type { ResourceSession } from "./resourceSession.js";
 import { UI_LIMITS, uiFormResultSchema } from "./core/uiForm.js";
 import { z } from "zod";
-import type {
-  CompletionItem,
-  LanguageHover,
-  LanguageDiagnostic,
-  SignatureHelp
-} from "./core/languageService.js";
 import type { AgentStreamEvent, InputExecutionResponse, RegisteredCallable, PlanExecutionOutcome } from "./core/types.js";
 import type { TurnReview } from "./core/turnReview.js";
 import type { KnowledgeSuggestion } from "./core/projectKnowledgeReview.js";
@@ -360,11 +354,3 @@ export type WebviewResponse =
   | { type: "triggerParameterHints" }
   | { type: "error"; message: string; sessionId?: string }
   | { type: "focusEditor" };
-
-export interface InputDefinition {
-  uri: string;
-  content?: string;
-  originFrom: number;
-  originTo: number;
-  range: { startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number };
-}

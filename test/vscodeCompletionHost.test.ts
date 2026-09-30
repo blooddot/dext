@@ -337,17 +337,18 @@ describe("inline completion host", () => {
     provider.dispose();
   });
 
-  it("leaves .dx files to the typed API provider and skips non-file documents", async () => {
+  it("offers completion in TypeScript files and skips non-file documents", async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ choices: [{ text: "x" }] })));
     vi.stubGlobal("fetch", fetchImpl);
     const provider = host();
+    // Code mode is plain TypeScript now, so FIM applies to it like any other file.
     expect(await provider.provideInlineCompletionItems(
-      document("ask(", { languageId: "dext-api" }), position, context, cancellation()
-    )).toEqual([]);
+      document("const answer = await ask({ input: \"x\" });\n", { languageId: "typescript" }), position, context, cancellation()
+    )).not.toEqual([]);
     expect(await provider.provideInlineCompletionItems(
       document("const a = ", { scheme: "untitled" }), position, context, cancellation()
     )).toEqual([]);
-    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
     provider.dispose();
   });
 
@@ -361,9 +362,9 @@ describe("inline completion host", () => {
     expect(provider.report()).toMatchObject({ invocations: 1, outcome: "offered a completion" });
 
     await provider.provideInlineCompletionItems(
-      document("ask(", { languageId: "dext-api" }), position, context, cancellation()
+      document("const answer = await ask({ input: \"x\" });\n", { languageId: "typescript" }), position, context, cancellation()
     );
-    expect(provider.report().outcome).toContain("typed API provider");
+    expect(provider.report().outcome).toContain("offered a completion");
 
     await provider.provideInlineCompletionItems(
       document("const a = ", { scheme: "untitled" }), position, context, cancellation()

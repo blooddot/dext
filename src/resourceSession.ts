@@ -26,7 +26,7 @@ export interface ResourceSession {
 export function resourceFileName(type: ResourceKind, name: string): string {
   if (type === "api") {
     if (!/^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)*$/.test(name)) throw new Error("Invalid API name.");
-    return `${name.replaceAll(".", "/")}.dx`;
+    return `${name.replaceAll(".", "/")}.ts`;
   }
   if (type === "file") {
     const normalized = name.trim().replaceAll("\\", "/");
@@ -40,7 +40,7 @@ export function resourceFileName(type: ResourceKind, name: string): string {
 export function resourcePathSegments(type: ResourceKind, path: string): string[] {
   const parts = path.split("/");
   if (parts.some((part) => !part || part === "." || part === ".." || /[\\:]/.test(part) || Array.from(part).some((character) => character.charCodeAt(0) < 32))) throw new Error("Invalid resource path.");
-  const valid = type === "file" ? true : type === "api" ? path.endsWith(".dx") : type === "mcp" ? parts.length === 1 && /\.jsonc?$/.test(path)
+  const valid = type === "file" ? true : type === "api" ? path.endsWith(".ts") : type === "mcp" ? parts.length === 1 && /\.jsonc?$/.test(path)
     : type === "skill" ? parts.length >= 2 && parts.at(-1) === "SKILL.md" : path.endsWith(".md");
   if (!valid) throw new Error("The selected file does not match the resource type.");
   return parts;
@@ -52,7 +52,7 @@ export function resourcePrompt(resource: ResourceSession, input: string): string
     `Generate one complete Dext ${RESOURCE_LABELS[resource.type]} resource. Do not write files; return a draft for review.`,
     "Return exactly one JSON object with string fields name and content, without markdown fences or commentary.",
     resource.type === "file" ? "name is a safe workspace-relative file path. content is the complete file content, preserving the file's format and extension."
-      : resource.type === "api" ? "name is a dotted API id. content is valid Dext .dx source containing main with typed parameters and a result return annotation, for example def main(input: str) -> AskResult: followed by return ask(input=input)."
+      : resource.type === "api" ? "name is a dotted API id. content is a TypeScript module exporting main, for example export async function main(input: string): Promise<AskResult> { return await ask({ input }); } — result types such as AskResult are exported by the dext module rather than declared globally, so import the ones the signature uses as types: import { ask, type AskResult } from \"dext\";."
       : resource.type === "mcp" ? "content is a complete JSONC MCP manifest with name, transport (stdio or http), command/args or url, and a tools allowlist array. Preserve existing tool schemas, auth and other settings unless the user requests changes. Credentials must be environment/SecretStorage references."
         : resource.type === "skill" ? "name is a safe directory name. content is a complete SKILL.md."
           : "name is a safe markdown filename. content is policy markdown.",

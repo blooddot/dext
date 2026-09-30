@@ -2,13 +2,10 @@ import { answerChoices, uiFieldChoices, uiResultText, type AnswerChoice } from "
 import { readHistoryResponse } from "./historyResponse.js";
 import { renderTurnSection, renderTurnInput, renderTurnMarkdown, renderTurnResult, renderTurnMessage, turnHtmlAdapter } from "./turnComponents.js";
 import { formatJsonOutput } from "./webview/jsonOutput.js";
-import { parser } from "@lezer/python";
-import { highlightCode } from "@lezer/highlight";
 import MarkdownIt from "markdown-it";
 import { markdownCodeCopy } from "./markdownCopy.js";
 import { latestAgentTodos, renderAgentTodos, planExecutionLabel } from "./agentTodoPresentation.js";
 import type { AgentStreamEvent, DextResult, InputExecutionResponse, RuntimeResponse, WorkflowStepResponse } from "./core/types.js";
-import type { EditorTokenTheme } from "./vscodeTheme.js";
 import type { DextHistoryRecord, DextHistorySession } from "./historyStore.js";
 import {
   TURN_RENAME_ACTION, TURN_FORK_ACTION, TURN_COPY_ACTION, TURN_DELETE_ACTION, presentTurn,
@@ -17,7 +14,6 @@ import {
 import { agentMessageCopyText, presentAgentMessage } from "./agentMessagePresentation.js";
 import { presentDiff } from "./diffPresentation.js";
 import type { PatchChange } from "./core/types.js";
-import { dextClassHighlighter, dextTokenStyles, shouldHighlightInput } from "./dextTokenTheme.js";
 import { prepareHistoryTrace } from "./core/agentTraceReplay.js";
 import {
   contextReferenceLabel,
@@ -141,18 +137,10 @@ function renderFileChange(change: Pick<PatchChange, "uri" | "before" | "after">)
   return `<details class="history-disclosure file-change" data-diff-container><summary>${chevron()}<span>${escapeHtml(name)}</span><span class="history-meta"><span class="diff-added">+${counts.added}</span> <span class="diff-removed">-${counts.removed}</span></span>${diffModeSwitch()}</summary><div class="file-path">${escapeHtml(change.uri)}</div>${renderDiff(change)}</details>`;
 }
 
+/** Source text as safe HTML. Dext no longer owns a language, so there are no
+ * token classes to apply: the editor's own TypeScript service renders source. */
 export function highlightDext(source: string): string {
-  let html = "";
-  highlightCode(
-    source,
-    parser.parse(source),
-    dextClassHighlighter,
-    (text, classes) => {
-      html += classes ? `<span class="${classes}">${escapeHtml(text)}</span>` : escapeHtml(text);
-    },
-    () => { html += "\n"; }
-  );
-  return html;
+  return escapeHtml(source);
 }
 
 const ANSI_COLOR_CLASSES = [
@@ -297,35 +285,15 @@ function plainInputSource(source: string): string {
   ).join("");
 }
 
-function renderedInputSource(source: string, mode?: DextHistoryRecord["mode"]): string {
-  const normalized = normalizeInputReferenceSource(source);
-  if (!shouldHighlightInput(normalized, mode)) return plainInputSource(normalized);
-  const parts = inputReferenceDisplayParts(normalized);
-  const references = parts.filter((part): part is Extract<typeof part, { kind: "ref" }> => part.kind === "ref");
-  if (!references.length) return highlightDext(normalized);
-
-  // Keep references as widgets while highlighting the complete source. A
-  // placeholder is a valid Python identifier in every context where a
-  // readable @path token can occur (including inside a string), so Lezer can
-  // still classify the surrounding Dext syntax correctly. Replace the
-  // placeholder after highlighting to avoid breaking token spans.
-  const placeholders = references.map((_, index) => `__dext_reference_${index}__`);
-  const highlightedSource = parts.map((part) => part.kind === "ref"
-    ? placeholders[references.indexOf(part)]!
-    : part.value
-  ).join("");
-  let html = highlightDext(highlightedSource);
-  references.forEach((part, index) => {
-    html = html.replaceAll(escapeHtml(placeholders[index]!), inputReferenceChip(part.reference));
-  });
-  return html;
+/** References stay chips; everything around them is escaped text. */
+function renderedInputSource(source: string): string {
+  return plainInputSource(normalizeInputReferenceSource(source));
 }
 
 function resultText(result: DextResult): string {
-  if (result.kind === "ask" || result.kind === "plan" || result.kind === "skill" || result.kind === "print" || result.kind === "agent" || result.kind === "template") return result.text;
+  if (result.kind === "ask" || result.kind === "plan" || result.kind === "skill" || result.kind === "agent" || result.kind === "template") return result.text;
   if (result.kind === "apply") return result.summary;
   if (result.kind === "terminal") return [result.stdout, result.stderr].filter(Boolean).join("\n");
-  if (result.kind === "patch") return result.changes.map((change) => `${change.uri}\n- ${change.before}\n+ ${change.after}`).join("\n\n");
   return uiResultText(result);
 }
 
@@ -521,7 +489,7 @@ export function renderHistoryRecord(record: DextHistoryRecord, sessionId?: strin
   const target = sessionId ? ` data-session-id="${escapeHtml(sessionId)}" data-turn-id="${escapeHtml(record.id)}"` : "";
   const inputHtml = turn.input
     ? historyTurnSection(turn.input, renderTurnInput(turnHtmlAdapter,
-      { html: `<pre class="dext-source">${renderedInputSource(turn.input.source, record.mode)}</pre>` },
+      { html: `<pre class="dext-source">${renderedInputSource(turn.input.source)}</pre>` },
       { html: copyButton(turn.input.source) }).html)
     : "";
   const planOutcome = record.planOutcome ?? (planExecution?.result.kind === "plan" ? planExecution.result.planOutcome : undefined);
@@ -593,6 +561,6 @@ export function conversationMarkdown(session: DextHistorySession): string {
   return [`# Dext conversation — ${dateLabel(session.createdAt)}`, ...turns].join("\n\n");
 }
 
-export function historyTokenStyles(theme?: EditorTokenTheme): string {
-  return dextTokenStyles(theme);
+export function historyTokenStyles(): string {
+  return "";
 }

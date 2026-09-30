@@ -186,7 +186,7 @@ function extractIssues(error: unknown): { path?: readonly (string | number | sym
 }
 
 /** Non-throwing zod validation used by callers that need a diagnostic string
- * rather than an exception (workflowRuntime, result repair assertions). */
+ * rather than an exception (the interpreter, result repair assertions). */
 export function safeValidate<T extends z.ZodType>(
   schema: T,
   value: unknown

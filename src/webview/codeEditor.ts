@@ -16,7 +16,10 @@ export interface CodeEditorOptions {
   parent: HTMLElement;
   dropTarget?: HTMLElement;
   workerUri?: string;
-  broker: LanguageRequestBroker;
+  /** Legacy language channel. The TypeScript worker owns completion,
+   * hover, signature help and diagnostics now, so the editor never calls it;
+   * the host may still pass it while the removed language stack is cleaned up. */
+  broker?: unknown;
   clipboard: ClipboardClient;
   files: FileSearchClient;
   projects?: ProjectReferenceClient;
@@ -136,11 +139,9 @@ export class DextCodeEditor {
     // leave the event available for snippet/find cancellation as well.
     this.disposables.push(this.view.onKeyDown(event => { if (event.keyCode === monaco.KeyCode.Escape) this.dismissAssistance(); }));
     this.chatEnter = this.view.createContextKey<boolean>("dextChatEnter", false);
-    this.disposables.push(registerMonacoLanguage({
-      model: this.model, editor: this.view, projection: this.projection,
-      broker: options.broker, files: options.files, source: () => this.source, enabled: () => this.languageEnabled,
-      ...(options.projects ? { projects: options.projects } : {}),
-      revision: () => this.dropRevision, range: (from, to) => this.sourceRange(from, to)
+    // The TypeScript worker publishes diagnostics as markers on the model.
+    this.disposables.push(monaco.editor.onDidChangeMarkers((resources) => {
+      if (resources.some((resource) => resource.toString() === this.model.uri.toString())) this.scheduleDiagnostics();
     }));
     this.disposables.push(this.model.onDidChangeContent(event => {
       if (this.transforming) return;
@@ -350,22 +351,20 @@ export class DextCodeEditor {
     this.chatEnter.set(!enabled && this.submitOnEnter); this.scheduleDiagnostics();
   }
   refreshLanguageState(): void { this.dropRevision++; this.scheduleDiagnostics(); }
-  private scheduleDiagnostics(): void { if (this.diagnosticsTimer) clearTimeout(this.diagnosticsTimer); this.diagnosticsTimer = setTimeout(() => { void this.updateDiagnostics(); }, 120); }
-  private async updateDiagnostics(): Promise<void> {
+  private scheduleDiagnostics(): void { if (this.diagnosticsTimer) clearTimeout(this.diagnosticsTimer); this.diagnosticsTimer = setTimeout(() => { this.publishDiagnostics(); }, 120); }
+  /** Diagnostics come from the TypeScript worker as markers on the model, so
+   * they are read back from Monaco instead of the removed language service. */
+  private publishDiagnostics(): void {
     if (this.destroyed) return;
-    const source = this.source, revision = this.dropRevision;
-    const result = this.languageEnabled && source.trim() ? await this.options.broker.request(source, source.length, undefined, "diagnostics") : undefined;
-    if (this.destroyed || revision !== this.dropRevision) return;
-    const diagnostics = result?.diagnostics ?? [];
-    monaco.editor.setModelMarkers(this.model, "dext", diagnostics.map(d => ({
-      ...this.sourceRange(d.from ?? d.offset, d.to ?? d.offset + 1),
-      message: d.message, severity: d.severity === "error" ? monaco.MarkerSeverity.Error : monaco.MarkerSeverity.Warning
-    })));
-    this.options.onDiagnosticsChanged({ errors: diagnostics.filter(d => d.severity === "error").length, warnings: diagnostics.filter(d => d.severity === "warning").length });
-    this.options.onInputKindChanged(result?.inputKind ?? (source.trim() ? "workflow" : "empty"));
+    const markers = monaco.editor.getModelMarkers({ resource: this.model.uri });
+    this.options.onDiagnosticsChanged({
+      errors: markers.filter(marker => marker.severity === monaco.MarkerSeverity.Error).length,
+      warnings: markers.filter(marker => marker.severity === monaco.MarkerSeverity.Warning).length
+    });
+    this.options.onInputKindChanged(this.source.trim() ? "workflow" : "empty");
   }
   goToFirstDiagnostic(): boolean {
-    const marker = monaco.editor.getModelMarkers({ resource: this.model.uri, owner: "dext" })[0]; if (!marker) return false;
+    const marker = monaco.editor.getModelMarkers({ resource: this.model.uri })[0]; if (!marker) return false;
     this.view.setSelection(marker); this.view.revealRangeInCenterIfOutsideViewport(marker); this.focus(); return true;
   }
   destroy(): void {

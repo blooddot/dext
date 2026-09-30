@@ -3,7 +3,6 @@ import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BUILTIN_METHODS } from "../src/core/builtins.js";
-import { loadCustomApis } from "../src/core/customApi.js";
 import { ContextResolver, type ContextHost } from "../src/core/contextResolver.js";
 import { MethodRegistry } from "../src/core/registry.js";
 import { DextRuntime } from "../src/core/runtime.js";
@@ -282,31 +281,6 @@ describe("template API", () => {
         { name: "source", value: "templates/adr.md" }
       ]))).rejects.toThrow(/configured Agent profile/);
     });
-  });
-
-  it("compiles a .dx API that returns TemplateResult and writes the rendered file itself", async () => {
-    const registry = new MethodRegistry();
-    registry.registerMany(BUILTIN_METHODS, "builtin");
-    const source = `def main(input: str, module: str, source: str, number: str, slug: str) -> TemplateResult:
-    created = template(
-        input=input,
-        source=source,
-        values={"module": module, "number": number, "slug": slug},
-        skills=["adr"],
-    )
-    node.fs.writeFile(path=f"docs/decisions/{number}-{slug}.md", content=created.text)
-    return created
-`;
-    const loaded = await loadCustomApis(
-      true,
-      ["C:/workspace/.dext/api"],
-      async () => ["C:/workspace/.dext/api/adr/create.dx"],
-      async (path) => (path.endsWith("create.dx") ? source : undefined),
-      registry
-    );
-
-    expect(loaded.diagnostics).toEqual([]);
-    expect(registry.get("adr.create")?.output).toMatchObject({ kind: "template" });
   });
 });
 

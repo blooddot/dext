@@ -30,7 +30,7 @@ const apiEntry = (name: string): ResourceEntry => ({
 const dataSource = (): ResourceEditorDataSource => ({
   list: async (_kind, query) => [apiEntry("Task.Query"), apiEntry("User.Get")].filter((entry) => !query || entry.name.toLowerCase().includes(query.toLowerCase())),
   definition: async (id) => id === "api:project:Task.Query"
-    ? { entry: apiEntry("Task.Query"), content: "def main() -> AskResult" }
+    ? { entry: apiEntry("Task.Query"), content: "export async function main(): Promise<AskResult> { ... }" }
     : undefined
 });
 

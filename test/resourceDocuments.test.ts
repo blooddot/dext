@@ -40,7 +40,7 @@ beforeEach(async () => {
   Object.assign(application, {
     workspaceTrusted: false, resourceWrite: Promise.resolve(),
     storage: { globalStorageUri: { fsPath: root }, attachmentPrompt: (input: string) => `${input}\nResolved attachment context` },
-    registry, customApiIds: new Set(), reload: vi.fn()
+    registry, reload: vi.fn()
   });
 });
 afterEach(async () => { await rm(root, { recursive: true, force: true }); });
@@ -48,7 +48,7 @@ afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 describe("resource documents", () => {
   it("keeps Top level APIs separate from node and ui namespaces", () => {
     const entry = (name: string): ResourceEntry => ({
-      id: `api:global:${name}`, kind: "api", scope: "global", name, path: `${name.replaceAll(".", "/")}.dx`,
+      id: `api:global:${name}`, kind: "api", scope: "global", name, path: `${name.replaceAll(".", "/")}.ts`,
       group: name.includes(".") ? name.slice(0, name.lastIndexOf(".")) : ".", source: { kind: "directory", label: "builtin" }
     });
     const html = renderResourceList(buildResourceList({ kind: "api", scope: "global", entries: [entry("ask"), entry("node.path"), entry("ui.input")] }), { apiTree: true });
@@ -62,7 +62,7 @@ describe("resource documents", () => {
 
   it("files MCP tool APIs under the MCP category", () => {
     const api = (name: string, kind: ResourceEntry["kind"] = "api"): ResourceEntry => ({
-      id: `${kind}:project:${name}`, kind, scope: "project", name, path: `${name}.dx`, group: ".",
+      id: `${kind}:project:${name}`, kind, scope: "project", name, path: `${name}.ts`, group: ".",
       source: { kind: "project", label: "Project" }
     });
     expect(resourceCategory(api("mcp.files.read"))).toBe("mcp");
@@ -75,7 +75,7 @@ describe("resource documents", () => {
   });
 
   it.each([
-    ["api", "team.lookup", "team/lookup.dx"], ["mcp", "server", "server.jsonc"],
+    ["api", "team.lookup", "team/lookup.ts"], ["mcp", "server", "server.jsonc"],
     ["rule", "review.md", "review.md"], ["skill", "release", "release/SKILL.md"]
   ] as const)("maps %s names to their real resource paths", (type, name, path) => {
     expect(resourceFileName(type, name)).toBe(path);
@@ -90,7 +90,7 @@ describe("resource documents", () => {
   });
 
   it.each([
-    ["api", "sample", "def main(input: str) -> AskResult:\n    return ask(input=input)\n", "api/sample.dx"],
+    ["api", "sample", 'export async function main(input: string): Promise<AskResult> {\n  return await ask({ input });\n}\n', "api/sample.ts"],
     ["rule", "review.md", "Review changes.\n", "rules/review.md"],
     ["skill", "release", "# Release\nVerify first.\n", "skills/release/SKILL.md"],
     ["mcp", "server", '{"name":"server","transport":"stdio","command":"node","tools":[]}\n', "mcp/server.jsonc"]
@@ -135,11 +135,11 @@ describe("resource documents", () => {
 
   it("lists nested resources and reads MCP names independently of filenames", async () => {
     await mkdir(join(root, "api/team"), { recursive: true });
-    await writeFile(join(root, "api/team/lookup.dx"), "def main():\n    return 1\n");
+    await writeFile(join(root, "api/team/lookup.ts"), "export function main() { return 1; }\n");
     await writeFile(join(root, "api/team/ignore.md"), "Not an API");
     await mkdir(join(root, "mcp"));
     await writeFile(join(root, "mcp/settings.jsonc"), '{"name":"server","transport":"stdio","command":"node","tools":[]}');
-    expect(await application.listResources("api")).toEqual([{ name: "team.lookup", path: "team/lookup.dx", scope: "global" }]);
+    expect(await application.listResources("api")).toEqual([{ name: "team.lookup", path: "team/lookup.ts", scope: "global" }]);
     expect(await application.readResource("mcp", "global", "settings.jsonc", "settings")).toMatchObject({ name: "server", path: "settings.jsonc" });
   });
 

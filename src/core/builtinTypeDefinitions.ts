@@ -3,11 +3,8 @@
  * independent of the runtime TypeScript interfaces so editor features can
  * describe the language contract without exposing host-only fields.
  */
-import { NODE_BUILTIN_CATALOG } from "./generated/nodeBuiltinCatalog.js";
 import { BUILTIN_METHODS } from "./builtins.js";
 import { formatFieldType } from "./methodSignature.js";
-import { pythonType } from "./pythonType.js";
-import { nodeBuiltinResultType } from "./builtinResultTypes.js";
 export interface BuiltinTypeField {
   name: string;
   type: string;
@@ -45,12 +42,6 @@ const staticTypes: readonly BuiltinTypeDefinition[] = [
   { name: "TerminalResult", description: "Captured execution of a terminal command.", fields: [
     { name: "kind", type: '"terminal"' }, { name: "status", type: '"succeeded" | "failed" | "timed_out"' }, { name: "command", type: "string" }, { name: "cwd", type: "string" },
     { name: "exit_code", type: "number" }, { name: "stdout", type: "string" }, { name: "stderr", type: "string" }, { name: "duration_ms", type: "number" }
-  ] },
-  { name: "PrintResult", description: "Value rendered in Dext Output.", fields: [
-    { name: "kind", type: '"print"' }, { name: "text", type: "string" }, { name: "label", type: "string", optional: true }
-  ] },
-  { name: "PatchResult", description: "An auditable set of document changes.", fields: [
-    { name: "kind", type: '"patch"' }, { name: "title", type: "string" }, { name: "changes", type: "PatchChange[]" }
   ] },
   { name: "UiResult", description: "Result returned by a Dext UI interaction.", fields: [
     { name: "kind", type: '"ui"' }, { name: "type", type: '"select" | "radio" | "checkbox" | "confirm" | "input" | "form" | "alert"' },
@@ -136,57 +127,3 @@ export function builtinTypeDefinition(name: string): BuiltinTypeDefinition | und
   return byName.get(name);
 }
 
-export function builtinTypeSignature(definition: BuiltinTypeDefinition): string {
-  return `${definition.name} { ${definition.fields.map((field) => `${field.name}${field.optional ? "?" : ""}: ${field.type}`).join("; ")} }`;
-}
-
-export interface BuiltinTypeDocument {
-  text: string;
-  ranges: ReadonlyMap<string, { from: number; to: number; nameFrom: number; nameTo: number }>;
-  fieldRanges: ReadonlyMap<string, { from: number; to: number; nameFrom: number; nameTo: number }>;
-}
-
-/** Render the read-only document used by Go to Definition and Peek Definition. */
-export function builtinTypeDocument(): BuiltinTypeDocument {
-  let text = "# Dext Built-in Types\n\n";
-  const ranges = new Map<string, { from: number; to: number; nameFrom: number; nameTo: number }>();
-  const fieldRanges = new Map<string, { from: number; to: number; nameFrom: number; nameTo: number }>();
-  const render = (definition: BuiltinTypeDefinition, name: string, depth: number): void => {
-    const from = text.length;
-    const indent = "    ".repeat(depth);
-    text += `${indent}# Type: ${definition.name}\n`;
-    text += `${indent}# ${definition.description}\n`;
-    const nameFrom = text.length + indent.length + "class ".length;
-    text += `${indent}class ${name}:\n`;
-    for (const field of definition.fields) {
-      // The document is presented as Python, so nested object shapes must use
-      // Python annotations (`x: str | None`) instead of TypeScript (`x?: string`).
-      const type = pythonType(field.type);
-      const fieldFrom = text.length;
-      const fieldNameFrom = fieldFrom + 4 * (depth + 1);
-      text += `${"    ".repeat(depth + 1)}${field.name}: ${type}${field.optional ? " | None" : ""}\n`;
-      fieldRanges.set(`${definition.name}.${field.name}`, {
-        from: fieldFrom, to: text.length - 1, nameFrom: fieldNameFrom, nameTo: fieldNameFrom + field.name.length
-      });
-    }
-    text += "\n";
-    ranges.set(definition.name, { from, to: text.length - 1, nameFrom, nameTo: nameFrom + name.length });
-  };
-  const groups = new Map<string, BuiltinTypeDefinition[]>();
-  for (const definition of types) {
-    const [namespace, name] = definition.name.split(".");
-    if (!name) render(definition, namespace!, 0);
-    else groups.set(namespace!, [...(groups.get(namespace!) ?? []), definition]);
-  }
-  for (const [namespace, definitions] of [...groups].sort(([left], [right]) => left.localeCompare(right))) {
-    const from = text.length;
-    const nameFrom = text.length + "class ".length;
-    text += `# Namespace: ${namespace}\nclass ${namespace}:\n`;
-    for (const definition of definitions.sort((left, right) => left.name.localeCompare(right.name))) {
-      render(definition, definition.name.slice(namespace.length + 1), 1);
-    }
-    text += "\n";
-    ranges.set(namespace, { from, to: text.length - 1, nameFrom, nameTo: nameFrom + namespace.length });
-  }
-  return { text, ranges, fieldRanges };
-}

@@ -5,10 +5,8 @@ import { describeEditorTab, type EditorTabManager } from "./editorTabManager.js"
 import type { EditorTabRestorer } from "./editorTabSerializer.js";
 import type { SidebarState } from "./webviewProtocol.js";
 import { formatFieldType, formatMethodParameter, methodResultType } from "./core/methodSignature.js";
-import { parser as pythonParser } from "@lezer/python";
-import { highlightCode } from "@lezer/highlight";
-import { dextClassHighlighter } from "./dextTokenTheme.js";
 import { resourceIcon } from "./resourceIcons.js";
+import type { ApiReferenceCatalog, ApiReferenceMember, ApiReferenceModule } from "./core/apiReference.js";
 
 export interface ResourceSourceRef {
   kind: "project" | "global" | "directory";
@@ -176,17 +174,14 @@ function renderResourceNavigation(options: ResourcePanelOptions): string {
     + scope + `</nav>`;
 }
 
+/** Resource source is plain text: Dext APIs are TypeScript files now, and the
+ * editor's own TypeScript service is what colours them. */
 function highlightResourceSource(source: string): string {
-  let html = "";
-  try {
-    highlightCode(source, pythonParser.parse(source), dextClassHighlighter,
-      (value, classes) => { html += classes ? `<span class="${classes}">${escapeResourceHtml(value)}</span>` : escapeResourceHtml(value); },
-      () => { html += "\n"; });
-    return html;
-  } catch { return escapeResourceHtml(source); }
+  return escapeResourceHtml(source);
 }
 
 function apiDisplayName(entry: ResourceEntry): string {
+  if (entry.displayName) return entry.displayName;
   return entry.kind === "api" ? entry.name.split(".").at(-1)! : entry.name;
 }
 

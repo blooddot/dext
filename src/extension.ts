@@ -1,8 +1,6 @@
 import * as vscode from "vscode";
-import { DextApiDefinitionProvider, DextBuiltinApisContentProvider, DextBuiltinTypesContentProvider, DextMcpApisContentProvider } from "./vscodeApiDefinitions.js";
 import { DextApplication } from "./application.js";
 import { redactedMcpUrl } from "./core/mcpRegistry.js";
-import { DextApiDiagnostics } from "./vscodeApiDiagnostics.js";
 import { DextSidebarProvider } from "./sidebarProvider.js";
 import { DEFAULT_HISTORY_LIMITS, DextHistoryStore } from "./historyStore.js";
 import type { DextHistoryRecord, DextHistorySession } from "./historyStore.js";
@@ -26,12 +24,6 @@ import {
   testCompletionModel,
   type CompletionDiagnoseOptions
 } from "./vscodeCompletionSetup.js";
-import {
-  dextSemanticTokens,
-  DEXT_SEMANTIC_TOKEN_MODIFIERS,
-  DEXT_SEMANTIC_TOKEN_TYPES
-} from "./dextSemanticTokens.js";
-import { pythonHoverCode } from "./vscodeHover.js";
 import { EditorTabManager, createVscodeEditorTabHost, wrapVscodeWebviewPanel, type EditorTabPanelHandle } from "./editorTabManager.js";
 import { EditorTabRestorer } from "./editorTabSerializer.js";
 import { EDITOR_TAB_VIEW_TYPES } from "./editorTabTypes.js";
@@ -73,8 +65,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   application.runtime.setWorkspaceTrusted(vscode.workspace.isTrusted && folder?.uri.scheme === "file");
   const projectHost = folder?.uri.scheme === "file" ? new VscodeProjectFileHost(folder.uri) : undefined;
   const projectStore = projectHost ? new ProjectStore(projectHost) : undefined;
-  let projectApiDirs: readonly string[] | undefined;
-  let projectMcpDirs: readonly string[] | undefined;
   const legacyWorkspaceSettings = (): ProjectWorkspaceSettings => {
     const configuration = vscode.workspace.getConfiguration("dext", folder?.uri);
     return {
@@ -88,23 +78,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   if (projectStore) {
     const definition = await projectStore.readDefinition();
     const legacy = legacyWorkspaceSettings();
-    projectApiDirs = definition.paths?.apiDirs;
-    projectMcpDirs = definition.paths?.mcpDirs;
     if (definition.paths) application.setProjectWorkspaceSettings(effectiveProjectWorkspaceSettings(definition, legacy));
   }
   await application.reload();
-  const apiDiagnostics = new DextApiDiagnostics(() => (vscode.workspace.workspaceFolders ?? [])
-    .filter((workspace) => workspace.uri.scheme === "file")
-    .map((workspace) => ({
-      workspace: workspace.uri.fsPath,
-      apiDirs: vscode.workspace.getConfiguration("dext", workspace.uri).get<string[]>("apiDirs", []),
-      ...(workspace === folder && projectApiDirs !== undefined ? { projectApiDirs } : {}),
-      ...(workspace === folder && projectMcpDirs !== undefined ? { projectMcpDirs } : {}),
-      globalStorage: context.globalStorageUri.fsPath,
-      readSettings: false
-    })));
-  application.onApiReload = () => apiDiagnostics.schedule();
-  context.subscriptions.push(apiDiagnostics);
   // Conversation history belongs to the active workspace. Using globalState
   // here makes every project share the same sessions, so reopening VS Code (or
   // switching projects) can restore a conversation from an unrelated project.
@@ -244,8 +220,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         legacyEvidenceSettings: () => legacyProjectEvidenceSettings(),
         legacyWorkspaceSettings,
         onWorkspaceSettingsChanged: async (settings) => {
-          projectApiDirs = settings.apiDirs;
-          projectMcpDirs = settings.mcpDirs;
           application.setProjectWorkspaceSettings(settings);
           await application.reload();
           await sidebar.refresh();
@@ -431,7 +405,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const focusSidebar = async (): Promise<void> => {
     await vscode.commands.executeCommand("dext.sidebar.focus");
   };
-  const activeDextEditor = (): boolean => vscode.window.activeTextEditor?.document.languageId === "dext-api";
   // The History and sidebar webviews pass the right-clicked element's context
   // object.
   interface ConversationContext {
@@ -641,10 +614,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     toggle: () => completionHost.toggle(),
     refresh: () => completionHost.refresh()
   };
-  const semanticLegend = new vscode.SemanticTokensLegend(
-    [...DEXT_SEMANTIC_TOKEN_TYPES],
-    [...DEXT_SEMANTIC_TOKEN_MODIFIERS]
-  );
 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(DextSidebarProvider.viewType, sidebar),
@@ -817,9 +786,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("dext.reloadMethods", async () => {
       await application.reload();
       await sidebar.refresh();
-      // The reload already scheduled a check; an explicit reload also reveals
-      // the details it produced instead of leaving one aggregate line behind.
-      await apiDiagnostics.check(true);
     }),
     vscode.commands.registerCommand("dext.openWorkspaceTrust", openWorkspaceTrust),
     vscode.commands.registerCommand("dext.workspaceTrustedStatus", openWorkspaceTrust),
@@ -891,20 +857,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await vscode.window.showInformationMessage(`MCP server '${serverName}' is ready.`);
       })
     ),
-    vscode.commands.registerCommand("dext.triggerSuggest", async () => {
-      if (activeDextEditor()) {
-        await vscode.commands.executeCommand("editor.action.triggerSuggest");
-        return;
-      }
-      sidebar.triggerSuggest();
-    }),
-    vscode.commands.registerCommand("dext.triggerParameterHints", async () => {
-      if (activeDextEditor()) {
-        await vscode.commands.executeCommand("editor.action.triggerParameterHints");
-        return;
-      }
-      sidebar.triggerParameterHints();
-    }),
+    vscode.commands.registerCommand("dext.triggerSuggest", () => sidebar.triggerSuggest()),
+    vscode.commands.registerCommand("dext.triggerParameterHints", () => sidebar.triggerParameterHints()),
     vscode.commands.registerCommand("dext.addSelectionToChat", (target?: SelectionTarget) =>
       reportCommandError(async () => {
         await sidebar.addSelectionToChat(target);
@@ -1044,104 +998,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // more thing that can quietly fail to match.
     vscode.languages.registerInlineCompletionItemProvider({ scheme: "file" }, completionHost),
     vscode.commands.registerCommand("dext.toggleCompletion", () => completionHost.toggle()),
-    vscode.languages.registerCompletionItemProvider(
-      { language: "dext-api", scheme: "file" },
-      {
-        provideCompletionItems(document, position) {
-          const source = document.getText();
-          const cursor = document.offsetAt(position);
-          const relative = vscode.workspace.asRelativePath(document.uri, false).replace(/\\/g, "/");
-          const marker = ".dext/api/";
-          const index = relative.indexOf(marker);
-          const apiId = index >= 0 ? relative.slice(index + marker.length).replace(/\.dx$/i, "").replace(/\//g, ".") : undefined;
-          return application.language.apiCompletions(source, cursor, apiId).map((candidate) => {
-            const completion = new vscode.CompletionItem(
-              candidate.label,
-              candidate.kind === "namespace" ? vscode.CompletionItemKind.Module :
-                candidate.kind === "method" ? vscode.CompletionItemKind.Function :
-                  candidate.kind === "parameter" ? vscode.CompletionItemKind.Field : vscode.CompletionItemKind.Value
-            );
-            completion.detail = candidate.detail;
-            completion.insertText = candidate.insertText;
-            if (candidate.sortText) completion.sortText = candidate.sortText;
-            completion.range = new vscode.Range(document.positionAt(candidate.replaceStart), document.positionAt(candidate.replaceEnd));
-            return completion;
-          });
-        }
-      },
-      ".",
-      " "
-    ),
-    vscode.languages.registerDefinitionProvider(
-      [{ language: "dext-api", scheme: "file" }, { scheme: "dext-types" }, { scheme: "dext-builtins" }, { scheme: "dext-mcp" }],
-      new DextApiDefinitionProvider((id) => application.customApiSourcePath(id), application.registry)
-    ),
-    vscode.workspace.registerTextDocumentContentProvider("dext-types", new DextBuiltinTypesContentProvider()),
-    vscode.workspace.registerTextDocumentContentProvider("dext-builtins", new DextBuiltinApisContentProvider()),
-    vscode.workspace.registerTextDocumentContentProvider("dext-mcp", new DextMcpApisContentProvider(application.registry)),
-    vscode.languages.registerHoverProvider(
-      [{ language: "dext-api", scheme: "file" }, { scheme: "dext-types" }, { scheme: "dext-builtins" }],
-      {
-        provideHover(document, position) {
-          const source = document.getText();
-          const cursor = document.offsetAt(position);
-          const hover = document.uri.scheme === "file"
-            ? application.language.apiHover(source, cursor)
-            : application.language.documentHover(source, cursor);
-          if (!hover) return undefined;
-          // Markdown bold renders signatures as plain text.  A Python fenced
-          // block uses VS Code's built-in grammar, which is also what Dext's
-          // .dx grammar inherits, so types, keywords and literals retain the
-          // familiar editor colours in hovers.
-          const contents = new vscode.MarkdownString();
-          contents.appendCodeblock(pythonHoverCode(hover.label, hover.kind), "python");
-          contents.appendMarkdown("\n\n");
-          contents.appendText(hover.documentation);
-          return new vscode.Hover(
-            contents,
-            new vscode.Range(document.positionAt(hover.rangeStart), document.positionAt(hover.rangeEnd))
-          );
-        }
-      }
-    ),
-    vscode.languages.registerSignatureHelpProvider(
-      { language: "dext-api", scheme: "file" },
-      {
-        provideSignatureHelp(document, position) {
-          const source = document.getText();
-          const signature = application.language.apiSignature(source, document.offsetAt(position));
-          if (!signature) return undefined;
-          const item = new vscode.SignatureInformation(signature.label, signature.documentation);
-          item.parameters = signature.parameters.map((parameter) => new vscode.ParameterInformation(parameter.label, parameter.documentation));
-          const result = new vscode.SignatureHelp();
-          result.signatures = [item];
-          result.activeSignature = 0;
-          result.activeParameter = signature.activeParameter;
-          return result;
-        }
-      },
-      "(", ","
-    ),
-    vscode.languages.registerDocumentSemanticTokensProvider(
-      [{ language: "dext-api", scheme: "file" }, { scheme: "dext-types" }, { scheme: "dext-builtins" }, { scheme: "dext-mcp" }],
-      {
-        provideDocumentSemanticTokens(document) {
-          const builder = new vscode.SemanticTokensBuilder(semanticLegend);
-          for (const token of dextSemanticTokens(document.getText())) {
-            builder.push(
-              new vscode.Range(document.positionAt(token.from), document.positionAt(token.to)),
-              token.type,
-              token.declaration ? ["declaration"] : []
-            );
-          }
-          return builder.build();
-        }
-      },
-      semanticLegend
-    )
   );
 
-  const watcher = vscode.workspace.createFileSystemWatcher("**/.dext/api/**/*.dx");
+  const watcher = vscode.workspace.createFileSystemWatcher("**/.dext/api/**/*.ts");
   let reloadTimer: ReturnType<typeof setTimeout> | undefined;
   let reloadRunning = false;
   let reloadQueued = false;
