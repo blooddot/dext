@@ -30,14 +30,15 @@ const mcpHttpAuthSchema = z.discriminatedUnion("type", [
 
 export const webviewRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ready") }),
-  z.object({ type: z.literal("inputDefinition"), requestId: z.number().int().nonnegative(), source: z.string(), cursor: z.number().int().nonnegative() }),
-  z.object({ type: z.literal("openInputDefinition"), source: z.string(), cursor: z.number().int().nonnegative() }),
+  // The composer asks for its types rather than only waiting for the host to push
+  // them: a Webview that missed the first message still gets its declaration, its
+  // API modules and its completion, instead of a silently dumb editor.
+  z.object({ type: z.literal("composerTypes") }),
+  // …and reports what it applied, so **Dext Input** shows both halves of the exchange.
   z.object({
-    type: z.literal("language"),
-    requestId: z.number().int().nonnegative(),
-    source: z.string(),
-    cursor: z.number().int().nonnegative(),
-    purpose: z.enum(["all", "completion", "diagnostics", "inputKind", "signature", "hover"]).optional()
+    type: z.literal("composerTypesApplied"),
+    builtins: z.number().int().min(0).max(10000),
+    modules: z.number().int().min(0).max(10000)
   }),
   z.object({
     type: z.literal("executeInput"),

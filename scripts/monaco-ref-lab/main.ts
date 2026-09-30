@@ -1,30 +1,29 @@
 import { monaco } from '../../src/webview/monacoEnvironment';
 import { DextCodeEditor } from '../../src/webview/codeEditor';
-import { DextLanguageService } from '../../src/core/languageService';
-import { MethodRegistry } from '../../src/core/registry';
-import { BUILTIN_METHODS } from '../../src/core/builtins';
-import type { LanguageRequestBroker } from '../../src/webview/languageClient';
 import type { ClipboardClient } from '../../src/webview/clipboardClient';
 import type { FileSearchClient } from '../../src/webview/fileSearchClient';
 import './style.css';
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
-Object.assign(globalThis, { MonacoEnvironment: { getWorker: () => new Worker('/assets/editor.worker.js', { type: 'module' }) } });
-const sample = 'agent(input="请检查 @src/features/workflow/components/main.ts#L12,5-L20,6 和 @src/界面/任务.ts 后继续")\n'
-  + 'ui.form(title="任务详情", description="截图 @.dext-global/attachments/example-screenshot.png")\n'
-  + '# 两个相邻引用：@src/a.ts @src/b.ts\n';
+Object.assign(globalThis, { MonacoEnvironment: { getWorker: (_moduleId: string, label: string) =>
+  new Worker(label === 'typescript' || label === 'javascript' ? '/assets/ts.worker.js' : '/assets/editor.worker.js', { type: 'module' }) } });
+const sample = 'const answer = await ask({ input: "请检查 @src/features/workflow/components/main.ts#L12,5-L20,6 和 @src/界面/任务.ts 后继续" });\n'
+  + 'const form = await ui.form({ title: "任务详情", description: "截图 @.dext-global/attachments/example-screenshot.png" });\n'
+  + '// 两个相邻引用：@src/a.ts @src/b.ts\n';
 
-const registry = new MethodRegistry(); registry.registerMany(BUILTIN_METHODS, 'builtin');
-const language = new DextLanguageService(registry);
 const assistance = { hold: false, calls: [] as string[], pending: [] as Array<()=>void>, runs: 0 };
-const broker = { request: async (source: string, cursor: number, _token: unknown, purpose: string) => {
-  assistance.calls.push(purpose);
-  const result = { type:'language' as const, inputKind:'workflow' as const,
-    completions: purpose==='completion'?language.documentCompletions(source,cursor):[],
-    diagnostics: purpose==='diagnostics'?language.documentDiagnostics(source):[],
-    signature: language.documentSignature(source,cursor), hover:language.documentHover(source,cursor) };
-  if(assistance.hold && purpose==='signature') await new Promise<void>(resolve=>assistance.pending.push(resolve));
-  return result;
-}, definition: async()=>undefined } as unknown as LanguageRequestBroker;
+// The editor's TypeScript worker reads the generated declaration from the same
+// message the host sends, so the lab can exercise real completion and hints. A module
+// stands in for the workspace's `.dext/api`, which is how an unimported export becomes
+// reachable at all — Monaco's own worker never reports one.
+void fetch('/dext.d.ts').then(response => response.text())
+  .then(declaration => window.postMessage({ type: 'dextTypes', declaration, apiPaths: ['./api/*.ts'],
+    modules: [{ path: 'api/git/commit.ts', specifier: 'dext/api/git/commit',
+      content: 'export async function commit(message: string): Promise<string> {\n  return message;\n}\n' }] }, '*'))
+  .catch(() => undefined);
+// The composer's language features come from Monaco's TypeScript worker now, so the
+// lab no longer forwards them to the extension host. `assistance` stays as the
+// observation point the Send/Enter checks use.
+const broker = undefined;
 const production = new DextCodeEditor({parent:$('editor'), workerUri:'/assets/editor.worker.js',broker,
  clipboard:{write:async(text:string)=>{await navigator.clipboard.writeText(text);return true;},read:async()=>({text:await navigator.clipboard.readText(),contextAttached:false})} as unknown as ClipboardClient,
  files:{search:async()=>['src/a.ts','src/nested/a.ts']} as unknown as FileSearchClient,resolveDroppedFiles:async paths=>paths.map(path=>'@'+path),
@@ -49,5 +48,4 @@ $('reset').addEventListener('click',()=>reset());reset();
 Object.assign(window,{lab:{model,editor,projection,source,refs,reset,remove,events,sample,monaco,production,assistance,
  position(offset:number){editor.setPosition(model.getPositionAt(projection.toView(model.getValue(),offset)));editor.focus();},
  select(from:number,to:number){editor.setSelection(monaco.Selection.fromPositions(model.getPositionAt(projection.toView(model.getValue(),from)),model.getPositionAt(projection.toView(model.getValue(),to,'right'))));editor.focus();}}});
-
 

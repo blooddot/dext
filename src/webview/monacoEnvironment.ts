@@ -1,5 +1,19 @@
 import * as monaco from "monaco-editor/editor/editor.api.js";
 import "monaco-editor/languages/definitions/python/register.js";
+// The composer's language id has to exist before a model can use it: an unregistered id
+// is silently replaced with `plaintext` (`LanguageService._createAndGetLanguageIdentifier`),
+// and then rich language features are requested for `plaintext` instead — no tokenizer, no
+// TypeScript, and the TypeScript contribution's `onLanguage("typescript", …)` never fires,
+// so `getTypeScriptWorker()` rejects with "TypeScript not registered!". This is the
+// monarch grammar and the language registration; `languages/features/typescript` below is
+// the language service that runs on top of it.
+import "monaco-editor/languages/definitions/typescript/register.js";
+// The composer is a TypeScript editor. Monaco fires `requestRichLanguageFeatures`
+// synchronously from `createModel`, so the TypeScript contribution's
+// `onLanguage("typescript", ...)` listener must already exist when the first
+// composer model is created: importing it here, before any editor is built,
+// guarantees that. The values are read lazily by `./monacoTypescript.js`.
+import "monaco-editor/languages/features/typescript/register.js";
 import "monaco-editor/editor/browser/coreCommands.js";
 import "monaco-editor/editor/contrib/suggest/browser/suggestController.js";
 import "monaco-editor/editor/contrib/snippet/browser/snippetController2.js";

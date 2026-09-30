@@ -519,7 +519,11 @@ const editor = new DextCodeEditor({
     persistComposerDraft();
     updateRunState();
   },
-  onError: renderError
+  onError: renderError,
+  // The host pushes the types too; asking means a Webview that missed that message
+  // still gets a working editor instead of one that silently completes nothing.
+  requestComposerTypes: () => vscode.postMessage({ type: "composerTypes" }),
+  reportComposerTypes: (counts) => vscode.postMessage({ type: "composerTypesApplied", ...counts })
 });
 
 function openInputReference(reference: ContextReferenceOccurrence): void {
@@ -1140,6 +1144,10 @@ function renderAgentControls(state: SidebarState): void {
     ["code", "Code", "codicon-code"]
   ], inputMode, (mode) => {
     inputMode = mode as InputMode;
+    // The badge is local, so the editor has to follow it now: waiting for the host to
+    // echo the selection leaves a Code badge above a plain-text model, which completes
+    // nothing and shows no diagnostics at all.
+    editor.setMode(inputMode === "code" ? "code" : "chat");
     submitAgentSelection({});
   }, [], {
     agent: "composer-menu-option-mode-agent",

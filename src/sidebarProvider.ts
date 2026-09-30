@@ -48,6 +48,7 @@ import type { DextHistoryRecord, DextHistorySession, DextHistoryStore } from "./
 import type { DextConversationPreferences } from "./conversationPreferences.js";
 import { conversationTitle, historyTurnTitle } from "./historyRender.js";
 import { normalizeInputReferenceSource } from "./core/fileReference.js";
+import { dextBuiltinNames } from "./webview/dextTypesStatus.js";
 import type { ProjectReferenceCandidate } from "./core/projectReference.js";
 import type { McpServerConfig } from "./core/mcpRegistry.js";
 
@@ -143,6 +144,8 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   static readonly viewType = "dext.sidebar";
   private view: vscode.WebviewView | undefined;
   private readonly messageQueue = new ReadyMessageQueue<WebviewResponse>();
+  /** The Output channel that says whether the composer's types were sent. */
+  private composerLog: vscode.OutputChannel | undefined;
   private readonly attachments = new AttachmentStore();
   private activeSession = outputSession();
   private readonly sessions = new Map<string, DextHistorySession>();
@@ -490,7 +493,43 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     private readonly application: DextApplication,
     private readonly history: DextHistoryStore,
     private readonly preferences: DextConversationPreferences
-  ) {}
+  ) {
+    // The composer holds the declaration in memory instead of reading the generated
+    // file, so a reload that changed it — an MCP manifest was added, an API module was
+    // written — has to hand over the new text. Without this the editor's TypeScript
+    // service would know about a manifest the composer still typed as the built-in
+    // surface, and an API module the composer could not resolve at all.
+    this.application.onApiReload = () => {
+      if (!this.view) return;
+      void this.postDextTypes("reload");
+    };
+  }
+
+  /**
+   * Hands the composer everything its TypeScript worker cannot read for itself: the
+   * generated declaration and the workspace's own API modules. Both are extra
+   * libraries in the worker, and the second one is why `import { main } from
+   * "dext/api/git/commit"` completes there.
+   *
+   * Both directions are logged to **Dext Input**, because the alternative is a composer
+   * that completes nothing and no way to tell whether the input asked, the host
+   * answered, or the Webview applied it.
+   */
+  private async postDextTypes(reason: "ready" | "requested" | "reload"): Promise<void> {
+    const types = await this.application.composerTypes();
+    this.logComposer(`types ${reason}: ${dextBuiltinNames(types.declaration).length} built-in name(s), ${types.modules.length} API module(s)`);
+    this.postWhenReady({ type: "dextTypes", ...types });
+  }
+
+  /** The one line a broken composer can be diagnosed from, in the Output panel. */
+  private logComposer(line: string): void {
+    try {
+      this.composerLog ??= vscode.window.createOutputChannel("Dext Input");
+      this.composerLog.appendLine(`[composer] ${line}`);
+    } catch {
+      // A test harness or an unusual host may not offer an output channel.
+    }
+  }
 
   /** Supplies the project's default Review preset. Without it the built-in default is used. */
   setProjectPresetSource(source: () => ReviewPreset): void {
@@ -1046,57 +1085,17 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           await this.refresh();
           await this.postConversationState();
           await this.post({ type: "outputSession", session: this.activeSession });
+          await this.postDextTypes("ready");
           await this.postActiveExecution(this.activeSession.id);
           await this.flushPendingMessages(pendingMessages);
           break;
         }
-        case "language": {
-          const purpose = request.purpose ?? "all";
-          const needsDiagnostics = purpose === "all" || purpose === "diagnostics" || purpose === "inputKind";
-          const diagnostics = needsDiagnostics && request.source.trim()
-            ? this.application.language.documentDiagnostics(request.source)
-            : [];
-          const signature = purpose === "all" || purpose === "signature"
-            ? this.application.language.documentSignature(request.source, request.cursor)
-            : undefined;
-          const hover = purpose === "all" || purpose === "hover"
-            ? this.application.language.documentHover(request.source, request.cursor)
-            : undefined;
-          const completions = purpose === "all" || purpose === "completion"
-            ? this.application.language.documentCompletions(request.source, request.cursor)
-            : [];
-          await this.post({
-            type: "language",
-            requestId: request.requestId,
-            completions,
-            diagnostics,
-            inputKind: request.source.trim()
-              ? (diagnostics.some((item) => item.severity === "error") ? "invalid" : "workflow")
-              : "empty",
-            ...(signature ? { signature } : {}),
-            ...(hover ? { hover } : {})
-          });
+        case "composerTypes": {
+          await this.postDextTypes("requested");
           break;
         }
-        case "inputDefinition":
-        case "openInputDefinition": {
-          const cancellation = new vscode.CancellationTokenSource();
-          try {
-            const definition = (await new DextApiDefinitionProvider(id => this.application.customApiSourcePath(id), this.application.registry)
-              .resolve(request.source, request.cursor, vscode.Uri.parse("dext-input:/composer.dx"), cancellation.token))?.[0];
-            if (request.type === "inputDefinition") {
-              const offset = (position: vscode.Position): number => request.source.split("\n").slice(0, position.line).reduce((sum, line) => sum + line.length + 1, 0) + position.character;
-              const range = definition?.targetSelectionRange ?? definition?.targetRange;
-              const content = definition && definition.targetUri.scheme !== "dext-input"
-                ? (await vscode.workspace.openTextDocument(definition.targetUri)).getText() : undefined;
-              await this.post({ type: "inputDefinition", requestId: request.requestId, ...(definition && range ? { target: {
-                uri: definition.targetUri.toString(), ...(content !== undefined ? { content } : {}), originFrom: offset(definition.originSelectionRange!.start), originTo: offset(definition.originSelectionRange!.end),
-                range: { startLineNumber: range.start.line + 1, startColumn: range.start.character + 1, endLineNumber: range.end.line + 1, endColumn: range.end.character + 1 }
-              } } : {}) });
-            } else if (definition && definition.targetUri.scheme !== "dext-input") {
-              await vscode.window.showTextDocument(definition.targetUri, { preview: true, selection: definition.targetSelectionRange ?? definition.targetRange });
-            }
-          } finally { cancellation.dispose(); }
+        case "composerTypesApplied": {
+          this.logComposer(`applied by the input: ${request.builtins} built-in name(s), ${request.modules} API module(s)`);
           break;
         }
         case "executeInput":

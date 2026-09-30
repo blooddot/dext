@@ -167,7 +167,9 @@ describe("sidebar panel layout", () => {
     // A new API directory changes the registered API set, so it needs a reload.
     expect(extension).toMatch(/event\.affectsConfiguration\("dext\.apiDirs"\)[\s\S]*?await application\.reload\(\)/);
     expect(extension).toMatch(/event\.affectsConfiguration\("dext\.diff\.defaultView"\)[\s\S]*?await sidebar\.refresh\(\)/);
-    expect(application).toMatch(/private apiDirectories[\s\S]*?isAbsolute\(value\)/);
+    // Configured API directories are searched, but `.dext/api` comes first.
+    expect(application).toMatch(/apiRoots\(\): string\[\] \{/);
+    expect(application).toMatch(/add\(vscode\.Uri\.joinPath\(vscode\.Uri\.file\(this\.workspaceRoot\), "\.dext", "api"\)\.fsPath\)/);
   });
 
   it("lays concurrent comprehension branches out beside one another", async () => {
@@ -184,7 +186,7 @@ describe("sidebar panel layout", () => {
     expect(css).toContain('content: "Branch " attr(data-branch)');
     // A narrow sidebar has to fall back to one column rather than squeeze.
     expect(css).toMatch(/\.fan-out \{[\s\S]*?grid-template-columns: repeat\(auto-fit, minmax\(/);
-    expect(application).toContain('this.workflowRuntime.setMaxConcurrency(positive("workflow.maxConcurrency"');
+    expect(application).toContain('this.dispatchConcurrency = positive("workflow.maxConcurrency", DEFAULT_DISPATCH_CONCURRENCY)');
   });
 
   it("offers sandbox-escaping presets in Agent and Plan and marks them Build-only in Plan", async () => {
@@ -358,10 +360,12 @@ describe("sidebar panel layout", () => {
   it("offers the @ file picker in every mode and inserts the same chip as a drop", async () => {
     const editor = await source("src/webview/codeEditor.ts");
     const sidebar = await source("src/sidebarProvider.ts");
-    const language = await source('src/webview/monacoLanguage.ts');
-    expect(language).toContain('registerCompletionItemProvider');
-    expect(language.indexOf('c.files.search')).toBeLessThan(language.indexOf('if (!c.enabled())'));
-    expect(editor).toContain('registerMonacoLanguage');
+    // Completion comes from Monaco's TypeScript worker plus the generated `dext`
+    // declaration, so there is no hand-written provider left to point at.
+    const typescript = await source("src/webview/monacoTypescript.ts");
+    expect(typescript).toContain('addExtraLib');
+    expect(typescript).toContain('dextTypes');
+    expect(editor).toContain('installDextTypescript');
     expect(sidebar).toMatch(/case "searchFiles":[\s\S]*?const fileIndex = await this\.workspaceFileIndex\(\)[\s\S]*?rankFileMatches\(\s*fileIndex/);
     expect(sidebar).toMatch(/private async workspaceFileIndex[\s\S]*?vscode\.workspace\.findFiles\("\*\*\/\*", FILE_INDEX_EXCLUDE, MAX_INDEXED_FILES\)/);
     // A failed listing must not raise the composer's error banner.

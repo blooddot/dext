@@ -1,11 +1,10 @@
 import { monaco, initializeMonacoWorkers } from "./monacoEnvironment.js";
 import { applyMonacoTheme } from "./monacoTheme.js";
-import { registerMonacoLanguage } from "./monacoLanguage.js";
+import { DEXT_COMPOSER_SCHEME, installDextTypescript } from "./monacoTypescript.js";
 import { ReferenceProjection, referenceDecorations } from "./monacoReferences.js";
 import type { ClipboardClient } from "./clipboardClient.js";
 import type { FileSearchClient } from "./fileSearchClient.js";
 import type { ProjectReferenceClient } from "./projectReferenceClient.js";
-import type { LanguageRequestBroker } from "./languageClient.js";
 import { codeReferencePasteText } from "./codeReferencePaste.js";
 import { bindFileDropTarget, droppedFilePaths, isFileDrag } from "./fileDrop.js";
 import { fileReferenceRemovalEdit } from "./fileReferenceDecorations.js";
@@ -28,6 +27,12 @@ export interface CodeEditorOptions {
   onInputKindChanged(kind: "empty" | "workflow" | "invalid"): void;
   onSourceChanged?(): void;
   onError(error: unknown): void;
+  /** Asks the extension for the generated `dext` declaration and the workspace's API
+   * modules. The host also pushes them; asking means a Webview that missed that
+   * message — or was created before it — still gets a working editor. */
+  requestComposerTypes?(): void;
+  /** What the editor ended up with, so the host can say so in its Output channel. */
+  reportComposerTypes?(counts: { builtins: number; modules: number }): void;
 }
 export function pasteEventText(event: Pick<ClipboardEvent, "clipboardData">): string | undefined {
   const data = event.clipboardData;
@@ -59,10 +64,44 @@ export class DextCodeEditor {
   private transforming = false;
   private pendingReferenceProjection = false;
 
+  /**
+   * The Composer's TypeScript support never arrived.
+   *
+   * Every other way of saying this is invisible: a missing declaration means no
+   * completion, no API modules and no diagnostic that anything is wrong. The marker
+   * says what to do, and `onTypesApplied` removes it as soon as the types do arrive.
+   */
+  private reportMissingTypes(): void {
+    if (this.destroyed) return;
+    // Across the whole buffer: a zero-width marker is invisible, and an invisible signal
+    // is the failure this exists to prevent.
+    monaco.editor.setModelMarkers(this.model, "dext-types", [{
+      severity: monaco.MarkerSeverity.Warning,
+      message: "Dext's TypeScript types did not load in this window, so this editor cannot complete the Dext APIs. Run \"Developer: Reload Window\" — the input is running an older Webview bundle than the extension.",
+      startLineNumber: 1,
+      startColumn: 1,
+      endLineNumber: Math.max(1, this.model.getLineCount()),
+      endColumn: this.model.getLineMaxColumn(Math.max(1, this.model.getLineCount()))
+    }]);
+  }
+
   constructor(private readonly options: CodeEditorOptions) {
     const uri = options.workerUri ?? document.querySelector<HTMLMetaElement>('meta[name="dext-editor-worker"]')?.content;
     if (uri) this.disposables.push(initializeMonacoWorkers(uri));
-    this.model = monaco.editor.createModel("", "python", monaco.Uri.parse(`dext-input:/composer-${++nextModel}.dx`));
+    // The composer is a TypeScript editor now: the kernel runs plain TypeScript,
+    // and Monaco's TypeScript worker provides the language features.
+    this.disposables.push(installDextTypescript({
+      ...(uri ? { workerUri: uri } : {}),
+      ...(options.requestComposerTypes
+        ? { requestTypes: (): void => { options.requestComposerTypes?.(); } }
+        : {}),
+      onTypesApplied: (counts) => {
+        monaco.editor.setModelMarkers(this.model, "dext-types", []);
+        options.reportComposerTypes?.(counts);
+      },
+      onTypesMissing: () => { this.reportMissingTypes(); }
+    }));
+    this.model = monaco.editor.createModel("", "typescript", monaco.Uri.parse(`${DEXT_COMPOSER_SCHEME}:/composer-${++nextModel}.ts`));
     this.model.setEOL(monaco.editor.EndOfLineSequence.LF);
     // VS Code forwards Webview clipboard commands through document.execCommand.
     // Monaco's textarea input supports that bridge; Chromium EditContext does not.
@@ -291,9 +330,13 @@ export class DextCodeEditor {
   }
   setMode(mode: ComposerEditorMode): void {
     const enabled = mode === "code";
-    if (enabled === this.languageEnabled) return;
+    const language = enabled ? "typescript" : "plaintext";
+    // The mode is also what gives the model its language, and a mode that has not
+    // switched yet must not be remembered as switched: the badge is local, so the
+    // editor can show "Code" over a plain-text model and complete nothing at all.
+    if (enabled === this.languageEnabled && this.model.getLanguageId() === language) return;
     this.dropRevision++; this.dismissAssistance(); this.languageEnabled = enabled;
-    monaco.editor.setModelLanguage(this.model, enabled ? "python" : "plaintext");
+    monaco.editor.setModelLanguage(this.model, language);
     // Chat modes are plain text and use the compact Cursor-like surface;
     // Code keeps the full editor gutter and language affordances.
     this.view.updateOptions({
