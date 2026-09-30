@@ -1,19 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { BUILTIN_METHODS } from "../src/core/builtins.js";
-import { formatFieldType, formatMethodSignature } from "../src/core/methodSignature.js";
+import { CONVERSATION_METHODS, formatFieldType, formatMethodParameter, methodResultType } from "../src/core/methodSignature.js";
 import type { CallableDefinition, FieldDefinition } from "../src/core/types.js";
 
-describe("method signatures", () => {
-  it("renders the complete public signature for a built-in API", () => {
+describe("API parameter contracts", () => {
+  it("renders a built-in parameter with its optionality and default", () => {
     const agent = BUILTIN_METHODS.find((method) => method.id === "agent");
     expect(agent).toBeDefined();
-    const cliParameters = ', cli?: "codex" | "claude" | "deepseek-harness", model?: "sonnet" | "opus" | agent.ModelOptions';
-    expect(formatMethodSignature(agent!)).toBe(
-      `agent(input: string, apply?: boolean = True, patch?: boolean = True, workspace?: dir${cliParameters}) -> AgentResult`
-    );
-    expect(formatMethodSignature(agent!, { includeInternal: true })).toBe(
-      `agent(input: string, apply?: boolean = True, patch?: boolean = True, skills?: string | string[], rules?: string | string[], workspace?: dir${cliParameters}) -> AgentResult`
-    );
+    const apply = agent!.input.find((field) => field.name === "apply");
+    expect(formatMethodParameter(apply!)).toBe("apply?: boolean = True");
   });
 
   it("renders array, enum, accepted, optional, and default field contracts", () => {
@@ -25,19 +20,9 @@ describe("method signatures", () => {
       multiple: true,
       default: "safe"
     };
-    const api: CallableDefinition = {
-      id: "sample.run",
-      title: "Sample",
-      description: "Sample API",
-      kind: "command",
-      version: "1.0.0",
-      input: [field],
-      output: { kind: "terminal" },
-      executor: { kind: "deterministic", handler: "sample" }
-    };
     expect(formatFieldType(field)).toBe('"safe" | "fast" | result | ("safe" | "fast" | result)[]');
-    expect(formatMethodSignature(api)).toBe(
-      'sample.run(mode?: "safe" | "fast" | result | ("safe" | "fast" | result)[] = "safe") -> TerminalResult'
+    expect(formatMethodParameter(field)).toBe(
+      'mode?: "safe" | "fast" | result | ("safe" | "fast" | result)[] = "safe"'
     );
   });
 
@@ -52,12 +37,18 @@ describe("method signatures", () => {
       output: { kind: "mcp.team.query", resultType: "DocumentResult" },
       executor: { kind: "deterministic", handler: "mcpTool" }
     };
-    expect(formatMethodSignature(api)).toBe("mcp.team.query() -> DocumentResult");
+    expect(methodResultType(api)).toBe("DocumentResult");
+    // No declared type: the result is named after the output kind.
+    expect(methodResultType({ ...api, output: { kind: "ask" } })).toBe("AskResult");
   });
 
   it("renders named shapes rather than expanding complex object parameters", () => {
     const form = BUILTIN_METHODS.find((method) => method.id === "ui.form");
-    expect(formatMethodSignature(form!)).toContain("fields: list[ui.Field]");
+    const fields = form!.input.find((field) => field.name === "fields");
+    expect(formatMethodParameter(fields!)).toContain("fields: list[ui.Field]");
   });
 
+  it("names the APIs whose per-call skills and rules stay caller-facing", () => {
+    expect([...CONVERSATION_METHODS].sort()).toEqual(["agent", "ask", "plan", "template"]);
+  });
 });

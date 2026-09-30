@@ -57,17 +57,3 @@ export function methodResultType(method: Pick<RegisteredCallable, "id" | "output
  * the resource panel — keeps them, while every other `internal` field stays runtime-only.
  */
 export const CONVERSATION_METHODS: ReadonlySet<string> = new Set(["ask", "plan", "agent", "template"]);
-
-export interface MethodSignatureOptions {
-  /** Include runtime-controlled fields such as conversation rules and skills. */
-  includeInternal?: boolean;
-}
-
-/** Render the call contract for a Dext API. */
-export function formatMethodSignature(
-  method: Pick<RegisteredCallable, "id" | "input" | "output">,
-  options: MethodSignatureOptions = {}
-): string {
-  const fields = options.includeInternal ? method.input : method.input.filter((field) => !field.internal);
-  return `${method.id}(${fields.map(formatMethodParameter).join(", ")}) -> ${methodResultType(method)}`;
-}
