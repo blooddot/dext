@@ -382,11 +382,13 @@ describe("Dext package manifest", () => {
     expect(properties["dext.project.evidenceDepth"]?.enum).toEqual(["standard", "deep", "whole"]);
     expect(properties["dext.project.evidenceDepth"]?.description).toContain("override this preset");
     expect(properties["dext.project.evidenceChars"]?.description).toContain("Overrides dext.project.evidenceDepth");
-    // Fan-out width has a ceiling because every branch can start its own process.
+    // Dispatch concurrency has a ceiling because each call can start its own process.
     const concurrency = properties["dext.workflow.maxConcurrency"];
     expect(concurrency).toMatchObject({ type: "integer", default: 4, minimum: 1 });
     expect(concurrency?.maximum).toBeLessThanOrEqual(16);
-    expect(concurrency?.description).toContain("comprehension");
+    // Code mode dispatches Dext APIs concurrently and queues the overflow.
+    expect(concurrency?.description).toContain("concurrently");
+    expect(concurrency?.description).toContain("wait in a queue");
   });
 
   it("offers writable Agent and Plan permission tiers and a trusted-only CLI passthrough", async () => {

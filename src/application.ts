@@ -1,10 +1,12 @@
-import { isAbsolute, sep } from "node:path";
+import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
+import { isAbsolute, relative as relativePath, sep } from "node:path";
 import * as vscode from "vscode";
 import { applyEdits, modify } from "jsonc-parser/lib/esm/main.js";
 import { BUILTIN_METHODS } from "./core/builtins.js";
-import { loadCustomApis } from "./core/customApi.js";
+import { DEXT_API_DIRECTORY, DEXT_DECLARATION_DIRECTORY, DEXT_DECLARATION_FILE, DEXT_TYPES_PATH, dextFiles, dextModuleDeclaration, dextSharedDeclaration, dextTsconfig } from "./core/dextApiTypes.js";
+import { inputReferenceDisplayParts } from "./core/fileReference.js";
 import { ContextResolver } from "./core/contextResolver.js";
-import { DextLanguageService } from "./core/languageService.js";
 import { MethodRegistry } from "./core/registry.js";
 import { DextRuntime } from "./core/runtime.js";
 import { REPAIR_OUTPUT_FIELD } from "./core/axAdapter.js";
@@ -13,9 +15,9 @@ import { createResultRepair } from "./core/resultRepair.js";
 import { runSingleTurnCli } from "./core/agentRunner.js";
 import { isIgnored, parseIgnoreRules, type IgnoreRule } from "./core/ignoreRules.js";
 import type { AgentAssertionSnapshot } from "./core/agentAssertions.js";
-import { compileWorkflow, parseWorkflowImports } from "./core/workflow.js";
-import { DEFAULT_MAX_CONCURRENCY, WorkflowRuntime } from "./core/workflowRuntime.js";
-import type { CallableDefinition, ExecutionMetadata, InputExecutionResponse, AgentStreamEvent } from "./core/types.js";
+import { DEFAULT_DISPATCH_CONCURRENCY, DextKernelHost } from "./runner/dextHost.js";
+import type { DextReplayEntry } from "./runner/dextResumeCache.js";
+import type { CallableDefinition, CodeRef, ExecutionMetadata, InputExecutionResponse, AgentStreamEvent } from "./core/types.js";
 import type { GlobalResourceItem, GlobalResources, SidebarState } from "./webviewProtocol.js";
 import { VsCodeContextHost } from "./vscodeContextHost.js";
 import { terminalRunHandler } from "./vscodeTerminalHost.js";
@@ -54,6 +56,10 @@ import type { ProjectWorkspaceSettings } from "./core/projectSettings.js";
 /** Global rather than per-workspace: the object form is rewritten in the user
  * settings file, so once is once for every window. */
 const COMPLETION_MIGRATION_KEY = "dext.completion.migrated";
+/** How many API modules the composer's TypeScript worker is given, and how many
+ * bytes of source, so a large workspace cannot flood the Webview channel. */
+const COMPOSER_MODULE_LIMIT = 200;
+const COMPOSER_MODULE_BYTES = 2 * 1024 * 1024;
 
 /** Registry diagnostics name the server they rejected. Keeping the reason lets
  * a later "unknown API" explain the real cause instead of only "not connected". */
@@ -71,7 +77,6 @@ function mcpRejectionReasons(diagnostics: readonly string[]): Map<string, string
 export class DextApplication {
   onApiReload: (() => void) | undefined;
   readonly registry = new MethodRegistry();
-  readonly language = new DextLanguageService(this.registry);
   private readonly contextResolver = new ContextResolver(new VsCodeContextHost());
   readonly runtime = new DextRuntime(
     this.registry,
@@ -79,16 +84,119 @@ export class DextApplication {
     undefined,
     { terminalRun: terminalRunHandler, applyPatch: applyPatchHandler }
   );
-  private readonly workflowRuntime = new WorkflowRuntime(this.runtime);
+  /** The TypeScript kernel, created on first use so a workspace without Code
+   * runs never pays for a child process. */
+  private kernel: DextKernelHost | undefined;
+  private dispatchConcurrency = DEFAULT_DISPATCH_CONCURRENCY;
   private configDiagnostics: string[] = [];
-  private customApiIds = new Set<string>();
-  private readonly customApiSources = new Map<string, string>();
 
-  customApiSourcePath(id: string): string | undefined {
-    return this.customApiSources.get(id);
+  /**
+   * The workspace's generated declaration when it has one, otherwise the built-in
+   * copy in Dext's own storage.
+   *
+   * A workspace that imports `dext` commits `.dext/api/dext.d.ts` — generated, and
+   * the file its `tsconfig.json` maps `dext` at — so that is the declaration to open.
+   * The storage copy is the fallback for a workspace that has no generated project
+   * yet, and it is a pure function of the built-in registry, so one copy per
+   * installation is enough.
+   *
+   * Neither path is in `dist/`: that is a build output, and a mapping into it would
+   * turn a missing or rebuilt artifact into a TypeScript error inside the user's own
+   * source file (`File '…/dist/dext.d.ts' is not a module`).
+   */
+  dextTypesPath(): string {
+    const workspace = this.workspaceDeclarationPath();
+    if (workspace && existsSync(workspace)) return workspace;
+    return vscode.Uri.joinPath(this.storage.globalStorageUri, DEXT_DECLARATION_DIRECTORY, DEXT_DECLARATION_FILE).fsPath;
+  }
+
+  /** The declaration the editor's project files should describe right now: the
+   * built-in surface plus the MCP tools this workspace's own manifests declare. */
+  dextDeclaration(): string {
+    return this.declarationText;
+  }
+
+  /**
+   * What the composer's TypeScript worker needs to describe the workspace's own APIs.
+   *
+   * Monaco has no filesystem, so it cannot read `.dext/api`: the sources travel with
+   * the declaration and are registered as virtual files, and `apiPaths` is the same
+   * `dext/api/*` mapping the generated `.dext/tsconfig.json` gives VS Code — so a
+   * specifier completes and type-checks the same way in both places. Without this the
+   * composer resolved the built-in `dext` module and nothing else, and a correct
+   * `import { main } from "dext/api/git/commit"` was a `Cannot find module` there.
+   *
+   * A workspace larger than the budget keeps the modules that fit, newest path first,
+   * rather than sending nothing: completion for the rest still comes from the
+   * generated project in VS Code.
+   */
+  async composerTypes(): Promise<{ declaration: string; apiPaths: string[]; modules: { path: string; specifier: string; content: string }[] }> {
+    const apiPaths = (JSON.parse(dextTsconfig(undefined, this.projectApiDirs())) as {
+      compilerOptions: { paths: Record<string, string[]> };
+    }).compilerOptions.paths["dext/api/*"] ?? [];
+    const modules: { path: string; specifier: string; content: string }[] = [];
+    const folder = vscode.workspace.workspaceFolders?.find((workspace) => workspace.uri.scheme === "file");
+    if (folder) {
+      let bytes = 0;
+      for (const directory of this.projectApiDirs()) {
+        if (modules.length >= COMPOSER_MODULE_LIMIT || bytes >= COMPOSER_MODULE_BYTES) break;
+        const found = await vscode.workspace.findFiles(
+          new vscode.RelativePattern(folder, `${directory}/**/*.{ts,mts}`),
+          "**/node_modules/**",
+          COMPOSER_MODULE_LIMIT
+        );
+        for (const uri of found.sort((left, right) => left.fsPath.localeCompare(right.fsPath))) {
+          if (modules.length >= COMPOSER_MODULE_LIMIT) break;
+          const relative = relativePath(folder.uri.fsPath, uri.fsPath).replaceAll("\\", "/");
+          if (!relative) continue;
+          const virtual = relative.startsWith(".dext/") ? relative.slice(".dext/".length) : `../${relative}`;
+          // The generated declaration is already registered as the ambient lib.
+          if (virtual === DEXT_TYPES_PATH) continue;
+          // The alias is `dext/api/<id>` whatever directory the module lives in, so the
+          // id is the path below the API directory the file was found in.
+          const id = relativePath(directory, relative).replaceAll("\\", "/").replace(/\.(ts|mts)$/, "");
+          let content: string;
+          try {
+            content = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
+          } catch {
+            continue;
+          }
+          bytes += content.length;
+          modules.push({ path: virtual, specifier: `dext/api/${id}`, content });
+        }
+      }
+    }
+    return { declaration: this.declarationText, apiPaths, modules };
+  }
+
+  /**
+   * Directories the `dext/api/<id>` alias resolves against, most specific first.
+   * `.dext/api` always comes first, so a configured directory cannot shadow a
+   * project API; `dext.apiDirs` and the project's own `paths.apiDirs` add roots
+   * after it, then global storage.
+   */
+  apiRoots(): string[] {
+    const roots: string[] = [];
+    const add = (root: string): void => { if (root && !roots.includes(root)) roots.push(root); };
+    add(vscode.Uri.joinPath(vscode.Uri.file(this.workspaceRoot), ".dext", "api").fsPath);
+    const folder = vscode.workspace.workspaceFolders?.find((workspace) => workspace.uri.scheme === "file");
+    const projectDirs = this.projectWorkspaceSettings?.apiDirs;
+    if (projectDirs) {
+      for (const entry of projectDirs) add(vscode.Uri.joinPath(folder?.uri ?? vscode.Uri.file(this.workspaceRoot), ...entry.split("/")).fsPath);
+    }
+    const configured = projectDirs ? [] : vscode.workspace.getConfiguration("dext").get<string[]>("apiDirs", []) ?? [];
+    for (const entry of configured) {
+      const value = typeof entry === "string" ? entry.trim() : "";
+      if (!value) continue;
+      add(isAbsolute(value) ? value : vscode.Uri.joinPath(folder?.uri ?? vscode.Uri.file(this.workspaceRoot), value).fsPath);
+    }
+    add(vscode.Uri.joinPath(this.storage.globalStorageUri, "api").fsPath);
+    return roots;
   }
   private workspaceRoot = process.cwd();
   private workspaceUri: vscode.Uri | undefined;
+  /** The root the cached kernel host was built for, so a folder switch replaces it. */
+  private kernelRoot: string | undefined;
   private workspaceTrusted = false;
   private projectWorkspaceSettings: ProjectWorkspaceSettings | undefined;
   private resourceWrite: Promise<void> = Promise.resolve();
@@ -97,6 +205,10 @@ export class DextApplication {
   /** Why a configured server was dropped, by server name; a rejected server is
    * absent from the registry, so this is the only place that reason survives. */
   private mcpServerRejections = new Map<string, string>();
+  /** The declaration the current workspace's generated project describes: the
+   * built-in surface plus the MCP tools its own manifests declare. Rebuilt on every
+   * reload from the same registry the kernel executes. */
+  private declarationText: string = dextModuleDeclaration();
   readonly skills = new SkillCatalog();
   readonly mcp = new McpToolRegistry();
   readonly agents: AgentProfileStore;
@@ -339,6 +451,10 @@ export class DextApplication {
     const projectSkillDirs = this.projectWorkspaceSettings?.skillDirs;
     const skillDirs = projectSkillDirs ?? [];
     const mcpManifests = await this.loadMcpManifests(folder);
+    // The declaration a project commits is generated from its own manifests only: a
+    // global manifest lives on one machine, and the committed file has to be the same
+    // text for everyone who checks out the repository.
+    this.declarationText = dextModuleDeclaration(mcpManifests.projectMethods);
     const mcpRegistryDiagnostics = [
       ...this.mcp.setServers(mcpManifests.servers),
       ...this.mcp.setTools(mcpManifests.tools)
@@ -360,74 +476,103 @@ export class DextApplication {
     } catch (error) {
       diagnostics.push(`Skill discovery: ${error instanceof Error ? error.message : String(error)}`);
     }
-    const loaded = await loadCustomApis(
-      vscode.workspace.isTrusted,
-      this.apiDirectories(folder),
-      async (root) => {
-        const files: string[] = [];
-        const visit = async (directory: vscode.Uri): Promise<void> => {
-          let entries: [string, vscode.FileType][];
-          try {
-            entries = await vscode.workspace.fs.readDirectory(directory);
-          } catch (error) {
-            if (error instanceof vscode.FileSystemError && error.code === "FileNotFound") return;
-            throw error;
-          }
-          for (const [name, type] of entries) {
-            const child = vscode.Uri.joinPath(directory, name);
-            if (type === vscode.FileType.Directory) await visit(child);
-            else if (type === vscode.FileType.File && name.toLowerCase().endsWith(".dx")) files.push(child.fsPath);
-          }
-        };
-        await visit(vscode.Uri.file(root));
-        return files;
-      },
-      async (filePath) => {
-        try {
-          const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(filePath));
-          return new TextDecoder().decode(bytes);
-        } catch (error) {
-          if (error instanceof vscode.FileSystemError && error.code === "FileNotFound") {
-            return undefined;
-          }
-          throw error;
-        }
-      },
-      this.registry,
-      "project"
-    );
-    this.runtime.setCustomPlans(loaded.plans);
-    this.runtime.setCustomApiDiagnostics(loaded.diagnosticDetails, loaded.blocked);
     this.onApiReload?.();
-    this.customApiSources.clear();
-    const registered = new Set(loaded.methods.map(({ definition }) => definition));
-    for (const file of loaded.files) {
-      if (registered.has(file.definition)) this.customApiSources.set(file.id, file.path);
-    }
-    this.customApiIds = new Set(loaded.methods.map(({ definition }) => definition.id));
-    this.language.setCustomApiIds(this.customApiIds);
-    const globalRoot = vscode.Uri.joinPath(this.storage.globalStorageUri, "api").fsPath.replace(/[\\/]$/, "");
-    const isGlobalApiDiagnostic = (message: string): boolean => {
-      const normalized = message.replaceAll("\\", "/").toLowerCase();
-      return normalized.startsWith(`${globalRoot.replaceAll("\\", "/").toLowerCase()}/`);
-    };
-    const globalApiDiagnostics = loaded.diagnostics.filter(isGlobalApiDiagnostic);
-    const projectApiDiagnostics = loaded.diagnostics.filter((message) => !isGlobalApiDiagnostic(message));
     const nonMcpDiagnostics = diagnostics.filter((message) =>
       !mcpManifests.diagnostics.includes(message) && !mcpRegistryDiagnostics.includes(message)
     );
     this.configDiagnostics = [
       ...mcpManifests.projectDiagnostics,
-      ...projectApiDiagnostics,
       ...nonMcpDiagnostics
     ];
     this.globalDiagnostics = [
       ...mcpManifests.globalDiagnostics,
-      ...globalApiDiagnostics,
       ...mcpRegistryDiagnostics
     ];
-    this.language.setSkillCompletions(this.skills.list());
     this.globalResources = await this.loadGlobalResources();
+    await this.writeDextTypes(mcpManifests.projectMethods);
+  }
+
+  /**
+   * Keep the editor's view of `dext` in step with the registry.
+   *
+   * The workspace's own project files are the mapping the editor uses, and they are
+   * generated into the workspace because every path in them is relative: the same
+   * files work on another machine and in CI. The storage copy stays as the fallback
+   * for a workspace that has no generated project yet.
+   */
+  private async writeDextTypes(methods: readonly CallableDefinition[]): Promise<void> {
+    try {
+      const directory = vscode.Uri.joinPath(this.storage.globalStorageUri, DEXT_DECLARATION_DIRECTORY);
+      await vscode.workspace.fs.createDirectory(directory);
+      await this.writeIfChanged(vscode.Uri.joinPath(directory, DEXT_DECLARATION_FILE), dextSharedDeclaration());
+      await this.writeWorkspaceDextProject(methods);
+    } catch {
+      // A read-only or virtual workspace cannot hold the generated project; the
+      // editor simply falls back to its own TypeScript defaults.
+    }
+  }
+
+  /** Writes `content` only when the file differs, so a reload does not touch mtimes. */
+  private async writeIfChanged(uri: vscode.Uri, content: string): Promise<void> {
+    try {
+      const current = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
+      // Line endings are the checkout's business: the generated text is LF, and a
+      // repository with `core.autocrlf` hands the committed file back as CRLF, which
+      // is not a reason to rewrite it (and would churn every reload).
+      if (current.replace(/\r\n/g, "\n") === content) return;
+    } catch {
+      // Missing: write it below.
+    }
+    await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(content));
+  }
+
+  /**
+   * Writes the generated project a workspace commits: the declaration beside its
+   * APIs, the `paths` project that maps `dext` at it, and the ESM marker.
+   *
+   * Every path in those files is relative, so the same files work on another machine
+   * and in CI — the reason Dext generates them into the project instead of pointing a
+   * mapping at its own storage. The declaration is not only the built-in surface: a
+   * workspace's own MCP manifests declare tools, and typing them is what keeps the
+   * editor and the kernel agreeing about `mcp.<server>.<tool>`.
+   */
+  private async writeWorkspaceDextProject(methods: readonly CallableDefinition[]): Promise<void> {
+    const folder = vscode.workspace.workspaceFolders?.find((workspace) => workspace.uri.scheme === "file");
+    if (!folder) return;
+    if (!await this.workspaceImportsDext(folder)) return;
+    const directory = vscode.Uri.joinPath(folder.uri, ".dext");
+    await vscode.workspace.fs.createDirectory(directory);
+    for (const file of dextFiles(methods, this.projectApiDirs())) {
+      await this.writeIfChanged(vscode.Uri.joinPath(directory, ...file.path.split("/")), file.content);
+    }
+  }
+
+  /**
+   * The directories `dext/api/<id>` resolves against that belong to the project, so
+   * the generated project can map them relatively and stay portable. The
+   * `dext.apiDirs` setting and Dext's own storage are deliberately absent: they live
+   * on one machine, and a committed mapping cannot name them.
+   */
+  private projectApiDirs(): string[] {
+    const dirs = [DEXT_API_DIRECTORY, ...(this.projectWorkspaceSettings?.apiDirs ?? [])];
+    return [...new Set(dirs.map((dir) => dir.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "")).filter(Boolean))];
+  }
+
+  /** The declaration this workspace's editor project maps `dext` at, when it has one. */
+  workspaceDeclarationPath(): string | undefined {
+    const folder = vscode.workspace.workspaceFolders?.find((workspace) => workspace.uri.scheme === "file");
+    if (!folder) return undefined;
+    return vscode.Uri.joinPath(folder.uri, ".dext", ...DEXT_TYPES_PATH.split("/")).fsPath;
+  }
+
+  /**
+   * Whether the workspace holds a TypeScript file that is part of the generated
+   * project. A workspace that never writes an API module gets no generated files at
+   * all, so Dext does not add a `tsconfig.json` to a project that does not use it.
+   */
+  private async workspaceImportsDext(folder: vscode.WorkspaceFolder): Promise<boolean> {
+    const found = await vscode.workspace.findFiles(new vscode.RelativePattern(folder, ".dext/api/**/*.ts"), undefined, 1);
+    return found.length > 0;
   }
 
   private async loadGlobalResources(): Promise<GlobalResources> {
@@ -457,7 +602,7 @@ export class DextApplication {
     const apiRoot = vscode.Uri.joinPath(root, "api");
     const ruleRoot = vscode.Uri.joinPath(root, "rules");
     const skillRoot = vscode.Uri.joinPath(root, "skills");
-    const apis = (await listFiles(apiRoot, ".dx")).map((file) => ({ name: relativeName(file, apiRoot, ".dx") }));
+    const apis = (await listFiles(apiRoot, ".ts")).map((file) => ({ name: relativeName(file, apiRoot, ".ts") }));
     const rules = (await listFiles(ruleRoot, ".md")).map((file) => ({ name: relativeName(file, ruleRoot, ".md") }));
     const skills = (await listFiles(skillRoot, "skill.md")).map((file) => ({
       name: file.slice(skillRoot.fsPath.replace(/[\\/]$/, "").length + 1).replace(/[\\/]/g, "/").replace(/\/SKILL\.md$/i, "")
@@ -498,29 +643,45 @@ export class DextApplication {
       agentTimeoutMs: this.agentTimeoutMs,
       agentIdleTimeoutMs: this.agentIdleTimeoutMs
     });
-    this.workflowRuntime.setMaxConcurrency(positive("workflow.maxConcurrency", DEFAULT_MAX_CONCURRENCY));
+    this.dispatchConcurrency = positive("workflow.maxConcurrency", DEFAULT_DISPATCH_CONCURRENCY);
+    this.kernel?.setMaxConcurrency(this.dispatchConcurrency);
   }
 
-  /** Project APIs are searched first, then global APIs. Project configuration
-   * owns the project roots; `dext.apiDirs` remains a legacy fallback. */
-  private apiDirectories(folder: vscode.WorkspaceFolder | undefined): string[] {
-    const roots: string[] = [];
-    const addRoot = (root: string): void => { if (!roots.includes(root)) roots.push(root); };
-    if (folder) addRoot(vscode.Uri.joinPath(folder.uri, ".dext", "api").fsPath);
-    const projectApiDirs = this.projectWorkspaceSettings?.apiDirs;
-    if (projectApiDirs) {
-      for (const entry of projectApiDirs) addRoot(vscode.Uri.joinPath(folder?.uri ?? vscode.Uri.file(this.workspaceRoot), entry).fsPath);
-    }
-    addRoot(vscode.Uri.joinPath(this.storage.globalStorageUri, "api").fsPath);
-    if (!folder) return roots;
-    const configured = projectApiDirs ? [] : vscode.workspace.getConfiguration("dext").get<string[]>("apiDirs", []) ?? [];
-    for (const entry of configured) {
-      const value = typeof entry === "string" ? entry.trim() : "";
-      if (!value) continue;
-      const uri = isAbsolute(value) ? vscode.Uri.file(value) : vscode.Uri.joinPath(folder.uri, value);
-      addRoot(uri.fsPath);
-    }
-    return roots;
+  /** The kernel that runs Code mode. Created on demand, one per workspace. */
+  private kernelHost(): DextKernelHost {
+    // The host is built around one workspace: its working directory, the root the
+    // loader resolves APIs against and the directory a run's buffer is written to.
+    // Opening a different folder replaces it — but only once it is idle, because a
+    // reload must never kill a run that is in flight.
+    if (this.kernel && this.kernelRoot !== this.workspaceRoot && !this.kernel.busy()) this.stopKernel();
+    this.kernel ??= new DextKernelHost({
+      workspaceRoot: this.workspaceRoot,
+      runnerDirectory: __dirname,
+      maxConcurrency: this.dispatchConcurrency,
+      runsDirectory: this.runsDirectory(),
+      execute: (invocation, metadata, context) => this.runtime.execute(invocation, context, metadata)
+    });
+    this.kernelRoot = this.workspaceRoot;
+    return this.kernel;
+  }
+
+  /**
+   * Where a Code run's buffer is written: Dext's own storage, keyed by workspace.
+   *
+   * A run buffer is an implementation detail of the kernel (it imports a real file),
+   * not project content, so it belongs beside the extension's other generated state
+   * rather than in the repository. The key is the workspace URI, which keeps two
+   * windows on different folders apart and is stable across restarts.
+   */
+  private runsDirectory(): string {
+    const digest = createHash("sha256").update(this.workspaceUri?.toString() ?? this.workspaceRoot).digest("hex").slice(0, 16);
+    return vscode.Uri.joinPath(this.storage.globalStorageUri, "runs", digest).fsPath;
+  }
+
+  /** Stops the kernel; the next run starts a fresh one. */
+  stopKernel(): void {
+    this.kernel?.dispose();
+    this.kernel = undefined;
   }
 
   /** Project and global MCP manifests use the same format. One file per server
@@ -529,6 +690,10 @@ export class DextApplication {
     servers: McpServerConfig[];
     tools: McpToolConfig[];
     methods: CallableDefinition[];
+    /** The subset the workspace's own manifests declare, which is what the generated
+     * declaration may describe: the file is committed, so it cannot depend on a
+     * machine's global configuration. */
+    projectMethods: CallableDefinition[];
     diagnostics: string[];
     projectDiagnostics: string[];
     globalDiagnostics: string[];
@@ -543,6 +708,7 @@ export class DextApplication {
     const servers: McpServerConfig[] = [];
     const tools: McpToolConfig[] = [];
     const methods: CallableDefinition[] = [];
+    const projectMethods: CallableDefinition[] = [];
     const diagnostics: string[] = [];
     const projectDiagnostics: string[] = [];
     const globalDiagnostics: string[] = [];
@@ -569,6 +735,7 @@ export class DextApplication {
         }
         tools.push(...manifest.tools);
         methods.push(...manifest.methods);
+        if (scope === "project") projectMethods.push(...manifest.methods);
         diagnostics.push(...manifest.diagnostics);
         (scope === "global" ? globalDiagnostics : projectDiagnostics).push(...manifest.diagnostics);
       } catch (error) {
@@ -578,7 +745,7 @@ export class DextApplication {
       }
       }
     }
-    return { servers, tools, methods, diagnostics, projectDiagnostics, globalDiagnostics };
+    return { servers, tools, methods, projectMethods, diagnostics, projectDiagnostics, globalDiagnostics };
   }
 
   /** The permission default and the passthrough arguments are both settings, so
@@ -812,20 +979,15 @@ export class DextApplication {
     return { name: manifest?.server?.name ?? name, path, content };
   }
 
-  private async validateResource(type: ResourceKind, draft: ResourceDocument): Promise<void> {
+  private validateResource(type: ResourceKind, draft: ResourceDocument): void {
     if (!draft.content.trim() || draft.content.length > 200_000) throw new Error("The resource draft is empty or too large.");
     if (type === "api") {
-      if (!draft.content.includes("def main")) throw new Error("The API must define main(...).");
-      const registry = new MethodRegistry();
-      for (const method of this.registry.list()) {
-        if (method.id === draft.name) {
-          if (method.source === "builtin") throw new Error(`API '${draft.name}' is built in. Choose another name.`);
-        } else registry.register(method, method.source);
+      // A Dext API is an ordinary TypeScript module now: the editor's own
+      // TypeScript service reports type errors, so this only checks the shape a
+      // callable API needs — a `main` the loader can import.
+      if (!/\bexport\s+(?:async\s+)?(?:function\s+main\b|const\s+main\b)/.test(draft.content)) {
+        throw new Error("The API must export main(), for example `export async function main() { ... }`.");
       }
-      const root = "/resource-draft";
-      const path = `${root}/${resourceFileName("api", draft.name)}`;
-      const loaded = await loadCustomApis(true, [root], () => Promise.resolve([path]), () => Promise.resolve(draft.content), registry);
-      if (!loaded.plans.has(draft.name) || loaded.diagnostics.length) throw new Error(`Invalid API source: ${loaded.diagnostics.join("\n")}`);
     } else if (type === "mcp") {
       const manifest = parseMcpManifest(draft.content, draft.name);
       const server = manifest.server;
@@ -846,7 +1008,7 @@ export class DextApplication {
     if (typeof value.name !== "string" || typeof value.content !== "string") throw new Error("The resource needs a name and content.");
     const draft = { name: resource.target?.name ?? value.name.trim(), content: value.content };
     if (!resource.target) resourceFileName(resource.type, draft.name);
-    await this.validateResource(resource.type, draft);
+    this.validateResource(resource.type, draft);
     // Keep generated JSON out of the final conversation response; show the actual document.
     const fence = "`".repeat(Math.max(3, ...Array.from(draft.content.matchAll(/`+/g), (match) => match[0].length + 1)));
     response.result.text = `Draft: ${draft.name}\n\n${fence}${resource.type === "api" ? "python" : resource.type === "mcp" ? "jsonc" : "text"}\n${draft.content}\n${fence}\n\nReview the draft, then save or describe further changes.`;
@@ -863,7 +1025,7 @@ export class DextApplication {
   private async writeResource(resource: ResourceSession): Promise<ResourceTarget> {
     if (!resource.draft) throw new Error("Generate a resource draft first.");
     const { type, scope, draft, target } = resource;
-    await this.validateResource(type, draft);
+    this.validateResource(type, draft);
     const path = target?.path ?? resourceFileName(type, draft.name);
     const root = this.resourceRoot(type, scope);
     const segments = resourcePathSegments(type, path);
@@ -973,17 +1135,47 @@ export class DextApplication {
     } });
   }
 
-  async executeInput(source: string, metadata: Readonly<ExecutionMetadata> = {}): Promise<InputExecutionResponse> {
-    const compiled = compileWorkflow(source, this.registry, {
-      allowImports: true,
-      aliases: parseWorkflowImports(source),
-      customApiIds: this.customApiIds,
-      requireCustomApiImports: false
+  /**
+   * Runs Code mode. The third argument carries the kernel-only options: calls
+   * replayed from an earlier attempt, and the sink for this attempt's call log.
+   */
+  async executeInput(
+    source: string,
+    metadata: Readonly<ExecutionMetadata> = {},
+    run: { resume?: readonly DextReplayEntry[]; onCallLog?: (entries: readonly DextReplayEntry[]) => void } = {}
+  ): Promise<InputExecutionResponse> {
+    return this.kernelHost().runSource(source, {
+      execution: metadata,
+      ...(metadata.signal ? { signal: metadata.signal } : {}),
+      ...(run.resume ? { resume: run.resume } : {}),
+      ...(run.onCallLog ? { onCallLog: run.onCallLog } : {}),
+      apiRoots: this.apiRoots(),
+      context: await this.codeContext(source)
     });
-    if (!compiled.program || compiled.diagnostics.some((item) => item.severity === "error")) {
-      throw new Error(compiled.diagnostics.map((item) => item.message).join("\n"));
+  }
+
+  /**
+   * The `@path` tokens in a Code run's source. The old compiler turned them into
+   * typed references; the kernel cannot, so the host resolves them once per run
+   * and attaches them to every API call the run makes. A token that cannot be
+   * resolved stays readable text instead of failing the run.
+   */
+  private async codeContext(source: string): Promise<CodeRef[]> {
+    const references: CodeRef[] = [];
+    const seen = new Set<string>();
+    for (const part of inputReferenceDisplayParts(source)) {
+      if (part.kind !== "ref" || part.reference.kind !== "file") continue;
+      const path = part.reference.payload;
+      if (seen.has(path)) continue;
+      seen.add(path);
+      try {
+        references.push(await this.contextResolver.resolveReference({ kind: "file", path }));
+      } catch {
+        // An unresolvable token is reported by the turn when the model needs it;
+        // there is nothing to attach.
+      }
     }
-    return this.workflowRuntime.execute(compiled.program, [], metadata);
+    return references;
   }
 
   async executeConversation(

@@ -10,10 +10,11 @@ const files = await Promise.all(
 );
 const fileNames = files.filter((file) => file.size > 0).map((file) => file.entry);
 
-for (const required of ["main.js", "main.css", "editor.worker.js"]) {
+// `ts.worker.js` is what gives the composer its TypeScript completion, hover and
+// diagnostics; without it the editor silently loses every language feature.
+for (const required of ["main.js", "main.css", "editor.worker.js", "ts.worker.js"]) {
   assert.ok(fileNames.includes(required), `Missing Webview build asset '${required}'.`);
 }
-assert.ok(fileNames.includes("editor.worker.js"));
 assert.ok((await stat(resolve("dist", "codicons", "codicon.ttf"))).size > 0, "Missing VS Code codicon font.");
 const mainBundle = await readFile(resolve(output, "main.js"), "utf8");
 const extensionBundle = await readFile(resolve("dist", "extension.js"), "utf8");
@@ -27,6 +28,7 @@ for (const required of [
   "dist/webview/main.css",
   "dist/webview/main.js",
   "dist/webview/editor.worker.js",
+  "dist/webview/ts.worker.js",
   "dist/codicons/codicon.css",
   "dist/codicons/codicon.ttf",
   "dist/markdown/github-markdown.css",
@@ -79,6 +81,40 @@ assert.ok(!mainStyles.includes('.cm-editor'), 'Old editor styles must not be bun
 
 // --- Project diagrams: Archify runtime completeness and removed-engine absence -----------------
 const buildMeta = JSON.parse(await readFile(resolve("dist", "build-meta.json"), "utf8"));
+// The kernel is started with `--import dist/dextLoader.mjs`, so its ESM files must
+// exist on disk, be listed in the manifest and survive packaging.
+// The kernel is started with `--import dist/dextLoader.mjs`, so its ESM files must
+// exist on disk, be listed in the manifest and survive packaging. `dist/dext.d.ts`
+// is the generated `dext` declaration the extension ships and points workspaces at.
+assert.ok((await stat(resolve("dist", "dext.d.ts"))).size > 0, "Missing the shipped dext declaration ('dist/dext.d.ts').");
+assert.ok(packagedFiles.has("dist/dext.d.ts"), "The shipped dext declaration is excluded from the VSIX.");
+const shippedDeclaration = await readFile(resolve("dist", "dext.d.ts"), "utf8");
+assert.ok(shippedDeclaration.includes('declare module "dext"'), "The shipped declaration must declare the dext module.");
+assert.ok(!shippedDeclaration.includes("PrintResult"), "The shipped declaration must not describe the removed print result.");
+for (const kernelFile of ["dextLoader.mjs", "dextKernel.mjs", "dextRuntime.mjs", "dextSerialization.mjs"]) {
+  const relative = `dist/${kernelFile}`;
+  assert.ok((await stat(resolve("dist", kernelFile))).size > 0, `Missing kernel build asset '${relative}'.`);
+  assert.ok(packagedFiles.has(relative), `The kernel asset '${relative}' is excluded from the VSIX.`);
+  const kernelOutputs = buildMeta.metafiles?.kernel?.outputs ?? {};
+  assert.ok(
+    Object.keys(kernelOutputs).some((output) => output.replaceAll("\\", "/") === relative),
+    `The kernel build manifest does not list '${relative}'; rerun \`npm run build\`.`
+  );
+}
+const kernelInputs = buildMeta.entryInputs?.kernel;
+assert.ok(Array.isArray(kernelInputs) && kernelInputs.some((input) => input.endsWith("src/runner/dextKernel.mjs")), "The build manifest does not describe the kernel entry.");
+assert.ok(!(await readFile(resolve("dist", "dextLoader.mjs"), "utf8")).includes("@lezer/"), "The kernel must not bundle the removed language parser.");
+// The kernel resolves `dext` through its own loader, which maps it to the runtime
+// file user code imports. A copy bundled into the kernel would be a second instance
+// with its own in-flight registry, so a run that called an API without `await` would
+// be reported finished while the call — and the agent behind it — was still running.
+const kernelBundle = await readFile(resolve("dist", "dextKernel.mjs"), "utf8");
+assert.ok(kernelBundle.includes('import("dext")'), "The kernel must obtain the runtime through its loader, not by a file path.");
+assert.ok(
+  !kernelBundle.includes("Dext APIs are only available inside a Dext run."),
+  "The kernel bundle contains its own copy of dextRuntime.mjs; mark 'dext' external so kernel and user code share one runtime instance."
+);
+
 // Guard the manifest shape first: an empty or renamed input list would make every assertion below
 // pass without checking anything.
 assert.equal(buildMeta.schemaVersion, 1, "dist/build-meta.json was written by an unknown esbuild manifest schema.");

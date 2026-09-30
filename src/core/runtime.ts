@@ -10,11 +10,8 @@ import type { ResultRepairEvent, ResultRepairOutcome } from "./resultRepair.js";
 import { builtinCliFields, builtinCliMetadata, CLI_BUILTIN_IDS, specializeBuiltinCli } from "./builtinCli.js";
 import type { ContextResolver } from "./contextResolver.js";
 import type { MethodRegistry } from "./registry.js";
-import type { AgentResult, CustomApiPlan, DirRef, McpRawResult } from "./types.js";
-import { WorkflowRuntime } from "./workflowRuntime.js";
+import type { AgentResult, DirRef, McpRawResult } from "./types.js";
 import { ExecutionCancelledError } from "./executionErrors.js";
-import { formatDiagnostic, type DextDiagnostic } from "./apiDiagnostic.js";
-import { executeNodeBuiltin } from "./nodeBuiltin.js";
 import { patchResultFrom } from "./patch.js";
 import type { AgentPermission, AgentProfile, AgentProvider, AgentSelection, WritableAgentPermission } from "../agentProfiles.js";
 import { DefaultAgentRunner } from "./agentRouter.js";
@@ -36,28 +33,6 @@ import type {
 export type DeterministicHandler = (
   invocation: ResolvedInvocation
 ) => DextResult | Promise<DextResult>;
-
-/** Print keeps structured values unambiguous so the output can be copied back
- * into a workflow or inspected as data. URI-backed references remain compact. */
-function printValue(value: unknown): string {
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  if (typeof value === "object" && value !== null && !Array.isArray(value) && "uri" in value && typeof value.uri === "string") {
-    return value.uri;
-  }
-  // `kind` is the runtime discriminator used by Dext to validate and route a
-  // result. It is not part of an MCP tool's payload and should not leak when a
-  // caller explicitly prints the structured result itself.
-  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
-    const record = value as Record<string, unknown>;
-    if (typeof record.kind === "string" && (record.kind === "mcpRaw" || record.kind.startsWith("mcp."))) {
-      const payload = Object.fromEntries(Object.entries(record).filter(([key]) => key !== "kind"));
-      return JSON.stringify(payload) ?? "";
-    }
-  }
-  return JSON.stringify(value) ?? "";
-}
 
 function stringListArgument(value: unknown, name: string): string[] {
   if (value === undefined) return [];
@@ -105,10 +80,6 @@ function plainTextAgentResult(kind: string, raw: unknown, allowWorkspaceWrite: b
   if (kind !== "agent" || allowWorkspaceWrite === true) return undefined;
   if (typeof raw !== "string" || !raw) return undefined;
   return { kind: "agent", text: raw };
-}
-
-function isMcpRawResult(value: DextResult): value is McpRawResult {
-  return value.kind === "mcpRaw";
 }
 
 /**
@@ -257,20 +228,6 @@ export const DEFAULT_HANDLERS: Readonly<Record<string, DeterministicHandler>> = 
       summary: "The patch contains no changes; no workspace files were written."
     };
   },
-  printText: ({ arguments: args }) => ({
-    kind: "print",
-    text: printValue(args.text),
-    ...(typeof args.label === "string" ? { label: args.label } : {})
-  }),
-  previewPatch: ({ context, method }) => ({
-    kind: "patch",
-    title: method.title,
-    changes: context.map((reference) => ({
-      uri: reference.uri,
-      before: reference.content,
-      after: reference.content
-    }))
-  }),
   uiSelect: uiHandler("select"),
   uiRadio: uiHandler("radio"),
   uiCheckbox: uiHandler("checkbox"),
@@ -340,7 +297,6 @@ export interface RuntimeResultRepair {
 
 export class DextRuntime {
   private readonly handlers: Readonly<Record<string, DeterministicHandler>>;
-  private readonly customPlans = new Map<string, CustomApiPlan>();
   private readonly agents = new Map<string, AgentProfile>();
   private agentSelection: AgentSelection = {};
   private agentRunner: AgentRunner;
@@ -356,13 +312,10 @@ export class DextRuntime {
     onProcessEvent?: ExecutionMetadata["onMcpEvent"]
   ) => Promise<McpRawResult>) | undefined;
   private resultRepair: RuntimeResultRepair | undefined;
-  /** Why a registered custom API has no compiled plan, by API id. */
-  private customApiDiagnostics: ReadonlyMap<string, readonly DextDiagnostic[]> = new Map();
   /** MCP tool ids a manifest declares, whether or not their server is running. */
   private declaredMcpTools: ReadonlySet<string> = new Set();
   /** Why a configured MCP server was rejected during the last reload, by name. */
   private mcpServerReasons: ReadonlyMap<string, readonly string[]> = new Map();
-  private customApisBlocked = false;
 
   constructor(
     private readonly registry: MethodRegistry,
@@ -372,29 +325,6 @@ export class DextRuntime {
   ) {
     this.handlers = { ...DEFAULT_HANDLERS, ...handlers };
     this.agentRunner = new DefaultAgentRunner();
-  }
-
-  setCustomPlans(plans: ReadonlyMap<string, CustomApiPlan>): void {
-    this.customPlans.clear();
-    for (const [id, plan] of plans) this.customPlans.set(id, plan);
-  }
-
-  /**
-   * The loader registers a custom API's method before it compiles its function
-   * body, so a compile failure leaves a callable id with no plan. Keeping the
-   * loader's diagnostics here is what lets that call report its real cause
-   * instead of a bare "is not available".
-   */
-  setCustomApiDiagnostics(diagnostics: readonly DextDiagnostic[], blocked: boolean): void {
-    const grouped = new Map<string, DextDiagnostic[]>();
-    for (const diagnostic of diagnostics) {
-      if (!diagnostic.apiId) continue;
-      const group = grouped.get(diagnostic.apiId) ?? [];
-      group.push(diagnostic);
-      grouped.set(diagnostic.apiId, group);
-    }
-    this.customApiDiagnostics = grouped;
-    this.customApisBlocked = blocked;
   }
 
   /** Every MCP tool a loaded manifest declares, including ones whose server is
@@ -434,52 +364,9 @@ export class DextRuntime {
       if (rejection) return `Unknown Dext API '${id}'. ${rejection}`;
       return `MCP server '${mcp[1]}' is not connected or the tool is not registered: unknown Dext API '${id}'.`;
     }
-    if (this.customApisBlocked) {
-      return `Unknown method '${id}'. Custom .dext/api files are disabled because this workspace is untrusted, so it was not registered. Trust the workspace and run "Dext: Reload APIs".`;
-    }
     return `Unknown method '${id}'.`;
   }
 
-  /**
-   * A registered custom API with no plan is a compile failure, a disabled
-   * workspace, or an incomplete load — never "not available" on its own. Every
-   * recorded diagnostic is reported with its file position, and a diagnostic
-   * that names a declared MCP tool also says which server is missing.
-   */
-  private async customApiFailure(apiId: string): Promise<string> {
-    if (this.customApisBlocked) {
-      return `Custom API '${apiId}' is not available: custom .dext/api files are disabled because this workspace is untrusted. Trust the workspace and run "Dext: Reload APIs".`;
-    }
-    const diagnostics = this.customApiDiagnostics.get(apiId) ?? [];
-    const sources = new Map<string, string | undefined>();
-    const sourceOf = async (path: string): Promise<string | undefined> => {
-      if (!sources.has(path)) {
-        try { sources.set(path, await readFile(path, "utf8")); } catch { sources.set(path, undefined); }
-      }
-      return sources.get(path);
-    };
-    const details: string[] = [];
-    for (const diagnostic of diagnostics) details.push(formatDiagnostic(diagnostic, await sourceOf(diagnostic.path)));
-    const missingMcp = [...new Set(diagnostics
-      .filter((diagnostic) => diagnostic.code === "dext/unknown-api")
-      .flatMap((diagnostic) => [...diagnostic.message.matchAll(/Unknown Dext API '([^']+)'/g)].map((match) => match[1]!))
-      .filter((id) => /^mcp\./.test(id) && this.declaredMcpTools.has(id) && !this.registry.get(id)))];
-    const advice = missingMcp.flatMap((id) => {
-      const server = /^mcp\.([^.]+)\./.exec(id)?.[1] ?? "";
-      const tool = id.slice(`mcp.${server}.`.length);
-      const notConnected = `MCP server '${server}' is not connected or '${tool}' is not registered on it. Connect the server and run "Dext: Reload APIs".`;
-      const rejection = this.mcpRejectionAdvice(server);
-      return rejection ? [notConnected, rejection] : [notConnected];
-    });
-    if (!details.length && !advice.length) {
-      return `Custom API '${apiId}' is registered but its function body has no compiled plan. Run "Dext: Check All APIs" for the current diagnostics.`;
-    }
-    return [
-      `Custom API '${apiId}' is registered but its function body failed to compile:`,
-      ...details,
-      ...advice
-    ].join("\n");
-  }
 
   setAgentProfiles(profiles: readonly AgentProfile[]): void {
     this.agents.clear();
@@ -628,25 +515,7 @@ export class DextRuntime {
     const template = method.id === "template" ? await this.loadTemplate(resolved.arguments) : undefined;
     if (template) contract = this.ax.compileOutput(method, templateOutputSchema(template.spec, template.preset));
     let result: DextResult;
-    if (method.executor.kind === "custom") {
-      const plan = this.customPlans.get(method.executor.apiId);
-      if (!plan) throw new Error(await this.customApiFailure(method.executor.apiId));
-      const customMetadata: ExecutionMetadata = {
-        ...metadata,
-        ...(plan.agent ? { agent: plan.agent } : {}),
-        ...(plan.model ? { model: plan.model } : {})
-      };
-      const workflowResult = await new WorkflowRuntime(this, plan.functions).executeValue(
-        plan.program,
-        Object.entries(resolved.arguments).map(([name, value]) => [name, value] as const),
-        customMetadata
-      );
-      result = method.output.fields
-        ? isMcpRawResult(workflowResult)
-          ? adaptTypedMcpResult(workflowResult, method.output.kind)
-          : (() => { throw new Error("A TypedDict custom API must return a typed MCP tool result."); })()
-        : workflowResult;
-    } else if (method.executor.kind === "deterministic" && method.executor.handler === "mcpTool") {
+    if (method.executor.kind === "deterministic" && method.executor.handler === "mcpTool") {
       if (!this.workspaceTrusted) {
         throw new Error("MCP tools require a trusted local workspace.");
       }
@@ -658,8 +527,6 @@ export class DextRuntime {
         metadata.onMcpEvent
       );
       result = method.output.fields ? adaptTypedMcpResult(raw, method.output.kind) : raw;
-    } else if (method.executor.kind === "deterministic" && method.executor.handler === "nodeBuiltin") {
-      result = await executeNodeBuiltin(resolved, this.workspaceRoot, this.workspaceTrusted);
     } else {
       const profileId = metadata.agent ?? this.agentSelection.profileId;
       const profile = profileId ? this.agents.get(profileId) : undefined;

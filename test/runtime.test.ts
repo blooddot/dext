@@ -1,22 +1,29 @@
 import { describe, expect, it } from "vitest";
-import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
-import { createServer } from "node:http";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { format as formatPath, join, relative as relativePath } from "node:path";
+import { join } from "node:path";
 import { AxAdapter } from "../src/core/axAdapter.js";
 import { BUILTIN_METHODS } from "../src/core/builtins.js";
 import { ContextResolver, type ContextHost } from "../src/core/contextResolver.js";
-import { MethodRegistry } from "../src/core/registry.js";
-import { DextRuntime, type RuntimeResultRepairRequest } from "../src/core/runtime.js";
-import { parseAgentResult } from "../src/core/resultBoundary.js";
-import { compileWorkflow } from "../src/core/workflow.js";
-import { WorkflowRuntime } from "../src/core/workflowRuntime.js";
-import { parseMcpManifest } from "../src/core/mcpManifest.js";
-import { fileReferenceInsertion } from "../src/webview/inputInsertion.js";
 import { ExecutionCancelledError } from "../src/core/executionErrors.js";
-import type { AgentConversationRequest, AgentStructuredRequest } from "../src/core/agentRunner.js";
-import type { AgentResult, AgentStreamEvent, InvocationValue, PatchResult, TerminalResult } from "../src/core/types.js";
+import { parseMcpManifest } from "../src/core/mcpManifest.js";
+import { MethodRegistry } from "../src/core/registry.js";
+import { parseAgentResult } from "../src/core/resultBoundary.js";
+import { DextRuntime, type RuntimeResultRepairRequest } from "../src/core/runtime.js";
+import { mcpRawResultSchema } from "../src/core/schemas.js";
 import { prepareHistoryTrace } from "../src/core/agentTraceReplay.js";
+import type { AgentConversationRequest, AgentStructuredRequest } from "../src/core/agentRunner.js";
+import type { UiFormDefinition } from "../src/core/uiForm.js";
+import type {
+  AgentResult,
+  AgentStreamEvent,
+  InvocationArgument,
+  InvocationAst,
+  InvocationValue,
+  McpProcessEvent,
+  PatchResult,
+  TerminalResult
+} from "../src/core/types.js";
 
 const host: ContextHost = {
   selection: async () => ({ uri: "file:///x.ts", content: "const x = 1;", version: 1 }),
@@ -41,18 +48,24 @@ function setup() {
       duration_ms: 0
     })
   });
-  return { registry, runtime, workflow: new WorkflowRuntime(runtime) };
+  return { registry, runtime };
 }
 
-function agentCall(apply: boolean | undefined, input = "work") {
-  return {
-    kind: "invocation" as const,
-    method: "agent",
-    source: "code" as const,
-    arguments: apply === undefined
-      ? [{ name: "input", value: input }]
-      : [{ name: "input", value: input }, { name: "apply", value: apply }]
-  };
+/** One InvocationAst argument, the only shape the runtime accepts. */
+function arg(name: string, value: InvocationValue): InvocationArgument {
+  return { name, value };
+}
+
+/** A code-sourced invocation, which is what the runtime executes directly now
+ * that the language layer no longer compiles programs for it. */
+function invoke(method: string, args: InvocationArgument[] = []): InvocationAst {
+  return { kind: "invocation", method, arguments: args, source: "code" };
+}
+
+function agentCall(apply: boolean | undefined, input = "work"): InvocationAst {
+  return invoke("agent", apply === undefined
+    ? [arg("input", input)]
+    : [arg("input", input), arg("apply", apply)]);
 }
 
 function selectFakeAgent(runtime: DextRuntime): void {
@@ -60,143 +73,67 @@ function selectFakeAgent(runtime: DextRuntime): void {
   runtime.setAgentSelection({ profileId: "codex" });
 }
 
-describe("Dext workflow runtime", () => {
-  it("reads relative and absolute paths in a trusted workspace and rejects relative traversal", async () => {
-    const root = await mkdtemp(join(tmpdir(), "dext-node-"));
-    try {
-      const { runtime } = setup();
-      runtime.setWorkspaceRoot(root);
-      runtime.setWorkspaceTrusted(true);
-      await runtime.execute({ kind: "invocation", method: "node.fs.writeFile", source: "code", arguments: [{ name: "path", value: "state.txt" }, { name: "content", value: "ok" }] });
-      expect(await readFile(join(root, "state.txt"), "utf8")).toBe("ok");
-      const absoluteRead = await runtime.execute({ kind: "invocation", method: "node.fs.readFile", source: "code", arguments: [{ name: "path", value: join(root, "state.txt") }] });
-      expect(absoluteRead.result).toMatchObject({ kind: "node", value: "ok" });
-      await expect(runtime.execute({ kind: "invocation", method: "node.fs.readFile", source: "code", arguments: [{ name: "path", value: join(root, "missing.txt") }] }))
-        .rejects.toMatchObject({ code: "ENOENT" });
-      await expect(runtime.execute({ kind: "invocation", method: "node.fs.readFile", source: "code", arguments: [{ name: "path", value: "../outside.txt" }] }))
-        .rejects.toThrow("workspace");
-      runtime.setWorkspaceTrusted(false);
-      await expect(runtime.execute({ kind: "invocation", method: "node.fs.readFile", source: "code", arguments: [{ name: "path", value: join(root, "state.txt") }] }))
-        .rejects.toThrow("trusted workspace");
-    } finally { await rm(root, { recursive: true, force: true }); }
+/** The public arguments each ui.* method requires. */
+function uiArguments(action: string): InvocationArgument[] {
+  if (["select", "radio", "checkbox"].includes(action)) return [arg("label", "Pick"), arg("options", ["a", "b"])];
+  if (action === "input") return [arg("label", "Text")];
+  if (action === "form") return [arg("title", "Form"), arg("fields", [])];
+  return [arg("message", "Continue?")];
+}
+
+/** A trusted runtime whose registry carries one MCP manifest's methods. */
+function mcpSetup(manifest: unknown): { registry: MethodRegistry; runtime: DextRuntime } {
+  const registry = new MethodRegistry();
+  registry.registerMany(BUILTIN_METHODS, "builtin");
+  const loaded = parseMcpManifest(JSON.stringify(manifest), "team.jsonc");
+  expect(loaded.diagnostics).toEqual([]);
+  registry.registerMany(loaded.methods, "project");
+  const runtime = new DextRuntime(registry, new ContextResolver(host));
+  runtime.setWorkspaceTrusted(true);
+  return { registry, runtime };
+}
+
+describe("Dext runtime", () => {
+  it("builds strict contracts for public builtins", () => {
+    const { registry } = setup();
+    const ask = new AxAdapter().compile(registry.get("ask")!);
+    expect(ask.inputSchema.safeParse({ input: "hello" }).success).toBe(true);
+    expect(ask.inputSchema.safeParse({ message: "hello" }).success).toBe(false);
+    const agent = new AxAdapter().compile(registry.get("agent")!);
+    expect(agent.outputSchema.safeParse({ kind: "agent", text: "done" }).success).toBe(true);
+    expect(agent.outputSchema.safeParse({ kind: "agent", text: "done", extra: true }).success).toBe(false);
+    expect(registry.get("chat")).toBeUndefined();
+    expect(registry.get("code.edit")).toBeUndefined();
   });
 
-  it.each(["physical", "symlink"])("bounds relative node.fs paths while allowing absolute reads from a %s workspace root", async (rootKind) => {
-    const base = await realpath(await mkdtemp(join(tmpdir(), "dext-node-links-")));
-    try {
-      const root = join(base, "workspace");
-      const outside = join(base, "workspace-outside");
-      const alias = join(base, "workspace-alias");
-      await mkdir(join(root, "data"), { recursive: true });
-      await mkdir(outside);
-      await writeFile(join(outside, "secret.txt"), "outside");
-      await symlink(root, alias, "junction");
-      await symlink(join(root, "data"), join(root, "inside-link"), "junction");
-      await symlink(outside, join(root, "outside-link"), "junction");
-      const { runtime } = setup();
-      runtime.setWorkspaceRoot(rootKind === "symlink" ? alias : root);
-      runtime.setWorkspaceTrusted(true);
-      const write = (path: string) => runtime.execute({ kind: "invocation", method: "node.fs.writeFile", source: "code", arguments: [{ name: "path", value: path }, { name: "content", value: "ok" }] });
-      const read = (path: string) => runtime.execute({ kind: "invocation", method: "node.fs.readFile", source: "code", arguments: [{ name: "path", value: path }] });
-
-      await write("inside-link/state.txt");
-      expect((await read("inside-link/state.txt")).result).toMatchObject({ value: "ok" });
-      expect((await read(join(root, "data", "state.txt"))).result).toMatchObject({ value: "ok" });
-      expect((await read(join(alias, "data", "state.txt"))).result).toMatchObject({ value: "ok" });
-      expect((await read(join(outside, "secret.txt"))).result).toMatchObject({ value: "outside" });
-      expect((await read(join(root, "outside-link", "secret.txt"))).result).toMatchObject({ value: "outside" });
-      expect(await readFile(join(root, "data", "state.txt"), "utf8")).toBe("ok");
-      await expect(read("../workspace-outside/secret.txt")).rejects.toThrow("workspace");
-      await expect(read("outside-link/secret.txt")).rejects.toThrow("symbolic link");
-      await expect(write("outside-link/secret.txt")).rejects.toThrow("symbolic link");
-      await expect(write("outside-link/new.txt")).rejects.toThrow("symbolic link");
-      // A directory listing resolves its target too, so it cannot enumerate a
-      // linked directory the read and write paths already refuse.
-      const list = (path: string) => runtime.execute({ kind: "invocation", method: "node.fs.readdir", source: "code", arguments: [{ name: "path", value: path }] });
-      expect((await list("inside-link")).result).toMatchObject({ value: ["state.txt"] });
-      await expect(list("outside-link")).rejects.toThrow("symbolic link");
-      expect(await readFile(join(outside, "secret.txt"), "utf8")).toBe("outside");
-      await expect(readFile(join(outside, "new.txt"))).rejects.toMatchObject({ code: "ENOENT" });
-      runtime.setWorkspaceTrusted(false);
-      await expect(read(join(outside, "secret.txt"))).rejects.toThrow("trusted workspace");
-    } finally { await rm(base, { recursive: true, force: true }); }
-  });
-
-  it("lists, inspects, copies and removes workspace entries through node.fs", async () => {
-    const root = await realpath(await mkdtemp(join(tmpdir(), "dext-node-surface-")));
-    try {
-      const { runtime } = setup();
-      runtime.setWorkspaceRoot(root);
-      runtime.setWorkspaceTrusted(true);
-      const call = (method: string, args: Record<string, InvocationValue>) =>
-        runtime.execute({ kind: "invocation", method, source: "code", arguments: Object.entries(args).map(([name, value]) => ({ name, value })) });
-      await mkdir(join(root, "docs", "nested"), { recursive: true });
-      await writeFile(join(root, "docs", "a.md"), "a");
-      await writeFile(join(root, "docs", "b.md"), "b");
-
-      const listing = await call("node.fs.readdir", { path: "docs" });
-      expect((listing.result as { value: string[] }).value.sort()).toEqual(["a.md", "b.md", "nested"]);
-
-      const file = await call("node.fs.stat", { path: "docs/a.md" });
-      expect(file.result).toMatchObject({ kind: "node", size: 1, mtime_ms: expect.any(Number), is_file: true, is_directory: false });
-      expect((await call("node.fs.stat", { path: "docs/nested" })).result).toMatchObject({ is_file: false, is_directory: true });
-
-      expect((await call("node.fs.access", { path: "docs/a.md" })).result).toMatchObject({ value: true });
-      await expect(call("node.fs.access", { path: "docs/missing.md" })).rejects.toMatchObject({ code: "ENOENT" });
-      expect((await call("node.fs.realpath", { path: "docs" })).result).toMatchObject({ value: await realpath(join(root, "docs")) });
-
-      await call("node.fs.copyFile", { sourcePath: "docs/a.md", destinationPath: "docs/copy.md" });
-      expect(await readFile(join(root, "docs", "copy.md"), "utf8")).toBe("a");
-
-      // A directory needs an explicit recursive flag and a missing path an
-      // explicit force flag, so rm cannot quietly widen what it deletes.
-      await expect(call("node.fs.rm", { path: "docs/nested" })).rejects.toMatchObject({ code: "ERR_FS_EISDIR" });
-      expect((await call("node.fs.stat", { path: "docs/nested" })).result).toMatchObject({ is_directory: true });
-      await expect(call("node.fs.rm", { path: "docs/missing.md" })).rejects.toMatchObject({ code: "ENOENT" });
-      expect((await call("node.fs.rm", { path: "docs/copy.md" })).result).toMatchObject({ value: true });
-      await expect(readFile(join(root, "docs", "copy.md"))).rejects.toMatchObject({ code: "ENOENT" });
-      await call("node.fs.rm", { path: "docs/nested", recursive: true });
-      await expect(call("node.fs.stat", { path: "docs/nested" })).rejects.toMatchObject({ code: "ENOENT" });
-
-      // The new methods inherit node.fs path containment and workspace trust.
-      for (const [method, args] of [
-        ["node.fs.readdir", { path: "../outside" }],
-        ["node.fs.stat", { path: "../outside" }],
-        ["node.fs.access", { path: "../outside" }],
-        ["node.fs.realpath", { path: "../outside" }],
-        ["node.fs.copyFile", { sourcePath: "../outside.txt", destinationPath: "docs/x.md" }],
-        ["node.fs.rm", { path: "../outside" }]
-      ] as const) await expect(call(method, args)).rejects.toThrow("workspace");
-      runtime.setWorkspaceTrusted(false);
-      await expect(call("node.fs.readdir", { path: "docs" })).rejects.toThrow("trusted workspace");
-    } finally { await rm(root, { recursive: true, force: true }); }
-  });
-
-  it("bridges both node.path.relative arguments and node.path.format", async () => {
-    const { runtime } = setup();
-    const call = (method: string, args: Record<string, InvocationValue>) =>
-      runtime.execute({ kind: "invocation", method, source: "code", arguments: Object.entries(args).map(([name, value]) => ({ name, value })) });
-    expect((await call("node.path.relative", { from: "docs/a.md", to: "docs/b.md" })).result)
-      .toMatchObject({ value: relativePath("docs/a.md", "docs/b.md") });
-    expect((await call("node.path.format", { pathObject: { dir: "docs", name: "a", ext: ".md" } })).result)
-      .toMatchObject({ value: formatPath({ dir: "docs", name: "a", ext: ".md" }) });
-  });
-
-  it("uses node.http.request for bounded, serializable local HTTP responses", async () => {
-    const server = createServer((request, response) => {
-      response.setHeader("content-type", "text/plain");
-      response.end(`${request.method}:${request.url}`);
+  it("compiles strict contracts for terminal, ui.form and apply", () => {
+    const { registry } = setup();
+    const terminal = new AxAdapter().compile(registry.get("terminal")!);
+    expect(terminal.inputSchema.safeParse({ command: "echo hi" }).success).toBe(true);
+    expect(terminal.inputSchema.safeParse({ command: "echo hi", extra: true }).success).toBe(false);
+    expect(terminal.outputJsonSchema).toMatchObject({
+      properties: { status: { enum: ["succeeded", "failed", "timed_out"] } }
     });
-    await new Promise<void>((resolveServer) => server.listen(0, "127.0.0.1", resolveServer));
-    try {
-      const address = server.address();
-      if (!address || typeof address === "string") throw new Error("Expected TCP test server.");
-      const { runtime } = setup();
-      runtime.setWorkspaceTrusted(true);
-      const response = await runtime.execute({ kind: "invocation", method: "node.http.request", source: "code", arguments: [{ name: "url", value: `http://127.0.0.1:${address.port}/health` }] });
-      expect(response.result).toMatchObject({ kind: "node", status: 200, body: "GET:/health" });
-    } finally { await new Promise<void>((resolveServer, rejectServer) => server.close((error) => error ? rejectServer(error) : resolveServer())); }
+
+    const form = new AxAdapter().compile(registry.get("ui.form")!);
+    expect(form.inputSchema.safeParse({ title: "Review", fields: [] }).success).toBe(true);
+    expect(form.inputSchema.safeParse({ fields: [] }).success).toBe(false);
+    expect(form.outputSchema.safeParse({ kind: "ui", type: "form", status: "cancelled", answers: {} }).success).toBe(true);
+    expect(form.outputSchema.safeParse({ kind: "ui", type: "confirm", confirmed: true }).success).toBe(false);
+
+    const apply = new AxAdapter().compile(registry.get("apply")!);
+    expect(apply.inputSchema.safeParse({ result: { kind: "ask", text: "x" } }).success).toBe(true);
+    expect(apply.inputSchema.safeParse({}).success).toBe(false);
   });
+
+  it("rejects unknown methods, duplicate arguments and wrong argument types", async () => {
+    const { runtime } = setup();
+    await expect(runtime.execute(invoke("nope"))).rejects.toThrow("Unknown method 'nope'.");
+    await expect(runtime.execute(invoke("ask", [arg("input", "a"), arg("input", "b")])))
+      .rejects.toThrow("Argument 'input' is provided more than once.");
+    await expect(runtime.execute(invoke("ask", [arg("input", 123)]))).rejects.toThrow(/input/);
+  });
+
   it("passes terminal environment variables through the generic terminal API", async () => {
     const registry = new MethodRegistry();
     registry.registerMany(BUILTIN_METHODS, "builtin");
@@ -207,33 +144,329 @@ describe("Dext workflow runtime", () => {
         return { kind: "terminal", status: "succeeded", command: typeof args.command === "string" ? args.command : "", cwd: ".", exit_code: 0, stdout: "", stderr: "", duration_ms: 0 };
       }
     });
-    await runtime.execute({
-      kind: "invocation",
-      method: "terminal",
-      source: "code",
-      arguments: [
-        { name: "command", value: "tool run" },
-        { name: "env", value: { TASK_TITLE: "Login fails" } }
-      ]
-    });
+    await runtime.execute(invoke("terminal", [
+      arg("command", "tool run"),
+      arg("env", { TASK_TITLE: "Login fails" })
+    ]));
     expect(received).toMatchObject({ command: "tool run", env: { TASK_TITLE: "Login fails" } });
   });
 
-  it("extracts the final path segment with whitelisted Node URL and path APIs", async () => {
-    const { runtime } = setup();
-    const parsed = await runtime.execute({
-      kind: "invocation",
-      method: "node.url.parse",
-      source: "code",
-      arguments: [{ name: "url", value: "https://www.teambition.com/task/6a9c21511d7b3a0050e59a0e?from=notice" }]
+  it("returns the terminal handler's complete result unchanged", async () => {
+    const registry = new MethodRegistry();
+    registry.registerMany(BUILTIN_METHODS, "builtin");
+    const terminalResult: TerminalResult = {
+      kind: "terminal",
+      status: "failed",
+      command: "exit 7",
+      cwd: ".",
+      exit_code: 7,
+      stdout: "",
+      stderr: "failed",
+      duration_ms: 3
+    };
+    const runtime = new DextRuntime(registry, new ContextResolver(host), undefined, {
+      terminalRun: () => terminalResult
     });
-    const response = await runtime.execute({
-      kind: "invocation", method: "node.path.basename", source: "code",
-      arguments: [{ name: "path", value: (parsed.result as unknown as { pathname: string }).pathname }]
-    });
-    expect(response.result).toEqual({ kind: "node", value: "6a9c21511d7b3a0050e59a0e" });
+    const response = await runtime.execute(invoke("terminal", [arg("command", "exit 7")]));
+    expect(response.result).toEqual(terminalResult);
   });
 
+  it.each(["select", "radio", "checkbox", "input", "confirm", "alert", "form"])(
+    "runs ui.%s through metadata.ui and returns its typed result",
+    async (action) => {
+      const { runtime } = setup();
+      const forms: UiFormDefinition[] = [];
+      const response = await runtime.execute(invoke(`ui.${action}`, uiArguments(action)), [], {
+        ui: {
+          form: async (form) => {
+            forms.push(form);
+            return { kind: "ui", type: "form", status: "cancelled", answers: {} };
+          }
+        }
+      });
+      expect(forms).toHaveLength(1);
+      expect(response.method.id).toBe(`ui.${action}`);
+      expect(response.result).toMatchObject({ kind: "ui", type: action });
+    }
+  );
+
+  it("requires an interactive host for ui handlers", async () => {
+    const { runtime } = setup();
+    await expect(runtime.execute(invoke("ui.confirm", [arg("message", "Continue?")])))
+      .rejects.toThrow("requires an interactive Dext host");
+  });
+
+  it("returns a submitted form with the pressed action and its validated answers", async () => {
+    const { runtime } = setup();
+    const response = await runtime.execute(
+      invoke("ui.form", [
+        arg("title", "Review"),
+        arg("fields", [{ id: "run", type: "radio", label: "Run?", options: ["yes", "no"] }]),
+        arg("actions", [{ id: "approve", label: "Approve" }, { id: "revise", label: "Revise" }])
+      ]),
+      [],
+      {
+        ui: {
+          form: async () => ({
+            kind: "ui",
+            type: "form",
+            status: "submitted",
+            answers: { run: { type: "radio", selected: ["no"] } },
+            action: "revise"
+          })
+        }
+      }
+    );
+    expect(response.result).toEqual({
+      kind: "ui",
+      type: "form",
+      status: "submitted",
+      answers: { run: { type: "radio", selected: ["no"] } },
+      action: "revise"
+    });
+  });
+
+  it("rejects a submitted form that names no action", async () => {
+    const { runtime } = setup();
+    await expect(runtime.execute(
+      invoke("ui.form", [
+        arg("title", "Review"),
+        arg("fields", []),
+        arg("actions", [{ id: "approve", label: "Approve" }, { id: "revise", label: "Revise" }])
+      ]),
+      [],
+      { ui: { form: async () => ({ kind: "ui", type: "form", status: "submitted", answers: {} }) } }
+    )).rejects.toThrow("Choose a form action.");
+  });
+
+  it("aborts the invocation when ui.form opts into on_cancel=abort", async () => {
+    const { runtime } = setup();
+    await expect(runtime.execute(
+      invoke("ui.form", [arg("title", "Confirm"), arg("fields", []), arg("on_cancel", "abort")]),
+      [],
+      { ui: { form: async () => ({ kind: "ui", type: "form", status: "cancelled", answers: {} }) } }
+    )).rejects.toThrow(ExecutionCancelledError);
+  });
+
+  it("reports a deterministic handler that needs a configured Agent profile", async () => {
+    const { runtime } = setup();
+    await expect(runtime.execute(invoke("skill", [arg("skill", "demo"), arg("input", "go")])))
+      .rejects.toThrow("skill requires a configured Agent profile");
+  });
+
+  it("renders a trusted template only with an Agent profile", async () => {
+    const root = await mkdtemp(join(tmpdir(), "dext-template-"));
+    try {
+      await writeFile(join(root, "plan.md"), [
+        "---",
+        "dext-template:",
+        "  format: markdown",
+        "  title:",
+        "    type: string",
+        "    description: A short title",
+        "---",
+        "# {{title}}",
+        ""
+      ].join("\n"));
+      const { runtime } = setup();
+      runtime.setWorkspaceRoot(root);
+      const call = invoke("template", [arg("input", "write it"), arg("source", "plan.md")]);
+      await expect(runtime.execute(call)).rejects.toThrow("template requires a trusted local workspace");
+      runtime.setWorkspaceTrusted(true);
+      await expect(runtime.execute(call)).rejects.toThrow("template requires a configured Agent profile");
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it("applies an empty patch as unchanged and refuses non-empty changes without a workspace host", async () => {
+    const { runtime } = setup();
+    const patch: PatchResult = { kind: "patch", title: "No changes", changes: [] };
+    const preview: AgentResult = { kind: "agent", text: "preview", patch };
+    await expect(runtime.execute(invoke("apply", [arg("result", preview)]))).resolves.toMatchObject({
+      result: { kind: "apply", status: "unchanged", files: [], summary: expect.stringContaining("no changes") }
+    });
+
+    const changed: AgentResult = {
+      kind: "agent",
+      text: "preview",
+      patch: { kind: "patch", title: "Edit", changes: [{ uri: "file:///x.ts", before: "a", after: "b" }] }
+    };
+    await expect(runtime.execute(invoke("apply", [arg("result", changed)])))
+      .rejects.toThrow("apply requires a workspace patch host for non-empty changes.");
+  });
+
+  it("accepts a JSON object in content for a typed MCP result", async () => {
+    const { runtime } = mcpSetup({
+      name: "team",
+      transport: "stdio",
+      command: "team-mcp",
+      tools: [{
+        name: "query",
+        inputSchema: { type: "object", properties: {} },
+        outputSchema: { type: "object", properties: { code: { type: "integer" } } }
+      }]
+    });
+    runtime.setMcpCaller(async () => ({
+      kind: "mcpRaw",
+      server: "team",
+      tool: "query",
+      content: JSON.stringify({ code: 200 })
+    }));
+    const response = await runtime.execute(invoke("mcp.team.query"));
+    expect(response.result).toMatchObject({ kind: "mcp.team.query", code: 200 });
+  });
+
+  it("accepts JSON objects wrapped in an MCP server response prefix", async () => {
+    const { runtime } = mcpSetup({
+      name: "team",
+      transport: "stdio",
+      command: "team-mcp",
+      tools: [{
+        name: "query",
+        inputSchema: { type: "object", properties: {} },
+        outputSchema: { type: "object", properties: { result: { type: "array" } } }
+      }]
+    });
+    runtime.setMcpCaller(async () => ({
+      kind: "mcpRaw",
+      server: "team",
+      tool: "query",
+      content: `API Response (Status: 200):\n${JSON.stringify({ result: [{ id: "t1" }] })}`
+    }));
+    const response = await runtime.execute(invoke("mcp.team.query"));
+    expect(response.result).toMatchObject({ kind: "mcp.team.query", result: [{ id: "t1" }] });
+  });
+
+  it("adapts structuredContent into the declared mcp.<server>.<tool> kind", async () => {
+    const { runtime } = mcpSetup({
+      name: "team",
+      transport: "stdio",
+      command: "team-mcp",
+      tools: [{
+        name: "query",
+        inputSchema: { type: "object", properties: {} },
+        outputSchema: {
+          type: "object",
+          properties: { result: { type: "array", items: { type: "object", properties: { id: { type: "string" } } } } }
+        }
+      }]
+    });
+    runtime.setMcpCaller(async () => ({
+      kind: "mcpRaw",
+      server: "team",
+      tool: "query",
+      structured: { result: [{ id: "t1" }] }
+    }));
+    const response = await runtime.execute(invoke("mcp.team.query"));
+    // The internal mcpRaw envelope never leaks into a typed result.
+    expect(response.result).toEqual({ kind: "mcp.team.query", result: [{ id: "t1" }] });
+  });
+
+  it("rejects typed MCP content that is not a JSON object", async () => {
+    const { runtime } = mcpSetup({
+      name: "team",
+      transport: "stdio",
+      command: "team-mcp",
+      tools: [{
+        name: "query",
+        inputSchema: { type: "object", properties: {} },
+        outputSchema: { type: "object", properties: { code: { type: "integer" } } }
+      }]
+    });
+    runtime.setMcpCaller(async () => ({ kind: "mcpRaw", server: "team", tool: "query", content: "plain text" }));
+    await expect(runtime.execute(invoke("mcp.team.query"))).rejects.toThrow(/structuredContent/);
+  });
+
+  it("returns a raw mcpRaw result when the manifest declares no output schema", async () => {
+    const { runtime } = mcpSetup({
+      name: "team",
+      transport: "stdio",
+      command: "team-mcp",
+      tools: [{ name: "ping", inputSchema: { type: "object", properties: {} } }]
+    });
+    runtime.setMcpCaller(async () => ({ kind: "mcpRaw", server: "team", tool: "ping", content: "pong" }));
+    const response = await runtime.execute(invoke("mcp.team.ping"));
+    expect(response.result).toEqual({ kind: "mcpRaw", server: "team", tool: "ping", content: "pong" });
+    expect(mcpRawResultSchema.safeParse({ kind: "mcpRaw", server: "team", tool: "ping" }).success).toBe(true);
+    expect(mcpRawResultSchema.safeParse({ kind: "mcpRaw", server: "team", tool: "ping", extra: true }).success).toBe(false);
+  });
+
+  it("gates MCP tools on workspace trust and a configured caller", async () => {
+    const { runtime } = mcpSetup({
+      name: "team",
+      transport: "stdio",
+      command: "team-mcp",
+      tools: [{ name: "ping", inputSchema: { type: "object", properties: {} } }]
+    });
+    runtime.setWorkspaceTrusted(false);
+    await expect(runtime.execute(invoke("mcp.team.ping")))
+      .rejects.toThrow("MCP tools require a trusted local workspace.");
+    runtime.setWorkspaceTrusted(true);
+    await expect(runtime.execute(invoke("mcp.team.ping")))
+      .rejects.toThrow("MCP registry is not configured.");
+  });
+
+  it("forwards MCP process events to metadata.onMcpEvent", async () => {
+    const { runtime } = mcpSetup({
+      name: "team",
+      transport: "stdio",
+      command: "team-mcp",
+      tools: [{ name: "ping", inputSchema: { type: "object", properties: {} } }]
+    });
+    const events: McpProcessEvent[] = [];
+    runtime.setMcpCaller(async (_tool, _input, onProcessEvent) => {
+      onProcessEvent?.({ source: "stderr", text: "connecting" });
+      return { kind: "mcpRaw", server: "team", tool: "ping", content: "pong" };
+    });
+    await runtime.execute(invoke("mcp.team.ping"), [], { onMcpEvent: (event) => events.push(event) });
+    expect(events).toEqual([{ source: "stderr", text: "connecting" }]);
+  });
+
+  it("explains an unknown MCP tool through the declared-tool advice", async () => {
+    const { runtime } = setup();
+    runtime.setDeclaredMcpTools(["mcp.team.query"]);
+    await expect(runtime.execute(invoke("mcp.team.query")))
+      .rejects.toThrow("is not connected or the tool is not registered");
+    runtime.setMcpServerDiagnostics(["MCP server 'team' was rejected: bad transport."]);
+    await expect(runtime.execute(invoke("mcp.team.query")))
+      .rejects.toThrow("was rejected: bad transport.");
+  });
+
+  it("keeps a sandbox-escaping preset off read-only turns and applies it when the turn is writable", async () => {
+    const { runtime } = setup();
+    const conversations: AgentConversationRequest[] = [];
+    const invocations: { allowWorkspaceWrite: boolean | undefined; agentPreset: string | undefined }[] = [];
+    runtime.setWorkspaceRoot(process.cwd());
+    runtime.setWorkspaceTrusted(true);
+    runtime.setAgentProfiles([{
+      id: "deepseek-harness", provider: "deepseek-harness", command: "dsh", label: "Harness", models: [],
+      presets: [
+        { id: "standard", label: "Standard", description: "", builtin: true, requiresFullAccess: false, writableTurnsOnly: false },
+        { id: "minimal", label: "Minimal", description: "", builtin: true, requiresFullAccess: true, writableTurnsOnly: true }
+      ]
+    }]);
+    runtime.setAgentSelection({ profileId: "deepseek-harness", permission: "full-access", agentPreset: "minimal" });
+    runtime.setAgentRunner({
+      run: async (request) => {
+        invocations.push({ allowWorkspaceWrite: request.allowWorkspaceWrite, agentPreset: request.agentPreset });
+        return { kind: "agent", text: "done" };
+      },
+      runConversation: async (request) => {
+        conversations.push(request);
+        return "answer";
+      }
+    });
+
+    // Plan generation and Ask are read-only; building a plan and Agent are writable.
+    await runtime.executeConversation("ask", "explain");
+    await runtime.executeConversation("plan", "plan it");
+    await runtime.executeConversation("plan", "build it", { executePlan: true });
+    await runtime.executeConversation("agent", "implement");
+    expect(conversations.map((item) => item.agentPreset)).toEqual(["standard", "standard", "minimal", "minimal"]);
+
+    await runtime.execute(invoke("agent", [arg("input", "preview"), arg("apply", false)]));
+    await runtime.execute(invoke("agent", [arg("input", "write")]));
+    expect(invocations.map((item) => item.agentPreset)).toEqual(["standard", "minimal"]);
+  });
 
   it("keeps Harness Ask and plan generation read-only while permitting explicit execution", async () => {
     const { runtime } = setup();
@@ -302,46 +535,6 @@ describe("Dext workflow runtime", () => {
       .rejects.toThrow(/native structured output/);
   });
 
-  it("keeps a sandbox-escaping preset off read-only turns and applies it when the turn is writable", async () => {
-    const { runtime } = setup();
-    const conversations: AgentConversationRequest[] = [];
-    const invocations: { allowWorkspaceWrite: boolean | undefined; agentPreset: string | undefined }[] = [];
-    runtime.setWorkspaceRoot(process.cwd());
-    runtime.setWorkspaceTrusted(true);
-    runtime.setAgentProfiles([{
-      id: "deepseek-harness", provider: "deepseek-harness", command: "dsh", label: "Harness", models: [],
-      presets: [
-        { id: "standard", label: "Standard", description: "", builtin: true, requiresFullAccess: false, writableTurnsOnly: false },
-        { id: "minimal", label: "Minimal", description: "", builtin: true, requiresFullAccess: true, writableTurnsOnly: true }
-      ]
-    }]);
-    runtime.setAgentSelection({ profileId: "deepseek-harness", permission: "full-access", agentPreset: "minimal" });
-    runtime.setAgentRunner({
-      run: async (request) => {
-        invocations.push({ allowWorkspaceWrite: request.allowWorkspaceWrite, agentPreset: request.agentPreset });
-        return { kind: "agent", text: "done" };
-      },
-      runConversation: async (request) => {
-        conversations.push(request);
-        return "answer";
-      }
-    });
-
-    // Plan generation and Ask are read-only; building a plan and Agent are writable.
-    await runtime.executeConversation("ask", "explain");
-    await runtime.executeConversation("plan", "plan it");
-    await runtime.executeConversation("plan", "build it", { executePlan: true });
-    await runtime.executeConversation("agent", "implement");
-    expect(conversations.map((item) => item.agentPreset)).toEqual(["standard", "standard", "minimal", "minimal"]);
-
-    await runtime.execute({
-      kind: "invocation", method: "agent", source: "code",
-      arguments: [{ name: "input", value: "preview" }, { name: "apply", value: false }]
-    });
-    await runtime.execute({ kind: "invocation", method: "agent", source: "code", arguments: [{ name: "input", value: "write" }] });
-    expect(invocations.map((item) => item.agentPreset)).toEqual(["standard", "minimal"]);
-  });
-
   it("runs the Harness default preset for a conversation that never chose one", async () => {
     const { runtime } = setup();
     const conversations: AgentConversationRequest[] = [];
@@ -383,394 +576,6 @@ describe("Dext workflow runtime", () => {
     await runtime.executeConversation("agent", "implement");
     expect(conversations.map((item) => item.agentPreset)).toEqual([""]);
   });
-  it("accepts JSON object content for typed MCP results when structuredContent is omitted", async () => {
-    const registry = new MethodRegistry();
-    registry.registerMany(BUILTIN_METHODS, "builtin");
-    const loaded = parseMcpManifest(JSON.stringify({
-      name: "team",
-      transport: "stdio",
-      command: "team-mcp",
-      tools: [{
-        name: "query",
-        inputSchema: { type: "object", properties: {} },
-        outputSchema: { type: "object", properties: { code: { type: "integer" } } }
-      }]
-    }), "team.jsonc");
-    registry.registerMany(loaded.methods, "project");
-    const runtime = new DextRuntime(registry, new ContextResolver(host));
-    runtime.setWorkspaceTrusted(true);
-    runtime.setMcpCaller(async () => ({
-      kind: "mcpRaw",
-      server: "team",
-      tool: "query",
-      content: JSON.stringify({ code: 200 })
-    }));
-    const compiled = compileWorkflow("mcp.team.query()", registry);
-    expect(compiled.diagnostics).toEqual([]);
-    const execution = await new WorkflowRuntime(runtime).execute(compiled.program!);
-    expect(execution.executions[0]?.result).toMatchObject({ kind: "mcp.team.query", code: 200 });
-  });
-
-  it("accepts JSON objects wrapped in an MCP server response prefix", async () => {
-    const registry = new MethodRegistry();
-    registry.registerMany(BUILTIN_METHODS, "builtin");
-    const loaded = parseMcpManifest(JSON.stringify({
-      name: "team",
-      transport: "stdio",
-      command: "team-mcp",
-      tools: [{
-        name: "query",
-        inputSchema: { type: "object", properties: {} },
-        outputSchema: { type: "object", properties: { result: { type: "array" } } }
-      }]
-    }), "team.jsonc");
-    registry.registerMany(loaded.methods, "project");
-    const runtime = new DextRuntime(registry, new ContextResolver(host));
-    runtime.setWorkspaceTrusted(true);
-    runtime.setMcpCaller(async () => ({
-      kind: "mcpRaw",
-      server: "team",
-      tool: "query",
-      content: `API Response (Status: 200):\n${JSON.stringify({ result: [{ id: "t1" }] })}`
-    }));
-    const compiled = compileWorkflow("mcp.team.query()", registry);
-    expect(compiled.diagnostics).toEqual([]);
-    const execution = await new WorkflowRuntime(runtime).execute(compiled.program!);
-    expect(execution.executions[0]?.result).toMatchObject({
-      kind: "mcp.team.query",
-      result: [{ id: "t1" }]
-    });
-  });
-
-  it("does not expose the internal MCP kind when printing a typed result", async () => {
-    const registry = new MethodRegistry();
-    registry.registerMany(BUILTIN_METHODS, "builtin");
-    const loaded = parseMcpManifest(JSON.stringify({
-      name: "team", transport: "stdio", command: "team-mcp",
-      tools: [{ name: "query", inputSchema: { type: "object", properties: {} },
-        outputSchema: { type: "object", properties: { result: { type: "array" } } } }]
-    }), "team.jsonc");
-    registry.registerMany(loaded.methods, "project");
-    const runtime = new DextRuntime(registry, new ContextResolver(host));
-    runtime.setWorkspaceTrusted(true);
-    runtime.setMcpCaller(async () => ({
-      kind: "mcpRaw", server: "team", tool: "query",
-      structured: { result: [{ id: "t1" }] }
-    }));
-    const compiled = compileWorkflow("result = mcp.team.query()\nprint(result)", registry);
-    expect(compiled.diagnostics).toEqual([]);
-    const execution = await new WorkflowRuntime(runtime).execute(compiled.program!);
-    expect(execution.executions.at(-1)?.result).toMatchObject({
-      kind: "print", text: '{"result":[{"id":"t1"}]}'
-    });
-  });
-
-  it("executes ask, agent and print in sequence", async () => {
-    const { registry, workflow } = setup();
-    const compiled = compileWorkflow(`answer = ask(input=f"Explain {ref.selection}")
-task = agent(input="Plan this change", apply=False)
-print(text=answer.text)`, registry);
-    expect(compiled.diagnostics).toEqual([]);
-    const result = await workflow.execute(compiled.program!);
-    expect(result.executions.map((item) => item.method.id)).toEqual(["ask", "agent", "print"]);
-    expect(result.executions.map((item) => item.result.kind)).toEqual(["ask", "agent", "print"]);
-  });
-
-  it("returns immediately from a custom workflow branch", async () => {
-    const { registry, workflow } = setup();
-    const compiled = compileWorkflow([
-      'before = print(text="before")',
-      'decision = ui.confirm(message="Continue?")',
-      "if decision.confirmed != True:",
-      "    return before",
-      'after = print(text="after")',
-      "return after"
-    ].join("\n"), registry, { allowReturn: true });
-    expect(compiled.diagnostics).toEqual([]);
-    const result = await workflow.executeValue(compiled.program!, [], {
-      ui: {
-        form: async () => ({ kind: "ui", type: "form", status: "cancelled", answers: {} })
-      }
-    });
-    expect(result).toMatchObject({ kind: "print", text: "before" });
-    const continued = await workflow.executeValue(compiled.program!, [], {
-      ui: {
-        form: async () => ({ kind: "ui", type: "form", status: "submitted", answers: {} })
-      }
-    });
-    expect(continued).toMatchObject({ kind: "print", text: "after" });
-  });
-
-  it("runs a for loop once per item and drops the loop variable afterwards", async () => {
-    const { registry, workflow } = setup();
-    const compiled = compileWorkflow([
-      'commands = ["git status", "git diff"]',
-      "for command in commands:",
-      "    terminal(command=command)"
-    ].join("\n"), registry);
-    expect(compiled.diagnostics).toEqual([]);
-    const result = await workflow.execute(compiled.program!);
-    // A literal list is inlined at compile time, so the only steps are the two
-    // passes through the body.
-    expect(result.steps?.map((step) => step.state)).toEqual(["success", "success"]);
-    // The body runs with the item bound, so each pass sees its own command.
-    expect(result.executions.map((item) => item.result.kind === "terminal" ? item.result.command : ""))
-      .toEqual(["git status", "git diff"]);
-  });
-
-  it("marks a loop body skipped when the list is empty and stops the workflow when a pass fails", async () => {
-    const { registry, workflow } = setup();
-    const empty = compileWorkflow([
-      "items: list[str] = []",
-      "for item in items:",
-      "    terminal(command=item)"
-    ].join("\n"), registry);
-    expect(empty.diagnostics).toEqual([]);
-    const emptyResult = await workflow.execute(empty.program!);
-    expect(emptyResult.steps).toEqual([{ method: "terminal", state: "skipped" }]);
-
-    const registry2 = new MethodRegistry();
-    registry2.registerMany(BUILTIN_METHODS, "builtin");
-    let calls = 0;
-    const runtime = new DextRuntime(registry2, new ContextResolver(host), undefined, {
-      terminalRun: () => {
-        calls += 1;
-        if (calls === 2) throw new Error("second command failed");
-        return {
-          kind: "terminal",
-          status: "succeeded",
-          command: "",
-          cwd: ".",
-          exit_code: 0,
-          stdout: "",
-          stderr: "",
-          duration_ms: 0
-        } satisfies TerminalResult;
-      }
-    });
-    const failing = compileWorkflow([
-      'commands = ["a", "b", "c"]',
-      "for command in commands:",
-      "    terminal(command=command)",
-      'print(text="done")'
-    ].join("\n"), registry2);
-    expect(failing.diagnostics).toEqual([]);
-    const failed = await new WorkflowRuntime(runtime).execute(failing.program!);
-    // A failing pass stops the loop, and everything after it is reported skipped
-    // rather than silently dropped.
-    expect(failed.steps?.map((step) => `${step.method}:${step.state}`)).toEqual([
-      "terminal:success",
-      "terminal:failed",
-      "print:skipped"
-    ]);
-    expect(calls).toBe(2);
-  });
-
-  it("fans a comprehension out concurrently, caps the width, and keeps list order", async () => {
-    const registry = new MethodRegistry();
-    registry.registerMany(BUILTIN_METHODS, "builtin");
-    let inFlight = 0;
-    let peak = 0;
-    const runtime = new DextRuntime(registry, new ContextResolver(host), undefined, {
-      terminalRun: async ({ arguments: args }) => {
-        inFlight += 1;
-        peak = Math.max(peak, inFlight);
-        // The later items resolve sooner, so an implementation that appended
-        // results as they settled would scramble the order.
-        const command = typeof args.command === "string" ? args.command : "";
-        await new Promise((resolve) => setTimeout(resolve, command === "a" ? 20 : 1));
-        inFlight -= 1;
-        return {
-          kind: "terminal",
-          status: "succeeded",
-          command,
-          cwd: ".",
-          exit_code: 0,
-          stdout: command,
-          stderr: "",
-          duration_ms: 0
-        } satisfies TerminalResult;
-      }
-    });
-    const workflow = new WorkflowRuntime(runtime);
-    workflow.setMaxConcurrency(2);
-    const compiled = compileWorkflow([
-      'commands = ["a", "b", "c", "d"]',
-      "runs = [terminal(command=command) for command in commands]"
-    ].join("\n"), registry);
-    expect(compiled.diagnostics).toEqual([]);
-    const result = await workflow.execute(compiled.program!);
-    expect(peak).toBe(2);
-    // Each branch gets its own step, indexed by position, followed by the
-    // assignment that binds the collected list.
-    expect(result.steps?.map((step) => `${step.method}#${step.branch ?? "-"}:${step.state}`)).toEqual([
-      "terminal#0:success",
-      "terminal#1:success",
-      "terminal#2:success",
-      "terminal#3:success",
-      "=#-:success"
-    ]);
-    expect(result.executions.map((item) => item.result.kind === "terminal" ? item.result.command : ""))
-      .toEqual(["a", "b", "c", "d"]);
-  });
-
-  it("stops a fan-out on cancellation and reports the branch that failed", async () => {
-    const registry = new MethodRegistry();
-    registry.registerMany(BUILTIN_METHODS, "builtin");
-    const controller = new AbortController();
-    let started = 0;
-    const runtime = new DextRuntime(registry, new ContextResolver(host), undefined, {
-      terminalRun: async ({ arguments: args }) => {
-        started += 1;
-        if (started === 1) controller.abort();
-        const command = typeof args.command === "string" ? args.command : "";
-        if (command === "b") throw new Error("branch b failed");
-        return {
-          kind: "terminal",
-          status: "succeeded",
-          command,
-          cwd: ".",
-          exit_code: 0,
-          stdout: "",
-          stderr: "",
-          duration_ms: 0
-        } satisfies TerminalResult;
-      }
-    });
-    const cancelling = new WorkflowRuntime(runtime);
-    cancelling.setMaxConcurrency(1);
-    const compiled = compileWorkflow([
-      'commands = ["a", "b", "c"]',
-      "runs = [terminal(command=command) for command in commands]",
-      'print(text="done")'
-    ].join("\n"), registry);
-    expect(compiled.diagnostics).toEqual([]);
-    const cancelled = await cancelling.execute(compiled.program!, [], { signal: controller.signal });
-    // Aborting stops handing out branches: the first one already in flight still
-    // finishes, the second never starts, and the statement after the fan-out is
-    // reported skipped rather than dropped.
-    expect(started).toBe(1);
-    expect(cancelled.steps?.map((step) => `${step.method}:${step.state}`)).toEqual([
-      "terminal:success",
-      "=:cancelled",
-      "print:skipped"
-    ]);
-
-    const failing = new WorkflowRuntime(new DextRuntime(registry, new ContextResolver(host), undefined, {
-      terminalRun: async ({ arguments: args }) => {
-        const command = typeof args.command === "string" ? args.command : "";
-        if (command === "b") throw new Error("branch b failed");
-        return {
-          kind: "terminal",
-          status: "succeeded",
-          command,
-          cwd: ".",
-          exit_code: 0,
-          stdout: "",
-          stderr: "",
-          duration_ms: 0
-        } satisfies TerminalResult;
-      }
-    }));
-    failing.setMaxConcurrency(1);
-    const result = await failing.execute(compiled.program!);
-    const failed = result.steps?.find((step) => step.state === "failed");
-    expect(failed).toMatchObject({ method: "terminal", branch: 1 });
-    expect(failed?.error).toContain("branch b failed");
-    expect(result.steps?.at(-1)).toMatchObject({ method: "print", state: "skipped" });
-  });
-
-  it("hands a failing step to except instead of skipping the rest of the workflow", async () => {
-    const registry = new MethodRegistry();
-    registry.registerMany(BUILTIN_METHODS, "builtin");
-    const runtime = new DextRuntime(registry, new ContextResolver(host), undefined, {
-      terminalRun: () => {
-        throw new Error("npm test exited 1");
-      }
-    });
-    const compiled = compileWorkflow([
-      "try:",
-      '    checked = terminal(command="npm test")',
-      "except Exception as failure:",
-      "    print(text=failure)",
-      "finally:",
-      '    print(text="cleanup")',
-      'print(text="still running")'
-    ].join("\n"), registry);
-    expect(compiled.diagnostics).toEqual([]);
-    const result = await new WorkflowRuntime(runtime).execute(compiled.program!);
-    expect(result.steps?.map((step) => `${step.method}:${step.state}`)).toEqual([
-      "terminal:failed",
-      "print:success",
-      "print:success",
-      "print:success"
-    ]);
-    // The handler sees the failure message, and the statement after the try runs
-    // because the failure was handled.
-    const handled = result.executions[0];
-    expect(handled?.result.kind === "print" && handled.result.text).toContain("npm test exited 1");
-  });
-
-  it("runs finally on success, skips the handler, and lets cancellation pass through", async () => {
-    const { registry, workflow } = setup();
-    const passing = compileWorkflow([
-      "try:",
-      '    checked = terminal(command="npm test")',
-      "except:",
-      '    print(text="recovering")',
-      "finally:",
-      '    print(text="cleanup")'
-    ].join("\n"), registry);
-    expect(passing.diagnostics).toEqual([]);
-    const result = await workflow.execute(passing.program!);
-    expect(result.steps?.map((step) => `${step.method}:${step.state}`)).toEqual([
-      "terminal:success",
-      "print:skipped",
-      "print:success"
-    ]);
-
-    const controller = new AbortController();
-    const cancellingRegistry = new MethodRegistry();
-    cancellingRegistry.registerMany(BUILTIN_METHODS, "builtin");
-    const cancelling = new WorkflowRuntime(new DextRuntime(
-      cancellingRegistry,
-      new ContextResolver(host),
-      undefined,
-      {
-        terminalRun: () => {
-          controller.abort();
-          throw new ExecutionCancelledError();
-        }
-      }
-    ));
-    const compiled = compileWorkflow([
-      "try:",
-      '    checked = terminal(command="npm test")',
-      "except:",
-      '    print(text="recovering")',
-      "finally:",
-      '    print(text="cleanup")'
-    ].join("\n"), cancellingRegistry);
-    const cancelled = await cancelling.execute(compiled.program!, [], { signal: controller.signal });
-    // Stopping is the user's decision, so except does not get to override it and
-    // neither the handler nor the finalizer runs.
-    expect(cancelled.steps?.map((step) => `${step.method}:${step.state}`)).toEqual([
-      "terminal:cancelled",
-      "print:skipped",
-      "print:skipped"
-    ]);
-  });
-
-  it("builds strict contracts for public builtins", () => {
-    const { registry } = setup();
-    const ask = new AxAdapter().compile(registry.get("ask")!);
-    expect(ask.inputSchema.safeParse({ input: "hello" }).success).toBe(true);
-    expect(ask.inputSchema.safeParse({ message: "hello" }).success).toBe(false);
-    const agent = new AxAdapter().compile(registry.get("agent")!);
-    expect(agent.outputSchema.safeParse({ kind: "agent", text: "done" }).success).toBe(true);
-    expect(registry.get("chat")).toBeUndefined();
-    expect(registry.get("code.edit")).toBeUndefined();
-  });
 
   it("keeps apply and terminal local when an Agent is selected", async () => {
     const { runtime } = setup();
@@ -778,8 +583,11 @@ print(text=answer.text)`, registry);
     runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
     runtime.setAgentSelection({ profileId: "codex" });
     runtime.setAgentRunner({ run: async () => { invoked = true; return { kind: "ask", text: "agent" }; } });
-    await expect(runtime.execute({ kind: "invocation", method: "terminal", source: "code", arguments: [{ name: "command", value: "echo test" }] }))
+    await expect(runtime.execute(invoke("terminal", [arg("command", "echo local")])))
       .resolves.toMatchObject({ result: { kind: "terminal" } });
+    const preview: AgentResult = { kind: "agent", text: "preview", patch: { kind: "patch", title: "No changes", changes: [] } };
+    await expect(runtime.execute(invoke("apply", [arg("result", preview)])))
+      .resolves.toMatchObject({ result: { kind: "apply", status: "unchanged" } });
     expect(invoked).toBe(false);
   });
 
@@ -788,8 +596,26 @@ print(text=answer.text)`, registry);
     runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
     runtime.setAgentSelection({ profileId: "codex" });
     runtime.setAgentRunner({ run: async () => ({ kind: "ask", text: "agent response" }) });
-    await expect(runtime.execute({ kind: "invocation", method: "ask", source: "code", arguments: [{ name: "input", value: "hello" }] }))
+    await expect(runtime.execute(invoke("ask", [arg("input", "hello")])))
       .resolves.toMatchObject({ result: { kind: "ask", text: "agent response" } });
+  });
+
+  it("routes a typed agent call to the CLI named by the cli argument", async () => {
+    const { runtime } = setup();
+    const providers: string[] = [];
+    runtime.setAgentProfiles([
+      { id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] },
+      { id: "claude", label: "Claude", provider: "claude", command: "claude", models: [] }
+    ]);
+    runtime.setAgentSelection({ profileId: "codex" });
+    runtime.setAgentRunner({
+      run: async (request) => {
+        providers.push(request.profile.provider);
+        return { kind: "agent", text: "done" };
+      }
+    });
+    await runtime.execute(invoke("agent", [arg("input", "work"), arg("apply", false), arg("cli", "claude")]));
+    expect(providers).toEqual(["claude"]);
   });
 
   it("loads selected skills before ordered rules from .dext", async () => {
@@ -815,17 +641,12 @@ print(text=answer.text)`, registry);
       }
     });
 
-    await runtime.execute({
-      kind: "invocation",
-      method: "agent",
-      source: "code",
-      arguments: [
-        { name: "input", value: "implement" },
-        { name: "apply", value: false },
-        { name: "skills", value: ["project", "testing", "project"] },
-        { name: "rules", value: ["dev/base.md", "dev/phase.md"] }
-      ]
-    });
+    await runtime.execute(invoke("agent", [
+      arg("input", "implement"),
+      arg("apply", false),
+      arg("skills", ["project", "testing", "project"]),
+      arg("rules", ["dev/base.md", "dev/phase.md"])
+    ]));
 
     expect(instruction).toBe([
       "Follow the skill 'project' from project/SKILL.md for this agent call.\n\nskill project",
@@ -833,16 +654,11 @@ print(text=answer.text)`, registry);
       "Apply rule 'dev/base.md':\n\nbase rule",
       "Apply rule 'dev/phase.md':\n\nphase rule"
     ].join("\n\n"));
-    await expect(runtime.execute({
-      kind: "invocation",
-      method: "agent",
-      source: "code",
-      arguments: [
-        { name: "input", value: "implement" },
-        { name: "apply", value: false },
-        { name: "rules", value: ["../api/dev/feat.dx"] }
-      ]
-    })).rejects.toThrow("rules must stay below .dext/rules");
+    await expect(runtime.execute(invoke("agent", [
+      arg("input", "implement"),
+      arg("apply", false),
+      arg("rules", ["../api/dev/feat.md"])
+    ]))).rejects.toThrow("rules must stay below .dext/rules.");
   });
 
   it("runs Agent and Ask as ordinary provider conversations", async () => {
@@ -995,7 +811,7 @@ print(text=answer.text)`, registry);
       onAgentEvent: (event) => events.push(event)
     });
 
-    // savePlan still receives the complete document from the reply text.
+    // The response still carries the complete document from the reply text.
     expect(response.result).toMatchObject({ kind: "plan", text: reply });
     expect(events.length).toBeGreaterThan(0);
     expect(events.every((event) => !(event.text ?? "").includes("dext-plan"))).toBe(true);
@@ -1075,132 +891,6 @@ print(text=answer.text)`, registry);
     expect(sent).toBe("");
   });
 
-  it("composes failed terminal fields and preserves the complete result", async () => {
-    const registry = new MethodRegistry();
-    registry.registerMany(BUILTIN_METHODS, "builtin");
-    const terminalResult: TerminalResult = {
-      kind: "terminal",
-      status: "failed",
-      command: "exit 7",
-      cwd: ".",
-      exit_code: 7,
-      stdout: "",
-      stderr: "failed",
-      duration_ms: 3
-    };
-    const runtime = new DextRuntime(registry, new ContextResolver(host), undefined, {
-      terminalRun: () => terminalResult
-    });
-    const compiled = compileWorkflow(`terminal_result = terminal(command="exit 7")
-printed = print(text=terminal_result.stderr)`, registry);
-
-    expect(compiled.diagnostics).toEqual([]);
-    const result = await new WorkflowRuntime(runtime).execute(compiled.program!);
-    expect(result.steps?.map((step) => step.state)).toEqual(["success", "success"]);
-    expect(result.executions[0]?.result).toEqual(terminalResult);
-    expect(result.executions[1]?.result).toEqual({ kind: "print", text: "failed" });
-  });
-
-  it("marks the unselected terminal status branch as skipped", async () => {
-    const { registry, workflow } = setup();
-    const compiled = compileWorkflow(`terminal_result = terminal(command="echo ok")
-if terminal_result.status == "succeeded":
-    print(text="success")
-else:
-    print(text="failure")`, registry);
-
-    expect(compiled.diagnostics).toEqual([]);
-    const result = await workflow.execute(compiled.program!);
-    expect(result.steps?.map((step) => step.state)).toEqual(["success", "skipped", "success"]);
-  });
-
-  it("marks a cancelled terminal confirmation and skips later calls", async () => {
-    const registry = new MethodRegistry();
-    registry.registerMany(BUILTIN_METHODS, "builtin");
-    const runtime = new DextRuntime(registry, new ContextResolver(host), undefined, {
-      terminalRun: () => { throw new ExecutionCancelledError("cancelled"); }
-    });
-    const compiled = compileWorkflow(`terminal(command="echo no")
-print(text="must not run")`, registry);
-    const result = await new WorkflowRuntime(runtime).execute(compiled.program!);
-
-    expect(result.steps).toEqual([
-      expect.objectContaining({ method: "terminal", state: "cancelled", error: "cancelled" }),
-      expect.objectContaining({ method: "print", state: "skipped" })
-    ]);
-  });
-
-  it("marks the active step cancelled and skips later calls when its signal is aborted", async () => {
-    const { registry, workflow } = setup();
-    const compiled = compileWorkflow(`print(text="first")
-print(text="must not run")`, registry);
-    const controller = new AbortController();
-    controller.abort();
-
-    const result = await workflow.execute(compiled.program!, [], { signal: controller.signal });
-
-    expect(result.steps).toEqual([
-      expect.objectContaining({ method: "print", state: "cancelled" }),
-      expect.objectContaining({ method: "print", state: "skipped" })
-    ]);
-  });
-
-  it("keeps terminal and print contracts strict and composable", async () => {
-    const { registry, workflow } = setup();
-    const compiled = compileWorkflow(`printed = print(text="hello", label="Build")
-answer = ask(input=printed.text)`, registry);
-
-    expect(compiled.diagnostics).toEqual([]);
-    const result = await workflow.execute(compiled.program!);
-    expect(result.executions[0]?.result).toEqual({ kind: "print", text: "hello", label: "Build" });
-    expect(result.executions[1]?.result).toEqual({ kind: "ask", text: "hello" });
-    const terminal = new AxAdapter().compile(registry.get("terminal")!);
-    expect(terminal.outputJsonSchema).toMatchObject({
-      properties: { status: { enum: ["succeeded", "failed", "timed_out"] } }
-    });
-    const printed = new AxAdapter().compile(registry.get("print")!);
-    expect(printed.outputJsonSchema).toMatchObject({
-      additionalProperties: false,
-      properties: { label: { type: "string" } }
-    });
-  });
-
-  it("renders structured print values as readable text", async () => {
-    const { registry, runtime } = setup();
-    const result = await runtime.execute({
-      kind: "invocation",
-      method: "print",
-      source: "code",
-      arguments: [{ name: "text", value: { kind: "ui", type: "confirm", confirmed: true } }]
-    });
-    expect(result.result).toEqual({
-      kind: "print",
-      text: '{"kind":"ui","type":"confirm","confirmed":true}'
-    });
-    const list = await runtime.execute({
-      kind: "invocation",
-      method: "print",
-      source: "code",
-      arguments: [{ name: "text", value: [{ value: 1 }, { value: 2 }] }]
-    });
-    expect(list.result).toMatchObject({ kind: "print", text: '[{"value":1},{"value":2}]' });
-    const contract = new AxAdapter().compile(registry.get("print")!);
-    expect(() => contract.inputSchema.parse({ text: { kind: "custom", value: 1 } })).not.toThrow();
-  });
-
-  it("accepts an AgentResult patch directly in apply", async () => {
-    const { runtime } = setup();
-    const patch: PatchResult = { kind: "patch", title: "No changes", changes: [] };
-    const agentResult: AgentResult = { kind: "agent", text: "preview", patch };
-
-    await expect(runtime.execute({
-      kind: "invocation",
-      method: "apply",
-      source: "code",
-      arguments: [{ name: "result", value: agentResult }]
-    })).resolves.toMatchObject({ result: { kind: "apply", status: "unchanged" } });
-  });
-
   it("keeps agent previews read-only and gates workspace writes on trust", async () => {
     const { runtime } = setup();
     runtime.setWorkspaceRoot(process.cwd());
@@ -1214,36 +904,25 @@ answer = ask(input=printed.text)`, registry);
       }
     });
 
-    await expect(runtime.execute({
-      kind: "invocation", method: "agent", source: "code",
-      arguments: [{ name: "input", value: "preview" }, { name: "apply", value: false }]
-    })).resolves.toMatchObject({ result: { kind: "agent", text: "done" } });
+    await expect(runtime.execute(agentCall(false, "preview"))).resolves.toMatchObject({ result: { kind: "agent", text: "done" } });
     expect(requests).toEqual([{ allowWorkspaceWrite: false, permission: "read-only", cwd: process.cwd() }]);
 
-    await expect(runtime.execute({
-      kind: "invocation", method: "agent", source: "code", arguments: [{ name: "input", value: "write" }]
-    })).rejects.toThrow("trusted local workspace");
+    await expect(runtime.execute(agentCall(undefined, "write"))).rejects.toThrow("trusted local workspace");
     expect(requests).toHaveLength(1);
 
     runtime.setWorkspaceTrusted(true);
-    await runtime.execute({
-      kind: "invocation", method: "agent", source: "code", arguments: [{ name: "input", value: "write" }]
-    });
+    await runtime.execute(agentCall(undefined, "write"));
     expect(requests[1]).toEqual({ allowWorkspaceWrite: true, permission: "workspace-write", cwd: process.cwd() });
 
     runtime.setAgentSelection({ profileId: "codex", permission: "full-access" });
-    await runtime.execute({
-      kind: "invocation", method: "agent", source: "code", arguments: [{ name: "input", value: "full access preview" }, { name: "apply", value: false }]
-    });
+    await runtime.execute(agentCall(false, "full access preview"));
     expect(requests[2]).toEqual({ allowWorkspaceWrite: false, permission: "read-only", cwd: process.cwd() });
 
-    await runtime.execute({
-      kind: "invocation", method: "agent", source: "code", arguments: [{ name: "input", value: "full access write" }]
-    }, [], { agentPermission: "full-access" });
+    await runtime.execute(agentCall(undefined, "full access write"), [], { agentPermission: "full-access" });
     expect(requests[3]).toEqual({ allowWorkspaceWrite: true, permission: "full-access", cwd: process.cwd() });
   });
 
-  it("passes the workflow cancellation signal to the selected Agent runner", async () => {
+  it("passes the cancellation signal to the selected Agent runner", async () => {
     const { runtime } = setup();
     runtime.setWorkspaceRoot(process.cwd());
     runtime.setWorkspaceTrusted(true);
@@ -1258,17 +937,12 @@ answer = ask(input=printed.text)`, registry);
     });
     const controller = new AbortController();
 
-    await runtime.execute({
-      kind: "invocation",
-      method: "agent",
-      source: "code",
-      arguments: [{ name: "input", value: "work" }]
-    }, [], { signal: controller.signal });
+    await runtime.execute(agentCall(undefined), [], { signal: controller.signal });
 
     expect(received).toBe(controller.signal);
   });
 
-  it("preserves readable @ tokens without resolving file content", async () => {
+  it("keeps @ tokens readable in an ask input without resolving file content", async () => {
     const resolved: string[] = [];
     const orderedHost: ContextHost = {
       selection: async () => {
@@ -1285,32 +959,12 @@ answer = ask(input=printed.text)`, registry);
     };
     const registry = new MethodRegistry();
     registry.registerMany(BUILTIN_METHODS, "builtin");
-    const workflow = new WorkflowRuntime(new DextRuntime(registry, new ContextResolver(orderedHost)));
-    const compiled = compileWorkflow('answer = ask(input="A @first.ts B @selection C")', registry);
+    const runtime = new DextRuntime(registry, new ContextResolver(orderedHost));
 
-    expect(compiled.diagnostics).toEqual([]);
-    const result = await workflow.execute(compiled.program!);
-    const text = (result.executions[0]?.result as { text?: string }).text ?? "";
+    const response = await runtime.execute(invoke("ask", [arg("input", "A @first.ts B @selection C")]));
+
     expect(resolved).toEqual([]);
-    expect(text).toBe("A @first.ts B @selection C");
-  });
-
-  it("compiles and resolves the exact serialized agent file-drop input", async () => {
-    const { registry, workflow } = setup();
-    const initial = 'input = """这段代码是什么含义\n"""\nagent(input=input)';
-    const cursor = initial.indexOf("\n");
-    const edit = fileReferenceInsertion(initial, cursor, cursor, ['@src/pathx.py#L55,1-L66,32']);
-    const source = `${initial.slice(0, edit.from)}${edit.text}${initial.slice(edit.to)}`;
-
-    expect(source).toContain('input = """这段代码是什么含义 @src/pathx.py#L55,1-L66,32\n"""');
-    expect(source).toContain("agent(input=input)");
-    expect(source).not.toContain('f"');
-    expect(source).not.toContain("ref.file(");
-    const compiled = compileWorkflow(source, registry);
-    expect(compiled.diagnostics).toEqual([]);
-    const result = await workflow.execute(compiled.program!);
-    expect((result.executions[0]?.result as { text?: string }).text)
-      .toBe("这段代码是什么含义 @src/pathx.py#L55,1-L66,32\n");
+    expect(response.result).toEqual({ kind: "ask", text: "A @first.ts B @selection C" });
   });
 
   it("forwards the selected model and rejects invalid Agent output", async () => {
@@ -1327,148 +981,48 @@ answer = ask(input=printed.text)`, registry);
       }
     });
 
-    await expect(runtime.execute({
-      kind: "invocation", method: "ask", source: "code", arguments: [{ name: "input", value: "hello" }]
-    })).resolves.toMatchObject({ result: { kind: "ask", text: "valid" } });
-    await expect(runtime.execute({
-      kind: "invocation", method: "agent", source: "code",
-      arguments: [{ name: "input", value: "preview" }, { name: "apply", value: false }]
-    })).rejects.toThrow();
+    await expect(runtime.execute(invoke("ask", [arg("input", "hello")])))
+      .resolves.toMatchObject({ result: { kind: "ask", text: "valid" } });
+    await expect(runtime.execute(agentCall(false, "preview"))).rejects.toThrow();
     expect(models).toEqual(["gpt-test", "gpt-test"]);
   });
 
-  it("keeps terminal, apply, and print local when an Agent is selected", async () => {
+  it("rejects an execution whose signal is already aborted", async () => {
     const { runtime } = setup();
-    runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
-    runtime.setAgentSelection({ profileId: "codex" });
-    runtime.setAgentRunner({ run: async () => { throw new Error("local APIs must not invoke the Agent runner"); } });
-
-    await expect(runtime.execute({
-      kind: "invocation", method: "terminal", source: "code", arguments: [{ name: "command", value: "echo local" }]
-    })).resolves.toMatchObject({ result: { kind: "terminal" } });
-    await expect(runtime.execute({
-      kind: "invocation", method: "print", source: "code", arguments: [{ name: "text", value: "local" }]
-    })).resolves.toMatchObject({ result: { kind: "print", text: "local" } });
-    await expect(runtime.execute({
-      kind: "invocation", method: "apply", source: "code", arguments: [{
-        name: "result", value: { kind: "patch", title: "No changes", changes: [] } as PatchResult
-      }]
-    })).resolves.toMatchObject({ result: { kind: "apply", status: "unchanged" } });
+    const controller = new AbortController();
+    controller.abort();
+    await expect(runtime.execute(invoke("ask", [arg("input", "hello")]), [], { signal: controller.signal }))
+      .rejects.toThrow(ExecutionCancelledError);
   });
 
-});
-
-describe("workflow variable reassignment", () => {
-  function prints(response: Awaited<ReturnType<WorkflowRuntime["execute"]>>): string[] {
-    return response.executions
-      .filter((execution) => execution.method.id === "print")
-      .map((execution) => (execution.result as { text: string }).text);
-  }
-
-  it("runs a counter loop instead of folding the value it started with", async () => {
-    const { registry, workflow } = setup();
-    const compiled = compileWorkflow(`count = 0
-while count < 3:
-    print(text=str(count))
-    count = count + 1`, registry);
-    expect(compiled.diagnostics).toEqual([]);
-    expect(prints(await workflow.execute(compiled.program!))).toEqual(["0", "1", "2"]);
+  it("rejects an aborted conversation before contacting the provider", async () => {
+    const { runtime } = setup();
+    const controller = new AbortController();
+    controller.abort();
+    await expect(runtime.executeConversation("ask", "explain", { signal: controller.signal }))
+      .rejects.toThrow(ExecutionCancelledError);
   });
 
-  it("reassigns a variable in straight-line code", async () => {
-    const { registry, workflow } = setup();
-    const compiled = compileWorkflow(`text = "first"
-text = "second"
-print(text=text)`, registry);
-    expect(compiled.diagnostics).toEqual([]);
-    expect(prints(await workflow.execute(compiled.program!))).toEqual(["second"]);
-  });
-
-  it("keeps a name at one type", () => {
-    const { registry } = setup();
-    const compiled = compileWorkflow('value = 1\nvalue = "two"', registry);
-    expect(compiled.diagnostics).toMatchObject([
-      { code: "dext/reassign", message: "Variable 'value' must keep type number; it cannot be reassigned to string." }
-    ]);
+  it("cancels a ui interaction whose signal aborts while the host is answering", async () => {
+    const { runtime } = setup();
+    const controller = new AbortController();
+    await expect(runtime.execute(
+      invoke("ui.confirm", [arg("message", "Continue?")]),
+      [],
+      {
+        signal: controller.signal,
+        ui: {
+          form: async () => {
+            controller.abort();
+            return { kind: "ui", type: "form", status: "cancelled", answers: {} };
+          }
+        }
+      }
+    )).rejects.toThrow(ExecutionCancelledError);
   });
 });
 
-describe("formal UI workflows", () => {
-  it.each(["select", "radio", "checkbox", "input", "confirm", "alert", "form"])("returns ordinary ui.%s cancellation and continues the workflow", async (action) => {
-    const { registry, workflow } = setup();
-    const args = ["select", "radio", "checkbox"].includes(action) ? 'label="Pick", options=["a", "b"]'
-      : action === "input" ? 'label="Text"' : action === "form" ? 'title="Form", fields=[]' : 'message="Continue?"';
-    const compiled = compileWorkflow(`ui.${action}(${args})\nprint(text="continued")`, registry);
-    expect(compiled.diagnostics).toEqual([]);
-    const response = await workflow.execute(compiled.program!, [], { ui: { form: async () => ({ kind: "ui", type: "form", status: "cancelled", answers: {} }) } });
-    expect(response.executions.map((execution) => execution.method.id)).toEqual([`ui.${action}`, "print"]);
-    if (action === "form") expect(response.executions[0]?.result).toMatchObject({ status: "cancelled", action: "", answers: {} });
-  });
-  it("rejects missing actions from alternate hosts instead of choosing the first branch", async () => {
-    const { registry, workflow } = setup();
-    const compiled = compileWorkflow('ui.form(title="Review", fields=[], actions=[{"id":"approve","label":"Approve"},{"id":"revise","label":"Revise"}])\nprint(text="must not run")', registry);
-    expect(compiled.diagnostics).toEqual([]);
-    const response = await workflow.execute(compiled.program!, [], { ui: { form: async () => ({ kind: "ui", type: "form", status: "submitted", answers: {} }) } });
-    expect(response.executions).toEqual([]);
-    expect(response.steps?.[0]).toMatchObject({ state: "failed", error: "Choose a form action." });
-  });
-  it("aborts the enclosing workflow when ui.form opts into on_cancel=abort", async () => {
-    const { registry, workflow } = setup();
-    const compiled = compileWorkflow('ui.form(title="Confirm", fields=[], on_cancel="abort")\nprint(text="must not run")', registry);
-    expect(compiled.diagnostics).toEqual([]);
-    await expect(workflow.execute(compiled.program!, [], { ui: { form: async () => ({ kind: "ui", type: "form", status: "cancelled", answers: {} }) } }))
-      .resolves.toMatchObject({ steps: [{ state: "cancelled" }, { state: "skipped" }] });
-  });
-  it("retries an interactive while step until the user confirms", async () => {
-    const { registry, workflow } = setup();
-    const compiled = compileWorkflow(`reply = ui.confirm(message="Continue?")
-while reply.confirmed != True:
-    reply = ui.confirm(message="Continue?")
-print(text="done")`, registry);
-    expect(compiled.diagnostics).toEqual([]);
-    let calls = 0;
-    const response = await workflow.execute(compiled.program!, [], {
-      ui: { form: async () => ({ kind: "ui", type: "form", status: calls++ === 0 ? "cancelled" : "submitted", answers: {} }) }
-    });
-    expect(response.executions.map((execution) => execution.method.id)).toEqual(["ui.confirm", "ui.confirm", "print"]);
-  });
-
-  it.each(["select", "radio", "checkbox", "input", "confirm", "alert", "form"])("executes ui.%s as one step", async (action) => {
-    const { registry, workflow } = setup();
-    const args = ["select", "radio", "checkbox"].includes(action) ? 'label="Pick", options=["a", "b"]'
-      : action === "input" ? 'label="Text"' : action === "form" ? 'title="Form", fields=[]' : 'message="Continue?"';
-    const compiled = compileWorkflow(`ui.${action}(${args})`, registry);
-    expect(compiled.diagnostics).toEqual([]);
-    const response = await workflow.execute(compiled.program!, [], { ui: { form: async (form) => ({ kind: "ui", type: "form", status: "submitted",
-      answers: form.fields[0]?.type === "input" ? { answer: { type: "input", value: "" } }
-        : ["select", "radio", "checkbox"].includes(action) ? { answer: { type: action as "select" | "radio" | "checkbox", selected: ["b"] } } : {} }) } });
-    expect(response.executions).toHaveLength(1);
-    expect(response.executions[0]?.result).toMatchObject({ kind: "ui", type: action });
-  });
-  it("executes a mixed declarative form and reads answers by stable ID", async () => {
-    const { registry, workflow } = setup();
-    const compiled = compileWorkflow(`fields = [{"id": "run", "type": "radio", "label": "Run?", "options": ["yes", "no"]}, {"id": "text", "type": "input", "label": "Details", "required": False}]
-reply = ui.form(title="Settings", fields=fields)
-if reply.status == "submitted":
-    if reply.answers["run"].selected[0] == "no":
-        print(text="No tests")`, registry);
-    expect(compiled.diagnostics).toEqual([]);
-    const response = await workflow.execute(compiled.program!, [], { ui: { form: async () => ({ kind: "ui", type: "form", status: "submitted", answers: { run: { type: "radio", selected: ["no"] } } }) } });
-    expect(response.executions.map((execution) => execution.method.id)).toEqual(["ui.form", "print"]);
-    expect(response.executions[1]?.result).toMatchObject({ text: "No tests" });
-  });
-  it("stops before later workflow steps when an interaction is aborted", async () => {
-    const { registry, workflow } = setup(); const controller = new AbortController();
-    const compiled = compileWorkflow('ui.input(label="Text")\nprint(text="must not run")', registry);
-    let calls = 0;
-    const response = await workflow.execute(compiled.program!, [], { signal: controller.signal, ui: { form: async () => {
-      calls++; controller.abort(); return { kind: "ui", type: "form", status: "cancelled", answers: {} };
-    } } });
-    expect(response.executions).toEqual([]);
-    expect(response.steps?.map((step) => step.state)).toEqual(["cancelled", "skipped"]);
-    expect(calls).toBe(1);
-  });
-
+describe("Dext result repair", () => {
   it("parses a fenced Agent result with surrounding narration", async () => {
     const { runtime } = setup();
     selectFakeAgent(runtime);
@@ -1612,12 +1166,8 @@ if reply.status == "submitted":
 
     // The `agent` kind is the one that wraps plain text; every other kind keeps
     // the old diagnose-and-repair path.
-    await expect(runtime.execute({
-      kind: "invocation",
-      method: "ask",
-      source: "code",
-      arguments: [{ name: "input", value: "hi" }]
-    })).rejects.toThrow(/No 'ask' JSON object could be extracted[\s\S]*Repair failed: not available/);
+    await expect(runtime.execute(invoke("ask", [arg("input", "hi")])))
+      .rejects.toThrow(/No 'ask' JSON object could be extracted[\s\S]*Repair failed: not available/);
   });
 
   it("treats explicitly null optional fields as absent instead of repairing", async () => {
@@ -1700,12 +1250,8 @@ if reply.status == "submitted":
     selectFakeAgent(runtime);
     runtime.setAgentRunner({ run: async () => "plain text without any envelope" });
 
-    await expect(runtime.execute({
-      kind: "invocation",
-      method: "ask",
-      source: "code",
-      arguments: [{ name: "input", value: "hi" }]
-    })).rejects.toThrow(/No 'ask' JSON object could be extracted/);
+    await expect(runtime.execute(invoke("ask", [arg("input", "hi")])))
+      .rejects.toThrow(/No 'ask' JSON object could be extracted/);
   });
 
   it("does not wrap a plain-text result on a write-enabled Agent turn", async () => {
