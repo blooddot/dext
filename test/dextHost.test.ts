@@ -292,11 +292,30 @@ describe("Dext kernel host", () => {
 
   it("names every call a run did not await", { timeout: 30000 }, async () => {
     // A count is not actionable: the report has to say which call dropped its result,
-    // and each name once even when the same API is called twice. Every call is issued
-    // synchronously, so none of them can have answered by the time the module ends.
+    // and each name once even when the same API is called twice. Issuing the calls
+    // synchronously is not enough to keep them in flight: the kernel reaches `settle`
+    // after `await import(...)`, so a reply processed during that await empties the
+    // in-flight set (`settleCalls` reads `inFlight.size`) and the notice is never
+    // written. Holding every reply until all three calls have reached the host is what
+    // makes the window deterministic.
     const root = await workspace();
-    const kernel = host(root, async (invocation) => askResponse(invocation));
-    const response = await kernel.runSource('import { agent, ask } from "dext";\nask({ input: "a" });\nask({ input: "b" });\nagent({ input: "c", apply: false });\n');
+    let reached = 0;
+    let allReached: () => void = () => {};
+    const everyCallReachedTheHost = new Promise<void>((resolve) => { allReached = resolve; });
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const kernel = host(root, async (invocation) => {
+      reached += 1;
+      if (reached === 3) allReached();
+      await held;
+      return askResponse(invocation);
+    });
+    const running = kernel.runSource('import { agent, ask } from "dext";\nask({ input: "a" });\nask({ input: "b" });\nagent({ input: "c", apply: false });\n');
+    await everyCallReachedTheHost;
+    // The module body has ended by now; what is left is `settle` waiting for these replies.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    release();
+    const response = await running;
     const notice = response.steps?.find((step) => step.notice)?.notice;
     expect(notice?.level).toBe("warning");
     expect(notice?.text).toMatch(/^ask\(\) and agent\(\) were not awaited/);
