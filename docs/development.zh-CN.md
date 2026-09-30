@@ -33,6 +33,18 @@ npm run package
 
 `release/` 会自动创建，已被 Git 忽略，也不会包含在 VSIX 中。不同版本的安装包会保留；重新打包同一版本会覆盖对应文件。例如 `0.1.1` 的输出为 `release/dext-0.1.1.vsix`。
 
+### 包体为什么这么大
+
+VSIX 压缩后约 **5 MB**（解压约 20 MB），几乎全部来自 Webview：
+
+| 资源 | 原始 | 压缩后 | 原因 |
+|---|---|---|---|
+| `dist/webview/main.js` | ~7.7 MB | ~2.1 MB | Monaco、mermaid、markdown-it 与 Webview 代码 |
+| `dist/webview/ts.worker.js` | ~6.7 MB | ~1.5 MB | Monaco 的 TypeScript worker，内嵌整个 TypeScript 编译器 |
+| `dist/extension.js` | ~2.7 MB | ~0.7 MB | 扩展宿主 bundle、kernel host 与 Agent CLI 适配 |
+
+这个 TypeScript worker 是**有意为之**：composer 的补全、悬停、F12 与诊断由 Monaco 自带的 TypeScript 服务提供，而 Webview 无法使用 VS Code 为工作区文件运行的 TypeScript 服务。把该入口从 `esbuild.mjs` 去掉可省约 1.5 MB（压缩后），代价是 composer 只剩语法高亮，而 `.dext/api/*.ts` 仍由 VS Code 提供完整语言支持。`dist/extensionHostTest.js`、source map、`node_modules/**` 与 devDependency `typescript` 已被 `.vscodeignore` 排除；`npm run check` 的资源检查会证明进入 VSIX 的新增运行时资源只有 kernel 的 `.mjs` 与随包发布的 `dist/dext.d.ts`。
+
 发布到 GitHub 的步骤：
 
 1. 更新 `package.json`、`package-lock.json` 中的版本，并在 [CHANGELOG.md](../CHANGELOG.md) 中填写版本说明。
@@ -48,20 +60,43 @@ npm run package
 
 MCP 初始化从 `package.json` 读取客户端名称和版本。协议版本分别维护在 `dext.mcpProtocolVersions.stdio` 和 `dext.mcpProtocolVersions.http`，HTTP 请求头复用 HTTP 协议版本。这些值会在构建时打包进扩展。只有对应传输实现支持该协议修订版时才应修改日期，并重新构建；它们不是面向用户的设置项。
 
-- `src/core/workflow.ts`：遍历 Lezer Python 语法树，限制语法、检查类型并生成诊断。
-- `src/core/workflowRuntime.ts`：顺序执行、结果组合和分支状态管理。
-- `src/core/languageService.ts`：Dext 补全、悬停、参数提示和诊断。
 - `src/core/contextResolver.ts`：不可变上下文快照。
 - `src/core/axAdapter.ts`：Ax / Zod / JSON Schema 契约适配。
 - `src/core/runtime.ts`：确定性执行器白名单。
-- `src/core/customApi.ts`：`.dx` API 加载、导入、签名和自定义计划。
-- `src/core/apiCheck.ts`：编辑器诊断背后的 `.dx`、MCP 与规则检查。
-- `src/vscodeApiDiagnostics.ts`：`.dx` 的 Problems 集合、文件监听和 `dext.checkApis` 命令。
-- `src/core/apiDiagnostic.ts`：共享的诊断结构、`path:line:column` 文本渲染，以及把函数体偏移映射回文件坐标的边界表。
+- `src/core/dextApiTypes.ts`：由注册表推导的 `dext` 声明与 `.dext/tsconfig.json` 工程。
 - `src/core/agentRunner.ts`：Codex / Claude CLI 的结构化执行适配。
 - `src/core/completionProvider.ts`：FIM 补全后端、缓存和密钥管理。
-- `src/core/workflowRecorder.ts`：从对话生成 `.dx` 工作流骨架。
-- `src/webview/codeEditor.ts`：基于 CodeMirror 的 Python 语法编辑器。
+- `src/core/workflowRecorder.ts`：从对话生成 TypeScript API 骨架。
+- `src/webview/codeEditor.ts`：Code 编辑器（Monaco、引用投影与文件拖放）。
+
+### TypeScript kernel
+
+`.dext/api/**/*.ts` 与 composer 的 Code 模式不再由扩展宿主里的解释器执行，而是在一个常驻 Node 子进程（kernel）里当作普通 TypeScript 运行：
+
+- `src/runner/dextHost.ts` 负责子进程：启动、握手、派发队列（`dext.workflow.maxConcurrency`）、崩溃重启与取消（取消即 kill），以及报告是否有 run 在跑的 `busy()`。它还把输入区的缓冲区落盘——内核 import 的是真实文件：扩展把它指向自己的存储（`runs/<工作区>/`），因此跑 Code 不会在仓库里留下任何文件，且只保留最新 20 个缓冲区。一个 host 绑定一个工作区，所以切换文件夹时扩展会替换缓存的那个——但只在 `busy()` 为 false 时，因为 reload 绝不能杀掉正在跑的 run。
+- `src/runner/dextKernel.mjs` 是子进程本身：每次 run 都以新的 generation 重新注册 loader，导入入口模块（导出了 `main` 就 await 它），并把 `console.log` / `console.error` 记为进程输出步骤。
+- `src/runner/dextLoader.mjs` 把 `dext` 映射到运行时模块、把 `dext/api/<id>` 映射到 `<workspace>/.dext/api/<id>.ts`，解析工作区内省略扩展名的 `.ts` 导入，并擦除 TypeScript 类型。
+- `src/runner/dextRuntime.mjs` 就是 `dext` 模块：每次调用记录一个步骤，并请求扩展宿主通过原有 runtime 执行。
+- `src/runner/dextSerialization.mjs` 定义跨进程值的规则。
+- `src/runner/dextResumeCache.ts` 记录 run 期间的 API 调用，并在用户继续失败 run 时重放。
+
+以下运行时事实在本仓库（2026-09）由 `test/dextHost.test.ts`、`scripts/dextSmoke.mjs` 与直接探测确认。本机开发使用 Node 22.23.2；`.vscode-test` 中的 VS Code 归档为 1.132.0 与 1.138.0。
+
+| 问题 | 实测结果 |
+|---|---|
+| `process.execPath` 能否当 Node 用？ | 可以。在扩展宿主里它是 VS Code 的 Electron 二进制，需要 `ELECTRON_RUN_AS_NODE=1`；1.138.0 归档下报 Node 24.18.1（Electron 42.10.0）。 |
+| `--import` + `module.register()` 可用吗？ | 可用，Node 22.23.2 与 Electron 二进制的 Node 24.18.1 都支持。 |
+| 有 TypeScript 支持吗？ | 有：两者都是 `process.features.typescript === "strip"`，且存在 `module.stripTypeScriptTypes()`。`enum` 会被拒绝并给出 `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`（"TypeScript enum is not supported in strip-only mode"），这也是生成的 `.dext/tsconfig.json` 设置 `erasableSyntaxOnly` 的原因。 |
+| 需要 `--experimental-strip-types` 吗？ | 不需要。loader 自己擦除类型，既不传该参数也不依赖它；`--experimental-transform-types` 可用但未采用。 |
+| Electron 二进制能直接跑 `.ts` **入口**吗？ | 不能，会在 CJS 加载器里报 `Cannot find module`。因此入口是 `dextKernel.mjs`，用户 `.ts` 文件由它导入。 |
+| 相对 `.ts` 导入（带扩展名）？ | 原生可用。 |
+| 省略扩展名的相对导入？ | Node 不解析；`dextLoader.mjs` 为工作区内文件解析 `.ts`、`.mts` 与 `/index.ts`。 |
+| `--import <Windows 绝对路径>`？ | 报 `ERR_UNSUPPORTED_ESM_URL_SCHEME`；宿主传 `file://` URL。 |
+| 同一个 kernel 能连跑两次同一文件吗？ | 能：kernel 以新的 generation 重新注册 loader，工作区 URL 会带上 `?dextRun=`，因此所有工作区模块都会重新求值，模块级状态不会跨 run 泄漏。 |
+| 类型擦除会有警告吗？ | 会，每个线程一次（`ExperimentalWarning`）。`src/runner/dextWarnings.mjs` 在 kernel 与 loader 线程里丢弃该警告，避免 Dext 自己的工具链出现在步骤里。 |
+
+类型擦除是原生能力，不需要额外依赖。只有当宿主运行时自身完全不支持 TypeScript 时，`dextLoader.mjs` 才会回退到 esbuild 转换；正因为这种回退很少见，esbuild 仍留在 devDependencies。
+
 
 ### 项目知识、对话运行与编辑器 Tab
 
