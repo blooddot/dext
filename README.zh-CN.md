@@ -20,13 +20,13 @@ Dext 是一款支持 AI 对话与类型化工作流的 Visual Studio Code 插件
 | **Ask** | 理解代码、分析问题，不修改文件 | 自然语言 |
 | **Agent** | 实现功能、修复问题、运行检查 | 自然语言 |
 | **Plan** | 创建和修订计划，再点击 **Build** 实施 | 自然语言 |
-| **Code** | 组合 API 调用，编写类型化工作流 | 工作流代码 |
+| **Code** | 组合 API 调用，编写类型化工作流 | TypeScript |
 
 执行 Plan 时，Dext 会在每轮回答后检查任务状态，自动继续未完成且未受阻的工作。任务全部报告完成后，还会单独请求最终验收，验收通过才显示 `Completed`。进度保存在会话历史中，不修改计划文件；暂停后再次点击 **Build** 会恢复同一计划中未变更任务的进度。
 
 用户停止显示 `Stopped`，所有剩余任务都有明确外部阻塞时显示 `Blocked`；连续三轮没有新增完成项或新工具活动，或达到单次 64 轮上限时显示 `Incomplete` 并保留计划。普通回答结束不再等于计划完成。最终验收依赖 Agent 检查代码与测试并报告结果，宿主不能仅凭任务勾选独立证明实现正确。
 
-你可以将文件和代码选区加入上下文，在 History 中继续对话，并从对话生成起始工作流。Code 模式提供 API 补全、参数提示、诊断和类型化结果字段。
+你可以将文件和代码选区加入上下文，在 History 中继续对话，并从对话生成起始工作流。Code 模式在 Node 内核中运行 TypeScript，并提供 API 补全、参数提示、诊断和类型化结果字段。
 
 从 VS Code 文件资源管理器拖动文件时，按住 **Shift**，在 Dext 输入框高亮后松开鼠标，即可在落点插入文件引用（ref）。支持多选文件一起拖入。
 
@@ -71,36 +71,41 @@ Dext 默认位于副侧栏（VS Code 默认布局的右侧）。安装或更新�
 
 选择 **Code**，输入以下代码并点击 **Run**：
 
-```python
-answer = ask(input="解释这个项目的结构")
-print(text=answer.text)
+```ts
+import { ask } from "dext";
+
+const answer = await ask({ input: "解释这个项目的结构" });
+console.log(answer.text);
 ```
 
-工作流使用 Python 的一小部分语法，由 Dext 自行解析和校验，**不需要 Python 解释器**。API 参数和结果字段都支持补全与类型检查。
+一个 Code 轮次就是普通的 ES 模块，由 Dext 放在长期存活的 Node 子进程中按 TypeScript 运行。没有 Python 解释器，也没有独立的工作流语言：Node 内置模块（`import fs from "node:fs/promises"`）和工作区能解析的任意包都可以直接使用，顶层 `await` 也可用。API 参数和结果字段的补全与类型检查来自 VS Code 自身的 TypeScript 服务。
 
-字符串是一等值：可以用 `+` 拼接，用 f-string 组合文本（`f"{answer.text} ({checked.exit_code})"`），也可以使用 Dext 自行编译的 Python 字符串方法和纯函数（`split`、`join`、`replace`、`upper`、`len`、`sorted`、`range`，以及 `text[::-1]` 这类切片）。详见[文本与取值表达式](docs/workflows.zh-CN.md#文本与取值表达式)。
+字符串、数组和对象就是普通 JavaScript 值：用模板字符串组合文本（`` `${answer.text} (${checked.exit_code})` ``），并使用标准库（`split`、`join`、`replace`、`toUpperCase`、`Math.max`、`Array.sort`、`text.slice`）。详见[文本与取值表达式](docs/workflows.zh-CN.md#文本与取值表达式)。
 
-可复用的 API 以 `.dx` 文件保存在 `.dext/api/` 中。例如，创建 `.dext/api/team/analyze.dx`：
+可复用的 API 以 TypeScript 模块保存在 `.dext/api/` 中。例如，创建 `.dext/api/team/analyze.ts`：
 
-```python
-def main(input: str) -> AskResult:
-    return ask(input=input)
+```ts
+import { ask, type AskResult } from "dext";
+
+export async function main(input: string): Promise<AskResult> {
+  return await ask({ input });
+}
 ```
 
-`ask`、`print`、`terminal` 等内置 API 始终可用，只有自定义 API 才需要 `import`。
+`ask`、`agent`、`terminal` 等内置 API 从 `dext` 模块导入；自定义 API 按其在 `.dext/api` 下的路径导入。
 
-在 Code 模式中，可以直接调用 `team.analyze(input="...")`，也可以导入后使用简短名称：
+在 Code 模式中，用同样的方式导入自定义 API：
 
-```python
-from team import analyze
+```ts
+import { main as analyze } from "dext/api/team/analyze";
 
-answer = analyze(input="解释任务筛选逻辑和相关测试")
-print(text=answer.text)
+const answer = await analyze("解释任务筛选逻辑和相关测试");
+console.log(answer.text);
 ```
 
 项目 API 需要受信任的工作区。你也可以右键 History 条目，选择 **Record Conversation as Dext Workflow**，生成起始文件后继续编辑。组合调用、Skills、规则和交互确认见[工作流与 API 参考](docs/workflows.zh-CN.md)。
 
-`.dx` 文件在编辑时会把诊断写入 **Problems** 面板，**Dext: Check All APIs** 可一次检查整个项目。自定义 API 调用失败时，报错会带上导致编译失败的文件、函数、原因与行号，而不再只是提示 API 不可用。详见 [API 诊断](docs/workflows.zh-CN.md#api-诊断)。
+Dext 会把 `dext` 类型声明生成到你的项目里——`.dext/api/dext.d.ts`，加上把 `dext` 映射到它的 `.dext/tsconfig.json` 和把该目录标记为 ESM 的 `.dext/package.json`——并在每次重新加载 API 时保持三者最新。这些文件里的路径全是相对路径，可以放心提交：`.dext/api/*.ts` 和输入区会在编辑时把诊断写入 **Problems** 面板，队友和 CI 在没装 Dext 的情况下也能做类型检查。详见[生成的类型](docs/workflows.zh-CN.md#生成的类型)。
 
 ![Code 模式调用 Playground API 后，输入 checked. 时显示 TerminalResult 字段补全](docs/images/dext-workflow-completion.png)
 
@@ -120,7 +125,7 @@ print(text=answer.text)
 
 | 文档 | 内容 |
 | --- | --- |
-| [工作流与 API](docs/workflows.zh-CN.md) | 语法、内置与自定义 API、上下文、Skills、规则和 History |
+| [工作流与 API](docs/workflows.zh-CN.md) | TypeScript Code 模式、内置与自定义 API、上下文、Skills、规则和 History |
 | [Agent 配置](docs/agents.zh-CN.md) | CLI 配置、模型覆盖、DeepSeek Harness 预设与权限 |
 | [MCP 配置](docs/mcp.zh-CN.md) | 工具清单、类型化结果、传输方式和凭据 |
 | [行内补全](docs/completion.zh-CN.md) | 模型配置、接口格式和调优 |

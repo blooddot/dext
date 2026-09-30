@@ -20,13 +20,13 @@ Dext is a Visual Studio Code extension for AI conversations and typed workflows.
 | **Ask** | Understand code and explore questions without changing files | Natural language |
 | **Agent** | Implement features, fix bugs, and run checks | Natural language |
 | **Plan** | Create and revise a plan, then click **Build** to implement it | Natural language |
-| **Code** | Compose API calls into typed workflows | Workflow code |
+| **Code** | Compose API calls into typed workflows | TypeScript |
 
 Plan execution checks reported task progress after every response and continues unfinished, actionable work. Once all tasks are reported complete, Dext requests a separate final verification before displaying `Completed`. Round checkpoints are saved in conversation history without editing the plan document. Clicking **Build** again restores matching tasks from the same plan.
 
 User cancellation displays `Stopped`; explicit external blockers covering every remaining task display `Blocked`. Three consecutive rounds without new completed tasks or new tool activity, or the 64-round execution ceiling, stop with `Incomplete` and preserve the plan. A normal Agent return no longer implies completion. Final verification relies on the Agent inspecting the implementation and checks; task reports alone cannot independently prove correctness.
 
-Add files and selections as context, revisit conversations in History, and record a conversation as a starting workflow. Code mode provides API completion, parameter hints, diagnostics, and typed result fields.
+Add files and selections as context, revisit conversations in History, and record a conversation as a starting workflow. Code mode runs TypeScript in a Node kernel and provides API completion, parameter hints, diagnostics, and typed result fields.
 
 Drag files from the VS Code Explorer, hold **Shift**, and release over the highlighted Dext input to insert file references at the drop position. You can drag multiple selected files together.
 
@@ -71,36 +71,41 @@ For a larger task, select **Plan** to create and revise an implementation plan. 
 
 Select **Code**, enter the following, and click **Run**:
 
-```python
-answer = ask(input="Explain the structure of this project")
-print(text=answer.text)
+```ts
+import { ask } from "dext";
+
+const answer = await ask({ input: "Explain the structure of this project" });
+console.log(answer.text);
 ```
 
-Workflows use a small subset of Python syntax, parsed and validated by Dext. **No Python interpreter is required.** API parameters and result fields have completion and type checking.
+A Code turn is an ordinary ES module that runs as TypeScript in a long-lived Node child process. There is no Python interpreter and no separate workflow language: Node built-ins (`import fs from "node:fs/promises"`) and any package the workspace resolves work directly, and top-level `await` is available. API arguments and result fields have completion and type checking from VS Code's own TypeScript service.
 
-Strings are first-class values: concatenate with `+`, build text with f-strings (`f"{answer.text} ({checked.exit_code})"`), and use the Python string methods and helpers Dext compiles itself (`split`, `join`, `replace`, `upper`, `len`, `sorted`, `range`, and slices such as `text[::-1]`). See [text and value expressions](docs/workflows.md#text-and-value-expressions).
+Strings, arrays and objects are ordinary JavaScript values: build text with template literals (`` `${answer.text} (${checked.exit_code})` ``), and use the standard library (`split`, `join`, `replace`, `toUpperCase`, `Math.max`, `Array.sort`, `text.slice`). See [text and value expressions](docs/workflows.md#text-and-value-expressions).
 
-Save reusable APIs as `.dx` files under `.dext/api/`. For example, create `.dext/api/team/analyze.dx`:
+Save reusable APIs as TypeScript modules under `.dext/api/`. For example, create `.dext/api/team/analyze.ts`:
 
-```python
-def main(input: str) -> AskResult:
-    return ask(input=input)
+```ts
+import { ask, type AskResult } from "dext";
+
+export async function main(input: string): Promise<AskResult> {
+  return await ask({ input });
+}
 ```
 
-Built-in APIs such as `ask`, `print`, and `terminal` are always in scope; only custom APIs need an `import`.
+Built-in APIs such as `ask`, `agent`, and `terminal` are imported from the `dext` module; custom APIs are imported by their path below `.dext/api`.
 
-In Code mode, call `team.analyze(input="...")` directly, or import a shorter name:
+In Code mode, import a custom API the same way:
 
-```python
-from team import analyze
+```ts
+import { main as analyze } from "dext/api/team/analyze";
 
-answer = analyze(input="Explain task filtering and its tests")
-print(text=answer.text)
+const answer = await analyze("Explain task filtering and its tests");
+console.log(answer.text);
 ```
 
 Project APIs require a trusted workspace. You can also right-click a History entry and choose **Record Conversation as Dext Workflow** to generate a starting point for editing. See the [workflow and API reference](docs/workflows.md) for composition, Skills, rules, and UI confirmations.
 
-`.dx` files report diagnostics in the **Problems** panel as you type, and **Dext: Check All APIs** checks the whole project at once. A failing custom API call also names the file, function, reason, and line that stopped it from compiling instead of only reporting that the API is unavailable. See [API diagnostics](docs/workflows.md#api-diagnostics).
+Dext generates the `dext` type declaration into your project — `.dext/api/dext.d.ts`, plus a small `.dext/tsconfig.json` that maps `dext` at it and `.dext/package.json` that marks the directory as ESM — and keeps all three current on every API reload. Every path in them is relative, so commit them: `.dext/api/*.ts` and the composer report diagnostics in the **Problems** panel as you type, and a teammate or CI can type-check without Dext installed. See [Generated types](docs/workflows.md#generated-types).
 
 <p align="center">
   <a href="docs/images/dext-workflow-completion.png"><img src="docs/images/dext-workflow-completion.png" alt="Code mode offering TerminalResult fields while typing checked. after a Playground API call" width="560"></a>
@@ -122,7 +127,7 @@ Project APIs require a trusted workspace. You can also right-click a History ent
 
 | Guide | Contents |
 | --- | --- |
-| [Workflows and APIs](docs/workflows.md) | Syntax, built-in and custom APIs, context, Skills, rules, and History |
+| [Workflows and APIs](docs/workflows.md) | TypeScript Code mode, built-in and custom APIs, context, Skills, rules, and History |
 | [Agent configuration](docs/agents.md) | CLI setup, model overrides, and DeepSeek Harness presets and permissions |
 | [MCP configuration](docs/mcp.md) | Tool manifests, typed results, transports, and credentials |
 | [Inline completion](docs/completion.md) | Model setup, API formats, and tuning |
