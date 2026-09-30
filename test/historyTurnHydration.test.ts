@@ -91,7 +91,8 @@ describe("expanding history while a turn is streaming", () => {
     context.renderAgentEvent.mockImplementation(() => { context.agentStream = { live: false }; });
     runInNewContext("hydrateOutputTurnOnOpen(event)", context);
     expect(turn.hydrated).toBe(true);
-    expect(context.renderedInputSource).toHaveBeenCalledWith("Historical input");
+    // The record carries no mode (legacy), so the source renderer is asked for plain text.
+    expect(context.renderedInputSource).toHaveBeenCalledWith("Historical input", undefined);
     expect(context.renderAgentEvent).toHaveBeenCalledWith(context.record.process[0]);
     expect(turn.output.append).toHaveBeenCalledWith("Historical answer");
     expect(turn.processDisclosure.open).toBe(false);

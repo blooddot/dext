@@ -85,6 +85,8 @@ describe("stored Plan turn hydration", () => {
   it("preserves the user's Input when drafting a Plan", () => {
     const view = hydrate({ ...base, input: "Write a plan", response: response(false) });
     expect(view.remove).not.toHaveBeenCalled();
-    expect(view.renderedInputSource).toHaveBeenCalledWith("Write a plan");
+    // The source renderer is handed the record's mode: it is what decides whether the
+    // input is colorized as code.
+    expect(view.renderedInputSource).toHaveBeenCalledWith("Write a plan", "plan");
   });
 });

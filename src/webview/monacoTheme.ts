@@ -1,12 +1,9 @@
 import { monaco } from "./monacoEnvironment.js";
 import type { EditorTokenTheme } from "../vscodeTheme.js";
+import { monacoColor, monacoThemeRules } from "./monacoThemeRules.js";
 
-function monacoColor(value: string): string | undefined {
-  const hex = value.trim().replace(/^#/, "");
-  if (/^[0-9a-f]{3}$/i.test(hex)) return [...hex].map((part) => part + part).join("");
-  if (/^[0-9a-f]{4}$/i.test(hex)) return [...hex].map((part) => part + part).join("");
-  return /^[0-9a-f]{6}([0-9a-f]{2})?$/i.test(hex) ? hex : undefined;
-}
+/** The Monaco theme the composer and the conversation both paint code with. */
+export const DEXT_MONACO_THEME = "dext";
 
 export function applyMonacoTheme(theme?: EditorTokenTheme): void {
   const css = getComputedStyle(document.body);
@@ -18,10 +15,11 @@ export function applyMonacoTheme(theme?: EditorTokenTheme): void {
     const color = monacoColor(value);
     if (color) colors[name] = `#${color}`;
   }
-  monaco.editor.defineTheme("dext", { base: contrast ? light ? "hc-light" : "hc-black" : light ? "vs" : "vs-dark", inherit: true,
-    rules: (Object.entries(theme ?? {}) as Array<[string, string]>).flatMap(([token, foreground]) => {
-      const color = monacoColor(foreground);
-      return color ? [{ token, foreground: color }] : [];
-    }), colors });
-  monaco.editor.setTheme("dext");
+  monaco.editor.defineTheme(DEXT_MONACO_THEME, {
+    base: contrast ? light ? "hc-light" : "hc-black" : light ? "vs" : "vs-dark",
+    inherit: true,
+    rules: monacoThemeRules(theme),
+    colors
+  });
+  monaco.editor.setTheme(DEXT_MONACO_THEME);
 }

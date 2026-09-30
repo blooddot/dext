@@ -106,5 +106,26 @@ await runLabChecks(async ({ evaluate, key, settle, send }) => {
   await key('F12', 123);
   await settle();
   assert.equal(await evaluate('lab.editor.getPosition().lineNumber'), before, 'F12 keeps the composer open');
-  console.log('PASS TypeScript diagnostics, parameter hints and suggestions in the composer');
+
+  // The composer paints the active VS Code theme, and that has to include the token types
+  // only Monaco's tokenizer knows about: `identifier` is every name in the buffer and
+  // `delimiter` is every brace, parenthesis and semicolon, and leaving them unmapped kept
+  // them on Monaco's own colors while the editor beside them used the theme's.
+  await evaluate("lab.production.applyTheme({identifier:{foreground:'#ff0000'},delimiter:{foreground:'#00ff00'}})");
+  const painted = await evaluate(`(async()=>{
+    const holder=document.createElement('span');holder.dataset.lang='typescript';
+    holder.textContent='import { commit } from "dext/api/git/commit";';
+    // The colorizer runs on a detached node, but a computed color needs a rendered one.
+    await lab.monaco.editor.colorizeElement(holder,{theme:'dext'});
+    document.body.append(holder);
+    const color=(text)=>{const spans=[...holder.querySelectorAll('span')].filter(node=>node.textContent.includes(text));
+      spans.sort((a,b)=>a.textContent.length-b.textContent.length);
+      return spans.length?getComputedStyle(spans[0]).color:'';};
+    const result={name:color('commit'),brace:color('{')};
+    holder.remove();
+    return JSON.stringify(result);})()`);
+  const colors = JSON.parse(painted);
+  assert.equal(colors.name, 'rgb(255, 0, 0)', 'a name takes the theme color: ' + painted);
+  assert.equal(colors.brace, 'rgb(0, 255, 0)', 'a brace takes the theme color: ' + painted);
+  console.log('PASS the composer paints the theme, names and braces included');
 }, false);

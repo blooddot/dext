@@ -62,7 +62,8 @@ describe("VS Code TextMate theme adapter", () => {
         { scope: "variable.other.constant", settings: { foreground: "#222222" } },
         { scope: "entity.name.function", settings: { foreground: "#333333" } },
         { scope: "constant.language.boolean", settings: { foreground: "#444444" } },
-        { scope: "punctuation", settings: { foreground: "#555555" } }
+        { scope: "punctuation", settings: { foreground: "#555555" } },
+        { scope: "comment", settings: { fontStyle: "italic" } }
       ]
     }));
     writeFileSync(join(directory, "themes", "active.jsonc"), `{
@@ -80,13 +81,34 @@ describe("VS Code TextMate theme adapter", () => {
     });
 
     expect(loadEditorTokenTheme()).toMatchObject({
-      variable: "#111111",
-      property: "#666666",
-      function: "#333333",
-      boolean: "#444444",
-      punctuation: "#555555",
-      string: "#777777",
-      keyword: "#888888"
+      variable: { foreground: "#111111" },
+      property: { foreground: "#666666" },
+      function: { foreground: "#333333" },
+      boolean: { foreground: "#444444" },
+      punctuation: { foreground: "#555555" },
+      string: { foreground: "#777777" },
+      keyword: { foreground: "#888888" },
+      // A rule may carry only a style; the color another rule gave the same scope stays.
+      comment: { fontStyle: "italic" }
+    });
+  });
+
+  it("gives the names and delimiters Monaco tokenizes a color of their own", () => {
+    writeFileSync(join(directory, "themes", "base.json"), JSON.stringify({
+      tokenColors: [
+        { scope: "variable.other.readwrite", settings: { foreground: "#101010" } },
+        { scope: "meta.brace", settings: { foreground: "#202020" } },
+        { scope: "string.regexp", settings: { foreground: "#303030" } }
+      ]
+    }));
+    addTheme("Project Theme", "./themes/base.json");
+    vscodeState.configuration.set("workbench.colorTheme", "Project Theme");
+    // `identifier` and `delimiter` are the Monaco token types for these scopes; without
+    // them the composer kept Monaco's own colors for every name, brace and semicolon.
+    expect(loadEditorTokenTheme()).toMatchObject({
+      identifier: { foreground: "#101010" },
+      delimiter: { foreground: "#202020" },
+      regexp: { foreground: "#303030" }
     });
   });
 
@@ -99,6 +121,6 @@ describe("VS Code TextMate theme adapter", () => {
     vscodeState.configuration.set("window.autoDetectColorScheme", true);
     vscodeState.configuration.set("workbench.preferredDarkColorTheme", "Preferred Dark");
 
-    expect(loadEditorTokenTheme()).toMatchObject({ string: "#abcdef" });
+    expect(loadEditorTokenTheme()).toMatchObject({ string: { foreground: "#abcdef" } });
   });
 });

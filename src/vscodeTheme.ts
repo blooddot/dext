@@ -3,23 +3,22 @@ import { dirname, resolve } from "node:path";
 import { parse } from "jsonc-parser/lib/esm/main.js";
 import * as vscode from "vscode";
 
-export interface EditorTokenTheme {
-  keyword?: string;
-  string?: string;
-  number?: string;
-  boolean?: string;
-  comment?: string;
-  function?: string;
-  property?: string;
-  variable?: string;
-  type?: string;
-  operator?: string;
-  punctuation?: string;
+export type EditorTokenName =
+  | "keyword" | "string" | "number" | "boolean" | "comment" | "function" | "property"
+  | "variable" | "identifier" | "type" | "operator" | "punctuation" | "delimiter" | "regexp";
+
+/** How the active theme paints one kind of token. */
+export interface EditorTokenStyle {
+  foreground?: string;
+  /** `italic`, `bold`, `underline`, or a combination, exactly as the theme wrote it. */
+  fontStyle?: string;
 }
+
+export type EditorTokenTheme = Partial<Record<EditorTokenName, EditorTokenStyle>>;
 
 interface TextMateRule {
   scope?: string | string[];
-  settings?: { foreground?: string };
+  settings?: { foreground?: string; fontStyle?: string };
 }
 
 interface ThemeFile {
@@ -27,7 +26,7 @@ interface ThemeFile {
   tokenColors?: TextMateRule[];
 }
 
-const SCOPES: Readonly<Record<keyof EditorTokenTheme, readonly string[]>> = {
+const SCOPES: Readonly<Record<EditorTokenName, readonly string[]>> = {
   keyword: ["keyword.control", "keyword", "storage.modifier"],
   string: ["string.quoted", "string"],
   number: ["constant.numeric"],
@@ -35,10 +34,20 @@ const SCOPES: Readonly<Record<keyof EditorTokenTheme, readonly string[]>> = {
   comment: ["comment.line", "comment.block", "comment"],
   function: ["entity.name.function", "support.function", "variable.function"],
   property: ["variable.other.property", "support.type.property-name", "meta.object-literal.key"],
-  variable: ["variable.other", "variable"],
-  type: ["entity.name.type", "entity.name.class", "support.type", "storage.type"],
+  variable: ["variable.other.readwrite", "variable.other", "variable"],
+  // Monaco's TypeScript tokenizer has one `identifier` token for every name — a function
+  // call and a local variable look the same to it — so the theme's plain-identifier scope
+  // is what paints it; leaving it unmapped is what kept the composer's names on Monaco's
+  // own default color instead of the user's.
+  identifier: ["variable.other.readwrite", "variable.other", "variable", "entity.name.function", "support.function"],
+  type: ["entity.name.type", "entity.name.class", "support.type", "support.class", "storage.type"],
   operator: ["keyword.operator"],
-  punctuation: ["punctuation.definition", "punctuation.section", "punctuation.separator", "punctuation"]
+  punctuation: ["punctuation.definition", "punctuation.section", "punctuation.separator", "punctuation.terminator", "meta.brace", "punctuation"],
+  // Braces, parentheses and the semicolon: the grammar emits `delimiter.bracket`,
+  // `delimiter.parenthesis` and `delimiter`, and a theme that colors punctuation has to
+  // reach all three.
+  delimiter: ["meta.brace", "punctuation.definition", "punctuation.section", "punctuation.separator", "punctuation.terminator", "punctuation"],
+  regexp: ["string.regexp", "string"]
 };
 
 function readTheme(filePath: string, seen = new Set<string>()): TextMateRule[] {
@@ -64,12 +73,19 @@ function matchSpecificity(selector: string, candidate: string): number {
   return -1;
 }
 
+/** TextMate resolves a token by walking its scopes in order: the most specific rule wins,
+ * a later rule breaks a tie, and `foreground` and `fontStyle` are chosen independently
+ * (a rule that only says `italic` does not clear the color another rule gave). */
 function applyRules(target: EditorTokenTheme, rules: readonly TextMateRule[]): void {
-  for (const [name, candidates] of Object.entries(SCOPES) as [keyof EditorTokenTheme, readonly string[]][]) {
-    let best = { specificity: -1, index: -1, foreground: undefined as string | undefined };
+  type Winner = { specificity: number; index: number; value: string };
+  for (const [name, candidates] of Object.entries(SCOPES) as [EditorTokenName, readonly string[]][]) {
+    let foreground: Winner | undefined;
+    let fontStyle: Winner | undefined;
+    const wins = (current: Winner | undefined, specificity: number, index: number): boolean =>
+      !current || specificity > current.specificity || (specificity === current.specificity && index >= current.index);
     for (const [index, rule] of rules.entries()) {
-      const foreground = rule.settings?.foreground;
-      if (!foreground) continue;
+      const settings = rule.settings;
+      if (!settings?.foreground && !settings?.fontStyle) continue;
       const specificity = Math.max(
         -1,
         ...scopes(rule).flatMap((selector) =>
@@ -77,18 +93,22 @@ function applyRules(target: EditorTokenTheme, rules: readonly TextMateRule[]): v
         )
       );
       if (specificity < 0) continue;
-      if (specificity > best.specificity || (specificity === best.specificity && index > best.index)) {
-        best = { specificity, index, foreground };
-      }
+      if (settings.foreground && wins(foreground, specificity, index)) foreground = { specificity, index, value: settings.foreground };
+      if (settings.fontStyle && wins(fontStyle, specificity, index)) fontStyle = { specificity, index, value: settings.fontStyle };
     }
-    if (best.foreground) target[name] = best.foreground;
+    if (foreground || fontStyle) {
+      target[name] = {
+        ...(foreground ? { foreground: foreground.value } : {}),
+        ...(fontStyle ? { fontStyle: fontStyle.value } : {})
+      };
+    }
   }
 }
 
 function customizationRules(value: unknown): TextMateRule[] {
   if (!value || typeof value !== "object") return [];
   const object = value as Record<string, unknown>;
-  const shorthand: [keyof EditorTokenTheme, string][] = [
+  const shorthand: [EditorTokenName, string][] = [
     ["comment", "comments"], ["string", "strings"], ["number", "numbers"],
     ["keyword", "keywords"], ["type", "types"], ["function", "functions"], ["variable", "variables"]
   ];

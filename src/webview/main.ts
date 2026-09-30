@@ -46,6 +46,7 @@ import {
   type ContextReferenceOccurrence
 } from "../core/fileReference.js";
 import { createFileReferenceChip, fileReferenceChipDescriptor } from "./fileReferenceChip.js";
+import { colorizeSource } from "./sourceHighlight.js";
 import { outputExternalLink, outputLinkReference } from "./outputLink.js";
 import { formatJsonOutput } from "./jsonOutput.js";
 import { observeComposerOverflow } from "./composerOverflow.js";
@@ -1978,14 +1979,15 @@ function referenceIcon(kind: ContextReferenceOccurrence["kind"]): string {
 }
 
 /** Renders readable @path tokens as the same chips used by the editor.
- * The source remains unchanged for copy and history replay. Dext owns no
- * language any more, so there are no token classes to apply. */
-function renderedInputSource(source: string): HTMLPreElement {
+ * The source remains unchanged for copy and history replay. A Code turn's text is
+ * colorized with the composer's own grammar and theme; the chips stay where they are. */
+function renderedInputSource(source: string, mode?: InputMode): HTMLPreElement {
   const pre = document.createElement("pre");
   pre.className = "dext-source";
   for (const part of inputReferenceDisplayParts(source)) {
     pre.append(part.kind === "ref" ? inputReferenceChipElement(part.reference) : document.createTextNode(part.value));
   }
+  if (mode === "code") colorizeSource(pre);
   return pre;
 }
 
@@ -2113,7 +2115,7 @@ function createOutputTurn(
     input.disclosure.open = !lazy;
     inputBody = input.body;
     if (!lazy) {
-      const inputText = renderedInputSource(source);
+      const inputText = renderedInputSource(source, options.mode);
       const inputCopy = renderTurnInput(turnDomAdapter(document), inputText, copyButton(source));
       input.body.append(inputCopy);
     }
@@ -3148,12 +3150,9 @@ function renderStoredTurn(record: DextHistoryRecord, turn: OutputTurnElements): 
 
   agentRunStartedAt = Date.now();
   if (turn.input && turn.input.childElementCount === 0) {
-    // Hydrated history should render the persisted source exactly as authored.
-    // The mode is only a presentation hint and passing it through here makes
-    // the renderer observable as a second argument (including for legacy
-    // records where it is undefined).  Keep this call compatible with the
-    // source renderer's single-argument contract.
-    const inputCopy = renderTurnInput(turnDomAdapter(document), renderedInputSource(record.input), copyButton(record.input));
+    // Hydrated history renders the persisted source exactly as authored, in the colors
+    // the composer wrote it in: a record's mode says whether that source was code.
+    const inputCopy = renderTurnInput(turnDomAdapter(document), renderedInputSource(record.input, record.mode), copyButton(record.input));
     turn.input.append(inputCopy);
   }
   const replay = typeof prepareHistoryTrace === "undefined" ? record.process : prepareHistoryTrace(record.process);
