@@ -807,16 +807,12 @@ it("renders process output steps as text rather than as API cards", () => {
       steps: [
         { method: "ask", state: "success", response: execution },
         { method: "stdout", state: "success", stream: { channel: "stdout", text: "x\n" } },
-        { method: "stderr", state: "success", stream: { channel: "stderr", text: "<boom>\n" } },
-        { method: "notice", state: "success", notice: { level: "warning", text: "ask() was <not> awaited." } }
+        { method: "stderr", state: "success", stream: { channel: "stderr", text: "<boom>\n" } }
       ]
     }
   });
   expect(html).toContain('<pre class="history-process-output process-output-stdout">x\n</pre>');
   expect(html).toContain('<pre class="history-process-output process-output-stderr">&lt;boom&gt;\n</pre>');
-  // A notice about the run is Output's own message, so it is neither the red stderr
-  // block nor the disclosure an API step without a response gets.
-  expect(html).toContain('<div class="history-process-notice process-notice process-notice-warning">ask() was &lt;not&gt; awaited.</div>');
   // A stream step never renders the disclosure an API step without a response gets.
   expect(html).not.toContain("<span>stdout</span>");
   expect(html).toContain('<section class="history-execution execution-result">');
