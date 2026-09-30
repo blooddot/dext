@@ -126,6 +126,24 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .resource-api-docs dd { margin: 4px 0 0 18px; color: var(--vscode-descriptionForeground); }
 .resource-api-type, .resource-api-default { color: var(--vscode-descriptionForeground); font-weight: normal; }
 .resource-source-heading { margin-top: 20px; }
+.resource-api-reference { margin: 0 0 24px; padding: 16px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; }
+.resource-api-reference h3 { margin: 20px 0 8px; font-size: 13px; color: var(--vscode-descriptionForeground); text-transform: uppercase; letter-spacing: 0.04em; }
+.resource-api-specifier { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; }
+.resource-api-specifier code { font-size: 1.05em; }
+.resource-api-copy { padding: 2px 8px; font-size: 11px; }
+.resource-api-members { list-style: none; margin: 0; padding: 0; }
+.resource-api-members .resource-api-members { margin: 8px 0 0 16px; padding-left: 12px; border-left: 1px solid var(--vscode-panel-border); }
+.resource-api-member { padding: 8px 0; border-top: 1px solid var(--vscode-panel-border); }
+.resource-api-members > .resource-api-member:first-child { border-top: 0; }
+.resource-api-member-signature { display: block; white-space: pre-wrap; overflow-wrap: anywhere; }
+.resource-api-documentation { margin-top: 6px; white-space: pre-wrap; color: var(--vscode-descriptionForeground); }
+.resource-api-params { margin: 6px 0 0; }
+.resource-api-params dt { font-weight: 600; }
+.resource-api-params dd { margin: 2px 0 0 16px; color: var(--vscode-descriptionForeground); white-space: pre-wrap; }
+.resource-api-returns, .resource-api-deprecated { margin: 6px 0 0; color: var(--vscode-descriptionForeground); white-space: pre-wrap; }
+.resource-api-tag { display: inline-block; min-width: 68px; color: var(--vscode-foreground); font-weight: 600; }
+.resource-api-example { margin: 8px 0 0; padding: 10px; overflow: auto; border: 1px solid var(--vscode-panel-border); border-radius: 4px; }
+.resource-api-example code { white-space: pre; }
 .project-nav { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--vscode-panel-border); margin-bottom: 24px; }
 .project-nav button { border: 0; border-radius: 0; border-bottom: 2px solid transparent; padding: 8px 12px; background: transparent; color: var(--vscode-descriptionForeground); }
 .project-nav button[aria-selected="true"] { color: var(--vscode-foreground); border-bottom-color: var(--vscode-focusBorder); }

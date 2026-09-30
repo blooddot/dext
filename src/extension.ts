@@ -41,6 +41,7 @@ import { PROJECT_PANEL_PAGES, type ProjectPanelPage } from "./webview/projectPan
 import { ApiEditorProvider } from "./apiEditorProvider.js";
 import { GlobalResourcesEditorProvider } from "./globalResourcesEditorProvider.js";
 import { createSidebarResourceDataSource, renderResourceError } from "./resourceDocuments.js";
+import { createApiReferenceSource } from "./core/apiReference.js";
 import type { ResourceScope } from "./resourceSession.js";
 import { parseEditorTabKey } from "./editorTabTypes.js";
 import type { VscodeWebviewPanelLike } from "./editorTabManager.js";
@@ -287,6 +288,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
   }
   const textDecoderForResources = new TextDecoder();
+  // The Node and JavaScript reference the APIs page lists: generated at build time
+  // from `@types/node` and TypeScript's own lib files, so it documents the same
+  // declarations the editor and the kernel resolve.
+  const apiReference = createApiReferenceSource(vscode.Uri.joinPath(context.extensionUri, "dist", "api-reference.json").fsPath);
   const resourceDataSource = createSidebarResourceDataSource({
     state: () => application.state(),
     readFile: async (entry) => {
@@ -298,7 +303,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         // A missing resource file falls back to the generated summary.
         return undefined;
       }
-    }
+    },
+    reference: apiReference
   });
   const resourceCommandFor = (scope: ResourceScope) =>
     async (command: string, payload: { id?: string; kind?: string; path?: string }): Promise<void> => {
@@ -329,7 +335,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     restorer: editorTabRestorer,
     dataSource: resourceDataSource,
     scope: "project",
-    onCommand: resourceCommandFor("project")
+    onCommand: resourceCommandFor("project"),
+    copyText: async (text) => { await vscode.env.clipboard.writeText(text); }
   });
   editors.globalResources = new GlobalResourcesEditorProvider({
     manager: editorTabs,
@@ -337,7 +344,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     dataSource: resourceDataSource,
     scope: "global",
     availableScopes: () => application.state().resourceRoots?.project ? ["global", "project"] : ["global"],
-    onCommand: (command, payload) => resourceCommandFor(payload.scope === "project" ? "project" : "global")(command, payload)
+    onCommand: (command, payload) => resourceCommandFor(payload.scope === "project" ? "project" : "global")(command, payload),
+    copyText: async (text) => { await vscode.env.clipboard.writeText(text); }
   }, ["api", "mcp", "rule", "skill"]);
   const resourceSerializer = (provider: () => ApiEditorProvider | GlobalResourcesEditorProvider | undefined) => ({
     deserializeWebviewPanel: async (panel: vscode.WebviewPanel, state: unknown): Promise<void> => {
