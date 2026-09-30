@@ -266,6 +266,11 @@
         "icon": "$(terminal)"
       },
       {
+        "command": "dext.copyFilePathWithLine",
+        "title": "Dext: Copy File Path with Line",
+        "icon": "$(copy)"
+      },
+      {
         "command": "dext.addFileToChat",
         "title": "Add to Dext",
         "icon": "$(files)"
@@ -335,7 +340,7 @@
         "when": "config.dext.copyFilePathOnCopy && !editorHoverVisible && !inputFocus && (filesExplorerFocus || openEditorsFocus || (editorAreaFocus && resourceScheme != untitled))"
       },
       {
-        "command": "copyFilePath",
+        "command": "dext.copyFilePathWithLine",
         "key": "ctrl+c",
         "mac": "cmd+c",
         "when": "config.dext.copyFilePathOnCopy && !editorHoverVisible && editorTextFocus && !editorHasSelection && resourceScheme != untitled"
@@ -370,18 +375,13 @@
         "command": "dext.copySelectionWithContext",
         "key": "ctrl+c",
         "mac": "cmd+c",
-        "when": "editorTextFocus && editorHasSelection && config.dext.captureSelectionOnCopy"
-      },
-      {
-        "command": "dext.copyTerminalSelectionWithContext",
-        "key": "ctrl+c",
-        "mac": "cmd+c",
-        "when": "terminalFocus && terminalTextSelected && config.dext.captureSelectionOnCopy"
+        "when": "editorTextFocus && editorHasSelection && !editorHasMultipleSelections && config.dext.captureSelectionOnCopy"
       },
       {
         "command": "dext.copyTerminalSelectionWithContext",
         "key": "ctrl+shift+c",
-        "when": "isWindows && terminalFocus && terminalTextSelected && config.dext.captureSelectionOnCopy"
+        "mac": "cmd+c",
+        "when": "terminalFocus && terminalTextSelected && config.dext.captureSelectionOnCopy"
       }
     ],
     "menus": {
@@ -408,6 +408,10 @@
         },
         {
           "command": "dext.triggerParameterHints",
+          "when": "false"
+        },
+        {
+          "command": "dext.copyFilePathWithLine",
           "when": "false"
         },
         {
@@ -830,6 +834,11 @@
         }
       ]
     },
+    "configurationDefaults": {
+      "terminal.integrated.commandsToSkipShell": [
+        "dext.copyTerminalSelectionWithContext"
+      ]
+    },
     "configuration": {
       "title": "Dext",
       "properties": {
@@ -846,7 +855,7 @@
         "dext.captureSelectionOnCopy": {
           "type": "boolean",
           "default": true,
-          "description": "Capture selections from any workspace text file, including Markdown, plain text, logs, and CSV, as Dext file references when copying with Ctrl+C or Cmd+C. The clipboard still receives the exact selected text. Disable this to use VS Code's native copy behavior."
+          "description": "Capture selections from any workspace text file, including Markdown, plain text, logs, and CSV, as Dext file references when copying with Ctrl+C or Cmd+C. The clipboard still receives the exact selected text, and a multi-cursor copy is left entirely to VS Code. Disable this to use VS Code's native copy behavior."
         },
         "dext.skillDirs": {
           "deprecationMessage": "Configure project-relative Skill directories in Project > Overview > Project configuration. This setting remains as a global fallback until the project saves its own directories.",

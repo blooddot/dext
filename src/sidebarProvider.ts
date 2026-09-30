@@ -33,7 +33,7 @@ import {
   type SelectionTarget
 } from "./vscodeAttachments.js";
 import { ReadyMessageQueue } from "./readyMessageQueue.js";
-import { clipboardFileReferences } from "./vscodeClipboardFiles.js";
+import { clipboardFileReferences, copyFilePathKeepingLine } from "./vscodeClipboardFiles.js";
 import { rankFileMatches } from "./core/fileSearch.js";
 import { planPathSegments } from "./core/planFile.js";
 import { planTodoItems, planTodoInstruction, stripPlanTodoProgress } from "./core/planTodoProgress.js";
@@ -1016,6 +1016,13 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   async copySelectionWithContext(): Promise<string> {
+    const editor = vscode.window.activeTextEditor;
+    // VS Code's own multi-cursor copy joins every selection, and Dext can only
+    // stage one range, so that copy is left entirely to VS Code.
+    if (editor && editor.selections.length > 1) {
+      await vscode.commands.executeCommand("editor.action.clipboardCopyAction");
+      return vscode.env.clipboard.readText();
+    }
     const attachment = await selectionAttachment();
     const copiedText = await writeExactClipboardText(vscode.env.clipboard, attachment.text);
     const reference = clipboardFileReference(attachment.reference);
@@ -1025,6 +1032,13 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       this.attachments.clearClipboard();
     }
     return copiedText;
+  }
+
+  /** Editor Copy Path with nothing selected. VS Code keeps its copy-line
+   * behavior; the path waits here for the Dext paste that consumes it. */
+  async copyFilePathWithLine(): Promise<void> {
+    const { path, clipboardText } = await copyFilePathKeepingLine();
+    this.attachments.stageFileCopy(path, clipboardText);
   }
 
   /** Terminal text has no VS Code document URI. Save a bounded snapshot as a
@@ -1407,6 +1421,12 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
             });
             throw error;
           }
+          // A Copy Path that handed the clipboard back keeps no text of its own
+          // for an Explorer copy: VS Code's file list replaced it. The staged
+          // paths stand in for that text, and never for a copy the user made
+          // afterwards.
+          const stagedPaths = this.attachments.stagedFilePath(text);
+          const copiedText = text || stagedPaths || "";
           let codeReference: ReturnType<typeof this.attachments.clipboardReference> = undefined;
           let fileReferences: Awaited<ReturnType<typeof clipboardFileReferences>>;
           try {
@@ -1441,6 +1461,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
                 // File Copy Path carries the original resources, including
                 // images. Resolve paths before falling back to staged context.
                 fileReferences = await clipboardFileReferences(text);
+                if (!fileReferences && stagedPaths) {
+                  fileReferences = await clipboardFileReferences(stagedPaths);
+                }
                 if (!fileReferences) codeReference = this.attachments.clipboardReference(text);
               }
             }
@@ -1449,7 +1472,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
               type: "clipboardReadResult",
               requestId: request.requestId,
               success: true,
-              text: codeReference?.expression ?? text,
+              text: codeReference?.expression ?? copiedText,
               contextAttached: false,
               ...(codeReference ? { codeReference } : {})
             });
@@ -1459,7 +1482,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
             type: "clipboardReadResult",
             requestId: request.requestId,
             success: true,
-            text: fileReferences?.map((reference) => reference.expression).join(" ") ?? codeReference?.expression ?? text,
+            text: request.purpose === "code"
+              ? fileReferences?.map((reference) => reference.expression).join(" ") ?? codeReference?.expression ?? copiedText
+              : copiedText,
             contextAttached: false,
             ...(codeReference ? { codeReference } : {}),
             ...(fileReferences ? { fileReferences } : {})

@@ -240,6 +240,8 @@ const result = await agent({ input: "实现所需的修改" });
 
 在资源管理器、“打开的编辑器”列表、文件标签或没有文字选区的文件正文中按 Ctrl+C（macOS 为 Cmd+C），再到 Dext Input 按 Ctrl+V，即可插入原文件路径的引用。支持多文件和图片文件，不会生成附件。编辑器悬浮提示显示时，Ctrl+C 保留 VS Code 原本的内容复制行为。Ctrl+Shift+V 按原文粘贴路径。将 `dext.copyFilePathOnCopy` 设为 `false`，可恢复资源管理器原生的文件复制和编辑器的整行复制快捷键。
 
+选中终端输出后按 Ctrl+Shift+C（macOS 为 Cmd+C）会复制并把这段输出附加到 Dext Input；Ctrl+C 仍交给 shell，因此仍能中断正在运行的命令。
+
 标记在提交的输入中保持可读文本，Dext 不会把文件内容展开进提示词，由 Agent 自行读取引用的文件。`ask`、`agent`、`plan`、`template` 的 `input` 都接受这些标记。
 
 输入区使用 Monaco 的 TypeScript 编辑器，高亮、缩进、括号匹配和原生编辑行为都来自 TypeScript 语法。Code 模式就是普通 TypeScript，不多做别的事：Dext 会把生成的 `dext` 声明和工作区自己的 `.dext/api` 模块作为 extra lib 注入，并沿用生成工程给 VS Code 的那套 `dext/api/*` 映射；此后补全、自动导入、参数提示、悬浮文档、转到定义和诊断都由编辑器自身的 TypeScript 服务提供。因此 `import { main } from "dext/api/git/commit"` 在输入区能解析、能类型检查，模块说明符和具名导出也像其他模块一样补全。还没导入的导出会连同绑定它的 import 一起补全——输入 `ask` 会给出 `ask` 和 `import { ask } from "dext";`，输入 `commi` 会给出工作区 API 自己的 `commit` 和 `import { commit } from "dext/api/git/commit";`；在 `import { … } from "…"` 里面则只给该模块的导出、不带额外编辑。这些名字都是从声明和 API 源码里读出来的，绝不按名字形状猜：`git` 是目录而不是导出，所以输入它没有任何提示，旧 `.dx` 那种限定调用也不会被翻译。运行里仍然用了这些名字却没有导入时，报错会直接给出该写的导入：`git is not defined` 后面跟着 `use: import { main as commit } from "dext/api/git/commit";`。

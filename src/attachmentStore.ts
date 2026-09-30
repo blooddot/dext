@@ -33,8 +33,19 @@ interface ClipboardEntry {
   expiresAt: number;
 }
 
+/** Copy Path writes the path text Dext reads, but the command that runs after it
+ * owns the clipboard: an Explorer paste needs VS Code's file list, which carries
+ * no text, and a copy-line replaces it with the line. The paths survive here for
+ * the next paste that would have read them. */
+interface FileCopyEntry {
+  paths: string;
+  clipboardText: string;
+  expiresAt: number;
+}
+
 export class AttachmentStore {
   private clipboard: ClipboardEntry | undefined;
+  private fileCopy: FileCopyEntry | undefined;
 
   constructor(private readonly now: () => number = Date.now) {}
 
@@ -44,6 +55,7 @@ export class AttachmentStore {
   ): void {
     if (!text) throw new Error("Select text before copying it with context.");
     this.assertSize(text);
+    this.fileCopy = undefined;
     this.clipboard = {
       text,
       reference,
@@ -59,8 +71,40 @@ export class AttachmentStore {
     this.clipboard = undefined;
   }
 
+  /** Copy Path runs first, so the path text is what the clipboard holds while
+   * Dext stages it. `clipboardText` is what the command that runs last leaves
+   * behind, so only that copy can consume the paths. */
+  stageFileCopy(paths: string, clipboardText = ""): void {
+    if (!paths) {
+      this.fileCopy = undefined;
+      return;
+    }
+    this.assertSize(paths);
+    this.clipboard = undefined;
+    this.fileCopy = {
+      paths,
+      clipboardText,
+      expiresAt: this.now() + CLIPBOARD_TTL_MS
+    };
+  }
+
+  /** The staged paths only stand in for a clipboard that still holds the copy
+   * Dext staged them for: VS Code's file list has no text of its own, and a
+   * copy-line holds the line. Any other text is a different copy, which retires
+   * the entry. */
+  stagedFilePath(clipboardText: string): string | undefined {
+    const fileCopy = this.fileCopy;
+    if (!fileCopy) return undefined;
+    if (fileCopy.expiresAt < this.now() || fileCopy.clipboardText !== clipboardText) {
+      this.fileCopy = undefined;
+      return undefined;
+    }
+    return fileCopy.paths;
+  }
+
   dispose(): void {
     this.clipboard = undefined;
+    this.fileCopy = undefined;
   }
 
   private matchClipboard(text: string): ClipboardEntry | undefined {

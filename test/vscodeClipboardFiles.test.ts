@@ -18,12 +18,16 @@ const vscode = vi.hoisted(() => {
       getWorkspaceFolder: vi.fn(),
       asRelativePath: vi.fn(),
       fs: { stat: vi.fn() }
-    }
+    },
+    commands: { executeCommand: vi.fn() },
+    env: { clipboard: { readText: vi.fn() } },
+    window: { activeTextEditor: undefined }
   };
 });
 
 vi.mock("vscode", () => vscode);
-import { clipboardFileReferences } from "../src/vscodeClipboardFiles.js";
+import { AttachmentStore } from "../src/attachmentStore.js";
+import { clipboardFileReferences, copyFilePathKeepingLine } from "../src/vscodeClipboardFiles.js";
 import { DextSidebarProvider } from "../src/sidebarProvider.js";
 import { FileDropClient } from "../src/webview/fileDropClient.js";
 
@@ -33,6 +37,8 @@ beforeEach(() => {
   vscode.workspace.getWorkspaceFolder.mockReturnValue({ uri: {} });
   vscode.workspace.asRelativePath.mockImplementation((uri: { path: string }) => uri.path.replace(/^\/C:\/repo\/|^\/repo\//, ""));
   vscode.workspace.fs.stat.mockResolvedValue({ type: 1 });
+  vscode.commands.executeCommand.mockResolvedValue(undefined);
+  vscode.env.clipboard.readText.mockResolvedValue("");
 });
 
 describe("clipboard file paths", () => {
@@ -96,5 +102,101 @@ describe("clipboard file paths", () => {
   it("falls back to the entire original text if any path is missing", async () => {
     vscode.workspace.fs.stat.mockRejectedValueOnce(new Error("missing"));
     await expect(clipboardFileReferences("/repo/missing.ts\n/repo/index.html")).resolves.toBeUndefined();
+  });
+});
+
+describe("Explorer Copy Path and VS Code's file list", () => {
+  function sidebarWithClipboard(): {
+    sidebar: DextSidebarProvider;
+    post: ReturnType<typeof vi.fn>;
+    attachments: AttachmentStore;
+  } {
+    const sidebar = Object.create(DextSidebarProvider.prototype) as DextSidebarProvider;
+    const post = vi.fn().mockResolvedValue(undefined);
+    const attachments = new AttachmentStore();
+    Object.assign(sidebar, { attachments, post });
+    return { sidebar, post, attachments };
+  }
+
+  async function paste(sidebar: DextSidebarProvider, purpose: "code" | "text"): Promise<void> {
+    await (sidebar as unknown as { receive(request: unknown): Promise<void> })
+      .receive({ type: "clipboardRead", requestId: 7, purpose });
+  }
+
+  it("returns the line VS Code left behind for a copy with nothing selected", async () => {
+    vscode.env.clipboard.readText
+      .mockResolvedValueOnce("C:\\repo\\index.html")
+      .mockResolvedValueOnce("const value = 1;");
+    await expect(copyFilePathKeepingLine()).resolves.toEqual({
+      path: "C:\\repo\\index.html", clipboardText: "const value = 1;"
+    });
+    expect(vscode.commands.executeCommand.mock.calls)
+      .toEqual([["copyFilePath"], ["editor.action.clipboardCopyAction"]]);
+  });
+
+  it("keeps the path text when VS Code cannot run the copy-line action", async () => {
+    vscode.env.clipboard.readText.mockResolvedValue("/repo/index.html");
+    vscode.commands.executeCommand.mockImplementation(async (command: string) => {
+      if (command === "editor.action.clipboardCopyAction") throw new Error("command not found");
+    });
+    await expect(copyFilePathKeepingLine()).resolves.toEqual({
+      path: "/repo/index.html", clipboardText: "/repo/index.html"
+    });
+  });
+
+  it("turns a staged Copy Path into references after VS Code copied the line", async () => {
+    const { sidebar, post, attachments } = sidebarWithClipboard();
+    attachments.stageFileCopy("C:\\repo\\index.html", "const value = 1;");
+    vscode.env.clipboard.readText.mockResolvedValue("const value = 1;");
+    await paste(sidebar, "code");
+    expect(post).toHaveBeenCalledExactlyOnceWith({
+      type: "clipboardReadResult", requestId: 7, success: true,
+      text: "@index.html", contextAttached: false,
+      fileReferences: [{ expression: "@index.html", payload: "index.html" }]
+    });
+  });
+
+  it("turns a staged Copy Path into references for a reference paste", async () => {
+    const { sidebar, post, attachments } = sidebarWithClipboard();
+    attachments.stageFileCopy("C:\\repo\\index.html");
+    await paste(sidebar, "code");
+    expect(post).toHaveBeenCalledExactlyOnceWith({
+      type: "clipboardReadResult", requestId: 7, success: true,
+      text: "@index.html", contextAttached: false,
+      fileReferences: [{ expression: "@index.html", payload: "index.html" }]
+    });
+  });
+
+  it("pastes a staged Copy Path as plain text for a raw paste", async () => {
+    const { sidebar, post, attachments } = sidebarWithClipboard();
+    attachments.stageFileCopy("C:\\repo\\index.html");
+    await paste(sidebar, "text");
+    expect(post).toHaveBeenCalledExactlyOnceWith({
+      type: "clipboardReadResult", requestId: 7, success: true,
+      text: "C:\\repo\\index.html", contextAttached: false
+    });
+  });
+
+  it("pastes the staged path text as-is when its file no longer resolves", async () => {
+    const { sidebar, post, attachments } = sidebarWithClipboard();
+    attachments.stageFileCopy("C:\\repo\\missing.html");
+    vscode.workspace.fs.stat.mockRejectedValueOnce(new Error("missing"));
+    await paste(sidebar, "code");
+    expect(post).toHaveBeenCalledExactlyOnceWith({
+      type: "clipboardReadResult", requestId: 7, success: true,
+      text: "C:\\repo\\missing.html", contextAttached: false
+    });
+  });
+
+  it("leaves other clipboard text alone", async () => {
+    const { sidebar, post, attachments } = sidebarWithClipboard();
+    attachments.stageFileCopy("C:\\repo\\index.html");
+    vscode.env.clipboard.readText.mockResolvedValue("copied text");
+    await paste(sidebar, "code");
+    expect(post).toHaveBeenCalledExactlyOnceWith({
+      type: "clipboardReadResult", requestId: 7, success: true,
+      text: "copied text", contextAttached: false
+    });
+    expect(vscode.workspace.fs.stat).not.toHaveBeenCalled();
   });
 });

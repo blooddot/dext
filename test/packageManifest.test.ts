@@ -9,6 +9,7 @@ interface PackageManifest {
     commands?: Array<{ command?: string; title?: string }>;
     menus?: Record<string, Array<{ command?: string; when?: string; group?: string }>>;
     keybindings?: Array<{ command?: string; key?: string; mac?: string; when?: string }>;
+    configurationDefaults?: Record<string, unknown>;
     configuration?: {
       properties?: Record<string, {
         type?: string;
@@ -44,39 +45,43 @@ describe("Dext package manifest", () => {
       {
         command: "copyFilePath", key: "ctrl+c", mac: "cmd+c",
         when: "config.dext.copyFilePathOnCopy && !editorHoverVisible && !inputFocus && (filesExplorerFocus || openEditorsFocus || (editorAreaFocus && resourceScheme != untitled))"
-      },
-      {
-        command: "copyFilePath", key: "ctrl+c", mac: "cmd+c",
-        when: "config.dext.copyFilePathOnCopy && !editorHoverVisible && editorTextFocus && !editorHasSelection && resourceScheme != untitled"
       }
     ]);
+    expect(value.contributes?.keybindings).toContainEqual({
+      command: "dext.copyFilePathWithLine", key: "ctrl+c", mac: "cmd+c",
+      when: "config.dext.copyFilePathOnCopy && !editorHoverVisible && editorTextFocus && !editorHasSelection && resourceScheme != untitled"
+    });
     expect(value.contributes?.configuration?.properties?.["dext.copyFilePathOnCopy"])
       .toMatchObject({ type: "boolean", default: true });
   });
 
-  it("captures normal editor copy only for nonempty selections when enabled", async () => {
+  it("captures normal editor copy only for nonempty single selections when enabled", async () => {
     const value = await manifest();
     expect(value.contributes?.commands).toEqual(expect.arrayContaining([
       expect.objectContaining({ command: "dext.copySelectionWithContext" }),
       expect.objectContaining({ command: "dext.copyTerminalSelectionWithContext" })
     ]));
+    // A multi-cursor copy never reaches Dext: VS Code joins every selection, and
+    // Dext can only stage one range.
     expect(value.contributes?.keybindings).toContainEqual({
       command: "dext.copySelectionWithContext",
       key: "ctrl+c",
       mac: "cmd+c",
-      when: "editorTextFocus && editorHasSelection && config.dext.captureSelectionOnCopy"
+      when: "editorTextFocus && editorHasSelection && !editorHasMultipleSelections && config.dext.captureSelectionOnCopy"
     });
-    expect(value.contributes?.keybindings).toContainEqual({
-      command: "dext.copyTerminalSelectionWithContext",
-      key: "ctrl+c",
-      mac: "cmd+c",
-      when: "terminalFocus && terminalTextSelected && config.dext.captureSelectionOnCopy"
-    });
+    // Ctrl+Shift+C (Cmd+C on macOS) is VS Code's own terminal copy; taking it
+    // over would instead send the key to the shell, so the command that runs in
+    // a terminal has to be one the terminal skips the shell for.
     expect(value.contributes?.keybindings).toContainEqual({
       command: "dext.copyTerminalSelectionWithContext",
       key: "ctrl+shift+c",
-      when: "isWindows && terminalFocus && terminalTextSelected && config.dext.captureSelectionOnCopy"
+      mac: "cmd+c",
+      when: "terminalFocus && terminalTextSelected && config.dext.captureSelectionOnCopy"
     });
+    expect(value.contributes?.keybindings?.filter((item) => item.command === "dext.copyTerminalSelectionWithContext"))
+      .toHaveLength(1);
+    expect(value.contributes?.configurationDefaults?.["terminal.integrated.commandsToSkipShell"])
+      .toEqual(["dext.copyTerminalSelectionWithContext"]);
   });
 
   it("binds the everyday conversation commands and scopes stop to a running turn", async () => {
@@ -325,6 +330,8 @@ describe("Dext package manifest", () => {
     // is currently covering. These exist for alt+/ and the parameter hint chord.
     expect(hidden).toContain("dext.triggerSuggest");
     expect(hidden).toContain("dext.triggerParameterHints");
+    // Copy Path is a shortcut, not a command anyone looks up.
+    expect(hidden).toContain("dext.copyFilePathWithLine");
     // The view contributes an automatic focus command whose generated title has
     // a gap where the unnamed view should be. `dext.focus` does the same thing
     // and then puts the cursor in the input.

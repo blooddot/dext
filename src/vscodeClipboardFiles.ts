@@ -2,6 +2,22 @@ import * as vscode from "vscode";
 import type { DextFileReference } from "./core/fileReference.js";
 import { directoryAttachment, fileAttachment } from "./vscodeAttachments.js";
 
+/** Editor Copy Path with nothing selected, kept compatible with VS Code's own
+ * copy-line behavior. The line copy runs last and the text it leaves behind is
+ * what the staged path belongs to. */
+export async function copyFilePathKeepingLine(): Promise<{ path: string; clipboardText: string }> {
+  await vscode.commands.executeCommand("copyFilePath");
+  const path = await vscode.env.clipboard.readText();
+  try {
+    await vscode.commands.executeCommand("editor.action.clipboardCopyAction");
+  } catch {
+    // Keep the path text: it still serves Dext Input, only the copy-line
+    // behavior is lost.
+    return { path, clipboardText: path };
+  }
+  return { path, clipboardText: await vscode.env.clipboard.readText() };
+}
+
 /** Only complete, existing absolute paths qualify. A sentence mentioning a
  * path, a relative code fragment, or an unavailable file stays ordinary text. */
 export async function clipboardFileReferences(text: string): Promise<DextFileReference[] | undefined> {

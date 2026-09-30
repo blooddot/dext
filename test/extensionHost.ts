@@ -47,6 +47,7 @@ export async function run(): Promise<void> {
   assert.ok(commands.includes("dext.triggerParameterHints"), "Parameter hints command is registered.");
   assert.ok(commands.includes("dext.addSelectionToChat"), "Selection attachment command is registered.");
   assert.ok(commands.includes("dext.copySelectionWithContext"), "Context copy command is registered.");
+  assert.ok(commands.includes("dext.copyFilePathWithLine"), "Editor file copy command is registered.");
   assert.ok(commands.includes("dext.addFileToChat"), "File attachment command is registered.");
   assert.ok(commands.includes("dext.setMcpAccessToken"), "Set MCP access token command is registered.");
   assert.ok(commands.includes("dext.clearMcpAccessToken"), "Clear MCP access token command is registered.");
@@ -106,6 +107,24 @@ export async function run(): Promise<void> {
     if (clipboardBaseline) {
       assert.equal(await vscode.env.clipboard.readText(), copiedText, "Context copy writes exact selection text.");
     }
+    // A multi-cursor copy is VS Code's own: every selection travels, not just
+    // the primary one Dext can stage a reference for.
+    editor.selections = [new vscode.Selection(0, 0, 0, 1), new vscode.Selection(1, 2, 1, 6)];
+    const perSelection = editor.selections.map((selection) => document.getText(selection));
+    await vscode.commands.executeCommand("dext.copySelectionWithContext");
+    if (clipboardBaseline) {
+      const deadline = Date.now() + 1_000;
+      let multiText = await vscode.env.clipboard.readText();
+      while (!perSelection.every((text) => multiText.includes(text)) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        multiText = await vscode.env.clipboard.readText();
+      }
+      for (const text of perSelection) {
+        assert.ok(multiText.includes(text), `A multi-cursor copy keeps "${text}".`);
+      }
+      assert.notEqual(multiText, perSelection[0], "A multi-cursor copy is not reduced to the primary selection.");
+    }
+    editor.selections = [new vscode.Selection(0, 0, 0, 1)];
   } finally {
     await vscode.env.clipboard.writeText(originalClipboard);
   }
