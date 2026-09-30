@@ -1,5 +1,4 @@
 import type { FieldDefinition, RegisteredCallable } from "./types.js";
-import { nodeBuiltinResultType } from "./builtinResultTypes.js";
 
 function literal(value: string): string {
   return JSON.stringify(value);
@@ -44,7 +43,6 @@ export function formatMethodParameter(field: FieldDefinition): string {
 
 /** Resolve the named result type exposed by an API. */
 export function methodResultType(method: Pick<RegisteredCallable, "id" | "output">): string {
-  if (method.output.kind === "node") return nodeBuiltinResultType(method.id);
   return method.output.resultType
     ?? `${method.output.kind.slice(0, 1).toUpperCase()}${method.output.kind.slice(1)}Result`;
 }

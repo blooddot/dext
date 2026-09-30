@@ -1,6 +1,5 @@
 import type { CallableDefinition, FieldDefinition } from "./types.js";
 import { builtinCliFields, CLI_BUILTIN_IDS } from "./builtinCli.js";
-import { NODE_BUILTIN_METHODS } from "./generated/nodeBuiltinCatalog.js";
 
 const CONTEXTS = ["selection", "activeFile", "file", "symbol"] as const;
 
@@ -61,7 +60,7 @@ const METHODS: readonly CallableDefinition[] = [
   {
     id: "template",
     title: "Render Template",
-    description: "Render text from a Dext template. The template declares the fields and the model only supplies their values, so the structure, section order and list markers always come from the template; the rendered output is validated as markdown, text, json, toml or yaml. It returns text only and writes nothing: call node.fs.writeFile to save it.",
+    description: "Render text from a Dext template. The template declares the fields and the model only supplies their values, so the structure, section order and list markers always come from the template; the rendered output is validated as markdown, text, json, toml or yaml. It returns text only and writes nothing: import Node's fs and write it yourself.",
     kind: "command",
     version: "1.0.0",
     input: [
@@ -74,7 +73,7 @@ const METHODS: readonly CallableDefinition[] = [
     ],
     output: {
       kind: "template",
-      description: "Text rendered by Dext from the template. It is not written anywhere: decide the destination and call node.fs.writeFile yourself."
+      description: "Text rendered by Dext from the template. It is not written anywhere: decide the destination and write it with Node's fs yourself."
     },
     context: [...CONTEXTS],
     executor: { kind: "deterministic", handler: "templateRender" }
@@ -140,7 +139,7 @@ const METHODS: readonly CallableDefinition[] = [
   }
 ];
 
-export const BUILTIN_METHODS: readonly CallableDefinition[] = [...METHODS, ...NODE_BUILTIN_METHODS].map((method) =>
+export const BUILTIN_METHODS: readonly CallableDefinition[] = METHODS.map((method) =>
   CLI_BUILTIN_IDS.has(method.id) ? { ...method, input: [...method.input, ...builtinCliFields()] } : method
 );
 

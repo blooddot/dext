@@ -37,10 +37,8 @@ describe("shared turn rendering", () => {
     expect(adapter.plan).toHaveBeenCalledWith("plans/a.md");
   });
 
-  it("keeps custom and Node result payloads visible instead of dropping unknown kinds", () => {
+  it("keeps a typed MCP payload visible instead of dropping its kind", () => {
     const adapter = resultAdapter();
-    renderTurnResult(adapter, { kind: "node", value: { path: "a.ts" } });
-    expect(JSON.parse(adapter.json.mock.calls[0]![0])).toEqual({ kind: "node", value: { path: "a.ts" } });
     renderTurnResult(adapter, { kind: "mcp.custom", answer: "kept" });
     expect(adapter.json).toHaveBeenLastCalledWith(JSON.stringify({ kind: "mcp.custom", answer: "kept" }, null, 2));
   });

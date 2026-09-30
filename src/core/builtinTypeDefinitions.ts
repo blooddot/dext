@@ -36,7 +36,7 @@ const staticTypes: readonly BuiltinTypeDefinition[] = [
     { name: "kind", type: '"agent"' }, { name: "text", type: "string" }, { name: "summary", type: "string", optional: true },
     { name: "patch", type: "PatchResult", optional: true }, { name: "files", type: "CodeRef[]", optional: true }
   ] },
-  { name: "TemplateResult", description: "Text rendered by Dext from a template; the model supplied only the field values. Nothing is written, so the caller saves it with node.fs.writeFile.", fields: [
+  { name: "TemplateResult", description: "Text rendered by Dext from a template; the model supplied only the field values. Nothing is written, so the caller saves it with fs.writeFile.", fields: [
     { name: "kind", type: '"template"' }, { name: "text", type: "string" }
   ] },
   { name: "ApplyResult", description: "Outcome of applying a patch.", fields: [
@@ -106,20 +106,6 @@ const staticTypes: readonly BuiltinTypeDefinition[] = [
   ] }
 ];
 
-const nodeTypes: readonly BuiltinTypeDefinition[] = NODE_BUILTIN_CATALOG.map(({ method }) => ({
-  name: nodeBuiltinResultType(method.id),
-  description: `Result returned by ${method.id}.`,
-  fields: [
-    { name: "kind", type: '"node"' },
-    ...(method.output.fields ?? []).map((field) => ({
-      name: field.name,
-      type: formatFieldType(field),
-      ...(field.required ? {} : { optional: true }),
-      ...(field.description ? { description: field.description } : {})
-    }))
-  ]
-}));
-
 const declaredOutputTypes: readonly BuiltinTypeDefinition[] = BUILTIN_METHODS
   .filter((method) => method.output.resultType && method.output.fields)
   .map((method) => ({
@@ -136,7 +122,7 @@ const declaredOutputTypes: readonly BuiltinTypeDefinition[] = BUILTIN_METHODS
 const answerFields = BUILTIN_METHODS.find((method) => method.id === "ui.form")!
   .output.fields!.find((field) => field.name === "answers")!.properties!;
 
-const types: readonly BuiltinTypeDefinition[] = [...staticTypes, ...declaredOutputTypes, ...nodeTypes, {
+const types: readonly BuiltinTypeDefinition[] = [...staticTypes, ...declaredOutputTypes, {
   name: "UiFieldAnswer",
   description: "Answer for one form field. Selection fields expose selected; input fields expose value. Radio and checkbox fields may also expose custom.",
   fields: answerFields.map((field) => ({
