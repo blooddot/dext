@@ -2,13 +2,12 @@ import { describe, expect, it } from "vitest";
 import { webviewRequestSchema } from "../src/webviewProtocol.js";
 
 describe("Webview protocol", () => {
-  it("separates definition discovery from opening and validates source offsets", () => {
-    const query = { type: "inputDefinition", requestId: 3, source: "agent()", cursor: 2 };
-    expect(webviewRequestSchema.parse(query)).toEqual(query);
-    expect(webviewRequestSchema.safeParse({ ...query, cursor: -1 }).success).toBe(false);
-    expect(webviewRequestSchema.safeParse({ ...query, requestId: "3" }).success).toBe(false);
-    expect(webviewRequestSchema.safeParse({ type: "openInputDefinition", source: "agent()", cursor: 2 }).success).toBe(true);
-    expect(webviewRequestSchema.safeParse({ type: "openInputDefinition", uri: "file:/arbitrary" }).success).toBe(false);
+  it("refuses the definition requests the removed language service answered", () => {
+    // F12 and completion come from Monaco's TypeScript worker now, so these
+    // requests no longer exist on the wire.
+    expect(webviewRequestSchema.safeParse({ type: "inputDefinition", requestId: 3, source: "agent()", cursor: 2 }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({ type: "openInputDefinition", source: "agent()", cursor: 2 }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({ type: "language", requestId: 1, source: "ask(", cursor: 4 }).success).toBe(false);
   });
   it("scopes resource controls and saves to their conversation", () => {
     const options = { type: "resourceOptions", sessionId: "session", resourceType: "skill", scope: "global" };
