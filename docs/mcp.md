@@ -4,19 +4,37 @@ English | [简体中文](mcp.zh-CN.md)
 
 [Back to README](../README.md)
 
-Register MCP tools as APIs with parameter hints and result-field completion. This guide covers manifests, transports, and credentials.
+Register MCP tools as APIs named `mcp.<server>.<tool>`, typed from the manifest and validated when the call runs. This guide covers manifests, transports, and credentials.
 
 ## MCP APIs
 
 MCP manifests live in `<workspace>/.dext/mcp/*.jsonc` or Dext global storage:
 one file declares one server and its explicit tool allowlist. Each enabled tool
-becomes a typed API named `mcp.<server>.<tool>`, with completion, signature help,
-required-argument validation, and structured result-field completion. Project
-manifests take precedence when a server name collides. The `inputSchema` is
-required; `outputSchema` is optional, but enables typed fields from MCP
-`structuredContent`.
+becomes an API named `mcp.<server>.<tool>`: its arguments are checked against the
+manifest's `inputSchema` when the call runs, so a missing required argument or an
+unknown one is refused by name, and a tool that declares an `outputSchema`
+returns the declared result — `{ kind: "mcp.<server>.<tool>", … }` carrying the
+schema's fields, with a JSON `content` body parsed and a body that is not an
+object refused. A tool without an `outputSchema` returns the raw
+`{ kind: "mcpRaw", server, tool, content?, structured? }` envelope instead.
+Project manifests take precedence when a server name collides, and the
+`inputSchema` is required.
 
-Hover over MCP methods, parameters, or structured result fields to see signatures, types, and descriptions, including names with hyphens such as `teambition-user`. In the `.dx` editor, Ctrl+click (Cmd+click on macOS) or F12 opens a read-only virtual definition generated from the loaded manifests, with parameters and return fields. Navigating again after a manifest reload opens the latest definition.
+A project's own manifests also shape the committed `dext` declaration, so those
+tools are named with the result their manifest declares, whether or not Dext is
+installed. The declaration nests by the id's own segments, which is exactly how the
+runtime resolves a call — it joins the property names it was reached through — so a
+tool the manifest named `b.c` is called as `mcp.docs.b.c`, and a node can be both a
+tool and a step (`mcp.docs.b` next to `mcp.docs.b.c`). A name that cannot be written
+with dots (`teambition-user`, `list-tasks`) is reached with brackets:
+`mcp["teambition-user"]["list-tasks"]({ … })`. Their argument object is a plain
+`Record<string, unknown>` — TypeScript cannot narrow one parameter while the same
+declaration keeps a globally configured server callable (TS2411) — so each tool's
+argument contract rides its hover text (`Arguments: uri: string, limit?: number`)
+and the runtime stays the authority that names a missing or unknown argument. A
+server only a *global* manifest declares is walked the same way and is typed as the
+union of every Dext result, so an unknown tool compiles and fails at runtime, where
+the method is named.
 
 ```jsonc
 // .dext/mcp/docs.jsonc
@@ -42,9 +60,12 @@ Hover over MCP methods, parameters, or structured result fields to see signature
 }
 ```
 
-```python
-document = mcp.docs.read(uri="README.md")
-print(text=document.content)
+```ts
+import { mcp } from "dext";
+
+// `docs.read` is declared by this project's manifest, so its result is typed.
+const document = await mcp.docs.read({ uri: "README.md" });
+console.log(document.content);
 ```
 
 For a stdio MCP that reads its credential from an environment variable, declare

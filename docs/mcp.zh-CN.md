@@ -4,15 +4,15 @@
 
 [返回 README](../README.zh-CN.md)
 
-将 MCP 工具注册为带参数提示和结果字段补全的 API。本文说明清单格式、传输方式和凭据配置。
+将 MCP 工具注册为名为 `mcp.<server>.<tool>` 的 API：类型来自清单，调用时按清单校验。本文说明清单格式、传输方式和凭据配置。
 
 ## MCP API
 
-MCP 清单位于 `<workspace>/.dext/mcp/*.jsonc` 或 Dext 全局存储中。每个文件声明一个服务器和显式工具白名单。启用的工具会成为 `mcp.<server>.<tool>(...)` API，支持补全、参数提示、必填参数校验和结构化结果字段补全。
+MCP 清单位于 `<workspace>/.dext/mcp/*.jsonc` 或 Dext 全局存储中。每个文件声明一个服务器和显式工具白名单。启用的工具会成为 `mcp.<server>.<tool>` API：调用时会按清单的 `inputSchema` 校验参数，缺少必填参数或传入未知参数都会被拒绝并指出具体名称；声明了 `outputSchema` 的工具返回声明的结果——`{ kind: "mcp.<server>.<tool>", … }` 携带 schema 中的字段，文本 `content` 若是 JSON 会被解析，若不是对象则报错。未声明 `outputSchema` 的工具改为返回原始的 `{ kind: "mcpRaw", server, tool, content?, structured? }` 信封。
 
-悬浮在 MCP 方法、参数或结构化结果字段上可查看签名、类型和说明，支持 `teambition-user` 等带连字符的名称。在 `.dx` 编辑器中按住 Ctrl 点击方法（macOS 使用 Cmd），或按 F12，可打开由已加载清单生成的只读虚拟定义，查看参数和返回字段；清单重载后再次跳转会打开最新定义。
+项目自己的清单还会参与那份被提交的 `dext` 声明，因此这些工具会带着清单声明的结果类型被具名声明——装不装 Dext 都一样。声明按 id 自身的片段逐层嵌套，这正是运行时解析调用的方式（把经过的属性名用点号拼起来），所以清单里名为 `b.c` 的工具就写成 `mcp.docs.b.c`，而一个节点可以既是工具又是路径（`mcp.docs.b` 与 `mcp.docs.b.c` 并存）。无法用点号书写的名字（`teambition-user`、`list-tasks`）用方括号访问：`mcp["teambition-user"]["list-tasks"]({ … })`。它们的参数对象是普通的 `Record<string, unknown>`：同一份声明还要让全局配置的服务器保持可调用，因此无法收窄某个参数（TS2411）；每个工具的参数契约写在悬浮说明里（`Arguments: uri: string, limit?: number`），而"指出缺失或未知参数"仍是运行时的职责。只有全局清单声明的服务器按同样方式逐层解析，返回类型是全部 Dext 结果的联合，所以写错工具名会在运行时被点名报错。
 
-同名时项目清单优先。`inputSchema` 必填；`outputSchema` 可选，用于为 MCP 的 `structuredContent` 提供类型信息。下面的命令名是示例，需要替换为实际安装的 MCP 服务器命令：
+同名时项目清单优先，`inputSchema` 必填。下面的命令名是示例，需要替换为实际安装的 MCP 服务器命令：
 
 ```jsonc
 // .dext/mcp/docs.jsonc
@@ -38,9 +38,12 @@ MCP 清单位于 `<workspace>/.dext/mcp/*.jsonc` 或 Dext 全局存储中。每�
 }
 ```
 
-```python
-document = mcp.docs.read(uri="README.md")
-print(text=document.content)
+```ts
+import { mcp } from "dext";
+
+// `docs.read` 由本项目清单声明，因此它的结果有类型。
+const document = await mcp.docs.read({ uri: "README.md" });
+console.log(document.content);
 ```
 
 如果 stdio MCP 从环境变量读取凭据，只需在清单中声明变量名，不要写入密钥：
