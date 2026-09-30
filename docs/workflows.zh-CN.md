@@ -46,7 +46,7 @@ Dext 把文件放在每个工作区一个长期存活的 Node 子进程中运行
 
 不再有独立的工作流语言，也没有需要学习的解释器。旧 Python 风格 `.dx` 语言的文件不会被读取：可用 `node scripts/migrateDxToTs.mjs <file.dx>` 迁移，它会改写能确定的部分，并报告需要人工完成的部分。
 
-一次运行只要还在等待 Dext API 就不算结束。没有写 `await` 的调用（`commit()` 而不是 `await commit()`）同样会让轮次保持开启，直到它返回；它失败则整次运行失败——这样调用启动的 agent 不会在面板已经停止更新之后还在后台继续跑。由于这类返回值不会进入你自己的代码，Output 随后会给出一条 warning，点名是哪些调用没有 await（`ask() was not awaited…`）；它是 Output 对这次运行本身的提示，而不是程序自己的 `stderr`，运行本身仍然算成功。需要读取结果就写 `await`。
+一次运行只要还在等待 Dext API 就不算结束。没有写 `await` 的调用（`commit()` 而不是 `await commit()`）同样会让轮次保持开启，直到它返回；它失败则整次运行失败——这样调用启动的 agent 不会在面板已经停止更新之后还在后台继续跑。运行不会为此报告任何东西：没有 await 的调用就是普通 TypeScript，类型上本来就写着它返回的是 promise。需要读取结果就写 `await`。
 
 ### 文本与取值表达式
 
