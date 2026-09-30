@@ -1188,7 +1188,7 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "check:ui": "node scripts/checkComposerLayoutUi.mjs && node scripts/checkStreamJumpUi.mjs && node scripts/checkConversationScrollUi.mjs && node scripts/checkQuestionVisibilityUi.mjs && node scripts/checkEditorTabsUi.mjs && node scripts/checkProjectDiagramsUi.mjs",
-    "check": "npm run lint && npm run typecheck && npm run test && npm run build && npm run generate:dext-types --check && node scripts/generateApiReference.mjs --check && node scripts/generateDextTypes.mjs --workspace . --check && npm run test:build-assets",
+    "check": "npm run lint && npm run typecheck && npm run test && npm run build && npm run generate:dext-types -- --check && node scripts/generateApiReference.mjs --check && node scripts/generateDextTypes.mjs --workspace . --check && npm run test:build-assets",
     "package": "node -e \"require('node:fs').mkdirSync('release', { recursive: true })\" && vsce package --out release/",
     "vscode:prepublish": "npm run check"
   },
