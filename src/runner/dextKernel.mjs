@@ -46,14 +46,6 @@ function streamStep(state, text) {
   send({ type: "step", step: { method: state.channel, state: "success", stream: { channel: state.channel, text } } });
 }
 
-/** A diagnostic the kernel has about the run itself. It is not user output: the
- * `stderr` stream block is where a program's own error output goes and is colored as
- * a failure, while the run this describes has succeeded. It carries its own level and
- * names what it is about instead. */
-function noticeStep(text, level = "warning") {
-  send({ type: "step", step: { method: "notice", state: "success", notice: { level, text } } });
-}
-
 function flush(state) {
   if (!state.text) return;
   const text = state.text;
@@ -203,34 +195,17 @@ async function run(id, file, replay, apiRoots) {
   }
 }
 
-/** `commit()`, or `ask() and commit()`, or `ask(), commit() and plan()`. */
-function callList(methods) {
-  const names = methods.map((method) => `${method}()`);
-  if (names.length < 2) return names[0] ?? "";
-  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
-}
-
-/** What the run says about the calls it had to wait for. Each one is named: a result
- * the caller's own code never sees is only actionable if the report says which call
- * dropped it. */
-function notAwaitedNotice(methods) {
-  const one = methods.length === 1;
-  return `${callList(methods)} ${one ? "was" : "were"} not awaited, so the run waited for ${one ? "it" : "them"}`
-    + ` and ${one ? "its result is" : "their results are"} not available to your code. Use await to read a result.`;
-}
-
-/** Waits for the calls this run left in flight, and says so when it had to: a call
- * without `await` is a result the caller's own code never sees, which is worth naming
- * rather than silently waiting for. */
+/**
+ * Waits for the calls this run left in flight before the run is reported.
+ *
+ * A call written without `await` is ordinary TypeScript — the editor's types already say
+ * it returns a promise — so the run waits for it silently rather than reporting it. What
+ * the wait is for is that the work cannot outlive the turn: a floating call that failed
+ * still fails the run, instead of landing where nothing is listening.
+ */
 async function settle() {
   const runtime = await runtimeModule();
-  const outcome = await runtime?.settleCalls() ?? { floating: 0, methods: [] };
-  if (outcome.floating > 0 && outcome.failure === undefined) {
-    // Sent after the run's own output, so the report reads in the order it happened.
-    flushAll();
-    noticeStep(notAwaitedNotice(outcome.methods ?? []));
-  }
-  return outcome;
+  return await runtime?.settleCalls() ?? {};
 }
 
 process.on("message", (message) => {

@@ -13,9 +13,9 @@
 import { toDextJson } from "./dextSerialization.mjs";
 
 const pending = new Map();
-/** Request promise -> the method it called, so `settleCalls` can name the calls a
- * run let run on its own instead of only counting them. */
-const inFlight = new Map();
+/** The calls this run has issued and not yet answered, so `settleCalls` can wait for
+ * them: the work a run started must not outlive the turn that started it. */
+const inFlight = new Set();
 const failures = [];
 let sequence = 0;
 
@@ -33,31 +33,23 @@ export function beginRun() {
 }
 
 /**
- * Waits for every call that is still in flight, and reports the calls the run let run
- * on its own.
+ * Waits for every call the run still has in flight.
  *
  * User code that calls a Dext API without `await` leaves the work behind the run: the
- * module body ends while the extension is still executing the agent the call started,
- * so the run would report success and the turn would close while the model was still
- * working — the answer, and the failure, arriving after the UI stopped listening. The
- * run waits here instead, and a floating call that failed fails the run.
- *
- * The calls are named, once each and in the order they were issued, because a result
- * the caller's own code never sees is only actionable if the report says which call
- * dropped it. The snapshot is taken before waiting: a call the waiting itself resumes
- * was awaited by user code, so it is not one the run left behind.
+ * module body ends while the extension is still executing the agent the call started, so
+ * the run would report success and the turn would close while the model was still
+ * working — the answer, and the failure, arriving after the UI stopped listening. The run
+ * waits here instead, and a floating call that failed fails the run.
  */
 export async function settleCalls() {
-  const floating = inFlight.size;
-  const methods = [...new Set(inFlight.values())];
   while (inFlight.size) {
-    await Promise.allSettled([...inFlight.keys()]);
+    await Promise.allSettled([...inFlight]);
     // A finished call resumes user code, which may issue the next one.
     await new Promise((resolve) => setImmediate(resolve));
   }
   const failure = failures.shift();
   failures.length = 0;
-  return { floating, methods, ...(failure === undefined ? {} : { failure }) };
+  return failure === undefined ? {} : { failure };
 }
 
 function flushStreams() {
@@ -131,7 +123,7 @@ async function invoke(method, options) {
       reject(error);
     }
   });
-  inFlight.set(completion, method);
+  inFlight.add(completion);
   let reply;
   try {
     reply = await completion;
