@@ -6,7 +6,7 @@ English | [简体中文](agents.zh-CN.md)
 
 Dext supports Codex CLI, Claude CLI, and DeepSeek Harness. Install and authenticate your chosen CLI, then select the Agent and model in Dext. Run **Dext: Configure Agent** to change executable paths.
 
-Codex conversations use the CLI's App Server to show native questions as cards above Process. Select an option or type an answer, then submit; asynchronous questions let the agent continue working while you answer. Completed or interrupted turns close unanswered cards, and history shows read-only answers. Existing text-only questions cannot be answered retroactively. This uses your normal Codex login and configuration, independently of Dext's completion account. Interactive conversations accept `--config`, `--enable`, and `--disable` overrides in `dext.agentCliArgs`; other CLI flags produce an explicit configuration error. Typed `.dx` APIs continue using `codex exec`.
+Codex conversations use the CLI's App Server to show native questions as cards above Process. Select an option or type an answer, then submit; asynchronous questions let the agent continue working while you answer. Completed or interrupted turns close unanswered cards, and history shows read-only answers. Existing text-only questions cannot be answered retroactively. This uses your normal Codex login and configuration, independently of Dext's completion account. Interactive conversations accept `--config`, `--enable`, and `--disable` overrides in `dext.agentCliArgs`; other CLI flags produce an explicit configuration error. Typed API calls continue using `codex exec`.
 
 Claude conversations run the CLI's bidirectional control protocol, so the questions and permission prompts it would have asked its own terminal arrive as Dext cards instead. See [Claude Code](#claude-code).
 
@@ -14,20 +14,20 @@ Claude conversations run the CLI's bidirectional control protocol, so the questi
 
 ## General configuration
 
-Agent profiles are stored in VS Code extension global storage. The input area exposes Agent, Model, Reasoning, and Speed selectors where supported by the provider. Codex profiles read the local Codex model cache when available, including supported reasoning levels and speed tiers. Claude Code profiles use its native `opus`/`sonnet` aliases and configured effort levels. A `.dx` file may override the Agent and Model with `@api(agent="codex", model="...")`; otherwise the input selection is used. `Dext: Configure Agent` edits executable commands and custom model labels without handling credentials.
+Agent profiles are stored in VS Code extension global storage. The input area exposes Agent, Model, Reasoning, and Speed selectors where supported by the provider. Codex profiles read the local Codex model cache when available, including supported reasoning levels and speed tiers. Claude Code profiles use its native `opus`/`sonnet` aliases and configured effort levels. An API call may override the Agent and Model for that call with its own `cli` and `model` arguments; otherwise the input selection is used. `Dext: Configure Agent` edits executable commands and custom model labels without handling credentials.
 
 The built-in `agent`, `ask`, `plan`, `template`, `skill`, and `create` APIs also accept optional per-call `cli` and `model` arguments. `cli` is `"codex"`, `"claude"`, or `"deepseek-harness"`; see below for the Harness model object. For Claude, `model` is `"sonnet"` or `"opus"`; for Codex it is a dictionary with a required `model` ID from the configured Codex model list, optional `reasoning` (`"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`, `"ultra"`), and optional `speed` (`"standard"`, `"fast"`). The selected model must support the requested reasoning level and Fast mode. If no local model list is available, Codex IDs are accepted as strings until the catalog is available.
 
-```python
-ask(input="Explain this code", cli="claude", model="sonnet")
-agent(input="Implement the change", cli="codex")
+```ts
+await ask({ input: "Explain this code", cli: "claude", model: "sonnet" });
+await agent({ input: "Implement the change", cli: "codex" });
 ```
 
-Omit both `cli` and `model` to use the current Input selection (existing `.dx` decorator overrides still apply). Providing only `cli` uses that CLI's own default configuration, without inheriting Input or decorator model, reasoning, or speed settings—even when the CLI matches Input. Providing both uses the explicit model options and leaves omitted reasoning/speed options to the CLI defaults. Providing only `model` uses Input's selected CLI; unspecified options retain Input settings when the model is unchanged, otherwise they use CLI defaults. These overrides apply only to the current call. Codex Speed controls Standard/Fast processing directly.
+Omit both `cli` and `model` to use the current Input selection. Providing only `cli` uses that CLI's own default configuration, without inheriting the Input model, reasoning, or speed settings—even when the CLI matches Input. Providing both uses the explicit model options and leaves omitted reasoning/speed options to the CLI defaults. Providing only `model` uses Input's selected CLI; unspecified options retain Input settings when the model is unchanged, otherwise they use CLI defaults. These overrides apply only to the current call. Codex Speed controls Standard/Fast processing directly.
 
 The `dext.agentCli` setting controls which built-in Agent profiles are shown in the composer. It defaults to `codex`, `claude`, and `deepseek-harness`; edit the list to choose which of these profiles to display.
 
-Built-in APIs are always available. Code input accepts qualified custom API calls and explicit imports. In `.dx` files, custom APIs are scoped by `import` or `from ... import ...` statements. Completion, hover, signatures, and compilation support imported names.
+Built-in APIs are always available. Code input is plain TypeScript: a `.dext/api` module is an ordinary ES module, so a custom API is scoped with an `import` statement, and completion, hover and F12 come from the editor's TypeScript service against the generated declaration.
 
 ### Turn timeouts
 
@@ -39,7 +39,7 @@ Set either value to `0` to disable that limit. An explicitly configured positive
 
 ## Claude Code
 
-Claude conversations run the CLI's bidirectional control protocol: `--input-format stream-json` opens the reverse channel and `--permission-prompt-tool stdio` routes every decision the CLI would have asked its own terminal for to Dext. Typed `.dx` calls are unchanged and keep using the CLI's one-shot print mode with `--json-schema`, because a typed call has no human in the loop.
+Claude conversations run the CLI's bidirectional control protocol: `--input-format stream-json` opens the reverse channel and `--permission-prompt-tool stdio` routes every decision the CLI would have asked its own terminal for to Dext. Typed API calls keep using the CLI's one-shot print mode with `--json-schema`, because a typed call has no human in the loop.
 
 ### Questions and permissions
 
@@ -63,7 +63,7 @@ For customization, use **Let Agent create a preset** to open a Create conversati
 
 ### Code calls
 
-Code workflows can use `ask(input="Explain this repository", cli="deepseek-harness")`. An optional model object takes `model` (the opaque ACP option value) and `reasoning`; use the composer for human-readable model names. Speed and service-tier controls are unavailable. Invalid output reports failure without automatically repeating work that may already have changed files.
+A typed API or Code run can use `await ask({ input: "Explain this repository", cli: "deepseek-harness" })`. An optional model object takes `model` (the opaque ACP option value) and `reasoning`; use the composer for human-readable model names. Speed and service-tier controls are unavailable. Invalid output reports failure without automatically repeating work that may already have changed files.
 
 ACP's `PromptRequest` has no output-schema field, so a typed Harness call cannot use a native schema the way Codex (`--output-schema`) and Claude (`--json-schema`) do. Dext fills that gap through its own preset overlay: before the prompt it registers one first-class tool, `dext_submit_result`, whose argument schema is the call's own output contract, and the model submits the result by calling it. Arguments arrive as losslessly materialized JSON — no fence, no envelope, no escaped string — and Dext validates every submission against the contract, returning the exact errors as the tool's result so the model fixes its answer inside the same turn instead of the turn failing. The prompt still carries the schema and the final-message form as the fallback, so a preset that restricts the tool away, or a model that never calls it, behaves exactly as before. The tool is registered per typed call and withdrawn with it.
 

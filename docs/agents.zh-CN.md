@@ -6,7 +6,7 @@
 
 支持 Codex CLI、Claude CLI 和 DeepSeek Harness。先安装并登录所选 CLI，再通过 Dext 输入区域选择 Agent 和模型；需要修改命令路径时运行 **Dext: Configure Agent**。
 
-Codex 对话通过 CLI 的 App Server 将原生提问显示为 Process 上方的卡片。选择选项或输入自己的答案后点击提交；异步提问允许 Agent 在等待回答时继续工作。任务完成或中断会关闭未回答的卡片，历史记录保留只读问答。已有的纯文本问题不能补接成交互。对话沿用普通 Codex 登录与配置，独立于 Dext 的补全账号。交互对话支持 `dext.agentCliArgs` 中的 `--config`、`--enable` 和 `--disable` 参数，其他 CLI 参数会给出明确的配置错误；类型化 `.dx` API 仍使用 `codex exec`。
+Codex 对话通过 CLI 的 App Server 将原生提问显示为 Process 上方的卡片。选择选项或输入自己的答案后点击提交；异步提问允许 Agent 在等待回答时继续工作。任务完成或中断会关闭未回答的卡片，历史记录保留只读问答。已有的纯文本问题不能补接成交互。对话沿用普通 Codex 登录与配置，独立于 Dext 的补全账号。交互对话支持 `dext.agentCliArgs` 中的 `--config`、`--enable` 和 `--disable` 参数，其他 CLI 参数会给出明确的配置错误；类型化 API 调用仍使用 `codex exec`。
 
 Claude 对话改用 CLI 的双向控制协议，它原本要问自己终端的问题与权限提示都会转成 Dext 卡片。详见 [Claude Code](#claude-code)。
 
@@ -16,7 +16,7 @@ Claude 对话改用 CLI 的双向控制协议，它原本要问自己终端的�
 
 Agent 配置保存在 VS Code 扩展全局存储中。输入区域根据后端能力提供 Agent、Model、Reasoning 和 Speed 选项。Codex 配置优先读取本地模型缓存中的模型、推理级别和速度选项；Claude Code 使用 `opus` / `sonnet` 别名及已配置的推理级别。
 
-`.dx` 文件可以通过 `@api(agent="codex", model="...")` 覆盖 Agent 和模型，否则使用输入区域的选择。**Dext: Configure Agent** 用于编辑可执行命令和自定义模型名称，不处理登录凭据。
+API 调用可以用自身的 `cli` 和 `model` 参数覆盖这次调用的 Agent 和模型，否则使用输入区域的选择。**Dext: Configure Agent** 用于编辑可执行命令和自定义模型名称，不处理登录凭据。
 
 内置的 `agent`、`ask`、`plan`、`template`、`skill`、`create` 还支持单次调用的 `cli` 和 `model` 参数：
 
@@ -24,23 +24,23 @@ Agent 配置保存在 VS Code 扩展全局存储中。输入区域根据后端�
 - Claude 的 `model` 为 `"sonnet"` 或 `"opus"`。
 - Codex 的 `model` 为字典，必填字段 `model` 使用已配置列表中的模型 ID；可选字段 `reasoning` 支持 `"low"`、`"medium"`、`"high"`、`"xhigh"`、`"max"`、`"ultra"`，`speed` 支持 `"standard"`、`"fast"`。实际选择必须受该模型支持。本地模型列表不可用时，模型 ID 按字符串接收，待列表可用后再进行目录校验。
 
-```python
-ask(input="解释这段代码", cli="claude", model="sonnet")
-agent(input="实现这次修改", cli="codex")
+```ts
+await ask({ input: "解释这段代码", cli: "claude", model: "sonnet" });
+await agent({ input: "实现这次修改", cli: "codex" });
 ```
 
 参数继承规则如下，覆盖仅对当前调用生效：
 
 | 参数 | 行为 |
 | --- | --- |
-| 都不提供 | 使用当前输入选择，已有 `.dx` 装饰器覆盖仍然生效。 |
-| 只提供 `cli` | 使用该 CLI 的默认配置，不继承输入区域或装饰器的模型、推理和速度设置。 |
+| 都不提供 | 使用当前输入选择。 |
+| 只提供 `cli` | 使用该 CLI 的默认配置，不继承输入区域的模型、推理和速度设置。 |
 | 同时提供 `cli` 和 `model` | 使用显式模型选项，未填写的推理或速度选项由 CLI 默认值决定。 |
 | 只提供 `model` | 使用输入区域选择的 CLI；模型未变时继承未指定选项，模型改变时使用 CLI 默认值。 |
 
 `dext.agentCli` 控制输入区域显示哪些内置 Agent，默认是 `codex`、`claude` 和 `deepseek-harness`。可以编辑列表，选择显示其中哪些配置。
 
-内置 API 始终可用。Code 输入区支持直接使用自定义 API 的完整名称，也支持显式导入；`.dx` 文件中的自定义 API 通过 `import` 或 `from ... import ...` 进入作用域。补全、悬停、参数提示和编译都支持导入后的名称。
+内置 API 始终可用。Code 输入区就是普通 TypeScript：`.dext/api` 模块就是普通的 ES 模块，自定义 API 通过 `import` 语句进入作用域，补全、悬停和 F12 由编辑器的 TypeScript 服务依据生成的声明提供。
 
 ### 单轮超时
 
@@ -52,7 +52,7 @@ Dext 默认使用 `dext.agent.timeoutMs: 0`（不限制总时长）和 `dext.age
 
 ## Claude Code
 
-Claude 对话使用 CLI 的双向控制协议：`--input-format stream-json` 打开反向通道，`--permission-prompt-tool stdio` 把 CLI 原本要问自己终端的每个决定转交给 Dext。类型化 `.dx` 调用不变，仍使用 CLI 的一次性 print 模式加 `--json-schema`，因为类型化调用没有人在回路中。
+Claude 对话使用 CLI 的双向控制协议：`--input-format stream-json` 打开反向通道，`--permission-prompt-tool stdio` 把 CLI 原本要问自己终端的每个决定转交给 Dext。类型化 API 调用仍使用 CLI 的一次性 print 模式加 `--json-schema`，因为类型化调用没有人在回路中。
 
 ### 提问与权限
 
@@ -76,7 +76,7 @@ Claude 对话使用 CLI 的双向控制协议：`--input-format stream-json` 打
 
 ### Code 调用
 
-Code 模式支持 `ask(input="解释项目", cli="deepseek-harness")`；可选模型对象包含 `model`（ACP 返回的不透明选项值）和 `reasoning`。界面展示可读模型名称，不展示速度或服务等级。格式错误会报告失败，不自动重跑可能已经修改文件的任务。
+类型化 API 或 Code 运行可以使用 `await ask({ input: "解释项目", cli: "deepseek-harness" })`；可选模型对象包含 `model`（ACP 返回的不透明选项值）和 `reasoning`。界面展示可读模型名称，不展示速度或服务等级。格式错误会报告失败，不自动重跑可能已经修改文件的任务。
 
 ACP 的 `PromptRequest` 没有输出 schema 字段，因此 Harness 的类型化调用无法像 Codex（`--output-schema`）和 Claude（`--json-schema`）那样使用原生 schema。Dext 通过自己的 preset 覆盖插件补上这一环：在提示词之前注册一个一等工具 `dext_submit_result`，其参数 schema 就是本次调用自己的输出契约，模型通过调用它提交结果。参数以无损 JSON 到达——没有围栏、没有信封、没有转义字符串——Dext 按契约校验每次提交，并把确切的错误作为工具结果返回，模型因此在同一轮内修正答案，而不是让整轮失败。提示词中仍保留 schema 和"最终消息即 JSON 对象"的形式作为回退，因此被 preset 限制掉的工具、或压根不调用工具的模型，行为与之前完全一致。该工具按类型化调用注册，并随调用结束一并撤销。
 
