@@ -2484,13 +2484,6 @@ function renderResult(response: InputExecutionResponse, reviewTurnId?: string): 
       output.dataset.channel = step.stream.channel;
       output.textContent = step.stream.text;
       item.append(output);
-    } else if (step.notice) {
-      // Output's own message about the run, not a program's stderr: it gets its level
-      // instead of the block that colors anything written to that channel as a failure.
-      const notice = document.createElement("div");
-      notice.className = `process-notice process-notice-${step.notice.level}`;
-      notice.textContent = step.notice.text;
-      item.append(notice);
     } else {
       const disclosure = document.createElement("details");
       disclosure.className = "execution-disclosure step-disclosure";

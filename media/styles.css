@@ -1542,26 +1542,6 @@ body.vscode-high-contrast-light .monaco-editor .view-line .dext-ref-chip {
   color: var(--vscode-errorForeground);
 }
 
-/* Output's own message about the run — a call the run left in flight, say — as opposed
- * to a program's stderr. The run has not failed, so it is shown at its own level
- * instead of in the error-colored stream block. */
-.process-notice {
-  margin: 0 0 8px;
-  padding: 6px 8px;
-  border-left: 2px solid var(--vscode-editorWarning-foreground, #cca700);
-  color: var(--vscode-editorWarning-foreground, #cca700);
-  background: var(--vscode-textCodeBlock-background, transparent);
-  font-size: var(--vscode-editor-font-size, 12px);
-  line-height: 1.4;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.process-notice-info {
-  border-left-color: var(--vscode-editorInfo-foreground, #3794ff);
-  color: var(--vscode-editorInfo-foreground, #3794ff);
-}
-
 .action-row {
   min-height: 34px;
   flex: 0 0 auto;

@@ -328,9 +328,6 @@ function output(response: InputExecutionResponse): string {
     if (step.stream) {
       return `<pre class="history-process-output process-output-${step.stream.channel}">${escapeHtml(step.stream.text)}</pre>`;
     }
-    if (step.notice) {
-      return `<div class="history-process-notice process-notice process-notice-${step.notice.level}">${escapeHtml(step.notice.text)}</div>`;
-    }
     return step.response
       ? execution(step.response)
       : `<details class="history-disclosure step-result"><summary>${chevron()}<span>${escapeHtml(step.method)}</span><span class="history-meta">${escapeHtml(step.state)}</span></summary>${step.error ? `<pre class="error">${escapeHtml(step.error)}</pre>` : ""}</details>`;
