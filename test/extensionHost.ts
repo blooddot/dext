@@ -249,7 +249,8 @@ async function verifyGeneratedDextProject(folder: vscode.WorkspaceFolder): Promi
   // Node: `dext/api/team/analyze` has to name `api/team/analyze.ts`.
   assert.equal(config.compilerOptions.paths?.["dext/api/*"]?.[0], "./api/*.ts", "Workspace APIs stay addressable.");
   assert.equal((await read(tsconfig)).includes(storage.fsPath.replaceAll("\\", "/")), false, "The committed project carries no machine path.");
-  assert.deepEqual(JSON.parse(await read(marker)), { type: "module" }, "The directory is ESM, so top-level await is not a diagnostic.");
+  assert.deepEqual(JSON.parse(await read(marker)), { type: "module", devDependencies: { "@types/node": "^22" } },
+    "The directory is ESM, so top-level await is not a diagnostic, and it declares the Node types its API files compile against.");
 
   // A generated file that drifted is rewritten on the next reload. The editor project
   // used to map `dext` at a machine path in Dext's storage and `dext/api/*` at a

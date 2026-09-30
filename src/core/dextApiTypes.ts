@@ -37,7 +37,8 @@ export const DEXT_TYPES_PATH = "api/dext.d.ts";
 export const DEXT_API_DIRECTORY = ".dext/api";
 /** Workspace-relative (inside `.dext`) path of the generated project file. */
 export const DEXT_TSCONFIG_PATH = "tsconfig.json";
-/** Marks the generated project as ESM, matching how the kernel loads it. */
+/** The generated project's manifest: it marks the project as ESM, matching how the
+ * kernel loads it, and declares the type definitions its API files compile against. */
 export const DEXT_PACKAGE_PATH = "package.json";
 
 const BOUNDARY_NOTE =
@@ -693,13 +694,38 @@ export function dextSharedDeclaration(): string {
 }
 
 /**
+ * The `@types/node` range the generated project declares, pinned to the Node major the
+ * kernel runs — Electron's bundled Node for the oldest VS Code this extension supports —
+ * so the declarations cannot describe an API that runtime does not have.
+ */
+const DEXT_NODE_TYPES = "^22";
+
+/**
+ * The generated `.dext/package.json`.
+ *
+ * The ESM marker is what lets tsserver accept the top-level `await` the kernel supports.
+ * The dependency is here because this file is Dext's: a workspace's API files import
+ * `node:` built-ins with ordinary `import`s, and the type definitions they need cannot
+ * live in a project-authored manifest that every reload would overwrite.
+ */
+const DEXT_PACKAGE_MANIFEST = {
+  type: "module",
+  devDependencies: { "@types/node": DEXT_NODE_TYPES }
+};
+
+/**
  * The generated project a workspace commits: the declaration beside its APIs, the
- * `paths` project that maps `dext` at it, and the ESM marker.
+ * `paths` project that maps `dext` at it, and the manifest.
  *
  * A relative mapping is what makes the files portable. `.dext/package.json` marks
  * the directory as ESM; without it tsserver treats `.dext/api/*.ts` as CommonJS and
  * rejects the top-level `await` the kernel supports, so the editor would disagree
- * with the runtime about the same file.
+ * with the runtime about the same file. It also declares the Node type definitions a
+ * workspace needs before an API file that imports a `node:` built-in can type-check:
+ * `types: []` in the generated project keeps `@types/node`'s ambient modules out of the
+ * program until the file references them, so such a file carries
+ * `/// <reference types="node" />` and the dependency is installed once with
+ * `npm install` in `.dext`.
  *
  * `methods` are the project's own MCP tools. They are part of the declaration
  * because the workspace has the manifests that declare them, which keeps the file a
@@ -716,6 +742,6 @@ export function dextFiles(
   return [
     { path: DEXT_TYPES_PATH, content: dextModuleDeclaration(methods) },
     { path: DEXT_TSCONFIG_PATH, content: dextTsconfig(undefined, apiDirs) },
-    { path: DEXT_PACKAGE_PATH, content: '{\n  "type": "module"\n}\n' }
+    { path: DEXT_PACKAGE_PATH, content: `${JSON.stringify(DEXT_PACKAGE_MANIFEST, null, 2)}\n` }
   ];
 }

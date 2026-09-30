@@ -110,8 +110,9 @@ describe("generated Dext TypeScript surface", () => {
     expect(files[0]!.content).toBe(dextSharedDeclaration());
     expect(files[1]!.content).toBe(dextTsconfig());
     // Without `"type": "module"` tsserver would read runs/*.ts as CommonJS and
-    // reject the top-level `await` the kernel supports.
-    expect(JSON.parse(files[2]!.content)).toEqual({ type: "module" });
+    // reject the top-level `await` the kernel supports; the dependency is what lets a
+    // workspace's own API file type-check a `node:` import after `npm install` here.
+    expect(JSON.parse(files[2]!.content)).toEqual({ type: "module", devDependencies: { "@types/node": "^22" } });
   });
 
   it("names a project's own MCP servers and their tools", () => {
@@ -298,8 +299,9 @@ describe("generated Dext TypeScript surface", () => {
     expect(files[0]!.content).toBe(dextSharedDeclaration());
     expect(files[1]!.content).toBe(dextTsconfig());
     // Without `"type": "module"` tsserver would read runs/*.ts as CommonJS and
-    // reject the top-level `await` the kernel supports.
-    expect(JSON.parse(files[2]!.content)).toEqual({ type: "module" });
+    // reject the top-level `await` the kernel supports; the dependency is what lets a
+    // workspace's own API file type-check a `node:` import after `npm install` here.
+    expect(JSON.parse(files[2]!.content)).toEqual({ type: "module", devDependencies: { "@types/node": "^22" } });
     const config = JSON.parse(files[1]!.content) as { compilerOptions: { paths: Record<string, string[]> } };
     // The mapping is relative, so the three files can be committed and shared.
     expect(config.compilerOptions.paths.dext).toEqual(["./api/dext.d.ts"]);

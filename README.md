@@ -105,7 +105,7 @@ console.log(answer.text);
 
 Project APIs require a trusted workspace. You can also right-click a History entry and choose **Record Conversation as Dext Workflow** to generate a starting point for editing. See the [workflow and API reference](docs/workflows.md) for composition, Skills, rules, and UI confirmations.
 
-Dext generates the `dext` type declaration into your project — `.dext/api/dext.d.ts`, plus a small `.dext/tsconfig.json` that maps `dext` at it and `.dext/package.json` that marks the directory as ESM — and keeps all three current on every API reload. Every path in them is relative, so commit them: `.dext/api/*.ts` and the composer report diagnostics in the **Problems** panel as you type, and a teammate or CI can type-check without Dext installed. See [Generated types](docs/workflows.md#generated-types).
+Dext generates the `dext` type declaration into your project — `.dext/api/dext.d.ts`, plus a small `.dext/tsconfig.json` that maps `dext` at it and `.dext/package.json` that marks the directory as ESM and declares the `@types/node` its API files compile against — and keeps all three current on every API reload. Every path in them is relative, so commit them: `.dext/api/*.ts` and the composer report diagnostics in the **Problems** panel as you type, and a teammate or CI can type-check without Dext installed. See [Generated types](docs/workflows.md#generated-types).
 
 <p align="center">
   <a href="docs/images/dext-workflow-completion.png"><img src="docs/images/dext-workflow-completion.png" alt="Code mode offering TerminalResult fields while typing checked. after a Playground API call" width="560"></a>

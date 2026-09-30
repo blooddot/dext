@@ -105,7 +105,7 @@ console.log(answer.text);
 
 项目 API 需要受信任的工作区。你也可以右键 History 条目，选择 **Record Conversation as Dext Workflow**，生成起始文件后继续编辑。组合调用、Skills、规则和交互确认见[工作流与 API 参考](docs/workflows.zh-CN.md)。
 
-Dext 会把 `dext` 类型声明生成到你的项目里——`.dext/api/dext.d.ts`，加上把 `dext` 映射到它的 `.dext/tsconfig.json` 和把该目录标记为 ESM 的 `.dext/package.json`——并在每次重新加载 API 时保持三者最新。这些文件里的路径全是相对路径，可以放心提交：`.dext/api/*.ts` 和输入区会在编辑时把诊断写入 **Problems** 面板，队友和 CI 在没装 Dext 的情况下也能做类型检查。详见[生成的类型](docs/workflows.zh-CN.md#生成的类型)。
+Dext 会把 `dext` 类型声明生成到你的项目里——`.dext/api/dext.d.ts`，加上把 `dext` 映射到它的 `.dext/tsconfig.json` 和把该目录标记为 ESM、并声明其 API 文件编译所需的 `@types/node` 的 `.dext/package.json`——并在每次重新加载 API 时保持三者最新。这些文件里的路径全是相对路径，可以放心提交：`.dext/api/*.ts` 和输入区会在编辑时把诊断写入 **Problems** 面板，队友和 CI 在没装 Dext 的情况下也能做类型检查。详见[生成的类型](docs/workflows.zh-CN.md#生成的类型)。
 
 ![Code 模式调用 Playground API 后，输入 checked. 时显示 TerminalResult 字段补全](docs/images/dext-workflow-completion.png)
 
