@@ -283,8 +283,23 @@ describe("Dext kernel host", () => {
     expect(response.steps?.map((step) => step.method)).toContain("ask");
     // The call was not awaited, so its result is not the run's result.
     expect(response.steps?.some((step) => step.state === "success")).toBe(true);
-    // The run says the call was not awaited, because its value never reached user code.
-    expect(response.steps?.some((step) => step.method === "stderr" && /not awaited/.test(step.stream?.text ?? ""))).toBe(true);
+    // The run names the call that was not awaited, because its value never reached user code.
+    expect(response.steps?.some((step) => step.notice?.level === "warning" && /^ask\(\) was not awaited/.test(step.notice.text))).toBe(true);
+    // A diagnostic about the run is not the program's own stderr output: it must not
+    // arrive in the stream block Output colors as a failure.
+    expect(response.steps?.some((step) => step.stream && /not awaited/.test(step.stream.text))).toBe(false);
+  });
+
+  it("names every call a run did not await", { timeout: 30000 }, async () => {
+    // A count is not actionable: the report has to say which call dropped its result,
+    // and each name once even when the same API is called twice. Every call is issued
+    // synchronously, so none of them can have answered by the time the module ends.
+    const root = await workspace();
+    const kernel = host(root, async (invocation) => askResponse(invocation));
+    const response = await kernel.runSource('import { agent, ask } from "dext";\nask({ input: "a" });\nask({ input: "b" });\nagent({ input: "c", apply: false });\n');
+    const notice = response.steps?.find((step) => step.notice)?.notice;
+    expect(notice?.level).toBe("warning");
+    expect(notice?.text).toMatch(/^ask\(\) and agent\(\) were not awaited/);
   });
 
   it("fails a run whose un-awaited call failed", { timeout: 30000 }, async () => {

@@ -137,6 +137,7 @@ function toStep(wire: DextWireStep): WorkflowStepResponse {
   const step: WorkflowStepResponse = { method: parsed.method, state: parsed.state };
   if (parsed.response !== undefined) step.response = parsed.response as RuntimeResponse;
   if (parsed.stream) step.stream = parsed.stream;
+  if (parsed.notice) step.notice = parsed.notice;
   if (parsed.error) step.error = parsed.error;
   if (parsed.assignment) step.assignment = parsed.assignment;
   return step;

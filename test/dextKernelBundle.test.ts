@@ -62,5 +62,9 @@ describe.skipIf(!existsSync(builtKernel))("the built kernel", () => {
     release();
     const response = await running;
     expect(response.steps?.map((step) => step.method)).toContain("ask");
+    // The built runtime keeps the same in-flight registry as the source: it names the
+    // call it had to wait for instead of only counting it.
+    const notice = response.steps?.find((step) => step.notice)?.notice;
+    expect(notice?.text).toMatch(/^ask\(\) was not awaited/);
   });
 });

@@ -115,14 +115,19 @@ export const dextResultSchema = z.union([builtinDextResultSchema, typedMcpResult
 export const executionStateSchema = z.enum(["success", "failed", "cancelled"]);
 
 /**
- * A step as the kernel reports it: an API response, process output, or a
- * failure. Exactly one of `response` and `stream` may be present, and a stream
- * step always belongs to `stdout` or `stderr` under the name it prints to.
+ * A step as the kernel reports it: an API response, process output, a diagnostic
+ * about the run itself, or a failure. At most one of `response`, `stream` and
+ * `notice` may be present; a stream step always belongs to `stdout` or `stderr`
+ * under the name it prints to, and a notice step is named `notice`.
  */
 export const dextWireStepSchema = z.object({
   method: z.string().min(1),
   state: executionStateSchema,
   response: z.unknown().optional(),
+  notice: z.object({
+    level: z.enum(["warning", "info"]),
+    text: z.string()
+  }).strict().optional(),
   stream: z.object({
     channel: z.enum(["stdout", "stderr"]),
     text: z.string()
@@ -130,10 +135,14 @@ export const dextWireStepSchema = z.object({
   error: z.string().optional(),
   assignment: z.string().optional()
 }).strict().superRefine((step, context) => {
-  if (step.response !== undefined && step.stream !== undefined) {
-    context.addIssue({ code: "custom", message: "A step carries either a response or a stream, never both." });
+  const carried = [step.response, step.stream, step.notice].filter((value) => value !== undefined).length;
+  if (carried > 1) {
+    context.addIssue({ code: "custom", message: "A step carries one of a response, a stream and a notice, never more." });
   }
   if (step.stream && (step.method !== step.stream.channel || step.state !== "success")) {
     context.addIssue({ code: "custom", message: "A stream step is named after its channel and always succeeds." });
+  }
+  if (step.notice && (step.method !== "notice" || step.state !== "success")) {
+    context.addIssue({ code: "custom", message: "A notice step is named 'notice' and always succeeds." });
   }
 });

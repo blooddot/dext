@@ -65,9 +65,10 @@ describe("Dext boundary values", () => {
 });
 
 describe("Dext wire steps", () => {
-  it("accepts an API step, a stream step and a failure", () => {
+  it("accepts an API step, a stream step, a notice and a failure", () => {
     expect(dextWireStepSchema.safeParse({ method: "ask", state: "success", response: { kind: "ask" } }).success).toBe(true);
     expect(dextWireStepSchema.safeParse({ method: "stdout", state: "success", stream: { channel: "stdout", text: "x\n" } }).success).toBe(true);
+    expect(dextWireStepSchema.safeParse({ method: "notice", state: "success", notice: { level: "warning", text: "ask() was not awaited." } }).success).toBe(true);
     expect(dextWireStepSchema.safeParse({ method: "ask", state: "failed", error: "nope" }).success).toBe(true);
   });
 
@@ -79,6 +80,27 @@ describe("Dext wire steps", () => {
       stream: { channel: "stdout", text: "x" }
     });
     expect(parsed.success).toBe(false);
+  });
+
+  it("refuses a step that carries a notice beside a response or a stream", () => {
+    expect(dextWireStepSchema.safeParse({
+      method: "ask",
+      state: "success",
+      response: { kind: "ask" },
+      notice: { level: "warning", text: "x" }
+    }).success).toBe(false);
+    expect(dextWireStepSchema.safeParse({
+      method: "stderr",
+      state: "success",
+      stream: { channel: "stderr", text: "x" },
+      notice: { level: "warning", text: "x" }
+    }).success).toBe(false);
+  });
+
+  it("refuses a notice step named after something else, or one that claims to fail", () => {
+    expect(dextWireStepSchema.safeParse({ method: "ask", state: "success", notice: { level: "warning", text: "x" } }).success).toBe(false);
+    expect(dextWireStepSchema.safeParse({ method: "notice", state: "failed", notice: { level: "warning", text: "x" } }).success).toBe(false);
+    expect(dextWireStepSchema.safeParse({ method: "notice", state: "success", notice: { level: "error", text: "x" } }).success).toBe(false);
   });
 
   it("refuses a stream step named after something other than its channel", () => {

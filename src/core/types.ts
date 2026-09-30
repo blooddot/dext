@@ -430,6 +430,14 @@ export interface WorkflowStepResponse {
     channel: "stdout" | "stderr";
     text: string;
   };
+  /** A diagnostic the kernel reports about the run itself, such as a call the run left
+   * in flight. Like `stream`, it is not an API result and is mutually exclusive with
+   * `response`; unlike `stream`, it is Output's own message rather than user output, so
+   * it renders at its own level instead of as the error-colored stderr block. */
+  notice?: {
+    level: "warning" | "info";
+    text: string;
+  };
   error?: string;
   /** Zero-based index of a comprehension branch, so concurrent fan-out steps can
    * be told apart and grouped in Output. Absent for ordinary sequential steps. */
