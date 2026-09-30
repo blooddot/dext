@@ -12,7 +12,7 @@
 
 Input 使用 Monaco，Code 模式入口和底部工具栏保持原位。Code 中 Enter 换行，Ctrl/Cmd+Enter 执行；聊天模式沿用发送设置，Shift+Enter 换行。补全列表打开时 Enter 接受建议。
 
-补全、悬浮说明、参数提示和诊断由 Monaco 的 TypeScript 服务提供，且**只在 Code 模式**生效:Agent、Chat、Plan 模式编辑的是纯文本,输入提示词不会出现任何 TypeScript 符号建议。在 Code 模式下,输入调用触发字符可显示参数提示,Esc 关闭提示,Ctrl/Cmd+Shift+Space 手动唤起。F12 或 Ctrl/Cmd+点击跳转到生成的 `dext` 声明。
+补全、悬浮说明、参数提示和诊断由 Monaco 的 TypeScript 服务提供，且**只在 Code 模式**生效:Agent、Chat、Plan 模式编辑的是纯文本,输入提示词不会出现任何 TypeScript 符号建议。在 Code 模式下,输入调用触发字符可显示参数提示,Esc 关闭提示,Ctrl/Cmd+Shift+Space 手动唤起。F12 或 Ctrl/Cmd+点击跳转到生成的 `dext` 声明。输入区按当前 VS Code 主题着色——颜色和斜体/粗体都照搬,标识符与括号标点同样着色;对话里 Code 轮次的源码也由同一套语法与主题着色,因此记录看起来就和当初输入的一致。Agent、Chat、Plan 的提示词在对话里同样保持纯文本。
 
 文件与图片标签可整体选择、删除及撤销，复制、保存草稿和执行时保留完整 `@path`。标签过长会缩短显示，可悬浮查看完整路径；光标在标签旁时 Alt+Enter 打开引用，Ctrl/Cmd+Shift+V 粘贴原文。引用是整体对象，修改路径时删除后重新插入；原生查找针对普通编辑文本，不搜索标签内隐藏的完整路径。
 

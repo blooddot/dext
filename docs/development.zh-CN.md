@@ -45,6 +45,8 @@ VSIX 压缩后约 **5 MB**（解压约 20 MB），几乎全部来自 Webview：
 
 这个 TypeScript worker 是**有意为之**：composer 的补全、悬停、F12 与诊断由 Monaco 自带的 TypeScript 服务提供，而 Webview 无法使用 VS Code 为工作区文件运行的 TypeScript 服务。把该入口从 `esbuild.mjs` 去掉可省约 1.5 MB（压缩后），代价是 composer 只剩语法高亮，而 `.dext/api/*.ts` 仍由 VS Code 提供完整语言支持。`dist/extensionHostTest.js`、source map、`node_modules/**` 与 devDependency `typescript` 已被 `.vscodeignore` 排除；`npm run check` 的资源检查会证明进入 VSIX 的新增运行时资源只有 kernel 的 `.mjs` 与随包发布的 `dist/dext.d.ts`。
 
+输入区的配色不来自这个 worker：Monaco 用 `src/webview/monacoTheme.ts` 里定义的 `dext` 主题着色，它**继承** Monaco 自带主题（按 Webview 的主题 class 选 `vs`/`vs-dark`/`hc-*`），再用 `src/vscodeTheme.ts` 读到的当前 VS Code 主题覆盖。这层桥接不是重复劳动：VS Code 主题是按 TextMate scope（`tokenColors`）写的，而 Monaco 的 Monarch 语法产出的是 Monaco token 类型（`identifier`、`delimiter.bracket`、`type.identifier`…），并且没有任何 VS Code API 能给出"解析后的 token 颜色"——只有主题*文件*里有，所以只能解析文件并按 TextMate 的 specificity 归纳成 14 个槽位。`src/webview/monacoThemeRules.ts` 再把这些槽位映射到 Monaco TypeScript 语法能产出的每一个 token 类型（含 `fontStyle`）；某个槽位没有规则时才会落回 Monaco 自己的颜色——这正是之前"名字和标点没跟着主题走"的原因。另一条路是打包 `vscode-textmate` 与 Oniguruma wasm，用真正的 TextMate 语法着色，代价是几 MB 体积和更慢的编辑器，而语言能力并不会变多。
+
 发布到 GitHub 的步骤：
 
 1. 更新 `package.json`、`package-lock.json` 中的版本，并在 [CHANGELOG.md](../CHANGELOG.md) 中填写版本说明。
