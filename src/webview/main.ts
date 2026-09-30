@@ -2565,7 +2565,14 @@ function renderResult(response: InputExecutionResponse, reviewTurnId?: string): 
     const item = document.createElement("section");
     item.className = "execution-result";
     if (step.response) item.append(renderExecution(step.response, reviewTurnId));
-    else {
+    else if (step.stream) {
+      // Process output is not an API call, so it gets no card of its own.
+      const output = document.createElement("pre");
+      output.className = `process-output process-output-${step.stream.channel}`;
+      output.dataset.channel = step.stream.channel;
+      output.textContent = step.stream.text;
+      item.append(output);
+    } else {
       const disclosure = document.createElement("details");
       disclosure.className = "execution-disclosure step-disclosure";
       disclosure.append(disclosureSummary(

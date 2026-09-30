@@ -11,6 +11,7 @@ import {
   renderHistorySession
 } from "../src/historyRender.js";
 import type { DextHistoryRecord } from "../src/historyStore.js";
+import type { RuntimeResponse } from "../src/core/types.js";
 import { parseUiForm, type UiFormDefinition } from "../src/core/uiForm.js";
 import { PLAN_DOCUMENT_END, PLAN_DOCUMENT_START } from "../src/core/planResponse.js";
 
@@ -173,11 +174,11 @@ describe("Dext history rendering", () => {
     expect(historyTurnMarkdown(turn)).toContain("### Output\n\nanswer");
   });
 
-  it("uses Python token classes for Dext input", () => {
+  it("renders Dext input as escaped plain text", () => {
     const html = highlightDext('result = code.edit(target=ref.selection, instruction="fix")');
-    expect(html).toContain("tok-variableName");
-    expect(html).toContain("tok-string");
-    expect(historyTokenStyles({ string: "#123456" })).toContain("#123456");
+    expect(html).toBe("result = code.edit(target=ref.selection, instruction=&quot;fix&quot;)");
+    expect(html).not.toContain("tok-");
+    expect(historyTokenStyles()).toBe("");
   });
 
   it("renders ANSI terminal colors and strips cursor control sequences", () => {
@@ -586,7 +587,7 @@ describe("Dext history rendering", () => {
     expect(html).not.toContain("tok-keyword");
   });
 
-  it("syntax-highlights code-mode Input in rendered history", () => {
+  it("renders code-mode Input as escaped plain text", () => {
     const record: DextHistoryRecord = {
       id: "highlighted-input",
       createdAt: 1,
@@ -596,31 +597,32 @@ describe("Dext history rendering", () => {
     };
 
     const html = renderHistoryRecord(record);
-    expect(html).toContain('<span class="tok-function">select</span>');
-    expect(html).toContain('class="tok-string"');
-    expect(html).toContain('class="tok-bool"');
+    expect(html).toContain("ui.select(label=&quot;Pick&quot;, options=[&quot;one&quot;, &quot;two&quot;], multiple=True)");
+    expect(html).not.toContain('class="tok-');
   });
 
-  it("highlights Dext call names and keyword arguments distinctly", () => {
+  it("keeps Dext call names and keyword arguments as escaped text", () => {
     const html = highlightDext('ask(input="https://example.test")');
-    expect(html).toContain('<span class="tok-function">ask</span>');
-    expect(html).toContain('<span class="tok-variableName">input</span>');
+    expect(html).toBe("ask(input=&quot;https://example.test&quot;)");
+    expect(html).not.toContain("tok-");
   });
 
-  it("matches input-editor token kinds for namespaced calls and result properties", () => {
-    const html = highlightDext('parsed_url = node.url.parse(url="https://example.test")\ntask_id = node.path.basename(path=parsed_url.pathname)');
-    for (const name of ["parse", "basename"]) expect(html).toContain(`<span class="tok-function">${name}</span>`);
-    for (const name of ["url", "path", "pathname"]) expect(html).toContain(`<span class="tok-propertyName">${name}</span>`);
-    expect(html).toContain('<span class="tok-variableName">parsed_url</span>');
-    expect(html).toContain('<span class="tok-string">&quot;https://example.test&quot;</span>');
+  it("keeps namespaced calls and result properties as escaped text", () => {
+    const source = 'parsed_url = node.url.parse(url="https://example.test")\ntask_id = node.path.basename(path=parsed_url.pathname)';
+    const html = highlightDext(source);
+    expect(html).toBe(source.replaceAll('"', "&quot;"));
+    expect(html).not.toContain("tok-");
   });
 
-  it("uses the recorded Code mode for comment-led code and keeps Ask input as prose", () => {
+  it("renders recorded Code mode and Ask input as the same escaped text", () => {
     const record: DextHistoryRecord = { id: "turn", createdAt: 1, mode: "code", input: '# comment\nif True:\n    print(text="<ok>")', process: [], output: "" };
     const code = renderHistoryRecord(record);
-    expect(code).toContain('<span class="tok-comment"># comment</span>');
-    expect(code).toContain('<span class="tok-keyword">if</span>');
+    expect(code).toContain("# comment");
+    expect(code).toContain("if True:");
+    expect(code).toContain("print(text=&quot;&lt;ok&gt;&quot;)");
+    expect(code).not.toContain('class="tok-');
     const prose = renderHistoryRecord({ ...record, mode: "ask", input: 'print(text="Please explain")' });
+    expect(prose).toContain("print(text=&quot;Please explain&quot;)");
     expect(prose).not.toContain('class="tok-');
   });
 
@@ -785,3 +787,34 @@ it("renders unknown historical UI results as bounded escaped JSON without an exe
   expect(html).not.toContain('type="radio"');
   expect(html).not.toContain("x".repeat(21000));
 });
+
+it("renders process output steps as text rather than as API cards", () => {
+  const execution: RuntimeResponse = {
+    invocation: { kind: "invocation", method: "ask", source: "code", arguments: [] },
+    method: { id: "ask", title: "Ask", source: "builtin", kind: "command" },
+    result: { kind: "ask", text: "x" },
+    durationMs: 1
+  };
+  const html = renderHistoryRecord({
+    id: "turn",
+    createdAt: 1,
+    input: "Run",
+    output: "",
+    process: [],
+    response: {
+      kind: "workflow",
+      executions: [execution],
+      steps: [
+        { method: "ask", state: "success", response: execution },
+        { method: "stdout", state: "success", stream: { channel: "stdout", text: "x\n" } },
+        { method: "stderr", state: "success", stream: { channel: "stderr", text: "<boom>\n" } }
+      ]
+    }
+  });
+  expect(html).toContain('<pre class="history-process-output process-output-stdout">x\n</pre>');
+  expect(html).toContain('<pre class="history-process-output process-output-stderr">&lt;boom&gt;\n</pre>');
+  // A stream step never renders the disclosure an API step without a response gets.
+  expect(html).not.toContain("<span>stdout</span>");
+  expect(html).toContain('<section class="history-execution execution-result">');
+});
+

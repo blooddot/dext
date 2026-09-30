@@ -89,25 +89,6 @@ const METHODS: readonly CallableDefinition[] = [
     executor: { kind: "deterministic", handler: "applyPatch" }
   },
   {
-    id: "print",
-    title: "Print",
-    description: "Render a value in Dext Output. Primitive values are shown as text; objects, lists, and API results are rendered as JSON.",
-    kind: "command",
-    version: "1.0.0",
-    input: [
-      {
-        name: "text",
-        type: "string",
-        accepts: ["number", "boolean", "object", "list", "result", "context", "dir"],
-        required: true,
-        description: "Value rendered in Dext Output. Objects, lists, and API results are rendered as JSON."
-      },
-      { name: "label", type: "string", description: "Optional output label." }
-    ],
-    output: { kind: "print" },
-    executor: { kind: "deterministic", handler: "printText" }
-  },
-  {
     id: "terminal",
     title: "Run Terminal Command",
     description: "Run a command in a trusted local workspace and return captured output. The command runs without a confirmation prompt, so a workflow decides what is safe to run.",

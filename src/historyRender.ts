@@ -356,10 +356,14 @@ function steps(response: InputExecutionResponse): WorkflowStepResponse[] {
 }
 
 function output(response: InputExecutionResponse): string {
-  return steps(response).map((step) => step.response
-    ? execution(step.response)
-    : `<details class="history-disclosure step-result"><summary>${chevron()}<span>${escapeHtml(step.method)}</span><span class="history-meta">${escapeHtml(step.state)}</span></summary>${step.error ? `<pre class="error">${escapeHtml(step.error)}</pre>` : ""}</details>`
-  ).join("");
+  return steps(response).map((step) => {
+    if (step.stream) {
+      return `<pre class="history-process-output process-output-${step.stream.channel}">${escapeHtml(step.stream.text)}</pre>`;
+    }
+    return step.response
+      ? execution(step.response)
+      : `<details class="history-disclosure step-result"><summary>${chevron()}<span>${escapeHtml(step.method)}</span><span class="history-meta">${escapeHtml(step.state)}</span></summary>${step.error ? `<pre class="error">${escapeHtml(step.error)}</pre>` : ""}</details>`;
+  }).join("");
 }
 
 function outputText(response: InputExecutionResponse): string {

@@ -46,7 +46,6 @@ export interface TurnResultAdapter<E> extends TurnRenderAdapter<E> {
 /** One result dispatch and layout policy for History and Conversation. Host actions
  * (open a plan, review a patch, copy output) remain callbacks on the adapters. */
 export function renderTurnResult<E>(adapter: TurnResultAdapter<E>, result: DextResult): E[] {
-  const title = (text: string): E => adapter.element("div", { class: "output-title" }, [text]);
   if (result.kind === "ask" || result.kind === "plan" || result.kind === "skill" || result.kind === "template") {
     return [adapter.markdown(result.text), ...(result.kind === "plan" && result.planPath ? [adapter.plan(result.planPath)] : [])];
   }
@@ -55,8 +54,6 @@ export function renderTurnResult<E>(adapter: TurnResultAdapter<E>, result: DextR
     ...(result.patch?.changes ?? []).map((change) => adapter.patch(change))
   ];
   if (result.kind === "apply") return [adapter.markdown(`${result.status}: ${result.summary}`)];
-  if (result.kind === "print") return [...(result.label ? [title(result.label)] : []), adapter.json(result.text)];
-  if (result.kind === "patch") return [title(result.title), ...result.changes.map((change) => adapter.patch(change))];
   if (result.kind === "terminal") {
     const el = adapter.element;
     return [el("details", { class: "execution-disclosure terminal-disclosure" }, [

@@ -1521,6 +1521,27 @@ body.vscode-high-contrast-light .monaco-editor .view-line .dext-ref-chip {
   overflow-wrap: anywhere;
 }
 
+/* console.log / console.error output: process output, not an API card. */
+.process-output {
+  max-height: 260px;
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  overflow: auto;
+  border-left: 2px solid var(--vscode-widget-border, #454545);
+  color: var(--vscode-editor-foreground);
+  background: var(--vscode-textCodeBlock-background, transparent);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: var(--vscode-editor-font-size, 12px);
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.process-output-stderr {
+  border-left-color: color-mix(in srgb, var(--vscode-errorForeground) 70%, transparent);
+  color: var(--vscode-errorForeground);
+}
+
 .action-row {
   min-height: 34px;
   flex: 0 0 auto;
