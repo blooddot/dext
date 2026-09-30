@@ -80,23 +80,3 @@ export type DextHostMessage =
   }
   | { type: "response"; requestId: number; response?: unknown; error?: string }
   | { type: "shutdown" };
-
-/** Methods the kernel may ask the parent to execute. `dextRuntime.mjs` exports
- * exactly these names. */
-export const DEXT_RUNTIME_METHODS = [
-  "ask",
-  "plan",
-  "agent",
-  "apply",
-  "terminal",
-  "skill",
-  "template",
-  "ui",
-  "mcp"
-] as const;
-
-export type DextRuntimeMethod = (typeof DEXT_RUNTIME_METHODS)[number];
-
-export function isDextRuntimeMethod(value: string): value is DextRuntimeMethod {
-  return (DEXT_RUNTIME_METHODS as readonly string[]).includes(value);
-}
