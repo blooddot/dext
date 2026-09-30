@@ -1,10 +1,9 @@
 import { BUILTIN_METHODS } from "./builtins.js";
 import { dextOptionsType, dextTsFieldType } from "./dextApiTypes.js";
-import { methodResultType } from "./methodSignature.js";
+import { CONVERSATION_METHODS, methodResultType } from "./methodSignature.js";
 import type { FieldDefinition, RegisteredCallable } from "./types.js";
 
 const byId = new Map(BUILTIN_METHODS.map((definition) => [definition.id, { ...definition, source: "builtin" as const }]));
-const CONVERSATION_METHODS = new Set(["agent", "ask", "plan", "template"]);
 
 export function builtinApiDefinition(id: string): RegisteredCallable | undefined {
   return byId.get(id);

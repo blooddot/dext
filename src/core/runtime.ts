@@ -13,6 +13,7 @@ import type { MethodRegistry } from "./registry.js";
 import type { AgentResult, DirRef, McpRawResult } from "./types.js";
 import { ExecutionCancelledError } from "./executionErrors.js";
 import { patchResultFrom } from "./patch.js";
+import { CONVERSATION_METHODS } from "./methodSignature.js";
 import type { AgentPermission, AgentProfile, AgentProvider, AgentSelection, WritableAgentPermission } from "../agentProfiles.js";
 import { DefaultAgentRunner } from "./agentRouter.js";
 import type { AgentRunner } from "./agentRunner.js";
@@ -152,9 +153,6 @@ const PLAN_RESPONSE_FORMAT_INSTRUCTION = [
 ].join("\n");
 
 const AGENT_METHODS = new Set(["ask", "plan", "agent", "skill", "template"]);
-/** The methods that take free-form input plus skills, rules, and a workspace,
- * as opposed to `skill`, which builds its instruction from the skill itself. */
-const CONVERSATION_METHODS = new Set(["ask", "plan", "agent", "template"]);
 function defaultWorkspace(root: string): DirRef {
   return { kind: "dirRef", uri: pathToFileURL(root).toString(), path: "." };
 }

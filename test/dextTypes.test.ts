@@ -71,6 +71,21 @@ describe("generated Dext TypeScript surface", () => {
     expect(declaration).toContain("JSON-serializable");
   });
 
+  it("lists the per-call skills and rules on the APIs that accept them", () => {
+    const declaration = dextModuleDeclaration();
+    const options = (id: string): string =>
+      new RegExp(`export function ${id}\\(options: ([\\s\\S]*?)\\): Promise<`).exec(declaration)?.[1] ?? "";
+    // `skills`/`rules` are `internal` because they are never forwarded to a provider as
+    // control fields, but on these four APIs they are options the caller writes.
+    for (const id of ["ask", "plan", "agent", "template"]) {
+      expect(options(id), id).toContain("skills?: string | string[]");
+      expect(options(id), id).toContain("rules?: string | string[]");
+    }
+    // Anywhere else an `internal` field stays runtime-only.
+    expect(options("skill")).not.toContain("skills?:");
+    expect(options("skill")).not.toContain("rules?:");
+  });
+
   it("never mentions PrintResult and only uses PatchResult for AgentResult.patch", () => {
     const declaration = dextModuleDeclaration();
     expect(declaration).not.toContain("PrintResult");

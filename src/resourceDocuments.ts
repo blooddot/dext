@@ -4,7 +4,7 @@ import type { EditorTabState } from "./editorTabState.js";
 import { describeEditorTab, type EditorTabManager } from "./editorTabManager.js";
 import type { EditorTabRestorer } from "./editorTabSerializer.js";
 import type { SidebarState } from "./webviewProtocol.js";
-import { formatFieldType, formatMethodParameter, methodResultType } from "./core/methodSignature.js";
+import { CONVERSATION_METHODS, formatFieldType, formatMethodParameter, methodResultType } from "./core/methodSignature.js";
 import { resourceIcon } from "./resourceIcons.js";
 import type { ApiReferenceCatalog, ApiReferenceMember, ApiReferenceModule } from "./core/apiReference.js";
 
@@ -649,7 +649,8 @@ function apiEntry(method: SidebarState["methods"][number], roots: SidebarState["
   const scope: ResourceScope = method.source === "project" ? "project" : "global";
   const path = `${method.id.replaceAll(".", "/")}.ts`;
   const directory = method.source === "builtin" ? "" : roots?.[scope] ?? "";
-  const fields = (method.input ?? []).filter((field) => !field.internal);
+  const input = method.input ?? [];
+  const fields = input.filter((field) => !field.internal || CONVERSATION_METHODS.has(method.id));
   const returnType = method.output ? methodResultType(method) : "Result";
   return {
     id: resourceEntryId({ kind: "api", scope, path }),

@@ -19,7 +19,7 @@
  */
 import { BUILTIN_METHODS } from "./builtins.js";
 import { builtinTypeDefinition, type BuiltinTypeDefinition } from "./builtinTypeDefinitions.js";
-import { methodResultType } from "./methodSignature.js";
+import { CONVERSATION_METHODS, methodResultType } from "./methodSignature.js";
 import type { CallableDefinition, FieldDefinition } from "./types.js";
 
 /** The bare module specifier user code imports. */
@@ -186,9 +186,11 @@ export function dextTsFieldType(field: FieldDefinition): string {
   return `${scalar} | ${arrayOf(scalar)}`;
 }
 
-/** The single object of named arguments every Dext API takes. */
+/** The single object of named arguments every Dext API takes. An `internal` field is
+ * runtime-only — except the `skills` and `rules` a conversation method takes per call,
+ * which are options a caller writes and every other surface already documents. */
 export function dextOptionsType(method: CallableDefinition): string {
-  const fields = method.input.filter((field) => !field.internal);
+  const fields = method.input.filter((field) => !field.internal || CONVERSATION_METHODS.has(method.id));
   if (!fields.length) return "Record<string, never>";
   const members = fields.map((field) => `${field.name}${field.required ? "" : "?"}: ${dextTsFieldType(field)}`);
   return `{ ${members.join("; ")} }`;

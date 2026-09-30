@@ -336,7 +336,7 @@ Plan 执行复用同一组件并额外绑定计划内容版本与本次 Build �
 
 Skill 是显式的包。`skill({ skill: "name", input })` 加载指定的 `SKILL.md` 并注入当前 Agent 任务。查找顺序为 `<workspace>/.dext/skills`、**Project > Overview > Project configuration** 中的项目 Skill 目录、Dext 全局存储；项目尚未保存 Skill 目录时回退到旧的 `dext.skillDirs`，同名时靠前的位置优先。`create` 可以在项目或全局范围创建 Skill。
 
-规则是 `.dext/rules/` 下的有序策略文件，规则路径只会在该目录下解析。`.dext/rules/plan.md` 会替换 Plan 模式默认的计划文档指令。`agent`、`ask`、`plan`、`template` 也可以为单次调用指定 `skills` 和 `rules`；两者都是内部选项，不会出现在生成的声明中。Dext 先加载所选 Skills，再按顺序加载规则，因此调用的窄规则会约束通用的 Skill 流程；这些内容注入 Agent 指令，而不会作为控制字段转发给提供方。`ui.*` 等待用户回答后继续同一个工作流。
+规则是 `.dext/rules/` 下的有序策略文件，规则路径只会在该目录下解析。`.dext/rules/plan.md` 会替换 Plan 模式默认的计划文档指令。`agent`、`ask`、`plan`、`template` 也可以为单次调用指定 `skills` 和 `rules`——`await agent({ input: "…", rules: ["review.md"] })`。它们是 `internal`，因为从不作为控制字段转发给提供方；而生成的声明恰好会在这四个 API 上列出它们，因为这是调用方自己写的选项。Dext 先加载所选 Skills，再按顺序加载规则，因此调用的窄规则会约束通用的 Skill 流程；这些内容注入 Agent 指令。`ui.*` 等待用户回答后继续同一个工作流。
 
 ## 自定义结果类型
 

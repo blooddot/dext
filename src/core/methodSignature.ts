@@ -47,6 +47,17 @@ export function methodResultType(method: Pick<RegisteredCallable, "id" | "output
     ?? `${method.output.kind.slice(0, 1).toUpperCase()}${method.output.kind.slice(1)}Result`;
 }
 
+/**
+ * The methods that take free-form conversation input plus the `skills` and `rules` that
+ * scope a single call.
+ *
+ * Those two fields are `internal` because they are never forwarded to a provider as
+ * control fields, but for exactly these APIs they are caller-facing options: a surface
+ * that lists what a caller may pass — the generated declaration, the reference signature,
+ * the resource panel — keeps them, while every other `internal` field stays runtime-only.
+ */
+export const CONVERSATION_METHODS: ReadonlySet<string> = new Set(["ask", "plan", "agent", "template"]);
+
 export interface MethodSignatureOptions {
   /** Include runtime-controlled fields such as conversation rules and skills. */
   includeInternal?: boolean;
