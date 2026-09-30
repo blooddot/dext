@@ -187,7 +187,7 @@ export function parseMcpManifest(source: string, path: string): McpManifestLoad 
       version: "1.0.0",
       input,
       output: typedOutput
-        ? { kind: id, fields: typedOutput, resultType: resultTypeName(name, toolName), description: `Structured result from ${name}.${toolName}.` }
+        ? { kind: `mcp.${name}.${toolName}`, fields: typedOutput, resultType: resultTypeName(name, toolName), description: `Structured result from ${name}.${toolName}.` }
         : { kind: "mcpRaw", description: `Raw result from ${name}.${toolName}.` },
       executor: { kind: "deterministic", handler: "mcpTool" }
     });

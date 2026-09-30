@@ -1341,7 +1341,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           await this.projectReferences.open(request.objectId);
           break;
         case "openBuiltinApiDefinition":
-          await openBuiltinApiDefinition(request.id);
+          // Every built-in API is declared in the generated `dext.d.ts` now, so
+          // that is what the API panel opens; tsserver serves F12 from it too.
+          await vscode.window.showTextDocument(vscode.Uri.file(this.application.dextTypesPath()), { preview: true });
           break;
         case "openExternalLink":
           await openExternalLink(request.url);
