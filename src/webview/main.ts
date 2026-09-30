@@ -47,9 +47,9 @@ import {
 } from "../core/fileReference.js";
 import { createFileReferenceChip, fileReferenceChipDescriptor } from "./fileReferenceChip.js";
 import { outputExternalLink, outputLinkReference } from "./outputLink.js";
-import { dextClassHighlighter, dextTokenStyles, shouldHighlightInput } from "../dextTokenTheme.js";
 import { formatJsonOutput } from "./jsonOutput.js";
 import { observeComposerOverflow } from "./composerOverflow.js";
+import { installResultScrollProbe } from "./scrollProbe.js";
 import { enableConversationTabDrag } from "./conversationTabDrag.js";
 import { AgentTodoView } from "./agentTodoView.js";
 import { AgentInputView } from "./agentInputView.js";
@@ -197,10 +197,13 @@ if (typeof ResizeObserver === "function") {
   resultLayoutObserver.observe(elements.resultBody);
   resultLayoutObserver.observe(elements.result);
 }
+// Console surface for the scroll port: `dextScrollWatch = true` logs a
+// measurement on every scroll/layout pass and `dextScrollReport()` returns one
+// on demand, naming whatever makes the range disagree with what it paints.
+installResultScrollProbe({ body: elements.resultBody, result: elements.result });
 
 let pendingConfirmation: (() => void) | undefined;
 
-const broker = new LanguageRequestBroker((request) => vscode.postMessage(request));
 const clipboard = new ClipboardClient((request) => vscode.postMessage(request));
 const fileSearch = new FileSearchClient((request) => vscode.postMessage(request));
 const projectReferences = new ProjectReferenceClient((request) => vscode.postMessage(request), (message) => renderError(new Error(message)));
