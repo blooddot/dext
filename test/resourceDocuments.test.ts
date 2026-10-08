@@ -32,7 +32,7 @@ vi.mock("vscode", () => {
 let root: string;
 let application: DextApplication;
 beforeEach(async () => {
-  Object.assign(vscode.workspace, { textDocuments: [] });
+  Object.assign(vscode.workspace, { textDocuments: [], workspaceFolders: undefined });
   root = await mkdtemp(join(tmpdir(), "dext-resources-"));
   const registry = new MethodRegistry();
   registry.registerMany(BUILTIN_METHODS, "builtin");
@@ -46,6 +46,22 @@ beforeEach(async () => {
 afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 
 describe("resource documents", () => {
+  it("initializes the workspace package once and preserves it on API reload", async () => {
+    Object.assign(vscode.workspace, { workspaceFolders: [{ uri: vscode.Uri.file(root) }] });
+    Object.assign(application, { workspaceImportsDext: async () => true });
+    await mkdir(join(root, ".dext", "api"), { recursive: true });
+    const writer = application as unknown as { writeWorkspaceDextProject(methods: []): Promise<void> };
+    await writer.writeWorkspaceDextProject([]);
+    const path = join(root, ".dext", "package.json");
+    expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ type: "module", devDependencies: { "@types/node": "^22" } });
+    const content = '{"type":"module","dependencies":{"parse5":"7.3.0"},"scripts":{"test":"node --test"}}\n';
+    await writeFile(path, content);
+    await writeFile(join(root, ".dext", "api", "dext.d.ts"), "outdated");
+    await writer.writeWorkspaceDextProject([]);
+    expect(await readFile(path, "utf8")).toBe(content);
+    expect(await readFile(join(root, ".dext", "api", "dext.d.ts"), "utf8")).toContain('declare module "dext"');
+  });
+
   it("keeps Top level APIs separate from node and ui namespaces", () => {
     const entry = (name: string): ResourceEntry => ({
       id: `api:global:${name}`, kind: "api", scope: "global", name, path: `${name.replaceAll(".", "/")}.ts`,

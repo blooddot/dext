@@ -543,7 +543,16 @@ export class DextApplication {
     const directory = vscode.Uri.joinPath(folder.uri, ".dext");
     await vscode.workspace.fs.createDirectory(directory);
     for (const file of dextFiles(methods, this.projectApiDirs())) {
-      await this.writeIfChanged(vscode.Uri.joinPath(directory, ...file.path.split("/")), file.content);
+      const uri = vscode.Uri.joinPath(directory, ...file.path.split("/"));
+      if (file.createOnly) {
+        try {
+          await vscode.workspace.fs.stat(uri);
+          continue;
+        } catch (error) {
+          if (!(error instanceof vscode.FileSystemError) || error.code !== "FileNotFound") throw error;
+        }
+      }
+      await this.writeIfChanged(uri, file.content);
     }
   }
 

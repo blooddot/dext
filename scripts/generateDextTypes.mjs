@@ -247,7 +247,7 @@ async function runCli(argv) {
         problems.push(`${path.join(".dext", file.path)} is missing.`);
         continue;
       }
-      if (!sameText(existing, file.content)) problems.push(...diffSummary(file.content, existing, path.join(".dext", file.path)));
+      if (!file.createOnly && !sameText(existing, file.content)) problems.push(...diffSummary(file.content, existing, path.join(".dext", file.path)));
     }
     if (problems.length) {
       console.error(`Dext types in ${directory} are out of date. Run \`npm run generate:dext-types --workspace ${options.workspace}\`.`);
@@ -261,7 +261,12 @@ async function runCli(argv) {
   for (const file of files) {
     const target = path.join(directory, file.path);
     await mkdir(path.dirname(target), { recursive: true });
-    await writeFile(target, file.content, "utf8");
+    try {
+      await writeFile(target, file.content, { encoding: "utf8", flag: file.createOnly ? "wx" : "w" });
+    } catch (error) {
+      if (file.createOnly && error.code === "EEXIST") continue;
+      throw error;
+    }
     console.log(`wrote ${path.relative(process.cwd(), target)}`);
   }
 }

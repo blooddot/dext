@@ -701,12 +701,11 @@ export function dextSharedDeclaration(): string {
 const DEXT_NODE_TYPES = "^22";
 
 /**
- * The generated `.dext/package.json`.
+ * The initial `.dext/package.json`, owned by the workspace after creation.
  *
  * The ESM marker is what lets tsserver accept the top-level `await` the kernel supports.
- * The dependency is here because this file is Dext's: a workspace's API files import
- * `node:` built-ins with ordinary `import`s, and the type definitions they need cannot
- * live in a project-authored manifest that every reload would overwrite.
+ * APIs import `node:` built-ins with ordinary imports. Seed their type definitions,
+ * then let the project maintain dependencies, versions and scripts itself.
  */
 const DEXT_PACKAGE_MANIFEST = {
   type: "module",
@@ -738,10 +737,10 @@ const DEXT_PACKAGE_MANIFEST = {
 export function dextFiles(
   methods: readonly CallableDefinition[] = [],
   apiDirs: readonly string[] = [DEXT_API_DIRECTORY]
-): { path: string; content: string }[] {
+): { path: string; content: string; createOnly?: boolean }[] {
   return [
     { path: DEXT_TYPES_PATH, content: dextModuleDeclaration(methods) },
     { path: DEXT_TSCONFIG_PATH, content: dextTsconfig(undefined, apiDirs) },
-    { path: DEXT_PACKAGE_PATH, content: `${JSON.stringify(DEXT_PACKAGE_MANIFEST, null, 2)}\n` }
+    { path: DEXT_PACKAGE_PATH, content: `${JSON.stringify(DEXT_PACKAGE_MANIFEST, null, 2)}\n`, createOnly: true }
   ];
 }

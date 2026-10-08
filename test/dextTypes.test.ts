@@ -453,6 +453,25 @@ describe("generated Dext TypeScript surface", () => {
     expect(result.stdout).toContain("up to date");
   });
 
+  it("preserves workspace package dependencies and scripts on regeneration and check", { timeout: 60_000 }, async () => {
+    const root = await tempWorkspace();
+    await run(process.execPath, [script, "--workspace", root]);
+    const manifest = join(root, ".dext", "package.json");
+    const content = JSON.stringify({
+      type: "module",
+      private: true,
+      dependencies: { parse5: "7.3.0" },
+      devDependencies: { "@types/node": "22.18.0" },
+      scripts: { test: "node --test" }
+    }, null, 4) + "\r\n";
+    await writeFile(manifest, content, "utf8");
+    await run(process.execPath, [script, "--workspace", root]);
+    expect(await readFile(manifest, "utf8")).toBe(content);
+    const result = await run(process.execPath, [script, "--workspace", root, "--check"]);
+    expect(result.stdout).toContain("up to date");
+    expect(await readFile(manifest, "utf8")).toBe(content);
+  });
+
   it("maps the API directories a project configures", async () => {
     // The kernel resolves `dext/api/<id>` against `.dext/api` plus the project's own
     // `apiDirs`, so the generated project has to map those too — relatively, because
