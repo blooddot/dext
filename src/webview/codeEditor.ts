@@ -6,7 +6,7 @@ import type { ClipboardClient } from "./clipboardClient.js";
 import type { FileSearchClient } from "./fileSearchClient.js";
 import type { ProjectReferenceClient } from "./projectReferenceClient.js";
 import { codeReferencePasteText } from "./codeReferencePaste.js";
-import { bindFileDropTarget, droppedFilePaths, isFileDrag } from "./fileDrop.js";
+import { bindFileDropTarget, droppedFilePaths, fileSelectionDropEffect, isFileDrag } from "./fileDrop.js";
 import { fileReferenceRemovalEdit } from "./fileReferenceDecorations.js";
 import { inputReferenceProjections, normalizeInputReferenceSource, type ContextReferenceOccurrence } from "../core/fileReference.js";
 import { fileReferenceInsertion } from "./inputInsertion.js";
@@ -305,7 +305,14 @@ export class DextCodeEditor {
     if (text) this.replaceSelections(text);
   }
   private setFileDragActive(active: boolean): void { this.options.parent.classList.toggle("file-drop-active", active); }
-  private fileDragOver(event: DragEvent): boolean { const active = isFileDrag(event); this.setFileDragActive(active); if (!active) return false; event.preventDefault(); event.dataTransfer!.dropEffect = "copy"; return true; }
+  private fileDragOver(event: DragEvent): boolean {
+    const active = isFileDrag(event);
+    this.setFileDragActive(active);
+    if (!active) return false;
+    event.preventDefault();
+    event.dataTransfer!.dropEffect = fileSelectionDropEffect(event.dataTransfer!.effectAllowed);
+    return true;
+  }
   private fileDrop(event: DragEvent): boolean {
     this.setFileDragActive(false); if (!isFileDrag(event)) return false;
     const paths = droppedFilePaths(event.dataTransfer);

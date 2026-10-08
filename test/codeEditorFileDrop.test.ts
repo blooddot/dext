@@ -35,7 +35,7 @@ describe("Monaco file-reference drop", () => {
       shiftKey: true, clientX: 20, clientY: 30,
       preventDefault: vi.fn(), stopPropagation: vi.fn(),
       dataTransfer: {
-        types: ["text/uri-list"], files: [], dropEffect: "none",
+        types: ["text/uri-list"], files: [], dropEffect: "none", effectAllowed: "copyMove",
         getData: vi.fn(() => "file:///repo/src/a.ts\r\nfile:///repo/src/b.ts")
       }
     };
@@ -48,6 +48,7 @@ describe("Monaco file-reference drop", () => {
 
   it("accepts a file dragover without Shift and inserts multiple refs at the drop coordinates", async () => {
     const { editor, event, handlers, resolveDroppedFiles, toggle, posAtCoords } = eventHarness();
+    event.shiftKey = false;
     expect(handlers.fileDragOver(event)).toBe(true);
     expect(event.dataTransfer.dropEffect).toBe("copy");
     expect(event.dataTransfer.getData).not.toHaveBeenCalled();
@@ -61,6 +62,17 @@ describe("Monaco file-reference drop", () => {
     expect(posAtCoords).toHaveBeenCalledWith(20, 30);
     expect(inputReferenceProjections(editor.source)).toHaveLength(2);
     expect(toggle).toHaveBeenLastCalledWith("file-drop-active", false);
+  });
+
+  it("accepts a Shift drop when the source only allows move", async () => {
+    const { editor, event, handlers, resolveDroppedFiles } = eventHarness();
+    event.dataTransfer.effectAllowed = "move";
+    expect(handlers.fileDragOver(event)).toBe(true);
+    expect(event.dataTransfer.dropEffect).toBe("move");
+    expect(handlers.fileDrop(event)).toBe(true);
+    await Promise.resolve();
+    expect(resolveDroppedFiles).toHaveBeenCalledOnce();
+    expect(inputReferenceProjections(editor.source)).toHaveLength(2);
   });
 
   it("leaves ordinary text drags to Monaco", () => {
