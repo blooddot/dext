@@ -35,6 +35,7 @@ const workspaceRoot = path.resolve(process.env.DEXT_WORKSPACE_ROOT ?? process.cw
 silenceTypeStrippingWarnings();
 
 let generation = 0;
+let activeRuntime;
 
 function send(message) {
   if (typeof process.send === "function") process.send(message);
@@ -57,6 +58,7 @@ function flush(state) {
 }
 
 function append(state, text) {
+  if (!activeRuntime?.isRunActive()) return;
   state.text += text;
   while (state.text.length >= MAX_STREAM_CHUNK) {
     const head = state.text.slice(0, MAX_STREAM_CHUNK);
@@ -217,28 +219,30 @@ async function run(id, file, replay, apiRoots) {
   globalThis.__dextReplay = Array.isArray(replay) ? replay : [];
   globalThis.__dextReplayIndex = 0;
   const runtime = await import("dext");
-  runtime.beginRun();
-  const entry = pathToFileURL(path.resolve(file));
-  entry.searchParams.set("dextRun", String(generation));
-  try {
-    const module = await import(entry.href);
-    const value = typeof module.main === "function" ? await module.main() : undefined;
-    const settled = await settle();
-    flushAll();
-    if (settled.failure !== undefined) {
-      send({ type: "runDone", id, ok: false, error: describeError(settled.failure) });
-    } else if (value === undefined) send({ type: "runDone", id, ok: true });
-    else {
-      const { toDextJson } = await import("./dextSerialization.mjs");
-      send({ type: "runDone", id, ok: true, result: toDextJson(value, "The run result") });
+  activeRuntime = runtime;
+  await runtime.withRun(generation, async () => {
+    const entry = pathToFileURL(path.resolve(file));
+    entry.searchParams.set("dextRun", String(generation));
+    try {
+      const module = await import(entry.href);
+      const value = typeof module.main === "function" ? await module.main() : undefined;
+      const settled = await settle();
+      flushAll();
+      if (settled.failure !== undefined) {
+        send({ type: "runDone", id, ok: false, error: describeError(settled.failure) });
+      } else if (value === undefined) send({ type: "runDone", id, ok: true });
+      else {
+        const { toDextJson } = await import("./dextSerialization.mjs");
+        send({ type: "runDone", id, ok: true, result: toDextJson(value, "The run result") });
+      }
+    } catch (error) {
+      // A failed run still waits for what it started, so the turn does not close while
+      // an agent it launched is running.
+      await settle();
+      flushAll();
+      send({ type: "runDone", id, ok: false, error: await undefinedNameHint(describeError(error), roots) });
     }
-  } catch (error) {
-    // A failed run still waits for what it started, so the turn does not close while
-    // an agent it launched is running.
-    await settle();
-    flushAll();
-    send({ type: "runDone", id, ok: false, error: await undefinedNameHint(describeError(error), roots) });
-  }
+  });
 }
 
 /**

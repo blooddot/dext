@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { InvocationAst, RuntimeResponse } from "../src/core/types.js";
 import { DextKernelHost } from "../src/runner/dextHost.js";
+import { workflowCases } from "./dextWorkflowCases.js";
 
 /**
  * The shipped kernel is a bundle, and a bundle can inline the runtime module the
@@ -37,6 +38,7 @@ function askResponse(invocation: InvocationAst): RuntimeResponse {
 }
 
 describe.skipIf(!existsSync(builtKernel))("the built kernel", () => {
+  workflowCases(resolve("dist"));
   it("waits for a call the run did not await", { timeout: 30000 }, async () => {
     const root = await mkdtemp(join(tmpdir(), "dext-dist-kernel-"));
     roots.push(root);

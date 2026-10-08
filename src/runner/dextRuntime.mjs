@@ -4,13 +4,14 @@
  * Every export is one Dext capability. A call sends a `request` to the extension
  * host, which executes it through the ordinary runtime (contract validation
  * included), records a step, and answers. Steps are therefore recorded at the
- * call boundary in user code — no source rewriting is involved.
+ * built-in call boundary in user code. Custom workflow entry tracking is separate.
  *
  * The same module instance is shared by the kernel and by user code: the loader
- * maps the bare `dext` specifier to this file, and the kernel imports it by path.
+ * maps the bare `dext` specifier to this file for the kernel and user code alike.
  */
 
 import { toDextJson } from "./dextSerialization.mjs";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 const pending = new Map();
 /** The calls this run has issued and not yet answered, so `settleCalls` can wait for
@@ -18,6 +19,9 @@ const pending = new Map();
 const inFlight = new Set();
 const failures = [];
 let sequence = 0;
+let currentGeneration = 0;
+// Attribution only: this does not enumerate or wait for background resources.
+const runContext = new AsyncLocalStorage();
 
 process.on("message", (message) => {
   if (!message || typeof message !== "object" || message.type !== "response") return;
@@ -28,8 +32,55 @@ process.on("message", (message) => {
 });
 
 /** Starts a run: a failure from an earlier attempt must not fail this one. */
-export function beginRun() {
+export async function withRun(generation, task) {
+  currentGeneration = generation;
   failures.length = 0;
+  const run = { generation, active: true };
+  try {
+    return await runContext.run(run, task);
+  } finally {
+    run.active = false;
+  }
+}
+
+export function isRunActive() {
+  const run = runContext.getStore();
+  return run?.active === true && run.generation === currentGeneration;
+}
+
+process.on("unhandledRejection", (error) => {
+  if (isRunActive()) failures.push(error instanceof Error ? error : new Error(String(error)));
+});
+
+/** Loader-inserted entry tracking, not an implicit await. The bookkeeping Promise
+ * never rejects; the returned Promise retains normal await/catch/Promise.all
+ * behavior. Only an unhandled rejection fails the run. */
+function trackWorkflow(value, generation) {
+  if (!isRunActive() || generation !== currentGeneration || value == null || typeof value.then !== "function") return value;
+  let finish;
+  const completion = new Promise((resolve) => { finish = resolve; });
+  inFlight.add(completion);
+  function done() {
+    inFlight.delete(completion);
+    finish();
+  }
+  return Promise.resolve(value).then(
+    (result) => { done(); return result; },
+    (error) => {
+      done();
+      throw error;
+    }
+  );
+}
+
+/** A callee wrapper preserves optional-chain short circuiting and namespace this.
+ * Nonfunctions pass through so optional calls and native call errors still work. */
+export function workflowEntry(callable, generation, receiver) {
+  if (typeof callable !== "function") return callable;
+  return (...args) => {
+    if (!isRunActive() || generation !== currentGeneration) throw new Error("The Dext workflow's run has already ended.");
+    return trackWorkflow(Reflect.apply(callable, receiver, args), generation);
+  };
 }
 
 /**
@@ -42,11 +93,12 @@ export function beginRun() {
  * waits here instead, and a floating call that failed fails the run.
  */
 export async function settleCalls() {
-  while (inFlight.size) {
+  do {
     await Promise.allSettled([...inFlight]);
-    // A finished call resumes user code, which may issue the next one.
+    // Drain continuations and Node's unhandledRejection notification even when a
+    // workflow settled during module evaluation. This is not an idle-time heuristic.
     await new Promise((resolve) => setImmediate(resolve));
-  }
+  } while (inFlight.size);
   const failure = failures.shift();
   failures.length = 0;
   return failure === undefined ? {} : { failure };
@@ -96,6 +148,7 @@ function requireChannel() {
 
 async function invoke(method, options) {
   requireChannel();
+  if (!isRunActive()) throw new Error("The Dext run that started this call has already ended.");
   const args = options === undefined || options === null ? {} : options;
   if (typeof args !== "object" || Array.isArray(args)) {
     throw new Error(`${method}() takes one object of named arguments, for example ${method}({ input: "..." }).`);

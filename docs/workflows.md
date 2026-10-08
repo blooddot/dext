@@ -44,7 +44,16 @@ A Code turn is an ordinary ES module. The whole TypeScript language is available
 
 Dext runs the file in one long-lived Node child process per workspace, started from VS Code's Electron binary with `ELECTRON_RUN_AS_NODE=1`. Every run re-registers the module loader with a fresh generation, so every workspace module is evaluated again and module-level state cannot leak between runs. Cancelling a turn kills the kernel, and the next run starts a fresh one; a crash in user code cannot take the extension host down. A run may call Dext APIs concurrently — for example with `Promise.all` — and `dext.workflow.maxConcurrency` (default 4, maximum 16) caps how many calls are in flight at once; calls beyond the limit wait in a queue.
 
-A run is not finished while it is waiting for a Dext API. A call written without `await` — `commit()` rather than `await commit()` — still keeps the turn open until it answers, and its failure fails the run, so the agent it started cannot keep working after the panel has stopped listening. Nothing is reported about it: an un-awaited call is ordinary TypeScript, and the types already show that it returns a promise. Write `await` to read the result.
+A run waits for built-in Dext requests and for Promises returned by direct calls to functions statically imported from `dext/api/...`. For example, this keeps the turn open through the whole `fix` workflow, including awaited native file IO, timers and confirmation forms:
+
+```ts
+import { fix } from "dext/api/dev/fix";
+fix("", "https://www.teambition.com/task/6ab36fad730476294198dade");
+```
+
+Automatic tracking applies at TypeScript (`.ts` / `.mts`, including Code mode) call sites: named imports (including `as` aliases), default imports, and direct namespace calls such as `api.fix()` or `api["fix"]()`. The imported module can reexport the function. Calls retain their ordinary execution order and concurrency; tracking does not insert `await`. Use `await` to consume a result or order dependent work. An exported `main()` is still awaited. Unhandled workflow rejections fail the current run; `await`/`catch` and Promise combinators can handle them normally. Existing built-in API failures still fail the run.
+
+This is an import-call boundary, not a wait for every asynchronous task in Node. Calls through copied function references, callbacks, `.call`/`.apply`, object methods below an exported object, dynamic imports, relative imports and JavaScript call sites need explicit `await` (or a returned Promise awaited by their caller). Detached timers, listeners and background work started inside a workflow are not covered by its returned Promise: await that work inside the workflow when it must finish before the turn closes. Dext requests and output from a closed run cannot enter the next run. Cancelling kills the kernel; already dispatched host work may finish, but its late response is discarded.
 
 There is no separate workflow language and no interpreter to learn. Files from the old Python-like `.dx` language are not read: migrate one with `node scripts/migrateDxToTs.mjs <file.dx>`, which rewrites what it can and reports what it could not convert for a human to finish.
 

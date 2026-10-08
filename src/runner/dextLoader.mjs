@@ -25,6 +25,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isMainThread } from "node:worker_threads";
 import { silenceTypeStrippingWarnings } from "./dextWarnings.mjs";
+import { trackWorkflowCalls } from "./dextWorkflowCalls.mjs";
 
 // The loader runs on its own thread, which has its own warning state.
 silenceTypeStrippingWarnings();
@@ -58,9 +59,10 @@ if (isMainThread && process.env.DEXT_LOADER_AUTOREGISTER === "1") {
 }
 
 function insideWorkspace(filePath) {
-  if (!workspaceRoot) return false;
-  const relative = path.relative(workspaceRoot, filePath);
-  return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+  return [workspaceRoot, ...apiRoots].filter(Boolean).some((root) => {
+    const relative = path.relative(root, filePath);
+    return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+  });
 }
 
 function inNodeModules(filePath) {
@@ -157,7 +159,7 @@ export async function load(url, context, next) {
   const source = await readFile(filePath, "utf8");
   let transformed;
   try {
-    transformed = await transformTypescript(source, filePath, filePath);
+    transformed = trackWorkflowCalls(await transformTypescript(source, filePath, filePath), generation);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     const code = error && typeof error === "object" && "code" in error ? String(error.code) : "ERR_DEXT_TYPESCRIPT";

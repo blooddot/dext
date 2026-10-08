@@ -10,8 +10,10 @@ import { MethodRegistry } from "../src/core/registry.js";
 import { DextRuntime } from "../src/core/runtime.js";
 import type { ExecutionMetadata, InvocationAst, RuntimeResponse } from "../src/core/types.js";
 import { DextKernelHost } from "../src/runner/dextHost.js";
+import { workflowCases } from "./dextWorkflowCases.js";
 
 const runnerDirectory = resolve("src", "runner");
+workflowCases(runnerDirectory);
 const languageFixture = resolve("test", "fixtures", "language.ts");
 
 const contextHost: ContextHost = {
