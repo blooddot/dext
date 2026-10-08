@@ -66,4 +66,22 @@ describe.skipIf(!existsSync(builtKernel))("the built kernel", () => {
     // for the call before it reports, and says nothing about it.
     expect(response.steps?.every((step) => step.error === undefined)).toBe(true);
   });
+
+  it("renders a logged object in the built kernel too", { timeout: 30000 }, async () => {
+    // The console patch lives at the top of the kernel bundle: a build that dropped it
+    // would hand Output `util.inspect`'s depth-limited `[Object]` again.
+    const root = await mkdtemp(join(tmpdir(), "dext-dist-kernel-"));
+    roots.push(root);
+    const kernel = new DextKernelHost({
+      workspaceRoot: root,
+      nodeExecPath: process.execPath,
+      runnerDirectory: resolve("dist"),
+      execute: async (invocation) => askResponse(invocation)
+    });
+    hosts.push(kernel);
+    const response = await kernel.runSource('console.log({ nested: { deep: { deepest: true } } });\n');
+    const stdout = response.steps?.filter((step) => step.stream?.channel === "stdout").map((step) => step.stream!.text).join("") ?? "";
+    expect(stdout).not.toContain("[Object]");
+    expect(stdout).toContain('"deepest": true');
+  });
 });

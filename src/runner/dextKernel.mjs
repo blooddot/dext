@@ -16,13 +16,16 @@
  *
  * `console.log` / `console.error` are captured per run as process-output steps
  * (chunks written in the same tick are merged, one step is capped at 64 KiB) and
- * are still forwarded to the real streams.
+ * are still forwarded to the real streams. An object argument is rendered as
+ * indented JSON rather than `util.inspect`'s depth-limited `[Object]`, so a logged
+ * payload reaches Output whole.
  */
 
 import * as nodeModule from "node:module";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { inspect } from "node:util";
 import { silenceTypeStrippingWarnings } from "./dextWarnings.mjs";
 
 const LOADER_URL = new URL("./dextLoader.mjs", import.meta.url);
@@ -92,6 +95,49 @@ function capture(channel) {
 
 capture("stdout");
 capture("stderr");
+
+/** Whether a value is plain data JSON can carry: a plain object, an array, or null. */
+function isPlainData(value) {
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null || Array.isArray(value);
+}
+
+/**
+ * One `console` argument as Output shows it.
+ *
+ * A logged object used to reach Output through `util.inspect`'s defaults, which stop at
+ * depth 2 — a payload nested three deep arrived as `[Object]` — and quote strings with
+ * single quotes, which nothing else in Dext does. An object is therefore rendered as
+ * indented JSON before Node's own formatting joins the line. Strings and primitives are
+ * passed through untouched, so `%s`/`%d`, `%o` and the space join keep working. A value
+ * JSON cannot carry (a `Map`, a cycle, a class instance) falls back to `util.inspect`,
+ * which shows its structure at full depth instead of dropping it.
+ */
+function consoleArgument(value) {
+  if (value === null || typeof value !== "object") return value;
+  if (value instanceof Error) return value.stack ?? String(value);
+  if (isPlainData(value)) {
+    try {
+      const json = JSON.stringify(value, null, 2);
+      if (json !== undefined) return json;
+    } catch {
+      // A cycle or a getter that throws: `inspect` below shows what it can.
+    }
+  }
+  return inspect(value, { depth: null, colors: false, breakLength: 100 });
+}
+
+/** `console` as a browser has it: an object argument is rendered as a value, not lost to
+ * `[Object]`. The captured text is what Output and History already render. */
+function patchConsole() {
+  for (const method of ["log", "info", "warn", "error", "debug"]) {
+    const original = console[method];
+    if (typeof original !== "function") continue;
+    console[method] = (...args) => original(...args.map((argument) => consoleArgument(argument)));
+  }
+}
+
+patchConsole();
 
 function describeError(error) {
   if (error instanceof Error) {

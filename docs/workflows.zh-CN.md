@@ -226,7 +226,7 @@ const result = await agent({ input: "实现所需的修改" });
 
 `terminal` 仅适用于受信任的本地 `file` 工作区。`cwd` 必须位于工作区内，超时上限为 10 分钟，捕获的输出大小也有限制。它不会弹出确认，因此由工作流决定哪些命令可以安全运行。返回状态为 `"succeeded"`、`"failed"` 或 `"timed_out"`；非零退出码会返回类型化的失败结果。
 
-`console.log` 和 `console.error` 会在 Dext Output 中展示内容，并转发到进程输出流，但不会写入集成终端。字符串和基本类型显示为文本，对象及 API 结果显示为 JSON。
+`console.log` 和 `console.error` 会在 Dext Output 中展示内容，并转发到进程输出流，但不会写入集成终端。字符串和基本类型显示为文本；对象或数组按缩进 JSON 渲染，且**不限深度**，所以带嵌套的载荷会完整到达，而不是变成 `util.inspect` 的 `[Object]`；JSON 装不下的值（`Map`、循环引用）退回 `util.inspect` 全深度渲染。格式化占位符与空格拼接仍由 Node 负责，因此 `console.log("标签", payload)` 仍是"标签 + 值"的读法。
 
 ## 文件与选区引用
 

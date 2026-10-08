@@ -96,6 +96,31 @@ describe("Dext kernel host", () => {
     expect(response.executions).toEqual([ask?.response]);
   });
 
+  it("renders a logged object as JSON instead of util.inspect's [Object]", { timeout: 30000 }, async () => {
+    // `console.log(obj)` is how a payload reaches Output, so the object has to arrive
+    // whole: `util.inspect` stops at depth 2, which is what a nested payload used to hit.
+    const root = await workspace();
+    const kernel = host(root, async (invocation) => askResponse(invocation));
+    const response = await kernel.runSource(
+      [
+        'const payload = { a: 1, nested: { deep: { deeper: { deepest: true } } }, zh: "中文" };',
+        "console.log(payload);",
+        'console.log("label", payload);',
+        'console.log("plain", 42, true);',
+        ""
+      ].join("\n")
+    );
+    const stdout = response.steps?.filter((step) => step.stream?.channel === "stdout").map((step) => step.stream!.text).join("") ?? "";
+    expect(stdout).not.toContain("[Object]");
+    expect(stdout).toContain('"deepest": true');
+    // A string argument is untouched: the label stays first and the space join still holds.
+    expect(stdout).toContain("label {");
+    expect(stdout).toContain("plain 42 true");
+    // The object text is JSON, so it can be parsed back out of the stream.
+    const json = stdout.slice(stdout.indexOf("{"), stdout.indexOf("\n}\n") + 3);
+    expect(JSON.parse(json)).toMatchObject({ nested: { deep: { deeper: { deepest: true } } }, zh: "中文" });
+  });
+
   it("runs each call through the injected runtime contract", { timeout: 30000 }, async () => {
     const root = await workspace();
     const runtime = builtinRuntime(root);

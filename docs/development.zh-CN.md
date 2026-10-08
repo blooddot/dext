@@ -76,7 +76,7 @@ MCP 初始化从 `package.json` 读取客户端名称和版本。协议版本分
 `.dext/api/**/*.ts` 与 composer 的 Code 模式不再由扩展宿主里的解释器执行，而是在一个常驻 Node 子进程（kernel）里当作普通 TypeScript 运行：
 
 - `src/runner/dextHost.ts` 负责子进程：启动、握手、派发队列（`dext.workflow.maxConcurrency`）、崩溃重启与取消（取消即 kill），以及报告是否有 run 在跑的 `busy()`。它还把输入区的缓冲区落盘——内核 import 的是真实文件：扩展把它指向自己的存储（`runs/<工作区>/`），因此跑 Code 不会在仓库里留下任何文件，且只保留最新 20 个缓冲区。一个 host 绑定一个工作区，所以切换文件夹时扩展会替换缓存的那个——但只在 `busy()` 为 false 时，因为 reload 绝不能杀掉正在跑的 run。
-- `src/runner/dextKernel.mjs` 是子进程本身：每次 run 都以新的 generation 重新注册 loader，导入入口模块（导出了 `main` 就 await 它），并把 `console.log` / `console.error` 记为进程输出步骤。
+- `src/runner/dextKernel.mjs` 是子进程本身：每次 run 都以新的 generation 重新注册 loader，导入入口模块（导出了 `main` 就 await 它），并把 `console.log` / `console.error` 记为进程输出步骤——对象参数会在 Node 自己拼接之前按缩进 JSON 渲染，所以打印出来的载荷会完整到达 Output，而不是 `util.inspect` 那种限深的 `[Object]`。
 - `src/runner/dextLoader.mjs` 把 `dext` 映射到运行时模块、把 `dext/api/<id>` 映射到 `<workspace>/.dext/api/<id>.ts`，解析工作区内省略扩展名的 `.ts` 导入，并擦除 TypeScript 类型。
 - `src/runner/dextRuntime.mjs` 就是 `dext` 模块：每次调用记录一个步骤，并请求扩展宿主通过原有 runtime 执行。
 - `src/runner/dextSerialization.mjs` 定义跨进程值的规则。

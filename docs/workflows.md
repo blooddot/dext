@@ -225,7 +225,9 @@ const result = await agent({ input: "Implement the requested change" });
 `terminal` is available only in a trusted local `file` workspace. Its `cwd` must stay inside the workspace, the timeout is capped at 10 minutes, and captured output is bounded. It runs without a confirmation prompt, so the workflow decides what is safe to run. It returns `TerminalStatus = "succeeded" | "failed" | "timed_out"`; a nonzero exit code is a typed failed result.
 
 `console.log` and `console.error` render values in Dext Output and are forwarded to the process streams; they never write to the integrated terminal. Strings and primitive values are
-shown as text; objects and API results are rendered as JSON.
+shown as text. An object or array argument is rendered as indented JSON, with no depth limit, so a logged payload arrives whole instead of as `util.inspect`'s `[Object]`; a value JSON
+cannot carry — a `Map`, a cycle — falls back to `util.inspect` at full depth. Format specifiers and the space join are Node's own, so `console.log("label", payload)` still reads as a label
+followed by the value.
 
 ## File and selection references
 
