@@ -123,6 +123,11 @@ interface PendingRun {
   reject: (error: Error) => void;
 }
 
+interface DispatchState {
+  active: number;
+  waiting: (() => void)[];
+}
+
 function defaultRunnerDirectory(): string {
   if (typeof __dirname === "string") return __dirname;
   throw new Error("DextKernelHost needs runnerDirectory when it is not loaded as a CommonJS bundle.");
@@ -150,8 +155,7 @@ export class DextKernelHost {
   private ready: DextKernelReady | undefined;
   private pending: PendingRun | undefined;
   private nextRunId = 1;
-  private active = 0;
-  private readonly waiting: (() => void)[] = [];
+  private dispatchState: DispatchState = { active: 0, waiting: [] };
   private maxConcurrency: number;
   private disposed = false;
   /** Metadata applied to every API call the current run makes. */
@@ -180,7 +184,7 @@ export class DextKernelHost {
 
   setMaxConcurrency(value: number): void {
     this.maxConcurrency = Math.max(1, Math.floor(value));
-    this.release();
+    this.drain(this.dispatchState);
   }
 
   /** Starts the kernel if needed and resolves when the child has handshaken. */
@@ -230,6 +234,7 @@ export class DextKernelHost {
         }
       };
       child.on("message", (message: unknown) => {
+        if (this.child !== child) return;
         const parsed = message as DextKernelMessage;
         if (!parsed || typeof parsed !== "object") return;
         if (parsed.type === "ready") {
@@ -269,8 +274,7 @@ export class DextKernelHost {
     this.readyPromise = undefined;
     const pending = this.pending;
     this.pending = undefined;
-    // Requests already being dispatched finish in the host and drain the queue
-    // through `release`; nothing has to be reset here.
+    this.dispatchState = { active: 0, waiting: [] };
     pending?.reject(new Error(`The Dext kernel stopped (code ${code ?? "null"}${signal ? `, signal ${signal}` : ""}).`));
   }
 
@@ -284,8 +288,8 @@ export class DextKernelHost {
         return;
       case "runDone": {
         const pending = this.pending;
-        this.pending = undefined;
         if (!pending || pending.id !== message.id) return;
+        this.pending = undefined;
         if (!message.ok) {
           pending.reject(new Error(message.error ?? "The Dext run failed."));
           return;
@@ -306,15 +310,24 @@ export class DextKernelHost {
   }
 
   private async onRequest(id: number, method: string, args: Record<string, unknown>): Promise<void> {
+    const child = this.child;
+    const run = this.pending;
+    if (!child || !run) return;
     const metadata = this.currentMetadata;
+    const context = this.currentContext;
+    const log = this.currentLog;
+    const isCurrent = (): boolean => this.child === child && this.pending === run;
     let reply: DextHostMessage;
     try {
-      const response = await this.dispatch(() =>
-        this.options.execute(this.invocation(method, args), metadata, this.currentContext));
+      const response = await this.dispatch(() => {
+        if (!isCurrent()) throw new ExecutionCancelledError();
+        return this.options.execute(this.invocation(method, args), metadata, context);
+      });
+      if (!isCurrent()) return;
       // The kernel receives JSON, so a result that cannot cross that boundary is
       // refused here with a readable message instead of degrading silently.
       const boundaryResponse = toBoundaryJson(response, `The result of ${method}()`);
-      this.currentLog?.record(method, args, boundaryResponse);
+      log?.record(method, args, boundaryResponse);
       reply = {
         type: "response",
         requestId: id,
@@ -324,7 +337,7 @@ export class DextKernelHost {
       reply = { type: "response", requestId: id, error: errorMessage(error) };
     }
     try {
-      if (this.child?.connected) this.child.send(reply);
+      if (isCurrent() && child.connected) child.send(reply);
     } catch {
       // The kernel died while the call was in flight; the exit handler reports it.
     }
@@ -342,29 +355,30 @@ export class DextKernelHost {
   }
 
   private async dispatch<T>(task: () => Promise<T>): Promise<T> {
-    await this.acquire();
+    const state = this.dispatchState;
+    await this.acquire(state);
     try {
       return await task();
     } finally {
-      this.release();
+      state.active -= 1;
+      this.drain(state);
     }
   }
 
-  private acquire(): void | Promise<void> {
-    if (this.active < this.maxConcurrency) {
-      this.active += 1;
+  private acquire(state: DispatchState): void | Promise<void> {
+    if (state.active < this.maxConcurrency) {
+      state.active += 1;
       return;
     }
-    // The admitted waiter takes the slot itself in `release`; incrementing here
+    // The admitted waiter takes the slot itself in `drain`; incrementing here
     // would admit every waiter at once.
-    return new Promise<void>((resolve) => this.waiting.push(resolve));
+    return new Promise<void>((resolve) => state.waiting.push(resolve));
   }
 
-  private release(): void {
-    this.active = Math.max(0, this.active - 1);
-    while (this.active < this.maxConcurrency && this.waiting.length) {
-      const admit = this.waiting.shift()!;
-      this.active += 1;
+  private drain(state: DispatchState): void {
+    while (state.active < this.maxConcurrency && state.waiting.length) {
+      const admit = state.waiting.shift()!;
+      state.active += 1;
       admit();
     }
   }
@@ -450,6 +464,7 @@ export class DextKernelHost {
     this.child = undefined;
     this.ready = undefined;
     this.readyPromise = undefined;
+    this.dispatchState = { active: 0, waiting: [] };
     child?.kill();
     const pending = this.pending;
     this.pending = undefined;

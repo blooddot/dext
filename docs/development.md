@@ -101,6 +101,8 @@ Runtime facts measured on this checkout (2026-09) with `test/dextHost.test.ts`, 
 
 Type stripping is native and needs no extra dependency. `dextLoader.mjs` falls back to an esbuild transform only when the host runtime has no TypeScript support of its own; esbuild stays a development dependency because of that fallback's rarity.
 
+Host requests capture their child, run, metadata, context and replay log before dispatch. Replies and log writes are accepted only while that child/run is current; queued requests recheck ownership before execution. Cancellation replaces the dispatch queue so an old unanswered host operation cannot block the next run. Old child messages and mismatched `runDone` messages cannot clear the new pending run.
+
 
 ### Project knowledge, runs, and editor tabs
 
