@@ -71,7 +71,7 @@ Dext 把文件放在每个工作区一个长期存活的 Node 子进程中运行
 
 ## 内置 API
 
-- 点击侧栏的 **Create resource**，打开复用 Conversation 和 Input 布局的专用 Tab。底部选择 **API / MCP / Rule / Skill** 和 **Project / Global**（菜单显示保存目录）。可以选择 **New resource** 新建，或选择已有资源描述修改；预览草稿或差异后保存。保存后保留 Tab，方便继续修改；更改已有资源的保存位置表示另存一份。资源目标、草稿和对话会随历史记录恢复。
+- 点击侧栏的 **Create resource**，打开复用 Conversation 和 Input 布局的专用 Tab。底部选择 **API / MCP / Rule / Skill** 和 **Project / Global**（菜单显示保存目录）。可以选择 **New resource** 新建，或选择已有资源描述修改；预览草稿或差异后保存。草稿可包含独立的 rules、模板和 skill 支持文件；API 通过文件名引用规则。预览时可选择文件，保存会检查所有文件的冲突并一起写入。保存后保留 Tab，方便继续修改；更改已有资源的保存位置表示连同关联文件另存一份。资源目标、关联文件、草稿和对话会随历史记录恢复。
 - `ask({ input, workspace?, cli?, model? }) -> AskResult`：只读解释和分析。
 - `plan({ input, workspace?, cli?, model? }) -> PlanResult`：创建、维护和执行实施计划。
 - `agent({ input, apply=true, patch=true, workspace?, cli?, model? }) -> AgentResult`：执行持续性任务；`patch=false` 时只以 text 汇报结论，不产出补丁。

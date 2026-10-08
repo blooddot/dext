@@ -80,7 +80,7 @@ The old interpreter's resource limits (`while` iteration count, `range` size, fo
 
 ## Built-in API
 
-- **Create resource** opens a dedicated tab using the same Conversation and Input layout. Choose **API / MCP / Rule / Skill**, then **Project / Global** (the menu shows the destination directory). Select **New resource** or an existing resource, describe your changes, and review the draft or diff before saving. Saving keeps the tab open for further revisions; changing an existing resource's destination creates a copy. Resource targets, drafts, and conversations are restored from History.
+- **Create resource** opens a dedicated tab using the same Conversation and Input layout. Choose **API / MCP / Rule / Skill**, then **Project / Global** (the menu shows the destination directory). Select **New resource** or an existing resource, describe your changes, and review the draft or diff before saving. Drafts can include separate rules, templates, and skill support files, with APIs referencing rules by filename. Preview lets you choose a file; saving checks every file for conflicts before writing the bundle. Saving keeps the tab open for further revisions; changing an existing resource's destination copies its supporting files too. Resource targets, supporting files, drafts, and conversations are restored from History.
 - `ask({ input, workspace?, cli?, model? }) -> AskResult`
 - `plan({ input, workspace?, cli?, model? }) -> PlanResult`
 - `agent({ input, apply=true, patch=true, workspace?, cli?, model? }) -> AgentResult` — `patch=false` reports conclusions as text without producing a patch.

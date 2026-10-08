@@ -829,6 +829,7 @@ function renderResourceToolbar(): void {
   if (!resource) return;
   const locked = composerSelectionLocked();
   const document = resource.draft ?? resource.target;
+  const fileCount = 1 + (document?.files?.length ?? 0);
   elements.resourceTargetLabel.textContent = document?.name ?? "New resource";
   elements.resourceTarget.querySelector(".codicon")!.className = `codicon codicon-${RESOURCE_ICONS[resource.type]}`;
   elements.resourceTarget.title = resource.target ? `${resourceDirectory(resource.scope, resource.type)}/${resource.target.path}` : "Select a resource (or hold Shift and drop a file)";
@@ -840,6 +841,7 @@ function renderResourceToolbar(): void {
   elements.resourceSave.textContent = resource.target ? "Save changes" : "Create";
   elements.resourceStatus.dataset.state = resourceErrors.has(activeConversationId ?? "") ? "error" : !locked && !resource.draft && resource.saved ? "saved" : "idle";
   elements.resourceStatus.textContent = resourceErrors.get(activeConversationId ?? "") ?? (resourcePending.has(activeConversationId ?? "") ? "Working…" : executing ? "Generating…" : resource.draft ? "Unsaved draft" : resource.saved ? "Saved" : resource.target ? "Editing" : "New resource");
+  if (fileCount > 1 && !resourceErrors.has(activeConversationId ?? "")) elements.resourceStatus.textContent += ` · ${fileCount} files`;
   editor.setPlaceholder(resource.target ? `Describe changes to ${resource.target.name}…` : `Describe the ${RESOURCE_LABELS[resource.type]} to create…`);
 }
 

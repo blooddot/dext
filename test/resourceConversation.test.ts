@@ -5,8 +5,15 @@ import { conversationTitle } from "../src/historyRender.js";
 import type { ResourceDocument, ResourceSession } from "../src/resourceSession.js";
 import type { ExecutionMetadata, InputExecutionResponse } from "../src/core/types.js";
 import type { WebviewResponse } from "../src/webviewProtocol.js";
+import * as vscode from "vscode";
 
-vi.mock("vscode", () => ({}));
+vi.mock("vscode", () => ({
+  Disposable: { from: vi.fn() },
+  Uri: { from: ({ path }: { path: string }) => ({ toString: () => path }) },
+  workspace: { registerTextDocumentContentProvider: vi.fn(), onDidCloseTextDocument: vi.fn(), openTextDocument: vi.fn() },
+  window: { showQuickPick: vi.fn(), showTextDocument: vi.fn() },
+  commands: { executeCommand: vi.fn() }
+}));
 
 function harness() {
   const session: DextHistorySession = { id: "resource", createdAt: 1, updatedAt: 1, turns: [], resource: { type: "rule", scope: "global" } };
@@ -29,6 +36,7 @@ function harness() {
   const sidebar = Object.create(DextSidebarProvider.prototype) as DextSidebarProvider;
   Object.assign(sidebar, {
     activeSession: session, activeExecutions: new Map(), resourceOperations: new Set(), conversationSelections: new Map(),
+    resourcePreviews: new Map(),
     sessions: new Map([[session.id, session]]), pendingPatches: new Map(), openConversations: [session.id],
     application, history, postAgentEvent: vi.fn(), post: async (message: WebviewResponse) => { messages.push(structuredClone(message)); },
     postConversationState: vi.fn(), refresh: vi.fn(), updateRunningContext: vi.fn(),
@@ -133,5 +141,36 @@ describe("resource conversations", () => {
     await h.host.receive({ type: "saveResource", sessionId: "resource" });
     expect(h.session.resource?.draft?.content).toBe("Review carefully");
     expect(h.messages.at(-1)).toEqual({ type: "error", sessionId: "resource", message: "File changed" });
+  });
+
+  it("retains supporting files through history, save, and destination changes", async () => {
+    const h = harness();
+    const files = [{ path: "rules/review-checks.md", content: "Check evidence" }];
+    const generate = h.draftResource.getMockImplementation()!;
+    h.draftResource.mockImplementation(async (...args) => {
+      const result = await generate(...args);
+      result.draft.files = files;
+      return result;
+    });
+    await h.host.run("ask", "Generate with rules");
+    expect(h.history.list()[0]?.resource?.draft?.files).toEqual(files);
+    await h.host.receive({ type: "saveResource", sessionId: "resource" });
+    expect(h.history.list()[0]?.resource?.target?.files).toEqual(files);
+    await h.host.receive({ type: "resourceOptions", sessionId: "resource", resourceType: "rule", scope: "project" });
+    expect(h.session.resource?.draft?.files).toEqual(files);
+    expect(h.session.resource?.target).toBeUndefined();
+  });
+
+  it("previews a selected supporting file against its saved contents", async () => {
+    const h = harness();
+    h.session.resource!.target = { name: "review", path: "review.md", content: "Primary",
+      files: [{ path: "rules/checks.md", content: "Original checks" }] };
+    h.session.resource!.draft = { name: "review", content: "Primary",
+      files: [{ path: "rules/checks.md", content: "Revised checks" }] };
+    vi.mocked(vscode.window.showQuickPick).mockImplementationOnce(async (items) => (await items)[1] as never);
+    await h.host.receive({ type: "previewResource", sessionId: "resource" });
+    expect(vscode.commands.executeCommand).toHaveBeenLastCalledWith("vscode.diff", expect.anything(), expect.anything(), "rules/checks.md — Resource changes");
+    const previews = (h.sidebar as unknown as { resourcePreviews: Map<string, string> }).resourcePreviews;
+    expect([...previews.values()]).toEqual(["Original checks", "Revised checks"]);
   });
 });

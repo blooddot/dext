@@ -6,7 +6,7 @@ import * as vscode from "vscode";
 import { DextApplication } from "../src/application.js";
 import { BUILTIN_METHODS } from "../src/core/builtins.js";
 import { MethodRegistry } from "../src/core/registry.js";
-import { resourceFileName, resourcePathSegments, resourcePrompt, type ResourceSession } from "../src/resourceSession.js";
+import { resourceFileName, resourcePathSegments, resourcePrompt, resourceFiles, type ResourceSession } from "../src/resourceSession.js";
 import { buildResourceList, isMcpApiId, renderResourceList, resourceCategory, type ResourceEntry } from "../src/resourceDocuments.js";
 
 vi.mock("vscode", () => {
@@ -24,6 +24,7 @@ vi.mock("vscode", () => {
       readFile: async (value: { fsPath: string }) => readFile(value.fsPath).catch(missing),
       stat: async (value: { fsPath: string }) => stat(value.fsPath).catch(missing),
       createDirectory: async (value: { fsPath: string }) => mkdir(value.fsPath, { recursive: true }),
+      delete: async (value: { fsPath: string }) => rm(value.fsPath).catch(missing),
       writeFile: async (value: { fsPath: string }, content: Uint8Array) => writeFile(value.fsPath, content)
     } }
   };
@@ -43,7 +44,7 @@ beforeEach(async () => {
     registry, reload: vi.fn()
   });
 });
-afterEach(async () => { await rm(root, { recursive: true, force: true }); });
+afterEach(async () => { vi.restoreAllMocks(); await rm(root, { recursive: true, force: true }); });
 
 describe("resource documents", () => {
   it("initializes the workspace package once and preserves it on API reload", async () => {
@@ -179,5 +180,115 @@ describe("resource documents", () => {
     resource.draft!.content = content.replace('"node"', '"node-next"');
     await application.saveResource(resource);
     expect(await readFile(join(root, "mcp/server.jsonc"), "utf8")).toBe(resource.draft!.content);
+  });
+
+  const bundle = (): ResourceSession => ({ type: "api", scope: "global", draft: {
+    name: "docs.review", content: 'import { ask } from "dext";\nexport function main(input: string) { return ask({ input, rules: ["review.md"] }); }',
+    files: [
+      { path: "rules/review.md", content: "Review with evidence." },
+      { path: "templates/review.md", content: "# Review\n" },
+      { path: "skills/review/references/checks.md", content: "Check tests." }
+    ]
+  } });
+
+  it.each(["global", "project"] as const)("saves a complete %s resource bundle and retains companions on revision", async (scope) => {
+    const resource = bundle();
+    resource.scope = scope;
+    if (scope === "project") {
+      Object.assign(vscode.workspace, { workspaceFolders: [{ uri: vscode.Uri.file(root) }] });
+      Object.assign(application, { workspaceTrusted: true });
+    }
+    const destination = scope === "project" ? join(root, ".dext") : root;
+    resource.target = await application.saveResource(resource);
+    for (const file of resource.target.files!) expect(await readFile(join(destination, file.path), "utf8")).toBe(file.content);
+    expect(await readFile(join(destination, "api/docs/review.ts"), "utf8")).toContain('rules: ["review.md"]');
+    resource.draft = { name: "docs.review", content: resource.target.content, files: [{ path: "rules/review.md", content: "Updated policy" }] };
+    resource.target = await application.saveResource(resource);
+    expect(resource.target.files).toHaveLength(3);
+    expect(await readFile(join(destination, "rules/review.md"), "utf8")).toBe("Updated policy\n");
+    resource.draft = { name: "docs.review", content: resource.target.content };
+    expect((await application.saveResource(resource)).files).toEqual(resource.target.files);
+  });
+
+  it("renders every draft file and preserves companions when the next model response omits them", async () => {
+    const resource = bundle();
+    const execute = vi.fn(async () => ({ result: { kind: "ask", text: JSON.stringify(resource.draft) } }));
+    Object.assign(application, { runtime: { executeConversation: execute } });
+    const result = await application.draftResource({ type: "api", scope: "global" }, "Create review API");
+    expect(result.draft.files).toEqual(resource.draft!.files);
+    const text = result.response.kind === "workflow" ? (result.response.executions[0]!.result as { text: string }).text : "";
+    expect(text).toContain("Draft: rules/review.md");
+    expect(text).toContain("Review with evidence.");
+    expect(text).toContain("```typescript");
+    expect(await readdir(root)).toEqual([]);
+    execute.mockImplementation(async () => ({ result: { kind: "ask", text: JSON.stringify({ name: "docs.review", content: "export function main() {}" }) } }));
+    const revised = await application.draftResource({ ...resource, draft: result.draft }, "Revise API");
+    expect(revised.draft.files).toEqual(result.draft.files);
+    expect(execute.mock.calls[1]).toEqual(["ask", expect.stringContaining("Review with evidence."), {}]);
+    expect(resourcePrompt(resource, "Create")).toContain('rules: ["example.md"]');
+  });
+
+  it.each(["../outside.md", "rules/../../outside.md", "/rules/a.md", "C:/rules/a.md", ".dext/rules/a.md", "rules/a\\b.md", "rules/a.md:stream", "rules/a.md.", "rules/CON.md", "api/helper.ts", "rules/a.ts"])("rejects unsafe or unsupported companion path %s", async (path) => {
+    const resource = bundle();
+    resource.draft!.files = [{ path, content: "Policy" }];
+    await expect(application.saveResource(resource)).rejects.toThrow();
+    expect(await readdir(root)).toEqual([]);
+  });
+
+  it("rejects malformed, duplicate, oversized, and primary-file aliases", async () => {
+    for (const value of [null, {}, [{ path: "rules/a.md" }], [{ path: "rules/a.md", content: "" }], [{ path: "rules/a.md", content: "a".repeat(200_001) }],
+      [{ path: "rules/a.md", content: "a" }, { path: "rules/A.md", content: "b" }]]) expect(() => resourceFiles(value)).toThrow();
+    await expect(application.saveResource({ type: "rule", scope: "global", draft: {
+      name: "review", content: "main", files: [{ path: "rules/review.md", content: "alias" }]
+    } })).rejects.toThrow("duplicates");
+    expect(await readdir(root)).toEqual([]);
+  });
+
+  it("checks all companion collisions before creating any files", async () => {
+    await mkdir(join(root, "templates"));
+    await writeFile(join(root, "templates/review.md"), "Existing template");
+    await expect(application.saveResource(bundle())).rejects.toThrow("already exists");
+    expect(await readdir(root)).toEqual(["templates"]);
+    expect(await readFile(join(root, "templates/review.md"), "utf8")).toBe("Existing template");
+  });
+
+  it.each(["disk", "editor"])("checks companion %s changes before updating the primary resource", async (source) => {
+    const resource = bundle();
+    resource.target = await application.saveResource(resource);
+    resource.draft!.content = "export function main() { return 42; }";
+    const path = join(root, "rules/review.md");
+    if (source === "disk") await writeFile(path, "External edit");
+    else Object.assign(vscode.workspace, { textDocuments: [{ uri: vscode.Uri.file(path), isDirty: true }] });
+    await expect(application.saveResource(resource)).rejects.toThrow(source === "disk" ? "changed on disk" : "unsaved editor changes");
+    expect(await readFile(join(root, "api/docs/review.ts"), "utf8")).toBe(resource.target.content);
+  });
+
+  it("removes newly created companions when a later write fails, allowing retry", async () => {
+    const resource = bundle();
+    const originalWrite = vscode.workspace.fs.writeFile.bind(vscode.workspace.fs);
+    const write = vi.spyOn(vscode.workspace.fs, "writeFile").mockImplementation(async (uri, content) => {
+      if (uri.fsPath.endsWith("review.ts")) throw new Error("Disk full");
+      return originalWrite(uri, content);
+    });
+    await expect(application.saveResource(resource)).rejects.toThrow("Disk full");
+    for (const file of resource.draft!.files!) await expect(readFile(join(root, file.path))).rejects.toThrow();
+    write.mockRestore();
+    await expect(application.saveResource(resource)).resolves.toMatchObject({ files: expect.any(Array) });
+  });
+
+  it("restores updated companions if saving the primary file fails", async () => {
+    const resource = bundle();
+    resource.target = await application.saveResource(resource);
+    resource.draft!.files![0]!.content = "Revised policy";
+    resource.draft!.content = "export function main() { return 2; }";
+    const originalWrite = vscode.workspace.fs.writeFile.bind(vscode.workspace.fs);
+    let failed = false;
+    vi.spyOn(vscode.workspace.fs, "writeFile").mockImplementation(async (uri, content) => {
+      if (uri.fsPath.endsWith("review.ts") && !failed) { failed = true; throw new Error("Write failed"); }
+      return originalWrite(uri, content);
+    });
+    await expect(application.saveResource(resource)).rejects.toThrow("Write failed");
+    expect(await readFile(join(root, "rules/review.md"), "utf8")).toBe(resource.target.files![0]!.content);
+    expect(await readFile(join(root, "api/docs/review.ts"), "utf8")).toBe(resource.target.content);
   });
 });

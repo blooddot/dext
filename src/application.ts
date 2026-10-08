@@ -37,7 +37,7 @@ import { DEFAULT_AGENT_TIMEOUT_MS, DEFAULT_AGENT_IDLE_TIMEOUT_MS, MAX_AGENT_TIME
 import { listHarnessPresets } from "./core/harnessPresets.js";
 import { SkillCatalog } from "./core/skillCatalog.js";
 
-import { RESOURCE_DIRECTORIES, resourceFileName, resourcePathSegments, resourcePrompt, type ResourceSession, type ResourceDocument, type ResourceTarget, type ResourceKind, type ResourceScope } from "./resourceSession.js";
+import { RESOURCE_DIRECTORIES, resourceFileName, resourcePathSegments, resourcePrompt, resourceFiles, mergeResourceFiles, type ResourceSession, type ResourceDocument, type ResourceTarget, type ResourceKind, type ResourceScope } from "./resourceSession.js";
 import { McpToolRegistry, authDiagnostic, mcpCredentialKind, redactedMcpUrl, redactedUrlQuery, type McpServerConfig, type McpToolConfig, type McpDiscoveredTool } from "./core/mcpRegistry.js";
 import { McpAccessTokenStore, type McpCredentialKind } from "./core/mcpSecrets.js";
 import { parseMcpManifest } from "./core/mcpManifest.js";
@@ -1015,12 +1015,19 @@ export class DextApplication {
     const value = agentResultCandidates(response.result.text)[0]?.value;
     if (value === undefined) throw new Error("The Agent returned invalid resource JSON. Refine the request and try again.");
     if (typeof value.name !== "string" || typeof value.content !== "string") throw new Error("The resource needs a name and content.");
-    const draft = { name: resource.target?.name ?? value.name.trim(), content: value.content };
+    const files = mergeResourceFiles((resource.draft ?? resource.target)?.files, value.files);
+    const draft: ResourceDocument = { name: resource.target?.name ?? value.name.trim(), content: value.content, ...(files.length ? { files } : {}) };
     if (!resource.target) resourceFileName(resource.type, draft.name);
     this.validateResource(resource.type, draft);
     // Keep generated JSON out of the final conversation response; show the actual document.
-    const fence = "`".repeat(Math.max(3, ...Array.from(draft.content.matchAll(/`+/g), (match) => match[0].length + 1)));
-    response.result.text = `Draft: ${draft.name}\n\n${fence}${resource.type === "api" ? "python" : resource.type === "mcp" ? "jsonc" : "text"}\n${draft.content}\n${fence}\n\nReview the draft, then save or describe further changes.`;
+    const documents = [{ path: resource.target?.path ?? resourceFileName(resource.type, draft.name), content: draft.content }, ...files];
+    response.result.text = documents.map((file, index) => {
+      const fence = "`".repeat(Math.max(3, ...Array.from(file.content.matchAll(/`+/g), (match) => match[0].length + 1)));
+      const language = file.path.endsWith(".ts") ? "typescript" : /\.jsonc?$/.test(file.path) ? "jsonc" : "text";
+      const path = index === 0 && resource.type !== "file" ? `${RESOURCE_DIRECTORIES[resource.type]}/${file.path}` : file.path;
+      const label = resource.scope === "project" && !(index === 0 && resource.type === "file") ? `.dext/${path}` : path;
+      return `Draft: ${label}\n\n${fence}${language}\n${file.content}\n${fence}`;
+    }).join("\n\n") + "\n\nReview all draft files, then save or describe further changes.";
     return { draft, response: { kind: "workflow", executions: [response] } };
   }
 
@@ -1036,23 +1043,55 @@ export class DextApplication {
     const { type, scope, draft, target } = resource;
     this.validateResource(type, draft);
     const path = target?.path ?? resourceFileName(type, draft.name);
-    const root = this.resourceRoot(type, scope);
-    const segments = resourcePathSegments(type, path);
-    const uri = vscode.Uri.joinPath(root, ...segments);
-    if ((vscode.workspace.textDocuments ?? []).some((document) => document.uri.toString() === uri.toString() && document.isDirty)) {
-      throw new Error("This resource has unsaved editor changes. Save them and select the resource again before updating it.");
+    const normalize = (content: string): string => content.endsWith("\n") ? content : `${content}\n`;
+    const content = normalize(draft.content);
+    const files = mergeResourceFiles(target?.files, draft.files).map((file) => ({ ...file, content: normalize(file.content) }));
+    const previousFiles = new Map(resourceFiles(target?.files).map((file) => [file.path, file.content]));
+    const uri = vscode.Uri.joinPath(this.resourceRoot(type, scope), ...resourcePathSegments(type, path));
+    const supportingRoot = files.length ? vscode.Uri.joinPath(this.resourceRoot("rule", scope), "..") : undefined;
+    const writes = [
+      ...files.map((file) => ({ uri: vscode.Uri.joinPath(supportingRoot!, ...file.path.split("/")), content: file.content, previous: previousFiles.get(file.path) })),
+      { uri, content, previous: target?.content }
+    ];
+    const destinations = new Set<string>();
+    // Check the entire bundle before changing anything, including unchanged companions.
+    for (const file of writes) {
+      const key = file.uri.toString().toLowerCase();
+      if (destinations.has(key)) throw new Error("A supporting file duplicates the primary resource path.");
+      destinations.add(key);
+      if ((vscode.workspace.textDocuments ?? []).some((document) => document.uri.toString().toLowerCase() === key && document.isDirty)) {
+        throw new Error(`This resource has unsaved editor changes: ${file.uri.fsPath}. Save them and select the resource again before updating it.`);
+      }
+      if (file.previous !== undefined) {
+        const current = new TextDecoder().decode(await vscode.workspace.fs.readFile(file.uri));
+        if (current !== file.previous) throw new Error(`This resource changed on disk: ${file.uri.fsPath}. Select it again to load the latest version before saving.`);
+      } else {
+        try { await vscode.workspace.fs.stat(file.uri); throw new Error(`Resource '${file.uri.fsPath}' already exists. Select it to edit, or choose a different name.`); }
+        catch (error) { if (!(error instanceof vscode.FileSystemError && error.code === "FileNotFound")) throw error; }
+      }
     }
-    if (target) {
-      const current = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
-      if (current !== target.content) throw new Error("This resource changed on disk. Select it again to load the latest version before saving.");
-    } else {
-      try { await vscode.workspace.fs.stat(uri); throw new Error(`Resource '${draft.name}' already exists. Select it to edit, or choose a different name.`); }
-      catch (error) { if (!(error instanceof vscode.FileSystemError && error.code === "FileNotFound")) throw error; }
+    const attempted: typeof writes = [];
+    try {
+      for (const file of writes) {
+        if (file.content === file.previous) continue;
+        await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(file.uri, ".."));
+        attempted.push(file);
+        await vscode.workspace.fs.writeFile(file.uri, new TextEncoder().encode(file.content));
+      }
+    } catch (error) {
+      const failures: string[] = [];
+      for (const file of attempted.reverse()) {
+        try {
+          if (file.previous !== undefined) await vscode.workspace.fs.writeFile(file.uri, new TextEncoder().encode(file.previous));
+          else await vscode.workspace.fs.delete(file.uri);
+        } catch (rollbackError) {
+          if (!(file.previous === undefined && rollbackError instanceof vscode.FileSystemError && rollbackError.code === "FileNotFound")) failures.push(file.uri.fsPath);
+        }
+      }
+      if (failures.length) throw new Error(`Resource save failed: ${String(error)}. Could not restore: ${failures.join(", ")}. Check these files before retrying.`);
+      throw error;
     }
-    const content = draft.content.endsWith("\n") ? draft.content : `${draft.content}\n`;
-    await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(root, ...segments.slice(0, -1)));
-    await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(content));
-    return { name: draft.name, path, content };
+    return { name: draft.name, path, content, ...(files.length ? { files } : {}) };
   }
 
   /** The webview cannot read configuration itself, so the settings it renders

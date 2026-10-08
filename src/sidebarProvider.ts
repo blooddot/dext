@@ -725,22 +725,31 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   private async previewResource(resource: ResourceSession): Promise<void> {
     const draft = resource.draft ?? resource.target;
     if (!draft) throw new Error("Generate a draft or select a resource first.");
+    const name = resource.target?.path ?? resourceFileName(resource.type, draft.name);
+    const files = [
+      { label: name, description: "Primary resource", content: draft.content, previous: resource.target?.content },
+      ...(draft.files ?? []).map((file) => ({ label: file.path, description: "Supporting file", content: file.content,
+        previous: resource.target?.files?.find((saved) => saved.path === file.path)?.content }))
+    ];
+    const selected = files.length > 1
+      ? await vscode.window.showQuickPick(files, { title: "Preview resource files", placeHolder: "Choose a file to review", matchOnDescription: true })
+      : files[0];
+    if (!selected) return;
     this.resourcePreviewProvider ??= vscode.Disposable.from(
       vscode.workspace.registerTextDocumentContentProvider("dext-resource-preview", {
         provideTextDocumentContent: (uri) => this.resourcePreviews.get(uri.toString()) ?? ""
       }),
       vscode.workspace.onDidCloseTextDocument((document) => this.resourcePreviews.delete(document.uri.toString()))
     );
-    const name = resource.target?.path ?? resourceFileName(resource.type, draft.name);
     const uri = (label: string, content: string): vscode.Uri => {
-      const value = vscode.Uri.from({ scheme: "dext-resource-preview", path: `/${randomBytes(12).toString("hex")}/${label}/${name}` });
+      const value = vscode.Uri.from({ scheme: "dext-resource-preview", path: `/${randomBytes(12).toString("hex")}/${label}/${selected.label}` });
       this.resourcePreviews.set(value.toString(), content);
       return value;
     };
-    if (resource.draft && resource.target) {
-      await vscode.commands.executeCommand("vscode.diff", uri("saved", resource.target.content), uri("draft", draft.content), `${draft.name} — Resource changes`);
+    if (resource.draft && selected.previous !== undefined) {
+      await vscode.commands.executeCommand("vscode.diff", uri("saved", selected.previous), uri("draft", selected.content), `${selected.label} — Resource changes`);
     } else {
-      const document = await vscode.workspace.openTextDocument(uri("preview", draft.content));
+      const document = await vscode.workspace.openTextDocument(uri("preview", selected.content));
       await vscode.window.showTextDocument(document, { preview: true });
     }
   }
@@ -1136,7 +1145,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
               // Changing destination makes an explicit copy; it never moves or overwrites the source.
               const document = resource.draft ?? resource.target;
               session.resource = { type: resource.type, scope: requestedScope,
-                ...(document ? { draft: { name: document.name, content: document.content } } : {}) };
+                ...(document ? { draft: { name: document.name, content: document.content, ...(document.files ? { files: structuredClone(document.files) } : {}) } } : {}) };
             }
             await this.persistResource(session);
           });
