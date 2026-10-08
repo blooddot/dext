@@ -93,6 +93,21 @@ describe("file drag payloads", () => {
     expect(isFileDrag({ dataTransfer: data })).toBe(true);
     expect(getData).not.toHaveBeenCalled();
   });
+
+  it("survives a transfer whose payload access throws", () => {
+    const protectedTransfer = transfer({ "text/uri-list": "file:///repo/a.ts" });
+    protectedTransfer.getData = () => { throw new Error("protected"); };
+    expect(droppedFilePaths(protectedTransfer)).toEqual([]);
+  });
+
+  it("falls back to plain paths when a preferred URI format is protected", () => {
+    const data = transfer({ "application/vnd.code.uri-list": "", "text/plain": "C:/repo/a.ts" });
+    data.getData = type => {
+      if (type === "application/vnd.code.uri-list") throw new Error("protected");
+      return type === "text/plain" ? "C:/repo/a.ts" : "";
+    };
+    expect(droppedFilePaths(data)).toEqual(["C:/repo/a.ts"]);
+  });
 });
 
 describe("file drop requests", () => {

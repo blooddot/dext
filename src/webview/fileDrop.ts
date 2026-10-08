@@ -47,7 +47,9 @@ export function bindFileDropTarget(target: HTMLElement, handlers: {
 
 function read(data: DataTransfer, type: string): string {
   const actual = [...data.types].find((candidate) => candidate.toLowerCase() === type);
-  return actual ? data.getData(actual) : "";
+  try {
+    return actual ? data.getData(actual) : "";
+  } catch { return ""; } // A protected format must not prevent other formats from resolving.
 }
 
 function paths(text: string, uriList = false): string[] {
