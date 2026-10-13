@@ -49,4 +49,3 @@ $('reset').addEventListener('click',()=>reset());reset();
 Object.assign(window,{lab:{model,editor,projection,source,refs,reset,remove,events,sample,monaco,production,assistance,colorizeSource,
  position(offset:number){editor.setPosition(model.getPositionAt(projection.toView(model.getValue(),offset)));editor.focus();},
  select(from:number,to:number){editor.setSelection(monaco.Selection.fromPositions(model.getPositionAt(projection.toView(model.getValue(),from)),model.getPositionAt(projection.toView(model.getValue(),to,'right'))));editor.focus();}}});
-
