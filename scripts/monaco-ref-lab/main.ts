@@ -1,5 +1,6 @@
 import { monaco } from '../../src/webview/monacoEnvironment';
 import { DextCodeEditor } from '../../src/webview/codeEditor';
+import { colorizeSource } from '../../src/webview/sourceHighlight';
 import type { ClipboardClient } from '../../src/webview/clipboardClient';
 import type { FileSearchClient } from '../../src/webview/fileSearchClient';
 import './style.css';
@@ -45,7 +46,7 @@ $('wrap').addEventListener('change',()=>editor.updateOptions({wordWrap:$<HTMLInp
 $('width').addEventListener('change',()=>{document.documentElement.style.setProperty('--editor-width',$<HTMLSelectElement>('width').value+'px');editor.layout();});
 $('theme').addEventListener('change',()=>{document.documentElement.dataset.theme=$<HTMLSelectElement>('theme').value;document.body.className=$<HTMLSelectElement>('theme').value==='vs'?'vscode-light':$<HTMLSelectElement>('theme').value==='hc-black'?'vscode-high-contrast':$<HTMLSelectElement>('theme').value==='hc-light'?'vscode-high-contrast-light':'vscode-dark';});
 $('reset').addEventListener('click',()=>reset());reset();
-Object.assign(window,{lab:{model,editor,projection,source,refs,reset,remove,events,sample,monaco,production,assistance,
+Object.assign(window,{lab:{model,editor,projection,source,refs,reset,remove,events,sample,monaco,production,assistance,colorizeSource,
  position(offset:number){editor.setPosition(model.getPositionAt(projection.toView(model.getValue(),offset)));editor.focus();},
  select(from:number,to:number){editor.setSelection(monaco.Selection.fromPositions(model.getPositionAt(projection.toView(model.getValue(),from)),model.getPositionAt(projection.toView(model.getValue(),to,'right'))));editor.focus();}}});
 
