@@ -13,8 +13,8 @@
  * and then the recorded responses would be attached to the wrong calls. That case is
  * a hard error, never a silent reuse.
  *
- * `src/runner/dextRuntime.mjs` implements the matching half in the kernel; the two
- * digests must agree, and `test/dextResume.test.ts` proves it by replaying a real run.
+ * `src/runner/dextRuntime.mjs` compares calls in the kernel;
+ * `test/dextResume.test.ts` verifies matching and rejection by replaying real runs.
  */
 
 export interface DextReplayEntry {
@@ -25,29 +25,6 @@ export interface DextReplayEntry {
 
 export const CHANGED_SINCE_STOPPED =
   "The Code file or a value it reads changed since it stopped, so the recorded calls no longer line up. Retry to run it from the start.";
-
-export class DextReplayMismatchError extends Error {
-  readonly code = "CHANGED_SINCE_STOPPED";
-
-  constructor(message = CHANGED_SINCE_STOPPED) {
-    super(message);
-    this.name = "DextReplayMismatchError";
-  }
-}
-
-/** JSON with sorted object keys, so two equal argument objects always hash alike. */
-export function stableStringify(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
-  const record = value as Record<string, unknown>;
-  const keys = Object.keys(record).sort();
-  return `{${keys.map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`).join(",")}}`;
-}
-
-/** Identity of one call: the same call in two runs has the same fingerprint. */
-export function replayFingerprint(method: string, args: unknown): string {
-  return `${method}(${stableStringify(args)})`;
-}
 
 /** What one attempt recorded, plus what a retry should replay. */
 export class DextResumeCache {
@@ -67,10 +44,5 @@ export class DextResumeCache {
 
   record(method: string, args: Record<string, unknown>, response: unknown): void {
     this.recorded.push({ method, arguments: args, response });
-  }
-
-  /** One line per call, for diagnostics; never contains response payloads. */
-  describe(): string {
-    return this.recorded.map((entry, index) => `${index + 1}. ${replayFingerprint(entry.method, entry.arguments)}`).join("\n");
   }
 }

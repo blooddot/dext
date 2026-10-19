@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { InvocationAst, RuntimeResponse } from "../src/core/types.js";
 import { DextKernelHost } from "../src/runner/dextHost.js";
-import { CHANGED_SINCE_STOPPED, type DextReplayEntry, stableStringify } from "../src/runner/dextResumeCache.js";
+import { CHANGED_SINCE_STOPPED, type DextReplayEntry } from "../src/runner/dextResumeCache.js";
 
 const runnerDirectory = resolve("src", "runner");
 
@@ -153,10 +153,5 @@ describe("Dext run replay", () => {
     // recorded call stays aligned with the second `ask`.
     expect(response.steps?.map((step) => step.method)).toEqual(["stdout", "ask", "stdout", "stderr"]);
     expect(response.steps?.filter((step) => step.method === "ask")).toHaveLength(1);
-  });
-
-  it("fingerprints arguments independently of key order", () => {
-    expect(stableStringify({ a: 1, b: [{ c: 2 }] })).toBe(stableStringify({ b: [{ c: 2 }], a: 1 }));
-    expect(stableStringify({ a: 1 })).not.toBe(stableStringify({ a: 2 }));
   });
 });

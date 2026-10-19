@@ -108,8 +108,7 @@ function flushStreams() {
   if (typeof globalThis.__dextFlushStreams === "function") globalThis.__dextFlushStreams();
 }
 
-/** JSON with sorted keys; must stay identical to `stableStringify` in
- * `src/runner/dextResumeCache.ts`, which fingerprints the recorded calls. */
+/** JSON with sorted keys for comparing recorded calls. */
 function stableStringify(value) {
   if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
