@@ -68,24 +68,20 @@ describe("project panel", () => {
     expect(html).toContain('value=".dext/mcp"');
   });
 
-  it("tells the reader when a removed scan profile is still sitting in .dext/project.json", () => {
-    const clear = renderProjectPanel("overview", data());
-    expect(clear.split("<script>")[0]).not.toContain("data-project-legacy-scan");
-
-    const note = renderProjectPanel("overview", data({
-      overview: { ...data().overview, legacyScanRoots: ["src", "lib"] }
-    }));
-    expect(note).toContain("data-project-legacy-scan");
-    expect(note).toContain("scan");
-    // The notice states the exact scope the retired roots still apply, not just that they exist.
-    expect(note).toContain("<code>src/**</code>");
-    expect(note).toContain("<code>lib/**</code>");
-    expect(note).toContain("Project settings below");
-    // The roots come from a project file, so they are escaped like any other untrusted value.
-    const escaped = renderProjectPanel("overview", data({
-      overview: { ...data().overview, legacyScanRoots: ["<img src=x onerror=1>"] }
-    }));
-    expect(escaped).not.toContain("<img src=x");
+  it("guides missing evidence configuration and accepts saved empty scope", () => {
+    const overview = {
+      ...data().overview,
+      workspaceSettings: { planDirectory: ".dext/plans", apiDirs: [], skillDirs: [], mcpDirs: [] },
+      evidenceSettings: { depth: "standard" as const, include: [] }
+    };
+    const missing = renderProjectPanel("overview", data({ overview: { ...overview, evidenceConfigured: false } })).split("<script>")[0]!;
+    expect(missing).toContain("data-project-evidence-required");
+    expect(missing).toContain('data-evidence-configured="false"');
+    expect(missing).toContain("Save reading settings");
+    const configured = renderProjectPanel("overview", data({ overview: { ...overview, evidenceConfigured: true } })).split("<script>")[0]!;
+    expect(configured).not.toContain("data-project-evidence-required");
+    expect(configured).not.toContain("Save reading settings");
+    expect(configured).toContain('data-evidence-configured="true"');
   });
 
   it("distinguishes running, failed, cancelled and completed-but-missing-diagram states", () => {

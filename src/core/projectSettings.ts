@@ -34,22 +34,8 @@ export const DEFAULT_PROJECT_WORKSPACE_SETTINGS: ProjectWorkspaceSettings = {
   mcpDirs: []
 };
 
-export function validProjectPaths(paths: readonly unknown[]): string[] {
-  return paths.flatMap((path) => {
-    const parsed = projectPathSchema.safeParse(path);
-    return parsed.success ? [parsed.data] : [];
-  });
-}
-
 export function projectWorkspaceSettingsFromDefinition(
-  definition: { paths?: Partial<ProjectWorkspaceSettings> | undefined } | undefined,
-  legacy: Partial<ProjectWorkspaceSettings> = {}
+  definition: { paths?: Partial<ProjectWorkspaceSettings> | undefined } | undefined
 ): ProjectWorkspaceSettings {
-  const source = definition?.paths;
-  return projectWorkspaceSettingsSchema.parse({
-    planDirectory: source?.planDirectory ?? legacy.planDirectory ?? DEFAULT_PLAN_DIRECTORY,
-    apiDirs: source?.apiDirs ?? validProjectPaths(legacy.apiDirs ?? []),
-    skillDirs: source?.skillDirs ?? validProjectPaths(legacy.skillDirs ?? []),
-    mcpDirs: source?.mcpDirs ?? validProjectPaths(legacy.mcpDirs ?? [])
-  });
+  return projectWorkspaceSettingsSchema.parse(definition?.paths ?? {});
 }

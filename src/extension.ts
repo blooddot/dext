@@ -28,10 +28,7 @@ import type { VscodeWebviewPanelLike } from "./editorTabManager.js";
 import { ProjectStore } from "./projectStore.js";
 import { searchProjectReferences } from "./core/projectContext.js";
 import { VscodeProjectFileHost, createProjectPanelDataSource, discoverArchifyRepository, effectiveProjectEvidenceSettings, effectiveProjectWorkspaceSettings, readWorkspaceEvidence } from "./vscodeProjectHost.js";
-import { legacyProjectEvidenceSettings } from "./projectAiLimits.js";
 import { resolveProjectEvidenceSettings } from "./core/projectEvidenceSettings.js";
-import { DEFAULT_PLAN_DIRECTORY } from "./core/planFile.js";
-import type { ProjectWorkspaceSettings } from "./core/projectSettings.js";
 import { renderEditorTabHtml } from "./editorTabHtml.js";
 import { ProjectDiagramAdapterRegistry } from "./core/projectDiagramRegistry.js";
 import { ArchifyAdapter } from "./core/archifyAdapter.js";
@@ -53,19 +50,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   application.runtime.setWorkspaceTrusted(vscode.workspace.isTrusted && folder?.uri.scheme === "file");
   const projectHost = folder?.uri.scheme === "file" ? new VscodeProjectFileHost(folder.uri) : undefined;
   const projectStore = projectHost ? new ProjectStore(projectHost) : undefined;
-  const legacyWorkspaceSettings = (): ProjectWorkspaceSettings => {
-    const configuration = vscode.workspace.getConfiguration("dext", folder?.uri);
-    return {
-      planDirectory: configuration.get<string>("plan.directory", DEFAULT_PLAN_DIRECTORY),
-      apiDirs: configuration.get<string[]>("apiDirs", []) ?? [],
-      skillDirs: configuration.get<string[]>("skillDirs", []) ?? [],
-      mcpDirs: []
-    };
-  };
   if (projectStore) {
     const definition = await projectStore.readDefinition();
-    const legacy = legacyWorkspaceSettings();
-    if (definition.paths) application.setProjectWorkspaceSettings(effectiveProjectWorkspaceSettings(definition, legacy));
+    if (definition.paths) application.setProjectWorkspaceSettings(effectiveProjectWorkspaceSettings(definition));
   }
   await application.reload();
   // Conversation history belongs to the active workspace. Using globalState
@@ -138,7 +125,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         projectStore.readIntent(),
         projectStore.readDefinition()
       ]);
-      const limits = resolveProjectEvidenceSettings(effectiveProjectEvidenceSettings(definition, legacyProjectEvidenceSettings()));
+      if (!definition.evidence) throw new Error("Configure and save Evidence reading in Overview > Project settings before reading project sources.");
+      const limits = resolveProjectEvidenceSettings(effectiveProjectEvidenceSettings(definition));
       return readWorkspaceEvidence(
         folder.uri,
         { objects, ...(intent ? { intent } : {}) },
@@ -207,8 +195,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             : profile.models.map((id) => ({ id, label: id }))
         })),
         openEvidence: openProjectEvidence,
-        legacyEvidenceSettings: () => legacyProjectEvidenceSettings(),
-        legacyWorkspaceSettings,
         onWorkspaceSettingsChanged: async (settings) => {
           application.setProjectWorkspaceSettings(settings);
           await application.reload();
@@ -836,13 +822,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await sidebar.refresh();
     }),
     vscode.workspace.onDidChangeConfiguration(async (event) => {
-      // A new API directory changes the registered API set, so this one has to
-      // go through a full reload rather than a refresh.
-      if (event.affectsConfiguration("dext.apiDirs")) {
-        await application.reload();
-        await sidebar.refresh();
-        return;
-      }
       if (
         event.affectsConfiguration("dext.diff.defaultView")
         || event.affectsConfiguration("dext.submitOnEnter")

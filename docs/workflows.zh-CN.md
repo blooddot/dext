@@ -198,7 +198,7 @@ await fs.writeFile(`docs/decisions/${number}-${slug}.md`, created.text);
 
 上面的 `?` 表示可选参数，是文档记法。
 
-项目 API 以 TypeScript 模块存放在 `.dext/api/` 中。模块按其在 `.dext/api` 下的路径导入，例如 `.dext/api/workflow/feature.ts` 对应 `import { main } from "dext/api/workflow/feature"`。全局 API 存放在 Dext 全局存储中，可供所有工作区使用；同名项目 API 优先。`dext.apiDirs` 可以增加更多 API 目录，`.dext/api` 始终最先查找。
+项目 API 以 TypeScript 模块存放在 `.dext/api/` 中。模块按其在 `.dext/api` 下的路径导入，例如 `.dext/api/workflow/feature.ts` 对应 `import { main } from "dext/api/workflow/feature"`。全局 API 存放在 Dext 全局存储中，可供所有工作区使用；同名项目 API 优先。`.dext/project.json` 中的 `paths.apiDirs` 可以增加更多 API 目录，`.dext/api` 始终最先查找。
 
 项目 API 可以直接组合类型化 MCP、`agent` 和 UI 调用，不需要导入中间阶段 API。例如，功能开发工作流可以先读取上下文、制定计划，经 `ui.confirm` 确认后实现，再确认并验证。规则存放在 `.dext/rules/`，由各 Agent 阶段显式指定使用顺序；代码生成、提交这类需要确认的操作仍然是显式的 UI 闸门。
 
@@ -297,7 +297,7 @@ Dext 为工作区生成一套编辑器用的 `dext` 工程，这个工程由项�
 - `.dext/tsconfig.json`——严格的 `nodenext` 工程，把 `dext` 映射到 `./api/dext.d.ts`、把 `dext/api/<id>` 映射到 API 模块本身（`dext/api/team/analyze` 对应 `api/team/analyze.ts`，与内核 loader 的查找顺序一致，项目通过 `apiDirs` 增加的目录同样在内），并包含 `api/**/*.ts`。它设置 `erasableSyntaxOnly: true`，因此 Node 类型擦除无法处理的语法——`enum`、`namespace`、参数属性和装饰器——在编辑器中就是错误；内核会以 `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX` 拒绝它。
 - `.dext/package.json`——把该目录标记为 ESM，使 TypeScript 服务按内核的加载方式对待 `.dext/api/*.ts`，包括顶层 `await`；同时声明这些文件编译时依赖的 `@types/node`。Dext 只在文件不存在时创建默认内容；之后由项目维护依赖、脚本及其他字段。请保留 `"type": "module"`，使工作流工程按 ESM 加载。
 
-类型声明和 tsconfig 会在重新加载时生成；`package.json` 只在缺失时初始化。`npm run check` 里的 `--workspace . --check` 检查生成文件是否与 registry 一致，以及 package 文件是否存在，不比较或改写项目依赖。完全不写 API 模块的工作区一个文件都不会生成。另有两类 API 源因为提交的文件无法指向它们而保持无类型：`dext.apiDirs` 设置与 Dext 全局存储里的 API 都是本机相关的；全局 MCP 清单同样不会进入声明（见 [MCP 配置](mcp.zh-CN.md)）。
+类型声明和 tsconfig 会在重新加载时生成；`package.json` 只在缺失时初始化。`npm run check` 里的 `--workspace . --check` 检查生成文件是否与 registry 一致，以及 package 文件是否存在，不比较或改写项目依赖。完全不写 API 模块的工作区一个文件都不会生成。Dext 全局存储里的 API 是本机相关的，因为提交的文件无法指向它们而保持无类型；全局 MCP 清单同样不会进入声明（见 [MCP 配置](mcp.zh-CN.md)）。
 
 Node 内置模块就是普通 import——自定义 API 读写文件用的 `import fs from "node:fs/promises"`——要让编辑器认它需要两步。先在 `.dext` 里执行一次 `npm install`，装上清单声明的类型定义。工程还设置了 `types: []`，以免工作区里无关的 `@types/*` 把全局量泄漏进这些文件；这也让 `@types/node` 的 ambient 模块在文件主动引用之前不进入程序，所以在 `api/` 下写一处 `/// <reference types="node" />` 就够了——它带进来的类型属于整个 program——完全不 import Node 内置模块的工程则既不需要这一行，也不需要那次安装。工作流自己的依赖直接声明在 `.dext/package.json`，在 `.dext` 中安装，并随工作流提交清单和锁文件。
 
@@ -319,7 +319,7 @@ History 子对话的悬浮操作栏和右键菜单依次提供重命名、分叉
 
 内置 API 从 `dext` 模块导入，始终可用；`import` 就是普通 ESM，因此也可以引入 Node 内置模块、工作区文件、以 `dext/api/<id>` 导入的自定义 API 和 npm 包。只有工作区被 VS Code 标记为受信任后，才会读取外部文件。
 
-Skill 是显式的包。`skill({ skill: "name", input })` 加载指定的 `SKILL.md` 并注入当前 Agent 任务。查找顺序为 `<workspace>/.dext/skills`、**Project > Overview > Project configuration** 中的项目 Skill 目录、Dext 全局存储；项目尚未保存 Skill 目录时回退到旧的 `dext.skillDirs`，同名时靠前的位置优先。`create` 可以在项目或全局范围创建 Skill。
+Skill 是显式的包。`skill({ skill: "name", input })` 加载指定的 `SKILL.md` 并注入当前 Agent 任务。查找顺序为 `<workspace>/.dext/skills`、**Project > Overview > Project configuration** 中的项目 Skill 目录、Dext 全局存储；同名时靠前的位置优先。`create` 可以在项目或全局范围创建 Skill。
 
 规则是 `.dext/rules/` 下的有序策略文件，规则路径只会在该目录下解析。`.dext/rules/plan.md` 会替换 Plan 模式默认的计划文档指令。`agent`、`ask`、`plan`、`template` 也可以为单次调用指定 `skills` 和 `rules`——`await agent({ input: "…", rules: ["review.md"] })`。它们是 `internal`，因为从不作为控制字段转发给提供方；而生成的声明恰好会在这四个 API 上列出它们，因为这是调用方自己写的选项。Dext 先加载所选 Skills，再按顺序加载规则，因此调用的窄规则会约束通用的 Skill 流程；这些内容注入 Agent 指令。`ui.*` 等待用户回答后继续同一个工作流。
 

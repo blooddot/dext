@@ -93,32 +93,43 @@ describe("project initialization output", () => {
 
   });
 
-  it("surfaces a removed scan profile instead of silently ignoring the configured roots", async () => {
-    const { createProjectPanelDataSource, legacyScanInclude, legacyScanRoots } = await import("../src/vscodeProjectHost.js");
-    const definition = {
-      schemaVersion: 1, version: 1, preset: { default: "engineering" },
-      knowledge: { enabled: true, initialized: true }, ai: {}, updatedAt: 1,
-      // The removed scanner profile survives on disk and keeps acting as the evidence scope.
-      scan: { roots: ["src", "tools/"], includeTests: false, extraExcludes: [] }
-    } as never;
-    expect(legacyScanRoots(definition)).toEqual(["src", "tools/"]);
-    expect(legacyScanInclude(definition)).toEqual(["src/**", "tools/**"]);
-    expect(legacyScanInclude(undefined)).toEqual([]);
-    expect(legacyScanInclude({ scan: { roots: ["."] } } as never)).toEqual(["**"]);
-
-    const dataSource = createProjectPanelDataSource({
-      name: "Example",
-      root: "C:/ws",
-      rootUri: { scheme: "file", fsPath: "C:/ws", path: "/C:/ws" } as never,
-      store: {
-        readObjects: async () => [],
-        readArchitecture: async () => ({ decisions: [] }),
-        readDefinition: async () => definition,
-        readDiagrams: async () => []
-      },
-      readEvidence: async () => evidence()
+  it.each([undefined, { roots: ["src", "tools/"] }])("requires saved evidence before indexing, regardless of old scan settings %j", async (scan) => {
+    const { createProjectPanelDataSource, effectiveProjectEvidenceSettings } = await import("../src/vscodeProjectHost.js");
+    const { ProjectStore, defaultProjectDefinition } = await import("../src/projectStore.js");
+    const files = new Map([[".dext/project.json", JSON.stringify({ ...defaultProjectDefinition(), ...(scan ? { scan } : {}) })]]);
+    const store = new ProjectStore({
+      readFile: async path => files.get(path),
+      writeFile: async (path, content) => { files.set(path, content); },
+      listDirectory: async () => []
     });
-    const data = await dataSource.load();
-    expect(data.overview.legacyScanRoots).toEqual(["src", "tools/"]);
+    const readEvidence = vi.fn(async () => evidence());
+    const provider = { ...failingProvider(), generate: vi.fn(failingProvider().generate) };
+    const dataSource = createProjectPanelDataSource({
+      name: "Example", root: "C:/ws", rootUri: {} as never,
+      store: {
+        readDefinition: () => store.readDefinition(),
+        writeDefinition: (value, version) => store.writeDefinition(value, version),
+        readObjects: async () => [], readArchitecture: async () => ({ decisions: [] })
+      },
+      readEvidence, projectAiProvider: provider
+    });
+    const loaded = await dataSource.load();
+    expect(loaded.overview.evidenceConfigured).toBe(false);
+    expect(loaded.overview.evidenceSettings).toEqual({ depth: "standard", include: [] });
+    expect(effectiveProjectEvidenceSettings(await store.readDefinition())).toEqual({ depth: "standard", include: [] });
+    const before = files.get(".dext/project.json");
+    await expect(dataSource.initialize?.()).rejects.toThrow("Configure and save Evidence reading");
+    expect(dataSource.initialization?.().error).toContain("Overview > Project settings");
+    expect(readEvidence).not.toHaveBeenCalled();
+    expect(provider.generate).not.toHaveBeenCalled();
+    expect(files.get(".dext/project.json")).toBe(before);
+
+    await dataSource.setEvidenceSettings!({ depth: "standard", include: [] }, loaded.overview.evidenceSettingsVersion!);
+    expect((await dataSource.load()).overview.evidenceConfigured).toBe(true);
+    // A saved empty scope is deliberate. Execution now reaches the provider instead of the gate.
+    await expect(dataSource.initialize?.()).rejects.toThrow("Codex CLI exited with code 1");
+    expect(readEvidence).toHaveBeenCalledTimes(1);
+    expect(provider.generate).toHaveBeenCalled();
+    expect((await store.readDefinition()).scan).toEqual(scan);
   });
 });

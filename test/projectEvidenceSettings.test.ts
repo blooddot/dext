@@ -5,6 +5,38 @@ import { ProjectStore, defaultProjectDefinition } from "../src/projectStore.js";
 vi.mock("vscode", () => ({ workspace: {} }));
 
 describe("Project-owned reading settings", () => {
+  it("keeps explicit evidence unchanged after removing redundant scan settings and saving paths", async () => {
+    const { createProjectPanelDataSource, effectiveProjectEvidenceSettings } = await import("../src/vscodeProjectHost.js");
+    const clean = { ...defaultProjectDefinition(), evidence: { depth: "whole" as const, include: ["src/**"] } };
+    const legacy = { ...clean, scan: { roots: ["src"], includeTests: false, extraExcludes: [] } };
+    const limits = resolveProjectEvidenceSettings(effectiveProjectEvidenceSettings(clean));
+    expect(resolveProjectEvidenceSettings(effectiveProjectEvidenceSettings(legacy))).toEqual(limits);
+    expect(limits).toEqual({ maxFiles: 1000, maxSourceFiles: 1000, maxFileChars: 24000, maxEvidenceChars: 1200000, include: ["src/**"], preset: "whole" });
+
+    const files = new Map([[".dext/project.json", JSON.stringify(clean)]]);
+    const store = new ProjectStore({
+      readFile: async (path) => files.get(path),
+      writeFile: async (path, content) => { files.set(path, content); },
+      listDirectory: async () => []
+    });
+    const panel = createProjectPanelDataSource({
+      name: "Example", root: ".", rootUri: {} as never,
+      store: {
+        readDefinition: () => store.readDefinition(),
+        writeDefinition: (value, version) => store.writeDefinition(value, version),
+        readObjects: async () => [], readArchitecture: async () => ({ decisions: [] })
+      },
+      readEvidence: vi.fn()
+    });
+    const workspace = { planDirectory: ".project/plans", apiDirs: ["tools/api"], skillDirs: [], mcpDirs: [] };
+    await panel.setWorkspaceSettings!(workspace, clean.version);
+    const saved = await store.readDefinition();
+    expect(saved.paths).toEqual(workspace);
+    expect(saved).not.toHaveProperty("preset");
+    expect(saved).not.toHaveProperty("scan");
+    expect(resolveProjectEvidenceSettings(effectiveProjectEvidenceSettings(saved))).toEqual(limits);
+  });
+
   it("saves and reloads per project, preserving unrelated settings and rejecting stale edits", async () => {
     const { createProjectPanelDataSource, effectiveProjectEvidenceSettings } = await import("../src/vscodeProjectHost.js");
     const files = new Map<string, string>();
@@ -22,12 +54,11 @@ describe("Project-owned reading settings", () => {
         writeDefinition: (value, version) => store.writeDefinition(value, version),
         readObjects: async () => [], readArchitecture: async () => ({ decisions: [] })
       },
-      readEvidence: vi.fn(),
-      legacyEvidenceSettings: () => ({ depth: "deep", files: 234, include: [] })
+      readEvidence: vi.fn()
     });
     const panel = source();
     const loaded = await panel.load();
-    expect(loaded.overview.evidenceSettings).toEqual({ depth: "deep", files: 234, include: ["src/**"] });
+    expect(loaded.overview.evidenceSettings).toEqual({ depth: "standard", include: [] });
     const before = files.get(".dext/project.json");
     await expect(panel.setEvidenceSettings!({ depth: "whole", files: 0, include: [] }, 1)).rejects.toThrow();
     expect(files.get(".dext/project.json")).toBe(before);
@@ -36,13 +67,30 @@ describe("Project-owned reading settings", () => {
     expect(saved.ai).toEqual({ cli: "claude" });
     expect(saved.scan).toEqual({ roots: ["src"] });
     expect((await source().load()).overview).toMatchObject({ evidenceSettings: { depth: "whole", include: [] }, evidenceSettingsVersion: 2 });
-    expect((await source().load()).overview.legacyScanRoots).toBeUndefined();
-    // Empty scope saved in Project must replace old scan roots and all legacy overrides.
-    const limits = resolveProjectEvidenceSettings(effectiveProjectEvidenceSettings(saved, { depth: "standard", files: 1, include: ["old/**"] }));
+    expect((await source().load()).overview.evidenceConfigured).toBe(true);
+    // Explicit empty scope is valid; old scan roots are inactive.
+    const limits = resolveProjectEvidenceSettings(effectiveProjectEvidenceSettings(saved));
     expect(limits).toMatchObject({ maxFiles: 1000, maxEvidenceChars: 1_200_000, include: [], preset: "whole" });
     expect(projectPromptLimits(limits.maxEvidenceChars).maxInputChars).toBe(1_360_000);
     await expect(panel.setEvidenceSettings!({ depth: "standard", include: [] }, 1)).rejects.toThrow("changed");
     expect((await store.readDefinition()).evidence?.depth).toBe("whole");
+  });
+
+  it.each([
+    ["standard", 600, 16_000, 600_000],
+    ["deep", 800, 20_000, 900_000],
+    ["whole", 1000, 24_000, 1_200_000]
+  ] as const)("keeps %s evidence and prompt budgets aligned", (depth, files, fileChars, chars) => {
+    const limits = resolveProjectEvidenceSettings({ depth, include: [] });
+    expect(limits).toEqual({ maxFiles: files, maxSourceFiles: files, maxFileChars: fileChars, maxEvidenceChars: chars, include: [], preset: depth });
+    expect(projectPromptLimits(chars)).toEqual({ maxInputChars: chars + 160_000, maxOutputChars: 240_000, maxOutputTokens: 32_000 });
+  });
+
+  it("defaults missing evidence to standard while keeping prompt headroom for small overrides", async () => {
+    const { effectiveProjectEvidenceSettings } = await import("../src/vscodeProjectHost.js");
+    expect(effectiveProjectEvidenceSettings(undefined)).toEqual({ depth: "standard", include: [] });
+    const limits = resolveProjectEvidenceSettings(projectEvidenceSettingsSchema.parse({ depth: "whole", chars: 20_000, include: [] }));
+    expect(projectPromptLimits(limits.maxEvidenceChars).maxInputChars).toBe(400_000);
   });
 
   it.each(["../outside/**", "C:/outside/**", "/absolute/**", "src/../../secret", "src\\file", "src\nfile"])("rejects invalid scope %s", (pattern) => {

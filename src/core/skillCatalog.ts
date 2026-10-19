@@ -29,13 +29,12 @@ function metadata(source: string, fallback: string): Pick<SkillDescriptor, "titl
 export class SkillCatalog {
   private readonly entries = new Map<string, SkillDescriptor>();
 
-  async reload(workspaceRoot: string, skillDirs: readonly string[] = [], globalRoot?: string, legacySkillDirs: readonly string[] = []): Promise<void> {
+  async reload(workspaceRoot: string, skillDirs: readonly string[] = [], globalRoot?: string): Promise<void> {
     this.entries.clear();
     const roots = [...new Set([
       join(workspaceRoot, ".dext", "skills"),
       ...skillDirs.map((directory) => resolve(workspaceRoot, directory)),
-      ...(globalRoot ? [resolve(globalRoot)] : []),
-      ...legacySkillDirs.map((directory) => resolve(workspaceRoot, directory))
+      ...(globalRoot ? [resolve(globalRoot)] : [])
     ])];
     for (const root of roots) await this.addRoot(root);
   }

@@ -28,7 +28,6 @@ import type { ProjectObject } from "./core/projectKnowledge.js";
 import type { ArchifyIdMapping, ArchifyRepository } from "./core/archifyAdapter.js";
 import type { ProjectDiagramAdapterRegistry } from "./core/projectDiagramRegistry.js";
 import type { ProjectArchitectureDecision, ProjectDiagramSummary } from "./webview/projectArchitectureTypes.js";
-import type { ProjectAiLimits } from "./projectAiLimits.js";
 import { architectureRuleReport, type ArchitectureRule } from "./core/projectArchitecture.js";
 import type { ProjectPanelData } from "./webview/projectPanel.js";
 import { DiagramTaskRegistry, isAllowedEvidencePath, isDiagramExportPayload } from "./projectDiagramViewer.js";
@@ -378,10 +377,6 @@ export interface ProjectPanelDataSourceOptions {
     serviceTiers?: readonly string[];
   }[] }[];
   openEvidence?: (path: string, line?: number) => Promise<void>;
-  /** Live AI budgets, read per run so a settings change applies without reloading the window. */
-  projectAiLimits?: () => ProjectAiLimits;
-  legacyEvidenceSettings?: () => ProjectEvidenceSettings;
-  legacyWorkspaceSettings?: () => Partial<ProjectWorkspaceSettings>;
   onWorkspaceSettingsChanged?: (settings: ProjectWorkspaceSettings) => Promise<void> | void;
   now?: () => number;
 }
@@ -409,35 +404,13 @@ function sortProjectDiagrams(diagrams: readonly ProjectDiagram[]): ProjectDiagra
     || left.title.localeCompare(right.title));
 }
 
-/**
- * The removed source scanner left a `scan` profile behind in `.dext/project.json`. It is preserved
- * on disk but never read by the scanner, so a reader who configured `scan.roots` is told that the
- * roots now act as the evidence scope until `dext.project.evidenceInclude` replaces them.
- */
-export function legacyScanRoots(definition: ProjectDefinition | undefined): string[] {
-  const scan = (definition as { scan?: { roots?: unknown } } | undefined)?.scan;
-  const roots = scan && typeof scan === "object" ? scan.roots : undefined;
-  return Array.isArray(roots)
-    ? roots.filter((root): root is string => typeof root === "string" && root.trim().length > 0).slice(0, 10)
-    : [];
-}
-
-/** The retired roots as evidence globs, so an old configuration keeps meaning what it said. */
-export function legacyScanInclude(definition: ProjectDefinition | undefined): string[] {
-  return legacyScanRoots(definition).map((root) => {
-    const trimmed = root.trim().replace(/\/+$/, "");
-    return trimmed === "" || trimmed === "." ? "**" : `${trimmed}/**`;
-  });
-}
-
-export function effectiveProjectEvidenceSettings(definition: ProjectDefinition | undefined, legacy?: ProjectEvidenceSettings): ProjectEvidenceSettings {
+export function effectiveProjectEvidenceSettings(definition: ProjectDefinition | undefined): ProjectEvidenceSettings {
   if (definition?.evidence) return definition.evidence;
-  const fallback = legacy ?? { depth: "standard", include: [] };
-  return { ...fallback, include: fallback.include.length ? fallback.include : legacyScanInclude(definition) };
+  return { depth: "standard", include: [] };
 }
 
-export function effectiveProjectWorkspaceSettings(definition: ProjectDefinition | undefined, legacy: Partial<ProjectWorkspaceSettings> = {}): ProjectWorkspaceSettings {
-  return projectWorkspaceSettingsFromDefinition(definition, legacy);
+export function effectiveProjectWorkspaceSettings(definition: ProjectDefinition | undefined): ProjectWorkspaceSettings {
+  return projectWorkspaceSettingsFromDefinition(definition);
 }
 
 function safeFileName(title: string): string {
@@ -502,13 +475,17 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
 
   const initializationService = new ProjectInitializationService({
     prepareEvidence: async (signal, onProgress) => {
+      if (options.store.readDefinition && !(await options.store.readDefinition()).evidence) {
+        throw new Error("Configure and save Evidence reading in Overview > Project settings before building the project index.");
+      }
+      signal.throwIfAborted();
       const packaged = await options.readEvidence({ mode: "index" }, signal, onProgress);
       await captureEvidence("initialize", packaged);
       return packaged;
     },
     generate: async (evidence, signal, _onProgress, onOutput) => {
       if (!projectAiProvider) throw new Error("Project AI is unavailable: enable and select an available AI CLI in the input area first.");
-      const service = new ProjectAiGenerationService(projectAiProvider, { ...options.projectAiLimits?.(), ...projectPromptLimits(evidence.selection.evidenceChars) });
+      const service = new ProjectAiGenerationService(projectAiProvider, projectPromptLimits(evidence.selection.evidenceChars));
       // `onOutput` is the single text sink: one activity event becomes exactly one output line.
       return service.generateIndex(evidence, {
         signal,
@@ -585,7 +562,7 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
       });
       await captureEvidence("diagram", evidence);
       post({ type: "projectDiagramProgress", message: "Calling the AI to generate the diagram…" });
-      const service = new ProjectAiGenerationService(projectAiProvider, { ...options.projectAiLimits?.(), ...projectPromptLimits(evidence.selection.evidenceChars) });
+      const service = new ProjectAiGenerationService(projectAiProvider, projectPromptLimits(evidence.selection.evidenceChars));
       const result = await service.generateDiagram(evidence, {
         requirement,
         ...(request.topicId ? { maxNodes: kind === "workflow" ? 8 : 10, explainTopic: true } : {}),
@@ -758,8 +735,7 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
       ? definition.ai.reasoningEffort : undefined;
     selectedAiSpeed = definition?.ai.speed && selectedModel?.speedTiers?.includes(definition.ai.speed)
       ? definition.ai.speed : undefined;
-    const retiredScanRoots = definition?.evidence ? [] : legacyScanRoots(definition);
-    const workspaceSettings = effectiveProjectWorkspaceSettings(definition, options.legacyWorkspaceSettings?.());
+    const workspaceSettings = effectiveProjectWorkspaceSettings(definition);
     return {
       overview: {
         ...(intent?.structure ? { structure: intent.structure } : {}),
@@ -771,9 +747,9 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
         drafts: objects.filter((object) => object.confirmation === "draft").length,
         needsVerification: objects.filter((object) => object.validity !== "current").length,
         initialization,
-        ...(options.store.writeDefinition ? { evidenceSettings: effectiveProjectEvidenceSettings(definition, options.legacyEvidenceSettings?.()), evidenceSettingsVersion: definition?.version ?? 0 } : {}),
+        ...(options.store.writeDefinition ? { evidenceSettings: effectiveProjectEvidenceSettings(definition), evidenceSettingsVersion: definition?.version ?? 0 } : {}),
         ...(options.store.writeDefinition ? { workspaceSettings, workspaceSettingsVersion: definition?.version ?? 0 } : {}),
-        ...(retiredScanRoots.length ? { legacyScanRoots: retiredScanRoots } : {}),
+        evidenceConfigured: Boolean(definition?.evidence),
         ...(options.aiCli?.length ? {
           aiCli: options.aiCli,
           ...(selectedAiCli ? { selectedAiCli } : {}),

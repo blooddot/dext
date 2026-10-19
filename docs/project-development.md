@@ -32,6 +32,10 @@ corrupt `project.json` falls back to defaults so development is never blocked.
 `ProjectObjectReference` stores a stable `objectId`. Renaming an object keeps its id and remembers
 the previous names as aliases, so references, links, and tests survive the rename.
 
+Explicit `evidence` settings control the reading budget and scope. Projects without them must save Evidence reading in Overview > Project settings before building or updating the index. The page guides users to the depth and scope controls and provides a Save reading settings button to confirm the displayed defaults. Explicit `include: []` is valid and uses the built-in file set. Legacy `scan.roots` no longer affects the scope. Legacy `scan` and unknown extension fields remain readable and are preserved, but are not generated. This repository already sets `evidence.include` to `["src/**"]`, so removing its redundant `scan` does not change the source scope. Whole increases the budget; it does not remove scope restrictions.
+
+Review presets have been removed. New definitions and saved definitions without `preset` never generate it; an existing legacy `preset` is preserved as inactive data. Project paths and evidence budgets are configured in `.dext/project.json` through Project settings. The retired VS Code directory and evidence settings are no longer read; missing paths use built-in defaults, while missing `evidence` requires an explicit save before indexing. Knowledge state, AI selection, versions and write timestamps remain in the document.
+
 ## Knowledge dimensions
 
 A project object carries four independent dimensions. They are never collapsed into one status.

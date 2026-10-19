@@ -4,20 +4,20 @@ import { projectWorkspaceSettingsSchema, projectWorkspaceSettingsFromDefinition 
 vi.mock("vscode", () => ({ workspace: {} }));
 
 describe("Project workspace settings", () => {
-  it("uses project values over legacy plugin values", () => {
+  it("uses explicit project paths", () => {
     const settings = projectWorkspaceSettingsFromDefinition({
       paths: { planDirectory: ".project/plans", apiDirs: ["tools/api"], skillDirs: ["tools/skills"], mcpDirs: ["tools/mcp"] }
-    }, { planDirectory: ".old-plans", apiDirs: ["old/api"], skillDirs: ["old/skills"], mcpDirs: ["old/mcp"] });
+    });
     expect(settings).toEqual({ planDirectory: ".project/plans", apiDirs: ["tools/api"], skillDirs: ["tools/skills"], mcpDirs: ["tools/mcp"] });
   });
 
-  it("filters legacy absolute paths before displaying them as portable project settings", () => {
-    const settings = projectWorkspaceSettingsFromDefinition(undefined, {
-      planDirectory: ".dext/plans", apiDirs: ["tools/api", "C:/private/api"], skillDirs: ["tools/skills", "../outside"], mcpDirs: ["tools/mcp", "../outside"]
+  it("uses built-in defaults when project paths are missing or partial", () => {
+    expect(projectWorkspaceSettingsFromDefinition(undefined)).toEqual({
+      planDirectory: ".dext/plans", apiDirs: [], skillDirs: [], mcpDirs: []
     });
-    expect(settings.apiDirs).toEqual(["tools/api"]);
-    expect(settings.skillDirs).toEqual(["tools/skills"]);
-    expect(settings.mcpDirs).toEqual(["tools/mcp"]);
+    expect(projectWorkspaceSettingsFromDefinition({ paths: { apiDirs: ["tools/api"] } })).toEqual({
+      planDirectory: ".dext/plans", apiDirs: ["tools/api"], skillDirs: [], mcpDirs: []
+    });
   });
 
   it("rejects project paths that can escape the workspace", () => {

@@ -23,9 +23,9 @@ function evidenceNumber(settings: ProjectEvidenceSettings, key: "files" | "chars
   return `<label>${label}<input type="number" name="${key}" min="${min}" max="${max}" step="1" value="${settings[key] ?? ""}" placeholder="${preset[key]}"></label>`;
 }
 
-export function renderProjectSettings(settings: ProjectWorkspaceSettings, evidence: ProjectEvidenceSettings, version: number, disabled: boolean, initialization: string): string {
+export function renderProjectSettings(settings: ProjectWorkspaceSettings, evidence: ProjectEvidenceSettings, version: number, disabled: boolean, initialization: string, evidenceConfigured = true): string {
   const depth = evidence.depth === "standard" ? "Standard" : evidence.depth === "deep" ? "Deep" : "Whole";
-  return `<form class="project-settings project-workspace-settings" data-project-settings data-version="${version}">
+  return `<form class="project-settings project-workspace-settings" data-project-settings data-version="${version}" data-evidence-configured="${evidenceConfigured}">
     <details>
       <summary><i class="project-settings-chevron codicon codicon-chevron-right" aria-hidden="true"></i><span class="project-settings-summary-content"><strong>Project settings</strong><span>${depth} · ${escape(settings.planDirectory)}</span></span><span class="project-settings-summary-hint">Click to expand</span></summary>
       <div class="project-workspace-settings-body">
@@ -55,6 +55,7 @@ export function renderProjectSettings(settings: ProjectWorkspaceSettings, eviden
               <p class="project-help">One workspace-relative pattern per line. Empty uses the built-in README, documentation, manifest and source file set.</p>
               <button type="button" data-evidence-use-preset>Use depth defaults</button>
             </details>
+            ${!evidenceConfigured ? '<button type="button" data-project-evidence-save>Save reading settings</button>' : ""}
           </section>
         </fieldset>
         <p class="project-help" role="status" aria-live="polite" data-project-settings-status>Changes save automatically.</p>
@@ -79,6 +80,7 @@ function bindProjectSettings(api: { postMessage(message: unknown): void }, prese
   let timer: ReturnType<typeof setTimeout> | undefined;
   let saving = false;
   let queued = false;
+  let dirty = false;
   const readSettings = (): ProjectSettings => {
     const evidence: Record<string, unknown> = { depth: value("depth").value, include: input("include").value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean) };
     for (const name of evidenceFields) if (input(name).value !== "") evidence[name] = Number(input(name).value);
@@ -102,10 +104,24 @@ function bindProjectSettings(api: { postMessage(message: unknown): void }, prese
     api.postMessage({ type: "projectSettings", settings: readSettings(), version: Number(form.dataset.version) });
   };
   const scheduleSave = (): void => {
+    dirty = true;
     status.textContent = "Unsaved changes";
     if (timer) clearTimeout(timer);
     timer = setTimeout(save, 500);
   };
+  document.addEventListener("click", (event) => {
+    if (!(event.target instanceof Element) || !event.target.closest("[data-project-initialize]")) return;
+    if (form.dataset.evidenceConfigured !== "false" && !dirty && !saving) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    form.querySelector<HTMLDetailsElement>("details")!.open = true;
+    form.querySelector<HTMLDetailsElement>(".project-advanced-settings")!.open = true;
+    status.textContent = saving ? "Wait for reading settings to finish saving before building the index."
+      : "Save the reading depth and scope before building the index. Empty scope uses the built-in file set.";
+    form.querySelector("[data-project-evidence-settings]")?.scrollIntoView({ block: "nearest" });
+    input("include").focus();
+  }, true);
+  form.querySelector("[data-project-evidence-save]")?.addEventListener("click", scheduleSave);
   form.addEventListener("input", scheduleSave);
   form.addEventListener("change", (event) => {
     if (event.target instanceof Element && event.target.matches("[data-project-ai-cli]")) return;
@@ -134,7 +150,10 @@ function bindProjectSettings(api: { postMessage(message: unknown): void }, prese
     status.textContent = message.error ? `Could not save: ${errorText}` : "Saved. New turns and resource reloads use this project configuration.";
     if (!message.error) {
       form.dataset.version = String(message.version);
-      document.querySelector("[data-project-legacy-scan]")?.remove();
+      dirty = queued;
+      form.dataset.evidenceConfigured = "true";
+      document.querySelector("[data-project-evidence-required]")?.remove();
+      form.querySelector("[data-project-evidence-save]")?.remove();
       if (queued) { queued = false; scheduleSave(); }
     }
   });

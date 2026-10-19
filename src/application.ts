@@ -163,7 +163,7 @@ export class DextApplication {
   /**
    * Directories the `dext/api/<id>` alias resolves against, most specific first.
    * `.dext/api` always comes first, so a configured directory cannot shadow a
-   * project API; `dext.apiDirs` and the project's own `paths.apiDirs` add roots
+   * project API; the project's own `paths.apiDirs` adds roots
    * after it, then global storage.
    */
   apiRoots(): string[] {
@@ -174,12 +174,6 @@ export class DextApplication {
     const projectDirs = this.projectWorkspaceSettings?.apiDirs;
     if (projectDirs) {
       for (const entry of projectDirs) add(vscode.Uri.joinPath(folder?.uri ?? vscode.Uri.file(this.workspaceRoot), ...entry.split("/")).fsPath);
-    }
-    const configured = projectDirs ? [] : vscode.workspace.getConfiguration("dext").get<string[]>("apiDirs", []) ?? [];
-    for (const entry of configured) {
-      const value = typeof entry === "string" ? entry.trim() : "";
-      if (!value) continue;
-      add(isAbsolute(value) ? value : vscode.Uri.joinPath(folder?.uri ?? vscode.Uri.file(this.workspaceRoot), value).fsPath);
     }
     add(vscode.Uri.joinPath(this.storage.globalStorageUri, "api").fsPath);
     return roots;
@@ -434,9 +428,7 @@ export class DextApplication {
     this.runtime.setWorkspaceTrusted(this.workspaceTrusted);
     this.applyTimeoutSettings();
     this.applyAgentPermissionSettings();
-    const configuredSkillDirs = vscode.workspace.getConfiguration("dext").get<string[]>("skillDirs", []);
-    const projectSkillDirs = this.projectWorkspaceSettings?.skillDirs;
-    const skillDirs = projectSkillDirs ?? [];
+    const skillDirs = this.projectWorkspaceSettings?.skillDirs ?? [];
     const mcpManifests = await this.loadMcpManifests(folder);
     // The declaration a project commits is generated from its own manifests only: a
     // global manifest lives on one machine, and the committed file has to be the same
@@ -459,7 +451,7 @@ export class DextApplication {
     // "server not connected" instead of "unknown name".
     this.runtime.setDeclaredMcpTools(mcpManifests.methods.map((method) => method.id));
     try {
-      await this.skills.reload(this.workspaceRoot, skillDirs, vscode.Uri.joinPath(this.storage.globalStorageUri, "skills").fsPath, projectSkillDirs ? [] : configuredSkillDirs);
+      await this.skills.reload(this.workspaceRoot, skillDirs, vscode.Uri.joinPath(this.storage.globalStorageUri, "skills").fsPath);
     } catch (error) {
       diagnostics.push(`Skill discovery: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -546,7 +538,7 @@ export class DextApplication {
   /**
    * The directories `dext/api/<id>` resolves against that belong to the project, so
    * the generated project can map them relatively and stay portable. The
-   * `dext.apiDirs` setting and Dext's own storage are deliberately absent: they live
+   * APIs in Dext's own storage are deliberately absent: they live
    * on one machine, and a committed mapping cannot name them.
    */
   private projectApiDirs(): string[] {
@@ -1256,7 +1248,7 @@ export class DextApplication {
     const workspaceStorage = this.storage.location() === "workspace";
     if (workspaceStorage && (!this.workspaceTrusted || !this.workspaceUri)) return response;
     const configured = (this.projectWorkspaceSettings?.planDirectory
-      ?? vscode.workspace.getConfiguration("dext").get<string>("plan.directory", DEFAULT_PLAN_DIRECTORY)).trim();
+      ?? DEFAULT_PLAN_DIRECTORY).trim();
     const segments = workspaceStorage ? planPathSegments(configured || DEFAULT_PLAN_DIRECTORY) : [];
     const directory = workspaceStorage
       ? vscode.Uri.joinPath(this.workspaceUri!, ...segments)

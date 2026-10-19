@@ -296,9 +296,6 @@ describe("Dext package manifest", () => {
 
   it("exposes the layout and history limits the UI reads at runtime", async () => {
     const properties = (await manifest()).contributes?.configuration?.properties ?? {};
-    expect(properties["dext.apiDirs"]).toMatchObject({ type: "array", default: [] });
-    // A configured directory must not be able to take over a project's own API.
-    expect(properties["dext.apiDirs"]?.description).toContain("cannot shadow a project API");
     expect(properties["dext.storage.location"]).toMatchObject({ type: "string", default: "global" });
     expect(properties["dext.storage.location"]?.enum).toEqual(["global", "workspace"]);
     expect(properties["dext.attachments.maxFiles"]).toMatchObject({ type: "integer", default: 200, minimum: 1, maximum: 1000 });
@@ -306,28 +303,12 @@ describe("Dext package manifest", () => {
     expect(properties["dext.attachments.maxBytes"])
       .toMatchObject({ type: "integer", default: 5 * 1024 * 1024, minimum: 64 * 1024, maximum: 50 * 1024 * 1024 });
     expect(properties["dext.attachments.maxBytes"]?.description).toContain("Workspace @file references are not size-limited");
-    expect(properties["dext.plan.directory"]).toMatchObject({ type: "string", default: ".dext/plans" });
-    expect(properties["dext.plan.directory"]?.description).toContain("inside the workspace");
     expect(properties["dext.submitOnEnter"]).toMatchObject({ type: "boolean", default: true });
     expect(properties["dext.submitOnEnter"]?.description).toContain("Shift+Enter");
     expect(properties["dext.diff.defaultView"]).toMatchObject({ type: "string", default: "inline" });
     expect(properties["dext.diff.defaultView"]?.enum).toEqual(["inline", "split"]);
     expect(properties["dext.history.maxTurns"]).toMatchObject({ type: "integer", default: 100 });
     expect(properties["dext.history.maxOutputLength"]).toMatchObject({ type: "integer", default: 200000 });
-    // Project evidence budgets are user-tunable: the right size depends on the selected CLI.
-    expect(properties["dext.project.evidenceChars"]).toMatchObject({ type: "integer", default: 600000, minimum: 20000, maximum: 1200000 });
-    expect(properties["dext.project.evidenceChars"]?.description).toContain("sent to the AI");
-    expect(properties["dext.project.evidenceFiles"]).toMatchObject({ type: "integer", default: 600, minimum: 1, maximum: 1000 });
-    expect(properties["dext.project.evidenceFiles"]?.description).toContain("source");
-    expect(properties["dext.project.evidenceFileChars"]).toMatchObject({ type: "integer", default: 16000, minimum: 512, maximum: 262144 });
-    expect(properties["dext.project.evidenceInclude"]).toMatchObject({ type: "array", default: [] });
-    // The removed scanner profile must not look like it still selects evidence.
-    expect(properties["dext.project.evidenceInclude"]?.description).toContain("scan.roots");
-    // Depth is the interface; the numbers below it are explicit overrides.
-    expect(properties["dext.project.evidenceDepth"]).toMatchObject({ type: "string", default: "standard" });
-    expect(properties["dext.project.evidenceDepth"]?.enum).toEqual(["standard", "deep", "whole"]);
-    expect(properties["dext.project.evidenceDepth"]?.description).toContain("override this preset");
-    expect(properties["dext.project.evidenceChars"]?.description).toContain("Overrides dext.project.evidenceDepth");
     // Dispatch concurrency has a ceiling because each call can start its own process.
     const concurrency = properties["dext.workflow.maxConcurrency"];
     expect(concurrency).toMatchObject({ type: "integer", default: 4, minimum: 1 });
@@ -335,6 +316,15 @@ describe("Dext package manifest", () => {
     // Code mode dispatches Dext APIs concurrently and queues the overflow.
     expect(concurrency?.description).toContain("concurrently");
     expect(concurrency?.description).toContain("wait in a queue");
+  });
+
+  it("does not contribute retired project settings", async () => {
+    const properties = (await manifest()).contributes?.configuration?.properties ?? {};
+    for (const setting of [
+      "dext.apiDirs", "dext.skillDirs", "dext.plan.directory",
+      "dext.project.evidenceDepth", "dext.project.evidenceChars", "dext.project.evidenceFiles",
+      "dext.project.evidenceFileChars", "dext.project.evidenceInclude"
+    ]) expect(properties[setting]).toBeUndefined();
   });
 
   it("offers writable Agent and Plan permission tiers and a trusted-only CLI passthrough", async () => {

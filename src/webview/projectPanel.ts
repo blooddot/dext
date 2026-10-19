@@ -48,8 +48,8 @@ export interface ProjectOverviewData {
   selectedAiModel?: string;
   selectedAiReasoning?: string;
   selectedAiSpeed?: string;
-  /** Removed scanner profile still present in `.dext/project.json`; it never affects evidence. */
-  legacyScanRoots?: readonly string[];
+  /** Whether the project has explicitly saved its reading depth and scope. */
+  evidenceConfigured?: boolean;
 }
 
 export interface ProjectPanelData {
@@ -144,17 +144,15 @@ function renderInitialization(initialization: ProjectInitializationState): strin
 
 function renderOverview(overview: ProjectOverviewData): string {
   const initialization = overview.initialization;
-  const retiredScan = overview.legacyScanRoots?.length
-    ? `<p class="project-scan-progress project-scan-progress-warning" role="status" data-project-legacy-scan>`
-      + `The removed <code>scan</code> settings in <code>.dext/project.json</code> still limit Project evidence to: ${overview.legacyScanRoots.map((root) => `<code>${escapeHtml(root)}/**</code>`).join(", ")}. `
-      + `These roots are included in Project settings below. Change the reading scope there to manage them.</p>`
+  const evidenceNotice = overview.evidenceConfigured === false
+    ? `<p class="project-scan-progress project-scan-progress-warning" role="status" data-project-evidence-required>Choose and save <strong>Evidence reading</strong> in Project settings before building or updating the index. Confirm the reading depth and scope, or save the displayed defaults.</p>`
     : "";
   return `<section class="project-overview" data-project-section="overview">`
     + `<h2>${escapeHtml(overview.name)}</h2>`
     + `<p class="project-help">Project uses the opened workspace folder as its root. Opening, restoring or switching this page only reads saved project files; building the index scans the configured source scope; module analysis reads focused source excerpts.</p>`
-    + retiredScan
+    + evidenceNotice
     + (overview.workspaceSettings && overview.evidenceSettings
-      ? renderProjectSettings(overview.workspaceSettings, overview.evidenceSettings, Math.max(overview.workspaceSettingsVersion ?? 0, overview.evidenceSettingsVersion ?? 0), initialization.status === "running", renderProjectInitializationSettings(overview))
+      ? renderProjectSettings(overview.workspaceSettings, overview.evidenceSettings, Math.max(overview.workspaceSettingsVersion ?? 0, overview.evidenceSettingsVersion ?? 0), initialization.status === "running", renderProjectInitializationSettings(overview), overview.evidenceConfigured !== false)
       : renderProjectInitializationSettings(overview))
     + renderInitialization(initialization)
     + (overview.qualityIssues?.length ? `<details class="project-reader-warning" open><summary>${overview.qualityIssues.length} quality checks to review</summary><ul>${overview.qualityIssues.map(issue => `<li>${escapeHtml(issue.message)}</li>`).join("")}</ul></details>` : "")

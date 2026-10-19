@@ -809,24 +809,6 @@
           "default": true,
           "description": "Capture selections from any workspace text file, including Markdown, plain text, logs, and CSV, as Dext file references when copying with Ctrl+C or Cmd+C. The clipboard still receives the exact selected text, and a multi-cursor copy is left entirely to VS Code. Disable this to use VS Code's native copy behavior."
         },
-        "dext.skillDirs": {
-          "deprecationMessage": "Configure project-relative Skill directories in Project > Overview > Project configuration. This setting remains as a global fallback until the project saves its own directories.",
-          "type": "array",
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "description": "Additional skill directories. Relative paths resolve from the current workspace; earlier directories take priority for duplicate skill names."
-        },
-        "dext.apiDirs": {
-          "deprecationMessage": "Configure project-relative API directories in Project > Overview > Project configuration. This setting remains as a global fallback until the project saves its own directories.",
-          "type": "array",
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "description": "Additional directories searched for API modules (.ts files exporting main). Relative paths resolve from the current workspace. The workspace's own .dext/api is always searched first, so a configured directory cannot shadow a project API."
-        },
         "dext.storage.location": {
           "type": "string",
           "default": "global",
@@ -853,12 +835,6 @@
           "minimum": 65536,
           "maximum": 52428800,
           "description": "Maximum size in bytes for a pasted image, copied terminal output, or clipboard context that Dext stores. Workspace @file references are not size-limited."
-        },
-        "dext.plan.directory": {
-          "deprecationMessage": "Configure the project Plan directory in Project > Overview > Project configuration. This setting remains as a fallback until the project saves its own directory.",
-          "type": "string",
-          "default": ".dext/plans",
-          "description": "Workspace-relative directory where Plan mode saves its documents when dext.storage.location is workspace. Must stay inside the workspace."
         },
         "dext.submitOnEnter": {
           "type": "boolean",
@@ -889,55 +865,6 @@
           "default": 200000,
           "minimum": 1000,
           "description": "Characters kept per stored input, process event, and serialized output before history truncates it."
-        },
-        "dext.project.evidenceDepth": {
-          "deprecationMessage": "Configure this in Project > Overview > Project settings. Existing values are used only until settings are saved for that project.",
-          "type": "string",
-          "default": "standard",
-          "enum": [
-            "standard",
-            "deep",
-            "whole"
-          ],
-          "enumDescriptions": [
-            "All READMEs, manifests and documentation plus a broad slice of product source. Keeps the prompt near 100k tokens.",
-            "More files and larger excerpts, near 150k tokens of prompt. For CLIs with a comfortable context margin.",
-            "The largest evidence Dext will send, near 200k tokens of prompt. Only for models with the biggest context windows."
-          ],
-          "description": "How much of the project the AI may read for Project knowledge and diagrams. The individual evidence limits below override this preset when set explicitly."
-        },
-        "dext.project.evidenceChars": {
-          "deprecationMessage": "Configure this in Project > Overview > Project settings. Existing values are used only until settings are saved for that project.",
-          "type": "integer",
-          "default": 600000,
-          "minimum": 20000,
-          "maximum": 1200000,
-          "description": "Characters of bounded evidence (README, documentation, manifests and source excerpts) sent to the AI for Project knowledge initialization and diagram generation. Overrides dext.project.evidenceDepth. The default keeps a prompt near 100k tokens, which leaves room in a 200k-token CLI context; raising it sends more of your code, costs more time, and can exceed the selected CLI's context window."
-        },
-        "dext.project.evidenceFiles": {
-          "deprecationMessage": "Configure this in Project > Overview > Project settings. Existing values are used only until settings are saved for that project.",
-          "type": "integer",
-          "default": 600,
-          "minimum": 1,
-          "maximum": 1000,
-          "description": "Evidence files read for Project knowledge initialization and diagram generation. Overrides dext.project.evidenceDepth. Documentation keeps precedence, with half of this window reserved for source; leftover slots go to source so the inventory can name as many modules as the window allows."
-        },
-        "dext.project.evidenceFileChars": {
-          "deprecationMessage": "Configure this in Project > Overview > Project settings. Existing values are used only until settings are saved for that project.",
-          "type": "integer",
-          "default": 16000,
-          "minimum": 512,
-          "maximum": 262144,
-          "description": "Characters read from one evidence file before it is truncated. Overrides dext.project.evidenceDepth. Source excerpts are capped at a quarter of this value so the budget still covers many modules; evidence beyond the visible lines cannot be cited."
-        },
-        "dext.project.evidenceInclude": {
-          "deprecationMessage": "Configure this in Project > Overview > Project settings. Existing values are used only until settings are saved for that project.",
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": [],
-          "description": "Workspace-relative globs that limit Project evidence to matching files, for example [\"src/**\"] to read source only, or [\"src/**\", \"docs/**\"]. Empty reads the built-in set: README, documentation and manifests first, then source. This is the replacement for the removed scan.roots setting in .dext/project.json, which only keeps applying while this setting is empty."
         },
         "dext.agentPermission": {
           "type": "string",

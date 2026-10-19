@@ -625,7 +625,7 @@ export function dextModuleDeclaration(methods: readonly CallableDefinition[] = [
  * relatively and stays portable; an absolute path, one that climbs out of the
  * workspace, and one inside `.dext` that holds no APIs are skipped, because a
  * committed file cannot carry them. Nothing here covers a machine-local source such
- * as the `dext.apiDirs` setting or an API in Dext's own storage: those are not part
+ * as an API in Dext's own storage: those are not part
  * of the workspace, and mapping one would make the file machine-specific.
  */
 function apiPathCandidates(apiDirs: readonly string[]): string[] {

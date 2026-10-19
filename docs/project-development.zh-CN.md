@@ -27,6 +27,10 @@ Project 设置位于 **Project > Overview** 的一个可折叠区域，包括初
 
 `ProjectObjectReference` 保存稳定的 `objectId`。重命名对象会保留 id 并把旧名记入别名，引用、链接与测试因此不会因改名而失效。
 
+显式 `evidence` 决定读取预算和范围，优先于旧配置；尚未保存它的项目，在构建或更新 Overview 索引前会提示先配置。页面引导用户设置读取深度与范围，也可点击 **Save reading settings** 保存显示的默认值。显式 `include: []` 表示使用内置文件范围，属于有效配置。旧 `scan.roots` 不再影响读取范围。旧 `scan` 和未知扩展字段兼容保留，但不自动生成。当前仓库已有 `evidence.include: ["src/**"]`，因此删除冗余 `scan` 不改变读取范围。Whole 仅提高预算，不取消范围限制。
+
+Review 预设已移除，新建配置及原本不含 `preset` 的配置保存时都不会生成该字段。旧文件中的 `preset` 仅作为无效遗留字段保留。项目路径和证据预算通过 Project 设置保存到 `.dext/project.json`。已废弃的 VS Code 目录及证据设置不再读取；项目缺失的路径使用内置默认值，缺少 `evidence` 时必须先显式保存再构建索引。`knowledge`、AI 选择、版本号和写入时间继续保留。
+
 ## 知识维度
 
 项目对象携带四个彼此独立的维度，绝不合并成单一状态。

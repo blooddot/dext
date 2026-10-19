@@ -175,12 +175,37 @@ try {
 
     }
   }
-  // Match the populated Overview from the reported screenshot, including inline code
-  // in the legacy warning and the custom model picker (not just the native CLI select).
+  // Missing evidence must be confirmed, including when the reader keeps the displayed defaults.
+  await load(ui.renderProjectPanel('overview', { ...project, overview: { ...project.overview,
+    workspaceSettings: { planDirectory: '.dext/plans', apiDirs: [], skillDirs: [], mcpDirs: [] },
+    workspaceSettingsVersion: 0, evidenceSettingsVersion: 0,
+    evidenceSettings: { depth: 'standard', include: [] }, evidenceConfigured: false
+  } }));
+  await evaluate(`document.querySelector('[data-project-settings] summary').click(); document.querySelector('[data-project-initialize]').click()`);
+  assert.equal(await evaluate(`messages.length`), 0, 'missing evidence never starts indexing');
+  assert.equal(await evaluate(`document.activeElement.name`), 'include', 'the prompt focuses the reading scope');
+  assert.equal(await evaluate(`document.querySelector('.project-advanced-settings').open`), true);
+  assert.match(await evaluate(`document.querySelector('[data-project-settings-status]').textContent`), /Save the reading depth and scope/);
+  await evaluate(`document.querySelector('[data-project-evidence-save]').click(); new Promise(resolve=>setTimeout(resolve,650))`);
+  assert.deepEqual(await evaluate(`messages.at(-1).settings.evidence`), { depth: 'standard', include: [] });
+  await evaluate(`window.dispatchEvent(new MessageEvent('message',{data:{type:'projectSettingsSaved',error:'Conflict'}})); document.querySelector('[data-project-initialize]').click()`);
+  assert.equal(await evaluate(`messages.some(m=>m.type==='projectInitialize')`), false, 'a failed save keeps the configuration gate');
+  await evaluate(`document.querySelector('[data-project-evidence-save]').click(); new Promise(resolve=>setTimeout(resolve,650))`);
+  await evaluate(`window.dispatchEvent(new MessageEvent('message',{data:{type:'projectSettingsSaved',version:1}}))`);
+  assert.equal(await evaluate(`!!document.querySelector('[data-project-evidence-required]')`), false);
+  assert.equal(await evaluate(`!!document.querySelector('[data-project-evidence-save]')`), false);
+  // Even a configured project must not run with an unsaved scope while autosave is pending.
+  await evaluate(`const scope=document.querySelector('[name="include"]'); scope.value='src/**'; scope.dispatchEvent(new Event('input',{bubbles:true})); document.querySelector('[data-project-initialize]').click()`);
+  assert.equal(await evaluate(`messages.some(m=>m.type==='projectInitialize')`), false, 'pending edits cannot be bypassed by Build');
+  await evaluate(`new Promise(resolve=>setTimeout(resolve,650))`);
+  assert.deepEqual(await evaluate(`messages.at(-1).settings.evidence.include`), ['src/**']);
+  await evaluate(`window.dispatchEvent(new MessageEvent('message',{data:{type:'projectSettingsSaved',version:2}})); document.querySelector('[data-project-initialize]').click()`);
+  assert.equal(await evaluate(`messages.filter(m=>m.type==='projectInitialize').length`), 1, 'saved settings permit indexing');
+  // Match the populated Overview from the reported screenshot, including the configuration notice and the custom model picker (not just the native CLI select).
   const populated = { ...project, overview: { ...project.overview,
     structure: { hash: 'fixture', files: 3500, parsed: 3400, modules: 28, responsibilities: 42, failed: 1, unsupported: 12, unresolved: 45,
       issues: [{ path: 'src/optional/generated/module.py', reason: 'Syntax errors; structure is partial' }] },
-    legacyScanRoots: ['src'], selectedAiCli: 'codex', selectedAiModel: 'gpt-6-astra',
+    evidenceConfigured: false, selectedAiCli: 'codex', selectedAiModel: 'gpt-6-astra',
     selectedAiReasoning: 'ultra', selectedAiSpeed: 'fast',
     workspaceSettings: { planDirectory: '.project/plans', apiDirs: ['tools/api'], skillDirs: ['tools/skills'], mcpDirs: ['tools/mcp'] },
     workspaceSettingsVersion: 3,
@@ -193,17 +218,16 @@ try {
     assert.match(await evaluate(`document.querySelector('.project-structure-summary').textContent`), /3400 source files · 28 directory groups · 42 knowledge modules/);
     await writeFile(join(artifacts, `project-populated-${width}.png`), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
     assert.equal(await evaluate(`document.documentElement.scrollWidth <= innerWidth`), true, `populated Overview fits ${width}px`);
-    assert.equal(await evaluate(`Array.from(document.querySelectorAll('[data-project-legacy-scan] code')).every(code => code.getClientRects().length === 1)`), true, 'warning code stays inline');
     // Help text, status lines and the AI control rows used to end at 780, 680 and 734 px
     // inside the same 1040 px panel, so the Overview showed three right edges and read as
     // clipped text at a narrow capture. They now share one measure.
-    const edges = await evaluate(`['.project-help','[data-project-legacy-scan]','.project-ai-cli','.project-ai-model','.project-initialization-result'].map(selector => { const node = document.querySelector(selector); return node ? Math.round(node.getBoundingClientRect().right) : -1; })`);
+    const edges = await evaluate(`['.project-help','[data-project-evidence-required]','.project-ai-cli','.project-ai-model','.project-initialization-result'].map(selector => { const node = document.querySelector(selector); return node ? Math.round(node.getBoundingClientRect().right) : -1; })`);
     assert.equal(new Set(edges).size, 1, `Overview text shares one right edge at ${width}px: ${JSON.stringify(edges)}`);
     assert.ok(edges[0] >= 0 && edges[0] <= width - 24, `Overview text stays inside the page at ${width}px: ${edges[0]}`);
-    // The legacy-scan notice is advisory: its text keeps the normal foreground and only
+    // The configuration notice is advisory: its text keeps the normal foreground and only
     // the left rule carries the warning colour. Painting the whole paragraph in Dark+'s
     // #CCA700 was reported as "why is every word yellow" and turned the code chips gold too.
-    const notice = await evaluate(`(() => { const style = getComputedStyle(document.querySelector('[data-project-legacy-scan]')); return { color: style.color, body: getComputedStyle(document.body).color, border: style.borderLeftColor, width: style.borderLeftWidth }; })()`);
+    const notice = await evaluate(`(() => { const style = getComputedStyle(document.querySelector('[data-project-evidence-required]')); return { color: style.color, body: getComputedStyle(document.body).color, border: style.borderLeftColor, width: style.borderLeftWidth }; })()`);
     assert.equal(notice.color, notice.body, `notice text keeps the normal foreground: ${JSON.stringify(notice)}`);
     assert.equal(notice.border, 'rgb(204, 167, 0)', `notice keeps the warning accent: ${JSON.stringify(notice)}`);
     assert.equal(notice.width, '3px', `notice shows the warning rule: ${JSON.stringify(notice)}`);
