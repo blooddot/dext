@@ -266,6 +266,7 @@ function baseMeta(project: ProjectDiagram, repository: ArchifyRepository | undef
     title: project.title,
     quality_profile: "standard",
     locale: LOCALE,
+    ...(project.kind !== "architecture" ? { animation: "trace" } : {}),
     ...(repositoryMeta ? { repository: repositoryMeta } : {}),
     ...extra
   };
