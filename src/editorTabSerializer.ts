@@ -1,4 +1,4 @@
-import { EDITOR_TAB_TITLES, EDITOR_TAB_VIEW_TYPES, parseEditorTabKey, type EditorTabKind } from "./editorTabTypes.js";
+import { EDITOR_TAB_TITLES, EDITOR_TAB_VIEW_TYPES, parseEditorTabKey } from "./editorTabTypes.js";
 import { restoreEditorTabState, type EditorTabState } from "./editorTabState.js";
 import type { EditorTabDescriptorLike, EditorTabManager, EditorTabPanelHandle } from "./editorTabManager.js";
 
@@ -62,13 +62,6 @@ export class EditorTabRestorer {
     }
   }
 
-  /** Called by the serializer before handing a panel over, preventing a concurrent second open. */
-  claim(key: string): boolean {
-    if (this.manager.has(key) || this.busy(key)) return false;
-    this.pending.add(key);
-    return true;
-  }
-
   /**
    * Adopts a panel VS Code already restored. If the proactive path opened the same key first, the
    * restored panel is disposed by the manager, so a serializer restore never double-opens a tab.
@@ -95,14 +88,6 @@ export class EditorTabRestorer {
       this.pending.delete(key);
     }
   }
-
-  release(key: string): void {
-    this.pending.delete(key);
-  }
-}
-
-export function editorTabKindOf(key: string): EditorTabKind | undefined {
-  return parseEditorTabKey(key)?.kind;
 }
 
 export type { EditorTabState };

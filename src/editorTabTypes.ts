@@ -20,7 +20,7 @@ export const EDITOR_TAB_TITLES: Record<EditorTabKind, string> = {
   history: "Dext History"
 };
 
-/** Page choices each kind exposes. Project deliberately has no Hooks, Review, or task log page. */
+/** Page choices exposed by each editor tab kind. */
 export const EDITOR_TAB_PAGES: Record<EditorTabKind, readonly string[]> = {
   project: ["overview", "knowledge", "architecture"],
   api: ["list", "detail"],
@@ -58,14 +58,6 @@ export function parseEditorTabKey(key: string): EditorTabKey | undefined {
   const scope = match[2] ? decodeURIComponent(match[2]) : undefined;
   const resourceId = match[3] ? decodeURIComponent(match[3]) : undefined;
   return { kind, ...(scope ? { scope } : {}), ...(resourceId ? { resourceId } : {}) };
-}
-
-export function isEditorTabKind(value: string): value is EditorTabKind {
-  return value in EDITOR_TAB_VIEW_TYPES;
-}
-
-export function isRecoverableEditorTabKey(key: string): boolean {
-  return parseEditorTabKey(key) !== undefined;
 }
 
 export function editorTabTitle(kind: EditorTabKind, resourceLabel?: string): string {

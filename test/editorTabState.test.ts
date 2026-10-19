@@ -1,18 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { EDITOR_TAB_RESTORE_VERSION, editorTabKey, editorTabTitle, isRecoverableEditorTabKey, parseEditorTabKey } from "../src/editorTabTypes.js";
+import { EDITOR_TAB_RESTORE_VERSION, editorTabKey, editorTabTitle, parseEditorTabKey } from "../src/editorTabTypes.js";
 import { createEditorTabState, normalizePage, restoreEditorTabState } from "../src/editorTabState.js";
 
 describe("editor tab keys", () => {
   it("round-trips a stable key with a resource id and scope", () => {
     const key = editorTabKey("api", { resourceId: "Task.Query", scope: "C:/ws" });
-    expect(isRecoverableEditorTabKey(key)).toBe(true);
+
     expect(parseEditorTabKey(key)).toEqual({ kind: "api", scope: "C:/ws", resourceId: "Task.Query" });
   });
 
   it("rejects unknown kinds and free-form titles", () => {
     expect(parseEditorTabKey("dext.editor:unknown")).toBeUndefined();
     expect(parseEditorTabKey("Dext APIs")).toBeUndefined();
-    expect(isRecoverableEditorTabKey("dext.editor:project")).toBe(true);
+    expect(parseEditorTabKey("dext.editor:project")).toEqual({ kind: "project" });
   });
 
   it("keeps a resource label in the title", () => {

@@ -37,18 +37,6 @@ describe("editor tab serializer", () => {
     expect(host.created[0]!.panel.revealed).toBe(1);
   });
 
-  it("skips a key currently being restored by the other path", () => {
-    const host = new FakeHost();
-    const manager = managerFor(host);
-    const restorer = new EditorTabRestorer(manager);
-    const key = "dext.editor:api#Task.Query";
-    expect(restorer.claim(key)).toBe(true);
-    const state = createEditorTabState(key, { page: "detail" });
-    expect(restorer.restore(state, "serializer").status).toBe("skipped");
-    restorer.release(key);
-    expect(restorer.restore(state, "proactive").status).toBe("opened");
-  });
-
   it("reports an invalid or unknown key instead of creating a page", () => {
     const host = new FakeHost();
     const restorer = new EditorTabRestorer(managerFor(host));
