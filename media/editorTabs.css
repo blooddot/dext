@@ -97,7 +97,7 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .resource-group h2 { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; font-size: 13px; }
 .resource-count, .resource-source { color: var(--vscode-descriptionForeground); font-size: 11px; font-weight: 400; }
 .resource-count { border-radius: 10px; padding: 0 6px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
-.resource-group ul, .project-objects, .project-drafts { list-style: none; padding: 0; margin: 0; }
+.resource-group ul, .project-objects { list-style: none; padding: 0; margin: 0; }
 .resource-api-node > ul { padding-left: 16px; }
 .resource-api-node > summary { font-size: 13px; }
 .resource-entry > button { display: block; width: 100%; padding: 8px 10px; text-align: left; border-color: transparent; color: inherit; background: transparent; }
@@ -167,9 +167,8 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .project-scan-progress { display: flex; align-items: center; gap: 8px; margin: -8px 0 16px; color: var(--vscode-descriptionForeground); }
 .project-scan-progress-label { min-width: 0; }
 .project-scan-progress-label strong { color: var(--vscode-foreground); font-weight: 600; }
-.project-object, .project-draft, .architecture-decision { padding: 12px; margin-bottom: 8px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; overflow-wrap: anywhere; }
-.object-kind, .object-state, .draft-kind { display: block; color: var(--vscode-descriptionForeground); font-size: 12px; }
-.draft-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.project-object, .architecture-decision { padding: 12px; margin-bottom: 8px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; overflow-wrap: anywhere; }
+.object-kind, .object-state { display: block; color: var(--vscode-descriptionForeground); font-size: 12px; }
 .project-object-focus { outline: 1px solid var(--vscode-focusBorder); }
 .project-knowledge-brief { margin-bottom: 20px; }
 .project-knowledge-brief > ul { padding-left: 20px; }
@@ -277,12 +276,12 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
   border-top: 1px solid var(--project-card-border);
 }
 .project-facts dd { color: var(--vscode-foreground); }
-.project-object, .project-draft, .architecture-decision {
+.project-object, .architecture-decision {
   border-color: var(--project-card-border);
   background: var(--project-card-fill);
   border-radius: 6px;
 }
-.project-object:hover, .project-draft:hover, .architecture-decision:hover {
+.project-object:hover, .architecture-decision:hover {
   border-color: color-mix(in srgb, var(--vscode-focusBorder) 55%, var(--project-card-border));
 }
 .architecture-relation-section, .architecture-rules, .architecture-decisions {
