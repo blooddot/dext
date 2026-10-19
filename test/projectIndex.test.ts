@@ -43,4 +43,10 @@ describe("Project index and module analyses", () => {
     expect(buildProjectTopics(intent, [diagram])[0]).toMatchObject({ analysisState: "stale", diagram });
   });
 
+  it("rejects a topic diagram that has no matching explanation", async () => {
+    const packaged = buildProjectEvidencePackage({ files: [{ path: "src/code.ts", content: "export function execute() {}" }], requirement: "Explain execution" });
+    const diagram = { schemaVersion: 1, id: "detail", title: "Execution", kind: "architecture", nodes: [{ id: "execute", label: "Execute", role: "component", semanticIds: [], evidence }], relations: [] };
+    const service = new ProjectAiGenerationService({ id: "fixture", generate: async () => ({ text: JSON.stringify({ diagram }) }) }, { maxAttempts: 1 });
+    await expect(service.generateDiagram(packaged, { requirement: "Explain execution", explainTopic: true })).rejects.toMatchObject({ diagnostics: expect.arrayContaining([expect.stringContaining("explanatory description")]) });
+  });
 });

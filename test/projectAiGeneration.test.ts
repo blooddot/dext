@@ -68,6 +68,24 @@ describe("Project evidence package", () => {
     expect(result.characterCount).toBeLessThanOrEqual(40_000);
   });
 
+  it("rejects inventory-only behavioral relationships", () => {
+    const input = evidence();
+    input.inventory.push({ path: "src/listed.ts", kind: "source", lines: 1 });
+    const model = validModel(input);
+    model.diagrams[0] = { ...model.diagrams[0]!,
+      nodes: [...model.diagrams[0]!.nodes, { id: "listed", label: "Listed", role: "module", semanticIds: [], evidence: [{ path: "src/listed.ts" }] }],
+      relations: [{ id: "call", from: "app", to: "listed", kind: "calls", evidence: [{ path: "src/listed.ts" }] }]
+    };
+    expect(validateProjectAiModel(model, input).some((error) => error.includes("inventory cannot establish behavior"))).toBe(true);
+  });
+
+  it("keeps initialization to a small overview instead of accepting a bundle of diagrams", async () => {
+    const input = evidence();
+    const model = validModel(input);
+    model.diagrams.push({ ...architectureDiagram(), id: "second" });
+    await expect(generateModel(JSON.stringify(model), input)).rejects.toMatchObject({ diagnostics: expect.arrayContaining([expect.stringContaining("at most one overview")]) });
+  });
+
   it("bounds files, redacts secrets and keeps a deterministic hash without any scan contract", () => {
     const first = evidence();
     const second = evidence();
