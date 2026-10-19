@@ -361,4 +361,3 @@ describe("Dext package manifest", () => {
     expect(properties["dext.mcpTools"]).toBeUndefined();
   });
 });
-

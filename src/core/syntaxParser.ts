@@ -20,3 +20,4 @@ export async function parserFor(language: string, assetsPath?: string): Promise<
   parser.setLanguage(grammar);
   return parser;
 }
+
