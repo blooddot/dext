@@ -9,6 +9,7 @@
 All notable changes to Dext are documented in this file.
 
 ## Unreleased
+- Remove source-file inline completion, its configuration and evaluation commands, feedback and memory services. Code-mode TypeScript completion and CLI turn-completion detection remain available. Existing user credentials and stored completion data are left untouched and no longer used.
 
 - Render a logged object as JSON instead of `util.inspect`'s depth-limited `[Object]`. `console.log(payload)` is how a Code run reports what it is working on, and a payload nested more than two deep reached Output as `{ nested: { deep: [Object] } }`: the object was logged, but its content was gone, and the formatter's single-quoted strings matched nothing else in Dext. The kernel now renders an object or array argument as indented JSON — `util.inspect` at full depth is the fallback for a value JSON cannot carry, such as a `Map` or a cycle — and leaves strings and primitives to Node's own formatter, so `%s`/`%d`, `%o` and the space join keep working; `console.error` renders the same way. `test/dextHost.test.ts` asserts a nested payload arrives whole and parses back as JSON, `test/dextKernelBundle.test.ts` asserts it through the built bundle, and `docs/workflows.md`, `docs/development.md` and their Chinese translations describe the rendering.
 

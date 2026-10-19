@@ -8,8 +8,8 @@ import { codexErrorMessage } from "./codexError.js";
 
 export interface CodexRpcMessage { id?: string | number | undefined; method: string; params: Record<string, unknown> }
 
-/** Conversation connection uses the user's CLI configuration/login, independently
- * of the isolated completion service. Stdio stays open for server requests. */
+/** Conversation connection uses the user's CLI configuration/login.
+ * Stdio stays open for server requests. */
 export class CodexConversationConnection {
   private child?: ChildProcessWithoutNullStreams;
   private buffer = "";

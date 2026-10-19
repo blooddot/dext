@@ -67,7 +67,6 @@ MCP 初始化从 `package.json` 读取客户端名称和版本。协议版本分
 - `src/core/runtime.ts`：确定性执行器白名单。
 - `src/core/dextApiTypes.ts`：由注册表推导的 `dext` 声明与 `.dext/tsconfig.json` 工程。
 - `src/core/agentRunner.ts`：Codex / Claude CLI 的结构化执行适配。
-- `src/core/completionProvider.ts`：FIM 补全后端、缓存和密钥管理。
 - `src/core/workflowRecorder.ts`：从对话生成 TypeScript API 骨架。
 - `src/webview/codeEditor.ts`：Code 编辑器（Monaco、引用投影与文件拖放）。
 

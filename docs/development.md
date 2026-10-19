@@ -67,7 +67,6 @@ MCP initialization reads the client name and version from `package.json`. Protoc
 - `src/core/runtime.ts`: deterministic executor allowlist.
 - `src/core/dextApiTypes.ts`: the generated `dext` declaration and the `.dext/tsconfig.json` project, both derived from the registry.
 - `src/core/agentRunner.ts`: structured Codex/Claude CLI adapter boundary.
-- `src/core/completionProvider.ts`: fill-in-the-middle backend, cache, and secret-stored key.
 - `src/core/workflowRecorder.ts`: History conversation to a TypeScript API skeleton.
 - `src/webview/codeEditor.ts`: the Code editor (Monaco, the reference projections, and file drops).
 

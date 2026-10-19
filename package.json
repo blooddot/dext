@@ -48,14 +48,6 @@
   "contributes": {
     "commands": [
       {
-        "command": "dext.evaluateCompletion",
-        "title": "Dext: Evaluate Completion Quality and Latency"
-      },
-      {
-        "command": "dext.clearCompletionMemory",
-        "title": "Dext: Clear Project Completion Memory"
-      },
-      {
         "command": "dext.sidebar.focus",
         "title": "Dext: Focus Sidebar"
       },
@@ -296,37 +288,6 @@
         "icon": "$(key)"
       },
       {
-        "command": "dext.configureCompletionModel",
-        "title": "Dext: Configure Completion Model",
-        "icon": "$(gear)"
-      },
-      {
-        "command": "dext.completionMenu",
-        "title": "Dext: Inline Completion Options"
-      },
-      {
-        "command": "dext.testCompletionModel",
-        "title": "Dext: Test Completion Model"
-      },
-      {
-        "command": "dext.diagnoseCompletion",
-        "title": "Dext: Diagnose Inline Completion"
-      },
-      {
-        "command": "dext.setCompletionApiKey",
-        "title": "Dext: Set Completion API Key",
-        "icon": "$(key)"
-      },
-      {
-        "command": "dext.clearCompletionApiKey",
-        "title": "Dext: Clear Completion API Key",
-        "icon": "$(key)"
-      },
-      {
-        "command": "dext.toggleCompletion",
-        "title": "Dext: Toggle Inline Completion"
-      },
-      {
         "command": "dext.clearMcpAccessToken",
         "title": "Dext: Clear MCP Access Token",
         "icon": "$(key)"
@@ -397,22 +358,6 @@
     ],
     "menus": {
       "commandPalette": [
-        {
-          "command": "dext.setCompletionApiKey",
-          "when": "false"
-        },
-        {
-          "command": "dext.clearCompletionApiKey",
-          "when": "false"
-        },
-        {
-          "command": "dext.testCompletionModel",
-          "when": "false"
-        },
-        {
-          "command": "dext.toggleCompletion",
-          "when": "false"
-        },
         {
           "command": "dext.triggerSuggest",
           "when": "false"
@@ -571,14 +516,6 @@
         },
         {
           "command": "dext.verifyMcpServer",
-          "when": "false"
-        },
-        {
-          "command": "dext.completionMenu",
-          "when": "false"
-        },
-        {
-          "command": "dext.diagnoseCompletion",
           "when": "false"
         },
         {
@@ -1076,95 +1013,6 @@
           "minimum": 1000,
           "maximum": 3600000,
           "description": "Timeout applied to terminal() calls that do not pass timeout_ms. Values are capped at 600000 milliseconds, which is also the hard ceiling for an explicit timeout_ms."
-        },
-        "dext.completion": {
-          "type": "object",
-          "default": {},
-          "markdownDeprecationMessage": "Replaced by the individual `dext.completion.*` settings, which the Settings UI can render as a dropdown and text boxes rather than an untyped table. Dext moves any values across on startup and then removes this entry, so nothing needs to be done by hand.",
-          "description": "Superseded by the individual dext.completion.* settings."
-        },
-        "dext.completion.adaptation": {
-          "type": "string",
-          "enum": [
-            "off",
-            "session",
-            "workspace"
-          ],
-          "default": "session",
-          "scope": "window",
-          "description": "Adapt completion from observable feedback. Workspace stores bounded local statistics and saved-code references. Session clears stored project experience. Off stops using and collecting experience. Model weights are unchanged."
-        },
-        "dext.completion.enabled": {
-          "type": "boolean",
-          "default": false,
-          "markdownDescription": "Enable inline code suggestions using an API model or local Ollama. [Configure a completion model](command:dext.configureCompletionModel). API keys stay in encrypted secret storage; use [Set Completion API Key](command:dext.setCompletionApiKey) to update yours."
-        },
-        "dext.completion.api": {
-          "type": "string",
-          "default": "openai",
-          "enum": [
-            "openai",
-            "openai-chat",
-            "anthropic",
-            "ollama"
-          ],
-          "enumDescriptions": [
-            "POST <base>/completions. A dedicated fill-in-the-middle model that accepts a prompt and a suffix. Fastest and most exact, but a chat model answered through this format returns a body it cannot read.",
-            "POST <base>/chat/completions. What most providers actually expose, DeepSeek and Qwen included. There is no suffix field, so the code around the cursor is sent as a chat prompt.",
-            "POST <base>/messages. Claude has no fill-in-the-middle endpoint, so the code around the cursor is sent as a chat prompt instead, which is slower and less exact.",
-            "POST <base>/api/generate. A local Ollama server using its own fill-in-the-middle fields."
-          ],
-          "description": "API format the completion model speaks. This has to match what the endpoint serves: the wrong choice returns a valid response that no completion can be read out of."
-        },
-        "dext.completion.endpoint": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Base URL of the completion model, with no trailing slash. The API path for the chosen format is appended if it is not already there, so `https://api.openai.com/v1` reaches `/v1/completions`.\n\nUsual values: `https://api.openai.com/v1`, `https://api.anthropic.com/v1`, `http://localhost:11434`."
-        },
-        "dext.completion.model": {
-          "type": "string",
-          "default": "",
-          "description": "Model ID to complete with. For the openai and ollama formats it must support fill-in-the-middle, since Dext sends both a prefix and a suffix. The anthropic format emulates that with a chat prompt, so pick the fastest Claude model available."
-        },
-        "dext.completion.maxTokens": {
-          "type": "integer",
-          "default": 64,
-          "minimum": 1,
-          "maximum": 2048,
-          "description": "Longest completion to request. This is the main thing deciding how long a suggestion takes to appear, because generation time scales with it. A completion is a continuation of a line or two, not a whole function, so raise it only if suggestions are being cut short."
-        },
-        "dext.completion.debounceMs": {
-          "type": "integer",
-          "default": 80,
-          "minimum": 1,
-          "maximum": 5000,
-          "description": "Idle time after the last keystroke before a completion is requested. Only the first keystroke of a burst waits: once a request is in flight the following keystrokes wait on that same answer rather than starting another. Keeping under the provider's requests-per-second limit is handled separately, by spacing requests out once the provider says they are arriving too quickly, so this does not need raising for that."
-        },
-        "dext.completion.prefixChars": {
-          "type": "integer",
-          "default": 4000,
-          "minimum": 1,
-          "maximum": 32000,
-          "description": "Characters before the cursor sent as context. Measured in characters rather than lines so one long generated line cannot exhaust the budget."
-        },
-        "dext.completion.suffixChars": {
-          "type": "integer",
-          "default": 1000,
-          "minimum": 1,
-          "maximum": 32000,
-          "description": "Characters after the cursor sent as context."
-        },
-        "dext.completion.timeoutMs": {
-          "type": "integer",
-          "default": 10000,
-          "minimum": 1,
-          "maximum": 30000,
-          "description": "How long a completion request may take before it is abandoned. Hosted gateways routinely need several seconds to emit maxTokens tokens, and a request abandoned at that point has burned them without showing anything. Waiting longer costs little, because the editor cancels the request as soon as the next key is pressed."
-        },
-        "dext.completion.ignoreGitignore": {
-          "type": "boolean",
-          "default": true,
-          "description": "Do not complete in files excluded by .gitignore. A .dextignore file in the workspace root adds further exclusions and is honored either way."
         },
         "dext.workflow.maxConcurrency": {
           "type": "integer",

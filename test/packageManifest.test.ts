@@ -1,7 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { COMPLETION_APIS, COMPLETION_FIELDS } from "../src/core/completionProvider.js";
 
 interface PackageManifest {
   activationEvents?: string[];
@@ -248,84 +247,13 @@ describe("Dext package manifest", () => {
     expect(titles.get("dext.history.recordWorkflow")).toBe("Record Conversation as Dext Workflow");
   });
 
-  it("configures the completion backend without ever asking for the key in settings", async () => {
+  it("does not contribute retired inline completion settings or commands", async () => {
     const value = await manifest();
     const properties = value.contributes?.configuration?.properties ?? {};
-    // One object setting renders in the Settings UI as an untyped key/value
-    // table with an Add Item button: no dropdown, and nowhere to type the URL.
-    // Each field is its own setting so the UI can draw a real control for it.
-    // The object form stays declared but deprecated: the Settings UI hides it,
-    // and a registered key is the only kind Dext is allowed to delete when it
-    // migrates the values across.
-    expect(properties["dext.completion"]?.markdownDeprecationMessage).toContain("Replaced by");
-    expect(properties["dext.completion.endpoint"]).toMatchObject({ type: "string", default: "" });
-    expect(properties["dext.completion.model"]).toMatchObject({ type: "string", default: "" });
-    expect(properties["dext.completion.ignoreGitignore"]).toMatchObject({ type: "boolean", default: true });
-    // Every field the backend reads has to be contributed, or it can only ever
-    // hold its default.
-    for (const field of COMPLETION_FIELDS) {
-      expect(properties).toHaveProperty(`dext.completion.${field}`);
-    }
-    // Every format the backend can speak has to be offered here too, or the
-    // wizard would write a value settings.json rejects.
-    const api = properties["dext.completion.api"];
-    expect(api?.enum).toEqual([...COMPLETION_APIS]);
-    expect(api?.enumDescriptions).toHaveLength(COMPLETION_APIS.length);
-    // The provider has to exist before the sidebar is ever opened, or inline
-    // completion silently does nothing until something else activates Dext.
-    expect(value.activationEvents).toContain("onStartupFinished");
-    // A key in settings.json ends up in source control, so there is no box for
-    // one; the description says where it goes and links to the command.
-    expect(JSON.stringify(properties["dext.completion.apiKey"])).toBe(undefined);
-    for (const key of ["backend", "codexCommand", "codexModel", "codexTimeoutMs"]) expect(properties[`dext.completion.${key}`]).toBeUndefined();
-    for (const suffix of ["loginCompletionChatGPT", "logoutCompletionChatGPT", "triggerChatGPTCompletion"]) {
-      expect(value.contributes?.commands?.some((item) => item.command === `dext.${suffix}`)).toBe(false);
-    }
-    const enabled = properties["dext.completion.enabled"];
-    expect(enabled?.markdownDescription).toContain("secret storage");
-    expect(enabled?.markdownDescription).toContain("(command:dext.setCompletionApiKey)");
-    expect(enabled?.markdownDescription).toContain("(command:dext.configureCompletionModel)");
-    const commands = (value.contributes?.commands ?? []).map((item) => item.command);
-    for (const command of [
-      "dext.configureCompletionModel",
-      "dext.completionMenu",
-      "dext.testCompletionModel",
-      "dext.setCompletionApiKey",
-      "dext.clearCompletionApiKey",
-      "dext.toggleCompletion"
-    ]) {
-      expect(commands).toContain(command);
-    }
-  });
-
-  it("keeps the command palette down to the completion entries with nowhere else to be", async () => {
-    const value = await manifest();
-    const hidden = new Set(
-      (value.contributes?.menus?.commandPalette ?? [])
-        .filter((item) => item.when === "false")
-        .map((item) => item.command)
-    );
-    // Every one of these is a line in the status bar menu, and the two key
-    // commands are also linked from the settings page. Registered, so those
-    // links and that menu keep working; hidden, so searching "dext" is not
-    // seven ways into the same place.
-    for (const command of [
-      "dext.setCompletionApiKey",
-      "dext.clearCompletionApiKey",
-      "dext.testCompletionModel",
-      "dext.toggleCompletion"
-    ]) {
-      expect(hidden).toContain(command);
-    }
-    // Completion configuration stays searchable; the status-bar menu and
-    // diagnostic helpers do not duplicate it in the command palette.
-    for (const command of [
-      "dext.completionMenu",
-      "dext.diagnoseCompletion"
-    ]) {
-      expect(hidden).toContain(command);
-    }
-    expect(hidden).not.toContain("dext.configureCompletionModel");
+    expect(Object.keys(properties).filter((key) => key === "dext.completion" || key.startsWith("dext.completion."))).toEqual([]);
+    const retired = /completion/i;
+    expect((value.contributes?.commands ?? []).filter((item) => retired.test(item.command ?? ""))).toEqual([]);
+    expect((value.contributes?.menus?.commandPalette ?? []).filter((item) => retired.test(item.command ?? ""))).toEqual([]);
   });
 
   it("hides the commands that only exist for a keybinding or a duplicate of one", async () => {

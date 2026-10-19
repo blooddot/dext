@@ -41,21 +41,12 @@ import { RESOURCE_DIRECTORIES, resourceFileName, resourcePathSegments, resourceP
 import { McpToolRegistry, authDiagnostic, mcpCredentialKind, redactedMcpUrl, redactedUrlQuery, type McpServerConfig, type McpToolConfig, type McpDiscoveredTool } from "./core/mcpRegistry.js";
 import { McpAccessTokenStore, type McpCredentialKind } from "./core/mcpSecrets.js";
 import { parseMcpManifest } from "./core/mcpManifest.js";
-import {
-  COMPLETION_FIELDS,
-  CompletionKeyStore,
-  normalizeCompletionSettings,
-  type CompletionSettings
-} from "./core/completionProvider.js";
 import { DEFAULT_PLAN_DIRECTORY, planFileName, planPathSegments } from "./core/planFile.js";
 import { splitPlanResponse } from "./core/planResponse.js";
 import { DextStorage } from "./dextStorage.js";
 import type { ProjectAiActivityEvent, ProjectAiProvider, ProjectAiRequest } from "./core/projectAiGeneration.js";
 import type { ProjectWorkspaceSettings } from "./core/projectSettings.js";
 
-/** Global rather than per-workspace: the object form is rewritten in the user
- * settings file, so once is once for every window. */
-const COMPLETION_MIGRATION_KEY = "dext.completion.migrated";
 /** How many API modules the composer's TypeScript worker is given, and how many
  * bytes of source, so a large workspace cannot flood the Webview channel. */
 const COMPOSER_MODULE_LIMIT = 200;
@@ -219,8 +210,6 @@ export class DextApplication {
   private agentTimeoutMs = DEFAULT_AGENT_TIMEOUT_MS;
   private agentIdleTimeoutMs = DEFAULT_AGENT_IDLE_TIMEOUT_MS;
   private readonly mcpSecrets: McpAccessTokenStore | undefined;
-  private readonly completionSecrets: CompletionKeyStore | undefined;
-  private readonly globalState: vscode.Memento | undefined;
   readonly storage: DextStorage;
 
   /** Project-only model bridge. It uses the selected CLI in read-only Ask mode and never alters composer input. */
@@ -310,7 +299,6 @@ export class DextApplication {
   }
 
   constructor(globalState?: vscode.Memento, secretStorage?: vscode.SecretStorage, globalStorageUri?: vscode.Uri) {
-    this.globalState = globalState;
     // Extension activation always supplies VS Code's Dext-specific global
     // storage root. The plain file URI keeps lightweight hostless tests from
     // needing to implement Uri.joinPath just to construct the application.
@@ -334,7 +322,6 @@ export class DextApplication {
         server.scope === "global" ? "global" : "workspace",
         mcpCredentialKind(server)
       ));
-      this.completionSecrets = new CompletionKeyStore(secretStorage, () => this.workspaceUri?.toString());
     }
     this.registry.registerMany(BUILTIN_METHODS, "builtin");
     this.refreshAgentProfiles();
@@ -1390,109 +1377,6 @@ export class DextApplication {
       server.scope === "global" ? "global" : "workspace",
       mcpCredentialKind(server)
     );
-  }
-
-  /** Each field is its own setting rather than one object, because the Settings
-   * UI renders an object as an untyped key/value table with an Add Item button:
-   * no dropdown for the format, and no box to type the URL into. */
-  completionSettings(uri?: vscode.Uri): CompletionSettings {
-    const configuration = vscode.workspace.getConfiguration("dext.completion", uri);
-    const raw: Record<string, unknown> = {};
-    for (const field of COMPLETION_FIELDS) {
-      const value = configuration.get(field);
-      if (value !== undefined) raw[field] = value;
-    }
-    return normalizeCompletionSettings(raw);
-  }
-
-  /** These settings were once a single `dext.completion` object. VS Code builds
-   * its configuration tree by splitting keys on dots, so a leftover object and
-   * the flat keys land on the same node and merge in file order: a stale empty
-   * `model` could win over the one the wizard just wrote. Moving the values out
-   * and deleting the object is the only way to make that predictable.
-   *
-   * Two things make this delicate. `inspect("completion")` returns the merged
-   * node, so once the flat keys exist it reports an object that is really just
-   * those keys read back; deleting on the strength of that would target the node
-   * they live under. And this runs in every window, so a mistake compounds. It
-   * therefore only deletes when a value was genuinely carried across, and only
-   * ever runs once. Returns whether anything moved. */
-  async migrateCompletionSettings(): Promise<boolean> {
-    if (this.globalState?.get<boolean>(COMPLETION_MIGRATION_KEY)) return false;
-    const configuration = vscode.workspace.getConfiguration("dext");
-    const legacy = configuration.inspect("completion");
-    const scoped = vscode.workspace.getConfiguration("dext.completion");
-    let migrated = false;
-    for (const [target, raw] of [
-      [vscode.ConfigurationTarget.Global, legacy?.globalValue],
-      [vscode.ConfigurationTarget.Workspace, legacy?.workspaceValue]
-    ] as const) {
-      if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
-      const values = raw as Record<string, unknown>;
-      let carried = false;
-      for (const field of COMPLETION_FIELDS) {
-        if (values[field] === undefined) continue;
-        // A flat key already set at this scope is the newer value, so the
-        // object never overwrites it, and reading it back is not a migration.
-        const existing = scoped.inspect(field);
-        const set = target === vscode.ConfigurationTarget.Global
-          ? existing?.globalValue
-          : existing?.workspaceValue;
-        if (set !== undefined) continue;
-        await scoped.update(field, values[field], target);
-        carried = true;
-      }
-      if (!carried) continue;
-      await configuration.update("completion", undefined, target);
-      migrated = true;
-    }
-    await this.globalState?.update(COMPLETION_MIGRATION_KEY, true);
-    return migrated;
-  }
-
-  /** Where the value actually in force came from. A completion model is written
-   * globally, so anything else means a project is overriding it, or that the
-   * global write never landed. */
-  completionSettingScope(field: keyof CompletionSettings, uri?: vscode.Uri): string {
-    const inspected = vscode.workspace.getConfiguration("dext.completion", uri).inspect(field);
-    if (inspected?.workspaceFolderValue !== undefined) return "folder";
-    if (inspected?.workspaceValue !== undefined) return "workspace";
-    if (inspected?.globalValue !== undefined) return "user";
-    return "default";
-  }
-
-  /** Writes only the fields the wizard collected, so the tuning values someone
-   * edited by hand survive. Global because a completion model follows the
-   * person rather than the repository. */
-  async writeCompletionSettings(patch: Partial<CompletionSettings>): Promise<void> {
-    const configuration = vscode.workspace.getConfiguration("dext.completion");
-    for (const [field, value] of Object.entries(patch)) {
-      await configuration.update(field, value, vscode.ConfigurationTarget.Global);
-    }
-  }
-
-  async completionApiKey(): Promise<string | undefined> {
-    if (!this.completionSecrets) return undefined;
-    try {
-      return await this.completionSecrets.get();
-    } catch {
-      // Secret storage can be unavailable; a missing key is not an error at read time.
-      return undefined;
-    }
-  }
-
-  completionCredentialStatus() {
-    return this.completionSecrets?.status() ?? Promise.resolve({ storageReadable: false, globalPresent: false, currentLegacyPresent: false });
-  }
-
-  async setCompletionApiKey(value: string): Promise<void> {
-    if (!this.completionSecrets) throw new Error("VS Code SecretStorage is not available.");
-    await this.completionSecrets.store(value);
-  }
-
-  async clearCompletionApiKey(): Promise<void> {
-    if (!this.completionSecrets) throw new Error("VS Code SecretStorage is not available.");
-    await this.completionSecrets.delete();
   }
 
   async verifyMcpServer(serverName: string): Promise<void> {
