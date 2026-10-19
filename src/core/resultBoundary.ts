@@ -1,4 +1,3 @@
-import type { z } from "zod";
 
 /**
  * The single tolerant boundary between raw Agent text and a Dext result.
@@ -183,16 +182,4 @@ function extractIssues(error: unknown): { path?: readonly (string | number | sym
   return record.issues.filter((issue): issue is { path?: readonly (string | number | symbol)[]; message: string } =>
     typeof issue === "object" && issue !== null && typeof (issue as { message?: unknown }).message === "string"
   );
-}
-
-/** Non-throwing zod validation used by callers that need a diagnostic string
- * rather than an exception (the interpreter, result repair assertions). */
-export function safeValidate<T extends z.ZodType>(
-  schema: T,
-  value: unknown
-): { success: true; data: z.infer<T> } | { success: false; diagnostics: string } {
-  const parsed = schema.safeParse(value);
-  return parsed.success
-    ? { success: true, data: parsed.data }
-    : { success: false, diagnostics: formatDiagnostics(parsed.error) };
 }

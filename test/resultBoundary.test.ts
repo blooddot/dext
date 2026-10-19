@@ -1,13 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import {
-  agentResultCandidates,
-  formatDiagnostics,
-  jsonCandidates,
-  parseAgentResult,
-  safeValidate,
-  stripNullProperties
-} from "../src/core/resultBoundary.js";
+import { agentResultCandidates, formatDiagnostics, jsonCandidates, parseAgentResult, stripNullProperties } from "../src/core/resultBoundary.js";
 
 const agent = (text: string, extra: Record<string, unknown> = {}): string =>
   JSON.stringify({ kind: "agent", text, ...extra });
@@ -125,16 +118,5 @@ describe("formatDiagnostics", () => {
 
   it("falls back to the error message without zod issues", () => {
     expect(formatDiagnostics(new Error("plain failure"))).toBe("plain failure");
-  });
-});
-
-describe("safeValidate", () => {
-  it("returns data on success and diagnostics on failure", () => {
-    const schema = z.object({ value: z.number() });
-    const good = safeValidate(schema, { value: 1 });
-    expect(good).toEqual({ success: true, data: { value: 1 } });
-    const bad = safeValidate(schema, { value: "no" });
-    expect(bad.success).toBe(false);
-    if (!bad.success) expect(bad.diagnostics).toContain("value: ");
   });
 });
