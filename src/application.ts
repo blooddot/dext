@@ -18,7 +18,7 @@ import type { AgentAssertionSnapshot } from "./core/agentAssertions.js";
 import { DEFAULT_DISPATCH_CONCURRENCY, DextKernelHost } from "./runner/dextHost.js";
 import type { DextReplayEntry } from "./runner/dextResumeCache.js";
 import type { CallableDefinition, CodeRef, ExecutionMetadata, InputExecutionResponse, AgentStreamEvent } from "./core/types.js";
-import type { GlobalResourceItem, GlobalResources, SidebarState } from "./webviewProtocol.js";
+import type { SidebarState } from "./webviewProtocol.js";
 import { VsCodeContextHost } from "./vscodeContextHost.js";
 import { terminalRunHandler } from "./vscodeTerminalHost.js";
 import { applyPatchHandler } from "./vscodePatchHost.js";
@@ -38,7 +38,7 @@ import { listHarnessPresets } from "./core/harnessPresets.js";
 import { SkillCatalog } from "./core/skillCatalog.js";
 
 import { RESOURCE_DIRECTORIES, resourceFileName, resourcePathSegments, resourcePrompt, resourceFiles, mergeResourceFiles, type ResourceSession, type ResourceDocument, type ResourceTarget, type ResourceKind, type ResourceScope } from "./resourceSession.js";
-import { McpToolRegistry, authDiagnostic, mcpCredentialKind, redactedMcpUrl, redactedUrlQuery, type McpServerConfig, type McpToolConfig, type McpDiscoveredTool } from "./core/mcpRegistry.js";
+import { McpToolRegistry, authDiagnostic, mcpCredentialKind, redactedMcpUrl, type McpServerConfig, type McpToolConfig, type McpDiscoveredTool } from "./core/mcpRegistry.js";
 import { McpAccessTokenStore, type McpCredentialKind } from "./core/mcpSecrets.js";
 import { parseMcpManifest } from "./core/mcpManifest.js";
 import { DEFAULT_PLAN_DIRECTORY, planFileName, planPathSegments } from "./core/planFile.js";
@@ -185,7 +185,6 @@ export class DextApplication {
   private workspaceTrusted = false;
   private projectWorkspaceSettings: ProjectWorkspaceSettings | undefined;
   private resourceWrite: Promise<void> = Promise.resolve();
-  private globalResources: GlobalResources = { apis: [], mcps: [], rules: [], skills: [] };
   private globalDiagnostics: string[] = [];
   /** Why a configured server was dropped, by server name; a rejected server is
    * absent from the registry, so this is the only place that reason survives. */
@@ -467,7 +466,6 @@ export class DextApplication {
       ...mcpManifests.globalDiagnostics,
       ...mcpRegistryDiagnostics
     ];
-    this.globalResources = await this.loadGlobalResources();
     await this.writeDextTypes(mcpManifests.projectMethods);
   }
 
@@ -561,55 +559,6 @@ export class DextApplication {
   private async workspaceImportsDext(folder: vscode.WorkspaceFolder): Promise<boolean> {
     const found = await vscode.workspace.findFiles(new vscode.RelativePattern(folder, ".dext/api/**/*.ts"), undefined, 1);
     return found.length > 0;
-  }
-
-  private async loadGlobalResources(): Promise<GlobalResources> {
-    const root = this.storage.globalStorageUri;
-    const listFiles = async (directory: vscode.Uri, extension?: string): Promise<string[]> => {
-      const files: string[] = [];
-      const visit = async (current: vscode.Uri): Promise<void> => {
-        let entries: [string, vscode.FileType][];
-        try { entries = await vscode.workspace.fs.readDirectory(current); }
-        catch (error) {
-          if (error instanceof vscode.FileSystemError && error.code === "FileNotFound") return;
-          throw error;
-        }
-        for (const [name, type] of entries) {
-          const child = vscode.Uri.joinPath(current, name);
-          if (type === vscode.FileType.Directory) await visit(child);
-          else if (type === vscode.FileType.File && (!extension || name.toLowerCase().endsWith(extension))) files.push(child.fsPath);
-        }
-      };
-      await visit(directory);
-      return files.sort((a, b) => a.localeCompare(b));
-    };
-    const relativeName = (file: string, directory: vscode.Uri, extension: string): string => {
-      const base = directory.fsPath.replace(/[\\/]$/, "");
-      return file.slice(base.length + 1).replace(/[\\/]/g, ".").replace(new RegExp(`${extension}$`, "i"), "");
-    };
-    const apiRoot = vscode.Uri.joinPath(root, "api");
-    const ruleRoot = vscode.Uri.joinPath(root, "rules");
-    const skillRoot = vscode.Uri.joinPath(root, "skills");
-    const apis = (await listFiles(apiRoot, ".ts")).map((file) => ({ name: relativeName(file, apiRoot, ".ts") }));
-    const rules = (await listFiles(ruleRoot, ".md")).map((file) => ({ name: relativeName(file, ruleRoot, ".md") }));
-    const skills = (await listFiles(skillRoot, "skill.md")).map((file) => ({
-      name: file.slice(skillRoot.fsPath.replace(/[\\/]$/, "").length + 1).replace(/[\\/]/g, "/").replace(/\/SKILL\.md$/i, "")
-    }));
-    const mcps: GlobalResourceItem[] = [];
-    for (const file of await listFiles(vscode.Uri.joinPath(root, "mcp"), ".jsonc")) {
-      try {
-        const manifest = parseMcpManifest(new TextDecoder().decode(await vscode.workspace.fs.readFile(vscode.Uri.file(file))), file);
-        if (manifest.server) mcps.push({
-          name: manifest.server.name,
-          detail: manifest.server.transport === "http"
-            ? redactedUrlQuery(manifest.server.url)
-            : manifest.server.command
-        });
-      } catch {
-        mcps.push({ name: file.split(/[\\/]/).pop()!.replace(/\.jsonc$/i, ""), detail: "invalid configuration" });
-      }
-    }
-    return { apis, mcps: mcps.sort((a, b) => a.name.localeCompare(b.name)), rules, skills };
   }
 
   /** A timeout that fires cuts the turn off with nothing the user can do about
@@ -774,7 +723,6 @@ export class DextApplication {
       diagnostics: this.configDiagnostics,
       mcpServers: this.mcp.listServers(),
       globalDiagnostics: this.globalDiagnostics,
-      globalResources: this.globalResources,
       resourceRoots: {
         global: this.storage.globalStorageUri.fsPath,
         ...(this.workspaceTrusted && vscode.workspace.workspaceFolders?.[0] ? { project: vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri, ".dext").fsPath } : {})
@@ -948,6 +896,7 @@ export class DextApplication {
           const path = `${prefix}${name}`;
           if (kind === vscode.FileType.Directory && type !== "mcp" && type !== "file") await visit(vscode.Uri.joinPath(directory, name), `${path}/`, depth + 1);
           if (kind !== vscode.FileType.File) continue;
+          if (type === "api" && path.endsWith(".d.ts")) continue;
           try { resourcePathSegments(type, path); } catch { continue; }
           const label = type === "file" ? path : type === "api" ? path.slice(0, -3).replaceAll("/", ".") : type === "skill" ? path.split("/").at(-2)! : name.replace(/\.(?:md|jsonc?)$/, "");
           items.push({ name: label, path, scope });

@@ -179,18 +179,6 @@ export interface ConversationSummary {
   running: boolean;
 }
 
-export interface GlobalResourceItem {
-  name: string;
-  detail?: string;
-}
-
-export interface GlobalResources {
-  apis: GlobalResourceItem[];
-  mcps: GlobalResourceItem[];
-  rules: GlobalResourceItem[];
-  skills: GlobalResourceItem[];
-}
-
 export interface SidebarState {
   theme?: EditorTokenTheme;
   methods: Pick<
@@ -206,7 +194,6 @@ export interface SidebarState {
   };
   mcpServers: McpServerConfig[];
   globalDiagnostics: string[];
-  globalResources?: GlobalResources;
   resourceRoots?: { project?: string; global: string };
 }
 

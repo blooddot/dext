@@ -108,4 +108,4 @@ MCP 初始化从 `package.json` 读取客户端名称和版本。协议版本分
 - `src/sidebarProvider.ts` 协调会话、执行、Plan 进度与待应用补丁。Plan 完成判定保留独立的自动验证轮次。
 - `src/core/projectArchitecture*.ts` 为 TypeScript、Python、Rust 提供同一套扫描模型。各解析器把无法解析或存在歧义的结构记录为 `unsupported` 并给出原因，而不是猜测；`cargo metadata` 不可用时，Rust 元数据降级并显式说明覆盖范围。
 - `src/editorTabManager.ts` 统一管理所有编辑器 Tab 的创建、复用、销毁和消息路由。`src/editorTabSerializer.ts` 对恢复去重，避免 serializer 回调与主动恢复重复打开同一页面；`src/projectEditorProvider.ts` 复用同一个稳定键。
-- `src/resourceDocuments.ts` 由侧边栏状态生成 API 与 Global Resources 页面，使搜索、分组、详情、引用插入和源码跳转在移出弹窗后保持一致。
+- `src/resourceDocuments.ts` 为 Resources 提供只读取文件的数据源：打开和刷新列表时枚举资源目录，查看详情时读取源码，不执行资源。API 列表也会通过 `src/core/apiSource.ts` 静态提取源码信息，复用 `src/core/syntaxParser.ts` 的 Tree-sitter 加载器。Resources 与 APIs 共用签名、参数、返回类型和源码预览组件。类型来自显式标注或简单参数默认值；无法确定的类型显示为 `unknown`，不执行模块，也不运行 TypeScript 编译器。APIs 页面单独组合可调用契约、Node/JavaScript 参考和文件 API。Resources 不再读取运行时注册表或侧栏资源缓存；注册表继续负责执行分发和参数契约。

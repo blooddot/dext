@@ -9,6 +9,8 @@
 All notable changes to Dext are documented in this file.
 
 ## Unreleased
+- Separate Resources file discovery from the runtime callable registry and sidebar caches. Resources refreshes directories directly; the APIs page retains callable documentation, language references and file APIs. Remove guessed resource paths and generated-summary fallbacks for missing files.
+- Discover file-based APIs, rules, skills and MCP manifests in Resources instead of relying only on registered callables. Project TypeScript API modules now appear without being imported or executed; declaration files are excluded. Preserve source paths, resource IDs and creation kinds when forwarding resource browser actions.
 - Correct the terminal timeout setting to a 120,000 ms default and a 600,000 ms maximum, matching runtime behavior; invalid configured values fall back to the default.
 - Remove the deprecated VS Code settings `dext.apiDirs`, `dext.skillDirs`, `dext.plan.directory`, and the five `dext.project.evidence*` settings, together with their runtime fallbacks. Configure paths and evidence in Project settings (`.dext/project.json`); missing values use built-in defaults. Remove the old project-file `scan.roots` scope fallback. Overview guides users to save evidence depth and scope before indexing; explicitly saved empty scope remains valid.
 - Remove source-file inline completion, its configuration and evaluation commands, feedback and memory services. Code-mode TypeScript completion and CLI turn-completion detection remain available. Existing user credentials and stored completion data are left untouched and no longer used.

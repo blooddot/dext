@@ -1,9 +1,7 @@
 import { createHash } from "node:crypto";
-import { join, posix, resolve } from "node:path";
-// The extension ships as CommonJS. The ESM binding uses import.meta.url internally and cannot
-// be flattened into that bundle; selecting the package's CJS export keeps its loader valid.
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-import TreeSitter = require("web-tree-sitter");
+import { posix } from "node:path";
+import { parserFor } from "./syntaxParser.js";
+import type * as TreeSitter from "web-tree-sitter";
 import type { Node } from "web-tree-sitter";
 import { parse as parseJson } from "jsonc-parser/lib/esm/main.js";
 import { parse as parseToml } from "smol-toml";
@@ -48,23 +46,7 @@ export function structureLanguage(path: string): string | undefined {
   return undefined;
 }
 const digest = (value: string): string => createHash("sha256").update(value).digest("hex");
-const { Parser, Language } = TreeSitter;
 const unquote = (value: string): string => value.replace(/^["']|["']$/g, "");
-let parserInit: Promise<void> | undefined;
-const languages = new Map<string, Promise<TreeSitter.Language>>();
-
-async function parserFor(language: string, assetsPath?: string): Promise<TreeSitter.Parser> {
-  const asset = (name: string): string => assetsPath ? join(assetsPath, name)
-    : resolve(process.cwd(), "node_modules", name === "web-tree-sitter.wasm" ? "web-tree-sitter" : `tree-sitter-${language === "tsx" ? "typescript" : language}`, name);
-  parserInit ??= Parser.init({ locateFile: () => asset("web-tree-sitter.wasm") });
-  await parserInit;
-  const path = asset(`tree-sitter-${language}.wasm`);
-  let pending = languages.get(path);
-  if (!pending) { pending = Language.load(path); languages.set(path, pending); }
-  const parser = new Parser();
-  parser.setLanguage(await pending);
-  return parser;
-}
 
 function extract(parser: TreeSitter.Parser, path: string, content: string, language: string): StructureFile {
   const tree = parser.parse(content);

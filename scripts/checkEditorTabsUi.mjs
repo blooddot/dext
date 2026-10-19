@@ -45,6 +45,7 @@ try {
     { kind: 'api', scope: 'global', name: 'agent', path: 'agent.ts', group: '.', description: 'Run an agent task', source: { kind: 'directory', label: 'builtin' } },
     { kind: 'api', scope: 'project', name: 'dev.readFile', path: 'dev/readFile.ts', group: 'dev', description: 'Read a file through the project API', source: { kind: 'project', label: 'project' } }
   ];
+  entries.forEach(entry => { entry.id = `${entry.kind}:${entry.scope}:${entry.path}`; });
   // Signatures are TypeScript now: the detail page's tokens are the ones a `.ts` API has.
   entries[0].api = {
     signature: 'agent(options: { input: string; apply?: boolean; cli?: "codex" | "claude" }): Promise<AgentResult>',
@@ -108,6 +109,7 @@ try {
         { kind: 'api', scope: 'project', name: 'dev.fix', path: 'dev/fix.ts', group: 'dev', description: 'Fix a defect', source: { kind: 'project', label: 'project' } },
         { kind: 'api', scope: 'project', name: 'mcp.files.readFile', path: 'mcp/files/readFile.ts', group: 'mcp.files', description: 'Read a file', source: { kind: 'project', label: 'project' } }
       ];
+      resourceEntries.forEach(entry => { entry.id = `${entry.kind}:${entry.scope}:${entry.path}`; });
       await load(ui.renderGlobalResources(ui.buildResourceList({ kind: 'api', scope: 'project', entries: resourceEntries, groupBy: 'kind' }), { title: 'Resources', createKinds: ['api','mcp','rule','skill'] }));
       assert.equal(await evaluate(`document.querySelectorAll('.resource-group:not(.resource-api-node)').length`), 4);
       assert.equal(await evaluate(`document.querySelectorAll('[data-resource-group-action]').length`), 4);
@@ -130,6 +132,32 @@ try {
       await evaluate(`document.querySelector('button[data-resource-kind="skill"]').click()`);
       assert.equal(await evaluate(`messages[0].kind`), 'skill');
       await writeFile(join(artifacts, `resources-${themeName}-${width}.png`), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
+      // File API signatures and details must use the same component and token palette on both pages.
+      const commit = { id: 'api:project:git/commit.ts', kind: 'api', scope: 'project', name: 'git.commit', path: 'git/commit.ts', group: 'git',
+        description: 'Split changes into Conventional Commits.', source: { kind: 'project', label: 'Project', path: '/project/.dext/api/git/commit.ts' },
+        api: { signature: 'git.commit(input?: string): Promise<AgentResult>', parameters: [{ name: 'input', type: 'string', required: false, defaultValue: '""' }], returnType: 'Promise<AgentResult>' }
+      };
+      const fileList = ui.buildResourceList({ kind: 'api', scope: 'project', entries: [commit], groupBy: 'kind' });
+      let signature;
+      for (const page of ['Resources', 'APIs']) {
+        await load(page === 'Resources' ? ui.renderGlobalResources(fileList, { title: page, createKinds: ['api'] }) : ui.renderApiList(fileList));
+        const rendered = await evaluate(`document.querySelector('.resource-entry-signature').innerHTML`);
+        if (signature) assert.equal(rendered, signature, 'both pages render identical file signatures');
+        signature = rendered;
+        assert.equal(await evaluate(`new Set(['.tok-function','.tok-propertyName','.tok-typeName','.tok-string'].map(selector=>getComputedStyle(document.querySelector('.resource-entry-signature '+selector)).color)).size`), 4);
+        await evaluate(`document.querySelector('[data-resource-open]').click()`);
+        assert.equal(await evaluate(`messages[0].id`), commit.id);
+        assert.equal(await evaluate(`document.documentElement.scrollWidth <= innerWidth`), true);
+        await writeFile(join(artifacts, `file-api-${page}-${themeName}-${width}.png`), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
+        const source = 'import { agent, type AgentResult } from "dext";\nexport function commit(input = ""): Promise<AgentResult> {\n  return agent({ input });\n}';
+        await load(ui.renderResourceDefinition(ui.buildResourceDefinition(commit, source), { title: page }));
+        assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('.resource-api-docs h3')).map(node=>node.textContent)`), ['Parameters', 'Returns']);
+        assert.equal(await evaluate(`document.querySelector('.resource-content code').textContent`), source, 'highlighting preserves the exact source');
+        assert.equal(await evaluate(`getComputedStyle(document.querySelector('.resource-content .tok-keyword')).color !== getComputedStyle(document.querySelector('.resource-content .tok-string')).color`), true);
+        assert.equal(await evaluate(`document.documentElement.scrollWidth <= innerWidth`), true);
+        await writeFile(join(artifacts, `file-api-detail-${page}-${themeName}-${width}.png`), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
+      }
+
       await load(ui.renderProjectPanel('overview', { ...project, overview: { ...project.overview,
         workspaceSettings: { planDirectory: '.project/plans', apiDirs: ['tools/api'], skillDirs: ['tools/skills'], mcpDirs: ['tools/mcp'] },
         workspaceSettingsVersion: 3,

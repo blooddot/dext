@@ -1,9 +1,10 @@
+import type { ApiSourceFunction } from "./core/apiSource.js";
 import { RESOURCE_DIRECTORIES, RESOURCE_LABELS, type ResourceKind, type ResourceScope } from "./resourceSession.js";
 import { editorTabKey } from "./editorTabTypes.js";
 import type { EditorTabState } from "./editorTabState.js";
 import { describeEditorTab, type EditorTabManager } from "./editorTabManager.js";
 import type { EditorTabRestorer } from "./editorTabSerializer.js";
-import type { SidebarState } from "./webviewProtocol.js";
+import type { RegisteredCallable } from "./core/types.js";
 import { CONVERSATION_METHODS, formatFieldType, formatMethodParameter, methodResultType } from "./core/methodSignature.js";
 import { resourceIcon } from "./resourceIcons.js";
 import type { ApiReferenceCatalog, ApiReferenceMember, ApiReferenceModule } from "./core/apiReference.js";
@@ -26,11 +27,9 @@ export interface ResourceEntry {
   source: ResourceSourceRef;
   group: string;
   description?: string;
-  api?: {
-    signature: string;
-    parameters: Array<{ name: string; type: string; required: boolean; defaultValue?: string; description?: string }>;
-    returnType: string;
-  };
+  api?: ApiSourceFunction["api"];
+  /** Exported functions read from a file; both pages render these with the same API component. */
+  apiFunctions?: ApiSourceFunction[];
   /** A read-only reference entry: a Node module or JavaScript global documented
    * from its own declaration rather than a callable Dext API. */
   reference?: ApiReferenceModule;
@@ -100,7 +99,8 @@ export function filterResourceEntries(entries: readonly ResourceEntry[], query: 
   if (!needle) return [...entries];
   return entries.filter((entry) =>
     entry.name.toLocaleLowerCase().includes(needle)
-    || (entry.description ?? "").toLocaleLowerCase().includes(needle));
+    || (entry.description ?? "").toLocaleLowerCase().includes(needle)
+    || (entry.apiFunctions?.map(item => item.api.signature).join(" ") ?? entry.api?.signature ?? "").toLocaleLowerCase().includes(needle));
 }
 
 export function buildResourceList(input: {
@@ -160,10 +160,21 @@ function renderResourceNavigation(options: ResourcePanelOptions): string {
     + scope + `</nav>`;
 }
 
-/** Resource source is plain text: Dext APIs are TypeScript files now, and the
- * editor's own TypeScript service is what colours them. */
+/** Lightweight lexical colouring for the read-only source preview, shared by both pages. */
 function highlightResourceSource(source: string): string {
-  return escapeResourceHtml(source);
+  return source.replace(/\/\*[\s\S]*?\*\/|\/\/[^\r\n]*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\[\s\S]|[^`\\])*`|\b[A-Za-z_$][\w$]*\b|\b\d+(?:\.\d+)?\b|[^A-Za-z_$\d"'`/]+|./g, (token: string) => {
+    const kind = token.startsWith("//") || token.startsWith("/*") ? "comment"
+      : /^["'`]/.test(token) ? "string"
+      : /^(?:import|from|export|default|async|await|function|return|const|let|var|if|else|throw|new|type|interface|extends|typeof|keyof|as|true|false|null|undefined)$/.test(token) ? "keyword"
+      : /^(?:string|number|boolean|void|unknown|never|any|bigint|[A-Z][\w$]*)$/.test(token) ? "typeName"
+      : /^\d/.test(token) ? "number" : undefined;
+    const text = escapeResourceHtml(token);
+    return kind ? `<span class="tok-${kind}">${text}</span>` : text;
+  });
+}
+
+function apiEntries(entry: ResourceEntry): ResourceEntry[] {
+  return entry.apiFunctions?.length ? entry.apiFunctions.map(item => ({ ...entry, ...item, displayName: item.name.split(".").at(-1)! })) : [entry];
 }
 
 function apiDisplayName(entry: ResourceEntry): string {
@@ -177,13 +188,13 @@ function highlightApiType(type: string): string {
       : /^[A-Za-z_]/.test(token) ? `<span class="tok-typeName">${escapeResourceHtml(token)}</span>` : escapeResourceHtml(token)).join("");
 }
 
-/** Signatures use metadata: optional markers are Dext syntax, not valid Python expressions. */
+/** Both pages render signatures from callable or statically extracted file metadata. */
 function renderApiSignature(entry: ResourceEntry, shortName = false): string {
   const api = entry.api;
   if (!api) return escapeResourceHtml(entry.name);
-  return `<span class="tok-function">${escapeResourceHtml(shortName ? apiDisplayName(entry) : entry.name)}</span>(`
+  return `<span class="tok-function">${escapeResourceHtml(shortName ? apiDisplayName(entry) : entry.name)}</span>${api.typeParameters ? highlightApiType(api.typeParameters) : ""}(`
     + api.parameters.map((parameter) => `<span class="tok-propertyName">${escapeResourceHtml(parameter.name)}</span>${parameter.required ? "" : "?"}: ${highlightApiType(parameter.type)}`
-      + (parameter.defaultValue === undefined ? "" : ` = ${highlightResourceSource(parameter.defaultValue === "true" ? "True" : parameter.defaultValue === "false" ? "False" : parameter.defaultValue)}`)).join(", ")
+      + (parameter.defaultValue === undefined ? "" : ` = ${highlightResourceSource(parameter.defaultValue)}`)).join(", ")
     + `) -&gt; ${highlightApiType(api.returnType)}`;
 }
 
@@ -235,11 +246,11 @@ function referenceMemberNames(members: readonly ApiReferenceMember[], names: str
 
 /** The text one row is searched by. */
 function resourceSearchText(entry: ResourceEntry): string {
-  return [entry.name, entry.description ?? "", entry.api?.signature ?? "", ...(entry.reference ? referenceMemberNames(entry.reference.members) : [])].join(" ");
+  return [entry.name, entry.description ?? "", entry.apiFunctions?.map(item => item.api.signature).join(" ") ?? entry.api?.signature ?? "", ...(entry.reference ? referenceMemberNames(entry.reference.members) : [])].join(" ");
 }
 
 function renderTreeEntry(entry: ResourceEntry): string {
-  return `<li class="resource-entry" data-resource-search-text="${escapeResourceHtml(resourceSearchText(entry))}" data-resource-id="${escapeResourceHtml(resourceEntryId(entry))}"><button type="button" data-resource-open="${escapeResourceHtml(resourceEntryId(entry))}"><span class="resource-entry-heading"><span class="resource-name">${escapeResourceHtml(apiDisplayName(entry))}</span><span class="resource-source">${escapeResourceHtml(entry.source.label)}</span></span>${entry.api ? `<code class="resource-entry-signature">${renderApiSignature(entry, true)}</code>` : ""}${entry.description ? `<span class="resource-description">${escapeResourceHtml(entry.description)}</span>` : ""}</button></li>`;
+  return `<li class="resource-entry" data-resource-search-text="${escapeResourceHtml(resourceSearchText(entry))}" data-resource-id="${escapeResourceHtml(entry.id)}"><button type="button" data-resource-open="${escapeResourceHtml(entry.id)}"><span class="resource-entry-heading"><span class="resource-name">${escapeResourceHtml(apiDisplayName(entry))}</span><span class="resource-source">${escapeResourceHtml(entry.source.label)}</span></span>${entry.api ? `<code class="resource-entry-signature">${apiEntries(entry).map(item => renderApiSignature(item, true)).join("<br>")}</code>` : ""}${entry.description ? `<span class="resource-description">${escapeResourceHtml(entry.description)}</span>` : ""}</button></li>`;
 }
 
 function renderTreeContents(node: ResourceTreeNode, collapsed: Set<string>, type: string): string {
@@ -375,8 +386,8 @@ export function renderResourceList(document: ResourceListDocument, options: Reso
     : options.categoryTree ? renderCategoryTree(document, collapsed)
     : document.groups.map((group) => `<details class="resource-group" data-resource-group="${escapeResourceHtml(group.label)}" data-resource-node="${escapeResourceHtml(group.label)}"${collapsed.has(group.label) ? "" : " open"} data-resource-type="${document.kind === "api" ? "api" : (options.createKinds?.find((kind) => RESOURCE_LABELS[kind] === group.label) ?? "")}">`
     + `<summary><span class="resource-group-toggle" data-resource-toggle="${escapeResourceHtml(group.label)}">${escapeResourceHtml(group.label === "." ? "Top level" : group.label)}</span><span class="resource-count">${group.entries.length}</span>${options.createKinds ? `<span class="resource-group-actions">${resourceToggleButton(`data-resource-group-action="toggle" data-resource-group-target="${escapeResourceHtml(group.label)}"`, group.label, !collapsed.has(group.label))}</span>` : ""}<span class="resource-group-chevron" aria-hidden="true">⌄</span></summary><ul>`
-    + group.entries.map((entry) => `<li class="resource-entry" data-resource-search-text="${escapeResourceHtml(`${entry.name} ${entry.description ?? ""}`)}" data-resource-id="${escapeResourceHtml(resourceEntryId(entry))}" data-resource-path="${escapeResourceHtml(entry.path)}">`
-      + `<button type="button" data-resource-open="${escapeResourceHtml(resourceEntryId(entry))}"><span class="resource-entry-heading"><span class="resource-name">${escapeResourceHtml(entry.name)}</span>`
+    + group.entries.map((entry) => `<li class="resource-entry" data-resource-search-text="${escapeResourceHtml(`${entry.name} ${entry.description ?? ""}`)}" data-resource-id="${escapeResourceHtml(entry.id)}" data-resource-path="${escapeResourceHtml(entry.path)}">`
+      + `<button type="button" data-resource-open="${escapeResourceHtml(entry.id)}"><span class="resource-entry-heading"><span class="resource-name">${escapeResourceHtml(entry.name)}</span>`
       + `<span class="resource-source">${escapeResourceHtml(entry.source.label)}</span></span>`
       + (entry.description ? `<span class="resource-description">${escapeResourceHtml(entry.description)}</span>` : "") + `</button>`
       + `</li>`).join("")
@@ -459,23 +470,25 @@ function renderReferenceModule(module: ApiReferenceModule): string {
 export function renderResourceDefinition(document: ResourceDefinitionDocument, options: ResourcePanelOptions = {}): string {
   const prefix = options.commandPrefix ?? "dext";
   const { entry } = document;
-  const api = entry.kind === "api" ? entry.api : undefined;
-  const highlightedApiSignature = renderApiSignature(entry);
-  const resultTitle = api ? ` title="${escapeResourceHtml(`Returned by ${api.signature}`)}"` : "";
-  const apiDetails = api
-    ? `<section class="resource-api-docs"><p class="resource-api-signature"><code>${highlightedApiSignature}</code></p><h3>Parameters</h3><dl>${(api.parameters.length ? api.parameters : [{ name: "", type: "", required: true, description: "This API takes no parameters." }]).map((parameter) => parameter.name
-      ? `<div><dt><code class="tok-propertyName">${escapeResourceHtml(parameter.name)}</code> <code class="resource-api-type">${highlightApiType(parameter.type)}</code>${parameter.required ? "" : " <em>(optional)</em>"}</dt><dd>${escapeResourceHtml(parameter.description ?? "No description provided.")}${parameter.defaultValue !== undefined ? ` <span class="resource-api-default">Default: <code>${highlightResourceSource(parameter.defaultValue)}</code></span>` : ""}</dd></div>`
-      : `<p>${escapeResourceHtml(parameter.description ?? "")}</p>`).join("")}</dl><h3>Returns</h3><p><code class="resource-result-type"${resultTitle}>${highlightApiType(api.returnType)}</code></p></section>`
-    : "";
+  const apiDetails = apiEntries(entry).map(item => {
+    const api = entry.kind === "api" ? item.api : undefined;
+    const highlightedApiSignature = renderApiSignature(item);
+    const resultTitle = api ? ` title="${escapeResourceHtml(`Returned by ${api.signature}`)}"` : "";
+    return api
+      ? `<section class="resource-api-docs">${item.description ? `<p class="resource-api-documentation">${escapeResourceHtml(item.description)}</p>` : ""}<p class="resource-api-signature"><code>${highlightedApiSignature}</code></p><h3>Parameters</h3><dl>${(api.parameters.length ? api.parameters : [{ name: "", type: "", required: true, description: "This API takes no parameters." }]).map((parameter) => parameter.name
+        ? `<div><dt><code class="tok-propertyName">${escapeResourceHtml(parameter.name)}</code> <code class="resource-api-type">${highlightApiType(parameter.type)}</code>${parameter.required ? "" : " <em>(optional)</em>"}</dt><dd>${escapeResourceHtml(parameter.description ?? "No description provided.")}${parameter.defaultValue !== undefined ? ` <span class="resource-api-default">Default: <code>${highlightResourceSource(parameter.defaultValue)}</code></span>` : ""}</dd></div>`
+        : `<p>${escapeResourceHtml(parameter.description ?? "")}</p>`).join("")}</dl><h3>Returns</h3><p><code class="resource-result-type"${resultTitle}>${highlightApiType(api.returnType)}</code></p></section>`
+      : "";
+  }).join("");
   const referenceDetails = entry.reference ? renderReferenceModule(entry.reference) : "";
   // A reference entry is documentation rather than a file: it has no Dext call to
   // insert and no source to open, and its own section is the whole page.
   const actions = entry.reference ? `<span class="resource-source">TypeScript declaration</span>`
     : (entry.source.path ? `<button type="button" data-resource-command="${prefix}.openResourceSource" data-resource-path="${escapeResourceHtml(entry.source.path)}">Open source</button>` : "")
-      + `<button type="button" data-resource-command="${prefix}.insertResourceReference" data-resource-id="${escapeResourceHtml(resourceEntryId(entry))}">Insert reference</button>`;
-  const source = entry.reference ? ""
-    : `<h3 class="resource-source-heading">Source</h3><pre class="resource-content" data-resource-source="${escapeResourceHtml(document.content)}"><code>${highlightResourceSource(document.content)}</code></pre>`;
-  return `<div class="resource-definition" data-resource-id="${escapeResourceHtml(resourceEntryId(entry))}">`
+      + `<button type="button" data-resource-command="${prefix}.insertResourceReference" data-resource-id="${escapeResourceHtml(entry.id)}">Insert reference</button>`;
+  const source = entry.reference || !document.content ? ""
+    : `<h3 class="resource-source-heading">Source</h3><pre class="resource-content" data-resource-source="${escapeResourceHtml(document.content)}"><code>${entry.kind === "api" ? highlightResourceSource(document.content) : escapeResourceHtml(document.content)}</code></pre>`;
+  return `<div class="resource-definition" data-resource-id="${escapeResourceHtml(entry.id)}">`
     + renderResourceNavigation(options)
     + `<header class="resource-toolbar"><h2>${escapeResourceHtml(entry.name)}</h2>`
     + actions
@@ -621,20 +634,25 @@ export class ResourceEditorProvider {
   }
 }
 
-export interface SidebarResourceDataSourceOptions {
-  /** Current sidebar state. Methods and global resources already describe every resource. */
-  state(): SidebarState;
-  /** Reads the file behind one entry. Missing files fall back to a generated summary. */
-  readFile?(entry: ResourceEntry): Promise<string | undefined>;
-  /** The generated Node and JavaScript reference, read lazily: a build without the
-   * catalog simply lists the callable APIs. */
+export interface FileResourceDataSourceOptions {
+  roots(): Partial<Record<ResourceScope, string>>;
+  /** Enumerates files without importing or executing TypeScript API modules. */
+  listFiles(kind: Exclude<ResourceKind, "file">): Promise<Array<{ name: string; path: string; scope: ResourceScope }>>;
+  readFile(entry: ResourceEntry): Promise<string | undefined>;
+  describeApi?(content: string): Promise<ApiSourceFunction[]>;
+}
+
+type ApiCallable = Pick<RegisteredCallable, "id" | "title" | "description" | "kind" | "source" | "input" | "output">;
+
+export interface ApiDataSourceOptions {
+  methods(): readonly ApiCallable[];
+  files?: ResourceEditorDataSource;
   reference?(): Promise<ApiReferenceCatalog | undefined>;
 }
 
-function apiEntry(method: SidebarState["methods"][number], roots: SidebarState["resourceRoots"]): ResourceEntry {
+function apiEntry(method: ApiCallable): ResourceEntry {
   const scope: ResourceScope = method.source === "project" ? "project" : "global";
   const path = `${method.id.replaceAll(".", "/")}.ts`;
-  const directory = method.source === "builtin" ? "" : roots?.[scope] ?? "";
   const input = method.input ?? [];
   const fields = input.filter((field) => !field.internal || CONVERSATION_METHODS.has(method.id));
   const returnType = method.output ? methodResultType(method) : "Result";
@@ -657,27 +675,8 @@ function apiEntry(method: SidebarState["methods"][number], roots: SidebarState["
       })),
       returnType
     },
-    // A built-in API ships inside the extension bundle, so it has no project or global source file.
-    source: {
-      kind: method.source === "builtin" ? "directory" : scope,
-      label: method.source,
-      ...(directory ? { path: `${directory}/${RESOURCE_DIRECTORIES.api}/${path}` } : {})
-    }
-  };
-}
-
-function globalEntry(item: { name: string; detail?: string }, kind: Exclude<ResourceKind, "api">, roots: SidebarState["resourceRoots"]): ResourceEntry {
-  const path = kind === "mcp" ? `${item.name}.jsonc` : kind === "skill" ? `${item.name}/SKILL.md` : item.name.endsWith(".md") ? item.name : `${item.name}.md`;
-  const directory = roots?.global ?? "";
-  return {
-    id: resourceEntryId({ kind, scope: "global", path }),
-    kind,
-    scope: "global",
-    name: item.name,
-    path,
-    group: RESOURCE_LABELS[kind],
-    ...(item.detail ? { description: item.detail } : {}),
-    source: { kind: "global", label: "Global", ...(directory ? { path: `${directory}/${RESOURCE_DIRECTORIES[kind]}/${path}` } : {}) }
+    // Callable contracts describe runtime capabilities, not resource source files.
+    source: { kind: "directory", label: method.source }
   };
 }
 
@@ -715,32 +714,75 @@ export function apiReferenceEntries(catalog: ApiReferenceCatalog | undefined): R
   return (catalog?.modules ?? []).map(apiReferenceEntry);
 }
 
-/** Builds tab documents from the sidebar state, so search, grouping, detail and jumps stay identical. */
-export function createSidebarResourceDataSource(options: SidebarResourceDataSourceOptions): ResourceEditorDataSource {
-  const entries = async (): Promise<ResourceEntry[]> => {
-    const state = options.state();
-    const roots = state.resourceRoots;
-    const resources = state.globalResources ?? { apis: [], mcps: [], rules: [], skills: [] };
-    return [
-      ...state.methods.map((method) => apiEntry(method, roots)),
-      ...resources.mcps.map((item) => globalEntry(item, "mcp", roots)),
-      ...resources.rules.map((item) => globalEntry(item, "rule", roots)),
-      ...resources.skills.map((item) => globalEntry(item, "skill", roots)),
-      ...apiReferenceEntries(await options.reference?.())
-    ];
+/** Resources are discovered from disk on each list/detail request, independently of callables. */
+export function createFileResourceDataSource(options: FileResourceDataSourceOptions): ResourceEditorDataSource {
+  const entries = async (kinds: readonly ResourceKind[]): Promise<ResourceEntry[]> => {
+    const roots = options.roots();
+    const files = await Promise.all((["api", "mcp", "rule", "skill"] as const).filter(kind => kinds.includes(kind)).map(async (kind) =>
+      (await options.listFiles(kind)).flatMap((file): ResourceEntry[] => {
+        const directory = roots[file.scope];
+        if (!directory || (kind === "api" && file.path.endsWith(".d.ts"))) return [];
+        return [{
+          ...file, kind, id: resourceEntryId({ kind, ...file }),
+          group: kind === "api" ? file.name.split(".").slice(0, -1).join(".") || "." : RESOURCE_LABELS[kind],
+          source: { kind: file.scope, label: file.scope === "project" ? "Project" : "Global", path: `${directory}/${RESOURCE_DIRECTORIES[kind]}/${file.path}` }
+        }];
+      })
+    ));
+    return files.flat();
+  };
+  const documentApi = async (entry: ResourceEntry, content: string): Promise<ResourceEntry> => {
+    if (entry.kind !== "api" || !options.describeApi) return entry;
+    const functions = await options.describeApi(content);
+    if (!functions.length) return entry;
+    const leaf = entry.name.split(".").at(-1);
+    const apiFunctions = functions.map(item => ({ ...item,
+      name: [leaf, "default", "main"].includes(item.name) ? entry.name : `${entry.name}.${item.name}`
+    }));
+    const primary = apiFunctions.find(item => item.name === entry.name) ?? apiFunctions[0]!;
+    return { ...entry, api: primary.api, apiFunctions, ...(primary.description ? { description: primary.description } : {}) };
   };
   return {
-    list: async (kinds, query) => filterResourceEntries((await entries()).filter((entry) => kinds.includes(entry.kind)), query),
+    list: async (kinds, query) => {
+      const result: ResourceEntry[] = [];
+      for (const entry of await entries(kinds)) {
+        // Only API lists need source metadata. Read sequentially to bound memory and I/O.
+        const content = entry.kind === "api" && options.describeApi ? await options.readFile(entry) : undefined;
+        result.push(content === undefined ? entry : await documentApi(entry, content));
+      }
+      return filterResourceEntries(result, query);
+    },
     definition: async (id) => {
-      const entry = (await entries()).find((candidate) => candidate.id === id);
+      const entry = (await entries(["api", "mcp", "rule", "skill"])).find(candidate => candidate.id === id);
       if (!entry) return undefined;
-      // A reference entry is rendered from the catalog itself, not from a file.
-      if (entry.reference) return { entry, content: "" };
-      const content = await options.readFile?.(entry);
-      return { entry, content: content ?? `${entry.name}\n${entry.description ?? ""}`.trim() };
+      const content = await options.readFile(entry);
+      return content === undefined ? undefined : { entry: await documentApi(entry, content), content };
     }
   };
 }
 
-
-
+/** The APIs page adds callable contracts and language references to the file API directory. */
+export function createApiDataSource(options: ApiDataSourceOptions): ResourceEditorDataSource {
+  const catalog = async (): Promise<ResourceEntry[]> => [
+    ...options.methods().map(apiEntry),
+    ...apiReferenceEntries(await options.reference?.())
+  ];
+  return {
+    list: async (kinds, query) => {
+      if (!kinds.includes("api")) return [];
+      const [documented, files] = await Promise.all([catalog(), options.files?.list(["api"], query) ?? []]);
+      const ids = new Set(documented.map(entry => entry.id));
+      // Preserve the built-in reference when a user module is also named ask.ts, etc.
+      return filterResourceEntries([
+        ...documented,
+        ...files.map(entry => ids.has(entry.id) ? { ...entry, id: `file:${entry.id}` } : entry)
+      ], query);
+    },
+    definition: async (id) => {
+      const entry = (await catalog()).find(candidate => candidate.id === id);
+      if (entry) return { entry, content: "" };
+      const file = await options.files?.definition(id.startsWith("file:") ? id.slice(5) : id);
+      return file ? { ...file, entry: { ...file.entry, id } } : undefined;
+    }
+  };
+}

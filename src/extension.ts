@@ -1,3 +1,4 @@
+import { describeApiSource } from "./core/apiSource.js";
 import * as vscode from "vscode";
 import { DextApplication } from "./application.js";
 import { redactedMcpUrl } from "./core/mcpRegistry.js";
@@ -20,7 +21,7 @@ import { ProjectEditorProvider } from "./projectEditorProvider.js";
 import { PROJECT_PANEL_PAGES, type ProjectPanelPage } from "./webview/projectPanel.js";
 import { ApiEditorProvider } from "./apiEditorProvider.js";
 import { GlobalResourcesEditorProvider } from "./globalResourcesEditorProvider.js";
-import { createSidebarResourceDataSource, renderResourceError } from "./resourceDocuments.js";
+import { createFileResourceDataSource, createApiDataSource, renderResourceError, type ResourceEditorDataSource } from "./resourceDocuments.js";
 import { createApiReferenceSource } from "./core/apiReference.js";
 import type { ResourceScope } from "./resourceSession.js";
 import { parseEditorTabKey } from "./editorTabTypes.js";
@@ -231,21 +232,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // from `@types/node` and TypeScript's own lib files, so it documents the same
   // declarations the editor and the kernel resolve.
   const apiReference = createApiReferenceSource(vscode.Uri.joinPath(context.extensionUri, "dist", "api-reference.json").fsPath);
-  const resourceDataSource = createSidebarResourceDataSource({
-    state: () => application.state(),
+  const resourceRoots = () => ({
+    global: application.storage.globalStorageUri.fsPath,
+    ...(vscode.workspace.isTrusted && folder?.uri.scheme === "file" ? { project: vscode.Uri.joinPath(folder.uri, ".dext").fsPath } : {})
+  });
+  const resourceDataSource = createFileResourceDataSource({
+    roots: resourceRoots,
+    describeApi: content => describeApiSource(content, vscode.Uri.joinPath(context.extensionUri, "dist", "project-index").fsPath),
+    listFiles: (kind) => application.listResources(kind),
     readFile: async (entry) => {
       const path = entry.source.path;
       if (!path) return undefined;
       try {
         return textDecoderForResources.decode(await vscode.workspace.fs.readFile(vscode.Uri.file(path)));
       } catch {
-        // A missing resource file falls back to the generated summary.
+        // A resource removed since discovery has no readable detail.
         return undefined;
       }
-    },
-    reference: apiReference
+    }
   });
-  const resourceCommandFor = (scope: ResourceScope) =>
+  const apiDataSource = createApiDataSource({
+    methods: () => application.registry.list(), files: resourceDataSource, reference: apiReference
+  });
+  const resourceCommandFor = (scope: ResourceScope, dataSource: ResourceEditorDataSource) =>
     async (command: string, payload: { id?: string; kind?: string; path?: string }): Promise<void> => {
       if (command.endsWith(".newResource")) {
         const kind = payload.kind;
@@ -261,7 +270,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return;
       }
       if (command.endsWith(".insertResourceReference")) {
-        const entry = payload.id ? await resourceDataSource.definition(payload.id) : undefined;
+        const entry = payload.id ? await dataSource.definition(payload.id) : undefined;
         if (!entry) throw new Error("Select a resource before inserting a reference.");
         if (entry.entry.kind === "api") sidebar.insertReferences([`${entry.entry.name}()`]);
         else await sidebar.editResource(entry.entry.kind, entry.entry.scope);
@@ -272,9 +281,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   editors.api = new ApiEditorProvider({
     manager: editorTabs,
     restorer: editorTabRestorer,
-    dataSource: resourceDataSource,
+    dataSource: apiDataSource,
     scope: "project",
-    onCommand: resourceCommandFor("project"),
+    onCommand: resourceCommandFor("project", apiDataSource),
     copyText: async (text) => { await vscode.env.clipboard.writeText(text); }
   });
   editors.globalResources = new GlobalResourcesEditorProvider({
@@ -282,8 +291,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     restorer: editorTabRestorer,
     dataSource: resourceDataSource,
     scope: "global",
-    availableScopes: () => application.state().resourceRoots?.project ? ["global", "project"] : ["global"],
-    onCommand: (command, payload) => resourceCommandFor(payload.scope === "project" ? "project" : "global")(command, payload),
+    availableScopes: () => resourceRoots().project ? ["global", "project"] : ["global"],
+    onCommand: async (command, payload) => {
+      // Resources refreshes its file listing; reloading runtime callables is unnecessary.
+      if (command === "dext.reloadMethods") return;
+      await resourceCommandFor(payload.scope === "project" ? "project" : "global", resourceDataSource)(command, payload);
+    },
     copyText: async (text) => { await vscode.env.clipboard.writeText(text); }
   }, ["api", "mcp", "rule", "skill"]);
   const resourceSerializer = (provider: () => ApiEditorProvider | GlobalResourcesEditorProvider | undefined) => ({
@@ -323,10 +336,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       reportCommandError(() => editors.globalResources?.showList() ?? Promise.resolve(undefined))
     ),
     vscode.commands.registerCommand("dext.openResourceSource", (path?: string) =>
-      reportCommandError(() => resourceCommandFor("project")("dext.openResourceSource", typeof path === "string" ? { path } : {}))
+      reportCommandError(() => resourceCommandFor("project", resourceDataSource)("dext.openResourceSource", typeof path === "string" ? { path } : {}))
     ),
     vscode.commands.registerCommand("dext.insertResourceReference", (id?: string) =>
-      reportCommandError(() => resourceCommandFor("project")("dext.insertResourceReference", typeof id === "string" ? { id } : {}))
+      reportCommandError(() => resourceCommandFor("project", apiDataSource)("dext.insertResourceReference", typeof id === "string" ? { id } : {}))
     ),
     vscode.commands.registerCommand("dext.editResource", (kind?: string, scope?: string) =>
       reportCommandError(() => sidebar.editResource(

@@ -33,7 +33,7 @@ export class ResourceBrowserProvider extends ResourceEditorProvider {
 
   override async handleMessage(key: string, message: unknown): Promise<void> {
     if (key !== this.listTabKey) return;
-    const payload = (message ?? {}) as { type?: unknown; scope?: unknown; direction?: unknown; query?: unknown; command?: unknown; viewState?: { query?: unknown; scrollTop?: unknown; collapsed?: unknown } };
+    const payload = (message ?? {}) as { type?: unknown; scope?: unknown; direction?: unknown; query?: unknown; command?: unknown; id?: unknown; kind?: unknown; path?: unknown; viewState?: { query?: unknown; scrollTop?: unknown; collapsed?: unknown } };
     const current = this.history[this.position]!;
     if (Array.isArray(payload.viewState?.collapsed)) current.collapsed = payload.viewState.collapsed.filter((value): value is string => typeof value === "string");
     if (typeof payload.viewState?.query === "string" && !current.id) current.query = payload.viewState.query;
@@ -71,7 +71,13 @@ export class ResourceBrowserProvider extends ResourceEditorProvider {
       return;
     }
     if (payload.type === "resourceCommand" && typeof payload.command === "string") {
-      await this.options.onCommand?.(payload.command, { scope: current.scope });
+      await this.options.onCommand?.(payload.command, {
+        scope: current.scope,
+        ...(typeof payload.id === "string" ? { id: payload.id } : {}),
+        ...(typeof payload.kind === "string" ? { kind: payload.kind } : {}),
+        ...(typeof payload.path === "string" ? { path: payload.path } : {}),
+        ...(typeof payload.query === "string" ? { query: payload.query } : {})
+      });
       return;
     }
     await super.handleMessage(key, message);
@@ -95,7 +101,7 @@ export class ResourceBrowserProvider extends ResourceEditorProvider {
     } else {
       // Keep all entries in the DOM so clearing a restored search reveals the full directory.
       const all = await this.options.dataSource.list(this.listKinds(), "");
-      const entries = this.tabKind === "globalResources" ? all.filter((entry) => entry.scope === location.scope && entry.source.kind !== "directory") : all;
+      const entries = this.tabKind === "globalResources" ? all.filter((entry) => entry.scope === location.scope) : all;
       const document = { ...buildResourceList({ kind: this.primaryKind(), scope: location.scope, entries, groupBy: this.groupBy() }), query: location.query };
       render = (options) => (this.options.renderList ?? renderApiList)(document, options);
     }

@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createApiReferenceSource, parseApiReference, type ApiReferenceCatalog } from "../src/core/apiReference.js";
-import { apiReferenceEntries, buildResourceList, createSidebarResourceDataSource, renderResourceDefinition, renderResourceList } from "../src/resourceDocuments.js";
+import { apiReferenceEntries, buildResourceList, createApiDataSource, createFileResourceDataSource, renderResourceDefinition, renderResourceList } from "../src/resourceDocuments.js";
 import { ApiEditorProvider } from "../src/apiEditorProvider.js";
 import { EditorTabManager, type EditorTabCallbacks, type EditorTabPanelHandle } from "../src/editorTabManager.js";
 import { EditorTabRestorer } from "../src/editorTabSerializer.js";
@@ -81,7 +81,6 @@ function state(): SidebarState {
     diagnostics: [],
     mcpServers: [],
     globalDiagnostics: [],
-    globalResources: { apis: [], mcps: [], rules: [], skills: [] },
     resourceRoots: {},
     agentProfiles: [],
     agentSelection: { profileId: "codex", model: "" },
@@ -185,19 +184,56 @@ describe("API reference catalog", () => {
   });
 
   it("adds the reference to the API list and returns its definition without a file read", async () => {
-    const readFile = vi.fn(async () => "export function main(): void {}");
-    const dataSource = createSidebarResourceDataSource({ state, readFile, reference: async () => catalog() });
+    const definition = vi.fn(async () => undefined);
+    const files = { list: vi.fn(async () => []), definition };
+    const dataSource = createApiDataSource({ methods: () => state().methods, files, reference: async () => catalog() });
     const listed = await dataSource.list(["api"], "");
     expect(listed.map((entry) => entry.name)).toContain("node:path");
     expect(await dataSource.list(["api"], "json")).toHaveLength(1);
-    const definition = await dataSource.definition("api:global:node:path.json");
-    expect(definition?.entry.reference?.id).toBe("node:path");
-    expect(definition?.content).toBe("");
-    expect(readFile).not.toHaveBeenCalled();
+    const document = await dataSource.definition("api:global:node:path.json");
+    expect(document?.entry.reference?.id).toBe("node:path");
+    expect(document?.content).toBe("");
+    expect(definition).not.toHaveBeenCalled();
 
     // Without the catalog the page lists the callable APIs alone.
-    const without = createSidebarResourceDataSource({ state, readFile });
+    const without = createApiDataSource({ methods: () => state().methods });
     expect((await without.list(["api"], "")).map((entry) => entry.name)).toEqual(["ask"]);
+  });
+
+  it("keeps Resources file-only while APIs includes contracts, references and same-named file APIs", async () => {
+    const methods = vi.fn(() => [
+      ...state().methods,
+      { ...state().methods[0]!, id: "mcp.files.read", source: "project" as const }
+    ]);
+    const reference = vi.fn(async () => catalog());
+    const readFile = vi.fn(async () => "export function main() {}");
+    const files = createFileResourceDataSource({
+      roots: () => ({ global: "/global", project: "/project/.dext" }),
+      listFiles: async kind => kind === "api" ? [
+        { name: "ask", path: "ask.ts", scope: "global" },
+        { name: "git.commit", path: "git/commit.ts", scope: "project" }
+      ] : [],
+      readFile
+    });
+    const apis = createApiDataSource({ methods, files, reference });
+    expect((await files.list(["api"], "")).map(entry => entry.id)).toEqual([
+      "api:global:ask.ts", "api:project:git/commit.ts"
+    ]);
+    expect((await files.definition("api:global:ask.ts"))?.content).toContain("export function main");
+    expect(methods).not.toHaveBeenCalled();
+    expect(reference).not.toHaveBeenCalled();
+    readFile.mockClear();
+    const listed = await apis.list(["api"], "");
+    expect(listed.map(entry => entry.name)).toEqual(expect.arrayContaining(["ask", "git.commit", "mcp.files.read", "node:path"]));
+    expect(listed.filter(entry => entry.name === "ask")).toHaveLength(2);
+    expect((await apis.definition("api:global:ask.ts"))?.entry.source.path).toBeUndefined();
+    expect((await apis.definition("api:project:mcp/files/read.ts"))?.entry.source.path).toBeUndefined();
+    expect(readFile).not.toHaveBeenCalled();
+    const file = await apis.definition("file:api:global:ask.ts");
+    expect(file?.entry.id).toBe("file:api:global:ask.ts");
+    expect(file?.entry.source.path).toBe("/global/api/ask.ts");
+    expect(file?.content).toContain("export function main");
+    expect(await apis.definition("api:project:missing.ts")).toBeUndefined();
   });
 
   it("copies a specifier through the host rather than the Webview clipboard", async () => {
@@ -207,7 +243,7 @@ describe("API reference catalog", () => {
     const provider = new ApiEditorProvider({
       manager,
       restorer: new EditorTabRestorer(manager),
-      dataSource: createSidebarResourceDataSource({ state, reference: async () => catalog() }),
+      dataSource: createApiDataSource({ methods: () => state().methods, reference: async () => catalog() }),
       scope: "project",
       copyText
     });

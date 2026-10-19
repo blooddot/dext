@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { GlobalResourcesEditorProvider } from "../src/globalResourcesEditorProvider.js";
 import { EditorTabManager, type EditorTabPanelHandle } from "../src/editorTabManager.js";import { EditorTabRestorer } from "../src/editorTabSerializer.js";
-import { buildResourceList, createSidebarResourceDataSource, type ResourceEditorDataSource, type ResourceEntry } from "../src/resourceDocuments.js";
+import { buildResourceList, createFileResourceDataSource, type ResourceEditorDataSource, type ResourceEntry } from "../src/resourceDocuments.js";
 import type { ResourceKind } from "../src/resourceSession.js";
 import { renderGlobalResources } from "../src/webview/globalResourcesPanel.js";
 
@@ -34,6 +34,41 @@ function entry(kind: ResourceKind, name: string): ResourceEntry {
 }
 
 describe("global resources panel", () => {
+  it("shows unregistered project files, opens their detail, and forwards source and creation actions", async () => {
+    let files = [{ name: "git.commit", path: "git/commit.ts", scope: "project" as const }];
+    const dataSource = createFileResourceDataSource({
+      roots: () => ({ project: "C:/project/.dext", global: "C:/global" }),
+      listFiles: async kind => kind === "api" ? files : [],
+      readFile: async () => "export function commit() {}"
+    });
+    const host = new FakeHost();
+    const manager = new EditorTabManager(host);
+    const onCommand = vi.fn();
+    const provider = new GlobalResourcesEditorProvider({
+      manager, restorer: new EditorTabRestorer(manager), dataSource, scope: "global", onCommand
+    }, ["api", "mcp", "rule", "skill"]);
+    await provider.showList();
+    expect(host.created[0]!.panel.html).not.toContain('data-resource-open="api:project:git/commit.ts"');
+    await provider.handleMessage(provider.listTabKey, { type: "resourceScope", scope: "project" });
+    expect(host.created[0]!.panel.html).toContain('data-resource-open="api:project:git/commit.ts"');
+    expect(host.created[0]!.panel.html).toContain('data-resource-node="API.git"');
+    await provider.handleMessage(provider.listTabKey, { type: "resourceOpen", id: "api:project:git/commit.ts" });
+    expect(host.created[0]!.panel.html).toContain('data-resource-path="C:/project/.dext/api/git/commit.ts"');
+    for (const payload of [
+      { command: "dext.openResourceSource", path: "C:/project/.dext/api/git/commit.ts" },
+      { command: "dext.insertResourceReference", id: "api:project:git/commit.ts" },
+      { command: "dext.newResource", kind: "api" }
+    ]) {
+      await provider.handleMessage(provider.listTabKey, { type: "resourceCommand", ...payload });
+      const { command, ...parameters } = payload;
+      expect(onCommand).toHaveBeenLastCalledWith(command, { scope: "project", ...parameters });
+    }
+    await provider.showList();
+    files = [];
+    await provider.handleMessage(provider.listTabKey, { type: "resourceCommand", command: "dext.reloadMethods" });
+    expect(host.created[0]!.panel.html).toContain("No API resources found.");
+  });
+
   it("keeps every category and creation action available when no resources exist", () => {
     const html = renderGlobalResources(buildResourceList({ kind: "mcp", scope: "global", entries: [], groupBy: "kind" }));
     for (const label of ["MCP", "Rule", "Skill"]) {
@@ -107,26 +142,26 @@ describe("global resources panel", () => {
     expect(mcpCategory).toContain(">read<");
   });
 
-  it("maps sidebar methods and global resources into one searchable data source", async () => {
-    const dataSource = createSidebarResourceDataSource({
-      state: () => ({
-        methods: [{ id: "ask", title: "Ask", description: "Question", kind: "prompt", source: "builtin" }],
-        globalResources: {
-          apis: [{ name: "ask", detail: "builtin" }],
-          mcps: [{ name: "files", detail: "stdio" }],
-          rules: [{ name: "style" }],
-          skills: [{ name: "ship", detail: "release" }]
-        },
-        resourceRoots: { global: "/home/.dext" }
-      } as never)
+  it("lists only current files, preserving nested paths and actual MCP filenames", async () => {
+    const readFile = vi.fn(async (): Promise<string | undefined> => "source");
+    const listFiles = vi.fn(async (kind: Exclude<ResourceKind, "file">) => {
+      const path = { api: "git/commit.ts", mcp: "servers.json", rule: "team/style.md", skill: "team/release/SKILL.md" }[kind];
+      return [{ name: kind, path, scope: "global" as const }];
+    });
+    const dataSource = createFileResourceDataSource({
+      roots: () => ({ global: "/home/.dext" }), listFiles, readFile
     });
     const apis = await dataSource.list(["api"], "");
-    expect(apis.map((item) => item.name)).toContain("ask");
+    expect(apis.map(item => item.path)).toEqual(["git/commit.ts"]);
+    expect(listFiles).toHaveBeenCalledTimes(1);
+    expect(listFiles).toHaveBeenCalledWith("api");
+    expect(readFile).not.toHaveBeenCalled();
     const globals = await dataSource.list(["mcp", "rule", "skill"], "");
-    expect(globals.map((item) => `${item.kind}:${item.name}`)).toEqual(["mcp:files", "rule:style", "skill:ship"]);
-    // A built-in API lives in the extension bundle, so it has no project or global source path.
-    expect(apis[0]?.source.path).toBeUndefined();
-    expect(globals[0]?.source.path).toBe("/home/.dext/mcp/files.jsonc");
-    expect(await dataSource.list(["mcp"], "release")).toHaveLength(0);
+    expect(globals.map(item => item.source.path)).toEqual([
+      "/home/.dext/mcp/servers.json", "/home/.dext/rules/team/style.md", "/home/.dext/skills/team/release/SKILL.md"
+    ]);
+    expect((await dataSource.definition("mcp:global:servers.json"))?.content).toBe("source");
+    readFile.mockResolvedValueOnce(undefined);
+    expect(await dataSource.definition("mcp:global:servers.json")).toBeUndefined();
   });
 });

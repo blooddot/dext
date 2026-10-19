@@ -7,7 +7,7 @@ import { DextApplication } from "../src/application.js";
 import { BUILTIN_METHODS } from "../src/core/builtins.js";
 import { MethodRegistry } from "../src/core/registry.js";
 import { resourceFileName, resourcePathSegments, resourcePrompt, resourceFiles, type ResourceSession } from "../src/resourceSession.js";
-import { buildResourceList, isMcpApiId, renderResourceList, resourceCategory, type ResourceEntry } from "../src/resourceDocuments.js";
+import { buildResourceList, createFileResourceDataSource, isMcpApiId, renderResourceList, resourceCategory, type ResourceEntry } from "../src/resourceDocuments.js";
 
 vi.mock("vscode", () => {
   class FileSystemError extends Error { code = "FileNotFound"; }
@@ -47,6 +47,46 @@ beforeEach(async () => {
 afterEach(async () => { vi.restoreAllMocks(); await rm(root, { recursive: true, force: true }); });
 
 describe("resource documents", () => {
+  it("discovers unregistered project API files and reads their source without executing them", async () => {
+    Object.assign(vscode.workspace, { workspaceFolders: [{ uri: vscode.Uri.file(root) }] });
+    Object.assign(application, { workspaceTrusted: true });
+    const project = join(root, ".dext");
+    await mkdir(join(project, "api/git"), { recursive: true });
+    await mkdir(join(project, "rules/team"), { recursive: true });
+    await mkdir(join(project, "skills/release"), { recursive: true });
+    await mkdir(join(project, "mcp"), { recursive: true });
+    await mkdir(join(root, "api"), { recursive: true });
+    const content = 'throw new Error("Must never execute during discovery");\nexport function commit() {}\n';
+    await writeFile(join(project, "api/git/commit.ts"), content);
+    await writeFile(join(project, "api/dext.d.ts"), 'declare module "dext" {}');
+    await writeFile(join(root, "api/ask.ts"), 'export function main() {}');
+    await writeFile(join(project, "rules/team/style.md"), '# Style');
+    await writeFile(join(project, "skills/release/SKILL.md"), '# Release');
+    await writeFile(join(project, "mcp/config.jsonc"), '{"name":"different-name"}');
+    const dataSource = createFileResourceDataSource({
+      roots: () => ({ project, global: root }),
+      listFiles: kind => application.listResources(kind),
+      readFile: entry => readFile(entry.source.path!, "utf8")
+    });
+    const apis = await dataSource.list(["api"], "");
+    expect(apis.filter(entry => entry.scope === "project").map(entry => entry.name)).toEqual(["git.commit"]);
+    expect(apis.filter(entry => entry.name === "ask")).toHaveLength(1);
+    expect(apis.find(entry => entry.id === "api:global:ask.ts")?.source.kind).toBe("global");
+    const document = await dataSource.definition("api:project:git/commit.ts");
+    expect(document?.content).toBe(content);
+    expect(document?.entry.source.path?.replaceAll("\\", "/")).toBe(`${project.replaceAll("\\", "/")}/api/git/commit.ts`);
+    const other = await dataSource.list(["rule", "skill", "mcp"], "");
+    expect(other.map(entry => entry.id)).toEqual(expect.arrayContaining([
+      "rule:project:team/style.md", "skill:project:release/SKILL.md", "mcp:project:config.jsonc"
+    ]));
+    expect((await dataSource.definition("mcp:project:config.jsonc"))?.content).toContain("different-name");
+    await rm(join(project, "api/git/commit.ts"));
+    expect(await dataSource.list(["api"], "git.commit")).toEqual([]);
+    expect(await dataSource.definition("api:project:git/commit.ts")).toBeUndefined();
+    Object.assign(application, { workspaceTrusted: false });
+    expect((await dataSource.list(["rule", "skill", "mcp"], "")).filter(entry => entry.scope === "project")).toEqual([]);
+  });
+
   it("initializes the workspace package once and preserves it on API reload", async () => {
     Object.assign(vscode.workspace, { workspaceFolders: [{ uri: vscode.Uri.file(root) }] });
     Object.assign(application, { workspaceImportsDext: async () => true });
