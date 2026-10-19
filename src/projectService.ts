@@ -159,7 +159,7 @@ export class ProjectInitializationService {
       startedAt: this.now(),
       drafts: this.queue.list().length,
       phase: "preparing",
-      message: "Preparing bounded text evidence…"
+      message: "Preparing the local structure index…"
     });
     const promise = this.run(controller.signal);
     this.activeTask = { promise, cancel: () => { if (this.controller === controller) this.cancel(); } };
@@ -202,7 +202,7 @@ export class ProjectInitializationService {
     try {
       const evidence = await this.dependencies.prepareEvidence(signal, onProgress);
       assertActive();
-      onProgress({ phase: "generating", message: "Calling the project AI to generate the semantic model…" });
+      onProgress({ phase: "generating", message: "Calling the project AI to build the module index…" });
       const output = await this.dependencies.generate(evidence, signal, onProgress, onOutput);
       assertActive();
       onProgress({ phase: "saving", message: "Validating and saving the generated result…" });

@@ -6,6 +6,7 @@ import { renderArchitectureView, projectDiagramScript, type ArchitectureViewInpu
 import type { ProjectEvidenceSettings } from "../core/projectEvidenceSettings.js";
 import type { ProjectWorkspaceSettings } from "../core/projectSettings.js";
 import { renderProjectSettings, projectSettingsScript } from "./projectSettingsView.js";
+import type { ProjectIntent } from "../core/projectIntent.js";
 
 export type ProjectPanelPage = "overview" | "knowledge" | "architecture";
 
@@ -18,6 +19,8 @@ function escapeHtml(value: string): string {
 }
 
 export interface ProjectOverviewData {
+  structure?: ProjectIntent["structure"];
+  qualityIssues?: ProjectIntent["qualityIssues"];
   name: string;
   root: string;
   objects: number;
@@ -89,7 +92,7 @@ export function renderProjectNav(page: ProjectPanelPage): string {
 }
 
 const PHASE_LABELS: Record<string, string> = {
-  preparing: "Preparing bounded text evidence",
+  preparing: "Preparing the local structure index",
   generating: "AI generation",
   saving: "Validating and saving"
 };
@@ -105,15 +108,16 @@ function renderInitialization(initialization: ProjectInitializationState): strin
       ? `<progress class="project-scan-progress-meter" value="${completed}" max="${total}" aria-label="${escapeHtml(phaseLabel)} progress"></progress><strong data-project-progress-count>${completed}/${total}</strong>`
       : `<progress class="project-scan-progress-meter" aria-label="${escapeHtml(phaseLabel)} in progress"></progress>`;
     return `<div class="project-init project-init-running" data-project-init-progress data-project-init-started-at="${initialization.startedAt ?? ""}" role="status" aria-live="polite">`
-      + `<div class="project-scan-progress-line"><span class="project-scan-progress-label" data-project-progress-label>Initializing project knowledge · ${escapeHtml(phaseLabel)}${initialization.message ? ` · ${escapeHtml(initialization.message)}` : ""}</span><span class="project-initialization-elapsed" data-project-init-elapsed></span>${progress}</div>`
+      + `<div class="project-scan-progress-line"><span class="project-scan-progress-label" data-project-progress-label>Building project index · ${escapeHtml(phaseLabel)}${initialization.message ? ` · ${escapeHtml(initialization.message)}` : ""}</span><span class="project-initialization-elapsed" data-project-init-elapsed></span>${progress}</div>`
       + `<pre class="project-initialization-output" data-project-init-output${initialization.output ? "" : " hidden"}>${escapeHtml(initialization.output ?? "")}</pre></div>`;
   }
   if (initialization.status === "completed") {
     const missingDiagram = (initialization.diagramsGenerated ?? 0) === 0;
     return `<div class="project-init project-init-completed" data-project-initialization-state="completed" role="status">`
-      + `<p class="project-initialization-result">Project knowledge initialized${initialization.intentGenerated ? " · valid project intent" : ""}${initialization.diagramsGenerated ? ` · ${initialization.diagramsGenerated} diagram${initialization.diagramsGenerated === 1 ? "" : "s"}` : ""}.</p>`
-      + (missingDiagram ? `<p class="project-scan-progress project-scan-progress-warning">Knowledge is initialized, but no diagram is saved yet. Use <strong>Diagrams</strong> to generate one for the evidenced semantics.</p>` : "")
+      + `<p class="project-initialization-result">Project index ready${initialization.intentGenerated ? " · valid project intent" : ""}${initialization.diagramsGenerated ? ` · ${initialization.diagramsGenerated} diagram${initialization.diagramsGenerated === 1 ? "" : "s"}` : ""}.</p>`
+      + (missingDiagram ? `<p class="project-scan-progress">Open <strong>Knowledge</strong>, choose a module and click <strong>Analyze this module</strong> to generate its explanation and diagram.</p>` : "")
       + (initialization.output ? `<details class="project-initialization-log"><summary>Initialization output</summary><pre>${escapeHtml(initialization.output)}</pre></details>` : "")
+      + `<button type="button" data-project-initialize>Update project index</button><p class="project-help">Refresh the introduction and module outlines. Saved module analyses remain available; changed outlines are marked for update.</p>`
       + `</div>`;
   }
   const failed = initialization.status === "failed";
@@ -125,12 +129,12 @@ function renderInitialization(initialization: ProjectInitializationState): strin
     ? `<p class="project-scan-progress project-scan-progress-error" role="status">Initialization failed: ${escapeHtml(initialization.error ?? "Unknown reason.")}</p>`
     : cancelled
       ? `<p class="project-scan-progress" role="status">Initialization cancelled. The previous saved knowledge is unchanged.</p>`
-      : `<p class="project-help"><strong>Not initialized.</strong> No valid saved semantic model was found. Initialize project knowledge to let AI read bounded README, documentation, manifest and source text, then validate and save the result.${initialization.diagramsGenerated ? " Saved diagrams remain viewable." : ""}</p>`;
+      : `<p class="project-help"><strong>Not initialized.</strong> No valid saved semantic model was found. Index the configured JS/TS, Rust and Python sources locally, then generate module summaries. Detailed explanations and diagrams are generated per module in Knowledge.${initialization.diagramsGenerated ? " Saved diagrams remain viewable." : ""}</p>`;
   return `<div class="project-init project-init-uninitialized" data-project-initialization-state="${failed ? "failed" : cancelled ? "cancelled" : "uninitialized"}">`
     + status
-    + `<button type="button" class="project-initialize" data-project-initialize>${failed || cancelled ? "Retry initialization" : "Initialize project knowledge"}</button>`
+    + `<button type="button" class="project-initialize" data-project-initialize>${failed || cancelled ? "Retry initialization" : "Build project index"}</button>`
     + errorDetails + aiControls
-    + `<div class="project-scan-progress" data-project-init-progress hidden role="status"><div class="project-scan-progress-line"><span class="project-scan-progress-label" data-project-progress-label>Preparing bounded text evidence…</span><progress class="project-scan-progress-meter"></progress></div><pre class="project-initialization-output" data-project-init-output hidden></pre></div>`
+    + `<div class="project-scan-progress" data-project-init-progress hidden role="status"><div class="project-scan-progress-line"><span class="project-scan-progress-label" data-project-progress-label>Preparing the local structure index…</span><progress class="project-scan-progress-meter"></progress></div><pre class="project-initialization-output" data-project-init-output hidden></pre></div>`
     + `</div>`;
 }
 
@@ -143,12 +147,14 @@ function renderOverview(overview: ProjectOverviewData): string {
     : "";
   return `<section class="project-overview" data-project-section="overview">`
     + `<h2>${escapeHtml(overview.name)}</h2>`
-    + `<p class="project-help">Project uses the opened workspace folder as its root. Opening, restoring or switching this page only reads saved project files; source text is read in bounded form when you initialize knowledge or generate a diagram.</p>`
+    + `<p class="project-help">Project uses the opened workspace folder as its root. Opening, restoring or switching this page only reads saved project files; building the index scans the configured source scope; module analysis reads focused source excerpts.</p>`
     + retiredScan
     + (overview.workspaceSettings && overview.evidenceSettings
       ? renderProjectSettings(overview.workspaceSettings, overview.evidenceSettings, Math.max(overview.workspaceSettingsVersion ?? 0, overview.evidenceSettingsVersion ?? 0), initialization.status === "running", renderProjectInitializationSettings(overview))
       : renderProjectInitializationSettings(overview))
     + renderInitialization(initialization)
+    + (overview.qualityIssues?.length ? `<details class="project-reader-warning" open><summary>${overview.qualityIssues.length} quality checks to review</summary><ul>${overview.qualityIssues.map(issue => `<li>${escapeHtml(issue.message)}</li>`).join("")}</ul></details>` : "")
+    + (overview.structure ? `<section class="project-structure-summary"><h3>Local structure index</h3><p>${overview.structure.parsed} source files · ${overview.structure.modules} directory groups${overview.structure.responsibilities !== undefined ? ` · ${overview.structure.responsibilities} knowledge modules` : ""} · ${overview.structure.unresolved} external or unresolved imports</p><p class="project-help">JS/TS, Rust and Python are indexed locally. Knowledge modules organize files by responsibility across directories. Detailed analysis is generated when requested in Knowledge.</p>${overview.structure.failed || overview.structure.unsupported ? `<p class="project-reader-warning">Partial coverage: ${overview.structure.failed} indexing issues · ${overview.structure.unsupported} unsupported files.</p>` : ""}${overview.structure.issues.length ? `<details><summary>Indexing issues</summary><ul>${overview.structure.issues.map(issue => `<li>${escapeHtml(issue.path)} — ${escapeHtml(issue.reason)}</li>`).join("")}</ul></details>` : ""}<button data-project-page="knowledge">Explore modules</button></section>` : "")
     + `<dl class="project-facts">`
     + `<dt>Workspace</dt><dd>${escapeHtml(overview.root)}</dd>`
     + `<dt>Objects</dt><dd>${overview.objects} (${overview.accepted} accepted, ${overview.drafts} drafts, ${overview.needsVerification} need verification)</dd>`
@@ -215,7 +221,7 @@ export function projectPanelScript(state?: EditorTabState): string {
     + "if(action){api.postMessage({type:\"projectDraft\",action:action,id:element.getAttribute(\"data-draft-id\")});}});"
     + "document.addEventListener('change',function(event){var target=event.target;if(!target||!target.matches)return;if(target.matches('[data-project-ai-cli]')){var option=target.options[target.selectedIndex],models=[];try{models=JSON.parse(option.getAttribute('data-models')||'[]');}catch(_){}var old=document.querySelector('.project-ai-model');if(old)old.remove();if(models.length&&target.value){var wrap=document.createElement('div');wrap.innerHTML='<label class=\"project-ai-model\">Model for Project initialization <div class=\"project-ai-model-control\"><button type=\"button\" class=\"project-model-trigger\" data-project-ai-model data-project-model-trigger aria-expanded=\"false\"><span>Model</span><strong data-project-model-value=\"model\">Use CLI default</strong><i class=\"codicon codicon-chevron-down\"></i></button><small class=\"project-model-capabilities\" data-project-model-capabilities hidden></small><div class=\"project-model-popover composer-model-popover\" data-project-model-menu hidden></div></div></label>';var control=wrap.firstElementChild;var menu=control.querySelector('[data-project-model-menu]');var make=function(id,label,items,disabled){return '<button type=\"button\" class=\"project-model-category composer-menu-option composer-menu-category\" data-project-model-category=\"'+id+'\" data-selected=\"\" data-items=\"'+JSON.stringify(items).replace(/\"/g,'&quot;')+'\"'+(disabled?' disabled':'')+'><span>'+label+'</span><span class=\"project-model-category-value\" data-project-model-value=\"'+id+'\">CLI setting</span><i class=\"codicon codicon-chevron-right\"></i></button>';};menu.innerHTML=make('model','Model',[{id:'',label:'Use CLI default'}].concat(models.map(function(m){return {id:m.id,label:m.label,group:m.group||'',reasoningEfforts:m.reasoningEfforts||[],speedTiers:m.speedTiers||[]};})),false)+make('reasoning','Reasoning',[],true)+make('speed','Speed',[],true)+'<div class=\"project-model-submenu composer-model-submenu\" data-project-model-submenu hidden></div>';target.closest('.project-ai-cli').insertAdjacentElement('afterend',control);}api.postMessage({type:'projectAiCli',cli:target.value||undefined});}});"
     + "var elapsedTimer=0;function updateElapsed(){var box=document.querySelector('[data-project-init-progress]'),node=box&&box.querySelector('[data-project-init-elapsed]'),started=box&&Number(box.getAttribute('data-project-init-started-at'));if(!node||!started)return;var seconds=Math.max(0,Math.floor((Date.now()-started)/1000)),minutes=Math.floor(seconds/60);node.textContent='· '+(minutes?minutes+'m '+(seconds%60)+'s':seconds+'s');}updateElapsed();if(document.querySelector('[data-project-init-progress][data-project-init-started-at]'))elapsedTimer=window.setInterval(updateElapsed,1000);"
-    + "window.addEventListener('message',function(event){var message=event&&event.data;if(!message||message.type!=='projectInitializationProgress')return;var state=message.state||{},box=document.querySelector('[data-project-init-progress]');if(!box)return;if(state.startedAt!==undefined)box.setAttribute('data-project-init-started-at',String(state.startedAt));if(state.status!=='running'&&elapsedTimer){window.clearInterval(elapsedTimer);elapsedTimer=0;}var label=box.querySelector('[data-project-progress-label]'),meter=box.querySelector('progress'),count=box.querySelector('[data-project-progress-count]'),output=box.querySelector('[data-project-init-output]');var phase=state.phase==='generating'?'AI generation':state.phase==='saving'?'Validating and saving':'Preparing bounded text evidence';if(label)label.textContent='Initializing project knowledge · '+phase+(state.message?' · '+state.message:'');updateElapsed();if(meter){if(state.progress!==undefined&&state.progressTotal){meter.max=state.progressTotal;meter.value=state.progress;}else{meter.removeAttribute('value');}}if(count){if(state.progress!==undefined&&state.progressTotal){count.hidden=false;count.textContent=state.progress+'/'+state.progressTotal;}else{count.hidden=true;}}if(output){if(state.output){output.hidden=false;output.textContent=state.output;}else if(state.status==='running'){output.hidden=true;}}});"
+    + "window.addEventListener('message',function(event){var message=event&&event.data;if(!message||message.type!=='projectInitializationProgress')return;var state=message.state||{},box=document.querySelector('[data-project-init-progress]');if(!box)return;if(state.startedAt!==undefined)box.setAttribute('data-project-init-started-at',String(state.startedAt));if(state.status!=='running'&&elapsedTimer){window.clearInterval(elapsedTimer);elapsedTimer=0;}var label=box.querySelector('[data-project-progress-label]'),meter=box.querySelector('progress'),count=box.querySelector('[data-project-progress-count]'),output=box.querySelector('[data-project-init-output]');var phase=state.phase==='generating'?'AI generation':state.phase==='saving'?'Validating and saving':'Preparing the local structure index';if(label)label.textContent='Building project index · '+phase+(state.message?' · '+state.message:'');updateElapsed();if(meter){if(state.progress!==undefined&&state.progressTotal){meter.max=state.progressTotal;meter.value=state.progress;}else{meter.removeAttribute('value');}}if(count){if(state.progress!==undefined&&state.progressTotal){count.hidden=false;count.textContent=state.progress+'/'+state.progressTotal;}else{count.hidden=true;}}if(output){if(state.output){output.hidden=false;output.textContent=state.output;}else if(state.status==='running'){output.hidden=true;}}});"
     // Navigating from an adopted suggestion marks the object it wrote.
     + "var focus=document.querySelector('[data-project-focus]');"
     + "if(focus){var id=focus.getAttribute('data-project-focus');"

@@ -548,7 +548,7 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
 
   const initializationService = new ProjectInitializationService({
     prepareEvidence: async (signal, onProgress) => {
-      const packaged = await options.readEvidence({}, signal, onProgress);
+      const packaged = await options.readEvidence({ mode: "index" }, signal, onProgress);
       await captureEvidence("initialize", packaged);
       return packaged;
     },
@@ -556,7 +556,7 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
       if (!projectAiProvider) throw new Error("Project AI is unavailable: enable and select an available AI CLI in the input area first.");
       const service = new ProjectAiGenerationService(projectAiProvider, { ...options.projectAiLimits?.(), ...projectPromptLimits(evidence.selection.evidenceChars) });
       // `onOutput` is the single text sink: one activity event becomes exactly one output line.
-      return service.generate(evidence, {
+      return service.generateIndex(evidence, {
         signal,
         onEvent: (event) => onOutput(activityLine(event))
       });
@@ -824,6 +824,8 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
     const workspaceSettings = effectiveProjectWorkspaceSettings(definition, options.legacyWorkspaceSettings?.());
     return {
       overview: {
+        ...(intent?.structure ? { structure: intent.structure } : {}),
+        ...(intent?.qualityIssues ? { qualityIssues: intent.qualityIssues } : {}),
         name: options.name,
         root: options.root,
         objects: objects.length,

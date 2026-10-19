@@ -14,11 +14,17 @@ const data = (overrides: Partial<ProjectPanelData> = {}, state: ProjectInitializ
 });
 
 describe("project panel", () => {
+  it("shows persisted semantic review warnings and escapes source-derived messages", () => {
+    const html = renderProjectPanel('overview', data({ overview: { ...data().overview,
+      qualityIssues: [{ code: 'missing-context-mapping', message: 'Webview <entry> needs a knowledge link', contextIds: [], elementIds: [], sourcePaths: [] }] } }));
+    expect(html).toContain('1 quality checks to review');
+    expect(html).toContain('Webview &lt;entry&gt; needs a knowledge link');
+  });
   it("shows an explicit uninitialized state with a deliberate initialization entry", () => {
     const html = renderProjectPanel("overview", data());
     expect(html).toContain('data-project-initialization-state="uninitialized"');
     expect(html).toContain("data-project-initialize");
-    expect(html).toContain("Initialize project knowledge");
+    expect(html).toContain("Build project index");
     expect(html).not.toContain("data-project-choose-roots");
     expect(html).not.toContain("Choose scan folders");
     expect(html).not.toContain("code-derived");
@@ -96,7 +102,7 @@ describe("project panel", () => {
 
     const completed = renderProjectPanel("overview", data({}, initialization("completed", { phase: "saving", intentGenerated: true, diagramsGenerated: 0 })));
     expect(completed).toContain('data-project-initialization-state="completed"');
-    expect(completed).toContain("no diagram is saved yet");
+    expect(completed).toContain("Analyze this module");
   });
 
   it("keeps the diagrams page free of the removed multi-engine and self-drawn canvas controls", () => {
