@@ -12,7 +12,7 @@ the repository. **Conversation review** describes one run and is never written i
 [Project files](#project-files) · [Knowledge dimensions](#knowledge-dimensions) ·
 [Conversation review](#conversation-review) · [Review presets](#review-presets) ·
 [Editor tabs](#editor-tabs) · [Explicit initialization](#explicit-initialization) ·
-[Diagrams and Archify](#diagrams-and-archify) · [Checks](#checks)
+[Diagram rendering](#diagram-rendering) · [Checks](#checks)
 
 ## Project files
 
@@ -101,24 +101,40 @@ Project, API, Global Resources, and History open as editor tabs and share one la
 - `editorTabSerializer` registers a `WebviewPanelSerializer`-compatible restore path with a claim
   guard, so a serializer restore and a proactive restore never double-open the same tab.
 
-The Project tab exposes **Overview**, **Knowledge**, and **Diagrams**. The page key stays `architecture`
-so restored tabs keep working, while the visible name describes what the page contains. There is
-deliberately no Hooks, Review, scan-folder or renderer-preference control, and no run metadata is
-loaded into it.
+The Project tab exposes **Overview** and **Knowledge**. Saved diagrams live in the reader's secondary directory. The old `architecture` page key opens that gallery inside the reader, preserving restored tabs. Hooks and single-run metadata remain outside Project.
+
+## Exploring topics
+
+**Knowledge** uses a searchable directory and one selected article. Each topic puts its explanation, interactive or structural view, source references and related topics together. Structure topics describe boundaries and their declared dependencies; flow topics pair the saved step descriptions with their graph. The introduction also keeps a collapsed glossary, architecture rules and decisions.
+
+Text and diagrams share the existing semantic IDs. Flow graphs use only explicit `nextStepIds`, never array order as a claimed transition. Selecting a diagram node or connection highlights the corresponding explanation and exposes its recorded sources; selecting a text step selects its node. Related-topic links continue the same reading path. Older intent files work without a migration; optional step descriptions improve future generations. Independent saved diagrams remain available, and views without a semantic link are labelled as such instead of matched by title.
+
+**Check sources** explicitly compares referenced files, including linked diagrams, with their saved hashes. Changed/missing evidence marks the topic for review; unreadable files and absent hashes stay unknown. Checks are bounded to 1,000 files, 256 KiB per file and 32 MB total, are session-only and do not call AI or rewrite knowledge. Opening the reader does not check files. Unchanged files do not establish semantic correctness.
+
+**Additional views > Generate a focused view** rereads current evidence, prioritizing the topic's files within the configured scope and budget. The saved topic is a historical hypothesis. Topic workflows are limited to 8 nodes; boundary views to 10. New views stay in the current topic and link to existing step/boundary IDs where the source supports them. Relationships must cite actual read excerpts, not just inventory entries.
+
+**Overview > Build project index / Update project index** builds a local JS/TS, Rust and Python structure index, then organizes complete file-level facts into responsibility outlines in bounded AI batches. A final overview can record evidence-backed C4 boundaries; detailed module flows remain on demand. Selecting a Knowledge module reads saved data; **Analyze this module / Update module analysis** explicitly generates its explanation and Archify diagram together.
+
+The article uses the same diagram's `metadata.topicSummary` and node descriptions. `topicId`, `topicAnalysis=1` and `topicBasis` record ownership and the index basis. One `writeDiagram` saves prose, evidence and graph together; updates reuse the diagram ID. Refreshing the index preserves saved analyses and marks changed module outlines for update. Failures and cancellations retain the previous result and do not modify other modules. Manual prose editing and automatic development-conversation injection are not implemented.
+
+Local indexing has no candidate/file-count cutoff and honors the configured scope and exclusions. Tree-sitter WASM grammars ship with the extension. Content hashes reuse unchanged parse results in the extension workspace storage cache; deleted files disappear and configuration changes recompute dependency resolution. Per-file size limits still apply, and unreadable, malformed and unsupported files are reported. Package/directory groups remain physical index metadata. Complete file membership, signatures and static dependencies feed candidate neighborhoods based on file names and dependencies; neighborhoods are scheduling hints, not knowledge boundaries. AI can split a directory and merge a feature across directories. Source-scoped indexing also reads README and configuration files in source ancestors for package/project context, without expanding the source scope.
+
+AI fact batches use at most 120,000 evidence characters (or the smaller configured limit), up to 12 candidate neighborhoods and 60 source files per request. Oversized neighborhoods split by file; no file or declaration is dropped to fit. A single file that exceeds the budget produces an explicit error. Every file must have exactly one primary responsibility owner; unknown/duplicate/missing ownership and foreign entry points fail validation. Later bounded passes reconcile responsibility summaries across batches, preserving every member. Non-reducing large passes retain separate outlines instead of forcing a fixed total count. The overview records supported C4 runtime boundaries from actual document/configuration and targeted source excerpts, not from import edges. Source candidates come from indexed runtime imports and entry declarations; reads stay within the evidence budget and preserve original line numbers and full-file hashes. Cross-batch consumers help distinguish shared infrastructure from a single feature. Runtime source excerpts retain boundary-priority order through final packaging, with a separate 1,400-character cap unaffected by the deep-read preset. The source budget balances deployment roots, packaged launchers, browser entries and alternative transports before duplicate launcher candidates; one file may contribute disjoint process, network and transport-dispatch excerpts, and citations in unread gaps are rejected. Every index, including a single source batch, consolidates outlines into reading topics using member paths, declaration summaries, per-file dependencies and cross-batch consumers. Consolidation may split provisional groups and reassign individual files, while validating exact file ownership and entry points; small supporting helpers should be absorbed into coherent features instead of becoming individual topics. Unresolved questions are stored separately from module purposes. Only questions ending in a question mark and naming an exact member path survive normalization; generic verification disclaimers are filtered. These checks enforce specificity of presentation, not the factual validity of a question. Shared formats and libraries alone do not justify a module boundary. The final overview must also assign every responsibility to exactly one functional area in capabilities, with missing, duplicate and unknown membership rejected. Knowledge groups modules under these areas; legacy flat indexes remain readable. Module reads prioritize persisted `sourceFiles` plus direct dependencies, excluding unrelated same-directory files. They remain capped at 32 files, 12,000 excerpt characters per file and 96,000 total evidence characters. Knowledge exposes the complete member list; directory-group and knowledge-module counts are displayed separately. New responsibility IDs derive from sorted member paths. Index updates preserve IDs for unambiguous continuations with at least 50% file-set overlap (intersection over union); splits and merges retain predecessor references. Changed topic bases mark existing analyses stale. Saved diagrams are never rewritten during indexing. Previous and already orphaned analyses with recorded member files remain accessible as historical views requiring review, not as verified explanations of the new boundary. Legacy contexts without file ownership remain readable; updating the index explicitly adopts the new directory, and existing diagrams remain saved.
+
+Overview also reads ancestor esbuild/Vite/Webpack/Rollup configuration as deployment evidence, without executing build scripts or treating them as application modules. Type-only TypeScript imports remain classified in the index and are excluded from non-type consumer lists. A bounded, single AI review revisits small helpers whose sole non-type consumer belongs to another module, using exact ownership validation. Remaining ownership concerns, isolated C4 elements and internal containers without knowledge links are saved in `qualityIssues` and shown in Overview and the relevant Knowledge topics. These are review signals, not proof of incorrect ownership or a semantic correctness score. System-context views project container interactions to their parent systems, combine descriptions and evidence, and remove internal self-edges; container-level relationships remain unchanged.
+
+Resolution covers common relative imports, local TS path mappings, Python package/src layouts and Rust module/use paths. Macro expansion, conditional compilation, dynamic loading, inherited TS configurations and cross-language runtime communication are not fully resolved; unresolved references remain explicit. The cache contains structural facts, not full source bodies.
 
 ## Explicit initialization
 
 Opening, restoring, switching or refreshing the Project tab only reads saved `.dext` data. Dext never
 enumerates source files, runs a parser, calls AI, or writes `.dext` in the background. Source text is
-read only after the user chooses **Initialize project knowledge** or generates a diagram.
+read only after the user chooses **Build project index**, **Update project index**, **Check evidence**, or generates a diagram.
 
 The initialization service uses three phases:
 
-1. **Preparing** — read a bounded evidence package: README/documentation, manifests and the necessary
-   source text, capped by file count, per-file size, total characters, exclusion rules, path validation
-   and secret redaction. No AST, import graph or language parser is constructed.
-2. **Generating** — the selected Project AI CLI returns one strict JSON document containing the Project
-   Intent and zero or more diagrams. Evidence, stable-id references and kind-specific diagram semantics
+1. **Preparing** — locally parse the configured source scope, cache complete file facts and derive candidate neighborhoods. Read bounded document/configuration excerpts for architecture evidence. Preserve exclusions, path validation, cancellation and secret redaction.
+2. **Generating** — the selected Project AI CLI assigns files to responsibility outlines under strict JSON contracts, then reconciles outlines across batches with exact membership checks. A final request generates the overview and optional C4 model. No detailed module diagrams are generated at this stage. Evidence, stable-id references and kind-specific diagram semantics
    are validated against the exact bounded input before anything is saved. Codex and Claude receive the
    response schema through their own structured-output channel (`--output-schema` / `--json-schema`), so
    the answer is constrained by the provider rather than only asked for in the prompt; a CLI that refuses
@@ -138,12 +154,9 @@ Running, failed, cancelled, and initialized-but-missing-diagram states are shown
 state is recovered from the saved intent, saved diagrams and the initialization record: a project with
 only diagrams keeps them viewable and reports that the knowledge model still needs initialization.
 
-## Diagrams and Archify
+## Diagram rendering
 
-Project's semantic model and `ProjectDiagram` IR are the source of truth. One pinned engine renders
-them: Archify `2.17.0-dev.1+d673e830`, shipped in `vendor/project-diagrams/archify` and located from
-`context.extensionUri` at runtime (never from `process.cwd()`). No skill installation, Python runtime
-or online rendering service is required.
+Project Intent and the renderer-neutral `ProjectDiagram` IR remain the data sources. Structural, C4, workflow, sequence, data-flow and lifecycle views all use bundled Archify 2.17.0-dev.1. Bundled Mermaid 11.17.2 remains a static fallback in strict mode. Both renderers share stable Project IDs, prose and source navigation, without an online rendering service.
 
 Five kinds share the common node/relation/evidence structures and add optional, renderer-neutral
 semantics:
@@ -156,10 +169,11 @@ semantics:
 | Data flow | Two to five stages with `stageId` on every node |
 | Lifecycle | Explicit initial/normal/terminal states, events, conditions and transitions |
 
-Archify conversion maps each kind to its own upstream schema (including `data_flow → dataflow` and
-workflow schema v2 columns 0–5), keeps a bidirectional Project-id/Archify-id mapping, passes source
-evidence where the upstream schema supports it, and repairs layout-only diagnostics within a bounded
-number of attempts. Semantic diagnostics are returned with their messages instead of being rewritten.
+Archify renders in an isolated sandbox and retains native animation, zoom and SVG export. Node selection and native route journeys link to prose. Reader playback follows a recorded main path or message order; branching workflows without a main path do not invent execution order. Interactive failures fall back to Mermaid from the same model, with a visible explanation. No stored diagram migration is required.
+
+Optional `intent.c4` records systems, people, external systems and runtime containers. `systemId` identifies the focal system; containers use `parentId` for system ownership and `contextIds` for responsibility links. Every element and relationship requires evidence from a read source/document excerpt. The reader derives separate Project landscape (C1) and Runtime units (C2) views, then links to responsibilities and flows. Directories are never inferred as containers. Existing models remain usable without C4; the structure index generates C4 only when read source/configuration/documentation supports runtime boundaries. Dedicated class/ER diagram types are not introduced yet.
+
+The reader supports zoom, fit, expand, SVG export and a collapsed source view. A failed render leaves the explanation and Mermaid source available. Queued results cannot replace a newer topic. SVG export and source navigation resolve the displayed diagram's ID and saved timestamp in the host. State connections also have an accessible connection list where the renderer lacks stable edge DOM IDs.
 
 ### Declared architecture rules
 
@@ -179,25 +193,8 @@ so a rule keeps working when Archify ids or the layout change:
 }
 ```
 
-`deny` flags a relation that exists, `allow` every relation leaving `from` that does not go to `to`,
-and `no_cycles` any dependency cycle. The Diagrams page lists the rules and the violations the saved
-diagram currently has; when rules exist but no diagram can be evaluated (`diagramId` is missing while
-several architecture diagrams are saved, names a diagram that is not saved, or no architecture
-diagram exists), the page says so instead of guessing. A rule typo makes the file unusable and the
-page reports the defaults, so a broken rule is never silently ignored.
+`deny` flags a relation that exists, `allow` flags relations from `from` to disallowed targets, and `no_cycles` flags dependency cycles. The existing host evaluation uses stable Project IDs; the reader's **Project introduction > Architecture rules and decisions** shows its rules, violations and unavailable-evaluation notes. Rules are never guessed against a different diagram.
 
-The **Diagrams** page embeds the complete Archify HTML in a sandboxed iframe, so the native visuals,
-search, zoom and exploration controls stay available. The parent page owns the VS Code API; iframe
-messages are validated by source window and session token, and actions are addressed by `diagramId`
-plus semantic version. The page provides diagram selection, generate/update, refresh, export and
-fullscreen; validation, version and evidence coverage details live in a collapsed section.
-
-Exports are **HTML** and **SVG** only, and both use the currently displayed successful render. HTML can
-be opened standalone; SVG is the native serialization of the live viewer (styles, fonts and background
-preserved) captured through the bridge, then saved by the extension host. If a newer render fails, the
-page shows the same diagram's last successful version and labels which version is displayed, so
-exporting matches what is on screen. Switching diagrams, closing the page, or starting a newer
-operation cancels stale work.
 
 ## Checks
 
@@ -210,11 +207,12 @@ Browser checks run in a local Chromium or Edge, and are kept out of `npm run che
 gate does not depend on one being installed:
 
 ```bash
-npm run check:ui                        # all four checks below
+npm run check:ui                        # UI regression suite
 node scripts/checkComposerLayoutUi.mjs  # composer attachment growth, footer alignment, narrow viewports
 node scripts/checkStreamJumpUi.mjs      # jump-to-latest control never covers the conversation scrollbar
 node scripts/checkEditorTabsUi.mjs      # shared editor shell, Project pages, CSP and themes
-node scripts/checkProjectDiagramsUi.mjs # five native diagram kinds, uninitialized/empty states, bridge, exports
+node scripts/checkProjectReaderUi.mjs   # hybrid rendering, C4, playback, source links, CSP and themes
+node scripts/checkProjectDiagramsUi.mjs # retained Archify adapter and bridge compatibility
 ```
 
 Unit tests for the project layer run with `npx vitest run test/project*.test.ts test/editorTab*.test.ts test/turnReview*.test.ts`.
