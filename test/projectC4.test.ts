@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { parseProjectIntent, validateProjectIntent } from "../src/core/projectIntent.js";
+import { parseProjectIntent, projectIntentSchema, validateProjectIntent } from "../src/core/projectIntent.js";
 import { buildProjectTopics, topicFingerprint } from "../src/core/projectTopics.js";
 import { projectIndexQuality } from "../src/core/projectIndexQuality.js";
+import { buildProjectEvidencePackage, ProjectAiGenerationService, validateProjectAiModel } from "../src/core/projectAiGeneration.js";
 
 const evidence = [{ path: "README.md", line: 1 }];
 const fixture = () => parseProjectIntent({ schemaVersion: 1, updatedAt: 1, brief: { name: "Example", evidence },
@@ -82,4 +83,16 @@ describe("C4 project views", () => {
     expect(validateProjectIntent(mixed).some(error => error.path === "c4.systemId")).toBe(true);
   });
 
+  it("requires read excerpts and stamps C4 evidence during generation", async () => {
+    const input = buildProjectEvidencePackage({ files: [{ path: "README.md", content: "Application: developer -> API -> store." }] });
+    const model = { intent: fixture(), diagrams: [] };
+    expect(validateProjectAiModel(model, input)).toEqual([]);
+    const service = new ProjectAiGenerationService({ id: "fixture", generate: async () => ({ text: JSON.stringify(model) }) }, { maxAttempts: 1 });
+    const generated = await service.generate(input);
+    expect(generated.intent.c4!.elements[0]!.evidence[0]!.contentHash).toBe(input.files[0]!.contentHash);
+    expect(generated.intent.c4!.relationships[0]!.evidence[0]!.contentHash).toBe(input.files[0]!.contentHash);
+    const inventoryOnly = { ...input, files: [] };
+    expect(validateProjectAiModel(model, inventoryOnly).some(error => error.includes("require a read excerpt"))).toBe(true);
+    expect(projectIntentSchema.parse(model.intent).c4!.systemId).toBe("app");
+  });
 });

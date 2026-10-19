@@ -59,6 +59,15 @@ const generateDiagram = (text: string, input: ProjectEvidencePackage, requiremen
   new ProjectAiGenerationService(answerWith(text), { maxAttempts: 1 }).generateDiagram(input, { requirement });
 
 describe("Project evidence package", () => {
+  it("prioritizes topic sources and reads deeper excerpts without increasing the total budget", () => {
+    const content = "export const item = 1;\n".repeat(700);
+    const input = { files: [{ path: "src/a.ts", content }, { path: "src/z.ts", content }], preferredPaths: ["src/z.ts"] };
+    const result = buildProjectEvidencePackage(input, { maxFiles: 1, maxFileChars: 8_000, maxTotalChars: 40_000 });
+    expect(result.files.map((file) => file.path)).toEqual(["src/z.ts"]);
+    expect(result.files[0]!.text.length).toBeGreaterThan(2_000);
+    expect(result.characterCount).toBeLessThanOrEqual(40_000);
+  });
+
   it("bounds files, redacts secrets and keeps a deterministic hash without any scan contract", () => {
     const first = evidence();
     const second = evidence();
