@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute, resolve, posix } from "node:path";
 import type { ProjectFileHost, ProjectDefinition, ProjectSaveResult } from "./projectStore.js";
 import type { ProjectEditorDataSource } from "./projectEditorProvider.js";
 import { KnowledgeDraftQueue } from "./core/projectKnowledgeReview.js";
@@ -11,6 +11,7 @@ import {
   isExcludedProjectEvidencePath,
   isProjectEvidencePath,
   projectEvidenceFileKind,
+  PROJECT_BUILD_CONFIG_PATH,
   ProjectAiGenerationService,
   summarizeProjectEvidence,
   type ProjectAiActivityEvent,
@@ -33,18 +34,27 @@ import type { DiagramValidationIssue } from "./core/projectDiagram.js";
 import { DiagramTaskRegistry, isAllowedEvidencePath, isDiagramExportPayload, resolveDiagramTarget } from "./projectDiagramViewer.js";
 import { projectEvidenceSettingsSchema, projectPromptLimits, type ProjectEvidenceSettings } from "./core/projectEvidenceSettings.js";
 import { projectSettingsSchema, projectWorkspaceSettingsFromDefinition, projectWorkspaceSettingsSchema, type ProjectSettings, type ProjectWorkspaceSettings } from "./core/projectSettings.js";
+import { indexedRelatedPaths, readProjectStructureEvidence } from "./projectStructureHost.js";
 
 const textDecoder = new TextDecoder();
 const textEncoder = new TextEncoder();
 
-export const PROJECT_EVIDENCE_EXCLUDE = "**/{node_modules,out,dist,build,.git,target,coverage,.vscode-test,.npm-cache,.tmp-tb}/**";
+export const PROJECT_EVIDENCE_EXCLUDE = "**/{node_modules,out,dist,build,.git,target,coverage,.vscode-test,.npm-cache,.tmp-tb,.venv,venv,__pycache__,.pytest_cache,.mypy_cache}/**";
 export const PROJECT_README_GLOB = "**/{README,README.md,README.txt,readme,readme.md,readme.txt}";
 export const PROJECT_DOCUMENT_GLOB = "**/*.{md,mdx,rst,txt}";
-export const PROJECT_MANIFEST_GLOB = "**/{package.json,Cargo.toml,Cargo.lock,pyproject.toml,go.mod,pom.xml}";
+export const PROJECT_MANIFEST_GLOB = "**/{package.json,tsconfig*.json,jsconfig.json,Cargo.toml,Cargo.lock,pyproject.toml,go.mod,pom.xml}";
+export const PROJECT_BUILD_CONFIG_GLOB = "**/{esbuild*,vite.config*,webpack.config*,rollup.config*}.{js,mjs,cjs,ts,mts,cts}";
 export const PROJECT_SOURCE_GLOB = "**/*.{ts,tsx,cts,mts,js,jsx,cjs,mjs,py,rs,go,java,kt,kts,rb,cs,php,swift,c,h,cpp,hpp}";
 
 export interface ProjectEvidenceReadOptions {
+  structureAssetsPath?: string;
+  structureCachePath?: string;
+  mode?: "index" | "topic";
   requirement?: string;
+  /** Explicit topic evidence is prioritized within the configured scope and budgets. */
+  preferredPaths?: readonly string[];
+  /** Exact responsibility membership; avoids pulling unrelated neighbors from a flat directory. */
+  modulePaths?: readonly string[];
   /** Total evidence files; the AI evidence package applies its own stricter budget afterwards. */
   maxFiles?: number;
   /** Source-text candidates read after documentation and manifests. */
@@ -72,8 +82,8 @@ function relativePath(root: vscode.Uri, uri: vscode.Uri): string | undefined {
 
 /**
  * Reads only bounded documentation, manifests and source text when the user explicitly starts
- * initialization or diagram generation. It never constructs an AST, runs a parser or scans files
- * in the background, and it keeps the same exclusion/path/size/cancellation guarantees.
+ * initialization or diagram generation. Index builds parse the configured source scope locally;
+ * diagram requests retain bounded excerpts. Nothing runs in the background.
  */
 export async function readWorkspaceEvidence(
   root: vscode.Uri,
@@ -82,6 +92,11 @@ export async function readWorkspaceEvidence(
   onProgress?: ProjectInitializationProgressListener,
   signal?: AbortSignal
 ): Promise<ProjectEvidencePackage> {
+  const mode = options.mode;
+  if (mode === "topic") options = { ...options, maxFiles: Math.min(options.maxFiles ?? 600, 32),
+    maxSourceFiles: Math.min(options.maxSourceFiles ?? 600, 28),
+    maxFileChars: Math.min(options.maxFileChars ?? 16_000, 12_000),
+    maxEvidenceChars: Math.min(options.maxEvidenceChars ?? 600_000, 96_000) };
   const maxFiles = Math.max(1, options.maxFiles ?? 600);
   const maxSourceFiles = Math.max(0, options.maxSourceFiles ?? 600);
   const maxFileBytes = Math.max(1024, options.maxFileBytes ?? 262_144);
@@ -106,16 +121,67 @@ export async function readWorkspaceEvidence(
   // Listing candidates is cheap; reading them is not. A wide window is ordered by project evidence
   // rank before the read limit applies, so vendored readmes or tooling folders cannot occupy the
   // slots the project's own documentation and code need.
-  const candidateLimit = Math.min(4_000, Math.max(maxFiles, maxSourceFiles) * 8);
+  const candidateLimit = mode === "index" ? undefined : mode ? 4_000 : Math.min(4_000, Math.max(maxFiles, maxSourceFiles) * 8);
   const pathOf = (uri: vscode.Uri): string => relativePath(root, uri) ?? uri.path;
-  const byEvidenceRank = (left: vscode.Uri, right: vscode.Uri): number => compareProjectEvidencePaths(pathOf(left), pathOf(right));
+  const preferred = new Set([...(options.preferredPaths ?? []), ...(options.modulePaths ?? [])]);
+  const preferredOrder = new Map([...preferred].map((path, index) => [path, index]));
+  const related = new Set<string>();
+  const cachedText = new Map<string, string>();
+  const byEvidenceRank = (left: vscode.Uri, right: vscode.Uri): number => (preferredOrder.get(pathOf(left)) ?? Number.MAX_SAFE_INTEGER) - (preferredOrder.get(pathOf(right)) ?? Number.MAX_SAFE_INTEGER) || Number(related.has(pathOf(right))) - Number(related.has(pathOf(left))) || compareProjectEvidencePaths(pathOf(left), pathOf(right));
   const found: vscode.Uri[] = [];
+  const foundPaths = new Set<string>();
   for (const pattern of patterns) {
     if (signal?.aborted) throw new Error("Project initialization was cancelled.");
     const uris = await vscode.workspace.findFiles(new vscode.RelativePattern(root, pattern), excluded, candidateLimit);
-    for (const uri of uris) if (!found.some((candidate) => candidate.path === uri.path)) found.push(uri);
+    for (const uri of uris) if (!foundPaths.has(uri.path)) { foundPaths.add(uri.path); found.push(uri); }
   }
   if (signal?.aborted) throw new Error("Project initialization was cancelled.");
+  if (mode === "index") {
+    // Source scope stays explicit. Ancestor manifests/READMEs provide package and project context.
+    const sourcePaths = found.map(pathOf).filter(path => projectEvidenceFileKind(path) === "source");
+    const ancestors = new Set<string>();
+    for (const path of sourcePaths) {
+      let directory = posix.dirname(path);
+      while (!ancestors.has(directory)) { ancestors.add(directory); if (directory === ".") break; directory = posix.dirname(directory); }
+    }
+    for (const pattern of [PROJECT_MANIFEST_GLOB, PROJECT_README_GLOB, PROJECT_BUILD_CONFIG_GLOB]) {
+      signal?.throwIfAborted();
+      const context = await vscode.workspace.findFiles(new vscode.RelativePattern(root, pattern), excluded);
+      for (const uri of context) {
+        const path = pathOf(uri), directory = posix.dirname(path);
+        if (pattern === PROJECT_BUILD_CONFIG_GLOB && !PROJECT_BUILD_CONFIG_PATH.test(path)) continue;
+        if (ancestors.has(directory) && !foundPaths.has(uri.path)) { foundPaths.add(uri.path); found.push(uri); }
+      }
+    }
+    return readProjectStructureEvidence(root, found, buildKnowledgeReferences(knowledge), { ...options, include }, onProgress, signal);
+  }
+  if (mode === "topic" && preferred.size) {
+    const available = new Set(found.map(pathOf));
+    for (const path of await indexedRelatedPaths(options.structureCachePath, preferred)) if (available.has(path)) related.add(path);
+    for (const uri of found.filter(uri => preferred.has(pathOf(uri))).sort(byEvidenceRank).slice(0, Math.min(8, maxSourceFiles, Math.floor(maxFiles / 2)))) {
+      if (signal?.aborted) throw new Error("Module analysis was cancelled.");
+      try {
+        if ((await vscode.workspace.fs.stat(uri)).size > maxFileBytes) continue;
+        const source = textDecoder.decode(await vscode.workspace.fs.readFile(uri));
+        cachedText.set(pathOf(uri), source);
+        for (const match of source.matchAll(/\b(?:from\s*|import\s*(?:\(\s*)?|require\s*\(\s*)["'](\.[^"']+)["']/g)) {
+          const target = posix.normalize(posix.join(posix.dirname(pathOf(uri)), match[1]!));
+          const stem = target.replace(/\.(?:mjs|cjs|js)$/, "");
+          const resolved = [target, `${stem}.ts`, `${stem}.tsx`, `${target}.ts`, `${target}.js`, `${target}/index.ts`, `${target}/index.js`].find(path => available.has(path));
+          if (resolved) related.add(resolved);
+        }
+      } catch { /* The normal bounded read below reports inaccessible entry files. */ }
+    }
+    const directories = [...preferred].map(path => path.slice(0, path.lastIndexOf("/") + 1));
+    // Select the module's explicit files and nearby source, plus project-level context.
+    for (let i = found.length - 1; i >= 0; i--) {
+      const path = pathOf(found[i]!);
+      if (!preferred.has(path) && !related.has(path) && (options.modulePaths || !directories.some(directory => path.startsWith(directory) && !path.slice(directory.length).includes("/")))
+        && !(path.indexOf("/") < 0 && projectEvidenceFileKind(path) !== "source")) found.splice(i, 1);
+    }
+    coverage.push(options.modulePaths ? "Module analysis prioritizes its recorded member files and direct dependencies within a bounded scope. Unrelated directory neighbors are excluded."
+      : "Module analysis reads its entry files, direct relative imports and nearby sources within a bounded scope. Cross-module behavior outside these excerpts remains unverified.");
+  }
   const foundDocuments = found.filter((uri) => projectEvidenceFileKind(pathOf(uri)) !== "source");
   const sources = found.filter((uri) => projectEvidenceFileKind(pathOf(uri)) === "source");
   // Documentation keeps its precedence, but a source reserve protects code when documentation
@@ -141,7 +207,7 @@ export async function readWorkspaceEvidence(
       if (!path || !isProjectEvidencePath(path) || isExcludedProjectEvidencePath(path)) continue;
       const stat = await vscode.workspace.fs.stat(uri);
       if (stat.size > maxFileBytes) { coverage.push(`${path}: exceeds the per-file read limit; skipped.`); continue; }
-      const content = textDecoder.decode(await vscode.workspace.fs.readFile(uri));
+      const content = cachedText.get(path) ?? textDecoder.decode(await vscode.workspace.fs.readFile(uri));
       files.push({ path, content });
     } catch {
       if (path) coverage.push(`${path}: could not be read; skipped.`);
@@ -155,6 +221,7 @@ export async function readWorkspaceEvidence(
     files,
     ...(knowledge.objects ? { objects: knowledge.objects } : {}),
     knowledge: knowledgeReferences,
+    ...(options.preferredPaths ? { preferredPaths: options.preferredPaths } : {}),
     ...(options.requirement ? { requirement: options.requirement } : {}),
     ...(include.length ? { scope: include } : {}),
     ...(options.preset ? { preset: options.preset } : {}),
@@ -187,6 +254,8 @@ function buildKnowledgeReferences(knowledge: { objects?: readonly ProjectObject[
     add("capability", intent.capabilities);
     add("context", intent.contexts);
     add("flow", intent.flows);
+    add("step", intent.flows.flatMap((flow) => flow.steps.map((step) => ({ ...step, canonicalName: step.label }))));
+    add("c4", (intent.c4?.elements ?? []).map((element) => ({ ...element, canonicalName: element.name })));
     add("term", intent.terms);
     add("constraint", intent.constraints);
     add("decision", intent.decisions);
@@ -303,7 +372,7 @@ export interface ProjectPanelDataSourceOptions {
     writeEvidenceSummary?(summary: ProjectEvidenceSummary): Promise<void>;
   };
   /** Reads bounded text evidence only when the user explicitly initializes or generates a diagram. */
-  readEvidence(options: { requirement?: string }, signal: AbortSignal, onProgress: ProjectInitializationProgressListener): Promise<ProjectEvidencePackage>;
+  readEvidence(options: { mode?: "index" | "topic"; requirement?: string; preferredPaths?: readonly string[]; modulePaths?: readonly string[] }, signal: AbortSignal, onProgress: ProjectInitializationProgressListener): Promise<ProjectEvidencePackage>;
   diagramRegistry?: ProjectDiagramAdapterRegistry;
   projectAiProvider?: ProjectAiProvider;
   aiCli?: readonly { id: string; label: string; models?: readonly {

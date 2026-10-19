@@ -144,7 +144,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       open: async (objectId) => { await editors.project?.show("knowledge", objectId); }
     });
     const readProjectEvidence = async (
-      request: { requirement?: string },
+      request: { mode?: "index" | "topic"; requirement?: string; preferredPaths?: readonly string[]; modulePaths?: readonly string[] },
       signal: AbortSignal,
       onProgress: ProjectInitializationProgressListener
     ) => {
@@ -160,7 +160,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         {
           // Read per run so a settings change applies to the next initialization or diagram.
           ...(request.requirement ? { requirement: request.requirement } : {}),
-          ...limits
+          ...(request.preferredPaths ? { preferredPaths: request.preferredPaths } : {}),
+          ...(request.modulePaths ? { modulePaths: request.modulePaths } : {}),
+          ...limits,
+          structureAssetsPath: vscode.Uri.joinPath(context.extensionUri, "dist", "project-index").fsPath,
+          structureCachePath: vscode.Uri.joinPath(context.storageUri ?? context.globalStorageUri, "project-structure.json").fsPath,
+          ...(request.mode ? { mode: request.mode } : {})
         },
         onProgress,
         signal
