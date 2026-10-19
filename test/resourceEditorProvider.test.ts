@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ResourceEntry } from "../src/resourceDocuments.js";
-import { applyResourceEdit, buildResourceDefinition, buildResourceList, filterResourceEntries, groupResourceEntries, renderResourceDefinition, renderResourceList } from "../src/resourceDocuments.js";
+import { buildResourceDefinition, buildResourceList, filterResourceEntries, groupResourceEntries, renderResourceDefinition, renderResourceList } from "../src/resourceDocuments.js";
 
 const entry = (name: string, path: string, kind: ResourceEntry["kind"] = "api"): ResourceEntry => ({
   id: `${kind}:project:${path}`, kind, scope: "project", name, path, group: path.split("/").slice(0, -1).join("/") || ".",
@@ -30,13 +30,6 @@ describe("resource documents", () => {
     expect(detail).toContain("openResourceSource");
     expect(detail).toContain("insertResourceReference");
     expect(detail).toContain("export async function main()");
-  });
-
-  it("reports a concurrent edit as a conflict instead of overwriting", () => {
-    const document = buildResourceDefinition(entries[0]!, "one");
-    expect(applyResourceEdit(document, "two", "one")).toEqual({ status: "applied", content: "two" });
-    expect(applyResourceEdit(document, "one", "one")).toEqual({ status: "unchanged", content: "one" });
-    expect(applyResourceEdit(document, "two", "someone-else")).toEqual({ status: "conflict", content: "someone-else" });
   });
 
   it("escapes resource content and names", () => {

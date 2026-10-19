@@ -124,20 +124,6 @@ export function buildResourceDefinition(entry: ResourceEntry, content: string): 
   return { entry, content, source: entry.source };
 }
 
-/**
- * Applies the user's edit if the file still matches the version it was opened at. A conflict is
- * reported with the current content instead of overwriting someone else's edit.
- */
-export function applyResourceEdit(
-  document: ResourceDefinitionDocument,
-  nextContent: string,
-  currentContent: string
-): { status: "applied"; content: string } | { status: "unchanged"; content: string } | { status: "conflict"; content: string } {
-  if (currentContent === nextContent) return { status: "unchanged", content: currentContent };
-  if (currentContent !== document.content) return { status: "conflict", content: currentContent };
-  return { status: "applied", content: nextContent };
-}
-
 export function escapeResourceHtml(value: string): string {
   return value.replace(/[&><"']/g, (character) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
