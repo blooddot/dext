@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeDiagramAdapter, type DiagramAdapterArtifact, type DiagramAdapterCapability, type DiagramAdapterDocument, type ProjectDiagramAdapter } from "../src/core/projectDiagramAdapter.js";
+import { type DiagramAdapterArtifact, type DiagramAdapterCapability, type DiagramAdapterDocument, type ProjectDiagramAdapter } from "../src/core/projectDiagramAdapter.js";
 import { validateProjectDiagram, type ProjectDiagram } from "../src/core/projectDiagram.js";
 
 const capability: DiagramAdapterCapability = {
@@ -47,7 +47,6 @@ describe("Project diagram adapter contract", () => {
     const adapter = new FakeAdapter();
     expect(adapter.supports("architecture")).toBe(true);
     expect(adapter.supports("workflow")).toBe(false);
-    expect(describeDiagramAdapter(adapter)).toEqual({ id: "fake", version: "1.0.0", capabilities: [capability] });
     const document = await adapter.transform(diagram);
     expect(document.payload).toEqual({ nodeCount: 1 });
     expect((await adapter.preview(document)).format).toBe("svg");

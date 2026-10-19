@@ -70,8 +70,3 @@ export interface ProjectDiagramAdapter {
   cancel?(operationId: string): void;
   dispose(): void;
 }
-
-/** Returns a compact capability record for UI and logs without leaking adapter internals. */
-export function describeDiagramAdapter(adapter: ProjectDiagramAdapter): { id: string; version: string; capabilities: readonly DiagramAdapterCapability[] } {
-  return { id: adapter.id, version: adapter.version, capabilities: adapter.capabilities };
-}
