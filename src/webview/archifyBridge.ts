@@ -2,7 +2,7 @@
  * Bridge injected into the renderer HTML. It is intentionally self-contained: the sandboxed
  * iframe has no access to VS Code APIs and only the parent page talks to the extension host.
  */
-export function archifyViewerBridgeScript(session: string, theme: "light" | "dark"): string {
+export function archifyViewerBridgeScript(session: string, theme: "light" | "dark", forwardEscape = false): string {
   return `(function(){
     try {
       var desired = ${JSON.stringify(theme)};
@@ -20,8 +20,16 @@ export function archifyViewerBridgeScript(session: string, theme: "light" | "dar
     var pendingSvg = null;
     var blobByUrl = new Map();
     var archifyToProject = {};
+    var projectToArchify = {};
+    var relationToProject = {};
     var presentationBeforeFullscreen = null;
     function post(message) { try { window.parent.postMessage(Object.assign({ __dext: session }, message), "*"); } catch (error) {} }
+    document.addEventListener("keydown", function(event) {
+      if (${forwardEscape} && event.key === "Escape" && presentationBeforeFullscreen !== null) {
+        event.preventDefault(); event.stopImmediatePropagation();
+        post({ type: "dext-diagram-escape" });
+      }
+    }, true);
     function themeNow() { return document.documentElement.getAttribute("data-theme"); }
     function applyTheme(next) {
       try {
@@ -61,7 +69,11 @@ export function archifyViewerBridgeScript(session: string, theme: "light" | "dar
     document.addEventListener("click", function (event) {
       try {
         var target = event.target && event.target.closest ? event.target.closest("[data-node-id]") : null;
-        if (!target) return;
+        if (!target) {
+          var edge = event.target && event.target.closest ? event.target.closest('[data-edge-id],[data-composition-edge-id]') : null;
+          if (edge) { var edgeId = edge.getAttribute('data-edge-id') || edge.getAttribute('data-composition-edge-id'); post({type:'dext-diagram-relation',relationId:relationToProject[edgeId] || edgeId}); }
+          return;
+        }
         var archifyId = target.getAttribute("data-node-id");
         if (!archifyId) return;
         post({ type: "dext-diagram-node", nodeId: archifyToProject[archifyId] || archifyId });
@@ -69,11 +81,19 @@ export function archifyViewerBridgeScript(session: string, theme: "light" | "dar
     }, true);
     window.addEventListener("message", function (event) {
       var data = event && event.data;
-      if (!data || data.__dext !== session || data.type !== "dext-diagram-command") return;
+      if (event.source !== window.parent || !data || data.__dext !== session || data.type !== "dext-diagram-command") return;
       var requestId = data.requestId;
       try {
         switch (data.command) {
-          case "map": archifyToProject = data.nodes || {}; post({ type: "dext-diagram-result", requestId: requestId, ok: true }); return;
+          case "map": archifyToProject = data.nodes || {}; projectToArchify = data.ids || {}; relationToProject = data.relations || {}; post({ type: "dext-diagram-result", requestId: requestId, ok: true }); return;
+          case "select": {
+            var targetId = projectToArchify[data.nodeId];
+            document.querySelectorAll('[data-node-id]').forEach(function(node){
+              var selected = node.getAttribute('data-node-id') === targetId;
+              node.style.filter = selected ? 'drop-shadow(0 0 5px #2d9bff)' : '';
+            });
+            break;
+          }
           case "theme": applyTheme(data.theme); post({ type: "dext-diagram-state", requestId: requestId, theme: themeNow() }); return;
           case "fullscreen": {
             if (!window.Archify || !Archify.presentation) throw new Error("Archify presentation is unavailable");
@@ -110,6 +130,12 @@ export function archifyViewerBridgeScript(session: string, theme: "light" | "dar
     });
     function ready() {
       applyTheme();
+      var lastJourney = '';
+      new MutationObserver(function(){
+        var current = document.querySelector('[data-route-journey-current][data-node-id]');
+        var id = current && current.getAttribute('data-node-id');
+        if (id !== lastJourney) { lastJourney = id || ''; if (id) post({type:'dext-diagram-node',nodeId:archifyToProject[id] || id}); }
+      }).observe(document.documentElement, {subtree:true,attributes:true,attributeFilter:['data-route-journey-current']});
       var finish = function () {
         var finder = document.getElementById("node-finder");
         post({
@@ -133,7 +159,7 @@ export function archifyViewerBridgeScript(session: string, theme: "light" | "dar
   })();`;
 }
 
-export const VIEWER_COMMANDS = ["map", "theme", "fullscreen", "export-svg", "search", "zoom-in", "zoom-out", "reset"] as const;
+export const VIEWER_COMMANDS = ["map", "select", "theme", "fullscreen", "export-svg", "search", "zoom-in", "zoom-out", "reset"] as const;
 export type ViewerCommand = typeof VIEWER_COMMANDS[number];
 
 /** The iframe may only send bridge messages after both the source window and session token match. */
