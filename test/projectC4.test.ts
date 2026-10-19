@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { parseProjectIntent, projectIntentSchema, validateProjectIntent } from "../src/core/projectIntent.js";
+import { projectIntentSchema, validateProjectIntent } from "../src/core/projectIntent.js";
 import { buildProjectTopics, topicFingerprint } from "../src/core/projectTopics.js";
 import { projectIndexQuality } from "../src/core/projectIndexQuality.js";
 import { buildProjectEvidencePackage, ProjectAiGenerationService, validateProjectAiModel } from "../src/core/projectAiGeneration.js";
 
 const evidence = [{ path: "README.md", line: 1 }];
-const fixture = () => parseProjectIntent({ schemaVersion: 1, updatedAt: 1, brief: { name: "Example", evidence },
+const fixture = () => projectIntentSchema.parse({ schemaVersion: 1, updatedAt: 1, brief: { name: "Example", evidence },
   contexts: [{ id: "execution", canonicalName: "Execution", evidence }],
   c4: { systemId: "app", elements: [
     { id: "app", name: "Application", kind: "system", evidence },
@@ -51,7 +51,7 @@ describe("C4 project views", () => {
   });
   it("preserves old models without inventing containers from responsibilities", () => {
     const old = fixture(); delete old.c4;
-    expect(buildProjectTopics(parseProjectIntent(old)).map(topic => topic.kind)).toEqual(["context"]);
+    expect(buildProjectTopics(projectIntentSchema.parse(old)).map(topic => topic.kind)).toEqual(["context"]);
   });
 
   it("derives distinct levels with stable source and responsibility links", () => {
@@ -78,7 +78,7 @@ describe("C4 project views", () => {
     expect(validateProjectIntent(model).map(error => error.message).join(" ")).toMatch(/must belong/);
     expect(validateProjectIntent(model).map(error => error.message).join(" ")).toMatch(/missing intent id/);
     const mixed = fixture(); mixed.c4!.relationships[0]!.from = "app"; mixed.c4!.relationships[0]!.to = "api";
-    expect(() => parseProjectIntent(mixed)).toThrow(/must not mix/);
+    expect(validateProjectIntent(mixed).some(error => /must not mix/.test(error.message))).toBe(true);
     mixed.c4!.elements[0]!.external = true;
     expect(validateProjectIntent(mixed).some(error => error.path === "c4.systemId")).toBe(true);
   });

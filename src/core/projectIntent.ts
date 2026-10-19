@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { projectEvidenceSchema } from "./projectKnowledge.js";
-import type { ProjectEvidence } from "./projectKnowledge.js";
 
 /** Provenance of a semantic statement in the Project model. */
 export const projectIntentOriginSchema = z.enum(["detected", "inferred", "declared", "accepted"]);
@@ -232,18 +231,4 @@ export function validateProjectIntent(intent: ProjectIntent): ProjectIntentValid
   });
   intent.terms.forEach((item, i) => item.contextIds.forEach((id, j) => check(`terms.${i}.contextIds.${j}`, id, knownContexts)));
   return errors;
-}
-
-/** Parses and validates both schema shape and references in one operation. */
-export function parseProjectIntent(input: unknown): ProjectIntent {
-  const parsed = projectIntentSchema.parse(input);
-  const errors = validateProjectIntent(parsed);
-  if (errors.length) throw new Error(errors.map((error) => `${error.path}: ${error.message}`).join("; "));
-  return parsed;
-}
-
-/** Collects all source evidence from the semantic model for diagnostics and indexing. */
-export function projectIntentEvidence(intent: ProjectIntent): ProjectEvidence[] {
-  return [intent.brief, ...intent.capabilities, ...intent.contexts, ...intent.flows, ...intent.terms, ...intent.constraints, ...intent.decisions, ...(intent.c4?.elements ?? []), ...(intent.c4?.relationships ?? [])]
-    .flatMap((item) => item.evidence);
 }
