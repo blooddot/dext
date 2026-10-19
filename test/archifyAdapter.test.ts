@@ -324,6 +324,50 @@ describe("ArchifyAdapter", () => {
     adapter.dispose();
   }, 120_000);
 
+  it("routes same-column architecture edges without overshooting and retracing past their target", async () => {
+    const adapter = new ArchifyAdapter(runtimeRoot);
+    const nodes = Array.from({ length: 9 }, (_, index) => node(`n${index}`, `Service ${index}`, "service"));
+    const relations = nodes.slice(1).map((entry, index) => relation(`e${index + 1}`, 'n0', entry.id, 'depends_on', { label: 'Owns' }));
+    // The cycle keeps all nodes in their stable listed order, exercising upward routes too.
+    relations.push(relation('back', 'n6', 'n0', 'depends_on', { label: 'Returns' }));
+    relations.push(relation('self', 'n0', 'n0', 'depends_on', { label: 'Reloads' }));
+    const diagram: ProjectDiagram = { schemaVersion: 1, id: 'column-routes', title: 'Column routes', kind: 'architecture', version: 1, updatedAt: 1, nodes, relations };
+    const document = await adapter.transform(diagram);
+    const { ir } = document.payload as { ir: { components: { id: string; row: number; col: number }[]; connections: { id: string; from: string; to: string; via: number[][] }[] } };
+    for (const edge of ir.connections.filter(edge => ['e3', 'e6', 'back'].includes(edge.id))) {
+      const from = ir.components.find(component => component.id === edge.from)!;
+      const to = ir.components.find(component => component.id === edge.to)!;
+      expect(from.col).toBe(to.col);
+      const ys = [from.row, to.row].map(row => 80 + row * (72 + 110) + 36);
+      expect(edge.via.every(point => point[1]! >= Math.min(...ys) && point[1]! <= Math.max(...ys))).toBe(true);
+      expect(new Set(edge.via.map(point => JSON.stringify(point))).size).toBe(edge.via.length);
+    }
+    const artifact = await adapter.render(document);
+    expect(String(artifact.content)).toContain('data-node-id="n8"');
+    expect((await adapter.validate(document)).status).not.toBe('failed');
+    adapter.dispose();
+  }, 120_000);
+
+  it("keeps authored outer connection rails and labels inside the rendered architecture canvas", async () => {
+    const adapter = new ArchifyAdapter(runtimeRoot);
+    const nodes = Array.from({ length: 4 }, (_, index) => node(`n${index}`, `Service ${index}`, "service"));
+    const diagram: ProjectDiagram = { schemaVersion: 1, id: 'outer-rails', title: 'Outer rails', kind: 'architecture', version: 1, updatedAt: 1, nodes,
+      relations: nodes.slice(1).map((entry, index) => relation(`e${index}`, 'n0', entry.id, 'depends_on', { label: 'Creates service' })) };
+    const document = await adapter.transform(diagram);
+    const html = String((await adapter.render(document)).content);
+    const boxes = [...html.matchAll(/<svg\b[^>]*viewBox="0 0 ([\d.]+) ([\d.]+)"/g)].map(match => [Number(match[1]), Number(match[2])]);
+    const canvas = boxes.sort((a, b) => b[0]! * b[1]! - a[0]! * a[1]!)[0]!;
+    const routes = [...html.matchAll(/data-composition-points="([^"]+)"/g)].flatMap(match => match[1]!.split(';').map(pair => pair.split(',').map(Number)));
+    expect(routes.length).toBeGreaterThan(0);
+    expect(routes.every(([x, y]) => x! >= 0 && y! >= 0 && x! + 8 <= canvas[0]! && y! + 8 <= canvas[1]!)).toBe(true);
+    const labels = [...html.matchAll(/<rect x="([\d.-]+)" y="([\d.-]+)" width="([\d.]+)" height="([\d.]+)"[^>]*class="c-mask"/g)];
+    expect(labels.length).toBeGreaterThan(0);
+    expect(labels.every(match => Number(match[1]) >= 0 && Number(match[2]) >= 0
+      && Number(match[1]) + Number(match[3]) + 8 <= canvas[0]!
+      && Number(match[2]) + Number(match[4]) + 8 <= canvas[1]!)).toBe(true);
+    adapter.dispose();
+  }, 60_000);
+
   it("renders more than 24 nodes without truncating the artifact", async () => {
     const adapter = new ArchifyAdapter(runtimeRoot);
     const nodes = Array.from({ length: 30 }, (_, index) => node(`n${index}`, `服务 ${index + 1}`, "service"));

@@ -332,13 +332,27 @@ function architectureGeometry(cell: ArchitectureCell): { exitX: number; cy: numb
  * agree by construction, and every middle segment stays in a channel no component
  * occupies.
  */
-function architectureVia(from: ArchitectureCell, to: ArchitectureCell): { fromSide: string; toSide: string; via: number[][] } {
+function architectureVia(from: ArchitectureCell, to: ArchitectureCell): { fromSide: string; toSide: string; via: number[][]; labelSegment: number; labelAt?: number[] } {
   const a = architectureGeometry(from);
   const b = architectureGeometry(to);
+  if (from.col === to.col) {
+    if (from.row === to.row) {
+      // A self-reference needs a real loop with distinct endpoint sides, not an out-and-back spur.
+      return { fromSide: "right", toSide: "bottom", labelSegment: 2,
+        via: [[a.columnGutter, a.cy], [a.columnGutter, a.rowChannel], [a.exitX - from.width / 2, a.rowChannel]] };
+    }
+    // Stop at the target row. The general U-shaped route would descend below both
+    // endpoints, repeat the same corner, then retrace the gutter back to the target.
+    return { fromSide: "right", toSide: "right", labelSegment: 1,
+      via: [[a.columnGutter, a.cy], [a.columnGutter, b.cy]],
+      // Keep long-route labels in the gap before the destination, away from intermediate boxes.
+      labelAt: [a.columnGutter, b.cy + Math.sign(a.cy - b.cy) * (ARCHITECTURE.height + ARCHITECTURE.gapY) / 2] };
+  }
   const channel = Math.max(a.rowChannel, b.rowChannel);
   return {
     fromSide: "right",
     toSide: "right",
+    labelSegment: 2,
     via: [
       [a.columnGutter, a.cy],
       [a.columnGutter, channel],
@@ -346,6 +360,41 @@ function architectureVia(from: ArchitectureCell, to: ArchitectureCell): { fromSi
       [b.columnGutter, b.cy]
     ]
   };
+}
+
+interface ArchitectureComponentGeometry { id: string; row: number; col: number; size: number[] }
+interface ArchitectureConnectionGeometry { via: number[][]; label?: string; labelAt?: number[]; labelSegment?: number }
+
+/** Upstream's automatic canvas bounds omit authored via points. Include the geometry we own. */
+function architectureViewBox(components: readonly ArchitectureComponentGeometry[], connections: readonly ArchitectureConnectionGeometry[],
+  boundaries: readonly { wraps: string[]; label: string }[], cellWidth: number, gapX: number, gapY: number): number[] {
+  const boxes = new Map(components.map(component => [component.id, {
+    x: ARCHITECTURE.origin[0] + component.col * (cellWidth + gapX),
+    y: ARCHITECTURE.origin[1] + component.row * (ARCHITECTURE.height + gapY),
+    width: component.size[0] ?? cellWidth, height: component.size[1] ?? ARCHITECTURE.height
+  }]));
+  let right = 0, bottom = 0;
+  for (const box of boxes.values()) { right = Math.max(right, box.x + box.width); bottom = Math.max(bottom, box.y + box.height); }
+  for (const boundary of boundaries) {
+    const members = boundary.wraps.flatMap(id => boxes.has(id) ? [boxes.get(id)!] : []);
+    if (!members.length) continue;
+    // Match the renderer's frame padding and conservatively allow its preferred title size.
+    right = Math.max(right, ...members.map(box => box.x + box.width + 30),
+      Math.min(...members.map(box => box.x)) - 30 + 4 + Math.max(30, textUnits(boundary.label) * 5.4 + 10));
+    bottom = Math.max(bottom, ...members.map(box => box.y + box.height + 20));
+  }
+  for (const connection of connections) {
+    for (const point of connection.via) { right = Math.max(right, point[0]!); bottom = Math.max(bottom, point[1]!); }
+    const segment = connection.labelSegment ?? 1;
+    const a = connection.via[segment - 1], b = connection.via[segment];
+    const label = connection.labelAt ?? (a && b ? [(a[0]! + b[0]!) / 2, (a[1]! + b[1]!) / 2 - 10] : undefined);
+    if (connection.label && label) {
+      right = Math.max(right, label[0]! + Math.max(30, textUnits(connection.label) * 4.8 + 10) / 2);
+      bottom = Math.max(bottom, label[1]! + 4);
+    }
+  }
+  // Space for stroke/arrow ends, plus the legend below the complete routed graph.
+  return [Math.max(320, Math.ceil(right + 40)), Math.max(240, Math.ceil(bottom + 100))];
 }
 
 function buildArchitecture(project: ProjectDiagram, repository: ArchifyRepository | undefined, attached: boolean): BuiltIr {
@@ -400,10 +449,6 @@ function buildArchitecture(project: ProjectDiagram, repository: ArchifyRepositor
       to,
       label: relationLabel(relation),
       ...architectureVia(fromCell, toCell),
-      // Ride the authoring corridor with the label: the default segment is the
-      // endpoint stub, whose midpoint sits inside the component row and collides
-      // with whatever the neighbouring columns hold.
-      labelSegment: 2,
       ...(relation.exception ? { variant: "dashed" } : {})
     }];
   });
@@ -412,7 +457,7 @@ function buildArchitecture(project: ProjectDiagram, repository: ArchifyRepositor
     ir: {
       schema_version: 1,
       diagram_type: "architecture",
-      meta: baseMeta(project, repository, attached),
+      meta: baseMeta(project, repository, attached, { viewBox: architectureViewBox(components, connections, boundaries, cellWidth, ARCHITECTURE.gapX, ARCHITECTURE.gapY) }),
       layout: { mode: "grid", cols: columns, gapX: ARCHITECTURE.gapX, gapY: ARCHITECTURE.gapY,
         cellW: Math.max(...components.map((component) => component.size[0] ?? 0)),
         cellH: Math.max(...components.map((component) => component.size[1] ?? 0)) },
@@ -1324,7 +1369,7 @@ function repairIr(input: Record<string, unknown>, diagnostics: readonly string[]
     // (`renderers/architecture/grid.mjs`), so a repair only widens the cell and the
     // gaps. Collapsing the column count is what turned a 22-node diagram into an
     // 11-row canvas whose edges crossed every component between their endpoints.
-    ir["layout"] = {
+    const layout = {
       mode: "grid",
       cols,
       gapX: ARCHITECTURE.gapX * (1 + attempt),
@@ -1332,7 +1377,8 @@ function repairIr(input: Record<string, unknown>, diagnostics: readonly string[]
       cellW: Math.max(Number(previous["cellW"]) || 0, ...components.map((component) => sizeOf(component, 0))),
       cellH: Math.max(Number(previous["cellH"]) || 0, ...components.map((component) => sizeOf(component, 1)))
     };
-    ir["components"] = components.map((component, index) => ({
+    ir["layout"] = layout;
+    const repairedComponents = components.map((component, index) => ({
       ...component,
       ...(text.includes("wider than") || text.includes("sublabel")
         ? { label: typeof component["label"] === "string" ? fitText(component["label"], fitLabelUnits(sizeOf(component, 0), ARCHITECTURE.labelUnit, 8)) : component["label"] }
@@ -1340,6 +1386,13 @@ function repairIr(input: Record<string, unknown>, diagnostics: readonly string[]
       row: Math.floor(index / cols),
       col: index % cols
     }));
+    ir["components"] = repairedComponents;
+    ir["meta"] = {
+      ...(ir["meta"] as Record<string, unknown> ?? {}),
+      viewBox: architectureViewBox(repairedComponents as ArchitectureComponentGeometry[],
+        (ir["connections"] ?? []) as ArchitectureConnectionGeometry[],
+        (ir["boundaries"] ?? []) as { wraps: string[]; label: string }[], layout.cellW, layout.gapX, layout.gapY)
+    };
   }
   if (type === "workflow") {
     // Groups and phases are presentation containers: drop them before touching semantic edges.
