@@ -11,7 +11,6 @@ describe("Project-owned reading settings", () => {
     const host = {
       readFile: async (path: string) => files.get(path),
       writeFile: async (path: string, value: string) => { files.set(path, value); },
-      deleteFile: async (path: string) => { files.delete(path); },
       listDirectory: async () => []
     };
     const store = new ProjectStore(host);

@@ -22,9 +22,9 @@ Dext 是一款支持 AI 对话与类型化工作流的 Visual Studio Code 插件
 | **Plan** | 创建和修订计划，再点击 **Build** 实施 | 自然语言 |
 | **Code** | 组合 API 调用，编写类型化工作流 | TypeScript |
 
-执行 Plan 时，Dext 会在每轮回答后检查任务状态，自动继续未完成且未受阻的工作。任务全部报告完成后，还会单独请求最终验收，验收通过才显示 `Completed`。进度保存在会话历史中，不修改计划文件；暂停后再次点击 **Build** 会恢复同一计划中未变更任务的进度。
+执行 Plan 时，Dext 会在每轮回答后检查任务状态，自动继续未完成且未受阻的工作。任务全部报告完成后，还会单独请求最终自动验证，验证通过才显示 `Completed`。进度保存在会话历史中，不修改计划文件；暂停后再次点击 **Build** 会恢复同一计划中未变更任务的进度。
 
-用户停止显示 `Stopped`，所有剩余任务都有明确外部阻塞时显示 `Blocked`；连续三轮没有新增完成项或新工具活动，或达到单次 64 轮上限时显示 `Incomplete` 并保留计划。普通回答结束不再等于计划完成。最终验收依赖 Agent 检查代码与测试并报告结果，宿主不能仅凭任务勾选独立证明实现正确。
+用户停止显示 `Stopped`，所有剩余任务都有明确外部阻塞时显示 `Blocked`；连续三轮没有新增完成项或新工具活动，或达到单次 64 轮上限时显示 `Incomplete` 并保留计划。普通回答结束不再等于计划完成。最终自动验证依赖 Agent 检查代码与测试并报告结果，宿主不能仅凭任务勾选独立证明实现正确。
 
 你可以将文件和代码选区加入上下文，在 History 中继续对话，并从对话生成起始工作流。Code 模式在 Node 内核中运行 TypeScript，并提供 API 补全、参数提示、诊断和类型化结果字段。
 
@@ -128,17 +128,12 @@ Dext 会把 `dext` 类型声明生成到你的项目里——`.dext/api/dext.d.t
 | [工作流与 API](docs/workflows.zh-CN.md) | TypeScript Code 模式、内置与自定义 API、上下文、Skills、规则和 History |
 | [Agent 配置](docs/agents.zh-CN.md) | CLI 配置、模型覆盖、DeepSeek Harness 预设与权限 |
 | [MCP 配置](docs/mcp.zh-CN.md) | 工具清单、类型化结果、传输方式和凭据 |
-| [项目知识与 Review](docs/project-development.zh-CN.md) | 项目文件、知识维度、对话 Review、编辑器标签和图表 |
+| [项目知识](docs/project-development.zh-CN.md) | 项目文件、知识维度、编辑器标签和图表 |
 | [开发与发布](docs/development.zh-CN.md) | 本地开发、检查、打包、发布和架构 |
 
-## 项目知识、编辑器标签与 Review
+## 项目知识与编辑器标签
 
 Project、API、Global Resources 和 History 都作为编辑器标签打开：同一目标只保留一个页面，重载后会恢复同一个页面。Project 只展示长期内容——Overview、Knowledge 和 Diagrams，不显示 Hook 日志、任务清单或单次执行记录。
-
-每个开发轮次结束时，对话中会出现可折叠的 Review：本轮改动的文件、记录到的脚本事实与覆盖范围、知识草稿，以及你的接受或退回决定。Review 绑定 `sessionId + turnId + runId`，因此重试或后续 Build 不会继承上一次的接受状态。工程审查与体验验收只改变呈现重点，都可以直接在对话中完成。Ask 保持只读且不生成验收卡片；编写 Plan 不会产生实现 Review。
-
-Plan 执行额外绑定计划内容版本与本次 Build，把多个轮次累计到同一份 Review。能证明归属的变更按任务分组，共享与无法归属的变更单列，不做猜测。接受代码 Review 与采用知识草稿是两个独立动作：采用一条草稿会写入一条长期对象并在 Project 中打开它。文件布局、知识维度和图表生成见[项目知识与 Review](docs/project-development.zh-CN.md)。
-
 
 ## 反馈与许可证
 

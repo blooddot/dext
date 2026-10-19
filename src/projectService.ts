@@ -1,5 +1,4 @@
 import type { ProjectEvidencePackage } from "./core/projectAiGeneration.js";
-import { KnowledgeDraftQueue, type KnowledgeSuggestion } from "./core/projectKnowledgeReview.js";
 import type { ProjectIntent } from "./core/projectIntent.js";
 import type { ProjectDiagram } from "./core/projectDiagram.js";
 
@@ -35,13 +34,10 @@ export interface ProjectInitializationState {
   intentGenerated?: boolean;
   /** Number of diagram kinds generated for this run. */
   diagramsGenerated?: number;
-  /** Draft suggestions queued by a legacy propose hook; the AI flow typically produces none. */
-  drafts: number;
   error?: string;
 }
 
 export interface ProjectInitializationOutput {
-  drafts?: KnowledgeSuggestion[];
   intent?: ProjectIntent;
   diagrams?: ProjectDiagram[];
 }
@@ -90,16 +86,13 @@ function initializationErrorMessage(error: unknown): string {
  * development; a retry starts a clean run whose late predecessor cannot overwrite state.
  */
 export class ProjectInitializationService {
-  private state: ProjectInitializationState = { status: "uninitialized", drafts: 0 };
+  private state: ProjectInitializationState = { status: "uninitialized" };
   private controller: AbortController | undefined;
   private activeTask: ProjectInitializationTask | undefined;
   private readonly listeners = new Set<(state: ProjectInitializationState) => void>();
   private readonly now: () => number;
 
-  constructor(
-    private readonly dependencies: ProjectInitializationDependencies,
-    private readonly queue: KnowledgeDraftQueue = new KnowledgeDraftQueue()
-  ) {
+  constructor(private readonly dependencies: ProjectInitializationDependencies) {
     this.now = dependencies.now ?? Date.now;
   }
 
@@ -135,8 +128,7 @@ export class ProjectInitializationService {
         status: "completed",
         finishedAt: this.now(),
         intentGenerated: true,
-        diagramsGenerated: diagramCount,
-        drafts: this.queue.list().length
+        diagramsGenerated: diagramCount
       });
       return;
     }
@@ -144,7 +136,6 @@ export class ProjectInitializationService {
       status: "uninitialized",
       intentGenerated: false,
       diagramsGenerated: diagramCount,
-      drafts: this.queue.list().length,
       ...(!input.hasIntent && diagramCount > 0 ? { message: "Saved diagrams remain viewable; project knowledge is not initialized yet." } : {})
     });
   }
@@ -157,7 +148,6 @@ export class ProjectInitializationService {
     this.replaceState({
       status: "running",
       startedAt: this.now(),
-      drafts: this.queue.list().length,
       phase: "preparing",
       message: "Preparing the local structure index…"
     });
@@ -208,25 +198,22 @@ export class ProjectInitializationService {
       onProgress({ phase: "saving", message: "Validating and saving the generated result…" });
       await this.dependencies.persist(output, signal, onProgress);
       assertActive();
-      for (const draft of output.drafts ?? []) this.queue.enqueue(draft);
       this.replaceState({
         ...this.state,
         status: "completed",
         finishedAt: this.now(),
         phase: "saving",
-        drafts: this.queue.list().length,
         intentGenerated: output.intent !== undefined,
         diagramsGenerated: output.diagrams?.length ?? 0
       });
       return this.snapshot;
     } catch (error) {
       // A cancelled older run may finish after its retry; it must never overwrite the new run.
-      if (!current()) return { status: "cancelled", drafts: 0, intentGenerated: false, diagramsGenerated: 0 };
+      if (!current()) return { status: "cancelled", intentGenerated: false, diagramsGenerated: 0 };
       this.replaceState({
         ...this.state,
         status: signal.aborted ? "cancelled" : "failed",
         finishedAt: this.now(),
-        drafts: this.queue.list().length,
         ...(signal.aborted ? {} : { error: initializationErrorMessage(error) })
       });
       return this.snapshot;

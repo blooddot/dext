@@ -267,8 +267,7 @@ export interface McpTypedResult extends DextResultBase {
   [key: string]: unknown;
 }
 
-/** `PatchResult` is not an API output kind: it is the shape of `AgentResult.patch`
- * and of a turn review's changes. */
+/** `PatchResult` is not an API output kind: it is the shape of `AgentResult.patch`. */
 export type DextResult = McpTypedResult
   | AskResult
   | PlanResult

@@ -7,7 +7,6 @@ class MemoryHost implements ProjectFileHost {
   readonly files = new Map<string, string>();
   async readFile(path: string): Promise<string | undefined> { return this.files.get(path); }
   async writeFile(path: string, content: string): Promise<void> { this.files.set(path, content); }
-  async deleteFile(path: string): Promise<void> { this.files.delete(path); }
   async listDirectory(dir: string): Promise<string[]> {
     const prefix = `${dir}/`;
     return [...this.files.keys()].filter((path) => path.startsWith(prefix)).map((path) => path.slice(prefix.length));
@@ -60,38 +59,53 @@ describe("project store", () => {
   it("saves project definitions and reports concurrent edits as conflicts", async () => {
     const store = new ProjectStore(new MemoryHost());
     const initial = await store.readDefinition();
-    const first = await store.writeDefinition({ ...initial, preset: { default: "experience" } }, initial.version);
+    const first = await store.writeDefinition({ ...initial, ai: { cli: "claude" } }, initial.version);
     expect(first.status).toBe("applied");
     // A second writer that still holds the old version must not clobber the newer value.
-    const stale = await store.writeDefinition({ ...initial, preset: { default: "engineering" } }, initial.version);
+    const stale = await store.writeDefinition({ ...initial, ai: { cli: "codex" } }, initial.version);
     expect(stale.status).toBe("conflict");
-    if (stale.status === "conflict") expect(stale.current.preset.default).toBe("experience");
-    expect((await store.readDefinition()).preset.default).toBe("experience");
+    if (stale.status === "conflict") expect(stale.current.ai.cli).toBe("claude");
+    expect((await store.readDefinition()).ai.cli).toBe("claude");
   });
 
   it("starts from project defaults when no file exists", async () => {
     const store = new ProjectStore(new MemoryHost());
     expect(await store.readDefinition()).toMatchObject({
-      schemaVersion: 1, version: 0, preset: { default: "engineering" }, knowledge: { enabled: false, initialized: false }
+      schemaVersion: 1, version: 0, knowledge: { enabled: false, initialized: false }
     });
-    expect(await store.readPresetDefault()).toBe("engineering");
+    expect(await store.readDefinition()).not.toHaveProperty("preset");
   });
 
-  it("caches the preset default so a send can freeze it synchronously", async () => {
+
+  it("reads and saves a cleaned definition without regenerating retired fields", async () => {
     const host = new MemoryHost();
+    const stored = {
+      schemaVersion: 1, version: 30, updatedAt: 123,
+      knowledge: { enabled: true, initialized: true },
+      evidence: { depth: "whole", include: ["src/**"] },
+      paths: { planDirectory: ".dext/plans", apiDirs: [".dext/api"], skillDirs: [".dext/skills"], mcpDirs: [".dext/mcp"] },
+      ai: { cli: "codex", model: "project-model", reasoningEffort: "high", speed: "fast" },
+      extensionData: { preserved: true }
+    };
+    const original = JSON.stringify(stored);
+    host.files.set(".dext/project.json", original);
     const store = new ProjectStore(host);
-    // Before the first read the built-in default applies.
-    expect(store.presetDefault()).toBe("engineering");
-    await store.writeDefinition({ ...defaultProjectDefinition(), preset: { default: "experience" } }, 0);
-    expect((await store.readDefinition()).preset.default).toBe("experience");
-    expect(store.presetDefault()).toBe("experience");
+    const loaded = await store.readDefinition();
+    expect(loaded).toEqual(stored);
+    expect(host.files.get(".dext/project.json")).toBe(original);
+    expect((await store.writeDefinition(loaded, loaded.version, { now: 456 })).status).toBe("applied");
+    const saved = JSON.parse(host.files.get(".dext/project.json")!);
+    expect(saved).toEqual({ ...stored, version: 31, updatedAt: 456 });
+    expect(saved).not.toHaveProperty("preset");
+    expect(saved).not.toHaveProperty("scan");
+    expect(await new ProjectStore(host).readDefinition()).toEqual(saved);
   });
 
   it("keeps accepted objects when conversation run records are cleaned up", async () => {
     const host = new MemoryHost();
     const store = new ProjectStore(host);
-    await store.writeObject(object("one", "TaskQuery"));
-    await store.writeObject(object("two", "TaskStats"));
+    host.files.set(".dext/objects/one.json", JSON.stringify(object("one", "TaskQuery")));
+    host.files.set(".dext/objects/two.json", JSON.stringify(object("two", "TaskStats")));
     // Simulate conversation snapshots living in the workspace cache, then being cleared.
     host.files.set(".dext/cache/runs/s1/t1.json", "{}");
     host.files.set(".dext/cache/runs/s2/t1.json", "{}");
@@ -141,7 +155,7 @@ describe("legacy project data and initialization recovery", () => {
     }));
     const store = new ProjectStore(host);
     const definition = await store.readDefinition();
-    expect(definition.preset.default).toBe("experience");
+    expect(definition.preset).toEqual({ default: "experience" });
     expect((definition as Record<string, unknown>).scan).toEqual({ roots: ["src"], includeTests: true, extraExcludes: ["vendor"] });
 
     const before = host.files.get(".dext/project.json");
@@ -150,10 +164,11 @@ describe("legacy project data and initialization recovery", () => {
     await store.readDiagrams();
     expect(host.files.get(".dext/project.json")).toBe(before);
 
-    const saved = await store.writeDefinition({ ...definition, preset: { default: "engineering" } }, definition.version);
+    const saved = await store.writeDefinition({ ...definition, ai: { cli: "claude" } }, definition.version);
     expect(saved.status).toBe("applied");
     const written = JSON.parse(host.files.get(".dext/project.json")!) as Record<string, unknown>;
-    expect(written["preset"]).toEqual({ default: "engineering" });
+    expect(written["preset"]).toEqual({ default: "experience" });
+    expect(written["ai"]).toEqual({ cli: "claude" });
     expect(written["scan"]).toEqual({ roots: ["src"], includeTests: true, extraExcludes: ["vendor"] });
     expect(written["diagramAdapters"]).toEqual({ byKind: { architecture: "drawio" }, byDiagram: { legacy: "mermaid" } });
   });

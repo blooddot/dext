@@ -74,7 +74,7 @@ export const mcpRawResultSchema = z.object({
   content: z.string().optional(),
   structured: z.record(z.string(), z.unknown()).optional()
 }).strict();
-/** `AgentResult.patch` and a turn review's changes; not an API output kind. */
+/** `AgentResult.patch`; not an API output kind. */
 export const patchResultSchema = z.object({
   kind: z.literal("patch"),
   title: z.string(),

@@ -28,7 +28,7 @@ const data: ProjectPanelData = {
   overview: {
     name: "Fixture", root: "C:/ws",
     objects: 0, accepted: 0, drafts: 0, needsVerification: 0,
-    initialization: { status: "uninitialized", drafts: 0 }
+    initialization: { status: "uninitialized" }
   },
   objects: [],
   architecture: { diagrams: [] }
@@ -95,8 +95,8 @@ describe("project editor tab", () => {
       load: async () => ({ ...data, overview: { ...data.overview, workspaceSettingsVersion: 2 } })
     });
     await provider.show();
-    await provider.handleMessage(provider.key, { type: "projectWorkspaceSettings", settings: { reviewPreset: "experience" }, version: 1 });
-    expect(saved).toEqual([{ settings: { reviewPreset: "experience" }, version: 1 }]);
+    await provider.handleMessage(provider.key, { type: "projectWorkspaceSettings", settings: { planDirectory: ".project/plans" }, version: 1 });
+    expect(saved).toEqual([{ settings: { planDirectory: ".project/plans" }, version: 1 }]);
     expect(host.created[0]!.panel.messages.at(-1)).toEqual({ type: "projectWorkspaceSettingsSaved", version: 2 });
   });
   it("routes the unified project settings form as one save", async () => {
@@ -106,7 +106,7 @@ describe("project editor tab", () => {
       load: async () => ({ ...data, overview: { ...data.overview, workspaceSettingsVersion: 3, evidenceSettingsVersion: 3 } })
     });
     await provider.show();
-    const settings = { workspace: { reviewPreset: "experience" }, evidence: { depth: "deep", include: [] } };
+    const settings = { workspace: { planDirectory: ".project/plans" }, evidence: { depth: "deep", include: [] } };
     await provider.handleMessage(provider.key, { type: "projectSettings", settings, version: 2 });
     expect(saved).toEqual([{ settings, version: 2 }]);
     expect(host.created[0]!.panel.messages.at(-1)).toEqual({ type: "projectSettingsSaved", version: 3 });
@@ -215,8 +215,8 @@ describe("project editor tab", () => {
     const initializationDone = new Promise<void>((resolve) => { resolveInitialization = resolve; });
     let started = false;
     let settled = false;
-    const runningData: ProjectPanelData = { ...data, overview: { ...data.overview, initialization: { status: "running", phase: "generating", drafts: 0, startedAt: 1 } } };
-    const completedData: ProjectPanelData = { ...data, overview: { ...data.overview, initialization: { status: "completed", phase: "saving", drafts: 0, intentGenerated: true, diagramsGenerated: 1 } } };
+    const runningData: ProjectPanelData = { ...data, overview: { ...data.overview, initialization: { status: "running", phase: "generating", startedAt: 1 } } };
+    const completedData: ProjectPanelData = { ...data, overview: { ...data.overview, initialization: { status: "completed", phase: "saving", intentGenerated: true, diagramsGenerated: 1 } } };
     const { host, provider } = setup({
       load: async () => started ? (settled ? completedData : runningData) : data,
       initialization: () => (settled ? completedData.overview.initialization : runningData.overview.initialization),

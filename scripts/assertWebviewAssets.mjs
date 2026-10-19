@@ -67,19 +67,18 @@ for (const action of [
   "insertFileReferences",
   "executeInput",
   "chooseFiles",
-  // Per-run Review ships in the conversation bundle.
-  "data-turn-review",
-  "data-plan-review",
-  "data-adopt-suggestion"
 ]) {
   assert.ok(mainBundle.includes(action), `Missing required Webview behavior '${action}' from the bundle.`);
+}
+for (const marker of ["data-turn-review", "data-plan-review", "data-adopt-suggestion", "adoptKnowledgeSuggestion"]) {
+  assert.ok(!mainBundle.includes(marker), `Retired Review behavior '${marker}' remains in the bundle.`);
 }
 // The migrated editor-tab pages are rendered by the host, so they live in the extension bundle.
 for (const action of ["data-resource-open", "data-resource-search", "data-project-page", "data-project-reader"]) {
   assert.ok(extensionBundle.includes(action), `Missing migrated editor-tab behavior '${action}' from the extension bundle.`);
 }
 for (const style of [".turn-review", ".plan-review"]) {
-  assert.ok(mainStyles.includes(style), `Missing Review style '${style}'.`);
+  assert.ok(!mainStyles.includes(style), `Retired Review style '${style}' remains.`);
 }
 
 for (const style of ['.monaco-editor', '.squiggly-error', '.squiggly-warning', '.parameter-hints-widget', '.dext-ref-chip']) {

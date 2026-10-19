@@ -8,18 +8,13 @@ import { projectIntentSchema } from "../src/core/projectIntent.js";
 import type { ProjectDiagram } from "../src/core/projectDiagram.js";
 import { ProjectDiagramAdapterRegistry } from "../src/core/projectDiagramRegistry.js";
 import type { DiagramAdapterArtifact, DiagramAdapterCapability, DiagramAdapterDocument, ProjectDiagramAdapter } from "../src/core/projectDiagramAdapter.js";
-import { applyKnowledgeSuggestion, type KnowledgeSuggestion } from "../src/core/projectKnowledgeReview.js";
-import { isAcceptedObject, normalizeProjectObject, type ProjectObject } from "../src/core/projectKnowledge.js";
-import { TurnReviewStore } from "../src/turnReviewStore.js";
-import { TurnReviewController } from "../src/turnReviewController.js";
-import { buildTurnReview } from "../src/core/turnReviewBuilder.js";
+import { isAcceptedObject, normalizeProjectObject } from "../src/core/projectKnowledge.js";
 
 class MemoryHost implements ProjectFileHost {
   readonly files = new Map<string, string>();
   writes = 0;
   async readFile(relativePath: string): Promise<string | undefined> { return this.files.get(relativePath); }
   async writeFile(relativePath: string, content: string): Promise<void> { this.writes += 1; this.files.set(relativePath, content); }
-  async deleteFile(relativePath: string): Promise<void> { this.files.delete(relativePath); }
   async listDirectory(relativeDir: string): Promise<string[]> {
     const prefix = relativeDir ? `${relativeDir.replace(/\/$/, "")}/` : "";
     return [...this.files.keys()].filter((path) => path.startsWith(prefix)).map((path) => path.slice(prefix.length).split("/")[0]!);
@@ -144,26 +139,6 @@ describe("project integration without any static scan", () => {
     expect(failed.artifact?.content).toBe(first.artifact?.content);
   });
 
-  it("keeps conversation Review separate from long-term knowledge", () => {
-    const reviews = new TurnReviewStore();
-    const knowledge = new Map<string, ProjectObject>();
-    const controller = new TurnReviewController(reviews, {
-      load: async (objectId) => knowledge.get(objectId),
-      save: async (object) => { knowledge.set(object.id, object); },
-      remove: async (objectId) => { knowledge.delete(objectId); },
-      navigate: () => {}
-    });
-    const review = buildTurnReview({
-      runId: "run-1", sessionId: "s1", turnId: "t1", mode: "agent",
-      changes: [{ uri: "src/a.ts", kind: "modified", moduleId: "src/a" }]
-    });
-    reviews.put(review);
-    expect(controller.acceptanceCard("s1", "t1", "run-1")?.changes).toEqual(["modified src/a.ts"]);
-    expect(knowledge.size).toBe(0);
-    expect(controller.find("s1", "t1", "run-2")).toBeUndefined();
-    expect(controller.submitFeedback("s1", "t1", "run-1", "accepted").status).toBe("accepted");
-    expect(knowledge.size).toBe(0);
-  });
 
   it("migrates legacy objects and reads the React + Tauri fixture without a scan", async () => {
     const legacy = normalizeProjectObject({
@@ -177,14 +152,5 @@ describe("project integration without any static scan", () => {
     const objects = fixture.objects.map((object) => normalizeProjectObject(object));
     expect(new Set(objects.map((object) => object.id))).toEqual(new Set(["ui.dashboard", "task.query", "legacy.report"]));
     expect(objects.find((object) => object.id === "legacy.report")).toMatchObject({ confirmation: "accepted", validity: "stale" });
-  });
-
-  it("applies an accepted knowledge suggestion into a long-term object", () => {
-    const suggestion: KnowledgeSuggestion = {
-      id: "s1", kind: "create", proposed: { canonicalName: "TaskQuery", description: "Runs a query." },
-      evidence: [{ path: "src/task.ts", symbol: "taskQuery" }], reason: "Detected an entry point.", source: "ai", baseVersion: 0
-    };
-    const object = applyKnowledgeSuggestion(undefined, suggestion, "accepted", 5)!;
-    expect(object).toMatchObject({ canonicalName: "TaskQuery", source: "ai", confirmation: "accepted", validity: "needs_verification", ownership: "candidate" });
   });
 });

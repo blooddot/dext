@@ -1,8 +1,7 @@
 import { z } from "zod";
 import { projectEvidenceSettingsSchema } from "./core/projectEvidenceSettings.js";
 import { projectWorkspaceSettingsSchema } from "./core/projectSettings.js";
-import { normalizeProjectObject, projectObjectSchema, type ProjectObject } from "./core/projectKnowledge.js";
-import { reviewPresetSchema, type ReviewPreset } from "./core/projectContext.js";
+import { normalizeProjectObject, type ProjectObject } from "./core/projectKnowledge.js";
 import { projectIntentSchema, type ProjectIntent } from "./core/projectIntent.js";
 import type { ProjectDiagramHistoryState } from "./core/projectDiagramHistory.js";
 import type { ProjectEvidenceSummary } from "./core/projectAiGeneration.js";
@@ -10,7 +9,7 @@ import { validateProjectDiagram, type ProjectDiagram } from "./core/projectDiagr
 
 /**
  * Long-term project files live under `.dext/` and are deliberately separate from conversation
- * snapshots and Review runs. Cleaning a conversation therefore never touches formal knowledge.
+ * snapshots. Cleaning a conversation therefore never touches formal knowledge.
  */
 export const PROJECT_DEFINITION_PATH = ".dext/project.json";
 export const PROJECT_ARCHITECTURE_PATH = ".dext/architecture.json";
@@ -19,10 +18,6 @@ export const PROJECT_DIAGRAM_HISTORY_PATH = ".dext/diagram-history.json";
 export const PROJECT_DIAGRAMS_DIRECTORY = ".dext/diagrams";
 /** What the last evidence read handed to the model, so a later diagram can be explained. */
 export const PROJECT_EVIDENCE_PATH = ".dext/evidence.json";
-
-export function projectObjectPath(id: string): string {
-  return `.dext/objects/${id}.json`;
-}
 
 export function projectDiagramPath(id: string): string {
   return `${PROJECT_DIAGRAMS_DIRECTORY}/${encodeURIComponent(id)}.json`;
@@ -37,11 +32,10 @@ export type ProjectKnowledgeConfig = z.infer<typeof projectKnowledgeConfigSchema
 export const projectDefinitionSchema = z.object({
   schemaVersion: z.literal(1),
   version: z.number().int().nonnegative().default(0),
-  preset: z.object({ default: reviewPresetSchema.default("engineering") }).strict().default({ default: "engineering" }),
   knowledge: projectKnowledgeConfigSchema.default({ enabled: false, initialized: false }),
   evidence: projectEvidenceSettingsSchema.optional(),
-  /** Project-owned paths and the default review emphasis. */
-  paths: projectWorkspaceSettingsSchema.omit({ reviewPreset: true }).optional(),
+  /** Project-owned resource and plan paths. */
+  paths: projectWorkspaceSettingsSchema.optional(),
   /** Project-only AI CLI. Omitted means use the current Input selection. */
   /** Project-only Agent CLI and optional model override. */
   ai: z.object({
@@ -52,8 +46,7 @@ export const projectDefinitionSchema = z.object({
   }).passthrough().default({}),
   updatedAt: z.number().int().nonnegative().default(0)
 })
-  // Legacy scan profiles and unknown engine settings stay on disk untouched. The product no longer
-  // reads or writes them, and parsing must not fail merely because an old field exists.
+  // Preserve legacy and unknown fields as inactive data without generating them.
   .passthrough();
 export type ProjectDefinition = z.infer<typeof projectDefinitionSchema>;
 
@@ -103,14 +96,13 @@ export const projectEvidenceSummarySchema = z.object({
 }).passthrough();
 
 export function defaultProjectDefinition(now = Date.now()): ProjectDefinition {
-  return { schemaVersion: 1, version: 0, preset: { default: "engineering" }, knowledge: { enabled: false, initialized: false }, ai: {}, updatedAt: now };
+  return { schemaVersion: 1, version: 0, knowledge: { enabled: false, initialized: false }, ai: {}, updatedAt: now };
 }
 
 /** Minimal file host so the store works with VS Code, a worker, or an in-memory test double. */
 export interface ProjectFileHost {
   readFile(relativePath: string): Promise<string | undefined>;
   writeFile(relativePath: string, content: string): Promise<void>;
-  deleteFile(relativePath: string): Promise<void>;
   listDirectory(relativeDir: string): Promise<string[]>;
 }
 
@@ -124,33 +116,19 @@ export interface ProjectSaveOptions {
 
 /**
  * Owns only the long-lived project files: settings, accepted objects, and declared architecture.
- * Run snapshots are managed by the conversation run store (see {@link TurnReviewStore}).
  */
 export class ProjectStore {
-  /** Last definition value, so a synchronous preset read never blocks a send. */
-  private cachedPreset: ReviewPreset = "engineering";
-
   constructor(private readonly host: ProjectFileHost) {}
 
   async readDefinition(): Promise<ProjectDefinition> {
     const raw = await this.host.readFile(PROJECT_DEFINITION_PATH);
-    if (!raw) return this.remember(defaultProjectDefinition());
+    if (!raw) return defaultProjectDefinition();
     try {
-      return this.remember(projectDefinitionSchema.parse(JSON.parse(raw)));
+      return projectDefinitionSchema.parse(JSON.parse(raw));
     } catch {
       // A corrupt or future-schema file must not block development; fall back to defaults.
-      return this.remember(defaultProjectDefinition());
+      return defaultProjectDefinition();
     }
-  }
-
-  private remember(definition: ProjectDefinition): ProjectDefinition {
-    this.cachedPreset = definition.preset.default;
-    return definition;
-  }
-
-  /** The project's default Review preset. Before the first read this is the built-in default. */
-  presetDefault(): ReviewPreset {
-    return this.cachedPreset;
   }
 
   async writeDefinition(next: ProjectDefinition, expectedVersion: number, options: ProjectSaveOptions = {}): Promise<ProjectSaveResult<ProjectDefinition>> {
@@ -158,12 +136,7 @@ export class ProjectStore {
     if (current.version !== expectedVersion) return { status: "conflict", current };
     const value = projectDefinitionSchema.parse({ ...next, version: current.version + 1, updatedAt: options.now ?? Date.now() });
     await this.host.writeFile(PROJECT_DEFINITION_PATH, `${JSON.stringify(value, null, 2)}\n`);
-    this.remember(value);
     return { status: "applied", value };
-  }
-
-  async readPresetDefault(): Promise<ReviewPreset> {
-    return (await this.readDefinition()).preset.default;
   }
 
   async readIntent(): Promise<ProjectIntent | undefined> {
@@ -245,15 +218,6 @@ export class ProjectStore {
       }
     }
     return objects.sort((left, right) => left.id.localeCompare(right.id));
-  }
-
-  async writeObject(object: ProjectObject): Promise<void> {
-    const value = projectObjectSchema.parse(object);
-    await this.host.writeFile(projectObjectPath(value.id), `${JSON.stringify(value, null, 2)}\n`);
-  }
-
-  async deleteObject(id: string): Promise<void> {
-    await this.host.deleteFile(projectObjectPath(id));
   }
 
   async readArchitecture(): Promise<ProjectArchitectureDocument> {

@@ -4,7 +4,6 @@ import { createHash } from "node:crypto";
 import { isAbsolute, resolve, posix } from "node:path";
 import type { ProjectFileHost, ProjectDefinition, ProjectSaveResult } from "./projectStore.js";
 import type { ProjectEditorDataSource, ProjectReaderEvidenceRequest, ProjectReaderExportRequest, ProjectReaderRenderRequest } from "./projectEditorProvider.js";
-import { KnowledgeDraftQueue } from "./core/projectKnowledgeReview.js";
 import type { ProjectInitializationState, ProjectInitializationProgressListener } from "./projectService.js";
 import { ProjectInitializationService } from "./projectService.js";
 import {
@@ -337,14 +336,6 @@ export class VscodeProjectFileHost implements ProjectFileHost {
     await vscode.workspace.fs.writeFile(this.uri(relativePath), textEncoder.encode(content));
   }
 
-  async deleteFile(relativePath: string): Promise<void> {
-    try {
-      await vscode.workspace.fs.delete(this.uri(relativePath));
-    } catch {
-      // Deleting an already-removed object is not an error.
-    }
-  }
-
   async listDirectory(relativeDir: string): Promise<string[]> {
     try {
       const entries = await vscode.workspace.fs.readDirectory(this.uri(relativeDir));
@@ -507,7 +498,6 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
   /** Last evidence record of this session, so the page can explain a run without a reload. */
   let lastEvidence: ProjectEvidenceSummary | undefined;
   const tasks = new DiagramTaskRegistry();
-  const draftQueue = new KnowledgeDraftQueue();
   const listeners = new Set<(message: ProjectPanelMessage) => void>();
   const post = (message: ProjectPanelMessage): void => { for (const listener of listeners) listener(message); };
   interface RenderedDiagram { version: number; engineVersion: string; html: string; mapping?: ArchifyIdMapping; receipt: { status: string; issues: readonly DiagramValidationIssue[] } }
@@ -610,7 +600,7 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
       }
     },
     ...(options.now ? { now: options.now } : {})
-  }, draftQueue);
+  });
 
   const readDiagrams = async (): Promise<ProjectDiagram[]> => sortProjectDiagrams(await (options.store.readDiagrams?.() ?? []));
 
@@ -960,7 +950,6 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
       },
       objects,
       readerDiagrams: diagrams,
-      drafts: draftQueue.list(),
       ...(intent ? {
         knowledge: {
           brief: intent.brief.summary,
@@ -1035,7 +1024,6 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
         if (definition.version !== version) throw new Error("Project settings changed. Reopen Overview before saving again.");
         const saved = await options.store.writeDefinition!({
           ...definition,
-          preset: { ...definition.preset, default: next.reviewPreset },
           paths: { planDirectory: next.planDirectory, apiDirs: next.apiDirs, skillDirs: next.skillDirs, mcpDirs: next.mcpDirs }
         }, version);
         if (saved.status === "conflict") throw new Error("Project settings changed. Reopen Overview before saving again.");
@@ -1048,7 +1036,6 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
         if (definition.version !== version) throw new Error("Project settings changed. Reopen Overview before saving again.");
         const saved = await options.store.writeDefinition!({
           ...definition,
-          preset: { ...definition.preset, default: next.workspace.reviewPreset },
           paths: { planDirectory: next.workspace.planDirectory, apiDirs: next.workspace.apiDirs, skillDirs: next.workspace.skillDirs, mcpDirs: next.workspace.mcpDirs },
           evidence: next.evidence
         }, version);

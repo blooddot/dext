@@ -130,17 +130,12 @@ Dext generates the `dext` type declaration into your project — `.dext/api/dext
 | [Workflows and APIs](docs/workflows.md) | TypeScript Code mode, built-in and custom APIs, context, Skills, rules, and History |
 | [Agent configuration](docs/agents.md) | CLI setup, model overrides, and DeepSeek Harness presets and permissions |
 | [MCP configuration](docs/mcp.md) | Tool manifests, typed results, transports, and credentials |
-| [Project knowledge and review](docs/project-development.md) | Project files, knowledge dimensions, conversation Review, editor tabs, and diagrams |
+| [Project knowledge](docs/project-development.md) | Project files, knowledge dimensions, editor tabs, and diagrams |
 | [Development and releases](docs/development.md) | Local development, checks, packaging, publishing, and architecture |
 
-## Project knowledge, editor tabs, and Review
+## Project knowledge and editor tabs
 
 Project, APIs, Global Resources, and History all open as editor tabs that reuse one page per target and restore the same page after a reload. Project keeps only long-term content — Overview, Knowledge, and Diagrams — and never shows Hook logs, task checklists, or single-run records.
-
-Every development turn ends with a collapsible Review in the conversation: the files the run changed, the script facts and coverage it recorded, knowledge drafts, and your accept or request-changes decision. Reviews belong to one `sessionId + turnId + runId`, so a retry or a later Build never inherits an earlier acceptance. Engineering review and experience acceptance change only the emphasis and can both be completed in the conversation. Ask stays read-only and produces no acceptance card, and writing a plan produces no implementation review.
-
-Plan execution additionally binds the plan content version and the Build run, accumulating every round into one review. Changes that can be proven to belong to a task are grouped by task; shared and unattributed changes are listed separately instead of being guessed. Accepting the code review and adopting a Knowledge draft are independent actions: adopting one draft writes a single long-term object and opens it in Project. See [Project knowledge and review](docs/project-development.md) for the file layout, knowledge dimensions, and diagram generation.
-
 
 ## Feedback and license
 

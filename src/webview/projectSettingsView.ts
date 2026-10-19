@@ -25,17 +25,15 @@ function evidenceNumber(settings: ProjectEvidenceSettings, key: "files" | "chars
 
 export function renderProjectSettings(settings: ProjectWorkspaceSettings, evidence: ProjectEvidenceSettings, version: number, disabled: boolean, initialization: string): string {
   const depth = evidence.depth === "standard" ? "Standard" : evidence.depth === "deep" ? "Deep" : "Whole";
-  const review = settings.reviewPreset === "engineering" ? "Engineering" : "Experience";
   return `<form class="project-settings project-workspace-settings" data-project-settings data-version="${version}">
     <details>
-      <summary><i class="project-settings-chevron codicon codicon-chevron-right" aria-hidden="true"></i><span class="project-settings-summary-content"><strong>Project settings</strong><span>${depth} · ${review} · ${escape(settings.planDirectory)}</span></span><span class="project-settings-summary-hint">Click to expand</span></summary>
+      <summary><i class="project-settings-chevron codicon codicon-chevron-right" aria-hidden="true"></i><span class="project-settings-summary-content"><strong>Project settings</strong><span>${depth} · ${escape(settings.planDirectory)}</span></span><span class="project-settings-summary-hint">Click to expand</span></summary>
       <div class="project-workspace-settings-body">
         <p class="project-help">Project-owned choices travel with the project in <code>.dext/project.json</code> and apply automatically to new turns and resource reloads.</p>
         <fieldset data-project-settings-fields${disabled ? " disabled" : ""}>
           ${initialization ? `<section class="project-settings-section"><h3>Initialization</h3>${initialization}</section>` : ""}
           <section class="project-settings-section">
-            <h3>Review &amp; workflow</h3>
-            <label>Default Review<select name="reviewPreset"><option value="engineering"${settings.reviewPreset === "engineering" ? " selected" : ""}>Engineering · correctness and implementation evidence</option><option value="experience"${settings.reviewPreset === "experience" ? " selected" : ""}>Experience · user behavior and visible outcome</option></select></label>
+            <h3>Workflow</h3>
             <label>Plan directory<input name="planDirectory" value="${escape(settings.planDirectory)}" placeholder=".dext/plans" spellcheck="false"></label>
             <p class="project-help">Workspace-relative directory used when storage is set to Workspace. Global storage keeps its existing location.</p>
           </section>
@@ -86,7 +84,6 @@ function bindProjectSettings(api: { postMessage(message: unknown): void }, prese
     for (const name of evidenceFields) if (input(name).value !== "") evidence[name] = Number(input(name).value);
     return {
       workspace: {
-        reviewPreset: value("reviewPreset").value as ProjectSettings["workspace"]["reviewPreset"],
         planDirectory: value("planDirectory").value.trim(),
         apiDirs: directoryValues("apiDirs"),
         skillDirs: directoryValues("skillDirs"),

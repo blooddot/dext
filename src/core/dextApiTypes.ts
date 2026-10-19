@@ -265,7 +265,7 @@ function renderManualTypes(extraResultTypes: readonly string[]): string[] {
   return [
     [
       "/** One applicable patch. No API returns one directly: this is the shape of",
-      " * `AgentResult.patch` and of a turn review's changes. */",
+      " * `AgentResult.patch`. */",
       "export interface PatchResult {",
       '  kind: "patch";',
       "  title: string;",

@@ -56,7 +56,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const legacyWorkspaceSettings = (): ProjectWorkspaceSettings => {
     const configuration = vscode.workspace.getConfiguration("dext", folder?.uri);
     return {
-      reviewPreset: "engineering",
       planDirectory: configuration.get<string>("plan.directory", DEFAULT_PLAN_DIRECTORY),
       apiDirs: configuration.get<string[]>("apiDirs", []) ?? [],
       skillDirs: configuration.get<string[]>("skillDirs", []) ?? [],
@@ -125,10 +124,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const archifyRoot = vscode.Uri.joinPath(context.extensionUri, "vendor", "project-diagrams", "archify").fsPath;
     diagramRegistry.register(new ArchifyAdapter(archifyRoot, () => discoverArchifyRepository(folder.uri)));
     context.subscriptions.push({ dispose: () => diagramRegistry.dispose() });
-    // Freezing the Review preset at send time needs a synchronous read, so the last known project
-    // definition is cached as soon as the store is first read.
-    void projectStore.readDefinition().catch(() => undefined);
-    sidebar.setProjectPresetSource(() => projectStore.presetDefault());
     sidebar.setProjectReferenceSource({
       search: async (query) => { const intent = await projectStore.readIntent(); return searchProjectReferences({ objects: await projectStore.readObjects(), query, ...(intent ? { intent } : {}) }); },
       open: async (objectId) => { await editors.project?.show("knowledge", objectId); }
@@ -223,17 +218,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
     context.subscriptions.push({ dispose: () => editors.project?.dispose() });
     context.subscriptions.push(
-      // The adoption bridge: adopting a Knowledge draft writes one long-term object and navigates
-      // to it. Accepting the code review stays a separate action and never writes project knowledge.
-      (() => {
-        sidebar.setReviewKnowledgeSink({
-          load: async (objectId) => (await projectStore.readObjects()).find((object) => object.id === objectId),
-          save: (object) => projectStore.writeObject(object),
-          remove: (objectId) => projectStore.deleteObject(objectId),
-          navigate: async (objectId) => { await editors.project?.show("knowledge", objectId); }
-        });
-        return { dispose: () => undefined };
-      })(),
       vscode.window.registerWebviewPanelSerializer(EDITOR_TAB_VIEW_TYPES.project, {
         deserializeWebviewPanel: async (panel, state) => {
           // The page script persists its own state, so this is normally present. A tab saved by an

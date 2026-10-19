@@ -678,19 +678,4 @@ describe("sidebar panel layout", () => {
     expect(documents).toContain("groupResourceEntries");
   });
 
-  it("binds a Build review to its plan version, build run and the user's decision", async () => {
-    const sidebar = await source("src/sidebarProvider.ts");
-    const main = await source("src/webview/main.ts");
-    // Writing a plan is not a Build, so it must not create an implementation review.
-    expect(sidebar).toMatch(/if \(mode === "plan" && !executePlan\) return;/);
-    // One Build accumulates every round of the same plan version.
-    expect(sidebar).toMatch(/const key = `\$\{sessionId\}:\$\{planVersion\}`;/);
-    expect(sidebar).toContain("appendPlanReviewRun(existing, review)");
-    expect(sidebar).toContain("buildPlanReview(review.runId, planVersion, [review])");
-    // The decision is refused when it does not belong to this Build.
-    expect(sidebar).toMatch(/if \(!review \|\| review\.runId !== request\.runId\) throw new Error\("That build review is no longer available\."\);/);
-    expect(sidebar).toContain("finalizePlanReview(review, request.decision)");
-    expect(main).toContain("data-plan-review-host");
-    expect(main).toContain('type: "planReviewDecision"');
-  });
 });

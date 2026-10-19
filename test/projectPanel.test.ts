@@ -1,10 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { renderProjectPanel, type ProjectPanelData } from "../src/webview/projectPanel.js";
 import { projectObjectSchema } from "../src/core/projectKnowledge.js";
-import type { KnowledgeSuggestion } from "../src/core/projectKnowledgeReview.js";
 import type { ProjectInitializationState } from "../src/projectService.js";
 
-const initialization = (status: ProjectInitializationState["status"], extra: Partial<ProjectInitializationState> = {}): ProjectInitializationState => ({ status, drafts: 0, ...extra });
+const initialization = (status: ProjectInitializationState["status"], extra: Partial<ProjectInitializationState> = {}): ProjectInitializationState => ({ status, ...extra });
 
 const data = (overrides: Partial<ProjectPanelData> = {}, state: ProjectInitializationState = initialization("uninitialized")): ProjectPanelData => ({
   overview: { name: "Fixture", root: "C:/ws", objects: 0, accepted: 0, drafts: 0, needsVerification: 0, initialization: state },
@@ -31,10 +30,10 @@ describe("project panel", () => {
     expect(html).not.toContain("Language");
   });
 
-  it("renders project-owned review, plan, API and Skill settings", () => {
+  it("renders project-owned plan, API and Skill settings without Review", () => {
     const html = renderProjectPanel("overview", data({ overview: {
       ...data().overview,
-      workspaceSettings: { reviewPreset: "experience", planDirectory: ".project/plans", apiDirs: ["tools/api", "tools/api/team"], skillDirs: ["tools/skills"], mcpDirs: ["tools/mcp"] },
+      workspaceSettings: { planDirectory: ".project/plans", apiDirs: ["tools/api", "tools/api/team"], skillDirs: ["tools/skills"], mcpDirs: ["tools/mcp"] },
       evidenceSettings: { depth: "standard", include: [] },
       workspaceSettingsVersion: 4
     } }));
@@ -47,7 +46,8 @@ describe("project panel", () => {
     expect(html).toContain("Skill directories");
     expect(html).toContain("MCP directories");
     expect(html).not.toContain("Additional project");
-    expect(html).toContain('value="experience" selected');
+    expect(html).not.toContain('name="reviewPreset"');
+    expect(html).not.toContain("Default Review");
     expect(html).toContain('data-version="4"');
     expect(html).toContain("Click to expand");
     expect(html).toContain("File limits and scope patterns");
@@ -59,7 +59,7 @@ describe("project panel", () => {
   it("shows the built-in resource directories when no project overrides are saved", () => {
     const html = renderProjectPanel("overview", data({ overview: {
       ...data().overview,
-      workspaceSettings: { reviewPreset: "engineering", planDirectory: ".dext/plans", apiDirs: [], skillDirs: [], mcpDirs: [] },
+      workspaceSettings: { planDirectory: ".dext/plans", apiDirs: [], skillDirs: [], mcpDirs: [] },
       evidenceSettings: { depth: "standard", include: [] },
       workspaceSettingsVersion: 1
     } }));
@@ -135,12 +135,12 @@ describe("project panel", () => {
       id: "TaskQuery", canonicalName: "TaskQuery", displayName: "任务查询", kind: "feature",
       source: "user", confirmation: "accepted", validity: "needs_verification", description: "Runs a query."
     });
-    const suggestion: KnowledgeSuggestion = { id: "s1", objectId: object.id, kind: "update", proposed: { description: "Runs a query." }, evidence: [], reason: "More precise", source: "ai" };
-    const html = renderProjectPanel("knowledge", { ...data(), objects: [object], drafts: [suggestion] }, { focusObjectId: object.id });
-    // These markers are the page's contract with the host script; the assertions for them were
-    // deleted with the old page tests while the controls stayed in the markup.
+    const html = renderProjectPanel("knowledge", { ...data(), objects: [object] }, { focusObjectId: object.id });
+    // Saved object state and reference navigation remain available.
     expect(html).toContain(`data-object-id="${object.id}"`);
-    expect(html).toContain("data-draft-action");
+    expect(html).not.toContain("data-draft-action");
+    expect(html).not.toContain("projectDraft");
+    expect(html).not.toContain("Pending knowledge suggestions");
     expect(html).toContain("data-confirmation=");
     expect(html).toContain("data-validity=");
     expect(html).toContain(`data-project-focus="${object.id}"`);

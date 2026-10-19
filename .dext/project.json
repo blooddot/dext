@@ -1,9 +1,6 @@
 {
   "schemaVersion": 1,
   "version": 30,
-  "preset": {
-    "default": "engineering"
-  },
   "knowledge": {
     "enabled": true,
     "initialized": true

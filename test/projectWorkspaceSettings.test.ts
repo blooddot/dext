@@ -6,10 +6,9 @@ vi.mock("vscode", () => ({ workspace: {} }));
 describe("Project workspace settings", () => {
   it("uses project values over legacy plugin values", () => {
     const settings = projectWorkspaceSettingsFromDefinition({
-      preset: { default: "experience" },
       paths: { planDirectory: ".project/plans", apiDirs: ["tools/api"], skillDirs: ["tools/skills"], mcpDirs: ["tools/mcp"] }
-    }, { reviewPreset: "engineering", planDirectory: ".old-plans", apiDirs: ["old/api"], skillDirs: ["old/skills"], mcpDirs: ["old/mcp"] });
-    expect(settings).toEqual({ reviewPreset: "experience", planDirectory: ".project/plans", apiDirs: ["tools/api"], skillDirs: ["tools/skills"], mcpDirs: ["tools/mcp"] });
+    }, { planDirectory: ".old-plans", apiDirs: ["old/api"], skillDirs: ["old/skills"], mcpDirs: ["old/mcp"] });
+    expect(settings).toEqual({ planDirectory: ".project/plans", apiDirs: ["tools/api"], skillDirs: ["tools/skills"], mcpDirs: ["tools/mcp"] });
   });
 
   it("filters legacy absolute paths before displaying them as portable project settings", () => {
@@ -22,8 +21,8 @@ describe("Project workspace settings", () => {
   });
 
   it("rejects project paths that can escape the workspace", () => {
-    expect(projectWorkspaceSettingsSchema.safeParse({ reviewPreset: "engineering", planDirectory: "../plans", apiDirs: [], skillDirs: [] }).success).toBe(false);
-    expect(projectWorkspaceSettingsSchema.safeParse({ reviewPreset: "engineering", planDirectory: ".dext/plans", apiDirs: ["C:/api"], skillDirs: [] }).success).toBe(false);
-    expect(projectWorkspaceSettingsSchema.safeParse({ reviewPreset: "engineering", planDirectory: ".dext/plans", apiDirs: [], skillDirs: ["tools/skills"], mcpDirs: [] }).success).toBe(true);
+    expect(projectWorkspaceSettingsSchema.safeParse({ planDirectory: "../plans", apiDirs: [], skillDirs: [] }).success).toBe(false);
+    expect(projectWorkspaceSettingsSchema.safeParse({ planDirectory: ".dext/plans", apiDirs: ["C:/api"], skillDirs: [] }).success).toBe(false);
+    expect(projectWorkspaceSettingsSchema.safeParse({ planDirectory: ".dext/plans", apiDirs: [], skillDirs: ["tools/skills"], mcpDirs: [] }).success).toBe(true);
   });
 });

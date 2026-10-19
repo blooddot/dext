@@ -1,4 +1,3 @@
-import type { KnowledgeSuggestion } from "../core/projectKnowledgeReview.js";
 import type { ProjectObject } from "../core/projectKnowledge.js";
 import type { EditorTabState } from "../editorTabState.js";
 import type { ProjectInitializationState } from "../projectService.js";
@@ -57,7 +56,6 @@ export interface ProjectPanelData {
   overview: ProjectOverviewData;
   /** Long-term objects only. Conversation runs never reach this view. */
   objects: readonly ProjectObject[];
-  drafts?: readonly KnowledgeSuggestion[];
   architecture: ArchitectureViewInput;
   readerDiagrams?: readonly ProjectDiagram[];
   knowledge?: {
@@ -168,7 +166,7 @@ function renderOverview(overview: ProjectOverviewData): string {
     + `</dl></section>`;
 }
 
-function renderKnowledge(objects: readonly ProjectObject[], drafts: readonly KnowledgeSuggestion[], knowledge?: ProjectPanelData["knowledge"]): string {
+function renderKnowledge(objects: readonly ProjectObject[], knowledge?: ProjectPanelData["knowledge"]): string {
   const rows = objects.map((object) => {
     const names = [object.canonicalName, object.displayName, ...object.aliases].filter(Boolean).join(" / ");
     return `<li class="project-object" data-object-id="${escapeHtml(object.id)}" data-confirmation="${object.confirmation}" data-validity="${object.validity}">`
@@ -179,13 +177,6 @@ function renderKnowledge(objects: readonly ProjectObject[], drafts: readonly Kno
       + (object.behavior.length ? `<ul class="object-behavior">${object.behavior.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : "")
       + `</li>`;
   }).join("");
-  const draftRows = (drafts ?? []).map((draft) => `<li class="project-draft" data-draft-id="${escapeHtml(draft.id)}">`
-    + `<strong>${escapeHtml(draft.proposed.canonicalName ?? draft.objectId ?? draft.id)}</strong>`
-    + `<span class="draft-kind">${escapeHtml(draft.kind)}</span>`
-    + `<p>${escapeHtml(draft.reason)}</p>`
-    + `<div class="draft-actions"><button type="button" data-draft-action="accept" data-draft-id="${escapeHtml(draft.id)}">Accept</button>`
-    + `<button type="button" data-draft-action="edit" data-draft-id="${escapeHtml(draft.id)}">Edit</button>`
-    + `<button type="button" data-draft-action="reject" data-draft-id="${escapeHtml(draft.id)}">Reject</button></div></li>`).join("");
   const semantic = knowledge?.topics ? `<section class="project-knowledge-brief"><h2>Project map</h2><p>${escapeHtml(knowledge.brief ?? "")}</p></section>`
     + renderProjectTopics(knowledge.topics, knowledge.checks)
     + (knowledge.terms?.length ? `<details class="project-topic"><summary>Glossary · ${knowledge.terms.length} terms</summary><dl class="project-topic-content">${knowledge.terms.map((term) => `<dt>${escapeHtml(term.canonical)}</dt><dd>${escapeHtml(term.definition ?? "")}</dd>`).join("")}</dl></details>` : "")
@@ -200,7 +191,6 @@ function renderKnowledge(objects: readonly ProjectObject[], drafts: readonly Kno
     + (!knowledge ? `<h2>Knowledge</h2>` : "")
     + (!knowledge ? `<p class="project-help">Project knowledge is not initialized yet. Open <strong>Overview</strong> and choose <em>Initialize project knowledge</em>; initialization never runs automatically. The entries below are long-term objects saved on disk.</p>` : "")
     + (rows ? `<h3>Saved objects</h3><ul class="project-objects">${rows}</ul>` : "")
-    + (draftRows ? `<h3>Pending knowledge suggestions</h3><ul class="project-drafts">${draftRows}</ul>` : "")
     + `</section>`;
 }
 
@@ -221,17 +211,15 @@ export function projectPanelScript(state?: EditorTabState): string {
     // navigation clicks to the actual tab buttons; otherwise clicking any child
     // control (especially a native <select>) bubbles to the root, posts a page
     // message, and the host replaces the document while the popup is opening.
-    + "var element=target&&target.closest?target.closest(\"button[data-project-page],[data-draft-action],[data-project-initialize]\"):null;"
+    + "var element=target&&target.closest?target.closest(\"button[data-project-page],[data-project-initialize]\"):null;"
     + "if(!element)return;var page=element.getAttribute(\"data-project-page\");"
     + "if(page){api.postMessage({type:\"projectPage\",page:page});return;}"
     + "if(element.hasAttribute('data-project-initialize')){var b=element;b.disabled=true;b.textContent='Initializing…';api.postMessage({type:'projectInitialize'});return;}"
-    + ""
-    + "var action=element.getAttribute(\"data-draft-action\");"
-    + "if(action){api.postMessage({type:\"projectDraft\",action:action,id:element.getAttribute(\"data-draft-id\")});}});"
+    + "});"
     + "document.addEventListener('change',function(event){var target=event.target;if(!target||!target.matches)return;if(target.matches('[data-project-ai-cli]')){var option=target.options[target.selectedIndex],models=[];try{models=JSON.parse(option.getAttribute('data-models')||'[]');}catch(_){}var old=document.querySelector('.project-ai-model');if(old)old.remove();if(models.length&&target.value){var wrap=document.createElement('div');wrap.innerHTML='<label class=\"project-ai-model\">Model for Project initialization <div class=\"project-ai-model-control\"><button type=\"button\" class=\"project-model-trigger\" data-project-ai-model data-project-model-trigger aria-expanded=\"false\"><span>Model</span><strong data-project-model-value=\"model\">Use CLI default</strong><i class=\"codicon codicon-chevron-down\"></i></button><small class=\"project-model-capabilities\" data-project-model-capabilities hidden></small><div class=\"project-model-popover composer-model-popover\" data-project-model-menu hidden></div></div></label>';var control=wrap.firstElementChild;var menu=control.querySelector('[data-project-model-menu]');var make=function(id,label,items,disabled){return '<button type=\"button\" class=\"project-model-category composer-menu-option composer-menu-category\" data-project-model-category=\"'+id+'\" data-selected=\"\" data-items=\"'+JSON.stringify(items).replace(/\"/g,'&quot;')+'\"'+(disabled?' disabled':'')+'><span>'+label+'</span><span class=\"project-model-category-value\" data-project-model-value=\"'+id+'\">CLI setting</span><i class=\"codicon codicon-chevron-right\"></i></button>';};menu.innerHTML=make('model','Model',[{id:'',label:'Use CLI default'}].concat(models.map(function(m){return {id:m.id,label:m.label,group:m.group||'',reasoningEfforts:m.reasoningEfforts||[],speedTiers:m.speedTiers||[]};})),false)+make('reasoning','Reasoning',[],true)+make('speed','Speed',[],true)+'<div class=\"project-model-submenu composer-model-submenu\" data-project-model-submenu hidden></div>';target.closest('.project-ai-cli').insertAdjacentElement('afterend',control);}api.postMessage({type:'projectAiCli',cli:target.value||undefined});}});"
     + "var elapsedTimer=0;function updateElapsed(){var box=document.querySelector('[data-project-init-progress]'),node=box&&box.querySelector('[data-project-init-elapsed]'),started=box&&Number(box.getAttribute('data-project-init-started-at'));if(!node||!started)return;var seconds=Math.max(0,Math.floor((Date.now()-started)/1000)),minutes=Math.floor(seconds/60);node.textContent='· '+(minutes?minutes+'m '+(seconds%60)+'s':seconds+'s');}updateElapsed();if(document.querySelector('[data-project-init-progress][data-project-init-started-at]'))elapsedTimer=window.setInterval(updateElapsed,1000);"
     + "window.addEventListener('message',function(event){var message=event&&event.data;if(!message||message.type!=='projectInitializationProgress')return;var state=message.state||{},box=document.querySelector('[data-project-init-progress]');if(!box)return;if(state.startedAt!==undefined)box.setAttribute('data-project-init-started-at',String(state.startedAt));if(state.status!=='running'&&elapsedTimer){window.clearInterval(elapsedTimer);elapsedTimer=0;}var label=box.querySelector('[data-project-progress-label]'),meter=box.querySelector('progress'),count=box.querySelector('[data-project-progress-count]'),output=box.querySelector('[data-project-init-output]');var phase=state.phase==='generating'?'AI generation':state.phase==='saving'?'Validating and saving':'Preparing the local structure index';if(label)label.textContent='Building project index · '+phase+(state.message?' · '+state.message:'');updateElapsed();if(meter){if(state.progress!==undefined&&state.progressTotal){meter.max=state.progressTotal;meter.value=state.progress;}else{meter.removeAttribute('value');}}if(count){if(state.progress!==undefined&&state.progressTotal){count.hidden=false;count.textContent=state.progress+'/'+state.progressTotal;}else{count.hidden=true;}}if(output){if(state.output){output.hidden=false;output.textContent=state.output;}else if(state.status==='running'){output.hidden=true;}}});"
-    // Navigating from an adopted suggestion marks the object it wrote.
+    // Highlight the saved object selected through Project reference navigation.
     + "var focus=document.querySelector('[data-project-focus]');"
     + "if(focus){var id=focus.getAttribute('data-project-focus');"
     + "var row=id?document.querySelector('[data-object-id=\"'+id+'\"]'):null;"
@@ -242,11 +230,11 @@ export function projectPanelScript(state?: EditorTabState): string {
 
 /**
  * Renders one Project page. Only long-term objects and saved semantic diagrams are emitted;
- * conversation execution logs, Hook output, and single-run Review never appear here.
+ * conversation execution logs and Hook output never appear here.
  */
 export function renderProjectPanel(page: ProjectPanelPage, data: ProjectPanelData, options: { focusObjectId?: string; state?: EditorTabState } = {}): string {
   const body = page === "overview" ? renderOverview(data.overview)
-    : page === "knowledge" && !data.knowledge?.topics && !data.readerDiagrams ? renderKnowledge(data.objects, data.drafts ?? [], data.knowledge)
+    : page === "knowledge" && !data.knowledge?.topics && !data.readerDiagrams ? renderKnowledge(data.objects, data.knowledge)
       : renderProjectTopics(data.knowledge?.topics ?? [], data.knowledge?.checks, { brief: data.knowledge?.brief ?? "", diagrams: data.readerDiagrams ?? [], terms: data.knowledge?.terms ?? [], architecture: data.architecture, gallery: page === "architecture", ...(data.architecture.selected ? { selectedDiagramId: data.architecture.selected.id } : {}) });
   const focus = options.focusObjectId
     ? `<span class="project-focus" data-project-focus="${escapeHtml(options.focusObjectId)}"></span>`

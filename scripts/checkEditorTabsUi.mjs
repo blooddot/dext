@@ -53,7 +53,7 @@ try {
     ], returnType: 'Promise<AgentResult>'
   };
   entries[1].api = { signature: 'main(input?: string): Promise<AskResult>', parameters: [{ name: 'input', type: 'string', required: false }], returnType: 'Promise<AskResult>' };
-  const project = { overview: { name: 'Dext', root: 'C:/github/blooddot/dext', objects: 0, accepted: 0, drafts: 0, needsVerification: 0, initialization: { status: 'uninitialized', drafts: 0 }, aiCli: [{ id: 'codex', label: 'Codex', models: [] }] }, objects: [], architecture: { diagrams: [] } };
+  const project = { overview: { name: 'Dext', root: 'C:/github/blooddot/dext', objects: 0, accepted: 0, drafts: 0, needsVerification: 0, initialization: { status: 'uninitialized' }, aiCli: [{ id: 'codex', label: 'Codex', models: [] }] }, objects: [], architecture: { diagrams: [] } };
   const artifacts = resolve('.tmp-tb/editor-tabs-ui'); await mkdir(artifacts, { recursive: true });
   async function load(body) {
     pageHtml = ui.renderEditorTabHtml('<script>window.messages=[];window.acquireVsCodeApi=()=>({postMessage:message=>messages.push(message)});</script>' + body, `${origin}/style.css`, origin);
@@ -131,7 +131,7 @@ try {
       assert.equal(await evaluate(`messages[0].kind`), 'skill');
       await writeFile(join(artifacts, `resources-${themeName}-${width}.png`), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
       await load(ui.renderProjectPanel('overview', { ...project, overview: { ...project.overview,
-        workspaceSettings: { reviewPreset: 'experience', planDirectory: '.project/plans', apiDirs: ['tools/api'], skillDirs: ['tools/skills'], mcpDirs: ['tools/mcp'] },
+        workspaceSettings: { planDirectory: '.project/plans', apiDirs: ['tools/api'], skillDirs: ['tools/skills'], mcpDirs: ['tools/mcp'] },
         workspaceSettingsVersion: 3,
         evidenceSettings: { depth: 'standard', include: ['src/**'], files: 234 }, evidenceSettingsVersion: 3
       } }));
@@ -148,13 +148,13 @@ try {
       await evaluate(`document.querySelector('[data-project-settings] summary').click()`);
       assert.equal(await evaluate(`document.querySelector('[data-project-settings] details').open`), true);
       await evaluate(`const apiDirs=document.querySelector('input[name="apiDirs"]'); apiDirs.value='tools/api, more/api'; apiDirs.dispatchEvent(new Event('input',{bubbles:true})); new Promise(resolve=>setTimeout(resolve,650))`);
-      assert.deepEqual(await evaluate(`messages.at(-1)`), { type: 'projectSettings', settings: { workspace: { reviewPreset: 'experience', planDirectory: '.project/plans', apiDirs: ['tools/api', 'more/api'], skillDirs: ['.dext/skills', 'tools/skills'], mcpDirs: ['.dext/mcp', 'tools/mcp'] }, evidence: { depth: 'standard', include: ['src/**'], files: 234 } }, version: 3 });
+      assert.deepEqual(await evaluate(`messages.at(-1)`), { type: 'projectSettings', settings: { workspace: { planDirectory: '.project/plans', apiDirs: ['tools/api', 'more/api'], skillDirs: ['.dext/skills', 'tools/skills'], mcpDirs: ['.dext/mcp', 'tools/mcp'] }, evidence: { depth: 'standard', include: ['src/**'], files: 234 } }, version: 3 });
       await evaluate(`window.dispatchEvent(new MessageEvent('message',{data:{type:'projectSettingsSaved',version:4}}))`);
       await evaluate(`document.querySelector('.project-evidence-settings details').open=true; document.querySelector('[name="depth"]').value='whole'; document.querySelector('[name="depth"]').dispatchEvent(new Event('change',{bubbles:true}));`);
       assert.equal(await evaluate(`document.querySelector('[name="chars"]').placeholder`), '1200000');
       assert.equal(await evaluate(`document.querySelector('[name="files"]').value`), '234', 'explicit overrides remain visible');
       await evaluate(`document.querySelector('[data-evidence-use-preset]').click(); document.querySelector('[name="include"]').value='src/**\\ndocs/**'; document.querySelector('[name="include"]').dispatchEvent(new Event('input',{bubbles:true})); new Promise(resolve=>setTimeout(resolve,650))`);
-      assert.deepEqual(await evaluate(`messages.at(-1)`), { type: 'projectSettings', settings: { workspace: { reviewPreset: 'experience', planDirectory: '.project/plans', apiDirs: ['tools/api', 'more/api'], skillDirs: ['.dext/skills', 'tools/skills'], mcpDirs: ['.dext/mcp', 'tools/mcp'] }, evidence: { depth: 'whole', include: ['src/**', 'docs/**'] } }, version: 4 });
+      assert.deepEqual(await evaluate(`messages.at(-1)`), { type: 'projectSettings', settings: { workspace: { planDirectory: '.project/plans', apiDirs: ['tools/api', 'more/api'], skillDirs: ['.dext/skills', 'tools/skills'], mcpDirs: ['.dext/mcp', 'tools/mcp'] }, evidence: { depth: 'whole', include: ['src/**', 'docs/**'] } }, version: 4 });
       assert.equal(await evaluate(`document.querySelector('[data-project-settings-fields]').disabled`), true);
       await evaluate(`window.dispatchEvent(new MessageEvent('message',{data:{type:'projectSettingsSaved',error:'Save failed'}}))`);
       assert.equal(await evaluate(`document.querySelector('[data-project-settings-fields]').disabled`), false);
@@ -182,9 +182,9 @@ try {
       issues: [{ path: 'src/optional/generated/module.py', reason: 'Syntax errors; structure is partial' }] },
     legacyScanRoots: ['src'], selectedAiCli: 'codex', selectedAiModel: 'gpt-6-astra',
     selectedAiReasoning: 'ultra', selectedAiSpeed: 'fast',
-    workspaceSettings: { reviewPreset: 'experience', planDirectory: '.project/plans', apiDirs: ['tools/api'], skillDirs: ['tools/skills'], mcpDirs: ['tools/mcp'] },
+    workspaceSettings: { planDirectory: '.project/plans', apiDirs: ['tools/api'], skillDirs: ['tools/skills'], mcpDirs: ['tools/mcp'] },
     workspaceSettingsVersion: 3,
-    initialization: { status: 'completed', drafts: 0, intentGenerated: true, diagramsGenerated: 1 },
+    initialization: { status: 'completed', intentGenerated: true, diagramsGenerated: 1 },
     aiCli: [{ id: 'codex', label: 'Codex CLI', models: [{ id: 'gpt-6-astra', label: 'GPT-6-Astra', reasoningEfforts: ['high', 'ultra'], speedTiers: ['standard', 'fast'] }] }]
   } };
   for (const width of [320, 701, 792, 1000, 1132]) {

@@ -1,15 +1,15 @@
-# 项目知识与对话 Review
+# 项目知识与编辑器标签
 
-Project 设置位于 **Project > Overview** 的一个可折叠区域，包括初始化选项、默认 Review 预设、工作区 Plan 目录，以及项目相对的 API、Skill 和 MCP 目录。资源目录输入框直接显示当前的 `.dext/api`、`.dext/skills` 和 `.dext/mcp`，多个工作区相对目录用逗号分隔。证据读取的 Standard、Deep、Whole 三档也合并在这里；展开 **Advanced reading settings** 可配置文件数量、字符预算和工作区相对路径范围。改动会自动写入 `.dext/project.json`，并应用于新的对话、Plan 文件、资源重载、项目初始化和生成图。项目尚未保存对应值时，旧的 VS Code 设置仍作为兼容回退。Whole 仍有 1000 个文件上限，证据数字字段留空则跟随所选档位。
+Project 设置位于 **Project > Overview** 的一个可折叠区域，包括初始化选项、工作区 Plan 目录，以及项目相对的 API、Skill 和 MCP 目录。资源目录输入框直接显示当前的 `.dext/api`、`.dext/skills` 和 `.dext/mcp`，多个工作区相对目录用逗号分隔。证据读取的 Standard、Deep、Whole 三档也合并在这里；展开 **Advanced reading settings** 可配置文件数量、字符预算和工作区相对路径范围。改动会自动写入 `.dext/project.json`，并应用于新的对话、Plan 文件、资源重载、项目初始化和生成图。项目尚未保存对应值时，旧的 VS Code 设置仍作为兼容回退。Whole 仍有 1000 个文件上限，证据数字字段留空则跟随所选档位。
 
 [English](project-development.md) | 简体中文
 
 [返回 README](../README.zh-CN.md)
 
-Dext 把两类理解严格分开：**项目知识**长期存在、属于仓库；**对话 Review**只描述某一次运行，永不写回项目。
+**项目知识**长期存在、属于仓库；对话历史独立保存，清理会话不会删除项目知识。
 
-[项目文件](#项目文件) · [知识维度](#知识维度) · [对话 Review](#对话-review) ·
-[Review 预设](#review-预设) · [编辑器标签](#编辑器标签) · [主动初始化](#主动初始化) · [系统图与-archify](#系统图与-archify) · [校验](#校验)
+[项目文件](#项目文件) · [知识维度](#知识维度) ·
+[编辑器标签](#编辑器标签) · [主动初始化](#主动初始化) · [系统图与-archify](#系统图与-archify) · [校验](#校验)
 
 ## 项目文件
 
@@ -17,7 +17,7 @@ Dext 把两类理解严格分开：**项目知识**长期存在、属于仓库�
 
 | 路径 | 内容 |
 | --- | --- |
-| `.dext/project.json` | schema 版本、乐观锁 `version`、默认 Review 预设、项目路径（`planDirectory`、`apiDirs`、`skillDirs`、`mcpDirs`）、知识设置和 AI CLI 选择 |
+| `.dext/project.json` | schema 版本、乐观锁 `version`、项目路径（`planDirectory`、`apiDirs`、`skillDirs`、`mcpDirs`）、知识设置和 AI CLI 选择 |
 | `.dext/project-intent.json` | 初始化时 AI 生成的项目简介和语义知识 |
 | `.dext/objects/<id>.json` | 每个文件一个已确认的长期对象 |
 | `.dext/architecture.json` | 人工声明的设计决策与架构规则；规则针对其指定的已保存图求值，不依赖源码扫描 |
@@ -39,29 +39,6 @@ Dext 把两类理解严格分开：**项目知识**长期存在、属于仓库�
 接受 AI 建议会设置 `confirmation: "accepted"`，但 `validity` 仍为 `"needs_verification"`：接受建议不等于已对当前代码核实。`validateProjectObjects` 会报告重复 id、重复名称/别名以及悬空的 `relatedIds`。
 
 旧字段 `status` 仍可解析。`normalizeProjectObject` 负责迁移：`accepted`、`stale`、`conflicted` 都映射为 `confirmation: "accepted"`，并补齐其余维度。新代码只写四个维度。
-
-## 对话 Review
-
-`TurnReview` 以 `sessionId + turnId + runId` 为键，反馈绝不会落到另一次运行、更早的尝试或别的 Plan Build 上。Review 还会记录产生时的 `projectVersion`、`planVersion`、`buildRunId`；`reviewRepresentsVersion` 会拒绝基于旧项目版本得出的结论。
-
-`TurnReviewStore` 在内存中保存 Review，按最旧优先淘汰并有上限；`TurnReviewController` 提供宿主所需动作：`find`、`submitFeedback`（返回 `not_found`、`stale`、`accepted`、`rejected`）、`diffTargets`、`acceptanceCard`、`adoptKnowledgeSuggestion`。接受代码改动与采纳知识建议是两个独立决定，后者会拒绝过期的 `baseVersion`。
-
-### 单轮 Review 视图
-
-`renderTurnReview` 生成可折叠区域。纯 Ask 轮次，或没有开发改动、也没有待验收内容的轮次，不产生验收卡片。只有提供方明确报告过 Hook 结果时才展示；未知或失败的 Hook 绝不会渲染成通过。
-
-### Plan Review
-
-`buildPlanReview` 汇总同一个 Build 的每一轮。`associatePlanChanges` 只依据显式记录的任务关联来分组：被多个任务同时拥有的改动进入「共享改动」，没有任何关联的改动保持「未归属」。Dext 绝不根据 AI 的任务勾选推断文件归属。`finalizePlanReview` 记录 Build 级决定；中间任务 Review 从不阻塞续写，只有最终 Review 等待用户。
-
-## Review 预设
-
-两个预设改变 Review 的关注点，与 Ask/Agent/Plan/Code 相互独立：
-
-- **engineering** 侧重设计决策、模块边界与改动理由。
-- **experience** 侧重行为变化、反馈与手工验证。
-
-`resolveReviewPreset` 依据项目默认值与可选的单次覆盖决定预设。Ask 模式下结果为只读，并记录捕获时间。
 
 ## 编辑器标签
 
@@ -170,4 +147,4 @@ node scripts/checkProjectDiagramsUi.mjs # 保留的 Archify 适配器与桥接�
 
 assertWebviewAssets.mjs 依据 esbuild 依赖清单证明运行包不含 TypeScript 编译器或旧扫描／引擎实现，确认适配器引用的 Archify 入口、五份 Schema 与五个渲染器存在，且 `vendor/project-diagrams/drawio` 未进入分发包；其余 vendor 内容随包分发由 `.vscodeignore` 未排除 `vendor/**` 保证。
 
-项目层单元测试可运行：`npx vitest run test/project*.test.ts test/editorTab*.test.ts test/turnReview*.test.ts`。
+项目层单元测试可运行：`npx vitest run test/project*.test.ts test/editorTab*.test.ts`。

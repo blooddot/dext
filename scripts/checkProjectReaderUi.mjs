@@ -120,7 +120,7 @@ try {
     { id: 'posts-command', from: 'webview', to: 'extension', description: 'Sends commands', evidence }
   ] };
   const topics = ui.buildProjectTopics(intent, diagrams);
-  const data = { overview: { name: 'Dext', root: '.', objects: 0, accepted: 0, drafts: 0, needsVerification: 0, initialization: { status: 'completed', drafts: 0 } }, objects: [], architecture: { diagrams }, readerDiagrams: diagrams, knowledge: { brief: intent.brief.summary, topics } };
+  const data = { overview: { name: 'Dext', root: '.', objects: 0, accepted: 0, drafts: 0, needsVerification: 0, initialization: { status: 'completed' } }, objects: [], architecture: { diagrams }, readerDiagrams: diagrams, knowledge: { brief: intent.brief.summary, topics } };
   const artifacts = resolve('.tmp-tb/project-reader-ui'); await mkdir(artifacts, { recursive: true });
   const wait = async (expression, label) => { for (let i = 0; i < 600; i++) { if (await evaluate(expression)) return; await new Promise(done => setTimeout(done, 50)); } throw new Error(`${label}: ${JSON.stringify(await evaluate(`({status:document.querySelector('[data-reader-render-status]')?.textContent,messages:window.messages,violations:window.violations,frame:document.querySelector('iframe')?.srcdoc.length})`))}`); };
   const ready = () => wait(`document.querySelector('[data-reader-canvas]')?.dataset.state==='ready' || (!document.querySelector('[data-reader-canvas]') && !!document.querySelector('[data-reader-analysis-state]'))`, 'Diagram did not render');

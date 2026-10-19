@@ -25,12 +25,6 @@ import { DextCodeEditor } from "./codeEditor.js";
 import { formatDuration } from "./duration.js";
 import { agentMessageCopyText, presentAgentMessage } from "../agentMessagePresentation.js";
 import { presentDiff } from "../diffPresentation.js";
-import type { TurnReview } from "../core/turnReview.js";
-import type { PlanReview } from "../core/planReview.js";
-import type { KnowledgeSuggestion } from "../core/projectKnowledgeReview.js";
-import type { ReviewPreset } from "../core/projectContext.js";
-import { renderTurnReview } from "./turnReviewView.js";
-import { renderPlanReview } from "./planReviewView.js";
 import type { DextHistoryRecord, DextHistorySession } from "../historyStore.js";
 import {
   TURN_EDIT_ACTION, TURN_RENAME_ACTION, TURN_RETRY_ACTION, TURN_FORK_ACTION,
@@ -237,8 +231,6 @@ let lastSidebarState: SidebarState | undefined;
 // The theme is independent of the active conversation. Keep a compact signature so switching tabs
 // only updates the composer controls instead of rebuilding the document styles again.
 let renderedThemeKey: string | undefined;
-/** Reviews received for the visible conversation, keyed by session, turn and run. */
-const lastTurnReviews = new Map<string, { review: TurnReview; preset?: ReviewPreset; suggestions?: KnowledgeSuggestion[] }>();
 let activeConversationId: string | undefined;
 const resourceSessions = new Map<string, ResourceSession>();
 const resourcePending = new Set<string>();
@@ -2417,41 +2409,6 @@ function patchReviewHeader(turnId: string, entries: readonly WorkflowStepRespons
   return header;
 }
 
-/** Renders one Build's accumulated Plan review. A later round replaces the previous card. */
-function renderPlanReviewCard(sessionId: string, review: PlanReview): void {
-  const host = elements.result.querySelector<HTMLElement>(`[data-plan-review-host="${sessionId}"]`) ?? document.createElement("div");
-  host.dataset.planReviewHost = sessionId;
-  host.dataset.reviewSession = sessionId;
-  host.dataset.planVersion = review.planVersion;
-  // The renderer escapes every value it interpolates, so this only assembles its own markup.
-  host.innerHTML = renderPlanReview(review);
-  const turn = [...outputTurns.values()].at(-1);
-  (turn?.output ?? elements.result).append(host);
-}
-
-/** Renders one run's Review into its turn. A later decision for the same run replaces the card. */
-function renderTurnReviewCard(
-  sessionId: string,
-  turnId: string,
-  review: TurnReview,
-  preset?: ReviewPreset,
-  knowledgeSuggestions?: KnowledgeSuggestion[]
-): void {
-  const target = outputTurns.get(turnId)?.output ?? elements.result;
-  target.querySelector(`[data-turn-review-host="${turnId}"]`)?.remove();
-  const html = renderTurnReview(review, {
-    ...(preset ? { preset } : {}),
-    ...(knowledgeSuggestions?.length ? { knowledgeSuggestions } : {})
-  });
-  if (!html) return;
-  const host = document.createElement("div");
-  host.dataset.turnReviewHost = turnId;
-  host.dataset.reviewSession = sessionId;
-  // The renderer escapes every value it interpolates, so this only assembles its own markup.
-  host.innerHTML = html;
-  target.append(host);
-}
-
 function renderResult(response: InputExecutionResponse, reviewTurnId?: string): void {  const target = activeTurn?.output ?? elements.result;
   target.replaceChildren();
   const entries: WorkflowStepResponse[] = response.steps ?? response.executions.map((execution) => ({
@@ -3309,11 +3266,6 @@ function renderOutputSessionRef(sessionId: string, signature: string, switchId?:
   conversationViewCache.set(sessionId, cached);
   renderedConversationId = sessionId;
   renderedConversationSignature = signature;
-  // Reviews are kept outside the cached DOM, so a restored conversation re-attaches its own cards.
-  for (const [key, entry] of lastTurnReviews) {
-    if (!key.startsWith(`${sessionId}:`)) continue;
-    renderTurnReviewCard(sessionId, entry.review.turnId, entry.review, entry.preset, entry.suggestions);
-  }
   elements.resultSection.classList.remove("hidden");
   finishConversationLoading();
   syncResultToggle();
@@ -3553,53 +3505,6 @@ jumpToTop.addEventListener("click", () => {
   elements.resultBody.focus({ preventScroll: true });
 });
 elements.problems.addEventListener("click", () => editor.goToFirstDiagnostic());
-// Review cards live inside the turn output, so one delegated listener covers every turn.
-elements.result.addEventListener("click", (event) => {
-  const target = event.target instanceof Element ? event.target : null;
-  const element = target?.closest<HTMLElement>(
-    "[data-review-accept],[data-review-reject],[data-review-diff],[data-plan-review-accept],[data-plan-review-reject],[data-adopt-suggestion]"
-  );
-  if (!element) return;
-  const suggestionId = element.getAttribute("data-adopt-suggestion");
-  if (suggestionId) {
-    const host = element.closest<HTMLElement>("[data-turn-review-host]");
-    const sessionId = host?.dataset.reviewSession;
-    const turnId = host?.dataset.turnReviewHost;
-    if (!sessionId || !turnId) return;
-    vscode.postMessage({ type: "adoptKnowledgeSuggestion", sessionId, turnId, suggestionId });
-    return;
-  }
-  const diff = element.getAttribute("data-review-diff");
-  if (diff) {
-    vscode.postMessage({ type: "openFileReference", reference: diff });
-    return;
-  }
-  const planReview = element.closest<HTMLElement>("[data-plan-review-host]");
-  if (planReview) {
-    const sessionId = planReview.dataset.reviewSession;
-    const planVersion = planReview.dataset.planVersion;
-    const accept = element.hasAttribute("data-plan-review-accept");
-    const runId = element.getAttribute(accept ? "data-plan-review-accept" : "data-plan-review-reject");
-    if (!sessionId || !planVersion || !runId) return;
-    vscode.postMessage({
-      type: "planReviewDecision",
-      sessionId,
-      planVersion,
-      runId,
-      decision: accept ? "accepted" : "rejected"
-    });
-    return;
-  }
-  const host = element.closest<HTMLElement>("[data-turn-review-host]");
-  if (!host) return;
-  const sessionId = host.dataset.reviewSession;
-  const turnId = host.dataset.turnReviewHost;
-  if (!sessionId || !turnId) return;
-  const accept = element.hasAttribute("data-review-accept");
-  const runId = element.getAttribute(accept ? "data-review-accept" : "data-review-reject");
-  if (!runId) return;
-  vscode.postMessage({ type: "reviewDecision", sessionId, turnId, runId, decision: accept ? "accepted" : "rejected" });
-});
 function requestCloseMcpAssistant(): void {
   if (mcpAssistantRunningRequestId) {
     // Closing while generation is active must go through the same cancellation
@@ -3917,46 +3822,6 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   }
   if (message.type === "patchResolved" && message.sessionId === activeConversationId) {
     applyPatchResolution(message.turnId, message.uris, message.status, message.message);
-  }
-  if (message.type === "turnReview") {
-    const entry = {
-      review: message.review,
-      ...(message.preset ? { preset: message.preset } : {}),
-      ...(message.knowledgeSuggestions ? { suggestions: message.knowledgeSuggestions } : {})
-    };
-    lastTurnReviews.set(`${message.sessionId}:${message.turnId}:${message.review.runId}`, entry);
-    if (message.sessionId === activeConversationId) {
-      renderTurnReviewCard(message.sessionId, message.turnId, message.review, message.preset, message.knowledgeSuggestions);
-    }
-  }
-  if (message.type === "knowledgeSuggestionDecision") {
-    const button = elements.result.querySelector<HTMLButtonElement>(
-      `[data-adopt-suggestion="${message.suggestionId}"]`
-    );
-    if (button) {
-      button.dataset.suggestionStatus = message.status;
-      button.disabled = true;
-      button.textContent = message.status === "adopted" ? "Adopted" : message.status === "stale" ? "Out of date" : "Unavailable";
-    }
-  }
-  if (message.type === "turnReviewDecision") {
-    const host = elements.result.querySelector<HTMLElement>(`[data-turn-review-host="${message.turnId}"]`);
-    const card = host?.querySelector<HTMLElement>("[data-turn-review]");
-    if (card) {
-      card.dataset.reviewDecision = message.status;
-      card.querySelector(".turn-review-actions")?.remove();
-    }
-  }
-  if (message.type === "planReview") {
-    if (message.sessionId === activeConversationId) renderPlanReviewCard(message.sessionId, message.review);
-  }
-  if (message.type === "planReviewDecision") {
-    const host = elements.result.querySelector<HTMLElement>(`[data-plan-review-host="${message.sessionId}"]`);
-    const card = host?.querySelector<HTMLElement>("[data-plan-review]");
-    if (card) {
-      card.dataset.reviewDecision = message.status;
-      card.querySelector(".plan-review-actions")?.remove();
-    }
   }
   if (message.type === "executionFailed") {
     conversationViewCache.delete(message.sessionId);

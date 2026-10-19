@@ -1,16 +1,14 @@
-# Project knowledge and review
+# Project knowledge and editor tabs
 
-The Project settings section lives in **Project > Overview** as one collapsible section. It includes initialization choices, the default Review preset, the workspace Plan directory, project-relative API, Skill, and MCP directories, and the Standard, Deep, or Whole evidence depth. Resource directory fields show the active `.dext/api`, `.dext/skills`, and `.dext/mcp` directories and accept comma-separated workspace-relative paths. Expand **Advanced reading settings** for file and character limits and workspace-relative scope patterns. Changes save automatically to `.dext/project.json` and apply to new turns, Plan documents, resource reloads, initialization, and diagram generation. Before a project saves its own value, the old VS Code settings remain a compatibility fallback. Whole still has a 1,000-file limit, and blank evidence numeric fields follow the selected depth.
+The Project settings section lives in **Project > Overview** as one collapsible section. It includes initialization choices, the workspace Plan directory, project-relative API, Skill, and MCP directories, and the Standard, Deep, or Whole evidence depth. Resource directory fields show the active `.dext/api`, `.dext/skills`, and `.dext/mcp` directories and accept comma-separated workspace-relative paths. Expand **Advanced reading settings** for file and character limits and workspace-relative scope patterns. Changes save automatically to `.dext/project.json` and apply to new turns, Plan documents, resource reloads, initialization, and diagram generation. Before a project saves its own value, the old VS Code settings remain a compatibility fallback. Whole still has a 1,000-file limit, and blank evidence numeric fields follow the selected depth.
 
 English | [简体中文](project-development.zh-CN.md)
 
 [Back to README](../README.md)
 
-Dext keeps two kinds of understanding separate. **Project knowledge** is long-lived and belongs to
-the repository. **Conversation review** describes one run and is never written into the project.
+**Project knowledge** is long-lived and belongs to the repository. Conversation history is stored separately; clearing a conversation does not delete project knowledge.
 
 [Project files](#project-files) · [Knowledge dimensions](#knowledge-dimensions) ·
-[Conversation review](#conversation-review) · [Review presets](#review-presets) ·
 [Editor tabs](#editor-tabs) · [Explicit initialization](#explicit-initialization) ·
 [Diagram rendering](#diagram-rendering) · [Checks](#checks)
 
@@ -20,7 +18,7 @@ Project data lives under `.dext/` in the workspace:
 
 | Path | Contents |
 | --- | --- |
-| `.dext/project.json` | Schema version, optimistic `version`, default review preset, project paths (`planDirectory`, `apiDirs`, `skillDirs`, and `mcpDirs`), evidence settings and AI CLI selection. Legacy `scan` and engine-preference fields stay readable and are preserved on write, but are no longer used. |
+| `.dext/project.json` | Schema version, optimistic `version`, project paths (`planDirectory`, `apiDirs`, `skillDirs`, and `mcpDirs`), evidence settings and AI CLI selection. |
 | `.dext/project-intent.json` | AI-generated project brief and semantic knowledge from initialization |
 | `.dext/objects/<id>.json` | One accepted long-term object per file |
 | `.dext/architecture.json` | Declared design decisions and architecture rules. Rules are evaluated against the saved diagram they name, never against a source scan. |
@@ -52,43 +50,6 @@ dangling `relatedIds`.
 The legacy `status` field is still parsed. `normalizeProjectObject` migrates it, mapping
 `accepted`, `stale`, and `conflicted` to `confirmation: "accepted"` and filling the remaining
 dimensions. New code writes the four dimensions only.
-
-## Conversation review
-
-`TurnReview` is keyed by `sessionId + turnId + runId`, so feedback can never land on another run,
-an older attempt, or a different Plan Build. A review also records the `projectVersion`,
-`planVersion`, and `buildRunId` it was produced against, and `reviewRepresentsVersion` refuses a
-conclusion that an older project version produced.
-
-`TurnReviewStore` keeps reviews in memory with oldest-first eviction at a bounded size, and
-`TurnReviewController` exposes the actions the host needs: `find`, `submitFeedback` (returning
-`not_found`, `stale`, `accepted`, or `rejected`), `diffTargets`, `acceptanceCard`, and
-`adoptKnowledgeSuggestion`. Accepting code and adopting a knowledge suggestion are separate
-decisions: the latter refuses a stale `baseVersion`.
-
-### Turn review view
-
-`renderTurnReview` produces a collapsible region. A pure Ask turn, or a turn with no development
-change and nothing to accept, produces no acceptance card. Hook results are only shown when a
-provider explicitly reported them; an unknown or failed hook is never rendered as a pass.
-
-### Plan review
-
-`buildPlanReview` accumulates every round of one Build. `associatePlanChanges` groups changes by
-task using explicitly recorded associations only — a change owned by more than one task becomes a
-shared change, and anything without an association stays unattributed. Dext never infers file
-ownership from the agent's task checkmarks. `finalizePlanReview` records the build-level decision;
-intermediate task reviews never block continuation, and only the final Review waits for the user.
-
-## Review presets
-
-Two presets change what a review emphasizes, independently of Ask/Agent/Plan/Code:
-
-- **engineering** emphasizes design decisions, module boundaries, and the reasons behind the change.
-- **experience** emphasizes behavior changes, feedback, and manual verification.
-
-`resolveReviewPreset` picks the preset from the project default and an optional per-run override. In
-Ask mode the result is read-only and the captured time is recorded.
 
 ## Editor tabs
 
@@ -215,7 +176,7 @@ node scripts/checkProjectReaderUi.mjs   # hybrid rendering, C4, playback, source
 node scripts/checkProjectDiagramsUi.mjs # retained Archify adapter and bridge compatibility
 ```
 
-Unit tests for the project layer run with `npx vitest run test/project*.test.ts test/editorTab*.test.ts test/turnReview*.test.ts`.
+Unit tests for the project layer run with `npx vitest run test/project*.test.ts test/editorTab*.test.ts`.
 `scripts/assertWebviewAssets.mjs` additionally proves from the esbuild dependency manifest that the
 runtime bundle contains neither the TypeScript compiler nor the removed scan/engine implementations,
 that the Archify entry point, five schemas and five renderers the adapter names are present, and that

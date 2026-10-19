@@ -2,10 +2,6 @@ import type { ResourceSession } from "./resourceSession.js";
 import { UI_LIMITS, uiFormResultSchema } from "./core/uiForm.js";
 import { z } from "zod";
 import type { AgentStreamEvent, InputExecutionResponse, RegisteredCallable, PlanExecutionOutcome } from "./core/types.js";
-import type { TurnReview } from "./core/turnReview.js";
-import type { KnowledgeSuggestion } from "./core/projectKnowledgeReview.js";
-import type { PlanReview } from "./core/planReview.js";
-import type { ReviewPreset } from "./core/projectContext.js";
 import type { AgentProfile, AgentSelection } from "./agentProfiles.js";
 import type { EditorTokenTheme } from "./vscodeTheme.js";
 import type { DextHistorySession, PlanStatus } from "./historyStore.js";
@@ -57,27 +53,6 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("renameTurn"), sessionId: z.string().min(1), turnId: z.string().min(1) }),
   z.object({ type: z.literal("deleteTurn"), turnId: z.string().min(1), sessionId: z.string().min(1).optional() }),
   z.object({ type: z.literal("copyTurn"), turnId: z.string().min(1), sessionId: z.string().min(1) }),
-  z.object({
-    type: z.literal("reviewDecision"),
-    sessionId: z.string().min(1),
-    turnId: z.string().min(1),
-    runId: z.string().min(1),
-    decision: z.enum(["accepted", "rejected"])
-  }),
-  z.object({
-    type: z.literal("planReviewDecision"),
-    sessionId: z.string().min(1),
-    /** The review is bound to a plan version and a Build run, so a decision cannot land on a later Build. */
-    planVersion: z.string().min(1),
-    runId: z.string().min(1),
-    decision: z.enum(["accepted", "rejected"])
-  }),
-  z.object({
-    type: z.literal("adoptKnowledgeSuggestion"),
-    sessionId: z.string().min(1),
-    turnId: z.string().min(1),
-    suggestionId: z.string().min(1)
-  }),
   z.object({ type: z.literal("buildPlan"), planPath: z.string().min(1).max(512) }),
   z.object({ type: z.literal("choosePlan") }),
   z.object({
@@ -285,40 +260,6 @@ export type WebviewResponse =
   /** `reviewPatch` is set when the host is holding an unapplied patch for this
    * turn, which is what puts Accept and Reject on its file changes. */
   | { type: "execution"; sessionId: string; turnId: string; response: InputExecutionResponse; reviewPatch?: boolean }
-  /** Per-run Review attachment. It is conversation-scoped, never project knowledge. */
-  | {
-    type: "turnReview";
-    sessionId: string;
-    turnId: string;
-    review: TurnReview;
-    preset?: ReviewPreset;
-    /** Unaccepted drafts. Adopting one writes a project object; accepting the code writes nothing. */
-    knowledgeSuggestions?: KnowledgeSuggestion[];
-  }
-  | {
-    type: "knowledgeSuggestionDecision";
-    sessionId: string;
-    turnId: string;
-    suggestionId: string;
-    status: "adopted" | "stale" | "not_applicable";
-    objectId?: string;
-  }
-  | {
-    type: "turnReviewDecision";
-    sessionId: string;
-    turnId: string;
-    runId: string;
-    status: "accepted" | "rejected" | "stale";
-  }
-  /** One Build review, accumulating every executed round for the same plan version. */
-  | { type: "planReview"; sessionId: string; review: PlanReview }
-  | {
-    type: "planReviewDecision";
-    sessionId: string;
-    planVersion: string;
-    runId: string;
-    status: "accepted" | "rejected";
-  }
   | { type: "executionFailed"; sessionId: string; turnId: string; message: string; planOutcome?: PlanExecutionOutcome }
   | {
     type: "patchResolved";

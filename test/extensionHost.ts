@@ -580,7 +580,7 @@ async function eventually(check: () => Promise<boolean>, description: string): P
 
 /**
  * Verifies the migrated editor tabs against a real VS Code window: each directory opens as its own
- * webview tab, reopening reuses the page, closing releases it, and the Review UI ships in the bundle.
+ * webview tab, reopening reuses the page, closing releases it, and retired Review UI is absent from the bundle.
  */
 async function verifyEditorTabs(): Promise<void> {
   const commands = await vscode.commands.getCommands(true);
@@ -621,10 +621,10 @@ async function verifyEditorTabs(): Promise<void> {
   }
   await new Promise((resolve) => setTimeout(resolve, 300));
   assert.equal(vscode.window.tabGroups.activeTabGroup.tabs.length, before, "Closing the migrated tabs releases them.");
-  // The packaged conversation bundle must carry the Review UI, and Assets cannot be silently missing.
+  // Retired Review UI must not remain in the packaged conversation bundle.
   const bundle = await readFile(join(vscode.extensions.getExtension("blooddot.dext")!.extensionPath, "dist", "webview", "main.js"), "utf8");
   for (const marker of ["data-turn-review", "data-plan-review", "data-adopt-suggestion", "adoptKnowledgeSuggestion"]) {
-    assert.ok(bundle.includes(marker), `The packaged conversation bundle includes '${marker}'.`);
+    assert.ok(!bundle.includes(marker), `The packaged conversation bundle excludes '${marker}'.`);
   }
   console.log("Editor tabs: Project, APIs, and Global Resources open, reuse, and close in a live VS Code window.");
 }
