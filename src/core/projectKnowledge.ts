@@ -94,34 +94,3 @@ export function normalizeProjectObject(input: unknown): ProjectObject {
     ...(explicit("ownership") ? {} : { ownership: legacyOwnership(legacy) ?? parsed.ownership })
   };
 }
-
-export function searchableProjectObjectValues(object: ProjectObject): string[] {
-  return [object.canonicalName, object.displayName ?? "", ...object.aliases]
-    .map((value) => value.trim().toLocaleLowerCase())
-    .filter(Boolean);
-}
-
-/** An accepted object can move to needs_verification or stale without losing its acceptance. */
-export function isAcceptedObject(object: Pick<ProjectObject, "confirmation">): boolean {
-  return object.confirmation === "accepted";
-}
-
-export function validateProjectObjects(objects: readonly ProjectObject[]): string[] {
-  const errors: string[] = [];
-  const ids = new Set<string>();
-  const names = new Map<string, string>();
-  for (const object of objects) {
-    if (ids.has(object.id)) errors.push(`Duplicate project object id '${object.id}'.`);
-    ids.add(object.id);
-    for (const name of searchableProjectObjectValues(object)) {
-      const previous = names.get(name);
-      if (previous && previous !== object.id) errors.push(`Project object name or alias '${name}' is used by '${previous}' and '${object.id}'.`);
-      names.set(name, object.id);
-    }
-  }
-  const known = new Set(objects.map((object) => object.id));
-  for (const object of objects) for (const related of object.relatedIds) {
-    if (!known.has(related)) errors.push(`Project object '${object.id}' references missing object '${related}'.`);
-  }
-  return errors;
-}

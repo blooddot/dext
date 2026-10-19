@@ -1,16 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { normalizeProjectObject, projectObjectSchema, validateProjectObjects } from "../src/core/projectKnowledge.js";
+import { normalizeProjectObject, projectObjectSchema } from "../src/core/projectKnowledge.js";
 
 const object = (id: string, canonicalName: string) => projectObjectSchema.parse({
   id, canonicalName, kind: "module", source: "user", confirmation: "accepted"
 });
 
 describe("project knowledge", () => {
-  it("requires an English canonical name and detects aliases shared by objects", () => {
+  it("requires an English canonical name", () => {
     expect(() => projectObjectSchema.parse({ id: "one", canonicalName: "任务", kind: "module", source: "user", confirmation: "accepted" })).toThrow();
-    const first = { ...object("one", "TaskQuery"), aliases: ["查询"] };
-    const second = { ...object("two", "TaskStats"), aliases: ["查询"] };
-    expect(validateProjectObjects([first, second]).some((error) => error.includes("used by"))).toBe(true);
   });
 
   it("keeps source, confirmation and validity as independent dimensions", () => {

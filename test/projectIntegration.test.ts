@@ -8,7 +8,7 @@ import { projectIntentSchema } from "../src/core/projectIntent.js";
 import type { ProjectDiagram } from "../src/core/projectDiagram.js";
 import { ProjectDiagramAdapterRegistry } from "../src/core/projectDiagramRegistry.js";
 import type { DiagramAdapterArtifact, DiagramAdapterCapability, DiagramAdapterDocument, ProjectDiagramAdapter } from "../src/core/projectDiagramAdapter.js";
-import { isAcceptedObject, normalizeProjectObject } from "../src/core/projectKnowledge.js";
+import { normalizeProjectObject } from "../src/core/projectKnowledge.js";
 
 class MemoryHost implements ProjectFileHost {
   readonly files = new Map<string, string>();
@@ -146,7 +146,7 @@ describe("project integration without any static scan", () => {
       evidence: [], version: 1
     });
     expect(legacy).toMatchObject({ confirmation: "accepted", validity: "stale" });
-    expect(isAcceptedObject(legacy)).toBe(true);
+
 
     const fixture = JSON.parse(await readFile(join("test", "fixtures", "projectKnowledge.json"), "utf8")) as { objects: unknown[] };
     const objects = fixture.objects.map((object) => normalizeProjectObject(object));
