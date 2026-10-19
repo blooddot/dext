@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildProjectEvidencePackage, PROJECT_INDEX_PROMPT_VERSION } from "../src/core/projectAiGeneration.js";
+import { attachProjectStructure, buildProjectEvidencePackage, PROJECT_INDEX_PROMPT_VERSION } from "../src/core/projectAiGeneration.js";
+import { buildStructureIndex } from "../src/core/projectStructure.js";
+import { buildProjectTopics } from "../src/core/projectTopics.js";
 import { projectIntentSchema } from "../src/core/projectIntent.js";
 import type { ProjectDiagram } from "../src/core/projectDiagram.js";
 import { ProjectDiagramAdapterRegistry } from "../src/core/projectDiagramRegistry.js";
@@ -8,6 +10,35 @@ import type { ProjectDiagramAdapter, DiagramAdapterDocument, DiagramAdapterArtif
 vi.mock("vscode", () => ({ Uri: {}, workspace: {} }));
 
 describe("Project topic host", () => {
+  it("reconciles generated index identities before saving and leaves saved diagrams untouched", async () => {
+    const { createProjectPanelDataSource } = await import('../src/vscodeProjectHost.js');
+    const files = [{ path: 'src/code.ts', content: 'export function execute() {}' }];
+    const index = await buildStructureIndex(files);
+    const evidence = attachProjectStructure(buildProjectEvidencePackage({ files }), index.summary);
+    let intent = projectIntentSchema.parse({ schemaVersion: 1, updatedAt: 1, brief: { name: 'App' }, contexts: [
+      { id: 'stable-code', canonicalName: 'Code', purpose: 'Old purpose', detail: 'outline', sourceFiles: ['src/code.ts'], entryPoints: ['src/code.ts'] }
+    ] });
+    const diagram: ProjectDiagram = { schemaVersion: 1, id: 'saved', title: 'Code', kind: 'architecture', version: 1, updatedAt: 1, nodes: [], relations: [],
+      metadata: { topicId: 'stable-code', topicAnalysis: 1, topicSummary: 'Old explanation', topicBasis: buildProjectTopics(intent)[0]!.basis! } };
+    const snapshot = JSON.stringify(diagram), writeDiagram = vi.fn();
+    const source = createProjectPanelDataSource({ name: 'App', root: 'C:/ws', rootUri: {} as never, readEvidence: async () => evidence,
+      store: { readObjects: async () => [], readArchitecture: async () => ({ decisions: [] }), readIntent: async () => intent,
+        writeIntent: async value => { intent = value; }, readDiagrams: async () => [diagram], writeDiagram },
+      projectAiProvider: { id: 'fixture', generate: async request => {
+        if (request.prompt.includes('Candidate file facts:')) return { text: JSON.stringify({ contexts: [{ canonicalName: 'Execution', purpose: 'Execute code', sourceFiles: ['src/code.ts'], entryPoints: ['src/code.ts'] }] }) };
+        const ids = [...new Set(request.prompt.match(/responsibility:[a-f0-9]+/g))];
+        return { text: JSON.stringify({ brief: { name: 'App', summary: 'Execute code', evidence: [{ path: 'src/code.ts', line: 1 }] },
+          capabilities: [{ canonicalName: 'Execution', description: 'Execute workflows', contextIds: ids }] }) };
+      } }
+    });
+    await source.initialize?.();
+    expect(intent.contexts[0]!.id).toBe('stable-code');
+    expect(intent.capabilities[0]!.contextIds).toEqual(['stable-code']);
+    expect((await source.load()).knowledge?.topics?.[0]).toMatchObject({ analysisState: 'stale', diagram });
+    expect(writeDiagram).not.toHaveBeenCalled();
+    expect(JSON.stringify(diagram)).toBe(snapshot);
+  });
+
   it("builds only an index, analyzes on explicit request, replaces one result and preserves it after failure", async () => {
     const { createProjectPanelDataSource } = await import("../src/vscodeProjectHost.js");
     let intent: ReturnType<typeof projectIntentSchema.parse> | undefined;

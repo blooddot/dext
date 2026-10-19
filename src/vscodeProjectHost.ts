@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { reconcileProjectIndex } from "./core/projectIndexEvolution.js";
 import { createHash } from "node:crypto";
 import { isAbsolute, resolve, posix } from "node:path";
 import type { ProjectFileHost, ProjectDefinition, ProjectSaveResult } from "./projectStore.js";
@@ -565,7 +566,9 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
       });
     },
     persist: async (output, signal, onProgress) => {
-      const intent = output.intent;
+      signal.throwIfAborted();
+      const intent = output.intent ? reconcileProjectIndex(output.intent,
+        await options.store.readIntent?.(), await options.store.readDiagrams?.() ?? []) : undefined;
       const diagrams = output.diagrams ?? [];
       if (!intent && !diagrams.length) throw new Error("AI did not return a savable project semantic model.");
       if (intent) {

@@ -2,6 +2,7 @@ import type { ProjectIntent } from "./projectIntent.js";
 import type { ProjectEvidence } from "./projectKnowledge.js";
 import type { ProjectDiagram, ProjectDiagramEvidence } from "./projectDiagram.js";
 import { buildC4Topics } from "./projectC4.js";
+import { analysisSourceFiles } from "./projectIndexEvolution.js";
 
 const diagramEvidenceEntries = (entries: readonly ProjectEvidence[]): ProjectDiagramEvidence[] => entries.map((entry) => ({
   path: entry.path,
@@ -24,6 +25,7 @@ export interface ProjectTopic {
   area?: { id: string; title: string; description: string };
   uncertainties?: string[];
   qualityWarnings?: string[];
+  previousAnalyses?: { id: string; title: string }[];
   steps: string[];
   constraints: string[];
   evidence: ProjectEvidence[];
@@ -78,6 +80,10 @@ export function buildProjectTopics(intent: ProjectIntent, diagrams: readonly Pro
     ...buildC4Topics(intent),
     ...intent.contexts.map((context): ProjectTopic => {
       const area = intent.capabilities.find(capability => capability.contextIds.includes(context.id));
+      const previousAnalyses = diagrams.filter(diagram => diagram.metadata?.topicAnalysis === 1 && diagram.metadata.topicId !== context.id
+        && (context.previousContextIds?.includes(String(diagram.metadata.topicId))
+          || (!intent.contexts.some(item => item.id === diagram.metadata?.topicId)
+            && analysisSourceFiles(diagram).some(path => context.sourceFiles?.includes(path)))));
       const scoped = constraints([context.id, ...context.moduleIds]);
       const collaborators = intent.contexts.filter((item) => context.dependsOn.includes(item.id));
       const section = { id: context.id, title: context.displayName ?? context.canonicalName, description: context.purpose, evidence: context.evidence, relatedTopicIds: [] };
@@ -91,6 +97,7 @@ export function buildProjectTopics(intent: ProjectIntent, diagrams: readonly Pro
         analysisState: context.detail === "outline" ? "outline" : "ready",
         id: context.id, title: context.displayName ?? context.canonicalName, kind: "context",
         ...(context.uncertainties?.length ? { uncertainties: context.uncertainties } : {}),
+        ...(previousAnalyses.length ? { previousAnalyses: previousAnalyses.map(diagram => ({ id: diagram.id, title: diagram.title })) } : {}),
         ...(area ? { area: { id: area.id, title: area.displayName ?? area.canonicalName, description: area.description } } : {}),
         description: context.purpose, responsibilities: context.responsibilities,
         entryPoints: context.entryPoints, ...(context.sourceFiles ? { sourceFiles: context.sourceFiles } : {}), steps: [], constraints: scoped.map((item) => item.statement),
