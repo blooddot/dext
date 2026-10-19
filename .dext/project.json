@@ -29,12 +29,5 @@
     "reasoningEffort": "high",
     "speed": "fast"
   },
-  "updatedAt": 1792399993251,
-  "scan": {
-    "roots": [
-      "src"
-    ],
-    "includeTests": false,
-    "extraExcludes": []
-  }
+  "updatedAt": 1792399993251
 }
