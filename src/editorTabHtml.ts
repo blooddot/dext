@@ -9,6 +9,8 @@ export interface EditorTabHtmlOptions {
    * also needs inline styles, data fonts and data/blob images for the self-contained artifact.
    */
   embedFrames?: boolean;
+  /** Local Mermaid bundle; its SVG styles require inline styles, but no frames or network. */
+  scriptUri?: string;
 }
 
 /** Shared document shell for new and restored Project and resource editor pages. */
@@ -17,10 +19,11 @@ export function renderEditorTabHtml(body: string, stylesheetUri: string, cspSour
   const policy = options.embedFrames
     ? `default-src 'none'; style-src ${escapeAttribute(cspSource)} 'unsafe-inline'; script-src 'nonce-${nonce}'; `
       + `frame-src 'self'; font-src data:; img-src data: blob:; connect-src 'none';`
-    : `default-src 'none'; style-src ${escapeAttribute(cspSource)}; script-src 'nonce-${nonce}';`;
+    : `default-src 'none'; style-src ${escapeAttribute(cspSource)}${options.scriptUri ? " 'unsafe-inline'" : ""}; script-src 'nonce-${nonce}';`;
   return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">`
     + `<meta name="viewport" content="width=device-width, initial-scale=1.0">`
     + `<meta http-equiv="Content-Security-Policy" content="${policy}">`
     + `<link rel="stylesheet" href="${escapeAttribute(stylesheetUri)}">`
-    + `</head><body class="editor-tab">${body.replaceAll("<script>", `<script nonce="${nonce}">`)}</body></html>`;
+    + `</head><body class="editor-tab">${body.replaceAll("<script>", `<script nonce="${nonce}">`)}`
+    + (options.scriptUri ? `<script nonce="${nonce}" src="${escapeAttribute(options.scriptUri)}"></script>` : "") + `</body></html>`;
 }

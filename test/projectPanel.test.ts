@@ -105,40 +105,23 @@ describe("project panel", () => {
     expect(completed).toContain("Analyze this module");
   });
 
-  it("keeps the diagrams page free of the removed multi-engine and self-drawn canvas controls", () => {
-    const diagrams = [
-      { id: "a", title: "Architecture", kind: "architecture" as const, version: 2, updatedAt: 1 },
-      { id: "w", title: "Flow", kind: "workflow" as const, version: 1, updatedAt: 1 }
-    ];
-    const html = renderProjectPanel("architecture", data({ architecture: { diagrams, selected: diagrams[0]! } }));
-    expect(html).toContain("data-diagram-select");
-    expect(html).toContain("data-diagram-generate-new");
-    expect(html).toContain("data-diagram-generate-update");
-    expect(html).toContain('data-diagram-action="refresh"');
-    expect(html).toContain('data-diagram-action="export"');
-    expect(html).toContain('data-diagram-action="fullscreen"');
-    expect(html).toContain("data-diagram-frame");
-    expect(html).toContain("dext-diagram-command");
-    expect(html).toContain("projectDiagramRender");
-    expect(html).toContain("projectDiagramExport");
-    expect(html).not.toContain("data-project-adapter-select");
-    expect(html).not.toContain("Use recommended");
-    expect(html).not.toContain("architecture-graph");
-    expect(html).not.toContain(">Architecture</button>");
-    expect(html).toContain(">Diagrams<");
-  });
-
-  it("explains that saved diagrams stay viewable while knowledge is uninitialized", () => {
-    const html = renderProjectPanel("architecture", data({ architecture: { diagrams: [], knowledgeUninitialized: true } }));
-    expect(html).toContain("Project knowledge is not initialized");
-    expect(html).toContain("No diagram generated yet");
-  });
-
-  it("lists all five diagram kinds with their English labels", () => {
+  it("opens saved diagrams inside the reader without a separate primary tab", () => {
     const kinds = ["architecture", "workflow", "sequence", "data_flow", "lifecycle"] as const;
-    const diagrams = kinds.map((kind, index) => ({ id: kind, title: `${kind} title`, kind, version: index + 1, updatedAt: index }));
-    const html = renderProjectPanel("architecture", data({ architecture: { diagrams, selected: diagrams[0]! } }));
-    for (const label of ["Architecture", "Workflow", "Sequence", "Data flow", "Lifecycle"]) expect(html).toContain(label);
+    const diagrams = kinds.map((kind) => ({ schemaVersion: 1 as const, id: kind, title: `${kind} title`, kind, version: 1, updatedAt: 1, nodes: [], relations: [] }));
+    const html = renderProjectPanel("architecture", data({ readerDiagrams: diagrams, architecture: { diagrams, selected: diagrams[0]! } }));
+    expect(html).toContain("data-project-reader");
+    expect(html).toContain("data-reader-view");
+    expect(html).toContain("data-reader-export");
+    expect(html).toContain("data-reader-fullscreen");
+    expect(html).toContain("All saved diagrams");
+    for (const kind of kinds) expect(html).toContain(`data-reader-diagram="${kind}"`);
+    expect(html).not.toContain("data-diagram-frame");
+    expect(html).not.toContain('role="tab" data-project-page="architecture"');
+  });
+
+  it("explains how to initialize an empty reader", () => {
+    const html = renderProjectPanel("architecture", data());
+    expect(html).toContain("Initialize the project from Overview");
   });
 
   it("updates the knowledge page copy to the explicit initialization flow", () => {
@@ -183,7 +166,8 @@ describe("project panel", () => {
   it("persists its own tab state so a reload restores the same page", () => {
     const state = { key: "dext.editor:project", page: "architecture", filters: {}, restoreVersion: 1 };
     const html = renderProjectPanel("architecture", data(), { state });
-    expect(html).toContain(`api.setState(${JSON.stringify(state)})`);
+    expect(html).toContain(JSON.stringify(state));
+    expect(html).toContain("api.getState&&api.getState()");
     // Pages rendered without a key (tests, previews) must not claim a state they cannot identify.
     expect(renderProjectPanel("overview", data())).not.toContain("api.setState(");
   });

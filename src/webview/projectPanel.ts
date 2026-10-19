@@ -2,10 +2,13 @@ import type { KnowledgeSuggestion } from "../core/projectKnowledgeReview.js";
 import type { ProjectObject } from "../core/projectKnowledge.js";
 import type { EditorTabState } from "../editorTabState.js";
 import type { ProjectInitializationState } from "../projectService.js";
-import { renderArchitectureView, projectDiagramScript, type ArchitectureViewInput } from "./projectArchitectureView.js";
+import type { ArchitectureViewInput } from "./projectArchitectureView.js";
 import type { ProjectEvidenceSettings } from "../core/projectEvidenceSettings.js";
 import type { ProjectWorkspaceSettings } from "../core/projectSettings.js";
 import { renderProjectSettings, projectSettingsScript } from "./projectSettingsView.js";
+import { renderProjectTopics } from "./projectTopicsView.js";
+import type { ProjectDiagram } from "../core/projectDiagram.js";
+import type { ProjectTopic, ProjectTopicCheck } from "../core/projectTopics.js";
 import type { ProjectIntent } from "../core/projectIntent.js";
 
 export type ProjectPanelPage = "overview" | "knowledge" | "architecture";
@@ -56,8 +59,11 @@ export interface ProjectPanelData {
   objects: readonly ProjectObject[];
   drafts?: readonly KnowledgeSuggestion[];
   architecture: ArchitectureViewInput;
+  readerDiagrams?: readonly ProjectDiagram[];
   knowledge?: {
     brief?: string;
+    topics?: readonly ProjectTopic[];
+    checks?: readonly ProjectTopicCheck[];
     contexts?: readonly { id: string; name: string; description?: string; evidence?: readonly string[] }[];
     terms?: readonly { id: string; canonical: string; aliases?: readonly string[]; definition?: string }[];
     flows?: readonly { id: string; name: string; steps: readonly string[] }[];
@@ -86,8 +92,8 @@ function renderProjectInitializationSettings(overview: ProjectOverviewData): str
 }
 
 export function renderProjectNav(page: ProjectPanelPage): string {
-  const items = PROJECT_PANEL_PAGES.map((item) =>
-    `<button type="button" role="tab" data-project-page="${item}" aria-selected="${item === page}">${PAGE_LABELS[item]}</button>`).join("");
+  const items = PROJECT_PANEL_PAGES.filter((item) => item !== "architecture").map((item) =>
+    `<button type="button" role="tab" data-project-page="${item}" aria-selected="${item === page || (item === "knowledge" && page === "architecture")}">${PAGE_LABELS[item]}</button>`).join("");
   return `<nav class="project-nav" role="tablist" aria-label="Project views">${items}</nav>`;
 }
 
@@ -180,7 +186,10 @@ function renderKnowledge(objects: readonly ProjectObject[], drafts: readonly Kno
     + `<div class="draft-actions"><button type="button" data-draft-action="accept" data-draft-id="${escapeHtml(draft.id)}">Accept</button>`
     + `<button type="button" data-draft-action="edit" data-draft-id="${escapeHtml(draft.id)}">Edit</button>`
     + `<button type="button" data-draft-action="reject" data-draft-id="${escapeHtml(draft.id)}">Reject</button></div></li>`).join("");
-  const semantic = knowledge ? `<section class="project-knowledge-brief"><h3>Project Brief</h3><p>${escapeHtml(knowledge.brief ?? "No AI-generated brief yet.")}</p>`
+  const semantic = knowledge?.topics ? `<section class="project-knowledge-brief"><h2>Project map</h2><p>${escapeHtml(knowledge.brief ?? "")}</p></section>`
+    + renderProjectTopics(knowledge.topics, knowledge.checks)
+    + (knowledge.terms?.length ? `<details class="project-topic"><summary>Glossary · ${knowledge.terms.length} terms</summary><dl class="project-topic-content">${knowledge.terms.map((term) => `<dt>${escapeHtml(term.canonical)}</dt><dd>${escapeHtml(term.definition ?? "")}</dd>`).join("")}</dl></details>` : "")
+    : knowledge ? `<section class="project-knowledge-brief"><h3>Project Brief</h3><p>${escapeHtml(knowledge.brief ?? "No AI-generated brief yet.")}</p>`
     + `<h3>Capabilities & contexts</h3>${knowledge.contexts?.length ? `<ul>${knowledge.contexts.map((context) => `<li data-project-semantic-id="${escapeHtml(context.id)}"><strong>${escapeHtml(context.name)}</strong>${context.description ? `<p>${escapeHtml(context.description)}</p>` : ""}${context.evidence?.length ? `<small>Evidence: ${context.evidence.map(escapeHtml).join(", ")}</small>` : ""}</li>`).join("")}</ul>` : `<p class="project-empty">No accepted contexts yet.</p>`}`
     + `<h3>Canonical terms</h3>${knowledge.terms?.length ? `<ul>${knowledge.terms.map((term) => `<li data-project-semantic-id="${escapeHtml(term.id)}"><code>${escapeHtml(term.canonical)}</code>${term.aliases?.length ? ` <span>(${term.aliases.map(escapeHtml).join(", ")})</span>` : ""}${term.definition ? `<p>${escapeHtml(term.definition)}</p>` : ""}</li>`).join("")}</ul>` : `<p class="project-empty">No canonical terms yet.</p>`}`
     + `<h3>Key flows</h3>${knowledge.flows?.length ? `<ul>${knowledge.flows.map((flow) => `<li data-project-semantic-id="${escapeHtml(flow.id)}"><strong>${escapeHtml(flow.name)}</strong><ol>${flow.steps.map((step) => `<li>${escapeHtml(step)}</li>`).join("")}</ol></li>`).join("")}</ul>` : `<p class="project-empty">No documented flows yet.</p>`}`
@@ -188,10 +197,10 @@ function renderKnowledge(objects: readonly ProjectObject[], drafts: readonly Kno
     + `</section>` : "";
   return `<section class="project-knowledge" data-project-section="knowledge">`
     + semantic
-    + `<h2>Knowledge</h2>`
+    + (!knowledge ? `<h2>Knowledge</h2>` : "")
     + (!knowledge ? `<p class="project-help">Project knowledge is not initialized yet. Open <strong>Overview</strong> and choose <em>Initialize project knowledge</em>; initialization never runs automatically. The entries below are long-term objects saved on disk.</p>` : "")
-    + `<h3>Objects</h3>${rows ? `<ul class="project-objects">${rows}</ul>` : `<p class="project-empty">No accepted knowledge yet. Development from Input does not require it.</p>`}`
-    + `<h3>AI drafts</h3>${draftRows ? `<ul class="project-drafts">${draftRows}</ul>` : `<p class="project-empty">No pending AI drafts.</p>`}`
+    + (rows ? `<h3>Saved objects</h3><ul class="project-objects">${rows}</ul>` : "")
+    + (draftRows ? `<h3>Pending knowledge suggestions</h3><ul class="project-drafts">${draftRows}</ul>` : "")
     + `</section>`;
 }
 
@@ -200,7 +209,7 @@ export function projectPanelScript(state?: EditorTabState): string {
   // bridge script shares this document, so the handle is cached on the window.
   // setState is what a webview serializer receives on reload: without it a restored
   // Project tab has no key and could never render.
-  const restore = state ? `api.setState(${JSON.stringify(state)});` : "";
+  const restore = state ? `api.setState(Object.assign({},${JSON.stringify(state)},{filters:Object.assign({},${JSON.stringify(state.filters ?? {})},(api.getState&&api.getState()||{}).filters)}));` : "";
   return "<script>(function(){var api=window.__dextApi||(window.__dextApi=acquireVsCodeApi());" + restore
     + projectSettingsScript()
     + "function closeModelMenu(){var menu=document.querySelector('[data-project-model-menu]');var trigger=document.querySelector('[data-project-model-trigger]');if(menu)menu.hidden=true;if(trigger)trigger.setAttribute('aria-expanded','false');var sub=document.querySelector('[data-project-model-submenu]');if(sub)sub.hidden=true;}"
@@ -237,10 +246,10 @@ export function projectPanelScript(state?: EditorTabState): string {
  */
 export function renderProjectPanel(page: ProjectPanelPage, data: ProjectPanelData, options: { focusObjectId?: string; state?: EditorTabState } = {}): string {
   const body = page === "overview" ? renderOverview(data.overview)
-    : page === "knowledge" ? renderKnowledge(data.objects, data.drafts ?? [], data.knowledge)
-      : renderArchitectureView(data.architecture);
+    : page === "knowledge" && !data.knowledge?.topics && !data.readerDiagrams ? renderKnowledge(data.objects, data.drafts ?? [], data.knowledge)
+      : renderProjectTopics(data.knowledge?.topics ?? [], data.knowledge?.checks, { brief: data.knowledge?.brief ?? "", diagrams: data.readerDiagrams ?? [], terms: data.knowledge?.terms ?? [], architecture: data.architecture, gallery: page === "architecture", ...(data.architecture.selected ? { selectedDiagramId: data.architecture.selected.id } : {}) });
   const focus = options.focusObjectId
     ? `<span class="project-focus" data-project-focus="${escapeHtml(options.focusObjectId)}"></span>`
     : "";
-  return `<div class="project-panel" data-project-page="${page}">${renderProjectNav(page)}<main class="project-body">${focus}${body}</main></div>${projectPanelScript(options.state)}${projectDiagramScript()}`;
+  return `<div class="project-panel" data-project-page="${page}">${renderProjectNav(page)}<main class="project-body">${focus}${body}</main></div>${projectPanelScript(options.state)}`;
 }

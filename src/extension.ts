@@ -113,7 +113,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return renderEditorTabHtml(body,
       webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "media", "editorTabs.css")).toString(),
       webview.cspSource,
-      { embedFrames: body.includes("data-diagram-frame") });
+      { embedFrames: body.includes("data-diagram-frame") || body.includes("data-project-reader"), ...(body.includes("data-project-reader") ? {
+        scriptUri: webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "dist", "webview", "project.js")).toString()
+      } : {}) });
   };
   const editorTabs = new EditorTabManager(
     createVscodeEditorTabHost(vscode.window, { localResourceRoots: [context.extensionUri], renderHtml: renderEditorHtml }),

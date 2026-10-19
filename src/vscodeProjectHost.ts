@@ -1,7 +1,8 @@
 import * as vscode from "vscode";
+import { createHash } from "node:crypto";
 import { isAbsolute, resolve, posix } from "node:path";
 import type { ProjectFileHost, ProjectDefinition, ProjectSaveResult } from "./projectStore.js";
-import type { ProjectEditorDataSource } from "./projectEditorProvider.js";
+import type { ProjectEditorDataSource, ProjectReaderEvidenceRequest, ProjectReaderExportRequest, ProjectReaderRenderRequest } from "./projectEditorProvider.js";
 import { KnowledgeDraftQueue } from "./core/projectKnowledgeReview.js";
 import type { ProjectInitializationState, ProjectInitializationProgressListener } from "./projectService.js";
 import { ProjectInitializationService } from "./projectService.js";
@@ -34,6 +35,7 @@ import type { DiagramValidationIssue } from "./core/projectDiagram.js";
 import { DiagramTaskRegistry, isAllowedEvidencePath, isDiagramExportPayload, resolveDiagramTarget } from "./projectDiagramViewer.js";
 import { projectEvidenceSettingsSchema, projectPromptLimits, type ProjectEvidenceSettings } from "./core/projectEvidenceSettings.js";
 import { projectSettingsSchema, projectWorkspaceSettingsFromDefinition, projectWorkspaceSettingsSchema, type ProjectSettings, type ProjectWorkspaceSettings } from "./core/projectSettings.js";
+import { buildProjectTopics, checkProjectTopics, topicDiagramRequirement, topicFingerprint, type ProjectTopicCheck } from "./core/projectTopics.js";
 import { indexedRelatedPaths, readProjectStructureEvidence } from "./projectStructureHost.js";
 
 const textDecoder = new TextDecoder();
@@ -373,6 +375,7 @@ export interface ProjectPanelDataSourceOptions {
   };
   /** Reads bounded text evidence only when the user explicitly initializes or generates a diagram. */
   readEvidence(options: { mode?: "index" | "topic"; requirement?: string; preferredPaths?: readonly string[]; modulePaths?: readonly string[] }, signal: AbortSignal, onProgress: ProjectInitializationProgressListener): Promise<ProjectEvidencePackage>;
+  evidenceSnapshot?: (path: string) => Promise<{ contentHash: string } | undefined>;
   diagramRegistry?: ProjectDiagramAdapterRegistry;
   projectAiProvider?: ProjectAiProvider;
   aiCli?: readonly { id: string; label: string; models?: readonly {
@@ -671,8 +674,8 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
     }
   };
 
-  const generateDiagram = async (request: { requirement: string; kind?: string; diagramId?: string }): Promise<void> => {
-    if (generating) { post({ type: "projectDiagramGenerateFailed", error: "A diagram generation task is already running." }); return; }
+  const generateDiagram = async (request: { requirement: string; kind?: string; diagramId?: string; preferredPaths?: readonly string[]; modulePaths?: readonly string[]; topicId?: string; topicBasis?: string }): Promise<void> => {
+    if (generating || initializationService.snapshot.status === "running") { post({ type: "projectDiagramGenerateFailed", error: "A diagram generation task is already running." }); return; }
     const requirement = request.requirement.trim();
     if (!requirement) { post({ type: "projectDiagramGenerateFailed", error: "Describe the business requirement for the diagram first." }); return; }
     const kind = request.kind && (["architecture", "workflow", "sequence", "data_flow", "lifecycle"] as string[]).includes(request.kind)
@@ -684,9 +687,10 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
     post({ type: "projectDiagramGenerating", active: true, message: "Reading bounded evidence…" });
     try {
       const diagrams = await readDiagrams();
-      const target = request.diagramId ? diagrams.find((candidate) => candidate.id === request.diagramId) : undefined;
+      const target = request.diagramId ? diagrams.find((candidate) => candidate.id === request.diagramId)
+        : request.topicId ? diagrams.filter(candidate => candidate.metadata?.topicId === request.topicId && candidate.metadata?.topicAnalysis === 1).sort((a,b) => b.updatedAt - a.updatedAt)[0] : undefined;
       if (request.diagramId && !target) throw new Error("The diagram to update does not exist.");
-      const evidence = await options.readEvidence({ requirement }, signal, (progress) => {
+      const evidence = await options.readEvidence({ requirement, ...(request.topicId ? { mode: "topic" as const } : {}), ...(request.preferredPaths ? { preferredPaths: request.preferredPaths } : {}), ...(request.modulePaths ? { modulePaths: request.modulePaths } : {}) }, signal, (progress) => {
         post({ type: "projectDiagramProgress", message: progress.message ?? "Preparing evidence…", phase: progress.phase });
       });
       await captureEvidence("diagram", evidence);
@@ -694,6 +698,7 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
       const service = new ProjectAiGenerationService(projectAiProvider, { ...options.projectAiLimits?.(), ...projectPromptLimits(evidence.selection.evidenceChars) });
       const result = await service.generateDiagram(evidence, {
         requirement,
+        ...(request.topicId ? { maxNodes: kind === "workflow" ? 8 : 10, explainTopic: true } : {}),
         ...(kind ? { kind } : {}),
         ...(target ? { target: { id: target.id, title: target.title, kind: target.kind, version: target.version } } : {})
       }, {
@@ -701,6 +706,12 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
         onEvent: (event) => post({ type: "projectDiagramProgress", message: activityLine(event).trim() || "Generating diagram…" })
       });
       let diagram = result.diagram;
+      if (request.topicId) {
+        const current = (await readTopics()).find(topic => topic.id === request.topicId);
+        if (!current || current.basis !== request.topicBasis) throw new Error("The module index changed during analysis. Reopen the module and retry.");
+        diagram = { ...diagram, nodes: diagram.nodes.map(node => ({ ...node, semanticIds: [...new Set([node.id, ...node.semanticIds])] })),
+          metadata: { ...diagram.metadata, topicId: request.topicId, topicAnalysis: 1, topicBasis: request.topicBasis ?? "" } };
+      }
       if (!target) {
         const used = new Set(diagrams.map((candidate) => candidate.id));
         if (used.has(diagram.id)) {
@@ -710,9 +721,10 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
         }
       }
       if (!options.store.writeDiagram) throw new Error("Project diagram storage is unavailable.");
+      if (signal.aborted) return;
       await options.store.writeDiagram(diagram);
-      post({ type: "projectDiagramGenerated", diagram: describeProjectDiagram(diagram), updated: Boolean(target) });
-      await renderDiagram(diagram.id, diagram.version, { refresh: true });
+      if (signal.aborted) return;
+      post({ type: "projectDiagramGenerated", diagram: describeProjectDiagram(diagram), document: diagram, topics: await readTopics(), updated: Boolean(target) });
     } catch (error) {
       generationError = error instanceof Error ? error.message : String(error);
       post({ type: "projectDiagramGenerateFailed", error: generationError });
@@ -786,6 +798,105 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
     }
   };
 
+  let topicChecks: ProjectTopicCheck[] = [];
+  let checkingKnowledge = false;
+  const readTopics = async () => {
+    const intent = await options.store.readIntent?.() ?? generatedIntent;
+    return intent ? buildProjectTopics(intent, await readDiagrams()) : [];
+  };
+  const checkKnowledge = async (): Promise<void> => {
+    if (checkingKnowledge) return;
+    checkingKnowledge = true;
+    try {
+      let bytes = 0;
+      let files = 0;
+      const snapshot = options.evidenceSnapshot ?? (async (path: string) => {
+        if (!isAllowedEvidencePath(path) || isExcludedProjectEvidencePath(path)) throw new Error("Unsupported evidence path.");
+        if (++files > 1000) throw new Error("Evidence file budget exceeded.");
+        const uri = vscode.Uri.joinPath(options.rootUri, ...path.split("/"));
+        try {
+          const stat = await vscode.workspace.fs.stat(uri);
+          if (stat.size > 262_144 || bytes + stat.size > 32_000_000) throw new Error("Evidence read budget exceeded.");
+          bytes += stat.size;
+          const content = textDecoder.decode(await vscode.workspace.fs.readFile(uri));
+          return { contentHash: createHash("sha256").update(content).digest("hex") };
+        } catch (error) {
+          if ((error as { code?: string }).code === "FileNotFound") return undefined;
+          throw error;
+        }
+      });
+      const checked = await checkProjectTopics(await readTopics(), snapshot, options.now?.() ?? Date.now());
+      // A regenerated intent may have arrived while files were being read.
+      const current = await readTopics();
+      topicChecks = checked.filter((check) => current.some((topic) => topic.id === check.id && topicFingerprint(topic) === check.fingerprint));
+      post({ type: "projectKnowledgeChecked", checks: topicChecks });
+    } catch (error) {
+      post({ type: "projectKnowledgeChecked", error: error instanceof Error ? error.message : String(error) });
+    } finally { checkingKnowledge = false; }
+  };
+  const openTopicEvidence = async (topicId: string, index: number): Promise<void> => {
+    if (!Number.isInteger(index) || index < 0) return;
+    const entry = (await readTopics()).find((topic) => topic.id === topicId)?.evidence[index];
+    if (!entry || !isAllowedEvidencePath(entry.path) || isExcludedProjectEvidencePath(entry.path)) return;
+    try { await options.openEvidence?.(entry.path, entry.line); }
+    catch { /* Missing sources remain visible in the evidence check. */ }
+  };
+  const generateTopicDiagram = async (topicId: string): Promise<void> => {
+    const topic = (await readTopics()).find((item) => item.id === topicId);
+    if (!topic) { post({ type: "projectDiagramGenerateFailed", error: "The saved topic no longer exists. Reopen Knowledge." }); return; }
+    if (topic.kind === "system_context" || topic.kind === "containers") { post({ type: "projectDiagramGenerateFailed", error: "Update the project map to refresh its system boundaries and runtime units." }); return; }
+    await generateDiagram({ requirement: topicDiagramRequirement(topic), kind: topic.kind === "flow" ? "workflow" : "architecture",
+      preferredPaths: [...new Set([...topic.entryPoints.filter(isProjectEvidencePath), ...(topic.sourceFiles ?? topic.evidence.map(entry => entry.path))])],
+      ...(topic.sourceFiles ? { modulePaths: topic.sourceFiles } : {}), topicId, ...(topic.basis ? { topicBasis: topic.basis } : {}) });
+  };
+
+  const readerDiagram = async (id: string, updatedAt: number) => {
+    const saved = await readDiagrams();
+    const intent = await options.store.readIntent?.() ?? generatedIntent;
+    const derived = intent ? buildProjectTopics(intent).flatMap((topic) => topic.diagram ? [topic.diagram] : []) : [];
+    return [...saved, ...derived].find((diagram) => diagram.id === id && diagram.updatedAt === updatedAt);
+  };
+  const renderReaderDiagram = async (request: ProjectReaderRenderRequest): Promise<void> => {
+    const signal = tasks.begin("reader-render");
+    try {
+      const diagram = await readerDiagram(request.diagramId, request.updatedAt);
+      if (!diagram) throw new Error("This diagram changed. Reopen the topic.");
+      const adapter = options.diagramRegistry?.list()[0];
+      if (!adapter || !adapter.supports(diagram.kind)) throw new Error("The interactive renderer is unavailable.");
+      const document = await adapter.transform(diagram, signal);
+      if (signal.aborted) return;
+      const artifact = await adapter.render(document, { format: "html", operationId: `reader:${request.requestId}`, signal });
+      if (signal.aborted) return;
+      const receipt = await adapter.validate(document, signal);
+      if (receipt.status === "failed") throw new Error(receipt.issues.map((issue) => issue.message).join("; "));
+      if (artifact.format !== "html" || typeof artifact.content !== "string" || artifact.content.length > 16 * 1024 * 1024) throw new Error("The interactive render is invalid or too large.");
+      if (!signal.aborted) post({ type: "projectReaderRendered", ...request, html: artifact.content, mapping: mappingOf(document) });
+    } catch (error) {
+      if (!signal.aborted) post({ type: "projectReaderRendered", ...request, error: error instanceof Error ? error.message : String(error) });
+    } finally { tasks.finish("reader-render", signal); }
+  };
+  const openReaderEvidence = async (request: ProjectReaderEvidenceRequest): Promise<void> => {
+    if (!Number.isInteger(request.evidenceIndex) || request.evidenceIndex < 0) return;
+    const diagram = await readerDiagram(request.diagramId, request.updatedAt);
+    const element = request.elementKind === "node" ? diagram?.nodes.find((node) => node.id === request.elementId)
+      : diagram?.relations.find((relation) => relation.id === request.elementId);
+    const entry = element?.evidence[request.evidenceIndex];
+    if (!entry || !isAllowedEvidencePath(entry.path) || isExcludedProjectEvidencePath(entry.path)) return;
+    try { await options.openEvidence?.(entry.path, entry.line); } catch { /* Best effort for deleted files. */ }
+  };
+  const exportReaderDiagram = async (request: ProjectReaderExportRequest): Promise<void> => {
+    try {
+      const diagram = await readerDiagram(request.diagramId, request.updatedAt);
+      if (!diagram) throw new Error("The diagram changed. Reopen the topic before exporting.");
+      if (!isDiagramExportPayload("svg", request.content, diagram.version, diagram.version)) throw new Error("Render the diagram before exporting SVG.");
+      if (textEncoder.encode(request.content).byteLength > 16 * 1024 * 1024) throw new Error("The SVG export exceeds the 16 MiB limit.");
+      const target = await vscode.window.showSaveDialog({ defaultUri: vscode.Uri.joinPath(options.rootUri, `${safeFileName(diagram.title)}.svg`), saveLabel: "Export full SVG" });
+      if (!target) { post({ type: "projectDiagramExported", format: "svg", cancelled: true }); return; }
+      await vscode.workspace.fs.writeFile(target, textEncoder.encode(request.content));
+      post({ type: "projectDiagramExported", format: "svg", fileName: target.fsPath.split(/[\\/]/).pop() ?? "" });
+    } catch (error) { post({ type: "projectDiagramExportFailed", error: error instanceof Error ? error.message : String(error) }); }
+  };
+
   const load = async (): Promise<ProjectPanelData> => {
     const [objects, architecture, definition, persistedIntent, persistedDiagrams, persistedEvidence] = await Promise.all([
       options.store.readObjects(),
@@ -845,10 +956,13 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
         } : {})
       },
       objects,
+      readerDiagrams: diagrams,
       drafts: draftQueue.list(),
       ...(intent ? {
         knowledge: {
           brief: intent.brief.summary,
+          topics: buildProjectTopics(intent, diagrams),
+          checks: topicChecks,
           contexts: intent.contexts.map((item) => ({ id: item.id, name: item.displayName ?? item.canonicalName, description: item.purpose, evidence: item.evidence.map((entry) => entry.path) })),
           terms: intent.terms.map((item) => ({ id: item.id, canonical: item.canonicalName, aliases: item.aliases, definition: item.definition })),
           flows: intent.flows.map((item) => ({ id: item.id, name: item.displayName ?? item.canonicalName, steps: item.steps.map((step) => step.label) }))
@@ -887,11 +1001,18 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
     exportDiagram,
     openDiagramEvidence,
     openEvidencePath,
+    checkKnowledge,
+    openTopicEvidence,
+    generateTopicDiagram,
+    openReaderEvidence,
+    exportReaderDiagram,
+    renderReaderDiagram,
     cancelDiagramWork: (): void => {
       options.diagramRegistry?.cancelAll();
       tasks.cancelAll();
     },
     initialize: async (): Promise<ProjectPanelData> => {
+      if (generating) throw new Error("Wait for module analysis to finish before updating the project index.");
       // Start synchronously so the editor can render the running snapshot before this async method
       // reaches its first await.
       const task = initializationService.start();

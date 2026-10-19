@@ -48,6 +48,26 @@ const setup = (overrides: Partial<ProjectEditorDataSource> = {}) => {
 };
 
 describe("project editor tab", () => {
+  it("routes topic actions while keeping generation in the current reading page", async () => {
+    const actions: unknown[] = [];
+    const { provider } = setup({
+      checkKnowledge: async () => { actions.push("check"); },
+      openTopicEvidence: async (id, index) => { actions.push([id, index]); },
+      generateTopicDiagram: async (id) => { actions.push([id, provider.page]); },
+      renderReaderDiagram: async (request) => { actions.push(request); }
+    });
+    await provider.show("knowledge");
+    await provider.handleMessage(provider.key, { type: "projectKnowledgeCheck" });
+    await provider.handleMessage(provider.key, { type: "projectTopicEvidence", topicId: "code", evidenceIndex: 0 });
+    await provider.handleMessage(provider.key, { type: "projectTopicDiagram", topicId: "code" });
+    expect(actions).toEqual(["check", ["code", 0], ["code", "knowledge"]]);
+    const request = { diagramId: "topic-view:code", updatedAt: 1, requestId: "render-1" };
+    await provider.handleMessage(provider.key, { type: "projectReaderRender", ...request });
+    expect(actions.at(-1)).toEqual(request);
+    await provider.handleMessage(provider.key, { type: "projectReaderRender", ...request, requestId: 1 });
+    expect(actions).toHaveLength(4);
+  });
+
   it("acknowledges settings saves and failures without replacing the user's form", async () => {
     const saves: unknown[] = [];
     const { host, provider } = setup({
@@ -91,13 +111,13 @@ describe("project editor tab", () => {
     expect(saved).toEqual([{ settings, version: 2 }]);
     expect(host.created[0]!.panel.messages.at(-1)).toEqual({ type: "projectSettingsSaved", version: 3 });
   });
-  it("creates one tab, reuses it and labels the third page as diagrams", async () => {
+  it("reuses one tab and restores old diagram pages inside the reader", async () => {
     const { host, provider } = setup();
     expect((await provider.show()).created).toBe(true);
     expect((await provider.show("architecture")).created).toBe(false);
     expect(host.created).toHaveLength(1);
     expect(host.created[0]!.panel.html).toContain('data-project-page="architecture"');
-    expect(host.created[0]!.panel.html).toContain(">Diagrams<");
+    expect(host.created[0]!.panel.html).toContain("data-project-reader");
     expect(host.created[0]!.panel.html).not.toContain(">Architecture</button>");
   });
 

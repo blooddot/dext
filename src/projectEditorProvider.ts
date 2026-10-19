@@ -6,6 +6,16 @@ import { renderProjectPanel, type ProjectPanelData, type ProjectPanelPage } from
 import type { ProjectInitializationState } from "./projectService.js";
 import type { ProjectPanelMessage } from "./vscodeProjectHost.js";
 
+export interface ProjectReaderEvidenceRequest {
+  diagramId: string;
+  updatedAt: number;
+  elementId: string;
+  elementKind: "node" | "relation";
+  evidenceIndex: number;
+}
+export interface ProjectReaderExportRequest { diagramId: string; updatedAt: number; content: string }
+export interface ProjectReaderRenderRequest { diagramId: string; updatedAt: number; requestId: string }
+
 export interface ProjectEditorDataSource {
   load(): Promise<ProjectPanelData>;
   /** Host → webview messages (render results, generation progress, export status). */
@@ -30,6 +40,12 @@ export interface ProjectEditorDataSource {
   openDiagramEvidence?(diagramId: string, nodeId: string, path: string, line?: number): Promise<void> | void;
   /** Opens one file the last evidence record lists, so the reader can inspect what was read. */
   openEvidencePath?(path: string): Promise<void> | void;
+  checkKnowledge?(): Promise<void>;
+  openTopicEvidence?(topicId: string, index: number): Promise<void>;
+  generateTopicDiagram?(topicId: string): Promise<void>;
+  openReaderEvidence?(request: ProjectReaderEvidenceRequest): Promise<void>;
+  exportReaderDiagram?(request: ProjectReaderExportRequest): Promise<void>;
+  renderReaderDiagram?(request: ProjectReaderRenderRequest): Promise<void>;
   /** Cancels in-flight render/generation work when the page closes or the diagram changes. */
   cancelDiagramWork?(): void;
 }
@@ -58,6 +74,7 @@ export class ProjectEditorProvider {
   private initializing = false;
   private activePanel: ReturnType<EditorTabManager["open"]>["panel"] | undefined;
   private lastData: ProjectPanelData | undefined;
+  private selectedDiagramId: string | undefined;
   private readonly unsubscribeMessages: (() => void) | undefined;
   private readonly unsubscribeInitialization: (() => void) | undefined;
   readonly key: string;
@@ -73,6 +90,8 @@ export class ProjectEditorProvider {
   }
 
   private render(page: ProjectPanelPage, data: ProjectPanelData): string {
+    const selected = data.architecture.diagrams.find((diagram) => diagram.id === this.selectedDiagramId);
+    if (selected) data = { ...data, architecture: { ...data.architecture, selected } };
     // The page script persists this exact state so a reload restores the same page.
     const state = createEditorTabState(this.key, { page });
     return renderProjectPanel(page, data, {
@@ -133,7 +152,40 @@ export class ProjectEditorProvider {
       requirement?: unknown; format?: unknown; content?: unknown; nodeId?: unknown; path?: unknown; line?: unknown; refresh?: unknown;
       cli?: unknown; model?: unknown; reasoningEffort?: unknown; speed?: unknown;
       settings?: unknown;
+      topicId?: unknown; evidenceIndex?: unknown;
+      updatedAt?: unknown; elementId?: unknown; elementKind?: unknown;
+      requestId?: unknown;
     };
+    if (payload?.type === "projectKnowledgeCheck") {
+      await this.options.dataSource.checkKnowledge?.();
+      return;
+    }
+    if (payload?.type === "projectReaderRender" && typeof payload.diagramId === "string" && typeof payload.updatedAt === "number" && typeof payload.requestId === "string") {
+      await this.options.dataSource.renderReaderDiagram?.({ diagramId: payload.diagramId, updatedAt: payload.updatedAt, requestId: payload.requestId });
+      return;
+    }
+    if (payload?.type === "projectReaderEvidence" && typeof payload.diagramId === "string" && typeof payload.updatedAt === "number"
+      && typeof payload.elementId === "string" && (payload.elementKind === "node" || payload.elementKind === "relation") && typeof payload.evidenceIndex === "number") {
+      await this.options.dataSource.openReaderEvidence?.({ diagramId: payload.diagramId, updatedAt: payload.updatedAt, elementId: payload.elementId, elementKind: payload.elementKind, evidenceIndex: payload.evidenceIndex });
+      return;
+    }
+    if (payload?.type === "projectReaderExport" && typeof payload.diagramId === "string" && typeof payload.updatedAt === "number" && typeof payload.content === "string") {
+      await this.options.dataSource.exportReaderDiagram?.({ diagramId: payload.diagramId, updatedAt: payload.updatedAt, content: payload.content });
+      return;
+    }
+    if (payload?.type === "projectTopicEvidence" && typeof payload.topicId === "string" && typeof payload.evidenceIndex === "number") {
+      await this.options.dataSource.openTopicEvidence?.(payload.topicId, payload.evidenceIndex);
+      return;
+    }
+    if (payload?.type === "projectTopicOpenDiagram" && typeof payload.diagramId === "string") {
+      this.selectedDiagramId = payload.diagramId;
+      await this.show("architecture");
+      return;
+    }
+    if (payload?.type === "projectTopicDiagram" && typeof payload.topicId === "string") {
+      await this.options.dataSource.generateTopicDiagram?.(payload.topicId);
+      return;
+    }
     if (payload?.type === "projectSettings" && this.options.dataSource.setProjectSettings) {
       try {
         if (this.initializing) throw new Error("Wait for initialization to finish before saving settings.");
