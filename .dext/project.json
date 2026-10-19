@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": 22,
+  "version": 30,
   "preset": {
     "default": "engineering"
   },
@@ -32,7 +32,7 @@
     "reasoningEffort": "high",
     "speed": "fast"
   },
-  "updatedAt": 1790245658567,
+  "updatedAt": 1792399993251,
   "scan": {
     "roots": [
       "src"
