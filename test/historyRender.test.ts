@@ -22,6 +22,27 @@ function choiceRows(html: string): [string, string][] {
 }
 
 describe("Dext history rendering", () => {
+  it("restores JSON from old raw output and serialized workflows without changing copied source", () => {
+    const text = ' \r\n' + JSON.stringify({ 中文: '换行\n"引号" C:\\path **bold** <script>bad</script>' }) + '\r\n ';
+    const execution: RuntimeResponse = {
+      invocation: { kind: "invocation", method: "ask", source: "code", arguments: [] },
+      method: { id: "ask", title: "Ask", kind: "command", source: "builtin" },
+      result: { kind: "ask", text }, durationMs: 1
+    };
+    const response = { kind: "workflow" as const, executions: [execution] };
+    const base = { id: "json", createdAt: 1, input: "ask", process: [] };
+    for (const record of [{ ...base, output: text }, { ...base, output: JSON.stringify(response) }, { ...base, output: "", response }]) {
+      const saved = JSON.stringify(record);
+      const html = renderHistoryRecord(record);
+      expect(html).toContain('json-disclosure" open');
+      expect(html).toContain('data-copy=" &#13;&#10;');
+      expect(html).toContain('\\n');
+      expect(html).not.toContain('<strong>');
+      expect(html).not.toContain('<script>');
+      expect(JSON.stringify(record)).toBe(saved);
+      expect(renderHistoryRecord(JSON.parse(saved) as DextHistoryRecord)).toBe(html);
+    }
+  });
   it("shows the selected form action in restored history", () => {
     const form = parseUiForm({ title: "Review", fields: [], actions: [{ id: "revise", label: "Revise <analysis>" }, { id: "approve", label: "Approve" }] });
     const html = renderHistoryRecord({ id: "turn", createdAt: 1, input: "Review", output: "Done", process: [

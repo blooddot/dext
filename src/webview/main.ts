@@ -1,7 +1,7 @@
 import { RESOURCE_LABELS, RESOURCE_ICONS, RESOURCE_DIRECTORIES, type ResourceSession, type ResourceKind, type ResourceScope } from "../resourceSession.js";
 import { readHistoryResponse } from "../historyResponse.js";
 import { prepareHistoryTrace } from "../core/agentTraceReplay.js";
-import { renderTurnSection, renderTurnInput, renderTurnMarkdown, renderTurnResult, renderTurnMessage, turnDomAdapter } from "../turnComponents.js";
+import { renderTurnSection, renderTurnInput, renderTurnMarkdown, renderTurnJson, renderTurnResult, renderTurnMessage, turnDomAdapter } from "../turnComponents.js";
 import type { UiFormAnswers } from "../core/uiForm.js";
 import "../../media/styles.css";
 import MarkdownIt from "markdown-it";
@@ -48,7 +48,6 @@ import {
 import { createFileReferenceChip, fileReferenceChipDescriptor } from "./fileReferenceChip.js";
 import { colorizeSource } from "./sourceHighlight.js";
 import { outputExternalLink, outputLinkReference } from "./outputLink.js";
-import { formatJsonOutput } from "./jsonOutput.js";
 import { observeComposerOverflow } from "./composerOverflow.js";
 import { installResultScrollProbe } from "./scrollProbe.js";
 import { enableConversationTabDrag } from "./conversationTabDrag.js";
@@ -1753,17 +1752,7 @@ function codeBlock(content: string): HTMLElement {
 }
 
 function jsonOutput(content: string): HTMLElement {
-  const formatted = formatJsonOutput(content);
-  if (!formatted) return copyableText(content);
-  const body = document.createElement("div");
-  body.className = "markdown-body";
-  // Keep one shared Markdown rendering path for every output. The fence is
-  // needed to preserve JSON whitespace while still letting Markdown own the
-  // surrounding layout and code-block styling.
-  body.innerHTML = markdown.render("```json\n" + formatted + "\n```");
-  const wrapper = renderTurnMarkdown(turnDomAdapter(document), body, copyButton(formatted));
-  wrapper.classList.add("json-output");
-  return wrapper;
+  return renderTurnJson(turnDomAdapter(document), content, copyButton(content)) ?? copyableText(content);
 }
 
 

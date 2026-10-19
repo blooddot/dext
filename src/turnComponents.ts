@@ -2,6 +2,7 @@ import type { DextResult, PatchChange } from "./core/types.js";
 import type { TurnSectionPresentation } from "./turnPresentation.js";
 import { uiResultText } from "./uiInteractionPresentation.js";
 import type { AgentMessagePresentation } from "./agentMessagePresentation.js";
+import { formatJsonOutput } from "./webview/jsonOutput.js";
 
 /** Only the output medium differs: text is escaped by HTML and appended as text by DOM. */
 export interface TurnRenderAdapter<E> {
@@ -35,6 +36,22 @@ export function renderTurnMarkdown<E>(adapter: TurnRenderAdapter<E>, body: E, co
   ]);
 }
 
+/** A literal JSON view shared by both hosts. Copy always receives the raw source. */
+export function renderTurnJson<E>(adapter: TurnRenderAdapter<E>, text: string, copy: E): E | undefined {
+  const formatted = formatJsonOutput(text);
+  if (formatted === undefined) return undefined;
+  const el = adapter.element;
+  return el("div", { class: "output-text-copyable json-output" }, [
+    el("div", { class: "markdown-copy-toolbar" }, [copy]),
+    el("details", { class: "execution-disclosure json-disclosure", open: true }, [
+      el("summary", {}, [
+        el("i", { class: "disclosure-chevron codicon codicon-chevron-right" }, []), "JSON"
+      ]),
+      el("pre", { class: "json-output-text" }, [el("code", {}, [formatted])])
+    ])
+  ]);
+}
+
 export interface TurnResultAdapter<E> extends TurnRenderAdapter<E> {
   markdown(text: string): E;
   json(text: string): E;
@@ -46,11 +63,12 @@ export interface TurnResultAdapter<E> extends TurnRenderAdapter<E> {
 /** One result dispatch and layout policy for History and Conversation. Host actions
  * (open a plan, review a patch, copy output) remain callbacks on the adapters. */
 export function renderTurnResult<E>(adapter: TurnResultAdapter<E>, result: DextResult): E[] {
+  const textOutput = (text: string): E => formatJsonOutput(text) === undefined ? adapter.markdown(text) : adapter.json(text);
   if (result.kind === "ask" || result.kind === "plan" || result.kind === "skill" || result.kind === "template") {
-    return [adapter.markdown(result.text), ...(result.kind === "plan" && result.planPath ? [adapter.plan(result.planPath)] : [])];
+    return [textOutput(result.text), ...(result.kind === "plan" && result.planPath ? [adapter.plan(result.planPath)] : [])];
   }
   if (result.kind === "agent") return [
-    ...(result.text ? [adapter.markdown(result.text)] : []),
+    ...(result.text ? [textOutput(result.text)] : []),
     ...(result.patch?.changes ?? []).map((change) => adapter.patch(change))
   ];
   if (result.kind === "apply") return [adapter.markdown(`${result.status}: ${result.summary}`)];

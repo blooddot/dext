@@ -3672,7 +3672,9 @@ details[open] > summary > .disclosure-chevron {
   position: relative;
 }
 
-.json-output .markdown-body pre { max-height: 480px; }
+.json-output { min-width: 0; max-width: 100%; }
+.json-output-text { max-height: 480px; overflow: auto; }
+.json-output-text { white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal; }
 .agent-inputs[hidden] { display: none; }
 /* Reports and code blocks must not set the grid's intrinsic column width. */
 .agent-inputs { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: 10px; margin: 10px 0; }

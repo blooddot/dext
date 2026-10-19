@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { renderTurnResult, renderTurnSection, renderTurnMessage, turnHtmlAdapter } from "../src/turnComponents.js";
+import { renderTurnResult, renderTurnSection, renderTurnMessage, renderTurnJson, turnHtmlAdapter } from "../src/turnComponents.js";
 import { presentTurn } from "../src/turnPresentation.js";
 import { presentAgentMessage } from "../src/agentMessagePresentation.js";
 
@@ -26,6 +26,28 @@ describe("shared turn rendering", () => {
       patch: vi.fn((change: { uri: string }) => literal(change.uri)), plan: vi.fn(literal)
     };
   }
+
+  it.each(["ask", "agent", "plan", "skill", "template"] as const)("routes complete %s JSON to the JSON adapter with its exact original text", (kind) => {
+    const text = ' \r\n' + JSON.stringify([{ 中文: '第一行\n"引号" C:\\path **bold** `code` <img src=x>', long: "x".repeat(4000) }]) + '\r\n ';
+    const result = Object.freeze({ kind, text });
+    const adapter = resultAdapter();
+    renderTurnResult(adapter, result);
+    expect(adapter.json).toHaveBeenCalledWith(text);
+    expect(adapter.markdown).not.toHaveBeenCalled();
+    expect(result.text).toBe(text);
+    const html = renderTurnJson(turnHtmlAdapter, text, { html: "copy" })!.html;
+    expect(html).toContain('json-disclosure" open');
+    expect(html).toContain('class="json-output-text"');
+    expect(html).not.toContain('<img');
+    expect(html).not.toContain('<strong>');
+  });
+
+  it.each(['# Heading\n\n**bold**', '{"partial":', '{invalid}', 'Here is {"x":1}', '```json\n{}\n```'])("preserves Markdown dispatch for %s", (text) => {
+    const adapter = resultAdapter();
+    renderTurnResult(adapter, { kind: "ask", text });
+    expect(adapter.markdown).toHaveBeenCalledWith(text);
+    expect(adapter.json).not.toHaveBeenCalled();
+  });
 
   it("preserves Agent patches and dispatches Plan links without granting actions to History", () => {
     const adapter = resultAdapter();

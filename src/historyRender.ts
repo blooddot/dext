@@ -1,7 +1,6 @@
 import { answerChoices, uiFieldChoices, uiResultText, type AnswerChoice } from "./uiInteractionPresentation.js";
 import { readHistoryResponse } from "./historyResponse.js";
-import { renderTurnSection, renderTurnInput, renderTurnMarkdown, renderTurnResult, renderTurnMessage, turnHtmlAdapter } from "./turnComponents.js";
-import { formatJsonOutput } from "./webview/jsonOutput.js";
+import { renderTurnSection, renderTurnInput, renderTurnMarkdown, renderTurnJson, renderTurnResult, renderTurnMessage, turnHtmlAdapter } from "./turnComponents.js";
 import MarkdownIt from "markdown-it";
 import { markdownCodeCopy } from "./markdownCopy.js";
 import { latestAgentTodos, renderAgentTodos, planExecutionLabel } from "./agentTodoPresentation.js";
@@ -55,7 +54,9 @@ function contextAttribute(context: Record<string, string | boolean>): string {
 }
 
 function copyButton(value: string): string {
-  return `<button class="copy-button codicon codicon-copy" type="button" data-copy="${escapeHtml(value)}" title="Copy" aria-label="Copy"></button>`;
+  // Character references survive HTML's CRLF normalization on history reload.
+  const payload = escapeHtml(value).replaceAll("\r", "&#13;").replaceAll("\n", "&#10;");
+  return `<button class="copy-button codicon codicon-copy" type="button" data-copy="${payload}" title="Copy" aria-label="Copy"></button>`;
 }
 
 /** Thin host adapter; shared components own section structure and result dispatch. */
@@ -71,11 +72,7 @@ function markdownOutput(text: string): string {
 }
 
 function jsonOutput(text: string): string {
-  const formatted = formatJsonOutput(text);
-  if (!formatted) return markdownOutput(text);
-  return renderTurnMarkdown(turnHtmlAdapter,
-    { html: `<div class="markdown-body">${renderProcessMarkdown("```json\n" + formatted + "\n```")}</div>` },
-    { html: copyButton(formatted) }).html;
+  return renderTurnJson(turnHtmlAdapter, text, { html: copyButton(text) })?.html ?? markdownOutput(text);
 }
 
 /** High-frequency conversation actions stay visible on hover; the complete
@@ -476,7 +473,8 @@ export function renderHistoryRecord(record: DextHistoryRecord, sessionId?: strin
   const todoHtml = renderAgentTodos(latestAgentTodos(record.process)) + inputHistory(record.process);
   const outputHtml = record.error
     ? `<pre class="error">${escapeHtml(record.error)}</pre>`
-    : response ? output(response) : `<pre>${escapeHtml(record.output)}</pre>`;
+    : response ? output(response) : (renderTurnJson(turnHtmlAdapter, record.output, { html: copyButton(record.output) })?.html
+      ?? `<pre>${escapeHtml(record.output)}</pre>`);
   const context = sessionId
     ? ` ${contextAttribute({
       webviewSection: "turn",
