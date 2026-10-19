@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { renderTurnResult, renderTurnSection, renderTurnMessage, renderTurnJson, turnHtmlAdapter } from "../src/turnComponents.js";
+import { renderTurnResult, renderTurnSection, renderTurnMessage, renderTurnJson, terminalCommandSummary, turnHtmlAdapter } from "../src/turnComponents.js";
 import { presentTurn } from "../src/turnPresentation.js";
 import { presentAgentMessage } from "../src/agentMessagePresentation.js";
 
@@ -47,6 +47,19 @@ describe("shared turn rendering", () => {
     renderTurnResult(adapter, { kind: "ask", text });
     expect(adapter.markdown).toHaveBeenCalledWith(text);
     expect(adapter.json).not.toHaveBeenCalled();
+  });
+
+  it.each(['powershell -NoProfile -EncodedCommand', 'pwsh.exe -enc', '& "C:\\Program Files\\PowerShell\\pwsh.exe" -EC'])("summarizes %s without executing its payload", (prefix) => {
+    const payload = Buffer.from('Write-Output "中文"', 'utf16le').toString('base64').repeat(200);
+    const command = `${prefix} ${payload} -NoExit`;
+    const html = renderTurnResult(resultAdapter(), { kind: "terminal", command, cwd: ".", status: "succeeded", exit_code: 0, stdout: "", stderr: "", duration_ms: 1 })[0]!.html;
+    const summary = html.slice(0, html.indexOf('</summary>'));
+    expect(summary).toContain('encoded command');
+    expect(summary).not.toContain(payload);
+    expect(html).toContain(payload);
+    expect(terminalCommandSummary(command)).toContain('-NoExit');
+    expect(terminalCommandSummary('npm test -- --run')).toBe('npm test -- --run');
+    expect(terminalCommandSummary('echo ' + 'x'.repeat(2000))).toContain('… (expand for full command)');
   });
 
   it("preserves Agent patches and dispatches Plan links without granting actions to History", () => {

@@ -3672,9 +3672,15 @@ details[open] > summary > .disclosure-chevron {
   position: relative;
 }
 
-.json-output { min-width: 0; max-width: 100%; }
+.json-output,
+.terminal-disclosure,
+.terminal-disclosure .execution-disclosure-body { min-width: 0; max-width: 100%; }
 .json-output-text { max-height: 480px; overflow: auto; }
-.json-output-text { white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal; }
+.json-output-text,
+.terminal-command { white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal; }
+.terminal-disclosure > summary { flex-wrap: wrap; min-width: 0; }
+.terminal-command-summary { flex: 1 1 120px; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.terminal-disclosure .result-meta { overflow-wrap: anywhere; }
 .agent-inputs[hidden] { display: none; }
 /* Reports and code blocks must not set the grid's intrinsic column width. */
 .agent-inputs { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: 10px; margin: 10px 0; }
