@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildProjectEvidencePackage,
   compareProjectEvidencePaths,
-  PROJECT_AI_PROMPT_VERSION,
+  PROJECT_INDEX_PROMPT_VERSION,
   PROJECT_DIAGRAM_PROMPT_VERSION,
   ProjectAiGenerationError,
   ProjectAiGenerationService,
@@ -49,12 +49,12 @@ const architectureDiagram = (): ProjectDiagram => ({
   relations: [], version: 0, updatedAt: 1
 });
 
+const validIndex = () => ({ brief: { name: "Example", summary: "Task application", evidence: [{ path: "README.md", line: 1 }] }, contexts: [{ id: "task.context", canonicalName: "TaskApplication", purpose: "Application boundary", entryPoints: ["src/app.ts"], evidence: [{ path: "src/app.ts", line: 1 }] }] });
+
 const validModel = (input: ProjectEvidencePackage): ProjectAiGeneratedModel => ({ intent: intent(input), diagrams: [architectureDiagram()] });
 
 /** Drives the real ax-backed service with one fixed CLI answer, so parsing is never tested twice. */
 const answerWith = (text: string): ProjectAiProvider => ({ id: "mock", generate: async () => ({ text }) });
-const generateModel = (text: string, input: ProjectEvidencePackage) =>
-  new ProjectAiGenerationService(answerWith(text), { maxAttempts: 1 }).generate(input);
 const generateDiagram = (text: string, input: ProjectEvidencePackage, requirement: string) =>
   new ProjectAiGenerationService(answerWith(text), { maxAttempts: 1 }).generateDiagram(input, { requirement });
 
@@ -77,13 +77,6 @@ describe("Project evidence package", () => {
       relations: [{ id: "call", from: "app", to: "listed", kind: "calls", evidence: [{ path: "src/listed.ts" }] }]
     };
     expect(validateProjectAiModel(model, input).some((error) => error.includes("inventory cannot establish behavior"))).toBe(true);
-  });
-
-  it("keeps initialization to a small overview instead of accepting a bundle of diagrams", async () => {
-    const input = evidence();
-    const model = validModel(input);
-    model.diagrams.push({ ...architectureDiagram(), id: "second" });
-    await expect(generateModel(JSON.stringify(model), input)).rejects.toMatchObject({ diagnostics: expect.arrayContaining([expect.stringContaining("at most one overview")]) });
   });
 
   it("bounds files, redacts secrets and keeps a deterministic hash without any scan contract", () => {
@@ -320,98 +313,6 @@ describe("Project AI response validation", () => {
     expect(validateProjectAiModel(workflow, input).some((error) => error.includes("lane"))).toBe(true);
   });
 
-  it("keeps a sound model whose objects carry an undocumented descriptive key", async () => {
-    const input = evidence();
-    const diagram = architectureDiagram();
-    // Providers accept the response schema but never enforce it, so a model may decorate a node
-    // with a free-text `note`. The key has no Project meaning and the answer is otherwise
-    // verifiable, so it must not cost the generation and a retry.
-    const model = {
-      ...validModel(input),
-      intent: { ...intent(input), brief: { ...intent(input).brief, note: "explained in the README" } },
-      diagrams: [{ ...diagram, nodes: [{ ...diagram.nodes[0]!, note: "entry point" }] }]
-    };
-    const result = await generateModel(JSON.stringify(model), input);
-    expect(result.metadata.attempts).toBe(1);
-    expect(result.diagrams[0]!.id).toBe("architecture");
-    expect(result.intent.brief.name).toBe("Example");
-    expect("note" in result.diagrams[0]!.nodes[0]!).toBe(false);
-    expect("note" in result.intent.brief).toBe(false);
-  });
-
-  it("accepts ordinary prose in every array-of-strings field", async () => {
-    const input = evidence();
-    // Regression: ax walks a schema attached to its output field and JSON.parses the elements of
-    // every array-typed leaf, so `goals: ["Author Dext …"]` used to fail inside ax with
-    // "Invalid JSON … in field 'goals'" before the contract was ever checked. The model below
-    // fills every string array the contract has.
-    const model = {
-      intent: {
-        ...intent(input),
-        brief: {
-          ...intent(input).brief,
-          goals: ["Author Dext runs AI coding tasks."],
-          runtime: ["Node.js"],
-          audiences: ["Extension developers"]
-        },
-        contexts: [{
-          id: "task.context", canonicalName: "TaskApplication", purpose: "Application boundary",
-          responsibilities: ["Owns the task lifecycle."], moduleIds: [], entryPoints: [], dependsOn: [], relatedContextIds: [],
-          evidence: [{ path: "src/app.ts", line: 1 }]
-        }],
-        capabilities: [{
-          id: "task.run", canonicalName: "TaskRun", description: "Runs a task.", outcomes: ["A task finishes."],
-          contextIds: ["task.context"], moduleIds: [], evidence: [{ path: "src/app.ts", line: 1 }]
-        }],
-        terms: [{
-          id: "term.task", canonicalName: "task", aliases: ["job"], forbiddenNames: ["work item"],
-          definition: "A unit of work.", contextIds: ["task.context"], evidence: [{ path: "src/app.ts", line: 1 }]
-        }],
-        constraints: [{ id: "constraint.one", statement: "One task at a time.", rationale: "Simplicity.", scope: ["task.run"], evidence: [{ path: "src/app.ts", line: 1 }] }],
-        decisions: [{ id: "decision.one", title: "Queue tasks", decision: "Queue them.", alternatives: ["Run them in parallel."], consequences: ["Slower but predictable."], evidence: [{ path: "src/app.ts", line: 1 }] }]
-      },
-      diagrams: [{
-        ...architectureDiagram(),
-        nodes: [{ ...architectureDiagram().nodes[0]!, semanticIds: ["task.context", "task.run"] }]
-      }]
-    };
-    const result = await generateModel(JSON.stringify(model), input);
-    expect(result.metadata.attempts).toBe(1);
-    expect(result.intent.brief.goals).toEqual(["Author Dext runs AI coding tasks."]);
-    expect(result.intent.terms[0]!.aliases).toEqual(["job"]);
-    expect(result.intent.decisions[0]!.alternatives).toEqual(["Run them in parallel."]);
-  });
-
-  it("reports every documented rule that an undocumented key cannot satisfy", async () => {
-    const input = evidence();
-    const diagram = architectureDiagram();
-    const invalidRole = { intent: intent(input), diagrams: [{ ...diagram, nodes: [{ ...diagram.nodes[0]!, role: "microservice", note: "entry point" }] }] };
-    await expect(generateModel(JSON.stringify(invalidRole), input)).rejects.toMatchObject({
-      code: "invalid_output",
-      message: "Project AI returned an invalid semantic model."
-    });
-    // Pruning drops the extra key; it never stands in for a missing documented field.
-    const missingLabel = { intent: intent(input), diagrams: [{ ...diagram, nodes: [{ id: "app", role: "system", semanticIds: [], evidence: [{ path: "src/app.ts", line: 1 }], note: "entry point" }] }] };
-    await expect(generateModel(JSON.stringify(missingLabel), input)).rejects.toMatchObject({ code: "invalid_output" });
-    // A contract-valid model with an unprovable claim keeps its own message and diagnostics.
-    const unknownReference = { ...validModel(input), intent: { ...intent(input), contexts: [{ ...intent(input).contexts[0]!, moduleIds: ["mod.missing"] }] } };
-    await expect(generateModel(JSON.stringify(unknownReference), input)).rejects.toMatchObject({
-      code: "invalid_output",
-      message: "Project AI evidence or references could not be verified.",
-      diagnostics: [expect.stringContaining("Unknown semantic reference 'mod.missing'")]
-    });
-  });
-
-  it("parses plain, explained and intent-shaped JSON output", async () => {
-    const input = evidence();
-    const model = validModel(input);
-    const json = JSON.stringify(model);
-    expect((await generateModel(`Here is the model:\n\n${json}`, input)).diagrams[0]!.id).toBe("architecture");
-    expect((await generateModel(`\`\`\`json\n${json}\n\`\`\``, input)).intent.brief.name).toBe("Example");
-    expect((await generateModel(JSON.stringify({ ...model.intent, diagrams: model.diagrams }), input)).intent.contexts[0]!.id).toBe("task.context");
-    await expect(generateModel("not json", input)).rejects.toMatchObject({ code: "invalid_output" });
-  });
-
   it("parses a single on-demand diagram response", async () => {
     const input = evidence("Show the architecture");
     const parsed = await generateDiagram(JSON.stringify({ diagram: architectureDiagram() }), input, "Show the architecture");
@@ -431,59 +332,77 @@ describe("Project AI response validation", () => {
 });
 
 describe("Project AI generation service", () => {
+  it("parses plain, explained and fenced JSON through the current diagram entry", async () => {
+    const requirement = "Show the architecture", input = evidence(requirement);
+    const json = JSON.stringify({ diagram: architectureDiagram() });
+    for (const text of [json, "Here is the diagram:\n" + json, "```json\n" + json + "\n```"]) {
+      expect((await generateDiagram(text, input, requirement)).diagram.id).toBe("architecture");
+    }
+    await expect(generateDiagram("not json", input, requirement)).rejects.toMatchObject({ code: "invalid_output" });
+  });
+
+  it("does not let an undocumented field satisfy a required diagram field", async () => {
+    const requirement = "Show the architecture", input = evidence(requirement), diagram = architectureDiagram();
+    for (const node of [{ ...diagram.nodes[0], role: "microservice", note: "entry" }, { id: "app", role: "system", semanticIds: [], evidence: diagram.nodes[0]!.evidence, note: "missing label" }]) {
+      await expect(generateDiagram(JSON.stringify({ diagram: { ...diagram, nodes: [node] } }), input, requirement)).rejects.toMatchObject({ code: "invalid_output" });
+    }
+  });
+
+  it("preserves generated diagram confidence and prose metadata", async () => {
+    const requirement = "Show the architecture", input = evidence(requirement);
+    const diagram = { ...architectureDiagram(), confidence: 0.9, metadata: { topicSummary: "Runs tasks and returns a result." }, nodes: [{ ...architectureDiagram().nodes[0], confidence: 0.8 }] };
+    const result = await generateDiagram(JSON.stringify({ diagram }), input, requirement);
+    expect(result.diagram.confidence).toBe(0.9);
+    expect(result.diagram.nodes[0]!.confidence).toBe(0.8);
+    expect(result.diagram.metadata?.topicSummary).toBe("Runs tasks and returns a result.");
+  });
+
+  it("times out and aborts an unresponsive provider through the current index entry", async () => {
+    let providerSignal: AbortSignal | undefined;
+    const provider: ProjectAiProvider = { id: "hanging", generate: async (_request, signal) => {
+      providerSignal = signal;
+      return await new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("Provider aborted")), { once: true }));
+    } };
+    await expect(new ProjectAiGenerationService(provider, { timeoutMs: 20, maxAttempts: 1 }).generateIndex(evidence())).rejects.toMatchObject({ code: "timeout" });
+    expect(providerSignal?.aborted).toBe(true);
+  });
+
   it("retries invalid output and stamps inferred draft provenance", async () => {
     const input = evidence();
-    const value = validModel(input);
+    const value = validIndex();
     let calls = 0;
     const provider: ProjectAiProvider = { id: "mock", generate: async () => ({ text: ++calls === 1 ? "{}" : JSON.stringify(value), model: "mock-model" }) };
-    const result = await new ProjectAiGenerationService(provider, { timeoutMs: 2_000, now: () => 42 }).generate(input);
+    const result = await new ProjectAiGenerationService(provider, { timeoutMs: 2_000, now: () => 42 }).generateIndex(input);
     expect(calls).toBe(2);
     expect(result.metadata.attempts).toBe(2);
-    expect(result.metadata.promptVersion).toBe(PROJECT_AI_PROMPT_VERSION);
+    expect(result.metadata.promptVersion).toBe(PROJECT_INDEX_PROMPT_VERSION);
     expect(result.intent.brief.origin).toBe("inferred");
     expect(result.intent.brief.review).toBe("draft");
     expect(result.intent.generatedAt).toBe(42);
-    expect(result.diagrams[0]!.version).toBe(0);
+    expect(result.diagrams).toEqual([]);
   });
 
   it("spends the retry budget on a provider failure and reports it when every attempt fails", async () => {
     const input = evidence();
-    const value = validModel(input);
+    const value = validIndex();
     let calls = 0;
     // A CLI that failed to start is worth one more attempt with the same bounded evidence.
     const transient: ProjectAiProvider = {
       id: "mock",
       generate: async () => (++calls === 1 ? { text: "CLI failed to start.", finishReason: "error" as const } : { text: JSON.stringify(value) })
     };
-    const recovered = await new ProjectAiGenerationService(transient).generate(input);
+    const recovered = await new ProjectAiGenerationService(transient).generateIndex(input);
     expect(calls).toBe(2);
     expect(recovered.metadata.attempts).toBe(2);
 
     const dead: ProjectAiProvider = { id: "mock", generate: async () => ({ text: "CLI auth expired.", finishReason: "error" as const }) };
-    await expect(new ProjectAiGenerationService(dead).generate(input)).rejects.toMatchObject({ code: "provider_error", diagnostics: ["CLI auth expired."] });
-  });
-
-  it("keeps the confidence the model reported for each statement", async () => {
-    const input = evidence();
-    const value: ProjectAiGeneratedModel = {
-      intent: {
-        ...validModel(input).intent,
-        brief: { ...validModel(input).intent.brief, confidence: 0.9 },
-        capabilities: [{ id: "task.query", canonicalName: "TaskQuery", description: "Runs a query.", outcomes: [], contextIds: [], moduleIds: [], evidence: [{ path: "src/app.ts", line: 1 }], confidence: 0.8 } as never]
-      },
-      diagrams: []
-    };
-    const provider: ProjectAiProvider = { id: "mock", generate: async () => ({ text: JSON.stringify(value) }) };
-    const result = await new ProjectAiGenerationService(provider).generate(input);
-    // Stamping provenance must not overwrite the model's estimate with a constant.
-    expect(result.intent.brief.confidence).toBe(0.9);
-    expect(result.intent.capabilities[0]!.confidence).toBe(0.8);
+    await expect(new ProjectAiGenerationService(dead).generateIndex(input)).rejects.toMatchObject({ code: "provider_error", diagnostics: ["CLI auth expired."] });
   });
 
   it("reports live activities, terminal provider errors and cancellation", async () => {
     const input = evidence();
     const events: ProjectAiActivityEvent[] = [];
-    const value = validModel(input);
+    const value = validIndex();
     const provider: ProjectAiProvider = {
       id: "mock",
       generate: async (request) => {
@@ -491,20 +410,20 @@ describe("Project AI generation service", () => {
         return { text: request.attempt === 1 ? "{}" : JSON.stringify(value) };
       }
     };
-    await new ProjectAiGenerationService(provider).generate(input, { onEvent: (event) => events.push(event) });
+    await new ProjectAiGenerationService(provider).generateIndex(input, { onEvent: (event) => events.push(event) });
     expect(events.some((event) => event.id === "cli-output")).toBe(true);
     expect(events.some((event) => event.title === "AI analysis attempt failed" && event.done)).toBe(true);
     expect(events.some((event) => event.title === "Retrying AI analysis")).toBe(true);
 
     const failing: ProjectAiProvider = { id: "failed", generate: async () => ({ text: "CLI authentication expired.", finishReason: "error" }) };
-    await expect(new ProjectAiGenerationService(failing, { maxAttempts: 1 }).generate(input)).rejects.toMatchObject({ code: "provider_error", diagnostics: ["CLI authentication expired."] });
+    await expect(new ProjectAiGenerationService(failing, { maxAttempts: 1 }).generateIndex(input)).rejects.toMatchObject({ code: "provider_error", diagnostics: ["CLI authentication expired."] });
 
     const hanging: ProjectAiProvider = { id: "hanging", generate: (_request, signal) => new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true })) };
     const controller = new AbortController();
-    const promise = new ProjectAiGenerationService(hanging, { timeoutMs: 10_000 }).generate(input, { signal: controller.signal });
+    const promise = new ProjectAiGenerationService(hanging, { timeoutMs: 10_000 }).generateIndex(input, { signal: controller.signal });
     controller.abort();
     await expect(promise).rejects.toMatchObject({ code: "cancelled" });
-    await expect(new ProjectAiGenerationService(undefined).generate(input)).rejects.toMatchObject({ code: "unavailable" });
+    await expect(new ProjectAiGenerationService(undefined).generateIndex(input)).rejects.toMatchObject({ code: "unavailable" });
   });
 
   it("generates one on-demand diagram of the requested kind without touching other artifacts", async () => {

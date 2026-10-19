@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import { projectIntentSchema, validateProjectIntent } from "../src/core/projectIntent.js";
 import { buildProjectTopics, topicFingerprint } from "../src/core/projectTopics.js";
 import { projectIndexQuality } from "../src/core/projectIndexQuality.js";
-import { buildProjectEvidencePackage, ProjectAiGenerationService, validateProjectAiModel } from "../src/core/projectAiGeneration.js";
+import { attachProjectStructure, buildProjectEvidencePackage, ProjectAiGenerationService, validateProjectAiModel } from "../src/core/projectAiGeneration.js";
+
+import { buildStructureIndex } from "../src/core/projectStructure.js";
 
 const evidence = [{ path: "README.md", line: 1 }];
 const fixture = () => projectIntentSchema.parse({ schemaVersion: 1, updatedAt: 1, brief: { name: "Example", evidence },
@@ -83,12 +85,19 @@ describe("C4 project views", () => {
     expect(validateProjectIntent(mixed).some(error => error.path === "c4.systemId")).toBe(true);
   });
 
-  it("requires read excerpts and stamps C4 evidence during generation", async () => {
+  it("requires read excerpts and stamps C4 evidence through the current index generator", async () => {
     const input = buildProjectEvidencePackage({ files: [{ path: "README.md", content: "Application: developer -> API -> store." }] });
     const model = { intent: fixture(), diagrams: [] };
     expect(validateProjectAiModel(model, input)).toEqual([]);
-    const service = new ProjectAiGenerationService({ id: "fixture", generate: async () => ({ text: JSON.stringify(model) }) }, { maxAttempts: 1 });
-    const generated = await service.generate(input);
+    const structure = await buildStructureIndex([{ path: "src/app.ts", content: "export function start() {}" }]);
+    const c4 = fixture().c4!;
+    c4.elements.forEach(element => { element.contextIds = []; });
+    const service = new ProjectAiGenerationService({ id: "fixture", generate: async request => ({ text: JSON.stringify(
+      request.prompt.includes("Optionally describe C4")
+        ? { brief: { name: "Example", summary: "Application", evidence }, capabilities: [{ canonicalName: "Application", description: "Runs the app", contextIds: [...new Set(request.prompt.match(/responsibility:[a-f0-9]+/g) ?? [])] }], c4 }
+        : { contexts: [{ canonicalName: "Application", purpose: "Runs the app", sourceFiles: ["src/app.ts"], entryPoints: ["src/app.ts"] }] }
+    ) }) }, { maxAttempts: 1 });
+    const generated = await service.generateIndex(attachProjectStructure(input, structure.summary));
     expect(generated.intent.c4!.elements[0]!.evidence[0]!.contentHash).toBe(input.files[0]!.contentHash);
     expect(generated.intent.c4!.relationships[0]!.evidence[0]!.contentHash).toBe(input.files[0]!.contentHash);
     const inventoryOnly = { ...input, files: [] };

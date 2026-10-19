@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ProjectStore, type ProjectFileHost } from "../src/projectStore.js";
 import { ProjectInitializationService } from "../src/projectService.js";
-import { buildProjectEvidencePackage, PROJECT_AI_PROMPT_VERSION, ProjectAiGenerationService, type ProjectAiProvider } from "../src/core/projectAiGeneration.js";
+import { buildProjectEvidencePackage, PROJECT_INDEX_PROMPT_VERSION, ProjectAiGenerationService, type ProjectAiProvider } from "../src/core/projectAiGeneration.js";
 import { projectIntentSchema } from "../src/core/projectIntent.js";
 import type { ProjectDiagram } from "../src/core/projectDiagram.js";
 import { ProjectDiagramAdapterRegistry } from "../src/core/projectDiagramRegistry.js";
@@ -37,7 +37,7 @@ function providerFor(config: { initialize?: unknown; diagram?: unknown }): Proje
   return {
     id: "mock",
     generate: async (request) => {
-      const value = request.promptVersion === PROJECT_AI_PROMPT_VERSION ? config.initialize : config.diagram;
+      const value = request.promptVersion === PROJECT_INDEX_PROMPT_VERSION ? config.initialize : config.diagram;
       return { text: JSON.stringify(value) };
     }
   };
@@ -60,12 +60,12 @@ function persistence(store: ProjectStore) {
 }
 
 describe("project integration without any static scan", () => {
-  it("initializes from bounded evidence, saves intent and diagram, and reports success only after persistence", async () => {
+  it("initializes the index from bounded evidence and reports success only after persistence", async () => {
     const host = new MemoryHost();
     const store = new ProjectStore(host);
     const service = new ProjectInitializationService({
       prepareEvidence: async () => evidence(),
-      generate: async (packageValue) => new ProjectAiGenerationService(providerFor({ initialize: { intent: intent(), diagrams: [diagram()] } })).generate(packageValue),
+      generate: async (packageValue) => new ProjectAiGenerationService(providerFor({ initialize: { brief: { name: "Example", summary: "A task application", evidence: [{ path: "README.md", line: 1 }] }, contexts: [{ id: "app", canonicalName: "App", purpose: "Runs the application", entryPoints: ["src/app.ts"], evidence: [{ path: "src/app.ts", line: 1 }] }] } })).generateIndex(packageValue),
       persist: async (output, signal) => {
         if (signal.aborted) throw new Error("cancelled");
         await persistence(store)(output);
@@ -74,12 +74,12 @@ describe("project integration without any static scan", () => {
     const state = await service.start().promise;
     expect(state.status).toBe("completed");
     expect(state.intentGenerated).toBe(true);
-    expect(state.diagramsGenerated).toBe(1);
+    expect(state.diagramsGenerated).toBe(0);
     expect(await store.readIntent()).toBeDefined();
-    expect((await store.readDiagrams()).map((item) => item.id)).toEqual(["architecture"]);
+    expect(await store.readDiagrams()).toEqual([]);
     expect((await store.readDefinition()).knowledge.initialized).toBe(true);
     expect(host.files.has(".dext/project-intent.json")).toBe(true);
-    expect(host.files.has(".dext/diagrams/architecture.json")).toBe(true);
+    expect(host.files.has(".dext/diagrams/architecture.json")).toBe(false);
   });
 
   it("recovers an uninitialized knowledge model while keeping saved diagrams viewable", async () => {
