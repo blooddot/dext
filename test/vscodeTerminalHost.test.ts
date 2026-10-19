@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedInvocation } from "../src/core/types.js";
@@ -90,6 +91,29 @@ describe("VS Code terminal host", () => {
     expect(failed).toMatchObject({ kind: "terminal", status: "failed", exit_code: 7 });
     await expect(terminalRunHandler(invocation({ command: "node --version", timeout_ms: 600_001 })))
       .rejects.toThrow("from 1 to 600000");
+  });
+
+  it("uses the manifest default, accepts its ceiling, and falls back for invalid settings", async () => {
+    const manifest = JSON.parse(await readFile(resolve("package.json"), "utf8")) as {
+      contributes: { configuration: { properties: { "dext.terminal.defaultTimeoutMs": { default: number; maximum: number } } } };
+    };
+    const setting = manifest.contributes.configuration.properties["dext.terminal.defaultTimeoutMs"];
+    const timer = vi.spyOn(globalThis, "setTimeout");
+    try {
+      for (const [configured, expected] of [
+        [undefined, setting.default], [setting.default, setting.default],
+        [setting.maximum, setting.maximum], [setting.maximum + 1, setting.default],
+        [0, setting.default], [-1, setting.default], [1.5, setting.default]
+      ]) {
+        timer.mockClear();
+        vscodeState.defaultTimeoutMs = configured;
+        const result = await terminalRunHandler(invocation({ command: "node --version" }));
+        expect(result).toMatchObject({ status: "succeeded" });
+        expect(timer).toHaveBeenCalledWith(expect.any(Function), expected);
+      }
+    } finally {
+      timer.mockRestore();
+    }
   });
 
   it("takes its default timeout from settings but never past the hard ceiling", async () => {

@@ -936,10 +936,10 @@
         },
         "dext.terminal.defaultTimeoutMs": {
           "type": "integer",
-          "default": 1800000,
+          "default": 120000,
           "minimum": 1000,
-          "maximum": 3600000,
-          "description": "Timeout applied to terminal() calls that do not pass timeout_ms. Values are capped at 600000 milliseconds, which is also the hard ceiling for an explicit timeout_ms."
+          "maximum": 600000,
+          "description": "Timeout applied to terminal() calls that do not pass timeout_ms. Default: 120000 milliseconds (two minutes). Invalid values or values above 600000 milliseconds fall back to the default; 600000 is also the hard ceiling for an explicit timeout_ms."
         },
         "dext.workflow.maxConcurrency": {
           "type": "integer",

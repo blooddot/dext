@@ -9,6 +9,7 @@
 All notable changes to Dext are documented in this file.
 
 ## Unreleased
+- Correct the terminal timeout setting to a 120,000 ms default and a 600,000 ms maximum, matching runtime behavior; invalid configured values fall back to the default.
 - Remove the deprecated VS Code settings `dext.apiDirs`, `dext.skillDirs`, `dext.plan.directory`, and the five `dext.project.evidence*` settings, together with their runtime fallbacks. Configure paths and evidence in Project settings (`.dext/project.json`); missing values use built-in defaults. Remove the old project-file `scan.roots` scope fallback. Overview guides users to save evidence depth and scope before indexing; explicitly saved empty scope remains valid.
 - Remove source-file inline completion, its configuration and evaluation commands, feedback and memory services. Code-mode TypeScript completion and CLI turn-completion detection remain available. Existing user credentials and stored completion data are left untouched and no longer used.
 - Remove conversation Turn Review, Plan Build Review, manual Acceptance, Review presets and the conversation knowledge-adoption bridge. Plan automatic final verification, pending-patch apply/reject controls and Project knowledge confirmation remain available.

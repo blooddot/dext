@@ -283,7 +283,7 @@ describe("Dext package manifest", () => {
     expect(properties["dext.agent.timeoutMs"]).toMatchObject({ type: "integer", default: 0, minimum: 0 });
     expect(properties["dext.agent.idleTimeoutMs"]).toMatchObject({ type: "integer", default: 600000, minimum: 0 });
     expect(properties["dext.terminal.defaultTimeoutMs"])
-      .toMatchObject({ type: "integer", default: 1800000 });
+      .toMatchObject({ type: "integer", default: 120000, minimum: 1000, maximum: 600000 });
     // The terminal ceiling stays a ceiling, so the setting cannot be used to
     // let a runaway command live longer than Dext allows.
     expect(properties["dext.terminal.defaultTimeoutMs"]?.description).toContain("600000");
