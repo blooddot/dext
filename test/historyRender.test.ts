@@ -1,15 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  conversationMarkdown,
-  conversationTitle,
-  highlightDext,
-  highlightTerminal,
-  historyTokenStyles,
-  historyTurnMarkdown,
-  historyTurnTitle,
-  renderHistoryRecord,
-  renderHistorySession
-} from "../src/historyRender.js";
+import { conversationMarkdown, conversationTitle, highlightTerminal, historyTurnMarkdown, historyTurnTitle, renderHistoryRecord, renderHistorySession } from "../src/historyRender.js";
 import type { DextHistoryRecord } from "../src/historyStore.js";
 import type { RuntimeResponse } from "../src/core/types.js";
 import { parseUiForm, type UiFormDefinition } from "../src/core/uiForm.js";
@@ -193,13 +183,6 @@ describe("Dext history rendering", () => {
     expect(historyTurnMarkdown(turn, 2)).toContain("## Turn 3");
     expect(historyTurnMarkdown(turn)).toContain("### Input\n\noriginal question");
     expect(historyTurnMarkdown(turn)).toContain("### Output\n\nanswer");
-  });
-
-  it("renders Dext input as escaped plain text", () => {
-    const html = highlightDext('result = code.edit(target=ref.selection, instruction="fix")');
-    expect(html).toBe("result = code.edit(target=ref.selection, instruction=&quot;fix&quot;)");
-    expect(html).not.toContain("tok-");
-    expect(historyTokenStyles()).toBe("");
   });
 
   it("renders ANSI terminal colors and strips cursor control sequences", () => {
@@ -620,19 +603,6 @@ describe("Dext history rendering", () => {
     const html = renderHistoryRecord(record);
     expect(html).toContain("ui.select(label=&quot;Pick&quot;, options=[&quot;one&quot;, &quot;two&quot;], multiple=True)");
     expect(html).not.toContain('class="tok-');
-  });
-
-  it("keeps Dext call names and keyword arguments as escaped text", () => {
-    const html = highlightDext('ask(input="https://example.test")');
-    expect(html).toBe("ask(input=&quot;https://example.test&quot;)");
-    expect(html).not.toContain("tok-");
-  });
-
-  it("keeps namespaced calls and result properties as escaped text", () => {
-    const source = 'parsed_url = node.url.parse(url="https://example.test")\ntask_id = node.path.basename(path=parsed_url.pathname)';
-    const html = highlightDext(source);
-    expect(html).toBe(source.replaceAll('"', "&quot;"));
-    expect(html).not.toContain("tok-");
   });
 
   it("renders recorded Code mode and Ask input as the same escaped text", () => {

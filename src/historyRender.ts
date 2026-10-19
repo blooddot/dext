@@ -134,12 +134,6 @@ function renderFileChange(change: Pick<PatchChange, "uri" | "before" | "after">)
   return `<details class="history-disclosure file-change" data-diff-container><summary>${chevron()}<span>${escapeHtml(name)}</span><span class="history-meta"><span class="diff-added">+${counts.added}</span> <span class="diff-removed">-${counts.removed}</span></span>${diffModeSwitch()}</summary><div class="file-path">${escapeHtml(change.uri)}</div>${renderDiff(change)}</details>`;
 }
 
-/** Source text as safe HTML. Dext no longer owns a language, so there are no
- * token classes to apply: the editor's own TypeScript service renders source. */
-export function highlightDext(source: string): string {
-  return escapeHtml(source);
-}
-
 const ANSI_COLOR_CLASSES = [
   "ansi-black", "ansi-red", "ansi-green", "ansi-yellow",
   "ansi-blue", "ansi-magenta", "ansi-cyan", "ansi-white",
