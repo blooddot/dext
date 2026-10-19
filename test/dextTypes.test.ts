@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { BUILTIN_METHODS } from "../src/core/builtins.js";
-import { dextFiles, dextModuleDeclaration, dextSharedDeclaration, dextTsconfig, dextTypesDocument } from "../src/core/dextApiTypes.js";
+import { dextFiles, dextModuleDeclaration, dextSharedDeclaration, dextTsconfig } from "../src/core/dextApiTypes.js";
 import { parseMcpManifest } from "../src/core/mcpManifest.js";
 import { methodResultType } from "../src/core/methodSignature.js";
 
@@ -96,7 +96,7 @@ describe("generated Dext TypeScript surface", () => {
   });
 
   it("derives result shapes from the registry and the type catalog", () => {
-    const types = dextTypesDocument();
+    const types = dextSharedDeclaration();
     for (const name of ["AskResult", "TerminalResult", "AgentResult", "McpRawResult", "PatchChange", "PatchResult", "UiSelectResult", "UiFormResult"]) {
       expect(types, `missing ${name}`).toContain(`interface ${name}`);
     }

@@ -552,16 +552,6 @@ function indentBlock(value: string, indent: string): string {
   return lines.map((line) => (line.length ? `${indent}${line}` : line)).join("\n");
 }
 
-/**
- * The result-type declarations, derived from `BUILTIN_METHODS` and
- * `builtinTypeDefinitions`. The output is deterministic: manual supporting types
- * come first in a fixed order, then every catalog shape sorted by name, then the
- * shapes a project's own MCP manifests declare.
- */
-export function dextTypesDocument(methods: readonly CallableDefinition[] = []): string {
-  return renderTypesDocument(generatedTypes(extraMethods(methods), declaredTypeNames()));
-}
-
 /** The document for a surface whose generated types are already computed, so a
  * caller that needs the per-tool result names does not compute them twice. */
 function renderTypesDocument(generated: GeneratedTypes): string {
