@@ -171,11 +171,15 @@ try {
       await load(ui.renderProjectPanel('knowledge', project));
       assert.equal(await evaluate(`document.querySelectorAll('.architecture-tools, .diagram-adapter-controls, .architecture-graph, .project-scan-folders, .diagram-versions, .architecture-relations').length`), 0);
       await writeFile(join(artifacts, `project-${themeName}-${width}.png`), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
+      // Topic reading and Mermaid interactions are covered by checkProjectReaderUi.mjs.
+
     }
   }
   // Match the populated Overview from the reported screenshot, including inline code
   // in the legacy warning and the custom model picker (not just the native CLI select).
   const populated = { ...project, overview: { ...project.overview,
+    structure: { hash: 'fixture', files: 3500, parsed: 3400, modules: 28, responsibilities: 42, failed: 1, unsupported: 12, unresolved: 45,
+      issues: [{ path: 'src/optional/generated/module.py', reason: 'Syntax errors; structure is partial' }] },
     legacyScanRoots: ['src'], selectedAiCli: 'codex', selectedAiModel: 'gpt-6-astra',
     selectedAiReasoning: 'ultra', selectedAiSpeed: 'fast',
     workspaceSettings: { reviewPreset: 'experience', planDirectory: '.project/plans', apiDirs: ['tools/api'], skillDirs: ['tools/skills'], mcpDirs: ['tools/mcp'] },
@@ -186,6 +190,7 @@ try {
   for (const width of [320, 701, 792, 1000, 1132]) {
     await send('Emulation.setDeviceMetricsOverride', { width, height: 600, deviceScaleFactor: 1, mobile: false });
     await load(ui.renderProjectPanel('overview', populated));
+    assert.match(await evaluate(`document.querySelector('.project-structure-summary').textContent`), /3400 source files · 28 directory groups · 42 knowledge modules/);
     await writeFile(join(artifacts, `project-populated-${width}.png`), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
     assert.equal(await evaluate(`document.documentElement.scrollWidth <= innerWidth`), true, `populated Overview fits ${width}px`);
     assert.equal(await evaluate(`Array.from(document.querySelectorAll('[data-project-legacy-scan] code')).every(code => code.getClientRects().length === 1)`), true, 'warning code stays inline');

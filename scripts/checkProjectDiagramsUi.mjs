@@ -58,7 +58,7 @@ try {
 
   const bundle = await build({
     stdin: {
-      contents: 'export { renderEditorTabHtml } from "./src/editorTabHtml.ts"; export { renderProjectPanel } from "./src/webview/projectPanel.ts"; export { archifyViewerBridgeScript } from "./src/webview/projectArchitectureView.ts"; export { ArchifyAdapter } from "./src/core/archifyAdapter.ts";',
+      contents: 'export { renderEditorTabHtml } from "./src/editorTabHtml.ts"; export { renderProjectPanel } from "./src/webview/projectPanel.ts"; export { renderArchitectureView, projectDiagramScript, archifyViewerBridgeScript } from "./src/webview/projectArchitectureView.ts"; export { ArchifyAdapter } from "./src/core/archifyAdapter.ts";',
       resolveDir: process.cwd()
     },
     bundle: true, write: false, platform: "node", format: "esm"
@@ -143,7 +143,7 @@ try {
       // VS Code allows one acquireVsCodeApi() per webview document and throws on a second call,
       // so the stub enforces the same rule: a page script that acquires it twice fails here.
       '<script>window.messages=[];window.__apiAcquired=0;window.acquireVsCodeApi=function(){if(window.__apiAcquired++)throw new Error("An instance of the VS Code API has already been acquired");return {postMessage:message=>messages.push(message)};};window.__fromFrame=[];window.addEventListener("message",function(event){var frame=document.querySelector("[data-diagram-frame]");if(frame&&event.source===frame.contentWindow)window.__fromFrame.push(event.data);});</script>'
-      + ui.renderProjectPanel(page, data),
+      + (page === "architecture" ? `<div class="project-panel">${ui.renderArchitectureView(data.architecture)}</div><script>window.__dextApi=acquireVsCodeApi();</script>${ui.projectDiagramScript()}` : ui.renderProjectPanel(page, data)),
       styleUrl,
       origin,
       { embedFrames: true }
