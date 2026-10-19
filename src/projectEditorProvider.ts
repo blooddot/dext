@@ -30,16 +30,6 @@ export interface ProjectEditorDataSource {
   setProjectSettings?(settings: unknown, version: number): Promise<void>;
   setEvidenceSettings?(settings: unknown, version: number): Promise<void>;
   setWorkspaceSettings?(settings: unknown, version: number): Promise<void>;
-  /** Renders one saved diagram by stable id; `refresh` distinguishes re-render from AI update. */
-  renderDiagram?(diagramId: string, version?: number, options?: { refresh?: boolean }): Promise<void> | void;
-  /** On-demand AI generation/update of one diagram; other diagrams and knowledge stay untouched. */
-  generateDiagram?(request: { requirement: string; kind?: string; diagramId?: string }): Promise<void> | void;
-  /** Host-owned saving of the exact rendered result (HTML artifact or live SVG serialization). */
-  exportDiagram?(request: { diagramId: string; version?: number; format?: string; content?: string }): Promise<void> | void;
-  /** Opens one evidence entry the clicked node declares; a card click alone never opens a file. */
-  openDiagramEvidence?(diagramId: string, nodeId: string, path: string, line?: number): Promise<void> | void;
-  /** Opens one file the last evidence record lists, so the reader can inspect what was read. */
-  openEvidencePath?(path: string): Promise<void> | void;
   checkKnowledge?(): Promise<void>;
   openTopicEvidence?(topicId: string, index: number): Promise<void>;
   generateTopicDiagram?(topicId: string): Promise<void>;
@@ -277,40 +267,6 @@ export class ProjectEditorProvider {
     if (payload?.type === "projectAiSpeed" && this.options.dataSource.setAiSpeed && !this.initializing) {
       await this.options.dataSource.setAiSpeed(typeof payload.speed === "string" && payload.speed ? payload.speed : undefined);
       await this.publishDefinitionVersion();
-      return;
-    }
-    if (payload?.type === "projectDiagramRender" && typeof payload.diagramId === "string") {
-      await this.options.dataSource.renderDiagram?.(payload.diagramId, typeof payload.version === "number" ? payload.version : undefined, payload.refresh === true ? { refresh: true } : {});
-      return;
-    }
-    if (payload?.type === "projectDiagramGenerate" && typeof payload.requirement === "string") {
-      await this.options.dataSource.generateDiagram?.({
-        requirement: payload.requirement,
-        ...(typeof payload.kind === "string" && payload.kind ? { kind: payload.kind } : {}),
-        ...(typeof payload.diagramId === "string" && payload.diagramId ? { diagramId: payload.diagramId } : {})
-      });
-      return;
-    }
-    if (payload?.type === "projectDiagramExport" && typeof payload.diagramId === "string") {
-      await this.options.dataSource.exportDiagram?.({
-        diagramId: payload.diagramId,
-        ...(typeof payload.version === "number" ? { version: payload.version } : {}),
-        ...(typeof payload.format === "string" ? { format: payload.format } : {}),
-        ...(typeof payload.content === "string" ? { content: payload.content } : {})
-      });
-      return;
-    }
-    if (payload?.type === "projectDiagramEvidence" && typeof payload.diagramId === "string" && typeof payload.nodeId === "string" && typeof payload.path === "string") {
-      await this.options.dataSource.openDiagramEvidence?.(
-        payload.diagramId,
-        payload.nodeId,
-        payload.path,
-        typeof payload.line === "number" ? payload.line : undefined
-      );
-      return;
-    }
-    if (payload?.type === "projectEvidenceOpen" && typeof payload.path === "string") {
-      await this.options.dataSource.openEvidencePath?.(payload.path);
       return;
     }
     if (payload?.type === "projectDiagramCancel") {

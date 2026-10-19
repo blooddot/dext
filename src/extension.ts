@@ -95,12 +95,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   } = {};
   const renderEditorHtml = (panel: VscodeWebviewPanelLike, body: string): string => {
     const webview = (panel as vscode.WebviewPanel).webview;
-    // Only the Project diagrams page embeds the sandboxed Archify viewer; its srcdoc inherits this
+    // The Project reader embeds the sandboxed Archify viewer; its srcdoc inherits this
     // policy, so the relaxed frame/font/image sources stay scoped to that document.
     return renderEditorTabHtml(body,
       webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "media", "editorTabs.css")).toString(),
       webview.cspSource,
-      { embedFrames: body.includes("data-diagram-frame") || body.includes("data-project-reader"), ...(body.includes("data-project-reader") ? {
+      { embedFrames: body.includes("data-project-reader"), ...(body.includes("data-project-reader") ? {
         scriptUri: webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "dist", "webview", "project.js")).toString()
       } : {}) });
   };

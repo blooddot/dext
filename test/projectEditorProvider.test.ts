@@ -143,52 +143,40 @@ describe("project editor tab", () => {
     expect(host.created).toHaveLength(1);
   });
 
-  it("addresses diagram operations by stable id and version", async () => {
+  it("forwards reader operations with snapshot identity and explicit evidence selection", async () => {
     const calls: unknown[] = [];
     const { provider } = setup({
-      renderDiagram: (diagramId, version, options) => { calls.push({ op: "render", diagramId, version, options }); },
-      generateDiagram: (request) => { calls.push({ op: "generate", ...request }); },
-      exportDiagram: (request) => { calls.push({ op: "export", ...request }); },
-      openDiagramEvidence: (diagramId, nodeId, path, line) => { calls.push({ op: "evidence", diagramId, nodeId, path, line }); }
+      renderReaderDiagram: async request => { calls.push({ op: "render", ...request }); },
+      generateTopicDiagram: async topicId => { calls.push({ op: "generate", topicId }); },
+      exportReaderDiagram: async request => { calls.push({ op: "export", ...request }); },
+      openReaderEvidence: async request => { calls.push({ op: "evidence", ...request }); }
     });
     await provider.show("architecture");
-    await provider.handleMessage(provider.key, { type: "projectDiagramRender", diagramId: "view", version: 3, refresh: true });
-    await provider.handleMessage(provider.key, { type: "projectDiagramGenerate", requirement: "更新订单流程", kind: "workflow", diagramId: "view" });
-    await provider.handleMessage(provider.key, { type: "projectDiagramExport", diagramId: "view", version: 3, format: "svg", content: "<svg/>" });
-    await provider.handleMessage(provider.key, { type: "projectDiagramEvidence", diagramId: "view", nodeId: "node-1", path: "README.md", line: 25 });
-    await provider.handleMessage(provider.key, { type: "projectDiagramCancel" });
+    await provider.handleMessage(provider.key, { type: "projectReaderRender", diagramId: "view", updatedAt: 3, requestId: "render-1" });
+    await provider.handleMessage(provider.key, { type: "projectTopicDiagram", topicId: "module" });
+    await provider.handleMessage(provider.key, { type: "projectReaderExport", diagramId: "view", updatedAt: 3, content: "<svg/>" });
+    await provider.handleMessage(provider.key, { type: "projectReaderEvidence", diagramId: "view", updatedAt: 3, elementId: "node-1", elementKind: "node", evidenceIndex: 0 });
     expect(calls).toEqual([
-      { op: "render", diagramId: "view", version: 3, options: { refresh: true } },
-      { op: "generate", requirement: "更新订单流程", kind: "workflow", diagramId: "view" },
-      { op: "export", diagramId: "view", version: 3, format: "svg", content: "<svg/>" },
-      { op: "evidence", diagramId: "view", nodeId: "node-1", path: "README.md", line: 25 }
+      { op: "render", diagramId: "view", updatedAt: 3, requestId: "render-1" },
+      { op: "generate", topicId: "module" },
+      { op: "export", diagramId: "view", updatedAt: 3, content: "<svg/>" },
+      { op: "evidence", diagramId: "view", updatedAt: 3, elementId: "node-1", elementKind: "node", evidenceIndex: 0 }
     ]);
   });
 
-  it("never opens a file for a card click and only opens evidence the node declares", async () => {
-    const calls: unknown[] = [];
+  it("ignores retired diagram operations and incomplete reader evidence requests", async () => {
+    const calls: string[] = [];
     const { provider } = setup({
-      openDiagramEvidence: (diagramId, nodeId, path, line) => { calls.push({ diagramId, nodeId, path, line }); }
-    });
-    await provider.show("architecture");
-    // A node selection message that carries no evidence target must not open anything.
-    await provider.handleMessage(provider.key, { type: "projectDiagramFocus", diagramId: "view", nodeId: "node-1" });
-    await provider.handleMessage(provider.key, { type: "projectDiagramEvidence", diagramId: "view", nodeId: "node-1" });
-    expect(calls).toEqual([]);
-  });
-
-  it("ignores removed scan and multi-engine message entries", async () => {
-    const calls: unknown[] = [];
-    const { provider } = setup({
-      renderDiagram: () => { calls.push("render"); },
-      generateDiagram: () => { calls.push("generate"); },
-      exportDiagram: () => { calls.push("export"); }
+      renderReaderDiagram: async () => { calls.push("render"); },
+      generateTopicDiagram: async () => { calls.push("generate"); },
+      exportReaderDiagram: async () => { calls.push("export"); },
+      openReaderEvidence: async () => { calls.push("evidence"); }
     });
     await provider.show("overview");
-    await provider.handleMessage(provider.key, { type: "projectChooseRoots" });
-    await provider.handleMessage(provider.key, { type: "projectAdapterPreference", kind: "architecture", adapterId: "drawio" });
-    await provider.handleMessage(provider.key, { type: "projectDiagramAction", action: "regenerate", kind: "architecture" });
-    await provider.handleMessage(provider.key, { type: "projectDiagramAction", action: "export", kind: "architecture", format: "drawio" });
+    for (const type of ["projectChooseRoots", "projectAdapterPreference", "projectDiagramAction", "projectDiagramRender", "projectDiagramGenerate", "projectDiagramExport", "projectDiagramEvidence", "projectDiagramFocus", "projectEvidenceOpen"]) {
+      await provider.handleMessage(provider.key, { type, diagramId: "view", version: 3, requirement: "Generate", format: "svg", content: "<svg/>", nodeId: "node", path: "src/app.ts" });
+    }
+    await provider.handleMessage(provider.key, { type: "projectReaderEvidence", diagramId: "view", elementId: "node-1" });
     expect(calls).toEqual([]);
   });
 
@@ -200,10 +188,10 @@ describe("project editor tab", () => {
       onInitializationChange: (next) => { progress = next as (state: unknown) => void; return () => { progress = undefined; }; }
     });
     await provider.show("architecture");
-    listener?.({ type: "projectDiagramRendered" });
+    listener?.({ type: "projectReaderRendered" });
     progress?.({ status: "running" });
     expect(host.created[0]!.panel.messages).toEqual([
-      { type: "projectDiagramRendered" },
+      { type: "projectReaderRendered" },
       { type: "projectInitializationProgress", state: { status: "running" } }
     ]);
     provider.dispose();

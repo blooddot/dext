@@ -27,12 +27,11 @@ import { validateProjectIntent, type ProjectIntent } from "./core/projectIntent.
 import type { ProjectObject } from "./core/projectKnowledge.js";
 import type { ArchifyIdMapping, ArchifyRepository } from "./core/archifyAdapter.js";
 import type { ProjectDiagramAdapterRegistry } from "./core/projectDiagramRegistry.js";
-import type { ProjectArchitectureDecision, ProjectDiagramNodeDetail, ProjectDiagramSummary } from "./webview/projectArchitectureView.js";
+import type { ProjectArchitectureDecision, ProjectDiagramSummary } from "./webview/projectArchitectureTypes.js";
 import type { ProjectAiLimits } from "./projectAiLimits.js";
 import { architectureRuleReport, type ArchitectureRule } from "./core/projectArchitecture.js";
 import type { ProjectPanelData } from "./webview/projectPanel.js";
-import type { DiagramValidationIssue } from "./core/projectDiagram.js";
-import { DiagramTaskRegistry, isAllowedEvidencePath, isDiagramExportPayload, resolveDiagramTarget } from "./projectDiagramViewer.js";
+import { DiagramTaskRegistry, isAllowedEvidencePath, isDiagramExportPayload } from "./projectDiagramViewer.js";
 import { projectEvidenceSettingsSchema, projectPromptLimits, type ProjectEvidenceSettings } from "./core/projectEvidenceSettings.js";
 import { projectSettingsSchema, projectWorkspaceSettingsFromDefinition, projectWorkspaceSettingsSchema, type ProjectSettings, type ProjectWorkspaceSettings } from "./core/projectSettings.js";
 import { buildProjectTopics, checkProjectTopics, topicDiagramRequirement, topicFingerprint, type ProjectTopicCheck } from "./core/projectTopics.js";
@@ -452,29 +451,6 @@ function activityLine(event: ProjectAiActivityEvent): string {
   return value || title ? `${title && value ? `${title}: ` : title}${value}\n` : "";
 }
 
-/** A card click shows these details in the page, so each payload stays small and self-describing. */
-function diagramNodeDetails(diagram: ProjectDiagram): ProjectDiagramNodeDetail[] {
-  return diagram.nodes.slice(0, 200).map((node) => ({
-    id: node.id,
-    label: node.label,
-    ...(node.description ? { description: clipText(node.description, 400) } : {}),
-    ...(node.role ? { role: node.role } : {}),
-    ...(node.semanticIds.length ? { semanticIds: node.semanticIds.slice(0, 12) } : {}),
-    evidence: node.evidence.slice(0, 6).map((entry) => ({
-      path: entry.path,
-      ...(entry.line ? { line: entry.line } : {}),
-      ...(entry.note ? { note: clipText(entry.note, 200) } : {})
-    })),
-    ...(typeof node.confidence === "number" ? { confidence: node.confidence } : {}),
-    ...(node.review ? { review: node.review } : {}),
-    ...(node.freshness ? { freshness: node.freshness } : {})
-  }));
-}
-
-function clipText(value: string, max: number): string {
-  return value.length > max ? `${value.slice(0, max - 1)}…` : value;
-}
-
 function mappingOf(document: unknown): ArchifyIdMapping | undefined {
   if (!document || typeof document !== "object") return undefined;
   const payload = (document as { payload?: unknown }).payload;
@@ -500,28 +476,12 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
   const tasks = new DiagramTaskRegistry();
   const listeners = new Set<(message: ProjectPanelMessage) => void>();
   const post = (message: ProjectPanelMessage): void => { for (const listener of listeners) listener(message); };
-  interface RenderedDiagram { version: number; engineVersion: string; html: string; mapping?: ArchifyIdMapping; receipt: { status: string; issues: readonly DiagramValidationIssue[] } }
-  /** HTML artifacts are hundreds of kilobytes each, so only the most recently used renders stay
-   * cached instead of accumulating one entry per diagram in the project. */
-  const MAX_CACHED_RENDERS = 6;
-  const rendered = new Map<string, RenderedDiagram>();
-  const cacheRender = (diagramId: string, entry: RenderedDiagram): void => {
-    rendered.delete(diagramId);
-    rendered.set(diagramId, entry);
-    while (rendered.size > MAX_CACHED_RENDERS) {
-      const oldest = rendered.keys().next().value;
-      if (oldest === undefined) break;
-      rendered.delete(oldest);
-    }
-  };
   /**
-   * Records what one evidence read handed over, posts it to the page and persists it so the next
-   * session can still explain why a diagram looks the way it does.
+   * Persists the evidence record for diagnostics, including unsuccessful generation attempts.
    */
   const captureEvidence = async (trigger: "initialize" | "diagram", packaged: ProjectEvidencePackage): Promise<void> => {
     const summary = summarizeProjectEvidence(packaged, { trigger, generatedAt: (options.now ?? Date.now)() });
     lastEvidence = summary;
-    post({ type: "projectEvidenceSummary", summary });
     try {
       await options.store.writeEvidenceSummary?.(summary);
     } catch {
@@ -604,69 +564,6 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
 
   const readDiagrams = async (): Promise<ProjectDiagram[]> => sortProjectDiagrams(await (options.store.readDiagrams?.() ?? []));
 
-  const renderDiagram = async (diagramId: string, version?: number, renderOptions: { refresh?: boolean } = {}): Promise<void> => {
-    try {
-      const diagrams = await readDiagrams();
-      const diagram = diagrams.find((candidate) => candidate.id === diagramId);
-      if (!diagram) { post({ type: "projectDiagramRenderFailed", diagramId, error: "The diagram no longer exists." }); return; }
-      if (version !== undefined && diagram.version !== version) {
-        post({ type: "projectDiagramRenderFailed", diagramId, requestedVersion: version, actualVersion: diagram.version, error: "The diagram version changed. Select it again." });
-        return;
-      }
-      const registry = options.diagramRegistry;
-      if (!registry) { post({ type: "projectDiagramRenderFailed", diagramId, error: "Archify runtime is not registered." }); return; }
-      if (renderOptions.refresh) { rendered.delete(diagramId); registry.cancel(diagramId); }
-      const engine = await registry.engineInfo();
-      if (!engine.available) { post({ type: "projectDiagramRenderFailed", diagramId, error: engine.reason ?? "Archify runtime is unavailable." }); return; }
-      const cached = rendered.get(diagramId);
-      if (cached && cached.version === diagram.version && cached.engineVersion === engine.version && !renderOptions.refresh) {
-        post({ type: "projectDiagramRendered", diagramId, requestedVersion: version, displayedVersion: cached.version, usedLastGood: false, html: cached.html, mapping: cached.mapping, nodes: diagramNodeDetails(diagram), receipt: cached.receipt, updatedAt: diagram.updatedAt });
-        return;
-      }
-      const outcome = await registry.render(diagram, { format: "html" });
-      if (outcome.status === "cancelled") return;
-      if (outcome.status === "failed" || !outcome.artifact) {
-        if (outcome.usedLastGood && outcome.snapshot && outcome.artifact) {
-          // Show the same diagram's last successful render, clearly labelled with its actual version.
-          const snapshotDiagram = outcome.snapshot.diagram;
-          let mapping: ArchifyIdMapping | undefined;
-          try {
-            const adapter = registry.list()[0];
-            if (adapter) mapping = mappingOf(await adapter.transform(snapshotDiagram));
-          } catch { mapping = undefined; }
-          post({
-            type: "projectDiagramRendered",
-            diagramId,
-            requestedVersion: diagram.version,
-            displayedVersion: snapshotDiagram.version,
-            usedLastGood: true,
-            html: outcome.artifact.content,
-            mapping,
-            nodes: diagramNodeDetails(snapshotDiagram),
-            receipt: { status: outcome.receipt.status, issues: outcome.receipt.issues },
-            updatedAt: snapshotDiagram.updatedAt,
-            error: outcome.error
-          });
-          return;
-        }
-        post({ type: "projectDiagramRenderFailed", diagramId, requestedVersion: diagram.version, error: outcome.error ?? "Archify rendering failed.", issues: outcome.receipt.issues });
-        return;
-      }
-      let mapping: ArchifyIdMapping | undefined;
-      try {
-        const adapter = registry.list()[0];
-        if (adapter) mapping = mappingOf(await adapter.transform(diagram));
-      } catch { mapping = undefined; }
-      const receipt = { status: outcome.receipt.status, issues: outcome.receipt.issues };
-      const cachedEntry: RenderedDiagram = { version: diagram.version, engineVersion: engine.version, html: outcome.artifact.content as string, receipt };
-      if (mapping) cachedEntry.mapping = mapping;
-      cacheRender(diagramId, cachedEntry);
-      post({ type: "projectDiagramRendered", diagramId, requestedVersion: version, displayedVersion: diagram.version, usedLastGood: false, html: outcome.artifact.content, mapping, nodes: diagramNodeDetails(diagram), receipt, updatedAt: diagram.updatedAt });
-    } catch (error) {
-      post({ type: "projectDiagramRenderFailed", diagramId, error: error instanceof Error ? error.message : String(error) });
-    }
-  };
-
   const generateDiagram = async (request: { requirement: string; kind?: string; diagramId?: string; preferredPaths?: readonly string[]; modulePaths?: readonly string[]; topicId?: string; topicBasis?: string }): Promise<void> => {
     if (generating || initializationService.snapshot.status === "running") { post({ type: "projectDiagramGenerateFailed", error: "A diagram generation task is already running." }); return; }
     const requirement = request.requirement.trim();
@@ -725,69 +622,6 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
       generating = false;
       tasks.finish("generate", signal);
       post({ type: "projectDiagramGenerating", active: false });
-    }
-  };
-
-  const exportDiagram = async (request: { diagramId: string; version?: number; format?: string; content?: string }): Promise<void> => {
-    try {
-      const format = request.format === "svg" ? "svg" as const : request.format === "html" ? "html" as const : undefined;
-      if (!format) { post({ type: "projectDiagramExportFailed", error: `Unsupported export format '${request.format ?? ""}'.` }); return; }
-      const resolved = resolveDiagramTarget(await readDiagrams(), request.diagramId, request.version);
-      if (!resolved.ok || !resolved.diagram) { post({ type: "projectDiagramExportFailed", error: resolved.reason ?? "The diagram no longer exists." }); return; }
-      const diagram = resolved.diagram;
-      const cached = rendered.get(diagram.id);
-      let content: string;
-      if (format === "html") {
-        if (!cached || cached.version !== diagram.version) { post({ type: "projectDiagramExportFailed", error: "Render the current diagram version successfully before exporting." }); return; }
-        content = cached.html;
-      } else {
-        if (!cached || !isDiagramExportPayload("svg", request.content, request.version, cached.version)) { post({ type: "projectDiagramExportFailed", error: "The exported content does not match the displayed diagram version." }); return; }
-        content = request.content as string;
-        if (new TextEncoder().encode(content).byteLength > 16 * 1024 * 1024) { post({ type: "projectDiagramExportFailed", error: "The SVG export exceeds the 16 MiB limit." }); return; }
-      }
-      if (format === "html" && !isDiagramExportPayload("html", content, request.version, cached?.version)) { post({ type: "projectDiagramExportFailed", error: "The HTML export content is incomplete." }); return; }
-      const target = await vscode.window.showSaveDialog({
-        defaultUri: vscode.Uri.joinPath(options.rootUri, `${safeFileName(diagram.title)}.${format}`),
-        saveLabel: format === "html" ? "Export standalone HTML" : "Export full SVG"
-      });
-      if (!target) { post({ type: "projectDiagramExported", format, cancelled: true }); return; }
-      await vscode.workspace.fs.writeFile(target, textEncoder.encode(content));
-      post({ type: "projectDiagramExported", format, fileName: target.fsPath.split(/[\\/]/).pop() ?? "" });
-    } catch (error) {
-      post({ type: "projectDiagramExportFailed", error: error instanceof Error ? error.message : String(error) });
-    }
-  };
-
-  /**
-   * Opens one evidence entry the clicked node itself declares. The webview can never name an
-   * arbitrary path, and the reader chooses when to leave the diagram.
-   */
-  const openDiagramEvidence = async (diagramId: string, nodeId: string, path: string, line?: number): Promise<void> => {
-    try {
-      const diagrams = await readDiagrams();
-      const diagram = diagrams.find((candidate) => candidate.id === diagramId);
-      const node = diagram?.nodes.find((candidate) => candidate.id === nodeId);
-      if (!node || !options.openEvidence) return;
-      const evidence = node.evidence.find((entry) => entry.path === path && isAllowedEvidencePath(entry.path));
-      if (!evidence) return;
-      await options.openEvidence(evidence.path, line && line > 0 ? line : evidence.line);
-    } catch {
-      // Opening evidence is best effort; an unreadable path never breaks the viewer.
-    }
-  };
-
-  /**
-   * Opens a file the evidence record actually lists. The page can never name an arbitrary path: the
-   * reader clicks a path the model was given, and only then does Dext leave for the editor.
-   */
-  const openEvidencePath = async (path: string): Promise<void> => {
-    try {
-      if (!options.openEvidence || !lastEvidence) return;
-      const known = lastEvidence.paths.includes(path) || lastEvidence.excerpted.includes(path);
-      if (!known || !isAllowedEvidencePath(path)) return;
-      await options.openEvidence(path);
-    } catch {
-      // Opening a file is best effort; an unreadable path never breaks the page.
     }
   };
 
@@ -988,11 +822,6 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
     },
     initialization: () => initializationService.snapshot,
     onInitializationChange: (listener: (state: ProjectInitializationState) => void): (() => void) => initializationService.subscribe(listener),
-    renderDiagram,
-    generateDiagram,
-    exportDiagram,
-    openDiagramEvidence,
-    openEvidencePath,
     checkKnowledge,
     openTopicEvidence,
     generateTopicDiagram,

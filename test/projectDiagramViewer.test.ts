@@ -6,16 +6,9 @@ import {
   isDiagramExportPayload,
   isTrustedHostMessage,
   isTrustedViewerMessage,
-  isViewerCommand,
-  resolveDiagramTarget
+  isViewerCommand
 } from "../src/projectDiagramViewer.js";
-import { projectDiagramScript, evidenceSummaryHtml } from "../src/webview/projectArchitectureView.js";
-import type { ProjectDiagram } from "../src/core/projectDiagram.js";
 
-const diagram = (id: string, version: number): ProjectDiagram => ({
-  schemaVersion: 1, id, title: id, kind: "architecture", version, updatedAt: version,
-  nodes: [{ id: "n", label: "N", role: "system", semanticIds: [], evidence: [] }], relations: []
-});
 
 describe("viewer message validation", () => {
   it("accepts only messages from the sandboxed frame with the matching session", () => {
@@ -28,7 +21,7 @@ describe("viewer message validation", () => {
 
   it("treats VS Code host messages as trusted and never accepts bridge-shaped messages from outside the frame", () => {
     const frame = { name: "frame" };
-    expect(isTrustedHostMessage(null, frame, { type: "projectDiagramRendered" })).toBe(true);
+    expect(isTrustedHostMessage(null, frame, { type: "projectReaderRendered" })).toBe(true);
     expect(isTrustedHostMessage(frame, frame, { type: "dext-diagram-export" })).toBe(false);
     expect(isTrustedHostMessage(null, frame, { __dext: "s1", type: "dext-diagram-export" })).toBe(false);
     expect(isTrustedHostMessage(null, frame, "text")).toBe(false);
@@ -39,13 +32,6 @@ describe("viewer message validation", () => {
     for (const command of ["eval", "reload", "", 1, null]) expect(isViewerCommand(command)).toBe(false);
   });
 
-  it("resolves diagram actions by stable id and semantic version", () => {
-    const diagrams = [diagram("view", 3), diagram("other", 1)];
-    expect(resolveDiagramTarget(diagrams, "view", 3)).toMatchObject({ ok: true, diagram: { id: "view" } });
-    expect(resolveDiagramTarget(diagrams, "view", 2)).toMatchObject({ ok: false });
-    expect(resolveDiagramTarget(diagrams, "missing", 1)).toMatchObject({ ok: false });
-    expect(resolveDiagramTarget(diagrams, "", 1)).toMatchObject({ ok: false });
-  });
 
   it("requires standalone HTML and script-free SVG for the displayed version", () => {
     expect(isDiagramExportPayload("html", "<!DOCTYPE html><html><body>x</body></html>", 2, 2)).toBe(true);
@@ -72,41 +58,6 @@ describe("viewer message validation", () => {
     expect(bridge).toContain("export-svg");
     expect(bridge).toContain("postMessage");
     expect(bridge).not.toContain("</script>");
-  });
-
-  it("ships the tested trust helpers in the parent bridge instead of a second copy", () => {
-    // The bridge runs inside a template string, so a hand-written duplicate of these rules could
-    // drift from what the unit tests above cover. It embeds the functions themselves.
-    const script = projectDiagramScript();
-    expect(script).toContain(isTrustedViewerMessage.toString());
-    expect(script).toContain(isTrustedHostMessage.toString());
-  });
-
-  it("shows clicked node details in the page and opens evidence only on request", () => {
-    const script = projectDiagramScript();
-    expect(script).toContain("showNodeDetails");
-    expect(script).toContain("data-diagram-evidence-path");
-    expect(script).toContain('type: "projectDiagramEvidence"');
-    // A card click must never ask the host to open a file on its own.
-    expect(script).not.toContain("projectDiagramFocus");
-  });
-
-  it("falls back to in-view focus mode when the webview refuses the Fullscreen API", () => {
-    const script = projectDiagramScript();
-    expect(script).toContain("requestFullscreen");
-    expect(script).toContain("diagram-focus");
-    expect(script).toContain("syncFullscreenControls");
-    expect(script).toContain("fullscreenchange");
-    expect(script).not.toContain("project-diagram-stage-fullscreen");
-  });
-
-  it("updates the evidence record live and opens a listed path only when clicked", () => {
-    const script = projectDiagramScript();
-    // The same renderer runs on the server and in the page, so a live update cannot drift.
-    expect(script).toContain(evidenceSummaryHtml.toString());
-    expect(script).toContain('message.type === "projectEvidenceSummary"');
-    expect(script).toContain('type: "projectEvidenceOpen"');
-    expect(script).toContain("data-evidence-path");
   });
 });
 

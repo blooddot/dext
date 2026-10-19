@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { architectureRuleReport, evaluateArchitectureRules } from "../src/core/projectArchitecture.js";
 import type { ProjectDiagram } from "../src/core/projectDiagram.js";
-import { renderArchitectureView } from "../src/webview/projectArchitectureView.js";
 
 function semanticDiagram(): ProjectDiagram {
   const evidence = [{ path: "src/a.ts", line: 1 }];
@@ -66,103 +65,5 @@ describe("architecture rules", () => {
 
     expect(architectureRuleReport([workflow], { rules: [deny] })?.note).toContain("no architecture diagram");
     expect(architectureRuleReport([architecture], { diagramId: "missing", rules: [deny] })?.note).toContain("missing");
-  });
-});
-
-describe("diagrams page", () => {
-  const summaries = [
-    { id: "d1", title: "订单流程", kind: "workflow" as const, version: 3, updatedAt: 1 },
-    { id: "d2", title: "示例架构", kind: "architecture" as const, version: 1, updatedAt: 2 }
-  ];
-
-  it("lists saved diagrams with per-diagram actions and no renderer preferences", () => {
-    const html = renderArchitectureView({ diagrams: summaries, selected: summaries[1]!, engine: { id: "archify", version: "2.17.0-dev.1+d673e830", available: true } });
-    expect(html).toContain("data-diagram-select");
-    expect(html).toContain('data-diagram-action="refresh"');
-    expect(html).toContain('data-diagram-action="export"');
-    expect(html).toContain('data-diagram-action="fullscreen"');
-    // The sandboxed viewer needs the fullscreen permission, and focus mode needs its own exit.
-    expect(html).toContain('allow="fullscreen"');
-    expect(html).toContain('data-diagram-action="exit-fullscreen"');
-    // A card click shows node details in place instead of jumping into an evidence file.
-    expect(html).toContain("data-diagram-node");
-    expect(html).toContain("data-diagram-node-evidence");
-    expect(html).toContain('data-diagram-action="close-node"');
-    expect(html).toContain("Workflow");
-    expect(html).not.toContain("data-project-adapter-select");
-    expect(html).not.toContain("Use recommended");
-    expect(html).not.toContain("Fallback:");
-  });
-
-  it("shows an empty state and a generation entry instead of a fake diagram", () => {
-    const html = renderArchitectureView({ diagrams: [] });
-    expect(html).toContain("No diagram generated yet");
-    expect(html).toContain("data-diagram-generate-new");
-    expect(html).toContain("data-diagram-empty");
-    expect(html).not.toContain("architecture-graph-scroll");
-    expect(html).not.toContain("data-module-id");
-  });
-
-  it("renders what the last evidence read handed the model, with clickable paths", () => {
-    const evidence = {
-      version: 1 as const, trigger: "initialize" as const, generatedAt: 1_700_000_000_000, inputHash: "hash",
-      selection: { scope: [], preset: "standard", files: 600, fileChars: 16_000, evidenceChars: 600_000 },
-      inventory: { total: 3, withSymbols: 2, byKind: { source: 3 } },
-      excerpts: { total: 2, truncated: 1, byKind: { source: 2 } },
-      omitted: { files: 1, objects: 0, knowledge: 0 },
-      coverage: ["Source text exceeds the limit."],
-      paths: ["src/app.ts", "src/core/deep.ts", "src/other.ts"],
-      excerpted: ["src/app.ts", "src/core/deep.ts"]
-    };
-    const html = renderArchitectureView({ diagrams: summaries, selected: summaries[1]!, evidence });
-    expect(html).toContain("data-diagram-evidence");
-    expect(html).toContain("data-evidence-scope");
-    expect(html).toContain("standard");
-    expect(html).toContain("built-in (README, documentation, manifests, source)");
-    expect(html).toContain("Read in full or in part (2)");
-    expect(html).toContain("Listed without an excerpt (1)");
-    expect(html).toContain('data-evidence-path="src/other.ts"');
-    expect(html).toContain("Source text exceeds the limit.");
-    // Without a record the section stays hidden instead of claiming a run that never happened.
-    expect(renderArchitectureView({ diagrams: summaries })).toContain('data-diagram-evidence hidden');
-  });
-
-  it("labels a last-good render with the version actually shown", () => {
-    const html = renderArchitectureView({
-      diagrams: summaries,
-      selected: summaries[1]!,
-      render: { diagramId: "d2", requestedVersion: 2, displayedVersion: 1, usedLastGood: true, status: "failed", issues: [] }
-    });
-    expect(html).toContain("v1");
-    expect(html).toContain("last successful result");
-  });
-
-  it("marks an uninitialized knowledge model without hiding saved diagrams", () => {
-    const html = renderArchitectureView({ diagrams: summaries, selected: summaries[1]!, knowledgeUninitialized: true });
-    expect(html).toContain("Project knowledge is not initialized");
-    expect(html).toContain("data-diagram-frame");
-  });
-
-  it("reports declared rules and their violations without claiming a baseline", () => {
-    const rules = [{ id: "no-ui-db", type: "deny" as const, from: "ui", to: "db", reason: "UI writes through the API." }];
-    const violations = [{ ruleId: "no-ui-db", nodeIds: ["ui", "db"], reason: "Denied architecture dependency." }];
-
-    const current = renderArchitectureView({ diagrams: summaries, selected: summaries[1]!, rules, violations });
-    expect(current).toContain("architecture-rules");
-    expect(current).toContain("no-ui-db");
-    expect(current).toContain("Violations (1)");
-    // Nothing was accepted as a baseline, so the current violations are not labelled as new ones.
-    expect(current).not.toContain("New violations");
-
-    const withBaseline = renderArchitectureView({ diagrams: summaries, selected: summaries[1]!, rules, violations, baselineViolations: violations });
-    expect(withBaseline).toContain("New violations (1)");
-    expect(withBaseline).toContain("Existing baseline violations (1)");
-
-    const noted = renderArchitectureView({ diagrams: [], rules, rulesNote: "Rules are declared but no architecture diagram is saved yet." });
-    expect(noted).toContain("no architecture diagram is saved yet");
-    expect(noted).not.toContain("architecture-violations");
-
-    // No rules, no violations and no note: the section is left out entirely.
-    expect(renderArchitectureView({ diagrams: summaries })).not.toContain("architecture-rules");
   });
 });

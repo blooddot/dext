@@ -1,24 +1,6 @@
 import { isProjectEvidencePath, isExcludedProjectEvidencePath } from "./core/projectAiGeneration.js";
-import type { ProjectDiagram } from "./core/projectDiagram.js";
 
 export { archifyViewerBridgeScript, VIEWER_COMMANDS, isTrustedViewerMessage, isTrustedHostMessage, isViewerCommand, type ViewerCommand } from "./webview/archifyBridge.js";
-
-export interface DiagramTargetResult {
-  ok: boolean;
-  diagram?: ProjectDiagram;
-  reason?: string;
-}
-
-/** Operations are addressed by diagram id and semantic version, never by list position. */
-export function resolveDiagramTarget(diagrams: readonly ProjectDiagram[], diagramId: unknown, version?: unknown): DiagramTargetResult {
-  if (typeof diagramId !== "string" || !diagramId.trim()) return { ok: false, reason: "A diagram id is required." };
-  const diagram = diagrams.find((candidate) => candidate.id === diagramId);
-  if (!diagram) return { ok: false, reason: "The diagram no longer exists." };
-  if (version !== undefined && (typeof version !== "number" || !Number.isInteger(version) || diagram.version !== version)) {
-    return { ok: false, reason: "The diagram version changed; select it again." };
-  }
-  return { ok: true, diagram };
-}
 
 /** Exported bytes must belong to the version currently shown; HTML must be a standalone document. */
 export function isDiagramExportPayload(format: unknown, content: unknown, expectedVersion: unknown, displayedVersion: unknown): boolean {

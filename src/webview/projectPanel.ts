@@ -1,7 +1,7 @@
 import type { ProjectObject } from "../core/projectKnowledge.js";
 import type { EditorTabState } from "../editorTabState.js";
 import type { ProjectInitializationState } from "../projectService.js";
-import type { ArchitectureViewInput } from "./projectArchitectureView.js";
+import type { ArchitectureViewInput } from "./projectArchitectureTypes.js";
 import type { ProjectEvidenceSettings } from "../core/projectEvidenceSettings.js";
 import type { ProjectWorkspaceSettings } from "../core/projectSettings.js";
 import { renderProjectSettings, projectSettingsScript } from "./projectSettingsView.js";

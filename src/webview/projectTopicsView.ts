@@ -1,6 +1,6 @@
 import { topicFingerprint, type ProjectTopic, type ProjectTopicCheck } from "../core/projectTopics.js";
 import type { ProjectDiagram } from "../core/projectDiagram.js";
-import type { ArchitectureViewInput } from "./projectArchitectureView.js";
+import type { ArchitectureViewInput } from "./projectArchitectureTypes.js";
 import { renderRules, renderDecisions } from "./projectArchitectureNotes.js";
 
 export const escapeProjectHtml = (value: string): string => value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character] ?? character);

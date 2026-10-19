@@ -46,19 +46,9 @@ try {
     if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails));
     return result.result.value;
   };
-  const viewerLayout = () => evaluateViewer(`(function(){
-    var canvas = document.querySelector('.diagram-container').getBoundingClientRect();
-    var svg = document.querySelector('.diagram-container > svg');
-    var bounds = svg.getBoundingClientRect();
-    var box = svg.viewBox.baseVal;
-    return { present: document.documentElement.getAttribute('data-present') === 'true',
-      width: innerWidth, height: innerHeight, canvasWidth: canvas.width, canvasHeight: canvas.height,
-      scale: Math.min(bounds.width / box.width, bounds.height / box.height) };
-  })()`);
-
   const bundle = await build({
     stdin: {
-      contents: 'export { renderEditorTabHtml } from "./src/editorTabHtml.ts"; export { renderProjectPanel } from "./src/webview/projectPanel.ts"; export { renderArchitectureView, projectDiagramScript, archifyViewerBridgeScript } from "./src/webview/projectArchitectureView.ts"; export { ArchifyAdapter } from "./src/core/archifyAdapter.ts";',
+      contents: 'export { renderEditorTabHtml } from "./src/editorTabHtml.ts"; export { renderProjectPanel } from "./src/webview/projectPanel.ts"; export { archifyViewerBridgeScript } from "./src/webview/archifyBridge.ts"; export { ArchifyAdapter } from "./src/core/archifyAdapter.ts";',
       resolveDir: process.cwd()
     },
     bundle: true, write: false, platform: "node", format: "esm"
@@ -96,6 +86,7 @@ try {
   };
   const adapter = new ui.ArchifyAdapter(resolve("vendor/project-diagrams/archify"));
   const htmlByKind = {};
+  const mappingByKind = {};
   for (const [kind, fixture] of Object.entries(fixtures)) {
     const document = await adapter.transform(fixture);
     const artifact = await adapter.render(document);
@@ -103,12 +94,20 @@ try {
     assert.ok(String(artifact.content).includes("<!DOCTYPE html>") || String(artifact.content).includes("<html"));
     assert.equal(/(?:src|href)=["']https?:/i.test(String(artifact.content)), false, `${kind}: the artifact must not reference remote resources`);
     htmlByKind[kind] = artifact.content;
+    mappingByKind[kind] = document.payload.mapping;
     console.log(`rendered ${kind}: ${String(artifact.content).length} bytes`);
   }
   const summaries = Object.entries(fixtures).map(([kind, value]) => ({ id: value.id, title: value.title, kind, version: value.version, updatedAt: value.updatedAt, review: "draft" }));
   const baseData = () => ({
-    overview: { name: "Dext", root: ".", objects: 0, accepted: 0, drafts: 0, needsVerification: 0, initialization: { status: "uninitialized", drafts: 0, intentGenerated: false, diagramsGenerated: 0 } },
+    overview: { name: "Dext", root: ".", objects: 0, accepted: 0, drafts: 0, needsVerification: 0, initialization: { status: "uninitialized", intentGenerated: false, diagramsGenerated: 0 } },
     objects: [],
+    readerDiagrams: Object.values(fixtures),
+    knowledge: { topics: Object.values(fixtures).map(value => ({
+      id: value.id, title: value.title, kind: "context", description: "Saved diagram fixture",
+      responsibilities: [], entryPoints: [], steps: [], constraints: [], evidence: value.nodes.flatMap(node => node.evidence),
+      diagrams: [{ id: value.id, title: value.title }], review: "draft", diagram: value,
+      sections: value.nodes.map(node => ({ id: node.id, title: node.label, description: "Diagram element", evidence: node.evidence, relatedTopicIds: [] }))
+    })) },
     architecture: {
       diagrams: summaries, selected: summaries[0], knowledgeUninitialized: true,
       engine: { id: "archify", version: adapter.version, available: true }, decisions: [],
@@ -121,10 +120,15 @@ try {
   const artifacts = resolve(".tmp-tb/project-diagrams-ui");
   await mkdir(artifacts, { recursive: true });
 
+  const readerBundle = await build({ entryPoints: ["src/webview/projectReader.ts"], bundle: true, write: false, platform: "browser", format: "iife" });
+  const readerScript = readerBundle.outputFiles[0].text;
   let panelPage = "";
   let probePage = "";
   server = createServer(async (request, response) => {
     const url = request.url ?? "/";
+    if (url.startsWith("/project.js")) {
+      response.setHeader("Content-Type", "application/javascript"); response.end(readerScript); return;
+    }
     // The page stylesheet is a real asset: serving it here is what makes the layout assertions count.
     if (url.startsWith("/editorTabs.css")) {
       response.setHeader("Content-Type", "text/css; charset=utf-8");
@@ -137,185 +141,67 @@ try {
   await new Promise((done) => server.listen(0, "127.0.0.1", done));
   const origin = `http://127.0.0.1:${server.address().port}`;
 
-  const loadPanel = async (page, data) => {
-    const styleUrl = `${origin}/editorTabs.css`;
+  const wait = async (expression, label) => {
+    for (let i = 0; i < 200; i++) { if (await evaluate(expression)) return; await sleep(50); }
+    throw new Error(label);
+  };
+  await send("Runtime.enable");
+  await send("Runtime.addBinding", { name: "projectHostMessage" });
+  socket.addEventListener("message", async ({ data }) => {
+    const event = JSON.parse(data);
+    if (event.method !== "Runtime.bindingCalled" || event.params.name !== "projectHostMessage") return;
+    const request = JSON.parse(event.params.payload);
+    if (request.type !== "projectReaderRender") return;
+    const entry = Object.entries(fixtures).find(([, value]) => value.id === request.diagramId && value.updatedAt === request.updatedAt);
+    const response = { ...request, type: "projectReaderRendered", ...(entry
+      ? { html: htmlByKind[entry[0]], mapping: mappingByKind[entry[0]] }
+      : { error: "Unknown fixture snapshot" }) };
+    await evaluate('window.dispatchEvent(new MessageEvent("message",{data:' + JSON.stringify(response) + '}))');
+  });
+  const loadPanel = async (page, data, topic = summaries[0].id) => {
+    data = { ...data, architecture: { ...data.architecture, selected: data.architecture.diagrams.find(diagram => diagram.id === topic) } };
     panelPage = ui.renderEditorTabHtml(
-      // VS Code allows one acquireVsCodeApi() per webview document and throws on a second call,
-      // so the stub enforces the same rule: a page script that acquires it twice fails here.
-      '<script>window.messages=[];window.__apiAcquired=0;window.acquireVsCodeApi=function(){if(window.__apiAcquired++)throw new Error("An instance of the VS Code API has already been acquired");return {postMessage:message=>messages.push(message)};};window.__fromFrame=[];window.addEventListener("message",function(event){var frame=document.querySelector("[data-diagram-frame]");if(frame&&event.source===frame.contentWindow)window.__fromFrame.push(event.data);});</script>'
-      + (page === "architecture" ? `<div class="project-panel">${ui.renderArchitectureView(data.architecture)}</div><script>window.__dextApi=acquireVsCodeApi();</script>${ui.projectDiagramScript()}` : ui.renderProjectPanel(page, data)),
-      styleUrl,
-      origin,
-      { embedFrames: true }
+      '<script>window.messages=[];window.violations=[];document.addEventListener("securitypolicyviolation",e=>violations.push(e.violatedDirective));window.__apiAcquired=0;window.state={filters:{topic:' + JSON.stringify(topic) + '}};window.acquireVsCodeApi=function(){if(window.__apiAcquired++)throw new Error("VS Code API acquired twice");return {postMessage:m=>{messages.push(m);projectHostMessage(JSON.stringify(m));},getState:()=>state,setState:s=>{state=s}};};</script>'
+      + ui.renderProjectPanel(page, data),
+      origin + "/editorTabs.css", origin, { embedFrames: true, scriptUri: origin + "/project.js" }
     );
-    await send("Page.navigate", { url: `${origin}/?${Date.now()}` });
-    for (let index = 0; index < 100; index++) {
-      if (await evaluate('document.readyState === "complete" && !!document.querySelector(".project-panel")')) return;
-      await sleep(30);
-    }
-    throw new Error("Project panel did not load");
+    await send("Page.navigate", { url: origin + "/?" + Date.now() });
+    await wait('document.readyState === "complete" && !!document.querySelector(".project-panel")', "Project panel did not load");
   };
-  const waitForFrameMessage = async (predicate, label) => {
-    for (let index = 0; index < 200; index++) {
-      if (await evaluate(`window.__fromFrame.some(function(message){ return ${predicate}; })`)) return;
-      await sleep(50);
-    }
-    throw new Error(`Timeout waiting for iframe message: ${label}`);
-  };
-  const waitForHostMessage = async (predicate, label) => {
-    for (let index = 0; index < 200; index++) {
-      if (await evaluate(`window.messages.some(function(message){ return ${predicate}; })`)) return;
-      await sleep(50);
-    }
-    throw new Error(`Timeout waiting for host message: ${label}`);
-  };
-
-  // 1. Uninitialized overview
   await loadPanel("overview", baseData());
-  assert.equal(await evaluate('document.querySelector("[data-project-initialization-state]").getAttribute("data-project-initialization-state")'), "uninitialized");
+  assert.equal(await evaluate('document.querySelector("[data-project-initialization-state]").dataset.projectInitializationState'), "uninitialized");
   assert.equal(await evaluate('!!document.querySelector("[data-project-initialize]")'), true);
-  assert.equal(await evaluate('!document.querySelector("[data-project-choose-roots]") && !/scan folder/i.test(document.body.textContent)'), true);
-
-  // 2. Five kinds are listed, old renderer controls are gone
-  await loadPanel("architecture", baseData());
-  assert.equal(await evaluate('document.querySelectorAll("[data-diagram-select] option").length'), 5);
-  for (const kind of ["Architecture", "Workflow", "Sequence", "Data flow", "Lifecycle"]) {
-    assert.equal(await evaluate(`document.body.textContent.includes(${JSON.stringify(kind)})`), true, `missing ${kind}`);
+  // Exercise the actual Project reader and its request/response bridge for every native kind.
+  for (const [kind, value] of Object.entries(fixtures)) {
+    await loadPanel("architecture", baseData(), value.id);
+    await wait('document.querySelector("[data-reader-canvas]")?.dataset.state === "ready"', kind + ": reader did not render");
+    assert.equal(await evaluate('document.querySelector("[data-reader-article] h2").textContent'), value.title);
+    assert.equal(await evaluate('document.querySelector("[data-reader-canvas]").dataset.renderer'), "archify");
+    assert.equal(await evaluateViewer('!!document.querySelector("svg")'), true);
+    assert.equal(await evaluate('document.querySelector("iframe").getAttribute("sandbox")'), "allow-scripts");
+    assert.deepEqual(await evaluate('window.violations'), [], kind + ": no CSP violations");
+    await evaluate('document.querySelector("[data-reader-export]").click()');
+    await wait('messages.some(m=>m.type==="projectReaderExport")', kind + ": export");
+    const exported = await evaluate('messages.find(m=>m.type==="projectReaderExport")');
+    assert.equal(exported.diagramId, value.id);
+    assert.equal(exported.updatedAt, value.updatedAt);
+    assert.match(exported.content, /<svg/);
+    await writeFile(join(artifacts, kind + "-reader.png"), Buffer.from((await send("Page.captureScreenshot")).data, "base64"));
   }
-  assert.equal(await evaluate('document.body.textContent.includes("Use recommended") || document.body.textContent.includes("Fallback:") || !!document.querySelector("[data-project-adapter-select]")'), false);
-  assert.equal(await evaluate('document.body.textContent.includes("Project knowledge is not initialized")'), true);
-
-  // 2b. Declared rules render with their violations, escaped, and without claiming a baseline
-  assert.equal(await evaluate('!!document.querySelector(".architecture-rules")'), true, "rules section");
-  assert.equal(await evaluate('document.querySelectorAll(".architecture-rule").length'), 1);
-  assert.equal(await evaluate('document.querySelectorAll(".architecture-violations li").length'), 1);
-  assert.equal(await evaluate('document.body.textContent.includes("Violations (1)")'), true);
-  assert.equal(await evaluate('document.body.textContent.includes("New violations")'), false, "no baseline was supplied");
-  assert.equal(await evaluate('document.querySelectorAll(".architecture-rules script").length'), 0, "rule ids are escaped");
-  assert.equal(await evaluate('document.querySelector(".architecture-rule code").textContent'), "no-ui-db<script>");
-
-  // 3. Rendered HTML bridge: fonts, explorer, export, version banner
-  const postRendered = async (kind, options = {}) => {
-    const value = fixtures[kind];
-    await evaluate('window.__fromFrame = []');
-    // The host sends one detail record per node so a card click can render in place.
-    const nodes = value.nodes.map((entry) => ({
-      id: entry.id, label: entry.label, role: entry.role, semanticIds: [],
-      description: `描述 ${entry.id}`,
-      evidence: [{ path: `src/${entry.id}.ts`, line: 1 }]
-    }));
-    await evaluate(`window.postMessage({type:"projectDiagramRendered",diagramId:${JSON.stringify(value.id)},requestedVersion:${options.requestedVersion ?? value.version},displayedVersion:${options.displayedVersion ?? value.version},usedLastGood:${Boolean(options.usedLastGood)},html:${JSON.stringify(htmlByKind[kind])},mapping:{reverseIds:{"n-1":"${value.nodes[0].id}"}},nodes:${JSON.stringify(nodes)},receipt:{status:"passed",issues:[]},updatedAt:Date.now()${options.error ? `,error:${JSON.stringify(options.error)}` : ""}},"*")`);
-    await waitForFrameMessage('message && message.type === "dext-diagram-ready"', `ready for ${kind}`);
-    const ready = await evaluate('window.__fromFrame.find(function(message){return message.type==="dext-diagram-ready";})');
-    assert.equal(ready.archify, true, `${kind}: Archify global`);
-    assert.equal(ready.fonts, true, `${kind}: bundled fonts`);
-  };
-  await postRendered("architecture");
-  assert.equal(await evaluate('!document.querySelector("[data-diagram-frame]").hidden'), true);
-
-  // 3b. Fullscreen: the webview host refuses the Fullscreen API, so focus mode must fill the view
-  // and always offer a way back out.
-  await send("Emulation.setDeviceMetricsOverride", { width: 2048, height: 1080, deviceScaleFactor: 1, mobile: false });
-  await sleep(200);
-  const normalLayout = await viewerLayout();
-  await evaluate('document.querySelector("[data-diagram-stage]").requestFullscreen = function(){return Promise.reject(new Error("Fullscreen is unavailable in the webview"));}');
-  assert.equal(await evaluate('document.querySelector("[data-diagram-frame]").getAttribute("allow")'), "fullscreen");
-  await evaluate('document.querySelector("[data-diagram-action=fullscreen]").click()');
-  await sleep(200);
-  assert.equal(await evaluate('document.querySelector("[data-diagram-action=fullscreen]").textContent'), "Exit fullscreen", "fullscreen label");
-  assert.equal(await evaluate('!document.querySelector("[data-diagram-action=exit-fullscreen]").hidden'), true, "in-view exit control");
-  const focused = await evaluate('document.body.classList.contains("diagram-focus") || document.fullscreenElement !== null');
-  assert.equal(focused, true, "fullscreen mode engaged");
-  const fullscreenLayout = await viewerLayout();
-  assert.equal(fullscreenLayout.present, true, "fullscreen also expands the inner renderer");
-  assert.ok(fullscreenLayout.canvasWidth > fullscreenLayout.width * 0.95, "diagram canvas fills the wide viewport");
-  assert.ok(fullscreenLayout.canvasHeight > fullscreenLayout.height * 0.8, "diagram canvas uses the available height");
-  assert.ok(fullscreenLayout.scale > normalLayout.scale, "the diagram itself grows, not only its iframe");
-  await postRendered("architecture");
-  await sleep(200);
-  assert.equal((await viewerLayout()).present, true, "reloaded diagram keeps the fullscreen layout");
-  // The exit control must be legible and clickable on top of the viewer, not just present in the DOM.
-  assert.equal(await evaluate('(function(){var b=document.querySelector("[data-diagram-action=exit-fullscreen]");var r=b.getBoundingClientRect();var top=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);var s=getComputedStyle(b);return top===b && r.width>0 && r.height>0 && s.color!=="rgba(0, 0, 0, 0)" && s.backgroundColor!=="rgba(0, 0, 0, 0)";})()'), true, "exit control is hit-testable");
-  await writeFile(join(artifacts, "architecture-fullscreen.png"), Buffer.from((await send("Page.captureScreenshot")).data, "base64"));
-  await evaluate('document.querySelector("[data-diagram-action=exit-fullscreen]").click()');
-  await sleep(200);
-  assert.equal(await evaluate('document.querySelector("[data-diagram-action=fullscreen]").textContent'), "Fullscreen", "fullscreen label restored");
-  assert.equal(await evaluate('document.body.classList.contains("diagram-focus") || document.fullscreenElement !== null'), false, "fullscreen mode left");
-  assert.equal((await viewerLayout()).present, false, "ordinary reader layout restored on exit");
-  await send("Emulation.clearDeviceMetricsOverride");
-
-  // 3c. Clicking a card shows node details in the page; opening a file stays an explicit choice.
-  await evaluate('window.postMessage({type:"dext-diagram-node",nodeId:"web"},"*")');
-  await sleep(100);
-  assert.equal(await evaluate('!document.querySelector("[data-diagram-node]").hidden'), true, "node panel visible");
-  assert.equal(await evaluate('document.querySelector("[data-diagram-node-label]").textContent'), "Web 前端");
-  assert.equal(await evaluate('document.querySelector("[data-diagram-node]").textContent.includes("描述 web")'), true);
-  assert.equal(await evaluate('document.querySelectorAll("[data-diagram-evidence-path]").length'), 1);
-  const nodeClip = await evaluate('(function(){var r=document.querySelector("[data-diagram-node]").getBoundingClientRect();return {x:Math.max(0,r.x+scrollX),y:Math.max(0,r.y+scrollY),width:r.width,height:r.height};})()');
-  await writeFile(join(artifacts, "architecture-node.png"), Buffer.from((await send("Page.captureScreenshot", { clip: { ...nodeClip, scale: 1 } })).data, "base64"));
-  assert.equal(await evaluate('window.messages.some(function(message){return message.type==="projectDiagramFocus";})'), false, "a card click never opens a file");
-  await evaluate('document.querySelector("[data-diagram-evidence-path]").click()');
-  await waitForHostMessage('message.type === "projectDiagramEvidence" && message.path === "src/web.ts"', "evidence action");
-  assert.equal(await evaluate('document.querySelector("[data-diagram-action=close-node]").click(); document.querySelector("[data-diagram-node]").hidden'), true, "node panel closes");
-
-  // 3d. The evidence record is inspectable, and a listed path opens only when the reader clicks it.
-  const evidenceRecord = {
-    version: 1, trigger: "initialize", generatedAt: Date.now(), inputHash: "hash",
-    selection: { scope: [], preset: "standard", files: 600, fileChars: 16000, evidenceChars: 600000 },
-    inventory: { total: 3, withSymbols: 2, byKind: { source: 3 } },
-    excerpts: { total: 2, truncated: 1, byKind: { source: 2 } },
-    omitted: { files: 1, objects: 0, knowledge: 0 },
-    coverage: ["Source text exceeds the limit."],
-    paths: ["src/web.ts", "src/api.ts", "src/db.ts"],
-    excerpted: ["src/web.ts", "src/api.ts"]
-  };
-  assert.equal(await evaluate('document.querySelector("[data-diagram-evidence]").hidden'), true, "no record before a run");
-  await evaluate(`window.postMessage({type:"projectEvidenceSummary",summary:${JSON.stringify(evidenceRecord)}},"*")`);
-  await sleep(100);
-  assert.equal(await evaluate('!document.querySelector("[data-diagram-evidence]").hidden'), true, "evidence record shows");
-  assert.equal(await evaluate('document.body.textContent.includes("Read in full or in part (2)")'), true, "excerpt count");
-  assert.equal(await evaluate('document.body.textContent.includes("Listed without an excerpt (1)")'), true, "listed-only count");
-  assert.equal(await evaluate('document.querySelectorAll("[data-evidence-path]").length'), 3);
-  assert.equal(await evaluate('window.messages.some(function(message){return message.type==="projectEvidenceOpen";})'), false, "a listed path opens nothing on its own");
-  await evaluate('document.querySelector("[data-evidence-path=\\"src/db.ts\\"]").click()');
-  await waitForHostMessage('message.type === "projectEvidenceOpen" && message.path === "src/db.ts"', "evidence path open");
-  await evaluate('document.querySelector("[data-diagram-evidence]").open = true');
-  await sleep(100);
-  assert.equal(await evaluate('document.querySelector("[data-evidence-scope]").textContent.includes("Depth standard") && document.querySelector("[data-evidence-scope]").textContent.includes("600000 chars")'), true, "scope and budgets shown");
-  assert.equal(await evaluate('document.querySelector("[data-diagram-evidence]").textContent.includes("3 candidates (source 3)")'), true, "inventory facts shown");
-  await writeFile(join(artifacts, "architecture-evidence.png"), Buffer.from((await send("Page.captureScreenshot")).data, "base64"));
-  await evaluate('document.querySelector("[data-diagram-export-format]").value="svg";document.querySelector("[data-diagram-action=export]").click()');
-  await waitForHostMessage('message.type === "projectDiagramExport" && message.format === "svg"', "SVG export");
-  const svgExport = await evaluate('window.messages.find(function(message){return message.type==="projectDiagramExport"&&message.format==="svg";})');
-  assert.ok(svgExport.content.trimStart().startsWith("<svg"), "native SVG serialization captured");
-  assert.ok(svgExport.content.includes("@font-face"), "SVG export keeps bundled fonts");
-  await evaluate('document.querySelector("[data-diagram-export-format]").value="html";document.querySelector("[data-diagram-action=export]").click()');
-  await waitForHostMessage('message.type === "projectDiagramExport" && message.format === "html"', "HTML export");
-  await postRendered("architecture", { usedLastGood: true, displayedVersion: 1, requestedVersion: 2, error: "layout failed" });
-  await sleep(200);
-  assert.equal(await evaluate('document.body.textContent.includes("v1") && document.body.textContent.includes("last successful result")'), true);
-  await writeFile(join(artifacts, "architecture-viewer.png"), Buffer.from((await send("Page.captureScreenshot")).data, "base64"));
-
-  // 4. Remaining kinds render natively
-  for (const kind of ["workflow", "sequence", "data_flow", "lifecycle"]) await postRendered(kind);
-
-  // 5. Empty state and no fake diagram
-  const emptyData = baseData();
-  emptyData.architecture = { diagrams: [], engine: { id: "archify", version: adapter.version, available: true } };
-  await loadPanel("architecture", emptyData);
-  assert.equal(await evaluate('!!document.querySelector("[data-diagram-empty]")'), true);
-  assert.equal(await evaluate('document.body.textContent.includes("No diagram generated yet")'), true);
-  assert.equal(await evaluate('!!document.querySelector("[data-diagram-frame]") && !document.querySelector("[data-diagram-frame]").hidden'), false);
-
-  // 6. CSP contains the viewer sources required by the sandboxed artifact
-  const csp = await evaluate('document.querySelector("meta[http-equiv=\\"Content-Security-Policy\\"]").content');
-  assert.ok(csp.includes("frame-src 'self'"), `viewer CSP allows the sandboxed frame: ${csp}`);
-  assert.ok(csp.includes("font-src data:"), `viewer CSP allows bundled fonts: ${csp}`);
-  assert.ok(csp.includes("img-src data: blob:"), `viewer CSP allows serialized images: ${csp}`);
-
-  // 7. Narrow window has no horizontal overflow
+  await evaluate('document.querySelector("[data-reader-home]").click()');
+    assert.equal(await evaluate('document.querySelectorAll(".architecture-rule").length'), 1);
+    assert.equal(await evaluate('document.querySelector(".architecture-rule code").textContent'), "no-ui-db<script>");
+    assert.equal(await evaluate('document.querySelectorAll(".architecture-rules script").length'), 0);
+  const empty = baseData();
+  empty.knowledge = { topics: [] }; empty.readerDiagrams = []; empty.architecture.diagrams = [];
+  await loadPanel("architecture", empty);
+  assert.equal(await evaluate('!!document.querySelector("iframe")'), false, "empty project has no fake diagram");
+  const csp = await evaluate('document.querySelector("meta[http-equiv]").content');
+  assert.ok(csp.includes("frame-src 'self'"));
+  assert.ok(csp.includes("font-src data:"));
   await send("Emulation.setDeviceMetricsOverride", { width: 360, height: 800, deviceScaleFactor: 1, mobile: false });
   await loadPanel("architecture", baseData());
+  await wait('document.querySelector("[data-reader-canvas]")?.dataset.state === "ready"', "narrow reader");
   assert.equal(await evaluate("document.documentElement.scrollWidth <= innerWidth"), true);
   await send("Emulation.clearDeviceMetricsOverride");
 
@@ -358,7 +244,7 @@ try {
   assert.equal(resetResult.zoom, probeReady.zoom, "native reset restores the initial scale");
   await writeFile(join(artifacts, "native-viewer.png"), Buffer.from((await send("Page.captureScreenshot")).data, "base64"));
 
-  console.log("PASS: five native Archify diagram kinds under the webview CSP; uninitialized/empty states; diagram selection; fullscreen focus mode; in-place node details with explicit evidence actions; native fonts, finder, zoom and reset; HTML/SVG export bridge; last-good version labelling; narrow layout. Screenshots: .tmp-tb/project-diagrams-ui");
+  console.log("PASS: current Project reader displays and exports five native Archify diagram kinds under CSP; escaped architecture rules; empty and narrow layouts; native fonts, finder, zoom and reset. Screenshots: .tmp-tb/project-diagrams-ui");
 } finally {
   server?.close();
   try { await shutdown?.(); } catch {}

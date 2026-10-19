@@ -54,10 +54,9 @@ describe("project initialization output", () => {
     expect(output).toContain("AI analysis attempt failed: Codex CLI exited with code 1");
   });
 
-  it("records what the model was given and never opens a path the record does not list", async () => {
+  it("persists the evidence record even when generation fails", async () => {
     const { createProjectPanelDataSource } = await import("../src/vscodeProjectHost.js");
     const written: unknown[] = [];
-    const opened: string[] = [];
     const summary = {
       version: 1, trigger: "initialize", generatedAt: 7, inputHash: "hash",
       selection: { scope: ["src/**"], preset: "standard", files: 600, fileChars: 16_000, evidenceChars: 600_000 },
@@ -80,7 +79,6 @@ describe("project initialization output", () => {
         writeEvidenceSummary: async (value) => { written.push(value); }
       },
       readEvidence: async () => evidence(),
-      openEvidence: async (path) => { opened.push(path); },
       projectAiProvider: failingProvider()
     });
 
@@ -92,12 +90,7 @@ describe("project initialization output", () => {
     const loaded = await dataSource.load();
     expect(loaded.architecture.evidence).toMatchObject({ inputHash: "hash", paths: ["src/app.ts", "src/deep/other.ts"] });
 
-    await dataSource.openEvidencePath?.("src/app.ts");
-    expect(opened).toEqual(["src/app.ts"]);
-    // A path the model never saw, and an unsafe one, are both refused.
-    await dataSource.openEvidencePath?.("src/secret.ts");
-    await dataSource.openEvidencePath?.("../outside.ts");
-    expect(opened).toEqual(["src/app.ts"]);
+
   });
 
   it("surfaces a removed scan profile instead of silently ignoring the configured roots", async () => {
