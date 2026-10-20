@@ -133,6 +133,22 @@ describe("API editor tab", () => {
     await provider.handleMessage(provider.listTabKey, { type: "resourceNavigate", direction: "back" });
     expect(host.created[0]!.panel.html).toContain('data-resource-search');
   });
+
+  it("does not let a slow detail overwrite a later list navigation", async () => {
+    const { host, manager, restorer } = setup();
+    const source = dataSource();
+    let finish!: (value: Awaited<ReturnType<ResourceEditorDataSource["definition"]>>) => void;
+    source.definition = () => new Promise(resolve => { finish = resolve; });
+    const provider = new ApiEditorProvider({ manager, restorer, dataSource: source, scope: "project" });
+    const pending = provider.showDetail("api:project:Task.Query");
+    await provider.showList("User");
+    const html = host.created[0]!.panel.html;
+    finish({ entry: apiEntry("Task.Query"), content: "late detail" });
+    await pending;
+    expect(host.created).toHaveLength(1);
+    expect(host.created[0]!.panel.html).toBe(html);
+    expect(html).toContain('data-resource-search value="User"');
+  });
 });
 
 describe("Global Resources editor tab", () => {
