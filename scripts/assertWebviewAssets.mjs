@@ -1,3 +1,4 @@
+import { checkBrowserMetafile } from "./checkModuleBoundaries.mjs";
 import assert from "node:assert/strict";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -179,3 +180,6 @@ for (const forbidden of ["vendor/project-diagrams/drawio", "dist/build-meta.json
     `'${forbidden}' must not be distributed in the VSIX.`
   );
 }
+
+const boundaryErrors = checkBrowserMetafile(buildMeta.metafiles.webview);
+if (boundaryErrors.length) throw new Error(boundaryErrors.join("\n"));
