@@ -392,3 +392,19 @@ describe("structure-driven AI generation", () => {
     expect(calls).toBe(1);
   });
 });
+
+it("discovers literal browser entries without executing build scripts and records gaps", async () => {
+  const { browserBuildEntries } = await import("../src/features/project/host/indexing/projectStructureKnowledge.js");
+  const found = browserBuildEntries('throw new Error("must not run"); build({ platform: "browser", entryPoints: { main: "src/chat.ts", project: "src/project.ts", dynamic: entries } }); build({platform:"node",entryPoints:["src/host.ts"]});');
+  expect(found.paths).toEqual(["src/chat.ts", "src/project.ts"]);
+  expect(found.gaps).toContain("Nonliteral browser entry was omitted.");
+});
+
+it("reads injected API, sending, and receiving as separate original-line windows", async () => {
+  const { runtimeEvidenceWindows } = await import("../src/features/project/host/indexing/projectStructureKnowledge.js");
+  const source = 'interface Api { postMessage(message: unknown): void; }\nconst api = (window as Window & { __dextApi?: Api }).__dextApi;\n' + '// gap\n'.repeat(100) + 'api.postMessage({ type: "ready" });\n' + '// gap\n'.repeat(100) + 'window.addEventListener("message", receive);';
+  const index = await buildStructureIndex([{ path: "src/view.ts", content: source }]);
+  const windows = runtimeEvidenceWindows(source, index.cache.files[0]!, 180);
+  expect(windows.map(window => window.category)).toEqual(expect.arrayContaining(["client", "send", "receive"]));
+  expect(windows.find(window => window.category === "receive")!.startLine).toBeGreaterThan(190);
+});

@@ -245,3 +245,24 @@ describe("project evidence selection", () => {
     expect(packaged.files.some((file) => file.path === "README.md")).toBe(true);
   }, 60_000);
 });
+
+it("preserves separate chat and injected Project reader communication alongside renderer and MCP evidence", async () => {
+  const { readWorkspaceEvidence } = await import("../src/features/project/host/indexing/workspaceEvidence.js");
+  const fixtures: Record<string, string> = {
+    "esbuild.mjs": 'build({platform:"browser",entryPoints:{chat:"src/chat.ts",project:"src/projectEntry.ts"}});',
+    "src/chat.ts": 'const api = acquireVsCodeApi();\napi.postMessage({type:"ready"});\nwindow.addEventListener("message", receive);',
+    "src/projectEntry.ts": 'import { start } from "./projectReader";\nconst api = (window as Window & { __dextApi?: Api }).__dextApi;\nstart(api);',
+    "src/projectReader.ts": 'export function start(api) { api.postMessage({type:"projectReaderRender"}); }\n' + '// gap\n'.repeat(180) + 'window.addEventListener("message", receiveProject);',
+    "src/projectHost.ts": 'import * as vscode from "vscode";\nwebview.onDidReceiveMessage(handleProject);',
+    "src/renderer.ts": 'import { spawn } from "node:child_process";\nexport function render() { return runToolProcess(process.execPath, [join(runtimeRoot, "bin/render.mjs")]); }',
+    "src/mcp.ts": 'import { spawn } from "node:child_process";\nexport function run() { spawn("mcp"); }\n' + '// gap\n'.repeat(150) + 'if (transport === "http") fetch(serverUrl);'
+  };
+  for (const [path, content] of Object.entries(fixtures)) { files.set(path, content); tree.sources.push(path); }
+  try {
+    const evidence = await readWorkspaceEvidence({ scheme: "file", fsPath: "C:/ws", path: "/C:/ws" } as never, {}, { mode: "index", include: ["src/**"] });
+    const text = evidence.files.map(file => file.text).join("\n");
+    for (const marker of ["acquireVsCodeApi()", "__dextApi", "projectReaderRender", "receiveProject", "handleProject", "runToolProcess", "fetch(serverUrl)"]) expect(text).toContain(marker);
+    const narrow = await readWorkspaceEvidence({ scheme: "file", fsPath: "C:/ws", path: "/C:/ws" } as never, {}, { mode: "index", include: ["src/**"], maxEvidenceChars: 12000 });
+    expect(narrow.coverage.join(" ")).toContain("omitted");
+  } finally { for (const path of Object.keys(fixtures)) files.delete(path); tree.sources.splice(-Object.keys(fixtures).length); }
+});

@@ -7,7 +7,7 @@ import type { ProjectInitializationProgressListener } from "../../contracts/life
 import { attachProjectStructure, buildProjectEvidencePackage, compareProjectEvidencePaths, isExcludedProjectEvidencePath, isProjectEvidencePath, PROJECT_BUILD_CONFIG_PATH, projectEvidenceFileKind, type ProjectEvidenceFileInput, type ProjectKnowledgeReference } from "../generation/projectAiGeneration.js";
 import type { ProjectEvidenceReadOptions } from "../projectPanelDataSource.js";
 import { buildStructureIndex, PROJECT_STRUCTURE_VERSION, structureCacheSchema, type StructureInput } from "./projectStructure.js";
-import { runtimeEvidenceCandidates, runtimeEvidenceWindows } from "./projectStructureKnowledge.js";
+import { browserBuildEntries, runtimeEvidenceCandidates, runtimeEvidenceWindows } from "./projectStructureKnowledge.js";
 
 export async function indexedRelatedPaths(cachePath: string | undefined, preferred: ReadonlySet<string>): Promise<string[]> {
   if (!cachePath) return [];
@@ -31,6 +31,8 @@ export async function readProjectStructureEvidence(root: vscode.Uri, candidates:
   }
   let completed = 0;
   const boundaryPaths = new Set<string>();
+  const browserEntries = new Set<string>();
+  const buildGaps: string[] = [];
   async function* inputs(): AsyncGenerator<StructureInput> {
     for (const uri of found) {
       signal?.throwIfAborted();
@@ -40,12 +42,17 @@ export async function readProjectStructureEvidence(root: vscode.Uri, candidates:
         if (stat.size > (options.maxFileBytes ?? 2_000_000)) { yield { path, issue: "Exceeds the per-file indexing size limit" }; continue; }
         const content = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
         const kind = projectEvidenceFileKind(path);
+        if (PROJECT_BUILD_CONFIG_PATH.test(path)) {
+          const entries = browserBuildEntries(content);
+          entries.paths.forEach(entry => browserEntries.add(entry.replace(/^\.\//, "")));
+          buildGaps.push(...entries.gaps.map(gap => path + ": " + gap));
+        }
         // Background excerpts are selected here; runtime source reads follow the complete index.
         if (kind !== "source" && excerptChars < evidenceChars / 3) {
           const text = content.slice(0, Math.min(options.maxFileChars ?? 8000, 8000, evidenceChars / 3 - excerptChars));
           excerpts.push({ path, content, kind, excerptStartLine: 1, excerptEndLine: Math.max(1, text.split("\n").length - Number(text.length < content.length)) }); excerptChars += text.length;
         }
-        if (/\b(?:acquireVsCodeApi|run\w*Process)\s*\(|\bextensionUri\b/.test(content)) boundaryPaths.add(path);
+        if (/\b(?:acquireVsCodeApi|postMessage|onDidReceiveMessage|handleMessage|run\w*Process)\s*\(|\bextensionUri\b|\b__dextApi\b/.test(content)) boundaryPaths.add(path);
         // Build scripts provide deployment evidence, not application knowledge ownership.
         if (!PROJECT_BUILD_CONFIG_PATH.test(path)) yield { path, content };
       } catch (error) {
@@ -63,19 +70,37 @@ export async function readProjectStructureEvidence(root: vscode.Uri, candidates:
   const byPath = new Map(found.map(uri => [pathOf(uri), uri]));
   const sourceBudget = Math.floor(evidenceChars * 0.15);
   // Overview needs boundary coverage, not the module-analysis preset's long excerpts.
-  const sourceExcerptChars = Math.min(options.maxFileChars ?? 8000, 1400, Math.max(64, Math.floor(sourceBudget / 3) - 300));
+  const sourceExcerptChars = Math.min(options.maxFileChars ?? 8000, 900, Math.max(64, Math.floor(sourceBudget / 3) - 300));
   let sourceChars = 0;
-  const sourceIssues: string[] = [];
+  const sourceIssues: string[] = [...buildGaps];
   const primary: ProjectEvidenceFileInput[] = [];
   const supplemental: ProjectEvidenceFileInput[] = [];
   const deployment: Array<ProjectEvidenceFileInput & { category: string }> = [];
   const addExcerpt = (excerpt: ProjectEvidenceFileInput, budget = sourceBudget): boolean => {
+    if (excerpts.some(item => item.path === excerpt.path && item.excerptStartLine === excerpt.excerptStartLine && item.excerptEndLine === excerpt.excerptEndLine)) return true;
     const text = excerpt.content.split("\n").slice(excerpt.excerptStartLine! - 1, excerpt.excerptEndLine).join("\n");
     const cost = Math.min(sourceExcerptChars, text.length) + 300;
     if (sourceChars + cost > budget) return false;
     excerpts.push(excerpt); sourceChars += cost; return true;
   };
-  const runtimeCandidates = runtimeEvidenceCandidates(index.cache.files);
+  const fileByPath = new Map(index.cache.files.map(file => [file.path, file]));
+  const entryPaths = new Set<string>();
+  const entryFamilies = new Map<string, string[]>();
+  for (const entry of browserEntries) {
+    if (!fileByPath.has(entry)) { sourceIssues.push("Browser build entry not indexed in configured scope: " + entry); continue; }
+    entryPaths.add(entry);
+    // Follow indexed local dependencies of small startup entries to their actual message handlers.
+    const queue = [{ path: entry, depth: 0 }], seen = new Set<string>();
+    while (queue.length && seen.size < 24) {
+      const next = queue.shift()!;
+      if (seen.has(next.path)) continue;
+      seen.add(next.path);
+      if (boundaryPaths.has(next.path) || next.path === entry) entryPaths.add(next.path);
+      entryFamilies.set(entry, [...seen]);
+      if (next.depth < 3) for (const edge of index.dependencies) if (edge.from === next.path && edge.to && !edge.typeOnly) queue.push({ path: edge.to, depth: next.depth + 1 });
+    }
+  }
+  const runtimeCandidates = [...new Set([...entryPaths].flatMap(path => fileByPath.get(path) ?? []).concat(runtimeEvidenceCandidates(index.cache.files)))];
   for (const candidate of [...runtimeCandidates, ...index.cache.files.filter(file => boundaryPaths.has(file.path) && !runtimeCandidates.includes(file))]) {
     signal?.throwIfAborted();
     try {
@@ -94,13 +119,31 @@ export async function readProjectStructureEvidence(root: vscode.Uri, candidates:
       sourceIssues.push(`Could not reread runtime evidence: ${candidate.path}.`);
     }
   }
-  // Reserve space for deployment/entry evidence and alternative transports before duplicate launchers.
-  const reserved = Math.min(Math.floor(sourceBudget * 2 / 3), (deployment.length + supplemental.length) * (sourceExcerptChars + 300));
-  const deferred = primary.filter(excerpt => !addExcerpt(excerpt, sourceBudget - reserved));
+  // One nearest communication window per role and actual build entry, before duplicates.
+  // A small startup module can delegate to a reader; its dependency path remains explicit.
+  const priority: typeof deployment = [];
+  for (const category of ["client", "send", "receive"]) for (const family of entryFamilies.values()) {
+    const match = deployment.filter(item => item.category === category && family.includes(item.path))
+      .sort((a, b) => family.indexOf(a.path) - family.indexOf(b.path))[0];
+    if (match) priority.push(match);
+  }
   const packagedLauncher = (item: ProjectEvidenceFileInput) => Number(/(?:process\.execPath|sys\.executable)[\s\S]*["']bin\//.test(item.content.split("\n").slice(item.excerptStartLine! - 1, item.excerptEndLine).join("\n")));
   deployment.sort((a, b) => packagedLauncher(b) - packagedLauncher(a) || compareProjectEvidencePaths(a.path, b.path));
-  const firstBoundaries = [...new Set(deployment.map(item => item.category))].map(category => deployment.find(item => item.category === category)!);
-  for (const excerpt of [...firstBoundaries, ...supplemental, ...deployment.filter(item => !firstBoundaries.includes(item)), ...deferred]) if (!addExcerpt(excerpt)) sourceIssues.push(`Runtime window omitted by budget: ${excerpt.path}:${excerpt.excerptStartLine}.`);
+  for (const category of ["launcher", "deployment", "dispatch", "host-receive"]) {
+    const dispatch = priority.find(item => item.category === "dispatch");
+    const candidates = deployment.filter(item => item.category === category && !entryPaths.has(item.path));
+    if (category === "host-receive" && dispatch) candidates.sort((a, b) =>
+      Number(index.dependencies.some(edge => edge.from === dispatch.path && edge.to === b.path && !edge.typeOnly))
+      - Number(index.dependencies.some(edge => edge.from === dispatch.path && edge.to === a.path && !edge.typeOnly)));
+    const match = candidates[0];
+    if (match) priority.push(match);
+  }
+  const processTransport = (item: ProjectEvidenceFileInput) => fileByPath.get(item.path)?.imports.some(edge => !edge.typeOnly && /child_process|subprocess|std::process/.test(edge.specifier)) ? 1 : 0;
+  supplemental.sort((a, b) => processTransport(b) - processTransport(a));
+  const transportLaunches = primary.filter(item => supplemental.some(other => other.path === item.path));
+  const ordered = [...priority, ...transportLaunches, ...supplemental, ...primary, ...deployment];
+  for (const excerpt of ordered) if (!addExcerpt(excerpt)) sourceIssues.push(`Runtime window omitted by budget: ${excerpt.path}:${excerpt.excerptStartLine}.`);
+  for (const entry of browserEntries) if (!excerpts.some(item => item.path === entry)) sourceIssues.push("Browser startup excerpt omitted by budget or unsupported entry: " + entry);
   if (options.structureCachePath) {
     const target = options.structureCachePath, temporary = `${target}.${randomUUID()}.tmp`;
     try {
@@ -117,8 +160,12 @@ export async function readProjectStructureEvidence(root: vscode.Uri, candidates:
   ];
   const packaged = buildProjectEvidencePackage({ projectName: root.path.split("/").at(-1) ?? "Project", files: excerpts, preserveSourceOrder: true, allowMultipleExcerpts: true, knowledge, scope: options.include ?? [], coverage,
     ...(options.preset ? { preset: options.preset } : {}) }, { maxTotalChars: Math.floor(evidenceChars / 2), maxFiles: Math.max(1, excerpts.length), maxFileChars: Math.min(options.maxFileChars ?? 8000, 8000), maxSourceFileChars: sourceExcerptChars });
+  const fileOrder = new Map([...new Set(packaged.files.map(file => file.path))].map((path, index) => [path, index]));
+  packaged.files.sort((left, right) => fileOrder.get(left.path)! - fileOrder.get(right.path)! || left.startLine - right.startLine);
   const omittedRuntime = excerpts.filter(file => file.kind === "source" && !packaged.files.some(excerpt => excerpt.path === file.path && excerpt.startLine === file.excerptStartLine));
   if (omittedRuntime.length) packaged.coverage.push(`Runtime excerpts omitted by packaging budget: ${omittedRuntime.map(file => file.path).join(", ")}. These boundaries remain unverified.`);
+  const startupGaps = sourceIssues.filter(issue => issue.startsWith("Browser "));
+  for (const gap of startupGaps) if (!packaged.coverage.includes(gap)) packaged.coverage.push(gap);
   packaged.selection.evidenceChars = evidenceChars;
   return attachProjectStructure(packaged, index.summary);
 }

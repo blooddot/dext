@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { parse } from "acorn";
 import { posix } from "node:path";
 import { z } from "zod";
 import { projectContextSchema, type ProjectContext } from "../../contracts/projectIntent.js";
@@ -6,6 +7,44 @@ import type { StructureFile, StructureMember, StructureSummary } from "./project
 
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const stem = (path: string) => posix.basename(path).replace(/\.[^.]+$/, "").replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase().split(/[\s_.-]+/)[0]!;
+
+/** Read literal browser entry declarations without importing or executing a build script. */
+export function browserBuildEntries(content: string): { paths: string[]; gaps: string[] } {
+  const paths = new Set<string>(), gaps: string[] = [];
+  let tree: unknown;
+  try { tree = parse(content, { ecmaVersion: "latest", sourceType: "module" }); }
+  catch { return { paths: [], gaps: ["Build configuration could not be statically parsed; dynamic/TypeScript entries remain unverified."] }; }
+  const object = (value: unknown): Record<string, unknown> | undefined => value && typeof value === "object" ? value as Record<string, unknown> : undefined;
+  const key = (value: unknown): unknown => object(value)?.name ?? object(value)?.value;
+  function entry(value: unknown): void {
+    const node = object(value);
+    if (!node) return;
+    if (node.type === "Literal" && typeof node.value === "string") { paths.add(node.value); return; }
+    if (node.type === "ArrayExpression" && Array.isArray(node.elements)) { node.elements.forEach(entry); return; }
+    if (node.type === "ObjectExpression" && Array.isArray(node.properties)) {
+      for (const property of node.properties) {
+        const item = object(property);
+        if (item?.type === "Property" && !item.computed) entry(item.value);
+        else gaps.push("Computed browser entry was omitted.");
+      }
+      return;
+    }
+    gaps.push("Nonliteral browser entry was omitted.");
+  }
+  function walk(value: unknown): void {
+    const node = object(value);
+    if (!node) return;
+    if (node.type === "ObjectExpression" && Array.isArray(node.properties)) {
+      const properties = node.properties.map(object).filter((item): item is Record<string, unknown> => !!item);
+      if (properties.some(item => key(item.key) === "platform" && object(item.value)?.value === "browser")) {
+        for (const item of properties) if (key(item.key) === "entryPoints") entry(item.value);
+      }
+    }
+    for (const child of Object.values(node)) if (Array.isArray(child)) child.forEach(walk); else if (child && typeof child === "object") walk(child);
+  }
+  walk(tree);
+  return { paths: [...paths], gaps: [...new Set(gaps)] };
+}
 export interface StructureCandidate { id: string; files: Array<StructureMember & { consumers?: string[] }> }
 
 /** Prioritize potential runtime boundaries for actual source reads, never infer C4 from these hints. */
@@ -30,14 +69,18 @@ export function runtimeEvidenceWindows(content: string, file: StructureFile, max
   const lines = content.split("\n");
   const code = (line: string) => !/^\s*(?:\/\/|\*|#)/.test(line);
   const boundary = lines.findIndex(line => code(line)
-    && /\b(?:spawn|fork|createWebviewPanel|createWebview|createServer|Worker|BrowserWindow|Popen|Process|postMessage|listen)\s*\(|Command::new\s*\(/.test(line));
+    && /\b(?:spawn|fork|createWebviewPanel|createWebview|createServer|Worker|BrowserWindow|Popen|Process|listen)\s*\(|Command::new\s*\(/.test(line));
   const entry = file.symbols.find(symbol => /^(?:main|activate|bootstrap)$/i.test(symbol.name));
   const points = [{ point: boundary >= 0 ? boundary : entry ? entry.line - 1 : -1, category: "primary" }];
   // Outbound HTTP and transport dispatch often occur far below the first process launch.
   for (const [category, pattern] of [
     ["transport", /\b(?:fetch|urlopen)\s*\(|\b(?:requests|http|https)\.(?:request|get|post)\s*\(|(?:ClientSession|reqwest::Client)\b/],
     ["transport", /\b(?:transport|protocol)\s*===?\s*["'](?:http|https|stdio|sse|websocket|grpc)["']/i],
-    ["client", /\bacquireVsCodeApi\s*\(/],
+    ["client", /\bacquireVsCodeApi\s*\(|\b__dextApi\b/],
+    ["send", /\.\s*postMessage(?:\?\.)?\s*\(/],
+    ["dispatch", /^\s*(?:async\s+)?handleMessage\s*\(/],
+    ["host-receive", /\bonDidReceiveMessage(?:\?\.)?\s*\(/],
+    ["receive", /\baddEventListener\s*\(\s*["']message["']/],
     ["launcher", /\brun\w*Process\s*\(/],
     ["deployment", /\b(?:joinPath|join|resolve)\s*\([^\n]*(?:extensionUri|resourcesPath|__dirname)[^\n]*["'](?:vendor|bin|resources)["']/]
   ] as const) points.push({ category, point: lines.findIndex(line => code(line) && pattern.test(line)
