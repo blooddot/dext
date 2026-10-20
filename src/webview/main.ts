@@ -24,7 +24,7 @@ TURN_COPY_ACTION, TURN_DELETE_ACTION,
 TURN_EDIT_ACTION,
 TURN_FORK_ACTION,
 TURN_RENAME_ACTION, TURN_RETRY_ACTION,
-TurnTitle, presentTurn,
+TurnTitle, presentTurn, formatTurnTokenUsage,
 type TurnSectionPresentation
 } from "../turnPresentation.js";
 import type { ConversationSummary, SidebarState, WebviewRequest, WebviewResponse } from "../webviewProtocol.js";
@@ -2668,13 +2668,7 @@ function updateAgentProgress(label: string): void {
   if (!agentProgress) return;
   agentProgressState = label;
   const elapsed = agentRunStartedAt ? Math.max(0, Date.now() - agentRunStartedAt) : 0;
-  const totalTokens = agentTokenUsage?.totalTokens
-    ?? (agentTokenUsage?.inputTokens !== undefined && agentTokenUsage.outputTokens !== undefined
-      ? agentTokenUsage.inputTokens + agentTokenUsage.outputTokens
-      : undefined);
-  const tokenLabel = totalTokens === undefined
-    ? ""
-    : `${totalTokens >= 1_000 ? `${(totalTokens / 1_000).toFixed(totalTokens >= 10_000 ? 0 : 1)}k` : totalTokens} tokens`;
+  const tokenLabel = formatTurnTokenUsage(agentTokenUsage);
   const details = [
     tokenLabel,
     agentEditedUris.size ? `Edited ${agentEditedUris.size} file${agentEditedUris.size === 1 ? "" : "s"}` : "",
@@ -3111,7 +3105,7 @@ function renderStoredTurn(record: DextHistoryRecord, turn: OutputTurnElements): 
   if (agentStream) finishAgentProgress();
   const duration = response?.executions.reduce((total, item) => total + item.durationMs, 0) ?? 0;
   if (turn.processMeta) turn.processMeta.textContent = presentTurn({
-    source: record.input, mode: record.mode, durationMs: duration
+    source: record.input, mode: record.mode, durationMs: duration, process: record.process
   }).process.detail ?? "";
   turn.todos.setRunning(false);
   turn.processDisclosure.open = false;

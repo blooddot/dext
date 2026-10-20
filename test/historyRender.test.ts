@@ -251,7 +251,8 @@ describe("Dext history rendering", () => {
 
   it("keeps elapsed time in Process and leaves Output to its result body", () => {
     const record: DextHistoryRecord = {
-      id: "timing", createdAt: 1, input: "ask(input=\"hello\")", process: [], output: "",
+      id: "timing", createdAt: 1, input: "ask(input=\"hello\")",
+      process: [{ phase: "status", text: "", usage: { totalTokens: 1_234 } }], output: "",
       response: {
         kind: "workflow",
         executions: [{
@@ -262,9 +263,10 @@ describe("Dext history rendering", () => {
       }
     };
     const html = renderHistoryRecord(record);
-    expect(html).toContain('Worked for 1s234ms');
+    expect(html).toContain('Worked for 1s234ms · 1.2k tokens');
     const output = html.slice(html.indexOf('data-turn-section="output"'));
     expect(output).not.toContain("1s234ms");
+    expect(output).not.toContain("tokens");
     expect(output.slice(0, output.indexOf("</summary>"))).not.toContain("button");
     expect(output.match(/data-copy="hello"/g)).toHaveLength(1);
   });

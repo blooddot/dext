@@ -18,7 +18,9 @@ const response = { kind: 'workflow', executions: [execution({ kind: 'ask', text:
   cwd: 'C:\\' + 'long-path'.repeat(200), stdout: 'ok', stderr: '', status: 'succeeded', exit_code: 0, duration_ms: 1 }),
   execution({ kind: 'ask', text: '# Ordinary Markdown\n\n**still bold**' }),
   execution({ kind: 'ask', text: '{invalid JSON}' })] };
-const record = { id: 't1', createdAt: 1, input: 'structured output', mode: 'code', process: [], output: JSON.stringify(response) };
+const usageEvents = [{ phase: 'status', text: '', usage: { totalTokens: 900 } },
+  { phase: 'status', text: '', usage: { inputTokens: 1000, cachedInputTokens: 800, outputTokens: 234 } }];
+const record = { id: 't1', createdAt: 1, input: 'structured output', mode: 'code', process: usageEvents, output: JSON.stringify(response) };
 
 await runLabChecks(async ({ evaluate, settle, send, click }) => {
   const template = await readFile('src/sidebarProvider.ts', 'utf8');
@@ -35,13 +37,16 @@ await runLabChecks(async ({ evaluate, settle, send, click }) => {
     host({type:'state',state:{methods:[],diagnostics:[],mcpServers:[],globalDiagnostics:[],agentProfiles:[{id:'codex',provider:'codex',label:'Codex CLI',command:'codex',models:['test-model']}],agentSelection:selection}});
     host({type:'conversations',sessions:[{id:'active',title:'JSON',updatedAt:1,turnCount:0,pinned:false,running:false}],activeId:'active',selection,planStatus:'new',hostInitiated:true});
     host({type:'executing',value:true,sessionId:'active',turnId:'t1',source:'structured output',mode:'code',startedAt:Date.now()});
-    host({type:'agentEvents',sessionId:'active',events:[{phase:'message',id:'partial',text:'{"partial":'}]});`);
+    host({type:'agentEvents',sessionId:'active',events:[...${JSON.stringify(usageEvents)},{phase:'message',id:'partial',text:'{"partial":'}]});`);
   await settle();
+  const processSummary = '[data-turn-section="process"] > summary';
+  assert.match(await evaluate(`document.querySelector(${JSON.stringify(processSummary)}).textContent`), /1\.2k tokens/, 'live usage');
   assert.equal(await evaluate(`document.querySelectorAll('.json-output').length`), 0, 'incomplete streaming output is not JSON');
   assert.ok(await evaluate(`document.getElementById('result').textContent.includes('{"partial":')`), 'incomplete stream stays visible');
   await evaluate(`host({type:'execution',sessionId:'active',turnId:'t1',response:${JSON.stringify(response)}});
     host({type:'executing',value:false,sessionId:'active',turnId:'t1'});`);
   await settle();
+  assert.match(await evaluate(`document.querySelector(${JSON.stringify(processSummary)}).textContent`), /Worked for .*1\.2k tokens/, 'completed usage');
   const displayed = await evaluate(`document.querySelector('.json-output-text').textContent`);
   assert.deepEqual(JSON.parse(displayed), JSON.parse(raw));
   assert.equal(await evaluate(`document.querySelectorAll('.json-output strong,.json-output img').length`), 0);
@@ -72,6 +77,7 @@ await runLabChecks(async ({ evaluate, settle, send, click }) => {
   // Re-open the persisted workflow through Conversation's actual hydration path.
   await evaluate(`host({type:'outputSession',hostInitiated:true,session:{id:'active',createdAt:1,updatedAt:2,turns:[${JSON.stringify(record)}]}});`);
   await settle();
+  assert.match(await evaluate(`document.querySelector(${JSON.stringify(processSummary)}).textContent`), /Worked for 4ms · 1\.2k tokens/, 'reopened usage');
   assert.equal(await evaluate(`document.querySelector('.json-output-text').textContent`), displayed);
   await click('.json-output .output-copy');
   assert.equal(await evaluate(`messages.findLast(m=>m.type==='clipboardWrite').text`), raw);
@@ -85,6 +91,7 @@ await runLabChecks(async ({ evaluate, settle, send, click }) => {
     const html = renderHistoryRecord(JSON.parse(JSON.stringify(saved)));
     await evaluate(`document.getElementById('history-fixture').innerHTML=${JSON.stringify(html)};
       document.querySelectorAll('details').forEach(el=>el.open=true);`);
+    assert.match(await evaluate(`document.querySelector(${JSON.stringify(processSummary)}).textContent`), /1\.2k tokens/, 'History usage including records without duration');
     assert.equal(await evaluate(`document.querySelector('.json-output-text').textContent`), displayed);
     await click('.json-output [data-copy]');
     assert.equal(await evaluate(`messages.findLast(m=>m.type==='copy').text`), raw, 'history HTML parsing preserves CRLF copy payload');

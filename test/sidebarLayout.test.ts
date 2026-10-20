@@ -335,7 +335,7 @@ describe("sidebar panel layout", () => {
     const main = await source("src/webview/main.ts");
     expect(main).toContain("let agentTokenUsage: AgentTokenUsage | undefined;");
     expect(main).toMatch(/function renderAgentEvent[\s\S]*?if \(event\.usage\) agentTokenUsage = event\.usage;/);
-    expect(main).toMatch(/function updateAgentProgress[\s\S]*?totalTokens[\s\S]*?tokens/);
+    expect(main).toMatch(/function updateAgentProgress[\s\S]*?formatTurnTokenUsage\(agentTokenUsage\)/);
   });
 
   it("keeps Process as the only disclosure around the live agent timeline", async () => {

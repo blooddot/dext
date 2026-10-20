@@ -1,4 +1,5 @@
 import { formatDuration } from "./webview/duration.js";
+import type { AgentStreamEvent, AgentTokenUsage } from "./core/types.js";
 
 /** Shared labels and icons for the live conversation and History toolbars. */
 export const TURN_EDIT_ACTION = { icon: "edit", label: "Edit input in Dext" } as const;
@@ -58,15 +59,32 @@ export interface TurnRenderModel {
   output: TurnSectionPresentation & { kind: "output"; label: "Output" };
 }
 
+/** Use the same provider-reported count during streaming and after replay. */
+export function formatTurnTokenUsage(usage?: AgentTokenUsage): string {
+  const total = usage?.totalTokens
+    ?? (usage?.inputTokens !== undefined && usage.outputTokens !== undefined
+      ? usage.inputTokens + usage.outputTokens : undefined);
+  if (total === undefined || !Number.isFinite(total) || total < 0) return "";
+  return `${total >= 1_000 ? `${(total / 1_000).toFixed(total >= 10_000 ? 0 : 1)}k` : total} tokens`;
+}
+
 export function presentTurn(options: {
   source: string;
   mode?: TurnMode | undefined;
   hideInput?: boolean | undefined;
   durationMs?: number | undefined;
+  process?: readonly AgentStreamEvent[] | undefined;
 }): TurnRenderModel {
   const duration = options.durationMs;
-  const detail = duration !== undefined && Number.isFinite(duration) && duration > 0
-    ? `Worked for ${formatDuration(duration)}` : undefined;
+  const timing = duration !== undefined && Number.isFinite(duration) && duration > 0
+    ? `Worked for ${formatDuration(duration)}` : "";
+  // Usage events are snapshots, just like the live header: keep the latest
+  // report instead of adding repeated updates or cached input a second time.
+  let usage: AgentTokenUsage | undefined;
+  for (const event of options.process ?? []) {
+    if (event.usage) usage = event.usage;
+  }
+  const detail = [timing, formatTurnTokenUsage(usage)].filter(Boolean).join(" · ");
   return {
     ...(options.hideInput ? {} : {
       input: { kind: "input", label: "Input", source: options.source, mode: presentTurnMode(options.mode) }

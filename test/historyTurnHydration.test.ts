@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { readHistoryResponse } from "../src/historyResponse.js";
 import { presentTurn } from "../src/turnPresentation.js";
 import { renderTurnInput, renderTurnResult, turnDomAdapter } from "../src/turnComponents.js";
+import type { AgentStreamEvent } from "../src/core/types.js";
 
 const main = readFileSync("src/webview/main.ts", "utf8");
 const renderer = ts.transpileModule([
@@ -29,7 +30,7 @@ function harness() {
     processDisclosure: { open: true }, processMeta: { textContent: "" }, outputDisclosure: { open: false },
     todos: { setRunning: vi.fn() }, output: { append: vi.fn() }, hydrated: false
   };
-  const record = { input: "Historical input", output: "Historical answer", process: [{ phase: "message", id: "shared", text: "Historical trace" }] };
+  const record = { input: "Historical input", output: "Historical answer", process: [{ phase: "message", id: "shared", text: "Historical trace" }] as AgentStreamEvent[] };
   const activeTurn = { todos: { setRunning: vi.fn() } };
   const state = {
     activeTurn, agentStream: { live: true }, agentRunStartedAt: 100, agentRunTimer: 42,
@@ -61,6 +62,14 @@ function harness() {
 }
 
 describe("expanding history while a turn is streaming", () => {
+  it("restores stored tokens without borrowing usage from the live turn", () => {
+    const { context, state, turn } = harness();
+    context.record.process.push({ phase: "status", text: "", usage: { totalTokens: 1_234 } });
+    runInNewContext("hydrateOutputTurnOnOpen(event)", context);
+    expect(turn.processMeta.textContent).toBe("1.2k tokens");
+    expect(context.agentTokenUsage).toBe(state.agentTokenUsage);
+  });
+
   it("renders the body of an old Agent chat result after reopening a turn", () => {
     const { context, turn } = harness();
     context.record.output = JSON.stringify({ kind: "workflow", executions: [{

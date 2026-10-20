@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { presentTurn, TURN_EDIT_ACTION, TURN_RENAME_ACTION, TurnTitle } from "../src/turnPresentation.js";
+import { formatTurnTokenUsage, presentTurn, TURN_EDIT_ACTION, TURN_RENAME_ACTION, TurnTitle } from "../src/turnPresentation.js";
 
 describe("turn title presentation", () => {
   it("keeps the shared Input, Process, and Output presentation stable", () => {
@@ -17,6 +17,30 @@ describe("turn title presentation", () => {
   it("distinguishes editing input from renaming the title", () => {
     expect(TURN_EDIT_ACTION).toEqual({ icon: "edit", label: "Edit input in Dext" });
     expect(TURN_RENAME_ACTION).toEqual({ icon: "rename", label: "Rename turn" });
+  });
+
+  it("keeps the last reported usage through completion without summing snapshots", () => {
+    const process = [
+      { phase: "status" as const, text: "", usage: { totalTokens: 900 } },
+      { phase: "status" as const, text: "", usage: { inputTokens: 1_000, cachedInputTokens: 800, outputTokens: 234 } },
+      { phase: "message" as const, text: "Done" }
+    ];
+    expect(presentTurn({ source: "prompt", durationMs: 1_234, process }).process.detail)
+      .toBe("Worked for 1s234ms · 1.2k tokens");
+    expect(presentTurn({ source: "prompt", process }).process.detail).toBe("1.2k tokens");
+  });
+
+  it.each([
+    [{ totalTokens: 0 }, "0 tokens"],
+    [{ totalTokens: 999 }, "999 tokens"],
+    [{ totalTokens: 12_345, inputTokens: 1, outputTokens: 2 }, "12k tokens"],
+    [{ inputTokens: 1 }, ""],
+    [{ cachedInputTokens: 800 }, ""],
+    [{ totalTokens: -1 }, ""],
+    [{ totalTokens: Infinity }, ""],
+    [undefined, ""]
+  ])("formats provider usage %j consistently", (usage, expected) => {
+    expect(formatTurnTokenUsage(usage)).toBe(expected);
   });
 
   it("does not invent elapsed time when a stored duration is unavailable or invalid", () => {

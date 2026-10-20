@@ -462,7 +462,7 @@ export function renderHistoryRecord(record: DextHistoryRecord, sessionId?: strin
   const executePlan = record.executePlan || !!planExecution;
   const firstLine = historyTurnTitle(record);
   const duration = response?.executions.reduce((total, item) => total + item.durationMs, 0) ?? 0;
-  const turn = presentTurn({ source: input, mode: record.mode, hideInput: executePlan, durationMs: duration });
+  const turn = presentTurn({ source: input, mode: record.mode, hideInput: executePlan, durationMs: duration, process: record.process });
   const processHtml = process(record.process);
   const todoHtml = renderAgentTodos(latestAgentTodos(record.process)) + inputHistory(record.process);
   const outputHtml = record.error
