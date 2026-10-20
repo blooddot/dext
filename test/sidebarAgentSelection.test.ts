@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AgentSelection } from "../src/agentProfiles.js";
+import type { AgentSelection } from "../src/features/agents/host/agentProfiles.js";
 import type { WebviewResponse } from "../src/webviewProtocol.js";
 
 vi.mock("vscode", () => ({

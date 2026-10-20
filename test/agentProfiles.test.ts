@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AgentProfileStore, modelOptionsFromCodexCache } from "../src/agentProfiles.js";
+import { AgentProfileStore, modelOptionsFromCodexCache } from "../src/features/agents/host/agentProfiles.js";
 
 describe("Agent profile defaults", () => {
   const temporaryDirectories: string[] = [];

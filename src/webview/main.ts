@@ -49,8 +49,8 @@ import { AgentTodoView } from "./agentTodoView.js";
 import { AgentInputView } from "./agentInputView.js";
 import { planExecutionLabel } from "../agentTodoPresentation.js";
 import { CLI_SPEEDS } from "../core/builtinCli.js";
-import { presentAgentSelection } from "../agentSelectionDefaults.js";
-import type { HarnessPresetOption } from "../agentProfiles.js";
+import type { HarnessPresetOption } from "../features/agents/contracts.js";
+import { presentAgentSelection } from "../features/agents/presentation/agentSelectionDefaults.js";
 import { DEFAULT_HARNESS_PRESET, harnessPresetOrDefault } from "../core/harnessPresetDefault.js";
 
 interface VsCodeApi {

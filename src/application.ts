@@ -24,14 +24,14 @@ import { terminalRunHandler } from "./vscodeTerminalHost.js";
 import { applyPatchHandler } from "./vscodePatchHost.js";
 import { loadEditorTokenTheme } from "./vscodeTheme.js";
 import {
-  AgentProfileStore,
-  AGENT_PERMISSIONS,
-  SUPPORTED_AGENT_PROFILE_IDS,
-  type WritableAgentPermission,
-  type AgentProfile,
-  type AgentProvider,
-  type AgentSelection
-} from "./agentProfiles.js";
+AGENT_PERMISSIONS,
+AgentProfileStore,
+SUPPORTED_AGENT_PROFILE_IDS,
+type AgentProfile,
+type AgentProvider,
+type AgentSelection,
+type WritableAgentPermission
+} from "./features/agents/host/agentProfiles.js";
 import { DefaultAgentRunner } from "./core/agentRouter.js";
 import { DEFAULT_AGENT_TIMEOUT_MS, DEFAULT_AGENT_IDLE_TIMEOUT_MS, MAX_AGENT_TIMEOUT_MS } from "./core/agentTimeout.js";
 import { listHarnessPresets } from "./core/harnessPresets.js";

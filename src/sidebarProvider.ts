@@ -35,7 +35,7 @@ import type { PlanExecutionOutcome } from "./core/types.js";
 import { openDextFileReference, openExternalLink } from "./vscodeContextHost.js";
 import { webviewRequestSchema } from "./webviewProtocol.js";
 import type { ConversationSummary, WebviewResponse } from "./webviewProtocol.js";
-import type { AgentSelection } from "./agentProfiles.js";
+import type { AgentSelection } from "./features/agents/host/agentProfiles.js";
 import { copyHarnessPreset, harnessPresetFile } from "./core/harnessPresets.js";
 import { harnessPresetOrDefault } from "./core/harnessPresetDefault.js";
 import type { DextHistoryRecord, DextHistorySession, DextHistoryStore } from "./historyStore.js";

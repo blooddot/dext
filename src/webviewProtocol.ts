@@ -2,7 +2,7 @@ import type { ResourceSession } from "./resourceSession.js";
 import { UI_LIMITS, uiFormResultSchema } from "./core/uiForm.js";
 import { z } from "zod";
 import type { AgentStreamEvent, InputExecutionResponse, RegisteredCallable, PlanExecutionOutcome } from "./core/types.js";
-import type { AgentProfile, AgentSelection } from "./agentProfiles.js";
+import type { AgentProfile, AgentSelection } from "./features/agents/contracts.js";
 import type { EditorTokenTheme } from "./vscodeTheme.js";
 import type { DextHistorySession, PlanStatus } from "./historyStore.js";
 import type { McpDiscoveredTool, McpServerConfig } from "./core/mcpRegistry.js";
