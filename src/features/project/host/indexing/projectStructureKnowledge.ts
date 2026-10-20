@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { posix } from "node:path";
 import { z } from "zod";
+import { projectContextSchema, type ProjectContext } from "../../contracts/projectIntent.js";
 import type { StructureFile, StructureMember, StructureSummary } from "./projectStructure.js";
-import { projectContextSchema, type ProjectContext } from "./projectIntent.js";
 
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const stem = (path: string) => posix.basename(path).replace(/\.[^.]+$/, "").replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase().split(/[\s_.-]+/)[0]!;

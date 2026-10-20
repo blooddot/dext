@@ -1,6 +1,6 @@
-import type { ProjectContext, ProjectIntent, ProjectQualityIssue } from "./projectIntent.js";
-import type { StructureMember } from "./projectStructure.js";
-import { systemContextRelationships } from "./projectC4.js";
+import type { ProjectContext, ProjectIntent, ProjectQualityIssue } from "../../contracts/projectIntent.js";
+import { systemContextRelationships } from "../../presentation/projectC4.js";
+import type { StructureMember } from "../indexing/projectStructure.js";
 
 /** A review signal, never an automatic ownership rewrite or proof of incorrect behavior. */
 export function ownershipConcerns(contexts: readonly ProjectContext[], files: readonly StructureMember[]): ProjectQualityIssue[] {

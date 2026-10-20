@@ -2,8 +2,8 @@ import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { DiagramAdapterDocument, DiagramAdapterRenderOptions, DiagramAdapterArtifact } from "./projectDiagramAdapter.js";
-import { validateProjectDiagram, type ProjectDiagram, type DiagramValidationReceipt, validationStatus } from "./projectDiagram.js";
+import { validateProjectDiagram, validationStatus, type DiagramValidationReceipt, type ProjectDiagram } from "../../contracts/projectDiagram.js";
+import type { DiagramAdapterArtifact, DiagramAdapterDocument, DiagramAdapterRenderOptions } from "../../contracts/projectDiagramAdapter.js";
 
 /** Shell-free, bounded local execution. Child processes receive only adapter-owned input files. */
 export function runDiagramProcess(command: string, args: readonly string[], cwd: string, signal?: AbortSignal, options: { tolerateFailure?: boolean } = {}): Promise<string> {

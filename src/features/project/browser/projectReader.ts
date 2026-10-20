@@ -1,13 +1,13 @@
-import { renderMermaidSvg } from "./markdownDiagrams.js";
-import { projectDiagramToMermaid, type ProjectMermaidView } from "../core/projectMermaid.js";
-import type { ProjectDiagram } from "../core/projectDiagram.js";
-import type { ProjectTopic } from "../core/projectTopics.js";
-import { projectDiagramRenderer, projectPlaybackSteps } from "../core/projectDiagramPresentation.js";
-import { renderReaderArchify, type ReaderArchifyView } from "./projectReaderArchify.js";
+import { renderMermaidSvg } from "../../../webview/markdownDiagrams.js";
+import type { ProjectDiagram } from "../contracts/projectDiagram.js";
+import type { ProjectTopic } from "../knowledge/projectTopics.js";
+import { projectDiagramRenderer, projectPlaybackSteps } from "../presentation/projectDiagramPresentation.js";
+import { projectDiagramToMermaid, type ProjectMermaidView } from "../presentation/projectMermaid.js";
+import { escapeProjectHtml as esc, readerGalleryArticle, readerIntroduction, readerTopicArticle, topicDiagrams, type ProjectReaderData } from "../presentation/projectTopicsView.js";
 import { isTrustedHostMessage } from "./archifyBridge.js";
-import { escapeProjectHtml as esc, readerGalleryArticle, readerIntroduction, readerTopicArticle, topicDiagrams, type ProjectReaderData } from "./projectTopicsView.js";
+import { renderReaderArchify, type ReaderArchifyView } from "./projectReaderArchify.js";
 
-interface ReaderApi { postMessage(message: unknown): void; getState?(): { filters?: Record<string, string> } | undefined; setState?(state: unknown): void }
+export interface ReaderApi { postMessage(message: unknown): void; getState?(): { filters?: Record<string, string> } | undefined; setState?(state: unknown): void }
 
 export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
   const template = root.querySelector<HTMLTemplateElement>("[data-project-reader-data]");
@@ -382,7 +382,4 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
   else if (data.topics[0]) selectTopic(data.topics[0].id);
   else if (data.diagrams[0]) selectDiagram(data.diagrams[0].id);
 }
-
-const root = document.querySelector<HTMLElement>("[data-project-reader]");
-const api = (window as Window & { __dextApi?: ReaderApi }).__dextApi;
-if (root && api) startProjectReader(root, api);
+

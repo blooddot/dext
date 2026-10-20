@@ -1,6 +1,6 @@
-import type { ArchitectureRule, ArchitectureViolation } from "../core/projectArchitecture.js";
-import type { ProjectDiagramKind } from "../core/projectDiagram.js";
-import type { ProjectEvidenceSummary } from "../core/projectAiGeneration.js";
+import type { ArchitectureRule, ArchitectureViolation } from "../knowledge/projectArchitecture.js";
+import type { ProjectEvidenceSummary } from "./evidence.js";
+import type { ProjectDiagramKind } from "./projectDiagram.js";
 
 export interface ProjectArchitectureDecision {
   id: string;

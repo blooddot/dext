@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { ProjectEditorProvider, type ProjectEditorDataSource } from "../src/projectEditorProvider.js";
-import type { ProjectPanelData } from "../src/webview/projectPanel.js";
+import { ProjectEditorProvider, type ProjectEditorDataSource } from "../src/features/project/host/projectEditorProvider.js";
+import type { ProjectPanelData } from "../src/features/project/presentation/projectPanel.js";
 import { EditorTabManager, type EditorTabCallbacks, type EditorTabPanelHandle } from "../src/platform/editor-tabs/editorTabManager.js";
 import { EditorTabRestorer } from "../src/platform/editor-tabs/editorTabSerializer.js";
 

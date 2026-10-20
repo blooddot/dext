@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { renderProjectPanel, type ProjectPanelData } from "../src/webview/projectPanel.js";
-import { projectObjectSchema } from "../src/core/projectKnowledge.js";
-import type { ProjectInitializationState } from "../src/projectService.js";
+import { projectObjectSchema } from "../src/features/project/contracts/projectKnowledge.js";
+import type { ProjectInitializationState } from "../src/features/project/host/projectService.js";
+import { renderProjectPanel, type ProjectPanelData } from "../src/features/project/presentation/projectPanel.js";
 
 const initialization = (status: ProjectInitializationState["status"], extra: Partial<ProjectInitializationState> = {}): ProjectInitializationState => ({ status, ...extra });
 

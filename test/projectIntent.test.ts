@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { projectIntentSchema, validateProjectIntent } from "../src/core/projectIntent.js";
+import { projectIntentSchema, validateProjectIntent } from "../src/features/project/contracts/projectIntent.js";
 
 const brief = { name: "Example", summary: "An example project", evidence: [{ path: "README.md", line: 1, contentHash: "readme-hash" }] };
 

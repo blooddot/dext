@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildProjectTopics, checkProjectTopics, topicDiagramRequirement, topicFingerprint } from "../src/core/projectTopics.js";
-import { projectIntentSchema } from "../src/core/projectIntent.js";
-import { renderProjectTopics } from "../src/webview/projectTopicsView.js";
+import { projectIntentSchema } from "../src/features/project/contracts/projectIntent.js";
+import { buildProjectTopics, checkProjectTopics, topicDiagramRequirement, topicFingerprint } from "../src/features/project/knowledge/projectTopics.js";
+import { renderProjectTopics } from "../src/features/project/presentation/projectTopicsView.js";
 
 const intent = () => projectIntentSchema.parse({
   schemaVersion: 1, updatedAt: 1,

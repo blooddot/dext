@@ -120,7 +120,7 @@ try {
   const artifacts = resolve(".tmp-tb/project-diagrams-ui");
   await mkdir(artifacts, { recursive: true });
 
-  const readerBundle = await build({ entryPoints: ["src/webview/projectReader.ts"], bundle: true, write: false, platform: "browser", format: "iife" });
+  const readerBundle = await build({ entryPoints: ["src/features/project/browser/entry.ts"], bundle: true, write: false, platform: "browser", format: "iife" });
   const readerScript = readerBundle.outputFiles[0].text;
   let panelPage = "";
   let probePage = "";

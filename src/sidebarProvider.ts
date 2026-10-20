@@ -43,7 +43,7 @@ import type { DextConversationPreferences } from "./conversationPreferences.js";
 import { conversationTitle, historyTurnTitle } from "./historyRender.js";
 import { normalizeInputReferenceSource } from "./core/fileReference.js";
 import { dextBuiltinNames } from "./webview/dextTypesStatus.js";
-import type { ProjectReferenceCandidate } from "./core/projectReference.js";
+import type { ProjectReferenceCandidate } from "./features/project/knowledge/projectReference.js";
 import type { McpServerConfig } from "./core/mcpRegistry.js";
 
 /** An `agent(apply=False)` step proposes changes and writes nothing, so its

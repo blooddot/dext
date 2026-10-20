@@ -1,13 +1,13 @@
-import * as vscode from "vscode";
-import { readFile, writeFile, mkdir, rename, rm } from "node:fs/promises";
-import { dirname } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
+import * as vscode from "vscode";
 import { z } from "zod";
-import { buildStructureIndex, structureCacheSchema, PROJECT_STRUCTURE_VERSION, type StructureInput } from "./core/projectStructure.js";
-import { attachProjectStructure, buildProjectEvidencePackage, compareProjectEvidencePaths, isExcludedProjectEvidencePath, isProjectEvidencePath, projectEvidenceFileKind, PROJECT_BUILD_CONFIG_PATH, type ProjectEvidenceFileInput, type ProjectKnowledgeReference } from "./core/projectAiGeneration.js";
-import type { ProjectEvidenceReadOptions } from "./vscodeProjectHost.js";
-import type { ProjectInitializationProgressListener } from "./projectService.js";
-import { runtimeEvidenceCandidates, runtimeEvidenceWindows } from "./core/projectStructureKnowledge.js";
+import type { ProjectInitializationProgressListener } from "../../contracts/lifecycle.js";
+import { attachProjectStructure, buildProjectEvidencePackage, compareProjectEvidencePaths, isExcludedProjectEvidencePath, isProjectEvidencePath, PROJECT_BUILD_CONFIG_PATH, projectEvidenceFileKind, type ProjectEvidenceFileInput, type ProjectKnowledgeReference } from "../generation/projectAiGeneration.js";
+import type { ProjectEvidenceReadOptions } from "../projectPanelDataSource.js";
+import { buildStructureIndex, PROJECT_STRUCTURE_VERSION, structureCacheSchema, type StructureInput } from "./projectStructure.js";
+import { runtimeEvidenceCandidates, runtimeEvidenceWindows } from "./projectStructureKnowledge.js";
 
 export async function indexedRelatedPaths(cachePath: string | undefined, preferred: ReadonlySet<string>): Promise<string[]> {
   if (!cachePath) return [];

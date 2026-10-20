@@ -1,5 +1,5 @@
-import type { ArchitectureViolation } from "../core/projectArchitecture.js";
-import type { ArchitectureViewInput, ProjectArchitectureDecision } from "./projectArchitectureTypes.js";
+import type { ArchitectureViewInput, ProjectArchitectureDecision } from "../contracts/projectArchitectureTypes.js";
+import type { ArchitectureViolation } from "../knowledge/projectArchitecture.js";
 
 const escapeHtml = (value: string): string => value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!);
 

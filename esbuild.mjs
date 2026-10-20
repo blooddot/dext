@@ -36,7 +36,7 @@ const contexts = await Promise.all([
   esbuild.context({
     entryPoints: {
       main: "src/webview/main.ts",
-      project: "src/webview/projectReader.ts",
+      project: "src/features/project/browser/entry.ts",
       "editor.worker": "node_modules/monaco-editor/esm/vs/editor/editor.worker.js",
       // The composer is a TypeScript editor, so Monaco's TypeScript worker is
       // bundled next to the editor worker and loaded from a blob URL by

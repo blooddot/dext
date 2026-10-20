@@ -1,5 +1,5 @@
-import type { ProjectIntent, ProjectContext } from "./projectIntent.js";
-import type { ProjectDiagram } from "./projectDiagram.js";
+import type { ProjectDiagram } from "../contracts/projectDiagram.js";
+import type { ProjectContext, ProjectIntent } from "../contracts/projectIntent.js";
 
 /** Older analyses already snapshot their exact module membership in the versioned topic basis. */
 export function analysisSourceFiles(diagram: ProjectDiagram): string[] {

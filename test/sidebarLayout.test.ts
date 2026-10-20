@@ -165,7 +165,7 @@ describe("sidebar panel layout", () => {
     expect(main).toContain("view.dataset.diffView = defaultDiffMode;");
     expect(main).toContain('button.className = `diff-mode-button${mode === defaultDiffMode ? " active" : ""}`');
     // Saving project paths changes the registered API set, so it needs a reload.
-    expect(extension).toMatch(/onWorkspaceSettingsChanged: async \(settings\) => \{\s*application\.setProjectWorkspaceSettings\(settings\);\s*await application\.reload\(\)/);
+    expect(extension).toMatch(/onWorkspaceSettingsChanged: async \(?settings\)? => \{\s*application\.setProjectWorkspaceSettings\(settings\);\s*await application\.reload\(\)/);
     expect(extension).toMatch(/event\.affectsConfiguration\("dext\.diff\.defaultView"\)[\s\S]*?await sidebar\.refresh\(\)/);
     // Configured API directories are searched, but `.dext/api` comes first.
     expect(application).toMatch(/apiRoots\(\): string\[\] \{/);

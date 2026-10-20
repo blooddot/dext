@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildStructureIndex, structureCacheSchema } from "../src/core/projectStructure.js";
-import { attachProjectStructure, buildProjectEvidencePackage, ProjectAiGenerationService, type ProjectAiRequest } from "../src/core/projectAiGeneration.js";
-import { buildProjectTopics } from "../src/core/projectTopics.js";
-import { structureCandidates, type StructureCandidate } from "../src/core/projectStructureKnowledge.js";
+import { attachProjectStructure, buildProjectEvidencePackage, ProjectAiGenerationService, type ProjectAiRequest } from "../src/features/project/host/generation/projectAiGeneration.js";
+import { buildStructureIndex, structureCacheSchema } from "../src/features/project/host/indexing/projectStructure.js";
+import { structureCandidates, type StructureCandidate } from "../src/features/project/host/indexing/projectStructureKnowledge.js";
+import { buildProjectTopics } from "../src/features/project/knowledge/projectTopics.js";
 
 const inputs = (files: Record<string, string>) => Object.entries(files).map(([path, content]) => ({ path, content }));
 const fixture = {

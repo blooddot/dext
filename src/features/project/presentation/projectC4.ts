@@ -1,6 +1,6 @@
-import type { ProjectIntent } from "./projectIntent.js";
-import type { ProjectTopic } from "./projectTopics.js";
-import type { ProjectDiagramEvidence } from "./projectDiagram.js";
+import type { ProjectDiagramEvidence } from "../contracts/projectDiagram.js";
+import type { ProjectIntent } from "../contracts/projectIntent.js";
+import type { ProjectTopic } from "../knowledge/projectTopics.js";
 
 /** Collapse process boundaries, not interactions. Preserve direction and all supporting evidence. */
 export function systemContextRelationships(model: NonNullable<ProjectIntent["c4"]>): typeof model.relationships {

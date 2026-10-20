@@ -1,4 +1,4 @@
-import type { ProjectDiagram } from "../core/projectDiagram.js";
+import type { ProjectDiagram } from "../contracts/projectDiagram.js";
 import { archifyViewerBridgeScript, isTrustedHostMessage, isTrustedViewerMessage } from "./archifyBridge.js";
 
 export interface ReaderArchifyView {

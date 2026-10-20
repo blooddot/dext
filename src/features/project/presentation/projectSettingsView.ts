@@ -1,5 +1,5 @@
-import { PROJECT_EVIDENCE_DEPTHS, type ProjectEvidenceSettings } from "../core/projectEvidenceSettings.js";
-import type { ProjectSettings, ProjectWorkspaceSettings } from "../core/projectSettings.js";
+import { PROJECT_EVIDENCE_DEPTHS, type ProjectEvidenceSettings } from "../contracts/projectEvidenceSettings.js";
+import type { ProjectSettings, ProjectWorkspaceSettings } from "../contracts/projectSettings.js";
 
 const escape = (value: string): string => value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!);
 

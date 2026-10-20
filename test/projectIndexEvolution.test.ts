@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { projectIntentSchema, validateProjectIntent } from "../src/core/projectIntent.js";
-import { reconcileProjectIndex, analysisSourceFiles } from "../src/core/projectIndexEvolution.js";
-import { buildProjectTopics } from "../src/core/projectTopics.js";
-import { readerGalleryArticle, renderProjectTopics } from "../src/webview/projectTopicsView.js";
-import type { ProjectDiagram } from "../src/core/projectDiagram.js";
+import type { ProjectDiagram } from "../src/features/project/contracts/projectDiagram.js";
+import { projectIntentSchema, validateProjectIntent } from "../src/features/project/contracts/projectIntent.js";
+import { analysisSourceFiles, reconcileProjectIndex } from "../src/features/project/knowledge/projectIndexEvolution.js";
+import { buildProjectTopics } from "../src/features/project/knowledge/projectTopics.js";
+import { readerGalleryArticle, renderProjectTopics } from "../src/features/project/presentation/projectTopicsView.js";
 
 const intent = (contexts: { id: string; sourceFiles: string[]; dependsOn?: string[] }[]) => projectIntentSchema.parse({
   schemaVersion: 1, updatedAt: 1, brief: { name: "App" },

@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { attachProjectStructure, buildProjectEvidencePackage, PROJECT_INDEX_PROMPT_VERSION } from "../src/core/projectAiGeneration.js";
-import { buildStructureIndex } from "../src/core/projectStructure.js";
-import { buildProjectTopics } from "../src/core/projectTopics.js";
-import { projectIntentSchema } from "../src/core/projectIntent.js";
-import type { ProjectDiagram } from "../src/core/projectDiagram.js";
-import { ProjectDiagramAdapterRegistry } from "../src/core/projectDiagramRegistry.js";
-import type { ProjectDiagramAdapter, DiagramAdapterDocument, DiagramAdapterArtifact } from "../src/core/projectDiagramAdapter.js";
+import type { ProjectDiagram } from "../src/features/project/contracts/projectDiagram.js";
+import type { DiagramAdapterArtifact, DiagramAdapterDocument, ProjectDiagramAdapter } from "../src/features/project/contracts/projectDiagramAdapter.js";
+import { projectIntentSchema } from "../src/features/project/contracts/projectIntent.js";
+import { ProjectDiagramAdapterRegistry } from "../src/features/project/host/diagrams/projectDiagramRegistry.js";
+import { attachProjectStructure, buildProjectEvidencePackage, PROJECT_INDEX_PROMPT_VERSION } from "../src/features/project/host/generation/projectAiGeneration.js";
+import { buildStructureIndex } from "../src/features/project/host/indexing/projectStructure.js";
+import { buildProjectTopics } from "../src/features/project/knowledge/projectTopics.js";
 
 vi.mock("vscode", () => ({ Uri: {}, workspace: {} }));
 

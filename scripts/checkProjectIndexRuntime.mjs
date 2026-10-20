@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 // Exercise the production CJS bundling path, not just the unbundled development dependency.
 export async function checkProjectIndexRuntime() {
   const outfile = resolve('.tmp-tb/project-index-runtime.cjs');
-  await build({ entryPoints: ['src/core/projectStructure.ts'], outfile, bundle: true, platform: 'node', format: 'cjs', target: 'node20' });
+  await build({ entryPoints: ['src/features/project/host/indexing/projectStructure.ts'], outfile, bundle: true, platform: 'node', format: 'cjs', target: 'node20' });
   const { buildStructureIndex } = await import(pathToFileURL(outfile).href);
   const index = await buildStructureIndex([
     { path: 'main.js', content: 'export function main() {}' },

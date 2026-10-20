@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { projectIntentSchema, validateProjectIntent } from "../src/core/projectIntent.js";
-import { buildProjectTopics, topicFingerprint } from "../src/core/projectTopics.js";
-import { projectIndexQuality } from "../src/core/projectIndexQuality.js";
-import { attachProjectStructure, buildProjectEvidencePackage, ProjectAiGenerationService, validateProjectAiModel } from "../src/core/projectAiGeneration.js";
+import { projectIntentSchema, validateProjectIntent } from "../src/features/project/contracts/projectIntent.js";
+import { attachProjectStructure, buildProjectEvidencePackage, ProjectAiGenerationService, validateProjectAiModel } from "../src/features/project/host/generation/projectAiGeneration.js";
+import { projectIndexQuality } from "../src/features/project/host/generation/projectIndexQuality.js";
+import { buildProjectTopics, topicFingerprint } from "../src/features/project/knowledge/projectTopics.js";
+import { buildStructureIndex } from "../src/features/project/host/indexing/projectStructure.js";
 
-import { buildStructureIndex } from "../src/core/projectStructure.js";
 
 const evidence = [{ path: "README.md", line: 1 }];
 const fixture = () => projectIntentSchema.parse({ schemaVersion: 1, updatedAt: 1, brief: { name: "Example", evidence },

@@ -1,22 +1,22 @@
 import { describe, expect, it } from "vitest";
+import type { ProjectDiagram } from "../src/features/project/contracts/projectDiagram.js";
+import { projectIntentSchema } from "../src/features/project/contracts/projectIntent.js";
 import {
-  buildProjectEvidencePackage,
-  compareProjectEvidencePaths,
-  PROJECT_INDEX_PROMPT_VERSION,
-  PROJECT_DIAGRAM_PROMPT_VERSION,
-  ProjectAiGenerationError,
-  ProjectAiGenerationService,
-  projectEvidenceFileRank,
-  summarizeProjectEvidence,
-  validateDiagramSemantics,
-  validateProjectAiModel,
-  type ProjectAiActivityEvent,
-  type ProjectAiGeneratedModel,
-  type ProjectAiProvider,
-  type ProjectEvidencePackage
-} from "../src/core/projectAiGeneration.js";
-import { projectIntentSchema } from "../src/core/projectIntent.js";
-import type { ProjectDiagram } from "../src/core/projectDiagram.js";
+buildProjectEvidencePackage,
+compareProjectEvidencePaths,
+PROJECT_DIAGRAM_PROMPT_VERSION,
+PROJECT_INDEX_PROMPT_VERSION,
+ProjectAiGenerationError,
+ProjectAiGenerationService,
+projectEvidenceFileRank,
+summarizeProjectEvidence,
+validateDiagramSemantics,
+validateProjectAiModel,
+type ProjectAiActivityEvent,
+type ProjectAiGeneratedModel,
+type ProjectAiProvider,
+type ProjectEvidencePackage
+} from "../src/features/project/host/generation/projectAiGeneration.js";
 
 const files = [
   { path: "README.md", content: "# Example\nA task application." },

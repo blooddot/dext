@@ -1,44 +1,10 @@
-import { editorTabKey } from "./editorTabTypes.js";
-import { createEditorTabState } from "./editorTabState.js";
-import { describeEditorTab, type EditorTabManager } from "./editorTabManager.js";
-import type { EditorTabRestorer } from "./editorTabSerializer.js";
-import { renderProjectPanel, type ProjectPanelData, type ProjectPanelPage } from "./webview/projectPanel.js";
-import type { ProjectInitializationState } from "./projectService.js";
-import type { ProjectPanelMessage } from "./vscodeProjectHost.js";
-
-export interface ProjectReaderEvidenceRequest {
-  diagramId: string;
-  updatedAt: number;
-  elementId: string;
-  elementKind: "node" | "relation";
-  evidenceIndex: number;
-}
-export interface ProjectReaderExportRequest { diagramId: string; updatedAt: number; content: string }
-export interface ProjectReaderRenderRequest { diagramId: string; updatedAt: number; requestId: string }
-
-export interface ProjectEditorDataSource {
-  load(): Promise<ProjectPanelData>;
-  /** Host → webview messages (render results, generation progress, export status). */
-  subscribe?(listener: (message: ProjectPanelMessage) => void): () => void;
-  initialize?(): Promise<ProjectPanelData>;
-  initialization?(): ProjectInitializationState;
-  onInitializationChange?(listener: (state: ProjectInitializationState) => void): () => void;
-  setAiCli?(cli?: string): Promise<void> | void;
-  setAiModel?(model?: string): Promise<void> | void;
-  setAiReasoning?(reasoningEffort?: string): Promise<void> | void;
-  setAiSpeed?(speed?: string): Promise<void> | void;
-  setProjectSettings?(settings: unknown, version: number): Promise<void>;
-  setEvidenceSettings?(settings: unknown, version: number): Promise<void>;
-  setWorkspaceSettings?(settings: unknown, version: number): Promise<void>;
-  checkKnowledge?(): Promise<void>;
-  openTopicEvidence?(topicId: string, index: number): Promise<void>;
-  generateTopicDiagram?(topicId: string): Promise<void>;
-  openReaderEvidence?(request: ProjectReaderEvidenceRequest): Promise<void>;
-  exportReaderDiagram?(request: ProjectReaderExportRequest): Promise<void>;
-  renderReaderDiagram?(request: ProjectReaderRenderRequest): Promise<void>;
-  /** Cancels in-flight render/generation work when the page closes or the diagram changes. */
-  cancelDiagramWork?(): void;
-}
+import { describeEditorTab, type EditorTabManager } from "../../../platform/editor-tabs/editorTabManager.js";
+import type { EditorTabRestorer } from "../../../platform/editor-tabs/editorTabSerializer.js";
+import { createEditorTabState } from "../../../platform/editor-tabs/editorTabState.js";
+import { editorTabKey } from "../../../platform/editor-tabs/editorTabTypes.js";
+import type { ProjectEditorDataSource } from "../contracts/reader.js";
+import { renderProjectPanel, type ProjectPanelData, type ProjectPanelPage } from "../presentation/projectPanel.js";
+export type { ProjectEditorDataSource, ProjectReaderEvidenceRequest, ProjectReaderExportRequest, ProjectReaderRenderRequest } from "../contracts/reader.js";
 
 export interface ProjectEditorProviderOptions {
   manager: EditorTabManager;

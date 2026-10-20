@@ -129,7 +129,7 @@ assert.ok(
 assert.equal(buildMeta.schemaVersion, 1, "dist/build-meta.json was written by an unknown esbuild manifest schema.");
 const extensionInputs = buildMeta.entryInputs?.extension;
 assert.ok(Array.isArray(extensionInputs) && extensionInputs.length > 0, "The build manifest lists no extension inputs; rerun `npm run build`.");
-for (const known of ["src/extension.ts", "src/core/archifyAdapter.ts"]) {
+for (const known of ["src/extension.ts", "src/features/project/host/diagrams/archifyAdapter.ts"]) {
   assert.ok(
     extensionInputs.some((input) => input === known || input.endsWith(`/${known}`)),
     `The build manifest does not list '${known}', so it does not describe this bundle.`
