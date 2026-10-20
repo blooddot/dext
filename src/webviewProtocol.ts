@@ -1,3 +1,4 @@
+import { fileSearchRequestSchema, type FileSearchResponse } from "./features/workspace/contracts.js";
 import type { ResourceSession } from "./features/resources/contracts/resourceSession.js";
 import { UI_LIMITS, uiFormResultSchema } from "./core/uiForm.js";
 import { z } from "zod";
@@ -75,11 +76,7 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("openFileReference"), reference: z.string().min(1) }),
   z.object({ type: z.literal("openBuiltinApiDefinition"), id: z.string().regex(/^[A-Za-z][A-Za-z0-9_.-]*$/) }),
   z.object({ type: z.literal("openExternalLink"), url: z.string().min(1) }),
-  z.object({
-    type: z.literal("searchFiles"),
-    requestId: z.number().int().nonnegative(),
-    query: z.string().max(120)
-  }),
+  fileSearchRequestSchema,
   z.object({ type: z.literal("chooseFiles") }),
   z.object({ type: z.literal("searchProjectReferences"), requestId: z.string().min(1), query: z.string().max(200) }),
   z.object({ type: z.literal("openProjectReference"), objectId: z.string().min(1).max(256) }),
@@ -273,7 +270,7 @@ export type WebviewResponse =
     codeReference?: { expression: string; payload: string };
     fileReferences?: Array<{ expression: string; payload: string }>;
   }
-  | { type: "searchFilesResult"; requestId: number; files: string[] }
+  | FileSearchResponse
   | { type: "projectReferenceSearchResult"; requestId: string; items: Array<{ objectId: string; canonicalName: string; displayName?: string; aliases: string[]; kind: string; token: string }>; error?: string }
   | { type: "resolveDroppedFilesResult"; requestId: number; expressions: string[]; error?: string }
   | { type: "setInput"; source: string }

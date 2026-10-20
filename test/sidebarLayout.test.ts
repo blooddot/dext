@@ -348,7 +348,7 @@ describe("sidebar panel layout", () => {
 
   it("opens workspace Markdown links from output in the editor", async () => {
     const main = await source("src/webview/main.ts");
-    const outputLinks = await source("src/webview/outputLink.ts");
+    const outputLinks = await source("src/features/workspace/browser/outputLink.ts");
     expect(main).toMatch(/function openOutputLink[\s\S]*?closest<HTMLAnchorElement>\("a\[href\]"\)[\s\S]*?type: "openFileReference"/);
     expect(main).toContain('elements.result.addEventListener("click", openOutputLink);');
     expect(main).toContain('type: "openExternalLink", url: externalUrl');
@@ -366,10 +366,12 @@ describe("sidebar panel layout", () => {
     expect(typescript).toContain('addExtraLib');
     expect(typescript).toContain('dextTypes');
     expect(editor).toContain('installDextTypescript');
-    expect(sidebar).toMatch(/case "searchFiles":[\s\S]*?const fileIndex = await this\.workspaceFileIndex\(\)[\s\S]*?rankFileMatches\(\s*fileIndex/);
-    expect(sidebar).toMatch(/private async workspaceFileIndex[\s\S]*?vscode\.workspace\.findFiles\("\*\*\/\*", FILE_INDEX_EXCLUDE, MAX_INDEXED_FILES\)/);
+    expect(sidebar).toContain('await this.fileSearch.search(request)');
+    const search = await source("src/features/workspace/host/fileSearchController.ts");
+    expect(search).toMatch(/const paths = await this\.workspaceFileIndex\(\)[\s\S]*?rankFileMatches\(paths/);
+    expect(search).toMatch(/private async workspaceFileIndex[\s\S]*?vscode\.workspace\.findFiles\("\*\*\/\*", FILE_INDEX_EXCLUDE, MAX_INDEXED_FILES\)/);
     // A failed listing must not raise the composer's error banner.
-    expect(sidebar).toMatch(/private async workspaceFileIndex[\s\S]*?\} catch \{[\s\S]*?paths = \[\];/);
+    expect(search).toMatch(/private async workspaceFileIndex[\s\S]*?\} catch \{[\s\S]*?paths = \[\];/);
   });
 
   it("sends on Enter in chat modes and keeps Enter as a newline in Code mode", async () => {

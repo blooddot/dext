@@ -17,7 +17,8 @@ import type {
 } from "../core/types.js";
 import type { ConversationSummary, SidebarState, WebviewRequest, WebviewResponse } from "../webviewProtocol.js";
 import { ClipboardClient } from "./clipboardClient.js";
-import { FileSearchClient } from "./fileSearchClient.js";
+import { FileSearchClient } from "../features/workspace/browser/fileSearchClient.js";
+import { outputExternalLink, outputLinkReference } from "../features/workspace/browser/outputLink.js";
 import { ProjectReferenceClient } from "./projectReferenceClient.js";
 import { bindFileDropTarget, droppedFilePaths, fileSelectionDropEffect, isFileDrag } from "./fileDrop.js";
 import { FileDropClient } from "./fileDropClient.js";
@@ -41,7 +42,6 @@ import {
 } from "../core/fileReference.js";
 import { createFileReferenceChip, fileReferenceChipDescriptor } from "./fileReferenceChip.js";
 import { colorizeSource } from "./sourceHighlight.js";
-import { outputExternalLink, outputLinkReference } from "./outputLink.js";
 import { observeComposerOverflow } from "./composerOverflow.js";
 import { installResultScrollProbe } from "./scrollProbe.js";
 import { enableConversationTabDrag } from "./conversationTabDrag.js";

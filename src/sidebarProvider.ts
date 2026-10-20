@@ -27,7 +27,7 @@ import {
 } from "./vscodeAttachments.js";
 import { ReadyMessageQueue } from "./readyMessageQueue.js";
 import { clipboardFileReferences, copyFilePathKeepingFiles, copyFilePathKeepingLine } from "./vscodeClipboardFiles.js";
-import { rankFileMatches } from "./core/fileSearch.js";
+import { FileSearchController } from "./features/workspace/host/fileSearchController.js";
 import { planPathSegments } from "./core/planFile.js";
 import { planTodoItems, planTodoInstruction, stripPlanTodoProgress } from "./core/planTodoProgress.js";
 import { PlanExecution, resumePlanTodos } from "./core/planExecution.js";
@@ -113,10 +113,6 @@ function defaultConversationSelection(previous: AgentSelection): AgentSelection 
 
 // The picker ranks paths in the host, so the index has to be broad enough to
 // contain the answer while staying cheap enough to rebuild on a stale read.
-const MAX_INDEXED_FILES = 20000;
-const MAX_FILE_SUGGESTIONS = 40;
-const FILE_INDEX_TTL_MS = 15000;
-const FILE_INDEX_EXCLUDE = "**/{node_modules,.git,dist,out,build,.venv,__pycache__,.dext/attachments}/**";
 
 function sessionSignature(session: DextHistorySession): string {
   const last = session.turns.at(-1);
@@ -198,9 +194,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   private readonly agentInputs = new AgentInputBroker();
   private inputNotifications?: InputNotifications;
   private pendingInputFocus: InputNotificationTarget | undefined;
-  private fileIndex: { paths: string[]; loadedAt: number } | undefined;
-  private fileIndexLoading: Promise<readonly string[]> | undefined;
-  private latestFileSearchRequestId = -1;
+  private fileSearch = new FileSearchController(response => this.post(response));
 
   private hydrateSessions(): void {
     if (this.sessionsHydrated) return;
@@ -493,6 +487,8 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   resolveWebviewView(view: vscode.WebviewView): void {
+    this.fileSearch.dispose();
+    this.fileSearch = new FileSearchController(response => this.post(response));
     this.view = view;
     this.postedSessionSignatures.clear();
     this.messageQueue.markNotReady();
@@ -515,6 +511,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     );
     view.onDidDispose(() => {
       if (this.view === view) {
+        this.fileSearch.dispose();
         this.view = undefined;
         this.messageQueue.markNotReady();
       }
@@ -1008,6 +1005,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   dispose(): void {
+    this.fileSearch.dispose();
     this.disposed = true;
     this.inputNotifications?.dispose();
     this.pendingInputFocus = undefined;
@@ -1269,19 +1267,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           await openExternalLink(request.url);
           break;
         case "searchFiles": {
-          if (request.requestId < this.latestFileSearchRequestId) break;
-          this.latestFileSearchRequestId = request.requestId;
-          const fileIndex = await this.workspaceFileIndex();
-          if (request.requestId !== this.latestFileSearchRequestId) break;
-          await this.post({
-            type: "searchFilesResult",
-            requestId: request.requestId,
-            files: rankFileMatches(
-              fileIndex,
-              request.query,
-              MAX_FILE_SUGGESTIONS
-            )
-          });
+          await this.fileSearch.search(request);
           break;
         }
         case "resolveDroppedFiles": {
@@ -1828,36 +1814,6 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     // it again after the turn is stored so the first turn survives a reload.
     for (const [provider, providerSessionId] of Object.entries(session.providerSessions ?? {})) {
       await this.history.setProviderSession(session.id, provider, providerSessionId);
-    }
-  }
-
-  // Ranking happens over a cached listing rather than one glob per keystroke,
-  // because a glob cannot express a fuzzy match that crosses path separators.
-  private async workspaceFileIndex(): Promise<readonly string[]> {
-    const now = Date.now();
-    if (this.fileIndex && now - this.fileIndex.loadedAt < FILE_INDEX_TTL_MS) return this.fileIndex.paths;
-    if (this.fileIndexLoading) return this.fileIndexLoading;
-    this.fileIndexLoading = (async () => {
-      let paths: string[];
-      try {
-        const uris = await vscode.workspace.findFiles("**/*", FILE_INDEX_EXCLUDE, MAX_INDEXED_FILES);
-        paths = uris.flatMap((uri) => {
-          const relative = vscode.workspace.asRelativePath(uri, false).replaceAll("\\", "/");
-          // A file outside every workspace folder has no reference Dext can build.
-          return relative.startsWith("..") || relative.includes(":") ? [] : [relative];
-        });
-      } catch {
-        // A failed listing must leave the composer usable, not raise an error
-        // banner over a keystroke the user did not think of as a command.
-        paths = [];
-      }
-      this.fileIndex = { paths, loadedAt: Date.now() };
-      return paths;
-    })();
-    try {
-      return await this.fileIndexLoading;
-    } finally {
-      this.fileIndexLoading = undefined;
     }
   }
 
