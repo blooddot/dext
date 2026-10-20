@@ -186,3 +186,147 @@ runtime bundle contains neither the TypeScript compiler nor the removed scan/eng
 that the Archify entry point, five schemas and five renderers the adapter names are present, and that
 `vendor/project-diagrams/drawio` is not packaged. The rest of the vendored runtime is distributed
 because `.vscodeignore` does not exclude `vendor/**`.
+
+## First module migration / 第一轮模块迁移
+
+Use `app` for composition, `platform` for shared infrastructure, and `features` for product responsibilities. `features` expresses this project's grouping; no industry popularity ranking is claimed. Do not introduce a parallel `modules` root or empty directory templates. Host code owns Node/VS Code; browser code owns DOM interaction; contracts and presentation remain environment independent.
+
+Keep extension commands, message discriminants, CSP/nonce, `dist/extension.js`, `dist/webview/main.js`, `dist/webview/project.js`, `dext.agentProfiles`, `dext.agentSelection`, editor tab identity and all persisted Project schemas compatible. The composition root owns service disposal; providers unsubscribe on close and cancel their own requests. Preserve existing .dext data; acceptance uses temporary copies.
+
+Compatibility entries have explicit exports and no implementation. Unmigrated consumers remain on those entries until their own migration; remove each entry only after its last external consumer moves. New feature code uses new paths.
+
+| Previous path | Implementation |
+| --- | --- |
+| `src/core/projectIntent.ts` | `src/features/project/contracts/projectIntent.ts` |
+| `src/core/projectKnowledge.ts` | `src/features/project/contracts/projectKnowledge.ts` |
+| `src/core/projectDiagram.ts` | `src/features/project/contracts/projectDiagram.ts` |
+| `src/core/projectDiagramAdapter.ts` | `src/features/project/contracts/projectDiagramAdapter.ts` |
+| `src/core/projectEvidenceSettings.ts` | `src/features/project/contracts/projectEvidenceSettings.ts` |
+| `src/core/projectSettings.ts` | `src/features/project/contracts/projectSettings.ts` |
+| `src/webview/projectArchitectureTypes.ts` | `src/features/project/contracts/projectArchitectureTypes.ts` |
+| `src/core/projectContext.ts` | `src/features/project/knowledge/projectContext.ts` |
+| `src/core/projectReference.ts` | `src/features/project/knowledge/projectReference.ts` |
+| `src/core/projectTopics.ts` | `src/features/project/knowledge/projectTopics.ts` |
+| `src/core/projectIndexEvolution.ts` | `src/features/project/knowledge/projectIndexEvolution.ts` |
+| `src/core/projectArchitecture.ts` | `src/features/project/knowledge/projectArchitecture.ts` |
+| `src/core/projectDiagramHistory.ts` | `src/features/project/knowledge/projectDiagramHistory.ts` |
+| `src/core/projectC4.ts` | `src/features/project/presentation/projectC4.ts` |
+| `src/core/projectDiagramPresentation.ts` | `src/features/project/presentation/projectDiagramPresentation.ts` |
+| `src/core/projectMermaid.ts` | `src/features/project/presentation/projectMermaid.ts` |
+| `src/core/projectStructure.ts` | `src/features/project/host/indexing/projectStructure.ts` |
+| `src/core/projectStructureKnowledge.ts` | `src/features/project/host/indexing/projectStructureKnowledge.ts` |
+| `src/projectStructureHost.ts` | `src/features/project/host/indexing/projectStructureHost.ts` |
+| `src/core/projectAiGeneration.ts` | `src/features/project/host/generation/projectAiGeneration.ts` |
+| `src/core/projectIndexQuality.ts` | `src/features/project/host/generation/projectIndexQuality.ts` |
+| `src/projectService.ts` | `src/features/project/host/projectService.ts` |
+| `src/projectStore.ts` | `src/features/project/host/persistence/projectStore.ts` |
+| `src/vscodeProjectHost.ts` | `src/features/project/host/projectPanelDataSource.ts` |
+| `src/projectEditorProvider.ts` | `src/features/project/host/projectEditorProvider.ts` |
+| `src/projectDiagramViewer.ts` | `src/features/project/host/diagrams/projectDiagramViewer.ts` |
+| `src/core/projectDiagramRegistry.ts` | `src/features/project/host/diagrams/projectDiagramRegistry.ts` |
+| `src/core/projectDiagramProcess.ts` | `src/features/project/host/diagrams/projectDiagramProcess.ts` |
+| `src/core/archifyAdapter.ts` | `src/features/project/host/diagrams/archifyAdapter.ts` |
+| `src/webview/projectPanel.ts` | `src/features/project/presentation/projectPanel.ts` |
+| `src/webview/projectSettingsView.ts` | `src/features/project/presentation/projectSettingsView.ts` |
+| `src/webview/projectTopicsView.ts` | `src/features/project/presentation/projectTopicsView.ts` |
+| `src/webview/projectArchitectureNotes.ts` | `src/features/project/presentation/projectArchitectureNotes.ts` |
+| `src/webview/projectReader.ts` | `src/features/project/browser/projectReader.ts` |
+| `src/webview/projectReaderArchify.ts` | `src/features/project/browser/projectReaderArchify.ts` |
+| `src/webview/archifyBridge.ts` | `src/features/project/browser/archifyBridge.ts` |
+| `src/editorTabTypes.ts` | `src/platform/editor-tabs/editorTabTypes.ts` |
+| `src/editorTabState.ts` | `src/platform/editor-tabs/editorTabState.ts` |
+| `src/editorTabSerializer.ts` | `src/platform/editor-tabs/editorTabSerializer.ts` |
+| `src/editorTabManager.ts` | `src/platform/editor-tabs/editorTabManager.ts` |
+| `src/editorTabHtml.ts` | `src/platform/editor-tabs/editorTabHtml.ts` |
+| `src/resourceSession.ts` | `src/features/resources/contracts/resourceSession.ts` |
+| `src/resourceIcons.ts` | `src/features/resources/presentation/resourceIcons.ts` |
+| `src/resourceBrowserProvider.ts` | `src/features/resources/host/resourceBrowserProvider.ts` |
+| `src/apiEditorProvider.ts` | `src/features/resources/host/apiEditorProvider.ts` |
+| `src/globalResourcesEditorProvider.ts` | `src/features/resources/host/globalResourcesEditorProvider.ts` |
+| `src/webview/apiPanel.ts` | `src/features/resources/presentation/apiPanel.ts` |
+| `src/webview/globalResourcesPanel.ts` | `src/features/resources/presentation/globalResourcesPanel.ts` |
+| `src/agentProfiles.ts` | `src/features/agents/host/agentProfiles.ts` |
+| `src/agentSelectionDefaults.ts` | `src/features/agents/presentation/agentSelectionDefaults.ts` |
+| `src/core/toml.ts` | `src/features/agents/host/toml.ts` |
+| `src/core/fileSearch.ts` | `src/features/workspace/domain/fileSearch.ts` |
+| `src/webview/outputLink.ts` | `src/features/workspace/browser/outputLink.ts` |
+| `src/webview/fileSearchClient.ts` | `src/features/workspace/browser/fileSearchClient.ts` |
+
+Additional verification file: `test/sidebarLayout.test.ts` — source-location assertions follow extracted implementations; layout and behavior expectations remain enforced. / 额外验证文件：源码断言改为读取迁移后的实现，保留布局和行为约束。
+
+Additional verification file: `scripts/checkProjectDiagramsUi.mjs` — use the new browser startup entry, retaining the same rendered diagram assertions. / 图表浏览器检查改用新启动入口，保留原渲染断言。
+
+### Behavior, boundaries and next-round entry criteria
+
+Behavior contracts: Project starts at `features/project/browser/entry.ts`, reads `window.__dextApi`, and still builds to `dist/webview/project.js`. Existing page, diagram, progress and result message discriminants remain unchanged; `projectPage` accepts an optional topic ID. File search still uses `searchFiles { requestId, query }` and `searchFilesResult { requestId, files }`, a 20,000-file index, 15-second cache and 40 suggestions with existing exclusions. Request identity and disposal checks suppress stale responses.
+
+Editor restore version remains 1; keys retain `dext.editor:<kind>[@scope][#resource]`. View types remain `dext.project`, `dext.api`, `dext.globalResources` and `dext.history`. `app/projectSetup.ts` registers Project editors, serializers and the diagram registry with the extension's disposal owner. Closing a page cancels its tasks and releases its subscriptions. The AI bridge receives narrow execution methods and Profile/Selection callbacks. Agent storage keys and Project paths/schema versions are unchanged; initialization succeeds only after saving, and failures/cancellation preserve the last valid result.
+
+`checkModuleBoundaries.mjs`, included in `npm run check`, distinguishes type-only imports from runtime edges and checks transitive environment dependencies, runtime cycles and feature-to-app dependencies. Bundle metadata also rejects host code and Node/VS Code dependencies in browser output. Cross-feature collaboration through explicit contracts remains allowed. The complete runtime legacy exception list is:
+
+| Source | Dependency | Reason and exit condition |
+| --- | --- | --- |
+| `features/project/browser/projectReader.ts` | `webview/markdownDiagrams.ts` | Existing browser renderer; remove when shared rendering moves to platform |
+| `features/project/contracts/projectSettings.ts` | `core/planFile.ts` | Pure plan-path contract; remove when conversation plan contracts migrate |
+| `features/project/host/generation/projectAiGeneration.ts` | `core/cliAxAIService.ts` | Structured-output transport; remove when Agent transport contracts migrate |
+| `features/project/host/indexing/projectStructure.ts` | `core/syntaxParser.ts` | WASM loader; remove when shared parser infrastructure migrates |
+| `features/resources/host/resourceEditorProvider.ts` | `core/methodSignature.ts` | API signature presentation; remove when workflow API contracts migrate |
+
+Exceptions do not bypass environment or cycle checks. There are no directory-wide exemptions.
+
+Quality review treats sole runtime consumers as clues. Each reviewed concern returns `retained`, `reassigned` or `unresolved`, a reason and supplied evidence paths. Missing/duplicate decisions, foreign evidence and invalid ownership fail validation. Overview and Knowledge separate architecture defects, unresolved ownership and collapsed explained decisions; old data without review status remains unresolved. Static build-entry discovery supplies bounded startup/send/receive/host/transport windows, including injected APIs; it never executes build scripts. Dynamic entries and budget omissions are recorded. Isolated C4 elements permit one bounded relationship-only review grounded in read excerpts; failure, timeout or insufficient evidence preserves warnings, while cancellation propagates.
+
+History remains readable after source movement, split or merge. Matching names alone cannot preserve identity; uncertain or orphan analyses show stale-boundary notices. Fixture, browser, extension-host and actual-AI checks remain separate. Use `node scripts/checkProjectReaderUi.mjs --saved-project --workspace <temporary-copy>` to browse generated data without writing to the real workspace.
+
+The next round starts only after all first-round checks and temporary-workspace AI acceptance pass and the compatibility/exception inventories are current. Split conversation state/history first (identity, cancellation and late messages), then execution/plan review (concurrency, approvals and restoration), then browser components (focus, streaming and scrolling). Workflow kernels and Agent providers follow explicit execution/transport contracts; MCP and completion follow with separate connection, credential, cancellation and latency checks. These remain in existing implementations for now. Do not create empty feature modules or transfer remaining responsibilities into another large controller.
+
+### Remaining compatibility consumers
+
+Acceptance on 2026-10-20: `npm run check` passed (154 test files / 1504 tests passed; existing 3 files / 13 tests skipped), including boundaries, lint, types, build, declarations and five packaged WASM grammars. Default test concurrency is unchanged. `npm run check:ui`, editor-tab checks, saved-project reader checks and `npm run test:host` passed, covering themes, narrow layouts, fullscreen, playback, export, navigation messages, activation and Project/API/resource tab lifecycles.
+
+A temporary post-migration source copy was analyzed through the real Codex Provider: all 229 source files received unique owners, with 3 additional documentation/configuration files; the output contained 50 responsibility modules and 2 architecture topics. Workspace search contracts and Agent selection presentation were retained with evidence-based explanations; no unresolved ownership or isolated C4 issues remained. Reader interactions cite actual browser send/receive and host-handler excerpts; MCP retains HTTP/stdio and Archify is an internal subprocess. A subsequent real module analysis produced 10 nodes and 8 relationships. Its first output failed validation, automatic repair passed, and the saved diagram rendered natively in Archify under the browser/fullscreen checks. Evidence is in `.tmp-tb/final-live.log`, `.tmp-tb/final-ai-reader.log` and `.tmp-tb/project-reader-ui/generated-module-analysis.png`.
+
+This records one real run, not a fixed module count or a guarantee of semantic completeness. Unread/truncated module evidence remains explicit, and sequential AI-call latency was not optimized. The plan file and the real workspace's evidence, intent and project settings retained their original hashes; generated acceptance data was written only to temporary copies.
+
+These explicit forwarders contain no implementation and can be removed when the listed consumers migrate. New feature implementations never import them.
+
+| Compatibility entry | Remaining consumers |
+| --- | --- |
+| `src/resourceDocuments.ts` | `test/apiReference.test.ts`, `test/apiSource.test.ts` |
+| `src/core/projectIntent.ts` | `test/projectIntegration.test.ts`, `test/projectIndex.test.ts`, `test/projectContext.test.ts` |
+| `src/core/projectKnowledge.ts` | `test/projectStore.test.ts`, `test/projectKnowledge.test.ts`, `test/projectIntegration.test.ts`, `test/projectContext.test.ts` |
+| `src/core/projectDiagram.ts` | `test/archifyLayoutBudget.test.ts`, `test/archifyAdapter.test.ts`, `test/projectStore.test.ts`, `test/projectMermaid.test.ts`, `test/projectIntegration.test.ts`, `test/projectIndex.test.ts`, `test/projectDiagramRegistry.test.ts`, `test/projectDiagramPresentation.test.ts`, `test/projectDiagramAdapter.test.ts`, `test/projectDiagram.test.ts`, `test/projectArchitecture.test.ts` |
+| `src/core/projectDiagramAdapter.ts` | `test/archifyAdapter.test.ts`, `test/projectIntegration.test.ts`, `test/projectDiagramRegistry.test.ts`, `test/projectDiagramAdapter.test.ts`, `test/projectDiagram.test.ts` |
+| `src/core/projectEvidenceSettings.ts` | `test/projectEvidenceSettings.test.ts` |
+| `src/core/projectSettings.ts` | `test/projectWorkspaceSettings.test.ts` |
+| `src/core/projectContext.ts` | `test/projectContext.test.ts` |
+| `src/core/projectReference.ts` | `src/webview/projectReferenceClient.ts`, `test/projectReference.test.ts`, `src/core/fileReference.ts` |
+| `src/core/projectTopics.ts` | `test/projectIndex.test.ts` |
+| `src/core/projectArchitecture.ts` | `test/projectArchitecture.test.ts` |
+| `src/core/projectDiagramHistory.ts` | `test/projectDiagram.test.ts` |
+| `src/core/projectDiagramPresentation.ts` | `test/projectDiagramPresentation.test.ts` |
+| `src/core/projectMermaid.ts` | `test/projectMermaid.test.ts` |
+| `src/core/projectAiGeneration.ts` | `test/archifyAdapter.test.ts`, `test/projectIntegration.test.ts`, `test/projectInitializationOutput.test.ts`, `test/projectIndex.test.ts` |
+| `src/projectService.ts` | `test/projectIntegration.test.ts` |
+| `src/projectStore.ts` | `test/projectStore.test.ts`, `test/projectIntegration.test.ts`, `test/projectInitializationOutput.test.ts`, `test/projectEvidenceSettings.test.ts` |
+| `src/vscodeProjectHost.ts` | `test/projectTopicsHost.test.ts`, `test/projectInitializationOutput.test.ts`, `test/projectEvidenceSettings.test.ts`, `test/projectEvidenceSelection.test.ts` |
+| `src/projectDiagramViewer.ts` | `test/projectDiagramViewer.test.ts` |
+| `src/core/projectDiagramRegistry.ts` | `test/projectIntegration.test.ts`, `test/projectDiagramRegistry.test.ts` |
+| `src/core/archifyAdapter.ts` | `scripts/checkProjectDiagramsUi.mjs`, `test/archifyLayoutBudget.test.ts`, `test/archifyAdapter.test.ts` |
+| `src/webview/projectPanel.ts` | `scripts/checkProjectDiagramsUi.mjs` |
+| `src/webview/archifyBridge.ts` | `scripts/checkProjectDiagramsUi.mjs` |
+| `src/editorTabTypes.ts` | `test/editorTabState.test.ts` |
+| `src/editorTabState.ts` | `test/editorTabState.test.ts` |
+| `src/editorTabSerializer.ts` | `test/apiReference.test.ts` |
+| `src/editorTabManager.ts` | `test/apiReference.test.ts`, `test/projectEvidenceSelection.test.ts`, `test/projectAiGeneration.test.ts` |
+| `src/editorTabHtml.ts` | `scripts/checkProjectDiagramsUi.mjs` |
+| `src/resourceSession.ts` | `src/historyStore.ts`, `test/resourceConversation.test.ts` |
+| `src/apiEditorProvider.ts` | `test/apiReference.test.ts` |
+| `src/webview/apiPanel.ts` | `test/apiSource.test.ts` |
+| `src/webview/globalResourcesPanel.ts` | `test/apiSource.test.ts` |
+| `src/agentProfiles.ts` | `test/agentRunner.test.ts`, `test/builtinCli.test.ts`, `test/harnessPresetSelection.test.ts`, `test/harnessPresets.integration.test.ts`, `src/core/agentRunner.ts`, `src/conversationPreferences.ts`, `src/core/builtinCli.ts`, `src/core/harnessPresets.ts`, `src/core/types.ts`, `src/core/deepseekHarnessRunner.ts`, `src/core/deepseekHarnessPolicy.ts`, `src/core/runtime.ts` |
+| `src/core/toml.ts` | `test/toml.test.ts` |
+| `src/webview/outputLink.ts` | `test/openImageReference.test.ts` |
+| `src/webview/fileSearchClient.ts` | `src/webview/codeEditor.ts` |
+
+Removed unused entries / 已移除无消费者入口：`src/webview/projectArchitectureTypes.ts`, `src/core/projectIndexEvolution.ts`, `src/core/projectC4.ts`, `src/core/projectStructure.ts`, `src/core/projectStructureKnowledge.ts`, `src/projectStructureHost.ts`, `src/core/projectIndexQuality.ts`, `src/projectEditorProvider.ts`, `src/core/projectDiagramProcess.ts`, `src/webview/projectSettingsView.ts`, `src/webview/projectTopicsView.ts`, `src/webview/projectArchitectureNotes.ts`, `src/webview/projectReader.ts`, `src/webview/projectReaderArchify.ts`, `src/resourceIcons.ts`, `src/resourceBrowserProvider.ts`, `src/globalResourcesEditorProvider.ts`, `src/agentSelectionDefaults.ts`, `src/core/fileSearch.ts`。
