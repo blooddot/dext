@@ -4,6 +4,7 @@ import type { WebviewResponse } from "../src/webviewProtocol.js";
 const host = vi.hoisted(() => ({ post: vi.fn() }));
 const output = vi.hoisted(() => ({ lines: [] as string[] }));
 vi.mock("vscode", () => ({
+  workspace: { findFiles: async () => [{ path: "src/current.ts" }], asRelativePath: (uri: { path: string }) => uri.path },
   window: { ...host, createOutputChannel: () => ({ appendLine: (line: string) => { output.lines.push(line); } }) },
   commands: host,
   Uri: { joinPath: () => ({ toString: () => "" }) }
@@ -73,5 +74,23 @@ describe("the composer's TypeScript support", () => {
     const { sidebar } = sidebarHarness();
     await receive(sidebar, { type: "composerTypesApplied", builtins: 24, modules: 3 });
     expect(output.lines).toContain("[composer] applied by the input: 24 built-in name(s), 3 API module(s)");
+  });
+
+  it("restarts file search ownership when a browser document sends ready again", async () => {
+    const { sidebar } = sidebarHarness();
+    const post = vi.fn<(message: WebviewResponse) => Promise<void>>(async () => {});
+    Object.assign(sidebar, {
+      messageQueue: { markReady: () => [] }, hydrateSessions: () => {}, updateRunningContext: () => {},
+      refresh: async () => {}, postConversationState: async () => {}, activeSession: { id: "session" },
+      post, postDextTypes: async () => {}, postActiveExecution: async () => {}, flushPendingMessages: async () => {}
+    });
+    await receive(sidebar, { type: "ready" });
+    await receive(sidebar, { type: "searchFiles", requestId: 9, query: "" });
+    await receive(sidebar, { type: "ready" });
+    await receive(sidebar, { type: "searchFiles", requestId: 1, query: "" });
+    expect(post.mock.calls.filter(([message]) => (message as { type: string }).type === "searchFilesResult")).toEqual([
+      [{ type: "searchFilesResult", requestId: 9, files: ["src/current.ts"] }],
+      [{ type: "searchFilesResult", requestId: 1, files: ["src/current.ts"] }]
+    ]);
   });
 });

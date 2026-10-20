@@ -1039,6 +1039,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     try {
       switch (request.type) {
         case "ready": {
+          // A reloaded document starts request ids at one; invalidate the previous document's work.
+          this.fileSearch?.dispose();
+          this.fileSearch = new FileSearchController(response => this.post(response));
           const pendingMessages = this.messageQueue.markReady();
           this.hydrateSessions();
           this.updateRunningContext();
