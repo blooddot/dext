@@ -317,7 +317,9 @@ describe("structure-driven AI generation", () => {
     expect(result.intent.contexts[1]!.sourceFiles).toEqual(['src/templates.ts']);
   });
 
-  it.each([false, true])("reviews a retained ownership contradiction once and preserves unresolved warnings: %s", async correct => {
+  it.each(['retained', 'reassigned', 'unresolved', 'missing-decision', 'duplicate-decision', 'foreign-evidence'])("validates ownership decisions and preserves unresolved warnings: %s", async status => {
+    const correct = status === 'reassigned';
+    const invalid = ['missing-decision', 'duplicate-decision', 'foreign-evidence'].includes(status);
     const index = await buildStructureIndex(inputs({
       'src/profiles.ts': 'import { parse } from "./config"; export function profiles() { return parse(); }',
       'src/config.ts': 'export function parse() { return {}; }',
@@ -335,15 +337,24 @@ describe("structure-driven AI generation", () => {
         reviews++;
         expect(request.prompt).toContain('"typeOnly":true');
         expect(request.prompt).toContain('src/config.ts');
-        return { text: JSON.stringify({ contexts: groups(correct) }) };
+        const decision = { sourcePath: 'src/config.ts', status: invalid ? 'retained' : status,
+          reason: correct ? 'Settings parser belongs with profile configuration.' : status === 'retained' ? 'The parser defines the view configuration format consumed by profile setup.' : 'Consumer facts alone do not establish ownership.',
+          evidence: [{ path: status === 'foreign-evidence' ? 'src/unread.ts' : 'src/config.ts' }, { path: 'src/profiles.ts' }] };
+        return { text: JSON.stringify({ contexts: groups(correct), decisions: status === 'missing-decision' ? [] : status === 'duplicate-decision' ? [decision, decision] : [decision] }) };
       }
       return { text: JSON.stringify({ contexts: groups(false) }) };
     } }, { maxAttempts: 1 });
+    if (invalid) {
+      await expect(service.generateIndex(evidence)).rejects.toMatchObject({ code: 'invalid_output' });
+      expect(reviews).toBe(1);
+      return;
+    }
     const result = await service.generateIndex(evidence);
     expect(reviews).toBe(1);
     expect(result.intent.contexts.flatMap(context => context.sourceFiles!).sort()).toEqual(['src/config.ts', 'src/profiles.ts', 'src/view.ts']);
-    expect(result.intent.qualityIssues?.filter(issue => issue.code === 'ownership-review')).toHaveLength(correct ? 0 : 1);
-    if (!correct) expect(buildProjectTopics(result.intent).find(topic => topic.title === 'View')?.qualityWarnings?.[0]).toContain('src/config.ts');
+    expect(result.intent.qualityIssues?.find(issue => issue.code === 'ownership-review')).toMatchObject({ status });
+    expect(result.intent.qualityIssues?.filter(issue => issue.code === 'ownership-review' && issue.status === 'unresolved')).toHaveLength(status === 'unresolved' ? 1 : 0);
+    if (status === 'unresolved') expect(buildProjectTopics(result.intent).find(topic => topic.title === 'View')?.qualityWarnings?.[0]).toContain('src/config.ts');
   });
 
   it.each(['missing', 'duplicate', 'unknown', 'foreign-entry'])("rejects %s files after consolidation reassignment", async mode => {

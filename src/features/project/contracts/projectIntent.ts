@@ -146,7 +146,11 @@ export const projectC4Schema = z.object({
 }).strict();
 
 export const projectQualityIssueSchema = z.object({ code: z.enum(["ownership-review", "isolated-c4-element", "missing-context-mapping"]),
-  message: z.string().min(1), contextIds: z.array(z.string()), elementIds: z.array(z.string()), sourcePaths: z.array(z.string()) }).strict();
+  message: z.string().min(1), contextIds: z.array(z.string()), elementIds: z.array(z.string()), sourcePaths: z.array(z.string()),
+  status: z.enum(["retained", "reassigned", "unresolved"]).optional(),
+  reason: z.string().trim().min(1).max(1000).optional(),
+  evidence: z.array(z.object({ path: z.string().min(1), line: z.number().int().positive().optional() }).strict()).max(12).optional()
+}).strict();
 export type ProjectQualityIssue = z.infer<typeof projectQualityIssueSchema>;
 
 /** Versioned, persisted semantic model owned by Project (never by a diagram adapter). */

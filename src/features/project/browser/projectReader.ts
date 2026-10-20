@@ -375,7 +375,9 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
     }
   });
   const filters = api.getState?.()?.filters;
-  if (!data.gallery && filters?.topic && data.topics.some((topic) => topic.id === filters.topic)) selectTopic(filters.topic, filters.diagram);
+  const focused = document.querySelector<HTMLElement>("[data-project-focus]")?.dataset.projectFocus;
+  if (focused && data.topics.some(item => item.id === focused)) selectTopic(focused);
+  else if (!data.gallery && filters?.topic && data.topics.some((topic) => topic.id === filters.topic)) selectTopic(filters.topic, filters.diagram);
   else if (data.gallery && data.diagrams.length) selectDiagram(data.selectedDiagramId ?? data.diagrams[0]!.id);
   else if (filters?.diagram && data.diagrams.some((diagram) => diagram.id === filters.diagram)) selectDiagram(filters.diagram);
   else if (filters?.topic === "" && !filters.diagram) selectIntroduction();

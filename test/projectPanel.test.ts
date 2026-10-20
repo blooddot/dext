@@ -16,7 +16,7 @@ describe("project panel", () => {
   it("shows persisted semantic review warnings and escapes source-derived messages", () => {
     const html = renderProjectPanel('overview', data({ overview: { ...data().overview,
       qualityIssues: [{ code: 'missing-context-mapping', message: 'Webview <entry> needs a knowledge link', contextIds: [], elementIds: [], sourcePaths: [] }] } }));
-    expect(html).toContain('1 quality checks to review');
+    expect(html).toContain('Architecture issues · 1');
     expect(html).toContain('Webview &lt;entry&gt; needs a knowledge link');
   });
   it("shows an explicit uninitialized state with a deliberate initialization entry", () => {

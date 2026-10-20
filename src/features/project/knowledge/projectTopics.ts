@@ -1,5 +1,5 @@
 import type { ProjectDiagram, ProjectDiagramEvidence } from "../contracts/projectDiagram.js";
-import type { ProjectIntent } from "../contracts/projectIntent.js";
+import type { ProjectIntent, ProjectQualityIssue } from "../contracts/projectIntent.js";
 import type { ProjectEvidence } from "../contracts/projectKnowledge.js";
 import { buildC4Topics } from "../presentation/projectC4.js";
 import { analysisSourceFiles } from "./projectIndexEvolution.js";
@@ -25,6 +25,7 @@ export interface ProjectTopic {
   area?: { id: string; title: string; description: string };
   uncertainties?: string[];
   qualityWarnings?: string[];
+  qualityIssues?: ProjectQualityIssue[];
   previousAnalyses?: { id: string; title: string }[];
   steps: string[];
   constraints: string[];
@@ -136,7 +137,7 @@ export function buildProjectTopics(intent: ProjectIntent, diagrams: readonly Pro
   return topics.map(topic => {
     const warnings = (intent.qualityIssues ?? []).filter(issue => issue.contextIds.includes(topic.id)
       || ((topic.kind === "system_context" || topic.kind === "containers") && issue.elementIds.some(id => topic.diagram?.nodes.some(node => node.id === id))));
-    if (warnings.length) topic = { ...topic, qualityWarnings: warnings.map(issue => issue.message) };
+    if (warnings.length) topic = { ...topic, qualityIssues: warnings, qualityWarnings: warnings.filter(issue => !issue.status || issue.status === "unresolved").map(issue => issue.message), evidence: unique([...topic.evidence, ...warnings.flatMap(issue => issue.evidence ?? issue.sourcePaths.map(path => ({ path })))]) };
     const analysis = diagrams.filter(diagram => diagram.metadata?.topicId === topic.id && diagram.metadata.topicAnalysis === 1 && typeof diagram.metadata.topicSummary === "string")
       .sort((a, b) => b.updatedAt - a.updatedAt || b.version - a.version)[0];
     if (!analysis) return topic;

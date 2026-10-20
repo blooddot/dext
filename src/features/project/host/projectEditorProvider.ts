@@ -243,7 +243,7 @@ export class ProjectEditorProvider {
     if (typeof page === "string" && (page === "overview" || page === "knowledge" || page === "architecture")) {
       if (this.page !== page) this.options.dataSource.cancelDiagramWork?.();
       this.pages.set(this.key, page);
-      this.focusObjectId = undefined;
+      this.focusObjectId = typeof payload.topicId === "string" ? payload.topicId : undefined;
       const data = await this.options.dataSource.load();
       const opened = this.options.manager.open(describeEditorTab("project", this.key, "dext.project"));
       this.activePanel = opened.panel;

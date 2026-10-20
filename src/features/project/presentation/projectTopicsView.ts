@@ -1,3 +1,4 @@
+import type { ProjectQualityIssue } from "../contracts/projectIntent.js";
 import type { ArchitectureViewInput } from "../contracts/projectArchitectureTypes.js";
 import type { ProjectDiagram } from "../contracts/projectDiagram.js";
 import { topicFingerprint, type ProjectTopic, type ProjectTopicCheck } from "../knowledge/projectTopics.js";
@@ -48,7 +49,7 @@ export function readerTopicArticle(topic: ProjectTopic, data: ProjectReaderData)
     + (topic.entryPoints.length ? `<section><h3>${topic.kind === "flow" ? "When it starts" : "Where to start in the code"}</h3>${list(topic.entryPoints)}</section>` : "")
     + (topic.sourceFiles?.length ? `<details class="project-reader-support"><summary>Files in this module · ${topic.sourceFiles.length}</summary>${list(topic.sourceFiles)}</details>` : "")
     + (topic.uncertainties?.length ? `<details class="project-reader-support"><summary>Questions to verify</summary>${list(topic.uncertainties)}</details>` : "")
-    + (topic.qualityWarnings?.length ? `<details class="project-reader-support" open><summary>Quality checks to review</summary>${list(topic.qualityWarnings)}</details>` : "")
+    + (topic.qualityIssues?.length ? renderProjectQuality(topic.qualityIssues, topic) : (topic.qualityWarnings?.length ? '<details class="project-reader-warning" open><summary>Ownership needs review</summary>' + list(topic.qualityWarnings) + '</details>' : ''))
     + (topic.previousAnalyses?.length ? `<section class="project-reader-related"><h3>Earlier module analyses</h3><p class="project-help">Module boundaries changed. These saved analyses overlap this module and need review; they do not describe the new boundary yet.</p>${topic.previousAnalyses.map(item => `<button type="button" data-reader-diagram="${esc(item.id)}">${esc(item.title)}</button>`).join("")}</section>` : "")
     + (topic.responsibilities.length || topic.constraints.length ? `<details class="project-reader-support"><summary>${topic.kind === "flow" ? "Outcomes and constraints" : "Responsibilities and constraints"}</summary>${list(topic.responsibilities)}${topic.constraints.length ? `<h4>Constraints</h4>${list(topic.constraints)}` : ""}</details>` : "")
     + `<details class="project-reader-support"><summary>Sources and freshness · ${topic.evidence.length} references</summary><p class="project-help">${check ? `Last checked ${esc(new Date(check.checkedAt).toLocaleString())} · ${esc(check.state)}. Unchanged files do not establish semantic correctness.` : "These are saved source references. Check them against the current files before relying on the explanation."}</p><button type="button" data-project-check-knowledge>Check sources</button><p data-project-check-status role="status"></p><ul class="project-topic-evidence">${topic.evidence.map((entry, index) => `<li><button type="button" data-topic-evidence="${esc(topic.id)}" data-evidence-index="${index}">${esc(entry.path)}${entry.line ? `:${entry.line}` : ""}${entry.symbol ? ` · ${esc(entry.symbol)}` : ""}</button>${entry.note ? `<small>${esc(entry.note)}</small>` : ""}<small data-topic-file="${esc(topic.id)}" data-file-index="${index}">${esc(check?.files[index]?.state ?? "")}</small></li>`).join("")}</ul></details>`
@@ -89,3 +90,20 @@ export function renderProjectTopics(topics: readonly ProjectTopic[], checks: rea
     + `</aside><div class="project-reader-main"><p class="project-reader-progress" data-reader-progress role="status" hidden></p><article data-reader-article>${article}</article></div></section>`;
 }
 
+
+/** Shared grouping for Overview and Knowledge; legacy issues remain unresolved. */
+export function renderProjectQuality(issues: readonly ProjectQualityIssue[], topic?: ProjectTopic): string {
+  const groups = [
+    { title: "Architecture issues", items: issues.filter(issue => issue.code !== "ownership-review"), open: true },
+    { title: "Ownership needs review", items: issues.filter(issue => issue.code === "ownership-review" && (!issue.status || issue.status === "unresolved")), open: true },
+    { title: "Explained ownership decisions", items: issues.filter(issue => issue.code === "ownership-review" && (issue.status === "retained" || issue.status === "reassigned")), open: false }
+  ];
+  return groups.filter(group => group.items.length).map(group => '<details class="project-reader-warning"' + (group.open ? ' open' : '') + '><summary>' + esc(group.title) + ' · ' + group.items.length + '</summary><ul>' + group.items.map(issue => {
+    const sources: Array<{ path: string; line?: number }> = issue.evidence ?? issue.sourcePaths.map(path => ({ path }));
+    return '<li>' + esc(issue.message) + (issue.reason ? '<p>' + esc(issue.reason) + '</p>' : '') + '<ul>' + sources.map(source => {
+      const index = topic?.evidence.findIndex(item => item.path === source.path && item.line === source.line) ?? -1;
+      const label = esc(source.path + (source.line ? ':' + source.line : ''));
+      return '<li>' + (topic && index >= 0 ? '<button type="button" data-topic-evidence="' + esc(topic.id) + '" data-evidence-index="' + index + '">' + label + '</button>' : issue.contextIds[0] ? '<button type="button" data-project-page="knowledge" data-project-topic="' + esc(issue.contextIds[0]) + '">' + label + '</button>' : '<code>' + label + '</code>') + '</li>';
+    }).join('') + '</ul></li>';
+  }).join('') + '</ul></details>').join('');
+}
