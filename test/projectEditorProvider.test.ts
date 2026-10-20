@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { ProjectEditorProvider, type ProjectEditorDataSource } from "../src/projectEditorProvider.js";
 import type { ProjectPanelData } from "../src/webview/projectPanel.js";
-import { EditorTabManager, type EditorTabCallbacks, type EditorTabPanelHandle } from "../src/editorTabManager.js";
-import { EditorTabRestorer } from "../src/editorTabSerializer.js";
+import { EditorTabManager, type EditorTabCallbacks, type EditorTabPanelHandle } from "../src/platform/editor-tabs/editorTabManager.js";
+import { EditorTabRestorer } from "../src/platform/editor-tabs/editorTabSerializer.js";
 
 class FakePanel implements EditorTabPanelHandle {
   html = "";

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { GlobalResourcesEditorProvider } from "../src/globalResourcesEditorProvider.js";
-import { EditorTabManager, type EditorTabPanelHandle } from "../src/editorTabManager.js";import { EditorTabRestorer } from "../src/editorTabSerializer.js";
+import { EditorTabManager, type EditorTabPanelHandle } from "../src/platform/editor-tabs/editorTabManager.js";
+import { EditorTabRestorer } from "../src/platform/editor-tabs/editorTabSerializer.js";
 import { buildResourceList, createFileResourceDataSource, type ResourceEditorDataSource, type ResourceEntry } from "../src/resourceDocuments.js";
 import type { ResourceKind } from "../src/resourceSession.js";
 import { renderGlobalResources } from "../src/webview/globalResourcesPanel.js";

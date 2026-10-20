@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { createVscodeEditorTabHost, wrapVscodeWebviewPanel, describeEditorTab, EditorTabManager, type EditorTabCallbacks, type EditorTabPanelHandle } from "../src/editorTabManager.js";
-import { EDITOR_TAB_VIEW_TYPES } from "../src/editorTabTypes.js";
-import { renderEditorTabHtml } from "../src/editorTabHtml.js";
+import { renderEditorTabHtml } from "../src/platform/editor-tabs/editorTabHtml.js";
+import { createVscodeEditorTabHost, describeEditorTab, EditorTabManager, wrapVscodeWebviewPanel, type EditorTabCallbacks, type EditorTabPanelHandle } from "../src/platform/editor-tabs/editorTabManager.js";
+import { EDITOR_TAB_VIEW_TYPES } from "../src/platform/editor-tabs/editorTabTypes.js";
 
 class FakePanel implements EditorTabPanelHandle {
   html = "";

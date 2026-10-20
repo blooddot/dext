@@ -55,7 +55,7 @@ try {
   const key = async (key, code) => { await send("Input.dispatchKeyEvent", { type: "keyDown", key, windowsVirtualKeyCode: code, ...(key === "Enter" ? { text: "\r" } : key === " " ? { text: " " } : {}) }); await send("Input.dispatchKeyEvent", { type: "keyUp", key, windowsVirtualKeyCode: code }); };
 
 
-  const bundle = await build({ stdin: { contents: 'export { renderEditorTabHtml } from "./src/editorTabHtml.ts"; export { renderProjectPanel } from "./src/webview/projectPanel.ts"; export { buildProjectTopics, topicFingerprint } from "./src/core/projectTopics.ts"; export { projectIntentSchema } from "./src/core/projectIntent.ts"; export { ArchifyAdapter } from "./src/core/archifyAdapter.ts";', resolveDir: process.cwd() }, bundle: true, write: false, platform: "node", format: "esm" });
+  const bundle = await build({ stdin: { contents: 'export { renderEditorTabHtml } from "./src/platform/editor-tabs/editorTabHtml.ts"; export { renderProjectPanel } from "./src/webview/projectPanel.ts"; export { buildProjectTopics, topicFingerprint } from "./src/core/projectTopics.ts"; export { projectIntentSchema } from "./src/core/projectIntent.ts"; export { ArchifyAdapter } from "./src/core/archifyAdapter.ts";', resolveDir: process.cwd() }, bundle: true, write: false, platform: "node", format: "esm" });
   const ui = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
   const adapter = new ui.ArchifyAdapter(resolve('vendor/project-diagrams/archify'));
   const cache = new Map();

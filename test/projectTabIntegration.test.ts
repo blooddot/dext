@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { EditorTabManager, describeEditorTab, type EditorTabCallbacks, type EditorTabPanelHandle } from "../src/editorTabManager.js";
-import { EditorTabRestorer } from "../src/editorTabSerializer.js";
-import { createEditorTabState } from "../src/editorTabState.js";
-import { EDITOR_TAB_VIEW_TYPES } from "../src/editorTabTypes.js";
+import { EditorTabManager, describeEditorTab, type EditorTabCallbacks, type EditorTabPanelHandle } from "../src/platform/editor-tabs/editorTabManager.js";
+import { EditorTabRestorer } from "../src/platform/editor-tabs/editorTabSerializer.js";
+import { createEditorTabState } from "../src/platform/editor-tabs/editorTabState.js";
+import { EDITOR_TAB_VIEW_TYPES } from "../src/platform/editor-tabs/editorTabTypes.js";
 
 class FakePanel implements EditorTabPanelHandle {
   html = "";
