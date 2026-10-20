@@ -419,3 +419,38 @@ it("reads injected API, sending, and receiving as separate original-line windows
   expect(windows.map(window => window.category)).toEqual(expect.arrayContaining(["client", "send", "receive"]));
   expect(windows.find(window => window.category === "receive")!.startLine).toBeGreaterThan(190);
 });
+
+it.each(["supported", "empty", "invented", "unread", "timeout", "cancel"])("bounds the isolated C4 review and preserves the original model: %s", async mode => {
+  const source = { "src/host.ts": 'export function handle() { webview.onDidReceiveMessage(receive); }', "src/reader.ts": 'export function view(api) { api.postMessage({type:"ready"}); }' };
+  const index = await buildStructureIndex(inputs(source));
+  const evidence = attachProjectStructure(buildProjectEvidencePackage({ files: [{ path: "README.md", content: "Application" }, ...Object.entries(source).map(([path, content]) => ({ path, content }))] }), index.summary);
+  const controller = new AbortController();
+  let reviews = 0;
+  const service = new ProjectAiGenerationService({ id: "fixture", generate: async (request, signal) => {
+    if (request.prompt.includes("Review isolated C4")) {
+      reviews++;
+      if (mode === "cancel") { controller.abort(); signal.throwIfAborted(); }
+      if (mode === "timeout") return new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true }));
+      return { text: JSON.stringify({ relationships: mode === "empty" ? [] : [{ id: "messages", from: mode === "invented" ? "invented" : "reader", to: "host", description: "Reader sends messages to the host", evidence: [{ path: "src/reader.ts", line: mode === "unread" ? 999 : 1 }, { path: "src/host.ts", line: 1 }] }] }) };
+    }
+    const groups = Object.keys(source).map(path => ({ canonicalName: path, purpose: "Runtime boundary", sourceFiles: [path], entryPoints: [path] }));
+    if (!request.prompt.includes("Optionally describe C4")) return { text: JSON.stringify({ contexts: groups }) };
+    const ids = [...new Set(request.prompt.match(/responsibility:[a-f0-9]+/g) ?? [])];
+    return { text: JSON.stringify({ brief: { name: "App", summary: "App", evidence: [{ path: "README.md", line: 1 }] }, capabilities: [{ canonicalName: "App", description: "App", contextIds: ids }], c4: { systemId: "app", elements: [
+      { id: "app", name: "App", kind: "system", evidence: [{ path: "README.md", line: 1 }] },
+      { id: "host", name: "Host", kind: "container", parentId: "app", contextIds: [ids[0]], evidence: [{ path: "src/host.ts", line: 1 }] },
+      { id: "reader", name: "Reader", kind: "container", parentId: "app", contextIds: [ids[1]], evidence: [{ path: "src/reader.ts", line: 1 }] }
+    ], relationships: [] } }) };
+  } }, { maxAttempts: 1, timeoutMs: mode === "timeout" ? 25 : 0 });
+  try {
+    if (mode === "cancel") await expect(service.generateIndex(evidence, { signal: controller.signal })).rejects.toMatchObject({ code: "cancelled" });
+    else {
+      const result = await service.generateIndex(evidence);
+      expect(result.intent.c4!.elements.map(item => item.id)).toEqual(["app", "host", "reader"]);
+      expect(result.intent.c4!.relationships).toHaveLength(mode === "supported" ? 1 : 0);
+      const readerIssues = result.intent.qualityIssues!.filter(issue => issue.elementIds.includes("reader"));
+      expect(readerIssues).toHaveLength(mode === "supported" ? 0 : 1);
+    }
+    expect(reviews).toBe(1);
+  } finally { service.dispose(); }
+});
