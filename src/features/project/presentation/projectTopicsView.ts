@@ -59,7 +59,7 @@ export function readerTopicArticle(topic: ProjectTopic, data: ProjectReaderData)
 export function readerGalleryArticle(diagram: ProjectDiagram, data: ProjectReaderData): string {
   const related = data.topics.filter((topic) => topicDiagrams(topic, [diagram]).some((item) => item.id === diagram.id) || topic.previousAnalyses?.some(item => item.id === diagram.id));
   return `<header class="project-reader-heading"><p class="project-reader-kind">Saved diagram</p><h2>${esc(diagram.title)}</h2>${related.length ? `<p>Read with ${related.map((topic) => `<button type="button" data-reader-topic="${esc(topic.id)}">${esc(topic.title)}</button>`).join(" ")}</p>` : '<p class="project-help">This saved diagram has no explicit topic link. Its nodes and source references remain available below.</p>'}</header>`
-    + (related.some(topic => topic.previousAnalyses?.some(item => item.id === diagram.id)) ? '<p class="project-reader-warning">Module boundaries changed. Review this historical analysis before applying it to the linked modules.</p>' : "")
+    + (related.some(topic => topic.previousAnalyses?.some(item => item.id === diagram.id)) || (diagram.metadata?.topicAnalysis === 1 && !data.topics.some(topic => topic.id === diagram.metadata?.topicId)) ? '<p class="project-reader-warning">Module boundaries changed. Review this historical analysis against current sources before relying on it.</p>' : "")
     + readerDiagramFrame([diagram], diagram.id);
 }
 

@@ -1,3 +1,7 @@
+import { mkdtemp, mkdir, readFile, writeFile, readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, dirname, resolve } from "node:path";
+import { ProjectStore } from "../src/features/project/host/persistence/projectStore.js";
 import { describe, expect, it } from "vitest";
 import type { ProjectDiagram } from "../src/features/project/contracts/projectDiagram.js";
 import { projectIntentSchema, validateProjectIntent } from "../src/features/project/contracts/projectIntent.js";
@@ -63,4 +67,36 @@ describe('Project index continuity', () => {
     expect(analysisSourceFiles({ ...diagram, metadata: { ...diagram.metadata, topicBasis: 'broken' } })).toEqual([]);
     expect(analysisSourceFiles({ ...diagram, metadata: { ...diagram.metadata, topicId: 'foreign' } })).toEqual([]);
   });
+});
+
+it("keeps old diagrams readable in a temporary workspace after a path-only migration", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "dext-history-migration-"));
+  const target = (path: string) => {
+    const value = resolve(directory, path);
+    if (!value.startsWith(resolve(directory) + (process.platform === "win32" ? "\\" : "/"))) throw new Error("Escaping test workspace");
+    return value;
+  };
+  const store = new ProjectStore({
+    readFile: async path => { try { return await readFile(target(path), "utf8"); } catch { return undefined; } },
+    writeFile: async (path, content) => { const file = target(path); await mkdir(dirname(file), { recursive: true }); await writeFile(file, content); },
+    listDirectory: async path => { try { return await readdir(target(path)); } catch { return []; } }
+  });
+  try {
+    const before = intent([{ id: "old", sourceFiles: ["src/old.ts"] }]);
+    const diagram = analysis("old", ["src/old.ts"]);
+    await store.writeIntent(before);
+    await store.writeDiagram(diagram);
+    const diagrams = await store.readDiagrams();
+    const next = intent([{ id: "new", sourceFiles: ["src/features/project/host/new.ts"] }]);
+    next.contexts[0]!.canonicalName = before.contexts[0]!.canonicalName;
+    const reconciled = reconcileProjectIndex(next, await store.readIntent(), diagrams);
+    await store.writeIntent(reconciled);
+    expect((await store.readIntent())!.contexts[0]!.id).toBe("new");
+    expect((await store.readDiagrams()).map(item => item.id)).toEqual([diagram.id]);
+    const topics = buildProjectTopics(reconciled, diagrams);
+    expect(topics[0]?.analysisState).toBe("outline");
+    expect(readerGalleryArticle(diagrams[0]!, { topics, checks: [], diagrams, brief: "", gallery: true })).toContain("Module boundaries changed");
+  } finally {
+    if (dirname(directory) === tmpdir() && directory.includes("dext-history-migration-")) await rm(directory, { recursive: true, force: true });
+  }
 });
