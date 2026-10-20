@@ -664,7 +664,7 @@ describe("sidebar panel layout", () => {
   it("opens the complete API list in an editor tab with search, grouping and detail", async () => {
     const html = await source("src/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
-    const documents = await source("src/resourceDocuments.ts");
+    const documents = await source("src/features/resources/presentation/resourceDocuments.ts");
     // The sidebar dialog is gone: the API list is an editor tab now.
     expect(html).not.toContain('id="reload-methods"');
     expect(main).not.toContain("renderMethods");

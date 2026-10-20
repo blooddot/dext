@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { GlobalResourcesEditorProvider } from "../src/globalResourcesEditorProvider.js";
+import type { ResourceKind } from "../src/features/resources/contracts/resourceSession.js";
+import { GlobalResourcesEditorProvider } from "../src/features/resources/host/globalResourcesEditorProvider.js";
+import { renderGlobalResources } from "../src/features/resources/presentation/globalResourcesPanel.js";
+import { buildResourceList } from "../src/features/resources/presentation/resourceDocuments.js";
+import { createFileResourceDataSource } from "../src/features/resources/host/resourceEditorProvider.js";
+import type { ResourceEditorDataSource, ResourceEntry } from "../src/features/resources/contracts/resourceDocuments.js";
 import { EditorTabManager, type EditorTabPanelHandle } from "../src/platform/editor-tabs/editorTabManager.js";
 import { EditorTabRestorer } from "../src/platform/editor-tabs/editorTabSerializer.js";
-import { buildResourceList, createFileResourceDataSource, type ResourceEditorDataSource, type ResourceEntry } from "../src/resourceDocuments.js";
-import type { ResourceKind } from "../src/resourceSession.js";
-import { renderGlobalResources } from "../src/webview/globalResourcesPanel.js";
 
 class FakePanel implements EditorTabPanelHandle {
   html = "";

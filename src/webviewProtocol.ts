@@ -1,4 +1,4 @@
-import type { ResourceSession } from "./resourceSession.js";
+import type { ResourceSession } from "./features/resources/contracts/resourceSession.js";
 import { UI_LIMITS, uiFormResultSchema } from "./core/uiForm.js";
 import { z } from "zod";
 import type { AgentStreamEvent, InputExecutionResponse, RegisteredCallable, PlanExecutionOutcome } from "./core/types.js";

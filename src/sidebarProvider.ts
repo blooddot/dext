@@ -1,4 +1,4 @@
-import { RESOURCE_LABELS, resourceFileName, type ResourceKind, type ResourceScope, type ResourceSession } from "./resourceSession.js";
+import { RESOURCE_LABELS, resourceFileName, type ResourceKind, type ResourceScope, type ResourceSession } from "./features/resources/contracts/resourceSession.js";
 import { UiInteractionBroker } from "./uiInteractionBroker.js";
 import { readHistoryResponse } from "./historyResponse.js";
 import { publicInteractionState } from "./uiInteractionPresentation.js";

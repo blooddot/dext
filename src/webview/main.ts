@@ -1,4 +1,4 @@
-import { RESOURCE_LABELS, RESOURCE_ICONS, RESOURCE_DIRECTORIES, type ResourceSession, type ResourceKind, type ResourceScope } from "../resourceSession.js";
+import { RESOURCE_DIRECTORIES, RESOURCE_ICONS, RESOURCE_LABELS, type ResourceKind, type ResourceScope, type ResourceSession } from "../features/resources/contracts/resourceSession.js";
 import { readHistoryResponse } from "../historyResponse.js";
 import { prepareHistoryTrace } from "../core/agentTraceReplay.js";
 import { renderTurnSection, renderTurnInput, renderTurnMarkdown, renderTurnJson, renderTurnResult, renderTurnMessage, turnDomAdapter } from "../turnComponents.js";

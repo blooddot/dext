@@ -1,7 +1,7 @@
-import type { ResourceEditorProviderOptions } from "./resourceDocuments.js";
+import type { ResourceEditorProviderOptions } from "../contracts/resourceDocuments.js";
+import type { ResourceKind } from "../contracts/resourceSession.js";
+import { renderGlobalResources } from "../presentation/globalResourcesPanel.js";
 import { ResourceBrowserProvider } from "./resourceBrowserProvider.js";
-import type { ResourceKind } from "./resourceSession.js";
-import { renderGlobalResources } from "./webview/globalResourcesPanel.js";
 
 /**
  * Global Resources as an editor tab. Categories, refresh, and the existing resource operations are

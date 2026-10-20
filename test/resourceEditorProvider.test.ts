@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { ResourceEntry } from "../src/resourceDocuments.js";
-import { buildResourceDefinition, buildResourceList, filterResourceEntries, groupResourceEntries, renderResourceDefinition, renderResourceList } from "../src/resourceDocuments.js";
+import type { ResourceEntry } from "../src/features/resources/contracts/resourceDocuments.js";
+import { buildResourceDefinition, buildResourceList, filterResourceEntries, groupResourceEntries, renderResourceDefinition, renderResourceList } from "../src/features/resources/presentation/resourceDocuments.js";
 
 const entry = (name: string, path: string, kind: ResourceEntry["kind"] = "api"): ResourceEntry => ({
   id: `${kind}:project:${path}`, kind, scope: "project", name, path, group: path.split("/").slice(0, -1).join("/") || ".",

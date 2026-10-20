@@ -1,8 +1,10 @@
-import { ResourceEditorProvider, buildResourceDefinition, buildResourceList, renderResourceError, type ResourceEditorProviderOptions, type ResourceEditorShowResult, type ResourcePanelOptions } from "./resourceDocuments.js";
-import { createEditorTabState } from "./editorTabState.js";
-import { describeEditorTab } from "./editorTabManager.js";
-import { renderApiDetail, renderApiList } from "./webview/apiPanel.js";
-import type { ResourceScope } from "./resourceSession.js";
+import { describeEditorTab } from "../../../platform/editor-tabs/editorTabManager.js";
+import { createEditorTabState } from "../../../platform/editor-tabs/editorTabState.js";
+import { type ResourceEditorProviderOptions, type ResourceEditorShowResult, type ResourcePanelOptions } from "../contracts/resourceDocuments.js";
+import type { ResourceScope } from "../contracts/resourceSession.js";
+import { renderApiDetail, renderApiList } from "../presentation/apiPanel.js";
+import { buildResourceDefinition, buildResourceList, renderResourceError } from "../presentation/resourceDocuments.js";
+import { ResourceEditorProvider } from "./resourceEditorProvider.js";
 
 /**
  * Browse the API directory and definitions in one tab, retaining each history entry's view state.

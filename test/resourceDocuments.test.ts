@@ -6,8 +6,10 @@ import * as vscode from "vscode";
 import { DextApplication } from "../src/application.js";
 import { BUILTIN_METHODS } from "../src/core/builtins.js";
 import { MethodRegistry } from "../src/core/registry.js";
-import { resourceFileName, resourcePathSegments, resourcePrompt, resourceFiles, type ResourceSession } from "../src/resourceSession.js";
-import { buildResourceList, createFileResourceDataSource, isMcpApiId, renderResourceList, resourceCategory, type ResourceEntry } from "../src/resourceDocuments.js";
+import { resourceFileName, resourceFiles, resourcePathSegments, resourcePrompt, type ResourceSession } from "../src/features/resources/contracts/resourceSession.js";
+import { buildResourceList, isMcpApiId, renderResourceList, resourceCategory } from "../src/features/resources/presentation/resourceDocuments.js";
+import { createFileResourceDataSource } from "../src/features/resources/host/resourceEditorProvider.js";
+import type { ResourceEntry } from "../src/features/resources/contracts/resourceDocuments.js";
 
 vi.mock("vscode", () => {
   class FileSystemError extends Error { code = "FileNotFound"; }

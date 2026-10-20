@@ -21,11 +21,13 @@ import { createEditorTabState, restoreEditorTabState } from "./platform/editor-t
 import { EDITOR_TAB_VIEW_TYPES, parseEditorTabKey } from "./platform/editor-tabs/editorTabTypes.js";
 import { ProjectEditorProvider } from "./projectEditorProvider.js";
 import { PROJECT_PANEL_PAGES, type ProjectPanelPage } from "./webview/projectPanel.js";
-import { ApiEditorProvider } from "./apiEditorProvider.js";
-import { GlobalResourcesEditorProvider } from "./globalResourcesEditorProvider.js";
-import { createFileResourceDataSource, createApiDataSource, renderResourceError, type ResourceEditorDataSource } from "./resourceDocuments.js";
+import { type ResourceEditorDataSource } from "./features/resources/contracts/resourceDocuments.js";
+import type { ResourceScope } from "./features/resources/contracts/resourceSession.js";
+import { ApiEditorProvider } from "./features/resources/host/apiEditorProvider.js";
+import { GlobalResourcesEditorProvider } from "./features/resources/host/globalResourcesEditorProvider.js";
+import { createApiDataSource, createFileResourceDataSource } from "./features/resources/host/resourceEditorProvider.js";
+import { renderResourceError } from "./features/resources/presentation/resourceDocuments.js";
 import { createApiReferenceSource } from "./core/apiReference.js";
-import type { ResourceScope } from "./resourceSession.js";
 import { ProjectStore } from "./projectStore.js";
 import { searchProjectReferences } from "./core/projectContext.js";
 import { VscodeProjectFileHost, createProjectPanelDataSource, discoverArchifyRepository, effectiveProjectEvidenceSettings, effectiveProjectWorkspaceSettings, readWorkspaceEvidence } from "./vscodeProjectHost.js";

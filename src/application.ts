@@ -37,7 +37,7 @@ import { DEFAULT_AGENT_TIMEOUT_MS, DEFAULT_AGENT_IDLE_TIMEOUT_MS, MAX_AGENT_TIME
 import { listHarnessPresets } from "./core/harnessPresets.js";
 import { SkillCatalog } from "./core/skillCatalog.js";
 
-import { RESOURCE_DIRECTORIES, resourceFileName, resourcePathSegments, resourcePrompt, resourceFiles, mergeResourceFiles, type ResourceSession, type ResourceDocument, type ResourceTarget, type ResourceKind, type ResourceScope } from "./resourceSession.js";
+import { RESOURCE_DIRECTORIES, mergeResourceFiles, resourceFileName, resourceFiles, resourcePathSegments, resourcePrompt, type ResourceDocument, type ResourceKind, type ResourceScope, type ResourceSession, type ResourceTarget } from "./features/resources/contracts/resourceSession.js";
 import { McpToolRegistry, authDiagnostic, mcpCredentialKind, redactedMcpUrl, type McpServerConfig, type McpToolConfig, type McpDiscoveredTool } from "./core/mcpRegistry.js";
 import { McpAccessTokenStore, type McpCredentialKind } from "./core/mcpSecrets.js";
 import { parseMcpManifest } from "./core/mcpManifest.js";
