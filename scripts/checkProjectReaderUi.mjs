@@ -286,11 +286,28 @@ try {
   assert.equal(await evaluate(`document.querySelectorAll('[data-reader-canvas] img, [data-reader-canvas] script').length`), 0);
   failRender = false;
   if (process.argv.includes('--saved-project')) {
-    const savedIntent = ui.projectIntentSchema.parse(JSON.parse(await readFile('.dext/project-intent.json', 'utf8')));
-    const savedDiagrams = await Promise.all((await readdir('.dext/diagrams')).filter(name => name.endsWith('.json')).map(async name => JSON.parse(await readFile(join('.dext/diagrams', name), 'utf8'))));
+    const workspaceOption = process.argv.indexOf('--workspace');
+    const savedRoot = workspaceOption < 0 ? '.' : process.argv[workspaceOption + 1];
+    assert.ok(savedRoot && !savedRoot.startsWith('--'), '--workspace requires a directory');
+    const savedIntent = ui.projectIntentSchema.parse(JSON.parse(await readFile(join(savedRoot, '.dext/project-intent.json'), 'utf8')));
+    const savedDiagrams = await Promise.all((await readdir(join(savedRoot, '.dext/diagrams'))).filter(name => name.endsWith('.json')).map(async name => JSON.parse(await readFile(join(savedRoot, '.dext/diagrams', name), 'utf8'))));
     const savedTopics = ui.buildProjectTopics(savedIntent, savedDiagrams);
     await load('vscode-dark', { ...data, readerDiagrams: savedDiagrams, architecture: { diagrams: savedDiagrams }, knowledge: { brief: savedIntent.brief.summary, topics: savedTopics } }, { topic: savedTopics[0].id });
-    for (const topic of savedTopics) { await click(`.project-reader-directory [data-reader-topic="${topic.id}"]`); await ready(); }
+    for (const topic of savedTopics) {
+      await click(`.project-reader-directory [data-reader-topic="${topic.id}"]`); await ready();
+      if (topic.qualityIssues?.some(issue => issue.status === 'retained' || issue.status === 'reassigned')) {
+        assert.equal(await evaluate(`Array.from(document.querySelectorAll('[data-reader-article] details')).find(d=>d.querySelector('summary')?.textContent.startsWith('Explained ownership decisions'))?.open`), false, 'explained decisions stay folded');
+      }
+      if (topic.qualityIssues?.some(issue => issue.code === 'ownership-review' && (!issue.status || issue.status === 'unresolved'))) {
+        assert.equal(await evaluate(`Array.from(document.querySelectorAll('[data-reader-article] details')).find(d=>d.querySelector('summary')?.textContent.startsWith('Ownership needs review'))?.open`), true, 'legacy and unresolved concerns stay visible');
+      }
+      if (await evaluate(`!!document.querySelector('[data-reader-article] [data-topic-evidence]')`)) {
+        await click('[data-reader-article] [data-topic-evidence]');
+        const request = await evaluate('messages.at(-1)');
+        assert.equal(request.type, 'projectTopicEvidence');
+        assert.equal(request.topicId, topic.id);
+      }
+    }
     const evolved = savedTopics.find(topic => topic.previousAnalyses?.length);
     if (evolved) {
       await click(`.project-reader-directory [data-reader-topic="${evolved.id}"]`); await ready();
@@ -302,6 +319,13 @@ try {
     }
     for (const diagram of savedDiagrams) {
       await click(`[data-reader-diagram="${diagram.id}"]`); await ready();
+      if (workspaceOption >= 0) {
+        assert.equal(await evaluate(`document.querySelector('[data-reader-canvas]').dataset.renderer`), 'archify', 'generated temporary-workspace diagram renders natively');
+        await click('[data-reader-fullscreen]');
+        await new Promise(done=>setTimeout(done,200));
+        await writeFile(join(artifacts, 'generated-module-analysis.png'), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
+        await key('Escape',27);
+      }
       if (diagram.id === 'diagram.dext-architecture' || diagram.id === 'extension-activation-composition') {
         assert.equal(await evaluate(`document.querySelector('[data-reader-canvas]').dataset.renderer`), 'archify', 'actual Dext architecture must use native rendering');
         if (diagram.id === 'extension-activation-composition') {
