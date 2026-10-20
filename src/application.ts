@@ -1,28 +1,25 @@
+import { applyEdits, modify } from "jsonc-parser/lib/esm/main.js";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { isAbsolute, relative as relativePath, sep } from "node:path";
 import * as vscode from "vscode";
-import { applyEdits, modify } from "jsonc-parser/lib/esm/main.js";
+import type { AgentAssertionSnapshot } from "./core/agentAssertions.js";
+import { DefaultAgentRunner } from "./core/agentRouter.js";
+import { runSingleTurnCli } from "./core/agentRunner.js";
+import { DEFAULT_AGENT_IDLE_TIMEOUT_MS, DEFAULT_AGENT_TIMEOUT_MS, MAX_AGENT_TIMEOUT_MS } from "./core/agentTimeout.js";
+import { REPAIR_OUTPUT_FIELD } from "./core/axAdapter.js";
 import { BUILTIN_METHODS } from "./core/builtins.js";
+import { ContextResolver } from "./core/contextResolver.js";
 import { DEXT_API_DIRECTORY, DEXT_DECLARATION_DIRECTORY, DEXT_DECLARATION_FILE, DEXT_TYPES_PATH, dextFiles, dextModuleDeclaration, dextSharedDeclaration, dextTsconfig } from "./core/dextApiTypes.js";
 import { inputReferenceDisplayParts } from "./core/fileReference.js";
-import { ContextResolver } from "./core/contextResolver.js";
+import { listHarnessPresets } from "./core/harnessPresets.js";
+import { isIgnored, parseIgnoreRules, type IgnoreRule } from "./core/ignoreRules.js";
 import { MethodRegistry } from "./core/registry.js";
-import { DextRuntime } from "./core/runtime.js";
-import { REPAIR_OUTPUT_FIELD } from "./core/axAdapter.js";
 import { agentResultCandidates, parseAgentResult } from "./core/resultBoundary.js";
 import { createResultRepair } from "./core/resultRepair.js";
-import { runSingleTurnCli } from "./core/agentRunner.js";
-import { isIgnored, parseIgnoreRules, type IgnoreRule } from "./core/ignoreRules.js";
-import type { AgentAssertionSnapshot } from "./core/agentAssertions.js";
-import { DEFAULT_DISPATCH_CONCURRENCY, DextKernelHost } from "./runner/dextHost.js";
-import type { DextReplayEntry } from "./runner/dextResumeCache.js";
+import { DextRuntime } from "./core/runtime.js";
+import { SkillCatalog } from "./core/skillCatalog.js";
 import type { CallableDefinition, CodeRef, ExecutionMetadata, InputExecutionResponse } from "./core/types.js";
-import type { SidebarState } from "./webviewProtocol.js";
-import { VsCodeContextHost } from "./vscodeContextHost.js";
-import { terminalRunHandler } from "./vscodeTerminalHost.js";
-import { applyPatchHandler } from "./vscodePatchHost.js";
-import { loadEditorTokenTheme } from "./vscodeTheme.js";
 import {
 AGENT_PERMISSIONS,
 AgentProfileStore,
@@ -32,21 +29,24 @@ type AgentProvider,
 type AgentSelection,
 type WritableAgentPermission
 } from "./features/agents/host/agentProfiles.js";
-import { DefaultAgentRunner } from "./core/agentRouter.js";
-import { DEFAULT_AGENT_TIMEOUT_MS, DEFAULT_AGENT_IDLE_TIMEOUT_MS, MAX_AGENT_TIMEOUT_MS } from "./core/agentTimeout.js";
-import { listHarnessPresets } from "./core/harnessPresets.js";
-import { SkillCatalog } from "./core/skillCatalog.js";
+import { createProjectAiProvider } from "./features/project/host/generation/projectAiProvider.js";
+import { DEFAULT_DISPATCH_CONCURRENCY, DextKernelHost } from "./runner/dextHost.js";
+import type { DextReplayEntry } from "./runner/dextResumeCache.js";
+import { VsCodeContextHost } from "./vscodeContextHost.js";
+import { applyPatchHandler } from "./vscodePatchHost.js";
+import { terminalRunHandler } from "./vscodeTerminalHost.js";
+import { loadEditorTokenTheme } from "./vscodeTheme.js";
+import type { SidebarState } from "./webviewProtocol.js";
 
-import { RESOURCE_DIRECTORIES, mergeResourceFiles, resourceFileName, resourceFiles, resourcePathSegments, resourcePrompt, type ResourceDocument, type ResourceKind, type ResourceScope, type ResourceSession, type ResourceTarget } from "./features/resources/contracts/resourceSession.js";
-import { McpToolRegistry, authDiagnostic, mcpCredentialKind, redactedMcpUrl, type McpServerConfig, type McpToolConfig, type McpDiscoveredTool } from "./core/mcpRegistry.js";
-import { McpAccessTokenStore, type McpCredentialKind } from "./core/mcpSecrets.js";
 import { parseMcpManifest } from "./core/mcpManifest.js";
+import { McpToolRegistry, authDiagnostic, mcpCredentialKind, redactedMcpUrl, type McpDiscoveredTool, type McpServerConfig, type McpToolConfig } from "./core/mcpRegistry.js";
+import { McpAccessTokenStore, type McpCredentialKind } from "./core/mcpSecrets.js";
 import { DEFAULT_PLAN_DIRECTORY, planFileName, planPathSegments } from "./core/planFile.js";
 import { splitPlanResponse } from "./core/planResponse.js";
 import { DextStorage } from "./dextStorage.js";
-import { createProjectAiProvider } from "./features/project/host/generation/projectAiProvider.js";
 import type { ProjectWorkspaceSettings } from "./features/project/contracts/projectSettings.js";
 import type { ProjectAiProvider } from "./features/project/host/generation/projectAiGeneration.js";
+import { RESOURCE_DIRECTORIES, mergeResourceFiles, resourceFileName, resourceFiles, resourcePathSegments, resourcePrompt, type ResourceDocument, type ResourceKind, type ResourceScope, type ResourceSession, type ResourceTarget } from "./features/resources/contracts/resourceSession.js";
 
 /** How many API modules the composer's TypeScript worker is given, and how many
  * bytes of source, so a large workspace cannot flood the Webview channel. */

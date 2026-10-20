@@ -1,50 +1,49 @@
-import { RESOURCE_LABELS, resourceFileName, type ResourceKind, type ResourceScope, type ResourceSession } from "./features/resources/contracts/resourceSession.js";
-import { UiInteractionBroker } from "./uiInteractionBroker.js";
-import { readHistoryResponse } from "./historyResponse.js";
-import { publicInteractionState } from "./uiInteractionPresentation.js";
 import { randomBytes } from "node:crypto";
 import { statSync } from "node:fs";
 import { basename, relative, sep } from "node:path";
 import * as vscode from "vscode";
 import { AgentInputBroker } from "./agentInputBroker.js";
-import { InputNotifications, type InputNotificationTarget } from "./inputNotifications.js";
 import type { DextApplication } from "./application.js";
-import type { AgentInputRequest, AgentStreamEvent, ApplyResult, InputExecutionResponse, McpProcessEvent, PatchResult, UiInteraction } from "./core/types.js";
-import type { DextReplayEntry } from "./runner/dextResumeCache.js";
-import { applyPatchHandler } from "./vscodePatchHost.js";
 import {
-  AttachmentStore,
-  writeExactClipboardText
+AttachmentStore,
+writeExactClipboardText
 } from "./attachmentStore.js";
-import {
-  attachmentFileReference,
-  activeWorkspaceSelection,
-  clipboardFileReference,
-  directoryAttachment,
-  fileAttachment,
-  selectionAttachment,
-  type SelectionTarget
-} from "./vscodeAttachments.js";
-import { ReadyMessageQueue } from "./readyMessageQueue.js";
-import { clipboardFileReferences, copyFilePathKeepingFiles, copyFilePathKeepingLine } from "./vscodeClipboardFiles.js";
-import { FileSearchController } from "./features/workspace/host/fileSearchController.js";
-import { planPathSegments } from "./core/planFile.js";
-import { planTodoItems, planTodoInstruction, stripPlanTodoProgress } from "./core/planTodoProgress.js";
-import { PlanExecution, resumePlanTodos } from "./core/planExecution.js";
-import type { PlanExecutionOutcome } from "./core/types.js";
-import { openDextFileReference, openExternalLink } from "./vscodeContextHost.js";
-import { webviewRequestSchema } from "./webviewProtocol.js";
-import type { ConversationSummary, WebviewResponse } from "./webviewProtocol.js";
-import type { AgentSelection } from "./features/agents/host/agentProfiles.js";
-import { copyHarnessPreset, harnessPresetFile } from "./core/harnessPresets.js";
-import { harnessPresetOrDefault } from "./core/harnessPresetDefault.js";
-import type { DextHistoryRecord, DextHistorySession, DextHistoryStore } from "./historyStore.js";
 import type { DextConversationPreferences } from "./conversationPreferences.js";
-import { conversationTitle, historyTurnTitle } from "./historyRender.js";
 import { normalizeInputReferenceSource } from "./core/fileReference.js";
-import { dextBuiltinNames } from "./webview/dextTypesStatus.js";
-import type { ProjectReferenceCandidate } from "./features/project/knowledge/projectReference.js";
+import { harnessPresetOrDefault } from "./core/harnessPresetDefault.js";
+import { copyHarnessPreset, harnessPresetFile } from "./core/harnessPresets.js";
 import type { McpServerConfig } from "./core/mcpRegistry.js";
+import { PlanExecution, resumePlanTodos } from "./core/planExecution.js";
+import { planPathSegments } from "./core/planFile.js";
+import { planTodoInstruction, planTodoItems, stripPlanTodoProgress } from "./core/planTodoProgress.js";
+import type { AgentInputRequest, AgentStreamEvent, ApplyResult, InputExecutionResponse, McpProcessEvent, PatchResult, PlanExecutionOutcome, UiInteraction } from "./core/types.js";
+import type { AgentSelection } from "./features/agents/host/agentProfiles.js";
+import type { ProjectReferenceCandidate } from "./features/project/knowledge/projectReference.js";
+import { RESOURCE_LABELS, resourceFileName, type ResourceKind, type ResourceScope, type ResourceSession } from "./features/resources/contracts/resourceSession.js";
+import { FileSearchController } from "./features/workspace/host/fileSearchController.js";
+import { conversationTitle, historyTurnTitle } from "./historyRender.js";
+import { readHistoryResponse } from "./historyResponse.js";
+import type { DextHistoryRecord, DextHistorySession, DextHistoryStore } from "./historyStore.js";
+import { InputNotifications, type InputNotificationTarget } from "./inputNotifications.js";
+import { ReadyMessageQueue } from "./readyMessageQueue.js";
+import type { DextReplayEntry } from "./runner/dextResumeCache.js";
+import { UiInteractionBroker } from "./uiInteractionBroker.js";
+import { publicInteractionState } from "./uiInteractionPresentation.js";
+import {
+activeWorkspaceSelection,
+attachmentFileReference,
+clipboardFileReference,
+directoryAttachment,
+fileAttachment,
+selectionAttachment,
+type SelectionTarget
+} from "./vscodeAttachments.js";
+import { clipboardFileReferences, copyFilePathKeepingFiles, copyFilePathKeepingLine } from "./vscodeClipboardFiles.js";
+import { openDextFileReference, openExternalLink } from "./vscodeContextHost.js";
+import { applyPatchHandler } from "./vscodePatchHost.js";
+import { dextBuiltinNames } from "./webview/dextTypesStatus.js";
+import type { ConversationSummary, WebviewResponse } from "./webviewProtocol.js";
+import { webviewRequestSchema } from "./webviewProtocol.js";
 
 /** An `agent(apply=False)` step proposes changes and writes nothing, so its
  * patch is the one Dext holds for review. A step that was allowed to write has

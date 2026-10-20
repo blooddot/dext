@@ -3,8 +3,8 @@ import { projectIntentSchema, validateProjectIntent } from "../src/features/proj
 import { attachProjectStructure, buildProjectEvidencePackage, ProjectAiGenerationService, validateProjectAiModel } from "../src/features/project/host/generation/projectAiGeneration.js";
 import { projectIndexQuality } from "../src/features/project/host/generation/projectIndexQuality.js";
 import { buildProjectTopics, topicFingerprint } from "../src/features/project/knowledge/projectTopics.js";
-import { buildStructureIndex } from "../src/features/project/host/indexing/projectStructure.js";
 
+import { buildStructureIndex } from "../src/features/project/host/indexing/projectStructure.js";
 
 const evidence = [{ path: "README.md", line: 1 }];
 const fixture = () => projectIntentSchema.parse({ schemaVersion: 1, updatedAt: 1, brief: { name: "Example", evidence },

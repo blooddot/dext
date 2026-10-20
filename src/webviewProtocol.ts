@@ -1,12 +1,12 @@
-import { fileSearchRequestSchema, type FileSearchResponse } from "./features/workspace/contracts.js";
-import type { ResourceSession } from "./features/resources/contracts/resourceSession.js";
-import { UI_LIMITS, uiFormResultSchema } from "./core/uiForm.js";
 import { z } from "zod";
-import type { AgentStreamEvent, InputExecutionResponse, RegisteredCallable, PlanExecutionOutcome } from "./core/types.js";
-import type { AgentProfile, AgentSelection } from "./features/agents/contracts.js";
-import type { EditorTokenTheme } from "./vscodeTheme.js";
-import type { DextHistorySession, PlanStatus } from "./historyStore.js";
 import type { McpDiscoveredTool, McpServerConfig } from "./core/mcpRegistry.js";
+import type { AgentStreamEvent, InputExecutionResponse, PlanExecutionOutcome, RegisteredCallable } from "./core/types.js";
+import { UI_LIMITS, uiFormResultSchema } from "./core/uiForm.js";
+import type { AgentProfile, AgentSelection } from "./features/agents/contracts.js";
+import type { ResourceSession } from "./features/resources/contracts/resourceSession.js";
+import { fileSearchRequestSchema, type FileSearchResponse } from "./features/workspace/contracts.js";
+import type { DextHistorySession, PlanStatus } from "./historyStore.js";
+import type { EditorTokenTheme } from "./vscodeTheme.js";
 
 /** HTTP MCP credentials are never written to a manifest: bearer uses the
  * SecretStorage token in an Authorization header, query attaches it to the

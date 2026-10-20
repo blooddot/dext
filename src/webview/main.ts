@@ -1,57 +1,60 @@
-import { RESOURCE_DIRECTORIES, RESOURCE_ICONS, RESOURCE_LABELS, type ResourceKind, type ResourceScope, type ResourceSession } from "../features/resources/contracts/resourceSession.js";
-import { readHistoryResponse } from "../historyResponse.js";
-import { prepareHistoryTrace } from "../core/agentTraceReplay.js";
-import { renderTurnSection, renderTurnInput, renderTurnMarkdown, renderTurnJson, renderTurnResult, renderTurnMessage, turnDomAdapter } from "../turnComponents.js";
-import type { UiFormAnswers } from "../core/uiForm.js";
-import "../../media/styles.css";
 import MarkdownIt from "markdown-it";
-import { markdownCodeCopy } from "../markdownCopy.js";
+import "../../media/styles.css";
+import { agentMessageCopyText, presentAgentMessage } from "../agentMessagePresentation.js";
+import { prepareHistoryTrace } from "../core/agentTraceReplay.js";
 import type {
-  AgentStreamEvent,
-  AgentToolKind,
-  AgentTokenUsage,
-  InputExecutionResponse,
-  PatchChange,
-  RuntimeResponse,
-  WorkflowStepResponse
+AgentStreamEvent,
+AgentTokenUsage,
+AgentToolKind,
+InputExecutionResponse,
+PatchChange,
+RuntimeResponse,
+WorkflowStepResponse
 } from "../core/types.js";
+import type { UiFormAnswers } from "../core/uiForm.js";
+import { presentDiff } from "../diffPresentation.js";
+import { RESOURCE_DIRECTORIES, RESOURCE_ICONS, RESOURCE_LABELS, type ResourceKind, type ResourceScope, type ResourceSession } from "../features/resources/contracts/resourceSession.js";
+import { FileSearchClient } from "../features/workspace/browser/fileSearchClient.js";
+import { readHistoryResponse } from "../historyResponse.js";
+import type { DextHistoryRecord, DextHistorySession } from "../historyStore.js";
+import { markdownCodeCopy } from "../markdownCopy.js";
+import { renderTurnInput, renderTurnJson, renderTurnMarkdown, renderTurnMessage, renderTurnResult, renderTurnSection, turnDomAdapter } from "../turnComponents.js";
+import {
+TURN_COPY_ACTION, TURN_DELETE_ACTION,
+TURN_EDIT_ACTION,
+TURN_FORK_ACTION,
+TURN_RENAME_ACTION, TURN_RETRY_ACTION,
+TurnTitle, presentTurn,
+type TurnSectionPresentation
+} from "../turnPresentation.js";
 import type { ConversationSummary, SidebarState, WebviewRequest, WebviewResponse } from "../webviewProtocol.js";
 import { ClipboardClient } from "./clipboardClient.js";
-import { FileSearchClient } from "../features/workspace/browser/fileSearchClient.js";
-import { outputExternalLink, outputLinkReference } from "../features/workspace/browser/outputLink.js";
-import { ProjectReferenceClient } from "./projectReferenceClient.js";
-import { bindFileDropTarget, droppedFilePaths, fileSelectionDropEffect, isFileDrag } from "./fileDrop.js";
-import { FileDropClient } from "./fileDropClient.js";
 import { DextCodeEditor } from "./codeEditor.js";
 import { formatDuration } from "./duration.js";
-import { agentMessageCopyText, presentAgentMessage } from "../agentMessagePresentation.js";
-import { presentDiff } from "../diffPresentation.js";
-import type { DextHistoryRecord, DextHistorySession } from "../historyStore.js";
-import {
-  TURN_EDIT_ACTION, TURN_RENAME_ACTION, TURN_RETRY_ACTION, TURN_FORK_ACTION,
-  TURN_COPY_ACTION, TURN_DELETE_ACTION, TurnTitle, presentTurn,
-  type TurnSectionPresentation
-} from "../turnPresentation.js";
+import { bindFileDropTarget, droppedFilePaths, fileSelectionDropEffect, isFileDrag } from "./fileDrop.js";
+import { FileDropClient } from "./fileDropClient.js";
+import { ProjectReferenceClient } from "./projectReferenceClient.js";
 
-import {
-  contextReferenceLabel,
-  inputReferenceDisplayParts,
-  inputReferenceDisplayText,
-  normalizeInputReferenceSource,
-  type ContextReferenceOccurrence
-} from "../core/fileReference.js";
-import { createFileReferenceChip, fileReferenceChipDescriptor } from "./fileReferenceChip.js";
-import { colorizeSource } from "./sourceHighlight.js";
-import { observeComposerOverflow } from "./composerOverflow.js";
-import { installResultScrollProbe } from "./scrollProbe.js";
-import { enableConversationTabDrag } from "./conversationTabDrag.js";
-import { AgentTodoView } from "./agentTodoView.js";
-import { AgentInputView } from "./agentInputView.js";
 import { planExecutionLabel } from "../agentTodoPresentation.js";
 import { CLI_SPEEDS } from "../core/builtinCli.js";
+import {
+contextReferenceLabel,
+inputReferenceDisplayParts,
+inputReferenceDisplayText,
+normalizeInputReferenceSource,
+type ContextReferenceOccurrence
+} from "../core/fileReference.js";
+import { DEFAULT_HARNESS_PRESET, harnessPresetOrDefault } from "../core/harnessPresetDefault.js";
 import type { HarnessPresetOption } from "../features/agents/contracts.js";
 import { presentAgentSelection } from "../features/agents/presentation/agentSelectionDefaults.js";
-import { DEFAULT_HARNESS_PRESET, harnessPresetOrDefault } from "../core/harnessPresetDefault.js";
+import { outputExternalLink, outputLinkReference } from "../features/workspace/browser/outputLink.js";
+import { AgentInputView } from "./agentInputView.js";
+import { AgentTodoView } from "./agentTodoView.js";
+import { observeComposerOverflow } from "./composerOverflow.js";
+import { enableConversationTabDrag } from "./conversationTabDrag.js";
+import { createFileReferenceChip, fileReferenceChipDescriptor } from "./fileReferenceChip.js";
+import { installResultScrollProbe } from "./scrollProbe.js";
+import { colorizeSource } from "./sourceHighlight.js";
 
 interface VsCodeApi {
   postMessage(message: WebviewRequest): void;

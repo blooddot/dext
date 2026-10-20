@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { ApiEditorProvider } from "../src/features/resources/host/apiEditorProvider.js";
 import { GlobalResourcesEditorProvider } from "../src/features/resources/host/globalResourcesEditorProvider.js";
-import type { ResourceEditorDataSource, ResourceEntry } from "../src/features/resources/contracts/resourceDocuments.js";
 import { EditorTabManager, type EditorTabCallbacks, type EditorTabPanelHandle } from "../src/platform/editor-tabs/editorTabManager.js";
 import { EditorTabRestorer } from "../src/platform/editor-tabs/editorTabSerializer.js";
+import type { ResourceEditorDataSource, ResourceEntry } from "../src/features/resources/contracts/resourceDocuments.js";
 
 class FakePanel implements EditorTabPanelHandle {
   html = "";

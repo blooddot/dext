@@ -1,8 +1,8 @@
-import type * as vscode from "vscode";
-import { afterEach, describe, expect, it } from "vitest";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import type * as vscode from "vscode";
 import { AgentProfileStore, modelOptionsFromCodexCache } from "../src/features/agents/host/agentProfiles.js";
 
 describe("Agent profile defaults", () => {
