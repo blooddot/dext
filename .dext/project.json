@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": 30,
+  "version": 31,
   "knowledge": {
     "enabled": true,
     "initialized": true
@@ -29,5 +29,5 @@
     "reasoningEffort": "high",
     "speed": "fast"
   },
-  "updatedAt": 1792399993251
+  "updatedAt": 1792415367763
 }

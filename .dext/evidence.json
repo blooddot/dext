@@ -1,8 +1,8 @@
 {
   "version": 1,
   "trigger": "initialize",
-  "generatedAt": 1792399062313,
-  "inputHash": "2f463b4522bbce462bcc3762d211c2ecc3c45d93b18ce43d9dbf3e57c6b2e5c5",
+  "generatedAt": 1792414606938,
+  "inputHash": "63105368f12bb17893481b8c701c0ea8e4fc4a08f71a75ab525aff724f093073",
   "selection": {
     "scope": [
       "src/**"
@@ -33,21 +33,21 @@
   "omitted": {
     "files": 1,
     "objects": 0,
-    "knowledge": 2
+    "knowledge": 0
   },
   "coverage": [
-    "Local index: 205 source files, 4 modules; 0 reused, 0 issues, 0 unsupported files.",
+    "Local index: 180 source files, 4 modules; 142 reused, 0 issues, 0 unsupported files.",
     "Static imports are code dependencies, not runtime calls. Dynamic imports, macros and unresolved references remain unverified.",
     "Runtime boundary excerpts are selected from the complete index within a text budget; omitted boundaries remain unverified.",
-    "Runtime window omitted by budget: src/application.ts:622.",
-    "Runtime window omitted by budget: src/sidebarProvider.ts:1587.",
-    "Runtime window omitted by budget: src/vscodeCompletionHost.ts:103.",
+    "Runtime window omitted by budget: src/application.ts:740.",
+    "Runtime window omitted by budget: src/sidebarProvider.ts:1476.",
     "Runtime window omitted by budget: src/core/projectStructureKnowledge.ts:35.",
-    "Runtime window omitted by budget: src/webview/main.ts:950.",
+    "Runtime window omitted by budget: src/webview/main.ts:942.",
     "Runtime window omitted by budget: src/core/agentRunner.ts:1149.",
     "Runtime window omitted by budget: src/historyEditorProvider.ts:158.",
-    "Runtime window omitted by budget: src/resourceDocuments.ts:298.",
-    "Runtime window omitted by budget: src/webview/projectArchitectureView.ts:237."
+    "Runtime window omitted by budget: src/resourceDocuments.ts:295.",
+    "Runtime window omitted by budget: src/webview/projectPanel.ts:198.",
+    "Runtime window omitted by budget: src/runner/dextHost.ts:208."
   ],
   "paths": [
     "src/extension.ts",
@@ -79,9 +79,9 @@
     "src/webview/projectPanel.ts"
   ],
   "structure": {
-    "files": 208,
-    "parsed": 205,
-    "cached": 0,
+    "files": 183,
+    "parsed": 180,
+    "cached": 142,
     "failed": 0,
     "unsupported": 0,
     "modules": 4
