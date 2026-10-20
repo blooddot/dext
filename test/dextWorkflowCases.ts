@@ -45,6 +45,56 @@ export function workflowCases(runnerDirectory: string): void {
       return { root, api, kernel };
     }
 
+    it.each(["stdout", "stderr"] as const)(
+      "drains large %s writes before subsequent API calls in an un-awaited workflow", { timeout: 30000 }, async (channel) => {
+        const payload = "x".repeat(2 * 1024 * 1024);
+        const calls: string[] = [];
+        const { kernel } = await setup(`
+          import { ask, ui } from "dext";
+          export async function fix() {
+            await ui.form({ title: "Confirm", fields: [] });
+            console.${channel === "stdout" ? "log" : "error"}("x".repeat(${payload.length}));
+            // Windows pipe writes can block synchronously inside console. On POSIX,
+            // wait for the queued write too, so an unread pipe cannot pass this test.
+            await new Promise<void>((resolve, reject) => {
+              process.${channel}.write("drained\\n", (error) => error ? reject(error) : resolve());
+            });
+            await ask({ input: "after output" });
+            console.log("done");
+          }
+        `, async (call) => { calls.push(call.method); return response(call); });
+        const controller = new AbortController();
+        // Bound failures in the parent, which stays responsive even if the child
+        // blocks in a synchronous write. Always kill the real child on failure.
+        const deadline = setTimeout(() => controller.abort(), 10000);
+        try {
+          for (let attempt = 0; attempt < 2; attempt += 1) {
+            let log: readonly DextReplayEntry[] = [];
+            const result = await kernel.runSource('import { fix } from "dext/api/fix"; fix();', {
+              signal: controller.signal,
+              onCallLog: (entries) => { log = entries; }
+            });
+            const output = (name: string): string => result.steps
+              ?.filter((step) => step.stream?.channel === name).map((step) => step.stream!.text).join("") ?? "";
+            // Exact text proves IPC output is neither lost nor duplicated by the
+            // host's raw pipe consumption; the trailing API and runDone must arrive.
+            expect(output(channel)).toBe(`${payload}\ndrained\n${channel === "stdout" ? "done\n" : ""}`);
+            if (channel === "stderr") expect(output("stdout")).toBe("done\n");
+            expect(result.executions.map((entry) => entry.invocation.method)).toEqual(["ui.form", "ask"]);
+            expect(log.map((entry) => entry.method)).toEqual(["ui.form", "ask"]);
+            expect(result.steps?.at(-1)?.stream?.text).toBe("done\n");
+            expect(kernel.busy()).toBe(false);
+            // The replacement child must get its own readers as well.
+            kernel.kill();
+          }
+          expect(calls).toEqual(["ui.form", "ask", "ui.form", "ask"]);
+        } finally {
+          clearTimeout(deadline);
+          kernel.dispose();
+        }
+      }
+    );
+
     it.each(["fix();", "await fix();", "export async function main() { await fix(); }"])(
       "waits across timers, native file IO and a held form: %s", { timeout: 30000 }, async (entry) => {
         const form = deferred();

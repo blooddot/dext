@@ -214,6 +214,11 @@ export class DextKernelHost {
       stdio: ["ignore", "pipe", "pipe", "ipc"]
     });
     this.child = child;
+    // The kernel captures output over IPC but also writes to its original streams.
+    // Drain both pipes for this child's entire lifetime: unread pipes can block
+    // Windows console writes. IPC remains the only source of displayed log steps.
+    child.stdout?.resume();
+    child.stderr?.resume();
     return new Promise<DextKernelReady>((resolve, reject) => {
       let settled = false;
       const timer = setTimeout(() => {
