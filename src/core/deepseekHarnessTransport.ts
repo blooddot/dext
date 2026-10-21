@@ -56,6 +56,7 @@ export class DeepSeekHarnessTransport {
   private readonly clientConnection: ClientConnection;
   private readonly child: ChildProcessWithoutNullStreams;
   private readonly bridge: HarnessBridge;
+  private readonly launcherLogs: boolean;
   private stderr = "";
   private stopped = false;
   private readonly failure: Promise<never>;
@@ -66,6 +67,10 @@ export class DeepSeekHarnessTransport {
 
   constructor(command: string, args: readonly string[], cwd: string, private readonly client: HarnessClient) {
     const invocation = harnessSpawnCommand(command, args, { cwd });
+    // The desktop launcher is Electron-as-node and prints its own startup logs
+    // on stdout; those lines cannot be protocol frames, so they are kept as
+    // diagnostics instead of failing the turn.
+    this.launcherLogs = invocation.env?.ELECTRON_RUN_AS_NODE === "1";
     // Dext's private channel listens before the spawn, so the Harness overlay
     // plugin can connect as soon as it loads. stdout stays JSON-RPC only.
     this.bridge = new HarnessBridge(
@@ -75,7 +80,7 @@ export class DeepSeekHarnessTransport {
     try {
       this.child = spawn(invocation.command, invocation.args, {
         cwd, windowsHide: true, stdio: "pipe", shell: false,
-        env: { ...process.env, [HARNESS_BRIDGE_ENV]: this.bridge.endpoint, [HARNESS_BRIDGE_TOKEN_ENV]: this.bridge.token }
+        env: { ...process.env, ...invocation.env, [HARNESS_BRIDGE_ENV]: this.bridge.endpoint, [HARNESS_BRIDGE_TOKEN_ENV]: this.bridge.token }
       });
     } catch (error) {
       this.bridge.dispose();
@@ -102,7 +107,8 @@ export class DeepSeekHarnessTransport {
     this.failure = new Promise((_, reject) => {
       const fail = (detail: string): void => reject(new Error(`DeepSeek Harness ${detail}${this.stderr ? `: ${this.stderr}` : ""}`));
       // The SDK tolerates malformed lines. A process backend must fail visibly
-      // when a plugin pollutes stdout instead of silently dropping protocol data.
+      // when a plugin pollutes stdout instead of silently dropping protocol data;
+      // the desktop launcher's own startup logs are the only tolerated exception.
       const decoder = new StringDecoder("utf8");
       let buffer = "";
       this.child.stdout.on("data", (chunk: Buffer) => {
@@ -112,6 +118,18 @@ export class DeepSeekHarnessTransport {
         const lines = buffer.split("\n"); buffer = lines.pop() ?? "";
         for (const line of lines) {
           if (!line.trim()) continue;
+          // A launcher may print diagnostics before the protocol starts (the
+          // desktop app logs its model listing there). Keep such lines as
+          // stderr-shaped diagnostics; anything that claims to be a frame still
+          // has to be valid JSON-RPC.
+          if (!line.trimStart().startsWith("{")) {
+            if (this.launcherLogs) {
+              this.stderr = (this.stderr + line + "\n").slice(-16000);
+              continue;
+            }
+            fail("ACP protocol contains invalid JSON-RPC");
+            continue;
+          }
           try {
             const frame = JSON.parse(line) as { jsonrpc?: unknown };
             if (!frame || frame.jsonrpc !== "2.0") throw new Error();
