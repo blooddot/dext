@@ -10,7 +10,7 @@ Run Dext from source, validate changes, and build a VSIX installer.
 
 ## Development
 
-Use the Node.js and DeepSeek Harness versions pinned in `mise.toml` and VS Code 1.105 or newer.
+Use the Node.js version pinned in `mise.toml`, the DeepSeek Harness desktop app for Harness turns, and VS Code 1.105 or newer.
 
 ```bash
 git clone https://github.com/blooddot/dext.git

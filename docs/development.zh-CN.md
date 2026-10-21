@@ -10,7 +10,7 @@
 
 ## 开发
 
-使用 `mise.toml` 固定的 Node.js 与 DeepSeek Harness 版本，以及 VS Code 1.105 或更新版本。
+使用 `mise.toml` 固定的 Node.js、DeepSeek Harness 桌面版（Harness 轮次），以及 VS Code 1.105 或更新版本。
 
 ```bash
 git clone https://github.com/blooddot/dext.git
