@@ -280,6 +280,12 @@ History remains readable after source movement, split or merge. Matching names a
 
 The next round starts only after all first-round checks and temporary-workspace AI acceptance pass and the compatibility/exception inventories are current. Split conversation state/history first (identity, cancellation and late messages), then execution/plan review (concurrency, approvals and restoration), then browser components (focus, streaming and scrolling). Workflow kernels and Agent providers follow explicit execution/transport contracts; MCP and completion follow with separate connection, credential, cancellation and latency checks. These remain in existing implementations for now. Do not create empty feature modules or transfer remaining responsibilities into another large controller.
 
+### Round two: forwarding entries removed
+
+The second round removed the 36 forwarding entries listed above together with every consumer update and then made the removal testable: `scripts/checkModuleBoundaries.mjs` now fails on a restored file, a static or type-only import, a literal dynamic load, a mock specifier or an inlined build entry string that names one of them. The tables above and below record the first-round migration and remain as history; current imports use the target paths directly, and `docs/conversation-development.md` records the conversation modules that were added on top.
+
+The conversation modules under `src/features/conversations/` and their single assembly point `src/app/conversationSetup.ts` replace the conversation, execution, plan and patch state that `src/sidebarProvider.ts` used to hold. The browser split described above as the next step is partial: the tab identity/cache, composer drafts, tab strip and output-scroll controller now live in `src/features/conversations/browser/`; the turn transcript, live Process/trace, Plan toolbar and patch review DOM still live in `src/webview/main.ts` and are the remaining browser work.
+
 ### Remaining compatibility consumers
 
 Acceptance on 2026-10-20: `npm run check` passed (154 test files / 1504 tests passed; existing 3 files / 13 tests skipped), including boundaries, lint, types, build, declarations and five packaged WASM grammars. Default test concurrency is unchanged. `npm run check:ui`, editor-tab checks, saved-project reader checks and `npm run test:host` passed, covering themes, narrow layouts, fullscreen, playback, export, navigation messages, activation and Project/API/resource tab lifecycles.
@@ -320,7 +326,7 @@ These explicit forwarders contain no implementation and can be removed when the 
 | `src/editorTabSerializer.ts` | `test/apiReference.test.ts` |
 | `src/editorTabManager.ts` | `test/apiReference.test.ts`, `test/projectEvidenceSelection.test.ts`, `test/projectAiGeneration.test.ts` |
 | `src/editorTabHtml.ts` | `scripts/checkProjectDiagramsUi.mjs` |
-| `src/resourceSession.ts` | `src/historyStore.ts`, `test/resourceConversation.test.ts` |
+| `src/resourceSession.ts` | `src/features/conversations/host/historyStore.ts`, `test/resourceConversation.test.ts` |
 | `src/apiEditorProvider.ts` | `test/apiReference.test.ts` |
 | `src/webview/apiPanel.ts` | `test/apiSource.test.ts` |
 | `src/webview/globalResourcesPanel.ts` | `test/apiSource.test.ts` |

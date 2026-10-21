@@ -103,9 +103,11 @@ MCP 初始化从 `package.json` 读取客户端名称和版本。协议版本分
 
 长期项目知识与单次运行记录分别存放，互不混用：
 
-- `src/projectStore.ts` 负责 `.dext/project.json`、AI 生成的 intent/diagram 文件、已接受的 `.dext/objects/<id>.json` 以及 `.dext/architecture.json`；它负责持久化已接受对象。并发写入按版本拒绝（`conflict`），不做合并。
-- `src/core/projectKnowledge.ts` 负责命名、稳定 ID，以及来源／确认／有效性／归属四个相互独立的维度。旧的 `status` 字段在读取时迁移；代码发生变化时，已接受对象保持已接受，同时标记为 `needs_verification`。
-- `src/sidebarProvider.ts` 协调会话、执行、Plan 进度与待应用补丁。Plan 完成判定保留独立的自动验证轮次。
-- `src/core/projectArchitecture*.ts` 为 TypeScript、Python、Rust 提供同一套扫描模型。各解析器把无法解析或存在歧义的结构记录为 `unsupported` 并给出原因，而不是猜测；`cargo metadata` 不可用时，Rust 元数据降级并显式说明覆盖范围。
-- `src/editorTabManager.ts` 统一管理所有编辑器 Tab 的创建、复用、销毁和消息路由。`src/editorTabSerializer.ts` 对恢复去重，避免 serializer 回调与主动恢复重复打开同一页面；`src/projectEditorProvider.ts` 复用同一个稳定键。
-- `src/resourceDocuments.ts` 为 Resources 提供只读取文件的数据源：打开和刷新列表时枚举资源目录，查看详情时读取源码，不执行资源。API 列表也会通过 `src/core/apiSource.ts` 静态提取源码信息，复用 `src/core/syntaxParser.ts` 的 Tree-sitter 加载器。Resources 与 APIs 共用签名、参数、返回类型和源码预览组件。类型来自显式标注或简单参数默认值；无法确定的类型显示为 `unknown`，不执行模块，也不运行 TypeScript 编译器。APIs 页面单独组合可调用契约、Node/JavaScript 参考和文件 API。Resources 不再读取运行时注册表或侧栏资源缓存；注册表继续负责执行分发和参数契约。
+- `src/features/project/host/persistence/projectStore.ts` 负责 `.dext/project.json`、AI 生成的 intent/diagram 文件、已接受的 `.dext/objects/<id>.json` 以及 `.dext/architecture.json`；它负责持久化已接受对象。并发写入按版本拒绝（`conflict`），不做合并。
+- `src/features/project/contracts/projectKnowledge.ts` 负责命名、稳定 ID，以及来源／确认／有效性／归属四个相互独立的维度。旧的 `status` 字段在读取时迁移；代码发生变化时，已接受对象保持已接受，同时标记为 `needs_verification`。
+- `src/sidebarProvider.ts` 只保留 Webview 生命周期与本轮范围外的功能。会话状态位于 `src/features/conversations/host/`（`conversationController.ts`、`turnExecutionCoordinator.ts`、`agentEventStream.ts`、`planController.ts`、`patchReviewController.ts`、`interactionController.ts`），由 `src/app/conversationSetup.ts` 统一装配一次。Plan 完成判定保留独立的自动验证轮次。参见 [conversation-development.zh-CN.md](conversation-development.zh-CN.md)。
+- 项目架构扫描为 TypeScript、Python、Rust 提供同一套模型。各解析器把无法解析或存在歧义的结构记录为 `unsupported` 并给出原因，而不是猜测；`cargo metadata` 不可用时，Rust 元数据降级并显式说明覆盖范围。
+- `src/platform/editor-tabs/editorTabManager.ts` 统一管理所有编辑器 Tab 的创建、复用、销毁和消息路由。`editorTabSerializer.ts` 对恢复去重，避免 serializer 回调与主动恢复重复打开同一页面；`src/features/project/host/projectEditorProvider.ts` 复用同一个稳定键。
+- Resources 使用只读取文件的数据源：`src/features/resources/host/resourceEditorProvider.ts` 枚举与读取资源但不执行，`src/features/resources/presentation/resourceDocuments.ts` 负责渲染。API 列表也会通过 `src/core/apiSource.ts` 静态提取源码信息，复用 `src/core/syntaxParser.ts` 的 Tree-sitter 加载器。Resources 与 APIs 共用签名、参数、返回类型和源码预览组件。类型来自显式标注或简单参数默认值；无法确定的类型显示为 `unknown`，不执行模块，也不运行 TypeScript 编译器。APIs 页面单独组合可调用契约、Node/JavaScript 参考和文件 API。Resources 不再读取运行时注册表或侧栏资源缓存；注册表继续负责执行分发和参数契约。
+
+导入直接指向符号所属的契约或实现。第一轮遗留在 `src/` 的转发文件已全部删除；一旦被恢复或被引用（包括测试、脚本和内嵌构建入口字符串），`scripts/checkModuleBoundaries.mjs` 会直接失败。

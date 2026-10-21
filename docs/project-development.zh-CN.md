@@ -277,6 +277,10 @@ Additional verification file: `scripts/checkProjectDiagramsUi.mjs` — use the n
 
 ### 兼容入口消费者
 
+第二轮已把上面列出的 36 个转发入口与全部消费者一起更新，然后删除；`scripts/checkModuleBoundaries.mjs` 会对恢复的文件、静态或仅类型导入、字面量动态加载、mock 说明符以及内嵌构建入口字符串报错。上表与下文表格是第一批迁移的历史记录；当前导入直接使用目标路径，本轮新增的会话模块记录在 `docs/conversation-development.zh-CN.md`。
+
+`src/features/conversations/` 下的会话模块及其唯一装配点 `src/app/conversationSetup.ts` 取代了 `src/sidebarProvider.ts` 原先持有的会话、执行、计划与补丁状态。上文所述浏览器拆分只完成一部分：标签身份/缓存、输入框草稿、标签条与输出滚动控制器已迁入 `src/features/conversations/browser/`；回合 transcript、实时 Process/trace、Plan 工具栏与补丁审核 DOM 仍在 `src/webview/main.ts`，是剩余的浏览器工作。
+
 These explicit forwarders contain no implementation and can be removed when the listed consumers migrate. New feature implementations never import them. / 下列入口仅转发导出，最后一个消费者迁移后删除，新实现不依赖这些入口。
 
 | Compatibility entry | Remaining consumers |
@@ -309,7 +313,7 @@ These explicit forwarders contain no implementation and can be removed when the 
 | `src/editorTabSerializer.ts` | `test/apiReference.test.ts` |
 | `src/editorTabManager.ts` | `test/apiReference.test.ts`, `test/projectEvidenceSelection.test.ts`, `test/projectAiGeneration.test.ts` |
 | `src/editorTabHtml.ts` | `scripts/checkProjectDiagramsUi.mjs` |
-| `src/resourceSession.ts` | `src/historyStore.ts`, `test/resourceConversation.test.ts` |
+| `src/resourceSession.ts` | `src/features/conversations/host/historyStore.ts`, `test/resourceConversation.test.ts` |
 | `src/apiEditorProvider.ts` | `test/apiReference.test.ts` |
 | `src/webview/apiPanel.ts` | `test/apiSource.test.ts` |
 | `src/webview/globalResourcesPanel.ts` | `test/apiSource.test.ts` |
