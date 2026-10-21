@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatJsonOutput } from "../src/webview/jsonOutput.js";
+import { formatJsonOutput } from "../src/platform/jsonOutput.js";
 
 describe("JSON output formatting", () => {
   it("pretty-prints complete object output without dropping nested fields", () => {

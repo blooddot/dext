@@ -1,4 +1,4 @@
-import type { AgentStreamEvent, AgentTodoItem, PlanExecutionOutcome } from "./types.js";
+import type { AgentStreamEvent, AgentTodoItem, PlanExecutionOutcome } from "../../../core/types.js";
 import { PlanTodoProgress, planTodoInstruction } from "./planTodoProgress.js";
 
 /** Completed tasks survive a resume only when their stable ID and text still match. */

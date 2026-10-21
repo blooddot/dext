@@ -1,26 +1,26 @@
 import { answerChoices, uiFieldChoices, uiResultText, type AnswerChoice } from "./uiInteractionPresentation.js";
-import { readHistoryResponse } from "./historyResponse.js";
+import { readHistoryResponse } from "../domain/historyResponse.js";
 import { renderTurnSection, renderTurnInput, renderTurnMarkdown, renderTurnJson, renderTurnResult, renderTurnMessage, turnHtmlAdapter } from "./turnComponents.js";
 import MarkdownIt from "markdown-it";
-import { markdownCodeCopy } from "./markdownCopy.js";
+import { markdownCodeCopy } from "../../../markdownCopy.js";
 import { latestAgentTodos, renderAgentTodos, planExecutionLabel } from "./agentTodoPresentation.js";
-import type { AgentStreamEvent, DextResult, InputExecutionResponse, RuntimeResponse, WorkflowStepResponse } from "./core/types.js";
-import type { DextHistoryRecord, DextHistorySession } from "./historyStore.js";
+import type { AgentStreamEvent, DextResult, InputExecutionResponse, RuntimeResponse, WorkflowStepResponse } from "../../../core/types.js";
+import type { DextHistoryRecord, DextHistorySession } from "../contracts/history.js";
 import {
   TURN_RENAME_ACTION, TURN_FORK_ACTION, TURN_COPY_ACTION, TURN_DELETE_ACTION, presentTurn,
   type TurnSectionPresentation
 } from "./turnPresentation.js";
 import { agentMessageCopyText, presentAgentMessage } from "./agentMessagePresentation.js";
 import { presentDiff } from "./diffPresentation.js";
-import type { PatchChange } from "./core/types.js";
-import { prepareHistoryTrace } from "./core/agentTraceReplay.js";
+import type { PatchChange } from "../../../core/types.js";
+import { prepareHistoryTrace } from "../domain/agentTraceReplay.js";
 import {
   contextReferenceLabel,
   inputReferenceDisplayParts,
   inputReferenceDisplayText,
   normalizeInputReferenceSource,
   type ContextReferenceOccurrence
-} from "./core/fileReference.js";
+} from "../../../core/fileReference.js";
 
 export function escapeHtml(value: string): string {
   return value.replace(/[&><"]/g, (character) => ({

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { planTodoItems, planTodoInstruction, PlanTodoProgress, stripPlanTodoProgress } from "../src/core/planTodoProgress.js";
-import { latestAgentTodos } from "../src/agentTodoPresentation.js";
+import { planTodoItems, planTodoInstruction, PlanTodoProgress, stripPlanTodoProgress } from "../src/features/conversations/domain/planTodoProgress.js";
+import { latestAgentTodos } from "../src/features/conversations/presentation/agentTodoPresentation.js";
 import type { AgentStreamEvent } from "../src/core/types.js";
 
 const document = "# Existing plan\n\n## Tasks\n\n1. [ ] Inspect implementation\n2. [x] Confirm dependencies\n3. [ ] Run tests\n\n## Verification\n- [ ] npm run check";

@@ -11,7 +11,7 @@ import { MethodRegistry } from "../src/core/registry.js";
 import { parseAgentResult } from "../src/core/resultBoundary.js";
 import { DextRuntime, type RuntimeResultRepairRequest } from "../src/core/runtime.js";
 import { mcpRawResultSchema } from "../src/core/schemas.js";
-import { prepareHistoryTrace } from "../src/core/agentTraceReplay.js";
+import { prepareHistoryTrace } from "../src/features/conversations/domain/agentTraceReplay.js";
 import type { AgentConversationRequest, AgentStructuredRequest } from "../src/core/agentRunner.js";
 import type { UiFormDefinition } from "../src/core/uiForm.js";
 import type {

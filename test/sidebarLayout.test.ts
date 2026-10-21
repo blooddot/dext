@@ -1,9 +1,55 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { ExecutionMetadata, InputExecutionResponse, PatchChange } from "../src/core/types.js";
+import type { DextHistoryRecord } from "../src/features/conversations/contracts/history.js";
+
+vi.mock("vscode", () => ({}));
+
+import { conversation, createConversationHarness } from "./conversationHarness.js";
 
 async function source(path: string): Promise<string> {
   return readFile(resolve(path), "utf8");
+}
+
+function turn(id: string): DextHistoryRecord {
+  return { id, createdAt: 1, input: "hello", process: [], output: "ok" };
+}
+
+function emptyResponse(): InputExecutionResponse {
+  return { kind: "workflow", executions: [] };
+}
+
+function gatedExecution(): {
+  executeConversation: (mode: "agent" | "ask" | "plan", source: string, metadata: Readonly<ExecutionMetadata>) => Promise<InputExecutionResponse>;
+  release: () => void;
+  started: () => boolean;
+  metadata: Readonly<ExecutionMetadata>[];
+} {
+  const gates: Array<() => void> = [];
+  const metadata: Readonly<ExecutionMetadata>[] = [];
+  return {
+    executeConversation: async (_mode, _source, meta) => {
+      metadata.push(meta);
+      await new Promise<void>((resolve) => gates.push(resolve));
+      return emptyResponse();
+    },
+    release: () => gates.shift()?.(),
+    started: () => gates.length > 0,
+    metadata
+  };
+}
+
+function patchResponse(apply: boolean, changes: PatchChange[] = [{ uri: "file:///x", before: "before", after: "after" }]): InputExecutionResponse {
+  return {
+    kind: "workflow",
+    executions: [{
+      invocation: { kind: "invocation", method: "agent", arguments: [{ name: "apply", value: apply }], source: "chat" },
+      method: { id: "agent", title: "Agent", kind: "command", source: "builtin" },
+      durationMs: 1,
+      result: { kind: "agent", text: "", patch: { kind: "patch", title: "Proposal", changes } }
+    }]
+  };
 }
 
 describe("sidebar panel layout", () => {
@@ -76,9 +122,10 @@ describe("sidebar panel layout", () => {
 
   it("uses the shared mouse and keyboard disclosure behavior", async () => {
     const main = await source("src/webview/main.ts");
+    const transcript = await source("src/features/conversations/browser/transcriptView.ts");
     expect(main).toContain('inputHeading: element<HTMLElement>("input-heading")');
     expect(main).toContain('inputBody: element<HTMLElement>("input-body")');
-    expect(main).toContain('const input = outputTurnSection(turnPresentation.input, true);');
+    expect(transcript).toContain('const input = this.section(turnPresentation.input, true);');
     expect(main).toMatch(/elements\.inputHeading\.addEventListener\("click",[\s\S]*toggleSection\(elements\.inputHeading, elements\.inputBody\)/);
     expect(main).toMatch(/elements\.inputHeading\.addEventListener\("keydown",[\s\S]*event\.key === "Enter" \|\| event\.key === " "[\s\S]*toggleSection\(elements\.inputHeading, elements\.inputBody\)/);
   });
@@ -126,15 +173,16 @@ describe("sidebar panel layout", () => {
     const main = await source("src/webview/main.ts");
     const sidebar = await source("src/sidebarProvider.ts");
     const application = await source("src/application.ts");
-    const history = await source("src/historyRender.ts");
+    const history = await source("src/features/conversations/presentation/historyRender.ts");
     const builtins = await source("src/core/builtins.ts");
+    const planControls = await source("src/features/conversations/browser/planControls.ts");
     expect(sidebar).toContain('<div class="plan-target-group">');
     expect(main).toMatch(/renderComposerMenu\(elements\.modeMenu, \[[\s\S]*?\["plan", "Plan", "codicon-checklist"\]/);
     expect(main).toContain('plan: "Plan"');
     // A plan turn ends in a file, so the result offers the file and the handoff.
-    expect(main).toContain('plan: planActions');
-    expect(main).toMatch(/function planActions[\s\S]*?type: "openFileReference", reference: planPath/);
-    expect(main).toMatch(/function planActions[\s\S]*?type: "buildPlan", planPath/);
+    expect(main).toContain('plan: (planPath) => planActions(document, planPath');
+    expect(planControls).toMatch(/export function planActions\([\s\S]*?open\(planPath\)/);
+    expect(main).toMatch(/type: "buildPlan", planPath/);
     expect(builtins).toMatch(/id: "plan",\s*title: "Plan",/);
     expect(application).toMatch(/mode === "plan" && !metadata\.executePlan/);
     expect(application).toMatch(/private async savePlan[\s\S]*?splitPlanResponse\(result\.text\)/);
@@ -144,11 +192,23 @@ describe("sidebar panel layout", () => {
     expect(application).toMatch(/private async savePlan[\s\S]*?planPath \}/);
     expect(application).toContain("globalDiagnostics: this.globalDiagnostics");
     expect(application).not.toContain('mcpDiagnostics: this.configDiagnostics.filter((item) => item.toLowerCase().includes("mcp"))');
-    // Building re-reads the file so edits made in the editor are what runs.
-    expect(sidebar).toMatch(/private async buildPlan[\s\S]*?vscode\.workspace\.fs\.readFile\(target\)/);
-    expect(sidebar).toMatch(/private async buildPlan[\s\S]*?application\.planUri\(planPath\)/);
-    expect(sidebar).toMatch(/private async buildPlan[\s\S]*?await this\.run\("plan", \[/);
-    expect(sidebar).toContain('].join("\\n"), undefined, true);');
+    // Building re-reads the plan file through the host port, so the turn runs
+    // on the current text in the editor rather than the text that created it.
+    // The old sidebar also pre-checked application.planUri; PlanController.build
+    // now delegates that existence check to its readPlan port (a missing plan
+    // throws "no longer available"), so the observable contract is the read
+    // text plus the plan path handed to the turn.
+    type ExecuteConversation = (mode: "agent" | "ask" | "plan", source: string, metadata: Readonly<ExecutionMetadata>) => Promise<InputExecutionResponse>;
+    const execute = vi.fn<ExecuteConversation>(async () => emptyResponse());
+    const h = createConversationHarness({ planText: "Ship the plan exactly as edited.", executeConversation: execute });
+    await h.controller.start();
+    await h.plans.build("plans/ship.plan.md");
+    expect(execute).toHaveBeenCalledOnce();
+    expect(execute.mock.calls[0]?.[0]).toBe("plan");
+    expect(String(execute.mock.calls[0]?.[1])).toContain("Ship the plan exactly as edited.");
+    expect(execute.mock.calls[0]?.[2]).toMatchObject({ executePlan: true, planPath: "plans/ship.plan.md" });
+    expect(h.controller.active().turns.at(-1)).toMatchObject({ executePlan: true, planPath: "plans/ship.plan.md" });
+    h.dispose();
     // History replays the document link but not the handoff button.
     expect(history).toContain('plan: (path) => ({ html: planLink(path) })');
     expect(history).not.toContain('type: "buildPlan"');
@@ -156,14 +216,15 @@ describe("sidebar panel layout", () => {
 
   it("hands the webview the settings it renders with instead of guessing", async () => {
     const main = await source("src/webview/main.ts");
+    const patches = await source("src/features/conversations/browser/patchReviewView.ts");
     const application = await source("src/application.ts");
     const extension = await source("src/extension.ts");
     expect(application).toMatch(/private webviewSettings[\s\S]*?diffView: diffView === "split" \? "split" : "inline"/);
     expect(application).toMatch(/private webviewSettings[\s\S]*?submitOnEnter: configuration\.get<boolean>\("submitOnEnter", true\) !== false/);
-    expect(main).toMatch(/if \(state\.settings\) \{[\s\S]*?defaultDiffMode = state\.settings\.diffView;[\s\S]*?editor\.setSubmitOnEnter\(state\.settings\.submitOnEnter\)/);
+    expect(main).toMatch(/if \(state\.settings\) \{[\s\S]*?patches\.diffMode = state\.settings\.diffView;[\s\S]*?editor\.setSubmitOnEnter\(state\.settings\.submitOnEnter\)/);
     // A new file change has to open in the configured layout, not always inline.
-    expect(main).toContain("view.dataset.diffView = defaultDiffMode;");
-    expect(main).toContain('button.className = `diff-mode-button${mode === defaultDiffMode ? " active" : ""}`');
+    expect(patches).toContain("view.dataset.diffView = this.diffMode;");
+    expect(patches).toContain('button.className = `diff-mode-button${mode === this.diffMode ? " active" : ""}`');
     // Saving project paths changes the registered API set, so it needs a reload.
     expect(extension).toMatch(/onWorkspaceSettingsChanged: async \(?settings\)? => \{\s*application\.setProjectWorkspaceSettings\(settings\);\s*await application\.reload\(\)/);
     expect(extension).toMatch(/event\.affectsConfiguration\("dext\.diff\.defaultView"\)[\s\S]*?await sidebar\.refresh\(\)/);
@@ -191,6 +252,7 @@ describe("sidebar panel layout", () => {
 
   it("offers sandbox-escaping presets in Agent and Plan and marks them Build-only in Plan", async () => {
     const main = await source("src/webview/main.ts");
+    const planControls = await source("src/features/conversations/browser/planControls.ts");
     // Plan applies the preset when the plan builds, so it may choose one that needs
     // Full access; Ask stays read-only and Code carries its own per-call permission.
     expect(main).toContain('const writable = inputMode === "agent" || inputMode === "plan";');
@@ -202,8 +264,8 @@ describe("sidebar panel layout", () => {
     expect(main).toContain("function fullAccessPresetRestriction(writableTurn: boolean)");
     expect(main).toContain('const presetRestriction = fullAccessPresetRestriction(inputMode === "agent" || codeMode);');
     expect(main).toContain("This preset requires Full access in Agent or Plan mode.");
-    expect(main).toContain("const buildRestriction = fullAccessPresetRestriction(true);");
-    expect(main).toContain("elements.planBuild.disabled = Boolean(buildRestriction)");
+    expect(main).toContain("buildRestriction: () => fullAccessPresetRestriction(true)");
+    expect(planControls).toContain("elements.build.disabled = Boolean(buildRestriction)");
   });
 
   it("offers exactly the installed Harness preset catalog and defaults to its own default", async () => {
@@ -235,14 +297,34 @@ describe("sidebar panel layout", () => {
     expect(manifest).toContain('"dext.agentPermission"');
     expect(manifest).toContain('"dext.agentCliArgs"');
     // The host holds the patch, so the buttons only appear when it says so.
+    const patchView = await source("src/features/conversations/browser/patchReviewView.ts");
     expect(main).toMatch(/renderResult\(message\.response, message\.reviewPatch \? message\.turnId : undefined\)/);
-    expect(main).toMatch(/function patchReviewActions[\s\S]*?type: "resolvePatch", turnId, uris: \[\.\.\.uris\], accept/);
-    expect(main).toMatch(/function applyPatchResolution[\s\S]*?if \(status === "conflict"\)[\s\S]*?button\.disabled = false/);
-    expect(sidebar).toMatch(/function unappliedPatch[\s\S]*?argument\.name === "apply" && argument\.value !== false/);
-    expect(sidebar).toMatch(/private async resolvePatch[\s\S]*?this\.pendingPatches\.get\(turnId\)/);
-    expect(sidebar).toMatch(/private async resolvePatch[\s\S]*?applyPatchHandler\(\{/);
+    expect(patchView).toMatch(/actions\(turnId: string, uris: readonly string\[\], suffix = ""\): HTMLElement \{[\s\S]*?this\.host\.resolve\(turnId, \[\.\.\.uris\], accept\)/);
+    expect(patchView).toMatch(/applyResolution\([\s\S]*?if \(status === "conflict"\)[\s\S]*?button\.disabled = false/);
+    // Patch ownership moved to the review controller: it holds only proposals
+    // whose Agent call did not write, and resolves them one entry at a time.
+    expect(sidebar).toMatch(/case "resolvePatch":[\s\S]*?this\.conversation\.patches\.resolve\(/);
+    const patches = await source("src/features/conversations/host/patchReviewController.ts");
+    expect(patches).toMatch(/function unappliedPatch[\s\S]*?argument\.name === "apply" && argument\.value !== false/);
+    // The VS Code write lives behind an injected handler, so the controller
+    // itself stays free of the editor API.
+    expect(patches).toMatch(/const result = await this\.options\.applyPatch\(\{/);
+    const setup = await source("src/app/conversationSetup.ts");
+    expect(setup).toMatch(/applyPatch: applyPatchHandler/);
     // A conflict leaves the entry pending so it can be reviewed again.
-    expect(sidebar).toMatch(/if \(result\.status === "applied" \|\| result\.status === "unchanged"\) \{\s*this\.forgetResolvedChanges/);
+    expect(patches).toMatch(/if \(result\.status === "applied" \|\| result\.status === "unchanged"\) \{\s*this\.forgetResolvedChanges/);
+
+    const h = createConversationHarness();
+    expect(h.patches.hold("review", patchResponse(false))).toBe(true);
+    expect(h.patches.has("review")).toBe(true);
+    await h.patches.resolve("session", "review", ["file:///x"], false);
+    expect(h.patches.has("review")).toBe(false);
+    expect(h.messages.at(-1)).toMatchObject({ type: "patchResolved", status: "rejected", uris: ["file:///x"] });
+    // Applied proposals and no-op patches are not offered for review.
+    expect(h.patches.hold("written", patchResponse(true))).toBe(false);
+    expect(h.patches.hold("no-op", patchResponse(false, [{ uri: "file:///x", before: "same", after: "same" }]))).toBe(false);
+    await expect(h.patches.resolve("session", "review", [], false)).rejects.toThrow("no longer available");
+    h.dispose();
     expect(css).toContain(".patch-review-action.accept");
     expect(css).toContain(".agent-file-change.patch-conflict");
     expect(css).toContain("#permission-control.is-full-access {");
@@ -279,12 +361,28 @@ describe("sidebar panel layout", () => {
     expect(css).toMatch(/^\.app-shell \{[\s\S]*?flex-direction: column;/m);
     expect(css).toMatch(/^main \{\r?\n {2}flex: 1 1 auto;/m);
     expect(css).toMatch(/\.conversation-tab \{[\s\S]*?max-width: 190px;[\s\S]*?\}/);
-    expect(main).toMatch(/function renderConversations[\s\S]*?conversation-tab-label[\s\S]*?conversation-tab-close/);
+    const tabs = await source("src/features/conversations/browser/conversationTabs.ts");
+    expect(main).toMatch(/function renderConversations[\s\S]*?renderConversationTabs\(\{/);
+    expect(tabs).toMatch(/conversation-tab-label[\s\S]*?conversation-tab-close/);
     expect(main).toMatch(/function selectConversation[\s\S]*?type: "selectConversation"/);
     expect(main).toMatch(/conversationTabs\.addEventListener\("dblclick"[\s\S]*?type: "newConversation"/);
     expect(main).toMatch(/function closeConversation[\s\S]*?type: "closeConversation"/);
     expect(manifest).toContain('"command": "dext.newConversation"');
-    expect(html).toMatch(/async openConversation\(session: DextHistorySession\)[\s\S]*?activateConversation\(existing(?:,[\s\S]*?)?\)/);
+    // History opens an already-open conversation by activating that same
+    // in-memory session (host initiated), never by creating a second tab.
+    const h = createConversationHarness({ layout: { openConversationIds: ["one", "two"], activeConversationId: "one" } });
+    h.seed([conversation("one", [turn("t1")]), conversation("two", [turn("t2")])]);
+    const existing = h.controller.session("two")!;
+    const beforeOpen = h.messages.length;
+    await h.controller.open({ ...existing, turns: [] });
+    expect(h.controller.active()).toBe(existing);
+    expect(h.controller.session("two")).toBe(existing);
+    await vi.waitFor(() => expect(h.messages.slice(beforeOpen)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "activeConversation", activeId: "two", hostInitiated: true }),
+      expect.objectContaining({ type: "outputSession", hostInitiated: true })
+    ])));
+    expect(h.controller.layout().openConversationIds.filter((id) => id === "two")).toHaveLength(1);
+    h.dispose();
     expect(html).toContain('id="input-error" class="input-error"');
     expect(main).toMatch(/function renderInputError[\s\S]*elements\.inputError\.hidden = false/);
     expect(main).toMatch(/message\.type === "error"[\s\S]*renderInputError\(message\.message\)/);
@@ -292,31 +390,50 @@ describe("sidebar panel layout", () => {
   });
 
   it("closes a conversation tab without dropping the conversation from history", async () => {
-    const sidebar = await source("src/sidebarProvider.ts");
-    const close = sidebar.slice(
-      sidebar.indexOf("private async closeConversation"),
-      sidebar.indexOf("constructor(")
-    );
-    expect(sidebar).toContain("private openConversations: string[]");
-    expect(close).toContain("this.openConversations = this.openConversations.filter((id) => id !== sessionId)");
-    expect(close).toContain("const neighbour = remaining[index] ?? remaining[index - 1]");
-    // The session store backs history, so closing a tab must never touch it.
-    expect(close).not.toContain("this.sessions.delete");
-    expect(sidebar).toMatch(/type: "conversations",[\s\S]*?this\.orderedConversations\(\)\.flatMap/);
+    const h = createConversationHarness({ layout: { openConversationIds: ["one", "two"], activeConversationId: "two" } });
+    h.seed([conversation("one", [turn("t1")]), conversation("two", [turn("t2")])]);
+    const beforeClose = h.messages.length;
+    await h.controller.close("two");
+    // The session store backs history, so closing a tab must never delete it.
+    expect(h.history.list(true).map((session) => session.id).sort()).toEqual(["one", "two"]);
+    expect(h.controller.session("two")).toBeDefined();
+    expect(h.controller.layout().openConversationIds).toEqual(["one"]);
+    // The neighbour replaces the closed tab instead of leaving a blank view.
+    expect(h.controller.active().id).toBe("one");
+    const posted = h.messages.slice(beforeClose);
+    expect(posted).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "conversations",
+        activeId: "one",
+        sessions: [expect.objectContaining({ id: "one" })]
+      }),
+      expect.objectContaining({ type: "outputSession", hostInitiated: true })
+    ]));
+    expect(posted.some((message) => message.type === "conversations" && message.sessions.some((session) => session.id === "two"))).toBe(false);
+    h.dispose();
   });
 
   it("pins a conversation tab to the front of the strip and back onto the next reload", async () => {
-    const sidebar = await source("src/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
     const css = await source("media/styles.css");
-    expect(sidebar).toMatch(/private orderedConversations\(\): string\[\][\s\S]*?this\.openConversations\.filter\(\(id\) => this\.preferences\.isPinned\(id\)\)/);
-    // Reopen every tab the user left open; pins remain the fallback for older
-    // saved layouts that did not record the open-tab list.
-    expect(sidebar).toMatch(/hydrateSessions\(\): void \{[\s\S]*?const restored = layout\.openConversationIds\.filter\(\(id\) => this\.sessions\.has\(id\)\);[\s\S]*?const pinned = this\.preferences\.pinned\(\)\.filter\(\(id\) => this\.sessions\.has\(id\)\);[\s\S]*?new Set\(\[\.\.\.restored, \.\.\.pinned, this\.activeSession\.id\]\)/);
+    // A pin restores a tab even when the saved layout predates open tabs.
+    const h = createConversationHarness({ layout: { openConversationIds: ["a", "c"], activeConversationId: "c" } });
+    await h.preferences.setPinned("b", true);
+    h.seed([conversation("a", [turn("a1")]), conversation("b", [turn("b1")]), conversation("c", [turn("c1")])]);
+    expect(h.controller.ordered()).toEqual(["b", "a", "c"]);
+    expect(h.controller.layout().openConversationIds).toContain("b");
+    await h.controller.pin("c", true);
+    expect(h.controller.ordered()).toEqual(["c", "b", "a"]);
+    expect(h.preferences.pinned()).toEqual(["b", "c"]);
     // Closing is an explicit dismissal, so it releases the pin as well.
-    expect(sidebar).toMatch(/private async closeConversation[\s\S]*?if \(this\.preferences\.isPinned\(sessionId\)\) await this\.preferences\.setPinned\(sessionId, false\)/);
-    expect(main).toMatch(/tab\.dataset\.vscodeContext = JSON\.stringify\(\{[\s\S]*?webviewSection: "conversationTab"[\s\S]*?dextTabPinned: conversation\.pinned/);
-    expect(main).toMatch(/conversation\.pinned \? "conversation-tab-pin" : "conversation-tab-close"/);
+    await h.controller.close("c");
+    expect(h.preferences.isPinned("c")).toBe(false);
+    expect(h.controller.layout().openConversationIds).not.toContain("c");
+    expect(h.controller.ordered()).toEqual(["b", "a"]);
+    h.dispose();
+    const tabs = await source("src/features/conversations/browser/conversationTabs.ts");
+    expect(tabs).toMatch(/tab\.dataset\.vscodeContext = JSON\.stringify\(\{[\s\S]*?webviewSection: "conversationTab"[\s\S]*?dextTabPinned: conversation\.pinned/);
+    expect(tabs).toMatch(/conversation\.pinned \? "conversation-tab-pin" : "conversation-tab-close"/);
     expect(main).toMatch(/function pinConversation[\s\S]*?type: "pinConversation"/);
     expect(css).toMatch(/\.conversation-tab\.pinned \{[\s\S]*?max-width: 128px;/);
   });
@@ -341,7 +458,7 @@ describe("sidebar panel layout", () => {
   it("keeps Process as the only disclosure around the live agent timeline", async () => {
     const main = await source("src/webview/main.ts");
     const css = await source("media/styles.css");
-    expect(main).toMatch(/function agentStreamPanel[\s\S]*?activeTurn\?\.process[\s\S]*?activeTurn\?\.processMeta/);
+    expect(main).toMatch(/function agentStreamPanel[\s\S]*?transcript\.active\?\.process[\s\S]*?transcript\.active\?\.processMeta/);
     expect(main).not.toContain('trace.className = "agent-run-disclosure"');
     expect(css).not.toContain(".agent-run-disclosure");
   });
@@ -413,26 +530,29 @@ describe("sidebar panel layout", () => {
     // end of the output, so the control uses the gutter main.ts measures.
     expect(css).toMatch(/\.stream-jump-latest \{[\s\S]*?right: calc\(var\(--dext-result-scroll-gutter, \d+px\) \+ \d+px\);/);
     expect(css).not.toMatch(/\.stream-jump-latest \{[\s\S]*?right: 28px;/);
-    expect(main).toMatch(/function syncResultScrollGutter\(\): void \{[\s\S]*?body\.offsetWidth - body\.clientWidth/);
+    const scrollSource = await source("src/features/conversations/browser/outputScrollController.ts");
+    expect(scrollSource).toMatch(/syncGutter\(\): void \{[\s\S]*?body\.offsetWidth - body\.clientWidth/);
     expect(main).toMatch(/elements\.resultSection\.append\(jumpToLatest\);\s*syncResultScrollGutter\(\);/);
     expect(main).toMatch(/addEventListener\("resize", syncResultScrollGutter/);
   });
 
   it("offers edit-and-resend and retry on every output turn", async () => {
     const main = await source("src/webview/main.ts");
+    const transcript = await source("src/features/conversations/browser/transcriptView.ts");
     const sidebar = await source("src/sidebarProvider.ts");
     const css = await source("media/styles.css");
-    const history = await source("src/historyRender.ts");
+    const history = await source("src/features/conversations/presentation/historyRender.ts");
     // The summary is its own click target, so an action click must not fold the
     // turn it belongs to.
-    expect(main).toMatch(/function turnActionButton[\s\S]*?event\.preventDefault\(\);\s*event\.stopPropagation\(\);/);
-    expect(main).toMatch(/turnActionButton\(TURN_EDIT_ACTION.icon, TURN_EDIT_ACTION.label, \(\) => \{[\s\S]*?editor\.setValue\(source\)/);
-    expect(main).toMatch(/turnActionButton\(TURN_RENAME_ACTION.icon, TURN_RENAME_ACTION.label, \(\) => \{[\s\S]*?type: "renameTurn", sessionId, turnId/);
+    expect(transcript).toMatch(/private actionButton[\s\S]*?event\.preventDefault\(\);\s*event\.stopPropagation\(\);/);
+    expect(main).toMatch(/edit: \(source\) => editor\.setValue\(source\)/);
+    expect(transcript).toMatch(/this\.actionButton\(TURN_EDIT_ACTION\.icon, TURN_EDIT_ACTION\.label, \(\) => \{[\s\S]*?this\.host\.edit\(source\)/);
+    expect(main).toMatch(/renameTurn: \(sessionId, turnId\) => vscode\.postMessage\(\{ type: "renameTurn", sessionId, turnId \}\)/);
     expect(sidebar).toMatch(/case "renameTurn":[\s\S]*?sessionId: request.sessionId/);
-    expect(main).toMatch(/turnActionButton\(TURN_RETRY_ACTION.icon, TURN_RETRY_ACTION.label, \(\) => \{[\s\S]*?type: "retryTurn", sessionId, turnId/);
-    expect(main).toMatch(/turnActionButton\(TURN_FORK_ACTION.icon, TURN_FORK_ACTION.label, \(\) => \{[\s\S]*?type: "forkFromTurn", sessionId, turnId/);
-    expect(main).toContain("summary.append(chevron, title, planExecutionStatus, time, actions);");
-    const actionOrder = [...main.matchAll(/turnActionButton\((TURN_\w+_ACTION)\.icon/g)].map((match) => match[1]);
+    expect(main).toMatch(/retryTurn: \(sessionId, turnId\) => vscode\.postMessage\(\{ type: "retryTurn", sessionId, turnId \}\)/);
+    expect(main).toMatch(/forkFromTurn: \(sessionId, turnId\) => vscode\.postMessage\(\{ type: "forkFromTurn", sessionId, turnId \}\)/);
+    expect(transcript).toContain("summary.append(chevron, title, planExecutionStatus, time, actions);");
+    const actionOrder = [...transcript.matchAll(/this\.actionButton\((TURN_\w+_ACTION)\.icon/g)].map((match) => match[1]);
     expect(actionOrder).toEqual([
       "TURN_EDIT_ACTION", "TURN_RETRY_ACTION", "TURN_RENAME_ACTION", "TURN_FORK_ACTION", "TURN_COPY_ACTION", "TURN_DELETE_ACTION"
     ]);
@@ -444,7 +564,22 @@ describe("sidebar panel layout", () => {
     expect(sidebar).toMatch(/case "forkFromTurn":[\s\S]*?dext\.history\.forkFromTurn[\s\S]*?sessionId: request.sessionId \?\? this\.activeSession\.id/);
     // Retry reproduces the recorded mode rather than whatever is selected now.
     expect(sidebar).toContain("await this.run(turn.mode ?? this.application.state().agentSelection.mode ?? \"agent\", turn.input);");
-    expect(sidebar).toContain("await this.history.addSuccess(source, events, response, sessionId, mode, turnId, planExecution);");
+    // The coordinator persists the turn under the webview's live turn id and
+    // the mode the retry ran in, so retry/delete still address the saved row.
+    const execution = gatedExecution();
+    const h = createConversationHarness({ executeConversation: execution.executeConversation });
+    await h.controller.start();
+    const active = h.controller.active();
+    const running = h.coordinator.execute(active, "plan", "retry me");
+    await vi.waitFor(() => expect(h.coordinator.running(active.id)).toBe(true));
+    await vi.waitFor(() => expect(execution.started()).toBe(true));
+    const turnId = h.coordinator.turnOf(active.id)!;
+    execution.release();
+    await running;
+    const stored = h.history.list(true).find((session) => session.id === active.id)!.turns.at(-1)!;
+    expect(stored).toMatchObject({ id: turnId, mode: "plan", input: "retry me" });
+    expect(active.turns.at(-1)?.id).toBe(turnId);
+    h.dispose();
     expect(css).toMatch(/\.output-turn > summary:hover \.output-turn-actions,[\s\S]*?opacity: 1;/);
     expect(history).toContain('const TURN_ACTION_HINT = "Right-click for turn actions";');
     expect(css).toMatch(/\.history-record > summary:hover \.history-turn-actions,[\s\S]*?opacity: 1;/);
@@ -468,54 +603,87 @@ describe("sidebar panel layout", () => {
     expect(clear).not.toContain("deleteImageAttachment");
     expect(main).not.toContain("function clearImageAttachments");
     expect(main).toMatch(/image-attachment-remove[\s\S]*?type: "deleteImageAttachment"/);
-    expect(sidebar).toMatch(/private updateRunningContext\(\): void \{[\s\S]*?"dext\.running",[\s\S]*?this\.activeExecutions\.has\(this\.activeSession\.id\)/);
-    expect(sidebar).toMatch(/stopExecution\(\): void \{[\s\S]*?this\.activeExecutions\.get\(this\.activeSession\.id\)[\s\S]*?execution\.controller\.abort\(\);/);
+    // `dext.running` and Stop are still the sidebar's context/commands, but the
+    // live execution they describe now belongs to the coordinator.
+    const execution = gatedExecution();
+    const h = createConversationHarness({ executeConversation: execution.executeConversation });
+    await h.controller.start();
+    const active = h.controller.active();
+    const running = h.coordinator.execute(active, "agent", "work");
+    await vi.waitFor(() => expect(h.coordinator.running(active.id)).toBe(true));
+    await vi.waitFor(() => expect(execution.started()).toBe(true));
+    expect(h.coordinator.abort(active.id)).toBe(true);
+    expect(execution.metadata[0]?.signal?.aborted).toBe(true);
+    execution.release();
+    await running;
+    expect(h.coordinator.running(active.id)).toBe(false);
+    expect(h.history.list(true).find((session) => session.id === active.id)!.turns.at(-1)?.error).toContain("stopped by user");
+    expect(sidebar).toMatch(/private updateRunningContext\(\): void \{[\s\S]*?"dext\.running",[\s\S]*?this\.running\(this\.activeSession\.id\)/);
+    expect(sidebar).toMatch(/stopExecution\(\): void \{[\s\S]*?this\.conversation\.coordinator\.abort\(this\.activeSession\.id\)/);
+    h.dispose();
   });
 
   it("defers temporary image deletion until the running turn has consumed its input", async () => {
     const sidebar = await source("src/sidebarProvider.ts");
     expect(sidebar).toContain("private readonly pendingAttachmentDeletes = new Set<string>();");
-    expect(sidebar).toMatch(/case "deleteImageAttachment":[\s\S]*?if \(this\.activeExecutions\.size\) this\.pendingAttachmentDeletes\.add\(request\.relativePath\);/);
-    expect(sidebar).toMatch(/if \(!this\.activeExecutions\.size\) await this\.flushAttachmentDeletes\(\);/);
+    expect(sidebar).toMatch(/case "deleteImageAttachment":[\s\S]*?if \(this\.conversation\.coordinator\.anyRunning\(\)\) this\.pendingAttachmentDeletes\.add\(request\.relativePath\);/);
+    // Deferred deletes are flushed when the coordinator reports that no
+    // conversation is running any more.
+    const setup = await source("src/app/conversationSetup.ts");
+    expect(setup).toContain("onIdle: dependencies.flushAttachmentDeletes");
+
+    const execution = gatedExecution();
+    const h = createConversationHarness({ executeConversation: execution.executeConversation });
+    await h.controller.start();
+    const running = h.coordinator.execute(h.controller.active(), "agent", "work");
+    await vi.waitFor(() => expect(h.coordinator.anyRunning()).toBe(true));
+    await vi.waitFor(() => expect(execution.started()).toBe(true));
+    execution.release();
+    await running;
+    expect(h.coordinator.anyRunning()).toBe(false);
+    h.dispose();
   });
 
   it("keeps live trace entries in event arrival order and folds consecutive commands together", async () => {
     const main = await source("src/webview/main.ts");
+    const trace = await source("src/features/conversations/browser/agentTraceView.ts");
     const css = await source("media/styles.css");
-    expect(main).toContain("let agentEventItems = new Map<string, HTMLElement>();");
-    expect(main).toContain("let agentToolGroup: AgentToolGroup | undefined;");
-    expect(main).toMatch(/function renderAgentEvent[\s\S]*?if \(event\.phase === "tool"\)[\s\S]*?createAgentToolCommand\(event, group\?\.body \?\? panel, group\)/);
-    expect(main).toMatch(/function renderAgentEvent[\s\S]*?agentToolGroup = undefined;[\s\S]*?panel\.append\(item\);/);
-    expect(main).toMatch(/function updateAgentToolGroupLabel[\s\S]*?Ran \$\{count\} command/);
-    expect(main).toMatch(/function createAgentToolCommand[\s\S]*?document\.createElement\("details"\)[\s\S]*?terminalText\(raw\)/);
-    expect(main).toMatch(/function renderAgentMessageItem[\s\S]*?body\.replaceChildren\(\.\.\.renderTurnMessage/);
+    expect(trace).toContain("private eventItems = new Map<string, HTMLElement>();");
+    expect(trace).toContain("private group: AgentToolGroup | undefined;");
+    expect(trace).toMatch(/renderEvent\(event: AgentStreamEvent\): void \{[\s\S]*?if \(event\.phase === "tool"\)[\s\S]*?this\.createToolCommand\(event, group\?\.body \?\? panel, group\)/);
+    expect(trace).toMatch(/renderEvent\(event: AgentStreamEvent\): void \{[\s\S]*?this\.group = undefined;[\s\S]*?panel\.append\(item\);/);
+    expect(trace).toMatch(/private updateGroupLabel[\s\S]*?Ran \$\{count\} command/);
+    expect(trace).toMatch(/private createToolCommand[\s\S]*?document\.createElement\("details"\)/);
+    expect(trace).toMatch(/renderEvent\(event: AgentStreamEvent\): void \{[\s\S]*?this\.host\.terminal\(raw\)/);
+    expect(trace).toMatch(/private renderMessageItem[\s\S]*?body\.replaceChildren\(\.\.\.renderTurnMessage/);
     expect(css).toMatch(/\.terminal-output \{[\s\S]*?max-height: 360px;[\s\S]*?overflow: auto;[\s\S]*?white-space: pre-wrap;/);
+    expect(trace).not.toContain("const order = { reasoning: 0, work: 1, files: 2, tool: 3 }");
     expect(main).not.toContain("const order = { reasoning: 0, work: 1, files: 2, tool: 3 }");
   });
 
   it("reproduces the grouping an agent reports and falls back to adjacency otherwise", async () => {
-    const main = await source("src/webview/main.ts");
-    expect(main).toContain("let agentToolGroups = new Map<string, AgentToolGroup>();");
+    const trace = await source("src/features/conversations/browser/agentTraceView.ts");
+    expect(trace).toContain("private toolGroups = new Map<string, AgentToolGroup>();");
     // A named group is reused wherever it already sits, so a later step of the
     // same group is never split off into a new one.
-    expect(main).toMatch(/if \(event\.groupId\) \{[\s\S]*?agentToolGroups\.get\(event\.groupId\)[\s\S]*?agentToolGroups\.set\(event\.groupId, group\);/);
-    expect(main).toMatch(/if \(event\.solo\) \{\s*agentToolGroup = undefined;\s*return undefined;/);
-    expect(main).toMatch(/const trailingGroup = \(group: AgentToolGroup \| undefined\): AgentToolGroup \| undefined =>[\s\S]*?group\.disclosure === panel\.lastElementChild \? group : undefined;/);
-    expect(main).toMatch(/const group = trailingGroup\(agentToolGroup\) \?\? createAgentToolGroup\(\);/);
-    expect(main).toMatch(/function updateAgentToolGroupLabel[\s\S]*?if \(group\.labelText\)/);
+    expect(trace).toMatch(/if \(event\.groupId\) \{[\s\S]*?this\.toolGroups\.get\(event\.groupId\)[\s\S]*?this\.toolGroups\.set\(event\.groupId, group\);/);
+    expect(trace).toMatch(/if \(event\.solo\) \{\s*this\.group = undefined;\s*return undefined;/);
+    expect(trace).toMatch(/const trailingGroup = \(group: AgentToolGroup \| undefined\): AgentToolGroup \| undefined =>[\s\S]*?group\.disclosure === panel\.lastElementChild \? group : undefined;/);
+    expect(trace).toMatch(/const group = trailingGroup\(this\.group\) \?\? this\.createToolGroup\(parent\);/);
+    expect(trace).toMatch(/private updateGroupLabel[\s\S]*?if \(group\.labelText\)/);
     // Replacing an earlier message must not split the run of commands below it.
-    expect(main).toMatch(/if \(!item\) \{\s*\/\/[\s\S]*?agentToolGroup = undefined;/);
-    expect(main).not.toMatch(/agentToolGroup = undefined;\s*const panel = agentStreamPanel\(\);/);
-    expect(main).toMatch(/function resetAgentTrace[\s\S]*?agentToolGroups\.clear\(\);/);
+    expect(trace).toMatch(/if \(!item\) \{\s*\/\/[\s\S]*?this\.group = undefined;/);
+    expect(trace).not.toMatch(/this\.group = undefined;\s*const panel = this\.host\.panel\(\);/);
+    expect(trace).toMatch(/reset\(\): void \{[\s\S]*?this\.toolGroups\.clear\(\);/);
   });
 
   it("renders trace prose in the UI font and command output as a code panel", async () => {
     const css = await source("media/styles.css");
-    const main = await source("src/webview/main.ts");
+    const trace = await source("src/features/conversations/browser/agentTraceView.ts");
     expect(css).toMatch(/\.agent-trace-message > \.agent-stream-text \{[\s\S]*?font-family: var\(--vscode-font-family\);[\s\S]*?white-space: normal;/);
     expect(css).toMatch(/\.agent-trace-command-body \{[\s\S]*?border: 1px solid var\(--vscode-widget-border\);/);
-    expect(main).toContain('body.className = "terminal-output agent-trace-command-body";');
-    expect(main).toMatch(/summary\.append\(toolGlyph\(event\.toolKind\), summaryLabel, chevron\)/);
+    expect(trace).toContain('body.className = "terminal-output agent-trace-command-body";');
+    expect(trace).toMatch(/summary\.append\(this\.toolGlyph\(event\.toolKind\), summaryLabel, chevron\)/);
   });
 
   it("keeps the model category menu visible beside its option submenu", async () => {
@@ -539,24 +707,27 @@ describe("sidebar panel layout", () => {
 
   it("does not reopen Output after a user folds it during result updates", async () => {
     const main = await source("src/webview/main.ts");
+    const trace = await source("src/features/conversations/browser/agentTraceView.ts");
     const renderResult = main.slice(main.indexOf("function renderResult"), main.indexOf("function renderError"));
     const renderError = main.slice(main.indexOf("function renderError"), main.indexOf("function agentStreamPanel"));
-    const renderAgentEvent = main.slice(main.indexOf("function renderAgentEvent"), main.indexOf("function renderAgentFileChanges"));
+    const renderAgentEvent = main.slice(main.indexOf("function renderAgentEvent"), main.indexOf("function resetAgentTrace"));
     expect(renderResult).not.toContain("setSectionOpen(elements.resultHeading, elements.resultBody, true)");
     expect(renderError).not.toContain("setSectionOpen(elements.resultHeading, elements.resultBody, true)");
     expect(renderAgentEvent).not.toContain("setSectionOpen(elements.resultHeading, elements.resultBody, true)");
+    expect(trace).not.toContain("setSectionOpen");
   });
 
   it("keeps live Process output visible without disrupting manual scrolling", async () => {
     const main = await source("src/webview/main.ts");
+    const scrollSource = await source("src/features/conversations/browser/outputScrollController.ts");
     // Following the stream is reader intent, not a per-batch measurement. A
     // batch taller than the tolerance used to make every later batch measure
     // "not at the end" and stop following for the rest of the turn.
-    expect(main).toMatch(/let followResultEnd = true;/);
-    expect(main).toMatch(/function resultIsNearBottom[\s\S]*?scrollHeight - scrollTop - clientHeight <= RESULT_END_TOLERANCE/);
-    expect(main).toMatch(/function snapResultToBottom[\s\S]*?body\.scrollHeight - body\.clientHeight/);
-    expect(main).toMatch(/function pinResultToBottom[\s\S]*?requestAnimationFrame[\s\S]*?snapResultToBottom\(\)/);
-    expect(main).toMatch(/message\.type === "agentEvent" && message\.sessionId === activeConversationId[\s\S]*?renderAgentEvent\(message\.event\);[\s\S]*?pinResultToBottom\(\);/);
+    expect(scrollSource).toMatch(/private followingEnd = true;/);
+    expect(scrollSource).toMatch(/isNearBottom\(\): boolean \{[\s\S]*?scrollHeight - scrollTop - clientHeight <= RESULT_END_TOLERANCE/);
+    expect(scrollSource).toMatch(/snapToBottom\(\): void \{[\s\S]*?body\.scrollHeight - body\.clientHeight/);
+    expect(scrollSource).toMatch(/pin\(\): void \{[\s\S]*?requestFrame[\s\S]*?snapToBottom\(\)/);
+    expect(main).toMatch(/message\.type === "agentEvent" && message\.sessionId === browser\.activeId[\s\S]*?renderAgentEvent\(message\.event\);[\s\S]*?pinResultToBottom\(\);/);
     // A scroll the app did not start - a clamp after a disclosure shrank, a
     // scroll-anchored adjustment, or the correction's own scrollTop write -
     // must not cancel the pin that keeps the newest output in view.
@@ -564,8 +735,10 @@ describe("sidebar panel layout", () => {
       main.indexOf('elements.resultBody.addEventListener("scroll"'),
       main.indexOf('elements.resultBody.addEventListener("pointerdown"')
     );
-    expect(scrollListener).not.toContain("cancelScheduledResultScroll");
-    expect(main).toMatch(/addEventListener\("pointerup", endResultScrollGesture[\s\S]*?followResultToBottom\(\)/);
+    expect(scrollListener).toContain("scroll.onScroll()");
+    expect(scrollListener).not.toContain("cancelScheduled");
+    expect(main).toMatch(/const endResultScrollGesture[\s\S]*?scroll\.endPointerGesture\(event\)/);
+    expect(main).toMatch(/addEventListener\("pointerup", endResultScrollGesture/);
     expect((await source("media/styles.css"))).toMatch(/#result-body \{[\s\S]*?overflow-anchor: none;/);
   });
 
@@ -577,27 +750,83 @@ describe("sidebar panel layout", () => {
     expect(main).toMatch(/if \(fullscreenPanel\)[\s\S]*toggleFullscreen\(panelName\);[\s\S]*setSectionOpen\(heading, body, false\);/);
     expect(main).not.toContain('onHeightChanged(height)');
     expect(main).toContain('vscode.postMessage({ type: "stopExecution", turnId: activeTurnId })');
-    expect(sidebar).toContain('private readonly activeExecutions = new Map<string, {');
-    expect(sidebar).toContain('if (execution.turnId === request.turnId) execution.controller.abort();');
+    expect(sidebar).toMatch(/case "stopExecution":[\s\S]*?this\.conversation\.coordinator\.abortTurn\(request\.turnId\)/);
+
+    // Active executions live in the coordinator, and Stop matches one turn id
+    // so another conversation's turn keeps running.
+    const execution = gatedExecution();
+    const h = createConversationHarness({
+      layout: { openConversationIds: ["one", "two"], activeConversationId: "one" },
+      executeConversation: execution.executeConversation
+    });
+    h.seed([conversation("one", [turn("t1")]), conversation("two", [turn("t2")])]);
+    const first = h.coordinator.execute(h.controller.session("one")!, "agent", "first");
+    const second = h.coordinator.execute(h.controller.session("two")!, "agent", "second");
+    await vi.waitFor(() => {
+      expect(h.coordinator.running("one")).toBe(true);
+      expect(h.coordinator.running("two")).toBe(true);
+      expect(execution.metadata).toHaveLength(2);
+    });
+    const firstTurn = h.coordinator.turnOf("one")!;
+    expect(h.coordinator.active("one")?.turnId).toBe(firstTurn);
+    h.coordinator.abortTurn(firstTurn);
+    expect(execution.metadata[0]?.signal?.aborted).toBe(true);
+    expect(execution.metadata[1]?.signal?.aborted).toBe(false);
+    execution.release();
+    execution.release();
+    await Promise.all([first, second]);
+    expect(h.history.list(true).find((session) => session.id === "one")!.turns.at(-1)?.error).toContain("stopped by user");
+    expect(h.history.list(true).find((session) => session.id === "two")!.turns.at(-1)?.error).toBeUndefined();
+    h.dispose();
   });
 
   it("keeps agent turns running independently across conversation tabs", async () => {
     const sidebar = await source("src/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
-    const protocol = await source("src/webviewProtocol.ts");
+    const protocol = await source("src/features/conversations/contracts/protocol.ts");
     const css = await source("media/styles.css");
     expect(sidebar).not.toContain("Wait for the current Dext turn to finish before starting another conversation.");
-    expect(sidebar).toMatch(/const session = this\.activeSession;[\s\S]*?this\.activeExecutions\.has\(sessionId\)[\s\S]*?this\.activeExecutions\.set\(sessionId/);
-    expect(sidebar).toMatch(/onAgentEvent:[\s\S]*?this\.postAgentEvent\(sessionId, update\)/);
-    expect(sidebar).toMatch(/private postAgentEvent\(sessionId: string, event: AgentStreamEvent\): void \{[\s\S]*?if \(this\.activeSession\.id !== sessionId\) return;[\s\S]*?this\.postWhenReady/);
-    expect(sidebar).toMatch(/this\.history\.addSuccess\(source, events, response, sessionId, mode, turnId, planExecution\)/);
+    // One execution per conversation: both tabs can run at once, each keeps
+    // its own buffered events, and only the visible tab receives live batches.
+    const metadataBySource = new Map<string, Readonly<ExecutionMetadata>>();
+    const gates = new Map<string, () => void>();
+    const h = createConversationHarness({
+      layout: { openConversationIds: ["one", "two"], activeConversationId: "one" },
+      executeConversation: async (_mode, source, metadata) => {
+        metadataBySource.set(source, metadata);
+        await new Promise<void>((resolve) => gates.set(source, resolve));
+        return emptyResponse();
+      }
+    });
+    h.seed([conversation("one", [turn("t1")]), conversation("two", [turn("t2")])]);
+    const first = h.coordinator.execute(h.controller.session("one")!, "agent", "first");
+    const second = h.coordinator.execute(h.controller.session("two")!, "agent", "second");
+    await vi.waitFor(() => {
+      expect(h.coordinator.running("one")).toBe(true);
+      expect(h.coordinator.running("two")).toBe(true);
+      expect(metadataBySource.size).toBe(2);
+    });
+    const firstTurn = h.coordinator.turnOf("one")!;
+    const secondTurn = h.coordinator.turnOf("two")!;
+    metadataBySource.get("first")!.onAgentEvent?.({ phase: "message", text: "one-event" });
+    metadataBySource.get("second")!.onAgentEvent?.({ phase: "message", text: "two-event" });
+    expect(h.coordinator.active("one")?.events).toHaveLength(1);
+    expect(h.coordinator.active("two")?.events).toHaveLength(1);
+    gates.get("first")!();
+    gates.get("second")!();
+    await Promise.all([first, second]);
+    expect(h.messages.some((message) => message.type === "agentEvent" && message.sessionId === "one")).toBe(true);
+    expect(h.messages.some((message) => message.type === "agentEvent" && message.sessionId === "two")).toBe(false);
+    expect(h.history.list(true).find((session) => session.id === "one")!.turns.at(-1)).toMatchObject({ id: firstTurn, mode: "agent" });
+    expect(h.history.list(true).find((session) => session.id === "two")!.turns.at(-1)).toMatchObject({ id: secondTurn, mode: "agent" });
+    h.dispose();
     expect(protocol).toContain('running: boolean;');
     expect(protocol).toContain('{ type: "agentEvent"; sessionId: string; event: AgentStreamEvent }');
     expect(main).toContain("const runningConversationIds = new Set<string>();");
-    expect(main).toMatch(/function selectConversation[\s\S]*?sessionId === activeConversationId/);
-    expect(main).toMatch(/const activeChanged = activeConversationId !== activeId;[\s\S]*?activeChanged \|\| !runningConversationIds\.has\(activeId\)/);
-    expect(main).toMatch(/message\.type === "agentEvent" && message\.sessionId === activeConversationId/);
-    expect(main).toMatch(/const existingTurn = outputTurns\.get\(message\.turnId\)/);
+    expect(main).toMatch(/function selectConversation[\s\S]*?sessionId === browser\.activeId/);
+    expect(main).toMatch(/const activeChanged = browser\.setActiveId\(activeId\);[\s\S]*?activeChanged \|\| !runningConversationIds\.has\(activeId\)/);
+    expect(main).toMatch(/message\.type === "agentEvent" && message\.sessionId === browser\.activeId/);
+    expect(main).toMatch(/const existingTurn = transcript\.get\(message\.turnId\)/);
     // Codicons declares `.codicon[class*='codicon-'] { display: inline-block }`.
     // The idle rule must outrank even a later Monaco codicon rule.
     expect(css).toMatch(/\.conversation-tab \.conversation-tab-activity\.codicon \{[\s\S]*?display: none/);
@@ -606,38 +835,85 @@ describe("sidebar panel layout", () => {
 
   it("clears stale conversation output before a tab switch waits on IPC", async () => {
     const main = await source("src/webview/main.ts");
-    expect(main).toMatch(/function clearVisibleConversation[\s\S]*?cacheRenderedConversation\(\);[\s\S]*?elements\.result\.replaceChildren\(\);[\s\S]*?renderedConversationId = undefined/);
-    expect(main).toMatch(/function selectConversation[\s\S]*?activeConversationId = sessionId;[\s\S]*?clearVisibleConversation\(\);[\s\S]*?type: "selectConversation", sessionId, switchId/);
-    expect(main).toMatch(/label\.addEventListener\("pointerdown",[\s\S]*?selectConversation\(conversation\.id\)/);
-    expect(main).toMatch(/message\.type === "outputSession"[\s\S]*?message\.session\.id !== activeConversationId/);
+    const tabs = await source("src/features/conversations/browser/conversationTabs.ts");
+    expect(main).toMatch(/function clearVisibleConversation[\s\S]*?cacheRenderedConversation\(\);[\s\S]*?elements\.result\.replaceChildren\(\);[\s\S]*?browser\.clearRendered\(\)/);
+    expect(main).toMatch(/function selectConversation[\s\S]*?browser\.beginSelection\(sessionId\);[\s\S]*?clearVisibleConversation\(\);[\s\S]*?type: "selectConversation", sessionId, switchId/);
+    expect(tabs).toMatch(/label\.addEventListener\("pointerdown",[\s\S]*?actions\.select\(conversation\.id\)/);
+    expect(main).toMatch(/message\.type === "outputSession"[\s\S]*?message\.session\.id !== browser\.activeId/);
   });
 
   it("pins a restored running conversation to the latest replayed event", async () => {
     const main = await source("src/webview/main.ts");
-    expect(main).toMatch(/let forceInitialConversationScroll = false/);
-    expect(main).toMatch(/message\.switchId !== undefined[\s\S]*?forceInitialConversationScroll = true[\s\S]*?scrollResultToBottom\(\)/);
-    expect(main).toMatch(/if \(forceInitialConversationScroll\)[\s\S]*?forceInitialConversationScroll = false[\s\S]*?scrollResultToBottom\(\)/);
+    const scrollSource = await source("src/features/conversations/browser/outputScrollController.ts");
+    expect(scrollSource).toMatch(/private forceInitialScroll = false;/);
+    expect(main).toMatch(/message\.switchId !== undefined[\s\S]*?scroll\.forceInitialBottom\(\)[\s\S]*?scrollResultToBottom\(\)/);
+    expect(main).toMatch(/if \(scroll\.consumeForcedInitialScroll\(\)\)[\s\S]*?scrollResultToBottom\(\)/);
   });
 
   it("preserves the original start time when restoring a running conversation", async () => {
     const sidebar = await source("src/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
-    expect(sidebar).toMatch(/const startedAt = Date\.now\(\);[\s\S]*?activeExecutions\.set\(sessionId, \{[^\n]*startedAt/);
-    expect(sidebar).toMatch(/type: "executing", sessionId, value: true, turnId, source, startedAt/);
+    // The coordinator snapshots startedAt when the turn begins. Switching tabs
+    // and restoring the live row reads that snapshot instead of restarting it.
+    const execution = gatedExecution();
+    const h = createConversationHarness({
+      layout: { openConversationIds: ["one", "two"], activeConversationId: "one" },
+      executeConversation: execution.executeConversation
+    });
+    h.seed([conversation("one", [turn("t1")]), conversation("two", [turn("t2")])]);
+    const one = h.controller.session("one")!;
+    const two = h.controller.session("two")!;
+    const running = h.coordinator.execute(one, "agent", "work");
+    await vi.waitFor(() => expect(h.coordinator.running("one")).toBe(true));
+    await vi.waitFor(() => expect(execution.started()).toBe(true));
+    const active = h.coordinator.active("one")!;
+    const startedAt = active.startedAt;
+    const turnId = active.turnId;
+    expect(startedAt).toBeGreaterThan(0);
+    h.controller.activate(two);
+    h.controller.activate(one);
+    expect(h.coordinator.active("one")?.startedAt).toBe(startedAt);
+    expect(h.coordinator.turnOf("one")).toBe(turnId);
+    const setup = await source("src/app/conversationSetup.ts");
+    expect(setup).toMatch(/type: "executing",[\s\S]*?turnId: snapshot\.turnId,[\s\S]*?startedAt: snapshot\.startedAt/);
     expect(sidebar).toMatch(/turnId: execution\.turnId,[\s\S]*?startedAt: execution\.startedAt/);
+    execution.release();
+    await running;
     expect(main).toMatch(/function startAgentProgress\(startedAt = Date\.now\(\)\)/);
     expect(main).toMatch(/startAgentProgress\(message\.startedAt\)/);
+    h.dispose();
   });
 
   it("accepts host-initiated conversation switches without weakening local stale-response guards", async () => {
     const sidebar = await source("src/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
-    expect(sidebar).toMatch(/activateConversation\(existing, undefined, true\)/);
-    expect(sidebar).toMatch(/postConversationState\(undefined, true\)/);
-    expect(sidebar).toMatch(/type: "outputSession", session: this\.activeSession, hostInitiated: true/);
-    expect(main).toMatch(/!message\.hostInitiated && activeConversationId && message\.session\.id !== activeConversationId/);
-    expect(main).toMatch(/!message\.hostInitiated && message\.switchId === undefined && activeConversationId && message\.activeId !== activeConversationId/);
-    expect(main).toMatch(/if \(activeConversationId !== message\.activeId\) \{[\s\S]*?activeExecutionSessionId = undefined;[\s\S]*?clearVisibleConversation\(\);/);
+    expect(sidebar).toMatch(/async openConversation\(session: DextHistorySession\): Promise<void> \{\s*await this\.conversation\.controller\.open\(session\);/);
+    // History, new conversations and closing a tab are host-initiated: their
+    // payloads carry hostInitiated so the Webview accepts an active-id change
+    // it did not request, while ordinary stale responses keep their guards.
+    const h = createConversationHarness({ layout: { openConversationIds: ["one", "two"], activeConversationId: "two" } });
+    h.seed([conversation("one", [turn("t1")]), conversation("two", [turn("t2")])]);
+    const beforeOpen = h.messages.length;
+    await h.controller.open(h.controller.session("one")!);
+    await vi.waitFor(() => expect(h.messages.slice(beforeOpen)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "activeConversation", activeId: "one", hostInitiated: true }),
+      expect.objectContaining({ type: "outputSession", hostInitiated: true })
+    ])));
+    const beforeStart = h.messages.length;
+    await h.controller.start();
+    const startedId = h.controller.active().id;
+    expect(h.messages.slice(beforeStart)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "conversations", activeId: startedId, hostInitiated: true })
+    ]));
+    const beforeClose = h.messages.length;
+    await h.controller.close(startedId);
+    await vi.waitFor(() => expect(h.messages.slice(beforeClose)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "outputSession", session: expect.objectContaining({ id: "two" }), hostInitiated: true })
+    ])));
+    h.dispose();
+    expect(main).toMatch(/!message\.hostInitiated && browser\.activeId && message\.session\.id !== browser\.activeId/);
+    expect(main).toMatch(/!message\.hostInitiated && message\.switchId === undefined && browser\.activeId && message\.activeId !== browser\.activeId/);
+    expect(main).toMatch(/if \(browser\.activeId !== message\.activeId\) \{[\s\S]*?activeExecutionSessionId = undefined;[\s\S]*?clearVisibleConversation\(\);/);
   });
 
   it("snapshots replay events before awaiting the executing message", async () => {
@@ -646,16 +922,44 @@ describe("sidebar panel layout", () => {
   });
 
   it("restores a running conversation without relying on an evictable DOM cache", async () => {
-    const sidebar = await source("src/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
-    expect(sidebar).toMatch(/const running = this\.activeExecutions\.has\(session\.id\);[\s\S]*?!running && this\.postedSessionSignatures/);
-    expect(main).toMatch(/const liveTurn = executing && activeExecutionSessionId === session\.id && activeTurn && activeTurnId[\s\S]*?elements\.result\.append\(liveTurn\.disclosure\);[\s\S]*?activeTurn = liveTurn/);
+    // A running conversation must be restored as a full output session even if
+    // its signature was posted before: a cached-DOM ref can be evicted while
+    // the live row is replayed and leave the view stuck loading.
+    const execution = gatedExecution();
+    const h = createConversationHarness({
+      layout: { openConversationIds: ["one", "two"], activeConversationId: "one" },
+      executeConversation: execution.executeConversation
+    });
+    h.seed([conversation("one", [turn("t1")]), conversation("two", [turn("t2")])]);
+    const one = h.controller.session("one")!;
+    const two = h.controller.session("two")!;
+    const running = h.coordinator.execute(one, "agent", "work");
+    await vi.waitFor(() => expect(h.coordinator.running("one")).toBe(true));
+    await vi.waitFor(() => expect(execution.started()).toBe(true));
+    h.controller.markOutputPosted(one);
+    let beforeSwitch = h.messages.length;
+    h.controller.activate(two);
+    h.controller.activate(one);
+    await vi.waitFor(() => expect(h.messages.slice(beforeSwitch).some((message) => message.type === "outputSession" && message.session.id === "one")).toBe(true));
+    expect(h.messages.slice(beforeSwitch).some((message) => message.type === "outputSessionRef")).toBe(false);
+
+    execution.release();
+    await running;
+    // Once the turn is not live, the same cached signature may take the ref path.
+    h.controller.markOutputPosted(one);
+    beforeSwitch = h.messages.length;
+    h.controller.activate(two);
+    h.controller.activate(one);
+    await vi.waitFor(() => expect(h.messages.slice(beforeSwitch).some((message) => message.type === "outputSessionRef" && message.sessionId === "one")).toBe(true));
+    h.dispose();
+    expect(main).toMatch(/const liveTurn = executing && activeExecutionSessionId === session\.id && transcript\.active && activeTurnId[\s\S]*?elements\.result\.append\(liveTurn\.disclosure\);[\s\S]*?transcript\.active = liveTurn/);
     expect(main).toMatch(/elements\.resultBody\.dataset\.loading !== "true"/);
   });
 
   it("copies turns through the host without changing the active stream", async () => {
-    const main = await source("src/webview/main.ts");
-    expect(main).toMatch(/turnActionButton\(TURN_COPY_ACTION.icon, TURN_COPY_ACTION.label, \(\) => \{\s*if \(sessionId\) vscode.postMessage\(\{ type: "copyTurn", sessionId, turnId \}\);\s*\}, true\)/);
+    const transcript = await source("src/features/conversations/browser/transcriptView.ts");
+    expect(transcript).toMatch(/this\.actionButton\(TURN_COPY_ACTION\.icon, TURN_COPY_ACTION\.label, \(\) => \{\s*if \(sessionId\) this\.host\.copyTurn\(sessionId, turnId\);\s*\}, true\)/);
   });
 
   it("explains an empty Harness model picker instead of showing a blank menu", async () => {

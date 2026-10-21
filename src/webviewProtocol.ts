@@ -1,11 +1,13 @@
 import { z } from "zod";
 import type { McpDiscoveredTool, McpServerConfig } from "./core/mcpRegistry.js";
-import type { AgentStreamEvent, InputExecutionResponse, PlanExecutionOutcome, RegisteredCallable } from "./core/types.js";
-import { UI_LIMITS, uiFormResultSchema } from "./core/uiForm.js";
+import type { AgentStreamEvent, RegisteredCallable } from "./core/types.js";
 import type { AgentProfile, AgentSelection } from "./features/agents/contracts.js";
-import type { ResourceSession } from "./features/resources/contracts/resourceSession.js";
+import {
+  conversationRequestSchemas,
+  type ConversationSummary as ConversationSummaryContract,
+  type ConversationWebviewResponse
+} from "./features/conversations/contracts/protocol.js";
 import { fileSearchRequestSchema, type FileSearchResponse } from "./features/workspace/contracts.js";
-import type { DextHistorySession, PlanStatus } from "./historyStore.js";
 import type { EditorTokenTheme } from "./vscodeTheme.js";
 
 /** HTTP MCP credentials are never written to a manifest: bearer uses the
@@ -19,7 +21,13 @@ const mcpHttpAuthSchema = z.discriminatedUnion("type", [
   }).strict()
 ]);
 
+export type ConversationSummary = ConversationSummaryContract;
+
+/** The host's whole request union. Conversation, workspace and resource messages
+ * keep their schema in the feature that owns them; this list only composes
+ * them, so a new conversation action does not edit every other feature. */
 export const webviewRequestSchema = z.discriminatedUnion("type", [
+  ...conversationRequestSchemas,
   z.object({ type: z.literal("ready") }),
   // The composer asks for its types rather than only waiting for the host to push
   // them: a Webview that missed the first message still gets its declaration, its
@@ -30,38 +38,6 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
     type: z.literal("composerTypesApplied"),
     builtins: z.number().int().min(0).max(10000),
     modules: z.number().int().min(0).max(10000)
-  }),
-  z.object({
-    type: z.literal("executeInput"),
-    mode: z.enum(["agent", "ask", "plan", "code"]),
-    source: z.string().min(1),
-    planPath: z.string().min(1).max(512).optional()
-  }),
-  z.object({ type: z.literal("stopExecution"), turnId: z.string().min(1) }),
-  z.object({
-    type: z.literal("agentInputResponse"),
-    sessionId: z.string().min(1), turnId: z.string().min(1), requestId: z.string().min(1),
-    // A multi-select question reports every chosen label, and a single-select
-    // question can carry one chosen option plus a custom answer, so one answer
-    // per question is wrong: the bound matches the checkbox answer shape.
-    answers: z.record(z.string().min(1).max(256), z.object({
-      answers: z.array(z.string().min(1).max(20000)).min(1).max(UI_LIMITS.options + 1)
-    })).nullable()
-  }),
-  z.object({ type: z.literal("retryTurn"), turnId: z.string().min(1), sessionId: z.string().min(1).optional() }),
-  z.object({ type: z.literal("continueTurn"), turnId: z.string().min(1), sessionId: z.string().min(1).optional() }),
-  z.object({ type: z.literal("forkFromTurn"), turnId: z.string().min(1), sessionId: z.string().min(1).optional() }),
-  z.object({ type: z.literal("renameTurn"), sessionId: z.string().min(1), turnId: z.string().min(1) }),
-  z.object({ type: z.literal("deleteTurn"), turnId: z.string().min(1), sessionId: z.string().min(1).optional() }),
-  z.object({ type: z.literal("copyTurn"), turnId: z.string().min(1), sessionId: z.string().min(1) }),
-  z.object({ type: z.literal("buildPlan"), planPath: z.string().min(1).max(512) }),
-  z.object({ type: z.literal("choosePlan") }),
-  z.object({
-    type: z.literal("resolvePatch"),
-    turnId: z.string().min(1),
-    /** Empty means every file the turn proposed, which is the Accept all path. */
-    uris: z.array(z.string().min(1)).max(200),
-    accept: z.boolean()
   }),
   z.object({
     type: z.literal("clipboardWrite"),
@@ -97,11 +73,6 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
     mimeType: z.string().min(1)
   }),
   z.object({ type: z.literal("deleteImageAttachment"), relativePath: z.string().min(1) }),
-  z.object({
-    type: z.literal("uiResponse"),
-    sessionId: z.string().min(1).max(128), turnId: z.string().min(1).max(128), requestId: z.string().min(1).max(128),
-    response: uiFormResultSchema
-  }).strict(),
   z.object({ type: z.literal("reload") }),
   z.object({ type: z.literal("addMcp") }),
   z.object({ type: z.literal("openResourceCreator") }),
@@ -134,47 +105,10 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
       z.object({ name: z.string().min(1).max(80), transport: z.literal("stdio"), command: z.string().min(1).max(512), args: z.array(z.string().max(512)).max(32).optional(), auth: z.object({ type: z.literal("token"), env: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/) }).optional(), timeoutMs: z.number().int().min(1000).max(120000).optional() }).strict(),
       z.object({ name: z.string().min(1).max(80), transport: z.literal("http"), url: z.string().min(1).max(2048), auth: mcpHttpAuthSchema.optional(), timeoutMs: z.number().int().min(1000).max(120000).optional() }).strict()
     ])
-  }),
-  z.object({ type: z.literal("newConversation") }),
-  z.object({ type: z.literal("selectConversation"), sessionId: z.string().min(1), switchId: z.number().int().positive().optional() }),
-  z.object({ type: z.literal("outputSessionRefMiss"), sessionId: z.string().min(1), signature: z.string(), switchId: z.number().int().positive().optional(), hostInitiated: z.literal(true).optional() }),
-  z.object({ type: z.literal("closeConversation"), sessionId: z.string().min(1) }),
-  z.object({
-    type: z.literal("moveConversation"),
-    sessionId: z.string().min(1),
-    beforeSessionId: z.string().min(1).nullable()
-  }),
-  z.object({
-    type: z.literal("pinConversation"),
-    sessionId: z.string().min(1),
-    pinned: z.boolean()
-  }),
-  z.object({
-    type: z.literal("agentSelection"),
-    selection: z.object({
-      mode: z.enum(["agent", "ask", "plan", "code"]),
-      permission: z.enum(["workspace-write", "full-access"]),
-      profileId: z.string(),
-      agentPreset: z.string().max(128).optional(),
-      model: z.string(),
-      reasoningEffort: z.string(),
-      speed: z.string(),
-      serviceTier: z.string()
-    }).strict()
-  }),
-  z.object({ type: z.literal("harnessPresetAction"), action: z.enum(["create", "copy", "edit", "refresh"]) })
+  })
 ]);
 
 export type WebviewRequest = z.infer<typeof webviewRequestSchema>;
-
-export interface ConversationSummary {
-  id: string;
-  title: string;
-  updatedAt: number;
-  turnCount: number;
-  pinned: boolean;
-  running: boolean;
-}
 
 export interface SidebarState {
   theme?: EditorTokenTheme;
@@ -195,6 +129,7 @@ export interface SidebarState {
 }
 
 export type WebviewResponse =
+  | ConversationWebviewResponse
   | { type: "state"; state: SidebarState }
   /** The generated `dext` declaration, so Monaco's TypeScript worker completes
    * and diagnoses `import { ask } from "dext"` in the composer — plus the workspace's
@@ -208,55 +143,11 @@ export type WebviewResponse =
     apiPaths: string[];
     modules: { path: string; specifier: string; content: string }[];
   }
-  | { type: "outputSession"; session: DextHistorySession; switchId?: number; hostInitiated?: true }
-  | { type: "turnRenamed"; sessionId: string; turnId: string; title?: string; displayTitle: string }
-  | { type: "outputSessionRef"; sessionId: string; signature: string; switchId?: number; hostInitiated?: true }
-  | {
-    type: "activeConversation";
-    activeId: string;
-    selection: AgentSelection;
-    planPath?: string;
-    planStatus: PlanStatus;
-    resource?: ResourceSession;
-    switchId?: number;
-    hostInitiated?: true;
-  }
-  | { type: "planContext"; path?: string; status: PlanStatus }
-  | { type: "resourceContext"; sessionId: string; resource: ResourceSession; busy?: boolean }
-  | {
-    type: "conversations";
-    sessions: ConversationSummary[];
-    activeId: string;
-    /** Active conversation-scoped controls, sent with the tab update so a
-     * tab switch does not need to resend the full sidebar state. */
-    selection?: AgentSelection;
-    planPath?: string;
-    planStatus?: PlanStatus;
-    resource?: ResourceSession;
-    switchId?: number;
-    hostInitiated?: true;
-  }
   | { type: "mcpAssistant" }
   | { type: "mcpProgress"; requestId: string; event: AgentStreamEvent }
   | { type: "mcpToolsDiscovered"; requestId: string; tools: McpDiscoveredTool[] }
   | { type: "mcpGenerated"; requestId: string; server: McpServerConfig }
   | { type: "mcpCreated"; name: string }
-  /** `reviewPatch` is set when the host is holding an unapplied patch for this
-   * turn, which is what puts Accept and Reject on its file changes. */
-  | { type: "execution"; sessionId: string; turnId: string; response: InputExecutionResponse; reviewPatch?: boolean }
-  | { type: "executionFailed"; sessionId: string; turnId: string; message: string; planOutcome?: PlanExecutionOutcome }
-  | {
-    type: "patchResolved";
-    sessionId: string;
-    turnId: string;
-    uris: string[];
-    status: "applied" | "rejected" | "conflict" | "unchanged";
-    message: string;
-  }
-  | { type: "agentEvent"; sessionId: string; event: AgentStreamEvent }
-  | { type: "focusAgentInput"; sessionId: string; turnId: string; requestId: string; kind: "agent" | "ui" }
-  | { type: "agentEvents"; sessionId: string; events: AgentStreamEvent[]; switchId?: number }
-  | { type: "executing"; sessionId: string; value: boolean; turnId: string; source?: string; mode?: "agent" | "ask" | "plan" | "code"; planPath?: string; executePlan?: boolean; startedAt?: number; switchId?: number; hostInitiated?: true }
   | { type: "inputKind"; kind: "empty" | "workflow" | "invalid" }
   | { type: "insertFileReferences"; expressions: string[] }
   | { type: "imageAttachment"; relativePath: string; webviewUri: string; name: string }

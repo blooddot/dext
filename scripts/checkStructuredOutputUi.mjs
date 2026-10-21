@@ -6,7 +6,7 @@ import { runLabChecks } from './monaco-ref-lab/check.mjs';
 
 // Run after npm run build. Production Conversation bundle and History renderer,
 // with a mocked VS Code message bridge; this is not a VS Code host acceptance test.
-const historyBundle = await build({ entryPoints: ['src/historyRender.ts'], bundle: true, write: false, platform: 'node', format: 'cjs' });
+const historyBundle = await build({ entryPoints: ['src/features/conversations/presentation/historyRender.ts'], bundle: true, write: false, platform: 'node', format: 'cjs' });
 const historyModule = { exports: {} };
 new Function('require', 'module', 'exports', historyBundle.outputFiles[0].text)(createRequire(import.meta.url), historyModule, historyModule.exports);
 const { renderHistoryRecord } = historyModule.exports;
@@ -83,7 +83,7 @@ await runLabChecks(async ({ evaluate, settle, send, click }) => {
   assert.equal(await evaluate(`messages.findLast(m=>m.type==='clipboardWrite').text`), raw);
 
   // History's HTML adapter and the shipped delegated copy handler.
-  const historyProvider = await readFile('src/historyEditorProvider.ts', 'utf8');
+  const historyProvider = await readFile('src/features/conversations/host/historyEditorProvider.ts', 'utf8');
   const historyScript = historyProvider.slice(historyProvider.indexOf('<script nonce="${nonce}">') + '<script nonce="${nonce}">'.length, historyProvider.indexOf('</script>'));
   await evaluate(`document.body.innerHTML='<section class="history-view"><div class="history-content" id="history-fixture"></div></section>';`);
   await evaluate(`(()=>{${historyScript}})()`);

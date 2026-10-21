@@ -1,6 +1,6 @@
 import type { AgentInputAnswers, AgentInputState } from "../core/types.js";
 import type { UiField, UiFormAnswers, UiFormDefinition, UiFormResult, UiInteractionState } from "../core/uiForm.js";
-import { agentInputForm, agentFormAnswers, uiFieldChoices, uiResultText, type AnswerChoice } from "../uiInteractionPresentation.js";
+import { agentInputForm, agentFormAnswers, uiFieldChoices, uiResultText, type AnswerChoice } from "../features/conversations/presentation/uiInteractionPresentation.js";
 import { InteractionForm } from "./interactionForm.js";
 import { InteractionDialog } from "./interactionDialog.js";
 import { interactionMarkdown } from "./interactionMarkdown.js";

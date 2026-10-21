@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { presentAgentMessage } from "../src/agentMessagePresentation.js";
+import { presentAgentMessage } from "../src/features/conversations/presentation/agentMessagePresentation.js";
 
 describe("Agent message presentation", () => {
   it("keeps an agent patch available for the same diff presentation", () => {

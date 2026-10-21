@@ -1,8 +1,8 @@
-import type { DextResult, PatchChange } from "./core/types.js";
+import type { DextResult, PatchChange } from "../../../core/types.js";
 import type { TurnSectionPresentation } from "./turnPresentation.js";
 import { uiResultText } from "./uiInteractionPresentation.js";
 import type { AgentMessagePresentation } from "./agentMessagePresentation.js";
-import { formatJsonOutput } from "./webview/jsonOutput.js";
+import { formatJsonOutput } from "../../../platform/jsonOutput.js";
 
 /** Only the output medium differs: text is escaped by HTML and appended as text by DOM. */
 export interface TurnRenderAdapter<E> {
@@ -152,17 +152,3 @@ export const turnHtmlAdapter: TurnRenderAdapter<TurnHtml> = {
       typeof child === "string" ? escapeTurnHtml(child) : child.html).join("")}</${tag}>`
   })
 };
-
-/** The document is injected so importing shared components never requires a browser. */
-export function turnDomAdapter(document: Document): TurnRenderAdapter<HTMLElement> {
-  return {
-    element: (tag, attributes, children) => {
-      const element = document.createElement(tag);
-      for (const [key, value] of Object.entries(attributes)) {
-        if (value !== false) element.setAttribute(key, value === true ? "" : value);
-      }
-      element.append(...children);
-      return element;
-    }
-  };
-}

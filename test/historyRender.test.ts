@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { conversationMarkdown, conversationTitle, highlightTerminal, historyTurnMarkdown, historyTurnTitle, renderHistoryRecord, renderHistorySession } from "../src/historyRender.js";
-import type { DextHistoryRecord } from "../src/historyStore.js";
+import { conversationMarkdown, conversationTitle, highlightTerminal, historyTurnMarkdown, historyTurnTitle, renderHistoryRecord, renderHistorySession } from "../src/features/conversations/presentation/historyRender.js";
+import type { DextHistoryRecord } from "../src/features/conversations/contracts/history.js";
 import type { RuntimeResponse } from "../src/core/types.js";
 import { parseUiForm, type UiFormDefinition } from "../src/core/uiForm.js";
-import { PLAN_DOCUMENT_END, PLAN_DOCUMENT_START } from "../src/core/planResponse.js";
+import { PLAN_DOCUMENT_END, PLAN_DOCUMENT_START } from "../src/features/conversations/domain/planResponse.js";
 
 /** Choice rows a submitted question card rendered, as [extra classes, icon]. */
 function choiceRows(html: string): [string, string][] {

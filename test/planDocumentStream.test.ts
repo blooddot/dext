@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { PLAN_DOCUMENT_END, PLAN_DOCUMENT_START } from "../src/core/planResponse.js";
-import { PlanDocumentFilter, guardPlanDocumentEvents } from "../src/core/planDocumentStream.js";
+import { PLAN_DOCUMENT_END, PLAN_DOCUMENT_START } from "../src/features/conversations/domain/planResponse.js";
+import { PlanDocumentFilter, guardPlanDocumentEvents } from "../src/features/conversations/domain/planDocumentStream.js";
 import type { AgentStreamEvent } from "../src/core/types.js";
 
 function collected(): { events: AgentStreamEvent[]; guard: (event: AgentStreamEvent) => void } {

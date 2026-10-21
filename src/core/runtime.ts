@@ -18,8 +18,8 @@ import type { AgentPermission, AgentProfile, AgentProvider, AgentSelection, Writ
 import { DefaultAgentRunner } from "./agentRouter.js";
 import type { AgentRunner } from "./agentRunner.js";
 import { DEFAULT_HARNESS_PRESET, harnessPresetOrDefault } from "./harnessPresetDefault.js";
-import { guardPlanDocumentEvents } from "./planDocumentStream.js";
-import { PLAN_DOCUMENT_END, PLAN_DOCUMENT_START } from "./planResponse.js";
+import { guardPlanDocumentEvents } from "../features/conversations/domain/planDocumentStream.js";
+import { PLAN_DOCUMENT_END, PLAN_DOCUMENT_START } from "../features/conversations/domain/planResponse.js";
 import type {
   AgentStreamEvent,
   CodeRef,

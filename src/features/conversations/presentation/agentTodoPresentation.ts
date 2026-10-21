@@ -1,4 +1,4 @@
-import type { AgentStreamEvent, AgentTodoItem, PlanExecutionOutcome } from "./core/types.js";
+import type { AgentStreamEvent, AgentTodoItem, PlanExecutionOutcome } from "../../../core/types.js";
 import MarkdownIt from "markdown-it";
 
 // Live Todo rows and restored history use the same Markdown interpretation.

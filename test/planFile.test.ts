@@ -5,7 +5,7 @@ import {
   planPathSegments,
   planSlug,
   planTimestamp
-} from "../src/core/planFile.js";
+} from "../src/features/conversations/domain/planFile.js";
 
 describe("plan documents", () => {
   it("reduces a goal to a portable file name", () => {

@@ -28,9 +28,9 @@ vi.mock("vscode", () => ({
 vi.mock("../src/vscodeTheme.js", () => ({ loadEditorTokenTheme: () => undefined }));
 vi.mock("../src/vscodeContextHost.js", () => ({ openDextFileReference: vi.fn() }));
 
-import { DextHistoryPanel } from "../src/historyEditorProvider.js";
-import { DextHistoryStore } from "../src/historyStore.js";
-import { DextConversationPreferences } from "../src/conversationPreferences.js";
+import { DextHistoryPanel } from "../src/features/conversations/host/historyEditorProvider.js";
+import { DextHistoryStore } from "../src/features/conversations/host/historyStore.js";
+import { DextConversationPreferences } from "../src/features/conversations/host/conversationPreferences.js";
 import type { DextStorage } from "../src/dextStorage.js";
 
 class MemoryState {

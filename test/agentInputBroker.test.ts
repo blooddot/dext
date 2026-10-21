@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { AgentInputBroker } from "../src/agentInputBroker.js";
-import { agentInputForm } from "../src/uiInteractionPresentation.js";
+import { AgentInputBroker } from "../src/features/conversations/host/agentInputBroker.js";
+import { agentInputForm } from "../src/features/conversations/presentation/uiInteractionPresentation.js";
 const question = { id: "request", blocking: true, questions: [{ id: "q", header: "", question: "Which?", options: [] }] };
 const multi = { id: "request", blocking: true, questions: [{ id: "q", header: "", question: "Which?", multiSelect: true,
   detail: "Pick any", options: [{ label: "A", description: "" }, { label: "B", description: "" }] }] };

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFile } from "node:fs/promises";
 import { AgentProfileStore } from "../src/agentProfiles.js";
-import { DextConversationPreferences } from "../src/conversationPreferences.js";
+import { DextConversationPreferences } from "../src/features/conversations/host/conversationPreferences.js";
 import { createHarnessPolicy, harnessBinding } from "../src/core/deepseekHarnessPolicy.js";
 import { DEFAULT_HARNESS_PRESET, harnessPresetOrDefault } from "../src/core/harnessPresetDefault.js";
 import { webviewRequestSchema } from "../src/webviewProtocol.js";

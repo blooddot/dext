@@ -1,8 +1,8 @@
 import * as vscode from "vscode";
 import { setupProject } from "./app/projectSetup.js";
 import { DextApplication } from "./application.js";
-import type { HistorySortOrder } from "./conversationPreferences.js";
-import { DextConversationPreferences } from "./conversationPreferences.js";
+import type { HistorySortOrder } from "./features/conversations/contracts/preferences.js";
+import { DextConversationPreferences } from "./features/conversations/host/conversationPreferences.js";
 import { createApiReferenceSource } from "./core/apiReference.js";
 import { describeApiSource } from "./core/apiSource.js";
 import { redactedMcpUrl } from "./core/mcpRegistry.js";
@@ -16,10 +16,11 @@ import { ApiEditorProvider } from "./features/resources/host/apiEditorProvider.j
 import { GlobalResourcesEditorProvider } from "./features/resources/host/globalResourcesEditorProvider.js";
 import { createApiDataSource, createFileResourceDataSource } from "./features/resources/host/resourceEditorProvider.js";
 import { renderResourceError } from "./features/resources/presentation/resourceDocuments.js";
-import { DextHistoryPanel } from "./historyEditorProvider.js";
-import { conversationMarkdown, conversationTitle, historyTurnMarkdown, historyTurnTitle } from "./historyRender.js";
-import type { DextHistoryRecord, DextHistorySession } from "./historyStore.js";
-import { DEFAULT_HISTORY_LIMITS, DextHistoryStore } from "./historyStore.js";
+import { DextHistoryPanel } from "./features/conversations/host/historyEditorProvider.js";
+import { conversationMarkdown, conversationTitle, historyTurnMarkdown, historyTurnTitle } from "./features/conversations/presentation/historyRender.js";
+import type { DextHistoryRecord, DextHistorySession } from "./features/conversations/contracts/history.js";
+import { DEFAULT_HISTORY_LIMITS } from "./features/conversations/contracts/history.js";
+import { DextHistoryStore } from "./features/conversations/host/historyStore.js";
 import { renderEditorTabHtml } from "./platform/editor-tabs/editorTabHtml.js";
 import type { VscodeWebviewPanelLike } from "./platform/editor-tabs/editorTabManager.js";
 import { EditorTabManager, createVscodeEditorTabHost, wrapVscodeWebviewPanel, type EditorTabPanelHandle } from "./platform/editor-tabs/editorTabManager.js";
@@ -27,7 +28,7 @@ import { EditorTabRestorer } from "./platform/editor-tabs/editorTabSerializer.js
 import { restoreEditorTabState } from "./platform/editor-tabs/editorTabState.js";
 import { EDITOR_TAB_VIEW_TYPES, parseEditorTabKey } from "./platform/editor-tabs/editorTabTypes.js";
 import { DextSidebarProvider } from "./sidebarProvider.js";
-import { DELETE_CONFIRMATION_DETAIL, TURN_DELETE_CONFIRMATION, TURN_RETRY_CONFIRMATION } from "./turnPresentation.js";
+import { DELETE_CONFIRMATION_DETAIL, TURN_DELETE_CONFIRMATION, TURN_RETRY_CONFIRMATION } from "./features/conversations/presentation/turnPresentation.js";
 import type { SelectionTarget } from "./vscodeAttachments.js";
 import { DextSelectionActions } from "./vscodeSelectionActions.js";
 let activeApplication: DextApplication | undefined;

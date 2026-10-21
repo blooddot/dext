@@ -1,5 +1,5 @@
 import type { AgentTodoItem } from "../core/types.js";
-import { agentTodoProgress, agentTodoRows } from "../agentTodoPresentation.js";
+import { agentTodoProgress, agentTodoRows } from "../features/conversations/presentation/agentTodoPresentation.js";
 
 /** Own state per turn so cached conversations retain both progress and the
  * user's disclosure choice. The provider remains the only source of status. */

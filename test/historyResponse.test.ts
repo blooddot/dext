@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { readHistoryResponse } from "../src/historyResponse.js";
-import { DextHistoryStore, type DextHistoryRecord } from "../src/historyStore.js";
-import { historyTurnMarkdown, renderHistoryRecord } from "../src/historyRender.js";
+import { readHistoryResponse } from "../src/features/conversations/domain/historyResponse.js";
+import type { DextHistoryRecord } from "../src/features/conversations/contracts/history.js";
+import { DextHistoryStore } from "../src/features/conversations/host/historyStore.js";
+import { historyTurnMarkdown, renderHistoryRecord } from "../src/features/conversations/presentation/historyRender.js";
 
 function legacyRecord(method = "agent", serialized = false): DextHistoryRecord {
   const execution = {

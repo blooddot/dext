@@ -1,7 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { DextConversationPreferences, orderHistorySessions } from "../src/conversationPreferences.js";
+import { DextConversationPreferences } from "../src/features/conversations/host/conversationPreferences.js";
+import { orderHistorySessions } from "../src/features/conversations/domain/conversationOrder.js";
+import { conversation, createConversationHarness } from "./conversationHarness.js";
 
 class MemoryState {
   private readonly values = new Map<string, unknown>();
@@ -98,18 +100,19 @@ describe("conversation preferences", () => {
     expect(store.conversationSelection("second")).toEqual(second);
   });
 
-  it("restores the saved tabs and active conversation when the sidebar is created again", async () => {
-    const sidebar = await readFile(resolve("src/sidebarProvider.ts"), "utf8");
-
-    expect(sidebar).toContain("const layout = this.preferences.conversationLayout();");
-    expect(sidebar).toContain("const restored = layout.openConversationIds.filter((id) => this.sessions.has(id));");
-    expect(sidebar).toContain("const previouslyActive = layout.activeConversationId");
-    expect(sidebar).toContain("await this.preferences.setConversationLayout({");
-    expect(sidebar).toContain("activeConversationId: this.activeSession.id");
+  it("restores the saved tabs and active conversation when the controller is created again", () => {
+    const layout = { openConversationIds: ["one", "two"], activeConversationId: "two" };
+    const first = createConversationHarness({ layout });
+    first.seed([conversation("one"), conversation("two")]);
+    // The layout is persisted by the controller whenever a tab changes.
+    expect(first.preferences.conversationLayout()).toEqual({ openConversationIds: ["one", "two"], activeConversationId: "two" });
+    // A store created over the same memento restores both tabs and the active one.
+    const restored = new DextConversationPreferences(first.state as never);
+    expect(restored.conversationLayout()).toEqual({ openConversationIds: ["one", "two"], activeConversationId: "two" });
   });
 
   it("renders the History panel through the stored ordering and names", async () => {
-    const panel = await readFile(resolve("src/historyEditorProvider.ts"), "utf8");
+    const panel = await readFile(resolve("src/features/conversations/host/historyEditorProvider.ts"), "utf8");
 
     expect(panel).toContain("const ordering = this.preferences.historyOrdering();");
     expect(panel).toContain("orderHistorySessions(this.history.list(), ordering)");
@@ -120,21 +123,29 @@ describe("conversation preferences", () => {
   });
 
   it("keeps a renamed conversation addressable by the id its agent session uses", async () => {
-    const store = preferences();
-    const sidebar = await readFile(resolve("src/sidebarProvider.ts"), "utf8");
+    const h = createConversationHarness();
+    h.seed([conversation("session-1")]);
+    h.controller.activate(h.controller.session("session-1")!);
 
-    await store.setTitle("session-1", "  Auth refactor  ");
-    expect(store.title("session-1")).toBe("Auth refactor");
+    await h.preferences.setTitle("session-1", "  Auth refactor  ");
+    expect(h.preferences.title("session-1")).toBe("Auth refactor");
 
     // Clearing the name hands the conversation back to its first message.
-    await store.setTitle("session-1", "   ");
-    expect(store.title("session-1")).toBeUndefined();
+    await h.preferences.setTitle("session-1", "   ");
+    expect(h.preferences.title("session-1")).toBeUndefined();
 
     // Renaming writes a label beside the conversation; the id the provider
-    // sessions are bound to is never rewritten.
-    expect(sidebar).toMatch(/async renameConversation\(sessionId: string, title: string\)[\s\S]*?this\.preferences\.setTitle\(sessionId, title\)/);
-    expect(sidebar).toContain("this.preferences.title(session.id) ?? conversationTitle(session)");
-    expect(sidebar).toMatch(/agentSessionId: sessionId/);
+    // sessions are bound to is never rewritten, so a new turn still runs in
+    // the same agent session.
+    await h.controller.rename("session-1", "Auth refactor");
+    expect(h.preferences.title("session-1")).toBe("Auth refactor");
+    expect(h.controller.session("session-1")?.id).toBe("session-1");
+    await h.coordinator.execute(h.controller.session("session-1")!, "agent", "prompt");
+    expect(h.executeConversation.mock.calls[0]?.[2].agentSessionId).toBe("session-1");
+    expect(h.messages).toContainEqual(expect.objectContaining({
+      type: "conversations",
+      sessions: [expect.objectContaining({ id: "session-1", title: "Auth refactor" })]
+    }));
   });
 
   it("drops a deleted conversation from pins and favorites alike", async () => {

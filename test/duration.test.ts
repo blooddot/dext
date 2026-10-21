@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatDuration } from "../src/webview/duration.js";
+import { formatDuration } from "../src/platform/duration.js";
 
 describe("duration formatting", () => {
   it("uses compact units at millisecond, second, and minute boundaries", () => {

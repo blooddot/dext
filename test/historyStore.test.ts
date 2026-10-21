@@ -1,6 +1,6 @@
 import { uiCallForm } from "../src/core/uiForm.js";
 import { describe, expect, it } from "vitest";
-import { DextHistoryStore } from "../src/historyStore.js";
+import { DextHistoryStore } from "../src/features/conversations/host/historyStore.js";
 
 class MemoryState {
   constructor(private value?: unknown) {}

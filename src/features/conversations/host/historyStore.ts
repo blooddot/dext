@@ -1,61 +1,20 @@
-import type { ResourceSession } from "./resourceSession.js";
-import { publicInteractionState } from "./uiInteractionPresentation.js";
-import { normalizeHistoryResponse } from "./historyResponse.js";
+import type { ResourceSession } from "../../resources/contracts/resourceSession.js";
+import { publicInteractionState } from "../presentation/uiInteractionPresentation.js";
+import { normalizeHistoryResponse } from "../domain/historyResponse.js";
 import type * as vscode from "vscode";
-import type { AgentStreamEvent, AgentTodoItem, InputExecutionResponse, PlanExecutionOutcome } from "./core/types.js";
-import { normalizeInputReferenceSource } from "./core/fileReference.js";
+import type { AgentStreamEvent, AgentTodoItem, InputExecutionResponse } from "../../../core/types.js";
+import { normalizeInputReferenceSource } from "../../../core/fileReference.js";
+import {
+  DEFAULT_HISTORY_LIMITS,
+  type ConversationHistoryStore,
+  type DextHistoryLimits,
+  type DextHistoryRecord,
+  type DextHistorySession,
+  type PlanStatus,
+  type TurnPlanContext
+} from "../contracts/history.js";
 
 const HISTORY_KEY = "dext.history";
-
-export interface DextHistoryLimits {
-  /** Turns kept across all conversations. The oldest are dropped first. */
-  maxTurns: number;
-  /** Characters kept per stored string before it is truncated. */
-  maxOutputLength: number;
-}
-
-export const DEFAULT_HISTORY_LIMITS: DextHistoryLimits = { maxTurns: 100, maxOutputLength: 200_000 };
-
-export type PlanStatus = "new" | "active" | "running" | "completed" | "failed";
-
-export interface DextHistoryRecord {
-  id: string;
-  /** Optional display name; the original input remains unchanged. */
-  title?: string;
-  createdAt: number;
-  input: string;
-  process: AgentStreamEvent[];
-  output: string;
-  /** The mode the turn ran in, so that retrying it reproduces the same run.
-   * Absent on turns recorded before Dext started tracking it. */
-  mode?: "agent" | "ask" | "plan" | "code";
-  /** Preserve Plan execution presentation even when a run fails without a response. */
-  executePlan?: boolean;
-  planPath?: string;
-  planOutcome?: PlanExecutionOutcome;
-  response?: InputExecutionResponse;
-  error?: string;
-}
-
-export interface DextHistorySession {
-  id: string;
-  createdAt: number;
-  updatedAt: number;
-  turns: DextHistoryRecord[];
-  /** Provider-owned session ids, keyed by provider name, used for native
-   * resume/fork operations. */
-  providerSessions?: Record<string, string>;
-  /** Provider session ids from the source conversation. A child consumes the
-   * matching entry when its first turn is sent. */
-  forkProviderSessions?: Record<string, string>;
-  /** Explicit Plan target and lifecycle, kept with the conversation tab. */
-  resource?: ResourceSession;
-  activePlanPath?: string;
-  planStatus?: PlanStatus;
-  planProgress?: { path: string; todos: AgentTodoItem[] };
-  /** Archived conversations remain available but are hidden from the default history view. */
-  archivedAt?: number;
-}
 
 function bounded(value: string, maxOutputLength: number): string {
   return value.length > maxOutputLength
@@ -135,7 +94,7 @@ function trimSessions(sessions: readonly DextHistorySession[], maxTurns: number)
   return next;
 }
 
-export class DextHistoryStore {
+export class DextHistoryStore implements ConversationHistoryStore {
   private mutation = Promise.resolve();
 
   /** Limits are read per write rather than captured once, so changing the
@@ -303,7 +262,7 @@ export class DextHistoryStore {
     sessionId?: string,
     mode?: DextHistoryRecord["mode"],
     turnId?: string,
-    planExecution?: Pick<DextHistoryRecord, "executePlan" | "planPath" | "planOutcome">
+    planExecution?: TurnPlanContext
   ): Promise<DextHistoryRecord> {
     const { maxOutputLength } = this.limits();
     return this.add({
@@ -323,7 +282,7 @@ export class DextHistoryStore {
     sessionId?: string,
     mode?: DextHistoryRecord["mode"],
     turnId?: string,
-    planExecution?: Pick<DextHistoryRecord, "executePlan" | "planPath" | "planOutcome">
+    planExecution?: TurnPlanContext
   ): Promise<DextHistoryRecord> {
     const message = error instanceof Error ? error.message : String(error);
     const { maxOutputLength } = this.limits();

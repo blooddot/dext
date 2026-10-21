@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { presentDiff } from "../src/diffPresentation.js";
+import { presentDiff } from "../src/features/conversations/presentation/diffPresentation.js";
 
 describe("Diff presentation", () => {
   it("aligns replacement blocks for inline and split rendering", () => {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { formatTurnTokenUsage, presentTurn, TURN_EDIT_ACTION, TURN_RENAME_ACTION, TurnTitle } from "../src/turnPresentation.js";
+import { formatTurnTokenUsage, presentTurn, TURN_EDIT_ACTION, TURN_RENAME_ACTION } from "../src/features/conversations/presentation/turnPresentation.js";
+import { TurnTitle } from "../src/features/conversations/browser/turnTitle.js";
 
 describe("turn title presentation", () => {
   it("keeps the shared Input, Process, and Output presentation stable", () => {

@@ -1,5 +1,5 @@
 import { guardPlanDocumentEvents } from "./planDocumentStream.js";
-import type { AgentStreamEvent } from "./types.js";
+import type { AgentStreamEvent } from "../../../core/types.js";
 
 /** Traces persisted before the runtime guard may still carry a Plan document.
  * Replaying them through the live guard keeps every historical renderer honest

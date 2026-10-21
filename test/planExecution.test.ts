@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { PlanExecution, resumePlanTodos } from "../src/core/planExecution.js";
-import { planTodoItems } from "../src/core/planTodoProgress.js";
-import { planExecutionLabel } from "../src/agentTodoPresentation.js";
+import { PlanExecution, resumePlanTodos } from "../src/features/conversations/domain/planExecution.js";
+import { planTodoItems } from "../src/features/conversations/domain/planTodoProgress.js";
+import { planExecutionLabel } from "../src/features/conversations/presentation/agentTodoPresentation.js";
 
 const tasks = () => planTodoItems("## Tasks\n1. [ ] Implement\n2. [ ] Verify");
 function report(run: PlanExecution, value: unknown): void {

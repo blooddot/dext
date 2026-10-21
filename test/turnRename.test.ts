@@ -1,55 +1,55 @@
-import { describe, expect, it, vi } from "vitest";
-import { DextHistoryStore } from "../src/historyStore.js";
-import { DextSidebarProvider } from "../src/sidebarProvider.js";
-
-vi.mock("vscode", () => ({}));
-
-class MemoryState {
-  private value: unknown;
-  get<T>(_: string, fallback: T): T { return (this.value as T | undefined) ?? fallback; }
-  async update(_: string, value: unknown): Promise<void> { this.value = value; }
-}
+import { describe, expect, it } from "vitest";
+import { conversation, createConversationHarness } from "./conversationHarness.js";
 
 describe("turn renaming across History and Conversation", () => {
   it("updates the persisted turn and cached session without replacing running conversation state", async () => {
-    const history = new DextHistoryStore(new MemoryState() as never);
-    await history.addSuccess("original input", [], { kind: "workflow", executions: [] }, "session-1", "ask", "turn-1");
-    await history.addSuccess("sibling input", [], { kind: "workflow", executions: [] }, "session-1", "ask", "turn-2");
-    const cachedSession = history.list()[0]!;
+    const harness = createConversationHarness();
+    harness.seed([
+      conversation("session-1", [
+        { id: "turn-1", createdAt: 1, input: "original input", process: [], output: "", mode: "ask" },
+        { id: "turn-2", createdAt: 2, input: "sibling input", process: [], output: "", mode: "ask" }
+      ])
+    ]);
+    const cachedSession = harness.controller.session("session-1");
+    if (!cachedSession) throw new Error("The seeded conversation was not hydrated.");
     const firstTurn = cachedSession.turns[0]!;
     const siblingTurn = { ...cachedSession.turns[1]! };
-    const postedSessionSignatures = new Map([["session-1", "old signature"]]);
-    const post = vi.fn();
-    // Exercise the public operation with an already-open session, without
-    // constructing a webview or starting an agent for this storage test.
-    const sidebar = Object.create(DextSidebarProvider.prototype) as DextSidebarProvider;
-    Object.assign(sidebar, {
-      history,
-      sessions: new Map([[cachedSession.id, cachedSession]]),
-      postedSessionSignatures,
-      postWhenReady: post
-    });
+    // Pretend the conversation has already been rendered, so the next activation
+    // can take the cached-signature path unless the rename invalidates it.
+    harness.controller.markOutputPosted(cachedSession);
 
-    await sidebar.renameTurn("session-1", "turn-1", "  Custom name  ");
+    await harness.controller.renameTurn("session-1", "turn-1", "  Custom name  ");
+    // An open conversation keeps its own turn objects while a turn is running;
+    // renaming only edits the label instead of replacing that state.
     expect(cachedSession.turns[0]).toBe(firstTurn);
     expect(firstTurn.title).toBe("Custom name");
     expect(firstTurn.input).toBe("original input");
     expect(cachedSession.turns[1]).toEqual(siblingTurn);
-    expect(history.list()[0]?.turns[0]?.title).toBe("Custom name");
-    expect(postedSessionSignatures.has("session-1")).toBe(false);
-    expect(post).toHaveBeenLastCalledWith({
+    expect(harness.history.list()[0]?.turns[0]?.title).toBe("Custom name");
+    expect(harness.messages.at(-1)).toEqual({
       type: "turnRenamed", sessionId: "session-1", turnId: "turn-1", title: "Custom name", displayTitle: "Custom name"
     });
 
-    await sidebar.renameTurn("session-1", "turn-1", "");
+    // The Webview caches a rendered conversation by signature. Renaming an
+    // already-rendered turn must invalidate it, otherwise the old title stays.
+    harness.messages.length = 0;
+    harness.controller.activate(cachedSession);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(harness.messages.filter((message) => message.type === "outputSessionRef")).toEqual([]);
+    expect(harness.messages.filter((message) => message.type === "outputSession").map((message) => message.session.id))
+      .toEqual(["session-1"]);
+
+    await harness.controller.renameTurn("session-1", "turn-1", "");
     expect(firstTurn.title).toBeUndefined();
-    expect(history.list()[0]?.turns[0]?.title).toBeUndefined();
-    expect(post).toHaveBeenLastCalledWith({
+    expect(harness.history.list()[0]?.turns[0]?.title).toBeUndefined();
+    expect(harness.messages.at(-1)).toEqual({
       type: "turnRenamed", sessionId: "session-1", turnId: "turn-1", displayTitle: "original input"
     });
-    post.mockClear();
-    await expect(sidebar.renameTurn("session-2", "turn-1", "wrong target")).rejects.toThrow("Conversation turn not found");
-    expect(post).not.toHaveBeenCalled();
+
+    harness.messages.length = 0;
+    await expect(harness.controller.renameTurn("session-2", "turn-1", "wrong target"))
+      .rejects.toThrow("Conversation turn not found");
+    expect(harness.messages).toEqual([]);
     expect(firstTurn.title).toBeUndefined();
   });
 });

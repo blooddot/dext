@@ -1,5 +1,12 @@
 import type * as vscode from "vscode";
-import type { AgentSelection } from "./agentProfiles.js";
+import type { AgentSelection } from "../../agents/contracts.js";
+import type {
+  ConversationLayout,
+  ConversationPreferences,
+  HistoryOrdering,
+  HistorySortOrder
+} from "../contracts/preferences.js";
+import { normalizeConversationLayout } from "../domain/conversationOrder.js";
 
 const PINNED_KEY = "dext.pinnedConversations";
 const FAVORITES_KEY = "dext.favoriteConversations";
@@ -11,56 +18,12 @@ const FAVORITES_ONLY_KEY = "dext.historyFavoritesOnly";
 const ARCHIVED_ONLY_KEY = "dext.historyArchivedOnly";
 const SELECTIONS_KEY = "dext.conversationSelections";
 
-export type HistorySortOrder = "newest" | "oldest";
-
-export interface HistoryOrdering {
-  order: HistorySortOrder;
-  favorites: readonly string[];
-  favoritesOnly: boolean;
-  archivedOnly?: boolean;
-}
-
-export interface ConversationLayout {
-  /** Conversation tabs that should be restored when VS Code starts again. */
-  openConversationIds: readonly string[];
-  /** The tab that was selected when the extension host last stopped. */
-  activeConversationId?: string;
-}
-
-interface OrderableSession {
-  id: string;
-  createdAt: number;
-  updatedAt: number;
-}
-
-// A conversation with no turns yet still reports its creation time, so the
-// later of the two timestamps is the moment the user last touched it.
-function lastActivity(session: OrderableSession): number {
-  return Math.max(session.updatedAt, session.createdAt);
-}
-
-export function orderHistorySessions<T extends OrderableSession>(
-  sessions: readonly T[],
-  ordering: HistoryOrdering
-): T[] {
-  const favorites = new Set(ordering.favorites);
-  const visible = sessions.filter((session) => {
-    const archived = Boolean((session as T & { archivedAt?: number }).archivedAt);
-    return archived === Boolean(ordering.archivedOnly) && (!ordering.favoritesOnly || favorites.has(session.id));
-  });
-  const direction = ordering.order === "newest" ? -1 : 1;
-  return visible.sort((left, right) => {
-    const byFavorite = Number(favorites.has(right.id)) - Number(favorites.has(left.id));
-    return byFavorite || direction * (lastActivity(left) - lastActivity(right));
-  });
-}
-
 /** Pinning keeps a conversation open across reloads, favouriting keeps it at
  * the top of history, and renaming replaces the name taken from its first
  * message. All three are keyed by conversation id, which is also the id the
  * agent runners bind their provider session to, so none of them can detach
  * a conversation from the agent that is answering it. */
-export class DextConversationPreferences {
+export class DextConversationPreferences implements ConversationPreferences {
   constructor(private readonly state: vscode.Memento) {}
 
   pinned(): string[] {
@@ -100,24 +63,11 @@ export class DextConversationPreferences {
   }
 
   conversationLayout(): ConversationLayout {
-    const stored = this.state.get<Partial<ConversationLayout>>(LAYOUT_KEY, {});
-    const openConversationIds = Array.isArray(stored.openConversationIds)
-      ? [...new Set(stored.openConversationIds.filter((id): id is string => typeof id === "string" && Boolean(id)))]
-      : [];
-    return {
-      openConversationIds,
-      ...(typeof stored.activeConversationId === "string" && stored.activeConversationId
-        ? { activeConversationId: stored.activeConversationId }
-        : {})
-    };
+    return normalizeConversationLayout(this.state.get<Partial<ConversationLayout>>(LAYOUT_KEY, {}));
   }
 
   async setConversationLayout(layout: ConversationLayout): Promise<void> {
-    const openConversationIds = [...new Set(layout.openConversationIds.filter(Boolean))];
-    await this.state.update(LAYOUT_KEY, {
-      openConversationIds,
-      ...(layout.activeConversationId ? { activeConversationId: layout.activeConversationId } : {})
-    } satisfies ConversationLayout);
+    await this.state.update(LAYOUT_KEY, normalizeConversationLayout(layout) satisfies ConversationLayout);
   }
 
   /** Composer settings that belong to an individual conversation tab. */

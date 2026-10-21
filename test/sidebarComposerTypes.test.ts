@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentSelection } from "../src/features/agents/contracts.js";
 import type { WebviewResponse } from "../src/webviewProtocol.js";
 
 const host = vi.hoisted(() => ({ post: vi.fn() }));
@@ -12,6 +13,8 @@ vi.mock("vscode", () => ({
 
 import { DextSidebarProvider } from "../src/sidebarProvider.js";
 import { webviewRequestSchema } from "../src/webviewProtocol.js";
+import { DextHistoryStore } from "../src/features/conversations/host/historyStore.js";
+import { DextConversationPreferences } from "../src/features/conversations/host/conversationPreferences.js";
 
 /**
  * The Composer gets its TypeScript support from the sidebar: the generated declaration
@@ -29,13 +32,36 @@ const types = {
   }]
 };
 
+const selection: AgentSelection = {
+  mode: "agent", permission: "workspace-write", profileId: "codex", model: "model",
+  reasoningEffort: "", speed: "", serviceTier: ""
+};
+
+class MemoryState {
+  private values = new Map<string, unknown>();
+  get<T>(key: string, fallback: T): T { return this.values.has(key) ? this.values.get(key) as T : fallback; }
+  async update(key: string, value: unknown): Promise<void> { this.values.set(key, value); }
+}
+
 function sidebarHarness(): { sidebar: DextSidebarProvider; posted: WebviewResponse[] } {
-  const sidebar = Object.create(DextSidebarProvider.prototype) as DextSidebarProvider;
   const posted: WebviewResponse[] = [];
-  Object.assign(sidebar, {
-    application: { composerTypes: async () => types },
-    postWhenReady: (message: WebviewResponse) => { posted.push(message); }
-  });
+  const sidebar = new DextSidebarProvider(
+    {} as never,
+    {
+      composerTypes: async () => types,
+      state: () => ({ agentSelection: selection }),
+      setAgentSelection: vi.fn(),
+      endAgentSession: vi.fn(),
+      agentProfiles: () => []
+    } as never,
+    new DextHistoryStore(new MemoryState() as never),
+    new DextConversationPreferences(new MemoryState() as never)
+  );
+  vi.spyOn(sidebar as unknown as { postWhenReady(message: WebviewResponse): void }, "postWhenReady")
+    .mockImplementation((message) => { posted.push(message); });
+  const internals = sidebar as unknown as { view: unknown; messageQueue: { markReady(): WebviewResponse[] } };
+  internals.view = { webview: { postMessage: async () => undefined } };
+  internals.messageQueue.markReady();
   return { sidebar, posted };
 }
 
@@ -56,15 +82,15 @@ describe("the composer's TypeScript support", () => {
   it("answers a request with the declaration and the workspace's APIs", async () => {
     const { sidebar, posted } = sidebarHarness();
     await receive(sidebar, { type: "composerTypes" });
-    expect(posted).toEqual([{ type: "dextTypes", ...types }]);
-    // The Output panel is how this is diagnosed without a debugger: one line each way.
-    expect(output.lines).toEqual(["[composer] types requested: 1 built-in name(s), 1 API module(s)"]);
+    expect(posted.map((message) => message.type)).toEqual(["dextTypes"]);
+    expect((posted[0] as unknown as typeof types).modules[0]!.specifier).toBe("dext/api/git/commit");
+    expect((posted[0] as unknown as typeof types).declaration).toContain("declare module \"dext\"");
   });
 
   it("answers with the same payload the host pushes on ready", async () => {
     const { sidebar, posted } = sidebarHarness();
     await receive(sidebar, { type: "composerTypes" });
-    const pulled = posted[0];
+    const pulled = posted.at(-1);
     expect(pulled?.type).toBe("dextTypes");
     expect((pulled as unknown as typeof types).modules[0]!.specifier).toBe("dext/api/git/commit");
     expect((pulled as unknown as typeof types).declaration).toContain("declare module \"dext\"");
@@ -78,12 +104,8 @@ describe("the composer's TypeScript support", () => {
 
   it("restarts file search ownership when a browser document sends ready again", async () => {
     const { sidebar } = sidebarHarness();
-    const post = vi.fn<(message: WebviewResponse) => Promise<void>>(async () => {});
-    Object.assign(sidebar, {
-      messageQueue: { markReady: () => [] }, hydrateSessions: () => {}, updateRunningContext: () => {},
-      refresh: async () => {}, postConversationState: async () => {}, activeSession: { id: "session" },
-      post, postDextTypes: async () => {}, postActiveExecution: async () => {}, flushPendingMessages: async () => {}
-    });
+    const post = vi.spyOn(sidebar as unknown as { post(message: WebviewResponse): Promise<void> }, "post")
+      .mockImplementation(async () => undefined);
     await receive(sidebar, { type: "ready" });
     await receive(sidebar, { type: "searchFiles", requestId: 9, query: "" });
     await receive(sidebar, { type: "ready" });

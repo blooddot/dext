@@ -1,5 +1,5 @@
-import type { InputExecutionResponse, RuntimeResponse } from "./core/types.js";
-import type { DextHistoryRecord } from "./historyStore.js";
+import type { InputExecutionResponse, RuntimeResponse } from "../../../core/types.js";
+import type { DextHistoryRecord } from "../contracts/history.js";
 
 /** Compatibility belongs at the persisted-data boundary, not in API contracts. */
 export function normalizeHistoryResponse(response: InputExecutionResponse, mode?: DextHistoryRecord["mode"]): InputExecutionResponse {

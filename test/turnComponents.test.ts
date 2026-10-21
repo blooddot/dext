@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { renderTurnResult, renderTurnSection, renderTurnMessage, renderTurnJson, terminalCommandSummary, turnHtmlAdapter } from "../src/turnComponents.js";
-import { presentTurn } from "../src/turnPresentation.js";
-import { presentAgentMessage } from "../src/agentMessagePresentation.js";
+import { renderTurnResult, renderTurnSection, renderTurnMessage, renderTurnJson, terminalCommandSummary, turnHtmlAdapter } from "../src/features/conversations/presentation/turnComponents.js";
+import { presentTurn } from "../src/features/conversations/presentation/turnPresentation.js";
+import { presentAgentMessage } from "../src/features/conversations/presentation/agentMessagePresentation.js";
 
 describe("shared turn rendering", () => {
   it("escapes model text and gives only Process an elapsed-time field", () => {

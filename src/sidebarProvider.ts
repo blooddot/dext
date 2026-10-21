@@ -2,33 +2,26 @@ import { randomBytes } from "node:crypto";
 import { statSync } from "node:fs";
 import { basename, relative, sep } from "node:path";
 import * as vscode from "vscode";
-import { AgentInputBroker } from "./agentInputBroker.js";
+import { createConversationServices, type ConversationServices } from "./app/conversationSetup.js";
 import type { DextApplication } from "./application.js";
 import {
 AttachmentStore,
 writeExactClipboardText
 } from "./attachmentStore.js";
-import type { DextConversationPreferences } from "./conversationPreferences.js";
+import type { AgentSelection } from "./features/agents/contracts.js";
+import type { ConversationHistoryStore, DextHistorySession } from "./features/conversations/contracts/history.js";
+import type { ConversationPreferences } from "./features/conversations/contracts/preferences.js";
+import { planPathSegments } from "./features/conversations/domain/planFile.js";
+import type { InputNotificationTarget } from "./features/conversations/host/inputNotifications.js";
 import { normalizeInputReferenceSource } from "./core/fileReference.js";
 import { harnessPresetOrDefault } from "./core/harnessPresetDefault.js";
 import { copyHarnessPreset, harnessPresetFile } from "./core/harnessPresets.js";
 import type { McpServerConfig } from "./core/mcpRegistry.js";
-import { PlanExecution, resumePlanTodos } from "./core/planExecution.js";
-import { planPathSegments } from "./core/planFile.js";
-import { planTodoInstruction, planTodoItems, stripPlanTodoProgress } from "./core/planTodoProgress.js";
-import type { AgentInputRequest, AgentStreamEvent, ApplyResult, InputExecutionResponse, McpProcessEvent, PatchResult, PlanExecutionOutcome, UiInteraction } from "./core/types.js";
-import type { AgentSelection } from "./features/agents/host/agentProfiles.js";
 import type { ProjectReferenceCandidate } from "./features/project/knowledge/projectReference.js";
 import { RESOURCE_LABELS, resourceFileName, type ResourceKind, type ResourceScope, type ResourceSession } from "./features/resources/contracts/resourceSession.js";
 import { FileSearchController } from "./features/workspace/host/fileSearchController.js";
-import { conversationTitle, historyTurnTitle } from "./historyRender.js";
-import { readHistoryResponse } from "./historyResponse.js";
-import type { DextHistoryRecord, DextHistorySession, DextHistoryStore } from "./historyStore.js";
-import { InputNotifications, type InputNotificationTarget } from "./inputNotifications.js";
 import { ReadyMessageQueue } from "./readyMessageQueue.js";
 import type { DextReplayEntry } from "./runner/dextResumeCache.js";
-import { UiInteractionBroker } from "./uiInteractionBroker.js";
-import { publicInteractionState } from "./uiInteractionPresentation.js";
 import {
 activeWorkspaceSelection,
 attachmentFileReference,
@@ -40,83 +33,9 @@ type SelectionTarget
 } from "./vscodeAttachments.js";
 import { clipboardFileReferences, copyFilePathKeepingFiles, copyFilePathKeepingLine } from "./vscodeClipboardFiles.js";
 import { openDextFileReference, openExternalLink } from "./vscodeContextHost.js";
-import { applyPatchHandler } from "./vscodePatchHost.js";
 import { dextBuiltinNames } from "./webview/dextTypesStatus.js";
-import type { ConversationSummary, WebviewResponse } from "./webviewProtocol.js";
+import type { WebviewResponse } from "./webviewProtocol.js";
 import { webviewRequestSchema } from "./webviewProtocol.js";
-
-/** An `agent(apply=False)` step proposes changes and writes nothing, so its
- * patch is the one Dext holds for review. A step that was allowed to write has
- * already landed and must not be offered again. */
-function unappliedPatch(response: InputExecutionResponse): PatchResult | undefined {
-  const changes: PatchResult["changes"] = [];
-  let title = "Proposed changes";
-  for (const execution of response.executions) {
-    if (execution.result.kind !== "agent" || !execution.result.patch) continue;
-    const applied = execution.invocation.arguments
-      .some((argument) => argument.name === "apply" && argument.value !== false);
-    if (applied) continue;
-    title = execution.result.patch.title || title;
-    changes.push(...execution.result.patch.changes.filter((change) => change.before !== change.after));
-  }
-  if (!changes.length) return undefined;
-  return { kind: "patch", title, changes };
-}
-
-function outputSession(): DextHistorySession {
-  const now = Date.now();
-  return {
-    id: randomBytes(12).toString("hex"),
-    createdAt: now,
-    updatedAt: now,
-    turns: []
-  };
-}
-
-/** Turns copied into a fork are only UI history until they are sent to a new
- * provider task. Keep a readable, bounded transcript that can bootstrap that
- * task without exposing Dext's internal JSON envelope as the conversation. */
-function conversationContext(turns: readonly DextHistoryRecord[]): string | undefined {
-  if (!turns.length) return undefined;
-  const sections: string[] = [];
-  let length = 0;
-  // Keep the branch point (the most recent turns) when the stored history is
-  // larger than a provider's practical prompt window.
-  for (const turn of [...turns].reverse()) {
-    const responseText = readHistoryResponse(turn)?.executions
-      .map((execution) => execution.result.kind === "ask" || execution.result.kind === "plan" || execution.result.kind === "skill" || execution.result.kind === "agent" || execution.result.kind === "template"
-        ? execution.result.text
-        : JSON.stringify(execution.result))
-      .filter(Boolean)
-      .join("\n") || turn.output || (turn.error ? `[error] ${turn.error}` : "");
-    const section = `User: ${turn.input}\nAssistant: ${responseText}`;
-    if (length + section.length > 120_000) break;
-    sections.unshift(section);
-    length += section.length;
-  }
-  if (!sections.length) return undefined;
-  return [
-    "The following is the prior Dext conversation. Treat it as conversation history, not as a new user request:",
-    "---",
-    sections.join("\n\n"),
-    "---",
-    "Continue from that context and answer the new user message."
-  ].join("\n");
-}
-
-// New tabs always start in Agent mode, while keeping the provider/model
-// controls the user was using in the tab they came from.
-function defaultConversationSelection(previous: AgentSelection): AgentSelection {
-  return { ...previous, mode: "agent", ...(previous.profileId === "deepseek-harness" ? { agentPreset: harnessPresetOrDefault(previous.agentPreset) } : {}) };
-}
-
-// The picker ranks paths in the host, so the index has to be broad enough to
-// contain the answer while staying cheap enough to rebuild on a stale read.
-
-function sessionSignature(session: DextHistorySession): string {
-  const last = session.turns.at(-1);
-  return `${session.updatedAt}:${session.turns.length}:${last?.id ?? ""}:${last?.process.length ?? 0}`;
-}
 
 function imageExtension(mimeType: string): string | undefined {
   const normalized = mimeType.toLowerCase().split(";")[0]!.trim();
@@ -129,6 +48,9 @@ function imageExtension(mimeType: string): string | undefined {
   })[normalized];
 }
 
+/** The Webview host. It owns the VS Code surface, the HTML shell, message
+ * dispatch and the features outside this round (resources, MCP, attachments).
+ * Conversation state lives in the controllers created by conversationSetup. */
 export class DextSidebarProvider implements vscode.WebviewViewProvider {
   static readonly viewType = "dext.sidebar";
   private view: vscode.WebviewView | undefined;
@@ -136,313 +58,73 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   /** The Output channel that says whether the composer's types were sent. */
   private composerLog: vscode.OutputChannel | undefined;
   private readonly attachments = new AttachmentStore();
-  private activeSession = outputSession();
-  private readonly sessions = new Map<string, DextHistorySession>();
-  // Every composer control belongs to its conversation tab. The application
-  // still receives the active tab's selection so execution uses the same
-  // runtime path, but no tab can overwrite another tab's controls.
-  private readonly conversationSelections = new Map<string, AgentSelection>();
-  // Conversations behave like editor tabs: the strip only shows the ones that
-  // are open, while every conversation stays reachable through history.
-  private openConversations: string[] = [this.activeSession.id];
-  private sessionsHydrated = false;
-  // Model discovery opens an ACP session. Run it once when this sidebar first
-  // needs Harness, or when the user explicitly switches to Harness, rather
-  // than before every turn.
-  private harnessModelsDiscovered = false;
-  private harnessModelDiscovery: Promise<void> | undefined;
-  private readonly activeExecutions = new Map<string, {
-    turnId: string;
-    mode: "agent" | "ask" | "plan" | "code";
-    source: string;
-    startedAt: number;
-    planPath?: string;
-    executePlan?: boolean;
-    controller: AbortController;
-    events: AgentStreamEvent[];
-  }>();
-  /** Live Code continuations. They intentionally stay in memory because they
-   * carry the runtime environment produced by earlier steps. */
-  /** Recorded API calls of a failed Code turn, so Continue can replay them. */
-  private readonly codeContinuations = new Map<string, readonly DextReplayEntry[]>();
+  private readonly conversation: ConversationServices;
   private projectReferences?: {
     search(query: string): Promise<ProjectReferenceCandidate[]> | ProjectReferenceCandidate[];
     open(objectId: string): Promise<void>;
   };
   // MCP manifest generation is an Agent-backed operation too, but it is not a
-  // conversation turn and therefore does not belong in activeExecutions.
-  // Keeping its controller separately lets the shared Stop button cancel it.
+  // conversation turn and therefore does not belong in the execution
+  // coordinator. Keeping its controller separately lets the shared Stop button
+  // cancel it.
   private mcpAssistantExecution: { requestId: string; controller: AbortController } | undefined;
   private readonly pendingAttachmentDeletes = new Set<string>();
-  private readonly postedSessionSignatures = new Map<string, string>();
-  private pendingAgentEvents = new Map<string, AgentStreamEvent>();
-  private agentEventFlushTimer: ReturnType<typeof setTimeout> | undefined;
-  private layoutWriteTimer: ReturnType<typeof setTimeout> | undefined;
-  private layoutWriteInFlight: Promise<void> | undefined;
-  private layoutWritePending = false;
-  private disposed = false;
-  private static readonly layoutWriteDebounceMs = 750;
-  // A read-only Agent turn leaves a patch nobody applied yet. It is kept per
-  // turn so two turns in the same conversation cannot resolve each other's
-  // files, and so a rejected file simply disappears from the entry.
-  private readonly pendingPatches = new Map<string, PatchResult>();
   private readonly resourceOperations = new Set<string>();
   private readonly resourcePreviews = new Map<string, string>();
   private resourcePreviewProvider: vscode.Disposable | undefined;
-  private readonly uiInputs = new UiInteractionBroker();
-  private readonly agentInputs = new AgentInputBroker();
-  private inputNotifications?: InputNotifications;
-  private pendingInputFocus: InputNotificationTarget | undefined;
   private fileSearch = new FileSearchController(response => this.post(response));
+  private disposed = false;
+  // Model discovery opens an ACP session. Run it once when this sidebar first
+  // needs Harness, or when the user explicitly switches to Harness, rather
+  // than before every turn.
+  private harnessModelsDiscovered = false;
+  private harnessModelDiscovery: Promise<void> | undefined;
 
-  private hydrateSessions(): void {
-    if (this.sessionsHydrated) return;
-    this.sessionsHydrated = true;
-    const storedSessions = this.history.list();
-    for (const session of storedSessions) {
-      if (session.planStatus === "running" && !this.activeExecutions.has(session.id)) {
-        session.planStatus = session.activePlanPath ? "active" : "new";
-        void this.history.updatePlanContext(session.id, session.activePlanPath, session.planStatus).catch(() => undefined);
-      }
-      this.sessions.set(session.id, session);
-    }
-    if (!this.sessions.has(this.activeSession.id)) this.sessions.set(this.activeSession.id, this.activeSession);
-    const latest = [...this.sessions.values()].sort((a, b) => b.updatedAt - a.updatedAt)[0];
-    const layout = this.preferences.conversationLayout();
-    const restored = layout.openConversationIds.filter((id) => this.sessions.has(id));
-    const previouslyActive = layout.activeConversationId
-      ? this.sessions.get(layout.activeConversationId)
-      : undefined;
-    if (previouslyActive) this.activeSession = previouslyActive;
-    else if (latest) this.activeSession = latest;
-    const storedSelection = this.preferences.conversationSelection(this.activeSession.id);
-    const initialSelection = storedSelection
-      ?? { ...this.application.state().agentSelection, mode: "agent" as const };
-    this.conversationSelections.set(this.activeSession.id, initialSelection);
-    this.application.setAgentSelection(initialSelection);
-    // Keep every tab the user left open, including non-pinned ones. Pins still
-    // provide a backwards-compatible fallback for layouts saved before this
-    // state was introduced.
-    const pinned = this.preferences.pinned().filter((id) => this.sessions.has(id));
-    this.openConversations = [...new Set([...restored, ...pinned, this.activeSession.id])];
+  private get activeSession(): DextHistorySession {
+    return this.conversation.controller.active();
   }
 
-  private async persistConversationLayout(): Promise<void> {
-    await this.preferences.setConversationLayout({
-      openConversationIds: this.openConversations,
-      activeConversationId: this.activeSession.id
-    });
+  private sessionInMap(sessionId: string): DextHistorySession | undefined {
+    return this.conversation.controller.session(sessionId);
   }
 
-  private scheduleConversationLayoutPersist(): void {
-    if (this.disposed) return;
-    this.layoutWritePending = true;
-    if (this.layoutWriteTimer) clearTimeout(this.layoutWriteTimer);
-    this.layoutWriteTimer = setTimeout(() => {
-      this.layoutWriteTimer = undefined;
-      void this.flushScheduledConversationLayout();
-    }, DextSidebarProvider.layoutWriteDebounceMs);
-  }
-
-  private async flushScheduledConversationLayout(): Promise<void> {
-    if (this.layoutWriteInFlight || !this.layoutWritePending) return;
-    this.layoutWritePending = false;
-    const write = this.persistConversationLayout();
-    this.layoutWriteInFlight = write;
-    try {
-      await write;
-    } catch {
-      // persistConversationLayout already records the error. A deferred UI
-      // write must not turn a tab click into an unhandled rejection.
-    } finally {
-      this.layoutWriteInFlight = undefined;
-      // If another switch happened while the write was in flight, give the
-      // user another idle window instead of immediately issuing a second
-      // globalState write.
-      if (this.layoutWritePending) {
-        if (this.disposed) {
-          this.layoutWritePending = false;
-          void this.persistConversationLayout().catch(() => undefined);
-        } else {
-          this.scheduleConversationLayoutPersist();
-        }
-      }
-    }
-  }
-
-  // Pinned tabs lead the strip so that they keep their place as other
-  // conversations open and close beside them.
-  private orderedConversations(): string[] {
-    const pinned = this.openConversations.filter((id) => this.preferences.isPinned(id));
-    return [...pinned, ...this.openConversations.filter((id) => !pinned.includes(id))];
-  }
-
-  private summarize(session: DextHistorySession): ConversationSummary {
-    return {
-      id: session.id,
-      title: this.preferences.title(session.id) ?? conversationTitle(session),
-      updatedAt: session.updatedAt,
-      turnCount: session.turns.length,
-      pinned: this.preferences.isPinned(session.id),
-      running: this.activeExecutions.has(session.id)
-    };
-  }
-
-  private async postConversationState(switchId?: number, hostInitiated = false): Promise<void> {
-    const conversationPayload = {
-      type: "conversations",
-      sessions: this.orderedConversations().flatMap((id) => {
-        const session = this.sessions.get(id);
-        return session ? [this.summarize(session)] : [];
-      }),
-      activeId: this.activeSession.id,
-      selection: this.conversationSelections.get(this.activeSession.id)
-        ?? this.application.state().agentSelection,
-      ...(this.activeSession.activePlanPath ? { planPath: this.activeSession.activePlanPath } : {}),
-      planStatus: this.activeSession.planStatus ?? "new",
-      ...(this.activeSession.resource ? { resource: this.activeSession.resource } : {}),
-      ...(switchId !== undefined ? { switchId } : {}),
-      ...(hostInitiated ? { hostInitiated: true as const } : {})
-    } satisfies WebviewResponse;
-    await this.post(conversationPayload);
-  }
-
-  private activateConversation(session: DextHistorySession, switchId?: number, hostInitiated = false): void {
-    const wasOpen = this.openConversations.includes(session.id);
-    this.activeSession = session;
-    const cachedSelection = this.conversationSelections.get(session.id);
-    const storedSelection = cachedSelection ? undefined : this.preferences.conversationSelection(session.id);
-    const selection = cachedSelection
-      ?? storedSelection
-      ?? { ...this.application.state().agentSelection, mode: "agent" as const };
-    this.conversationSelections.set(session.id, selection);
-    this.application.setAgentSelection(selection);
-    if (!wasOpen) this.openConversations.push(session.id);
-    // Persistence and UI messages are independent. Do not make the webview
-    // wait for global-state I/O before it can paint the selected conversation.
-    // Keep the operations lazy so the stage timer includes the actual start of
-    // each operation. Passing already-started promises here makes the timer
-    // include unrelated work that ran while Promise.all was being assembled.
-    // Layout persistence is intentionally outside the critical path. Rapid
-    // tab changes are coalesced and written once after the UI settles.
-    this.scheduleConversationLayoutPersist();
-    if (!cachedSelection && !storedSelection) {
-      void this.preferences.setConversationSelection(session.id, selection).catch(() => {
-        // Selection persistence is best effort and must not block switching.
-      });
-    }
-    this.updateRunningContext();
-    const sendActiveConversation = (): Promise<void> => this.post({
-      type: "activeConversation",
-      activeId: session.id,
-      selection,
-      ...(session.activePlanPath ? { planPath: session.activePlanPath } : {}),
-      planStatus: session.planStatus ?? "new",
-      ...(session.resource ? { resource: session.resource } : {}),
-      ...(switchId !== undefined ? { switchId } : {}),
-      ...(hostInitiated ? { hostInitiated: true as const } : {})
-    });
-    const sendOutputSession = (): Promise<void> => {
-      const signature = sessionSignature(session);
-      // A running conversation has no stable cached DOM: its live row and
-      // buffered events must be restored after the historical payload. Never
-      // take the ref path here, because a stale/evicted cache would require a
-      // second request that can race the executing replay and leave the view
-      // stuck in its loading state.
-      const running = this.activeExecutions.has(session.id);
-      if (!running && this.postedSessionSignatures.get(session.id) === signature) {
-        return this.post({ type: "outputSessionRef", sessionId: session.id, signature, ...(switchId !== undefined ? { switchId } : {}), ...(hostInitiated ? { hostInitiated: true as const } : {}) });
-      }
-      this.postedSessionSignatures.set(session.id, signature);
-      return this.post({ type: "outputSession", session, ...(switchId !== undefined ? { switchId } : {}), ...(hostInitiated ? { hostInitiated: true as const } : {}) });
-    };
-    // Keep the historical payload ahead of the live execution replay. If the
-    // two posts race, an `executing` row can be rendered first and then be
-    // erased when outputSession rebuilds the result pane.
-    const switchMessages = async (): Promise<void> => {
-      await sendActiveConversation();
-      await sendOutputSession();
-      await this.postActiveExecution(session.id, switchId, hostInitiated);
-      if (!wasOpen) await this.postConversationState(switchId, hostInitiated);
-    };
-    // The webview paints the selected tab from its local state. Do not make
-    // the click handler wait for VS Code's postMessage delivery.
-    void switchMessages().catch(() => undefined);
-  }
-
-  // A new conversation opens its own tab, while clearing replaces the
-  // conversation shown in the tab that is already active.
-  private async startConversation(replaceActiveTab = false, resource?: ResourceSession): Promise<void> {
-    const previousSelection = this.conversationSelections.get(this.activeSession.id) ?? this.application.state().agentSelection;
-    const index = replaceActiveTab ? this.openConversations.indexOf(this.activeSession.id) : -1;
-    if (replaceActiveTab) this.application.endAgentSession(this.activeSession.id);
-    const session = outputSession();
-    if (resource) session.resource = resource;
-    this.activeSession = session;
-    this.sessions.set(session.id, session);
-    const selection = resource ? { ...defaultConversationSelection(previousSelection), mode: "ask" as const, agentPreset: "standard" } : defaultConversationSelection(previousSelection);
-    this.conversationSelections.set(session.id, selection);
-    this.application.setAgentSelection(selection);
-    if (index === -1) this.openConversations.push(session.id);
-    else this.openConversations[index] = session.id;
-    await this.preferences.setConversationSelection(session.id, selection);
-    if (resource) await this.history.updateResourceContext(session.id, resource);
-    await this.persistConversationLayout();
-    // Another tab can be opened while preferences/history are being written.
-    if (this.activeSession.id !== session.id) return;
-    this.updateRunningContext();
-    await this.postConversationState(undefined, true);
-    await this.refresh();
-    if (this.activeSession.id === session.id) await this.post({ type: "outputSession", session, hostInitiated: true });
-  }
-
-  // Closing a tab only hides the conversation; history keeps it so that the
-  // conversation list can reopen it later.
-  private async closeConversation(sessionId: string): Promise<void> {
-    const visible = this.orderedConversations();
-    const index = visible.indexOf(sessionId);
-    if (index === -1) return;
-    if (this.activeExecutions.has(sessionId)) {
-      throw new Error("Stop this Dext turn before closing its conversation.");
-    }
-    this.application.endAgentSession(sessionId);
-    this.openConversations = this.openConversations.filter((id) => id !== sessionId);
-    // Closing is an explicit dismissal, so a pinned conversation must not come
-    // back on the next reload.
-    if (this.preferences.isPinned(sessionId)) await this.preferences.setPinned(sessionId, false);
-    if (sessionId !== this.activeSession.id) {
-      await this.persistConversationLayout();
-      await this.postConversationState();
-      return;
-    }
-    const remaining = visible.filter((id) => id !== sessionId);
-    const neighbour = remaining[index] ?? remaining[index - 1];
-    const session = neighbour ? this.sessions.get(neighbour) : undefined;
-    if (!session) {
-      await this.startConversation();
-      return;
-    }
-    this.activeSession = session;
-    const selection = this.conversationSelections.get(session.id)
-      ?? this.preferences.conversationSelection(session.id)
-      ?? { ...this.application.state().agentSelection, mode: "agent" as const };
-    this.conversationSelections.set(session.id, selection);
-    this.application.setAgentSelection(selection);
-    await this.preferences.setConversationSelection(session.id, selection);
-    await this.persistConversationLayout();
-    this.updateRunningContext();
-    await this.postConversationState(undefined, true);
-    await this.refresh();
-    await this.post({ type: "outputSession", session: this.activeSession, hostInitiated: true });
-    await this.postActiveExecution(session.id, undefined, true);
+  private running(sessionId: string): boolean {
+    return this.conversation.coordinator.running(sessionId);
   }
 
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly application: DextApplication,
-    private readonly history: DextHistoryStore,
-    private readonly preferences: DextConversationPreferences
+    private readonly history: ConversationHistoryStore,
+    private readonly preferences: ConversationPreferences
   ) {
+    this.conversation = createConversationServices({
+      history,
+      preferences,
+      post: (message) => this.post(message),
+      postWhenReady: (message) => this.postWhenReady(message),
+      currentSelection: () => this.application.state().agentSelection,
+      setAgentSelection: (selection) => this.application.setAgentSelection(selection),
+      endAgentSession: (sessionId) => this.application.endAgentSession(sessionId),
+      profiles: () => this.application.agentProfiles(),
+      executeConversation: (mode, source, metadata) => this.application.executeConversation(mode, source, metadata),
+      executeInput: (source, metadata, run) => this.application.executeInput(source, metadata, run),
+      draftResource: (resource, source, metadata) => this.application.draftResource(resource, source, metadata),
+      applyMethod: () => this.applyMethod(),
+      isTrustedLocalWorkspace: () => this.application.isTrustedLocalWorkspace(),
+      readPlan: (planPath) => this.readPlanText(planPath),
+      knownPlan: (reference) => Boolean(this.application.planUri(reference)),
+      activeSessionId: () => this.activeSession.id,
+      disposed: () => this.disposed,
+      resourceBusy: (sessionId) => this.resourceOperations.has(sessionId),
+      notifyInput: async () => await vscode.window.showInformationMessage(
+        "Dext: AI needs your response. Choose an option or enter an answer.", "View question"
+      ) === "View question",
+      openInputTarget: (target) => this.openInputTarget(target),
+      postActiveExecution: (sessionId, switchId, hostInitiated) => this.postActiveExecution(sessionId, switchId, hostInitiated),
+      flushAttachmentDeletes: () => this.flushAttachmentDeletes(),
+      runningChanged: () => this.updateRunningContext()
+    });
     // The composer holds the declaration in memory instead of reading the generated
     // file, so a reload that changed it — an MCP manifest was added, an API module was
     // written — has to hand over the new text. Without this the editor's TypeScript
@@ -489,7 +171,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     this.fileSearch.dispose();
     this.fileSearch = new FileSearchController(response => this.post(response));
     this.view = view;
-    this.postedSessionSignatures.clear();
+    this.conversation.controller.clearOutputSignatures();
     this.messageQueue.markNotReady();
     view.webview.options = {
       enableScripts: true,
@@ -520,27 +202,12 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   async refresh(): Promise<void> {
     const state = this.application.state();
     await this.post({ type: "state", state });
-    await this.postPlanContext();
-  }
-
-  private async postPlanContext(): Promise<void> {
-    await this.post({ type: "planContext", ...(this.activeSession.activePlanPath ? { path: this.activeSession.activePlanPath } : {}), status: this.activeSession.planStatus ?? "new" });
+    await this.conversation.controller.postPlanContext();
   }
 
   async setActivePlan(reference: string | undefined): Promise<void> {
-    this.hydrateSessions();
-    if (this.activeExecutions.has(this.activeSession.id)) throw new Error("Stop the running turn before changing the active plan.");
-    if (reference) {
-      const uri = this.application.planUri(reference);
-      if (!uri) throw new Error(`'${reference}' is not a Dext plan file.`);
-      this.activeSession.activePlanPath = reference;
-      this.activeSession.planStatus = "active";
-    } else {
-      delete this.activeSession.activePlanPath;
-      this.activeSession.planStatus = "new";
-    }
-    await this.history.updatePlanContext(this.activeSession.id, this.activeSession.activePlanPath, this.activeSession.planStatus);
-    await this.postPlanContext();
+    this.conversation.controller.hydrate();
+    await this.conversation.plans.setActivePlan(reference);
   }
 
   async setActivePlanFromUri(uri: vscode.Uri): Promise<void> {
@@ -564,7 +231,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private async choosePlan(): Promise<void> {
-    this.hydrateSessions();
+    this.conversation.controller.hydrate();
     const items: Array<vscode.QuickPickItem & { reference?: string }> = [{ label: "$(add) New plan", description: "Create a new plan document" }];
     const roots: Array<{ uri: vscode.Uri; prefix: string }> = [{ uri: vscode.Uri.joinPath(this.application.storage.globalStorageUri, "plans"), prefix: ".dext-global/plans" }];
     const folder = vscode.workspace.workspaceFolders?.[0];
@@ -581,17 +248,26 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     await this.setActivePlan(picked.reference);
   }
 
+  /** Reads the plan the user is editing. The path is validated before the read. */
+  private async readPlanText(planPath: string): Promise<string> {
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    if (!folder) throw new Error("Building a plan requires a trusted local workspace.");
+    const target = this.application.planUri(planPath)
+      ?? vscode.Uri.joinPath(folder.uri, ...planPathSegments(planPath));
+    return new TextDecoder().decode(await vscode.workspace.fs.readFile(target));
+  }
+
   private async persistResource(session: DextHistorySession): Promise<void> {
     if (!session.resource) return;
     await this.history.updateResourceContext(session.id, session.resource);
     await this.post({ type: "resourceContext", sessionId: session.id, resource: session.resource, busy: this.resourceOperations.has(session.id) });
-    await this.postConversationState();
+    await this.conversation.controller.postConversationState();
   }
 
   private async resourceAction(sessionId: string, action: (session: DextHistorySession, resource: ResourceSession) => Promise<void>): Promise<void> {
-    const session = this.sessions.get(sessionId);
+    const session = this.sessionInMap(sessionId);
     if (!session?.resource) throw new Error("This resource conversation is no longer available.");
-    if (this.activeExecutions.has(sessionId) || this.resourceOperations.has(sessionId)) throw new Error("Wait for the current resource operation to finish.");
+    if (this.running(sessionId) || this.resourceOperations.has(sessionId)) throw new Error("Wait for the current resource operation to finish.");
     this.resourceOperations.add(sessionId);
     try { await action(session, session.resource); }
     finally {
@@ -714,33 +390,33 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   async newConversation(): Promise<void> {
-    this.hydrateSessions();
+    this.conversation.controller.hydrate();
     await this.startConversation();
+  }
+
+  // A new conversation opens its own tab, while clearing replaces the
+  // conversation shown in the tab that is already active.
+  private async startConversation(replaceActiveTab = false, resource?: ResourceSession): Promise<void> {
+    const session = await this.conversation.controller.start(replaceActiveTab, resource);
+    // Another tab can be opened while preferences/history are being written.
+    if (this.activeSession.id !== session.id) return;
+    this.updateRunningContext();
+    await this.refresh();
+    await this.post({ type: "outputSession", session, hostInitiated: true });
   }
 
   // History hands over its own copy of a conversation; an already open one
   // keeps the in-memory instance so that a running turn stays attached to it.
   async openConversation(session: DextHistorySession): Promise<void> {
-    this.hydrateSessions();
-    const existing = this.sessions.get(session.id) ?? session;
-    this.sessions.set(existing.id, existing);
-    // Preserve the asynchronous command contract used by history actions;
-    // the actual tab activation itself is deliberately detached from IPC.
-    await Promise.resolve();
-    this.activateConversation(existing, undefined, true);
+    await this.conversation.controller.open(session);
   }
 
-  // Renaming only replaces the label a conversation is listed under. The agent
-  // runners key their provider sessions on the conversation id, which the
-  // rename never touches, so a renamed conversation keeps answering in the same
-  // agent session it always did.
   async renameConversation(sessionId: string, title: string): Promise<void> {
-    await this.preferences.setTitle(sessionId, title);
-    await this.postConversationState();
+    await this.conversation.controller.rename(sessionId, title);
   }
 
   private discoverHarnessModelsOnce(): Promise<void> {
-    const selection = this.conversationSelections.get(this.activeSession.id)
+    const selection = this.conversation.controller.selection(this.activeSession.id)
       ?? this.application.state().agentSelection;
     if (
       this.harnessModelsDiscovered
@@ -755,7 +431,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private async manageHarnessPreset(action: "create" | "copy" | "edit" | "refresh"): Promise<void> {
-    const sourceSelection = this.conversationSelections.get(this.activeSession.id) ?? this.application.state().agentSelection;
+    const sourceSelection = this.conversation.controller.selection(this.activeSession.id) ?? this.application.state().agentSelection;
     await this.application.discoverHarnessPresets();
     await this.refresh();
     if (action === "refresh") return;
@@ -766,10 +442,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       if (!preset || preset.error) throw new Error(preset?.error ?? "The Harness Create preset is unavailable.");
       await this.newConversation();
       const selection: AgentSelection = { ...sourceSelection, profileId: profile.id, agentPreset: "cordis", mode: "agent" };
-      this.conversationSelections.set(this.activeSession.id, selection);
-      this.application.setAgentSelection(selection);
+      this.conversation.controller.setSelection(this.activeSession.id, selection);
       await this.preferences.setConversationSelection(this.activeSession.id, selection);
-      await this.postConversationState();
+      await this.conversation.controller.postConversationState();
       await this.refresh();
       this.setInput("Help me create a custom DeepSeek Harness Agent preset. First ask what I want it to do. Use the preset-authoring guidance supplied by Create mode, copy an existing preset into the Harness user preset directory, then edit that copy. Keep built-in presets unchanged. Explain the result and tell me to refresh Agent presets in Dext when it is ready.");
       return;
@@ -795,56 +470,30 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   async renameTurn(sessionId: string, turnId: string, title: string): Promise<void> {
-    if (!await this.history.renameTurn(sessionId, turnId, title)) throw new Error("Conversation turn not found.");
-    const stored = this.history.list(true).find((session) => session.id === sessionId)?.turns.find((turn) => turn.id === turnId);
-    if (!stored) throw new Error("Conversation turn not found.");
-    // Open conversations retain their own objects while agents are running.
-    // Update only the name so continuing or switching tabs cannot restore it.
-    const cached = this.sessions.get(sessionId)?.turns.find((turn) => turn.id === turnId);
-    if (cached) {
-      if (stored.title) cached.title = stored.title;
-      else delete cached.title;
-    }
-    this.postedSessionSignatures.delete(sessionId);
-    this.postWhenReady({
-      type: "turnRenamed", sessionId, turnId,
-      ...(stored.title ? { title: stored.title } : {}),
-      displayTitle: historyTurnTitle(stored)
-    });
+    await this.conversation.controller.renameTurn(sessionId, turnId, title);
   }
 
   async pinConversation(sessionId: string, pinned: boolean): Promise<void> {
-    this.hydrateSessions();
-    await this.preferences.setPinned(sessionId, pinned);
-    await this.persistConversationLayout();
-    await this.postConversationState();
+    await this.conversation.controller.pin(sessionId, pinned);
   }
 
   async moveConversation(sessionId: string, beforeSessionId: string | null): Promise<void> {
-    this.hydrateSessions();
-    const ordered = this.orderedConversations();
-    if (!ordered.includes(sessionId) || sessionId === beforeSessionId) return;
-    const pinned = this.preferences.isPinned(sessionId);
-    const group = ordered.filter((id) => this.preferences.isPinned(id) === pinned && id !== sessionId);
-    // Resolve against current tabs, so a late drop cannot reopen a closed tab
-    // or move a tab across the pinned boundary.
-    if (beforeSessionId !== null && !group.includes(beforeSessionId)) return;
-    group.splice(beforeSessionId === null ? group.length : group.indexOf(beforeSessionId), 0, sessionId);
-    const other = ordered.filter((id) => this.preferences.isPinned(id) !== pinned);
-    this.openConversations = pinned ? [...group, ...other] : [...other, ...group];
-    this.scheduleConversationLayoutPersist();
-    await this.postConversationState();
+    await this.conversation.controller.move(sessionId, beforeSessionId);
   }
 
   async closeTab(sessionId: string): Promise<void> {
-    this.hydrateSessions();
-    await this.closeConversation(sessionId);
+    this.conversation.controller.hydrate();
+    const wasActive = this.activeSession.id === sessionId;
+    await this.conversation.controller.close(sessionId);
+    // Closing the visible tab repaints the shared sidebar state for the
+    // neighbour; closing a background tab never did.
+    if (wasActive) await this.refresh();
   }
 
   async retryTurn(sessionId: string, turnId: string): Promise<void> {
-    this.hydrateSessions();
-    if (this.activeExecutions.has(sessionId)) throw new Error("Stop this Dext turn before retrying a conversation turn.");
-    const session = this.sessions.get(sessionId) ?? this.history.list(true).find((item) => item.id === sessionId);
+    this.conversation.controller.hydrate();
+    if (this.running(sessionId)) throw new Error("Stop this Dext turn before retrying a conversation turn.");
+    const session = this.sessionInMap(sessionId) ?? this.history.list(true).find((item) => item.id === sessionId);
     const turn = session?.turns.find((item) => item.id === turnId);
     if (!session || !turn) throw new Error("Conversation turn not found.");
     if (session.archivedAt) {
@@ -858,14 +507,13 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   async continueTurn(sessionId: string, turnId: string): Promise<void> {
-    this.hydrateSessions();
-    if (this.activeExecutions.has(sessionId)) throw new Error("Stop this Dext turn before continuing a conversation turn.");
-    const continuation = this.codeContinuations.get(`${sessionId}:${turnId}`);
+    this.conversation.controller.hydrate();
+    if (this.running(sessionId)) throw new Error("Stop this Dext turn before continuing a conversation turn.");
+    const continuation = this.conversation.coordinator.takeContinuation(sessionId, turnId);
     if (!continuation) throw new Error("This Code turn cannot be continued after the extension was reloaded. Retry it instead.");
-    const session = this.sessions.get(sessionId) ?? this.history.list(true).find((item) => item.id === sessionId);
+    const session = this.sessionInMap(sessionId) ?? this.history.list(true).find((item) => item.id === sessionId);
     const turn = session?.turns.find((item) => item.id === turnId);
     if (!session || !turn || turn.mode !== "code") throw new Error("Conversation Code turn not found.");
-    this.codeContinuations.delete(`${sessionId}:${turnId}`);
     if (session.archivedAt) {
       await this.history.setArchived(sessionId, false);
       delete session.archivedAt;
@@ -877,40 +525,12 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   async deleteTurn(turnId: string, sessionId = this.activeSession.id): Promise<void> {
-    this.hydrateSessions();
-    if (this.activeExecutions.has(sessionId)) {
-      throw new Error("Stop this Dext turn before deleting a conversation turn.");
-    }
-    const session = this.sessions.get(sessionId) ?? this.history.list(true).find((item) => item.id === sessionId);
-    const index = session?.turns.findIndex((turn) => turn.id === turnId) ?? -1;
-    if (!session || index === -1) throw new Error("Conversation turn not found.");
-    const removed = await this.history.removeTurn(sessionId, turnId, session.providerSessions);
-    if (!removed) throw new Error("Conversation turn not found.");
-    session.turns.splice(index, 1);
-    session.updatedAt = session.turns.at(-1)?.createdAt ?? session.createdAt;
-    if (session.turns.length) session.createdAt = session.turns[0]!.createdAt;
-    // Deletion only edits Dext history. Keep the provider session bindings and
-    // runner state intact, including when this was the final displayed turn.
-    this.pendingPatches.delete(turnId);
-    this.postedSessionSignatures.delete(sessionId);
-    await this.postConversationState();
-    await this.post({ type: "outputSession", session });
+    await this.conversation.controller.deleteTurn(turnId, sessionId);
+    this.conversation.patches.drop(turnId);
   }
 
   async forgetConversation(sessionId: string): Promise<void> {
-    if (this.activeExecutions.has(sessionId)) {
-      throw new Error("Stop this Dext turn before deleting its conversation.");
-    }
-    this.hydrateSessions();
-    this.sessions.delete(sessionId);
-    this.conversationSelections.delete(sessionId);
-    await this.preferences.forgetConversationSelection(sessionId);
-    if (this.openConversations.includes(sessionId)) {
-      await this.closeConversation(sessionId);
-      return;
-    }
-    if (sessionId === this.activeSession.id) await this.startConversation();
-    else await this.persistConversationLayout();
+    await this.conversation.controller.forget(sessionId);
   }
 
   setInput(source: string): void {
@@ -918,9 +538,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   editTurnInput(sessionId: string, turnId: string): void {
-    this.hydrateSessions();
-    const execution = this.activeExecutions.get(sessionId);
-    const session = this.sessions.get(sessionId) ?? this.history.list(true).find((item) => item.id === sessionId);
+    this.conversation.controller.hydrate();
+    const execution = this.conversation.coordinator.active(sessionId);
+    const session = this.sessionInMap(sessionId) ?? this.history.list(true).find((item) => item.id === sessionId);
     const source = execution?.turnId === turnId
       ? execution.source
       : session?.turns.find((turn) => turn.id === turnId)?.input;
@@ -931,11 +551,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   /** The keyboard and Command Palette route into the same abort the composer's
    * Stop button uses, so there is only one way a turn ends early. */
   stopExecution(): void {
-    const execution = this.activeExecutions.get(this.activeSession.id);
-    if (execution) {
-      execution.controller.abort();
-      return;
-    }
+    if (this.conversation.coordinator.abort(this.activeSession.id)) return;
     if (this.mcpAssistantExecution) {
       this.mcpAssistantExecution.controller.abort();
       return;
@@ -1006,25 +622,15 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   dispose(): void {
     this.fileSearch.dispose();
     this.disposed = true;
-    this.inputNotifications?.dispose();
-    this.pendingInputFocus = undefined;
-    if (this.layoutWriteTimer) clearTimeout(this.layoutWriteTimer);
-    this.layoutWriteTimer = undefined;
-    // Do not lose the latest tab layout when the extension is disposed during
-    // the debounce window. This is a single small global-state write and does
-    // not affect the normal tab-switch path.
-    void this.flushScheduledConversationLayout();
-    for (const [sessionId, execution] of this.activeExecutions) {
-      execution.controller.abort();
-      this.application.endAgentSession(sessionId);
+    this.conversation.dispose();
+    for (const session of this.conversation.controller.sessionsList()) {
+      if (this.conversation.coordinator.running(session.id)) this.application.endAgentSession(session.id);
     }
     this.mcpAssistantExecution?.controller.abort();
     this.mcpAssistantExecution = undefined;
     this.resourcePreviewProvider?.dispose();
     this.resourcePreviews.clear();
     this.attachments.dispose();
-    this.uiInputs.dispose();
-    this.agentInputs.dispose();
     this.messageQueue.clear();
   }
 
@@ -1042,10 +648,10 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           this.fileSearch?.dispose();
           this.fileSearch = new FileSearchController(response => this.post(response));
           const pendingMessages = this.messageQueue.markReady();
-          this.hydrateSessions();
+          this.conversation.controller.hydrate();
           this.updateRunningContext();
           await this.refresh();
-          await this.postConversationState();
+          await this.conversation.controller.postConversationState();
           await this.post({ type: "outputSession", session: this.activeSession });
           await this.postDextTypes("ready");
           await this.postActiveExecution(this.activeSession.id);
@@ -1064,7 +670,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           await this.run(request.mode, request.source, request.planPath);
           break;
         case "openResourceCreator":
-          this.hydrateSessions();
+          this.conversation.controller.hydrate();
           await this.startConversation(false, { type: "api", scope: this.application.state().resourceRoots?.project ? "project" : "global" });
           break;
         case "resourceOptions":
@@ -1109,17 +715,15 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           });
           break;
         case "agentInputResponse":
-          this.agentInputs.respond(request.sessionId, request.turnId, request.requestId, request.answers);
+          this.conversation.interactions.respondAgent(request.sessionId, request.turnId, request.requestId, request.answers);
           break;
         case "uiResponse":
-          if (!this.uiInputs.respond(request.sessionId, request.turnId, request.requestId, request.response)) {
+          if (!this.conversation.interactions.respondUi(request.sessionId, request.turnId, request.requestId, request.response)) {
             await this.post({ type: "error", message: "Invalid or expired interaction response." });
           }
           break;
         case "stopExecution":
-          for (const execution of this.activeExecutions.values()) {
-            if (execution.turnId === request.turnId) execution.controller.abort();
-          }
+          this.conversation.coordinator.abortTurn(request.turnId);
           if (this.mcpAssistantExecution?.requestId === request.turnId) {
             this.mcpAssistantExecution.controller.abort();
           }
@@ -1155,39 +759,38 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           });
           break;
         case "buildPlan":
-          await this.buildPlan(request.planPath);
+          await this.conversation.plans.build(request.planPath);
           break;
         case "choosePlan":
           await this.choosePlan();
           break;
         case "resolvePatch":
-          await this.resolvePatch(request.turnId, request.uris, request.accept);
+          await this.conversation.patches.resolve(this.activeSession.id, request.turnId, request.uris, request.accept);
           break;
         case "newConversation":
           await this.newConversation();
           break;
         case "selectConversation": {
-          const selected = this.sessions.get(request.sessionId);
+          const selected = this.sessionInMap(request.sessionId);
           if (!selected) throw new Error("Conversation not found.");
-          this.activateConversation(selected, request.switchId);
+          this.conversation.controller.activate(selected, request.switchId);
           break;
         }
         case "outputSessionRefMiss": {
-          const selected = this.sessions.get(request.sessionId);
+          const selected = this.sessionInMap(request.sessionId);
           if (!selected) break;
-          const signature = sessionSignature(selected);
-          this.postedSessionSignatures.set(request.sessionId, signature);
+          this.conversation.controller.markOutputPosted(selected);
           await this.post({ type: "outputSession", session: selected, ...(request.switchId !== undefined ? { switchId: request.switchId } : {}), ...(request.hostInitiated ? { hostInitiated: true as const } : {}) });
           break;
         }
         case "closeConversation":
-          await this.closeConversation(request.sessionId);
+          await this.conversation.controller.close(request.sessionId);
           break;
         case "moveConversation":
-          await this.moveConversation(request.sessionId, request.beforeSessionId);
+          await this.conversation.controller.move(request.sessionId, request.beforeSessionId);
           break;
         case "pinConversation":
-          await this.pinConversation(request.sessionId, request.pinned);
+          await this.conversation.controller.pin(request.sessionId, request.pinned);
           break;
         case "harnessPresetAction":
           await this.manageHarnessPreset(request.action);
@@ -1195,11 +798,11 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         case "agentSelection":
           {
           // Reject late menu clicks after execution has already started.
-          if (this.activeExecutions.has(this.activeSession.id)) {
+          if (this.running(this.activeSession.id)) {
             await this.refresh();
             break;
           }
-          const previousSelection = this.conversationSelections.get(this.activeSession.id);
+          const previousSelection = this.conversation.controller.selection(this.activeSession.id);
           const previousProfileId = previousSelection?.profileId;
           // The Harness preset catalog is the only source of preset choices, so
           // an unset preset reads as the default it will run as. Only a Harness
@@ -1224,8 +827,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
             serviceTier: request.selection.serviceTier
           } satisfies AgentSelection;
           const sessionId = this.activeSession.id;
-          this.conversationSelections.set(sessionId, selection);
-          this.application.setAgentSelection(selection);
+          this.conversation.controller.setSelection(sessionId, selection);
           this.updateRunningContext();
           // Publish the accepted selection before storage or ACP discovery can
           // delay it. Execution must also see it if the user sends immediately.
@@ -1410,7 +1012,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           break;
         }
         case "deleteImageAttachment":
-          if (this.activeExecutions.size) this.pendingAttachmentDeletes.add(request.relativePath);
+          if (this.conversation.coordinator.anyRunning()) this.pendingAttachmentDeletes.add(request.relativePath);
           else await this.deleteImage(request.relativePath);
           break;
         case "reload":
@@ -1505,318 +1107,19 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  /** Accepting is what actually writes a read-only Agent turn to disk. Files are
-   * resolved one entry at a time so accepting part of a proposal leaves the rest
-   * pending instead of discarding it. */
-  private async resolvePatch(turnId: string, uris: readonly string[], accept: boolean): Promise<void> {
-    const sessionId = this.activeSession.id;
-    const pending = this.pendingPatches.get(turnId);
-    if (!pending) throw new Error("These changes are no longer available for review.");
-    const targets = uris.length
-      ? pending.changes.filter((change) => uris.includes(change.uri))
-      : [...pending.changes];
-    if (!targets.length) throw new Error("None of those files are part of this proposal.");
-    const resolved = targets.map((change) => change.uri);
-    const remaining = pending.changes.filter((change) => !resolved.includes(change.uri));
-    if (!accept) {
-      this.forgetResolvedChanges(turnId, pending, remaining);
-      await this.post({
-        type: "patchResolved",
-        sessionId,
-        turnId,
-        uris: resolved,
-        status: "rejected",
-        message: `Discarded ${resolved.length} proposed change${resolved.length === 1 ? "" : "s"}.`
-      });
-      return;
-    }
-    const patch: PatchResult = { kind: "patch", title: pending.title, changes: targets };
-    const result = await applyPatchHandler({
-      invocation: { kind: "invocation", method: "apply", arguments: [], source: "chat" },
-      method: this.applyMethod(),
-      arguments: { result: patch },
-      context: [],
-      metadata: {}
-    }) as ApplyResult;
-    // A conflict leaves the entry pending: the file moved on, and re-reviewing
-    // it is the only honest next step.
-    if (result.status === "applied" || result.status === "unchanged") {
-      this.forgetResolvedChanges(turnId, pending, remaining);
-    }
-    await this.post({
-      type: "patchResolved",
-      sessionId,
-      turnId,
-      uris: resolved,
-      status: result.status === "applied" || result.status === "unchanged" ? result.status : "conflict",
-      message: result.summary
-    });
-  }
-
-  private forgetResolvedChanges(turnId: string, pending: PatchResult, remaining: PatchResult["changes"]): void {
-    if (remaining.length) this.pendingPatches.set(turnId, { ...pending, changes: remaining });
-    else this.pendingPatches.delete(turnId);
-  }
-
-  private applyMethod(): Parameters<typeof applyPatchHandler>[0]["method"] {
+  private applyMethod(): NonNullable<ReturnType<DextApplication["registry"]["get"]>> {
     const method = this.application.registry.get("apply");
     if (!method) throw new Error("The apply API is not available.");
     return method;
   }
 
-  /** Handing a plan to the Agent re-reads the file rather than trusting the
-   * text from the turn, so edits the user made in the editor are what gets
-   * built. The path comes from the webview, so it is checked before any read. */
-  private async buildPlan(planPath: string): Promise<void> {
-    const folder = vscode.workspace.workspaceFolders?.[0];
-    if (!folder || !this.application.isTrustedLocalWorkspace()) {
-      throw new Error("Building a plan requires a trusted local workspace.");
-    }
-    const target = this.application.planUri(planPath)
-      ?? vscode.Uri.joinPath(folder.uri, ...planPathSegments(planPath));
-    let text: string;
-    try {
-      text = new TextDecoder().decode(await vscode.workspace.fs.readFile(target));
-    } catch {
-      throw new Error(`Plan '${planPath}' is no longer available.`);
-    }
-    if (!text.trim()) throw new Error(`Plan '${planPath}' is empty.`);
-    this.activeSession.activePlanPath = planPath;
-    this.activeSession.planStatus = "running";
-    await this.history.updatePlanContext(this.activeSession.id, planPath, "running");
-    await this.refresh();
-    await this.run("plan", [
-      `Implement the plan in ${planPath} exactly as written. Do not edit the plan file itself.`,
-      planTodoInstruction(planTodoItems(text)),
-      "",
-      text.trim()
-    ].join("\n"), undefined, true);
-  }
-
   private async run(mode: "agent" | "ask" | "plan" | "code", source: string, planPath?: string, executePlan = false, codeContinuation?: readonly DextReplayEntry[]): Promise<void> {
-    if (this.activeSession.resource) {
-      mode = "ask";
-      if (this.resourceOperations.has(this.activeSession.id)) throw new Error("Wait for the resource operation to finish.");
-    }
-    source = normalizeInputReferenceSource(source);
-    const events: AgentStreamEvent[] = [];
-    const turnId = randomBytes(12).toString("hex");
-    const session = this.activeSession;
-    const sessionId = session.id;
-    const executionPlanPath = executePlan ? planPath ?? session.activePlanPath : planPath;
-    const previousPlan = executePlan ? [...session.turns].reverse().find((turn) => turn.executePlan && turn.planPath === executionPlanPath) : undefined;
-    const previousTodos = session.planProgress && session.planProgress.path === executionPlanPath ? session.planProgress.todos
-      : previousPlan ? [...previousPlan.process].reverse().find((event) => event.phase === "todo")?.todos ?? [] : [];
-    const planRun = executePlan ? new PlanExecution(resumePlanTodos(planTodoItems(source), previousTodos)) : undefined;
-    const todoProgress = planRun?.progress;
-    const planExecution: { executePlan: boolean; planPath?: string; planOutcome?: PlanExecutionOutcome } | undefined = executePlan
-      ? { executePlan: true, ...(executionPlanPath ? { planPath: executionPlanPath } : {}) } : undefined;
-    let codeCallLog: readonly DextReplayEntry[] | undefined;
-    if (this.activeExecutions.has(sessionId)) {
-      throw new Error("Wait for this conversation's current Dext turn to finish before running another one.");
-    }
-    const controller = new AbortController();
-    const startedAt = Date.now();
-    this.activeExecutions.set(sessionId, { turnId, source, startedAt, mode, ...(executionPlanPath ? { planPath: executionPlanPath } : {}), ...(executePlan ? { executePlan: true } : {}), controller, events });
-    this.updateRunningContext();
-    await this.postConversationState();
-    await this.post({ type: "executing", sessionId, value: true, turnId, source, startedAt, mode, ...(executionPlanPath ? { planPath: executionPlanPath } : {}), ...(executePlan ? { executePlan: true } : {}) });
-    try {
-      if (todoProgress) {
-        const initial = todoProgress.initial();
-        this.appendAgentEvent(sessionId, events, initial);
-      }
-      const priorConversation = conversationContext(session.turns);
-      const selection = this.conversationSelections.get(sessionId) ?? this.application.state().agentSelection;
-      const profile = this.application.agentProfiles().find((candidate) => candidate.id === selection.profileId)
-        ?? this.application.agentProfiles()[0];
-      const metadata = {
-        agentSessionId: sessionId,
-        agentPreset: harnessPresetOrDefault(selection.agentPreset),
-        ...(mode === "code" ? { agentPermission: "full-access" as const } : {}),
-        ...(priorConversation ? { conversationContext: priorConversation } : {}),
-        signal: controller.signal,
-        ui: this.uiInteraction(sessionId, turnId, events),
-        requestAgentInput: (request: AgentInputRequest, signal: AbortSignal) =>
-          this.agentInputs.request(sessionId, turnId, request, signal),
-        ...(mode === "plan" && executionPlanPath ? { planPath: executionPlanPath } : {}),
-        ...(executePlan ? { executePlan: true } : {}),
-        onAgentEvent: (event: AgentStreamEvent) => {
-          planRun?.observe(event);
-          const scoped = planRun ? { ...event, id: `plan-round-${planRun.rounds}:${event.id ?? "stream"}` } : event;
-          for (const update of todoProgress ? todoProgress.consume(scoped) : [event]) {
-            this.appendAgentEvent(sessionId, events, { ...update });
-          }
-        },
-        onMcpEvent: (event: McpProcessEvent) => {
-          const processEvent: AgentStreamEvent = {
-            phase: "tool",
-            toolKind: "step",
-            solo: true,
-            title: `MCP ${event.source}`,
-            text: event.text
-          };
-          this.appendAgentEvent(sessionId, events, processEvent);
-        },
-        onAgentSessionId: (provider: string, providerSessionId: string) => {
-          session.providerSessions = { ...(session.providerSessions ?? {}), [provider]: providerSessionId };
-          void this.history.setProviderSession(sessionId, provider, providerSessionId);
-        }
-      };
-      let response: InputExecutionResponse;
-      let roundSource = todoProgress ? `${source}\n\nCurrent host task state (takes precedence over the document's unchecked boxes):\n${planTodoInstruction(todoProgress.snapshot())}` : source;
-      for (;;) {
-        if (controller.signal.aborted) throw new Error(session.resource ? "Resource generation stopped by user." : "Plan execution stopped by user.");
-        planRun?.beginRound();
-        const providerSession = profile ? session.providerSessions?.[profile.provider] : undefined;
-        const forkFrom = providerSession ? undefined : profile ? session.forkProviderSessions?.[profile.provider] : undefined;
-        let acceptingEvents = true;
-        const roundMetadata = { ...metadata,
-          onAgentEvent: (event: AgentStreamEvent) => { if (acceptingEvents) metadata.onAgentEvent(event); },
-          onMcpEvent: (event: McpProcessEvent) => { if (acceptingEvents) metadata.onMcpEvent(event); },
-          onAgentSessionId: (provider: string, id: string) => { if (acceptingEvents) metadata.onAgentSessionId(provider, id); },
-          ...(providerSession ? { conversationProviderSessionId: providerSession } : {}),
-          ...(forkFrom ? { conversationForkFrom: forkFrom } : {}) };
-        if (planRun?.verifying) roundSource = planRun.prompt(source);
-        try {
-          if (session.resource) {
-            const generated = await this.application.draftResource(session.resource, roundSource, roundMetadata);
-            if (controller.signal.aborted) throw new Error("Resource generation stopped by user.");
-            session.resource = { ...session.resource, draft: generated.draft, saved: false };
-            await this.persistResource(session);
-            response = generated.response;
-          } else {
-            response = mode === "code"
-              ? await this.application.executeInput(roundSource, roundMetadata, {
-                ...(codeContinuation ? { resume: codeContinuation } : {}),
-                onCallLog: (entries) => { codeCallLog = entries; }
-              })
-              : await this.application.executeConversation(mode, roundSource, roundMetadata);
-          }
-        } finally { acceptingEvents = false; }
-        if (controller.signal.aborted) throw new Error(session.resource ? "Resource generation stopped by user." : "Plan execution stopped by user.");
-        if (!planRun || !todoProgress || !planExecution) break;
-        const answers: string[] = [];
-        for (const [index, execution] of response.executions.entries()) {
-          if (execution.result.kind !== "plan") continue;
-          // Some providers only include the final task report in their return value.
-          const report: AgentStreamEvent = { phase: "message", id: `plan-round-${planRun.rounds}:final-${index}`, text: execution.result.text, done: true };
-          for (const update of todoProgress.consume(report)) {
-            if (update.phase === "todo") this.appendAgentEvent(sessionId, events, update);
-          }
-          execution.result.text = stripPlanTodoProgress(execution.result.text);
-          answers.push(execution.result.text);
-        }
-        const outcome = planRun.finishRound();
-        if (executionPlanPath) {
-          session.planProgress = { path: executionPlanPath, todos: todoProgress.snapshot() };
-          await this.history.updatePlanProgress(sessionId, executionPlanPath, session.planProgress.todos);
-          await this.persistProviderSessions(session);
-        }
-        if (controller.signal.aborted) throw new Error(session.resource ? "Resource generation stopped by user." : "Plan execution stopped by user.");
-        if (outcome) {
-          planExecution.planOutcome = outcome;
-          for (const execution of response.executions) if (execution.result.kind === "plan") {
-            execution.result.planOutcome = outcome;
-            if (outcome.status !== "completed") execution.result.text += `\n\nDext plan execution: ${outcome.status}. ${outcome.reason}`;
-          }
-          break;
-        }
-        const notice: AgentStreamEvent = { phase: "message", id: `plan-round-${planRun.rounds}:continuation`, text: planRun.verifying
-          ? "Dext: all tasks are reported complete; running final verification."
-          : `Dext: ${todoProgress.snapshot().filter((item) => item.status !== "completed").length} tasks remain; continuing the plan.`, done: true };
-          this.appendAgentEvent(sessionId, events, notice);
-        roundSource = planRun.prompt(source, answers.join("\n"));
-      }
-      // The webview creates the visible row as soon as execution starts. Keep
-      // that id when persisting the result so retry/delete actions still point
-      // at the stored turn after success or cancellation.
-      const turn = await this.history.addSuccess(source, events, response, sessionId, mode, turnId, planExecution);
-      await this.persistProviderSessions(session);
-      if (mode === "plan" && !executePlan && response.executions.some((execution) => execution.result.kind === "plan" && execution.result.planPath)) {
-        const savedPath = response.executions.find((execution) => execution.result.kind === "plan" && execution.result.planPath)?.result;
-        if (savedPath?.kind === "plan" && savedPath.planPath) {
-          session.activePlanPath = savedPath.planPath;
-          session.planStatus = "active";
-          await this.history.updatePlanContext(sessionId, savedPath.planPath, "active");
-          await this.postPlanContext();
-        }
-      }
-      session.turns.push(turn);
-      session.updatedAt = turn.createdAt;
-      this.sessions.set(sessionId, session);
-      await this.postConversationState();
-      const reviewable = unappliedPatch(response);
-      if (reviewable) this.pendingPatches.set(turnId, reviewable);
-      await this.post({
-        type: "execution",
-        sessionId,
-        turnId,
-        response,
-        ...(reviewable ? { reviewPatch: true } : {})
-      });
-    } catch (error) {
-      if (todoProgress && executionPlanPath) {
-        session.planProgress = { path: executionPlanPath, todos: todoProgress.snapshot() };
-        await this.history.updatePlanProgress(sessionId, executionPlanPath, session.planProgress.todos);
-      }
-      if (planExecution && controller.signal.aborted) planExecution.planOutcome = { status: "cancelled", reason: "Stopped by user. Plan progress is preserved.", rounds: planRun?.rounds ?? 0 };
-      if (mode === "plan" && session.planStatus === "running") {
-        session.planStatus = controller.signal.aborted ? "active" : "failed";
-        await this.history.updatePlanContext(sessionId, session.activePlanPath, session.planStatus);
-        await this.postPlanContext();
-      }
-      const turn = await this.history.addFailure(source, events, error, sessionId, mode, turnId, planExecution);
-      // A failed Code turn keeps the calls it managed to make, so Continue replays
-      // them instead of repeating work that already succeeded. A stop is not a
-      // failure to continue from: the user asked for it to end.
-      if (mode === "code" && !controller.signal.aborted && codeCallLog?.length) {
-        this.codeContinuations.set(`${sessionId}:${turnId}`, codeCallLog);
-      }
-      await this.persistProviderSessions(session);
-      session.turns.push(turn);
-      session.updatedAt = turn.createdAt;
-      this.sessions.set(sessionId, session);
-      await this.postConversationState();
-      await this.post({
-        type: "executionFailed",
-        sessionId,
-        turnId,
-        ...(planExecution?.planOutcome ? { planOutcome: planExecution.planOutcome } : {}),
-        message: error instanceof Error ? error.message : String(error)
-      });
-    } finally {
-      this.flushPendingAgentEvents();
-      const active = this.activeExecutions.get(sessionId);
-      if (active?.turnId === turnId) this.activeExecutions.delete(sessionId);
-      this.inputNotifications?.clearTurn(sessionId, turnId);
-      if (this.pendingInputFocus?.sessionId === sessionId && this.pendingInputFocus.turnId === turnId) this.pendingInputFocus = undefined;
-      if (mode === "plan" && session.planStatus === "running") {
-        if (planExecution?.planOutcome?.status === "completed") {
-          delete session.activePlanPath;
-          session.planStatus = "new";
-        } else {
-          session.planStatus = "active";
-        }
-        await this.history.updatePlanContext(sessionId, session.activePlanPath, session.planStatus);
-        await this.postPlanContext();
-      }
-      this.updateRunningContext();
-      await this.postConversationState();
-      try {
-        if (!this.activeExecutions.size) await this.flushAttachmentDeletes();
-      } finally {
-        await this.post({ type: "executing", sessionId, value: false, turnId });
-      }
-    }
-  }
-
-  private async persistProviderSessions(session: DextHistorySession): Promise<void> {
-    // The CLI can report its ID before the first history record exists. Save
-    // it again after the turn is stored so the first turn survives a reload.
-    for (const [provider, providerSessionId] of Object.entries(session.providerSessions ?? {})) {
-      await this.history.setProviderSession(session.id, provider, providerSessionId);
-    }
+    this.conversation.controller.hydrate();
+    await this.conversation.coordinator.execute(this.activeSession, mode, normalizeInputReferenceSource(source), {
+      ...(planPath !== undefined ? { planPath } : {}),
+      executePlan,
+      ...(codeContinuation ? { codeContinuation } : {})
+    });
   }
 
   // The stop keybinding is only live while a turn is running, which keeps a
@@ -1825,12 +1128,12 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     void vscode.commands.executeCommand(
       "setContext",
       "dext.running",
-      this.activeExecutions.has(this.activeSession.id) || Boolean(this.mcpAssistantExecution)
+      this.running(this.activeSession.id) || Boolean(this.mcpAssistantExecution)
     );
     void vscode.commands.executeCommand(
       "setContext",
       "dext.planMode",
-      (this.conversationSelections.get(this.activeSession.id)?.mode
+      (this.conversation.controller.selection(this.activeSession.id)?.mode
         ?? this.application.state().agentSelection.mode
         ?? "agent") === "plan"
     );
@@ -1842,80 +1145,8 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     for (const relativePath of pending) await this.deleteImage(relativePath);
   }
 
-  private uiInteraction(sessionId: string, turnId: string, events: AgentStreamEvent[]): UiInteraction {
-    return { form: (form, signal) => this.uiInputs.request(sessionId, turnId, form, signal, (state) => {
-      const event: AgentStreamEvent = { phase: "input", id: state.requestId, text: "", uiInteraction: publicInteractionState(state) };
-      this.appendAgentEvent(sessionId, events, event);
-    }) };
-  }
-
-  /** Keep one logical tool event while a provider streams its stdout chunks. */
-  private appendAgentEvent(sessionId: string, events: AgentStreamEvent[], event: AgentStreamEvent): void {
-    const previous = events.at(-1);
-    let update = event;
-    if (event.phase === "tool" && event.id && previous?.phase === "tool" && previous.id === event.id) {
-      update = { ...event, text: event.replace ? event.text : `${previous.text}${event.text}`, replace: true };
-      events[events.length - 1] = update;
-    } else events.push(event);
-    this.postAgentEvent(sessionId, update);
-  }
-
-  private postAgentEvent(sessionId: string, event: AgentStreamEvent): void {
-    const pendingEvents = this.pendingAgentEvents ?? (this.pendingAgentEvents = new Map());
-    const execution = this.activeExecutions.get(sessionId);
-    if (!this.disposed && execution && (event.userInput || event.uiInteraction)) {
-      this.inputNotifications ??= new InputNotifications(
-        async () => await vscode.window.showInformationMessage(
-          "Dext: AI needs your response. Choose an option or enter an answer.", "View question"
-        ) === "View question",
-        async (target) => {
-          // Asking the host to focus a view that is already on screen rewrites
-          // the layout the reader chose: a maximized Secondary Side Bar drops
-          // back to its docked width. Only a Dext the reader cannot see is
-          // revealed here; an on-screen one keeps the display state it has and
-          // still takes focus, because the Webview focuses the question field.
-          if (this.view?.visible !== true) await vscode.commands.executeCommand("dext.sidebar.focus");
-          if (!this.inputNotifications?.isWaiting(target) || this.disposed
-            || this.activeExecutions.get(target.sessionId)?.turnId !== target.turnId) return;
-          const session = this.sessions.get(target.sessionId);
-          if (!session) return;
-          this.pendingInputFocus = target;
-          await this.openConversation(session);
-        }
-      );
-      if (event.userInput) this.inputNotifications.observe({
-        sessionId, turnId: execution.turnId, requestId: event.userInput.id, kind: "agent"
-      }, event.userInput.status === "waiting");
-      if (event.uiInteraction && event.uiInteraction.turnId === execution.turnId) this.inputNotifications.observe({
-        sessionId, turnId: execution.turnId, requestId: event.uiInteraction.requestId, kind: "ui"
-      }, event.uiInteraction.status === "waiting");
-    }
-    // Keep collecting events for background conversations so they can be
-    // replayed when the user returns, but do not flood the Webview IPC queue
-    // while another tab is visible.  The active conversation is restored via
-    // postActiveExecution(), which sends the buffered events as one batch.
-    if (this.activeSession.id !== sessionId) return;
-    const key = event.phase === "tool" && event.id ? `${sessionId}:${event.id}` : `${sessionId}:${randomBytes(8).toString("hex")}`;
-    const previous = pendingEvents.get(key);
-    pendingEvents.set(key, previous && event.phase === "tool"
-      ? { ...event, text: event.replace ? event.text : `${previous.text}${event.text}`, replace: true }
-      : event);
-    if (this.agentEventFlushTimer === undefined) this.agentEventFlushTimer = setTimeout(() => this.flushPendingAgentEvents(), 16);
-  }
-
-  private flushPendingAgentEvents(): void {
-    if (this.agentEventFlushTimer !== undefined) clearTimeout(this.agentEventFlushTimer);
-    this.agentEventFlushTimer = undefined;
-    const pendingEvents = this.pendingAgentEvents ?? new Map<string, AgentStreamEvent>();
-    for (const [pendingKey, pending] of pendingEvents) {
-      const separator = pendingKey.indexOf(":");
-      this.postWhenReady({ type: "agentEvent", sessionId: pendingKey.slice(0, separator), event: pending });
-    }
-    pendingEvents.clear();
-  }
-
   private async postActiveExecution(sessionId: string, switchId?: number, hostInitiated = false): Promise<void> {
-    const execution = this.activeExecutions.get(sessionId);
+    const execution = this.conversation.coordinator.active(sessionId);
     if (!execution) return;
     // Snapshot before awaiting the executing message. Events arriving after
     // this point are delivered through the normal single-event path and must
@@ -1939,11 +1170,23 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       // message instead of awaiting one Webview post per event.
       await this.post({ type: "agentEvents", sessionId, events: replayEvents, ...(switchId !== undefined ? { switchId } : {}) });
     }
-    const focus = this.pendingInputFocus;
-    if (focus?.sessionId === sessionId && focus.turnId === execution.turnId && this.activeSession.id === sessionId) {
-      this.pendingInputFocus = undefined;
-      if (this.inputNotifications?.isWaiting(focus)) this.postWhenReady({ type: "focusAgentInput", ...focus });
-    }
+    const focus = this.conversation.interactions.pendingFocus(sessionId, execution.turnId);
+    if (focus) this.postWhenReady({ type: "focusAgentInput", ...focus });
+  }
+
+  private async openInputTarget(target: InputNotificationTarget): Promise<void> {
+    // Asking the host to focus a view that is already on screen rewrites the
+    // layout the reader chose: a maximized Secondary Side Bar drops back to
+    // its docked width. Only a Dext the reader cannot see is revealed here; an
+    // on-screen one keeps the display state it has and still takes focus,
+    // because the Webview focuses the question field.
+    if (this.view?.visible !== true) await vscode.commands.executeCommand("dext.sidebar.focus");
+    if (!this.conversation.interactions.isWaiting(target) || this.disposed
+      || this.conversation.coordinator.turnOf(target.sessionId) !== target.turnId) return;
+    const session = this.sessionInMap(target.sessionId);
+    if (!session) return;
+    this.conversation.interactions.requestFocus(target);
+    await this.openConversation(session);
   }
 
   private async post(message: WebviewResponse): Promise<void> {

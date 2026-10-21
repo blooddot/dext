@@ -1,5 +1,5 @@
-import { formatDuration } from "./webview/duration.js";
-import type { AgentStreamEvent, AgentTokenUsage } from "./core/types.js";
+import { formatDuration } from "../../../platform/duration.js";
+import type { AgentStreamEvent, AgentTokenUsage } from "../../../core/types.js";
 
 /** Shared labels and icons for the live conversation and History toolbars. */
 export const TURN_EDIT_ACTION = { icon: "edit", label: "Edit input in Dext" } as const;
@@ -94,28 +94,3 @@ export function presentTurn(options: {
   };
 }
 
-/** Keep a custom name through deferred Plan hydration and cached tab restores. */
-export class TurnTitle {
-  constructor(
-    private readonly element: Pick<HTMLElement, "textContent">,
-    private fallback: string,
-    private name?: string
-  ) {
-    this.render();
-  }
-
-  rename(name: string | undefined, fallback: string): void {
-    this.name = name;
-    this.fallback = fallback;
-    this.render();
-  }
-
-  setPlanPath(path: string): void {
-    this.fallback = `Plan: ${path.split("/").pop() ?? path}`;
-    this.render();
-  }
-
-  private render(): void {
-    this.element.textContent = this.name || this.fallback;
-  }
-}

@@ -1,7 +1,7 @@
-import type { AgentInputAnswers, AgentInputRequest } from "./core/types.js";
+import type { AgentInputAnswers, AgentInputRequest } from "../../../core/types.js";
 import { UiInteractionBroker } from "./uiInteractionBroker.js";
-import { agentInputForm, agentFormAnswers } from "./uiInteractionPresentation.js";
-import type { UiFormAnswers } from "./core/uiForm.js";
+import { agentInputForm, agentFormAnswers } from "../presentation/uiInteractionPresentation.js";
+import type { UiFormAnswers } from "../../../core/uiForm.js";
 
 export class AgentInputBroker {
   private readonly broker = new UiInteractionBroker();

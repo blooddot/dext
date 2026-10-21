@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { UiInteractionBroker } from "../src/uiInteractionBroker.js";
+import { UiInteractionBroker } from "../src/features/conversations/host/uiInteractionBroker.js";
 import { parseUiForm, uiCallForm, type UiInteractionState } from "../src/core/uiForm.js";
 const form = uiCallForm("radio", { label: "Pick", options: ["a", "b"] });
 const response = { kind: "ui", type: "form", status: "submitted", answers: { answer: { type: "radio", selected: ["b"] } } };

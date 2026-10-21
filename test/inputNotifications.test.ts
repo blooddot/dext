@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { InputNotifications, type InputNotificationTarget } from "../src/inputNotifications.js";
+import { InputNotifications, type InputNotificationTarget } from "../src/features/conversations/host/inputNotifications.js";
 
 const target: InputNotificationTarget = { sessionId: "background", turnId: "turn", requestId: "question", kind: "agent" };
 function harness() {

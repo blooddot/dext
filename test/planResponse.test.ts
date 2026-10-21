@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PLAN_DOCUMENT_END, PLAN_DOCUMENT_START, PLAN_FALLBACK_CONVERSATION, splitPlanResponse, stripPlanDocument } from "../src/core/planResponse.js";
+import { PLAN_DOCUMENT_END, PLAN_DOCUMENT_START, PLAN_FALLBACK_CONVERSATION, splitPlanResponse, stripPlanDocument } from "../src/features/conversations/domain/planResponse.js";
 
 describe("plan response splitting", () => {
   it("keeps the conversational explanation out of the saved document", () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { prepareHistoryTrace } from "../src/core/agentTraceReplay.js";
+import { prepareHistoryTrace } from "../src/features/conversations/domain/agentTraceReplay.js";
 
 describe("persisted agent trace replay", () => {
   it("keeps non-tool order and folds replacement chunks at the first tool position", () => {

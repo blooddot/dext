@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { DEFAULT_PLAN_DIRECTORY } from "../../../core/planFile.js";
+import { DEFAULT_PLAN_DIRECTORY } from "../../conversations/domain/planFile.js";
 import { projectEvidenceSettingsSchema, type ProjectEvidenceSettings } from "./projectEvidenceSettings.js";
 
 /** Project-owned settings that affect files and behavior shared by the repository. */

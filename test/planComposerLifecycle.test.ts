@@ -1,116 +1,127 @@
-import { describe, expect, it, vi } from "vitest";
-import { DextSidebarProvider } from "../src/sidebarProvider.js";
-import { DextHistoryStore, type DextHistorySession } from "../src/historyStore.js";
+import { describe, expect, it } from "vitest";
 import type { ExecutionMetadata, InputExecutionResponse } from "../src/core/types.js";
+import type { DextHistorySession } from "../src/features/conversations/contracts/history.js";
+import { createConversationHarness } from "./conversationHarness.js";
 
-vi.mock("vscode", () => ({}));
+const planSource = "## Tasks\n1. [ ] Implement and verify";
 
-function harness(error?: string) {
-  const session: DextHistorySession = { id: "session", createdAt: 1, updatedAt: 1, turns: [], planStatus: "running", activePlanPath: "old.plan.md" };
-  let stored: unknown = [session];
-  const state = { get: () => stored, update: async (_key: string, value: unknown) => { stored = value; } };
-  const history = new DextHistoryStore(state as never);
-  const execute = vi.fn(async (_mode: string, _source: string, metadata: ExecutionMetadata): Promise<InputExecutionResponse> => {
-    if (error) throw new Error(error);
-    return { kind: "workflow", executions: [{
-      invocation: { kind: "invocation", method: "plan", arguments: [], source: "chat" },
-      method: { id: "plan", title: "Plan", kind: "command", source: "builtin" }, durationMs: 1,
-      result: { kind: "plan", executePlan: !!metadata.executePlan, planPath: metadata.planPath ?? "new.plan.md", text: metadata.executePlan
-        ? 'Done <!-- dext-todo: {"updates":[{"id":"plan-1","status":"completed"}],"verification":"passed"} -->' : "Done" }
-    }] };
+async function harness(error?: string) {
+  const session: DextHistorySession = {
+    id: "session", createdAt: 1, updatedAt: 1, turns: [],
+    planStatus: "active", activePlanPath: "old.plan.md"
+  };
+  const harness = createConversationHarness({
+    planText: planSource,
+    profiles: [{ id: "codex", provider: "codex", command: "codex", label: "Codex", models: [] }],
+    executeConversation: async (_mode: string, _source: string, metadata: ExecutionMetadata): Promise<InputExecutionResponse> => {
+      if (error) throw new Error(error);
+      return { kind: "workflow", executions: [{
+        invocation: { kind: "invocation", method: "plan", arguments: [], source: "chat" },
+        method: { id: "plan", title: "Plan", kind: "command", source: "builtin" }, durationMs: 1,
+        result: { kind: "plan", executePlan: !!metadata.executePlan, planPath: metadata.planPath ?? "new.plan.md", text: metadata.executePlan
+          ? 'Done <!-- dext-todo: {"updates":[{"id":"plan-1","status":"completed"}],"verification":"passed"} -->' : "Done" }
+      }] };
+    }
   });
-  const sidebar = Object.create(DextSidebarProvider.prototype) as DextSidebarProvider;
-  Object.assign(sidebar, {
-    activeSession: session, activeExecutions: new Map(), conversationSelections: new Map(), sessions: new Map(), pendingPatches: new Map(),
-    application: { state: () => ({ agentSelection: {} }), agentProfiles: () => [], executeConversation: execute, planUri: () => ({}) },
-    history, postAgentEvent: vi.fn(), post: vi.fn(), postConversationState: vi.fn(), postPlanContext: vi.fn(), updateRunningContext: vi.fn(),
-    persistProviderSessions: vi.fn(), flushAttachmentDeletes: vi.fn(), uiInteraction: vi.fn(), hydrateSessions: vi.fn()
-  });
-  const run = (build = true, path?: string) => (sidebar as unknown as {
-    run(mode: string, source: string, path: string | undefined, build: boolean): Promise<void>;
-  }).run("plan", build ? "## Tasks\n1. [ ] Implement and verify" : "Request", path, build);
-  return { session, sidebar, history, execute, run };
+  harness.seed([session]);
+  harness.controller.activate(harness.controller.session(session.id)!);
+  const active = harness.controller.active();
+  // Building re-reads the plan file and starts the execution turn, exactly as
+  // the composer's Build button does.
+  const run = (executePlan = true, planPath?: string) => executePlan
+    ? harness.plans.build("old.plan.md")
+    : harness.coordinator.execute(active, "plan", planSource, {
+      ...(planPath !== undefined ? { planPath } : {}),
+      executePlan: false
+    });
+  return { ...harness, session: active, run };
 }
 
 describe("Plan composer after execution", () => {
   it("resumes a persisted task checkpoint with verification instead of implementing completed work again", async () => {
-    const { session, execute, run } = harness();
-    session.planProgress = { path: "old.plan.md", todos: [{ id: "plan-1", text: "Implement and verify", status: "completed" }] };
-    await run();
-    expect(execute).toHaveBeenCalledOnce();
-    expect(execute.mock.calls[0]?.[1]).toContain("FINAL VERIFICATION");
-    expect(session.turns[0]?.planOutcome?.status).toBe("completed");
+    const h = await harness();
+    h.session.planProgress = { path: "old.plan.md", todos: [{ id: "plan-1", text: "Implement and verify", status: "completed" }] };
+    await h.run();
+    expect(h.executeConversation).toHaveBeenCalledOnce();
+    expect(h.executeConversation.mock.calls[0]?.[1]).toContain("FINAL VERIFICATION");
+    expect(h.controller.session("session")?.turns[0]?.planOutcome?.status).toBe("completed");
   });
+
   it("stops before another round when the user cancels, preserving partial progress", async () => {
-    const { sidebar, session, execute, history, run } = harness();
-    execute.mockImplementation(async (_mode, _source, metadata) => {
+    const h = await harness();
+    h.executeConversation.mockImplementation(async (_mode, _source, metadata) => {
       metadata.onAgentEvent?.({ phase: "message", text: '<!-- dext-todo: {"updates":[{"id":"plan-1","status":"in_progress"}]} -->' });
-      const active = (sidebar as unknown as { activeExecutions: Map<string, { controller: AbortController }> }).activeExecutions.get("session")!;
-      active.controller.abort(); throw new Error("Cancelled");
+      h.coordinator.abort("session");
+      throw new Error("Cancelled");
     });
-    await run();
-    expect(execute).toHaveBeenCalledOnce();
-    expect(session).toMatchObject({ activePlanPath: "old.plan.md", planStatus: "active" });
-    expect(history.list()[0]?.planProgress?.todos[0]?.status).toBe("in_progress");
-    expect(session.turns[0]?.planOutcome?.status).toBe("cancelled");
+    await h.run();
+    expect(h.executeConversation).toHaveBeenCalledOnce();
+    expect(h.session).toMatchObject({ activePlanPath: "old.plan.md", planStatus: "active" });
+    expect(h.history.list()[0]?.planProgress?.todos[0]?.status).toBe("in_progress");
+    expect(h.controller.session("session")?.turns[0]?.planOutcome?.status).toBe("cancelled");
   });
+
   it("continues using the returned native session and ignores late progress from an earlier round", async () => {
-    const { sidebar, execute, run, session } = harness();
+    const h = await harness();
     let oldMetadata: ExecutionMetadata | undefined;
-    const original = execute.getMockImplementation()!;
-    Object.assign(sidebar, { application: { state: () => ({ agentSelection: {} }), agentProfiles: () => [{ id: "codex", provider: "codex" }], executeConversation: execute } });
-    execute.mockImplementation(async (mode, source, metadata) => {
+    const original = h.executeConversation.getMockImplementation()!;
+    h.executeConversation.mockImplementation(async (mode, source, metadata) => {
       if (oldMetadata) {
         expect(metadata.conversationProviderSessionId).toBe("native-session");
         oldMetadata.onAgentEvent?.({ phase: "message", text: '<!-- dext-todo: {"updates":[{"id":"plan-1","status":"pending"}]} -->' });
-      } else { oldMetadata = metadata; metadata.onAgentSessionId?.("codex", "native-session"); }
+      } else {
+        oldMetadata = metadata;
+        metadata.onAgentSessionId?.("codex", "native-session");
+      }
       return original(mode, source, metadata);
     });
-    await run();
-    expect(execute).toHaveBeenCalledTimes(2);
-    expect(session.turns[0]?.planOutcome?.status).toBe("completed");
+    await h.run();
+    expect(h.executeConversation).toHaveBeenCalledTimes(2);
+    expect(h.controller.session("session")?.turns[0]?.planOutcome?.status).toBe("completed");
+    expect(h.controller.session("session")?.planProgress?.todos[0]?.status).toBe("completed");
   });
+
   it("starts the next request as a new plan while retaining the completed execution's file", async () => {
-    const { session, history, execute, run } = harness();
-    await run();
-    expect(session.planStatus).toBe("new");
-    expect(session.activePlanPath).toBeUndefined();
-    const saved = history.list()[0]!;
+    const h = await harness();
+    await h.run();
+    expect(h.session.planStatus).toBe("new");
+    expect(h.session.activePlanPath).toBeUndefined();
+    const saved = h.history.list()[0]!;
     expect(saved.planStatus).toBe("new");
     expect(saved.activePlanPath).toBeUndefined();
     expect(saved.turns[0]).toMatchObject({ executePlan: true, planPath: "old.plan.md" });
-    await run(false);
-    expect(execute.mock.calls[2]?.[2].planPath).toBeUndefined();
-    expect(session.activePlanPath).toBe("new.plan.md");
-    expect(session.planStatus).toBe("active");
+    await h.run(false);
+    expect(h.executeConversation.mock.calls.at(-1)?.[2].planPath).toBeUndefined();
+    expect(h.session.activePlanPath).toBe("new.plan.md");
+    expect(h.session.planStatus).toBe("active");
   });
 
   it.each(["Cancelled", "Build failed"])("keeps the selected plan when execution ends with %s", async (error) => {
-    const { session, history, run } = harness(error);
-    await run();
-    expect(session).toMatchObject({ activePlanPath: "old.plan.md", planStatus: "failed" });
-    expect(history.list()[0]).toMatchObject({ activePlanPath: "old.plan.md", planStatus: "failed" });
+    const h = await harness(error);
+    await h.run();
+    expect(h.session).toMatchObject({ activePlanPath: "old.plan.md", planStatus: "failed" });
+    expect(h.history.list()[0]).toMatchObject({ activePlanPath: "old.plan.md", planStatus: "failed" });
   });
 
   it("allows explicitly selecting the completed plan for revision", async () => {
-    const { sidebar, session, execute, run } = harness();
-    await run();
-    await sidebar.setActivePlan("old.plan.md");
-    await run(false, session.activePlanPath);
-    expect(execute.mock.calls[2]?.[2]).toMatchObject({ planPath: "old.plan.md" });
-    expect(session).toMatchObject({ activePlanPath: "old.plan.md", planStatus: "active" });
+    const h = await harness();
+    await h.run();
+    await h.plans.setActivePlan("old.plan.md");
+    await h.run(false, h.session.activePlanPath);
+    expect(h.executeConversation.mock.calls.at(-1)?.[2]).toMatchObject({ planPath: "old.plan.md" });
+    expect(h.session).toMatchObject({ activePlanPath: "old.plan.md", planStatus: "active" });
   });
 
   it("only resets the conversation whose plan finished in the background", async () => {
-    const { sidebar, session, execute, run } = harness();
-    const other = { id: "other", activePlanPath: "other.plan.md", planStatus: "active" };
-    const original = execute.getMockImplementation()!;
-    execute.mockImplementation(async (...args) => {
-      Object.assign(sidebar, { activeSession: other });
+    const h = await harness();
+    const other: DextHistorySession = { id: "other", createdAt: 2, updatedAt: 2, turns: [], activePlanPath: "other.plan.md", planStatus: "active" };
+    const original = h.executeConversation.getMockImplementation()!;
+    h.executeConversation.mockImplementation(async (...args) => {
+      h.controller.activate(other);
       return original(...args);
     });
-    await run();
-    expect(session.planStatus).toBe("new");
-    expect(other).toEqual({ id: "other", activePlanPath: "other.plan.md", planStatus: "active" });
+    await h.run();
+    expect(h.controller.session("session")?.planStatus).toBe("new");
+    expect(other).toMatchObject({ activePlanPath: "other.plan.md", planStatus: "active" });
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { answerChoices, uiFieldChoices } from "../src/uiInteractionPresentation.js";
+import { answerChoices, uiFieldChoices } from "../src/features/conversations/presentation/uiInteractionPresentation.js";
 import { parseUiForm, type UiField } from "../src/core/uiForm.js";
 
 function field(definition: Record<string, unknown>): UiField {

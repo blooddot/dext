@@ -1,11 +1,11 @@
 import { randomBytes } from "node:crypto";
 import * as vscode from "vscode";
-import type { DextHistoryStore } from "./historyStore.js";
-import type { DextConversationPreferences } from "./conversationPreferences.js";
-import { orderHistorySessions } from "./conversationPreferences.js";
-import { historyTokenStyles, historyTurnTitle, renderHistorySession, renderHistorySessionBody } from "./historyRender.js";
-import { openDextFileReference } from "./vscodeContextHost.js";
-import type { DextStorage } from "./dextStorage.js";
+import type { ConversationHistoryStore } from "../contracts/history.js";
+import type { ConversationPreferences } from "../contracts/preferences.js";
+import { orderHistorySessions } from "../domain/conversationOrder.js";
+import { historyTokenStyles, historyTurnTitle, renderHistorySession, renderHistorySessionBody } from "../presentation/historyRender.js";
+import { openDextFileReference } from "../../../vscodeContextHost.js";
+import type { DextStorage } from "../../../dextStorage.js";
 
 export class DextHistoryPanel implements vscode.Disposable {
   static readonly viewType = "dext.history";
@@ -13,8 +13,8 @@ export class DextHistoryPanel implements vscode.Disposable {
 
   constructor(
     private readonly extensionUri: vscode.Uri,
-    private readonly history: DextHistoryStore,
-    private readonly preferences: DextConversationPreferences,
+    private readonly history: ConversationHistoryStore,
+    private readonly preferences: ConversationPreferences,
     private readonly storage: DextStorage
   ) {}
 

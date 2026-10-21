@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
-import { ExecutionCancelledError } from "./core/executionErrors.js";
-import { validateUiFormResult, type UiFormDefinition, type UiFormResult, type UiInteractionState } from "./core/uiForm.js";
+import { ExecutionCancelledError } from "../../../core/executionErrors.js";
+import { validateUiFormResult, type UiFormDefinition, type UiFormResult, type UiInteractionState } from "../../../core/uiForm.js";
 
 /** Only a matching live request may consume a response. Answers are validated
  * against the host's definition, never a definition supplied by the Webview. */
