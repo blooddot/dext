@@ -5,11 +5,4 @@ release/
 coverage/
 .vscode-test/
 .npm-cache
-.tmp-tb
-.tmp-dsh-home
-.tmp-global
-.tmp-harness
-.tmp-mise
-.tmp-npm-cache
-.tmp-npm-resolve
-.tmp-dsh-home3
+.tmp-*
