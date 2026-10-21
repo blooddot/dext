@@ -8,7 +8,7 @@ import { createHarnessPolicy, decodeHarnessSession, encodeHarnessSession, harnes
 import { DeepSeekHarnessTransport } from "./deepseekHarnessTransport.js";
 import { agentTodoEvent, normalizeAgentTodos } from "./agentTodoTracking.js";
 import { elicitationQuestions, elicitationResponse, harnessInputQuestions, harnessQuestionAnswer, type HarnessQuestionOutcome, type HarnessQuestionRequest } from "./harnessQuestions.js";
-import { harnessPresetPatch } from "./harnessPresets.js";
+import { harnessInstallation, harnessPresetLayer, harnessPresetPatch } from "./harnessPresets.js";
 import { harnessResultEnvelope } from "./harnessPresetDefault.js";
 import { formatDiagnostics } from "./resultBoundary.js";
 import { harnessResultInstruction, harnessResultTool, type HarnessResultOutcome, type HarnessResultRequest } from "./harnessResultTool.js";
@@ -94,11 +94,11 @@ export class DeepSeekHarnessRunner implements AgentRunner {
   async preloadSettings(): Promise<void> { await this.launchSettings(); }
   async refreshSettings(): Promise<void> { this.settingsLoad = this.settingsLoader(); await this.settingsLoad; }
 
-  private arguments(args: readonly string[], patch: string): string[] {
+  private arguments(args: readonly string[], patch: string, presetLayer?: string): string[] {
     for (let i = 0; i < args.length; i += 2) {
       if (args[i] !== "--patch" || !args[i + 1]) throw new Error("Harness extra arguments support only --patch <path> pairs. Dext owns the ACP profile and permission policy.");
     }
-    return [...args, "--profile", "acp", "--patch", patch];
+    return [...args, "--profile", "acp", ...(presetLayer ? ["--patch", presetLayer] : []), "--patch", patch];
   }
 
   private async open(request: Request, binding: string, settings?: HarnessLaunchSettings): Promise<Session> {
@@ -106,13 +106,17 @@ export class DeepSeekHarnessRunner implements AgentRunner {
     const permission = request.allowWorkspaceWrite ? request.permission ?? "workspace-write" : "read-only";
     const presetPatch = request.agentPreset
       ? await harnessPresetPatch(request.profile, request.agentPreset, permission, settings?.defaultModel ? { ...settings.defaultModel } : {}, request.cwd) : [];
+    // 0.2.x ships each preset as its own composition patch, which has to arrive
+    // as a launcher layer before Dext's policy overlay.
+    const presetLayer = request.agentPreset
+      ? harnessPresetLayer(harnessInstallation(request.profile.command, request.cwd), request.agentPreset) : undefined;
     const policy = await createHarnessPolicy(permission, request.cwd, settings, presetPatch);
     let session: Session | undefined;
     let transport: DeepSeekHarnessTransport | undefined;
     const onAbort = (): void => { void transport?.close(); };
     request.signal?.addEventListener("abort", onAbort, { once: true });
     try {
-      transport = this.transportFactory(request.profile.command, this.arguments(request.cliArguments ?? [], policy.path), request.cwd, {
+      transport = this.transportFactory(request.profile.command, this.arguments(request.cliArguments ?? [], policy.path, presetLayer), request.cwd, {
         sessionUpdate: (event) => { if (session && event.sessionId === session.id) this.update(session, event); },
         requestPermission: (event) => session ? this.permission(session, event, permission) : Promise.resolve({ outcome: { outcome: "cancelled" } }),
         createElicitation: (event) => session ? this.elicitation(session, event) : Promise.resolve({ action: "decline" as const }),
