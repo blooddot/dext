@@ -15,7 +15,6 @@ import { planPathSegments } from "./features/conversations/domain/planFile.js";
 import type { InputNotificationTarget } from "./features/conversations/host/inputNotifications.js";
 import { normalizeInputReferenceSource } from "./core/fileReference.js";
 import { harnessPresetOrDefault } from "./core/harnessPresetDefault.js";
-import { copyHarnessPreset, harnessPresetFile } from "./core/harnessPresets.js";
 import type { McpServerConfig } from "./core/mcpRegistry.js";
 import type { ProjectReferenceCandidate } from "./features/project/knowledge/projectReference.js";
 import { RESOURCE_LABELS, resourceFileName, type ResourceKind, type ResourceScope, type ResourceSession } from "./features/resources/contracts/resourceSession.js";
@@ -430,41 +429,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     return this.harnessModelDiscovery;
   }
 
-  private async manageHarnessPreset(action: "create" | "copy" | "edit" | "refresh"): Promise<void> {
-    const sourceSelection = this.conversation.controller.selection(this.activeSession.id) ?? this.application.state().agentSelection;
-    await this.application.discoverHarnessPresets();
-    await this.refresh();
-    if (action === "refresh") return;
-    const profile = this.application.agentProfiles().find((item) => item.provider === "deepseek-harness");
-    if (!profile) throw new Error("DeepSeek Harness is not enabled.");
-    if (action === "create") {
-      const preset = profile.presets?.find((item) => item.id === "cordis");
-      if (!preset || preset.error) throw new Error(preset?.error ?? "The Harness Create preset is unavailable.");
-      await this.newConversation();
-      const selection: AgentSelection = { ...sourceSelection, profileId: profile.id, agentPreset: "cordis", mode: "agent" };
-      this.conversation.controller.setSelection(this.activeSession.id, selection);
-      await this.preferences.setConversationSelection(this.activeSession.id, selection);
-      await this.conversation.controller.postConversationState();
-      await this.refresh();
-      this.setInput("Help me create a custom DeepSeek Harness Agent preset. First ask what I want it to do. Use the preset-authoring guidance supplied by Create mode, copy an existing preset into the Harness user preset directory, then edit that copy. Keep built-in presets unchanged. Explain the result and tell me to refresh Agent presets in Dext when it is ready.");
-      return;
-    }
-    const candidates = (profile.presets ?? []).filter((item) => action === "edit" ? !item.builtin : !item.error);
-    const picked = await vscode.window.showQuickPick(candidates.map((preset) => ({
-      label: preset.label, description: preset.id, detail: preset.error ?? preset.description, preset
-    })), { title: action === "copy" ? "Copy an Agent preset" : "Open a custom Agent preset", placeHolder: "Choose a preset" });
-    if (!picked) return;
-    let file: string;
-    if (action === "copy") {
-      const id = await vscode.window.showInputBox({
-        title: "Name the preset copy", prompt: "Lowercase letters, numbers and hyphens", value: `${picked.preset.id}-custom`,
-        validateInput: (value) => !/^[a-z0-9][a-z0-9-]{0,127}$/.test(value) ? "Use lowercase letters, numbers and hyphens."
-          : profile.presets?.some((item) => item.id === value) ? "That preset ID already exists." : undefined
-      });
-      if (!id) return;
-      file = await copyHarnessPreset(profile, picked.preset.id, id);
-    } else file = await harnessPresetFile(profile, picked.preset.id);
-    await vscode.window.showTextDocument(vscode.Uri.file(file));
+  private async refreshHarnessPresets(): Promise<void> {
     await this.application.discoverHarnessPresets();
     await this.refresh();
   }
@@ -793,7 +758,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           await this.conversation.controller.pin(request.sessionId, request.pinned);
           break;
         case "harnessPresetAction":
-          await this.manageHarnessPreset(request.action);
+          await this.refreshHarnessPresets();
           break;
         case "agentSelection":
           {

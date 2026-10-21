@@ -8,13 +8,6 @@ import type { AgentPermission, AgentProfile, HarnessPresetOption } from "../feat
 import { harnessSpawnCommand } from "./harnessCommand.js";
 
 const run = promisify(execFile);
-export const HARNESS_PRESET_AGENT_ROWS = [
-  "tool-bash", "tool-pwsh", "tool-jobs", "tool-fs", "tool-fs-search", "tool-str-replace-editor",
-  "skill-filesystem", "tool-skill", "command-goal", "tool-goal", "plan-mode", "compaction-basic",
-  "command-compact", "tool-result-pruner", "tool-subagent-control", "tool-subagent-list-agents",
-  "tool-subagent", "tool-subagent-fork", "workflow-worker-thread", "tool-workflow", "tool-ralph",
-  "agent-instructions", "tool-todo", "tool-web"
-];
 
 export function harnessPresetHelper(): string {
   const packaged = join(__dirname, "..", "media", "harness-presets.mjs");
@@ -55,23 +48,12 @@ export function harnessInstallation(command: string, cwd = process.cwd()): Harne
   return { command: invocation.command, prefixArgs, entry, acpModule, ...(invocation.env ? { env: invocation.env } : {}) };
 }
 
-export type HarnessPresetSupport = "package" | "patch";
-
 /**
- * Harness 0.1.x discovers presets through `@deepseek-ai/dsh-agent-presets`;
- * 0.2.x removed that package and ships one composition patch file per preset
- * inside `@deepseek-ai/dsh-web-app/presets`. The desktop app loads them from
- * `app.asar`, where plain node cannot resolve them, so the entry path decides.
+ * The shipped declaration of one preset, applied as its own launcher layer.
+ * Harness declares presets as composition patches inside `dsh-web-app/presets`.
  */
-export function harnessPresetSupport(install: HarnessInstallation): HarnessPresetSupport {
-  if (install.entry.includes(".asar")) return "patch";
-  try { createRequire(install.entry).resolve("@deepseek-ai/dsh-agent-presets"); return "package"; }
-  catch { return "patch"; }
-}
-
-/** The shipped declaration of one preset, applied as its own launcher layer. */
 export function harnessPresetLayer(install: HarnessInstallation, id: string): string | undefined {
-  if (harnessPresetSupport(install) !== "patch" || !/^[a-z0-9][a-z0-9-]*$/.test(id)) return undefined;
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) return undefined;
   const marker = `${sep}node_modules${sep}`;
   const index = install.entry.lastIndexOf(marker);
   if (index < 0) return undefined;
@@ -81,19 +63,19 @@ export function harnessPresetLayer(install: HarnessInstallation, id: string): st
 interface NativePreset { id: string; name?: string; description?: string; trust: string; path: string; broken?: string }
 const LABELS: Record<string, string> = { standard: "Standard", ptc: "PTC", minimal: "Minimal", cordis: "Create" };
 
-async function presetCommand(profile: AgentProfile, action: string, args: string[] = [], cwd = process.cwd()): Promise<unknown> {
+async function presetRows(profile: AgentProfile, cwd = process.cwd()): Promise<NativePreset[]> {
   const install = harnessInstallation(profile.command, cwd);
-  const result = await run(install.command, [...install.prefixArgs, harnessPresetHelper(), install.entry, action, ...args], {
+  const result = await run(install.command, [...install.prefixArgs, harnessPresetHelper(), install.entry, "list"], {
     cwd, windowsHide: true, timeout: 30_000, maxBuffer: 2 * 1024 * 1024,
     env: { ...process.env, ...install.env }
   });
-  return JSON.parse(result.stdout) as unknown;
+  return JSON.parse(result.stdout) as NativePreset[];
 }
 
 /**
  * One successful listing serves every turn. On the desktop install the helper
  * runs inside Electron, so re-listing per session would add seconds to the
- * turn; `Refresh presets` (and copy/edit) clears this instead.
+ * turn; `Refresh presets` clears this instead.
  */
 const presetListings = new Map<string, Promise<HarnessPresetOption[]>>();
 
@@ -103,7 +85,7 @@ export async function listHarnessPresets(profile: AgentProfile, cwd = process.cw
   const key = `${profile.command}\u0000${cwd}`;
   const cached = presetListings.get(key);
   if (cached) return cached;
-  const pending = presetCommand(profile, "list", [], cwd).then((result) => (result as NativePreset[]).map((row) => {
+  const pending = presetRows(profile, cwd).then((rows) => rows.map((row) => {
     // Minimal's native terminal/fs and Create's runtime plugin loader are not confined
     // by the host sandbox. User-authored plugin code has the same process access.
     // Those presets therefore need Full access, and because the sandbox policy cannot
@@ -122,18 +104,6 @@ export async function listHarnessPresets(profile: AgentProfile, cwd = process.cw
   return pending;
 }
 
-export async function copyHarnessPreset(profile: AgentProfile, source: string, id: string, cwd = process.cwd()): Promise<string> {
-  const result = await presetCommand(profile, "copy", [source, id], cwd) as { path: string };
-  return join(result.path, "agent.cordis.yml");
-}
-
-export async function harnessPresetFile(profile: AgentProfile, id: string, cwd = process.cwd()): Promise<string> {
-  const rows = await presetCommand(profile, "list", [], cwd) as NativePreset[];
-  const row = rows.find((candidate) => candidate.id === id);
-  if (!row || row.trust === "system") throw new Error("Copy a built-in preset before editing it.");
-  return row.path;
-}
-
 export async function harnessPresetPatch(profile: AgentProfile, id: string, permission: AgentPermission,
   acp: Record<string, unknown> = {}, cwd = process.cwd()): Promise<unknown[]> {
   const option = (await listHarnessPresets(profile, cwd)).find((row) => row.id === id);
@@ -143,27 +113,13 @@ export async function harnessPresetPatch(profile: AgentProfile, id: string, perm
     throw new Error(`Harness preset '${option.label}' requires Full access because it can run plugins or tools outside the Harness sandbox. Choose Standard/PTC for restricted access.`);
   }
   const install = harnessInstallation(profile.command, cwd);
-  if (harnessPresetSupport(install) === "patch") {
-    // 0.2.x: the preset declaration itself travels as the launcher layer this
-    // row set depends on, so only the registry, its supporting rows and Dext's
-    // ACP adapter are inserted here.
-    return [
-      { id: "acp", disabled: true },
-      { insert: [
-        { id: "agent-preset-registry", name: "@deepseek-ai/dsh-agent-preset-registry", config: { default: id } },
-        { id: "subagent-model-selection-settings", name: "@deepseek-ai/dsh-tool-subagent/model-selection-settings" },
-        { id: "cordis-host-runner", name: "@deepseek-ai/dsh-cordis-host-runner" },
-        { id: "dext-acp-presets", name: pathToFileURL(harnessPresetHelper()).href, inject: ["acpAppStartup"],
-          config: { preset: id, acpModule: install.acpModule, acp } }
-      ] }
-    ];
-  }
+  // The preset declaration itself travels as the launcher layer this row set
+  // depends on, so only the registry, its supporting rows and Dext's ACP
+  // adapter are inserted here.
   return [
-    ...HARNESS_PRESET_AGENT_ROWS.map((row) => ({ id: row, disabled: true })),
     { id: "acp", disabled: true },
     { insert: [
-      { id: "agent-presets", name: "@deepseek-ai/dsh-agent-presets", config: { default: "standard" } },
-      { id: "code-runtime", name: "@deepseek-ai/dsh-code-runtime-worker-thread" },
+      { id: "agent-preset-registry", name: "@deepseek-ai/dsh-agent-preset-registry", config: { default: id } },
       { id: "subagent-model-selection-settings", name: "@deepseek-ai/dsh-tool-subagent/model-selection-settings" },
       { id: "cordis-host-runner", name: "@deepseek-ai/dsh-cordis-host-runner" },
       { id: "dext-acp-presets", name: pathToFileURL(harnessPresetHelper()).href, inject: ["acpAppStartup"],

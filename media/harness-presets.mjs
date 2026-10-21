@@ -1,8 +1,6 @@
 // Runs in the selected dsh installation's Node process, never in the webview.
-import { createRequire } from 'node:module';
 import { existsSync, readdirSync } from 'node:fs';
 import { connect } from 'node:net';
-import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -25,37 +23,20 @@ export async function apply(ctx, config) {
   }
   const agents = ctx.agents;
   const presets = ctx.agentPresets;
-  const legacy = typeof presets?.resolveMountable === 'function' && typeof presets?.mount === 'function';
-  const factory = legacy ? await legacyFactory(agents, presets, config) : registryFactory(agents, presets, config);
+  const factory = registryFactory(agents, presets, config);
   const acp = await import(pathToFileURL(config.acpModule).href);
   const original = [...ctx.loader.entries()].find((entry) => entry.options.id === 'acp');
   acp.apply(ctx.extend({ agents: factory }), { ...original?.options.config, ...config.acp });
 }
 
-/** Harness 0.1.x: a preset is mounted into the agent's setup before it starts. */
-async function legacyFactory(agents, presets, config) {
-  const preset = await presets.resolveMountable(config.preset);
-  const setup = (original) => async (...args) => {
-    await presets.mount(args[0], preset.id);
-    await original?.(...args);
-  };
-  return {
-    get: (id) => agents.get(id),
-    create: (options) => agents.create({
-      ...options, meta: { ...options.meta, agentPreset: preset.id }, setup: setup(options.setup)
-    }),
-    resume: (options) => agents.resume({ ...options, setup: setup(options.setup) })
-  };
-}
-
 /**
- * Harness 0.2.x: presets are registry entries. The agent is created first and
- * then recomposed onto the chosen preset, which is the same seam the desktop app
- * uses when a session selects one.
+ * Presets are registry entries: the agent is created first and then recomposed
+ * onto the chosen preset, which is the seam the desktop app uses when a session
+ * selects one.
  */
 function registryFactory(agents, presets, config) {
   if (typeof presets?.select !== 'function') {
-    throw new Error('The installed Harness has no agent preset registry. Refresh presets or reinstall @deepseek-ai/dsh.');
+    throw new Error('The installed Harness has no agent preset registry. Update DeepSeek Harness.');
   }
   const select = async (handle) => { await presets.select(handle?.agent ?? handle, config.preset); };
   return {
@@ -244,16 +225,17 @@ function installResultTool(ctx, bridge) {
   });
 }
 
-/**
- * Harness 0.2.x dropped `@deepseek-ai/dsh-agent-presets`: the shipped presets are
- * composition patch files inside `@deepseek-ai/dsh-web-app/presets`, one
- * `@deepseek-ai/dsh-agent-preset` declaration each. Read that directory when the
- * installation has no preset package (the desktop app loads it from app.asar).
- */
 /** Shipped preset order, matching the `order` each declaration carries. */
 const PRESET_ORDER = { standard: 1, ptc: 2, minimal: 3, cordis: 4 };
 
-function patchPresetDirectory(entry) {  let directory = dirname(entry);
+/**
+ * Harness 0.2.x declares its presets as composition patch files inside
+ * `@deepseek-ai/dsh-web-app/presets`, one `@deepseek-ai/dsh-agent-preset`
+ * declaration each. The desktop app loads them from app.asar, which its bundled
+ * Electron can read; a plain node installation carries the same layout on disk.
+ */
+function patchPresetDirectory(entry) {
+  let directory = dirname(entry);
   for (;;) {
     if (basename(directory).toLowerCase() === 'node_modules') break;
     const parent = dirname(directory);
@@ -263,48 +245,18 @@ function patchPresetDirectory(entry) {  let directory = dirname(entry);
   return join(directory, '@deepseek-ai', 'dsh-web-app', 'presets');
 }
 
-async function loadPresetCatalog(entry) {
-  let modulePath;
-  try { modulePath = createRequire(entry).resolve('@deepseek-ai/dsh-agent-presets'); } catch { modulePath = undefined; }
-  if (!modulePath) {
-    const directory = patchPresetDirectory(entry);
-    if (!directory || !existsSync(directory)) throw new Error('Cannot locate DeepSeek Harness preset packages. Reinstall @deepseek-ai/dsh.');
-    const presets = readdirSync(directory)
-      .filter((name) => name.endsWith('.patch.yml'))
-      .map((name) => ({ id: name.slice(0, -'.patch.yml'.length), trust: 'system', path: join(directory, name) }))
-      .sort((left, right) => (PRESET_ORDER[left.id] ?? 99) - (PRESET_ORDER[right.id] ?? 99));
-    return { kind: 'patch', presets };
-  }
-  const native = await import(pathToFileURL(modulePath).href);
-  const dshHome = process.env.DSH_HOME || join(homedir(), '.dsh');
-  const roots = [
-    { path: native.SHIPPED_PRESET_ROOT, trust: 'system' },
-    { path: join(dshHome, '.agent-presets'), trust: 'user' }
-  ];
-  const profileBase = join(dshHome, 'profiles', 'acp', 'cordis.yml');
-  const presets = await native.discoverPresets(roots, pathToFileURL(existsSync(profileBase) ? profileBase : entry).href);
-  return { kind: 'package', native, roots, presets };
+function loadPresetCatalog(entry) {
+  const directory = patchPresetDirectory(entry);
+  if (!directory || !existsSync(directory)) throw new Error('Cannot locate DeepSeek Harness preset declarations. Update DeepSeek Harness.');
+  return readdirSync(directory)
+    .filter((name) => name.endsWith('.patch.yml'))
+    .map((name) => ({ id: name.slice(0, -'.patch.yml'.length), trust: 'system', path: join(directory, name) }))
+    .sort((left, right) => (PRESET_ORDER[left.id] ?? 99) - (PRESET_ORDER[right.id] ?? 99));
 }
 
 async function main() {
-  const [entry, action, sourceId, targetId] = process.argv.slice(2);
-  const catalog = await loadPresetCatalog(entry);
-  if (action === 'list') {
-    process.stdout.write(JSON.stringify(catalog.presets));
-    return;
-  }
-  const source = catalog.presets.find((preset) => preset.id === sourceId);
-  if (!source) throw new Error('The selected preset no longer exists. Refresh presets.');
-  if (action === 'copy') {
-    if (catalog.kind !== 'package') throw new Error('This Harness version does not support copying presets. Edit presets in DeepSeek Harness.');
-    if (source.broken) throw new Error(source.broken);
-    if (!/^[a-z0-9][a-z0-9-]*$/.test(targetId ?? '')) throw new Error('Use lowercase letters, numbers and hyphens for the preset ID.');
-    if (catalog.presets.some((preset) => preset.id === targetId)) throw new Error('A preset with that ID already exists.');
-    const path = await catalog.native.copyComposition(catalog.roots, source, targetId);
-    process.stdout.write(JSON.stringify({ path }));
-    return;
-  }
-  throw new Error('Unknown preset action.');
+  const [entry] = process.argv.slice(2);
+  process.stdout.write(JSON.stringify(loadPresetCatalog(entry)));
 }
 
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {

@@ -1162,7 +1162,7 @@ function renderModelMenu(
       ? "No models discovered. Using the Harness configuration; run Dext: Configure Agent to refresh this list."
       : "No models are available for this Agent.";
     elements.modelMenu.append(empty);
-    if (profile?.provider === "deepseek-harness") appendHarnessPresetManagementMenu(state);
+    if (profile?.provider === "deepseek-harness") appendHarnessPresetManagementMenu();
     return;
   }
   for (const category of categories) {
@@ -1187,10 +1187,10 @@ function renderModelMenu(
     button.addEventListener("click", openChoices);
     elements.modelMenu.append(button);
   }
-  if (profile?.provider === "deepseek-harness") appendHarnessPresetManagementMenu(state);
+  if (profile?.provider === "deepseek-harness") appendHarnessPresetManagementMenu();
 }
 
-function appendHarnessPresetManagementMenu(state: SidebarState): void {
+function appendHarnessPresetManagementMenu(): void {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "composer-menu-option composer-preset-management";
@@ -1202,7 +1202,7 @@ function appendHarnessPresetManagementMenu(state: SidebarState): void {
   button.append(label, chevron);
   button.addEventListener("click", (event) => {
     event.stopPropagation();
-    if (!composerSelectionLocked()) renderHarnessPresetManagement(state);
+    if (!composerSelectionLocked()) renderHarnessPresetManagement();
   });
   elements.modelMenu.append(button);
 }
@@ -1263,15 +1263,10 @@ function renderHarnessPresetChoices(state: SidebarState): void {
   positionModelSubmenu();
 }
 
-function renderHarnessPresetManagement(state: SidebarState): void {
-  const profile = state.agentProfiles.find((item) => item.id === "deepseek-harness");
+function renderHarnessPresetManagement(): void {
   const menu = elements.modelSubmenu;
   renderModelChoices(menu, "Manage presets", [], "", () => undefined);
-  const actions: ["create" | "copy" | "edit" | "refresh", string][] = [
-    ["create", "Let Agent create a preset"], ["copy", "Copy and open configuration"],
-    ...(profile?.presets?.some((preset) => !preset.builtin) ? [["edit", "Open custom configuration"] as ["edit", string]] : []),
-    ["refresh", "Refresh presets"]
-  ];
+  const actions: ["refresh", string][] = [["refresh", "Refresh presets"]];
   for (const [action, label] of actions) {
     const button = document.createElement("button");
     button.type = "button";
@@ -1285,8 +1280,7 @@ function renderHarnessPresetManagement(state: SidebarState): void {
       event.stopPropagation();
       if (composerSelectionLocked()) return;
       closeComposerMenus();
-      vscode.postMessage({ type: "harnessPresetAction", action });
-    });
+      vscode.postMessage({ type: "harnessPresetAction", action });    });
     menu.append(button);
   }
   positionModelSubmenu();
