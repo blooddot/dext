@@ -55,9 +55,13 @@ Install the tested release with `mise install` using the repository's `mise.toml
 
 The published Harness `0.1.5-rc.1` uses ACP SDK `1.4.0`, which Dext pins. Its [official CLI](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/cli/README.md) exposes `dsh --profile acp`; the installed package was checked for initialize, new/resume/close, model configuration, prompt and cancellation. New installations show all three backends. `dext.agentCli` can restrict that list.
 
+Dext also drives the DeepSeek Harness desktop installation. When the resolved `dsh` is that app's launcher, Dext starts its bundled Electron against the same ACP profile and reads the preset catalog from the installation, so the desktop app needs no separate `dsh` install.
+
 ### Presets and customization
 
 The model menu includes **Agent preset**, which lists exactly the installed Harness preset catalog: Standard, PTC, Minimal and Create. Standard is the default for a new conversation; choose another before the first message, because an existing conversation keeps its preset. Dext mounts the selected preset through an ACP factory adapter without changing the installed Harness files, and it never runs the profile's own agent composition in place of a preset. A conversation saved by an earlier version without a preset runs Standard.
+
+The catalog comes from whichever installation runs. Harness 0.1.x ships directory presets under `$DSH_HOME/.agent-presets`; 0.2.x (the desktop app) declares them as composition patches inside the installation. On 0.2.x Dext lists and runs those presets but cannot copy or edit them, so use the Harness app for that.
 
 For customization, use **Let Agent create a preset** to open a Create conversation with a draft request, or **Copy and open configuration** to copy a preset and edit its `agent.cordis.yml` in VS Code. Copies live in `$DSH_HOME/.agent-presets` (normally `~/.dsh/.agent-presets`), alongside presets created by the Harness web UI. **Refresh presets** picks up file changes and shows configuration errors automatically. Standard and PTC support Dext's restricted permissions. Minimal, Create and custom plugins require **Full access**; their native tools or plugin code can bypass the host sandbox. Dext never raises that permission when selecting a preset.
 

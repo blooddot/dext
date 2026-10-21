@@ -68,9 +68,13 @@ Claude 对话使用 CLI 的双向控制协议：`--input-format stream-json` 打
 
 发布包 `0.1.5-rc.1` 使用 ACP SDK `1.4.0`，Dext 固定使用同一 SDK 版本。已核对实际发布包的握手、创建/恢复/关闭会话、模型配置、执行及取消接口；入口为[官方 CLI](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/cli/README.md) 的 `dsh --profile acp`。新安装默认显示三个后端，可通过 `dext.agentCli` 限定列表。
 
+Dext 也可以直接驱动 DeepSeek Harness 桌面版：当解析到的 `dsh` 是桌面版启动器时，Dext 会用其内置 Electron 启动同一个 ACP profile，并从安装中读取预设目录，因此桌面版不需要另外安装 `dsh`。
+
 ### 预设与自定义
 
 模型菜单中的 **Agent preset** 就是已安装 Harness 的预设目录本身：标准、PTC、极简和创造模式。新会话默认使用标准模式；要换预设请在第一条消息前选择，已有会话保持原预设。Dext 通过 ACP 会话工厂适配器挂载所选预设，不修改 Harness 安装文件，也不会用 profile 自带的 agent 组合代替预设。旧版本保存的、没有预设的会话按标准模式运行。
+
+预设目录来自实际运行的安装：Harness 0.1.x 使用 `$DSH_HOME/.agent-presets` 下的目录式预设；0.2.x（桌面版）把预设声明为安装内的 composition patch。0.2.x 下 Dext 只能列出并运行这些预设，不能复制或编辑，这类操作请在 Harness 应用中完成。
 
 自定义只需选择 **Let Agent create a preset**，开启创造模式会话并填入草稿；也可以使用 **Copy and open configuration** 复制预设，在 VS Code 编辑 `agent.cordis.yml`。副本保存在 `$DSH_HOME/.agent-presets`（通常为 `~/.dsh/.agent-presets`），与 Harness 网页创建的预设共用目录。修改后点击 **Refresh presets**，配置问题会自动显示。标准和 PTC 支持 Dext 的受限权限；极简、创造和自定义插件可能绕过宿主沙箱，因此需要 **Full access**，选择预设不会自动提升权限。
 
