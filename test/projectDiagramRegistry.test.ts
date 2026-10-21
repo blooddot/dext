@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { ProjectDiagramAdapterRegistry } from "../src/core/projectDiagramRegistry.js";
-import type { DiagramAdapterArtifact, DiagramAdapterCapability, DiagramAdapterDocument, DiagramAdapterRenderOptions, ProjectDiagramAdapter } from "../src/core/projectDiagramAdapter.js";
-import type { ProjectDiagram, DiagramValidationReceipt } from "../src/core/projectDiagram.js";
+import { ProjectDiagramAdapterRegistry } from "../src/features/project/host/diagrams/projectDiagramRegistry.js";
+import type { DiagramAdapterArtifact, DiagramAdapterCapability, DiagramAdapterDocument, DiagramAdapterRenderOptions, ProjectDiagramAdapter } from "../src/features/project/contracts/projectDiagramAdapter.js";
+import type { ProjectDiagram, DiagramValidationReceipt } from "../src/features/project/contracts/projectDiagram.js";
 
 const capability: DiagramAdapterCapability = { kind: "architecture", formats: ["html"], features: ["interactive", "deterministic", "validation"] };
 

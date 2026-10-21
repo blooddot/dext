@@ -2,7 +2,7 @@ import { monaco } from '../../src/webview/monacoEnvironment';
 import { DextCodeEditor } from '../../src/webview/codeEditor';
 import { colorizeSource } from '../../src/webview/sourceHighlight';
 import type { ClipboardClient } from '../../src/webview/clipboardClient';
-import type { FileSearchClient } from '../../src/webview/fileSearchClient';
+import type { FileSearchClient } from '../../src/features/workspace/browser/fileSearchClient';
 import './style.css';
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 Object.assign(globalThis, { MonacoEnvironment: { getWorker: (_moduleId: string, label: string) =>

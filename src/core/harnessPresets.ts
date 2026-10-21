@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
-import type { AgentPermission, AgentProfile, HarnessPresetOption } from "../agentProfiles.js";
+import type { AgentPermission, AgentProfile, HarnessPresetOption } from "../features/agents/contracts.js";
 import { harnessSpawnCommand } from "./harnessCommand.js";
 
 const run = promisify(execFile);

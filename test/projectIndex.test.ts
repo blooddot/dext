@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildProjectEvidencePackage, ProjectAiGenerationService, type ProjectAiRequest } from "../src/core/projectAiGeneration.js";
-import { buildProjectTopics } from "../src/core/projectTopics.js";
-import { projectIntentSchema } from "../src/core/projectIntent.js";
-import type { ProjectDiagram } from "../src/core/projectDiagram.js";
+import { buildProjectEvidencePackage, ProjectAiGenerationService, type ProjectAiRequest } from "../src/features/project/host/generation/projectAiGeneration.js";
+import { buildProjectTopics } from "../src/features/project/knowledge/projectTopics.js";
+import { projectIntentSchema } from "../src/features/project/contracts/projectIntent.js";
+import type { ProjectDiagram } from "../src/features/project/contracts/projectDiagram.js";
 
 const evidence = [{ path: "src/code.ts", line: 1 }];
 const index = { brief: { name: "Example", summary: "Runs code", evidence }, contexts: [{ id: "code", canonicalName: "Execution", purpose: "Runs code", entryPoints: ["src/code.ts"], evidence }] };

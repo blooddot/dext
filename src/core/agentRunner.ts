@@ -7,7 +7,7 @@ import { delimiter, extname, isAbsolute, join } from "node:path";
 import { isDextResult, serializeResultForAgent } from "./resultSerialization.js";
 import { jsonCandidates, stripNullProperties } from "./resultBoundary.js";
 import { ExecutionCancelledError } from "./executionErrors.js";
-import type { AgentPermission, AgentProfile } from "../agentProfiles.js";
+import type { AgentPermission, AgentProfile } from "../features/agents/contracts.js";
 import type { AxMethodContract } from "./axAdapter.js";
 import type { AgentStreamEvent, AgentStreamPhase, AgentTokenUsage, AgentInputAnswers, AgentInputQuestion, ExecutionMetadata, RegisteredCallable, ResolvedInvocation } from "./types.js";
 import { agentTodoEvent, ClaudeTodoTracker, isClaudeTodoTool, normalizeAgentTodos } from "./agentTodoTracking.js";

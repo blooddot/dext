@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { projectDiagramRenderer, projectPlaybackSteps } from "../src/core/projectDiagramPresentation.js";
-import type { ProjectDiagram } from "../src/core/projectDiagram.js";
+import { projectDiagramRenderer, projectPlaybackSteps } from "../src/features/project/presentation/projectDiagramPresentation.js";
+import type { ProjectDiagram } from "../src/features/project/contracts/projectDiagram.js";
 
 const flow = (): ProjectDiagram => ({ schemaVersion: 1, id: "flow", title: "Flow", kind: "workflow", version: 0, updatedAt: 1,
   nodes: ["c", "a", "b"].map(id => ({ id, label: id, role: "step", semanticIds: [], evidence: [] })),

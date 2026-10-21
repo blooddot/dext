@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildProjectEvidencePackage, type ProjectAiRequest } from "../src/core/projectAiGeneration.js";
+import { buildProjectEvidencePackage, type ProjectAiRequest } from "../src/features/project/host/generation/projectAiGeneration.js";
 
 vi.mock("vscode", () => ({
   Uri: {
@@ -22,7 +22,7 @@ const failingProvider = () => ({
 });
 
 async function failedInitializationOutput(): Promise<string> {
-  const { createProjectPanelDataSource } = await import("../src/vscodeProjectHost.js");
+  const { createProjectPanelDataSource } = await import("../src/features/project/host/projectPanelDataSource.js");
   const dataSource = createProjectPanelDataSource({
     name: "Example",
     root: "C:/ws",
@@ -55,7 +55,7 @@ describe("project initialization output", () => {
   });
 
   it("persists the evidence record even when generation fails", async () => {
-    const { createProjectPanelDataSource } = await import("../src/vscodeProjectHost.js");
+    const { createProjectPanelDataSource } = await import("../src/features/project/host/projectPanelDataSource.js");
     const written: unknown[] = [];
     const summary = {
       version: 1, trigger: "initialize", generatedAt: 7, inputHash: "hash",
@@ -94,8 +94,8 @@ describe("project initialization output", () => {
   });
 
   it.each([undefined, { roots: ["src", "tools/"] }])("requires saved evidence before indexing, regardless of old scan settings %j", async (scan) => {
-    const { createProjectPanelDataSource, effectiveProjectEvidenceSettings } = await import("../src/vscodeProjectHost.js");
-    const { ProjectStore, defaultProjectDefinition } = await import("../src/projectStore.js");
+    const { createProjectPanelDataSource, effectiveProjectEvidenceSettings } = await import("../src/features/project/host/projectPanelDataSource.js");
+    const { ProjectStore, defaultProjectDefinition } = await import("../src/features/project/host/persistence/projectStore.js");
     const files = new Map([[".dext/project.json", JSON.stringify({ ...defaultProjectDefinition(), ...(scan ? { scan } : {}) })]]);
     const store = new ProjectStore({
       readFile: async path => files.get(path),

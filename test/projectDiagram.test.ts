@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { validateProjectDiagram, validationStatus, type DiagramValidationReceipt, type ProjectDiagram } from "../src/core/projectDiagram.js";
-import type { DiagramAdapterArtifact } from "../src/core/projectDiagramAdapter.js";
-import { compareDiagramSnapshots, createDiagramSnapshot, isArchifySnapshot, ProjectDiagramHistory } from "../src/core/projectDiagramHistory.js";
+import { validateProjectDiagram, validationStatus, type DiagramValidationReceipt, type ProjectDiagram } from "../src/features/project/contracts/projectDiagram.js";
+import type { DiagramAdapterArtifact } from "../src/features/project/contracts/projectDiagramAdapter.js";
+import { compareDiagramSnapshots, createDiagramSnapshot, isArchifySnapshot, ProjectDiagramHistory } from "../src/features/project/knowledge/projectDiagramHistory.js";
 
 const evidence = (path: string, line = 1) => [{ path, line }];
 const base = (kind: ProjectDiagram["kind"]): ProjectDiagram => ({

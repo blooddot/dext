@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { ArchifyAdapter, type ArchifyIdMapping, type ArchifyRepository } from "../src/core/archifyAdapter.js";
-import type { DiagramAdapterDocument } from "../src/core/projectDiagramAdapter.js";
-import { validateProjectDiagram, type ProjectDiagram, type ProjectDiagramEvidence } from "../src/core/projectDiagram.js";
-import { validateDiagramSemantics } from "../src/core/projectAiGeneration.js";
+import { ArchifyAdapter, type ArchifyIdMapping, type ArchifyRepository } from "../src/features/project/host/diagrams/archifyAdapter.js";
+import type { DiagramAdapterDocument } from "../src/features/project/contracts/projectDiagramAdapter.js";
+import { validateProjectDiagram, type ProjectDiagram, type ProjectDiagramEvidence } from "../src/features/project/contracts/projectDiagram.js";
+import { validateDiagramSemantics } from "../src/features/project/host/generation/projectAiGeneration.js";
 
 const runtimeRoot = resolve("vendor/project-diagrams/archify");
 const evidence = (path: string, line = 1): ProjectDiagramEvidence[] => [{ path, line }];

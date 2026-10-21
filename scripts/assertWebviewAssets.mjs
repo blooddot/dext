@@ -139,11 +139,11 @@ for (const known of ["src/extension.ts", "src/features/project/host/diagrams/arc
 for (const forbidden of [
   "typescript/lib/typescript.js",
   "typescript/lib/tsc.js",
-  "src/core/projectArchitectureTypeScript.ts",
-  "src/core/projectArchitecturePython.ts",
-  "src/core/projectArchitectureRust.ts",
-  "src/core/projectArchitectureScanner.ts",
-  "src/core/projectArchitectureWorker.ts",
+  "src/features/project/knowledge/projectArchitectureTypeScript.ts",
+  "src/features/project/knowledge/projectArchitecturePython.ts",
+  "src/features/project/knowledge/projectArchitectureRust.ts",
+  "src/features/project/knowledge/projectArchitectureScanner.ts",
+  "src/features/project/knowledge/projectArchitectureWorker.ts",
   "src/core/drawioAdapter.ts",
   "src/core/mermaidAdapter.ts",
   "src/core/structurizrAdapter.ts"

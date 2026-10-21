@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatProjectReference, projectReferenceOccurrences } from "../src/core/projectReference.js";
+import { formatProjectReference, projectReferenceOccurrences } from "../src/features/project/knowledge/projectReference.js";
 
 
 describe("project reference", () => {

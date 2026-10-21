@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { codexConfiguredDefaults, type AgentProfile } from "../src/features/agents/host/agentProfiles.js";
+import type { AgentProfile } from "../src/features/agents/contracts.js";
+import { codexConfiguredDefaults } from "../src/features/agents/host/agentProfiles.js";
 import { presentAgentSelection } from "../src/features/agents/presentation/agentSelectionDefaults.js";
 
 const profile: AgentProfile = {

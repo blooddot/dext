@@ -1,5 +1,5 @@
 import type { UiFormDefinition, UiFormResult, UiInteractionState } from "./uiForm.js";
-import type { WritableAgentPermission } from "../agentProfiles.js";
+import type { WritableAgentPermission } from "../features/agents/contracts.js";
 export type MethodKind = "command" | "skill";
 export type MethodSource = "builtin" | "global" | "project";
 export type BuiltinOutputKind =

@@ -1,7 +1,7 @@
 import { uiCallForm } from "./uiForm.js";
 import { randomUUID } from "node:crypto";
 import type { CreateElicitationRequest, CreateElicitationResponse, SessionConfigOption, SessionNotification, RequestPermissionRequest, RequestPermissionResponse, ToolCallUpdate } from "@agentclientprotocol/sdk";
-import type { AgentModelOption, AgentPermission, AgentProfile } from "../agentProfiles.js";
+import type { AgentModelOption, AgentPermission, AgentProfile } from "../features/agents/contracts.js";
 import { agentPayload, bootstrappedConversationInput, type AgentRunner, type AgentConversationRequest, type AgentExecutionRequest } from "./agentRunner.js";
 import { ExecutionCancelledError } from "./executionErrors.js";
 import { createHarnessPolicy, decodeHarnessSession, encodeHarnessSession, harnessBinding, readHarnessLaunchSettings, type HarnessLaunchSettings } from "./deepseekHarnessPolicy.js";

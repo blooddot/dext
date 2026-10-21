@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { projectDiagramToMermaid } from "../src/core/projectMermaid.js";
-import type { ProjectDiagram } from "../src/core/projectDiagram.js";
+import { projectDiagramToMermaid } from "../src/features/project/presentation/projectMermaid.js";
+import type { ProjectDiagram } from "../src/features/project/contracts/projectDiagram.js";
 
 const diagram: ProjectDiagram = {
   schemaVersion: 1, id: "example", title: "Example", kind: "workflow", version: 1, updatedAt: 1,

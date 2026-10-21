@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { architectureRuleReport, evaluateArchitectureRules } from "../src/core/projectArchitecture.js";
-import type { ProjectDiagram } from "../src/core/projectDiagram.js";
+import { architectureRuleReport, evaluateArchitectureRules } from "../src/features/project/knowledge/projectArchitecture.js";
+import type { ProjectDiagram } from "../src/features/project/contracts/projectDiagram.js";
 
 function semanticDiagram(): ProjectDiagram {
   const evidence = [{ path: "src/a.ts", line: 1 }];

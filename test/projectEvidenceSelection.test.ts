@@ -53,7 +53,7 @@ vi.mock("vscode", () => {
 
 describe("project evidence selection", () => {
   it("includes build entries, packaged launch arguments and actual browser entry evidence", async () => {
-    const { readWorkspaceEvidence } = await import('../src/vscodeProjectHost.js');
+    const { readWorkspaceEvidence } = await import('../src/features/project/host/projectPanelDataSource.js');
     const fixtures = {
       'esbuild.mjs': 'build({ entryPoints: { main: "src/ui.ts" }, platform: "browser" });',
       'src/ui.ts': 'interface Api { postMessage(message: unknown): void; }\ndeclare function acquireVsCodeApi(): Api;\nconst api = acquireVsCodeApi();',
@@ -73,7 +73,7 @@ describe("project evidence selection", () => {
     } finally { for (const path of Object.keys(fixtures)) files.delete(path); tree.sources.splice(-Object.keys(fixtures).length); }
   });
   it("balances deployment, browser and alternative transport evidence under competing runtime candidates", async () => {
-    const { readWorkspaceEvidence } = await import('../src/vscodeProjectHost.js');
+    const { readWorkspaceEvidence } = await import('../src/features/project/host/projectPanelDataSource.js');
     const originalReadme = files.get('README.md')!;
     files.set('README.md', 'Documentation line\n'.repeat(3000));
     const fixtures: Record<string, string> = {
@@ -94,7 +94,7 @@ describe("project evidence selection", () => {
     } finally { files.set('README.md', originalReadme); for (const path of Object.keys(fixtures)) files.delete(path); tree.sources.splice(-Object.keys(fixtures).length); }
   });
   it.each([120000, 20000])("retains stdio, HTTP and transport dispatch windows with a %i character budget", async maxEvidenceChars => {
-    const { readWorkspaceEvidence } = await import('../src/vscodeProjectHost.js');
+    const { readWorkspaceEvidence } = await import('../src/features/project/host/projectPanelDataSource.js');
     const root = { scheme: 'file', fsPath: 'C:/ws', path: '/C:/ws' } as never;
     const path = 'src/aaaTransport.ts';
     const content = 'import { spawn } from "node:child_process";\nexport function main() { return spawn("tool"); }\n'
@@ -115,11 +115,11 @@ describe("project evidence selection", () => {
     } finally { for (const item of [path, ...workers]) files.delete(item); tree.sources.splice(-(workers.length + 1)); }
   });
   it("keeps Webview and subprocess evidence in the final payload with the whole-project 24000-character preset", async () => {
-    const { readWorkspaceEvidence } = await import('../src/vscodeProjectHost.js');
+    const { readWorkspaceEvidence } = await import('../src/features/project/host/projectPanelDataSource.js');
     const root = { scheme: 'file', fsPath: 'C:/ws', path: '/C:/ws' } as never;
     const fixtures: Record<string, string> = {
       'src/extension.ts': 'import * as vscode from "vscode";\nexport function activate() {}\n',
-      'src/editorTabManager.ts': 'export function createWebviewPanel() { return windowApi.createWebviewPanel("app"); }\n',
+      'src/platform/editor-tabs/editorTabManager.ts': 'export function createWebviewPanel() { return windowApi.createWebviewPanel("app"); }\n',
       'src/core/agentRunner.ts': 'import { spawn } from "node:child_process";\nexport function main() { return spawn("agent"); }\n',
       'src/runner/kernel.ts': 'import { spawn } from "node:child_process";\nexport function main() { return spawn("node"); }\n'
     };
@@ -135,7 +135,7 @@ describe("project evidence selection", () => {
   });
 
   it("indexes every source independently of AI file budgets and supplies module summaries", async () => {
-    const { readWorkspaceEvidence } = await import("../src/vscodeProjectHost.js");
+    const { readWorkspaceEvidence } = await import("../src/features/project/host/projectPanelDataSource.js");
     const root = { scheme: "file", fsPath: "C:/ws", path: "/C:/ws" } as never;
     const packaged = await readWorkspaceEvidence(root, {}, { mode: "index", maxFiles: 1, maxSourceFiles: 1, maxEvidenceChars: 1_000_000 });
     expect(packaged.structure?.parsed).toBe(400);
@@ -146,7 +146,7 @@ describe("project evidence selection", () => {
   });
 
   it("prioritizes a late module entry and its direct imports over unrelated sources", async () => {
-    const { readWorkspaceEvidence } = await import("../src/vscodeProjectHost.js");
+    const { readWorkspaceEvidence } = await import("../src/features/project/host/projectPanelDataSource.js");
     const root = { scheme: "file", fsPath: "C:/ws", path: "/C:/ws" } as never;
     const entry = "src/core/module-399.ts";
     const imported = "src/shared/run.ts";
@@ -166,7 +166,7 @@ describe("project evidence selection", () => {
   });
 
   it("reads indexed runtime boundaries beyond import headers with original line numbers and hashes", async () => {
-    const { readWorkspaceEvidence } = await import("../src/vscodeProjectHost.js");
+    const { readWorkspaceEvidence } = await import("../src/features/project/host/projectPanelDataSource.js");
     const { createHash } = await import('node:crypto');
     const root = { scheme: 'file', fsPath: 'C:/ws', path: '/C:/ws' } as never;
     const path = 'src/worker.ts';
@@ -185,7 +185,7 @@ describe("project evidence selection", () => {
   });
 
   it("adds project background for source-only indexing without including unrelated documentation", async () => {
-    const { readWorkspaceEvidence } = await import("../src/vscodeProjectHost.js");
+    const { readWorkspaceEvidence } = await import("../src/features/project/host/projectPanelDataSource.js");
     const root = { scheme: "file", fsPath: "C:/ws", path: "/C:/ws" } as never;
     const packaged = await readWorkspaceEvidence(root, {}, { mode: "index", include: ["src/**"] });
     expect(packaged.structure?.parsed).toBe(400);
@@ -194,7 +194,7 @@ describe("project evidence selection", () => {
   });
 
   it("reads cross-directory members and excludes unrelated files from the same directory", async () => {
-    const { readWorkspaceEvidence } = await import("../src/vscodeProjectHost.js");
+    const { readWorkspaceEvidence } = await import("../src/features/project/host/projectPanelDataSource.js");
     const root = { scheme: "file", fsPath: "C:/ws", path: "/C:/ws" } as never;
     const entry = 'src/core/module-399.ts', second = 'src/webview/feature.ts';
     files.set(second, 'export function feature() {}'); tree.sources.push(second);
@@ -207,7 +207,7 @@ describe("project evidence selection", () => {
   });
 
   it("keeps project source and the project README when documentation dominates", async () => {
-    const { readWorkspaceEvidence } = await import("../src/vscodeProjectHost.js");
+    const { readWorkspaceEvidence } = await import("../src/features/project/host/projectPanelDataSource.js");
     const root = { scheme: "file", fsPath: "C:/ws", path: "/C:/ws" } as never;
     const packaged = await readWorkspaceEvidence(root, {}, {});
 
@@ -228,7 +228,7 @@ describe("project evidence selection", () => {
   }, 60_000);
 
   it("honours an explicit evidence scope instead of the built-in globs", async () => {
-    const { readWorkspaceEvidence } = await import("../src/vscodeProjectHost.js");
+    const { readWorkspaceEvidence } = await import("../src/features/project/host/projectPanelDataSource.js");
     const root = { scheme: "file", fsPath: "C:/ws", path: "/C:/ws" } as never;
     const packaged = await readWorkspaceEvidence(root, {}, { include: ["src/**"] });
     expect(packaged.files.length).toBeGreaterThan(0);
@@ -238,7 +238,7 @@ describe("project evidence selection", () => {
   }, 60_000);
 
   it("drops a scope that could escape the workspace root", async () => {
-    const { readWorkspaceEvidence } = await import("../src/vscodeProjectHost.js");
+    const { readWorkspaceEvidence } = await import("../src/features/project/host/projectPanelDataSource.js");
     const root = { scheme: "file", fsPath: "C:/ws", path: "/C:/ws" } as never;
     // Every entry is invalid, so the built-in globs stay in force rather than reading nothing.
     const packaged = await readWorkspaceEvidence(root, {}, { include: ["../outside/**", "C:/secret/**", "/etc/**"] });

@@ -1,3 +1,0 @@
-// Compatibility entry for callers outside the first migration. Implementation lives in the feature.
-export { validateProjectDiagram, validationStatus } from "../features/project/contracts/projectDiagram.js";
-export type { DiagramValidationIssue, DiagramValidationReceipt, DiagramValidationSeverity, DiagramValidationStatus, ProjectDiagram, ProjectDiagramBoundary, ProjectDiagramEvidence, ProjectDiagramGroup, ProjectDiagramKind, ProjectDiagramLane, ProjectDiagramMessage, ProjectDiagramNode, ProjectDiagramNodeRole, ProjectDiagramParticipant, ProjectDiagramPhase, ProjectDiagramRelation, ProjectDiagramRelationKind, ProjectDiagramSemantics, ProjectDiagramStage, ProjectDiagramState, ProjectDiagramTransition } from "../features/project/contracts/projectDiagram.js";

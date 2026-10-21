@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { projectWorkspaceSettingsSchema, projectWorkspaceSettingsFromDefinition } from "../src/core/projectSettings.js";
+import { projectWorkspaceSettingsSchema, projectWorkspaceSettingsFromDefinition } from "../src/features/project/contracts/projectSettings.js";
 
 vi.mock("vscode", () => ({ workspace: {} }));
 

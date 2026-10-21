@@ -1,3 +1,0 @@
-// Compatibility entry for callers outside the first migration. Implementation lives in the feature.
-export { knowledgeConfirmationSchema, knowledgeLegacyStatusSchema, knowledgeOwnershipSchema, knowledgeSourceSchema, knowledgeValiditySchema, normalizeProjectObject, projectEvidenceSchema, projectKnowledgeSchema, projectObjectSchema } from "../features/project/contracts/projectKnowledge.js";
-export type { KnowledgeConfirmation, KnowledgeLegacyStatus, KnowledgeOwnership, KnowledgeSource, KnowledgeValidity, ProjectEvidence, ProjectKnowledge, ProjectObject } from "../features/project/contracts/projectKnowledge.js";

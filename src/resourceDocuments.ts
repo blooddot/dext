@@ -1,4 +1,0 @@
-// Compatibility exports for unmigrated callers.
-export type { ApiDataSourceOptions, FileResourceDataSourceOptions, ResourceDefinitionDocument, ResourceEditorDataSource, ResourceEditorProviderOptions, ResourceEditorShowResult, ResourceEntry, ResourceListDocument, ResourcePanelOptions, ResourceSourceRef } from "./features/resources/contracts/resourceDocuments.js";
-export { ResourceEditorProvider, apiReferenceEntries, createApiDataSource, createFileResourceDataSource } from "./features/resources/host/resourceEditorProvider.js";
-export { buildResourceDefinition, buildResourceList, escapeResourceHtml, filterResourceEntries, groupResourceEntries, isMcpApiId, renderResourceDefinition, renderResourceError, renderResourceList, resourceCategory, resourceClientScript, resourceEntryId, resourceKindForLabel } from "./features/resources/presentation/resourceDocuments.js";

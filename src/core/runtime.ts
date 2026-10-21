@@ -14,7 +14,7 @@ import type { AgentResult, DirRef, McpRawResult } from "./types.js";
 import { ExecutionCancelledError } from "./executionErrors.js";
 import { patchResultFrom } from "./patch.js";
 import { CONVERSATION_METHODS } from "./methodSignature.js";
-import type { AgentPermission, AgentProfile, AgentProvider, AgentSelection, WritableAgentPermission } from "../agentProfiles.js";
+import type { AgentPermission, AgentProfile, AgentProvider, AgentSelection, WritableAgentPermission } from "../features/agents/contracts.js";
 import { DefaultAgentRunner } from "./agentRouter.js";
 import type { AgentRunner } from "./agentRunner.js";
 import { DEFAULT_HARNESS_PRESET, harnessPresetOrDefault } from "./harnessPresetDefault.js";

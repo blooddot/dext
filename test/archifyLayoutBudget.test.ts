@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { resolve } from "node:path";
-import { ArchifyAdapter } from "../src/core/archifyAdapter.js";
-import type { ProjectDiagram, ProjectDiagramEvidence, ProjectDiagramNode, ProjectDiagramRelation } from "../src/core/projectDiagram.js";
+import { ArchifyAdapter } from "../src/features/project/host/diagrams/archifyAdapter.js";
+import type { ProjectDiagram, ProjectDiagramEvidence, ProjectDiagramNode, ProjectDiagramRelation } from "../src/features/project/contracts/projectDiagram.js";
 
 /**
  * The diagrams a real Project produces are much larger than the small fixtures the

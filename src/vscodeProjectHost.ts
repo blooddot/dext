@@ -1,3 +1,0 @@
-// Compatibility entry for callers outside the first migration. Implementation lives in the feature.
-export { PROJECT_BUILD_CONFIG_GLOB, PROJECT_DOCUMENT_GLOB, PROJECT_EVIDENCE_EXCLUDE, PROJECT_MANIFEST_GLOB, PROJECT_README_GLOB, PROJECT_SOURCE_GLOB, VscodeProjectFileHost, createProjectPanelDataSource, describeProjectDiagram, discoverArchifyRepository, effectiveProjectEvidenceSettings, effectiveProjectWorkspaceSettings, readWorkspaceEvidence } from "./features/project/host/projectPanelDataSource.js";
-export type { ProjectEvidenceReadOptions, ProjectPanelDataSourceOptions, ProjectPanelMessage } from "./features/project/host/projectPanelDataSource.js";

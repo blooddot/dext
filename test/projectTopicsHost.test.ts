@@ -11,7 +11,7 @@ vi.mock("vscode", () => ({ Uri: {}, workspace: {} }));
 
 describe("Project topic host", () => {
   it("reconciles generated index identities before saving and leaves saved diagrams untouched", async () => {
-    const { createProjectPanelDataSource } = await import('../src/vscodeProjectHost.js');
+    const { createProjectPanelDataSource } = await import('../src/features/project/host/projectPanelDataSource.js');
     const files = [{ path: 'src/code.ts', content: 'export function execute() {}' }];
     const index = await buildStructureIndex(files);
     const evidence = attachProjectStructure(buildProjectEvidencePackage({ files }), index.summary);
@@ -40,7 +40,7 @@ describe("Project topic host", () => {
   });
 
   it("builds only an index, analyzes on explicit request, replaces one result and preserves it after failure", async () => {
-    const { createProjectPanelDataSource } = await import("../src/vscodeProjectHost.js");
+    const { createProjectPanelDataSource } = await import("../src/features/project/host/projectPanelDataSource.js");
     let intent: ReturnType<typeof projectIntentSchema.parse> | undefined;
     const saved: ProjectDiagram[] = [{ schemaVersion: 1, id: "unrelated", title: "Unrelated", kind: "architecture", nodes: [], relations: [], version: 0, updatedAt: 1 }];
     const writeIntent = vi.fn(async (value: NonNullable<typeof intent>) => { intent = value; });
@@ -87,7 +87,7 @@ describe("Project topic host", () => {
   });
 
   it("renders exact derived snapshots, rejects old ones and cancels superseded requests without writing history", async () => {
-    const { createProjectPanelDataSource } = await import("../src/vscodeProjectHost.js");
+    const { createProjectPanelDataSource } = await import("../src/features/project/host/projectPanelDataSource.js");
     const intent = projectIntentSchema.parse({ schemaVersion: 1, updatedAt: 1, brief: { name: "Example" }, flows: [{ id: "run", canonicalName: "Run", steps: [{ id: "step", label: "Step" }] }] });
     const writes = vi.fn();
     const registry = new ProjectDiagramAdapterRegistry({ load: async () => undefined, save: writes });
@@ -123,7 +123,7 @@ describe("Project topic host", () => {
   });
 
   it("publishes the complete generated view with its topic link, without requiring Archify rendering", async () => {
-    const { createProjectPanelDataSource } = await import("../src/vscodeProjectHost.js");
+    const { createProjectPanelDataSource } = await import("../src/features/project/host/projectPanelDataSource.js");
     const intent = projectIntentSchema.parse({ schemaVersion: 1, updatedAt: 1, brief: { name: "Example" }, contexts: [{ id: "code", canonicalName: "Code", evidence: [{ path: "src/code.ts", line: 1 }] }] });
     let saved: ProjectDiagram[] = [];
     const source = createProjectPanelDataSource({
@@ -147,7 +147,7 @@ describe("Project topic host", () => {
   });
 
   it("checks only on request, opens declared evidence and scopes diagram reads by saved topic ID", async () => {
-    const { createProjectPanelDataSource } = await import("../src/vscodeProjectHost.js");
+    const { createProjectPanelDataSource } = await import("../src/features/project/host/projectPanelDataSource.js");
     const intent = projectIntentSchema.parse({ schemaVersion: 1, updatedAt: 1, brief: { name: "Example" }, contexts: [{ id: "code", canonicalName: "Code", entryPoints: ["src/code.ts"], sourceFiles: ["src/code.ts", "src/ui/feature.ts"], evidence: [{ path: "src/code.ts", line: 3, contentHash: "before" }] }] });
     const snapshot = vi.fn(async () => ({ contentHash: "after" }));
     const open = vi.fn(async () => {});

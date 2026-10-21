@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseToml, tomlString } from "../src/core/toml.js";
+import { parseToml, tomlString } from "../src/features/agents/host/toml.js";
 
 describe("TOML parsing", () => {
   it("reads nested tables the same way JSON.parse reads objects", () => {

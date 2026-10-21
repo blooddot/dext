@@ -3,7 +3,7 @@ import { applyMonacoTheme } from "./monacoTheme.js";
 import { DEXT_COMPOSER_SCHEME, installDextTypescript } from "./monacoTypescript.js";
 import { ReferenceProjection, referenceDecorations } from "./monacoReferences.js";
 import type { ClipboardClient } from "./clipboardClient.js";
-import type { FileSearchClient } from "./fileSearchClient.js";
+import type { FileSearchClient } from "./../features/workspace/browser/fileSearchClient.js";
 import type { ProjectReferenceClient } from "./projectReferenceClient.js";
 import { codeReferencePasteText } from "./codeReferencePaste.js";
 import { bindFileDropTarget, droppedFilePaths, fileSelectionDropEffect, isFileDrag } from "./fileDrop.js";

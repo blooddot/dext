@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { ProjectStore, type ProjectFileHost } from "../src/projectStore.js";
-import { ProjectInitializationService } from "../src/projectService.js";
-import { buildProjectEvidencePackage, PROJECT_INDEX_PROMPT_VERSION, ProjectAiGenerationService, type ProjectAiProvider } from "../src/core/projectAiGeneration.js";
-import { projectIntentSchema } from "../src/core/projectIntent.js";
-import type { ProjectDiagram } from "../src/core/projectDiagram.js";
-import { ProjectDiagramAdapterRegistry } from "../src/core/projectDiagramRegistry.js";
-import type { DiagramAdapterArtifact, DiagramAdapterCapability, DiagramAdapterDocument, ProjectDiagramAdapter } from "../src/core/projectDiagramAdapter.js";
-import { normalizeProjectObject } from "../src/core/projectKnowledge.js";
+import { ProjectStore, type ProjectFileHost } from "../src/features/project/host/persistence/projectStore.js";
+import { ProjectInitializationService } from "../src/features/project/host/projectService.js";
+import { buildProjectEvidencePackage, PROJECT_INDEX_PROMPT_VERSION, ProjectAiGenerationService, type ProjectAiProvider } from "../src/features/project/host/generation/projectAiGeneration.js";
+import { projectIntentSchema } from "../src/features/project/contracts/projectIntent.js";
+import type { ProjectDiagram } from "../src/features/project/contracts/projectDiagram.js";
+import { ProjectDiagramAdapterRegistry } from "../src/features/project/host/diagrams/projectDiagramRegistry.js";
+import type { DiagramAdapterArtifact, DiagramAdapterCapability, DiagramAdapterDocument, ProjectDiagramAdapter } from "../src/features/project/contracts/projectDiagramAdapter.js";
+import { normalizeProjectObject } from "../src/features/project/contracts/projectKnowledge.js";
 
 class MemoryHost implements ProjectFileHost {
   readonly files = new Map<string, string>();

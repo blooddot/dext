@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { EDITOR_TAB_RESTORE_VERSION, editorTabKey, editorTabTitle, parseEditorTabKey } from "../src/editorTabTypes.js";
-import { createEditorTabState, normalizePage, restoreEditorTabState } from "../src/editorTabState.js";
+import { EDITOR_TAB_RESTORE_VERSION, editorTabKey, editorTabTitle, parseEditorTabKey } from "../src/platform/editor-tabs/editorTabTypes.js";
+import { createEditorTabState, normalizePage, restoreEditorTabState } from "../src/platform/editor-tabs/editorTabState.js";
 
 describe("editor tab keys", () => {
   it("round-trips a stable key with a resource id and scope", () => {

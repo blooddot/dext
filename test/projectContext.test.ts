@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { searchProjectReferences } from "../src/core/projectContext.js";
-import { projectIntentSchema } from "../src/core/projectIntent.js";
-import { projectObjectSchema } from "../src/core/projectKnowledge.js";
+import { searchProjectReferences } from "../src/features/project/knowledge/projectContext.js";
+import { projectIntentSchema } from "../src/features/project/contracts/projectIntent.js";
+import { projectObjectSchema } from "../src/features/project/contracts/projectKnowledge.js";
 
 const make = (canonicalName: string) => projectObjectSchema.parse({ id: canonicalName, canonicalName, kind: "feature", source: "ai", description: "feature" });
 

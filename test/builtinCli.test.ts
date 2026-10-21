@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AgentProfile } from "../src/agentProfiles.js";
+import type { AgentProfile } from "../src/features/agents/contracts.js";
 import { builtinCliFields, CLI_BUILTIN_IDS, specializeBuiltinCli } from "../src/core/builtinCli.js";
 import { BUILTIN_METHODS } from "../src/core/builtins.js";
 import { ContextResolver } from "../src/core/contextResolver.js";

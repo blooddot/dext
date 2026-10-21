@@ -1,4 +1,4 @@
-import type { AgentProfile, AgentSelection } from "../agentProfiles.js";
+import type { AgentProfile, AgentSelection } from "../features/agents/contracts.js";
 import { harnessPresetOrDefault } from "./harnessPresetDefault.js";
 import type { CallableDefinition, ExecutionMetadata, FieldDefinition } from "./types.js";
 

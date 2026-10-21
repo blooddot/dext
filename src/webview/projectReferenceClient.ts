@@ -1,5 +1,5 @@
 import type { WebviewRequest, WebviewResponse } from "../webviewProtocol.js";
-import type { ProjectReferenceCandidate } from "../core/projectReference.js";
+import type { ProjectReferenceCandidate } from "../features/project/knowledge/projectReference.js";
 
 /** Latest-query-wins picker transport. It never modifies the composer's source. */
 export class ProjectReferenceClient {

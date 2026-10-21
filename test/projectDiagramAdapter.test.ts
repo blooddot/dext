@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { type DiagramAdapterArtifact, type DiagramAdapterCapability, type DiagramAdapterDocument, type ProjectDiagramAdapter } from "../src/core/projectDiagramAdapter.js";
-import { validateProjectDiagram, type ProjectDiagram } from "../src/core/projectDiagram.js";
+import { type DiagramAdapterArtifact, type DiagramAdapterCapability, type DiagramAdapterDocument, type ProjectDiagramAdapter } from "../src/features/project/contracts/projectDiagramAdapter.js";
+import { validateProjectDiagram, type ProjectDiagram } from "../src/features/project/contracts/projectDiagram.js";
 
 const capability: DiagramAdapterCapability = {
   kind: "architecture",

@@ -19,7 +19,7 @@ const mock = vi.hoisted(() => {
 });
 vi.mock("vscode", () => mock);
 import { openDextFileReference, openWorkspaceDocument } from "../src/vscodeContextHost.js";
-import { outputLinkReference } from "../src/webview/outputLink.js";
+import { outputLinkReference } from "../src/features/workspace/browser/outputLink.js";
 
 beforeEach(() => {
   vi.clearAllMocks();

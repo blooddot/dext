@@ -278,7 +278,7 @@ describe("Project AI response validation", () => {
         { path: "src/app.ts", content: "export function start() {}\n" },
         { path: "src/core/builtins.ts", content: "export function ask() {}\n" },
         { path: "src/webview/main.ts", content: "export function render() {}\n" },
-        { path: "src/editorTabManager.ts", content: "export function openTab() {}\n" }
+        { path: "src/platform/editor-tabs/editorTabManager.ts", content: "export function openTab() {}\n" }
       ]
     });
     const model = validModel(input);

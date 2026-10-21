@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeProjectObject, projectObjectSchema } from "../src/core/projectKnowledge.js";
+import { normalizeProjectObject, projectObjectSchema } from "../src/features/project/contracts/projectKnowledge.js";
 
 const object = (id: string, canonicalName: string) => projectObjectSchema.parse({
   id, canonicalName, kind: "module", source: "user", confirmation: "accepted"

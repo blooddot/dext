@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { projectEvidenceSettingsSchema, resolveProjectEvidenceSettings, projectPromptLimits } from "../src/core/projectEvidenceSettings.js";
-import { ProjectStore, defaultProjectDefinition } from "../src/projectStore.js";
+import { projectEvidenceSettingsSchema, resolveProjectEvidenceSettings, projectPromptLimits } from "../src/features/project/contracts/projectEvidenceSettings.js";
+import { ProjectStore, defaultProjectDefinition } from "../src/features/project/host/persistence/projectStore.js";
 
 vi.mock("vscode", () => ({ workspace: {} }));
 
 describe("Project-owned reading settings", () => {
   it("keeps explicit evidence unchanged after removing redundant scan settings and saving paths", async () => {
-    const { createProjectPanelDataSource, effectiveProjectEvidenceSettings } = await import("../src/vscodeProjectHost.js");
+    const { createProjectPanelDataSource, effectiveProjectEvidenceSettings } = await import("../src/features/project/host/projectPanelDataSource.js");
     const clean = { ...defaultProjectDefinition(), evidence: { depth: "whole" as const, include: ["src/**"] } };
     const legacy = { ...clean, scan: { roots: ["src"], includeTests: false, extraExcludes: [] } };
     const limits = resolveProjectEvidenceSettings(effectiveProjectEvidenceSettings(clean));
@@ -38,7 +38,7 @@ describe("Project-owned reading settings", () => {
   });
 
   it("saves and reloads per project, preserving unrelated settings and rejecting stale edits", async () => {
-    const { createProjectPanelDataSource, effectiveProjectEvidenceSettings } = await import("../src/vscodeProjectHost.js");
+    const { createProjectPanelDataSource, effectiveProjectEvidenceSettings } = await import("../src/features/project/host/projectPanelDataSource.js");
     const files = new Map<string, string>();
     const host = {
       readFile: async (path: string) => files.get(path),
@@ -87,7 +87,7 @@ describe("Project-owned reading settings", () => {
   });
 
   it("defaults missing evidence to standard while keeping prompt headroom for small overrides", async () => {
-    const { effectiveProjectEvidenceSettings } = await import("../src/vscodeProjectHost.js");
+    const { effectiveProjectEvidenceSettings } = await import("../src/features/project/host/projectPanelDataSource.js");
     expect(effectiveProjectEvidenceSettings(undefined)).toEqual({ depth: "standard", include: [] });
     const limits = resolveProjectEvidenceSettings(projectEvidenceSettingsSchema.parse({ depth: "whole", chars: 20_000, include: [] }));
     expect(projectPromptLimits(limits.maxEvidenceChars).maxInputChars).toBe(400_000);

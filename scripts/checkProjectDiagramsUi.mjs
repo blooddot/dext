@@ -48,7 +48,7 @@ try {
   };
   const bundle = await build({
     stdin: {
-      contents: 'export { renderEditorTabHtml } from "./src/editorTabHtml.ts"; export { renderProjectPanel } from "./src/webview/projectPanel.ts"; export { archifyViewerBridgeScript } from "./src/webview/archifyBridge.ts"; export { ArchifyAdapter } from "./src/core/archifyAdapter.ts";',
+      contents: 'export { renderEditorTabHtml } from "./src/platform/editor-tabs/editorTabHtml.ts"; export { renderProjectPanel } from "./src/features/project/presentation/projectPanel.ts"; export { archifyViewerBridgeScript } from "./src/features/project/browser/archifyBridge.ts"; export { ArchifyAdapter } from "./src/features/project/host/diagrams/archifyAdapter.ts";',
       resolveDir: process.cwd()
     },
     bundle: true, write: false, platform: "node", format: "esm"

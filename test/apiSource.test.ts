@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { describeApiSource } from "../src/core/apiSource.js";
-import { buildResourceDefinition, buildResourceList, createApiDataSource, createFileResourceDataSource } from "../src/resourceDocuments.js";
-import { renderApiDetail, renderApiList } from "../src/webview/apiPanel.js";
-import { renderGlobalResources } from "../src/webview/globalResourcesPanel.js";
+import { createApiDataSource, createFileResourceDataSource } from "../src/features/resources/host/resourceEditorProvider.js";
+import { buildResourceDefinition, buildResourceList } from "../src/features/resources/presentation/resourceDocuments.js";
+import { renderApiDetail, renderApiList } from "../src/features/resources/presentation/apiPanel.js";
+import { renderGlobalResources } from "../src/features/resources/presentation/globalResourcesPanel.js";
 
 const commitSource = `import { agent, type AgentResult } from "dext";
 throw new Error("Browsing must not execute this module");

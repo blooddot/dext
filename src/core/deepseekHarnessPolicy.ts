@@ -3,7 +3,7 @@ import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "yaml";
-import type { AgentPermission } from "../agentProfiles.js";
+import type { AgentPermission } from "../features/agents/contracts.js";
 
 export const HARNESS_VERSION = "0.1.5-rc.1";
 export const harnessMode = (permission: AgentPermission): string => permission === "full-access" ? "danger-full-access" : permission;

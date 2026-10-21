@@ -30,7 +30,7 @@ import { BUILTIN_METHODS } from "../src/core/builtins.js";
 import { AxAdapter } from "../src/core/axAdapter.js";
 import { serializeResultForAgent } from "../src/core/resultSerialization.js";
 import { CodexConversationConnection } from "../src/core/codexConversationConnection.js";
-import type { AgentProfile } from "../src/agentProfiles.js";
+import type { AgentProfile } from "../src/features/agents/contracts.js";
 import type { AgentStreamEvent, RegisteredCallable } from "../src/core/types.js";
 
 const temporaryDirectories: string[] = [];

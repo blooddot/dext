@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { ProjectStore, defaultProjectDefinition, projectDiagramPath, PROJECT_ARCHITECTURE_PATH, type ProjectFileHost } from "../src/projectStore.js";
-import type { ProjectDiagram } from "../src/core/projectDiagram.js";
-import { projectObjectSchema } from "../src/core/projectKnowledge.js";
+import { ProjectStore, defaultProjectDefinition, projectDiagramPath, PROJECT_ARCHITECTURE_PATH, type ProjectFileHost } from "../src/features/project/host/persistence/projectStore.js";
+import type { ProjectDiagram } from "../src/features/project/contracts/projectDiagram.js";
+import { projectObjectSchema } from "../src/features/project/contracts/projectKnowledge.js";
 
 class MemoryHost implements ProjectFileHost {
   readonly files = new Map<string, string>();

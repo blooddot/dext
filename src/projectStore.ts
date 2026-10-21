@@ -1,3 +1,0 @@
-// Compatibility entry for callers outside the first migration. Implementation lives in the feature.
-export { PROJECT_ARCHITECTURE_PATH, PROJECT_DEFINITION_PATH, PROJECT_DIAGRAMS_DIRECTORY, PROJECT_DIAGRAM_HISTORY_PATH, PROJECT_EVIDENCE_PATH, PROJECT_INTENT_PATH, ProjectStore, defaultProjectDefinition, projectArchitectureRuleSchema, projectArchitectureSchema, projectDefinitionSchema, projectDiagramPath, projectEvidenceSummarySchema, projectKnowledgeConfigSchema } from "./features/project/host/persistence/projectStore.js";
-export type { ProjectArchitectureDocument, ProjectDefinition, ProjectFileHost, ProjectKnowledgeConfig, ProjectSaveOptions, ProjectSaveResult } from "./features/project/host/persistence/projectStore.js";

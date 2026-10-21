@@ -4,10 +4,11 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createApiReferenceSource, parseApiReference, type ApiReferenceCatalog } from "../src/core/apiReference.js";
-import { apiReferenceEntries, buildResourceList, createApiDataSource, createFileResourceDataSource, renderResourceDefinition, renderResourceList } from "../src/resourceDocuments.js";
-import { ApiEditorProvider } from "../src/apiEditorProvider.js";
-import { EditorTabManager, type EditorTabCallbacks, type EditorTabPanelHandle } from "../src/editorTabManager.js";
-import { EditorTabRestorer } from "../src/editorTabSerializer.js";
+import { createApiDataSource, createFileResourceDataSource, apiReferenceEntries } from "../src/features/resources/host/resourceEditorProvider.js";
+import { buildResourceList, renderResourceDefinition, renderResourceList } from "../src/features/resources/presentation/resourceDocuments.js";
+import { ApiEditorProvider } from "../src/features/resources/host/apiEditorProvider.js";
+import { EditorTabManager, type EditorTabCallbacks, type EditorTabPanelHandle } from "../src/platform/editor-tabs/editorTabManager.js";
+import { EditorTabRestorer } from "../src/platform/editor-tabs/editorTabSerializer.js";
 import type { SidebarState } from "../src/webviewProtocol.js";
 
 class FakePanel implements EditorTabPanelHandle {

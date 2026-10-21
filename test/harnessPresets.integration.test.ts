@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { AgentProfile } from "../src/agentProfiles.js";
+import type { AgentProfile } from "../src/features/agents/contracts.js";
 import { copyHarnessPreset, harnessInstallation, harnessPresetFile, harnessPresetPatch, listHarnessPresets } from "../src/core/harnessPresets.js";
 import { createHarnessPolicy } from "../src/core/deepseekHarnessPolicy.js";
 import { DeepSeekHarnessTransport } from "../src/core/deepseekHarnessTransport.js";

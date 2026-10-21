@@ -20,15 +20,8 @@ import { createResultRepair } from "./core/resultRepair.js";
 import { DextRuntime } from "./core/runtime.js";
 import { SkillCatalog } from "./core/skillCatalog.js";
 import type { CallableDefinition, CodeRef, ExecutionMetadata, InputExecutionResponse } from "./core/types.js";
-import {
-AGENT_PERMISSIONS,
-AgentProfileStore,
-SUPPORTED_AGENT_PROFILE_IDS,
-type AgentProfile,
-type AgentProvider,
-type AgentSelection,
-type WritableAgentPermission
-} from "./features/agents/host/agentProfiles.js";
+import { AGENT_PERMISSIONS, SUPPORTED_AGENT_PROFILE_IDS, type AgentProfile, type AgentProvider, type AgentSelection, type WritableAgentPermission } from "./features/agents/contracts.js";
+import { AgentProfileStore } from "./features/agents/host/agentProfiles.js";
 import { createProjectAiProvider } from "./features/project/host/generation/projectAiProvider.js";
 import { DEFAULT_DISPATCH_CONCURRENCY, DextKernelHost } from "./runner/dextHost.js";
 import type { DextReplayEntry } from "./runner/dextResumeCache.js";

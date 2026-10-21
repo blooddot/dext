@@ -1,5 +1,5 @@
 import type { Range } from "./types.js";
-import { projectReferenceOccurrences } from "./projectReference.js";
+import { projectReferenceOccurrences } from "../features/project/knowledge/projectReference.js";
 
 export interface DextFileReference {
   expression: string;

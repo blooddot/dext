@@ -1,13 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
-  DiagramTaskRegistry,
   archifyViewerBridgeScript,
-  isAllowedEvidencePath,
-  isDiagramExportPayload,
   isTrustedHostMessage,
   isTrustedViewerMessage,
   isViewerCommand
-} from "../src/projectDiagramViewer.js";
+} from "../src/features/project/browser/archifyBridge.js";
+import {
+  DiagramTaskRegistry,
+  isAllowedEvidencePath,
+  isDiagramExportPayload
+} from "../src/features/project/host/diagrams/projectDiagramViewer.js";
 
 
 describe("viewer message validation", () => {
