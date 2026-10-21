@@ -169,6 +169,7 @@ lines.on("line", async (line) => {
       } else if (text.includes("received-tool")) {
         answer = JSON.stringify(tool ?? null);
       }
+      if (text === "usage") update(p.sessionId, { sessionUpdate: "usage_update", used: 12345, size: 1000000 });
       update(p.sessionId, { sessionUpdate: "agent_message_chunk", messageId: "final", content: { type: "text", text: answer } });
       return result({ stopReason: "end_turn" });
     }

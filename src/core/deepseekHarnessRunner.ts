@@ -185,8 +185,18 @@ export class DeepSeekHarnessRunner implements AgentRunner {
       const details = tool.content?.map((item) => item.type === "content" && item.content.type === "text" ? item.content.text : item.type === "diff" ? `${item.path}\n${item.newText}` : "").filter(Boolean).join("\n");
       request.onEvent?.({ id: `${session.id}:${tool.toolCallId}`, phase: "tool", group: "work-log", title: tool.title ?? "Tool", text: details || tool.title || "Tool", replace: true,
         done: tool.status === "completed" || tool.status === "failed", toolKind: tool.kind === "execute" ? "command" : tool.kind === "edit" || tool.kind === "read" ? "file" : "step" });
+    } else if (update.sessionUpdate === "usage_update") {
+      // ACP's `usage_update` is context occupancy, not a per-turn charge: Dext
+      // shows it as `used/window context` and never as billed token usage.
+      const used = Math.round(update.used);
+      const size = Math.round(update.size);
+      if (Number.isFinite(used) && used >= 0) {
+        request.onEvent?.({ phase: "status", text: "", usage: {
+          contextTokens: used,
+          ...(Number.isFinite(size) && size > 0 ? { contextWindowTokens: size } : {})
+        } });
+      }
     }
-    // ACP usage_update describes context occupancy, not per-turn token charges.
   }
 
   private async permission(session: Session, event: RequestPermissionRequest, permission: AgentPermission): Promise<RequestPermissionResponse> {

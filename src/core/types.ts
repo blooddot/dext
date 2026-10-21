@@ -369,12 +369,19 @@ export interface AgentTodoItem {
 export type AgentToolKind = "command" | "file" | "image" | "step";
 
 /** Token counts reported by a provider for one completed agent turn. Cached
- * input is diagnostic metadata only and is never added to the total twice. */
+ * input is diagnostic metadata only and is never added to the total twice.
+ * ACP providers that cannot report billed usage may instead report the tokens
+ * currently occupying the context window; those are displayed separately and
+ * are never treated as a per-turn charge. */
 export interface AgentTokenUsage {
   inputTokens?: number;
   cachedInputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
+  /** Current context occupancy (`usage_update.used`). */
+  contextTokens?: number;
+  /** Total context window (`usage_update.size`), when the provider reports it. */
+  contextWindowTokens?: number;
 }
 
 export interface AgentStreamEvent {

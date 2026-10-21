@@ -60,12 +60,36 @@ export interface TurnRenderModel {
 }
 
 /** Use the same provider-reported count during streaming and after replay. */
+function compactTokenCount(value: number): string {
+  const scaled = value >= 1_000_000 ? { size: value / 1_000_000, suffix: "M" }
+    : value >= 1_000 ? { size: value / 1_000, suffix: "k" }
+      : { size: value, suffix: "" };
+  const digits = scaled.suffix && scaled.size < 10 ? 1 : 0;
+  return `${scaled.size.toFixed(digits).replace(/\.0$/, "")}${scaled.suffix}`;
+}
+
 export function formatTurnTokenUsage(usage?: AgentTokenUsage): string {
   const total = usage?.totalTokens
     ?? (usage?.inputTokens !== undefined && usage.outputTokens !== undefined
       ? usage.inputTokens + usage.outputTokens : undefined);
-  if (total === undefined || !Number.isFinite(total) || total < 0) return "";
-  return `${total >= 1_000 ? `${(total / 1_000).toFixed(total >= 10_000 ? 0 : 1)}k` : total} tokens`;
+  if (total !== undefined && Number.isFinite(total) && total >= 0) return `${compactTokenCount(total)} tokens`;
+  // ACP (DeepSeek Harness) reports context occupancy instead of billed usage.
+  // Keep that distinction in the label rather than passing it off as a charge.
+  const context = usage?.contextTokens;
+  if (context === undefined || !Number.isFinite(context) || context < 0) return "";
+  const window = usage?.contextWindowTokens;
+  return window !== undefined && Number.isFinite(window) && window > 0
+    ? `${compactTokenCount(context)}/${compactTokenCount(window)} context`
+    : `${compactTokenCount(context)} context`;
+}
+
+/** Usage events are snapshots. A snapshot that reports billed counts replaces
+ * the previous billed report; a context-only ACP update merges in so it cannot
+ * erase a billed count that arrived earlier in the same turn. */
+export function updateTurnTokenUsage(previous: AgentTokenUsage | undefined, next: AgentTokenUsage): AgentTokenUsage {
+  const billed = next.totalTokens !== undefined || next.inputTokens !== undefined
+    || next.outputTokens !== undefined || next.cachedInputTokens !== undefined;
+  return billed ? next : { ...previous, ...next };
 }
 
 export function presentTurn(options: {
@@ -82,7 +106,7 @@ export function presentTurn(options: {
   // report instead of adding repeated updates or cached input a second time.
   let usage: AgentTokenUsage | undefined;
   for (const event of options.process ?? []) {
-    if (event.usage) usage = event.usage;
+    if (event.usage) usage = updateTurnTokenUsage(usage, event.usage);
   }
   const detail = [timing, formatTurnTokenUsage(usage)].filter(Boolean).join(" · ");
   return {

@@ -81,6 +81,6 @@ Harness questions appear in the same Dext card Codex questions use, above Proces
 
 ### Advanced configuration and compatibility
 
-`dext.agentCliArgs.deepseek-harness` accepts repeated `--patch <path>` launcher pairs in trusted workspaces. Dext owns the ACP profile and appends its permission patch last. Plugins are trusted code: overlays must preserve the shipped sandbox wiring and keep stdout exclusively JSON-RPC. Configuration changes require a new connection. Turns use the total and idle limits described above; ACP setup and model configuration requests retain their separate timeouts. Updates arrive as committed messages and tool events, not token-by-token deltas; context occupancy is not reported as billed token usage.
+`dext.agentCliArgs.deepseek-harness` accepts repeated `--patch <path>` launcher pairs in trusted workspaces. Dext owns the ACP profile and appends its permission patch last. Plugins are trusted code: overlays must preserve the shipped sandbox wiring and keep stdout exclusively JSON-RPC. Configuration changes require a new connection. Turns use the total and idle limits described above; ACP setup and model configuration requests retain their separate timeouts. Updates arrive as committed messages and tool events, not token-by-token deltas. ACP's `usage_update` appears in Process as `used/window context` (context occupancy), never as billed token usage.
 
 AIOA/CDP support has been removed. Old AIOA conversations have no compatibility or migration support.

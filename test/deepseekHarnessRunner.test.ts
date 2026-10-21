@@ -57,6 +57,13 @@ describe("Harness runner", { timeout: 15000 }, () => {
     expect(await r.runConversation({ ...req, onEvent })).toBe("hello");
     expect(onEvent.mock.calls.map(([event]) => event).filter((event) => event.phase === "tool")).toMatchObject([{ done: false }, { done: true, replace: true, text: "done" }]);
   });
+  it("reports Harness context occupancy without presenting it as billed usage", async () => {
+    const events: AgentStreamEvent[] = [];
+    await runner().runConversation({ ...request("usage"), onEvent: (event) => events.push(event) });
+    const usage = events.flatMap((event) => event.usage ? [event.usage] : []);
+    expect(usage).toContainEqual({ contextTokens: 12345, contextWindowTokens: 1000000 });
+    expect(usage.every((item) => item.totalTokens === undefined)).toBe(true);
+  });
   it("serializes one conversation and isolates concurrent conversations", async () => {
     const r = runner();
     expect(await Promise.all([r.runConversation(request("slow")), r.runConversation(request("second")), r.runConversation(request("other", "other"))])).toEqual(["slow", "second", "other"]);

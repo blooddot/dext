@@ -451,7 +451,7 @@ describe("sidebar panel layout", () => {
   it("shows provider token usage in Process only when the provider reports it", async () => {
     const main = await source("src/webview/main.ts");
     expect(main).toContain("let agentTokenUsage: AgentTokenUsage | undefined;");
-    expect(main).toMatch(/function renderAgentEvent[\s\S]*?if \(event\.usage\) agentTokenUsage = event\.usage;/);
+    expect(main).toMatch(/function renderAgentEvent[\s\S]*?if \(event\.usage\) agentTokenUsage = updateTurnTokenUsage\(agentTokenUsage, event\.usage\);/);
     expect(main).toMatch(/function updateAgentProgress[\s\S]*?formatTurnTokenUsage\(agentTokenUsage\)/);
   });
 

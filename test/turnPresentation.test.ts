@@ -31,10 +31,23 @@ describe("turn title presentation", () => {
     expect(presentTurn({ source: "prompt", process }).process.detail).toBe("1.2k tokens");
   });
 
+  it("keeps billed usage when a later snapshot only carries context occupancy", () => {
+    const process = [
+      { phase: "status" as const, text: "", usage: { totalTokens: 900 } },
+      { phase: "status" as const, text: "", usage: { contextTokens: 12_345, contextWindowTokens: 1_000_000 } }
+    ];
+    expect(presentTurn({ source: "prompt", process }).process.detail).toBe("900 tokens");
+  });
+
   it.each([
     [{ totalTokens: 0 }, "0 tokens"],
     [{ totalTokens: 999 }, "999 tokens"],
     [{ totalTokens: 12_345, inputTokens: 1, outputTokens: 2 }, "12k tokens"],
+    [{ contextTokens: 12_345, contextWindowTokens: 1_000_000 }, "12k/1M context"],
+    [{ contextTokens: 4_500 }, "4.5k context"],
+    [{ contextTokens: 900 }, "900 context"],
+    [{ contextTokens: 12_345, totalTokens: 900 }, "900 tokens"],
+    [{ contextTokens: -1 }, ""],
     [{ inputTokens: 1 }, ""],
     [{ cachedInputTokens: 800 }, ""],
     [{ totalTokens: -1 }, ""],

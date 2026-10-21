@@ -94,6 +94,6 @@ Harness 的提问显示在与 Codex 相同的 Dext 卡片中（位于 Process �
 
 ### 高级配置与兼容性
 
-受信任工作区的 `dext.agentCliArgs.deepseek-harness` 接受重复的 `--patch <path>` 参数对；Dext 管理 ACP profile 并最后附加权限配置。插件属于受信任代码，自定义配置必须保留官方沙箱实现，stdout 必须仅输出 JSON-RPC。配置更改需建立新连接。单轮执行使用上文的总时限和空闲时限；ACP 初始化和模型配置请求保留各自的超时。过程按已提交消息和工具事件更新，不保证逐 token 展示，也不把上下文占用当作计费 token 消耗。
+受信任工作区的 `dext.agentCliArgs.deepseek-harness` 接受重复的 `--patch <path>` 参数对；Dext 管理 ACP profile 并最后附加权限配置。插件属于受信任代码，自定义配置必须保留官方沙箱实现，stdout 必须仅输出 JSON-RPC。配置更改需建立新连接。单轮执行使用上文的总时限和空闲时限；ACP 初始化和模型配置请求保留各自的超时。过程按已提交消息和工具事件更新，不保证逐 token 展示。ACP 的 `usage_update` 会在 Process 中显示为 `已用/窗口 context`（上下文占用），不会被当作计费 token 消耗。
 
 AIOA/CDP 接入已移除，不提供旧 AIOA 对话兼容或迁移。

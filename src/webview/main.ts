@@ -18,7 +18,7 @@ import { renderTurnInput, renderTurnJson, renderTurnMarkdown, renderTurnResult }
 import { turnDomAdapter } from "../features/conversations/browser/turnDomAdapter.js";
 import { TranscriptView, type OutputTurnElements } from "../features/conversations/browser/transcriptView.js";
 import {
-presentTurn, formatTurnTokenUsage
+presentTurn, formatTurnTokenUsage, updateTurnTokenUsage
 } from "../features/conversations/presentation/turnPresentation.js";
 import type { ConversationSummary } from "../features/conversations/contracts/protocol.js";
 import type { SidebarState, WebviewRequest, WebviewResponse } from "../webviewProtocol.js";
@@ -1976,7 +1976,7 @@ function renderAgentEvent(event: AgentStreamEvent): void {
     if (event.todos) transcript.active?.todos.update(event.todos);
     return;
   }
-  if (event.usage) agentTokenUsage = event.usage;
+  if (event.usage) agentTokenUsage = updateTurnTokenUsage(agentTokenUsage, event.usage);
   if (event.phase === "status") {
     updateAgentProgress(event.text || agentProgressState);
     return;
