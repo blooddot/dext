@@ -8,8 +8,50 @@ interface CommandOptions {
   env?: NodeJS.ProcessEnv;
 }
 
+/** A resolved Harness process. `env` carries what the wrapper itself would have set. */
+export interface HarnessInvocation {
+  command: string;
+  args: string[];
+  env?: Record<string, string>;
+}
+
+/** `%~dp0` (or `%dp0%`) names the launcher's own directory in a Windows wrapper. */
+const WRAPPER_DIRECTORY = /%(?:~dp0|dp0%)/i;
+
+function wrapperPath(scriptPath: string, reference: string): string {
+  const relative = reference.replace(WRAPPER_DIRECTORY, "").replace(/^[\\/]+/, "");
+  return resolve(dirname(scriptPath), ...relative.split(/[\\/]/));
+}
+
+/**
+ * A wrapper that starts a bundled runtime with a script argument — the DeepSeek
+ * Harness desktop launcher is the shipped example:
+ *
+ *     "%~dp0..\..\..\..\DeepSeek Harness.exe" --expose-internals "%~dp0..\..\..\app.asar\...\cli.js" %*
+ *
+ * The script lives inside `app.asar` and only the bundled Electron can read it,
+ * so handing that path to plain node (the generic wrapper branch below) can never
+ * work. Return the executable, its own flags and the environment the wrapper sets.
+ */
+function desktopLauncher(script: string, scriptPath: string, args: readonly string[]): HarnessInvocation | undefined {
+  const executable = /"(%(?:~dp0|dp0%)[^"\r\n]*?\.exe)"/i.exec(script)?.[1];
+  if (!executable || /^node(?:\.exe)?$/i.test(basename(executable.replace(WRAPPER_DIRECTORY, "")))) return undefined;
+  const program = wrapperPath(scriptPath, executable);
+  if (!existsSync(program)) return undefined;
+  const scriptArgument = /"(%(?:~dp0|dp0%)[^"\r\n]*?\.[cm]?js)"/i.exec(script)?.[1];
+  if (!scriptArgument) return undefined;
+  const entry = wrapperPath(scriptPath, scriptArgument);
+  const between = script.slice(script.indexOf(executable) + executable.length, script.indexOf(scriptArgument));
+  const flags = between.replace(/["']/g, " ").split(/\s+/).filter((flag) => flag.startsWith("-"));
+  return {
+    command: program,
+    args: [...flags, entry, ...args],
+    ...(/ELECTRON_RUN_AS_NODE\s*=\s*1/i.test(script) ? { env: { ELECTRON_RUN_AS_NODE: "1" } } : {})
+  };
+}
+
 /** Resolve PATH and wrappers, not a version manager's private install layout. */
-export function harnessSpawnCommand(command: string, args: readonly string[], options: CommandOptions = {}): { command: string; args: string[] } {
+export function harnessSpawnCommand(command: string, args: readonly string[], options: CommandOptions = {}): HarnessInvocation {
   const cwd = options.cwd ?? process.cwd();
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
@@ -44,7 +86,7 @@ export function harnessSpawnCommand(command: string, args: readonly string[], op
     throw new Error(`DeepSeek Harness CLI '${name}' could not be resolved using ${manager}. Reinstall @deepseek-ai/dsh.`);
   };
   const visited = new Set<string>();
-  const unwrap = (input: string, selectedNode?: string): { command: string; args: string[] } => {
+  const unwrap = (input: string, selectedNode?: string): HarnessInvocation => {
     const path = locate(input);
     if (!path) throw new Error(`DeepSeek Harness CLI '${input}' was not found on PATH. Install @deepseek-ai/dsh.`);
     if (visited.has(path) || visited.size >= 8) throw new Error("Cannot resolve a recursive Harness command shim.");
@@ -67,6 +109,8 @@ export function harnessSpawnCommand(command: string, args: readonly string[], op
       const name = basename(path).replace(/\.(?:exe|cmd|bat)$/i, "");
       return unwrap(which(manager, name), which(manager, "node"));
     }
+    const launcher = desktopLauncher(script, path, args);
+    if (launcher) return launcher;
     const relative = /["']%(?:~dp0|dp0%)[\\/]*([^"'\r\n]*?\.[cm]?js)/i.exec(script)?.[1]
       ?? /["']\$(?:basedir|\{basedir\})\/([^"'\r\n]*?\.[cm]?js)/.exec(script)?.[1];
     if (relative) {
