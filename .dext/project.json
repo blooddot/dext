@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": 31,
+  "version": 36,
   "knowledge": {
     "enabled": true,
     "initialized": true
@@ -24,10 +24,9 @@
     ]
   },
   "ai": {
-    "cli": "codex",
-    "model": "gpt-6-astra",
-    "reasoningEffort": "high",
-    "speed": "fast"
+    "cli": "deepseek-harness",
+    "model": "[\"deepseek-official\",\"deepseek-v4-flash\"]",
+    "reasoningEffort": "max"
   },
-  "updatedAt": 1792415367763
+  "updatedAt": 1792578223396
 }
