@@ -137,22 +137,24 @@ try {
   await evaluate(`{const meta=document.createElement('meta');meta.httpEquiv='Content-Security-Policy';meta.content=${JSON.stringify(policy.replaceAll('${webview.cspSource}', 'https://webview.test').replaceAll('${nonce}', 'test'))};document.head.append(meta);
     const style=document.createElement('style');style.textContent=${JSON.stringify(await readFile('dist/markdown/github-markdown.css', 'utf8'))};document.head.append(style);document.body.classList.add('vscode-dark');}`);
   const imageRequests = [];
+  let intercepting = false;
   socket.addEventListener("message", ({ data }) => {
     const message = JSON.parse(data);
-    if (message.method !== "Fetch.requestPaused") return;
+    if (!intercepting || message.method !== "Fetch.requestPaused") return;
     const { requestId, request } = message.params;
     imageRequests.push(request.url);
     const failed = request.url.includes("expired");
     void send("Fetch.fulfillRequest", { requestId, responseCode: failed ? 403 : 200,
       responseHeaders: [{ name: "Content-Type", value: "image/svg+xml" }],
-      body: Buffer.from(failed ? "Expired" : '<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="500"><rect width="1200" height="500" fill="#4466aa"/></svg>').toString("base64") });
+      body: Buffer.from(failed ? "Expired" : '<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="500"><rect width="1200" height="500" fill="#4466aa"/></svg>').toString("base64") }).catch(() => undefined);
   });
   await send("Fetch.enable", { patterns: [{ urlPattern: "https://attachments.test/*" }] });
+  intercepting = true;
   const signedImage = "https://attachments.test/screenshot.svg?Signature=abc%2Bdef%3D&Expires=9999999999";
   await theme("#181818", "#dddddd", "#66aaff");
   const report = '## 根因\n\n**升级请求重复**\n\n- TouchStart\n- TouchEnd\n\n```js\nconst pending = true;\n```\n\n| 项目 | 结果 |\n| --- | --- |\n| 请求 | 重复 |\n\n![截图](' + signedImage + ')\n\n![已过期](https://attachments.test/expired.png)\n\n<script>window.markdownInjected=true</script>\n\n[unsafe](javascript:alert(1))';
   for (const presentation of ["inline", "dialog"]) {
-    await evaluate(`window.markdownState=state('markdown-${presentation}',InteractionUI.parseUiForm({title:'任务详情',presentation:'${presentation}',description:${JSON.stringify(report)},fields:[]}));view.updateUi(markdownState);window.description=document.querySelector('.interaction-description');`);
+    await evaluate(`window.markdownState=state('markdown-${presentation}',InteractionUI.parseUiForm({title:'任务详情',presentation:'${presentation}',description:${JSON.stringify(report)},fields:[]}));view.updateUi(markdownState);window.description=[...document.querySelectorAll('.interaction-description')].filter(description=>!description.closest('.agent-input-disclosure-body')).at(-1);`);
     assert.equal(await evaluate(`description.querySelector('h2').textContent`), "根因");
     assert.equal(await evaluate(`description.querySelector('strong').textContent`), "升级请求重复");
     assert.equal(await evaluate(`description.querySelectorAll('li').length`), 2);
@@ -176,6 +178,7 @@ try {
     await evaluate(`view.updateUi({...markdownState,status:'cancelled'});`);
   }
   assert.ok(imageRequests.includes(signedImage), "signed image query reaches the server unchanged");
+  intercepting = false;
   await send("Fetch.disable");
   const diagrams = [
     '```mermaid\nflowchart TD\n A[打开宠物] --> B{数据有效?}\n B -->|是| C[刷新属性]\n B -->|否| D[忽略]\n click A "javascript:alert(1)"\n```',
@@ -185,7 +188,7 @@ try {
   ].join('\n\n');
   for (const [presentation, themeClass] of [["inline", "vscode-dark"], ["dialog", "vscode-light"]]) {
     await theme(themeClass === 'vscode-light' ? '#ffffff' : '#181818', themeClass === 'vscode-light' ? '#222222' : '#dddddd', '#4488cc');
-    await evaluate(`document.body.className='${themeClass}';window.diagramState=state('diagrams-${presentation}',InteractionUI.parseUiForm({title:'流程图与类图',presentation:'${presentation}',description:${JSON.stringify(diagrams)},fields:[]}));view.updateUi(diagramState);window.description=document.querySelector('.interaction-description');`);
+    await evaluate(`document.body.className='${themeClass}';window.diagramState=state('diagrams-${presentation}',InteractionUI.parseUiForm({title:'流程图与类图',presentation:'${presentation}',description:${JSON.stringify(diagrams)},fields:[]}));view.updateUi(diagramState);window.description=[...document.querySelectorAll('.interaction-description')].filter(description=>!description.closest('.agent-input-disclosure-body')).at(-1);`);
     assert.equal(await evaluate(`new Promise(resolve=>{const deadline=Date.now()+15000;const check=()=>{if(description.querySelectorAll('[data-diagram-state]').length===3)resolve(true);else if(Date.now()>deadline)resolve(false);else setTimeout(check,50);};check();})`), true, `${presentation}: all diagrams finish under Webview CSP`);
     assert.equal(await evaluate(`description.querySelectorAll('[data-diagram-state=ready] svg').length`), 2, `${presentation}: flowchart and class diagram render despite invalid sibling`);
     assert.equal(await evaluate(`description.querySelector('[data-diagram-state=ready] svg').textContent.includes('刷新属性')`), true);

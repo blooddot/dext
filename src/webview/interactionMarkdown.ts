@@ -20,6 +20,9 @@ export function interactionMarkdown(source: string): HTMLDivElement {
   body.className = "interaction-description markdown-body";
   body.innerHTML = markdown.render(source);
   for (const image of body.querySelectorAll("img")) {
+    // A form can sit in a dialog or below the fold; lazy loading would then
+    // never request the image, so a broken link could not report itself.
+    image.loading = "eager";
     // Existing Markdown image links retain their destination. Otherwise the
     // conversation's delegated link handler can open the original attachment.
     if (!image.closest("a")) {
@@ -29,12 +32,22 @@ export function interactionMarkdown(source: string): HTMLDivElement {
       image.replaceWith(link);
       link.append(image);
     }
-    image.addEventListener("error", () => {
+    let failed = false;
+    const showFallback = (): void => {
+      if (failed) return;
+      failed = true;
       const fallback = document.createElement("span");
       fallback.className = "interaction-image-error";
       fallback.textContent = `Image unavailable (link may have expired): ${image.alt || "Open original image"}`;
       image.replaceWith(fallback);
-    }, { once: true });
+    };
+    image.addEventListener("error", showFallback, { once: true });
+    // `decode()` also reports a failure whose `error` event fired before this
+    // listener was attached, which happens with a cached failing URL.
+    image.decode?.().catch(showFallback);
+    // A cached or lazy image can finish failing before the listener above is
+    // attached; `complete` with no intrinsic size is the same failure signal.
+    if (image.complete && image.naturalWidth === 0) showFallback();
   }
   renderMarkdownDiagrams(body);
   return body;
