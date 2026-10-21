@@ -51,6 +51,18 @@ describe("TurnExecutionCoordinator", () => {
     expect(h.history.list()[0]?.turns[0]?.mode).toBe("agent");
   });
 
+  it("publishes a non-running tab summary when a turn finishes", async () => {
+    const h = createConversationHarness();
+    h.seed([conversation("session")]);
+    h.controller.activate(h.controller.session("session")!);
+    await h.coordinator.execute(h.controller.session("session")!, "agent", "prompt");
+    const last = [...h.messages].reverse().find((message) => message.type === "conversations");
+    expect(last).toMatchObject({
+      type: "conversations",
+      sessions: [{ id: "session", running: false }]
+    });
+  });
+
   it("buffers a finished turn's events and never reuses them for the next turn", async () => {
     let events: AgentStreamEvent[][] = [];
     const h = createConversationHarness({

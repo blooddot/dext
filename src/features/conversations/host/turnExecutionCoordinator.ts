@@ -321,7 +321,11 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
       if (mode === "plan") {
         await this.options.plans.settle(session, { ...(outcome ? { outcome } : {}), cancelled, failed });
       }
+      // The tab strip derives its running spinner from this summary, and the
+      // success/failure posts above still saw this execution in the map. Publish
+      // again now that it is gone so a finished turn cannot leave a spinning tab.
       try {
+        await this.options.sessions.postConversationState();
         if (!this.activeExecutions.size) await this.options.onIdle?.();
       } finally {
         await this.options.notifier.finished(sessionId, turnId);
