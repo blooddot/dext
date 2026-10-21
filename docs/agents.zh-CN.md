@@ -64,7 +64,7 @@ Claude 对话使用 CLI 的双向控制协议：`--input-format stream-json` 打
 
 ### 安装与模型
 
-安装 DeepSeek Harness 桌面版，在 Harness 中配置模型凭据，再在 Dext 选择 **DeepSeek Harness**。**Dext: Configure Agent** 可配置可执行文件路径（默认使用 PATH 上桌面版的 `dsh` 启动器），并通过 ACP 发现模型和推理选项；首次选择也会发现模型。模型留空时使用 Harness 默认值。Dext 在扩展启动时读取一次 `$DSH_HOME/settings.yaml` 中的 `llm-pi-ai.providers` 和 `agent-default-model` 路由；首次选择 Harness 或运行配置命令时刷新，并把缓存结果用于临时 ACP 覆盖层；不会复制或修改用户的 profile 文件或 `.credentials.yaml`。安装和凭据由 Harness 管理。
+安装 DeepSeek Harness 桌面版，在 Harness 中配置模型凭据，再在 Dext 选择 **DeepSeek Harness**。**Dext: Configure Agent** 可配置可执行文件路径（默认使用 PATH 上桌面版的 `dsh` 启动器），并通过 ACP 发现模型和推理选项；首次选择也会发现模型。模型留空时使用 Harness 默认值。Dext 在扩展启动时读取一次 `$DSH_HOME/settings.yaml` 中的 `llm-pi-ai.providers`、`llm-deepseek` 模型和 `agent-default-model` 路由；其中未定义的字段改用桌面 profile 的 `$DSH_HOME/profiles/desktop/cordis.patch.yml`（Harness 应用把界面里新增的模型保存在这里）。两个路径都从 `$DSH_HOME`（未设置时为 `~/.dsh`）解析，因此 Windows 与 macOS 使用同一套代码。首次选择 Harness 或运行配置命令时会刷新，并把缓存结果用于临时 ACP 覆盖层；不会复制或修改用户的 profile 文件或 `.credentials.yaml`。安装和凭据由 Harness 管理。
 
 Dext 使用 ACP，并固定 ACP SDK `1.4.0`——受支持的各 Harness 发布版也使用同一版本。入口为[官方 CLI](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/cli/README.md) 的 `dsh --profile acp`；Dext 实际调用的启动器已核对握手、创建/恢复/关闭会话、模型配置、执行及取消接口。新安装默认显示三个后端，可通过 `dext.agentCli` 限定列表。
 
