@@ -90,9 +90,20 @@ async function presetCommand(profile: AgentProfile, action: string, args: string
   return JSON.parse(result.stdout) as unknown;
 }
 
+/**
+ * One successful listing serves every turn. On the desktop install the helper
+ * runs inside Electron, so re-listing per session would add seconds to the
+ * turn; `Refresh presets` (and copy/edit) clears this instead.
+ */
+const presetListings = new Map<string, Promise<HarnessPresetOption[]>>();
+
+export function clearHarnessPresetCache(): void { presetListings.clear(); }
+
 export async function listHarnessPresets(profile: AgentProfile, cwd = process.cwd()): Promise<HarnessPresetOption[]> {
-  const rows = await presetCommand(profile, "list", [], cwd) as NativePreset[];
-  return rows.map((row) => {
+  const key = `${profile.command}\u0000${cwd}`;
+  const cached = presetListings.get(key);
+  if (cached) return cached;
+  const pending = presetCommand(profile, "list", [], cwd).then((result) => (result as NativePreset[]).map((row) => {
     // Minimal's native terminal/fs and Create's runtime plugin loader are not confined
     // by the host sandbox. User-authored plugin code has the same process access.
     // Those presets therefore need Full access, and because the sandbox policy cannot
@@ -105,7 +116,10 @@ export async function listHarnessPresets(profile: AgentProfile, cwd = process.cw
       requiresFullAccess: unconfined,
       writableTurnsOnly: unconfined
     };
-  });
+  }));
+  presetListings.set(key, pending);
+  pending.catch(() => { if (presetListings.get(key) === pending) presetListings.delete(key); });
+  return pending;
 }
 
 export async function copyHarnessPreset(profile: AgentProfile, source: string, id: string, cwd = process.cwd()): Promise<string> {

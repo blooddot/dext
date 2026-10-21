@@ -12,7 +12,7 @@ import { BUILTIN_METHODS } from "./core/builtins.js";
 import { ContextResolver } from "./core/contextResolver.js";
 import { DEXT_API_DIRECTORY, DEXT_DECLARATION_DIRECTORY, DEXT_DECLARATION_FILE, DEXT_TYPES_PATH, dextFiles, dextModuleDeclaration, dextSharedDeclaration, dextTsconfig } from "./core/dextApiTypes.js";
 import { inputReferenceDisplayParts } from "./core/fileReference.js";
-import { listHarnessPresets } from "./core/harnessPresets.js";
+import { clearHarnessPresetCache, listHarnessPresets } from "./core/harnessPresets.js";
 import { isIgnored, parseIgnoreRules, type IgnoreRule } from "./core/ignoreRules.js";
 import { MethodRegistry } from "./core/registry.js";
 import { agentResultCandidates, parseAgentResult } from "./core/resultBoundary.js";
@@ -1008,6 +1008,7 @@ export class DextApplication {
   async discoverHarnessPresets(): Promise<void> {
     const profile = this.agents.list().find((item) => item.provider === "deepseek-harness");
     if (!profile) return;
+    clearHarnessPresetCache();
     const presets = await listHarnessPresets(profile);
     this.updateAgentProfile({ ...profile, presets });
   }
