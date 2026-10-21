@@ -78,6 +78,13 @@ await runLabChecks(async ({ evaluate, settle, send, click, key, artifacts }) => 
   // A live turn that owns a real scrollbar, with the reader following it.
   await evaluate(`host({type:'executing',value:true,sessionId:'active',turnId:'t1',source:'Scroll check',startedAt:Date.now()})`);
   await settle();
+  const processSelector = 'details.output-turn-section[data-turn-section="process"]';
+  assert.equal(await evaluate(`document.querySelector(${JSON.stringify(processSelector)}).open`), false,
+    'a new live turn starts with Process collapsed');
+  // Following is a property of an opened timeline: the reader opts in to watch
+  // the stream by expanding Process.
+  await evaluate(`document.querySelector(${JSON.stringify(processSelector)}).open=true`);
+  await settle();
   let current = await growBeyondViewport(1);
   for (let n = 20; n <= 24; n++) {
     await evaluate(`stream(${n})`);
@@ -89,7 +96,6 @@ await runLabChecks(async ({ evaluate, settle, send, click, key, artifacts }) => 
   assert.equal(current.overflowAnchor, 'none', 'the scroll port disables browser scroll anchoring');
   console.log('PASS a streamed batch keeps a following reader at the newest output');
 
-  const processSelector = 'details.output-turn-section[data-turn-section="process"]';
   await evaluate(`document.querySelector(${JSON.stringify(processSelector)}).open=false`);
   await settle();
   const collapsedPosition = (await state()).top;

@@ -210,7 +210,11 @@ export class TranscriptView {
       }
       body.append(input.disclosure);
     }
-    const process = this.section(turnPresentation.process, !lazy);
+    // Process is a timeline the reader opens on demand, never the default view
+    // of a new turn. While the turn runs, its summary still carries the live
+    // "Worked for" duration and event count, and expanding it mid-run keeps
+    // appending events at the live end.
+    const process = this.section(turnPresentation.process, false);
     const todos = this.host.createTodos();
     const questions = this.host.createQuestions(turnId, this.host.activeSessionId());
     const output = this.section(turnPresentation.output, !lazy);

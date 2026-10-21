@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import { runLabChecks } from './monaco-ref-lab/check.mjs';
 
 // A question parks the turn, so it has to reach the reader. The card renders
-// above the Process timeline, and a live turn grows that timeline far past the
-// viewport while the reader follows the newest output - which left a published
-// question thousands of pixels off screen and the turn waiting for an answer
-// nobody could see. This check drives the real Webview bundle: the question
-// must be revealed, the follow must be released so the next batch cannot push
-// it back out, and a question the agent answers in parallel must not move the
+// above the Process timeline, and a live turn can grow that timeline far past
+// the viewport once the reader opens it and follows the newest output - which
+// left a published question thousands of pixels off screen and the turn waiting
+// for an answer nobody could see. This check drives the real Webview bundle: the
+// question must be revealed, the follow must be released so the next batch cannot
+// push it back out, and a question the agent answers in parallel must not move the
 // reader at all.
 await runLabChecks(async ({ evaluate, settle }) => {
   const template = await readFile('src/sidebarProvider.ts', 'utf8');
@@ -51,6 +51,13 @@ await runLabChecks(async ({ evaluate, settle }) => {
         panel:r?Math.round(r.top-view.top):null,view:Math.round(view.height)};};`);
   await settle();
   await evaluate(`host({type:'executing',value:true,sessionId:'active',turnId:'t1',source:'Long turn',startedAt:Date.now()})`);
+  await settle();
+  const processSelector = 'details.output-turn-section[data-turn-section="process"]';
+  assert.equal(await evaluate(`document.querySelector(${JSON.stringify(processSelector)}).open`), false,
+    'a new live turn starts with Process collapsed');
+  // The long-turn scenario needs the reader to have opened the timeline; that
+  // opt-in is what lets streamed rows grow the scroll range.
+  await evaluate(`document.querySelector(${JSON.stringify(processSelector)}).open=true`);
   await settle();
   await evaluate('stream(60)');
   await settle();
