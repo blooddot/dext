@@ -81,6 +81,8 @@ Overview 还会读取上级目录的 esbuild/Vite/Webpack/Rollup 构建配置作
 
 当前依赖解析覆盖常见相对导入、当前 TS 配置中的路径映射、Python package/src 布局和 Rust module/use 路径。宏展开、条件编译、动态加载、继承的 TS 配置和跨语言运行通信尚未完整解析，保留未解析状态。缓存只保存结构事实，不保存完整源码。
 
+**派生结构图。** 每次索引都会用同一批文件事实派生一张内存图：已解析的 import 边标记 `extracted`、`inferred` 或 `ambiguous`，PageRank 找出枢纽文件，强连通分量找出环，确定性的 Louvain 过程把耦合紧密的文件划为社区。这张图不持久化，不替代 AI 的职责归属，也不会把 import 升级成运行时调用。有界图表证据按图度数把源码名额优先给枢纽和共享基础设施，然后附带最多 200 条、且两端都在所选路径内的紧凑边集。生成的 `depends_on` 关系会写入 `metadata.provenance` 和 `metadata.structureMatch`；方向与 import 相反时写入 `metadata.structureConflicts` 和图表级 warning，而不是删除模型给出的关系。社区分歧只作为 `qualityIssues` 中的 `community-split`、`module-fragmentation` 和 `surprising-dependency` 复核信号出现。项目模型构建完成后，Dext 会自动向 Codex、Claude 和 DeepSeek Harness 对话注入宿主自有的 `dext_structure` 工具服务，提供只读的 `structure_query` 查询（节点、引用者、依赖、社区、枢纽、搜索和最短路径），不需要用户 MCP manifest、单独安装命令或系统 `node`。Project settings 的 **Agent tools** 区域可按项目关闭（默认开启）；没有已保存模型的项目不会注入。服务由 Dext 自身的 Electron/Node 可执行文件启动，每次调用读取缓存图，并在对话结束时退出。类型导入不参与社区、跨模块引用者计数和面向运行的遍历。
+
 初始化状态机分为三个阶段：
 
 1. **准备证据** —— 本地解析配置范围内的源码并缓存完整文件结构事实，形成候选分组；另读取有界文档和配置摘录，作为架构证据。保留排除规则、路径校验、取消与脱敏处理。
@@ -233,7 +235,7 @@ Additional verification file: `scripts/checkProjectDiagramsUi.mjs` — use the n
 
 `node scripts/checkModuleBoundaries.mjs` 已加入 `npm run check`。检查区分类型导入和运行时导入，追踪浏览器与纯模块的传递依赖、运行时循环、根目录白名单、`shared` 纯度、`platform`/feature 环境方向、`contracts/` 目录规则、功能到应用装配层的反向依赖，以及全部已移除路径。浏览器构建清单另外检查宿主实现和 Node/VS Code 依赖。跨功能接口调用允许保留，不提供目录级豁免。
 
-`migrationExceptions` 已为空。纯层引用实现模块类型的 6 条现有边登记在 `declaredTypeEdges`；跨 feature 的 4 条 host 耦合登记在 `crossFeatureHostCouplings`。新增或过期条目都会失败，且都不能跳过环境隔离和无循环检查。
+`migrationExceptions` 已为空。纯层引用实现模块类型的 7 条现有边登记在 `declaredTypeEdges`；跨 feature 的 4 条 host 耦合登记在 `crossFeatureHostCouplings`。新增或过期条目都会失败，且都不能跳过环境隔离和无循环检查。
 
 ### 索引质量流程
 
@@ -263,7 +265,7 @@ Additional verification file: `scripts/checkProjectDiagramsUi.mjs` — use the n
 1. 将 `sidebarProvider.ts` 中的资源/MCP/附件以及 `webview/main.ts` 中的历史补载、滚动编排作为行为工作拆分。
 2. 按所有者拆分 `shared/contracts/types.ts`，缩小共享契约面。
 3. 通过 `app` 注入端口消除 4 条跨 feature host 耦合，使 `crossFeatureHostCouplings` 归零。
-4. 把 6 条 `declaredTypeEdges` 收敛为纯类型契约。
+4. 把 7 条 `declaredTypeEdges` 收敛为纯类型契约。
 5. 工作流内核、Agent 执行器、MCP 与补全的独立行为轮次仍按原计划推进。
 
 本轮不预建空模块，不将剩余内容搬入新的大文件。
