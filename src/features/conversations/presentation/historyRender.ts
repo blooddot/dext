@@ -342,7 +342,7 @@ function commandRow(event: AgentStreamEvent, className = "process-command"): str
   return `<details class="history-disclosure ${className}"><summary>${chevron()}<span>${escapeHtml(commandLabel(event))}</span></summary><pre class="terminal-text">${highlightTerminal(event.text)}</pre></details>`;
 }
 
-function process(events: readonly AgentStreamEvent[]): string {
+function process(events: readonly AgentStreamEvent[]): { html: string; copyText: string } {
   const html: string[] = [];
   // Use the same stable-id replay that Conversation history restoration uses.
   const replayEvents = prepareHistoryTrace(events);
@@ -378,7 +378,7 @@ function process(events: readonly AgentStreamEvent[]): string {
   }
   flushTools();
   const content = html.join("");
-  if (!content) return "";
+  if (!content) return { html: "", copyText: "" };
   const copyText = replayEvents
     .filter((event) => event.phase !== "status" && event.phase !== "todo" && event.phase !== "input")
     .map((event) => event.phase === "tool"
@@ -386,9 +386,7 @@ function process(events: readonly AgentStreamEvent[]): string {
       : agentMessageCopyText(presentAgentMessage(event.text)))
     .filter(Boolean)
     .join("\n\n");
-  // Keep the toolbar visually pinned to the top with CSS while placing it
-  // after the content in the serialized markup.
-  return `<div class="output-text-copyable"><div class="process-content">${content}</div><div class="markdown-copy-toolbar">${copyButton(copyText)}</div></div>`;
+  return { html: `<div class="process-content">${content}</div>`, copyText };
 }
 
 /** A restored card keeps every choice the question offered, with the picked ones
@@ -459,7 +457,7 @@ export function renderHistoryRecord(record: DextHistoryRecord, sessionId?: strin
   const firstLine = historyTurnTitle(record);
   const duration = response?.executions.reduce((total, item) => total + item.durationMs, 0) ?? 0;
   const turn = presentTurn({ source: input, mode: record.mode, hideInput: executePlan, durationMs: duration, process: record.process });
-  const processHtml = process(record.process);
+  const processView = process(record.process);
   const todoHtml = renderAgentTodos(latestAgentTodos(record.process)) + inputHistory(record.process);
   const outputHtml = record.error
     ? `<pre class="error">${escapeHtml(record.error)}</pre>`
@@ -483,7 +481,9 @@ export function renderHistoryRecord(record: DextHistoryRecord, sessionId?: strin
     : "";
   const planOutcome = record.planOutcome ?? (planExecution?.result.kind === "plan" ? planExecution.result.planOutcome : undefined);
   const planStatusHtml = executePlan ? `<span class="plan-status">${planExecutionLabel(record.process, record.error, planOutcome)}</span>` : "";
-  const processSummary = historyTurnSection(turn.process, processHtml);
+  const processSummary = historyTurnSection(turn.process, processView.html, {
+    ...(processView.copyText ? { action: copyButton(processView.copyText) } : {})
+  });
   const outputSection = historyTurnSection(turn.output, outputHtml, {
     open: true,
     ...(outputCopy ? { action: copyButton(outputCopy) } : {})

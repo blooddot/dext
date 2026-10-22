@@ -37,8 +37,9 @@ export interface OutputTurnElements {
   questions: AgentInputView;
   output: HTMLElement;
   outputDisclosure: HTMLDetailsElement;
-  /** The whole-section copy control lives in the title bar. Its payload is
+  /** The whole-section copy controls live in the title bar. Their payloads are
    * filled in as the turn streams or when a stored turn is hydrated. */
+  setProcessCopy?: (text: string) => void;
   setOutputCopy?: (text: string) => void;
   hydrated?: boolean;
   hydrate?: () => void;
@@ -219,8 +220,11 @@ export class TranscriptView {
       }
       body.append(input.disclosure);
     }
-    // Output fills in as results stream, so its copy payload is read when
-    // clicked instead of being fixed at row creation.
+    // Process and Output fill in as events stream, so their copy payloads are
+    // read when clicked instead of being fixed at row creation.
+    const processCopyText = { value: "" };
+    const processCopy = this.host.copyLive(() => processCopyText.value);
+    processCopy.hidden = true;
     const outputCopyText = { value: "" };
     const outputCopy = this.host.copyLive(() => outputCopyText.value);
     outputCopy.hidden = true;
@@ -228,7 +232,7 @@ export class TranscriptView {
     // of a new turn. While the turn runs, its summary still carries the live
     // "Worked for" duration and event count, and expanding it mid-run keeps
     // appending events at the live end.
-    const process = this.section(turnPresentation.process, false);
+    const process = this.section(turnPresentation.process, false, processCopy);
     const todos = this.host.createTodos();
     const questions = this.host.createQuestions(turnId, this.host.activeSessionId());
     const output = this.section(turnPresentation.output, !lazy, outputCopy);
@@ -247,6 +251,10 @@ export class TranscriptView {
       questions,
       output: output.body,
       outputDisclosure: output.disclosure,
+      setProcessCopy: (text: string) => {
+        processCopyText.value = text;
+        processCopy.hidden = text.length === 0;
+      },
       setOutputCopy: (text: string) => {
         outputCopyText.value = text;
         outputCopy.hidden = text.length === 0;

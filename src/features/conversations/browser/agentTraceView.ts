@@ -5,7 +5,6 @@ import { turnDomAdapter } from "./turnDomAdapter.js";
 
 export interface AgentToolCommand {
   body: HTMLElement;
-  copy: HTMLButtonElement;
   label: string;
   summaryLabel: HTMLElement;
   group?: AgentToolGroup;
@@ -31,7 +30,6 @@ export interface AgentTraceHost {
   markdown(text: string): string;
   codeBlock(text: string): HTMLElement;
   patch(change: PatchChange): HTMLElement;
-  copy(text: string): HTMLButtonElement;
   terminal(text: string): DocumentFragment;
   /** The Process timeline the trace is currently painted into. */
   panel(): HTMLElement;
@@ -53,6 +51,8 @@ export interface AgentTraceSnapshot {
   commandIds: Set<string>;
   pendingRenders: Set<HTMLElement>;
   renderFrame: number | undefined;
+  copyTexts: Map<string, string>;
+  copySequence: number;
 }
 
 /**
@@ -72,6 +72,10 @@ export class AgentTraceView {
   private commandIds = new Set<string>();
   private pendingRenders = new Set<HTMLElement>();
   private renderFrame: number | undefined;
+  /** Copy payloads in rendered order, so the Process title bar can copy the
+   * timeline even while it is still streaming. */
+  private copyTexts = new Map<string, string>();
+  private copySequence = 0;
 
   constructor(private readonly host: AgentTraceHost) {}
 
@@ -81,6 +85,11 @@ export class AgentTraceView {
 
   editedFileCount(): number {
     return this.editedUris.size;
+  }
+
+  /** The whole Process timeline as plain text, in the order it was rendered. */
+  copyText(): string {
+    return [...this.copyTexts.values()].filter(Boolean).join("\n\n");
   }
 
   /** Detaches queued message renders so they cannot paint into a cached page. */
@@ -104,6 +113,8 @@ export class AgentTraceView {
     this.commandIds = new Set();
     this.pendingRenders = new Set();
     this.renderFrame = undefined;
+    this.copyTexts = new Map();
+    this.copySequence = 0;
     return previous;
   }
 
@@ -117,6 +128,8 @@ export class AgentTraceView {
     this.commandIds = snapshot.commandIds;
     this.pendingRenders = snapshot.pendingRenders;
     this.renderFrame = snapshot.renderFrame;
+    this.copyTexts = snapshot.copyTexts;
+    this.copySequence = snapshot.copySequence;
   }
 
   private capture(): AgentTraceSnapshot {
@@ -129,7 +142,9 @@ export class AgentTraceView {
       editedUris: this.editedUris,
       commandIds: this.commandIds,
       pendingRenders: this.pendingRenders,
-      renderFrame: this.renderFrame
+      renderFrame: this.renderFrame,
+      copyTexts: this.copyTexts,
+      copySequence: this.copySequence
     };
   }
 
@@ -144,6 +159,8 @@ export class AgentTraceView {
     this.fileChanges = undefined;
     this.editedUris = new Set();
     this.commandIds = new Set();
+    this.copyTexts.clear();
+    this.copySequence = 0;
   }
 
   /** Renders a reasoning, message or tool event into the current panel. */
@@ -173,11 +190,10 @@ export class AgentTraceView {
       const code = command.body.querySelector("code");
       if (code) code.replaceChildren(this.host.terminal(raw));
       else command.body.textContent = raw;
+      const copyKey = event.id ? `id:${event.id}` : `event:${this.copySequence++}`;
+      this.copyTexts.set(copyKey, raw);
       command.label = event.title ?? command.label;
       command.summaryLabel.textContent = command.label;
-      const copy = this.host.copy(raw);
-      command.copy.replaceWith(copy);
-      command.copy = copy;
       if (command.group) this.updateGroupLabel(command.group);
       this.host.revealResult();
       return;
@@ -188,14 +204,16 @@ export class AgentTraceView {
       // of an earlier message leaves the trailing group open for more commands.
       this.group = undefined;
       item = this.createEventItem(event);
+      item.dataset.copyKey = event.id ? `id:${event.id}` : `event:${this.copySequence++}`;
       if (event.id) this.eventItems.set(event.id, item);
-      item.append(this.host.copy(event.text));
       panel.append(item);
     }
+    const copyKey = item.dataset.copyKey ?? `event:${this.copySequence++}`;
     const body = item.querySelector<HTMLElement>(".agent-stream-text");
     if (body) {
       const raw = event.replace ? event.text : `${body.dataset.raw ?? ""}${event.text}`;
       body.dataset.raw = raw;
+      this.copyTexts.set(copyKey, agentMessageCopyText(presentAgentMessage(raw)));
       this.scheduleMessageRender(item);
     }
     this.host.revealResult();
@@ -315,15 +333,13 @@ export class AgentTraceView {
     body.className = "terminal-output agent-trace-command-body";
     const code = document.createElement("code");
     body.append(code);
-    const copy = this.host.copy(event.text);
     const content = document.createElement("div");
     content.className = "agent-trace-command-content";
-    content.append(body, copy);
+    content.append(body);
     command.append(content);
     container.append(command);
     const item: AgentToolCommand = {
       body,
-      copy,
       label: this.toolLabel(event),
       summaryLabel,
       ...(group ? { group } : {})
@@ -363,7 +379,7 @@ export class AgentTraceView {
     return group;
   }
 
-  private renderMessageItem(item: HTMLElement, body: HTMLElement): void {
+  private renderMessageItem(body: HTMLElement): void {
     if (!body.isConnected) return;
     const presentation = presentAgentMessage(body.dataset.raw ?? "");
     body.classList.toggle("agent-stream-result", presentation.structured);
@@ -378,8 +394,6 @@ export class AgentTraceView {
       code: (text) => this.host.codeBlock(text),
       patch: (change) => this.host.patch(change)
     }, presentation));
-    const outputCopy = item.querySelector<HTMLButtonElement>(".output-copy");
-    if (outputCopy) outputCopy.replaceWith(this.host.copy(agentMessageCopyText(presentation)));
   }
 
   scheduleMessageRender(item: HTMLElement): void {
@@ -398,7 +412,7 @@ export class AgentTraceView {
     this.pendingRenders.clear();
     for (const queued of items) {
       const queuedBody = queued.querySelector<HTMLElement>(".agent-stream-text");
-      if (queuedBody) this.renderMessageItem(queued, queuedBody);
+      if (queuedBody) this.renderMessageItem(queuedBody);
     }
   }
 }

@@ -300,7 +300,6 @@ const trace = new AgentTraceView({
   markdown: (text) => markdown.render(text),
   codeBlock: (text) => codeBlock(text),
   patch: (change) => patches.fileChangeDisclosure(change, "agent-file-change agent-result-change"),
-  copy: (text) => copyButton(text),
   terminal: (text) => terminalText(text),
   panel: () => agentStreamPanel(),
   progressState: () => agentProgressState,
@@ -1998,6 +1997,7 @@ function renderAgentEvent(event: AgentStreamEvent): void {
     return;
   }
   trace.renderEvent(event);
+  transcript.active?.setProcessCopy?.(trace.copyText());
 }
 
 function resetAgentTrace(): void {
@@ -2108,6 +2108,7 @@ function renderStoredTurn(record: DextHistoryRecord, turn: OutputTurnElements): 
   }
   const replay = typeof prepareHistoryTrace === "undefined" ? record.process : prepareHistoryTrace(record.process);
   for (const event of replay) renderAgentEvent(event);
+  turn.setProcessCopy?.(trace.copyText());
   if (agentStream) finishAgentProgress();
   const duration = response?.executions.reduce((total, item) => total + item.durationMs, 0) ?? 0;
   if (turn.processMeta) turn.processMeta.textContent = presentTurn({
