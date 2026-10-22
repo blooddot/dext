@@ -838,7 +838,7 @@ export class DextRuntime implements WorkflowRuntime {
       throw new Error(`Agent '${profile.label}' does not support normal conversation mode.`);
     }
     const readOnly = mode === "ask" || (profile.provider === "deepseek-harness" && mode === "plan" && !metadata.executePlan);
-    const permission: AgentPermission = readOnly ? "read-only" : this.agentPermission();
+    const permission: AgentPermission = readOnly ? "read-only" : metadata.agentPermission ?? this.agentPermission();
     const allowWorkspaceWrite = !readOnly;
     if (allowWorkspaceWrite && !this.workspaceTrusted) {
       throw new Error(`${mode === "plan" ? "Plan" : "Agent"} mode requires a trusted local workspace.`);

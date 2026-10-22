@@ -2,18 +2,19 @@ import { describe, expect, it } from "vitest";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AxAdapter } from "../src/core/axAdapter.js";
-import { BUILTIN_METHODS } from "../src/core/builtins.js";
-import { ContextResolver, type ContextHost } from "../src/core/contextResolver.js";
-import { ExecutionCancelledError } from "../src/core/executionErrors.js";
-import { parseMcpManifest } from "../src/core/mcpManifest.js";
-import { MethodRegistry } from "../src/core/registry.js";
-import { parseAgentResult } from "../src/core/resultBoundary.js";
-import { DextRuntime, type RuntimeResultRepairRequest } from "../src/core/runtime.js";
-import { mcpRawResultSchema } from "../src/core/schemas.js";
+import { AxAdapter } from "../src/features/agents/domain/axAdapter.js";
+import { BUILTIN_METHODS } from "../src/features/workflow/domain/builtins.js";
+import { ContextResolver } from "../src/features/workflow/host/contextResolver.js";
+import type { ContextHost } from "../src/shared/contracts/context.js";
+import { ExecutionCancelledError } from "../src/shared/protocol/executionErrors.js";
+import { parseMcpManifest } from "../src/features/mcp/domain/mcpManifest.js";
+import { MethodRegistry } from "../src/features/workflow/domain/registry.js";
+import { parseAgentResult } from "../src/shared/protocol/resultBoundary.js";
+import { DextRuntime, type RuntimeResultRepairRequest } from "../src/features/workflow/host/runtime.js";
+import { mcpRawResultSchema } from "../src/shared/contracts/schemas.js";
 import { prepareHistoryTrace } from "../src/features/conversations/domain/agentTraceReplay.js";
-import type { AgentConversationRequest, AgentStructuredRequest } from "../src/core/agentRunner.js";
-import type { UiFormDefinition } from "../src/core/uiForm.js";
+import type { AgentConversationRequest, AgentStructuredRequest } from "../src/features/agents/host/agentRunner.js";
+import type { UiFormDefinition } from "../src/shared/contracts/uiForm.js";
 import type {
   AgentResult,
   AgentStreamEvent,
@@ -23,7 +24,7 @@ import type {
   McpProcessEvent,
   PatchResult,
   TerminalResult
-} from "../src/core/types.js";
+} from "../src/shared/contracts/types.js";
 
 const host: ContextHost = {
   selection: async () => ({ uri: "file:///x.ts", content: "const x = 1;", version: 1 }),
@@ -482,6 +483,32 @@ describe("Dext runtime", () => {
     expect(requests.map((item) => item.permission)).toEqual(["read-only", "read-only", "full-access", "full-access"]);
     expect(requests[1]?.input).toContain("dext-plan:start");
     expect(requests[2]?.input).toBe("build it");
+  });
+
+  it("runs a conversation with the caller's Agent snapshot, not the active selection", async () => {
+    const { runtime } = setup();
+    const requests: AgentConversationRequest[] = [];
+    runtime.setAgentProfiles([
+      { id: "codex", provider: "codex", command: "codex", label: "Codex", models: [] },
+      { id: "deepseek-harness", provider: "deepseek-harness", command: "dsh", label: "Harness", models: [] }
+    ]);
+    runtime.setAgentSelection({ profileId: "codex", permission: "workspace-write", model: "active-model" });
+    runtime.setWorkspaceTrusted(true);
+    runtime.setAgentRunner({ run: async () => ({ kind: "ask", text: "typed" }), runConversation: async (request) => { requests.push(request); return "answer"; } });
+    await runtime.executeConversation("agent", "hello", {
+      agent: "deepseek-harness",
+      agentPermission: "full-access",
+      model: "snapshot-model",
+      reasoningEffort: "high",
+      conversationProviderSessionId: "dsh1:stored"
+    });
+    expect(requests[0]).toMatchObject({
+      profile: { id: "deepseek-harness" },
+      permission: "full-access",
+      model: "snapshot-model",
+      reasoningEffort: "high",
+      metadata: { conversationProviderSessionId: "dsh1:stored" }
+    });
   });
 
   it("carries a caller-owned schema through the provider's native structured channel", async () => {

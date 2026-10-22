@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AgentStreamEvent, InputExecutionResponse } from "../src/core/types.js";
+import type { AgentStreamEvent, ExecutionMetadata, InputExecutionResponse } from "../src/shared/contracts/types.js";
 import { conversation, createConversationHarness, defaultSelection } from "./conversationHarness.js";
 
 function deferred() {
@@ -49,6 +49,38 @@ describe("TurnExecutionCoordinator", () => {
     expect(h.controller.selection("a")?.model).toBe("changed-mid-turn");
     // The visible turn used the captured controls, not the late change.
     expect(h.history.list()[0]?.turns[0]?.mode).toBe("agent");
+  });
+
+  it("snapshots the conversation's own Agent controls and provider session", async () => {
+    const seen: Readonly<ExecutionMetadata>[] = [];
+    const h = createConversationHarness({
+      profiles: [{ id: "deepseek-harness", label: "Harness", provider: "deepseek-harness", command: "dsh", models: [] }],
+      executeConversation: async (_mode, _source, metadata) => {
+        seen.push(metadata);
+        return { kind: "workflow", executions: [] };
+      }
+    });
+    h.seed([{ ...conversation("session"), providerSessions: { "deepseek-harness": "dsh1:stored" } }]);
+    h.controller.activate(h.controller.session("session")!);
+    h.controller.setSelection("session", {
+      mode: "agent",
+      permission: "full-access",
+      profileId: "deepseek-harness",
+      model: "harness-model",
+      reasoningEffort: "high",
+      speed: "fast",
+      serviceTier: "priority"
+    });
+    await h.coordinator.execute(h.controller.session("session")!, "agent", "prompt");
+    expect(seen[0]).toMatchObject({
+      agent: "deepseek-harness",
+      model: "harness-model",
+      reasoningEffort: "high",
+      speed: "fast",
+      serviceTier: "priority",
+      agentPermission: "full-access",
+      conversationProviderSessionId: "dsh1:stored"
+    });
   });
 
   it("publishes a non-running tab summary when a turn finishes", async () => {

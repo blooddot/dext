@@ -186,7 +186,16 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
         ?? this.options.host.profiles()[0];
       const metadata = {
         agentSessionId: sessionId,
-
+        // Snapshot the conversation's own Agent controls. The application-level
+        // selection follows the active tab, so a background plan round or a tab
+        // switch must not make this turn run with another conversation's
+        // provider/session/model.
+        ...(profile ? { agent: profile.id } : {}),
+        ...(selection.model ? { model: selection.model } : {}),
+        ...(selection.reasoningEffort ? { reasoningEffort: selection.reasoningEffort } : {}),
+        ...(selection.speed ? { speed: selection.speed } : {}),
+        ...(selection.serviceTier ? { serviceTier: selection.serviceTier } : {}),
+        ...(selection.permission ? { agentPermission: selection.permission } : {}),
         agentPreset: harnessPresetOrDefault(selection.agentPreset),
         ...(mode === "code" ? { agentPermission: "full-access" as const } : {}),
         ...(priorConversation ? { conversationContext: priorConversation } : {}),
