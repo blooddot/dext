@@ -1,5 +1,5 @@
 import { PROJECT_EVIDENCE_DEPTHS, type ProjectEvidenceSettings } from "../contracts/projectEvidenceSettings.js";
-import type { ProjectSettings, ProjectWorkspaceSettings } from "../contracts/projectSettings.js";
+import type { ProjectSettings, ProjectToolSettings, ProjectWorkspaceSettings } from "../contracts/projectSettings.js";
 
 const escape = (value: string): string => value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!);
 
@@ -23,7 +23,7 @@ function evidenceNumber(settings: ProjectEvidenceSettings, key: "files" | "chars
   return `<label>${label}<input type="number" name="${key}" min="${min}" max="${max}" step="1" value="${settings[key] ?? ""}" placeholder="${preset[key]}"></label>`;
 }
 
-export function renderProjectSettings(settings: ProjectWorkspaceSettings, evidence: ProjectEvidenceSettings, version: number, disabled: boolean, initialization: string, evidenceConfigured = true): string {
+export function renderProjectSettings(settings: ProjectWorkspaceSettings, evidence: ProjectEvidenceSettings, tool: ProjectToolSettings, version: number, disabled: boolean, initialization: string, evidenceConfigured = true): string {
   const depth = evidence.depth === "standard" ? "Standard" : evidence.depth === "deep" ? "Deep" : "Whole";
   return `<form class="project-settings project-workspace-settings" data-project-settings data-version="${version}" data-evidence-configured="${evidenceConfigured}">
     <details>
@@ -42,6 +42,11 @@ export function renderProjectSettings(settings: ProjectWorkspaceSettings, eviden
             ${directoryList("apiDirs", "API directories", settings.apiDirs)}
             ${directoryList("skillDirs", "Skill directories", settings.skillDirs)}
             ${directoryList("mcpDirs", "MCP directories", settings.mcpDirs)}
+          </section>
+          <section class="project-settings-section">
+            <h3>Agent tools</h3>
+            <label class="project-checkbox-field"><input type="checkbox" name="structureQuery"${tool.structureQuery ? " checked" : ""}> Structure query tool</label>
+            <p class="project-help">Offers a read-only structure lookup (consumers, dependencies, hubs, communities and import paths) to Codex, Claude and DeepSeek conversations. It starts only after this project has a saved model and never reads source text or changes files. Turn it off to skip launching the tool for every Agent turn.</p>
           </section>
           <section class="project-settings-section project-evidence-settings" data-project-evidence-settings>
             <h3>Evidence reading</h3>
@@ -75,6 +80,7 @@ function bindProjectSettings(api: { postMessage(message: unknown): void }, prese
   const status = form.querySelector<HTMLElement>("[data-project-settings-status]")!;
   const value = (name: string): HTMLInputElement | HTMLSelectElement => form.elements.namedItem(name)! as HTMLInputElement;
   const input = (name: string): HTMLInputElement => form.elements.namedItem(name)! as HTMLInputElement;
+  const checked = (name: string): boolean => form.querySelector<HTMLInputElement>(`input[name="${name}"]`)?.checked ?? false;
   const directoryValues = (name: string): string[] => [...form.querySelectorAll<HTMLInputElement>(`input[name="${name}"]`)].flatMap((item) => item.value.split(",").map((entry) => entry.trim()).filter(Boolean));
   const evidenceFields = ["files", "chars", "fileChars"] as const;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -91,7 +97,8 @@ function bindProjectSettings(api: { postMessage(message: unknown): void }, prese
         skillDirs: directoryValues("skillDirs"),
         mcpDirs: directoryValues("mcpDirs")
       },
-      evidence: evidence as ProjectSettings["evidence"]
+      evidence: evidence as ProjectSettings["evidence"],
+      tool: { structureQuery: checked("structureQuery") }
     };
   };
   const save = (): void => {

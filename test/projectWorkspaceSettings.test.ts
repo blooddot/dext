@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { projectWorkspaceSettingsSchema, projectWorkspaceSettingsFromDefinition } from "../src/features/project/contracts/projectSettings.js";
+import { projectSettingsSchema, projectToolSettingsFromDefinition, projectWorkspaceSettingsFromDefinition, projectWorkspaceSettingsSchema } from "../src/features/project/contracts/projectSettings.js";
 
 vi.mock("vscode", () => ({ workspace: {} }));
 
@@ -24,5 +24,12 @@ describe("Project workspace settings", () => {
     expect(projectWorkspaceSettingsSchema.safeParse({ planDirectory: "../plans", apiDirs: [], skillDirs: [] }).success).toBe(false);
     expect(projectWorkspaceSettingsSchema.safeParse({ planDirectory: ".dext/plans", apiDirs: ["C:/api"], skillDirs: [] }).success).toBe(false);
     expect(projectWorkspaceSettingsSchema.safeParse({ planDirectory: ".dext/plans", apiDirs: [], skillDirs: ["tools/skills"], mcpDirs: [] }).success).toBe(true);
+  });
+
+  it("enables the structure query tool by default and keeps an explicit off choice", () => {
+    expect(projectToolSettingsFromDefinition(undefined)).toEqual({ structureQuery: true });
+    expect(projectToolSettingsFromDefinition({ tool: { structureQuery: false } })).toEqual({ structureQuery: false });
+    const parsed = projectSettingsSchema.parse({ workspace: projectWorkspaceSettingsFromDefinition(undefined), evidence: { depth: "standard", include: [] } });
+    expect(parsed.tool).toEqual({ structureQuery: true });
   });
 });

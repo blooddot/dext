@@ -78,6 +78,30 @@ describe("Project-owned reading settings", () => {
     expect((await store.readDefinition()).evidence?.depth).toBe("whole");
   });
 
+  it("defaults the structure query tool on and persists an explicit off choice", async () => {
+    const { createProjectPanelDataSource, effectiveProjectToolSettings } = await import("../src/features/project/host/projectPanelDataSource.js");
+    const files = new Map<string, string>();
+    const store = new ProjectStore({
+      readFile: async (path) => files.get(path),
+      writeFile: async (path, value) => { files.set(path, value); },
+      listDirectory: async () => []
+    });
+    const source = () => createProjectPanelDataSource({
+      name: "Example", root: ".", rootUri: {} as never,
+      store: {
+        readDefinition: () => store.readDefinition(),
+        writeDefinition: (value, version) => store.writeDefinition(value, version),
+        readObjects: async () => [], readArchitecture: async () => ({ decisions: [] })
+      },
+      readEvidence: vi.fn(), readStructureIndex: vi.fn()
+    });
+    expect((await source().load()).overview.toolSettings).toEqual({ structureQuery: true });
+    const loaded = await source().load();
+    await source().setProjectSettings!({ workspace: loaded.overview.workspaceSettings!, evidence: loaded.overview.evidenceSettings!, tool: { structureQuery: false } }, loaded.overview.workspaceSettingsVersion ?? 0);
+    expect(effectiveProjectToolSettings(await store.readDefinition())).toEqual({ structureQuery: false });
+    expect((await source().load()).overview.toolSettings).toEqual({ structureQuery: false });
+  });
+
   it.each([
     ["standard", 600, 16_000, 600_000],
     ["deep", 800, 20_000, 900_000],

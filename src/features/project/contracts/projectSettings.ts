@@ -17,15 +17,31 @@ export const projectWorkspaceSettingsSchema = z.object({
 }).strict();
 export type ProjectWorkspaceSettings = z.infer<typeof projectWorkspaceSettingsSchema>;
 
+/** Host-owned tools offered to Agent conversations; the user can turn them off per project. */
+export const projectToolSettingsSchema = z.object({
+  structureQuery: z.boolean().default(true)
+}).strict();
+export type ProjectToolSettings = z.infer<typeof projectToolSettingsSchema>;
+
 /** The single Project settings document edited by the Overview panel. */
 export const projectSettingsSchema = z.object({
   workspace: projectWorkspaceSettingsSchema,
-  evidence: projectEvidenceSettingsSchema
+  evidence: projectEvidenceSettingsSchema,
+  tool: projectToolSettingsSchema.default({ structureQuery: true })
 }).strict();
 export type ProjectSettings = {
   workspace: ProjectWorkspaceSettings;
   evidence: ProjectEvidenceSettings;
+  tool: ProjectToolSettings;
 };
+
+export const DEFAULT_PROJECT_TOOL_SETTINGS: ProjectToolSettings = { structureQuery: true };
+
+export function projectToolSettingsFromDefinition(
+  definition: { tool?: Partial<ProjectToolSettings> | undefined } | undefined
+): ProjectToolSettings {
+  return projectToolSettingsSchema.parse(definition?.tool ?? {});
+}
 
 export const DEFAULT_PROJECT_WORKSPACE_SETTINGS: ProjectWorkspaceSettings = {
   planDirectory: DEFAULT_PLAN_DIRECTORY,

@@ -6,7 +6,7 @@ import { validateProjectDiagram, type ProjectDiagram, type ProjectDiagramKind } 
 import { projectEvidenceSettingsSchema, projectPromptLimits, type ProjectEvidenceSettings } from "../contracts/projectEvidenceSettings.js";
 import { validateProjectIntent, type ProjectIntent } from "../contracts/projectIntent.js";
 import type { ProjectObject } from "../contracts/projectKnowledge.js";
-import { projectSettingsSchema, projectWorkspaceSettingsFromDefinition, projectWorkspaceSettingsSchema, type ProjectSettings, type ProjectWorkspaceSettings } from "../contracts/projectSettings.js";
+import { projectSettingsSchema, projectToolSettingsFromDefinition, projectWorkspaceSettingsFromDefinition, projectWorkspaceSettingsSchema, type ProjectSettings, type ProjectToolSettings, type ProjectWorkspaceSettings } from "../contracts/projectSettings.js";
 import type { ProjectEditorDataSource, ProjectPanelMessage, ProjectReaderEvidenceRequest, ProjectReaderExportRequest, ProjectReaderRenderRequest } from "../contracts/reader.js";
 import { architectureRuleReport, type ArchitectureRule } from "../knowledge/projectArchitecture.js";
 import { reconcileProjectModel } from "../knowledge/projectModelEvolution.js";
@@ -105,6 +105,11 @@ export function effectiveProjectEvidenceSettings(definition: ProjectDefinition |
 
 export function effectiveProjectWorkspaceSettings(definition: ProjectDefinition | undefined): ProjectWorkspaceSettings {
   return projectWorkspaceSettingsFromDefinition(definition);
+}
+
+
+export function effectiveProjectToolSettings(definition: ProjectDefinition | undefined): ProjectToolSettings {
+  return projectToolSettingsFromDefinition(definition);
 }
 
 
@@ -458,6 +463,7 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
         needsVerification: objects.filter((object) => object.validity !== "current").length,
         initialization,
         ...(options.store.writeDefinition ? { evidenceSettings: effectiveProjectEvidenceSettings(definition), evidenceSettingsVersion: definition?.version ?? 0 } : {}),
+        ...(options.store.writeDefinition ? { toolSettings: effectiveProjectToolSettings(definition) } : {}),
         ...(options.store.writeDefinition ? { workspaceSettings, workspaceSettingsVersion: definition?.version ?? 0 } : {}),
         evidenceConfigured: Boolean(definition?.evidence),
         ...(options.aiCli?.length ? {
@@ -552,7 +558,8 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
         const saved = await options.store.writeDefinition!({
           ...definition,
           paths: { planDirectory: next.workspace.planDirectory, apiDirs: next.workspace.apiDirs, skillDirs: next.workspace.skillDirs, mcpDirs: next.workspace.mcpDirs },
-          evidence: next.evidence
+          evidence: next.evidence,
+          tool: next.tool
         }, version);
         if (saved.status === "conflict") throw new Error("Project settings changed. Reopen Overview before saving again.");
         await options.onWorkspaceSettingsChanged?.(next.workspace);

@@ -5,7 +5,7 @@ import type { ProjectDiagram } from "../contracts/projectDiagram.js";
 import type { ProjectEvidenceSettings } from "../contracts/projectEvidenceSettings.js";
 import type { ProjectIntent } from "../contracts/projectIntent.js";
 import type { ProjectObject } from "../contracts/projectKnowledge.js";
-import type { ProjectWorkspaceSettings } from "../contracts/projectSettings.js";
+import type { ProjectToolSettings, ProjectWorkspaceSettings } from "../contracts/projectSettings.js";
 import type { ProjectTopic, ProjectTopicCheck } from "../knowledge/projectTopics.js";
 import { projectSettingsScript, renderProjectSettings } from "./projectSettingsView.js";
 import { renderProjectQuality, renderProjectTopics } from "./projectTopicsView.js";
@@ -34,6 +34,7 @@ export interface ProjectOverviewData {
   evidenceSettingsVersion?: number;
   workspaceSettings?: ProjectWorkspaceSettings;
   workspaceSettingsVersion?: number;
+  toolSettings?: ProjectToolSettings;
   /** Available Agent CLI profiles and the project-specific selection. */
   aiCli?: readonly { id: string; label: string; models?: readonly {
     id: string;
@@ -152,7 +153,7 @@ function renderOverview(overview: ProjectOverviewData): string {
     + `<p class="project-help">Project uses the opened workspace folder as its root. Opening, restoring or switching this page only reads saved project files; building the index scans the configured source scope; module analysis reads focused source excerpts.</p>`
     + evidenceNotice
     + (overview.workspaceSettings && overview.evidenceSettings
-      ? renderProjectSettings(overview.workspaceSettings, overview.evidenceSettings, Math.max(overview.workspaceSettingsVersion ?? 0, overview.evidenceSettingsVersion ?? 0), initialization.status === "running", renderProjectInitializationSettings(overview), overview.evidenceConfigured !== false)
+      ? renderProjectSettings(overview.workspaceSettings, overview.evidenceSettings, overview.toolSettings ?? { structureQuery: true }, Math.max(overview.workspaceSettingsVersion ?? 0, overview.evidenceSettingsVersion ?? 0), initialization.status === "running", renderProjectInitializationSettings(overview), overview.evidenceConfigured !== false)
       : renderProjectInitializationSettings(overview))
     + renderInitialization(initialization)
     + (overview.qualityIssues?.length ? renderProjectQuality(overview.qualityIssues) : "")

@@ -4,7 +4,7 @@ import { validateProjectDiagram, type ProjectDiagram } from "../../contracts/pro
 import { projectEvidenceSettingsSchema } from "../../contracts/projectEvidenceSettings.js";
 import { projectIntentSchema, type ProjectIntent } from "../../contracts/projectIntent.js";
 import { normalizeProjectObject, type ProjectObject } from "../../contracts/projectKnowledge.js";
-import { projectWorkspaceSettingsSchema } from "../../contracts/projectSettings.js";
+import { projectToolSettingsSchema, projectWorkspaceSettingsSchema } from "../../contracts/projectSettings.js";
 import type { ProjectDiagramHistoryState } from "../../knowledge/projectDiagramHistory.js";
 
 /**
@@ -34,6 +34,8 @@ export const projectDefinitionSchema = z.object({
   version: z.number().int().nonnegative().default(0),
   knowledge: projectKnowledgeConfigSchema.default({ enabled: false, initialized: false }),
   evidence: projectEvidenceSettingsSchema.optional(),
+  /** Host-owned Agent tools; absent keeps the default enabled behavior. */
+  tool: projectToolSettingsSchema.optional(),
   /** Project-owned resource and plan paths. */
   paths: projectWorkspaceSettingsSchema.optional(),
   /** Project-only AI CLI. Omitted means use the current Input selection. */
