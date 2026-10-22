@@ -28,7 +28,6 @@
 | `src/core/projectEvidenceSettings.ts` | `src/features/project/contracts/projectEvidenceSettings.ts` |
 | `src/core/projectIntent.ts` | `src/features/project/contracts/projectIntent.ts` |
 | `src/core/projectKnowledge.ts` | `src/features/project/contracts/projectKnowledge.ts` |
-| `src/core/projectMermaid.ts` | `src/features/project/presentation/projectMermaid.ts` |
 | `src/core/projectReference.ts` | `src/features/project/knowledge/projectReference.ts` |
 | `src/core/projectSettings.ts` | `src/features/project/contracts/projectSettings.ts` |
 | `src/core/projectTopics.ts` | `src/features/project/knowledge/projectTopics.ts` |

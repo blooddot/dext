@@ -93,7 +93,7 @@ Overview 还会读取上级目录的 esbuild/Vite/Webpack/Rollup 构建配置作
 
 ## 图表渲染
 
-Project Intent 和与渲染器无关的 `ProjectDiagram` IR 仍是数据来源。结构图、C4 视图、流程、时序、数据流和生命周期统一使用本地 Archify 2.17.0-dev.1。Mermaid 11.17.2（严格安全模式）保留为静态降级方案。两者共用稳定 Project ID、正文和源码链接，不依赖在线渲染服务。
+Project Intent 和与渲染器无关的 `ProjectDiagram` IR 仍是数据来源。结构图、C4 视图、流程、时序、数据流和生命周期统一使用本地 Archify 3.2.0，它是 Project 图的唯一渲染器。Mermaid 11.17.2 仍用于会话和表单 Markdown 中的 `mermaid` 代码块，不参与 Project 图渲染。Project ID、正文和源码链接来自已保存模型，不依赖在线渲染服务。
 
 
 五类图共享节点、关系和证据结构，并按类型增加可选的渲染器中性语义：
@@ -106,11 +106,11 @@ Project Intent 和与渲染器无关的 `ProjectDiagram` IR 仍是数据来源�
 | 数据流图 | 2–5 个阶段与节点 `stageId` |
 | 状态机／生命周期图 | 初始／普通／终态、事件、条件与转换 |
 
-Archify 在独立沙箱中渲染，保留原生动画、缩放和导出。节点选择与原生路径演示联动正文；阅读器还可按明确主路径或消息顺序逐步播放。分支流程没有主路径时不猜测执行顺序。交互渲染失败时从同一份模型降级为 Mermaid，并保留错误说明；已有图无需迁移。
+Archify 在独立沙箱中渲染，保留原生动画、缩放和导出。节点选择与原生路径演示联动正文；阅读器还可按明确主路径或消息顺序逐步播放。分支流程没有主路径时不猜测执行顺序。运行时无法渲染时，阅读器显示包含具体原因的明确错误，并保留正文、证据和已保存模型；它不会切换到另一套布局引擎。生命周期图使用 Archify schema v3：有序 `mainPath`、语义化状态和转换让渲染器自行推导全部几何。已有图无需迁移。
 
 可选的 `intent.c4` 记录系统、人员、外部系统和运行单元，以 `systemId` 指定当前系统，运行单元通过 `parentId` 归属系统、通过 `contextIds` 关联职责主题。每个元素和关系必须有已读取的源码／文档证据。阅读器派生“项目全貌（C1）→ 运行单元（C2）”，再链接职责与流程；不把目录当容器，不把不同层级混在同一张图。已有 C4 模型仍可读取；新的索引流程可以根据已读取文档、配置和关键入口源码生成 C4，不把目录推断成运行单元。类图／ER 图暂未新增独立数据类型。
 
-阅读器提供缩放、适应宽度、展开、SVG 导出和折叠源码。渲染失败仍保留正文与 Mermaid 源码；异步渲染不能覆盖后来选择的主题。源码跳转和导出由宿主核对图 ID 与保存时间。没有稳定边 DOM ID 的状态连接可通过连接列表选择。
+阅读器提供缩放、适应宽度、展开、SVG 导出和折叠的 **Diagram model** 面板。渲染失败仍保留正文、证据和已保存模型，并自动展开该面板，以便检查原因与模型。异步渲染不能覆盖后来选择的主题。源码跳转和导出由宿主核对图 ID 与保存时间。所有关系同时以键盘可访问的 **Connections** 列表提供。
 
 ### 声明的架构规则
 
@@ -145,11 +145,11 @@ npm run check:ui                        # 依次运行浏览器检查
 node scripts/checkComposerLayoutUi.mjs  # 输入区附件向上生长、底栏对齐、窄视口
 node scripts/checkStreamJumpUi.mjs      # 跳到底部控件不遮挡对话滚动条
 node scripts/checkEditorTabsUi.mjs      # 编辑器外壳、Project 各页、CSP 与主题
-node scripts/checkProjectReaderUi.mjs   # 混合渲染、C4、播放、图文源码关联、CSP、切换与窄屏
+node scripts/checkProjectReaderUi.mjs   # 单一 Archify 渲染、C4、播放、图文源码关联、CSP、错误态与窄屏
 node scripts/checkProjectDiagramsUi.mjs # 保留的 Archify 适配器与桥接兼容检查
 ```
 
-assertWebviewAssets.mjs 依据 esbuild 依赖清单证明运行包不含 TypeScript 编译器或旧扫描／引擎实现，确认适配器引用的 Archify 入口、五份 Schema 与五个渲染器存在，且 `vendor/project-diagrams/drawio` 未进入分发包；其余 vendor 内容随包分发由 `.vscodeignore` 未排除 `vendor/**` 保证。
+assertWebviewAssets.mjs 依据 esbuild 依赖清单证明运行包不含 TypeScript 编译器或旧扫描／引擎实现，确认适配器引用的 Archify 入口、CLI 辅助文件、五份 Schema 与五个渲染器存在，并包含它们静态或运行时依赖的 locale manifest、渲染产物检查器、explainer 检查器与临时目录／更新辅助文件；`vendor/project-diagrams/drawio` 和 `.tmp-*` 不得进入分发包。其余 vendor 内容随包分发由 `.vscodeignore` 未排除 `vendor/**` 保证。
 
 项目层单元测试可运行：`npx vitest run test/project*.test.ts test/editorTab*.test.ts`。
 
@@ -178,7 +178,6 @@ assertWebviewAssets.mjs 依据 esbuild 依赖清单证明运行包不含 TypeScr
 | `src/core/projectDiagramHistory.ts` | `src/features/project/knowledge/projectDiagramHistory.ts` |
 | `src/core/projectC4.ts` | `src/features/project/presentation/projectC4.ts` |
 | `src/core/projectDiagramPresentation.ts` | `src/features/project/presentation/projectDiagramPresentation.ts` |
-| `src/core/projectMermaid.ts` | `src/features/project/presentation/projectMermaid.ts` |
 | `src/core/projectStructure.ts` | `src/features/project/host/indexing/projectStructure.ts` |
 | `src/core/projectStructureKnowledge.ts` | `src/features/project/host/indexing/projectStructureKnowledge.ts` |
 | `src/projectStructureHost.ts` | `src/features/project/host/indexing/projectStructureHost.ts` |
@@ -282,7 +281,7 @@ Additional verification file: `scripts/checkProjectDiagramsUi.mjs` — use the n
 | `src/resourceDocuments.ts` | `test/apiReference.test.ts`, `test/apiSource.test.ts` |
 | `src/core/projectIntent.ts` | `test/projectIntegration.test.ts`, `test/projectIndex.test.ts`, `test/projectContext.test.ts` |
 | `src/core/projectKnowledge.ts` | `test/projectStore.test.ts`, `test/projectKnowledge.test.ts`, `test/projectIntegration.test.ts`, `test/projectContext.test.ts` |
-| `src/core/projectDiagram.ts` | `test/archifyLayoutBudget.test.ts`, `test/archifyAdapter.test.ts`, `test/projectStore.test.ts`, `test/projectMermaid.test.ts`, `test/projectIntegration.test.ts`, `test/projectIndex.test.ts`, `test/projectDiagramRegistry.test.ts`, `test/projectDiagramPresentation.test.ts`, `test/projectDiagramAdapter.test.ts`, `test/projectDiagram.test.ts`, `test/projectArchitecture.test.ts` |
+| `src/core/projectDiagram.ts` | `test/archifyLayoutBudget.test.ts`, `test/archifyAdapter.test.ts`, `test/projectStore.test.ts`, `test/projectIntegration.test.ts`, `test/projectIndex.test.ts`, `test/projectDiagramRegistry.test.ts`, `test/projectDiagramPresentation.test.ts`, `test/projectDiagramAdapter.test.ts`, `test/projectDiagram.test.ts`, `test/projectArchitecture.test.ts` |
 | `src/core/projectDiagramAdapter.ts` | `test/archifyAdapter.test.ts`, `test/projectIntegration.test.ts`, `test/projectDiagramRegistry.test.ts`, `test/projectDiagramAdapter.test.ts`, `test/projectDiagram.test.ts` |
 | `src/core/projectEvidenceSettings.ts` | `test/projectEvidenceSettings.test.ts` |
 | `src/core/projectSettings.ts` | `test/projectWorkspaceSettings.test.ts` |
@@ -292,7 +291,6 @@ Additional verification file: `scripts/checkProjectDiagramsUi.mjs` — use the n
 | `src/core/projectArchitecture.ts` | `test/projectArchitecture.test.ts` |
 | `src/core/projectDiagramHistory.ts` | `test/projectDiagram.test.ts` |
 | `src/core/projectDiagramPresentation.ts` | `test/projectDiagramPresentation.test.ts` |
-| `src/core/projectMermaid.ts` | `test/projectMermaid.test.ts` |
 | `src/core/projectAiGeneration.ts` | `test/archifyAdapter.test.ts`, `test/projectIntegration.test.ts`, `test/projectInitializationOutput.test.ts`, `test/projectIndex.test.ts` |
 | `src/projectService.ts` | `test/projectIntegration.test.ts` |
 | `src/projectStore.ts` | `test/projectStore.test.ts`, `test/projectIntegration.test.ts`, `test/projectInitializationOutput.test.ts`, `test/projectEvidenceSettings.test.ts` |

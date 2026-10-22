@@ -1,9 +1,5 @@
 import type { ProjectDiagram } from "../contracts/projectDiagram.js";
 
-export function projectDiagramRenderer(diagram: ProjectDiagram): "archify" | "mermaid" {
-  return ["architecture", "workflow", "sequence", "data_flow", "lifecycle"].includes(diagram.kind) ? "archify" : "mermaid";
-}
-
 /** Only play recorded message order or an unambiguous connected path, never arbitrary array order. */
 export function projectPlaybackSteps(diagram: ProjectDiagram): { id: string; kind: "node" | "relation" }[] {
   if (diagram.kind === "sequence") return [...(diagram.semantics?.messages ?? [])].sort((a, b) => a.order - b.order).map((message) => ({ id: message.relationId, kind: "relation" }));

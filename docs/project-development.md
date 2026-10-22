@@ -121,7 +121,7 @@ only diagrams keeps them viewable and reports that the knowledge model still nee
 
 ## Diagram rendering
 
-Project Intent and the renderer-neutral `ProjectDiagram` IR remain the data sources. Structural, C4, workflow, sequence, data-flow and lifecycle views all use bundled Archify 2.17.0-dev.1. Bundled Mermaid 11.17.2 remains a static fallback in strict mode. Both renderers share stable Project IDs, prose and source navigation, without an online rendering service.
+Project Intent and the renderer-neutral `ProjectDiagram` IR remain the data sources. Structural, C4, workflow, sequence, data-flow and lifecycle views all use bundled Archify 3.2.0 as their only renderer. Bundled Mermaid 11.17.2 is still used for `mermaid` fenced code blocks in conversation and form Markdown; it is not a Project diagram renderer. Project IDs, prose and source navigation come from the saved model, without an online rendering service.
 
 Five kinds share the common node/relation/evidence structures and add optional, renderer-neutral
 semantics:
@@ -134,11 +134,11 @@ semantics:
 | Data flow | Two to five stages with `stageId` on every node |
 | Lifecycle | Explicit initial/normal/terminal states, events, conditions and transitions |
 
-Archify renders in an isolated sandbox and retains native animation, zoom and SVG export. Node selection and native route journeys link to prose. Reader playback follows a recorded main path or message order; branching workflows without a main path do not invent execution order. Interactive failures fall back to Mermaid from the same model, with a visible explanation. No stored diagram migration is required.
+Archify renders in an isolated sandbox and retains native animation, zoom and SVG export. Node selection and native route journeys link to prose. Reader playback follows a recorded main path or message order; branching workflows without a main path do not invent execution order. If the runtime cannot render, the reader shows an explicit error naming the reason and keeps the explanation, evidence and saved model available; it never switches to a second layout engine. Lifecycle diagrams use Archify schema v3, whose ordered `mainPath`, semantic states and transitions let the renderer derive all geometry. No stored diagram migration is required.
 
 Optional `intent.c4` records systems, people, external systems and runtime containers. `systemId` identifies the focal system; containers use `parentId` for system ownership and `contextIds` for responsibility links. Every element and relationship requires evidence from a read source/document excerpt. The reader derives separate Project landscape (C1) and Runtime units (C2) views, then links to responsibilities and flows. Directories are never inferred as containers. Existing models remain usable without C4; the structure index generates C4 only when read source/configuration/documentation supports runtime boundaries. Dedicated class/ER diagram types are not introduced yet.
 
-The reader supports zoom, fit, expand, SVG export and a collapsed source view. A failed render leaves the explanation and Mermaid source available. Queued results cannot replace a newer topic. SVG export and source navigation resolve the displayed diagram's ID and saved timestamp in the host. State connections also have an accessible connection list where the renderer lacks stable edge DOM IDs.
+The reader supports zoom, fit, expand, SVG export and a collapsed **Diagram model** panel. A failed render leaves the explanation, evidence and saved model available, and opens that panel so the cause and model remain inspectable. Queued results cannot replace a newer topic. SVG export and source navigation resolve the displayed diagram's ID and saved timestamp in the host. All relations are also listed as keyboard-accessible **Connections** entries.
 
 ### Declared architecture rules
 
@@ -183,7 +183,9 @@ node scripts/checkProjectDiagramsUi.mjs # retained Archify adapter and bridge co
 Unit tests for the project layer run with `npx vitest run test/project*.test.ts test/editorTab*.test.ts`.
 `scripts/assertWebviewAssets.mjs` additionally proves from the esbuild dependency manifest that the
 runtime bundle contains neither the TypeScript compiler nor the removed scan/engine implementations,
-that the Archify entry point, five schemas and five renderers the adapter names are present, and that
+that the Archify entry point, CLI helper, five schemas and five renderers the adapter names are present,
+including the locale manifest, render-output checker, explainer checker and owned-temp/update helpers they
+import, and that
 `vendor/project-diagrams/drawio` is not packaged. The rest of the vendored runtime is distributed
 because `.vscodeignore` does not exclude `vendor/**`.
 
@@ -212,7 +214,6 @@ Compatibility entries have explicit exports and no implementation. Unmigrated co
 | `src/core/projectDiagramHistory.ts` | `src/features/project/knowledge/projectDiagramHistory.ts` |
 | `src/core/projectC4.ts` | `src/features/project/presentation/projectC4.ts` |
 | `src/core/projectDiagramPresentation.ts` | `src/features/project/presentation/projectDiagramPresentation.ts` |
-| `src/core/projectMermaid.ts` | `src/features/project/presentation/projectMermaid.ts` |
 | `src/core/projectStructure.ts` | `src/features/project/host/indexing/projectStructure.ts` |
 | `src/core/projectStructureKnowledge.ts` | `src/features/project/host/indexing/projectStructureKnowledge.ts` |
 | `src/projectStructureHost.ts` | `src/features/project/host/indexing/projectStructureHost.ts` |
@@ -298,7 +299,7 @@ in `docs/conversation-development.md`.
 | `src/resourceDocuments.ts` | `test/apiReference.test.ts`, `test/apiSource.test.ts` |
 | `src/core/projectIntent.ts` | `test/projectIntegration.test.ts`, `test/projectIndex.test.ts`, `test/projectContext.test.ts` |
 | `src/core/projectKnowledge.ts` | `test/projectStore.test.ts`, `test/projectKnowledge.test.ts`, `test/projectIntegration.test.ts`, `test/projectContext.test.ts` |
-| `src/core/projectDiagram.ts` | `test/archifyLayoutBudget.test.ts`, `test/archifyAdapter.test.ts`, `test/projectStore.test.ts`, `test/projectMermaid.test.ts`, `test/projectIntegration.test.ts`, `test/projectIndex.test.ts`, `test/projectDiagramRegistry.test.ts`, `test/projectDiagramPresentation.test.ts`, `test/projectDiagramAdapter.test.ts`, `test/projectDiagram.test.ts`, `test/projectArchitecture.test.ts` |
+| `src/core/projectDiagram.ts` | `test/archifyLayoutBudget.test.ts`, `test/archifyAdapter.test.ts`, `test/projectStore.test.ts`, `test/projectIntegration.test.ts`, `test/projectIndex.test.ts`, `test/projectDiagramRegistry.test.ts`, `test/projectDiagramPresentation.test.ts`, `test/projectDiagramAdapter.test.ts`, `test/projectDiagram.test.ts`, `test/projectArchitecture.test.ts` |
 | `src/core/projectDiagramAdapter.ts` | `test/archifyAdapter.test.ts`, `test/projectIntegration.test.ts`, `test/projectDiagramRegistry.test.ts`, `test/projectDiagramAdapter.test.ts`, `test/projectDiagram.test.ts` |
 | `src/core/projectEvidenceSettings.ts` | `test/projectEvidenceSettings.test.ts` |
 | `src/core/projectSettings.ts` | `test/projectWorkspaceSettings.test.ts` |
@@ -308,7 +309,6 @@ in `docs/conversation-development.md`.
 | `src/core/projectArchitecture.ts` | `test/projectArchitecture.test.ts` |
 | `src/core/projectDiagramHistory.ts` | `test/projectDiagram.test.ts` |
 | `src/core/projectDiagramPresentation.ts` | `test/projectDiagramPresentation.test.ts` |
-| `src/core/projectMermaid.ts` | `test/projectMermaid.test.ts` |
 | `src/core/projectAiGeneration.ts` | `test/archifyAdapter.test.ts`, `test/projectIntegration.test.ts`, `test/projectInitializationOutput.test.ts`, `test/projectIndex.test.ts` |
 | `src/projectService.ts` | `test/projectIntegration.test.ts` |
 | `src/projectStore.ts` | `test/projectStore.test.ts`, `test/projectIntegration.test.ts`, `test/projectInitializationOutput.test.ts`, `test/projectEvidenceSettings.test.ts` |

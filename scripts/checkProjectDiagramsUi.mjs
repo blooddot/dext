@@ -92,7 +92,8 @@ try {
     const artifact = await adapter.render(document);
     assert.equal(artifact.format, "html");
     assert.ok(String(artifact.content).includes("<!DOCTYPE html>") || String(artifact.content).includes("<html"));
-    assert.equal(/(?:src|href)=["']https?:/i.test(String(artifact.content)), false, `${kind}: the artifact must not reference remote resources`);
+    // Archify 3.2.0 adds a navigable GitHub credit link; only resource loads must stay local.
+    assert.equal(/(?:<(?:script|img|iframe|link|video|audio|source)\b[^>]*(?:src|href)=["']https?:)|(?:url\(\s*["']?https?:)/i.test(String(artifact.content)), false, `${kind}: the artifact must not load remote resources`);
     htmlByKind[kind] = artifact.content;
     mappingByKind[kind] = document.payload.mapping;
     console.log(`rendered ${kind}: ${String(artifact.content).length} bytes`);

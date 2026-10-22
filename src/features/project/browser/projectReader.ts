@@ -1,8 +1,6 @@
-import { renderMermaidSvg } from "../../../platform/browser/markdownDiagrams.js";
 import type { ProjectDiagram } from "../contracts/projectDiagram.js";
 import type { ProjectTopic } from "../knowledge/projectTopics.js";
-import { projectDiagramRenderer, projectPlaybackSteps } from "../presentation/projectDiagramPresentation.js";
-import { projectDiagramToMermaid, type ProjectMermaidView } from "../presentation/projectMermaid.js";
+import { projectPlaybackSteps } from "../presentation/projectDiagramPresentation.js";
 import { escapeProjectHtml as esc, readerGalleryArticle, readerIntroduction, readerTopicArticle, topicDiagrams, type ProjectReaderData } from "../presentation/projectTopicsView.js";
 import { isTrustedHostMessage } from "./archifyBridge.js";
 import { renderReaderArchify, type ReaderArchifyView } from "./projectReaderArchify.js";
@@ -17,9 +15,7 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
   const progress = root.querySelector<HTMLElement>("[data-reader-progress]")!;
   let topic: ProjectTopic | undefined;
   let diagram: ProjectDiagram | undefined;
-  let rendered: ProjectMermaidView | undefined;
   let generation = 0;
-  let zoom = 1;
   let busy = false;
   let generationFailed = false;
   let interactive: ReaderArchifyView | undefined;
@@ -41,14 +37,8 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
     const group = button.closest<HTMLDetailsElement>("[data-reader-area]");
     if (active && group) group.open = true;
   });
-  const setZoom = () => {
-    const svg = article.querySelector<SVGSVGElement>("[data-reader-canvas] > svg");
-    if (!svg) return;
-    const canvas = svg.parentElement!;
-    const width = svg.viewBox.baseVal.width || 800;
-    svg.style.maxWidth = "none";
-    svg.style.width = `${Math.min(width, canvas.clientWidth) * zoom}px`;
-    svg.style.height = "auto";
+  const setInteractiveControls = (enabled: boolean) => {
+    article.querySelectorAll<HTMLButtonElement>("[data-reader-zoom], [data-reader-export]").forEach((button) => { button.disabled = !enabled; });
   };
   const exitFullscreen = (restoreFocus = true) => {
     const figure = fullscreenFigure;
@@ -63,7 +53,6 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
     if (expand) expand.disabled = false;
     if (document.fullscreenElement === figure) void document.exitFullscreen().catch(() => undefined);
     interactive?.command("fullscreen", { active: figure.classList.contains("is-expanded") });
-    setZoom();
     if (restoreFocus && fullscreenFocus?.isConnected) fullscreenFocus.focus({ preventScroll: true });
     fullscreenFocus = undefined;
   };
@@ -80,7 +69,6 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
     button.textContent = "Exit fullscreen"; button.setAttribute("aria-pressed", "true");
     figure.querySelector<HTMLButtonElement>("[data-reader-fullscreen]")!.disabled = true;
     interactive?.command("fullscreen", { active: true });
-    setZoom();
     // VS Code may disallow the native API on its containing iframe. The viewport layout still works.
     try { await figure.requestFullscreen?.(); } catch { /* Keep the fullscreen Webview layout. */ }
     if (owner !== fullscreenRequest || fullscreenFigure !== figure || !figure.isConnected) {
@@ -88,7 +76,6 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
       return;
     }
     nativeFullscreen = document.fullscreenElement === figure;
-    setZoom();
   };
   const closePresentation = () => {
     stopPlayback();
@@ -97,7 +84,6 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
     interactive?.command("fullscreen", { active: false });
     const button = article.querySelector("[data-reader-fullscreen]");
     if (button) button.textContent = "Expand";
-    setZoom();
   };
   const highlight = (semanticIds: readonly string[], elementId?: string) => {
     article.querySelectorAll<HTMLElement>("[data-reader-section]").forEach((node) => node.classList.toggle("is-selected", semanticIds.includes(node.dataset.readerSection ?? "")));
@@ -129,43 +115,26 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
     const explained = Array.from(article.querySelectorAll<HTMLElement>("[data-reader-section]")).find((node) => semanticIds.includes(node.dataset.readerSection ?? ""));
     if (!article.querySelector(".is-expanded, .is-fullscreen")) explained?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   };
-  const attach = (elements: readonly Element[], id: string, kind: "node" | "relation") => {
-    for (const element of elements) {
-      element.setAttribute("data-reader-element", id);
-      element.setAttribute("tabindex", "0");
-      element.setAttribute("role", "button");
-      const label = kind === "node" ? diagram?.nodes.find((node) => node.id === id)?.label : diagram?.relations.find((relation) => relation.id === id)?.label;
-      element.setAttribute("aria-label", `Inspect ${label || id}`);
-      element.addEventListener("click", () => inspect(id, kind));
-      element.addEventListener("keydown", (event) => {
-        const key = (event as KeyboardEvent).key;
-        if (key === "Enter" || key === " ") { event.preventDefault(); inspect(id, kind); }
-      });
-    }
-  };
-  const wireDiagram = (canvas: HTMLElement, view: ProjectMermaidView) => {
-    for (const node of view.nodes) {
-      let elements: Element[];
-      if (view.kind === "sequence") elements = Array.from(canvas.querySelectorAll("[name]")).filter((element) => element.getAttribute("name") === node.key);
-      else elements = Array.from(canvas.querySelectorAll("g.node, g.statediagram-state")).filter((element) => `-${element.id}`.includes(`-flowchart-${node.key}-`) || `-${element.id}`.includes(`-state-${node.key}-`) || element.getAttribute("data-id") === node.key);
-      attach(elements, node.id, "node");
-    }
-    view.relations.forEach((relation, index) => {
-      const elements = view.kind === "flowchart" ? Array.from(canvas.querySelectorAll("[id], [data-id]")).filter((element) => element.id === relation.key || element.id.endsWith(`-${relation.key}`) || element.getAttribute("data-id") === relation.key)
-        : view.kind === "sequence" ? [canvas.querySelectorAll(".messageText")[index], canvas.querySelectorAll(".messageLine0, .messageLine1")[index]].filter((element): element is Element => Boolean(element)) : [];
-      attach(elements, relation.id, "relation");
-    });
-    // An accessible relationship list also covers state renderers without stable edge DOM IDs.
+  const renderConnections = () => {
     const inspector = article.querySelector<HTMLElement>("[data-reader-inspector]");
-    const existing = article.querySelector("[data-reader-connections]");
-    existing?.remove();
-    if (view.relations.length && inspector) {
-      const connections = document.createElement("details");
-      connections.dataset.readerConnections = "";
-      connections.className = "project-reader-source";
-      connections.innerHTML = `<summary>Connections · ${view.relations.length}</summary>` + (diagram?.relations ?? []).map((relation) => `<button type="button" data-reader-relation="${esc(relation.id)}">${esc(diagram?.nodes.find((node) => node.id === relation.from)?.label ?? relation.from)} → ${esc(diagram?.nodes.find((node) => node.id === relation.to)?.label ?? relation.to)}${relation.label ? ` · ${esc(relation.label)}` : ""}</button>`).join("");
-      inspector.after(connections);
+    article.querySelector("[data-reader-connections]")?.remove();
+    if (!diagram?.relations.length || !inspector) return;
+    const connections = document.createElement("details");
+    connections.dataset.readerConnections = "";
+    connections.className = "project-reader-source";
+    const summary = document.createElement("summary");
+    summary.textContent = `Connections · ${diagram.relations.length}`;
+    connections.append(summary);
+    for (const relation of diagram.relations) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.readerRelation = relation.id;
+      const from = diagram.nodes.find((node) => node.id === relation.from)?.label ?? relation.from;
+      const to = diagram.nodes.find((node) => node.id === relation.to)?.label ?? relation.to;
+      button.textContent = `${from} → ${to}${relation.label ? ` · ${relation.label}` : ""}`;
+      connections.append(button);
     }
+    inspector.after(connections);
   };
   const renderDiagram = async () => {
     const owner = ++generation;
@@ -173,55 +142,39 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
     interactive?.dispose(); interactive = undefined;
     const canvas = article.querySelector<HTMLElement>("[data-reader-canvas]");
     const status = article.querySelector<HTMLElement>("[data-reader-render-status]");
-    rendered = undefined;
     if (!diagram || !canvas || !status) return;
     canvas.replaceChildren();
     const playback = article.querySelector<HTMLElement>("[data-reader-playback]");
     if (playback) playback.hidden = true;
     delete canvas.dataset.renderer;
     canvas.dataset.state = "loading";
+    setInteractiveControls(false);
     status.hidden = false;
     status.textContent = "Rendering diagram…";
-    const view = projectDiagramToMermaid(diagram);
-    article.querySelector<HTMLElement>("[data-reader-mermaid-source]")!.textContent = view.source;
-    let fallback = "";
-    if (projectDiagramRenderer(diagram) === "archify") {
-      const active = renderReaderArchify(diagram, canvas, (message) => api.postMessage(message), inspect, closePresentation);
-      interactive = active;
-      try {
-        await active.ready;
-        if (owner !== generation || !canvas.isConnected) return;
-        canvas.dataset.state = "ready"; canvas.dataset.renderer = "archify";
-        status.hidden = true;
-        active.command("fullscreen", { active: Boolean(canvas.closest(".is-expanded, .is-fullscreen")) });
-        rendered = view;
-        wireDiagram(canvas, view);
-        article.querySelector<HTMLElement>("[data-reader-playback]")!.hidden = projectPlaybackSteps(diagram).length < 2;
-        article.querySelector<HTMLElement>("[data-reader-mermaid-source]")!.textContent = "Static alternative (Mermaid)\n\n" + view.source;
-        return;
-      } catch {
-        if (owner !== generation || !canvas.isConnected) return;
-        active.dispose(); interactive = undefined; canvas.replaceChildren();
-        fallback = "Interactive view unavailable. Showing the static view of the same saved model.";
-      }
-    }
+    const model = article.querySelector<HTMLElement>("[data-reader-diagram-source]");
+    if (model) model.textContent = JSON.stringify(diagram, null, 2);
+    renderConnections();
+    const active = renderReaderArchify(diagram, canvas, (message) => api.postMessage(message), inspect, closePresentation);
+    interactive = active;
     try {
-      const svg = await renderMermaidSvg(view.source, root);
+      await active.ready;
       if (owner !== generation || !canvas.isConnected) return;
-      canvas.innerHTML = svg;
-      canvas.dataset.state = "ready";
-      canvas.dataset.renderer = "mermaid";
-      status.textContent = fallback || view.note || "";
-      status.hidden = !status.textContent;
-      rendered = view;
-      zoom = 1;
-      setZoom();
-      wireDiagram(canvas, view);
-    } catch {
+      canvas.dataset.state = "ready"; canvas.dataset.renderer = "archify";
+      status.hidden = true;
+      active.command("fullscreen", { active: Boolean(canvas.closest(".is-expanded, .is-fullscreen")) });
+      article.querySelector<HTMLElement>("[data-reader-playback]")!.hidden = projectPlaybackSteps(diagram).length < 2;
+      setInteractiveControls(true);
+    } catch (error) {
       if (owner !== generation || !canvas.isConnected) return;
+      active.dispose(); interactive = undefined; canvas.replaceChildren();
       canvas.dataset.state = "error";
-      status.textContent = "This diagram could not be rendered. The explanation and diagram source are still available.";
-      article.querySelector<HTMLDetailsElement>(".project-reader-source")!.open = true;
+      delete canvas.dataset.renderer;
+      const reason = error instanceof Error ? error.message : String(error);
+      status.hidden = false;
+      status.textContent = `Diagram unavailable: ${reason.length > 240 ? `${reason.slice(0, 239)}…` : reason}. The explanation and evidence remain available.`;
+      const details = article.querySelector<HTMLDetailsElement>("[data-reader-diagram-source]")?.closest("details");
+      if (details) details.open = true;
+      setInteractiveControls(false);
     }
   };
   const selectTopic = (id: string, diagramId?: string) => {
@@ -302,18 +255,16 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
     if (button.hasAttribute("data-project-check-knowledge")) { button.disabled = true; api.postMessage({ type: "projectKnowledgeCheck" }); }
     if (button.dataset.topicDiagram && !busy) { busy = true; button.disabled = true; api.postMessage({ type: "projectTopicDiagram", topicId: button.dataset.topicDiagram }); }
     if (button.dataset.readerZoom) {
-      if (interactive) interactive.command(button.dataset.readerZoom === "fit" ? "reset" : button.dataset.readerZoom === "in" ? "zoom-in" : "zoom-out");
-      else { zoom = button.dataset.readerZoom === "fit" ? 1 : Math.max(0.5, Math.min(4, zoom * (button.dataset.readerZoom === "in" ? 1.25 : 0.8))); setZoom(); }
+      interactive?.command(button.dataset.readerZoom === "fit" ? "reset" : button.dataset.readerZoom === "in" ? "zoom-in" : "zoom-out");
     }
     if (button.hasAttribute("data-reader-fullscreen")) {
       const figure = article.querySelector<HTMLElement>(".project-reader-figure");
-      if (figure) { figure.classList.toggle("is-expanded"); button.textContent = figure.classList.contains("is-expanded") ? "Close" : "Expand"; interactive?.command("fullscreen", { active: figure.classList.contains("is-expanded") }); setZoom(); }
+      if (figure) { figure.classList.toggle("is-expanded"); button.textContent = figure.classList.contains("is-expanded") ? "Close" : "Expand"; interactive?.command("fullscreen", { active: figure.classList.contains("is-expanded") }); }
     }
     if (button.hasAttribute("data-reader-screen")) void enterFullscreen();
-    if (button.hasAttribute("data-reader-export") && diagram && rendered) {
-      if (interactive) { interactive.command("export-svg"); return; }
-      const svg = article.querySelector<SVGSVGElement>("[data-reader-canvas] > svg")?.cloneNode(true) as SVGSVGElement | undefined;
-      if (svg) { svg.style.width = ""; svg.style.maxWidth = ""; svg.querySelectorAll(".is-selected").forEach((node) => node.classList.remove("is-selected")); api.postMessage({ type: "projectReaderExport", diagramId: diagram.id, updatedAt: diagram.updatedAt, content: new XMLSerializer().serializeToString(svg) }); }
+    if (button.hasAttribute("data-reader-export") && interactive) {
+      interactive.command("export-svg");
+      return;
     }
     if ((button.hasAttribute("data-reader-play") || button.hasAttribute("data-reader-next")) && diagram && interactive) {
       const steps = projectPlaybackSteps(diagram);
@@ -336,7 +287,6 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
     if (document.fullscreenElement === fullscreenFigure) nativeFullscreen = true;
     else if (nativeFullscreen) exitFullscreen();
   });
-  window.addEventListener("resize", setZoom);
   window.addEventListener("message", (event: MessageEvent<{ type?: string; checks?: ProjectReaderData["checks"]; topics?: ProjectReaderData["topics"]; error?: string; message?: string; active?: boolean; document?: ProjectDiagram; cancelled?: boolean; fileName?: string }>) => {
     const message = event.data;
     if (!message || !isTrustedHostMessage(event.source, article.querySelector<HTMLIFrameElement>("iframe")?.contentWindow, message)) return;

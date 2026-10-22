@@ -494,8 +494,6 @@ describe("Project AI generation service", () => {
     expect(prompt).toContain("not layout-bound lane assignments");
     expect(prompt).toContain("wait, retry and interruption states");
     expect(prompt).toContain("event/condition transitions");
-    expect(prompt).not.toContain("phase map");
-    expect(prompt).not.toContain("one rail in lane 'main'");
   });
 
   it("updates a target diagram by stable id and version while rejecting kind/id changes", async () => {

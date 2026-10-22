@@ -239,24 +239,24 @@ try {
   await wait(`document.querySelector('[data-reader-section="settle"]').classList.contains('is-selected')`, 'restarted native journey');
   for (const fixture of diagrams) {
     await click(`[data-reader-diagram="${fixture.id}"]`); await ready();
-    const expected = 'archify';
-    assert.equal(await evaluate(`document.querySelector('[data-reader-canvas]').dataset.renderer`), expected, fixture.kind);
-    if (expected === 'mermaid') await click('[data-reader-canvas] [data-reader-element="editor"]');
-    else await evaluateViewer(`Array.from(document.querySelectorAll('[data-node-id]')).find(n=>n.textContent.includes('Code editor')).dispatchEvent(new MouseEvent('click',{bubbles:true}))`);
+    assert.equal(await evaluate(`document.querySelector('[data-reader-canvas]').dataset.renderer`), 'archify', fixture.kind);
+    assert.equal(await evaluate(`document.querySelector('[data-reader-diagram-source]').closest('details').open`), false, 'saved model stays folded after a successful render');
+    assert.equal(await evaluate(`document.querySelector('[data-reader-diagram-source]').textContent.trim().startsWith('{')`), true, 'saved model is shown as JSON');
+    await evaluateViewer(`Array.from(document.querySelectorAll('[data-node-id]')).find(n=>n.textContent.includes('Code editor')).dispatchEvent(new MouseEvent('click',{bubbles:true}))`);
     await wait(`document.querySelector('[data-reader-inspector]').textContent.includes('Code editor')`, 'node inspection');
     await click('[data-reader-relation="request"]');
     await click('[data-reader-inspector] [data-reader-element-source]');
     assert.equal(await evaluate('messages.at(-1).elementId'), 'request');
   }
   failRender = true;
-  await click('.project-reader-directory [data-reader-topic="run"]'); await ready();
-  assert.equal(await evaluate(`document.querySelector('[data-reader-canvas]').dataset.renderer`), 'mermaid');
-  assert.match(await evaluate(`document.querySelector('[data-reader-render-status]').textContent`), /Interactive view unavailable/);
-  assert.equal(await evaluate(`document.querySelectorAll('[data-reader-canvas] iframe').length`), 0);
-  await click('[data-reader-screen]');
-  assert.equal(await evaluate(`!!document.querySelector('.is-fullscreen [data-reader-canvas] > svg')`), true, 'static fallback supports fullscreen');
-  await key('Escape', 27);
-  assert.equal(await evaluate(`!!document.querySelector('.is-fullscreen')`), false);
+  await click('.project-reader-directory [data-reader-topic="run"]');
+  await wait(`document.querySelector('[data-reader-canvas]')?.dataset.state==='error'`, 'explicit render error');
+  assert.equal(await evaluate(`document.querySelector('[data-reader-canvas]').dataset.state`), 'error');
+  assert.equal(await evaluate(`document.querySelector('[data-reader-canvas]').dataset.renderer`), undefined);
+  assert.match(await evaluate(`document.querySelector('[data-reader-render-status]').textContent`), /Diagram unavailable: Fixture render failure\. The explanation and evidence remain available\./);
+  assert.equal(await evaluate(`document.querySelectorAll('[data-reader-canvas] iframe, [data-reader-canvas] svg').length`), 0);
+  assert.equal(await evaluate(`Array.from(document.querySelectorAll('[data-reader-zoom], [data-reader-export]')).every(button => button.disabled)`), true, 'view controls are disabled without an interactive view');
+  assert.equal(await evaluate(`document.querySelector('[data-reader-diagram-source]').closest('details').open`), true, 'saved model opens when the renderer fails');
   failRender = false;
   // Rapid switching while native renders resolve must leave only the last topic.
   await evaluate(`document.querySelector('[data-reader-topic="run"]').click();document.querySelector('[data-reader-topic="editor"]').click();document.querySelector('[data-reader-topic="kernel"]').click()`);
@@ -277,13 +277,17 @@ try {
   await click('[data-reader-inspector] [data-reader-topic="editor"]'); await ready();
   assert.equal(await evaluate(`document.querySelector('[data-reader-article] h2').textContent`), 'Code editor');
   await click('.project-reader-breadcrumb [data-reader-topic="c4:system_context:dext-system"]'); await ready();
-  // Static fallback still escapes model strings and Mermaid directives.
+  // The saved-model panel writes model strings as text, never as markup.
   failRender = true;
   const malicious = { ...diagrams[0], id: 'malicious', nodes: [node('unsafe', '<img src=x onerror="window.__projectReaderXss=1"> %%{init:{}}%%')] , relations: [], semantics: {} };
   await hostMessage({ type: 'projectDiagramGenerated', document: malicious });
-  await click('[data-reader-diagram="malicious"]'); await ready();
+  await click('[data-reader-diagram="malicious"]');
+  await wait(`document.querySelector('[data-reader-canvas]')?.dataset.state==='error'`, 'malicious model error state');
   assert.equal(await evaluate(`window.__projectReaderXss || 0`), 0);
+  assert.equal(await evaluate(`document.querySelectorAll('[data-reader-diagram-source] img, [data-reader-diagram-source] script').length`), 0);
   assert.equal(await evaluate(`document.querySelectorAll('[data-reader-canvas] img, [data-reader-canvas] script').length`), 0);
+  assert.equal(await evaluate(`document.querySelector('[data-reader-diagram-source]').textContent.includes('<img')`), true, 'raw model text is retained but escaped');
+  assert.equal(await evaluate(`document.querySelector('[data-reader-diagram-source]').closest('details').open`), true, 'failing model panel is expanded');
   failRender = false;
   if (process.argv.includes('--saved-project')) {
     const workspaceOption = process.argv.indexOf('--workspace');
@@ -398,7 +402,7 @@ try {
   assert.equal(await evaluate(`document.querySelectorAll('[data-diagram-state=ready] svg').length`), 2);
   assert.equal(await evaluate(`document.querySelector('[data-diagram-state=error] details').open`), true);
   assert.equal(await evaluate(`document.querySelectorAll('.markdown-diagram-staging').length`), 0);
-  console.log('PASS: Project reader Archify rendering with Mermaid fallback, five kinds, diagram/prose/source links, CSP, ownership, export, failures and responsive themes. Screenshots: .tmp-tb/project-reader-ui');
+  console.log('PASS: Project reader uses Archify for all five kinds, with model/prose/source links, CSP, ownership, export, explicit render errors and responsive themes. Screenshots: .tmp-tb/project-reader-ui');
 } finally {
   server?.close();
   try { await shutdown?.(); } catch {}

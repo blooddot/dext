@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { projectDiagramRenderer, projectPlaybackSteps } from "../src/features/project/presentation/projectDiagramPresentation.js";
+import { projectPlaybackSteps } from "../src/features/project/presentation/projectDiagramPresentation.js";
 import type { ProjectDiagram } from "../src/features/project/contracts/projectDiagram.js";
 
 const flow = (): ProjectDiagram => ({ schemaVersion: 1, id: "flow", title: "Flow", kind: "workflow", version: 0, updatedAt: 1,
@@ -21,10 +21,8 @@ describe("Project diagram presentation", () => {
     const disconnected = flow(); disconnected.relations = disconnected.relations.slice(0, 1);
     expect(projectPlaybackSteps(disconnected)).toEqual([]);
   });
-  it("uses recorded sequence message order and Archify for structural views too", () => {
+  it("uses recorded sequence message order", () => {
     const sequence = { ...flow(), kind: "sequence" as const, semantics: { messages: [{ relationId: "bc", order: 2, kind: "call" as const, evidence: [] }, { relationId: "ab", order: 1, kind: "call" as const, evidence: [] }] } };
     expect(projectPlaybackSteps(sequence)).toEqual([{ id: "ab", kind: "relation" }, { id: "bc", kind: "relation" }]);
-    expect(projectDiagramRenderer(sequence)).toBe("archify");
-    expect(projectDiagramRenderer({ ...flow(), kind: "architecture" })).toBe("archify");
   });
 });
