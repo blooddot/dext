@@ -125,5 +125,12 @@ describe("Codex interactive conversations over stdio", () => {
   it("allows config flags but rejects flags that would break the stdio connection", () => {
     expect(codexAppServerArguments(["-c", 'foo="bar"', "--enable", "feature"])).toEqual(["app-server", "-c", 'foo="bar"', "--enable", "feature"]);
     expect(() => codexAppServerArguments(["--listen", "ws://localhost:9000"])).toThrow("do not support");
+    const server = { name: "dext_structure", command: "C:\\Program Files\\Dext\\Code.exe", args: ["C:\\Dext\\structureMcp.js", "--cache", "C:\\cache.json"], env: { ELECTRON_RUN_AS_NODE: "1" } };
+    expect(codexAppServerArguments([], [server])).toEqual([
+      "app-server",
+      "--config", 'mcp_servers.dext_structure.command="C:\\\\Program Files\\\\Dext\\\\Code.exe"',
+      "--config", 'mcp_servers.dext_structure.args=["C:\\\\Dext\\\\structureMcp.js","--cache","C:\\\\cache.json"]',
+      "--config", 'mcp_servers.dext_structure.env.ELECTRON_RUN_AS_NODE="1"'
+    ]);
   });
 });

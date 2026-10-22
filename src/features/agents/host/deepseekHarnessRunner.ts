@@ -1,7 +1,7 @@
 import { uiCallForm } from "../../../shared/contracts/uiForm.js";
 import { randomUUID } from "node:crypto";
 import type { CreateElicitationRequest, CreateElicitationResponse, SessionConfigOption, SessionNotification, RequestPermissionRequest, RequestPermissionResponse, ToolCallUpdate } from "@agentclientprotocol/sdk";
-import type { AgentModelOption, AgentPermission, AgentProfile } from "../contracts/agent.js";
+import type { AgentMcpServer, AgentModelOption, AgentPermission, AgentProfile } from "../contracts/agent.js";
 import { agentPayload, bootstrappedConversationInput, type AgentRunner, type AgentConversationRequest, type AgentExecutionRequest } from "./agentRunner.js";
 import { ExecutionCancelledError } from "../../../shared/protocol/executionErrors.js";
 import { createHarnessPolicy, decodeHarnessSession, encodeHarnessSession, harnessBinding, readHarnessLaunchSettings, type HarnessLaunchSettings } from "./deepseekHarnessPolicy.js";
@@ -19,10 +19,18 @@ import type { AgentInputAnswers, AgentInputQuestion, AgentInputRequest, AgentInp
 /** A Harness turn plus the Dext contract its answer must satisfy. `run()` knows
  * the contract; the conversation shape deliberately carries none, so the result
  * tool is offered exactly where a structured answer is required. */
+/** ACP's stdio shape for a host-owned tool server. */
+export function acpMcpServers(servers: readonly AgentMcpServer[] | undefined): Array<{ type: "stdio"; name: string; command: string; args: string[]; env: Array<{ name: string; value: string }> }> {
+  return (servers ?? []).map(server => ({
+    type: "stdio" as const, name: server.name, command: server.command, args: [...server.args],
+    env: Object.entries(server.env).map(([name, value]) => ({ name, value }))
+  }));
+}
+
 interface TurnRequest extends AgentConversationRequest { contract?: AxMethodContract }
 type Request = TurnRequest;
 interface Session {
-  id: string; binding: string; transport: DeepSeekHarnessTransport;
+  id: string; binding: string; mcpKey: string; transport: DeepSeekHarnessTransport;
   policy: Awaited<ReturnType<typeof createHarnessPolicy>>;
   options: SessionConfigOption[]; defaults: Map<string, string>;
   request?: Request | undefined; messages: Map<string, string>; tools: Map<string, ToolCallUpdate>; fresh: boolean;
@@ -128,7 +136,7 @@ export class DeepSeekHarnessRunner implements AgentRunner {
       const resume = saved?.binding === binding && !request.metadata.conversationForkFrom ? saved.id : undefined;
       if (request.signal?.aborted) throw new ExecutionCancelledError();
       const opened = await this.openSession(transport, request, resume);
-      session = { ...opened, binding, transport, policy, defaults: new Map(), messages: new Map(), tools: new Map() };
+      session = { ...opened, binding, mcpKey: JSON.stringify(request.mcpServers ?? []), transport, policy, defaults: new Map(), messages: new Map(), tools: new Map() };
       for (const option of session.options) if (option.type === "select") session.defaults.set(option.id, option.currentValue);
       return session;
     } catch (error) { await transport?.close(); await policy.dispose(); throw error; }
@@ -141,14 +149,15 @@ export class DeepSeekHarnessRunner implements AgentRunner {
    * `fresh` flag makes its prompt carry Dext's own conversation context instead. */
   private async openSession(transport: DeepSeekHarnessTransport, request: Request, resume: string | undefined):
     Promise<{ id: string; options: SessionConfigOption[]; fresh: boolean }> {
+    const mcpServers = acpMcpServers(request.mcpServers);
     const create = async (): Promise<{ id: string; options: SessionConfigOption[]; fresh: boolean }> => {
-      const response = await transport.wait(transport.connection.newSession({ cwd: request.cwd, mcpServers: [] }));
+      const response = await transport.wait(transport.connection.newSession({ cwd: request.cwd, mcpServers }));
       return { id: response.sessionId, options: response.configOptions ?? [], fresh: true };
     };
     if (!resume) return create();
     let refused: string;
     try {
-      const response = await transport.wait(transport.connection.resumeSession({ sessionId: resume, cwd: request.cwd, mcpServers: [] }));
+      const response = await transport.wait(transport.connection.resumeSession({ sessionId: resume, cwd: request.cwd, mcpServers }));
       return { id: resume, options: response.configOptions ?? [], fresh: false };
     } catch (error) {
       // An aborted turn is a cancellation, not a refusal: keep reporting it as one.
@@ -414,8 +423,9 @@ export class DeepSeekHarnessRunner implements AgentRunner {
       const permission = request.allowWorkspaceWrite ? request.permission ?? "workspace-write" : "read-only";
       const settings = await this.launchSettings();
       const binding = await harnessBinding(request.cwd, permission, request.profile.command, request.cliArguments ?? [], settings, request.agentPreset);
+      const mcpKey = JSON.stringify(request.mcpServers ?? []);
       session = this.sessions.get(key);
-      if (session && (session.binding !== binding || !session.transport.alive)) {
+      if (session && (session.binding !== binding || session.mcpKey !== mcpKey || !session.transport.alive)) {
         await this.close(session); this.sessions.delete(key); session = undefined;
       }
       session ??= await this.open(active, binding, settings);

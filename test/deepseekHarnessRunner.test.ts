@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { DeepSeekHarnessRunner } from "../src/features/agents/host/deepseekHarnessRunner.js";
+import { DeepSeekHarnessRunner, acpMcpServers } from "../src/features/agents/host/deepseekHarnessRunner.js";
 import { DeepSeekHarnessTransport } from "../src/features/agents/host/deepseekHarnessTransport.js";
 import type { AgentInputRequest, AgentStreamEvent } from "../src/shared/contracts/types.js";
 import { decodeHarnessSession, encodeHarnessSession } from "../src/features/agents/host/deepseekHarnessPolicy.js";
@@ -29,6 +29,12 @@ function executionRequest(input: string): AgentExecutionRequest {
 afterEach(async () => { await Promise.all(runners.splice(0).map((value) => value.dispose())); });
 
 describe("Harness runner", { timeout: 15000 }, () => {
+  it("maps host-owned tool servers to the ACP stdio shape", () => {
+    expect(acpMcpServers([{ name: "dext_structure", command: "C:\\Code.exe", args: ["server.js"], env: { ELECTRON_RUN_AS_NODE: "1" } }])).toEqual([
+      { type: "stdio", name: "dext_structure", command: "C:\\Code.exe", args: ["server.js"], env: [{ name: "ELECTRON_RUN_AS_NODE", value: "1" }] }
+    ]);
+    expect(acpMcpServers(undefined)).toEqual([]);
+  });
   it("loads Harness settings once, unless an explicit refresh requests a new snapshot", async () => {
     const loader = vi.fn(async () => undefined);
     const value = new DeepSeekHarnessRunner(15000, (_command, _args, cwd, client) => new DeepSeekHarnessTransport(process.execPath, [fixture], cwd, client), loader);

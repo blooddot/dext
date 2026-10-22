@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { AgentConversationRequest } from "./agentRunner.js";
+import type { AgentMcpServer } from "../contracts/agent.js";
 import type { AgentInputAnswers, AgentInputRequest } from "../../../shared/contracts/types.js";
 import { agentTimeout } from "../domain/agentTimeout.js";
 import { ExecutionCancelledError } from "../../../shared/protocol/executionErrors.js";
@@ -8,8 +9,14 @@ import { codexConversationEvent, codexInputQuestions, object } from "../domain/c
 import { codexErrorMessage } from "../domain/codexError.js";
 const stringValue = (value: unknown): string => typeof value === "string" ? value : "";
 
-export function codexAppServerArguments(extra: readonly string[]): string[] {
+export function codexAppServerArguments(extra: readonly string[], mcpServers: readonly AgentMcpServer[] = []): string[] {
   const args = ["app-server"];
+  for (const server of mcpServers) {
+    const key = `mcp_servers.${server.name}`;
+    args.push("--config", `${key}.command=${JSON.stringify(server.command)}`,
+      "--config", `${key}.args=${JSON.stringify([...server.args])}`);
+    for (const [name, value] of Object.entries(server.env)) args.push("--config", `${key}.env.${name}=${JSON.stringify(value)}`);
+  }
   for (let index = 0; index < extra.length; index++) {
     const arg = extra[index]!;
     if (["-c", "--config", "--enable", "--disable"].includes(arg) && extra[index + 1]) {
@@ -142,7 +149,7 @@ export async function runCodexConversation(request: AgentConversationRequest, op
   try {
     if (request.signal?.aborted) cancel();
     if (controller.signal.aborted) throw controller.signal.reason;
-    await connection.start(options.command, codexAppServerArguments(request.cliArguments ?? []), request.cwd, options.env);
+    await connection.start(options.command, codexAppServerArguments(request.cliArguments ?? [], request.mcpServers ?? []), request.cwd, options.env);
     const permission = request.allowWorkspaceWrite ? request.permission ?? "workspace-write" : "read-only";
     const config = { cwd: request.cwd, approvalPolicy: "never",
       sandbox: permission === "full-access" ? "danger-full-access" : permission,

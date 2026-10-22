@@ -14,7 +14,7 @@ import type { AgentResult, DirRef, McpRawResult } from "../../../shared/contract
 import { ExecutionCancelledError } from "../../../shared/protocol/executionErrors.js";
 import { patchResultFrom } from "../../../shared/protocol/patch.js";
 import { CONVERSATION_METHODS } from "../domain/methodSignature.js";
-import type { AgentPermission, AgentProfile, AgentProvider, AgentSelection, WritableAgentPermission } from "../../agents/contracts/agent.js";
+import type { AgentMcpServer, AgentPermission, AgentProfile, AgentProvider, AgentSelection, WritableAgentPermission } from "../../agents/contracts/agent.js";
 import { DefaultAgentRunner } from "../../agents/host/agentRouter.js";
 import type { AgentRunner } from "../../agents/host/agentRunner.js";
 import { DEFAULT_HARNESS_PRESET, harnessPresetOrDefault } from "../../agents/domain/harnessPresetDefault.js";
@@ -301,6 +301,7 @@ export class DextRuntime implements WorkflowRuntime {
   private workspaceTrusted = false;
   private defaultAgentPermission: WritableAgentPermission = "workspace-write";
   private agentCliArguments: Readonly<Partial<Record<AgentProvider, readonly string[]>>> = {};
+  private conversationMcpServers: (() => readonly AgentMcpServer[] | Promise<readonly AgentMcpServer[]>) | undefined;
   private skillLoader: ((skill: string, workspace: DirRef) => Promise<{ instructions: string; sourcePath: string }>) | undefined;
   private ruleLoader: ((path: string) => Promise<string | undefined>) | undefined;
   private mcpCaller: ((
@@ -384,6 +385,11 @@ export class DextRuntime implements WorkflowRuntime {
 
   setAgentRunner(runner: AgentRunner): void {
     this.agentRunner = runner;
+  }
+
+  /** Host-owned tools offered to every conversation; no user manifest or CLI install is involved. */
+  setConversationMcpServers(provider: (() => readonly AgentMcpServer[] | Promise<readonly AgentMcpServer[]>) | undefined): void {
+    this.conversationMcpServers = provider;
   }
 
   /** The tier a fresh conversation starts at when the composer has not chosen
@@ -857,6 +863,8 @@ export class DextRuntime implements WorkflowRuntime {
     const selectedServiceTier = metadata.serviceTier ?? (sameSelectedAgent ? this.agentSelection.serviceTier : undefined);
     const selectedPreset = metadata.agentPreset ?? (sameSelectedAgent ? this.agentSelection.agentPreset : undefined);
     const onEvent = metadata.onAgentEvent ? guardPlanDocumentEvents(metadata.onAgentEvent) : undefined;
+    let mcpServers: readonly AgentMcpServer[] = [];
+    try { mcpServers = await (this.conversationMcpServers?.() ?? []); } catch { /* A failed optional tool must not block the turn. */ }
     const response = await this.agentRunner.runConversation({
       profile,
       ...(profile.provider === "deepseek-harness" ? { agentPreset: this.harnessPreset(profile, selectedPreset ?? "", readOnly) } : {}),
@@ -877,6 +885,7 @@ export class DextRuntime implements WorkflowRuntime {
       allowWorkspaceWrite,
       permission,
       ...(this.extraCliArguments(profile).length ? { cliArguments: this.extraCliArguments(profile) } : {}),
+      ...(mcpServers.length ? { mcpServers } : {}),
       ...(metadata.signal ? { signal: metadata.signal } : {}),
       ...(onEvent ? { onEvent } : {})
     });

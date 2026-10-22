@@ -20,7 +20,8 @@ const contexts = await Promise.all([
   esbuild.context({
     entryPoints: {
       extension: "src/extension.ts",
-      extensionHostTest: "test/extensionHost.ts"
+      extensionHostTest: "test/extensionHost.ts",
+      structureMcp: "src/features/project/host/indexing/projectStructureMcp.ts"
     },
     bundle: true,
     outdir: "dist",

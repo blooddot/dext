@@ -331,6 +331,20 @@ describe("CLI command resolution", () => {
     expect(claudeConversationArguments({ permission: "workspace-write" })).not.toContain("--json-schema");
   });
 
+  it("injects host-owned tool servers without a user MCP manifest", () => {
+    const server = { name: "dext_structure", command: "C:\\Program Files\\Dext\\Code.exe", args: ["C:\\Dext\\structureMcp.js", "--cache", "C:\\cache.json"], env: { ELECTRON_RUN_AS_NODE: "1" } };
+    const claude = claudeConversationArguments({ permission: "read-only", mcpServers: [server] });
+    const config = JSON.parse(claude[claude.indexOf("--mcp-config") + 1]!) as { mcpServers: Record<string, unknown> };
+    expect(config.mcpServers.dext_structure).toMatchObject({ type: "stdio", command: server.command, args: server.args, env: server.env });
+    const codex = codexConversationArguments({ permission: "read-only" }, undefined, [], { persist: true, mcpServers: [server] });
+    expect(codex).toEqual(expect.arrayContaining([
+      "--config", expect.stringContaining("mcp_servers.dext_structure.command="),
+      "--config", expect.stringContaining("mcp_servers.dext_structure.args="),
+      "--config", 'mcp_servers.dext_structure.env.ELECTRON_RUN_AS_NODE="1"'
+    ]));
+    expect(codex.join(" ")).not.toContain("--mcp-config");
+  });
+
   it("uses native fork arguments for Codex and Claude sessions", () => {
     expect(codexConversationArguments({ permission: "read-only" }, undefined, [], {
       persist: true,

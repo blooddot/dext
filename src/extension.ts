@@ -10,6 +10,7 @@ import { recordWorkflow } from "./features/workflow/domain/workflowRecorder.js";
 import { ProjectStore } from "./features/project/host/persistence/projectStore.js";
 import type { ProjectEditorProvider } from "./features/project/host/projectEditorProvider.js";
 import { VscodeProjectFileHost, effectiveProjectWorkspaceSettings } from "./features/project/host/projectPanelDataSource.js";
+import { projectToolSettingsFromDefinition } from "./features/project/contracts/projectSettings.js";
 import { type ResourceEditorDataSource } from "./features/resources/contracts/resourceDocuments.js";
 import type { ResourceScope } from "./features/resources/contracts/resourceSession.js";
 import { ApiEditorProvider } from "./features/resources/host/apiEditorProvider.js";
@@ -48,6 +49,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   if (projectStore) {
     const definition = await projectStore.readDefinition();
     if (definition.paths) application.setProjectWorkspaceSettings(effectiveProjectWorkspaceSettings(definition));
+    application.setStructureToolProvider(async () => {
+      const [definition, intent] = await Promise.all([projectStore.readDefinition(), projectStore.readIntent()]);
+      if (!intent || !projectToolSettingsFromDefinition(definition).structureQuery) return undefined;
+      return {
+        cachePath: vscode.Uri.joinPath(context.storageUri ?? context.globalStorageUri, "project-structure.json").fsPath,
+        serverPath: vscode.Uri.joinPath(context.extensionUri, "dist", "structureMcp.js").fsPath
+      };
+    });
   }
   await application.reload();
   // Conversation history belongs to the active workspace. Using globalState

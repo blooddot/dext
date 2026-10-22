@@ -20,7 +20,7 @@ import { createResultRepair } from "../features/agents/host/resultRepair.js";
 import { DextRuntime } from "../features/workflow/host/runtime.js";
 import { SkillCatalog } from "../features/workflow/host/skillCatalog.js";
 import type { CallableDefinition, CodeRef, ExecutionMetadata, InputExecutionResponse } from "../shared/contracts/types.js";
-import { AGENT_PERMISSIONS, SUPPORTED_AGENT_PROFILE_IDS, type AgentProfile, type AgentProvider, type AgentSelection, type WritableAgentPermission } from "../features/agents/contracts/agent.js";
+import { AGENT_PERMISSIONS, SUPPORTED_AGENT_PROFILE_IDS, type AgentMcpServer, type AgentProfile, type AgentProvider, type AgentSelection, type WritableAgentPermission } from "../features/agents/contracts/agent.js";
 import { AgentProfileStore } from "../features/agents/host/agentProfiles.js";
 import { createProjectAiProvider } from "../features/project/host/generation/projectAiProvider.js";
 import { DEFAULT_DISPATCH_CONCURRENCY, DextKernelHost } from "../runner/dextHost.js";
@@ -184,6 +184,8 @@ export class DextApplication {
   /** Why a configured server was dropped, by server name; a rejected server is
    * absent from the registry, so this is the only place that reason survives. */
   private mcpServerRejections = new Map<string, string>();
+  /** Built-in host tool resolved per turn; a user setting and a saved model can disable it. */
+  private structureToolProvider: (() => Promise<{ cachePath: string; serverPath: string } | undefined>) | undefined;
   /** The declaration the current workspace's generated project describes: the
    * built-in surface plus the MCP tools its own manifests declare. Rebuilt on every
    * reload from the same registry the kernel executes. */
@@ -207,6 +209,28 @@ export class DextApplication {
   /** Applies the project-owned paths before the next resource reload or turn. */
   setProjectWorkspaceSettings(settings: ProjectWorkspaceSettings): void {
     this.projectWorkspaceSettings = settings;
+  }
+
+  /**
+   * The host-owned structure tool is injected into Agent conversations as an ordinary stdio MCP
+   * server. The resolver runs per turn, so a setting change or a newly built model applies without
+   * restarting Dext. It uses Dext's own Electron/Node binary, so the user installs no manifest and
+   * needs no system `node`; the server exits with the provider session.
+   */
+  setStructureToolProvider(provider: (() => Promise<{ cachePath: string; serverPath: string } | undefined>) | undefined): void {
+    this.structureToolProvider = provider;
+  }
+
+  private async conversationMcpServers(): Promise<readonly AgentMcpServer[]> {
+    if (!this.structureToolProvider || !this.workspaceTrusted) return [];
+    const tool = await this.structureToolProvider();
+    if (!tool || !existsSync(tool.cachePath)) return [];
+    return [{
+      name: "dext_structure",
+      command: process.execPath,
+      args: [tool.serverPath, "--cache", tool.cachePath],
+      env: process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {}
+    }];
   }
 
   constructor(globalState?: vscode.Memento, secretStorage?: vscode.SecretStorage, globalStorageUri?: vscode.Uri) {
@@ -266,6 +290,7 @@ export class DextApplication {
     this.runtime.setMcpCaller((tool, input, onProcessEvent) => this.mcp.call(tool, input, {
       ...(onProcessEvent ? { onProcessEvent } : {})
     }));
+    this.runtime.setConversationMcpServers(() => this.conversationMcpServers());
     // Single result boundary: tolerant parse plus one bounded read-only repair
     // attempt. The transport is chosen here per profile; the core predictor
     // itself stays hostless.

@@ -28,6 +28,19 @@ export interface AgentProfile {
 }
 
 
+/**
+ * One host-owned MCP server injected into a conversation. Dext launches the tool process; the
+ * provider only receives the connection details, so no user manifest or system Node install is
+ * involved. Only stdio is used today because all three providers support it.
+ */
+export interface AgentMcpServer {
+  name: string;
+  command: string;
+  args: readonly string[];
+  env: Readonly<Record<string, string>>;
+}
+
+
 export interface AgentModelOption {
   id: string;
   label: string;

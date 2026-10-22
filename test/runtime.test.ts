@@ -485,6 +485,22 @@ describe("Dext runtime", () => {
     expect(requests[2]?.input).toBe("build it");
   });
 
+  it("injects host-owned MCP servers per turn and omits them when disabled", async () => {
+    const { runtime } = setup();
+    const requests: AgentConversationRequest[] = [];
+    runtime.setAgentProfiles([{ id: "codex", provider: "codex", command: "codex", label: "Codex", models: [] }]);
+    runtime.setAgentSelection({ profileId: "codex" });
+    runtime.setWorkspaceTrusted(true);
+    runtime.setAgentRunner({ run: async () => ({ kind: "ask", text: "typed" }), runConversation: async (request) => { requests.push(request); return "answer"; } });
+    const server = { name: "dext_structure", command: "Code.exe", args: ["server.js", "--cache", "cache.json"], env: { ELECTRON_RUN_AS_NODE: "1" } };
+    runtime.setConversationMcpServers(async () => [server]);
+    await runtime.executeConversation("ask", "with tools");
+    runtime.setConversationMcpServers(async () => []);
+    await runtime.executeConversation("ask", "without tools");
+    expect(requests[0]?.mcpServers).toEqual([server]);
+    expect(requests[1]?.mcpServers).toBeUndefined();
+  });
+
   it("runs a conversation with the caller's Agent snapshot, not the active selection", async () => {
     const { runtime } = setup();
     const requests: AgentConversationRequest[] = [];

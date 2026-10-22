@@ -7,7 +7,7 @@ import { delimiter, extname, isAbsolute, join } from "node:path";
 import { isDextResult, serializeResultForAgent } from "../../../shared/protocol/resultSerialization.js";
 import { jsonCandidates, stripNullProperties } from "../../../shared/protocol/resultBoundary.js";
 import { ExecutionCancelledError } from "../../../shared/protocol/executionErrors.js";
-import type { AgentPermission, AgentProfile } from "../contracts/agent.js";
+import type { AgentMcpServer, AgentPermission, AgentProfile } from "../contracts/agent.js";
 import type { AxMethodContract } from "../domain/axAdapter.js";
 import type { AgentStreamEvent, AgentStreamPhase, AgentTokenUsage, AgentInputAnswers, AgentInputQuestion, ExecutionMetadata, RegisteredCallable, ResolvedInvocation } from "../../../shared/contracts/types.js";
 import { agentTodoEvent, ClaudeTodoTracker, isClaudeTodoTool, normalizeAgentTodos } from "../domain/agentTodoTracking.js";
@@ -64,6 +64,8 @@ export interface AgentConversationRequest {
   permission?: AgentPermission;
   /** Extra provider CLI arguments from `dext.agentCliArgs`, already filtered. */
   cliArguments?: readonly string[];
+  /** Host-owned MCP servers injected for this turn; no user manifest is involved. */
+  mcpServers?: readonly AgentMcpServer[];
   onEvent?: (event: AgentStreamEvent) => void;
   signal?: AbortSignal;
 }
@@ -638,6 +640,26 @@ export function codexSandbox(permission: AgentPermission): string {
   return permission === "workspace-write" ? "workspace-write" : "read-only";
 }
 
+/** Claude accepts extra stdio servers as one JSON document; no user file is written. */
+function claudeMcpArguments(servers: readonly AgentMcpServer[]): string[] {
+  if (!servers.length) return [];
+  return ["--mcp-config", JSON.stringify({ mcpServers: Object.fromEntries(servers.map(server => [server.name, {
+    type: "stdio", command: server.command, args: [...server.args], env: { ...server.env }
+  }])) })];
+}
+
+/** Codex reads the same injection through `--config` overrides. */
+function codexMcpArguments(servers: readonly AgentMcpServer[]): string[] {
+  return servers.flatMap(server => {
+    const key = `mcp_servers.${server.name}`;
+    return [
+      "--config", `${key}.command=${JSON.stringify(server.command)}`,
+      "--config", `${key}.args=${JSON.stringify([...server.args])}`,
+      ...Object.entries(server.env).flatMap(([name, value]) => ["--config", `${key}.env.${name}=${JSON.stringify(value)}`])
+    ];
+  });
+}
+
 /** Arguments for Claude Code's non-interactive, structured streaming mode. */
 export function claudeCliArguments(
   options: { model?: string; reasoningEffort?: string; permission: AgentPermission },
@@ -660,7 +682,7 @@ export function claudeCliArguments(
 
 /** Claude's stream mode without a Dext output contract. */
 export function claudeConversationArguments(
-  options: { model?: string; reasoningEffort?: string; permission: AgentPermission; resumeId?: string; forkSession?: boolean },
+  options: { model?: string; reasoningEffort?: string; permission: AgentPermission; resumeId?: string; forkSession?: boolean; mcpServers?: readonly AgentMcpServer[] },
   extraArguments: readonly string[] = []
 ): string[] {
   return [
@@ -671,6 +693,7 @@ export function claudeConversationArguments(
     ...(options.resumeId ? ["--resume", options.resumeId] : []),
     ...(options.forkSession ? ["--fork-session"] : []),
     "--permission-mode", claudePermissionMode(options.permission),
+    ...claudeMcpArguments(options.mcpServers ?? []),
     ...(options.model ? ["--model", options.model] : []),
     ...(options.reasoningEffort ? ["--effort", options.reasoningEffort] : []),
     ...extraArguments
@@ -683,7 +706,7 @@ export function claudeConversationArguments(
  * routes every tool that needs a human — `AskUserQuestion` included — to the
  * caller as a `can_use_tool` control request. */
 export function claudeControlArguments(
-  options: { model?: string; reasoningEffort?: string; permission: AgentPermission; resumeId?: string; forkSession?: boolean },
+  options: { model?: string; reasoningEffort?: string; permission: AgentPermission; resumeId?: string; forkSession?: boolean; mcpServers?: readonly AgentMcpServer[] },
   extraArguments: readonly string[] = []
 ): string[] {
   return [
@@ -696,6 +719,7 @@ export function claudeControlArguments(
     ...(options.resumeId ? ["--resume", options.resumeId] : []),
     ...(options.forkSession ? ["--fork-session"] : []),
     "--permission-mode", claudePermissionMode(options.permission),
+    ...claudeMcpArguments(options.mcpServers ?? []),
     ...(options.model ? ["--model", options.model] : []),
     ...(options.reasoningEffort ? ["--effort", options.reasoningEffort] : []),
     ...extraArguments
@@ -979,7 +1003,7 @@ export function codexConversationArguments(
   options: { model?: string; reasoningEffort?: string; permission: AgentPermission },
   serviceTier?: string,
   extraArguments: readonly string[] = [],
-  session: { persist?: boolean; resumeId?: string; forkFromId?: string } = {}
+  session: { persist?: boolean; resumeId?: string; forkFromId?: string; mcpServers?: readonly AgentMcpServer[] } = {}
 ): string[] {
   const sandbox = codexSandbox(options.permission);
   return [
@@ -992,6 +1016,7 @@ export function codexConversationArguments(
     ...(options.reasoningEffort ? ["--config", 'model_reasoning_effort="' + options.reasoningEffort + '"'] : []),
     "--config", 'model_reasoning_summary="detailed"',
     ...(serviceTier ? ["--config", 'service_tier="' + serviceTier + '"'] : []),
+    ...codexMcpArguments(session.mcpServers ?? []),
     ...extraArguments,
     ...(session.forkFromId ? ["fork", session.forkFromId] : session.resumeId ? ["resume", session.resumeId] : []),
     "-"
@@ -1451,7 +1476,7 @@ export class CliAgentRunner implements AgentRunner {
     if (request.profile.provider === "claude" && request.metadata.requestAgentInput && request.metadata.ui) {
       return runClaudeConversation(request, {
         command,
-        args: claudeControlArguments({ ...request, permission, ...(resumeId ? { resumeId } : {}), forkSession: Boolean(forkFromId) }, extraArguments),
+        args: claudeControlArguments({ ...request, permission, ...(resumeId ? { resumeId } : {}), forkSession: Boolean(forkFromId), ...(request.mcpServers?.length ? { mcpServers: request.mcpServers } : {}) }, extraArguments),
         env: await this.processEnvironment(command, request),
         timeoutMs: this.timeoutMs, idleTimeoutMs: this.idleTimeoutMs,
         onSession: (id) => {
@@ -1465,9 +1490,9 @@ export class CliAgentRunner implements AgentRunner {
           { ...request, permission },
           serviceTier,
           extraArguments,
-          { persist: Boolean(conversationKey), ...(resumeId ? { resumeId } : {}), ...(forkFromId ? { forkFromId } : {}) }
+          { persist: Boolean(conversationKey), ...(resumeId ? { resumeId } : {}), ...(forkFromId ? { forkFromId } : {}), ...(request.mcpServers?.length ? { mcpServers: request.mcpServers } : {}) }
         )
-      : claudeConversationArguments({ ...request, permission, ...(resumeId ? { resumeId } : {}), ...(forkFromId ? { forkSession: true } : {}) }, extraArguments);
+      : claudeConversationArguments({ ...request, permission, ...(resumeId ? { resumeId } : {}), ...(forkFromId ? { forkSession: true } : {}), ...(request.mcpServers?.length ? { mcpServers: request.mcpServers } : {}) }, extraArguments);
     const processEnv = await this.processEnvironment(command, request);
     const controller = new AbortController();
     const timeout = agentTimeout(controller, this.timeoutMs, this.idleTimeoutMs);
