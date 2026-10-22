@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { stripTypeScriptTypes } from "node:module";
-import { recordWorkflow, recordedApiName, type RecordedTurn } from "../src/core/workflowRecorder.js";
-import type { InputExecutionResponse } from "../src/core/types.js";
+import { recordWorkflow, recordedApiName, type RecordedTurn } from "../src/features/workflow/domain/workflowRecorder.js";
+import type { InputExecutionResponse } from "../src/shared/contracts/types.js";
 
 function response(method: string, kind: "ask" | "agent", confirmMessages: string[] = []): InputExecutionResponse {
   const executions = [

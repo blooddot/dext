@@ -3,8 +3,8 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { DeepSeekHarnessRunner } from "../src/core/deepseekHarnessRunner.js";
-import type { AgentInputRequest, AgentStreamEvent } from "../src/core/types.js";
+import { DeepSeekHarnessRunner } from "../src/features/agents/host/deepseekHarnessRunner.js";
+import type { AgentInputRequest, AgentStreamEvent } from "../src/shared/contracts/types.js";
 
 const probe = resolve("test/fixtures/harnessQuestionAgentProbe.mjs");
 

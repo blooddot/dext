@@ -2,11 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import { DextHistoryStore } from "../src/features/conversations/host/historyStore.js";
 import { DextConversationPreferences } from "../src/features/conversations/host/conversationPreferences.js";
 import type { DextHistorySession } from "../src/features/conversations/contracts/history.js";
-import type { AgentSelection } from "../src/features/agents/contracts.js";
-import { DextSidebarProvider } from "../src/sidebarProvider.js";
-import { CliAgentRunner } from "../src/core/agentRunner.js";
-import type { ExecutionMetadata } from "../src/core/types.js";
-import type { WebviewResponse } from "../src/webviewProtocol.js";
+import type { AgentSelection } from "../src/features/agents/contracts/agent.js";
+import { DextSidebarProvider } from "../src/app/sidebarProvider.js";
+import { CliAgentRunner } from "../src/features/agents/host/agentRunner.js";
+import type { ExecutionMetadata } from "../src/shared/contracts/types.js";
+import type { WebviewResponse } from "../src/platform/webviewProtocol.js";
 
 const host = vi.hoisted(() => ({ executeCommand: vi.fn().mockResolvedValue(undefined), showInformationMessage: vi.fn() }));
 vi.mock("vscode", () => ({ commands: host, window: host }));

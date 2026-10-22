@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { harnessPolicyPatch, harnessBinding, encodeHarnessSession, decodeHarnessSession, harnessLaunchSettingsFromYaml, harnessLaunchSettingsFromProfilePatch, readHarnessLaunchSettings } from "../src/core/deepseekHarnessPolicy.js";
+import { harnessPolicyPatch, harnessBinding, encodeHarnessSession, decodeHarnessSession, harnessLaunchSettingsFromYaml, harnessLaunchSettingsFromProfilePatch, readHarnessLaunchSettings } from "../src/features/agents/host/deepseekHarnessPolicy.js";
 describe("Harness policy", () => {
   it.each(["read-only", "workspace-write", "full-access"] as const)("pins all user preset choices to %s", (permission) => {
     const patch = JSON.parse(harnessPolicyPatch(permission, process.cwd())) as { id: string; config: { presets?: Record<string, { sandbox: string; approval: string }> } }[];

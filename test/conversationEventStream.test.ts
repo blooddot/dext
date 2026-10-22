@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AgentStreamEvent } from "../src/core/types.js";
+import type { AgentStreamEvent } from "../src/shared/contracts/types.js";
 import { AgentEventStream } from "../src/features/conversations/host/agentEventStream.js";
 import type { ConversationWebviewResponse } from "../src/features/conversations/contracts/protocol.js";
 

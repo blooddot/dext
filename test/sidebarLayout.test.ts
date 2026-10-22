@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { ExecutionMetadata, InputExecutionResponse, PatchChange } from "../src/core/types.js";
+import type { ExecutionMetadata, InputExecutionResponse, PatchChange } from "../src/shared/contracts/types.js";
 import type { DextHistoryRecord } from "../src/features/conversations/contracts/history.js";
 
 vi.mock("vscode", () => ({}));
@@ -71,7 +71,7 @@ describe("sidebar panel layout", () => {
   });
 
   it("starts background Harness model discovery when the sidebar opens or Harness is selected", async () => {
-    const sidebar = await source("src/sidebarProvider.ts");
+    const sidebar = await source("src/app/sidebarProvider.ts");
     expect(sidebar).toContain("private harnessModelsDiscovered = false;");
     expect(sidebar).toMatch(/resolveWebviewView[\s\S]*?discoverHarnessModelsOnce\(\)\.then/);
     expect(sidebar).toMatch(/case "agentSelection":[\s\S]*?selection\.profileId === "deepseek-harness" && previousProfileId !== "deepseek-harness"[\s\S]*?void this\.discoverHarnessModelsOnce\(\)\s*\.then/);
@@ -87,7 +87,7 @@ describe("sidebar panel layout", () => {
   });
 
   it("moves API and Global Resources out of the sidebar into editor tabs", async () => {
-    const html = await source("src/sidebarProvider.ts");
+    const html = await source("src/app/sidebarProvider.ts");
     const manifest = await source("package.json");
     const extension = await source("src/extension.ts");
     expect(html).toContain('<section id="input-section" class="input-section">');
@@ -108,7 +108,7 @@ describe("sidebar panel layout", () => {
   });
 
   it("creates resources in the shared conversation composer with resource controls", async () => {
-    const html = await source("src/sidebarProvider.ts");
+    const html = await source("src/app/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
     expect(html).toContain('id="create-resource"');
     expect(html).not.toContain('id="resource-creator-dialog"');
@@ -131,7 +131,7 @@ describe("sidebar panel layout", () => {
   });
 
   it("uses exactly Mode, Agent, and Model controls for the input footer", async () => {
-    const html = await source("src/sidebarProvider.ts");
+    const html = await source("src/app/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
     const editor = await source("src/webview/codeEditor.ts");
     const css = await source("media/styles.css");
@@ -171,10 +171,10 @@ describe("sidebar panel layout", () => {
 
   it("offers Plan beside Agent, Ask, and Code and lands its result as a document", async () => {
     const main = await source("src/webview/main.ts");
-    const sidebar = await source("src/sidebarProvider.ts");
-    const application = await source("src/application.ts");
+    const sidebar = await source("src/app/sidebarProvider.ts");
+    const application = await source("src/app/application.ts");
     const history = await source("src/features/conversations/presentation/historyRender.ts");
-    const builtins = await source("src/core/builtins.ts");
+    const builtins = await source("src/features/workflow/domain/builtins.ts");
     const planControls = await source("src/features/conversations/browser/planControls.ts");
     expect(sidebar).toContain('<div class="plan-target-group">');
     expect(main).toMatch(/renderComposerMenu\(elements\.modeMenu, \[[\s\S]*?\["plan", "Plan", "codicon-checklist"\]/);
@@ -217,7 +217,7 @@ describe("sidebar panel layout", () => {
   it("hands the webview the settings it renders with instead of guessing", async () => {
     const main = await source("src/webview/main.ts");
     const patches = await source("src/features/conversations/browser/patchReviewView.ts");
-    const application = await source("src/application.ts");
+    const application = await source("src/app/application.ts");
     const extension = await source("src/extension.ts");
     expect(application).toMatch(/private webviewSettings[\s\S]*?diffView: diffView === "split" \? "split" : "inline"/);
     expect(application).toMatch(/private webviewSettings[\s\S]*?submitOnEnter: configuration\.get<boolean>\("submitOnEnter", true\) !== false/);
@@ -236,7 +236,7 @@ describe("sidebar panel layout", () => {
   it("lays concurrent comprehension branches out beside one another", async () => {
     const main = await source("src/webview/main.ts");
     const css = await source("media/styles.css");
-    const application = await source("src/application.ts");
+    const application = await source("src/app/application.ts");
     // Branches ran at the same time, so consecutive branch steps collect into one
     // container instead of reading as a sequence.
     expect(main).toMatch(/if \(step\.branch === undefined\) \{[\s\S]*?fanOut = undefined;/);
@@ -270,7 +270,7 @@ describe("sidebar panel layout", () => {
 
   it("offers exactly the installed Harness preset catalog and defaults to its own default", async () => {
     const main = await source("src/webview/main.ts");
-    const defaults = await source("src/core/harnessPresetDefault.ts");
+    const defaults = await source("src/features/agents/domain/harnessPresetDefault.ts");
     // Dext no longer invents an "ACP default" entry: the catalog is the only
     // source of preset choices, and an unset selection runs the Harness default.
     expect(main).not.toContain("ACP default");
@@ -281,9 +281,9 @@ describe("sidebar panel layout", () => {
   });
 
   it("shows writable permission tiers for Agent and Plan modes", async () => {
-    const html = await source("src/sidebarProvider.ts");
+    const html = await source("src/app/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
-    const sidebar = await source("src/sidebarProvider.ts");
+    const sidebar = await source("src/app/sidebarProvider.ts");
     const manifest = await source("package.json");
     const css = await source("media/styles.css");
     expect(html).toContain('id="permission-control"');
@@ -349,7 +349,7 @@ describe("sidebar panel layout", () => {
   });
 
   it("switches conversations through editor-style tabs and keeps input errors out of Output", async () => {
-    const html = await source("src/sidebarProvider.ts");
+    const html = await source("src/app/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
     const manifest = await source("package.json");
     const css = await source("media/styles.css");
@@ -476,7 +476,7 @@ describe("sidebar panel layout", () => {
 
   it("offers the @ file picker in every mode and inserts the same chip as a drop", async () => {
     const editor = await source("src/webview/codeEditor.ts");
-    const sidebar = await source("src/sidebarProvider.ts");
+    const sidebar = await source("src/app/sidebarProvider.ts");
     // Completion comes from Monaco's TypeScript worker plus the generated `dext`
     // declaration, so there is no hand-written provider left to point at.
     const typescript = await source("src/webview/monacoTypescript.ts");
@@ -539,7 +539,7 @@ describe("sidebar panel layout", () => {
   it("offers edit-and-resend and retry on every output turn", async () => {
     const main = await source("src/webview/main.ts");
     const transcript = await source("src/features/conversations/browser/transcriptView.ts");
-    const sidebar = await source("src/sidebarProvider.ts");
+    const sidebar = await source("src/app/sidebarProvider.ts");
     const css = await source("media/styles.css");
     const history = await source("src/features/conversations/presentation/historyRender.ts");
     // The summary is its own click target, so an action click must not fold the
@@ -588,7 +588,7 @@ describe("sidebar panel layout", () => {
 
   it("clears submitted text and its attachment chips without deleting the files", async () => {
     const main = await source("src/webview/main.ts");
-    const sidebar = await source("src/sidebarProvider.ts");
+    const sidebar = await source("src/app/sidebarProvider.ts");
     expect(main).toMatch(/vscode\.postMessage\(\{ type: "executeInput", mode: inputMode, source \}\);[\s\S]*?clearSubmittedInput\(\);/);
     const clear = main.slice(
       main.indexOf("function clearSubmittedInput"),
@@ -624,7 +624,7 @@ describe("sidebar panel layout", () => {
   });
 
   it("defers temporary image deletion until the running turn has consumed its input", async () => {
-    const sidebar = await source("src/sidebarProvider.ts");
+    const sidebar = await source("src/app/sidebarProvider.ts");
     expect(sidebar).toContain("private readonly pendingAttachmentDeletes = new Set<string>();");
     expect(sidebar).toMatch(/case "deleteImageAttachment":[\s\S]*?if \(this\.conversation\.coordinator\.anyRunning\(\)\) this\.pendingAttachmentDeletes\.add\(request\.relativePath\);/);
     // Deferred deletes are flushed when the coordinator reports that no
@@ -744,7 +744,7 @@ describe("sidebar panel layout", () => {
 
   it("supports shared panel fullscreen and stop execution interactions", async () => {
     const main = await source("src/webview/main.ts");
-    const sidebar = await source("src/sidebarProvider.ts");
+    const sidebar = await source("src/app/sidebarProvider.ts");
     expect(main).toContain('type PanelName = "input" | "result"');
     expect(main).toContain('elements.main.classList.add("workspace-fullscreen")');
     expect(main).toMatch(/if \(fullscreenPanel\)[\s\S]*toggleFullscreen\(panelName\);[\s\S]*setSectionOpen\(heading, body, false\);/);
@@ -781,7 +781,7 @@ describe("sidebar panel layout", () => {
   });
 
   it("keeps agent turns running independently across conversation tabs", async () => {
-    const sidebar = await source("src/sidebarProvider.ts");
+    const sidebar = await source("src/app/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
     const protocol = await source("src/features/conversations/contracts/protocol.ts");
     const css = await source("media/styles.css");
@@ -851,7 +851,7 @@ describe("sidebar panel layout", () => {
   });
 
   it("preserves the original start time when restoring a running conversation", async () => {
-    const sidebar = await source("src/sidebarProvider.ts");
+    const sidebar = await source("src/app/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
     // The coordinator snapshots startedAt when the turn begins. Switching tabs
     // and restoring the live row reads that snapshot instead of restarting it.
@@ -885,7 +885,7 @@ describe("sidebar panel layout", () => {
   });
 
   it("accepts host-initiated conversation switches without weakening local stale-response guards", async () => {
-    const sidebar = await source("src/sidebarProvider.ts");
+    const sidebar = await source("src/app/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
     expect(sidebar).toMatch(/async openConversation\(session: DextHistorySession\): Promise<void> \{\s*await this\.conversation\.controller\.open\(session\);/);
     // History, new conversations and closing a tab are host-initiated: their
@@ -917,7 +917,7 @@ describe("sidebar panel layout", () => {
   });
 
   it("snapshots replay events before awaiting the executing message", async () => {
-    const sidebar = await source("src/sidebarProvider.ts");
+    const sidebar = await source("src/app/sidebarProvider.ts");
     expect(sidebar).toMatch(/const replayEvents = \[\.\.\.execution\.events\];[\s\S]*?await this\.post\(\{[\s\S]*?type: "executing"[\s\S]*?\}\);[\s\S]*?events: replayEvents/);
   });
 
@@ -968,7 +968,7 @@ describe("sidebar panel layout", () => {
   });
 
   it("opens the complete API list in an editor tab with search, grouping and detail", async () => {
-    const html = await source("src/sidebarProvider.ts");
+    const html = await source("src/app/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
     const documents = await source("src/features/resources/presentation/resourceDocuments.ts");
     // The sidebar dialog is gone: the API list is an editor tab now.

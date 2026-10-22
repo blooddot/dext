@@ -2,12 +2,13 @@ import { describe, expect, it } from "vitest";
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BUILTIN_METHODS } from "../src/core/builtins.js";
-import { ContextResolver, type ContextHost } from "../src/core/contextResolver.js";
-import { MethodRegistry } from "../src/core/registry.js";
-import { DextRuntime } from "../src/core/runtime.js";
-import { parseAgentResult } from "../src/core/resultBoundary.js";
-import type { AgentResult, InvocationValue } from "../src/core/types.js";
+import { BUILTIN_METHODS } from "../src/features/workflow/domain/builtins.js";
+import { ContextResolver } from "../src/features/workflow/host/contextResolver.js";
+import type { ContextHost } from "../src/shared/contracts/context.js";
+import { MethodRegistry } from "../src/features/workflow/domain/registry.js";
+import { DextRuntime } from "../src/features/workflow/host/runtime.js";
+import { parseAgentResult } from "../src/shared/protocol/resultBoundary.js";
+import type { AgentResult, InvocationValue } from "../src/shared/contracts/types.js";
 
 const host: ContextHost = {
   selection: async () => ({ uri: "file:///x.ts", content: "const x = 1;", version: 1 }),

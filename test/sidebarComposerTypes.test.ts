@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentSelection } from "../src/features/agents/contracts.js";
-import type { WebviewResponse } from "../src/webviewProtocol.js";
+import type { AgentSelection } from "../src/features/agents/contracts/agent.js";
+import type { WebviewResponse } from "../src/platform/webviewProtocol.js";
 
 const host = vi.hoisted(() => ({ post: vi.fn() }));
 const output = vi.hoisted(() => ({ lines: [] as string[] }));
@@ -11,8 +11,8 @@ vi.mock("vscode", () => ({
   Uri: { joinPath: () => ({ toString: () => "" }) }
 }));
 
-import { DextSidebarProvider } from "../src/sidebarProvider.js";
-import { webviewRequestSchema } from "../src/webviewProtocol.js";
+import { DextSidebarProvider } from "../src/app/sidebarProvider.js";
+import { webviewRequestSchema } from "../src/platform/webviewProtocol.js";
 import { DextHistoryStore } from "../src/features/conversations/host/historyStore.js";
 import { DextConversationPreferences } from "../src/features/conversations/host/conversationPreferences.js";
 

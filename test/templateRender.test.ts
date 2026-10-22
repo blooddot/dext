@@ -8,7 +8,7 @@ import {
   templateOutputSchema,
   templatePreset,
   templateValues
-} from "../src/core/templateRender.js";
+} from "../src/features/workflow/domain/templateRender.js";
 
 const ADR = `---
 dext-template:

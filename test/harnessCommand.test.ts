@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { harnessSpawnCommand } from "../src/core/harnessCommand.js";
+import { harnessSpawnCommand } from "../src/features/agents/host/harnessCommand.js";
 
 const directories: string[] = [];
 afterEach(async () => {

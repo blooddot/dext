@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 // Load the application during test collection. Its dependency graph can take
 // longer than a hook's timeout to transform while the whole suite runs in parallel.
-import { DextApplication } from "../src/application.js";
-import type { AgentStreamEvent } from "../src/core/types.js";
+import { DextApplication } from "../src/app/application.js";
+import type { AgentStreamEvent } from "../src/shared/contracts/types.js";
 import type { ProjectAiActivityEvent, ProjectAiProvider, ProjectAiRequest } from "../src/features/project/host/generation/projectAiGeneration.js";
 
 vi.mock("vscode", () => ({

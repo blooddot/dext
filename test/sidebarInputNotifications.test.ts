@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentStreamEvent, ExecutionMetadata, InputExecutionResponse } from "../src/core/types.js";
+import type { AgentStreamEvent, ExecutionMetadata, InputExecutionResponse } from "../src/shared/contracts/types.js";
 import type { ConversationWebviewResponse } from "../src/features/conversations/contracts/protocol.js";
-import type { WebviewResponse } from "../src/webviewProtocol.js";
-import { uiCallForm } from "../src/core/uiForm.js";
+import type { WebviewResponse } from "../src/platform/webviewProtocol.js";
+import { uiCallForm } from "../src/shared/contracts/uiForm.js";
 
 const host = vi.hoisted(() => ({ showInformationMessage: vi.fn(), executeCommand: vi.fn() }));
 vi.mock("vscode", () => ({
@@ -11,7 +11,7 @@ vi.mock("vscode", () => ({
   workspace: { getConfiguration: () => ({ get: (_key: string, fallback: unknown) => fallback }) }
 }));
 
-import { DextSidebarProvider } from "../src/sidebarProvider.js";
+import { DextSidebarProvider } from "../src/app/sidebarProvider.js";
 import { DextHistoryStore } from "../src/features/conversations/host/historyStore.js";
 import { DextConversationPreferences } from "../src/features/conversations/host/conversationPreferences.js";
 import type { DextHistoryRecord } from "../src/features/conversations/contracts/history.js";

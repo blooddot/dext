@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   fileReferenceChipDescriptor
-} from "../src/webview/fileReferenceChip.js";
+} from "../src/platform/browser/fileReferenceChip.js";
 
 describe("Shared file reference chip", () => {
   it("uses the same visible and accessible labels for Chat and Code", () => {

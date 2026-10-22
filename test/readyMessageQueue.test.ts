@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ReadyMessageQueue } from "../src/readyMessageQueue.js";
+import { ReadyMessageQueue } from "../src/shared/lib/readyMessageQueue.js";
 
 describe("ReadyMessageQueue", () => {
   it("retains first-invocation messages until the Webview reports ready", () => {

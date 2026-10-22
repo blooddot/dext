@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import * as vscode from "vscode";
-import { DextApplication } from "../src/application.js";
-import { openWorkspaceFileReference } from "../src/vscodeContextHost.js";
-import { clipboardFileReferences } from "../src/vscodeClipboardFiles.js";
-import { selectionAttachment, type SelectionTarget } from "../src/vscodeAttachments.js";
+import { DextApplication } from "../src/app/application.js";
+import { openWorkspaceFileReference } from "../src/platform/vscode/contextHost.js";
+import { clipboardFileReferences } from "../src/platform/vscode/clipboardFiles.js";
+import { selectionAttachment, type SelectionTarget } from "../src/platform/vscode/attachments.js";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";

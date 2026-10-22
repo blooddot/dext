@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { agentTimeout } from "../src/core/agentTimeout.js";
-import { trackCliToolActivity } from "../src/core/agentToolActivity.js";
+import { agentTimeout } from "../src/features/agents/domain/agentTimeout.js";
+import { trackCliToolActivity } from "../src/features/agents/domain/agentToolActivity.js";
 
 afterEach(() => { vi.useRealTimers(); });
 

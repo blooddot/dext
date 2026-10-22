@@ -14,7 +14,7 @@ const tree = {
     ...Array.from({ length: 500 }, (_, index) => `docs/guide-${String(index).padStart(3, "0")}.md`),
     ...Array.from({ length: 200 }, (_, index) => `vendor/third-party/renderers/part-${String(index).padStart(3, "0")}/README.md`)
   ],
-  sources: Array.from({ length: 400 }, (_, index) => `src/core/module-${String(index).padStart(3, "0")}.ts`)
+  sources: Array.from({ length: 400 }, (_, index) => `src/features/module-${String(index).padStart(3, "0")}.ts`)
 };
 
 const files = new Map<string, string>();
@@ -120,7 +120,7 @@ describe("project evidence selection", () => {
     const fixtures: Record<string, string> = {
       'src/extension.ts': 'import * as vscode from "vscode";\nexport function activate() {}\n',
       'src/platform/editor-tabs/editorTabManager.ts': 'export function createWebviewPanel() { return windowApi.createWebviewPanel("app"); }\n',
-      'src/core/agentRunner.ts': 'import { spawn } from "node:child_process";\nexport function main() { return spawn("agent"); }\n',
+      'src/features/agents/host/agentRunner.ts': 'import { spawn } from "node:child_process";\nexport function main() { return spawn("agent"); }\n',
       'src/runner/kernel.ts': 'import { spawn } from "node:child_process";\nexport function main() { return spawn("node"); }\n'
     };
     for (const [path, content] of Object.entries(fixtures)) { files.set(path, content + '// implementation\n'.repeat(800)); tree.sources.push(path); }
@@ -140,7 +140,7 @@ describe("project evidence selection", () => {
     const packaged = await readWorkspaceEvidence(root, {}, { mode: "index", maxFiles: 1, maxSourceFiles: 1, maxEvidenceChars: 1_000_000 });
     expect(packaged.structure?.parsed).toBe(400);
     expect(packaged.structure?.modules.reduce((sum, module) => sum + module.files, 0)).toBe(400);
-    expect(packaged.structure?.modules[0]?.entryPoints).toContain("src/core/module-000.ts");
+    expect(packaged.structure?.modules[0]?.entryPoints).toContain("src/features/module-000.ts");
     expect(packaged.files.every(file => file.kind !== "source")).toBe(true);
     expect(packaged.selection.evidenceChars).toBe(120_000);
   });
@@ -148,7 +148,7 @@ describe("project evidence selection", () => {
   it("prioritizes a late module entry and its direct imports over unrelated sources", async () => {
     const { readWorkspaceEvidence } = await import("../src/features/project/host/projectPanelDataSource.js");
     const root = { scheme: "file", fsPath: "C:/ws", path: "/C:/ws" } as never;
-    const entry = "src/core/module-399.ts";
+    const entry = "src/features/module-399.ts";
     const imported = "src/shared/run.ts";
     const unrelated = "src/unrelated/other.ts";
     const original = files.get(entry)!;
@@ -196,7 +196,7 @@ describe("project evidence selection", () => {
   it("reads cross-directory members and excludes unrelated files from the same directory", async () => {
     const { readWorkspaceEvidence } = await import("../src/features/project/host/projectPanelDataSource.js");
     const root = { scheme: "file", fsPath: "C:/ws", path: "/C:/ws" } as never;
-    const entry = 'src/core/module-399.ts', second = 'src/webview/feature.ts';
+    const entry = 'src/features/module-399.ts', second = 'src/webview/feature.ts';
     files.set(second, 'export function feature() {}'); tree.sources.push(second);
     try {
       const packaged = await readWorkspaceEvidence(root, {}, { mode: 'topic', preferredPaths: [entry], modulePaths: [entry, second] });

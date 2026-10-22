@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { uiCallForm } from "../src/core/uiForm.js";
-import type { AgentStreamEvent } from "../src/core/types.js";
+import { uiCallForm } from "../src/shared/contracts/uiForm.js";
+import type { AgentStreamEvent } from "../src/shared/contracts/types.js";
 import { InteractionController } from "../src/features/conversations/host/interactionController.js";
 import type { InputNotificationTarget } from "../src/features/conversations/host/inputNotifications.js";
 import { conversation, createConversationHarness } from "./conversationHarness.js";

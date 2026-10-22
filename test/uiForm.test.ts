@@ -1,8 +1,8 @@
-import { AxAdapter } from "../src/core/axAdapter.js";
-import { BUILTIN_METHODS } from "../src/core/builtins.js";
+import { AxAdapter } from "../src/features/agents/domain/axAdapter.js";
+import { BUILTIN_METHODS } from "../src/features/workflow/domain/builtins.js";
 import { describe, expect, it } from "vitest";
-import { parseUiForm, uiCallForm, uiCallResult, validateUiAnswers, UI_LIMITS } from "../src/core/uiForm.js";
-import { uiResultSchema } from "../src/core/schemas.js";
+import { parseUiForm, uiCallForm, uiCallResult, validateUiAnswers, UI_LIMITS } from "../src/shared/contracts/uiForm.js";
+import { uiResultSchema } from "../src/shared/contracts/schemas.js";
 
 const radio = { id: "decision", type: "radio", label: "Run tests?", options: [{ value: "yes", label: "Yes" }, { value: "no", label: "No" }] };
 const form = (fields: unknown[] = [radio]) => parseUiForm({ title: "Settings", fields });

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { PLAN_DOCUMENT_END, PLAN_DOCUMENT_START } from "../src/features/conversations/domain/planResponse.js";
 import { PlanDocumentFilter, guardPlanDocumentEvents } from "../src/features/conversations/domain/planDocumentStream.js";
-import type { AgentStreamEvent } from "../src/core/types.js";
+import type { AgentStreamEvent } from "../src/shared/contracts/types.js";
 
 function collected(): { events: AgentStreamEvent[]; guard: (event: AgentStreamEvent) => void } {
   const events: AgentStreamEvent[] = [];

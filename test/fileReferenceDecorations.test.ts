@@ -3,7 +3,7 @@ import {
   atReferenceOccurrences,
   inputReferenceProjections,
   normalizeInputReferenceSource
-} from "../src/core/fileReference.js";
+} from "../src/features/workspace/domain/fileReference.js";
 import { ReferenceProjection } from "../src/webview/monacoReferences.js";
 import { fileReferenceRemovalEdit } from "../src/webview/fileReferenceDecorations.js";
 

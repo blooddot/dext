@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { resolve } from "node:path";
-import { BUILTIN_METHODS } from "../src/core/builtins.js";
-import { ContextResolver, type ContextHost } from "../src/core/contextResolver.js";
-import { DeepSeekHarnessRunner } from "../src/core/deepseekHarnessRunner.js";
-import { DeepSeekHarnessTransport } from "../src/core/deepseekHarnessTransport.js";
-import { MethodRegistry } from "../src/core/registry.js";
-import { DextRuntime } from "../src/core/runtime.js";
-import type { AgentStreamEvent } from "../src/core/types.js";
+import { BUILTIN_METHODS } from "../src/features/workflow/domain/builtins.js";
+import { ContextResolver } from "../src/features/workflow/host/contextResolver.js";
+import type { ContextHost } from "../src/shared/contracts/context.js";
+import { DeepSeekHarnessRunner } from "../src/features/agents/host/deepseekHarnessRunner.js";
+import { DeepSeekHarnessTransport } from "../src/features/agents/host/deepseekHarnessTransport.js";
+import { MethodRegistry } from "../src/features/workflow/domain/registry.js";
+import { DextRuntime } from "../src/features/workflow/host/runtime.js";
+import type { AgentStreamEvent } from "../src/shared/contracts/types.js";
 
 /** The `agent()` call a long `dev.plan` task-list turn makes, wired end to end
  * to a Harness that ignores the JSON envelope and answers in Markdown. This is

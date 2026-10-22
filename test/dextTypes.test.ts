@@ -5,10 +5,10 @@ import { stripTypeScriptTypes } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
-import { BUILTIN_METHODS } from "../src/core/builtins.js";
-import { dextFiles, dextModuleDeclaration, dextSharedDeclaration, dextTsconfig } from "../src/core/dextApiTypes.js";
-import { parseMcpManifest } from "../src/core/mcpManifest.js";
-import { methodResultType } from "../src/core/methodSignature.js";
+import { BUILTIN_METHODS } from "../src/features/workflow/domain/builtins.js";
+import { dextFiles, dextModuleDeclaration, dextSharedDeclaration, dextTsconfig } from "../src/features/workflow/domain/dextApiTypes.js";
+import { parseMcpManifest } from "../src/features/mcp/domain/mcpManifest.js";
+import { methodResultType } from "../src/features/workflow/domain/methodSignature.js";
 
 /**
  * Decision (recorded for the kernel/editor contract): Dext keeps Node's native

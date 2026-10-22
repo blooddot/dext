@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AgentStreamEvent, InputExecutionResponse } from "../src/core/types.js";
+import type { AgentStreamEvent, InputExecutionResponse } from "../src/shared/contracts/types.js";
 import type { DextHistorySession } from "../src/features/conversations/contracts/history.js";
 import { createConversationHarness } from "./conversationHarness.js";
 

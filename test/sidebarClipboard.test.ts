@@ -27,8 +27,8 @@ vi.mock("vscode", () => ({
   } }
 }));
 
-import { AttachmentStore } from "../src/attachmentStore.js";
-import { DextSidebarProvider } from "../src/sidebarProvider.js";
+import { AttachmentStore } from "../src/shared/lib/attachmentStore.js";
+import { DextSidebarProvider } from "../src/app/sidebarProvider.js";
 
 const selectedText = "# 项目说明\n\n保留文本内容。\n";
 const payload = "README.md#L2,1-L5,1";

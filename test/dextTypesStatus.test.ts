@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dextBuiltinNames, dextTypesNotice } from "../src/webview/dextTypesStatus.js";
+import { dextBuiltinNames, dextTypesNotice } from "../src/features/workflow/domain/dextTypesStatus.js";
 
 /**
  * Code mode is plain TypeScript: the composer completes imports and their exports the

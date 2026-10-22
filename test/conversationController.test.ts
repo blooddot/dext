@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { InputExecutionResponse } from "../src/core/types.js";
+import type { InputExecutionResponse } from "../src/shared/contracts/types.js";
 import { conversation, createConversationHarness } from "./conversationHarness.js";
 
 function deferredExecution() {

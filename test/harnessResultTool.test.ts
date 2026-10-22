@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { BUILTIN_METHODS } from "../src/core/builtins.js";
-import { AxAdapter } from "../src/core/axAdapter.js";
-import { HARNESS_RESULT_TOOL, harnessResultInstruction, harnessResultTool, parseHarnessResultRequest } from "../src/core/harnessResultTool.js";
+import { BUILTIN_METHODS } from "../src/features/workflow/domain/builtins.js";
+import { AxAdapter } from "../src/features/agents/domain/axAdapter.js";
+import { HARNESS_RESULT_TOOL, harnessResultInstruction, harnessResultTool, parseHarnessResultRequest } from "../src/features/agents/domain/harnessResultTool.js";
 
 describe("Harness result tool", () => {
   it("publishes one named tool whose arguments are the call's own contract", () => {

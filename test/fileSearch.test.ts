@@ -5,9 +5,9 @@ const paths = [
   "README.md",
   "package.json",
   "src/extension.ts",
-  "src/sidebarProvider.ts",
-  "src/core/fileSearch.ts",
-  "src/core/runtime.ts",
+  "src/app/sidebarProvider.ts",
+  "src/fileSearch.ts",
+  "src/runtime.ts",
   "src/webview/main.ts",
   "src/webview/codeEditor.ts",
   "test/fileSearch.test.ts"
@@ -24,12 +24,12 @@ describe("composer file search ranking", () => {
   it("is case insensitive and puts the closest name first", () => {
     expect(rankFileMatches(paths, "READ", 3)[0]).toBe("README.md");
     expect(rankFileMatches(paths, "codeeditor", 3)[0]).toBe("src/webview/codeEditor.ts");
-    expect(rankFileMatches(paths, "runtime", 3)[0]).toBe("src/core/runtime.ts");
+    expect(rankFileMatches(paths, "runtime", 3)[0]).toBe("src/runtime.ts");
   });
 
   it("prefers a basename hit over the same letters buried in directories", () => {
     const ranked = rankFileMatches(paths, "filesearch", 9);
-    expect(ranked[0]).toBe("src/core/fileSearch.ts");
+    expect(ranked[0]).toBe("src/fileSearch.ts");
     expect(ranked).toContain("test/fileSearch.test.ts");
   });
 

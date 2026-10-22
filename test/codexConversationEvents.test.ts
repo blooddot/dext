@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { codexConversationEvent, codexInputQuestions } from "../src/core/codexConversationEvents.js";
+import { codexConversationEvent, codexInputQuestions } from "../src/features/agents/domain/codexConversationEvents.js";
 describe("Codex App Server event presentation", () => {
   it("retains native option labels, descriptions and secret fields", () => {
     expect(codexInputQuestions([{ id: "one", header: "Pick", question: "Which?", isSecret: true, options: [{ label: "A", description: "First" }] }]))

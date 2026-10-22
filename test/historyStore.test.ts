@@ -1,4 +1,4 @@
-import { uiCallForm } from "../src/core/uiForm.js";
+import { uiCallForm } from "../src/shared/contracts/uiForm.js";
 import { describe, expect, it } from "vitest";
 import { DextHistoryStore } from "../src/features/conversations/host/historyStore.js";
 

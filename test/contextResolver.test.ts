@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { ContextResolver, type ContextHost } from "../src/core/contextResolver.js";
+import { ContextResolver } from "../src/features/workflow/host/contextResolver.js";
+import type { ContextHost } from "../src/shared/contracts/context.js";
 
 const host: ContextHost = {
   selection: async () => ({

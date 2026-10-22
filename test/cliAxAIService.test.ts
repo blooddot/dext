@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AxChatRequest } from "@ax-llm/ax";
-import { CliAxAIService, renderChatPrompt, type CliAxTransport } from "../src/core/cliAxAIService.js";
+import { CliAxAIService, renderChatPrompt, type CliAxTransport } from "../src/features/agents/host/cliAxAIService.js";
 
 const OUTPUT_FIELD = "structuredOutput";
 

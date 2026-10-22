@@ -25,13 +25,13 @@ vi.mock("vscode", () => ({
     })
   }
 }));
-vi.mock("../src/vscodeTheme.js", () => ({ loadEditorTokenTheme: () => undefined }));
-vi.mock("../src/vscodeContextHost.js", () => ({ openDextFileReference: vi.fn() }));
+vi.mock("../src/platform/vscode/theme.js", () => ({ loadEditorTokenTheme: () => undefined }));
+vi.mock("../src/platform/vscode/contextHost.js", () => ({ openDextFileReference: vi.fn() }));
 
 import { DextHistoryPanel } from "../src/features/conversations/host/historyEditorProvider.js";
 import { DextHistoryStore } from "../src/features/conversations/host/historyStore.js";
 import { DextConversationPreferences } from "../src/features/conversations/host/conversationPreferences.js";
-import type { DextStorage } from "../src/dextStorage.js";
+import type { DextStorage } from "../src/platform/vscode/dextStorage.js";
 
 class MemoryState {
   private values = new Map<string, unknown>();

@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, writeFile, rm, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { DeepSeekHarnessTransport, harnessSpawnCommand } from "../src/core/deepseekHarnessTransport.js";
+import { DeepSeekHarnessTransport, harnessSpawnCommand } from "../src/features/agents/host/deepseekHarnessTransport.js";
 const connections: DeepSeekHarnessTransport[] = [];
 const directories: string[] = [];
 const client = { sessionUpdate: async () => {}, requestPermission: async () => ({ outcome: { outcome: "cancelled" as const } }) };

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { agentTodoEvent, ClaudeTodoTracker, normalizeAgentTodos } from "../src/core/agentTodoTracking.js";
-import { CliAgentRunner, parseClaudeStreamEvents, parseCodexStreamLine } from "../src/core/agentRunner.js";
-import type { AgentStreamEvent } from "../src/core/types.js";
+import { agentTodoEvent, ClaudeTodoTracker, normalizeAgentTodos } from "../src/features/agents/domain/agentTodoTracking.js";
+import { CliAgentRunner, parseClaudeStreamEvents, parseCodexStreamLine } from "../src/features/agents/host/agentRunner.js";
+import type { AgentStreamEvent } from "../src/shared/contracts/types.js";
 import { agentTodoProgress, agentTodoRows, latestAgentTodos, renderAgentTodos } from "../src/features/conversations/presentation/agentTodoPresentation.js";
 import { DextHistoryStore } from "../src/features/conversations/host/historyStore.js";
 import { renderHistoryRecord } from "../src/features/conversations/presentation/historyRender.js";

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AgentSelection } from "../src/features/agents/contracts.js";
-import type { ExecutionMetadata, InputExecutionResponse } from "../src/core/types.js";
-import type { WebviewResponse } from "../src/webviewProtocol.js";
+import type { AgentSelection } from "../src/features/agents/contracts/agent.js";
+import type { ExecutionMetadata, InputExecutionResponse } from "../src/shared/contracts/types.js";
+import type { WebviewResponse } from "../src/platform/webviewProtocol.js";
 import { DextHistoryStore } from "../src/features/conversations/host/historyStore.js";
 import { DextConversationPreferences } from "../src/features/conversations/host/conversationPreferences.js";
 import { createConversationServices } from "../src/app/conversationSetup.js";

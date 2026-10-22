@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ExecutionMetadata, InputExecutionResponse } from "../src/core/types.js";
+import type { ExecutionMetadata, InputExecutionResponse } from "../src/shared/contracts/types.js";
 import type { DextHistorySession } from "../src/features/conversations/contracts/history.js";
 import { DextConversationPreferences } from "../src/features/conversations/host/conversationPreferences.js";
 import { DextHistoryStore } from "../src/features/conversations/host/historyStore.js";
 import { conversationTitle } from "../src/features/conversations/presentation/historyRender.js";
 import type { ResourceDocument, ResourceSession, ResourceTarget } from "../src/features/resources/contracts/resourceSession.js";
-import type { WebviewResponse } from "../src/webviewProtocol.js";
-import { DextSidebarProvider } from "../src/sidebarProvider.js";
+import type { WebviewResponse } from "../src/platform/webviewProtocol.js";
+import { DextSidebarProvider } from "../src/app/sidebarProvider.js";
 import { conversation, createConversationHarness, HarnessState, seedHistory } from "./conversationHarness.js";
 import * as vscode from "vscode";
 

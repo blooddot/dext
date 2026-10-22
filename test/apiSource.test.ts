@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { describeApiSource } from "../src/core/apiSource.js";
+import { describeApiSource } from "../src/features/workflow/host/apiSource.js";
 import { createApiDataSource, createFileResourceDataSource } from "../src/features/resources/host/resourceEditorProvider.js";
 import { buildResourceDefinition, buildResourceList } from "../src/features/resources/presentation/resourceDocuments.js";
 import { renderApiDetail, renderApiList } from "../src/features/resources/presentation/apiPanel.js";

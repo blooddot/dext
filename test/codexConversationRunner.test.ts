@@ -1,10 +1,10 @@
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { displayName, name, version } from "../package.json";
-import { runCodexConversation, codexAppServerArguments } from "../src/core/codexConversationRunner.js";
-import { CodexConversationConnection } from "../src/core/codexConversationConnection.js";
-import type { AgentConversationRequest } from "../src/core/agentRunner.js";
-import type { AgentInputRequest, AgentStreamEvent, ExecutionMetadata } from "../src/core/types.js";
+import { runCodexConversation, codexAppServerArguments } from "../src/features/agents/host/codexConversationRunner.js";
+import { CodexConversationConnection } from "../src/features/agents/host/codexConversationConnection.js";
+import type { AgentConversationRequest } from "../src/features/agents/host/agentRunner.js";
+import type { AgentInputRequest, AgentStreamEvent, ExecutionMetadata } from "../src/shared/contracts/types.js";
 
 // Preserve the real transport while substituting a deterministic child process.
 // eslint-disable-next-line @typescript-eslint/unbound-method
@@ -91,8 +91,9 @@ describe("Codex interactive conversations over stdio", () => {
   });
   it("preserves model, permission gate, native resume/fork and context", async () => {
     const { run } = setup("config", { allowWorkspaceWrite: false, permission: "full-access", model: "configured-model", reasoningEffort: "high" });
-    const reply = JSON.parse((await run({ resumeId: "prior-thread", serviceTier: "priority" })).slice("Received: ".length)) as { config: unknown };
-    expect(reply.config).toMatchObject({ method: "thread/resume", threadId: "prior-thread", sandbox: "read-only", model: "configured-model", approvalPolicy: "never", serviceTier: "priority" });
+    const threadId = "01a15ec5-32fe-70d1-bc3a-9d2f481f51ed";
+    const reply = JSON.parse((await run({ resumeId: threadId, serviceTier: "priority" })).slice("Received: ".length)) as { config: unknown };
+    expect(reply.config).toMatchObject({ method: "thread/resume", threadId, sandbox: "read-only", model: "configured-model", approvalPolicy: "never", serviceTier: "priority" });
   });
   it("surfaces process failure instead of leaving an empty Output", async () => {
     await expect(setup("exit").run()).rejects.toThrow(/exited/);

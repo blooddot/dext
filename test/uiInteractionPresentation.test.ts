@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { answerChoices, uiFieldChoices } from "../src/features/conversations/presentation/uiInteractionPresentation.js";
-import { parseUiForm, type UiField } from "../src/core/uiForm.js";
+import { parseUiForm, type UiField } from "../src/shared/contracts/uiForm.js";
 
 function field(definition: Record<string, unknown>): UiField {
   return parseUiForm({ title: "Question", fields: [definition] }).fields[0]!;

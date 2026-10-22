@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { InputExecutionResponse, PatchResult } from "../src/core/types.js";
+import type { InputExecutionResponse, PatchResult } from "../src/shared/contracts/types.js";
 import { PatchReviewController } from "../src/features/conversations/host/patchReviewController.js";
 import type { ConversationWebviewResponse } from "../src/features/conversations/contracts/protocol.js";
 

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AgentSelection } from "../src/features/agents/contracts.js";
+import type { AgentSelection } from "../src/features/agents/contracts/agent.js";
 import { conversationRequestSchemas } from "../src/features/conversations/contracts/protocol.js";
-import { webviewRequestSchema } from "../src/webviewProtocol.js";
+import { webviewRequestSchema } from "../src/platform/webviewProtocol.js";
 
 describe("conversation protocol", () => {
   it("composes its messages into the host's one request union", () => {

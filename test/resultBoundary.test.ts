@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { agentResultCandidates, formatDiagnostics, jsonCandidates, parseAgentResult, stripNullProperties } from "../src/core/resultBoundary.js";
+import { agentResultCandidates, formatDiagnostics, jsonCandidates, parseAgentResult, stripNullProperties } from "../src/shared/protocol/resultBoundary.js";
 
 const agent = (text: string, extra: Record<string, unknown> = {}): string =>
   JSON.stringify({ kind: "agent", text, ...extra });

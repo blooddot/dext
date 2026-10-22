@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PatchResult, ResolvedInvocation } from "../src/core/types.js";
-import type { DeterministicHandler } from "../src/core/runtime.js";
+import type { PatchResult, ResolvedInvocation } from "../src/shared/contracts/types.js";
+import type { DeterministicHandler } from "../src/features/workflow/host/runtime.js";
 
 const vscodeState = vi.hoisted(() => ({
   trusted: true,
@@ -90,7 +90,7 @@ function invocation(before: string, after: string): ResolvedInvocation {
 }
 
 describe("VS Code patch host", () => {
-  beforeAll(async () => { ({ applyPatchHandler } = await import("../src/vscodePatchHost.js")); });
+  beforeAll(async () => { ({ applyPatchHandler } = await import("../src/platform/vscode/patchHost.js")); });
   beforeEach(() => {
     vscodeState.trusted = true;
     vscodeState.text = "before";

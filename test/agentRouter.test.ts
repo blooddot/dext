@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { DefaultAgentRunner } from "../src/core/agentRouter.js";
-import { CliAgentRunner, type AgentConversationRequest } from "../src/core/agentRunner.js";
-import { DeepSeekHarnessRunner } from "../src/core/deepseekHarnessRunner.js";
+import { DefaultAgentRunner } from "../src/features/agents/host/agentRouter.js";
+import { CliAgentRunner, type AgentConversationRequest } from "../src/features/agents/host/agentRunner.js";
+import { DeepSeekHarnessRunner } from "../src/features/agents/host/deepseekHarnessRunner.js";
 describe("Agent routing", () => {
   it("routes each supported backend explicitly and rejects unknown providers", async () => {
     const cli = new CliAgentRunner(), harness = new DeepSeekHarnessRunner();

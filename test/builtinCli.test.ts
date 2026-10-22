@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { AgentProfile } from "../src/features/agents/contracts.js";
-import { builtinCliFields, CLI_BUILTIN_IDS, specializeBuiltinCli } from "../src/core/builtinCli.js";
-import { BUILTIN_METHODS } from "../src/core/builtins.js";
-import { ContextResolver } from "../src/core/contextResolver.js";
-import { MethodRegistry } from "../src/core/registry.js";
-import { DextRuntime } from "../src/core/runtime.js";
-import type { AgentExecutionRequest } from "../src/core/agentRunner.js";
-import type { ExecutionMetadata, InvocationValue } from "../src/core/types.js";
+import type { AgentProfile } from "../src/features/agents/contracts/agent.js";
+import { builtinCliFields, CLI_BUILTIN_IDS, specializeBuiltinCli } from "../src/features/agents/domain/builtinCli.js";
+import { BUILTIN_METHODS } from "../src/features/workflow/domain/builtins.js";
+import { ContextResolver } from "../src/features/workflow/host/contextResolver.js";
+import { MethodRegistry } from "../src/features/workflow/domain/registry.js";
+import { DextRuntime } from "../src/features/workflow/host/runtime.js";
+import type { AgentExecutionRequest } from "../src/features/agents/host/agentRunner.js";
+import type { ExecutionMetadata, InvocationValue } from "../src/shared/contracts/types.js";
 
 const profiles: AgentProfile[] = [
   { id: "codex", provider: "codex", command: "codex", label: "Codex", models: ["gpt-test", "gpt-other"] },

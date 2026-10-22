@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import MarkdownIt from "markdown-it";
-import { markdownCodeCopy } from "../src/markdownCopy.js";
+import { markdownCodeCopy } from "../src/shared/lib/markdownCopy.js";
 
 describe("Markdown code copy", () => {
   it("copies individual fenced and indented blocks without surrounding prose", () => {

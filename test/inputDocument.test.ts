@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { inputReferenceProjections } from "../src/core/fileReference.js";
+import { inputReferenceProjections } from "../src/features/workspace/domain/fileReference.js";
 import { coreInputReferenceInsertion, fileReferenceInsertion } from "../src/webview/inputInsertion.js";
 
 describe("Dext input document", () => {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { BUILTIN_METHODS } from "../src/core/builtins.js";
-import { CONVERSATION_METHODS, formatFieldType, formatMethodParameter, methodResultType } from "../src/core/methodSignature.js";
-import type { CallableDefinition, FieldDefinition } from "../src/core/types.js";
+import { BUILTIN_METHODS } from "../src/features/workflow/domain/builtins.js";
+import { CONVERSATION_METHODS, formatFieldType, formatMethodParameter, methodResultType } from "../src/features/workflow/domain/methodSignature.js";
+import type { CallableDefinition, FieldDefinition } from "../src/shared/contracts/types.js";
 
 describe("API parameter contracts", () => {
   it("renders a built-in parameter with its optionality and default", () => {

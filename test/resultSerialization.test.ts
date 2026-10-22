@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { toBoundaryJson } from "../src/core/resultSerialization.js";
-import { dextWireStepSchema } from "../src/core/schemas.js";
+import { toBoundaryJson } from "../src/shared/protocol/resultSerialization.js";
+import { dextWireStepSchema } from "../src/shared/contracts/schemas.js";
 
 describe("Dext boundary values", () => {
   it("passes JSON shapes through unchanged", () => {

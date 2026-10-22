@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { McpAccessTokenStore, type SecretStorageLike } from "../src/core/mcpSecrets.js";
+import { McpAccessTokenStore, type SecretStorageLike } from "../src/features/mcp/host/mcpSecrets.js";
 
 describe("McpAccessTokenStore", () => {
   it("derives distinct opaque SecretStorage keys for each workspace and server", async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AgentProfile } from "../src/features/agents/contracts.js";
+import type { AgentProfile } from "../src/features/agents/contracts/agent.js";
 import { codexConfiguredDefaults } from "../src/features/agents/host/agentProfiles.js";
 import { presentAgentSelection } from "../src/features/agents/presentation/agentSelectionDefaults.js";
 

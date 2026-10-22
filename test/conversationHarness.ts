@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import type { AgentProfile, AgentSelection } from "../src/features/agents/contracts.js";
+import type { AgentProfile, AgentSelection } from "../src/features/agents/contracts/agent.js";
 import type { ConversationHistoryStore, DextHistorySession } from "../src/features/conversations/contracts/history.js";
 import type { ConversationLayout } from "../src/features/conversations/contracts/preferences.js";
 import type { ConversationWebviewResponse } from "../src/features/conversations/contracts/protocol.js";
@@ -11,7 +11,7 @@ import { InteractionController } from "../src/features/conversations/host/intera
 import { PatchReviewController } from "../src/features/conversations/host/patchReviewController.js";
 import { PlanController } from "../src/features/conversations/host/planController.js";
 import { TurnExecutionCoordinator } from "../src/features/conversations/host/turnExecutionCoordinator.js";
-import type { ExecutionMetadata, InputExecutionResponse, RegisteredCallable } from "../src/core/types.js";
+import type { ExecutionMetadata, InputExecutionResponse, RegisteredCallable } from "../src/shared/contracts/types.js";
 import type { ResourceDocument, ResourceSession } from "../src/features/resources/contracts/resourceSession.js";
 import type { DextReplayEntry } from "../src/runner/dextResumeCache.js";
 

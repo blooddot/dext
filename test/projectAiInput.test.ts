@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { ReferenceProjection } from "../src/webview/monacoReferences.js";
-import type { WebviewResponse } from "../src/webviewProtocol.js";
+import type { WebviewResponse } from "../src/platform/webviewProtocol.js";
 
 vi.mock("vscode", () => ({}));
-import { DextSidebarProvider } from "../src/sidebarProvider.js";
+import { DextSidebarProvider } from "../src/app/sidebarProvider.js";
 
 function harness() {
   const sidebar = Object.create(DextSidebarProvider.prototype) as DextSidebarProvider;

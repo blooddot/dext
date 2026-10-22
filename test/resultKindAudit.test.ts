@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { dextResultSchema } from "../src/core/schemas.js";
+import { dextResultSchema } from "../src/shared/contracts/schemas.js";
 
 /** Read the declared union instead of trusting a hand-written list here. */
 function declaredBuiltinKinds(): string[] {
-  const source = readFileSync(resolve("src", "core", "types.ts"), "utf8");
+  const source = readFileSync(resolve("src", "shared", "contracts", "types.ts"), "utf8");
   const match = /export type BuiltinOutputKind =\r?\n([\s\S]*?);/.exec(source);
   if (!match) throw new Error("BuiltinOutputKind is not declared as a multi-line union.");
   return [...match[1]!.matchAll(/"([^"]+)"/g)].map((item) => item[1]!).sort();
@@ -16,7 +16,7 @@ describe("Dext result kinds", () => {
     expect(declaredBuiltinKinds()).toEqual([
       "agent", "apply", "ask", "mcpRaw", "plan", "skill", "template", "terminal", "ui"
     ]);
-    const source = readFileSync(resolve("src", "core", "types.ts"), "utf8");
+    const source = readFileSync(resolve("src", "shared", "contracts", "types.ts"), "utf8");
     // A custom API is an ordinary module now, so `OutputKind` may only add the
     // managed `mcp.<server>.<tool>` namespace — never arbitrary strings.
     expect(source).toContain("export type OutputKind = BuiltinOutputKind | `mcp.${string}`;");

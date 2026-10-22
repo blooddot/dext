@@ -6,8 +6,8 @@ import { readHistoryResponse } from "../src/features/conversations/domain/histor
 import { formatTurnTokenUsage, presentTurn } from "../src/features/conversations/presentation/turnPresentation.js";
 import { renderTurnInput, renderTurnResult } from "../src/features/conversations/presentation/turnComponents.js";
 import { turnDomAdapter } from "../src/features/conversations/browser/turnDomAdapter.js";
-import { formatDuration } from "../src/platform/duration.js";
-import type { AgentStreamEvent } from "../src/core/types.js";
+import { formatDuration } from "../src/shared/lib/duration.js";
+import type { AgentStreamEvent } from "../src/shared/contracts/types.js";
 
 // The hydration path still lives in the webview entry, but its stateful parts
 // (the transcript rows and the Agent trace) moved into dedicated browser

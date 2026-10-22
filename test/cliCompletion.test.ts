@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { cliCompletion } from "../src/core/cliCompletion.js";
-import { CliAgentRunner, runProcess } from "../src/core/agentRunner.js";
+import { cliCompletion } from "../src/features/agents/domain/cliCompletion.js";
+import { CliAgentRunner, runProcess } from "../src/features/agents/host/agentRunner.js";
 
 describe("CLI protocol completion", () => {
   it("recognizes fragmented terminal events without requiring a final newline", () => {

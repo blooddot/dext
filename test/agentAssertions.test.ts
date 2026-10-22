@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { evaluate, MAX_SOFT_DIFF_LINES, type AgentAssertionSnapshot } from "../src/core/agentAssertions.js";
-import type { PatchChange } from "../src/core/types.js";
+import { evaluate, MAX_SOFT_DIFF_LINES, type AgentAssertionSnapshot } from "../src/features/agents/host/agentAssertions.js";
+import type { PatchChange } from "../src/shared/contracts/types.js";
 
 function hash(content: string): string {
   return createHash("sha256").update(content).digest("hex");

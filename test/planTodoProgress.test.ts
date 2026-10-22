@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { planTodoItems, planTodoInstruction, PlanTodoProgress, stripPlanTodoProgress } from "../src/features/conversations/domain/planTodoProgress.js";
 import { latestAgentTodos } from "../src/features/conversations/presentation/agentTodoPresentation.js";
-import type { AgentStreamEvent } from "../src/core/types.js";
+import type { AgentStreamEvent } from "../src/shared/contracts/types.js";
 
 const document = "# Existing plan\n\n## Tasks\n\n1. [ ] Inspect implementation\n2. [x] Confirm dependencies\n3. [ ] Run tests\n\n## Verification\n- [ ] npm run check";
 const marker = (id: string, status: string) => `<!-- dext-todo: ${JSON.stringify({ updates: [{ id, status }] })} -->`;

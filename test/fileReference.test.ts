@@ -4,7 +4,7 @@ import {
   formatDextDirectoryReference,
   formatDextFileReference,
   parseFileReference
-} from "../src/core/fileReference.js";
+} from "../src/features/workspace/domain/fileReference.js";
 
 describe("Dext file references", () => {
   it("formats a workspace-relative selection with one-based coordinates", () => {

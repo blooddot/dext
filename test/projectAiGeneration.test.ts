@@ -111,7 +111,7 @@ describe("Project evidence package", () => {
       { path: "README.md", content: "# Example\nA task application." },
       { path: "package.json", content: '{"name":"example"}' },
       { path: "src/app.ts", content: "export class App {}\n" },
-      { path: "src/core/deep.ts", content: `${"// filler line\n".repeat(600)}export class Deep {}\n` }
+      { path: "src/features/deep.ts", content: `${"// filler line\n".repeat(600)}export class Deep {}\n` }
     ];
     const packaged = buildProjectEvidencePackage({ projectName: "Example", files, scope: ["src/**"], preset: "deep" }, { maxTotalChars: 20_000, maxFileChars: 1_000, maxFiles: 3 });
     const summary = summarizeProjectEvidence(packaged, { trigger: "diagram", generatedAt: 42 });
@@ -128,12 +128,12 @@ describe("Project evidence package", () => {
   });
 
   it("orders evidence by ownership and kind so a docs tree cannot outrank the project it documents", () => {
-    expect(projectEvidenceFileRank("src/core/agentRunner.ts")).toBe(0);
+    expect(projectEvidenceFileRank("src/features/agentRunner.ts")).toBe(0);
     expect(projectEvidenceFileRank("docs/development.md")).toBe(1);
     expect(projectEvidenceFileRank("test/archifyAdapter.test.ts")).toBe(2);
     expect(projectEvidenceFileRank("vendor/project-diagrams/archify/renderers/lifecycle/README.md")).toBe(3);
-    const ordered = ["vendor/pkg/README.md", "docs/guide.md", "src/core/a.ts", "README.md", "test/a.test.ts"].sort(compareProjectEvidencePaths);
-    expect(ordered).toEqual(["src/core/a.ts", "README.md", "docs/guide.md", "test/a.test.ts", "vendor/pkg/README.md"]);
+    const ordered = ["vendor/pkg/README.md", "docs/guide.md", "src/features/a.ts", "README.md", "test/a.test.ts"].sort(compareProjectEvidencePaths);
+    expect(ordered).toEqual(["src/features/a.ts", "README.md", "docs/guide.md", "test/a.test.ts", "vendor/pkg/README.md"]);
   });
 
   it("reserves evidence budget for project source when documentation is abundant", () => {
@@ -142,7 +142,7 @@ describe("Project evidence package", () => {
       ...Array.from({ length: 10 }, (_, index) => ({ path: `vendor/pkg-${index}/README.md`, content: "v".repeat(4_000) })),
       { path: "README.md", content: "r".repeat(4_000) },
       { path: "package.json", content: '{"name":"example"}' },
-      ...Array.from({ length: 10 }, (_, index) => ({ path: `src/core/module-${index}.ts`, content: "s".repeat(4_000) }))
+      ...Array.from({ length: 10 }, (_, index) => ({ path: `src/features/module-${index}.ts`, content: "s".repeat(4_000) }))
     ];
     // Explicit limits keep the budget tight, so the reserve has to do real work instead of
     // everything fitting and the vendored filler surviving on leftover room.
@@ -175,30 +175,30 @@ describe("Project evidence package", () => {
       { path: "README.md", content: "# Example\nA task application." },
       { path: "package.json", content: '{"name":"example"}' },
       { path: "src/app.ts", content: "export class App {}\n" },
-      ...Array.from({ length: 5 }, (_, index) => ({ path: `src/core/part-${index}.ts`, content: `export class Part${index} {}\n` })),
+      ...Array.from({ length: 5 }, (_, index) => ({ path: `src/features/part-${index}.ts`, content: `export class Part${index} {}\n` })),
       // Ranked last inside its directory, so the excerpt budget runs out before it.
-      { path: "src/core/zz-big.ts", content: `${"// filler line\n".repeat(600)}export class Deep {}\n` }
+      { path: "src/features/zz-big.ts", content: `${"// filler line\n".repeat(600)}export class Deep {}\n` }
     ];
     // Three excerpts only: README, the manifest and the first source, so the tail is inventory-only.
     const input = buildProjectEvidencePackage({ projectName: "Example", files }, { maxTotalChars: 20_000, maxFileChars: 1_000, maxFiles: 3 });
-    expect(input.inventory.map((entry) => entry.path)).toContain("src/core/zz-big.ts");
-    expect(input.files.map((file) => file.path)).not.toContain("src/core/zz-big.ts");
+    expect(input.inventory.map((entry) => entry.path)).toContain("src/features/zz-big.ts");
+    expect(input.files.map((file) => file.path)).not.toContain("src/features/zz-big.ts");
 
     const model = validModel(input);
-    model.diagrams[0]!.nodes[0]!.evidence = [{ path: "src/core/zz-big.ts" }];
+    model.diagrams[0]!.nodes[0]!.evidence = [{ path: "src/features/zz-big.ts" }];
     expect(validateProjectAiModel(model, input).filter((error) => error.includes("zz-big.ts"))).toEqual([]);
 
     // A line number is a claim about text the model was given, so it must be inside the excerpt.
-    model.diagrams[0]!.nodes[0]!.evidence = [{ path: "src/core/zz-big.ts", line: 400 }];
+    model.diagrams[0]!.nodes[0]!.evidence = [{ path: "src/features/zz-big.ts", line: 400 }];
     expect(validateProjectAiModel(model, input).some((error) => error.includes("outside the supplied excerpt"))).toBe(true);
   });
 
   it("reads entry points first and samples every source directory instead of one folder", () => {
     const files = [
-      { path: "src/core/alpha.ts", content: "export class Alpha {}\n" },
-      { path: "src/core/beta.ts", content: "export class Beta {}\n" },
-      { path: "src/core/gamma.ts", content: "export class Gamma {}\n" },
-      { path: "src/core/delta.ts", content: "export class Delta {}\n" },
+      { path: "src/features/alpha.ts", content: "export class Alpha {}\n" },
+      { path: "src/features/beta.ts", content: "export class Beta {}\n" },
+      { path: "src/features/gamma.ts", content: "export class Gamma {}\n" },
+      { path: "src/features/delta.ts", content: "export class Delta {}\n" },
       { path: "src/web/one.ts", content: "export class One {}\n" },
       { path: "src/web/two.ts", content: "export class Two {}\n" },
       { path: "src/extension.ts", content: "export function activate() {}\n" }
@@ -276,7 +276,7 @@ describe("Project AI response validation", () => {
       files: [
         { path: "README.md", content: "# Example" },
         { path: "src/app.ts", content: "export function start() {}\n" },
-        { path: "src/core/builtins.ts", content: "export function ask() {}\n" },
+        { path: "src/features/builtins.ts", content: "export function ask() {}\n" },
         { path: "src/webview/main.ts", content: "export function render() {}\n" },
         { path: "src/platform/editor-tabs/editorTabManager.ts", content: "export function openTab() {}\n" }
       ]
@@ -286,7 +286,7 @@ describe("Project AI response validation", () => {
     if (!context) throw new Error("Expected a context in the fixture.");
     model.intent.contexts[0] = {
       ...context,
-      moduleIds: ["src/core/builtins", "mod.builtins", "mod.webview", "mod.editorTabs"]
+      moduleIds: ["src/features/builtins", "mod.builtins", "mod.webview", "mod.editorTabs"]
     };
     expect(validateProjectAiModel(model, input)).toEqual([]);
 

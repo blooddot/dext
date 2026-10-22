@@ -100,7 +100,7 @@ describe("structure-driven AI generation", () => {
   });
 
   async function setup(count = 25) {
-    const index = await buildStructureIndex(Array.from({ length: count }, (_, i) => ({ path: `src/core/feature${i}.ts`, content: `export function feature${i}() {}` })));
+    const index = await buildStructureIndex(Array.from({ length: count }, (_, i) => ({ path: `src/features/feature${i}.ts`, content: `export function feature${i}() {}` })));
     const evidence = attachProjectStructure(buildProjectEvidencePackage({ files: [{ path: "README.md", content: "A modular application." }] }, { maxTotalChars: 48_000 }), index.summary);
     return { index, evidence };
   }
@@ -194,7 +194,7 @@ describe("structure-driven AI generation", () => {
   });
 
   it("retains every file and its declarations beyond the former 3 entry / 12 symbol summary", async () => {
-    const index = await buildStructureIndex(Array.from({ length: 80 }, (_, i) => ({ path: `src/core/projectPart${i}.ts`, content: Array.from({ length: 20 }, (_, n) => `export function symbol${i}_${n}() {}`).join('\n') })));
+    const index = await buildStructureIndex(Array.from({ length: 80 }, (_, i) => ({ path: `src/features/projectPart${i}.ts`, content: Array.from({ length: 20 }, (_, n) => `export function symbol${i}_${n}() {}`).join('\n') })));
     expect(index.summary.modules).toHaveLength(1);
     expect(index.summary.modules[0]!.members).toHaveLength(80);
     expect(structureCandidates(index.summary).flatMap(candidate => candidate.files).reduce((sum, file) => sum + file.symbols.length, 0)).toBe(1600);
@@ -226,18 +226,18 @@ describe("structure-driven AI generation", () => {
   });
 
   it("allows cross-directory ownership and derives dependencies and stable ids from exact member files", async () => {
-    const source = { 'src/core/billing.ts': 'export function invoice() {}', 'src/webview/billingView.ts': 'import { invoice } from "../core/billing";', 'src/core/payments.ts': 'import { invoice } from "./billing";' };
+    const source = { 'src/features/billing.ts': 'export function invoice() {}', 'src/webview/billingView.ts': 'import { invoice } from "../features/billing";', 'src/features/payments.ts': 'import { invoice } from "./billing";' };
     const index = await buildStructureIndex(inputs(source));
     const evidence = attachProjectStructure(buildProjectEvidencePackage({ files: [{ path: 'README.md', content: 'Billing app' }] }), index.summary);
     const service = new ProjectAiGenerationService({ id: 'fixture', generate: async request => request.prompt.includes('Optionally describe C4') || request.prompt.includes('Responsibility outlines:') ? reply(request) : { text: JSON.stringify({ contexts: [
-      { canonicalName: 'Billing', purpose: 'Invoice preparation', sourceFiles: ['src/core/billing.ts', 'src/webview/billingView.ts'], entryPoints: ['src/webview/billingView.ts'] },
-      { canonicalName: 'Payments', purpose: 'Payments use invoices', sourceFiles: ['src/core/payments.ts'], entryPoints: ['src/core/payments.ts'] }
+      { canonicalName: 'Billing', purpose: 'Invoice preparation', sourceFiles: ['src/features/billing.ts', 'src/webview/billingView.ts'], entryPoints: ['src/webview/billingView.ts'] },
+      { canonicalName: 'Payments', purpose: 'Payments use invoices', sourceFiles: ['src/features/payments.ts'], entryPoints: ['src/features/payments.ts'] }
     ] }) } }, { maxAttempts: 1 });
     const first = await service.generateIndex(evidence), second = await service.generateIndex(evidence);
     expect(first.intent.contexts.map(context => context.id)).toEqual(second.intent.contexts.map(context => context.id));
     expect(first.intent.contexts[1]!.dependsOn).toEqual([first.intent.contexts[0]!.id]);
     expect(buildProjectTopics(first.intent).find(topic => topic.title === 'Billing')?.sourceFiles).toHaveLength(2);
-    const changed = await buildStructureIndex(inputs({ ...source, 'src/core/billing.ts': 'export function invoice() { return 1; }' }), { cache: index.cache });
+    const changed = await buildStructureIndex(inputs({ ...source, 'src/features/billing.ts': 'export function invoice() { return 1; }' }), { cache: index.cache });
     const refreshed = await service.generateIndex(attachProjectStructure(evidence, changed.summary));
     expect(refreshed.intent.contexts[0]!.id).toBe(first.intent.contexts[0]!.id);
     expect(refreshed.intent.contexts[0]!.structureHash).not.toBe(first.intent.contexts[0]!.structureHash);
@@ -272,13 +272,13 @@ describe("structure-driven AI generation", () => {
       expect(outlines.every(item => item.declarations[0]!.count > 0)).toBe(true);
       consolidated = true;
       return { text: JSON.stringify({ contexts: [{ canonicalName: 'Feature execution', purpose: 'Run the feature with its supporting helpers',
-        sourceFiles: outlines.flatMap(item => item.sourceFiles), entryPoints: ['src/core/feature0.ts'], uncertainties: ['Does src/core/feature0.ts run before the external service is ready?', 'Runtime verification is required.'] }] }) };
+        sourceFiles: outlines.flatMap(item => item.sourceFiles), entryPoints: ['src/features/feature0.ts'], uncertainties: ['Does src/features/feature0.ts run before the external service is ready?', 'Runtime verification is required.'] }] }) };
     } }, { maxAttempts: 1 });
     const result = await service.generateIndex(evidence);
     expect(consolidated).toBe(true);
     expect(result.intent.contexts).toHaveLength(1);
-    expect(result.intent.contexts[0]).toMatchObject({ sourceFiles: ['src/core/feature0.ts', 'src/core/feature1.ts'], uncertainties: ['Does src/core/feature0.ts run before the external service is ready?'] });
-    expect(buildProjectTopics(result.intent).find(topic => topic.kind === 'context')?.uncertainties).toEqual(['Does src/core/feature0.ts run before the external service is ready?']);
+    expect(result.intent.contexts[0]).toMatchObject({ sourceFiles: ['src/features/feature0.ts', 'src/features/feature1.ts'], uncertainties: ['Does src/features/feature0.ts run before the external service is ready?'] });
+    expect(buildProjectTopics(result.intent).find(topic => topic.kind === 'context')?.uncertainties).toEqual(['Does src/features/feature0.ts run before the external service is ready?']);
   });
 
   it("reports an oversized file instead of truncating its structure facts", async () => {

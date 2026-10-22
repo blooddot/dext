@@ -1,8 +1,8 @@
 import { connect, type Socket } from "node:net";
 import { describe, expect, it, vi } from "vitest";
-import { HarnessBridge } from "../src/core/harnessBridge.js";
-import type { HarnessQuestionOutcome } from "../src/core/harnessQuestions.js";
-import type { HarnessResultOutcome } from "../src/core/harnessResultTool.js";
+import { HarnessBridge } from "../src/features/agents/host/harnessBridge.js";
+import type { HarnessQuestionOutcome } from "../src/features/agents/domain/harnessQuestions.js";
+import type { HarnessResultOutcome } from "../src/features/agents/domain/harnessResultTool.js";
 
 const question = { id: "q", question: "Which?" };
 const tool = { name: "dext_submit_result", description: "Submit the result.", parameters: { type: "object", properties: {} } };

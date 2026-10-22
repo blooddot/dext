@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { InvocationAst, RuntimeResponse } from "../src/core/types.js";
+import type { InvocationAst, RuntimeResponse } from "../src/shared/contracts/types.js";
 import { DextKernelHost } from "../src/runner/dextHost.js";
 import { workflowCases } from "./dextWorkflowCases.js";
 

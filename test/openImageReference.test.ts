@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { DextStorage } from "../src/dextStorage.js";
+import type { DextStorage } from "../src/platform/vscode/dextStorage.js";
 
 const mock = vi.hoisted(() => {
   class Uri {
@@ -18,7 +18,7 @@ const mock = vi.hoisted(() => {
   };
 });
 vi.mock("vscode", () => mock);
-import { openDextFileReference, openWorkspaceDocument } from "../src/vscodeContextHost.js";
+import { openDextFileReference, openWorkspaceDocument } from "../src/platform/vscode/contextHost.js";
 import { outputLinkReference } from "../src/features/workspace/browser/outputLink.js";
 
 beforeEach(() => {

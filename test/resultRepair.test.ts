@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { AxAdapter, REPAIR_OUTPUT_FIELD } from "../src/core/axAdapter.js";
-import { createResultRepair, type ResultRepairRequest } from "../src/core/resultRepair.js";
-import type { AgentAssertionSnapshot } from "../src/core/agentAssertions.js";
-import { BUILTIN_METHODS } from "../src/core/builtins.js";
-import type { AgentResult } from "../src/core/types.js";
+import { AxAdapter, REPAIR_OUTPUT_FIELD } from "../src/features/agents/domain/axAdapter.js";
+import { createResultRepair, type ResultRepairRequest } from "../src/features/agents/host/resultRepair.js";
+import type { AgentAssertionSnapshot } from "../src/features/agents/host/agentAssertions.js";
+import { BUILTIN_METHODS } from "../src/features/workflow/domain/builtins.js";
+import type { AgentResult } from "../src/shared/contracts/types.js";
 
 const contract = new AxAdapter().compile(BUILTIN_METHODS.find((method) => method.id === "agent")!);
 

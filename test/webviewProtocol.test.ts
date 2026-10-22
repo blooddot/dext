@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { webviewRequestSchema } from "../src/webviewProtocol.js";
+import { webviewRequestSchema } from "../src/platform/webviewProtocol.js";
 
 describe("Webview protocol", () => {
   it("refuses the definition requests the removed language service answered", () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { name, version, dext } from "../package.json";
-import { HttpMcpTransport, McpToolRegistry, StdioMcpTransport, authDiagnostic, mcpCredentialKind, mcpRequestUrl, redactedMcpUrl, redactedUrlQuery, type McpFetch, type McpTransport } from "../src/core/mcpRegistry.js";
+import { HttpMcpTransport, McpToolRegistry, StdioMcpTransport, authDiagnostic, mcpCredentialKind, mcpRequestUrl, redactedMcpUrl, redactedUrlQuery, type McpFetch, type McpTransport } from "../src/features/mcp/host/mcpRegistry.js";
 
 function jsonResponse(value: unknown, sessionId?: string): Response {
   return new Response(JSON.stringify(value), {

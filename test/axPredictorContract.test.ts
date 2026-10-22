@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { AxGenerateError, ax, type AxAIServiceOptions, type AxChatRequest } from "@ax-llm/ax";
-import { REPAIR_OUTPUT_FIELD, repairSignature } from "../src/core/axAdapter.js";
-import { CliAxAIService, type CliAxTransport } from "../src/core/cliAxAIService.js";
+import { REPAIR_OUTPUT_FIELD, repairSignature } from "../src/features/agents/domain/axAdapter.js";
+import { CliAxAIService, type CliAxTransport } from "../src/features/agents/host/cliAxAIService.js";
 
 function envelope(value: unknown): string {
   return JSON.stringify({ [REPAIR_OUTPUT_FIELD]: value });

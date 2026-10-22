@@ -2,9 +2,9 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { CliAgentRunner, resolveCliCommand, runClaudeConversation } from "../src/core/agentRunner.js";
-import type { AgentConversationRequest } from "../src/core/agentRunner.js";
-import type { AgentInputRequest, UiFormResult, ExecutionMetadata } from "../src/core/types.js";
+import { CliAgentRunner, resolveCliCommand, runClaudeConversation } from "../src/features/agents/host/agentRunner.js";
+import type { AgentConversationRequest } from "../src/features/agents/host/agentRunner.js";
+import type { AgentInputRequest, UiFormResult, ExecutionMetadata } from "../src/shared/contracts/types.js";
 
 // Opt-in native integration: it makes real model calls with the installed CLI's
 // own login. Enable with DEXT_TEST_CLAUDE=claude (or an executable path).

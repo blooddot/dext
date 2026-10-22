@@ -25,13 +25,13 @@ import {
   type AgentConversationRequest,
   type AgentExecutionRequest,
   type AgentStructuredRequest
-} from "../src/core/agentRunner.js";
-import { BUILTIN_METHODS } from "../src/core/builtins.js";
-import { AxAdapter } from "../src/core/axAdapter.js";
-import { serializeResultForAgent } from "../src/core/resultSerialization.js";
-import { CodexConversationConnection } from "../src/core/codexConversationConnection.js";
-import type { AgentProfile } from "../src/features/agents/contracts.js";
-import type { AgentStreamEvent, RegisteredCallable } from "../src/core/types.js";
+} from "../src/features/agents/host/agentRunner.js";
+import { BUILTIN_METHODS } from "../src/features/workflow/domain/builtins.js";
+import { AxAdapter } from "../src/features/agents/domain/axAdapter.js";
+import { serializeResultForAgent } from "../src/shared/protocol/resultSerialization.js";
+import { CodexConversationConnection } from "../src/features/agents/host/codexConversationConnection.js";
+import type { AgentProfile } from "../src/features/agents/contracts/agent.js";
+import type { AgentStreamEvent, RegisteredCallable } from "../src/shared/contracts/types.js";
 
 const temporaryDirectories: string[] = [];
 

@@ -1,8 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ResolvedInvocation } from "../src/core/types.js";
-import type { DeterministicHandler } from "../src/core/runtime.js";
+import type { ResolvedInvocation } from "../src/shared/contracts/types.js";
+import type { DeterministicHandler } from "../src/features/workflow/host/runtime.js";
 
 const vscodeState = vi.hoisted(() => ({
   trusted: true,
@@ -46,7 +46,7 @@ function invocation(arguments_: ResolvedInvocation["arguments"]): ResolvedInvoca
 
 describe("VS Code terminal host", () => {
   beforeAll(async () => {
-    ({ terminalRunHandler } = await import("../src/vscodeTerminalHost.js"));
+    ({ terminalRunHandler } = await import("../src/platform/vscode/terminalHost.js"));
   });
   beforeEach(() => {
     vscodeState.trusted = true;
@@ -54,7 +54,7 @@ describe("VS Code terminal host", () => {
   });
 
   it("describes itself as running without a confirmation step, which is what it does", async () => {
-    const { BUILTIN_METHODS } = await import("../src/core/builtins.js");
+    const { BUILTIN_METHODS } = await import("../src/features/workflow/domain/builtins.js");
     const terminal = BUILTIN_METHODS.find((method) => method.id === "terminal");
     // The old wording promised a confirmation the handler never performs.
     expect(terminal?.description).not.toContain("confirmed command");

@@ -2,10 +2,10 @@ import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   claudeAnswerMap, claudeAskUserQuestion, claudeControlArguments, claudePermissionMode, runClaudeConversation
-} from "../src/core/agentRunner.js";
-import type { AgentConversationRequest } from "../src/core/agentRunner.js";
-import type { AgentInputRequest, AgentStreamEvent, ExecutionMetadata, UiFormResult } from "../src/core/types.js";
-import type { UiFormDefinition } from "../src/core/uiForm.js";
+} from "../src/features/agents/host/agentRunner.js";
+import type { AgentConversationRequest } from "../src/features/agents/host/agentRunner.js";
+import type { AgentInputRequest, AgentStreamEvent, ExecutionMetadata, UiFormResult } from "../src/shared/contracts/types.js";
+import type { UiFormDefinition } from "../src/shared/contracts/uiForm.js";
 
 const fixture = resolve("test/fixtures/claudeAgent.mjs");
 

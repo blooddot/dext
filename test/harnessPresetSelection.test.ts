@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { readFile } from "node:fs/promises";
 import { AgentProfileStore } from "../src/features/agents/host/agentProfiles.js";
 import { DextConversationPreferences } from "../src/features/conversations/host/conversationPreferences.js";
-import { createHarnessPolicy, harnessBinding } from "../src/core/deepseekHarnessPolicy.js";
-import { DEFAULT_HARNESS_PRESET, harnessPresetOrDefault } from "../src/core/harnessPresetDefault.js";
-import { webviewRequestSchema } from "../src/webviewProtocol.js";
+import { createHarnessPolicy, harnessBinding } from "../src/features/agents/host/deepseekHarnessPolicy.js";
+import { DEFAULT_HARNESS_PRESET, harnessPresetOrDefault } from "../src/features/agents/domain/harnessPresetDefault.js";
+import { webviewRequestSchema } from "../src/platform/webviewProtocol.js";
 
 describe("Harness preset selection", () => {
   it("preserves each conversation's preset and reads an unset one as the Harness default", async () => {

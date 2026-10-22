@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { builtinTypeDefinition } from "../src/core/builtinTypeDefinitions.js";
+import { builtinTypeDefinition } from "../src/features/workflow/domain/builtinTypeDefinitions.js";
 
 describe("built-in Dext type definitions", () => {
   it("exposes the result shapes the runtime returns", () => {

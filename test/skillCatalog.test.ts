@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { rm } from "node:fs/promises";
-import { SkillCatalog } from "../src/core/skillCatalog.js";
+import { SkillCatalog } from "../src/features/workflow/host/skillCatalog.js";
 
 const roots: string[] = [];
 

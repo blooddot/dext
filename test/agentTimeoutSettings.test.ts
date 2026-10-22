@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 // Load the application during test collection. Its dependency graph can take
 // longer than a hook's timeout to transform while the whole suite runs in parallel.
-import { DextApplication } from "../src/application.js";
-import { DEFAULT_AGENT_IDLE_TIMEOUT_MS, DEFAULT_AGENT_TIMEOUT_MS } from "../src/core/agentTimeout.js";
+import { DextApplication } from "../src/app/application.js";
+import { DEFAULT_AGENT_IDLE_TIMEOUT_MS, DEFAULT_AGENT_TIMEOUT_MS } from "../src/features/agents/domain/agentTimeout.js";
 
 /** The `dext` configuration node, read the way `applyTimeoutSettings` does it:
  * a section-relative key plus the caller's own fallback. */

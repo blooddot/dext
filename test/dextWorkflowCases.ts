@@ -2,8 +2,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ExecutionCancelledError } from "../src/core/executionErrors.js";
-import type { InvocationAst, RuntimeResponse } from "../src/core/types.js";
+import { ExecutionCancelledError } from "../src/shared/protocol/executionErrors.js";
+import type { InvocationAst, RuntimeResponse } from "../src/shared/contracts/types.js";
 import { DextKernelHost } from "../src/runner/dextHost.js";
 import type { DextReplayEntry } from "../src/runner/dextResumeCache.js";
 

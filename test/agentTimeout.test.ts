@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { agentTimeout } from "../src/core/agentTimeout.js";
+import { agentTimeout } from "../src/features/agents/domain/agentTimeout.js";
 
 afterEach(() => { vi.useRealTimers(); });
 

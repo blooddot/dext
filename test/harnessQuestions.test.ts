@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CreateElicitationRequest } from "@agentclientprotocol/sdk";
-import { elicitationQuestions, elicitationResponse, harnessInputQuestions, harnessQuestionAnswer, parseHarnessQuestionRequest } from "../src/core/harnessQuestions.js";
+import { elicitationQuestions, elicitationResponse, harnessInputQuestions, harnessQuestionAnswer, parseHarnessQuestionRequest } from "../src/features/agents/domain/harnessQuestions.js";
 
 const form = (properties: Record<string, unknown>, required: string[] = []): CreateElicitationRequest =>
   ({ mode: "form", sessionId: "s", message: "Pick", requestedSchema: { type: "object", required, properties } }) as CreateElicitationRequest;

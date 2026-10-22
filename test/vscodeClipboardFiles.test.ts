@@ -26,9 +26,9 @@ const vscode = vi.hoisted(() => {
 });
 
 vi.mock("vscode", () => vscode);
-import { AttachmentStore } from "../src/attachmentStore.js";
-import { clipboardFileReferences, copyFilePathKeepingFiles, copyFilePathKeepingLine } from "../src/vscodeClipboardFiles.js";
-import { DextSidebarProvider } from "../src/sidebarProvider.js";
+import { AttachmentStore } from "../src/shared/lib/attachmentStore.js";
+import { clipboardFileReferences, copyFilePathKeepingFiles, copyFilePathKeepingLine } from "../src/platform/vscode/clipboardFiles.js";
+import { DextSidebarProvider } from "../src/app/sidebarProvider.js";
 import { FileDropClient } from "../src/webview/fileDropClient.js";
 
 beforeEach(() => {

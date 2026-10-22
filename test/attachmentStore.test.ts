@@ -7,8 +7,8 @@ import {
   MAX_ATTACHMENT_BYTES,
   MIN_ATTACHMENT_BYTES,
   writeExactClipboardText
-} from "../src/attachmentStore.js";
-import type { DextFileReference } from "../src/core/fileReference.js";
+} from "../src/shared/lib/attachmentStore.js";
+import type { DextFileReference } from "../src/features/workspace/domain/fileReference.js";
 
 function codeRef(content = "const value = 1;"): DextFileReference {
   return {

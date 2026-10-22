@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { codexErrorMessage } from "../src/core/codexError.js";
+import { codexErrorMessage } from "../src/features/agents/domain/codexError.js";
 
 describe("Codex error diagnostics", () => {
   it("keeps message-only errors concise when optional details are absent", () => {

@@ -33,7 +33,7 @@ vi.mock("vscode", () => ({
   }
 }));
 
-import { loadEditorTokenTheme } from "../src/vscodeTheme.js";
+import { loadEditorTokenTheme } from "../src/platform/vscode/theme.js";
 
 let directory: string;
 
