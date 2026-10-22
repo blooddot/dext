@@ -134,6 +134,8 @@ export interface ProjectEvidenceSelection {
 export interface ProjectEvidenceSummary {
   /** Structure facts this read computed and attached; only a full index build produces them. */
   structure?: { files: number; modules: number; parsed: number; cached: number; failed: number; unsupported: number };
+  /** The index summary persisted with the last completed project model; a bounded read cannot attach structure. */
+  structureIndex?: ProjectStructureIndexSummary;
   version: 1;
   trigger: "initialize" | "diagram";
   generatedAt: number;
@@ -147,4 +149,15 @@ export interface ProjectEvidenceSummary {
   paths: string[];
   /** Candidates that received text, so the reader knows which claims can carry line numbers. */
   excerpted: string[];
+}
+
+
+/** Counts of a locally indexed structure map, independent of any model input. */
+export interface ProjectStructureIndexSummary {
+  hash?: string;
+  files: number;
+  parsed: number;
+  modules: number;
+  failed: number;
+  unsupported: number;
 }

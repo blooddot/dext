@@ -3,14 +3,14 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { CliAxAIService, type CliAxTransport } from "../../../agents/host/cliAxAIService.js";
 import type { AgentTokenUsage } from "../../../../shared/contracts/types.js";
-import type { IndexedProjectEvidence, ProjectEvidenceFile, ProjectEvidenceFileInput, ProjectEvidenceInput, ProjectEvidenceInventoryEntry, ProjectEvidenceLimits, ProjectEvidencePackage, ProjectEvidenceSummary } from "../../contracts/evidence.js";
+import type { IndexedProjectEvidence, ProjectEvidenceFile, ProjectEvidenceFileInput, ProjectEvidenceInput, ProjectEvidenceInventoryEntry, ProjectEvidenceLimits, ProjectEvidencePackage, ProjectEvidenceSummary, ProjectStructureIndexSummary } from "../../contracts/evidence.js";
 import { validateProjectDiagram, type ProjectDiagram, type ProjectDiagramEvidence, type ProjectDiagramKind } from "../../contracts/projectDiagram.js";
 import { projectC4Schema, projectIntentSchema, validateProjectIntent, type ProjectContext, type ProjectIntent, type ProjectQualityIssue, type ProjectIntentProvenance } from "../../contracts/projectIntent.js";
 import type { ProjectEvidence } from "../../contracts/projectKnowledge.js";
 import type { StructureSummary } from "../indexing/projectStructure.js";
 import { connectResponsibilities, responsibilityContext, responsibilityDraftSchema, responsibilityMergeSchema, structureCandidates, validateOwnership, type StructureCandidate } from "../indexing/projectStructureKnowledge.js";
 import { ownershipConcerns, projectModelQuality } from "./projectModelQuality.js";
-export type { IndexedProjectEvidence, ProjectEvidenceFile, ProjectEvidenceFileInput, ProjectEvidenceInput, ProjectEvidenceInventoryEntry, ProjectEvidenceLimits, ProjectEvidencePackage, ProjectEvidenceSelection, ProjectEvidenceSummary, ProjectKnowledgeReference } from "../../contracts/evidence.js";
+export type { IndexedProjectEvidence, ProjectEvidenceFile, ProjectEvidenceFileInput, ProjectEvidenceInput, ProjectEvidenceInventoryEntry, ProjectEvidenceLimits, ProjectEvidencePackage, ProjectEvidenceSelection, ProjectEvidenceSummary, ProjectKnowledgeReference, ProjectStructureIndexSummary } from "../../contracts/evidence.js";
 export const PROJECT_DIAGRAM_PROMPT_VERSION = "project-diagram-7";
 export const PROJECT_MODEL_PROMPT_VERSION = "project-model-7";
 
@@ -23,14 +23,17 @@ function countByKind(entries: readonly { kind: string }[]): Record<string, numbe
 /** Pure summary of one package; the host persists it and the page renders it. */
 export function summarizeProjectEvidence(
   packaged: ProjectEvidencePackage,
-  meta: { trigger: "initialize" | "diagram"; generatedAt: number }
+  meta: { trigger: "initialize" | "diagram"; generatedAt: number; structureIndex?: ProjectStructureIndexSummary }
 ): ProjectEvidenceSummary {
   return {
     version: 1,
     trigger: meta.trigger,
     generatedAt: meta.generatedAt,
     inputHash: packaged.inputHash,
-    ...(packaged.structure ? { structure: { files: packaged.structure.files, parsed: packaged.structure.parsed, cached: packaged.structure.cached, failed: packaged.structure.failed, unsupported: packaged.structure.unsupported, modules: packaged.structure.modules.length } } : {}),
+    // An index run records the structure it built. A bounded diagram read cannot attach structure
+    // facts, so it records the persisted index summary instead; absent means no completed index run.
+    ...(packaged.structure ? { structure: { files: packaged.structure.files, parsed: packaged.structure.parsed, cached: packaged.structure.cached, failed: packaged.structure.failed, unsupported: packaged.structure.unsupported, modules: packaged.structure.modules.length } }
+      : meta.structureIndex ? { structureIndex: { ...meta.structureIndex } } : {}),
     selection: packaged.selection,
     inventory: {
       total: packaged.inventory.length,

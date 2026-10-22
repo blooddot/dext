@@ -127,6 +127,16 @@ describe("Project evidence package", () => {
     expect(summary.excerpted.length).toBeLessThan(summary.paths.length);
   });
 
+  it("records the local structure index a bounded diagram read did not attach", () => {
+    const packaged = buildProjectEvidencePackage({ projectName: "Example", files: [{ path: "src/app.ts", content: "export class App {}" }] });
+    const structureIndex = { hash: "index", files: 12, parsed: 12, modules: 3, failed: 0, unsupported: 1 };
+    const summary = summarizeProjectEvidence(packaged, { trigger: "diagram", generatedAt: 42, structureIndex });
+    expect(summary.structure).toBeUndefined();
+    expect(summary.structureIndex).toEqual(structureIndex);
+    // No index at all is distinguishable from "index existed but was not attached".
+    expect(summarizeProjectEvidence(packaged, { trigger: "diagram", generatedAt: 42 }).structureIndex).toBeUndefined();
+  });
+
   it("orders evidence by ownership and kind so a docs tree cannot outrank the project it documents", () => {
     expect(projectEvidenceFileRank("src/features/agentRunner.ts")).toBe(0);
     expect(projectEvidenceFileRank("docs/development.md")).toBe(1);

@@ -137,10 +137,12 @@ describe("Project topic host", () => {
     const intent = projectIntentSchema.parse({ schemaVersion: 1, updatedAt: 1, brief: { name: "Example" }, contexts: [{ id: "code", canonicalName: "Code", evidence: [{ path: "src/code.ts", line: 1 }] }],
       structure: { hash: "structure-hash", files: 1, parsed: 1, modules: 1, failed: 2, unsupported: 3, unresolved: 0, issues: [] } });
     let saved: ProjectDiagram[] = [];
+    const written: { structure?: unknown; structureIndex?: unknown; trigger?: string }[] = [];
     const source = createProjectPanelDataSource({
       name: "Example", root: "C:/ws", rootUri: {} as never,
       store: { readObjects: async () => [], readArchitecture: async () => ({ decisions: [] }), readIntent: async () => intent,
-        readDiagrams: async () => saved, writeDiagram: async (diagram) => { saved = [diagram]; } },
+        readDiagrams: async () => saved, writeDiagram: async (diagram) => { saved = [diagram]; },
+        writeEvidenceSummary: async (summary) => { written.push(summary); } },
       readEvidence: async (request) => buildProjectEvidencePackage({ ...request, files: [{ path: "src/code.ts", content: "export function execute() {}" }], knowledge: [{ id: "code", kind: "context", name: "Code" }] }),
       readStructureIndex: async () => buildProjectEvidencePackage({ files: [] }) as IndexedProjectEvidence,
       projectAiProvider: { id: "fixture", generate: async () => ({ text: JSON.stringify({ diagram: {
@@ -154,6 +156,10 @@ describe("Project topic host", () => {
     await source.generateTopicDiagram?.("code");
     expect(saved, JSON.stringify(messages.filter((message) => message.type === "projectDiagramGenerateFailed"))).toHaveLength(1);
     expect(saved[0]!.metadata?.topicId).toBe("code");
+    // A bounded topic read records the persisted index without claiming it was attached to the prompt.
+    expect(written).toHaveLength(1);
+    expect(written[0]).toMatchObject({ trigger: "diagram", structureIndex: { hash: "structure-hash", files: 1, parsed: 1, modules: 1, failed: 2, unsupported: 3 } });
+    expect(written[0]!.structure).toBeUndefined();
     expect(messages.find((message) => message.type === "projectDiagramGenerated")).toMatchObject({ document: saved[0], topics: [{ id: "code", diagrams: [{ id: "code-view" }] }] });
     expect(messages.some((message) => message.type === "projectDiagramRenderFailed")).toBe(false);
   });

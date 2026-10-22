@@ -80,6 +80,14 @@ export const projectEvidenceSummarySchema = z.object({
   trigger: z.enum(["initialize", "diagram"]),
   generatedAt: z.number().int().nonnegative(),
   inputHash: z.string(),
+  structure: z.object({
+    files: z.number().int().nonnegative(), parsed: z.number().int().nonnegative(), cached: z.number().int().nonnegative(),
+    failed: z.number().int().nonnegative(), unsupported: z.number().int().nonnegative(), modules: z.number().int().nonnegative()
+  }).passthrough().optional(),
+  structureIndex: z.object({
+    hash: z.string().optional(), files: z.number().int().nonnegative(), parsed: z.number().int().nonnegative(),
+    modules: z.number().int().nonnegative(), failed: z.number().int().nonnegative(), unsupported: z.number().int().nonnegative()
+  }).passthrough().optional(),
   selection: z.object({
     scope: z.array(z.string()).default([]),
     preset: z.string().optional(),
