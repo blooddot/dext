@@ -8,7 +8,7 @@ import { renderProjectQuality } from "../src/features/project/presentation/proje
 
 describe("ownership review classification", () => {
   it.each(["apiEditorProvider", "editorTabHtml", "agentSelectionDefaults", "fileSearch", "apiPanel", "unfamiliarHelper"])("keeps justified %s boundaries without a filename whitelist", name => {
-    const member = (path: string, dependencies: StructureMember["dependencies"] = []): StructureMember => ({ path, hash: "h", language: "typescript", symbols: [], dependencies });
+    const member = (path: string, dependencies: StructureMember["dependencies"] = []): StructureMember => ({ path, hash: "h", language: "typescript", lines: 1, symbols: [], dependencies });
     const helper = member(`src/${name}.ts`), peer = member("src/peer.ts"), caller = member("src/composition.ts", [{ specifier: `./${name}`, to: helper.path }]);
     const contexts = [responsibilityContext("Feature", "Own the feature", [helper, peer], [helper.path]), responsibilityContext("Composition", "Connect features", [caller], [caller.path])];
     const intent = projectIntentSchema.parse({ schemaVersion: 1, updatedAt: 0, brief: { name: "App", summary: "App" }, contexts });

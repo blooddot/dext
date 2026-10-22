@@ -357,7 +357,7 @@ function structureBatch(evidence: ProjectEvidencePackage, candidates: StructureC
   delete base.structure;
   // Runtime excerpts are for the final overview, not repeated in every structural batch.
   base.files = base.files.filter(file => file.kind !== "source");
-  return { ...base, knowledge: [], inventory: candidates.flatMap(candidate => candidate.files.map(file => ({ path: file.path, kind: "source" as const, lines: 0, contentHash: file.hash }))) };
+  return { ...base, knowledge: [], inventory: candidates.flatMap(candidate => candidate.files.map(file => ({ path: file.path, kind: "source" as const, lines: file.lines, contentHash: file.hash }))) };
 }
 
 const nonempty = z.string().trim().min(1).max(10_000);
@@ -1299,7 +1299,7 @@ export class ProjectAiGenerationService {
     // Runtime architecture is a separate interpretation, grounded in configuration/document excerpts.
     const base: ProjectEvidencePackage = { ...evidence };
     delete (base as { structure?: unknown }).structure;
-    const overviewEvidence = { ...base, inventory: [...base.inventory, ...contexts.flatMap(context => context.entryPoints.slice(0, 1)).filter(path => !base.inventory.some(file => file.path === path)).map(path => ({ path, kind: "source" as const, lines: 0 }))],
+    const overviewEvidence = { ...base, inventory: [...base.inventory, ...contexts.flatMap(context => context.entryPoints.slice(0, 1)).filter(path => !base.inventory.some(file => file.path === path)).map(path => ({ path, kind: "source" as const, lines: fileByPath.get(path)?.lines ?? 0 }))],
       knowledge: contexts.map(context => ({ id: context.id, name: context.canonicalName, kind: "context" as const })) };
     const schema = z.object({ brief: projectModelSchema.shape.brief,
       capabilities: z.array(z.object({ canonicalName: z.string().trim().min(1).max(120), description: z.string().trim().min(1).max(500),

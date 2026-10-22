@@ -208,6 +208,19 @@ describe("structure-driven AI generation", () => {
     expect(result.intent.contexts.flatMap(context => context.sourceFiles!)).toHaveLength(80);
   });
 
+  it("reports real line counts for candidates and never invents lines for an inventory-only file", async () => {
+    const index = await buildStructureIndex(inputs({ "src/lines.ts": "export const a = 1;\nexport const b = 2;\nexport const c = 3;" }));
+    expect(index.summary.modules.flatMap(module => module.members).find(file => file.path === "src/lines.ts")?.lines).toBe(3);
+    const evidence = attachProjectStructure(buildProjectEvidencePackage({ files: [{ path: "README.md", content: "App" }] }), index.summary);
+    const requests: ProjectAiRequest[] = [];
+    const service = new ProjectAiGenerationService({ id: "fixture", generate: async request => { requests.push(request); return reply(request); } }, { maxAttempts: 1 });
+    await service.generateProjectModel(evidence);
+    const batch = requests.find(request => request.prompt.includes("Candidate file facts:"));
+    expect(batch).toBeDefined();
+    const input = JSON.parse(batch!.prompt.match(/Evidence data: ([^\n]+)/)![1]!) as { inventory: { path: string; lines: number }[] };
+    expect(input.inventory.find(entry => entry.path === "src/lines.ts")?.lines).toBe(3);
+  });
+
   it.each(['duplicate', 'unknown', 'foreign-entry', 'missing-merge'])("rejects %s ownership", async mode => {
     const { evidence } = await setup(mode === 'missing-merge' ? 25 : 2);
     const service = new ProjectAiGenerationService({ id: "fixture", generate: async request => {

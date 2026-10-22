@@ -26,7 +26,7 @@ export interface StructureModule {
   members: StructureMember[];
 }
 export interface StructureMember {
-  path: string; hash: string; language: string; symbols: StructureFile["symbols"];
+  path: string; hash: string; language: string; lines: number; symbols: StructureFile["symbols"];
   dependencies: Array<{ specifier: string; to?: string; typeOnly?: boolean }>;
 }
 export interface StructureSummary {
@@ -223,7 +223,7 @@ function summarize(files: readonly StructureFile[], config: readonly Config[], d
     }
     const targets = [...new Set(edges.flatMap(edge => edge.to && owner.get(edge.to) !== path ? [id(owner.get(edge.to)!)] : []))].sort();
     return { id: id(path), path, package: group.package, languages: [...new Set(group.files.map(file => file.language))].sort(), files: group.files.length,
-      members: ranked.map(file => ({ path: file.path, hash: file.hash, language: file.language, symbols: file.symbols, dependencies: fileEdges.get(file.path) ?? [] })),
+      members: ranked.map(file => ({ path: file.path, hash: file.hash, language: file.language, lines: file.lines, symbols: file.symbols, dependencies: fileEdges.get(file.path) ?? [] })),
       entryPoints: ranked.slice(0, 3).map(file => file.path), symbols: ranked.flatMap(file => file.symbols.slice(0, 4).map(symbol => ({ path: file.path, ...symbol }))).slice(0, 12),
       evidence: ranked.slice(0, 3).map(file => ({ path: file.path, contentHash: file.hash })),
       references: [...references.values()].sort((a, b) => b.count - a.count || a.specifier.localeCompare(b.specifier)).slice(0, 12),
