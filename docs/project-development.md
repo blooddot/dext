@@ -123,9 +123,9 @@ only diagrams keeps them viewable and reports that the knowledge model still nee
 
 ## Diagram rendering
 
-Project Intent and the renderer-neutral `ProjectDiagram` IR remain the data sources. Structural, C4, workflow, sequence, data-flow and lifecycle views all use bundled Archify 3.2.0 as their only renderer. Bundled Mermaid 11.17.2 is still used for `mermaid` fenced code blocks in conversation and form Markdown; it is not a Project diagram renderer. Project IDs, prose and source navigation come from the saved model, without an online rendering service.
+Project Intent and the renderer-neutral `ProjectDiagram` IR remain the data sources. Structural, C4, workflow, sequence, data-flow, lifecycle, tree and class views all use bundled Archify 3.2.0 as their only renderer. Bundled Mermaid 11.17.2 is still used for `mermaid` fenced code blocks in conversation and form Markdown; it is not a Project diagram renderer. Project IDs, prose and source navigation come from the saved model, without an online rendering service.
 
-Five kinds share the common node/relation/evidence structures and add optional, renderer-neutral
+Seven kinds share the common node/relation/evidence structures and add optional, renderer-neutral
 semantics:
 
 | Kind | Optional semantic structures |
@@ -135,10 +135,14 @@ semantics:
 | Sequence | Ordered participants and call/return messages covering every relation |
 | Data flow | Two to five stages with `stageId` on every node |
 | Lifecycle | Explicit initial/normal/terminal states, events, conditions and transitions |
+| Tree | A single root and `parentId` parent chains; no cross-branch relations |
+| Class | Explicit `classKind` and members on nodes; `inheritance`/`realization` relations |
 
 Archify renders in an isolated sandbox and retains native animation, zoom and SVG export. Node selection and native route journeys link to prose. Reader playback follows a recorded main path or message order; branching workflows without a main path do not invent execution order. If the runtime cannot render, the reader shows an explicit error naming the reason and keeps the explanation, evidence and saved model available; it never switches to a second layout engine. Lifecycle diagrams use Archify schema v3, whose ordered `mainPath`, semantic states and transitions let the renderer derive all geometry. No stored diagram migration is required.
 
-Optional `intent.c4` records systems, people, external systems and runtime containers. `systemId` identifies the focal system; containers use `parentId` for system ownership and `contextIds` for responsibility links. Every element and relationship requires evidence from a read source/document excerpt. The reader derives separate Project landscape (C1) and Runtime units (C2) views, then links to responsibilities and flows. Directories are never inferred as containers. Existing models remain usable without C4; the structure index generates C4 only when read source/configuration/documentation supports runtime boundaries. Dedicated class/ER diagram types are not introduced yet.
+**Structure map and Type map** are derived on the fly from the current structure index; they are never written to `.dext/diagrams` and never sent to AI. The Structure map projects project → directory module → representative file → representative declaration. The Type map projects explicit types, their declared members, and only unambiguous `extends`/`implements` (Python bases) edges. Index version 4 records stable symbol ids, `ownerId`/`ownerName`, member kinds, type/parameter/return text, visibility and modifiers, plus explicit heritage; TS/JS extracts classes, interfaces, enums and their members, Python extracts classes/methods/class-level annotated fields, and Rust extracts structs/enums/traits, fields and impl methods. Rust `impl Trait for Type` edges and Python instance fields are intentionally not inferred. Named heritage targets must be unique among the selected types or the edge is skipped with a theme warning. A cache written by an older index version is rejected, so upgrade Dext and run **Build project model** or **Update project model** once to populate the local index and both maps.
+
+Optional `intent.c4` records systems, people, external systems and runtime containers. `systemId` identifies the focal system; containers use `parentId` for system ownership and `contextIds` for responsibility links. Every element and relationship requires evidence from a read source/document excerpt. The reader derives separate Project landscape (C1) and Runtime units (C2) views, then links to responsibilities and flows. Directories are never inferred as containers. Existing models remain usable without C4; the structure index generates C4 only when read source/configuration/documentation supports runtime boundaries. ER diagrams are still outside this scope; the new class kind is limited to the explicit type facts above.
 
 The reader supports zoom, fit, expand, SVG export and a collapsed **Diagram model** panel. A failed render leaves the explanation, evidence and saved model available, and opens that panel so the cause and model remain inspectable. Queued results cannot replace a newer topic. SVG export and source navigation resolve the displayed diagram's ID and saved timestamp in the host. All relations are also listed as keyboard-accessible **Connections** entries.
 
@@ -185,9 +189,9 @@ node scripts/checkProjectDiagramsUi.mjs # retained Archify adapter and bridge co
 Unit tests for the project layer run with `npx vitest run test/project*.test.ts test/editorTab*.test.ts`.
 `scripts/assertWebviewAssets.mjs` additionally proves from the esbuild dependency manifest that the
 runtime bundle contains neither the TypeScript compiler nor the removed scan/engine implementations,
-that the Archify entry point, CLI helper, five schemas and five renderers the adapter names are present,
-including the locale manifest, render-output checker, explainer checker and owned-temp/update helpers they
-import, and that
+that the Archify entry point, CLI helper, seven schemas and seven renderers the adapter names are present,
+including the tree/class renderers, the class grid helper, the locale manifest, render-output checker,
+explainer checker and owned-temp/update helpers they import, and that
 `vendor/project-diagrams/drawio` is not packaged. The rest of the vendored runtime is distributed
 because `.vscodeignore` does not exclude `vendor/**`.
 
@@ -333,5 +337,10 @@ in `docs/conversation-development.md`.
 | `src/core/toml.ts` | `test/toml.test.ts` |
 | `src/webview/outputLink.ts` | `test/openImageReference.test.ts` |
 | `src/webview/fileSearchClient.ts` | `src/webview/codeEditor.ts` |
+
+Derived diagram builders live in `src/features/project/host/diagrams/projectStructureMap.ts` (Structure map)
+and `src/features/project/host/diagrams/projectClassMap.ts` (Type map); their coverage is
+`test/projectStructureTree.test.ts` and `test/projectStructureClass.test.ts`, with extraction covered by
+`test/projectStructureTypes.test.ts` and cache compatibility by `test/projectStructureCache.test.ts`.
 
 Removed unused entries / 已移除无消费者入口：`src/webview/projectArchitectureTypes.ts`, `src/core/projectIndexEvolution.ts`, `src/core/projectC4.ts`, `src/core/projectStructure.ts`, `src/core/projectStructureKnowledge.ts`, `src/projectStructureHost.ts`, `src/core/projectIndexQuality.ts`, `src/projectEditorProvider.ts`, `src/core/projectDiagramProcess.ts`, `src/webview/projectSettingsView.ts`, `src/webview/projectTopicsView.ts`, `src/webview/projectArchitectureNotes.ts`, `src/webview/projectReader.ts`, `src/webview/projectReaderArchify.ts`, `src/resourceIcons.ts`, `src/resourceBrowserProvider.ts`, `src/globalResourcesEditorProvider.ts`, `src/agentSelectionDefaults.ts`, `src/core/fileSearch.ts`。

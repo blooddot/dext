@@ -95,10 +95,10 @@ Overview 还会读取上级目录的 esbuild/Vite/Webpack/Rollup 构建配置作
 
 ## 图表渲染
 
-Project Intent 和与渲染器无关的 `ProjectDiagram` IR 仍是数据来源。结构图、C4 视图、流程、时序、数据流和生命周期统一使用本地 Archify 3.2.0，它是 Project 图的唯一渲染器。Mermaid 11.17.2 仍用于会话和表单 Markdown 中的 `mermaid` 代码块，不参与 Project 图渲染。Project ID、正文和源码链接来自已保存模型，不依赖在线渲染服务。
+Project Intent 和与渲染器无关的 `ProjectDiagram` IR 仍是数据来源。结构图、C4 视图、流程、时序、数据流、生命周期、树图和类图统一使用本地 Archify 3.2.0，它是 Project 图的唯一渲染器。Mermaid 11.17.2 仍用于会话和表单 Markdown 中的 `mermaid` 代码块，不参与 Project 图渲染。Project ID、正文和源码链接来自已保存模型，不依赖在线渲染服务。
 
 
-五类图共享节点、关系和证据结构，并按类型增加可选的渲染器中性语义：
+七类图共享节点、关系和证据结构，并按类型增加可选的渲染器中性语义：
 
 | 类型 | 可选语义结构 |
 | --- | --- |
@@ -107,10 +107,14 @@ Project Intent 和与渲染器无关的 `ProjectDiagram` IR 仍是数据来源�
 | 时序图 | 有序参与者与调用／返回消息 |
 | 数据流图 | 2–5 个阶段与节点 `stageId` |
 | 状态机／生命周期图 | 初始／普通／终态、事件、条件与转换 |
+| 树图 | 单一根节点与 `parentId` 父链；不画跨分支关系 |
+| 类图 | 节点上的显式 `classKind` 与成员；`inheritance`／`realization` 关系 |
 
 Archify 在独立沙箱中渲染，保留原生动画、缩放和导出。节点选择与原生路径演示联动正文；阅读器还可按明确主路径或消息顺序逐步播放。分支流程没有主路径时不猜测执行顺序。运行时无法渲染时，阅读器显示包含具体原因的明确错误，并保留正文、证据和已保存模型；它不会切换到另一套布局引擎。生命周期图使用 Archify schema v3：有序 `mainPath`、语义化状态和转换让渲染器自行推导全部几何。已有图无需迁移。
 
-可选的 `intent.c4` 记录系统、人员、外部系统和运行单元，以 `systemId` 指定当前系统，运行单元通过 `parentId` 归属系统、通过 `contextIds` 关联职责主题。每个元素和关系必须有已读取的源码／文档证据。阅读器派生“项目全貌（C1）→ 运行单元（C2）”，再链接职责与流程；不把目录当容器，不把不同层级混在同一张图。已有 C4 模型仍可读取；新的索引流程可以根据已读取文档、配置和关键入口源码生成 C4，不把目录推断成运行单元。类图／ER 图暂未新增独立数据类型。
+**Structure map 与 Type map** 每次都从当前结构索引即时派生，不写入 `.dext/diagrams`，也不交给 AI。Structure map 呈现项目 → 目录模块 → 代表文件 → 代表声明；Type map 呈现显式类型、已声明成员，以及只在目标名唯一时才连出的 `extends`／`implements`（Python bases）关系。索引 v4 为每个符号记录稳定 id、`ownerId`／`ownerName`、成员种类、类型／参数／返回文本、可见性与修饰符，以及显式继承；TS/JS 抽取类、接口、枚举及成员，Python 抽取类／方法／类级注解字段，Rust 抽取 struct/enum/trait、字段和 impl 方法。Rust `impl Trait for Type` 边与 Python 实例字段有意不推断；继承目标在已选类型中不唯一时跳过并写入主题警告。旧索引版本的缓存会被拒绝，因此升级 Dext 后需要运行一次 **Build project model** 或 **Update project model**，两个派生主题才会出现。
+
+可选的 `intent.c4` 记录系统、人员、外部系统和运行单元，以 `systemId` 指定当前系统，运行单元通过 `parentId` 归属系统、通过 `contextIds` 关联职责主题。每个元素和关系必须有已读取的源码／文档证据。阅读器派生“项目全貌（C1）→ 运行单元（C2）”，再链接职责与流程；不把目录当容器，不把不同层级混在同一张图。已有 C4 模型仍可读取；新的索引流程可以根据已读取文档、配置和关键入口源码生成 C4，不把目录推断成运行单元。ER 图仍不在本次范围；类图只使用上述显式类型事实。
 
 阅读器提供缩放、适应宽度、展开、SVG 导出和折叠的 **Diagram model** 面板。渲染失败仍保留正文、证据和已保存模型，并自动展开该面板，以便检查原因与模型。异步渲染不能覆盖后来选择的主题。源码跳转和导出由宿主核对图 ID 与保存时间。所有关系同时以键盘可访问的 **Connections** 列表提供。
 
@@ -151,9 +155,14 @@ node scripts/checkProjectReaderUi.mjs   # 单一 Archify 渲染、C4、播放、
 node scripts/checkProjectDiagramsUi.mjs # 保留的 Archify 适配器与桥接兼容检查
 ```
 
-assertWebviewAssets.mjs 依据 esbuild 依赖清单证明运行包不含 TypeScript 编译器或旧扫描／引擎实现，确认适配器引用的 Archify 入口、CLI 辅助文件、五份 Schema 与五个渲染器存在，并包含它们静态或运行时依赖的 locale manifest、渲染产物检查器、explainer 检查器与临时目录／更新辅助文件；`vendor/project-diagrams/drawio` 和 `.tmp-*` 不得进入分发包。其余 vendor 内容随包分发由 `.vscodeignore` 未排除 `vendor/**` 保证。
+assertWebviewAssets.mjs 依据 esbuild 依赖清单证明运行包不含 TypeScript 编译器或旧扫描／引擎实现，确认适配器引用的 Archify 入口、CLI 辅助文件、七份 Schema 与七个渲染器存在，并包含 tree/class 渲染器、class 网格辅助、locale manifest、渲染产物检查器、explainer 检查器与临时目录／更新辅助文件；`vendor/project-diagrams/drawio` 和 `.tmp-*` 不得进入分发包。其余 vendor 内容随包分发由 `.vscodeignore` 未排除 `vendor/**` 保证。
 
 项目层单元测试可运行：`npx vitest run test/project*.test.ts test/editorTab*.test.ts`。
+
+派生图构建器位于 `src/features/project/host/diagrams/projectStructureMap.ts`（Structure map）与
+`src/features/project/host/diagrams/projectClassMap.ts`（Type map）；覆盖测试为
+`test/projectStructureTree.test.ts`、`test/projectStructureClass.test.ts`、`test/projectStructureTypes.test.ts`
+和 `test/projectStructureCache.test.ts`。
 
 ## 第一轮模块迁移
 
