@@ -22,6 +22,7 @@ ProjectAiGenerationService,
 summarizeProjectEvidence,
 type ProjectAiActivityEvent,
 type ProjectAiProvider,
+type IndexedProjectEvidence,
 type ProjectEvidencePackage,
 type ProjectEvidenceSummary
 } from "./generation/projectAiGeneration.js";
@@ -50,8 +51,10 @@ export interface ProjectPanelDataSourceOptions {
     readEvidenceSummary?(): Promise<ProjectEvidenceSummary | undefined>;
     writeEvidenceSummary?(summary: ProjectEvidenceSummary): Promise<void>;
   };
-  /** Reads bounded text evidence only when the user explicitly initializes or generates a diagram. */
-  readEvidence(options: { mode?: "index" | "topic"; requirement?: string; preferredPaths?: readonly string[]; modulePaths?: readonly string[] }, signal: AbortSignal, onProgress: ProjectInitializationProgressListener): Promise<ProjectEvidencePackage>;
+  /** Reads bounded text evidence for a diagram or topic request. */
+  readEvidence(options: { requirement?: string; preferredPaths?: readonly string[]; modulePaths?: readonly string[] }, signal: AbortSignal, onProgress: ProjectInitializationProgressListener): Promise<ProjectEvidencePackage>;
+  /** Parses the complete configured scope and attaches the local structure summary for initialization. */
+  readStructureIndex(signal: AbortSignal, onProgress: ProjectInitializationProgressListener): Promise<IndexedProjectEvidence>;
   evidenceSnapshot?: (path: string) => Promise<{ contentHash: string } | undefined>;
   diagramRegistry?: ProjectDiagramAdapterRegistry;
   projectAiProvider?: ProjectAiProvider;
@@ -170,10 +173,10 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
   const initializationService = new ProjectInitializationService({
     prepareEvidence: async (signal, onProgress) => {
       if (options.store.readDefinition && !(await options.store.readDefinition()).evidence) {
-        throw new Error("Configure and save Evidence reading in Overview > Project settings before building the project index.");
+        throw new Error("Configure and save Evidence reading in Overview > Project settings before building the project model.");
       }
       signal.throwIfAborted();
-      const packaged = await options.readEvidence({ mode: "index" }, signal, onProgress);
+      const packaged = await options.readStructureIndex(signal, onProgress);
       await captureEvidence("initialize", packaged);
       return packaged;
     },
@@ -181,7 +184,7 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
       if (!projectAiProvider) throw new Error("Project AI is unavailable: enable and select an available AI CLI in the input area first.");
       const service = new ProjectAiGenerationService(projectAiProvider, projectPromptLimits(evidence.selection.evidenceChars));
       // `onOutput` is the single text sink: one activity event becomes exactly one output line.
-      return service.generateIndex(evidence, {
+      return service.generateProjectModel(evidence, {
         signal,
         onEvent: (event) => onOutput(activityLine(event))
       });
@@ -251,7 +254,7 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
       const target = request.diagramId ? diagrams.find((candidate) => candidate.id === request.diagramId)
         : request.topicId ? diagrams.filter(candidate => candidate.metadata?.topicId === request.topicId && candidate.metadata?.topicAnalysis === 1).sort((a,b) => b.updatedAt - a.updatedAt)[0] : undefined;
       if (request.diagramId && !target) throw new Error("The diagram to update does not exist.");
-      const evidence = await options.readEvidence({ requirement, ...(request.topicId ? { mode: "topic" as const } : {}), ...(request.preferredPaths ? { preferredPaths: request.preferredPaths } : {}), ...(request.modulePaths ? { modulePaths: request.modulePaths } : {}) }, signal, (progress) => {
+      const evidence = await options.readEvidence({ requirement, ...(request.preferredPaths ? { preferredPaths: request.preferredPaths } : {}), ...(request.modulePaths ? { modulePaths: request.modulePaths } : {}) }, signal, (progress) => {
         post({ type: "projectDiagramProgress", message: progress.message ?? "Preparing evidence…", phase: progress.phase });
       });
       await captureEvidence("diagram", evidence);
@@ -607,6 +610,6 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
   };
 }
 export type { ProjectPanelMessage } from "../contracts/reader.js";
-export { discoverArchifyRepository, PROJECT_BUILD_CONFIG_GLOB, PROJECT_DOCUMENT_GLOB, PROJECT_EVIDENCE_EXCLUDE, PROJECT_MANIFEST_GLOB, PROJECT_README_GLOB, PROJECT_SOURCE_GLOB, readWorkspaceEvidence } from "./indexing/workspaceEvidence.js";
+export { discoverArchifyRepository, PROJECT_BUILD_CONFIG_GLOB, PROJECT_DOCUMENT_GLOB, PROJECT_EVIDENCE_EXCLUDE, PROJECT_MANIFEST_GLOB, PROJECT_README_GLOB, PROJECT_SOURCE_GLOB, readProjectEvidence, readStructureIndexEvidence } from "./indexing/workspaceEvidence.js";
 export type { ProjectEvidenceReadOptions } from "./indexing/workspaceEvidence.js";
 export { VscodeProjectFileHost } from "./persistence/vscodeProjectFileHost.js";

@@ -26,7 +26,8 @@ describe("Project-owned reading settings", () => {
         writeDefinition: (value, version) => store.writeDefinition(value, version),
         readObjects: async () => [], readArchitecture: async () => ({ decisions: [] })
       },
-      readEvidence: vi.fn()
+      readEvidence: vi.fn(),
+      readStructureIndex: vi.fn()
     });
     const workspace = { planDirectory: ".project/plans", apiDirs: ["tools/api"], skillDirs: [], mcpDirs: [] };
     await panel.setWorkspaceSettings!(workspace, clean.version);
@@ -54,7 +55,8 @@ describe("Project-owned reading settings", () => {
         writeDefinition: (value, version) => store.writeDefinition(value, version),
         readObjects: async () => [], readArchitecture: async () => ({ decisions: [] })
       },
-      readEvidence: vi.fn()
+      readEvidence: vi.fn(),
+      readStructureIndex: vi.fn()
     });
     const panel = source();
     const loaded = await panel.load();

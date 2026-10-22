@@ -10,9 +10,10 @@ function initializationErrorMessage(error: unknown): string {
 }
 
 /**
- * Runs the explicit `Initialize Knowledge` flow: prepare bounded evidence, generate with AI,
- * validate, then save. Cancelling, failing, or a missing AI never fakes success and never blocks
- * development; a retry starts a clean run whose late predecessor cannot overwrite state.
+ * Runs the explicit `Initialize Knowledge` flow: build the local structure index with bounded
+ * supporting excerpts, generate with AI, validate, then save. Cancelling, failing, or a missing AI
+ * never fakes success and never blocks development; a retry starts a clean run whose late
+ * predecessor cannot overwrite state.
  */
 export class ProjectInitializationService {
   private state: ProjectInitializationState = { status: "uninitialized" };
@@ -121,7 +122,7 @@ export class ProjectInitializationService {
     try {
       const evidence = await this.dependencies.prepareEvidence(signal, onProgress);
       assertActive();
-      onProgress({ phase: "generating", message: "Calling the project AI to build the module index…" });
+      onProgress({ phase: "generating", message: "Calling the project AI to build the project model…" });
       const output = await this.dependencies.generate(evidence, signal, onProgress, onOutput);
       assertActive();
       onProgress({ phase: "saving", message: "Validating and saving the generated result…" });

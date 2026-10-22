@@ -1,4 +1,4 @@
-import type { ProjectEvidencePackage } from "./evidence.js";
+import type { IndexedProjectEvidence } from "./evidence.js";
 import type { ProjectDiagram } from "./projectDiagram.js";
 import type { ProjectIntent } from "./projectIntent.js";
 
@@ -61,11 +61,11 @@ export interface ProjectInitializationHydration {
 
 
 export interface ProjectInitializationDependencies {
-  /** Reads a bounded text evidence package only when the user starts initialization. */
-  prepareEvidence(signal: AbortSignal, onProgress: ProjectInitializationProgressListener): Promise<ProjectEvidencePackage>;
+  /** Builds the complete local structure index, plus bounded excerpts, when initialization starts. */
+  prepareEvidence(signal: AbortSignal, onProgress: ProjectInitializationProgressListener): Promise<IndexedProjectEvidence>;
   /** AI generation; must throw with a clear reason when no provider is available. */
   generate(
-    evidence: ProjectEvidencePackage,
+    evidence: IndexedProjectEvidence,
     signal: AbortSignal,
     onProgress: ProjectInitializationProgressListener,
     /** Sole text sink for provider activity; the host formats its own structured events into it. */

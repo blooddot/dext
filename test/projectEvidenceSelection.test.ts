@@ -53,7 +53,7 @@ vi.mock("vscode", () => {
 
 describe("project evidence selection", () => {
   it("includes build entries, packaged launch arguments and actual browser entry evidence", async () => {
-    const { readWorkspaceEvidence } = await import('../src/features/project/host/projectPanelDataSource.js');
+    const { readStructureIndexEvidence } = await import('../src/features/project/host/projectPanelDataSource.js');
     const fixtures = {
       'esbuild.mjs': 'build({ entryPoints: { main: "src/ui.ts" }, platform: "browser" });',
       'src/ui.ts': 'interface Api { postMessage(message: unknown): void; }\ndeclare function acquireVsCodeApi(): Api;\nconst api = acquireVsCodeApi();',
@@ -62,7 +62,7 @@ describe("project evidence selection", () => {
     };
     for (const [path, content] of Object.entries(fixtures)) { files.set(path, content); tree.sources.push(path); }
     try {
-      const evidence = await readWorkspaceEvidence({ scheme: 'file', fsPath: 'C:/ws', path: '/C:/ws' } as never, {}, { mode: 'index', include: ['src/**'] });
+      const evidence = await readStructureIndexEvidence({ scheme: 'file', fsPath: 'C:/ws', path: '/C:/ws' } as never, {}, { include: ['src/**'] });
       expect(evidence.files.find(file => file.path === 'esbuild.mjs')).toMatchObject({ kind: 'manifest', text: expect.stringContaining('platform: "browser"') });
       expect(evidence.structure?.modules.flatMap(module => module.members).some(file => file.path === 'esbuild.mjs')).toBe(false);
       const text = evidence.files.map(file => file.text).join('\n');
@@ -73,7 +73,7 @@ describe("project evidence selection", () => {
     } finally { for (const path of Object.keys(fixtures)) files.delete(path); tree.sources.splice(-Object.keys(fixtures).length); }
   });
   it("balances deployment, browser and alternative transport evidence under competing runtime candidates", async () => {
-    const { readWorkspaceEvidence } = await import('../src/features/project/host/projectPanelDataSource.js');
+    const { readStructureIndexEvidence } = await import('../src/features/project/host/projectPanelDataSource.js');
     const originalReadme = files.get('README.md')!;
     files.set('README.md', 'Documentation line\n'.repeat(3000));
     const fixtures: Record<string, string> = {
@@ -87,14 +87,14 @@ describe("project evidence selection", () => {
     for (let i = 0; i < 12; i++) fixtures[`src/zWorker${i}.ts`] = 'import { spawn } from "node:child_process";\nexport function main() { spawn("worker"); }\n' + '// gap\n'.repeat(400);
     for (const [path, content] of Object.entries(fixtures)) { files.set(path, content); tree.sources.push(path); }
     try {
-      const evidence = await readWorkspaceEvidence({ scheme: 'file', fsPath: 'C:/ws', path: '/C:/ws' } as never, {}, { mode: 'index', maxFileChars: 24000 });
+      const evidence = await readStructureIndexEvidence({ scheme: 'file', fsPath: 'C:/ws', path: '/C:/ws' } as never, {}, { maxFileChars: 24000 });
       const text = evidence.files.map(file => file.text).join('\n');
       for (const expected of ['platform: "browser"', 'acquireVsCodeApi()', 'context.extensionUri, "vendor"', 'runToolProcess(process.execPath', 'fetch(url)', 'transport === "http"']) expect(text).toContain(expected);
       expect(evidence.files.filter(file => file.path === 'src/aTransport.ts')).toHaveLength(3);
     } finally { files.set('README.md', originalReadme); for (const path of Object.keys(fixtures)) files.delete(path); tree.sources.splice(-Object.keys(fixtures).length); }
   });
   it.each([120000, 20000])("retains stdio, HTTP and transport dispatch windows with a %i character budget", async maxEvidenceChars => {
-    const { readWorkspaceEvidence } = await import('../src/features/project/host/projectPanelDataSource.js');
+    const { readStructureIndexEvidence } = await import('../src/features/project/host/projectPanelDataSource.js');
     const root = { scheme: 'file', fsPath: 'C:/ws', path: '/C:/ws' } as never;
     const path = 'src/aaaTransport.ts';
     const content = 'import { spawn } from "node:child_process";\nexport function main() { return spawn("tool"); }\n'
@@ -104,7 +104,7 @@ describe("project evidence selection", () => {
     const workers = Array.from({ length: 12 }, (_, i) => `src/zWorker${i}.ts`);
     for (const worker of workers) { files.set(worker, 'import { spawn } from "node:child_process";\nexport function main() { spawn("node"); }\n' + '// implementation\n'.repeat(100)); tree.sources.push(worker); }
     try {
-      const packaged = await readWorkspaceEvidence(root, {}, { mode: 'index', maxFileChars: 24000, maxEvidenceChars });
+      const packaged = await readStructureIndexEvidence(root, {}, { maxFileChars: 24000, maxEvidenceChars });
       const windows = packaged.files.filter(file => file.path === path);
       expect(windows).toHaveLength(3);
       expect(windows.map(file => file.text).join('\n')).toContain('fetch(url)');
@@ -115,7 +115,7 @@ describe("project evidence selection", () => {
     } finally { for (const item of [path, ...workers]) files.delete(item); tree.sources.splice(-(workers.length + 1)); }
   });
   it("keeps Webview and subprocess evidence in the final payload with the whole-project 24000-character preset", async () => {
-    const { readWorkspaceEvidence } = await import('../src/features/project/host/projectPanelDataSource.js');
+    const { readStructureIndexEvidence } = await import('../src/features/project/host/projectPanelDataSource.js');
     const root = { scheme: 'file', fsPath: 'C:/ws', path: '/C:/ws' } as never;
     const fixtures: Record<string, string> = {
       'src/extension.ts': 'import * as vscode from "vscode";\nexport function activate() {}\n',
@@ -125,7 +125,7 @@ describe("project evidence selection", () => {
     };
     for (const [path, content] of Object.entries(fixtures)) { files.set(path, content + '// implementation\n'.repeat(800)); tree.sources.push(path); }
     try {
-      const packaged = await readWorkspaceEvidence(root, {}, { mode: 'index', maxFileChars: 24000, maxEvidenceChars: 120000 });
+      const packaged = await readStructureIndexEvidence(root, {}, { maxFileChars: 24000, maxEvidenceChars: 120000 });
       const sources = packaged.files.filter(file => file.kind === 'source');
       expect(sources.map(file => file.path)).toEqual(expect.arrayContaining(Object.keys(fixtures)));
       expect(sources.every(file => file.text.length <= 2000)).toBe(true);
@@ -135,9 +135,9 @@ describe("project evidence selection", () => {
   });
 
   it("indexes every source independently of AI file budgets and supplies module summaries", async () => {
-    const { readWorkspaceEvidence } = await import("../src/features/project/host/projectPanelDataSource.js");
+    const { readStructureIndexEvidence } = await import("../src/features/project/host/projectPanelDataSource.js");
     const root = { scheme: "file", fsPath: "C:/ws", path: "/C:/ws" } as never;
-    const packaged = await readWorkspaceEvidence(root, {}, { mode: "index", maxFiles: 1, maxSourceFiles: 1, maxEvidenceChars: 1_000_000 });
+    const packaged = await readStructureIndexEvidence(root, {}, { maxFiles: 1, maxSourceFiles: 1, maxEvidenceChars: 1_000_000 });
     expect(packaged.structure?.parsed).toBe(400);
     expect(packaged.structure?.modules.reduce((sum, module) => sum + module.files, 0)).toBe(400);
     expect(packaged.structure?.modules[0]?.entryPoints).toContain("src/features/module-000.ts");
@@ -146,7 +146,7 @@ describe("project evidence selection", () => {
   });
 
   it("prioritizes a late module entry and its direct imports over unrelated sources", async () => {
-    const { readWorkspaceEvidence } = await import("../src/features/project/host/projectPanelDataSource.js");
+    const { readProjectEvidence } = await import("../src/features/project/host/projectPanelDataSource.js");
     const root = { scheme: "file", fsPath: "C:/ws", path: "/C:/ws" } as never;
     const entry = "src/features/module-399.ts";
     const imported = "src/shared/run.ts";
@@ -156,7 +156,7 @@ describe("project evidence selection", () => {
     files.set(imported, "export function run() {}"); files.set(unrelated, "export function other() {}");
     tree.sources.push(imported, unrelated);
     try {
-      const packaged = await readWorkspaceEvidence(root, {}, { mode: "topic", preferredPaths: [entry] });
+      const packaged = await readProjectEvidence(root, {}, { preferredPaths: [entry] });
       expect(packaged.files[0]!.path).toBe(entry);
       expect(packaged.files.map(file => file.path)).toContain(imported);
       expect(packaged.files.map(file => file.path)).not.toContain(unrelated);
@@ -166,14 +166,14 @@ describe("project evidence selection", () => {
   });
 
   it("reads indexed runtime boundaries beyond import headers with original line numbers and hashes", async () => {
-    const { readWorkspaceEvidence } = await import("../src/features/project/host/projectPanelDataSource.js");
+    const { readStructureIndexEvidence } = await import("../src/features/project/host/projectPanelDataSource.js");
     const { createHash } = await import('node:crypto');
     const root = { scheme: 'file', fsPath: 'C:/ws', path: '/C:/ws' } as never;
     const path = 'src/worker.ts';
     const content = 'import { spawn } from "node:child_process";\n// spawn() is explained here, not executed.\n' + '// padding\n'.repeat(300) + 'export function main() { return spawn("node", ["worker.js"]); }\n';
     files.set(path, content); tree.sources.push(path);
     try {
-      const packaged = await readWorkspaceEvidence(root, {}, { mode: 'index', maxFiles: 1, maxSourceFiles: 1 });
+      const packaged = await readStructureIndexEvidence(root, {}, { maxFiles: 1, maxSourceFiles: 1 });
       const excerpt = packaged.files.find(file => file.path === path)!;
       expect(packaged.structure?.parsed).toBe(401);
       expect(excerpt.startLine).toBeGreaterThan(290);
@@ -185,21 +185,21 @@ describe("project evidence selection", () => {
   });
 
   it("adds project background for source-only indexing without including unrelated documentation", async () => {
-    const { readWorkspaceEvidence } = await import("../src/features/project/host/projectPanelDataSource.js");
+    const { readStructureIndexEvidence } = await import("../src/features/project/host/projectPanelDataSource.js");
     const root = { scheme: "file", fsPath: "C:/ws", path: "/C:/ws" } as never;
-    const packaged = await readWorkspaceEvidence(root, {}, { mode: "index", include: ["src/**"] });
+    const packaged = await readStructureIndexEvidence(root, {}, { include: ["src/**"] });
     expect(packaged.structure?.parsed).toBe(400);
     expect(packaged.files.map(file => file.path)).toEqual(expect.arrayContaining(['README.md', 'package.json']));
     expect(packaged.files.some(file => file.path.startsWith('docs/') || file.path.startsWith('vendor/'))).toBe(false);
   });
 
   it("reads cross-directory members and excludes unrelated files from the same directory", async () => {
-    const { readWorkspaceEvidence } = await import("../src/features/project/host/projectPanelDataSource.js");
+    const { readProjectEvidence } = await import("../src/features/project/host/projectPanelDataSource.js");
     const root = { scheme: "file", fsPath: "C:/ws", path: "/C:/ws" } as never;
     const entry = 'src/features/module-399.ts', second = 'src/webview/feature.ts';
     files.set(second, 'export function feature() {}'); tree.sources.push(second);
     try {
-      const packaged = await readWorkspaceEvidence(root, {}, { mode: 'topic', preferredPaths: [entry], modulePaths: [entry, second] });
+      const packaged = await readProjectEvidence(root, {}, { preferredPaths: [entry], modulePaths: [entry, second] });
       const sources = packaged.files.filter(file => file.kind === 'source').map(file => file.path);
       expect(sources).toEqual([entry, second]);
       expect(packaged.coverage.join(' ')).toContain('Unrelated directory neighbors are excluded');
@@ -207,9 +207,9 @@ describe("project evidence selection", () => {
   });
 
   it("keeps project source and the project README when documentation dominates", async () => {
-    const { readWorkspaceEvidence } = await import("../src/features/project/host/projectPanelDataSource.js");
+    const { readProjectEvidence } = await import("../src/features/project/host/projectPanelDataSource.js");
     const root = { scheme: "file", fsPath: "C:/ws", path: "/C:/ws" } as never;
-    const packaged = await readWorkspaceEvidence(root, {}, {});
+    const packaged = await readProjectEvidence(root, {}, {});
 
     const paths = packaged.files.map((file) => file.path);
     const kinds = packaged.files.map((file) => file.kind);
@@ -228,9 +228,9 @@ describe("project evidence selection", () => {
   }, 60_000);
 
   it("honours an explicit evidence scope instead of the built-in globs", async () => {
-    const { readWorkspaceEvidence } = await import("../src/features/project/host/projectPanelDataSource.js");
+    const { readProjectEvidence } = await import("../src/features/project/host/projectPanelDataSource.js");
     const root = { scheme: "file", fsPath: "C:/ws", path: "/C:/ws" } as never;
-    const packaged = await readWorkspaceEvidence(root, {}, { include: ["src/**"] });
+    const packaged = await readProjectEvidence(root, {}, { include: ["src/**"] });
     expect(packaged.files.length).toBeGreaterThan(0);
     // A scope replaces the built-in README/documentation/manifest globs, so nothing outside it is read.
     expect(packaged.files.every((file) => file.path.startsWith("src/"))).toBe(true);
@@ -238,16 +238,16 @@ describe("project evidence selection", () => {
   }, 60_000);
 
   it("drops a scope that could escape the workspace root", async () => {
-    const { readWorkspaceEvidence } = await import("../src/features/project/host/projectPanelDataSource.js");
+    const { readProjectEvidence } = await import("../src/features/project/host/projectPanelDataSource.js");
     const root = { scheme: "file", fsPath: "C:/ws", path: "/C:/ws" } as never;
     // Every entry is invalid, so the built-in globs stay in force rather than reading nothing.
-    const packaged = await readWorkspaceEvidence(root, {}, { include: ["../outside/**", "C:/secret/**", "/etc/**"] });
+    const packaged = await readProjectEvidence(root, {}, { include: ["../outside/**", "C:/secret/**", "/etc/**"] });
     expect(packaged.files.some((file) => file.path === "README.md")).toBe(true);
   }, 60_000);
 });
 
 it("preserves separate chat and injected Project reader communication alongside renderer and MCP evidence", async () => {
-  const { readWorkspaceEvidence } = await import("../src/features/project/host/indexing/workspaceEvidence.js");
+  const { readStructureIndexEvidence } = await import("../src/features/project/host/indexing/workspaceEvidence.js");
   const fixtures: Record<string, string> = {
     "esbuild.mjs": 'build({platform:"browser",entryPoints:{chat:"src/chat.ts",project:"src/projectEntry.ts"}});',
     "src/chat.ts": 'const api = acquireVsCodeApi();\napi.postMessage({type:"ready"});\nwindow.addEventListener("message", receive);',
@@ -259,10 +259,10 @@ it("preserves separate chat and injected Project reader communication alongside 
   };
   for (const [path, content] of Object.entries(fixtures)) { files.set(path, content); tree.sources.push(path); }
   try {
-    const evidence = await readWorkspaceEvidence({ scheme: "file", fsPath: "C:/ws", path: "/C:/ws" } as never, {}, { mode: "index", include: ["src/**"] });
+    const evidence = await readStructureIndexEvidence({ scheme: "file", fsPath: "C:/ws", path: "/C:/ws" } as never, {}, { include: ["src/**"] });
     const text = evidence.files.map(file => file.text).join("\n");
     for (const marker of ["acquireVsCodeApi()", "__dextApi", "projectReaderRender", "receiveProject", "handleProject", "runToolProcess", "fetch(serverUrl)"]) expect(text).toContain(marker);
-    const narrow = await readWorkspaceEvidence({ scheme: "file", fsPath: "C:/ws", path: "/C:/ws" } as never, {}, { mode: "index", include: ["src/**"], maxEvidenceChars: 12000 });
+    const narrow = await readStructureIndexEvidence({ scheme: "file", fsPath: "C:/ws", path: "/C:/ws" } as never, {}, { include: ["src/**"], maxEvidenceChars: 12000 });
     expect(narrow.coverage.join(" ")).toContain("omitted");
   } finally { for (const path of Object.keys(fixtures)) files.delete(path); tree.sources.splice(-Object.keys(fixtures).length); }
 });

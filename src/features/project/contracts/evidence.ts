@@ -110,6 +110,12 @@ export interface ProjectEvidencePackage {
 }
 
 
+/** Initialization evidence: the complete local structure index plus bounded supporting excerpts. */
+export interface IndexedProjectEvidence extends ProjectEvidencePackage {
+  structure: StructureSummary;
+}
+
+
 /** The scope and budgets one evidence read used. */
 export interface ProjectEvidenceSelection {
   /** Explicit scope globs; empty means the built-in README/documentation/manifest/source set. */
@@ -126,6 +132,7 @@ export interface ProjectEvidenceSelection {
  * given, and for a later run to explain a different diagram.
  */
 export interface ProjectEvidenceSummary {
+  /** Structure facts this read computed and attached; only a full index build produces them. */
   structure?: { files: number; modules: number; parsed: number; cached: number; failed: number; unsupported: number };
   version: 1;
   trigger: "initialize" | "diagram";

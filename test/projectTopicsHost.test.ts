@@ -3,7 +3,7 @@ import type { ProjectDiagram } from "../src/features/project/contracts/projectDi
 import type { DiagramAdapterArtifact, DiagramAdapterDocument, ProjectDiagramAdapter } from "../src/features/project/contracts/projectDiagramAdapter.js";
 import { projectIntentSchema } from "../src/features/project/contracts/projectIntent.js";
 import { ProjectDiagramAdapterRegistry } from "../src/features/project/host/diagrams/projectDiagramRegistry.js";
-import { attachProjectStructure, buildProjectEvidencePackage, PROJECT_MODEL_PROMPT_VERSION } from "../src/features/project/host/generation/projectAiGeneration.js";
+import { attachProjectStructure, buildProjectEvidencePackage, type IndexedProjectEvidence } from "../src/features/project/host/generation/projectAiGeneration.js";
 import { buildStructureIndex } from "../src/features/project/host/indexing/projectStructure.js";
 import { buildProjectTopics } from "../src/features/project/knowledge/projectTopics.js";
 
@@ -21,7 +21,7 @@ describe("Project topic host", () => {
     const diagram: ProjectDiagram = { schemaVersion: 1, id: 'saved', title: 'Code', kind: 'architecture', version: 1, updatedAt: 1, nodes: [], relations: [],
       metadata: { topicId: 'stable-code', topicAnalysis: 1, topicSummary: 'Old explanation', topicBasis: buildProjectTopics(intent)[0]!.basis! } };
     const snapshot = JSON.stringify(diagram), writeDiagram = vi.fn();
-    const source = createProjectPanelDataSource({ name: 'App', root: 'C:/ws', rootUri: {} as never, readEvidence: async () => evidence,
+    const source = createProjectPanelDataSource({ name: 'App', root: 'C:/ws', rootUri: {} as never, readEvidence: async () => evidence, readStructureIndex: async () => evidence,
       store: { readObjects: async () => [], readArchitecture: async () => ({ decisions: [] }), readIntent: async () => intent,
         writeIntent: async value => { intent = value; }, readDiagrams: async () => [diagram], writeDiagram },
       projectAiProvider: { id: 'fixture', generate: async request => {
@@ -45,42 +45,51 @@ describe("Project topic host", () => {
     const saved: ProjectDiagram[] = [{ schemaVersion: 1, id: "unrelated", title: "Unrelated", kind: "architecture", nodes: [], relations: [], version: 0, updatedAt: 1 }];
     const writeIntent = vi.fn(async (value: NonNullable<typeof intent>) => { intent = value; });
     const writeDiagram = vi.fn(async (diagram: ProjectDiagram) => { const position = saved.findIndex(item => item.id === diagram.id); if (position < 0) saved.push(diagram); else saved[position] = diagram; });
-    const readEvidence = vi.fn(async (request: { mode?: "index" | "topic"; requirement?: string }) => buildProjectEvidencePackage({ ...request, files: [{ path: "src/code.ts", content: "export function execute() {}" }], knowledge: [{ id: "code", kind: "context", name: "Code" }] }));
+    const readEvidence = vi.fn(async (request: { requirement?: string }) => buildProjectEvidencePackage({ ...request, files: [{ path: "src/code.ts", content: "export function execute() {}" }], knowledge: [{ id: "code", kind: "context", name: "Code" }] }));
+    const index = await buildStructureIndex([{ path: "src/code.ts", content: "export function execute() {}" }]);
+    const readStructureIndex = vi.fn(async () => attachProjectStructure(buildProjectEvidencePackage({ files: [{ path: "src/code.ts", content: "export function execute() {}" }], knowledge: [{ id: "code", kind: "context", name: "Code" }] }), index.summary));
     let fail = false;
     const control: { pause?: Promise<void> } = {};
     let markStarted: (() => void) | undefined;
-    const source = createProjectPanelDataSource({ name: "Example", root: "C:/ws", rootUri: {} as never, readEvidence,
+    const source = createProjectPanelDataSource({ name: "Example", root: "C:/ws", rootUri: {} as never, readEvidence, readStructureIndex,
       store: { readObjects: async () => [], readArchitecture: async () => ({ decisions: [] }), readIntent: async () => intent, writeIntent, readDiagrams: async () => saved, writeDiagram },
       projectAiProvider: { id: "fixture", generate: async request => {
         if (fail) throw new Error("Fixture failure");
         if (control.pause) { markStarted?.(); await control.pause; }
         const evidence = [{ path: "src/code.ts", line: 1 }];
-        return { text: JSON.stringify(request.promptVersion === PROJECT_MODEL_PROMPT_VERSION
-          ? { brief: { name: "Example", summary: "Runs code", evidence }, contexts: [{ id: "code", canonicalName: "Code", purpose: "Runs code", entryPoints: ["src/code.ts"], evidence }] }
-          : { diagram: { schemaVersion: 1, id: "code-view", title: "Code", kind: "architecture", nodes: [{ id: "execute", label: "Execute", description: "Runs the source.", role: "component", semanticIds: ["code"], evidence }], relations: [], metadata: { topicSummary: "Executes code and returns its output." } } }) };
+        if (request.prompt.includes("Candidate file facts:")) return { text: JSON.stringify({ contexts: [{ canonicalName: "Execution", purpose: "Runs code", sourceFiles: ["src/code.ts"], entryPoints: ["src/code.ts"], uncertainties: [] }] }) };
+        if (request.prompt.includes("Optionally describe C4")) {
+          const ids = [...new Set(request.prompt.match(/responsibility:[a-f0-9]+/g) ?? [])];
+          return { text: JSON.stringify({ brief: { name: "Example", summary: "Runs code", evidence }, capabilities: [{ canonicalName: "Execution", description: "Runs code", contextIds: ids }] }) };
+        }
+        return { text: JSON.stringify({ diagram: { schemaVersion: 1, id: "code-view", title: "Code", kind: "architecture", nodes: [{ id: "execute", label: "Execute", description: "Runs the source.", role: "component", semanticIds: ["code"], evidence }], relations: [], metadata: { topicSummary: "Executes code and returns its output." } } }) };
       } }
     });
-    await source.load(); expect(readEvidence).not.toHaveBeenCalled();
+    await source.load(); expect(readEvidence).not.toHaveBeenCalled(); expect(readStructureIndex).not.toHaveBeenCalled();
     await source.initialize?.();
-    expect(readEvidence.mock.calls[0]![0]).toMatchObject({ mode: "index" });
+    expect(readStructureIndex).toHaveBeenCalledTimes(1);
+    expect(readEvidence).not.toHaveBeenCalled();
     expect(writeDiagram).not.toHaveBeenCalled();
     expect((await source.load()).knowledge?.topics?.[0]).toMatchObject({ analysisState: "outline" });
-    await source.generateTopicDiagram?.("code");
-    expect(readEvidence.mock.calls[1]![0]).toMatchObject({ mode: "topic" });
+    const topicId = (await source.load()).knowledge?.topics?.[0]?.id;
+    await source.generateTopicDiagram?.(topicId!);
+    expect(readEvidence).toHaveBeenCalledTimes(1);
+    expect(readEvidence.mock.calls[0]![0]).toMatchObject({ preferredPaths: ["src/code.ts"] });
+    expect(readStructureIndex).toHaveBeenCalledTimes(1);
     expect(writeIntent).toHaveBeenCalledTimes(1);
     expect(saved).toHaveLength(2);
     expect((await source.load()).knowledge?.topics?.[0]).toMatchObject({ analysisState: "ready", description: "Executes code and returns its output." });
-    await source.generateTopicDiagram?.("code");
+    await source.generateTopicDiagram?.(topicId!);
     expect(saved).toHaveLength(2); expect(saved[1]!.version).toBe(1);
     const previous = JSON.stringify(saved);
-    fail = true; await source.generateTopicDiagram?.("code");
+    fail = true; await source.generateTopicDiagram?.(topicId!);
     expect(JSON.stringify(saved)).toBe(previous);
     expect(writeIntent).toHaveBeenCalledTimes(1);
     fail = false;
     let resume!: () => void;
     control.pause = new Promise<void>(resolve => { resume = resolve; });
     const started = new Promise<void>(resolve => { markStarted = resolve; });
-    const cancelled = source.generateTopicDiagram?.("code");
+    const cancelled = source.generateTopicDiagram?.(topicId!);
     await started;
     source.cancelDiagramWork?.(); resume(); await cancelled;
     expect(JSON.stringify(saved)).toBe(previous);
@@ -103,6 +112,7 @@ describe("Project topic host", () => {
     };
     registry.register(adapter);
     const source = createProjectPanelDataSource({ name: "Example", root: "C:/ws", rootUri: {} as never, diagramRegistry: registry, readEvidence: async () => buildProjectEvidencePackage({ files: [] }),
+      readStructureIndex: async () => buildProjectEvidencePackage({ files: [] }) as IndexedProjectEvidence,
       store: { readObjects: async () => [], readArchitecture: async () => ({ decisions: [] }), readIntent: async () => intent } });
     const messages: { type: string; [key: string]: unknown }[] = [];
     source.subscribe?.(message => messages.push(message));
@@ -124,13 +134,15 @@ describe("Project topic host", () => {
 
   it("publishes the complete generated view with its topic link, without requiring Archify rendering", async () => {
     const { createProjectPanelDataSource } = await import("../src/features/project/host/projectPanelDataSource.js");
-    const intent = projectIntentSchema.parse({ schemaVersion: 1, updatedAt: 1, brief: { name: "Example" }, contexts: [{ id: "code", canonicalName: "Code", evidence: [{ path: "src/code.ts", line: 1 }] }] });
+    const intent = projectIntentSchema.parse({ schemaVersion: 1, updatedAt: 1, brief: { name: "Example" }, contexts: [{ id: "code", canonicalName: "Code", evidence: [{ path: "src/code.ts", line: 1 }] }],
+      structure: { hash: "structure-hash", files: 1, parsed: 1, modules: 1, failed: 2, unsupported: 3, unresolved: 0, issues: [] } });
     let saved: ProjectDiagram[] = [];
     const source = createProjectPanelDataSource({
       name: "Example", root: "C:/ws", rootUri: {} as never,
       store: { readObjects: async () => [], readArchitecture: async () => ({ decisions: [] }), readIntent: async () => intent,
         readDiagrams: async () => saved, writeDiagram: async (diagram) => { saved = [diagram]; } },
       readEvidence: async (request) => buildProjectEvidencePackage({ ...request, files: [{ path: "src/code.ts", content: "export function execute() {}" }], knowledge: [{ id: "code", kind: "context", name: "Code" }] }),
+      readStructureIndex: async () => buildProjectEvidencePackage({ files: [] }) as IndexedProjectEvidence,
       projectAiProvider: { id: "fixture", generate: async () => ({ text: JSON.stringify({ diagram: {
         schemaVersion: 1, id: "code-view", title: "Code", kind: "architecture", version: 0, updatedAt: 1,
         metadata: { topicSummary: "Executes source code." },
@@ -155,7 +167,7 @@ describe("Project topic host", () => {
     const source = createProjectPanelDataSource({
       name: "Example", root: "C:/ws", rootUri: {} as never,
       store: { readObjects: async () => [], readArchitecture: async () => ({ decisions: [] }), readIntent: async () => intent },
-      readEvidence, evidenceSnapshot: snapshot, openEvidence: open,
+      readEvidence, readStructureIndex: vi.fn(), evidenceSnapshot: snapshot, openEvidence: open,
       projectAiProvider: { id: "fixture", generate: async () => { throw new Error("Stop before saving"); } }
     });
     const messages: { type: string; [key: string]: unknown }[] = [];

@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildProjectEvidencePackage } from "../src/features/project/host/generation/projectAiGeneration.js";
+import { buildProjectEvidencePackage, type IndexedProjectEvidence } from "../src/features/project/host/generation/projectAiGeneration.js";
 import { ProjectInitializationService, type ProjectInitializationPhase } from "../src/features/project/host/projectService.js";
 
-const evidence = () => buildProjectEvidencePackage({ projectName: "Example", files: [] });
+// The state machine never inspects the structure map; it exercises the initialization contract.
+const evidence = () => buildProjectEvidencePackage({ projectName: "Example", files: [] }) as IndexedProjectEvidence;
 const promptIntent = { schemaVersion: 1 as const, brief: { name: "Example", summary: "Summary", evidence: [{ path: "README.md", line: 1 }] }, updatedAt: 1 };
 
 function deferred<T>() {

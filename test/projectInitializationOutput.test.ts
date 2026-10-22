@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildProjectEvidencePackage, type ProjectAiRequest } from "../src/features/project/host/generation/projectAiGeneration.js";
+import { attachProjectStructure, buildProjectEvidencePackage, type ProjectAiRequest } from "../src/features/project/host/generation/projectAiGeneration.js";
+import { buildStructureIndex } from "../src/features/project/host/indexing/projectStructure.js";
 
 vi.mock("vscode", () => ({
   Uri: {
@@ -10,7 +11,11 @@ vi.mock("vscode", () => ({
   window: { showSaveDialog: vi.fn() }
 }));
 
-const evidence = () => buildProjectEvidencePackage({ projectName: "Example", files: [] });
+/** A real indexed package: initialization now requires the local structure map. */
+const indexedEvidence = async () => attachProjectStructure(
+  buildProjectEvidencePackage({ projectName: "Example", files: [] }),
+  (await buildStructureIndex([{ path: "src/app.ts", content: "export function start() {}" }])).summary
+);
 
 /** A provider that behaves like the CLI bridge: it reports one line of activity per attempt, then fails. */
 const failingProvider = () => ({
@@ -28,7 +33,8 @@ async function failedInitializationOutput(): Promise<string> {
     root: "C:/ws",
     rootUri: { scheme: "file", fsPath: "C:/ws", path: "/C:/ws" } as never,
     store: { readObjects: async () => [], readArchitecture: async () => ({ decisions: [] }) },
-    readEvidence: async () => evidence(),
+    readEvidence: vi.fn(),
+    readStructureIndex: indexedEvidence,
     projectAiProvider: failingProvider()
   });
   await expect(dataSource.initialize?.()).rejects.toThrow();
@@ -78,7 +84,8 @@ describe("project initialization output", () => {
         readEvidenceSummary: async () => summary,
         writeEvidenceSummary: async (value) => { written.push(value); }
       },
-      readEvidence: async () => evidence(),
+      readEvidence: vi.fn(),
+      readStructureIndex: indexedEvidence,
       projectAiProvider: failingProvider()
     });
 
@@ -102,7 +109,7 @@ describe("project initialization output", () => {
       writeFile: async (path, content) => { files.set(path, content); },
       listDirectory: async () => []
     });
-    const readEvidence = vi.fn(async () => evidence());
+    const readStructureIndex = vi.fn(indexedEvidence);
     const provider = { ...failingProvider(), generate: vi.fn(failingProvider().generate) };
     const dataSource = createProjectPanelDataSource({
       name: "Example", root: "C:/ws", rootUri: {} as never,
@@ -111,7 +118,7 @@ describe("project initialization output", () => {
         writeDefinition: (value, version) => store.writeDefinition(value, version),
         readObjects: async () => [], readArchitecture: async () => ({ decisions: [] })
       },
-      readEvidence, projectAiProvider: provider
+      readEvidence: vi.fn(), readStructureIndex, projectAiProvider: provider
     });
     const loaded = await dataSource.load();
     expect(loaded.overview.evidenceConfigured).toBe(false);
@@ -120,7 +127,7 @@ describe("project initialization output", () => {
     const before = files.get(".dext/project.json");
     await expect(dataSource.initialize?.()).rejects.toThrow("Configure and save Evidence reading");
     expect(dataSource.initialization?.().error).toContain("Overview > Project settings");
-    expect(readEvidence).not.toHaveBeenCalled();
+    expect(readStructureIndex).not.toHaveBeenCalled();
     expect(provider.generate).not.toHaveBeenCalled();
     expect(files.get(".dext/project.json")).toBe(before);
 
@@ -128,7 +135,7 @@ describe("project initialization output", () => {
     expect((await dataSource.load()).overview.evidenceConfigured).toBe(true);
     // A saved empty scope is deliberate. Execution now reaches the provider instead of the gate.
     await expect(dataSource.initialize?.()).rejects.toThrow("Codex CLI exited with code 1");
-    expect(readEvidence).toHaveBeenCalledTimes(1);
+    expect(readStructureIndex).toHaveBeenCalledTimes(1);
     expect(provider.generate).toHaveBeenCalled();
     expect((await store.readDefinition()).scan).toEqual(scan);
   });

@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ProjectStore, type ProjectFileHost } from "../src/features/project/host/persistence/projectStore.js";
 import { ProjectInitializationService } from "../src/features/project/host/projectService.js";
-import { buildProjectEvidencePackage, PROJECT_MODEL_PROMPT_VERSION, ProjectAiGenerationService, type ProjectAiProvider } from "../src/features/project/host/generation/projectAiGeneration.js";
+import { buildProjectEvidencePackage, PROJECT_MODEL_PROMPT_VERSION, ProjectAiGenerationService, type IndexedProjectEvidence, type ProjectAiProvider } from "../src/features/project/host/generation/projectAiGeneration.js";
 import { projectIntentSchema } from "../src/features/project/contracts/projectIntent.js";
 import type { ProjectDiagram } from "../src/features/project/contracts/projectDiagram.js";
 import { ProjectDiagramAdapterRegistry } from "../src/features/project/host/diagrams/projectDiagramRegistry.js";
@@ -43,11 +43,13 @@ function providerFor(config: { initialize?: unknown; diagram?: unknown }): Proje
   };
 }
 
+// The orchestration test exercises the explicit excerpt fallback; a real initialization supplies a
+// complete structure index through readStructureIndexEvidence instead.
 const evidence = (requirement?: string) => buildProjectEvidencePackage({
   projectName: "Example",
   files: [{ path: "README.md", content: "# Example" }, { path: "src/app.ts", content: "export function start() {}" }],
   ...(requirement ? { requirement } : {})
-});
+}) as IndexedProjectEvidence;
 
 function persistence(store: ProjectStore) {
   return async (output: { intent?: ReturnType<typeof intent>; diagrams?: readonly ProjectDiagram[] }): Promise<void> => {
@@ -65,7 +67,7 @@ describe("project integration without any static scan", () => {
     const store = new ProjectStore(host);
     const service = new ProjectInitializationService({
       prepareEvidence: async () => evidence(),
-      generate: async (packageValue) => new ProjectAiGenerationService(providerFor({ initialize: { brief: { name: "Example", summary: "A task application", evidence: [{ path: "README.md", line: 1 }] }, contexts: [{ id: "app", canonicalName: "App", purpose: "Runs the application", entryPoints: ["src/app.ts"], evidence: [{ path: "src/app.ts", line: 1 }] }] } })).generateIndex(packageValue),
+      generate: async (packageValue) => new ProjectAiGenerationService(providerFor({ initialize: { brief: { name: "Example", summary: "A task application", evidence: [{ path: "README.md", line: 1 }] }, contexts: [{ id: "app", canonicalName: "App", purpose: "Runs the application", entryPoints: ["src/app.ts"], evidence: [{ path: "src/app.ts", line: 1 }] }] } })).generateProjectModelFromExcerpts(packageValue),
       persist: async (output, signal) => {
         if (signal.aborted) throw new Error("cancelled");
         await persistence(store)(output);

@@ -97,7 +97,7 @@ describe("C4 project views", () => {
         ? { brief: { name: "Example", summary: "Application", evidence }, capabilities: [{ canonicalName: "Application", description: "Runs the app", contextIds: [...new Set(request.prompt.match(/responsibility:[a-f0-9]+/g) ?? [])] }], c4 }
         : { contexts: [{ canonicalName: "Application", purpose: "Runs the app", sourceFiles: ["src/app.ts"], entryPoints: ["src/app.ts"] }] }
     ) }) }, { maxAttempts: 1 });
-    const generated = await service.generateIndex(attachProjectStructure(input, structure.summary));
+    const generated = await service.generateProjectModel(attachProjectStructure(input, structure.summary));
     expect(generated.intent.c4!.elements[0]!.evidence[0]!.contentHash).toBe(input.files[0]!.contentHash);
     expect(generated.intent.c4!.relationships[0]!.evidence[0]!.contentHash).toBe(input.files[0]!.contentHash);
     const inventoryOnly = { ...input, files: [] };

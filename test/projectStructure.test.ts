@@ -90,7 +90,7 @@ describe("structure-driven AI generation", () => {
     const original = JSON.stringify(index.summary);
     const evidence = buildProjectEvidencePackage({ files: [{ path: 'README.md', content: 'App' }] });
     const packaged = attachProjectStructure(evidence, index.summary);
-    const members = packaged.structure!.modules.flatMap(module => module.members);
+    const members = packaged.structure.modules.flatMap(module => module.members);
     expect(members.map(file => file.path).sort()).toEqual(['src/auth.ts', 'src/worker.ts']);
     expect(members.find(file => file.path === 'src/auth.ts')!.symbols[0]!.signature).toContain('[REDACTED]');
     expect(members.find(file => file.path === 'src/worker.ts')!.symbols[0]!.name).toBe('run');
@@ -123,7 +123,7 @@ describe("structure-driven AI generation", () => {
     const { evidence } = await setup();
     const requests: ProjectAiRequest[] = [];
     const service = new ProjectAiGenerationService({ id: "fixture", generate: async request => { requests.push(request); return reply(request); } }, { maxAttempts: 1 });
-    const result = await service.generateIndex(evidence);
+    const result = await service.generateProjectModel(evidence);
     expect(requests).toHaveLength(5);
     expect(result.intent.contexts).toHaveLength(25);
     expect(result.intent.structure).toMatchObject({ parsed: 25, modules: 1, responsibilities: 25 });
@@ -140,7 +140,7 @@ describe("structure-driven AI generation", () => {
   it("rejects missing file ownership instead of silently reducing coverage", async () => {
     const { evidence } = await setup(2);
     const service = new ProjectAiGenerationService({ id: "fixture", generate: async request => reply(request, true) }, { maxAttempts: 1 });
-    await expect(service.generateIndex(evidence)).rejects.toMatchObject({ diagnostics: expect.arrayContaining([expect.stringContaining("Missing source ownership")]) });
+    await expect(service.generateProjectModel(evidence)).rejects.toMatchObject({ diagnostics: expect.arrayContaining([expect.stringContaining("Missing source ownership")]) });
   });
 
   it.each(['missing', 'duplicate', 'unknown'])("rejects %s functional-area membership", async mode => {
@@ -155,7 +155,7 @@ describe("structure-driven AI generation", () => {
       if (mode === 'unknown') ids.push('invented');
       return { text: JSON.stringify(value) };
     } }, { maxAttempts: 1 });
-    await expect(service.generateIndex(evidence)).rejects.toMatchObject({ code: 'invalid_output' });
+    await expect(service.generateProjectModel(evidence)).rejects.toMatchObject({ code: 'invalid_output' });
   });
 
   it("grounds C4 in targeted source excerpts and rejects lines outside the read window", async () => {
@@ -173,8 +173,8 @@ describe("structure-driven AI generation", () => {
       value.c4.elements[0]!.evidence = [{ path, line }];
       return { text: JSON.stringify(value) };
     } }, { maxAttempts: 1 });
-    await expect(service(1).generateIndex(evidence)).rejects.toMatchObject({ diagnostics: expect.arrayContaining([expect.stringContaining('outside the supplied excerpt')]) });
-    const result = await service(301).generateIndex(evidence);
+    await expect(service(1).generateProjectModel(evidence)).rejects.toMatchObject({ diagnostics: expect.arrayContaining([expect.stringContaining('outside the supplied excerpt')]) });
+    const result = await service(301).generateProjectModel(evidence);
     expect(result.intent.c4!.elements[0]!.evidence[0]).toMatchObject({ path, line: 301, contentHash: index.cache.files[0]!.hash });
     for (const request of requests.filter(request => request.prompt.includes('Candidate file facts:'))) {
       const input = JSON.parse(request.prompt.match(/Evidence data: ([^\n]+)/)![1]!) as { files: { kind: string }[] };
@@ -201,7 +201,7 @@ describe("structure-driven AI generation", () => {
     const evidence = attachProjectStructure(buildProjectEvidencePackage({ files: [{ path: "README.md", content: "App" }] }), index.summary);
     const requests: ProjectAiRequest[] = [];
     const service = new ProjectAiGenerationService({ id: "fixture", generate: async request => { requests.push(request); return reply(request); } }, { maxAttempts: 1 });
-    const result = await service.generateIndex(evidence);
+    const result = await service.generateProjectModel(evidence);
     const sent = requests.filter(request => request.prompt.includes("Candidate file facts:")).flatMap(request => (JSON.parse(request.prompt.match(/Candidate file facts: ([^\n]+)/)![1]!) as StructureCandidate[]).flatMap(candidate => candidate.files));
     expect(sent).toHaveLength(80);
     expect(sent.reduce((sum, file) => sum + file.symbols.length, 0)).toBe(1600);
@@ -222,7 +222,7 @@ describe("structure-driven AI generation", () => {
       }
       return { text: JSON.stringify(parsed) };
     } }, { maxAttempts: 1 });
-    await expect(service.generateIndex(evidence)).rejects.toMatchObject({ code: 'invalid_output' });
+    await expect(service.generateProjectModel(evidence)).rejects.toMatchObject({ code: 'invalid_output' });
   });
 
   it("allows cross-directory ownership and derives dependencies and stable ids from exact member files", async () => {
@@ -233,12 +233,12 @@ describe("structure-driven AI generation", () => {
       { canonicalName: 'Billing', purpose: 'Invoice preparation', sourceFiles: ['src/features/billing.ts', 'src/webview/billingView.ts'], entryPoints: ['src/webview/billingView.ts'] },
       { canonicalName: 'Payments', purpose: 'Payments use invoices', sourceFiles: ['src/features/payments.ts'], entryPoints: ['src/features/payments.ts'] }
     ] }) } }, { maxAttempts: 1 });
-    const first = await service.generateIndex(evidence), second = await service.generateIndex(evidence);
+    const first = await service.generateProjectModel(evidence), second = await service.generateProjectModel(evidence);
     expect(first.intent.contexts.map(context => context.id)).toEqual(second.intent.contexts.map(context => context.id));
     expect(first.intent.contexts[1]!.dependsOn).toEqual([first.intent.contexts[0]!.id]);
     expect(buildProjectTopics(first.intent).find(topic => topic.title === 'Billing')?.sourceFiles).toHaveLength(2);
     const changed = await buildStructureIndex(inputs({ ...source, 'src/features/billing.ts': 'export function invoice() { return 1; }' }), { cache: index.cache });
-    const refreshed = await service.generateIndex(attachProjectStructure(evidence, changed.summary));
+    const refreshed = await service.generateProjectModel(attachProjectStructure(evidence, changed.summary));
     expect(refreshed.intent.contexts[0]!.id).toBe(first.intent.contexts[0]!.id);
     expect(refreshed.intent.contexts[0]!.structureHash).not.toBe(first.intent.contexts[0]!.structureHash);
     expect(buildProjectTopics(refreshed.intent).find(topic => topic.title === 'Billing')?.basis).not.toBe(buildProjectTopics(first.intent).find(topic => topic.title === 'Billing')?.basis);
@@ -256,7 +256,7 @@ describe("structure-driven AI generation", () => {
       for (const context of response.contexts) context.canonicalName = Number(context.sourceFiles[0]!.match(/feature(\d+)/)![1]) % 2 ? 'Search' : 'Completion';
       return { text: JSON.stringify(response) };
     } }, { maxAttempts: 1 });
-    const result = await service.generateIndex(evidence);
+    const result = await service.generateProjectModel(evidence);
     expect(result.intent.contexts).toHaveLength(2);
     expect(result.intent.contexts.flatMap(context => context.sourceFiles!)).toHaveLength(25);
     expect(result.intent.contexts.map(context => context.sourceFiles!.length).sort()).toEqual([12, 13]);
@@ -274,7 +274,7 @@ describe("structure-driven AI generation", () => {
       return { text: JSON.stringify({ contexts: [{ canonicalName: 'Feature execution', purpose: 'Run the feature with its supporting helpers',
         sourceFiles: outlines.flatMap(item => item.sourceFiles), entryPoints: ['src/features/feature0.ts'], uncertainties: ['Does src/features/feature0.ts run before the external service is ready?', 'Runtime verification is required.'] }] }) };
     } }, { maxAttempts: 1 });
-    const result = await service.generateIndex(evidence);
+    const result = await service.generateProjectModel(evidence);
     expect(consolidated).toBe(true);
     expect(result.intent.contexts).toHaveLength(1);
     expect(result.intent.contexts[0]).toMatchObject({ sourceFiles: ['src/features/feature0.ts', 'src/features/feature1.ts'], uncertainties: ['Does src/features/feature0.ts run before the external service is ready?'] });
@@ -286,7 +286,7 @@ describe("structure-driven AI generation", () => {
     evidence.selection.evidenceChars = 10;
     let calls = 0;
     const service = new ProjectAiGenerationService({ id: 'fixture', generate: async request => { calls++; return reply(request); } });
-    await expect(service.generateIndex(evidence)).rejects.toMatchObject({ code: 'budget_exceeded' });
+    await expect(service.generateProjectModel(evidence)).rejects.toMatchObject({ code: 'budget_exceeded' });
     expect(calls).toBe(0);
   });
 
@@ -312,7 +312,7 @@ describe("structure-driven AI generation", () => {
         { canonicalName: 'Templates', purpose: 'Render documents', sourceFiles: ['src/templates.ts', 'src/config.ts'], entryPoints: ['src/templates.ts'] }
       ] }) };
     } }, { maxAttempts: 1 });
-    const result = await service.generateIndex(evidence);
+    const result = await service.generateProjectModel(evidence);
     expect(result.intent.contexts[0]).toMatchObject({ sourceFiles: ['src/config.ts', 'src/profiles.ts'], uncertainties: ['Does src/config.ts accept legacy account fields?'] });
     expect(result.intent.contexts[1]!.sourceFiles).toEqual(['src/templates.ts']);
   });
@@ -345,11 +345,11 @@ describe("structure-driven AI generation", () => {
       return { text: JSON.stringify({ contexts: groups(false) }) };
     } }, { maxAttempts: 1 });
     if (invalid) {
-      await expect(service.generateIndex(evidence)).rejects.toMatchObject({ code: 'invalid_output' });
+      await expect(service.generateProjectModel(evidence)).rejects.toMatchObject({ code: 'invalid_output' });
       expect(reviews).toBe(1);
       return;
     }
-    const result = await service.generateIndex(evidence);
+    const result = await service.generateProjectModel(evidence);
     expect(reviews).toBe(1);
     expect(result.intent.contexts.flatMap(context => context.sourceFiles!).sort()).toEqual(['src/config.ts', 'src/profiles.ts', 'src/view.ts']);
     expect(result.intent.qualityIssues?.find(issue => issue.code === 'ownership-review')).toMatchObject({ status });
@@ -369,7 +369,7 @@ describe("structure-driven AI generation", () => {
       if (mode === 'foreign-entry') value.contexts[0]!.entryPoints = value.contexts[1]!.sourceFiles;
       return { text: JSON.stringify(value) };
     } }, { maxAttempts: 1 });
-    await expect(service.generateIndex(evidence)).rejects.toMatchObject({ code: 'invalid_output' });
+    await expect(service.generateProjectModel(evidence)).rejects.toMatchObject({ code: 'invalid_output' });
   });
 
   it("accepts separate source windows but rejects citations in their unread gap", async () => {
@@ -389,9 +389,9 @@ describe("structure-driven AI generation", () => {
       value.c4.elements[0]!.evidence = [{ path, line }];
       return { text: JSON.stringify(value) };
     } }, { maxAttempts: 1 });
-    await expect(service(15).generateIndex(evidence)).resolves.toBeDefined();
-    await expect(service(105).generateIndex(evidence)).resolves.toBeDefined();
-    await expect(service(55).generateIndex(evidence)).rejects.toMatchObject({ diagnostics: expect.arrayContaining([expect.stringContaining('outside the supplied excerpt')]) });
+    await expect(service(15).generateProjectModel(evidence)).resolves.toBeDefined();
+    await expect(service(105).generateProjectModel(evidence)).resolves.toBeDefined();
+    await expect(service(55).generateProjectModel(evidence)).rejects.toMatchObject({ diagnostics: expect.arrayContaining([expect.stringContaining('outside the supplied excerpt')]) });
   });
 
   it("cancels between batches and never returns a partial model", async () => {
@@ -399,7 +399,7 @@ describe("structure-driven AI generation", () => {
     const controller = new AbortController();
     let calls = 0;
     const service = new ProjectAiGenerationService({ id: "fixture", generate: async request => { calls++; controller.abort(); return reply(request); } }, { maxAttempts: 1 });
-    await expect(service.generateIndex(evidence, { signal: controller.signal })).rejects.toThrow();
+    await expect(service.generateProjectModel(evidence, { signal: controller.signal })).rejects.toThrow();
     expect(calls).toBe(1);
   });
 });
@@ -443,9 +443,9 @@ it.each(["supported", "empty", "invented", "unread", "timeout", "cancel"])("boun
     ], relationships: [] } }) };
   } }, { maxAttempts: 1, timeoutMs: mode === "timeout" ? 25 : 0 });
   try {
-    if (mode === "cancel") await expect(service.generateIndex(evidence, { signal: controller.signal })).rejects.toMatchObject({ code: "cancelled" });
+    if (mode === "cancel") await expect(service.generateProjectModel(evidence, { signal: controller.signal })).rejects.toMatchObject({ code: "cancelled" });
     else {
-      const result = await service.generateIndex(evidence);
+      const result = await service.generateProjectModel(evidence);
       expect(result.intent.c4!.elements.map(item => item.id)).toEqual(["app", "host", "reader"]);
       expect(result.intent.c4!.relationships).toHaveLength(mode === "supported" ? 1 : 0);
       const readerIssues = result.intent.qualityIssues!.filter(issue => issue.elementIds.includes("reader"));

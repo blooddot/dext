@@ -357,13 +357,13 @@ describe("Project AI generation service", () => {
     expect(result.diagram.metadata?.topicSummary).toBe("Runs tasks and returns a result.");
   });
 
-  it("times out and aborts an unresponsive provider through the current index entry", async () => {
+  it("times out and aborts an unresponsive provider through the explicit excerpt fallback", async () => {
     let providerSignal: AbortSignal | undefined;
     const provider: ProjectAiProvider = { id: "hanging", generate: async (_request, signal) => {
       providerSignal = signal;
       return await new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("Provider aborted")), { once: true }));
     } };
-    await expect(new ProjectAiGenerationService(provider, { timeoutMs: 20, maxAttempts: 1 }).generateIndex(evidence())).rejects.toMatchObject({ code: "timeout" });
+    await expect(new ProjectAiGenerationService(provider, { timeoutMs: 20, maxAttempts: 1 }).generateProjectModelFromExcerpts(evidence())).rejects.toMatchObject({ code: "timeout" });
     expect(providerSignal?.aborted).toBe(true);
   });
 
@@ -372,7 +372,7 @@ describe("Project AI generation service", () => {
     const value = validIndex();
     let calls = 0;
     const provider: ProjectAiProvider = { id: "mock", generate: async () => ({ text: ++calls === 1 ? "{}" : JSON.stringify(value), model: "mock-model" }) };
-    const result = await new ProjectAiGenerationService(provider, { timeoutMs: 2_000, now: () => 42 }).generateIndex(input);
+    const result = await new ProjectAiGenerationService(provider, { timeoutMs: 2_000, now: () => 42 }).generateProjectModelFromExcerpts(input);
     expect(calls).toBe(2);
     expect(result.metadata.attempts).toBe(2);
     expect(result.metadata.promptVersion).toBe(PROJECT_MODEL_PROMPT_VERSION);
@@ -391,12 +391,12 @@ describe("Project AI generation service", () => {
       id: "mock",
       generate: async () => (++calls === 1 ? { text: "CLI failed to start.", finishReason: "error" as const } : { text: JSON.stringify(value) })
     };
-    const recovered = await new ProjectAiGenerationService(transient).generateIndex(input);
+    const recovered = await new ProjectAiGenerationService(transient).generateProjectModelFromExcerpts(input);
     expect(calls).toBe(2);
     expect(recovered.metadata.attempts).toBe(2);
 
     const dead: ProjectAiProvider = { id: "mock", generate: async () => ({ text: "CLI auth expired.", finishReason: "error" as const }) };
-    await expect(new ProjectAiGenerationService(dead).generateIndex(input)).rejects.toMatchObject({ code: "provider_error", diagnostics: ["CLI auth expired."] });
+    await expect(new ProjectAiGenerationService(dead).generateProjectModelFromExcerpts(input)).rejects.toMatchObject({ code: "provider_error", diagnostics: ["CLI auth expired."] });
   });
 
   it("reports live activities, terminal provider errors and cancellation", async () => {
@@ -410,20 +410,20 @@ describe("Project AI generation service", () => {
         return { text: request.attempt === 1 ? "{}" : JSON.stringify(value) };
       }
     };
-    await new ProjectAiGenerationService(provider).generateIndex(input, { onEvent: (event) => events.push(event) });
+    await new ProjectAiGenerationService(provider).generateProjectModelFromExcerpts(input, { onEvent: (event) => events.push(event) });
     expect(events.some((event) => event.id === "cli-output")).toBe(true);
     expect(events.some((event) => event.title === "AI analysis attempt failed" && event.done)).toBe(true);
     expect(events.some((event) => event.title === "Retrying AI analysis")).toBe(true);
 
     const failing: ProjectAiProvider = { id: "failed", generate: async () => ({ text: "CLI authentication expired.", finishReason: "error" }) };
-    await expect(new ProjectAiGenerationService(failing, { maxAttempts: 1 }).generateIndex(input)).rejects.toMatchObject({ code: "provider_error", diagnostics: ["CLI authentication expired."] });
+    await expect(new ProjectAiGenerationService(failing, { maxAttempts: 1 }).generateProjectModelFromExcerpts(input)).rejects.toMatchObject({ code: "provider_error", diagnostics: ["CLI authentication expired."] });
 
     const hanging: ProjectAiProvider = { id: "hanging", generate: (_request, signal) => new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true })) };
     const controller = new AbortController();
-    const promise = new ProjectAiGenerationService(hanging, { timeoutMs: 10_000 }).generateIndex(input, { signal: controller.signal });
+    const promise = new ProjectAiGenerationService(hanging, { timeoutMs: 10_000 }).generateProjectModelFromExcerpts(input, { signal: controller.signal });
     controller.abort();
     await expect(promise).rejects.toMatchObject({ code: "cancelled" });
-    await expect(new ProjectAiGenerationService(undefined).generateIndex(input)).rejects.toMatchObject({ code: "unavailable" });
+    await expect(new ProjectAiGenerationService(undefined).generateProjectModelFromExcerpts(input)).rejects.toMatchObject({ code: "unavailable" });
   });
 
   it("generates one on-demand diagram of the requested kind without touching other artifacts", async () => {

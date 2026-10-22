@@ -8,7 +8,7 @@ import type { ProjectAiProvider } from "../features/project/host/generation/proj
 import { isExcludedProjectEvidencePath, isProjectEvidencePath } from "../features/project/host/generation/projectAiGeneration.js";
 import type { ProjectStore } from "../features/project/host/persistence/projectStore.js";
 import { ProjectEditorProvider } from "../features/project/host/projectEditorProvider.js";
-import { createProjectPanelDataSource, discoverArchifyRepository, effectiveProjectEvidenceSettings, readWorkspaceEvidence } from "../features/project/host/projectPanelDataSource.js";
+import { createProjectPanelDataSource, discoverArchifyRepository, effectiveProjectEvidenceSettings, readProjectEvidence as readBoundedProjectEvidence, readStructureIndexEvidence } from "../features/project/host/projectPanelDataSource.js";
 import type { ProjectInitializationProgressListener } from "../features/project/host/projectService.js";
 import { searchProjectReferences } from "../features/project/knowledge/projectContext.js";
 import type { ProjectReferenceCandidate } from "../features/project/knowledge/projectReference.js";
@@ -45,34 +45,43 @@ export function setupProject(options: ProjectSetupOptions): ProjectEditorProvide
     search: async (query) => { const intent = await projectStore.readIntent(); return searchProjectReferences({ objects: await projectStore.readObjects(), query, ...(intent ? { intent } : {}) }); },
     open: async (objectId) => { await editors.project?.show("knowledge", objectId); }
   });
-  const readProjectEvidence = async (
-    request: { mode?: "index" | "topic"; requirement?: string; preferredPaths?: readonly string[]; modulePaths?: readonly string[] },
-    signal: AbortSignal,
-    onProgress: ProjectInitializationProgressListener
-  ) => {
+  const projectEvidenceInput = async () => {
     const [objects, intent, definition] = await Promise.all([
       projectStore.readObjects(),
       projectStore.readIntent(),
       projectStore.readDefinition()
     ]);
     if (!definition.evidence) throw new Error("Configure and save Evidence reading in Overview > Project settings before reading project sources.");
-    const limits = resolveProjectEvidenceSettings(effectiveProjectEvidenceSettings(definition));
-    return readWorkspaceEvidence(
+    return {
+      // Read per run so a settings change applies to the next initialization or diagram.
+      knowledge: { objects, ...(intent ? { intent } : {}) },
+      limits: resolveProjectEvidenceSettings(effectiveProjectEvidenceSettings(definition)),
+      structureAssetsPath: vscode.Uri.joinPath(context.extensionUri, "dist", "structure-index").fsPath,
+      structureCachePath: vscode.Uri.joinPath(context.storageUri ?? context.globalStorageUri, "project-structure.json").fsPath
+    };
+  };
+  const readProjectEvidence = async (
+    request: { requirement?: string; preferredPaths?: readonly string[]; modulePaths?: readonly string[] },
+    signal: AbortSignal,
+    onProgress: ProjectInitializationProgressListener
+  ) => {
+    const { knowledge, limits, structureAssetsPath, structureCachePath } = await projectEvidenceInput();
+    return readBoundedProjectEvidence(
       folder.uri,
-      { objects, ...(intent ? { intent } : {}) },
+      knowledge,
       {
-        // Read per run so a settings change applies to the next initialization or diagram.
         ...(request.requirement ? { requirement: request.requirement } : {}),
         ...(request.preferredPaths ? { preferredPaths: request.preferredPaths } : {}),
         ...(request.modulePaths ? { modulePaths: request.modulePaths } : {}),
-        ...limits,
-        structureAssetsPath: vscode.Uri.joinPath(context.extensionUri, "dist", "structure-index").fsPath,
-        structureCachePath: vscode.Uri.joinPath(context.storageUri ?? context.globalStorageUri, "project-structure.json").fsPath,
-        ...(request.mode ? { mode: request.mode } : {})
+        ...limits, structureAssetsPath, structureCachePath
       },
       onProgress,
       signal
     );
+  };
+  const readStructureIndex = async (signal: AbortSignal, onProgress: ProjectInitializationProgressListener) => {
+    const { knowledge, limits, structureAssetsPath, structureCachePath } = await projectEvidenceInput();
+    return readStructureIndexEvidence(folder.uri, knowledge, { ...limits, structureAssetsPath, structureCachePath }, onProgress, signal);
   };
   const openProjectEvidence = async (path: string, line?: number): Promise<void> => {
     // Stable-ID evidence navigation: the host validates the relative path before opening.
@@ -108,6 +117,7 @@ export function setupProject(options: ProjectSetupOptions): ProjectEditorProvide
         writeEvidenceSummary: (summary) => projectStore.writeEvidenceSummary(summary)
       },
       readEvidence: readProjectEvidence,
+      readStructureIndex,
       diagramRegistry,
       projectAiProvider: options.aiProvider,
       aiCli: options.agentProfiles().map((profile) => ({

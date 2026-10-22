@@ -8,11 +8,11 @@ const evidence = [{ path: "src/code.ts", line: 1 }];
 const index = { brief: { name: "Example", summary: "Runs code", evidence }, contexts: [{ id: "code", canonicalName: "Execution", purpose: "Runs code", entryPoints: ["src/code.ts"], evidence }] };
 const input = () => buildProjectEvidencePackage({ files: [{ path: "src/code.ts", content: "export function execute() {}" }] });
 
-describe("Project index and module analyses", () => {
+describe("Project model and module analyses", () => {
   it("generates only an index with a small schema and no phantom diagram", async () => {
     let request: ProjectAiRequest | undefined;
     const service = new ProjectAiGenerationService({ id: "fixture", generate: async value => { request = value; return { text: JSON.stringify(index) }; } }, { maxAttempts: 1 });
-    const result = await service.generateIndex(input());
+    const result = await service.generateProjectModelFromExcerpts(input());
     expect(result.diagrams).toEqual([]);
     expect(result.intent.contexts[0]).toMatchObject({ detail: "outline", entryPoints: ["src/code.ts"] });
     expect(result.intent.contexts[0]!.evidence[0]!.contentHash).toBe(input().files[0]!.contentHash);
@@ -26,8 +26,8 @@ describe("Project index and module analyses", () => {
 
   it("rejects missing entry paths and an oversized full-project answer", async () => {
     const service = (value: unknown) => new ProjectAiGenerationService({ id: "fixture", generate: async () => ({ text: JSON.stringify(value) }) }, { maxAttempts: 1 });
-    await expect(service({ ...index, contexts: [{ ...index.contexts[0], entryPoints: ["src/missing.ts"] }] }).generateIndex(input())).rejects.toMatchObject({ diagnostics: expect.arrayContaining([expect.stringContaining("Entry point")]) });
-    await expect(service({ ...index, diagrams: [] }).generateIndex(input())).rejects.toMatchObject({ code: "invalid_output" });
+    await expect(service({ ...index, contexts: [{ ...index.contexts[0], entryPoints: ["src/missing.ts"] }] }).generateProjectModelFromExcerpts(input())).rejects.toMatchObject({ diagnostics: expect.arrayContaining([expect.stringContaining("Entry point")]) });
+    await expect(service({ ...index, diagrams: [] }).generateProjectModelFromExcerpts(input())).rejects.toMatchObject({ code: "invalid_output" });
   });
 
   it("keeps explanation, node descriptions and evidence in the same saved result, and detects changed outlines", () => {

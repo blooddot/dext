@@ -11,6 +11,7 @@ isExcludedProjectEvidencePath,
 isProjectEvidencePath,
 PROJECT_BUILD_CONFIG_PATH,
 projectEvidenceFileKind,
+type IndexedProjectEvidence,
 type ProjectEvidenceFileInput,
 type ProjectEvidencePackage,
 type ProjectKnowledgeReference
@@ -37,7 +38,6 @@ export const PROJECT_SOURCE_GLOB = "**/*.{ts,tsx,cts,mts,js,jsx,cjs,mjs,py,rs,go
 export interface ProjectEvidenceReadOptions {
   structureAssetsPath?: string;
   structureCachePath?: string;
-  mode?: "index" | "topic";
   requirement?: string;
   /** Explicit topic evidence is prioritized within the configured scope and budgets. */
   preferredPaths?: readonly string[];
@@ -70,29 +70,25 @@ export function relativePath(root: vscode.Uri, uri: vscode.Uri): string | undefi
 }
 
 
+interface EvidenceScope {
+  include: string[];
+  found: vscode.Uri[];
+  foundPaths: Set<string>;
+  pathOf: (uri: vscode.Uri) => string;
+}
+
 /**
- * Reads only bounded documentation, manifests and source text when the user explicitly starts
- * initialization or diagram generation. Index builds parse the configured source scope locally;
- * diagram requests retain bounded excerpts. Nothing runs in the background.
+ * Lists evidence candidates for either operation. A bounded read passes its read window as the
+ * limit; a full index passes none so every discovered source reaches the local parser.
  */
-export async function readWorkspaceEvidence(
+async function findEvidenceScope(
   root: vscode.Uri,
-  knowledge: { objects?: readonly ProjectObject[]; intent?: ProjectIntent },
   options: ProjectEvidenceReadOptions,
-  onProgress?: ProjectInitializationProgressListener,
-  signal?: AbortSignal
-): Promise<ProjectEvidencePackage> {
-  const mode = options.mode;
-  if (mode === "topic") options = { ...options, maxFiles: Math.min(options.maxFiles ?? 600, 32),
-    maxSourceFiles: Math.min(options.maxSourceFiles ?? 600, 28),
-    maxFileChars: Math.min(options.maxFileChars ?? 16_000, 12_000),
-    maxEvidenceChars: Math.min(options.maxEvidenceChars ?? 600_000, 96_000) };
-  const maxFiles = Math.max(1, options.maxFiles ?? 600);
-  const maxSourceFiles = Math.max(0, options.maxSourceFiles ?? 600);
-  const maxFileBytes = Math.max(1024, options.maxFileBytes ?? 262_144);
+  onProgress: ProjectInitializationProgressListener | undefined,
+  signal: AbortSignal | undefined,
+  candidateLimit: number | undefined
+): Promise<EvidenceScope> {
   const excluded = PROJECT_EVIDENCE_EXCLUDE;
-  const files: ProjectEvidenceFileInput[] = [];
-  const coverage: string[] = [];
   // A configured scope replaces the built-in globs instead of extending them: that is how a reader
   // says "only this part of the tree is evidence". Invalid entries are dropped so a scope can never
   // escape the workspace root.
@@ -111,13 +107,7 @@ export async function readWorkspaceEvidence(
   // Listing candidates is cheap; reading them is not. A wide window is ordered by project evidence
   // rank before the read limit applies, so vendored readmes or tooling folders cannot occupy the
   // slots the project's own documentation and code need.
-  const candidateLimit = mode === "index" ? undefined : mode ? 4_000 : Math.min(4_000, Math.max(maxFiles, maxSourceFiles) * 8);
   const pathOf = (uri: vscode.Uri): string => relativePath(root, uri) ?? uri.path;
-  const preferred = new Set([...(options.preferredPaths ?? []), ...(options.modulePaths ?? [])]);
-  const preferredOrder = new Map([...preferred].map((path, index) => [path, index]));
-  const related = new Set<string>();
-  const cachedText = new Map<string, string>();
-  const byEvidenceRank = (left: vscode.Uri, right: vscode.Uri): number => (preferredOrder.get(pathOf(left)) ?? Number.MAX_SAFE_INTEGER) - (preferredOrder.get(pathOf(right)) ?? Number.MAX_SAFE_INTEGER) || Number(related.has(pathOf(right))) - Number(related.has(pathOf(left))) || compareProjectEvidencePaths(pathOf(left), pathOf(right));
   const found: vscode.Uri[] = [];
   const foundPaths = new Set<string>();
   for (const pattern of patterns) {
@@ -126,26 +116,74 @@ export async function readWorkspaceEvidence(
     for (const uri of uris) if (!foundPaths.has(uri.path)) { foundPaths.add(uri.path); found.push(uri); }
   }
   if (signal?.aborted) throw new Error("Project initialization was cancelled.");
-  if (mode === "index") {
-    // Source scope stays explicit. Ancestor manifests/READMEs provide package and project context.
-    const sourcePaths = found.map(pathOf).filter(path => projectEvidenceFileKind(path) === "source");
-    const ancestors = new Set<string>();
-    for (const path of sourcePaths) {
-      let directory = posix.dirname(path);
-      while (!ancestors.has(directory)) { ancestors.add(directory); if (directory === ".") break; directory = posix.dirname(directory); }
-    }
-    for (const pattern of [PROJECT_MANIFEST_GLOB, PROJECT_README_GLOB, PROJECT_BUILD_CONFIG_GLOB]) {
-      signal?.throwIfAborted();
-      const context = await vscode.workspace.findFiles(new vscode.RelativePattern(root, pattern), excluded);
-      for (const uri of context) {
-        const path = pathOf(uri), directory = posix.dirname(path);
-        if (pattern === PROJECT_BUILD_CONFIG_GLOB && !PROJECT_BUILD_CONFIG_PATH.test(path)) continue;
-        if (ancestors.has(directory) && !foundPaths.has(uri.path)) { foundPaths.add(uri.path); found.push(uri); }
-      }
-    }
-    return readProjectStructureEvidence(root, found, buildKnowledgeReferences(knowledge), { ...options, include }, onProgress, signal);
+  return { include, found, foundPaths, pathOf };
+}
+
+
+/**
+ * Parses the configured source scope and attaches the complete structure summary. This is the
+ * initialization operation: it has no excerpt budget because the index itself is the local output.
+ */
+export async function readStructureIndexEvidence(
+  root: vscode.Uri,
+  knowledge: { objects?: readonly ProjectObject[]; intent?: ProjectIntent },
+  options: ProjectEvidenceReadOptions,
+  onProgress?: ProjectInitializationProgressListener,
+  signal?: AbortSignal
+): Promise<IndexedProjectEvidence> {
+  const { include, found, foundPaths, pathOf } = await findEvidenceScope(root, options, onProgress, signal, undefined);
+  // Source scope stays explicit. Ancestor manifests/READMEs provide package and project context.
+  const sourcePaths = found.map(pathOf).filter(path => projectEvidenceFileKind(path) === "source");
+  const ancestors = new Set<string>();
+  for (const path of sourcePaths) {
+    let directory = posix.dirname(path);
+    while (!ancestors.has(directory)) { ancestors.add(directory); if (directory === ".") break; directory = posix.dirname(directory); }
   }
-  if (mode === "topic" && preferred.size) {
+  for (const pattern of [PROJECT_MANIFEST_GLOB, PROJECT_README_GLOB, PROJECT_BUILD_CONFIG_GLOB]) {
+    signal?.throwIfAborted();
+    const context = await vscode.workspace.findFiles(new vscode.RelativePattern(root, pattern), PROJECT_EVIDENCE_EXCLUDE);
+    for (const uri of context) {
+      const path = pathOf(uri), directory = posix.dirname(path);
+      if (pattern === PROJECT_BUILD_CONFIG_GLOB && !PROJECT_BUILD_CONFIG_PATH.test(path)) continue;
+      if (ancestors.has(directory) && !foundPaths.has(uri.path)) { foundPaths.add(uri.path); found.push(uri); }
+    }
+  }
+  return readProjectStructureEvidence(root, found, buildKnowledgeReferences(knowledge), { ...options, include }, onProgress, signal);
+}
+
+
+/**
+ * Reads bounded documentation, manifests and source text for a diagram request. A focused request
+ * (topic analysis) names preferred/module paths: it then clamps its budget, follows resolved local
+ * imports and excludes unrelated neighbors. Nothing runs in the background.
+ */
+export async function readProjectEvidence(
+  root: vscode.Uri,
+  knowledge: { objects?: readonly ProjectObject[]; intent?: ProjectIntent },
+  options: ProjectEvidenceReadOptions,
+  onProgress?: ProjectInitializationProgressListener,
+  signal?: AbortSignal
+): Promise<ProjectEvidencePackage> {
+  // A focus is expressed by the paths themselves, not by a mode flag: a caller that names files is
+  // asking for module analysis and accepts its smaller reading window.
+  const focused = options.preferredPaths !== undefined || options.modulePaths !== undefined;
+  if (focused) options = { ...options, maxFiles: Math.min(options.maxFiles ?? 600, 32),
+    maxSourceFiles: Math.min(options.maxSourceFiles ?? 600, 28),
+    maxFileChars: Math.min(options.maxFileChars ?? 16_000, 12_000),
+    maxEvidenceChars: Math.min(options.maxEvidenceChars ?? 600_000, 96_000) };
+  const maxFiles = Math.max(1, options.maxFiles ?? 600);
+  const maxSourceFiles = Math.max(0, options.maxSourceFiles ?? 600);
+  const maxFileBytes = Math.max(1024, options.maxFileBytes ?? 262_144);
+  const candidateLimit = focused ? 4_000 : Math.min(4_000, Math.max(maxFiles, maxSourceFiles) * 8);
+  const { include, found, pathOf } = await findEvidenceScope(root, options, onProgress, signal, candidateLimit);
+  const files: ProjectEvidenceFileInput[] = [];
+  const coverage: string[] = [];
+  const preferred = new Set([...(options.preferredPaths ?? []), ...(options.modulePaths ?? [])]);
+  const preferredOrder = new Map([...preferred].map((path, index) => [path, index]));
+  const related = new Set<string>();
+  const cachedText = new Map<string, string>();
+  const byEvidenceRank = (left: vscode.Uri, right: vscode.Uri): number => (preferredOrder.get(pathOf(left)) ?? Number.MAX_SAFE_INTEGER) - (preferredOrder.get(pathOf(right)) ?? Number.MAX_SAFE_INTEGER) || Number(related.has(pathOf(right))) - Number(related.has(pathOf(left))) || compareProjectEvidencePaths(pathOf(left), pathOf(right));
+  if (focused && preferred.size) {
     const available = new Set(found.map(pathOf));
     for (const path of await indexedRelatedPaths(options.structureCachePath, preferred)) if (available.has(path)) related.add(path);
     for (const uri of found.filter(uri => preferred.has(pathOf(uri))).sort(byEvidenceRank).slice(0, Math.min(8, maxSourceFiles, Math.floor(maxFiles / 2)))) {
@@ -205,12 +243,11 @@ export async function readWorkspaceEvidence(
       onProgress?.({ phase: "preparing", completed: processed, total: pending.length, message: `Read ${processed} / ${pending.length} files` });
     }
   }
-  const knowledgeReferences = buildKnowledgeReferences(knowledge);
   return buildProjectEvidencePackage({
     projectName: root.path.split("/").filter(Boolean).pop() ?? "Project",
     files,
     ...(knowledge.objects ? { objects: knowledge.objects } : {}),
-    knowledge: knowledgeReferences,
+    knowledge: buildKnowledgeReferences(knowledge),
     ...(options.preferredPaths ? { preferredPaths: options.preferredPaths } : {}),
     ...(options.requirement ? { requirement: options.requirement } : {}),
     ...(include.length ? { scope: include } : {}),
