@@ -145,7 +145,7 @@ export const projectC4Schema = z.object({
   }).strict()).max(120).default([])
 }).strict();
 
-export const projectQualityIssueSchema = z.object({ code: z.enum(["ownership-review", "isolated-c4-element", "missing-context-mapping"]),
+export const projectQualityIssueSchema = z.object({ code: z.enum(["ownership-review", "isolated-c4-element", "missing-context-mapping", "community-split", "module-fragmentation", "surprising-dependency"]),
   message: z.string().min(1), contextIds: z.array(z.string()), elementIds: z.array(z.string()), sourcePaths: z.array(z.string()),
   status: z.enum(["retained", "reassigned", "unresolved"]).optional(),
   reason: z.string().trim().min(1).max(1000).optional(),
