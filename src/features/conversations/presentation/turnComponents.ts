@@ -11,7 +11,7 @@ export interface TurnRenderAdapter<E> {
 
 export function renderTurnSection<E>(
   adapter: TurnRenderAdapter<E>, section: TurnSectionPresentation, children: readonly E[] = [],
-  open = false
+  open = false, action?: E
 ): { disclosure: E; body: E; meta: E } {
   const el = adapter.element;
   const meta = section.kind === "input"
@@ -19,7 +19,8 @@ export function renderTurnSection<E>(
     : el("span", { class: "turn-section-meta disclosure-meta" }, [section.kind === "process" ? section.detail ?? "" : ""]);
   const summary = el("summary", {}, [
     el("i", { class: "disclosure-chevron codicon codicon-chevron-right" }, []),
-    el("span", {}, [section.label]), meta
+    el("span", {}, [section.label]), meta,
+    ...(action ? [el("span", { class: "turn-section-actions" }, [action])] : [])
   ]);
   const body = el("div", { class: "turn-section-body" }, children);
   return { disclosure: el("details", { class: "turn-section", "data-turn-section": section.kind, open }, [summary, body]), body, meta };
