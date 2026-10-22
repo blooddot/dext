@@ -20,7 +20,7 @@ const response = { kind: 'workflow', executions: [execution({ kind: 'ask', text:
   execution({ kind: 'ask', text: '{invalid JSON}' })] };
 const usageEvents = [{ phase: 'status', text: '', usage: { totalTokens: 900 } },
   { phase: 'status', text: '', usage: { inputTokens: 1000, cachedInputTokens: 800, outputTokens: 234 } }];
-const record = { id: 't1', createdAt: 1, input: 'structured output', mode: 'code', process: usageEvents, output: JSON.stringify(response) };
+const record = { id: 't1', createdAt: 1, input: 'structured output', mode: 'code', process: [...usageEvents, { phase: 'message', text: 'Historical trace' }], output: JSON.stringify(response) };
 
 await runLabChecks(async ({ evaluate, settle, send, click }) => {
   const template = await readFile('src/app/sidebarProvider.ts', 'utf8');
@@ -47,6 +47,9 @@ await runLabChecks(async ({ evaluate, settle, send, click }) => {
     host({type:'executing',value:false,sessionId:'active',turnId:'t1'});`);
   await settle();
   assert.match(await evaluate(`document.querySelector(${JSON.stringify(processSummary)}).textContent`), /Worked for .*1\.2k tokens/, 'completed usage');
+  for (const section of ['input', 'process', 'output']) {
+    assert.ok(await evaluate(`document.querySelector('[data-turn-section="${section}"] > summary .output-copy') !== null`), `${section} copy in the title bar`);
+  }
   const displayed = await evaluate(`document.querySelector('.json-output-text').textContent`);
   assert.deepEqual(JSON.parse(displayed), JSON.parse(raw));
   assert.equal(await evaluate(`document.querySelectorAll('.json-output strong,.json-output img').length`), 0);
@@ -78,6 +81,9 @@ await runLabChecks(async ({ evaluate, settle, send, click }) => {
   await evaluate(`host({type:'outputSession',hostInitiated:true,session:{id:'active',createdAt:1,updatedAt:2,turns:[${JSON.stringify(record)}]}});`);
   await settle();
   assert.match(await evaluate(`document.querySelector(${JSON.stringify(processSummary)}).textContent`), /Worked for 4ms · 1\.2k tokens/, 'reopened usage');
+  for (const section of ['input', 'process', 'output']) {
+    assert.ok(await evaluate(`document.querySelector('[data-turn-section="${section}"] > summary .output-copy') !== null`), `reopened ${section} copy in the title bar`);
+  }
   assert.equal(await evaluate(`document.querySelector('.json-output-text').textContent`), displayed);
   await click('.json-output .output-copy');
   assert.equal(await evaluate(`messages.findLast(m=>m.type==='clipboardWrite').text`), raw);
@@ -92,6 +98,9 @@ await runLabChecks(async ({ evaluate, settle, send, click }) => {
     await evaluate(`document.getElementById('history-fixture').innerHTML=${JSON.stringify(html)};
       document.querySelectorAll('details').forEach(el=>el.open=true);`);
     assert.match(await evaluate(`document.querySelector(${JSON.stringify(processSummary)}).textContent`), /1\.2k tokens/, 'History usage including records without duration');
+    for (const section of ['input', 'process', 'output']) {
+      assert.ok(await evaluate(`document.querySelector('[data-turn-section="${section}"] > summary [data-copy]') !== null`), `history ${section} copy in the title bar`);
+    }
     assert.equal(await evaluate(`document.querySelector('.json-output-text').textContent`), displayed);
     await click('.json-output [data-copy]');
     assert.equal(await evaluate(`messages.findLast(m=>m.type==='copy').text`), raw, 'history HTML parsing preserves CRLF copy payload');

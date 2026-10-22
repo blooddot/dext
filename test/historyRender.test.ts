@@ -11,6 +11,14 @@ function choiceRows(html: string): [string, string][] {
     .map((match) => [match[1]!.trim(), match[2]!]);
 }
 
+/** The rendered Process body. Its title bar also carries the copy payload, which
+ * repeats the timeline text and would confuse source-order assertions. */
+function processBody(html: string): string {
+  const start = html.indexOf('data-turn-section="process"');
+  const end = html.indexOf('data-turn-section="output"', start);
+  return html.slice(html.indexOf("</summary>", start), end);
+}
+
 describe("Dext history rendering", () => {
   it("restores JSON from old raw output and serialized workflows without changing copied source", () => {
     const text = ' \r\n' + JSON.stringify({ 中文: '换行\n"引号" C:\\path **bold** <script>bad</script>' }) + '\r\n ';
@@ -267,7 +275,9 @@ describe("Dext history rendering", () => {
     const output = html.slice(html.indexOf('data-turn-section="output"'));
     expect(output).not.toContain("1s234ms");
     expect(output).not.toContain("tokens");
-    expect(output.slice(0, output.indexOf("</summary>"))).not.toContain("button");
+    const outputSummary = output.slice(0, output.indexOf("</summary>"));
+    expect(outputSummary).toContain('class="turn-section-actions"');
+    expect(outputSummary).toContain('data-copy="hello"');
     expect(output.match(/data-copy="hello"/g)).toHaveLength(1);
   });
 
@@ -416,11 +426,12 @@ describe("Dext history rendering", () => {
     };
 
     const html = renderHistoryRecord(record);
+    const body = processBody(html);
     expect(html).toContain("Ran 2 commands");
     expect(html).toContain('class="history-disclosure process-event process-command-group"');
-    expect(html.indexOf("Inspect the current implementation")).toBeLessThan(html.indexOf("Ran 2 commands"));
-    expect(html.indexOf("Ran 2 commands")).toBeLessThan(html.indexOf("Apply the smallest change"));
-    expect(html.indexOf("Apply the smallest change")).toBeLessThan(html.indexOf("npm test"));
+    expect(body.indexOf("Inspect the current implementation")).toBeLessThan(body.indexOf("Ran 2 commands"));
+    expect(body.indexOf("Ran 2 commands")).toBeLessThan(body.indexOf("Apply the smallest change"));
+    expect(body.indexOf("Apply the smallest change")).toBeLessThan(body.indexOf("npm test"));
   });
 
   it("reproduces the step grouping an agent reported instead of regrouping by arrival", () => {
@@ -449,14 +460,15 @@ describe("Dext history rendering", () => {
     };
 
     const html = renderHistoryRecord(record);
+    const body = processBody(html);
     expect(html).toContain("运行了 2 条命令");
     expect(html).toContain("已编辑 1 个文件 · 运行了 1 条命令");
     expect(html).not.toContain("Ran 2 commands");
     // The standalone step keeps its own row rather than joining a group.
     expect(html).toContain('class="history-disclosure process-event process-command-solo"');
-    expect(html.indexOf("运行了 2 条命令")).toBeLessThan(html.indexOf("已查看 shot.png"));
-    expect(html.indexOf("已查看 shot.png")).toBeLessThan(html.indexOf("Applying the fix"));
-    expect(html.indexOf("Applying the fix")).toBeLessThan(html.indexOf("npm test"));
+    expect(body.indexOf("运行了 2 条命令")).toBeLessThan(body.indexOf("已查看 shot.png"));
+    expect(body.indexOf("已查看 shot.png")).toBeLessThan(body.indexOf("Applying the fix"));
+    expect(body.indexOf("Applying the fix")).toBeLessThan(body.indexOf("npm test"));
   });
 
   it("preserves the arrival order of thoughts and commands", () => {

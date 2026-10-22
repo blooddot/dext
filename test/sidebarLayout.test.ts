@@ -125,7 +125,7 @@ describe("sidebar panel layout", () => {
     const transcript = await source("src/features/conversations/browser/transcriptView.ts");
     expect(main).toContain('inputHeading: element<HTMLElement>("input-heading")');
     expect(main).toContain('inputBody: element<HTMLElement>("input-body")');
-    expect(transcript).toContain('const input = this.section(turnPresentation.input, true);');
+    expect(transcript).toContain('const input = this.section(turnPresentation.input, true, this.host.copy(source));');
     expect(main).toMatch(/elements\.inputHeading\.addEventListener\("click",[\s\S]*toggleSection\(elements\.inputHeading, elements\.inputBody\)/);
     expect(main).toMatch(/elements\.inputHeading\.addEventListener\("keydown",[\s\S]*event\.key === "Enter" \|\| event\.key === " "[\s\S]*toggleSection\(elements\.inputHeading, elements\.inputBody\)/);
   });
@@ -657,6 +657,12 @@ describe("sidebar panel layout", () => {
     expect(trace).toMatch(/renderEvent\(event: AgentStreamEvent\): void \{[\s\S]*?this\.host\.terminal\(raw\)/);
     expect(trace).toMatch(/private renderMessageItem[\s\S]*?body\.replaceChildren\(\.\.\.renderTurnMessage/);
     expect(css).toMatch(/\.terminal-output \{[\s\S]*?max-height: 360px;[\s\S]*?overflow: auto;[\s\S]*?white-space: pre-wrap;/);
+    // Process has one whole-timeline copy control in its title bar; individual
+    // messages and commands no longer add their own floating copies.
+    expect(trace).not.toContain("this.host.copy");
+    expect(css).not.toContain(".agent-trace-command-content > .output-copy");
+    expect(css).not.toContain(".agent-stream-item > .output-copy");
+    expect(css).not.toContain(".agent-stream-item > .copy-button");
     expect(trace).not.toContain("const order = { reasoning: 0, work: 1, files: 2, tool: 3 }");
     expect(main).not.toContain("const order = { reasoning: 0, work: 1, files: 2, tool: 3 }");
   });

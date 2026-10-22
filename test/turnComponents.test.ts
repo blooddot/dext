@@ -18,6 +18,17 @@ describe("shared turn rendering", () => {
     expect(output).not.toContain("button");
   });
 
+  it("keeps section actions in the title bar after its metadata", () => {
+    const model = presentTurn({ source: "hello", mode: "agent" });
+    const action = turnHtmlAdapter.element("button", { class: "copy-button" }, []);
+    const html = renderTurnSection(turnHtmlAdapter, model.input!, [], true, action).disclosure.html;
+    const summary = html.slice(0, html.indexOf("</summary>"));
+    expect(summary).toContain('class="turn-section-actions"');
+    expect(summary).toContain('class="copy-button"');
+    expect(summary.indexOf('class="turn-mode"')).toBeLessThan(summary.indexOf("turn-section-actions"));
+    expect(html.slice(html.indexOf("</summary>"))).not.toContain("copy-button");
+  });
+
   function resultAdapter() {
     const literal = (text: string) => turnHtmlAdapter.element("span", {}, [text]);
     return {
