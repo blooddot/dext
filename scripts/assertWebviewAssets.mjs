@@ -170,11 +170,16 @@ for (const required of [
   "vendor/project-diagrams/archify/schemas/sequence.schema.json",
   "vendor/project-diagrams/archify/schemas/dataflow.schema.json",
   "vendor/project-diagrams/archify/schemas/lifecycle.schema.json",
+  "vendor/project-diagrams/archify/schemas/tree.schema.json",
+  "vendor/project-diagrams/archify/schemas/class.schema.json",
   "vendor/project-diagrams/archify/renderers/architecture/render-architecture.mjs",
   "vendor/project-diagrams/archify/renderers/workflow/render-workflow.mjs",
   "vendor/project-diagrams/archify/renderers/sequence/render-sequence.mjs",
   "vendor/project-diagrams/archify/renderers/dataflow/render-dataflow.mjs",
-  "vendor/project-diagrams/archify/renderers/lifecycle/render-lifecycle.mjs"
+  "vendor/project-diagrams/archify/renderers/lifecycle/render-lifecycle.mjs",
+  "vendor/project-diagrams/archify/renderers/tree/render-tree.mjs",
+  "vendor/project-diagrams/archify/renderers/class/render-class.mjs",
+  "vendor/project-diagrams/archify/renderers/erd/grid.mjs"
 ]) {
   assert.ok(packagedFiles.has(required), `Missing packaged Archify runtime file '${required}'.`);
 }

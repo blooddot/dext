@@ -5,7 +5,7 @@ import { CliAxAIService, type CliAxTransport } from "../../../agents/host/cliAxA
 import type { AgentTokenUsage } from "../../../../shared/contracts/types.js";
 import type { IndexedProjectEvidence, ProjectEvidenceFile, ProjectEvidenceFileInput, ProjectEvidenceInput, ProjectEvidenceInventoryEntry, ProjectEvidenceLimits, ProjectEvidencePackage, ProjectEvidenceSummary, ProjectStructureIndexSummary } from "../../contracts/evidence.js";
 import type { StructureGraphFacts } from "../indexing/projectStructureGraph.js";
-import { validateProjectDiagram, type ProjectDiagram, type ProjectDiagramEvidence, type ProjectDiagramKind } from "../../contracts/projectDiagram.js";
+import { validateProjectDiagram, type ProjectDiagram, type ProjectDiagramEvidence } from "../../contracts/projectDiagram.js";
 import { projectC4Schema, projectIntentSchema, validateProjectIntent, type ProjectContext, type ProjectIntent, type ProjectQualityIssue, type ProjectIntentProvenance } from "../../contracts/projectIntent.js";
 import type { ProjectEvidence } from "../../contracts/projectKnowledge.js";
 import type { StructureSummary } from "../indexing/projectStructure.js";
@@ -15,6 +15,13 @@ import { ownershipConcerns, projectModelQuality } from "./projectModelQuality.js
 export type { IndexedProjectEvidence, ProjectEvidenceFile, ProjectEvidenceFileInput, ProjectEvidenceInput, ProjectEvidenceInventoryEntry, ProjectEvidenceLimits, ProjectEvidencePackage, ProjectEvidenceSelection, ProjectEvidenceSummary, ProjectKnowledgeReference, ProjectStructureIndexSummary } from "../../contracts/evidence.js";
 export const PROJECT_DIAGRAM_PROMPT_VERSION = "project-diagram-7";
 export const PROJECT_MODEL_PROMPT_VERSION = "project-model-7";
+
+/**
+ * AI-generated diagrams stay limited to the five semantic kinds. `tree` and `class` are derived
+ * locally from the structure index, so they must never appear in the request, zod enum or prompt.
+ */
+export const AI_DIAGRAM_KINDS = ["architecture", "workflow", "sequence", "data_flow", "lifecycle"] as const;
+export type AiProjectDiagramKind = (typeof AI_DIAGRAM_KINDS)[number];
 
 function countByKind(entries: readonly { kind: string }[]): Record<string, number> {
   const counts: Record<string, number> = {};
@@ -428,7 +435,7 @@ export const projectDiagramSemanticsSchema = z.object({
 /** AI cannot supply layout or renderer payloads: those are derived by the Archify adapter. */
 export const projectGeneratedDiagramSchema = z.object({
   schemaVersion: z.literal(1), id: nonempty, title: nonempty,
-  kind: z.enum(["architecture", "workflow", "sequence", "data_flow", "lifecycle"]),
+  kind: z.enum(AI_DIAGRAM_KINDS),
   nodes: z.array(diagramNodeSchema).min(1).max(200), relations: z.array(diagramRelationSchema).max(500),
   semantics: projectDiagramSemanticsSchema.optional(),
   version: z.number().int().nonnegative().default(0), updatedAt: z.number().int().nonnegative().default(0), confidence: z.number().min(0).max(1).default(0),
@@ -559,6 +566,10 @@ export function validateDiagramSemantics(diagram: ProjectDiagram): string[] {
       requireRelations("transition", (semantics.transitions ?? []).map((transition) => transition.relationId));
       break;
     }
+    case "tree":
+    case "class":
+      // Derived locally from the structure index; never part of the AI contract.
+      break;
   }
   return errors;
 }
@@ -878,9 +889,9 @@ export interface ProjectDiagramGenerationRequest {
   /** A focused topic view has a hard reading budget; ordinary custom diagrams may omit it. */
   maxNodes?: number;
   /** Omitted means the model selects the most appropriate kind. */
-  kind?: ProjectDiagramKind;
+  kind?: AiProjectDiagramKind;
   /** Present when updating one existing diagram; id and kind must be preserved. */
-  target?: { id: string; title: string; kind: ProjectDiagramKind; version: number };
+  target?: { id: string; title: string; kind: AiProjectDiagramKind; version: number };
 }
 
 /** The two evidence tiers, so a model never invents a line for a file it only saw listed. */
@@ -915,8 +926,7 @@ function outputFieldsBlock(schema: Readonly<Record<string, unknown>>): string {
 function buildDiagramPrompt(evidence: ProjectEvidencePackage, request: ProjectDiagramGenerationRequest, schema: Readonly<Record<string, unknown>>): string {
   const requestedKind = request.kind
     ? `a ${request.kind} diagram`
-    : "one diagram of the most appropriate kind among architecture, workflow, sequence, data_flow and lifecycle";
-  const target = request.target
+    : "one diagram of the most appropriate kind among architecture, workflow, sequence, data_flow and lifecycle";  const target = request.target
     ? `Update the existing ${request.target.kind} diagram '${request.target.id}' titled '${request.target.title}'. Keep its id and kind unchanged.`
     : "Create a new diagram; choose a stable lowercase id.";
   return [

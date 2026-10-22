@@ -9,8 +9,27 @@ import { parserFor } from "../../../../platform/node/syntaxParser.js";
 import { buildStructureGraph, rankStructureFiles, type StructureGraph } from "./projectStructureGraph.js";
 
 // Bump when extraction, grouping or resolution changes. Cached facts never contain source bodies.
-export const PROJECT_STRUCTURE_VERSION = 3;
-const symbolSchema = z.object({ name: z.string(), kind: z.string(), line: z.number().int().positive(), signature: z.string() });
+export const PROJECT_STRUCTURE_VERSION = 4;
+const visibilitySchema = z.enum(["public", "protected", "package", "private"]);
+const symbolSchema = z.object({
+  id: z.string().min(1),
+  name: z.string(),
+  kind: z.string(),
+  line: z.number().int().positive(),
+  signature: z.string(),
+  ownerId: z.string().optional(),
+  ownerName: z.string().optional(),
+  memberKind: z.enum(["method", "field"]).optional(),
+  typeText: z.string().optional(),
+  parameters: z.string().optional(),
+  returns: z.string().optional(),
+  visibility: visibilitySchema.optional(),
+  static: z.boolean().optional(),
+  abstract: z.boolean().optional(),
+  extends: z.array(z.string()).optional(),
+  implements: z.array(z.string()).optional()
+});
+export type StructureSymbol = z.infer<typeof symbolSchema>;
 const importSchema = z.object({ specifier: z.string(), line: z.number().int().positive(), kind: z.enum(["import", "module", "dynamic"]), typeOnly: z.boolean().optional() });
 const fileSchema = z.object({ path: z.string(), hash: z.string(), language: z.string(), lines: z.number(), errors: z.boolean(), symbols: z.array(symbolSchema), imports: z.array(importSchema) });
 export const structureCacheSchema = z.object({ version: z.literal(PROJECT_STRUCTURE_VERSION), files: z.array(fileSchema) });
@@ -19,7 +38,7 @@ export type StructureCache = z.infer<typeof structureCacheSchema>;
 export interface StructureDependency { from: string; specifier: string; line: number; kind: "import" | "module" | "dynamic"; status: "resolved" | "unresolved"; to?: string; typeOnly?: boolean | undefined }
 export interface StructureModule {
   id: string; path: string; package: string; languages: string[]; files: number;
-  entryPoints: string[]; symbols: Array<{ path: string; name: string; kind: string; line: number; signature: string }>;
+  entryPoints: string[]; symbols: Array<StructureSymbol & { path: string }>;
   evidence: Array<{ path: string; contentHash: string }>;
   references: Array<{ specifier: string; status: "resolved" | "unresolved"; count: number }>;
   dependsOn: string[]; dependencyCount: number; unresolved: number; hash: string;
@@ -31,14 +50,14 @@ export interface StructureMember {
   dependencies: Array<{ specifier: string; to?: string; typeOnly?: boolean }>;
 }
 export interface StructureSummary {
-  version: 1; hash: string; files: number; parsed: number; cached: number; failed: number; unsupported: number;
+  version: 2; hash: string; files: number; parsed: number; cached: number; failed: number; unsupported: number;
   modules: StructureModule[];
   issues: Array<{ path: string; reason: string }>;
 }
 export interface StructureIndex { cache: StructureCache; dependencies: StructureDependency[]; summary: StructureSummary; graph: StructureGraph }
 export interface StructureInput { path: string; content?: string; issue?: string }
 
-const structureSymbolSchema = z.object({ path: z.string(), name: z.string(), kind: z.string(), line: z.number().int().positive(), signature: z.string() });
+const structureSymbolSchema = z.object({ path: z.string(), ...symbolSchema.shape });
 const structureMemberSchema = z.object({
   path: z.string(), hash: z.string(), language: z.string(), lines: z.number(), symbols: z.array(symbolSchema),
   dependencies: z.array(z.object({ specifier: z.string(), to: z.string().optional(), typeOnly: z.boolean().optional() }))
@@ -53,7 +72,7 @@ const structureModuleSchema = z.object({
 });
 /** The persisted summary shape a bounded read may reuse without reparsing sources. */
 export const structureSummarySchema = z.object({
-  version: z.literal(1), hash: z.string(), files: z.number(), parsed: z.number(), cached: z.number(), failed: z.number(), unsupported: z.number(),
+  version: z.literal(2), hash: z.string(), files: z.number(), parsed: z.number(), cached: z.number(), failed: z.number(), unsupported: z.number(),
   modules: z.array(structureModuleSchema),
   issues: z.array(z.object({ path: z.string(), reason: z.string() }))
 });
@@ -68,6 +87,35 @@ export function structureLanguage(path: string): string | undefined {
 }
 const digest = (value: string): string => createHash("sha256").update(value).digest("hex");
 const unquote = (value: string): string => value.replace(/^["']|["']$/g, "");
+const symbolId = (path: string, name: string, line: number): string => `${path}#${name}@${line}`;
+const typeName = (value: string): string => value.trim().replace(/<[\s\S]*$/, "").split("::").at(-1)?.split(".").at(-1)?.trim() ?? value.trim();
+const typeAnnotation = (value: string | undefined): string | undefined => {
+  const text = value?.replace(/^\s*:\s*/, "").trim();
+  return text ? text : undefined;
+};
+function parametersText(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  let text = value.trim().replace(/^\(/, "").replace(/\)$/, "").trim();
+  const parts = text.split(",").map((part) => part.trim()).filter(Boolean);
+  while (parts.length && /^(?:&\s*(?:mut\s+)?self|mut\s+self|self)$/.test(parts[0]!)) parts.shift();
+  text = parts.join(", ");
+  return text || undefined;
+}
+function visibilityOf(node: Node): "public" | "protected" | "package" | "private" | undefined {
+  const text = node.namedChildren.find((child) => child.type === "accessibility_modifier" || child.type === "visibility_modifier")?.text;
+  if (!text) return undefined;
+  if (text === "public" || text === "pub" || text.startsWith("pub(")) return "public";
+  if (text === "protected") return "protected";
+  if (text === "private") return "private";
+  return text === "package" ? "package" : undefined;
+}
+function hasToken(node: Node, token: string): boolean {
+  return node.children.some((child) => child.type === token);
+}
+function signatureOf(content: string, node: Node): string {
+  const body = node.childForFieldName("body") ?? node.childForFieldName("value")?.childForFieldName("body");
+  return content.slice(node.startIndex, Math.min(body?.startIndex ?? node.endIndex, node.startIndex + 200)).replace(/\s+/g, " ").trim();
+}
 
 function extract(parser: TreeSitter.Parser, path: string, content: string, language: string): StructureFile {
   const tree = parser.parse(content);
@@ -76,51 +124,212 @@ function extract(parser: TreeSitter.Parser, path: string, content: string, langu
   const addImport = (node: Node, specifier: string, kind: "import" | "module" | "dynamic" = "import", typeOnly = false) => {
     if (specifier) imports.push({ specifier, line: node.startPosition.row + 1, kind, ...(typeOnly ? { typeOnly } : {}) });
   };
-  const declarations = /^(?:class_declaration|abstract_class_declaration|function_declaration|generator_function_declaration|method_definition|method_signature|interface_declaration|type_alias_declaration|enum_declaration|function_item|function_signature_item|struct_item|enum_item|trait_item|type_item|mod_item|class_definition|function_definition)$/;
-  const visit = (node: Node): void => {
+  const addSymbol = (node: Node, nameNode: Node, extra: Omit<StructureSymbol, "id" | "name" | "kind" | "line" | "signature"> = {}): string => {
+    const line = node.startPosition.row + 1;
+    const id = symbolId(path, nameNode.text, line);
+    symbols.push({ id, name: nameNode.text, kind: node.type, line, signature: signatureOf(content, node), ...extra });
+    return id;
+  };
+  interface TypeScope { id: string; name: string; kind: string }
+  const declarations = /^(?:function_declaration|generator_function_declaration|method_definition|method_signature|function_item|function_signature_item|function_definition|variable_declarator)$/;
+  const typeDeclarations: Record<string, string> = {
+    class_declaration: "class", abstract_class_declaration: "abstract", interface_declaration: "interface", enum_declaration: "enum",
+    class_definition: "class", struct_item: "record", enum_item: "enum", trait_item: "interface"
+  };
+  const tsMembers = new Set(["method_definition", "method_signature", "abstract_method_signature", "public_field_definition", "property_signature"]);
+  const rustTypes = new Map<string, { id: string; kind: string }>();
+  if (language === "rust") {
+    const scanRust = (node: Node): void => {
+      if (typeDeclarations[node.type] && /^(?:struct_item|enum_item|trait_item)$/.test(node.type)) {
+        const name = node.childForFieldName("name");
+        if (name) {
+          const line = node.startPosition.row + 1;
+          rustTypes.set(name.text, { id: symbolId(path, name.text, line), kind: typeDeclarations[node.type]! });
+        }
+      }
+      for (const child of node.namedChildren) scanRust(child);
+    };
+    scanRust(tree.rootNode);
+  }
+  const visit = (node: Node, scope?: TypeScope, allowDeclarations = true): void => {
     const name = node.childForFieldName("name");
-    if (name && (declarations.test(node.type) || (node.type === "variable_declarator" && ["arrow_function", "function_expression"].includes(node.childForFieldName("value")?.type ?? "")))) {
-      const body = node.childForFieldName("body") ?? node.childForFieldName("value")?.childForFieldName("body");
-      symbols.push({ name: name.text, kind: node.type, line: node.startPosition.row + 1,
-        signature: content.slice(node.startIndex, Math.min(body?.startIndex ?? node.endIndex, node.startIndex + 200)).replace(/\s+/g, " ").trim() });
-    }
     if (language === "rust") {
       if (node.type === "use_declaration") {
         const arg = node.childForFieldName("argument");
-        // Retain the explicit module prefix; grouped members do not prove symbol targets.
         if (arg) addImport(node, (arg.type === "scoped_use_list" || arg.type === "use_as_clause" ? arg.childForFieldName("path")?.text ?? arg.text : arg.text).replace(/::\*$/, ""));
       }
       if (node.type === "mod_item" && !node.childForFieldName("body") && name) addImport(node, name.text, "module");
-    } else if (language === "python") {
+      if (typeDeclarations[node.type] && /^(?:struct_item|enum_item|trait_item)$/.test(node.type) && name) {
+        const id = addSymbol(node, name, {
+          ...(hasToken(node, "abstract") ? { abstract: true } : {}),
+          ...(visibilityOf(node) ? { visibility: visibilityOf(node) } : {})
+        });
+        if (node.type === "struct_item") {
+          const body = node.childForFieldName("body");
+          for (const field of body?.namedChildren ?? []) {
+            if (field.type !== "field_declaration") continue;
+            const fieldName = field.childForFieldName("name");
+            if (!fieldName) continue;
+            const type = field.childForFieldName("type");
+            addSymbol(field, fieldName, { ownerId: id, ownerName: name.text, memberKind: "field", ...(type ? { typeText: type.text } : {}), ...(visibilityOf(field) ? { visibility: visibilityOf(field) } : {}) });
+          }
+        }
+        if (node.type === "enum_item") {
+          const body = node.childForFieldName("body");
+          for (const variant of body?.namedChildren ?? []) {
+            if (variant.type !== "enum_variant") continue;
+            const variantName = variant.childForFieldName("name");
+            if (variantName) addSymbol(variant, variantName, { ownerId: id, ownerName: name.text, memberKind: "field" });
+          }
+        }
+        if (node.type === "trait_item") for (const child of node.childForFieldName("body")?.namedChildren ?? []) visit(child, { id, name: name.text, kind: "interface" }, allowDeclarations);
+        return;
+      }
+      if (node.type === "impl_item") {
+        const ownerName = node.childForFieldName("type")?.text;
+        if (ownerName) {
+          const declared = rustTypes.get(typeName(ownerName));
+          const owner = { id: declared?.id ?? "", name: typeName(ownerName), kind: declared?.kind ?? "record" };
+          for (const child of node.childForFieldName("body")?.namedChildren ?? []) visit(child, owner, allowDeclarations);
+        }
+        return;
+      }
+      if ((node.type === "function_item" || node.type === "function_signature_item") && name) {
+        const parameters = node.childForFieldName("parameters");
+        const returns = node.childForFieldName("return_type");
+        const member = scope && node.parent?.type === "declaration_list";
+        addSymbol(node, name, {
+          ...(member ? { ...(scope.id ? { ownerId: scope.id } : {}), ownerName: scope.name, memberKind: "method" as const } : {}),
+          ...(parametersText(parameters?.text) ? { parameters: parametersText(parameters?.text) } : {}),
+          ...(returns?.text ? { returns: returns.text } : {}),
+          ...(visibilityOf(node) ? { visibility: visibilityOf(node) } : {}),
+          ...(node.type === "function_signature_item" || hasToken(node, "abstract") ? { abstract: true } : {})
+        });
+        return;
+      }
+      for (const child of node.namedChildren) visit(child, scope, allowDeclarations);
+      return;
+    }
+    if (language === "python") {
       if (node.type === "import_from_statement") {
         addImport(node, node.childForFieldName("module_name")?.text ?? "");
       } else if (node.type === "import_statement") {
         for (const child of node.namedChildren) addImport(node, child.type === "aliased_import" ? child.childForFieldName("name")?.text ?? "" : child.text);
       }
-    } else {
-      if (node.type === "import_statement" || node.type === "export_statement") {
-        const source = node.childForFieldName("source");
-        if (source) {
-          const clause = node.namedChildren.find(child => child.type === "import_clause" || child.type === "export_clause");
-          const named = clause?.namedChildren.find(child => child.type === "named_imports") ?? clause;
-          const specifiers = named?.namedChildren.filter(child => child.type === "import_specifier" || child.type === "export_specifier") ?? [];
-          const typeOnly = node.children.some(child => child.type === "type") || !!(specifiers.length
-            && named?.namedChildren.length === specifiers.length
-            && (!clause || clause === named || clause.namedChildren.length === 1)
-            && specifiers.every(child => child.children.some(token => token.type === "type")));
-          addImport(node, unquote(source.text), "import", typeOnly);
+      if (node.type === "class_definition" && name) {
+        const bases = (node.childForFieldName("superclasses")?.namedChildren ?? [])
+          .map((base) => typeName(base.text)).filter((base) => base && base !== "object");
+        const id = addSymbol(node, name, {
+          ...(hasToken(node, "abstract") ? { abstract: true } : {}),
+          ...(bases.length ? { extends: [...new Set(bases)] } : {})
+        });
+        for (const child of node.childForFieldName("body")?.namedChildren ?? []) visit(child, { id, name: name.text, kind: "class" }, allowDeclarations);
+        return;
+      }
+      const inClassBody = scope && (node.parent?.type === "block"
+        || (node.parent?.type === "decorated_definition" && node.parent.parent?.type === "block")
+        || (node.parent?.type === "expression_statement" && node.parent.parent?.type === "block"));
+      if (inClassBody && allowDeclarations) {
+        if (node.type === "function_definition" && name) {
+          const decorators = node.parent?.type === "decorated_definition"
+            ? node.parent.namedChildren.filter((child) => child.type === "decorator").map((child) => child.text.replace(/^@/, "").trim()) : [];
+          const parameters = node.childForFieldName("parameters");
+          const returns = node.childForFieldName("return_type");
+          addSymbol(node, name, {
+            ownerId: scope.id, ownerName: scope.name, memberKind: "method",
+            ...(parametersText(parameters?.text) ? { parameters: parametersText(parameters?.text) } : {}),
+            ...(returns?.text ? { returns: returns.text } : {}),
+            ...(decorators.includes("staticmethod") || decorators.includes("classmethod") ? { static: true } : {}),
+            ...(decorators.includes("abstractmethod") ? { abstract: true } : {})
+          });
+          for (const child of node.namedChildren) visit(child, scope, false);
+          return;
+        }
+        if (node.type === "assignment") {
+          const left = node.childForFieldName("left");
+          const annotation = node.childForFieldName("type");
+          if (left && annotation && left.type === "identifier") {
+            addSymbol(node, left, { ownerId: scope.id, ownerName: scope.name, memberKind: "field", typeText: annotation.text });
+            return;
+          }
         }
       }
-      if (node.type === "call_expression") {
-        const fn = node.childForFieldName("function")?.text;
-        if (fn === "require" || fn === "import") {
-          const arg = node.childForFieldName("arguments")?.namedChildren[0];
-          addImport(node, arg?.type === "string" ? unquote(arg.text) : "<dynamic>", arg?.type === "string" ? "import" : "dynamic");
-        }
+      if (node.type === "function_definition" && name && (!scope || allowDeclarations)) {
+        const parameters = node.childForFieldName("parameters");
+        const returns = node.childForFieldName("return_type");
+        addSymbol(node, name, {
+          ...(parametersText(parameters?.text) ? { parameters: parametersText(parameters?.text) } : {}),
+          ...(returns?.text ? { returns: returns.text } : {})
+        });
+        return;
+      }
+      for (const child of node.namedChildren) visit(child, scope, allowDeclarations);
+      return;
+    }
+    // TypeScript / JavaScript.
+    if (node.type === "import_statement" || node.type === "export_statement") {
+      const source = node.childForFieldName("source");
+      if (source) {
+        const clause = node.namedChildren.find((child) => child.type === "import_clause" || child.type === "export_clause");
+        const named = clause?.namedChildren.find((child) => child.type === "named_imports") ?? clause;
+        const specifiers = named?.namedChildren.filter((child) => child.type === "import_specifier" || child.type === "export_specifier") ?? [];
+        const typeOnly = node.children.some((child) => child.type === "type") || !!(specifiers.length
+          && named?.namedChildren.length === specifiers.length
+          && (!clause || clause === named || clause.namedChildren.length === 1)
+          && specifiers.every((child) => child.children.some((token) => token.type === "type")));
+        addImport(node, unquote(source.text), "import", typeOnly);
+      }
+    }
+    if (node.type === "call_expression") {
+      const fn = node.childForFieldName("function")?.text;
+      if (fn === "require" || fn === "import") {
+        const arg = node.childForFieldName("arguments")?.namedChildren[0];
+        addImport(node, arg?.type === "string" ? unquote(arg.text) : "<dynamic>", arg?.type === "string" ? "import" : "dynamic");
+      }
+    }
+    if (typeDeclarations[node.type] && name && allowDeclarations) {
+      const heritage = node.namedChildren.find((child) => child.type === "class_heritage");
+      const extendsClause = heritage?.namedChildren.find((child) => child.type === "extends_clause");
+      const implementations = heritage?.namedChildren.find((child) => child.type === "implements_clause");
+      const extendNames = extendsClause ? [typeName(extendsClause.childForFieldName("value")?.text ?? extendsClause.namedChildren[0]?.text ?? "")].filter(Boolean) : [];
+      const implementNames = (implementations?.namedChildren ?? []).map((child) => typeName(child.text)).filter(Boolean);
+      const abstract = typeDeclarations[node.type] === "abstract" || hasToken(node, "abstract");
+      const id = addSymbol(node, name, {
+        ...(abstract ? { abstract: true } : {}),
+        ...(visibilityOf(node) ? { visibility: visibilityOf(node) } : {}),
+        ...(extendNames.length ? { extends: [...new Set(extendNames)] } : {}),
+        ...(implementNames.length ? { implements: [...new Set(implementNames)] } : {})
+      });
+      for (const child of node.namedChildren) visit(child, { id, name: name.text, kind: typeDeclarations[node.type]! }, allowDeclarations);
+      return;
+    }
+    const inClassBody = scope && (node.parent?.type === "class_body" || node.parent?.type === "interface_body");
+    if (inClassBody && allowDeclarations && tsMembers.has(node.type) && name) {
+      const method = node.type === "method_definition" || node.type === "method_signature" || node.type === "abstract_method_signature";
+      const parameters = node.childForFieldName("parameters");
+      const returns = node.childForFieldName("return_type");
+      const annotation = node.childForFieldName("type");
+      addSymbol(node, name, {
+        ownerId: scope.id, ownerName: scope.name, memberKind: method ? "method" : "field",
+        ...(method && parametersText(parameters?.text) ? { parameters: parametersText(parameters?.text) } : {}),
+        ...(method && returns ? { returns: typeAnnotation(returns.text) ?? returns.text } : {}),
+        ...(!method && annotation ? { typeText: typeAnnotation(annotation.text) ?? annotation.text } : {}),
+        ...(visibilityOf(node) ? { visibility: visibilityOf(node) } : {}),
+        ...(hasToken(node, "static") ? { static: true } : {}),
+        ...(node.type === "abstract_method_signature" || hasToken(node, "abstract") ? { abstract: true } : {})
+      });
+      for (const child of node.namedChildren) visit(child, scope, false);
+      return;
+    }
+    if (allowDeclarations && !scope && name && declarations.test(node.type)) {
+      const body = node.childForFieldName("body") ?? node.childForFieldName("value")?.childForFieldName("body");
+      if (node.type !== "variable_declarator" || ["arrow_function", "function_expression"].includes(node.childForFieldName("value")?.type ?? "")) {
+        addSymbol(node, name, { ...(body ? {} : {}) });
+        return;
       }
     }
     // Walk declarations/imports, but do not collect local variables as public module structure.
-    for (const child of node.namedChildren) visit(child);
+    for (const child of node.namedChildren) visit(child, scope, allowDeclarations);
   };
   try {
     visit(tree.rootNode);
@@ -283,7 +492,7 @@ export async function buildStructureIndex(inputs: AsyncIterable<StructureInput> 
   const config = configs(configuration), dependencies = resolveDependencies(files, config);
   const modules = summarize(files, config, dependencies);
   const hash = digest(JSON.stringify({ version: PROJECT_STRUCTURE_VERSION, files: files.map(file => [file.path, file.hash]), config, issues }));
-  const summary: StructureSummary = { version: 1, hash, files: count, parsed: files.length, cached, failed: issues.length, unsupported, modules, issues };
+  const summary: StructureSummary = { version: 2, hash, files: count, parsed: files.length, cached, failed: issues.length, unsupported, modules, issues };
   const index = { cache: { version: PROJECT_STRUCTURE_VERSION, files }, dependencies, summary } as const;
   return { ...index, graph: buildStructureGraph(index) };
 }

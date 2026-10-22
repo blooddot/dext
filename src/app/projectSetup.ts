@@ -6,6 +6,7 @@ import { ArchifyAdapter } from "../features/project/host/diagrams/archifyAdapter
 import { ProjectDiagramAdapterRegistry } from "../features/project/host/diagrams/projectDiagramRegistry.js";
 import type { ProjectAiProvider } from "../features/project/host/generation/projectAiGeneration.js";
 import { isExcludedProjectEvidencePath, isProjectEvidencePath } from "../features/project/host/generation/projectAiGeneration.js";
+import { readCachedStructure } from "../features/project/host/indexing/projectStructureHost.js";
 import type { ProjectStore } from "../features/project/host/persistence/projectStore.js";
 import { ProjectEditorProvider } from "../features/project/host/projectEditorProvider.js";
 import { createProjectPanelDataSource, discoverArchifyRepository, effectiveProjectEvidenceSettings, readProjectEvidence as readBoundedProjectEvidence, readStructureIndexEvidence } from "../features/project/host/projectPanelDataSource.js";
@@ -45,6 +46,7 @@ export function setupProject(options: ProjectSetupOptions): ProjectEditorProvide
     search: async (query) => { const intent = await projectStore.readIntent(); return searchProjectReferences({ objects: await projectStore.readObjects(), query, ...(intent ? { intent } : {}) }); },
     open: async (objectId) => { await editors.project?.show("knowledge", objectId); }
   });
+  const structureCachePath = vscode.Uri.joinPath(context.storageUri ?? context.globalStorageUri, "project-structure.json").fsPath;
   const projectEvidenceInput = async () => {
     const [objects, intent, definition] = await Promise.all([
       projectStore.readObjects(),
@@ -57,7 +59,7 @@ export function setupProject(options: ProjectSetupOptions): ProjectEditorProvide
       knowledge: { objects, ...(intent ? { intent } : {}) },
       limits: resolveProjectEvidenceSettings(effectiveProjectEvidenceSettings(definition)),
       structureAssetsPath: vscode.Uri.joinPath(context.extensionUri, "dist", "structure-index").fsPath,
-      structureCachePath: vscode.Uri.joinPath(context.storageUri ?? context.globalStorageUri, "project-structure.json").fsPath
+      structureCachePath
     };
   };
   const readProjectEvidence = async (
@@ -118,6 +120,7 @@ export function setupProject(options: ProjectSetupOptions): ProjectEditorProvide
       },
       readEvidence: readProjectEvidence,
       readStructureIndex,
+      readStructure: () => readCachedStructure(structureCachePath),
       diagramRegistry,
       projectAiProvider: options.aiProvider,
       aiCli: options.agentProfiles().map((profile) => ({

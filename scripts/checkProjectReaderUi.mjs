@@ -110,6 +110,12 @@ try {
   const relation = (id, from, to, extra = {}) => ({ id, from, to, kind: 'calls', label: 'send request', evidence, ...extra });
   const diagram = (kind, semantics = {}) => ({ schemaVersion: 1, id: kind, title: `${kind} saved view`, kind, version: 1, updatedAt: 10, nodes: [node('editor', 'Code editor', { ...(kind === 'data_flow' ? { stageId: 'input' } : {}), ...(kind === 'workflow' ? { laneId: 'ui' } : {}) }), node('kernel', 'Execution kernel', { role: 'store', ...(kind === 'data_flow' ? { stageId: 'output' } : {}), ...(kind === 'workflow' ? { laneId: 'host' } : {}) })], relations: [relation('request', 'editor', 'kernel')], semantics });
   const diagrams = [diagram('architecture', { boundaries: [{ id: 'app', label: 'Application', nodeIds: ['editor', 'kernel'], evidence }] }), diagram('workflow', { lanes: [{ id: 'ui', label: 'Editor', evidence }, { id: 'host', label: 'Host', evidence }] }), diagram('sequence', { participants: [{ nodeId: 'editor', order: 0 }, { nodeId: 'kernel', order: 1 }], messages: [{ relationId: 'request', order: 0, kind: 'call', evidence }] }), diagram('data_flow', { stages: [{ id: 'input', label: 'Input', order: 0, evidence }, { id: 'output', label: 'Output', order: 1, evidence }] }), diagram('lifecycle', { states: [{ nodeId: 'editor', kind: 'initial', evidence }, { nodeId: 'kernel', kind: 'terminal', outcome: 'success', evidence }], transitions: [{ relationId: 'request', event: 'Submit', evidence }] })];
+  const treeDiagram = { ...diagram('tree'), title: 'tree saved view', nodes: [node('editor', 'Code editor'), node('kernel', 'Execution kernel', { role: 'store', parentId: 'editor' })], relations: [], semantics: undefined };
+  const classDiagram = { ...diagram('class'), title: 'class saved view', nodes: [
+    { ...node('editor', 'Code editor'), classKind: 'class', members: [{ name: 'submit', kind: 'method', returns: 'void' }] },
+    { ...node('kernel', 'Execution kernel', { role: 'store' }), classKind: 'interface', members: [{ name: 'execute', kind: 'method', returns: 'void' }] }
+  ], relations: [{ ...relation('implements', 'editor', 'kernel'), kind: 'realization' }], semantics: undefined };
+  diagrams.push(treeDiagram, classDiagram);
   intent.c4 = { systemId: 'dext-system', elements: [
     { id: 'dext-system', name: 'Dext system', kind: 'system', description: 'Development assistant', contextIds: [], evidence },
     { id: 'developer', name: 'Developer', kind: 'person', description: 'Runs tasks', contextIds: [], evidence },
@@ -119,7 +125,11 @@ try {
     { id: 'uses-dext', from: 'developer', to: 'dext-system', description: 'Uses assistant', evidence },
     { id: 'posts-command', from: 'webview', to: 'extension', description: 'Sends commands', evidence }
   ] };
-  const topics = ui.buildProjectTopics(intent, diagrams);
+  const topics = [...ui.buildProjectTopics(intent, diagrams), {
+    id: 'structure:map', title: 'Structure map', kind: 'structure', analysisState: 'ready', description: 'Physical module and file layout.', responsibilities: [], entryPoints: [], steps: [], constraints: [], evidence: [evidence[0]], diagrams: [], review: 'derived', diagram: treeDiagram
+  }, {
+    id: 'structure:types', title: 'Type map', kind: 'types', analysisState: 'ready', description: 'Explicit types and members.', responsibilities: [], entryPoints: [], steps: [], constraints: [], evidence: [evidence[0]], diagrams: [], review: 'derived', diagram: classDiagram
+  }];
   const data = { overview: { name: 'Dext', root: '.', objects: 0, accepted: 0, drafts: 0, needsVerification: 0, initialization: { status: 'completed' } }, objects: [], architecture: { diagrams }, readerDiagrams: diagrams, knowledge: { brief: intent.brief.summary, topics } };
   const artifacts = resolve('.tmp-tb/project-reader-ui'); await mkdir(artifacts, { recursive: true });
   const wait = async (expression, label) => { for (let i = 0; i < 600; i++) { if (await evaluate(expression)) return; await new Promise(done => setTimeout(done, 50)); } throw new Error(`${label}: ${JSON.stringify(await evaluate(`({status:document.querySelector('[data-reader-render-status]')?.textContent,messages:window.messages,violations:window.violations,frame:document.querySelector('iframe')?.srcdoc.length})`))}`); };
@@ -244,9 +254,11 @@ try {
     assert.equal(await evaluate(`document.querySelector('[data-reader-diagram-source]').textContent.trim().startsWith('{')`), true, 'saved model is shown as JSON');
     await evaluateViewer(`Array.from(document.querySelectorAll('[data-node-id]')).find(n=>n.textContent.includes('Code editor')).dispatchEvent(new MouseEvent('click',{bubbles:true}))`);
     await wait(`document.querySelector('[data-reader-inspector]').textContent.includes('Code editor')`, 'node inspection');
-    await click('[data-reader-relation="request"]');
-    await click('[data-reader-inspector] [data-reader-element-source]');
-    assert.equal(await evaluate('messages.at(-1).elementId'), 'request');
+    if (fixture.relations.length) {
+      await click('[data-reader-relation="request"]').catch(() => click(`[data-reader-relation="${fixture.relations[0].id}"]`));
+      await click('[data-reader-inspector] [data-reader-element-source]');
+      assert.equal(await evaluate('messages.at(-1).elementId'), fixture.relations[0].id);
+    }
   }
   failRender = true;
   await click('.project-reader-directory [data-reader-topic="run"]');
@@ -402,7 +414,7 @@ try {
   assert.equal(await evaluate(`document.querySelectorAll('[data-diagram-state=ready] svg').length`), 2);
   assert.equal(await evaluate(`document.querySelector('[data-diagram-state=error] details').open`), true);
   assert.equal(await evaluate(`document.querySelectorAll('.markdown-diagram-staging').length`), 0);
-  console.log('PASS: Project reader uses Archify for all five kinds, with model/prose/source links, CSP, ownership, export, explicit render errors and responsive themes. Screenshots: .tmp-tb/project-reader-ui');
+  console.log('PASS: Project reader uses Archify for all seven kinds, with model/prose/source links, CSP, ownership, export, explicit render errors and responsive themes. Screenshots: .tmp-tb/project-reader-ui');
 } finally {
   server?.close();
   try { await shutdown?.(); } catch {}

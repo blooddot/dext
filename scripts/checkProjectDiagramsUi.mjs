@@ -82,7 +82,17 @@ try {
     lifecycle: diagram("lifecycle",
       [node("created", "创建", "state"), node("paid", "已支付", "state"), node("shipped", "已发货", "state"), node("done", "已完成", "state"), node("cancelled", "已取消", "event")],
       [relation("t1", "created", "paid", "transitions", { label: "支付", order: 1 }), relation("t2", "paid", "shipped", "transitions", { label: "发货", order: 2 }), relation("t3", "shipped", "done", "transitions", { label: "签收", order: 3 }), relation("t4", "paid", "cancelled", "transitions", { label: "取消", order: 4, condition: "超时" })],
-      { lanes: [{ id: "main", label: "阶段", evidence: evidence("created") }, { id: "terminal", label: "结果", evidence: evidence("done") }], states: [{ nodeId: "created", kind: "initial", evidence: evidence("created") }, { nodeId: "paid", kind: "normal", evidence: evidence("paid") }, { nodeId: "shipped", kind: "normal", evidence: evidence("shipped") }, { nodeId: "done", kind: "terminal", outcome: "success", evidence: evidence("done") }, { nodeId: "cancelled", kind: "terminal", outcome: "failure", evidence: evidence("cancelled") }], transitions: [{ relationId: "t1", event: "支付", evidence: evidence("t1") }, { relationId: "t2", event: "发货", evidence: evidence("t2") }, { relationId: "t3", event: "签收", evidence: evidence("t3") }, { relationId: "t4", event: "取消", condition: "超时", evidence: evidence("t4") }] })
+      { lanes: [{ id: "main", label: "阶段", evidence: evidence("created") }, { id: "terminal", label: "结果", evidence: evidence("done") }], states: [{ nodeId: "created", kind: "initial", evidence: evidence("created") }, { nodeId: "paid", kind: "normal", evidence: evidence("paid") }, { nodeId: "shipped", kind: "normal", evidence: evidence("shipped") }, { nodeId: "done", kind: "terminal", outcome: "success", evidence: evidence("done") }, { nodeId: "cancelled", kind: "terminal", outcome: "failure", evidence: evidence("cancelled") }], transitions: [{ relationId: "t1", event: "支付", evidence: evidence("t1") }, { relationId: "t2", event: "发货", evidence: evidence("t2") }, { relationId: "t3", event: "签收", evidence: evidence("t3") }, { relationId: "t4", event: "取消", condition: "超时", evidence: evidence("t4") }] }),
+    tree: diagram("tree",
+      [node("root", "项目", "system"), node("module", "src", "module", { parentId: "root", description: "source files" }), node("model", "model.ts", "component", { parentId: "module" })],
+      [], undefined, { metadata: { derived: true, structureMap: true } }),
+    class: diagram("class",
+      [
+        node("base", "Base", "module", { classKind: "class", members: [{ name: "id", kind: "attribute", type: "string" }] }),
+        node("named", "Named", "module", { classKind: "interface", members: [{ name: "name", kind: "attribute", type: "string" }] }),
+        node("child", "Child", "module", { classKind: "class", members: [{ name: "run", kind: "method", returns: "void" }] })
+      ],
+      [relation("extends", "child", "base", "inheritance"), relation("implements", "child", "named", "realization")], undefined, { metadata: { derived: true, classMap: true } })
   };
   const adapter = new ui.ArchifyAdapter(resolve("vendor/project-diagrams/archify"));
   const htmlByKind = {};
@@ -104,7 +114,7 @@ try {
     objects: [],
     readerDiagrams: Object.values(fixtures),
     knowledge: { topics: Object.values(fixtures).map(value => ({
-      id: value.id, title: value.title, kind: "context", description: "Saved diagram fixture",
+      id: value.id, title: value.title, kind: value.kind === "tree" ? "structure" : value.kind === "class" ? "types" : "context", description: "Saved diagram fixture",
       responsibilities: [], entryPoints: [], steps: [], constraints: [], evidence: value.nodes.flatMap(node => node.evidence),
       diagrams: [{ id: value.id, title: value.title }], review: "draft", diagram: value,
       sections: value.nodes.map(node => ({ id: node.id, title: node.label, description: "Diagram element", evidence: node.evidence, relatedTopicIds: [] }))
@@ -178,6 +188,8 @@ try {
     await wait('document.querySelector("[data-reader-canvas]")?.dataset.state === "ready"', kind + ": reader did not render");
     assert.equal(await evaluate('document.querySelector("[data-reader-article] h2").textContent'), value.title);
     assert.equal(await evaluate('document.querySelector("[data-reader-canvas]").dataset.renderer'), "archify");
+    if (kind === "tree") assert.equal(await evaluate('Array.from(document.querySelectorAll(".project-reader-directory h3")).some(h => h.textContent === "Structure")'), true, "Structure group");
+    if (kind === "class") assert.equal(await evaluate('Array.from(document.querySelectorAll(".project-reader-directory h3")).some(h => h.textContent === "Types")'), true, "Types group");
     assert.equal(await evaluateViewer('!!document.querySelector("svg")'), true);
     assert.equal(await evaluate('document.querySelector("iframe").getAttribute("sandbox")'), "allow-scripts");
     assert.deepEqual(await evaluate('window.violations'), [], kind + ": no CSP violations");
@@ -245,7 +257,7 @@ try {
   assert.equal(resetResult.zoom, probeReady.zoom, "native reset restores the initial scale");
   await writeFile(join(artifacts, "native-viewer.png"), Buffer.from((await send("Page.captureScreenshot")).data, "base64"));
 
-  console.log("PASS: current Project reader displays and exports five native Archify diagram kinds under CSP; escaped architecture rules; empty and narrow layouts; native fonts, finder, zoom and reset. Screenshots: .tmp-tb/project-diagrams-ui");
+  console.log("PASS: current Project reader displays and exports seven native Archify diagram kinds under CSP; escaped architecture rules; empty and narrow layouts; native fonts, finder, zoom and reset. Screenshots: .tmp-tb/project-diagrams-ui");
 } finally {
   server?.close();
   try { await shutdown?.(); } catch {}

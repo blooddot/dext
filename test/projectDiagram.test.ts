@@ -64,6 +64,46 @@ describe("Project diagram semantics", () => {
     expect(validateProjectDiagram(noTerminal).some((issue) => issue.code === "missing_lifecycle_states")).toBe(true);
   });
 
+  it("validates single-root trees and acyclic explicit class heritage", () => {
+    const tree: ProjectDiagram = {
+      ...base("tree"),
+      nodes: [
+        { id: "root", label: "Root", role: "system", semanticIds: [], evidence: [] },
+        { id: "child", label: "Child", role: "module", parentId: "root", semanticIds: [], evidence: [] }
+      ],
+      relations: []
+    };
+    expect(validateProjectDiagram(tree).filter((issue) => issue.severity === "error")).toEqual([]);
+    const twoRoots: ProjectDiagram = { ...tree, nodes: [
+      { id: "root", label: "Root", role: "system", semanticIds: [], evidence: [] },
+      { id: "child", label: "Child", role: "module", semanticIds: [], evidence: [] }
+    ] };
+    expect(validateProjectDiagram(twoRoots).some((issue) => issue.code === "tree_root_count")).toBe(true);
+    const cycle: ProjectDiagram = { ...tree, nodes: tree.nodes.map((node) => node.id === "root" ? { ...node, parentId: "child" } : node) };
+    expect(validateProjectDiagram(cycle).some((issue) => issue.code === "tree_parent_cycle")).toBe(true);
+
+    const classDiagram: ProjectDiagram = {
+      ...base("class"),
+      nodes: [
+        { id: "base", label: "Base", role: "module", classKind: "class", members: [{ name: "id", kind: "attribute", type: "string" }], semanticIds: [], evidence: [] },
+        { id: "named", label: "Named", role: "module", classKind: "interface", members: [], semanticIds: [], evidence: [] },
+        { id: "child", label: "Child", role: "module", classKind: "class", members: [{ name: "run", kind: "method" }], semanticIds: [], evidence: [] }
+      ],
+      relations: [
+        { id: "extends", from: "child", to: "base", kind: "inheritance", evidence: [] },
+        { id: "implements", from: "child", to: "named", kind: "realization", evidence: [] }
+      ]
+    };
+    expect(validateProjectDiagram(classDiagram).filter((issue) => issue.severity === "error")).toEqual([]);
+    const inheritedCycle: ProjectDiagram = { ...classDiagram, relations: [
+      { id: "one", from: "base", to: "child", kind: "inheritance", evidence: [] },
+      { id: "two", from: "child", to: "base", kind: "inheritance", evidence: [] }
+    ] };
+    expect(validateProjectDiagram(inheritedCycle).some((issue) => issue.code === "class_inheritance_cycle")).toBe(true);
+    const badRealization: ProjectDiagram = { ...classDiagram, relations: [{ id: "bad", from: "base", to: "child", kind: "realization", evidence: [] }] };
+    expect(validateProjectDiagram(badRealization).some((issue) => issue.code === "invalid_realization_target")).toBe(true);
+  });
+
   it("keeps legacy diagrams without semantics readable and ignores removed layout metadata", () => {
     const legacy = { ...base("architecture"), layoutOverlay: { adapterId: "drawio", nodes: { a: { x: 0, y: 0 } } } } as unknown as ProjectDiagram;
     const issues = validateProjectDiagram(legacy);

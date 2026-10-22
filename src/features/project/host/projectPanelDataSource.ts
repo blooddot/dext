@@ -10,16 +10,21 @@ import { projectSettingsSchema, projectToolSettingsFromDefinition, projectWorksp
 import type { ProjectEditorDataSource, ProjectPanelMessage, ProjectReaderEvidenceRequest, ProjectReaderExportRequest, ProjectReaderRenderRequest } from "../contracts/reader.js";
 import { architectureRuleReport, type ArchitectureRule } from "../knowledge/projectArchitecture.js";
 import { reconcileProjectModel } from "../knowledge/projectModelEvolution.js";
-import { buildProjectTopics, checkProjectTopics, topicDiagramRequirement, topicFingerprint, type ProjectTopicCheck } from "../knowledge/projectTopics.js";
+import { buildProjectTopics, checkProjectTopics, topicDiagramRequirement, topicFingerprint, type ProjectTopic, type ProjectTopicCheck } from "../knowledge/projectTopics.js";
 import type { ProjectPanelData } from "../presentation/projectPanel.js";
 import type { ArchifyIdMapping } from "./diagrams/archifyAdapter.js";
+import { buildClassMap } from "./diagrams/projectClassMap.js";
+import { buildStructureMap } from "./diagrams/projectStructureMap.js";
 import type { ProjectDiagramAdapterRegistry } from "./diagrams/projectDiagramRegistry.js";
 import { DiagramTaskRegistry, isAllowedEvidencePath, isDiagramExportPayload } from "./diagrams/projectDiagramViewer.js";
+import type { CachedStructure } from "./indexing/projectStructureHost.js";
 import {
 isExcludedProjectEvidencePath,
 isProjectEvidencePath,
 ProjectAiGenerationService,
 summarizeProjectEvidence,
+AI_DIAGRAM_KINDS,
+type AiProjectDiagramKind,
 type ProjectAiActivityEvent,
 type ProjectAiProvider,
 type IndexedProjectEvidence,
@@ -56,6 +61,8 @@ export interface ProjectPanelDataSourceOptions {
   readEvidence(options: { requirement?: string; preferredPaths?: readonly string[]; modulePaths?: readonly string[] }, signal: AbortSignal, onProgress: ProjectInitializationProgressListener): Promise<ProjectEvidencePackage>;
   /** Parses the complete configured scope and attaches the local structure summary for initialization. */
   readStructureIndex(signal: AbortSignal, onProgress: ProjectInitializationProgressListener): Promise<IndexedProjectEvidence>;
+  /** Reads the last completed index from its cache; derived tree/class topics exist only when present. */
+  readStructure?(): Promise<CachedStructure | undefined>;
   evidenceSnapshot?: (path: string) => Promise<{ contentHash: string } | undefined>;
   diagramRegistry?: ProjectDiagramAdapterRegistry;
   projectAiProvider?: ProjectAiProvider;
@@ -74,7 +81,7 @@ export interface ProjectPanelDataSourceOptions {
 
 
 export const DIAGRAM_KIND_RANK: Record<ProjectDiagramKind, number> = {
-  architecture: 0, workflow: 1, sequence: 2, data_flow: 3, lifecycle: 4
+  architecture: 0, workflow: 1, sequence: 2, data_flow: 3, lifecycle: 4, tree: 5, class: 6
 };
 
 
@@ -156,6 +163,8 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
   let generationError: string | undefined;
   /** Last evidence record of this session, so the page can explain a run without a reload. */
   let lastEvidence: ProjectEvidenceSummary | undefined;
+  let structureCache: CachedStructure | undefined;
+  let structureRead = false;
   const tasks = new DiagramTaskRegistry();
   const listeners = new Set<(message: ProjectPanelMessage) => void>();
   const post = (message: ProjectPanelMessage): void => { for (const listener of listeners) listener(message); };
@@ -253,12 +262,40 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
 
   const readDiagrams = async (): Promise<ProjectDiagram[]> => sortProjectDiagrams(await (options.store.readDiagrams?.() ?? []));
 
+  const readStructureCache = async (): Promise<CachedStructure | undefined> => {
+    if (!structureRead) {
+      structureRead = true;
+      try { structureCache = await options.readStructure?.(); } catch { structureCache = undefined; }
+    }
+    return structureCache;
+  };
+  const readDerivedTopics = async () => {
+    const structure = await readStructureCache();
+    if (!structure || !structure.summary.modules.length) return [];
+    const topics: ProjectTopic[] = [];
+    const map = buildStructureMap(structure.summary, structure.updatedAt);
+    if (map.diagram.nodes.length > 1) topics.push(map.topic);
+    const types = buildClassMap(structure.summary, structure.updatedAt);
+    if (types.diagram.nodes.length) topics.push(types.topic);
+    return topics;
+  };
+  const readTopics = async () => {
+    const intent = await options.store.readIntent?.() ?? generatedIntent;
+    if (!intent) return [];
+    const base = buildProjectTopics(intent, await readDiagrams());
+    const derived = await readDerivedTopics();
+    if (!derived.length) return base;
+    const firstNonC4 = base.findIndex((topic) => topic.kind !== "system_context" && topic.kind !== "containers");
+    const at = firstNonC4 < 0 ? base.length : firstNonC4;
+    return [...base.slice(0, at), ...derived.filter((topic) => !base.some((item) => item.id === topic.id)), ...base.slice(at)];
+  };
+
   const generateDiagram = async (request: { requirement: string; kind?: string; diagramId?: string; preferredPaths?: readonly string[]; modulePaths?: readonly string[]; topicId?: string; topicBasis?: string }): Promise<void> => {
     if (generating || initializationService.snapshot.status === "running") { post({ type: "projectDiagramGenerateFailed", error: "A diagram generation task is already running." }); return; }
     const requirement = request.requirement.trim();
     if (!requirement) { post({ type: "projectDiagramGenerateFailed", error: "Describe the business requirement for the diagram first." }); return; }
-    const kind = request.kind && (["architecture", "workflow", "sequence", "data_flow", "lifecycle"] as string[]).includes(request.kind)
-      ? request.kind as ProjectDiagramKind : undefined;
+    const kind = request.kind && (AI_DIAGRAM_KINDS as readonly string[]).includes(request.kind)
+      ? request.kind as AiProjectDiagramKind : undefined;
     if (!projectAiProvider) { post({ type: "projectDiagramGenerateFailed", error: "Project AI is unavailable: select an available AI CLI first." }); return; }
     generating = true;
     generationError = undefined;
@@ -269,6 +306,10 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
       const target = request.diagramId ? diagrams.find((candidate) => candidate.id === request.diagramId)
         : request.topicId ? diagrams.filter(candidate => candidate.metadata?.topicId === request.topicId && candidate.metadata?.topicAnalysis === 1).sort((a,b) => b.updatedAt - a.updatedAt)[0] : undefined;
       if (request.diagramId && !target) throw new Error("The diagram to update does not exist.");
+      const targetRequest = target && (AI_DIAGRAM_KINDS as readonly string[]).includes(target.kind)
+        ? { id: target.id, title: target.title, kind: target.kind as AiProjectDiagramKind, version: target.version }
+        : undefined;
+      if (target && !targetRequest) throw new Error("Derived structure diagrams cannot be updated by AI.");
       const [evidence, persistedIntent] = await Promise.all([
         options.readEvidence({ requirement, ...(request.preferredPaths ? { preferredPaths: request.preferredPaths } : {}), ...(request.modulePaths ? { modulePaths: request.modulePaths } : {}) }, signal, (progress) => {
           post({ type: "projectDiagramProgress", message: progress.message ?? "Preparing evidence…", phase: progress.phase });
@@ -282,7 +323,7 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
         requirement,
         ...(request.topicId ? { maxNodes: kind === "workflow" ? 8 : 10, explainTopic: true } : {}),
         ...(kind ? { kind } : {}),
-        ...(target ? { target: { id: target.id, title: target.title, kind: target.kind, version: target.version } } : {})
+        ...(targetRequest ? { target: targetRequest } : {})
       }, {
         signal: signal,
         onEvent: (event) => post({ type: "projectDiagramProgress", message: activityLine(event).trim() || "Generating diagram…" })
@@ -319,10 +360,6 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
 
   let topicChecks: ProjectTopicCheck[] = [];
   let checkingKnowledge = false;
-  const readTopics = async () => {
-    const intent = await options.store.readIntent?.() ?? generatedIntent;
-    return intent ? buildProjectTopics(intent, await readDiagrams()) : [];
-  };
   const checkKnowledge = async (): Promise<void> => {
     if (checkingKnowledge) return;
     checkingKnowledge = true;
@@ -364,6 +401,7 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
     const topic = (await readTopics()).find((item) => item.id === topicId);
     if (!topic) { post({ type: "projectDiagramGenerateFailed", error: "The saved topic no longer exists. Reopen Knowledge." }); return; }
     if (topic.kind === "system_context" || topic.kind === "containers") { post({ type: "projectDiagramGenerateFailed", error: "Update the project map to refresh its system boundaries and runtime units." }); return; }
+    if (topic.kind === "structure" || topic.kind === "types") { post({ type: "projectDiagramGenerateFailed", error: "Structure and type maps are derived from the local index. Update the project model to refresh them." }); return; }
     await generateDiagram({ requirement: topicDiagramRequirement(topic), kind: topic.kind === "flow" ? "workflow" : "architecture",
       preferredPaths: [...new Set([...topic.entryPoints.filter(isProjectEvidencePath), ...(topic.sourceFiles ?? topic.evidence.map(entry => entry.path))])],
       ...(topic.sourceFiles ? { modulePaths: topic.sourceFiles } : {}), topicId, ...(topic.basis ? { topicBasis: topic.basis } : {}) });
@@ -371,8 +409,8 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
 
   const readerDiagram = async (id: string, updatedAt: number) => {
     const saved = await readDiagrams();
-    const intent = await options.store.readIntent?.() ?? generatedIntent;
-    const derived = intent ? buildProjectTopics(intent).flatMap((topic) => topic.diagram ? [topic.diagram] : []) : [];
+    const topics = await readTopics();
+    const derived = topics.flatMap((topic) => topic.diagram ? [topic.diagram] : []);
     return [...saved, ...derived].find((diagram) => diagram.id === id && diagram.updatedAt === updatedAt);
   };
   const renderReaderDiagram = async (request: ProjectReaderRenderRequest): Promise<void> => {
@@ -451,6 +489,7 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
     selectedAiSpeed = definition?.ai.speed && selectedModel?.speedTiers?.includes(definition.ai.speed)
       ? definition.ai.speed : undefined;
     const workspaceSettings = effectiveProjectWorkspaceSettings(definition);
+    const topics = intent ? await readTopics() : [];
     return {
       overview: {
         ...(intent?.structure ? { structure: intent.structure } : {}),
@@ -479,7 +518,7 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
       ...(intent ? {
         knowledge: {
           brief: intent.brief.summary,
-          topics: buildProjectTopics(intent, diagrams),
+          topics,
           checks: topicChecks,
           contexts: intent.contexts.map((item) => ({ id: item.id, name: item.displayName ?? item.canonicalName, description: item.purpose, evidence: item.evidence.map((entry) => entry.path) })),
           terms: intent.terms.map((item) => ({ id: item.id, canonical: item.canonicalName, aliases: item.aliases, definition: item.definition })),
@@ -526,6 +565,8 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
     },
     initialize: async (): Promise<ProjectPanelData> => {
       if (generating) throw new Error("Wait for module analysis to finish before updating the project model.");
+      structureRead = false;
+      structureCache = undefined;
       // Start synchronously so the editor can render the running snapshot before this async method
       // reaches its first await.
       const task = initializationService.start();

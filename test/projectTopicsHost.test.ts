@@ -200,4 +200,53 @@ describe("Project topic host", () => {
     expect(readEvidence.mock.calls[0]?.[0].requirement).toContain("Explain one topic: Code");
     expect(messages.some((message) => message.type === "projectDiagramGenerateFailed")).toBe(true);
   });
+
+  it("adds Structure and Type maps only from a current cached index and never sends them to AI", async () => {
+    const { createProjectPanelDataSource } = await import("../src/features/project/host/projectPanelDataSource.js");
+    const intent = projectIntentSchema.parse({ schemaVersion: 1, updatedAt: 1, brief: { name: "Example" }, contexts: [{ id: "code", canonicalName: "Code", purpose: "Runs code", evidence: [{ path: "src/model.ts", line: 1 }] }] });
+    const index = await buildStructureIndex([
+      { path: "src/model.ts", content: "export class Base { id: string } export class Child extends Base { run(): void {} }" },
+      { path: "src/entry.ts", content: "export function main() {}" }
+    ]);
+    const generate = vi.fn(async () => ({ text: JSON.stringify({ diagram: { schemaVersion: 1, id: "code-view", title: "Code", kind: "architecture", nodes: [], relations: [] } }) }));
+    const artifact = (document: DiagramAdapterDocument): DiagramAdapterArtifact => ({ format: "html", mimeType: "text/html", content: "<html>derived</html>", adapterId: "fixture", adapterVersion: "1", diagramId: document.diagramId });
+    const adapter: ProjectDiagramAdapter = { id: "fixture", version: "1", capabilities: [], supports: () => true,
+      transform: async (diagram) => ({ adapterId: "fixture", adapterVersion: "1", diagramId: diagram.id, kind: diagram.kind, payload: {} }),
+      render: async (document) => { expect(document.kind).toBe("tree"); return artifact(document); },
+      preview: async (document) => artifact(document), export: async (document) => artifact(document),
+      validate: async () => ({ adapterId: "fixture", adapterVersion: "1", status: "passed", checkedAt: 1, issues: [] }), dispose: () => {}
+    };
+    const registry = new ProjectDiagramAdapterRegistry({ load: async () => undefined, save: async () => {} });
+    registry.register(adapter);
+    const source = createProjectPanelDataSource({
+      name: "Example", root: "C:/ws", rootUri: {} as never, diagramRegistry: registry,
+      readEvidence: async () => buildProjectEvidencePackage({ files: [] }), readStructureIndex: async () => buildProjectEvidencePackage({ files: [] }) as IndexedProjectEvidence,
+      readStructure: async () => ({ summary: index.summary, graph: index.graph, updatedAt: 9 }),
+      store: { readObjects: async () => [], readArchitecture: async () => ({ decisions: [] }), readIntent: async () => intent },
+      projectAiProvider: { id: "fixture", generate }
+    });
+    const messages: { type: string; [key: string]: unknown }[] = [];
+    source.subscribe?.((message) => messages.push(message));
+    const topics = (await source.load()).knowledge?.topics ?? [];
+    expect(topics.map((topic) => topic.id)).toEqual(expect.arrayContaining(["structure:map", "structure:types"]));
+    expect(topics.find((topic) => topic.id === "structure:map")?.diagram).toMatchObject({ kind: "tree", metadata: { structureMap: true } });
+    expect(topics.find((topic) => topic.id === "structure:types")?.diagram).toMatchObject({ kind: "class", metadata: { classMap: true } });
+    await source.generateTopicDiagram?.("structure:map");
+    expect(generate).not.toHaveBeenCalled();
+    expect(messages.at(-1)).toMatchObject({ type: "projectDiagramGenerateFailed", error: expect.stringContaining("derived") });
+    await source.renderReaderDiagram?.({ diagramId: "structure:map", updatedAt: 9, requestId: "derived" });
+    expect(messages.at(-1)).toMatchObject({ type: "projectReaderRendered", requestId: "derived", html: "<html>derived</html>" });
+  });
+
+  it("hides derived topics when the cache is absent", async () => {
+    const { createProjectPanelDataSource } = await import("../src/features/project/host/projectPanelDataSource.js");
+    const intent = projectIntentSchema.parse({ schemaVersion: 1, updatedAt: 1, brief: { name: "Example" }, contexts: [{ id: "code", canonicalName: "Code", purpose: "Runs code" }] });
+    const source = createProjectPanelDataSource({
+      name: "Example", root: "C:/ws", rootUri: {} as never,
+      readEvidence: async () => buildProjectEvidencePackage({ files: [] }), readStructureIndex: async () => buildProjectEvidencePackage({ files: [] }) as IndexedProjectEvidence,
+      store: { readObjects: async () => [], readArchitecture: async () => ({ decisions: [] }), readIntent: async () => intent }
+    });
+    const topics = (await source.load()).knowledge?.topics ?? [];
+    expect(topics.some((topic) => topic.kind === "structure" || topic.kind === "types")).toBe(false);
+  });
 });

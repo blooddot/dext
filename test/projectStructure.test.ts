@@ -36,6 +36,8 @@ describe("local multilingual structure index (real WASM parsers)", () => {
   it("extracts all supported languages and resolves only supported static dependencies", async () => {
     const index = await buildStructureIndex(inputs(fixture));
     expect(index.summary.parsed).toBe(8);
+    expect(index.cache.version).toBe(4);
+    expect(index.summary.version).toBe(2);
     expect(index.summary.failed).toBe(0);
     expect(new Set(index.cache.files.map(file => file.language))).toEqual(new Set(["typescript", "tsx", "javascript", "rust", "python"]));
     expect(index.cache.files.find(file => file.path.endsWith("store.ts"))?.symbols.map(symbol => symbol.name)).toContain("Store");
@@ -62,6 +64,7 @@ describe("local multilingual structure index (real WASM parsers)", () => {
     expect(third.dependencies.find(edge => edge.specifier === "@/data/store")?.status).toBe("unresolved");
     expect(third.summary.hash).not.toBe(first.summary.hash);
     expect(structureCacheSchema.safeParse({ version: 0, files: [] }).success).toBe(false);
+    expect(structureCacheSchema.safeParse({ version: 3, files: [] }).success).toBe(false);
   });
 
   it("retains coverage beyond 4000 files and reports unsupported, unreadable and malformed sources", async () => {

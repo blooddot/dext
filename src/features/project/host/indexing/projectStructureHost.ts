@@ -10,13 +10,32 @@ import { buildStructureIndex, PROJECT_STRUCTURE_VERSION, structureCacheSchema, s
 import { buildStructureGraphFromSummary, structureDependencies, structureEntryFamily, type StructureGraph } from "./projectStructureGraph.js";
 import { browserBuildEntries, runtimeEvidenceCandidates, runtimeEvidenceWindows } from "./projectStructureKnowledge.js";
 
-/** The graph of the last completed index, read from the cache without touching source text. */
-export async function readCachedStructureGraph(cachePath: string | undefined): Promise<StructureGraph | undefined> {
+export interface CachedStructure {
+  summary: StructureSummary;
+  graph: StructureGraph;
+  updatedAt: number;
+}
+
+const cachedStructureSchema = z.object({
+  version: z.literal(PROJECT_STRUCTURE_VERSION),
+  summary: structureSummarySchema.optional(),
+  updatedAt: z.number().finite().optional()
+});
+
+/** The summary and derived graph of the last completed index, without touching source text. */
+export async function readCachedStructure(cachePath: string | undefined): Promise<CachedStructure | undefined> {
   if (!cachePath) return undefined;
   try {
-    const cached = z.object({ version: z.literal(PROJECT_STRUCTURE_VERSION), summary: structureSummarySchema.optional() }).parse(JSON.parse(await readFile(cachePath, "utf8")));
-    return cached.summary ? buildStructureGraphFromSummary(cached.summary as unknown as StructureSummary) : undefined;
+    const cached = cachedStructureSchema.parse(JSON.parse(await readFile(cachePath, "utf8")));
+    if (!cached.summary) return undefined;
+    const summary = cached.summary as unknown as StructureSummary;
+    return { summary, graph: buildStructureGraphFromSummary(summary), updatedAt: cached.updatedAt ?? 0 };
   } catch { return undefined; }
+}
+
+/** The graph of the last completed index, read from the cache without touching source text. */
+export async function readCachedStructureGraph(cachePath: string | undefined): Promise<StructureGraph | undefined> {
+  return (await readCachedStructure(cachePath))?.graph;
 }
 
 export async function indexedRelatedPaths(cachePath: string | undefined, preferred: ReadonlySet<string>): Promise<string[]> {

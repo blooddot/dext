@@ -119,13 +119,39 @@ const lifecycle: ProjectDiagram = {
   }
 };
 
+/** A wide local structure map: one root with forty representative branches. */
+const tree: ProjectDiagram = {
+  ...base, id: "repository-structure", title: "Repository structure", kind: "tree",
+  nodes: [
+    node("tree.root", "Project", "system", "Root"),
+    ...Array.from({ length: 40 }, (_, index) => node(`tree.module${index}`, `module-${index}/file-${index}.ts`, "module", "Representative module file.", { parentId: "tree.root" }))
+  ],
+  relations: []
+};
+
+/** Sixty explicit types, each with attributes and methods, laid out on the 5 x 12 grid. */
+const classDiagram: ProjectDiagram = {
+  ...base, id: "repository-types", title: "Repository types", kind: "class",
+  nodes: Array.from({ length: 60 }, (_, index) => ({
+    ...node(`type.${index}`, `Type${index}`, "module", "A declared type."),
+    classKind: index % 7 === 0 ? "interface" as const : index % 11 === 0 ? "abstract" as const : "class" as const,
+    members: [
+      { name: "id", kind: "attribute" as const, type: "string", visibility: "protected" as const },
+      { name: "run", kind: "method" as const, parameters: "value: number", returns: "Promise<void>" }
+    ]
+  })),
+  relations: []
+};
+
 describe("Archify layout for full-size Project diagrams", { timeout: 180_000 }, () => {
   it.each([
     ["sequence", sequence],
     ["architecture", architecture],
     ["workflow", workflow],
     ["data_flow", dataFlow],
-    ["lifecycle", lifecycle]
+    ["lifecycle", lifecycle],
+    ["tree", tree],
+    ["class", classDiagram]
   ] as const)("renders the %s diagram a real Project produces", async (_kind, diagram) => {
     const adapter = new ArchifyAdapter(runtimeRoot);
     try {

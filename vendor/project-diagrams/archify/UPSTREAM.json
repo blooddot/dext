@@ -5,8 +5,8 @@
   "archiveSha256": "70e210265c59f24dcbdf2a502ff671104b5454e7ee7d3554aecd86bad32384f5",
   "integration": "unmodified local CLI runtime pruned to validate/deliver dependencies; invoked by Project adapter; no skill installed",
   "pruned": {
-    "renderers": ["class", "erd", "explainer", "timeline", "tree", "waterfall"],
-    "schemas": ["class", "erd", "explainer", "timeline", "tree", "waterfall"],
+    "renderers": ["erd", "explainer", "timeline", "waterfall"],
+    "schemas": ["erd", "explainer", "timeline", "waterfall"],
     "commands": ["doctor", "compare", "migrate", "guide"],
     "intentionallyOmitted": ["examples/", "references/", "recipes/", "delta/", "migrations/", "SKILL.md"]
   }

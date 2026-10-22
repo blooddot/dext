@@ -102,7 +102,7 @@ describe("project panel", () => {
   });
 
   it("opens saved diagrams inside the reader without a separate primary tab", () => {
-    const kinds = ["architecture", "workflow", "sequence", "data_flow", "lifecycle"] as const;
+    const kinds = ["architecture", "workflow", "sequence", "data_flow", "lifecycle", "tree", "class"] as const;
     const diagrams = kinds.map((kind) => ({ schemaVersion: 1 as const, id: kind, title: `${kind} title`, kind, version: 1, updatedAt: 1, nodes: [], relations: [] }));
     const html = renderProjectPanel("architecture", data({ readerDiagrams: diagrams, architecture: { diagrams, selected: diagrams[0]! } }));
     expect(html).toContain("data-project-reader");

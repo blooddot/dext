@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ProjectDiagram } from "../src/features/project/contracts/projectDiagram.js";
 import { projectIntentSchema } from "../src/features/project/contracts/projectIntent.js";
 import {
+AI_DIAGRAM_KINDS,
 buildProjectEvidencePackage,
 compareProjectEvidencePaths,
 PROJECT_DIAGRAM_PROMPT_VERSION,
@@ -463,6 +464,20 @@ describe("Project AI generation service", () => {
     const missing = buildProjectEvidencePackage({ projectName: "Example", files });
     await expect(new ProjectAiGenerationService(provider).generateDiagram(missing, { requirement, kind: "architecture" }))
       .rejects.toMatchObject({ code: "invalid_output" });
+  });
+
+  it("keeps locally derived tree and class diagrams outside the AI contract", async () => {
+    expect(AI_DIAGRAM_KINDS).toEqual(["architecture", "workflow", "sequence", "data_flow", "lifecycle"]);
+    expect(AI_DIAGRAM_KINDS).not.toContain("tree");
+    expect(AI_DIAGRAM_KINDS).not.toContain("class");
+    let prompt = "";
+    const provider: ProjectAiProvider = {
+      id: "mock",
+      generate: async (request) => { prompt = request.prompt; return { text: JSON.stringify({ diagram: architectureDiagram() }) }; }
+    };
+    await new ProjectAiGenerationService(provider).generateDiagram(evidence("Show the project"), { requirement: "Show the project" });
+    expect(prompt).not.toContain("derive a tree");
+    expect(prompt).not.toContain("class diagram");
   });
 
   it("states the lifecycle shape the renderer can lay out", async () => {

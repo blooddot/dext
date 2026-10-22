@@ -19,7 +19,7 @@ ProjectDiagramAdapter
 } from "../../contracts/projectDiagramAdapter.js";
 import { assertDiagramDocument, diagramArtifact, diagramReceipt, readDiagramOutput, runDiagramProcess, withDiagramFiles } from "./projectDiagramProcess.js";
 
-const KINDS = ["architecture", "workflow", "sequence", "data_flow", "lifecycle"] as const;
+const KINDS = ["architecture", "workflow", "sequence", "data_flow", "lifecycle", "tree", "class"] as const;
 const RUNTIME_VERSION = "3.2.0+e62275b";
 const PACKAGE_VERSION = "3.2.0";
 const LOCALE = "zh-CN";
@@ -38,12 +38,17 @@ const ASSET_CHECKS: readonly { path: string; label: string }[] = [
   { path: "renderers/sequence/render-sequence.mjs", label: "sequence renderer" },
   { path: "renderers/dataflow/render-dataflow.mjs", label: "dataflow renderer" },
   { path: "renderers/lifecycle/render-lifecycle.mjs", label: "lifecycle renderer" },
+  { path: "renderers/tree/render-tree.mjs", label: "tree renderer" },
+  { path: "renderers/class/render-class.mjs", label: "class renderer" },
+  { path: "renderers/erd/grid.mjs", label: "class grid layout helper" },
   { path: "schemas/common.schema.json", label: "common schema" },
   { path: "schemas/architecture.schema.json", label: "architecture schema" },
   { path: "schemas/workflow.schema.json", label: "workflow schema" },
   { path: "schemas/sequence.schema.json", label: "sequence schema" },
   { path: "schemas/dataflow.schema.json", label: "dataflow schema" },
   { path: "schemas/lifecycle.schema.json", label: "lifecycle schema" },
+  { path: "schemas/tree.schema.json", label: "tree schema" },
+  { path: "schemas/class.schema.json", label: "class schema" },
   { path: "LICENSE", label: "license" },
   { path: "THIRD_PARTY_NOTICES.md", label: "third-party notices" }
 ];
@@ -483,9 +488,123 @@ function buildArchitecture(project: ProjectDiagram, repository: ArchifyRepositor
   };
 }
 
+const TREE = {
+  direction: "right",
+  nodeW: 220,
+  nodeMaxW: 360,
+  gapX: 48,
+  gapY: 24
+} as const;
+
+function treeDepth(node: ProjectDiagramNode, byId: ReadonlyMap<string, ProjectDiagramNode>, trail = new Set<string>()): number {
+  if (!node.parentId) return 0;
+  if (trail.has(node.id)) throw new Error(`Tree diagram contains a parent cycle at '${node.id}'.`);
+  const parent = byId.get(node.parentId);
+  if (!parent) throw new Error(`Tree node '${node.id}' references missing parent '${node.parentId}'.`);
+  return treeDepth(parent, byId, new Set([...trail, node.id])) + 1;
+}
+
+function buildTree(project: ProjectDiagram): BuiltIr {
+  const mapping = emptyMapping();
+  const usedNodes = new Set<string>();
+  const byId = new Map(project.nodes.map((node) => [node.id, node]));
+  const roots = project.nodes.filter((node) => !node.parentId);
+  if (roots.length !== 1) throw new Error(`Tree diagram needs exactly one root node; found ${roots.length}.`);
+  const depths = new Map(project.nodes.map((node) => [node.id, treeDepth(node, byId)]));
+  const ordered = project.nodes
+    .map((node, index) => ({ node, index }))
+    .sort((left, right) => (depths.get(left.node.id) ?? 0) - (depths.get(right.node.id) ?? 0) || left.index - right.index);
+  for (const { node } of ordered) mapNode(mapping, node, usedNodes);
+  const nodes = ordered.map(({ node }) => ({
+    id: mapping.ids[node.id]!,
+    label: fitText(node.label, fitLabelUnits(TREE.nodeMaxW, 6.4, 8)),
+    ...(node.parentId ? { parent: mapping.ids[node.parentId]! } : {}),
+    ...(node.description ? { sublabel: fitText(node.description, fitSublabelUnits(TREE.nodeMaxW)) } : {})
+  }));
+  return {
+    mapping,
+    ir: {
+      schema_version: 1,
+      diagram_type: "tree",
+      meta: baseMeta(project, undefined, false),
+      layout: { ...TREE },
+      nodes
+    }
+  };
+}
+
+const CLASS = {
+  columns: 5,
+  maxTypes: 60,
+  maxMembers: 12,
+  gapX: 128,
+  gapY: 84,
+  typeW: 240,
+  typeMaxW: 360
+} as const;
+
+function buildClass(project: ProjectDiagram): BuiltIr {
+  const mapping = emptyMapping();
+  const usedNodes = new Set<string>();
+  const usedRelations = new Set<string>();
+  const selected = project.nodes.slice(0, CLASS.maxTypes);
+  for (const node of selected) mapNode(mapping, node, usedNodes);
+  const types = selected.map((node, index) => {
+    const members = (node.members ?? []).slice(0, CLASS.maxMembers);
+    const attributes = members.filter((member) => member.kind === "attribute").map((member) => ({
+      name: member.name,
+      ...(member.type ? { type: member.type } : {}),
+      ...(member.visibility ? { visibility: member.visibility } : {}),
+      ...(member.static ? { static: true } : {})
+    }));
+    const methods = members.filter((member) => member.kind === "method").map((member) => ({
+      name: member.name,
+      ...(member.parameters ? { parameters: member.parameters } : {}),
+      ...(member.returns ? { returns: member.returns } : {}),
+      ...(member.visibility ? { visibility: member.visibility } : {}),
+      ...(member.static ? { static: true } : {}),
+      ...(member.abstract ? { abstract: true } : {})
+    }));
+    return {
+      id: mapping.ids[node.id]!,
+      label: fitText(node.label, fitLabelUnits(CLASS.typeMaxW, 7, 8)),
+      kind: node.classKind ?? "class",
+      ...(node.description ? { sublabel: fitText(node.description, fitSublabelUnits(CLASS.typeMaxW)) } : {}),
+      row: Math.floor(index / CLASS.columns),
+      col: index % CLASS.columns,
+      ...(attributes.length ? { attributes } : {}),
+      ...(methods.length ? { methods } : {})
+    };
+  });
+  const relationships = project.relations
+    .filter((relation) => relation.kind === "inheritance" || relation.kind === "realization")
+    .flatMap((relation) => {
+      const from = mapping.ids[relation.from];
+      const to = mapping.ids[relation.to];
+      if (!from || !to) return [];
+      return [{
+        id: mapRelation(mapping, relation, usedRelations),
+        from,
+        to,
+        kind: relation.kind,
+        ...(relation.label ? { label: truncate(relation.label, 120) } : {})
+      }];
+    });
+  return {
+    mapping,
+    ir: {
+      schema_version: 1,
+      diagram_type: "class",
+      meta: baseMeta(project, undefined, false),
+      layout: { mode: "grid", gapX: CLASS.gapX, gapY: CLASS.gapY, typeW: CLASS.typeW, typeMaxW: CLASS.typeMaxW },
+      types,
+      ...(relationships.length ? { relationships } : {})
+    }
+  };
+}
+
 /** Workflow node label width metric and column budget, from the compiler's own lints. */
-const WORKFLOW = {
-  labelUnit: 6.8,
+const WORKFLOW = {  labelUnit: 6.8,
   /** Columns a lane holds before the rail continues in a continuation lane. */
   columns: 6
 } as const;
@@ -934,6 +1053,8 @@ function buildIr(project: ProjectDiagram, repository: ArchifyRepository | undefi
     case "sequence": return buildSequence(project, repository, attached);
     case "data_flow": return buildDataFlow(project, repository, attached);
     case "lifecycle": return buildLifecycle(project, repository, attached);
+    case "tree": return buildTree(project);
+    case "class": return buildClass(project);
   }
 }
 
@@ -1108,6 +1229,18 @@ function repairIr(input: Record<string, unknown>, diagnostics: readonly string[]
     const current = Array.isArray(meta["viewBox"]) ? meta["viewBox"] as number[] : [900, 520];
     meta["viewBox"] = [Math.max(760, current[0] ?? 0), Math.max(420, (current[1] ?? 520) + attempt * 120)];
     ir["meta"] = meta;
+  }
+  if (type === "class") {
+    const layout = { ...(ir["layout"] as Record<string, unknown> ?? {}) };
+    if (text.includes("gap") || text.includes("corridor") || text.includes("crossing") || text.includes("border")) {
+      layout["gapX"] = Number(layout["gapX"] ?? CLASS.gapX) + attempt * 32;
+      layout["gapY"] = Number(layout["gapY"] ?? CLASS.gapY) + attempt * 32;
+    }
+    if (text.includes("title") || text.includes("text capacity") || text.includes("wider")) {
+      layout["typeMaxW"] = Math.max(Number(layout["typeMaxW"] ?? CLASS.typeMaxW), CLASS.typeMaxW + attempt * 40);
+      layout["typeW"] = Math.max(Number(layout["typeW"] ?? CLASS.typeW), CLASS.typeW + attempt * 20);
+    }
+    ir["layout"] = layout;
   }
   // Lifecycle v3 owns all of its geometry: Dext authors no lanes, coordinates,
   // routes, or labels there, so there is nothing a layout-only repair may rewrite.

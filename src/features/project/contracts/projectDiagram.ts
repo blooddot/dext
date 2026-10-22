@@ -1,5 +1,5 @@
 /** Diagram kinds understood by Project's Archify adapter protocol. */
-export type ProjectDiagramKind = "architecture" | "workflow" | "sequence" | "data_flow" | "lifecycle";
+export type ProjectDiagramKind = "architecture" | "workflow" | "sequence" | "data_flow" | "lifecycle" | "tree" | "class";
 
 /** Semantic roles are intentionally renderer-neutral. Archify maps them to its own component types. */
 export type ProjectDiagramNodeRole =
@@ -26,6 +26,20 @@ export interface ProjectDiagramEvidence {
   contentHash?: string;
 }
 
+export type ProjectDiagramClassKind = "class" | "abstract" | "interface" | "enum" | "record";
+
+/** A class/type member. Only explicit declarations are recorded; members are never inferred. */
+export interface ProjectDiagramMember {
+  name: string;
+  kind: "attribute" | "method";
+  type?: string;
+  parameters?: string;
+  returns?: string;
+  visibility?: "public" | "protected" | "package" | "private";
+  static?: boolean;
+  abstract?: boolean;
+}
+
 export interface ProjectDiagramNode {
   review?: "draft" | "accepted" | "rejected" | "edited";
   freshness?: "current" | "needs_verification" | "stale" | "conflicted";
@@ -40,6 +54,9 @@ export interface ProjectDiagramNode {
   laneId?: string;
   /** Data-flow stage id. Only meaningful for data-flow diagrams. */
   stageId?: string;
+  /** Tree/class diagrams are derived locally from the structure index, never AI-generated. */
+  classKind?: ProjectDiagramClassKind;
+  members?: readonly ProjectDiagramMember[];
   /** Ids of Project knowledge objects or stable ids from this AI output. */
   semanticIds: readonly string[];
   evidence: readonly ProjectDiagramEvidence[];
@@ -57,6 +74,8 @@ export type ProjectDiagramRelationKind =
   | "subscribes"
   | "transitions"
   | "flows_to"
+  | "inheritance"
+  | "realization"
   | "unknown";
 
 export interface ProjectDiagramRelation {
@@ -228,9 +247,11 @@ const WORKFLOW_COLUMN_LIMIT = 5;
 export function validateProjectDiagram(diagram: ProjectDiagram): DiagramValidationIssue[] {
   const issues: DiagramValidationIssue[] = [];
   const nodeIds = new Set<string>();
+  const nodeById = new Map<string, ProjectDiagramNode>();
   for (const node of diagram.nodes) {
     if (nodeIds.has(node.id)) issues.push({ code: "duplicate_node_id", message: `Duplicate diagram node id '${node.id}'.`, severity: "error", nodeId: node.id });
     nodeIds.add(node.id);
+    if (!nodeById.has(node.id)) nodeById.set(node.id, node);
     if (!node.label.trim()) issues.push({ code: "empty_node_label", message: `Diagram node '${node.id}' has an empty label.`, severity: "error", nodeId: node.id });
     for (const evidence of node.evidence) {
       if (!evidence.path.trim()) issues.push({ code: "empty_evidence_path", message: `Diagram node '${node.id}' has an empty evidence path.`, severity: "error", nodeId: node.id });
@@ -249,6 +270,64 @@ export function validateProjectDiagram(diagram: ProjectDiagram): DiagramValidati
   }
   for (const node of diagram.nodes) {
     if (node.parentId && !nodeIds.has(node.parentId)) issues.push({ code: "missing_parent", message: `Node '${node.id}' references missing parent '${node.parentId}'.`, severity: "error", nodeId: node.id });
+  }
+  if (diagram.kind === "tree") {
+    const roots = diagram.nodes.filter((node) => !node.parentId);
+    if (roots.length !== 1) issues.push({ code: "tree_root_count", message: `A tree diagram needs exactly one root node; found ${roots.length}.`, severity: "error", ...(roots.length === 1 ? { nodeId: roots[0]!.id } : {}) });
+    const cyclic = new Set<string>();
+    for (const node of diagram.nodes) {
+      const chain = new Set<string>();
+      let cursor: string | undefined = node.id;
+      while (cursor && nodeById.has(cursor)) {
+        if (chain.has(cursor)) {
+          for (const id of chain) cyclic.add(id);
+          break;
+        }
+        chain.add(cursor);
+        cursor = nodeById.get(cursor)?.parentId;
+      }
+    }
+    for (const id of [...cyclic].sort()) issues.push({ code: "tree_parent_cycle", message: `Node '${id}' is part of a parent cycle.`, severity: "error", nodeId: id });
+  }
+  if (diagram.kind === "class") {
+    const inheritanceEdges: Array<{ from: string; to: string; id: string }> = [];
+    for (const node of diagram.nodes) {
+      for (const member of node.members ?? []) {
+        if (!member.name.trim()) issues.push({ code: "empty_class_member", message: `Class node '${node.id}' has a member with an empty name.`, severity: "error", nodeId: node.id });
+      }
+      const names = (node.members ?? []).map((member) => `${member.kind}:${member.name}`);
+      if (new Set(names).size !== names.length) issues.push({ code: "duplicate_class_member", message: `Class node '${node.id}' declares the same member twice.`, severity: "warning", nodeId: node.id });
+    }
+    for (const relation of diagram.relations) {
+      if (relation.kind !== "inheritance" && relation.kind !== "realization") continue;
+      const from = nodeById.get(relation.from);
+      const to = nodeById.get(relation.to);
+      if (!from || !to) continue;
+      if (relation.from === relation.to) issues.push({ code: "self_class_relationship", message: `Class relationship '${relation.id}' connects '${relation.from}' to itself.`, severity: "error", relationId: relation.id });
+      if (!from.classKind || !to.classKind) issues.push({ code: "invalid_class_relationship", message: `Class relationship '${relation.id}' must connect two typed class nodes.`, severity: "error", relationId: relation.id });
+      if (relation.kind === "realization" && to.classKind !== "interface") issues.push({ code: "invalid_realization_target", message: `Realization '${relation.id}' must target an interface.`, severity: "error", relationId: relation.id });
+      if (relation.kind === "inheritance" && to.classKind === "interface") issues.push({ code: "invalid_inheritance_target", message: `Inheritance '${relation.id}' must not target an interface.`, severity: "error", relationId: relation.id });
+      if (relation.kind === "inheritance" && relation.from !== relation.to) inheritanceEdges.push({ from: relation.from, to: relation.to, id: relation.id });
+    }
+    const outgoing = new Map<string, string[]>();
+    for (const edge of inheritanceEdges) {
+      const next = outgoing.get(edge.from) ?? [];
+      next.push(edge.to);
+      outgoing.set(edge.from, next);
+    }
+    const visiting = new Set<string>();
+    const visited = new Set<string>();
+    const cycles = new Set<string>();
+    const visit = (id: string): void => {
+      if (visiting.has(id)) { cycles.add(id); return; }
+      if (visited.has(id)) return;
+      visiting.add(id);
+      for (const next of outgoing.get(id) ?? []) visit(next);
+      visiting.delete(id);
+      visited.add(id);
+    };
+    for (const id of outgoing.keys()) visit(id);
+    for (const id of [...cycles].sort()) issues.push({ code: "class_inheritance_cycle", message: `Class inheritance contains a cycle through '${id}'.`, severity: "error", nodeId: id });
   }
   const semantics = diagram.semantics ?? {};
   const requireNodes = (code: string, label: string, ids: readonly string[]): void => {

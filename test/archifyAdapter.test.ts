@@ -6,6 +6,9 @@ import { ArchifyAdapter, type ArchifyIdMapping, type ArchifyRepository } from ".
 import type { DiagramAdapterDocument } from "../src/features/project/contracts/projectDiagramAdapter.js";
 import { validateProjectDiagram, type ProjectDiagram, type ProjectDiagramEvidence } from "../src/features/project/contracts/projectDiagram.js";
 import { validateDiagramSemantics } from "../src/features/project/host/generation/projectAiGeneration.js";
+import { buildStructureIndex } from "../src/features/project/host/indexing/projectStructure.js";
+import { buildStructureMap } from "../src/features/project/host/diagrams/projectStructureMap.js";
+import { buildClassMap } from "../src/features/project/host/diagrams/projectClassMap.js";
 
 const runtimeRoot = resolve("vendor/project-diagrams/archify");
 const evidence = (path: string, line = 1): ProjectDiagramEvidence[] => [{ path, line }];
@@ -154,7 +157,31 @@ const fanOutLifecycle: ProjectDiagram = {
   }
 };
 
-const fixtures: readonly ProjectDiagram[] = [architecture, workflow, sequence, dataFlow, lifecycle];
+const tree: ProjectDiagram = {
+  schemaVersion: 1, id: "demo-tree", title: "结构树", kind: "tree", version: 1, updatedAt: 1,
+  nodes: [
+    node("root", "项目", "system"),
+    node("src", "src", "module", { parentId: "root", description: "source" }),
+    node("model", "model.ts", "component", { parentId: "src" }),
+    node("service", "service.ts", "component", { parentId: "src" })
+  ],
+  relations: []
+};
+
+const classDiagram: ProjectDiagram = {
+  schemaVersion: 1, id: "demo-class", title: "类型图", kind: "class", version: 1, updatedAt: 1,
+  nodes: [
+    { ...node("base", "Base", "module"), classKind: "class", members: [{ name: "id", kind: "attribute", type: "string", visibility: "protected" }, { name: "run", kind: "method", parameters: "value: number", returns: "Promise<void>", abstract: true }] },
+    { ...node("named", "Named", "module"), classKind: "interface", members: [{ name: "name", kind: "attribute", type: "string" }] },
+    { ...node("child", "Child", "module"), classKind: "class", members: [{ name: "save", kind: "method", returns: "void" }] }
+  ],
+  relations: [
+    relation("extends", "child", "base", "inheritance", { evidence: evidence("src/model.ts") }),
+    relation("implements", "child", "named", "realization", { evidence: evidence("src/model.ts") })
+  ]
+};
+
+const fixtures: readonly ProjectDiagram[] = [architecture, workflow, sequence, dataFlow, lifecycle, tree, classDiagram];
 
 /**
  * A local stand-in for the vendored CLI. It mirrors the one upstream restriction the adapter has to
@@ -196,12 +223,17 @@ const STUB_ASSETS = [
   "renderers/sequence/render-sequence.mjs",
   "renderers/dataflow/render-dataflow.mjs",
   "renderers/lifecycle/render-lifecycle.mjs",
+  "renderers/tree/render-tree.mjs",
+  "renderers/class/render-class.mjs",
+  "renderers/erd/grid.mjs",
   "schemas/common.schema.json",
   "schemas/architecture.schema.json",
   "schemas/workflow.schema.json",
   "schemas/sequence.schema.json",
   "schemas/dataflow.schema.json",
   "schemas/lifecycle.schema.json",
+  "schemas/tree.schema.json",
+  "schemas/class.schema.json",
   "LICENSE",
   "THIRD_PARTY_NOTICES.md"
 ] as const;
@@ -234,7 +266,7 @@ describe("ArchifyAdapter", () => {
     adapter.dispose();
   });
 
-  it("maps all five kinds to the upstream schemas with bidirectional stable ids", async () => {
+  it("maps all seven kinds to the upstream schemas with bidirectional stable ids", async () => {
     const adapter = new ArchifyAdapter(runtimeRoot);
     const expectations = [
       ["architecture", (ir: Record<string, unknown>) => (ir["components"] as unknown[]).length === 3 && (ir["boundaries"] as unknown[]).length === 1],
@@ -245,7 +277,14 @@ describe("ArchifyAdapter", () => {
         && !("lanes" in ir)
         && JSON.stringify(ir["mainPath"]) === JSON.stringify(["created", "paid", "shipped", "done"])
         && (ir["states"] as unknown[]).length === 5
-        && (ir["transitions"] as unknown[]).length === 5]
+        && (ir["transitions"] as unknown[]).length === 5],
+      ["tree", (ir: Record<string, unknown>) => ir["diagram_type"] === "tree"
+        && (ir["nodes"] as Array<Record<string, unknown>>).length === 4
+        && (ir["nodes"] as Array<Record<string, unknown>>).find((entry) => entry["label"] === "src")?.["parent"] === "root"
+        && !("relations" in ir)],
+      ["class", (ir: Record<string, unknown>) => ir["diagram_type"] === "class"
+        && (ir["types"] as unknown[]).length === 3
+        && (ir["relationships"] as unknown[]).length === 2]
     ] as const;
     for (const [kind, check] of expectations) {
       const fixture = fixtures.find((item) => item.kind === kind)!;
@@ -276,7 +315,7 @@ describe("ArchifyAdapter", () => {
     adapter.dispose();
   });
 
-  it("renders real native HTML for all five kinds and validates the result", async () => {
+  it("renders real native HTML for all seven kinds and validates the result", async () => {
     const adapter = new ArchifyAdapter(runtimeRoot);
     for (const fixture of fixtures) {
       const document = await adapter.transform(fixture);
@@ -346,6 +385,24 @@ describe("ArchifyAdapter", () => {
     const receipt = await adapter.validate(document);
     expect(receipt.status, JSON.stringify(receipt.issues)).not.toBe("failed");
     adapter.dispose();
+  }, 120_000);
+
+  it("renders the locally derived structure and type maps", async () => {
+    const adapter = new ArchifyAdapter(runtimeRoot);
+    try {
+      const index = await buildStructureIndex([
+        { path: "src/model.ts", content: "export interface Named { name: string } export abstract class Base { id: string; abstract run(): void } export class Child extends Base implements Named { name: string; run(): void {} }" },
+        { path: "src/entry.ts", content: "export function main() {}" }
+      ]);
+      for (const diagram of [buildStructureMap(index.summary, 7).diagram, buildClassMap(index.summary, 7).diagram]) {
+        const document = await adapter.transform(diagram);
+        const artifact = await adapter.render(document);
+        expect(String(artifact.content)).toContain("<!DOCTYPE html>");
+        expect(validateProjectDiagram(diagram).filter((issue) => issue.severity === "error"), JSON.stringify(validateProjectDiagram(diagram))).toEqual([]);
+        const html = String(artifact.content);
+        for (const node of diagram.nodes) expect(html).toContain(`data-node-id="${(document.payload as { mapping: ArchifyIdMapping }).mapping.ids[node.id]}"`);
+      }
+    } finally { adapter.dispose(); }
   }, 120_000);
 
   it("routes same-column architecture edges without overshooting and retracing past their target", async () => {

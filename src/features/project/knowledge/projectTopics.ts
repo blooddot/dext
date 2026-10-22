@@ -17,7 +17,7 @@ export interface ProjectTopic {
   analysisState?: "outline" | "ready" | "stale";
   id: string;
   title: string;
-  kind: "context" | "flow" | "system_context" | "containers";
+  kind: "context" | "flow" | "system_context" | "containers" | "structure" | "types";
   description: string;
   responsibilities: string[];
   entryPoints: string[];
