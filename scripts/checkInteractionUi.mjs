@@ -28,7 +28,7 @@ try {
   shutdown = () => send("Browser.close");
   const evaluate = async (expression) => { const result = await send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }); if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails)); return result.result.value; };
   const key = async (key, code) => { await send("Input.dispatchKeyEvent", { type: "keyDown", key, windowsVirtualKeyCode: code, ...(key === "Enter" ? { text: "\r" } : key === " " ? { text: " " } : {}) }); await send("Input.dispatchKeyEvent", { type: "keyUp", key, windowsVirtualKeyCode: code }); };
-  const bundle = await build({ stdin: { contents: 'export { AgentInputView } from "./src/webview/agentInputView.ts"; export { InteractionForm } from "./src/webview/interactionForm.ts"; export { InteractionDialog } from "./src/webview/interactionDialog.ts"; export { uiCallForm, parseUiForm } from "./src/core/uiForm.ts";', resolveDir: process.cwd() }, bundle: true, write: false, format: "iife", globalName: "InteractionUI" });
+  const bundle = await build({ stdin: { contents: 'export { AgentInputView } from "./src/features/conversations/browser/agentInputView.ts"; export { InteractionForm } from "./src/features/conversations/browser/interactionForm.ts"; export { InteractionDialog } from "./src/features/conversations/browser/interactionDialog.ts"; export { uiCallForm, parseUiForm } from "./src/shared/contracts/uiForm.ts";', resolveDir: process.cwd() }, bundle: true, write: false, format: "iife", globalName: "InteractionUI" });
   await evaluate(bundle.outputFiles[0].text);
   await evaluate(`document.body.innerHTML='<button id="previous">Previous focus</button><main id="turn"></main><details id="process"><summary>Process</summary></details>'; window.replies=[];window.saved={};
     window.createView=()=>{const view=new InteractionUI.AgentInputView((id,answers)=>replies.push({id,answers}),(state,result)=>replies.push({id:state.requestId,result}),'test',{get:key=>saved[key],set:(key,draft)=>{saved[key]=draft}});document.getElementById('turn').append(view.element);view.setRunning(true);return view;};
@@ -131,7 +131,7 @@ try {
   }
   // Use the actual sidebar policy and intercepted HTTPS responses so a renderer
   // that creates <img> but cannot load it under Webview CSP fails this check.
-  const sidebarSource = await readFile("src/sidebarProvider.ts", "utf8");
+  const sidebarSource = await readFile("src/app/sidebarProvider.ts", "utf8");
   const policy = sidebarSource.match(/<meta http-equiv="Content-Security-Policy" content="([^"]+)"/)?.[1];
   assert.ok(policy);
   await evaluate(`{const meta=document.createElement('meta');meta.httpEquiv='Content-Security-Policy';meta.content=${JSON.stringify(policy.replaceAll('${webview.cspSource}', 'https://webview.test').replaceAll('${nonce}', 'test'))};document.head.append(meta);
@@ -237,7 +237,7 @@ try {
   await evaluate(`document.getElementById('previous').focus();window.focusDialog=new InteractionUI.InteractionDialog(new InteractionUI.InteractionForm(InteractionUI.uiCallForm('confirm',{message:'Focus check'}),()=>{}));document.body.append(focusDialog.element);focusDialog.open();focusDialog.close();window.nextFocus=document.createElement('button');document.body.append(nextFocus);nextFocus.focus();focusDialog.close();`);
   assert.equal(await evaluate(`document.activeElement===nextFocus`), true, "closing an already closed dialog does not steal focus");
   await evaluate(`focusDialog.element.remove();nextFocus.remove();`);
-  const sidebar = await readFile("src/sidebarProvider.ts", "utf8");
+  const sidebar = await readFile("src/app/sidebarProvider.ts", "utf8");
   for (const id of ["mcp-assistant-dialog"]) {
     const template = sidebar.match(new RegExp(`<dialog id="${id}"[\\s\\S]*?</dialog>`))?.[0];
     assert.ok(template, `${id} template exists`);

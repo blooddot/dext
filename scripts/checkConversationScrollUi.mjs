@@ -9,7 +9,7 @@ import { runLabChecks } from './monaco-ref-lab/check.mjs';
 // frame, and no scroll event the app did not ask for may cancel that
 // correction.
 await runLabChecks(async ({ evaluate, settle, send, click, key, artifacts }) => {
-  const template = await readFile('src/sidebarProvider.ts', 'utf8');
+  const template = await readFile('src/app/sidebarProvider.ts', 'utf8');
   const body = template.slice(template.indexOf('<body>') + 6, template.lastIndexOf('</body>')).replace(/<script[\s\S]*?<\/script>/g, '');
   await evaluate(`lab.production.destroy();document.querySelectorAll('link[rel="stylesheet"],style').forEach(el=>el.remove());
     document.body.innerHTML=${JSON.stringify(body)};

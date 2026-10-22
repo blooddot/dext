@@ -143,10 +143,7 @@ for (const forbidden of [
   "src/features/project/knowledge/projectArchitecturePython.ts",
   "src/features/project/knowledge/projectArchitectureRust.ts",
   "src/features/project/knowledge/projectArchitectureScanner.ts",
-  "src/features/project/knowledge/projectArchitectureWorker.ts",
-  "src/core/drawioAdapter.ts",
-  "src/core/mermaidAdapter.ts",
-  "src/core/structurizrAdapter.ts"
+  "src/features/project/knowledge/projectArchitectureWorker.ts"
 ]) {
   assert.ok(
     !extensionInputs.some((input) => input === forbidden || input.endsWith(`/${forbidden}`)),

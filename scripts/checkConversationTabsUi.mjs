@@ -5,7 +5,7 @@ import { runLabChecks } from './monaco-ref-lab/check.mjs';
 // Load the production sidebar and final CSS bundle: source-only CSS assertions
 // cannot catch a later Monaco codicon rule overriding an idle indicator.
 await runLabChecks(async ({ evaluate, settle }) => {
-  const template = await readFile('src/sidebarProvider.ts', 'utf8');
+  const template = await readFile('src/app/sidebarProvider.ts', 'utf8');
   const body = template.slice(template.indexOf('<body>') + 6, template.lastIndexOf('</body>')).replace(/<script[\s\S]*?<\/script>/g, '');
   await evaluate(`lab.production.destroy();document.body.innerHTML=${JSON.stringify(body)};
     {const meta=document.createElement('meta');meta.name='dext-editor-worker';meta.content='/assets/editor.worker.js';document.head.append(meta);}

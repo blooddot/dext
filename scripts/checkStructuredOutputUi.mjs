@@ -23,7 +23,7 @@ const usageEvents = [{ phase: 'status', text: '', usage: { totalTokens: 900 } },
 const record = { id: 't1', createdAt: 1, input: 'structured output', mode: 'code', process: usageEvents, output: JSON.stringify(response) };
 
 await runLabChecks(async ({ evaluate, settle, send, click }) => {
-  const template = await readFile('src/sidebarProvider.ts', 'utf8');
+  const template = await readFile('src/app/sidebarProvider.ts', 'utf8');
   const body = template.slice(template.indexOf('<body>') + 6, template.lastIndexOf('</body>')).replace(/<script[\s\S]*?<\/script>/g, '');
   await evaluate(`lab.production.destroy();document.querySelectorAll('link[rel="stylesheet"],style').forEach(el=>el.remove());
     document.body.innerHTML=${JSON.stringify(body)};

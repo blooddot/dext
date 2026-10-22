@@ -33,7 +33,7 @@ try {
   for(let attempt=0;attempt<100;attempt++){if(await evaluate('Boolean(window.lab)'))break;await new Promise(done=>setTimeout(done,100));}
   await evaluate(`lab.production.destroy();document.head.querySelectorAll('link[rel=stylesheet]').forEach(link=>link.remove());
     {const meta=document.createElement('meta');meta.name='dext-editor-worker';meta.content='/assets/editor.worker.js';document.head.append(meta);}`);
-  const template = await readFile("src/sidebarProvider.ts", "utf8");
+  const template = await readFile("src/app/sidebarProvider.ts", "utf8");
   const body = template.slice(template.indexOf("<body>"), template.lastIndexOf("</body>") + 7).replace(/<script[\s\S]*?<\/script>/g, "");
   await evaluate(`document.body.outerHTML=${JSON.stringify(body)};window.sent=[];window.uiErrors=[];window.addEventListener('error', e=>uiErrors.push(e.message));window.acquireVsCodeApi=()=>({postMessage:m=>sent.push(m),getState:()=>({}),setState:()=>{}});window.host=m=>window.dispatchEvent(new MessageEvent('message',{data:m}));`);
   const font = (await readFile("dist/codicons/codicon.ttf")).toString("base64");

@@ -11,7 +11,7 @@ import { runLabChecks } from './monaco-ref-lab/check.mjs';
 // push it back out, and a question the agent answers in parallel must not move the
 // reader at all.
 await runLabChecks(async ({ evaluate, settle }) => {
-  const template = await readFile('src/sidebarProvider.ts', 'utf8');
+  const template = await readFile('src/app/sidebarProvider.ts', 'utf8');
   const body = template.slice(template.indexOf('<body>') + 6, template.lastIndexOf('</body>')).replace(/<script[\s\S]*?<\/script>/g, '');
   await evaluate(`lab.production.destroy();document.querySelectorAll('link[rel="stylesheet"],style').forEach(el=>el.remove());
     document.body.innerHTML=${JSON.stringify(body)};

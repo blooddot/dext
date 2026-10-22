@@ -53,8 +53,8 @@ async function loadGenerator() {
     // manifests declare as well as the built-in surface.
     stdin: {
       contents: [
-        'export { dextFiles, dextSharedDeclaration, dextModuleDeclaration } from "./src/core/dextApiTypes.ts";',
-        'export { parseMcpManifest } from "./src/core/mcpManifest.ts";'
+        'export { dextFiles, dextSharedDeclaration, dextModuleDeclaration } from "./src/features/workflow/domain/dextApiTypes.ts";',
+        'export { parseMcpManifest } from "./src/features/mcp/domain/mcpManifest.ts";'
       ].join("\n"),
       resolveDir: root,
       sourcefile: "generateDextTypes.entry.ts",

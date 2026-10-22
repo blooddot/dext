@@ -360,7 +360,7 @@ try {
   }
   // New indexes browse without AI or phantom diagrams; explicit analysis publishes prose and graph together.
   const outlineIntent = ui.projectIntentSchema.parse({ schemaVersion: 1, updatedAt: 20, brief: { name: 'Dext', summary: 'Module index' }, contexts: [
-    { id: 'code-module', canonicalName: 'Code module', purpose: 'Runs code', detail: 'outline', entryPoints: ['src/runner.ts'], sourceFiles: ['src/runner.ts', 'src/core/execution.ts'], evidence },
+    { id: 'code-module', canonicalName: 'Code module', purpose: 'Runs code', detail: 'outline', entryPoints: ['src/runner.ts'], sourceFiles: ['src/runner.ts', 'src/extension.ts'], evidence },
     { id: 'other-module', canonicalName: 'Other module', purpose: 'Other responsibility', detail: 'outline', entryPoints: ['src/other.ts'], evidence }
   ] });
   const outlineData = { ...data, readerDiagrams: [], architecture: { diagrams: [] }, knowledge: { brief: 'Module index', topics: ui.buildProjectTopics(outlineIntent) } };
@@ -369,7 +369,7 @@ try {
   assert.equal(await evaluate('messages.length'), 0, 'opening an outline never starts AI or rendering');
   assert.equal(await evaluate(`document.querySelector('[data-topic-diagram]').textContent`), 'Analyze this module');
   assert.match(await evaluate(`document.querySelector('[data-reader-article]').textContent`), /Files in this module · 2/);
-  assert.match(await evaluate(`document.querySelector('[data-reader-article]').textContent`), /src\/core\/execution\.ts/);
+  assert.match(await evaluate(`document.querySelector('[data-reader-article]').textContent`), /src\/extension\.ts/);
   await click('[data-topic-diagram]');
   assert.deepEqual(await evaluate('messages.at(-1)'), { type: 'projectTopicDiagram', topicId: 'code-module' });
   await hostMessage({ type: 'projectDiagramGenerating', active: true });
@@ -391,7 +391,7 @@ try {
   await evaluate('window.scrollTo(0,0)');
   await writeFile(join(artifacts, 'module-analysis.png'), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
   // Conversation forms call the shared renderer before attaching their fragment to the document.
-  const markdownBundle = await build({ stdin: { contents: 'export { renderMarkdownDiagrams } from "./src/webview/markdownDiagrams.ts";', resolveDir: process.cwd() }, bundle: true, write: false, format: 'iife', globalName: 'MarkdownDiagramCheck' });
+  const markdownBundle = await build({ stdin: { contents: 'export { renderMarkdownDiagrams } from "./src/platform/browser/markdownDiagrams.ts";', resolveDir: process.cwd() }, bundle: true, write: false, format: 'iife', globalName: 'MarkdownDiagramCheck' });
   await evaluate(markdownBundle.outputFiles[0].text);
   await evaluate(`{const root=document.createElement('section');for(const source of ['flowchart TD\\n A[Start] --> B[Done]','flowchart TD\\n A[unfinished','classDiagram\\n class Example']){const pre=document.createElement('pre'),code=document.createElement('code');code.className='language-mermaid';code.textContent=source;pre.append(code);root.append(pre);}MarkdownDiagramCheck.renderMarkdownDiagrams(root);document.body.replaceChildren(root);}`);
   await wait(`document.querySelectorAll('[data-diagram-state]').length===3`, 'detached Markdown rendering');
