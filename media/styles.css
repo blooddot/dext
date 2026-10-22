@@ -2636,7 +2636,7 @@ button.primary.stopping {
 
 .output-turn-input > pre.dext-source {
   margin: 0;
-  padding: 0 30px 0 0;
+  padding: 0;
   border: 0;
   background: transparent;
   white-space: pre-wrap;
@@ -2702,15 +2702,45 @@ button.primary.stopping {
 .turn-section-meta { color: var(--vscode-descriptionForeground); font-size: 11px; }
 .turn-section .disclosure-chevron { flex: 0 0 12px; width: 12px; font-size: 12px; }
 .turn-section[open] > summary > .disclosure-chevron { transform: rotate(90deg); }
-.output-turn-input > .copy-button,
-.output-turn-input > .output-copy {
-  position: absolute;
-  top: -2px;
-  right: 0;
+
+/* Section copy controls sit at the trailing edge of the title bar, not over the
+   content they copy. */
+.turn-section-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.turn-section-actions > .copy-button,
+.turn-section-actions > .output-copy,
+.turn-section > summary > .copy-button,
+.turn-section > summary > .output-copy {
+  flex: 0 0 auto;
+  margin-left: auto;
+  opacity: 1;
+}
+.turn-section-actions > .copy-button {
+  margin-left: 0;
+}
+/* The hidden attribute is the streaming state; the icon's display rule must not
+   override it. */
+.turn-section-actions > .output-copy[hidden],
+.turn-section-actions > .copy-button[hidden],
+.execution-disclosure > summary > .output-copy[hidden],
+.execution-disclosure > summary > .copy-button[hidden] {
+  display: none;
 }
 
 .execution-disclosure > summary:hover {
   background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.06));
+}
+
+/* JSON keeps its exact-source copy in its own title bar. */
+.execution-disclosure > summary > .copy-button,
+.execution-disclosure > summary > .output-copy {
+  flex: 0 0 auto;
+  margin-left: auto;
+  opacity: 1;
 }
 
 .disclosure-meta {
@@ -2799,7 +2829,6 @@ button.primary.stopping {
 }
 .markdown-body img { max-width: 100%; height: auto; }
 
-.markdown-copy-toolbar,
 .markdown-code-toolbar {
   display: flex;
   align-items: center;
@@ -2809,11 +2838,8 @@ button.primary.stopping {
   color: var(--vscode-descriptionForeground);
 }
 
-/* Input, Output and Process share the same copy control and focus treatment. */
+/* Section and code-block copy controls share the same focus treatment. */
 .output-copy.icon-button,
-.output-turn-input > .copy-button,
-.agent-stream-item > .copy-button,
-.markdown-copy-toolbar > .copy-button,
 .markdown-code-copy.codicon {
   display: inline-flex;
   align-items: center;
@@ -2833,35 +2859,15 @@ button.primary.stopping {
 }
 
 .output-copy.icon-button:hover,
-.markdown-copy-toolbar > .copy-button:hover,
 .markdown-code-copy:hover {
   color: var(--vscode-descriptionForeground);
   background: var(--vscode-toolbar-hoverBackground);
 }
 
 .output-copy.icon-button:focus-visible,
-.markdown-copy-toolbar > .copy-button:focus-visible,
 .markdown-code-copy:focus-visible {
   outline: 1px solid var(--vscode-focusBorder);
   outline-offset: -1px;
-}
-
-/* Whole-message copy controls must not create an empty row before the text. */
-.output-text-copyable > .markdown-copy-toolbar {
-  position: absolute;
-  /* Center the 24px control on the first text line rather than letting its
-     lower edge sit below the opening paragraph. */
-  top: -2px;
-  right: 0;
-  min-height: 24px;
-}
-
-.output-text-copyable > .markdown-body {
-  padding-right: 30px;
-}
-
-.output-text-copyable > .process-content {
-  padding-right: 30px;
 }
 
 .markdown-body .markdown-code-block {
@@ -3074,14 +3080,13 @@ pre {
 }
 
 .agent-trace-command-content {
-  position: relative;
   margin: 3px 0 6px 18px;
 }
 
 .agent-trace-command-body {
   max-height: 320px;
   margin: 0;
-  padding: 8px 34px 8px 10px;
+  padding: 8px 10px;
   overflow: auto;
   border: 1px solid var(--vscode-widget-border);
   border-radius: 4px;
@@ -3089,12 +3094,6 @@ pre {
    * it back to read as a code block. */
   background: var(--vscode-textCodeBlock-background, var(--vscode-editor-background)) !important;
   white-space: pre-wrap;
-}
-
-.agent-trace-command-content > .output-copy {
-  position: absolute;
-  right: 4px;
-  top: 4px;
 }
 
 .agent-file-changes {
@@ -3655,21 +3654,8 @@ details[open] > summary > .disclosure-chevron {
 .output-copyable:hover > .output-copy,
 .output-copyable:focus-within > .output-copy,
 .output-text-copyable:hover > .output-copy,
-.output-text-copyable:focus-within > .output-copy,
-.agent-stream-item:hover > .output-copy,
-.agent-stream-item:focus-within > .output-copy {
+.output-text-copyable:focus-within > .output-copy {
   opacity: 1;
-}
-
-.agent-stream-item > .output-copy,
-.agent-stream-item > .copy-button {
-  position: absolute;
-  right: 0;
-  top: -2px;
-}
-
-.agent-stream-item {
-  position: relative;
 }
 
 .json-output,
