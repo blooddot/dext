@@ -4,6 +4,7 @@ import { posix } from "node:path";
 import { z } from "zod";
 import { projectContextSchema, type ProjectContext } from "../../contracts/projectIntent.js";
 import type { StructureFile, StructureMember, StructureSummary } from "./projectStructure.js";
+import { buildStructureGraphFromMembers, buildStructureGraphFromSummary, structureConsumers, structureDependencies, structureDependencyEdges, structureConsumerEdges } from "./projectStructureGraph.js";
 
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const stem = (path: string) => posix.basename(path).replace(/\.[^.]+$/, "").replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase().split(/[\s_.-]+/)[0]!;
@@ -103,6 +104,7 @@ export function runtimeEvidenceWindows(content: string, file: StructureFile, max
 
 /** Small neighborhoods are scheduling hints, never the final knowledge boundaries. */
 export function structureCandidates(summary: StructureSummary): StructureCandidate[] {
+  const graph = buildStructureGraphFromSummary(summary);
   const result: StructureCandidate[] = [];
   for (const pkg of [...new Set(summary.modules.map(module => module.package))].sort()) {
     const files = summary.modules.filter(module => module.package === pkg).flatMap(module => module.members).sort((a, b) => a.path.localeCompare(b.path));
@@ -111,10 +113,11 @@ export function structureCandidates(summary: StructureSummary): StructureCandida
     for (const file of files) { const family = families.get(stem(file.path)) ?? new Set<string>(); family.add(file.path); families.set(stem(file.path), family); }
     const claim = (file: StructureMember) => { remaining.delete(file.path); families.get(stem(file.path))!.delete(file.path); };
     const neighbors = new Map<string, Set<string>>();
-    for (const file of files) for (const edge of file.dependencies) if (edge.to && remaining.has(edge.to)) {
-      for (const [a, b] of [[file.path, edge.to], [edge.to, file.path]]) {
-        const targets = neighbors.get(a!) ?? new Set<string>(); targets.add(b!); neighbors.set(a!, targets);
-      }
+    for (const file of files) {
+      const adjacent = neighbors.get(file.path) ?? new Set<string>();
+      for (const edge of structureDependencyEdges(graph, file.path)) adjacent.add(edge.to);
+      for (const edge of structureConsumerEdges(graph, file.path)) adjacent.add(edge.from);
+      neighbors.set(file.path, adjacent);
     }
     while (remaining.size) {
       const first = remaining.values().next().value!;
@@ -136,12 +139,8 @@ export function structureCandidates(summary: StructureSummary): StructureCandida
       result.push({ id: `candidate:${first.path}`, files: group });
     }
   }
-  const consumers = new Map<string, Set<string>>();
-  for (const file of summary.modules.flatMap(module => module.members)) for (const edge of file.dependencies) if (edge.to && !edge.typeOnly) {
-    const paths = consumers.get(edge.to) ?? new Set<string>(); paths.add(file.path); consumers.set(edge.to, paths);
-  }
   return result.map(candidate => ({ ...candidate, files: candidate.files.map(file => ({ ...file,
-    consumers: [...(consumers.get(file.path) ?? [])].sort()
+    consumers: structureConsumers(graph, file.path, { typeOnly: false })
   })) }));
 }
 
@@ -186,7 +185,7 @@ export function responsibilityContext(name: string, purpose: string, members: re
 
 export function connectResponsibilities(contexts: ProjectContext[], files: readonly StructureMember[]): ProjectContext[] {
   const owners = new Map(contexts.flatMap(context => (context.sourceFiles ?? []).map(path => [path, context.id] as const)));
-  const dependencies = new Map(files.map(file => [file.path, file.dependencies]));
+  const graph = buildStructureGraphFromMembers(files);
   return contexts.map(context => ({ ...context, dependsOn: [...new Set((context.sourceFiles ?? []).flatMap(path =>
-    (dependencies.get(path) ?? []).flatMap(edge => edge.to && owners.get(edge.to) && owners.get(edge.to) !== context.id ? [owners.get(edge.to)!] : [])))].sort() }));
+    structureDependencies(graph, path).flatMap(target => owners.get(target) && owners.get(target) !== context.id ? [owners.get(target)!] : [])))].sort() }));
 }

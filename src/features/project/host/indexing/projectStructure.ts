@@ -6,6 +6,7 @@ import type * as TreeSitter from "web-tree-sitter";
 import type { Node } from "web-tree-sitter";
 import { z } from "zod";
 import { parserFor } from "../../../../platform/node/syntaxParser.js";
+import { buildStructureGraph, rankStructureFiles, type StructureGraph } from "./projectStructureGraph.js";
 
 // Bump when extraction, grouping or resolution changes. Cached facts never contain source bodies.
 export const PROJECT_STRUCTURE_VERSION = 3;
@@ -34,8 +35,28 @@ export interface StructureSummary {
   modules: StructureModule[];
   issues: Array<{ path: string; reason: string }>;
 }
-export interface StructureIndex { cache: StructureCache; dependencies: StructureDependency[]; summary: StructureSummary }
+export interface StructureIndex { cache: StructureCache; dependencies: StructureDependency[]; summary: StructureSummary; graph: StructureGraph }
 export interface StructureInput { path: string; content?: string; issue?: string }
+
+const structureSymbolSchema = z.object({ path: z.string(), name: z.string(), kind: z.string(), line: z.number().int().positive(), signature: z.string() });
+const structureMemberSchema = z.object({
+  path: z.string(), hash: z.string(), language: z.string(), lines: z.number(), symbols: z.array(symbolSchema),
+  dependencies: z.array(z.object({ specifier: z.string(), to: z.string().optional(), typeOnly: z.boolean().optional() }))
+});
+const structureModuleSchema = z.object({
+  id: z.string(), path: z.string(), package: z.string(), languages: z.array(z.string()), files: z.number(),
+  entryPoints: z.array(z.string()), symbols: z.array(structureSymbolSchema),
+  evidence: z.array(z.object({ path: z.string(), contentHash: z.string() })),
+  references: z.array(z.object({ specifier: z.string(), status: z.enum(["resolved", "unresolved"]), count: z.number() })),
+  dependsOn: z.array(z.string()), dependencyCount: z.number(), unresolved: z.number(), hash: z.string(),
+  members: z.array(structureMemberSchema)
+});
+/** The persisted summary shape a bounded read may reuse without reparsing sources. */
+export const structureSummarySchema = z.object({
+  version: z.literal(1), hash: z.string(), files: z.number(), parsed: z.number(), cached: z.number(), failed: z.number(), unsupported: z.number(),
+  modules: z.array(structureModuleSchema),
+  issues: z.array(z.object({ path: z.string(), reason: z.string() }))
+});
 
 export function structureLanguage(path: string): string | undefined {
   if (/\.tsx$/i.test(path)) return "tsx";
@@ -191,24 +212,16 @@ function summarize(files: readonly StructureFile[], config: readonly Config[], d
     group.files.push(file); groups.set(path, group); owner.set(file.path, path);
   }
   const edgesByModule = new Map<string, StructureDependency[]>();
-  const outgoing = new Map<string, Set<string>>();
   const fileEdges = new Map<string, StructureMember["dependencies"]>();
   for (const edge of dependencies) {
     const imports = fileEdges.get(edge.from) ?? [];
     imports.push({ specifier: edge.specifier, ...(edge.to ? { to: edge.to } : {}), ...(edge.typeOnly ? { typeOnly: true } : {}) }); fileEdges.set(edge.from, imports);
     const module = owner.get(edge.from)!;
     const group = edgesByModule.get(module) ?? []; group.push(edge); edgesByModule.set(module, group);
-    if (edge.to) { const targets = outgoing.get(edge.from) ?? new Set<string>(); targets.add(edge.to); outgoing.set(edge.from, targets); }
   }
   // Repo-map-style graph ranking allocates detail inside each module. It cannot remove a module.
   const count = Math.max(1, files.length);
-  let ranks = new Map(files.map(file => [file.path, 1 / count]));
-  for (let iteration = 0; iteration < 12; iteration++) {
-    const dangling = files.reduce((sum, file) => sum + (outgoing.get(file.path)?.size ? 0 : ranks.get(file.path)!), 0);
-    const next = new Map(files.map(file => [file.path, (0.15 + 0.85 * dangling) / count]));
-    for (const [from, targets] of outgoing) for (const to of targets) next.set(to, next.get(to)! + 0.85 * ranks.get(from)! / targets.size);
-    ranks = next;
-  }
+  const ranks = rankStructureFiles(files.map(file => file.path), dependencies);
   const id = (path: string): string => `module:${path}`;
   return [...groups].sort(([a], [b]) => a.localeCompare(b)).map(([path, group]) => {
     const ranked = [...group.files].sort((a, b) => {
@@ -270,6 +283,7 @@ export async function buildStructureIndex(inputs: AsyncIterable<StructureInput> 
   const config = configs(configuration), dependencies = resolveDependencies(files, config);
   const modules = summarize(files, config, dependencies);
   const hash = digest(JSON.stringify({ version: PROJECT_STRUCTURE_VERSION, files: files.map(file => [file.path, file.hash]), config, issues }));
-  return { cache: { version: PROJECT_STRUCTURE_VERSION, files }, dependencies,
-    summary: { version: 1, hash, files: count, parsed: files.length, cached, failed: issues.length, unsupported, modules, issues } };
+  const summary: StructureSummary = { version: 1, hash, files: count, parsed: files.length, cached, failed: issues.length, unsupported, modules, issues };
+  const index = { cache: { version: PROJECT_STRUCTURE_VERSION, files }, dependencies, summary } as const;
+  return { ...index, graph: buildStructureGraph(index) };
 }

@@ -7,6 +7,7 @@ import type { ProjectInitializationProgressListener } from "../../contracts/life
 import { attachProjectStructure, buildProjectEvidencePackage, compareProjectEvidencePaths, isExcludedProjectEvidencePath, isProjectEvidencePath, PROJECT_BUILD_CONFIG_PATH, projectEvidenceFileKind, type ProjectEvidenceFileInput, type ProjectKnowledgeReference } from "../generation/projectAiGeneration.js";
 import type { ProjectEvidenceReadOptions } from "../projectPanelDataSource.js";
 import { buildStructureIndex, PROJECT_STRUCTURE_VERSION, structureCacheSchema, type StructureInput } from "./projectStructure.js";
+import { structureDependencies, structureEntryFamily } from "./projectStructureGraph.js";
 import { browserBuildEntries, runtimeEvidenceCandidates, runtimeEvidenceWindows } from "./projectStructureKnowledge.js";
 
 export async function indexedRelatedPaths(cachePath: string | undefined, preferred: ReadonlySet<string>): Promise<string[]> {
@@ -88,17 +89,10 @@ export async function readProjectStructureEvidence(root: vscode.Uri, candidates:
   const entryFamilies = new Map<string, string[]>();
   for (const entry of browserEntries) {
     if (!fileByPath.has(entry)) { sourceIssues.push("Browser build entry not indexed in configured scope: " + entry); continue; }
-    entryPaths.add(entry);
     // Follow indexed local dependencies of small startup entries to their actual message handlers.
-    const queue = [{ path: entry, depth: 0 }], seen = new Set<string>();
-    while (queue.length && seen.size < 24) {
-      const next = queue.shift()!;
-      if (seen.has(next.path)) continue;
-      seen.add(next.path);
-      if (boundaryPaths.has(next.path) || next.path === entry) entryPaths.add(next.path);
-      entryFamilies.set(entry, [...seen]);
-      if (next.depth < 3) for (const edge of index.dependencies) if (edge.from === next.path && edge.to && !edge.typeOnly) queue.push({ path: edge.to, depth: next.depth + 1 });
-    }
+    const family = structureEntryFamily(index.graph, entry);
+    for (const path of family) if (boundaryPaths.has(path) || path === entry) entryPaths.add(path);
+    entryFamilies.set(entry, family);
   }
   const runtimeCandidates = [...new Set([...entryPaths].flatMap(path => fileByPath.get(path) ?? []).concat(runtimeEvidenceCandidates(index.cache.files)))];
   for (const candidate of [...runtimeCandidates, ...index.cache.files.filter(file => boundaryPaths.has(file.path) && !runtimeCandidates.includes(file))]) {
@@ -132,9 +126,10 @@ export async function readProjectStructureEvidence(root: vscode.Uri, candidates:
   for (const category of ["launcher", "deployment", "dispatch", "host-receive"]) {
     const dispatch = priority.find(item => item.category === "dispatch");
     const candidates = deployment.filter(item => item.category === category && !entryPaths.has(item.path));
-    if (category === "host-receive" && dispatch) candidates.sort((a, b) =>
-      Number(index.dependencies.some(edge => edge.from === dispatch.path && edge.to === b.path && !edge.typeOnly))
-      - Number(index.dependencies.some(edge => edge.from === dispatch.path && edge.to === a.path && !edge.typeOnly)));
+    if (category === "host-receive" && dispatch) {
+      const targets = new Set(structureDependencies(index.graph, dispatch.path, { typeOnly: false }));
+      candidates.sort((a, b) => Number(targets.has(b.path)) - Number(targets.has(a.path)));
+    }
     const match = candidates[0];
     if (match) priority.push(match);
   }

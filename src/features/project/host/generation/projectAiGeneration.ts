@@ -8,6 +8,7 @@ import { validateProjectDiagram, type ProjectDiagram, type ProjectDiagramEvidenc
 import { projectC4Schema, projectIntentSchema, validateProjectIntent, type ProjectContext, type ProjectIntent, type ProjectQualityIssue, type ProjectIntentProvenance } from "../../contracts/projectIntent.js";
 import type { ProjectEvidence } from "../../contracts/projectKnowledge.js";
 import type { StructureSummary } from "../indexing/projectStructure.js";
+import { buildStructureGraphFromSummary, structureConsumers } from "../indexing/projectStructureGraph.js";
 import { connectResponsibilities, responsibilityContext, responsibilityDraftSchema, responsibilityMergeSchema, structureCandidates, validateOwnership, type StructureCandidate } from "../indexing/projectStructureKnowledge.js";
 import { ownershipConcerns, projectModelQuality } from "./projectModelQuality.js";
 export type { IndexedProjectEvidence, ProjectEvidenceFile, ProjectEvidenceFileInput, ProjectEvidenceInput, ProjectEvidenceInventoryEntry, ProjectEvidenceLimits, ProjectEvidencePackage, ProjectEvidenceSelection, ProjectEvidenceSummary, ProjectKnowledgeReference, ProjectStructureIndexSummary } from "../../contracts/evidence.js";
@@ -1143,12 +1144,8 @@ export class ProjectAiGenerationService {
     if (batch.length) batches.push(batch);
     const files = structure.modules.flatMap(module => module.members);
     const fileByPath = new Map(files.map(file => [file.path, file]));
-    const consumers = new Map<string, string[]>();
-    for (const file of files) for (const edge of file.dependencies) if (edge.to && !edge.typeOnly) {
-      const paths = consumers.get(edge.to) ?? [];
-      if (!paths.includes(file.path)) paths.push(file.path);
-      consumers.set(edge.to, paths);
-    }
+    const structureGraph = buildStructureGraphFromSummary(structure);
+    const consumers = new Map(files.map(file => [file.path, structureConsumers(structureGraph, file.path, { typeOnly: false })]));
     const uncertaintyInstruction = "Use uncertainties only for concrete unanswered questions that affect understanding this module. Each question must include an exact member source path and end with a question mark. Prefer an empty array. Omit generic cautions about static analysis, missing runtime verification, or unknown implementation details. Correct ownership contradictions rather than recording them as uncertainty.";
     let drafts: ProjectContext[] = [], totalAttempts = 0;
     for (const [index, candidates] of batches.entries()) {

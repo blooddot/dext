@@ -1,16 +1,14 @@
 import type { ProjectContext, ProjectIntent, ProjectQualityIssue } from "../../contracts/projectIntent.js";
 import { systemContextRelationships } from "../../presentation/projectC4.js";
 import type { StructureMember } from "../indexing/projectStructure.js";
+import { buildStructureGraphFromMembers, structureConsumers } from "../indexing/projectStructureGraph.js";
 
 /** A review signal, never an automatic ownership rewrite or proof of incorrect behavior. */
 export function ownershipConcerns(contexts: readonly ProjectContext[], files: readonly StructureMember[]): ProjectQualityIssue[] {
   const owners = new Map(contexts.flatMap(context => (context.sourceFiles ?? []).map(path => [path, context] as const)));
-  const consumers = new Map<string, string[]>();
-  for (const file of files) for (const edge of file.dependencies) if (edge.to && !edge.typeOnly) {
-    consumers.set(edge.to, [...new Set([...(consumers.get(edge.to) ?? []), file.path])]);
-  }
+  const graph = buildStructureGraphFromMembers(files);
   return files.flatMap(file => {
-    const owner = owners.get(file.path), usedBy = consumers.get(file.path) ?? [];
+    const owner = owners.get(file.path), usedBy = structureConsumers(graph, file.path, { typeOnly: false });
     if (!owner || (owner.sourceFiles?.length ?? 0) < 2 || file.symbols.length > 3 || usedBy.length !== 1) return [];
     const consumer = owners.get(usedBy[0]!);
     if (!consumer || consumer.id === owner.id || file.dependencies.some(edge => !edge.typeOnly && edge.to && owners.get(edge.to)?.id === owner.id)) return [];
