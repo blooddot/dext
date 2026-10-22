@@ -62,13 +62,24 @@ VSIX 压缩后约 **5 MB**（解压约 20 MB），几乎全部来自 Webview：
 
 MCP 初始化从 `package.json` 读取客户端名称和版本。协议版本分别维护在 `dext.mcpProtocolVersions.stdio` 和 `dext.mcpProtocolVersions.http`，HTTP 请求头复用 HTTP 协议版本。这些值会在构建时打包进扩展。只有对应传输实现支持该协议修订版时才应修改日期，并重新构建；它们不是面向用户的设置项。
 
-- `src/core/contextResolver.ts`：不可变上下文快照。
-- `src/core/axAdapter.ts`：Ax / Zod / JSON Schema 契约适配。
-- `src/core/runtime.ts`：确定性执行器白名单。
-- `src/core/dextApiTypes.ts`：由注册表推导的 `dext` 声明与 `.dext/tsconfig.json` 工程。
-- `src/core/agentRunner.ts`：Codex / Claude CLI 的结构化执行适配。
-- `src/core/workflowRecorder.ts`：从对话生成 TypeScript API 骨架。
+- `src/features/workflow/host/contextResolver.ts` 与 `src/shared/contracts/context.ts`：不可变上下文快照及其宿主端口。
+- `src/features/agents/domain/axAdapter.ts`：Ax / Zod / JSON Schema 契约适配。
+- `src/features/workflow/host/runtime.ts`：确定性执行器白名单。
+- `src/features/workflow/domain/dextApiTypes.ts`：由注册表推导的 `dext` 声明与 `.dext/tsconfig.json` 工程。
+- `src/features/agents/host/agentRunner.ts`：Codex / Claude CLI 的结构化执行适配。
+- `src/features/workflow/domain/workflowRecorder.ts`：从对话生成 TypeScript API 骨架。
+- `src/shared/` 是跨 feature 的公共内核（`contracts/`、`protocol/`、`lib/`）；`src/platform/` 是按环境分区的适配层（`vscode/`、`node/`、`browser/`、`editor-tabs/`、`webviewProtocol.ts`）。`src/core/` 已不存在。
 - `src/webview/codeEditor.ts`：Code 编辑器（Monaco、引用投影与文件拖放）。
+
+### 层级词表
+
+- `src/app/` 是组合根（`application.ts`、`sidebarProvider.ts` 与两个 setup 模块），除浏览器入口外可以依赖其余层。
+- `src/features/<slice>/` 拥有产品职责，并按环境分区：`contracts/`、`domain/`、`knowledge/`、`presentation/` 不依赖环境；`host/` 面向 Node/VS Code；`browser/` 面向 DOM。feature 之间只通过 `contracts`/`domain` 协作，跨 feature 的 host 耦合必须登记在 `crossFeatureHostCouplings`。
+- `src/platform/` 只放环境适配器：`vscode/`、`node/`、`browser/`、`editor-tabs/` 与线协议聚合 `webviewProtocol.ts`。它不是“所有共享代码”的同义词。
+- `src/shared/` 是跨 feature 的公共内核，只允许 `contracts/`、`protocol/`、`lib/`。本仓库不设 `core`、`common`、`base`、`modules`、`utils` 根目录：`core` 是已解散的旧目录，`common`/`base` 会与 `shared`、`platform` 重叠，`utils` 容易变成无结构堆放。
+- 每个 feature 契约都是目录内的主题文件（`agents/contracts/agent.ts`、`workspace/contracts/fileSearch.ts`、`workflow/contracts/runtime.ts`、`mcp/contracts/mcp.ts`）。禁止 `contracts.ts` 与 `contracts/index.ts`；消费者显式导入具体文件。
+
+`src/runner/` 是 Node 工作流内核，只依赖 `shared/`、Node 内置模块和自身模块。`src/app/application.ts` 负责构造内核宿主；依赖是单向的，内核不会反向导入上层。
 
 ### TypeScript kernel
 
@@ -105,9 +116,9 @@ MCP 初始化从 `package.json` 读取客户端名称和版本。协议版本分
 
 - `src/features/project/host/persistence/projectStore.ts` 负责 `.dext/project.json`、AI 生成的 intent/diagram 文件、已接受的 `.dext/objects/<id>.json` 以及 `.dext/architecture.json`；它负责持久化已接受对象。并发写入按版本拒绝（`conflict`），不做合并。
 - `src/features/project/contracts/projectKnowledge.ts` 负责命名、稳定 ID，以及来源／确认／有效性／归属四个相互独立的维度。旧的 `status` 字段在读取时迁移；代码发生变化时，已接受对象保持已接受，同时标记为 `needs_verification`。
-- `src/sidebarProvider.ts` 只保留 Webview 生命周期与本轮范围外的功能。会话状态位于 `src/features/conversations/host/`（`conversationController.ts`、`turnExecutionCoordinator.ts`、`agentEventStream.ts`、`planController.ts`、`patchReviewController.ts`、`interactionController.ts`），由 `src/app/conversationSetup.ts` 统一装配一次。Plan 完成判定保留独立的自动验证轮次。参见 [conversation-development.zh-CN.md](conversation-development.zh-CN.md)。
+- `src/app/sidebarProvider.ts` 只保留 Webview 生命周期与本轮范围外的功能。会话状态位于 `src/features/conversations/host/`（`conversationController.ts`、`turnExecutionCoordinator.ts`、`agentEventStream.ts`、`planController.ts`、`patchReviewController.ts`、`interactionController.ts`），由 `src/app/conversationSetup.ts` 统一装配一次。Plan 完成判定保留独立的自动验证轮次。参见 [conversation-development.zh-CN.md](conversation-development.zh-CN.md)。
 - 项目架构扫描为 TypeScript、Python、Rust 提供同一套模型。各解析器把无法解析或存在歧义的结构记录为 `unsupported` 并给出原因，而不是猜测；`cargo metadata` 不可用时，Rust 元数据降级并显式说明覆盖范围。
 - `src/platform/editor-tabs/editorTabManager.ts` 统一管理所有编辑器 Tab 的创建、复用、销毁和消息路由。`editorTabSerializer.ts` 对恢复去重，避免 serializer 回调与主动恢复重复打开同一页面；`src/features/project/host/projectEditorProvider.ts` 复用同一个稳定键。
-- Resources 使用只读取文件的数据源：`src/features/resources/host/resourceEditorProvider.ts` 枚举与读取资源但不执行，`src/features/resources/presentation/resourceDocuments.ts` 负责渲染。API 列表也会通过 `src/core/apiSource.ts` 静态提取源码信息，复用 `src/core/syntaxParser.ts` 的 Tree-sitter 加载器。Resources 与 APIs 共用签名、参数、返回类型和源码预览组件。类型来自显式标注或简单参数默认值；无法确定的类型显示为 `unknown`，不执行模块，也不运行 TypeScript 编译器。APIs 页面单独组合可调用契约、Node/JavaScript 参考和文件 API。Resources 不再读取运行时注册表或侧栏资源缓存；注册表继续负责执行分发和参数契约。
+- Resources 使用只读取文件的数据源：`src/features/resources/host/resourceEditorProvider.ts` 枚举与读取资源但不执行，`src/features/resources/presentation/resourceDocuments.ts` 负责渲染。API 列表也会通过 `src/features/workflow/host/apiSource.ts` 静态提取源码信息，复用 `src/platform/node/syntaxParser.ts` 的 Tree-sitter 加载器。Resources 与 APIs 共用签名、参数、返回类型和源码预览组件。类型来自显式标注或简单参数默认值；无法确定的类型显示为 `unknown`，不执行模块，也不运行 TypeScript 编译器。APIs 页面单独组合可调用契约、Node/JavaScript 参考和文件 API。Resources 不再读取运行时注册表或侧栏资源缓存；注册表继续负责执行分发和参数契约。
 
-导入直接指向符号所属的契约或实现。第一轮遗留在 `src/` 的转发文件已全部删除；一旦被恢复或被引用（包括测试、脚本和内嵌构建入口字符串），`scripts/checkModuleBoundaries.mjs` 会直接失败。
+导入直接指向符号所属的契约或实现。第一轮和第二轮遗留的转发文件、`src/core/`、根目录 `application.ts`/`sidebarProvider.ts` 都已删除；一旦被恢复或被引用（包括测试、脚本、注释和内嵌构建入口字符串），`scripts/checkModuleBoundaries.mjs` 会直接失败。

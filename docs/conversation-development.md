@@ -6,23 +6,25 @@ It is the current operating guide; historical notes are separated at the bottom.
 
 ## Baseline
 
-- Second refactor starts from `a26b4ab` (`fix(conversation): retain token usage in
-  completed and historical turns`) with a clean worktree.
-- The first wave (Project, Resources, Workspace search, Agent configuration and editor
-  tabs) had already been committed. It left 36 modules in `src/` whose only job was
-  re-exporting the feature implementation. Those entries are gone; consumers import the
-  contract or the implementation directly.
+- Third refactor starts from `3d81b48` (`feat(conversations): collapse Process by default for new turns`).
+- The second wave moved conversation state, execution, plan and patch review into
+  `features/conversations/` and deleted the first wave's 36 forwarding modules.
+- The third wave dissolved `src/core/` into `features/{agents,workflow,mcp,workspace}`,
+  `shared/` and `platform/`, moved the VS Code adapters to `platform/vscode/`, the
+  composition roots to `src/app/`, and the remaining conversation DOM to
+  `features/conversations/browser/`. `src/` now contains only `extension.ts`.
 
-## Removed entries and their targets
+## Removed entries and their targets (historical)
 
-Every path below was deleted together with the import update in the same batch. No
-alias, mock, build plugin or barrel file restores them: `scripts/checkModuleBoundaries.mjs`
-fails on a static import, a type-only import, a literal dynamic load, a mocked
-specifier, an inlined build entry string or a restored file.
+Every path below was deleted together with the import update in the same batch. The table
+is a migration record only; it is **not** a current import instruction. No alias, mock,
+build plugin or barrel file restores them: `scripts/checkModuleBoundaries.mjs` fails on a
+static import, a type-only import, a literal dynamic load, a mocked specifier, an inlined
+build entry string, a comment, or a restored file.
 
 | Removed path | Target |
 | --- | --- |
-| `src/agentProfiles.ts` | contracts in `src/features/agents/contracts.ts`, store/helpers in `src/features/agents/host/agentProfiles.ts` |
+| `src/agentProfiles.ts` | contracts in `src/features/agents/contracts/agent.ts`, store/helpers in `src/features/agents/host/agentProfiles.ts` |
 | `src/apiEditorProvider.ts` | `src/features/resources/host/apiEditorProvider.ts` |
 | `src/core/archifyAdapter.ts` | `src/features/project/host/diagrams/archifyAdapter.ts` |
 | `src/core/projectAiGeneration.ts` | `src/features/project/host/generation/projectAiGeneration.ts` |
@@ -62,19 +64,18 @@ specifier, an inlined build entry string or a restored file.
 Consumers were updated in the same commit as each deletion. The important split is by
 symbol, not by filename:
 
-- Agent types and constants come from `features/agents/contracts.ts`; only
+- Agent types and constants come from `features/agents/contracts/agent.ts`; only
   `AgentProfileStore`, `codexConfiguredDefaults` and `modelOptionsFromCodexCache` come
-  from the host module. Consumers: `application.ts`, `core/agentRunner.ts`,
-  `core/builtinCli.ts`, `core/deepseekHarnessPolicy.ts`, `core/deepseekHarnessRunner.ts`,
-  `core/harnessPresets.ts`, `core/runtime.ts`, `core/types.ts`, `webviewProtocol.ts`,
-  `webview/main.ts`, `sidebarProvider.ts`, `conversationPreferences.ts` and the
-  matching tests.
+  from the host module. Consumers: `app/application.ts`,
+  `features/agents/host/*`, `features/workflow/domain|host/*`,
+  `shared/contracts/types.ts`, `platform/webviewProtocol.ts`, `webview/main.ts`,
+  `app/sidebarProvider.ts`, `conversationPreferences.ts` and the matching tests.
 - Resources are split three ways: contracts (`resourceDocuments.ts`,
   `resourceSession.ts`), host (`resourceEditorProvider.ts`, `apiEditorProvider.ts`,
   `globalResourcesEditorProvider.ts`, `resourceBrowserProvider.ts`) and presentation
   (`resourceDocuments.ts`, `apiPanel.ts`, `globalResourcesPanel.ts`). Consumers are
-  `extension.ts`, `application.ts`, `webview/main.ts`, `historyStore.ts`,
-  `webviewProtocol.ts`, `sidebarProvider.ts` and the resource tests.
+  `extension.ts`, `app/application.ts`, `webview/main.ts`, `historyStore.ts`,
+  `platform/webviewProtocol.ts`, `app/sidebarProvider.ts` and the resource tests.
 - Project diagrams keep the contract (`contracts/projectDiagram.ts`), the knowledge
   helpers, the host registry/adapters and the browser bridge apart; the removed viewer
   entry mixed all four, so its consumers now import each symbol from its own module.
@@ -125,7 +126,7 @@ mapping stays honest.
 | Plan toolbar and the per-turn Plan/open action | `features/conversations/browser/planControls.ts` | rebuilt from host state |
 | Diff layout preference, patch review buttons and resolution feedback | `features/conversations/browser/patchReviewView.ts` | DOM + `diffMode`; writing stays a host call |
 | Conversation tab strip DOM | `features/conversations/browser/conversationTabs.ts` | rebuilt from the host summary |
-| Webview lifecycle, HTML shell, message dispatch, resources/MCP/attachments | `sidebarProvider.ts` | VS Code objects |
+| Webview lifecycle, HTML shell, message dispatch, resources/MCP/attachments | `app/sidebarProvider.ts` | VS Code objects |
 
 Narrow ports live in `contracts/`:
 
@@ -141,58 +142,78 @@ Narrow ports live in `contracts/`:
 - `PlanFileHost` / `PlanSessionPort` (in `host/planController.ts`) — the plan controller
   reads the file and saves progress through these, so it never imports `vscode`.
 - `ApplyPatch` is injected into `PatchReviewController`; the host capability that writes
-  files lives in `src/vscodePatchHost.ts` and is connected by `app/conversationSetup.ts`.
+  files lives in `src/platform/vscode/patchHost.ts` and is connected by
+  `app/conversationSetup.ts`.
 
 A conversation module never imports `DextApplication`, `DextSidebarProvider`,
 `webview/main.ts` or the whole sidebar state. `ConversationSummary` and the conversation
-message schema live in `contracts/protocol.ts`, and `src/webviewProtocol.ts` only
+message schema live in `contracts/protocol.ts`, and `src/platform/webviewProtocol.ts` only
 composes them.
 
-## Verification (this round)
+### Provider session identity
+
+Every execution snapshots the conversation's own Agent controls — profile, model,
+reasoning, speed, service tier and permission — into `ExecutionMetadata`. The
+application-level selection follows the active tab, so a background Plan round or a fast
+tab switch must not run with another conversation's provider.
+
+Provider session ids are stored per provider and are only written from the provider that
+reported them. The execution snapshot is the only pairing rule: the profile and the
+provider session are both derived from the same conversation selection, so a Harness
+`dsh1:...` id cannot reach Codex and trigger `-32600 invalid session id` on
+`thread/resume`. No cross-provider fallback is applied, so a provider error is still
+reported instead of being silently rewritten.
+
+## Verification (third round)
 
 Results are recorded separately; anything not run is not claimed as passed.
 
 | Check | Result |
 | --- | --- |
-| `node scripts/checkModuleBoundaries.mjs` | passed — 36 removed paths guarded, new conversation boundaries and the listed legacy exceptions accepted |
+| `node scripts/checkModuleBoundaries.mjs` | passed — root whitelist, `shared` purity, platform/feature environment direction, `declaredTypeEdges` (6), `crossFeatureHostCouplings` (4), `contracts.ts` ban, browser bundle inputs, and every removed path |
 | `npm run lint` | passed |
 | `npm run typecheck` | passed |
-| `npx vitest run` | passed — 162 files / 1568 tests, 13 pre-existing skips |
-| `npm run build` | passed — `dist/webview/main.js`, `main.css` and the other existing assets keep their names |
-| `npm run check` (boundaries, lint, types, tests, build, declaration and API-reference checks, packaged assets) | passed |
+| `npx vitest run` | passed — 163 files / 1589 tests, with 2 pre-existing skipped files (4 skipped tests) |
+| `npm run build` | passed — `dist/webview/main.js`, `main.css`, `project.js` and the other assets keep their names |
+| `npm run check` | passed — boundaries, lint, types, tests, build, declaration and API-reference checks, packaged assets |
 | `npm run check:ui` | passed — composer, stream jump, conversation scroll, question visibility, editor tabs, Project reader and diagrams |
+| `npm run check:ui:conversations` | passed — tabs, delayed scroll, stream jump, question visibility, structured output and the interaction suite |
 | `node scripts/monaco-ref-lab/check.mjs` | passed |
-| `npm run check:ui:conversations` | passed — tabs, conversation scroll (delayed scroll and stop-following), stream jump, question visibility, structured output and the full interaction suite including expired-image fallback, secret fields and duplicate submission |
-| `npm run test:host` | passed — activation, editor tabs, generated types and the Monaco webview verification (including clipboard) completed |
+| `npm run test:host` | passed — activation, editor tabs, generated types and the Monaco webview verification |
 
 Real Provider smoke tests were **not** run in this round. They need a configured provider,
 a temporary workspace and manual interaction; no browser or provider result is claimed.
 
 ## What is not in this round
 
-- The browser split is complete for conversations. Tab identity/cache, drafts, the tab
-  strip, scroll, turn rows, the live Process trace, the Plan toolbar and patch review all
-  live under `features/conversations/browser/`; `src/webview/main.ts` only wires them to
-  the protocol and to out-of-scope UI (resources, MCP, model menus, editor).
-  `test/conversationBrowserState.test.ts` and the browser UI checks cover the extracted
-  state and DOM.
+- `sidebarProvider.ts` and `webview/main.ts` remain large entries. This round only moved
+  paths, contracts, environment boundaries and the remaining conversation DOM; the next
+  round can split resources/MCP/attachments out of the sidebar and history hydration out
+  of `main.ts` as behaviour work.
 - Agent executors, CLI transports, the workflow kernel, MCP, completion and resource
-  editing are untouched beyond the import changes needed for the removed entries.
-- The next round should start from this document and the first-round records in
-  `docs/project-development.md`; do not treat the tables there as current import
+  editing moved paths but kept their behaviour.
+- `core/types.ts` moved to `shared/contracts/types.ts` without splitting its contents.
+  The next round can split it per owner and shrink the shared contract surface.
+- The next round should start from this document and the records in
+  `docs/project-development.md`; do not treat the historical tables as current import
   instructions.
 
-### Shared legacy dependencies kept for this round
+### Shared dependencies kept for this round
 
-The boundary check lists them as `migrationExceptions`, each with one reason and one
-removal condition:
+`migrationExceptions` is empty: the previous round's remaining dependencies now have an
+owner.
 
-| From | To | Why it stays |
+| From | To | Why it is allowed |
 | --- | --- | --- |
-| `domain/planTodoProgress.ts` | `src/core/agentTodoTracking.ts` | todo event reducer is shared with the runtime |
-| `presentation/historyRender.ts` | `src/core/fileReference.ts`, `src/markdownCopy.ts` | input references and Markdown copy are shared tools |
-| `host/historyStore.ts` | `src/core/fileReference.ts` | input normalization at the persisted-data boundary |
-| `host/historyEditorProvider.ts` | `src/vscodeContextHost.ts` | file-reference opener |
-| `host/uiInteractionBroker.ts` | `src/core/uiForm.ts`, `src/core/executionErrors.ts` | form validation and the cancellation error |
-| `browser/transcriptView.ts` | `src/core/fileReference.ts`, `src/webview/fileReferenceChip.ts`, `src/webview/sourceHighlight.ts` | @reference display and composer highlighting are shared with the editor |
+| `features/conversations/domain/planTodoProgress.ts` | `features/agents/domain/agentTodoTracking.ts` | shared todo reducer; feature domain → feature domain is allowed |
+| `features/conversations/presentation/historyRender.ts` | `features/workspace/domain/fileReference.ts`, `shared/lib/markdownCopy.ts` | cross-feature domain and the shared kernel |
+| `features/conversations/host/historyStore.ts` | `features/workspace/domain/fileReference.ts` | cross-feature domain |
+| `features/conversations/host/historyEditorProvider.ts` | `platform/vscode/contextHost.ts` | host → VS Code adapter is allowed |
+| `features/conversations/host/uiInteractionBroker.ts` | `shared/contracts/uiForm.ts`, `shared/protocol/executionErrors.ts` | shared kernel |
+| `features/conversations/browser/transcriptView.ts` | `features/workspace/domain/fileReference.ts`, `platform/browser/fileReferenceChip.ts` | browser → shared browser primitive; `colorizeSource` is injected by `main.ts` |
+
+The two explicit cross-feature host couplings are registered in
+`crossFeatureHostCouplings` (`workflow/host/runtime` → `agents/host/*`, and
+`project/host/generation/projectAiGeneration` → `agents/host/cliAxAIService`). The next
+round injects those through `app` and removes the table entries.
 

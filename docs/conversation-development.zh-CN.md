@@ -4,16 +4,17 @@
 
 ## 基线
 
-- 第二轮从 `a26b4ab`（`fix(conversation): retain token usage in completed and historical turns`）开始，工作区干净。
-- 第一批迁移（Project、Resources、Workspace 搜索、Agent 配置、编辑器标签）已提交，并在 `src/` 留下 36 个只做转发的文件。本轮把这些入口和消费者一起更新后删除。
+- 第三轮从 `3d81b48`（`feat(conversations): collapse Process by default for new turns`）开始。
+- 第二轮已将会话状态、执行、计划与补丁审核迁入 `features/conversations/`，并删除第一轮遗留的 36 个转发入口。
+- 第三轮解散 `src/core/`，按所有者迁入 `features/{agents,workflow,mcp,workspace}`、`shared/` 与 `platform/`；VS Code 适配器进入 `platform/vscode/`，组合根进入 `src/app/`，剩余会话 DOM 进入 `features/conversations/browser/`。`src/` 根目录现在只有 `extension.ts`。
 
-## 已删除入口与目标路径
+## 已删除入口与目标路径（仅历史）
 
-下表中每个路径都在同一批次里删除并更新消费者。没有 alias、mock、构建插件或汇总文件恢复它们：`scripts/checkModuleBoundaries.mjs` 会对静态导入、仅类型导入、字面量动态加载、mock 说明符、内嵌构建入口字符串以及被恢复的文件直接报错。
+下表中每个路径都在同一批次里删除并更新消费者。该表只用于记录迁移，**不是当前导入指引**。没有 alias、mock、构建插件或汇总文件恢复它们：`scripts/checkModuleBoundaries.mjs` 会对静态导入、仅类型导入、字面量动态加载、mock 说明符、内嵌构建入口字符串、注释以及被恢复的文件直接报错。
 
 | 已删除路径 | 目标 |
 | --- | --- |
-| `src/agentProfiles.ts` | 契约在 `src/features/agents/contracts.ts`，存储与辅助函数在 `src/features/agents/host/agentProfiles.ts` |
+| `src/agentProfiles.ts` | 契约在 `src/features/agents/contracts/agent.ts`，存储与辅助函数在 `src/features/agents/host/agentProfiles.ts` |
 | `src/apiEditorProvider.ts` | `src/features/resources/host/apiEditorProvider.ts` |
 | `src/core/archifyAdapter.ts` | `src/features/project/host/diagrams/archifyAdapter.ts` |
 | `src/core/projectAiGeneration.ts` | `src/features/project/host/generation/projectAiGeneration.ts` |
@@ -74,35 +75,45 @@
 | 实时 Process 时间线、工具分组、延迟 Markdown 渲染队列 | `features/conversations/browser/agentTraceView.ts` | 内存；历史回放时隔离 |
 | Plan 工具栏与回合内的 Plan/打开操作 | `features/conversations/browser/planControls.ts` | 依据宿主状态重建 |
 | 差异布局偏好、补丁审核按钮与结果提示 | `features/conversations/browser/patchReviewView.ts` | DOM 与 `diffMode`；写入仍由宿主调用 |
-| Webview 生命周期、HTML 外壳、消息分发、资源/MCP/附件 | `sidebarProvider.ts` | VS Code 对象 |
+| Webview 生命周期、HTML 外壳、消息分发、资源/MCP/附件 | `app/sidebarProvider.ts` | VS Code 对象 |
 
-窄接口位于 `contracts/`：`TurnExecutionHost`、`TurnInteractionPort`、`ConversationSessionPort`、`TurnNotifier`、`TurnPatchPort`、`ConversationHistoryStore`、`ConversationPreferences`；计划文件读取与进度保存通过 `PlanFileHost` / `PlanSessionPort`，补丁写入能力由 `app/conversationSetup.ts` 注入 `applyPatch`。会话模块不导入 `DextApplication`、`DextSidebarProvider`、`webview/main.ts`，也不接收整个侧栏状态。`ConversationSummary` 与会话消息 schema 位于 `contracts/protocol.ts`，`src/webviewProtocol.ts` 只做组合。
+窄接口位于 `contracts/`：`TurnExecutionHost`、`TurnInteractionPort`、`ConversationSessionPort`、`TurnNotifier`、`TurnPatchPort`、`ConversationHistoryStore`、`ConversationPreferences`；计划文件读取与进度保存通过 `PlanFileHost` / `PlanSessionPort`，补丁写入能力由 `app/conversationSetup.ts` 注入 `applyPatch`。会话模块不导入 `DextApplication`、`DextSidebarProvider`、`webview/main.ts`，也不接收整个侧栏状态。`ConversationSummary` 与会话消息 schema 位于 `contracts/protocol.ts`，`src/platform/webviewProtocol.ts` 只做组合。
+
+### Provider 会话身份
+
+每次执行都会把当前会话自己的 Agent 控件（Profile、模型、推理、速度、服务档位、权限）快照进 `ExecutionMetadata`。应用级选择会跟随当前激活的标签，因此后台 Plan 轮次或快速切换标签时，不能用另一个会话的 Provider 执行。
+
+Provider 会话 id 按 Provider 分别保存，且只会由上报它的 Provider 写入。执行快照是唯一的配对依据：Profile 与 Provider 会话都来自同一个会话选择，因此 Harness 的 `dsh1:...` 不可能到达 Codex 并触发 `thread/resume` 的 `-32600 invalid session id`。实现不做跨 Provider 的静默回退，真正的 Provider 错误仍会如实上报。
 
 ### 本轮保留的真实共享依赖
 
-边界检查以 `migrationExceptions` 逐条登记，均带原因与移除条件：`domain/planTodoProgress.ts` → `src/core/agentTodoTracking.ts`；`presentation/historyRender.ts` → `src/core/fileReference.ts`、`src/markdownCopy.ts`；`host/historyStore.ts` → `src/core/fileReference.ts`；`host/historyEditorProvider.ts` → `src/vscodeContextHost.ts`；`host/uiInteractionBroker.ts` → `src/core/uiForm.ts`、`src/core/executionErrors.ts`；`contracts/protocol.ts` → `src/core/uiForm.ts`；会话控制器与执行协调器 → `src/core/harnessPresetDefault.ts`；`browser/transcriptView.ts` → `src/core/fileReference.ts`、`src/webview/fileReferenceChip.ts`、`src/webview/sourceHighlight.ts`（@ 引用展示与编辑器同源）。
+`migrationExceptions` 已为空：上一轮保留的依赖都已有了新所有者。`domain/planTodoProgress.ts` → `features/agents/domain/agentTodoTracking.ts`（feature domain 之间允许）；`presentation/historyRender.ts`、`host/historyStore.ts` → `features/workspace/domain/fileReference.ts` 与 `shared/lib/markdownCopy.ts`（跨 feature domain 与共享内核）；`host/historyEditorProvider.ts` → `platform/vscode/contextHost.ts`（host 使用 VS Code 适配器）；`host/uiInteractionBroker.ts` → `shared/contracts/uiForm.ts`、`shared/protocol/executionErrors.ts`；`browser/transcriptView.ts` → `features/workspace/domain/fileReference.ts`、`platform/browser/fileReferenceChip.ts`，`colorizeSource` 由 `main.ts` 注入。
 
-## 验证（本轮）
+两条跨 feature host 耦合登记在 `crossFeatureHostCouplings`：`workflow/host/runtime` → `agents/host/*`，以及 `project/host/generation/projectAiGeneration` → `agents/host/cliAxAIService`。下一轮通过 `app` 注入端口后删除登记。
+
+## 验证（第三轮）
 
 结果分别记录；未执行的项目不计为通过。
 
 | 检查 | 结果 |
 | --- | --- |
-| `node scripts/checkModuleBoundaries.mjs` | 通过：36 个已移除路径受到保护，新会话边界与已登记例外通过 |
+| `node scripts/checkModuleBoundaries.mjs` | 通过：根目录白名单、`shared` 纯度、`platform`/feature 环境方向、`declaredTypeEdges`（6 条）、`crossFeatureHostCouplings`（4 条）、`contracts.ts` 禁令、浏览器包输入以及全部已移除路径 |
 | `npm run lint` | 通过 |
 | `npm run typecheck` | 通过 |
-| `npx vitest run` | 通过：162 个文件 / 1568 个测试，13 个原有跳过 |
-| `npm run build` | 通过：`dist/webview/main.js`、`main.css` 等既有产物名不变 |
+| `npx vitest run` | 通过：163 个文件 / 1589 个测试，另有 2 个原有跳过文件（4 个跳过测试） |
+| `npm run build` | 通过：`dist/webview/main.js`、`main.css`、`project.js` 等既有产物名不变 |
 | `npm run check`（边界、lint、类型、测试、构建、声明与 API 参考检查、打包资源） | 通过 |
 | `npm run check:ui` | 通过：输入框、流式跳转、会话滚动、问题可见性、编辑器标签、Project 阅读器与图表 |
+| `npm run check:ui:conversations` | 通过：标签、延迟滚动、流式跳转、问题可见性、结构化输出与完整交互套件 |
 | `node scripts/monaco-ref-lab/check.mjs` | 通过 |
-| `npm run check:ui:conversations` | 通过：标签、会话滚动（含延迟滚动与停止跟随）、流式跳转、问题可见性、结构化输出，以及完整交互套件（过期图片回退、秘密字段、重复提交） |
-| `npm run test:host` | 通过：激活、编辑器标签、类型生成与 Monaco Webview 验证（含剪贴板）完成 |
+| `npm run test:host` | 通过：激活、编辑器标签、类型生成与 Monaco Webview 验证 |
 
 本轮**未**执行真实 Provider 冒烟（需要已配置的 Provider、临时工作区与人工交互）；不声称浏览器或 Provider 结果。
 
 ## 本轮不包含的内容
 
-- 会话浏览器拆分已完成：标签身份/缓存、草稿、标签条、滚动、回合行、实时 Process trace、Plan 工具栏与补丁审核均位于 `features/conversations/browser/`；`src/webview/main.ts` 只负责连接协议与范围外界面（资源、MCP、模型菜单、编辑器）。`test/conversationBrowserState.test.ts` 与浏览器 UI 检查覆盖已提取状态与 DOM。
-- Agent 执行器、CLI 传输、工作流内核、MCP、补全与资源编辑除清理所需的导入修改外未改动。
+- `sidebarProvider.ts` 与 `webview/main.ts` 仍是较大的入口。本轮只整理路径、契约、环境边界与剩余会话 DOM；资源/MCP/附件与历史补载的行为拆分留到下一轮。
+- Agent 执行器、CLI 传输、工作流内核、MCP、补全与资源编辑只更新了路径，行为未改。
+- `core/types.ts` 搬到 `shared/contracts/types.ts`，本轮未拆分内容；下一轮按所有者拆分并收缩共享契约。
+- 下一轮请从本文与 `docs/project-development.md` 的迁移记录开始；不要把历史表格当作当前导入指引。
 - 下一轮以本文与 `docs/project-development.zh-CN.md` 的历史记录为起点；那里的表格不是当前导入指引。

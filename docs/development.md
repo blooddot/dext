@@ -62,13 +62,24 @@ To update the VS Code Marketplace listing, use a version higher than the publish
 
 MCP initialization reads the client name and version from `package.json`. Protocol versions are maintained separately under `dext.mcpProtocolVersions.stdio` and `dext.mcpProtocolVersions.http`; the HTTP request header uses the same HTTP value. These values are bundled at build time. Change protocol versions only when the corresponding transport supports that revision, then rebuild; they are not end-user settings.
 
-- `src/core/contextResolver.ts`: immutable context snapshots.
-- `src/core/axAdapter.ts`: Ax/Zod/JSON Schema contract boundary.
-- `src/core/runtime.ts`: deterministic executor allowlist.
-- `src/core/dextApiTypes.ts`: the generated `dext` declaration and the `.dext/tsconfig.json` project, both derived from the registry.
-- `src/core/agentRunner.ts`: structured Codex/Claude CLI adapter boundary.
-- `src/core/workflowRecorder.ts`: History conversation to a TypeScript API skeleton.
+- `src/features/workflow/host/contextResolver.ts` and `src/shared/contracts/context.ts`: immutable context snapshots and their host port.
+- `src/features/agents/domain/axAdapter.ts`: Ax/Zod/JSON Schema contract boundary.
+- `src/features/workflow/host/runtime.ts`: deterministic executor allowlist.
+- `src/features/workflow/domain/dextApiTypes.ts`: the generated `dext` declaration and the `.dext/tsconfig.json` project, both derived from the registry.
+- `src/features/agents/host/agentRunner.ts`: structured Codex/Claude CLI adapter boundary.
+- `src/features/workflow/domain/workflowRecorder.ts`: History conversation to a TypeScript API skeleton.
+- `src/shared/` is the cross-feature kernel (`contracts/`, `protocol/`, `lib/`); `src/platform/` holds environment adapters (`vscode/`, `node/`, `browser/`, `editor-tabs/`, `webviewProtocol.ts`). `src/core/` no longer exists.
 - `src/webview/codeEditor.ts`: the Code editor (Monaco, the reference projections, and file drops).
+
+### Layer vocabulary
+
+- `src/app/` is the composition root (`application.ts`, `sidebarProvider.ts`, the two setup modules). It may import anything except the browser entry.
+- `src/features/<slice>/` owns product behaviour, split by environment: `contracts/`, `domain/`, `knowledge/` and `presentation/` are environment-free; `host/` is Node/VS Code; `browser/` is DOM. A feature collaborates with another only through `contracts`/`domain`, plus the explicitly registered host couplings in `crossFeatureHostCouplings`.
+- `src/platform/` holds environment adapters only: `vscode/`, `node/`, `browser/`, `editor-tabs/` and the wire-protocol composition `webviewProtocol.ts`. It is not the shared-code bucket.
+- `src/shared/` is the cross-feature kernel and only allows `contracts/`, `protocol/` and `lib/`. `core`, `common`, `base`, `modules` and `utils` are not roots in this repository: `core` is the dissolved directory, `common`/`base` would duplicate `shared` and `platform`, and `utils` invites an unstructured dump.
+- Every feature contract is a directory with topic files (`agents/contracts/agent.ts`, `workspace/contracts/fileSearch.ts`, `workflow/contracts/runtime.ts`, `mcp/contracts/mcp.ts`). `contracts.ts` and `contracts/index.ts` are rejected; consumers import the specific file.
+
+`src/runner/` is the Node workflow kernel and may only depend on `shared/`, Node builtins and its own modules. `src/app/application.ts` constructs the kernel host; the dependency is one-way, and the kernel never imports upward.
 
 ### The TypeScript kernel
 
@@ -112,10 +123,10 @@ Long-term project knowledge and single-run records are deliberately separate sto
 
 - `src/features/project/host/persistence/projectStore.ts` owns `.dext/project.json`, generated intent/diagram files, accepted `.dext/objects/<id>.json` objects, and `.dext/architecture.json`. It persists accepted objects. Concurrent writes are rejected by version (`conflict`), never merged.
 - `src/features/project/contracts/projectKnowledge.ts` keeps naming, stable ids, and the independent source/confirmation/validity/ownership dimensions. A legacy `status` field is migrated on read; an accepted object whose code changed stays accepted and additionally becomes `needs_verification`.
-- `src/sidebarProvider.ts` keeps the Webview lifecycle and the features outside the conversation round. Conversation state lives in `src/features/conversations/host/` (`conversationController.ts`, `turnExecutionCoordinator.ts`, `agentEventStream.ts`, `planController.ts`, `patchReviewController.ts`, `interactionController.ts`) and is assembled once by `src/app/conversationSetup.ts`. Plan completion retains its separate automatic verification round. See [conversation-development.md](conversation-development.md).
+- `src/app/sidebarProvider.ts` keeps the Webview lifecycle and the features outside the conversation round. Conversation state lives in `src/features/conversations/host/` (`conversationController.ts`, `turnExecutionCoordinator.ts`, `agentEventStream.ts`, `planController.ts`, `patchReviewController.ts`, `interactionController.ts`) and is assembled once by `src/app/conversationSetup.ts`. Plan completion retains its separate automatic verification round. See [conversation-development.md](conversation-development.md).
 - The project architecture scan is one model shared by TypeScript, Python, and Rust. Each parser reports unresolved and ambiguous structures as `unsupported` with a reason instead of guessing, and Rust metadata degrades with an explicit coverage note when `cargo metadata` is unavailable.
 - `src/platform/editor-tabs/editorTabManager.ts` owns panel creation, reuse, disposal, and message routing for every editor tab. `editorTabSerializer.ts` deduplicates restores so a serializer callback and a proactive restore cannot open the same page twice, and `src/features/project/host/projectEditorProvider.ts` reuses the same stable key.
-- Resources read from a file-only data source: `src/features/resources/host/resourceEditorProvider.ts` lists and opens resources without executing them, and `src/features/resources/presentation/resourceDocuments.ts` renders them. API lists also read source metadata through `src/core/apiSource.ts`, using the shared Tree-sitter loader in `src/core/syntaxParser.ts`. Resources and APIs share the signature, parameter, return type and source-preview renderer. Types come from annotations or simple parameter defaults; unresolved types are shown as `unknown`, without executing modules or running the TypeScript compiler. The APIs page separately combines callable contracts, Node/JavaScript references and file APIs. Resources does not read the runtime registry or sidebar resource cache; the registry remains responsible for execution dispatch and argument contracts.
+- Resources read from a file-only data source: `src/features/resources/host/resourceEditorProvider.ts` lists and opens resources without executing them, and `src/features/resources/presentation/resourceDocuments.ts` renders them. API lists also read source metadata through `src/features/workflow/host/apiSource.ts`, using the shared Tree-sitter loader in `src/platform/node/syntaxParser.ts`. Resources and APIs share the signature, parameter, return type and source-preview renderer. Types come from annotations or simple parameter defaults; unresolved types are shown as `unknown`, without executing modules or running the TypeScript compiler. The APIs page separately combines callable contracts, Node/JavaScript references and file APIs. Resources does not read the runtime registry or sidebar resource cache; the registry remains responsible for execution dispatch and argument contracts.
 
 Imports use the owning contract or implementation directly. The first-wave forwarding files
 in `src/` are gone, and `scripts/checkModuleBoundaries.mjs` fails when one is restored or

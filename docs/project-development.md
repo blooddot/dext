@@ -262,31 +262,23 @@ Behavior contracts: Project starts at `features/project/browser/entry.ts`, reads
 
 Editor restore version remains 1; keys retain `dext.editor:<kind>[@scope][#resource]`. View types remain `dext.project`, `dext.api`, `dext.globalResources` and `dext.history`. `app/projectSetup.ts` registers Project editors, serializers and the diagram registry with the extension's disposal owner. Closing a page cancels its tasks and releases its subscriptions. The AI bridge receives narrow execution methods and Profile/Selection callbacks. Agent storage keys and Project paths/schema versions are unchanged; initialization succeeds only after saving, and failures/cancellation preserve the last valid result.
 
-`checkModuleBoundaries.mjs`, included in `npm run check`, distinguishes type-only imports from runtime edges and checks transitive environment dependencies, runtime cycles and feature-to-app dependencies. Bundle metadata also rejects host code and Node/VS Code dependencies in browser output. Cross-feature collaboration through explicit contracts remains allowed. The complete runtime legacy exception list is:
+`checkModuleBoundaries.mjs`, included in `npm run check`, distinguishes type-only imports from runtime edges, checks transient environment dependencies, runtime cycles, feature-to-app dependencies, the `src/` root whitelist, `shared` purity, platform/feature environment direction, the `contracts/` directory rule and every removed path. Bundle metadata also rejects host code and Node/VS Code dependencies in browser output. Cross-feature collaboration through explicit contracts remains allowed.
 
-| Source | Dependency | Reason and exit condition |
-| --- | --- | --- |
-| `features/project/browser/projectReader.ts` | `webview/markdownDiagrams.ts` | Existing browser renderer; remove when shared rendering moves to platform |
-| `features/project/contracts/projectSettings.ts` | `core/planFile.ts` | Pure plan-path contract; remove when conversation plan contracts migrate |
-| `features/project/host/generation/projectAiGeneration.ts` | `core/cliAxAIService.ts` | Structured-output transport; remove when Agent transport contracts migrate |
-| `features/project/host/indexing/projectStructure.ts` | `core/syntaxParser.ts` | WASM loader; remove when shared parser infrastructure migrates |
-| `features/resources/host/resourceEditorProvider.ts` | `core/methodSignature.ts` | API signature presentation; remove when workflow API contracts migrate |
-
-Exceptions do not bypass environment or cycle checks. There are no directory-wide exemptions.
+`migrationExceptions` is empty. The remaining pure-layer type references to implementation modules are the six exact entries in `declaredTypeEdges`; the remaining cross-feature host couplings are the four exact entries in `crossFeatureHostCouplings`. Adding or removing an entry without updating the list fails the check, and none of them bypasses environment or cycle checks.
 
 Quality review treats sole runtime consumers as clues. Each reviewed concern returns `retained`, `reassigned` or `unresolved`, a reason and supplied evidence paths. Missing/duplicate decisions, foreign evidence and invalid ownership fail validation. Overview and Knowledge separate architecture defects, unresolved ownership and collapsed explained decisions; old data without review status remains unresolved. Static build-entry discovery supplies bounded startup/send/receive/host/transport windows, including injected APIs; it never executes build scripts. Dynamic entries and budget omissions are recorded. Isolated C4 elements permit one bounded relationship-only review grounded in read excerpts; failure, timeout or insufficient evidence preserves warnings, while cancellation propagates.
 
 History remains readable after source movement, split or merge. Matching names alone cannot preserve identity; uncertain or orphan analyses show stale-boundary notices. Fixture, browser, extension-host and actual-AI checks remain separate. Use `node scripts/checkProjectReaderUi.mjs --saved-project --workspace <temporary-copy>` to browse generated data without writing to the real workspace.
 
-The next round starts only after all first-round checks and temporary-workspace AI acceptance pass and the compatibility/exception inventories are current. Split conversation state/history first (identity, cancellation and late messages), then execution/plan review (concurrency, approvals and restoration), then browser components (focus, streaming and scrolling). Workflow kernels and Agent providers follow explicit execution/transport contracts; MCP and completion follow with separate connection, credential, cancellation and latency checks. These remain in existing implementations for now. Do not create empty feature modules or transfer remaining responsibilities into another large controller.
+A new round starts only after the complete checks pass and the compatibility/exception inventories are current. The conversation state/history, execution/plan review and browser components were split in round two; round three then dissolved `src/core/` and fixed the environment boundaries. The remaining behaviour work is listed under “Round three” below. Workflow kernels and Agent providers follow explicit execution/transport contracts; MCP and completion follow with separate connection, credential, cancellation and latency checks. Do not create empty feature modules or transfer remaining responsibilities into another large controller.
 
-### Round two: forwarding entries removed
+### Round three: shared kernel and environment boundaries
 
-The second round removed the 36 forwarding entries listed above together with every consumer update and then made the removal testable: `scripts/checkModuleBoundaries.mjs` now fails on a restored file, a static or type-only import, a literal dynamic load, a mock specifier or an inlined build entry string that names one of them. The tables above and below record the first-round migration and remain as history; current imports use the target paths directly, and `docs/conversation-development.md` records the conversation modules that were added on top.
+The third round dissolved `src/core/`. Shared contracts and pure tools moved to `src/shared/` (`contracts/`, `protocol/`, `lib/`), VS Code adapters to `src/platform/vscode/`, the composition roots to `src/app/`, and the remaining browser modules to their feature's `browser/` layer. `src/` now contains only `extension.ts`; `src/core`, `src/common`, `src/base`, `src/modules` and `src/utils` are forbidden by the boundary check.
 
-The conversation modules under `src/features/conversations/` and their single assembly point `src/app/conversationSetup.ts` replace the conversation, execution, plan and patch state that `src/sidebarProvider.ts` used to hold. The browser split described above as the next step is partial: the tab identity/cache, composer drafts, tab strip and output-scroll controller now live in `src/features/conversations/browser/`; the turn transcript, live Process/trace, Plan toolbar and patch review DOM still live in `src/webview/main.ts` and are the remaining browser work.
+The conversation browser split is complete: tab identity/cache, composer drafts, tab strip, output scroll, turn transcript, live Process/trace, Plan toolbar and patch review all live under `src/features/conversations/browser/`; `src/webview/main.ts` wires them to the protocol and the out-of-scope UI. The conversation modules under `src/features/conversations/` are assembled once by `src/app/conversationSetup.ts`.
 
-### Remaining compatibility consumers
+### Acceptance records
 
 Acceptance on 2026-10-20: `npm run check` passed (154 test files / 1504 tests passed; existing 3 files / 13 tests skipped), including boundaries, lint, types, build, declarations and five packaged WASM grammars. Default test concurrency is unchanged. `npm run check:ui`, editor-tab checks, saved-project reader checks and `npm run test:host` passed, covering themes, narrow layouts, fullscreen, playback, export, navigation messages, activation and Project/API/resource tab lifecycles.
 
@@ -294,7 +286,12 @@ A temporary post-migration source copy was analyzed through the real Codex Provi
 
 This records one real run, not a fixed module count or a guarantee of semantic completeness. Unread/truncated module evidence remains explicit, and sequential AI-call latency was not optimized. The plan file and the real workspace's evidence, intent and project settings retained their original hashes; generated acceptance data was written only to temporary copies.
 
-These explicit forwarders contain no implementation and can be removed when the listed consumers migrate. New feature implementations never import them.
+### Historical compatibility inventory (all entries removed)
+
+The tables below record the first- and second-round inventories. Every path in them has
+been deleted; they are kept only to explain the migration and are **not** current import
+instructions. Current imports use the target paths listed in the first migration table and
+in `docs/conversation-development.md`.
 
 | Compatibility entry | Remaining consumers |
 | --- | --- |

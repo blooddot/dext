@@ -230,19 +230,11 @@ Additional verification file: `scripts/checkProjectDiagramsUi.mjs` — use the n
 - `app/projectSetup.ts` 注册 Project 编辑器、序列化恢复和图表注册表，并把释放对象交给扩展上下文。页面关闭取消本页任务；数据源订阅随 Provider 释放。AI 桥接仅接收执行方法、Profile 与 Selection 回调，不接收整个应用实例。
 - Agent 存储键、Project Schema 版本和 `.dext` 文件路径不变。初始化以保存成功作为完成条件；取消和失败不覆盖最后一次有效结果。
 
-### 模块边界与临时例外
+### 模块边界与已收敛例外
 
-`node scripts/checkModuleBoundaries.mjs` 已加入 `npm run check`。检查区分类型导入和运行时导入，追踪浏览器与纯模块的传递依赖、运行时循环，以及功能到应用装配层的反向依赖。浏览器构建清单另外检查宿主实现和 Node/VS Code 依赖。跨功能接口调用允许保留，不提供目录级豁免。
+`node scripts/checkModuleBoundaries.mjs` 已加入 `npm run check`。检查区分类型导入和运行时导入，追踪浏览器与纯模块的传递依赖、运行时循环、根目录白名单、`shared` 纯度、`platform`/feature 环境方向、`contracts/` 目录规则、功能到应用装配层的反向依赖，以及全部已移除路径。浏览器构建清单另外检查宿主实现和 Node/VS Code 依赖。跨功能接口调用允许保留，不提供目录级豁免。
 
-以下为完整的运行时旧目录例外；即便命中例外，仍须满足环境隔离和无循环要求：
-
-| 来源 | 暂用依赖 | 原因及移除条件 |
-| --- | --- | --- |
-| `features/project/browser/projectReader.ts` | `webview/markdownDiagrams.ts` | 复用现有浏览器图表渲染器；共享 Webview 渲染迁入 platform 后移除 |
-| `features/project/contracts/projectSettings.ts` | `core/planFile.ts` | 复用纯计划路径契约；会话计划契约迁移后移除 |
-| `features/project/host/generation/projectAiGeneration.ts` | `core/cliAxAIService.ts` | 复用结构化输出传输；Agent 传输契约迁移后移除 |
-| `features/project/host/indexing/projectStructure.ts` | `core/syntaxParser.ts` | 复用 WASM 加载器；解析基础设施迁移后移除 |
-| `features/resources/host/resourceEditorProvider.ts` | `core/methodSignature.ts` | 复用 API 签名展示；工作流 API 契约迁移后移除 |
+`migrationExceptions` 已为空。纯层引用实现模块类型的 6 条现有边登记在 `declaredTypeEdges`；跨 feature 的 4 条 host 耦合登记在 `crossFeatureHostCouplings`。新增或过期条目都会失败，且都不能跳过环境隔离和无循环检查。
 
 ### 索引质量流程
 
@@ -265,23 +257,25 @@ Additional verification file: `scripts/checkProjectDiagramsUi.mjs` — use the n
 
 固定夹具测试、浏览器检查、扩展宿主检查与真实 AI 生成分别验收。可用 `node scripts/checkProjectReaderUi.mjs --saved-project --workspace <临时副本>` 浏览实际生成的数据；省略 `--workspace` 时只读当前工作区。任何生成验证不得回写当前仓库的 `.dext`。
 
-下一轮以本轮完整检查、浏览器、扩展宿主和临时副本 AI 验收通过为准入条件，并要求兼容入口消费者和例外清单保持准确。下一轮仍需逐条完整链路迁移：
+第三轮已完成 `src/core/` 的解散：共享契约与纯工具进入 `src/shared/`（`contracts/`、`protocol/`、`lib/`），VS Code 适配器进入 `src/platform/vscode/`，组合根进入 `src/app/`，剩余浏览器组件进入各自 feature 的 `browser/`。`src/` 根目录只剩 `extension.ts`；`src/core`、`src/common`、`src/base`、`src/modules`、`src/utils` 由边界检查禁止恢复。会话浏览器拆分已完成：标签身份/缓存、草稿、标签条、滚动、回合行、实时 Process/trace、Plan 工具栏与补丁审核均位于 `src/features/conversations/browser/`。
 
-1. 会话状态与历史恢复：先固定会话和回合身份、取消及晚到消息行为，再提取服务。
-2. 执行协调与计划审核：以现有并发、审批及恢复测试为门禁，避免集中搬入新的大控制器。
-3. 会话浏览器组件：分别提取输入、消息展示、选择器和导航，保留焦点、流式输出及滚动行为。
-4. 工作流内核和 Agent 提供方：先明确执行与传输契约，再迁移运行器及其生命周期。
-5. MCP 与补全：保持连接释放、凭据范围、取消和延迟约束，分别迁移并独立验收。
+下一轮以本轮完整检查为准入条件，并保持 `declaredTypeEdges`、`crossFeatureHostCouplings` 与已移除路径清单准确。优先级：
 
-这些职责本轮仍留在原实现中；不预建空模块，不将全部剩余内容搬入新的大文件。`application.ts`、`sidebarProvider.ts` 和 `webview/main.ts` 的后续拆分需要遵守上述准入条件。
+1. 将 `sidebarProvider.ts` 中的资源/MCP/附件以及 `webview/main.ts` 中的历史补载、滚动编排作为行为工作拆分。
+2. 按所有者拆分 `shared/contracts/types.ts`，缩小共享契约面。
+3. 通过 `app` 注入端口消除 4 条跨 feature host 耦合，使 `crossFeatureHostCouplings` 归零。
+4. 把 6 条 `declaredTypeEdges` 收敛为纯类型契约。
+5. 工作流内核、Agent 执行器、MCP 与补全的独立行为轮次仍按原计划推进。
 
-### 兼容入口消费者
+本轮不预建空模块，不将剩余内容搬入新的大文件。
+
+### 兼容入口消费者（仅历史，均已删除）
 
 第二轮已把上面列出的 36 个转发入口与全部消费者一起更新，然后删除；`scripts/checkModuleBoundaries.mjs` 会对恢复的文件、静态或仅类型导入、字面量动态加载、mock 说明符以及内嵌构建入口字符串报错。上表与下文表格是第一批迁移的历史记录；当前导入直接使用目标路径，本轮新增的会话模块记录在 `docs/conversation-development.zh-CN.md`。
 
-`src/features/conversations/` 下的会话模块及其唯一装配点 `src/app/conversationSetup.ts` 取代了 `src/sidebarProvider.ts` 原先持有的会话、执行、计划与补丁状态。上文所述浏览器拆分只完成一部分：标签身份/缓存、输入框草稿、标签条与输出滚动控制器已迁入 `src/features/conversations/browser/`；回合 transcript、实时 Process/trace、Plan 工具栏与补丁审核 DOM 仍在 `src/webview/main.ts`，是剩余的浏览器工作。
+`src/features/conversations/` 下的会话模块及其唯一装配点 `src/app/conversationSetup.ts` 取代了会话、执行、计划与补丁状态。会话浏览器拆分已完成：标签身份/缓存、输入框草稿、标签条、输出滚动、回合 transcript、实时 Process/trace、Plan 工具栏与补丁审核均位于 `src/features/conversations/browser/`；`src/webview/main.ts` 只负责连接协议与范围外界面。
 
-These explicit forwarders contain no implementation and can be removed when the listed consumers migrate. New feature implementations never import them. / 下列入口仅转发导出，最后一个消费者迁移后删除，新实现不依赖这些入口。
+以下表格中的每个路径都已删除，仅用于记录历史，**不是当前导入指引**。
 
 | Compatibility entry | Remaining consumers |
 | --- | --- |
