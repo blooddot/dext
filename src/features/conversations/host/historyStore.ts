@@ -2,8 +2,8 @@ import type { ResourceSession } from "../../resources/contracts/resourceSession.
 import { publicInteractionState } from "../presentation/uiInteractionPresentation.js";
 import { normalizeHistoryResponse } from "../domain/historyResponse.js";
 import type * as vscode from "vscode";
-import type { AgentStreamEvent, AgentTodoItem, InputExecutionResponse } from "../../../core/types.js";
-import { normalizeInputReferenceSource } from "../../../core/fileReference.js";
+import type { AgentStreamEvent, AgentTodoItem, InputExecutionResponse } from "../../../shared/contracts/types.js";
+import { normalizeInputReferenceSource } from "../../workspace/domain/fileReference.js";
 import {
   DEFAULT_HISTORY_LIMITS,
   type ConversationHistoryStore,

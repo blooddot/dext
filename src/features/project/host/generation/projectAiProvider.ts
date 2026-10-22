@@ -1,9 +1,9 @@
-import type { DextRuntime } from "../../../../core/runtime.js";
-import type { AgentStreamEvent } from "../../../../core/types.js";
-import type { AgentProfile, AgentSelection } from "../../../agents/contracts.js";
+import type { WorkflowRuntime } from "../../../workflow/contracts/runtime.js";
+import type { AgentStreamEvent } from "../../../../shared/contracts/types.js";
+import type { AgentProfile, AgentSelection } from "../../../agents/contracts/agent.js";
 import type { ProjectAiActivityEvent, ProjectAiProvider, ProjectAiRequest } from "./projectAiGeneration.js";
 export interface ProjectAiDependencies {
-  runtime: Pick<DextRuntime, "executeConversation" | "executeStructuredJson">;
+  runtime: WorkflowRuntime;
   listProfiles(): readonly AgentProfile[];
   profiles(): readonly AgentProfile[];
   selection(): AgentSelection;

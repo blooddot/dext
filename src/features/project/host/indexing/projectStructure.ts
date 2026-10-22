@@ -5,7 +5,7 @@ import { parse as parseToml } from "smol-toml";
 import type * as TreeSitter from "web-tree-sitter";
 import type { Node } from "web-tree-sitter";
 import { z } from "zod";
-import { parserFor } from "../../../../core/syntaxParser.js";
+import { parserFor } from "../../../../platform/node/syntaxParser.js";
 
 // Bump when extraction, grouping or resolution changes. Cached facts never contain source bodies.
 export const PROJECT_STRUCTURE_VERSION = 3;

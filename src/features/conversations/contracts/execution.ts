@@ -1,6 +1,6 @@
-import type { AgentProfile } from "../../agents/contracts.js";
+import type { AgentProfile } from "../../agents/contracts/agent.js";
 import type { ResourceDocument, ResourceSession } from "../../resources/contracts/resourceSession.js";
-import type { DextReplayEntry } from "../../../runner/dextResumeCache.js";
+import type { DextReplayEntry } from "../../../shared/contracts/replay.js";
 import type {
   AgentInputAnswers,
   AgentInputRequest,
@@ -10,7 +10,7 @@ import type {
   InputExecutionResponse,
   PlanExecutionOutcome,
   UiInteraction
-} from "../../../core/types.js";
+} from "../../../shared/contracts/types.js";
 import type { DextHistoryRecord, DextHistorySession } from "./history.js";
 
 /** A conversation turn mode. */

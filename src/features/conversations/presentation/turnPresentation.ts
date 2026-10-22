@@ -1,5 +1,5 @@
-import { formatDuration } from "../../../platform/duration.js";
-import type { AgentStreamEvent, AgentTokenUsage } from "../../../core/types.js";
+import { formatDuration } from "../../../shared/lib/duration.js";
+import type { AgentStreamEvent, AgentTokenUsage } from "../../../shared/contracts/types.js";
 
 /** Shared labels and icons for the live conversation and History toolbars. */
 export const TURN_EDIT_ACTION = { icon: "edit", label: "Edit input in Dext" } as const;

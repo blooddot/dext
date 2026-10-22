@@ -1,5 +1,5 @@
-import type { AgentInputAnswers, AgentInputRequest, AgentStreamEvent, UiInteraction } from "../../../core/types.js";
-import type { UiFormDefinition, UiFormResult } from "../../../core/uiForm.js";
+import type { AgentInputAnswers, AgentInputRequest, AgentStreamEvent, UiInteraction } from "../../../shared/contracts/types.js";
+import type { UiFormDefinition, UiFormResult } from "../../../shared/contracts/uiForm.js";
 import { AgentInputBroker } from "./agentInputBroker.js";
 import { InputNotifications, type InputNotificationTarget } from "./inputNotifications.js";
 import { UiInteractionBroker } from "./uiInteractionBroker.js";

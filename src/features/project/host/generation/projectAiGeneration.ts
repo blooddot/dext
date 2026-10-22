@@ -1,8 +1,8 @@
 import { AxGenerateError, ax, f } from "@ax-llm/ax";
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { CliAxAIService, type CliAxTransport } from "../../../../core/cliAxAIService.js";
-import type { AgentTokenUsage } from "../../../../core/types.js";
+import { CliAxAIService, type CliAxTransport } from "../../../agents/host/cliAxAIService.js";
+import type { AgentTokenUsage } from "../../../../shared/contracts/types.js";
 import type { ProjectEvidenceFile, ProjectEvidenceFileInput, ProjectEvidenceInput, ProjectEvidenceInventoryEntry, ProjectEvidenceLimits, ProjectEvidencePackage, ProjectEvidenceSummary } from "../../contracts/evidence.js";
 import { validateProjectDiagram, type ProjectDiagram, type ProjectDiagramEvidence, type ProjectDiagramKind } from "../../contracts/projectDiagram.js";
 import { projectC4Schema, projectIntentSchema, validateProjectIntent, type ProjectContext, type ProjectIntent, type ProjectQualityIssue, type ProjectIntentProvenance } from "../../contracts/projectIntent.js";
@@ -609,7 +609,7 @@ function projectEvidenceModuleIds(input: ProjectEvidencePackage): Set<string> {
     if (entry.kind !== "source") continue;
     const path = entry.path.replaceAll("\\", "/").replace(/\.[^/.]+$/, "");
     if (!path) continue;
-    // Preserve the scanner's historical path ids (for example src/core/agentRunner).
+    // Preserve the scanner's historical path ids (for example src/features/agents/host/agentRunner).
     ids.add(path);
     const parts = path.split("/").filter(Boolean);
     const name = parts.at(-1);

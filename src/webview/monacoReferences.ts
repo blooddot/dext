@@ -1,5 +1,5 @@
 import type * as Monaco from "monaco-editor";
-import { contextReferenceOccurrences, contextReferenceLabel, type ContextReferenceOccurrence } from "../core/fileReference.js";
+import { contextReferenceOccurrences, contextReferenceLabel, type ContextReferenceOccurrence } from "../features/workspace/domain/fileReference.js";
 
 export interface ProjectedReference {
   viewFrom: number;

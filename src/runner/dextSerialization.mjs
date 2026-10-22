@@ -3,7 +3,7 @@
  *
  * The kernel and the extension host are separate processes that talk JSON, so a
  * value that cannot survive that trip is refused at the boundary with a message
- * that says what to write instead. `src/core/resultSerialization.ts` implements
+ * that says what to write instead. `src/shared/protocol/resultSerialization.ts` implements
  * the same rule on the TypeScript side and is tested against the same shapes.
  */
 

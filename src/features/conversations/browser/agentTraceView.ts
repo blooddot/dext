@@ -1,4 +1,4 @@
-import type { AgentStreamEvent, AgentToolKind, PatchChange, WorkflowStepResponse } from "../../../core/types.js";
+import type { AgentStreamEvent, AgentToolKind, PatchChange, WorkflowStepResponse } from "../../../shared/contracts/types.js";
 import { agentMessageCopyText, presentAgentMessage } from "../presentation/agentMessagePresentation.js";
 import { renderTurnMessage } from "../presentation/turnComponents.js";
 import { turnDomAdapter } from "./turnDomAdapter.js";

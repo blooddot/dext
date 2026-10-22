@@ -2,11 +2,11 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type * as vscode from "vscode";
-import type { AgentModelOption, AgentProfile, AgentProvider, AgentSelection, StoredAgentProfile } from "../contracts.js";
-import { SUPPORTED_AGENT_PROFILE_IDS } from "../contracts.js";
+import type { AgentModelOption, AgentProfile, AgentProvider, AgentSelection, StoredAgentProfile } from "../contracts/agent.js";
+import { SUPPORTED_AGENT_PROFILE_IDS } from "../contracts/agent.js";
 import { parseToml, tomlString } from "./toml.js";
-export { AGENT_PERMISSIONS, SUPPORTED_AGENT_PROFILE_IDS } from "../contracts.js";
-export type { AgentModelOption, AgentPermission, AgentProfile, AgentProvider, AgentSelection, HarnessPresetOption, StoredAgentProfile, WritableAgentPermission } from "../contracts.js";
+export { AGENT_PERMISSIONS, SUPPORTED_AGENT_PROFILE_IDS } from "../contracts/agent.js";
+export type { AgentModelOption, AgentPermission, AgentProfile, AgentProvider, AgentSelection, HarnessPresetOption, StoredAgentProfile, WritableAgentPermission } from "../contracts/agent.js";
 
 const STORAGE_KEY = "dext.agentProfiles";
 const SELECTION_KEY = "dext.agentSelection";

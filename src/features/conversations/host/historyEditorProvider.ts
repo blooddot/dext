@@ -4,8 +4,8 @@ import type { ConversationHistoryStore } from "../contracts/history.js";
 import type { ConversationPreferences } from "../contracts/preferences.js";
 import { orderHistorySessions } from "../domain/conversationOrder.js";
 import { historyTokenStyles, historyTurnTitle, renderHistorySession, renderHistorySessionBody } from "../presentation/historyRender.js";
-import { openDextFileReference } from "../../../vscodeContextHost.js";
-import type { DextStorage } from "../../../dextStorage.js";
+import { openDextFileReference } from "../../../platform/vscode/contextHost.js";
+import type { DextStorage } from "../../../platform/vscode/dextStorage.js";
 
 export class DextHistoryPanel implements vscode.Disposable {
   static readonly viewType = "dext.history";

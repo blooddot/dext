@@ -1,4 +1,4 @@
-import type { InputExecutionResponse, RuntimeResponse } from "../../../core/types.js";
+import type { InputExecutionResponse, RuntimeResponse } from "../../../shared/contracts/types.js";
 import type { DextHistoryRecord } from "../contracts/history.js";
 
 /** Compatibility belongs at the persisted-data boundary, not in API contracts. */

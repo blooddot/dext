@@ -1,5 +1,5 @@
 import type * as vscode from "vscode";
-import type { AgentSelection } from "../../agents/contracts.js";
+import type { AgentSelection } from "../../agents/contracts/agent.js";
 import type {
   ConversationLayout,
   ConversationPreferences,

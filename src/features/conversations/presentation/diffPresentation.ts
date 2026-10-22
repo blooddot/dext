@@ -1,4 +1,4 @@
-import type { PatchChange } from "../../../core/types.js";
+import type { PatchChange } from "../../../shared/contracts/types.js";
 
 export interface DiffSide {
   line: number;

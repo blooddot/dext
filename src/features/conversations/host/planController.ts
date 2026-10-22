@@ -1,6 +1,6 @@
 import { PlanExecution, resumePlanTodos } from "../domain/planExecution.js";
 import { planTodoItems, planTodoInstruction, type PlanTodoProgress } from "../domain/planTodoProgress.js";
-import type { AgentTodoItem, PlanExecutionOutcome } from "../../../core/types.js";
+import type { AgentTodoItem, PlanExecutionOutcome } from "../../../shared/contracts/types.js";
 import type { DextHistorySession, PlanStatus } from "../contracts/history.js";
 
 /** The host capabilities plan work needs. Reading the actual file is a port so

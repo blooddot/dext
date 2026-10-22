@@ -1,6 +1,5 @@
-import type { ApiReferenceCatalog, ApiReferenceModule } from "../../../core/apiReference.js";
-import type { ApiSourceFunction } from "../../../core/apiSource.js";
-import type { RegisteredCallable } from "../../../core/types.js";
+import type { ApiReferenceCatalog, ApiReferenceModule, ApiSourceFunction } from "../../workflow/contracts/apiReference.js";
+import type { RegisteredCallable } from "../../../shared/contracts/types.js";
 import { type EditorTabManager } from "../../../platform/editor-tabs/editorTabManager.js";
 import type { EditorTabRestorer } from "../../../platform/editor-tabs/editorTabSerializer.js";
 import type { EditorTabState } from "../../../platform/editor-tabs/editorTabState.js";

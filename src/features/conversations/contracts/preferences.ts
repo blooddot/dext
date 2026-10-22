@@ -1,4 +1,4 @@
-import type { AgentSelection } from "../../agents/contracts.js";
+import type { AgentSelection } from "../../agents/contracts/agent.js";
 
 /** Conversation-scoped composer preferences. Stored per conversation id, never
  * in the shared sidebar state, so two tabs cannot overwrite each other. */

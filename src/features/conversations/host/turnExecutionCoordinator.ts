@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import type { AgentSelection } from "../../agents/contracts.js";
+import type { AgentSelection } from "../../agents/contracts/agent.js";
 import type {
   AgentInputAnswers,
   AgentInputRequest,
@@ -8,7 +8,7 @@ import type {
   McpProcessEvent,
   PlanExecutionOutcome,
   UiInteraction
-} from "../../../core/types.js";
+} from "../../../shared/contracts/types.js";
 import type { DextReplayEntry } from "../../../runner/dextResumeCache.js";
 import type {
   ConversationHistoryStore,
@@ -28,7 +28,7 @@ import type { InteractionController } from "./interactionController.js";
 import type { PatchReviewController } from "./patchReviewController.js";
 import type { PlanController, PlanRunContext } from "./planController.js";
 import { planTodoInstruction, stripPlanTodoProgress } from "../domain/planTodoProgress.js";
-import { harnessPresetOrDefault } from "../../../core/harnessPresetDefault.js";
+import { harnessPresetOrDefault } from "../../agents/domain/harnessPresetDefault.js";
 
 /** Turns copied into a fork are only UI history until they are sent to a new
  * provider task. Keep a readable, bounded transcript that can bootstrap that
@@ -186,6 +186,7 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
         ?? this.options.host.profiles()[0];
       const metadata = {
         agentSessionId: sessionId,
+
         agentPreset: harnessPresetOrDefault(selection.agentPreset),
         ...(mode === "code" ? { agentPermission: "full-access" as const } : {}),
         ...(priorConversation ? { conversationContext: priorConversation } : {}),

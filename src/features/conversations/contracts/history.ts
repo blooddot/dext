@@ -1,5 +1,5 @@
 import type { ResourceSession } from "../../resources/contracts/resourceSession.js";
-import type { AgentStreamEvent, AgentTodoItem, InputExecutionResponse, PlanExecutionOutcome } from "../../../core/types.js";
+import type { AgentStreamEvent, AgentTodoItem, InputExecutionResponse, PlanExecutionOutcome } from "../../../shared/contracts/types.js";
 
 /** Persisted conversation shape. This contract is safe to import from the
  * browser bundle: it has no VS Code, filesystem or timer dependency. */

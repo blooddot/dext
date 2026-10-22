@@ -1,5 +1,5 @@
 import { PLAN_DOCUMENT_END, PLAN_DOCUMENT_START, stripPlanDocument } from "./planResponse.js";
-import type { AgentStreamEvent } from "../../../core/types.js";
+import type { AgentStreamEvent } from "../../../shared/contracts/types.js";
 
 interface MessageStream {
   /** Raw provider text, including the document that must stay hidden. */

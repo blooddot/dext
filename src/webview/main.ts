@@ -7,13 +7,13 @@ AgentTokenUsage,
 InputExecutionResponse,
 RuntimeResponse,
 WorkflowStepResponse
-} from "../core/types.js";
-import type { UiFormAnswers } from "../core/uiForm.js";
+} from "../shared/contracts/types.js";
+import type { UiFormAnswers } from "../shared/contracts/uiForm.js";
 import { RESOURCE_DIRECTORIES, RESOURCE_ICONS, RESOURCE_LABELS, type ResourceKind, type ResourceScope, type ResourceSession } from "../features/resources/contracts/resourceSession.js";
 import { FileSearchClient } from "../features/workspace/browser/fileSearchClient.js";
 import { readHistoryResponse } from "../features/conversations/domain/historyResponse.js";
 import type { DextHistoryRecord, DextHistorySession } from "../features/conversations/contracts/history.js";
-import { markdownCodeCopy } from "../markdownCopy.js";
+import { markdownCodeCopy } from "../shared/lib/markdownCopy.js";
 import { renderTurnInput, renderTurnJson, renderTurnMarkdown, renderTurnResult } from "../features/conversations/presentation/turnComponents.js";
 import { turnDomAdapter } from "../features/conversations/browser/turnDomAdapter.js";
 import { TranscriptView, type OutputTurnElements } from "../features/conversations/browser/transcriptView.js";
@@ -21,10 +21,11 @@ import {
 presentTurn, formatTurnTokenUsage, updateTurnTokenUsage
 } from "../features/conversations/presentation/turnPresentation.js";
 import type { ConversationSummary } from "../features/conversations/contracts/protocol.js";
-import type { SidebarState, WebviewRequest, WebviewResponse } from "../webviewProtocol.js";
+import type { SidebarState, WebviewRequest, WebviewResponse } from "../platform/webviewProtocol.js";
 import { ClipboardClient } from "./clipboardClient.js";
 import { DextCodeEditor } from "./codeEditor.js";
-import { formatDuration } from "../platform/duration.js";
+import { colorizeSource } from "./sourceHighlight.js";
+import { formatDuration } from "../shared/lib/duration.js";
 import { bindFileDropTarget, droppedFilePaths, fileSelectionDropEffect, isFileDrag } from "./fileDrop.js";
 import { FileDropClient } from "./fileDropClient.js";
 import { ProjectReferenceClient } from "./projectReferenceClient.js";
@@ -37,17 +38,17 @@ import { renderConversationTabs } from "../features/conversations/browser/conver
 import { PatchReviewView } from "../features/conversations/browser/patchReviewView.js";
 import { planActions, renderPlanToolbar as renderPlanToolbarView } from "../features/conversations/browser/planControls.js";
 import { AgentTraceView } from "../features/conversations/browser/agentTraceView.js";
-import { CLI_SPEEDS } from "../core/builtinCli.js";
-import type { ContextReferenceOccurrence } from "../core/fileReference.js";
-import { DEFAULT_HARNESS_PRESET, harnessPresetOrDefault } from "../core/harnessPresetDefault.js";
-import type { HarnessPresetOption } from "../features/agents/contracts.js";
+import { CLI_SPEEDS } from "../features/agents/domain/builtinCli.js";
+import type { ContextReferenceOccurrence } from "../features/workspace/domain/fileReference.js";
+import { DEFAULT_HARNESS_PRESET, harnessPresetOrDefault } from "../features/agents/domain/harnessPresetDefault.js";
+import type { HarnessPresetOption } from "../features/agents/contracts/agent.js";
 import { presentAgentSelection } from "../features/agents/presentation/agentSelectionDefaults.js";
 import { outputExternalLink, outputLinkReference } from "../features/workspace/browser/outputLink.js";
-import { AgentInputView } from "./agentInputView.js";
-import { AgentTodoView } from "./agentTodoView.js";
-import { observeComposerOverflow } from "./composerOverflow.js";
-import { enableConversationTabDrag } from "./conversationTabDrag.js";
-import { installResultScrollProbe } from "./scrollProbe.js";
+import { AgentInputView } from "../features/conversations/browser/agentInputView.js";
+import { AgentTodoView } from "../features/conversations/browser/agentTodoView.js";
+import { observeComposerOverflow } from "../features/conversations/browser/composerOverflow.js";
+import { enableConversationTabDrag } from "../features/conversations/browser/conversationTabDrag.js";
+import { installResultScrollProbe } from "../features/conversations/browser/scrollProbe.js";
 
 interface VsCodeApi {
   postMessage(message: WebviewRequest): void;
@@ -283,7 +284,8 @@ const transcript = new TranscriptView({
   createTodos: () => new AgentTodoView(),
   createQuestions: (turnId, sessionId) => createTurnQuestions(turnId, sessionId),
   openReference: (reference) => openInputReference(reference),
-  syncResultToggle: () => syncResultToggle()
+  syncResultToggle: () => syncResultToggle(),
+  colorizeSource: (pre) => colorizeSource(pre)
 });
 
 const patches = new PatchReviewView({

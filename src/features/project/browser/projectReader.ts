@@ -1,4 +1,4 @@
-import { renderMermaidSvg } from "../../../webview/markdownDiagrams.js";
+import { renderMermaidSvg } from "../../../platform/browser/markdownDiagrams.js";
 import type { ProjectDiagram } from "../contracts/projectDiagram.js";
 import type { ProjectTopic } from "../knowledge/projectTopics.js";
 import { projectDiagramRenderer, projectPlaybackSteps } from "../presentation/projectDiagramPresentation.js";

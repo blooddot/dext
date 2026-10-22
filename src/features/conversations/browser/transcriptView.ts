@@ -5,11 +5,10 @@ import {
   inputReferenceDisplayText,
   normalizeInputReferenceSource,
   type ContextReferenceOccurrence
-} from "../../../core/fileReference.js";
-import { colorizeSource } from "../../../webview/sourceHighlight.js";
-import { createFileReferenceChip, fileReferenceChipDescriptor } from "../../../webview/fileReferenceChip.js";
-import type { AgentInputView } from "../../../webview/agentInputView.js";
-import type { AgentTodoView } from "../../../webview/agentTodoView.js";
+} from "../../workspace/domain/fileReference.js";
+import { createFileReferenceChip, fileReferenceChipDescriptor } from "../../../platform/browser/fileReferenceChip.js";
+import type { AgentInputView } from "./agentInputView.js";
+import type { AgentTodoView } from "./agentTodoView.js";
 import {
   TURN_COPY_ACTION,
   TURN_DELETE_ACTION,
@@ -72,6 +71,9 @@ export interface TranscriptHost {
   createQuestions(turnId: string, sessionId: string | undefined): AgentInputView;
   openReference(reference: ContextReferenceOccurrence): void;
   syncResultToggle(): void;
+  /** Optional composer grammar highlighter, injected by the browser entry so this
+   * module never imports the webview implementation. */
+  colorizeSource?(pre: HTMLElement): void;
 }
 
 /**
@@ -269,7 +271,7 @@ export class TranscriptView {
     for (const part of inputReferenceDisplayParts(source)) {
       pre.append(part.kind === "ref" ? this.inputReferenceChipElement(part.reference) : document.createTextNode(part.value));
     }
-    if (mode === "code") colorizeSource(pre);
+    if (mode === "code") this.host.colorizeSource?.(pre);
     return pre;
   }
 

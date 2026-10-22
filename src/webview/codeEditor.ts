@@ -8,9 +8,9 @@ import type { ProjectReferenceClient } from "./projectReferenceClient.js";
 import { codeReferencePasteText } from "./codeReferencePaste.js";
 import { bindFileDropTarget, droppedFilePaths, fileSelectionDropEffect, isFileDrag } from "./fileDrop.js";
 import { fileReferenceRemovalEdit } from "./fileReferenceDecorations.js";
-import { inputReferenceProjections, normalizeInputReferenceSource, type ContextReferenceOccurrence } from "../core/fileReference.js";
+import { inputReferenceProjections, normalizeInputReferenceSource, type ContextReferenceOccurrence } from "../features/workspace/domain/fileReference.js";
 import { fileReferenceInsertion } from "./inputInsertion.js";
-import type { EditorTokenTheme } from "../vscodeTheme.js";
+import type { EditorTokenTheme } from "../shared/contracts/theme.js";
 
 export interface CodeEditorOptions {
   parent: HTMLElement;

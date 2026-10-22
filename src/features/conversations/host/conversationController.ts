@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import type { AgentSelection } from "../../agents/contracts.js";
+import type { AgentSelection } from "../../agents/contracts/agent.js";
 import type { ResourceSession } from "../../resources/contracts/resourceSession.js";
 import type { ConversationHistoryStore, DextHistorySession } from "../contracts/history.js";
 import type { ConversationLayout, ConversationPreferences } from "../contracts/preferences.js";
@@ -9,8 +9,8 @@ import type {
 } from "../contracts/protocol.js";
 import { orderedConversationIds } from "../domain/conversationOrder.js";
 import { conversationTitle, historyTurnTitle } from "../presentation/historyRender.js";
-import { harnessPresetOrDefault } from "../../../core/harnessPresetDefault.js";
-import type { AgentTodoItem } from "../../../core/types.js";
+import { harnessPresetOrDefault } from "../../agents/domain/harnessPresetDefault.js";
+import type { AgentTodoItem } from "../../../shared/contracts/types.js";
 
 /** Everything the controller publishes. The sidebar implements it with the
  * Webview's IPC channel; the controller never touches `vscode` itself. */

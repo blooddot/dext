@@ -1,0 +1,1263 @@
+import { applyEdits, modify } from "jsonc-parser/lib/esm/main.js";
+import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
+import { isAbsolute, relative as relativePath, sep } from "node:path";
+import * as vscode from "vscode";
+import type { AgentAssertionSnapshot } from "../features/agents/host/agentAssertions.js";
+import { DefaultAgentRunner } from "../features/agents/host/agentRouter.js";
+import { runSingleTurnCli } from "../features/agents/host/agentRunner.js";
+import { DEFAULT_AGENT_IDLE_TIMEOUT_MS, DEFAULT_AGENT_TIMEOUT_MS, MAX_AGENT_TIMEOUT_MS } from "../features/agents/domain/agentTimeout.js";
+import { REPAIR_OUTPUT_FIELD } from "../features/agents/domain/axAdapter.js";
+import { BUILTIN_METHODS } from "../features/workflow/domain/builtins.js";
+import { ContextResolver } from "../features/workflow/host/contextResolver.js";
+import { DEXT_API_DIRECTORY, DEXT_DECLARATION_DIRECTORY, DEXT_DECLARATION_FILE, DEXT_TYPES_PATH, dextFiles, dextModuleDeclaration, dextSharedDeclaration, dextTsconfig } from "../features/workflow/domain/dextApiTypes.js";
+import { inputReferenceDisplayParts } from "../features/workspace/domain/fileReference.js";
+import { clearHarnessPresetCache, listHarnessPresets } from "../features/agents/host/harnessPresets.js";
+import { isIgnored, parseIgnoreRules, type IgnoreRule } from "../features/workspace/domain/ignoreRules.js";
+import { MethodRegistry } from "../features/workflow/domain/registry.js";
+import { agentResultCandidates, parseAgentResult } from "../shared/protocol/resultBoundary.js";
+import { createResultRepair } from "../features/agents/host/resultRepair.js";
+import { DextRuntime } from "../features/workflow/host/runtime.js";
+import { SkillCatalog } from "../features/workflow/host/skillCatalog.js";
+import type { CallableDefinition, CodeRef, ExecutionMetadata, InputExecutionResponse } from "../shared/contracts/types.js";
+import { AGENT_PERMISSIONS, SUPPORTED_AGENT_PROFILE_IDS, type AgentProfile, type AgentProvider, type AgentSelection, type WritableAgentPermission } from "../features/agents/contracts/agent.js";
+import { AgentProfileStore } from "../features/agents/host/agentProfiles.js";
+import { createProjectAiProvider } from "../features/project/host/generation/projectAiProvider.js";
+import { DEFAULT_DISPATCH_CONCURRENCY, DextKernelHost } from "../runner/dextHost.js";
+import type { DextReplayEntry } from "../runner/dextResumeCache.js";
+import { VsCodeContextHost } from "../platform/vscode/contextHost.js";
+import { applyPatchHandler } from "../platform/vscode/patchHost.js";
+import { terminalRunHandler } from "../platform/vscode/terminalHost.js";
+import { loadEditorTokenTheme } from "../platform/vscode/theme.js";
+import type { SidebarState } from "../platform/webviewProtocol.js";
+
+import { parseMcpManifest } from "../features/mcp/domain/mcpManifest.js";
+import { McpToolRegistry, authDiagnostic, mcpCredentialKind, redactedMcpUrl } from "../features/mcp/host/mcpRegistry.js";
+import type { McpCredentialKind, McpDiscoveredTool, McpServerConfig, McpToolConfig } from "../features/mcp/contracts/mcp.js";
+import { McpAccessTokenStore } from "../features/mcp/host/mcpSecrets.js";
+import { DEFAULT_PLAN_DIRECTORY, planFileName, planPathSegments } from "../features/conversations/domain/planFile.js";
+import { splitPlanResponse } from "../features/conversations/domain/planResponse.js";
+import { DextStorage } from "../platform/vscode/dextStorage.js";
+import type { ProjectWorkspaceSettings } from "../features/project/contracts/projectSettings.js";
+import type { ProjectAiProvider } from "../features/project/host/generation/projectAiGeneration.js";
+import { RESOURCE_DIRECTORIES, mergeResourceFiles, resourceFileName, resourceFiles, resourcePathSegments, resourcePrompt, type ResourceDocument, type ResourceKind, type ResourceScope, type ResourceSession, type ResourceTarget } from "../features/resources/contracts/resourceSession.js";
+
+/** How many API modules the composer's TypeScript worker is given, and how many
+ * bytes of source, so a large workspace cannot flood the Webview channel. */
+const COMPOSER_MODULE_LIMIT = 200;
+const COMPOSER_MODULE_BYTES = 2 * 1024 * 1024;
+
+/** Registry diagnostics name the server they rejected. Keeping the reason lets
+ * a later "unknown API" explain the real cause instead of only "not connected". */
+function mcpRejectionReasons(diagnostics: readonly string[]): Map<string, string> {
+  const reasons = new Map<string, string>();
+  for (const message of diagnostics) {
+    const match = /^MCP server '([^']+)' (.+)$/.exec(message);
+    const name = match?.[1];
+    const reason = match?.[2];
+    if (name && reason) reasons.set(name, reason);
+  }
+  return reasons;
+}
+
+export class DextApplication {
+  onApiReload: (() => void) | undefined;
+  readonly registry = new MethodRegistry();
+  private readonly contextResolver = new ContextResolver(new VsCodeContextHost());
+  readonly runtime = new DextRuntime(
+    this.registry,
+    this.contextResolver,
+    undefined,
+    { terminalRun: terminalRunHandler, applyPatch: applyPatchHandler }
+  );
+  /** The TypeScript kernel, created on first use so a workspace without Code
+   * runs never pays for a child process. */
+  private kernel: DextKernelHost | undefined;
+  private dispatchConcurrency = DEFAULT_DISPATCH_CONCURRENCY;
+  private configDiagnostics: string[] = [];
+
+  /**
+   * The workspace's generated declaration when it has one, otherwise the built-in
+   * copy in Dext's own storage.
+   *
+   * A workspace that imports `dext` commits `.dext/api/dext.d.ts` — generated, and
+   * the file its `tsconfig.json` maps `dext` at — so that is the declaration to open.
+   * The storage copy is the fallback for a workspace that has no generated project
+   * yet, and it is a pure function of the built-in registry, so one copy per
+   * installation is enough.
+   *
+   * Neither path is in `dist/`: that is a build output, and a mapping into it would
+   * turn a missing or rebuilt artifact into a TypeScript error inside the user's own
+   * source file (`File '…/dist/dext.d.ts' is not a module`).
+   */
+  dextTypesPath(): string {
+    const workspace = this.workspaceDeclarationPath();
+    if (workspace && existsSync(workspace)) return workspace;
+    return vscode.Uri.joinPath(this.storage.globalStorageUri, DEXT_DECLARATION_DIRECTORY, DEXT_DECLARATION_FILE).fsPath;
+  }
+
+  /** The declaration the editor's project files should describe right now: the
+   * built-in surface plus the MCP tools this workspace's own manifests declare. */
+  dextDeclaration(): string {
+    return this.declarationText;
+  }
+
+  /**
+   * What the composer's TypeScript worker needs to describe the workspace's own APIs.
+   *
+   * Monaco has no filesystem, so it cannot read `.dext/api`: the sources travel with
+   * the declaration and are registered as virtual files, and `apiPaths` is the same
+   * `dext/api/*` mapping the generated `.dext/tsconfig.json` gives VS Code — so a
+   * specifier completes and type-checks the same way in both places. Without this the
+   * composer resolved the built-in `dext` module and nothing else, and a correct
+   * `import { main } from "dext/api/git/commit"` was a `Cannot find module` there.
+   *
+   * A workspace larger than the budget keeps the modules that fit, newest path first,
+   * rather than sending nothing: completion for the rest still comes from the
+   * generated project in VS Code.
+   */
+  async composerTypes(): Promise<{ declaration: string; apiPaths: string[]; modules: { path: string; specifier: string; content: string }[] }> {
+    const apiPaths = (JSON.parse(dextTsconfig(undefined, this.projectApiDirs())) as {
+      compilerOptions: { paths: Record<string, string[]> };
+    }).compilerOptions.paths["dext/api/*"] ?? [];
+    const modules: { path: string; specifier: string; content: string }[] = [];
+    const folder = vscode.workspace.workspaceFolders?.find((workspace) => workspace.uri.scheme === "file");
+    if (folder) {
+      let bytes = 0;
+      for (const directory of this.projectApiDirs()) {
+        if (modules.length >= COMPOSER_MODULE_LIMIT || bytes >= COMPOSER_MODULE_BYTES) break;
+        const found = await vscode.workspace.findFiles(
+          new vscode.RelativePattern(folder, `${directory}/**/*.{ts,mts}`),
+          "**/node_modules/**",
+          COMPOSER_MODULE_LIMIT
+        );
+        for (const uri of found.sort((left, right) => left.fsPath.localeCompare(right.fsPath))) {
+          if (modules.length >= COMPOSER_MODULE_LIMIT) break;
+          const relative = relativePath(folder.uri.fsPath, uri.fsPath).replaceAll("\\", "/");
+          if (!relative) continue;
+          const virtual = relative.startsWith(".dext/") ? relative.slice(".dext/".length) : `../${relative}`;
+          // The generated declaration is already registered as the ambient lib.
+          if (virtual === DEXT_TYPES_PATH) continue;
+          // The alias is `dext/api/<id>` whatever directory the module lives in, so the
+          // id is the path below the API directory the file was found in.
+          const id = relativePath(directory, relative).replaceAll("\\", "/").replace(/\.(ts|mts)$/, "");
+          let content: string;
+          try {
+            content = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
+          } catch {
+            continue;
+          }
+          bytes += content.length;
+          modules.push({ path: virtual, specifier: `dext/api/${id}`, content });
+        }
+      }
+    }
+    return { declaration: this.declarationText, apiPaths, modules };
+  }
+
+  /**
+   * Directories the `dext/api/<id>` alias resolves against, most specific first.
+   * `.dext/api` always comes first, so a configured directory cannot shadow a
+   * project API; the project's own `paths.apiDirs` adds roots
+   * after it, then global storage.
+   */
+  apiRoots(): string[] {
+    const roots: string[] = [];
+    const add = (root: string): void => { if (root && !roots.includes(root)) roots.push(root); };
+    add(vscode.Uri.joinPath(vscode.Uri.file(this.workspaceRoot), ".dext", "api").fsPath);
+    const folder = vscode.workspace.workspaceFolders?.find((workspace) => workspace.uri.scheme === "file");
+    const projectDirs = this.projectWorkspaceSettings?.apiDirs;
+    if (projectDirs) {
+      for (const entry of projectDirs) add(vscode.Uri.joinPath(folder?.uri ?? vscode.Uri.file(this.workspaceRoot), ...entry.split("/")).fsPath);
+    }
+    add(vscode.Uri.joinPath(this.storage.globalStorageUri, "api").fsPath);
+    return roots;
+  }
+  private workspaceRoot = process.cwd();
+  private workspaceUri: vscode.Uri | undefined;
+  /** The root the cached kernel host was built for, so a folder switch replaces it. */
+  private kernelRoot: string | undefined;
+  private workspaceTrusted = false;
+  private projectWorkspaceSettings: ProjectWorkspaceSettings | undefined;
+  private resourceWrite: Promise<void> = Promise.resolve();
+  private globalDiagnostics: string[] = [];
+  /** Why a configured server was dropped, by server name; a rejected server is
+   * absent from the registry, so this is the only place that reason survives. */
+  private mcpServerRejections = new Map<string, string>();
+  /** The declaration the current workspace's generated project describes: the
+   * built-in surface plus the MCP tools its own manifests declare. Rebuilt on every
+   * reload from the same registry the kernel executes. */
+  private declarationText: string = dextModuleDeclaration();
+  readonly skills = new SkillCatalog();
+  readonly mcp = new McpToolRegistry();
+  readonly agents: AgentProfileStore;
+  private readonly agentRunner: DefaultAgentRunner;
+  /** The normalized `dext.agent.*` limits. Kept in fields because the one-shot
+   * result repair budgets itself from the same settings as any other turn
+   * rather than from a private constant. */
+  private agentTimeoutMs = DEFAULT_AGENT_TIMEOUT_MS;
+  private agentIdleTimeoutMs = DEFAULT_AGENT_IDLE_TIMEOUT_MS;
+  private readonly mcpSecrets: McpAccessTokenStore | undefined;
+  readonly storage: DextStorage;
+  projectAiProvider(): ProjectAiProvider {
+    return createProjectAiProvider({ runtime: this.runtime, listProfiles: () => this.agents.list(), profiles: () => this.agentProfiles(), selection: () => this.agents.currentSelection() });
+  }
+
+
+  /** Applies the project-owned paths before the next resource reload or turn. */
+  setProjectWorkspaceSettings(settings: ProjectWorkspaceSettings): void {
+    this.projectWorkspaceSettings = settings;
+  }
+
+  constructor(globalState?: vscode.Memento, secretStorage?: vscode.SecretStorage, globalStorageUri?: vscode.Uri) {
+    // Extension activation always supplies VS Code's Dext-specific global
+    // storage root. The plain file URI keeps lightweight hostless tests from
+    // needing to implement Uri.joinPath just to construct the application.
+    this.storage = new DextStorage(globalStorageUri ?? vscode.Uri.file(process.cwd()));
+    this.agentRunner = new DefaultAgentRunner();
+    // Load once during extension startup. Later launches reuse this snapshot;
+    // Configure Agent and a fresh Harness selection explicitly refresh it.
+    void this.agentRunner.harness.preloadSettings();
+    this.runtime.setAgentRunner(this.agentRunner);
+    this.agents = new AgentProfileStore(globalState);
+    this.agentRunner.harness.onModels = (profile, options) => {
+      const saved = this.agents.list().find((item) => item.id === profile.id);
+      const modelOptions = [...(saved?.modelOptions ?? []).filter((item) => !options.some((next) => next.id === item.id)), ...options];
+      this.updateAgentProfile({ ...profile, ...(saved?.presets ? { presets: saved.presets } : {}), models: modelOptions.map((item) => item.id), modelOptions });
+    };
+    if (secretStorage) {
+      const mcpSecrets = new McpAccessTokenStore(secretStorage, () => this.workspaceUri?.toString());
+      this.mcpSecrets = mcpSecrets;
+      this.mcp.setAccessTokenProvider(async (server) => mcpSecrets.get(
+        server.name,
+        server.scope === "global" ? "global" : "workspace",
+        mcpCredentialKind(server)
+      ));
+    }
+    this.registry.registerMany(BUILTIN_METHODS, "builtin");
+    this.refreshAgentProfiles();
+    this.runtime.setAgentSelection(this.agents.currentSelection());
+    this.runtime.setSkillLoader((skill, workspace) => this.skills.load(skill, this.workspaceRoot, workspace.path));
+    this.runtime.setRuleLoader(async (path) => {
+      try {
+        const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(path));
+        return new TextDecoder().decode(bytes);
+      } catch (error) {
+        if (error instanceof vscode.FileSystemError && error.code === "FileNotFound") {
+          const projectRulesRoot = vscode.Uri.joinPath(vscode.Uri.file(this.workspaceRoot), ".dext", "rules").fsPath;
+          const relativePath = path.startsWith(`${projectRulesRoot}${sep}`)
+            ? path.slice(projectRulesRoot.length + 1)
+            : undefined;
+          if (relativePath) {
+            try {
+              const globalFile = vscode.Uri.joinPath(this.storage.globalStorageUri, "rules", ...relativePath.split(/[\\\\/]/));
+              const bytes = await vscode.workspace.fs.readFile(globalFile);
+              return new TextDecoder().decode(bytes);
+            } catch (globalError) {
+              if (globalError instanceof vscode.FileSystemError && globalError.code === "FileNotFound") return undefined;
+              throw globalError;
+            }
+          }
+          return undefined;
+        }
+        throw error;
+      }
+    });
+    this.runtime.setMcpCaller((tool, input, onProcessEvent) => this.mcp.call(tool, input, {
+      ...(onProcessEvent ? { onProcessEvent } : {})
+    }));
+    // Single result boundary: tolerant parse plus one bounded read-only repair
+    // attempt. The transport is chosen here per profile; the core predictor
+    // itself stays hostless.
+    this.runtime.setResultRepair({
+      parse: parseAgentResult,
+      repair: async (request) => {
+        if (request.profile.provider !== "codex" && request.profile.provider !== "claude") {
+          return { diagnostics: `Result repair is not available for '${request.profile.label}'.` };
+        }
+        const snapshot = await this.resultRepairSnapshot();
+        return createResultRepair({
+          contract: request.contract,
+          outputField: REPAIR_OUTPUT_FIELD,
+          transport: (prompt, signal) => runSingleTurnCli({
+            profile: request.profile,
+            cwd: request.cwd,
+            prompt,
+            // A repair is budgeted exactly like the turn it is repairing: the
+            // limits the user configured, not a hardcoded cap. With the default
+            // unlimited total limit it is bounded by the idle limit and by the
+            // outer turn's cancellation signal instead.
+            timeoutMs: this.agentTimeoutMs,
+            idleTimeoutMs: this.agentIdleTimeoutMs,
+            ...(signal ? { signal } : {})
+          })
+        }).repair({ ...request, snapshot });
+      }
+    });
+  }
+
+  /** Workspace facts for the preview-result assertions. Read at repair time so
+   * the conflict checks see the current disk state. */
+  private async resultRepairSnapshot(): Promise<AgentAssertionSnapshot> {
+    const root = this.workspaceUri ?? vscode.Uri.file(this.workspaceRoot);
+    const rules: IgnoreRule[] = [];
+    for (const name of [".gitignore", ".dextignore"]) {
+      try {
+        const bytes = await vscode.workspace.fs.readFile(vscode.Uri.joinPath(root, name));
+        rules.push(...parseIgnoreRules(new TextDecoder().decode(bytes)));
+      } catch {
+        // A missing ignore file is the normal case.
+      }
+    }
+    return {
+      // Result repair is always read-only, so the hard workspace checks run.
+      apply: false,
+      resolve: (uri) => {
+        try {
+          const parsed = vscode.Uri.parse(uri, true);
+          if (parsed.scheme !== "file" || !vscode.workspace.getWorkspaceFolder(parsed)) return undefined;
+          const relativePath = vscode.workspace.asRelativePath(parsed, false).replaceAll("\\", "/");
+          return relativePath.startsWith("../") || isAbsolute(relativePath) ? undefined : relativePath;
+        } catch {
+          return undefined;
+        }
+      },
+      read: async (relativePath) => {
+        try {
+          const bytes = await vscode.workspace.fs.readFile(vscode.Uri.joinPath(root, ...relativePath.split("/")));
+          return new TextDecoder().decode(bytes);
+        } catch {
+          return undefined;
+        }
+      },
+      isIgnored: (relativePath) => isIgnored(rules, relativePath)
+    };
+  }
+
+  async reload(): Promise<void> {
+    this.registry.clearExternal();
+    const diagnostics: string[] = [];
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    this.workspaceUri = folder?.uri;
+    this.workspaceRoot = folder?.uri.fsPath ?? process.cwd();
+    this.workspaceTrusted = vscode.workspace.isTrusted && folder?.uri.scheme === "file";
+    this.runtime.setWorkspaceRoot(this.workspaceRoot);
+    this.runtime.setWorkspaceTrusted(this.workspaceTrusted);
+    this.applyTimeoutSettings();
+    this.applyAgentPermissionSettings();
+    const skillDirs = this.projectWorkspaceSettings?.skillDirs ?? [];
+    const mcpManifests = await this.loadMcpManifests(folder);
+    // The declaration a project commits is generated from its own manifests only: a
+    // global manifest lives on one machine, and the committed file has to be the same
+    // text for everyone who checks out the repository.
+    this.declarationText = dextModuleDeclaration(mcpManifests.projectMethods);
+    const mcpRegistryDiagnostics = [
+      ...this.mcp.setServers(mcpManifests.servers),
+      ...this.mcp.setTools(mcpManifests.tools)
+    ];
+    this.mcpServerRejections = mcpRejectionReasons(mcpRegistryDiagnostics);
+    this.runtime.setMcpServerDiagnostics(mcpRegistryDiagnostics);
+    diagnostics.push(...mcpManifests.diagnostics, ...mcpRegistryDiagnostics);
+    const activeMcpTools = new Set(this.mcp.list().map((tool) => `${tool.server}.${tool.tool}`));
+    this.registry.registerMany(
+      mcpManifests.methods.filter((method) => activeMcpTools.has(method.id.slice("mcp.".length))),
+      "project"
+    );
+    // A manifest method whose server is not connected is deliberately not
+    // registered. Remembering the declared set lets a later failure say
+    // "server not connected" instead of "unknown name".
+    this.runtime.setDeclaredMcpTools(mcpManifests.methods.map((method) => method.id));
+    try {
+      await this.skills.reload(this.workspaceRoot, skillDirs, vscode.Uri.joinPath(this.storage.globalStorageUri, "skills").fsPath);
+    } catch (error) {
+      diagnostics.push(`Skill discovery: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    this.onApiReload?.();
+    const nonMcpDiagnostics = diagnostics.filter((message) =>
+      !mcpManifests.diagnostics.includes(message) && !mcpRegistryDiagnostics.includes(message)
+    );
+    this.configDiagnostics = [
+      ...mcpManifests.projectDiagnostics,
+      ...nonMcpDiagnostics
+    ];
+    this.globalDiagnostics = [
+      ...mcpManifests.globalDiagnostics,
+      ...mcpRegistryDiagnostics
+    ];
+    await this.writeDextTypes(mcpManifests.projectMethods);
+  }
+
+  /**
+   * Keep the editor's view of `dext` in step with the registry.
+   *
+   * The workspace's own project files are the mapping the editor uses, and they are
+   * generated into the workspace because every path in them is relative: the same
+   * files work on another machine and in CI. The storage copy stays as the fallback
+   * for a workspace that has no generated project yet.
+   */
+  private async writeDextTypes(methods: readonly CallableDefinition[]): Promise<void> {
+    try {
+      const directory = vscode.Uri.joinPath(this.storage.globalStorageUri, DEXT_DECLARATION_DIRECTORY);
+      await vscode.workspace.fs.createDirectory(directory);
+      await this.writeIfChanged(vscode.Uri.joinPath(directory, DEXT_DECLARATION_FILE), dextSharedDeclaration());
+      await this.writeWorkspaceDextProject(methods);
+    } catch {
+      // A read-only or virtual workspace cannot hold the generated project; the
+      // editor simply falls back to its own TypeScript defaults.
+    }
+  }
+
+  /** Writes `content` only when the file differs, so a reload does not touch mtimes. */
+  private async writeIfChanged(uri: vscode.Uri, content: string): Promise<void> {
+    try {
+      const current = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
+      // Line endings are the checkout's business: the generated text is LF, and a
+      // repository with `core.autocrlf` hands the committed file back as CRLF, which
+      // is not a reason to rewrite it (and would churn every reload).
+      if (current.replace(/\r\n/g, "\n") === content) return;
+    } catch {
+      // Missing: write it below.
+    }
+    await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(content));
+  }
+
+  /**
+   * Writes the generated project a workspace commits: the declaration beside its
+   * APIs, the `paths` project that maps `dext` at it, and the ESM marker.
+   *
+   * Every path in those files is relative, so the same files work on another machine
+   * and in CI — the reason Dext generates them into the project instead of pointing a
+   * mapping at its own storage. The declaration is not only the built-in surface: a
+   * workspace's own MCP manifests declare tools, and typing them is what keeps the
+   * editor and the kernel agreeing about `mcp.<server>.<tool>`.
+   */
+  private async writeWorkspaceDextProject(methods: readonly CallableDefinition[]): Promise<void> {
+    const folder = vscode.workspace.workspaceFolders?.find((workspace) => workspace.uri.scheme === "file");
+    if (!folder) return;
+    if (!await this.workspaceImportsDext(folder)) return;
+    const directory = vscode.Uri.joinPath(folder.uri, ".dext");
+    await vscode.workspace.fs.createDirectory(directory);
+    for (const file of dextFiles(methods, this.projectApiDirs())) {
+      const uri = vscode.Uri.joinPath(directory, ...file.path.split("/"));
+      if (file.createOnly) {
+        try {
+          await vscode.workspace.fs.stat(uri);
+          continue;
+        } catch (error) {
+          if (!(error instanceof vscode.FileSystemError) || error.code !== "FileNotFound") throw error;
+        }
+      }
+      await this.writeIfChanged(uri, file.content);
+    }
+  }
+
+  /**
+   * The directories `dext/api/<id>` resolves against that belong to the project, so
+   * the generated project can map them relatively and stay portable. The
+   * APIs in Dext's own storage are deliberately absent: they live
+   * on one machine, and a committed mapping cannot name them.
+   */
+  private projectApiDirs(): string[] {
+    const dirs = [DEXT_API_DIRECTORY, ...(this.projectWorkspaceSettings?.apiDirs ?? [])];
+    return [...new Set(dirs.map((dir) => dir.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "")).filter(Boolean))];
+  }
+
+  /** The declaration this workspace's editor project maps `dext` at, when it has one. */
+  workspaceDeclarationPath(): string | undefined {
+    const folder = vscode.workspace.workspaceFolders?.find((workspace) => workspace.uri.scheme === "file");
+    if (!folder) return undefined;
+    return vscode.Uri.joinPath(folder.uri, ".dext", ...DEXT_TYPES_PATH.split("/")).fsPath;
+  }
+
+  /**
+   * Whether the workspace holds a TypeScript file that is part of the generated
+   * project. A workspace that never writes an API module gets no generated files at
+   * all, so Dext does not add a `tsconfig.json` to a project that does not use it.
+   */
+  private async workspaceImportsDext(folder: vscode.WorkspaceFolder): Promise<boolean> {
+    const found = await vscode.workspace.findFiles(new vscode.RelativePattern(folder, ".dext/api/**/*.ts"), undefined, 1);
+    return found.length > 0;
+  }
+
+  /** A timeout that fires cuts the turn off with nothing the user can do about
+   * it, so these follow the settings rather than the values they were built
+   * with. Nonsense values fall back to the default instead of failing a run. */
+  applyTimeoutSettings(): void {
+    const configuration = vscode.workspace.getConfiguration("dext");
+    const positive = (key: string, fallback: number): number => {
+      const value = configuration.get<number>(key, fallback);
+      return Number.isInteger(value) && value > 0 ? value : fallback;
+    };
+    const timeout = (key: string, fallback: number): number => {
+      const value = configuration.get<number>(key, fallback);
+      return Number.isInteger(value) && value >= 0 && value <= MAX_AGENT_TIMEOUT_MS ? value : fallback;
+    };
+    this.agentTimeoutMs = timeout("agent.timeoutMs", DEFAULT_AGENT_TIMEOUT_MS);
+    this.agentIdleTimeoutMs = timeout("agent.idleTimeoutMs", DEFAULT_AGENT_IDLE_TIMEOUT_MS);
+    this.agentRunner.setTimeouts({
+      agentTimeoutMs: this.agentTimeoutMs,
+      agentIdleTimeoutMs: this.agentIdleTimeoutMs
+    });
+    this.dispatchConcurrency = positive("workflow.maxConcurrency", DEFAULT_DISPATCH_CONCURRENCY);
+    this.kernel?.setMaxConcurrency(this.dispatchConcurrency);
+  }
+
+  /** The kernel that runs Code mode. Created on demand, one per workspace. */
+  private kernelHost(): DextKernelHost {
+    // The host is built around one workspace: its working directory, the root the
+    // loader resolves APIs against and the directory a run's buffer is written to.
+    // Opening a different folder replaces it — but only once it is idle, because a
+    // reload must never kill a run that is in flight.
+    if (this.kernel && this.kernelRoot !== this.workspaceRoot && !this.kernel.busy()) this.stopKernel();
+    this.kernel ??= new DextKernelHost({
+      workspaceRoot: this.workspaceRoot,
+      runnerDirectory: __dirname,
+      maxConcurrency: this.dispatchConcurrency,
+      runsDirectory: this.runsDirectory(),
+      execute: (invocation, metadata, context) => this.runtime.execute(invocation, context, metadata)
+    });
+    this.kernelRoot = this.workspaceRoot;
+    return this.kernel;
+  }
+
+  /**
+   * Where a Code run's buffer is written: Dext's own storage, keyed by workspace.
+   *
+   * A run buffer is an implementation detail of the kernel (it imports a real file),
+   * not project content, so it belongs beside the extension's other generated state
+   * rather than in the repository. The key is the workspace URI, which keeps two
+   * windows on different folders apart and is stable across restarts.
+   */
+  private runsDirectory(): string {
+    const digest = createHash("sha256").update(this.workspaceUri?.toString() ?? this.workspaceRoot).digest("hex").slice(0, 16);
+    return vscode.Uri.joinPath(this.storage.globalStorageUri, "runs", digest).fsPath;
+  }
+
+  /** Stops the kernel; the next run starts a fresh one. */
+  stopKernel(): void {
+    this.kernel?.dispose();
+    this.kernel = undefined;
+  }
+
+  /** Project and global MCP manifests use the same format. One file per server
+   * keeps the allowlist and its API contract together rather than split across settings. */
+  private async loadMcpManifests(folder: vscode.WorkspaceFolder | undefined, includeGlobal = true): Promise<{
+    servers: McpServerConfig[];
+    tools: McpToolConfig[];
+    methods: CallableDefinition[];
+    /** The subset the workspace's own manifests declare, which is what the generated
+     * declaration may describe: the file is committed, so it cannot depend on a
+     * machine's global configuration. */
+    projectMethods: CallableDefinition[];
+    diagnostics: string[];
+    projectDiagnostics: string[];
+    globalDiagnostics: string[];
+  }> {
+    const directories: Array<{ uri: vscode.Uri; scope: "project" | "global" }> = [];
+    if (folder?.uri.scheme === "file") directories.push({ uri: vscode.Uri.joinPath(folder.uri, ".dext", "mcp"), scope: "project" });
+    if (folder?.uri.scheme === "file") {
+      for (const entry of this.projectWorkspaceSettings?.mcpDirs ?? []) directories.push({ uri: vscode.Uri.joinPath(folder.uri, entry), scope: "project" });
+    }
+    if (includeGlobal) directories.push({ uri: vscode.Uri.joinPath(this.storage.globalStorageUri, "mcp"), scope: "global" });
+    const uniqueDirectories = directories.filter((item, index, all) => all.findIndex((candidate) => candidate.scope === item.scope && candidate.uri.fsPath === item.uri.fsPath) === index);
+    const servers: McpServerConfig[] = [];
+    const tools: McpToolConfig[] = [];
+    const methods: CallableDefinition[] = [];
+    const projectMethods: CallableDefinition[] = [];
+    const diagnostics: string[] = [];
+    const projectDiagnostics: string[] = [];
+    const globalDiagnostics: string[] = [];
+    const seenServerNames = new Set<string>();
+    for (const { uri: directory, scope } of uniqueDirectories) {
+      let entries: [string, vscode.FileType][];
+      try { entries = await vscode.workspace.fs.readDirectory(directory); }
+      catch (error) {
+        if (error instanceof vscode.FileSystemError && error.code === "FileNotFound") continue;
+        const message = `MCP manifest discovery: ${error instanceof Error ? error.message : String(error)}`;
+        diagnostics.push(message);
+        (scope === "global" ? globalDiagnostics : projectDiagnostics).push(message);
+        continue;
+      }
+      for (const [name, type] of entries.sort(([left], [right]) => left.localeCompare(right))) {
+      if (type !== vscode.FileType.File || !name.toLowerCase().endsWith(".jsonc")) continue;
+      const file = vscode.Uri.joinPath(directory, name);
+      try {
+        const manifest = parseMcpManifest(new TextDecoder().decode(await vscode.workspace.fs.readFile(file)), file.fsPath);
+        if (manifest.server && seenServerNames.has(manifest.server.name)) continue;
+        if (manifest.server) {
+          seenServerNames.add(manifest.server.name);
+          servers.push({ ...manifest.server, scope });
+        }
+        tools.push(...manifest.tools);
+        methods.push(...manifest.methods);
+        if (scope === "project") projectMethods.push(...manifest.methods);
+        diagnostics.push(...manifest.diagnostics);
+        (scope === "global" ? globalDiagnostics : projectDiagnostics).push(...manifest.diagnostics);
+      } catch (error) {
+        const message = `${file.fsPath}: ${error instanceof Error ? error.message : String(error)}`;
+        diagnostics.push(message);
+        (scope === "global" ? globalDiagnostics : projectDiagnostics).push(message);
+      }
+      }
+    }
+    return { servers, tools, methods, projectMethods, diagnostics, projectDiagnostics, globalDiagnostics };
+  }
+
+  /** The permission default and the passthrough arguments are both settings, so
+   * they are re-read whenever configuration changes rather than cached at
+   * construction. */
+  applyAgentPermissionSettings(): void {
+    const configuration = vscode.workspace.getConfiguration("dext");
+    const configured = configuration.get<string>("agentPermission", "workspace-write");
+    this.runtime.setDefaultAgentPermission(
+      AGENT_PERMISSIONS.includes(configured as WritableAgentPermission)
+        ? configured as WritableAgentPermission
+        : "workspace-write"
+    );
+    const raw = configuration.get<Record<string, unknown>>("agentCliArgs", {}) ?? {};
+    const byProvider: Partial<Record<AgentProvider, readonly string[]>> = {};
+    for (const provider of ["codex", "claude", "deepseek-harness"] as const) {
+      const value = raw[provider];
+      if (!Array.isArray(value)) continue;
+      const args = value.filter((item): item is string => typeof item === "string" && item.trim() !== "");
+      if (args.length) byProvider[provider] = args;
+    }
+    this.runtime.setAgentCliArguments(byProvider);
+  }
+
+  state(): SidebarState {
+    const theme = loadEditorTokenTheme();
+    return {
+      ...(theme ? { theme } : {}),
+      methods: this.registry.list().map((method) => ({
+        id: method.id,
+        title: method.title,
+        description: method.description,
+        kind: method.kind,
+        source: method.source,
+        input: method.input,
+        output: method.output
+      })),
+      diagnostics: this.configDiagnostics,
+      mcpServers: this.mcp.listServers(),
+      globalDiagnostics: this.globalDiagnostics,
+      resourceRoots: {
+        global: this.storage.globalStorageUri.fsPath,
+        ...(this.workspaceTrusted && vscode.workspace.workspaceFolders?.[0] ? { project: vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri, ".dext").fsPath } : {})
+      },
+      agentProfiles: this.agentProfiles(),
+      agentSelection: this.agents.currentSelection(),
+      settings: this.webviewSettings()
+    };
+  }
+
+  /** Creates a project-owned MCP manifest. The server is verified and its
+   * tools are discovered when possible, so the generated file is immediately
+   * usable while keeping the explicit allowlist required by Dext. */
+  async createMcpManifest(server: McpServerConfig, scope: "project" | "global" = "project", selectedTools?: readonly string[]): Promise<void> {
+    if (!/^[A-Za-z0-9_.-]+$/.test(server.name)) {
+      throw new Error("MCP server names must use letters, numbers, dots, underscores, or hyphens.");
+    }
+    if (server.transport === "http") {
+      let url: URL;
+      try { url = new URL(server.url); } catch { throw new Error("MCP HTTP URL is invalid."); }
+      const loopback = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(url.hostname);
+      if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
+        throw new Error("MCP HTTP URL must use HTTPS or loopback HTTP.");
+      }
+      if (url.username || url.password || url.search || url.hash) {
+        throw new Error("MCP HTTP URL must not contain credentials, query strings, or fragments.");
+      }
+    } else if (!server.command.trim()) {
+      throw new Error("MCP stdio command is required.");
+    }
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    if (scope === "project" && (!folder || folder.uri.scheme !== "file" || !this.workspaceTrusted)) {
+      throw new Error("Creating an MCP configuration requires a trusted local workspace.");
+    }
+    const directory = scope === "global"
+      ? vscode.Uri.joinPath(this.storage.globalStorageUri, "mcp")
+      : vscode.Uri.joinPath(folder!.uri, ".dext", "mcp");
+    await vscode.workspace.fs.createDirectory(directory);
+    const file = vscode.Uri.joinPath(directory, `${server.name}.jsonc`);
+    try {
+      await vscode.workspace.fs.stat(file);
+      throw new Error(`MCP configuration '${server.name}' already exists.`);
+    } catch (error) {
+      if (!(error instanceof vscode.FileSystemError && error.code === "FileNotFound")) throw error;
+    }
+    const initial = { ...server, tools: [] };
+    await vscode.workspace.fs.writeFile(file, new TextEncoder().encode(`${JSON.stringify(initial, null, 2)}\n`));
+    await this.reload();
+    let tools: Array<Record<string, unknown>> = [];
+    try {
+      const discovered = await this.mcp.discoverServerTools(server.name);
+      const selected = selectedTools === undefined ? discovered : discovered.filter((tool) => selectedTools.includes(tool.name));
+      tools = selected.map((tool) => ({
+        // Manifest tools are local allowlist entries.  The server is already
+        // declared by the containing file, so the parser expects the MCP
+        // protocol's tool name here (not the registry's flattened
+        // `{server, tool}` representation).
+        name: tool.name,
+        ...(tool.description ? { description: tool.description } : {}),
+        ...(tool.inputSchema ? { inputSchema: tool.inputSchema } : {}),
+        ...(tool.outputSchema ? { outputSchema: tool.outputSchema } : {})
+      }));
+    } catch {
+      // Saving the server is still useful when discovery needs credentials or
+      // the endpoint is temporarily unavailable; the user can edit/reload it.
+    }
+    const manifest = { ...server, tools };
+    await vscode.workspace.fs.writeFile(file, new TextEncoder().encode(`${JSON.stringify(manifest, null, 2)}\n`));
+    await this.reload();
+  }
+
+  async discoverMcpTools(server: McpServerConfig): Promise<McpDiscoveredTool[]> {
+    return this.mcp.discoverTools(server);
+  }
+
+  /** Ask the currently selected Agent CLI to turn MCP documentation or a
+   * natural-language description into a server manifest. */
+  async generateMcpManifest(document: string, metadata: Readonly<ExecutionMetadata> = {}): Promise<McpServerConfig> {
+    const trimmed = document.trim();
+    let documentUrl: string | undefined;
+    try {
+      const url = new URL(trimmed);
+      if (["http:", "https:"].includes(url.protocol)) documentUrl = trimmed;
+    } catch {
+      // Natural-language MCP descriptions are also accepted by the resource creator.
+    }
+    let documentation = "";
+    if (documentUrl) {
+      try {
+        const fetched = await fetch(documentUrl, { signal: AbortSignal.timeout(15_000) });
+        if (fetched.ok) documentation = (await fetched.text()).slice(0, 80_000);
+      } catch {
+        // The selected CLI may still be able to access the URL itself.
+      }
+    }
+    const selection = this.agents.currentSelection();
+    const response = await this.runtime.executeConversation("ask", [
+      "You generate Dext MCP configuration.",
+      "Read the MCP documentation or interpret the user's description and return exactly one JSON object, with no markdown fences or commentary.",
+      "Allowed shape: {name, transport:'http', url, auth?:{type:'bearer'}|{type:'query',name:'key'}, timeoutMs?} or {name, transport:'stdio', command, args?, auth?:{type:'token',env:'ENV_NAME'}, timeoutMs?}.",
+      "Use the actual MCP endpoint or install command from the documentation; do not invent credentials.",
+      documentUrl ? `Documentation URL: ${documentUrl}` : `User description: ${trimmed}`,
+      documentation ? `Documentation content:\n${documentation}` : "No documentation was fetched; infer only what the URL or user description supports."
+    ].join("\n"), {
+      ...(selection.profileId ? { agent: selection.profileId } : {}),
+      ...metadata
+    });
+    if (response.result.kind !== "ask") throw new Error("The selected Agent did not return text.");
+    const raw = response.result.text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+    let value: unknown;
+    try { value = JSON.parse(raw); } catch { throw new Error("The Agent returned invalid JSON. Try again or paste a direct MCP configuration."); }
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("The Agent returned an invalid MCP configuration.");
+    const candidate = value as Record<string, unknown>;
+    if (candidate.transport === "http" && typeof candidate.name === "string" && typeof candidate.url === "string") {
+      const auth = candidate.auth && typeof candidate.auth === "object" && !authDiagnostic(candidate.auth)
+        ? (candidate.auth as Record<string, unknown>).type === "query"
+          ? { type: "query" as const, name: (candidate.auth as Record<string, unknown>).name as string }
+          : { type: "bearer" as const }
+        : undefined;
+      return {
+        name: candidate.name, transport: "http", url: candidate.url,
+        ...(auth ? { auth } : {}),
+        ...(typeof candidate.timeoutMs === "number" ? { timeoutMs: candidate.timeoutMs } : {})
+      };
+    }
+    if (candidate.transport === "stdio" && typeof candidate.name === "string" && typeof candidate.command === "string") {
+      const args = Array.isArray(candidate.args) ? candidate.args.filter((item): item is string => typeof item === "string") : undefined;
+      const auth = candidate.auth && typeof candidate.auth === "object" && !Array.isArray(candidate.auth)
+        ? candidate.auth as Record<string, unknown>
+        : undefined;
+      const stdioAuth = auth?.type === "token" && typeof auth.env === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(auth.env)
+        ? { type: "token" as const, env: auth.env }
+        : undefined;
+      return {
+        name: candidate.name,
+        transport: "stdio",
+        command: candidate.command,
+        ...(args?.length ? { args } : {}),
+        ...(stdioAuth ? { auth: stdioAuth } : {}),
+        ...(typeof candidate.timeoutMs === "number" ? { timeoutMs: candidate.timeoutMs } : {})
+      };
+    }
+    throw new Error("The Agent returned an unsupported MCP configuration shape.");
+  }
+
+  resourceRoot(type: ResourceKind, scope: ResourceScope): vscode.Uri {
+    if (type === "file") {
+      const folder = vscode.workspace.workspaceFolders?.[0];
+      if (scope !== "project" || !folder || folder.uri.scheme !== "file" || !this.workspaceTrusted) {
+        throw new Error("File resources require a trusted local workspace and Project scope.");
+      }
+      return folder.uri;
+    }
+    if (scope === "global") return vscode.Uri.joinPath(this.storage.globalStorageUri, RESOURCE_DIRECTORIES[type]);
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    if (!folder || folder.uri.scheme !== "file" || !this.workspaceTrusted) throw new Error("Project resources require a trusted local workspace.");
+    return vscode.Uri.joinPath(folder.uri, ".dext", RESOURCE_DIRECTORIES[type]);
+  }
+
+  async listResources(type: ResourceKind): Promise<Array<{ name: string; path: string; scope: ResourceScope }>> {
+    const items: Array<{ name: string; path: string; scope: ResourceScope }> = [];
+    for (const scope of ["project", "global"] as const) {
+      if (scope === "project" && (!vscode.workspace.workspaceFolders?.[0] || !this.workspaceTrusted)) continue;
+      const root = this.resourceRoot(type, scope);
+      const visit = async (directory: vscode.Uri, prefix = "", depth = 0): Promise<void> => {
+        if (depth > 12 || items.length >= 2000) return;
+        let entries: [string, vscode.FileType][];
+        try { entries = await vscode.workspace.fs.readDirectory(directory); }
+        catch (error) { if (error instanceof vscode.FileSystemError && error.code === "FileNotFound") return; throw error; }
+        for (const [name, kind] of entries) {
+          const path = `${prefix}${name}`;
+          if (kind === vscode.FileType.Directory && type !== "mcp" && type !== "file") await visit(vscode.Uri.joinPath(directory, name), `${path}/`, depth + 1);
+          if (kind !== vscode.FileType.File) continue;
+          if (type === "api" && path.endsWith(".d.ts")) continue;
+          try { resourcePathSegments(type, path); } catch { continue; }
+          const label = type === "file" ? path : type === "api" ? path.slice(0, -3).replaceAll("/", ".") : type === "skill" ? path.split("/").at(-2)! : name.replace(/\.(?:md|jsonc?)$/, "");
+          items.push({ name: label, path, scope });
+        }
+      };
+      await visit(root);
+    }
+    return items.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  async readResource(type: ResourceKind, scope: ResourceScope, path: string, name: string): Promise<ResourceTarget> {
+    const uri = vscode.Uri.joinPath(this.resourceRoot(type, scope), ...resourcePathSegments(type, path));
+    const content = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
+    if (content.length > 200_000) throw new Error("This resource is too large to edit in a conversation.");
+    // MCP manifest names can differ from their filenames.
+    const manifest = type === "mcp" ? parseMcpManifest(content, path) : undefined;
+    return { name: manifest?.server?.name ?? name, path, content };
+  }
+
+  private validateResource(type: ResourceKind, draft: ResourceDocument): void {
+    if (!draft.content.trim() || draft.content.length > 200_000) throw new Error("The resource draft is empty or too large.");
+    if (type === "api") {
+      // A Dext API is an ordinary TypeScript module now: the editor's own
+      // TypeScript service reports type errors, so this only checks the shape a
+      // callable API needs — a `main` the loader can import.
+      if (!/\bexport\s+(?:async\s+)?(?:function\s+main\b|const\s+main\b)/.test(draft.content)) {
+        throw new Error("The API must export main(), for example `export async function main() { ... }`.");
+      }
+    } else if (type === "mcp") {
+      const manifest = parseMcpManifest(draft.content, draft.name);
+      const server = manifest.server;
+      if (!server || manifest.diagnostics.length) throw new Error(`Invalid MCP manifest: ${manifest.diagnostics.join("\n")}`);
+      if (server.name !== draft.name) throw new Error("The MCP manifest name must match the resource name.");
+      const diagnostics = new McpToolRegistry().setServers([server]);
+      if (diagnostics.length) throw new Error(`Invalid MCP configuration: ${diagnostics.join("\n")}`);
+    }
+  }
+
+  async draftResource(resource: ResourceSession, input: string, metadata: Readonly<ExecutionMetadata> = {}): Promise<{ draft: ResourceDocument; response: InputExecutionResponse }> {
+    if (!input.trim()) throw new Error("Describe the resource or the changes to make.");
+    this.resourceRoot(resource.type, resource.scope);
+    const response = await this.runtime.executeConversation("ask", resourcePrompt(resource, this.storage.attachmentPrompt(input)), metadata);
+    if (response.result.kind !== "ask") throw new Error("The selected Agent did not return resource text.");
+    const value = agentResultCandidates(response.result.text)[0]?.value;
+    if (value === undefined) throw new Error("The Agent returned invalid resource JSON. Refine the request and try again.");
+    if (typeof value.name !== "string" || typeof value.content !== "string") throw new Error("The resource needs a name and content.");
+    const files = mergeResourceFiles((resource.draft ?? resource.target)?.files, value.files);
+    const draft: ResourceDocument = { name: resource.target?.name ?? value.name.trim(), content: value.content, ...(files.length ? { files } : {}) };
+    if (!resource.target) resourceFileName(resource.type, draft.name);
+    this.validateResource(resource.type, draft);
+    // Keep generated JSON out of the final conversation response; show the actual document.
+    const documents = [{ path: resource.target?.path ?? resourceFileName(resource.type, draft.name), content: draft.content }, ...files];
+    response.result.text = documents.map((file, index) => {
+      const fence = "`".repeat(Math.max(3, ...Array.from(file.content.matchAll(/`+/g), (match) => match[0].length + 1)));
+      const language = file.path.endsWith(".ts") ? "typescript" : /\.jsonc?$/.test(file.path) ? "jsonc" : "text";
+      const path = index === 0 && resource.type !== "file" ? `${RESOURCE_DIRECTORIES[resource.type]}/${file.path}` : file.path;
+      const label = resource.scope === "project" && !(index === 0 && resource.type === "file") ? `.dext/${path}` : path;
+      return `Draft: ${label}\n\n${fence}${language}\n${file.content}\n${fence}`;
+    }).join("\n\n") + "\n\nReview all draft files, then save or describe further changes.";
+    return { draft, response: { kind: "workflow", executions: [response] } };
+  }
+
+  saveResource(resource: ResourceSession): Promise<ResourceTarget> {
+    const snapshot = structuredClone(resource);
+    const operation = this.resourceWrite.then(() => this.writeResource(snapshot));
+    this.resourceWrite = operation.then(() => undefined, () => undefined);
+    return operation;
+  }
+
+  private async writeResource(resource: ResourceSession): Promise<ResourceTarget> {
+    if (!resource.draft) throw new Error("Generate a resource draft first.");
+    const { type, scope, draft, target } = resource;
+    this.validateResource(type, draft);
+    const path = target?.path ?? resourceFileName(type, draft.name);
+    const normalize = (content: string): string => content.endsWith("\n") ? content : `${content}\n`;
+    const content = normalize(draft.content);
+    const files = mergeResourceFiles(target?.files, draft.files).map((file) => ({ ...file, content: normalize(file.content) }));
+    const previousFiles = new Map(resourceFiles(target?.files).map((file) => [file.path, file.content]));
+    const uri = vscode.Uri.joinPath(this.resourceRoot(type, scope), ...resourcePathSegments(type, path));
+    const supportingRoot = files.length ? vscode.Uri.joinPath(this.resourceRoot("rule", scope), "..") : undefined;
+    const writes = [
+      ...files.map((file) => ({ uri: vscode.Uri.joinPath(supportingRoot!, ...file.path.split("/")), content: file.content, previous: previousFiles.get(file.path) })),
+      { uri, content, previous: target?.content }
+    ];
+    const destinations = new Set<string>();
+    // Check the entire bundle before changing anything, including unchanged companions.
+    for (const file of writes) {
+      const key = file.uri.toString().toLowerCase();
+      if (destinations.has(key)) throw new Error("A supporting file duplicates the primary resource path.");
+      destinations.add(key);
+      if ((vscode.workspace.textDocuments ?? []).some((document) => document.uri.toString().toLowerCase() === key && document.isDirty)) {
+        throw new Error(`This resource has unsaved editor changes: ${file.uri.fsPath}. Save them and select the resource again before updating it.`);
+      }
+      if (file.previous !== undefined) {
+        const current = new TextDecoder().decode(await vscode.workspace.fs.readFile(file.uri));
+        if (current !== file.previous) throw new Error(`This resource changed on disk: ${file.uri.fsPath}. Select it again to load the latest version before saving.`);
+      } else {
+        try { await vscode.workspace.fs.stat(file.uri); throw new Error(`Resource '${file.uri.fsPath}' already exists. Select it to edit, or choose a different name.`); }
+        catch (error) { if (!(error instanceof vscode.FileSystemError && error.code === "FileNotFound")) throw error; }
+      }
+    }
+    const attempted: typeof writes = [];
+    try {
+      for (const file of writes) {
+        if (file.content === file.previous) continue;
+        await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(file.uri, ".."));
+        attempted.push(file);
+        await vscode.workspace.fs.writeFile(file.uri, new TextEncoder().encode(file.content));
+      }
+    } catch (error) {
+      const failures: string[] = [];
+      for (const file of attempted.reverse()) {
+        try {
+          if (file.previous !== undefined) await vscode.workspace.fs.writeFile(file.uri, new TextEncoder().encode(file.previous));
+          else await vscode.workspace.fs.delete(file.uri);
+        } catch (rollbackError) {
+          if (!(file.previous === undefined && rollbackError instanceof vscode.FileSystemError && rollbackError.code === "FileNotFound")) failures.push(file.uri.fsPath);
+        }
+      }
+      if (failures.length) throw new Error(`Resource save failed: ${String(error)}. Could not restore: ${failures.join(", ")}. Check these files before retrying.`);
+      throw error;
+    }
+    return { name: draft.name, path, content, ...(files.length ? { files } : {}) };
+  }
+
+  /** The webview cannot read configuration itself, so the settings it renders
+   * with travel with the rest of its state. */
+  private webviewSettings(): NonNullable<SidebarState["settings"]> {
+    const configuration = vscode.workspace.getConfiguration("dext");
+    const diffView = configuration.get<string>("diff.defaultView", "inline");
+    return {
+      diffView: diffView === "split" ? "split" : "inline",
+      submitOnEnter: configuration.get<boolean>("submitOnEnter", true) !== false
+    };
+  }
+
+  setAgentSelection(selection: AgentSelection): void {
+    const previous = this.agents.currentSelection();
+    this.agents.setSelection(selection);
+    this.runtime.setAgentSelection(selection);
+    if (selection.profileId === "deepseek-harness" && previous.profileId !== "deepseek-harness") {
+      void this.agentRunner.harness.refreshSettings();
+    }
+  }
+
+  /** Profiles exposed to the composer. */
+  agentProfiles(): AgentProfile[] {
+    const configured = vscode.workspace.getConfiguration("dext").get<unknown>("agentCli", ["codex", "claude", "deepseek-harness"]);
+    const ids = Array.isArray(configured)
+      ? [...new Set(configured
+        .filter((item): item is string => typeof item === "string" && item.trim() !== "")
+        .map((item) => item.trim()))]
+      : [];
+    const enabledIds = ids.filter((id) => (SUPPORTED_AGENT_PROFILE_IDS as readonly string[]).includes(id));
+    const selectedIds = enabledIds.length ? enabledIds : ["codex", "claude", "deepseek-harness"];
+    return this.agents.list(selectedIds, this.workspaceTrusted ? this.workspaceRoot : undefined);
+  }
+
+  /** Returns non-empty profile IDs that cannot be used by `dext.agentCli`. */
+  invalidAgentCliIds(): string[] {
+    const configured = vscode.workspace.getConfiguration("dext").get<unknown>("agentCli", ["codex", "claude", "deepseek-harness"]);
+    if (!Array.isArray(configured)) return [];
+    return [...new Set(configured
+      .filter((item): item is string => typeof item === "string" && item.trim() !== "")
+      .map((item) => item.trim())
+      .filter((id) => !(SUPPORTED_AGENT_PROFILE_IDS as readonly string[]).includes(id)))];
+  }
+
+  refreshAgentProfiles(): void {
+    const profiles = this.agentProfiles();
+    this.runtime.setAgentProfiles(profiles);
+    const selection = this.agents.currentSelection();
+    if (selection.profileId && !profiles.some((profile) => profile.id === selection.profileId)) {
+      const fallback = profiles[0];
+      if (fallback) {
+        const next = { ...selection, profileId: fallback.id, model: "", reasoningEffort: "", speed: "", serviceTier: "" };
+        this.agents.setSelection(next);
+        this.runtime.setAgentSelection(next);
+      }
+    }
+  }
+
+  updateAgentProfile(profile: AgentProfile): void {
+    this.agents.update(profile);
+    this.refreshAgentProfiles();
+  }
+
+  dispose(): Promise<void> {
+    return this.agentRunner.dispose();
+  }
+
+  async discoverHarnessPresets(): Promise<void> {
+    const profile = this.agents.list().find((item) => item.provider === "deepseek-harness");
+    if (!profile) return;
+    clearHarnessPresetCache();
+    const presets = await listHarnessPresets(profile);
+    this.updateAgentProfile({ ...profile, presets });
+  }
+
+  async discoverHarnessModels(): Promise<void> {
+    const profile = this.agents.list().find((item) => item.provider === "deepseek-harness");
+    if (!profile) return;
+    await this.discoverHarnessPresets();
+    const args = this.workspaceTrusted
+      ? vscode.workspace.getConfiguration("dext").get<Record<string, string[]>>("agentCliArgs", {})["deepseek-harness"] ?? []
+      : [];
+    await this.agentRunner.harness.refreshSettings();
+    const modelOptions = await this.agentRunner.harness.discoverModels(profile, this.workspaceRoot, args);
+    const defaultModel = modelOptions.find((item) => item.isDefault);
+    this.updateAgentProfile({ ...profile, presets: this.agents.list().find((item) => item.id === profile.id)?.presets ?? [], models: modelOptions.map((item) => item.id), modelOptions, defaults: {
+      ...(defaultModel ? { model: defaultModel.id } : {}),
+      ...(defaultModel?.defaultReasoningEffort ? { reasoningEffort: defaultModel.defaultReasoningEffort } : {})
+    } });
+  }
+
+  /**
+   * Runs Code mode. The third argument carries the kernel-only options: calls
+   * replayed from an earlier attempt, and the sink for this attempt's call log.
+   */
+  async executeInput(
+    source: string,
+    metadata: Readonly<ExecutionMetadata> = {},
+    run: { resume?: readonly DextReplayEntry[]; onCallLog?: (entries: readonly DextReplayEntry[]) => void } = {}
+  ): Promise<InputExecutionResponse> {
+    return this.kernelHost().runSource(source, {
+      execution: metadata,
+      ...(metadata.signal ? { signal: metadata.signal } : {}),
+      ...(run.resume ? { resume: run.resume } : {}),
+      ...(run.onCallLog ? { onCallLog: run.onCallLog } : {}),
+      apiRoots: this.apiRoots(),
+      context: await this.codeContext(source)
+    });
+  }
+
+  /**
+   * The `@path` tokens in a Code run's source. The old compiler turned them into
+   * typed references; the kernel cannot, so the host resolves them once per run
+   * and attaches them to every API call the run makes. A token that cannot be
+   * resolved stays readable text instead of failing the run.
+   */
+  private async codeContext(source: string): Promise<CodeRef[]> {
+    const references: CodeRef[] = [];
+    const seen = new Set<string>();
+    for (const part of inputReferenceDisplayParts(source)) {
+      if (part.kind !== "ref" || part.reference.kind !== "file") continue;
+      const path = part.reference.payload;
+      if (seen.has(path)) continue;
+      seen.add(path);
+      try {
+        references.push(await this.contextResolver.resolveReference({ kind: "file", path }));
+      } catch {
+        // An unresolvable token is reported by the turn when the model needs it;
+        // there is nothing to attach.
+      }
+    }
+    return references;
+  }
+
+  async executeConversation(
+    mode: "agent" | "ask" | "plan",
+    input: string,
+    metadata: Readonly<ExecutionMetadata> = {}
+  ): Promise<InputExecutionResponse> {
+    let prompt = this.storage.attachmentPrompt(input);
+    if (mode === "plan" && metadata.planPath && !metadata.executePlan) {
+      const target = this.planUri(metadata.planPath);
+      if (!target) throw new Error(`Plan '${metadata.planPath}' is no longer available.`);
+      try { await vscode.workspace.fs.stat(target); }
+      catch { throw new Error(`Plan '${metadata.planPath}' is no longer available.`); }
+      prompt = [
+        "Revise the selected plan document according to the user's request.",
+        "Keep the plan complete and internally consistent after applying the requested changes.",
+        `Read the current plan from this file before revising it: ${target.fsPath}`,
+        "Do not edit that file directly; return the complete revised plan in the required response format so Dext can save it.",
+        "",
+        "Requested changes:",
+        prompt
+      ].join("\n");
+    }
+    const response = await this.runtime.executeConversation(mode, prompt, metadata);
+    const saved = mode === "plan" && !metadata.executePlan
+      ? await this.savePlan(input, response, metadata.planPath)
+      : response;
+    return {
+      kind: "workflow",
+      executions: [saved],
+      steps: [{ method: saved.method.id, state: "success", response: saved }]
+    };
+  }
+
+  /** A plan is only useful if it survives the turn. The model's document goes
+   * to the configured storage location, while its concise explanation remains
+   * in the chat beside the file reference. */
+  private async savePlan(input: string, response: InputExecutionResponse["executions"][number], existingPath?: string): Promise<InputExecutionResponse["executions"][number]> {
+    const result = response.result;
+    if (result.kind !== "plan" || !result.text.trim()) return response;
+    const plan = splitPlanResponse(result.text);
+    if (!plan.document) return response;
+    const workspaceStorage = this.storage.location() === "workspace";
+    if (workspaceStorage && (!this.workspaceTrusted || !this.workspaceUri)) return response;
+    const configured = (this.projectWorkspaceSettings?.planDirectory
+      ?? DEFAULT_PLAN_DIRECTORY).trim();
+    const segments = workspaceStorage ? planPathSegments(configured || DEFAULT_PLAN_DIRECTORY) : [];
+    const directory = workspaceStorage
+      ? vscode.Uri.joinPath(this.workspaceUri!, ...segments)
+      : this.storage.directory("plans");
+    const name = existingPath ? undefined : planFileName(input, new Date());
+    const target = existingPath
+      ? this.planUri(existingPath) ?? vscode.Uri.joinPath(directory, ...planPathSegments(existingPath))
+      : vscode.Uri.joinPath(directory, name!);
+    await vscode.workspace.fs.createDirectory(directory);
+    await vscode.workspace.fs.writeFile(target, new TextEncoder().encode(`${plan.document}\n`));
+    const planPath = existingPath ?? (workspaceStorage ? [...segments, name!].join("/") : this.storage.reference("plans", name!));
+    return { ...response, result: { ...result, text: plan.conversation, planPath } };
+  }
+
+  planUri(reference: string): vscode.Uri | undefined {
+    const stored = this.storage.uriForReference("plans", reference);
+    if (stored) return stored;
+    if (this.storage.location() !== "workspace" || !this.workspaceUri) return undefined;
+    try { return vscode.Uri.joinPath(this.workspaceUri, ...planPathSegments(reference)); }
+    catch { return undefined; }
+  }
+
+  endAgentSession(sessionId: string): void {
+    this.runtime.endAgentSession(sessionId);
+  }
+
+  isTrustedLocalWorkspace(): boolean {
+    return this.workspaceTrusted;
+  }
+
+  mcpCredentialServers(transport?: "http" | "stdio", kind?: McpCredentialKind): McpServerConfig[] {
+    return this.mcp.listServers().filter((server) => {
+      if (!server.auth || (transport && server.transport !== transport)) return false;
+      return kind === undefined || mcpCredentialKind(server) === kind;
+    });
+  }
+
+  /** Every configured server plus the ones a rejected manifest dropped, so
+   * Verify can select any server and explain a rejection instead of hiding it. */
+  mcpServerChoices(): Array<{ name: string; detail: string; reason?: string }> {
+    const choices: Array<{ name: string; detail: string; reason?: string }> = this.mcp.listServers().map((server) => ({
+      name: server.name,
+      detail: server.transport === "http"
+        ? redactedMcpUrl(server)
+        : `${server.command} ${(server.args ?? []).join(" ")}`.trim()
+    }));
+    for (const [name, reason] of this.mcpServerRejections) {
+      if (choices.some((choice) => choice.name === name)) continue;
+      choices.push({ name, detail: "rejected configuration", reason });
+    }
+    return choices.sort((left, right) => left.name.localeCompare(right.name));
+  }
+
+  async setMcpAccessToken(serverName: string, token: string): Promise<void> {
+    const server = this.assertCredentialServer(serverName);
+    if (!this.mcpSecrets) throw new Error("VS Code SecretStorage is not available.");
+    await this.mcpSecrets.store(
+      serverName,
+      token,
+      server.scope === "global" ? "global" : "workspace",
+      mcpCredentialKind(server)
+    );
+  }
+
+  /** Discovers the authenticated server's tools and updates its manifest's
+   * explicit allowlist while preserving JSONC comments and formatting. */
+  async discoverAndPersistMcpTools(serverName: string): Promise<number> {
+    const server = this.assertCredentialServer(serverName);
+    const discovered = await this.mcp.discoverServerTools(serverName);
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    const directories: Array<{ uri: vscode.Uri; scope: "project" | "global" }> = [];
+    if (folder?.uri.scheme === "file") directories.push({ uri: vscode.Uri.joinPath(folder.uri, ".dext", "mcp"), scope: "project" });
+    if (folder?.uri.scheme === "file") {
+      for (const entry of this.projectWorkspaceSettings?.mcpDirs ?? []) directories.push({ uri: vscode.Uri.joinPath(folder.uri, entry), scope: "project" });
+    }
+    directories.push({ uri: vscode.Uri.joinPath(this.storage.globalStorageUri, "mcp"), scope: "global" });
+    for (const { uri: directory, scope } of directories) {
+      if (server.scope && server.scope !== scope) continue;
+      let entries: [string, vscode.FileType][];
+      try { entries = await vscode.workspace.fs.readDirectory(directory); }
+      catch (error) {
+        if (error instanceof vscode.FileSystemError && error.code === "FileNotFound") continue;
+        throw error;
+      }
+      for (const [name, type] of entries) {
+        if (type !== vscode.FileType.File || !name.toLowerCase().endsWith(".jsonc")) continue;
+        const file = vscode.Uri.joinPath(directory, name);
+        const source = new TextDecoder().decode(await vscode.workspace.fs.readFile(file));
+        const parsed = parseMcpManifest(source, file.fsPath);
+        if (parsed.server?.name !== serverName) continue;
+        const tools = discovered.map((tool) => {
+          // Some MCP servers (including older Teambition package versions)
+          // omit outputSchema from tools/list. Keep a schema authored in the
+          // manifest so rediscovery does not silently disable result hints.
+          const existing = parsed.tools.find((candidate) => candidate.tool === tool.name);
+          return {
+            name: tool.name,
+            ...(tool.description ? { description: tool.description } : {}),
+            ...(tool.inputSchema ? { inputSchema: tool.inputSchema } : {}),
+            ...(tool.outputSchema ?? existing?.outputSchema
+              ? { outputSchema: tool.outputSchema ?? existing?.outputSchema } : {})
+          };
+        });
+        const edits = modify(source, ["tools"], tools, { formattingOptions: { insertSpaces: true, tabSize: 2 } });
+        await vscode.workspace.fs.writeFile(file, new TextEncoder().encode(applyEdits(source, edits)));
+        await this.reload();
+        return tools.length;
+      }
+    }
+    throw new Error(`MCP manifest for '${serverName}' could not be found.`);
+  }
+
+  async clearMcpAccessToken(serverName: string): Promise<void> {
+    const server = this.assertCredentialServer(serverName);
+    if (!this.mcpSecrets) throw new Error("VS Code SecretStorage is not available.");
+    await this.mcpSecrets.delete(
+      serverName,
+      server.scope === "global" ? "global" : "workspace",
+      mcpCredentialKind(server)
+    );
+  }
+
+  async verifyMcpServer(serverName: string): Promise<void> {
+    if (!this.workspaceTrusted) throw new Error("MCP credentials require a trusted local workspace.");
+    if (!this.mcp.getServer(serverName)) {
+      const rejection = this.mcpServerRejections.get(serverName);
+      throw new Error(rejection
+        ? `MCP server '${serverName}' was rejected: ${rejection}`
+        : `MCP server '${serverName}' is not configured.`);
+    }
+    await this.mcp.verifyServer(serverName);
+  }
+
+  private assertCredentialServer(serverName: string): McpServerConfig {
+    if (!this.workspaceTrusted) throw new Error("MCP credentials require a trusted local workspace.");
+    const server = this.mcp.getServer(serverName);
+    if (!server) {
+      const rejection = this.mcpServerRejections.get(serverName);
+      if (rejection) throw new Error(`MCP server '${serverName}' was rejected: ${rejection}`);
+    }
+    if (!server?.auth) throw new Error(`MCP server '${serverName}' does not declare a token credential.`);
+    return server;
+  }
+}

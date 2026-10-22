@@ -16,9 +16,9 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { ExecutionCancelledError } from "../core/executionErrors.js";
-import { dextWireStepSchema } from "../core/schemas.js";
-import { toBoundaryJson } from "../core/resultSerialization.js";
+import { ExecutionCancelledError } from "../shared/protocol/executionErrors.js";
+import { dextWireStepSchema } from "../shared/contracts/schemas.js";
+import { toBoundaryJson } from "../shared/protocol/resultSerialization.js";
 import { DextResumeCache, type DextReplayEntry } from "./dextResumeCache.js";
 import type {
   CodeRef,
@@ -28,7 +28,7 @@ import type {
   InvocationValue,
   RuntimeResponse,
   WorkflowStepResponse
-} from "../core/types.js";
+} from "../shared/contracts/types.js";
 import type { DextHostMessage, DextKernelMessage, DextWireStep } from "./dextProtocol.js";
 import { DEXT_KERNEL_PROTOCOL } from "./dextProtocol.js";
 

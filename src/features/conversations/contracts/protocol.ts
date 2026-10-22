@@ -1,12 +1,12 @@
 import { z } from "zod";
-import type { AgentStreamEvent, InputExecutionResponse, PlanExecutionOutcome } from "../../../core/types.js";
-import { UI_LIMITS, uiFormResultSchema } from "../../../core/uiForm.js";
-import type { AgentSelection } from "../../agents/contracts.js";
+import type { AgentStreamEvent, InputExecutionResponse, PlanExecutionOutcome } from "../../../shared/contracts/types.js";
+import { UI_LIMITS, uiFormResultSchema } from "../../../shared/contracts/uiForm.js";
+import type { AgentSelection } from "../../agents/contracts/agent.js";
 import type { ResourceSession } from "../../resources/contracts/resourceSession.js";
 import type { DextHistorySession, PlanStatus } from "./history.js";
 
 /** Conversation, execution, plan and patch messages. The global protocol in
- * `src/webviewProtocol.ts` composes this list with the other features, so a
+ * `src/platform/webviewProtocol.ts` composes this list with the other features, so a
  * conversation change never edits the host's whole message union. */
 
 const conversationSchemaList = [

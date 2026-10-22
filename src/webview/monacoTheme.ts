@@ -1,5 +1,5 @@
 import { monaco } from "./monacoEnvironment.js";
-import type { EditorTokenTheme } from "../vscodeTheme.js";
+import type { EditorTokenTheme } from "../shared/contracts/theme.js";
 import { monacoColor, monacoThemeRules } from "./monacoThemeRules.js";
 
 /** The Monaco theme the composer and the conversation both paint code with. */

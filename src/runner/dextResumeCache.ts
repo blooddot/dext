@@ -17,11 +17,9 @@
  * `test/dextResume.test.ts` verifies matching and rejection by replaying real runs.
  */
 
-export interface DextReplayEntry {
-  method: string;
-  arguments: Record<string, unknown>;
-  response: unknown;
-}
+import type { DextReplayEntry } from "../shared/contracts/replay.js";
+
+export type { DextReplayEntry } from "../shared/contracts/replay.js";
 
 export const CHANGED_SINCE_STOPPED =
   "The Code file or a value it reads changed since it stopped, so the recorded calls no longer line up. Retry to run it from the start.";

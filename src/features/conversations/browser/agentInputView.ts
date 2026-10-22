@@ -1,0 +1,158 @@
+import type { AgentInputAnswers, AgentInputState } from "../../../shared/contracts/types.js";
+import type { UiField, UiFormAnswers, UiFormDefinition, UiFormResult, UiInteractionState } from "../../../shared/contracts/uiForm.js";
+import { agentInputForm, agentFormAnswers, uiFieldChoices, uiResultText, type AnswerChoice } from "../presentation/uiInteractionPresentation.js";
+import { InteractionForm } from "./interactionForm.js";
+import { InteractionDialog } from "./interactionDialog.js";
+import { interactionMarkdown } from "./interactionMarkdown.js";
+
+export interface InteractionDraftStore {
+  get(key: string): UiFormAnswers | undefined;
+  set(key: string, draft: UiFormAnswers): void;
+}
+interface Card {
+  id: string; status: string; form: UiFormDefinition; answers?: UiFormAnswers; action?: string | undefined;
+  element: HTMLElement; control?: InteractionForm; dialog?: InteractionDialog;
+  send: (result: UiFormResult) => void;
+}
+/** API requests and native Agent questions share controls, with separate answer adapters. */
+export class AgentInputView {
+  readonly element = document.createElement("section");
+  private running = false;
+  private readonly cards = new Map<string, Card>();
+  private readonly drafts = new Map<string, UiFormAnswers>();
+  constructor(private readonly respond: (requestId: string, answers: AgentInputAnswers | null) => void,
+    private readonly respondUi: (state: UiInteractionState, result: UiFormResult) => void = () => {},
+    private readonly scope = "", private readonly store?: InteractionDraftStore) {
+    this.element.className = "agent-inputs"; this.element.hidden = true;
+    this.element.setAttribute("aria-label", "Questions and interactions");
+  }
+  /** Returns whether this state newly put an answerable card on screen. The
+   * caller uses that to bring a request the reader has never seen into view;
+   * a repeated state is not new, so a reader who deliberately scrolled away is
+   * not dragged back on every replayed event. */
+  update(state: AgentInputState): boolean {
+    const form = agentInputForm(state);
+    const answers: UiFormAnswers = {};
+    for (const question of state.questions) {
+      if (question.isSecret) continue;
+      const values = state.answers?.[question.id]?.answers;
+      if (!values?.length) continue;
+      if (!question.options.length) { answers[question.id] = { type: "input", value: values[0]! }; continue; }
+      // An Agent answer is a flat list of labels, so a value that names an option
+      // is a picked option and anything else is the reply the reader typed. The
+      // split is what lets the settled card mark the right row.
+      const labels = question.options.map((option) => option.label);
+      const typed = values.filter((value) => !labels.includes(value));
+      answers[question.id] = { type: question.multiSelect ? "checkbox" : "radio",
+        selected: values.filter((value) => labels.includes(value)), ...(typed.length ? { custom: typed.join(", ") } : {}) };
+    }
+    return this.put({ id: `agent:${state.id}`, status: state.status === "answered" ? "submitted" : state.status === "dismissed" ? "cancelled" : "waiting", form, answers,
+      element: document.createElement("section"), send: (result) => this.respond(state.id, agentFormAnswers(result)) });
+  }
+  updateUi(state: UiInteractionState): boolean {
+    return this.put({ id: `ui:${state.requestId}`, status: state.status, form: state.form, action: state.action, ...(state.answers ? { answers: state.answers } : {}),
+      element: document.createElement("section"), send: (result) => this.respondUi(state, result) });
+  }
+  private put(card: Card): boolean {
+    const previous = this.cards.get(card.id);
+    // Replayed or delayed waiting events cannot revive a terminal request.
+    if (previous && previous.status !== "waiting") return false;
+    if (previous?.status === card.status) { previous.dialog?.open(); return false; }
+    previous?.dialog?.close(); previous?.control?.disable();
+    if (previous) previous.element.replaceWith(card.element); else this.element.append(card.element);
+    this.cards.set(card.id, card); this.element.hidden = false; this.render(card);
+    return card.status === "waiting";
+  }
+  setRunning(running: boolean): void {
+    if (this.running === running) { if (running) this.resume(); return; }
+    this.running = running;
+    for (const card of this.cards.values()) if (card.status === "waiting") this.render(card);
+  }
+  suspend(): void { for (const card of this.cards.values()) { card.control?.suspend(); card.dialog?.close(); } }
+  focusRequest(kind: "agent" | "ui", requestId: string): boolean {
+    const card = this.cards.get(`${kind}:${requestId}`);
+    if (!this.running || card?.status !== "waiting" || !card.control) return false;
+    card.element.scrollIntoView({ block: "center" });
+    card.dialog?.open();
+    card.control.element.querySelector<HTMLElement>("input:not(:disabled), textarea:not(:disabled), select:not(:disabled), button:not(:disabled)")?.focus({ preventScroll: true });
+    return true;
+  }
+  resume(): void { if (this.running) for (const card of this.cards.values()) card.dialog?.open(); }
+  private render(card: Card): void {
+    card.dialog?.close(); card.control?.disable();
+    delete card.dialog; delete card.control;
+    card.element.replaceChildren(); card.element.className = "agent-input-card";
+    const key = `${this.scope}:${card.id}`;
+    if (this.running && card.status === "waiting") {
+      const save = (draft: UiFormAnswers): void => { this.drafts.set(key, draft); this.store?.set(key, draft); };
+      const form = new InteractionForm(card.form, (result) => {
+        card.send(result);
+        const answers = { ...result.answers };
+        for (const field of card.form.fields) if (field.secret) delete answers[field.id];
+        this.put({ ...card, status: result.status, answers, action: result.action, element: document.createElement("section") });
+      }, this.drafts.get(key) ?? this.store?.get(key) ?? {}, save);
+      card.control = form;
+      if (card.form.presentation === "dialog") {
+        const dialog = new InteractionDialog(form); card.dialog = dialog;
+        const reopen = document.createElement("button"); reopen.type = "button"; reopen.textContent = card.form.title;
+        reopen.addEventListener("click", () => dialog.open());
+        card.element.append(reopen, dialog.element); queueMicrotask(() => dialog.open());
+      } else {
+        const close = document.createElement("button"); close.type = "button"; close.textContent = "×";
+        close.className = "interaction-close"; close.setAttribute("aria-label", "Close interaction"); close.addEventListener("click", () => form.cancel());
+        card.element.append(close, form.element);
+        card.element.onkeydown = (event) => { if (event.key === "Escape") { event.preventDefault(); form.cancel(); } };
+      }
+      return;
+    }
+    card.element.onkeydown = null;
+    const action = card.form.actions.find((action) => action.id === card.action);
+    const disclosure = document.createElement("details"); disclosure.className = "agent-input-disclosure";
+    const summary = document.createElement("summary");
+    const chevron = document.createElement("i"); chevron.className = "disclosure-chevron codicon codicon-chevron-right";
+    const title = document.createElement("strong"); title.textContent = `${card.form.title} — ${card.status === "submitted" ? "Submitted" : "Closed"}${action ? ` (${action.label})` : ""}`;
+    summary.append(chevron, title); disclosure.append(summary);
+    const body = document.createElement("div"); body.className = "agent-input-disclosure-body";
+    if (card.form.description) body.append(interactionMarkdown(card.form.description));
+    for (const field of card.form.fields) body.append(this.field(card, field));
+    disclosure.append(body); card.element.append(disclosure);
+    if (card.status !== "waiting") { this.drafts.delete(key); this.store?.set(key, {}); }
+  }
+  /** A settled card keeps every choice the question offered and marks the picked
+   * ones, so the answer still reads against its alternatives once the form is
+   * gone. Fields without options keep their answer as plain text. */
+  private field(card: Card, field: UiField): HTMLElement {
+    const fieldBody = document.createElement("div"); fieldBody.className = "agent-input-field";
+    const label = document.createElement("strong"); label.textContent = field.label; fieldBody.append(label);
+    const answer = card.answers?.[field.id];
+    const text = field.secret ? "Answer hidden" : answer ? uiResultText(answer) : "No answer submitted";
+    const choices = field.secret ? [] : uiFieldChoices(field, answer);
+    if (!choices.length) {
+      const value = document.createElement("p"); value.className = "agent-input-answer"; value.textContent = text;
+      fieldBody.append(value);
+      return fieldBody;
+    }
+    const list = document.createElement("ul"); list.className = "agent-input-choices";
+    for (const choice of choices) list.append(this.choice(choice));
+    fieldBody.append(list);
+    return fieldBody;
+  }
+  private choice(choice: AnswerChoice): HTMLElement {
+    const item = document.createElement("li");
+    item.className = `agent-input-choice${choice.selected ? " selected" : ""}${choice.custom ? " custom" : ""}`;
+    const mark = document.createElement("i");
+    mark.className = `codicon codicon-${choice.selected ? "check" : "blank"}`; mark.setAttribute("aria-hidden", "true");
+    const text = document.createElement("span");
+    if (choice.custom) {
+      const source = document.createElement("small"); source.className = "agent-input-choice-source"; source.textContent = "Other";
+      text.append(source);
+    }
+    text.append(choice.label);
+    if (choice.description) {
+      const description = document.createElement("small"); description.textContent = choice.description;
+      text.append(description);
+    }
+    item.append(mark, text);
+    return item;
+  }
+}

@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import type { AgentProfile } from "../features/agents/contracts.js";
+import type { AgentProfile } from "../features/agents/contracts/agent.js";
 import { resolveProjectEvidenceSettings } from "../features/project/contracts/projectEvidenceSettings.js";
 import type { ProjectWorkspaceSettings } from "../features/project/contracts/projectSettings.js";
 import { ArchifyAdapter } from "../features/project/host/diagrams/archifyAdapter.js";

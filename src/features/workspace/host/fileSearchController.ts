@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import type { FileSearchRequest, FileSearchResponse } from "../contracts.js";
+import type { FileSearchRequest, FileSearchResponse } from "../contracts/fileSearch.js";
 import { rankFileMatches } from "../domain/fileSearch.js";
 const MAX_INDEXED_FILES = 20000;
 const MAX_FILE_SUGGESTIONS = 40;

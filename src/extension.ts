@@ -1,12 +1,12 @@
 import * as vscode from "vscode";
 import { setupProject } from "./app/projectSetup.js";
-import { DextApplication } from "./application.js";
+import { DextApplication } from "./app/application.js";
 import type { HistorySortOrder } from "./features/conversations/contracts/preferences.js";
 import { DextConversationPreferences } from "./features/conversations/host/conversationPreferences.js";
-import { createApiReferenceSource } from "./core/apiReference.js";
-import { describeApiSource } from "./core/apiSource.js";
-import { redactedMcpUrl } from "./core/mcpRegistry.js";
-import { recordWorkflow } from "./core/workflowRecorder.js";
+import { createApiReferenceSource } from "./features/workflow/host/apiReference.js";
+import { describeApiSource } from "./features/workflow/host/apiSource.js";
+import { redactedMcpUrl } from "./features/mcp/host/mcpRegistry.js";
+import { recordWorkflow } from "./features/workflow/domain/workflowRecorder.js";
 import { ProjectStore } from "./features/project/host/persistence/projectStore.js";
 import type { ProjectEditorProvider } from "./features/project/host/projectEditorProvider.js";
 import { VscodeProjectFileHost, effectiveProjectWorkspaceSettings } from "./features/project/host/projectPanelDataSource.js";
@@ -27,10 +27,10 @@ import { EditorTabManager, createVscodeEditorTabHost, wrapVscodeWebviewPanel, ty
 import { EditorTabRestorer } from "./platform/editor-tabs/editorTabSerializer.js";
 import { restoreEditorTabState } from "./platform/editor-tabs/editorTabState.js";
 import { EDITOR_TAB_VIEW_TYPES, parseEditorTabKey } from "./platform/editor-tabs/editorTabTypes.js";
-import { DextSidebarProvider } from "./sidebarProvider.js";
+import { DextSidebarProvider } from "./app/sidebarProvider.js";
 import { DELETE_CONFIRMATION_DETAIL, TURN_DELETE_CONFIRMATION, TURN_RETRY_CONFIRMATION } from "./features/conversations/presentation/turnPresentation.js";
-import type { SelectionTarget } from "./vscodeAttachments.js";
-import { DextSelectionActions } from "./vscodeSelectionActions.js";
+import type { SelectionTarget } from "./platform/vscode/attachments.js";
+import { DextSelectionActions } from "./platform/vscode/selectionActions.js";
 let activeApplication: DextApplication | undefined;
 
 /** Narrows a restored page to one the Project tab can actually render. */

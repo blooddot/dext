@@ -1,4 +1,4 @@
-import type { FileSearchRequest, FileSearchResponse } from "../contracts.js";
+import type { FileSearchRequest, FileSearchResponse } from "../contracts/fileSearch.js";
 
 /** Request side of the composer's `@` file picker. Only the newest query is
  * kept: an in-flight lookup for text the user has already typed past would

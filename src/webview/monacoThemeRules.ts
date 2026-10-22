@@ -1,4 +1,4 @@
-import type { EditorTokenName, EditorTokenTheme } from "../vscodeTheme.js";
+import type { EditorTokenName, EditorTokenTheme } from "../shared/contracts/theme.js";
 
 /**
  * The Monaco half of the theme: the active VS Code theme read as token colors, turned

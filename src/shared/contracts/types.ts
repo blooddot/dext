@@ -1,0 +1,443 @@
+import type { UiFormDefinition, UiFormResult, UiInteractionState } from "./uiForm.js";
+import type { WritableAgentPermission } from "./permissions.js";
+export type MethodKind = "command" | "skill";
+export type MethodSource = "builtin" | "global" | "project";
+export type BuiltinOutputKind =
+  | "ask"
+  | "plan"
+  | "agent"
+  | "template"
+  | "apply"
+  | "terminal"
+  | "skill"
+  | "ui"
+  | "mcpRaw";
+
+/** A structured MCP tool declares its own `mcp.<server>.<tool>` kind, which is the
+ * one non-builtin kind the runtime still produces. */
+export type OutputKind = BuiltinOutputKind | `mcp.${string}`;
+
+/** Common structural contract shared by every value returned from a Dext API. */
+export interface DextResultBase {
+  kind: string;
+}
+
+export interface Position {
+  line: number;
+  character: number;
+}
+
+export interface Range {
+  start: Position;
+  end: Position;
+}
+
+export interface CodeRef {
+  kind: "codeRef";
+  uri: string;
+  range?: Range;
+  symbol?: string;
+  documentVersion: number;
+  contentHash: string;
+  content: string;
+}
+
+/** A workspace-contained directory reference. It deliberately contains no
+ * directory contents, so passing a directory never expands the prompt. */
+export interface DirRef {
+  kind: "dirRef";
+  uri: string;
+  path: string;
+}
+
+export type ContextReference =
+  | { kind: "selection" }
+  | { kind: "activeFile" }
+  | { kind: "file"; path: string }
+  | { kind: "symbol"; name: string };
+
+export interface DirectoryReference {
+  kind: "dir";
+  path: string;
+}
+
+export type InvocationValue =
+  | string
+  | number
+  | boolean
+  | ContextReference
+  | DirectoryReference
+  | DirRef
+  | CodeRef
+  | DextResultBase
+  | InvocationValue[]
+  | { [key: string]: InvocationValue };
+
+export interface InvocationArgument {
+  name: string;
+  value: InvocationValue;
+}
+
+export interface InvocationAst {
+  kind: "invocation";
+  method: string;
+  arguments: InvocationArgument[];
+  source: "code" | "chat";
+}
+
+export type FieldType = "string" | "number" | "boolean" | "object" | "list" | "enum" | "context" | "dir" | "result";
+
+export interface FieldDefinition {
+  name: string;
+  type: FieldType;
+  /** Named structural type for an object or list element, e.g. `ui.Field`. */
+  shapeType?: string;
+  /** Named result type a declared output uses, for MCP typed results and `ui.*`. */
+  resultType?: string;
+  /** Whether the field may explicitly contain JSON null. */
+  nullable?: boolean;
+  /** Runtime-only argument omitted from public signatures and completions. */
+  internal?: boolean;
+  accepts?: FieldType[];
+  description?: string;
+  required?: boolean;
+  values?: string[];
+  default?: string | number | boolean | { [key: string]: never };
+  multiple?: boolean;
+  /** Nested contract information for structured MCP results. */
+  properties?: FieldDefinition[];
+  items?: FieldDefinition;
+  /** Object variants selected by a literal discriminator property. */
+  discriminator?: {
+    name: string;
+    variants: { value: string; properties: FieldDefinition[] }[];
+  };
+}
+
+export interface CallableDefinition {
+  id: string;
+  title: string;
+  description: string;
+  kind: MethodKind;
+  version: string;
+  input: FieldDefinition[];
+  output: {
+    kind: OutputKind;
+    description?: string;
+    /** Fields declared by a restricted Python TypedDict result. */
+    fields?: FieldDefinition[];
+    resultType?: string;
+  };
+  context?: ContextReference["kind"][];
+  /** Every API is deterministic now: a custom API is an ordinary TypeScript
+   * module the kernel imports, not a plan the extension host interprets. */
+  executor: {
+    kind: "deterministic";
+    handler: string;
+  };
+}
+
+export interface RegisteredCallable extends CallableDefinition {
+  source: MethodSource;
+}
+
+export interface PlanExecutionOutcome {
+  status: "completed" | "incomplete" | "blocked" | "cancelled";
+  reason: string;
+  rounds: number;
+}
+
+export interface AskResult extends DextResultBase {
+  kind: "ask";
+  text: string;
+}
+
+/** Plan text plus host-owned state for the saved or executed plan document. */
+export interface PlanResult extends DextResultBase {
+  kind: "plan";
+  text: string;
+  /** Workspace-relative path of the saved plan document, set only by Plan mode. */
+  planPath?: string;
+  /** The host is building an existing plan; keep the turn in Plan mode but
+   * send the implementation request directly instead of creating a new plan. */
+  executePlan?: boolean;
+  planOutcome?: PlanExecutionOutcome;
+}
+
+export interface SkillResult extends DextResultBase {
+  kind: "skill";
+  text: string;
+}
+
+/** Result of a continuous agent task. A patch is present when the Agent
+ * generated an auditable edit proposal, including every apply=false edit. */
+export interface AgentResult extends DextResultBase {
+  kind: "agent";
+  text: string;
+  summary?: string;
+  patch?: PatchResult;
+  files?: CodeRef[];
+}
+
+/** Text rendered from a Dext template file. The model only supplied the field
+ * values; the heading structure, section order and list markers come from the
+ * template, so a non-compliant model cannot change them. Nothing is written:
+ * the caller decides whether and where to save `text`. */
+export interface TemplateResult extends DextResultBase {
+  kind: "template";
+  text: string;
+}
+
+export interface ApplyResult extends DextResultBase {
+  kind: "apply";
+  status: "applied" | "unchanged" | "conflict";
+  files: CodeRef[];
+  summary: string;
+}
+
+export type TerminalStatus = "succeeded" | "failed" | "timed_out";
+
+export interface TerminalResult extends DextResultBase {
+  kind: "terminal";
+  status: TerminalStatus;
+  command: string;
+  cwd: string;
+  exit_code: number;
+  stdout: string;
+  stderr: string;
+  duration_ms: number;
+}
+
+export interface UiSelectResult extends DextResultBase {
+  kind: "ui"; type: "select"; selected: string[];
+}
+export interface UiRadioResult extends DextResultBase {
+  kind: "ui"; type: "radio"; selected: string[]; custom?: string;
+}
+export interface UiCheckboxResult extends DextResultBase {
+  kind: "ui"; type: "checkbox"; selected: string[]; custom?: string;
+}
+export interface UiAlertResult extends DextResultBase {
+  kind: "ui"; type: "alert"; status: "acknowledged" | "dismissed";
+}
+export type { UiFormResult } from "./uiForm.js";
+
+export interface UiConfirmResult extends DextResultBase {
+  kind: "ui";
+  type: "confirm";
+  confirmed: boolean;
+}
+
+export interface UiInputResult extends DextResultBase {
+  kind: "ui";
+  type: "input";
+  value?: string;
+}
+
+export type UiResult = UiSelectResult | UiRadioResult | UiCheckboxResult | UiConfirmResult | UiInputResult | UiAlertResult | UiFormResult;
+
+/** Raw result of an MCP tools/call request. TypedDict custom APIs adapt only
+ * the structured payload into domain-specific result kinds. */
+export interface McpRawResult extends DextResultBase {
+  kind: "mcpRaw";
+  server: string;
+  tool: string;
+  content?: string;
+  structured?: Record<string, unknown>;
+}
+
+export interface PatchChange {
+  uri: string;
+  before: string;
+  after: string;
+  range?: Range;
+  documentVersion?: number;
+  contentHash?: string;
+}
+
+export interface PatchResult extends DextResultBase {
+  kind: "patch";
+  title: string;
+  changes: PatchChange[];
+}
+
+/** A structured result synthesized from a configured MCP output schema. */
+export interface McpTypedResult extends DextResultBase {
+  kind: `mcp.${string}`;
+  [key: string]: unknown;
+}
+
+/** `PatchResult` is not an API output kind: it is the shape of `AgentResult.patch`. */
+export type DextResult = McpTypedResult
+  | AskResult
+  | PlanResult
+  | AgentResult
+  | TemplateResult
+  | ApplyResult
+  | TerminalResult
+  | SkillResult
+  | UiResult
+  | McpRawResult;
+
+export interface ResolvedInvocation {
+  invocation: InvocationAst;
+  method: RegisteredCallable;
+  arguments: Record<string, InvocationValue | CodeRef | CodeRef[] | DirRef>;
+  context: CodeRef[];
+  metadata: Readonly<ExecutionMetadata>;
+}
+
+export interface ExecutionMetadata {
+  agentPreset?: string;
+  /** Host-selected permission for typed Agent calls in a mode without its own
+   * permission picker, such as Code. */
+  agentPermission?: WritableAgentPermission;
+  instruction?: string;
+  /** Explicit Plan document selected by the host for a revise turn. */
+  planPath?: string;
+  /** Build an existing plan while keeping the turn in Plan mode. */
+  executePlan?: boolean;
+  agent?: string;
+  model?: string;
+  reasoningEffort?: string;
+  speed?: string;
+  serviceTier?: string;
+  agentSessionId?: string;
+  /** Provider-native session to fork before the next turn, when available. */
+  conversationForkFrom?: string;
+  /** Persisted provider session to resume after the extension restarts. */
+  conversationProviderSessionId?: string;
+  /** Prior Dext turns to bootstrap a provider conversation that has no native
+   * session yet (for example, the first turn after a fork or reload). */
+  conversationContext?: string;
+  /** Called when a provider exposes the native session id for this turn. */
+  onAgentSessionId?: (provider: string, sessionId: string) => void;
+  signal?: AbortSignal;
+  onAgentEvent?: (event: AgentStreamEvent) => void;
+  requestAgentInput?: (request: AgentInputRequest, signal: AbortSignal) => Promise<AgentInputAnswers | null>;
+  /** Process output emitted while an MCP tool is running. */
+  onMcpEvent?: (event: McpProcessEvent) => void;
+  ui?: UiInteraction;
+}
+
+export type McpProcessEventSource = "stdout" | "stderr" | "progress";
+
+/** Non-result output emitted during an MCP tool invocation. */
+export interface McpProcessEvent {
+  source: McpProcessEventSource;
+  text: string;
+}
+
+/** Host-owned, cancellable interaction surface shared by all UI APIs. */
+export interface UiInteraction {
+  form(definition: UiFormDefinition, signal?: AbortSignal): Promise<UiFormResult>;
+}
+
+export interface AgentInputQuestion {
+  id: string;
+  header: string;
+  question: string;
+  options: { label: string; description: string }[];
+  isSecret?: boolean;
+  /** Supporting detail shown with the question, kept out of the option labels. */
+  detail?: string;
+  /** More than one option may be selected. Answers then carry every selection. */
+  multiSelect?: boolean;
+}
+
+export interface AgentInputRequest {
+  id: string;
+  questions: AgentInputQuestion[];
+  blocking: boolean;
+}
+
+export type AgentInputAnswers = Record<string, { answers: string[] }>;
+
+export interface AgentInputState extends AgentInputRequest {
+  status: "waiting" | "answered" | "dismissed";
+  answers?: AgentInputAnswers;
+}
+
+export type AgentStreamPhase = "status" | "reasoning" | "message" | "tool" | "todo" | "input";
+
+export interface AgentTodoItem {
+  id: string;
+  text: string;
+  status: "pending" | "in_progress" | "completed";
+}
+
+export type AgentToolKind = "command" | "file" | "image" | "step";
+
+/** Token counts reported by a provider for one completed agent turn. Cached
+ * input is diagnostic metadata only and is never added to the total twice.
+ * ACP providers that cannot report billed usage may instead report the tokens
+ * currently occupying the context window; those are displayed separately and
+ * are never treated as a per-turn charge. */
+export interface AgentTokenUsage {
+  inputTokens?: number;
+  cachedInputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  /** Current context occupancy (`usage_update.used`). */
+  contextTokens?: number;
+  /** Total context window (`usage_update.size`), when the provider reports it. */
+  contextWindowTokens?: number;
+}
+
+export interface AgentStreamEvent {
+  id?: string;
+  phase: AgentStreamPhase;
+  text: string;
+  title?: string;
+  /** Keeps agent work-log context and its command cards together in the UI. */
+  group?: "work-log";
+  /** Identity of the group the agent itself put this step in. Agents that report
+   * their own grouping get reproduced exactly; the rest fall back to arrival order. */
+  groupId?: string;
+  groupLabel?: string;
+  /** A step the agent showed on its own row, so it needs no enclosing group. */
+  solo?: boolean;
+  toolKind?: AgentToolKind;
+  replace?: boolean;
+  done?: boolean;
+  eventType?: string;
+  usage?: AgentTokenUsage;
+  /** Complete provider-reported snapshot; an empty list clears the panel. */
+  todos?: AgentTodoItem[];
+  userInput?: AgentInputState;
+  uiInteraction?: UiInteractionState;
+}
+
+export interface RuntimeResponse {
+  invocation: InvocationAst;
+  method: Pick<RegisteredCallable, "id" | "title" | "kind" | "source">;
+  result: DextResult;
+  durationMs: number;
+  instruction?: string;
+}
+
+export interface InputExecutionResponse {
+  kind: "workflow";
+  executions: RuntimeResponse[];
+  steps?: WorkflowStepResponse[];
+}
+
+export type ExecutionState = "success" | "failed" | "cancelled";
+
+export interface WorkflowStepResponse {
+  assignment?: string;
+  method: string;
+  state: ExecutionState;
+  response?: RuntimeResponse;
+  /** Process output written by user code (`console.log` / `console.error`). It is
+   * not an API result, so it never carries `invocation` or `durationMs` and is
+   * mutually exclusive with `response`. */
+  stream?: {
+    channel: "stdout" | "stderr";
+    text: string;
+  };
+  error?: string;
+  /** Zero-based index of a comprehension branch, so concurrent fan-out steps can
+   * be told apart and grouped in Output. Absent for ordinary sequential steps. */
+  branch?: number;
+}

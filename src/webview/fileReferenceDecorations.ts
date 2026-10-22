@@ -1,5 +1,5 @@
-import type { InputReferenceProjection } from "../core/fileReference.js";
-export { inputReferenceProjections } from "../core/fileReference.js";
+import type { InputReferenceProjection } from "../features/workspace/domain/fileReference.js";
+export { inputReferenceProjections } from "../features/workspace/domain/fileReference.js";
 
 export interface FileReferenceRemovalEdit {
   from: number;

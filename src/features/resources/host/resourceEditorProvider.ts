@@ -1,5 +1,5 @@
-import type { ApiReferenceCatalog, ApiReferenceModule } from "../../../core/apiReference.js";
-import { CONVERSATION_METHODS, formatFieldType, formatMethodParameter, methodResultType } from "../../../core/methodSignature.js";
+import type { ApiReferenceCatalog, ApiReferenceModule } from "../../workflow/contracts/apiReference.js";
+import { CONVERSATION_METHODS, formatFieldType, formatMethodParameter, methodResultType } from "../../workflow/domain/methodSignature.js";
 import { describeEditorTab } from "../../../platform/editor-tabs/editorTabManager.js";
 import { editorTabKey } from "../../../platform/editor-tabs/editorTabTypes.js";
 import type { ApiCallable, ApiDataSourceOptions, FileResourceDataSourceOptions, ResourceEditorDataSource, ResourceEditorProviderOptions, ResourceEditorShowResult, ResourceEntry, ResourcePanelOptions } from "../contracts/resourceDocuments.js";

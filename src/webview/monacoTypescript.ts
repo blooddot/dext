@@ -13,7 +13,7 @@
  * contribution's defaults lazily, to configure the compiler and to inject the
  * `dext` declaration, neither of which has to happen at construction time.
  *
- * The `dext` module is declared by the generator in `src/core/dextApiTypes.ts`.
+ * The `dext` module is declared by the generator in `src/features/workflow/domain/dextApiTypes.ts`.
  * The extension host sends that declaration to every webview as
  * `{ type: "dextTypes", declaration }`; this module adds it as an extra lib so
  * `import { ask } from "dext"` resolves inside the composer.
@@ -24,7 +24,7 @@
  */
 import type * as typescriptRegister from "monaco-editor/languages/features/typescript/register.js";
 import { monaco } from "./monacoEnvironment.js";
-import { dextBuiltinNames, dextTypesNotice } from "./dextTypesStatus.js";
+import { dextBuiltinNames, dextTypesNotice } from "../features/workflow/domain/dextTypesStatus.js";
 import {
   dextApiSymbols, dextImportEdit, dextImportTargetAt, dextSymbolsFor,
   type DextSymbol, type DextSymbolKind

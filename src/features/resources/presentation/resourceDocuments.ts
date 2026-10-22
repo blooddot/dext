@@ -1,4 +1,4 @@
-import type { ApiReferenceMember, ApiReferenceModule } from "../../../core/apiReference.js";
+import type { ApiReferenceMember, ApiReferenceModule } from "../../workflow/contracts/apiReference.js";
 import type { EditorTabState } from "../../../platform/editor-tabs/editorTabState.js";
 import type { ResourceDefinitionDocument, ResourceEntry, ResourceListDocument, ResourcePanelOptions, ResourceTreeNode } from "../contracts/resourceDocuments.js";
 import { RESOURCE_LABELS, type ResourceKind, type ResourceScope } from "../contracts/resourceSession.js";

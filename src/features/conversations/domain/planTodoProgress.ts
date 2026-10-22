@@ -1,5 +1,5 @@
-import type { AgentStreamEvent, AgentTodoItem } from "../../../core/types.js";
-import { agentTodoEvent } from "../../../core/agentTodoTracking.js";
+import type { AgentStreamEvent, AgentTodoItem } from "../../../shared/contracts/types.js";
+import { agentTodoEvent } from "../../agents/domain/agentTodoTracking.js";
 
 const MARKER = "<!-- dext-todo:";
 

@@ -1,5 +1,5 @@
-import type { ApplyResult, InputExecutionResponse, PatchResult, RegisteredCallable } from "../../../core/types.js";
-import type { DeterministicHandler } from "../../../core/runtime.js";
+import type { ApplyResult, InputExecutionResponse, PatchResult, RegisteredCallable } from "../../../shared/contracts/types.js";
+import type { DeterministicHandler } from "../../workflow/contracts/runtime.js";
 import type { ConversationWebviewResponse } from "../contracts/protocol.js";
 
 /** An `agent(apply=False)` step proposes changes and writes nothing, so its

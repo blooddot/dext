@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import type { AgentStreamEvent } from "../../../core/types.js";
+import type { AgentStreamEvent } from "../../../shared/contracts/types.js";
 import type { ConversationWebviewResponse } from "../contracts/protocol.js";
 
 export interface AgentEventStreamOptions {

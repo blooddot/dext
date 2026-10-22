@@ -1,0 +1,1538 @@
+import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { delimiter, extname, isAbsolute, join } from "node:path";
+import { isDextResult, serializeResultForAgent } from "../../../shared/protocol/resultSerialization.js";
+import { jsonCandidates, stripNullProperties } from "../../../shared/protocol/resultBoundary.js";
+import { ExecutionCancelledError } from "../../../shared/protocol/executionErrors.js";
+import type { AgentPermission, AgentProfile } from "../contracts/agent.js";
+import type { AxMethodContract } from "../domain/axAdapter.js";
+import type { AgentStreamEvent, AgentStreamPhase, AgentTokenUsage, AgentInputAnswers, AgentInputQuestion, ExecutionMetadata, RegisteredCallable, ResolvedInvocation } from "../../../shared/contracts/types.js";
+import { agentTodoEvent, ClaudeTodoTracker, isClaudeTodoTool, normalizeAgentTodos } from "../domain/agentTodoTracking.js";
+import { elicitationFormQuestions, elicitationFormResponse } from "../domain/elicitationForm.js";
+import { uiCallForm } from "../../../shared/contracts/uiForm.js";
+import { cliCompletion } from "../domain/cliCompletion.js";
+import { agentTimeout, DEFAULT_AGENT_TIMEOUT_MS, DEFAULT_AGENT_IDLE_TIMEOUT_MS } from "../domain/agentTimeout.js";
+import { trackCliToolActivity } from "../domain/agentToolActivity.js";
+import { runCodexConversation } from "./codexConversationRunner.js";
+import { codexErrorMessage } from "../domain/codexError.js";
+
+export interface AgentExecutionRequest {
+  agentPreset?: string;
+  profile: AgentProfile;
+  model?: string;
+  reasoningEffort?: string;
+  speed?: string;
+  serviceTier?: string;
+  cwd: string;
+  method: RegisteredCallable;
+  resolved: ResolvedInvocation;
+  contract: AxMethodContract;
+  metadata: Readonly<ExecutionMetadata>;
+  /** Only agent(apply=true) may receive a trusted writable sandbox. */
+  allowWorkspaceWrite?: boolean;
+  /** The composer-selected write tier. The write gate above still controls
+   * whether this value can take effect. */
+  permission?: AgentPermission;
+  /** When false, the Agent reports conclusions in text and must not produce a
+   * patch (agent(patch=false)). Defaults to true. */
+  includePatch?: boolean;
+  /** Extra provider CLI arguments from `dext.agentCliArgs`, already filtered. */
+  cliArguments?: readonly string[];
+  onEvent?: (event: AgentStreamEvent) => void;
+  signal?: AbortSignal;
+}
+
+/** An unstructured user conversation. Unlike Dext APIs, it has no JSON
+ * envelope or output schema and its result is ordinary assistant text. */
+export interface AgentConversationRequest {
+  agentPreset?: string;
+  profile: AgentProfile;
+  mode: "agent" | "ask" | "plan";
+  model?: string;
+  reasoningEffort?: string;
+  speed?: string;
+  serviceTier?: string;
+  cwd: string;
+  input: string;
+  metadata: Readonly<ExecutionMetadata>;
+  allowWorkspaceWrite: boolean;
+  /** The tier the composer asked for. `allowWorkspaceWrite` stays the single
+   * gate on writes; this only decides how the provider is told about it. */
+  permission?: AgentPermission;
+  /** Extra provider CLI arguments from `dext.agentCliArgs`, already filtered. */
+  cliArguments?: readonly string[];
+  onEvent?: (event: AgentStreamEvent) => void;
+  signal?: AbortSignal;
+}
+
+/**
+ * One read-only turn whose answer is constrained by the provider's own
+ * structured-output channel (`codex --output-schema`, `claude --json-schema`).
+ * Unlike `run`, the caller owns the contract, so the result is the raw
+ * schema-conforming message text rather than a value parsed as a Dext result.
+ * A provider without such a channel cannot serve this request.
+ */
+export interface AgentStructuredRequest {
+  profile: AgentProfile;
+  cwd: string;
+  /** Complete prompt text; the transport owns no other context. */
+  input: string;
+  /** The JSON schema the answer must conform to. */
+  outputSchema: object;
+  model?: string;
+  reasoningEffort?: string;
+  speed?: string;
+  serviceTier?: string;
+  /** Extra provider CLI arguments from `dext.agentCliArgs`, already filtered. */
+  cliArguments?: readonly string[];
+  onEvent?: (event: AgentStreamEvent) => void;
+  signal?: AbortSignal;
+}
+
+export interface AgentRunner {
+  run(request: AgentExecutionRequest): Promise<unknown>;
+  runConversation?(request: AgentConversationRequest): Promise<string>;
+  runStructured?(request: AgentStructuredRequest): Promise<string>;
+  endSession?(sessionId: string): void;
+  dispose?(): void | Promise<void>;
+}
+
+interface ProcessResult {
+  stdout: string;
+  stderr: string;
+  code: number | null;
+}
+
+type ProcessRunner = typeof runProcess;
+
+interface CommandResolutionOptions {
+  platform?: NodeJS.Platform;
+  env?: NodeJS.ProcessEnv;
+}
+
+export function agentProcessEnvironment(
+  provider: AgentProfile["provider"],
+  usesChatGptLogin: boolean,
+  source: NodeJS.ProcessEnv = process.env
+): NodeJS.ProcessEnv | undefined {
+  if (provider !== "codex" || !usesChatGptLogin) return undefined;
+  const env = { ...source };
+  delete env.OPENAI_API_KEY;
+  delete env.CODEX_API_KEY;
+  return env;
+}
+
+function windowsCommandCandidates(
+  command: string,
+  options: Required<CommandResolutionOptions>
+): string[] {
+  const trimmed = command.trim();
+  const extensions = (options.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD")
+    .split(";")
+    .map((extension) => extension.trim().toLowerCase())
+    .filter(Boolean);
+  // A Unix shell shim may sit beside a Windows `.cmd` shim. `spawn()` cannot
+  // execute that bare file on Windows, so prefer a PATHEXT-qualified command
+  // when the user did not name an extension explicitly.
+  const names = options.platform === "win32" && !extname(trimmed)
+    ? [...extensions.map((extension) => `${trimmed}${extension}`), trimmed]
+    : [trimmed];
+
+  return [...new Set(names)];
+}
+
+/**
+ * Resolve a configured CLI from the current process environment. Windows CLI
+ * installs commonly expose a `.cmd` shim, so PATHEXT is honored explicitly.
+ */
+export function resolveCliCommand(
+  command: string,
+  _provider: AgentProfile["provider"],
+  input: CommandResolutionOptions = {}
+): string | undefined {
+  const trimmed = command.trim();
+  if (!trimmed) return undefined;
+  const options: Required<CommandResolutionOptions> = {
+    platform: input.platform ?? process.platform,
+    env: input.env ?? process.env
+  };
+  for (const candidate of windowsCommandCandidates(trimmed, options)) {
+    if (isAbsolute(candidate) && existsSync(candidate)) return candidate;
+    if (isAbsolute(candidate)) continue;
+    for (const directory of (options.env.Path ?? options.env.PATH ?? "").split(delimiter)) {
+      if (!directory) continue;
+      const resolved = join(directory, candidate);
+      if (existsSync(resolved)) return resolved;
+    }
+  }
+  return undefined;
+}
+
+export function displayValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(displayValue);
+  if (isDextResult(value)) return serializeResultForAgent(value);
+  if (typeof value === "object" && value !== null && "content" in value && "uri" in value) {
+    const reference = value as { uri?: string; content?: string; range?: unknown; symbol?: string };
+    return { uri: reference.uri, content: reference.content, range: reference.range, symbol: reference.symbol };
+  }
+  return value;
+}
+
+type JsonSchema = Record<string, unknown>;
+
+function nullableSchema(schema: JsonSchema): JsonSchema {
+  if (schema.type === "null") return schema;
+  if (typeof schema.type === "string") {
+    return { ...schema, type: [schema.type, "null"] };
+  }
+  if (Array.isArray(schema.type) && !schema.type.includes("null")) {
+    return { ...schema, type: [...schema.type.filter((item): item is string => typeof item === "string"), "null"] };
+  }
+  return { anyOf: [schema, { type: "null" }] };
+}
+
+/** Codex strict structured output requires every object property to be required. */
+export function codexOutputSchema(value: object): object {
+  return codexSchema(value, false) as object;
+}
+
+function codexSchema(value: unknown, optional = false): unknown {
+  if (Array.isArray(value)) return value.map((item) => codexSchema(item));
+  if (typeof value !== "object" || value === null) return value;
+  const schema = { ...(value as JsonSchema) };
+  if (schema.properties && typeof schema.properties === "object" && !Array.isArray(schema.properties)) {
+    const properties = schema.properties as Record<string, unknown>;
+    const declaredRequired = new Set(
+      Array.isArray(schema.required) ? schema.required.filter((item): item is string => typeof item === "string") : []
+    );
+    schema.properties = Object.fromEntries(Object.entries(properties).map(([key, child]) => [
+      key,
+      codexSchema(child, !declaredRequired.has(key))
+    ]));
+    schema.required = Object.keys(properties);
+  }
+  if ("items" in schema) schema.items = codexSchema(schema.items);
+  for (const key of ["additionalProperties", "anyOf", "oneOf", "allOf"]) {
+    if (key in schema) schema[key] = codexSchema(schema[key]);
+  }
+  return optional ? nullableSchema(schema) : schema;
+}
+
+/** Stable invocation envelope for stateless CLI agent adapters. */
+export function agentPayload(request: AgentExecutionRequest): string {
+  const fields = new Map(request.method.input.map((field) => [field.name, field]));
+  return JSON.stringify({
+    api: request.method.id,
+    description: request.method.description,
+    ...(request.metadata.instruction ? { instruction: request.metadata.instruction } : {}),
+    arguments: Object.fromEntries(Object.entries(request.resolved.arguments)
+      .filter(([key]) => !fields.get(key)?.internal)
+      .map(([key, value]) => [key, displayValue(value)])),
+    // Inline inputs are readable @path tokens and are sent unchanged.
+    context: ["ask", "agent"].includes(request.method.id)
+      ? []
+      : request.resolved.context.map(displayValue)
+  });
+}
+
+/** First JSON candidate from one CLI JSONL line (or a fenced/embedded
+ * payload). This is the low-level JSONL helper; final Agent messages are parsed
+ * by the runtime through the shared result boundary instead. */
+function extractJson(value: string): unknown {
+  // Fast path: a JSONL line is normally one complete object, and the tolerant scan would
+  // parse every balanced object inside it before returning that same one.
+  const trimmed = value.trim();
+  if (trimmed) {
+    try { return JSON.parse(trimmed); } catch { /* fall through to the tolerant scan */ }
+  }
+  const candidate = jsonCandidates(value)[0];
+  if (candidate === undefined) return undefined;
+  try { return JSON.parse(candidate); } catch { return undefined; }
+}
+
+export function extractClaudeResult(output: string): unknown {
+  let finalResult: unknown;
+  for (const line of output.split(/\r?\n/)) {
+    const event = extractJson(line);
+    if (!event || typeof event !== "object" || (event as { type?: unknown }).type !== "result") continue;
+    const result = event as { structured_output?: unknown; result?: unknown };
+    if (result.structured_output !== undefined) finalResult = result.structured_output;
+    // Keep the raw final message: when it is not valid JSON the caller must
+    // still receive the original text so the boundary/repair can diagnose it.
+    else if (typeof result.result === "string") finalResult = result.result;
+    else if (result.result !== undefined) finalResult = result.result;
+  }
+  if (finalResult !== undefined) return stripNullProperties(finalResult);
+  const parsed = extractJson(output);
+  if (parsed && typeof parsed === "object" && "result" in parsed) {
+    const result = (parsed as { result?: unknown }).result;
+    if (typeof result === "string") return result;
+    return stripNullProperties(result);
+  }
+  return stripNullProperties(parsed ?? output);
+}
+
+function extractAgentValue(output: string, provider: AgentProfile["provider"]): unknown {
+  if (provider === "codex") {
+    let finalText = "";
+    for (const line of output.split(/\r?\n/)) {
+      const event = extractJson(line);
+      if (!event || typeof event !== "object") continue;
+      const item = (event as { item?: { type?: string; text?: string } }).item;
+      if (item?.type === "agent_message" && typeof item.text === "string") finalText = item.text;
+    }
+    // The runtime's result boundary owns tolerant extraction, so hand it the
+    // final message text instead of partially parsing here.
+    return stripNullProperties(finalText);
+  }
+  return extractClaudeResult(output);
+}
+
+/** Extracts a normal assistant reply without attempting to parse it as a
+ * Dext result. A conversation is allowed to contain arbitrary text or JSON. */
+export function extractConversationText(output: string, provider: AgentProfile["provider"]): string {
+  if (provider === "codex") {
+    let finalText = "";
+    for (const line of output.split(/\r?\n/)) {
+      const event = extractJson(line);
+      if (!event || typeof event !== "object") continue;
+      const item = (event as { item?: { type?: string; text?: string } }).item;
+      if (item?.type === "agent_message" && typeof item.text === "string") finalText = item.text;
+    }
+    return finalText || output.trim();
+  }
+  const result = extractClaudeResult(output);
+  return typeof result === "string" ? result : JSON.stringify(result, null, 2);
+}
+
+/**
+ * Restores the intended "absent" meaning in a native structured answer.
+ *
+ * Codex strict structured output requires every object property to be required,
+ * so the schema Dext sends marks the optional ones nullable and the model answers
+ * `null` where it means "omitted". Dext's contracts declare those fields as
+ * merely optional, which rejects null, so drop null properties before the caller
+ * validates. No Dext or Project contract has a nullable field, so this can only
+ * turn an invalid answer into a valid one. Text that is not JSON is returned
+ * unchanged, so a caller still sees what the model actually produced.
+ */
+function normalizeStructuredAnswer(text: string): string {
+  try {
+    return JSON.stringify(stripNullProperties(JSON.parse(text)));
+  } catch {
+    return text;
+  }
+}
+
+export function bootstrappedConversationInput(context: string | undefined, input: string): string {
+  const prior = context?.trim();
+  return prior ? `${prior}\n\nNew user message:\n${input}` : input;
+}
+
+/** The public JSONL stream announces the durable Codex thread before any turn
+ * events. Dext keeps that provider ID separate from its own conversation ID so
+ * several open tabs can resume independently without relying on `--last`. */
+export function extractCodexThreadId(output: string): string | undefined {
+  for (const line of output.split(/\r?\n/)) {
+    const event = extractJson(line);
+    if (!event || typeof event !== "object") continue;
+    const record = event as { type?: unknown; thread_id?: unknown };
+    if (record.type === "thread.started" && typeof record.thread_id === "string" && record.thread_id.trim()) {
+      return record.thread_id;
+    }
+  }
+  return undefined;
+}
+
+/** Claude emits the durable session id on its JSONL envelope (usually on the
+ * initial system event, and again on the final result). */
+export function extractClaudeSessionId(output: string): string | undefined {
+  for (const line of output.split(/\r?\n/)) {
+    const event = extractJson(line);
+    if (!event || typeof event !== "object") continue;
+    const sessionId = (event as { session_id?: unknown }).session_id;
+    if (typeof sessionId === "string" && sessionId.trim()) return sessionId;
+  }
+  return undefined;
+}
+
+function eventText(event: Record<string, unknown>, item?: Record<string, unknown>): string | undefined {
+  const candidates: unknown[] = [
+    event.delta,
+    event.text,
+    event.message,
+    item?.delta,
+    item?.text,
+    item?.message,
+    item?.command,
+    item?.aggregated_output,
+    item?.summary,
+    item?.content
+  ];
+  const findText = (value: unknown): string | undefined => {
+    if (typeof value === "string") return value;
+    if (Array.isArray(value)) {
+      return value.map(findText).filter((part): part is string => Boolean(part)).join("") || undefined;
+    }
+    if (typeof value === "object" && value !== null) {
+      const record = value as Record<string, unknown>;
+      if (typeof record.text === "string") return record.text;
+      if (typeof record.delta === "string") return record.delta;
+      return findText(record.content) ?? findText(record.summary);
+    }
+    return undefined;
+  };
+  return candidates.map(findText).find((value): value is string => Boolean(value));
+}
+
+function isStructuredAgentResult(text: string): boolean {
+  const parsed = extractJson(text);
+  return typeof parsed === "object" && parsed !== null && typeof (parsed as { kind?: unknown }).kind === "string";
+}
+
+export function parseCodexStreamLine(
+  line: string,
+  streamPhases: Map<string, AgentStreamPhase> = new Map()
+): AgentStreamEvent | undefined {
+  const parsed = extractJson(line);
+  if (!parsed || typeof parsed !== "object") return undefined;
+  const event = parsed as Record<string, unknown>;
+  const eventType = typeof event.type === "string" ? event.type : undefined;
+  if (!eventType || eventType === "thread.started" || eventType === "turn.started") return undefined;
+  const usage = agentTokenUsage(event.usage);
+  const item = typeof event.item === "object" && event.item !== null
+    ? event.item as Record<string, unknown>
+    : undefined;
+  const eventItemId = typeof event.item_id === "string" ? event.item_id : undefined;
+  const itemType = typeof item?.type === "string" ? item.type : undefined;
+  // Codex echoes the request as a `user_message` item in its JSONL stream.
+  // That payload can contain the entire Plan prompt and current document; it
+  // is input, rather than agent progress, so never surface it in Process. A
+  // few CLI versions put the item kind in the envelope's `type` instead of
+  // `item.type`, so cover both shapes while keeping agent messages visible.
+  const isInputMessageType = (value: string | undefined): boolean => {
+    const kind = value?.replace(/^item[._-]/i, "").replace(/[-_]/g, "").toLowerCase();
+    return kind === "usermessage" || kind === "developermessage";
+  };
+  if (isInputMessageType(itemType) || isInputMessageType(eventType)) {
+    // Preserve token accounting if a CLI version attaches usage metadata to
+    // the echoed request envelope, while still omitting its prompt text.
+    return usage ? { phase: "status", text: "", eventType, usage } : undefined;
+  }
+  if (itemType === "todo_list") {
+    const todos = normalizeAgentTodos(item?.items, "codex");
+    return todos ? agentTodoEvent(todos) : undefined;
+  }
+  const text = eventText(event, item);
+  const eventId = typeof event.id === "string"
+    ? event.id
+    : typeof item?.id === "string" ? item.id : eventItemId;
+  let phase: AgentStreamPhase = eventItemId ? streamPhases.get(eventItemId) ?? "message" : "status";
+  if (itemType === "reasoning" || itemType === "analysis" || eventType.includes("reasoning")) phase = "reasoning";
+  else if (itemType === "agent_message" || eventType.includes("message") || eventType.includes("output_text")) phase = "message";
+  else if (itemType === "command_execution" || itemType === "tool_call" || eventType.includes("tool")) phase = "tool";
+  if (eventId && (eventType === "item.started" || itemType)) streamPhases.set(eventId, phase);
+  const command = typeof item?.command === "string" ? item.command : undefined;
+  const aggregatedOutput = typeof item?.aggregated_output === "string" ? item.aggregated_output : undefined;
+  const statusText = phase === "tool" ? (aggregatedOutput || command || text || "")
+    : (text ?? "");
+  if ((!statusText && !usage) || (phase === "message" && isStructuredAgentResult(statusText))) return undefined;
+  return {
+    ...(eventId ? { id: eventId } : {}),
+    phase,
+    text: statusText,
+    ...(command ? { title: command } : {}),
+    ...(eventType === "item.updated" || eventType === "item.completed" ? { replace: true } : {}),
+    ...(eventType.endsWith("completed") || eventType.endsWith("done") ? { done: true } : {}),
+    eventType,
+    ...(usage ? { usage } : {})
+  };
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function tokenCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+/** Normalizes the fields emitted by Codex and Claude's JSON CLIs. Unknown
+ * provider payloads intentionally yield no usage rather than an estimate. */
+export function agentTokenUsage(value: unknown): AgentTokenUsage | undefined {
+  const usage = record(value);
+  if (!usage) return undefined;
+  const inputTokens = tokenCount(usage.input_tokens ?? usage.inputTokens);
+  const cachedInputTokens = tokenCount(usage.cached_input_tokens ?? usage.cachedInputTokens);
+  const outputTokens = tokenCount(usage.output_tokens ?? usage.outputTokens);
+  const totalTokens = tokenCount(usage.total_tokens ?? usage.totalTokens);
+  if (inputTokens === undefined && cachedInputTokens === undefined && outputTokens === undefined && totalTokens === undefined) {
+    return undefined;
+  }
+  return {
+    ...(inputTokens === undefined ? {} : { inputTokens }),
+    ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
+    ...(outputTokens === undefined ? {} : { outputTokens }),
+    ...(totalTokens === undefined ? {} : { totalTokens })
+  };
+}
+
+function claudeContentText(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (!Array.isArray(value)) return undefined;
+  const text = value.flatMap((item) => {
+    const block = record(item);
+    if (!block || block.type === "thinking") return [];
+    if (typeof block.text === "string") return [block.text];
+    if (typeof block.content === "string") return [block.content];
+    return [];
+  }).join("");
+  return text || undefined;
+}
+
+function claudeToolText(block: Record<string, unknown>): string {
+  const input = record(block.input);
+  if (!input) return typeof block.input === "string" ? block.input : "";
+  if (typeof input.command === "string") return input.command;
+  return Object.keys(input).length ? JSON.stringify(input) : "";
+}
+
+/** Parse the public `stream-json` events emitted by Claude Code's print mode. */
+export function parseClaudeStreamLine(line: string, messageIds?: Map<string, string>): AgentStreamEvent | undefined {
+  const parsed = extractJson(line);
+  const event = record(parsed);
+  if (!event) return undefined;
+  const eventType = typeof event.type === "string" ? event.type : "";
+  if (!eventType || eventType === "system") return undefined;
+  const usage = agentTokenUsage(event.usage);
+  if (eventType === "result") {
+    return usage ? { phase: "status", text: "", eventType, done: true, usage } : undefined;
+  }
+
+  if (eventType === "stream_event") {
+    const stream = record(event.event);
+    const streamType = typeof stream?.type === "string" ? stream.type : "";
+    // Block indexes restart for each message. Keep the provider message ID so
+    // the final assistant snapshot replaces its streamed text, including when
+    // a subagent's events are interleaved with the parent conversation.
+    const scope = typeof event.parent_tool_use_id === "string" ? event.parent_tool_use_id : "";
+    if (streamType === "message_start") {
+      const message = record(stream?.message);
+      if (typeof message?.id === "string") messageIds?.set(scope, message.id);
+      else messageIds?.delete(scope);
+      return undefined;
+    }
+    if (streamType === "content_block_delta") {
+      const delta = record(stream?.delta);
+      if (delta?.type === "thinking_delta" || typeof delta?.thinking === "string") return undefined;
+      const text = typeof delta?.text === "string" ? delta.text : undefined;
+      if (!text) return undefined;
+      const index = typeof stream?.index === "number" ? stream.index : 0;
+      return { id: messageIds?.get(scope) ?? `claude-stream-${index}`, phase: "message", text, eventType };
+    }
+    if (streamType === "content_block_start") {
+      const block = record(stream?.content_block);
+      if (block?.type !== "tool_use") return undefined;
+      const id = typeof block.id === "string" ? block.id : undefined;
+      const title = typeof block.name === "string" ? block.name : "Tool";
+      if (isClaudeTodoTool(title)) return undefined;
+      const text = claudeToolText(block) || title;
+      return { ...(id ? { id } : {}), phase: "tool", title, text, eventType };
+    }
+    return undefined;
+  }
+
+  const message = record(event.message);
+  const blocks = Array.isArray(message?.content) ? message.content : [];
+  if (eventType === "assistant") {
+    const tool = blocks.map(record).find((block) => block?.type === "tool_use");
+    if (tool) {
+      const id = typeof tool.id === "string" ? tool.id : undefined;
+      const title = typeof tool.name === "string" ? tool.name : "Tool";
+      const text = claudeToolText(tool) || title;
+      return { ...(id ? { id } : {}), phase: "tool", title, text, eventType };
+    }
+    const text = claudeContentText(message?.content);
+    if (!text || isStructuredAgentResult(text)) return undefined;
+    const id = typeof message?.id === "string" ? message.id : undefined;
+    return { ...(id ? { id } : {}), phase: "message", text, eventType, replace: true, done: true };
+  }
+  if (eventType === "user") {
+    const result = blocks.map(record).find((block) => block?.type === "tool_result");
+    if (!result) return undefined;
+    const id = typeof result.tool_use_id === "string" ? result.tool_use_id : undefined;
+    const text = claudeContentText(result.content) || "Completed";
+    return { ...(id ? { id } : {}), phase: "tool", text, replace: true, done: true, eventType };
+  }
+  return undefined;
+}
+
+/** A Claude message can carry a task call alongside ordinary tool or text
+ * blocks. Emit both the snapshot and the remaining process content. */
+export function parseClaudeStreamEvents(line: string, todos: ClaudeTodoTracker, messageIds?: Map<string, string>): AgentStreamEvent[] {
+  const event = record(extractJson(line));
+  if (!event) return [];
+  const message = record(event.message);
+  const content = Array.isArray(message?.content) && !event.parent_tool_use_id
+    ? message.content.filter((raw) => {
+      const block = record(raw);
+      return !(block?.type === "tool_use" && isClaudeTodoTool(block.name))
+        && !(block?.type === "tool_result" && todos.ownsCall(block.tool_use_id));
+    }) : undefined;
+  const todo = todos.consume(event);
+  const process = content?.length === 0 ? undefined
+    : parseClaudeStreamLine(content ? JSON.stringify({ ...event, message: { ...message, content } }) : line, messageIds);
+  return [...(todo ? [todo] : []), ...(process ? [process] : [])];
+}
+
+function codexFailure(output: string): string | undefined {
+  let message: string | undefined;
+  for (const line of output.split(/\r?\n/)) {
+    const parsed = extractJson(line);
+    if (!parsed || typeof parsed !== "object") continue;
+    const event = parsed as Record<string, unknown>;
+    if (event.type === "turn.failed") message = codexErrorMessage(event.error, "Codex turn failed.");
+    else if (event.type === "error") message = codexErrorMessage(event.error ?? event, "Codex turn failed.");
+  }
+  return message;
+}
+
+function claudeFailure(output: string): string | undefined {
+  for (const line of output.split(/\r?\n/)) {
+    const event = extractJson(line);
+    if (!event || typeof event !== "object" || (event as { type?: unknown }).type !== "result") continue;
+    const result = event as { is_error?: unknown; result?: unknown; subtype?: unknown };
+    if (result.is_error === true || result.subtype === "error") {
+      return typeof result.result === "string" ? result.result : "Claude Code returned an error result.";
+    }
+  }
+  return undefined;
+}
+
+/** Resolve the provider tier for a typed Agent call. The apply flag is the
+ * hard write gate; a full-access tier is honored only when that gate is open. */
+export function permissionForWrite(
+  allowWorkspaceWrite: boolean | undefined,
+  requestedPermission?: AgentPermission
+): AgentPermission {
+  if (allowWorkspaceWrite !== true) return "read-only";
+  return requestedPermission === "full-access" ? "full-access" : "workspace-write";
+}
+
+/** Claude names the tiers after what it will do without asking. `plan` refuses
+ * every edit, `acceptEdits` takes file edits, and `bypassPermissions` stops
+ * asking altogether. */
+export function claudePermissionMode(permission: AgentPermission): string {
+  if (permission === "full-access") return "bypassPermissions";
+  return permission === "workspace-write" ? "acceptEdits" : "plan";
+}
+
+/** Codex names the tiers after the sandbox it puts the process in. */
+export function codexSandbox(permission: AgentPermission): string {
+  if (permission === "full-access") return "danger-full-access";
+  return permission === "workspace-write" ? "workspace-write" : "read-only";
+}
+
+/** Arguments for Claude Code's non-interactive, structured streaming mode. */
+export function claudeCliArguments(
+  options: { model?: string; reasoningEffort?: string; permission: AgentPermission },
+  outputSchema: object,
+  extraArguments: readonly string[] = []
+): string[] {
+  return [
+    "-p",
+    "--output-format", "stream-json",
+    "--verbose",
+    "--include-partial-messages",
+    "--json-schema", JSON.stringify(outputSchema),
+    "--no-session-persistence",
+    "--permission-mode", claudePermissionMode(options.permission),
+    ...(options.model ? ["--model", options.model] : []),
+    ...(options.reasoningEffort ? ["--effort", options.reasoningEffort] : []),
+    ...extraArguments
+  ];
+}
+
+/** Claude's stream mode without a Dext output contract. */
+export function claudeConversationArguments(
+  options: { model?: string; reasoningEffort?: string; permission: AgentPermission; resumeId?: string; forkSession?: boolean },
+  extraArguments: readonly string[] = []
+): string[] {
+  return [
+    "-p",
+    "--output-format", "stream-json",
+    "--verbose",
+    "--include-partial-messages",
+    ...(options.resumeId ? ["--resume", options.resumeId] : []),
+    ...(options.forkSession ? ["--fork-session"] : []),
+    "--permission-mode", claudePermissionMode(options.permission),
+    ...(options.model ? ["--model", options.model] : []),
+    ...(options.reasoningEffort ? ["--effort", options.reasoningEffort] : []),
+    ...extraArguments
+  ];
+}
+
+/** Arguments for Claude's bidirectional control protocol. Print mode runs with
+ * no host, so the CLI answers its own questions or fails. `--input-format
+ * stream-json` opens the reverse channel and `--permission-prompt-tool stdio`
+ * routes every tool that needs a human — `AskUserQuestion` included — to the
+ * caller as a `can_use_tool` control request. */
+export function claudeControlArguments(
+  options: { model?: string; reasoningEffort?: string; permission: AgentPermission; resumeId?: string; forkSession?: boolean },
+  extraArguments: readonly string[] = []
+): string[] {
+  return [
+    "-p",
+    "--input-format", "stream-json",
+    "--output-format", "stream-json",
+    "--verbose",
+    "--include-partial-messages",
+    "--permission-prompt-tool", "stdio",
+    ...(options.resumeId ? ["--resume", options.resumeId] : []),
+    ...(options.forkSession ? ["--fork-session"] : []),
+    "--permission-mode", claudePermissionMode(options.permission),
+    ...(options.model ? ["--model", options.model] : []),
+    ...(options.reasoningEffort ? ["--effort", options.reasoningEffort] : []),
+    ...extraArguments
+  ];
+}
+
+/** Claude asks by tool call rather than by question id, so Dext synthesizes
+ * stable ids and keeps the question text that its answer map is keyed by. */
+export function claudeAskUserQuestion(input: unknown): { questions: AgentInputQuestion[]; texts: Map<string, string> } | undefined {
+  const raw = record(input)?.questions;
+  if (!Array.isArray(raw) || !raw.length || raw.length > 4) return undefined;
+  const questions: AgentInputQuestion[] = [];
+  const texts = new Map<string, string>();
+  for (const [index, value] of raw.entries()) {
+    const item = record(value);
+    const question = typeof item?.question === "string" ? item.question.trim() : "";
+    if (!question) return undefined;
+    const id = `question-${index + 1}`;
+    const options = Array.isArray(item?.options) ? item.options.flatMap((option) => {
+      const entry = record(option);
+      const label = typeof entry?.label === "string" ? entry.label : "";
+      return label ? [{ label, description: typeof entry?.description === "string" ? entry.description : "" }] : [];
+    }) : [];
+    texts.set(id, question);
+    questions.push({ id, header: typeof item?.header === "string" ? item.header : "", question, options,
+      ...(item?.multiSelect === true ? { multiSelect: true } : {}) });
+  }
+  return { questions, texts };
+}
+
+/** Read back as question text -> answer string; multi-select joins with commas. */
+export function claudeAnswerMap(questions: readonly AgentInputQuestion[], texts: Map<string, string>, answers: AgentInputAnswers | null): Record<string, string> | undefined {
+  if (!answers) return undefined;
+  const result: Record<string, string> = {};
+  for (const question of questions) {
+    const text = texts.get(question.id);
+    const values = answers[question.id]?.answers.map((value) => value.trim()).filter(Boolean) ?? [];
+    if (!text || !values.length) return undefined;
+    result[text] = values.join(", ");
+  }
+  return result;
+}
+
+/** One line describing the tool call a permission request is about. */
+function claudePermissionDetail(request: Record<string, unknown>): string {
+  const input = record(request.input);
+  const parts: string[] = [];
+  for (const value of [request.description, request.decision_reason, request.blocked_path]) {
+    if (typeof value === "string" && value.trim()) parts.push(value.trim());
+  }
+  const command = typeof input?.command === "string" ? input.command : undefined;
+  const path = typeof input?.file_path === "string" ? input.file_path : undefined;
+  if (command ?? path) parts.push(command ?? path!);
+  else if (input && Object.keys(input).length) parts.push(JSON.stringify(input));
+  return parts.join("\n");
+}
+
+type ClaudeControlReply = { subtype: "success"; response: unknown } | { subtype: "error"; error: string };
+
+/**
+ * One Claude conversation over the bidirectional control protocol. Every
+ * decision the CLI would have asked its own terminal for arrives here as a
+ * `can_use_tool` control request and is answered with Dext's cards.
+ */
+export async function runClaudeConversation(request: AgentConversationRequest, options: {
+  command: string; args: readonly string[]; env?: NodeJS.ProcessEnv | undefined;
+  timeoutMs: number; idleTimeoutMs: number; onSession: (id: string) => void;
+}): Promise<string> {
+  const controller = new AbortController();
+  const timeout = agentTimeout(controller, options.timeoutMs, options.idleTimeoutMs);
+  const cancel = (): void => controller.abort(new ExecutionCancelledError());
+  request.signal?.addEventListener("abort", cancel, { once: true });
+  const shell = process.platform === "win32" && /\.(?:cmd|bat)$/i.test(options.command);
+  const child = spawn(options.command, [...options.args], {
+    cwd: request.cwd, windowsHide: true, shell, stdio: ["pipe", "pipe", "pipe"], ...(options.env ? { env: options.env } : {})
+  });
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  let stdout = "";
+  let stderr = "";
+  let buffer = "";
+  let finished = false;
+  let resultSeen = false;
+  let resultError: string | undefined;
+  let abortReason: Error | undefined;
+  let settle: ReturnType<typeof setTimeout> | undefined;
+  let reportedSession = "";
+  const open = new Map<string, AbortController>();
+  const claudeTodos = new ClaudeTodoTracker();
+  const claudeMessageIds = new Map<string, string>();
+  let resolveTurn!: (text: string) => void;
+  let rejectTurn!: (error: Error) => void;
+  const completed = new Promise<string>((resolve, reject) => { resolveTurn = resolve; rejectTurn = reject; });
+  void completed.catch(() => {});
+
+  /** Terminate the CLI and every descendant: a Claude turn can start services. */
+  const terminate = (): Promise<void> => {
+    if (process.platform !== "win32" || child.pid === undefined) { child.kill(); return Promise.resolve(); }
+    return new Promise((done) => {
+      const killer = spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], { windowsHide: true, stdio: "ignore" });
+      killer.once("error", () => { child.kill(); done(); });
+      killer.once("close", () => done());
+    });
+  };
+  const write = (value: unknown): void => {
+    if (child.stdin.destroyed) return;
+    child.stdin.write(`${JSON.stringify(value)}\n`);
+  };
+  const reply = (requestId: string, value: ClaudeControlReply): void => {
+    write(value.subtype === "success"
+      ? { type: "control_response", response: { subtype: "success", request_id: requestId, response: value.response } }
+      : { type: "control_response", response: { subtype: "error", request_id: requestId, error: value.error } });
+  };
+  const closeInputs = (): void => {
+    for (const pending of open.values()) pending.abort();
+    open.clear();
+  };
+  const fail = (error: Error): void => {
+    if (finished) return;
+    finished = true;
+    closeInputs();
+    if (settle) clearTimeout(settle);
+    rejectTurn(error);
+  };
+  const complete = (): void => {
+    if (finished) return;
+    finished = true;
+    closeInputs();
+    if (settle) clearTimeout(settle);
+    resolveTurn(extractConversationText(stdout, "claude"));
+  };
+
+  /** Answer one control request through the same Dext surfaces the other
+   * providers use; a missing surface answers fail-closed. */
+  const decide = async (control: Record<string, unknown>, signal: AbortSignal): Promise<ClaudeControlReply> => {
+    const toolName = typeof control.tool_name === "string" ? control.tool_name : "";
+    const subtype = typeof control.subtype === "string" ? control.subtype : "";
+    const ui = request.metadata.ui;
+    if (toolName === "AskUserQuestion") {
+      const asked = claudeAskUserQuestion(control.input);
+      if (!asked || !request.metadata.requestAgentInput) return { subtype: "error", error: "Dext cannot render this question." };
+      const answers = await request.metadata.requestAgentInput({ id: randomUUID(), questions: asked.questions, blocking: true }, signal);
+      const mapped = claudeAnswerMap(asked.questions, asked.texts, answers);
+      return mapped ? { subtype: "success", response: { behavior: "allow", updatedInput: { ...record(control.input), answers: mapped } } }
+        : { subtype: "success", response: { behavior: "deny", message: "The user dismissed the question." } };
+    }
+    if (subtype === "elicitation") {
+      const questions = elicitationFormQuestions(control.requested_schema);
+      if (!questions || !ui) return { subtype: "success", response: { action: "decline" } };
+      const answers = await request.metadata.requestAgentInput?.({ id: randomUUID(), questions, blocking: true }, signal) ?? null;
+      return { subtype: "success", response: elicitationFormResponse(control.requested_schema, answers) };
+    }
+    // Anything else is a protocol surface Dext did not ask for; answering it as a
+    // permission decision would misread the request.
+    if (subtype !== "can_use_tool") return { subtype: "error", error: `Dext does not handle the '${subtype}' control request.` };
+    if (!ui) return { subtype: "success", response: { behavior: "deny", message: "Dext has no surface to approve this call." } };
+    const title = typeof control.display_name === "string" && control.display_name ? control.display_name : toolName || "Tool";
+    const detail = claudePermissionDetail(control);
+    const answer = await ui.form(uiCallForm("confirm", {
+      message: [title, detail].filter(Boolean).join("\n\n"), confirm_label: "Allow once", cancel_label: "Deny"
+    }), signal);
+    return answer.status === "submitted"
+      ? { subtype: "success", response: { behavior: "allow" } }
+      : { subtype: "success", response: { behavior: "deny", message: "The user denied this call." } };
+  };
+
+  const receive = (line: string): void => {
+    if (finished || !line.trim()) return;
+    timeout.activity();
+    trackCliToolActivity("claude", line, timeout);
+    const frame = record(extractJson(line));
+    if (!frame) return;
+    const sessionId = typeof frame.session_id === "string" ? frame.session_id : undefined;
+    // Claude repeats the id on every frame; a fork is the one time it changes.
+    if (sessionId && sessionId !== reportedSession) { reportedSession = sessionId; options.onSession(sessionId); }
+    if (frame.type === "control_request") {
+      const requestId = typeof frame.request_id === "string" ? frame.request_id : undefined;
+      const control = record(frame.request);
+      if (!requestId || !control || typeof control.subtype !== "string") return;
+      const pending = new AbortController();
+      open.set(requestId, pending);
+      // A pending Dext card parks the turn, so idle detection pauses with it.
+      const key = `claude-input:${requestId}`;
+      timeout.toolStarted(key);
+      void decide(control, pending.signal).then((value) => reply(requestId, value), (error: unknown) => {
+        reply(requestId, { subtype: "error", error: error instanceof Error ? error.message : "Dext could not answer this request." });
+      }).finally(() => {
+        timeout.toolFinished(key);
+        open.delete(requestId);
+      });
+      return;
+    }
+    if (frame.type === "control_cancel_request") {
+      const requestId = typeof frame.request_id === "string" ? frame.request_id : "";
+      open.get(requestId)?.abort();
+      return;
+    }
+    if (frame.type === "result") {
+      resultSeen = true;
+      resultError = claudeFailure(line);
+      // The CLI stays alive for more input, so the turn ends with stdin. A failed
+      // result still ends it; the close handler reports the reason.
+      child.stdin.end();
+      if (!resultError) settle = setTimeout(() => { void terminate().finally(complete); }, 3000);
+      return;
+    }
+    for (const event of parseClaudeStreamEvents(line, claudeTodos, claudeMessageIds)) request.onEvent?.(event);
+  };
+
+  child.stdout.on("data", (chunk: string) => {
+    if (finished) return;
+    stdout += chunk;
+    buffer += chunk;
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() ?? "";
+    for (const line of lines) receive(line);
+  });
+  child.stderr.on("data", (chunk: string) => {
+    if (chunk.length) timeout.activity();
+    stderr = (stderr + chunk).slice(-16000);
+  });
+  child.on("error", (error) => fail(new Error(`Unable to start '${options.command}': ${error.message}`)));
+  child.on("close", (code) => {
+    if (finished) return;
+    // Cancellation kills the CLI, so its exit must not be reported as a crash.
+    if (abortReason) { fail(abortReason); return; }
+    if (buffer.trim()) receive(buffer);
+    if (resultSeen && !resultError) { complete(); return; }
+    const detail = resultError ?? claudeFailure(stdout) ?? [stderr.trim(), stdout.trim()].filter(Boolean).join("\n");
+    fail(new Error(resultError ? `${request.profile.label}: ${detail}`
+      : `${request.profile.label} exited with code ${code ?? "unknown"}${detail ? `:\n${detail}` : ""}`));
+  });
+  const abort = (): void => {
+    abortReason = controller.signal.reason instanceof Error ? controller.signal.reason : new ExecutionCancelledError();
+    void terminate().finally(() => fail(abortReason!));
+  };
+  controller.signal.addEventListener("abort", abort, { once: true });
+  if (controller.signal.aborted) abort();
+
+  try {
+    write({ type: "user", message: { role: "user", content: [{ type: "text", text: request.input }] }, parent_tool_use_id: null });
+    return await completed;
+  } finally {
+    if (settle) clearTimeout(settle);
+    timeout.dispose();
+    request.signal?.removeEventListener("abort", cancel);
+    controller.signal.removeEventListener("abort", abort);
+    if (child.exitCode === null && !child.killed) void terminate();
+  }
+}
+
+/** Arguments for Codex's structured execution mode. Workspace writes are only
+ * enabled for an explicitly trusted agent(apply=true) request. */
+export function codexCliArguments(
+  options: { model?: string; reasoningEffort?: string },
+  schemaPath: string,
+  permission: AgentPermission,
+  serviceTier?: string,
+  extraArguments: readonly string[] = []
+): string[] {
+  const sandbox = codexSandbox(permission);
+  return [
+    "exec",
+    "--json",
+    "--ephemeral",
+    "--sandbox", sandbox,
+    "--output-schema", schemaPath,
+    ...(sandbox === "read-only" ? [] : ["--skip-git-repo-check"]),
+    ...(options.model ? ["--model", options.model] : []),
+    ...(options.reasoningEffort ? ["--config", 'model_reasoning_effort="' + options.reasoningEffort + '"'] : []),
+    "--config", 'model_reasoning_summary="detailed"',
+    ...(serviceTier ? ["--config", 'service_tier="' + serviceTier + '"'] : []),
+    ...extraArguments,
+    "-"
+  ];
+}
+
+/** Codex's JSON event stream is used only for Process rendering. No JSON
+ * schema is passed, so the final assistant message remains ordinary text. */
+export function codexConversationArguments(
+  options: { model?: string; reasoningEffort?: string; permission: AgentPermission },
+  serviceTier?: string,
+  extraArguments: readonly string[] = [],
+  session: { persist?: boolean; resumeId?: string; forkFromId?: string } = {}
+): string[] {
+  const sandbox = codexSandbox(options.permission);
+  return [
+    "exec",
+    "--json",
+    ...(session.persist ? [] : ["--ephemeral"]),
+    "--sandbox", sandbox,
+    ...(sandbox === "read-only" ? [] : ["--skip-git-repo-check"]),
+    ...(options.model ? ["--model", options.model] : []),
+    ...(options.reasoningEffort ? ["--config", 'model_reasoning_effort="' + options.reasoningEffort + '"'] : []),
+    "--config", 'model_reasoning_summary="detailed"',
+    ...(serviceTier ? ["--config", 'service_tier="' + serviceTier + '"'] : []),
+    ...extraArguments,
+    ...(session.forkFromId ? ["fork", session.forkFromId] : session.resumeId ? ["resume", session.resumeId] : []),
+    "-"
+  ];
+}
+
+export function runProcess(
+  command: string,
+  args: readonly string[],
+  input: string,
+  cwd: string,
+  signal?: AbortSignal,
+  onStdout?: (chunk: string) => void,
+  env?: NodeJS.ProcessEnv,
+  completion?: { consume: (chunk: string) => number | undefined; graceMs?: number },
+  onActivity?: () => void
+): Promise<ProcessResult> {
+  return new Promise((resolve, reject) => {
+    const shell = process.platform === "win32" && /\.(?:cmd|bat)$/i.test(command);
+    const child = spawn(command, [...args], { cwd, windowsHide: true, shell, ...(env ? { env } : {}) });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    let aborting = false;
+    let completionCode: number | undefined;
+    let completionTimer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (callback: () => void): void => {
+      if (settled) return;
+      settled = true;
+      if (completionTimer) clearTimeout(completionTimer);
+      signal?.removeEventListener("abort", abort);
+      callback();
+    };
+    const finishCompleted = (): void => {
+      if (settled || aborting || completionCode === undefined) return;
+      const code = completionCode;
+      // The provider has ended the turn and emitted its final answer. Allow
+      // normal shutdown first, then release the completed CLI and its pipes.
+      // Do not kill descendants: a task may intentionally start a service.
+      finish(() => resolve({ stdout, stderr, code }));
+      child.kill("SIGKILL");
+      child.stdin.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+    };
+    const abort = (): void => {
+      if (aborting || settled) return;
+      if (completionCode !== undefined) { finishCompleted(); return; }
+      aborting = true;
+      const terminate = (): Promise<void> => {
+        if (process.platform !== "win32" || child.pid === undefined) {
+          child.kill();
+          return Promise.resolve();
+        }
+        return new Promise((done) => {
+          const killer = spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
+            windowsHide: true,
+            stdio: "ignore"
+          });
+          killer.once("error", () => {
+            child.kill();
+            done();
+          });
+          killer.once("close", () => done());
+        });
+      };
+      const signalReason: unknown = signal?.reason;
+      const reason = signalReason instanceof Error && signalReason.name !== "AbortError"
+        ? signalReason
+        : new ExecutionCancelledError();
+      void terminate().finally(() => finish(() => reject(reason)));
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) {
+      abort();
+    }
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      if (settled || aborting) return;
+      if (chunk.length) onActivity?.();
+      stdout += chunk;
+      onStdout?.(chunk);
+      if (completionCode === undefined) {
+        completionCode = completion?.consume(chunk);
+        if (completionCode !== undefined) completionTimer = setTimeout(finishCompleted, completion?.graceMs ?? 1000);
+      }
+    });
+    child.stderr.on("data", (chunk: string) => {
+      if (settled || aborting) return;
+      if (chunk.length) onActivity?.();
+      stderr += chunk;
+    });
+    child.on("error", (error) => {
+      if (!aborting) finish(() => reject(new Error(`Unable to start '${command}': ${error.message}`)));
+    });
+    child.on("close", (code) => {
+      if (!aborting) finish(() => resolve({ stdout, stderr, code }));
+    });
+    child.stdin.end(input);
+  });
+}
+
+export interface SingleTurnCliRequest {
+  profile: AgentProfile;
+  cwd: string;
+  /** Complete prompt text; the transport owns no other context. */
+  prompt: string;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  idleTimeoutMs?: number;
+  cliArguments?: readonly string[];
+}
+
+function finalTokenUsage(output: string): AgentTokenUsage | undefined {
+  let usage: AgentTokenUsage | undefined;
+  for (const line of output.split(/\r?\n/)) {
+    const event = extractJson(line);
+    if (typeof event !== "object" || event === null) continue;
+    const candidate = agentTokenUsage((event as { usage?: unknown }).usage);
+    if (candidate) usage = candidate;
+  }
+  return usage;
+}
+
+/**
+ * One read-only, single-turn CLI process used by the result-repair predictor.
+ * It mirrors the runner's abort/timeout wiring and returns the final message
+ * text plus provider-reported usage, never a parsed Dext result.
+ */
+export async function runSingleTurnCli(request: SingleTurnCliRequest): Promise<{ text: string; usage?: AgentTokenUsage }> {
+  const provider = request.profile.provider;
+  if (provider !== "codex" && provider !== "claude") {
+    throw new Error(`Single-turn CLI calls are not available for '${request.profile.label}'.`);
+  }
+  if (!request.profile.command?.trim()) {
+    throw new Error(`Agent '${request.profile.label}' has no CLI command configured.`);
+  }
+  const configuredCommand = request.profile.command.trim();
+  const command = resolveCliCommand(configuredCommand, provider);
+  if (!command) {
+    throw new Error(`CLI '${configuredCommand}' is not installed or not available on PATH. Install ${request.profile.label}.`);
+  }
+  const extraArguments = request.cliArguments ?? [];
+  const args = provider === "codex"
+    ? codexConversationArguments({ permission: "read-only" }, undefined, extraArguments)
+    : claudeConversationArguments({ permission: "read-only" }, extraArguments);
+  const controller = new AbortController();
+  const timeout = agentTimeout(
+    controller,
+    request.timeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS,
+    request.idleTimeoutMs ?? DEFAULT_AGENT_IDLE_TIMEOUT_MS
+  );
+  const cancel = (): void => controller.abort(new ExecutionCancelledError());
+  request.signal?.addEventListener("abort", cancel, { once: true });
+  if (request.signal?.aborted) cancel();
+  try {
+    const result = await runProcess(
+      command,
+      args,
+      request.prompt,
+      request.cwd,
+      controller.signal,
+      undefined,
+      undefined,
+      { consume: cliCompletion(provider) },
+      timeout.activity
+    );
+    if (result.code !== 0) {
+      const details = [result.stderr.trim(), result.stdout.trim()].filter(Boolean).join("\n");
+      throw new Error(`${request.profile.label} exited with code ${result.code ?? "unknown"}${details ? `:\n${details}` : ""}`);
+    }
+    const text = extractConversationText(result.stdout, provider).trim();
+    if (!text) throw new Error(`${request.profile.label} returned no result text.`);
+    const usage = finalTokenUsage(result.stdout);
+    return usage ? { text, usage } : { text };
+  } finally {
+    timeout.dispose();
+    request.signal?.removeEventListener("abort", cancel);
+  }
+}
+
+export class CliAgentRunner implements AgentRunner {
+  private codexUsesChatGpt: boolean | undefined;
+  /** Dext owns the stable UI conversation key; Codex owns the resumable thread
+   * UUID. This map joins them while the extension host is alive. */
+  private readonly codexConversationSessions = new Map<string, string>();
+  /** App-server permits one active writer per thread. Keep turns for one Dext
+   * conversation ordered even though separate UI events can arrive together. */
+  private readonly codexConversationQueues = new Map<string, Promise<void>>();
+  /** Claude's session UUID is likewise kept separate from Dext's conversation
+   * id so a provider-native fork can target the source session. */
+  private readonly claudeConversationSessions = new Map<string, string>();
+
+  constructor(
+    private timeoutMs = DEFAULT_AGENT_TIMEOUT_MS,
+    private readonly processRunner: ProcessRunner = runProcess,
+    private idleTimeoutMs = DEFAULT_AGENT_IDLE_TIMEOUT_MS
+  ) {}
+
+  /** A long agent turn is cut off by this timer, so it has to follow the
+   * setting rather than be fixed when the runner was built. */
+  setTimeoutMs(timeoutMs: number): void {
+    this.timeoutMs = timeoutMs;
+  }
+
+  setIdleTimeoutMs(timeoutMs: number): void {
+    this.idleTimeoutMs = timeoutMs;
+  }
+
+  private async processEnvironment(
+    command: string,
+    request: Pick<AgentExecutionRequest | AgentConversationRequest, "profile" | "cwd" | "signal">
+  ): Promise<NodeJS.ProcessEnv | undefined> {
+    if (request.profile.provider === "claude") return { ...process.env, CLAUDE_CODE_ENABLE_TODO_TOOLS: "1" };
+    if (request.profile.provider !== "codex") return undefined;
+    if (this.codexUsesChatGpt === undefined) {
+      try {
+        const status = await this.processRunner(command, ["login", "status"], "", request.cwd, request.signal);
+        this.codexUsesChatGpt = status.code === 0 && /logged in using chatgpt/i.test(`${status.stdout}\n${status.stderr}`);
+      } catch (error) {
+        if (error instanceof ExecutionCancelledError) throw error;
+        this.codexUsesChatGpt = false;
+      }
+    }
+    return agentProcessEnvironment(request.profile.provider, this.codexUsesChatGpt);
+  }
+
+  async run(request: AgentExecutionRequest): Promise<unknown> {
+    if (request.profile.provider !== "codex" && request.profile.provider !== "claude") {
+      throw new Error("This provider requires its own Agent runner.");
+    }
+    if (!request.profile.command) throw new Error(`Agent '${request.profile.label}' has no CLI command configured.`);
+    if (request.signal?.aborted) throw new ExecutionCancelledError();
+    const configuredCommand = request.profile.command.trim();
+    const command = resolveCliCommand(configuredCommand, request.profile.provider);
+    if (!command) {
+      throw new Error(`CLI '${configuredCommand}' is not installed or not available on PATH. Install ${request.profile.label}.`);
+    }
+    const directory = await mkdtemp(join(tmpdir(), "dext-agent-"));
+    const schemaPath = join(directory, "output-schema.json");
+    const outputSchema = request.profile.provider === "codex"
+      ? codexOutputSchema(request.contract.outputJsonSchema)
+      : request.contract.outputJsonSchema;
+    await writeFile(schemaPath, JSON.stringify(outputSchema), "utf8");
+    const input = agentPayload(request);
+    const progressInstruction = "While working, emit concise progress updates that summarize what you are inspecting and why, without exposing hidden chain-of-thought. The final agent message must contain only JSON matching the native structured-output schema.";
+    const includePatch = request.includePatch !== false;
+    const prompt = request.method.id === "agent" && request.allowWorkspaceWrite
+        ? `Read the Dext JSON payload from stdin. You may modify files only inside the current trusted workspace. Do not install packages or change files outside this workspace. Return an AgentResult${includePatch ? ", including an auditable patch whenever changes can be represented" : " without a patch; report conclusions in text only"}. ${progressInstruction}`
+        : request.method.id === "agent"
+          ? `Read the Dext JSON payload from stdin. This is preview-only: do not modify workspace files, install packages, or run state-changing commands. Return an AgentResult${includePatch ? ". When the task requests a change, include a complete applicable patch with exact before and after content." : " without a patch; report conclusions in text only."} ${progressInstruction}`
+          : request.method.id === "template"
+            ? `Read the Dext JSON payload from stdin. Do not modify workspace files, install packages, or run state-changing commands. Answer with the template's fields and nothing else: every field's value carries only that field's content, so never repeat the template's headings or section structure, which Dext renders from the template itself. A field declared as a line list takes one item per line and no list markers. Fields with fixed allowed values must use one of them verbatim. ${progressInstruction}`
+            : `Read the Dext JSON payload from stdin. Values tagged kind=dext-result are prior typed API results; inspect their value field. Execute the requested API without modifying workspace files, installing packages, or running state-changing commands. ${progressInstruction}`;
+    const serviceTier = request.speed === "fast" ? "priority" : request.speed === "standard" ? "default" : request.serviceTier || undefined;
+    const processEnv = await this.processEnvironment(command, request);
+    const permission = permissionForWrite(request.allowWorkspaceWrite, request.permission);
+    const extraArguments = request.cliArguments ?? [];
+    const args: string[] = request.profile.provider === "codex"
+      ? codexCliArguments(request, schemaPath, permission, serviceTier, extraArguments)
+      : claudeCliArguments({ ...request, permission }, outputSchema, extraArguments);
+    try {
+      const stdin = request.profile.provider === "codex"
+        ? `${prompt}\n\n${input}`
+        : `${prompt}\n\nDext JSON payload:\n${input}`;
+      const result = await this.runStreamingCli({
+        provider: request.profile.provider,
+        label: request.profile.label,
+        command,
+        args,
+        stdin,
+        cwd: request.cwd,
+        ...(processEnv ? { env: processEnv } : {}),
+        ...(request.signal ? { signal: request.signal } : {}),
+        ...(request.onEvent ? { onEvent: request.onEvent } : {})
+      });
+      const value = extractAgentValue(result.stdout, request.profile.provider);
+      if (value === undefined || value === "") throw new Error(`${request.profile.label} returned no structured result.`);
+      return value;
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+
+  /**
+   * Shared provider-stream plumbing for one CLI turn: abort and idle/timeout
+   * wiring, the JSONL line dispatch that turns raw provider output into Dext
+   * stream events, and the provider-specific process failure text. Both the
+   * typed execution path above and the schema-carrying path below use it so
+   * their timeout, cancellation and progress behavior cannot drift apart.
+   */
+  private async runStreamingCli(options: {
+    provider: "codex" | "claude";
+    label: string;
+    command: string;
+    args: readonly string[];
+    stdin: string;
+    cwd: string;
+    env?: NodeJS.ProcessEnv;
+    signal?: AbortSignal;
+    onEvent?: (event: AgentStreamEvent) => void;
+  }): Promise<ProcessResult> {
+    const { provider } = options;
+    const controller = new AbortController();
+    const timeout = agentTimeout(controller, this.timeoutMs, this.idleTimeoutMs);
+    const cancel = (): void => controller.abort(new ExecutionCancelledError());
+    options.signal?.addEventListener("abort", cancel, { once: true });
+    if (options.signal?.aborted) cancel();
+    let eventBuffer = "";
+    const streamPhases = new Map<string, AgentStreamPhase>();
+    const claudeTodos = new ClaudeTodoTracker();
+    const claudeMessageIds = new Map<string, string>();
+    const emitLine = (line: string): void => {
+      trackCliToolActivity(provider, line, timeout);
+      if (provider === "codex") {
+        const event = parseCodexStreamLine(line, streamPhases);
+        if (event) options.onEvent?.(event);
+        return;
+      }
+      for (const event of parseClaudeStreamEvents(line, claudeTodos, claudeMessageIds)) options.onEvent?.(event);
+    };
+    const onStdout = (chunk: string): void => {
+      eventBuffer += chunk;
+      const lines = eventBuffer.split(/\r?\n/);
+      eventBuffer = lines.pop() ?? "";
+      for (const line of lines) emitLine(line);
+    };
+    try {
+      const result = await this.processRunner(options.command, [...options.args], options.stdin, options.cwd, controller.signal,
+        onStdout, options.env, { consume: cliCompletion(provider) }, timeout.activity);
+      if (eventBuffer) emitLine(eventBuffer);
+      if (result.code !== 0) {
+        const structuredFailure = provider === "codex"
+          ? codexFailure(result.stdout)
+          : provider === "claude" ? claudeFailure(result.stdout) : undefined;
+        const details = structuredFailure ?? [result.stderr.trim(), result.stdout.trim()].filter(Boolean).join("\n");
+        throw new Error(`${options.label} exited with code ${result.code ?? "unknown"}${details ? `:\n${details}` : ""}`);
+      }
+      return result;
+    } finally {
+      timeout.dispose();
+      options.signal?.removeEventListener("abort", cancel);
+    }
+  }
+
+  /**
+   * One read-only turn constrained by the provider's own structured-output
+   * channel. The schema is written for Codex and inlined for Claude, exactly as
+   * a typed Dext call is, but the answer comes back as text so the caller keeps
+   * its own contract, repair loop and evidence checks.
+   */
+  async runStructured(request: AgentStructuredRequest): Promise<string> {
+    const provider = request.profile.provider;
+    if (provider !== "codex" && provider !== "claude") {
+      throw new Error(`Agent '${request.profile.label}' does not support the provider's native structured output.`);
+    }
+    if (!request.profile.command?.trim()) throw new Error(`Agent '${request.profile.label}' has no CLI command configured.`);
+    if (request.signal?.aborted) throw new ExecutionCancelledError();
+    const configuredCommand = request.profile.command.trim();
+    const command = resolveCliCommand(configuredCommand, provider);
+    if (!command) {
+      throw new Error(`CLI '${configuredCommand}' is not installed or not available on PATH. Install ${request.profile.label}.`);
+    }
+    const serviceTier = request.speed === "fast" ? "priority" : request.speed === "standard" ? "default" : request.serviceTier || undefined;
+    const extraArguments = request.cliArguments ?? [];
+    const directory = await mkdtemp(join(tmpdir(), "dext-structured-"));
+    const schemaPath = join(directory, "output-schema.json");
+    // Codex strict structured output requires every object property to be
+    // required, so the two providers do not receive the same document.
+    const outputSchema = provider === "codex" ? codexOutputSchema(request.outputSchema) : request.outputSchema;
+    await writeFile(schemaPath, JSON.stringify(outputSchema), "utf8");
+    const cliOptions = {
+      ...(request.model ? { model: request.model } : {}),
+      ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {})
+    };
+    const args = provider === "codex"
+      ? codexCliArguments(cliOptions, schemaPath, "read-only", serviceTier, extraArguments)
+      : claudeCliArguments({ ...cliOptions, permission: "read-only" }, outputSchema, extraArguments);
+    const processEnv = await this.processEnvironment(command, request);
+    try {
+      const result = await this.runStreamingCli({
+        provider,
+        label: request.profile.label,
+        command,
+        args,
+        stdin: request.input,
+        cwd: request.cwd,
+        ...(processEnv ? { env: processEnv } : {}),
+        ...(request.signal ? { signal: request.signal } : {}),
+        ...(request.onEvent ? { onEvent: request.onEvent } : {})
+      });
+      const text = extractConversationText(result.stdout, provider).trim();
+      if (!text) throw new Error(`${request.profile.label} returned no structured result.`);
+      return normalizeStructuredAnswer(text);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+
+  async runConversation(request: AgentConversationRequest): Promise<string> {
+    if (request.profile.provider !== "codex") return this.runConversationNow(request);
+    const queueKey = request.metadata.agentSessionId ?? request.metadata.conversationProviderSessionId;
+    if (!queueKey) return this.runConversationNow(request);
+    const previous = this.codexConversationQueues.get(queueKey) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const queued = previous.catch(() => undefined).then(() => gate);
+    this.codexConversationQueues.set(queueKey, queued);
+    await previous.catch(() => undefined);
+    try {
+      return await this.runConversationNow(request);
+    } finally {
+      release();
+      if (this.codexConversationQueues.get(queueKey) === queued) this.codexConversationQueues.delete(queueKey);
+    }
+  }
+
+  private async runConversationNow(request: AgentConversationRequest): Promise<string> {
+    if (request.profile.provider !== "codex" && request.profile.provider !== "claude") {
+      throw new Error("This provider requires its own Agent runner.");
+    }
+    if (!request.profile.command) throw new Error(`Agent '${request.profile.label}' has no CLI command configured.`);
+    if (request.signal?.aborted) throw new ExecutionCancelledError();
+    const command = resolveCliCommand(request.profile.command.trim(), request.profile.provider);
+    if (!command) {
+      throw new Error(`CLI '${request.profile.command.trim()}' is not installed or not available on PATH. Install ${request.profile.label}.`);
+    }
+    const serviceTier = request.speed === "fast" ? "priority" : request.speed === "standard" ? "default" : request.serviceTier || undefined;
+    // A tier that would write is only honoured when the caller also opened the
+    // write gate, so a read-only mode can never be talked into full access.
+    const permission = request.allowWorkspaceWrite
+      ? request.permission ?? "workspace-write"
+      : "read-only";
+    const extraArguments = request.cliArguments ?? [];
+    const conversationKey = request.metadata.agentSessionId;
+    const providerSessions = request.profile.provider === "codex"
+      ? this.codexConversationSessions
+      : this.claudeConversationSessions;
+    const resumeId = conversationKey
+      ? providerSessions.get(conversationKey) ?? request.metadata.conversationProviderSessionId
+      : request.metadata.conversationProviderSessionId;
+    if (conversationKey && resumeId) providerSessions.set(conversationKey, resumeId);
+    const forkFromId = !resumeId ? request.metadata.conversationForkFrom : undefined;
+    if (request.profile.provider === "codex" && request.metadata.requestAgentInput) {
+      return runCodexConversation(request, {
+        command, env: await this.processEnvironment(command, request), resumeId, forkFromId, serviceTier,
+        timeoutMs: this.timeoutMs, idleTimeoutMs: this.idleTimeoutMs,
+        onThread: (id) => {
+          if (conversationKey) providerSessions.set(conversationKey, id);
+          request.metadata.onAgentSessionId?.("codex", id);
+        }
+      });
+    }
+    // The control protocol needs a Dext surface to answer with; without one the
+    // CLI keeps its own print-mode behaviour rather than being denied everything.
+    if (request.profile.provider === "claude" && request.metadata.requestAgentInput && request.metadata.ui) {
+      return runClaudeConversation(request, {
+        command,
+        args: claudeControlArguments({ ...request, permission, ...(resumeId ? { resumeId } : {}), forkSession: Boolean(forkFromId) }, extraArguments),
+        env: await this.processEnvironment(command, request),
+        timeoutMs: this.timeoutMs, idleTimeoutMs: this.idleTimeoutMs,
+        onSession: (id) => {
+          if (conversationKey) providerSessions.set(conversationKey, id);
+          request.metadata.onAgentSessionId?.("claude", id);
+        }
+      });
+    }
+    const args = request.profile.provider === "codex"
+      ? codexConversationArguments(
+          { ...request, permission },
+          serviceTier,
+          extraArguments,
+          { persist: Boolean(conversationKey), ...(resumeId ? { resumeId } : {}), ...(forkFromId ? { forkFromId } : {}) }
+        )
+      : claudeConversationArguments({ ...request, permission, ...(resumeId ? { resumeId } : {}), ...(forkFromId ? { forkSession: true } : {}) }, extraArguments);
+    const processEnv = await this.processEnvironment(command, request);
+    const controller = new AbortController();
+    const timeout = agentTimeout(controller, this.timeoutMs, this.idleTimeoutMs);
+    const cancel = (): void => controller.abort(new ExecutionCancelledError());
+    request.signal?.addEventListener("abort", cancel, { once: true });
+    if (request.signal?.aborted) cancel();
+    let eventBuffer = "";
+    const streamPhases = new Map<string, AgentStreamPhase>();
+    const claudeTodos = new ClaudeTodoTracker();
+    const claudeMessageIds = new Map<string, string>();
+    const onStdout = (chunk: string): void => {
+      eventBuffer += chunk;
+      const lines = eventBuffer.split(/\r?\n/);
+      eventBuffer = lines.pop() ?? "";
+      for (const line of lines) {
+        trackCliToolActivity(request.profile.provider, line, timeout);
+        const providerSessionId = request.profile.provider === "codex"
+          ? extractCodexThreadId(line)
+          : extractClaudeSessionId(line);
+        if (conversationKey && providerSessionId) {
+          providerSessions.set(conversationKey, providerSessionId);
+          request.metadata.onAgentSessionId?.(request.profile.provider, providerSessionId);
+        }
+        if (request.profile.provider === "codex") {
+          const event = parseCodexStreamLine(line, streamPhases);
+          if (event) request.onEvent?.(event);
+        } else {
+          for (const event of parseClaudeStreamEvents(line, claudeTodos, claudeMessageIds)) request.onEvent?.(event);
+        }
+      }
+    };
+    try {
+      const input = (resumeId || forkFromId)
+        ? request.input
+        : bootstrappedConversationInput(request.metadata.conversationContext, request.input);
+      const result = await this.processRunner(command, args, input, request.cwd, controller.signal, onStdout, processEnv,
+        { consume: cliCompletion(request.profile.provider) }, timeout.activity);
+      if (eventBuffer) {
+        trackCliToolActivity(request.profile.provider, eventBuffer, timeout);
+        const providerSessionId = request.profile.provider === "codex"
+          ? extractCodexThreadId(eventBuffer)
+          : extractClaudeSessionId(eventBuffer);
+        if (conversationKey && providerSessionId) {
+          providerSessions.set(conversationKey, providerSessionId);
+          request.metadata.onAgentSessionId?.(request.profile.provider, providerSessionId);
+        }
+        if (request.profile.provider === "codex") {
+          const event = parseCodexStreamLine(eventBuffer, streamPhases);
+          if (event) request.onEvent?.(event);
+        } else {
+          for (const event of parseClaudeStreamEvents(eventBuffer, claudeTodos, claudeMessageIds)) request.onEvent?.(event);
+        }
+      }
+      if (result.code !== 0) {
+        const details = request.profile.provider === "codex"
+          ? codexFailure(result.stdout)
+          : claudeFailure(result.stdout);
+        throw new Error(`${request.profile.label} exited with code ${result.code ?? "unknown"}${details ? `:\n${details}` : ""}`);
+      }
+      const text = extractConversationText(result.stdout, request.profile.provider);
+      if (!text) throw new Error(`${request.profile.label} returned no response.`);
+      return text;
+    } finally {
+      timeout.dispose();
+      request.signal?.removeEventListener("abort", cancel);
+    }
+  }
+}

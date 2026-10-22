@@ -1,4 +1,4 @@
-import type { PatchChange, WorkflowStepResponse } from "../../../core/types.js";
+import type { PatchChange, WorkflowStepResponse } from "../../../shared/contracts/types.js";
 import { presentDiff } from "../presentation/diffPresentation.js";
 
 export type DiffMode = "inline" | "split";

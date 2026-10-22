@@ -1,5 +1,5 @@
-import type { AgentInputAnswers, AgentInputRequest } from "../../../core/types.js";
-import type { UiField, UiFieldAnswer, UiFormDefinition, UiFormResult, UiInteractionState } from "../../../core/uiForm.js";
+import type { AgentInputAnswers, AgentInputRequest } from "../../../shared/contracts/types.js";
+import type { UiField, UiFieldAnswer, UiFormDefinition, UiFormResult, UiInteractionState } from "../../../shared/contracts/uiForm.js";
 
 export function agentInputForm(request: AgentInputRequest): UiFormDefinition {
   return { title: "Question", description: request.blocking ? "Waiting for your answer" : "You can answer while the agent works",

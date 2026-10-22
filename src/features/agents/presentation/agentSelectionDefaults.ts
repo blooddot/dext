@@ -1,4 +1,4 @@
-import type { AgentModelOption, AgentProfile, AgentSelection } from "../contracts.js";
+import type { AgentModelOption, AgentProfile, AgentSelection } from "../contracts/agent.js";
 
 /** Display inherited values without persisting them as explicit CLI overrides. */
 export function presentAgentSelection(profile: AgentProfile | undefined, selection: AgentSelection): {

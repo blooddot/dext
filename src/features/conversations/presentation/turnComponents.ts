@@ -1,8 +1,8 @@
-import type { DextResult, PatchChange } from "../../../core/types.js";
+import type { DextResult, PatchChange } from "../../../shared/contracts/types.js";
 import type { TurnSectionPresentation } from "./turnPresentation.js";
 import { uiResultText } from "./uiInteractionPresentation.js";
 import type { AgentMessagePresentation } from "./agentMessagePresentation.js";
-import { formatJsonOutput } from "../../../platform/jsonOutput.js";
+import { formatJsonOutput } from "../../../shared/lib/jsonOutput.js";
 
 /** Only the output medium differs: text is escaped by HTML and appended as text by DOM. */
 export interface TurnRenderAdapter<E> {

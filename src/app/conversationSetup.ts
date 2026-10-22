@@ -1,10 +1,10 @@
-import type { AgentProfile, AgentSelection } from "../features/agents/contracts.js";
+import type { AgentProfile, AgentSelection } from "../features/agents/contracts/agent.js";
 import type { ResourceDocument, ResourceSession } from "../features/resources/contracts/resourceSession.js";
 import type { ConversationHistoryStore } from "../features/conversations/contracts/history.js";
 import type { ConversationPreferences } from "../features/conversations/contracts/preferences.js";
 import type { DextReplayEntry } from "../runner/dextResumeCache.js";
-import type { ExecutionMetadata, InputExecutionResponse, RegisteredCallable } from "../core/types.js";
-import type { WebviewResponse } from "../webviewProtocol.js";
+import type { ExecutionMetadata, InputExecutionResponse, RegisteredCallable } from "../shared/contracts/types.js";
+import type { WebviewResponse } from "../platform/webviewProtocol.js";
 import { AgentEventStream } from "../features/conversations/host/agentEventStream.js";
 import { ConversationController } from "../features/conversations/host/conversationController.js";
 import { InteractionController } from "../features/conversations/host/interactionController.js";
@@ -12,7 +12,7 @@ import type { InputNotificationTarget } from "../features/conversations/host/inp
 import { PatchReviewController } from "../features/conversations/host/patchReviewController.js";
 import { PlanController } from "../features/conversations/host/planController.js";
 import { TurnExecutionCoordinator } from "../features/conversations/host/turnExecutionCoordinator.js";
-import { applyPatchHandler } from "../vscodePatchHost.js";
+import { applyPatchHandler } from "../platform/vscode/patchHost.js";
 
 /** What the sidebar still owns: Webview lifecycle, VS Code adapters and the
  * features outside this round. Everything below is passed in as a narrow
