@@ -92,7 +92,6 @@ const lifecycle: ProjectDiagram = {
     relation("t5", "cancelled", "paid", "transitions", { label: "重试", order: 5 })
   ],
   semantics: {
-    lanes: [{ id: "main", label: "阶段", evidence: evidence("created") }, { id: "terminal", label: "结果", evidence: evidence("done") }],
     states: [
       { nodeId: "created", kind: "initial", evidence: evidence("created") },
       { nodeId: "paid", kind: "normal", evidence: evidence("paid") },
@@ -112,8 +111,8 @@ const lifecycle: ProjectDiagram = {
 
 /**
  * The shape every real Plan/Build lifecycle produces: one hub state, a self-transition, and a
- * fan-out into four terminal exits (two of them sharing a target). The vendored renderer uses a
- * fixed three-band grid, so this is the case that used to exhaust the bounded repair budget.
+ * fan-out into four terminal exits (two of them sharing a target). Lifecycle v3 lays this
+ * out automatically from the ordered main path and the semantic transitions.
  */
 const fanOutLifecycle: ProjectDiagram = {
   schemaVersion: 1, id: "demo-lifecycle-fan-out", title: "Plan Build execution and documented outcomes", kind: "lifecycle", version: 1, updatedAt: 1,
@@ -135,7 +134,6 @@ const fanOutLifecycle: ProjectDiagram = {
     relation("t-ceiling", "hub", "incomplete", "transitions", { label: "Ceiling reached", order: 7 })
   ],
   semantics: {
-    lanes: [{ id: "main", label: "Stages", evidence: evidence("plan") }, { id: "terminal", label: "Result", evidence: evidence("done") }],
     states: [
       { nodeId: "plan", kind: "initial", evidence: evidence("plan") },
       { nodeId: "hub", kind: "normal", evidence: evidence("hub") },
@@ -177,17 +175,28 @@ if (argv.includes("--repo-root") && type !== "architecture") {
   }));
   process.exit(2);
 }
-if (command === "deliver") writeFileSync(argv[3], "<!DOCTYPE html><html><body>stub</body></html>");
-process.stdout.write(JSON.stringify({ ok: true, composition: { status: "passed", summary: { errors: 0, warnings: 0 } } }));
+if (command === "deliver") {
+  writeFileSync(argv[3], "<!DOCTYPE html><html><body>stub</body></html>");
+  process.stdout.write(JSON.stringify({ ok: true, validation: { compositionStatus: "pass", errors: 0, warnings: 0 } }));
+} else {
+  process.stdout.write(JSON.stringify({ ok: true, composition: { status: "pass", summary: { errors: 0, warnings: 0 }, issues: [] } }));
+}
 `;
 
 const STUB_ASSETS = [
+  "bin/delivery-update.mjs",
   "assets/template.html",
+  "scripts/check-render-output.mjs",
+  "explainer/check.mjs",
+  "locales/manifest.json",
+  "locales/zh-CN.json",
+  "renderers/shared/owned-temp-directory.mjs",
   "renderers/architecture/render-architecture.mjs",
   "renderers/workflow/render-workflow.mjs",
   "renderers/sequence/render-sequence.mjs",
   "renderers/dataflow/render-dataflow.mjs",
   "renderers/lifecycle/render-lifecycle.mjs",
+  "schemas/common.schema.json",
   "schemas/architecture.schema.json",
   "schemas/workflow.schema.json",
   "schemas/sequence.schema.json",
@@ -204,7 +213,7 @@ async function createStubRuntime(): Promise<{ runtimeRoot: string; calls(): Prom
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, asset === "bin/archify.mjs" ? STUB_CLI : "");
   }
-  await writeFile(join(runtimeRoot, "package.json"), JSON.stringify({ name: "archify", version: "2.17.0-dev.1" }));
+  await writeFile(join(runtimeRoot, "package.json"), JSON.stringify({ name: "archify", version: "3.2.0" }));
   return {
     runtimeRoot,
     calls: async () => {
@@ -232,13 +241,19 @@ describe("ArchifyAdapter", () => {
       ["workflow", (ir: Record<string, unknown>) => ir["schema_version"] === 2 && (ir["lanes"] as unknown[]).length === 3 && (ir["nodes"] as Array<{ lane: string }>).every((entry) => entry.lane)],
       ["sequence", (ir: Record<string, unknown>) => (ir["participants"] as unknown[]).length === 3 && (ir["messages"] as unknown[]).length === 4],
       ["data_flow", (ir: Record<string, unknown>) => ir["diagram_type"] === "dataflow" && (ir["stages"] as unknown[]).length === 3],
-      ["lifecycle", (ir: Record<string, unknown>) => (ir["lanes"] as Array<{ id: string }>).some((lane) => lane.id === "main") && (ir["lanes"] as Array<{ id: string }>).some((lane) => lane.id === "terminal") && (ir["states"] as unknown[]).length === 5 && (ir["transitions"] as unknown[]).length === 5]
+      ["lifecycle", (ir: Record<string, unknown>) => ir["schema_version"] === 3
+        && !("lanes" in ir)
+        && JSON.stringify(ir["mainPath"]) === JSON.stringify(["created", "paid", "shipped", "done"])
+        && (ir["states"] as unknown[]).length === 5
+        && (ir["transitions"] as unknown[]).length === 5]
     ] as const;
     for (const [kind, check] of expectations) {
       const fixture = fixtures.find((item) => item.kind === kind)!;
       const document = await adapter.transform(fixture);
       const payload = document.payload as { ir: Record<string, unknown>; mapping: ArchifyIdMapping };
       expect(check(payload.ir), `${kind} upstream mapping`).toBe(true);
+      expect((payload.ir["meta"] as Record<string, unknown>)["output"], `${kind} meta.output`).toBe("diagram.html");
+      expect((payload.ir["meta"] as Record<string, unknown>)["animation"], `${kind} legacy animation`).toBeUndefined();
       for (const node of fixture.nodes) {
         const archifyId = payload.mapping.ids[node.id];
         expect(archifyId).toBeTruthy();
@@ -269,7 +284,7 @@ describe("ArchifyAdapter", () => {
       expect(artifact.format).toBe("html");
       expect(artifact.mimeType).toBe("text/html");
       expect(artifact.adapterId).toBe("archify");
-      expect(artifact.adapterVersion).toContain("2.17.0-dev.1");
+      expect(artifact.adapterVersion).toContain("3.2.0");
       expect(String(artifact.content)).toContain("<!DOCTYPE html>");
       const receipt = await adapter.validate(document);
       expect(receipt.status).not.toBe("failed");
@@ -301,19 +316,28 @@ describe("ArchifyAdapter", () => {
     const ir = (document.payload as { ir: Record<string, unknown> }).ir;
     const states = ir["states"] as Array<Record<string, unknown>>;
     const transitions = ir["transitions"] as Array<Record<string, unknown>>;
+    expect(ir["schema_version"]).toBe(3);
+    expect(ir["mainPath"]).toEqual(["plan", "hub", "done"]);
+    expect(ir["lanes"]).toBeUndefined();
     // A terminal without an explicit success outcome is a non-completion exit, never `success`.
     expect(states.find((state) => state["id"] === "done")?.["type"]).toBe("success");
     for (const id of ["stopped", "blocked", "incomplete"]) {
       expect(states.find((state) => state["id"] === id)?.["type"], `${id} type`).toBe("failure");
     }
-    // Every transition carries authored geometry, and the self-transition carries explicit via points.
-    expect(transitions.every((transition) => typeof transition["fromSide"] === "string" && typeof transition["toSide"] === "string")).toBe(true);
-    expect(Array.isArray(transitions.find((transition) => transition["id"] === "t-continue")?.["via"])).toBe(true);
+    // v3 owns the geometry: states carry meaning only and transitions no routing controls.
+    for (const state of states) {
+      for (const key of ["lane", "col", "width", "yOffset", "x", "y"]) expect(state[key], `${String(state["id"])}.${key}`).toBeUndefined();
+    }
+    for (const transition of transitions) {
+      for (const key of ["fromSide", "toSide", "via", "labelAt", "channelY", "channelX"]) {
+        expect(transition[key], `${String(transition["id"])}.${key}`).toBeUndefined();
+      }
+    }
     expect(transitions.every((transition) => transition["label"] !== undefined)).toBe(true);
-    // The two exits that share the Incomplete target must not share one corridor.
+    // The two exits that share the Incomplete target stay separate transitions with their own labels.
     const duplicated = transitions.filter((transition) => transition["to"] === "incomplete");
     expect(duplicated).toHaveLength(2);
-    expect(new Set(duplicated.map((transition) => JSON.stringify(transition["via"]))).size).toBe(2);
+    expect(new Set(duplicated.map((transition) => transition["label"])).size).toBe(2);
 
     const artifact = await adapter.render(document);
     const html = String(artifact.content);

@@ -840,11 +840,9 @@ const EVIDENCE_TIER_GUIDANCE = "Evidence comes in two tiers. Each file listed in
 
 /**
  * The renderers lay these kinds out on fixed grids, so the kind guidance states the shape
- * each one can hold rather than only its semantics. The lifecycle wording follows the
- * renderer's own contract (`renderers/lifecycle/README.md`: one rail for the primary
- * lifecycle, lower lanes only for interruptions, recovery and terminal exits, and terminal
- * exits dropping from their source event) and the `object-lifecycle` recipe that ships with
- * the diagram skill.
+ * each one can hold rather than only its semantics. Lifecycle v3 derives its own geometry,
+ * so its wording describes the ordered main path and semantic states/transitions rather
+ * than any lane or band assignment.
  */
 function buildKindGuidance(): string {
   return [
@@ -853,7 +851,7 @@ function buildKindGuidance(): string {
     "- workflow: at least one lane, laneId on every node and explicit order on every relation. When the requested scope includes branches or exceptions, label their conditions and exception paths.",
     "- sequence: at least two participants and explicit call/return messages covering every relation.",
     "- data_flow: two to five evidenced stages and a stageId on every node.",
-    "- lifecycle: at least one initial and one terminal state plus event/condition transitions. Model it as a phase map, not a dense state-transition graph: put the start and progress states on one rail in lane 'main' in the order they occur, use a second lane for wait, retry and interruption states, and a 'terminal' lane for the outcomes. Keep it to about five progress states, three wait/retry states and three terminal states, and have each terminal be entered from the wait/retry state it follows rather than straight from the rail. Label every transition with its event, and never omit an ending; describe remaining detail in node labels instead of adding more states."
+    "- lifecycle: at least one initial and one terminal state plus event/condition transitions. Model it as one ordered main path of semantic states, not a dense state-transition graph and not layout-bound lane assignments: list the start and progress states in the order they occur, keep wait, retry and interruption states off the main path, and represent outcomes as success or failure terminal states reached by event/condition transitions. Keep it to about five main-path states, three wait/retry states and three terminal states, and label every transition with its event or condition. Never omit an ending; describe remaining detail in node labels instead of adding more states."
   ].join("\n");
 }
 

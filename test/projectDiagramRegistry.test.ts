@@ -7,7 +7,7 @@ const capability: DiagramAdapterCapability = { kind: "architecture", formats: ["
 
 class FakeAdapter implements ProjectDiagramAdapter {
   readonly id = "archify";
-  readonly version = "2.17.0-dev.1";
+  readonly version = "3.2.0";
   readonly capabilities = [capability] as const;
   behaviour: "succeed" | "fail-after-first" | "hang" = "succeed";
   renders = 0;
@@ -135,7 +135,7 @@ describe("Project diagram registry", () => {
     registry.register(adapter);
     expect(adapter.probe === undefined).toBe(true);
     // An adapter without a probe is assumed usable instead of being reported unavailable.
-    expect(await registry.engineInfo()).toEqual({ id: "archify", version: "2.17.0-dev.1", available: true });
+    expect(await registry.engineInfo()).toEqual({ id: "archify", version: "3.2.0", available: true });
     expect(registry.supports("architecture")).toBe(true);
     expect(registry.supports("workflow")).toBe(false);
 

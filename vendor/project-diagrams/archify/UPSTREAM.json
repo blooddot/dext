@@ -1,5 +1,13 @@
 {
   "repository": "https://github.com/tt-a1i/archify",
-  "revision": "d673e8300df60a5c8166abe78787fdc78f6b8000",
-  "integration": "unmodified local CLI runtime; invoked by Project adapter; no skill installed"
+  "revision": "e62275b6373fa63436e195635835c313ce028b21",
+  "archive": "archify.zip",
+  "archiveSha256": "70e210265c59f24dcbdf2a502ff671104b5454e7ee7d3554aecd86bad32384f5",
+  "integration": "unmodified local CLI runtime pruned to validate/deliver dependencies; invoked by Project adapter; no skill installed",
+  "pruned": {
+    "renderers": ["class", "erd", "explainer", "timeline", "tree", "waterfall"],
+    "schemas": ["class", "erd", "explainer", "timeline", "tree", "waterfall"],
+    "commands": ["doctor", "compare", "migrate", "guide"],
+    "intentionallyOmitted": ["examples/", "references/", "recipes/", "delta/", "migrations/", "SKILL.md"]
+  }
 }

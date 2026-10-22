@@ -16,6 +16,7 @@ dist/build-meta.json
 node_modules/**
 .npm-cache/**
 .tmp-tb/**
+.tmp-*/**
 **/*.map
 *.ts
 esbuild.mjs

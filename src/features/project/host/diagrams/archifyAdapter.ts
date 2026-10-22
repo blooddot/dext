@@ -20,18 +20,25 @@ ProjectDiagramAdapter
 import { assertDiagramDocument, diagramArtifact, diagramReceipt, readDiagramOutput, runDiagramProcess, withDiagramFiles } from "./projectDiagramProcess.js";
 
 const KINDS = ["architecture", "workflow", "sequence", "data_flow", "lifecycle"] as const;
-const RUNTIME_VERSION = "2.17.0-dev.1+d673e830";
-const PACKAGE_VERSION = "2.17.0-dev.1";
+const RUNTIME_VERSION = "3.2.0+e62275b";
+const PACKAGE_VERSION = "3.2.0";
 const LOCALE = "zh-CN";
 const MAX_LAYOUT_REPAIRS = 2;
 const ASSET_CHECKS: readonly { path: string; label: string }[] = [
   { path: "bin/archify.mjs", label: "CLI" },
+  { path: "bin/delivery-update.mjs", label: "delivery update helper" },
   { path: "assets/template.html", label: "HTML template" },
+  { path: "scripts/check-render-output.mjs", label: "render output checker" },
+  { path: "explainer/check.mjs", label: "explainer checker" },
+  { path: "locales/manifest.json", label: "locale manifest" },
+  { path: "locales/zh-CN.json", label: "zh-CN locale" },
+  { path: "renderers/shared/owned-temp-directory.mjs", label: "owned temp directory helper" },
   { path: "renderers/architecture/render-architecture.mjs", label: "architecture renderer" },
   { path: "renderers/workflow/render-workflow.mjs", label: "workflow renderer" },
   { path: "renderers/sequence/render-sequence.mjs", label: "sequence renderer" },
   { path: "renderers/dataflow/render-dataflow.mjs", label: "dataflow renderer" },
   { path: "renderers/lifecycle/render-lifecycle.mjs", label: "lifecycle renderer" },
+  { path: "schemas/common.schema.json", label: "common schema" },
   { path: "schemas/architecture.schema.json", label: "architecture schema" },
   { path: "schemas/workflow.schema.json", label: "workflow schema" },
   { path: "schemas/sequence.schema.json", label: "sequence schema" },
@@ -78,6 +85,13 @@ interface UpstreamResult {
   error?: string;
   diagnostics?: UpstreamDiagnostic[];
   composition?: { status?: string; summary?: { errors?: number; warnings?: number }; issues?: unknown[] };
+  /** Deliver receipts report the artifact checks under `validation` instead of `composition`. */
+  validation?: {
+    compositionStatus?: string;
+    errors?: number;
+    warnings?: number;
+    compositionIssues?: unknown[];
+  };
 }
 
 export class ArchifyLayoutError extends Error {
@@ -264,9 +278,9 @@ function baseMeta(project: ProjectDiagram, repository: ArchifyRepository | undef
   const repositoryMeta = metadataRepository(repository, attached);
   return {
     title: project.title,
+    output: "diagram.html",
     quality_profile: "standard",
     locale: LOCALE,
-    ...(project.kind !== "architecture" ? { animation: "trace" } : {}),
     ...(repositoryMeta ? { repository: repositoryMeta } : {}),
     ...extra
   };
@@ -783,259 +797,11 @@ function buildDataFlow(project: ProjectDiagram, repository: ArchifyRepository | 
   };
 }
 
-function lifecycleLaneId(value: string, used: Set<string>): string {
-  if (value === "main" || value === "terminal") return value;
-  return archifyId(value, used);
-}
-
-/**
- * The vendored lifecycle renderer draws a fixed three-band grid: phase states sit at
- * `phase.y` on `phase.xs`, every non-main/non-terminal lane shares the event band, and the
- * terminal lane owns the outcome band (see `renderers/lifecycle/README.md`). Dext has to
- * author geometry inside that grid: the columns, the 32px side margin, the 10px state gap,
- * the 32px minimum transition length and label clearances are all validated by the
- * renderer and are not repairable upstream.
- */
-const LIFECYCLE = {
-  width: 980,
-  margin: 32,
-  bottomReserve: 122,
-  rowGap: 76,
-  minEdge: 32,
-  /** Phase columns are 154px apart, so two 120px states still leave a 34px rail edge. */
-  railWidth: 120,
-  /** Rows Dext puts on the phase rail. The renderer's own capacity is two, but a
-   * state on the second row blocks every vertical corridor out of the row above. */
-  phaseRows: 1,
-  /** Offsets of the event band's two rows, from `renderers/lifecycle/README.md`: the
-   * renderer's own 76px row pitch leaves only an 18px gap, which is below the 32px a
-   * transition needs, so the second row is pushed clear of the first. */
-  eventRowOffsets: [0, 100] as const,
-  /** The event and outcome bands share the same 154px pitch as the phase rail, and the
-   * renderer requires 10px between neighbouring states, so a band state is capped below
-   * the pitch rather than at the widest label it could otherwise carry. */
-  bandWidth: 140,
-  minWidth: 118,
-  maxWidth: 260,
-  /** Width estimates the renderer itself applies to state labels and transition labels. */
-  stateUnit: 6.2,
-  labelUnit: 4.9,
-  phase: { y: 126, height: 62, xs: [94, 248, 402, 556, 710] },
-  event: { y: 278, height: 58, xs: [402, 556, 710] },
-  outcome: { y: 450, height: 58, xs: [402, 556, 710] }
-} as const;
-
-type LifecycleBandName = "phase" | "event" | "outcome";
-
-interface LifecycleBand { readonly y: number; readonly height: number; readonly xs: readonly number[]; }
-
-interface LifecycleBox {
-  id: string;
-  band: LifecycleBandName;
-  col: number;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  cx: number;
-  cy: number;
-}
-
-interface LifecycleRoute { fromSide: string; toSide: string; via?: number[][]; }
-
-interface LifecycleLabelRect { x: number; y: number; width: number; height: number; }
-
-function lifecycleBandFor(lane: string): LifecycleBandName {
-  if (lane === "main") return "phase";
-  if (lane === "terminal") return "outcome";
-  return "event";
-}
-
-function lifecycleBandGeometry(band: LifecycleBandName): LifecycleBand {
-  if (band === "phase") return LIFECYCLE.phase;
-  if (band === "event") return LIFECYCLE.event;
-  return LIFECYCLE.outcome;
-}
-
 /** CJK-aware unit count, shared with the renderer's own width estimates. */
 function textUnits(value: string): number {
   let units = 0;
   for (const character of value) units += character.codePointAt(0)! > 0x2e80 ? 2 : 1;
   return units;
-}
-
-/** Keeps a state label inside the width its band can actually give it. */
-function lifecycleStateLabel(label: string, width: number): string {
-  if (textUnits(label) * LIFECYCLE.stateUnit <= width + 6) return label;
-  const characters = [...label];
-  while (characters.length && (textUnits(characters.join("")) + 1) * LIFECYCLE.stateUnit > width + 6) characters.pop();
-  return characters.length ? `${characters.join("")}…` : label.slice(0, 1);
-}
-
-function lifecycleAnchor(box: LifecycleBox, side: string): number[] {
-  switch (side) {
-    case "left": return [box.x, box.cy];
-    case "right": return [box.x + box.width, box.cy];
-    case "top": return [box.cx, box.y];
-    default: return [box.cx, box.y + box.height];
-  }
-}
-
-function lifecycleRectsOverlap(a: LifecycleLabelRect | LifecycleBox, b: LifecycleLabelRect | LifecycleBox): boolean {
-  return !(a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y);
-}
-
-function lifecycleSegmentsCross(a: number[], b: number[], c: number[], d: number[]): boolean {
-  const denominator = (b[0]! - a[0]!) * (d[1]! - c[1]!) - (b[1]! - a[1]!) * (d[0]! - c[0]!);
-  if (Math.abs(denominator) < 1e-9) return false;
-  const t = ((c[0]! - a[0]!) * (d[1]! - c[1]!) - (c[1]! - a[1]!) * (d[0]! - c[0]!)) / denominator;
-  const u = ((c[0]! - a[0]!) * (b[1]! - a[1]!) - (c[1]! - a[1]!) * (b[0]! - a[0]!)) / denominator;
-  return t >= 0 && t <= 1 && u >= 0 && u <= 1;
-}
-
-/** Mirrors the renderer's clean-flow obstacle test: 2px clearance around every other state. */
-function lifecycleSegmentHitsBox(a: number[], b: number[], box: LifecycleBox, clearance = 2): boolean {
-  const x1 = box.x - clearance;
-  const y1 = box.y - clearance;
-  const x2 = box.x + box.width + clearance;
-  const y2 = box.y + box.height + clearance;
-  const inside = (point: number[]) => point[0]! >= x1 && point[0]! <= x2 && point[1]! >= y1 && point[1]! <= y2;
-  if (inside(a) || inside(b)) return true;
-  return lifecycleSegmentsCross(a, b, [x1, y1], [x2, y1])
-    || lifecycleSegmentsCross(a, b, [x2, y1], [x2, y2])
-    || lifecycleSegmentsCross(a, b, [x2, y2], [x1, y2])
-    || lifecycleSegmentsCross(a, b, [x1, y2], [x1, y1]);
-}
-
-/**
- * The route `renderers/lifecycle/README.md` asks for when nothing else fits: an exit
- * that leaves the rail downwards, runs along the empty gap between the phase band and
- * the event band, around the outer margin, and back in below the outcome band.
- *
- * `outcomeXs` and `eventXs` are the same three coordinates, so a rail state that feeds
- * a terminal frequently has no straight corridor left — the renderer's own candidates
- * then fall through to a diagonal that the endpoint gate rejects. Authored `via` points
- * are authoritative (`render-lifecycle.mjs` returns them before any preset), so Dext can
- * state the corridor itself instead of guessing.
- */
-function lifecycleOutsideRoute(from: LifecycleBox, to: LifecycleBox, maxBottom: number): LifecycleRoute | undefined {
-  if (from.band !== "phase" || to.band !== "outcome") return undefined;
-  const gapY = Math.round((LIFECYCLE.phase.y + LIFECYCLE.phase.height + LIFECYCLE.event.y) / 2);
-  const marginX = LIFECYCLE.width - 24;
-  const belowY = maxBottom + 22;
-  return {
-    fromSide: "bottom",
-    toSide: "bottom",
-    via: [[from.cx, gapY], [marginX, gapY], [marginX, belowY], [to.cx, belowY]]
-  };
-}
-
-function lifecycleRouteCandidates(from: LifecycleBox, to: LifecycleBox, channels: readonly number[]): LifecycleRoute[] {
-  const candidates: LifecycleRoute[] = [];
-  const bottom = (box: LifecycleBox) => box.y + box.height;
-  if (from.id === to.id) {
-    // A self-transition has no valid automatic route: the renderer's endpoint gate demands a
-    // first segment that leaves the inferred source side and a last segment that enters the
-    // inferred target side, and no pair of anchors on one rectangle satisfies both. An
-    // authored `via` is authoritative and is the only form the gate accepts.
-    candidates.push({
-      fromSide: "right",
-      toSide: "top",
-      via: [[from.x + from.width + 22, from.cy], [from.x + from.width + 22, from.y - 34], [from.cx, from.y - 34]]
-    });
-    return candidates;
-  }
-  if (from.band === "phase" && to.band === "phase" && from.cy === to.cy) {
-    if (to.col === from.col + 1) candidates.push({ fromSide: "right", toSide: "left" });
-    if (to.col === from.col - 1) candidates.push({ fromSide: "left", toSide: "right" });
-  }
-  for (const channel of channels) {
-    if (channel > bottom(from) + 8 && channel < to.y - 8) candidates.push({ fromSide: "bottom", toSide: "top", via: [[from.cx, channel], [to.cx, channel]] });
-    if (channel > bottom(to) + 8) candidates.push({ fromSide: "bottom", toSide: "bottom", via: [[from.cx, channel], [to.cx, channel]] });
-    if (channel < from.y - 8 && channel > bottom(to) + 8) candidates.push({ fromSide: "top", toSide: "bottom", via: [[from.cx, channel], [to.cx, channel]] });
-  }
-  if (from.y > 96 && to.y > 96) candidates.push({ fromSide: "top", toSide: "top", via: [[from.cx, 86], [to.cx, 86]] });
-  candidates.push({ fromSide: "left", toSide: "left", via: [[20, from.cy], [20, to.cy]] });
-  candidates.push({ fromSide: "right", toSide: "right", via: [[LIFECYCLE.width - 20, from.cy], [LIFECYCLE.width - 20, to.cy]] });
-  candidates.push(from.cx <= to.cx ? { fromSide: "right", toSide: "left" } : { fromSide: "left", toSide: "right" });
-  return candidates;
-}
-
-function lifecycleRoutePoints(from: LifecycleBox, to: LifecycleBox, route: LifecycleRoute): number[][] {
-  return [lifecycleAnchor(from, route.fromSide), ...(route.via ?? []), lifecycleAnchor(to, route.toSide)];
-}
-
-function lifecycleRouteValid(from: LifecycleBox, to: LifecycleBox, points: readonly number[][], boxes: readonly LifecycleBox[]): boolean {
-  const start = points[0]!;
-  const end = points[points.length - 1]!;
-  if (Math.hypot(end[0]! - start[0]!, end[1]! - start[1]!) < LIFECYCLE.minEdge) return false;
-  for (const box of boxes) {
-    if (box.id === from.id || box.id === to.id) continue;
-    for (let index = 0; index < points.length - 1; index += 1) {
-      if (lifecycleSegmentHitsBox(points[index]!, points[index + 1]!, box)) return false;
-    }
-  }
-  return true;
-}
-
-/** Corridor a route leans on, used to spread a fan-out over separate channels. */
-function lifecycleRouteChannel(route: LifecycleRoute): number | undefined {
-  const via = route.via;
-  if (!via || !via.length) return undefined;
-  const first = via[0]!;
-  const last = via[via.length - 1]!;
-  return first[1] === last[1] ? first[1] : first[0];
-}
-
-/**
- * Places one transition label at the first candidate that clears every state and every label
- * already placed. Returns undefined when the fixed bands leave no room, so the caller can omit
- * the label instead of shipping a collision the renderer rejects.
- */
-function lifecycleLabelPlacement(
-  points: readonly number[][],
-  label: string,
-  note: string | undefined,
-  boxes: readonly LifecycleBox[],
-  placed: readonly LifecycleLabelRect[],
-  midX: number,
-  maxBottom: number,
-  viewBoxHeight: number
-): { lx: number; ly: number; rect: LifecycleLabelRect } | undefined {
-  const width = Math.max(32, Math.max(textUnits(label), textUnits(note ?? "")) * LIFECYCLE.labelUnit + 12);
-  const height = note ? 27 : 16;
-  const clampX = (value: number) => Math.min(LIFECYCLE.width - 8 - width / 2, Math.max(8 + width / 2, value));
-  const fits = (rect: LifecycleLabelRect) => {
-    if (rect.x < 8 || rect.x + rect.width > LIFECYCLE.width - 8 || rect.y < 8 || rect.y + rect.height > viewBoxHeight - 8) return false;
-    for (const box of boxes) if (lifecycleRectsOverlap(rect, box)) return false;
-    for (const other of placed) if (lifecycleRectsOverlap(rect, other)) return false;
-    return true;
-  };
-  const candidates: Array<[number, number]> = [];
-  const segments: Array<[number[], number[]]> = [];
-  for (let index = 0; index < points.length - 1; index += 1) segments.push([points[index]!, points[index + 1]!]);
-  const ordered = [...segments.filter((_, index) => index > 0 && index < segments.length - 1), ...segments];
-  for (const [a, b] of ordered) {
-    const horizontal = Math.abs(a[1]! - b[1]!) <= 0.5;
-    const mx = (a[0]! + b[0]!) / 2;
-    const my = (a[1]! + b[1]!) / 2;
-    if (horizontal) {
-      candidates.push([mx, a[1]! + 5 - height]);
-      candidates.push([mx, a[1]! + 17]);
-    } else {
-      candidates.push([a[0]! + 8 + width / 2, my - height / 2 + 11]);
-      candidates.push([a[0]! - 8 - width / 2, my - height / 2 + 11]);
-    }
-  }
-  // Rows the fixed bands leave free: above the rail and inside both inter-band gaps.
-  for (const row of [205, 233, 365, 393, 96]) candidates.push([midX, row - height / 2 + 11]);
-  candidates.push([midX, maxBottom + 12 + 11]);
-  for (const [lx, ly] of candidates) {
-    const centerX = clampX(lx);
-    const rect: LifecycleLabelRect = { x: centerX - width / 2, y: ly - 11, width, height };
-    if (fits(rect)) return { lx: centerX, ly, rect };
-  }
-  return undefined;
 }
 
 function stateType(node: ProjectDiagramNode, kind: "initial" | "terminal" | "normal", outcome?: "success" | "failure"): string {
@@ -1049,6 +815,68 @@ function stateType(node: ProjectDiagramNode, kind: "initial" | "terminal" | "nor
   return "active";
 }
 
+/**
+ * The v3 renderer derives all geometry from `mainPath` and the semantic states.
+ * Dext therefore only chooses the story: a shortest transition path from the
+ * initial state to a success terminal, falling back to any terminal and then to
+ * the furthest reachable state. Every consecutive pair is an actual transition,
+ * which is the one structural rule the renderer enforces for the main path.
+ */
+function lifecycleMainPath(
+  project: ProjectDiagram,
+  stateByNode: ReadonlyMap<string, { kind: "initial" | "terminal" | "normal"; outcome?: "success" | "failure" }>,
+  transitions: readonly ProjectDiagramRelation[]
+): string[] {
+  const start = project.nodes.find((node) => stateByNode.get(node.id)?.kind === "initial") ?? project.nodes[0];
+  if (!start) return [];
+  const adjacency = new Map<string, string[]>();
+  for (const node of project.nodes) adjacency.set(node.id, []);
+  for (const relation of transitions) {
+    const next = adjacency.get(relation.from);
+    if (next && !next.includes(relation.to)) next.push(relation.to);
+  }
+  const terminals = project.nodes.filter((node) => stateByNode.get(node.id)?.kind === "terminal");
+  const successTerminals = new Set(terminals
+    .filter((node) => stateByNode.get(node.id)?.outcome === "success")
+    .map((node) => node.id));
+  const allTerminals = new Set(terminals.map((node) => node.id));
+
+  const search = (goals?: ReadonlySet<string>): { path: string[]; furthest: string[] } => {
+    const parent = new Map<string, string | undefined>([[start.id, undefined]]);
+    const depth = new Map<string, number>([[start.id, 0]]);
+    const queue = [start.id];
+    let deepest = start.id;
+    let deepestDepth = 0;
+    const build = (id: string): string[] => {
+      const path = [id];
+      let cursor = parent.get(id);
+      while (cursor) { path.unshift(cursor); cursor = parent.get(cursor); }
+      return path;
+    };
+    while (queue.length) {
+      const id = queue.shift()!;
+      if (goals?.has(id)) return { path: build(id), furthest: build(id) };
+      for (const target of adjacency.get(id) ?? []) {
+        if (parent.has(target)) continue;
+        parent.set(target, id);
+        const nextDepth = (depth.get(id) ?? 0) + 1;
+        depth.set(target, nextDepth);
+        if (nextDepth > deepestDepth) { deepest = target; deepestDepth = nextDepth; }
+        queue.push(target);
+      }
+    }
+    // No requested goal is reachable: keep a real connected chain instead of a
+    // fabricated state order, so the renderer's main-path gap check still holds.
+    return { path: [], furthest: build(deepest) };
+  };
+
+  const preferred = successTerminals.size ? search(successTerminals).path : [];
+  if (preferred.length >= 2) return preferred;
+  const terminal = allTerminals.size ? search(allTerminals).path : [];
+  if (terminal.length >= 2) return terminal;
+  return search().furthest;
+}
+
 function buildLifecycle(project: ProjectDiagram, repository: ArchifyRepository | undefined, attached: boolean): BuiltIr {
   const semantics = project.semantics ?? {};
   const stateDefinitions = semantics.states ?? [];
@@ -1056,229 +884,43 @@ function buildLifecycle(project: ProjectDiagram, repository: ArchifyRepository |
   const mapping = emptyMapping();
   const usedNodes = new Set<string>();
   const usedRelations = new Set<string>();
-  const usedLanes = new Set<string>();
   const stateByNode = new Map(stateDefinitions.map((state) => [state.nodeId, state]));
   const transitionIds = new Set((semantics.transitions ?? []).map((transition) => transition.relationId));
   const transitionRelations = project.relations.filter((relation) => transitionIds.has(relation.id) || relation.kind === "transitions");
   const transitionByRelation = new Map((semantics.transitions ?? []).map((transition) => [transition.relationId, transition]));
-  const declaredLanes = semantics.lanes ?? [];
-  const mainSource = declaredLanes.find((lane) => lane.id === "main") ?? declaredLanes[0];
-  const terminalSource = declaredLanes.find((lane) => lane.id === "terminal");
-  const eventSource = declaredLanes.filter((lane) => lane !== mainSource && lane !== terminalSource).slice(0, 2);
-  const hasTerminal = stateDefinitions.some((state) => state.kind === "terminal");
-  const lanes: Array<Record<string, unknown>> = [{ id: "main", label: mainSource?.label ?? "Stages" }];
-  if (hasTerminal) lanes.push({ id: "terminal", label: terminalSource?.label ?? "Result" });
-  const eventLaneIds: string[] = [];
-  for (const lane of eventSource) {
-    const id = lifecycleLaneId(lane.id, usedLanes);
-    eventLaneIds.push(id);
-    lanes.push({ id, label: lane.label });
+  const mainPathIds = lifecycleMainPath(project, stateByNode, transitionRelations);
+  if (mainPathIds.length < 2) {
+    throw new Error("Lifecycle diagram needs a connected main path of at least two states.");
   }
-  if (eventLaneIds.length === 0 && lanes.length < 4) {
-    eventLaneIds.push("events");
-    lanes.push({ id: "events", label: "Events" });
-  }
-  const ranks = rankNodes(project.nodes, transitionRelations.map((relation) => ({ from: relation.from, to: relation.to })));
-  const terminalNodes = project.nodes.filter((node) => stateByNode.get(node.id)?.kind === "terminal");
-  const stateKind = (node: ProjectDiagramNode): "initial" | "terminal" | "normal" => stateByNode.get(node.id)?.kind ?? "normal";
-  const nodeStateType = (node: ProjectDiagramNode): string => stateType(node, stateKind(node), stateByNode.get(node.id)?.outcome);
-  // `renderers/lifecycle/README.md` states the contract Dext has to place into: the main
-  // rail carries the start and active states left to right, the lower lanes carry
-  // "interruptions, recovery, and terminal exits", and "terminal exits should drop
-  // vertically from their source event whenever possible". The bands are fixed, so the
-  // allocation below follows that shape rather than placing by index.
-  const railOrder = [...project.nodes]
-    .filter((node) => stateKind(node) !== "terminal")
-    .sort((left, right) => (ranks.get(left.id) ?? 0) - (ranks.get(right.id) ?? 0)
-      || project.nodes.indexOf(left) - project.nodes.indexOf(right));
-  const phaseColumnByRank = new Map<number, number>();
-  for (const rank of [...new Set(railOrder
-    .filter((node) => nodeStateType(node) !== "waiting")
-    .map((node) => ranks.get(node.id) ?? 0))].sort((left, right) => left - right).slice(0, LIFECYCLE.phase.xs.length)) {
-    phaseColumnByRank.set(rank, phaseColumnByRank.size);
-  }
-  const railRow = new Map<number, number>();
-  const slotByNode = new Map<string, { lane: string; col: number; yOffset: number }>();
-  const eventQueue: ProjectDiagramNode[] = [];
-  for (const node of railOrder) {
-    const column = nodeStateType(node) === "waiting" ? undefined : phaseColumnByRank.get(ranks.get(node.id) ?? 0);
-    if (column !== undefined) {
-      const row = railRow.get(column) ?? 0;
-      if (row < LIFECYCLE.phaseRows) {
-        railRow.set(column, row + 1);
-        slotByNode.set(node.id, { lane: "main", col: column, yOffset: row * LIFECYCLE.rowGap });
-        continue;
-      }
-    }
-    eventQueue.push(node);
-  }
-  // A terminal is entered straight down from the state above it, which only works when
-  // that state is the *only* one in its column: `outcomeXs` and `eventXs` are the same
-  // three coordinates, so any other event state in that column sits across the drop.
-  // States that exit into a terminal therefore take a column of their own in the event
-  // band's first row, which is also the row tall enough to leave from.
-  const terminalPredecessors = new Map<string, string[]>(terminalNodes.map((node) => [node.id, []]));
-  for (const relation of transitionRelations) terminalPredecessors.get(relation.to)?.push(relation.from);
-  const exitsIntoTerminal = new Set(eventQueue
-    .filter((node) => [...terminalPredecessors.values()].some((list) => list.includes(node.id)))
-    .map((node) => node.id));
-  const eventPlacement = new Map<string, { col: number; yOffset: number }>();
-  const sharedSlots: Array<{ col: number; yOffset: number }> = [];
-  for (const node of eventQueue.filter((entry) => exitsIntoTerminal.has(entry.id))) {
-    eventPlacement.set(node.id, { col: eventPlacement.size, yOffset: 0 });
-  }
-  const reservedColumns = eventPlacement.size;
-  for (let col = reservedColumns; col < LIFECYCLE.event.xs.length; col += 1) {
-    for (const yOffset of LIFECYCLE.eventRowOffsets) sharedSlots.push({ col, yOffset });
-  }
-  // Last resort: the second row of a reserved column, which does cross that column's
-  // terminal exit. Better than refusing a diagram whose states do fit the bands.
-  for (let col = 0; col < reservedColumns; col += 1) {
-    for (const yOffset of LIFECYCLE.eventRowOffsets.slice(1)) sharedSlots.push({ col, yOffset });
-  }
-  for (const node of eventQueue.filter((entry) => !exitsIntoTerminal.has(entry.id))) {
-    const slot = sharedSlots.shift();
-    if (!slot) {
-      throw new Error("Lifecycle diagram has more states than the fixed phase and event bands can hold. Split it into two lifecycle diagrams.");
-    }
-    eventPlacement.set(node.id, slot);
-  }
-  for (const [nodeId, slot] of eventPlacement) slotByNode.set(nodeId, { lane: eventLaneIds[0] ?? "main", ...slot });
-  const eventColumnCounts = new Map<number, number>();
-  const loneEventColumn = new Map<string, number>();
-  for (const [nodeId, slot] of eventPlacement) {
-    eventColumnCounts.set(slot.col, (eventColumnCounts.get(slot.col) ?? 0) + 1);
-    if (slot.yOffset === 0) loneEventColumn.set(nodeId, slot.col);
-  }
-  // Terminals: below the event state that exits into them when there is one (a straight
-  // drop), otherwise in a column no event state occupies, otherwise wherever is left.
-  const terminalColumn = new Map<string, number>();
-  const terminalRow = new Map<string, number>();
-  const takenTerminalColumns = new Set<number>();
-  const terminalRowCount = new Map<number, number>();
-  for (const node of terminalNodes) {
-    const eventSource = (terminalPredecessors.get(node.id) ?? [])
-      .map((id) => loneEventColumn.get(id))
-      .find((col) => col !== undefined && eventColumnCounts.get(col) === 1);
-    const column = eventSource
-      ?? [0, 1, 2].find((col) => !eventColumnCounts.has(col) && !takenTerminalColumns.has(col))
-      ?? [0, 1, 2].find((col) => !takenTerminalColumns.has(col))
-      ?? terminalColumn.size % LIFECYCLE.outcome.xs.length;
-    takenTerminalColumns.add(column);
-    terminalColumn.set(node.id, column);
-    const row = terminalRowCount.get(column) ?? 0;
-    terminalRowCount.set(column, row + 1);
-    terminalRow.set(node.id, row);
-  }
-  const boxes: LifecycleBox[] = [];
   const states = project.nodes.map((node) => {
     const id = mapNode(mapping, node, usedNodes);
     const definition = stateByNode.get(node.id);
-    const kind = definition?.kind ?? "normal";
-    let lane: string;
-    let col: number;
-    let yOffset: number;
-    if (kind === "terminal") {
-      lane = hasTerminal ? "terminal" : "main";
-      col = terminalColumn.get(node.id) ?? 0;
-      // A column holds one terminal; only a fourth outcome reuses a column, and its
-      // deeper row is then the one nothing else sits below.
-      yOffset = (terminalRow.get(node.id) ?? 0) * LIFECYCLE.rowGap;
-    } else {
-      const slot = slotByNode.get(node.id)!;
-      lane = slot.lane;
-      col = slot.col;
-      yOffset = slot.yOffset;
-    }
-    const band = lifecycleBandFor(lane);
-    const geometry = lifecycleBandGeometry(band);
-    if (col >= geometry.xs.length) col = geometry.xs.length - 1;
-    const cx = geometry.xs[col]!;
-    const envelope = Math.min(cx - LIFECYCLE.margin, LIFECYCLE.width - LIFECYCLE.margin - cx);
-    const cap = band === "phase" ? Math.min(LIFECYCLE.railWidth, envelope * 2) : Math.min(LIFECYCLE.bandWidth, envelope * 2);
-    const desired = Math.max(LIFECYCLE.minWidth, Math.round(textUnits(node.label) * LIFECYCLE.stateUnit) + 12);
-    const width = Math.max(1, Math.min(desired, cap));
-    const box: LifecycleBox = { id, band, col, x: cx - width / 2, y: geometry.y + yOffset, width, height: geometry.height, cx, cy: geometry.y + yOffset + geometry.height / 2 };
-    boxes.push(box);
     return {
       id,
-      type: stateType(node, kind, definition?.outcome),
-      label: lifecycleStateLabel(node.label, width),
-      lane,
-      col,
-      width,
-      ...(yOffset ? { yOffset } : {})
+      type: stateType(node, definition?.kind ?? "normal", definition?.outcome),
+      label: node.label
     };
   });
-  const boxById = new Map(boxes.map((box) => [box.id, box]));
-  const maxBottom = boxes.reduce((bottom, box) => Math.max(bottom, box.y + box.height), LIFECYCLE.outcome.y + LIFECYCLE.outcome.height);
-  // Corridors the fixed bands leave free, plus channels under the deepest outcome row.
-  const channels: number[] = [200, 232, 264, 348, 380, 412];
-  for (let index = 0; index < 4; index += 1) channels.push(maxBottom + 14 + index * 32);
-  const channelUsage = new Map<number, number>();
-  const routes: Array<{ relation: ProjectDiagramRelation; route: LifecycleRoute; points: number[][] }> = [];
-  for (const relation of transitionRelations) {
-    const from = boxById.get(mapping.ids[relation.from] ?? "");
-    const to = boxById.get(mapping.ids[relation.to] ?? "");
-    if (!from || !to) continue;
-    const candidates = lifecycleRouteCandidates(from, to, channels);
-    // The authored outer corridor is tried last: it is always clear of states, but a
-    // shorter route from the renderer's own candidates reads better when one fits.
-    const outside = lifecycleOutsideRoute(from, to, maxBottom);
-    if (outside) candidates.push(outside);
-    let best: { route: LifecycleRoute; points: number[][]; score: number } | undefined;
-    for (const [index, route] of candidates.entries()) {
-      const points = lifecycleRoutePoints(from, to, route);
-      if (!lifecycleRouteValid(from, to, points, boxes)) continue;
-      const channel = lifecycleRouteChannel(route);
-      const score = (channel === undefined ? 0 : channelUsage.get(channel) ?? 0) * 100 + index;
-      if (!best || score < best.score) best = { route, points, score };
-    }
-    if (!best) {
-      // Every candidate crossed another state. Prefer the authored outer corridor when
-      // there is one — it honours the endpoint sides — so the bounded repair loop sees
-      // concrete geometry instead of the renderer's diagonal last resort.
-      const route = outside ?? candidates[candidates.length - 1]!;
-      best = { route, points: lifecycleRoutePoints(from, to, route), score: Number.MAX_SAFE_INTEGER };
-    }
-    const channel = lifecycleRouteChannel(best.route);
-    if (channel !== undefined) channelUsage.set(channel, (channelUsage.get(channel) ?? 0) + 1);
-    routes.push({ relation, route: best.route, points: best.points });
-  }
-  const viewBoxHeight = Math.max(660, maxBottom + LIFECYCLE.bottomReserve);
-  const placedLabels: LifecycleLabelRect[] = [];
-  const transitions = routes.map(({ relation, route, points }) => {
+  const transitions = transitionRelations.map((relation) => {
     const definition = transitionByRelation.get(relation.id);
-    const id = mapRelation(mapping, relation, usedRelations);
     const label = definition?.event ?? relation.label;
     const note = definition?.condition ?? relation.condition;
-    const transition: Record<string, unknown> = {
-      id,
+    return {
+      id: mapRelation(mapping, relation, usedRelations),
       from: mapping.ids[relation.from]!,
       to: mapping.ids[relation.to]!,
-      fromSide: route.fromSide,
-      toSide: route.toSide,
-      ...(route.via ? { via: route.via } : { route: "straight" })
+      ...(label ? { label: truncate(label, 60) } : {}),
+      ...(note ? { note: truncate(note, 200) } : {}),
+      ...(relation.exception ? { variant: "dashed" } : {})
     };
-    if (label) {
-      const midX = points.reduce((sum, point) => sum + point[0]!, 0) / points.length;
-      const placement = lifecycleLabelPlacement(points, label, note, boxes, placedLabels, midX, maxBottom, viewBoxHeight);
-      if (placement) {
-        transition["label"] = truncate(label, 60);
-        if (note) transition["note"] = truncate(note, 200);
-        transition["labelAt"] = [Math.round(placement.lx * 10) / 10, Math.round(placement.ly * 10) / 10];
-        placedLabels.push(placement.rect);
-      }
-    }
-    return transition;
   });
   return {
     mapping,
     ir: {
-      schema_version: 1,
+      schema_version: 3,
       diagram_type: "lifecycle",
-      meta: baseMeta(project, repository, attached, { viewBox: [LIFECYCLE.width, viewBoxHeight] }),
-      lanes,
+      meta: baseMeta(project, repository, attached),
+      mainPath: mainPathIds.map((id) => mapping.ids[id]!),
       states,
       transitions
     }
@@ -1331,9 +973,30 @@ function diagnosticsToIssues(result: UpstreamResult, mapping: ArchifyIdMapping |
   return issues;
 }
 
+interface UpstreamComposition {
+  status?: string;
+  errors: number;
+  warnings: number;
+  issues: readonly unknown[];
+}
+
+/** Validate reports `composition`; deliver reports its artifact checks under `validation`. */
+function upstreamComposition(result: UpstreamResult): UpstreamComposition {
+  const composition = result.composition;
+  const validation = result.validation;
+  const status = composition?.status ?? validation?.compositionStatus;
+  return {
+    ...(status !== undefined ? { status } : {}),
+    errors: composition?.summary?.errors ?? validation?.errors ?? 0,
+    warnings: composition?.summary?.warnings ?? validation?.warnings ?? 0,
+    issues: composition?.issues ?? validation?.compositionIssues ?? []
+  };
+}
+
 function compositionIssues(result: UpstreamResult): DiagramValidationIssue[] {
   const issues: DiagramValidationIssue[] = [];
-  for (const entry of (result.composition?.issues ?? []).slice(0, 40)) {
+  const composition = upstreamComposition(result);
+  for (const entry of composition.issues.slice(0, 40)) {
     if (!entry || typeof entry !== "object") continue;
     const record = entry as Record<string, unknown>;
     const message = typeof record["message"] === "string" ? record["message"] : JSON.stringify(record);
@@ -1343,13 +1006,14 @@ function compositionIssues(result: UpstreamResult): DiagramValidationIssue[] {
       severity: record["severity"] === "warning" ? "warning" : "info"
     });
   }
-  const warnings = result.composition?.summary?.warnings ?? 0;
-  if (!issues.length && warnings > 0) issues.push({ code: "archify_composition", message: `${warnings} upstream composition warning(s).`, severity: "warning" });
+  if (!issues.length && composition.warnings > 0) {
+    issues.push({ code: "archify_composition", message: `${composition.warnings} upstream composition warning(s).`, severity: "warning" });
+  }
   return issues;
 }
 
 function validationVerdict(result: UpstreamResult): "passed" | "warning" | "failed-semantic" | "failed-layout" {
-  if (result.ok) return (result.composition?.summary?.warnings ?? 0) > 0 ? "warning" : "passed";
+  if (result.ok) return upstreamComposition(result).warnings > 0 ? "warning" : "passed";
   const diagnostics = result.diagnostics ?? [];
   if (!diagnostics.length) return "failed-layout";
   return diagnostics.every(isSemanticDiagnostic) ? "failed-semantic" : "failed-layout";
@@ -1445,72 +1109,14 @@ function repairIr(input: Record<string, unknown>, diagnostics: readonly string[]
     meta["viewBox"] = [Math.max(760, current[0] ?? 0), Math.max(420, (current[1] ?? 520) + attempt * 120)];
     ir["meta"] = meta;
   }
-  if (type === "lifecycle") {
-    const transitions = Array.isArray(ir["transitions"]) ? ir["transitions"] as Record<string, unknown>[] : [];
-    const states = Array.isArray(ir["states"]) ? ir["states"] as Record<string, unknown>[] : [];
-    const meta = { ...(ir["meta"] as Record<string, unknown> ?? {}) };
-    const current = Array.isArray(meta["viewBox"]) ? meta["viewBox"] as number[] : [LIFECYCLE.width, 660];
-    let viewWidth = current[0] ?? LIFECYCLE.width;
-    const viewHeight = current[1] ?? 660;
-    // A state outside the horizontal envelope cannot be rescued by a wider viewBox when it is the
-    // left/right margin itself, so shrink the over-wide states and only then grow the viewBox.
-    if (text.includes("horizontal bounds")) {
-      ir["states"] = states.map((state) => ({
-        ...state,
-        width: Math.max(48, Math.round(Number(state["width"] ?? LIFECYCLE.minWidth) * 0.8))
-      }));
-      viewWidth = Math.min(1400, viewWidth + attempt * 60);
-    }
-    if (text.includes("label") && (text.includes("overlap") || text.includes("collid"))) {
-      // Drop only the labels the diagnostics name, so one collision does not strip every label.
-      const named = new Set([...text.matchAll(/label "([^"]+)"/g)].map((match) => match[1]!.toLowerCase()));
-      ir["transitions"] = transitions.map((transition) => {
-        const next = { ...transition };
-        const label = typeof next["label"] === "string" ? next["label"].toLowerCase() : "";
-        if (!named.size || (label && named.has(label))) { delete next["label"]; delete next["note"]; delete next["labelAt"]; }
-        return next;
-      });
-    }
-    // States in one band are validated to be at least 10px apart, and the event band's
-    // columns are 154px apart, so a state wider than that overlaps its neighbour.
-    if (text.includes("less than 10px")) {
-      ir["states"] = states.map((state) => ({
-        ...state,
-        width: Math.max(48, Math.min(Number(state["width"] ?? LIFECYCLE.minWidth), LIFECYCLE.bandWidth))
-      }));
-    }
-    if (text.includes("too short") || text.includes("endpoint-side") || text.includes("edge-through-node")) {
-      // Exits that cannot find a corridor are routed by the authored outer channel rather
-      // than by a shared bottom channel: a `channelY` inside the outcome band crosses the
-      // states it is meant to avoid.
-      ir["transitions"] = transitions.map((transition) => {
-        const next = { ...transition };
-        delete next["channelY"];
-        delete next["channelX"];
-        return next;
-      });
-    }
-    meta["viewBox"] = [viewWidth, Math.min(1600, Math.max(660, viewHeight + attempt * 120))];
-    ir["meta"] = meta;
-  }
+  // Lifecycle v3 owns all of its geometry: Dext authors no lanes, coordinates,
+  // routes, or labels there, so there is nothing a layout-only repair may rewrite.
   return ir;
 }
 
-/** The bounded repair loop only rewrites geometry Dext authored, so when a diagram
- * still fails the reason is usually that it does not fit the renderer's fixed grid.
- * Naming that in the error is what tells the reader whether to shrink the diagram or
- * report a bug: `renderers/lifecycle/README.md` calls the lifecycle a phase map, and
- * its three bands hold five phases, three event states, and the terminal exits. */
-function layoutBudgetHint(diagramType: string, diagnostics: readonly string[]): string {
-  if (diagramType !== "lifecycle" || !diagnostics.length) return "";
-  return " The lifecycle renderer draws a fixed three-band grid (five phase columns, three event columns,"
-    + " and the terminal exits), and a terminal can only be reached down a column no event state occupies."
-    + " Reduce the number of states or transitions, or split the diagram in two.";
-}
-
-function layoutError(diagramType: string, diagnostics: readonly string[]): ArchifyLayoutError {
+function layoutError(diagnostics: readonly string[]): ArchifyLayoutError {
   return new ArchifyLayoutError(
-    `Archify could not lay out this diagram within the bounded repair budget.${layoutBudgetHint(diagramType, diagnostics)}`,
+    "Archify could not lay out this diagram within the bounded repair budget.",
     diagnostics
   );
 }
@@ -1614,6 +1220,7 @@ export class ArchifyAdapter implements ProjectDiagramAdapter {
 
   private receiptFrom(result: UpstreamResult, mapping: ArchifyIdMapping | undefined, repairs: number): DiagramValidationReceipt {
     const verdict = validationVerdict(result);
+    const composition = upstreamComposition(result);
     return {
       adapterId: this.id,
       adapterVersion: this.version,
@@ -1625,7 +1232,11 @@ export class ArchifyAdapter implements ProjectDiagramAdapter {
       metadata: {
         runtime: this.version,
         repairs,
-        upstream: JSON.stringify({ ok: result.ok === true, checks: result.composition?.summary ?? {}, error: result.error ?? "" }).slice(0, 12000)
+        upstream: JSON.stringify({
+          ok: result.ok === true,
+          checks: { status: composition.status ?? "", errors: composition.errors, warnings: composition.warnings },
+          error: result.error ?? ""
+        }).slice(0, 12000)
       }
     };
   }
@@ -1702,7 +1313,7 @@ export class ArchifyAdapter implements ProjectDiagramAdapter {
         if (deliverVerdict === "failed-semantic") throw new ArchifyLayoutError("Archify rejected the diagram semantics.", lines);
         ir = repairIr(ir, lines, attempt + 1);
       }
-      throw layoutError(String(ir["diagram_type"]), diagnostics);
+      throw layoutError(diagnostics);
     } finally {
       options.signal?.removeEventListener("abort", cancel);
       if (this.active.get(operationId) === controller) this.active.delete(operationId);

@@ -155,9 +155,16 @@ assert.ok(!extensionBundle.includes("ArchitectureScanResult"), "The removed stat
 for (const required of [
   "vendor/project-diagrams/archify/package.json",
   "vendor/project-diagrams/archify/bin/archify.mjs",
+  "vendor/project-diagrams/archify/bin/delivery-update.mjs",
   "vendor/project-diagrams/archify/assets/template.html",
+  "vendor/project-diagrams/archify/scripts/check-render-output.mjs",
+  "vendor/project-diagrams/archify/explainer/check.mjs",
+  "vendor/project-diagrams/archify/locales/manifest.json",
+  "vendor/project-diagrams/archify/locales/zh-CN.json",
+  "vendor/project-diagrams/archify/renderers/shared/owned-temp-directory.mjs",
   "vendor/project-diagrams/archify/LICENSE",
   "vendor/project-diagrams/archify/THIRD_PARTY_NOTICES.md",
+  "vendor/project-diagrams/archify/schemas/common.schema.json",
   "vendor/project-diagrams/archify/schemas/architecture.schema.json",
   "vendor/project-diagrams/archify/schemas/workflow.schema.json",
   "vendor/project-diagrams/archify/schemas/sequence.schema.json",
@@ -171,7 +178,7 @@ for (const required of [
 ]) {
   assert.ok(packagedFiles.has(required), `Missing packaged Archify runtime file '${required}'.`);
 }
-for (const forbidden of ["vendor/project-diagrams/drawio", "dist/build-meta.json", "dist/extensionHostTest.js"]) {
+for (const forbidden of ["vendor/project-diagrams/drawio", ".tmp-archify-upstream", ".tmp-tb", "dist/build-meta.json", "dist/extensionHostTest.js"]) {
   assert.ok(
     ![...packagedFiles].some((file) => file === forbidden || file.startsWith(`${forbidden}/`)),
     `'${forbidden}' must not be distributed in the VSIX.`

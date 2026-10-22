@@ -90,14 +90,25 @@ const dataFlow: ProjectDiagram = {
   }
 };
 
-/** Nine states and eleven transitions: more than the fixed lifecycle bands can route. */
+/** Nine states and eleven transitions with a short main path and real off-path branches. */
 const lifecycle: ProjectDiagram = {
   ...base, id: "editor-tab-lifecycle", title: "Editor tab lifecycle", kind: "lifecycle",
   nodes: ["ls.absent", "ls.keyKnown", "ls.opened", "ls.reused", "ls.pending", "ls.adopted", "ls.skipped", "ls.invalid", "ls.closed"]
-    .map((id, index) => node(id, `State ${index + 1} with a longer label`, "state", "What this state means for the reader.", { laneId: index < 7 ? "main" : "terminal" })),
-  relations: Array.from({ length: 11 }, (_, index) => relation(`ls.t${index}`, index === 0 ? "ls.absent" : `ls.${["keyKnown", "opened", "reused", "pending", "adopted", "skipped", "invalid", "closed"][(index - 1) % 8]!}`, `ls.${["keyKnown", "opened", "reused", "pending", "adopted", "skipped", "invalid", "closed"][index % 8]!}`, "transitions", { label: `transition ${index}`, order: index + 1 })),
+    .map((id, index) => node(id, `State ${index + 1} with a longer label`, "state", "What this state means for the reader.")),
+  relations: [
+    relation("ls.t0", "ls.absent", "ls.keyKnown", "transitions", { label: "key known", order: 1 }),
+    relation("ls.t1", "ls.keyKnown", "ls.opened", "transitions", { label: "open the tab", order: 2 }),
+    relation("ls.t2", "ls.opened", "ls.closed", "transitions", { label: "close", order: 3 }),
+    relation("ls.t3", "ls.opened", "ls.invalid", "transitions", { label: "invalid key", order: 4 }),
+    relation("ls.t4", "ls.opened", "ls.reused", "transitions", { label: "reuse", order: 5 }),
+    relation("ls.t5", "ls.reused", "ls.pending", "transitions", { label: "pending", order: 6 }),
+    relation("ls.t6", "ls.pending", "ls.adopted", "transitions", { label: "adopt", order: 7 }),
+    relation("ls.t7", "ls.adopted", "ls.closed", "transitions", { label: "finish", order: 8 }),
+    relation("ls.t8", "ls.pending", "ls.skipped", "transitions", { label: "skip", order: 9 }),
+    relation("ls.t9", "ls.skipped", "ls.invalid", "transitions", { label: "reject", order: 10 }),
+    relation("ls.t10", "ls.closed", "ls.opened", "transitions", { label: "reopen", order: 11 })
+  ],
   semantics: {
-    lanes: [{ id: "main", label: "Stages", evidence: evidence("main") }, { id: "terminal", label: "Result", evidence: evidence("terminal") }],
     states: [
       { nodeId: "ls.absent", kind: "initial", evidence: evidence("ls.absent") },
       ...["ls.keyKnown", "ls.opened", "ls.reused", "ls.pending", "ls.adopted", "ls.skipped"].map((nodeId) => ({ nodeId, kind: "normal" as const, evidence: evidence(nodeId) })),
@@ -108,26 +119,12 @@ const lifecycle: ProjectDiagram = {
   }
 };
 
-/** More non-terminal states than the rail (5) and the event band (3 x 2) can hold. */
-const oversizedLifecycle: ProjectDiagram = {
-  ...base, id: "oversized-lifecycle", title: "Oversized lifecycle", kind: "lifecycle",
-  nodes: Array.from({ length: 12 }, (_, index) => node(`os.n${index}`, `State ${index + 1}`, "state", "What this state means.", { laneId: "main" })),
-  relations: Array.from({ length: 11 }, (_, index) => relation(`os.t${index}`, `os.n${index}`, `os.n${index + 1}`, "transitions", { label: `transition ${index}`, order: index + 1 })),
-  semantics: {
-    lanes: [{ id: "main", label: "Stages", evidence: evidence("main") }],
-    states: Array.from({ length: 12 }, (_, index) => ({ nodeId: `os.n${index}`, kind: index === 0 ? "initial" as const : "normal" as const, evidence: evidence(`os.n${index}`) })),
-    transitions: Array.from({ length: 11 }, (_, index) => ({ relationId: `os.t${index}`, event: `transition ${index}`, evidence: evidence(`os.t${index}`) }))
-  }
-};
-
 describe("Archify layout for full-size Project diagrams", { timeout: 180_000 }, () => {
   it.each([
     ["sequence", sequence],
     ["architecture", architecture],
     ["workflow", workflow],
     ["data_flow", dataFlow],
-    // Nine states and eleven transitions: three of them share the event band, which
-    // leaves one free column for the two terminal exits.
     ["lifecycle", lifecycle]
   ] as const)("renders the %s diagram a real Project produces", async (_kind, diagram) => {
     const adapter = new ArchifyAdapter(runtimeRoot);
@@ -137,11 +134,18 @@ describe("Archify layout for full-size Project diagrams", { timeout: 180_000 }, 
     } finally { adapter.dispose(); }
   });
 
-  it("names the fixed lifecycle bands when a lifecycle exceeds them", async () => {
+  it("lays out a nine-state lifecycle without authored geometry", async () => {
     const adapter = new ArchifyAdapter(runtimeRoot);
     try {
-      await expect((async () => adapter.render(await adapter.transform(oversizedLifecycle)))())
-        .rejects.toThrow(/phase and event bands can hold/);
+      const document = await adapter.transform(lifecycle);
+      const ir = (document.payload as { ir: Record<string, unknown> }).ir;
+      expect(ir["schema_version"]).toBe(3);
+      expect(ir["lanes"]).toBeUndefined();
+      expect((ir["mainPath"] as string[]).length).toBeGreaterThanOrEqual(2);
+      for (const state of ir["states"] as Array<Record<string, unknown>>) {
+        for (const key of ["lane", "col", "width", "yOffset", "x", "y"]) expect(state[key]).toBeUndefined();
+      }
+      await expect(adapter.render(document)).resolves.toMatchObject({ format: "html" });
     } finally { adapter.dispose(); }
   });
 });

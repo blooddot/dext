@@ -111,7 +111,7 @@ describe("project integration without any static scan", () => {
   it("renders and exports through the single engine, then falls back to the same diagram's last good version", async () => {
     class Renderer implements ProjectDiagramAdapter {
       readonly id = "archify";
-      readonly version = "2.17.0-dev.1";
+      readonly version = "3.2.0";
       readonly capabilities: readonly DiagramAdapterCapability[] = [{ kind: "architecture", formats: ["html"], features: ["interactive", "validation"] }];
       fail = false;
       supports(): boolean { return true; }

@@ -475,7 +475,6 @@ describe("Project AI generation service", () => {
       ],
       relations: [{ id: "t", from: "a", to: "b", kind: "transitions", evidence: entry }],
       semantics: {
-        lanes: [{ id: "main", label: "Stages", evidence: entry }, { id: "terminal", label: "Result", evidence: entry }],
         states: [
           { nodeId: "a", kind: "initial", evidence: entry },
           { nodeId: "b", kind: "terminal", outcome: "success", evidence: entry }
@@ -489,12 +488,14 @@ describe("Project AI generation service", () => {
       generate: async (request) => { prompt = request.prompt; return { text: JSON.stringify({ diagram }) }; }
     };
     await new ProjectAiGenerationService(provider).generateDiagram(evidence("展示发布生命周期"), { requirement: "展示发布生命周期", kind: "lifecycle" });
-    // The renderer fixes its three bands and only reaches a terminal down a column no
-    // event state occupies, so the instruction has to ask for that shape explicitly.
-    expect(prompt).toContain("phase map, not a dense state-transition graph");
-    expect(prompt).toContain("one rail in lane 'main'");
+    // Lifecycle v3 derives its own layout from the ordered main path and semantic
+    // states, so the instruction must not ask for lane-bound bands.
+    expect(prompt).toContain("ordered main path of semantic states");
+    expect(prompt).toContain("not layout-bound lane assignments");
     expect(prompt).toContain("wait, retry and interruption states");
-    expect(prompt).toContain("entered from the wait/retry state it follows rather than straight from the rail");
+    expect(prompt).toContain("event/condition transitions");
+    expect(prompt).not.toContain("phase map");
+    expect(prompt).not.toContain("one rail in lane 'main'");
   });
 
   it("updates a target diagram by stable id and version while rejecting kind/id changes", async () => {
