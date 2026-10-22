@@ -5,18 +5,22 @@ import { type ProjectIntent } from "../../contracts/projectIntent.js";
 import type { ProjectObject } from "../../contracts/projectKnowledge.js";
 import type { ArchifyRepository } from "../diagrams/archifyAdapter.js";
 import {
+attachStructureGraph,
 buildProjectEvidencePackage,
 compareProjectEvidencePaths,
 isExcludedProjectEvidencePath,
+isProjectEntryPoint,
 isProjectEvidencePath,
 PROJECT_BUILD_CONFIG_PATH,
 projectEvidenceFileKind,
+projectEvidenceFileRank,
 type IndexedProjectEvidence,
 type ProjectEvidenceFileInput,
 type ProjectEvidencePackage,
 type ProjectKnowledgeReference
 } from "../generation/projectAiGeneration.js";
-import { indexedRelatedPaths, readProjectStructureEvidence } from "./projectStructureHost.js";
+import { structureGraphFacts } from "./projectStructureGraph.js";
+import { indexedRelatedPaths, readCachedStructureGraph, readProjectStructureEvidence } from "./projectStructureHost.js";
 
 
 export const textDecoder = new TextDecoder();
@@ -176,13 +180,26 @@ export async function readProjectEvidence(
   const maxFileBytes = Math.max(1024, options.maxFileBytes ?? 262_144);
   const candidateLimit = focused ? 4_000 : Math.min(4_000, Math.max(maxFiles, maxSourceFiles) * 8);
   const { include, found, pathOf } = await findEvidenceScope(root, options, onProgress, signal, candidateLimit);
+  const structureGraph = await readCachedStructureGraph(options.structureCachePath);
+  // A bounded whole-project read spends its source slots on graph hubs and shared infrastructure
+  // instead of path order. Module analysis keeps its explicit membership contract.
+  const graphRanked = structureGraph !== undefined && structureGraph.edges.length > 0 && !focused;
+  const centrality = new Map<string, number>();
+  if (structureGraph && graphRanked) {
+    let maximum = 0;
+    for (const node of structureGraph.nodes) maximum = Math.max(maximum, node.rank);
+    maximum ||= 1;
+    for (const node of structureGraph.nodes) centrality.set(node.path,
+      node.rank / maximum + Math.min(node.consumers, 20) / 100 + Math.min(node.crossModuleOut, 10) * 0.03
+      + (isProjectEntryPoint(node.path) ? 0.15 : 0) - projectEvidenceFileRank(node.path) * 0.5);
+  }
   const files: ProjectEvidenceFileInput[] = [];
   const coverage: string[] = [];
   const preferred = new Set([...(options.preferredPaths ?? []), ...(options.modulePaths ?? [])]);
   const preferredOrder = new Map([...preferred].map((path, index) => [path, index]));
   const related = new Set<string>();
   const cachedText = new Map<string, string>();
-  const byEvidenceRank = (left: vscode.Uri, right: vscode.Uri): number => (preferredOrder.get(pathOf(left)) ?? Number.MAX_SAFE_INTEGER) - (preferredOrder.get(pathOf(right)) ?? Number.MAX_SAFE_INTEGER) || Number(related.has(pathOf(right))) - Number(related.has(pathOf(left))) || compareProjectEvidencePaths(pathOf(left), pathOf(right));
+  const byEvidenceRank = (left: vscode.Uri, right: vscode.Uri): number => (preferredOrder.get(pathOf(left)) ?? Number.MAX_SAFE_INTEGER) - (preferredOrder.get(pathOf(right)) ?? Number.MAX_SAFE_INTEGER) || Number(related.has(pathOf(right))) - Number(related.has(pathOf(left))) || (centrality.get(pathOf(right)) ?? 0) - (centrality.get(pathOf(left)) ?? 0) || compareProjectEvidencePaths(pathOf(left), pathOf(right));
   if (focused && preferred.size) {
     const available = new Set(found.map(pathOf));
     for (const path of await indexedRelatedPaths(options.structureCachePath, preferred)) if (available.has(path)) related.add(path);
@@ -243,9 +260,12 @@ export async function readProjectEvidence(
       onProgress?.({ phase: "preparing", completed: processed, total: pending.length, message: `Read ${processed} / ${pending.length} files` });
     }
   }
-  return buildProjectEvidencePackage({
+  const packaged = buildProjectEvidencePackage({
     projectName: root.path.split("/").filter(Boolean).pop() ?? "Project",
     files,
+    // Whole-project reads already ranked sources by graph importance; directory round-robin would
+    // discard that order and return to alphabetical sampling.
+    ...(graphRanked ? { preserveSourceOrder: true } : {}),
     ...(knowledge.objects ? { objects: knowledge.objects } : {}),
     knowledge: buildKnowledgeReferences(knowledge),
     ...(options.preferredPaths ? { preferredPaths: options.preferredPaths } : {}),
@@ -258,6 +278,11 @@ export async function readProjectEvidence(
     ...(options.maxFileChars !== undefined ? { maxFileChars: options.maxFileChars } : {}),
     ...(options.maxEvidenceChars !== undefined ? { maxTotalChars: options.maxEvidenceChars } : {})
   });
+  const graph = structureGraph;
+  if (!graph) return packaged;
+  const paths = new Set([...packaged.inventory.map(entry => entry.path), ...packaged.files.map(file => file.path)]);
+  const facts = structureGraphFacts(graph, paths);
+  return facts.edges.length ? attachStructureGraph(packaged, facts) : packaged;
 }
 
 

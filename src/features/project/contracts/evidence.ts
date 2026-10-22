@@ -1,3 +1,4 @@
+import type { StructureGraphFacts } from "../host/indexing/projectStructureGraph.js";
 import type { StructureSummary } from "../host/indexing/projectStructure.js";
 import type { ProjectObject } from "./projectKnowledge.js";
 
@@ -88,6 +89,8 @@ export interface ProjectEvidenceInventoryEntry {
 export interface ProjectEvidencePackage {
   /** Complete local module map; split into bounded batches before any AI request. */
   structure?: StructureSummary;
+  /** Compact static-import facts; only present when a completed structure cache exists. */
+  graph?: StructureGraphFacts;
   schemaVersion: 2;
   projectName: string;
   files: ProjectEvidenceFile[];

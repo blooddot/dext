@@ -4,6 +4,7 @@ import { z } from "zod";
 import { CliAxAIService, type CliAxTransport } from "../../../agents/host/cliAxAIService.js";
 import type { AgentTokenUsage } from "../../../../shared/contracts/types.js";
 import type { IndexedProjectEvidence, ProjectEvidenceFile, ProjectEvidenceFileInput, ProjectEvidenceInput, ProjectEvidenceInventoryEntry, ProjectEvidenceLimits, ProjectEvidencePackage, ProjectEvidenceSummary, ProjectStructureIndexSummary } from "../../contracts/evidence.js";
+import type { StructureGraphFacts } from "../indexing/projectStructureGraph.js";
 import { validateProjectDiagram, type ProjectDiagram, type ProjectDiagramEvidence, type ProjectDiagramKind } from "../../contracts/projectDiagram.js";
 import { projectC4Schema, projectIntentSchema, validateProjectIntent, type ProjectContext, type ProjectIntent, type ProjectQualityIssue, type ProjectIntentProvenance } from "../../contracts/projectIntent.js";
 import type { ProjectEvidence } from "../../contracts/projectKnowledge.js";
@@ -356,9 +357,27 @@ export function attachProjectStructure(evidence: ProjectEvidencePackage, structu
   return result;
 }
 
+/** Compact graph facts ride in the same bounded package, so prompt size stays a function of it. */
+export function attachStructureGraph(evidence: ProjectEvidencePackage, graph: StructureGraphFacts): ProjectEvidencePackage {
+  const result: ProjectEvidencePackage = { ...evidence, graph: { ...graph, edges: [...graph.edges], truncated: { ...graph.truncated } } };
+  const measure = (): number => JSON.stringify(result).length;
+  result.inputHash = hash(JSON.stringify({ ...result, inputHash: undefined, characterCount: undefined }));
+  result.characterCount = measure();
+  // The graph is an aid, not a reason to exceed the evidence contract the caller selected.
+  while (result.characterCount > evidence.selection.evidenceChars && result.graph!.edges.length) {
+    result.graph!.edges.pop();
+    result.graph!.truncated.edges += 1;
+    result.inputHash = hash(JSON.stringify({ ...result, inputHash: undefined, characterCount: undefined }));
+    result.characterCount = measure();
+  }
+  if (result.characterCount > evidence.selection.evidenceChars) return evidence;
+  return result;
+}
+
 function structureBatch(evidence: ProjectEvidencePackage, candidates: StructureCandidate[]): ProjectEvidencePackage {
   const base = { ...evidence };
   delete base.structure;
+  delete base.graph;
   // Runtime excerpts are for the final overview, not repeated in every structural batch.
   base.files = base.files.filter(file => file.kind !== "source");
   return { ...base, knowledge: [], inventory: candidates.flatMap(candidate => candidate.files.map(file => ({ path: file.path, kind: "source" as const, lines: file.lines, contentHash: file.hash }))) };
@@ -772,7 +791,35 @@ function parseProjectDiagram(value: unknown, evidence: ProjectEvidencePackage): 
   return errors.length ? { ok: false, message: UNVERIFIED_DIAGRAM_MESSAGE, errors: errors.slice(0, 20) } : { ok: true, value: { diagram } };
 }
 
-/** Public execution activity only; private reasoning and interactive requests are excluded. */
+/**
+ * Annotate `depends_on` relations with what the static graph can actually prove. `extracted` means
+ * a resolved import exists in that direction; `inferred` means the model's direction was not found.
+ * A reverse edge is a review warning, never a reason to delete the model's output.
+ */
+function annotateStructureProvenance(diagram: ProjectDiagram, facts: StructureGraphFacts | undefined): ProjectDiagram {
+  if (!facts?.edges.length) return diagram;
+  const pathsByNode = new Map(diagram.nodes.map(node => [node.id, new Set(node.evidence.map(entry => entry.path))]));
+  let extracted = 0, inferred = 0, conflicts = 0;
+  const relations = diagram.relations.map(relation => {
+    if (relation.kind !== "depends_on") return relation;
+    const from = new Set(pathsByNode.get(relation.from) ?? []);
+    const to = new Set(pathsByNode.get(relation.to) ?? []);
+    // Older model output sometimes cites the file on the relation only; use that as a fallback.
+    if (!from.size || !to.size) for (const entry of relation.evidence) { if (!from.size) from.add(entry.path); if (!to.size) to.add(entry.path); }
+    const direct = facts.edges.find(edge => from.has(edge.from) && to.has(edge.to));
+    const reverse = direct ? undefined : facts.edges.find(edge => from.has(edge.to) && to.has(edge.from));
+    const provenance = direct ? direct.provenance : "inferred";
+    if (direct) extracted += 1; else inferred += 1;
+    if (reverse) conflicts += 1;
+    return { ...relation, metadata: { ...relation.metadata, provenance, structureMatch: direct ? "direct" : reverse ? "reverse" : "unmapped" } };
+  });
+  const metadata = { ...diagram.metadata,
+    structureProvenance: `extracted:${extracted};inferred:${inferred}`,
+    structureConflicts: conflicts,
+    ...(conflicts ? { structureWarning: `${conflicts} depends_on relation${conflicts === 1 ? "" : "s"} point opposite to the indexed static import direction. Review the direction; imports are not runtime calls.` } : {})
+  };
+  return { ...diagram, relations, metadata };
+}
 export interface ProjectAiActivityEvent {
   id?: string;
   phase: "status" | "message" | "tool";
@@ -880,6 +927,7 @@ function buildDiagramPrompt(evidence: ProjectEvidencePackage, request: ProjectDi
     `Requirement: ${request.requirement}`,
     "Ground every node, relation and semantic structure in the supplied file excerpts. Cite exact relative paths and valid visible line numbers or symbols.",
     EVIDENCE_TIER_GUIDANCE,
+    ...(evidence.graph?.edges.length ? ["`graph.edges` lists resolved static imports between the inventory paths. Use it to orient `depends_on` relations, but it is code dependency data, not proof of a runtime call, transport or execution order. Each relation still needs its own read evidence."] : []),
     "Answer one specific developer question. Keep one abstraction level, short labels and a clear main path. Aim for at most 10 nodes; describe secondary details in node descriptions. For workflow, show the normal path by default; add exception paths only when the requirement explicitly requests them. Every relationship must cite a supplied text excerpt, not only an inventory path.",
     "Use stable ids. Existing knowledge ids in the evidence package may be referenced directly; source module references may use only the path-backed ids listed below; every other referenced id must be defined in this response.",
     `Source module ids: ${JSON.stringify([...projectEvidenceModuleIds(evidence)].sort())}`,
@@ -1432,11 +1480,11 @@ export class ProjectAiGenerationService {
     } else {
       diagram = { ...diagram, version: 0 };
     }
-    const stamped: ProjectDiagram = {
+    const stamped: ProjectDiagram = annotateStructureProvenance({
       ...diagram, updatedAt: generatedAt, review: "draft", freshness: "current",
       nodes: diagram.nodes.map((node) => ({ ...node, review: "draft", freshness: "current", evidence: this.evidenceHash(node.evidence, evidence) })),
       relations: diagram.relations.map((relation) => ({ ...relation, review: "draft", freshness: "current", evidence: this.evidenceHash(relation.evidence, evidence) }))
-    };
+    }, evidence.graph);
     return {
       diagram: stamped,
       metadata: { inputHash: evidence.inputHash, model: run.model, providerId: this.provider!.id, promptVersion: PROJECT_DIAGRAM_PROMPT_VERSION, schemaVersion: 2, generatedAt, attempts: run.attempts }

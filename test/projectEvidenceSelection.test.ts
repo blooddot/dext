@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
+import { rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 /**
  * The workspace host is the only place that decides which files the model may read. The fixture
@@ -204,6 +208,42 @@ describe("project evidence selection", () => {
       expect(sources).toEqual([entry, second]);
       expect(packaged.coverage.join(' ')).toContain('Unrelated directory neighbors are excluded');
     } finally { files.delete(second); tree.sources.pop(); }
+  });
+
+  it("spends whole-project source slots on graph hubs instead of path order", async () => {
+    const { readProjectEvidence } = await import("../src/features/project/host/projectPanelDataSource.js");
+    const { buildStructureIndex } = await import("../src/features/project/host/indexing/projectStructure.js");
+    const root = { scheme: "file", fsPath: "C:/ws", path: "/C:/ws" } as never;
+    const source = {
+      "src/hub.ts": "export function shared() {}",
+      "src/a.ts": 'import { shared } from "./hub"; export function a() { return shared(); }',
+      "src/b.ts": 'import { shared } from "./hub"; export function b() { return shared(); }',
+      "src/c.ts": 'import { shared } from "./hub"; export function c() { return shared(); }',
+      "src/d.ts": 'import { shared } from "./hub"; export function d() { return shared(); }'
+    };
+    const previous = new Map<string, string>();
+    const added: string[] = [];
+    for (const [path, content] of Object.entries(source)) {
+      previous.set(path, files.get(path) ?? "");
+      if (!files.has(path)) added.push(path);
+      files.set(path, content);
+      if (!tree.sources.includes(path)) tree.sources.push(path);
+    }
+    const cache = join(tmpdir(), `dext-graph-${randomUUID()}.json`);
+    try {
+      const index = await buildStructureIndex(Object.entries(source).map(([path, content]) => ({ path, content })));
+      await writeFile(cache, JSON.stringify({ ...index.cache, dependencies: index.dependencies, summary: index.summary }), "utf8");
+      const { readCachedStructureGraph } = await import("../src/features/project/host/indexing/projectStructureHost.js");
+      expect(await readCachedStructureGraph(cache)).toBeDefined();
+      const packaged = await readProjectEvidence(root, {}, { include: ["src/**"], maxFiles: 4, maxSourceFiles: 4000, structureCachePath: cache });
+      const sources = packaged.files.filter(file => file.kind === "source").map(file => file.path);
+      expect(sources[0]).toBe("src/hub.ts");
+      expect(packaged.graph?.edges.length).toBeGreaterThan(0);
+    } finally {
+      await rm(cache, { force: true });
+      for (const path of added) { files.delete(path); const index = tree.sources.indexOf(path); if (index >= 0) tree.sources.splice(index, 1); }
+      for (const [path, content] of previous) if (content) files.set(path, content);
+    }
   });
 
   it("keeps project source and the project README when documentation dominates", async () => {

@@ -6,9 +6,18 @@ import { z } from "zod";
 import type { ProjectInitializationProgressListener } from "../../contracts/lifecycle.js";
 import { attachProjectStructure, buildProjectEvidencePackage, compareProjectEvidencePaths, isExcludedProjectEvidencePath, isProjectEvidencePath, PROJECT_BUILD_CONFIG_PATH, projectEvidenceFileKind, type ProjectEvidenceFileInput, type ProjectKnowledgeReference } from "../generation/projectAiGeneration.js";
 import type { ProjectEvidenceReadOptions } from "../projectPanelDataSource.js";
-import { buildStructureIndex, PROJECT_STRUCTURE_VERSION, structureCacheSchema, type StructureInput } from "./projectStructure.js";
-import { structureDependencies, structureEntryFamily } from "./projectStructureGraph.js";
+import { buildStructureIndex, PROJECT_STRUCTURE_VERSION, structureCacheSchema, structureSummarySchema, type StructureInput, type StructureSummary } from "./projectStructure.js";
+import { buildStructureGraphFromSummary, structureDependencies, structureEntryFamily, type StructureGraph } from "./projectStructureGraph.js";
 import { browserBuildEntries, runtimeEvidenceCandidates, runtimeEvidenceWindows } from "./projectStructureKnowledge.js";
+
+/** The graph of the last completed index, read from the cache without touching source text. */
+export async function readCachedStructureGraph(cachePath: string | undefined): Promise<StructureGraph | undefined> {
+  if (!cachePath) return undefined;
+  try {
+    const cached = z.object({ version: z.literal(PROJECT_STRUCTURE_VERSION), summary: structureSummarySchema.optional() }).parse(JSON.parse(await readFile(cachePath, "utf8")));
+    return cached.summary ? buildStructureGraphFromSummary(cached.summary as unknown as StructureSummary) : undefined;
+  } catch { return undefined; }
+}
 
 export async function indexedRelatedPaths(cachePath: string | undefined, preferred: ReadonlySet<string>): Promise<string[]> {
   if (!cachePath) return [];
@@ -143,7 +152,7 @@ export async function readProjectStructureEvidence(root: vscode.Uri, candidates:
     const target = options.structureCachePath, temporary = `${target}.${randomUUID()}.tmp`;
     try {
       await mkdir(dirname(target), { recursive: true });
-      await writeFile(temporary, JSON.stringify({ ...index.cache, dependencies: index.dependencies, summary: index.summary }), "utf8");
+      await writeFile(temporary, JSON.stringify({ ...index.cache, dependencies: index.dependencies, summary: index.summary, updatedAt: Date.now() }), "utf8");
       signal?.throwIfAborted();
       await rename(temporary, target);
     } finally { await rm(temporary, { force: true }); }

@@ -24,14 +24,14 @@ const {
 const flags = (sources: Record<string, string>, text: string) => checkModuleBoundaries(sources).join("\n").includes(text);
 
 describe("layer boundaries", () => {
-  it("allows the six registered pure type edges and normal cross-feature contracts", () => {
+  it("allows the seven registered pure type edges and normal cross-feature contracts", () => {
     expect(checkModuleBoundaries({
       "src/features/resources/contracts/resourceDocuments.ts": 'import type { EditorTabState } from "../../../platform/editor-tabs/editorTabState.js";',
       "src/platform/editor-tabs/editorTabState.ts": "export interface EditorTabState { readonly page: string }",
       "src/features/a/domain/use.ts": 'import type { B } from "../../b/contracts/b.js";',
       "src/features/b/contracts/b.ts": "export interface B {}"
     })).toEqual([]);
-    expect(declaredTypeEdges).toHaveLength(6);
+    expect(declaredTypeEdges).toHaveLength(7);
   });
 
   it("rejects an unregistered pure type edge and any runtime host edge", () => {

@@ -108,7 +108,10 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
     const description = node ? node.description || sections.map((section) => section.description).filter(Boolean).join(" ")
       : relation?.label || transition?.event || relation?.kind.replaceAll("_", " ") || "";
     const condition = transition?.condition ?? message?.condition ?? relation?.condition;
+    const provenance = typeof relation?.metadata?.provenance === "string" ? relation.metadata.provenance : undefined;
+    const reverse = relation?.metadata?.structureMatch === "reverse";
     inspector.innerHTML = `<strong>${esc(title ?? id)}</strong>${description ? `<p>${esc(description)}</p>` : ""}${condition ? `<p>When: ${esc(condition)}</p>` : ""}${relation?.exception ? "<p>Exception path</p>" : ""}`
+      + (provenance ? `<p class="project-help">Structure: ${esc(provenance)}${reverse ? " — opposite to the indexed import direction; review the direction" : ""}</p>` : "")
       + (sections.length ? `<p class="project-help">Linked to the explanation: ${sections.map((section) => esc(section.title)).join(", ")}</p>` : "")
       + `<div class="project-reader-related">${related.map((candidate) => `<button type="button" data-reader-topic="${esc(candidate.id)}">Read ${esc(candidate.title)} →</button>`).join("")}</div>`
       + `<ul class="project-topic-evidence">${item.evidence.map((entry, index) => `<li><button type="button" data-reader-element-source="${esc(id)}" data-element-kind="${kind}" data-evidence-index="${index}">${esc(entry.path)}${entry.line ? `:${entry.line}` : ""}${entry.symbol ? ` · ${esc(entry.symbol)}` : ""}</button>${entry.note ? `<small>${esc(entry.note)}</small>` : ""}</li>`).join("") || "<li>No source reference was saved for this element.</li>"}</ul>`;
@@ -131,7 +134,8 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
       button.dataset.readerRelation = relation.id;
       const from = diagram.nodes.find((node) => node.id === relation.from)?.label ?? relation.from;
       const to = diagram.nodes.find((node) => node.id === relation.to)?.label ?? relation.to;
-      button.textContent = `${from} → ${to}${relation.label ? ` · ${relation.label}` : ""}`;
+      const provenance = typeof relation.metadata?.provenance === "string" ? ` · ${relation.metadata.provenance}` : "";
+      button.textContent = `${from} → ${to}${relation.label ? ` · ${relation.label}` : ""}${provenance}`;
       connections.append(button);
     }
     inspector.after(connections);

@@ -39,6 +39,10 @@ export const declaredTypeEdges = [
   {
     from: "src/features/project/contracts/evidence.ts",
     to: "src/features/project/host/indexing/projectStructure.ts"
+  },
+  {
+    from: "src/features/project/contracts/evidence.ts",
+    to: "src/features/project/host/indexing/projectStructureGraph.ts"
   }
 ];
 
