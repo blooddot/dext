@@ -26,27 +26,27 @@ export function renderTurnSection<E>(
   return { disclosure: el("details", { class: "turn-section", "data-turn-section": section.kind, open }, [summary, body]), body, meta };
 }
 
-/** Copy controls and content use identical layout in both views. */
-export function renderTurnInput<E>(adapter: TurnRenderAdapter<E>, source: E, copy: E): E {
-  return adapter.element("div", { class: "output-turn-input" }, [source, copy]);
+/** Copy controls belong to the section title bar, not to the content they copy. */
+export function renderTurnInput<E>(adapter: TurnRenderAdapter<E>, source: E): E {
+  return adapter.element("div", { class: "output-turn-input" }, [source]);
 }
 
-export function renderTurnMarkdown<E>(adapter: TurnRenderAdapter<E>, body: E, copy: E): E {
-  return adapter.element("div", { class: "output-text-copyable" }, [
-    adapter.element("div", { class: "markdown-copy-toolbar" }, [copy]), body
-  ]);
+export function renderTurnMarkdown<E>(adapter: TurnRenderAdapter<E>, body: E): E {
+  return adapter.element("div", { class: "output-text-copyable" }, [body]);
 }
 
-/** A literal JSON view shared by both hosts. Copy always receives the raw source. */
-export function renderTurnJson<E>(adapter: TurnRenderAdapter<E>, text: string, copy: E): E | undefined {
+/** A literal JSON view shared by both hosts. Copy always receives the raw source
+ * and sits in the JSON title bar, so it stays exact even when Output has more
+ * than one result. */
+export function renderTurnJson<E>(adapter: TurnRenderAdapter<E>, text: string, copy?: E): E | undefined {
   const formatted = formatJsonOutput(text);
   if (formatted === undefined) return undefined;
   const el = adapter.element;
   return el("div", { class: "output-text-copyable json-output" }, [
-    el("div", { class: "markdown-copy-toolbar" }, [copy]),
     el("details", { class: "execution-disclosure json-disclosure", open: true }, [
       el("summary", {}, [
-        el("i", { class: "disclosure-chevron codicon codicon-chevron-right" }, []), "JSON"
+        el("i", { class: "disclosure-chevron codicon codicon-chevron-right" }, []), "JSON",
+        ...(copy ? [copy] : [])
       ]),
       el("pre", { class: "json-output-text" }, [el("code", {}, [formatted])])
     ])

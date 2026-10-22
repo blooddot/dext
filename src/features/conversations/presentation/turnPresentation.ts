@@ -1,5 +1,6 @@
 import { formatDuration } from "../../../shared/lib/duration.js";
-import type { AgentStreamEvent, AgentTokenUsage } from "../../../shared/contracts/types.js";
+import type { AgentStreamEvent, AgentTokenUsage, DextResult } from "../../../shared/contracts/types.js";
+import { uiResultText } from "./uiInteractionPresentation.js";
 
 /** Shared labels and icons for the live conversation and History toolbars. */
 export const TURN_EDIT_ACTION = { icon: "edit", label: "Edit input in Dext" } as const;
@@ -81,6 +82,14 @@ export function formatTurnTokenUsage(usage?: AgentTokenUsage): string {
   return window !== undefined && Number.isFinite(window) && window > 0
     ? `${compactTokenCount(context)}/${compactTokenCount(window)} context`
     : `${compactTokenCount(context)} context`;
+}
+
+/** The text a result's copy control should place on the clipboard. */
+export function resultCopyText(result: DextResult): string {
+  if (result.kind === "ask" || result.kind === "plan" || result.kind === "skill" || result.kind === "agent" || result.kind === "template") return result.text;
+  if (result.kind === "apply") return result.summary;
+  if (result.kind === "terminal") return [result.stdout, result.stderr].filter(Boolean).join("\n");
+  return uiResultText(result);
 }
 
 /** Usage events are snapshots. A snapshot that reports billed counts replaces

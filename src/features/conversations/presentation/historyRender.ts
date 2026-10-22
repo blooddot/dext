@@ -7,7 +7,7 @@ import { latestAgentTodos, renderAgentTodos, planExecutionLabel } from "./agentT
 import type { AgentStreamEvent, DextResult, InputExecutionResponse, RuntimeResponse, WorkflowStepResponse } from "../../../shared/contracts/types.js";
 import type { DextHistoryRecord, DextHistorySession } from "../contracts/history.js";
 import {
-  TURN_RENAME_ACTION, TURN_FORK_ACTION, TURN_COPY_ACTION, TURN_DELETE_ACTION, presentTurn,
+  TURN_RENAME_ACTION, TURN_FORK_ACTION, TURN_COPY_ACTION, TURN_DELETE_ACTION, presentTurn, resultCopyText,
   type TurnSectionPresentation
 } from "./turnPresentation.js";
 import { agentMessageCopyText, presentAgentMessage } from "./agentMessagePresentation.js";
@@ -60,14 +60,17 @@ function copyButton(value: string): string {
 }
 
 /** Thin host adapter; shared components own section structure and result dispatch. */
-function historyTurnSection(section: TurnSectionPresentation, body: string, options: { open?: boolean } = {}): string {
-  return renderTurnSection(turnHtmlAdapter, section, [{ html: body }], options.open).disclosure.html;
+function historyTurnSection(
+  section: TurnSectionPresentation, body: string,
+  options: { open?: boolean; action?: string } = {}
+): string {
+  const action = options.action === undefined ? undefined : { html: options.action };
+  return renderTurnSection(turnHtmlAdapter, section, [{ html: body }], options.open, action).disclosure.html;
 }
 
 function markdownOutput(text: string): string {
   return renderTurnMarkdown(turnHtmlAdapter,
-    { html: `<div class="markdown-body">${renderProcessMarkdown(text)}</div>` },
-    { html: copyButton(text) }
+    { html: `<div class="markdown-body">${renderProcessMarkdown(text)}</div>` }
   ).html;
 }
 
@@ -281,13 +284,6 @@ function renderedInputSource(source: string): string {
   return plainInputSource(normalizeInputReferenceSource(source));
 }
 
-function resultText(result: DextResult): string {
-  if (result.kind === "ask" || result.kind === "plan" || result.kind === "skill" || result.kind === "agent" || result.kind === "template") return result.text;
-  if (result.kind === "apply") return result.summary;
-  if (result.kind === "terminal") return [result.stdout, result.stderr].filter(Boolean).join("\n");
-  return uiResultText(result);
-}
-
 function resultBody(result: DextResult): string {
   return renderTurnResult({
     ...turnHtmlAdapter,
@@ -326,7 +322,7 @@ function output(response: InputExecutionResponse): string {
 }
 
 function outputText(response: InputExecutionResponse): string {
-  return response.executions.map((item) => resultText(item.result)).filter(Boolean).join("\n\n");
+  return response.executions.map((item) => resultCopyText(item.result)).filter(Boolean).join("\n\n");
 }
 
 function processMessage(text: string): string {
@@ -469,6 +465,7 @@ export function renderHistoryRecord(record: DextHistoryRecord, sessionId?: strin
     ? `<pre class="error">${escapeHtml(record.error)}</pre>`
     : response ? output(response) : (renderTurnJson(turnHtmlAdapter, record.output, { html: copyButton(record.output) })?.html
       ?? `<pre>${escapeHtml(record.output)}</pre>`);
+  const outputCopy = record.error ? "" : response ? outputText(response) : record.output;
   const context = sessionId
     ? ` ${contextAttribute({
       webviewSection: "turn",
@@ -481,13 +478,16 @@ export function renderHistoryRecord(record: DextHistoryRecord, sessionId?: strin
   const target = sessionId ? ` data-session-id="${escapeHtml(sessionId)}" data-turn-id="${escapeHtml(record.id)}"` : "";
   const inputHtml = turn.input
     ? historyTurnSection(turn.input, renderTurnInput(turnHtmlAdapter,
-      { html: `<pre class="dext-source">${renderedInputSource(turn.input.source)}</pre>` },
-      { html: copyButton(turn.input.source) }).html)
+      { html: `<pre class="dext-source">${renderedInputSource(turn.input.source)}</pre>` }).html,
+    { action: copyButton(turn.input.source) })
     : "";
   const planOutcome = record.planOutcome ?? (planExecution?.result.kind === "plan" ? planExecution.result.planOutcome : undefined);
   const planStatusHtml = executePlan ? `<span class="plan-status">${planExecutionLabel(record.process, record.error, planOutcome)}</span>` : "";
   const processSummary = historyTurnSection(turn.process, processHtml);
-  const outputSection = historyTurnSection(turn.output, outputHtml, { open: true });
+  const outputSection = historyTurnSection(turn.output, outputHtml, {
+    open: true,
+    ...(outputCopy ? { action: copyButton(outputCopy) } : {})
+  });
   return `<details class="history-record"${target}${context}><summary${hint}>${chevron()}<span class="history-summary-input${record.title ? " named" : ""}">${escapeHtml(firstLine)}</span>${planStatusHtml}<span class="history-meta history-record-time">${escapeHtml(dateLabel(record.createdAt))}</span>${sessionId ? historyTurnActions(sessionId, record.id) : ""}</summary><div class="history-record-body">${inputHtml}${todoHtml}${processSummary}${outputSection}</div></details>`;
 }
 

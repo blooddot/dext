@@ -37,6 +37,9 @@ export interface OutputTurnElements {
   questions: AgentInputView;
   output: HTMLElement;
   outputDisclosure: HTMLDetailsElement;
+  /** The whole-section copy control lives in the title bar. Its payload is
+   * filled in as the turn streams or when a stored turn is hydrated. */
+  setOutputCopy?: (text: string) => void;
   hydrated?: boolean;
   hydrate?: () => void;
 }
@@ -60,6 +63,9 @@ export interface TranscriptHost {
   activeTurnId(): string | undefined;
   activeExecutionSessionId(): string | undefined;
   copy(source: string): HTMLButtonElement;
+  /** A copy control whose payload is resolved at click time, for content that is
+   * still streaming when the title bar is created. */
+  copyLive(read: () => string): HTMLButtonElement;
   edit(source: string): void;
   openInput(): void;
   retryTurn(sessionId: string, turnId: string): void;
@@ -202,16 +208,22 @@ export class TranscriptView {
     summary.append(chevron, title, planExecutionStatus, time, actions);
     let inputBody: HTMLElement | undefined;
     if (turnPresentation.input) {
-      const input = this.section(turnPresentation.input, true);
+      // The source is known as soon as the row exists, so Input can offer its
+      // copy control from the title bar even before a lazy body hydrates.
+      const input = this.section(turnPresentation.input, true, this.host.copy(source));
       input.disclosure.open = !lazy;
       inputBody = input.body;
       if (!lazy) {
         const inputText = this.renderInputSource(source, options.mode);
-        const inputCopy = renderTurnInput(turnDomAdapter(document), inputText, this.host.copy(source));
-        input.body.append(inputCopy);
+        input.body.append(renderTurnInput(turnDomAdapter(document), inputText));
       }
       body.append(input.disclosure);
     }
+    // Output fills in as results stream, so its copy payload is read when
+    // clicked instead of being fixed at row creation.
+    const outputCopyText = { value: "" };
+    const outputCopy = this.host.copyLive(() => outputCopyText.value);
+    outputCopy.hidden = true;
     // Process is a timeline the reader opens on demand, never the default view
     // of a new turn. While the turn runs, its summary still carries the live
     // "Worked for" duration and event count, and expanding it mid-run keeps
@@ -219,7 +231,7 @@ export class TranscriptView {
     const process = this.section(turnPresentation.process, false);
     const todos = this.host.createTodos();
     const questions = this.host.createQuestions(turnId, this.host.activeSessionId());
-    const output = this.section(turnPresentation.output, !lazy);
+    const output = this.section(turnPresentation.output, !lazy, outputCopy);
     body.append(todos.element, questions.element, process.disclosure, output.disclosure);
     disclosure.append(summary, body);
     this.host.result.append(disclosure);
@@ -235,6 +247,10 @@ export class TranscriptView {
       questions,
       output: output.body,
       outputDisclosure: output.disclosure,
+      setOutputCopy: (text: string) => {
+        outputCopyText.value = text;
+        outputCopy.hidden = text.length === 0;
+      },
       hydrated: !lazy
     };
     this.turns.set(turnId, turn);
@@ -243,12 +259,12 @@ export class TranscriptView {
     return turn;
   }
 
-  private section(section: TurnSectionPresentation, open: boolean): {
+  private section(section: TurnSectionPresentation, open: boolean, action?: HTMLElement): {
     disclosure: HTMLDetailsElement;
     body: HTMLElement;
     meta: HTMLElement;
   } {
-    const view = renderTurnSection(turnDomAdapter(this.host.document), section, [], open);
+    const view = renderTurnSection(turnDomAdapter(this.host.document), section, [], open, action);
     // Legacy hooks still identify cached turns and scope patch-review interactions.
     view.disclosure.classList.add("output-turn-section");
     return { ...view, disclosure: view.disclosure as HTMLDetailsElement };

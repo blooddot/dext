@@ -18,7 +18,7 @@ import { renderTurnInput, renderTurnJson, renderTurnMarkdown, renderTurnResult }
 import { turnDomAdapter } from "../features/conversations/browser/turnDomAdapter.js";
 import { TranscriptView, type OutputTurnElements } from "../features/conversations/browser/transcriptView.js";
 import {
-presentTurn, formatTurnTokenUsage, updateTurnTokenUsage
+presentTurn, formatTurnTokenUsage, updateTurnTokenUsage, resultCopyText
 } from "../features/conversations/presentation/turnPresentation.js";
 import type { ConversationSummary } from "../features/conversations/contracts/protocol.js";
 import type { SidebarState, WebviewRequest, WebviewResponse } from "../platform/webviewProtocol.js";
@@ -274,6 +274,7 @@ const transcript = new TranscriptView({
   activeTurnId: () => activeTurnId,
   activeExecutionSessionId: () => activeExecutionSessionId,
   copy: (source) => copyButton(source),
+  copyLive: (read) => copyButtonFrom(read),
   edit: (source) => editor.setValue(source),
   openInput: () => setSectionOpen(elements.inputHeading, elements.inputBody, true),
   retryTurn: (sessionId, turnId) => vscode.postMessage({ type: "retryTurn", sessionId, turnId }),
@@ -1545,6 +1546,11 @@ function toggleComposerMenu(menu: HTMLElement): void {
 }
 
 function copyButton(text: string): HTMLButtonElement {
+  return copyButtonFrom(() => text);
+}
+
+/** Streaming sections resolve their payload at click time. */
+function copyButtonFrom(read: () => string): HTMLButtonElement {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "icon-button compact output-copy";
@@ -1554,8 +1560,9 @@ function copyButton(text: string): HTMLButtonElement {
   icon.className = "codicon codicon-copy";
   button.append(icon);
   button.addEventListener("click", (event) => {
+    event.preventDefault();
     event.stopPropagation();
-    void clipboard.write(text).then((success) => {
+    void clipboard.write(read()).then((success) => {
       if (!success) return;
       icon.className = "codicon codicon-check";
       window.setTimeout(() => { icon.className = "codicon codicon-copy"; }, 900);
@@ -1764,7 +1771,7 @@ function copyableText(content: string): HTMLElement {
   const body = document.createElement("div");
   body.className = "markdown-body";
   body.innerHTML = markdown.render(content);
-  return renderTurnMarkdown(turnDomAdapter(document), body, copyButton(content));
+  return renderTurnMarkdown(turnDomAdapter(document), body);
 }
 
 function disclosureSummary(label: string, detail: string): HTMLElement {
@@ -1854,6 +1861,12 @@ function renderResult(response: InputExecutionResponse, reviewTurnId?: string): 
     item.dataset.branch = String(step.branch + 1);
     fanOut.append(item);
   }
+  const outputCopy = entries.flatMap((step) => {
+    if (step.response) return [resultCopyText(step.response.result)];
+    if (step.stream) return [step.stream.text];
+    return [];
+  }).filter(Boolean).join("\n\n");
+  transcript.active?.setOutputCopy?.(outputCopy);
   elements.resultSection.classList.remove("hidden");
   syncResultToggle();
 }
@@ -1877,6 +1890,7 @@ function renderOutputError(message: unknown): void {
   summary.className = "error-output";
   summary.textContent = text;
   target.append(summary);
+  transcript.active?.setOutputCopy?.("");
   elements.resultSection.classList.remove("hidden");
   syncResultToggle();
 }
@@ -2089,7 +2103,7 @@ function renderStoredTurn(record: DextHistoryRecord, turn: OutputTurnElements): 
   if (turn.input && turn.input.childElementCount === 0) {
     // Hydrated history renders the persisted source exactly as authored, in the colors
     // the composer wrote it in: a record's mode says whether that source was code.
-    const inputCopy = renderTurnInput(turnDomAdapter(document), transcript.renderInputSource(record.input, record.mode), copyButton(record.input));
+    const inputCopy = renderTurnInput(turnDomAdapter(document), transcript.renderInputSource(record.input, record.mode));
     turn.input.append(inputCopy);
   }
   const replay = typeof prepareHistoryTrace === "undefined" ? record.process : prepareHistoryTrace(record.process);
@@ -2103,7 +2117,10 @@ function renderStoredTurn(record: DextHistoryRecord, turn: OutputTurnElements): 
   turn.processDisclosure.open = false;
   if (record.error) renderOutputError(record.error);
   else if (response) renderResult(response);
-  else if (record.output) turn.output.append(jsonOutput(record.output));
+  else if (record.output) {
+    turn.output.append(jsonOutput(record.output));
+    turn.setOutputCopy?.(record.output);
+  }
   turn.outputDisclosure.open = true;
   syncResultToggle();
 }
