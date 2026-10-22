@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { listFiles } from "@vscode/vsce";
-import { projectIndexAssets } from "./buildProjectIndexAssets.mjs";
-import { checkProjectIndexRuntime } from "./checkProjectIndexRuntime.mjs";
+import { structureIndexAssets } from "./buildStructureIndexAssets.mjs";
+import { checkStructureIndexRuntime } from "./checkStructureIndexRuntime.mjs";
 
 const output = resolve("dist", "webview");
 const entries = await readdir(output, { recursive: true });
@@ -25,13 +25,13 @@ const mainStyles = await readFile(resolve(output, "main.css"), "utf8");
 // Files on disk can pass build checks while .vscodeignore removes them from the VSIX.
 // Keep the History stylesheet's existing URL valid for pages open during an update.
 const packagedFiles = new Set((await listFiles()).map((file) => file.replaceAll("\\", "/")));
-for (const [pkg, file] of projectIndexAssets) {
+for (const [pkg, file] of structureIndexAssets) {
   for (const name of [file, `${pkg}.LICENSE`]) {
-    assert.ok(packagedFiles.has(`dist/project-index/${name}`), `Missing local index asset '${name}'.`);
-    assert.ok((await stat(resolve('dist/project-index', name))).size > 0);
+    assert.ok(packagedFiles.has(`dist/structure-index/${name}`), `Missing structure index asset '${name}'.`);
+    assert.ok((await stat(resolve('dist/structure-index', name))).size > 0);
   }
 }
-await checkProjectIndexRuntime();
+await checkStructureIndexRuntime();
 for (const required of [
   "media/styles.css",
   "media/editorTabs.css",

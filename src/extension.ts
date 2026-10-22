@@ -114,7 +114,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
   const resourceDataSource = createFileResourceDataSource({
     roots: resourceRoots,
-    describeApi: content => describeApiSource(content, vscode.Uri.joinPath(context.extensionUri, "dist", "project-index").fsPath),
+    describeApi: content => describeApiSource(content, vscode.Uri.joinPath(context.extensionUri, "dist", "structure-index").fsPath),
     listFiles: (kind) => application.listResources(kind),
     readFile: async (entry) => {
       const path = entry.source.path;

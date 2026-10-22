@@ -4,8 +4,8 @@ import { pathToFileURL } from 'node:url';
 import assert from 'node:assert/strict';
 
 // Exercise the production CJS bundling path, not just the unbundled development dependency.
-export async function checkProjectIndexRuntime() {
-  const outfile = resolve('.tmp-tb/project-index-runtime.cjs');
+export async function checkStructureIndexRuntime() {
+  const outfile = resolve('.tmp-tb/structure-index-runtime.cjs');
   await build({ entryPoints: ['src/features/project/host/indexing/projectStructure.ts'], outfile, bundle: true, platform: 'node', format: 'cjs', target: 'node20' });
   const { buildStructureIndex } = await import(pathToFileURL(outfile).href);
   const index = await buildStructureIndex([
@@ -14,8 +14,8 @@ export async function checkProjectIndexRuntime() {
     { path: 'main.tsx', content: 'export function View() { return <div/>; }' },
     { path: 'main.rs', content: 'fn main() {}' },
     { path: 'main.py', content: 'def main(): pass' }
-  ], { assetsPath: resolve('dist/project-index') });
+  ], { assetsPath: resolve('dist/structure-index') });
   assert.equal(index.summary.parsed, 5);
   assert.equal(index.summary.failed, 0);
-  console.log('PASS: bundled Project index loads all five shipped WASM grammars.');
+  console.log('PASS: bundled structure index loads all five shipped WASM grammars.');
 }

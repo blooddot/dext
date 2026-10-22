@@ -66,7 +66,7 @@ export function setupProject(options: ProjectSetupOptions): ProjectEditorProvide
         ...(request.preferredPaths ? { preferredPaths: request.preferredPaths } : {}),
         ...(request.modulePaths ? { modulePaths: request.modulePaths } : {}),
         ...limits,
-        structureAssetsPath: vscode.Uri.joinPath(context.extensionUri, "dist", "project-index").fsPath,
+        structureAssetsPath: vscode.Uri.joinPath(context.extensionUri, "dist", "structure-index").fsPath,
         structureCachePath: vscode.Uri.joinPath(context.storageUri ?? context.globalStorageUri, "project-structure.json").fsPath,
         ...(request.mode ? { mode: request.mode } : {})
       },

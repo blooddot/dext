@@ -1,6 +1,6 @@
 import { copyFile, mkdir } from 'node:fs/promises';
 
-export const projectIndexAssets = [
+export const structureIndexAssets = [
   ['web-tree-sitter', 'web-tree-sitter.wasm'],
   ['tree-sitter-javascript', 'tree-sitter-javascript.wasm'],
   ['tree-sitter-typescript', 'tree-sitter-typescript.wasm'],
@@ -9,10 +9,10 @@ export const projectIndexAssets = [
   ['tree-sitter-python', 'tree-sitter-python.wasm']
 ];
 
-export async function buildProjectIndexAssets() {
-  await mkdir('dist/project-index', { recursive: true });
-  for (const [pkg, file] of projectIndexAssets) {
-    await copyFile(`node_modules/${pkg}/${file}`, `dist/project-index/${file}`);
-    await copyFile(`node_modules/${pkg}/LICENSE`, `dist/project-index/${pkg}.LICENSE`);
+export async function buildStructureIndexAssets() {
+  await mkdir('dist/structure-index', { recursive: true });
+  for (const [pkg, file] of structureIndexAssets) {
+    await copyFile(`node_modules/${pkg}/${file}`, `dist/structure-index/${file}`);
+    await copyFile(`node_modules/${pkg}/LICENSE`, `dist/structure-index/${pkg}.LICENSE`);
   }
 }

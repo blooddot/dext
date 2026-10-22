@@ -3,11 +3,11 @@ import { copyFile, mkdir, writeFile } from "node:fs/promises";
 import { buildMarkdownStyles } from "./scripts/buildMarkdownStyles.mjs";
 import { writeShippedDeclaration } from "./scripts/generateDextTypes.mjs";
 import { writeApiReference } from "./scripts/generateApiReference.mjs";
-import { buildProjectIndexAssets } from "./scripts/buildProjectIndexAssets.mjs";
+import { buildStructureIndexAssets } from "./scripts/buildStructureIndexAssets.mjs";
 
 const watch = process.argv.includes("--watch");
 await buildMarkdownStyles();
-await buildProjectIndexAssets();
+await buildStructureIndexAssets();
 // The generated `dext` declaration ships with the extension as `dist/dext.d.ts`,
 // so a workspace never carries its own copy of the API surface; `npm run check`
 // proves the shipped file still matches the registry.
