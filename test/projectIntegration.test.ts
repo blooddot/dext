@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ProjectStore, type ProjectFileHost } from "../src/features/project/host/persistence/projectStore.js";
 import { ProjectInitializationService } from "../src/features/project/host/projectService.js";
-import { buildProjectEvidencePackage, PROJECT_INDEX_PROMPT_VERSION, ProjectAiGenerationService, type ProjectAiProvider } from "../src/features/project/host/generation/projectAiGeneration.js";
+import { buildProjectEvidencePackage, PROJECT_MODEL_PROMPT_VERSION, ProjectAiGenerationService, type ProjectAiProvider } from "../src/features/project/host/generation/projectAiGeneration.js";
 import { projectIntentSchema } from "../src/features/project/contracts/projectIntent.js";
 import type { ProjectDiagram } from "../src/features/project/contracts/projectDiagram.js";
 import { ProjectDiagramAdapterRegistry } from "../src/features/project/host/diagrams/projectDiagramRegistry.js";
@@ -37,7 +37,7 @@ function providerFor(config: { initialize?: unknown; diagram?: unknown }): Proje
   return {
     id: "mock",
     generate: async (request) => {
-      const value = request.promptVersion === PROJECT_INDEX_PROMPT_VERSION ? config.initialize : config.diagram;
+      const value = request.promptVersion === PROJECT_MODEL_PROMPT_VERSION ? config.initialize : config.diagram;
       return { text: JSON.stringify(value) };
     }
   };

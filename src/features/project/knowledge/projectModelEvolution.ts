@@ -15,7 +15,7 @@ export function analysisSourceFiles(diagram: ProjectDiagram): string[] {
 const overlaps = (a: readonly string[], b: readonly string[]): boolean => a.some(path => b.includes(path));
 
 /** Preserve unambiguous continuations; split/merged boundaries retain history without adopting it. */
-export function reconcileProjectIndex(next: ProjectIntent, previous: ProjectIntent | undefined, diagrams: readonly ProjectDiagram[]): ProjectIntent {
+export function reconcileProjectModel(next: ProjectIntent, previous: ProjectIntent | undefined, diagrams: readonly ProjectDiagram[]): ProjectIntent {
   const old = previous?.contexts.filter(context => context.sourceFiles?.length) ?? [];
   const incoming = next.contexts;
   const predecessors = new Map(incoming.map(context => [context.id, old.filter(item => overlaps(context.sourceFiles ?? [], item.sourceFiles!))]));

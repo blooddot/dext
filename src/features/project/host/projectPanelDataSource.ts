@@ -9,7 +9,7 @@ import type { ProjectObject } from "../contracts/projectKnowledge.js";
 import { projectSettingsSchema, projectWorkspaceSettingsFromDefinition, projectWorkspaceSettingsSchema, type ProjectSettings, type ProjectWorkspaceSettings } from "../contracts/projectSettings.js";
 import type { ProjectEditorDataSource, ProjectPanelMessage, ProjectReaderEvidenceRequest, ProjectReaderExportRequest, ProjectReaderRenderRequest } from "../contracts/reader.js";
 import { architectureRuleReport, type ArchitectureRule } from "../knowledge/projectArchitecture.js";
-import { reconcileProjectIndex } from "../knowledge/projectIndexEvolution.js";
+import { reconcileProjectModel } from "../knowledge/projectModelEvolution.js";
 import { buildProjectTopics, checkProjectTopics, topicDiagramRequirement, topicFingerprint, type ProjectTopicCheck } from "../knowledge/projectTopics.js";
 import type { ProjectPanelData } from "../presentation/projectPanel.js";
 import type { ArchifyIdMapping } from "./diagrams/archifyAdapter.js";
@@ -188,7 +188,7 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
     },
     persist: async (output, signal, onProgress) => {
       signal.throwIfAborted();
-      const intent = output.intent ? reconcileProjectIndex(output.intent,
+      const intent = output.intent ? reconcileProjectModel(output.intent,
         await options.store.readIntent?.(), await options.store.readDiagrams?.() ?? []) : undefined;
       const diagrams = output.diagrams ?? [];
       if (!intent && !diagrams.length) throw new Error("AI did not return a savable project semantic model.");
@@ -269,7 +269,7 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
       let diagram = result.diagram;
       if (request.topicId) {
         const current = (await readTopics()).find(topic => topic.id === request.topicId);
-        if (!current || current.basis !== request.topicBasis) throw new Error("The module index changed during analysis. Reopen the module and retry.");
+        if (!current || current.basis !== request.topicBasis) throw new Error("The project model changed during analysis. Reopen the module and retry.");
         diagram = { ...diagram, nodes: diagram.nodes.map(node => ({ ...node, semanticIds: [...new Set([node.id, ...node.semanticIds])] })),
           metadata: { ...diagram.metadata, topicId: request.topicId, topicAnalysis: 1, topicBasis: request.topicBasis ?? "" } };
       }
@@ -503,7 +503,7 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
       tasks.cancelAll();
     },
     initialize: async (): Promise<ProjectPanelData> => {
-      if (generating) throw new Error("Wait for module analysis to finish before updating the project index.");
+      if (generating) throw new Error("Wait for module analysis to finish before updating the project model.");
       // Start synchronously so the editor can render the running snapshot before this async method
       // reaches its first await.
       const task = initializationService.start();

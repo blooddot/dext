@@ -3,7 +3,7 @@ import type { ProjectDiagram } from "../src/features/project/contracts/projectDi
 import type { DiagramAdapterArtifact, DiagramAdapterDocument, ProjectDiagramAdapter } from "../src/features/project/contracts/projectDiagramAdapter.js";
 import { projectIntentSchema } from "../src/features/project/contracts/projectIntent.js";
 import { ProjectDiagramAdapterRegistry } from "../src/features/project/host/diagrams/projectDiagramRegistry.js";
-import { attachProjectStructure, buildProjectEvidencePackage, PROJECT_INDEX_PROMPT_VERSION } from "../src/features/project/host/generation/projectAiGeneration.js";
+import { attachProjectStructure, buildProjectEvidencePackage, PROJECT_MODEL_PROMPT_VERSION } from "../src/features/project/host/generation/projectAiGeneration.js";
 import { buildStructureIndex } from "../src/features/project/host/indexing/projectStructure.js";
 import { buildProjectTopics } from "../src/features/project/knowledge/projectTopics.js";
 
@@ -55,7 +55,7 @@ describe("Project topic host", () => {
         if (fail) throw new Error("Fixture failure");
         if (control.pause) { markStarted?.(); await control.pause; }
         const evidence = [{ path: "src/code.ts", line: 1 }];
-        return { text: JSON.stringify(request.promptVersion === PROJECT_INDEX_PROMPT_VERSION
+        return { text: JSON.stringify(request.promptVersion === PROJECT_MODEL_PROMPT_VERSION
           ? { brief: { name: "Example", summary: "Runs code", evidence }, contexts: [{ id: "code", canonicalName: "Code", purpose: "Runs code", entryPoints: ["src/code.ts"], evidence }] }
           : { diagram: { schemaVersion: 1, id: "code-view", title: "Code", kind: "architecture", nodes: [{ id: "execute", label: "Execute", description: "Runs the source.", role: "component", semanticIds: ["code"], evidence }], relations: [], metadata: { topicSummary: "Executes code and returns its output." } } }) };
       } }

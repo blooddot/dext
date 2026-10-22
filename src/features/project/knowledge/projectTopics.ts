@@ -2,7 +2,7 @@ import type { ProjectDiagram, ProjectDiagramEvidence } from "../contracts/projec
 import type { ProjectIntent, ProjectQualityIssue } from "../contracts/projectIntent.js";
 import type { ProjectEvidence } from "../contracts/projectKnowledge.js";
 import { buildC4Topics } from "../presentation/projectC4.js";
-import { analysisSourceFiles } from "./projectIndexEvolution.js";
+import { analysisSourceFiles } from "./projectModelEvolution.js";
 
 const diagramEvidenceEntries = (entries: readonly ProjectEvidence[]): ProjectDiagramEvidence[] => entries.map((entry) => ({
   path: entry.path,

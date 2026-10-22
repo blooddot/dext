@@ -23,7 +23,7 @@ describe("project panel", () => {
     const html = renderProjectPanel("overview", data());
     expect(html).toContain('data-project-initialization-state="uninitialized"');
     expect(html).toContain("data-project-initialize");
-    expect(html).toContain("Build project index");
+    expect(html).toContain("Build project model");
     expect(html).not.toContain("data-project-choose-roots");
     expect(html).not.toContain("Choose scan folders");
     expect(html).not.toContain("code-derived");

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { projectIntentSchema, validateProjectIntent } from "../src/features/project/contracts/projectIntent.js";
 import { attachProjectStructure, buildProjectEvidencePackage, ProjectAiGenerationService, validateProjectAiModel } from "../src/features/project/host/generation/projectAiGeneration.js";
-import { projectIndexQuality } from "../src/features/project/host/generation/projectIndexQuality.js";
+import { projectModelQuality } from "../src/features/project/host/generation/projectModelQuality.js";
 import { buildProjectTopics, topicFingerprint } from "../src/features/project/knowledge/projectTopics.js";
 
 import { buildStructureIndex } from "../src/features/project/host/indexing/projectStructure.js";
@@ -25,7 +25,7 @@ describe("C4 project views", () => {
   it("reports missing knowledge links and isolated nodes without mistaking projected interactions for isolation", () => {
     const intent = fixture();
     intent.c4!.elements.push({ id: 'orphan', name: 'Orphan', kind: 'system', description: '', external: true, contextIds: [], evidence });
-    intent.qualityIssues = projectIndexQuality(intent, []);
+    intent.qualityIssues = projectModelQuality(intent, []);
     expect(intent.qualityIssues.map(issue => [issue.code, issue.elementIds[0]])).toEqual([
       ['missing-context-mapping', 'store'], ['isolated-c4-element', 'orphan']
     ]);

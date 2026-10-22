@@ -66,7 +66,7 @@ export function readerGalleryArticle(diagram: ProjectDiagram, data: ProjectReade
 export function readerIntroduction(data: ProjectReaderData): string {
   const notes = data.architecture ? renderRules(data.architecture) + renderDecisions(data.architecture.decisions ?? []) : "";
   return `<h2>Project introduction</h2><p class="project-reader-intro">${esc(data.brief || "Choose a topic to explore the project.")}</p><h3>Start exploring</h3><div class="project-reader-related">${data.topics.slice(0, 6).map((topic) => `<button type="button" data-reader-topic="${esc(topic.id)}">${esc(topic.title)} →</button>`).join("")}</div>`
-    + (!data.topics.some((topic) => topic.kind === "system_context") ? '<p class="project-help">System boundaries and runtime units have not been recorded. The project index contains module outlines. Analyze a module to add its detailed explanation and diagram.</p>' : "")
+    + (!data.topics.some((topic) => topic.kind === "system_context") ? '<p class="project-help">System boundaries and runtime units have not been recorded. The project model contains module outlines. Analyze a module to add its detailed explanation and diagram.</p>' : "")
     + (data.terms?.length ? `<details class="project-reader-support"><summary>Glossary · ${data.terms.length}</summary><dl>${data.terms.map((term) => `<dt>${esc(term.canonical)}</dt><dd>${esc(term.definition ?? "")}</dd>`).join("")}</dl></details>` : "")
     + (notes ? `<details class="project-reader-support"><summary>Architecture rules and decisions</summary>${notes}</details>` : "");
 }

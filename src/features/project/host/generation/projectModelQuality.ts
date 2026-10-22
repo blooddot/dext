@@ -20,7 +20,7 @@ export function ownershipConcerns(contexts: readonly ProjectContext[], files: re
 }
 
 /** Semantic review signals remain separate from schema/reference validation. */
-export function projectIndexQuality(intent: ProjectIntent, files: readonly StructureMember[], reviews: readonly ProjectQualityIssue[] = []): ProjectQualityIssue[] {
+export function projectModelQuality(intent: ProjectIntent, files: readonly StructureMember[], reviews: readonly ProjectQualityIssue[] = []): ProjectQualityIssue[] {
   const issues = ownershipConcerns(intent.contexts, files).map(issue => reviews.find(review => review.sourcePaths[0] === issue.sourcePaths[0]) ?? { ...issue, status: "unresolved" as const });
   for (const review of reviews) if (!issues.some(issue => issue.sourcePaths[0] === review.sourcePaths[0])) issues.push(review);
   const model = intent.c4;

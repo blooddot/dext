@@ -5,7 +5,7 @@ import {
 buildProjectEvidencePackage,
 compareProjectEvidencePaths,
 PROJECT_DIAGRAM_PROMPT_VERSION,
-PROJECT_INDEX_PROMPT_VERSION,
+PROJECT_MODEL_PROMPT_VERSION,
 ProjectAiGenerationError,
 ProjectAiGenerationService,
 projectEvidenceFileRank,
@@ -375,7 +375,7 @@ describe("Project AI generation service", () => {
     const result = await new ProjectAiGenerationService(provider, { timeoutMs: 2_000, now: () => 42 }).generateIndex(input);
     expect(calls).toBe(2);
     expect(result.metadata.attempts).toBe(2);
-    expect(result.metadata.promptVersion).toBe(PROJECT_INDEX_PROMPT_VERSION);
+    expect(result.metadata.promptVersion).toBe(PROJECT_MODEL_PROMPT_VERSION);
     expect(result.intent.brief.origin).toBe("inferred");
     expect(result.intent.brief.review).toBe("draft");
     expect(result.intent.generatedAt).toBe(42);
