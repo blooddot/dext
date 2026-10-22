@@ -65,13 +65,13 @@ Review 预设已移除，新建配置及原本不含 `preset` 的配置保存时
 
 **Additional views > Generate a focused view** 在配置范围与预算内优先读取主题引用的源码，已保存主题只作为历史假设。流程图最多 8 个节点，边界图最多 10 个节点。新图留在当前主题，源代码支持时复用已有步骤或边界 ID。关系必须引用实际读到的文本片段，文件清单本身不足以证明调用或依赖。
 
-**Overview > Build project index / Update project index** 先构建 JS/TS、Rust、Python 本地结构索引，再根据完整文件结构信息分批整理职责模块，最后生成项目简介和有证据支持的 C4 边界；详细模块流程仍按需生成。Knowledge 中选择模块只读取已保存内容；点击 **Analyze this module / Update module analysis** 才分析当前模块，同时生成说明与 Archify 图。
+**Overview > Build project model / Update project model** 先构建 JS/TS、Rust、Python 本地结构索引，再根据完整文件结构信息分批整理职责模块，最后生成项目简介和有证据支持的 C4 边界；详细模块流程仍按需生成。Knowledge 中选择模块只读取已保存内容；点击 **Analyze this module / Update module analysis** 才分析当前模块，同时生成说明与 Archify 图。
 
-模块正文使用同一张图的 `metadata.topicSummary` 和节点 `description`；`topicId`、`topicAnalysis=1`、`topicBasis` 记录归属及索引依据。说明、节点证据和图通过一次 `writeDiagram` 一起保存，更新复用原图 ID，不堆积副本。索引刷新不删除模块分析；对应职责或入口证据变化时显示待更新，旧内容继续可读。失败或取消保留原结果，不覆盖其他模块。手动编辑正文和开发对话自动引用尚未实现。
+模块正文使用同一张图的 `metadata.topicSummary` 和节点 `description`；`topicId`、`topicAnalysis=1`、`topicBasis` 记录归属及项目模型依据。说明、节点证据和图通过一次 `writeDiagram` 一起保存，更新复用原图 ID，不堆积副本。刷新项目模型不删除模块分析；对应职责或入口证据变化时显示待更新，旧内容继续可读。失败或取消保留原结果，不覆盖其他模块。手动编辑正文和开发对话自动引用尚未实现。
 
 ## 主动初始化
 
-打开、恢复、切换或刷新项目标签只读取已经保存在 `.dext` 中的数据。Dext 不会在后台枚举源码、运行解析器、调用 AI 或写入 `.dext`。只有在用户主动选择 **Build project index**、**Update project index**、**Check evidence** 或生成图时，才会读取受限的文档或源码。
+打开、恢复、切换或刷新项目标签只读取已经保存在 `.dext` 中的数据。Dext 不会在后台枚举源码、运行解析器、调用 AI 或写入 `.dext`。只有在用户主动选择 **Build project model**、**Update project model**、**Check evidence** 或生成图时，才会读取受限的文档或源码。
 
 本地索引取消候选文件数与 24 文件上限，遵守配置范围、排除规则和单文件大小限制。扩展随包携带 Tree-sitter WASM 语法；结构缓存保存在扩展的工作区存储中，以内容哈希复用未变化的解析结果，删除文件会移除，配置变化会重新解析依赖。不可读、语法异常及不支持的文件会显示为覆盖问题。包和目录分组仅作为物理索引信息。完整文件归属、符号签名和静态依赖用于构建候选分组；候选分组只组织分批阅读，AI 可以拆分目录内不同职责，也可以跨目录归并同一功能。限定源码范围时，索引仍会补充源码上级目录的 README 和项目配置作为背景，不扩大源码范围。
 
@@ -173,7 +173,7 @@ assertWebviewAssets.mjs 依据 esbuild 依赖清单证明运行包不含 TypeScr
 | `src/core/projectContext.ts` | `src/features/project/knowledge/projectContext.ts` |
 | `src/core/projectReference.ts` | `src/features/project/knowledge/projectReference.ts` |
 | `src/core/projectTopics.ts` | `src/features/project/knowledge/projectTopics.ts` |
-| `src/core/projectIndexEvolution.ts` | `src/features/project/knowledge/projectIndexEvolution.ts` |
+| `src/core/projectIndexEvolution.ts` | `src/features/project/knowledge/projectModelEvolution.ts` |
 | `src/core/projectArchitecture.ts` | `src/features/project/knowledge/projectArchitecture.ts` |
 | `src/core/projectDiagramHistory.ts` | `src/features/project/knowledge/projectDiagramHistory.ts` |
 | `src/core/projectC4.ts` | `src/features/project/presentation/projectC4.ts` |
@@ -183,7 +183,7 @@ assertWebviewAssets.mjs 依据 esbuild 依赖清单证明运行包不含 TypeScr
 | `src/core/projectStructureKnowledge.ts` | `src/features/project/host/indexing/projectStructureKnowledge.ts` |
 | `src/projectStructureHost.ts` | `src/features/project/host/indexing/projectStructureHost.ts` |
 | `src/core/projectAiGeneration.ts` | `src/features/project/host/generation/projectAiGeneration.ts` |
-| `src/core/projectIndexQuality.ts` | `src/features/project/host/generation/projectIndexQuality.ts` |
+| `src/core/projectIndexQuality.ts` | `src/features/project/host/generation/projectModelQuality.ts` |
 | `src/projectService.ts` | `src/features/project/host/projectService.ts` |
 | `src/projectStore.ts` | `src/features/project/host/persistence/projectStore.ts` |
 | `src/vscodeProjectHost.ts` | `src/features/project/host/projectPanelDataSource.ts` |

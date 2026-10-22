@@ -78,9 +78,9 @@ Text and diagrams share the existing semantic IDs. Flow graphs use only explicit
 
 **Additional views > Generate a focused view** rereads current evidence, prioritizing the topic's files within the configured scope and budget. The saved topic is a historical hypothesis. Topic workflows are limited to 8 nodes; boundary views to 10. New views stay in the current topic and link to existing step/boundary IDs where the source supports them. Relationships must cite actual read excerpts, not just inventory entries.
 
-**Overview > Build project index / Update project index** builds a local JS/TS, Rust and Python structure index, then organizes complete file-level facts into responsibility outlines in bounded AI batches. A final overview can record evidence-backed C4 boundaries; detailed module flows remain on demand. Selecting a Knowledge module reads saved data; **Analyze this module / Update module analysis** explicitly generates its explanation and Archify diagram together.
+**Overview > Build project model / Update project model** builds a local JS/TS, Rust and Python structure index, then organizes complete file-level facts into responsibility outlines in bounded AI batches. A final overview can record evidence-backed C4 boundaries; detailed module flows remain on demand. Selecting a Knowledge module reads saved data; **Analyze this module / Update module analysis** explicitly generates its explanation and Archify diagram together.
 
-The article uses the same diagram's `metadata.topicSummary` and node descriptions. `topicId`, `topicAnalysis=1` and `topicBasis` record ownership and the index basis. One `writeDiagram` saves prose, evidence and graph together; updates reuse the diagram ID. Refreshing the index preserves saved analyses and marks changed module outlines for update. Failures and cancellations retain the previous result and do not modify other modules. Manual prose editing and automatic development-conversation injection are not implemented.
+The article uses the same diagram's `metadata.topicSummary` and node descriptions. `topicId`, `topicAnalysis=1` and `topicBasis` record ownership and the project-model basis. One `writeDiagram` saves prose, evidence and graph together; updates reuse the diagram ID. Refreshing the project model preserves saved analyses and marks changed module outlines for update. Failures and cancellations retain the previous result and do not modify other modules. Manual prose editing and automatic development-conversation injection are not implemented.
 
 Local indexing has no candidate/file-count cutoff and honors the configured scope and exclusions. Tree-sitter WASM grammars ship with the extension. Content hashes reuse unchanged parse results in the extension workspace storage cache; deleted files disappear and configuration changes recompute dependency resolution. Per-file size limits still apply, and unreadable, malformed and unsupported files are reported. Package/directory groups remain physical index metadata. Complete file membership, signatures and static dependencies feed candidate neighborhoods based on file names and dependencies; neighborhoods are scheduling hints, not knowledge boundaries. AI can split a directory and merge a feature across directories. Source-scoped indexing also reads README and configuration files in source ancestors for package/project context, without expanding the source scope.
 
@@ -94,7 +94,7 @@ Resolution covers common relative imports, local TS path mappings, Python packag
 
 Opening, restoring, switching or refreshing the Project tab only reads saved `.dext` data. Dext never
 enumerates source files, runs a parser, calls AI, or writes `.dext` in the background. Source text is
-read only after the user chooses **Build project index**, **Update project index**, **Check evidence**, or generates a diagram.
+read only after the user chooses **Build project model**, **Update project model**, **Check evidence**, or generates a diagram.
 
 The initialization service uses three phases:
 
@@ -207,7 +207,7 @@ Compatibility entries have explicit exports and no implementation. Unmigrated co
 | `src/core/projectContext.ts` | `src/features/project/knowledge/projectContext.ts` |
 | `src/core/projectReference.ts` | `src/features/project/knowledge/projectReference.ts` |
 | `src/core/projectTopics.ts` | `src/features/project/knowledge/projectTopics.ts` |
-| `src/core/projectIndexEvolution.ts` | `src/features/project/knowledge/projectIndexEvolution.ts` |
+| `src/core/projectIndexEvolution.ts` | `src/features/project/knowledge/projectModelEvolution.ts` |
 | `src/core/projectArchitecture.ts` | `src/features/project/knowledge/projectArchitecture.ts` |
 | `src/core/projectDiagramHistory.ts` | `src/features/project/knowledge/projectDiagramHistory.ts` |
 | `src/core/projectC4.ts` | `src/features/project/presentation/projectC4.ts` |
@@ -217,7 +217,7 @@ Compatibility entries have explicit exports and no implementation. Unmigrated co
 | `src/core/projectStructureKnowledge.ts` | `src/features/project/host/indexing/projectStructureKnowledge.ts` |
 | `src/projectStructureHost.ts` | `src/features/project/host/indexing/projectStructureHost.ts` |
 | `src/core/projectAiGeneration.ts` | `src/features/project/host/generation/projectAiGeneration.ts` |
-| `src/core/projectIndexQuality.ts` | `src/features/project/host/generation/projectIndexQuality.ts` |
+| `src/core/projectIndexQuality.ts` | `src/features/project/host/generation/projectModelQuality.ts` |
 | `src/projectService.ts` | `src/features/project/host/projectService.ts` |
 | `src/projectStore.ts` | `src/features/project/host/persistence/projectStore.ts` |
 | `src/vscodeProjectHost.ts` | `src/features/project/host/projectPanelDataSource.ts` |
