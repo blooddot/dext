@@ -115,11 +115,47 @@ The initialization service uses three phases:
    `initialized` only after all writes succeed. A failed or cancelled run never reports success, and a
    late response from an older run cannot overwrite a newer state.
 
+While **Preparing** or **Generating**, **Pause** aborts the in-flight step without writing generated
+artifacts and keeps the accepted output of every completed AI stage in
+`.dext/project-initialization.checkpoint.json`. **Resume initialization** reloads that checkpoint and
+continues after the last completed stage, so completed responsibility batches and reconciliation
+rounds are not sent to the model again. The checkpoint stores each responsibility batch together with
+the signature of its exact model input. Before resuming, Dext re-indexes the current sources and
+compares the fingerprint (structure hash, index version, evidence input hash, prompt/schema version
+and selected Project AI model/reasoning/speed):
+
+- an exact match continues after the last completed stage;
+- when only the sources or their trimmed evidence changed, every completed batch whose candidate
+  files, documentation context and evidence contract are still identical is adopted without another
+  model call. Only affected batches and the global reconciliation/review/overview stages rerun.
+  Repository-wide counters (`Local index: … reused`, `omitted`) are not part of a batch's identity,
+  so a warm parse cache does not invalidate batches; adding or deleting a file can still re-pack the
+  batch list, and the shifted batches are regenerated. The output reports how many batches were
+  reused. A change large enough to re-group every batch leaves nothing to reuse and regenerates all
+  of them; the global stages always rerun, so the architecture (capabilities and C4 boundaries) is
+  rebuilt from the current sources even when some batches are inherited;
+- a changed prompt/schema/index version or Project AI settings discards the checkpoint and
+  regenerates from the current sources.
+
+A rejected checkpoint reports the fields that changed (for example `project sources` or `Project AI
+settings`). The checkpoint is removed after the model is saved successfully. **Saving** does not
+offer Pause because it may already have written files. The running panel shows an overall percentage
+plus elapsed time; a resumed run re-indexes first while the bar keeps the checkpoint's percentage, so
+re-indexing does not look like a fresh start, and then continues the AI portion from that point. The
+paused card replaces the running card as soon as the run reports cancellation, and **Resume
+initialization** renders the running card immediately — the data source reads the checkpoint before
+it starts the state machine, so the page never waits for the first stage before reacting. The
+aborted call may still be settling at that point; resuming from the paused card in that window is
+allowed, and the older run cannot repaint over the newer one.
+
 A project with no valid saved intent shows **Not initialized** and an explicit initialization entry.
 A legacy `initialized` flag, old scan data or an engine-preference file alone never counts as success.
 Running, failed, cancelled, and initialized-but-missing-diagram states are shown separately. On restart,
 state is recovered from the saved intent, saved diagrams and the initialization record: a project with
-only diagrams keeps them viewable and reports that the knowledge model still needs initialization.
+only diagrams keeps them viewable and reports that the knowledge model still needs initialization. A
+checkpoint left by a run that stopped before the window closed is shown as resumable after the reload:
+without a saved model the card offers **Resume initialization**, and with one Overview keeps the
+completed card but states that **Update project model** resumes the checkpoint.
 
 ## Diagram rendering
 
