@@ -51,6 +51,22 @@ describe("Project initialization state machine", () => {
     expect(state.message).toBe("saved");
   });
 
+  it("completes even when a progress subscriber fails because its view closed", async () => {
+    let calls = 0;
+    const service = new ProjectInitializationService({
+      prepareEvidence: async () => evidence(),
+      generate: async () => ({ intent: promptIntent as never, diagrams: [] }),
+      persist: async () => undefined
+    });
+    service.subscribe(() => {
+      calls += 1;
+      // The immediate snapshot on subscribe is fine; later progress reaches a closed Webview.
+      if (calls > 1) throw new Error("Webview is disposed");
+    });
+    const state = await service.start().promise;
+    expect(state.status).toBe("completed");
+  });
+
   it("fails with a clear reason when no AI provider is available and saves nothing", async () => {
     let persisted = false;
     const service = new ProjectInitializationService({

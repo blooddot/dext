@@ -34,7 +34,11 @@ export class ProjectInitializationService {
 
   private publish(): void {
     const snapshot = this.snapshot;
-    for (const listener of this.listeners) listener(snapshot);
+    for (const listener of this.listeners) {
+      // A view can be closed while a long initialization is still reporting. Progress is a
+      // notification, not part of the result, so a failed render must not abort the run.
+      try { listener(snapshot); } catch { /* The run continues; its persisted state remains the truth. */ }
+    }
   }
 
   private replaceState(next: ProjectInitializationState): void {

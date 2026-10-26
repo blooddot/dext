@@ -41,6 +41,35 @@ describe("editor tab manager", () => {
     }
   });
 
+  it("does not throw into callers when a Webview closed before rendering or posting", () => {
+    let disposed = false;
+    const webview = {
+      get html() { return ""; },
+      set html(_value: string) { if (disposed) throw new Error("Webview is disposed"); },
+      onDidReceiveMessage: vi.fn(),
+      postMessage: vi.fn(() => {
+        if (disposed) throw new Error("Webview is disposed");
+        return Promise.resolve(true);
+      })
+    };
+    const panel = {
+      dispose: vi.fn(),
+      onDidDispose: vi.fn(),
+      // VS Code 1.143 `WebviewPanel.webview` itself asserts disposal; a closed tab throws
+      // before the caller ever reaches `postMessage`.
+      get webview() {
+        if (disposed) throw new Error("Webview is disposed");
+        return webview;
+      }
+    };
+    const handle = wrapVscodeWebviewPanel(panel, { onDispose: vi.fn(), onMessage: vi.fn() });
+    handle.setHtml?.("<div>API</div>");
+    handle.postMessage?.({ type: "ping" });
+    disposed = true;
+    expect(() => handle.setHtml?.("<div>API</div>")).not.toThrow();
+    expect(() => handle.postMessage?.({ type: "ping" })).not.toThrow();
+  });
+
   it("creates once per stable key and reveals the existing panel on reopen", () => {
     const host = new FakeHost();
     const manager = new EditorTabManager(host);

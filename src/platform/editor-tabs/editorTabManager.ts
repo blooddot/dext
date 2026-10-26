@@ -157,12 +157,23 @@ export function wrapVscodeWebviewPanel(panel: VscodeWebviewPanelLike, callbacks:
   panel.onDidDispose(() => callbacks.onDispose());
   panel.webview.onDidReceiveMessage((message) => callbacks.onMessage(message));
   return {
-    reveal: (column?: unknown) => panel.reveal?.(column),
+    reveal: (column?: unknown) => {
+      try { panel.reveal?.(column); } catch { /* Closed while being revealed. */ }
+    },
     dispose: () => panel.dispose(),
-    setHtml: (html: string) => { panel.webview.html = renderHtml ? renderHtml(panel, html) : html; },
+    setHtml: (html: string) => {
+      try { panel.webview.html = renderHtml ? renderHtml(panel, html) : html; } catch { /* A closed tab has nowhere to render. */ }
+    },
     postMessage: (message: unknown) => {
-      const webview = panel.webview as { postMessage?: (value: unknown) => void };
-      webview.postMessage?.(message);
+      try {
+        const webview = panel.webview as { postMessage?: (value: unknown) => unknown };
+        const result = webview.postMessage?.(message);
+        // Depending on the VS Code build, a disposed Webview either throws above or rejects the
+        // returned thenable. Neither may reach the work that is reporting progress.
+        if (result && typeof (result as PromiseLike<unknown>).then === "function") void Promise.resolve(result).catch(() => undefined);
+      } catch {
+        // Disposed between the caller's check and this message.
+      }
     }
   };
 }
