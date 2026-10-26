@@ -65,7 +65,13 @@ export function resourcePrompt(resource: ResourceSession, input: string): string
       ? 'Reference template files by workspace-relative source paths, e.g. source: ".dext/templates/example.md".'
       : 'Rules and skills can be resolved from global resources. template() source must be inside the workspace: do not reference a global template as if it were a project .dext/templates file.',
     resource.type === "file" ? "name is a safe workspace-relative file path. content is the complete file content, preserving the file's format and extension."
-      : resource.type === "api" ? "name is a dotted API id. content is a TypeScript module exporting main, for example export async function main(input: string): Promise<AskResult> { return await ask({ input }); } — result types such as AskResult are exported by the dext module rather than declared globally, so import the ones the signature uses as types: import { ask, type AskResult } from \"dext\";."
+      : resource.type === "api" ? [
+        "name is a dotted API id. content is a TypeScript module exporting main. Result types such as AskResult are exported by the dext module rather than declared globally, so import the ones the signature uses as types.",
+        "Give every function exactly one responsibility. A function that calls ask, agent, plan, skill, template, or terminal must be a named wrapper containing only that one top-level API call: no second top-level API and no local helper call.",
+        "Entry functions only compose named wrappers and ordinary helpers; each function node in the Execution flow is labelled with the top-level API it wraps (· ask, · agent, and so on).",
+        "Example:",
+        "import { ask, agent, type AskResult, type AgentResult } from \"dext\";\n\nasync function askForPlan(input: string): Promise<AskResult> {\n  return ask({ input: `Plan: ${input}` });\n}\n\nasync function runAgent(input: string): Promise<AgentResult> {\n  return agent({ input });\n}\n\nexport async function main(input: string): Promise<AgentResult> {\n  await askForPlan(input);\n  return runAgent(input);\n}"
+      ].join("\n\n")
       : resource.type === "mcp" ? "content is a complete JSONC MCP manifest with name, transport (stdio or http), command/args or url, and a tools allowlist array. Preserve existing tool schemas, auth and other settings unless the user requests changes. Credentials must be environment/SecretStorage references."
         : resource.type === "skill" ? "name is a safe directory name. content is a complete SKILL.md."
           : "name is a safe markdown filename. content is policy markdown.",

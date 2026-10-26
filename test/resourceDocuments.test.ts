@@ -9,6 +9,7 @@ import { MethodRegistry } from "../src/features/workflow/domain/registry.js";
 import { resourceFileName, resourceFiles, resourcePathSegments, resourcePrompt, type ResourceSession } from "../src/features/resources/contracts/resourceSession.js";
 import { buildResourceList, isMcpApiId, renderResourceList, resourceCategory } from "../src/features/resources/presentation/resourceDocuments.js";
 import { createFileResourceDataSource } from "../src/features/resources/host/resourceEditorProvider.js";
+import { describeApiFlow } from "../src/features/workflow/host/apiFlow.js";
 import type { ResourceEntry } from "../src/features/resources/contracts/resourceDocuments.js";
 
 vi.mock("vscode", () => {
@@ -200,6 +201,56 @@ describe("resource documents", () => {
     await writeFile(join(root, "mcp/settings.jsonc"), '{"name":"server","transport":"stdio","command":"node","tools":[]}');
     expect(await application.listResources("api")).toEqual([{ name: "team.lookup", path: "team/lookup.ts", scope: "global" }]);
     expect(await application.readResource("mcp", "global", "settings.jsonc", "settings")).toMatchObject({ name: "server", path: "settings.jsonc" });
+  });
+
+  it("documents the single-purpose wrapper rule when creating an API", () => {
+    const prompt = resourcePrompt({ type: "api", scope: "global" }, "Create an API");
+    expect(prompt).toContain("exactly one responsibility");
+    expect(prompt).toContain("only that one top-level API call");
+    expect(prompt).toContain("Entry functions only compose named wrappers and ordinary helpers");
+    expect(prompt).toContain("askForPlan");
+    expect(prompt).toContain("runAgent");
+    expect(prompt).toContain("export async function main");
+  });
+
+  it("blocks a new API that mixes top-level API calls", async () => {
+    application.setApiFlowAnalyzer(describeApiFlow);
+    const resource: ResourceSession = { type: "api", scope: "global", draft: {
+      name: "mixed",
+      content: 'import { ask, agent } from "dext";\nexport function main() { return Promise.all([ask({}), agent({})]); }'
+    } };
+    await expect(application.saveResource(resource)).rejects.toThrow(/main/);
+    await expect(application.saveResource(resource)).rejects.toThrow(/ask and agent/);
+    await expect(application.saveResource(resource)).rejects.toThrow(/one named wrapper|own named wrapper/);
+    expect(await readdir(root)).toEqual([]);
+  });
+
+  it("only warns when an existing API breaks the wrapper rule", async () => {
+    const resource: ResourceSession = { type: "api", scope: "global", draft: {
+      name: "legacy",
+      content: 'import { ask } from "dext";\nexport function main() { return ask({}); }'
+    } };
+    resource.target = await application.saveResource(resource);
+    application.setApiFlowAnalyzer(describeApiFlow);
+    resource.draft = {
+      name: "legacy",
+      content: 'import { ask, agent } from "dext";\nexport function main() { return Promise.all([ask({}), agent({})]); }'
+    };
+    await expect(application.saveResource(resource)).resolves.toMatchObject({ name: "legacy" });
+  });
+
+  it("surfaces flow issues in the generated draft text", async () => {
+    application.setApiFlowAnalyzer(describeApiFlow);
+    const content = 'import { ask, agent } from "dext";\nexport function main() { return Promise.all([ask({}), agent({})]); }';
+    const execute = vi.fn(async () => ({ result: { kind: "ask", text: JSON.stringify({ name: "mixed", content }) } }));
+    Object.assign(application, { runtime: { executeConversation: execute } });
+    const result = await application.draftResource({ type: "api", scope: "global" }, "Create an API");
+    expect(result.draft.content).toBe(content);
+    const text = result.response.kind === "workflow" ? (result.response.executions[0]!.result as { text: string }).text : "";
+    expect(text).toContain("API flow issues:");
+    expect(text).toContain("main");
+    expect(text).toContain("wrapper");
+    expect(await readdir(root)).toEqual([]);
   });
 
   it("generates a read-only draft using the current content and attachment context without writing files", async () => {

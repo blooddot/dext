@@ -936,6 +936,14 @@ export class DextApplication {
     if (!resource.draft) throw new Error("Generate a resource draft first.");
     const { type, scope, draft, target } = resource;
     this.validateResource(type, draft);
+    // A historical API may already break the wrapper rule; only a newly created
+    // API is blocked, so upgrading Dext cannot make existing work unsaveable.
+    if (type === "api" && !target) {
+      const issues = await this.apiFlowIssues(draft.content);
+      if (issues.length) {
+        throw new Error(`${this.apiFlowIssueText(issues)}\n\nA new API must keep each top-level Dext API call in its own named wrapper and compose the wrappers in the entry function.`);
+      }
+    }
     const path = target?.path ?? resourceFileName(type, draft.name);
     const normalize = (content: string): string => content.endsWith("\n") ? content : `${content}\n`;
     const content = normalize(draft.content);
