@@ -8,6 +8,7 @@ import type { ProjectAiProvider } from "../features/project/host/generation/proj
 import { isExcludedProjectEvidencePath, isProjectEvidencePath } from "../features/project/host/generation/projectAiGeneration.js";
 import { readCachedStructure } from "../features/project/host/indexing/projectStructureHost.js";
 import type { ProjectStore } from "../features/project/host/persistence/projectStore.js";
+import { createProjectInitializationCheckpointStore } from "../features/project/host/persistence/projectInitializationCheckpointStore.js";
 import { ProjectEditorProvider } from "../features/project/host/projectEditorProvider.js";
 import { createProjectPanelDataSource, discoverArchifyRepository, effectiveProjectEvidenceSettings, readProjectEvidence as readBoundedProjectEvidence, readStructureIndexEvidence } from "../features/project/host/projectPanelDataSource.js";
 import type { ProjectInitializationProgressListener } from "../features/project/host/projectService.js";
@@ -121,6 +122,7 @@ export function setupProject(options: ProjectSetupOptions): ProjectEditorProvide
       readEvidence: readProjectEvidence,
       readStructureIndex,
       readStructure: () => readCachedStructure(structureCachePath),
+      checkpoint: createProjectInitializationCheckpointStore(folder.uri),
       diagramRegistry,
       projectAiProvider: options.aiProvider,
       aiCli: options.agentProfiles().map((profile) => ({

@@ -89,17 +89,34 @@ describe("project panel", () => {
     expect(running).toContain("project-init-running");
     expect(running).toContain('value="63"');
     expect(running).toContain("63%");
+    expect(running).toContain("data-project-initialize-pause");
+    expect(running).toContain(">Pause<");
+    // Saving may already have written artifacts, so it no longer offers Pause.
+    const saving = renderProjectPanel("overview", data({}, initialization("running", { phase: "saving", percent: 92 }))).split("<script>")[0]!;
+    expect(saving).not.toContain("data-project-initialize-pause");
 
     const failed = renderProjectPanel("overview", data({}, initialization("failed", { error: "AI unavailable" })));
     expect(failed).toContain("AI unavailable");
     expect(failed).toContain("Retry initialization");
 
     const cancelled = renderProjectPanel("overview", data({}, initialization("cancelled")));
-    expect(cancelled).toContain("Initialization cancelled");
+    expect(cancelled).toContain("Initialization stopped");
+    expect(cancelled).toContain("Continue initialization");
+    expect(cancelled).not.toContain("Retry initialization");
+
+    const paused = renderProjectPanel("overview", data({}, initialization("cancelled", { resumable: true, resumeStage: "batches", resumePercent: 52 })));
+    expect(paused).toContain("Initialization paused after responsibility batches (52%)");
+    expect(paused).toContain("Resume initialization");
 
     const completed = renderProjectPanel("overview", data({}, initialization("completed", { phase: "saving", intentGenerated: true, diagramsGenerated: 0 })));
     expect(completed).toContain('data-project-initialization-state="completed"');
     expect(completed).toContain("Analyze this module");
+
+    const resumableCompleted = renderProjectPanel("overview", data({}, initialization("completed", {
+      phase: "saving", intentGenerated: true, resumable: true, resumeStage: "batches", resumePercent: 53
+    })));
+    expect(resumableCompleted).toContain("An earlier update stopped after responsibility batches (53%)");
+    expect(resumableCompleted).toContain("Update project model");
   });
 
   it("opens saved diagrams inside the reader without a separate primary tab", () => {

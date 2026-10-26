@@ -102,37 +102,61 @@ const PHASE_LABELS: Record<string, string> = {
   saving: "Validating and saving"
 };
 
+const RESUME_STAGE_LABELS: Record<string, string> = {
+  batches: "responsibility batches",
+  reconcile: "directory reconciliation",
+  review: "ownership review",
+  overview: "project overview",
+  repair: "architecture review"
+};
+
 function renderInitialization(initialization: ProjectInitializationState): string {
   const phaseLabel = PHASE_LABELS[initialization.phase ?? ""] ?? "Preparing";
   const aiControls = "";
   if (initialization.status === "running") {
     const percent = Math.max(0, Math.min(100, Math.round(initialization.percent ?? 0)));
+    // Saving may already have written artifacts; offering Pause there would contradict the
+    // paused-state promise that saved knowledge is unchanged. It is also the shortest phase.
+    const pausable = initialization.phase !== "saving";
     return `<div class="project-init project-init-running" data-project-init-progress data-project-init-started-at="${initialization.startedAt ?? ""}" role="status" aria-live="polite">`
       + `<div class="project-scan-progress-line"><span class="project-scan-progress-label" data-project-progress-label>Building project model · ${escapeHtml(phaseLabel)}${initialization.message ? ` · ${escapeHtml(initialization.message)}` : ""}</span><span class="project-initialization-elapsed" data-project-init-elapsed></span><progress class="project-scan-progress-meter" value="${percent}" max="100" aria-label="${escapeHtml(phaseLabel)} progress" aria-valuetext="${percent}%"></progress><strong class="project-scan-progress-percent" data-project-progress-percent>${percent}%</strong></div>`
+      + (pausable ? `<div class="project-initialization-actions"><button type="button" data-project-initialize-pause>Pause</button><span class="project-help">Pauses this run; completed AI stages are saved for Continue.</span></div>` : "")
       + `<pre class="project-initialization-output" data-project-init-output${initialization.output ? "" : " hidden"}>${escapeHtml(initialization.output ?? "")}</pre></div>`;
   }
   if (initialization.status === "completed") {
     const missingDiagram = (initialization.diagramsGenerated ?? 0) === 0;
+    const resumeStage = initialization.resumeStage ? RESUME_STAGE_LABELS[initialization.resumeStage] ?? initialization.resumeStage : undefined;
+    // A reload keeps the saved model and its completed card, but an interrupted update still has a
+    // checkpoint: say so, because the Update button is what resumes it.
+    const pendingResume = initialization.resumable && resumeStage
+      ? `<p class="project-scan-progress">An earlier update stopped after ${escapeHtml(resumeStage)} (${Math.max(0, Math.min(100, Math.round(initialization.resumePercent ?? 0)))}%). <strong>Update project model</strong> resumes that checkpoint; if sources or AI settings changed, it regenerates.</p>`
+      : "";
     return `<div class="project-init project-init-completed" data-project-initialization-state="completed" role="status">`
       + `<p class="project-initialization-result">Project model ready${initialization.intentGenerated ? " · valid project intent" : ""}${initialization.diagramsGenerated ? ` · ${initialization.diagramsGenerated} diagram${initialization.diagramsGenerated === 1 ? "" : "s"}` : ""}.</p>`
       + (missingDiagram ? `<p class="project-scan-progress">Open <strong>Knowledge</strong>, choose a module and click <strong>Analyze this module</strong> to generate its explanation and diagram.</p>` : "")
+      + pendingResume
       + (initialization.output ? `<details class="project-initialization-log"><summary>Initialization output</summary><pre>${escapeHtml(initialization.output)}</pre></details>` : "")
       + `<button type="button" data-project-initialize>Update project model</button><p class="project-help">Refresh the introduction and module outlines. Saved module analyses remain available; changed outlines are marked for update.</p>`
       + `</div>`;
   }
   const failed = initialization.status === "failed";
   const cancelled = initialization.status === "cancelled";
+  const resumable = cancelled && initialization.resumable === true;
+  const resumeStage = initialization.resumeStage ? RESUME_STAGE_LABELS[initialization.resumeStage] ?? initialization.resumeStage : undefined;
+  const resumePercent = Math.max(0, Math.min(100, Math.round(initialization.resumePercent ?? 0)));
   const errorDetails = initialization.error || initialization.output
     ? `<details class="project-initialization-error"${failed ? " open" : ""}><summary>${failed ? "Initialization failed" : "Last initialization output"}</summary><pre>${escapeHtml(initialization.error ?? "")}${initialization.output ? `\n\n${escapeHtml(initialization.output)}` : ""}</pre></details>`
     : "";
   const status = failed
     ? `<p class="project-scan-progress project-scan-progress-error" role="status">Initialization failed: ${escapeHtml(initialization.error ?? "Unknown reason.")}</p>`
     : cancelled
-      ? `<p class="project-scan-progress" role="status">Initialization cancelled. The previous saved knowledge is unchanged.</p>`
+      ? resumable
+        ? `<p class="project-scan-progress" role="status">Initialization paused after ${escapeHtml(resumeStage ?? "completed stages")} (${resumePercent}%). Continue resumes from that checkpoint; if sources or AI settings changed, it regenerates.</p>`
+        : `<p class="project-scan-progress" role="status">Initialization stopped. The saved model is unchanged. Continuing re-indexes the current sources and starts a new run; this run's unsaved output is discarded.</p>`
       : `<p class="project-help"><strong>Not initialized.</strong> No valid saved semantic model was found. Index the configured JS/TS, Rust and Python sources locally, then generate module summaries. Detailed explanations and diagrams are generated per module in Knowledge.${initialization.diagramsGenerated ? " Saved diagrams remain viewable." : ""}</p>`;
   return `<div class="project-init project-init-uninitialized" data-project-initialization-state="${failed ? "failed" : cancelled ? "cancelled" : "uninitialized"}">`
     + status
-    + `<button type="button" class="project-initialize" data-project-initialize>${failed || cancelled ? "Retry initialization" : "Build project model"}</button>`
+    + `<button type="button" class="project-initialize" data-project-initialize>${failed ? "Retry initialization" : cancelled ? (resumable ? "Resume initialization" : "Continue initialization") : "Build project model"}</button>`
     + errorDetails + aiControls
     + `<div class="project-scan-progress" data-project-init-progress hidden role="status"><div class="project-scan-progress-line"><span class="project-scan-progress-label" data-project-progress-label>Preparing the local structure index…</span><progress class="project-scan-progress-meter" value="0" max="100" aria-label="Initialization progress" aria-valuetext="0%"></progress><strong class="project-scan-progress-percent" data-project-progress-percent>0%</strong></div><pre class="project-initialization-output" data-project-init-output hidden></pre></div>`
     + `</div>`;
@@ -205,14 +229,15 @@ export function projectPanelScript(state?: EditorTabState): string {
     // navigation clicks to the actual tab buttons; otherwise clicking any child
     // control (especially a native <select>) bubbles to the root, posts a page
     // message, and the host replaces the document while the popup is opening.
-    + "var element=target&&target.closest?target.closest(\"button[data-project-page],[data-project-initialize]\"):null;"
+    + "var element=target&&target.closest?target.closest(\"button[data-project-page],[data-project-initialize],[data-project-initialize-pause]\"):null;"
     + "if(!element)return;var page=element.getAttribute(\"data-project-page\");"
     + "if(page){api.postMessage({type:\"projectPage\",page:page,topicId:target.getAttribute('data-project-topic')||undefined});return;}"
+    + "if(element.hasAttribute('data-project-initialize-pause')){element.disabled=true;element.textContent='Pausing…';api.postMessage({type:'projectInitializePause'});return;}"
     + "if(element.hasAttribute('data-project-initialize')){var b=element;b.disabled=true;b.textContent='Initializing…';api.postMessage({type:'projectInitialize'});return;}"
     + "});"
     + "document.addEventListener('change',function(event){var target=event.target;if(!target||!target.matches)return;if(target.matches('[data-project-ai-cli]')){var option=target.options[target.selectedIndex],models=[];try{models=JSON.parse(option.getAttribute('data-models')||'[]');}catch(_){}var old=document.querySelector('.project-ai-model');if(old)old.remove();if(models.length&&target.value){var wrap=document.createElement('div');wrap.innerHTML='<label class=\"project-ai-model\">Model for Project initialization <div class=\"project-ai-model-control\"><button type=\"button\" class=\"project-model-trigger\" data-project-ai-model data-project-model-trigger aria-expanded=\"false\"><span>Model</span><strong data-project-model-value=\"model\">Use CLI default</strong><i class=\"codicon codicon-chevron-down\"></i></button><small class=\"project-model-capabilities\" data-project-model-capabilities hidden></small><div class=\"project-model-popover composer-model-popover\" data-project-model-menu hidden></div></div></label>';var control=wrap.firstElementChild;var menu=control.querySelector('[data-project-model-menu]');var make=function(id,label,items,disabled){return '<button type=\"button\" class=\"project-model-category composer-menu-option composer-menu-category\" data-project-model-category=\"'+id+'\" data-selected=\"\" data-items=\"'+JSON.stringify(items).replace(/\"/g,'&quot;')+'\"'+(disabled?' disabled':'')+'><span>'+label+'</span><span class=\"project-model-category-value\" data-project-model-value=\"'+id+'\">CLI setting</span><i class=\"codicon codicon-chevron-right\"></i></button>';};menu.innerHTML=make('model','Model',[{id:'',label:'Use CLI default'}].concat(models.map(function(m){return {id:m.id,label:m.label,group:m.group||'',reasoningEfforts:m.reasoningEfforts||[],speedTiers:m.speedTiers||[]};})),false)+make('reasoning','Reasoning',[],true)+make('speed','Speed',[],true)+'<div class=\"project-model-submenu composer-model-submenu\" data-project-model-submenu hidden></div>';target.closest('.project-ai-cli').insertAdjacentElement('afterend',control);}api.postMessage({type:'projectAiCli',cli:target.value||undefined});}});"
     + "var elapsedTimer=0;function updateElapsed(){var box=document.querySelector('[data-project-init-progress]'),node=box&&box.querySelector('[data-project-init-elapsed]'),started=box&&Number(box.getAttribute('data-project-init-started-at'));if(!node||!started)return;var seconds=Math.max(0,Math.floor((Date.now()-started)/1000)),minutes=Math.floor(seconds/60);node.textContent='· '+(minutes?minutes+'m '+(seconds%60)+'s':seconds+'s');}updateElapsed();if(document.querySelector('[data-project-init-progress][data-project-init-started-at]'))elapsedTimer=window.setInterval(updateElapsed,1000);"
-    + "window.addEventListener('message',function(event){var message=event&&event.data;if(!message||message.type!=='projectInitializationProgress')return;var state=message.state||{},box=document.querySelector('[data-project-init-progress]');if(!box)return;if(state.startedAt!==undefined)box.setAttribute('data-project-init-started-at',String(state.startedAt));if(state.status!=='running'&&elapsedTimer){window.clearInterval(elapsedTimer);elapsedTimer=0;}var label=box.querySelector('[data-project-progress-label]'),meter=box.querySelector('progress'),percent=box.querySelector('[data-project-progress-percent]'),output=box.querySelector('[data-project-init-output]');var phase=state.phase==='generating'?'AI generation':state.phase==='saving'?'Validating and saving':'Preparing the local structure index';if(label)label.textContent='Building project model · '+phase+(state.message?' · '+state.message:'');updateElapsed();var pct=typeof state.percent==='number'?Math.max(0,Math.min(100,Math.round(state.percent))):0;if(meter){meter.max=100;meter.value=pct;meter.setAttribute('aria-valuetext',pct+'%');}if(percent)percent.textContent=pct+'%';if(output){if(state.output){output.hidden=false;output.textContent=state.output;}else if(state.status==='running'){output.hidden=true;}}});"
+    + "window.addEventListener('message',function(event){var message=event&&event.data;if(!message||message.type!=='projectInitializationProgress')return;var state=message.state||{},box=document.querySelector('[data-project-init-progress]');if(!box)return;if(state.startedAt!==undefined)box.setAttribute('data-project-init-started-at',String(state.startedAt));if(state.status!=='running'&&elapsedTimer){window.clearInterval(elapsedTimer);elapsedTimer=0;}var label=box.querySelector('[data-project-progress-label]'),meter=box.querySelector('progress'),percent=box.querySelector('[data-project-progress-percent]'),output=box.querySelector('[data-project-init-output]');var phase=state.phase==='generating'?'AI generation':state.phase==='saving'?'Validating and saving':'Preparing the local structure index';if(label)label.textContent='Building project model · '+phase+(state.message?' · '+state.message:'');updateElapsed();var actions=box.querySelector('.project-initialization-actions');if(actions&&state.phase==='saving')actions.remove();var pct=typeof state.percent==='number'?Math.max(0,Math.min(100,Math.round(state.percent))):0;if(meter){meter.max=100;meter.value=pct;meter.setAttribute('aria-valuetext',pct+'%');}if(percent)percent.textContent=pct+'%';if(output){if(state.output){output.hidden=false;output.textContent=state.output;}else if(state.status==='running'){output.hidden=true;}}});"
     // Highlight the saved object selected through Project reference navigation.
     + "var focus=document.querySelector('[data-project-focus]');"
     + "if(focus){var id=focus.getAttribute('data-project-focus');"

@@ -62,6 +62,12 @@ export interface ProjectInitializationState {
    * It never decreases while a run is active.
    */
   percent?: number;
+  /** A stopped run has a durable checkpoint that Continue can resume (fingerprint permitting). */
+  resumable?: boolean;
+  /** The last completed generation stage in that checkpoint. */
+  resumeStage?: string;
+  /** Overall percentage the checkpoint restores; shown in the stopped card. */
+  resumePercent?: number;
   message?: string;
   /** Bounded tail of output emitted by the initialization provider. */
   output?: string;
@@ -86,6 +92,11 @@ export interface ProjectInitializationHydration {
   diagramCount: number;
   /** Legacy `.dext/project.json` flag. Never sufficient on its own. */
   markedInitialized?: boolean;
+  /**
+   * A durable checkpoint left by a run that stopped before the window closed. Without this, a
+   * reload would show "Not initialized" even though Continue can resume the saved stages.
+   */
+  checkpoint?: { stage: string; fraction: number };
 }
 
 

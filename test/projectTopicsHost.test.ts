@@ -4,6 +4,7 @@ import type { DiagramAdapterArtifact, DiagramAdapterDocument, ProjectDiagramAdap
 import { projectIntentSchema } from "../src/features/project/contracts/projectIntent.js";
 import { ProjectDiagramAdapterRegistry } from "../src/features/project/host/diagrams/projectDiagramRegistry.js";
 import { attachProjectStructure, buildProjectEvidencePackage, type IndexedProjectEvidence } from "../src/features/project/host/generation/projectAiGeneration.js";
+import type { ProjectInitializationCheckpointStore, ProjectModelCheckpoint } from "../src/features/project/host/generation/projectModelCheckpoint.js";
 import { buildStructureIndex } from "../src/features/project/host/indexing/projectStructure.js";
 import { buildProjectTopics } from "../src/features/project/knowledge/projectTopics.js";
 
@@ -238,6 +239,69 @@ describe("Project topic host", () => {
     expect(messages.at(-1)).toMatchObject({ type: "projectReaderRendered", requestId: "derived", html: "<html>derived</html>" });
   });
 
+  it("pauses a running initialization, keeps a stage checkpoint and resumes without repeating batches", async () => {
+    const { createProjectPanelDataSource } = await import("../src/features/project/host/projectPanelDataSource.js");
+    const files = Array.from({ length: 13 }, (_, index) => ({ path: `src/features/f${index}.ts`, content: `export function f${index}() {}` }));
+    const index = await buildStructureIndex(files);
+    const evidence = attachProjectStructure(buildProjectEvidencePackage({ files: [{ path: "README.md", content: "App" }] }, { maxTotalChars: 48_000 }), index.summary);
+    let checkpoint: ProjectModelCheckpoint | undefined;
+    let clears = 0;
+    const store: ProjectInitializationCheckpointStore = {
+      read: async () => checkpoint,
+      write: async (next) => { checkpoint = structuredClone(next); },
+      clear: async () => { checkpoint = undefined; clears += 1; }
+    };
+    let intent: ReturnType<typeof projectIntentSchema.parse> | undefined;
+    const writeIntent = vi.fn(async (value: NonNullable<typeof intent>) => { intent = value; });
+    let batches = 0;
+    let blockSecond = true;
+    let started!: () => void;
+    const secondBatchStarted = new Promise<void>((resolve) => { started = resolve; });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const generate = async (request: { prompt: string }) => {
+      const ids = [...new Set(request.prompt.match(/responsibility:[a-f0-9]+/g) ?? [])];
+      if (request.prompt.includes("Optionally describe C4")) {
+        return { text: JSON.stringify({ brief: { name: "App", summary: "App", evidence: [{ path: "README.md", line: 1 }] },
+          capabilities: [{ canonicalName: "Features", description: "Features", contextIds: ids }] }) };
+      }
+      if (request.prompt.includes("Responsibility outlines:")) {
+        const items = JSON.parse(request.prompt.match(/Responsibility outlines: ([^\n]+)/)![1]!) as { name: string; purpose: string; sourceFiles: string[]; entryPoints: string[] }[];
+        return { text: JSON.stringify({ contexts: items.map((item) => ({ canonicalName: item.name, purpose: item.purpose, sourceFiles: item.sourceFiles, entryPoints: item.entryPoints })) }) };
+      }
+      batches += 1;
+      if (blockSecond && batches === 2) { started(); await gate; }
+      const candidates = JSON.parse(request.prompt.match(/Candidate file facts: ([^\n]+)/)![1]!) as { files: { path: string }[] }[];
+      const candidatesFiles = candidates.flatMap((candidate) => candidate.files);
+      return { text: JSON.stringify({ contexts: candidatesFiles.map((file) => ({ canonicalName: file.path, purpose: "Feature", sourceFiles: [file.path], entryPoints: [file.path] })) }) };
+    };
+    const source = createProjectPanelDataSource({
+      name: "Example", root: "C:/ws", rootUri: {} as never, checkpoint: store,
+      readEvidence: async () => buildProjectEvidencePackage({ files: [] }), readStructureIndex: async () => evidence,
+      store: { readObjects: async () => [], readArchitecture: async () => ({ decisions: [] }), readIntent: async () => intent, writeIntent },
+      projectAiProvider: { id: "fixture", generate }
+    });
+    const first = source.initialize!();
+    await secondBatchStarted;
+    source.pauseInitialization?.();
+    release();
+    await expect(first).rejects.toThrow(/cancelled/i);
+    expect(source.initialization?.()).toMatchObject({ status: "cancelled", resumable: true, resumeStage: "batches" });
+    expect(checkpoint?.stage).toBe("batches");
+    expect(checkpoint?.batches?.length).toBe(1);
+    expect(writeIntent).not.toHaveBeenCalled();
+
+    blockSecond = false;
+    await source.initialize!();
+    // Batch 1 completed before Pause, so Resume runs only the remaining batch (1 call for the
+    // aborted batch and 1 for the resumed one, on top of batch 1) instead of both batches again.
+    expect(batches).toBe(3);
+    expect(clears).toBe(1);
+    expect(checkpoint).toBeUndefined();
+    expect(writeIntent).toHaveBeenCalledTimes(1);
+    expect(new Set(intent!.contexts.flatMap((context) => context.sourceFiles ?? [])).size).toBe(13);
+  });
+
   it("hides derived topics when the cache is absent", async () => {
     const { createProjectPanelDataSource } = await import("../src/features/project/host/projectPanelDataSource.js");
     const intent = projectIntentSchema.parse({ schemaVersion: 1, updatedAt: 1, brief: { name: "Example" }, contexts: [{ id: "code", canonicalName: "Code", purpose: "Runs code" }] });
@@ -248,5 +312,25 @@ describe("Project topic host", () => {
     });
     const topics = (await source.load()).knowledge?.topics ?? [];
     expect(topics.some((topic) => topic.kind === "structure" || topic.kind === "types")).toBe(false);
+  });
+
+  it("hydrates a checkpoint as a resumable card after a reload", async () => {
+    const { createProjectPanelDataSource } = await import("../src/features/project/host/projectPanelDataSource.js");
+    const checkpoint: ProjectModelCheckpoint = {
+      version: 2, createdAt: 1, updatedAt: 2,
+      fingerprint: { structureHash: "a".repeat(64), structureVersion: 2, indexVersion: 4, evidenceInputHash: "b".repeat(64), promptVersion: "project-model-7", schemaVersion: 2, ai: "{}" },
+      stage: "reconcile", fraction: 0.5, attempts: 3
+    };
+    let cleared = 0;
+    const source = createProjectPanelDataSource({
+      name: "Example", root: "C:/ws", rootUri: {} as never,
+      readEvidence: async () => buildProjectEvidencePackage({ files: [] }), readStructureIndex: async () => buildProjectEvidencePackage({ files: [] }) as IndexedProjectEvidence,
+      checkpoint: { read: async () => checkpoint, write: async () => undefined, clear: async () => { cleared += 1; } },
+      store: { readObjects: async () => [], readArchitecture: async () => ({ decisions: [] }) }
+    });
+    expect((await source.load()).overview.initialization).toMatchObject({
+      status: "cancelled", resumable: true, resumeStage: "reconcile", resumePercent: 53
+    });
+    expect(cleared).toBe(0);
   });
 });

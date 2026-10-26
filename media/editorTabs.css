@@ -393,6 +393,8 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .project-initialization-elapsed { flex: 0 0 auto; color: var(--vscode-descriptionForeground); font-size: 11px; white-space: nowrap; }
 .project-scan-progress-meter { flex: 0 0 180px; width: 180px; height: 8px; accent-color: var(--vscode-focusBorder); }
 .project-scan-progress-percent { flex: 0 0 auto; min-width: 32px; color: var(--vscode-foreground); font-size: 11px; font-variant-numeric: tabular-nums; text-align: right; }
+.project-initialization-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.project-initialization-actions .project-help { margin: 0; }
 .project-initialization-output { max-height: 150px; margin: 8px 0 0; padding: 8px; overflow: auto; white-space: pre-wrap; color: var(--vscode-descriptionForeground); background: var(--vscode-textCodeBlock-background); border: 1px solid var(--vscode-panel-border); border-radius: 4px; font-size: 11px; line-height: 1.35; }
 .project-initialization-output[hidden] { display: none; }
 @media (max-width: 700px) { .project-scan-progress-line { align-items: stretch; flex-direction: column; gap: 5px; } .project-scan-progress-meter { flex-basis: auto; width: 100%; } }

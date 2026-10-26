@@ -8,10 +8,22 @@ import type { StructureGraphFacts } from "../indexing/projectStructureGraph.js";
 import { validateProjectDiagram, type ProjectDiagram, type ProjectDiagramEvidence } from "../../contracts/projectDiagram.js";
 import { projectC4Schema, projectIntentSchema, validateProjectIntent, type ProjectContext, type ProjectIntent, type ProjectQualityIssue, type ProjectIntentProvenance } from "../../contracts/projectIntent.js";
 import type { ProjectEvidence } from "../../contracts/projectKnowledge.js";
-import type { StructureSummary } from "../indexing/projectStructure.js";
+import { PROJECT_STRUCTURE_VERSION, type StructureSummary } from "../indexing/projectStructure.js";
 import { buildStructureGraphFromSummary, structureConsumers } from "../indexing/projectStructureGraph.js";
 import { connectResponsibilities, responsibilityContext, responsibilityDraftSchema, responsibilityMergeSchema, structureCandidates, validateOwnership, type StructureCandidate } from "../indexing/projectStructureKnowledge.js";
 import { ownershipConcerns, projectModelQuality } from "./projectModelQuality.js";
+import {
+  PROJECT_MODEL_CHECKPOINT_VERSION,
+  checkpointReached,
+  projectModelCheckpointMismatch,
+  projectModelCheckpointContentOnly,
+  projectModelCheckpointStageLabel,
+  type ProjectInitializationCheckpointStore,
+  type ProjectModelCheckpoint,
+  type ProjectModelCheckpointBatch,
+  type ProjectModelCheckpointFingerprint,
+  type ProjectModelCheckpointStage
+} from "./projectModelCheckpoint.js";
 export type { IndexedProjectEvidence, ProjectEvidenceFile, ProjectEvidenceFileInput, ProjectEvidenceInput, ProjectEvidenceInventoryEntry, ProjectEvidenceLimits, ProjectEvidencePackage, ProjectEvidenceSelection, ProjectEvidenceSummary, ProjectKnowledgeReference, ProjectStructureIndexSummary } from "../../contracts/evidence.js";
 export const PROJECT_DIAGRAM_PROMPT_VERSION = "project-diagram-7";
 export const PROJECT_MODEL_PROMPT_VERSION = "project-model-7";
@@ -205,6 +217,28 @@ function declaredSymbols(text: string, limit: number): string[] {
 }
 
 /**
+ * Identity of the model input, not of the run that built it.
+ *
+ * The parse cache reports how many files it reused (`structure.cached` and the matching
+ * "N reused" coverage sentence). A resumed run starts with a warm cache and therefore reports a
+ * different count even when every source is unchanged; hashing that counter made a paused Project
+ * initialization look stale and silently regenerate from scratch. Redaction and truncation stay in
+ * the hash because they change what the model actually sees.
+ */
+export function projectEvidenceInputHash(evidence: ProjectEvidencePackage): string {
+  const body = JSON.parse(JSON.stringify(evidence)) as Record<string, unknown>;
+  delete body.inputHash;
+  delete body.characterCount;
+  const structure = body.structure as { cached?: unknown } | undefined;
+  if (structure) delete structure.cached;
+  const coverage: unknown = body.coverage;
+  if (Array.isArray(coverage)) {
+    body.coverage = coverage.map((line: unknown) => typeof line === "string" ? line.replace(/\b\d+ reused\b/g, "N reused") : line);
+  }
+  return hash(JSON.stringify(body));
+}
+
+/**
  * Pure construction: the host chooses and reads files; this function never traverses the disk,
  * reads conversations, invokes a model or modifies any user input. Oversized inputs are bounded
  * before serialization, with omission counts retained instead of hiding incomplete coverage.
@@ -345,10 +379,7 @@ export function buildProjectEvidencePackage(input: ProjectEvidenceInput, limits:
   }
   // The hash identifies the actual model input, including redaction and truncation, rather than
   // the full repository. Identical bounded input gives the same hash in independent runs.
-  const body = JSON.parse(JSON.stringify(result)) as Record<string, unknown>;
-  delete body.inputHash;
-  delete body.characterCount;
-  result.inputHash = hash(JSON.stringify(body));
+  result.inputHash = projectEvidenceInputHash(result);
   result.characterCount = JSON.stringify(result).length;
   return result;
 }
@@ -359,7 +390,7 @@ export function attachProjectStructure(evidence: ProjectEvidencePackage, structu
   // let a text replacement consume the remainder of the serialized index (including delimiters).
   const sanitized = JSON.stringify(structure, (_key, value: unknown) => typeof value === "string" ? redact(value) : value);
   const result: IndexedProjectEvidence = { ...evidence, structure: JSON.parse(sanitized) as StructureSummary };
-  result.inputHash = hash(JSON.stringify({ ...result, inputHash: undefined, characterCount: undefined }));
+  result.inputHash = projectEvidenceInputHash(result);
   result.characterCount = JSON.stringify(result).length;
   return result;
 }
@@ -368,13 +399,13 @@ export function attachProjectStructure(evidence: ProjectEvidencePackage, structu
 export function attachStructureGraph(evidence: ProjectEvidencePackage, graph: StructureGraphFacts): ProjectEvidencePackage {
   const result: ProjectEvidencePackage = { ...evidence, graph: { ...graph, edges: [...graph.edges], truncated: { ...graph.truncated } } };
   const measure = (): number => JSON.stringify(result).length;
-  result.inputHash = hash(JSON.stringify({ ...result, inputHash: undefined, characterCount: undefined }));
+  result.inputHash = projectEvidenceInputHash(result);
   result.characterCount = measure();
   // The graph is an aid, not a reason to exceed the evidence contract the caller selected.
   while (result.characterCount > evidence.selection.evidenceChars && result.graph!.edges.length) {
     result.graph!.edges.pop();
     result.graph!.truncated.edges += 1;
-    result.inputHash = hash(JSON.stringify({ ...result, inputHash: undefined, characterCount: undefined }));
+    result.inputHash = projectEvidenceInputHash(result);
     result.characterCount = measure();
   }
   if (result.characterCount > evidence.selection.evidenceChars) return evidence;
@@ -388,6 +419,31 @@ function structureBatch(evidence: ProjectEvidencePackage, candidates: StructureC
   // Runtime excerpts are for the final overview, not repeated in every structural batch.
   base.files = base.files.filter(file => file.kind !== "source");
   return { ...base, knowledge: [], inventory: candidates.flatMap(candidate => candidate.files.map(file => ({ path: file.path, kind: "source" as const, lines: file.lines, contentHash: file.hash }))) };
+}
+
+/**
+ * Identity of one responsibility batch's model input.
+ *
+ * Repository-wide counters (`Local index: …` coverage and `omitted`) describe the whole index, not
+ * this batch, and change whenever any file is added or served from the parse cache; they are
+ * excluded. What remains is the batch's candidate facts, its documentation context and the
+ * evidence contract, so two runs that agree on those would have sent the model the same prompt and
+ * the accepted outline can be reused without another call.
+ */
+function batchSignature(evidence: IndexedProjectEvidence, candidates: StructureCandidate[]): string {
+  const input = structureBatch(evidence, candidates);
+  const stable = {
+    schemaVersion: input.schemaVersion,
+    projectName: input.projectName,
+    selection: input.selection,
+    files: input.files,
+    inventory: input.inventory,
+    objects: input.objects,
+    knowledge: input.knowledge,
+    coverage: input.coverage.filter(line => !line.startsWith("Local index:")),
+    ...(input.requirement === undefined ? {} : { requirement: input.requirement })
+  };
+  return hash(JSON.stringify({ candidates, input: stable }));
 }
 
 const nonempty = z.string().trim().min(1).max(10_000);
@@ -841,6 +897,19 @@ export interface ProjectAiActivityEvent {
   usage?: AgentTokenUsage;
 }
 
+/**
+ * Completion of the AI stage pipeline from 0 to 1. The pipeline does not know how many
+ * provider attempts a stage will need, so stages are weighted by the work they represent:
+ * ownership batches, directory reconciliation, ownership review, overview and architecture
+ * repair. Optional stages are reported as skipped when they are known not to run.
+ */
+export interface ProjectAiGenerationProgress {
+  fraction: number;
+  message: string;
+}
+
+export type ProjectAiGenerationProgressListener = (progress: ProjectAiGenerationProgress) => void;
+
 export interface ProjectAiRequest {
   /** A dedicated Project generation request, never a modification of the composer request. */
   prompt: string;
@@ -1140,7 +1209,14 @@ export class ProjectAiGenerationService {
   }
 
   /** Standard initialization entry. A complete local structure index is required, never inferred. */
-  async generateProjectModel(evidence: IndexedProjectEvidence, options: { signal?: AbortSignal; onEvent?: (event: ProjectAiActivityEvent) => void } = {}): Promise<ProjectAiGenerationResult> {
+  async generateProjectModel(evidence: IndexedProjectEvidence, options: {
+    signal?: AbortSignal;
+    onEvent?: (event: ProjectAiActivityEvent) => void;
+    onProgress?: ProjectAiGenerationProgressListener;
+    resume?: ProjectModelCheckpoint;
+    settingsFingerprint?: string;
+    checkpoint?: ProjectInitializationCheckpointStore;
+  } = {}): Promise<ProjectAiGenerationResult> {
     return this.generateProjectModelFromStructure(evidence, options);
   }
 
@@ -1148,7 +1224,8 @@ export class ProjectAiGenerationService {
    * Explicit fallback for callers that only have bounded excerpts. The stored project flow always
    * supplies a structure index, so this is never selected implicitly.
    */
-  async generateProjectModelFromExcerpts(evidence: ProjectEvidencePackage, options: { signal?: AbortSignal; onEvent?: (event: ProjectAiActivityEvent) => void } = {}): Promise<ProjectAiGenerationResult> {
+  async generateProjectModelFromExcerpts(evidence: ProjectEvidencePackage, options: { signal?: AbortSignal; onEvent?: (event: ProjectAiActivityEvent) => void; onProgress?: ProjectAiGenerationProgressListener } = {}): Promise<ProjectAiGenerationResult> {
+    options.onProgress?.({ fraction: 0.03, message: "Generating the project introduction and module outline…" });
     const schema = z.toJSONSchema(projectModelSchema) as Readonly<Record<string, unknown>>;
     const run = await this.runPrompt<ProjectAiGeneratedModel>({
       instructions: [
@@ -1174,14 +1251,62 @@ export class ProjectAiGenerationService {
     const generatedAt = this.now();
     const provenance = this.provenance(evidence, run, PROJECT_MODEL_PROMPT_VERSION, generatedAt);
     const stamp = <T extends ProjectIntentProvenance>(item: T): T => ({ ...item, ...provenance, evidence: this.evidenceHash(item.evidence, evidence) });
+    options.onProgress?.({ fraction: 0.95, message: "Generated the project introduction and module outline." });
     return { intent: { ...run.value.intent, brief: stamp(run.value.intent.brief), contexts: run.value.intent.contexts.map(stamp), updatedAt: generatedAt, generatedAt, inputHash: evidence.inputHash, model: run.model }, diagrams: [],
       metadata: { inputHash: evidence.inputHash, model: run.model, providerId: this.provider!.id, promptVersion: PROJECT_MODEL_PROMPT_VERSION, schemaVersion: 2, generatedAt, attempts: run.attempts } };
   }
 
   /** Builds the project model from the complete local structure index in bounded ownership batches. */
-  private async generateProjectModelFromStructure(evidence: IndexedProjectEvidence, options: { signal?: AbortSignal; onEvent?: (event: ProjectAiActivityEvent) => void }): Promise<ProjectAiGenerationResult> {
+  private async generateProjectModelFromStructure(evidence: IndexedProjectEvidence, options: {
+    signal?: AbortSignal;
+    onEvent?: (event: ProjectAiActivityEvent) => void;
+    onProgress?: ProjectAiGenerationProgressListener;
+    /** A checkpoint saved by a paused run; reused only when every fingerprint field matches. */
+    resume?: ProjectModelCheckpoint;
+    /** Stable JSON of the selected Project AI settings, part of the checkpoint fingerprint. */
+    settingsFingerprint?: string;
+    /** Persistence for stage checkpoints; omitted by tests and callers without a workspace. */
+    checkpoint?: ProjectInitializationCheckpointStore;
+  }): Promise<ProjectAiGenerationResult> {
     const structure = evidence.structure;
     if (!structure.modules.length) throw new ProjectAiGenerationError("invalid_output", "No JS/TS, Rust or Python modules were indexed. Check the configured scope and indexing issues.");
+    // Fractions are monotone even when a later stage discovers more work (a second reconciliation
+    // round); the bar may pause, but a finished stage is never taken back.
+    let reported = 0;
+    const report = (fraction: number, message: string): void => {
+      const value = Math.max(reported, Math.min(1, fraction));
+      if (value <= reported) return;
+      reported = value;
+      options.onProgress?.({ fraction: value, message });
+    };
+    const fingerprint: ProjectModelCheckpointFingerprint = {
+      structureHash: structure.hash,
+      structureVersion: structure.version,
+      indexVersion: PROJECT_STRUCTURE_VERSION,
+      evidenceInputHash: evidence.inputHash,
+      promptVersion: PROJECT_MODEL_PROMPT_VERSION,
+      schemaVersion: 2,
+      ai: options.settingsFingerprint ?? ""
+    };
+    let resume = options.resume;
+    const mismatch = resume ? projectModelCheckpointMismatch(resume.fingerprint, fingerprint) : [];
+    // Changed sources (or their trimmed evidence) are recoverable at batch granularity: the batch
+    // list is rebuilt from the current index and unchanged batches are adopted by signature.
+    const reuseBatches = Boolean(resume) && projectModelCheckpointContentOnly(mismatch);
+    if (resume && mismatch.length && !reuseBatches) {
+      try { await options.checkpoint?.clear(); } catch { /* Best effort; a stale checkpoint is simply not resumed. */ }
+      const changed = mismatch.map(item => item.label).join(" and ");
+      options.onEvent?.({ id: "project-checkpoint-discarded", phase: "status", title: "Sources or settings changed", text: `The ${changed} changed since this run paused. Regenerating the project model from the current sources.`, done: true });
+      report(0.005, `${changed} changed since the paused run; regenerating…`);
+      resume = undefined;
+    } else if (reuseBatches) {
+      const changed = mismatch.map(item => item.label).join(" and ");
+      options.onEvent?.({ id: "project-checkpoint-reused", phase: "status", title: "Reusing completed responsibility batches", text: `The ${changed} changed since this run paused. Completed batches whose inputs are unchanged are reused without another model call; only affected batches and the global stages are regenerated.` });
+      report(0.005, `${changed} changed since the paused run; reusing unchanged batches…`);
+    } else if (resume) {
+      options.onEvent?.({ id: "project-checkpoint-resumed", phase: "status", title: "Resuming project model generation", text: `Continuing after ${projectModelCheckpointStageLabel(resume.stage)}. Completed stages are not repeated.` });
+      report(resume.fraction, `Resuming after ${projectModelCheckpointStageLabel(resume.stage)}…`);
+    }
     const budget = Math.min(evidence.selection.evidenceChars, this.maxInputChars - 24_000);
     const batches: StructureCandidate[][] = [];
     let batch: StructureCandidate[] = [];
@@ -1200,13 +1325,93 @@ export class ProjectAiGenerationService {
     };
     for (const candidate of structureCandidates(structure)) append(candidate);
     if (batch.length) batches.push(batch);
+    report(0.02, `Identifying responsibilities across ${batches.length} source batch${batches.length === 1 ? "" : "es"}…`);
     const files = structure.modules.flatMap(module => module.members);
     const fileByPath = new Map(files.map(file => [file.path, file]));
     const structureGraph = buildStructureGraphFromSummary(structure);
     const consumers = new Map(files.map(file => [file.path, structureConsumers(structureGraph, file.path, { typeOnly: false })]));
     const uncertaintyInstruction = "Use uncertainties only for concrete unanswered questions that affect understanding this module. Each question must include an exact member source path and end with a question mark. Prefer an empty array. Omit generic cautions about static analysis, missing runtime verification, or unknown implementation details. Correct ownership contradictions rather than recording them as uncertainty.";
-    let drafts: ProjectContext[] = [], totalAttempts = 0;
-    for (const [index, candidates] of batches.entries()) {
+    // Signatures are computed once so a resumed run can adopt completed batches without
+    // re-serializing their prompts.
+    const signatures = batches.map(candidates => batchSignature(evidence, candidates));
+    const reusable = new Map<string, ProjectContext[]>();
+    for (const batch of resume?.batches ?? []) if (!reusable.has(batch.signature)) reusable.set(batch.signature, batch.drafts);
+    if (reuseBatches) {
+      // The actual count depends on the rebuilt batch list: a large refactor can move every batch,
+      // in which case reuse saves nothing and the run regenerates all of them.
+      const reused = signatures.filter(signature => reusable.has(signature)).length;
+      const completed = resume?.batches?.length ?? 0;
+      options.onEvent?.({ id: "project-checkpoint-reuse-count", phase: "status", title: "Responsibility batch reuse", text: reused
+        ? `${reused} of ${completed} completed batches are unchanged and will be reused; ${batches.length - reused} of ${batches.length} batches will be generated again.`
+        : `No completed batch still matches the rebuilt batch list, so all ${batches.length} batches will be generated again.` });
+    }
+    const createdAt = resume?.createdAt ?? this.now();
+    let totalAttempts = 0;
+    let batchResults: ProjectModelCheckpointBatch[] = [];
+    let startBatch = 0;
+    let reconcileRound = 0;
+    let reconcileComplete = false;
+    let ownershipReviews: ProjectQualityIssue[] = [];
+    let overviewIntent: ProjectIntent | undefined;
+    let overviewModel: string | undefined;
+    if (resume) {
+      totalAttempts = resume.attempts;
+      const saved = resume.batches ?? [];
+      if (!reuseBatches && checkpointReached(resume, "reconcile") && saved.length === batches.length) {
+        // Directory reconciliation and later stages only run after every batch, so a checkpoint at
+        // or past that boundary already holds the complete batch output. A checkpoint that cannot
+        // account for every rebuilt batch is not trusted for that skip.
+        batchResults = [...saved];
+        startBatch = batches.length;
+        reconcileRound = resume.reconcileRound ?? 0;
+        reconcileComplete = resume.reconcileComplete ?? true;
+        ownershipReviews = resume.ownershipReviews ?? [];
+        overviewIntent = resume.overview?.intent;
+        overviewModel = resume.overview?.model;
+      } else if (!reuseBatches) {
+        // An exact fingerprint match rebuilds the same batch list; keep its completed prefix.
+        if (saved.length <= batches.length && saved.every((batch, index) => batch.signature === signatures[index])) {
+          batchResults = [...saved];
+          startBatch = saved.length;
+        }
+      }
+    }
+    const saveCheckpoint = async (stage: ProjectModelCheckpointStage, fraction: number, extra: {
+      reconcileRound?: number;
+      reconcileComplete?: boolean;
+      ownershipReviews?: ProjectQualityIssue[];
+      overview?: { intent: ProjectIntent; model?: string };
+    } = {}): Promise<void> => {
+      if (!options.checkpoint) return;
+      // A paused run must not overwrite the checkpoint with stages that completed after the user
+      // paused. The resumed run may already have read the previous checkpoint.
+      if (options.signal?.aborted) throw new ProjectAiGenerationError("cancelled", "Project generation was cancelled.");
+      const checkpoint: ProjectModelCheckpoint = {
+        version: PROJECT_MODEL_CHECKPOINT_VERSION,
+        createdAt,
+        updatedAt: this.now(),
+        fingerprint,
+        stage,
+        fraction,
+        attempts: totalAttempts,
+        batches: [...batchResults],
+        ...(extra.reconcileRound !== undefined ? { reconcileRound: extra.reconcileRound } : {}),
+        ...(extra.reconcileComplete !== undefined ? { reconcileComplete: extra.reconcileComplete } : {}),
+        ...(extra.ownershipReviews !== undefined ? { ownershipReviews: extra.ownershipReviews } : {}),
+        ...(extra.overview ? { overview: extra.overview } : {})
+      };
+      try { await options.checkpoint.write(checkpoint); } catch { /* A checkpoint is an optimization; generation continues. */ }
+    };
+    for (let index = startBatch; index < batches.length; index++) {
+      const candidates = batches[index]!;
+      const signature = signatures[index]!;
+      const reused = reusable.get(signature);
+      if (reused) {
+        batchResults.push({ signature, drafts: reused });
+        const fraction = 0.04 + 0.44 * (batchResults.length / Math.max(1, batches.length));
+        report(fraction, `Reused responsibility batch ${batchResults.length}/${batches.length} (${reused.length} module${reused.length === 1 ? "" : "s"}).`);
+        continue;
+      }
       const input = structureBatch(evidence, candidates);
       options.onEvent?.({ id: `structure-batch-${index}`, phase: "status", title: "Identifying responsibilities", text: `Batch ${index + 1}/${batches.length} · ${input.inventory.length} source files. All files retain an explicit owner.` });
       const responseSchema = z.toJSONSchema(responsibilityDraftSchema) as Readonly<Record<string, unknown>>;
@@ -1232,12 +1437,18 @@ export class ProjectAiGenerationService {
           return { ok: true, value: parsed.data.contexts.map(context => responsibilityContext(context.canonicalName, context.purpose, context.sourceFiles.map(path => fileByPath.get(path)!), context.entryPoints, context.uncertainties)) };
         }, fallbackMessage: INVALID_MODEL_MESSAGE
       }, options);
-      totalAttempts += run.attempts; drafts.push(...run.value);
+      totalAttempts += run.attempts;
+      batchResults.push({ signature, drafts: run.value });
+      const fraction = 0.04 + 0.44 * (batchResults.length / Math.max(1, batches.length));
+      report(fraction, `Identified responsibilities in batch ${batchResults.length} of ${batches.length}.`);
+      await saveCheckpoint("batches", fraction);
     }
+    let drafts: ProjectContext[] = batchResults.flatMap(batch => batch.drafts);
     // Reconcile batch boundaries with exact ownership validation. Large directories use bounded
     // hierarchical passes; a non-reducing pass stops without discarding any responsibility.
-    if (drafts.length > 1) {
-      let round = 0;
+    report(0.5, "Organizing the knowledge directory…");
+    if (!reconcileComplete && drafts.length > 1) {
+      let round = reconcileRound;
       while (drafts.length > 1) {
         drafts = connectResponsibilities(drafts, files);
         const compact = (items: ProjectContext[]) => items.map(item => ({ id: item.id, name: item.canonicalName, purpose: item.purpose,
@@ -1281,15 +1492,25 @@ export class ProjectAiGenerationService {
             }, fallbackMessage: INVALID_MODEL_MESSAGE
           }, options);
           totalAttempts += run.attempts; merged.push(...run.value);
+          report(0.5 + 0.13 * ((index + 1) / chunks.length), `Reconciled ${index + 1} of ${chunks.length} responsibility groups.`);
         }
         const reduced = merged.length < drafts.length;
         drafts = merged;
         if (chunks.length === 1 || !reduced) break;
         round++;
+        reconcileRound = round;
+        await saveCheckpoint("reconcile", 0.5 + 0.13 * (round / Math.max(1, round + 1)), { reconcileRound, reconcileComplete: false });
       }
     }
-    const concerns = ownershipConcerns(drafts, files);
-    const ownershipReviews: ProjectQualityIssue[] = [];
+    if (!reconcileComplete) {
+      reconcileComplete = true;
+      reconcileRound = Math.max(reconcileRound, 0);
+      // No reconciliation was needed, or the last round ended the loop.
+      await saveCheckpoint("reconcile", 0.64, { reconcileRound, reconcileComplete: true });
+    }
+    report(0.64, "Checking module ownership…");
+    const reviewAlreadyComplete = Boolean(resume && !reuseBatches && checkpointReached(resume, "review"));
+    const concerns = reviewAlreadyComplete ? [] : ownershipConcerns(drafts, files);
     const reviewIds = new Set<string>();
     const reviewFacts = (ids: ReadonlySet<string>) => drafts.filter(item => ids.has(item.id)).map(item => ({
       canonicalName: item.canonicalName, purpose: item.purpose, sourceFiles: item.sourceFiles, entryPoints: item.entryPoints,
@@ -1351,6 +1572,10 @@ export class ProjectAiGenerationService {
           contextIds: drafts.filter(item => item.sourceFiles?.some(path => concern.sourcePaths.includes(path))).map(item => item.id) });
       }
     }
+    if (!reviewAlreadyComplete) {
+      report(0.7, "Summarizing the project purpose and runtime boundaries…");
+      await saveCheckpoint("review", 0.7, { ownershipReviews });
+    }
     const contexts = connectResponsibilities(drafts, files);
     // Runtime architecture is a separate interpretation, grounded in configuration/document excerpts.
     const base: ProjectEvidencePackage = { ...evidence };
@@ -1361,7 +1586,7 @@ export class ProjectAiGenerationService {
       capabilities: z.array(z.object({ canonicalName: z.string().trim().min(1).max(120), description: z.string().trim().min(1).max(500),
         contextIds: z.array(z.string().min(1)).min(1) }).strict()).min(1).max(12),
       c4: projectC4Schema.optional() }).strict();
-    const run = await this.runPrompt<ProjectIntent>({
+    const overviewRun = overviewIntent ? undefined : await this.runPrompt<ProjectIntent>({
       instructions: [
         "Write a concise project overview from configuration/document excerpts and the locally indexed module directory. Return exactly <output_fields>.",
         "Describe the product and its main responsibilities in the brief. Do not fill the brief or capability descriptions with statements about what this generation run did not establish. Prioritize the main user-facing execution path and external integrations over optional supporting stores. A documented external integration can be represented without inventing its unknown transport protocol.",
@@ -1397,9 +1622,19 @@ export class ProjectAiGenerationService {
         return errors.length ? { ok: false, message: UNVERIFIED_MODEL_MESSAGE, errors } : { ok: true, value: { ...intent, contexts } };
       }, fallbackMessage: INVALID_MODEL_MESSAGE
     }, options);
-    const isolated = projectModelQuality(run.value, files).filter(issue => issue.code === "isolated-c4-element");
-    if (run.value.c4 && run.value.c4.elements.length > 1 && isolated.length) {
-      const model = run.value.c4;
+    if (overviewRun) {
+      totalAttempts += overviewRun.attempts;
+      overviewIntent = overviewRun.value;
+      overviewModel = overviewRun.model;
+      report(0.88, "Reviewing the architecture model…");
+      await saveCheckpoint("overview", 0.88, { ownershipReviews, overview: { intent: overviewIntent, ...(overviewModel ? { model: overviewModel } : {}) } });
+    }
+    if (!overviewIntent) throw new ProjectAiGenerationError("invalid_output", "Project overview generation produced no model.");
+    let intent = overviewIntent;
+    const repairAlreadyComplete = Boolean(resume && !reuseBatches && checkpointReached(resume, "repair"));
+    const isolated = projectModelQuality(intent, files).filter(issue => issue.code === "isolated-c4-element");
+    if (!repairAlreadyComplete && intent.c4 && intent.c4.elements.length > 1 && isolated.length) {
+      const model = intent.c4;
       const isolatedIds = new Set(isolated.flatMap(issue => issue.elementIds));
       const repairSchema = z.object({ relationships: projectC4Schema.shape.relationships.unwrap().max(12) }).strict();
       const remaining = 120 - model.relationships.length;
@@ -1426,27 +1661,33 @@ export class ProjectAiGenerationService {
               if (!edge.evidence.length || edge.evidence.some(item => item.line === undefined || !overviewEvidence.files.some(file => file.path === item.path && item.line! >= file.startLine && item.line! <= file.endLine))) errors.push("Relationships require visible excerpt lines.");
               checker.check(edge.id, edge.evidence);
             }
-            const candidate = { ...run.value, c4: { ...model, relationships: [...model.relationships, ...parsed.data.relationships] } };
+            const candidate = { ...intent, c4: { ...model, relationships: [...model.relationships, ...parsed.data.relationships] } };
             errors.push(...checker.errors, ...validateProjectIntent(candidate).map(issue => issue.message));
             return errors.length ? { ok: false, message: UNVERIFIED_MODEL_MESSAGE, errors } : { ok: true, value: parsed.data };
           }, fallbackMessage: INVALID_MODEL_MESSAGE
         }, options);
         totalAttempts += repair.attempts;
-        run.value = { ...run.value, c4: { ...model, relationships: [...model.relationships, ...repair.value.relationships] } };
+        intent = { ...intent, c4: { ...model, relationships: [...model.relationships, ...repair.value.relationships] } };
       } catch (error) {
         if (options.signal?.aborted || this.disposed || error instanceof ProjectAiGenerationError && error.code === "cancelled") throw error;
         options.onEvent?.({ id: "project-c4-review-unresolved", phase: "status", title: "Architecture review remains unresolved", text: error instanceof Error ? error.message : String(error), done: true });
       }
     }
-    const generatedAt = this.now(), provenance = this.provenance(evidence, run, PROJECT_MODEL_PROMPT_VERSION, generatedAt);
-    return { intent: { ...run.value, qualityIssues: projectModelQuality(run.value, files, ownershipReviews), brief: { ...run.value.brief, ...provenance, evidence: this.evidenceHash(run.value.brief.evidence, overviewEvidence) },
-      ...(run.value.c4 ? { c4: { ...run.value.c4, elements: run.value.c4.elements.map(item => ({ ...item, evidence: this.evidenceHash(item.evidence, overviewEvidence) })), relationships: run.value.c4.relationships.map(item => ({ ...item, evidence: this.evidenceHash(item.evidence, overviewEvidence) })) } } : {}),
+    if (!repairAlreadyComplete) {
+      report(0.94, "Finalizing the project model…");
+      await saveCheckpoint("repair", 0.97, { ownershipReviews, overview: { intent, ...(overviewModel ? { model: overviewModel } : {}) } });
+    }
+    report(0.97, "Project model generated.");
+    const generatedAt = this.now();
+    const provenance = this.provenance(evidence, { value: intent, model: overviewModel ?? this.provider!.id, attempts: 0 }, PROJECT_MODEL_PROMPT_VERSION, generatedAt);
+    return { intent: { ...intent, qualityIssues: projectModelQuality(intent, files, ownershipReviews), brief: { ...intent.brief, ...provenance, evidence: this.evidenceHash(intent.brief.evidence, overviewEvidence) },
+      ...(intent.c4 ? { c4: { ...intent.c4, elements: intent.c4.elements.map(item => ({ ...item, evidence: this.evidenceHash(item.evidence, overviewEvidence) })), relationships: intent.c4.relationships.map(item => ({ ...item, evidence: this.evidenceHash(item.evidence, overviewEvidence) })) } } : {}),
       contexts: contexts.map(context => ({ ...context, ...provenance })),
-      capabilities: run.value.capabilities.map(capability => ({ ...capability, ...provenance })),
+      capabilities: intent.capabilities.map(capability => ({ ...capability, ...provenance })),
       structure: { hash: structure.hash, files: structure.files, parsed: structure.parsed, modules: structure.modules.length, responsibilities: contexts.length, failed: structure.failed, unsupported: structure.unsupported,
         unresolved: structure.modules.reduce((sum, module) => sum + module.unresolved, 0), issues: structure.issues.slice(0, 100) },
-      updatedAt: generatedAt, generatedAt, inputHash: evidence.inputHash, ...(run.model ? { model: run.model } : {}) }, diagrams: [],
-      metadata: { inputHash: evidence.inputHash, model: run.model, providerId: this.provider!.id, promptVersion: PROJECT_MODEL_PROMPT_VERSION, schemaVersion: 2, generatedAt, attempts: totalAttempts + run.attempts } };
+      updatedAt: generatedAt, generatedAt, inputHash: evidence.inputHash, ...(overviewModel ? { model: overviewModel } : {}) }, diagrams: [],
+      metadata: { inputHash: evidence.inputHash, model: overviewModel ?? this.provider!.id, providerId: this.provider!.id, promptVersion: PROJECT_MODEL_PROMPT_VERSION, schemaVersion: 2, generatedAt, attempts: totalAttempts } };
   }
 
   async generateDiagram(evidence: ProjectEvidencePackage, request: ProjectDiagramGenerationRequest, options: { signal?: AbortSignal; onEvent?: (event: ProjectAiActivityEvent) => void } = {}): Promise<ProjectAiDiagramGenerationResult> {

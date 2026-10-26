@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import * as vscode from "vscode";
-import type { ProjectInitializationProgressListener, ProjectInitializationState } from "../contracts/lifecycle.js";
+import { projectInitializationPercent, type ProjectInitializationProgressListener, type ProjectInitializationState } from "../contracts/lifecycle.js";
 import type { ProjectArchitectureDecision, ProjectDiagramSummary } from "../contracts/projectArchitectureTypes.js";
 import { validateProjectDiagram, type ProjectDiagram, type ProjectDiagramKind } from "../contracts/projectDiagram.js";
 import { projectEvidenceSettingsSchema, projectPromptLimits, type ProjectEvidenceSettings } from "../contracts/projectEvidenceSettings.js";
@@ -35,6 +35,7 @@ type ProjectStructureIndexSummary
 import { textDecoder } from "./indexing/workspaceEvidence.js";
 import type { ProjectDefinition, ProjectSaveResult } from "./persistence/projectStore.js";
 import { textEncoder } from "./persistence/vscodeProjectFileHost.js";
+import type { ProjectInitializationCheckpointStore, ProjectModelCheckpoint } from "./generation/projectModelCheckpoint.js";
 import { ProjectInitializationService } from "./projectService.js";
 
 
@@ -63,6 +64,8 @@ export interface ProjectPanelDataSourceOptions {
   readStructureIndex(signal: AbortSignal, onProgress: ProjectInitializationProgressListener): Promise<IndexedProjectEvidence>;
   /** Reads the last completed index from its cache; derived tree/class topics exist only when present. */
   readStructure?(): Promise<CachedStructure | undefined>;
+  /** Durable stage checkpoint for a paused initialization; omitted by callers without a workspace. */
+  checkpoint?: ProjectInitializationCheckpointStore;
   evidenceSnapshot?: (path: string) => Promise<{ contentHash: string } | undefined>;
   diagramRegistry?: ProjectDiagramAdapterRegistry;
   projectAiProvider?: ProjectAiProvider;
@@ -165,6 +168,34 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
   let lastEvidence: ProjectEvidenceSummary | undefined;
   let structureCache: CachedStructure | undefined;
   let structureRead = false;
+  /** Last checkpoint seen on disk; decorates a stopped state so the page can offer resume. */
+  let checkpointInfo: ProjectModelCheckpoint | undefined;
+  let resumeCheckpoint: ProjectModelCheckpoint | undefined;
+  let resumeSettingsFingerprint = "";
+  const checkpointStore: ProjectInitializationCheckpointStore | undefined = options.checkpoint ? {
+    read: () => options.checkpoint!.read(),
+    write: async (checkpoint) => { await options.checkpoint!.write(checkpoint); checkpointInfo = checkpoint; },
+    clear: async () => { checkpointInfo = undefined; await options.checkpoint!.clear(); }
+  } : undefined;
+  const refreshCheckpoint = async (): Promise<void> => {
+    if (!checkpointStore) { checkpointInfo = undefined; return; }
+    checkpointInfo = await checkpointStore.read();
+  };
+  const checkpointSettingsFingerprint = (): string => JSON.stringify({
+    cli: selectedAiCli ?? null,
+    model: selectedAiModel ?? null,
+    reasoning: selectedAiReasoning ?? null,
+    speed: selectedAiSpeed ?? null
+  });
+  const decorateInitialization = (state: ProjectInitializationState): ProjectInitializationState => {
+    if (state.status !== "cancelled" || !checkpointInfo) return state;
+    return {
+      ...state,
+      resumable: true,
+      resumeStage: checkpointInfo.stage,
+      resumePercent: projectInitializationPercent("generating", checkpointInfo.fraction)
+    };
+  };
   const tasks = new DiagramTaskRegistry();
   const listeners = new Set<(message: ProjectPanelMessage) => void>();
   const post = (message: ProjectPanelMessage): void => { for (const listener of listeners) listener(message); };
@@ -213,7 +244,10 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
       return service.generateProjectModel(evidence, {
         signal,
         onProgress: (progress) => onProgress({ phase: "generating", fraction: progress.fraction, message: progress.message }),
-        onEvent: (event) => onOutput(activityLine(event))
+        onEvent: (event) => onOutput(activityLine(event)),
+        settingsFingerprint: resumeSettingsFingerprint,
+        ...(resumeCheckpoint ? { resume: resumeCheckpoint } : {}),
+        ...(checkpointStore ? { checkpoint: checkpointStore } : {})
       });
     },
     persist: async (output, signal, onProgress) => {
@@ -458,6 +492,7 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
   };
 
   const load = async (): Promise<ProjectPanelData> => {
+    await refreshCheckpoint();
     const [objects, architecture, definition, persistedIntent, persistedDiagrams, persistedEvidence] = await Promise.all([
       options.store.readObjects(),
       options.store.readArchitecture(),
@@ -472,12 +507,12 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
       const hydration = options.store.readInitialization
         ? await options.store.readInitialization()
         : { markedInitialized: false, hasIntent: Boolean(persistedIntent), diagramCount: persistedDiagrams?.length ?? 0 };
-      initializationService.hydrate(hydration);
+      initializationService.hydrate({ ...hydration, ...(checkpointInfo ? { checkpoint: { stage: checkpointInfo.stage, fraction: checkpointInfo.fraction } } : {}) });
     }
     if (persistedIntent) generatedIntent = persistedIntent;
     const intent = generatedIntent ?? persistedIntent;
     const diagrams = sortProjectDiagrams(persistedDiagrams ?? []);
-    const initialization = initializationService.snapshot;
+    const initialization = decorateInitialization(initializationService.snapshot);
     const engine = options.diagramRegistry ? await options.diagramRegistry.engineInfo() : undefined;
     const selected = diagrams.find((diagram) => diagram.kind === "architecture") ?? diagrams[0];
     const ruleReport = architectureRuleReport(diagrams, { ...(architecture.diagramId ? { diagramId: architecture.diagramId } : {}), rules: architecture.rules ?? [] });
@@ -554,8 +589,15 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    initialization: () => initializationService.snapshot,
-    onInitializationChange: (listener: (state: ProjectInitializationState) => void): (() => void) => initializationService.subscribe(listener),
+    initialization: () => decorateInitialization(initializationService.snapshot),
+    onInitializationChange: (listener: (state: ProjectInitializationState) => void): (() => void) => initializationService.subscribe((state) => listener(decorateInitialization(state))),
+    // Saving is short and may already have written artifacts; pausing there would make the
+    // "saved knowledge is unchanged" message false, so only the build and AI phases are pausable.
+    pauseInitialization: (): void => {
+      if (initializationService.snapshot.status !== "running") return;
+      if (initializationService.snapshot.phase === "saving") return;
+      initializationService.cancel();
+    },
     checkKnowledge,
     openTopicEvidence,
     generateTopicDiagram,
@@ -570,15 +612,22 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
       if (generating) throw new Error("Wait for module analysis to finish before updating the project model.");
       structureRead = false;
       structureCache = undefined;
+      resumeSettingsFingerprint = checkpointSettingsFingerprint();
+      resumeCheckpoint = checkpointStore ? await checkpointStore.read() : undefined;
+      checkpointInfo = resumeCheckpoint;
+      // A resumed run starts at the checkpoint's percentage; re-indexing reports lower fractions
+      // for the Preparing phase, and the state machine keeps the bar from moving backwards.
+      const resumePercent = resumeCheckpoint ? projectInitializationPercent("generating", resumeCheckpoint.fraction) : 0;
       // Start synchronously so the editor can render the running snapshot before this async method
       // reaches its first await.
-      const task = initializationService.start();
+      const task = initializationService.start(resumePercent);
       // Keep a rejection handler attached even if the optimistic running render fails before the
       // normal await below.
       void task.promise.catch(() => undefined);
       const state = await task.promise;
       if (state.status === "cancelled") throw new Error("Project initialization was cancelled.");
       if (state.status !== "completed") throw new Error(state.error ?? "Project initialization failed.");
+      if (checkpointStore) await checkpointStore.clear();
       return load();
     },
     ...(options.store.readDefinition && options.store.writeDefinition ? {

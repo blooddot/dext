@@ -18,6 +18,8 @@ export interface ProjectEditorDataSource {
   /** Host → webview messages (render results, generation progress, export status). */
   subscribe?(listener: (message: ProjectPanelMessage) => void): () => void;
   initialize?(): Promise<ProjectPanelData>;
+  /** Pauses a running initialization before it starts saving generated artifacts. */
+  pauseInitialization?(): void;
   initialization?(): ProjectInitializationState;
   onInitializationChange?(listener: (state: ProjectInitializationState) => void): () => void;
   setAiCli?(cli?: string): Promise<void> | void;

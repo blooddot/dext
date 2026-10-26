@@ -1,4 +1,4 @@
-import { PROJECT_INITIALIZATION_PHASE_PERCENT, type ProjectInitializationDependencies, type ProjectInitializationHydration, type ProjectInitializationProgressListener, type ProjectInitializationState, type ProjectInitializationTask } from "../contracts/lifecycle.js";
+import { PROJECT_INITIALIZATION_PHASE_PERCENT, projectInitializationPercent, type ProjectInitializationDependencies, type ProjectInitializationHydration, type ProjectInitializationProgressListener, type ProjectInitializationState, type ProjectInitializationTask } from "../contracts/lifecycle.js";
 export type { ProjectInitializationDependencies, ProjectInitializationHydration, ProjectInitializationOutput, ProjectInitializationPhase, ProjectInitializationProgress, ProjectInitializationProgressListener, ProjectInitializationState, ProjectInitializationStatus, ProjectInitializationTask } from "../contracts/lifecycle.js";
 
 function clampFraction(value: number): number {
@@ -67,7 +67,28 @@ export class ProjectInitializationService {
         status: "completed",
         finishedAt: this.now(),
         intentGenerated: true,
-        diagramsGenerated: diagramCount
+        diagramsGenerated: diagramCount,
+        // A saved model is still the completed state, but an interrupted update keeps its
+        // checkpoint resumable; the card explains that Update continues it.
+        ...(input.checkpoint ? {
+          resumable: true,
+          resumeStage: input.checkpoint.stage,
+          resumePercent: projectInitializationPercent("generating", input.checkpoint.fraction)
+        } : {})
+      });
+      return;
+    }
+    if (input.checkpoint) {
+      // The run is gone with the window that owned it, but its completed stages are on disk.
+      // Showing the paused card keeps Continue (and the fingerprint check it performs) reachable.
+      this.replaceState({
+        status: "cancelled",
+        finishedAt: this.now(),
+        intentGenerated: false,
+        diagramsGenerated: diagramCount,
+        resumable: true,
+        resumeStage: input.checkpoint.stage,
+        resumePercent: projectInitializationPercent("generating", input.checkpoint.fraction)
       });
       return;
     }

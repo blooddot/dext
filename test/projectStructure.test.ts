@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { attachProjectStructure, buildProjectEvidencePackage, ProjectAiGenerationService, type ProjectAiRequest } from "../src/features/project/host/generation/projectAiGeneration.js";
 import { buildStructureIndex, structureCacheSchema } from "../src/features/project/host/indexing/projectStructure.js";
+import { projectModelCheckpointSchema, type ProjectInitializationCheckpointStore, type ProjectModelCheckpoint } from "../src/features/project/host/generation/projectModelCheckpoint.js";
 import { structureCandidates, type StructureCandidate } from "../src/features/project/host/indexing/projectStructureKnowledge.js";
 import { buildProjectTopics } from "../src/features/project/knowledge/projectTopics.js";
 
@@ -121,6 +122,177 @@ describe("structure-driven AI generation", () => {
     const files = candidates.flatMap(candidate => candidate.files);
     return { text: JSON.stringify({ contexts: (omit ? files.slice(1) : files).map(file => ({ canonicalName: file.path, purpose: "A feature module", sourceFiles: [file.path], entryPoints: [file.path] })) }) };
   }
+
+  function captureCheckpoints() {
+    const checkpoints: ProjectModelCheckpoint[] = [];
+    let clears = 0;
+    const store: ProjectInitializationCheckpointStore = {
+      read: async () => undefined,
+      write: async (checkpoint) => { checkpoints.push(structuredClone(checkpoint)); },
+      clear: async () => { clears += 1; }
+    };
+    return { store, checkpoints, clears: () => clears };
+  }
+
+  it("resumes from a saved batch checkpoint instead of repeating completed batches", async () => {
+    const { evidence } = await setup();
+    const firstCapture = captureCheckpoints();
+    const firstRequests: ProjectAiRequest[] = [];
+    const firstService = new ProjectAiGenerationService({ id: "fixture", generate: async request => { firstRequests.push(request); return reply(request); } }, { maxAttempts: 1 });
+    const full = await firstService.generateProjectModel(evidence, { checkpoint: firstCapture.store, settingsFingerprint: "fixture" });
+    const fullBatches = firstRequests.filter(request => request.prompt.includes("Candidate file facts:")).length;
+    const checkpoint = firstCapture.checkpoints.find(item => item.stage === "batches");
+    expect(checkpoint).toBeDefined();
+    expect(checkpoint!.batches!.length).toBeGreaterThan(0);
+    expect(checkpoint!.batches!.length).toBeLessThan(fullBatches);
+    expect(full.intent.contexts).toHaveLength(25);
+    expect(projectModelCheckpointSchema.safeParse(checkpoint).success).toBe(true);
+    expect(projectModelCheckpointSchema.safeParse(firstCapture.checkpoints.at(-1)).success).toBe(true);
+    expect(projectModelCheckpointSchema.safeParse({ ...checkpoint, version: 1 }).success).toBe(false);
+
+    const resumedRequests: ProjectAiRequest[] = [];
+    const resumedCapture = captureCheckpoints();
+    const resumedService = new ProjectAiGenerationService({ id: "fixture", generate: async request => { resumedRequests.push(request); return reply(request); } }, { maxAttempts: 1 });
+    const resumed = await resumedService.generateProjectModel(evidence, { resume: checkpoint!, checkpoint: resumedCapture.store, settingsFingerprint: "fixture" });
+    const resumedBatches = resumedRequests.filter(request => request.prompt.includes("Candidate file facts:")).length;
+    expect(resumedBatches).toBe(fullBatches - checkpoint!.batches!.length);
+    expect(resumed.intent.contexts).toHaveLength(25);
+    expect(resumedCapture.checkpoints.at(-1)?.stage).toBe("repair");
+  });
+
+  it("resumes when only the parse-cache reuse count changed between runs", async () => {
+    const { index } = await setup();
+    const coverage = (reused: number) => [`Local index: 25 source files, 1 modules; ${reused} reused, 0 issues, 0 unsupported files.`];
+    const cold = attachProjectStructure(buildProjectEvidencePackage({ files: [{ path: "README.md", content: "A modular application." }], coverage: coverage(0) }, { maxTotalChars: 48_000 }), { ...index.summary, cached: 0 });
+    const firstCapture = captureCheckpoints();
+    const firstRequests: ProjectAiRequest[] = [];
+    const firstService = new ProjectAiGenerationService({ id: "fixture", generate: async request => { firstRequests.push(request); return reply(request); } }, { maxAttempts: 1 });
+    await firstService.generateProjectModel(cold, { checkpoint: firstCapture.store, settingsFingerprint: "fixture" });
+    const fullBatches = firstRequests.filter(request => request.prompt.includes("Candidate file facts:")).length;
+    const checkpoint = firstCapture.checkpoints.find(item => item.stage === "batches")!;
+
+    // A resumed run reuses the parse cache: its summary reports every file as cached and the
+    // coverage line says so. Neither is model input, so the checkpoint must still apply.
+    const warmed = attachProjectStructure(buildProjectEvidencePackage({ files: [{ path: "README.md", content: "A modular application." }], coverage: coverage(25) }, { maxTotalChars: 48_000 }), { ...index.summary, cached: 25 });
+    expect(warmed.inputHash).toBe(cold.inputHash);
+
+    const requests: ProjectAiRequest[] = [];
+    const resumedCapture = captureCheckpoints();
+    const service = new ProjectAiGenerationService({ id: "fixture", generate: async request => { requests.push(request); return reply(request); } }, { maxAttempts: 1 });
+    await service.generateProjectModel(warmed, { resume: checkpoint, checkpoint: resumedCapture.store, settingsFingerprint: "fixture" });
+    expect(resumedCapture.clears()).toBe(0);
+    expect(requests.filter(request => request.prompt.includes("Candidate file facts:")).length).toBe(fullBatches - checkpoint.batches!.length);
+  });
+
+  it("reuses the completed batches whose inputs are unchanged after a source edit", async () => {
+    const evidenceFor = (edit: Record<string, string> = {}) => {
+      const inputs = Array.from({ length: 25 }, (_, i) => `src/features/feature${i}.ts`)
+        .map(path => ({ path, content: edit[path] ?? `export function feature${path.match(/\d+/)![0]}() {}` }));
+      return buildStructureIndex(inputs);
+    };
+    const first = await evidenceFor();
+    const cold = attachProjectStructure(buildProjectEvidencePackage({ files: [{ path: "README.md", content: "A modular application." }] }, { maxTotalChars: 48_000 }), first.summary);
+    const firstCapture = captureCheckpoints();
+    const firstRequests: ProjectAiRequest[] = [];
+    const firstService = new ProjectAiGenerationService({ id: "fixture", generate: async request => { firstRequests.push(request); return reply(request); } }, { maxAttempts: 1 });
+    await firstService.generateProjectModel(cold, { checkpoint: firstCapture.store, settingsFingerprint: "fixture" });
+    const fullBatches = firstRequests.filter(request => request.prompt.includes("Candidate file facts:")).length;
+    const checkpoint = firstCapture.checkpoints.filter(item => item.stage === "batches").at(-1)!;
+    expect(checkpoint.batches).toHaveLength(fullBatches);
+
+    // One file changes, so the aggregate structure hash no longer matches. Only the batch built
+    // from that file should be sent to the model again.
+    const second = await evidenceFor({ "src/features/feature0.ts": "export function feature0() { return 1; }" });
+    expect(second.summary.hash).not.toBe(first.summary.hash);
+    const edited = attachProjectStructure(buildProjectEvidencePackage({ files: [{ path: "README.md", content: "A modular application." }] }, { maxTotalChars: 48_000 }), second.summary);
+    const requests: ProjectAiRequest[] = [];
+    const events: string[] = [];
+    const partialCapture = captureCheckpoints();
+    const service = new ProjectAiGenerationService({ id: "fixture", generate: async request => { requests.push(request); return reply(request); } }, { maxAttempts: 1 });
+    const result = await service.generateProjectModel(edited, { resume: checkpoint, checkpoint: partialCapture.store, settingsFingerprint: "fixture", onEvent: (event) => events.push(`${event.title ?? ""} ${event.text ?? ""}`) });
+    const regenerated = requests.filter(request => request.prompt.includes("Candidate file facts:")).length;
+    expect(regenerated).toBe(1);
+    expect(regenerated).toBeLessThan(fullBatches);
+    expect(partialCapture.clears()).toBe(0);
+    expect(events.join(" ")).toContain("reused");
+    expect(result.intent.contexts.flatMap(context => context.sourceFiles ?? [])).toHaveLength(25);
+    expect(new Set(result.intent.contexts.flatMap(context => context.sourceFiles ?? [])).size).toBe(25);
+  });
+
+  it("reuses completed batches that survive re-packing when a file is added", async () => {
+    const files = (extra: boolean) => Array.from({ length: extra ? 26 : 25 }, (_, i) => ({ path: `src/features/feature${i}.ts`, content: `export function feature${i}() {}` }));
+    const first = await buildStructureIndex(files(false));
+    const cold = attachProjectStructure(buildProjectEvidencePackage({ files: [{ path: "README.md", content: "A modular application." }] }, { maxTotalChars: 48_000 }), first.summary);
+    const firstCapture = captureCheckpoints();
+    const firstService = new ProjectAiGenerationService({ id: "fixture", generate: async request => reply(request) }, { maxAttempts: 1 });
+    await firstService.generateProjectModel(cold, { checkpoint: firstCapture.store, settingsFingerprint: "fixture" });
+    const fullBatches = firstCapture.checkpoints.filter(item => item.stage === "batches").at(-1)!.batches!.length;
+    const checkpoint = firstCapture.checkpoints.filter(item => item.stage === "batches").at(-1)!;
+
+    // The added file changes the index counters in the coverage text and `omitted`, which are not
+    // part of a batch's identity. Adding a candidate can shift the tail of the packed batch list,
+    // so the batches that survive the new packing are reused and only the shifted ones regenerate.
+    const second = await buildStructureIndex(files(true));
+    const grown = attachProjectStructure(buildProjectEvidencePackage({ files: [{ path: "README.md", content: "A modular application." }] }, { maxTotalChars: 48_000 }), second.summary);
+    const requests: ProjectAiRequest[] = [];
+    const events: string[] = [];
+    const partialCapture = captureCheckpoints();
+    const service = new ProjectAiGenerationService({ id: "fixture", generate: async request => { requests.push(request); return reply(request); } }, { maxAttempts: 1 });
+    const result = await service.generateProjectModel(grown, { resume: checkpoint, checkpoint: partialCapture.store, settingsFingerprint: "fixture", onEvent: (event) => events.push(`${event.title ?? ""} ${event.text ?? ""}`) });
+    expect(requests.filter(request => request.prompt.includes("Candidate file facts:")).length).toBeLessThan(fullBatches);
+    expect(partialCapture.clears()).toBe(0);
+    expect(events.join(" ")).toMatch(/\d+ of \d+ completed batches are unchanged/);
+    expect(new Set(result.intent.contexts.flatMap(context => context.sourceFiles ?? [])).size).toBe(26);
+  });
+
+  it("reuses completed batches that survive when a file is deleted", async () => {
+    const files = (drop?: string) => Array.from({ length: 25 }, (_, i) => `src/features/feature${i}.ts`)
+      .filter(path => path !== drop)
+      .map(path => ({ path, content: `export function feature${path.match(/\d+/)![0]}() {}` }));
+    const first = await buildStructureIndex(files());
+    const cold = attachProjectStructure(buildProjectEvidencePackage({ files: [{ path: "README.md", content: "A modular application." }] }, { maxTotalChars: 48_000 }), first.summary);
+    const firstCapture = captureCheckpoints();
+    const firstService = new ProjectAiGenerationService({ id: "fixture", generate: async request => reply(request) }, { maxAttempts: 1 });
+    await firstService.generateProjectModel(cold, { checkpoint: firstCapture.store, settingsFingerprint: "fixture" });
+    const fullBatches = firstCapture.checkpoints.filter(item => item.stage === "batches").at(-1)!.batches!.length;
+    const checkpoint = firstCapture.checkpoints.filter(item => item.stage === "batches").at(-1)!;
+
+    // Deleting the last-packed file removes one candidate from the final batch; the batches before
+    // it keep their exact input and are reused, while every global stage is regenerated.
+    const second = await buildStructureIndex(files("src/features/feature9.ts"));
+    expect(second.summary.hash).not.toBe(first.summary.hash);
+    const shrunk = attachProjectStructure(buildProjectEvidencePackage({ files: [{ path: "README.md", content: "A modular application." }] }, { maxTotalChars: 48_000 }), second.summary);
+    const requests: ProjectAiRequest[] = [];
+    const events: string[] = [];
+    const partialCapture = captureCheckpoints();
+    const service = new ProjectAiGenerationService({ id: "fixture", generate: async request => { requests.push(request); return reply(request); } }, { maxAttempts: 1 });
+    const result = await service.generateProjectModel(shrunk, { resume: checkpoint, checkpoint: partialCapture.store, settingsFingerprint: "fixture", onEvent: (event) => events.push(`${event.title ?? ""} ${event.text ?? ""}`) });
+    const regenerated = requests.filter(request => request.prompt.includes("Candidate file facts:")).length;
+    expect(regenerated).toBeLessThan(fullBatches);
+    expect(partialCapture.clears()).toBe(0);
+    expect(events.join(" ")).toMatch(/\d+ of \d+ completed batches are unchanged/);
+    expect(new Set(result.intent.contexts.flatMap(context => context.sourceFiles ?? [])).size).toBe(24);
+  });
+
+  it("discards a checkpoint when the AI settings fingerprint changed", async () => {
+    const { evidence } = await setup();
+    const firstCapture = captureCheckpoints();
+    const firstRequests: ProjectAiRequest[] = [];
+    const firstService = new ProjectAiGenerationService({ id: "fixture", generate: async request => { firstRequests.push(request); return reply(request); } }, { maxAttempts: 1 });
+    await firstService.generateProjectModel(evidence, { checkpoint: firstCapture.store, settingsFingerprint: "fixture" });
+    const fullBatches = firstRequests.filter(request => request.prompt.includes("Candidate file facts:")).length;
+    const checkpoint = firstCapture.checkpoints.find(item => item.stage === "batches")!;
+
+    const requests: ProjectAiRequest[] = [];
+    const events: string[] = [];
+    const mismatchCapture = captureCheckpoints();
+    const service = new ProjectAiGenerationService({ id: "fixture", generate: async request => { requests.push(request); return reply(request); } }, { maxAttempts: 1 });
+    const result = await service.generateProjectModel(evidence, { resume: checkpoint, checkpoint: mismatchCapture.store, settingsFingerprint: "different-model", onEvent: (event) => events.push(`${event.title ?? ""} ${event.text ?? ""}`) });
+    expect(mismatchCapture.clears()).toBe(1);
+    expect(events.join(" ")).toContain("Project AI settings");
+    expect(requests.filter(request => request.prompt.includes("Candidate file facts:")).length).toBe(fullBatches);
+    expect(result.intent.contexts).toHaveLength(25);
+  });
 
   it("splits one flat directory into responsibilities across bounded batches, then produces shared C4 knowledge", async () => {
     const { evidence } = await setup();

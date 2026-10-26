@@ -11,8 +11,8 @@ class FakePanel implements EditorTabPanelHandle {
   disposed = false;
   dispose(): void { this.disposed = true; }
   reveal(): void { this.revealed += 1; }
-  setHtml(html: string): void { this.html = html; }
-  postMessage(message: unknown): void { this.messages.push(message); }
+  setHtml(html: string): void { if (this.disposed) throw new Error("Webview is disposed"); this.html = html; }
+  postMessage(message: unknown): void { if (this.disposed) throw new Error("Webview is disposed"); this.messages.push(message); }
 }
 
 class FakeHost {
@@ -198,6 +198,51 @@ describe("project editor tab", () => {
     expect(listener).toBeUndefined();
   });
 
+  it("pauses a running initialization through the data source", async () => {
+    let paused = 0;
+    const { provider } = setup({ pauseInitialization: () => { paused += 1; } });
+    await provider.show("overview");
+    await provider.handleMessage(provider.key, { type: "projectInitializePause" });
+    expect(paused).toBe(1);
+  });
+
+  it("starts initialization without a running render when the tab closed first", async () => {
+    const completedData: ProjectPanelData = { ...data, overview: { ...data.overview, initialization: { status: "completed", phase: "saving", intentGenerated: true, diagramsGenerated: 1 } } };
+    const { host, manager, provider } = setup({
+      initialize: async () => completedData
+    });
+    await provider.show("overview");
+    manager.close(provider.key);
+    await provider.handleMessage(provider.key, { type: "projectInitialize" });
+    expect(host.created).toHaveLength(2);
+    expect(host.created[1]!.panel.html).toContain('data-project-page="overview"');
+  });
+
+  it("keeps initialization progress away from a tab that closed while the run was active", async () => {
+    let progress: ((state: unknown) => void) | undefined;
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    const runningData: ProjectPanelData = { ...data, overview: { ...data.overview, initialization: { status: "running", phase: "generating", startedAt: 1 } } };
+    const completedData: ProjectPanelData = { ...data, overview: { ...data.overview, initialization: { status: "completed", phase: "saving", intentGenerated: true, diagramsGenerated: 1 } } };
+    const { host, manager, provider } = setup({
+      onInitializationChange: (next) => { progress = next as (state: unknown) => void; return () => { progress = undefined; }; },
+      initialization: () => runningData.overview.initialization,
+      initialize: async () => { await pending; return completedData; }
+    });
+    await provider.show("overview");
+    const message = provider.handleMessage(provider.key, { type: "projectInitialize" });
+    await Promise.resolve();
+    manager.close(provider.key);
+    // VS Code's Webview throws "Webview is disposed" for a tab that closed mid-run; that must not
+    // abort the AI generation that is only trying to report progress.
+    expect(() => progress?.({ status: "running" })).not.toThrow();
+    expect(() => progress?.({ status: "failed", error: "Generate failed: Webview is disposed" })).not.toThrow();
+    finish();
+    await message;
+    expect(host.created).toHaveLength(2);
+    expect(host.created[1]!.panel.html).toContain('data-project-page="overview"');
+  });
+
   it("keeps the running state visible and preserves the selected page during initialization", async () => {
     let resolveInitialization!: () => void;
     const initializationDone = new Promise<void>((resolve) => { resolveInitialization = resolve; });
@@ -219,5 +264,79 @@ describe("project editor tab", () => {
     await initializeMessage;
     expect(provider.page).toBe("knowledge");
     expect(host.created[0]!.panel.html).toContain('data-project-page="knowledge"');
+  });
+
+  // Pause cancels the state machine synchronously, but the data source's `initialize()` reads the
+  // checkpoint before it starts the run, so its snapshot is still the paused one for a moment. The
+  // card must not be rendered from that stale snapshot, or Continue silently shows paused UI while
+  // progress streams into the hidden block.
+  it("renders the running card as soon as Continue is clicked, before the run starts", async () => {
+    let release!: (value: ProjectPanelData) => void;
+    const pending = new Promise<ProjectPanelData>((resolve) => { release = resolve; });
+    const paused: ProjectPanelData = { ...data, overview: { ...data.overview, initialization: { status: "cancelled", resumable: true, resumeStage: "batches", resumePercent: 52 } } };
+    const { host, provider } = setup({
+      load: async () => paused,
+      initialization: () => paused.overview.initialization,
+      initialize: () => pending
+    });
+    await provider.show("overview");
+    expect(host.created[0]!.panel.html).toContain("Resume initialization");
+    const message = provider.handleMessage(provider.key, { type: "projectInitialize" });
+    await Promise.resolve();
+    expect(host.created[0]!.panel.html).toContain("project-init-running");
+    expect(host.created[0]!.panel.html).toContain("data-project-initialize-pause");
+    release(paused);
+    await message;
+    expect(host.created[0]!.panel.html).toContain("Resume initialization");
+  });
+
+  it("swaps the running card for the paused card while the aborted run is still settling", async () => {
+    let progress: ((state: unknown) => void) | undefined;
+    let release!: (value: ProjectPanelData) => void;
+    const pending = new Promise<ProjectPanelData>((resolve) => { release = resolve; });
+    const runningState = { status: "running" as const, phase: "generating" as const, startedAt: 1, percent: 42 };
+    const running: ProjectPanelData = { ...data, overview: { ...data.overview, initialization: runningState } };
+    const { host, provider } = setup({
+      load: async () => running,
+      initialization: () => runningState,
+      initialize: () => pending,
+      onInitializationChange: (next) => { progress = next as (state: unknown) => void; return () => { progress = undefined; }; }
+    });
+    await provider.show("overview");
+    const message = provider.handleMessage(provider.key, { type: "projectInitialize" });
+    await Promise.resolve();
+    progress?.({ status: "cancelled", resumable: true, resumeStage: "batches", resumePercent: 52 });
+    expect(host.created[0]!.panel.html).toContain("Initialization paused after responsibility batches (52%)");
+    expect(host.created[0]!.panel.html).toContain("Resume initialization");
+    expect(host.created[0]!.panel.html.split("<script>")[0]).not.toContain("data-project-initialize-pause");
+    release(running);
+    await message;
+  });
+
+  it("starts a new run from the paused card while the aborted run is still settling", async () => {
+    let progress: ((state: unknown) => void) | undefined;
+    let rejectFirst!: (error: Error) => void;
+    const first = new Promise<ProjectPanelData>((_, reject) => { rejectFirst = reject; });
+    let calls = 0;
+    const paused: ProjectPanelData = { ...data, overview: { ...data.overview, initialization: { status: "cancelled", resumable: true, resumeStage: "batches", resumePercent: 52 } } };
+    const completed: ProjectPanelData = { ...data, overview: { ...data.overview, initialization: { status: "completed", phase: "saving", intentGenerated: true, diagramsGenerated: 1 } } };
+    const { host, provider } = setup({
+      load: async () => paused,
+      initialization: () => paused.overview.initialization,
+      initialize: () => { calls += 1; return calls === 1 ? first : Promise.resolve(completed); },
+      onInitializationChange: (next) => { progress = next as (state: unknown) => void; return () => { progress = undefined; }; }
+    });
+    await provider.show("overview");
+    const firstClick = provider.handleMessage(provider.key, { type: "projectInitialize" });
+    await Promise.resolve();
+    progress?.({ status: "cancelled", resumable: true, resumeStage: "batches", resumePercent: 52 });
+    const secondClick = provider.handleMessage(provider.key, { type: "projectInitialize" });
+    await secondClick;
+    expect(calls).toBe(2);
+    expect(host.created[0]!.panel.html).toContain('data-project-initialization-state="completed"');
+    rejectFirst(new Error("Project initialization was cancelled."));
+    await firstClick;
+    // The stale run settling must not repaint over the newer result.
+    expect(host.created[0]!.panel.html).toContain('data-project-initialization-state="completed"');
   });
 });

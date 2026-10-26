@@ -43,6 +43,21 @@ describe("Project initialization state machine", () => {
     expect(percents).toEqual([...percents].sort((a, b) => a - b));
   });
 
+  it("starts a resumed run at its checkpoint percentage while re-indexing", async () => {
+    const service = new ProjectInitializationService({
+      prepareEvidence: async (_signal, onProgress) => { onProgress({ phase: "preparing", completed: 1, total: 10, message: "indexing" }); return evidence(); },
+      generate: async () => ({ intent: promptIntent as never }),
+      persist: async () => undefined
+    });
+    const percents: number[] = [];
+    service.subscribe((state) => { if (state.status === "running" && state.percent !== undefined) percents.push(state.percent); });
+    const state = await service.start(53).promise;
+    expect(state.status).toBe("completed");
+    // Re-indexing reports a low Preparing fraction; it must not pull the saved 53% back down.
+    expect(percents[0]).toBe(53);
+    expect(percents.every((percent) => percent >= 53)).toBe(true);
+  });
+
   it("starts uninitialized and never treats an old flag or diagrams alone as success", () => {
     const service = new ProjectInitializationService({
       prepareEvidence: async () => evidence(),
@@ -59,6 +74,30 @@ describe("Project initialization state machine", () => {
     service.hydrate({ hasIntent: true, diagramCount: 1 });
     expect(service.snapshot.status).toBe("completed");
     expect(service.snapshot.intentGenerated).toBe(true);
+  });
+
+  it("offers a durable checkpoint as resumable after a window reload", () => {
+    const service = new ProjectInitializationService({
+      prepareEvidence: async () => evidence(),
+      generate: async () => ({}),
+      persist: async () => undefined
+    });
+    service.hydrate({ hasIntent: false, diagramCount: 0, checkpoint: { stage: "batches", fraction: 0.5 } });
+    expect(service.snapshot).toMatchObject({
+      status: "cancelled",
+      resumable: true,
+      resumeStage: "batches",
+      resumePercent: 53
+    });
+    expect(service.snapshot.message).toBeUndefined();
+    // A saved intent is still the only success; a checkpoint only annotates it as resumable.
+    service.hydrate({ hasIntent: true, diagramCount: 1, checkpoint: { stage: "batches", fraction: 0.5 } });
+    expect(service.snapshot).toMatchObject({
+      status: "completed",
+      resumable: true,
+      resumeStage: "batches",
+      resumePercent: 53
+    });
   });
 
   it("runs prepare → generate → persist and only completes after saving", async () => {
