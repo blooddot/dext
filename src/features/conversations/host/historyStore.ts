@@ -11,7 +11,7 @@ import {
   type DextHistoryRecord,
   type DextHistorySession,
   type PlanStatus,
-  type TurnPlanContext
+  type TurnRecordContext
 } from "../contracts/history.js";
 
 const HISTORY_KEY = "dext.history";
@@ -262,7 +262,7 @@ export class DextHistoryStore implements ConversationHistoryStore {
     sessionId?: string,
     mode?: DextHistoryRecord["mode"],
     turnId?: string,
-    planExecution?: TurnPlanContext
+    turnContext?: TurnRecordContext
   ): Promise<DextHistoryRecord> {
     const { maxOutputLength } = this.limits();
     return this.add({
@@ -270,7 +270,7 @@ export class DextHistoryStore implements ConversationHistoryStore {
       process: storedProcess(process, maxOutputLength),
       output: serializeResponse(response, maxOutputLength),
       ...(mode ? { mode } : {}),
-      ...planExecution,
+      ...turnContext,
       response
     }, sessionId, turnId);
   }
@@ -282,7 +282,7 @@ export class DextHistoryStore implements ConversationHistoryStore {
     sessionId?: string,
     mode?: DextHistoryRecord["mode"],
     turnId?: string,
-    planExecution?: TurnPlanContext
+    turnContext?: TurnRecordContext
   ): Promise<DextHistoryRecord> {
     const message = error instanceof Error ? error.message : String(error);
     const { maxOutputLength } = this.limits();
@@ -291,7 +291,7 @@ export class DextHistoryStore implements ConversationHistoryStore {
       process: storedProcess(process, maxOutputLength),
       output: "",
       ...(mode ? { mode } : {}),
-      ...planExecution,
+      ...turnContext,
       error: bounded(message, maxOutputLength)
     }, sessionId, turnId);
   }

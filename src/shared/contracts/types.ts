@@ -303,6 +303,8 @@ export interface ExecutionMetadata {
   speed?: string;
   serviceTier?: string;
   agentSessionId?: string;
+  /** Where a new Skill resource came from. Import turns never call the model. */
+  resourceSource?: "describe" | "import";
   /** Provider-native session to fork before the next turn, when available. */
   conversationForkFrom?: string;
   /** Persisted provider session to resume after the extension restarts. */

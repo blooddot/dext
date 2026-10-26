@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpDiscoveredTool, McpServerConfig } from "../features/mcp/contracts/mcp.js";
 import type { AgentStreamEvent, RegisteredCallable } from "../shared/contracts/types.js";
 import type { AgentProfile, AgentSelection } from "../features/agents/contracts/agent.js";
+import type { SkillCommandSummary, SkillSummary } from "../features/workflow/contracts/skill.js";
 import {
   conversationRequestSchemas,
   type ConversationSummary as ConversationSummaryContract,
@@ -119,6 +120,13 @@ export interface SidebarState {
   diagnostics: string[];
   agentProfiles: AgentProfile[];
   agentSelection: AgentSelection;
+  /** Installed skills, grouped by pack id. Source paths stay host-side. */
+  skills?: SkillSummary[];
+  /** Commands whose skill can be selected in the composer. */
+  skillCommands?: SkillCommandSummary[];
+  /** Skills are disabled outside a trusted local workspace. */
+  skillsEnabled?: boolean;
+  skillsDisabledReason?: string;
   settings?: {
     diffView: "inline" | "split";
     submitOnEnter: boolean;

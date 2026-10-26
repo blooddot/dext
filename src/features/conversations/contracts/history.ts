@@ -15,6 +15,8 @@ export const DEFAULT_HISTORY_LIMITS: DextHistoryLimits = { maxTurns: 100, maxOut
 
 export type PlanStatus = "new" | "active" | "running" | "completed" | "failed";
 
+export type ResourceSourceKind = "describe" | "import";
+
 export interface DextHistoryRecord {
   id: string;
   /** Optional display name; the original input remains unchanged. */
@@ -32,10 +34,16 @@ export interface DextHistoryRecord {
   planOutcome?: PlanExecutionOutcome;
   response?: InputExecutionResponse;
   error?: string;
+  /** Which creation mode produced a resource draft. */
+  resourceSource?: ResourceSourceKind;
 }
 
 /** The Plan context fields a turn stores with its record. */
 export type TurnPlanContext = Pick<DextHistoryRecord, "executePlan" | "planPath" | "planOutcome">;
+
+/** Everything the coordinator records beside a turn's result. */
+export type TurnRecordContext = TurnPlanContext
+  & Pick<DextHistoryRecord, "resourceSource">;
 
 export interface DextHistorySession {
   id: string;
@@ -77,7 +85,7 @@ export interface ConversationHistoryStore {
     sessionId?: string,
     mode?: DextHistoryRecord["mode"],
     turnId?: string,
-    planExecution?: TurnPlanContext
+    turnContext?: TurnRecordContext
   ): Promise<DextHistoryRecord>;
   addFailure(
     input: string,
@@ -86,6 +94,6 @@ export interface ConversationHistoryStore {
     sessionId?: string,
     mode?: DextHistoryRecord["mode"],
     turnId?: string,
-    planExecution?: TurnPlanContext
+    turnContext?: TurnRecordContext
   ): Promise<DextHistoryRecord>;
 }

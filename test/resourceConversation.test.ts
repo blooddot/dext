@@ -303,6 +303,25 @@ describe("resource conversations", () => {
     expect(harness.history.list()[0]?.turns).toHaveLength(2);
   });
 
+  it("carries the import creation mode through draft, history and retry", async () => {
+    const harness = createSidebarHarness();
+    const sessionId = await harness.seed({ type: "skill", scope: "global" });
+    await harness.receive({ type: "executeInput", mode: "ask", source: "https://github.com/acme/ponytail", resourceSource: "import" });
+    expect(harness.draftResource).toHaveBeenCalledOnce();
+    expect(harness.draftResource.mock.calls[0]?.[2]).toMatchObject({ resourceSource: "import" });
+    const stored = harness.history.list().find((item) => item.id === sessionId);
+    expect(stored?.turns[0]).toMatchObject({ input: "https://github.com/acme/ponytail", resourceSource: "import" });
+    // The tab is not auto-enabled and no skills leak into its selection.
+    const conversation = (harness.sidebar as unknown as {
+      conversation: { controller: { selection(id: string): { skills?: string[] } | undefined } };
+    }).conversation;
+    expect(conversation.controller.selection(sessionId)?.skills).toBeUndefined();
+
+    await harness.sidebar.retryTurn(sessionId, stored!.turns[0]!.id);
+    expect(harness.draftResource).toHaveBeenCalledTimes(2);
+    expect(harness.draftResource.mock.calls[1]?.[2]).toMatchObject({ resourceSource: "import" });
+  });
+
   it("makes a scope change a copy and retains the unsaved document", async () => {
     const harness = createSidebarHarness();
     const sessionId = await harness.seed({

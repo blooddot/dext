@@ -13,7 +13,9 @@ import type { DextReplayEntry } from "../../../runner/dextResumeCache.js";
 import type {
   ConversationHistoryStore,
   DextHistoryRecord,
-  DextHistorySession
+  DextHistorySession,
+  ResourceSourceKind,
+  TurnRecordContext
 } from "../contracts/history.js";
 import type {
   ActiveExecution,
@@ -82,6 +84,8 @@ export interface ExecuteTurnOptions {
   planPath?: string;
   executePlan?: boolean;
   codeContinuation?: readonly DextReplayEntry[];
+  /** Creation mode a resource draft was requested from. Defaults to describe. */
+  resourceSource?: ResourceSourceKind;
 }
 
 /** Owns running turns: the active execution per conversation, its abort
@@ -147,7 +151,7 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
   }
 
   async execute(session: DextHistorySession, mode: "agent" | "ask" | "plan" | "code", source: string, options: ExecuteTurnOptions = {}): Promise<void> {
-    const { planPath, executePlan = false, codeContinuation } = options;
+    const { planPath, executePlan = false, codeContinuation, resourceSource = "describe" } = options;
     const sessionId = session.id;
     if (session.resource) {
       mode = "ask";
@@ -175,6 +179,10 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
     let failed = false;
     let cancelled = false;
     let outcome: PlanExecutionOutcome | undefined = planExecution?.planOutcome;
+    const recordContext = (): TurnRecordContext => ({
+      ...planExecution,
+      ...(session.resource ? { resourceSource } : {})
+    });
     try {
       if (todoProgress) {
         const initial = todoProgress.initial();
@@ -196,6 +204,7 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
         ...(selection.speed ? { speed: selection.speed } : {}),
         ...(selection.serviceTier ? { serviceTier: selection.serviceTier } : {}),
         ...(selection.permission ? { agentPermission: selection.permission } : {}),
+        ...(session.resource ? { resourceSource } : {}),
         agentPreset: harnessPresetOrDefault(selection.agentPreset),
         ...(mode === "code" ? { agentPermission: "full-access" as const } : {}),
         ...(priorConversation ? { conversationContext: priorConversation } : {}),
@@ -292,7 +301,7 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
       // The webview creates the visible row as soon as execution starts. Keep
       // that id when persisting the result so retry/delete actions still point
       // at the stored turn after success or cancellation.
-      const turn = await this.options.history.addSuccess(source, events, response, sessionId, mode, turnId, planExecution);
+      const turn = await this.options.history.addSuccess(source, events, response, sessionId, mode, turnId, recordContext());
       await this.options.sessions.saveProviderSessions(session);
       if (mode === "plan" && !executePlan) {
         const savedPath = response.executions.find((execution) => execution.result.kind === "plan" && execution.result.planPath)?.result;
@@ -312,7 +321,7 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
         planExecution.planOutcome = { status: "cancelled", reason: "Stopped by user. Plan progress is preserved.", rounds: planRun?.rounds ?? 0 };
         outcome = planExecution.planOutcome;
       }
-      const turn = await this.options.history.addFailure(source, events, error, sessionId, mode, turnId, planExecution);
+      const turn = await this.options.history.addFailure(source, events, error, sessionId, mode, turnId, recordContext());
       // A failed Code turn keeps the calls it managed to make, so Continue replays
       // them instead of repeating work that already succeeded. A stop is not a
       // failure to continue from: the user asked for it to end.

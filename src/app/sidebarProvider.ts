@@ -468,7 +468,11 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     await vscode.commands.executeCommand("dext.sidebar.focus");
     this.showChat();
     await this.openConversation(session);
-    await this.run(turn.mode ?? this.application.state().agentSelection.mode ?? "agent", turn.input);
+    if (turn.resourceSource) {
+      await this.run(turn.mode ?? this.application.state().agentSelection.mode ?? "agent", turn.input, undefined, false, undefined, turn.resourceSource);
+    } else {
+      await this.run(turn.mode ?? this.application.state().agentSelection.mode ?? "agent", turn.input);
+    }
   }
 
   async continueTurn(sessionId: string, turnId: string): Promise<void> {
@@ -632,7 +636,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           break;
         }
         case "executeInput":
-          await this.run(request.mode, request.source, request.planPath);
+          await (request.resourceSource
+            ? this.run(request.mode, request.source, request.planPath, false, undefined, request.resourceSource)
+            : this.run(request.mode, request.source, request.planPath));
           break;
         case "openResourceCreator":
           this.conversation.controller.hydrate();
@@ -1078,12 +1084,13 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     return method;
   }
 
-  private async run(mode: "agent" | "ask" | "plan" | "code", source: string, planPath?: string, executePlan = false, codeContinuation?: readonly DextReplayEntry[]): Promise<void> {
+  private async run(mode: "agent" | "ask" | "plan" | "code", source: string, planPath?: string, executePlan = false, codeContinuation?: readonly DextReplayEntry[], resourceSource?: "describe" | "import"): Promise<void> {
     this.conversation.controller.hydrate();
     await this.conversation.coordinator.execute(this.activeSession, mode, normalizeInputReferenceSource(source), {
       ...(planPath !== undefined ? { planPath } : {}),
       executePlan,
-      ...(codeContinuation ? { codeContinuation } : {})
+      ...(codeContinuation ? { codeContinuation } : {}),
+      ...(resourceSource ? { resourceSource } : {})
     });
   }
 
@@ -1315,6 +1322,10 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           <span id="resource-status" class="plan-status" aria-live="polite"></span>
           <button id="resource-preview" class="resource-preview" type="button">Preview</button>
           <button id="resource-save" class="primary resource-save" type="button">Save</button>
+        </div>
+        <div id="resource-source-toggle" class="resource-source-toggle" role="tablist" aria-label="Skill creation mode" hidden>
+          <button id="resource-source-describe" type="button" role="tab" data-resource-source="describe" aria-selected="true">Describe</button>
+          <button id="resource-source-import" type="button" role="tab" data-resource-source="import" aria-selected="false">Import</button>
         </div>
         <section id="input-shell" class="input-panel unified-input">
           <div id="code-editor" class="code-editor" aria-label="Dext input"></div>

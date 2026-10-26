@@ -47,6 +47,7 @@ import { outputExternalLink, outputLinkReference } from "../features/workspace/b
 import { AgentInputView } from "../features/conversations/browser/agentInputView.js";
 import { AgentTodoView } from "../features/conversations/browser/agentTodoView.js";
 import { observeComposerOverflow } from "../features/conversations/browser/composerOverflow.js";
+import { looksLikeGithubUrl } from "../features/resources/domain/skillSource.js";
 import { enableConversationTabDrag } from "../features/conversations/browser/conversationTabDrag.js";
 import { installResultScrollProbe } from "../features/conversations/browser/scrollProbe.js";
 
@@ -108,6 +109,9 @@ const elements = {
   modeControlIcon: element<HTMLElement>("mode-control-icon"),
   modeControlValue: element<HTMLElement>("mode-control-value"),
   modeMenu: element<HTMLElement>("mode-menu"),
+  resourceSourceToggle: element<HTMLElement>("resource-source-toggle"),
+  resourceSourceDescribe: element<HTMLButtonElement>("resource-source-describe"),
+  resourceSourceImport: element<HTMLButtonElement>("resource-source-import"),
   permissionMenuShell: element<HTMLElement>("permission-menu-shell"),
   permissionControl: element<HTMLButtonElement>("permission-control"),
   permissionControlIcon: element<HTMLElement>("permission-control-icon"),
@@ -225,6 +229,9 @@ const PERMISSION_ICON: Record<AgentPermission, string> = {
   "full-access": "codicon-unlock"
 };
 let agentPermission: AgentPermission = "workspace-write";
+type ResourceSource = "describe" | "import";
+let resourceSource: ResourceSource = "describe";
+let resourceSourceKey = "";
 let sidebarState: SidebarState | undefined;
 let lastSidebarState: SidebarState | undefined;
 // The theme is independent of the active conversation. Keep a compact signature so switching tabs
@@ -498,14 +505,16 @@ function updateRunState(): void {
   // Plan's Send are read-only and substitute a confined preset instead.
   const presetRestriction = fullAccessPresetRestriction(inputMode === "agent" || codeMode);
   const resource = activeResource();
+  const importing = pristineNewSkill(resource) && resourceSource === "import";
+  const invalidImport = importing && !looksLikeGithubUrl(editor.source.trim());
   elements.inputSection.dataset.mode = resource ? "resource" : inputMode;
   if (resource) elements.inputSection.dataset.resourceType = resource.type;
   else delete elements.inputSection.dataset.resourceType;
   elements.run.disabled = executing
     ? stopping || !activeTurnId
-    : resourcePending.has(browser.activeId ?? "") || !editor.source.trim() || Boolean(presetRestriction) || (codeMode && (hasErrors || inputKind === "invalid"));
-  elements.runLabel.textContent = executing ? (stopping ? "Stopping" : "Stop") : codeMode ? "Run" : "Send";
-  elements.run.title = !executing && presetRestriction ? presetRestriction : elements.runLabel.textContent;
+    : resourcePending.has(browser.activeId ?? "") || !editor.source.trim() || Boolean(presetRestriction) || (codeMode && (hasErrors || inputKind === "invalid")) || invalidImport;
+  elements.runLabel.textContent = executing ? (stopping ? "Stopping" : "Stop") : importing ? "Import" : codeMode ? "Run" : "Send";
+  elements.run.title = !executing && (invalidImport ? "Paste a public GitHub URL" : presetRestriction) || elements.runLabel.textContent;
   elements.run.setAttribute("aria-label", elements.runLabel.textContent);
   const runIcon = elements.run.querySelector<HTMLElement>("i");
   if (runIcon) runIcon.className = `codicon codicon-${executing ? "debug-stop" : codeMode ? "play" : "arrow-up"}`;
@@ -564,7 +573,11 @@ function run(): void {
   const source = editor.source.trim();
   if (!source || elements.run.disabled) return;
   clearInputError();
-  if (inputMode === "plan" && activePlanPath) {
+  const importing = pristineNewSkill(activeResource()) && resourceSource === "import";
+  if (importing) {
+    if (!looksLikeGithubUrl(source)) return;
+    vscode.postMessage({ type: "executeInput", mode: "ask", source, resourceSource: "import" });
+  } else if (inputMode === "plan" && activePlanPath) {
     vscode.postMessage({ type: "executeInput", mode: inputMode, source, planPath: activePlanPath });
   } else {
     vscode.postMessage({ type: "executeInput", mode: inputMode, source });
@@ -647,8 +660,35 @@ function changeResourceOptions(resourceType: ResourceKind, scope: ResourceScope)
   } else submit();
 }
 
+function pristineNewSkill(resource: ResourceSession | undefined): resource is ResourceSession {
+  return Boolean(resource && resource.type === "skill" && !resource.target && !resource.draft);
+}
+
+/** Describe | Import belongs to one new Skill. A different type, target, draft,
+ * conversation or mode starts a new decision, so the toggle resets to Describe. */
+function renderResourceSource(resource: ResourceSession | undefined): void {
+  const key = [
+    browser.activeId ?? "", inputMode, resource?.type ?? "", resource?.scope ?? "",
+    resource?.target?.path ?? "", resource?.draft ? "draft" : "", pristineNewSkill(resource) ? "new" : ""
+  ].join("|");
+  if (key !== resourceSourceKey) {
+    resourceSourceKey = key;
+    resourceSource = "describe";
+  }
+  const visible = pristineNewSkill(resource);
+  elements.resourceSourceToggle.hidden = !visible;
+  for (const button of [elements.resourceSourceDescribe, elements.resourceSourceImport]) {
+    const selected = button.dataset.resourceSource === resourceSource;
+    button.setAttribute("aria-selected", String(selected));
+    button.classList.toggle("is-selected", selected);
+    button.disabled = composerSelectionLocked();
+  }
+  elements.inputSection.classList.toggle("resource-import", visible && resourceSource === "import");
+}
+
 function renderResourceControls(): void {
   const resource = activeResource();
+  renderResourceSource(resource);
   elements.modeControl.querySelector(".composer-control-label")!.textContent = resource ? "Resource" : "Mode";
   elements.permissionControl.querySelector(".composer-control-label")!.textContent = resource ? "Save to" : "Permission";
   elements.modeControl.title = resource ? "Resource type" : "Mode";
@@ -708,7 +748,10 @@ function renderResourceToolbar(): void {
   elements.resourceStatus.dataset.state = resourceErrors.has(browser.activeId ?? "") ? "error" : !locked && !resource.draft && resource.saved ? "saved" : "idle";
   elements.resourceStatus.textContent = resourceErrors.get(browser.activeId ?? "") ?? (resourcePending.has(browser.activeId ?? "") ? "Working…" : executing ? "Generating…" : resource.draft ? "Unsaved draft" : resource.saved ? "Saved" : resource.target ? "Editing" : "New resource");
   if (fileCount > 1 && !resourceErrors.has(browser.activeId ?? "")) elements.resourceStatus.textContent += ` · ${fileCount} files`;
-  editor.setPlaceholder(resource.target ? `Describe changes to ${resource.target.name}…` : `Describe the ${RESOURCE_LABELS[resource.type]} to create…`);
+  const importing = pristineNewSkill(resource) && resourceSource === "import";
+  editor.setPlaceholder(importing
+    ? "Paste a GitHub URL"
+    : resource.target ? `Describe changes to ${resource.target.name}…` : `Describe the ${RESOURCE_LABELS[resource.type]} to create…`);
 }
 
 function resetMcpAssistantProcess(): void {
@@ -2516,6 +2559,17 @@ elements.resultHeading.addEventListener("keydown", (event) => {
   }
 });
 elements.attachFiles.addEventListener("click", () => vscode.postMessage({ type: "chooseFiles" }));
+for (const button of [elements.resourceSourceDescribe, elements.resourceSourceImport]) {
+  button.addEventListener("click", () => {
+    if (composerSelectionLocked()) return;
+    const next = button.dataset.resourceSource;
+    if (next !== "describe" && next !== "import") return;
+    resourceSource = next;
+    renderResourceControls();
+    updateRunState();
+    editor.focus();
+  });
+}
 elements.composerMore.addEventListener("click", (event) => {
   event.stopPropagation();
   closeComposerMenus();

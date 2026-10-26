@@ -10,6 +10,7 @@ import { resourceFileName, resourceFiles, resourcePathSegments, resourcePrompt, 
 import { buildResourceList, isMcpApiId, renderResourceList, resourceCategory } from "../src/features/resources/presentation/resourceDocuments.js";
 import { createFileResourceDataSource } from "../src/features/resources/host/resourceEditorProvider.js";
 import { describeApiFlow } from "../src/features/workflow/host/apiFlow.js";
+import { SkillCatalog } from "../src/features/workflow/host/skillCatalog.js";
 import type { ResourceEntry } from "../src/features/resources/contracts/resourceDocuments.js";
 
 vi.mock("vscode", () => {
@@ -44,7 +45,7 @@ beforeEach(async () => {
   Object.assign(application, {
     workspaceTrusted: false, resourceWrite: Promise.resolve(),
     storage: { globalStorageUri: { fsPath: root }, attachmentPrompt: (input: string) => `${input}\nResolved attachment context` },
-    registry, reload: vi.fn()
+    registry, reload: vi.fn(), skills: new SkillCatalog()
   });
 });
 afterEach(async () => { vi.restoreAllMocks(); await rm(root, { recursive: true, force: true }); });
@@ -284,12 +285,257 @@ describe("resource documents", () => {
     Object.assign(application, { runtime: { executeConversation: execute } });
     const resource: ResourceSession = { type: "rule", scope: "global", target: { name: "review", path: "review.md", content: "Original rule" } };
     const result = await application.draftResource(resource, "Make it concise", { agentSessionId: "one" });
-    expect(execute.mock.calls[0]).toEqual(["ask", expect.stringContaining("Original rule"), { agentSessionId: "one" }]);
+    expect(execute.mock.calls[0]).toEqual(["ask", expect.stringContaining("Original rule"), { agentSessionId: "one", resourceSource: "describe" }]);
     expect(execute.mock.calls[0]).toEqual(["ask", expect.stringContaining("Resolved attachment context"), expect.anything()]);
     expect(result.draft.content).toBe("Revised rule");
     expect(await readdir(root)).toEqual([]);
     resource.draft = result.draft;
     expect(resourcePrompt(resource, "Continue")).toContain("Revised rule");
+  });
+
+  it("rejects import outside a pristine new Skill before calling the model", async () => {
+    const execute = vi.fn();
+    Object.assign(application, { runtime: { executeConversation: execute } });
+    const cases: ResourceSession[] = [
+      { type: "rule", scope: "global" },
+      { type: "skill", scope: "global", target: { name: "review", path: "review/SKILL.md", content: "# Review" } },
+      { type: "skill", scope: "global", draft: { name: "review", content: "# Review" } }
+    ];
+    for (const resource of cases) {
+      await expect(application.draftResource(resource, "https://github.com/acme/skills", { resourceSource: "import" }))
+        .rejects.toThrow("Import is only available for a new Skill with no existing draft.");
+    }
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("builds an imported Skill pack draft without calling the model and renders the report first", async () => {
+    const execute = vi.fn();
+    Object.assign(application, { runtime: { executeConversation: execute } });
+    const manifest = {
+      name: "ponytail",
+      version: 1 as const,
+      source: "https://github.com/acme/ponytail",
+      importedAt: "2026-10-26T00:00:00.000Z",
+      skills: [
+        { id: "ponytail", name: "Ponytail", description: "Lean code", directory: "skills/ponytail", commands: [], warnings: [] },
+        { id: "ponytail-audit", name: "Audit", description: "Audit code", directory: "skills/ponytail-audit", commands: [], warnings: [] }
+      ],
+      commands: [],
+      analysis: { mode: "deterministic" as const, selected: ["skills/ponytail", "skills/ponytail-audit"], excluded: [], skipped: [] }
+    };
+    const imported = {
+      primarySkillId: "ponytail",
+      report: "# ponytail skill pack\n\nDiscovery: deterministic",
+      manifest,
+      draft: {
+        name: "ponytail",
+        content: "---\nname: ponytail\ndescription: Lean code\n---\n# Ponytail\n",
+        files: [
+          { path: "skills/ponytail-audit/SKILL.md", content: "---\nname: Audit\n---\n# Audit\n" },
+          { path: "skill-packs/ponytail/pack.json", content: JSON.stringify(manifest) },
+          { path: "skill-packs/ponytail/SOURCE.md", content: "# ponytail skill pack" }
+        ]
+      }
+    };
+    const importSkillPack = vi.fn(async () => imported);
+    Object.assign(application, { importSkillPack });
+    const resource: ResourceSession = { type: "skill", scope: "global" };
+    const result = await application.draftResource(resource, "https://github.com/acme/ponytail", { resourceSource: "import" });
+    expect(importSkillPack).toHaveBeenCalledWith("https://github.com/acme/ponytail", expect.objectContaining({ analyzer: expect.any(Function) }));
+    expect(execute).not.toHaveBeenCalled();
+    expect(resource.origin).toBe("import");
+    expect(result.draft).toEqual(imported.draft);
+    const text = result.response.executions[0]!.result.kind === "ask" ? result.response.executions[0]!.result.text : "";
+    expect(text.indexOf("Discovery: deterministic")).toBeLessThan(text.indexOf("Draft: skills/ponytail/SKILL.md"));
+    expect(text).toContain("Draft: skills/ponytail-audit/SKILL.md");
+    expect(text).toContain("Draft: skill-packs/ponytail/pack.json");
+
+    // Retrying an import turn replaces its own unsaved draft.
+    resource.draft = result.draft;
+    await expect(application.draftResource(resource, "https://github.com/acme/ponytail", { resourceSource: "import" }))
+      .resolves.toMatchObject({ draft: imported.draft });
+  });
+
+  it("routes the ambiguity analyzer through structured output or an Ask fallback and emits one status", async () => {
+    const imported = {
+      primarySkillId: "review",
+      report: "report",
+      manifest: {} as never,
+      draft: {
+        name: "review", content: "# Review\n",
+        files: [{ path: "skill-packs/p/pack.json", content: "{}" }]
+      }
+    };
+    let analyzer: ((request: unknown) => Promise<unknown>) | undefined;
+    Object.assign(application, {
+      importSkillPack: vi.fn(async (_input: string, options: { analyzer: (request: unknown) => Promise<unknown> }) => {
+        analyzer = options.analyzer;
+        return imported;
+      }),
+      agents: {
+        currentSelection: () => ({ profileId: "codex", model: "gpt-5", reasoningEffort: "high", speed: "standard", serviceTier: "default" }),
+        list: () => [{ id: "codex", provider: "codex", label: "Codex", command: "codex", models: ["gpt-5"] }]
+      }
+    });
+    const structured = vi.fn(async (_input: string, _schema: object, _metadata: Readonly<Record<string, unknown>>) => {
+      void _input; void _schema; void _metadata;
+      return { text: JSON.stringify({ packName: "p", skillDirectories: ["skills/review"], excluded: [], confidence: "high", summary: "ok" }) };
+    });
+    const ask = vi.fn();
+    const onAgentEvent = vi.fn();
+    Object.assign(application, { runtime: { executeStructuredJson: structured, executeConversation: ask } });
+    await application.draftResource({ type: "skill", scope: "global" }, "https://github.com/acme/skills", {
+      resourceSource: "import", onAgentEvent,
+      model: "gpt-5", reasoningEffort: "high", speed: "standard", serviceTier: "default"
+    });
+    const selection = await analyzer!({
+      repository: "https://github.com/acme/skills",
+      sourceUrl: "https://github.com/acme/skills",
+      candidates: [{ directory: "skills/review", id: "review", fileCount: 1, shallow: "ok" }]
+    });
+    expect(selection).toMatchObject({ packName: "p", skillDirectories: ["skills/review"] });
+    expect(structured).toHaveBeenCalledOnce();
+    expect(ask).not.toHaveBeenCalled();
+    expect(onAgentEvent).toHaveBeenCalledOnce();
+    expect(onAgentEvent.mock.calls[0]?.[0]).toMatchObject({ title: "Analyzing repository structure" });
+    const metadata = structured.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(metadata).toMatchObject({ agent: "codex", model: "gpt-5", reasoningEffort: "high", speed: "standard", serviceTier: "default" });
+    expect(metadata).not.toHaveProperty("ui");
+    expect(metadata).not.toHaveProperty("conversationContext");
+
+    // Harness cannot use the provider structured-output channel, so it asks.
+    Object.assign(application, {
+      agents: {
+        currentSelection: () => ({ profileId: "deepseek-harness" }),
+        list: () => [{ id: "deepseek-harness", provider: "deepseek-harness", label: "Harness", command: "dsh", models: [] }]
+      }
+    });
+    const asked = vi.fn(async () => ({ result: { kind: "ask", text: JSON.stringify({ packName: "p", skillDirectories: ["skills/review"], excluded: [], confidence: "high", summary: "ok" }) } }));
+    Object.assign(application, { runtime: { executeStructuredJson: structured, executeConversation: asked } });
+    await application.draftResource({ type: "skill", scope: "global" }, "https://github.com/acme/skills", { resourceSource: "import" });
+    await analyzer!({
+      repository: "https://github.com/acme/skills", sourceUrl: "https://github.com/acme/skills",
+      candidates: [{ directory: "skills/review", id: "review", fileCount: 1, shallow: "ok" }]
+    });
+    expect(asked).toHaveBeenCalledOnce();
+    expect(structured).toHaveBeenCalledOnce();
+
+    // An unsupported structured channel falls back to Ask.
+    const unsupported = vi.fn(async () => { throw new Error("Agent 'Codex' does not support the provider's native structured output."); });
+    Object.assign(application, {
+      agents: {
+        currentSelection: () => ({ profileId: "codex" }),
+        list: () => [{ id: "codex", provider: "codex", label: "Codex", command: "codex", models: [] }]
+      },
+      runtime: { executeStructuredJson: unsupported, executeConversation: asked }
+    });
+    await application.draftResource({ type: "skill", scope: "global" }, "https://github.com/acme/skills", { resourceSource: "import" });
+    await analyzer!({
+      repository: "https://github.com/acme/skills", sourceUrl: "https://github.com/acme/skills",
+      candidates: [{ directory: "skills/review", id: "review", fileCount: 1, shallow: "ok" }]
+    });
+    expect(asked).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects import shapes before analysis and a bare GitHub URL in Describe mode", async () => {
+    const execute = vi.fn();
+    const importSkillPack = vi.fn();
+    Object.assign(application, { runtime: { executeConversation: execute }, importSkillPack });
+    await expect(application.draftResource({ type: "skill", scope: "global" }, "describe a skill", { resourceSource: "import" }))
+      .rejects.toThrow("Import needs a single public GitHub");
+    expect(importSkillPack).not.toHaveBeenCalled();
+    await expect(application.draftResource({ type: "skill", scope: "global" }, "https://github.com/acme/ponytail"))
+      .rejects.toThrow("Switch to Import");
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("preflights existing pack and skill targets again before writing", async () => {
+    const imported = {
+      primarySkillId: "ponytail",
+      report: "report",
+      manifest: {} as never,
+      draft: {
+        name: "ponytail",
+        content: "---\nname: ponytail\n---\n# Ponytail\n",
+        files: [
+          { path: "skills/ponytail-audit/SKILL.md", content: "# Audit\n" },
+          { path: "skill-packs/ponytail/pack.json", content: "{}" }
+        ]
+      }
+    };
+    Object.assign(application, { importSkillPack: vi.fn(async () => imported) });
+    await mkdir(join(root, "skill-packs", "ponytail"), { recursive: true });
+    await expect(application.draftResource({ type: "skill", scope: "global" }, "https://github.com/acme/ponytail", { resourceSource: "import" }))
+      .rejects.toThrow("already installed");
+
+    await rm(join(root, "skill-packs"), { recursive: true, force: true });
+    await mkdir(join(root, "skills", "ponytail-audit"), { recursive: true });
+    await expect(application.draftResource({ type: "skill", scope: "global" }, "https://github.com/acme/ponytail", { resourceSource: "import" }))
+      .rejects.toThrow("Skill 'ponytail-audit' already exists");
+
+    // A target created between draft and Create is re-checked and nothing is staged.
+    await rm(join(root, "skills"), { recursive: true, force: true });
+    Object.assign(application, { importSkillPack: vi.fn(async () => imported) });
+    const resource: ResourceSession = { type: "skill", scope: "global", origin: "import" };
+    await mkdir(join(root, "skill-packs", "ponytail"), { recursive: true });
+    await expect(application.saveResource({ ...resource, draft: imported.draft })).rejects.toThrow("already installed");
+    await expect(readdir(join(root, "skills"))).rejects.toThrow();
+  });
+
+  it("writes every pack file and reloads a grouped skill catalog", async () => {
+    const manifest = {
+      name: "ponytail",
+      version: 1 as const,
+      source: "https://github.com/acme/ponytail",
+      importedAt: "2026-10-26T00:00:00.000Z",
+      skills: [
+        { id: "ponytail", name: "Ponytail", description: "Lean code", directory: "skills/ponytail", commands: [], warnings: [] },
+        { id: "ponytail-audit", name: "Audit", description: "Audit code", directory: "skills/ponytail-audit", commands: [], warnings: [] }
+      ],
+      commands: [],
+      analysis: { mode: "deterministic" as const, selected: ["skills/ponytail", "skills/ponytail-audit"], excluded: [], skipped: [] }
+    };
+    const draft = {
+      name: "ponytail",
+      content: "---\nname: ponytail\ndescription: Lean code\n---\n# Ponytail\n",
+      files: [
+        { path: "skills/ponytail-audit/SKILL.md", content: "---\nname: Audit\ndescription: Audit code\n---\n# Audit\n" },
+        { path: "skill-packs/ponytail/pack.json", content: `${JSON.stringify(manifest, null, 2)}\n` },
+        { path: "skill-packs/ponytail/SOURCE.md", content: "# pack\n" }
+      ]
+    };
+    const saved = await application.saveResource({ type: "skill", scope: "global", origin: "import", draft });
+    expect(saved.path).toBe("ponytail/SKILL.md");
+    expect(await readFile(join(root, "skills/ponytail/SKILL.md"), "utf8")).toContain("name: ponytail");
+    expect(await readFile(join(root, "skills/ponytail-audit/SKILL.md"), "utf8")).toContain("name: Audit");
+    expect(await readFile(join(root, "skill-packs/ponytail/pack.json"), "utf8")).toContain('"ponytail-audit"');
+
+    await application.skills.reload(root, [], join(root, "skills"));
+    expect(application.skills.list()).toMatchObject([
+      { id: "ponytail", packId: "ponytail", packName: "ponytail" },
+      { id: "ponytail-audit", packId: "ponytail", packName: "ponytail" }
+    ]);
+  });
+
+  it("applies per-kind skill limits and allows skill-packs only for imported drafts", async () => {
+    Object.assign(application, { runtime: { executeConversation: vi.fn(async () => ({
+      result: { kind: "ask", text: JSON.stringify({ name: "review", content: "# Review", files: [{ path: "skill-packs/pack/x.md", content: "x" }] }) }
+    })) } });
+    await expect(application.draftResource({ type: "skill", scope: "global" }, "Generate"))
+      .rejects.toThrow("Invalid supporting file path: skill-packs/pack/x.md");
+
+    const many = Array.from({ length: 129 }, (_, index) => ({ path: `skills/review/file-${index}.md`, content: "x" }));
+    Object.assign(application, { runtime: { executeConversation: vi.fn(async () => ({
+      result: { kind: "ask", text: JSON.stringify({ name: "review", content: "# Review", files: many }) }
+    })) } });
+    await expect(application.draftResource({ type: "skill", scope: "global" }, "Generate"))
+      .rejects.toThrow("up to 128 supporting files");
+
+    Object.assign(application, { runtime: { executeConversation: vi.fn(async () => ({
+      result: { kind: "ask", text: JSON.stringify({ name: "review", content: "# Review", files: [{ path: "skills/review/large.md", content: "x".repeat(200_001) }] }) }
+    })) } });
+    await expect(application.draftResource({ type: "skill", scope: "global" }, "Generate"))
+      .rejects.toThrow("Supporting files are empty or too large.");
   });
 
   it("preserves MCP allowlists and comments when updating", async () => {
@@ -343,7 +589,7 @@ describe("resource documents", () => {
     execute.mockImplementation(async () => ({ result: { kind: "ask", text: JSON.stringify({ name: "docs.review", content: "export function main() {}" }) } }));
     const revised = await application.draftResource({ ...resource, draft: result.draft }, "Revise API");
     expect(revised.draft.files).toEqual(result.draft.files);
-    expect(execute.mock.calls[1]).toEqual(["ask", expect.stringContaining("Review with evidence."), {}]);
+    expect(execute.mock.calls[1]).toEqual(["ask", expect.stringContaining("Review with evidence."), { resourceSource: "describe" }]);
     expect(resourcePrompt(resource, "Create")).toContain('rules: ["example.md"]');
   });
 

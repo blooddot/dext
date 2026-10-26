@@ -3818,3 +3818,40 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .composer-menu-optio
   outline: 1px solid var(--vscode-contrastBorder, var(--vscode-foreground));
   outline-offset: -1px;
 }
+
+/* Describe | Import: one explicit choice above the shared Skill input. */
+.resource-source-toggle {
+  display: inline-flex;
+  align-self: flex-start;
+  margin: 0 0 6px 2px;
+  padding: 2px;
+  gap: 2px;
+  border: 1px solid var(--vscode-widget-border, var(--vscode-input-border));
+  border-radius: 6px;
+  background: var(--vscode-input-background);
+}
+.resource-source-toggle[hidden] {
+  display: none;
+}
+.resource-source-toggle button {
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  cursor: pointer;
+}
+.resource-source-toggle button.is-selected {
+  background: var(--vscode-button-secondaryBackground, var(--vscode-button-background));
+  color: var(--vscode-button-secondaryForeground, var(--vscode-button-foreground));
+}
+.resource-source-toggle button:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+}
+.input-section.resource-import #attach-files,
+.input-section.resource-import #attachment-bar {
+  display: none !important;
+}

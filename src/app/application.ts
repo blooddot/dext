@@ -42,7 +42,15 @@ import { splitPlanResponse } from "../features/conversations/domain/planResponse
 import { DextStorage } from "../platform/vscode/dextStorage.js";
 import type { ProjectWorkspaceSettings } from "../features/project/contracts/projectSettings.js";
 import type { ProjectAiProvider } from "../features/project/host/generation/projectAiGeneration.js";
-import { RESOURCE_DIRECTORIES, mergeResourceFiles, resourceFileName, resourceFiles, resourcePathSegments, resourcePrompt, type ResourceDocument, type ResourceKind, type ResourceScope, type ResourceSession, type ResourceTarget } from "../features/resources/contracts/resourceSession.js";
+import { RESOURCE_DIRECTORIES, mergeResourceFiles, resourceFileName, resourceFiles, resourcePathSegments, resourcePrompt, type ResourceDocument, type ResourceFileLimits, type ResourceKind, type ResourceScope, type ResourceSession, type ResourceTarget } from "../features/resources/contracts/resourceSession.js";
+import { importSkillPack, preflightSkillPack, SKILL_PACK_MAX_FILES, type ImportSkillPackOptions, type SkillPackDraft } from "../features/resources/host/skillImporter.js";
+import { looksLikeGithubUrl } from "../features/resources/domain/skillSource.js";
+import {
+  parseSkillImportSelectionText,
+  skillImportPrompt,
+  SKILL_IMPORT_SELECTION_JSON_SCHEMA,
+  type SkillImportAnalyzer
+} from "../features/resources/domain/skillImportAnalysis.js";
 
 /** How many API modules the composer's TypeScript worker is given, and how many
  * bytes of source, so a large workspace cannot flood the Webview channel. */
@@ -751,6 +759,17 @@ export class DextApplication {
       },
       agentProfiles: this.agentProfiles(),
       agentSelection: this.agents.currentSelection(),
+      skills: this.skills.list().map((skill) => ({
+        id: skill.id,
+        title: skill.title,
+        description: skill.description,
+        commandIds: [...skill.commandIds],
+        ...(skill.packId ? { packId: skill.packId } : {}),
+        ...(skill.packName ? { packName: skill.packName } : {})
+      })),
+      skillCommands: this.skills.commands(),
+      skillsEnabled: this.workspaceTrusted,
+      ...(this.workspaceTrusted ? {} : { skillsDisabledReason: "Skills require a trusted local workspace." }),
       settings: this.webviewSettings()
     };
   }
@@ -957,22 +976,16 @@ export class DextApplication {
     }
   }
 
-  async draftResource(resource: ResourceSession, input: string, metadata: Readonly<ExecutionMetadata> = {}): Promise<{ draft: ResourceDocument; response: InputExecutionResponse }> {
-    if (!input.trim()) throw new Error("Describe the resource or the changes to make.");
-    this.resourceRoot(resource.type, resource.scope);
-    const response = await this.runtime.executeConversation("ask", resourcePrompt(resource, this.storage.attachmentPrompt(input)), metadata);
-    if (response.result.kind !== "ask") throw new Error("The selected Agent did not return resource text.");
-    const value = agentResultCandidates(response.result.text)[0]?.value;
-    if (value === undefined) throw new Error("The Agent returned invalid resource JSON. Refine the request and try again.");
-    if (typeof value.name !== "string" || typeof value.content !== "string") throw new Error("The resource needs a name and content.");
-    const files = mergeResourceFiles((resource.draft ?? resource.target)?.files, value.files);
-    const draft: ResourceDocument = { name: resource.target?.name ?? value.name.trim(), content: value.content, ...(files.length ? { files } : {}) };
-    if (!resource.target) resourceFileName(resource.type, draft.name);
-    this.validateResource(resource.type, draft);
-    const flowIssues = resource.type === "api" ? await this.apiFlowIssues(draft.content) : [];
-    // Keep generated JSON out of the final conversation response; show the actual document.
+  private resourceFileLimits(resource: Pick<ResourceSession, "type" | "origin">): ResourceFileLimits {
+    return resource.type === "skill"
+      ? { maxFiles: SKILL_PACK_MAX_FILES, allowSkillPacks: resource.origin === "import" }
+      : {};
+  }
+
+  /** Renders a reviewed draft as the chat-visible document list. */
+  private renderDraftText(resource: ResourceSession, draft: ResourceDocument, files: readonly { path: string; content: string }[], flowIssues: readonly ApiFlowIssue[] = []): string {
     const documents = [{ path: resource.target?.path ?? resourceFileName(resource.type, draft.name), content: draft.content }, ...files];
-    response.result.text = documents.map((file, index) => {
+    return documents.map((file, index) => {
       const fence = "`".repeat(Math.max(3, ...Array.from(file.content.matchAll(/`+/g), (match) => match[0].length + 1)));
       const language = file.path.endsWith(".ts") ? "typescript" : /\.jsonc?$/.test(file.path) ? "jsonc" : "text";
       const path = index === 0 && resource.type !== "file" ? `${RESOURCE_DIRECTORIES[resource.type]}/${file.path}` : file.path;
@@ -980,6 +993,151 @@ export class DextApplication {
       return `Draft: ${label}\n\n${fence}${language}\n${file.content}\n${fence}`;
     }).join("\n\n") + (flowIssues.length ? `\n\n${this.apiFlowIssueText(flowIssues)}` : "")
       + "\n\nReview all draft files, then save or describe further changes.";
+  }
+
+  /** A path lookup relative to the `.dext/` (or global) root. */
+  private async resourceTargetExists(base: vscode.Uri, relativePath: string): Promise<boolean> {
+    try {
+      await vscode.workspace.fs.stat(vscode.Uri.joinPath(base, ...relativePath.split("/")));
+      return true;
+    } catch (error) {
+      if (error instanceof vscode.FileSystemError && error.code === "FileNotFound") return false;
+      throw error;
+    }
+  }
+
+  private resourceBase(scope: ResourceScope): vscode.Uri {
+    return vscode.Uri.joinPath(this.resourceRoot("rule", scope), "..");
+  }
+
+  /** Re-checks an imported pack against the target scope. Run both before the
+   * draft is shown and immediately before writing. */
+  private async preflightImportedSkill(resource: ResourceSession, draft: ResourceDocument): Promise<string[]> {
+    const base = this.resourceBase(resource.scope);
+    let otherBase: vscode.Uri | undefined;
+    if (resource.scope === "project") otherBase = vscode.Uri.joinPath(this.storage.globalStorageUri, "rules", "..");
+    else {
+      try { otherBase = this.resourceBase("project"); } catch { /* No trusted project is an expected case. */ }
+    }
+    const other = otherBase;
+    return (await preflightSkillPack(draft, {
+      exists: (relativePath) => this.resourceTargetExists(base, relativePath),
+      ...(other ? { otherScopeExists: (relativePath: string) => this.resourceTargetExists(other, relativePath) } : {})
+    })).warnings;
+  }
+
+  /** One narrow, read-only analysis call. It selects directories; it never
+   * writes files or returns SKILL.md contents. */
+  private skillImportAnalyzer(metadata: Readonly<ExecutionMetadata>): SkillImportAnalyzer {
+    return async (request) => {
+      const selection = this.agents.currentSelection();
+      const profileId = metadata.agent ?? selection.profileId;
+      const profile = (profileId ? this.agents.list().find((candidate) => candidate.id === profileId) : undefined)
+        ?? this.agents.list()[0];
+      const narrow = {
+        ...(profile ? { agent: profile.id } : {}),
+        ...(metadata.model ? { model: metadata.model } : {}),
+        ...(metadata.reasoningEffort ? { reasoningEffort: metadata.reasoningEffort } : {}),
+        ...(metadata.speed ? { speed: metadata.speed } : {}),
+        ...(metadata.serviceTier ? { serviceTier: metadata.serviceTier } : {}),
+        ...(metadata.signal ? { signal: metadata.signal } : {})
+      };
+      let announced = false;
+      const announce = (): void => {
+        if (announced) return;
+        announced = true;
+        metadata.onAgentEvent?.({
+          phase: "tool", toolKind: "step", solo: true, done: true,
+          title: "Analyzing repository structure",
+          text: "Choosing the Skill directories to import."
+        });
+      };
+      announce();
+      const prompt = skillImportPrompt(request);
+      let text: string;
+      if (profile?.provider === "deepseek-harness") {
+        const response = await this.runtime.executeConversation("ask", prompt, narrow);
+        if (response.result.kind !== "ask") throw new Error("The analyzer did not return text.");
+        text = response.result.text;
+      } else {
+        try {
+          text = (await this.runtime.executeStructuredJson(prompt, SKILL_IMPORT_SELECTION_JSON_SCHEMA, narrow)).text;
+        } catch (error) {
+          if (metadata.signal?.aborted) throw error;
+          const message = error instanceof Error ? error.message : String(error);
+          if (!/does not support/.test(message)) throw error;
+          const response = await this.runtime.executeConversation("ask", prompt, narrow);
+          if (response.result.kind !== "ask") throw new Error("The analyzer did not return text.");
+          text = response.result.text;
+        }
+      }
+      return parseSkillImportSelectionText(text);
+    };
+  }
+
+  /** Seam for host tests: an import never needs a real network call to prove
+   * the draft, response and preflight wiring. */
+  protected importSkillPack(input: string, options: ImportSkillPackOptions): Promise<SkillPackDraft> {
+    return importSkillPack(input, options);
+  }
+
+  async draftResource(resource: ResourceSession, input: string, metadata: Readonly<ExecutionMetadata> = {}): Promise<{ draft: ResourceDocument; response: InputExecutionResponse }> {
+    if (!input.trim()) throw new Error("Describe the resource or the changes to make.");
+    this.resourceRoot(resource.type, resource.scope);
+    const resourceSource = metadata.resourceSource ?? "describe";
+    // Import is a deterministic installer for a new Skill. A draft produced by
+    // an earlier import may be replaced on retry; a model draft or an existing
+    // saved resource may not.
+    if (resourceSource === "import" && (resource.type !== "skill" || resource.target
+      || (resource.draft && resource.origin !== "import"))) {
+      throw new Error("Import is only available for a new Skill with no existing draft.");
+    }
+    if (resourceSource === "import") {
+      if (!looksLikeGithubUrl(input)) {
+        throw new Error("Import needs a single public GitHub repository, tree, or SKILL.md URL.");
+      }
+      const started = Date.now();
+      const imported = await this.importSkillPack(input.trim(), {
+        analyzer: this.skillImportAnalyzer(metadata),
+        ...(metadata.signal ? { signal: metadata.signal } : {})
+      });
+      resource.origin = "import";
+      const warnings = await this.preflightImportedSkill(resource, imported.draft);
+      this.validateResource("skill", imported.draft);
+      const report = warnings.length
+        ? `${imported.report}\n\n## Warnings\n${warnings.map((warning) => `- ${warning}`).join("\n")}`
+        : imported.report;
+      const text = `${report}\n\n${this.renderDraftText(resource, imported.draft, imported.draft.files ?? [])}`;
+      const execution = {
+        invocation: {
+          kind: "invocation" as const,
+          method: "ask",
+          arguments: [{ name: "input", value: input.trim() }],
+          source: "chat" as const
+        },
+        method: { id: "ask", title: "Ask", kind: "command" as const, source: "builtin" as const },
+        result: { kind: "ask" as const, text },
+        durationMs: Date.now() - started
+      };
+      return { draft: imported.draft, response: { kind: "workflow", executions: [execution] } };
+    }
+    if (resource.type === "skill" && !resource.target && looksLikeGithubUrl(input)) {
+      throw new Error("This is a GitHub URL. Switch to Import to install a Skill from it.");
+    }
+    if (resource.type === "skill" && !resource.target) resource.origin = "describe";
+    const response = await this.runtime.executeConversation("ask", resourcePrompt(resource, this.storage.attachmentPrompt(input)), { ...metadata, resourceSource });
+    if (response.result.kind !== "ask") throw new Error("The selected Agent did not return resource text.");
+    const value = agentResultCandidates(response.result.text)[0]?.value;
+    if (value === undefined) throw new Error("The Agent returned invalid resource JSON. Refine the request and try again.");
+    if (typeof value.name !== "string" || typeof value.content !== "string") throw new Error("The resource needs a name and content.");
+    const limits = this.resourceFileLimits(resource);
+    const files = mergeResourceFiles((resource.draft ?? resource.target)?.files, value.files, limits);
+    const draft: ResourceDocument = { name: resource.target?.name ?? value.name.trim(), content: value.content, ...(files.length ? { files } : {}) };
+    if (!resource.target) resourceFileName(resource.type, draft.name);
+    this.validateResource(resource.type, draft);
+    const flowIssues = resource.type === "api" ? await this.apiFlowIssues(draft.content) : [];
+    // Keep generated JSON out of the final conversation response; show the actual document.
+    response.result.text = this.renderDraftText(resource, draft, files, flowIssues);
     return { draft, response: { kind: "workflow", executions: [response] } };
   }
 
@@ -1002,11 +1160,17 @@ export class DextApplication {
         throw new Error(`${this.apiFlowIssueText(issues)}\n\nA new API must keep each top-level Dext API call in its own named wrapper and compose the wrappers in the entry function.`);
       }
     }
+    // A pack install names directories, not individual files, so check the
+    // pack and skill roots as well as every destination file.
+    if (type === "skill" && resource.origin === "import") {
+      await this.preflightImportedSkill(resource, draft);
+    }
     const path = target?.path ?? resourceFileName(type, draft.name);
     const normalize = (content: string): string => content.endsWith("\n") ? content : `${content}\n`;
     const content = normalize(draft.content);
-    const files = mergeResourceFiles(target?.files, draft.files).map((file) => ({ ...file, content: normalize(file.content) }));
-    const previousFiles = new Map(resourceFiles(target?.files).map((file) => [file.path, file.content]));
+    const limits = this.resourceFileLimits(resource);
+    const files = mergeResourceFiles(target?.files, draft.files, limits).map((file) => ({ ...file, content: normalize(file.content) }));
+    const previousFiles = new Map(resourceFiles(target?.files, limits).map((file) => [file.path, file.content]));
     const uri = vscode.Uri.joinPath(this.resourceRoot(type, scope), ...resourcePathSegments(type, path));
     const supportingRoot = files.length ? vscode.Uri.joinPath(this.resourceRoot("rule", scope), "..") : undefined;
     const writes = [
@@ -1151,10 +1315,10 @@ export class DextApplication {
   async executeInput(
     source: string,
     metadata: Readonly<ExecutionMetadata> = {},
-    run: { resume?: readonly DextReplayEntry[]; onCallLog?: (entries: readonly DextReplayEntry[]) => void } = {}
+    run: { resume?: readonly DextReplayEntry[]; onCallLog?: (entries: readonly DextReplayEntry[]) => void; resourceSource?: "describe" | "import" } = {}
   ): Promise<InputExecutionResponse> {
     return this.kernelHost().runSource(source, {
-      execution: metadata,
+      execution: { ...metadata, ...(run.resourceSource ? { resourceSource: run.resourceSource } : {}) },
       ...(metadata.signal ? { signal: metadata.signal } : {}),
       ...(run.resume ? { resume: run.resume } : {}),
       ...(run.onCallLog ? { onCallLog: run.onCallLog } : {}),

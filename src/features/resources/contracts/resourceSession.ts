@@ -28,6 +28,9 @@ export interface ResourceSession {
   target?: ResourceTarget;
   draft?: ResourceDocument;
   saved?: boolean;
+  /** How a new Skill draft was produced. Imported packs are the only drafts
+   * allowed to write below `skill-packs/`, and their targets are preflighted. */
+  origin?: "describe" | "import";
 }
 
 export function resourceFileName(type: ResourceKind, name: string): string {
@@ -90,16 +93,28 @@ export function resourcePrompt(resource: ResourceSession, input: string): string
 }
 
 /** Validate model output before any path reaches the filesystem. */
-export function resourceFiles(value: unknown): ResourceFile[] {
+export interface ResourceFileLimits {
+  maxFiles?: number;
+  maxFileBytes?: number;
+  maxTotalBytes?: number;
+  /** Imported Skill packs are the only drafts allowed below skill-packs/. */
+  allowSkillPacks?: boolean;
+}
+
+export function resourceFiles(value: unknown, limits: ResourceFileLimits = {}): ResourceFile[] {
   if (value === undefined) return [];
-  if (!Array.isArray(value) || value.length > 32) throw new Error("A resource may include up to 32 supporting files.");
+  const maxFiles = limits.maxFiles ?? 32;
+  const maxFileBytes = limits.maxFileBytes ?? 200_000;
+  const maxTotalBytes = limits.maxTotalBytes ?? 1_000_000;
+  if (!Array.isArray(value) || value.length > maxFiles) throw new Error(`A resource may include up to ${maxFiles} supporting files.`);
+  const allowed = new Set(["rules", "templates", "skills", ...(limits.allowSkillPacks ? ["skill-packs"] : [])]);
   const paths = new Set<string>();
   let size = 0;
   return value.map((file: unknown) => {
     if (!file || typeof file !== "object" || !("path" in file) || typeof file.path !== "string"
       || !("content" in file) || typeof file.content !== "string") throw new Error("Supporting files need a path and content.");
     const parts = resourcePathSegments("file", file.path);
-    if (parts.length < 2 || !["rules", "templates", "skills"].includes(parts[0]!)
+    if (parts.length < 2 || !allowed.has(parts[0]!)
       || (parts[0] === "rules" && !file.path.endsWith(".md"))
       || parts.some((part) => /[<>"|?*]|[. ]$/.test(part) || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part))) {
       throw new Error(`Invalid supporting file path: ${file.path}`);
@@ -108,17 +123,17 @@ export function resourceFiles(value: unknown): ResourceFile[] {
     if (paths.has(key)) throw new Error(`Duplicate supporting file: ${file.path}`);
     paths.add(key);
     size += file.content.length;
-    if (!file.content.trim() || file.content.length > 200_000 || size > 1_000_000) throw new Error("Supporting files are empty or too large.");
+    if (!file.content.trim() || file.content.length > maxFileBytes || size > maxTotalBytes) throw new Error("Supporting files are empty or too large.");
     return { path: file.path, content: file.content };
   });
 }
 
 /** Older single-file responses and partial revisions retain their companions. */
-export function mergeResourceFiles(current: ResourceFile[] | undefined, next: unknown): ResourceFile[] {
-  const merged = new Map(resourceFiles(current).map((file) => [file.path.toLowerCase(), file]));
-  for (const file of resourceFiles(next)) {
+export function mergeResourceFiles(current: ResourceFile[] | undefined, next: unknown, limits: ResourceFileLimits = {}): ResourceFile[] {
+  const merged = new Map(resourceFiles(current, limits).map((file) => [file.path.toLowerCase(), file]));
+  for (const file of resourceFiles(next, limits)) {
     const key = file.path.toLowerCase();
     merged.set(key, { ...file, path: merged.get(key)?.path ?? file.path });
   }
-  return resourceFiles([...merged.values()]);
+  return resourceFiles([...merged.values()], limits);
 }

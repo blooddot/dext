@@ -14,7 +14,8 @@ const conversationSchemaList = [
     type: z.literal("executeInput"),
     mode: z.enum(["agent", "ask", "plan", "code"]),
     source: z.string().min(1),
-    planPath: z.string().min(1).max(512).optional()
+    planPath: z.string().min(1).max(512).optional(),
+    resourceSource: z.enum(["describe", "import"]).optional()
   }),
   z.object({ type: z.literal("stopExecution"), turnId: z.string().min(1) }),
   z.object({
