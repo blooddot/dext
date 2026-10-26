@@ -53,6 +53,15 @@ function patchResponse(apply: boolean, changes: PatchChange[] = [{ uri: "file://
 }
 
 describe("sidebar panel layout", () => {
+  it("advertises Pi permission limitations without upgrading the stored selection", async () => {
+    const main = await source("src/webview/main.ts");
+    expect(main).toContain("writablePermissions");
+    expect(main).toContain("button.disabled = true");
+    expect(main.includes("Pi does not support Workspace write.")).toBe(true);
+    expect(main.includes('button.dataset.permissionDisabled === "true"')).toBe(true);
+    const extension = await source("src/extension.ts");
+    expect(extension).toContain('vscode.Uri.joinPath(context.extensionUri, "media", "pi-extension.mjs")');
+  });
   it("uses prose typography and compact refs for sent Input without changing composer chips", async () => {
     const css = await source("media/styles.css");
     expect(css).not.toContain("--dext-input-line-height");

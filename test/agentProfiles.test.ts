@@ -57,7 +57,8 @@ describe("Agent profile defaults", () => {
   });
 
   it("exposes Harness as the third backend", () => {
-    expect(new AgentProfileStore().list().map((profile) => profile.id)).toEqual(["codex", "claude", "deepseek-harness"]);
+    expect(new AgentProfileStore().list().map((profile) => profile.id)).toEqual(["codex", "claude", "deepseek-harness", "pi"]);
+    expect(new AgentProfileStore().list().find((profile) => profile.id === "pi")?.writablePermissions).toEqual(["full-access"]);
   });
 
   it("can expose only the profiles selected by the user", () => {

@@ -1,7 +1,7 @@
 {
   "name": "dext",
   "displayName": "Dext",
-  "description": "AI coding with Codex, Claude, and DeepSeek. Chat, plan, and automate tasks with reusable workflows.",
+  "description": "AI coding with Codex, Claude, DeepSeek, and optional Pi CLI. Chat, plan, and automate tasks with reusable workflows.",
   "version": "0.1.2",
   "publisher": "blooddot",
   "license": "SEE LICENSE IN LICENSE",
@@ -897,6 +897,11 @@
               },
               "description": "Extra arguments appended to every Claude Code invocation."
             },
+            "pi": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Arguments for the associated Pi CLI. Only repeated --append-system-prompt value pairs are supported; Dext manages RPC, sessions, resources, tools, and permissions."
+            },
             "deepseek-harness": {
               "type": "array",
               "items": {
@@ -918,14 +923,14 @@
           "items": {
             "type": "string"
           },
-          "markdownDescription": "Agent backend IDs shown in the Dext composer: `codex`, `claude`, `deepseek-harness`. Unsupported IDs are rejected."
+          "markdownDescription": "Agent backend IDs shown in the Dext composer: `codex`, `claude`, `deepseek-harness`, and optional `pi`. Associate an already installed Pi using Dext: Configure Agent. Unsupported IDs are rejected."
         },
         "dext.agent.timeoutMs": {
           "type": "integer",
           "default": 0,
           "minimum": 0,
           "maximum": 2147483647,
-          "description": "Maximum total duration of a Codex, Claude, or DeepSeek Harness turn in milliseconds, even while it is producing output. The same limit bounds the one-shot result repair a turn falls back to when its final message is not a valid result. 0 disables this limit. Use dext.agent.idleTimeoutMs to stop stalled turns. Changes apply to new turns."
+          "description": "Maximum total duration of a Codex, Claude, DeepSeek Harness, or Pi turn in milliseconds, even while it is producing output. The same limit bounds supported one-shot result repair calls. 0 disables this limit. Use dext.agent.idleTimeoutMs to stop stalled turns. Changes apply to new turns."
         },
         "dext.agent.idleTimeoutMs": {
           "type": "integer",

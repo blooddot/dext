@@ -11,7 +11,8 @@ import type { ExecutionMetadata, InvocationValue } from "../src/shared/contracts
 const profiles: AgentProfile[] = [
   { id: "codex", provider: "codex", command: "codex", label: "Codex", models: ["gpt-test", "gpt-other"] },
   { id: "claude", provider: "claude", command: "claude", label: "Claude", models: ["sonnet", "opus"] },
-  { id: "deepseek-harness", provider: "deepseek-harness", command: "dsh", label: "Harness", models: [] }
+  { id: "deepseek-harness", provider: "deepseek-harness", command: "dsh", label: "Harness", models: [] },
+  { id: "pi", provider: "pi", command: "pi", label: "Pi", models: [] }
 ];
 
 function setup() {
@@ -37,6 +38,20 @@ function setup() {
 }
 
 describe("per-call built-in CLI options", () => {
+  it.each(["ask", "plan", "agent", "skill", "template", "create"])("specializes %s for Pi without inheriting Codex tiers", (id) => {
+    // `create` is a legacy specialization id; resource creation uses the host
+    // draft flow rather than a public Code callable in this checkout.
+    const definition = BUILTIN_METHODS.find((method) => method.id === id) ?? { ...BUILTIN_METHODS.find((method) => method.id === "ask")!, id };
+    expect(specializeBuiltinCli(definition, "pi").input.find((field) => field.name === "model")).toMatchObject({ type: "object", shapeType: "agent.PiModelOptions" });
+  });
+  it("routes Pi model identity and advertised reasoning without inherited speed", async () => {
+    const { execute, requests } = setup();
+    await execute({ cli: "pi", model: { model: "gateway/org/flash", reasoning: "off" } });
+    expect(requests[0]).toMatchObject({ profile: { provider: "pi" }, model: "gateway/org/flash", reasoningEffort: "off" });
+    expect(requests[0]?.speed).toBeUndefined();
+    await expect(execute({ cli: "pi", model: { model: "gateway/flash", speed: "fast" } })).rejects.toThrow();
+    await expect(execute({ cli: "pi", model: { model: "flash" } })).rejects.toThrow("provider/modelId");
+  });
   it("routes Harness object options without inherited Codex tiers", async () => {
     const { execute, requests } = setup();
     await execute({ cli: "deepseek-harness", model: { model: "opaque-id", reasoning: "off" } });
@@ -155,12 +170,12 @@ describe("built-in CLI contract", () => {
   it("declares the cli enum and the Codex model dictionary", () => {
     const fields = builtinCliFields(profiles);
     expect(fields.map((field) => field.name)).toEqual(["cli", "model"]);
-    expect(fields[0]).toMatchObject({ type: "enum", values: ["codex", "claude", "deepseek-harness"] });
+    expect(fields[0]).toMatchObject({ type: "enum", values: ["codex", "claude", "deepseek-harness", "pi"] });
     expect(modelField(profiles)).toMatchObject({
       type: "enum",
       accepts: ["object"],
       values: ["sonnet", "opus"],
-      shapeType: "agent.ModelOptions"
+      shapeType: "agent.ModelOptions | agent.PiModelOptions"
     });
     expect(modelField(profiles).properties?.find((field) => field.name === "model"))
       .toMatchObject({ type: "enum", values: ["gpt-test", "gpt-other"], required: true });

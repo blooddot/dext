@@ -79,6 +79,8 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   // than before every turn.
   private harnessModelsDiscovered = false;
   private harnessModelDiscovery: Promise<void> | undefined;
+  private readonly piModelsDiscovered = new Set<string>();
+  private readonly piModelDiscoveries = new Map<string, Promise<void>>();
 
   private get activeSession(): DextHistorySession {
     return this.conversation.controller.active();
@@ -191,6 +193,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       // installed or its provider is temporarily unavailable.
       () => undefined
     );
+    void this.discoverPiModelsOnce().then(() => this.refresh()).catch(() => undefined);
     view.onDidDispose(() => {
       if (this.view === view) {
         this.fileSearch.dispose();
@@ -456,6 +459,17 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   private async refreshHarnessPresets(): Promise<void> {
     await this.application.discoverHarnessPresets();
     await this.refresh();
+  }
+
+  private discoverPiModelsOnce(): Promise<void> {
+    const selection = this.conversation.controller.selection(this.activeSession.id) ?? this.application.state().agentSelection;
+    if (selection.profileId !== "pi" || !this.application.agentProfiles().some((profile) => profile.id === "pi")) return Promise.resolve();
+    const key = `${this.application.piDiscoveryKey()}\u0000${selection.model ?? ""}`;
+    if (this.piModelsDiscovered.has(key)) return Promise.resolve();
+    const previous = this.piModelDiscoveries.get(key); if (previous) return previous;
+    const operation = this.application.discoverPiModels(selection.model || undefined).then(() => { this.piModelsDiscovered.add(key); })
+      .finally(() => this.piModelDiscoveries.delete(key));
+    this.piModelDiscoveries.set(key, operation); return operation;
   }
 
   async renameTurn(sessionId: string, turnId: string, title: string): Promise<void> {
@@ -834,6 +848,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           // Publish the accepted selection before storage or ACP discovery can
           // delay it. Execution must also see it if the user sends immediately.
           const refresh = this.refresh();
+          if (selection.profileId === "pi") {
+            void this.discoverPiModelsOnce().then(() => { if (!this.disposed) return this.refresh(); }).catch(() => undefined);
+          }
           if (selection.profileId === "deepseek-harness" && previousProfileId !== "deepseek-harness") {
             this.harnessModelsDiscovered = false;
             void this.discoverHarnessModelsOnce()

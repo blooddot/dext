@@ -21,7 +21,7 @@ vi.mock("vscode", () => ({
   }
 }));
 
-type Provider = "codex" | "claude" | "deepseek-harness";
+type Provider = "codex" | "claude" | "deepseek-harness" | "pi";
 type Metadata = Record<string, unknown>;
 
 function projectRequest(overrides: Partial<ProjectAiRequest> = {}): ProjectAiRequest {
@@ -80,8 +80,8 @@ describe("Project AI transport routing", () => {
     expect(executeStructuredJson).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps the conversation transport for a provider with no schema channel", async () => {
-    const { provider, executeStructuredJson, executeConversation } = build({ provider: "deepseek-harness" });
+  it.each(["deepseek-harness", "pi"] as const)("keeps the conversation transport for %s without a schema channel", async (backend) => {
+    const { provider, executeStructuredJson, executeConversation } = build({ provider: backend });
 
     const response = await provider.generate(projectRequest(), new AbortController().signal);
 

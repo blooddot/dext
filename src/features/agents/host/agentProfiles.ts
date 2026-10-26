@@ -163,7 +163,8 @@ const CLAUDE_MODELS: AgentModelOption[] = [
 const DEFAULT_PROFILES: readonly AgentProfile[] = [
   { id: "codex", label: "Codex CLI", provider: "codex", command: "codex", models: CODEX_MODELS.map((model) => model.id), modelOptions: CODEX_MODELS },
   { id: "claude", label: "Claude CLI", provider: "claude", command: "claude", models: CLAUDE_MODELS.map((model) => model.id), modelOptions: CLAUDE_MODELS },
-  { id: "deepseek-harness", label: "DeepSeek Harness", provider: "deepseek-harness", command: "dsh", models: [] }
+  { id: "deepseek-harness", label: "DeepSeek Harness", provider: "deepseek-harness", command: "dsh", models: [] },
+  { id: "pi", label: "Pi CLI", provider: "pi", command: "pi", models: [], writablePermissions: ["full-access"] }
 ];
 
 function mergeProfiles(stored: readonly StoredAgentProfile[] | undefined): AgentProfile[] {
@@ -178,6 +179,7 @@ function mergeProfiles(stored: readonly StoredAgentProfile[] | undefined): Agent
     return {
       ...defaults,
       ...saved,
+      ...(defaults.provider === "pi" ? { writablePermissions: ["full-access" as const] } : {}),
       models,
       ...(modelOptions.length ? { modelOptions } : {})
     };
@@ -212,6 +214,7 @@ export class AgentProfileStore {
         ...profile,
         defaults: { ...profile.defaults, ...configuredDefaults(profile.provider, workspaceRoot) },
         models: [...profile.models],
+        ...(profile.writablePermissions ? { writablePermissions: [...profile.writablePermissions] } : {}),
         ...(profile.presets ? { presets: profile.presets.map((preset) => ({ ...preset })) } : {}),
         ...(profile.modelOptions ? { modelOptions: profile.modelOptions.map((model) => ({ ...model, reasoningEfforts: [...model.reasoningEfforts], speedTiers: [...model.speedTiers], serviceTiers: [...model.serviceTiers] })) } : {})
       }));

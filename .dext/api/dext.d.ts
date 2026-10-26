@@ -56,6 +56,12 @@ declare module "dext" {
     speed?: "standard" | "fast";
   }
 
+  /** Pi per-call model selection; reasoning levels come from the selected model. */
+  export interface AgentPiModelOptions {
+    model: string; // Pi provider/modelId.
+    reasoning?: string;
+  }
+
   /** Result of a continuous Agent task; preview-only edits may include a patch, while patch=false returns text only. */
   export interface AgentResult {
     kind: "agent";
@@ -239,16 +245,16 @@ declare module "dext" {
   }
 
   /** Ask — Hold a read-only conversation about a string input with optional inline Dext references. */
-  export function ask(options: { input: string; skills?: string | string[]; rules?: string | string[]; workspace?: DirectoryReference | DirRef; cli?: "codex" | "claude" | "deepseek-harness"; model?: "sonnet" | "opus" | AgentModelOptions }): Promise<AskResult>;
+  export function ask(options: { input: string; skills?: string | string[]; rules?: string | string[]; workspace?: DirectoryReference | DirRef; cli?: undefined; model?: "sonnet" | "opus" | AgentModelOptions | AgentPiModelOptions } | { input: string; skills?: string | string[]; rules?: string | string[]; workspace?: DirectoryReference | DirRef; cli: "codex"; model?: AgentModelOptions } | { input: string; skills?: string | string[]; rules?: string | string[]; workspace?: DirectoryReference | DirRef; cli: "claude"; model?: "sonnet" | "opus" } | { input: string; skills?: string | string[]; rules?: string | string[]; workspace?: DirectoryReference | DirRef; cli: "deepseek-harness"; model?: { model: string; reasoning?: string } } | { input: string; skills?: string | string[]; rules?: string | string[]; workspace?: DirectoryReference | DirRef; cli: "pi"; model?: AgentPiModelOptions }): Promise<AskResult>;
 
   /** Plan — Generate and execute an implementation plan with the selected Plan write scope. */
-  export function plan(options: { input: string; skills?: string | string[]; rules?: string | string[]; workspace?: DirectoryReference | DirRef; cli?: "codex" | "claude" | "deepseek-harness"; model?: "sonnet" | "opus" | AgentModelOptions }): Promise<PlanResult>;
+  export function plan(options: { input: string; skills?: string | string[]; rules?: string | string[]; workspace?: DirectoryReference | DirRef; cli?: undefined; model?: "sonnet" | "opus" | AgentModelOptions | AgentPiModelOptions } | { input: string; skills?: string | string[]; rules?: string | string[]; workspace?: DirectoryReference | DirRef; cli: "codex"; model?: AgentModelOptions } | { input: string; skills?: string | string[]; rules?: string | string[]; workspace?: DirectoryReference | DirRef; cli: "claude"; model?: "sonnet" | "opus" } | { input: string; skills?: string | string[]; rules?: string | string[]; workspace?: DirectoryReference | DirRef; cli: "deepseek-harness"; model?: { model: string; reasoning?: string } } | { input: string; skills?: string | string[]; rules?: string | string[]; workspace?: DirectoryReference | DirRef; cli: "pi"; model?: AgentPiModelOptions }): Promise<PlanResult>;
 
   /** Agent — Run a continuous task from a string input with optional inline Dext references. By default, the selected Agent may modify a trusted workspace. */
-  export function agent(options: { input: string; apply?: boolean; patch?: boolean; skills?: string | string[]; rules?: string | string[]; workspace?: DirectoryReference | DirRef; cli?: "codex" | "claude" | "deepseek-harness"; model?: "sonnet" | "opus" | AgentModelOptions }): Promise<AgentResult>;
+  export function agent(options: { input: string; apply?: boolean; patch?: boolean; skills?: string | string[]; rules?: string | string[]; workspace?: DirectoryReference | DirRef; cli?: undefined; model?: "sonnet" | "opus" | AgentModelOptions | AgentPiModelOptions } | { input: string; apply?: boolean; patch?: boolean; skills?: string | string[]; rules?: string | string[]; workspace?: DirectoryReference | DirRef; cli: "codex"; model?: AgentModelOptions } | { input: string; apply?: boolean; patch?: boolean; skills?: string | string[]; rules?: string | string[]; workspace?: DirectoryReference | DirRef; cli: "claude"; model?: "sonnet" | "opus" } | { input: string; apply?: boolean; patch?: boolean; skills?: string | string[]; rules?: string | string[]; workspace?: DirectoryReference | DirRef; cli: "deepseek-harness"; model?: { model: string; reasoning?: string } } | { input: string; apply?: boolean; patch?: boolean; skills?: string | string[]; rules?: string | string[]; workspace?: DirectoryReference | DirRef; cli: "pi"; model?: AgentPiModelOptions }): Promise<AgentResult>;
 
   /** Render Template — Render text from a Dext template. The template declares the fields and the model only supplies their values, so the structure, section order and list markers always come from the template; the rendered output is validated as markdown, text, json, toml or yaml. It returns text only and writes nothing: import Node's fs and write it yourself. */
-  export function template(options: { input: string; source: string; values?: Record<string, unknown>; skills?: string | string[]; rules?: string | string[]; workspace?: DirectoryReference | DirRef; cli?: "codex" | "claude" | "deepseek-harness"; model?: "sonnet" | "opus" | AgentModelOptions }): Promise<TemplateResult>;
+  export function template(options: { input: string; source: string; values?: Record<string, unknown>; skills?: string | string[]; rules?: string | string[]; workspace?: DirectoryReference | DirRef; cli?: undefined; model?: "sonnet" | "opus" | AgentModelOptions | AgentPiModelOptions } | { input: string; source: string; values?: Record<string, unknown>; skills?: string | string[]; rules?: string | string[]; workspace?: DirectoryReference | DirRef; cli: "codex"; model?: AgentModelOptions } | { input: string; source: string; values?: Record<string, unknown>; skills?: string | string[]; rules?: string | string[]; workspace?: DirectoryReference | DirRef; cli: "claude"; model?: "sonnet" | "opus" } | { input: string; source: string; values?: Record<string, unknown>; skills?: string | string[]; rules?: string | string[]; workspace?: DirectoryReference | DirRef; cli: "deepseek-harness"; model?: { model: string; reasoning?: string } } | { input: string; source: string; values?: Record<string, unknown>; skills?: string | string[]; rules?: string | string[]; workspace?: DirectoryReference | DirRef; cli: "pi"; model?: AgentPiModelOptions }): Promise<TemplateResult>;
 
   /** Apply Patch — Apply the patch carried by an AgentResult. A valid AgentResult without a patch is allowed and returns unchanged; malformed patch payloads still throw. */
   export function apply(options: { result: DextResult }): Promise<ApplyResult>;
@@ -275,7 +281,7 @@ declare module "dext" {
   };
 
   /** Run Skill — Load and execute a standard SKILL.md from the configured project skill directories. */
-  export function skill(options: { skill: string; input: string; workspace?: DirectoryReference | DirRef; cli?: "codex" | "claude" | "deepseek-harness"; model?: "sonnet" | "opus" | AgentModelOptions }): Promise<SkillResult>;
+  export function skill(options: { skill: string; input: string; workspace?: DirectoryReference | DirRef; cli?: undefined; model?: "sonnet" | "opus" | AgentModelOptions | AgentPiModelOptions } | { skill: string; input: string; workspace?: DirectoryReference | DirRef; cli: "codex"; model?: AgentModelOptions } | { skill: string; input: string; workspace?: DirectoryReference | DirRef; cli: "claude"; model?: "sonnet" | "opus" } | { skill: string; input: string; workspace?: DirectoryReference | DirRef; cli: "deepseek-harness"; model?: { model: string; reasoning?: string } } | { skill: string; input: string; workspace?: DirectoryReference | DirRef; cli: "pi"; model?: AgentPiModelOptions }): Promise<SkillResult>;
 
   /**
    * `mcp.<server>.<tool>` — call a configured MCP tool. Servers and tools are

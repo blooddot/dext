@@ -8,12 +8,12 @@ import type {
 
 export type { AgentPermission, WritableAgentPermission };
 
-export type AgentProvider = "codex" | "claude" | "deepseek-harness";
+export type AgentProvider = "codex" | "claude" | "deepseek-harness" | "pi";
 
 
 /** Profile IDs accepted by the `dext.agentCli` setting. Keep this separate
  * from the settings manifest so the runtime can validate hand-entered IDs. */
-export const SUPPORTED_AGENT_PROFILE_IDS: readonly AgentProvider[] = ["codex", "claude", "deepseek-harness"];
+export const SUPPORTED_AGENT_PROFILE_IDS: readonly AgentProvider[] = ["codex", "claude", "deepseek-harness", "pi"];
 
 
 export interface AgentProfile {
@@ -21,6 +21,8 @@ export interface AgentProfile {
   label: string;
   provider: AgentProvider;
   command: string;
+  /** Absent means both existing writable tiers. Read-only requests are separate. */
+  writablePermissions?: WritableAgentPermission[];
   models: string[];
   modelOptions?: AgentModelOption[];
   presets?: HarnessPresetOption[];
@@ -31,7 +33,7 @@ export interface AgentProfile {
 /**
  * One host-owned MCP server injected into a conversation. Dext launches the tool process; the
  * provider only receives the connection details, so no user manifest or system Node install is
- * involved. Only stdio is used today because all three providers support it.
+ * involved. Only stdio is used today because the supported providers accept it.
  */
 export interface AgentMcpServer {
   name: string;

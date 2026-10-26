@@ -92,6 +92,9 @@ const staticTypes: readonly BuiltinTypeDefinition[] = [
   { name: "ui.InputField", description: "Free-text form field.", fields: [
     { name: "default", type: "string", optional: true }, { name: "placeholder", type: "string", optional: true }, { name: "multiline", type: "boolean", optional: true }
   ] },
+  { name: "agent.PiModelOptions", description: "Pi per-call model selection; reasoning levels come from the selected model.", fields: [
+    { name: "model", type: "string", description: "Pi provider/modelId." }, { name: "reasoning", type: "string", optional: true }
+  ] },
   { name: "agent.ModelOptions", description: "Codex per-call model selection options.", fields: [
     { name: "model", type: "string" }, { name: "reasoning", type: '"low" | "medium" | "high" | "xhigh" | "max" | "ultra"', optional: true }, { name: "speed", type: '"standard" | "fast"', optional: true }
   ] }

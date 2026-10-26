@@ -482,11 +482,11 @@ describe("Dext runtime", () => {
     expect(invocations.map((item) => item.agentPreset)).toEqual(["standard", "minimal"]);
   });
 
-  it("keeps Harness Ask and plan generation read-only while permitting explicit execution", async () => {
+  it.each(["deepseek-harness", "pi"] as const)("keeps %s Ask and plan generation read-only while permitting explicit execution", async (provider) => {
     const { runtime } = setup();
     const requests: AgentConversationRequest[] = [];
-    runtime.setAgentProfiles([{ id: "deepseek-harness", provider: "deepseek-harness", command: "dsh", label: "Harness", models: [] }]);
-    runtime.setAgentSelection({ profileId: "deepseek-harness", permission: "full-access" });
+    runtime.setAgentProfiles([{ id: provider, provider, command: provider, label: provider, models: [] }]);
+    runtime.setAgentSelection({ profileId: provider, permission: "full-access" });
     runtime.setWorkspaceTrusted(true);
     runtime.setAgentRunner({ run: async () => ({ kind: "ask", text: "typed" }), runConversation: async (request) => { requests.push(request); return "answer"; } });
     await runtime.executeConversation("ask", "explain");
@@ -496,6 +496,7 @@ describe("Dext runtime", () => {
     expect(requests.map((item) => item.permission)).toEqual(["read-only", "read-only", "full-access", "full-access"]);
     expect(requests[1]?.input).toContain("dext-plan:start");
     expect(requests[2]?.input).toBe("build it");
+    expect(requests.every((item) => item.workspaceTrusted === true)).toBe(true);
   });
 
   it("injects host-owned MCP servers per turn and omits them when disabled", async () => {

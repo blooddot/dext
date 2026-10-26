@@ -1,10 +1,11 @@
 import { applyEdits, modify } from "jsonc-parser/lib/esm/main.js";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { isAbsolute, relative as relativePath, sep } from "node:path";
+import { isAbsolute, join, relative as relativePath, sep } from "node:path";
 import * as vscode from "vscode";
 import type { AgentAssertionSnapshot } from "../features/agents/host/agentAssertions.js";
 import { DefaultAgentRunner } from "../features/agents/host/agentRouter.js";
+import { piDiscoveryIdentity } from "../features/agents/host/piAgentRunner.js";
 import { runSingleTurnCli } from "../features/agents/host/agentRunner.js";
 import { DEFAULT_AGENT_IDLE_TIMEOUT_MS, DEFAULT_AGENT_TIMEOUT_MS, MAX_AGENT_TIMEOUT_MS } from "../features/agents/domain/agentTimeout.js";
 import { REPAIR_OUTPUT_FIELD } from "../features/agents/domain/axAdapter.js";
@@ -318,11 +319,19 @@ export class DextApplication {
     // needing to implement Uri.joinPath just to construct the application.
     this.storage = new DextStorage(globalStorageUri ?? vscode.Uri.file(process.cwd()));
     this.agentRunner = new DefaultAgentRunner();
+    this.agentRunner.pi.configure({ sessionDirectory: join(this.storage.globalStorageUri.fsPath, "pi-sessions") });
     // Load once during extension startup. Later launches reuse this snapshot;
     // Configure Agent and a fresh Harness selection explicitly refresh it.
     void this.agentRunner.harness.preloadSettings();
     this.runtime.setAgentRunner(this.agentRunner);
     this.agents = new AgentProfileStore(globalState);
+    this.agentRunner.pi.onModels = (profile, discovery, discoveryKey) => {
+      const saved = this.agents.list().find((item) => item.id === profile.id);
+      if (saved?.command !== profile.command || discoveryKey !== this.piDiscoveryKey()) return;
+      const previous = new Map((saved.modelOptions ?? []).map((option) => [option.id, option]));
+      const modelOptions = discovery.options.map((option) => option.reasoningEfforts.length ? option : { ...option, reasoningEfforts: previous.get(option.id)?.reasoningEfforts ?? [] });
+      this.updateAgentProfile({ ...saved, models: modelOptions.map((option) => option.id), modelOptions, defaults: discovery.defaults });
+    };
     this.agentRunner.harness.onModels = (profile, options) => {
       const saved = this.agents.list().find((item) => item.id === profile.id);
       const modelOptions = [...(saved?.modelOptions ?? []).filter((item) => !options.some((next) => next.id === item.id)), ...options];
@@ -728,7 +737,7 @@ export class DextApplication {
     );
     const raw = configuration.get<Record<string, unknown>>("agentCliArgs", {}) ?? {};
     const byProvider: Partial<Record<AgentProvider, readonly string[]>> = {};
-    for (const provider of ["codex", "claude", "deepseek-harness"] as const) {
+    for (const provider of ["codex", "claude", "deepseek-harness", "pi"] as const) {
       const value = raw[provider];
       if (!Array.isArray(value)) continue;
       const args = value.filter((item): item is string => typeof item === "string" && item.trim() !== "");
@@ -1294,6 +1303,24 @@ export class DextApplication {
     clearHarnessPresetCache();
     const presets = await listHarnessPresets(profile);
     this.updateAgentProfile({ ...profile, presets });
+  }
+
+  configurePiRuntime(extensionPath: string): void { this.agentRunner.pi.configure({ extensionPath }); }
+
+  piDiscoveryKey(): string {
+    const profile = this.agents.list().find((item) => item.provider === "pi");
+    const args = this.workspaceTrusted ? vscode.workspace.getConfiguration("dext").get<Record<string, string[]>>("agentCliArgs", {}).pi ?? [] : [];
+    return piDiscoveryIdentity(this.workspaceRoot, this.workspaceTrusted, profile?.command, args);
+  }
+
+  async discoverPiModels(model?: string): Promise<void> {
+    const key = this.piDiscoveryKey(), root = this.workspaceRoot;
+    const profile = this.agents.list().find((item) => item.provider === "pi");
+    if (!profile) return;
+    const args = this.workspaceTrusted ? vscode.workspace.getConfiguration("dext").get<Record<string, string[]>>("agentCliArgs", {}).pi ?? [] : [];
+    const discovery = await this.agentRunner.pi.discoverModels(profile, root, args, model, this.workspaceTrusted);
+    if (key !== this.piDiscoveryKey()) return;
+    this.agentRunner.pi.onModels?.(profile, discovery, key);
   }
 
   async discoverHarnessModels(): Promise<void> {

@@ -18,6 +18,7 @@
  * string. The generated declaration says so in its own comments.
  */
 import { BUILTIN_METHODS } from "./builtins.js";
+import { CLI_BUILTIN_IDS, specializeBuiltinCli } from "../../agents/domain/builtinCli.js";
 import { builtinTypeDefinition, type BuiltinTypeDefinition } from "./builtinTypeDefinitions.js";
 import { CONVERSATION_METHODS, methodResultType } from "./methodSignature.js";
 import type { CallableDefinition, FieldDefinition } from "../../../shared/contracts/types.js";
@@ -193,6 +194,16 @@ export function dextTsFieldType(field: FieldDefinition): string {
 export function dextOptionsType(method: CallableDefinition): string {
   const fields = method.input.filter((field) => !field.internal || CONVERSATION_METHODS.has(method.id));
   if (!fields.length) return "Record<string, never>";
+  if (CLI_BUILTIN_IDS.has(method.id) && fields.some((field) => field.name === "cli") && fields.some((field) => field.name === "model")) {
+    const common = fields.filter((field) => field.name !== "cli" && field.name !== "model").map((field) => `${field.name}${field.required ? "" : "?"}: ${dextTsFieldType(field)}`);
+    const model = fields.find((field) => field.name === "model")!;
+    const variants = [`{ ${[...common, "cli?: undefined", `model?: ${dextTsFieldType(model)}`].join("; ")} }`];
+    for (const cli of ["codex", "claude", "deepseek-harness", "pi"]) {
+      const specialized = specializeBuiltinCli(method, cli).input.find((field) => field.name === "model")!;
+      variants.push(`{ ${[...common, `cli: ${JSON.stringify(cli)}`, `model?: ${dextTsFieldType(specialized)}`].join("; ")} }`);
+    }
+    return variants.join(" | ");
+  }
   const members = fields.map((field) => `${field.name}${field.required ? "" : "?"}: ${dextTsFieldType(field)}`);
   return `{ ${members.join("; ")} }`;
 }
@@ -206,7 +217,7 @@ function extractTypeNames(type: string): string[] {
 }
 
 function collectFieldRoots(field: FieldDefinition, roots: string[]): void {
-  if (field.shapeType) roots.push(field.shapeType);
+  if (field.shapeType) roots.push(...extractTypeNames(field.shapeType));
   if (field.resultType) roots.push(field.resultType);
   if (field.items) collectFieldRoots(field.items, roots);
   for (const property of field.properties ?? []) collectFieldRoots(property, roots);

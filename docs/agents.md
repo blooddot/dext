@@ -4,19 +4,19 @@ English | [简体中文](agents.zh-CN.md)
 
 [Back to README](../README.md)
 
-Dext supports Codex CLI, Claude CLI, and DeepSeek Harness. Install and authenticate your chosen CLI, then select the Agent and model in Dext. Run **Dext: Configure Agent** to change executable paths.
+Dext supports Codex CLI, Claude CLI, DeepSeek Harness, and optional Pi CLI. Install and authenticate your chosen CLI, then select the Agent and model in Dext. Run **Dext: Configure Agent** to change executable paths.
 
 Codex conversations use the CLI's App Server to show native questions as cards above Process. Select an option or type an answer, then submit; asynchronous questions let the agent continue working while you answer. Completed or interrupted turns close unanswered cards, and history shows read-only answers. Existing text-only questions cannot be answered retroactively. This uses your normal Codex login and configuration, independently of Dext's completion account. Interactive conversations accept `--config`, `--enable`, and `--disable` overrides in `dext.agentCliArgs`; other CLI flags produce an explicit configuration error. Typed API calls continue using `codex exec`.
 
 Claude conversations run the CLI's bidirectional control protocol, so the questions and permission prompts it would have asked its own terminal arrive as Dext cards instead. See [Claude Code](#claude-code).
 
-[General configuration](#general-configuration) · [Claude Code](#claude-code) · [DeepSeek Harness](#deepseek-harness)
+[General configuration](#general-configuration) · [Claude Code](#claude-code) · [DeepSeek Harness](#deepseek-harness) · [Pi](#pi)
 
 ## General configuration
 
 Agent profiles are stored in VS Code extension global storage. The input area exposes Agent, Model, Reasoning, and Speed selectors where supported by the provider. Codex profiles read the local Codex model cache when available, including supported reasoning levels and speed tiers. Claude Code profiles use its native `opus`/`sonnet` aliases and configured effort levels. An API call may override the Agent and Model for that call with its own `cli` and `model` arguments; otherwise the input selection is used. `Dext: Configure Agent` edits executable commands and custom model labels without handling credentials.
 
-The built-in `agent`, `ask`, `plan`, `template`, `skill`, and `create` APIs also accept optional per-call `cli` and `model` arguments. `cli` is `"codex"`, `"claude"`, or `"deepseek-harness"`; see below for the Harness model object. For Claude, `model` is `"sonnet"` or `"opus"`; for Codex it is a dictionary with a required `model` ID from the configured Codex model list, optional `reasoning` (`"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`, `"ultra"`), and optional `speed` (`"standard"`, `"fast"`). The selected model must support the requested reasoning level and Fast mode. If no local model list is available, Codex IDs are accepted as strings until the catalog is available.
+The built-in `agent`, `ask`, `plan`, `template`, and `skill` APIs also accept optional per-call `cli` and `model` arguments. `cli` is `"codex"`, `"claude"`, `"deepseek-harness"`, or `"pi"`; see below for the Harness and Pi model objects. Resource creation uses the Resources conversation, rather than a public `create()` API. For Claude, `model` is `"sonnet"` or `"opus"`; for Codex it is a dictionary with a required `model` ID from the configured Codex model list, optional `reasoning` (`"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`, `"ultra"`), and optional `speed` (`"standard"`, `"fast"`). The selected model must support the requested reasoning level and Fast mode. If no local model list is available, Codex IDs are accepted as strings until the catalog is available.
 
 ```ts
 await ask({ input: "Explain this code", cli: "claude", model: "sonnet" });
@@ -25,7 +25,7 @@ await agent({ input: "Implement the change", cli: "codex" });
 
 Omit both `cli` and `model` to use the current Input selection. Providing only `cli` uses that CLI's own default configuration, without inheriting the Input model, reasoning, or speed settings—even when the CLI matches Input. Providing both uses the explicit model options and leaves omitted reasoning/speed options to the CLI defaults. Providing only `model` uses Input's selected CLI; unspecified options retain Input settings when the model is unchanged, otherwise they use CLI defaults. These overrides apply only to the current call. Codex Speed controls Standard/Fast processing directly.
 
-The `dext.agentCli` setting controls which built-in Agent profiles are shown in the composer. It defaults to `codex`, `claude`, and `deepseek-harness`; edit the list to choose which of these profiles to display.
+The `dext.agentCli` setting controls which built-in Agent profiles are shown in the composer. It defaults to `codex`, `claude`, and `deepseek-harness`; add `pi` to enable its profile.
 
 Built-in APIs are always available. Code input is plain TypeScript: a `.dext/api` module is an ordinary ES module, so a custom API is scoped with an `import` statement, and completion, hover and F12 come from the editor's TypeScript service against the generated declaration.
 
@@ -84,3 +84,23 @@ Harness questions appear in the same Dext card Codex questions use, above Proces
 `dext.agentCliArgs.deepseek-harness` accepts repeated `--patch <path>` launcher pairs in trusted workspaces. Dext owns the ACP profile and appends its permission patch last. Plugins are trusted code: overlays must preserve the shipped sandbox wiring and keep stdout exclusively JSON-RPC. Configuration changes require a new connection. Turns use the total and idle limits described above; ACP setup and model configuration requests retain their separate timeouts. Updates arrive as committed messages and tool events, not token-by-token deltas. ACP's `usage_update` appears in Process as `used/window context` (context occupancy), never as billed token usage.
 
 AIOA/CDP support has been removed. Old AIOA conversations have no compatibility or migration support.
+
+## Pi
+
+Prepare Pi 1.4.0 or a compatible newer CLI yourself, including authentication and models. Add `pi` to `dext.agentCli` (the three default entries stay unchanged), run **Dext: Configure Agent**, select Pi, and associate `pi` on PATH or an existing executable path. Dext checks the command version and required RPC interfaces. Missing commands, startup failures and incompatible protocols are reported separately; Dext never downloads Pi, changes PATH, selects a Node runtime, or repairs your environment.
+
+Model discovery reads Pi's own authenticated model catalog without making a model request. Refresh by configuring Pi again; selecting a model discovers its supported thinking levels. Clear Model/Reasoning to restore the CLI startup defaults rather than retain the previous override. Model IDs include their provider, for example:
+
+```ts
+await ask({ input: "Review the change", cli: "pi", model: { model: "deepseek/deepseek-v4-flash", reasoning: "off" } });
+```
+
+Use an ID actually returned by your Pi catalog. Pi model options do not accept Codex speed/service tiers or Harness presets. Ordinary chat, Code, Plan, Dext Rules/Skills, templates, resource generation, Project generation and Skill import use the existing host flows. Code `ui.*` and `mcp.*` remain deterministic host calls. Resource drafts require explicit saving.
+
+Pi has no Dext workspace sandbox. Ask, previews and plan generation restrict its active tools and reject non-allowlisted tool calls; native MCP is disabled in those turns. Writes and plan execution require a trusted local workspace and an explicit **Full access** selection, which can reach outside the workspace. **Workspace write** is disabled for Pi and never silently upgraded. This tool restriction does not provide OS isolation of Pi or executable user configuration.
+
+Dext loads only its shipped extension, disables automatic extensions/Skills/templates/themes and package updates, and preserves trusted project text instructions such as AGENTS.md/CLAUDE.md. Extra `dext.agentCliArgs.pi` accepts only repeated `--append-system-prompt`, value pairs. Untrusted requests disable project context discovery. User-level model and authentication files remain owned by Pi.
+
+Questions support single/multiple choices and custom answers; native select/confirm/input/editor requests use Dext forms. Secret answers are omitted from displayed events. Cancellation, dismissal and timeouts close pending requests. Asynchronous questions, arbitrary TUI embedding, native schema mode, independent result repair and native-entry forks are not supported. Typed calls register `dext_submit_result`, validate in the same turn, then remove it; they do not automatically retry write operations.
+
+Conversations reuse one RPC process in order. Restore uses only the recorded session within Dext global `pi-sessions`; a missing or corrupt session is an error. Forks and configuration changes start fresh with visible history. Stop clears queued work, cancels retry and aborts before terminating the process. Message usage and session deltas count only this turn, including compaction; context occupancy is shown separately when known. Real provider quality/speed and platform-specific behavior still depend on your installed CLI and model.

@@ -8,6 +8,8 @@ Register MCP tools as APIs named `mcp.<server>.<tool>`, typed from the manifest 
 
 ## MCP APIs
 
+With Pi, Code `mcp.*` uses this same Dext manifest/credential path. Pi's native MCP is separate: Full access explicitly loads Pi's built-in MCP extension and injects Dext's host stdio servers, preserving their child-process environment. Read-only Pi turns disable native MCP. Dext does not convert these manifests into Pi configuration or copy credentials into Pi files. See [Pi permissions](agents.md#pi).
+
 MCP manifests live in `<workspace>/.dext/mcp/**/*.jsonc` or Dext global storage:
 one file declares one server and its explicit tool allowlist. Subdirectories are
 allowed, and Resources groups manifests by them. Each enabled tool

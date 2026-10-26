@@ -15,7 +15,7 @@ export function presentAgentSelection(profile: AgentProfile | undefined, selecti
   }
   const selected = options.find((option) => option.id === model);
   const reasoningEffort = selection.reasoningEffort
-    || (profile?.provider !== "deepseek-harness" || model === defaultModel ? profile?.defaults?.reasoningEffort : undefined)
+    || (!["deepseek-harness", "pi"].includes(profile?.provider ?? "") || model === defaultModel ? profile?.defaults?.reasoningEffort : undefined)
     || selected?.defaultReasoningEffort || "";
   const speed = selection.speed || (selection.serviceTier === "priority" || selection.serviceTier === "fast"
     ? "fast" : selection.serviceTier === "default" ? "standard" : profile?.defaults?.speed) || "";

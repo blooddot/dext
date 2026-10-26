@@ -37,6 +37,7 @@ function turn(id: string): DextHistoryRecord {
  */
 function sidebarHarness(options: {
   executeConversation?: () => Promise<InputExecutionResponse>;
+  provider?: "deepseek-harness" | "pi";
 } = {}) {
   const state = new HarnessState();
   const history = new DextHistoryStore(state as never);
@@ -54,12 +55,14 @@ function sidebarHarness(options: {
   preferences.setConversationSelection = setConversationSelection as never;
   const messages: WebviewResponse[] = [];
   const application = {
-    state: () => ({ agentSelection: { ...selection }, agentProfiles: [{ id: "deepseek-harness", models: [...models] }] }),
+    state: () => ({ agentSelection: { ...selection }, agentProfiles: [{ id: options.provider ?? "deepseek-harness", models: [...models] }] }),
     setAgentSelection,
     endAgentSession: vi.fn(),
-    agentProfiles: () => [{ id: "deepseek-harness" }],
+    agentProfiles: () => [{ id: options.provider ?? "deepseek-harness" }],
     skills: { list: () => [{ id: "ponytail" }, { id: "ponytail-review" }] },
     discoverHarnessModels,
+    discoverPiModels: discoverHarnessModels,
+    piDiscoveryKey: () => "pi-command-and-workspace",
     executeConversation: vi.fn(options.executeConversation ?? emptyResponse),
     executeInput: vi.fn(),
     draftResource: vi.fn(),
@@ -102,6 +105,24 @@ function sidebarHarness(options: {
 }
 
 describe("sidebar agent selection synchronization", () => {
+  it("deduplicates Pi discovery and preserves a newer selection after a late reply", async () => {
+    const h = sidebarHarness({ provider: "pi" }); h.storage.resolve();
+    await h.select("pi"); await h.select("codex"); await h.select("pi"); await h.select("claude");
+    expect(h.discoverHarnessModels).toHaveBeenCalledOnce();
+    h.discovery.resolve();
+    await vi.waitFor(() => expect(h.states().at(-1)?.agentProfiles[0]?.models).toEqual(["discovered-model"]));
+    expect(h.states().at(-1)?.agentSelection.profileId).toBe("claude");
+    expect(h.selection().profileId).toBe("claude");
+  });
+
+  it("keeps Pi cached models on failure and retries discovery when selected again", async () => {
+    const h = sidebarHarness({ provider: "pi" }); h.storage.resolve();
+    await h.select("pi"); h.discovery.reject(new Error("Pi missing"));
+    await vi.waitFor(() => expect(h.states()).toHaveLength(1));
+    expect(h.states()[0]?.agentProfiles[0]?.models).toEqual(["cached-model"]);
+    await h.select("codex"); await h.select("pi");
+    await vi.waitFor(() => expect(h.discoverHarnessModels).toHaveBeenCalledTimes(2));
+  });
   it("publishes and commits DeepSeek before storage and model discovery complete", async () => {
     const h = sidebarHarness();
     const request = h.select("deepseek-harness");

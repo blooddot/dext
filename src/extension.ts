@@ -41,6 +41,7 @@ let activeApplication: DextApplication | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const application = new DextApplication(context.globalState, context.secrets, context.globalStorageUri);
+  application.configurePiRuntime(vscode.Uri.joinPath(context.extensionUri, "media", "pi-extension.mjs").fsPath);
   activeApplication = application;
   context.subscriptions.push({ dispose: () => { void application.dispose(); } });
   const folder = vscode.workspace.workspaceFolders?.[0];
@@ -325,7 +326,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (!invalid.length) return;
     await vscode.window.showErrorMessage(
       `Unsupported Dext agent CLI profile${invalid.length === 1 ? "" : "s"}: ${invalid.join(", ")}. `
-      + "Supported values: codex, claude, deepseek-harness."
+      + "Supported values: codex, claude, deepseek-harness, pi."
     );
   };
   await reportInvalidAgentCliConfiguration();
@@ -763,6 +764,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         ignoreFocusOut: true
       });
       if (command === undefined) return;
+      if (picked.profile.provider === "pi") {
+        application.updateAgentProfile({ ...picked.profile, command: command.trim() });
+        try { await application.discoverPiModels(); }
+        catch (error) { await vscode.window.showWarningMessage(`Pi command saved; model discovery failed: ${String(error)}`); }
+        await sidebar.refresh();
+        return;
+      }
       if (picked.profile.provider === "deepseek-harness") {
         application.updateAgentProfile({ ...picked.profile, command: command.trim() });
         try { await application.discoverHarnessModels(); }

@@ -1,19 +1,23 @@
 import { CliAgentRunner, type AgentConversationRequest, type AgentExecutionRequest, type AgentRunner, type AgentStructuredRequest } from "./agentRunner.js";
 import { DeepSeekHarnessRunner } from "./deepseekHarnessRunner.js";
+import { PiAgentRunner } from "./piAgentRunner.js";
 export class DefaultAgentRunner implements AgentRunner {
-  constructor(private readonly cli = new CliAgentRunner(), readonly harness = new DeepSeekHarnessRunner()) {}
+  constructor(private readonly cli = new CliAgentRunner(), readonly harness = new DeepSeekHarnessRunner(), readonly pi = new PiAgentRunner()) {}
   setTimeouts(timeouts: { agentTimeoutMs?: number; agentIdleTimeoutMs?: number }): void {
     if (timeouts.agentTimeoutMs !== undefined) {
       this.cli.setTimeoutMs(timeouts.agentTimeoutMs);
       this.harness.setTimeoutMs(timeouts.agentTimeoutMs);
+      this.pi.setTimeoutMs(timeouts.agentTimeoutMs);
     }
     if (timeouts.agentIdleTimeoutMs !== undefined) {
       this.cli.setIdleTimeoutMs(timeouts.agentIdleTimeoutMs);
       this.harness.setIdleTimeoutMs(timeouts.agentIdleTimeoutMs);
+      this.pi.setIdleTimeoutMs(timeouts.agentIdleTimeoutMs);
     }
   }
   private runner(provider: string): AgentRunner {
     if (provider === "deepseek-harness") return this.harness;
+    if (provider === "pi") return this.pi;
     if (provider === "codex" || provider === "claude") return this.cli;
     throw new Error(`Unsupported Agent backend: ${provider}`);
   }
@@ -33,6 +37,6 @@ export class DefaultAgentRunner implements AgentRunner {
     }
     return runner.runStructured(request);
   }
-  endSession(sessionId: string): void { this.harness.endSession(sessionId); }
-  dispose(): Promise<void> { return this.harness.dispose(); }
+  endSession(sessionId: string): void { this.harness.endSession(sessionId); this.pi.endSession(sessionId); }
+  async dispose(): Promise<void> { await Promise.all([this.harness.dispose(), this.pi.dispose()]); }
 }

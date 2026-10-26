@@ -58,6 +58,31 @@ interface ExecFailure {
 }
 
 describe("generated Dext TypeScript surface", () => {
+  it("type-checks Pi overrides and rejects provider-specific options for the wrong CLI", async () => {
+    const root = await tempWorkspace(), directory = join(root, ".dext");
+    for (const file of dextFiles()) { const target = join(directory, ...file.path.split("/")); await mkdir(dirname(target), { recursive: true }); await writeFile(target, file.content); }
+    await writeFile(join(directory, "api", "pi.ts"), [
+      'import { ask, agent, plan, skill, template } from "dext";',
+      'await ask({ input: "x", cli: "pi", model: { model: "deepseek/flash", reasoning: "off" } });',
+      'await agent({ input: "x", cli: "pi", apply: false });',
+      'await plan({ input: "x", cli: "pi" });',
+      'await skill({ input: "x", skill: "review", cli: "pi" });',
+      'await template({ input: "x", source: "a.md", cli: "pi" });',
+      '// @ts-expect-error Pi does not accept Codex speed',
+      'await ask({ input: "x", cli: "pi", model: { model: "deepseek/flash", speed: "fast" } });',
+      '// @ts-expect-error Codex does not accept Pi thinking off',
+      'await ask({ input: "x", cli: "codex", model: { model: "gpt", reasoning: "off" } });',
+      '// @ts-expect-error Claude model remains an alias',
+      'await ask({ input: "x", cli: "claude", model: { model: "local/flash" } });'
+    ].join("\n"));
+    await expect(typecheckWorkspace(root)).resolves.toBeUndefined();
+  }, 60000);
+  it("follows both model union members into the shipped declaration", () => {
+    const declaration = dextModuleDeclaration();
+    expect(declaration).toContain('"pi"');
+    expect(declaration).toContain("interface AgentPiModelOptions");
+    expect(declaration).toContain("AgentModelOptions | AgentPiModelOptions");
+  });
   it("declares every built-in API in the dext module", () => {
     const declaration = dextModuleDeclaration();
     expect(declaration).toContain('declare module "dext"');

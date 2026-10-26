@@ -510,7 +510,7 @@ function updateRunState(): void {
   }
   elements.skillsControl.disabled = selectionLocked || sidebarState?.skillsEnabled === false;
   for (const menu of [elements.modeMenu, elements.permissionMenu, elements.agentMenu, elements.modelMenu, elements.modelSubmenu]) {
-    for (const button of menu.querySelectorAll<HTMLButtonElement>("button")) button.disabled = selectionLocked || button.dataset.presetDisabled === "true";
+    for (const button of menu.querySelectorAll<HTMLButtonElement>("button")) button.disabled = selectionLocked || button.dataset.presetDisabled === "true" || button.dataset.permissionDisabled === "true";
   }
   if (selectionLocked) closeComposerMenus();
   const codeMode = !activeResource() && inputMode === "code";
@@ -1152,6 +1152,16 @@ function renderAgentControls(state: SidebarState): void {
     agentPermission = permission as AgentPermission;
     submitAgentSelection({ permission: agentPermission });
   }, ["full-access"]);
+  for (const button of elements.permissionMenu.querySelectorAll<HTMLButtonElement>("button[data-value]")) {
+    const permission = button.dataset.value as AgentPermission;
+    if (selected?.writablePermissions && !selected.writablePermissions.includes(permission)) {
+      button.disabled = true;
+      button.dataset.permissionDisabled = "true";
+      button.title = `${selected.label} requires an explicit Full access selection for writes. Ask and plan generation remain read-only.`;
+    }
+  }
+  elements.permissionControl.title = selected?.provider === "pi" && agentPermission === "workspace-write"
+    ? "Pi does not support Workspace write. Select Full access explicitly for Agent edits or plan execution." : "Permission";
   renderComposerMenu(elements.agentMenu, state.agentProfiles.map((item) => [item.id, item.label, "codicon-account"]), selected?.id ?? "", (profileId) => {
     submitAgentSelection({ profileId, model: "", reasoningEffort: "", speed: "", serviceTier: "",
       agentPreset: state.agentSelection.agentPreset ?? (profileId === "deepseek-harness" && !transcript.size ? DEFAULT_HARNESS_PRESET : "") });
@@ -1175,6 +1185,7 @@ function renderComposerMenu(
     const button = document.createElement("button");
     button.type = "button";
     const itemClass = itemClasses[value];
+    button.dataset.value = value;
     button.className = `composer-menu-option${warningValues.includes(value) ? " composer-menu-option-warning" : ""}${itemClass ? ` ${itemClass}` : ""}`;
     button.tabIndex = -1;
     button.setAttribute("role", "menuitemradio");
@@ -1257,7 +1268,8 @@ function renderModelMenu(
   if (!options.length) {
     const empty = document.createElement("div");
     empty.className = "composer-menu-empty";
-    empty.textContent = profile?.provider === "deepseek-harness"
+    empty.textContent = profile?.provider === "pi" ? "No Pi models discovered. Associate an installed Pi CLI using Dext: Configure Agent; configure models and authentication in Pi."
+      : profile?.provider === "deepseek-harness"
       ? "No models discovered. Using the Harness configuration; run Dext: Configure Agent to refresh this list."
       : "No models are available for this Agent.";
     elements.modelMenu.append(empty);

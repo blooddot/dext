@@ -619,6 +619,7 @@ export class DextRuntime implements WorkflowRuntime {
         const includePatch = method.id !== "template" && resolved.arguments.patch !== false;
         const raw = await this.agentRunner.run({
           profile,
+          workspaceTrusted: this.workspaceTrusted,
           ...(profile.provider === "deepseek-harness" ? { agentPreset: this.harnessPreset(profile, metadata.agentPreset ?? this.agentSelection.agentPreset ?? "", !agentWriteEnabled) } : {}),
           ...(metadata.model || this.agentSelection.model ? { model: metadata.model ?? this.agentSelection.model } : {}),
           ...((metadata.reasoningEffort ?? this.agentSelection.reasoningEffort) ? { reasoningEffort: metadata.reasoningEffort ?? this.agentSelection.reasoningEffort } : {}),
@@ -838,7 +839,7 @@ export class DextRuntime implements WorkflowRuntime {
     if (!this.agentRunner.runConversation) {
       throw new Error(`Agent '${profile.label}' does not support normal conversation mode.`);
     }
-    const readOnly = mode === "ask" || (profile.provider === "deepseek-harness" && mode === "plan" && !metadata.executePlan);
+    const readOnly = mode === "ask" || (["deepseek-harness", "pi"].includes(profile.provider) && mode === "plan" && !metadata.executePlan);
     const permission: AgentPermission = readOnly ? "read-only" : metadata.agentPermission ?? this.agentPermission();
     const allowWorkspaceWrite = !readOnly;
     if (allowWorkspaceWrite && !this.workspaceTrusted) {
@@ -879,6 +880,7 @@ export class DextRuntime implements WorkflowRuntime {
     try { mcpServers = await (this.conversationMcpServers?.() ?? []); } catch { /* A failed optional tool must not block the turn. */ }
     const response = await this.agentRunner.runConversation({
       profile,
+      workspaceTrusted: this.workspaceTrusted,
       ...(profile.provider === "deepseek-harness" ? { agentPreset: this.harnessPreset(profile, selectedPreset ?? "", readOnly) } : {}),
       ...(selectedModel ? { model: selectedModel } : {}),
       ...(selectedReasoning ? { reasoningEffort: selectedReasoning } : {}),

@@ -12,6 +12,10 @@ const profile: AgentProfile = {
 };
 
 describe("displaying inherited CLI settings", () => {
+  it("does not carry the Pi CLI default effort onto a different selected model", () => {
+    expect(presentAgentSelection({ ...profile, provider: "pi" }, { model: "first" }).reasoningEffort).toBe("medium");
+    expect(presentAgentSelection({ ...profile, provider: "pi" }, {}).reasoningEffort).toBe("high");
+  });
   it("resolves the reset values sent on CLI switch without choosing the first model or changing selection", () => {
     const selection = { profileId: "codex", model: "", reasoningEffort: "", speed: "", serviceTier: "" };
     const original = { ...selection };

@@ -35,6 +35,7 @@ for (const [pkg, file] of structureIndexAssets) {
 }
 await checkStructureIndexRuntime();
 for (const required of [
+  "media/pi-extension.mjs",
   "media/styles.css",
   "media/editorTabs.css",
   "dist/webview/main.css",
@@ -51,6 +52,8 @@ for (const required of [
 ]) {
   assert.ok(packagedFiles.has(required), `Missing packaged Webview asset '${required}'.`);
 }
+assert.ok((await stat(resolve("media/pi-extension.mjs"))).size > 0, "Missing the managed Pi extension.");
+assert.ok(extensionBundle.includes("pi-extension.mjs"), "Pi must resolve its managed extension from the installed package.");
 assert.ok(packagedFiles.has("dist/api-reference.json.br"), "Missing the packaged brotli API reference.");
 assert.ok(!packagedFiles.has("dist/api-reference.json"), "The uncompressed API reference must not be packaged; only the brotli copy ships.");
 assert.ok((await stat(resolve("dist", "api-reference.json.br"))).size > 0, "Missing the brotli API reference.");

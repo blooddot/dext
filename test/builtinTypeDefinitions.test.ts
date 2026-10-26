@@ -2,6 +2,11 @@ import { describe, expect, it } from "vitest";
 import { builtinTypeDefinition } from "../src/features/workflow/domain/builtinTypeDefinitions.js";
 
 describe("built-in Dext type definitions", () => {
+  it("declares Pi model identity and dynamic reasoning without Codex speed", () => {
+    expect(builtinTypeDefinition("agent.PiModelOptions")?.fields).toEqual([
+      { name: "model", type: "string", description: "Pi provider/modelId." }, { name: "reasoning", type: "string", optional: true }
+    ]);
+  });
   it("exposes the result shapes the runtime returns", () => {
     expect(builtinTypeDefinition("AgentResult")).toMatchObject({
       name: "AgentResult",
