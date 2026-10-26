@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": 36,
+  "version": 41,
   "knowledge": {
     "enabled": true,
     "initialized": true
@@ -25,8 +25,8 @@
   },
   "ai": {
     "cli": "deepseek-harness",
-    "model": "[\"deepseek-official\",\"deepseek-v4-flash\"]",
+    "model": "[\"deepseek-official\",\"deepseek-flash\"]",
     "reasoningEffort": "max"
   },
-  "updatedAt": 1792578223396
+  "updatedAt": 1792815246597
 }
