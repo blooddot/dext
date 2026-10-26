@@ -76,7 +76,7 @@ Dext 把文件放在每个工作区一个长期存活的 Node 子进程中运行
 - `plan({ input, workspace?, cli?, model? }) -> PlanResult`：创建、维护和执行实施计划。
 - `agent({ input, apply=true, patch=true, workspace?, cli?, model? }) -> AgentResult`：执行持续性任务；`patch=false` 时只以 text 汇报结论，不产出补丁。
 - `template({ input, source, values={}, workspace?, cli?, model? }) -> TemplateResult`：按模板文件渲染文本（见[模板](#模板)）。
-- `apply({ result }) -> ApplyResult`：应用 `AgentResult` 中存在的补丁。
+- `apply({ result }) -> ApplyResult`：`AgentResult` 没有 patch 时返回 unchanged；非法 patch 仍然报错。
 - `terminal({ command, cwd=".", env={}, timeout_ms=120000 }) -> TerminalResult`：在平台 Shell 中运行任意终端命令；`env` 可传入仅对此命令有效的字符串环境变量。
 - `skill({ skill, input, workspace?, cli?, model? }) -> SkillResult`：使用指定 Skill 执行任务。
 - `mcp.<server>.<tool>({...})`：调用已配置的 MCP 工具。

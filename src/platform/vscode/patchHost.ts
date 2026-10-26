@@ -60,6 +60,14 @@ export const applyPatchHandler: DeterministicHandler = async ({ arguments: args 
     throw new Error("apply requires a trusted workspace.");
   }
   const patch = patchResultFrom(args.result);
+  if (!patch) {
+    return {
+      kind: "apply",
+      status: "unchanged",
+      files: [],
+      summary: "The result contains no patch; nothing to apply."
+    } satisfies ApplyResult;
+  }
   const changes = patch.changes.filter((change) => change.before !== change.after);
   if (!changes.length) {
     return {

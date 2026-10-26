@@ -295,6 +295,19 @@ describe("Dext runtime", () => {
       .rejects.toThrow("apply requires a workspace patch host for non-empty changes.");
   });
 
+  it("applies an AgentResult without a patch as unchanged", async () => {
+    const { runtime } = setup();
+    const preview: AgentResult = { kind: "agent", text: "preview" };
+    await expect(runtime.execute(invoke("apply", [arg("result", preview)]))).resolves.toMatchObject({
+      result: {
+        kind: "apply",
+        status: "unchanged",
+        files: [],
+        summary: "The result contains no patch; nothing to apply."
+      }
+    });
+  });
+
   it("accepts a JSON object in content for a typed MCP result", async () => {
     const { runtime } = mcpSetup({
       name: "team",

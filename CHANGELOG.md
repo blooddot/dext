@@ -10,6 +10,8 @@ All notable changes to Dext are documented in this file.
 
 ## Unreleased
 
+- **Fixed:** apply now treats an AgentResult without a patch as unchanged instead of throwing.
+
 - Structure Plan documents around `Goal`, `Context`, `Design`, `Files`, `Tasks`, `Verification`, `Risks` and an optional `Out of scope`, with conditional Mermaid **Before / After** and **Execution flow** diagrams plus a prose fallback. `## Tasks` stays a flat numbered checklist for the build panel, `Ctrl+Shift+V` previews the diagrams, and `.dext/rules/plan.md` still replaces the whole template.
 
 - Group every Resources category by directory, not only APIs. `rules/git/commit.md` now appears under **Rule > git**, and skills (`skills/git/release/SKILL.md`) and MCP manifests nest the same way; a category's directory nodes collapse and search like the API tree. MCP discovery now walks `mcp/**/*.jsonc`, so a manifest can live in a subdirectory in both project and global scope.

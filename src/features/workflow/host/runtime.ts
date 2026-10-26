@@ -198,6 +198,14 @@ export const DEFAULT_HANDLERS: Readonly<Record<string, DeterministicHandler>> = 
   } satisfies AgentResult),
   applyPatch: ({ arguments: args }) => {
     const patch = patchResultFrom(args.result);
+    if (!patch) {
+      return {
+        kind: "apply",
+        status: "unchanged",
+        files: [],
+        summary: "The result contains no patch; nothing to apply."
+      };
+    }
     const changed = patch.changes.filter((change) => change.before !== change.after);
     if (changed.length) {
       throw new Error("apply requires a workspace patch host for non-empty changes.");

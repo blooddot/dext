@@ -85,7 +85,7 @@ The old interpreter's resource limits (`while` iteration count, `range` size, fo
 - `plan({ input, workspace?, cli?, model? }) -> PlanResult`
 - `agent({ input, apply=true, patch=true, workspace?, cli?, model? }) -> AgentResult` — `patch=false` reports conclusions as text without producing a patch.
 - `template({ input, source, values={}, workspace?, cli?, model? }) -> TemplateResult` — renders text from a template file ([templates](#templates)).
-- `apply({ result }) -> ApplyResult`
+- `apply({ result }) -> ApplyResult` — an `AgentResult` without a patch returns `unchanged`; a malformed patch still throws.
 - `terminal({ command, cwd=".", env={}, timeout_ms=120000 }) -> TerminalResult` — runs an arbitrary command in the platform shell. `env` supplies string environment variables to that command.
 - `skill({ skill, input, workspace?, cli?, model? }) -> SkillResult`
 - `mcp.<server>.<tool>({...})` — calls a configured MCP tool.

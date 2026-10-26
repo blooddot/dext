@@ -81,10 +81,10 @@ const METHODS: readonly CallableDefinition[] = [
   {
     id: "apply",
     title: "Apply Patch",
-    description: "Validate and apply a typed edit result to the current trusted workspace.",
+    description: "Apply the patch carried by an AgentResult. A valid AgentResult without a patch is allowed and returns unchanged; malformed patch payloads still throw.",
     kind: "command",
     version: "1.0.0",
-    input: [{ name: "result", type: "result", required: true, description: "A Dext result containing an applicable patch, usually an AgentResult." }],
+    input: [{ name: "result", type: "result", required: true, description: "A Dext result containing an applicable patch, usually an AgentResult. An AgentResult may legitimately contain no patch." }],
     output: { kind: "apply" },
     executor: { kind: "deterministic", handler: "applyPatch" }
   },

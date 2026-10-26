@@ -89,6 +89,13 @@ function invocation(before: string, after: string): ResolvedInvocation {
   };
 }
 
+function invocationWithoutPatch(): ResolvedInvocation {
+  return {
+    ...invocation("before", "after"),
+    arguments: { result: { kind: "agent", text: "no edits" } }
+  };
+}
+
 describe("VS Code patch host", () => {
   beforeAll(async () => { ({ applyPatchHandler } = await import("../src/platform/vscode/patchHost.js")); });
   beforeEach(() => {
@@ -101,6 +108,12 @@ describe("VS Code patch host", () => {
     const result = await applyPatchHandler(invocation("before", "after"));
     expect(result).toMatchObject({ kind: "apply", status: "applied", summary: "Applied 1 change to 1 file." });
     expect(vscodeState.text).toBe("after");
+  });
+
+  it("returns unchanged without writing when an AgentResult has no patch", async () => {
+    const result = await applyPatchHandler(invocationWithoutPatch());
+    expect(result).toMatchObject({ kind: "apply", status: "unchanged", files: [] });
+    expect(vscodeState.text).toBe("before");
   });
 
   it("returns a conflict instead of overwriting content changed after preview", async () => {

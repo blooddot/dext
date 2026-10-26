@@ -16,14 +16,19 @@ function range(value: unknown): Range | undefined {
   return start && end ? { start, end } : undefined;
 }
 
-export function patchResultFrom(value: unknown): PatchResult {
+export function patchResultFrom(value: unknown): PatchResult | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("apply requires a Dext result containing a patch.");
   }
   const record = value as Record<string, unknown>;
   const candidate = record.kind === "patch" ? record : record.patch;
+  if (candidate === undefined) {
+    if (record.kind === "agent") return undefined;
+    const kind = typeof record.kind === "string" ? record.kind : "unknown";
+    throw new Error(`apply expects an AgentResult or a result containing a patch; received '${kind}'.`);
+  }
   if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) {
-    throw new Error("apply requires a Dext result containing a patch.");
+    throw new Error("apply requires a valid patch result.");
   }
   const patch = candidate as Record<string, unknown>;
   if (patch.kind !== "patch" || typeof patch.title !== "string" || !Array.isArray(patch.changes)) {
