@@ -823,6 +823,31 @@ describe("Dext runtime", () => {
     expect(request.mode).toBe("plan");
     expect(request.input).toContain("You are in Dext Plan mode.");
     expect(request.input).toContain("Do not create, modify, or delete any file.");
+    // The default template now owns the document shape, including the sections
+    // a reader scans first and the conservative diagram vocabulary.
+    for (const section of [
+      "## Goal",
+      "## Context",
+      "### Assumptions and open questions",
+      "## Design",
+      "### Before / After",
+      "### Execution flow",
+      "### Decisions",
+      "## Files",
+      "## Tasks",
+      "## Verification",
+      "## Risks",
+      "## Out of scope"
+    ]) {
+      expect(request.input).toContain(section);
+    }
+    expect(request.input).toContain("`mermaid`");
+    expect(request.input).toContain("top-level numbered checkbox");
+    expect(request.input).toContain("Do not use nested lists");
+    // The response envelope is appended after the whole template, so the
+    // model sees the document rules before the chat/file boundary.
+    expect(request.input.indexOf("You are in Dext Plan mode.")).toBeLessThan(request.input.indexOf("dext-plan:start"));
+    expect(request.input.indexOf("## Tasks")).toBeLessThan(request.input.indexOf("dext-plan:start"));
     // The user's own words stay verbatim below the instruction.
     expect(request.input.endsWith("Goal:\n\nAdd a cache")).toBe(true);
   });

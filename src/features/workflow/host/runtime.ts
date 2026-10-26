@@ -20,6 +20,7 @@ import type { AgentRunner } from "../../agents/host/agentRunner.js";
 import { DEFAULT_HARNESS_PRESET, harnessPresetOrDefault } from "../../agents/domain/harnessPresetDefault.js";
 import { guardPlanDocumentEvents } from "../../conversations/domain/planDocumentStream.js";
 import { PLAN_DOCUMENT_END, PLAN_DOCUMENT_START } from "../../conversations/domain/planResponse.js";
+import { DEFAULT_PLAN_INSTRUCTION } from "../../conversations/domain/planTemplate.js";
 import type {
   AgentStreamEvent,
   CodeRef,
@@ -124,23 +125,6 @@ function adaptTypedMcpResult(result: McpRawResult, kind: string): DextResult {
   }
   return { ...structured, kind } as DextResult;
 }
-
-/** The fallback Plan instruction. Dext separates the document from the chat
- * reply before saving it. */
-const DEFAULT_PLAN_INSTRUCTION = [
-  "You are in Dext Plan mode. Investigate the workspace and return an implementation plan.",
-  "",
-  "Constraints:",
-  "- Do not create, modify, or delete any file. Dext saves the plan document for you.",
-  "- Do not ask clarifying questions. Record open questions and assumptions in the plan instead.",
-  "Write GitHub-flavoured Markdown with these sections:",
-  "- `# <short title>`",
-  "- `## Goal` — what is true once the work is done.",
-  "- `## Files` — every file to touch, one line each on why.",
-  "- `## Tasks` — an ordered checklist, each item small enough to verify on its own.",
-  "- `## Verification` — the commands or checks that prove the work is correct.",
-  "- `## Risks` — what could go wrong, or `None known`."
-].join("\n");
 
 /** Kept outside the project-overridable plan rule: a custom rule controls the
  * plan's content, but Dext still needs this boundary between chat and file. */

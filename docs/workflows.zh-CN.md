@@ -102,6 +102,16 @@ Node 内置模块和工作区依赖可以直接使用，因为代码运行在真
 
 跨 Dext API 边界的值必须可 JSON 序列化，因为内核与扩展宿主之间通过 JSON 通信。函数、Symbol、`Map`、`Set`、`Buffer`、类型化数组、类实例（除非实现了 `toJSON()`）和循环引用都无法传递，`Date` 会转换为 ISO 字符串。报错会指出具体路径和替代写法：`{ createdAt: new Date() }` 会变成 ISO 字符串，而 `{ cache: new Map() }` 会在 `cache` 处报错。用户代码内部可以使用任意值——只有交给 Dext API 的值、以及 API 模块返回的值会被检查。
 
+### 计划文档
+
+Plan 轮次同时返回一段对话回复和一份 Markdown 计划文档，Dext 将它保存为 `.plan.md`。默认指令要求按顺序包含 `## Goal`、`## Context`、`## Design`、`## Files`、`## Tasks`、`## Verification`、`## Risks`，以及可选的 `## Out of scope`。`## Design` 下可以有 `### Before / After`、`### Execution flow` 和 `### Decisions`；它们是条件式的，没有结构性影响的改动不应画空图。
+
+图示就是文档里的普通 `mermaid` 围栏代码块。打开计划后按 `Ctrl+Shift+V`（macOS 为 `Cmd+Shift+V`，或选择 **Open Preview to the Side**），由 VS Code 内置的 Markdown 预览渲染；Dext 不新增渲染器或预览命令。指令要求每张图保持克制——最多 12 个节点、3 个子图，节点标签加引号，不使用 HTML 或自定义样式——并在图后保留一句文字说明，因此原始 Markdown 仍可读，在不支持 Mermaid 的环境里含义也不会丢。
+
+执行计划时，`## Tasks` 也是 Dext 任务面板的输入。每个任务都应是扁平的顶层编号复选框。Dext 会解析该章节里的每一行 checklist，所以嵌套 checklist 会产生幻影任务；`##` 子标题会结束该章节，只有 `###` 阶段标题可以用于分组。Dext 按顺序把解析出的任务编号为 `plan-1`、`plan-2`，新任务保持未勾选。
+
+要替换这套模板，请在工作区创建 `.dext/rules/plan.md`。它的内容会成为完整的计划文档指令，因此项目可以使用自己的章节；分隔对话回复与计划文档的响应分隔符由 Dext 追加，不属于可覆盖的规则。
+
 ### 模板
 
 rules 只能"请求"模型遵守模板，模型一旦漂移，输出结构就跟着变。`template` 消除了这一点：模型只填模板声明的字段，标题层级、章节顺序和列表符号都由 Dext 依据模板文件渲染。模型因此无法新增、改名、重排或删除章节。

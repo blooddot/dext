@@ -111,6 +111,16 @@ Node built-ins and workspace packages work directly, because the code runs in a 
 
 Values that cross a Dext API boundary must be JSON-serializable, because the kernel and the extension host exchange JSON. Functions, symbols, `Map`, `Set`, `Buffer`, typed arrays, class instances (unless they have a `toJSON()` method) and circular references cannot be sent, and a `Date` is converted to an ISO string. The error names the path and the replacement, so `{ createdAt: new Date() }` becomes an ISO string while `{ cache: new Map() }` is reported at `cache`. User code may use anything inside itself — only what it hands to a Dext API, or returns from an API module, is checked.
 
+### Plan documents
+
+A Plan turn returns a chat reply plus a Markdown document that Dext saves as a `.plan.md` file. The default instruction asks for `## Goal`, `## Context`, `## Design`, `## Files`, `## Tasks`, `## Verification`, `## Risks`, and optionally `## Out of scope`, in that order. `## Design` may add `### Before / After`, `### Execution flow` and `### Decisions`; they are conditional, because a change without structural consequences should not carry an empty diagram.
+
+Diagrams are ordinary fenced `mermaid` blocks inside the document. Open the plan and press `Ctrl+Shift+V` (`Cmd+Shift+V` on macOS, or **Open Preview to the Side**) to render them with VS Code's built-in Markdown Preview; Dext adds no renderer or preview command. The instruction keeps each diagram deliberately small — at most 12 nodes and 3 subgraphs, quoted node labels, no HTML or custom styling — and requires one sentence of prose after it, so the file still reads correctly as raw Markdown or on a host without Mermaid.
+
+`## Tasks` is also the input to Dext's task panel when the plan is built. Keep every task as a flat, top-level numbered checkbox. Dext parses every checklist line in that section, so a nested checklist adds phantom tasks; a `##` subheading ends the section, and only `###` phase headings may group tasks. Dext numbers the parsed tasks in order as `plan-1`, `plan-2`, and so on, and a new task stays unchecked.
+
+To replace this template, create `.dext/rules/plan.md` in the workspace. Its contents become the whole plan-document instruction, so a project can use its own sections; the response delimiters that separate the chat reply from the saved document are appended by Dext and are not part of the overridable rule.
+
 ### Templates
 
 A rule can only ask a model to follow a template, so a model that drifts changes the output's structure. `template` removes that: the model fills the template's fields, and Dext renders the headings, the section order and the list markers from the template file itself. A model can therefore never add, rename, reorder or drop a section.

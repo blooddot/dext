@@ -27,6 +27,33 @@ describe("plan task progress without native task tools", () => {
     expect(planTodoItems("No task section")).toEqual([]);
   });
 
+  it("ignores phase headings and Mermaid diagrams inside Tasks and keeps flat task IDs stable", () => {
+    const plan = [
+      "## Tasks",
+      "",
+      "### Phase 1",
+      "",
+      "```mermaid",
+      "flowchart TD",
+      '  A["Inspect"] --> B["Apply"]',
+      "1. [ ] Phantom task inside a diagram",
+      "```",
+      "",
+      "1. [ ] Inspect implementation",
+      "2. [ ] Run targeted tests",
+      "",
+      "### Phase 2",
+      "",
+      "```mermaid",
+      '  C["Verify"] --> D["Report"]',
+      "```"
+    ].join("\n");
+    expect(planTodoItems(plan)).toEqual([
+      { id: "plan-1", text: "Inspect implementation", status: "pending" },
+      { id: "plan-2", text: "Run targeted tests", status: "pending" }
+    ]);
+  });
+
   it("updates explicit status from arbitrarily fragmented progress comments while keeping them out of Process", () => {
     const tracker = new PlanTodoProgress(planTodoItems(document));
     const text = `Inspecting.\n${marker("plan-1", "in_progress")}\nReading files.`;
