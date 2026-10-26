@@ -67,7 +67,6 @@ function element<T extends HTMLElement>(id: string): T {
 const vscode = acquireVsCodeApi();
 
 const elements = {
-  main: element<HTMLElement>("dext-main"),
   conversationTabs: element<HTMLElement>("conversation-tabs"),
   mcpAssistantDialog: element<HTMLDialogElement>("mcp-assistant-dialog"),
   mcpAssistantClose: element<HTMLButtonElement>("mcp-assistant-close"),
@@ -130,8 +129,6 @@ const elements = {
   resultBody: element<HTMLElement>("result-body"),
   result: element<HTMLElement>("result"),
   resultToggle: element<HTMLButtonElement>("result-toggle"),
-  inputFullscreen: element<HTMLButtonElement>("input-fullscreen"),
-  resultFullscreen: element<HTMLButtonElement>("result-fullscreen"),
   planToolbar: element<HTMLElement>("plan-toolbar"),
   planTarget: element<HTMLButtonElement>("plan-target"),
   planChoose: element<HTMLButtonElement>("plan-choose"),
@@ -575,55 +572,6 @@ function run(): void {
   clearSubmittedInput();
 }
 
-type PanelName = "input" | "result";
-
-const panels: Record<PanelName, { section: HTMLElement; heading: HTMLElement; body: HTMLElement; button: HTMLButtonElement; label: string }> = {
-  input: { section: elements.inputSection, heading: elements.inputHeading, body: elements.inputBody, button: elements.inputFullscreen, label: "Input" },
-  result: { section: elements.resultSection, heading: elements.resultHeading, body: elements.resultBody, button: elements.resultFullscreen, label: "Conversation" }
-};
-let fullscreenPanel: PanelName | undefined;
-let fullscreenSnapshot: Record<PanelName, boolean> | undefined;
-
-function syncFullscreenButtons(): void {
-  document.body.classList.toggle("panel-maximized", fullscreenPanel !== undefined);
-  for (const [name, panel] of Object.entries(panels) as [PanelName, typeof panels[PanelName]][]) {
-    const active = fullscreenPanel === name;
-    const title = active ? `Restore ${panel.label}` : `Maximize ${panel.label}`;
-    panel.button.title = title;
-    panel.button.setAttribute("aria-label", title);
-    const icon = panel.button.querySelector<HTMLElement>("i");
-    if (icon) icon.className = `codicon codicon-screen-${active ? "normal" : "full"}`;
-  }
-}
-
-function toggleFullscreen(name: PanelName): void {
-  if (fullscreenPanel === name) {
-    fullscreenPanel = undefined;
-    elements.main.classList.remove("workspace-fullscreen");
-    for (const panelName of Object.keys(panels) as PanelName[]) {
-      panels[panelName].section.classList.remove("panel-expanded");
-      setSectionOpen(panels[panelName].heading, panels[panelName].body, fullscreenSnapshot?.[panelName] ?? true);
-    }
-    fullscreenSnapshot = undefined;
-    syncFullscreenButtons();
-    return;
-  }
-  if (!fullscreenPanel) {
-    fullscreenSnapshot = Object.fromEntries((Object.keys(panels) as PanelName[]).map((panelName) => [
-      panelName,
-      panels[panelName].heading.getAttribute("aria-expanded") === "true"
-    ])) as Record<PanelName, boolean>;
-  }
-  fullscreenPanel = name;
-  elements.main.classList.add("workspace-fullscreen");
-  for (const panelName of Object.keys(panels) as PanelName[]) {
-    const active = panelName === name;
-    panels[panelName].section.classList.toggle("panel-expanded", active);
-    setSectionOpen(panels[panelName].heading, panels[panelName].body, active);
-  }
-  syncFullscreenButtons();
-}
-
 function openMcpAssistantDialog(): void {
   closeComposerMenus();
   if (!elements.mcpAssistantDialog.open) elements.mcpAssistantDialog.showModal();
@@ -976,13 +924,6 @@ function setSectionOpen(heading: HTMLElement, body: HTMLElement, open: boolean):
 }
 
 function toggleSection(heading: HTMLElement, body: HTMLElement): void {
-  if (fullscreenPanel) {
-    if (panels[fullscreenPanel].heading !== heading) return;
-    const panelName = fullscreenPanel;
-    toggleFullscreen(panelName);
-    setSectionOpen(heading, body, false);
-    return;
-  }
   setSectionOpen(heading, body, heading.getAttribute("aria-expanded") !== "true");
 }
 
@@ -2563,12 +2504,6 @@ elements.inputHeading.addEventListener("keydown", (event) => {
     toggleSection(elements.inputHeading, elements.inputBody);
   }
 });
-for (const [name, panel] of Object.entries(panels) as [PanelName, typeof panels[PanelName]][]) {
-  panel.button.addEventListener("click", (event) => {
-    event.stopPropagation();
-    toggleFullscreen(name);
-  });
-}
 elements.resultHeading.addEventListener("click", (event) => {
   if (event.target instanceof Element && event.target.closest("button")) return;
   toggleSection(elements.resultHeading, elements.resultBody);
@@ -2804,7 +2739,6 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     flushAgentEventBatches();
     const turn = transcript.get(message.turnId);
     if (turn) {
-      if (fullscreenPanel === "input") toggleFullscreen("input");
       setSectionOpen(elements.resultHeading, elements.resultBody, true);
       turn.hydrate?.();
       turn.disclosure.open = true;
@@ -2861,9 +2795,7 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
       transcript.active?.todos.setRunning(true);
       transcript.active?.questions?.setRunning(true);
       elements.resultSection.classList.remove("hidden");
-      if (!fullscreenPanel || fullscreenPanel === "result") {
-        setSectionOpen(elements.resultHeading, elements.resultBody, true);
-      }
+      setSectionOpen(elements.resultHeading, elements.resultBody, true);
       syncJumpToLatest();
     } else {
       scroll.consumeForcedInitialScroll();
@@ -2917,6 +2849,5 @@ window.addEventListener("unload", () => {
 });
 
 updateRunState();
-syncFullscreenButtons();
 syncResultToggle();
 vscode.postMessage({ type: "ready" });

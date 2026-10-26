@@ -104,7 +104,7 @@ describe("sidebar panel layout", () => {
     expect(html).not.toContain('id="methods-section"');
     expect(html.indexOf('id="result-section"')).toBeLessThan(html.indexOf('id="input-section"'));
     expect(html).toMatch(/id="input-body" class="collapsible-body input-body"[\s\S]*id="input-shell"[\s\S]*id="attachment-bar"[\s\S]*class="action-row"/);
-    expect(html.match(/class="icon-button panel-fullscreen"/g)).toHaveLength(2);
+    expect(html.match(/class="icon-button panel-fullscreen"/g)).toBeNull();
   });
 
   it("creates resources in the shared conversation composer with resource controls", async () => {
@@ -518,7 +518,6 @@ describe("sidebar panel layout", () => {
     expect(css).toMatch(/#result-body \{[\s\S]*?flex-basis: 0;[\s\S]*?min-height: 0;[\s\S]*?overflow: auto;/);
     expect(css).toMatch(/#result-body \{[\s\S]*?scrollbar-gutter: stable;/);
     expect(css).toMatch(/@media \(max-height: 480px\)[\s\S]*?\.input-section \{[\s\S]*?--input-editor-height: clamp\(56px, 20vh, 96px\);/);
-    expect(css).toMatch(/main\.workspace-fullscreen > \.panel-expanded \{[\s\S]*?max-height: none;/);
   });
 
   it("keeps the jump-to-latest control clear of the host scrollbar", async () => {
@@ -748,12 +747,12 @@ describe("sidebar panel layout", () => {
     expect((await source("media/styles.css"))).toMatch(/#result-body \{[\s\S]*?overflow-anchor: none;/);
   });
 
-  it("supports shared panel fullscreen and stop execution interactions", async () => {
+  it("supports stop execution interactions", async () => {
     const main = await source("src/webview/main.ts");
     const sidebar = await source("src/app/sidebarProvider.ts");
-    expect(main).toContain('type PanelName = "input" | "result"');
-    expect(main).toContain('elements.main.classList.add("workspace-fullscreen")');
-    expect(main).toMatch(/if \(fullscreenPanel\)[\s\S]*toggleFullscreen\(panelName\);[\s\S]*setSectionOpen\(heading, body, false\);/);
+    expect(main).not.toContain('type PanelName = "input" | "result"');
+    expect(main).not.toContain('elements.main.classList.add("workspace-fullscreen")');
+    expect(main).not.toMatch(/toggleFullscreen\(/);
     expect(main).not.toContain('onHeightChanged(height)');
     expect(main).toContain('vscode.postMessage({ type: "stopExecution", turnId: activeTurnId })');
     expect(sidebar).toMatch(/case "stopExecution":[\s\S]*?this\.conversation\.coordinator\.abortTurn\(request\.turnId\)/);

@@ -1286,7 +1286,6 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         <span class="section-heading-label"><i class="section-chevron codicon codicon-chevron-down"></i><span>Conversation</span></span>
         <div class="section-heading-actions">
           <button id="result-toggle" class="icon-button" type="button" title="Collapse conversation" aria-label="Collapse conversation"><i class="codicon codicon-collapse-all"></i></button>
-          <button id="result-fullscreen" class="icon-button panel-fullscreen" type="button" title="Maximize Conversation" aria-label="Maximize Conversation"><i class="codicon codicon-screen-full"></i></button>
         </div>
       </div>
       <div id="result-body" class="collapsible-body result-body" tabindex="-1"><div id="result"></div></div>
@@ -1297,7 +1296,6 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         <span class="section-heading-label"><i class="section-chevron codicon codicon-chevron-down"></i><span>Input</span></span>
         <div class="section-heading-actions">
           <button id="create-resource" class="icon-button" type="button" title="Create resource" aria-label="Create resource"><i class="codicon codicon-add"></i></button>
-          <button id="input-fullscreen" class="icon-button panel-fullscreen" type="button" title="Maximize Input" aria-label="Maximize Input"><i class="codicon codicon-screen-full"></i></button>
         </div>
       </div>
       <div id="input-body" class="collapsible-body input-body">

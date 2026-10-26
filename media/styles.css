@@ -580,8 +580,6 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .agent-todo-item.act
     width: min(1120px, calc(100% - 32px));
     margin: 0 auto;
   }
-
-  body.panel-maximized .app-shell { width: calc(100% - 32px); }
 }
 
 button {
@@ -2391,23 +2389,6 @@ details:not([open]) > :not(summary) {
   max-width: none;
   padding: 0;
   border: 0;
-}
-
-main.workspace-fullscreen > .input-section,
-main.workspace-fullscreen > .result-section {
-  flex: 0 0 auto;
-  max-height: none;
-}
-
-main.workspace-fullscreen > .panel-expanded {
-  flex: 1 1 auto;
-  max-height: none;
-}
-
-main.workspace-fullscreen > .input-section.panel-expanded .input-body,
-main.workspace-fullscreen > .input-section.panel-expanded .input-panel {
-  flex: 1 1 auto;
-  height: auto;
 }
 
 button.primary.stopping {
