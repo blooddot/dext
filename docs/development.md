@@ -47,6 +47,12 @@ The TypeScript worker is deliberate: the composer's completion, hover, F12 and d
 
 The composer's colors do not come from the worker: Monaco paints with the `dext` theme built in `src/webview/monacoTheme.ts`, which *inherits* one of Monaco's own themes (`vs`/`vs-dark`/`hc-*`, chosen from the Webview's theme class) and then overrides it with the active VS Code theme read by `src/vscodeTheme.ts`. That bridge is unavoidable rather than duplication: a VS Code theme is authored as TextMate scopes (`tokenColors`), while Monaco tokenizes with Monarch grammars that emit Monaco token types (`identifier`, `delimiter.bracket`, `type.identifier`, …), and no VS Code API reports resolved token colors — only the theme *file* does, so it is parsed and each of the 14 slots is resolved by TextMate specificity. `src/webview/monacoThemeRules.ts` maps those slots onto every token type Monaco's TypeScript grammar can emit, `fontStyle` included; a slot with no rule falls back to Monaco's own color, which is exactly what left names and punctuation unthemed before. The alternative — bundling `vscode-textmate` and an Oniguruma wasm to tokenize with real TextMate grammars — would cost megabytes and a slower editor for no language-feature gain.
 
+### API execution flow bundle
+
+API detail pages contain a second small Webview entry, `src/features/resources/browser/apiFlow.ts`, built to `dist/webview/apiFlow.js`. The extension host never renders Mermaid: `src/features/resources/presentation/apiFlowDiagram.ts` emits Mermaid `flowchart LR` source plus a plain HTML shell, and `extension.ts` adds the `apiFlow.js` `scriptUri` only when the page body contains `data-api-flow`. A page with no flow therefore loads neither the script nor Mermaid, and the Project reader keeps its `project.js` path.
+
+The entry calls `renderMermaidSvg` from `src/platform/browser/markdownDiagrams.ts`, so `securityLevel: "strict"`, `htmlLabels: false`, light/dark theme detection and the serialized render queue are shared with conversation Markdown instead of duplicated. Because each Webview entry is an independent IIFE, `apiFlow.js` bundles its own Mermaid rather than reusing the instance in `main.js`; the tradeoff is a second Mermaid copy that is loaded only on API detail pages. `scripts/assertWebviewAssets.mjs` requires the non-empty bundle in both the build output and the VSIX.
+
 To publish a version on GitHub:
 
 1. Update the version in `package.json` and `package-lock.json`, and add the release notes to [CHANGELOG.md](../CHANGELOG.md).

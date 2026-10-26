@@ -289,6 +289,37 @@ export async function main(): Promise<void> {
 
 辅助函数就是普通函数：一个模块可以导出任意多个值，其他模块可以导入其中任意一个；递归、类、泛型和 npm 包都能使用。没有强制的返回类型——`main` 可以返回 Dext 结果、普通值，也可以不返回。`.dext/api/*.ts` 中的补全、参数提示和悬浮说明由 VS Code 的 TypeScript 服务依据生成的声明提供。
 
+### 执行流程
+
+每个 API 详情页都会在签名与 Source 之间显示 **Execution flow**。它由 tree-sitter 静态分析模块生成，绝不会导入或执行该模块。每个节点对应一个函数并带有源码行号（同名重载合并为一个节点），每条边表示对同一文件中另一个函数的直接调用。导出函数是入口，使用圆角端点形状；直接调用 `ask`、`agent`、`plan`、`skill`、`template` 或 `terminal` 的函数使用子程序形状，并附带 `· ask` 这类标签；其他函数是矩形辅助函数。无法从导出函数到达的节点标记为 `unused`，违反创建规则的节点会单独描边。
+
+流程图是 Mermaid `flowchart LR`，在 Webview 中渲染。展开 **Mermaid source** 可以查看或复制源文本，展开 **Functions** 可以查看每个节点的行号、角色和出边。区块会先显示渲染状态；如果 Mermaid 失败，会显示错误并自动展开源码，而不是留下空白。
+
+图中只包含直接标识符调用。`.call`/`.apply`、回调、嵌套函数、动态 `import()`、复制出来的函数引用，以及导出对象下面的方法都不在图中；注释和字符串里的调用会被忽略。
+
+#### 单一职责包装函数规则
+
+每个函数只承担一个职责。直接调用上述六个顶层 API 之一的函数只能包含那一个调用：不能同时调用第二个顶层 API，也不能调用本地辅助函数。入口函数负责组合包装函数和普通辅助函数：
+
+```ts
+import { ask, agent, type AskResult, type AgentResult } from "dext";
+
+async function askForPlan(input: string): Promise<AskResult> {
+  return ask({ input: `Plan: ${input}` });
+}
+
+async function runAgent(input: string): Promise<AgentResult> {
+  return agent({ input });
+}
+
+export async function main(input: string): Promise<AgentResult> {
+  await askForPlan(input);
+  return runAgent(input);
+}
+```
+
+新建 API 时，只要一个函数直接调用两个带标签的 API，或带标签的包装函数又调用了本地辅助函数，保存就会被拒绝。生成的草稿文本和详情页都会指出函数名、行号和修复方法。已有 API 仍然可以保存，升级不会让历史工作流无法编辑；它们的详情页仍会显示问题。这条规则刻意从严：把参数整理移到入口函数，或移到由入口调用的独立辅助函数中。
+
 ### 生成的类型
 
 Dext 为工作区生成一套编辑器用的 `dext` 工程，这个工程由项目提交。每次 API 重新加载都会写入，而且文件里所有路径都是相对路径——同一套文件换到别的机器和 CI 上都能用：

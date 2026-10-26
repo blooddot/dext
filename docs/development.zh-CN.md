@@ -47,6 +47,12 @@ VSIX 压缩后约 **5 MB**（解压约 20 MB），几乎全部来自 Webview：
 
 输入区的配色不来自这个 worker：Monaco 用 `src/webview/monacoTheme.ts` 里定义的 `dext` 主题着色，它**继承** Monaco 自带主题（按 Webview 的主题 class 选 `vs`/`vs-dark`/`hc-*`），再用 `src/vscodeTheme.ts` 读到的当前 VS Code 主题覆盖。这层桥接不是重复劳动：VS Code 主题是按 TextMate scope（`tokenColors`）写的，而 Monaco 的 Monarch 语法产出的是 Monaco token 类型（`identifier`、`delimiter.bracket`、`type.identifier`…），并且没有任何 VS Code API 能给出"解析后的 token 颜色"——只有主题*文件*里有，所以只能解析文件并按 TextMate 的 specificity 归纳成 14 个槽位。`src/webview/monacoThemeRules.ts` 再把这些槽位映射到 Monaco TypeScript 语法能产出的每一个 token 类型（含 `fontStyle`）；某个槽位没有规则时才会落回 Monaco 自己的颜色——这正是之前"名字和标点没跟着主题走"的原因。另一条路是打包 `vscode-textmate` 与 Oniguruma wasm，用真正的 TextMate 语法着色，代价是几 MB 体积和更慢的编辑器，而语言能力并不会变多。
 
+### API 执行流程包的取舍
+
+API 详情页还有第二个小型 Webview 入口 `src/features/resources/browser/apiFlow.ts`，构建为 `dist/webview/apiFlow.js`。扩展宿主从不渲染 Mermaid：`src/features/resources/presentation/apiFlowDiagram.ts` 只生成 Mermaid `flowchart LR` 源文本和普通 HTML 外壳，`extension.ts` 仅在页面正文包含 `data-api-flow` 时为它添加 `apiFlow.js` 的 `scriptUri`。没有流程图的页面因此既不会加载该脚本，也不会加载 Mermaid；Project reader 继续使用原来的 `project.js`。
+
+该入口复用 `src/platform/browser/markdownDiagrams.ts` 的 `renderMermaidSvg`，所以 `securityLevel: "strict"`、`htmlLabels: false`、light/dark 主题检测和串行渲染队列都与会话 Markdown 共用，而不是再复制一套初始化逻辑。由于每个 Webview 入口都是独立的 IIFE，`apiFlow.js` 会再打包一份 Mermaid，无法复用 `main.js` 里的实例；代价是只在 API 详情页加载的第二份 Mermaid。`scripts/assertWebviewAssets.mjs` 会在构建产物和 VSIX 中都要求这个 bundle 存在且非空。
+
 发布到 GitHub 的步骤：
 
 1. 更新 `package.json`、`package-lock.json` 中的版本，并在 [CHANGELOG.md](../CHANGELOG.md) 中填写版本说明。

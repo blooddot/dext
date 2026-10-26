@@ -299,6 +299,37 @@ export async function main(): Promise<void> {
 
 Helpers are ordinary functions: a module may export as many values as it likes, another module imports any of them, and recursion, classes, generics and npm packages all work. There is no required result type — `main` may return a Dext result, a plain value, or nothing. Completion, signature help and hover in `.dext/api/*.ts` come from VS Code's TypeScript service against the generated declaration.
 
+### Execution flow
+
+Every API detail page shows an **Execution flow** between its signature and Source. It is built statically from the module with tree-sitter; the module is never imported or executed. Each node is one function with its source line (an overload group is one node), and each edge is a direct call to another function in the same file. Exported functions are entry points and use the rounded endpoint shape. A function that directly calls `ask`, `agent`, `plan`, `skill`, `template`, or `terminal` uses the subroutine shape and carries a `· ask`-style label. Other functions are rectangular helpers. A function not reachable from an export is marked `unused`, and a creation-rule violation is outlined.
+
+The diagram is Mermaid `flowchart LR`, rendered in the Webview. Expand **Mermaid source** to read or copy it, and **Functions** for each node's line, role and outgoing calls. The section first shows a rendering status; if Mermaid fails it reports the failure and opens the source rather than leaving a blank area.
+
+Only direct identifier calls are graphed. `.call`/`.apply`, callbacks, nested functions, dynamic imports, copied function references and calls below an exported object are outside the graph; calls inside comments and strings are ignored.
+
+#### The single-purpose wrapper rule
+
+Give every function one responsibility. A function that calls one of the six labelled top-level APIs must contain only that call: no second top-level API and no local helper call. Entry functions compose the wrappers and ordinary helpers:
+
+```ts
+import { ask, agent, type AskResult, type AgentResult } from "dext";
+
+async function askForPlan(input: string): Promise<AskResult> {
+  return ask({ input: `Plan: ${input}` });
+}
+
+async function runAgent(input: string): Promise<AgentResult> {
+  return agent({ input });
+}
+
+export async function main(input: string): Promise<AgentResult> {
+  await askForPlan(input);
+  return runAgent(input);
+}
+```
+
+Creating a new API is blocked when a function calls two labelled APIs, or when a labelled wrapper also calls a local helper. The generated draft text and the detail page name the function, line and a fix. Existing APIs still save, so an upgrade cannot make a historical workflow uneditable; their detail page still shows the issues. The rule is deliberately strict: move argument preparation into the entry function or into a separate helper that the entry calls.
+
 ### Generated types
 
 Dext generates the `dext` project a workspace's editor reads, and the workspace commits it. It is written on every API reload, and every path in it is relative, so the same files work on another machine and in CI:
