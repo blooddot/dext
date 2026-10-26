@@ -273,7 +273,7 @@ describe("TurnExecutionCoordinator", () => {
     expect(h.history.list().find((session) => session.id === "resource")?.turns[0]?.resourceSource).toBe("import");
   });
 
-  it("holds a read-only Agent proposal for review and skips applied writes", async () => {
+  it("publishes an Agent result without registering pending review state", async () => {
     const h = createConversationHarness({
       executeConversation: async (): Promise<InputExecutionResponse> => ({
         kind: "workflow",
@@ -291,7 +291,7 @@ describe("TurnExecutionCoordinator", () => {
     h.controller.activate(h.controller.session("session")!);
     await h.coordinator.execute(h.controller.session("session")!, "agent", "edit");
     const turnId = h.history.list()[0]!.turns[0]!.id;
-    expect(h.patches.has(turnId)).toBe(true);
-    expect(h.messages).toContainEqual(expect.objectContaining({ type: "execution", turnId, reviewPatch: true }));
+    expect(h).not.toHaveProperty("patches");
+    expect(h.messages).toContainEqual(expect.objectContaining({ type: "execution", turnId }));
   });
 });

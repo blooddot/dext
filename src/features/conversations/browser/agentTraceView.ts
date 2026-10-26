@@ -1,4 +1,4 @@
-import type { AgentStreamEvent, AgentToolKind, PatchChange, WorkflowStepResponse } from "../../../shared/contracts/types.js";
+import type { AgentStreamEvent, AgentToolKind, WorkflowStepResponse } from "../../../shared/contracts/types.js";
 import { agentMessageCopyText, presentAgentMessage } from "../presentation/agentMessagePresentation.js";
 import { renderTurnMessage } from "../presentation/turnComponents.js";
 import { turnDomAdapter } from "./turnDomAdapter.js";
@@ -19,17 +19,10 @@ export interface AgentToolGroup {
   labelText?: string;
 }
 
-interface AgentFileChanges {
-  disclosure: HTMLDetailsElement;
-  body: HTMLElement;
-  label: HTMLElement;
-}
-
 export interface AgentTraceHost {
   document: Document;
   markdown(text: string): string;
   codeBlock(text: string): HTMLElement;
-  patch(change: PatchChange): HTMLElement;
   terminal(text: string): DocumentFragment;
   /** The Process timeline the trace is currently painted into. */
   panel(): HTMLElement;
@@ -46,7 +39,6 @@ export interface AgentTraceSnapshot {
   toolItems: Map<string, AgentToolCommand>;
   toolGroups: Map<string, AgentToolGroup>;
   group: AgentToolGroup | undefined;
-  fileChanges: AgentFileChanges | undefined;
   editedUris: Set<string>;
   commandIds: Set<string>;
   pendingRenders: Set<HTMLElement>;
@@ -67,7 +59,6 @@ export class AgentTraceView {
   private toolItems = new Map<string, AgentToolCommand>();
   private toolGroups = new Map<string, AgentToolGroup>();
   private group: AgentToolGroup | undefined;
-  private fileChanges: AgentFileChanges | undefined;
   private editedUris = new Set<string>();
   private commandIds = new Set<string>();
   private pendingRenders = new Set<HTMLElement>();
@@ -108,7 +99,6 @@ export class AgentTraceView {
     this.toolItems = new Map();
     this.toolGroups = new Map();
     this.group = undefined;
-    this.fileChanges = undefined;
     this.editedUris = new Set();
     this.commandIds = new Set();
     this.pendingRenders = new Set();
@@ -123,7 +113,6 @@ export class AgentTraceView {
     this.toolItems = snapshot.toolItems;
     this.toolGroups = snapshot.toolGroups;
     this.group = snapshot.group;
-    this.fileChanges = snapshot.fileChanges;
     this.editedUris = snapshot.editedUris;
     this.commandIds = snapshot.commandIds;
     this.pendingRenders = snapshot.pendingRenders;
@@ -138,7 +127,6 @@ export class AgentTraceView {
       toolItems: this.toolItems,
       toolGroups: this.toolGroups,
       group: this.group,
-      fileChanges: this.fileChanges,
       editedUris: this.editedUris,
       commandIds: this.commandIds,
       pendingRenders: this.pendingRenders,
@@ -156,7 +144,6 @@ export class AgentTraceView {
     this.toolItems.clear();
     this.toolGroups.clear();
     this.group = undefined;
-    this.fileChanges = undefined;
     this.editedUris = new Set();
     this.commandIds = new Set();
     this.copyTexts.clear();
@@ -220,37 +207,19 @@ export class AgentTraceView {
     this.host.syncResultToggle();
   }
 
-  /** Paints the edited-file disclosures an Agent result proposes. */
+  /** Counts changed files without rendering patch content. */
   renderFileChanges(entries: readonly WorkflowStepResponse[]): void {
-    // Only an Agent result carries a patch now; `patch` is no longer an API output kind.
-    const changes = entries.flatMap((step): PatchChange[] => {
+    const uris = entries.flatMap((step) => {
       const result = step.response?.result;
-      if (result?.kind === "agent") return result.patch?.changes ?? [];
-      return [];
-    }).filter((change) => change.before !== change.after);
-    for (const change of changes) {
-      if (this.editedUris.has(change.uri)) continue;
-      this.editedUris.add(change.uri);
-      if (!this.fileChanges?.disclosure.isConnected) {
-        const { document } = this.host;
-        const disclosure = document.createElement("details");
-        disclosure.className = "agent-stream-item agent-trace-event agent-trace-files";
-        const summary = document.createElement("summary");
-        const chevron = document.createElement("i");
-        chevron.className = "disclosure-chevron codicon codicon-chevron-right";
-        const label = document.createElement("span");
-        label.className = "agent-stream-summary-label";
-        const body = document.createElement("div");
-        body.className = "agent-file-changes";
-        summary.append(chevron, label);
-        disclosure.append(summary, body);
-        this.host.panel().append(disclosure);
-        this.fileChanges = { disclosure, body, label };
-      }
-      this.fileChanges.body.append(this.host.patch(change));
+      if (result?.kind !== "agent") return [];
+      return step.response?.patchApplication?.files.map((file) => file.uri)
+        ?? result.patch?.changes.filter((change) => change.before !== change.after).map((change) => change.uri)
+        ?? [];
+    });
+    for (const uri of uris) {
+      this.editedUris.add(uri);
     }
-    if (changes.length) {
-      if (this.fileChanges) this.fileChanges.label.textContent = `Edited ${this.editedUris.size} file${this.editedUris.size === 1 ? "" : "s"}`;
+    if (uris.length) {
       this.host.updateProgress(this.host.progressState());
     }
   }
@@ -392,7 +361,6 @@ export class AgentTraceView {
         return content;
       },
       code: (text) => this.host.codeBlock(text),
-      patch: (change) => this.host.patch(change)
     }, presentation));
   }
 

@@ -31,7 +31,6 @@ function services(options: { executeConversation?: (mode: "agent" | "ask" | "pla
     executeConversation,
     executeInput: vi.fn(async (): Promise<InputExecutionResponse> => ({ kind: "workflow", executions: [] })),
     draftResource: vi.fn(),
-    applyMethod: () => { throw new Error("no apply"); },
     isTrustedLocalWorkspace: () => true,
     readPlan: async () => "",
     knownPlan: () => true,
@@ -65,7 +64,7 @@ describe("createConversationServices", () => {
     expect(h.history.list()[0]?.turns[0]?.input).toBe("hello");
     // The same controller instance owns the conversation for plan and patch work.
     expect(h.services.plans).toBeDefined();
-    expect(h.services.patches).toBeDefined();
+    expect(h.services).not.toHaveProperty("patches");
     expect(h.services.interactions).toBeDefined();
   });
 

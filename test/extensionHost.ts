@@ -10,6 +10,13 @@ import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
 import type * as Esbuild from "esbuild";
+import { DextRuntime } from "../src/features/workflow/host/runtime.js";
+import { MethodRegistry } from "../src/features/workflow/domain/registry.js";
+import { BUILTIN_METHODS } from "../src/features/workflow/domain/builtins.js";
+import { ContextResolver } from "../src/features/workflow/host/contextResolver.js";
+import { applyPatchHandler } from "../src/platform/vscode/patchHost.js";
+import type { AgentResult, ApplyResult, InvocationAst } from "../src/shared/contracts/types.js";
+import { renderHistoryRecord } from "../src/features/conversations/presentation/historyRender.js";
 
 const hostTypesDirectory = `host-types-${randomUUID()}`;
 const hostTypesPath = `api/${hostTypesDirectory}/commit.ts`;
@@ -32,6 +39,7 @@ async function runHostChecks(): Promise<void> {
   assert.ok(extension, "Dext extension is discoverable.");
   await extension.activate();
   assert.equal(extension.isActive, true, "Dext extension activates.");
+  await autoApplyPatchHostTest();
   // The Monaco Webview check asserts a clean CSP and fails on this checkout with
   // "script-src eval" (reproduced on VS Code 1.132.0 and 1.138.0 with a webview
   // bundle byte-identical to the committed build config). It runs first, so it
@@ -218,6 +226,52 @@ async function runHostChecks(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 300));
   await verifyEditorTabs();
   await verifyGeneratedDextProject(folder);
+}
+
+async function autoApplyPatchHostTest(): Promise<void> {
+  const file = vscode.Uri.joinPath(vscode.workspace.workspaceFolders![0]!.uri, ".dext", `host-patch-${randomUUID()}.txt`);
+  const registry = new MethodRegistry();
+  registry.registerMany(BUILTIN_METHODS, "builtin");
+  const resolver = new ContextResolver({
+    selection: async () => undefined, activeFile: async () => undefined,
+    file: async () => undefined, symbol: async () => undefined, dir: async () => undefined
+  });
+  const runtime = new DextRuntime(registry, resolver, undefined, { applyPatch: applyPatchHandler });
+  runtime.setWorkspaceRoot(vscode.workspace.workspaceFolders![0]!.uri.fsPath);
+  runtime.setWorkspaceTrusted(vscode.workspace.isTrusted);
+  runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
+  runtime.setAgentSelection({ profileId: "codex" });
+  const call: InvocationAst = {
+    kind: "invocation", method: "agent", source: "code",
+    arguments: [{ name: "input", value: "edit" }, { name: "apply", value: false }, { name: "patch", value: true }]
+  };
+  const patch = (before: string, after: string): AgentResult => ({
+    kind: "agent", text: "Done", patch: { kind: "patch", title: "Host test", changes: [{ uri: file.toString(), before, after }] }
+  });
+  const applyCall = (result: AgentResult): InvocationAst => ({ kind: "invocation", method: "apply", source: "code", arguments: [{ name: "result", value: result }] });
+  try {
+    await vscode.workspace.fs.writeFile(file, new TextEncoder().encode("before"));
+    runtime.setAgentRunner({ run: async () => patch("before", "after") });
+    const response = await runtime.execute(call);
+    assert.equal(new TextDecoder().decode(await vscode.workspace.fs.readFile(file)), "after", "Agent patches are saved before returning.");
+    assert.equal(response.patchApplication?.status, "applied");
+    assert.equal((response.result as AgentResult).patch, undefined);
+    assert.equal(((await runtime.execute(applyCall(response.result as AgentResult))).result as ApplyResult).status, "unchanged");
+    const html = renderHistoryRecord({ id: "patch", createdAt: 1, input: "edit", process: [], output: "", response: { kind: "workflow", executions: [response] } });
+    assert.match(html, /Automatically applied changes to 1 file/);
+    assert.doesNotMatch(html, /patch-review|data-review-uri|data-diff-mode|agent-file-change/);
+
+    // Explicit apply keeps validating the caller's original patch.
+    assert.equal(((await runtime.execute(applyCall(patch("after", "explicit")))).result as ApplyResult).status, "applied");
+    assert.equal(((await runtime.execute(applyCall(patch("after", "explicit")))).result as ApplyResult).status, "conflict");
+    const failed = await runtime.execute(call);
+    assert.equal(failed.patchApplication?.status, "conflict");
+    const failureHtml = renderHistoryRecord({ id: "conflict", createdAt: 1, input: "edit", process: [], output: "", response: { kind: "workflow", executions: [failed] } });
+    assert.match(failureHtml, /Auto-apply conflict/);
+    assert.match(failureHtml, /changed after/);
+    assert.equal(new TextDecoder().decode(await vscode.workspace.fs.readFile(file)), "explicit");
+    console.log("PASS automatic patch save, consumed result, explicit apply compatibility and visible conflict");
+  } finally { await vscode.workspace.fs.delete(file); }
 }
 
 /**

@@ -1235,9 +1235,7 @@ export class DextApplication {
    * with travel with the rest of its state. */
   private webviewSettings(): NonNullable<SidebarState["settings"]> {
     const configuration = vscode.workspace.getConfiguration("dext");
-    const diffView = configuration.get<string>("diff.defaultView", "inline");
     return {
-      diffView: diffView === "split" ? "split" : "inline",
       submitOnEnter: configuration.get<boolean>("submitOnEnter", true) !== false
     };
   }

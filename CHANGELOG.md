@@ -10,6 +10,8 @@ All notable changes to Dext are documented in this file.
 
 ## Unreleased
 
+- Automatically apply every Agent result patch before returning it. Remove pending-patch storage, Accept/Reject cards, Inline/Split diff views and `dext.diff.defaultView`. Conversation and History show the application outcome and real conflict/unchanged details. The returned AgentResult consumes its patch after the attempt, so a later `apply({ result })` is unchanged; explicit `apply()`, patch types and Agent options remain compatible. Legacy conversation patches are explicitly ignored on load to avoid unexpected writes.
+
 - **Fixed:** apply now treats an AgentResult without a patch as unchanged instead of throwing.
 
 - Structure Plan documents around `Goal`, `Context`, `Design`, `Files`, `Tasks`, `Verification`, `Risks` and an optional `Out of scope`, with conditional Mermaid **Before / After** and **Execution flow** diagrams plus a prose fallback. `## Tasks` stays a flat numbered checklist for the build panel, `Ctrl+Shift+V` previews the diagrams, and `.dext/rules/plan.md` still replaces the whole template.

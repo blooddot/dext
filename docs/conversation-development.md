@@ -7,7 +7,7 @@ It is the current operating guide; historical notes are separated at the bottom.
 ## Baseline
 
 - Third refactor starts from `3d81b48` (`feat(conversations): collapse Process by default for new turns`).
-- The second wave moved conversation state, execution, plan and patch review into
+- The second wave moved conversation state, execution and plans into
   `features/conversations/` and deleted the first wave's 36 forwarding modules.
 - The third wave dissolved `src/core/` into `features/{agents,workflow,mcp,workspace}`,
   `shared/` and `platform/`, moved the VS Code adapters to `platform/vscode/`, the
@@ -113,7 +113,6 @@ mapping stays honest.
 | Layout write debounce timer | `features/conversations/host/conversationController.ts` | released with the controller |
 | Active executions, abort controllers, Code continuations | `features/conversations/host/turnExecutionCoordinator.ts` | in memory, one entry per conversation |
 | Buffered agent events and their flush timer | `features/conversations/host/agentEventStream.ts` | in memory, cleared by `dispose()` |
-| Pending read-only patches | `features/conversations/host/patchReviewController.ts` | in memory, per turn |
 | Pending agent questions and UI forms | `features/conversations/host/interactionController.ts` (two brokers) | in memory, per session/turn/request |
 | Plan file text, task progress and verification | `features/conversations/host/planController.ts` + `domain/plan*` | in memory plus `dext.history` progress |
 | Browser tab identity, switch ids, render generation, rendered signature | `features/conversations/browser/conversationController.ts` | in memory; reset on switch |
@@ -123,7 +122,6 @@ mapping stays honest.
 | Turn rows (creation, selection, deletion, cached-row reuse) | `features/conversations/browser/transcriptView.ts` | DOM owned by the rendered view; one map per visible conversation |
 | Live Process timeline, tool groups, queued Markdown renders | `features/conversations/browser/agentTraceView.ts` | in memory; isolated during history replay |
 | Plan toolbar and the per-turn Plan/open action | `features/conversations/browser/planControls.ts` | rebuilt from host state |
-| Diff layout preference, patch review buttons and resolution feedback | `features/conversations/browser/patchReviewView.ts` | DOM + `diffMode`; writing stays a host call |
 | Conversation tab strip DOM | `features/conversations/browser/conversationTabs.ts` | rebuilt from the host summary |
 | Webview lifecycle, HTML shell, message dispatch, resources/MCP/attachments | `app/sidebarProvider.ts` | VS Code objects |
 
@@ -134,15 +132,15 @@ Narrow ports live in `contracts/`:
 - `TurnInteractionPort` — question/UI ownership by session and turn id.
 - `ConversationSessionPort` — the controller is the only writer of the session map; the
   coordinator reports a finished turn instead of mutating tabs.
-- `TurnNotifier`, `TurnPatchPort` — publishing and pending patches without an event bus or
+- `TurnNotifier` — publishing without an event bus or
   a shared mutable state bag.
 - `ConversationHistoryStore` / `ConversationPreferences` — persistence contracts the
   controllers and tests depend on.
 - `PlanFileHost` / `PlanSessionPort` (in `host/planController.ts`) — the plan controller
   reads the file and saves progress through these, so it never imports `vscode`.
-- `ApplyPatch` is injected into `PatchReviewController`; the host capability that writes
-  files lives in `src/platform/vscode/patchHost.ts` and is connected by
-  `app/conversationSetup.ts`.
+- `features/workflow/host/runtime.ts` automatically applies Agent patches before returning.
+  File writes stay in `src/platform/vscode/patchHost.ts`, connected by `app/application.ts`.
+  History only displays outcomes; legacy patches are explicitly ignored.
 
 A conversation module never imports `DextApplication`, `DextSidebarProvider`,
 `webview/main.ts` or the whole sidebar state. `ConversationSummary` and the conversation

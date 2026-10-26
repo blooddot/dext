@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { presentAgentMessage } from "../src/features/conversations/presentation/agentMessagePresentation.js";
 
 describe("Agent message presentation", () => {
-  it("keeps an agent patch available for the same diff presentation", () => {
+  it("keeps an agent patch available for copying its original data", () => {
     const presentation = presentAgentMessage(JSON.stringify({
       kind: "agent",
       text: "Applied the change.",

@@ -1,4 +1,4 @@
-import type { DextResult, PatchChange } from "../../../shared/contracts/types.js";
+import type { ApplyResult, DextResult } from "../../../shared/contracts/types.js";
 import type { TurnSectionPresentation } from "./turnPresentation.js";
 import { uiResultText } from "./uiInteractionPresentation.js";
 import type { AgentMessagePresentation } from "./agentMessagePresentation.js";
@@ -69,20 +69,26 @@ export interface TurnResultAdapter<E> extends TurnRenderAdapter<E> {
   markdown(text: string): E;
   json(text: string): E;
   terminal(text: string, stderr: boolean): E;
-  patch(change: PatchChange): E;
   plan(path: string): E;
 }
 
 /** One result dispatch and layout policy for History and Conversation. Host actions
- * (open a plan, review a patch, copy output) remain callbacks on the adapters. */
-export function renderTurnResult<E>(adapter: TurnResultAdapter<E>, result: DextResult): E[] {
+ * (open a plan, copy output) remain callbacks on the adapters. */
+export function renderTurnResult<E>(adapter: TurnResultAdapter<E>, result: DextResult, patchApplication?: ApplyResult): E[] {
   const textOutput = (text: string): E => formatJsonOutput(text) === undefined ? adapter.markdown(text) : adapter.json(text);
   if (result.kind === "ask" || result.kind === "plan" || result.kind === "skill" || result.kind === "template") {
     return [textOutput(result.text), ...(result.kind === "plan" && result.planPath ? [adapter.plan(result.planPath)] : [])];
   }
   if (result.kind === "agent") return [
     ...(result.text ? [textOutput(result.text)] : []),
-    ...(result.patch?.changes ?? []).map((change) => adapter.patch(change))
+    ...(patchApplication ? [adapter.element("div", {
+      class: `patch-application ${patchApplication.status}`,
+      role: patchApplication.status === "conflict" ? "alert" : "status"
+    }, [patchApplication.status === "applied"
+      ? `Automatically applied changes to ${patchApplication.files.length} file${patchApplication.files.length === 1 ? "" : "s"}.`
+      : `Auto-apply ${patchApplication.status}: ${patchApplication.summary}`])] : result.patch ? [adapter.element("div", {
+      class: "patch-application ignored", role: "status"
+    }, ["Legacy patch ignored; no files were written when loading this conversation."])] : [])
   ];
   if (result.kind === "apply") return [adapter.markdown(`${result.status}: ${result.summary}`)];
   if (result.kind === "terminal") {
@@ -110,7 +116,6 @@ export interface TurnHtml { readonly html: string }
 export interface TurnMessageAdapter<E> extends TurnRenderAdapter<E> {
   prose(text: string): E;
   code(text: string): E;
-  patch(change: PatchChange): E;
 }
 
 /** Process messages share structure too; the live view only owns when to update them. */
@@ -130,7 +135,6 @@ export function renderTurnMessage<E>(adapter: TurnMessageAdapter<E>, message: Ag
     ...message.details.map((detail) => el("div", { class: `agent-result-detail ${detail.tone}` }, [
       ...(detail.meta ? [el("span", { class: "agent-result-detail-meta" }, [detail.meta])] : []), detail.text
     ])),
-    ...message.changes.map((change) => adapter.patch(change)),
     ...message.references.map((reference) => disclosure(reference.uri.replaceAll("\\", "/").split("/").pop() ?? reference.uri,
       [reference.location, reference.symbol].filter(Boolean).join(" · "), "agent-result-reference", [
         el("div", { class: "agent-file-path" }, [reference.uri]),

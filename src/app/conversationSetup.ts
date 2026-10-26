@@ -4,16 +4,14 @@ import type { ConversationHistoryStore } from "../features/conversations/contrac
 import type { ConversationPreferences } from "../features/conversations/contracts/preferences.js";
 import type { DextReplayEntry } from "../runner/dextResumeCache.js";
 import type { SkillCommandResolution } from "../features/workflow/contracts/skill.js";
-import type { ExecutionMetadata, InputExecutionResponse, RegisteredCallable } from "../shared/contracts/types.js";
+import type { ExecutionMetadata, InputExecutionResponse } from "../shared/contracts/types.js";
 import type { WebviewResponse } from "../platform/webviewProtocol.js";
 import { AgentEventStream } from "../features/conversations/host/agentEventStream.js";
 import { ConversationController } from "../features/conversations/host/conversationController.js";
 import { InteractionController } from "../features/conversations/host/interactionController.js";
 import type { InputNotificationTarget } from "../features/conversations/host/inputNotifications.js";
-import { PatchReviewController } from "../features/conversations/host/patchReviewController.js";
 import { PlanController } from "../features/conversations/host/planController.js";
 import { TurnExecutionCoordinator } from "../features/conversations/host/turnExecutionCoordinator.js";
-import { applyPatchHandler } from "../platform/vscode/patchHost.js";
 
 /** What the sidebar still owns: Webview lifecycle, VS Code adapters and the
  * features outside this round. Everything below is passed in as a narrow
@@ -35,7 +33,6 @@ export interface ConversationSetupDependencies {
   ) => Promise<InputExecutionResponse>;
   draftResource: (resource: ResourceSession, source: string, metadata: Readonly<ExecutionMetadata>) => Promise<{ draft: ResourceDocument; response: InputExecutionResponse }>;
   resolveSkillCommand?: (id: string, selectedSkillIds: readonly string[], args: string, agent?: string) => SkillCommandResolution;
-  applyMethod: () => RegisteredCallable;
   isTrustedLocalWorkspace: () => boolean;
   readPlan: (planPath: string) => Promise<string>;
   knownPlan: (reference: string) => boolean;
@@ -55,7 +52,6 @@ export interface ConversationServices {
   coordinator: TurnExecutionCoordinator;
   events: AgentEventStream;
   interactions: InteractionController;
-  patches: PatchReviewController;
   plans: PlanController;
   dispose(): void;
 }
@@ -93,11 +89,6 @@ export function createConversationServices(dependencies: ConversationSetupDepend
     activeSessionId: dependencies.activeSessionId,
     disposed: dependencies.disposed
   });
-  const patches = new PatchReviewController({
-    post: dependencies.post,
-    applyMethod: dependencies.applyMethod,
-    applyPatch: applyPatchHandler
-  });
   const plans = new PlanController({
     host: {
       isTrustedLocalWorkspace: dependencies.isTrustedLocalWorkspace,
@@ -130,7 +121,6 @@ export function createConversationServices(dependencies: ConversationSetupDepend
     sessions: controller,
     interactions,
     plans,
-    patches,
     events,
     notifier: {
       started: async (snapshot) => {
@@ -147,13 +137,12 @@ export function createConversationServices(dependencies: ConversationSetupDepend
         });
         dependencies.runningChanged();
       },
-      executed: async (sessionId, turnId, response, reviewPatch) => {
+      executed: async (sessionId, turnId, response) => {
         await dependencies.post({
           type: "execution",
           sessionId,
           turnId,
-          response,
-          ...(reviewPatch ? { reviewPatch: true } : {})
+          response
         });
       },
       failed: async (sessionId, turnId, message, planOutcome) => {
@@ -180,7 +169,6 @@ export function createConversationServices(dependencies: ConversationSetupDepend
     coordinator,
     events,
     interactions,
-    patches,
     plans,
     dispose: () => {
       coordinator.abortAll();

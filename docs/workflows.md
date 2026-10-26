@@ -23,7 +23,7 @@ import { agent, apply, ask } from "dext";
 
 const analysis = await ask({ input: "Explain this implementation and give refactoring requirements:" });
 
-const preview = await agent({
+const edited = await agent({
   input: "Implement the requested refactoring",
   apply: false,
 });
@@ -35,10 +35,13 @@ const summary = await agent({
   patch: false,
 });
 
-if (preview.patch) {
-  const applied = await apply({ result: preview });
-}
+// The patch was automatically processed and consumed; reapplying is unchanged.
+const applied = await apply({ result: edited });
 ```
+
+Every patch returned by an Agent is automatically applied through the existing `apply()` host before the call completes, including `apply: false` results; there is no manual review. `apply: true` retains its direct-write permission and already-written changes that match their after-image are skipped. `apply: false` restricts the Agent process, but does not prevent the host from applying its result. Use `apply: false, patch: false` for text-only, read-only work.
+
+After the attempt, the returned `AgentResult.patch` is cleared, including conflict/unchanged outcomes, and `summary` includes the status and original error. Calling `apply({ result })` again deterministically returns `unchanged` without writing. Execution history separately stores the application outcome; Conversation and History display one line with the file count or real error. Public `apply()` still validates programmatically constructed patches using the existing range, content, hash and workspace checks. Legacy patches are marked ignored; opening history never applies them.
 
 A Code turn is an ordinary ES module. The whole TypeScript language is available — variables, functions, classes, `if`/`for`/`while`, `try`/`catch`, `async`/`await`, the standard library, and any Node built-in or npm package the workspace can resolve. Top-level `await` works because the entry file is imported as ESM.
 

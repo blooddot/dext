@@ -8,10 +8,9 @@ import { DextConversationPreferences } from "../src/features/conversations/host/
 import { AgentEventStream } from "../src/features/conversations/host/agentEventStream.js";
 import { ConversationController } from "../src/features/conversations/host/conversationController.js";
 import { InteractionController } from "../src/features/conversations/host/interactionController.js";
-import { PatchReviewController } from "../src/features/conversations/host/patchReviewController.js";
 import { PlanController } from "../src/features/conversations/host/planController.js";
 import { TurnExecutionCoordinator } from "../src/features/conversations/host/turnExecutionCoordinator.js";
-import type { ExecutionMetadata, InputExecutionResponse, RegisteredCallable } from "../src/shared/contracts/types.js";
+import type { ExecutionMetadata, InputExecutionResponse } from "../src/shared/contracts/types.js";
 import type { ResourceDocument, ResourceSession } from "../src/features/resources/contracts/resourceSession.js";
 import type { DextReplayEntry } from "../src/runner/dextResumeCache.js";
 import type { SkillCommandResolution } from "../src/features/workflow/contracts/skill.js";
@@ -79,9 +78,6 @@ export function createConversationHarness(options: ConversationHarnessOptions = 
     draft: { name: "draft", content: "" },
     response: { kind: "workflow", executions: [] }
   })));
-  const applyMethod = vi.fn((): RegisteredCallable => {
-    throw new Error("no apply method in this test");
-  });
   const executionRef: { coordinator?: TurnExecutionCoordinator } = {};
   const controller = new ConversationController({
     history,
@@ -110,13 +106,6 @@ export function createConversationHarness(options: ConversationHarnessOptions = 
     turnOf: (sessionId) => executionRef.coordinator?.turnOf(sessionId),
     activeSessionId: () => controller.active().id,
     disposed: () => false
-  });
-  const patches = new PatchReviewController({
-    post,
-    applyMethod,
-    applyPatch: vi.fn(() => {
-      throw new Error("no apply handler in this test");
-    })
   });
   const plans = new PlanController({
     host: {
@@ -148,7 +137,6 @@ export function createConversationHarness(options: ConversationHarnessOptions = 
     sessions: controller,
     interactions,
     plans,
-    patches,
     events,
     notifier: {
       started: async (snapshot) => {
@@ -164,8 +152,8 @@ export function createConversationHarness(options: ConversationHarnessOptions = 
           ...(snapshot.executePlan ? { executePlan: true } : {})
         });
       },
-      executed: async (sessionId, turnId, response, reviewPatch) => {
-        messages.push({ type: "execution", sessionId, turnId, response, ...(reviewPatch ? { reviewPatch: true } : {}) });
+      executed: async (sessionId, turnId, response) => {
+        messages.push({ type: "execution", sessionId, turnId, response });
       },
       failed: async (sessionId, turnId, message, planOutcome) => {
         messages.push({ type: "executionFailed", sessionId, turnId, message, ...(planOutcome ? { planOutcome } : {}) });
@@ -199,8 +187,8 @@ export function createConversationHarness(options: ConversationHarnessOptions = 
   }
 
   return {
-    state, history, preferences, controller, coordinator, plans, patches, interactions, events,
-    messages, post, postWhenReady, executeConversation, executeInput, draftResource, applyMethod, open, notify, seed,
+    state, history, preferences, controller, coordinator, plans, interactions, events,
+    messages, post, postWhenReady, executeConversation, executeInput, draftResource, open, notify, seed,
     dispose: () => {
       events.dispose();
       interactions.dispose();

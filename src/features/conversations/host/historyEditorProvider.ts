@@ -161,22 +161,6 @@ export class DextHistoryPanel implements vscode.Disposable {
     const vscode = acquireVsCodeApi();
     document.addEventListener('click', (event) => {
       const target = event.target instanceof Element ? event.target : null;
-      const modeButton = target?.closest('button[data-diff-mode]');
-      if (modeButton) {
-        event.preventDefault();
-        event.stopPropagation();
-        const container = modeButton.closest('[data-diff-container]');
-        const mode = modeButton.dataset.diffMode;
-        if (container && (mode === 'inline' || mode === 'split')) {
-          container.querySelector('.diff-view').dataset.diffView = mode;
-          container.querySelectorAll('.diff-mode-button').forEach((button) => {
-            const active = button.dataset.diffMode === mode;
-            button.classList.toggle('active', active);
-            button.setAttribute('aria-pressed', String(active));
-          });
-        }
-        return;
-      }
       const copyButton = target?.closest('button[data-copy]');
       if (copyButton) {
         event.preventDefault();

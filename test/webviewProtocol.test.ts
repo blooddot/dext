@@ -161,31 +161,7 @@ describe("Webview protocol", () => {
     expect(webviewRequestSchema.safeParse({ type: "buildPlan", planPath: "" }).success).toBe(false);
     expect(webviewRequestSchema.safeParse({ type: "buildPlan", planPath: "x".repeat(513) }).success)
       .toBe(false);
-    // An empty uri list is how Accept all asks for every pending file.
-    expect(webviewRequestSchema.parse({
-      type: "resolvePatch",
-      turnId: "turn-1",
-      uris: [],
-      accept: true
-    })).toMatchObject({ type: "resolvePatch", accept: true });
-    expect(webviewRequestSchema.safeParse({
-      type: "resolvePatch",
-      turnId: "turn-1",
-      uris: ["file:///a.ts"],
-      accept: false
-    }).success).toBe(true);
-    expect(webviewRequestSchema.safeParse({
-      type: "resolvePatch",
-      turnId: "",
-      uris: [],
-      accept: true
-    }).success).toBe(false);
-    expect(webviewRequestSchema.safeParse({
-      type: "resolvePatch",
-      turnId: "turn-1",
-      uris: [""],
-      accept: true
-    }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({ type: "resolvePatch", turnId: "turn-1", uris: [], accept: true }).success).toBe(false);
     expect(webviewRequestSchema.safeParse({
       type: "clipboardWrite",
       requestId: 3,

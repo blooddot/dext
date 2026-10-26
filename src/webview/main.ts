@@ -35,7 +35,6 @@ import { OutputScrollController } from "../features/conversations/browser/output
 import { ConversationBrowser, ConversationViewStore, conversationSignature } from "../features/conversations/browser/conversationController.js";
 import { ComposerDraftStore, type DraftAttachment } from "../features/conversations/browser/composerController.js";
 import { renderConversationTabs } from "../features/conversations/browser/conversationTabs.js";
-import { PatchReviewView } from "../features/conversations/browser/patchReviewView.js";
 import { planActions, renderPlanToolbar as renderPlanToolbarView } from "../features/conversations/browser/planControls.js";
 import { AgentTraceView } from "../features/conversations/browser/agentTraceView.js";
 import { CLI_SPEEDS } from "../features/agents/domain/builtinCli.js";
@@ -301,17 +300,10 @@ const transcript = new TranscriptView({
   colorizeSource: (pre) => colorizeSource(pre)
 });
 
-const patches = new PatchReviewView({
-  document,
-  root: () => elements.result,
-  activeOutput: () => transcript.active?.output,
-  resolve: (turnId, uris, accept) => vscode.postMessage({ type: "resolvePatch", turnId, uris: [...uris], accept })
-});
 const trace = new AgentTraceView({
   document,
   markdown: (text) => markdown.render(text),
   codeBlock: (text) => codeBlock(text),
-  patch: (change) => patches.fileChangeDisclosure(change, "agent-file-change agent-result-change"),
   terminal: (text) => terminalText(text),
   panel: () => agentStreamPanel(),
   progressState: () => agentProgressState,
@@ -1094,7 +1086,6 @@ function renderAgentControls(state: SidebarState): void {
   // not retain the previous tab's mode in the webview-local fallback.
   inputMode = activeResource() ? "ask" : state.agentSelection.mode ?? "agent";
   if (state.settings) {
-    patches.diffMode = state.settings.diffView;
     editor.setSubmitOnEnter(state.settings.submitOnEnter);
   }
   editor.setMode(inputMode === "code" ? "code" : "chat");
@@ -1907,20 +1898,19 @@ function syncTurnActions(): void {
 }
 
 
-function renderExecution(response: RuntimeResponse, reviewTurnId?: string): DocumentFragment {
+function renderExecution(response: RuntimeResponse): DocumentFragment {
   const fragment = document.createDocumentFragment();
   fragment.append(...renderTurnResult({
     ...turnDomAdapter(document),
     markdown: copyableText,
     json: jsonOutput,
     terminal: (text, stderr) => terminalBlock(text, stderr ? "terminal-output terminal-stderr" : "terminal-output"),
-    patch: (change) => patches.fileChangeDisclosure(change, "agent-file-change execution-file-change", reviewTurnId),
     plan: (planPath) => planActions(document, planPath, (reference) => vscode.postMessage({ type: "openFileReference", reference }))
-  }, response.result));
+  }, response.result, response.patchApplication));
   return fragment;
 }
 
-function renderResult(response: InputExecutionResponse, reviewTurnId?: string): void {  const target = transcript.active?.output ?? elements.result;
+function renderResult(response: InputExecutionResponse): void {  const target = transcript.active?.output ?? elements.result;
   target.replaceChildren();
   const entries: WorkflowStepResponse[] = response.steps ?? response.executions.map((execution) => ({
     method: execution.method.id,
@@ -1928,14 +1918,13 @@ function renderResult(response: InputExecutionResponse, reviewTurnId?: string): 
     response: execution
   }));
   trace.renderFileChanges(entries);
-  if (reviewTurnId) target.append(patches.header(reviewTurnId, entries));
   // Comprehension branches ran at the same time, so they are laid out beside one
   // another instead of pretending they were a sequence.
   let fanOut: HTMLElement | undefined;
   for (const [index, step] of entries.entries()) {
     const item = document.createElement("section");
     item.className = "execution-result";
-    if (step.response) item.append(renderExecution(step.response, reviewTurnId));
+    if (step.response) item.append(renderExecution(step.response));
     else if (step.stream) {
       // Process output is not an API call, so it gets no card of its own.
       const output = document.createElement("pre");
@@ -2890,10 +2879,7 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     transcript.select(message.turnId);
     const planResult = message.response.executions.find((execution) => execution.result.kind === "plan" && execution.result.executePlan)?.result;
     if (transcript.active?.planExecutionStatus && !transcript.active.planExecutionStatus.hidden) transcript.active.planExecutionStatus.textContent = planExecutionLabel([], undefined, planResult?.kind === "plan" ? planResult.planOutcome : undefined);
-    renderResult(message.response, message.reviewPatch ? message.turnId : undefined);
-  }
-  if (message.type === "patchResolved" && message.sessionId === browser.activeId) {
-    patches.applyResolution(message.turnId, message.uris, message.status, message.message);
+    renderResult(message.response);
   }
   if (message.type === "executionFailed") {
     conversationViewCache.delete(message.sessionId);

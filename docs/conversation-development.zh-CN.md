@@ -62,7 +62,6 @@
 | 布局写入定时器 | 同上 | 随控制器释放 |
 | 活动执行、取消控制器、Code 续跑调用 | `features/conversations/host/turnExecutionCoordinator.ts` | 内存，每会话一条 |
 | 缓冲的 Agent 事件与刷新定时器 | `features/conversations/host/agentEventStream.ts` | 内存，`dispose()` 清理 |
-| 待审核补丁 | `features/conversations/host/patchReviewController.ts` | 内存，按回合 |
 | 待回答的问题与表单 | `features/conversations/host/interactionController.ts` | 内存，按会话/回合/请求 |
 | 计划文件、任务进度与验证 | `features/conversations/host/planController.ts` + `domain/plan*` | 内存加 `dext.history` 进度 |
 | 浏览器标签身份、切换编号、渲染代次、已渲染签名 | `features/conversations/browser/conversationController.ts` | 内存；切换时重置 |
@@ -73,10 +72,9 @@
 | 回合行（创建、选择、删除、缓存行复用） | `features/conversations/browser/transcriptView.ts` | 由已渲染视图持有；每个可见会话一份映射 |
 | 实时 Process 时间线、工具分组、延迟 Markdown 渲染队列 | `features/conversations/browser/agentTraceView.ts` | 内存；历史回放时隔离 |
 | Plan 工具栏与回合内的 Plan/打开操作 | `features/conversations/browser/planControls.ts` | 依据宿主状态重建 |
-| 差异布局偏好、补丁审核按钮与结果提示 | `features/conversations/browser/patchReviewView.ts` | DOM 与 `diffMode`；写入仍由宿主调用 |
 | Webview 生命周期、HTML 外壳、消息分发、资源/MCP/附件 | `app/sidebarProvider.ts` | VS Code 对象 |
 
-窄接口位于 `contracts/`：`TurnExecutionHost`、`TurnInteractionPort`、`ConversationSessionPort`、`TurnNotifier`、`TurnPatchPort`、`ConversationHistoryStore`、`ConversationPreferences`；计划文件读取与进度保存通过 `PlanFileHost` / `PlanSessionPort`，补丁写入能力由 `app/conversationSetup.ts` 注入 `applyPatch`。会话模块不导入 `DextApplication`、`DextSidebarProvider`、`webview/main.ts`，也不接收整个侧栏状态。`ConversationSummary` 与会话消息 schema 位于 `contracts/protocol.ts`，`src/platform/webviewProtocol.ts` 只做组合。
+窄接口位于 `contracts/`：`TurnExecutionHost`、`TurnInteractionPort`、`ConversationSessionPort`、`TurnNotifier`、`ConversationHistoryStore`、`ConversationPreferences`；计划文件读取与进度保存通过 `PlanFileHost` / `PlanSessionPort`，补丁由 `features/workflow/host/runtime.ts` 在返回 Agent 结果前调用 apply 宿主自动处理；历史只展示结果，旧补丁明确忽略。会话模块不导入 `DextApplication`、`DextSidebarProvider`、`webview/main.ts`，也不接收整个侧栏状态。`ConversationSummary` 与会话消息 schema 位于 `contracts/protocol.ts`，`src/platform/webviewProtocol.ts` 只做组合。
 
 ### Provider 会话身份
 

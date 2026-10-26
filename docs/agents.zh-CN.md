@@ -12,6 +12,8 @@ Claude 对话改用 CLI 的双向控制协议，它原本要问自己终端的�
 
 [通用配置](#通用配置) · [Claude Code](#claude-code) · [DeepSeek Harness](#deepseek-harness) · [Pi](#pi)
 
+`agent({ apply: false })` 只限制 Agent 进程的写入权限；若结果包含 patch，Dext 宿主仍会自动应用并清空返回的 patch。需要只读结论时同时指定 `patch: false`。应用状态与真实错误显示在对话及结果摘要中；旧历史补丁会明确忽略，不会在打开会话时写盘。
+
 ## 通用配置
 
 Agent 配置保存在 VS Code 扩展全局存储中。输入区域根据后端能力提供 Agent、Model、Reasoning 和 Speed 选项。Codex 配置优先读取本地模型缓存中的模型、推理级别和速度选项；Claude Code 使用 `opus` / `sonnet` 别名及已配置的推理级别。

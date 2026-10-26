@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { ExecutionMetadata, InputExecutionResponse, PatchChange } from "../src/shared/contracts/types.js";
+import type { ExecutionMetadata, InputExecutionResponse } from "../src/shared/contracts/types.js";
 import type { DextHistoryRecord } from "../src/features/conversations/contracts/history.js";
 
 vi.mock("vscode", () => ({}));
@@ -40,17 +40,6 @@ function gatedExecution(): {
   };
 }
 
-function patchResponse(apply: boolean, changes: PatchChange[] = [{ uri: "file:///x", before: "before", after: "after" }]): InputExecutionResponse {
-  return {
-    kind: "workflow",
-    executions: [{
-      invocation: { kind: "invocation", method: "agent", arguments: [{ name: "apply", value: apply }], source: "chat" },
-      method: { id: "agent", title: "Agent", kind: "command", source: "builtin" },
-      durationMs: 1,
-      result: { kind: "agent", text: "", patch: { kind: "patch", title: "Proposal", changes } }
-    }]
-  };
-}
 
 describe("sidebar panel layout", () => {
   it("advertises Pi permission limitations without upgrading the stored selection", async () => {
@@ -225,18 +214,12 @@ describe("sidebar panel layout", () => {
 
   it("hands the webview the settings it renders with instead of guessing", async () => {
     const main = await source("src/webview/main.ts");
-    const patches = await source("src/features/conversations/browser/patchReviewView.ts");
     const application = await source("src/app/application.ts");
     const extension = await source("src/extension.ts");
-    expect(application).toMatch(/private webviewSettings[\s\S]*?diffView: diffView === "split" \? "split" : "inline"/);
     expect(application).toMatch(/private webviewSettings[\s\S]*?submitOnEnter: configuration\.get<boolean>\("submitOnEnter", true\) !== false/);
-    expect(main).toMatch(/if \(state\.settings\) \{[\s\S]*?patches\.diffMode = state\.settings\.diffView;[\s\S]*?editor\.setSubmitOnEnter\(state\.settings\.submitOnEnter\)/);
-    // A new file change has to open in the configured layout, not always inline.
-    expect(patches).toContain("view.dataset.diffView = this.diffMode;");
-    expect(patches).toContain('button.className = `diff-mode-button${mode === this.diffMode ? " active" : ""}`');
+    expect(main).toMatch(/if \(state\.settings\) \{[\s\S]*?editor\.setSubmitOnEnter\(state\.settings\.submitOnEnter\)/);
     // Saving project paths changes the registered API set, so it needs a reload.
     expect(extension).toMatch(/onWorkspaceSettingsChanged: async \(?settings\)? => \{\s*application\.setProjectWorkspaceSettings\(settings\);\s*await application\.reload\(\)/);
-    expect(extension).toMatch(/event\.affectsConfiguration\("dext\.diff\.defaultView"\)[\s\S]*?await sidebar\.refresh\(\)/);
     // Configured API directories are searched, but `.dext/api` comes first.
     expect(application).toMatch(/apiRoots\(\): string\[\] \{/);
     expect(application).toMatch(/add\(vscode\.Uri\.joinPath\(vscode\.Uri\.file\(this\.workspaceRoot\), "\.dext", "api"\)\.fsPath\)/);
@@ -292,7 +275,6 @@ describe("sidebar panel layout", () => {
   it("shows writable permission tiers for Agent and Plan modes", async () => {
     const html = await source("src/app/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
-    const sidebar = await source("src/app/sidebarProvider.ts");
     const manifest = await source("package.json");
     const css = await source("media/styles.css");
     expect(html).toContain('id="permission-control"');
@@ -305,37 +287,8 @@ describe("sidebar panel layout", () => {
     expect(main).toContain('permission: change.permission ?? agentPermission');
     expect(manifest).toContain('"dext.agentPermission"');
     expect(manifest).toContain('"dext.agentCliArgs"');
-    // The host holds the patch, so the buttons only appear when it says so.
-    const patchView = await source("src/features/conversations/browser/patchReviewView.ts");
-    expect(main).toMatch(/renderResult\(message\.response, message\.reviewPatch \? message\.turnId : undefined\)/);
-    expect(patchView).toMatch(/actions\(turnId: string, uris: readonly string\[\], suffix = ""\): HTMLElement \{[\s\S]*?this\.host\.resolve\(turnId, \[\.\.\.uris\], accept\)/);
-    expect(patchView).toMatch(/applyResolution\([\s\S]*?if \(status === "conflict"\)[\s\S]*?button\.disabled = false/);
-    // Patch ownership moved to the review controller: it holds only proposals
-    // whose Agent call did not write, and resolves them one entry at a time.
-    expect(sidebar).toMatch(/case "resolvePatch":[\s\S]*?this\.conversation\.patches\.resolve\(/);
-    const patches = await source("src/features/conversations/host/patchReviewController.ts");
-    expect(patches).toMatch(/function unappliedPatch[\s\S]*?argument\.name === "apply" && argument\.value !== false/);
-    // The VS Code write lives behind an injected handler, so the controller
-    // itself stays free of the editor API.
-    expect(patches).toMatch(/const result = await this\.options\.applyPatch\(\{/);
-    const setup = await source("src/app/conversationSetup.ts");
-    expect(setup).toMatch(/applyPatch: applyPatchHandler/);
-    // A conflict leaves the entry pending so it can be reviewed again.
-    expect(patches).toMatch(/if \(result\.status === "applied" \|\| result\.status === "unchanged"\) \{\s*this\.forgetResolvedChanges/);
-
-    const h = createConversationHarness();
-    expect(h.patches.hold("review", patchResponse(false))).toBe(true);
-    expect(h.patches.has("review")).toBe(true);
-    await h.patches.resolve("session", "review", ["file:///x"], false);
-    expect(h.patches.has("review")).toBe(false);
-    expect(h.messages.at(-1)).toMatchObject({ type: "patchResolved", status: "rejected", uris: ["file:///x"] });
-    // Applied proposals and no-op patches are not offered for review.
-    expect(h.patches.hold("written", patchResponse(true))).toBe(false);
-    expect(h.patches.hold("no-op", patchResponse(false, [{ uri: "file:///x", before: "same", after: "same" }]))).toBe(false);
-    await expect(h.patches.resolve("session", "review", [], false)).rejects.toThrow("no longer available");
-    h.dispose();
-    expect(css).toContain(".patch-review-action.accept");
-    expect(css).toContain(".agent-file-change.patch-conflict");
+    expect(main).not.toContain("resolvePatch");
+    expect(css).not.toContain(".patch-review-action");
     expect(css).toContain("#permission-control.is-full-access {");
     expect(css).toContain(".composer-menu-option.composer-menu-option-warning {");
   });

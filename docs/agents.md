@@ -12,6 +12,8 @@ Claude conversations run the CLI's bidirectional control protocol, so the questi
 
 [General configuration](#general-configuration) · [Claude Code](#claude-code) · [DeepSeek Harness](#deepseek-harness) · [Pi](#pi)
 
+`agent({ apply: false })` restricts the Agent process permission; if the result contains a patch, the Dext host automatically applies it and clears the returned patch. Also pass `patch: false` for read-only conclusions. Conversation and the result summary report the application status and real errors. Legacy history patches are explicitly ignored without writing on load.
+
 ## General configuration
 
 Agent profiles are stored in VS Code extension global storage. The input area exposes Agent, Model, Reasoning, and Speed selectors where supported by the provider. Codex profiles read the local Codex model cache when available, including supported reasoning levels and speed tiers. Claude Code profiles use its native `opus`/`sonnet` aliases and configured effort levels. An API call may override the Agent and Model for that call with its own `cli` and `model` arguments; otherwise the input selection is used. `Dext: Configure Agent` edits executable commands and custom model labels without handling credentials.

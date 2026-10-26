@@ -73,12 +73,12 @@ describe("shared turn rendering", () => {
     expect(terminalCommandSummary('echo ' + 'x'.repeat(2000))).toContain('… (expand for full command)');
   });
 
-  it("preserves Agent patches and dispatches Plan links without granting actions to History", () => {
+  it("ignores legacy Agent patches and dispatches Plan links without granting actions to History", () => {
     const adapter = resultAdapter();
     const change = { uri: "a.ts", before: "old", after: "new" };
     renderTurnResult(adapter, { kind: "agent", text: "Answer", patch: { kind: "patch", title: "Edit", changes: [change] } });
     expect(adapter.markdown).toHaveBeenCalledWith("Answer");
-    expect(adapter.patch).toHaveBeenCalledWith(change);
+    expect(adapter.patch).not.toHaveBeenCalled();
     renderTurnResult(adapter, { kind: "plan", text: "Plan", planPath: "plans/a.md" });
     expect(adapter.plan).toHaveBeenCalledWith("plans/a.md");
   });
@@ -102,10 +102,10 @@ describe("shared turn rendering", () => {
 
   it("uses the same readable structured Process content for both adapters", () => {
     const prose = vi.fn((text: string) => turnHtmlAdapter.element("p", {}, [text]));
-    const content = renderTurnMessage({ ...turnHtmlAdapter, prose, code: prose, patch: () => ({ html: "patch" }) },
+    const content = renderTurnMessage({ ...turnHtmlAdapter, prose, code: prose },
       presentAgentMessage(JSON.stringify({ kind: "agent", text: "Readable answer", patch: { kind: "patch", title: "Edit", changes: [{ uri: "a", before: "b", after: "c" }] } })));
     expect(content[0]?.html).toContain("Readable answer");
-    expect(content[0]?.html).toContain("patch");
+    expect(content[0]?.html).not.toContain("data-diff");
     expect(content[0]?.html).not.toContain('&quot;kind&quot;');
   });
 });

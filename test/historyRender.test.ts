@@ -489,7 +489,7 @@ describe("Dext history rendering", () => {
     expect(html.indexOf("rg greeting")).toBeLessThan(html.indexOf("Apply the smallest change"));
   });
 
-  it("keeps patch details and both diff layouts in structured thoughts", () => {
+  it("keeps legacy patch copy data without rendering diff layouts", () => {
     const structured = JSON.stringify({
       kind: "patch",
       title: "Complete hello_world",
@@ -511,13 +511,13 @@ describe("Dext history rendering", () => {
     expect(html).toContain("target-1/temp.py");
     expect(html).toContain("def hello_world():");
     expect(html).toContain('return &quot;hello world&quot;');
-    expect(html).toContain('data-diff-mode="inline"');
-    expect(html).toContain('data-diff-mode="split"');
-    expect(html).toContain("diff-inline");
-    expect(html).toContain("diff-split");
+    expect(html).not.toContain('data-diff-mode="inline"');
+    expect(html).not.toContain('data-diff-mode="split"');
+    expect(html).not.toContain("diff-inline");
+    expect(html).not.toContain("diff-split");
   });
 
-  it("renders an agent result patch as an expandable diff in history", () => {
+  it("marks a legacy agent result patch ignored in history", () => {
     const record: DextHistoryRecord = {
       id: "agent-patch",
       createdAt: 1,
@@ -544,9 +544,9 @@ describe("Dext history rendering", () => {
     };
 
     const html = renderHistoryRecord(record);
-    expect(html).toContain("greeting.ts");
-    expect(html).toContain("data-diff-mode=\"split\"");
-    expect(html).toContain("export const greeting");
+    expect(html).toContain("Legacy patch ignored");
+    expect(html).not.toContain("data-diff-mode=\"split\"");
+    expect(html).not.toContain("export const greeting");
   });
 
   it("uses compact durations in history summaries and executions", () => {

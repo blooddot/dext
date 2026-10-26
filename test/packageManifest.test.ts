@@ -305,8 +305,7 @@ describe("Dext package manifest", () => {
     expect(properties["dext.attachments.maxBytes"]?.description).toContain("Workspace @file references are not size-limited");
     expect(properties["dext.submitOnEnter"]).toMatchObject({ type: "boolean", default: true });
     expect(properties["dext.submitOnEnter"]?.description).toContain("Shift+Enter");
-    expect(properties["dext.diff.defaultView"]).toMatchObject({ type: "string", default: "inline" });
-    expect(properties["dext.diff.defaultView"]?.enum).toEqual(["inline", "split"]);
+    expect(properties).not.toHaveProperty("dext.diff.defaultView");
     expect(properties["dext.history.maxTurns"]).toMatchObject({ type: "integer", default: 100 });
     expect(properties["dext.history.maxOutputLength"]).toMatchObject({ type: "integer", default: 200000 });
     // Dispatch concurrency has a ceiling because each call can start its own process.

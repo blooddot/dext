@@ -21,15 +21,30 @@ function fullDocumentRange(document: vscode.TextDocument): vscode.Range {
   return new vscode.Range(new vscode.Position(0, 0), document.positionAt(document.getText().length));
 }
 
-async function validatedChange(change: PatchChange): Promise<{
+async function validatedChange(change: PatchChange, autoApply = false): Promise<{
   document: vscode.TextDocument;
   range: vscode.Range;
+  alreadyApplied: boolean;
 }> {
   const uri = vscode.Uri.parse(change.uri, true);
   if (uri.scheme !== "file" || !vscode.workspace.getWorkspaceFolder(uri)) {
     throw new Error("apply only writes files inside the current workspace.");
   }
   const document = await vscode.workspace.openTextDocument(uri);
+  // A writable Agent can return a record of edits it has already made. Only
+  // automatic application recognizes that case; public apply keeps its contract.
+  if (autoApply) {
+    const afterRange = change.range
+      ? new vscode.Range(vscodeRange(change.range).start, document.positionAt(document.offsetAt(vscodeRange(change.range).start) + change.after.length))
+      : fullDocumentRange(document);
+    if (document.validateRange(afterRange).isEqual(afterRange)
+      && document.getText(afterRange) === change.after
+      // An empty ranged after-image cannot prove that a deletion landed.
+      // Keep the existing conflict check rather than accepting arbitrary drift.
+      && (change.after !== "" || !change.range)) {
+      return { document, range: afterRange, alreadyApplied: true };
+    }
+  }
   const targetRange = change.range ? vscodeRange(change.range) : fullDocumentRange(document);
   if (!document.validateRange(targetRange).isEqual(targetRange)) {
     throw new Error(`Patch range is outside '${document.uri.fsPath}'.`);
@@ -41,7 +56,7 @@ async function validatedChange(change: PatchChange): Promise<{
   if (change.contentHash && contentHash(current) !== change.contentHash) {
     throw new Error(`'${document.uri.fsPath}' no longer matches the edit preview.`);
   }
-  return { document, range: targetRange };
+  return { document, range: targetRange, alreadyApplied: false };
 }
 
 function codeRef(document: vscode.TextDocument): CodeRef {
@@ -55,7 +70,7 @@ function codeRef(document: vscode.TextDocument): CodeRef {
   };
 }
 
-export const applyPatchHandler: DeterministicHandler = async ({ arguments: args }) => {
+export const applyPatchHandler: DeterministicHandler = async ({ arguments: args, metadata }) => {
   if (!vscode.workspace.isTrusted) {
     throw new Error("apply requires a trusted workspace.");
   }
@@ -80,7 +95,7 @@ export const applyPatchHandler: DeterministicHandler = async ({ arguments: args 
 
   let validated: Awaited<ReturnType<typeof validatedChange>>[];
   try {
-    validated = await Promise.all(changes.map(validatedChange));
+    validated = await Promise.all(changes.map((change) => validatedChange(change, metadata.autoApplyPatch)));
   } catch (error) {
     return {
       kind: "apply",
@@ -90,8 +105,17 @@ export const applyPatchHandler: DeterministicHandler = async ({ arguments: args 
     } satisfies ApplyResult;
   }
 
+  if (validated.every((change) => change.alreadyApplied)) {
+    return {
+      kind: "apply", status: "unchanged",
+      files: [...new Map(validated.map(({ document }) => [document.uri.toString(), document])).values()].map(codeRef),
+      summary: "The Agent changes are already present; nothing to apply."
+    } satisfies ApplyResult;
+  }
+
   const edit = new vscode.WorkspaceEdit();
   for (const [index, change] of changes.entries()) {
+    if (validated[index]!.alreadyApplied) continue;
     edit.replace(validated[index]!.document.uri, validated[index]!.range, change.after);
   }
   if (!await vscode.workspace.applyEdit(edit)) {
@@ -103,8 +127,9 @@ export const applyPatchHandler: DeterministicHandler = async ({ arguments: args 
     } satisfies ApplyResult;
   }
 
+  const written = validated.filter((change) => !change.alreadyApplied);
   const documents = await Promise.all(
-    [...new Map(validated.map(({ document }) => [document.uri.toString(), document.uri])).values()]
+    [...new Map(written.map(({ document }) => [document.uri.toString(), document.uri])).values()]
       .map((uri) => vscode.workspace.openTextDocument(uri))
   );
   const saved = await Promise.all(documents.map((document) => document.save()));
@@ -120,6 +145,6 @@ export const applyPatchHandler: DeterministicHandler = async ({ arguments: args 
     kind: "apply",
     status: "applied",
     files: documents.map(codeRef),
-    summary: `Applied ${changes.length} change${changes.length === 1 ? "" : "s"} to ${documents.length} file${documents.length === 1 ? "" : "s"}.`
+    summary: `Applied ${written.length} change${written.length === 1 ? "" : "s"} to ${documents.length} file${documents.length === 1 ? "" : "s"}.`
   } satisfies ApplyResult;
 };

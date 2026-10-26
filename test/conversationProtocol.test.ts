@@ -7,14 +7,14 @@ describe("conversation protocol", () => {
   it("composes its messages into the host's one request union", () => {
     const types = conversationRequestSchemas.map((schema) => schema.shape.type.value);
     expect(types).toContain("executeInput");
-    expect(types).toContain("resolvePatch");
+    expect(types).not.toContain("resolvePatch");
     expect(types).toContain("selectConversation");
     expect(types).toContain("agentSelection");
-    expect(types).toHaveLength(21);
+    expect(types).toHaveLength(20);
     for (const type of types) expect(webviewRequestSchema.options.some((option) => option.shape.type.value === type)).toBe(true);
   });
 
-  it("accepts the conversation, execution, plan and review messages", () => {
+  it("accepts the conversation, execution, and plan messages", () => {
     const selection: AgentSelection = {
       mode: "agent", permission: "workspace-write", profileId: "codex", model: "m", reasoningEffort: "", speed: "", serviceTier: ""
     };
@@ -22,7 +22,6 @@ describe("conversation protocol", () => {
       { type: "executeInput", mode: "agent", source: "hello" },
       { type: "stopExecution", turnId: "turn" },
       { type: "buildPlan", planPath: ".dext/plans/a.plan.md" },
-      { type: "resolvePatch", turnId: "turn", uris: [], accept: true },
       { type: "selectConversation", sessionId: "session" },
       { type: "moveConversation", sessionId: "a", beforeSessionId: null },
       { type: "pinConversation", sessionId: "a", pinned: true },

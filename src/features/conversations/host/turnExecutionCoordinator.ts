@@ -29,7 +29,6 @@ import type {
 import { readHistoryResponse } from "../domain/historyResponse.js";
 import type { AgentEventStream } from "./agentEventStream.js";
 import type { InteractionController } from "./interactionController.js";
-import type { PatchReviewController } from "./patchReviewController.js";
 import type { PlanController, PlanRunContext } from "./planController.js";
 import { planTodoInstruction, stripPlanTodoProgress } from "../domain/planTodoProgress.js";
 import { harnessPresetOrDefault } from "../../agents/domain/harnessPresetDefault.js";
@@ -71,7 +70,6 @@ export interface TurnExecutionCoordinatorOptions {
   sessions: ConversationSessionPort;
   interactions: InteractionController;
   plans: PlanController;
-  patches: PatchReviewController;
   events: AgentEventStream;
   notifier: TurnNotifier;
   /** The composer controls this conversation will run with, captured once. */
@@ -342,8 +340,7 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
       }
       this.options.sessions.recordTurn(sessionId, turn);
       await this.options.sessions.postConversationState();
-      const reviewable = this.options.patches.hold(turnId, response);
-      await this.options.notifier.executed(sessionId, turnId, response, reviewable);
+      await this.options.notifier.executed(sessionId, turnId, response);
     } catch (error) {
       failed = true;
       cancelled = controller.signal.aborted;

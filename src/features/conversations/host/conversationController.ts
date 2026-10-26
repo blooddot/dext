@@ -70,7 +70,7 @@ function sessionSignature(session: DextHistorySession): string {
 
 /** Owns the in-memory conversation set: which tabs are open, which one is
  * active, the per-tab composer selection and the saved layout. Execution,
- * plan and patch state live in their own controllers. */
+ * plan state lives in its own controller. */
 export class ConversationController {
   private activeSession = outputSession();
   private readonly sessions = new Map<string, DextHistorySession>();

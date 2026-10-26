@@ -128,7 +128,6 @@ export interface SidebarState {
   skillsEnabled?: boolean;
   skillsDisabledReason?: string;
   settings?: {
-    diffView: "inline" | "split";
     submitOnEnter: boolean;
   };
   mcpServers: McpServerConfig[];

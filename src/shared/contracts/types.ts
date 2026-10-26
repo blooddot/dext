@@ -288,6 +288,8 @@ export interface ResolvedInvocation {
 }
 
 export interface ExecutionMetadata {
+  /** Internal: skip changes already written by the Agent during auto-apply. */
+  autoApplyPatch?: boolean;
   agentPreset?: string;
   /** Host-selected permission for typed Agent calls in a mode without its own
    * permission picker, such as Code. */
@@ -417,6 +419,8 @@ export interface AgentStreamEvent {
 }
 
 export interface RuntimeResponse {
+  /** Persisted automatic application outcome; never a pending proposal. */
+  patchApplication?: ApplyResult;
   invocation: InvocationAst;
   method: Pick<RegisteredCallable, "id" | "title" | "kind" | "source">;
   result: DextResult;

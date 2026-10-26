@@ -23,7 +23,7 @@ import { agent, apply, ask } from "dext";
 
 const analysis = await ask({ input: "解释这段实现，并提出重构要求：" });
 
-const preview = await agent({
+const edited = await agent({
   input: "实现所需的重构",
   apply: false,
 });
@@ -35,10 +35,13 @@ const summary = await agent({
   patch: false,
 });
 
-if (preview.patch) {
-  const applied = await apply({ result: preview });
-}
+// 补丁已自动处理并清空；重复 apply 确定性返回 unchanged。
+const applied = await apply({ result: edited });
 ```
+
+Agent 返回的任何 patch 都会在调用完成前自动通过现有 `apply()` 能力应用，包括 `apply: false` 的结果；不再等待人工审核。`apply: true` 的直接写入权限保持不变，可校验匹配的已写入内容会跳过。`apply: false` 只限制 Agent 进程直接写入，不再阻止宿主应用结果。需要只读结论时同时使用 `apply: false, patch: false`。
+
+自动尝试后返回的 `AgentResult.patch` 会被清空（包括 conflict/unchanged），`summary` 包含应用状态与原始错误；因此再次 `apply({ result })` 确定性返回 `unchanged`，不会重复写盘。执行记录另存应用结果，Conversation 与 History 显示一行文件数或真实错误。公开 `apply()` 对程序自行构造的 patch 仍按原有范围、内容、哈希和工作区校验处理。旧历史中的补丁标记为已忽略，加载历史不会写盘。
 
 一个 Code 轮次就是普通的 ES 模块。完整 TypeScript 语言都可用：变量、函数、类、`if`/`for`/`while`、`try`/`catch`、`async`/`await`、标准库，以及工作区能解析的任意 Node 内置模块或 npm 包。入口文件按 ESM 导入，因此顶层 `await` 可用。
 

@@ -113,7 +113,6 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       executeInput: (source, metadata, run) => this.application.executeInput(source, metadata, run),
       draftResource: (resource, source, metadata) => this.application.draftResource(resource, source, metadata),
       resolveSkillCommand: (id, selectedSkillIds, args, agent) => this.application.skills.resolveCommand(id, selectedSkillIds, args, agent),
-      applyMethod: () => this.applyMethod(),
       isTrustedLocalWorkspace: () => this.application.isTrustedLocalWorkspace(),
       readPlan: (planPath) => this.readPlanText(planPath),
       knownPlan: (reference) => Boolean(this.application.planUri(reference)),
@@ -533,7 +532,6 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
 
   async deleteTurn(turnId: string, sessionId = this.activeSession.id): Promise<void> {
     await this.conversation.controller.deleteTurn(turnId, sessionId);
-    this.conversation.patches.drop(turnId);
   }
 
   async forgetConversation(sessionId: string): Promise<void> {
@@ -772,9 +770,6 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           break;
         case "choosePlan":
           await this.choosePlan();
-          break;
-        case "resolvePatch":
-          await this.conversation.patches.resolve(this.activeSession.id, request.turnId, request.uris, request.accept);
           break;
         case "newConversation":
           await this.newConversation();
@@ -1124,12 +1119,6 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         message: error instanceof Error ? error.message : String(error)
       });
     }
-  }
-
-  private applyMethod(): NonNullable<ReturnType<DextApplication["registry"]["get"]>> {
-    const method = this.application.registry.get("apply");
-    if (!method) throw new Error("The apply API is not available.");
-    return method;
   }
 
   private async run(mode: "agent" | "ask" | "plan" | "code", source: string, planPath?: string, executePlan = false, codeContinuation?: readonly DextReplayEntry[], resourceSource?: "describe" | "import"): Promise<void> {

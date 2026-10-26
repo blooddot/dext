@@ -273,7 +273,7 @@ export class TranscriptView {
     meta: HTMLElement;
   } {
     const view = renderTurnSection(turnDomAdapter(this.host.document), section, [], open, action);
-    // Legacy hooks still identify cached turns and scope patch-review interactions.
+    // Legacy hooks still identify cached turns.
     view.disclosure.classList.add("output-turn-section");
     return { ...view, disclosure: view.disclosure as HTMLDetailsElement };
   }

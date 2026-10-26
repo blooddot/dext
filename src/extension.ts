@@ -793,8 +793,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
     vscode.workspace.onDidChangeConfiguration(async (event) => {
       if (
-        event.affectsConfiguration("dext.diff.defaultView")
-        || event.affectsConfiguration("dext.submitOnEnter")
+        event.affectsConfiguration("dext.submitOnEnter")
       ) {
         await sidebar.refresh();
         return;

@@ -10,7 +10,7 @@ import { ExecutionCancelledError } from "../src/shared/protocol/executionErrors.
 import { parseMcpManifest } from "../src/features/mcp/domain/mcpManifest.js";
 import { MethodRegistry } from "../src/features/workflow/domain/registry.js";
 import { parseAgentResult } from "../src/shared/protocol/resultBoundary.js";
-import { DextRuntime, type RuntimeResultRepairRequest } from "../src/features/workflow/host/runtime.js";
+import { DextRuntime, type RuntimeResultRepairRequest, type DeterministicHandler } from "../src/features/workflow/host/runtime.js";
 import { mcpRawResultSchema } from "../src/shared/contracts/schemas.js";
 import { prepareHistoryTrace } from "../src/features/conversations/domain/agentTraceReplay.js";
 import type { AgentConversationRequest, AgentStructuredRequest } from "../src/features/agents/host/agentRunner.js";
@@ -34,10 +34,11 @@ const host: ContextHost = {
   dir: async (path) => ({ kind: "dirRef", uri: `file:///${path}`, path })
 };
 
-function setup() {
+function setup(handlers: Record<string, DeterministicHandler> = {}) {
   const registry = new MethodRegistry();
   registry.registerMany(BUILTIN_METHODS, "builtin");
   const runtime = new DextRuntime(registry, new ContextResolver(host), undefined, {
+    ...handlers,
     terminalRun: async ({ arguments: args }) => ({
       kind: "terminal",
       status: "succeeded",
@@ -1343,8 +1344,12 @@ describe("Dext result repair", () => {
     expect(repaired).toBe(false);
   });
 
-  it("drops nested nulls so a Codex patch result still validates", async () => {
-    const { runtime } = setup();
+  it("drops nested nulls before automatically applying a Codex patch result", async () => {
+    let received: unknown;
+    const { runtime } = setup({ applyPatch: ({ arguments: args }) => {
+      received = args.result;
+      return { kind: "apply", status: "applied", files: [], summary: "Applied" };
+    } });
     selectFakeAgent(runtime);
     runtime.setAgentRunner({
       run: async () => JSON.stringify({
@@ -1360,10 +1365,12 @@ describe("Dext result repair", () => {
     });
 
     const response = await runtime.execute(agentCall(false));
-    expect(response.result).toMatchObject({
+    expect(received).toMatchObject({
       kind: "agent",
       patch: { kind: "patch", title: "edit", changes: [{ uri: "file:///x.ts", before: "a", after: "b" }] }
     });
+    expect(response.result).not.toHaveProperty("patch");
+    expect(response.patchApplication?.status).toBe("applied");
     expect(JSON.stringify(response.result)).not.toContain("null");
   });
 

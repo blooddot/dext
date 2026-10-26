@@ -135,7 +135,7 @@ describe("expanding history while a turn is streaming", () => {
         createDocumentFragment: () => ({ append: (...nodes: unknown[]) => fragments.push(...nodes) })
       },
       copyableText: (text: string) => text,
-      terminalBlock: vi.fn(), patches: { fileChangeDisclosure: vi.fn() }, planActions: vi.fn(),
+      terminalBlock: vi.fn(), planActions: vi.fn(),
       renderResult: (response: { executions: unknown[] }) => {
         const code = main.slice(main.indexOf("function renderExecution("), main.indexOf("function renderResult("));
         runInNewContext(ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText

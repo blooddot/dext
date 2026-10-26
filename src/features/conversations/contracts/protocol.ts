@@ -41,13 +41,6 @@ const conversationSchemaList = [
   z.object({ type: z.literal("copyTurn"), turnId: z.string().min(1), sessionId: z.string().min(1) }),
   z.object({ type: z.literal("buildPlan"), planPath: z.string().min(1).max(512) }),
   z.object({ type: z.literal("choosePlan") }),
-  z.object({
-    type: z.literal("resolvePatch"),
-    turnId: z.string().min(1),
-    /** Empty means every file the turn proposed, which is the Accept all path. */
-    uris: z.array(z.string().min(1)).max(200),
-    accept: z.boolean()
-  }),
   z.object({ type: z.literal("newConversation") }),
   z.object({ type: z.literal("selectConversation"), sessionId: z.string().min(1), switchId: z.number().int().positive().optional() }),
   z.object({ type: z.literal("outputSessionRefMiss"), sessionId: z.string().min(1), signature: z.string(), switchId: z.number().int().positive().optional(), hostInitiated: z.literal(true).optional() }),
@@ -122,18 +115,8 @@ export type ConversationWebviewResponse =
     switchId?: number;
     hostInitiated?: true;
   }
-  /** `reviewPatch` is set when the host is holding an unapplied patch for this
-   * turn, which is what puts Accept and Reject on its file changes. */
-  | { type: "execution"; sessionId: string; turnId: string; response: InputExecutionResponse; reviewPatch?: boolean }
+  | { type: "execution"; sessionId: string; turnId: string; response: InputExecutionResponse }
   | { type: "executionFailed"; sessionId: string; turnId: string; message: string; planOutcome?: PlanExecutionOutcome }
-  | {
-    type: "patchResolved";
-    sessionId: string;
-    turnId: string;
-    uris: string[];
-    status: "applied" | "rejected" | "conflict" | "unchanged";
-    message: string;
-  }
   | { type: "agentEvent"; sessionId: string; event: AgentStreamEvent }
   | { type: "focusAgentInput"; sessionId: string; turnId: string; requestId: string; kind: "agent" | "ui" }
   | { type: "agentEvents"; sessionId: string; events: AgentStreamEvent[]; switchId?: number }

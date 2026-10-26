@@ -11,8 +11,6 @@ import {
   type TurnSectionPresentation
 } from "./turnPresentation.js";
 import { agentMessageCopyText, presentAgentMessage } from "./agentMessagePresentation.js";
-import { presentDiff } from "./diffPresentation.js";
-import type { PatchChange } from "../../../shared/contracts/types.js";
 import { prepareHistoryTrace } from "../domain/agentTraceReplay.js";
 import {
   contextReferenceLabel,
@@ -110,31 +108,6 @@ function historySessionActions(session: DextHistorySession, favorite: boolean): 
     historyActionButton(archiveIcon, archiveCommand, archiveLabel, session.id),
     historyActionButton("trash", "dext.history.deleteConversation", "Delete conversation", session.id)
   ].join("");
-}
-
-function diffModeSwitch(): string {
-  return `<span class="diff-mode-switch" role="group" aria-label="Diff layout"><button class="diff-mode-button active" type="button" data-diff-mode="inline" aria-pressed="true" title="Inline diff">Inline</button><button class="diff-mode-button" type="button" data-diff-mode="split" aria-pressed="false" title="Split diff">Split</button></span>`;
-}
-
-function diffSide(line: ReturnType<typeof presentDiff>["rows"][number]["before"], marker: string): string {
-  if (!line) return `<span class="diff-side empty"><span class="diff-line-number"></span><span class="diff-marker"></span><span class="diff-code"></span></span>`;
-  return `<span class="diff-side ${line.kind}"><span class="diff-line-number">${line.line}</span><span class="diff-marker">${marker}</span><span class="diff-code">${escapeHtml(line.text)}</span></span>`;
-}
-
-function renderDiff(change: Pick<PatchChange, "before" | "after">): string {
-  const diff = presentDiff(change);
-  const inline = diff.rows.flatMap((row) => {
-    if (row.before?.kind === "context") return [diffSide(row.before, " ")];
-    return [row.before ? diffSide(row.before, "-") : "", row.after ? diffSide(row.after, "+") : ""].filter(Boolean);
-  }).join("");
-  const split = diff.rows.map((row) => `<span class="diff-split-row">${diffSide(row.before, row.before?.kind === "removed" ? "-" : " ")}${diffSide(row.after, row.after?.kind === "added" ? "+" : " ")}</span>`).join("");
-  return `<div class="diff-view" data-diff-view="inline"><div class="diff-inline">${inline}</div><div class="diff-split">${split}</div></div>`;
-}
-
-function renderFileChange(change: Pick<PatchChange, "uri" | "before" | "after">): string {
-  const name = change.uri.replaceAll("\\", "/").split("/").pop() ?? change.uri;
-  const counts = presentDiff(change);
-  return `<details class="history-disclosure file-change" data-diff-container><summary>${chevron()}<span>${escapeHtml(name)}</span><span class="history-meta"><span class="diff-added">+${counts.added}</span> <span class="diff-removed">-${counts.removed}</span></span>${diffModeSwitch()}</summary><div class="file-path">${escapeHtml(change.uri)}</div>${renderDiff(change)}</details>`;
 }
 
 const ANSI_COLOR_CLASSES = [
@@ -284,15 +257,14 @@ function renderedInputSource(source: string): string {
   return plainInputSource(normalizeInputReferenceSource(source));
 }
 
-function resultBody(result: DextResult): string {
+function resultBody(result: DextResult, patchApplication?: RuntimeResponse["patchApplication"]): string {
   return renderTurnResult({
     ...turnHtmlAdapter,
     markdown: (text) => ({ html: markdownOutput(text) }),
     json: (text) => ({ html: jsonOutput(text) }),
     terminal: (text, stderr) => ({ html: `<pre class="terminal-text${stderr ? " terminal-stderr" : ""}">${highlightTerminal(text)}</pre>` }),
-    patch: (change) => ({ html: renderFileChange(change) }),
     plan: (path) => ({ html: planLink(path) })
-  }, result).map((node) => node.html).join("");
+  }, result, patchApplication).map((node) => node.html).join("");
 }
 
 // History opens the plan document; building it belongs to the live composer.
@@ -303,7 +275,7 @@ function planLink(planPath: string): string {
 }
 
 function execution(response: RuntimeResponse): string {
-  return `<section class="history-execution execution-result">${resultBody(response.result)}</section>`;
+  return `<section class="history-execution execution-result">${resultBody(response.result, response.patchApplication)}</section>`;
 }
 
 function steps(response: InputExecutionResponse): WorkflowStepResponse[] {
@@ -330,7 +302,6 @@ function processMessage(text: string): string {
     ...turnHtmlAdapter,
     prose: (text) => ({ html: `<div class="markdown-body">${renderProcessMarkdown(text)}</div>` }),
     code: (text) => ({ html: `<pre>${escapeHtml(text)}</pre>` }),
-    patch: (change) => ({ html: renderFileChange(change) })
   }, presentAgentMessage(text)).map((node) => node.html).join("");
 }
 

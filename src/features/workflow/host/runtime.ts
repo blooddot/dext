@@ -23,6 +23,7 @@ import { PLAN_DOCUMENT_END, PLAN_DOCUMENT_START } from "../../conversations/doma
 import { DEFAULT_PLAN_INSTRUCTION } from "../../conversations/domain/planTemplate.js";
 import type {
   AgentStreamEvent,
+  ApplyResult,
   CodeRef,
   DextResult,
   ExecutionMetadata,
@@ -669,6 +670,22 @@ export class DextRuntime implements WorkflowRuntime {
       }
     }
     result = this.ax.validateOutput(contract, result);
+    let patchApplication: ApplyResult | undefined;
+    if (result.kind === "agent" && result.patch) {
+      const applied = await this.execute({
+        kind: "invocation", method: "apply", source: invocation.source,
+        arguments: [{ name: "result", value: result }]
+      }, [], { ...metadata, autoApplyPatch: resolved.arguments.apply !== false });
+      patchApplication = applied.result as ApplyResult;
+      // Consume the patch even on conflict (including a failed save after an
+      // edit). Reapplying this returned result must never write an insertion twice.
+      const consumed = { ...result };
+      delete consumed.patch;
+      result = {
+        ...consumed,
+        summary: [result.summary, `Auto-apply ${patchApplication.status}: ${patchApplication.summary}`].filter(Boolean).join("\n")
+      };
+    }
     return {
       invocation,
       method: {
@@ -678,6 +695,7 @@ export class DextRuntime implements WorkflowRuntime {
         source: method.source
       },
       result,
+      ...(patchApplication ? { patchApplication } : {}),
       durationMs: performance.now() - started,
       ...(metadata.instruction ? { instruction: metadata.instruction } : {})
     };

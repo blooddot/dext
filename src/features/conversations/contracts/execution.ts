@@ -95,13 +95,7 @@ export interface ConversationSessionPort {
 /** Everything the coordinator publishes, without owning the IPC channel. */
 export interface TurnNotifier {
   started: (snapshot: ExecutionSnapshot) => Promise<void>;
-  executed: (sessionId: string, turnId: string, response: InputExecutionResponse, reviewPatch: boolean) => Promise<void>;
+  executed: (sessionId: string, turnId: string, response: InputExecutionResponse) => Promise<void>;
   failed: (sessionId: string, turnId: string, message: string, planOutcome?: PlanExecutionOutcome) => Promise<void>;
   finished: (sessionId: string, turnId: string) => Promise<void>;
-}
-
-/** Pending patch ownership belongs to the patch review controller. */
-export interface TurnPatchPort {
-  /** Returns true when the turn left something a reader must review. */
-  hold: (turnId: string, response: InputExecutionResponse) => boolean;
 }
