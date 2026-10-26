@@ -204,12 +204,15 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
       await captureEvidence("initialize", packaged);
       return packaged;
     },
-    generate: async (evidence, signal, _onProgress, onOutput) => {
+    generate: async (evidence, signal, onProgress, onOutput) => {
       if (!projectAiProvider) throw new Error("Project AI is unavailable: enable and select an available AI CLI in the input area first.");
       const service = new ProjectAiGenerationService(projectAiProvider, projectPromptLimits(evidence.selection.evidenceChars));
       // `onOutput` is the single text sink: one activity event becomes exactly one output line.
+      // `onProgress` carries the AI pipeline stage fraction so the overall bar advances while
+      // generation runs; it is not an elapsed-time estimate.
       return service.generateProjectModel(evidence, {
         signal,
+        onProgress: (progress) => onProgress({ phase: "generating", fraction: progress.fraction, message: progress.message }),
         onEvent: (event) => onOutput(activityLine(event))
       });
     },

@@ -12,12 +12,35 @@ export type ProjectInitializationStatus = "uninitialized" | "running" | "complet
 
 export type ProjectInitializationPhase = "preparing" | "generating" | "saving";
 
+/**
+ * Share of the overall initialization bar owned by each phase. Preparing and saving are
+ * countable; AI generation reports a pipeline-stage fraction. The percentage reflects finished
+ * work, never elapsed time.
+ */
+export const PROJECT_INITIALIZATION_PHASE_PERCENT: Record<ProjectInitializationPhase, readonly [start: number, end: number]> = {
+  preparing: [0, 20],
+  generating: [20, 85],
+  saving: [85, 100]
+};
+
+/** Map a 0..1 fraction of one phase onto the overall 0..100 percentage. */
+export function projectInitializationPercent(phase: ProjectInitializationPhase, fraction: number): number {
+  const [start, end] = PROJECT_INITIALIZATION_PHASE_PERCENT[phase];
+  return Math.max(0, Math.min(100, Math.round(start + (end - start) * Math.max(0, Math.min(1, fraction)))));
+}
+
 
 export interface ProjectInitializationProgress {
   phase: ProjectInitializationPhase;
   /** Work units actually completed in the current phase; absent when no total is known. */
   completed?: number;
   total?: number;
+  /**
+   * Completion of the current phase from 0 to 1 for stages whose work is not a countable
+   * total (the AI pipeline reports one fraction per finished stage). Used only when
+   * `completed`/`total` are absent so the bar never invents elapsed-time progress.
+   */
+  fraction?: number;
   message?: string;
 }
 
@@ -33,6 +56,12 @@ export interface ProjectInitializationState {
   /** Actual completed work units in the current phase, never an estimated percentage. */
   progress?: number;
   progressTotal?: number;
+  /**
+   * Overall completion of the run from 0 to 100. Each phase owns a fixed share of the bar;
+   * inside it only measured work units or the AI pipeline's stage fraction move the value.
+   * It never decreases while a run is active.
+   */
+  percent?: number;
   message?: string;
   /** Bounded tail of output emitted by the initialization provider. */
   output?: string;

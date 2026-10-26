@@ -85,9 +85,10 @@ describe("project panel", () => {
   });
 
   it("distinguishes running, failed, cancelled and completed-but-missing-diagram states", () => {
-    const running = renderProjectPanel("overview", data({}, initialization("running", { phase: "generating", progress: 1, progressTotal: 2, message: "generating" })));
+    const running = renderProjectPanel("overview", data({}, initialization("running", { phase: "generating", percent: 63, message: "generating" })));
     expect(running).toContain("project-init-running");
-    expect(running).toContain("1/2");
+    expect(running).toContain('value="63"');
+    expect(running).toContain("63%");
 
     const failed = renderProjectPanel("overview", data({}, initialization("failed", { error: "AI unavailable" })));
     expect(failed).toContain("AI unavailable");

@@ -1,5 +1,10 @@
-import type { ProjectInitializationDependencies, ProjectInitializationHydration, ProjectInitializationProgressListener, ProjectInitializationState, ProjectInitializationTask } from "../contracts/lifecycle.js";
+import { PROJECT_INITIALIZATION_PHASE_PERCENT, type ProjectInitializationDependencies, type ProjectInitializationHydration, type ProjectInitializationProgressListener, type ProjectInitializationState, type ProjectInitializationTask } from "../contracts/lifecycle.js";
 export type { ProjectInitializationDependencies, ProjectInitializationHydration, ProjectInitializationOutput, ProjectInitializationPhase, ProjectInitializationProgress, ProjectInitializationProgressListener, ProjectInitializationState, ProjectInitializationStatus, ProjectInitializationTask } from "../contracts/lifecycle.js";
+
+function clampFraction(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
 
 function initializationErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
@@ -74,8 +79,12 @@ export class ProjectInitializationService {
     });
   }
 
-  /** Idempotent while running: the same in-flight task is returned instead of a second run. */
-  start(): ProjectInitializationTask {
+  /**
+   * Idempotent while running: the same in-flight task is returned instead of a second run.
+   * `startPercent` lets a resumed run begin where its checkpoint stopped instead of dropping the
+   * bar back to zero; progress reports never move it backwards.
+   */
+  start(startPercent = 0): ProjectInitializationTask {
     if (this.activeTask && this.state.status === "running") return this.activeTask;
     const controller = new AbortController();
     this.controller = controller;
@@ -83,6 +92,7 @@ export class ProjectInitializationService {
       status: "running",
       startedAt: this.now(),
       phase: "preparing",
+      percent: Math.max(0, Math.min(99, Math.round(startPercent))),
       message: "Preparing the local structure index…"
     });
     const promise = this.run(controller.signal);
@@ -109,9 +119,16 @@ export class ProjectInitializationService {
       delete previous.progressTotal;
       delete previous.message;
       const measured = update.completed !== undefined && update.total !== undefined && update.total > 0;
+      const [start, end] = PROJECT_INITIALIZATION_PHASE_PERCENT[update.phase];
+      const fraction = measured ? clampFraction(update.completed! / update.total!) : update.fraction !== undefined ? clampFraction(update.fraction) : undefined;
+      // A late report from a skipped or restarted stage must never move the bar backwards.
+      const percent = fraction === undefined
+        ? previous.percent ?? start
+        : Math.max(previous.percent ?? 0, Math.round(start + (end - start) * fraction));
       this.replaceState({
         ...previous,
         phase: update.phase,
+        percent,
         ...(measured ? { progress: Math.max(0, Math.min(update.completed!, update.total!)), progressTotal: update.total } : {}),
         ...(update.message ? { message: update.message } : {})
       });
@@ -126,10 +143,10 @@ export class ProjectInitializationService {
     try {
       const evidence = await this.dependencies.prepareEvidence(signal, onProgress);
       assertActive();
-      onProgress({ phase: "generating", message: "Calling the project AI to build the project model…" });
+      onProgress({ phase: "generating", fraction: 0, message: "Calling the project AI to build the project model…" });
       const output = await this.dependencies.generate(evidence, signal, onProgress, onOutput);
       assertActive();
-      onProgress({ phase: "saving", message: "Validating and saving the generated result…" });
+      onProgress({ phase: "saving", fraction: 0, message: "Validating and saving the generated result…" });
       await this.dependencies.persist(output, signal, onProgress);
       assertActive();
       this.replaceState({
@@ -137,6 +154,7 @@ export class ProjectInitializationService {
         status: "completed",
         finishedAt: this.now(),
         phase: "saving",
+        percent: 100,
         intentGenerated: output.intent !== undefined,
         diagramsGenerated: output.diagrams?.length ?? 0
       });

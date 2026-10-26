@@ -14,6 +14,35 @@ function deferred<T>() {
 }
 
 describe("Project initialization state machine", () => {
+  it("reports a monotone overall percentage from measured work and AI stage fractions", async () => {
+    const service = new ProjectInitializationService({
+      prepareEvidence: async (_signal, onProgress) => {
+        onProgress({ phase: "preparing", completed: 1, total: 4, message: "indexing" });
+        return evidence();
+      },
+      generate: async (_evidence, _signal, onProgress) => {
+        onProgress({ phase: "generating", fraction: 0.5, message: "halfway" });
+        // A stage that became optional/restarted must not move the bar backwards.
+        onProgress({ phase: "generating", fraction: 0.4, message: "stale stage" });
+        return { intent: promptIntent as never };
+      },
+      persist: async (_output, _signal, onProgress) => {
+        onProgress({ phase: "saving", completed: 1, total: 2, message: "saved" });
+      }
+    });
+    const percents: number[] = [];
+    service.subscribe((state) => {
+      if (state.status === "running" && state.percent !== undefined) percents.push(state.percent);
+    });
+    const state = await service.start().promise;
+    expect(state.status).toBe("completed");
+    expect(state.percent).toBe(100);
+    expect(percents).toContain(5); // preparing: 1/4 of 0–20
+    expect(percents).toContain(53); // generating: 20 + 65 * 0.5
+    expect(percents).toContain(93); // saving: 85 + 15 * 1/2
+    expect(percents).toEqual([...percents].sort((a, b) => a - b));
+  });
+
   it("starts uninitialized and never treats an old flag or diagrams alone as success", () => {
     const service = new ProjectInitializationService({
       prepareEvidence: async () => evidence(),
