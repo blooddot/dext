@@ -342,7 +342,7 @@ describe("resource documents", () => {
     const resource: ResourceSession = { type: "skill", scope: "global" };
     const result = await application.draftResource(resource, "https://github.com/acme/ponytail", { resourceSource: "import" });
     expect(importSkillPack).toHaveBeenCalledWith("https://github.com/acme/ponytail", expect.objectContaining({
-      analyzer: expect.any(Function), chooseTarget: expect.any(Function), chooseVariant: expect.any(Function)
+      analyzer: expect.any(Function)
     }));
     expect(execute).not.toHaveBeenCalled();
     expect(resource.origin).toBe("import");
@@ -369,11 +369,9 @@ describe("resource documents", () => {
       }
     };
     let analyzer: ((request: unknown) => Promise<unknown>) | undefined;
-    let importTargetRecommendation: string | undefined;
     Object.assign(application, {
-      importSkillPack: vi.fn(async (_input: string, options: { analyzer: (request: unknown) => Promise<unknown>; preferredAgent?: string }) => {
+      importSkillPack: vi.fn(async (_input: string, options: { analyzer: (request: unknown) => Promise<unknown> }) => {
         analyzer = options.analyzer;
-        importTargetRecommendation = options.preferredAgent;
         return imported;
       }),
       agents: {
@@ -397,7 +395,6 @@ describe("resource documents", () => {
       sourceUrl: "https://github.com/acme/skills",
       candidates: [{ directory: "skills/review", id: "review", fileCount: 1, shallow: "ok" }]
     });
-    expect(importTargetRecommendation).toBe("codex");
     expect(selection).toMatchObject({ packName: "p", skillDirectories: ["skills/review"] });
     expect(structured).toHaveBeenCalledOnce();
     expect(ask).not.toHaveBeenCalled();

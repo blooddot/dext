@@ -1,185 +1,193 @@
-import { describe, expect, it, vi } from "vitest";
+import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { importSkillPack } from "../src/features/resources/host/skillImporter.js";
 import type { FetchedArchive } from "../src/features/resources/host/githubArchive.js";
+import { SkillCatalog } from "../src/features/workflow/host/skillCatalog.js";
 import { normalizeSkillPackManifest } from "../src/features/resources/domain/skillPack.js";
-import type { ImportTargetRequest, ImportVariantRequest } from "../src/features/resources/domain/skillImportVariants.js";
 
 const ROOT = "https://github.com/acme/pack";
 const skill = (name: string, body = "Shared instructions"): string => `---\nname: ${name}\ndescription: Work on ${name}.\n---\n${body}\n`;
 const command = (body: string, fields = ""): string => `---\nskill: review\n${fields}---\n${body}\n`;
 function archive(contents: Record<string, string>): FetchedArchive {
-  return {
-    source: { kind: "repo", owner: "acme", repo: "pack", path: "", repositoryUrl: ROOT },
+  return { source: { kind: "repo", owner: "acme", repo: "pack", path: "", repositoryUrl: ROOT },
     ref: "main", commit: "abc1234",
-    files: new Map(Object.entries(contents).map(([path, text]) => [path, new TextEncoder().encode(text)]))
-  };
+    files: new Map(Object.entries(contents).map(([path, text]) => [path, new TextEncoder().encode(text)])) };
+}
+const roots: string[] = [];
+afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
+
+async function install(contents: Record<string, string>) {
+  const result = await importSkillPack(ROOT, { archive: archive(contents) });
+  const root = await mkdtemp(join(tmpdir(), "dext-variants-"));
+  roots.push(root);
+  for (const file of [{ path: `skills/${result.draft.name}/SKILL.md`, content: result.draft.content }, ...result.draft.files ?? []]) {
+    const path = join(root, ".dext", file.path);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, file.content, "utf8");
+  }
+  const catalog = new SkillCatalog();
+  await catalog.reload(root);
+  return { ...result, root, catalog };
 }
 
-describe("multi-agent skill imports", () => {
-  it("asks once for a target, prefers its variants and fills gaps with shared skills", async () => {
-    const chooseTarget = vi.fn(async (request: ImportTargetRequest) => {
-      expect(request.recommended).toBe("codex");
-      expect(request.targets).toEqual(expect.arrayContaining(["shared", "codex", "claude"]));
-      return "codex";
+describe("import all Skill versions and resolve per Agent", () => {
+  it("imports once and switches versions at use time with shared fallback", async () => {
+    const result = await install({
+      "skills/review/SKILL.md": skill("review", "Shared review"),
+      "skills/review/reference.md": "Shared support",
+      ".codex/skills/review/SKILL.md": skill("review", "Codex review"),
+      ".codex/skills/review/reference.md": "Codex support",
+      ".claude/skills/review/SKILL.md": skill("review", "Claude review"),
+      "skills/deploy/SKILL.md": skill("deploy", "Shared deploy")
     });
-    const analyzer = vi.fn();
-    const result = await importSkillPack(ROOT, { archive: archive({
-      "skills/review/SKILL.md": skill("review"),
-      "skills/deploy/SKILL.md": skill("deploy"),
-      ".codex/skills/review/SKILL.md": skill("review", "Codex instructions"),
-      ".claude/skills/review/SKILL.md": skill("review", "Claude instructions"),
-      ".claude/skills/claude-only/SKILL.md": skill("claude-only")
-    }), preferredAgent: "codex", chooseTarget, analyzer });
-    expect(chooseTarget).toHaveBeenCalledOnce();
-    expect(analyzer).not.toHaveBeenCalled();
-    expect(result.manifest.targetAgent).toBe("codex");
-    expect(result.manifest.skills.map((item) => item.directory)).toEqual([".codex/skills/review", "skills/deploy"]);
-    expect(result.report).toContain("Skill review: .codex/skills/review (codex)");
-    expect(result.report).toContain("claude variant excluded");
-    expect(result.manifest.analysis.skipped.find((item) => item.path === "skills/review")?.reason).toContain("Different shared variant");
+    expect(result.manifest.version).toBe(2);
+    expect(result.manifest.targetAgent).toBeUndefined();
+    expect(result.manifest.skills).toHaveLength(4);
+    expect(result.catalog.list("codex").map((entry) => entry.id)).toEqual(["deploy", "review"]);
+    expect(result.catalog.list("codex").find((entry) => entry.id === "review")?.variant).toBe("codex");
+    expect(result.catalog.list("claude").find((entry) => entry.id === "review")?.variant).toBe("claude");
+    expect(result.catalog.list("pi").find((entry) => entry.id === "review")?.variant).toBe("shared");
+    const codex = await result.catalog.load("review", result.root, ".", "codex");
+    expect(codex.instructions).toContain("Codex review");
+    expect(codex.sourcePath).toContain(join("variants", "codex", "skills", "review", "SKILL.md"));
+    expect(await result.catalog.load("review", result.root, ".", "claude")).toMatchObject({ instructions: expect.stringContaining("Claude review") });
+    expect(await result.catalog.load("review", result.root, ".", "pi")).toMatchObject({ instructions: expect.stringContaining("Shared review") });
+    expect(await result.catalog.load("deploy", result.root, ".", "codex")).toMatchObject({ instructions: expect.stringContaining("Shared deploy") });
+    expect(result.report).toContain("all imported");
+    expect(result.report).toContain(".codex/skills/review (codex)");
   });
 
-  it.each([ROOT, `${ROOT}/tree/main`])("does not silently prefer a visible copy for %s", async (url) => {
-    const files = archive({
-      "skills/review/SKILL.md": skill("review"),
-      ".claude/skills/review/SKILL.md": skill("review", "Different instructions")
+  it("never falls back to another CLI when a shared version does not exist", async () => {
+    const result = await install({ ".claude/skills/review/SKILL.md": skill("review", "Claude only") });
+    expect(result.catalog.list("codex")[0]?.available).toBe(false);
+    expect(result.catalog.list("claude")[0]?.available).toBe(true);
+    await expect(result.catalog.load("review", result.root, ".", "codex")).rejects.toThrow("no 'codex' version or shared fallback");
+    await expect(result.catalog.load("review", result.root, ".", "claude")).resolves.toMatchObject({ instructions: expect.stringContaining("Claude only") });
+  });
+
+  it("keeps distinct Agent mappings even when their complete trees match", async () => {
+    const result = await install({
+      "skills/review/SKILL.md": skill("review"), ".claude/skills/review/SKILL.md": skill("review")
     });
-    await expect(importSkillPack(url, { archive: files })).rejects.toThrow("Choose an import target");
-    const result = await importSkillPack(ROOT, { archive: files, targetAgent: "shared" });
-    expect(result.manifest.skills[0]?.directory).toBe("skills/review");
+    expect(result.manifest.skills).toHaveLength(2);
+    expect(result.catalog.list("claude")[0]?.variant).toBe("claude");
+    expect(result.catalog.list("codex")[0]?.variant).toBe("shared");
   });
 
-  it("compares supporting files as well as the main instructions", async () => {
-    const chooseTarget = vi.fn(async () => "shared");
-    const result = await importSkillPack(ROOT, { archive: archive({
-      "skills/review/SKILL.md": skill("review"), "skills/review/reference.md": "Shared support",
-      ".codex/skills/review/SKILL.md": skill("review"), ".codex/skills/review/reference.md": "Different support"
-    }), chooseTarget });
-    expect(chooseTarget).toHaveBeenCalledOnce();
-    expect(result.manifest.analysis.skipped[0]?.reason).toContain("Different codex variant");
-  });
-
-  it("merges identical complete trees without prompting", async () => {
-    const chooseTarget = vi.fn();
-    const chooseVariant = vi.fn();
-    const result = await importSkillPack(ROOT, { archive: archive({
-      "skills/review/SKILL.md": skill("review"), "skills/review/reference.md": "Same",
-      ".claude/skills/review/SKILL.md": skill("review"), ".claude/skills/review/reference.md": "Same"
-    }), chooseTarget, chooseVariant });
-    expect(chooseTarget).not.toHaveBeenCalled();
-    expect(chooseVariant).not.toHaveBeenCalled();
-    expect(result.manifest.skills[0]?.directory).toBe("skills/review");
-    expect(result.report).toContain("Identical skill tree");
-  });
-
-  it("asks for an exact source when two different variants have the same target", async () => {
-    const chooseVariant = vi.fn(async (request: ImportVariantRequest) => {
-      expect(request.kind).toBe("skill");
-      expect(request.sources.map((source: { path: string }) => source.path)).toEqual(["packages/a/skills/review", "packages/b/skills/review"]);
-      return "packages/b/skills/review";
+  it("deduplicates equivalent copies of the same Agent version", async () => {
+    const result = await install({
+      "skills/review/SKILL.md": skill("review"), ".agents/skills/review/SKILL.md": skill("review")
     });
-    const result = await importSkillPack(ROOT, { archive: archive({
-      "packages/a/skills/review/SKILL.md": skill("review", "A"), "packages/b/skills/review/SKILL.md": skill("review", "B")
-    }), targetAgent: "shared", chooseVariant });
-    expect(chooseVariant).toHaveBeenCalledOnce();
-    expect(result.manifest.skills[0]?.directory).toBe("packages/b/skills/review");
+    expect(result.manifest.skills).toHaveLength(1);
+    expect(result.report).toContain("Identical skill tree for the same Agent");
   });
 
-  it("uses a direct Agent-specific tree link as the explicit source choice", async () => {
-    const chooseTarget = vi.fn();
+  it("rejects different same-Agent sources without merging or opening a picker", async () => {
+    await expect(importSkillPack(ROOT, { archive: archive({
+      "packages/a/skills/review/SKILL.md": skill("review", "A"),
+      "packages/b/skills/review/SKILL.md": skill("review", "B")
+    }) })).rejects.toThrow("Different shared variants");
+  });
+
+  it("compares supporting files when deduplicating the same Agent version", async () => {
+    await expect(importSkillPack(ROOT, { archive: archive({
+      "skills/review/SKILL.md": skill("review"), "skills/review/reference.md": "A",
+      ".agents/skills/review/SKILL.md": skill("review"), ".agents/skills/review/reference.md": "B"
+    }) })).rejects.toThrow("Different shared variants");
+  });
+
+  it("honors subtree import scope", async () => {
     const result = await importSkillPack(`${ROOT}/tree/main/.claude/skills/review`, { archive: archive({
-      "skills/review/SKILL.md": skill("review"), ".claude/skills/review/SKILL.md": skill("review", "Claude instructions")
-    }), preferredAgent: "codex", chooseTarget });
-    expect(chooseTarget).not.toHaveBeenCalled();
-    expect(result.manifest.targetAgent).toBe("claude");
+      "skills/review/SKILL.md": skill("review"), ".claude/skills/review/SKILL.md": skill("review", "Claude")
+    }) });
+    expect(result.manifest.skills).toHaveLength(1);
     expect(result.manifest.skills[0]?.agent).toBe("claude");
   });
 
-  it("reads custom paths from plugin manifests and records skipped native functionality", async () => {
-    const result = await importSkillPack(ROOT, { archive: archive({
+  it("recognizes custom plugin roots and keeps native hooks out of the install", async () => {
+    const result = await install({
       ".codex-plugin/plugin.json": JSON.stringify({ skills: "./codex-prompts/", hooks: "./hooks.json" }),
       ".claude-plugin/plugin.json": JSON.stringify({ skills: ["./claude-prompts/"] }),
-      "codex-prompts/review/SKILL.md": skill("review", "Codex instructions"),
-      "claude-prompts/review/SKILL.md": skill("review", "Claude instructions"), "hooks.json": "{}"
-    }), targetAgent: "codex" });
-    expect(result.manifest.skills[0]?.directory).toBe("codex-prompts/review");
-    expect(result.manifest.skills[0]?.agent).toBe("codex");
+      "codex-prompts/review/SKILL.md": skill("review", "Codex"),
+      "claude-prompts/review/SKILL.md": skill("review", "Claude"), "hooks.json": "{}"
+    });
+    expect(result.manifest.skills).toHaveLength(2);
+    expect(normalizeSkillPackManifest(result.manifest, "pack")?.version).toBe(2);
     expect(result.report).toContain("native plugin configuration and hooks are not installed");
     expect(result.draft.files?.some((file) => file.path.endsWith("hooks.json"))).toBe(false);
-    expect(normalizeSkillPackManifest(result.manifest, "pack")?.targetAgent).toBe("codex");
-    expect(normalizeSkillPackManifest(result.manifest, "pack")?.skills[0]?.agent).toBe("codex");
   });
 
-  it("ignores unsafe manifest paths without turning them into candidates", async () => {
+  it("records unknown sources without treating them as shared fallback", async () => {
+    const result = await install({ "prompts/review/SKILL.md": skill("review") });
+    expect(result.manifest.skills[0]?.agent).toBe("unknown");
+    await expect(result.catalog.load("review", result.root, ".", "codex")).rejects.toThrow("shared fallback");
+  });
+
+  it("retains all variants of a logical skill chosen by ambiguous-pack analysis", async () => {
+    const analyzer = vi.fn(async () => ({ packName: "review", skillDirectories: ["packages/a/skills/review"],
+      excluded: [], confidence: "high", summary: "Review pack" }));
     const result = await importSkillPack(ROOT, { archive: archive({
-      ".codex-plugin/plugin.json": JSON.stringify({ skills: "../outside" }), "skills/review/SKILL.md": skill("review")
-    }) });
-    expect(result.report).toContain("ignored unsafe skill path");
-    expect(result.manifest.skills[0]?.agent).toBe("shared");
+      "packages/a/skills/review/SKILL.md": skill("review"),
+      "packages/a/.claude/skills/review/SKILL.md": skill("review", "Claude"),
+      "packages/b/skills/deploy/SKILL.md": skill("deploy")
+    }), analyzer });
+    expect(analyzer).toHaveBeenCalledOnce();
+    expect(result.manifest.skills.map((item) => item.agent).sort()).toEqual(["claude", "shared"]);
   });
 
-  it.each([undefined, "outside"])("rejects a cancelled or invalid target (%s)", async (answer) => {
-    await expect(importSkillPack(ROOT, { archive: archive({
-      "skills/review/SKILL.md": skill("review"), ".codex/skills/review/SKILL.md": skill("review", "Different")
-    }), chooseTarget: async () => answer })).rejects.toThrow(answer ? "not available" : "stopped");
-  });
-
-  it("rejects a variant selector that invents a source", async () => {
-    await expect(importSkillPack(ROOT, { archive: archive({
-      "a/review/SKILL.md": skill("review", "A"), "b/review/SKILL.md": skill("review", "B")
-    }), chooseVariant: async () => "outside/review" })).rejects.toThrow("not an offered source");
+  it("keeps legacy fixed-version packs usable across Agents", async () => {
+    const result = await install({ "skills/review/SKILL.md": skill("review", "Legacy instructions") });
+    await writeFile(join(result.root, ".dext", "skill-packs", "pack", "pack.json"), JSON.stringify({
+      ...result.manifest, version: 1, targetAgent: "claude",
+      skills: result.manifest.skills.map((entry) => ({ ...entry, agent: "claude" }))
+    }));
+    await result.catalog.reload(result.root);
+    await expect(result.catalog.load("review", result.root, ".", "codex")).resolves.toMatchObject({ instructions: expect.stringContaining("Legacy instructions") });
+    expect(result.catalog.list("codex")[0]?.available).toBeUndefined();
   });
 });
 
-describe("multi-agent command imports", () => {
-  it("chooses target-specific templates instead of the first path", async () => {
-    const result = await importSkillPack(ROOT, { archive: archive({
-      "skills/review/SKILL.md": skill("review"), ".claude/commands/review.md": command("Claude review"),
-      ".codex/commands/review.md": command("Codex review", "model: preferred-model\nagent: codex\n"),
-      "commands/review.md": command("Shared review")
-    }), targetAgent: "codex" });
-    const available = result.manifest.commands.filter((item) => item.status === "available");
-    expect(available).toHaveLength(1);
-    expect(available[0]?.source).toBe(".codex/commands/review.md");
-    expect(available[0]?.warnings?.[0]).toContain("Ignored routing fields");
-    expect(result.report).toContain("Command /review: .codex/commands/review.md (codex)");
-    expect(result.report).toContain("different variant");
-  });
-
-  it("does not let an unsupported command block a later compatible variant", async () => {
-    const result = await importSkillPack(ROOT, { archive: archive({
+describe("commands resolve per turn Agent", () => {
+  it("imports all compatible command versions and selects exact then shared", async () => {
+    const result = await install({
       "skills/review/SKILL.md": skill("review"),
-      ".claude/commands/review.md": command("Review $1", "allowed-tools: Bash\n"),
-      "commands/review.md": command("Review $ARGUMENTS")
-    }), targetAgent: "claude" });
-    expect(result.manifest.commands.find((item) => item.status === "available")?.source).toBe("commands/review.md");
-    expect(result.manifest.commands.find((item) => item.status === "unavailable")?.reason).toContain("Unsupported");
+      ".claude/commands/review.md": command("Claude $ARGUMENTS"),
+      ".codex/commands/review.md": command("Codex $ARGUMENTS", "model: preferred-model\n"),
+      "commands/review.md": command("Shared $ARGUMENTS")
+    });
+    expect(result.manifest.commands.filter((item) => item.status === "available")).toHaveLength(3);
+    for (const [agent, body] of [["codex", "Codex"], ["claude", "Claude"], ["pi", "Shared"]]) {
+      expect(result.catalog.resolveCommand("review", ["review"], "now", agent)).toMatchObject({
+        status: "ok", command: { instruction: `${body} now` }
+      });
+      expect(result.catalog.commands(agent).map((item) => item.id)).toEqual(["review"]);
+    }
   });
 
-  it("asks when equally ranked foreign command variants differ", async () => {
-    const chooseVariant = vi.fn(async (request: ImportVariantRequest) => {
-      expect(request.kind).toBe("command");
-      return ".opencode/command/review.md";
+  it("does not let an unsupported native template block a shared alternative", async () => {
+    const result = await install({
+      "skills/review/SKILL.md": skill("review"), ".claude/commands/review.md": command("Review $1", "allowed-tools: Bash\n"),
+      "commands/review.md": command("Shared $ARGUMENTS")
     });
-    const files = archive({
-      "skills/review/SKILL.md": skill("review"), ".claude/commands/review.md": command("Claude template"),
-      ".opencode/command/review.md": command("OpenCode template")
-    });
-    await expect(importSkillPack(ROOT, { archive: files, targetAgent: "shared" })).rejects.toThrow("Choose a command variant");
-    const result = await importSkillPack(ROOT, { archive: files, targetAgent: "shared", chooseVariant });
-    expect(chooseVariant).toHaveBeenCalledOnce();
-    expect(result.manifest.commands.find((item) => item.status === "available")?.source).toBe(".opencode/command/review.md");
-    expect(result.report).toContain("Adapted a compatible opencode prompt template");
+    expect(result.catalog.resolveCommand("review", ["review"], "now", "claude")).toMatchObject({ status: "ok", command: { instruction: "Shared now" } });
   });
 
-  it("merges identical command templates without asking", async () => {
-    const chooseVariant = vi.fn();
-    const result = await importSkillPack(ROOT, { archive: archive({
-      "skills/review/SKILL.md": skill("review"), ".claude/commands/review.md": command("Review $ARGUMENTS"),
-      ".opencode/command/review.md": command("Review $ARGUMENTS")
-    }), targetAgent: "shared", chooseVariant });
-    expect(chooseVariant).not.toHaveBeenCalled();
-    expect(result.manifest.commands.filter((item) => item.status === "available")).toHaveLength(1);
-    expect(result.report).toContain("identical template");
+  it("makes a lone compatible OpenCode prompt available as a shared Dext command", async () => {
+    const result = await install({
+      "skills/review/SKILL.md": skill("review"), ".opencode/command/review.md": command("Review $ARGUMENTS")
+    });
+    expect(result.manifest.commands[0]).toMatchObject({ agent: "shared", sourceAgent: "opencode" });
+    expect(result.catalog.resolveCommand("review", ["review"], "now", "codex")).toMatchObject({ status: "ok" });
+  });
+
+  it("does not offer or run another CLI's command without a shared alternative", async () => {
+    const result = await install({
+      "skills/review/SKILL.md": skill("review"), ".claude/commands/review.md": command("Claude only")
+    });
+    expect(result.catalog.commands("codex")).toEqual([]);
+    expect(result.catalog.resolveCommand("review", ["review"], "", "codex")).toMatchObject({ status: "invalid" });
+    expect(result.catalog.resolveCommand("review", ["review"], "", "claude")).toMatchObject({ status: "ok" });
   });
 });

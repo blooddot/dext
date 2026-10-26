@@ -43,6 +43,9 @@ export interface SkillSummary {
   id: string;
   title: string;
   description: string;
+  /** Automatically resolved for the current Input Agent. */
+  variant?: string;
+  available?: boolean;
   /** Present when `.dext/skill-packs/<pack>/pack.json` declared this skill. */
   packId?: string;
   packName?: string;

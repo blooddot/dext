@@ -865,6 +865,25 @@ describe("Dext runtime", () => {
     expect(request.input.endsWith("Goal:\n\nAdd a cache")).toBe(true);
   });
 
+  it("loads Skill variants for the actual turn and explicit API CLI instead of the active selection", async () => {
+    const { runtime } = setup();
+    runtime.setWorkspaceTrusted(true);
+    runtime.setAgentProfiles([
+      { id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] },
+      { id: "claude", label: "Claude", provider: "claude", command: "claude", models: [] }
+    ]);
+    runtime.setAgentSelection({ profileId: "codex" });
+    const loaded: Array<string | undefined> = [];
+    runtime.setSkillLoader(async (_id, _workspace, agent) => {
+      loaded.push(agent);
+      return { instructions: `${agent} instructions`, sourcePath: `/skills/${agent}/SKILL.md` };
+    });
+    runtime.setAgentRunner({ run: async () => ({ kind: "ask", text: "reply" }), runConversation: async () => "reply" });
+    await runtime.executeConversation("ask", "explain", { agent: "claude", skills: ["review"] });
+    await runtime.execute(invoke("ask", [arg("input", "explain"), arg("skills", ["review"]), arg("cli", "claude")]));
+    expect(loaded).toEqual(["claude", "claude"]);
+  });
+
   it("injects session skills and a command before the Plan contract", async () => {
     const { runtime } = setup();
     runtime.setWorkspaceTrusted(true);

@@ -16,6 +16,8 @@ export interface SkillDescriptor {
   title: string;
   description: string;
   sourcePath: string;
+  variant?: string;
+  available?: boolean;
   /** Set when an installed pack manifest owns this skill. */
   packId?: string;
   packName?: string;
@@ -29,13 +31,17 @@ interface CommandEntry {
   /** Lower numbers win: the local .dext root is 0, configured roots 1 and
    * global storage 2. */
   priority: number;
+  agent: string;
 }
 
 interface InvalidCommand {
   id: string;
   reason: string;
   priority: number;
+  agent: string;
 }
+
+interface SkillVariant { agent: string; sourcePath: string; title: string; description: string; }
 
 function inside(root: string, candidate: string): boolean {
   const path = relative(root, candidate);
@@ -52,14 +58,16 @@ function unique<T>(values: readonly T[]): T[] {
  * manifests or a skill's own `commands/` directory. */
 export class SkillCatalog {
   private readonly entries = new Map<string, SkillDescriptor>();
-  private readonly commandEntries = new Map<string, CommandEntry>();
-  private readonly invalidCommands = new Map<string, InvalidCommand>();
+  private readonly commandEntries = new Map<string, CommandEntry[]>();
+  private readonly invalidCommands = new Map<string, InvalidCommand[]>();
+  private readonly skillVariants = new Map<string, SkillVariant[]>();
   private readonly notes: string[] = [];
 
   async reload(workspaceRoot: string, skillDirs: readonly string[] = [], globalRoot?: string): Promise<void> {
     this.entries.clear();
     this.commandEntries.clear();
     this.invalidCommands.clear();
+    this.skillVariants.clear();
     this.notes.length = 0;
     const roots = unique([
       join(workspaceRoot, ".dext", "skills"),
@@ -82,17 +90,26 @@ export class SkillCatalog {
     // same priority) wins; the priority check still lets a local loose command
     // replace one from a global pack.
     for (const root of roots) await this.addLooseCommands(root, priorityOf(root));
-    this.attachCommandIds();
   }
 
-  list(): SkillDescriptor[] {
-    return [...this.entries.values()].sort((left, right) => left.id.localeCompare(right.id));
+  list(agent = "shared"): SkillDescriptor[] {
+    const commands = this.commands(agent);
+    return [...this.entries.values()].map((entry) => {
+      const variants = this.skillVariants.get(entry.id);
+      const variant = variants?.find((item) => item.agent === agent) ?? variants?.find((item) => item.agent === "shared");
+      return { ...entry, ...(variants ? { available: Boolean(variant), ...(variant ? { ...variant, variant: variant.agent } : {}) } : {}),
+        commandIds: commands.filter((command) => command.skillId === entry.id).map((command) => command.id).sort() };
+    }).sort((left, right) => left.id.localeCompare(right.id));
   }
 
   /** Command descriptors safe for the composer; source paths stay on the host. */
-  commands(): SkillCommandSummary[] {
-    return [...this.commandEntries.values()]
-      .map((entry) => entry.summary)
+  commands(agent = "shared"): SkillCommandSummary[] {
+    return [...this.commandEntries.keys()]
+      .flatMap((id) => {
+        const entry = this.commandFor(id, agent);
+        const variants = entry ? this.skillVariants.get(entry.summary.skillId) : undefined;
+        return entry && (!variants || variants.some((variant) => variant.agent === agent || variant.agent === "shared")) ? [entry.summary] : [];
+      })
       .sort((left, right) => left.id.localeCompare(right.id));
   }
 
@@ -100,24 +117,30 @@ export class SkillCatalog {
     return [...this.notes];
   }
 
-  async load(id: string, workspaceRoot: string, workspacePath = "."): Promise<{ instructions: string; sourcePath: string }> {
+  async load(id: string, workspaceRoot: string, workspacePath = ".", agent = "shared"): Promise<{ instructions: string; sourcePath: string }> {
     const base = resolve(workspaceRoot, workspacePath);
     if (!inside(workspaceRoot, base)) throw new Error("skill workspace must stay inside the current project.");
     const descriptor = this.entries.get(id);
     if (!descriptor) throw new Error(`Unknown skill '${id}'. Reload Dext after adding a SKILL.md package.`);
-    const source = await readFile(descriptor.sourcePath, "utf8");
-    return { instructions: source, sourcePath: descriptor.sourcePath };
+    const variants = this.skillVariants.get(id);
+    const variant = variants?.find((item) => item.agent === agent) ?? variants?.find((item) => item.agent === "shared");
+    if (variants && !variant) throw new Error(`Skill '${id}' has no '${agent}' version or shared fallback.`);
+    const sourcePath = variant?.sourcePath ?? descriptor.sourcePath;
+    const source = await readFile(sourcePath, "utf8");
+    return { instructions: source, sourcePath };
   }
 
   /** Resolves one `/command` for a turn. The skill must be selected for the
    * conversation; an unknown or unsupported command never falls through to a
    * model call with the raw slash text. */
-  resolveCommand(id: string, selectedSkillIds: readonly string[], args = ""): SkillCommandResolution {
-    const entry = this.commandEntries.get(id);
+  resolveCommand(id: string, selectedSkillIds: readonly string[], args = "", agent = "shared"): SkillCommandResolution {
+    const entry = this.commandFor(id, agent);
     if (!entry) {
-      const invalid = this.invalidCommands.get(id);
+      const invalid = this.invalidCommands.get(id)?.find((item) => item.agent === agent || item.agent === "shared");
       return invalid
         ? { status: "invalid", id, reason: invalid.reason }
+        : this.commandEntries.has(id) || this.invalidCommands.has(id)
+          ? { status: "invalid", id, reason: `Command has no '${agent}' version or shared fallback.` }
         : { status: "unknown", id };
     }
     if (!selectedSkillIds.includes(entry.summary.skillId)) {
@@ -154,22 +177,24 @@ export class SkillCatalog {
     }
   }
 
-  private commandWins(existing: { priority: number } | undefined, priority: number): boolean {
-    return !existing || existing.priority > priority;
+  private commandFor(id: string, agent: string): CommandEntry | undefined {
+    const entries = this.commandEntries.get(id) ?? [];
+    const invalid = this.invalidCommands.get(id) ?? [];
+    const priority = Math.min(...entries.map((item) => item.priority), ...invalid.map((item) => item.priority));
+    return entries.find((item) => item.priority === priority && item.agent === agent)
+      ?? entries.find((item) => item.priority === priority && item.agent === "shared");
   }
 
-  private registerInvalidCommand(id: string, reason: string, priority: number): void {
-    if (!this.commandWins(this.commandEntries.get(id), priority)) return;
-    if (!this.commandWins(this.invalidCommands.get(id), priority)) return;
-    this.commandEntries.delete(id);
-    this.invalidCommands.set(id, { id, reason, priority });
+  private registerInvalidCommand(id: string, reason: string, priority: number, agent = "shared"): void {
+    const entries = this.invalidCommands.get(id) ?? [];
+    if (!entries.some((entry) => entry.agent === agent && entry.priority === priority)) entries.push({ id, reason, priority, agent });
+    this.invalidCommands.set(id, entries);
   }
 
-  private registerCommand(id: string, summary: SkillCommandSummary, parsed: ParsedSkillCommand, priority: number): void {
-    if (!this.commandWins(this.commandEntries.get(id), priority)) return;
-    if (!this.commandWins(this.invalidCommands.get(id), priority)) return;
-    this.invalidCommands.delete(id);
-    this.commandEntries.set(id, { summary, parsed, priority });
+  private registerCommand(id: string, summary: SkillCommandSummary, parsed: ParsedSkillCommand, priority: number, agent = "shared"): void {
+    const entries = this.commandEntries.get(id) ?? [];
+    if (!entries.some((entry) => entry.agent === agent && entry.priority === priority)) entries.push({ summary, parsed, priority, agent });
+    this.commandEntries.set(id, entries);
   }
 
   private async addPackRoot(root: string, base: string, seen: Set<string>, priority: number): Promise<void> {
@@ -210,32 +235,48 @@ export class SkillCatalog {
       });
       for (const record of scopedSkills) {
         const skill = this.entries.get(record.id)!;
-        if (skill.packId) continue;
+        if (skill.packId && skill.packId !== directory.name) continue;
         skill.packId = directory.name;
         skill.packName = manifest.name;
+        if (manifest.version === 2) {
+          const variants = this.skillVariants.get(record.id) ?? [];
+          this.skillVariants.set(record.id, variants);
+          const path = record.file ? resolve(base, record.file) : undefined;
+          if (!path || !inside(base, path)) { this.notes.push(`${record.id}: variant path escapes the resource root or is missing.`); continue; }
+          try {
+            const metadata = parseSkillMetadata(await readFile(path, "utf8"), record.id);
+            const agent = record.agent ?? "unknown";
+            if (variants.some((variant) => variant.agent === agent)) {
+              this.notes.push(`${record.id}: duplicate '${agent}' variant in pack manifest.`);
+              continue;
+            }
+            variants.push({ agent, sourcePath: path, title: metadata.title, description: metadata.description });
+          } catch { this.notes.push(`${record.id}: variant file is missing.`); }
+        }
       }
       const scopedIds = new Set(scopedSkills.map((record) => record.id));
       for (const record of manifest.commands) {
+        const agent = manifest.version === 2 ? record.agent ?? "unknown" : "shared";
         if (!scopedIds.has(record.skillId)) continue;
         if (record.status !== "available" || !record.file) {
-          this.registerInvalidCommand(record.id, record.reason ?? "Command is unavailable.", priority);
+          this.registerInvalidCommand(record.id, record.reason ?? "Command is unavailable.", priority, agent);
           continue;
         }
         const path = resolve(base, record.file);
         if (!inside(base, path)) {
-          this.registerInvalidCommand(record.id, "Command path escapes the resource root.", priority);
+          this.registerInvalidCommand(record.id, "Command path escapes the resource root.", priority, agent);
           continue;
         }
         let source: string;
         try {
           source = await readFile(path, "utf8");
         } catch {
-          this.registerInvalidCommand(record.id, "Command file is missing.", priority);
+          this.registerInvalidCommand(record.id, "Command file is missing.", priority, agent);
           continue;
         }
         const parsed = parseCommandSource(record.id, source);
         if (!parsed.supported) {
-          this.registerInvalidCommand(record.id, parsed.diagnostics.join(" "), priority);
+          this.registerInvalidCommand(record.id, parsed.diagnostics.join(" "), priority, agent);
           continue;
         }
         const packId = this.entries.get(record.skillId)?.packId;
@@ -249,7 +290,7 @@ export class SkillCatalog {
           ...(packName ? { packName } : {}),
           ...(parsed.argumentHint ? { argumentHint: parsed.argumentHint } : {}),
           syntax: `/${record.id}`
-        }, parsed, priority);
+        }, parsed, priority, agent);
       }
     }
   }
@@ -304,12 +345,4 @@ export class SkillCatalog {
     }
   }
 
-  private attachCommandIds(): void {
-    for (const skill of this.entries.values()) skill.commandIds = [];
-    for (const entry of this.commandEntries.values()) {
-      const skill = this.entries.get(entry.summary.skillId);
-      if (skill) skill.commandIds.push(entry.summary.id);
-    }
-    for (const skill of this.entries.values()) skill.commandIds.sort();
-  }
 }

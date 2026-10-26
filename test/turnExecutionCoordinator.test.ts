@@ -188,6 +188,7 @@ describe("TurnExecutionCoordinator", () => {
     }));
     const h = createConversationHarness({
       resolveSkillCommand,
+      profiles: [{ id: "codex", provider: "codex", label: "Codex", command: "codex", models: [] }],
       executeConversation: async (_mode, _source, metadata) => {
         seen.push(metadata);
         return { kind: "workflow", executions: [] };
@@ -199,7 +200,7 @@ describe("TurnExecutionCoordinator", () => {
     await h.coordinator.execute(h.controller.session("session")!, "agent", "/ponytail-review src/a.ts");
 
     expect(resolveSkillCommand).toHaveBeenCalledOnce();
-    expect(resolveSkillCommand).toHaveBeenCalledWith("ponytail-review", ["ponytail-review"], "src/a.ts");
+    expect(resolveSkillCommand).toHaveBeenCalledWith("ponytail-review", ["ponytail-review"], "src/a.ts", "codex");
     expect(h.executeConversation.mock.calls[0]?.[1]).toBe("src/a.ts");
     expect(seen[0]?.commandInstruction).toContain("Review src/a.ts.");
     expect(seen[0]?.skills).toEqual(["ponytail-review"]);

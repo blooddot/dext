@@ -20,6 +20,8 @@ export interface SkillPackSkillRecord {
   description: string;
   directory: string;
   agent?: string;
+  /** Installed SKILL.md path relative to the Dext resource root (v2 packs). */
+  file?: string;
   commands: string[];
   warnings: string[];
 }
@@ -32,6 +34,7 @@ export interface SkillPackCommandRecord {
   /** Repository path of the command template. */
   source: string;
   agent?: string;
+  sourceAgent?: string;
   warnings?: string[];
   /** Installed path relative to `.dext/`, when the command is available. */
   file?: string;
@@ -55,7 +58,7 @@ export interface SkillPackAnalysis {
 
 export interface SkillPackManifest {
   name: string;
-  version: 1;
+  version: 1 | 2;
   source: string;
   targetAgent?: string;
   notes?: string[];
@@ -109,6 +112,7 @@ export function normalizeSkillPackManifest(value: unknown, fallbackId: string): 
       description: text(skill.description) ?? "",
       directory: text(skill.directory) ?? "",
       ...(text(skill.agent) ? { agent: text(skill.agent)! } : {}),
+      ...(text(skill.file) ? { file: text(skill.file)! } : {}),
       commands: strings(skill.commands),
       warnings: strings(skill.warnings)
     }];
@@ -127,6 +131,7 @@ export function normalizeSkillPackManifest(value: unknown, fallbackId: string): 
       skillId,
       source: text(command.source) ?? "",
       ...(text(command.agent) ? { agent: text(command.agent)! } : {}),
+      ...(text(command.sourceAgent) ? { sourceAgent: text(command.sourceAgent)! } : {}),
       ...(Array.isArray(command.warnings) ? { warnings: strings(command.warnings) } : {}),
       ...(text(command.file) ? { file: text(command.file)! } : {}),
       status,
@@ -152,7 +157,7 @@ export function normalizeSkillPackManifest(value: unknown, fallbackId: string): 
   const summary = text(analysisData?.summary);
   return {
     name: text(data.name) ?? fallbackId,
-    version: 1,
+    version: data.version === 2 ? 2 : 1,
     source: text(data.source) ?? "",
     ...(text(data.targetAgent) ? { targetAgent: text(data.targetAgent)! } : {}),
     ...(Array.isArray(data.notes) ? { notes: strings(data.notes) } : {}),
@@ -178,12 +183,13 @@ export function formatSkillPackReport(manifest: SkillPackManifest): string {
     `# ${manifest.name} skill pack`,
     "",
     `- Source: ${manifest.source || "unknown"}`,
-    ...(manifest.targetAgent ? [`- Import target: ${manifest.targetAgent} (files are selected at import time; switching Agent does not replace them)`] : []),
+    ...(manifest.version === 2 ? ["- Versions: all imported; each turn uses its Agent's version, then shared"]
+      : manifest.targetAgent ? [`- Import target: ${manifest.targetAgent} (fixed legacy import)`] : []),
     ...(manifest.commit ? [`- Commit: ${manifest.commit}`] : []),
     `- Imported: ${manifest.importedAt}`,
     `- Discovery: ${manifest.analysis.mode === "ai" ? "AI-assisted selection" : "deterministic"}`,
     ...(manifest.analysis.summary ? [`- Summary: ${manifest.analysis.summary}`] : []),
-    `- Skills: ${manifest.skills.map((skill) => skill.id).join(", ")}`,
+    `- Skills: ${[...new Set(manifest.skills.map((skill) => skill.id))].join(", ")}`,
     `- Commands: ${manifest.commands.length
       ? manifest.commands.map((command) => `${command.id} (${command.status})`).join(", ")
       : "none"}`

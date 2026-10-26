@@ -51,6 +51,24 @@ await runLabChecks(async ({ evaluate, settle, send, artifacts }) => {
   assert.equal(await evaluate(`document.activeElement?.textContent`), "Review");
   await key("Escape", 27);
   assert.equal(await evaluate(`document.getElementById('skills-menu').hidden`), true);
+  // The host resolves variants for the active Agent; Input keeps one logical
+  // selection and updates its version label and availability on a state change.
+  await evaluate(`window.routedSkillsState={methods:[],diagnostics:[],mcpServers:[],globalDiagnostics:[],
+    agentProfiles:[{id:'codex',provider:'codex',label:'Codex CLI',command:'codex',models:['test-model']},{id:'claude',provider:'claude',label:'Claude CLI',command:'claude',models:[]}],
+    agentSelection:{...selection,skills:['ponytail']},skillsEnabled:true,skillCommands:[],skills:[
+      {id:'ponytail',title:'Ponytail',description:'Lean code',packId:'ponytail',packName:'Ponytail',commandIds:[],variant:'codex',available:true},
+      {id:'claude-only',title:'Claude only',description:'Claude version',packId:'ponytail',packName:'Ponytail',commandIds:[],available:false}]};
+    host({type:'state',state:routedSkillsState});document.getElementById('skills-control').click();`);
+  assert.match(await evaluate(`document.querySelector('[data-value="skill:ponytail"]').textContent`), /Codex version/);
+  assert.equal(await evaluate(`document.querySelector('[data-value="skill:claude-only"]').disabled`), true);
+  await evaluate(`routedSkillsState.agentSelection={...routedSkillsState.agentSelection,profileId:'claude'};
+    routedSkillsState.skills[0].variant='shared';routedSkillsState.skills[1]={...routedSkillsState.skills[1],variant:'claude',available:true};
+    host({type:'state',state:routedSkillsState});`);
+  assert.match(await evaluate(`document.querySelector('[data-value="skill:ponytail"]').textContent`), /Shared version/);
+  assert.equal(await evaluate(`document.querySelectorAll('[data-value="skill:ponytail"]').length`), 1);
+  assert.equal(await evaluate(`document.querySelector('[data-value="skill:ponytail"]').getAttribute('aria-checked')`), 'checked');
+  assert.equal(await evaluate(`document.querySelector('[data-value="skill:claude-only"]').disabled`), false);
+  await key("Escape", 27);
   await evaluate(`host({type:'imageAttachment',relativePath:'.dext-global/attachments/layout.png',name:'layout.png',webviewUri:'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48"><rect width="48" height="48" fill="skyblue"/></svg>'});`);
   await settle();
   const after = await bounds();

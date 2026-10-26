@@ -59,7 +59,7 @@ describe("skill pack import", () => {
     expect(paths.has("skill-packs/ponytail/LICENSE")).toBe(true);
     expect(paths.has("skills/ponytail-review/SKILL.md")).toBe(true);
     expect(paths.has("skills/ponytail-review/reference.md")).toBe(true);
-    expect(paths.has("skill-packs/ponytail/commands/ponytail-review.md")).toBe(true);
+    expect(paths.has("skill-packs/ponytail/commands/shared/ponytail-review.md")).toBe(true);
     // The primary skill file is the draft content, never a duplicate companion.
     expect(paths.has("skills/ponytail/SKILL.md")).toBe(false);
     expect(paths.has("skills/ponytail/reference.md")).toBe(true);
@@ -144,17 +144,15 @@ describe("skill pack import", () => {
       .rejects.toThrow("No candidate skill passed validation");
   });
 
-  it("deduplicates identical skill trees and reports the shared source", async () => {
+  it("retains identical shared and Agent-specific skill versions", async () => {
     const files = archive({
       "skills/review/SKILL.md": skill("review"),
       ".openclaw/skills/review/SKILL.md": skill("review"),
       ".opencode/command/review.md": "---\nskill: review\n---\nReview $ARGUMENTS.\n"
     });
     const result = await importSkillPack("https://github.com/acme/skills", { archive: files });
-    expect(result.manifest.skills.map((item) => item.id)).toEqual(["review"]);
-    expect(result.manifest.analysis.skipped).toEqual([
-      { path: ".openclaw/skills/review", reason: expect.stringContaining("Identical skill tree") }
-    ]);
+    expect(result.manifest.skills.map((item) => item.agent).sort()).toEqual(["openclaw", "shared"]);
+    expect(result.manifest.analysis.skipped).toEqual([]);
   });
 
   it("rejects duplicate ids case-insensitively", async () => {
@@ -190,7 +188,7 @@ describe("skill pack import", () => {
     const statuses = Object.fromEntries(result.manifest.commands.map((command) => [command.id, command.status]));
     expect(statuses).toEqual({ good: "available", positional: "unavailable", tools: "unavailable", unmapped: "unavailable" });
     const paths = (result.draft.files ?? []).map((file) => file.path);
-    expect(paths).toContain("skill-packs/skills/commands/good.md");
+    expect(paths).toContain("skill-packs/skills/commands/shared/good.md");
     expect(paths.some((path) => path.includes("positional") || path.includes("tools") || path.includes("unmapped"))).toBe(false);
     expect(result.report).toContain("Unavailable commands");
   });

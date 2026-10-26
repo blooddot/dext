@@ -24,8 +24,7 @@ import {
 } from "../domain/skillImportAnalysis.js";
 import type { FetchedArchive } from "./githubArchive.js";
 import { fetchGithubSkillSnapshot } from "./githubSkillSnapshot.js";
-import type { ImportVariantOptions } from "../domain/skillImportVariants.js";
-import { PLUGIN_MANIFEST, fileHash, logicalSkillDirectory, selectCommandVariants, selectSkillVariants, skillSourceDeclarations, sourceAgent } from "./skillVariants.js";
+import { PLUGIN_MANIFEST, collectSkillVariants, fileHash, logicalSkillDirectory, skillSourceDeclarations, sourceAgent } from "./skillVariants.js";
 
 export const SKILL_PACK_MAX_FILES = 128;
 export const SKILL_PACK_MAX_BYTES = 1_000_000;
@@ -74,7 +73,7 @@ export interface SkillPackDraft {
   primarySkillId: string;
 }
 
-export interface ImportSkillPackOptions extends ImportVariantOptions {
+export interface ImportSkillPackOptions {
   analyzer?: SkillImportAnalyzer;
   signal?: AbortSignal;
   fetch?: typeof globalThis.fetch;
@@ -264,13 +263,8 @@ export async function importSkillPack(input: string, options: ImportSkillPackOpt
     }
     throw new Error("No SKILL.md was found in the linked repository directory. Dext will not generate a skill from a README.");
   }
-  const scopedAgent = sourceAgent(source.path, declarations);
-  const explicitSource = source.kind !== "repo" && (source.kind !== "tree" || scopedAgent !== "shared"
-    || /^(?:skills|\.agents\/skills)(?:\/|$)/.test(source.path)
-    || discovered.candidates.some((candidate) => candidate.directory === source.path));
-  const variants = await selectSkillVariants(discovered.candidates, (path) => snapshot?.fileHashes?.get(path)
-    ?? (allFiles.has(path) ? fileHash(allFiles.get(path)!) : undefined), declarations, options,
-    explicitSource ? scopedAgent : undefined);
+  const variants = collectSkillVariants(discovered.candidates, (path) => snapshot?.fileHashes?.get(path)
+    ?? (allFiles.has(path) ? fileHash(allFiles.get(path)!) : undefined), declarations);
   const discovery = classifySkillCandidates(variants.candidates, discovered.commandFiles, variants.skipped, (path) => logicalSkillDirectory(path, declarations));
   const shallowInvalid = discovery.candidates.filter((candidate) => !candidate.shallow.ok);
   if (!discovery.valid.length) {
@@ -319,7 +313,9 @@ export async function importSkillPack(input: string, options: ImportSkillPackOpt
     }
     const byDirectory = new Map(discovery.valid.map((candidate) => [candidate.directory, candidate]));
     selected = selection.skillDirectories.map((directory) => byDirectory.get(directory)!);
-    selectedFromAnalysis = new Set(selection.skillDirectories);
+    const selectedIds = new Set(selected.map((candidate) => candidate.id));
+    selected = discovery.valid.filter((candidate) => selectedIds.has(candidate.id));
+    selectedFromAnalysis = new Set(selected.map((candidate) => candidate.directory));
     packName = selection.packName;
     analysisMode = "ai";
     summary = selection.summary || undefined;
@@ -338,9 +334,18 @@ export async function importSkillPack(input: string, options: ImportSkillPackOpt
   ]);
 
   // Full validation of the selected set: any failure aborts the whole pack.
+  const packId = skillPackId(packName);
+  const baseVariants = new Map<string, SkillCandidate>();
+  for (const candidate of selected) {
+    const previous = baseVariants.get(candidate.id);
+    if (!previous || sourceAgent(candidate.directory, declarations) === "shared") baseVariants.set(candidate.id, candidate);
+  }
   const records: SkillPackSkillRecord[] = [];
   const packFiles: Array<{ path: string; bytes: Uint8Array }> = [];
   for (const candidate of [...selected].sort((left, right) => left.directory.localeCompare(right.directory))) {
+    const agent = sourceAgent(candidate.directory, declarations);
+    const installedRoot = candidate === baseVariants.get(candidate.id) ? `${SKILLS_DIRECTORY}/${candidate.id}`
+      : `${SKILL_PACKS_DIRECTORY}/${packId}/variants/${agent}/skills/${candidate.id}`;
     const warnings: string[] = [];
     const metadata = candidate.metadata;
     const diagnostics = metadata.diagnostics.filter((diagnostic) => /Invalid YAML|must be a/.test(diagnostic));
@@ -367,14 +372,15 @@ export async function importSkillPack(input: string, options: ImportSkillPackOpt
         continue;
       }
       if (bytes[0] === 0x23 && bytes[1] === 0x21) warnings.push(`Supporting file '${relative}' is executable text; it is copied but never run.`);
-      packFiles.push({ path: `${SKILLS_DIRECTORY}/${candidate.id}/${relative}`, bytes });
+      packFiles.push({ path: `${installedRoot}/${relative}`, bytes });
     }
     records.push({
       id: candidate.id,
       name: metadata.name ?? candidate.id,
       description: metadata.description,
       directory: candidate.directory,
-      agent: sourceAgent(candidate.directory, declarations),
+      agent,
+      file: `${installedRoot}/SKILL.md`,
       commands: [],
       warnings
     });
@@ -382,7 +388,6 @@ export async function importSkillPack(input: string, options: ImportSkillPackOpt
 
   // Commands are copied only when their syntax is a plain prompt template and
   // they map to a selected skill. Everything else is reported, never written.
-  const packId = skillPackId(packName);
   const commands: SkillPackCommandRecord[] = [];
   const commandFiles = new Map<string, Uint8Array>();
   const validCommands: Array<{ path: string; agent: string; id: string; identity: string; bytes: Uint8Array; parsed: ParsedSkillCommand; mapping: string }> = [];
@@ -425,35 +430,44 @@ export async function importSkillPack(input: string, options: ImportSkillPackOpt
     }
     validCommands.push({ path, agent: sourceAgent(path, declarations), id, identity: fileHash(bytes), bytes, parsed: parsedCommand, mapping });
   }
-  const commandVariants = await selectCommandVariants(validCommands, variants.targetAgent, options);
-  for (const { source: candidate, reason } of commandVariants.skipped) {
-    commands.push({ id: candidate.id, title: candidate.parsed.title, description: candidate.parsed.description,
-      skillId: candidate.mapping, source: candidate.path, agent: candidate.agent, status: "unavailable", reason });
+  const commandVariants = new Map<string, typeof validCommands[number]>();
+  for (const candidate of validCommands) {
+    // OpenCode prompt templates accepted by our parser are portable Dext
+    // commands. Preserve the original adapter in sourceAgent for provenance.
+    const agent = candidate.agent === "opencode" ? "shared" : candidate.agent;
+    const key = `${agent}:${candidate.id.toLowerCase()}`;
+    const previous = commandVariants.get(key);
+    if (previous) {
+      if (previous.identity !== candidate.identity || previous.mapping !== candidate.mapping) {
+        throw new Error(`Different ${agent} variants of command '${candidate.id}' have the same id. Import a specific directory instead.`);
+      }
+      continue;
+    }
+    commandVariants.set(key, candidate);
   }
-  for (const candidate of commandVariants.selected) {
-    const { id, path, agent, bytes, parsed: parsedCommand, mapping } = candidate;
-    const installed = `${SKILL_PACKS_DIRECTORY}/${packId}/${SKILL_PACK_COMMANDS_DIRECTORY}/${id}.md`;
+  for (const candidate of commandVariants.values()) {
+    const { id, path, bytes, parsed: parsedCommand, mapping } = candidate;
+    const agent = candidate.agent === "opencode" ? "shared" : candidate.agent;
+    const installed = `${SKILL_PACKS_DIRECTORY}/${packId}/${SKILL_PACK_COMMANDS_DIRECTORY}/${agent}/${id}.md`;
     commandFiles.set(installed, bytes);
     const record: SkillPackCommandRecord = {
       id, title: parsedCommand.title, description: parsedCommand.description, skillId: mapping,
-      source: path, agent, file: installed, status: "available",
+      source: path, agent, sourceAgent: candidate.agent, file: installed, status: "available",
       warnings: [
-        ...(agent !== "shared" && agent !== variants.targetAgent ? [`Adapted a compatible ${agent} prompt template for '${variants.targetAgent}'.`] : []),
+        ...(candidate.agent === "opencode" ? ["Adapted a compatible OpenCode prompt template as a shared Dext command."] : []),
         ...(parsedCommand.ignoredKeys.length ? [`Ignored routing fields: ${parsedCommand.ignoredKeys.join(", ")}; the conversation's Agent is used.`] : [])
       ]
     };
     commands.push(record);
-    const skill = records.find((item) => item.id === mapping);
-    if (skill) skill.commands.push(id);
+    for (const skill of records.filter((item) => item.id === mapping)) if (!skill.commands.includes(id)) skill.commands.push(id);
   }
 
   const licenses = [...allFiles.keys()].filter((path) => !path.includes("/") && LICENSE_NAME.test(path)).sort();
   const licenseBytes = licenses[0] ? allFiles.get(licenses[0]) : undefined;
   const manifest: SkillPackManifest = {
     name: packName,
-    version: 1,
+    version: 2,
     source: input.trim(),
-    targetAgent: variants.targetAgent,
     notes: declarations.notes,
     ...(archive.commit ? { commit: archive.commit } : {}),
     ...(licenses[0] ? { license: licenses[0] } : {}),
@@ -470,8 +484,9 @@ export async function importSkillPack(input: string, options: ImportSkillPackOpt
     }
   };
   const report = formatSkillPackReport(manifest);
-  const primary = records.find((record) => record.id === packId) ?? records[0]!;
-  const primaryCandidate = selected.find((candidate) => candidate.id === primary.id)!;
+  const primaryId = records.find((record) => record.id === packId)?.id ?? records[0]!.id;
+  const primaryCandidate = baseVariants.get(primaryId)!;
+  const primary = records.find((record) => record.id === primaryId && record.directory === primaryCandidate.directory)!;
   const primarySource = files.get(primaryCandidate.skillPath);
   const primaryContent = primarySource ? decodeText(primarySource) : undefined;
   if (!primaryContent) throw new Error(`Skill '${primary.id}' has no readable SKILL.md.`);

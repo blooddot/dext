@@ -34,7 +34,7 @@ export interface ConversationSetupDependencies {
     run: { resume?: readonly DextReplayEntry[]; onCallLog?: (entries: readonly DextReplayEntry[]) => void }
   ) => Promise<InputExecutionResponse>;
   draftResource: (resource: ResourceSession, source: string, metadata: Readonly<ExecutionMetadata>) => Promise<{ draft: ResourceDocument; response: InputExecutionResponse }>;
-  resolveSkillCommand?: (id: string, selectedSkillIds: readonly string[], args: string) => SkillCommandResolution;
+  resolveSkillCommand?: (id: string, selectedSkillIds: readonly string[], args: string, agent?: string) => SkillCommandResolution;
   applyMethod: () => RegisteredCallable;
   isTrustedLocalWorkspace: () => boolean;
   readPlan: (planPath: string) => Promise<string>;

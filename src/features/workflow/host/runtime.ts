@@ -294,7 +294,7 @@ export class DextRuntime implements WorkflowRuntime {
   private defaultAgentPermission: WritableAgentPermission = "workspace-write";
   private agentCliArguments: Readonly<Partial<Record<AgentProvider, readonly string[]>>> = {};
   private conversationMcpServers: (() => readonly AgentMcpServer[] | Promise<readonly AgentMcpServer[]>) | undefined;
-  private skillLoader: ((skill: string, workspace: DirRef) => Promise<{ instructions: string; sourcePath: string }>) | undefined;
+  private skillLoader: ((skill: string, workspace: DirRef, agent?: string) => Promise<{ instructions: string; sourcePath: string }>) | undefined;
   private ruleLoader: ((path: string) => Promise<string | undefined>) | undefined;
   private mcpCaller: ((
     tool: string,
@@ -436,7 +436,7 @@ export class DextRuntime implements WorkflowRuntime {
     this.workspaceTrusted = trusted;
   }
 
-  setSkillLoader(loader: (skill: string, workspace: DirRef) => Promise<{ instructions: string; sourcePath: string }>): void {
+  setSkillLoader(loader: (skill: string, workspace: DirRef, agent?: string) => Promise<{ instructions: string; sourcePath: string }>): void {
     this.skillLoader = loader;
   }
 
@@ -543,7 +543,7 @@ export class DextRuntime implements WorkflowRuntime {
             }
             if (!this.skillLoader) throw new Error("Agent call skill loading is not configured.");
             for (const skill of skills) {
-              const loaded = await this.skillLoader(skill, directory);
+              const loaded = await this.skillLoader(skill, directory, profile.provider);
               skillInstructions.push([
                 `Follow the skill '${skill}' from ${loaded.sourcePath} for this ${method.id} call.`,
                 loaded.instructions
@@ -601,7 +601,7 @@ export class DextRuntime implements WorkflowRuntime {
             : defaultWorkspace(this.workspaceRoot);
           const skill = resolved.arguments.skill;
           if (typeof skill !== "string") throw new Error("skill requires a skill name.");
-          const loaded = await this.skillLoader(skill, directory);
+          const loaded = await this.skillLoader(skill, directory, profile.provider);
           runnerMetadata = {
             ...metadata,
             instruction: [
@@ -847,7 +847,7 @@ export class DextRuntime implements WorkflowRuntime {
     // Skills and commands are user-installed text, so they share the rules
     // trust boundary. The command body already contains its arguments; the
     // remaining input is the task that follows it.
-    const skillInstruction = await this.conversationSkillInstruction(metadata.skills);
+    const skillInstruction = await this.conversationSkillInstruction(metadata.skills, profile.provider);
     const commandInstruction = metadata.commandInstruction?.trim() || undefined;
     if (commandInstruction && !this.workspaceTrusted) {
       throw new Error("Commands require a trusted local workspace.");
@@ -965,7 +965,7 @@ export class DextRuntime implements WorkflowRuntime {
   /** Loads every selected skill for a conversation turn. A skill that was
    * uninstalled after the tab stored its selection fails the turn here rather
    * than disappearing silently. */
-  private async conversationSkillInstruction(skills: readonly string[] | undefined): Promise<string | undefined> {
+  private async conversationSkillInstruction(skills: readonly string[] | undefined, agent: string): Promise<string | undefined> {
     const ids = [...new Set((skills ?? []).map((skill) => skill.trim()).filter(Boolean))].slice(0, 64);
     if (!ids.length) return undefined;
     if (!this.workspaceTrusted) throw new Error("Skills require a trusted local workspace.");
@@ -973,7 +973,7 @@ export class DextRuntime implements WorkflowRuntime {
     const workspace = defaultWorkspace(this.workspaceRoot);
     const instructions: string[] = [];
     for (const id of ids) {
-      const loaded = await this.skillLoader(id, workspace);
+      const loaded = await this.skillLoader(id, workspace, agent);
       instructions.push([
         `Follow the skill '${id}' from ${loaded.sourcePath}.`,
         "Read any files the skill references relative to that directory.",

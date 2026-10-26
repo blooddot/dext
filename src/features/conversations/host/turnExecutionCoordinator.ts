@@ -175,7 +175,7 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
     if (mode !== "code" && !session.resource && this.options.host.resolveSkillCommand) {
       const invocation = splitCommandInput(source);
       if (invocation) {
-        const resolved = this.options.host.resolveSkillCommand(invocation.commandId, selectedSkills, invocation.arguments);
+        const resolved = this.options.host.resolveSkillCommand(invocation.commandId, selectedSkills, invocation.arguments, profile?.provider);
         if (resolved.status === "ok") {
           command = { id: resolved.command.id, skillId: resolved.command.skillId };
           commandInstruction = [

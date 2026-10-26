@@ -61,7 +61,8 @@ export interface TurnExecutionHost {
   resolveSkillCommand?: (
     id: string,
     selectedSkillIds: readonly string[],
-    args: string
+    args: string,
+    agent?: string
   ) => SkillCommandResolution;
 }
 

@@ -110,7 +110,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       executeConversation: (mode, source, metadata) => this.application.executeConversation(mode, source, metadata),
       executeInput: (source, metadata, run) => this.application.executeInput(source, metadata, run),
       draftResource: (resource, source, metadata) => this.application.draftResource(resource, source, metadata),
-      resolveSkillCommand: (id, selectedSkillIds, args) => this.application.skills.resolveCommand(id, selectedSkillIds, args),
+      resolveSkillCommand: (id, selectedSkillIds, args, agent) => this.application.skills.resolveCommand(id, selectedSkillIds, args, agent),
       applyMethod: () => this.applyMethod(),
       isTrustedLocalWorkspace: () => this.application.isTrustedLocalWorkspace(),
       readPlan: (planPath) => this.readPlanText(planPath),

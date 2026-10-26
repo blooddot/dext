@@ -1,12 +1,11 @@
 import { createHash } from "node:crypto";
 import { posix } from "node:path";
-import type { ImportVariantOptions, ImportVariantSource } from "../domain/skillImportVariants.js";
 
 const AGENT_DIRECTORIES: Record<string, string> = {
   ".codex": "codex", ".codex-plugin": "codex",
   ".claude": "claude", ".claude-plugin": "claude",
   ".opencode": "opencode", ".openclaw": "openclaw",
-  ".github": "copilot", ".cursor": "cursor", ".gemini": "gemini"
+  ".github": "copilot", ".cursor": "cursor", ".gemini": "gemini", ".pi": "pi"
 };
 
 export const PLUGIN_MANIFEST = /(?:^|\/)\.(?:codex|claude)-plugin\/plugin\.json$/;
@@ -60,10 +59,12 @@ export function logicalSkillDirectory(path: string, declarations: SkillSourceDec
 export function sourceAgent(path: string, declarations?: SkillSourceDeclarations): string {
   for (const part of path.split("/")) if (Object.hasOwn(AGENT_DIRECTORIES, part)) return AGENT_DIRECTORIES[part]!;
   // These are portable skill locations, even when a plugin references them.
-  if (/^(?:skills\/|\.agents\/skills\/)/.test(path)) return "shared";
+  if (/^(?:skills\/|\.agents\/skills\/|commands\/)/.test(path)) return "shared";
   const matches = declarations?.roots.filter((root) => path === root.path || path.startsWith(`${root.path}/`)) ?? [];
   const agents = new Set(matches.map((root) => root.agent));
-  return agents.size === 1 ? [...agents][0]! : "shared";
+  if (agents.size === 1) return [...agents][0]!;
+  if (agents.size > 1 || !path || path.split("/").includes("skills")) return "shared";
+  return "unknown";
 }
 
 export interface SkillVariantCandidate {
@@ -88,108 +89,33 @@ function treeIdentity(candidate: SkillVariantCandidate, hash: (path: string) => 
   return parts.sort().join("\n");
 }
 
-export async function chooseImportVariant<T extends ImportVariantSource>(
-  kind: "skill" | "command", id: string, sources: T[], targetAgent: string, options: ImportVariantOptions
-): Promise<T> {
-  if (sources.length === 1) return sources[0]!;
-  const selected = await options.chooseVariant?.({ kind, id, targetAgent, sources });
-  if (!selected) {
-    if (options.chooseVariant) throw new Error("Skill import stopped: no variant was selected.");
-    throw new Error(`Choose a ${kind} variant for '${id}' instead of merging different contents:\n${sources.map((source) => `- ${source.agent}: ${source.path}`).join("\n")}`);
-  }
-  const result = sources.find((source) => source.path === selected);
-  if (!result) throw new Error(`The chosen ${kind} variant is not an offered source: ${selected}`);
-  return result;
-}
-
-export async function selectSkillVariants<T extends SkillVariantCandidate>(
-  candidates: T[], hash: (path: string) => string | undefined, declarations: SkillSourceDeclarations,
-  options: ImportVariantOptions, explicitSourceAgent?: string
-): Promise<{ candidates: T[]; targetAgent: string; skipped: Array<{ path: string; reason: string }> }> {
-  const groups = new Map<string, Array<{ candidate: T; path: string; agent: string; identity: string | undefined }>>();
+/** Import all Agent versions. Only equivalent copies of the same Agent version
+ * are collapsed; conflicting same-Agent sources require a narrower source URL. */
+export function collectSkillVariants<T extends SkillVariantCandidate>(
+  candidates: T[], hash: (path: string) => string | undefined, declarations: SkillSourceDeclarations
+): { candidates: T[]; skipped: Array<{ path: string; reason: string }> } {
+  const spellings = new Map<string, string>();
+  const groups = new Map<string, T[]>();
   for (const candidate of candidates) {
-    const key = candidate.id.toLowerCase();
-    groups.set(key, [...(groups.get(key) ?? []), {
-      candidate, path: candidate.directory, agent: sourceAgent(candidate.directory, declarations), identity: treeIdentity(candidate, hash)
-    }]);
-  }
-  for (const group of groups.values()) {
-    if (new Set(group.map((entry) => entry.candidate.id)).size > 1) {
-      throw new Error(`Two skill directories resolve to the same id with different casing: ${group.map((entry) => entry.path).join(", ")}`);
+    const folded = candidate.id.toLowerCase();
+    if (spellings.has(folded) && spellings.get(folded) !== candidate.id) {
+      throw new Error(`Two skill directories resolve to the same id with different casing: ${candidate.id}`);
     }
+    spellings.set(folded, candidate.id);
+    const key = `${folded}:${sourceAgent(candidate.directory, declarations)}`;
+    groups.set(key, [...(groups.get(key) ?? []), candidate]);
   }
-  const equivalent = (group: Array<{ identity: string | undefined }>): boolean => group.length > 1 && Boolean(group[0]?.identity)
-    && group.every((entry) => entry.identity === group[0]!.identity);
-  const agents = [...new Set(candidates.map((candidate) => sourceAgent(candidate.directory, declarations)))];
-  const competingAgents = [...groups.values()].some((group) => group.length > 1 && !equivalent(group)
-    && new Set(group.map((entry) => entry.agent)).size > 1);
-  const uniqueAgents = [...groups.values()].filter((group) => !equivalent(group) || group.length === 1)
-    .flatMap((group) => group.map((entry) => entry.agent));
-  const needsTarget = competingAgents || new Set(uniqueAgents).size > 1
-    || (agents.length === 1 && agents[0] !== "shared" && agents[0] !== options.preferredAgent);
-  let targetAgent = options.targetAgent ?? explicitSourceAgent;
-  if (!targetAgent && needsTarget) {
-    const declaredAgents = declarations.roots.filter((root) => candidates.some((candidate) => candidate.directory === root.path || candidate.directory.startsWith(`${root.path}/`))).map((root) => root.agent);
-    const targets = [...new Set([...agents, ...declaredAgents])];
-    if (agents.includes("shared") && options.preferredAgent && !targets.includes(options.preferredAgent)) targets.push(options.preferredAgent);
-    const recommended = options.preferredAgent && targets.includes(options.preferredAgent) ? options.preferredAgent
-      : targets.includes("shared") ? "shared" : targets[0]!;
-    targetAgent = await options.chooseTarget?.({ recommended, targets, sources: candidates.map((candidate) => ({ path: candidate.directory, agent: sourceAgent(candidate.directory, declarations) })) });
-    if (!targetAgent) {
-      if (options.chooseTarget) throw new Error("Skill import stopped: no target version was selected.");
-      throw new Error(`Choose an import target (${targets.join(", ")}) for this multi-agent repository.`);
-    }
-    if (!targets.includes(targetAgent)) throw new Error(`The chosen import target is not available: ${targetAgent}`);
-  }
-  targetAgent ??= options.preferredAgent ?? "shared";
   const selected: T[] = [];
   const skipped: Array<{ path: string; reason: string }> = [];
   for (const group of groups.values()) {
-    const isEquivalent = equivalent(group);
-    const rank = (entry: { agent: string }): number => entry.agent === targetAgent ? 0 : entry.agent === "shared" ? 1 : 2;
-    const eligible = group.filter((entry) => isEquivalent || entry.agent === targetAgent || entry.agent === "shared");
-    if (!eligible.length) {
-      skipped.push(...group.map((entry) => ({ path: entry.path, reason: `${entry.agent} variant excluded for import target '${targetAgent}'.` })));
-      continue;
+    const first = group[0]!;
+    const identity = treeIdentity(first, hash);
+    if (group.length > 1 && (!identity || group.some((item) => treeIdentity(item, hash) !== identity))) {
+      throw new Error(`Different ${sourceAgent(first.directory, declarations)} variants of skill '${first.id}' have the same id. Import a specific directory instead: ${group.map((item) => item.directory).join(", ")}`);
     }
-    const bestRank = Math.min(...eligible.map(rank));
-    const preferred = eligible.filter((entry) => rank(entry) === bestRank);
-    const chosen = isEquivalent ? preferred.sort((a, b) => a.path.localeCompare(b.path))[0]!
-      : await chooseImportVariant("skill", group[0]!.candidate.id, preferred, targetAgent, options);
-    selected.push(chosen.candidate);
-    for (const entry of group) {
-      if (entry === chosen) continue;
-      skipped.push({ path: entry.path, reason: isEquivalent
-        ? `Identical skill tree; using '${chosen.path}' (${chosen.agent}).`
-        : `Different ${entry.agent} variant; import target '${targetAgent}' uses '${chosen.path}' (${chosen.agent}).` });
-    }
+    selected.push(first);
+    for (const duplicate of group.slice(1)) skipped.push({ path: duplicate.directory,
+      reason: `Identical skill tree for the same Agent; using '${first.directory}'.` });
   }
-  if (!selected.length) throw new Error(`No skills are available for import target '${targetAgent}'.`);
-  return { candidates: selected, targetAgent, skipped };
-}
-
-export async function selectCommandVariants<T extends ImportVariantSource & { id: string; identity: string }>(
-  sources: T[], targetAgent: string, options: ImportVariantOptions
-): Promise<{ selected: T[]; skipped: Array<{ source: T; reason: string }> }> {
-  const groups = new Map<string, T[]>();
-  for (const source of sources) {
-    const key = source.id.toLowerCase();
-    groups.set(key, [...(groups.get(key) ?? []), source]);
-  }
-  const selected: T[] = [];
-  const skipped: Array<{ source: T; reason: string }> = [];
-  for (const group of groups.values()) {
-    const rank = (source: T): number => source.agent === targetAgent ? 0 : source.agent === "shared" ? 1 : 2;
-    const bestRank = Math.min(...group.map(rank));
-    const preferred = group.filter((source) => rank(source) === bestRank);
-    const identical = preferred.every((source) => source.identity === preferred[0]!.identity);
-    const chosen = identical ? preferred.sort((a, b) => a.path.localeCompare(b.path))[0]!
-      : await chooseImportVariant("command", group[0]!.id, preferred, targetAgent, options);
-    selected.push(chosen);
-    for (const source of group) {
-      if (source === chosen) continue;
-      skipped.push({ source, reason: `Using '${chosen.path}' (${chosen.agent}) for import target '${targetAgent}'${source.identity === chosen.identity ? "; identical template" : "; different variant"}.` });
-    }
-  }
-  return { selected, skipped };
+  return { candidates: selected, skipped };
 }

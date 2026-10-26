@@ -1014,10 +1014,12 @@ function renderSkillsMenu(state: SidebarState, selected: readonly string[], enab
     level: number;
     pack?: boolean;
     commands?: string;
+    disabled?: boolean;
     onToggle(): void;
   }): HTMLButtonElement => {
     const button = document.createElement("button");
     button.type = "button";
+    button.disabled = options.disabled === true;
     button.className = `composer-menu-option composer-skill-option${options.pack ? " composer-skill-pack" : ""}`;
     button.dataset.level = String(options.level);
     button.dataset.value = options.value;
@@ -1040,18 +1042,22 @@ function renderSkillsMenu(state: SidebarState, selected: readonly string[], enab
   };
   for (const group of groups) {
     if (group.packId) {
-      const check = packCheckState(group.skills.map((skill) => skill.id), selected);
+      const availableIds = group.skills.filter((skill) => skill.available !== false).map((skill) => skill.id);
+      const check = packCheckState(availableIds, selected);
       menu.append(row({
         label: group.name, value: `pack:${group.packId}`, checked: check, level: 0, pack: true,
         commands: `${group.skills.length} skill${group.skills.length === 1 ? "" : "s"}`,
-        onToggle: () => submitAgentSelection({ skills: togglePack(selected, group.skills.map((skill) => skill.id), check !== "checked") }, true)
+        disabled: availableIds.length === 0,
+        onToggle: () => submitAgentSelection({ skills: togglePack(selected, availableIds, check !== "checked") }, true)
       }));
     }
     for (const skill of group.skills) {
       const commands = group.commands.filter((command) => command.skillId === skill.id);
       menu.append(row({
         label: skill.title, value: `skill:${skill.id}`, checked: selected.includes(skill.id) ? "checked" : "unchecked", level: 1,
-        commands: commands.length ? commands.map((command) => command.syntax).join(" ") : "",
+        commands: skill.available === false ? "No version for this Agent or shared fallback"
+          : [skill.variant ? `${displayOptionValue(skill.variant)} version` : "", ...commands.map((command) => command.syntax)].filter(Boolean).join(" · "),
+        disabled: skill.available === false && !selected.includes(skill.id),
         onToggle: () => submitAgentSelection({ skills: toggleSkill(selected, skill.id) }, true)
       }));
     }

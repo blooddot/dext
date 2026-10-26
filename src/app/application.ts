@@ -44,7 +44,6 @@ import type { ProjectWorkspaceSettings } from "../features/project/contracts/pro
 import type { ProjectAiProvider } from "../features/project/host/generation/projectAiGeneration.js";
 import { RESOURCE_DIRECTORIES, mergeResourceFiles, resourceFileName, resourceFiles, resourcePathSegments, resourcePrompt, type ResourceDocument, type ResourceFileLimits, type ResourceKind, type ResourceScope, type ResourceSession, type ResourceTarget } from "../features/resources/contracts/resourceSession.js";
 import { importSkillPack, preflightSkillPack, SKILL_PACK_MAX_FILES, type ImportSkillPackOptions, type SkillPackDraft } from "../features/resources/host/skillImporter.js";
-import { skillImportChoices } from "../features/resources/host/skillImportPicker.js";
 import { looksLikeGithubUrl } from "../features/resources/domain/skillSource.js";
 import {
   parseSkillImportSelectionText,
@@ -341,7 +340,7 @@ export class DextApplication {
     this.registry.registerMany(BUILTIN_METHODS, "builtin");
     this.refreshAgentProfiles();
     this.runtime.setAgentSelection(this.agents.currentSelection());
-    this.runtime.setSkillLoader((skill, workspace) => this.skills.load(skill, this.workspaceRoot, workspace.path));
+    this.runtime.setSkillLoader((skill, workspace, agent) => this.skills.load(skill, this.workspaceRoot, workspace.path, agent));
     this.runtime.setRuleLoader(async (path) => {
       try {
         const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(path));
@@ -740,6 +739,8 @@ export class DextApplication {
 
   state(): SidebarState {
     const theme = loadEditorTokenTheme();
+    const selection = this.agents.currentSelection();
+    const skillAgent = this.agents.list().find((profile) => profile.id === selection.profileId)?.provider;
     return {
       ...(theme ? { theme } : {}),
       methods: this.registry.list().map((method) => ({
@@ -759,16 +760,18 @@ export class DextApplication {
         ...(this.workspaceTrusted && vscode.workspace.workspaceFolders?.[0] ? { project: vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri, ".dext").fsPath } : {})
       },
       agentProfiles: this.agentProfiles(),
-      agentSelection: this.agents.currentSelection(),
-      skills: this.skills.list().map((skill) => ({
+      agentSelection: selection,
+      skills: this.skills.list(skillAgent).map((skill) => ({
         id: skill.id,
         title: skill.title,
         description: skill.description,
+        ...(skill.variant ? { variant: skill.variant } : {}),
+        ...(skill.available !== undefined ? { available: skill.available } : {}),
         commandIds: [...skill.commandIds],
         ...(skill.packId ? { packId: skill.packId } : {}),
         ...(skill.packName ? { packName: skill.packName } : {})
       })),
-      skillCommands: this.skills.commands(),
+      skillCommands: this.skills.commands(skillAgent),
       skillsEnabled: this.workspaceTrusted,
       ...(this.workspaceTrusted ? {} : { skillsDisabledReason: "Skills require a trusted local workspace." }),
       settings: this.webviewSettings()
@@ -1098,11 +1101,8 @@ export class DextApplication {
         throw new Error("Import needs a single public GitHub repository, tree, or SKILL.md URL.");
       }
       const started = Date.now();
-      const profileId = metadata.agent ?? this.agents?.currentSelection().profileId;
-      const preferredAgent = this.agents?.list().find((profile) => profile.id === profileId)?.provider;
       const imported = await this.importSkillPack(input.trim(), {
         analyzer: this.skillImportAnalyzer(metadata),
-        ...skillImportChoices(preferredAgent, metadata.signal),
         ...(metadata.signal ? { signal: metadata.signal } : {})
       });
       resource.origin = "import";
