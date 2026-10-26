@@ -12,6 +12,7 @@ import { BUILTIN_METHODS } from "../features/workflow/domain/builtins.js";
 import { describeApiFlowIssue, type ApiFlow, type ApiFlowIssue } from "../features/workflow/contracts/apiFlow.js";
 import { ContextResolver } from "../features/workflow/host/contextResolver.js";
 import { DEXT_API_DIRECTORY, DEXT_DECLARATION_DIRECTORY, DEXT_DECLARATION_FILE, DEXT_TYPES_PATH, dextFiles, dextModuleDeclaration, dextSharedDeclaration, dextTsconfig } from "../features/workflow/domain/dextApiTypes.js";
+import { COMPOSER_GLOBAL_API_PATHS, composerGlobalApiModules, type ComposerApiSource } from "../features/workflow/domain/composerApiModules.js";
 import { inputReferenceDisplayParts } from "../features/workspace/domain/fileReference.js";
 import { clearHarnessPresetCache, listHarnessPresets } from "../features/agents/host/harnessPresets.js";
 import { isIgnored, parseIgnoreRules, type IgnoreRule } from "../features/workspace/domain/ignoreRules.js";
@@ -47,6 +48,33 @@ import { RESOURCE_DIRECTORIES, mergeResourceFiles, resourceFileName, resourceFil
  * bytes of source, so a large workspace cannot flood the Webview channel. */
 const COMPOSER_MODULE_LIMIT = 200;
 const COMPOSER_MODULE_BYTES = 2 * 1024 * 1024;
+
+/** The TypeScript sources below an API root, without requiring a workspace folder.
+ * `workspace.findFiles` searches the workspace, while Dext's global API directory lives
+ * in global storage; reading it directly keeps both roots on one code path. */
+async function apiSourceFiles(root: vscode.Uri, limit: number): Promise<vscode.Uri[]> {
+  const files: vscode.Uri[] = [];
+  const directories = [root];
+  while (directories.length && files.length < limit) {
+    const directory = directories.shift()!;
+    let entries: [string, vscode.FileType][];
+    try {
+      entries = await vscode.workspace.fs.readDirectory(directory);
+    } catch {
+      continue;
+    }
+    for (const [name, type] of entries.sort(([left], [right]) => left.localeCompare(right))) {
+      if (files.length >= limit) break;
+      const uri = vscode.Uri.joinPath(directory, name);
+      if (type === vscode.FileType.Directory) {
+        if (name !== "node_modules") directories.push(uri);
+      } else if (type === vscode.FileType.File && /\.(ts|mts)$/i.test(name)) {
+        files.push(uri);
+      }
+    }
+  }
+  return files;
+}
 
 /** Registry diagnostics name the server they rejected. Keeping the reason lets
  * a later "unknown API" explain the real cause instead of only "not connected". */
@@ -113,18 +141,24 @@ export class DextApplication {
    * composer resolved the built-in `dext` module and nothing else, and a correct
    * `import { main } from "dext/api/git/commit"` was a `Cannot find module` there.
    *
+   * Global APIs are included too, though the generated project deliberately omits them:
+   * a committed mapping cannot name Dext's machine-local storage. The composer's extra
+   * libraries are not committed, so it appends one virtual directory after the project
+   * mapping; a project API still wins when both roots supply the same id.
+   *
    * A workspace larger than the budget keeps the modules that fit, newest path first,
    * rather than sending nothing: completion for the rest still comes from the
    * generated project in VS Code.
    */
   async composerTypes(): Promise<{ declaration: string; apiPaths: string[]; modules: { path: string; specifier: string; content: string }[] }> {
-    const apiPaths = (JSON.parse(dextTsconfig(undefined, this.projectApiDirs())) as {
+    const projectPaths = (JSON.parse(dextTsconfig(undefined, this.projectApiDirs())) as {
       compilerOptions: { paths: Record<string, string[]> };
     }).compilerOptions.paths["dext/api/*"] ?? [];
+    const apiPaths = [...projectPaths, ...COMPOSER_GLOBAL_API_PATHS];
     const modules: { path: string; specifier: string; content: string }[] = [];
+    let bytes = 0;
     const folder = vscode.workspace.workspaceFolders?.find((workspace) => workspace.uri.scheme === "file");
     if (folder) {
-      let bytes = 0;
       for (const directory of this.projectApiDirs()) {
         if (modules.length >= COMPOSER_MODULE_LIMIT || bytes >= COMPOSER_MODULE_BYTES) break;
         const found = await vscode.workspace.findFiles(
@@ -153,6 +187,22 @@ export class DextApplication {
         }
       }
     }
+    const globalRoot = vscode.Uri.joinPath(this.storage.globalStorageUri, "api");
+    const globalSources: ComposerApiSource[] = [];
+    for (const uri of await apiSourceFiles(globalRoot, Math.max(0, COMPOSER_MODULE_LIMIT - modules.length))) {
+      if (modules.length + globalSources.length >= COMPOSER_MODULE_LIMIT || bytes >= COMPOSER_MODULE_BYTES) break;
+      const relative = relativePath(globalRoot.fsPath, uri.fsPath).replaceAll("\\", "/");
+      if (!relative || relative.startsWith("../") || isAbsolute(relative)) continue;
+      let content: string;
+      try {
+        content = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
+      } catch {
+        continue;
+      }
+      bytes += content.length;
+      globalSources.push({ relative, content });
+    }
+    modules.push(...composerGlobalApiModules(modules, globalSources));
     return { declaration: this.declarationText, apiPaths, modules };
   }
 

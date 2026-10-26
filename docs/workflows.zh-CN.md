@@ -254,7 +254,7 @@ const result = await agent({ input: "实现所需的修改" });
 
 标记在提交的输入中保持可读文本，Dext 不会把文件内容展开进提示词，由 Agent 自行读取引用的文件。`ask`、`agent`、`plan`、`template` 的 `input` 都接受这些标记。
 
-输入区使用 Monaco 的 TypeScript 编辑器，高亮、缩进、括号匹配和原生编辑行为都来自 TypeScript 语法。Code 模式就是普通 TypeScript，不多做别的事：Dext 会把生成的 `dext` 声明和工作区自己的 `.dext/api` 模块作为 extra lib 注入，并沿用生成工程给 VS Code 的那套 `dext/api/*` 映射；此后补全、自动导入、参数提示、悬浮文档、转到定义和诊断都由编辑器自身的 TypeScript 服务提供。因此 `import { main } from "dext/api/git/commit"` 在输入区能解析、能类型检查，模块说明符和具名导出也像其他模块一样补全。还没导入的导出会连同绑定它的 import 一起补全——输入 `ask` 会给出 `ask` 和 `import { ask } from "dext";`，输入 `commi` 会给出工作区 API 自己的 `commit` 和 `import { commit } from "dext/api/git/commit";`；在 `import { … } from "…"` 里面则只给该模块的导出、不带额外编辑。这些名字都是从声明和 API 源码里读出来的，绝不按名字形状猜：`git` 是目录而不是导出，所以输入它没有任何提示，旧 `.dx` 那种限定调用也不会被翻译。运行里仍然用了这些名字却没有导入时，报错会直接给出该写的导入：`git is not defined` 后面跟着 `use: import { main as commit } from "dext/api/git/commit";`。
+输入区使用 Monaco 的 TypeScript 编辑器，高亮、缩进、括号匹配和原生编辑行为都来自 TypeScript 语法。Code 模式就是普通 TypeScript，不多做别的事：Dext 会把生成的 `dext` 声明、工作区自己的 `.dext/api` 模块以及 Dext 全局存储中的 API 作为 extra lib 注入，并沿用生成工程给 VS Code 的那套 `dext/api/*` 映射（全局模块使用一个追加在项目候选之后的虚拟目录）；此后补全、自动导入、参数提示、悬浮文档、转到定义和诊断都由编辑器自身的 TypeScript 服务提供。因此 `import { main } from "dext/api/git/commit"` 在输入区能解析、能类型检查，模块说明符和具名导出也像其他模块一样补全。还没导入的导出会连同绑定它的 import 一起补全——输入 `ask` 会给出 `ask` 和 `import { ask } from "dext";`，输入 `commi` 会给出工作区 API 自己的 `commit` 和 `import { commit } from "dext/api/git/commit";`；在 `import { … } from "…"` 里面则只给该模块的导出、不带额外编辑。这些名字都是从声明和 API 源码里读出来的，绝不按名字形状猜：`git` 是目录而不是导出，所以输入它没有任何提示，旧 `.dx` 那种限定调用也不会被翻译。运行里仍然用了这些名字却没有导入时，报错会直接给出该写的导入：`git is not defined` 后面跟着 `use: import { main as commit } from "dext/api/git/commit";`。
 
 ## 自定义 API 与 Skills
 
@@ -338,7 +338,7 @@ Dext 为工作区生成一套编辑器用的 `dext` 工程，这个工程由项�
 - `.dext/tsconfig.json`——严格的 `nodenext` 工程，把 `dext` 映射到 `./api/dext.d.ts`、把 `dext/api/<id>` 映射到 API 模块本身（`dext/api/team/analyze` 对应 `api/team/analyze.ts`，与内核 loader 的查找顺序一致，项目通过 `apiDirs` 增加的目录同样在内），并包含 `api/**/*.ts`。它设置 `erasableSyntaxOnly: true`，因此 Node 类型擦除无法处理的语法——`enum`、`namespace`、参数属性和装饰器——在编辑器中就是错误；内核会以 `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX` 拒绝它。
 - `.dext/package.json`——把该目录标记为 ESM，使 TypeScript 服务按内核的加载方式对待 `.dext/api/*.ts`，包括顶层 `await`；同时声明这些文件编译时依赖的 `@types/node`。Dext 只在文件不存在时创建默认内容；之后由项目维护依赖、脚本及其他字段。请保留 `"type": "module"`，使工作流工程按 ESM 加载。
 
-类型声明和 tsconfig 会在重新加载时生成；`package.json` 只在缺失时初始化。`npm run check` 里的 `--workspace . --check` 检查生成文件是否与 registry 一致，以及 package 文件是否存在，不比较或改写项目依赖。完全不写 API 模块的工作区一个文件都不会生成。Dext 全局存储里的 API 是本机相关的，因为提交的文件无法指向它们而保持无类型；全局 MCP 清单同样不会进入声明（见 [MCP 配置](mcp.zh-CN.md)）。
+类型声明和 tsconfig 会在重新加载时生成；`package.json` 只在缺失时初始化。`npm run check` 里的 `--workspace . --check` 检查生成文件是否与 registry 一致，以及 package 文件是否存在，不比较或改写项目依赖。完全不写 API 模块的工作区一个文件都不会生成。Dext 全局存储里的 API 是本机相关的，因此不会写进生成的工程，因为提交的文件无法指向它们；输入区会把这些模块单独注册为虚拟 extra lib，所以 Code 模式仍能补全并类型检查全局 API 的 `dext/api/<id>`。全局 MCP 清单同样不会进入声明（见 [MCP 配置](mcp.zh-CN.md)）。
 
 Node 内置模块就是普通 import——自定义 API 读写文件用的 `import fs from "node:fs/promises"`——要让编辑器认它需要两步。先在 `.dext` 里执行一次 `npm install`，装上清单声明的类型定义。工程还设置了 `types: []`，以免工作区里无关的 `@types/*` 把全局量泄漏进这些文件；这也让 `@types/node` 的 ambient 模块在文件主动引用之前不进入程序，所以在 `api/` 下写一处 `/// <reference types="node" />` 就够了——它带进来的类型属于整个 program——完全不 import Node 内置模块的工程则既不需要这一行，也不需要那次安装。工作流自己的依赖直接声明在 `.dext/package.json`，在 `.dext` 中安装，并随工作流提交清单和锁文件。
 
