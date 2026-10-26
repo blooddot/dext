@@ -1,0 +1,287 @@
+{
+  "name": "ponytail",
+  "version": 2,
+  "source": "https://github.com/DietrichGebert/ponytail.git",
+  "notes": [
+    ".claude-plugin/plugin.json: native plugin configuration and hooks are not installed.",
+    ".codex-plugin/plugin.json: native plugin configuration and hooks are not installed."
+  ],
+  "commit": "09c434ab73ca43761c5d8b0c5d341926c2fba710",
+  "license": "LICENSE",
+  "importedAt": "2026-10-26T13:11:01.751Z",
+  "skills": [
+    {
+      "id": "ponytail",
+      "name": "ponytail",
+      "description": "Lazy senior dev mode for any coding task: the smallest change that fully solves it, and a reply a busy human understands in one read.",
+      "directory": ".openclaw/skills/ponytail",
+      "agent": "openclaw",
+      "file": "skill-packs/ponytail/variants/openclaw/skills/ponytail/SKILL.md",
+      "commands": [
+        "ponytail"
+      ],
+      "warnings": [
+        "No LICENSE file was found beside SKILL.md."
+      ]
+    },
+    {
+      "id": "ponytail-audit",
+      "name": "ponytail-audit",
+      "description": "Quality audit of the whole repo: bugs, security, real load, missing tests, speed, and what to delete. Most important first.",
+      "directory": ".openclaw/skills/ponytail-audit",
+      "agent": "openclaw",
+      "file": "skill-packs/ponytail/variants/openclaw/skills/ponytail-audit/SKILL.md",
+      "commands": [
+        "ponytail-audit"
+      ],
+      "warnings": [
+        "No LICENSE file was found beside SKILL.md."
+      ]
+    },
+    {
+      "id": "ponytail-debt",
+      "name": "ponytail-debt",
+      "description": "Harvest every shortcut: comment into one debt ledger, so deferrals get tracked instead of forgotten. One-shot report.",
+      "directory": ".openclaw/skills/ponytail-debt",
+      "agent": "openclaw",
+      "file": "skill-packs/ponytail/variants/openclaw/skills/ponytail-debt/SKILL.md",
+      "commands": [
+        "ponytail-debt"
+      ],
+      "warnings": [
+        "No LICENSE file was found beside SKILL.md."
+      ]
+    },
+    {
+      "id": "ponytail-gain",
+      "name": "ponytail-gain",
+      "description": "Show ponytail measured impact as a scoreboard: less code, less cost, more speed, from the agentic benchmark averages. One-shot display.",
+      "directory": ".openclaw/skills/ponytail-gain",
+      "agent": "openclaw",
+      "file": "skill-packs/ponytail/variants/openclaw/skills/ponytail-gain/SKILL.md",
+      "commands": [
+        "ponytail-gain"
+      ],
+      "warnings": [
+        "No LICENSE file was found beside SKILL.md."
+      ]
+    },
+    {
+      "id": "ponytail-help",
+      "name": "ponytail-help",
+      "description": "Quick reference for ponytail's modes, skills, and commands. One-shot display.",
+      "directory": ".openclaw/skills/ponytail-help",
+      "agent": "openclaw",
+      "file": "skill-packs/ponytail/variants/openclaw/skills/ponytail-help/SKILL.md",
+      "commands": [
+        "ponytail-help"
+      ],
+      "warnings": [
+        "No LICENSE file was found beside SKILL.md."
+      ]
+    },
+    {
+      "id": "ponytail-review",
+      "name": "ponytail-review",
+      "description": "Quality review of a diff: bugs, security, real load, missing tests, speed, and what to delete. Each finding says what goes wrong and how to fix it.",
+      "directory": ".openclaw/skills/ponytail-review",
+      "agent": "openclaw",
+      "file": "skill-packs/ponytail/variants/openclaw/skills/ponytail-review/SKILL.md",
+      "commands": [
+        "ponytail-review"
+      ],
+      "warnings": [
+        "No LICENSE file was found beside SKILL.md."
+      ]
+    },
+    {
+      "id": "ponytail",
+      "name": "ponytail",
+      "description": "Lazy senior dev mode: the smallest change that fully solves the task, and a reply a busy human understands in one read. Use on any coding task (writing, fixing, refactoring, reviewing, choosing dependencies) and when the user says \"ponytail\", \"be lazy\", \"simplest solution\", \"yagni\", or complains about over-engineering or bloat. Levels: lite, full (default), ultra.",
+      "directory": "skills/ponytail",
+      "agent": "shared",
+      "file": "skills/ponytail/SKILL.md",
+      "commands": [
+        "ponytail"
+      ],
+      "warnings": [
+        "No LICENSE file was found beside SKILL.md."
+      ]
+    },
+    {
+      "id": "ponytail-audit",
+      "name": "ponytail-audit",
+      "description": "Quality audit of a whole repo: bugs, security holes, what breaks under real load, risky code without tests, slow paths, and what to delete, merge or split. Ranked, each finding explained in plain English. One-shot report, changes nothing. Use for \"audit this codebase\", \"review the whole repo\", \"find bloat\", \"what can I delete\", /ponytail-audit.",
+      "directory": "skills/ponytail-audit",
+      "agent": "shared",
+      "file": "skills/ponytail-audit/SKILL.md",
+      "commands": [
+        "ponytail-audit"
+      ],
+      "warnings": [
+        "No LICENSE file was found beside SKILL.md."
+      ]
+    },
+    {
+      "id": "ponytail-debt",
+      "name": "ponytail-debt",
+      "description": "List every `shortcut:` comment (and older `ponytail:` ones) as a debt ledger. One-shot report, changes nothing. Use for \"ponytail debt\", \"what did ponytail defer\", \"list the shortcuts\", /ponytail-debt.",
+      "directory": "skills/ponytail-debt",
+      "agent": "shared",
+      "file": "skills/ponytail-debt/SKILL.md",
+      "commands": [
+        "ponytail-debt"
+      ],
+      "warnings": [
+        "No LICENSE file was found beside SKILL.md."
+      ]
+    },
+    {
+      "id": "ponytail-gain",
+      "name": "ponytail-gain",
+      "description": "Show ponytail's measured savings (code, cost, speed) from the benchmark. One-shot display. Use for /ponytail-gain, \"what does ponytail save\", \"ponytail impact\".",
+      "directory": "skills/ponytail-gain",
+      "agent": "shared",
+      "file": "skills/ponytail-gain/SKILL.md",
+      "commands": [
+        "ponytail-gain"
+      ],
+      "warnings": [
+        "No LICENSE file was found beside SKILL.md."
+      ]
+    },
+    {
+      "id": "ponytail-help",
+      "name": "ponytail-help",
+      "description": "Quick reference for ponytail levels, skills and commands. One-shot display. Use for /ponytail-help, \"ponytail help\", \"how do I use ponytail\".",
+      "directory": "skills/ponytail-help",
+      "agent": "shared",
+      "file": "skills/ponytail-help/SKILL.md",
+      "commands": [
+        "ponytail-help"
+      ],
+      "warnings": [
+        "No LICENSE file was found beside SKILL.md."
+      ]
+    },
+    {
+      "id": "ponytail-review",
+      "name": "ponytail-review",
+      "description": "Quality review of a change: is the logic right, is it safe, does it hold under real load, is risky code tested, is it fast enough, and is every line needed. Reads the connected code, not only the diff. Each finding is explained in plain English. Use for \"review this\", \"code review\", \"review the last commit\", \"review my PR\", \"is this over-engineered\", /ponytail-review.",
+      "directory": "skills/ponytail-review",
+      "agent": "shared",
+      "file": "skills/ponytail-review/SKILL.md",
+      "commands": [
+        "ponytail-review"
+      ],
+      "warnings": [
+        "No LICENSE file was found beside SKILL.md."
+      ]
+    }
+  ],
+  "commands": [
+    {
+      "id": "ponytail-audit",
+      "title": "Quality audit of the whole repo: bugs, security, load, tests, speed, bloat",
+      "description": "Quality audit of the whole repo: bugs, security, load, tests, speed, bloat",
+      "skillId": "ponytail-audit",
+      "source": ".opencode/command/ponytail-audit.md",
+      "agent": "shared",
+      "sourceAgent": "opencode",
+      "file": "skill-packs/ponytail/commands/shared/ponytail-audit.md",
+      "status": "available",
+      "warnings": [
+        "Adapted a compatible OpenCode prompt template as a shared Dext command."
+      ]
+    },
+    {
+      "id": "ponytail-debt",
+      "title": "Harvest shortcut: comments into a tracked debt ledger",
+      "description": "Harvest shortcut: comments into a tracked debt ledger",
+      "skillId": "ponytail-debt",
+      "source": ".opencode/command/ponytail-debt.md",
+      "agent": "shared",
+      "sourceAgent": "opencode",
+      "file": "skill-packs/ponytail/commands/shared/ponytail-debt.md",
+      "status": "available",
+      "warnings": [
+        "Adapted a compatible OpenCode prompt template as a shared Dext command."
+      ]
+    },
+    {
+      "id": "ponytail-gain",
+      "title": "Show ponytail's measured impact scoreboard (less code, cost, time)",
+      "description": "Show ponytail's measured impact scoreboard (less code, cost, time)",
+      "skillId": "ponytail-gain",
+      "source": ".opencode/command/ponytail-gain.md",
+      "agent": "shared",
+      "sourceAgent": "opencode",
+      "file": "skill-packs/ponytail/commands/shared/ponytail-gain.md",
+      "status": "available",
+      "warnings": [
+        "Adapted a compatible OpenCode prompt template as a shared Dext command."
+      ]
+    },
+    {
+      "id": "ponytail-help",
+      "title": "Quick reference for ponytail levels, skills, and commands",
+      "description": "Quick reference for ponytail levels, skills, and commands",
+      "skillId": "ponytail-help",
+      "source": ".opencode/command/ponytail-help.md",
+      "agent": "shared",
+      "sourceAgent": "opencode",
+      "file": "skill-packs/ponytail/commands/shared/ponytail-help.md",
+      "status": "available",
+      "warnings": [
+        "Adapted a compatible OpenCode prompt template as a shared Dext command."
+      ]
+    },
+    {
+      "id": "ponytail-review",
+      "title": "Quality review of the current changes: bugs, security, load, tests, speed, bloat",
+      "description": "Quality review of the current changes: bugs, security, load, tests, speed, bloat",
+      "skillId": "ponytail-review",
+      "source": ".opencode/command/ponytail-review.md",
+      "agent": "shared",
+      "sourceAgent": "opencode",
+      "file": "skill-packs/ponytail/commands/shared/ponytail-review.md",
+      "status": "available",
+      "warnings": [
+        "Adapted a compatible OpenCode prompt template as a shared Dext command."
+      ]
+    },
+    {
+      "id": "ponytail",
+      "title": "Switch ponytail intensity level (lite/full/ultra/off)",
+      "description": "Switch ponytail intensity level (lite/full/ultra/off)",
+      "skillId": "ponytail",
+      "source": ".opencode/command/ponytail.md",
+      "agent": "shared",
+      "sourceAgent": "opencode",
+      "file": "skill-packs/ponytail/commands/shared/ponytail.md",
+      "status": "available",
+      "warnings": [
+        "Adapted a compatible OpenCode prompt template as a shared Dext command."
+      ]
+    }
+  ],
+  "analysis": {
+    "mode": "deterministic",
+    "selected": [
+      ".openclaw/skills/ponytail",
+      ".openclaw/skills/ponytail-audit",
+      ".openclaw/skills/ponytail-debt",
+      ".openclaw/skills/ponytail-gain",
+      ".openclaw/skills/ponytail-help",
+      ".openclaw/skills/ponytail-review",
+      "skills/ponytail",
+      "skills/ponytail-audit",
+      "skills/ponytail-debt",
+      "skills/ponytail-gain",
+      "skills/ponytail-help",
+      "skills/ponytail-review"
+    ],
+    "excluded": [],
+    "skipped": []
+  }
+}
