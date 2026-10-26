@@ -82,6 +82,8 @@ describe("resource documents", () => {
     expect(other.map(entry => entry.id)).toEqual(expect.arrayContaining([
       "rule:project:team/style.md", "skill:project:release/SKILL.md", "mcp:project:config.jsonc"
     ]));
+    expect(other.find(entry => entry.id === "rule:project:team/style.md")?.group).toBe("team");
+    expect(other.find(entry => entry.id === "skill:project:release/SKILL.md")?.group).toBe(".");
     expect((await dataSource.definition("mcp:project:config.jsonc"))?.content).toContain("different-name");
     await rm(join(project, "api/git/commit.ts"));
     expect(await dataSource.list(["api"], "git.commit")).toEqual([]);
@@ -201,6 +203,21 @@ describe("resource documents", () => {
     await writeFile(join(root, "mcp/settings.jsonc"), '{"name":"server","transport":"stdio","command":"node","tools":[]}');
     expect(await application.listResources("api")).toEqual([{ name: "team.lookup", path: "team/lookup.ts", scope: "global" }]);
     expect(await application.readResource("mcp", "global", "settings.jsonc", "settings")).toMatchObject({ name: "server", path: "settings.jsonc" });
+  });
+
+  it("discovers nested MCP manifests and classifies them by directory", async () => {
+    await mkdir(join(root, "mcp/git"), { recursive: true });
+    await writeFile(join(root, "mcp/git/server.jsonc"), '{"name":"server","transport":"stdio","command":"node","tools":[]}');
+    expect(await application.listResources("mcp")).toEqual([{ name: "server", path: "git/server.jsonc", scope: "global" }]);
+    expect(resourcePathSegments("mcp", "git/server.jsonc")).toEqual(["git", "server.jsonc"]);
+    const dataSource = createFileResourceDataSource({
+      roots: () => ({ global: root }),
+      listFiles: kind => application.listResources(kind),
+      readFile: entry => readFile(entry.source.path!, "utf8")
+    });
+    const [manifest] = await dataSource.list(["mcp"], "");
+    expect(manifest).toMatchObject({ kind: "mcp", name: "server", path: "git/server.jsonc", group: "git" });
+    expect((await dataSource.definition("mcp:global:git/server.jsonc"))?.content).toContain('"name":"server"');
   });
 
   it("documents the single-purpose wrapper rule when creating an API", () => {

@@ -3,7 +3,7 @@ import { CONVERSATION_METHODS, formatFieldType, formatMethodParameter, methodRes
 import { describeEditorTab } from "../../../platform/editor-tabs/editorTabManager.js";
 import { editorTabKey } from "../../../platform/editor-tabs/editorTabTypes.js";
 import type { ApiCallable, ApiDataSourceOptions, FileResourceDataSourceOptions, ResourceEditorDataSource, ResourceEditorProviderOptions, ResourceEditorShowResult, ResourceEntry, ResourcePanelOptions } from "../contracts/resourceDocuments.js";
-import { RESOURCE_DIRECTORIES, RESOURCE_LABELS, type ResourceKind, type ResourceScope } from "../contracts/resourceSession.js";
+import { RESOURCE_DIRECTORIES, resourceDirectorySegments, type ResourceKind, type ResourceScope } from "../contracts/resourceSession.js";
 import { buildResourceDefinition, buildResourceList, filterResourceEntries, renderResourceDefinition, renderResourceList, resourceEntryId } from "../presentation/resourceDocuments.js";
 
 
@@ -196,7 +196,9 @@ export function createFileResourceDataSource(options: FileResourceDataSourceOpti
         if (!directory || (kind === "api" && file.path.endsWith(".d.ts"))) return [];
         return [{
           ...file, kind, id: resourceEntryId({ kind, ...file }),
-          group: kind === "api" ? file.name.split(".").slice(0, -1).join(".") || "." : RESOURCE_LABELS[kind],
+          group: kind === "api"
+            ? file.name.split(".").slice(0, -1).join(".") || "."
+            : resourceDirectorySegments(kind, file.path).join("/") || ".",
           source: { kind: file.scope, label: file.scope === "project" ? "Project" : "Global", path: `${directory}/${RESOURCE_DIRECTORIES[kind]}/${file.path}` }
         }];
       })

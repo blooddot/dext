@@ -615,36 +615,44 @@ export class DextApplication {
     const globalDiagnostics: string[] = [];
     const seenServerNames = new Set<string>();
     for (const { uri: directory, scope } of uniqueDirectories) {
-      let entries: [string, vscode.FileType][];
-      try { entries = await vscode.workspace.fs.readDirectory(directory); }
-      catch (error) {
-        if (error instanceof vscode.FileSystemError && error.code === "FileNotFound") continue;
-        const message = `MCP manifest discovery: ${error instanceof Error ? error.message : String(error)}`;
-        diagnostics.push(message);
-        (scope === "global" ? globalDiagnostics : projectDiagnostics).push(message);
-        continue;
-      }
-      for (const [name, type] of entries.sort(([left], [right]) => left.localeCompare(right))) {
-      if (type !== vscode.FileType.File || !name.toLowerCase().endsWith(".jsonc")) continue;
-      const file = vscode.Uri.joinPath(directory, name);
-      try {
-        const manifest = parseMcpManifest(new TextDecoder().decode(await vscode.workspace.fs.readFile(file)), file.fsPath);
-        if (manifest.server && seenServerNames.has(manifest.server.name)) continue;
-        if (manifest.server) {
-          seenServerNames.add(manifest.server.name);
-          servers.push({ ...manifest.server, scope });
+      const visit = async (current: vscode.Uri, depth: number): Promise<void> => {
+        if (depth > 12) return;
+        let entries: [string, vscode.FileType][];
+        try { entries = await vscode.workspace.fs.readDirectory(current); }
+        catch (error) {
+          if (error instanceof vscode.FileSystemError && error.code === "FileNotFound") return;
+          const message = `MCP manifest discovery: ${error instanceof Error ? error.message : String(error)}`;
+          diagnostics.push(message);
+          (scope === "global" ? globalDiagnostics : projectDiagnostics).push(message);
+          return;
         }
-        tools.push(...manifest.tools);
-        methods.push(...manifest.methods);
-        if (scope === "project") projectMethods.push(...manifest.methods);
-        diagnostics.push(...manifest.diagnostics);
-        (scope === "global" ? globalDiagnostics : projectDiagnostics).push(...manifest.diagnostics);
-      } catch (error) {
-        const message = `${file.fsPath}: ${error instanceof Error ? error.message : String(error)}`;
-        diagnostics.push(message);
-        (scope === "global" ? globalDiagnostics : projectDiagnostics).push(message);
-      }
-      }
+        for (const [name, type] of entries.sort(([left], [right]) => left.localeCompare(right))) {
+          if (type === vscode.FileType.Directory) {
+            await visit(vscode.Uri.joinPath(current, name), depth + 1);
+            continue;
+          }
+          if (type !== vscode.FileType.File || !name.toLowerCase().endsWith(".jsonc")) continue;
+          const file = vscode.Uri.joinPath(current, name);
+          try {
+            const manifest = parseMcpManifest(new TextDecoder().decode(await vscode.workspace.fs.readFile(file)), file.fsPath);
+            if (manifest.server && seenServerNames.has(manifest.server.name)) continue;
+            if (manifest.server) {
+              seenServerNames.add(manifest.server.name);
+              servers.push({ ...manifest.server, scope });
+            }
+            tools.push(...manifest.tools);
+            methods.push(...manifest.methods);
+            if (scope === "project") projectMethods.push(...manifest.methods);
+            diagnostics.push(...manifest.diagnostics);
+            (scope === "global" ? globalDiagnostics : projectDiagnostics).push(...manifest.diagnostics);
+          } catch (error) {
+            const message = `${file.fsPath}: ${error instanceof Error ? error.message : String(error)}`;
+            diagnostics.push(message);
+            (scope === "global" ? globalDiagnostics : projectDiagnostics).push(message);
+          }
+        }
+      };
+      await visit(directory, 0);
     }
     return { servers, tools, methods, projectMethods, diagnostics, projectDiagnostics, globalDiagnostics };
   }
@@ -858,7 +866,7 @@ export class DextApplication {
         catch (error) { if (error instanceof vscode.FileSystemError && error.code === "FileNotFound") return; throw error; }
         for (const [name, kind] of entries) {
           const path = `${prefix}${name}`;
-          if (kind === vscode.FileType.Directory && type !== "mcp" && type !== "file") await visit(vscode.Uri.joinPath(directory, name), `${path}/`, depth + 1);
+          if (kind === vscode.FileType.Directory && type !== "file") await visit(vscode.Uri.joinPath(directory, name), `${path}/`, depth + 1);
           if (kind !== vscode.FileType.File) continue;
           if (type === "api" && path.endsWith(".d.ts")) continue;
           try { resourcePathSegments(type, path); } catch { continue; }
@@ -1251,36 +1259,47 @@ export class DextApplication {
     directories.push({ uri: vscode.Uri.joinPath(this.storage.globalStorageUri, "mcp"), scope: "global" });
     for (const { uri: directory, scope } of directories) {
       if (server.scope && server.scope !== scope) continue;
-      let entries: [string, vscode.FileType][];
-      try { entries = await vscode.workspace.fs.readDirectory(directory); }
-      catch (error) {
-        if (error instanceof vscode.FileSystemError && error.code === "FileNotFound") continue;
-        throw error;
-      }
-      for (const [name, type] of entries) {
-        if (type !== vscode.FileType.File || !name.toLowerCase().endsWith(".jsonc")) continue;
-        const file = vscode.Uri.joinPath(directory, name);
-        const source = new TextDecoder().decode(await vscode.workspace.fs.readFile(file));
-        const parsed = parseMcpManifest(source, file.fsPath);
-        if (parsed.server?.name !== serverName) continue;
-        const tools = discovered.map((tool) => {
-          // Some MCP servers (including older Teambition package versions)
-          // omit outputSchema from tools/list. Keep a schema authored in the
-          // manifest so rediscovery does not silently disable result hints.
-          const existing = parsed.tools.find((candidate) => candidate.tool === tool.name);
-          return {
-            name: tool.name,
-            ...(tool.description ? { description: tool.description } : {}),
-            ...(tool.inputSchema ? { inputSchema: tool.inputSchema } : {}),
-            ...(tool.outputSchema ?? existing?.outputSchema
-              ? { outputSchema: tool.outputSchema ?? existing?.outputSchema } : {})
-          };
-        });
-        const edits = modify(source, ["tools"], tools, { formattingOptions: { insertSpaces: true, tabSize: 2 } });
-        await vscode.workspace.fs.writeFile(file, new TextEncoder().encode(applyEdits(source, edits)));
-        await this.reload();
-        return tools.length;
-      }
+      const visit = async (current: vscode.Uri, depth: number): Promise<number | undefined> => {
+        if (depth > 12) return undefined;
+        let entries: [string, vscode.FileType][];
+        try { entries = await vscode.workspace.fs.readDirectory(current); }
+        catch (error) {
+          if (error instanceof vscode.FileSystemError && error.code === "FileNotFound") return undefined;
+          throw error;
+        }
+        for (const [name, type] of entries.sort(([left], [right]) => left.localeCompare(right))) {
+          if (type === vscode.FileType.Directory) {
+            const found = await visit(vscode.Uri.joinPath(current, name), depth + 1);
+            if (found !== undefined) return found;
+            continue;
+          }
+          if (type !== vscode.FileType.File || !name.toLowerCase().endsWith(".jsonc")) continue;
+          const file = vscode.Uri.joinPath(current, name);
+          const source = new TextDecoder().decode(await vscode.workspace.fs.readFile(file));
+          const parsed = parseMcpManifest(source, file.fsPath);
+          if (parsed.server?.name !== serverName) continue;
+          const tools = discovered.map((tool) => {
+            // Some MCP servers (including older Teambition package versions)
+            // omit outputSchema from tools/list. Keep a schema authored in the
+            // manifest so rediscovery does not silently disable result hints.
+            const existing = parsed.tools.find((candidate) => candidate.tool === tool.name);
+            return {
+              name: tool.name,
+              ...(tool.description ? { description: tool.description } : {}),
+              ...(tool.inputSchema ? { inputSchema: tool.inputSchema } : {}),
+              ...(tool.outputSchema ?? existing?.outputSchema
+                ? { outputSchema: tool.outputSchema ?? existing?.outputSchema } : {})
+            };
+          });
+          const edits = modify(source, ["tools"], tools, { formattingOptions: { insertSpaces: true, tabSize: 2 } });
+          await vscode.workspace.fs.writeFile(file, new TextEncoder().encode(applyEdits(source, edits)));
+          await this.reload();
+          return tools.length;
+        }
+        return undefined;
+      };
+      const found = await visit(directory, 0);
+      if (found !== undefined) return found;
     }
     throw new Error(`MCP manifest for '${serverName}' could not be found.`);
   }

@@ -8,8 +8,9 @@ Register MCP tools as APIs named `mcp.<server>.<tool>`, typed from the manifest 
 
 ## MCP APIs
 
-MCP manifests live in `<workspace>/.dext/mcp/*.jsonc` or Dext global storage:
-one file declares one server and its explicit tool allowlist. Each enabled tool
+MCP manifests live in `<workspace>/.dext/mcp/**/*.jsonc` or Dext global storage:
+one file declares one server and its explicit tool allowlist. Subdirectories are
+allowed, and Resources groups manifests by them. Each enabled tool
 becomes an API named `mcp.<server>.<tool>`: its arguments are checked against the
 manifest's `inputSchema` when the call runs, so a missing required argument or an
 unknown one is refused by name, and a tool that declares an `outputSchema`

@@ -1,7 +1,7 @@
 import type { ApiReferenceMember, ApiReferenceModule } from "../../workflow/contracts/apiReference.js";
 import type { EditorTabState } from "../../../platform/editor-tabs/editorTabState.js";
 import type { ResourceDefinitionDocument, ResourceEntry, ResourceListDocument, ResourcePanelOptions, ResourceTreeNode } from "../contracts/resourceDocuments.js";
-import { RESOURCE_LABELS, type ResourceKind, type ResourceScope } from "../contracts/resourceSession.js";
+import { RESOURCE_LABELS, resourceDirectorySegments, type ResourceKind, type ResourceScope } from "../contracts/resourceSession.js";
 import { renderApiFlow } from "./apiFlowDiagram.js";
 import { resourceIcon } from "./resourceIcons.js";
 
@@ -33,11 +33,12 @@ export function resourceKindForLabel(label: string): ResourceKind | undefined {
 
 
 /**
- * Tree levels for one entry inside a category. Only namespaced APIs nest; every other resource is
- * a single file, and an MCP tool drops the `mcp` root the MCP category already names.
+ * Tree levels for one entry inside a category. APIs nest by their dotted namespace;
+ * file resources nest by the directories they live in, so `rules/git/commit.md` reads
+ * as `git` with `commit` beneath it. An MCP tool drops the `mcp` root the category names.
  */
 export function categoryTreePath(entry: ResourceEntry, kind: ResourceKind | undefined): string[] {
-  if (entry.kind !== "api") return [];
+  if (entry.kind !== "api") return resourceDirectorySegments(entry.kind, entry.path);
   const namespace = entry.name.split(".").slice(0, -1);
   return kind === "mcp" && namespace[0] === "mcp" ? namespace.slice(1) : namespace;
 }

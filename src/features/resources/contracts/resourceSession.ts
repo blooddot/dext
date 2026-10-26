@@ -47,10 +47,17 @@ export function resourceFileName(type: ResourceKind, name: string): string {
 export function resourcePathSegments(type: ResourceKind, path: string): string[] {
   const parts = path.split("/");
   if (parts.some((part) => !part || part === "." || part === ".." || /[\\:]/.test(part) || Array.from(part).some((character) => character.charCodeAt(0) < 32))) throw new Error("Invalid resource path.");
-  const valid = type === "file" ? true : type === "api" ? path.endsWith(".ts") : type === "mcp" ? parts.length === 1 && /\.jsonc?$/.test(path)
+  const valid = type === "file" ? true : type === "api" ? path.endsWith(".ts") : type === "mcp" ? /\.jsonc?$/.test(path)
     : type === "skill" ? parts.length >= 2 && parts.at(-1) === "SKILL.md" : path.endsWith(".md");
   if (!valid) throw new Error("The selected file does not match the resource type.");
   return parts;
+}
+
+/** Directories a resource lives in, below its kind's root. A rule or MCP manifest
+ * owns one file, while a skill owns its whole directory including SKILL.md. */
+export function resourceDirectorySegments(type: ResourceKind, path: string): string[] {
+  const parts = path.split("/");
+  return parts.slice(0, Math.max(0, parts.length - (type === "skill" ? 2 : 1)));
 }
 
 export function resourcePrompt(resource: ResourceSession, input: string): string {

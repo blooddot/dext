@@ -145,6 +145,34 @@ describe("global resources panel", () => {
     expect(mcpCategory).toContain(">read<");
   });
 
+  it("nests rules, MCP manifests and skills by their directory", () => {
+    const resource = (kind: ResourceKind, name: string, path: string): ResourceEntry => ({ ...entry(kind, name), id: `${kind}:global:${path}`, path });
+    const document = buildResourceList({
+      kind: "mcp",
+      scope: "global",
+      groupBy: "kind",
+      entries: [
+        resource("rule", "commit", "git/commit.md"),
+        resource("rule", "git-commit", "git-commit.md"),
+        resource("mcp", "server", "git/server.jsonc"),
+        resource("skill", "release", "git/release/SKILL.md")
+      ]
+    });
+    const html = renderGlobalResources(document, { createKinds: ["mcp", "rule", "skill"] });
+    for (const category of ["MCP", "Rule", "Skill"]) {
+      expect(html).toContain(`data-resource-node="${category}.git"`);
+    }
+    const rule = html.slice(html.indexOf('data-resource-group="Rule"'), html.indexOf('data-resource-group="Skill"'));
+    const gitRules = rule.slice(rule.indexOf('data-resource-node="Rule.git"'));
+    expect(gitRules).toContain('data-resource-id="rule:global:git/commit.md"');
+    expect(gitRules).not.toContain('rule:global:git-commit.md"');
+    expect(rule).toContain('data-resource-id="rule:global:git-commit.md"');
+    const mcp = html.slice(html.indexOf('data-resource-group="MCP"'), html.indexOf('data-resource-group="Rule"'));
+    expect(mcp).toContain('data-resource-id="mcp:global:git/server.jsonc"');
+    const skill = html.slice(html.indexOf('data-resource-group="Skill"'));
+    expect(skill).toContain('data-resource-id="skill:global:git/release/SKILL.md"');
+  });
+
   it("lists only current files, preserving nested paths and actual MCP filenames", async () => {
     const readFile = vi.fn(async (): Promise<string | undefined> => "source");
     const listFiles = vi.fn(async (kind: Exclude<ResourceKind, "file">) => {

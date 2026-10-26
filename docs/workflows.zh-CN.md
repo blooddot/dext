@@ -334,7 +334,7 @@ export async function main(input: string): Promise<AgentResult> {
 
 Dext 为工作区生成一套编辑器用的 `dext` 工程，这个工程由项目提交。每次 API 重新加载都会写入，而且文件里所有路径都是相对路径——同一套文件换到别的机器和 CI 上都能用：
 
-- `.dext/api/dext.d.ts`——`dext` 模块：全部内置 API、`ui` 分组、`mcp` 分组、所有结果接口、JSON 边界规则，以及本项目自己的 `.dext/mcp/*.jsonc` 清单所声明的 MCP 工具。**打开内置 API 定义** 与 F12 打开的就是这个文件。
+- `.dext/api/dext.d.ts`——`dext` 模块：全部内置 API、`ui` 分组、`mcp` 分组、所有结果接口、JSON 边界规则，以及本项目自己的 `.dext/mcp/**/*.jsonc` 清单所声明的 MCP 工具。**打开内置 API 定义** 与 F12 打开的就是这个文件。
 - `.dext/tsconfig.json`——严格的 `nodenext` 工程，把 `dext` 映射到 `./api/dext.d.ts`、把 `dext/api/<id>` 映射到 API 模块本身（`dext/api/team/analyze` 对应 `api/team/analyze.ts`，与内核 loader 的查找顺序一致，项目通过 `apiDirs` 增加的目录同样在内），并包含 `api/**/*.ts`。它设置 `erasableSyntaxOnly: true`，因此 Node 类型擦除无法处理的语法——`enum`、`namespace`、参数属性和装饰器——在编辑器中就是错误；内核会以 `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX` 拒绝它。
 - `.dext/package.json`——把该目录标记为 ESM，使 TypeScript 服务按内核的加载方式对待 `.dext/api/*.ts`，包括顶层 `await`；同时声明这些文件编译时依赖的 `@types/node`。Dext 只在文件不存在时创建默认内容；之后由项目维护依赖、脚本及其他字段。请保留 `"type": "module"`，使工作流工程按 ESM 加载。
 
