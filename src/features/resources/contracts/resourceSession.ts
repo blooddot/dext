@@ -122,8 +122,9 @@ export function resourceFiles(value: unknown, limits: ResourceFileLimits = {}): 
     const key = file.path.toLowerCase();
     if (paths.has(key)) throw new Error(`Duplicate supporting file: ${file.path}`);
     paths.add(key);
-    size += file.content.length;
-    if (!file.content.trim() || file.content.length > maxFileBytes || size > maxTotalBytes) throw new Error("Supporting files are empty or too large.");
+    const bytes = new TextEncoder().encode(file.content).byteLength;
+    size += bytes;
+    if (!file.content.trim() || bytes > maxFileBytes || size > maxTotalBytes) throw new Error("Supporting files are empty or too large.");
     return { path: file.path, content: file.content };
   });
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GithubSource } from "../src/features/resources/domain/skillSource.js";
 import type { FetchedArchive } from "../src/features/resources/host/githubArchive.js";
-import { importSkillPack, preflightSkillPack } from "../src/features/resources/host/skillImporter.js";
+import { importSkillPack, preflightSkillPack, SKILL_FILE_MAX_BYTES, SKILL_PACK_MAX_FILES, SKILL_PACK_MAX_BYTES, SKILL_SUPPORT_FILE_MAX_BYTES } from "../src/features/resources/host/skillImporter.js";
 import type { SkillImportAnalysisRequest } from "../src/features/resources/domain/skillImportAnalysis.js";
 
 const encoder = new TextEncoder();
@@ -120,9 +120,42 @@ describe("skill pack import", () => {
 
   it("fails the whole pack when one selected skill violates a file limit", async () => {
     const files = ponytailFiles();
-    files["skills/ponytail-audit/huge.bin"] = "x".repeat(200_001);
+    files["skills/ponytail-audit/huge.bin"] = "x".repeat(SKILL_SUPPORT_FILE_MAX_BYTES + 1);
     await expect(importSkillPack("https://github.com/acme/ponytail", { archive: archive(files) }))
-      .rejects.toThrow(/larger than 200000 bytes/);
+      .rejects.toThrow(`larger than ${SKILL_SUPPORT_FILE_MAX_BYTES} bytes`);
+  });
+
+  it("keeps the smaller SKILL.md limit", async () => {
+    await expect(importSkillPack("https://github.com/acme/skills", { archive: archive({
+      "skills/review/SKILL.md": skill("review", "x".repeat(SKILL_FILE_MAX_BYTES))
+    }) })).rejects.toThrow(`SKILL.md is larger than ${SKILL_FILE_MAX_BYTES} bytes`);
+  });
+
+  it.each([0, 1])("counts the entire pack including generated files (excess: %s)", async (excess) => {
+    const files: Record<string, string> = { "skills/review/SKILL.md": skill("review") };
+    for (let index = 0; index < SKILL_PACK_MAX_FILES - 3 + excess; index++) {
+      files[`skills/review/library/${index}.json`] = "{}";
+    }
+    const result = importSkillPack("https://github.com/acme/skills", { archive: archive(files) });
+    if (excess) await expect(result).rejects.toThrow(`the limit is ${SKILL_PACK_MAX_FILES}`);
+    else expect((await result).draft.files!.length + 1).toBe(SKILL_PACK_MAX_FILES);
+  });
+
+  it("imports a supporting file at the 25 MiB limit", async () => {
+    const content = "x".repeat(SKILL_SUPPORT_FILE_MAX_BYTES);
+    const result = await importSkillPack("https://github.com/acme/skills", { archive: archive({
+      "skills/review/SKILL.md": skill("review"), "skills/review/library/data.json": content
+    }) });
+    expect(result.draft.files!.find((file) => file.path.endsWith("data.json"))!.content).toBe(content);
+  });
+
+  it("rejects a pack whose supporting files exceed the total byte limit", async () => {
+    const files: Record<string, string> = { "skills/review/SKILL.md": skill("review") };
+    for (let index = 0; index < SKILL_PACK_MAX_BYTES / SKILL_SUPPORT_FILE_MAX_BYTES; index++) {
+      files[`skills/review/library/${index}.json`] = "x".repeat(SKILL_SUPPORT_FILE_MAX_BYTES);
+    }
+    await expect(importSkillPack("https://github.com/acme/skills", { archive: archive(files) }))
+      .rejects.toThrow(`the limit is ${SKILL_PACK_MAX_BYTES}`);
   });
 
   it("excludes shallow-invalid candidates before choosing a pack", async () => {

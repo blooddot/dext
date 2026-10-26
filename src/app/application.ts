@@ -44,7 +44,7 @@ import { DextStorage } from "../platform/vscode/dextStorage.js";
 import type { ProjectWorkspaceSettings } from "../features/project/contracts/projectSettings.js";
 import type { ProjectAiProvider } from "../features/project/host/generation/projectAiGeneration.js";
 import { RESOURCE_DIRECTORIES, mergeResourceFiles, resourceFileName, resourceFiles, resourcePathSegments, resourcePrompt, type ResourceDocument, type ResourceFileLimits, type ResourceKind, type ResourceScope, type ResourceSession, type ResourceTarget } from "../features/resources/contracts/resourceSession.js";
-import { importSkillPack, preflightSkillPack, SKILL_PACK_MAX_FILES, type ImportSkillPackOptions, type SkillPackDraft } from "../features/resources/host/skillImporter.js";
+import { importSkillPack, preflightSkillPack, SKILL_PACK_MAX_FILES, SKILL_PACK_MAX_BYTES, SKILL_FILE_MAX_BYTES, SKILL_SUPPORT_FILE_MAX_BYTES, type ImportSkillPackOptions, type SkillPackDraft } from "../features/resources/host/skillImporter.js";
 import { looksLikeGithubUrl } from "../features/resources/domain/skillSource.js";
 import {
   parseSkillImportSelectionText,
@@ -964,14 +964,19 @@ export class DextApplication {
   async readResource(type: ResourceKind, scope: ResourceScope, path: string, name: string): Promise<ResourceTarget> {
     const uri = vscode.Uri.joinPath(this.resourceRoot(type, scope), ...resourcePathSegments(type, path));
     const content = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
-    if (content.length > 200_000) throw new Error("This resource is too large to edit in a conversation.");
+    if (type === "skill" ? new TextEncoder().encode(content).byteLength > SKILL_FILE_MAX_BYTES : content.length > 200_000) throw new Error("This resource is too large to edit in a conversation.");
     // MCP manifest names can differ from their filenames.
     const manifest = type === "mcp" ? parseMcpManifest(content, path) : undefined;
     return { name: manifest?.server?.name ?? name, path, content };
   }
 
   private validateResource(type: ResourceKind, draft: ResourceDocument): void {
-    if (!draft.content.trim() || draft.content.length > 200_000) throw new Error("The resource draft is empty or too large.");
+    const tooLarge = type === "skill" ? new TextEncoder().encode(draft.content).byteLength > SKILL_FILE_MAX_BYTES : draft.content.length > 200_000;
+    if (!draft.content.trim() || tooLarge) throw new Error("The resource draft is empty or too large.");
+    if (type === "skill" && draft.files?.some((file) => /(?:^|\/)SKILL\.md$/i.test(file.path)
+      && new TextEncoder().encode(file.content).byteLength > SKILL_FILE_MAX_BYTES)) {
+      throw new Error(`SKILL.md is larger than ${SKILL_FILE_MAX_BYTES} bytes.`);
+    }
     if (type === "api") {
       // A Dext API is an ordinary TypeScript module now: the editor's own
       // TypeScript service reports type errors, so this only checks the shape a
@@ -989,9 +994,11 @@ export class DextApplication {
     }
   }
 
-  private resourceFileLimits(resource: Pick<ResourceSession, "type" | "origin">): ResourceFileLimits {
+  private resourceFileLimits(resource: Pick<ResourceSession, "type" | "origin">, content: string): ResourceFileLimits {
     return resource.type === "skill"
-      ? { maxFiles: SKILL_PACK_MAX_FILES, allowSkillPacks: resource.origin === "import" }
+      ? { maxFiles: SKILL_PACK_MAX_FILES - 1, maxFileBytes: SKILL_SUPPORT_FILE_MAX_BYTES,
+        maxTotalBytes: SKILL_PACK_MAX_BYTES - new TextEncoder().encode(content).byteLength,
+        allowSkillPacks: resource.origin === "import" }
       : {};
   }
 
@@ -1143,7 +1150,7 @@ export class DextApplication {
     const value = agentResultCandidates(response.result.text)[0]?.value;
     if (value === undefined) throw new Error("The Agent returned invalid resource JSON. Refine the request and try again.");
     if (typeof value.name !== "string" || typeof value.content !== "string") throw new Error("The resource needs a name and content.");
-    const limits = this.resourceFileLimits(resource);
+    const limits = this.resourceFileLimits(resource, value.content);
     const files = mergeResourceFiles((resource.draft ?? resource.target)?.files, value.files, limits);
     const draft: ResourceDocument = { name: resource.target?.name ?? value.name.trim(), content: value.content, ...(files.length ? { files } : {}) };
     if (!resource.target) resourceFileName(resource.type, draft.name);
@@ -1179,9 +1186,10 @@ export class DextApplication {
       await this.preflightImportedSkill(resource, draft);
     }
     const path = target?.path ?? resourceFileName(type, draft.name);
-    const normalize = (content: string): string => content.endsWith("\n") ? content : `${content}\n`;
+    // Skill files retain their exact bytes, including files at the size limit.
+    const normalize = (content: string): string => type === "skill" || content.endsWith("\n") ? content : `${content}\n`;
     const content = normalize(draft.content);
-    const limits = this.resourceFileLimits(resource);
+    const limits = this.resourceFileLimits(resource, content);
     const files = mergeResourceFiles(target?.files, draft.files, limits).map((file) => ({ ...file, content: normalize(file.content) }));
     const previousFiles = new Map(resourceFiles(target?.files, limits).map((file) => [file.path, file.content]));
     const uri = vscode.Uri.joinPath(this.resourceRoot(type, scope), ...resourcePathSegments(type, path));

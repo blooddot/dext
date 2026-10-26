@@ -26,9 +26,10 @@ import type { FetchedArchive } from "./githubArchive.js";
 import { fetchGithubSkillSnapshot } from "./githubSkillSnapshot.js";
 import { PLUGIN_MANIFEST, collectSkillVariants, fileHash, logicalSkillDirectory, skillSourceDeclarations, sourceAgent } from "./skillVariants.js";
 
-export const SKILL_PACK_MAX_FILES = 128;
-export const SKILL_PACK_MAX_BYTES = 1_000_000;
-export const SKILL_FILE_MAX_BYTES = 200_000;
+export const SKILL_PACK_MAX_FILES = 500;
+export const SKILL_PACK_MAX_BYTES = 50 * 1024 * 1024;
+export const SKILL_FILE_MAX_BYTES = 1024 * 1024;
+export const SKILL_SUPPORT_FILE_MAX_BYTES = 25 * 1024 * 1024;
 const MAX_COMMAND_BYTES = 200_000;
 const DENYLISTED_SEGMENTS = new Set([
   ".git", "node_modules", "test", "tests", "fixtures", "examples", "docs", "vendor", ".github",
@@ -365,7 +366,8 @@ export async function importSkillPack(input: string, options: ImportSkillPackOpt
         warnings.push(`Skipped binary supporting file '${relative}'.`);
         continue;
       }
-      if (bytes.byteLength > SKILL_FILE_MAX_BYTES) throw new Error(`'${relative}' in skill '${candidate.id}' is larger than ${SKILL_FILE_MAX_BYTES} bytes.`);
+      const maxBytes = /(?:^|\/)SKILL\.md$/i.test(relative) ? SKILL_FILE_MAX_BYTES : SKILL_SUPPORT_FILE_MAX_BYTES;
+      if (bytes.byteLength > maxBytes) throw new Error(`'${relative}' in skill '${candidate.id}' is larger than ${maxBytes} bytes.`);
       if (decodeText(bytes) === undefined) {
         if (relative === "SKILL.md") throw new Error(`Skill '${candidate.id}' has a SKILL.md that is not valid UTF-8.`);
         warnings.push(`Skipped non-UTF-8 supporting file '${relative}'.`);

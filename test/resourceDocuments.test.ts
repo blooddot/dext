@@ -12,6 +12,7 @@ import { createFileResourceDataSource } from "../src/features/resources/host/res
 import { describeApiFlow } from "../src/features/workflow/host/apiFlow.js";
 import { SkillCatalog } from "../src/features/workflow/host/skillCatalog.js";
 import type { ResourceEntry } from "../src/features/resources/contracts/resourceDocuments.js";
+import { importSkillPack, SKILL_FILE_MAX_BYTES, SKILL_PACK_MAX_FILES, SKILL_PACK_MAX_BYTES, SKILL_SUPPORT_FILE_MAX_BYTES } from "../src/features/resources/host/skillImporter.js";
 
 vi.mock("vscode", () => {
   class FileSystemError extends Error { code = "FileNotFound"; }
@@ -519,6 +520,54 @@ describe("resource documents", () => {
     ]);
   });
 
+  it("imports and saves large skill data files without truncation", async () => {
+    const library = {
+      "sections.json": JSON.stringify("x".repeat(276_144)),
+      "sites.json": JSON.stringify("x".repeat(869_071)),
+      "photos.json": JSON.stringify("x".repeat(160_630))
+    };
+    const imported = await importSkillPack("https://github.com/Leonxlnx/taste-skill.git", { archive: {
+      source: { kind: "repo", owner: "Leonxlnx", repo: "taste-skill", path: "", repositoryUrl: "https://github.com/Leonxlnx/taste-skill" },
+      ref: "main", commit: "abc1234", files: new Map(Object.entries({
+        "skills/taste-skill/SKILL.md": `---\nname: taste-skill\ndescription: Design a page.\n---\n# Taste\n${"界".repeat(100_000)}`,
+        ...Object.fromEntries(Object.entries(library).map(([name, content]) => [`skills/taste-skill/library/${name}`, content]))
+      }).map(([path, content]) => [path, new TextEncoder().encode(content)]))
+    } });
+    const saved = await application.saveResource({ type: "skill", scope: "global", origin: "import", draft: imported.draft });
+    expect(saved.path).toBe("taste-skill/SKILL.md");
+    for (const [name, content] of Object.entries(library)) {
+      expect(await readFile(join(root, "skills/taste-skill/library", name), "utf8")).toBe(content);
+    }
+    const target = await application.readResource("skill", "global", saved.path, saved.name);
+    expect(target.content).toBe(imported.draft.content);
+    expect((await application.saveResource({ type: "skill", scope: "global", target, draft: target })).content).toBe(target.content);
+  });
+
+  it("accepts a 1 MiB SKILL.md and rejects oversized UTF-8 instructions on save and reopen", async () => {
+    const draft = { name: "large", content: "x".repeat(SKILL_FILE_MAX_BYTES) };
+    const saved = await application.saveResource({ type: "skill", scope: "global", draft });
+    expect((await application.readResource("skill", "global", saved.path, saved.name)).content).toBe(draft.content);
+    for (const content of [draft.content + "x", "界".repeat(Math.floor(SKILL_FILE_MAX_BYTES / 3) + 1)]) {
+      await expect(application.saveResource({ type: "skill", scope: "global", draft: { name: "oversize", content } })).rejects.toThrow("too large");
+      await writeFile(join(root, "skills/large/SKILL.md"), content);
+      await expect(application.readResource("skill", "global", saved.path, saved.name)).rejects.toThrow("too large");
+    }
+    await expect(application.saveResource({ type: "rule", scope: "global", draft: { name: "large", content: "x".repeat(200_001) } })).rejects.toThrow("too large");
+  });
+
+  it("includes the primary skill in the save byte budget and checks supporting UTF-8 bytes", async () => {
+    const content = "x".repeat(SKILL_SUPPORT_FILE_MAX_BYTES);
+    await expect(application.saveResource({ type: "skill", scope: "global", draft: {
+      name: "review", content: "# Review", files: [
+        { path: "skills/review/data/a.txt", content }, { path: "skills/review/data/b.txt", content }
+      ]
+    } })).rejects.toThrow("too large");
+    expect(SKILL_PACK_MAX_BYTES).toBe(2 * SKILL_SUPPORT_FILE_MAX_BYTES);
+    expect(await readdir(root)).toEqual([]);
+    expect(() => resourceFiles([{ path: "skills/review/data.txt", content: "界界" }], { maxFileBytes: 5 })).toThrow("too large");
+    expect(() => resourceFiles([{ path: "skills/review/data.txt", content: "界界" }], { maxTotalBytes: 5 })).toThrow("too large");
+  });
+
   it("applies per-kind skill limits and allows skill-packs only for imported drafts", async () => {
     Object.assign(application, { runtime: { executeConversation: vi.fn(async () => ({
       result: { kind: "ask", text: JSON.stringify({ name: "review", content: "# Review", files: [{ path: "skill-packs/pack/x.md", content: "x" }] }) }
@@ -526,18 +575,18 @@ describe("resource documents", () => {
     await expect(application.draftResource({ type: "skill", scope: "global" }, "Generate"))
       .rejects.toThrow("Invalid supporting file path: skill-packs/pack/x.md");
 
-    const many = Array.from({ length: 129 }, (_, index) => ({ path: `skills/review/file-${index}.md`, content: "x" }));
+    const many = Array.from({ length: SKILL_PACK_MAX_FILES }, (_, index) => ({ path: `skills/review/file-${index}.md`, content: "x" }));
     Object.assign(application, { runtime: { executeConversation: vi.fn(async () => ({
       result: { kind: "ask", text: JSON.stringify({ name: "review", content: "# Review", files: many }) }
     })) } });
     await expect(application.draftResource({ type: "skill", scope: "global" }, "Generate"))
-      .rejects.toThrow("up to 128 supporting files");
+      .rejects.toThrow(`up to ${SKILL_PACK_MAX_FILES - 1} supporting files`);
 
     Object.assign(application, { runtime: { executeConversation: vi.fn(async () => ({
-      result: { kind: "ask", text: JSON.stringify({ name: "review", content: "# Review", files: [{ path: "skills/review/large.md", content: "x".repeat(200_001) }] }) }
+      result: { kind: "ask", text: JSON.stringify({ name: "review", content: "# Review", files: [{ path: "skills/other/SKILL.md", content: "x".repeat(SKILL_FILE_MAX_BYTES + 1) }] }) }
     })) } });
     await expect(application.draftResource({ type: "skill", scope: "global" }, "Generate"))
-      .rejects.toThrow("Supporting files are empty or too large.");
+      .rejects.toThrow(`SKILL.md is larger than ${SKILL_FILE_MAX_BYTES} bytes.`);
   });
 
   it("preserves MCP allowlists and comments when updating", async () => {
