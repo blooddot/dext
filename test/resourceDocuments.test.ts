@@ -555,6 +555,22 @@ describe("resource documents", () => {
     await expect(application.saveResource({ type: "rule", scope: "global", draft: { name: "large", content: "x".repeat(200_001) } })).rejects.toThrow("too large");
   });
 
+  it("limits only the skill preview and saves every complete companion", async () => {
+    const files = Array.from({ length: 6 }, (_, index) => ({ path: `skills/review/data/${index}.txt`, content: `START-${index}\n${"x".repeat(20_000)}\nEND-${index}` }));
+    const draft = { name: "review", content: "# Review", files };
+    Object.assign(application, { runtime: { executeConversation: vi.fn(async () => ({ result: { kind: "ask", text: JSON.stringify(draft) } })) } });
+    const result = await application.draftResource({ type: "skill", scope: "global" }, "Generate");
+    const response = result.response.executions[0]!.result;
+    const text = response.kind === "ask" ? response.text : "";
+    expect(text.length).toBeLessThan(70_000);
+    expect(text).toContain("Preview truncated; the complete file will be saved.");
+    expect(text).toContain("Draft: skills/review/data/5.txt");
+    expect(text).not.toContain("END-0");
+    expect(result.draft.files).toEqual(files);
+    await application.saveResource({ type: "skill", scope: "global", draft: result.draft });
+    for (const file of files) expect(await readFile(join(root, file.path), "utf8")).toBe(file.content);
+  });
+
   it("includes the primary skill in the save byte budget and checks supporting UTF-8 bytes", async () => {
     const content = "x".repeat(SKILL_SUPPORT_FILE_MAX_BYTES);
     await expect(application.saveResource({ type: "skill", scope: "global", draft: {

@@ -1005,12 +1005,17 @@ export class DextApplication {
   /** Renders a reviewed draft as the chat-visible document list. */
   private renderDraftText(resource: ResourceSession, draft: ResourceDocument, files: readonly { path: string; content: string }[], flowIssues: readonly ApiFlowIssue[] = []): string {
     const documents = [{ path: resource.target?.path ?? resourceFileName(resource.type, draft.name), content: draft.content }, ...files];
+    // Bound the chat preview while retaining every complete file in the draft.
+    let remaining = resource.type === "skill" ? 64_000 : Infinity;
     return documents.map((file, index) => {
-      const fence = "`".repeat(Math.max(3, ...Array.from(file.content.matchAll(/`+/g), (match) => match[0].length + 1)));
+      const preview = file.content.slice(0, Math.min(remaining, resource.type === "skill" ? 16_000 : Infinity));
+      remaining -= preview.length;
+      const fence = "`".repeat(Math.max(3, ...Array.from(preview.matchAll(/`+/g), (match) => match[0].length + 1)));
       const language = file.path.endsWith(".ts") ? "typescript" : /\.jsonc?$/.test(file.path) ? "jsonc" : "text";
       const path = index === 0 && resource.type !== "file" ? `${RESOURCE_DIRECTORIES[resource.type]}/${file.path}` : file.path;
       const label = resource.scope === "project" && !(index === 0 && resource.type === "file") ? `.dext/${path}` : path;
-      return `Draft: ${label}\n\n${fence}${language}\n${file.content}\n${fence}`;
+      return `Draft: ${label}\n\n${fence}${language}\n${preview}\n${fence}`
+        + (preview.length < file.content.length ? "\n\nPreview truncated; the complete file will be saved." : "");
     }).join("\n\n") + (flowIssues.length ? `\n\n${this.apiFlowIssueText(flowIssues)}` : "")
       + "\n\nReview all draft files, then save or describe further changes.";
   }
