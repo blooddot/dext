@@ -1,8 +1,8 @@
 {
   "version": 1,
   "trigger": "initialize",
-  "generatedAt": 1792822306793,
-  "inputHash": "866896f58c77e0b7b2bf9ed6b1b0c4ef30f9ae4db6425fddef469c3d39875a9e",
+  "generatedAt": 1792837580360,
+  "inputHash": "44f7cd8f0dee0c41748524888b7db39bb6ec30f3a2e9beb508c3713dbb07170f",
   "structure": {
     "files": 234,
     "parsed": 231,
@@ -41,7 +41,7 @@
   "omitted": {
     "files": 1,
     "objects": 0,
-    "knowledge": 17
+    "knowledge": 0
   },
   "coverage": [
     "Local index: 231 source files, 7 modules; 231 reused, 1 issues, 0 unsupported files.",
