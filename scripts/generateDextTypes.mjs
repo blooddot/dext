@@ -250,7 +250,7 @@ async function runCli(argv) {
       if (!file.createOnly && !sameText(existing, file.content)) problems.push(...diffSummary(file.content, existing, path.join(".dext", file.path)));
     }
     if (problems.length) {
-      console.error(`Dext types in ${directory} are out of date. Run \`npm run generate:dext-types --workspace ${options.workspace}\`.`);
+      console.error(`Dext types in ${directory} are out of date. Run \`npm run generate:dext-types -- --workspace ${options.workspace}\`.`);
       for (const problem of problems) console.error(`  ${problem}`);
       process.exitCode = 1;
       return;
