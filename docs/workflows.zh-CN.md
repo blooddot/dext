@@ -378,6 +378,10 @@ Import 是确定性安装器，只有候选存在歧义时才使用当前 Agent�
 
 按需下载的文件合计上限为 50 MiB、5,000 个文件。如果 GitHub API 被限流，或递归目录被截断，Dext 会回退到整仓归档下载，上限为压缩 50 MiB、解压 200 MiB、5,000 个文件。下载期间一旦超限就停止，即使响应未声明大小也会检查。每个网络阶段超时为 60 秒，并支持停止。下载限制与下述最终 Skill 包的校验限制分开计算。
 
+对于多 Agent 仓库，Dext 会识别共享的 `skills/`、`.agents/skills/`，以及 `.codex/skills/`、`.claude/skills/` 等专用目录，并读取 Codex/Claude 插件清单声明的 Skill 路径。同名版本只有在包含附属文件的完整目录内容一致时才直接去重。不同 Agent 版本会弹出目标选择，适用时推荐当前会话的 Agent。选定目标后，优先采用该 Agent 的版本，用共享版本补充缺项，排除其他 Agent 独有的 Skill。直接指向某个 Skill 或 Agent 专用目录的链接视为明确选择来源。如果同一优先级仍有不同版本，会再列出具体路径供选择。取消选择会停止导入，不生成草稿。
+
+Command 会先校验再选择版本：兼容的目标 Agent 模板优先于共享模板；其他 Agent 的模板明确且兼容时，可以作为 Dext 提示词导入。同优先级但内容不同的模板需要明确选择来源，内容相同的副本直接去重；不兼容模板不会阻挡可用的其他版本。预览和保存的 `SOURCE.md` 会列出导入目标、所选 Skill 与 command 的路径、跳过的版本、忽略的命令路由字段，以及未安装的原生插件功能。Dext 不会改写正文中的 Agent 专用工具名或路径。目标只决定导入时采用的文件，之后切换会话 Agent 不会替换这些文件，也不会启用原生 hooks。
+
 Create 之前，每个被选中的 Skill 都会完整校验（front matter、标量 description、非空正文、id、安全路径、128 个文件、总计 1 MB、单文件 200 KB）；任一选中项失败则整包失败。front matter 格式非法会失败，但缺少 front matter 只是警告。草稿把每个 Skill 放在 `skills/<id>/`，在 `skill-packs/<pack>/` 下写入清单和报告，把可用提示词命令复制到 `skill-packs/<pack>/commands/`，并在仓库提供 LICENSE 时保留它。Import 本身不写盘。Create 原子写入整个包，重新检查已存在的包目录和 Skill 目录，并且不会自动启用新 Skill；之后需在 Skills 控件中勾选。
 
 Import 不支持私有仓库、凭据、端口、查询串、GitLab/Bitbucket、npm 包、二进制附带文件（会跳过并警告）、可执行 hook，也不支持更新已安装的包。只有命令、没有 Skill 的仓库，或直接指向命令文件的 URL，都不是 Skill，会被拒绝。
