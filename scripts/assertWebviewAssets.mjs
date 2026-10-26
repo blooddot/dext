@@ -189,6 +189,10 @@ for (const forbidden of ["vendor/project-diagrams/drawio", ".tmp-archify-upstrea
     `'${forbidden}' must not be distributed in the VSIX.`
   );
 }
+assert.ok(
+  ![...packagedFiles].some((file) => file.split("/").some((segment) => segment.startsWith(".tmp-"))),
+  "Temporary '.tmp-*' files or directories must not be distributed in the VSIX; exclude them in .vscodeignore."
+);
 
 const boundaryErrors = checkBrowserMetafile(buildMeta.metafiles.webview);
 if (boundaryErrors.length) throw new Error(boundaryErrors.join("\n"));

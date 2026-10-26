@@ -17,6 +17,8 @@ node_modules/**
 .npm-cache/**
 .tmp-tb/**
 .tmp-*/**
+# Also exclude top-level scratch files (logs, archives), not only `.tmp-*` directories.
+.tmp-*
 **/*.map
 *.ts
 esbuild.mjs
