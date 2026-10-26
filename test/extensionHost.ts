@@ -8,9 +8,26 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
+import { randomUUID } from "node:crypto";
 import type * as Esbuild from "esbuild";
 
+const hostTypesDirectory = `host-types-${randomUUID()}`;
+const hostTypesPath = `api/${hostTypesDirectory}/commit.ts`;
+const hostTypesSpecifier = `dext/api/${hostTypesDirectory}/commit`;
+
 export async function run(): Promise<void> {
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  assert.ok(folder, "Extension Host test opens a workspace folder.");
+  // Own the API fixture instead of depending on the author's editable APIs.
+  const directory = vscode.Uri.joinPath(folder.uri, ".dext", "api", hostTypesDirectory);
+  await vscode.workspace.fs.createDirectory(directory);
+  try {
+    await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(directory, "commit.ts"), new TextEncoder().encode('export async function commit(): Promise<string> { return "host-types"; }\n'));
+    await runHostChecks();
+  } finally { await vscode.workspace.fs.delete(directory, { recursive: true }); }
+}
+
+async function runHostChecks(): Promise<void> {
   const extension = vscode.extensions.getExtension("blooddot.dext");
   assert.ok(extension, "Dext extension is discoverable.");
   await extension.activate();
@@ -240,11 +257,12 @@ async function verifyGeneratedDextProject(folder: vscode.WorkspaceFolder): Promi
   // The composer cannot read the workspace, so the API modules travel to it as
   // virtual files, resolved by the project's own `dext/api/*` mapping.
   const composer = await app.composerTypes();
-  assert.deepEqual(composer.apiPaths, ["./api/*.ts", "./api/*.mts", "./api/*/index.ts"], "The composer resolves the mapping the generated project does.");
-  const apiModule = composer.modules.find((entry) => entry.path === "api/git/commit.ts");
+  assert.deepEqual(composer.apiPaths.slice(0, 3), ["./api/*.ts", "./api/*.mts", "./api/*/index.ts"], "The composer resolves the workspace mapping before global APIs.");
+  assert.ok(composer.apiPaths.slice(3).every((path) => path.startsWith("./__dext-global-api__/")), "Additional mappings belong to the composer global API root.");
+  const apiModule = composer.modules.find((entry) => entry.path === hostTypesPath);
   assert.ok(apiModule, "The workspace's own API module reaches the composer.");
-  assert.equal(apiModule.specifier, "dext/api/git/commit", "It is reached by the specifier the kernel resolves.");
-  const commitSource = new TextDecoder().decode(await vscode.workspace.fs.readFile(vscode.Uri.joinPath(folder.uri, ".dext", "api", "git", "commit.ts")));
+  assert.equal(apiModule.specifier, hostTypesSpecifier, "It is reached by the specifier the kernel resolves.");
+  const commitSource = new TextDecoder().decode(await vscode.workspace.fs.readFile(vscode.Uri.joinPath(folder.uri, ".dext", ...hostTypesPath.split("/"))));
   assert.equal(apiModule.content, commitSource, "It travels as the source the worker types against, whatever it exports.");
   assert.equal(composer.modules.some((entry) => entry.path === "api/dext.d.ts"), false, "The generated declaration stays the ambient library.");
 
@@ -499,7 +517,7 @@ async function monacoWebviewHostTest(extensionUri: vscode.Uri, realTypes: unknow
         const realApiList=(Array.isArray(realApi)?realApi:realApi?.suggestions)??[];
         const api=realApiList.find(item=>String(item.label)==='commit');
         check(!!api,'an unimported API export is offered: '+JSON.stringify(realApiList.map(item=>item.label)));
-        check((api.additionalTextEdits??[]).some(edit=>String(edit.text).includes('import { commit } from "dext/api/git/commit";')),
+        check((api.additionalTextEdits??[]).some(edit=>String(edit.text).includes(${JSON.stringify(`import { commit } from "${hostTypesSpecifier}";`)})),
           'the item writes the API import: '+JSON.stringify(api.additionalTextEdits));
         // Neither a directory nor a qualified .dx call is a symbol, so both stay empty.
         for(const typed of ['git','git.']){
