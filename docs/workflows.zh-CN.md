@@ -374,7 +374,9 @@ Skill 是显式的包。`skill({ skill: "name", input })` 加载指定的 `SKILL
 
 新建 Skill 时，输入框上方有 **Describe | Import**。Describe 是默认模式，交给模型生成。Import 只接受一个公开的 `https://github.com/...` 仓库链接、`tree` 链接、指向 `SKILL.md` 的 `blob` 链接，或 `raw.githubusercontent.com/.../SKILL.md`。在 Describe 下粘贴裸 GitHub 链接会被拒绝并提示切换 Import，不会发送给模型。
 
-Import 是确定性安装器，只有候选存在歧义时才使用当前 Agent。Dext 在内存中下载仓库 tarball，递归扫描链接范围内的 `SKILL.md`；嵌套的 `SKILL.md` 视为外层 Skill 的附带文件，根目录的 `SKILL.md` 则拥有整个仓库。只有一个候选，或所有候选都是同一个非根目录（例如 `skills/`）的直接子目录时，不调用模型。只有候选分散在互不相关的目录时，Agent 才会收到受限元数据——目录、id、截断到 300 字符的名称和描述、文件数、浅校验状态——并且只返回选择结果。返回的每个路径都必须对应真实候选；未知、重复、越界、低置信度或空选择都会失败，并列出每个候选的 `tree` 链接；没有可用 Agent 时同样失败，绝不猜测。
+Import 是确定性安装器，只有候选存在歧义时才使用当前 Agent。Dext 固定一个 commit，读取文件目录，并下载链接范围内候选的 `SKILL.md`。选定后再下载所选 Skill 的附带文件、链接范围内的命令模板和根许可证，不下载仓库中的无关资源。嵌套的 `SKILL.md` 视为外层 Skill 的附带文件，根目录的 `SKILL.md` 则拥有整个仓库。只有一个候选，或所有候选都是同一个非根目录（例如 `skills/`）的直接子目录时，不调用模型。只有候选分散在互不相关的目录时，Agent 才会收到受限元数据——目录、id、截断到 300 字符的名称和描述、文件数、浅校验状态——并且只返回选择结果。返回的每个路径都必须对应真实候选；未知、重复、越界、低置信度或空选择都会失败，并列出每个候选的 `tree` 链接；没有可用 Agent 时同样失败，绝不猜测。
+
+按需下载的文件合计上限为 50 MiB、5,000 个文件。如果 GitHub API 被限流，或递归目录被截断，Dext 会回退到整仓归档下载，上限为压缩 50 MiB、解压 200 MiB、5,000 个文件。下载期间一旦超限就停止，即使响应未声明大小也会检查。每个网络阶段超时为 60 秒，并支持停止。下载限制与下述最终 Skill 包的校验限制分开计算。
 
 Create 之前，每个被选中的 Skill 都会完整校验（front matter、标量 description、非空正文、id、安全路径、128 个文件、总计 1 MB、单文件 200 KB）；任一选中项失败则整包失败。front matter 格式非法会失败，但缺少 front matter 只是警告。草稿把每个 Skill 放在 `skills/<id>/`，在 `skill-packs/<pack>/` 下写入清单和报告，把可用提示词命令复制到 `skill-packs/<pack>/commands/`，并在仓库提供 LICENSE 时保留它。Import 本身不写盘。Create 原子写入整个包，重新检查已存在的包目录和 Skill 目录，并且不会自动启用新 Skill；之后需在 Skills 控件中勾选。
 
