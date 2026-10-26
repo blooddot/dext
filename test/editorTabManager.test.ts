@@ -41,6 +41,16 @@ describe("editor tab manager", () => {
     }
   });
 
+  it("publishes the shared Mermaid URI and its matching nonce", () => {
+    const html = renderEditorTabHtml("<div>API</div>", "https://webview.test/media/editorTabs.css", "https://webview.test", {
+      mermaidUri: "https://webview.test/dist/webview/mermaid.js"
+    });
+    const nonce = html.match(/<meta name="dext-script-nonce" content="([^"]+)">/)?.[1];
+    expect(nonce).toBeTruthy();
+    expect(html).toContain('name="dext-mermaid" content="https://webview.test/dist/webview/mermaid.js"');
+    expect(html).toContain(`script-src 'nonce-${nonce}'`);
+  });
+
   it("does not throw into callers when a Webview closed before rendering or posting", () => {
     let disposed = false;
     const webview = {

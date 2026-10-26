@@ -30,6 +30,11 @@ try {
   const key = async (key, code) => { await send("Input.dispatchKeyEvent", { type: "keyDown", key, windowsVirtualKeyCode: code, ...(key === "Enter" ? { text: "\r" } : key === " " ? { text: " " } : {}) }); await send("Input.dispatchKeyEvent", { type: "keyUp", key, windowsVirtualKeyCode: code }); };
   const bundle = await build({ stdin: { contents: 'export { AgentInputView } from "./src/features/conversations/browser/agentInputView.ts"; export { InteractionForm } from "./src/features/conversations/browser/interactionForm.ts"; export { InteractionDialog } from "./src/features/conversations/browser/interactionDialog.ts"; export { uiCallForm, parseUiForm } from "./src/shared/contracts/uiForm.ts";', resolveDir: process.cwd() }, bundle: true, write: false, format: "iife", globalName: "InteractionUI" });
   await evaluate(bundle.outputFiles[0].text);
+  // Mermaid is a separate lazy bundle. This harness has no server, so evaluate it
+  // once and let `markdownDiagrams.ts` use the renderer it installs on globalThis;
+  // the CSP below then applies to the SVG that renderer produces.
+  const mermaidBundle = await build({ entryPoints: ["src/webview/mermaid.ts"], bundle: true, write: false, platform: "browser", format: "iife", target: "es2022", minify: true, logLevel: "silent" });
+  await evaluate(mermaidBundle.outputFiles[0].text);
   await evaluate(`document.body.innerHTML='<button id="previous">Previous focus</button><main id="turn"></main><details id="process"><summary>Process</summary></details>'; window.replies=[];window.saved={};
     window.createView=()=>{const view=new InteractionUI.AgentInputView((id,answers)=>replies.push({id,answers}),(state,result)=>replies.push({id:state.requestId,result}),'test',{get:key=>saved[key],set:(key,draft)=>{saved[key]=draft}});document.getElementById('turn').append(view.element);view.setRunning(true);return view;};
     window.view=createView();window.state=(id,form)=>({sessionId:'session',turnId:'turn',requestId:id,status:'waiting',form});`);

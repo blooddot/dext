@@ -15,11 +15,13 @@ const fileNames = files.filter((file) => file.size > 0).map((file) => file.entry
 
 // `ts.worker.js` is what gives the composer its TypeScript completion, hover and
 // diagnostics; without it the editor silently loses every language feature.
-for (const required of ["main.js", "project.js", "apiFlow.js", "main.css", "editor.worker.js", "ts.worker.js"]) {
+for (const required of ["main.js", "project.js", "apiFlow.js", "mermaid.js", "main.css", "editor.worker.js", "ts.worker.js"]) {
   assert.ok(fileNames.includes(required), `Missing Webview build asset '${required}'.`);
 }
 assert.ok((await stat(resolve("dist", "codicons", "codicon.ttf"))).size > 0, "Missing VS Code codicon font.");
 const mainBundle = await readFile(resolve(output, "main.js"), "utf8");
+const apiFlowBundle = await readFile(resolve(output, "apiFlow.js"), "utf8");
+const mermaidBundle = await readFile(resolve(output, "mermaid.js"), "utf8");
 const extensionBundle = await readFile(resolve("dist", "extension.js"), "utf8");
 const mainStyles = await readFile(resolve(output, "main.css"), "utf8");
 // Files on disk can pass build checks while .vscodeignore removes them from the VSIX.
@@ -39,6 +41,7 @@ for (const required of [
   "dist/webview/main.js",
   "dist/webview/project.js",
   "dist/webview/apiFlow.js",
+  "dist/webview/mermaid.js",
   "dist/webview/editor.worker.js",
   "dist/webview/ts.worker.js",
   "dist/codicons/codicon.css",
@@ -75,6 +78,19 @@ for (const action of [
 ]) {
   assert.ok(mainBundle.includes(action), `Missing required Webview behavior '${action}' from the bundle.`);
 }
+// Mermaid must live only in the shared bundle. If esbuild inlines its ~3 MB into
+// main.js or apiFlow.js again, the VSIX silently pays for a second copy.
+assert.ok(mermaidBundle.includes("cytoscape"), "The shared Mermaid bundle does not contain a Mermaid renderer.");
+assert.ok(mermaidBundle.includes("markdown-diagram-staging"), "The shared Mermaid bundle does not contain Dext's renderer.");
+assert.ok(!mainBundle.includes("cytoscape"), "main.js contains an inlined Mermaid renderer; lazy-load dist/webview/mermaid.js instead.");
+assert.ok(!apiFlowBundle.includes("cytoscape"), "apiFlow.js contains an inlined Mermaid renderer; lazy-load dist/webview/mermaid.js instead.");
+// The host must publish the bundle URI and a nonce that matches the CSP; without
+// either, the lazy <script> is blocked and every diagram silently falls back.
+for (const marker of ["dext-mermaid", "dext-script-nonce"]) {
+  assert.ok(extensionBundle.includes(marker), `The host does not publish the '${marker}' meta tag.`);
+  assert.ok(mainBundle.includes(marker), `main.js does not read the '${marker}' meta tag.`);
+}
+assert.ok(apiFlowBundle.includes("dext-mermaid"), "apiFlow.js does not read the shared Mermaid meta tag.");
 for (const marker of ["data-turn-review", "data-plan-review", "data-adopt-suggestion", "adoptKnowledgeSuggestion"]) {
   assert.ok(!mainBundle.includes(marker), `Retired Review behavior '${marker}' remains in the bundle.`);
 }

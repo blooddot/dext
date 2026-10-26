@@ -11,6 +11,8 @@ export interface EditorTabHtmlOptions {
   embedFrames?: boolean;
   /** Local Mermaid bundle; its SVG styles require inline styles, but no frames or network. */
   scriptUri?: string;
+  /** Shared Mermaid bundle loaded on demand by `main.js` or `apiFlow.js`. */
+  mermaidUri?: string;
 }
 
 /** Shared document shell for new and restored Project and resource editor pages. */
@@ -23,6 +25,8 @@ export function renderEditorTabHtml(body: string, stylesheetUri: string, cspSour
   return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">`
     + `<meta name="viewport" content="width=device-width, initial-scale=1.0">`
     + `<meta http-equiv="Content-Security-Policy" content="${policy}">`
+    + `<meta name="dext-script-nonce" content="${nonce}">`
+    + (options.mermaidUri ? `<meta name="dext-mermaid" content="${escapeAttribute(options.mermaidUri)}">` : "")
     + `<link rel="stylesheet" href="${escapeAttribute(stylesheetUri)}">`
     + `</head><body class="editor-tab">${body.replaceAll("<script>", `<script nonce="${nonce}">`)}`
     + (options.scriptUri ? `<script nonce="${nonce}" src="${escapeAttribute(options.scriptUri)}"></script>` : "") + `</body></html>`;

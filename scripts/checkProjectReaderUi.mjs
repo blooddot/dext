@@ -57,6 +57,8 @@ try {
 
   const bundle = await build({ stdin: { contents: 'export { renderEditorTabHtml } from "./src/platform/editor-tabs/editorTabHtml.ts"; export { renderProjectPanel } from "./src/features/project/presentation/projectPanel.ts"; export { buildProjectTopics, topicFingerprint } from "./src/features/project/knowledge/projectTopics.ts"; export { projectIntentSchema } from "./src/features/project/contracts/projectIntent.ts"; export { ArchifyAdapter } from "./src/features/project/host/diagrams/archifyAdapter.ts";', resolveDir: process.cwd() }, bundle: true, write: false, platform: "node", format: "esm" });
   const ui = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
+  const mermaidBundle = await build({ entryPoints: ["src/webview/mermaid.ts"], bundle: true, write: false, platform: "browser", format: "iife", target: "es2022", minify: true, logLevel: "silent" });
+  const mermaidScript = mermaidBundle.outputFiles[0].text;
   const adapter = new ui.ArchifyAdapter(resolve('vendor/project-diagrams/archify'));
   const cache = new Map();
   let currentData, failRender = false;
@@ -88,8 +90,9 @@ try {
   const js = await readFile('dist/webview/project.js', 'utf8');
   let pageHtml = '', themeCss = '';
   server = createServer((request, response) => {
-    response.setHeader('Content-Type', request.url === '/style.css' ? 'text/css' : request.url === '/project.js' ? 'application/javascript' : 'text/html');
-    response.end(request.url === '/style.css' ? themeCss + css : request.url === '/project.js' ? js : pageHtml);
+    const url = request.url ?? '';
+    response.setHeader('Content-Type', url === '/style.css' ? 'text/css' : url === '/project.js' || url === '/mermaid.js' ? 'application/javascript' : 'text/html');
+    response.end(url === '/style.css' ? themeCss + css : url === '/project.js' ? js : url === '/mermaid.js' ? mermaidScript : pageHtml);
   });
   await new Promise(done => server.listen(0, '127.0.0.1', done));
   const origin = `http://127.0.0.1:${server.address().port}`;
@@ -140,7 +143,7 @@ try {
     currentData = pageData;
     const light = theme === 'vscode-light';
     themeCss = `:root{--vscode-font-family:Segoe UI,sans-serif;--vscode-font-size:13px;--vscode-editor-background:${light ? '#fff' : '#1e1e1e'};--vscode-foreground:${light ? '#333' : '#ddd'};--vscode-descriptionForeground:${light ? '#555' : '#bbb'};--vscode-input-background:${light ? '#eee' : '#313131'};--vscode-input-foreground:${light ? '#333' : '#ddd'};--vscode-panel-border:${light ? '#ddd' : '#555'};--vscode-focusBorder:#0088ff;--vscode-list-activeSelectionBackground:#004c80;--vscode-list-activeSelectionForeground:#fff;--vscode-button-secondaryBackground:${light ? '#eee' : '#313131'};--vscode-textBlockQuote-background:${light ? '#eee' : '#292929'}}`;
-    pageHtml = ui.renderEditorTabHtml(`<script>document.body.classList.add('${theme}');window.messages=[];window.violations=[];document.addEventListener('securitypolicyviolation',e=>violations.push(e.violatedDirective));window.state={filters:${JSON.stringify(filters)}};window.acquireVsCodeApi=()=>({postMessage:m=>{messages.push(m);projectHostMessage(JSON.stringify(m))},getState:()=>state,setState:s=>{state=s}});</script>` + ui.renderProjectPanel('knowledge', pageData, { state: { key: 'dext.editor:project', page: 'knowledge', filters: {}, restoreVersion: 1 } }), `${origin}/style.css`, origin, { embedFrames: true, scriptUri: `${origin}/project.js` });
+    pageHtml = ui.renderEditorTabHtml(`<script>document.body.classList.add('${theme}');window.messages=[];window.violations=[];document.addEventListener('securitypolicyviolation',e=>violations.push(e.violatedDirective));window.state={filters:${JSON.stringify(filters)}};window.acquireVsCodeApi=()=>({postMessage:m=>{messages.push(m);projectHostMessage(JSON.stringify(m))},getState:()=>state,setState:s=>{state=s}});</script>` + ui.renderProjectPanel('knowledge', pageData, { state: { key: 'dext.editor:project', page: 'knowledge', filters: {}, restoreVersion: 1 } }), `${origin}/style.css`, origin, { embedFrames: true, scriptUri: `${origin}/project.js`, mermaidUri: `${origin}/mermaid.js` });
     await send('Page.navigate', { url: `${origin}/?${Date.now()}` });
     await wait(`document.readyState==='complete' && !!window.messages && !!document.querySelector('[data-reader-article]')`, 'reader load');
     await ready();

@@ -95,9 +95,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return renderEditorTabHtml(body,
       webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "media", "editorTabs.css")).toString(),
       webview.cspSource,
-      { embedFrames: projectReader, ...(script ? {
-        scriptUri: webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "dist", "webview", script)).toString()
-      } : {}) });
+      {
+        embedFrames: projectReader,
+        // Both the conversation page and the API page lazy-load this one bundle;
+        // it is listed for every editor tab so an API page can render its flow
+        // without each tab paying for Mermaid up front.
+        mermaidUri: webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "dist", "webview", "mermaid.js")).toString(),
+        ...(script ? { scriptUri: webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "dist", "webview", script)).toString() } : {})
+      });
   };
   const editorTabs = new EditorTabManager(
     createVscodeEditorTabHost(vscode.window, { localResourceRoots: [context.extensionUri], renderHtml: renderEditorHtml }),

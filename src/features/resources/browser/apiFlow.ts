@@ -2,8 +2,9 @@ import { renderMermaidSvg } from "../../../platform/browser/markdownDiagrams.js"
 
 /**
  * Renders every Execution flow on the page. The host deliberately ships only
- * Mermaid source; this is the one Webview entry that loads Mermaid, so API pages
- * pay for it only when they actually contain a flow.
+ * Mermaid source; this entry lazy-loads the shared `mermaid.js` bundle, so API
+ * pages pay for the renderer only when they actually contain a flow and the
+ * conversation page reuses the same single copy from the VSIX.
  */
 async function renderFlow(root: HTMLElement): Promise<void> {
   const preview = root.querySelector<HTMLElement>("[data-api-flow-preview]");

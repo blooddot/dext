@@ -40,15 +40,22 @@ try {
 
   const bundle = await build({ stdin: { contents: 'export { renderEditorTabHtml } from "./src/platform/editor-tabs/editorTabHtml.ts"; export { buildResourceList, renderResourceDefinition, buildResourceDefinition } from "./src/features/resources/presentation/resourceDocuments.ts"; export { renderApiList } from "./src/features/resources/presentation/apiPanel.ts"; export { renderGlobalResources } from "./src/features/resources/presentation/globalResourcesPanel.ts"; export { renderProjectPanel } from "./src/features/project/presentation/projectPanel.ts";', resolveDir: process.cwd() }, bundle: true, write: false, platform: "node", format: "esm" });
   const ui = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
-  // Build the real Webview entry so the API detail fixture renders Mermaid under the page CSP.
-  const apiFlowBundle = await build({ entryPoints: ["src/features/resources/browser/apiFlow.ts"], bundle: true, write: false, platform: "browser", format: "iife", target: "es2022", minify: true, logLevel: "silent" });
+  // Build the real Webview entries so the API detail fixture renders Mermaid under
+  // the page CSP. Mermaid is a separate lazy bundle now; both files are served from
+  // the same origin so the nonce-authorized script tag can load it.
+  const [apiFlowBundle, mermaidBundle] = await Promise.all([
+    build({ entryPoints: ["src/features/resources/browser/apiFlow.ts"], bundle: true, write: false, platform: "browser", format: "iife", target: "es2022", minify: true, logLevel: "silent" }),
+    build({ entryPoints: ["src/webview/mermaid.ts"], bundle: true, write: false, platform: "browser", format: "iife", target: "es2022", minify: true, logLevel: "silent" })
+  ]);
   const apiFlowScript = apiFlowBundle.outputFiles[0].text;
+  const mermaidScript = mermaidBundle.outputFiles[0].text;
   const css = await readFile('media/editorTabs.css', 'utf8');
   let pageHtml = '', themeCss = '', themeClass = '';
   server = createServer((request, response) => {
     const url = request.url ?? '';
-    response.setHeader('Content-Type', url === '/style.css' ? 'text/css' : url === '/apiFlow.js' ? 'text/javascript' : 'text/html');
-    response.end(url === '/style.css' ? themeCss + css : url === '/apiFlow.js' ? apiFlowScript : pageHtml);
+    const contentType = url === '/style.css' ? 'text/css' : url === '/apiFlow.js' || url === '/mermaid.js' ? 'text/javascript' : 'text/html';
+    response.setHeader('Content-Type', contentType);
+    response.end(url === '/style.css' ? themeCss + css : url === '/apiFlow.js' ? apiFlowScript : url === '/mermaid.js' ? mermaidScript : pageHtml);
   });
   await new Promise(done => server.listen(0, '127.0.0.1', done));
   const origin = `http://127.0.0.1:${server.address().port}`;
@@ -68,7 +75,7 @@ try {
   const project = { overview: { name: 'Dext', root: 'C:/github/blooddot/dext', objects: 0, accepted: 0, drafts: 0, needsVerification: 0, initialization: { status: 'uninitialized' }, aiCli: [{ id: 'codex', label: 'Codex', models: [] }] }, objects: [], architecture: { diagrams: [] } };
   const artifacts = resolve('.tmp-tb/editor-tabs-ui'); await mkdir(artifacts, { recursive: true });
   async function load(body, options = {}, bootstrap = '') {
-    pageHtml = ui.renderEditorTabHtml('<script>' + bootstrap + 'window.messages=[];window.acquireVsCodeApi=()=>({postMessage:message=>messages.push(message)});</script>' + body, `${origin}/style.css`, origin, options);
+    pageHtml = ui.renderEditorTabHtml('<script>' + bootstrap + 'window.messages=[];window.acquireVsCodeApi=()=>({postMessage:message=>messages.push(message)});</script>' + body, `${origin}/style.css`, origin, { mermaidUri: `${origin}/mermaid.js`, ...options });
     await send('Page.navigate', { url: `${origin}/?${Date.now()}` });
     for (let i = 0; i < 100; i++) {
       if (await evaluate(`document.readyState === 'complete' && !!document.querySelector('.editor-tab') && !!window.messages`)) {
@@ -143,7 +150,7 @@ try {
         { kind: 'api', scope: 'project', name: 'mcp.files.readFile', path: 'mcp/files/readFile.ts', group: 'mcp.files', description: 'Read a file', source: { kind: 'project', label: 'project' } }
       ];
       resourceEntries.forEach(entry => { entry.id = `${entry.kind}:${entry.scope}:${entry.path}`; });
-      await load(ui.renderGlobalResources(ui.buildResourceList({ kind: 'api', scope: 'project', entries: resourceEntries, groupBy: 'kind' }), { title: 'Resources', createKinds: ['api','mcp','rule','skill'] }));
+      await load(ui.renderGlobalResources(ui.buildResourceList({ kind: 'api', scope: 'project', entries: resourceEntries, groupBy: 'kind' }), { title: 'Resources', createKinds: ['api','mcp','rule','skill'], openResourceDirectory: true }));
       assert.equal(await evaluate(`document.querySelectorAll('.resource-group:not(.resource-api-node)').length`), 4);
       assert.equal(await evaluate(`document.querySelectorAll('[data-resource-group-action]').length`), 4);
       assert.equal(await evaluate(`document.querySelectorAll('[data-resource-toggle-all]').length`), 0);
@@ -160,6 +167,10 @@ try {
       assert.equal(await evaluate(`document.querySelector('[data-resource-node="API"]').open`), true);
       await evaluate(`document.querySelector('.resource-toolbar [data-resource-command] svg path').dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true}))`);
       assert.equal(await evaluate(`messages[0].command`), 'dext.reloadMethods');
+      await evaluate(`messages=[]`);
+      assert.equal(await evaluate(`document.querySelector('.resource-toolbar [data-resource-command="dext.openResourceDirectory"]').title`), 'Open project resources folder');
+      await evaluate(`document.querySelector('.resource-toolbar [data-resource-command="dext.openResourceDirectory"]').click()`);
+      assert.equal(await evaluate(`messages[0].command`), 'dext.openResourceDirectory');
       await evaluate(`messages=[]`);
       assert.equal(await evaluate(`document.documentElement.scrollWidth <= innerWidth`), true);
       await evaluate(`document.querySelector('button[data-resource-kind="skill"]').click()`);

@@ -38,6 +38,11 @@ const contexts = await Promise.all([
     entryPoints: {
       main: "src/webview/main.ts",
       project: "src/features/project/browser/entry.ts",
+      // The API detail pages and the conversation page both display Mermaid, and
+      // they are separate Webview documents. This single shared entry keeps one
+      // copy of Mermaid in the VSIX; both pages lazy-load it only when a diagram
+      // is present, instead of each bundle inlining its own ~3 MB copy.
+      mermaid: "src/webview/mermaid.ts",
       // API detail pages render Mermaid only when an Execution flow exists; this
       // separate entry keeps that renderer out of every other editor-tab page.
       apiFlow: "src/features/resources/browser/apiFlow.ts",

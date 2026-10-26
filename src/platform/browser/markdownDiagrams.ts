@@ -1,29 +1,58 @@
-let nextDiagramId = 0;
-let renderQueue = Promise.resolve();
+import type { DextMermaidRenderer } from "./mermaidRenderer.js";
 
-/** Shared renderer for conversation Markdown and the Project reader, serialized per document. */
-export function renderMermaidSvg(source: string, root: HTMLElement): Promise<string> {
-  const result = renderQueue.then(async () => {
-    const { default: mermaid } = await import("mermaid");
-    const light = document.body.classList.contains("vscode-light") || document.body.classList.contains("vscode-high-contrast-light");
-    mermaid.initialize({
-      startOnLoad: false, securityLevel: "strict", suppressErrorRendering: true,
-      theme: light ? "default" : "dark", fontFamily: getComputedStyle(root).fontFamily,
-      htmlLabels: false,
-      secure: ["secure", "securityLevel", "startOnLoad", "maxTextSize", "maxEdges", "suppressErrorRendering", "htmlLabels"]
-    });
-    const staging = document.createElement("div");
-    staging.className = "markdown-diagram-staging";
-    staging.setAttribute("aria-hidden", "true");
-    document.body.append(staging);
-    try { return (await mermaid.render(`dext-mermaid-${++nextDiagramId}`, source, staging)).svg; }
-    finally { staging.remove(); }
+const MERMAID_META = 'meta[name="dext-mermaid"]';
+const NONCE_META = 'meta[name="dext-script-nonce"]';
+
+let renderer: Promise<DextMermaidRenderer> | undefined;
+
+/**
+ * Load the shared Mermaid bundle once per document.
+ *
+ * `main.js` and `apiFlow.js` deliberately contain no Mermaid code. The host puts
+ * the bundle's Webview URI and the document nonce in meta tags; the first diagram
+ * appends a nonce-authorized script and every later diagram reuses the global it
+ * installs. The conversation and API pages each pay for Mermaid only when a
+ * diagram is actually rendered.
+ */
+function loadMermaidRenderer(): Promise<DextMermaidRenderer> {
+  if (renderer) return renderer;
+  const existing = (globalThis as typeof globalThis & { __dextMermaid?: DextMermaidRenderer }).__dextMermaid;
+  if (existing) {
+    renderer = Promise.resolve(existing);
+    return renderer;
+  }
+  renderer = new Promise<DextMermaidRenderer>((resolve, reject) => {
+    const url = document.querySelector<HTMLMetaElement>(MERMAID_META)?.content;
+    if (!url) {
+      reject(new Error("The shared Mermaid bundle is not configured for this page."));
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = url;
+    script.async = true;
+    const nonce = document.querySelector<HTMLMetaElement>(NONCE_META)?.content;
+    if (nonce) script.nonce = nonce;
+    script.addEventListener("load", () => {
+      const loaded = (globalThis as typeof globalThis & { __dextMermaid?: DextMermaidRenderer }).__dextMermaid;
+      if (loaded) resolve(loaded);
+      else reject(new Error("The shared Mermaid bundle did not register a renderer."));
+    }, { once: true });
+    script.addEventListener("error", () => reject(new Error("The shared Mermaid bundle could not be loaded.")), { once: true });
+    document.head.append(script);
+  }).catch((error: unknown) => {
+    // A transient load failure must not poison every later diagram in this page.
+    renderer = undefined;
+    throw error;
   });
-  renderQueue = result.then(() => undefined, () => undefined);
-  return result;
+  return renderer;
 }
 
-/** Render locally bundled Mermaid without letting one bad diagram break the form. */
+/** Shared renderer for conversation Markdown and API execution flows. */
+export async function renderMermaidSvg(source: string, root: HTMLElement): Promise<string> {
+  return (await loadMermaidRenderer()).renderSvg(source, root);
+}
+
+/** Render loaded Mermaid without letting one bad diagram break the form. */
 export function renderMarkdownDiagrams(root: HTMLElement): void {
   for (const code of root.querySelectorAll<HTMLElement>("pre > code.language-mermaid")) {
     const pre = code.parentElement!;
