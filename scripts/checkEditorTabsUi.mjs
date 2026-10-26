@@ -147,9 +147,10 @@ try {
       const resourceEntries = [
         { kind: 'api', scope: 'project', name: 'dev.feat', path: 'dev/feat.ts', group: 'dev', description: 'Plan a feature', source: { kind: 'project', label: 'project' } },
         { kind: 'api', scope: 'project', name: 'dev.fix', path: 'dev/fix.ts', group: 'dev', description: 'Fix a defect', source: { kind: 'project', label: 'project' } },
-        { kind: 'api', scope: 'project', name: 'mcp.files.readFile', path: 'mcp/files/readFile.ts', group: 'mcp.files', description: 'Read a file', source: { kind: 'project', label: 'project' } }
+        { kind: 'api', scope: 'project', name: 'mcp.files.readFile', path: 'mcp/files/readFile.ts', group: 'mcp.files', description: 'Read a file', source: { kind: 'project', label: 'project' } },
+        { kind: 'skill', scope: 'project', name: 'review', path: 'review/SKILL.md', group: '.', description: 'Review changes using the current Agent version.', source: { kind: 'project', label: 'project' } }
       ];
-      resourceEntries.forEach(entry => { entry.id = `${entry.kind}:${entry.scope}:${entry.path}`; });
+      resourceEntries.forEach(entry => { entry.id = `${entry.kind}:${entry.scope}:${entry.path}`; entry.source.path = `C:/project/.dext/${entry.kind === 'skill' ? 'skills' : 'api'}/${entry.path}`; });
       await load(ui.renderGlobalResources(ui.buildResourceList({ kind: 'api', scope: 'project', entries: resourceEntries, groupBy: 'kind' }), { title: 'Resources', createKinds: ['api','mcp','rule','skill'], openResourceDirectory: true }));
       assert.equal(await evaluate(`document.querySelectorAll('.resource-group:not(.resource-api-node)').length`), 4);
       assert.equal(await evaluate(`document.querySelectorAll('[data-resource-group-action]').length`), 4);
@@ -175,6 +176,22 @@ try {
       assert.equal(await evaluate(`document.documentElement.scrollWidth <= innerWidth`), true);
       await evaluate(`document.querySelector('button[data-resource-kind="skill"]').click()`);
       assert.equal(await evaluate(`messages[0].kind`), 'skill');
+      await evaluate(`messages=[]; document.querySelector('.resource-entry').scrollIntoView({block:'center'}); document.activeElement.blur()`);
+      await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 0, y: 0 });
+      assert.equal(await evaluate(`getComputedStyle(document.querySelector('.resource-entry-actions')).opacity`), await evaluate(`matchMedia('(hover:none)').matches ? '1' : '0'`), 'actions stay hidden until hover/focus on pointer devices');
+      const row = await evaluate(`(() => { const r = document.querySelector('.resource-entry').getBoundingClientRect(); return { x:r.x+4, y:r.y+4 }; })()`);
+      await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...row });
+      assert.equal(await evaluate(`getComputedStyle(document.querySelector('.resource-entry-actions')).opacity`), '1', 'hover reveals the resource toolbar');
+      const fileButton = await evaluate(`(() => { const r = document.querySelector('.resource-entry-actions button').getBoundingClientRect(); return { x:r.x+r.width/2, y:r.y+r.height/2 }; })()`);
+      await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...fileButton, button: 'left', clickCount: 1 });
+      await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...fileButton, button: 'left', clickCount: 1 });
+      for (const command of ['openResourceFolder', 'deleteResource']) await evaluate(`document.querySelector('.resource-entry-actions [data-resource-command="dext.${command}"] svg path').dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true}))`);
+      assert.deepEqual(await evaluate(`messages.map(message=>({type:message.type,command:message.command,id:message.id}))`), ['openResourceSource','openResourceFolder','deleteResource'].map(command=>({type:'resourceCommand',command:`dext.${command}`,id:resourceEntries[0].id})), 'toolbar actions target the resource without opening its detail');
+      await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 0, y: 0 });
+      await evaluate(`document.querySelector('.resource-entry-actions button').focus()`);
+      assert.equal(await evaluate(`getComputedStyle(document.querySelector('.resource-entry-actions')).opacity`), '1', 'keyboard focus reveals the resource toolbar');
+      assert.equal(await evaluate(`document.querySelector('[data-resource-node="Skill"] .resource-entry-actions').children.length`), 3);
+      assert.equal(await evaluate(`document.documentElement.scrollWidth <= innerWidth`), true, 'resource actions fit the viewport');
       await writeFile(join(artifacts, `resources-${themeName}-${width}.png`), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
       // File API signatures and details must use the same component and token palette on both pages.
       const commit = { id: 'api:project:git/commit.ts', kind: 'api', scope: 'project', name: 'git.commit', path: 'git/commit.ts', group: 'git',

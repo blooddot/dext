@@ -207,6 +207,11 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     await this.conversation.controller.postPlanContext();
   }
 
+  async resourcesChanged(): Promise<void> {
+    await this.conversation.controller.reconcileInstalledSkills(this.installedSkillIds());
+    await this.refresh();
+  }
+
   /** Installed ids, read defensively because lightweight host tests build a
    * partial application object. */
   private installedSkillIds(): Set<string> {

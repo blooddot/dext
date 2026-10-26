@@ -347,6 +347,22 @@ export class ConversationController {
     this.options.application.setAgentSelection(selection);
   }
 
+  /** Explicit resource removal also clears saved checkboxes, so re-importing a
+   * package does not silently re-enable it in an older conversation. */
+  async reconcileInstalledSkills(installed: ReadonlySet<string>): Promise<void> {
+    this.hydrate();
+    for (const sessionId of this.sessions.keys()) {
+      const previous = this.conversationSelections.get(sessionId) ?? this.preferences.conversationSelection(sessionId);
+      if (!previous?.skills?.length) continue;
+      const skills = previous.skills.filter((id) => installed.has(id));
+      if (skills.length === previous.skills.length) continue;
+      const selection = skills.length ? { ...previous, skills } : withoutSkills(previous);
+      this.conversationSelections.set(sessionId, selection);
+      if (sessionId === this.activeSession.id) this.options.application.setAgentSelection(selection);
+      await this.preferences.setConversationSelection(sessionId, selection);
+    }
+  }
+
   // History hands over its own copy of a conversation; an already open one
   // keeps the in-memory instance so that a running turn stays attached to it.
   async open(session: DextHistorySession): Promise<void> {

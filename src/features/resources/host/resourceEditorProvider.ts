@@ -80,13 +80,13 @@ export class ResourceEditorProvider {
     if (payload.type === "resourceCommand") {
       const command = (payload as { command?: unknown }).command;
       if (typeof command !== "string") return;
-      await this.options.onCommand?.(command, {
+      const changed = await this.options.onCommand?.(command, {
         ...(typeof payload.id === "string" ? { id: payload.id } : {}),
         ...(typeof payload.kind === "string" ? { kind: payload.kind } : {}),
         ...(typeof payload.path === "string" ? { path: payload.path } : {}),
         ...(typeof payload.query === "string" ? { query: payload.query } : {})
       });
-      if (command === `${this.options.commandPrefix ?? "dext"}.reloadMethods`) {
+      if (command === `${this.options.commandPrefix ?? "dext"}.reloadMethods` || (changed === true && command.endsWith(".deleteResource"))) {
         await this.showList();
       }
     }

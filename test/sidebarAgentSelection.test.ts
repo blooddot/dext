@@ -202,6 +202,33 @@ describe("sidebar agent selection synchronization", () => {
 });
 
 describe("conversation composer selection", () => {
+  it("clears uninstalled Skills from active and closed saved conversations while preserving other controls", async () => {
+    const h = createConversationHarness({ layout: { openConversationIds: ["one"], activeConversationId: "one" } });
+    h.seed([conversation("one", [turn("t1")]), conversation("two", [turn("t2")])]);
+    const one = { ...defaultSelection, profileId: "codex", model: "one-model", skills: ["review", "keep"] };
+    const two = { ...defaultSelection, profileId: "claude", model: "two-model", skills: ["review"] };
+    h.controller.setSelection("one", one);
+    await h.preferences.setConversationSelection("one", one);
+    await h.preferences.setConversationSelection("two", two);
+    await h.controller.reconcileInstalledSkills(new Set(["keep"]));
+    expect(h.controller.selection("one")).toEqual({ ...one, skills: ["keep"] });
+    expect(h.preferences.conversationSelection("one")).toEqual({ ...one, skills: ["keep"] });
+    expect(h.preferences.conversationSelection("two")).toEqual({ ...defaultSelection, profileId: "claude", model: "two-model" });
+    h.dispose();
+  });
+
+  it("reconciles execution and saved selection when Resources removes an installed Skill", async () => {
+    const h = sidebarHarness(); h.storage.resolve();
+    await h.select("codex", { skills: ["ponytail"] });
+    h.application.skills.list = () => [];
+    await h.sidebar.resourcesChanged();
+    const id = h.internals.conversation.controller.active().id;
+    expect(h.internals.conversation.controller.selection(id)?.skills).toBeUndefined();
+    expect(h.selection().skills).toBeUndefined();
+    expect(h.states().at(-1)?.agentSelection.skills).toBeUndefined();
+    expect(h.setConversationSelection).toHaveBeenLastCalledWith(id, expect.not.objectContaining({ skills: expect.anything() }));
+  });
+
   it("starts a new tab in Agent mode while keeping the provider and model it came from", async () => {
     const h = createConversationHarness();
     await h.controller.start();

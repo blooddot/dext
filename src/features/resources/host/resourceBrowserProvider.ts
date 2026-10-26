@@ -73,13 +73,22 @@ export class ResourceBrowserProvider extends ResourceEditorProvider {
       return;
     }
     if (payload.type === "resourceCommand" && typeof payload.command === "string") {
-      await this.options.onCommand?.(payload.command, {
+      const parameters = {
         scope: current.scope,
         ...(typeof payload.id === "string" ? { id: payload.id } : {}),
         ...(typeof payload.kind === "string" ? { kind: payload.kind } : {}),
         ...(typeof payload.path === "string" ? { path: payload.path } : {}),
         ...(typeof payload.query === "string" ? { query: payload.query } : {})
-      });
+      };
+      try {
+        const changed = await this.options.onCommand?.(payload.command, parameters);
+        if (changed === true && payload.command.endsWith(".deleteResource")) {
+          await this.navigate({ query: current.query, scrollTop: current.scrollTop, scope: current.scope, collapsed: current.collapsed });
+        }
+      } catch (error) {
+        if (payload.command.endsWith(".deleteResource")) await this.navigate({ query: current.query, scrollTop: current.scrollTop, scope: current.scope, collapsed: current.collapsed });
+        throw error;
+      }
       return;
     }
     await super.handleMessage(key, message);

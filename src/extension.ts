@@ -17,6 +17,7 @@ import type { ResourceScope } from "./features/resources/contracts/resourceSessi
 import { ApiEditorProvider } from "./features/resources/host/apiEditorProvider.js";
 import { GlobalResourcesEditorProvider } from "./features/resources/host/globalResourcesEditorProvider.js";
 import { createApiDataSource, createFileResourceDataSource } from "./features/resources/host/resourceEditorProvider.js";
+import { managedResourcePath, removeManagedResource } from "./features/resources/host/resourceActions.js";
 import { renderResourceError } from "./features/resources/presentation/resourceDocuments.js";
 import { DextHistoryPanel } from "./features/conversations/host/historyEditorProvider.js";
 import { conversationMarkdown, conversationTitle, historyTurnMarkdown, historyTurnTitle } from "./features/conversations/presentation/historyRender.js";
@@ -156,7 +157,44 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     methods: () => application.registry.list(), files: resourceDataSource, reference: apiReference
   });
   const resourceCommandFor = (scope: ResourceScope, dataSource: ResourceEditorDataSource) =>
-    async (command: string, payload: { id?: string; kind?: string; path?: string }): Promise<void> => {
+    async (command: string, payload: { id?: string; kind?: string; path?: string }): Promise<void | boolean> => {
+      if (command.endsWith(".deleteResource") || command.endsWith(".openResourceFolder") || (command.endsWith(".openResourceSource") && payload.id)) {
+        const document = payload.id ? await dataSource.definition(payload.id) : undefined;
+        if (!document) throw new Error("This resource is no longer available. Refresh the list.");
+        // The APIs page can show both scopes; resolve ownership from the current
+        // data source entry rather than from the tab's creation default.
+        const root = resourceRoots()[document.entry.scope];
+        if (!root) throw new Error("Project resources require a trusted local workspace.");
+        const path = managedResourcePath(document.entry, root);
+        if (command.endsWith(".openResourceSource")) {
+          await vscode.window.showTextDocument(vscode.Uri.file(path));
+          return;
+        }
+        if (command.endsWith(".openResourceFolder")) {
+          if (!await vscode.env.openExternal(vscode.Uri.joinPath(vscode.Uri.file(path), ".."))) throw new Error("VS Code could not open the resource folder.");
+          return;
+        }
+        let removed: boolean;
+        try {
+          removed = await removeManagedResource(document.entry, root, {
+            confirm: async (plan) => await vscode.window.showWarningMessage(`Delete ${plan.label}?`, {
+              modal: true,
+              detail: `${plan.skills.length ? `This removes the entire pack and all ${plan.skills.length} Skills: ${plan.skills.join(", ")}.\n\n` : ""}Files and folders will be moved to Trash:\n${plan.targets.join("\n")}`
+            }, "Move to Trash") === "Move to Trash",
+            dirtyPaths: () => vscode.workspace.textDocuments.filter((document) => document.isDirty && document.uri.scheme === "file").map((document) => document.uri.fsPath),
+            trash: async (target) => {
+              try { await vscode.workspace.fs.delete(vscode.Uri.file(target), { recursive: true, useTrash: true }); }
+              catch (error) { if (!(error instanceof vscode.FileSystemError) || error.code !== "FileNotFound") throw error; }
+            }
+          });
+        } catch (error) {
+          await application.reload();
+          await sidebar.resourcesChanged();
+          throw error;
+        }
+        if (removed) { await application.reload(); await sidebar.resourcesChanged(); }
+        return removed;
+      }
       if (command.endsWith(".newResource")) {
         const kind = payload.kind;
         if (kind !== "api" && kind !== "mcp" && kind !== "rule" && kind !== "skill") {
@@ -206,7 +244,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     onCommand: async (command, payload) => {
       // Resources refreshes its file listing; reloading runtime callables is unnecessary.
       if (command === "dext.reloadMethods") return;
-      await resourceCommandFor(payload.scope === "project" ? "project" : "global", resourceDataSource)(command, payload);
+      return await resourceCommandFor(payload.scope === "project" ? "project" : "global", resourceDataSource)(command, payload);
     },
     copyText: async (text) => { await vscode.env.clipboard.writeText(text); }
   }, ["api", "mcp", "rule", "skill"]);

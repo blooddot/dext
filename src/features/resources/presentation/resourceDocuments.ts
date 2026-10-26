@@ -218,29 +218,41 @@ export function resourceSearchText(entry: ResourceEntry): string {
 }
 
 
-export function renderTreeEntry(entry: ResourceEntry): string {
-  return `<li class="resource-entry" data-resource-search-text="${escapeResourceHtml(resourceSearchText(entry))}" data-resource-id="${escapeResourceHtml(entry.id)}"><button type="button" data-resource-open="${escapeResourceHtml(entry.id)}"><span class="resource-entry-heading"><span class="resource-name">${escapeResourceHtml(apiDisplayName(entry))}</span><span class="resource-source">${escapeResourceHtml(entry.source.label)}</span></span>${entry.api ? `<code class="resource-entry-signature">${apiEntries(entry).map(item => renderApiSignature(item, true)).join("<br>")}</code>` : ""}${entry.description ? `<span class="resource-description">${escapeResourceHtml(entry.description)}</span>` : ""}</button></li>`;
+export function renderResourceActions(entry: ResourceEntry, prefix: string): string {
+  if (!entry.source.path || entry.source.kind !== entry.scope || entry.reference || entry.kind === "file") return "";
+  const actions = [
+    ["openResourceSource", "Open file", "file"],
+    ["openResourceFolder", "Open containing folder", "folder-opened"],
+    ["deleteResource", "Delete resource", "trash"]
+  ] as const;
+  return `<span class="resource-entry-actions" role="group" aria-label="Resource actions">${actions.map(([command, label, icon]) =>
+    `<button type="button" class="resource-icon-button${command === "deleteResource" ? " resource-delete" : ""}" data-resource-command="${escapeResourceHtml(prefix)}.${command}" data-resource-id="${escapeResourceHtml(entry.id)}" title="${label}" aria-label="${label}">${resourceIcon(icon)}</button>`
+  ).join("")}</span>`;
+}
+
+export function renderTreeEntry(entry: ResourceEntry, prefix = "dext"): string {
+  return `<li class="resource-entry" data-resource-search-text="${escapeResourceHtml(resourceSearchText(entry))}" data-resource-id="${escapeResourceHtml(entry.id)}"><button type="button" data-resource-open="${escapeResourceHtml(entry.id)}"><span class="resource-entry-heading"><span class="resource-name">${escapeResourceHtml(apiDisplayName(entry))}</span><span class="resource-source">${escapeResourceHtml(entry.source.label)}</span></span>${entry.api ? `<code class="resource-entry-signature">${apiEntries(entry).map(item => renderApiSignature(item, true)).join("<br>")}</code>` : ""}${entry.description ? `<span class="resource-description">${escapeResourceHtml(entry.description)}</span>` : ""}</button>${renderResourceActions(entry, prefix)}</li>`;
 }
 
 
-export function renderTreeContents(node: ResourceTreeNode, collapsed: Set<string>, type: string): string {
-  return [...node.entries].sort((left, right) => left.name.localeCompare(right.name)).map(renderTreeEntry).join("")
-    + [...node.children.values()].sort((left, right) => left.label.localeCompare(right.label)).map((child) => renderTreeNode(child, collapsed, type)).join("");
+export function renderTreeContents(node: ResourceTreeNode, collapsed: Set<string>, type: string, prefix = "dext"): string {
+  return [...node.entries].sort((left, right) => left.name.localeCompare(right.name)).map((entry) => renderTreeEntry(entry, prefix)).join("")
+    + [...node.children.values()].sort((left, right) => left.label.localeCompare(right.label)).map((child) => renderTreeNode(child, collapsed, type, prefix)).join("");
 }
 
 
-export function renderTreeNode(node: ResourceTreeNode, collapsed: Set<string>, type: string): string {
-  return `<details class="resource-group resource-api-node" data-resource-group="${escapeResourceHtml(node.path)}" data-resource-node="${escapeResourceHtml(node.path)}" data-resource-type="${escapeResourceHtml(type)}"${collapsed.has(node.path) ? "" : " open"}><summary><span class="resource-group-toggle" data-resource-toggle="${escapeResourceHtml(node.path)}">${escapeResourceHtml(node.label)}</span><span class="resource-count">${countTreeNodeEntries(node)}</span><span class="resource-group-chevron" aria-hidden="true">⌄</span></summary><ul>${renderTreeContents(node, collapsed, type)}</ul></details>`;
+export function renderTreeNode(node: ResourceTreeNode, collapsed: Set<string>, type: string, prefix = "dext"): string {
+  return `<details class="resource-group resource-api-node" data-resource-group="${escapeResourceHtml(node.path)}" data-resource-node="${escapeResourceHtml(node.path)}" data-resource-type="${escapeResourceHtml(type)}"${collapsed.has(node.path) ? "" : " open"}><summary><span class="resource-group-toggle" data-resource-toggle="${escapeResourceHtml(node.path)}">${escapeResourceHtml(node.label)}</span><span class="resource-count">${countTreeNodeEntries(node)}</span><span class="resource-group-chevron" aria-hidden="true">⌄</span></summary><ul>${renderTreeContents(node, collapsed, type, prefix)}</ul></details>`;
 }
 
 
-export function renderApiTree(document: ResourceListDocument, collapsed: Set<string>): string {
+export function renderApiTree(document: ResourceListDocument, collapsed: Set<string>, prefix = "dext"): string {
   const root = buildResourceTree(newTreeNode("", "."),
     document.groups.flatMap((group) => group.entries.map((entry) => ({ entry, parts: group.label === "." ? [] : group.label.split(".") }))));
   // Keep the synthetic Top level group limited to APIs without a namespace. Namespace
   // groups such as node and ui are siblings of it, rather than nested beneath it.
-  const topLevel = `<details class="resource-group resource-api-node" data-resource-group="." data-resource-node="." data-resource-type="api"${collapsed.has(".") ? "" : " open"}><summary><span class="resource-group-toggle" data-resource-toggle=".">Top level</span><span class="resource-count">${root.entries.length}</span><span class="resource-group-chevron" aria-hidden="true">⌄</span></summary><ul>${root.entries.sort((left, right) => left.name.localeCompare(right.name)).map(renderTreeEntry).join("")}</ul></details>`;
-  return topLevel + [...root.children.values()].sort((left, right) => left.label.localeCompare(right.label)).map((node) => renderTreeNode(node, collapsed, "api")).join("");
+  const topLevel = `<details class="resource-group resource-api-node" data-resource-group="." data-resource-node="." data-resource-type="api"${collapsed.has(".") ? "" : " open"}><summary><span class="resource-group-toggle" data-resource-toggle=".">Top level</span><span class="resource-count">${root.entries.length}</span><span class="resource-group-chevron" aria-hidden="true">⌄</span></summary><ul>${root.entries.sort((left, right) => left.name.localeCompare(right.name)).map((entry) => renderTreeEntry(entry, prefix)).join("")}</ul></details>`;
+  return topLevel + [...root.children.values()].sort((left, right) => left.label.localeCompare(right.label)).map((node) => renderTreeNode(node, collapsed, "api", prefix)).join("");
 }
 
 
@@ -248,7 +260,7 @@ export function renderApiTree(document: ResourceListDocument, collapsed: Set<str
  * The Resources page keeps one category per kind and nests each category's own namespaces, so
  * `dev.feat` reads as `dev` with `feat` beneath it instead of one flat list.
  */
-export function renderCategoryTree(document: ResourceListDocument, collapsed: Set<string>): string {
+export function renderCategoryTree(document: ResourceListDocument, collapsed: Set<string>, prefix = "dext"): string {
   return document.groups.map((group) => {
     const kind = resourceKindForLabel(group.label);
     const type = kind ?? "";
@@ -257,7 +269,7 @@ export function renderCategoryTree(document: ResourceListDocument, collapsed: Se
     return `<details class="resource-group" data-resource-group="${escapeResourceHtml(group.label)}" data-resource-node="${escapeResourceHtml(group.label)}" data-resource-type="${escapeResourceHtml(type)}"${collapsed.has(group.label) ? "" : " open"}>`
       + `<summary><span class="resource-group-toggle" data-resource-toggle="${escapeResourceHtml(group.label)}">${escapeResourceHtml(group.label)}</span><span class="resource-count">${group.entries.length}</span>`
       + `<span class="resource-group-actions">${resourceToggleButton(`data-resource-group-action="toggle" data-resource-group-target="${escapeResourceHtml(group.label)}"`, group.label, !collapsed.has(group.label))}</span>`
-      + `<span class="resource-group-chevron" aria-hidden="true">⌄</span></summary><ul>${renderTreeContents(root, collapsed, type)}</ul>`
+      + `<span class="resource-group-chevron" aria-hidden="true">⌄</span></summary><ul>${renderTreeContents(root, collapsed, type, prefix)}</ul>`
       + (group.entries.length ? "" : `<p class="resource-empty">No ${escapeResourceHtml(group.label)} resources found.</p>`) + `</details>`;
   }).join("");
 }
@@ -357,15 +369,15 @@ export function resourceClientScript(state?: EditorTabState): string {
 export function renderResourceList(document: ResourceListDocument, options: ResourcePanelOptions = {}): string {
   const prefix = options.commandPrefix ?? "dext";
   const collapsed = new Set(options.collapsed ?? []);
-  const groups = options.apiTree ? renderApiTree(document, collapsed)
-    : options.categoryTree ? renderCategoryTree(document, collapsed)
+  const groups = options.apiTree ? renderApiTree(document, collapsed, prefix)
+    : options.categoryTree ? renderCategoryTree(document, collapsed, prefix)
     : document.groups.map((group) => `<details class="resource-group" data-resource-group="${escapeResourceHtml(group.label)}" data-resource-node="${escapeResourceHtml(group.label)}"${collapsed.has(group.label) ? "" : " open"} data-resource-type="${document.kind === "api" ? "api" : (options.createKinds?.find((kind) => RESOURCE_LABELS[kind] === group.label) ?? "")}">`
     + `<summary><span class="resource-group-toggle" data-resource-toggle="${escapeResourceHtml(group.label)}">${escapeResourceHtml(group.label === "." ? "Top level" : group.label)}</span><span class="resource-count">${group.entries.length}</span>${options.createKinds ? `<span class="resource-group-actions">${resourceToggleButton(`data-resource-group-action="toggle" data-resource-group-target="${escapeResourceHtml(group.label)}"`, group.label, !collapsed.has(group.label))}</span>` : ""}<span class="resource-group-chevron" aria-hidden="true">⌄</span></summary><ul>`
     + group.entries.map((entry) => `<li class="resource-entry" data-resource-search-text="${escapeResourceHtml(`${entry.name} ${entry.description ?? ""}`)}" data-resource-id="${escapeResourceHtml(entry.id)}" data-resource-path="${escapeResourceHtml(entry.path)}">`
       + `<button type="button" data-resource-open="${escapeResourceHtml(entry.id)}"><span class="resource-entry-heading"><span class="resource-name">${escapeResourceHtml(entry.name)}</span>`
       + `<span class="resource-source">${escapeResourceHtml(entry.source.label)}</span></span>`
       + (entry.description ? `<span class="resource-description">${escapeResourceHtml(entry.description)}</span>` : "") + `</button>`
-      + `</li>`).join("")
+      + `${renderResourceActions(entry, prefix)}</li>`).join("")
     + `</ul>${group.entries.length ? "" : `<p class="resource-empty">No ${escapeResourceHtml(group.label)} resources found.</p>`}</details>`).join("");
   return `<div class="resource-panel" data-resource-kind="${document.kind}" data-resource-scope="${document.scope}">`
     + renderResourceNavigation(options)

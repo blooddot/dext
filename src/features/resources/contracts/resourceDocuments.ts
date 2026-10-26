@@ -92,8 +92,8 @@ export interface ResourceEditorProviderOptions {
   scopeKey?: string;
   availableScopes?(): readonly ResourceScope[];
   commandPrefix?: string;
-  /** Runs a toolbar command such as a source jump, reference insertion, or refresh. */
-  onCommand?(command: string, payload: { id?: string; kind?: string; path?: string; query?: string; scope?: ResourceScope }): Promise<void> | void;
+  /** Runs a toolbar command. Return true after removing a resource to refresh its list. */
+  onCommand?(command: string, payload: { id?: string; kind?: string; path?: string; query?: string; scope?: ResourceScope }): Promise<void | boolean> | void | boolean;
   /** Copies text the page offers, such as a module specifier; the host owns the clipboard. */
   copyText?(text: string): Promise<void> | void;
   /** Page renderers. The migrated API and Global Resources pages override these. */

@@ -39,4 +39,18 @@ describe("resource documents", () => {
     expect(list).not.toContain("<script>");
     expect(list).toContain("&lt;script&gt;");
   });
+
+  it("offers source management actions only for managed files, with custom command prefixes in every layout", () => {
+    const source = entry("review", "review/SKILL.md", "skill");
+    const builtin: ResourceEntry = { ...source, id: "builtin", source: { kind: "directory", label: "builtin", path: "/builtin/SKILL.md" } };
+    const list = buildResourceList({ kind: "skill", scope: "project", entries: [source, builtin] });
+    for (const layout of [{}, { categoryTree: true }, { apiTree: true }]) {
+      const html = renderResourceList(list, { ...layout, commandPrefix: "custom" });
+      for (const command of ["openResourceSource", "openResourceFolder", "deleteResource"]) {
+        expect(html.match(new RegExp(`data-resource-command="custom\\.${command}"`, "g"))).toHaveLength(1);
+      }
+      expect(html).toContain('aria-label="Delete resource"');
+      expect(html).not.toContain('data-resource-command="dext.deleteResource"');
+    }
+  });
 });

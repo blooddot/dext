@@ -37,6 +37,38 @@ function entry(kind: ResourceKind, name: string): ResourceEntry {
 }
 
 describe("global resources panel", () => {
+  it.each([false, true])("refreshes the current scope after confirmed deletion only (confirmed: %s)", async (confirmed) => {
+    let files = [{ name: "review", path: "review/SKILL.md", scope: "project" as const }];
+    const dataSource = createFileResourceDataSource({
+      roots: () => ({ project: "C:/project/.dext" }), listFiles: async kind => kind === "skill" ? files : [], readFile: async () => "Skill source"
+    });
+    const host = new FakeHost();
+    const manager = new EditorTabManager(host);
+    const onCommand = vi.fn(async () => { if (confirmed) files = []; return confirmed; });
+    const provider = new GlobalResourcesEditorProvider({ manager, restorer: new EditorTabRestorer(manager), dataSource, scope: "project", onCommand });
+    await provider.showList();
+    await provider.handleMessage(provider.listTabKey, { type: "resourceCommand", command: "dext.deleteResource", id: "skill:project:review/SKILL.md", viewState: { query: "review", collapsed: ["Rule"], scrollTop: 123 } });
+    expect(onCommand).toHaveBeenCalledWith("dext.deleteResource", { scope: "project", id: "skill:project:review/SKILL.md" });
+    const html = host.created[0]!.panel.html;
+    expect(html.includes('data-resource-open="skill:project:review/SKILL.md"')).toBe(!confirmed);
+    if (confirmed) {
+      expect(html).toContain('data-resource-scroll="123"');
+      expect(html).toContain('value="review"');
+      expect(html).toContain('data-resource-scope="project"');
+    }
+  });
+
+  it("refreshes after a partially failed deletion and reports the original error", async () => {
+    let files = [{ name: "review", path: "review/SKILL.md", scope: "global" as const }];
+    const dataSource = createFileResourceDataSource({ roots: () => ({ global: "C:/global" }), listFiles: async kind => kind === "skill" ? files : [], readFile: async () => "Skill source" });
+    const host = new FakeHost();
+    const manager = new EditorTabManager(host);
+    const provider = new GlobalResourcesEditorProvider({ manager, restorer: new EditorTabRestorer(manager), dataSource, scope: "global", onCommand: async () => { files = []; throw new Error("Trash unavailable"); } });
+    await provider.showList();
+    await expect(provider.handleMessage(provider.listTabKey, { type: "resourceCommand", command: "dext.deleteResource", id: "skill:global:review/SKILL.md" })).rejects.toThrow("Trash unavailable");
+    expect(host.created[0]!.panel.html).not.toContain('data-resource-open="skill:global:review/SKILL.md"');
+  });
+
   it("shows unregistered project files, opens their detail, and forwards source and creation actions", async () => {
     let files = [{ name: "git.commit", path: "git/commit.ts", scope: "project" as const }];
     const dataSource = createFileResourceDataSource({

@@ -384,7 +384,9 @@ Command 校验后也按每一轮的“Agent 专用版 → 共享版”解析。�
 
 Create 之前，每个被选中的 Skill 都会完整校验（front matter、标量 description、非空正文、id、安全路径、128 个文件、总计 1 MB、单文件 200 KB）；任一选中项失败则整包失败。front matter 格式非法会失败，但缺少 front matter 只是警告。草稿把每个 Skill 放在 `skills/<id>/`，在 `skill-packs/<pack>/` 下写入清单和报告，把可用提示词命令复制到 `skill-packs/<pack>/commands/`，并在仓库提供 LICENSE 时保留它。Import 本身不写盘。Create 原子写入整个包，重新检查已存在的包目录和 Skill 目录，并且不会自动启用新 Skill；之后需在 Skills 控件中勾选。
 
-Import 不支持私有仓库、凭据、端口、查询串、GitLab/Bitbucket、npm 包、二进制附带文件（会跳过并警告）、可执行 hook，也不支持更新已安装的包。只有命令、没有 Skill 的仓库，或直接指向命令文件的 URL，都不是 Skill，会被拒绝。
+移除旧版本时，打开 **Resources** 并切换到安装时的 **Project / Global**，悬浮或键盘聚焦资源行，可选择打开文件、打开所在目录、删除。独立 Skill 会连同自己的附属文件目录一起移除；导入包中的任意 Skill 的删除按钮会卸载整个包，包括所有 Skill、Agent 版本、commands、清单和报告，确认框会列出范围。删除使用系统回收站，存在未保存文件时会阻止操作。删除后 Resources 和 Input 会刷新，再通过 Import / Create 安装新版本。API、Rule、MCP 的删除按钮只移除对应文件；内置和只读参考资源没有这些管理按钮。
+
+Import 不支持私有仓库、凭据、端口、查询串、GitLab/Bitbucket、npm 包、二进制附带文件（会跳过并警告）、可执行 hook，也不支持原地更新已安装的包。只有命令、没有 Skill 的仓库，或直接指向命令文件的 URL，都不是 Skill，会被拒绝。
 
 规则是 `.dext/rules/` 下的有序策略文件，规则路径只会在该目录下解析。`.dext/rules/plan.md` 会替换 Plan 模式默认的计划文档指令。`agent`、`ask`、`plan`、`template` 也可以为单次调用指定 `skills` 和 `rules`——`await agent({ input: "…", rules: ["review.md"] })`。它们是 `internal`，因为从不作为控制字段转发给提供方；而生成的声明恰好会在这四个 API 上列出它们，因为这是调用方自己写的选项。Dext 先加载所选 Skills，再按顺序加载规则，因此调用的窄规则会约束通用的 Skill 流程；这些内容注入 Agent 指令。`ui.*` 等待用户回答后继续同一个工作流。
 
