@@ -2,6 +2,7 @@ import type { ApiReferenceMember, ApiReferenceModule } from "../../workflow/cont
 import type { EditorTabState } from "../../../platform/editor-tabs/editorTabState.js";
 import type { ResourceDefinitionDocument, ResourceEntry, ResourceListDocument, ResourcePanelOptions, ResourceTreeNode } from "../contracts/resourceDocuments.js";
 import { RESOURCE_LABELS, type ResourceKind, type ResourceScope } from "../contracts/resourceSession.js";
+import { renderApiFlow } from "./apiFlowDiagram.js";
 import { resourceIcon } from "./resourceIcons.js";
 
 
@@ -452,6 +453,8 @@ export function renderResourceDefinition(document: ResourceDefinitionDocument, o
       : "";
   }).join("");
   const referenceDetails = entry.reference ? renderReferenceModule(entry.reference) : "";
+  // A flow without source (a built-in or a reference entry) has no module to analyse.
+  const flow = entry.apiFlow ? renderApiFlow(entry.apiFlow, entry.name) : "";
   // A reference entry is documentation rather than a file: it has no Dext call to
   // insert and no source to open, and its own section is the whole page.
   const actions = entry.reference ? `<span class="resource-source">TypeScript declaration</span>`
@@ -463,5 +466,5 @@ export function renderResourceDefinition(document: ResourceDefinitionDocument, o
     + renderResourceNavigation(options)
     + `<header class="resource-toolbar"><h2>${escapeResourceHtml(entry.name)}</h2>`
     + actions
-    + `</header>${apiDetails}${referenceDetails}${source}</div>${resourceClientScript(options.tabState)}`;
+    + `</header>${apiDetails}${flow}${referenceDetails}${source}</div>${resourceClientScript(options.tabState)}`;
 }

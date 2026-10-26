@@ -1,3 +1,4 @@
+import type { ApiFlow } from "../../workflow/contracts/apiFlow.js";
 import type { ApiReferenceCatalog, ApiReferenceModule, ApiSourceFunction } from "../../workflow/contracts/apiReference.js";
 import type { RegisteredCallable } from "../../../shared/contracts/types.js";
 import { type EditorTabManager } from "../../../platform/editor-tabs/editorTabManager.js";
@@ -28,6 +29,8 @@ export interface ResourceEntry {
   api?: ApiSourceFunction["api"];
   /** Exported functions read from a file; both pages render these with the same API component. */
   apiFunctions?: ApiSourceFunction[];
+  /** Function-level Execution flow. Parsed only for a detail page, never for a list. */
+  apiFlow?: ApiFlow;
   /** A read-only reference entry: a Node module or JavaScript global documented
    * from its own declaration rather than a callable Dext API. */
   reference?: ApiReferenceModule;
@@ -109,6 +112,8 @@ export interface FileResourceDataSourceOptions {
   listFiles(kind: Exclude<ResourceKind, "file">): Promise<Array<{ name: string; path: string; scope: ResourceScope }>>;
   readFile(entry: ResourceEntry): Promise<string | undefined>;
   describeApi?(content: string): Promise<ApiSourceFunction[]>;
+  /** Builds the function call graph for a detail page; lists deliberately skip it. */
+  describeApiFlow?(content: string): Promise<ApiFlow>;
 }
 
 

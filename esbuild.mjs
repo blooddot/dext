@@ -38,6 +38,9 @@ const contexts = await Promise.all([
     entryPoints: {
       main: "src/webview/main.ts",
       project: "src/features/project/browser/entry.ts",
+      // API detail pages render Mermaid only when an Execution flow exists; this
+      // separate entry keeps that renderer out of every other editor-tab page.
+      apiFlow: "src/features/resources/browser/apiFlow.ts",
       "editor.worker": "node_modules/monaco-editor/esm/vs/editor/editor.worker.js",
       // The composer is a TypeScript editor, so Monaco's TypeScript worker is
       // bundled next to the editor worker and loaded from a blob URL by

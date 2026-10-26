@@ -5,6 +5,7 @@ import type { HistorySortOrder } from "./features/conversations/contracts/prefer
 import { DextConversationPreferences } from "./features/conversations/host/conversationPreferences.js";
 import { createApiReferenceSource } from "./features/workflow/host/apiReference.js";
 import { describeApiSource } from "./features/workflow/host/apiSource.js";
+import { describeApiFlow } from "./features/workflow/host/apiFlow.js";
 import { redactedMcpUrl } from "./features/mcp/host/mcpRegistry.js";
 import { recordWorkflow } from "./features/workflow/domain/workflowRecorder.js";
 import { ProjectStore } from "./features/project/host/persistence/projectStore.js";
@@ -88,11 +89,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const webview = (panel as vscode.WebviewPanel).webview;
     // The Project reader embeds the sandboxed Archify viewer; its srcdoc inherits this
     // policy, so the relaxed frame/font/image sources stay scoped to that document.
+    // An API page replaces that script with the local Mermaid entry only when a flow exists.
+    const projectReader = body.includes("data-project-reader");
+    const script = projectReader ? "project.js" : body.includes("data-api-flow") ? "apiFlow.js" : undefined;
     return renderEditorTabHtml(body,
       webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "media", "editorTabs.css")).toString(),
       webview.cspSource,
-      { embedFrames: body.includes("data-project-reader"), ...(body.includes("data-project-reader") ? {
-        scriptUri: webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "dist", "webview", "project.js")).toString()
+      { embedFrames: projectReader, ...(script ? {
+        scriptUri: webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "dist", "webview", script)).toString()
       } : {}) });
   };
   const editorTabs = new EditorTabManager(
@@ -117,13 +121,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // from `@types/node` and TypeScript's own lib files, so it documents the same
   // declarations the editor and the kernel resolve.
   const apiReference = createApiReferenceSource(vscode.Uri.joinPath(context.extensionUri, "dist", "api-reference.json").fsPath);
+  // One analyser feeds both the detail page and the creation rules, so they cannot
+  // disagree about whether a function breaks the wrapper rule.
+  const structureAssets = vscode.Uri.joinPath(context.extensionUri, "dist", "structure-index").fsPath;
+  const apiFlowFor = (content: string) => describeApiFlow(content, structureAssets);
+  application.setApiFlowAnalyzer(apiFlowFor);
   const resourceRoots = () => ({
     global: application.storage.globalStorageUri.fsPath,
     ...(vscode.workspace.isTrusted && folder?.uri.scheme === "file" ? { project: vscode.Uri.joinPath(folder.uri, ".dext").fsPath } : {})
   });
   const resourceDataSource = createFileResourceDataSource({
     roots: resourceRoots,
-    describeApi: content => describeApiSource(content, vscode.Uri.joinPath(context.extensionUri, "dist", "structure-index").fsPath),
+    describeApi: content => describeApiSource(content, structureAssets),
+    describeApiFlow: apiFlowFor,
     listFiles: (kind) => application.listResources(kind),
     readFile: async (entry) => {
       const path = entry.source.path;

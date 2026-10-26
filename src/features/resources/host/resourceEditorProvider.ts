@@ -203,16 +203,19 @@ export function createFileResourceDataSource(options: FileResourceDataSourceOpti
     ));
     return files.flat();
   };
-  const documentApi = async (entry: ResourceEntry, content: string): Promise<ResourceEntry> => {
-    if (entry.kind !== "api" || !options.describeApi) return entry;
-    const functions = await options.describeApi(content);
-    if (!functions.length) return entry;
+  // The function call graph is only needed by a detail page: a list would pay for
+  // an extra parse of every API module just to show rows.
+  const documentApi = async (entry: ResourceEntry, content: string, includeFlow = false): Promise<ResourceEntry> => {
+    if (entry.kind !== "api") return entry;
+    const functions = options.describeApi ? await options.describeApi(content) : [];
+    const apiFlow = includeFlow && options.describeApiFlow ? await options.describeApiFlow(content) : undefined;
+    if (!functions.length) return apiFlow ? { ...entry, apiFlow } : entry;
     const leaf = entry.name.split(".").at(-1);
     const apiFunctions = functions.map(item => ({ ...item,
       name: [leaf, "default", "main"].includes(item.name) ? entry.name : `${entry.name}.${item.name}`
     }));
     const primary = apiFunctions.find(item => item.name === entry.name) ?? apiFunctions[0]!;
-    return { ...entry, api: primary.api, apiFunctions, ...(primary.description ? { description: primary.description } : {}) };
+    return { ...entry, api: primary.api, apiFunctions, ...(primary.description ? { description: primary.description } : {}), ...(apiFlow ? { apiFlow } : {}) };
   };
   return {
     list: async (kinds, query) => {
@@ -228,7 +231,7 @@ export function createFileResourceDataSource(options: FileResourceDataSourceOpti
       const entry = (await entries(["api", "mcp", "rule", "skill"])).find(candidate => candidate.id === id);
       if (!entry) return undefined;
       const content = await options.readFile(entry);
-      return content === undefined ? undefined : { entry: await documentApi(entry, content), content };
+      return content === undefined ? undefined : { entry: await documentApi(entry, content, true), content };
     }
   };
 }

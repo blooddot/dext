@@ -527,3 +527,21 @@ html:has(body.project-reader-fullscreen) { scrollbar-gutter: auto; }
 .project-reader-playback { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .project-reader-breadcrumb { color: var(--vscode-descriptionForeground); margin-bottom: 14px; }
 .project-reader-breadcrumb button { background: transparent; padding: 2px 4px; }
+
+/* API detail: the host ships Mermaid source, the apiFlow.js entry renders the SVG. */
+.resource-api-flow { margin: 20px 0; padding: 14px; min-width: 0; border: 1px solid var(--vscode-panel-border); border-radius: 6px; background: var(--vscode-editor-background); }
+.resource-api-flow figcaption { margin-bottom: 8px; color: var(--vscode-descriptionForeground); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.resource-api-flow-status { margin: 0 0 8px; color: var(--vscode-descriptionForeground); font-size: 12px; }
+.resource-api-flow-preview { min-width: 0; padding: 6px 0; overflow-x: auto; }
+.resource-api-flow-preview svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+.resource-api-flow[data-api-flow-state="error"] .resource-api-flow-status { color: var(--vscode-editorError-foreground, #d13438); }
+.resource-api-flow-issues { margin: 10px 0; padding: 8px 12px; border-left: 3px solid var(--vscode-editorError-foreground, #d13438); background: var(--vscode-textBlockQuote-background); }
+.resource-api-flow-issues h3 { margin: 0 0 6px; font-size: 13px; }
+.resource-api-flow-issues ul { margin: 0; padding-left: 20px; }
+.resource-api-flow-issues li { overflow-wrap: anywhere; }
+.resource-api-flow-source, .resource-api-flow-functions { margin-top: 10px; border-top: 1px solid var(--vscode-panel-border); }
+.resource-api-flow-source summary, .resource-api-flow-functions summary { padding: 8px 0; cursor: pointer; color: var(--vscode-descriptionForeground); font-size: 12px; }
+.resource-api-flow-source pre { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.resource-api-flow-list { margin: 0 0 8px; padding: 0; list-style: none; }
+.resource-api-flow-list li { padding: 6px 0; border-top: 1px solid var(--vscode-panel-border); overflow-wrap: anywhere; }
+.resource-api-flow-role { color: var(--vscode-descriptionForeground); }

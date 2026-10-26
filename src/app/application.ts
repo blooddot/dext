@@ -9,6 +9,7 @@ import { runSingleTurnCli } from "../features/agents/host/agentRunner.js";
 import { DEFAULT_AGENT_IDLE_TIMEOUT_MS, DEFAULT_AGENT_TIMEOUT_MS, MAX_AGENT_TIMEOUT_MS } from "../features/agents/domain/agentTimeout.js";
 import { REPAIR_OUTPUT_FIELD } from "../features/agents/domain/axAdapter.js";
 import { BUILTIN_METHODS } from "../features/workflow/domain/builtins.js";
+import { describeApiFlowIssue, type ApiFlow, type ApiFlowIssue } from "../features/workflow/contracts/apiFlow.js";
 import { ContextResolver } from "../features/workflow/host/contextResolver.js";
 import { DEXT_API_DIRECTORY, DEXT_DECLARATION_DIRECTORY, DEXT_DECLARATION_FILE, DEXT_TYPES_PATH, dextFiles, dextModuleDeclaration, dextSharedDeclaration, dextTsconfig } from "../features/workflow/domain/dextApiTypes.js";
 import { inputReferenceDisplayParts } from "../features/workspace/domain/fileReference.js";
@@ -180,6 +181,8 @@ export class DextApplication {
   private workspaceTrusted = false;
   private projectWorkspaceSettings: ProjectWorkspaceSettings | undefined;
   private resourceWrite: Promise<void> = Promise.resolve();
+  /** Static API flow analysis for creation rules. Absent in hostless unit setups. */
+  private apiFlowAnalyzer: ((content: string) => Promise<ApiFlow>) | undefined;
   private globalDiagnostics: string[] = [];
   /** Why a configured server was dropped, by server name; a rejected server is
    * absent from the registry, so this is the only place that reason survives. */
@@ -209,6 +212,24 @@ export class DextApplication {
   /** Applies the project-owned paths before the next resource reload or turn. */
   setProjectWorkspaceSettings(settings: ProjectWorkspaceSettings): void {
     this.projectWorkspaceSettings = settings;
+  }
+
+  /**
+   * The same syntax-only analyser the API detail page uses. New APIs are rejected
+   * when a function breaks the single-purpose wrapper rule; existing APIs stay
+   * editable and only show the flow issues.
+   */
+  setApiFlowAnalyzer(analyzer: ((content: string) => Promise<ApiFlow>) | undefined): void {
+    this.apiFlowAnalyzer = analyzer;
+  }
+
+  private async apiFlowIssues(content: string): Promise<ApiFlowIssue[]> {
+    if (!this.apiFlowAnalyzer) return [];
+    return (await this.apiFlowAnalyzer(content)).issues.filter((issue) => issue.severity === "error");
+  }
+
+  private apiFlowIssueText(issues: readonly ApiFlowIssue[]): string {
+    return ["API flow issues:", ...issues.map((issue) => `- ${describeApiFlowIssue(issue)}`)].join("\n");
   }
 
   /**
@@ -890,6 +911,7 @@ export class DextApplication {
     const draft: ResourceDocument = { name: resource.target?.name ?? value.name.trim(), content: value.content, ...(files.length ? { files } : {}) };
     if (!resource.target) resourceFileName(resource.type, draft.name);
     this.validateResource(resource.type, draft);
+    const flowIssues = resource.type === "api" ? await this.apiFlowIssues(draft.content) : [];
     // Keep generated JSON out of the final conversation response; show the actual document.
     const documents = [{ path: resource.target?.path ?? resourceFileName(resource.type, draft.name), content: draft.content }, ...files];
     response.result.text = documents.map((file, index) => {
@@ -898,7 +920,8 @@ export class DextApplication {
       const path = index === 0 && resource.type !== "file" ? `${RESOURCE_DIRECTORIES[resource.type]}/${file.path}` : file.path;
       const label = resource.scope === "project" && !(index === 0 && resource.type === "file") ? `.dext/${path}` : path;
       return `Draft: ${label}\n\n${fence}${language}\n${file.content}\n${fence}`;
-    }).join("\n\n") + "\n\nReview all draft files, then save or describe further changes.";
+    }).join("\n\n") + (flowIssues.length ? `\n\n${this.apiFlowIssueText(flowIssues)}` : "")
+      + "\n\nReview all draft files, then save or describe further changes.";
     return { draft, response: { kind: "workflow", executions: [response] } };
   }
 

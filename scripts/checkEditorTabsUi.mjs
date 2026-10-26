@@ -30,14 +30,25 @@ try {
   shutdown = () => send("Browser.close");
   const evaluate = async (expression) => { const result = await send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }); if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails)); return result.result.value; };
   const key = async (key, code) => { await send("Input.dispatchKeyEvent", { type: "keyDown", key, windowsVirtualKeyCode: code, ...(key === "Enter" ? { text: "\r" } : key === " " ? { text: " " } : {}) }); await send("Input.dispatchKeyEvent", { type: "keyUp", key, windowsVirtualKeyCode: code }); };
+  const waitFor = async (expression, label) => {
+    for (let attempt = 0; attempt < 300; attempt++) {
+      if (await evaluate(expression)) return;
+      await new Promise(done => setTimeout(done, 50));
+    }
+    throw new Error(`Timed out waiting for ${label}`);
+  };
 
   const bundle = await build({ stdin: { contents: 'export { renderEditorTabHtml } from "./src/platform/editor-tabs/editorTabHtml.ts"; export { buildResourceList, renderResourceDefinition, buildResourceDefinition } from "./src/features/resources/presentation/resourceDocuments.ts"; export { renderApiList } from "./src/features/resources/presentation/apiPanel.ts"; export { renderGlobalResources } from "./src/features/resources/presentation/globalResourcesPanel.ts"; export { renderProjectPanel } from "./src/features/project/presentation/projectPanel.ts";', resolveDir: process.cwd() }, bundle: true, write: false, platform: "node", format: "esm" });
   const ui = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
+  // Build the real Webview entry so the API detail fixture renders Mermaid under the page CSP.
+  const apiFlowBundle = await build({ entryPoints: ["src/features/resources/browser/apiFlow.ts"], bundle: true, write: false, platform: "browser", format: "iife", target: "es2022", minify: true, logLevel: "silent" });
+  const apiFlowScript = apiFlowBundle.outputFiles[0].text;
   const css = await readFile('media/editorTabs.css', 'utf8');
   let pageHtml = '', themeCss = '', themeClass = '';
   server = createServer((request, response) => {
-    response.setHeader('Content-Type', request.url === '/style.css' ? 'text/css' : 'text/html');
-    response.end(request.url === '/style.css' ? themeCss + css : pageHtml);
+    const url = request.url ?? '';
+    response.setHeader('Content-Type', url === '/style.css' ? 'text/css' : url === '/apiFlow.js' ? 'text/javascript' : 'text/html');
+    response.end(url === '/style.css' ? themeCss + css : url === '/apiFlow.js' ? apiFlowScript : pageHtml);
   });
   await new Promise(done => server.listen(0, '127.0.0.1', done));
   const origin = `http://127.0.0.1:${server.address().port}`;
@@ -56,8 +67,8 @@ try {
   entries[1].api = { signature: 'main(input?: string): Promise<AskResult>', parameters: [{ name: 'input', type: 'string', required: false }], returnType: 'Promise<AskResult>' };
   const project = { overview: { name: 'Dext', root: 'C:/github/blooddot/dext', objects: 0, accepted: 0, drafts: 0, needsVerification: 0, initialization: { status: 'uninitialized' }, aiCli: [{ id: 'codex', label: 'Codex', models: [] }] }, objects: [], architecture: { diagrams: [] } };
   const artifacts = resolve('.tmp-tb/editor-tabs-ui'); await mkdir(artifacts, { recursive: true });
-  async function load(body) {
-    pageHtml = ui.renderEditorTabHtml('<script>window.messages=[];window.acquireVsCodeApi=()=>({postMessage:message=>messages.push(message)});</script>' + body, `${origin}/style.css`, origin);
+  async function load(body, options = {}, bootstrap = '') {
+    pageHtml = ui.renderEditorTabHtml('<script>' + bootstrap + 'window.messages=[];window.acquireVsCodeApi=()=>({postMessage:message=>messages.push(message)});</script>' + body, `${origin}/style.css`, origin, options);
     await send('Page.navigate', { url: `${origin}/?${Date.now()}` });
     for (let i = 0; i < 100; i++) {
       if (await evaluate(`document.readyState === 'complete' && !!document.querySelector('.editor-tab') && !!window.messages`)) {
@@ -102,6 +113,28 @@ try {
       assert.equal(await evaluate(`getComputedStyle(document.querySelector('.resource-api-signature code')).backgroundColor`), 'rgba(0, 0, 0, 0)');
       assert.equal(await evaluate(`getComputedStyle(document.querySelector('dt .tok-propertyName')).color !== getComputedStyle(document.querySelector('dt .tok-typeName')).color`), true);
       await writeFile(join(artifacts, `api-detail-${themeName}-${width}.png`), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
+      // Execution flow: the real apiFlow.js Webview entry renders Mermaid inside the page CSP.
+      const flowFixture = { functions: [
+        { name: 'commit', line: 2, exported: true, calls: [], apiCalls: [{ tag: 'agent', line: 3, callee: 'agent' }], unused: false }
+      ], edges: [], issues: [] };
+      const flowSource = 'import { agent } from "dext";\nexport function commit() { return agent({}); }';
+      await load(ui.renderResourceDefinition(ui.buildResourceDefinition({ ...entries[0], name: 'git.commit', apiFlow: flowFixture }, flowSource)),
+        { scriptUri: `${origin}/apiFlow.js` }, `document.body.classList.add(${JSON.stringify(themeClass)});`);
+      await waitFor(`document.querySelector('[data-api-flow]')?.dataset.apiFlowState === 'ready'`, 'API flow');
+      assert.equal(await evaluate(`!!document.querySelector('[data-api-flow-preview] svg')`), true, 'Mermaid renders a real SVG');
+      assert.equal(await evaluate(`document.querySelector('[data-api-flow-preview]').textContent.includes('agent')`), true, 'the agent tag is visible');
+      assert.equal(await evaluate(`document.querySelector('[data-api-flow-source-details]').open`), false, 'source stays collapsed');
+      assert.equal(await evaluate(`document.documentElement.scrollWidth <= innerWidth`), true, 'execution flow fits the page');
+      await writeFile(join(artifacts, `api-flow-${themeName}-${width}.png`), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
+      if (width === 320) {
+        // A broken source must surface as an error and open the source instead of leaving a blank canvas.
+        await load('<figure class="resource-api-flow" data-api-flow data-api-flow-state="loading"><p class="resource-api-flow-status" data-api-flow-status role="status">Rendering execution flow…</p><div class="resource-api-flow-preview" data-api-flow-preview></div><details data-api-flow-source-details><summary>Mermaid source</summary><pre><code data-api-flow-source>flowchart LR\n  n0 --></code></pre></details></figure>',
+          { scriptUri: `${origin}/apiFlow.js` }, `document.body.classList.add(${JSON.stringify(themeClass)});`);
+        await waitFor(`document.querySelector('[data-api-flow]')?.dataset.apiFlowState === 'error'`, 'API flow error state');
+        assert.equal(await evaluate(`document.querySelector('[data-api-flow-source-details]').open`), true, 'failure opens the Mermaid source');
+        assert.match(await evaluate(`document.querySelector('[data-api-flow-status]').textContent`), /Unable to render execution flow/);
+        await writeFile(join(artifacts, `api-flow-error-${themeName}.png`), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
+      }
       // The Resources page must file MCP tools under MCP and nest every category the way the API
       // page does: `dev` holds `feat`, and the tool server holds its own tools.
       const resourceEntries = [
