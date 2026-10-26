@@ -1,62 +1,74 @@
 {
   "version": 1,
   "trigger": "initialize",
-  "generatedAt": 1792414606938,
-  "inputHash": "63105368f12bb17893481b8c701c0ea8e4fc4a08f71a75ab525aff724f093073",
+  "generatedAt": 1792822306793,
+  "inputHash": "866896f58c77e0b7b2bf9ed6b1b0c4ef30f9ae4db6425fddef469c3d39875a9e",
+  "structure": {
+    "files": 234,
+    "parsed": 231,
+    "cached": 231,
+    "failed": 1,
+    "unsupported": 0,
+    "modules": 7
+  },
   "selection": {
     "scope": [
       "src/**"
     ],
     "preset": "whole",
-    "files": 15,
+    "files": 20,
     "fileChars": 8000,
     "evidenceChars": 120000
   },
   "inventory": {
-    "total": 11,
-    "withSymbols": 7,
+    "total": 13,
+    "withSymbols": 8,
     "byKind": {
-      "source": 7,
+      "source": 9,
       "readme": 1,
       "manifest": 3
     }
   },
   "excerpts": {
-    "total": 14,
-    "truncated": 13,
+    "total": 19,
+    "truncated": 18,
     "byKind": {
       "readme": 1,
       "manifest": 2,
-      "source": 11
+      "source": 16
     }
   },
   "omitted": {
     "files": 1,
     "objects": 0,
-    "knowledge": 0
+    "knowledge": 17
   },
   "coverage": [
-    "Local index: 180 source files, 4 modules; 142 reused, 0 issues, 0 unsupported files.",
+    "Local index: 231 source files, 7 modules; 231 reused, 1 issues, 0 unsupported files.",
     "Static imports are code dependencies, not runtime calls. Dynamic imports, macros and unresolved references remain unverified.",
     "Runtime boundary excerpts are selected from the complete index within a text budget; omitted boundaries remain unverified.",
-    "Runtime window omitted by budget: src/application.ts:740.",
-    "Runtime window omitted by budget: src/sidebarProvider.ts:1476.",
-    "Runtime window omitted by budget: src/core/projectStructureKnowledge.ts:35.",
-    "Runtime window omitted by budget: src/webview/main.ts:942.",
-    "Runtime window omitted by budget: src/core/agentRunner.ts:1149.",
-    "Runtime window omitted by budget: src/historyEditorProvider.ts:158.",
-    "Runtime window omitted by budget: src/resourceDocuments.ts:295.",
-    "Runtime window omitted by budget: src/webview/projectPanel.ts:198.",
-    "Runtime window omitted by budget: src/runner/dextHost.ts:208."
+    "Browser build entry not indexed in configured scope: node_modules/monaco-editor/esm/vs/editor/editor.worker.js",
+    "Browser build entry not indexed in configured scope: node_modules/monaco-editor/esm/vs/languages/features/typescript/ts.worker.js",
+    "Runtime window omitted by budget: src/app/application.ts:755.",
+    "Runtime window omitted by budget: src/app/application.ts:683.",
+    "Runtime window omitted by budget: src/app/sidebarProvider.ts:1031.",
+    "Runtime window omitted by budget: src/features/project/host/indexing/projectStructureKnowledge.ts:75.",
+    "Runtime window omitted by budget: src/features/conversations/host/conversationController.ts:254.",
+    "Runtime window omitted by budget: src/platform/editor-tabs/editorTabManager.ts:142.",
+    "Runtime window omitted by budget: src/runner/dextHost.ts:208.",
+    "Browser startup excerpt omitted by budget or unsupported entry: node_modules/monaco-editor/esm/vs/editor/editor.worker.js",
+    "Browser startup excerpt omitted by budget or unsupported entry: node_modules/monaco-editor/esm/vs/languages/features/typescript/ts.worker.js"
   ],
   "paths": [
     "src/extension.ts",
     "src/webview/main.ts",
-    "src/application.ts",
-    "src/core/archifyAdapter.ts",
-    "src/core/mcpRegistry.ts",
-    "src/editorTabManager.ts",
-    "src/webview/projectPanel.ts",
+    "src/app/projectSetup.ts",
+    "src/features/mcp/host/mcpRegistry.ts",
+    "src/features/project/browser/entry.ts",
+    "src/features/project/browser/projectReader.ts",
+    "src/features/project/host/diagrams/archifyAdapter.ts",
+    "src/features/project/host/projectEditorProvider.ts",
+    "src/platform/editor-tabs/editorTabManager.ts",
     "README.md",
     "esbuild.mjs",
     "package.json",
@@ -66,24 +78,21 @@
     "README.md",
     "esbuild.mjs",
     "package.json",
-    "src/core/mcpRegistry.ts",
-    "src/editorTabManager.ts",
-    "src/extension.ts",
-    "src/core/archifyAdapter.ts",
-    "src/extension.ts",
     "src/webview/main.ts",
-    "src/core/mcpRegistry.ts",
-    "src/core/mcpRegistry.ts",
+    "src/webview/main.ts",
+    "src/webview/main.ts",
+    "src/webview/main.ts",
+    "src/features/project/browser/entry.ts",
+    "src/features/project/browser/projectReader.ts",
+    "src/features/project/browser/projectReader.ts",
+    "src/features/project/host/diagrams/archifyAdapter.ts",
+    "src/app/projectSetup.ts",
+    "src/features/project/host/projectEditorProvider.ts",
+    "src/platform/editor-tabs/editorTabManager.ts",
     "src/extension.ts",
-    "src/application.ts",
-    "src/webview/projectPanel.ts"
-  ],
-  "structure": {
-    "files": 183,
-    "parsed": 180,
-    "cached": 142,
-    "failed": 0,
-    "unsupported": 0,
-    "modules": 4
-  }
+    "src/extension.ts",
+    "src/features/mcp/host/mcpRegistry.ts",
+    "src/features/mcp/host/mcpRegistry.ts",
+    "src/features/mcp/host/mcpRegistry.ts"
+  ]
 }
