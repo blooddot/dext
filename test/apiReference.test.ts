@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { brotliCompressSync } from "node:zlib";
 import { createApiReferenceSource, parseApiReference, type ApiReferenceCatalog } from "../src/features/workflow/host/apiReference.js";
 import { createApiDataSource, createFileResourceDataSource, apiReferenceEntries } from "../src/features/resources/host/resourceEditorProvider.js";
 import { buildResourceList, renderResourceDefinition, renderResourceList } from "../src/features/resources/presentation/resourceDocuments.js";
@@ -182,6 +183,19 @@ describe("API reference catalog", () => {
     // The absent file is retried: the next build's catalog is picked up.
     await writeFile(join(directory, "absent.json"), JSON.stringify(catalog()), "utf8");
     expect((await missing())?.modules).toHaveLength(2);
+  });
+
+  it("reads the brotli catalog the VSIX ships", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "dext-api-reference-"));
+    teardown.push(directory);
+    const file = join(directory, "api-reference.json.br");
+    await writeFile(file, brotliCompressSync(Buffer.from(JSON.stringify(catalog()), "utf8")));
+    const source = createApiReferenceSource(file);
+    expect((await source())?.modules.map((module) => module.id)).toEqual(["node:path", "js.JSON"]);
+
+    const corrupt = join(directory, "corrupt.json.br");
+    await writeFile(corrupt, Buffer.from("not brotli"));
+    expect(await createApiReferenceSource(corrupt)()).toBeUndefined();
   });
 
   it("adds the reference to the API list and returns its definition without a file read", async () => {

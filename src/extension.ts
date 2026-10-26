@@ -119,8 +119,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const textDecoderForResources = new TextDecoder();
   // The Node and JavaScript reference the APIs page lists: generated at build time
   // from `@types/node` and TypeScript's own lib files, so it documents the same
-  // declarations the editor and the kernel resolve.
-  const apiReference = createApiReferenceSource(vscode.Uri.joinPath(context.extensionUri, "dist", "api-reference.json").fsPath);
+  // declarations the editor and the kernel resolve. Only the brotli copy ships;
+  // the host inflates it on the first API page render.
+  const apiReference = createApiReferenceSource(vscode.Uri.joinPath(context.extensionUri, "dist", "api-reference.json.br").fsPath);
   // One analyser feeds both the detail page and the creation rules, so they cannot
   // disagree about whether a function breaks the wrapper rule.
   const structureAssets = vscode.Uri.joinPath(context.extensionUri, "dist", "structure-index").fsPath;

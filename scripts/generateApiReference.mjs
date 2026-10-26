@@ -15,19 +15,26 @@
  *   `lib.es*.d.ts` files declare (`JSON`, `Math`, `Date`, `Promise`, `Array`, …).
  *
  * The catalog is a build artifact: `esbuild.mjs` writes it to
- * `dist/api-reference.json`, the extension reads it lazily, and `npm run check`
- * proves the shipped file still matches these declarations.
+ * `dist/api-reference.json` and its shipped brotli copy to
+ * `dist/api-reference.json.br`; the extension reads the compressed copy lazily,
+ * and `npm run check` proves both still match these declarations.
  */
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
 import ts from "typescript";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-/** The shipped catalog; `esbuild.mjs` writes it. */
+/** The uncompressed build artifact; tests and `--check` read it. */
 export const API_REFERENCE_PATH = path.join(root, "dist", "api-reference.json");
+
+/** The compressed catalog shipped in the VSIX. JSON compresses far better with
+ * brotli than with the VSIX's own deflate stream, and the host can inflate it
+ * with the Node built-in before parsing. */
+export const API_REFERENCE_COMPRESSED_PATH = `${API_REFERENCE_PATH}.br`;
 
 /** The catalog format, so a build can be recognised against a newer reader. */
 export const API_REFERENCE_VERSION = 1;
@@ -390,6 +397,12 @@ export async function writeApiReference(text) {
   const content = text ?? await buildApiReferenceText();
   await mkdir(path.dirname(API_REFERENCE_PATH), { recursive: true });
   await writeFile(API_REFERENCE_PATH, content, "utf8");
+  // Quality 11 is the smallest output available; the file is written once at
+  // build time, so the extra CPU does not affect the extension or the Webview.
+  const compressed = brotliCompressSync(Buffer.from(content, "utf8"), {
+    params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 11 }
+  });
+  await writeFile(API_REFERENCE_COMPRESSED_PATH, compressed);
   return API_REFERENCE_PATH;
 }
 
@@ -400,15 +413,17 @@ function sameText(current, expected) {
 async function runCli(argv) {
   if (argv.includes("--check")) {
     let existing;
+    let existingCompressed;
     try {
       existing = await readFile(API_REFERENCE_PATH, "utf8");
+      existingCompressed = brotliDecompressSync(await readFile(API_REFERENCE_COMPRESSED_PATH)).toString("utf8");
     } catch {
-      console.error("dist/api-reference.json is missing. Run `npm run build`.");
+      console.error("dist/api-reference.json or dist/api-reference.json.br is missing. Run `npm run build`.");
       process.exitCode = 1;
       return;
     }
     const expected = await buildApiReferenceText();
-    if (!sameText(existing, expected)) {
+    if (!sameText(existing, expected) || !sameText(existingCompressed, expected)) {
       console.error("The shipped API reference is out of date. Run `npm run build`.");
       process.exitCode = 1;
       return;
@@ -417,7 +432,7 @@ async function runCli(argv) {
     return;
   }
   const file = await writeApiReference();
-  console.log(`wrote ${path.relative(process.cwd(), file)}`);
+  console.log(`wrote ${path.relative(process.cwd(), file)} and ${path.relative(process.cwd(), API_REFERENCE_COMPRESSED_PATH)}`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

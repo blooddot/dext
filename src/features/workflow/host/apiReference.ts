@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { brotliDecompressSync } from "node:zlib";
 import type {
   ApiReferenceCatalog,
   ApiReferenceKind,
@@ -21,8 +22,9 @@ export type {
  * The catalog is generated from declaration files rather than maintained by hand
  * (`scripts/generateApiReference.mjs`), so every signature is the one the editor
  * and the kernel resolve and every description is the JSDoc the declaration
- * carries. It ships as `dist/api-reference.json` and is read lazily: a workspace
- * without the build artifact simply shows the callable APIs and nothing else.
+ * carries. It ships as the brotli-compressed `dist/api-reference.json.br` and is
+ * read lazily: a workspace without the build artifact simply shows the callable
+ * APIs and nothing else.
  */
 
 /** The catalog format this reader understands; a newer build is not parsed. */
@@ -106,10 +108,14 @@ export function parseApiReference(text: string): ApiReferenceCatalog | undefined
 }
 
 /** Reads the catalog a build wrote. A missing file is not an error: the page
- * falls back to the callable APIs alone. */
+ * falls back to the callable APIs alone. A `.br` path is inflated first; the
+ * extension ships only the compressed copy, while tests and the build check use
+ * the plain JSON artifact. */
 export async function loadApiReference(file: string): Promise<ApiReferenceCatalog | undefined> {
   try {
-    return parseApiReference(await readFile(file, "utf8"));
+    const content = await readFile(file);
+    const text = file.endsWith(".br") ? brotliDecompressSync(content).toString("utf8") : content.toString("utf8");
+    return parseApiReference(text);
   } catch {
     return undefined;
   }

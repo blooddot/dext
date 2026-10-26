@@ -48,6 +48,9 @@ for (const required of [
 ]) {
   assert.ok(packagedFiles.has(required), `Missing packaged Webview asset '${required}'.`);
 }
+assert.ok(packagedFiles.has("dist/api-reference.json.br"), "Missing the packaged brotli API reference.");
+assert.ok(!packagedFiles.has("dist/api-reference.json"), "The uncompressed API reference must not be packaged; only the brotli copy ships.");
+assert.ok((await stat(resolve("dist", "api-reference.json.br"))).size > 0, "Missing the brotli API reference.");
 const historyStyles = await readFile(resolve("media", "styles.css"), "utf8");
 const markdownStyles = await readFile(resolve("dist", "markdown", "github-markdown.css"), "utf8");
 for (const theme of ["vscode-light", "vscode-dark", "vscode-high-contrast-light", "vscode-high-contrast"]) {
