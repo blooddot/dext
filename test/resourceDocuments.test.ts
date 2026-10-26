@@ -122,6 +122,15 @@ describe("resource documents", () => {
     expect(top).not.toContain("node.path");
   });
 
+  it("offers the open-directory button only when the page host enables it", () => {
+    const document = buildResourceList({ kind: "api", scope: "project", entries: [] });
+    expect(renderResourceList(document)).not.toContain("openResourceDirectory");
+    const html = renderResourceList(document, { openResourceDirectory: true });
+    expect(html).toContain('data-resource-command="dext.openResourceDirectory"');
+    expect(html).toContain('title="Open project resources folder"');
+    expect(html).toContain('title="Open project resources folder" aria-label="Open project resources folder">');
+  });
+
   it("files MCP tool APIs under the MCP category", () => {
     const api = (name: string, kind: ResourceEntry["kind"] = "api"): ResourceEntry => ({
       id: `${kind}:project:${name}`, kind, scope: "project", name, path: `${name}.ts`, group: ".",

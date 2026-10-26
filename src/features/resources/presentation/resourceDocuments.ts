@@ -168,6 +168,13 @@ export function resourceRefreshButton(prefix: string): string {
 }
 
 
+/** Opens the resource directory for the scope the page is currently showing. */
+export function resourceDirectoryButton(prefix: string, scope?: ResourceScope): string {
+  const label = scope === "project" ? "Open project resources folder" : scope === "global" ? "Open global resources folder" : "Open resources folder";
+  return `<button type="button" class="resource-icon-button" data-resource-command="${prefix}.openResourceDirectory" title="${label}" aria-label="${label}">${resourceIcon("folder-opened")}</button>`;
+}
+
+
 export function countTreeNodeEntries(node: ResourceTreeNode): number {
   return node.entries.length + [...node.children.values()].reduce((total, child) => total + countTreeNodeEntries(child), 0);
 }
@@ -366,6 +373,7 @@ export function renderResourceList(document: ResourceListDocument, options: Reso
     + `<header class="resource-toolbar">`
     + `<input type="search" data-resource-search value="${escapeResourceHtml(document.query)}" placeholder="Search by name or description" aria-label="Search resources">`
     + resourceRefreshButton(prefix)
+    + (options.openResourceDirectory ? resourceDirectoryButton(prefix, document.scope) : "")
     + (options.createKinds ? "" : `<span class="resource-tree-actions">${resourceToggleButton('data-resource-toggle-all="toggle"', "all", true)}</span>`)
     + (options.createKinds?.map((kind) => `<button type="button" class="resource-create" data-resource-command="${prefix}.newResource" data-resource-kind="${kind}" data-resource-type="${kind}">New ${RESOURCE_LABELS[kind]}</button>`).join("") ?? "")
     + `</header>`

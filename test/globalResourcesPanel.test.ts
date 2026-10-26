@@ -54,10 +54,13 @@ describe("global resources panel", () => {
     expect(host.created[0]!.panel.html).not.toContain('data-resource-open="api:project:git/commit.ts"');
     await provider.handleMessage(provider.listTabKey, { type: "resourceScope", scope: "project" });
     expect(host.created[0]!.panel.html).toContain('data-resource-open="api:project:git/commit.ts"');
+    expect(host.created[0]!.panel.html).toContain('data-resource-command="dext.openResourceDirectory"');
+    expect(host.created[0]!.panel.html).toContain('title="Open project resources folder"');
     expect(host.created[0]!.panel.html).toContain('data-resource-node="API.git"');
     await provider.handleMessage(provider.listTabKey, { type: "resourceOpen", id: "api:project:git/commit.ts" });
     expect(host.created[0]!.panel.html).toContain('data-resource-path="C:/project/.dext/api/git/commit.ts"');
     for (const payload of [
+      { command: "dext.openResourceDirectory" },
       { command: "dext.openResourceSource", path: "C:/project/.dext/api/git/commit.ts" },
       { command: "dext.insertResourceReference", id: "api:project:git/commit.ts" },
       { command: "dext.newResource", kind: "api" }

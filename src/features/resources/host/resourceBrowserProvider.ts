@@ -123,7 +123,7 @@ export class ResourceBrowserProvider extends ResourceEditorProvider {
     });
     result.panel.setHtml?.(render({
       ...(this.options.commandPrefix ? { commandPrefix: this.options.commandPrefix } : {}),
-      ...(this.tabKind === "globalResources" ? { title: "Resources", createKinds: this.listKinds(), scope: location.scope, availableScopes: this.options.availableScopes?.() ?? ["global", "project"] } : {}),
+      ...(this.tabKind === "globalResources" ? { title: "Resources", createKinds: this.listKinds(), scope: location.scope, availableScopes: this.options.availableScopes?.() ?? ["global", "project"], openResourceDirectory: true } : {}),
       ...(tabState ? { tabState } : {}),
       collapsed: this.history[this.position]!.collapsed,
       navigation: {

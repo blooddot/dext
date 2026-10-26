@@ -159,6 +159,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await sidebar.editResource(kind, scope);
         return;
       }
+      if (command.endsWith(".openResourceDirectory")) {
+        const root = resourceRoots()[scope];
+        if (!root) throw new Error("Open a local project folder to open project resources.");
+        const directory = vscode.Uri.file(root);
+        // A scope with no resources yet has no directory to reveal, so create the root first.
+        await vscode.workspace.fs.createDirectory(directory);
+        const opened = await vscode.env.openExternal(directory);
+        if (!opened) throw new Error("VS Code could not open the resource directory.");
+        return;
+      }
       if (command.endsWith(".openResourceSource")) {
         if (!payload.path) throw new Error("This resource has no readable source file.");
         await vscode.window.showTextDocument(vscode.Uri.file(payload.path));

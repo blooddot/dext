@@ -58,6 +58,8 @@ export interface ResourcePanelOptions {
   commandPrefix?: string;
   title?: string;
   createKinds?: readonly ResourceKind[];
+  /** Offers a toolbar button that opens the current scope's resource directory. */
+  openResourceDirectory?: boolean;
   scope?: ResourceScope;
   availableScopes?: readonly ResourceScope[];
   collapsed?: readonly string[];
