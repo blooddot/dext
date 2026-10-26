@@ -196,8 +196,9 @@ export class AgentProfileStore {
     const stored = state?.get<StoredAgentProfile[]>(STORAGE_KEY);
     this.profiles = mergeProfiles(stored);
     const storedSelection = state?.get<AgentSelection>(SELECTION_KEY) ?? {};
-    const { mode, ...globalSelection } = storedSelection;
+    const { mode, skills: storedSkills, ...globalSelection } = storedSelection;
     void mode;
+    void storedSkills;
     this.selection = globalSelection.profileId && !this.profiles.some((profile) => profile.id === globalSelection.profileId)
       ? { ...globalSelection, profileId: this.profiles[0]?.id ?? "codex", model: "", reasoningEffort: "", speed: "", serviceTier: "" }
       : globalSelection;
@@ -231,10 +232,14 @@ export class AgentProfileStore {
       ...(selection.agentPreset !== undefined ? { agentPreset: selection.agentPreset } : {}),
       ...(selection.reasoningEffort !== undefined ? { reasoningEffort: selection.reasoningEffort } : {}),
       ...(selection.speed !== undefined ? { speed: selection.speed } : {}),
-      ...(selection.serviceTier !== undefined ? { serviceTier: selection.serviceTier } : {})
+      ...(selection.serviceTier !== undefined ? { serviceTier: selection.serviceTier } : {}),
+      ...(selection.skills !== undefined ? { skills: [...selection.skills] } : {})
     };
-    const { mode, ...globalSelection } = this.selection;
+    // Skills belong to one conversation, so they stay in memory and never leak
+    // into the global (new-tab) selection.
+    const { mode, skills, ...globalSelection } = this.selection;
     void mode;
+    void skills;
     void this.state?.update(SELECTION_KEY, globalSelection);
   }
 

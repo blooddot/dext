@@ -46,6 +46,20 @@ describe("ConversationController", () => {
     expect(h.controller.ordered()).toEqual(expect.arrayContaining(["first", created.id]));
   });
 
+  it("starts a new tab and a resource tab with no skills", async () => {
+    const h = createConversationHarness();
+    await h.controller.start();
+    const first = h.controller.active();
+    h.controller.setSelection(first.id, { ...h.controller.selection(first.id)!, skills: ["ponytail"] });
+    const next = await h.controller.start();
+    expect(h.controller.selection(next.id)?.skills).toBeUndefined();
+    expect(h.preferences.conversationSelection(next.id)?.skills).toBeUndefined();
+    const resource = await h.controller.start(false, { type: "skill", scope: "project" });
+    expect(resource.resource).toEqual({ type: "skill", scope: "project" });
+    expect(h.controller.selection(resource.id)?.skills).toBeUndefined();
+    expect(h.controller.selection(resource.id)?.mode).toBe("ask");
+  });
+
   it("refuses to close a running conversation and selects a neighbour otherwise", async () => {
     const execution = deferredExecution();
     const h = createConversationHarness({ executeConversation: execution.executeConversation });

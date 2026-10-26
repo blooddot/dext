@@ -14,6 +14,7 @@ import { TurnExecutionCoordinator } from "../src/features/conversations/host/tur
 import type { ExecutionMetadata, InputExecutionResponse, RegisteredCallable } from "../src/shared/contracts/types.js";
 import type { ResourceDocument, ResourceSession } from "../src/features/resources/contracts/resourceSession.js";
 import type { DextReplayEntry } from "../src/runner/dextResumeCache.js";
+import type { SkillCommandResolution } from "../src/features/workflow/contracts/skill.js";
 
 /** A shared in-memory memento for controllers and preferences. */
 export class HarnessState {
@@ -51,6 +52,7 @@ export interface ConversationHarnessOptions {
   planText?: string;
   trusted?: boolean;
   running?: (sessionId: string) => boolean;
+  resolveSkillCommand?: (id: string, selectedSkillIds: readonly string[], args: string) => SkillCommandResolution;
 }
 
 /** Builds the real conversation stack for tests: controller, coordinator, plan
@@ -140,7 +142,8 @@ export function createConversationHarness(options: ConversationHarnessOptions = 
       profiles: () => options.profiles ?? [],
       executeConversation,
       executeInput,
-      draftResource
+      draftResource,
+      ...(options.resolveSkillCommand ? { resolveSkillCommand: options.resolveSkillCommand } : {})
     },
     sessions: controller,
     interactions,

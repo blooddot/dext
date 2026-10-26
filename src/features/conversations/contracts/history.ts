@@ -15,6 +15,13 @@ export const DEFAULT_HISTORY_LIMITS: DextHistoryLimits = { maxTurns: 100, maxOut
 
 export type PlanStatus = "new" | "active" | "running" | "completed" | "failed";
 
+/** A `/command` invocation captured with the turn so retry and audit can show
+ * what template ran without re-resolving it against a changed skill set. */
+export interface TurnCommandSnapshot {
+  id: string;
+  skillId: string;
+}
+
 export type ResourceSourceKind = "describe" | "import";
 
 export interface DextHistoryRecord {
@@ -34,6 +41,10 @@ export interface DextHistoryRecord {
   planOutcome?: PlanExecutionOutcome;
   response?: InputExecutionResponse;
   error?: string;
+  /** Skills that were enabled for this turn. */
+  skills?: string[];
+  /** The command this turn invoked, if any. */
+  command?: TurnCommandSnapshot;
   /** Which creation mode produced a resource draft. */
   resourceSource?: ResourceSourceKind;
 }
@@ -43,7 +54,7 @@ export type TurnPlanContext = Pick<DextHistoryRecord, "executePlan" | "planPath"
 
 /** Everything the coordinator records beside a turn's result. */
 export type TurnRecordContext = TurnPlanContext
-  & Pick<DextHistoryRecord, "resourceSource">;
+  & Pick<DextHistoryRecord, "skills" | "command" | "resourceSource">;
 
 export interface DextHistorySession {
   id: string;

@@ -3,6 +3,7 @@ import type { ResourceDocument, ResourceSession } from "../features/resources/co
 import type { ConversationHistoryStore } from "../features/conversations/contracts/history.js";
 import type { ConversationPreferences } from "../features/conversations/contracts/preferences.js";
 import type { DextReplayEntry } from "../runner/dextResumeCache.js";
+import type { SkillCommandResolution } from "../features/workflow/contracts/skill.js";
 import type { ExecutionMetadata, InputExecutionResponse, RegisteredCallable } from "../shared/contracts/types.js";
 import type { WebviewResponse } from "../platform/webviewProtocol.js";
 import { AgentEventStream } from "../features/conversations/host/agentEventStream.js";
@@ -33,6 +34,7 @@ export interface ConversationSetupDependencies {
     run: { resume?: readonly DextReplayEntry[]; onCallLog?: (entries: readonly DextReplayEntry[]) => void }
   ) => Promise<InputExecutionResponse>;
   draftResource: (resource: ResourceSession, source: string, metadata: Readonly<ExecutionMetadata>) => Promise<{ draft: ResourceDocument; response: InputExecutionResponse }>;
+  resolveSkillCommand?: (id: string, selectedSkillIds: readonly string[], args: string) => SkillCommandResolution;
   applyMethod: () => RegisteredCallable;
   isTrustedLocalWorkspace: () => boolean;
   readPlan: (planPath: string) => Promise<string>;
@@ -122,7 +124,8 @@ export function createConversationServices(dependencies: ConversationSetupDepend
       profiles: dependencies.profiles,
       executeConversation: dependencies.executeConversation,
       executeInput: dependencies.executeInput,
-      draftResource: dependencies.draftResource
+      draftResource: dependencies.draftResource,
+      ...(dependencies.resolveSkillCommand ? { resolveSkillCommand: dependencies.resolveSkillCommand } : {})
     },
     sessions: controller,
     interactions,

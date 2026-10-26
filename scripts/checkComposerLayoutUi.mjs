@@ -4,6 +4,10 @@ import { join } from 'node:path';
 import { runLabChecks } from './monaco-ref-lab/check.mjs';
 
 await runLabChecks(async ({ evaluate, settle, send, artifacts }) => {
+  const key = async (key, code) => {
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key, windowsVirtualKeyCode: code });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key, windowsVirtualKeyCode: code });
+  };
   const template = await readFile('src/app/sidebarProvider.ts', 'utf8');
   const body = template.slice(template.indexOf('<body>') + 6, template.lastIndexOf('</body>')).replace(/<script[\s\S]*?<\/script>/g, '');
   await evaluate(`lab.production.destroy();document.querySelectorAll('link[rel="stylesheet"],style').forEach(el=>el.remove());
@@ -14,7 +18,7 @@ await runLabChecks(async ({ evaluate, settle, send, artifacts }) => {
   await evaluate(`{const style=document.createElement('style');style.textContent=${JSON.stringify(await readFile('dist/webview/main.css', 'utf8'))};document.head.append(style);}`);
   await evaluate(await readFile('dist/webview/main.js', 'utf8'));
   await evaluate(`window.selection={profileId:'codex',mode:'plan',permission:'full-access',model:'test-model',reasoningEffort:'',speed:'',serviceTier:''};
-    host({type:'state',state:{methods:[],diagnostics:[],mcpServers:[],globalDiagnostics:[],agentProfiles:[{id:'codex',provider:'codex',label:'Codex CLI',command:'codex',models:['test-model']}],agentSelection:selection}});
+    host({type:'state',state:{methods:[],diagnostics:[],mcpServers:[],globalDiagnostics:[],agentProfiles:[{id:'codex',provider:'codex',label:'Codex CLI',command:'codex',models:['test-model']}],agentSelection:selection,skills:[{id:'ponytail',title:'Ponytail',description:'Lean code',packId:'ponytail',packName:'Ponytail',commandIds:['ponytail-review']},{id:'ponytail-review',title:'Review',description:'Review',packId:'ponytail',packName:'Ponytail',commandIds:[]}],skillCommands:[{id:'ponytail-review',title:'Review',description:'Review',skillId:'ponytail',packId:'ponytail',packName:'Ponytail',syntax:'/ponytail-review'}],skillsEnabled:true}});
     host({type:'conversations',sessions:[{id:'active',title:'Layout',updatedAt:1,turnCount:0,pinned:false,running:false}],activeId:'active',selection,planStatus:'new',hostInitiated:true});`);
   const bounds = () => evaluate(`{
     const rect=selector=>{const r=document.querySelector(selector).getBoundingClientRect();return {top:r.top,bottom:r.bottom,height:r.height};};
@@ -33,6 +37,20 @@ await runLabChecks(async ({ evaluate, settle, send, artifacts }) => {
   await send('Emulation.setDeviceMetricsOverride', { width: 940, height: 1000, deviceScaleFactor: 1, mobile: false });
   await settle();
   const before = await bounds();
+  assert.equal(await evaluate(`document.getElementById('skills-menu-shell').hidden`), false, 'Skills is a primary composer control');
+  await evaluate(`document.getElementById('skills-control').click()`);
+  assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('#skills-menu .composer-skill-option')).map(button=>[button.getAttribute('aria-checked'),button.textContent])`), [
+    ['unchecked', 'Ponytail2 skills'],
+    ['unchecked', 'Ponytail/ponytail-review'],
+    ['unchecked', 'Review']
+  ]);
+  await evaluate(`document.querySelector('#skills-menu .composer-skill-pack').focus()`);
+  await key("ArrowDown", 40);
+  assert.equal(await evaluate(`document.activeElement?.textContent`), "Ponytail/ponytail-review", 'roving focus reaches a skill row');
+  await key("ArrowDown", 40);
+  assert.equal(await evaluate(`document.activeElement?.textContent`), "Review");
+  await key("Escape", 27);
+  assert.equal(await evaluate(`document.getElementById('skills-menu').hidden`), true);
   await evaluate(`host({type:'imageAttachment',relativePath:'.dext-global/attachments/layout.png',name:'layout.png',webviewUri:'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48"><rect width="48" height="48" fill="skyblue"/></svg>'});`);
   await settle();
   const after = await bounds();
@@ -44,6 +62,9 @@ await runLabChecks(async ({ evaluate, settle, send, artifacts }) => {
       await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
       await settle();
       fits(await bounds(), `${width}x${height}`);
+      if (width === 320) {
+        assert.equal(await evaluate(`getComputedStyle(document.querySelector('.composer-skills .composer-control-label')).display`), "none", "320 collapses the Skills label");
+      }
     }
   }
   await send('Emulation.setDeviceMetricsOverride', { width: 940, height: 1000, deviceScaleFactor: 1, mobile: false });

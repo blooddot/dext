@@ -12,6 +12,7 @@ import type {
   UiInteraction
 } from "../../../shared/contracts/types.js";
 import type { DextHistoryRecord, DextHistorySession } from "./history.js";
+import type { SkillCommandResolution } from "../../workflow/contracts/skill.js";
 
 /** A conversation turn mode. */
 export type ConversationMode = "agent" | "ask" | "plan" | "code";
@@ -55,6 +56,13 @@ export interface TurnExecutionHost {
     source: string,
     metadata: Readonly<ExecutionMetadata>
   ) => Promise<{ draft: ResourceDocument; response: InputExecutionResponse }>;
+  /** Resolves an installed `/command` against the turn's selected skills.
+   * Absent in hostless tests, where slash text stays ordinary input. */
+  resolveSkillCommand?: (
+    id: string,
+    selectedSkillIds: readonly string[],
+    args: string
+  ) => SkillCommandResolution;
 }
 
 /** Interaction ownership for the turn: the coordinator passes the session and

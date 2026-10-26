@@ -172,6 +172,106 @@ describe("TurnExecutionCoordinator", () => {
     expect(stopped.coordinator.takeContinuation("session", stopped.history.list()[0]!.turns[0]!.id)).toBeUndefined();
   });
 
+  it("resolves a command once, executes the expanded task, and stores the raw source", async () => {
+    const seen: Readonly<ExecutionMetadata>[] = [];
+    const resolveSkillCommand = vi.fn(() => ({
+      status: "ok" as const,
+      command: {
+        id: "ponytail-review",
+        title: "Review",
+        description: "Review the change",
+        skillId: "ponytail-review",
+        template: "Review $ARGUMENTS.",
+        instruction: "Review src/a.ts.",
+        arguments: "src/a.ts"
+      }
+    }));
+    const h = createConversationHarness({
+      resolveSkillCommand,
+      executeConversation: async (_mode, _source, metadata) => {
+        seen.push(metadata);
+        return { kind: "workflow", executions: [] };
+      }
+    });
+    h.seed([conversation("session")]);
+    h.controller.activate(h.controller.session("session")!);
+    h.controller.setSelection("session", { ...defaultSelection, skills: ["ponytail-review"] });
+    await h.coordinator.execute(h.controller.session("session")!, "agent", "/ponytail-review src/a.ts");
+
+    expect(resolveSkillCommand).toHaveBeenCalledOnce();
+    expect(resolveSkillCommand).toHaveBeenCalledWith("ponytail-review", ["ponytail-review"], "src/a.ts");
+    expect(h.executeConversation.mock.calls[0]?.[1]).toBe("src/a.ts");
+    expect(seen[0]?.commandInstruction).toContain("Review src/a.ts.");
+    expect(seen[0]?.skills).toEqual(["ponytail-review"]);
+
+    const turn = h.history.list()[0]!.turns[0]!;
+    expect(turn.input).toBe("/ponytail-review src/a.ts");
+    expect(turn.command).toEqual({ id: "ponytail-review", skillId: "ponytail-review" });
+    expect(turn.skills).toEqual(["ponytail-review"]);
+  });
+
+  it("fails a command whose skill is not selected or that is unsupported", async () => {
+    const inactive = createConversationHarness({
+      resolveSkillCommand: () => ({
+        status: "inactive",
+        command: {
+          id: "review", title: "Review", description: "", skillId: "review", syntax: "/review"
+        }
+      })
+    });
+    inactive.seed([conversation("session")]);
+    inactive.controller.activate(inactive.controller.session("session")!);
+    await expect(inactive.coordinator.execute(inactive.controller.session("session")!, "agent", "/review"))
+      .rejects.toThrow("requires the skill 'review'");
+    expect(inactive.executeConversation).not.toHaveBeenCalled();
+
+    const invalid = createConversationHarness({
+      resolveSkillCommand: () => ({ status: "invalid", id: "run", reason: "shell execution is not supported" })
+    });
+    invalid.seed([conversation("session")]);
+    invalid.controller.activate(invalid.controller.session("session")!);
+    await expect(invalid.coordinator.execute(invalid.controller.session("session")!, "agent", "/run"))
+      .rejects.toThrow("/run cannot run: shell execution is not supported");
+    expect(invalid.executeConversation).not.toHaveBeenCalled();
+  });
+
+  it("suppresses skills and commands for Code and resource turns", async () => {
+    const resolveSkillCommand = vi.fn();
+    const executeInput = vi.fn(async (_source: string, _metadata: Readonly<ExecutionMetadata>): Promise<InputExecutionResponse> => {
+      void _source; void _metadata;
+      return { kind: "workflow", executions: [] };
+    });
+    const draftResource = vi.fn(async (_resource: unknown, _source: string, _metadata: Readonly<ExecutionMetadata>): Promise<{ draft: { name: string; content: string }; response: InputExecutionResponse }> => {
+      void _resource; void _source; void _metadata;
+      return {
+        draft: { name: "draft", content: "" },
+        response: { kind: "workflow", executions: [] }
+      };
+    });
+    const h = createConversationHarness({ resolveSkillCommand, executeInput, draftResource });
+    h.seed([
+      conversation("code"),
+      { ...conversation("resource"), resource: { type: "skill", scope: "project" } }
+    ]);
+    for (const id of ["code", "resource"]) {
+      h.controller.activate(h.controller.session(id)!);
+      h.controller.setSelection(id, { ...defaultSelection, skills: ["ponytail-review"] });
+    }
+    h.controller.activate(h.controller.session("code")!);
+    await h.coordinator.execute(h.controller.session("code")!, "code", "/review src/a.ts");
+    expect(executeInput.mock.calls[0]?.[0]).toBe("/review src/a.ts");
+    expect(executeInput.mock.calls[0]?.[1].skills).toBeUndefined();
+    expect(executeInput.mock.calls[0]?.[1].commandInstruction).toBeUndefined();
+
+    h.controller.activate(h.controller.session("resource")!);
+    await h.coordinator.execute(h.controller.session("resource")!, "agent", "/review src/a.ts", { resourceSource: "import" });
+    expect(resolveSkillCommand).not.toHaveBeenCalled();
+    expect(draftResource.mock.calls[0]?.[2]).toMatchObject({ resourceSource: "import" });
+    expect(draftResource.mock.calls[0]?.[2].skills).toBeUndefined();
+    expect(draftResource.mock.calls[0]?.[2].commandInstruction).toBeUndefined();
+    expect(h.history.list().find((session) => session.id === "resource")?.turns[0]?.resourceSource).toBe("import");
+  });
+
   it("holds a read-only Agent proposal for review and skips applied writes", async () => {
     const h = createConversationHarness({
       executeConversation: async (): Promise<InputExecutionResponse> => ({

@@ -530,6 +530,9 @@ export class DextRuntime implements WorkflowRuntime {
           const skills = stringListArgument(resolved.arguments.skills, "skills");
           const skillInstructions: string[] = [];
           if (skills.length) {
+            if (!this.workspaceTrusted) {
+              throw new Error("Skills require a trusted local workspace.");
+            }
             if (!this.skillLoader) throw new Error("Agent call skill loading is not configured.");
             for (const skill of skills) {
               const loaded = await this.skillLoader(skill, directory);
@@ -833,6 +836,23 @@ export class DextRuntime implements WorkflowRuntime {
     if (allowWorkspaceWrite && !this.workspaceTrusted) {
       throw new Error(`${mode === "plan" ? "Plan" : "Agent"} mode requires a trusted local workspace.`);
     }
+    // Skills and commands are user-installed text, so they share the rules
+    // trust boundary. The command body already contains its arguments; the
+    // remaining input is the task that follows it.
+    const skillInstruction = await this.conversationSkillInstruction(metadata.skills);
+    const commandInstruction = metadata.commandInstruction?.trim() || undefined;
+    if (commandInstruction && !this.workspaceTrusted) {
+      throw new Error("Commands require a trusted local workspace.");
+    }
+    const conversationInstruction = combineInstructions(skillInstruction, commandInstruction);
+    const conversationInput = mode === "plan" && !metadata.executePlan
+      ? combineInstructions(
+        conversationInstruction,
+        await this.planInstruction(),
+        PLAN_RESPONSE_FORMAT_INSTRUCTION,
+        `---\n\nGoal:\n\n${text}`
+      )!
+      : combineInstructions(conversationInstruction, text)!;
     const started = performance.now();
     const sessionId = metadata.agentSessionId
       ? `${metadata.agentSessionId}\u0000conversation`
@@ -857,9 +877,7 @@ export class DextRuntime implements WorkflowRuntime {
       ...(selectedSpeed ? { speed: selectedSpeed } : {}),
       ...(selectedServiceTier ? { serviceTier: selectedServiceTier } : {}),
       cwd: this.workspaceRoot,
-      input: mode === "plan" && !metadata.executePlan
-        ? `${await this.planInstruction()}\n\n${PLAN_RESPONSE_FORMAT_INSTRUCTION}\n\n---\n\nGoal:\n\n${text}`
-        : text,
+      input: conversationInput,
       mode,
       metadata: {
         ...metadata,
@@ -934,6 +952,27 @@ export class DextRuntime implements WorkflowRuntime {
       ...(metadata.signal ? { signal: metadata.signal } : {})
     });
     return { text: response, ...(selectedModel ? { model: selectedModel } : {}) };
+  }
+
+  /** Loads every selected skill for a conversation turn. A skill that was
+   * uninstalled after the tab stored its selection fails the turn here rather
+   * than disappearing silently. */
+  private async conversationSkillInstruction(skills: readonly string[] | undefined): Promise<string | undefined> {
+    const ids = [...new Set((skills ?? []).map((skill) => skill.trim()).filter(Boolean))].slice(0, 64);
+    if (!ids.length) return undefined;
+    if (!this.workspaceTrusted) throw new Error("Skills require a trusted local workspace.");
+    if (!this.skillLoader) throw new Error("Skill loading is not configured.");
+    const workspace = defaultWorkspace(this.workspaceRoot);
+    const instructions: string[] = [];
+    for (const id of ids) {
+      const loaded = await this.skillLoader(id, workspace);
+      instructions.push([
+        `Follow the skill '${id}' from ${loaded.sourcePath}.`,
+        "Read any files the skill references relative to that directory.",
+        loaded.instructions
+      ].join("\n\n"));
+    }
+    return instructions.join("\n\n");
   }
 
   /** Plan mode owns the plan document's shape, so the instruction is part of

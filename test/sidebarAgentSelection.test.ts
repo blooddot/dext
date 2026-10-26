@@ -58,6 +58,7 @@ function sidebarHarness(options: {
     setAgentSelection,
     endAgentSession: vi.fn(),
     agentProfiles: () => [{ id: "deepseek-harness" }],
+    skills: { list: () => [{ id: "ponytail" }, { id: "ponytail-review" }] },
     discoverHarnessModels,
     executeConversation: vi.fn(options.executeConversation ?? emptyResponse),
     executeInput: vi.fn(),
@@ -95,7 +96,7 @@ function sidebarHarness(options: {
   const states = () => messages.flatMap((message) => message.type === "state" ? [message.state] : []);
   return {
     internals, messages, application, discovery, storage, discoverHarnessModels,
-    setAgentSelection, setConversationSelection, select, states,
+    setAgentSelection, setConversationSelection, select, states, sidebar,
     selection: () => selection
   };
 }
@@ -151,6 +152,24 @@ describe("sidebar agent selection synchronization", () => {
     await h.select("codex");
     await h.select("deepseek-harness");
     await vi.waitFor(() => expect(h.discoverHarnessModels).toHaveBeenCalledTimes(2));
+  });
+
+  it("validates skills against the installed catalog and preserves an absent field", async () => {
+    const h = sidebarHarness();
+    h.storage.resolve();
+    await h.select("codex", { skills: ["ponytail", "missing", "ponytail"] });
+    const id = h.internals.conversation.controller.active().id;
+    expect(h.internals.conversation.controller.selection(id)?.skills).toEqual(["ponytail"]);
+
+    // A menu that does not send skills keeps the conversation's current array.
+    await h.select("codex", { model: "changed-model" });
+    expect(h.internals.conversation.controller.selection(id)?.skills).toEqual(["ponytail"]);
+
+    // A persisted selection can name a skill uninstalled while the tab was
+    // closed; refresh drops it before the composer sees it.
+    h.setAgentSelection({ ...h.selection(), skills: ["gone", "ponytail-review"] } as AgentSelection);
+    await h.sidebar.refresh();
+    expect(h.states().at(-1)?.agentSelection.skills).toEqual(["ponytail-review"]);
   });
 
   it("rejects a late agent selection while the active conversation is running", async () => {

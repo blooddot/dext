@@ -27,9 +27,12 @@ describe("conversation protocol", () => {
       { type: "moveConversation", sessionId: "a", beforeSessionId: null },
       { type: "pinConversation", sessionId: "a", pinned: true },
       { type: "agentSelection", selection },
+      { type: "agentSelection", selection: { ...selection, skills: ["ponytail", "ponytail-review"] } },
       { type: "harnessPresetAction", action: "refresh" }
     ];
     for (const request of accepted) expect(webviewRequestSchema.safeParse(request).success, JSON.stringify(request)).toBe(true);
+    expect(webviewRequestSchema.safeParse({ type: "agentSelection", selection: { ...selection, skills: Array.from({ length: 65 }, (_, index) => `skill-${index}`) } }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({ type: "agentSelection", selection: { ...selection, skills: [1] } }).success).toBe(false);
   });
 
   it("keeps the older message behavior intact", () => {

@@ -72,7 +72,8 @@ const conversationSchemaList = [
       model: z.string(),
       reasoningEffort: z.string(),
       speed: z.string(),
-      serviceTier: z.string()
+      serviceTier: z.string(),
+      skills: z.array(z.string().min(1).max(64)).max(64).optional()
     }).strict()
   }),
   z.object({ type: z.literal("harnessPresetAction"), action: z.enum(["create", "copy", "edit", "refresh"]) })

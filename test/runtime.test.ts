@@ -852,6 +852,58 @@ describe("Dext runtime", () => {
     expect(request.input.endsWith("Goal:\n\nAdd a cache")).toBe(true);
   });
 
+  it("injects session skills and a command before the Plan contract", async () => {
+    const { runtime } = setup();
+    runtime.setWorkspaceTrusted(true);
+    runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
+    runtime.setAgentSelection({ profileId: "codex" });
+    runtime.setRuleLoader(async () => undefined);
+    runtime.setSkillLoader(async (skill) => ({ sourcePath: `/skills/${skill}/SKILL.md`, instructions: `skill ${skill}` }));
+    const requests: { input: string }[] = [];
+    runtime.setAgentRunner({
+      run: async () => ({ kind: "ask", text: "unused" }),
+      runConversation: async (request) => {
+        requests.push(request);
+        return "# Plan\n\n## Goal\nShip it.";
+      }
+    });
+
+    await runtime.executeConversation("plan", "Add a cache", {
+      skills: ["ponytail", "ponytail-review"],
+      commandInstruction: "The user invoked /ponytail-review.\n\nReview $ARGUMENTS."
+    });
+    const input = requests[0]!.input;
+    expect(input.indexOf("skill ponytail-review")).toBeGreaterThanOrEqual(0);
+    expect(input.indexOf("skill ponytail")).toBeLessThan(input.indexOf("The user invoked /ponytail-review."));
+    expect(input.indexOf("The user invoked /ponytail-review.")).toBeLessThan(input.indexOf("You are in Dext Plan mode."));
+    expect(input.indexOf("You are in Dext Plan mode.")).toBeLessThan(input.indexOf("dext-plan:start"));
+    expect(input.indexOf("dext-plan:start")).toBeLessThan(input.indexOf("Goal:\n\nAdd a cache"));
+    expect(input.endsWith("Goal:\n\nAdd a cache")).toBe(true);
+  });
+
+  it("requires a trusted workspace for skills and commands and fails an unknown skill", async () => {
+    const { runtime } = setup();
+    runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
+    runtime.setAgentSelection({ profileId: "codex" });
+    runtime.setSkillLoader(async (skill) => ({ sourcePath: `/skills/${skill}/SKILL.md`, instructions: `skill ${skill}` }));
+    runtime.setAgentRunner({ run: async () => ({ kind: "ask", text: "unused" }), runConversation: async () => "reply" });
+
+    await expect(runtime.executeConversation("ask", "explain", { skills: ["ponytail"] }))
+      .rejects.toThrow("Skills require a trusted local workspace.");
+    runtime.setWorkspaceTrusted(true);
+    await expect(runtime.executeConversation("ask", "explain", { commandInstruction: "run" }))
+      .resolves.toMatchObject({ result: { text: "reply" } });
+
+    const failing = setup().runtime;
+    failing.setWorkspaceTrusted(true);
+    failing.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
+    failing.setAgentSelection({ profileId: "codex" });
+    failing.setSkillLoader(async () => { throw new Error("Unknown skill 'gone'."); });
+    failing.setAgentRunner({ run: async () => ({ kind: "ask", text: "unused" }), runConversation: async () => "reply" });
+    await expect(failing.executeConversation("ask", "explain", { skills: ["gone"] }))
+      .rejects.toThrow("Unknown skill 'gone'.");
+  });
+
   it("keeps a streamed Plan document out of Process while returning the full reply", async () => {
     const { runtime } = setup();
     runtime.setWorkspaceTrusted(true);

@@ -47,6 +47,10 @@ import { outputExternalLink, outputLinkReference } from "../features/workspace/b
 import { AgentInputView } from "../features/conversations/browser/agentInputView.js";
 import { AgentTodoView } from "../features/conversations/browser/agentTodoView.js";
 import { observeComposerOverflow } from "../features/conversations/browser/composerOverflow.js";
+import {
+  groupSkills, packCheckState, selectionLabel, togglePack, toggleSkill
+} from "../features/conversations/browser/skillSelection.js";
+import { registerSlashCommandProvider } from "./monacoSlashCommands.js";
 import { looksLikeGithubUrl } from "../features/resources/domain/skillSource.js";
 import { enableConversationTabDrag } from "../features/conversations/browser/conversationTabDrag.js";
 import { installResultScrollProbe } from "../features/conversations/browser/scrollProbe.js";
@@ -109,6 +113,10 @@ const elements = {
   modeControlIcon: element<HTMLElement>("mode-control-icon"),
   modeControlValue: element<HTMLElement>("mode-control-value"),
   modeMenu: element<HTMLElement>("mode-menu"),
+  skillsMenuShell: element<HTMLElement>("skills-menu-shell"),
+  skillsControl: element<HTMLButtonElement>("skills-control"),
+  skillsControlValue: element<HTMLElement>("skills-control-value"),
+  skillsMenu: element<HTMLElement>("skills-menu"),
   resourceSourceToggle: element<HTMLElement>("resource-source-toggle"),
   resourceSourceDescribe: element<HTMLButtonElement>("resource-source-describe"),
   resourceSourceImport: element<HTMLButtonElement>("resource-source-import"),
@@ -444,8 +452,12 @@ const editor = new DextCodeEditor({
   reportComposerTypes: (counts) => vscode.postMessage({ type: "composerTypesApplied", ...counts })
 });
 
-function openInputReference(reference: ContextReferenceOccurrence): void {
-  if (reference.kind === "project") {
+registerSlashCommandProvider(() => ({
+  commands: sidebarState?.skillCommands ?? [],
+  selectedSkillIds: sidebarState?.agentSelection.skills ?? []
+}));
+
+function openInputReference(reference: ContextReferenceOccurrence): void {  if (reference.kind === "project") {
     vscode.postMessage({ type: "openProjectReference", objectId: reference.payload });
     return;
   }
@@ -496,6 +508,7 @@ function updateRunState(): void {
   for (const control of [elements.modeControl, elements.permissionControl, elements.agentControl, elements.modelControl]) {
     control.disabled = selectionLocked;
   }
+  elements.skillsControl.disabled = selectionLocked || sidebarState?.skillsEnabled === false;
   for (const menu of [elements.modeMenu, elements.permissionMenu, elements.agentMenu, elements.modelMenu, elements.modelSubmenu]) {
     for (const button of menu.querySelectorAll<HTMLButtonElement>("button")) button.disabled = selectionLocked || button.dataset.presetDisabled === "true";
   }
@@ -976,6 +989,99 @@ function displayOptionValue(value: string): string {
     .replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
+function renderSkillsMenu(state: SidebarState, selected: readonly string[], enabled: boolean): void {
+  const menu = elements.skillsMenu;
+  menu.replaceChildren();
+  const groups = groupSkills(state.skills ?? [], state.skillCommands ?? []);
+  if (!enabled) {
+    const note = document.createElement("div");
+    note.className = "composer-menu-empty";
+    note.textContent = state.skillsDisabledReason ?? "Skills are disabled in this workspace.";
+    menu.append(note);
+    return;
+  }
+  if (!groups.length) {
+    const note = document.createElement("div");
+    note.className = "composer-menu-empty";
+    note.textContent = "No skills are installed. Add a SKILL.md package under .dext/skills or import a GitHub repository.";
+    menu.append(note);
+    return;
+  }
+  const row = (options: {
+    label: string;
+    value: string;
+    checked: "checked" | "mixed" | "unchecked";
+    level: number;
+    pack?: boolean;
+    commands?: string;
+    onToggle(): void;
+  }): HTMLButtonElement => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `composer-menu-option composer-skill-option${options.pack ? " composer-skill-pack" : ""}`;
+    button.dataset.level = String(options.level);
+    button.dataset.value = options.value;
+    button.tabIndex = -1;
+    button.setAttribute("role", "menuitemcheckbox");
+    button.setAttribute("aria-checked", options.checked);
+    const glyph = document.createElement("i");
+    glyph.className = `codicon codicon-${options.checked === "checked" ? "check" : options.checked === "mixed" ? "circle-filled" : "blank"}`;
+    const text = document.createElement("span");
+    text.textContent = options.label;
+    if (options.commands) {
+      const hint = document.createElement("small");
+      hint.className = "composer-skill-commands";
+      hint.textContent = options.commands;
+      text.append(hint);
+    }
+    button.append(glyph, text);
+    button.addEventListener("click", () => { if (!composerSelectionLocked() && enabled) options.onToggle(); });
+    return button;
+  };
+  for (const group of groups) {
+    if (group.packId) {
+      const check = packCheckState(group.skills.map((skill) => skill.id), selected);
+      menu.append(row({
+        label: group.name, value: `pack:${group.packId}`, checked: check, level: 0, pack: true,
+        commands: `${group.skills.length} skill${group.skills.length === 1 ? "" : "s"}`,
+        onToggle: () => submitAgentSelection({ skills: togglePack(selected, group.skills.map((skill) => skill.id), check !== "checked") }, true)
+      }));
+    }
+    for (const skill of group.skills) {
+      const commands = group.commands.filter((command) => command.skillId === skill.id);
+      menu.append(row({
+        label: skill.title, value: `skill:${skill.id}`, checked: selected.includes(skill.id) ? "checked" : "unchecked", level: 1,
+        commands: commands.length ? commands.map((command) => command.syntax).join(" ") : "",
+        onToggle: () => submitAgentSelection({ skills: toggleSkill(selected, skill.id) }, true)
+      }));
+    }
+  }
+}
+
+function renderSkillsControl(state: SidebarState): void {
+  const resource = activeResource();
+  const visible = !resource && inputMode !== "code";
+  elements.skillsMenuShell.hidden = !visible;
+  if (!visible) {
+    if (!elements.skillsMenu.hidden) closeComposerMenus();
+    return;
+  }
+  const selected = state.agentSelection.skills ?? [];
+  const enabled = state.skillsEnabled !== false;
+  elements.skillsControl.disabled = composerSelectionLocked() || !enabled;
+  elements.skillsControl.title = enabled
+    ? "Skills for this conversation"
+    : state.skillsDisabledReason ?? "Skills are disabled in this workspace.";
+  elements.skillsControlValue.textContent = selectionLabel(selected);
+  elements.skillsControl.classList.toggle("has-skills", selected.length > 0);
+  const focused = document.activeElement instanceof HTMLElement && elements.skillsMenu.contains(document.activeElement)
+    ? document.activeElement.dataset.value
+    : undefined;
+  renderSkillsMenu(state, selected, enabled);
+  // Rebuilding the tree must not drop roving keyboard focus after a toggle.
+  if (focused) elements.skillsMenu.querySelector<HTMLButtonElement>(`button[data-value="${focused}"]`)?.focus();
+}
+
 function renderAgentControls(state: SidebarState): void {
   sidebarState = state;
   // A tab with no stored mode is a fresh conversation and must use Agent. Do
@@ -1045,6 +1151,7 @@ function renderAgentControls(state: SidebarState): void {
       agentPreset: state.agentSelection.agentPreset ?? (profileId === "deepseek-harness" && !transcript.size ? DEFAULT_HARNESS_PRESET : "") });
   });
   renderModelMenu(state, options, selectedModel);
+  renderSkillsControl(state);
   renderResourceControls();
   updateRunState();
 }
@@ -1338,10 +1445,10 @@ function positionModelSubmenu(): void {
 
 window.addEventListener("resize", positionModelSubmenu);
 
-function submitAgentSelection(change: Partial<SidebarState["agentSelection"]>): void {
+function submitAgentSelection(change: Partial<SidebarState["agentSelection"]>, keepMenuOpen = false): void {
   if (composerSelectionLocked()) return;
   const selection = sidebarState?.agentSelection;
-  closeComposerMenus();
+  if (!keepMenuOpen) closeComposerMenus();
   vscode.postMessage({
     type: "agentSelection", selection: {
       mode: inputMode,
@@ -1351,7 +1458,10 @@ function submitAgentSelection(change: Partial<SidebarState["agentSelection"]>): 
       agentPreset: harnessPresetOrDefault(change.agentPreset ?? selection?.agentPreset),
       reasoningEffort: change.reasoningEffort ?? selection?.reasoningEffort ?? "",
       speed: change.speed ?? selection?.speed ?? "",
-      serviceTier: change.serviceTier ?? selection?.serviceTier ?? ""
+      serviceTier: change.serviceTier ?? selection?.serviceTier ?? "",
+      ...(change.skills !== undefined || selection?.skills?.length
+        ? { skills: change.skills ?? selection?.skills ?? [] }
+        : {})
     }
   });
 }
@@ -1442,6 +1552,7 @@ function renderConversations(sessions: readonly ConversationSummary[], activeId:
 
 const composerMenus = [
   { control: elements.modeControl, menu: elements.modeMenu },
+  { control: elements.skillsControl, menu: elements.skillsMenu },
   { control: elements.permissionControl, menu: elements.permissionMenu },
   { control: elements.agentControl, menu: elements.agentMenu },
   { control: elements.modelControl, menu: elements.modelMenu }

@@ -5,18 +5,28 @@ export function observeComposerOverflow(controls: HTMLElement): void {
   const actions = row.querySelector<HTMLElement>(".action-actions")!;
   const extras = controls.querySelector<HTMLElement>(".composer-extras")!;
   const mode = controls.querySelector<HTMLElement>(".composer-menu")!;
+  const skills = controls.querySelector<HTMLElement>(".composer-skills");
   const more = controls.querySelector<HTMLButtonElement>(".composer-more")!;
   let pending = false;
 
   function measure(): void {
     pending = false;
     if (!row.clientWidth) return;
-    controls.classList.add("measure-extras");
     const gap = parseFloat(getComputedStyle(controls).columnGap) || 0;
     const rowGap = parseFloat(getComputedStyle(row).columnGap) || 0;
-    const required = mode.getBoundingClientRect().width + extras.getBoundingClientRect().width
-      + gap + rowGap + actions.getBoundingClientRect().width;
-    controls.classList.remove("measure-extras");
+    const requiredWidth = (): number => {
+      controls.classList.add("measure-extras");
+      const required = mode.getBoundingClientRect().width
+        + (skills && !skills.hidden ? skills.getBoundingClientRect().width : 0)
+        + extras.getBoundingClientRect().width
+        + gap + rowGap + actions.getBoundingClientRect().width;
+      controls.classList.remove("measure-extras");
+      return required;
+    };
+    let required = requiredWidth();
+    const skillsCompact = required > row.clientWidth;
+    controls.classList.toggle("skills-compact", skillsCompact);
+    if (skillsCompact) required = requiredWidth();
     const compact = required > row.clientWidth;
     controls.classList.toggle("is-compact", compact);
     if (!compact) {

@@ -10,6 +10,7 @@ import type {
 import { orderedConversationIds } from "../domain/conversationOrder.js";
 import { conversationTitle, historyTurnTitle } from "../presentation/historyRender.js";
 import { harnessPresetOrDefault } from "../../agents/domain/harnessPresetDefault.js";
+import { withoutSkills } from "../domain/agentSelection.js";
 import type { AgentTodoItem } from "../../../shared/contracts/types.js";
 
 /** Everything the controller publishes. The sidebar implements it with the
@@ -56,10 +57,10 @@ function outputSession(): DextHistorySession {
   };
 }
 
-// New tabs always start in Agent mode, while keeping the provider/model
-// controls the user was using in the tab they came from.
+// New tabs always start in Agent mode with no skills, while keeping the
+// provider/model controls the user was using in the tab they came from.
 function defaultConversationSelection(previous: AgentSelection): AgentSelection {
-  return { ...previous, mode: "agent", ...(previous.profileId === "deepseek-harness" ? { agentPreset: harnessPresetOrDefault(previous.agentPreset) } : {}) };
+  return { ...withoutSkills(previous), mode: "agent", ...(previous.profileId === "deepseek-harness" ? { agentPreset: harnessPresetOrDefault(previous.agentPreset) } : {}) };
 }
 
 function sessionSignature(session: DextHistorySession): string {
@@ -136,7 +137,7 @@ export class ConversationController {
     else if (latest) this.activeSession = latest;
     const storedSelection = this.preferences.conversationSelection(this.activeSession.id);
     const initialSelection = storedSelection
-      ?? { ...this.options.application.currentSelection(), mode: "agent" as const };
+      ?? { ...withoutSkills(this.options.application.currentSelection()), mode: "agent" as const };
     this.conversationSelections.set(this.activeSession.id, initialSelection);
     this.options.application.setAgentSelection(initialSelection);
     // Keep every tab the user left open, including non-pinned ones. Pins still
@@ -261,7 +262,7 @@ export class ConversationController {
     const storedSelection = cachedSelection ? undefined : this.preferences.conversationSelection(session.id);
     const selection = cachedSelection
       ?? storedSelection
-      ?? { ...this.options.application.currentSelection(), mode: "agent" as const };
+      ?? { ...withoutSkills(this.options.application.currentSelection()), mode: "agent" as const };
     this.conversationSelections.set(session.id, selection);
     this.options.application.setAgentSelection(selection);
     if (!wasOpen) this.openConversations.push(session.id);
@@ -387,7 +388,7 @@ export class ConversationController {
     this.activeSession = session;
     const selection = this.conversationSelections.get(session.id)
       ?? this.preferences.conversationSelection(session.id)
-      ?? { ...this.options.application.currentSelection(), mode: "agent" as const };
+      ?? { ...withoutSkills(this.options.application.currentSelection()), mode: "agent" as const };
     this.conversationSelections.set(session.id, selection);
     this.options.application.setAgentSelection(selection);
     await this.preferences.setConversationSelection(session.id, selection);

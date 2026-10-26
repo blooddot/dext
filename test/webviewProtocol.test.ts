@@ -1,7 +1,30 @@
 import { describe, expect, it } from "vitest";
 import { webviewRequestSchema } from "../src/platform/webviewProtocol.js";
+import type { SidebarState } from "../src/platform/webviewProtocol.js";
 
 describe("Webview protocol", () => {
+  it("describes pack-aware skills without exposing host source paths", () => {
+    const state: SidebarState = {
+      methods: [], diagnostics: [], mcpServers: [], globalDiagnostics: [],
+      agentProfiles: [], agentSelection: {},
+      skillsEnabled: true,
+      skills: [{
+        id: "ponytail-review", title: "Review", description: "Review a change",
+        packId: "ponytail", packName: "Ponytail", commandIds: ["ponytail-review"]
+      }],
+      skillCommands: [{
+        id: "ponytail-review", title: "Review", description: "Review a change",
+        skillId: "ponytail-review", packId: "ponytail", packName: "Ponytail",
+        syntax: "/ponytail-review"
+      }]
+    };
+    expect(state.skills?.[0]?.packId).toBe("ponytail");
+    expect(state.skillCommands?.[0]?.syntax).toBe("/ponytail-review");
+    expect(JSON.stringify(state)).not.toContain("sourcePath");
+    const disabled: SidebarState = { ...state, skillsEnabled: false, skillsDisabledReason: "Skills require a trusted local workspace." };
+    expect(disabled.skillsDisabledReason).toContain("trusted");
+  });
+
   it("refuses the definition requests the removed language service answered", () => {
     // F12 and completion come from Monaco's TypeScript worker now, so these
     // requests no longer exist on the wire.

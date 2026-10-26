@@ -65,6 +65,22 @@ describe("Agent profile defaults", () => {
     expect(profiles.map((profile) => profile.id)).toEqual(["codex", "claude"]);
   });
 
+  it("keeps conversation skills in memory but never in the global selection", () => {
+    const updates = new Map<string, unknown>();
+    const state = {
+      get: (key: string, fallback: unknown) => key === "dext.agentSelection"
+        ? { profileId: "codex", model: "gpt", skills: ["stale"] }
+        : fallback,
+      update: async (key: string, value: unknown) => { updates.set(key, structuredClone(value)); }
+    } as unknown as vscode.Memento;
+    const store = new AgentProfileStore(state);
+    // A pre-existing globally persisted skills value is dropped on read.
+    expect(store.currentSelection().skills).toBeUndefined();
+    store.setSelection({ profileId: "codex", skills: ["ponytail", "ponytail-review"] });
+    expect(store.currentSelection().skills).toEqual(["ponytail", "ponytail-review"]);
+    expect((updates.get("dext.agentSelection") as { skills?: string[] }).skills).toBeUndefined();
+  });
+
   it("ignores unsupported saved profiles and resets their model selection", () => {
     const state = { get: (key: string) => key === "dext.agentProfiles" ? [{ id: "obsolete", provider: "obsolete", models: [] }] : { profileId: "obsolete", model: "old-model" }, update: async () => undefined } as unknown as vscode.Memento;
     const store = new AgentProfileStore(state);

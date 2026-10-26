@@ -82,6 +82,9 @@ export interface AgentSelection {
   reasoningEffort?: string;
   speed?: string;
   serviceTier?: string;
+  /** Skills enabled for this conversation. Empty or absent means none. A new
+   * tab never inherits another tab's selection. */
+  skills?: string[];
 }
 
 

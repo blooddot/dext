@@ -303,6 +303,12 @@ export interface ExecutionMetadata {
   speed?: string;
   serviceTier?: string;
   agentSessionId?: string;
+  /** Skills enabled for this turn. The host loads each SKILL.md before the
+   * provider call; unknown ids fail the turn instead of being ignored. */
+  skills?: string[];
+  /** An expanded `/command` prompt template. Injected after the skills and
+   * before Plan's own instructions. */
+  commandInstruction?: string;
   /** Where a new Skill resource came from. Import turns never call the model. */
   resourceSource?: "describe" | "import";
   /** Provider-native session to fork before the next turn, when available. */

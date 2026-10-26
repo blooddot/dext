@@ -7,6 +7,7 @@ import type {
   HistorySortOrder
 } from "../contracts/preferences.js";
 import { normalizeConversationLayout } from "../domain/conversationOrder.js";
+import { normalizeAgentSelection } from "../domain/agentSelection.js";
 
 const PINNED_KEY = "dext.pinnedConversations";
 const FAVORITES_KEY = "dext.favoriteConversations";
@@ -74,12 +75,12 @@ export class DextConversationPreferences implements ConversationPreferences {
   conversationSelection(sessionId: string): AgentSelection | undefined {
     const selections = this.state.get<Record<string, AgentSelection>>(SELECTIONS_KEY, {});
     const selection = selections[sessionId];
-    return selection && typeof selection === "object" ? { ...selection } : undefined;
+    return selection && typeof selection === "object" ? normalizeAgentSelection({ ...selection }) : undefined;
   }
 
   async setConversationSelection(sessionId: string, selection: AgentSelection): Promise<void> {
     const selections = { ...this.state.get<Record<string, AgentSelection>>(SELECTIONS_KEY, {}) };
-    selections[sessionId] = { ...selection };
+    selections[sessionId] = normalizeAgentSelection({ ...selection });
     await this.state.update(SELECTIONS_KEY, selections);
   }
 

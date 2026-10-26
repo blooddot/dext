@@ -15,6 +15,7 @@ import { planPathSegments } from "../features/conversations/domain/planFile.js";
 import type { InputNotificationTarget } from "../features/conversations/host/inputNotifications.js";
 import { normalizeInputReferenceSource } from "../features/workspace/domain/fileReference.js";
 import { harnessPresetOrDefault } from "../features/agents/domain/harnessPresetDefault.js";
+import { dedupeSkillIds, withoutSkills } from "../features/conversations/domain/agentSelection.js";
 import type { McpServerConfig } from "../features/mcp/host/mcpRegistry.js";
 import type { ProjectReferenceCandidate } from "../features/project/knowledge/projectReference.js";
 import { RESOURCE_LABELS, resourceFileName, type ResourceKind, type ResourceScope, type ResourceSession } from "../features/resources/contracts/resourceSession.js";
@@ -109,6 +110,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       executeConversation: (mode, source, metadata) => this.application.executeConversation(mode, source, metadata),
       executeInput: (source, metadata, run) => this.application.executeInput(source, metadata, run),
       draftResource: (resource, source, metadata) => this.application.draftResource(resource, source, metadata),
+      resolveSkillCommand: (id, selectedSkillIds, args) => this.application.skills.resolveCommand(id, selectedSkillIds, args),
       applyMethod: () => this.applyMethod(),
       isTrustedLocalWorkspace: () => this.application.isTrustedLocalWorkspace(),
       readPlan: (planPath) => this.readPlanText(planPath),
@@ -200,8 +202,25 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
 
   async refresh(): Promise<void> {
     const state = this.application.state();
+    state.agentSelection = this.validateInstalledSkills(state.agentSelection);
     await this.post({ type: "state", state });
     await this.conversation.controller.postPlanContext();
+  }
+
+  /** Installed ids, read defensively because lightweight host tests build a
+   * partial application object. */
+  private installedSkillIds(): Set<string> {
+    const catalog = (this.application as { skills?: { list(): Array<{ id: string }> } }).skills;
+    return new Set((catalog?.list() ?? []).map((skill) => skill.id));
+  }
+
+  /** A persisted or late selection may name a skill that was uninstalled while
+   * this conversation was closed. Drop it before the UI or a turn can use it. */
+  private validateInstalledSkills(selection: AgentSelection): AgentSelection {
+    if (selection.skills === undefined) return selection;
+    const installed = this.installedSkillIds();
+    const skills = dedupeSkillIds(selection.skills).filter((id) => installed.has(id));
+    return skills.length ? { ...selection, skills } : withoutSkills(selection);
   }
 
   async setActivePlan(reference: string | undefined): Promise<void> {
@@ -787,6 +806,12 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           if (this.activeSession.turns.length && previousPreset !== undefined && requestedPreset !== previousPreset) {
             throw new Error("Choose an Agent preset in a new conversation. This conversation keeps its original preset.");
           }
+          // Skills are per-conversation. An absent field preserves the array
+          // the tab already had; a present field replaces it, and ids that are
+          // no longer installed are dropped rather than carried into a turn.
+          const requestedSkills = request.selection.skills === undefined
+            ? previousSelection?.skills
+            : dedupeSkillIds(request.selection.skills).filter((id) => this.installedSkillIds().has(id));
           const selection = {
             mode: this.activeSession.resource ? "ask" : request.selection.mode,
             permission: request.selection.permission,
@@ -795,7 +820,8 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
             ...(request.selection.agentPreset !== undefined || previousSelection?.agentPreset ? { agentPreset: requestedPreset } : {}),
             reasoningEffort: request.selection.reasoningEffort,
             speed: request.selection.speed,
-            serviceTier: request.selection.serviceTier
+            serviceTier: request.selection.serviceTier,
+            ...(!this.activeSession.resource && requestedSkills?.length ? { skills: requestedSkills } : {})
           } satisfies AgentSelection;
           const sessionId = this.activeSession.id;
           this.conversation.controller.setSelection(sessionId, selection);
@@ -1344,6 +1370,10 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
             <div class="composer-menu">
               <button id="mode-control" class="composer-control" type="button" aria-haspopup="menu" aria-expanded="false"><i id="mode-control-icon" class="codicon codicon-comment-discussion" aria-hidden="true"></i><span class="composer-control-label">Mode</span><span id="mode-control-value" class="composer-control-value"></span><i class="codicon codicon-chevron-down"></i></button>
               <div id="mode-menu" class="composer-popover" role="menu" hidden></div>
+            </div>
+            <div id="skills-menu-shell" class="composer-menu composer-skills">
+              <button id="skills-control" class="composer-control" type="button" aria-haspopup="menu" aria-expanded="false"><i class="codicon codicon-library" aria-hidden="true"></i><span class="composer-control-label">Skills</span><span id="skills-control-value" class="composer-control-value">No skills</span><i class="codicon codicon-chevron-down" aria-hidden="true"></i></button>
+              <div id="skills-menu" class="composer-popover composer-skills-popover" role="menu" aria-label="Skills" hidden></div>
             </div>
             <div id="composer-extras" class="composer-extras">
             <div id="permission-menu-shell" class="composer-menu">

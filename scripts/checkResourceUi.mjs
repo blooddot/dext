@@ -61,7 +61,7 @@ try {
   assert.equal(await evaluate(`document.getElementById('permission-control-value').textContent`), "Project");
   assert.equal(await evaluate(`document.getElementById('resource-save').disabled`), true);
   await evaluate(`document.getElementById('mode-control').click()`);
-  assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('#mode-menu button span')).map(x=>x.textContent)`), ["API", "MCP", "Rule", "Skill"]);
+  assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('#mode-menu button span')).map(x=>x.textContent)`), ["API", "MCP", "Rule", "Skill", "File"]);
   await key("Escape", 27);
   await evaluate(`document.getElementById('permission-control').click()`);
   assert.equal(await evaluate(`document.getElementById('permission-menu').textContent.includes('C:/project/.dext/api')`), true);
@@ -105,7 +105,7 @@ try {
   const artifacts = resolve(".tmp-tb/resource-ui"); await mkdir(artifacts, { recursive: true });
   await evaluate(`document.querySelector('#code-editor textarea').focus()`);
   await send("Input.insertText", { text: "Refine this resource" });
-  const appearances = [["api", "symbol-method"], ["mcp", "plug"], ["rule", "law"], ["skill", "book"]];
+  const appearances = [["api", "symbol-method"], ["mcp", "plug"], ["rule", "law"], ["skill", "book"], ["file", "file"]];
   for (const [name, themeClass, background, foreground, accent] of [
     ["dark", "vscode-dark", "#181818", "#ddd", "#66aaff"],
     ["light", "vscode-light", "#fff", "#222", "#005fcc"],
@@ -140,7 +140,7 @@ try {
       await evaluate(`document.getElementById('mode-control').click()`);
       const items = await evaluate(`Array.from(document.querySelectorAll('#mode-menu button')).map(button=>({icon:button.querySelector('i').className,color:getComputedStyle(button).color,selected:button.getAttribute('aria-checked'),background:getComputedStyle(button).backgroundColor}))`);
       assert.deepEqual(items.map(item=>item.icon), appearances.map(([,glyph])=>`codicon codicon-${glyph}`));
-      assert.equal(new Set(items.map(item=>item.color)).size, 4);
+      assert.equal(new Set(items.map(item=>item.color)).size, appearances.length);
       assert.equal(items.find(item=>item.selected==='true').color, appearance.label);
       await evaluate(`document.querySelector('#mode-menu button[data-resource-type="${type}"]').focus()`);
       assert.equal(await evaluate(`getComputedStyle(document.activeElement).color`), appearance.label);
@@ -152,12 +152,110 @@ try {
       await new Promise(done => setTimeout(done, 80));
       assert.equal(await evaluate(`document.documentElement.scrollWidth <= innerWidth`), true, `${name}/${type} overflow`);
     }
-    assert.equal(colors.size, 4, `${name}: each resource has a distinct theme color`);
+    assert.equal(colors.size, appearances.length, `${name}: each resource has a distinct theme color`);
     assert.equal(disabledFills.size, 1, `${name}: disabled saves stay neutral`);
     const screenshot = await send("Page.captureScreenshot"); await writeFile(join(artifacts, `${name}.png`), Buffer.from(screenshot.data, "base64"));
   }
+  // Skills tree, slash completion, Describe | Import, AI report and narrow layout.
+  const skills = [
+    { id: "ponytail", title: "Ponytail", description: "Lean code", packId: "ponytail", packName: "Ponytail", commandIds: ["ponytail-review"] },
+    { id: "ponytail-review", title: "Review", description: "Review a change", packId: "ponytail", packName: "Ponytail", commandIds: [] }
+  ];
+  const skillCommands = [{ id: "ponytail-review", title: "Review", description: "Review a change", skillId: "ponytail", packId: "ponytail", packName: "Ponytail", syntax: "/ponytail-review" }];
+  await evaluate(`state={...state,skills:${JSON.stringify(skills)},skillCommands:${JSON.stringify(skillCommands)},skillsEnabled:true};host({type:'state',state});activate('chat');`);
+  assert.equal(await evaluate(`document.getElementById('skills-menu-shell').hidden`), false);
+  assert.equal(await evaluate(`document.getElementById('skills-control-value').textContent`), "No skills");
+  await evaluate(`document.getElementById('skills-control').click()`);
+  assert.equal(await evaluate(`document.querySelector('#skills-menu .composer-skill-pack').getAttribute('aria-checked')`), "unchecked");
+  assert.equal(await evaluate(`document.querySelector('#skills-menu').textContent.includes('Review')`), true);
+  await evaluate(`document.querySelector('#skills-menu .composer-skill-pack').click()`);
+  assert.deepEqual(await evaluate(`sent.filter(x=>x.type==='agentSelection').at(-1).selection.skills`), ["ponytail", "ponytail-review"]);
+  await evaluate(`host({type:'conversations',sessions,activeId:'chat',selection:{...selection,mode:'agent',skills:['ponytail']},planStatus:'new',hostInitiated:true})`);
+  assert.equal(await evaluate(`document.querySelector('#skills-menu .composer-skill-pack').getAttribute('aria-checked')`), "mixed");
+  assert.equal(await evaluate(`document.getElementById('skills-control-value').textContent`), "1 skill");
+  await evaluate(`Array.from(document.querySelectorAll('#skills-menu .composer-skill-option')).find(button=>button.textContent.includes('Review')).click()`);
+  assert.deepEqual(await evaluate(`sent.filter(x=>x.type==='agentSelection').at(-1).selection.skills`), ["ponytail", "ponytail-review"]);
+  await evaluate(`host({type:'conversations',sessions,activeId:'chat',selection:{...selection,mode:'agent',skills:['ponytail','ponytail-review']},planStatus:'new',hostInitiated:true});document.getElementById('skills-control').click()`);
+  assert.equal(await evaluate(`document.querySelector('#skills-menu .composer-skill-pack').getAttribute('aria-checked')`), "checked");
+
+  // Slash completion only offers a command whose skill is selected.
+  await evaluate(`document.body.click()`);
+  await evaluate(`document.querySelector('#code-editor textarea').focus()`);
+  await new Promise(done => setTimeout(done, 80));
+  await send("Input.dispatchKeyEvent", { type: "keyDown", key: "a", windowsVirtualKeyCode: 65, modifiers: 2 });
+  await send("Input.dispatchKeyEvent", { type: "keyUp", key: "a", windowsVirtualKeyCode: 65, modifiers: 2 });
+  await send("Input.dispatchKeyEvent", { type: "keyDown", key: "Backspace", windowsVirtualKeyCode: 8 });
+  await send("Input.dispatchKeyEvent", { type: "keyUp", key: "Backspace", windowsVirtualKeyCode: 8 });
+  await send("Input.dispatchKeyEvent", { type: "keyDown", key: "/", code: "Slash", windowsVirtualKeyCode: 191, text: "/" });
+  await send("Input.dispatchKeyEvent", { type: "keyUp", key: "/", code: "Slash", windowsVirtualKeyCode: 191 });
+  await evaluate(`host({type:'triggerSuggest'})`);
+  await new Promise(done => setTimeout(done, 350));
+  const slashRows = await evaluate(`Array.from(document.querySelectorAll('.suggest-widget .monaco-list-row')).map(row=>row.textContent)`);
+  assert.equal(slashRows.some((row) => row.includes("/ponytail-review")), true, `slash suggestions: ${JSON.stringify(slashRows)}`);
+  await evaluate(`document.querySelector('#code-editor textarea').focus()`);
+  await send("Input.dispatchKeyEvent", { type: "keyDown", key: "a", windowsVirtualKeyCode: 65, modifiers: 2 });
+  await send("Input.dispatchKeyEvent", { type: "keyUp", key: "a", windowsVirtualKeyCode: 65, modifiers: 2 });
+  await send("Input.dispatchKeyEvent", { type: "keyDown", key: "Backspace", windowsVirtualKeyCode: 8 });
+  await send("Input.dispatchKeyEvent", { type: "keyUp", key: "Backspace", windowsVirtualKeyCode: 8 });
+
+  // Describe | Import is available only for a pristine new Skill.
+  await evaluate(`resource={type:'skill',scope:'project'};activate('resource');`);
+  assert.equal(await evaluate(`document.getElementById('resource-source-toggle').hidden`), false);
+  assert.equal(await evaluate(`document.getElementById('resource-source-describe').getAttribute('aria-selected')`), "true");
+  assert.equal(await evaluate(`document.querySelector('.monaco-editor .editorPlaceholder')?.textContent`), "Describe the Skill to create…");
+  await evaluate(`document.getElementById('resource-source-import').click()`);
+  assert.equal(await evaluate(`document.getElementById('resource-source-import').getAttribute('aria-selected')`), "true");
+  assert.equal(await evaluate(`document.querySelector('.monaco-editor .editorPlaceholder')?.textContent`), "Paste a GitHub URL");
+  assert.equal(await evaluate(`getComputedStyle(document.getElementById('attach-files')).display`), "none");
+  assert.equal(await evaluate(`document.getElementById('run').disabled`), true);
+  assert.equal(await evaluate(`document.querySelector('#code-editor textarea').focus() || true`), true);
+  await send("Input.insertText", { text: "not a URL" });
+  await new Promise(done => setTimeout(done, 80));
+  assert.equal(await evaluate(`document.getElementById('run').disabled`), true);
+  await evaluate(`document.querySelector('#code-editor textarea').focus()`);
+  await send("Input.dispatchKeyEvent", { type: "keyDown", key: "a", windowsVirtualKeyCode: 65, modifiers: 2 });
+  await send("Input.dispatchKeyEvent", { type: "keyUp", key: "a", windowsVirtualKeyCode: 65, modifiers: 2 });
+  await send("Input.dispatchKeyEvent", { type: "keyDown", key: "Backspace", windowsVirtualKeyCode: 8 });
+  await send("Input.dispatchKeyEvent", { type: "keyUp", key: "Backspace", windowsVirtualKeyCode: 8 });
+  await send("Input.insertText", { text: "https://github.com/acme/ponytail" });
+  await new Promise(done => setTimeout(done, 80));
+  assert.equal(await evaluate(`document.getElementById('run').disabled`), false);
+  assert.equal(await evaluate(`document.getElementById('run').title`), "Import");
+  await evaluate(`document.getElementById('run').click()`);
+  assert.deepEqual(await evaluate(`sent.filter(x=>x.type==='executeInput').at(-1)`), { type: "executeInput", mode: "ask", source: "https://github.com/acme/ponytail", resourceSource: "import" });
+
+  // A draft hides the choice, and returning to a pristine Skill resets it to Describe.
+  await evaluate(`host({type:'resourceContext',sessionId:'resource',resource:{type:'skill',scope:'project',draft:{name:'ponytail',content:'# Ponytail'}}})`);
+  assert.equal(await evaluate(`document.getElementById('resource-source-toggle').hidden`), true);
+  await evaluate(`host({type:'resourceContext',sessionId:'resource',resource:{type:'skill',scope:'project'}})`);
+  assert.equal(await evaluate(`document.getElementById('resource-source-toggle').hidden`), false);
+  assert.equal(await evaluate(`document.getElementById('resource-source-describe').getAttribute('aria-selected')`), "true");
+
+  // The imported report is rendered before the Draft blocks.
+  const report = "# ponytail skill pack\n\nDiscovery: AI-assisted selection\n\nDraft: skills/ponytail/SKILL.md\n\n```text\n# Ponytail\n```";
+  await evaluate(`host({type:'executing',sessionId:'resource',value:true,turnId:'import-ai',source:'https://github.com/acme/ponytail',startedAt:Date.now(),mode:'ask'})`);
+  await evaluate(`host({type:'execution',sessionId:'resource',turnId:'import-ai',response:{kind:'workflow',executions:[{invocation:{kind:'invocation',method:'ask',arguments:[],source:'chat'},method:{id:'ask',title:'Ask',kind:'command',source:'builtin'},durationMs:1,result:{kind:'ask',text:${JSON.stringify(report)}}}]}})`);
+  await new Promise(done => setTimeout(done, 120));
+  assert.equal(await evaluate(`document.getElementById('result').textContent.includes('Discovery: AI-assisted selection')`), true);
+  assert.equal(await evaluate(`document.getElementById('result').textContent.includes('Draft: skills/ponytail/SKILL.md')`), true);
+  await evaluate(`host({type:'executing',sessionId:'resource',value:false,turnId:'import-ai'})`);
+
+  // Untrusted workspaces disable Skills with a reason; Code and Resource hide them.
+  await evaluate(`host({type:'state',state:{...state,skillsEnabled:false,skillsDisabledReason:'Skills require a trusted local workspace.'}});activate('chat');`);
+  assert.equal(await evaluate(`document.getElementById('skills-control').disabled`), true);
+  assert.equal(await evaluate(`document.getElementById('skills-control').title.includes('trusted')`), true);
+  await evaluate(`host({type:'conversations',sessions,activeId:'chat',selection:{...selection,mode:'code'},planStatus:'new',hostInitiated:true})`);
+  assert.equal(await evaluate(`document.getElementById('skills-menu-shell').hidden`), true);
+  await evaluate(`host({type:'conversations',sessions,activeId:'resource',selection:{...selection,mode:'ask'},planStatus:'new',resource:{type:'skill',scope:'project'},hostInitiated:true})`);
+  assert.equal(await evaluate(`document.getElementById('skills-menu-shell').hidden`), true);
+
+  await send("Emulation.setDeviceMetricsOverride", { width: 320, height: 800, deviceScaleFactor: 1, mobile: false });
+  await new Promise(done => setTimeout(done, 120));
+  assert.equal(await evaluate(`document.documentElement.scrollWidth <= innerWidth`), true, "320 skills/import layout");
+  assert.equal(await evaluate(`(()=>{const r=document.getElementById('resource-source-toggle').getBoundingClientRect();return r.left>=0&&r.right<=innerWidth;})()`), true);
+
   assert.deepEqual(await evaluate(`uiErrors`), []);
-  console.log("PASS: resource tab entry, four resource types, save destinations, shared composer, stop, scoped preview/save, tab isolation, save failure/retry, retained saved tab, four distinct resource palettes/icons, synchronized action colors, neutral disabled actions, keyboard focus, narrow dark/light/high-contrast themes. Screenshots: .tmp-tb/resource-ui");
+  console.log("PASS: resource tab entry, five resource types, save destinations, shared composer, stop, scoped preview/save, tab isolation, save failure/retry, retained saved tab, five distinct resource palettes/icons, synchronized action colors, neutral disabled actions, keyboard focus, pack tree with tri-state skills, selected-only slash completion, Describe/Import URL gating and resourceSource, AI report before Draft, hidden/disabled states, 320 px import layout, narrow dark/light/high-contrast themes. Screenshots: .tmp-tb/resource-ui");
 } finally {
   server.close();
   try { await shutdown?.(); } catch {}

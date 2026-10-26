@@ -45,6 +45,21 @@ describe("DextHistoryStore", () => {
     expect(turns[2]?.executePlan).toBeUndefined();
   });
 
+  it("persists skills, command and resource source on success and failure", async () => {
+    const state = new MemoryState();
+    const store = new DextHistoryStore(state as never);
+    const context = {
+      skills: ["ponytail-review"],
+      command: { id: "ponytail-review", skillId: "ponytail-review" },
+      resourceSource: "import" as const
+    };
+    await store.addSuccess("/ponytail-review src/a.ts", [], { kind: "workflow", executions: [] }, "session", "agent", "success", context);
+    await store.addFailure("/ponytail-review src/a.ts", [], new Error("failed"), "session", "agent", "failure", context);
+    const turns = new DextHistoryStore(state as never).list()[0]!.turns;
+    expect(turns[0]).toMatchObject({ ...context, input: "/ponytail-review src/a.ts" });
+    expect(turns[1]).toMatchObject({ ...context, input: "/ponytail-review src/a.ts", error: "failed" });
+  });
+
   it("keeps CLI bindings after deleting the final Dext record and reloading", async () => {
     const state = new MemoryState();
     const store = new DextHistoryStore(state as never);

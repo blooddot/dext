@@ -15,8 +15,10 @@ import type {
   DextHistoryRecord,
   DextHistorySession,
   ResourceSourceKind,
+  TurnCommandSnapshot,
   TurnRecordContext
 } from "../contracts/history.js";
+import { splitCommandInput } from "../../workflow/contracts/skill.js";
 import type {
   ActiveExecution,
   ConversationSessionPort,
@@ -160,10 +162,40 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
     if (this.activeExecutions.has(sessionId)) {
       throw new Error("Wait for this conversation's current Dext turn to finish before running another one.");
     }
+    const selection = this.options.selection(sessionId);
+    const profile = this.options.host.profiles().find((candidate) => candidate.id === selection.profileId)
+      ?? this.options.host.profiles()[0];
+    // Skills and commands belong to a conversation turn, never to Code or a
+    // resource draft. Resolve the command once so every Plan round sees the
+    // same expanded instruction.
+    const selectedSkills = mode === "code" || session.resource ? [] : [...(selection.skills ?? [])];
+    let command: TurnCommandSnapshot | undefined;
+    let commandInstruction: string | undefined;
+    let taskSource = source;
+    if (mode !== "code" && !session.resource && this.options.host.resolveSkillCommand) {
+      const invocation = splitCommandInput(source);
+      if (invocation) {
+        const resolved = this.options.host.resolveSkillCommand(invocation.commandId, selectedSkills, invocation.arguments);
+        if (resolved.status === "ok") {
+          command = { id: resolved.command.id, skillId: resolved.command.skillId };
+          commandInstruction = [
+            `The user invoked /${resolved.command.id} from the skill '${resolved.command.skillId}'.`,
+            resolved.command.instruction
+          ].join("\n\n");
+          taskSource = invocation.arguments || source;
+        } else if (resolved.status === "inactive") {
+          throw new Error(`/${invocation.commandId} requires the skill '${resolved.command.skillId}'. Select it in Skills first.`);
+        } else if (resolved.status === "invalid") {
+          throw new Error(`/${invocation.commandId} cannot run: ${resolved.reason}`);
+        } else {
+          throw new Error(`Unknown Dext command '/${invocation.commandId}'.`);
+        }
+      }
+    }
     const events: AgentStreamEvent[] = [];
     const turnId = randomBytes(12).toString("hex");
     const executionPlanPath = executePlan ? planPath ?? session.activePlanPath : planPath;
-    const plan: PlanRunContext = this.options.plans.startRun(session, source, executePlan, executionPlanPath);
+    const plan: PlanRunContext = this.options.plans.startRun(session, taskSource, executePlan, executionPlanPath);
     const { planRun, todoProgress, planExecution } = plan;
     let codeCallLog: readonly DextReplayEntry[] | undefined;
     const controller = new AbortController();
@@ -181,6 +213,8 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
     let outcome: PlanExecutionOutcome | undefined = planExecution?.planOutcome;
     const recordContext = (): TurnRecordContext => ({
       ...planExecution,
+      ...(selectedSkills.length ? { skills: selectedSkills } : {}),
+      ...(command ? { command } : {}),
       ...(session.resource ? { resourceSource } : {})
     });
     try {
@@ -189,9 +223,6 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
         this.options.events.append(sessionId, events, initial);
       }
       const priorConversation = conversationContext(session.turns);
-      const selection = this.options.selection(sessionId);
-      const profile = this.options.host.profiles().find((candidate) => candidate.id === selection.profileId)
-        ?? this.options.host.profiles()[0];
       const metadata = {
         agentSessionId: sessionId,
         // Snapshot the conversation's own Agent controls. The application-level
@@ -204,6 +235,8 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
         ...(selection.speed ? { speed: selection.speed } : {}),
         ...(selection.serviceTier ? { serviceTier: selection.serviceTier } : {}),
         ...(selection.permission ? { agentPermission: selection.permission } : {}),
+        ...(selectedSkills.length ? { skills: selectedSkills } : {}),
+        ...(commandInstruction ? { commandInstruction } : {}),
         ...(session.resource ? { resourceSource } : {}),
         agentPreset: harnessPresetOrDefault(selection.agentPreset),
         ...(mode === "code" ? { agentPermission: "full-access" as const } : {}),
@@ -237,7 +270,7 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
         }
       };
       let response: InputExecutionResponse;
-      let roundSource = todoProgress ? `${source}\n\nCurrent host task state (takes precedence over the document's unchecked boxes):\n${planTodoInstruction(todoProgress.snapshot())}` : source;
+      let roundSource = todoProgress ? `${taskSource}\n\nCurrent host task state (takes precedence over the document's unchecked boxes):\n${planTodoInstruction(todoProgress.snapshot())}` : taskSource;
       for (;;) {
         if (controller.signal.aborted) throw new Error(session.resource ? "Resource generation stopped by user." : "Plan execution stopped by user.");
         planRun?.beginRound();
@@ -250,7 +283,7 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
           onAgentSessionId: (provider: string, id: string) => { if (acceptingEvents) metadata.onAgentSessionId(provider, id); },
           ...(providerSession ? { conversationProviderSessionId: providerSession } : {}),
           ...(forkFrom ? { conversationForkFrom: forkFrom } : {}) };
-        if (planRun?.verifying) roundSource = planRun.prompt(source);
+        if (planRun?.verifying) roundSource = planRun.prompt(taskSource);
         try {
           if (session.resource) {
             const generated = await this.options.host.draftResource(session.resource, roundSource, roundMetadata);
@@ -296,7 +329,7 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
           ? "Dext: all tasks are reported complete; running final verification."
           : `Dext: ${todoProgress.snapshot().filter((item) => item.status !== "completed").length} tasks remain; continuing the plan.`, done: true };
         this.options.events.append(sessionId, events, notice);
-        roundSource = planRun.prompt(source, answers.join("\n"));
+        roundSource = planRun.prompt(taskSource, answers.join("\n"));
       }
       // The webview creates the visible row as soon as execution starts. Keep
       // that id when persisting the result so retry/delete actions still point

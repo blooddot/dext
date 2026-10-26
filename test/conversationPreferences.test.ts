@@ -100,6 +100,19 @@ describe("conversation preferences", () => {
     expect(store.conversationSelection("second")).toEqual(second);
   });
 
+  it("normalizes skills per conversation, keeps legacy selections, and caps the list", async () => {
+    const store = preferences();
+    const legacy = { mode: "agent" as const, permission: "workspace-write" as const, profileId: "codex", model: "gpt", reasoningEffort: "", speed: "", serviceTier: "" };
+    await store.setConversationSelection("legacy", legacy);
+    expect(store.conversationSelection("legacy")).toEqual(legacy);
+
+    await store.setConversationSelection("skills", { ...legacy, skills: ["ponytail", " ponytail ", "ponytail", "bad/id"] });
+    expect(store.conversationSelection("skills")?.skills).toEqual(["ponytail"]);
+
+    await store.setConversationSelection("many", { ...legacy, skills: Array.from({ length: 70 }, (_, index) => `skill-${index}`) });
+    expect(store.conversationSelection("many")?.skills).toHaveLength(64);
+  });
+
   it("restores the saved tabs and active conversation when the controller is created again", () => {
     const layout = { openConversationIds: ["one", "two"], activeConversationId: "two" };
     const first = createConversationHarness({ layout });

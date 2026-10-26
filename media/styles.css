@@ -3819,6 +3819,44 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .composer-menu-optio
   outline-offset: -1px;
 }
 
+/* Skills control: pack rows and their skills share the composer menu surface. */
+.composer-controls.skills-compact .composer-skills .composer-control-label {
+  display: none;
+}
+.composer-skills .composer-control-value {
+  max-width: 92px;
+}
+.composer-skills.has-skills .composer-control-value {
+  color: var(--vscode-textLink-foreground, var(--vscode-focusBorder));
+}
+.composer-skills-popover {
+  min-width: 236px;
+  max-width: min(340px, calc(100vw - 24px));
+  max-height: 330px;
+  overflow-y: auto;
+}
+.composer-skill-option {
+  grid-template-columns: 14px minmax(0, 1fr);
+}
+.composer-skill-option[data-level="1"] {
+  padding-left: 20px;
+}
+.composer-skill-pack {
+  font-weight: 600;
+}
+.composer-skill-commands {
+  display: block;
+  overflow: hidden;
+  color: var(--vscode-descriptionForeground);
+  font-size: 10px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-skill-option[aria-checked="mixed"] > .codicon {
+  color: var(--vscode-textLink-foreground, var(--vscode-focusBorder));
+}
+
 /* Describe | Import: one explicit choice above the shared Skill input. */
 .resource-source-toggle {
   display: inline-flex;
