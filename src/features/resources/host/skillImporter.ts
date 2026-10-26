@@ -22,7 +22,8 @@ import {
   type SkillCandidateSummary,
   type SkillImportAnalyzer
 } from "../domain/skillImportAnalysis.js";
-import { fetchGithubArchive, type FetchedArchive } from "./githubArchive.js";
+import type { FetchedArchive } from "./githubArchive.js";
+import { fetchGithubSkillSnapshot } from "./githubSkillSnapshot.js";
 
 export const SKILL_PACK_MAX_FILES = 128;
 export const SKILL_PACK_MAX_BYTES = 1_000_000;
@@ -106,13 +107,14 @@ function repositoryName(source: GithubSource): string {
  * outer skill, and a root SKILL.md owns the whole repository. */
 export function discoverSkillCandidates(
   files: ReadonlyMap<string, Uint8Array>,
-  repository: string
+  repository: string,
+  indexedPaths: readonly string[] = [...files.keys()]
 ): SkillDiscovery {
-  const commandFiles = [...files.keys()].filter((path) => /\.md$/i.test(path) && COMMAND_ROOTS.some((root) => path.startsWith(`${root}/`)));
+  const commandFiles = indexedPaths.filter((path) => /\.md$/i.test(path) && COMMAND_ROOTS.some((root) => path.startsWith(`${root}/`)));
   // Only repository metadata is skipped outright. Test, example and documentation
   // copies stay candidates so the ambiguity check can send them to the analyzer
   // instead of importing or silently dropping one.
-  const paths = [...files.keys()].filter((path) => /(?:^|\/)SKILL\.md$/i.test(path)
+  const paths = indexedPaths.filter((path) => /(?:^|\/)SKILL\.md$/i.test(path)
     && !path.split("/").some((segment) => segment === ".git" || segment === "node_modules"));
   if (!paths.length) return { candidates: [], valid: [], deterministic: false, ignoredDuplicates: [], commandFiles };
   let skillPaths: string[];
@@ -137,7 +139,7 @@ export function discoverSkillCandidates(
     const source = files.get(skillPath)!;
     const text = decodeText(source);
     const metadata = text === undefined ? undefined : parseSkillMetadata(text, id);
-    const owned = [...files.keys()].filter((path) => directory === "" ? true : path === skillPath || path.startsWith(`${directory}/`)).sort();
+    const owned = indexedPaths.filter((path) => directory === "" ? true : path === skillPath || path.startsWith(`${directory}/`)).sort();
     let reason: string | undefined;
     if (!isSkillId(id)) reason = `Invalid skill id '${String(id)}'.`;
     else if (source.byteLength > SKILL_FILE_MAX_BYTES) reason = `SKILL.md is larger than ${SKILL_FILE_MAX_BYTES} bytes.`;
@@ -235,35 +237,46 @@ function ambiguityFailure(source: GithubSource, candidates: readonly SkillCandid
   ].join("\n"));
 }
 
-/** Fetches the repository, chooses a pack, validates every selected skill and
+/** Indexes the repository, chooses a pack, fetches and validates selected files and
  * returns a reviewable draft. No file is written here. */
 export async function importSkillPack(input: string, options: ImportSkillPackOptions = {}): Promise<SkillPackDraft> {
   const parsed = parseGithubUrl(input);
   if ("error" in parsed) throw new Error(parsed.error);
   const source = parsed.source;
-  const archive = options.archive ?? await fetchGithubArchive(source, {
+  const snapshot = options.archive ? undefined : await fetchGithubSkillSnapshot(source, {
     ...(options.fetch ? { fetch: options.fetch } : {}),
     ...(options.signal ? { signal: options.signal } : {}),
     ...(options.limits ? { limits: options.limits } : {})
   });
+  const archive = options.archive ?? snapshot!;
   if (options.signal?.aborted) throw new Error("Skill import stopped by user.");
   const allFiles = archive.files;
-  // Repository-root links resolve their branch during download, so report and
-  // candidate URLs should use the branch that was actually fetched.
+  // Report links carry the ref actually used (HEAD for repository roots).
   const reportSource: GithubSource = { ...source, ref: source.ref ?? archive.ref };
   // A tree link imports only the subtree it points at; a blob or raw link only
   // its own skill directory. Root LICENSE files stay visible for provenance.
   const prefix = source.kind === "blob" || source.kind === "tree" || source.kind === "raw" ? source.path : "";
-  const files = new Map<string, Uint8Array>();
-  for (const [path, bytes] of allFiles) {
+  const paths = (snapshot?.paths ?? [...allFiles.keys()]).filter((path) => {
     const rootLicense = !path.includes("/") && LICENSE_NAME.test(path);
-    if (!prefix || path === prefix || path.startsWith(`${prefix}/`) || rootLicense) files.set(path, bytes);
-  }
+    return !prefix || path === prefix || path.startsWith(`${prefix}/`) || rootLicense;
+  });
+  const files = new Map<string, Uint8Array>();
+  const loadFiles = async (requested: readonly string[]): Promise<void> => {
+    if (options.signal?.aborted) throw new Error("Skill import stopped by user.");
+    await snapshot?.loadFiles(requested);
+    for (const path of requested) {
+      const bytes = allFiles.get(path);
+      if (bytes) files.set(path, bytes);
+    }
+  };
+  // Discovery reads only SKILL.md contents; supporting names come from the index.
+  await loadFiles(paths.filter((path) => /(?:^|\/)SKILL\.md$/i.test(path)
+    && !path.split("/").some((segment) => segment === ".git" || segment === "node_modules")));
   if ((source.kind === "blob" || source.kind === "raw")
     && !files.has(`${source.path ? `${source.path}/` : ""}SKILL.md`)) {
     throw new Error(`The linked SKILL.md was not found in the downloaded archive: ${source.skillFile ?? source.path}.`);
   }
-  const discovery = discoverSkillCandidates(files, repositoryName(source));
+  const discovery = discoverSkillCandidates(files, repositoryName(source), paths);
   if (!discovery.candidates.length) {
     if (discovery.commandFiles.length) {
       throw new Error("This repository contains commands but no SKILL.md. Dext imports skill packs, not command-only repositories.");
@@ -328,6 +341,12 @@ export async function importSkillPack(input: string, options: ImportSkillPackOpt
       skipped.push({ path: candidate.directory || ".", reason: excluded?.reason ?? "not selected by the analysis" });
     }
   }
+
+  await loadFiles([
+    ...selected.flatMap((candidate) => candidate.files),
+    ...discovery.commandFiles,
+    ...paths.filter((path) => !path.includes("/") && LICENSE_NAME.test(path))
+  ]);
 
   // Full validation of the selected set: any failure aborts the whole pack.
   const records: SkillPackSkillRecord[] = [];

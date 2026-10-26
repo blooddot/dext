@@ -93,9 +93,9 @@ function response(body: Uint8Array | string | null, init: { status?: number; hea
 
 describe("GitHub archive extraction", () => {
   it("keeps the documented download and expansion caps", () => {
-    expect(DEFAULT_ARCHIVE_LIMITS.maxCompressedBytes).toBe(10 * 1024 * 1024);
-    expect(DEFAULT_ARCHIVE_LIMITS.maxExpandedBytes).toBe(25 * 1024 * 1024);
-    expect(DEFAULT_ARCHIVE_LIMITS.timeoutMs).toBe(20_000);
+    expect(DEFAULT_ARCHIVE_LIMITS.maxCompressedBytes).toBe(50 * 1024 * 1024);
+    expect(DEFAULT_ARCHIVE_LIMITS.maxExpandedBytes).toBe(200 * 1024 * 1024);
+    expect(DEFAULT_ARCHIVE_LIMITS.timeoutMs).toBe(60_000);
   });
 
   it("strips the repository root and records the commit", () => {
@@ -150,6 +150,32 @@ describe("GitHub archive extraction", () => {
 });
 
 describe("fetchGithubArchive", () => {
+  it("cancels an oversized streaming download without buffering the entire response", async () => {
+    const cancel = vi.fn();
+    let reads = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) { reads++; controller.enqueue(new Uint8Array(64)); },
+      cancel
+    }, { highWaterMark: 0 });
+    const fetch = vi.fn(async () => new Response(body));
+    const source: GithubSource = { ...githubRepo(), ref: "main" };
+    await expect(fetchGithubArchive(source, { fetch: fetch as never, limits: { maxCompressedBytes: 100 } }))
+      .rejects.toThrow("download limit");
+    expect(reads).toBe(2);
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("cancels a declared oversized response before reading its body", async () => {
+    const cancel = vi.fn();
+    const pull = vi.fn();
+    const body = new ReadableStream<Uint8Array>({ pull, cancel }, { highWaterMark: 0 });
+    const fetch = vi.fn(async () => new Response(body, { headers: { "content-length": "101" } }));
+    await expect(fetchGithubArchive({ ...githubRepo(), ref: "main" }, { fetch: fetch as never, limits: { maxCompressedBytes: 100 } }))
+      .rejects.toThrow("download limit");
+    expect(pull).not.toHaveBeenCalled();
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
   it("caches the default branch and downloads one snapshot", async () => {
     resetGithubArchiveCache();
     const api = vi.fn(async () => response(JSON.stringify({ default_branch: "main" })));

@@ -11,10 +11,10 @@ export interface ArchiveLimits {
 }
 
 export const DEFAULT_ARCHIVE_LIMITS: ArchiveLimits = {
-  maxCompressedBytes: 10 * 1024 * 1024,
-  maxExpandedBytes: 25 * 1024 * 1024,
+  maxCompressedBytes: 50 * 1024 * 1024,
+  maxExpandedBytes: 200 * 1024 * 1024,
   maxFiles: 5_000,
-  timeoutMs: 20_000
+  timeoutMs: 60_000
 };
 
 export interface ExtractedArchive {
@@ -238,16 +238,18 @@ async function resolveRef(
   return { ref: (await cached).branch };
 }
 
-async function fetchBuffer(
+export async function fetchGithubBytes(
   url: string,
   fetcher: typeof globalThis.fetch,
   signal: AbortSignal,
-  limits: ArchiveLimits
+  limits: ArchiveLimits,
+  label = "The GitHub archive",
+  accept = "application/octet-stream"
 ): Promise<Uint8Array> {
   let current = url;
   for (let redirects = 0; redirects <= 5; redirects++) {
     const response = await fetcher(current, {
-      headers: { "User-Agent": "Dext", Accept: "application/octet-stream" },
+      headers: { "User-Agent": "Dext", Accept: accept },
       redirect: "manual",
       signal
     });
@@ -259,16 +261,51 @@ async function fetchBuffer(
       current = next;
       continue;
     }
-    if (!response.ok) throw new Error(`GitHub returned ${response.status} while downloading the archive.`);
-    const length = Number(response.headers.get("content-length") ?? "");
-    if (Number.isFinite(length) && length > limits.maxCompressedBytes) {
-      throw new Error(`The GitHub archive is larger than ${limits.maxCompressedBytes} bytes.`);
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new GithubHttpError(response.status);
     }
-    const body = new Uint8Array(await response.arrayBuffer());
-    if (body.byteLength > limits.maxCompressedBytes) throw new Error(`The GitHub archive is larger than ${limits.maxCompressedBytes} bytes.`);
+    const length = Number(response.headers.get("content-length") ?? "");
+    const tooLarge = (): Error => new Error(`${label} exceeds the ${(limits.maxCompressedBytes / 1024 / 1024).toFixed(1)} MiB download limit.`);
+    if (Number.isFinite(length) && length > limits.maxCompressedBytes) {
+      await response.body?.cancel();
+      throw tooLarge();
+    }
+    const reader = response.body?.getReader();
+    // Keep support for injected fetch implementations without a readable body.
+    if (!reader) {
+      const body = new Uint8Array(await response.arrayBuffer());
+      if (body.byteLength > limits.maxCompressedBytes) throw tooLarge();
+      return body;
+    }
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > limits.maxCompressedBytes) throw tooLarge();
+        chunks.push(value);
+      }
+    } catch (error) {
+      await reader.cancel().catch(() => {});
+      throw error;
+    } finally {
+      reader.releaseLock();
+    }
+    const body = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) { body.set(chunk, offset); offset += chunk.byteLength; }
     return body;
   }
   throw new Error("GitHub redirected the archive too many times.");
+}
+
+export class GithubHttpError extends Error {
+  constructor(readonly status: number) {
+    super(`GitHub returned ${status} while downloading repository files.`);
+  }
 }
 
 /** Downloads and extracts one public repository snapshot in memory. */
@@ -284,7 +321,7 @@ export async function fetchGithubArchive(source: GithubSource, options: FetchArc
   else options.signal?.addEventListener("abort", abort, { once: true });
   try {
     const resolved = await resolveRef(source, fetcher, controller.signal, apiBase);
-    const archive = await fetchBuffer(
+    const archive = await fetchGithubBytes(
       `${codeloadBase}/${source.owner}/${source.repo}/tar.gz/${encodeURIComponent(resolved.ref)}`,
       fetcher,
       controller.signal,
