@@ -250,7 +250,7 @@ declare module "dext" {
   /** Render Template — Render text from a Dext template. The template declares the fields and the model only supplies their values, so the structure, section order and list markers always come from the template; the rendered output is validated as markdown, text, json, toml or yaml. It returns text only and writes nothing: import Node's fs and write it yourself. */
   export function template(options: { input: string; source: string; values?: Record<string, unknown>; skills?: string | string[]; rules?: string | string[]; workspace?: DirectoryReference | DirRef; cli?: "codex" | "claude" | "deepseek-harness"; model?: "sonnet" | "opus" | AgentModelOptions }): Promise<TemplateResult>;
 
-  /** Apply Patch — Validate and apply a typed edit result to the current trusted workspace. */
+  /** Apply Patch — Apply the patch carried by an AgentResult. A valid AgentResult without a patch is allowed and returns unchanged; malformed patch payloads still throw. */
   export function apply(options: { result: DextResult }): Promise<ApplyResult>;
 
   /** Run Terminal Command — Run a command in a trusted local workspace and return captured output. The command runs without a confirmation prompt, so a workflow decides what is safe to run. */
