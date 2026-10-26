@@ -71,7 +71,7 @@ Dext 把文件放在每个工作区一个长期存活的 Node 子进程中运行
 
 ## 内置 API
 
-- 点击侧栏的 **Create resource**，打开复用 Conversation 和 Input 布局的专用 Tab。底部选择 **API / MCP / Rule / Skill** 和 **Project / Global**（菜单显示保存目录）。可以选择 **New resource** 新建，或选择已有资源描述修改；预览草稿或差异后保存。草稿可包含独立的 rules、模板和 skill 支持文件；API 通过文件名引用规则。预览时可选择文件，保存会检查所有文件的冲突并一起写入。保存后保留 Tab，方便继续修改；更改已有资源的保存位置表示连同关联文件另存一份。资源目标、关联文件、草稿和对话会随历史记录恢复。
+- 点击侧栏的 **Create resource**，打开复用 Conversation 和 Input 布局的专用 Tab。底部选择 **API / MCP / Rule / Skill** 和 **Project / Global**（菜单显示保存目录）。可以选择 **New resource** 新建，或选择已有资源描述修改；预览草稿或差异后保存。新建 Skill 时还提供 **Describe | Import**：Import 以确定性方式安装 GitHub Skill 包，仅在候选有歧义时调用 Agent，并且仍需显式 Create。草稿可包含独立的 rules、模板和 skill 支持文件；API 通过文件名引用规则。预览时可选择文件，保存会检查所有文件的冲突并一起写入。保存后保留 Tab，方便继续修改；更改已有资源的保存位置表示连同关联文件另存一份。资源目标、关联文件、草稿和对话会随历史记录恢复。
 - `ask({ input, workspace?, cli?, model? }) -> AskResult`：只读解释和分析。
 - `plan({ input, workspace?, cli?, model? }) -> PlanResult`：创建、维护和执行实施计划。
 - `agent({ input, apply=true, patch=true, workspace?, cli?, model? }) -> AgentResult`：执行持续性任务；`patch=false` 时只以 text 汇报结论，不产出补丁。
@@ -361,6 +361,24 @@ History 子对话的悬浮操作栏和右键菜单依次提供重命名、分叉
 内置 API 从 `dext` 模块导入，始终可用；`import` 就是普通 ESM，因此也可以引入 Node 内置模块、工作区文件、以 `dext/api/<id>` 导入的自定义 API 和 npm 包。只有工作区被 VS Code 标记为受信任后，才会读取外部文件。
 
 Skill 是显式的包。`skill({ skill: "name", input })` 加载指定的 `SKILL.md` 并注入当前 Agent 任务。查找顺序为 `<workspace>/.dext/skills`、**Project > Overview > Project configuration** 中的项目 Skill 目录、Dext 全局存储；同名时靠前的位置优先。`create` 可以在项目或全局范围创建 Skill。
+
+### 会话级 Skills 与命令
+
+输入框底部的 **Skills** 控件只为当前会话选择 Skill。已安装的包是父节点，包内 Skill 在其下；包复选框是三态的，勾选整个包即选中其全部 Skill。新会话、资源标签页、Code 模式，以及没有保存过选择的旧标签页，初始都没有 Skill。宿主会丢弃已卸载的 id；如果 Skill 在标签页保存选择之后被卸载，本轮会明确失败，而不是静默忽略。
+
+选中的 Skill 会注入到本轮用户文本之前。Plan 模式仍把计划指令和响应格式边界放在最后，因此 Skill 不能替换 Dext 的文档契约。Skill 和提示词命令都需要受信任的本地工作区。
+
+包清单还可以安装只读的 `/command` 提示词模板。在聊天输入的首个 token 输入 `/`，补全列表只显示其 Skill 已被选中的命令。命令会替换 `$ARGUMENTS`（没有占位符时把剩余文本追加到末尾），命令正文在 Skills 之后、Plan 指令之前注入。命令只是惰性文本：Dext 不会执行 shell、hook 或位置参数；语法不受支持的命令会在导入时报告，并且永远不会写入。
+
+### 从 GitHub 导入 Skill 包
+
+新建 Skill 时，输入框上方有 **Describe | Import**。Describe 是默认模式，交给模型生成。Import 只接受一个公开的 `https://github.com/...` 仓库链接、`tree` 链接、指向 `SKILL.md` 的 `blob` 链接，或 `raw.githubusercontent.com/.../SKILL.md`。在 Describe 下粘贴裸 GitHub 链接会被拒绝并提示切换 Import，不会发送给模型。
+
+Import 是确定性安装器，只有候选存在歧义时才使用当前 Agent。Dext 在内存中下载仓库 tarball，递归扫描链接范围内的 `SKILL.md`；嵌套的 `SKILL.md` 视为外层 Skill 的附带文件，根目录的 `SKILL.md` 则拥有整个仓库。只有一个候选，或所有候选都是同一个非根目录（例如 `skills/`）的直接子目录时，不调用模型。只有候选分散在互不相关的目录时，Agent 才会收到受限元数据——目录、id、截断到 300 字符的名称和描述、文件数、浅校验状态——并且只返回选择结果。返回的每个路径都必须对应真实候选；未知、重复、越界、低置信度或空选择都会失败，并列出每个候选的 `tree` 链接；没有可用 Agent 时同样失败，绝不猜测。
+
+Create 之前，每个被选中的 Skill 都会完整校验（front matter、标量 description、非空正文、id、安全路径、128 个文件、总计 1 MB、单文件 200 KB）；任一选中项失败则整包失败。front matter 格式非法会失败，但缺少 front matter 只是警告。草稿把每个 Skill 放在 `skills/<id>/`，在 `skill-packs/<pack>/` 下写入清单和报告，把可用提示词命令复制到 `skill-packs/<pack>/commands/`，并在仓库提供 LICENSE 时保留它。Import 本身不写盘。Create 原子写入整个包，重新检查已存在的包目录和 Skill 目录，并且不会自动启用新 Skill；之后需在 Skills 控件中勾选。
+
+Import 不支持私有仓库、凭据、端口、查询串、GitLab/Bitbucket、npm 包、二进制附带文件（会跳过并警告）、可执行 hook，也不支持更新已安装的包。只有命令、没有 Skill 的仓库，或直接指向命令文件的 URL，都不是 Skill，会被拒绝。
 
 规则是 `.dext/rules/` 下的有序策略文件，规则路径只会在该目录下解析。`.dext/rules/plan.md` 会替换 Plan 模式默认的计划文档指令。`agent`、`ask`、`plan`、`template` 也可以为单次调用指定 `skills` 和 `rules`——`await agent({ input: "…", rules: ["review.md"] })`。它们是 `internal`，因为从不作为控制字段转发给提供方；而生成的声明恰好会在这四个 API 上列出它们，因为这是调用方自己写的选项。Dext 先加载所选 Skills，再按顺序加载规则，因此调用的窄规则会约束通用的 Skill 流程；这些内容注入 Agent 指令。`ui.*` 等待用户回答后继续同一个工作流。
 
