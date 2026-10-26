@@ -31,6 +31,8 @@ npm run package
 
 此命令先执行 lint、类型检查、单元测试、构建和 Webview 资源检查，再生成 `release/dext-<版本号>.vsix`。版本号来自 `package.json`。
 
+打包会校验随扩展发布的类型声明和 API 参考。工作区 `.dext/` 不会进入 VSIX，且可能被已安装的扩展重新生成，因此其声明是否最新通过 `npm run check:workspace-types` 单独检查。需要按当前源码刷新时，运行 `npm run generate:dext-types -- --workspace .`。
+
 `release/` 会自动创建，已被 Git 忽略，也不会包含在 VSIX 中。不同版本的安装包会保留；重新打包同一版本会覆盖对应文件。例如 `0.1.1` 的输出为 `release/dext-0.1.1.vsix`。
 
 ### 包体为什么这么大
