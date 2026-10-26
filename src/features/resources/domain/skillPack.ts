@@ -19,6 +19,7 @@ export interface SkillPackSkillRecord {
   name: string;
   description: string;
   directory: string;
+  agent?: string;
   commands: string[];
   warnings: string[];
 }
@@ -30,6 +31,8 @@ export interface SkillPackCommandRecord {
   skillId: string;
   /** Repository path of the command template. */
   source: string;
+  agent?: string;
+  warnings?: string[];
   /** Installed path relative to `.dext/`, when the command is available. */
   file?: string;
   status: "available" | "unavailable";
@@ -54,6 +57,8 @@ export interface SkillPackManifest {
   name: string;
   version: 1;
   source: string;
+  targetAgent?: string;
+  notes?: string[];
   commit?: string;
   license?: string;
   importedAt: string;
@@ -103,6 +108,7 @@ export function normalizeSkillPackManifest(value: unknown, fallbackId: string): 
       name: text(skill.name) ?? id,
       description: text(skill.description) ?? "",
       directory: text(skill.directory) ?? "",
+      ...(text(skill.agent) ? { agent: text(skill.agent)! } : {}),
       commands: strings(skill.commands),
       warnings: strings(skill.warnings)
     }];
@@ -120,6 +126,8 @@ export function normalizeSkillPackManifest(value: unknown, fallbackId: string): 
       description: text(command.description) ?? "",
       skillId,
       source: text(command.source) ?? "",
+      ...(text(command.agent) ? { agent: text(command.agent)! } : {}),
+      ...(Array.isArray(command.warnings) ? { warnings: strings(command.warnings) } : {}),
       ...(text(command.file) ? { file: text(command.file)! } : {}),
       status,
       ...(text(command.reason) ? { reason: text(command.reason)! } : {})
@@ -146,6 +154,8 @@ export function normalizeSkillPackManifest(value: unknown, fallbackId: string): 
     name: text(data.name) ?? fallbackId,
     version: 1,
     source: text(data.source) ?? "",
+    ...(text(data.targetAgent) ? { targetAgent: text(data.targetAgent)! } : {}),
+    ...(Array.isArray(data.notes) ? { notes: strings(data.notes) } : {}),
     ...(text(data.commit) ? { commit: text(data.commit)! } : {}),
     ...(text(data.license) ? { license: text(data.license)! } : {}),
     importedAt: text(data.importedAt) ?? "",
@@ -168,6 +178,7 @@ export function formatSkillPackReport(manifest: SkillPackManifest): string {
     `# ${manifest.name} skill pack`,
     "",
     `- Source: ${manifest.source || "unknown"}`,
+    ...(manifest.targetAgent ? [`- Import target: ${manifest.targetAgent} (files are selected at import time; switching Agent does not replace them)`] : []),
     ...(manifest.commit ? [`- Commit: ${manifest.commit}`] : []),
     `- Imported: ${manifest.importedAt}`,
     `- Discovery: ${manifest.analysis.mode === "ai" ? "AI-assisted selection" : "deterministic"}`,
@@ -177,6 +188,13 @@ export function formatSkillPackReport(manifest: SkillPackManifest): string {
       ? manifest.commands.map((command) => `${command.id} (${command.status})`).join(", ")
       : "none"}`
   ];
+  lines.push("", "## Selected sources", "");
+  for (const skill of manifest.skills) lines.push(`- Skill ${skill.id}: ${skill.directory || "."} (${skill.agent ?? "shared"})`);
+  for (const command of manifest.commands.filter((item) => item.status === "available")) {
+    lines.push(`- Command /${command.id}: ${command.source} (${command.agent ?? "shared"})`);
+    for (const warning of command.warnings ?? []) lines.push(`  - ${warning}`);
+  }
+  if (manifest.notes?.length) lines.push("", "## Import notes", "", ...manifest.notes.map((note) => `- ${note}`));
   if (manifest.analysis.skipped.length) {
     lines.push("", "## Skipped candidates", "");
     for (const entry of manifest.analysis.skipped) lines.push(`- ${entry.path}: ${entry.reason}`);
@@ -184,7 +202,7 @@ export function formatSkillPackReport(manifest: SkillPackManifest): string {
   if (manifest.commands.some((command) => command.status === "unavailable")) {
     lines.push("", "## Unavailable commands", "");
     for (const command of manifest.commands.filter((item) => item.status === "unavailable")) {
-      lines.push(`- ${command.id}: ${command.reason ?? "unsupported"}`);
+      lines.push(`- ${command.id} (${command.source}): ${command.reason ?? "unsupported"}`);
     }
   }
   return lines.join("\n");

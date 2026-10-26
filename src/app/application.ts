@@ -44,6 +44,7 @@ import type { ProjectWorkspaceSettings } from "../features/project/contracts/pro
 import type { ProjectAiProvider } from "../features/project/host/generation/projectAiGeneration.js";
 import { RESOURCE_DIRECTORIES, mergeResourceFiles, resourceFileName, resourceFiles, resourcePathSegments, resourcePrompt, type ResourceDocument, type ResourceFileLimits, type ResourceKind, type ResourceScope, type ResourceSession, type ResourceTarget } from "../features/resources/contracts/resourceSession.js";
 import { importSkillPack, preflightSkillPack, SKILL_PACK_MAX_FILES, type ImportSkillPackOptions, type SkillPackDraft } from "../features/resources/host/skillImporter.js";
+import { skillImportChoices } from "../features/resources/host/skillImportPicker.js";
 import { looksLikeGithubUrl } from "../features/resources/domain/skillSource.js";
 import {
   parseSkillImportSelectionText,
@@ -1097,8 +1098,11 @@ export class DextApplication {
         throw new Error("Import needs a single public GitHub repository, tree, or SKILL.md URL.");
       }
       const started = Date.now();
+      const profileId = metadata.agent ?? this.agents?.currentSelection().profileId;
+      const preferredAgent = this.agents?.list().find((profile) => profile.id === profileId)?.provider;
       const imported = await this.importSkillPack(input.trim(), {
         analyzer: this.skillImportAnalyzer(metadata),
+        ...skillImportChoices(preferredAgent, metadata.signal),
         ...(metadata.signal ? { signal: metadata.signal } : {})
       });
       resource.origin = "import";

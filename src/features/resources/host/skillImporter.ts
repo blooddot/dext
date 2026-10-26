@@ -1,7 +1,7 @@
 import { basename, dirname } from "node:path";
 import { isSkillCommandId, isSkillId } from "../../workflow/contracts/skill.js";
 import { parseSkillMetadata, type SkillMetadata } from "../../workflow/domain/skillMetadata.js";
-import { parseCommandSource } from "../../workflow/domain/skillCommand.js";
+import { parseCommandSource, type ParsedSkillCommand } from "../../workflow/domain/skillCommand.js";
 import type { ResourceDocument, ResourceFile } from "../contracts/resourceSession.js";
 import { parseGithubUrl, githubTreeUrl, type GithubSource } from "../domain/skillSource.js";
 import {
@@ -24,6 +24,8 @@ import {
 } from "../domain/skillImportAnalysis.js";
 import type { FetchedArchive } from "./githubArchive.js";
 import { fetchGithubSkillSnapshot } from "./githubSkillSnapshot.js";
+import type { ImportVariantOptions } from "../domain/skillImportVariants.js";
+import { PLUGIN_MANIFEST, fileHash, logicalSkillDirectory, selectCommandVariants, selectSkillVariants, skillSourceDeclarations, sourceAgent } from "./skillVariants.js";
 
 export const SKILL_PACK_MAX_FILES = 128;
 export const SKILL_PACK_MAX_BYTES = 1_000_000;
@@ -72,7 +74,7 @@ export interface SkillPackDraft {
   primarySkillId: string;
 }
 
-export interface ImportSkillPackOptions {
+export interface ImportSkillPackOptions extends ImportVariantOptions {
   analyzer?: SkillImportAnalyzer;
   signal?: AbortSignal;
   fetch?: typeof globalThis.fetch;
@@ -132,7 +134,7 @@ export function discoverSkillCandidates(
     }
   }
 
-  const grouped = new Map<string, SkillCandidate[]>();
+  const candidates: SkillCandidate[] = [];
   for (const skillPath of skillPaths) {
     const directory = dirname(skillPath) === "." ? "" : dirname(skillPath);
     const id = directory ? basename(directory) : repository;
@@ -153,35 +155,12 @@ export function discoverSkillCandidates(
       files: owned,
       shallow: reason ? { ok: false, reason } : { ok: true }
     };
-    const folded = id.toLowerCase();
-    grouped.set(folded, [...(grouped.get(folded) ?? []), candidate]);
+    candidates.push(candidate);
   }
+  return classifySkillCandidates(candidates, commandFiles);
+}
 
-  // A repository that ships adapter copies (for example `.openclaw/skills/`)
-  // beside its canonical `skills/` must not fail: prefer the visible copy and
-  // report the hidden one. Two visible directories with the same id are a real
-  // conflict and still fail.
-  const candidates: SkillCandidate[] = [];
-  const ignoredDuplicates: Array<{ path: string; reason: string }> = [];
-  for (const group of grouped.values()) {
-    if (group.length === 1) {
-      candidates.push(group[0]!);
-      continue;
-    }
-    const canonical = group.filter((candidate) => !candidate.directory.split("/").some((segment) => segment.startsWith(".")));
-    if (canonical.length !== 1) {
-      const directories = group.map((candidate) => `'${candidate.directory || "."}'`).join(" and ");
-      throw new Error(`Two skill directories resolve to the same id '${group[0]!.id}': ${directories}. Rename one before importing.`);
-    }
-    candidates.push(canonical[0]!);
-    for (const duplicate of group) {
-      if (duplicate === canonical[0]) continue;
-      ignoredDuplicates.push({
-        path: duplicate.directory || ".",
-        reason: `Duplicate adapter copy of '${canonical[0]!.id}'; the canonical directory is '${canonical[0]!.directory || "."}'.`
-      });
-    }
-  }
+function classifySkillCandidates(candidates: SkillCandidate[], commandFiles: string[], ignoredDuplicates: SkillDiscovery["ignoredDuplicates"] = [], logicalDirectory: (path: string) => string = (path) => path): SkillDiscovery {
   candidates.sort((left, right) => left.directory.localeCompare(right.directory));
 
   const valid = candidates.filter((candidate) => candidate.shallow.ok);
@@ -191,18 +170,18 @@ export function discoverSkillCandidates(
     // A lone copy under docs/, examples/ or test/ is still a copy: ask the
     // analyzer rather than installing whatever documentation the repository
     // happens to ship.
-    deterministic = !hasDenylistedSegment(valid[0]!.directory);
+    deterministic = !hasDenylistedSegment(logicalDirectory(valid[0]!.directory));
     if (!deterministic) {
       ambiguity = `The only candidate is inside a documentation, test, or example directory: '${valid[0]!.directory}'.`;
     }
   } else if (valid.length > 1) {
-    const parents = new Set(valid.map((candidate) => dirname(candidate.directory)));
+    const parents = new Set(valid.map((candidate) => dirname(logicalDirectory(candidate.directory))));
     const parent = parents.size === 1 ? [...parents][0]! : undefined;
     const allDirectChildren = parent !== undefined
       && parent !== "."
       && parent !== ""
-      && valid.every((candidate) => candidate.directory !== "" && dirname(candidate.directory) === parent);
-    if (allDirectChildren && !hasDenylistedSegment(parent) && !valid.some((candidate) => hasDenylistedSegment(candidate.directory))) {
+      && valid.every((candidate) => candidate.directory !== "" && dirname(logicalDirectory(candidate.directory)) === parent);
+    if (allDirectChildren && !hasDenylistedSegment(parent) && !valid.some((candidate) => hasDenylistedSegment(logicalDirectory(candidate.directory)))) {
       deterministic = true;
     } else {
       ambiguity = valid.length === 1
@@ -272,17 +251,27 @@ export async function importSkillPack(input: string, options: ImportSkillPackOpt
   // Discovery reads only SKILL.md contents; supporting names come from the index.
   await loadFiles(paths.filter((path) => /(?:^|\/)SKILL\.md$/i.test(path)
     && !path.split("/").some((segment) => segment === ".git" || segment === "node_modules")));
+  await loadFiles((snapshot?.paths ?? [...allFiles.keys()]).filter((path) => PLUGIN_MANIFEST.test(path)));
+  const declarations = skillSourceDeclarations(allFiles);
   if ((source.kind === "blob" || source.kind === "raw")
     && !files.has(`${source.path ? `${source.path}/` : ""}SKILL.md`)) {
     throw new Error(`The linked SKILL.md was not found in the downloaded archive: ${source.skillFile ?? source.path}.`);
   }
-  const discovery = discoverSkillCandidates(files, repositoryName(source), paths);
-  if (!discovery.candidates.length) {
-    if (discovery.commandFiles.length) {
+  const discovered = discoverSkillCandidates(files, repositoryName(source), paths);
+  if (!discovered.candidates.length) {
+    if (discovered.commandFiles.length) {
       throw new Error("This repository contains commands but no SKILL.md. Dext imports skill packs, not command-only repositories.");
     }
     throw new Error("No SKILL.md was found in the linked repository directory. Dext will not generate a skill from a README.");
   }
+  const scopedAgent = sourceAgent(source.path, declarations);
+  const explicitSource = source.kind !== "repo" && (source.kind !== "tree" || scopedAgent !== "shared"
+    || /^(?:skills|\.agents\/skills)(?:\/|$)/.test(source.path)
+    || discovered.candidates.some((candidate) => candidate.directory === source.path));
+  const variants = await selectSkillVariants(discovered.candidates, (path) => snapshot?.fileHashes?.get(path)
+    ?? (allFiles.has(path) ? fileHash(allFiles.get(path)!) : undefined), declarations, options,
+    explicitSource ? scopedAgent : undefined);
+  const discovery = classifySkillCandidates(variants.candidates, discovered.commandFiles, variants.skipped, (path) => logicalSkillDirectory(path, declarations));
   const shallowInvalid = discovery.candidates.filter((candidate) => !candidate.shallow.ok);
   if (!discovery.valid.length) {
     throw new Error([
@@ -385,6 +374,7 @@ export async function importSkillPack(input: string, options: ImportSkillPackOpt
       name: metadata.name ?? candidate.id,
       description: metadata.description,
       directory: candidate.directory,
+      agent: sourceAgent(candidate.directory, declarations),
       commands: [],
       warnings
     });
@@ -395,6 +385,7 @@ export async function importSkillPack(input: string, options: ImportSkillPackOpt
   const packId = skillPackId(packName);
   const commands: SkillPackCommandRecord[] = [];
   const commandFiles = new Map<string, Uint8Array>();
+  const validCommands: Array<{ path: string; agent: string; id: string; identity: string; bytes: Uint8Array; parsed: ParsedSkillCommand; mapping: string }> = [];
   const selectedIds = new Set(selected.map((candidate) => candidate.id));
   for (const path of [...discovery.commandFiles].sort()) {
     if (!/\.md$/i.test(path) || !files.has(path)) continue;
@@ -425,13 +416,6 @@ export async function importSkillPack(input: string, options: ImportSkillPackOpt
       });
       continue;
     }
-    if (commands.some((command) => command.id === id)) {
-      commands.push({
-        id, title: parsedCommand.title, description: parsedCommand.description, skillId: mapping,
-        source: path, status: "unavailable", reason: `Duplicate command id '${id}'.`
-      });
-      continue;
-    }
     if (!isSkillCommandId(id)) {
       commands.push({
         id, title: parsedCommand.title, description: parsedCommand.description, skillId: mapping,
@@ -439,11 +423,24 @@ export async function importSkillPack(input: string, options: ImportSkillPackOpt
       });
       continue;
     }
+    validCommands.push({ path, agent: sourceAgent(path, declarations), id, identity: fileHash(bytes), bytes, parsed: parsedCommand, mapping });
+  }
+  const commandVariants = await selectCommandVariants(validCommands, variants.targetAgent, options);
+  for (const { source: candidate, reason } of commandVariants.skipped) {
+    commands.push({ id: candidate.id, title: candidate.parsed.title, description: candidate.parsed.description,
+      skillId: candidate.mapping, source: candidate.path, agent: candidate.agent, status: "unavailable", reason });
+  }
+  for (const candidate of commandVariants.selected) {
+    const { id, path, agent, bytes, parsed: parsedCommand, mapping } = candidate;
     const installed = `${SKILL_PACKS_DIRECTORY}/${packId}/${SKILL_PACK_COMMANDS_DIRECTORY}/${id}.md`;
     commandFiles.set(installed, bytes);
     const record: SkillPackCommandRecord = {
       id, title: parsedCommand.title, description: parsedCommand.description, skillId: mapping,
-      source: path, file: installed, status: "available"
+      source: path, agent, file: installed, status: "available",
+      warnings: [
+        ...(agent !== "shared" && agent !== variants.targetAgent ? [`Adapted a compatible ${agent} prompt template for '${variants.targetAgent}'.`] : []),
+        ...(parsedCommand.ignoredKeys.length ? [`Ignored routing fields: ${parsedCommand.ignoredKeys.join(", ")}; the conversation's Agent is used.`] : [])
+      ]
     };
     commands.push(record);
     const skill = records.find((item) => item.id === mapping);
@@ -456,6 +453,8 @@ export async function importSkillPack(input: string, options: ImportSkillPackOpt
     name: packName,
     version: 1,
     source: input.trim(),
+    targetAgent: variants.targetAgent,
+    notes: declarations.notes,
     ...(archive.commit ? { commit: archive.commit } : {}),
     ...(licenses[0] ? { license: licenses[0] } : {}),
     importedAt: new Date().toISOString(),

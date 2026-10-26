@@ -144,7 +144,7 @@ describe("skill pack import", () => {
       .rejects.toThrow("No candidate skill passed validation");
   });
 
-  it("prefers a canonical skill over an adapter copy with the same id and reports it", async () => {
+  it("deduplicates identical skill trees and reports the shared source", async () => {
     const files = archive({
       "skills/review/SKILL.md": skill("review"),
       ".openclaw/skills/review/SKILL.md": skill("review"),
@@ -153,7 +153,7 @@ describe("skill pack import", () => {
     const result = await importSkillPack("https://github.com/acme/skills", { archive: files });
     expect(result.manifest.skills.map((item) => item.id)).toEqual(["review"]);
     expect(result.manifest.analysis.skipped).toEqual([
-      { path: ".openclaw/skills/review", reason: expect.stringContaining("Duplicate adapter copy") }
+      { path: ".openclaw/skills/review", reason: expect.stringContaining("Identical skill tree") }
     ]);
   });
 

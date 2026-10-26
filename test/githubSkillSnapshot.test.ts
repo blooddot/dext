@@ -34,6 +34,23 @@ function backend(contents: Record<string, string>, extra: Entry[] = [], truncate
 afterEach(() => vi.restoreAllMocks());
 
 describe("selective GitHub skill downloads", () => {
+  it("compares blob hashes and downloads support only for the selected Agent version", async () => {
+    const { fetch, tree } = backend({
+      "skills/review/SKILL.md": skill("review"),
+      "skills/review/reference.md": "Shared support",
+      ".codex/skills/review/SKILL.md": skill("review"),
+      ".codex/skills/review/reference.md": "Codex support"
+    });
+    for (const entry of tree) entry.sha = entry.path.endsWith("SKILL.md") ? "1".repeat(40)
+      : entry.path.startsWith(".codex") ? "2".repeat(40) : "3".repeat(40);
+    const chooseTarget = vi.fn(async () => "codex");
+    const result = await importSkillPack(ROOT, { fetch: fetch as never, chooseTarget });
+    expect(chooseTarget).toHaveBeenCalledOnce();
+    expect(result.manifest.skills[0]?.directory).toBe(".codex/skills/review");
+    expect(fetch.mock.calls.some(([url]) => String(url).endsWith("/skills/review/reference.md") && !String(url).includes("/.codex/"))).toBe(false);
+    expect(result.draft.files).toContainEqual({ path: "skills/review/reference.md", content: "Codex support" });
+  });
+
   it("selects before downloading support and ignores unrelated oversized assets", async () => {
     const { fetch } = backend({
       "packages/a/review/SKILL.md": skill("review"),
