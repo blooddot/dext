@@ -176,17 +176,36 @@ describe("fetchGithubArchive", () => {
     expect(cancel).toHaveBeenCalledOnce();
   });
 
-  it("caches the default branch and downloads one snapshot", async () => {
+  it("downloads the latest release tag for a repository URL", async () => {
     resetGithubArchiveCache();
-    const api = vi.fn(async () => response(JSON.stringify({ default_branch: "main" })));
+    const release = vi.fn(async () => response(JSON.stringify({ tag_name: "v2.0.0", draft: false, prerelease: false })));
     const codeload = vi.fn(async () => response(fixture(["SKILL.md"])));
-    const fetch = vi.fn(async (input: string) => String(input).startsWith("https://api.github.com") ? api() : codeload());
+    const fetch = vi.fn(async (input: string) => String(input).endsWith("/releases/latest") ? release() : codeload());
+    const result = await fetchGithubArchive(githubRepo(), { fetch: fetch as never });
+    expect(result.ref).toBe("v2.0.0");
+    expect(result.releaseTag).toBe("v2.0.0");
+    const urls = fetch.mock.calls.map(([input]) => String(input));
+    expect(urls.some((url) => url.includes("codeload.github.com") && url.includes("tar.gz/v2.0.0"))).toBe(true);
+    expect(codeload).toHaveBeenCalledOnce();
+  });
+
+  it("caches the default branch and downloads one snapshot when no release exists", async () => {
+    resetGithubArchiveCache();
+    const release = vi.fn(async () => response(null, { status: 404 }));
+    const repo = vi.fn(async () => response(JSON.stringify({ default_branch: "main" })));
+    const codeload = vi.fn(async () => response(fixture(["SKILL.md"])));
+    const fetch = vi.fn(async (input: string) => {
+      const url = String(input);
+      return url.endsWith("/releases/latest") ? release() : url.startsWith("https://api.github.com") ? repo() : codeload();
+    });
     const first = await fetchGithubArchive(githubRepo(), { fetch: fetch as never });
     expect(first.ref).toBe("main");
+    expect(first.releaseTag).toBeUndefined();
     expect(first.commit).toBe("abc1234");
     expect(first.files.has("SKILL.md")).toBe(true);
     await fetchGithubArchive(githubRepo(), { fetch: fetch as never });
-    expect(api).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledTimes(2);
+    expect(repo).toHaveBeenCalledOnce();
     expect(codeload).toHaveBeenCalledTimes(2);
   });
 
@@ -221,7 +240,7 @@ describe("fetchGithubArchive", () => {
     resetGithubArchiveCache();
     const denied = vi.fn(async () => response(JSON.stringify({}), { status: 403 }));
     await expect(fetchGithubArchive(githubRepo(), { fetch: denied as never }))
-      .rejects.toThrow("GitHub returned 403");
+      .rejects.toThrow("could not resolve the latest release");
   });
 
   it("uses a ref from the URL without calling the API", async () => {

@@ -1,6 +1,6 @@
 import type { ApiReferenceMember, ApiReferenceModule } from "../../workflow/contracts/apiReference.js";
 import type { EditorTabState } from "../../../platform/editor-tabs/editorTabState.js";
-import type { ResourceDefinitionDocument, ResourceEntry, ResourceListDocument, ResourcePanelOptions, ResourceTreeNode } from "../contracts/resourceDocuments.js";
+import type { ResourceDefinitionDocument, ResourceEntry, ResourceListDocument, ResourcePackRef, ResourcePanelOptions, ResourceTreeNode } from "../contracts/resourceDocuments.js";
 import { RESOURCE_LABELS, resourceDirectorySegments, type ResourceKind, type ResourceScope } from "../contracts/resourceSession.js";
 import { renderApiFlow } from "./apiFlowDiagram.js";
 import { resourceIcon } from "./resourceIcons.js";
@@ -175,6 +175,28 @@ export function resourceDirectoryButton(prefix: string, scope?: ResourceScope): 
 }
 
 
+/** The installed release line shown beside a pack name. */
+export function resourcePackVersion(pack: Pick<ResourcePackRef, "upstreamVersion" | "releaseTag" | "commit">): string {
+  if (pack.releaseTag) return pack.releaseTag;
+  if (pack.upstreamVersion) return `v${pack.upstreamVersion.replace(/^v/i, "")}`;
+  return pack.commit ? `@${pack.commit.slice(0, 7)}` : "";
+}
+
+
+function renderSkillPack(pack: ResourcePackRef, entries: readonly ResourceEntry[], collapsed: Set<string>, prefix: string): string {
+  const node = `Skill/${pack.id}`;
+  const version = resourcePackVersion(pack);
+  const action = pack.updatable
+    ? `<span class="resource-group-actions resource-pack-actions"><button type="button" class="resource-icon-button" data-resource-command="${prefix}.upgradeSkillPack" data-resource-pack="${escapeResourceHtml(pack.id)}" data-resource-kind="skill" title="Update ${escapeResourceHtml(pack.name)} to the latest GitHub version" aria-label="Update ${escapeResourceHtml(pack.name)}">${resourceIcon("upgrade")}</button></span>`
+    : "";
+  return `<details class="resource-group resource-pack" data-resource-group="Skill" data-resource-node="${escapeResourceHtml(node)}" data-resource-type="skill" data-resource-pack="${escapeResourceHtml(pack.id)}"${collapsed.has(node) ? "" : " open"}>`
+    + `<summary><span class="resource-group-toggle" data-resource-toggle="${escapeResourceHtml(node)}">${escapeResourceHtml(pack.name)}</span>`
+    + (version ? `<span class="resource-pack-version">${escapeResourceHtml(version)}</span>` : "")
+    + `<span class="resource-count">${entries.length}</span>${action}<span class="resource-group-chevron" aria-hidden="true">⌄</span></summary>`
+    + `<ul>${[...entries].sort((left, right) => left.name.localeCompare(right.name)).map((entry) => renderTreeEntry(entry, prefix)).join("")}</ul></details>`;
+}
+
+
 export function countTreeNodeEntries(node: ResourceTreeNode): number {
   return node.entries.length + [...node.children.values()].reduce((total, child) => total + countTreeNodeEntries(child), 0);
 }
@@ -264,12 +286,25 @@ export function renderCategoryTree(document: ResourceListDocument, collapsed: Se
   return document.groups.map((group) => {
     const kind = resourceKindForLabel(group.label);
     const type = kind ?? "";
+    const packs = new Map<string, { pack: ResourcePackRef; entries: ResourceEntry[] }>();
+    const loose: ResourceEntry[] = [];
+    for (const entry of group.entries) {
+      if (kind === "skill" && entry.pack) {
+        const current = packs.get(entry.pack.id) ?? { pack: entry.pack, entries: [] };
+        current.entries.push(entry);
+        packs.set(entry.pack.id, current);
+      } else loose.push(entry);
+    }
     const root = buildResourceTree(newTreeNode("", group.label),
-      group.entries.map((entry) => ({ entry, parts: categoryTreePath(entry, kind) })));
+      loose.map((entry) => ({ entry, parts: categoryTreePath(entry, kind) })));
+    const packHtml = kind === "skill"
+      ? [...packs.values()].sort((left, right) => left.pack.name.localeCompare(right.pack.name))
+        .map(({ pack, entries }) => renderSkillPack(pack, entries, collapsed, prefix)).join("")
+      : "";
     return `<details class="resource-group" data-resource-group="${escapeResourceHtml(group.label)}" data-resource-node="${escapeResourceHtml(group.label)}" data-resource-type="${escapeResourceHtml(type)}"${collapsed.has(group.label) ? "" : " open"}>`
       + `<summary><span class="resource-group-toggle" data-resource-toggle="${escapeResourceHtml(group.label)}">${escapeResourceHtml(group.label)}</span><span class="resource-count">${group.entries.length}</span>`
       + `<span class="resource-group-actions">${resourceToggleButton(`data-resource-group-action="toggle" data-resource-group-target="${escapeResourceHtml(group.label)}"`, group.label, !collapsed.has(group.label))}</span>`
-      + `<span class="resource-group-chevron" aria-hidden="true">⌄</span></summary><ul>${renderTreeContents(root, collapsed, type, prefix)}</ul>`
+      + `<span class="resource-group-chevron" aria-hidden="true">⌄</span></summary><ul>${packHtml}${renderTreeContents(root, collapsed, type, prefix)}</ul>`
       + (group.entries.length ? "" : `<p class="resource-empty">No ${escapeResourceHtml(group.label)} resources found.</p>`) + `</details>`;
   }).join("");
 }
@@ -335,9 +370,10 @@ export function resourceClientScript(state?: EditorTabState): string {
       var direction=element.getAttribute('data-resource-navigate'),command=element.getAttribute('data-resource-command'),id=element.getAttribute('data-resource-open');
       var message=direction?{type:'resourceNavigate',direction:direction}:command?{
         type:'resourceCommand',command:command,kind:element.getAttribute('data-resource-kind')||undefined,
-        path:element.getAttribute('data-resource-path')||undefined,id:element.getAttribute('data-resource-id')||undefined
+        path:element.getAttribute('data-resource-path')||undefined,id:element.getAttribute('data-resource-id')||undefined,
+        pack:element.getAttribute('data-resource-pack')||undefined
       }:id?{type:'resourceOpen',id:id}:null;
-      if(message){if(document.querySelector('.resource-navigation'))message.viewState=viewState();api.postMessage(message);}
+      if(message){if(command&&message.type==='resourceCommand')event.preventDefault();if(document.querySelector('.resource-navigation'))message.viewState=viewState();api.postMessage(message);}
     });
     document.addEventListener('toggle',function(event){
       var node=event.target;if(!node.matches('[data-resource-node]'))return;

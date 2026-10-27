@@ -58,10 +58,15 @@ export interface SkillPackAnalysis {
 
 export interface SkillPackManifest {
   name: string;
+  /** Manifest format, not the upstream package version. */
   version: 1 | 2;
   source: string;
   targetAgent?: string;
   notes?: string[];
+  /** Version declared by the repository's package.json or plugin manifest. */
+  upstreamVersion?: string;
+  /** Published GitHub release tag the pack was downloaded from. */
+  releaseTag?: string;
   commit?: string;
   license?: string;
   importedAt: string;
@@ -159,6 +164,8 @@ export function normalizeSkillPackManifest(value: unknown, fallbackId: string): 
     name: text(data.name) ?? fallbackId,
     version: data.version === 2 ? 2 : 1,
     source: text(data.source) ?? "",
+    ...(text(data.upstreamVersion) ? { upstreamVersion: text(data.upstreamVersion)! } : {}),
+    ...(text(data.releaseTag) ? { releaseTag: text(data.releaseTag)! } : {}),
     ...(text(data.targetAgent) ? { targetAgent: text(data.targetAgent)! } : {}),
     ...(Array.isArray(data.notes) ? { notes: strings(data.notes) } : {}),
     ...(text(data.commit) ? { commit: text(data.commit)! } : {}),
@@ -183,6 +190,8 @@ export function formatSkillPackReport(manifest: SkillPackManifest): string {
     `# ${manifest.name} skill pack`,
     "",
     `- Source: ${manifest.source || "unknown"}`,
+    ...(manifest.releaseTag ? [`- Release: ${manifest.releaseTag}`] : []),
+    ...(manifest.upstreamVersion ? [`- Upstream version: ${manifest.upstreamVersion}`] : []),
     ...(manifest.version === 2 ? ["- Versions: all imported; each turn uses its Agent's version, then shared"]
       : manifest.targetAgent ? [`- Import target: ${manifest.targetAgent} (fixed legacy import)`] : []),
     ...(manifest.commit ? [`- Commit: ${manifest.commit}`] : []),

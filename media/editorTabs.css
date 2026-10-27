@@ -72,6 +72,10 @@ html:has(.project-panel) { scrollbar-gutter: stable; }
 .resource-group > summary::-webkit-details-marker { display: none; }
 .resource-group-toggle { flex: 1; }
 .resource-group-actions { display: inline-flex; margin-left: auto; }
+.resource-pack > summary .resource-pack-actions { opacity: 0; pointer-events: none; }
+.resource-pack > summary:hover .resource-pack-actions, .resource-pack > summary:focus-within .resource-pack-actions { opacity: 1; pointer-events: auto; }
+.resource-pack-version { color: var(--vscode-descriptionForeground); font-size: 11px; font-weight: 400; }
+@media (hover: none) { .resource-pack > summary .resource-pack-actions { opacity: 1; pointer-events: auto; } }
 .resource-group-chevron { transition: transform 120ms ease; }
 .resource-group:not([open]) .resource-group-chevron { transform: rotate(-90deg); }
 .resource-tree-actions { display: inline-flex; gap: 4px; margin-left: auto; }

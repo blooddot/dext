@@ -44,6 +44,14 @@ const COMMAND_ROOTS = [
   ".github/commands"
 ];
 const LICENSE_NAME = /^(?:licen[cs]e|copying)(?:\.(?:md|txt))?$/i;
+/** Root metadata that declares the repository's own release version. */
+const VERSION_MANIFEST_PATHS = [
+  "package.json",
+  ".claude-plugin/plugin.json",
+  ".codex-plugin/plugin.json",
+  ".openclaw-plugin/plugin.json",
+  ".opencode-plugin/plugin.json"
+];
 
 export interface SkillCandidate {
   /** Repository-relative directory; empty for a root SKILL.md. */
@@ -93,6 +101,24 @@ function decodeText(bytes: Uint8Array): string | undefined {
 
 function isBinary(bytes: Uint8Array): boolean {
   return bytes.includes(0);
+}
+
+/** The repository's declared release, preferring a package version over plugin
+ * metadata. A repository that ships neither keeps only its commit pin. */
+function repositoryVersion(files: ReadonlyMap<string, Uint8Array>): string | undefined {
+  for (const path of VERSION_MANIFEST_PATHS) {
+    const bytes = files.get(path);
+    const text = bytes ? decodeText(bytes) : undefined;
+    if (!text) continue;
+    try {
+      const value = JSON.parse(text) as unknown;
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        const version = (value as Record<string, unknown>).version;
+        if (typeof version === "string" && version.trim()) return version.trim();
+      }
+    } catch { /* A malformed metadata file is not a reason to reject the pack. */ }
+  }
+  return undefined;
 }
 
 function hasDenylistedSegment(path: string): boolean {
@@ -252,6 +278,16 @@ export async function importSkillPack(input: string, options: ImportSkillPackOpt
   await loadFiles(paths.filter((path) => /(?:^|\/)SKILL\.md$/i.test(path)
     && !path.split("/").some((segment) => segment === ".git" || segment === "node_modules")));
   await loadFiles((snapshot?.paths ?? [...allFiles.keys()]).filter((path) => PLUGIN_MANIFEST.test(path)));
+  // A version manifest belongs to the repository, not the linked subtree, so it
+  // is read even for a tree or blob import. It is optional metadata: a missing,
+  // linked or oversized file must not make an otherwise valid pack unimportable.
+  try {
+    await loadFiles((snapshot?.paths ?? [...allFiles.keys()]).filter((path) => VERSION_MANIFEST_PATHS.includes(path)));
+  } catch (error) {
+    if (options.signal?.aborted) throw error;
+    /* Keep the commit pin when the release metadata is unavailable. */
+  }
+  const upstreamVersion = repositoryVersion(files);
   const declarations = skillSourceDeclarations(allFiles);
   if ((source.kind === "blob" || source.kind === "raw")
     && !files.has(`${source.path ? `${source.path}/` : ""}SKILL.md`)) {
@@ -466,11 +502,17 @@ export async function importSkillPack(input: string, options: ImportSkillPackOpt
 
   const licenses = [...allFiles.keys()].filter((path) => !path.includes("/") && LICENSE_NAME.test(path)).sort();
   const licenseBytes = licenses[0] ? allFiles.get(licenses[0]) : undefined;
+  const notes = [...declarations.notes];
+  if (!source.ref && !archive.releaseTag) {
+    notes.push("No published GitHub release was found; the default branch was imported.");
+  }
   const manifest: SkillPackManifest = {
     name: packName,
     version: 2,
     source: input.trim(),
-    notes: declarations.notes,
+    ...(upstreamVersion ? { upstreamVersion } : {}),
+    ...(archive.releaseTag ? { releaseTag: archive.releaseTag } : {}),
+    notes,
     ...(archive.commit ? { commit: archive.commit } : {}),
     ...(licenses[0] ? { license: licenses[0] } : {}),
     importedAt: new Date().toISOString(),

@@ -1,7 +1,7 @@
 import { applyEdits, modify } from "jsonc-parser/lib/esm/main.js";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { isAbsolute, join, relative as relativePath, sep } from "node:path";
+import { isAbsolute, join, relative as relativePath, resolve, sep } from "node:path";
 import * as vscode from "vscode";
 import type { AgentAssertionSnapshot } from "../features/agents/host/agentAssertions.js";
 import { DefaultAgentRunner } from "../features/agents/host/agentRouter.js";
@@ -46,7 +46,10 @@ import { DextStorage } from "../platform/vscode/dextStorage.js";
 import type { ProjectWorkspaceSettings } from "../features/project/contracts/projectSettings.js";
 import type { ProjectAiProvider } from "../features/project/host/generation/projectAiGeneration.js";
 import { RESOURCE_DIRECTORIES, mergeResourceFiles, resourceFileName, resourceFiles, resourcePathSegments, resourcePrompt, type ResourceDocument, type ResourceFileLimits, type ResourceKind, type ResourceScope, type ResourceSession, type ResourceTarget } from "../features/resources/contracts/resourceSession.js";
+import type { ResourcePackRef } from "../features/resources/contracts/resourceDocuments.js";
 import { importSkillPack, preflightSkillPack, SKILL_PACK_MAX_FILES, SKILL_PACK_MAX_BYTES, SKILL_FILE_MAX_BYTES, SKILL_SUPPORT_FILE_MAX_BYTES, type ImportSkillPackOptions, type SkillPackDraft } from "../features/resources/host/skillImporter.js";
+import { isSkillPackId, normalizeSkillPackManifest, skillPackId, SKILL_PACK_MANIFEST_FILE, SKILL_PACK_SOURCE_FILE, SKILL_PACKS_DIRECTORY, SKILLS_DIRECTORY, type SkillPackManifest } from "../features/resources/domain/skillPack.js";
+import { buildSkillPackUpgradePlan, compareSkillPackContent, type InstalledSkillPack } from "../features/resources/domain/skillPackUpgrade.js";
 import { looksLikeGithubUrl } from "../features/resources/domain/skillSource.js";
 import {
   parseSkillImportSelectionText,
@@ -59,6 +62,43 @@ import {
  * bytes of source, so a large workspace cannot flood the Webview channel. */
 const COMPOSER_MODULE_LIMIT = 200;
 const COMPOSER_MODULE_BYTES = 2 * 1024 * 1024;
+
+export interface SkillPackUpgradeConfirmation {
+  label: string;
+  detail: string;
+  from: string;
+  to: string;
+  remove: string[];
+}
+
+export interface SkillPackUpgradeHost {
+  confirm(plan: SkillPackUpgradeConfirmation): Promise<boolean>;
+  dirtyPaths(): readonly string[];
+  trash(path: string): Promise<void>;
+}
+
+export interface SkillPackUpgradeResult {
+  updated: boolean;
+  cancelled?: boolean;
+  /** Release metadata was rewritten without replacing any pack content. */
+  refreshed?: boolean;
+  name: string;
+  from: string;
+  to: string;
+  /** Short commit pins, when the replacement moved to another commit. */
+  commitFrom?: string;
+  commitTo?: string;
+}
+
+function skillPackRelease(manifest: Pick<SkillPackManifest, "upstreamVersion" | "releaseTag" | "commit">): string {
+  if (manifest.releaseTag) return manifest.releaseTag;
+  if (manifest.upstreamVersion) return `v${manifest.upstreamVersion.replace(/^v/i, "")}`;
+  return manifest.commit ? manifest.commit.slice(0, 7) : "unknown";
+}
+
+function shortCommit(commit: string | undefined): string | undefined {
+  return commit ? commit.slice(0, 7) : undefined;
+}
 
 /** The TypeScript sources below an API root, without requiring a workspace folder.
  * `workspace.findFiles` searches the workspace, while Dext's global API directory lives
@@ -964,11 +1004,12 @@ export class DextApplication {
     return vscode.Uri.joinPath(folder.uri, ".dext", RESOURCE_DIRECTORIES[type]);
   }
 
-  async listResources(type: ResourceKind): Promise<Array<{ name: string; path: string; scope: ResourceScope }>> {
-    const items: Array<{ name: string; path: string; scope: ResourceScope }> = [];
+  async listResources(type: ResourceKind): Promise<Array<{ name: string; path: string; scope: ResourceScope; pack?: ResourcePackRef }>> {
+    const items: Array<{ name: string; path: string; scope: ResourceScope; pack?: ResourcePackRef }> = [];
     for (const scope of ["project", "global"] as const) {
       if (scope === "project" && (!vscode.workspace.workspaceFolders?.[0] || !this.workspaceTrusted)) continue;
       const root = this.resourceRoot(type, scope);
+      const owned = type === "skill" ? await this.skillPackRefs(scope) : undefined;
       const visit = async (directory: vscode.Uri, prefix = "", depth = 0): Promise<void> => {
         if (depth > 12 || items.length >= 2000) return;
         let entries: [string, vscode.FileType][];
@@ -981,12 +1022,288 @@ export class DextApplication {
           if (type === "api" && path.endsWith(".d.ts")) continue;
           try { resourcePathSegments(type, path); } catch { continue; }
           const label = type === "file" ? path : type === "api" ? path.slice(0, -3).replaceAll("/", ".") : type === "skill" ? path.split("/").at(-2)! : name.replace(/\.(?:md|jsonc?)$/, "");
-          items.push({ name: label, path, scope });
+          const pack = owned?.get(path);
+          items.push({ name: label, path, scope, ...(pack ? { pack } : {}) });
         }
       };
       await visit(root);
     }
     return items.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /** Installed canonical skills tagged with the pack that owns them, so the
+   * Resources page can group a pack and offer its update action. */
+  private async skillPackRefs(scope: ResourceScope): Promise<Map<string, ResourcePackRef>> {
+    const result = new Map<string, ResourcePackRef>();
+    const directory = vscode.Uri.joinPath(this.resourceBase(scope), "skill-packs");
+    let entries: [string, vscode.FileType][];
+    try { entries = await vscode.workspace.fs.readDirectory(directory); }
+    catch (error) { if (error instanceof vscode.FileSystemError && error.code === "FileNotFound") return result; throw error; }
+    for (const [id] of entries) {
+      if (!isSkillPackId(id)) continue;
+      let manifest: SkillPackManifest | undefined;
+      try {
+        const source = new TextDecoder().decode(await vscode.workspace.fs.readFile(vscode.Uri.joinPath(directory, id, "pack.json")));
+        manifest = normalizeSkillPackManifest(JSON.parse(source) as unknown, id);
+      } catch { continue; }
+      if (!manifest) continue;
+      const ref: ResourcePackRef = {
+        id,
+        name: manifest.name,
+        ...(manifest.upstreamVersion ? { upstreamVersion: manifest.upstreamVersion } : {}),
+        ...(manifest.releaseTag ? { releaseTag: manifest.releaseTag } : {}),
+        ...(manifest.commit ? { commit: manifest.commit } : {}),
+        updatable: Boolean(manifest.source)
+      };
+      for (const skill of manifest.skills) {
+        if (skill.file?.startsWith("skills/")) result.set(skill.file.slice("skills/".length), ref);
+        else if (!skill.agent || skill.agent === "shared") result.set(`${skill.id}/SKILL.md`, ref);
+      }
+    }
+    return result;
+  }
+
+  private async readInstalledSkillPacks(scope: ResourceScope): Promise<Array<InstalledSkillPack & { sourceText: string }>> {
+    const directory = vscode.Uri.joinPath(this.resourceBase(scope), "skill-packs");
+    let entries: [string, vscode.FileType][];
+    try { entries = await vscode.workspace.fs.readDirectory(directory); }
+    catch (error) { if (error instanceof vscode.FileSystemError && error.code === "FileNotFound") return []; throw error; }
+    const packs: Array<InstalledSkillPack & { sourceText: string }> = [];
+    for (const [id, type] of entries) {
+      if (type !== vscode.FileType.Directory || !isSkillPackId(id)) continue;
+      try {
+        const sourceText = new TextDecoder().decode(await vscode.workspace.fs.readFile(vscode.Uri.joinPath(directory, id, "pack.json")));
+        const manifest = normalizeSkillPackManifest(JSON.parse(sourceText) as unknown, id);
+        if (manifest) packs.push({ id, manifest, sourceText });
+      } catch { /* An unreadable pack cannot be updated, but it must not hide the others. */ }
+    }
+    return packs;
+  }
+
+  /**
+   * Re-imports an installed pack from its stored GitHub source and replaces its
+   * files after confirmation. The old directories move to Trash; a failed write
+   * restores the previous contents in memory. Skill enablement is stored per
+   * conversation and is intentionally untouched.
+   */
+  async upgradeSkillPack(packId: string, scope: ResourceScope, host: SkillPackUpgradeHost): Promise<SkillPackUpgradeResult> {
+    if (!isSkillPackId(packId)) throw new Error(`Invalid Skill pack id '${String(packId)}'.`);
+    this.resourceRoot("skill", scope);
+    const base = this.resourceBase(scope);
+    const packs = await this.readInstalledSkillPacks(scope);
+    const installed = packs.find((pack) => pack.id === packId);
+    if (!installed) throw new Error(`Skill pack '${packId}' is no longer installed. Refresh Resources and try again.`);
+    if (!looksLikeGithubUrl(installed.manifest.source)) {
+      throw new Error(`Skill pack '${installed.manifest.name}' has no GitHub source to update from.`);
+    }
+    const from = skillPackRelease(installed.manifest);
+    const imported = await this.importSkillPack(installed.manifest.source, { analyzer: this.skillImportAnalyzer({}) });
+    if (skillPackId(imported.manifest.name) !== packId) {
+      throw new Error(`The source now names its pack '${imported.manifest.name}', but '${installed.manifest.name}' is installed. Remove the old pack to switch sources.`);
+    }
+    const to = skillPackRelease(imported.manifest);
+    const commitFrom = shortCommit(installed.manifest.commit);
+    const commitTo = shortCommit(imported.manifest.commit);
+    if (installed.manifest.commit && imported.manifest.commit === installed.manifest.commit) {
+      return { updated: false, name: installed.manifest.name, from, to };
+    }
+    this.validateResource("skill", imported.draft);
+    const plan = await buildSkillPackUpgradePlan({
+      packId,
+      existing: installed.manifest,
+      draft: imported.draft,
+      otherPacks: packs.filter((pack) => pack.id !== packId),
+      exists: (relativePath) => this.resourceTargetExists(base, relativePath)
+    });
+    // A new commit is not automatically new pack content. README, hook, test and
+    // workflow changes leave every installed Skill identical, and a legacy pack
+    // may record the default branch while its files match the release.
+    const installedContent = await this.readSkillPackContent(base, packId, installed.manifest);
+    const content = installedContent ? compareSkillPackContent({ packId, planFiles: plan.files, installed: installedContent }) : undefined;
+    if (content?.identical) {
+      const refreshed = await this.refreshSkillPackMetadata(base, packId, plan.files, host.dirtyPaths());
+      return {
+        updated: false,
+        name: installed.manifest.name,
+        from,
+        to,
+        ...(refreshed ? { refreshed: true } : {}),
+        ...(commitFrom ? { commitFrom } : {}),
+        ...(commitTo ? { commitTo } : {})
+      };
+    }
+    const remove = [
+      ...plan.removeSkills.map((id) => join(base.fsPath, "skills", id)),
+      join(base.fsPath, "skill-packs", packId)
+    ];
+    const written = new Set<string>([...remove, ...plan.files.map((file) => join(base.fsPath, ...file.path.split("/")))]);
+    this.assertUpgradeTargetsClear(written, host.dirtyPaths());
+    const detail = [
+      ...(from === to
+        ? [
+            `Version ${to} is unchanged, but the source content differs.`,
+            ...(commitFrom && commitTo && commitFrom !== commitTo
+              ? [`The installed copy is pinned to commit ${commitFrom}; the source now resolves to ${commitTo}.`]
+              : []),
+            ...(content
+              ? [`Files changed: ${content.changed.length}, added: ${content.added.length}, removed: ${content.removed.length}.`]
+              : [])
+          ]
+        : [`From ${from} to ${to}.`]),
+      ...(plan.addedSkills.length ? [`Added Skills: ${plan.addedSkills.join(", ")}.`] : []),
+      ...(plan.removedSkills.length ? [`Removed Skills: ${plan.removedSkills.join(", ")}.`] : []),
+      "Local edits inside these directories are replaced.",
+      "",
+      "Moved to Trash:",
+      ...remove
+    ].join("\n");
+    if (!await host.confirm({ label: `Skill pack '${installed.manifest.name}'`, detail, from, to, remove })) {
+      return { updated: false, cancelled: true, name: installed.manifest.name, from, to };
+    }
+    // Import can take a while. Refuse to overwrite a pack that changed while
+    // the user was reading the confirmation.
+    const current = (await this.readInstalledSkillPacks(scope)).find((pack) => pack.id === packId);
+    if (!current || current.sourceText !== installed.sourceText) {
+      throw new Error("The Skill pack changed while confirming the update. Refresh Resources and try again.");
+    }
+    const backups = await this.backupSkillPackPaths(remove);
+    const writeFiles: string[] = [];
+    try {
+      for (const path of remove) await host.trash(path);
+      for (const file of plan.files) {
+        const uri = vscode.Uri.joinPath(base, ...file.path.split("/"));
+        await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(uri, ".."));
+        await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(file.content));
+        writeFiles.push(uri.fsPath);
+      }
+    } catch (error) {
+      const failures = await this.restoreSkillPackFiles(writeFiles, backups);
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(failures.length
+        ? `Skill pack update failed: ${message}. Could not restore: ${failures.join(", ")}.`
+        : `Skill pack update failed: ${message}. The previous pack was restored.`);
+    }
+    return {
+      updated: true,
+      name: installed.manifest.name,
+      from,
+      to,
+      ...(commitFrom ? { commitFrom } : {}),
+      ...(commitTo ? { commitTo } : {})
+    };
+  }
+
+  /**
+   * Reads the files the installed manifest claims, so an update can compare
+   * bytes instead of trusting a commit pin. Returns undefined when a manifest
+   * path falls outside the pack's own directories, which makes the caller fall
+   * back to the confirmation flow.
+   */
+  private async readSkillPackContent(base: vscode.Uri, packId: string, manifest: SkillPackManifest): Promise<Map<string, Uint8Array> | undefined> {
+    const roots = new Set<string>([`${SKILL_PACKS_DIRECTORY}/${packId}`]);
+    for (const skill of manifest.skills) {
+      if (!skill.file) continue;
+      let parts: string[];
+      try { parts = resourcePathSegments("file", skill.file); } catch { return undefined; }
+      const directory = parts.slice(0, -1);
+      if (!directory.length) return undefined;
+      if (directory[0] === SKILL_PACKS_DIRECTORY) {
+        if (directory[1] !== packId) return undefined;
+        continue; // Already covered by the pack directory.
+      }
+      if (directory[0] !== SKILLS_DIRECTORY || directory.length < 2) return undefined;
+      roots.add(directory.join("/"));
+    }
+    const files = new Map<string, Uint8Array>();
+    const visit = async (relative: string): Promise<void> => {
+      let entries: [string, vscode.FileType][];
+      try { entries = await vscode.workspace.fs.readDirectory(vscode.Uri.joinPath(base, ...relative.split("/"))); }
+      catch (error) { if (error instanceof vscode.FileSystemError && error.code === "FileNotFound") return; throw error; }
+      for (const [name, kind] of entries) {
+        const path = `${relative}/${name}`;
+        if (kind === vscode.FileType.Directory) await visit(path);
+        else if (kind === vscode.FileType.File) files.set(path, await vscode.workspace.fs.readFile(vscode.Uri.joinPath(base, ...path.split("/"))));
+      }
+    };
+    for (const root of roots) await visit(root);
+    return files;
+  }
+
+  /** Rewrites only generated release metadata after the content comparison found
+   * nothing to replace. Unsaved editor copies are left alone. */
+  private async refreshSkillPackMetadata(
+    base: vscode.Uri,
+    packId: string,
+    files: ReadonlyArray<{ path: string; content: string }>,
+    dirtyPaths: readonly string[]
+  ): Promise<boolean> {
+    const metadata = files.filter((file) => file.path === `${SKILL_PACKS_DIRECTORY}/${packId}/${SKILL_PACK_MANIFEST_FILE}`
+      || file.path === `${SKILL_PACKS_DIRECTORY}/${packId}/${SKILL_PACK_SOURCE_FILE}`);
+    if (!metadata.length) return false;
+    const targets = new Set(metadata.map((file) => join(base.fsPath, ...file.path.split("/"))));
+    try { this.assertUpgradeTargetsClear(targets, dirtyPaths); }
+    catch { return false; }
+    let written = false;
+    for (const file of metadata) {
+      const uri = vscode.Uri.joinPath(base, ...file.path.split("/"));
+      try {
+        if (new TextDecoder().decode(await vscode.workspace.fs.readFile(uri)) === file.content) continue;
+      } catch { /* A missing metadata file is written below. */ }
+      await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(uri, ".."));
+      await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(file.content));
+      written = true;
+    }
+    return written;
+  }
+
+  private assertUpgradeTargetsClear(targets: ReadonlySet<string>, dirtyPaths: readonly string[]): void {
+    for (const dirty of dirtyPaths) {
+      const path = resolve(dirty);
+      for (const target of targets) {
+        const part = relativePath(resolve(target), path);
+        if (part === "" || (!part.startsWith("..") && !isAbsolute(part))) {
+          throw new Error(`This Skill pack has unsaved files: ${dirty}. Save or discard those changes before updating it.`);
+        }
+      }
+    }
+  }
+
+  private async backupSkillPackPaths(targets: readonly string[]): Promise<Array<{ path: string; content: Uint8Array }>> {
+    const files: Array<{ path: string; content: Uint8Array }> = [];
+    const visit = async (path: string): Promise<void> => {
+      const uri = vscode.Uri.file(path);
+      let stat: vscode.FileStat;
+      try { stat = await vscode.workspace.fs.stat(uri); }
+      catch (error) { if (error instanceof vscode.FileSystemError && error.code === "FileNotFound") return; throw error; }
+      const legacyDirectory = (stat as unknown as { isDirectory?: () => boolean }).isDirectory;
+      const isDirectory = typeof legacyDirectory === "function"
+        ? legacyDirectory.call(stat)
+        : (stat.type & vscode.FileType.Directory) !== 0;
+      if (!isDirectory) {
+        files.push({ path, content: await vscode.workspace.fs.readFile(uri) });
+        return;
+      }
+      const entries = await vscode.workspace.fs.readDirectory(uri);
+      for (const [name] of entries) await visit(join(path, name));
+    };
+    for (const target of targets) await visit(target);
+    return files;
+  }
+
+  private async restoreSkillPackFiles(written: readonly string[], backups: ReadonlyArray<{ path: string; content: Uint8Array }>): Promise<string[]> {
+    const failures: string[] = [];
+    for (const path of [...written].reverse()) {
+      try { await vscode.workspace.fs.delete(vscode.Uri.file(path)); }
+      catch (error) { if (!(error instanceof vscode.FileSystemError && error.code === "FileNotFound")) failures.push(path); }
+    }
+    for (const file of backups) {
+      try {
+        const uri = vscode.Uri.file(file.path);
+        await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(uri, ".."));
+        await vscode.workspace.fs.writeFile(uri, file.content);
+      } catch { failures.push(file.path); }
+    }
+    return failures;
   }
 
   async readResource(type: ResourceKind, scope: ResourceScope, path: string, name: string): Promise<ResourceTarget> {

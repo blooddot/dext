@@ -377,7 +377,7 @@ Skill 是显式的包。`skill({ skill: "name", input })` 加载指定的 `SKILL
 
 ### 从 GitHub 导入 Skill 包
 
-新建 Skill 时，输入框上方有 **Describe | Import**。Describe 是默认模式，交给模型生成。Import 只接受一个公开的 `https://github.com/...` 仓库链接、`tree` 链接、指向 `SKILL.md` 的 `blob` 链接，或 `raw.githubusercontent.com/.../SKILL.md`。在 Describe 下粘贴裸 GitHub 链接会被拒绝并提示切换 Import，不会发送给模型。
+新建 Skill 时，输入框上方有 **Describe | Import**。Describe 是默认模式，交给模型生成。Import 只接受一个公开的 `https://github.com/...` 仓库链接、`tree` 链接、指向 `SKILL.md` 的 `blob` 链接，或 `raw.githubusercontent.com/.../SKILL.md`。裸仓库链接会安装仓库**最新发布的 GitHub Release**，而不是默认分支，因此仍在开发中的 commit 不会被装成 Skill 包。`tree`、`blob` 或 raw 链接仍使用链接里指定的分支、tag 或 commit；要固定某个版本，请在链接里使用 release tag。仓库从未发布 Release 时会回退到默认分支，并在导入说明中记录这一点。在 Describe 下粘贴裸 GitHub 链接会被拒绝并提示切换 Import，不会发送给模型。
 
 Import 是确定性安装器，只有候选存在歧义时才使用当前 Agent。Dext 固定一个 commit，读取文件目录，并下载链接范围内候选的 `SKILL.md`。选定后再下载所选 Skill 的附带文件、链接范围内的命令模板和根许可证，不下载仓库中的无关资源。嵌套的 `SKILL.md` 视为外层 Skill 的附带文件，根目录的 `SKILL.md` 则拥有整个仓库。只有一个候选，或所有候选都是同一个非根目录（例如 `skills/`）的直接子目录时，不调用模型。只有候选分散在互不相关的目录时，Agent 才会收到受限元数据——目录、id、截断到 300 字符的名称和描述、文件数、浅校验状态——并且只返回选择结果。返回的每个路径都必须对应真实候选；未知、重复、越界、低置信度或空选择都会失败，并列出每个候选的 `tree` 链接；没有可用 Agent 时同样失败，绝不猜测。
 
@@ -385,13 +385,17 @@ Import 是确定性安装器，只有候选存在歧义时才使用当前 Agent�
 
 多 Agent 仓库会一次导入链接范围内的所有 Skill 版本，不再弹出 CLI 或版本选择框。Dext 会识别共享的 `skills/`、`.agents/skills/`，以及 `.codex/skills/`、`.claude/skills/` 等专用目录，并读取 Codex/Claude 插件清单声明的 Skill 路径。每个 Skill 在 Input 中只显示一项，每一轮自动加载实际执行的 Agent 专用版，没有专用版时使用共享版；切换 Agent 后会更新采用的版本和可用 command。两种版本都没有时，Input 会标记不可用，执行时明确报缺失，不借用其他 CLI 的指令。未知来源保存为 `unknown`，不会当作共享回退。同一 Agent 版本的重复副本只有在完整目录内容一致时才去重；同名但不同内容的同 Agent 来源会报冲突并列出路径，可以用更具体的目录链接导入。
 
-Command 校验后也按每一轮的“Agent 专用版 → 共享版”解析。兼容的 OpenCode 提示词模板会转换为共享 Dext command，并记录原始来源；不兼容的专用模板不会阻挡可用的共享模板。预览和保存的 `SOURCE.md` 会列出所有导入版本、来源路径、忽略的命令路由字段，以及未安装的原生插件功能。各版本分别保留自己的附属文件。Dext 不会改写正文中的 Agent 专用工具名或路径，也不会启用原生 hooks。新导入使用版本 2 包清单；已有版本 1 包仍可使用原来安装的内容，需要重新导入才能获得额外版本。
+Command 校验后也按每一轮的“Agent 专用版 → 共享版”解析。兼容的 OpenCode 提示词模板会转换为共享 Dext command，并记录原始来源；不兼容的专用模板不会阻挡可用的共享模板。预览和保存的 `SOURCE.md` 会列出所有导入版本、来源路径、忽略的命令路由字段，以及未安装的原生插件功能。各版本分别保留自己的附属文件。Dext 不会改写正文中的 Agent 专用工具名或路径，也不会启用原生 hooks。新导入使用版本 2 包清单；已有版本 1 包仍可使用原来安装的内容，需要重新导入才能获得额外版本。`version` 表示清单格式，不是仓库发布版本；仓库导入会记录已发布 Release 的 `releaseTag`、仓库在 `package.json` 或插件清单中声明的 `upstreamVersion`，以及解析后的 `commit`。
 
 Create 之前，每个被选中的 Skill 都会完整校验（front matter、标量 description、非空正文、id、安全路径、128 个文件、总计 1 MB、单文件 200 KB）；任一选中项失败则整包失败。front matter 格式非法会失败，但缺少 front matter 只是警告。草稿把每个 Skill 放在 `skills/<id>/`，在 `skill-packs/<pack>/` 下写入清单和报告，把可用提示词命令复制到 `skill-packs/<pack>/commands/`，并在仓库提供 LICENSE 时保留它。Import 本身不写盘。Create 原子写入整个包，重新检查已存在的包目录和 Skill 目录，并且不会自动启用新 Skill；之后需在 Skills 控件中勾选。
 
-移除旧版本时，打开 **Resources** 并切换到安装时的 **Project / Global**，悬浮或键盘聚焦资源行，可选择打开文件、打开所在目录、删除。独立 Skill 会连同自己的附属文件目录一起移除；导入包中的任意 Skill 的删除按钮会卸载整个包，包括所有 Skill、Agent 版本、commands、清单和报告，确认框会列出范围。删除使用系统回收站，存在未保存文件时会阻止操作。删除后 Resources 和 Input 会刷新，再通过 Import / Create 安装新版本。API、Rule、MCP 的删除按钮只移除对应文件；内置和只读参考资源没有这些管理按钮。
+移除旧版本时，打开 **Resources** 并切换到安装时的 **Project / Global**，悬浮或键盘聚焦资源行，可选择打开文件、打开所在目录、删除。独立 Skill 会连同自己的附属文件目录一起移除；导入包中的任意 Skill 的删除按钮会卸载整个包，包括所有 Skill、Agent 版本、commands、清单和报告，确认框会列出范围。删除使用系统回收站，存在未保存文件时会阻止操作。删除后 Resources 和 Input 会刷新。
 
-Import 不支持私有仓库、凭据、端口、查询串、GitLab/Bitbucket、npm 包、二进制附带文件（会跳过并警告）、可执行 hook，也不支持原地更新已安装的包。只有命令、没有 Skill 的仓库，或直接指向命令文件的 URL，都不是 Skill，会被拒绝。
+**Skill** 分类会按导入包分组。包所在行会显示发布版本（没有 Release 时显示短 commit），悬浮或键盘聚焦时出现 **Update Skill pack**。更新会从保存的 GitHub 来源重新导入：裸仓库链接跟随最新发布的 Release，`tree`/`blob` 链接跟随链接里指定的分支或 tag；随后在真正改动前请求确认。确认框会列出旧/新版本、新增和移除的 Skill，以及所有将移入回收站的目录。存在未保存文件、新 Skill id 被其他包或独立 Skill 占用、或确认期间清单发生变化时，更新会被拒绝。写入失败时会从内存恢复原有文件。对话中的 Skill 选择会保留；新版本不再安装的 Skill 会变为不可用。如果包已经在解析出的 commit 上，Dext 会提示已是最新且不写入任何文件。
+
+API、Rule、MCP 的删除按钮只移除对应文件；内置和只读参考资源没有这些管理按钮。
+
+Import 不支持私有仓库、凭据、端口、查询串、GitLab/Bitbucket、npm 包、二进制附带文件（会跳过并警告）、可执行 hook。只有命令、没有 Skill 的仓库，或直接指向命令文件的 URL，都不是 Skill，会被拒绝。
 
 规则是 `.dext/rules/` 下的有序策略文件，规则路径只会在该目录下解析。`.dext/rules/plan.md` 会替换 Plan 模式默认的计划文档指令。`agent`、`ask`、`plan`、`template` 也可以为单次调用指定 `skills` 和 `rules`——`await agent({ input: "…", rules: ["review.md"] })`。它们是 `internal`，因为从不作为控制字段转发给提供方；而生成的声明恰好会在这四个 API 上列出它们，因为这是调用方自己写的选项。Dext 先加载所选 Skills，再按顺序加载规则，因此调用的窄规则会约束通用的 Skill 流程；这些内容注入 Agent 指令。`ui.*` 等待用户回答后继续同一个工作流。
 

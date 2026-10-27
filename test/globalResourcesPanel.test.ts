@@ -208,6 +208,31 @@ describe("global resources panel", () => {
     expect(skill).toContain('data-resource-id="skill:global:git/release/SKILL.md"');
   });
 
+  it("groups managed Skills by pack and offers an update action on the pack row", () => {
+    const skillEntry = (name: string): ResourceEntry => ({
+      ...entry("skill", name),
+      id: `skill:global:${name}/SKILL.md`,
+      path: `${name}/SKILL.md`
+    });
+    const managed = {
+      ...skillEntry("review"),
+      pack: { id: "ponytail", name: "ponytail", upstreamVersion: "5.3.2", commit: "09c434ab", updatable: true }
+    };
+    const document = buildResourceList({
+      kind: "skill",
+      scope: "global",
+      groupBy: "kind",
+      entries: [managed, skillEntry("standalone")]
+    });
+    const html = renderGlobalResources(document, { createKinds: ["mcp", "rule", "skill"] });
+    expect(html).toContain('data-resource-node="Skill/ponytail"');
+    expect(html).toContain('data-resource-pack="ponytail"');
+    expect(html).toContain('class="resource-pack-version">v5.3.2');
+    expect(html).toContain('data-resource-command="dext.upgradeSkillPack"');
+    expect(html).toContain('data-resource-id="skill:global:standalone/SKILL.md"');
+    expect(html).toContain('data-resource-id="skill:global:review/SKILL.md"');
+  });
+
   it("lists only current files, preserving nested paths and actual MCP filenames", async () => {
     const readFile = vi.fn(async (): Promise<string | undefined> => "source");
     const listFiles = vi.fn(async (kind: Exclude<ResourceKind, "file">) => {

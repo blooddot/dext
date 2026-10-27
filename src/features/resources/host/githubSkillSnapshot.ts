@@ -4,6 +4,7 @@ import {
   GithubHttpError,
   fetchGithubArchive,
   fetchGithubBytes,
+  resolveGithubRef,
   type FetchArchiveOptions,
   type FetchedArchive
 } from "./githubArchive.js";
@@ -60,12 +61,21 @@ export async function fetchGithubSkillSnapshot(source: GithubSource, options: Fe
   const fetcher = options.fetch ?? globalThis.fetch;
   const apiBase = (options.apiBase ?? "https://api.github.com").replace(/\/$/, "");
   const repoApi = `${apiBase}/repos/${source.owner}/${source.repo}`;
-  const ref = source.ref ?? "HEAD";
-  let commit: string | undefined;
+  // A repository URL follows its latest release. Tree, blob and raw links keep
+  // the branch or tag they name in the URL.
+  const resolvedRef = await withTimeout(options, async (signal) => await resolveGithubRef(source, fetcher, signal, apiBase));
+  const ref = resolvedRef.ref;
+  let commit = resolvedRef.commit;
+  const releaseTag = resolvedRef.releaseTag;
   const fallback = async (): Promise<GithubSkillSnapshot> => {
-    // HEAD works without a default-branch API lookup when the API is limited.
+    // HEAD works without a default-branch lookup when the API is limited.
     const archive = await fetchGithubArchive({ ...source, ref: commit ?? ref }, options);
-    return { ...archive, source, ref, paths: [...archive.files.keys()], loadFiles: async () => {} };
+    return {
+      ...archive, source, ref,
+      ...(releaseTag ? { releaseTag } : {}),
+      paths: [...archive.files.keys()],
+      loadFiles: async () => {}
+    };
   };
   let entries: TreeEntry[];
   let truncated = false;
@@ -104,6 +114,7 @@ export async function fetchGithubSkillSnapshot(source: GithubSource, options: Fe
   const maxBytes = Math.min(limits.maxCompressedBytes, limits.maxExpandedBytes);
   return {
     source, ref, commit: commit!, files, paths: [...indexed.keys()],
+    ...(releaseTag ? { releaseTag } : {}),
     fileHashes: new Map([...indexed].flatMap(([path, entry]) => /^[0-9a-f]{40}$/i.test(entry.sha ?? "")
       ? [[path, `${entry.mode}:${entry.sha!}`] as const] : [])),
     async loadFiles(paths) {

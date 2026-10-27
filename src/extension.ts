@@ -158,7 +158,42 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     methods: () => application.registry.list(), files: resourceDataSource, reference: apiReference
   });
   const resourceCommandFor = (scope: ResourceScope, dataSource: ResourceEditorDataSource) =>
-    async (command: string, payload: { id?: string; kind?: string; path?: string }): Promise<void | boolean> => {
+    async (command: string, payload: { id?: string; kind?: string; pack?: string; path?: string }): Promise<void | boolean> => {
+      if (command.endsWith(".upgradeSkillPack")) {
+        if (!payload.pack) throw new Error("Select a Skill pack to update.");
+        const result = await vscode.window.withProgress({
+          location: vscode.ProgressLocation.Notification,
+          title: `Checking Skill pack '${payload.pack}' for updates…`
+        }, async () => await application.upgradeSkillPack(payload.pack!, scope, {
+          confirm: async (plan) => await vscode.window.showWarningMessage(`Update ${plan.label}?`, {
+            modal: true,
+            detail: plan.detail
+          }, "Update") === "Update",
+          dirtyPaths: () => vscode.workspace.textDocuments.filter((document) => document.isDirty && document.uri.scheme === "file").map((document) => document.uri.fsPath),
+          trash: async (target) => {
+            try { await vscode.workspace.fs.delete(vscode.Uri.file(target), { recursive: true, useTrash: true }); }
+            catch (error) { if (!(error instanceof vscode.FileSystemError) || error.code !== "FileNotFound") throw error; }
+          }
+        }));
+        if (result.cancelled) return false;
+        const pinChange = result.commitFrom && result.commitTo && result.commitFrom !== result.commitTo
+          ? ` (commit ${result.commitFrom} → ${result.commitTo})`
+          : "";
+        if (result.updated) {
+          await application.reload();
+          await sidebar.resourcesChanged();
+          void vscode.window.showInformationMessage(result.from === result.to
+            ? `Updated Skill pack '${result.name}' at ${result.to}${pinChange}.`
+            : `Updated Skill pack '${result.name}' from ${result.from} to ${result.to}.`);
+        } else if (result.refreshed) {
+          // The version label and commit pin changed even though no Skill file did.
+          await sidebar.resourcesChanged();
+          void vscode.window.showInformationMessage(`Skill pack '${result.name}' content is unchanged; release metadata now records ${result.commitTo ? `commit ${result.commitTo}` : "the source pin"} (${result.to}).`);
+        } else {
+          void vscode.window.showInformationMessage(`Skill pack '${result.name}' is already up to date (${result.to}).`);
+        }
+        return result.updated || Boolean(result.refreshed);
+      }
       if (command.endsWith(".deleteResource") || command.endsWith(".openResourceFolder") || (command.endsWith(".openResourceSource") && payload.id)) {
         const document = payload.id ? await dataSource.definition(payload.id) : undefined;
         if (!document) throw new Error("This resource is no longer available. Refresh the list.");

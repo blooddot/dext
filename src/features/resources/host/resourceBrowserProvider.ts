@@ -35,7 +35,7 @@ export class ResourceBrowserProvider extends ResourceEditorProvider {
 
   override async handleMessage(key: string, message: unknown): Promise<void> {
     if (key !== this.listTabKey) return;
-    const payload = (message ?? {}) as { type?: unknown; scope?: unknown; direction?: unknown; query?: unknown; command?: unknown; id?: unknown; kind?: unknown; path?: unknown; viewState?: { query?: unknown; scrollTop?: unknown; collapsed?: unknown } };
+    const payload = (message ?? {}) as { type?: unknown; scope?: unknown; direction?: unknown; query?: unknown; command?: unknown; id?: unknown; kind?: unknown; pack?: unknown; path?: unknown; viewState?: { query?: unknown; scrollTop?: unknown; collapsed?: unknown } };
     const current = this.history[this.position]!;
     if (Array.isArray(payload.viewState?.collapsed)) current.collapsed = payload.viewState.collapsed.filter((value): value is string => typeof value === "string");
     if (typeof payload.viewState?.query === "string" && !current.id) current.query = payload.viewState.query;
@@ -77,16 +77,17 @@ export class ResourceBrowserProvider extends ResourceEditorProvider {
         scope: current.scope,
         ...(typeof payload.id === "string" ? { id: payload.id } : {}),
         ...(typeof payload.kind === "string" ? { kind: payload.kind } : {}),
+        ...(typeof payload.pack === "string" ? { pack: payload.pack } : {}),
         ...(typeof payload.path === "string" ? { path: payload.path } : {}),
         ...(typeof payload.query === "string" ? { query: payload.query } : {})
       };
       try {
         const changed = await this.options.onCommand?.(payload.command, parameters);
-        if (changed === true && payload.command.endsWith(".deleteResource")) {
+        if (changed === true && (payload.command.endsWith(".deleteResource") || payload.command.endsWith(".upgradeSkillPack"))) {
           await this.navigate({ query: current.query, scrollTop: current.scrollTop, scope: current.scope, collapsed: current.collapsed });
         }
       } catch (error) {
-        if (payload.command.endsWith(".deleteResource")) await this.navigate({ query: current.query, scrollTop: current.scrollTop, scope: current.scope, collapsed: current.collapsed });
+        if (payload.command.endsWith(".deleteResource") || payload.command.endsWith(".upgradeSkillPack")) await this.navigate({ query: current.query, scrollTop: current.scrollTop, scope: current.scope, collapsed: current.collapsed });
         throw error;
       }
       return;

@@ -206,6 +206,206 @@ describe("resource documents", () => {
     expect(await readFile(join(root, "rules/review.md"), "utf8")).toBe("Original\n");
   });
 
+  it("tags canonical Skills with the pack that owns them", async () => {
+    Object.assign(vscode.workspace, { workspaceFolders: [{ uri: vscode.Uri.file(root) }] });
+    Object.assign(application, { workspaceTrusted: true });
+    await mkdir(join(root, ".dext", "skills", "release"), { recursive: true });
+    await mkdir(join(root, ".dext", "skill-packs", "demo"), { recursive: true });
+    await writeFile(join(root, ".dext", "skills", "release", "SKILL.md"), "# Release\n");
+    await writeFile(join(root, ".dext", "skill-packs", "demo", "pack.json"), JSON.stringify({
+      name: "demo", version: 2, source: "https://github.com/acme/demo", upstreamVersion: "1.2.3", commit: "abc1234",
+      importedAt: "2026-10-26T00:00:00.000Z",
+      skills: [{ id: "release", name: "release", description: "Release", directory: "skills/release", agent: "shared", file: "skills/release/SKILL.md", commands: [], warnings: [] }],
+      commands: [], analysis: { mode: "deterministic", selected: ["skills/release"], excluded: [], skipped: [] }
+    }));
+    expect(await application.listResources("skill")).toEqual([{
+      name: "release", path: "release/SKILL.md", scope: "project",
+      pack: { id: "demo", name: "demo", upstreamVersion: "1.2.3", commit: "abc1234", updatable: true }
+    }]);
+  });
+
+  it("updates an installed pack in place, removing Skills the new version dropped", async () => {
+    Object.assign(vscode.workspace, { workspaceFolders: [{ uri: vscode.Uri.file(root) }] });
+    Object.assign(application, { workspaceTrusted: true });
+    const project = join(root, ".dext");
+    await mkdir(join(project, "skill-packs", "demo"), { recursive: true });
+    await mkdir(join(project, "skills", "alpha"), { recursive: true });
+    await mkdir(join(project, "skills", "beta"), { recursive: true });
+    const oldManifest = {
+      name: "demo", version: 2, source: "https://github.com/acme/demo", upstreamVersion: "1.0.0", commit: "old",
+      importedAt: "2026-10-01T00:00:00.000Z",
+      skills: [
+        { id: "alpha", name: "alpha", description: "Alpha", directory: "skills/alpha", agent: "shared", file: "skills/alpha/SKILL.md", commands: [], warnings: [] },
+        { id: "beta", name: "beta", description: "Beta", directory: "skills/beta", agent: "shared", file: "skills/beta/SKILL.md", commands: [], warnings: [] }
+      ],
+      commands: [], analysis: { mode: "deterministic", selected: ["skills/alpha", "skills/beta"], excluded: [], skipped: [] }
+    };
+    await writeFile(join(project, "skill-packs", "demo", "pack.json"), JSON.stringify(oldManifest));
+    await writeFile(join(project, "skills", "alpha", "SKILL.md"), "# Alpha v1\n");
+    await writeFile(join(project, "skills", "beta", "SKILL.md"), "# Beta\n");
+    const nextManifest = {
+      ...oldManifest, upstreamVersion: "2.0.0", commit: "new",
+      skills: [
+        oldManifest.skills[0]!,
+        { id: "gamma", name: "gamma", description: "Gamma", directory: "skills/gamma", agent: "shared", file: "skills/gamma/SKILL.md", commands: [], warnings: [] }
+      ]
+    };
+    const imported = {
+      draft: { name: "alpha", content: "# Alpha v2", files: [
+        { path: "skills/alpha/reference.md", content: "Alpha reference v2" },
+        { path: "skills/gamma/SKILL.md", content: "# Gamma\n" },
+        { path: "skill-packs/demo/pack.json", content: `${JSON.stringify(nextManifest, null, 2)}\n` },
+        { path: "skill-packs/demo/SOURCE.md", content: "# Demo\n" }
+      ] },
+      report: "# Demo", manifest: nextManifest, primarySkillId: "alpha"
+    };
+    const importPack = vi.fn(async () => imported);
+    Object.assign(application, { importSkillPack: importPack });
+    const confirm = vi.fn(async () => true);
+    const trash = vi.fn(async (path: string) => rm(path, { recursive: true, force: true }));
+    const result = await application.upgradeSkillPack("demo", "project", { confirm, dirtyPaths: () => [], trash });
+    expect(result).toMatchObject({ updated: true, name: "demo", from: "v1.0.0", to: "v2.0.0" });
+    expect(importPack).toHaveBeenCalledWith("https://github.com/acme/demo", expect.objectContaining({ analyzer: expect.any(Function) }));
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(trash.mock.calls.map(([path]) => path.replaceAll("\\", "/"))).toEqual([
+      `${project}/skills/alpha`.replaceAll("\\", "/"),
+      `${project}/skills/beta`.replaceAll("\\", "/"),
+      `${project}/skill-packs/demo`.replaceAll("\\", "/")
+    ]);
+    await expect(readFile(join(project, "skills", "beta", "SKILL.md"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(join(project, "skills", "alpha", "SKILL.md"), "utf8")).toBe("# Alpha v2\n");
+    expect(await readFile(join(project, "skills", "gamma", "SKILL.md"), "utf8")).toBe("# Gamma\n");
+    expect(await readFile(join(project, "skill-packs", "demo", "pack.json"), "utf8")).toContain('"upstreamVersion": "2.0.0"');
+  });
+
+  it("does not rewrite or ask to confirm a pack already at the latest commit", async () => {
+    Object.assign(vscode.workspace, { workspaceFolders: [{ uri: vscode.Uri.file(root) }] });
+    Object.assign(application, { workspaceTrusted: true });
+    const project = join(root, ".dext");
+    await mkdir(join(project, "skill-packs", "demo"), { recursive: true });
+    await mkdir(join(project, "skills", "alpha"), { recursive: true });
+    const installed = {
+      name: "demo", version: 2, source: "https://github.com/acme/demo", upstreamVersion: "1.0.0", commit: "same",
+      importedAt: "2026-10-01T00:00:00.000Z",
+      skills: [{ id: "alpha", name: "alpha", description: "Alpha", directory: "skills/alpha", agent: "shared", file: "skills/alpha/SKILL.md", commands: [], warnings: [] }],
+      commands: [], analysis: { mode: "deterministic", selected: ["skills/alpha"], excluded: [], skipped: [] }
+    };
+    await writeFile(join(project, "skill-packs", "demo", "pack.json"), JSON.stringify(installed));
+    await writeFile(join(project, "skills", "alpha", "SKILL.md"), "# Alpha\n");
+    Object.assign(application, {
+      importSkillPack: vi.fn(async () => ({ draft: { name: "alpha", content: "# Alpha\n" }, report: "", manifest: installed, primarySkillId: "alpha" }))
+    });
+    const confirm = vi.fn(async () => true);
+    const result = await application.upgradeSkillPack("demo", "project", { confirm, dirtyPaths: () => [], trash: vi.fn() });
+    expect(result).toMatchObject({ updated: false, from: "v1.0.0", to: "v1.0.0" });
+    expect(confirm).not.toHaveBeenCalled();
+    expect(await readFile(join(project, "skills", "alpha", "SKILL.md"), "utf8")).toBe("# Alpha\n");
+  });
+
+  it("refreshes release metadata without replacing a pack whose files are unchanged", async () => {
+    Object.assign(vscode.workspace, { workspaceFolders: [{ uri: vscode.Uri.file(root) }] });
+    Object.assign(application, { workspaceTrusted: true });
+    const project = join(root, ".dext");
+    await mkdir(join(project, "skill-packs", "demo"), { recursive: true });
+    await mkdir(join(project, "skills", "alpha"), { recursive: true });
+    const installed = {
+      name: "demo", version: 2, source: "https://github.com/acme/demo", releaseTag: "v5.3.2", upstreamVersion: "5.3.2", commit: "09c434a",
+      importedAt: "2026-10-26T00:00:00.000Z",
+      skills: [{ id: "alpha", name: "alpha", description: "Alpha", directory: "skills/alpha", agent: "shared", file: "skills/alpha/SKILL.md", commands: [], warnings: [] }],
+      commands: [], analysis: { mode: "deterministic", selected: ["skills/alpha"], excluded: [], skipped: [] }
+    };
+    await writeFile(join(project, "skill-packs", "demo", "pack.json"), JSON.stringify(installed));
+    await writeFile(join(project, "skills", "alpha", "SKILL.md"), "# Alpha\n");
+    const nextManifest = { ...installed, commit: "16352ac", importedAt: "2026-10-27T00:00:00.000Z" };
+    Object.assign(application, {
+      importSkillPack: vi.fn(async () => ({
+        draft: {
+          name: "alpha", content: "# Alpha\n", files: [
+            { path: "skill-packs/demo/pack.json", content: `${JSON.stringify(nextManifest, null, 2)}\n` },
+            { path: "skill-packs/demo/SOURCE.md", content: "# Demo release\n" }
+          ]
+        },
+        report: "# Demo release", manifest: nextManifest, primarySkillId: "alpha"
+      }))
+    });
+    const confirm = vi.fn(async () => true);
+    const trash = vi.fn();
+    const result = await application.upgradeSkillPack("demo", "project", { confirm, dirtyPaths: () => [], trash });
+    expect(result).toMatchObject({ updated: false, refreshed: true, from: "v5.3.2", to: "v5.3.2" });
+    expect(confirm).not.toHaveBeenCalled();
+    expect(trash).not.toHaveBeenCalled();
+    expect(await readFile(join(project, "skills", "alpha", "SKILL.md"), "utf8")).toBe("# Alpha\n");
+    const written = JSON.parse(await readFile(join(project, "skill-packs", "demo", "pack.json"), "utf8")) as { commit?: string };
+    expect(written.commit).toBe("16352ac");
+    expect(await readFile(join(project, "skill-packs", "demo", "SOURCE.md"), "utf8")).toBe("# Demo release\n");
+  });
+
+  it("explains a same-version replacement by commit instead of repeating the version", async () => {
+    Object.assign(vscode.workspace, { workspaceFolders: [{ uri: vscode.Uri.file(root) }] });
+    Object.assign(application, { workspaceTrusted: true });
+    const project = join(root, ".dext");
+    await mkdir(join(project, "skill-packs", "demo"), { recursive: true });
+    await mkdir(join(project, "skills", "alpha"), { recursive: true });
+    const installed = {
+      name: "demo", version: 2, source: "https://github.com/acme/demo", releaseTag: "v5.3.2", upstreamVersion: "5.3.2", commit: "09c434a",
+      importedAt: "2026-10-26T00:00:00.000Z",
+      skills: [{ id: "alpha", name: "alpha", description: "Alpha", directory: "skills/alpha", agent: "shared", file: "skills/alpha/SKILL.md", commands: [], warnings: [] }],
+      commands: [], analysis: { mode: "deterministic", selected: ["skills/alpha"], excluded: [], skipped: [] }
+    };
+    await writeFile(join(project, "skill-packs", "demo", "pack.json"), JSON.stringify(installed));
+    await writeFile(join(project, "skills", "alpha", "SKILL.md"), "# Alpha main\n");
+    const nextManifest = { ...installed, commit: "16352ac", importedAt: "2026-10-27T00:00:00.000Z" };
+    Object.assign(application, {
+      importSkillPack: vi.fn(async () => ({
+        draft: {
+          name: "alpha", content: "# Alpha release\n", files: [
+            { path: "skill-packs/demo/pack.json", content: `${JSON.stringify(nextManifest, null, 2)}\n` },
+            { path: "skill-packs/demo/SOURCE.md", content: "# Demo release\n" }
+          ]
+        },
+        report: "# Demo release", manifest: nextManifest, primarySkillId: "alpha"
+      }))
+    });
+    let detail = "";
+    const confirm = vi.fn(async (plan: { detail: string }) => { detail = plan.detail; return true; });
+    const trash = vi.fn(async (path: string) => rm(path, { recursive: true, force: true }));
+    const result = await application.upgradeSkillPack("demo", "project", { confirm, dirtyPaths: () => [], trash });
+    expect(result).toMatchObject({ updated: true, from: "v5.3.2", to: "v5.3.2", commitFrom: "09c434a", commitTo: "16352ac" });
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(detail).toContain("Version v5.3.2 is unchanged");
+    expect(detail).toContain("commit 09c434a");
+    expect(detail).toContain("16352ac");
+    expect(detail).not.toContain("From v5.3.2 to v5.3.2");
+    expect(await readFile(join(project, "skills", "alpha", "SKILL.md"), "utf8")).toBe("# Alpha release\n");
+  });
+
+  it("blocks an update with unsaved files inside the pack", async () => {
+    Object.assign(vscode.workspace, { workspaceFolders: [{ uri: vscode.Uri.file(root) }] });
+    Object.assign(application, { workspaceTrusted: true });
+    const project = join(root, ".dext");
+    await mkdir(join(project, "skill-packs", "demo"), { recursive: true });
+    await mkdir(join(project, "skills", "alpha"), { recursive: true });
+    const installed = {
+      name: "demo", version: 2, source: "https://github.com/acme/demo", commit: "old",
+      importedAt: "2026-10-01T00:00:00.000Z",
+      skills: [{ id: "alpha", name: "alpha", description: "Alpha", directory: "skills/alpha", agent: "shared", file: "skills/alpha/SKILL.md", commands: [], warnings: [] }],
+      commands: [], analysis: { mode: "deterministic", selected: ["skills/alpha"], excluded: [], skipped: [] }
+    };
+    await writeFile(join(project, "skill-packs", "demo", "pack.json"), JSON.stringify(installed));
+    await writeFile(join(project, "skills", "alpha", "SKILL.md"), "# Alpha\n");
+    Object.assign(application, {
+      importSkillPack: vi.fn(async () => ({
+        draft: { name: "alpha", content: "# Alpha 2\n", files: [{ path: "skill-packs/demo/pack.json", content: "{}" }] },
+        report: "", manifest: { ...installed, commit: "new" }, primarySkillId: "alpha"
+      }))
+    });
+    const confirm = vi.fn(async () => true);
+    await expect(application.upgradeSkillPack("demo", "project", {
+      confirm, dirtyPaths: () => [join(project, "skills", "alpha", "SKILL.md")], trash: vi.fn()
+    })).rejects.toThrow("unsaved files");
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
   it("lists nested resources and reads MCP names independently of filenames", async () => {
     await mkdir(join(root, "api/team"), { recursive: true });
     await writeFile(join(root, "api/team/lookup.ts"), "export function main() { return 1; }\n");

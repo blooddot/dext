@@ -14,6 +14,17 @@ export interface ResourceSourceRef {
 }
 
 
+export interface ResourcePackRef {
+  id: string;
+  name: string;
+  upstreamVersion?: string;
+  releaseTag?: string;
+  commit?: string;
+  /** An installed import with a GitHub source, so it can be updated. */
+  updatable: boolean;
+}
+
+
 export interface ResourceEntry {
   id: string;
   kind: ResourceKind;
@@ -26,6 +37,8 @@ export interface ResourceEntry {
   source: ResourceSourceRef;
   group: string;
   description?: string;
+  /** Present when a pack manifest owns this canonical Skill. */
+  pack?: ResourcePackRef;
   api?: ApiSourceFunction["api"];
   /** Exported functions read from a file; both pages render these with the same API component. */
   apiFunctions?: ApiSourceFunction[];
@@ -93,7 +106,7 @@ export interface ResourceEditorProviderOptions {
   availableScopes?(): readonly ResourceScope[];
   commandPrefix?: string;
   /** Runs a toolbar command. Return true after removing a resource to refresh its list. */
-  onCommand?(command: string, payload: { id?: string; kind?: string; path?: string; query?: string; scope?: ResourceScope }): Promise<void | boolean> | void | boolean;
+  onCommand?(command: string, payload: { id?: string; kind?: string; path?: string; pack?: string; query?: string; scope?: ResourceScope }): Promise<void | boolean> | void | boolean;
   /** Copies text the page offers, such as a module specifier; the host owns the clipboard. */
   copyText?(text: string): Promise<void> | void;
   /** Page renderers. The migrated API and Global Resources pages override these. */
@@ -111,7 +124,7 @@ export interface ResourceEditorShowResult {
 export interface FileResourceDataSourceOptions {
   roots(): Partial<Record<ResourceScope, string>>;
   /** Enumerates files without importing or executing TypeScript API modules. */
-  listFiles(kind: Exclude<ResourceKind, "file">): Promise<Array<{ name: string; path: string; scope: ResourceScope }>>;
+  listFiles(kind: Exclude<ResourceKind, "file">): Promise<Array<{ name: string; path: string; scope: ResourceScope; pack?: ResourcePackRef }>>;
   readFile(entry: ResourceEntry): Promise<string | undefined>;
   describeApi?(content: string): Promise<ApiSourceFunction[]>;
   /** Builds the function call graph for a detail page; lists deliberately skip it. */

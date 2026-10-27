@@ -27,6 +27,8 @@ export interface ExtractedArchive {
 export interface FetchedArchive extends ExtractedArchive {
   source: GithubSource;
   ref: string;
+  /** The published release tag a repository-root source resolved to. */
+  releaseTag?: string;
 }
 
 export interface FetchArchiveOptions {
@@ -201,22 +203,61 @@ export function extractTarGz(archive: Uint8Array, options: Partial<ArchiveLimits
 }
 
 const branchCache = new Map<string, Promise<{ branch: string }>>();
+const MAX_RELEASE_BYTES = 1024 * 1024;
 
 export function resetGithubArchiveCache(): void {
   branchCache.clear();
 }
 
-/** Resolves a source to `{ref, commit}`. Only repository-root URLs need the
- * GitHub API; tree/blob/raw URLs already carry their ref. */
-async function resolveRef(
+/** The latest non-prerelease GitHub release, or undefined when the repository
+ * has never published one. A repository URL imports the release tag, never the
+ * default branch, so an in-development commit cannot become an installed pack. */
+async function latestRelease(
   source: GithubSource,
   fetcher: typeof globalThis.fetch,
   signal: AbortSignal,
   apiBase: string
-): Promise<{ ref: string; commit?: string }> {
+): Promise<string | undefined> {
+  try {
+    const bytes = await fetchGithubBytes(
+      `${apiBase}/repos/${source.owner}/${source.repo}/releases/latest`,
+      fetcher,
+      signal,
+      { ...DEFAULT_ARCHIVE_LIMITS, maxCompressedBytes: MAX_RELEASE_BYTES },
+      "The GitHub release",
+      "application/vnd.github+json"
+    );
+    const body = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+    if (!body || typeof body !== "object" || Array.isArray(body)) return undefined;
+    const release = body as Record<string, unknown>;
+    if (release.draft === true || release.prerelease === true) return undefined;
+    const tag = release.tag_name;
+    return typeof tag === "string" && tag.trim() ? tag.trim() : undefined;
+  } catch (error) {
+    if (error instanceof GithubHttpError) {
+      if (error.status === 404) return undefined;
+      if (error.status === 403 || error.status === 429) {
+        throw new Error(`GitHub could not resolve the latest release (HTTP ${error.status}). Try again later, or paste a tree URL with a release tag.`);
+      }
+    }
+    throw error;
+  }
+}
+
+/** Resolves a source to `{ref, commit}`. A tree/blob/raw URL already carries its
+ * ref. A repository URL follows its latest release; only a repository with no
+ * published release falls back to its default branch. */
+export async function resolveGithubRef(
+  source: GithubSource,
+  fetcher: typeof globalThis.fetch,
+  signal: AbortSignal,
+  apiBase: string
+): Promise<{ ref: string; commit?: string; releaseTag?: string }> {
   if (source.ref) {
     return { ref: source.ref, ...(/^[0-9a-f]{7,40}$/i.test(source.ref) ? { commit: source.ref } : {}) };
   }
+  const releaseTag = await latestRelease(source, fetcher, signal, apiBase);
+  if (releaseTag) return { ref: releaseTag, releaseTag };
   const key = `${source.owner}/${source.repo}`.toLowerCase();
   let cached = branchCache.get(key);
   if (!cached) {
@@ -320,7 +361,7 @@ export async function fetchGithubArchive(source: GithubSource, options: FetchArc
   if (options.signal?.aborted) abort();
   else options.signal?.addEventListener("abort", abort, { once: true });
   try {
-    const resolved = await resolveRef(source, fetcher, controller.signal, apiBase);
+    const resolved = await resolveGithubRef(source, fetcher, controller.signal, apiBase);
     const archive = await fetchGithubBytes(
       `${codeloadBase}/${source.owner}/${source.repo}/tar.gz/${encodeURIComponent(resolved.ref)}`,
       fetcher,
@@ -332,6 +373,7 @@ export async function fetchGithubArchive(source: GithubSource, options: FetchArc
       ...extracted,
       source,
       ref: resolved.ref,
+      ...(resolved.releaseTag ? { releaseTag: resolved.releaseTag } : {}),
       ...((resolved.commit ?? extracted.commit) ? { commit: resolved.commit ?? extracted.commit! } : {})
     };
   } catch (error) {

@@ -67,6 +67,24 @@ describe("skill pack import", () => {
     expect(result.report).toContain("ponytail-review (available)");
   });
 
+  it("records the repository release beside the pinned commit", async () => {
+    const files = ponytailFiles();
+    files["package.json"] = JSON.stringify({ name: "ponytail", version: "5.3.2" });
+    files[".codex-plugin/plugin.json"] = JSON.stringify({ name: "ponytail", version: "5.3.2" });
+    const result = await importSkillPack("https://github.com/acme/ponytail", { archive: archive(files) });
+    expect(result.manifest.upstreamVersion).toBe("5.3.2");
+    expect(result.report).toContain("Upstream version: 5.3.2");
+    expect(result.report).toContain("Commit: abc1234");
+  });
+
+  it("falls back to plugin metadata and ignores a malformed version manifest", async () => {
+    const files = ponytailFiles();
+    files["package.json"] = "{not json";
+    files[".codex-plugin/plugin.json"] = JSON.stringify({ version: "2.1.5" });
+    const result = await importSkillPack("https://github.com/acme/ponytail", { archive: archive(files) });
+    expect(result.manifest.upstreamVersion).toBe("2.1.5");
+  });
+
   it("asks the analyzer only for an ambiguous set and installs only its selection", async () => {
     const files = archive({
       "packages/a/skills/review/SKILL.md": skill("review"),

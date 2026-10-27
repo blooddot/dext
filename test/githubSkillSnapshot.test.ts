@@ -12,13 +12,19 @@ const skill = (name: string): string => `---\nname: ${name}\ndescription: Help w
 
 interface Entry { path: string; type: string; mode: string; size?: number; sha?: string; }
 
-function backend(contents: Record<string, string>, extra: Entry[] = [], truncated = false) {
+function backend(contents: Record<string, string>, extra: Entry[] = [], truncated = false, releaseTag: string | null = "v1.2.3") {
   const tree: Entry[] = Object.entries(contents).map(([path, text]) => ({
     path, type: "blob", mode: "100644", size: new TextEncoder().encode(text).byteLength
   }));
   tree.push(...extra);
   const fetch = vi.fn(async (input: string) => {
     const url = String(input);
+    if (url.endsWith("/releases/latest")) {
+      return releaseTag
+        ? Response.json({ tag_name: releaseTag, draft: false, prerelease: false })
+        : new Response(null, { status: 404 });
+    }
+    if (url === "https://api.github.com/repos/acme/skills") return Response.json({ default_branch: "main" });
     if (url.includes("/commits/")) return Response.json({ sha: COMMIT, commit: { tree: { sha: TREE } } });
     if (url.includes(`/git/trees/${TREE}?recursive=1`)) return Response.json({ tree, truncated });
     const prefix = `https://raw.githubusercontent.com/acme/skills/${COMMIT}/`;
@@ -48,6 +54,33 @@ describe("selective GitHub skill downloads", () => {
     expect(fetch.mock.calls.some(([url]) => String(url).endsWith("/skills/review/reference.md") && !String(url).includes("/.codex/"))).toBe(true);
     expect(result.draft.files).toContainEqual({ path: "skills/review/reference.md", content: "Shared support" });
     expect(result.draft.files).toContainEqual({ path: "skill-packs/skills/variants/codex/skills/review/reference.md", content: "Codex support" });
+  });
+
+  it("imports the latest release tag instead of a development commit", async () => {
+    const { fetch } = backend({ "skills/review/SKILL.md": skill("review") }, [], false, "v9.9.9");
+    const result = await importSkillPack(ROOT, { fetch: fetch as never });
+    expect(result.manifest.commit).toBe(COMMIT);
+    expect(result.manifest.releaseTag).toBe("v9.9.9");
+    expect(result.report).toContain("Release: v9.9.9");
+    const urls = fetch.mock.calls.map(([url]) => String(url));
+    expect(urls).toContain("https://api.github.com/repos/acme/skills/releases/latest");
+    expect(urls.some((url) => url.includes("/commits/v9.9.9"))).toBe(true);
+  });
+
+  it("falls back to the default branch, with a note, when no release exists", async () => {
+    const { fetch } = backend({ "skills/review/SKILL.md": skill("review") }, [], false, null);
+    const result = await importSkillPack(ROOT, { fetch: fetch as never });
+    expect(result.manifest.releaseTag).toBeUndefined();
+    expect(result.manifest.notes).toContain("No published GitHub release was found; the default branch was imported.");
+    const urls = fetch.mock.calls.map(([url]) => String(url));
+    expect(urls.some((url) => url.includes("/commits/main"))).toBe(true);
+  });
+
+  it("keeps an explicit tree ref instead of resolving a release", async () => {
+    const { fetch } = backend({ "skills/review/SKILL.md": skill("review") }, [], false, "v9.9.9");
+    const result = await importSkillPack(`${ROOT}/tree/next/skills/review`, { fetch: fetch as never });
+    expect(result.manifest.releaseTag).toBeUndefined();
+    expect(fetch.mock.calls.some(([url]) => String(url).endsWith("/releases/latest"))).toBe(false);
   });
 
   it("selects before downloading support and ignores unrelated oversized assets", async () => {
@@ -146,11 +179,14 @@ describe("selective GitHub skill downloads", () => {
       source, ref: "HEAD", commit: COMMIT, files: new Map([["SKILL.md", new TextEncoder().encode(skill("skills"))]])
     });
     const normal = backend({}, [], true).fetch;
-    const fetch = reason === "truncated" ? normal : vi.fn(async () => new Response(null, { status: 403 }));
+    const fetch = reason === "truncated" ? normal : vi.fn(async (input: string) =>
+      String(input).endsWith("/releases/latest")
+        ? Response.json({ tag_name: "v1.2.3" })
+        : new Response(null, { status: 403 }));
     const result = await importSkillPack(ROOT, { fetch: fetch as never });
     expect(result.manifest.skills[0]?.id).toBe("skills");
     expect(archive).toHaveBeenCalledOnce();
-    expect(archive.mock.calls[0]?.[0].ref).toBe(reason === "truncated" ? COMMIT : "HEAD");
+    expect(archive.mock.calls[0]?.[0].ref).toBe(reason === "truncated" ? COMMIT : "v1.2.3");
   });
 
   it("does not hide an invalid repository behind an archive retry", async () => {

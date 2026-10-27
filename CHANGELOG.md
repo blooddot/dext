@@ -10,6 +10,8 @@ All notable changes to Dext are documented in this file.
 
 ## Unreleased
 
+- Import a bare GitHub repository URL at its **latest published release**, not its default branch, so an in-development commit cannot become an installed Skill pack. `tree`/`blob`/raw URLs keep the ref they name, and a repository with no release falls back to the default branch with an import note. The pack records `releaseTag`, the repository's own `upstreamVersion` (from `package.json` or a plugin manifest) and the resolved `commit`; `version` remains the manifest format. **Resources > Skill** groups skills by pack, shows the installed release, and offers **Update Skill pack** on the pack row's hover menu. Updating re-imports the latest release, compares the installed files with the release, reports up to date (refreshing only the recorded release metadata) when no Skill content changed, lists added and removed skills otherwise, moves replaced directories to Trash, restores them if writing fails, and refuses collisions or unsaved files.
+
 - Automatically apply every Agent result patch before returning it. Remove pending-patch storage, Accept/Reject cards, Inline/Split diff views and `dext.diff.defaultView`. Conversation and History show the application outcome and real conflict/unchanged details. The returned AgentResult consumes its patch after the attempt, so a later `apply({ result })` is unchanged; explicit `apply()`, patch types and Agent options remain compatible. Legacy conversation patches are explicitly ignored on load to avoid unexpected writes.
 
 - **Fixed:** apply now treats an AgentResult without a patch as unchanged instead of throwing.

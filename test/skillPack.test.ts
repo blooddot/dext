@@ -4,6 +4,8 @@ import { formatSkillPackReport, normalizeSkillPackManifest, skillPackId } from "
 const manifest = {
   name: "ponytail",
   source: "https://github.com/DietrichGebert/ponytail",
+  releaseTag: "v5.3.2",
+  upstreamVersion: "5.3.2",
   commit: "abc123",
   license: "MIT",
   importedAt: "2026-10-26T00:00:00.000Z",
@@ -51,6 +53,8 @@ describe("skill pack manifest", () => {
   it("formats a report with the discovery mode and skipped candidates", () => {
     const report = formatSkillPackReport(normalizeSkillPackManifest(manifest, "fallback")!);
     expect(report).toContain("Discovery: AI-assisted selection");
+    expect(report).toContain("Release: v5.3.2");
+    expect(report).toContain("Upstream version: 5.3.2");
     expect(report).toContain("examples/demo: example directory");
     expect(report).toContain("Commands: ponytail-review (available)");
   });
