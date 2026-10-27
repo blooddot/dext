@@ -30,6 +30,38 @@ export function archifyViewerBridgeScript(session: string, theme: "light" | "dar
         post({ type: "dext-diagram-escape" });
       }
     }, true);
+    // Ctrl/Cmd + wheel is the platform's page-zoom gesture; inside the viewer it should
+    // zoom the diagram around the pointer. Accumulate small trackpad deltas so one
+    // gesture is one step.
+    var wheelDelta = 0;
+    document.addEventListener("wheel", function(event) {
+      if (!(event.ctrlKey || event.metaKey) || !window.Archify || !Archify.view) return;
+      var delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 100 : 1);
+      if (!delta) return;
+      event.preventDefault();
+      wheelDelta += delta;
+      if (Math.abs(wheelDelta) < 60) return;
+      var direction = wheelDelta < 0 ? 1 : -1;
+      wheelDelta = 0;
+      var view = Archify.view;
+      var state = view.state();
+      var next = Math.max(0.25, Math.min(3, Math.round((state.scale + direction * 0.25) * 4) / 4));
+      if (next === state.scale) return;
+      var svg = document.querySelector(".diagram-container > svg");
+      var ctm = svg && svg.getScreenCTM ? svg.getScreenCTM() : null;
+      var fit = svg && svg.viewBox && svg.viewBox.baseVal.width
+        ? Math.min((svg.clientWidth || 1) / svg.viewBox.baseVal.width, (svg.clientHeight || 1) / svg.viewBox.baseVal.height) : 0;
+      // centerAt cannot zoom out below 1; the map view keeps the button behaviour.
+      if (next < 1 || !view.centerAt || !ctm || !fit) { if (direction > 0) view.zoomIn(); else view.zoomOut(); return; }
+      var point = svg.createSVGPoint();
+      point.x = event.clientX; point.y = event.clientY;
+      var user = point.matrixTransform(ctm.inverse());
+      // zoom() and centerAt share the svg's layout centre as their anchor.
+      var rect = svg.getBoundingClientRect();
+      var anchorX = rect.left - state.x + (svg.clientWidth || 1) / 2;
+      var anchorY = rect.top - state.y + (svg.clientHeight || 1) / 2;
+      view.centerAt(user.x - (event.clientX - anchorX) / (fit * next), user.y - (event.clientY - anchorY) / (fit * next), { scale: next });
+    }, { passive: false });
     function themeNow() { return document.documentElement.getAttribute("data-theme"); }
     function applyTheme(next) {
       try {

@@ -286,6 +286,45 @@ try {
   assert.equal(probeReady.archify, true);
   assert.ok(probeReady.fontFaces > 0, "bundled JetBrains Mono faces are present in the sandboxed artifact");
   assert.equal(probeReady.explorerVisible, true, "native navigation stays available");
+  // Ctrl/Cmd + wheel zooms around the pointer; a plain wheel must keep scrolling.
+  const centerPoint = () => evaluateViewer(`(function(){
+    var nodes=Array.from(document.querySelectorAll('[data-node-id]')),best=nodes[0],closest=Infinity;
+    nodes.forEach(function(node){var r=node.getBoundingClientRect(),x=(r.left+r.right)/2-innerWidth/2,y=(r.top+r.bottom)/2-innerHeight/2,d=x*x+y*y;if(d<closest){closest=d;best=node;}});
+    var r=best.getBoundingClientRect();
+    return {id:best.getAttribute('data-node-id'),x:(r.left+r.right)/2,y:(r.top+r.bottom)/2};
+  })()`);
+  const centerOf = (id) => evaluateViewer(`(function(){var r=document.querySelector('[data-node-id="${id}"]').getBoundingClientRect();return {x:(r.left+r.right)/2,y:(r.top+r.bottom)/2};})()`);
+  const dispatchWheel = (ctrlKey, metaKey, x, y) => evaluateViewer(`document.dispatchEvent(new WheelEvent("wheel",{bubbles:true,cancelable:true,clientX:${x},clientY:${y},ctrlKey:${ctrlKey},metaKey:${metaKey},deltaY:-120}))`);
+  const zoomOf = async (requestId) => {
+    await evaluate(`window.__probeSend({type:"dext-diagram-command",command:"select",nodeId:"__probe",requestId:"${requestId}"})`);
+    for (let index = 0; index < 100; index++) {
+      if (await evaluate(`window.__probeMessages.some(function(message){return message.requestId==="${requestId}";})`)) break;
+      await sleep(50);
+    }
+    return (await evaluate(`window.__probeMessages.find(function(message){return message.requestId==="${requestId}";})`))?.zoom;
+  };
+  const reset = async (requestId) => {
+    await evaluate(`window.__probeSend({type:"dext-diagram-command",command:"reset",requestId:"${requestId}"})`);
+    for (let index = 0; index < 100; index++) {
+      if (await evaluate(`window.__probeMessages.some(function(message){return message.requestId==="${requestId}";})`)) break;
+      await sleep(50);
+    }
+  };
+  const plain = await centerPoint();
+  assert.equal(await dispatchWheel(false, false, plain.x, plain.y), true, "a plain wheel is left to the page");
+  assert.equal(await zoomOf("w0"), probeReady.zoom, "a plain wheel does not zoom");
+  const ctrlPoint = await centerPoint();
+  assert.equal(await dispatchWheel(true, false, ctrlPoint.x, ctrlPoint.y), false, "Ctrl+wheel is consumed by the viewer");
+  assert.notEqual(await zoomOf("w1"), probeReady.zoom, "Ctrl+wheel zooms the diagram");
+  const ctrlAfter = await centerOf(ctrlPoint.id);
+  assert.ok(Math.abs(ctrlAfter.x - ctrlPoint.x) <= 2 && Math.abs(ctrlAfter.y - ctrlPoint.y) <= 2, "Ctrl+wheel keeps the pointer content in place");
+  await reset("w2");
+  const metaPoint = await centerPoint();
+  assert.equal(await dispatchWheel(false, true, metaPoint.x, metaPoint.y), false, "Cmd+wheel is consumed by the viewer");
+  assert.notEqual(await zoomOf("w3"), probeReady.zoom, "Cmd+wheel zooms the diagram");
+  const metaAfter = await centerOf(metaPoint.id);
+  assert.ok(Math.abs(metaAfter.x - metaPoint.x) <= 2 && Math.abs(metaAfter.y - metaPoint.y) <= 2, "Cmd+wheel keeps the pointer content in place");
+  await reset("w4");
   await evaluate('window.__probeSend({type:"dext-diagram-command",command:"search",requestId:"s1"})');
   await evaluate('window.__probeSend({type:"dext-diagram-command",command:"zoom-in",requestId:"z1"})');
   await evaluate('window.__probeSend({type:"dext-diagram-command",command:"zoom-in",requestId:"z2"})');
