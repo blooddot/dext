@@ -743,6 +743,95 @@ describe("Dext runtime", () => {
     ]);
   });
 
+  it.each(["codex", "claude", "deepseek-harness", "pi"] as const)(
+    "injects the resolved interaction language into %s Ask, Agent, and Plan turns",
+    async (provider) => {
+      const { runtime } = setup();
+      runtime.setWorkspaceTrusted(true);
+      runtime.setAgentProfiles([{ id: provider, provider, command: provider, label: provider, models: [] }]);
+      runtime.setAgentSelection({ profileId: provider, permission: "full-access" });
+      runtime.setRuleLoader(async () => undefined);
+      runtime.setOutputLanguage("zh-CN");
+      const requests: AgentConversationRequest[] = [];
+      runtime.setAgentRunner({
+        run: async () => ({ kind: "ask", text: "typed" }),
+        runConversation: async (request) => {
+          requests.push(request);
+          return "answer";
+        }
+      });
+
+      const tasks = ["Explain the cache", "Update the cache", "Add a cache", "Implement the saved plan"];
+      await runtime.executeConversation("ask", tasks[0]!);
+      await runtime.executeConversation("agent", tasks[1]!);
+      await runtime.executeConversation("plan", tasks[2]!);
+      await runtime.executeConversation("plan", tasks[3]!, { executePlan: true });
+
+      expect(requests).toHaveLength(4);
+      for (const [index, request] of requests.entries()) {
+        expect(request.input).toContain("Interaction language set by Dext:");
+        expect(request.input).toContain("Simplified Chinese (zh-CN)");
+        // The user's own sentence is not rewritten by the instruction.
+        expect(request.input).toContain(tasks[index]!);
+      }
+      // Plan generation keeps the document envelope; building a saved plan is
+      // an ordinary write turn and must not receive the plan template.
+      expect(requests[2]?.input).toContain("dext-plan:start");
+      expect(requests[2]?.input.endsWith(`Goal:\n\n${tasks[2]}`)).toBe(true);
+      expect(requests[3]?.input).not.toContain("dext-plan:start");
+      expect(requests[3]?.input.endsWith(tasks[3]!)).toBe(true);
+    }
+  );
+
+  it("snapshots the interaction language before the first await", async () => {
+    const { runtime } = setup();
+    runtime.setWorkspaceTrusted(true);
+    runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
+    runtime.setAgentSelection({ profileId: "codex" });
+    runtime.setOutputLanguage("zh-CN");
+    const requests: AgentConversationRequest[] = [];
+    runtime.setSkillLoader(async () => {
+      // A hot configuration update while this turn is loading must not split
+      // the prompt across two preferences.
+      runtime.setOutputLanguage("en");
+      return { sourcePath: "/skills/review/SKILL.md", instructions: "Review carefully." };
+    });
+    runtime.setAgentRunner({
+      run: async () => ({ kind: "ask", text: "typed" }),
+      runConversation: async (request) => {
+        requests.push(request);
+        return "answer";
+      }
+    });
+
+    await runtime.executeConversation("ask", "Explain the cache", { skills: ["review"] });
+    expect(requests[0]?.input).toContain("Simplified Chinese (zh-CN)");
+    expect(requests[0]?.input).not.toContain("English (en)");
+  });
+
+  it("injects no language instruction when no preference is resolved", async () => {
+    const { runtime } = setup();
+    runtime.setWorkspaceTrusted(true);
+    runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
+    runtime.setAgentSelection({ profileId: "codex" });
+    runtime.setRuleLoader(async () => undefined);
+    const requests: AgentConversationRequest[] = [];
+    runtime.setAgentRunner({
+      run: async () => ({ kind: "ask", text: "typed" }),
+      runConversation: async (request) => {
+        requests.push(request);
+        return "answer";
+      }
+    });
+
+    runtime.setOutputLanguage(undefined);
+    await runtime.executeConversation("ask", "Explain the cache");
+    await runtime.executeConversation("plan", "Add a cache");
+    expect(requests[0]?.input).toBe("Explain the cache");
+    expect(requests[1]?.input).not.toContain("Interaction language set by Dext");
+    expect(requests[1]?.input.endsWith("Goal:\n\nAdd a cache")).toBe(true);
+  });
+
   it("keeps a write tier on the conversation path and never lets a read-only mode escalate", async () => {
     const { runtime } = setup();
     runtime.setWorkspaceTrusted(true);
@@ -859,6 +948,11 @@ describe("Dext runtime", () => {
     expect(request.input).toContain("`mermaid`");
     expect(request.input).toContain("top-level numbered checkbox");
     expect(request.input).toContain("Do not use nested lists");
+    // The document body follows the setting; when none is configured the model
+    // follows the user's own language. Headings keep their protocol language.
+    expect(request.input).toContain("Section headings stay in English");
+    expect(request.input).toContain("configured interaction language");
+    expect(request.input).toContain("when no language is configured");
     // The response envelope is appended after the whole template, so the
     // model sees the document rules before the chat/file boundary.
     expect(request.input.indexOf("You are in Dext Plan mode.")).toBeLessThan(request.input.indexOf("dext-plan:start"));
@@ -977,6 +1071,7 @@ describe("Dext runtime", () => {
     runtime.setWorkspaceTrusted(true);
     runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
     runtime.setAgentSelection({ profileId: "codex", permission: "full-access" });
+    runtime.setOutputLanguage("zh-TW");
     let request: { mode: string; input: string; permission?: string; allowWorkspaceWrite: boolean } | undefined;
     runtime.setAgentRunner({
       run: async () => ({ kind: "ask", text: "unused" }),
@@ -989,10 +1084,45 @@ describe("Dext runtime", () => {
     await runtime.executeConversation("plan", "Implement the saved plan", { executePlan: true });
     expect(request).toMatchObject({
       mode: "plan",
-      input: "Implement the saved plan",
       permission: "full-access",
       allowWorkspaceWrite: true
     });
+    expect(request?.input).toContain("Traditional Chinese (zh-TW)");
+    // Building a plan gets the language preference but not the plan-document
+    // template or its chat/file delimiter.
+    expect(request?.input).not.toContain("dext-plan:start");
+    expect(request?.input.endsWith("Implement the saved plan")).toBe(true);
+  });
+
+  it("applies language changes to later Plan revisions without rewriting the request", async () => {
+    const { runtime } = setup();
+    runtime.setWorkspaceTrusted(true);
+    runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
+    runtime.setAgentSelection({ profileId: "codex" });
+    runtime.setRuleLoader(async () => undefined);
+    runtime.setOutputLanguage("zh-CN");
+    const requests: AgentConversationRequest[] = [];
+    runtime.setAgentRunner({
+      run: async () => ({ kind: "ask", text: "unused" }),
+      runConversation: async (request) => {
+        requests.push(request);
+        return "# Plan";
+      }
+    });
+
+    await runtime.executeConversation("plan", "Add a cache", { planPath: "cache.plan.md" });
+    runtime.setOutputLanguage("en");
+    const revision = "Revise the plan: use Redis and keep the public API unchanged.";
+    await runtime.executeConversation("plan", revision, { planPath: "cache.plan.md" });
+
+    expect(requests[0]?.input).toContain("Simplified Chinese (zh-CN)");
+    expect(requests[0]?.input).not.toContain("English (en)");
+    // The next turn picks up the new value, and the revision request is passed
+    // through verbatim below the instruction.
+    expect(requests[1]?.input).toContain("English (en)");
+    expect(requests[1]?.input).not.toContain("Simplified Chinese (zh-CN)");
+    expect(requests[1]?.input).toContain("when revising an existing plan");
+    expect(requests[1]?.input.endsWith(`Goal:\n\n${revision}`)).toBe(true);
   });
 
   it("lets .dext/rules/plan.md replace the built-in Plan instruction", async () => {
@@ -1001,6 +1131,7 @@ describe("Dext runtime", () => {
     runtime.setWorkspaceTrusted(true);
     runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
     runtime.setAgentSelection({ profileId: "codex" });
+    runtime.setOutputLanguage("ja");
     const requestedPaths: string[] = [];
     runtime.setRuleLoader(async (path) => {
       requestedPaths.push(path.replaceAll("\\", "/"));
@@ -1019,6 +1150,11 @@ describe("Dext runtime", () => {
     expect(requestedPaths).toEqual(["/workspace/.dext/rules/plan.md"]);
     expect(sent).toContain("Project planning instruction.");
     expect(sent).not.toContain("You are in Dext Plan mode.");
+    // A custom rule keeps its own structure; the language preference and the
+    // chat/file boundary are still appended by Dext.
+    expect(sent).toContain("Japanese (ja)");
+    expect(sent).toContain("dext-plan:start");
+    expect(sent.endsWith("Goal:\n\nAdd a cache")).toBe(true);
   });
 
   it("keeps the built-in Plan instruction when the workspace is untrusted", async () => {

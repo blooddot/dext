@@ -109,11 +109,13 @@ Node 内置模块和工作区依赖可以直接使用，因为代码运行在真
 
 Plan 轮次同时返回一段对话回复和一份 Markdown 计划文档，Dext 将它保存为 `.plan.md`。默认指令要求按顺序包含 `## Goal`、`## Context`、`## Design`、`## Files`、`## Tasks`、`## Verification`、`## Risks`，以及可选的 `## Out of scope`。`## Design` 下可以有 `### Before / After`、`### Execution flow` 和 `### Decisions`；它们是条件式的，没有结构性影响的改动不应画空图。
 
+计划正文采用 `dext.outputLanguage`；`auto` 跟随 VS Code 显示语言，而非操作系统语言。未配置语言时，正文跟随用户使用的语言。章节标题和任务语法保持格式自身的语言，以保证计划仍可解析；代码、命令、路径、标识符、引用原文和响应分隔符不会被翻译。设置入口、工作区覆盖关系和隐藏思考语言的限制见 [Agent 配置](agents.zh-CN.md#交互语言)。
+
 图示就是文档里的普通 `mermaid` 围栏代码块。打开计划后按 `Ctrl+Shift+V`（macOS 为 `Cmd+Shift+V`，或选择 **Open Preview to the Side**），由 VS Code 内置的 Markdown 预览渲染；Dext 不新增渲染器或预览命令。指令要求每张图保持克制——最多 12 个节点、3 个子图，节点标签加引号，不使用 HTML 或自定义样式——并在图后保留一句文字说明，因此原始 Markdown 仍可读，在不支持 Mermaid 的环境里含义也不会丢。
 
 执行计划时，`## Tasks` 也是 Dext 任务面板的输入。每个任务都应是扁平的顶层编号复选框。Dext 会解析该章节里的每一行 checklist，所以嵌套 checklist 会产生幻影任务；`##` 子标题会结束该章节，只有 `###` 阶段标题可以用于分组。Dext 按顺序把解析出的任务编号为 `plan-1`、`plan-2`，新任务保持未勾选。
 
-要替换这套模板，请在工作区创建 `.dext/rules/plan.md`。它的内容会成为完整的计划文档指令，因此项目可以使用自己的章节；分隔对话回复与计划文档的响应分隔符由 Dext 追加，不属于可覆盖的规则。
+要替换这套模板，请在工作区创建 `.dext/rules/plan.md`。它的内容会成为完整的计划文档指令，因此项目可以使用自己的章节；分隔对话回复与计划文档的响应分隔符由 Dext 追加，不属于可覆盖的规则。Dext 仍会追加已配置的交互语言指令，因此自定义模板保留自己的标题与结构，正文则遵循 `dext.outputLanguage`。
 
 ### 模板
 

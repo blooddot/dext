@@ -792,6 +792,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await sidebar.refresh();
     }),
     vscode.workspace.onDidChangeConfiguration(async (event) => {
+      // The interaction language only steers the next prompt. Apply it before
+      // the early-return branches below so a batch change that also touches
+      // submitOnEnter, a timeout, or an Agent setting never skips it. It must
+      // not reload the API set.
+      if (event.affectsConfiguration("dext.outputLanguage")) {
+        application.applyOutputLanguageSettings();
+      }
       if (
         event.affectsConfiguration("dext.submitOnEnter")
       ) {

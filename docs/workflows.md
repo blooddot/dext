@@ -118,11 +118,13 @@ Values that cross a Dext API boundary must be JSON-serializable, because the ker
 
 A Plan turn returns a chat reply plus a Markdown document that Dext saves as a `.plan.md` file. The default instruction asks for `## Goal`, `## Context`, `## Design`, `## Files`, `## Tasks`, `## Verification`, `## Risks`, and optionally `## Out of scope`, in that order. `## Design` may add `### Before / After`, `### Execution flow` and `### Decisions`; they are conditional, because a change without structural consequences should not carry an empty diagram.
 
+The document body follows `dext.outputLanguage`; `auto` uses the VS Code display language, not the operating system language. When no language is configured, the body follows the user's language. Section headings and task syntax stay in the format's own language so plans remain parseable, and code, commands, paths, identifiers, quoted text, and response delimiters are never translated. The setting, its workspace override, and the limit on hidden model reasoning are described in [Agent configuration](agents.md#interaction-language).
+
 Diagrams are ordinary fenced `mermaid` blocks inside the document. Open the plan and press `Ctrl+Shift+V` (`Cmd+Shift+V` on macOS, or **Open Preview to the Side**) to render them with VS Code's built-in Markdown Preview; Dext adds no renderer or preview command. The instruction keeps each diagram deliberately small — at most 12 nodes and 3 subgraphs, quoted node labels, no HTML or custom styling — and requires one sentence of prose after it, so the file still reads correctly as raw Markdown or on a host without Mermaid.
 
 `## Tasks` is also the input to Dext's task panel when the plan is built. Keep every task as a flat, top-level numbered checkbox. Dext parses every checklist line in that section, so a nested checklist adds phantom tasks; a `##` subheading ends the section, and only `###` phase headings may group tasks. Dext numbers the parsed tasks in order as `plan-1`, `plan-2`, and so on, and a new task stays unchecked.
 
-To replace this template, create `.dext/rules/plan.md` in the workspace. Its contents become the whole plan-document instruction, so a project can use its own sections; the response delimiters that separate the chat reply from the saved document are appended by Dext and are not part of the overridable rule.
+To replace this template, create `.dext/rules/plan.md` in the workspace. Its contents become the whole plan-document instruction, so a project can use its own sections; the response delimiters that separate the chat reply from the saved document are appended by Dext and are not part of the overridable rule. Dext still appends the configured interaction-language instruction, so a custom template keeps its headings and structure while the body follows `dext.outputLanguage`.
 
 ### Templates
 

@@ -8,6 +8,7 @@ import { DefaultAgentRunner } from "../features/agents/host/agentRouter.js";
 import { piDiscoveryIdentity } from "../features/agents/host/piAgentRunner.js";
 import { runSingleTurnCli } from "../features/agents/host/agentRunner.js";
 import { DEFAULT_AGENT_IDLE_TIMEOUT_MS, DEFAULT_AGENT_TIMEOUT_MS, MAX_AGENT_TIMEOUT_MS } from "../features/agents/domain/agentTimeout.js";
+import { resolveOutputLanguage } from "../features/agents/domain/outputLanguage.js";
 import { REPAIR_OUTPUT_FIELD } from "../features/agents/domain/axAdapter.js";
 import { BUILTIN_METHODS } from "../features/workflow/domain/builtins.js";
 import { describeApiFlowIssue, type ApiFlow, type ApiFlowIssue } from "../features/workflow/contracts/apiFlow.js";
@@ -458,6 +459,7 @@ export class DextApplication {
     this.runtime.setWorkspaceTrusted(this.workspaceTrusted);
     this.applyTimeoutSettings();
     this.applyAgentPermissionSettings();
+    this.applyOutputLanguageSettings();
     const skillDirs = this.projectWorkspaceSettings?.skillDirs ?? [];
     const mcpManifests = await this.loadMcpManifests(folder);
     // The declaration a project commits is generated from its own manifests only: a
@@ -744,6 +746,18 @@ export class DextApplication {
       if (args.length) byProvider[provider] = args;
     }
     this.runtime.setAgentCliArguments(byProvider);
+  }
+
+  /** Resolves the interaction-language setting for the next turn. `auto`
+   * follows `vscode.env.language`, the editor display language, rather than the
+   * operating system locale; an unsupported display language resolves to no
+   * instruction. */
+  applyOutputLanguageSettings(): void {
+    const configuration = vscode.workspace.getConfiguration("dext");
+    this.runtime.setOutputLanguage(resolveOutputLanguage(
+      configuration.get<unknown>("outputLanguage", "auto"),
+      vscode.env.language
+    ));
   }
 
   state(): SidebarState {

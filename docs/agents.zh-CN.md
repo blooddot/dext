@@ -42,6 +42,14 @@ await agent({ input: "实现这次修改", cli: "codex" });
 
 `dext.agentCli` 控制输入区域显示哪些内置 Agent，默认是 `codex`、`claude` 和 `deepseek-harness`；在列表中加入 `pi` 可启用其配置。
 
+### 交互语言
+
+`dext.outputLanguage` 控制 Dext 的回复、进度说明、可见 reasoning 摘要和计划正文所使用的自然语言。打开 VS Code 设置，搜索 `dext.outputLanguage`，在 `auto`、`zh-CN`、`zh-TW`、`en`、`ja`、`ko` 中选择；默认是 `auto`。
+
+`auto` 跟随 VS Code 显示语言（`vscode.env.language`），不是操作系统语言。因此中文 Windows 上使用英文界面的 VS Code 时，回复是英文。若显示语言不属于这五种受支持语言，Dext 不注入语言指令，由模型自行判断，而不会强制改成英文。该设置是 window 作用域：工作区值覆盖用户值，修改后下一轮生效，不需要新建会话或重载插件。
+
+Dext 不会翻译计划格式要求的章节标题、任务 checklist 语法、代码、命令、路径、标识符、引用原文或自身的分隔符。当前轮用户明确要求翻译或改用另一种语言时，以该请求为准。Dext 可以约束可见文本，但提供方隐藏的内部思考语言由模型控制，无法保证。
+
 内置 API 始终可用。Code 输入区就是普通 TypeScript：`.dext/api` 模块就是普通的 ES 模块，自定义 API 通过 `import` 语句进入作用域，补全、悬停和 F12 由编辑器的 TypeScript 服务依据生成的声明提供。
 
 ### 单轮超时

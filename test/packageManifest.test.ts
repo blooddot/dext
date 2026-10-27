@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { OUTPUT_LANGUAGES } from "../src/features/agents/domain/outputLanguage.js";
 
 interface PackageManifest {
   activationEvents?: string[];
@@ -12,6 +13,7 @@ interface PackageManifest {
     configuration?: {
       properties?: Record<string, {
         type?: string;
+        scope?: string;
         default?: unknown;
         enum?: string[];
         minimum?: number;
@@ -292,6 +294,21 @@ describe("Dext package manifest", () => {
     for (const [name, property] of Object.entries(properties)) {
       expect(JSON.stringify({ name, property })).not.toMatch(/[\u4e00-\u9fff]/);
     }
+  });
+
+  it("offers a window-scoped interaction language dropdown", async () => {
+    const properties = (await manifest()).contributes?.configuration?.properties ?? {};
+    const setting = properties["dext.outputLanguage"];
+    expect(setting).toMatchObject({ type: "string", scope: "window", default: "auto" });
+    expect(setting?.enum).toEqual([...OUTPUT_LANGUAGES]);
+    // VS Code renders one description per option, and every option needs one.
+    expect(setting?.enumDescriptions).toHaveLength(OUTPUT_LANGUAGES.length);
+    // Auto is the editor display language, not the OS locale, and the workspace
+    // value is the documented override.
+    expect(setting?.description).toContain("VS Code display language");
+    expect(setting?.description).toContain("not the operating system language");
+    expect(setting?.description).toContain("workspace value overrides");
+    expect(setting?.description).toContain("next turn");
   });
 
   it("exposes the layout and history limits the UI reads at runtime", async () => {

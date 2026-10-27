@@ -18,6 +18,7 @@ import type { AgentMcpServer, AgentPermission, AgentProfile, AgentProvider, Agen
 import { DefaultAgentRunner } from "../../agents/host/agentRouter.js";
 import type { AgentRunner } from "../../agents/host/agentRunner.js";
 import { DEFAULT_HARNESS_PRESET, harnessPresetOrDefault } from "../../agents/domain/harnessPresetDefault.js";
+import { outputLanguageInstruction, type ResolvedOutputLanguage } from "../../agents/domain/outputLanguage.js";
 import { guardPlanDocumentEvents } from "../../conversations/domain/planDocumentStream.js";
 import { PLAN_DOCUMENT_END, PLAN_DOCUMENT_START } from "../../conversations/domain/planResponse.js";
 import { DEFAULT_PLAN_INSTRUCTION } from "../../conversations/domain/planTemplate.js";
@@ -131,8 +132,8 @@ function adaptTypedMcpResult(result: McpRawResult, kind: string): DextResult {
  * plan's content, but Dext still needs this boundary between chat and file. */
 const PLAN_RESPONSE_FORMAT_INSTRUCTION = [
   "Response format required by Dext:",
-  "- First, write a concise conversational reply for the user in their language. State what you investigated, the important decisions, and—when revising an existing plan—what changed. Do not repeat the complete plan in this reply.",
-  `- Then put the complete plan document, and nothing else, between these exact delimiter lines: ${PLAN_DOCUMENT_START} and ${PLAN_DOCUMENT_END}.`,
+  "- First, write a concise conversational reply in the configured interaction language, or in the user's language when no language is configured. State what you investigated, the important decisions, and—when revising an existing plan—what changed. Do not repeat the complete plan in this reply.",
+  `- Then put the complete plan document, written in that same language, and nothing else, between these exact delimiter lines: ${PLAN_DOCUMENT_START} and ${PLAN_DOCUMENT_END}.`,
   "- Do not put the delimiters inside a Markdown code fence."
 ].join("\n");
 
@@ -294,6 +295,9 @@ export class DextRuntime implements WorkflowRuntime {
   private workspaceTrusted = false;
   private defaultAgentPermission: WritableAgentPermission = "workspace-write";
   private agentCliArguments: Readonly<Partial<Record<AgentProvider, readonly string[]>>> = {};
+  /** Resolved once by the host; `undefined` means no language instruction is
+   * injected and the provider keeps deciding from the user's message. */
+  private outputLanguage: ResolvedOutputLanguage | undefined;
   private conversationMcpServers: (() => readonly AgentMcpServer[] | Promise<readonly AgentMcpServer[]>) | undefined;
   private skillLoader: ((skill: string, workspace: DirRef, agent?: string) => Promise<{ instructions: string; sourcePath: string }>) | undefined;
   private ruleLoader: ((path: string) => Promise<string | undefined>) | undefined;
@@ -393,6 +397,12 @@ export class DextRuntime implements WorkflowRuntime {
 
   setAgentCliArguments(argumentsByProvider: Readonly<Partial<Record<AgentProvider, readonly string[]>>>): void {
     this.agentCliArguments = { ...argumentsByProvider };
+  }
+
+  /** A resolved interaction language, or `undefined` for "let the model
+   * decide". The next conversation turn snapshots this value. */
+  setOutputLanguage(language: ResolvedOutputLanguage | undefined): void {
+    this.outputLanguage = language;
   }
 
   private agentPermission(): WritableAgentPermission {
@@ -847,6 +857,10 @@ export class DextRuntime implements WorkflowRuntime {
     metadata: Readonly<ExecutionMetadata> = {}
   ): Promise<RuntimeResponse> {
     if (metadata.signal?.aborted) throw new ExecutionCancelledError();
+    // Snapshot before the first await: a configuration change while skills,
+    // commands, or plan rules are loading must not split one turn across two
+    // language preferences. Reads are synchronous from here on.
+    const languageInstruction = outputLanguageInstruction(this.outputLanguage);
     const text = input.trim();
     if (!text) throw new Error("Enter a message before sending it.");
     const method = this.registry.get(mode);
@@ -876,10 +890,11 @@ export class DextRuntime implements WorkflowRuntime {
       ? combineInstructions(
         conversationInstruction,
         await this.planInstruction(),
+        languageInstruction,
         PLAN_RESPONSE_FORMAT_INSTRUCTION,
         `---\n\nGoal:\n\n${text}`
       )!
-      : combineInstructions(conversationInstruction, text)!;
+      : combineInstructions(conversationInstruction, languageInstruction, text)!;
     const started = performance.now();
     const sessionId = metadata.agentSessionId
       ? `${metadata.agentSessionId}\u0000conversation`

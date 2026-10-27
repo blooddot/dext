@@ -7,7 +7,7 @@ const PLAN_MODE_PREAMBLE = [
   "- Do not create, modify, or delete any file. Dext saves the plan document for you.",
   "- Do not ask clarifying questions. Record assumptions and open questions in the plan instead.",
   "- Read the relevant source, tests, documentation and configuration before deciding. Name exact files, symbols, commands and expected results.",
-  "- Section headings stay in English, in the order below. Write the body in the user's language.",
+  "- Section headings stay in English, in the order below. Write the body in the configured interaction language; when no language is configured, follow the user's language.",
   "- Replace every angle-bracket placeholder. A finished plan contains no `<...>` or `TBD` text.",
   "- Aim for 60-150 lines. State each fact once: in prose, a table, or a diagram, never all three.",
   "- Keep one source of truth: the `## Files` list and the `## Tasks` checklist drive execution; diagrams explain, they do not redefine it."

@@ -841,6 +841,28 @@
           "default": true,
           "description": "Send the message with Enter in Agent, Ask, and Plan modes, using Shift+Enter for a newline. Turn this off to require Ctrl+Enter to send. Code mode always runs with Ctrl+Enter."
         },
+        "dext.outputLanguage": {
+          "type": "string",
+          "scope": "window",
+          "default": "auto",
+          "enum": [
+            "auto",
+            "zh-CN",
+            "zh-TW",
+            "en",
+            "ja",
+            "ko"
+          ],
+          "enumDescriptions": [
+            "Follow the VS Code display language: Simplified Chinese, Traditional Chinese, English, Japanese, or Korean. Other display languages leave the choice to the model.",
+            "Reply in Simplified Chinese.",
+            "Reply in Traditional Chinese.",
+            "Reply in English.",
+            "Reply in Japanese.",
+            "Reply in Korean."
+          ],
+          "description": "Language for Dext replies, progress updates, visible reasoning summaries, and plan bodies. Auto follows the VS Code display language, not the operating system language. A workspace value overrides the user value, and changes apply to the next turn. Section headings, task syntax, code, commands, paths, identifiers, quoted text, and delimiters are not translated. The language of hidden model reasoning is controlled by the model and cannot be guaranteed."
+        },
         "dext.history.maxTurns": {
           "type": "integer",
           "default": 100,

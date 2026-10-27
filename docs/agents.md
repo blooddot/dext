@@ -29,6 +29,14 @@ Omit both `cli` and `model` to use the current Input selection. Providing only `
 
 The `dext.agentCli` setting controls which built-in Agent profiles are shown in the composer. It defaults to `codex`, `claude`, and `deepseek-harness`; add `pi` to enable its profile.
 
+### Interaction language
+
+The `dext.outputLanguage` setting controls the natural language of Dext's replies, progress updates, visible reasoning summaries, and plan bodies. Open VS Code Settings, search `dext.outputLanguage`, and choose `auto`, `zh-CN`, `zh-TW`, `en`, `ja`, or `ko`; the default is `auto`.
+
+`auto` follows the VS Code display language (`vscode.env.language`), not the operating system language. An English VS Code on a Chinese Windows system therefore replies in English. If the display language is not one of the five supported languages, Dext adds no language instruction and leaves the choice to the model, rather than forcing English. The setting has window scope: a workspace value overrides the user value, and a change applies to the next turn without starting a new conversation or reloading the plugin.
+
+Dext never translates section headings required by the plan format, task checklist syntax, code, commands, paths, identifiers, quoted source text, or its own delimiters. An explicit request in the current turn, such as a translation, overrides the setting for that turn. Dext can steer visible text, but the language a provider uses for hidden internal reasoning is controlled by the model and cannot be guaranteed.
+
 Built-in APIs are always available. Code input is plain TypeScript: a `.dext/api` module is an ordinary ES module, so a custom API is scoped with an `import` statement, and completion, hover and F12 come from the editor's TypeScript service against the generated declaration.
 
 ### Turn timeouts
