@@ -10,6 +10,8 @@ All notable changes to Dext are documented in this file.
 
 ## Unreleased
 
+- Narrow the Project architecture review signals. `community-split` stays quiet for a graph community that spans more than 8 responsibility modules, because that describes the whole application rather than one reviewable boundary, and `module-fragmentation` now measures the largest cohesive group against files that actually have a community, so isolated type-only imports no longer make a context look fragmented.
+
 - Show Pi CLI in the composer by default. `dext.agentCli` now defaults to `codex`, `claude`, `deepseek-harness`, and `pi`, so **Dext: Configure Agent** can associate an installed Pi without a settings edit first. Removing an ID still hides that backend, and Pi's command, version and RPC checks are unchanged.
 
 - Apply the **Output Language** setting to Code mode. `agent()` and `ask()` calls made from workflow code now receive the same interaction-language instruction as Agent, Ask, and Plan turns, so their progress updates and visible reasoning follow `dext.outputLanguage`. The shared instruction also states that JSON keys, schema field names, enum values and other machine-readable output are never translated, and a template's format contract stays last so the language preference cannot outrank the output contract.
