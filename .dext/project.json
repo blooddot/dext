@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": 42,
+  "version": 43,
   "knowledge": {
     "enabled": true,
     "initialized": true
@@ -28,5 +28,5 @@
     "model": "[\"deepseek-official\",\"deepseek-flash\"]",
     "reasoningEffort": "max"
   },
-  "updatedAt": 1792842855810
+  "updatedAt": 1793077978205
 }
