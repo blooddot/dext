@@ -62,6 +62,7 @@ export function outputLanguageInstruction(language: ResolvedOutputLanguage | und
     "Interaction language set by Dext:",
     `- Use ${LANGUAGE_NAMES[language]} for every user-facing reply, progress update, visible reasoning summary, and Plan document body.`,
     "- Keep the structure and protocol intact: do not translate section headings required by the Plan format, task checklist numbering or status markers, code, commands, file paths, identifiers, quoted source text, or Dext delimiter lines.",
+    "- Never translate machine-readable output: JSON keys, schema field names, enum values, type names, and any value the response contract defines. Only human-readable prose changes language.",
     "- Preserve the user's original wording inside quoted input and file contents.",
     "- If the user explicitly asks for another language or a translation in this turn, follow that request instead."
   ].join("\n");

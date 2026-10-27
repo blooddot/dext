@@ -89,7 +89,10 @@ describe("output language contract", () => {
         "file paths",
         "identifiers",
         "quoted source text",
-        "delimiter lines"
+        "delimiter lines",
+        "JSON keys",
+        "schema field names",
+        "enum values"
       ]) {
         expect(instruction).toContain(protectedContent);
       }
