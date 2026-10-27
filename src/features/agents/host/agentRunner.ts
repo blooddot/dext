@@ -471,8 +471,14 @@ function tokenCount(value: unknown): number | undefined {
 export function agentTokenUsage(value: unknown): AgentTokenUsage | undefined {
   const usage = record(value);
   if (!usage) return undefined;
-  const inputTokens = tokenCount(usage.input_tokens ?? usage.inputTokens);
-  const cachedInputTokens = tokenCount(usage.cached_input_tokens ?? usage.cachedInputTokens);
+  // Claude reports cache read/write beside a bare `input_tokens`, while Codex's
+  // `cached_input_tokens` is already counted inside its `input_tokens`.
+  const cacheRead = tokenCount(usage.cache_read_input_tokens);
+  const cacheWrite = tokenCount(usage.cache_creation_input_tokens);
+  const reportedInput = tokenCount(usage.input_tokens ?? usage.inputTokens);
+  const inputTokens = reportedInput === undefined && cacheRead === undefined && cacheWrite === undefined
+    ? undefined : (reportedInput ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0);
+  const cachedInputTokens = tokenCount(usage.cached_input_tokens ?? usage.cachedInputTokens) ?? cacheRead;
   const outputTokens = tokenCount(usage.output_tokens ?? usage.outputTokens);
   const totalTokens = tokenCount(usage.total_tokens ?? usage.totalTokens);
   if (inputTokens === undefined && cachedInputTokens === undefined && outputTokens === undefined && totalTokens === undefined) {
@@ -922,6 +928,10 @@ export async function runClaudeConversation(request: AgentConversationRequest, o
     if (frame.type === "result") {
       resultSeen = true;
       resultError = claudeFailure(line);
+      // This frame carries the turn's only billed usage report, and the shared
+      // parser never sees it because the control loop consumes it here.
+      const usageEvent = parseClaudeStreamLine(line);
+      if (usageEvent) request.onEvent?.(usageEvent);
       // The CLI stays alive for more input, so the turn ends with stdin. A failed
       // result still ends it; the close handler reports the reason.
       child.stdin.end();

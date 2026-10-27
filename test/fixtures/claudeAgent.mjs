@@ -91,6 +91,6 @@ lines.on("line", (line) => {
     if (answer === undefined) return; // The scenario emitted its own terminal frame.
     send(message("assistant", [{ type: "text", text: answer }]));
     send({ type: "result", subtype: "success", session_id: sessionId, is_error: false, result: answer,
-      usage: { input_tokens: 10, output_tokens: 5 } });
+      usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 800, cache_creation_input_tokens: 20 } });
   })();
 });

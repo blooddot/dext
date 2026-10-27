@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
-  claudeAnswerMap, claudeAskUserQuestion, claudeControlArguments, claudePermissionMode, runClaudeConversation
+  agentTokenUsage, claudeAnswerMap, claudeAskUserQuestion, claudeControlArguments, claudePermissionMode, runClaudeConversation
 } from "../src/features/agents/host/agentRunner.js";
 import type { AgentConversationRequest } from "../src/features/agents/host/agentRunner.js";
 import type { AgentInputRequest, AgentStreamEvent, ExecutionMetadata, UiFormResult } from "../src/shared/contracts/types.js";
@@ -66,7 +66,27 @@ describe("Claude control-protocol arguments", () => {
   });
 });
 
+describe("Provider token usage", () => {
+  it("counts Claude's cache tokens as input and leaves Codex's subset alone", () => {
+    // Claude: input_tokens excludes cache, so the total must include both.
+    expect(agentTokenUsage({ input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 800, cache_creation_input_tokens: 20 }))
+      .toEqual({ inputTokens: 830, cachedInputTokens: 800, outputTokens: 5 });
+    // Codex: input_tokens already contains the cached subset.
+    expect(agentTokenUsage({ input_tokens: 830, cached_input_tokens: 800, output_tokens: 5, total_tokens: 835 }))
+      .toEqual({ inputTokens: 830, cachedInputTokens: 800, outputTokens: 5, totalTokens: 835 });
+    expect(agentTokenUsage({})).toBeUndefined();
+    expect(agentTokenUsage(undefined)).toBeUndefined();
+  });
+});
+
 describe("Claude interactive conversations", () => {
+  it("reports the turn's billed usage from the result frame", async () => {
+    const { events, run } = setup();
+    await run("plain");
+    expect(events.filter((event) => event.usage).map((event) => event.usage)).toEqual([
+      { inputTokens: 830, cachedInputTokens: 800, outputTokens: 5 }
+    ]);
+  });
   it("answers AskUserQuestion through Dext's card", async () => {
     const { metadata, run, onSession } = setup();
     expect(await run("question")).toBe(`answers=${JSON.stringify({ "Which one?": "B" })}`);
