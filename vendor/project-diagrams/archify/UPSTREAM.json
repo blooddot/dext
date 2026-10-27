@@ -1,13 +1,42 @@
 {
   "repository": "https://github.com/tt-a1i/archify",
   "revision": "e62275b6373fa63436e195635835c313ce028b21",
+  "revisionType": "tag",
+  "sourceCommit": "208acba8d412335185b2056fedf54b3405df43fb",
+  "version": "3.2.0",
+  "releaseTag": "v3.2.0",
+  "archiveUrl": "https://github.com/tt-a1i/archify/releases/download/v3.2.0/archify.zip",
   "archive": "archify.zip",
   "archiveSha256": "70e210265c59f24dcbdf2a502ff671104b5454e7ee7d3554aecd86bad32384f5",
   "integration": "unmodified local CLI runtime pruned to validate/deliver dependencies; invoked by Project adapter; no skill installed",
   "pruned": {
-    "renderers": ["erd", "explainer", "timeline", "waterfall"],
-    "schemas": ["erd", "explainer", "timeline", "waterfall"],
-    "commands": ["doctor", "compare", "migrate", "guide"],
-    "intentionallyOmitted": ["examples/", "references/", "recipes/", "delta/", "migrations/", "SKILL.md"]
-  }
+    "renderers": [
+      "erd",
+      "explainer",
+      "timeline",
+      "waterfall"
+    ],
+    "schemas": [
+      "erd",
+      "explainer",
+      "timeline",
+      "waterfall"
+    ],
+    "commands": [
+      "doctor",
+      "compare",
+      "migrate",
+      "guide"
+    ],
+    "intentionallyOmitted": [
+      "examples/",
+      "references/",
+      "recipes/",
+      "delta/",
+      "migrations/",
+      "SKILL.md"
+    ]
+  },
+  "runtimeFileCount": 126,
+  "runtimeSha256": "8d2a33d7ac5ce92f5fd107b25dd04b25d5d8b522a1824b476507ac7c59eaa4c0"
 }

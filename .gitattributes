@@ -1,0 +1,2 @@
+# Preserve the exact bytes of the upstream release on Windows checkouts.
+vendor/project-diagrams/archify/** -text

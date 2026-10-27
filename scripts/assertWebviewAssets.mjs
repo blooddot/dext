@@ -5,6 +5,9 @@ import { resolve } from "node:path";
 import { listFiles } from "@vscode/vsce";
 import { structureIndexAssets } from "./buildStructureIndexAssets.mjs";
 import { checkStructureIndexRuntime } from "./checkStructureIndexRuntime.mjs";
+import { checkArchifyUpstream } from "./checkArchifyUpstream.mjs";
+
+const archifyRuntime = await checkArchifyUpstream();
 
 const output = resolve("dist", "webview");
 const entries = await readdir(output, { recursive: true });
@@ -27,6 +30,9 @@ const mainStyles = await readFile(resolve(output, "main.css"), "utf8");
 // Files on disk can pass build checks while .vscodeignore removes them from the VSIX.
 // Keep the History stylesheet's existing URL valid for pages open during an update.
 const packagedFiles = new Set((await listFiles()).map((file) => file.replaceAll("\\", "/")));
+for (const path of [...archifyRuntime.paths, "UPSTREAM.json"]) {
+  assert.ok(packagedFiles.has(`vendor/project-diagrams/archify/${path}`), `Missing packaged Archify runtime file '${path}'.`);
+}
 for (const [pkg, file] of structureIndexAssets) {
   for (const name of [file, `${pkg}.LICENSE`]) {
     assert.ok(packagedFiles.has(`dist/structure-index/${name}`), `Missing structure index asset '${name}'.`);

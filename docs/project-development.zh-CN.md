@@ -103,6 +103,8 @@ Overview 还会读取上级目录的 esbuild/Vite/Webpack/Rollup 构建配置作
 
 ## 图表渲染
 
+Archify 的固定发布来源、源码边界、升级命令和新功能接入流程见 [Archify 集成与升级](archify-integration.zh-CN.md)。
+
 Project Intent 和与渲染器无关的 `ProjectDiagram` IR 仍是数据来源。结构图、C4 视图、流程、时序、数据流、生命周期、树图和类图统一使用本地 Archify 3.2.0，它是 Project 图的唯一渲染器。Mermaid 11.17.2 仍用于会话和表单 Markdown 中的 `mermaid` 代码块，不参与 Project 图渲染。Project ID、正文和源码链接来自已保存模型，不依赖在线渲染服务。
 
 
