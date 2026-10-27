@@ -47,7 +47,7 @@ async function runHostChecks(): Promise<void> {
   // the default behavior on a working machine is unchanged.
   if (process.env.DEXT_SKIP_MONACO_CSP !== "1") await monacoWebviewHostTest(extension.extensionUri, await composerTypesForTest());
 
-  assert.deepEqual(vscode.workspace.getConfiguration("dext").inspect<string[]>("agentCli")?.defaultValue, ["codex", "claude", "deepseek-harness"]);
+  assert.deepEqual(vscode.workspace.getConfiguration("dext").inspect<string[]>("agentCli")?.defaultValue, ["codex", "claude", "deepseek-harness", "pi"]);
   const commands = await vscode.commands.getCommands(true);
   assert.ok(commands.includes("dext.configureAgent"));
   assert.deepEqual(commands.filter((command) => command.startsWith("dext.") && /completion/i.test(command)), [], "Retired inline completion commands must not be registered.");

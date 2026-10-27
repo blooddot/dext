@@ -56,7 +56,7 @@ describe("Agent profile defaults", () => {
     expect(new AgentProfileStore().list().find((profile) => profile.id === "claude")?.defaults?.model).toBe("opusplan");
   });
 
-  it("exposes Harness as the third backend", () => {
+  it("exposes every built-in backend, with Pi limited to full access", () => {
     expect(new AgentProfileStore().list().map((profile) => profile.id)).toEqual(["codex", "claude", "deepseek-harness", "pi"]);
     expect(new AgentProfileStore().list().find((profile) => profile.id === "pi")?.writablePermissions).toEqual(["full-access"]);
   });

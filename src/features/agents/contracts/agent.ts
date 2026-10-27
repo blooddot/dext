@@ -16,6 +16,11 @@ export type AgentProvider = "codex" | "claude" | "deepseek-harness" | "pi";
 export const SUPPORTED_AGENT_PROFILE_IDS: readonly AgentProvider[] = ["codex", "claude", "deepseek-harness", "pi"];
 
 
+/** Profiles shown when `dext.agentCli` is unset or lists no supported ID.
+ * Keep `dext.agentCli.default` in package.json in sync. */
+export const DEFAULT_AGENT_PROFILE_IDS: readonly AgentProvider[] = ["codex", "claude", "deepseek-harness", "pi"];
+
+
 export interface AgentProfile {
   id: string;
   label: string;

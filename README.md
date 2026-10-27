@@ -30,7 +30,7 @@ Add files and selections as context, revisit conversations in History, and recor
 
 Drag files from the VS Code Explorer, hold **Shift**, and release over the highlighted Dext input to insert file references at the drop position. You can drag multiple selected files together.
 
-Dext supports **Codex CLI, Claude CLI, DeepSeek Harness, and optional Pi CLI**. To associate an already installed Pi, add `pi` to `dext.agentCli`, then run **Dext: Configure Agent**. Dext does not install or repair Pi; see [Pi capabilities and permissions](docs/agents.md#pi).
+Dext supports **Codex CLI, Claude CLI, DeepSeek Harness, and Pi CLI**, all shown in the Agent list by default. To associate an already installed Pi, run **Dext: Configure Agent**. Dext does not install or repair Pi; see [Pi capabilities and permissions](docs/agents.md#pi). Remove an ID from `dext.agentCli` to hide that backend.
 
 ## Installation
 

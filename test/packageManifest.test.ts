@@ -357,7 +357,7 @@ describe("Dext package manifest", () => {
     // A passthrough argument must not be a way around the tier.
     expect(passthrough?.markdownDescription).toContain("cannot loosen the permission tier");
     const agentCli = properties["dext.agentCli"];
-    expect(agentCli).toMatchObject({ type: "array", default: ["codex", "claude", "deepseek-harness"] });
+    expect(agentCli).toMatchObject({ type: "array", default: ["codex", "claude", "deepseek-harness", "pi"] });
     const agentCliItems = (agentCli as unknown as { items?: { type?: string; enum?: string[] } } | undefined)?.items;
     expect(agentCliItems).toMatchObject({ type: "string" });
     expect(agentCliItems?.enum).toBeUndefined();

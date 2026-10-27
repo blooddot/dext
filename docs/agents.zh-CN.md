@@ -40,7 +40,7 @@ await agent({ input: "实现这次修改", cli: "codex" });
 | 同时提供 `cli` 和 `model` | 使用显式模型选项，未填写的推理或速度选项由 CLI 默认值决定。 |
 | 只提供 `model` | 使用输入区域选择的 CLI；模型未变时继承未指定选项，模型改变时使用 CLI 默认值。 |
 
-`dext.agentCli` 控制输入区域显示哪些内置 Agent，默认是 `codex`、`claude` 和 `deepseek-harness`；在列表中加入 `pi` 可启用其配置。
+`dext.agentCli` 控制输入区域显示哪些内置 Agent，默认是 `codex`、`claude`、`deepseek-harness` 和 `pi`；移除某个 ID 可隐藏对应配置，重新加入即可恢复。
 
 ### 交互语言
 
@@ -76,7 +76,7 @@ Claude 对话使用 CLI 的双向控制协议：`--input-format stream-json` 打
 
 安装 DeepSeek Harness 桌面版，在 Harness 中配置模型凭据，再在 Dext 选择 **DeepSeek Harness**。**Dext: Configure Agent** 可配置可执行文件路径（默认使用 PATH 上桌面版的 `dsh` 启动器），并通过 ACP 发现模型和推理选项；首次选择也会发现模型。模型留空时使用 Harness 默认值。Dext 在扩展启动时读取一次 `$DSH_HOME/settings.yaml` 中的 `llm-pi-ai.providers`、`llm-deepseek` 模型和 `agent-default-model` 路由；其中未定义的字段改用桌面 profile 的 `$DSH_HOME/profiles/desktop/cordis.patch.yml`（Harness 应用把界面里新增的模型保存在这里）。两个路径都从 `$DSH_HOME`（未设置时为 `~/.dsh`）解析，因此 Windows 与 macOS 使用同一套代码。首次选择 Harness 或运行配置命令时会刷新，并把缓存结果用于临时 ACP 覆盖层；不会复制或修改用户的 profile 文件或 `.credentials.yaml`。安装和凭据由 Harness 管理。
 
-Dext 使用 ACP，并固定 ACP SDK `1.4.0`——受支持的各 Harness 发布版也使用同一版本。入口为[官方 CLI](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/cli/README.md) 的 `dsh --profile acp`；Dext 实际调用的启动器已核对握手、创建/恢复/关闭会话、模型配置、执行及取消接口。新安装默认显示三个后端，可通过 `dext.agentCli` 限定列表。
+Dext 使用 ACP，并固定 ACP SDK `1.4.0`——受支持的各 Harness 发布版也使用同一版本。入口为[官方 CLI](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/cli/README.md) 的 `dsh --profile acp`；Dext 实际调用的启动器已核对握手、创建/恢复/关闭会话、模型配置、执行及取消接口。新安装默认显示四个后端，可通过 `dext.agentCli` 限定列表。
 
 桌面版启动器通过其内置 Electron（`--expose-internals`、`ELECTRON_RUN_AS_NODE`）执行，因为 ACP 入口在 `app.asar` 内，普通 node 读不到。
 
@@ -110,7 +110,7 @@ AIOA/CDP 接入已移除，不提供旧 AIOA 对话兼容或迁移。
 
 ## Pi
 
-请自行准备 Pi 1.4.0 或兼容的更新 CLI，完成认证和模型配置。在 `dext.agentCli` 加入 `pi`（原有三个默认项不变），运行 **Dext: Configure Agent**，选择 Pi，关联 PATH 中的 `pi` 或已有可执行路径。Dext 检查命令版本和所需 RPC 接口，区分命令缺失、启动失败及协议不兼容；不会下载 Pi、修改 PATH、选择 Node 运行时或修复环境。
+请自行准备 Pi 1.4.0 或兼容的更新 CLI，完成认证和模型配置。Pi 默认显示在 Agent 列表中，运行 **Dext: Configure Agent**，选择 Pi，关联 PATH 中的 `pi` 或已有可执行路径。Dext 检查命令版本和所需 RPC 接口，区分命令缺失、启动失败及协议不兼容；不会下载 Pi、修改 PATH、选择 Node 运行时或修复环境。
 
 模型发现读取 Pi 自有的已认证模型目录，不发模型请求。需要刷新时重新配置 Pi；选择模型后按需读取支持的推理档位。清空 Model/Reasoning 会恢复 CLI 启动默认值，避免保留上一轮覆盖。模型 ID 包含提供方，例如：
 

@@ -27,7 +27,7 @@ await agent({ input: "Implement the change", cli: "codex" });
 
 Omit both `cli` and `model` to use the current Input selection. Providing only `cli` uses that CLI's own default configuration, without inheriting the Input model, reasoning, or speed settings—even when the CLI matches Input. Providing both uses the explicit model options and leaves omitted reasoning/speed options to the CLI defaults. Providing only `model` uses Input's selected CLI; unspecified options retain Input settings when the model is unchanged, otherwise they use CLI defaults. These overrides apply only to the current call. Codex Speed controls Standard/Fast processing directly.
 
-The `dext.agentCli` setting controls which built-in Agent profiles are shown in the composer. It defaults to `codex`, `claude`, and `deepseek-harness`; add `pi` to enable its profile.
+The `dext.agentCli` setting controls which built-in Agent profiles are shown in the composer. It defaults to `codex`, `claude`, `deepseek-harness`, and `pi`; remove an ID to hide that profile, or add it back to restore it.
 
 ### Interaction language
 
@@ -63,7 +63,7 @@ Read-only Ask and Plan turns use Claude's `plan` mode, Agent turns use `acceptEd
 
 Install the DeepSeek Harness desktop app, configure its model credentials in Harness, then select **DeepSeek Harness** in Dext. **Dext: Configure Agent** accepts the executable path (the app's `dsh` launcher on PATH is used by default) and discovers model and reasoning choices over ACP; leaving the model unset uses the Harness default. First selection also discovers models. Dext reads the settings-defined `llm-pi-ai.providers`, `llm-deepseek` models and `agent-default-model` route from `$DSH_HOME/settings.yaml` once at extension startup; any field that file leaves undefined falls back to the desktop profile's `$DSH_HOME/profiles/desktop/cordis.patch.yml`, which is where the Harness app saves models added in its UI. Both paths resolve from `$DSH_HOME` (or `~/.dsh` when unset), so Windows and macOS use the same code. Dext refreshes them when Harness is newly selected or configured, then applies the cached result in a temporary ACP overlay. It never copies or changes the user's profile files or `.credentials.yaml`. Dext does not install Harness or manage its credentials.
 
-Dext speaks ACP and pins ACP SDK `1.4.0`, the version the supported Harness releases use. The [official CLI](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/cli/README.md) exposes `dsh --profile acp`; the launcher Dext invokes was checked for initialize, new/resume/close, model configuration, prompt and cancellation. New installations show all three backends. `dext.agentCli` can restrict that list.
+Dext speaks ACP and pins ACP SDK `1.4.0`, the version the supported Harness releases use. The [official CLI](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/cli/README.md) exposes `dsh --profile acp`; the launcher Dext invokes was checked for initialize, new/resume/close, model configuration, prompt and cancellation. New installations show all four backends. `dext.agentCli` can restrict that list.
 
 The desktop launcher is started through its bundled Electron (`--expose-internals`, `ELECTRON_RUN_AS_NODE`) because the ACP entry lives inside `app.asar`, where plain node cannot read it.
 
@@ -97,7 +97,7 @@ AIOA/CDP support has been removed. Old AIOA conversations have no compatibility 
 
 ## Pi
 
-Prepare Pi 1.4.0 or a compatible newer CLI yourself, including authentication and models. Add `pi` to `dext.agentCli` (the three default entries stay unchanged), run **Dext: Configure Agent**, select Pi, and associate `pi` on PATH or an existing executable path. Dext checks the command version and required RPC interfaces. Missing commands, startup failures and incompatible protocols are reported separately; Dext never downloads Pi, changes PATH, selects a Node runtime, or repairs your environment.
+Prepare Pi 1.4.0 or a compatible newer CLI yourself, including authentication and models. Pi is listed by default; run **Dext: Configure Agent**, select Pi, and associate `pi` on PATH or an existing executable path. Dext checks the command version and required RPC interfaces. Missing commands, startup failures and incompatible protocols are reported separately; Dext never downloads Pi, changes PATH, selects a Node runtime, or repairs your environment.
 
 Model discovery reads Pi's own authenticated model catalog without making a model request. Refresh by configuring Pi again; selecting a model discovers its supported thinking levels. Clear Model/Reasoning to restore the CLI startup defaults rather than retain the previous override. Model IDs include their provider, for example:
 

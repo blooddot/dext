@@ -30,7 +30,7 @@ Dext 是一款支持 AI 对话与类型化工作流的 Visual Studio Code 插件
 
 从 VS Code 文件资源管理器拖动文件时，按住 **Shift**，在 Dext 输入框高亮后松开鼠标，即可在落点插入文件引用（ref）。支持多选文件一起拖入。
 
-支持 **Codex CLI、Claude CLI、DeepSeek Harness 和可选的 Pi CLI**。关联已安装的 Pi 时，在 `dext.agentCli` 中加入 `pi`，再运行 **Dext: Configure Agent**。Dext 不安装或修复 Pi，详见 [Pi 能力与权限](docs/agents.zh-CN.md#pi)。
+支持 **Codex CLI、Claude CLI、DeepSeek Harness 和 Pi CLI**，默认都会显示在 Agent 列表中。关联已安装的 Pi 时，运行 **Dext: Configure Agent**。Dext 不安装或修复 Pi，详见 [Pi 能力与权限](docs/agents.zh-CN.md#pi)。如需隐藏某个后端，从 `dext.agentCli` 中移除对应 ID。
 
 ## 安装
 

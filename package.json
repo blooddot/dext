@@ -927,12 +927,13 @@
           "default": [
             "codex",
             "claude",
-            "deepseek-harness"
+            "deepseek-harness",
+            "pi"
           ],
           "items": {
             "type": "string"
           },
-          "markdownDescription": "Agent backend IDs shown in the Dext composer: `codex`, `claude`, `deepseek-harness`, and optional `pi`. Associate an already installed Pi using Dext: Configure Agent. Unsupported IDs are rejected."
+          "markdownDescription": "Agent backend IDs shown in the Dext composer: `codex`, `claude`, `deepseek-harness`, and `pi`. For Pi, run Dext: Configure Agent to associate an already installed CLI. Unsupported IDs are rejected."
         },
         "dext.agent.timeoutMs": {
           "type": "integer",

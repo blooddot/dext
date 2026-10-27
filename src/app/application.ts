@@ -24,7 +24,7 @@ import { createResultRepair } from "../features/agents/host/resultRepair.js";
 import { DextRuntime } from "../features/workflow/host/runtime.js";
 import { SkillCatalog } from "../features/workflow/host/skillCatalog.js";
 import type { CallableDefinition, CodeRef, ExecutionMetadata, InputExecutionResponse } from "../shared/contracts/types.js";
-import { AGENT_PERMISSIONS, SUPPORTED_AGENT_PROFILE_IDS, type AgentMcpServer, type AgentProfile, type AgentProvider, type AgentSelection, type WritableAgentPermission } from "../features/agents/contracts/agent.js";
+import { AGENT_PERMISSIONS, DEFAULT_AGENT_PROFILE_IDS, SUPPORTED_AGENT_PROFILE_IDS, type AgentMcpServer, type AgentProfile, type AgentProvider, type AgentSelection, type WritableAgentPermission } from "../features/agents/contracts/agent.js";
 import { AgentProfileStore } from "../features/agents/host/agentProfiles.js";
 import { createProjectAiProvider } from "../features/project/host/generation/projectAiProvider.js";
 import { DEFAULT_DISPATCH_CONCURRENCY, DextKernelHost } from "../runner/dextHost.js";
@@ -1609,20 +1609,20 @@ export class DextApplication {
 
   /** Profiles exposed to the composer. */
   agentProfiles(): AgentProfile[] {
-    const configured = vscode.workspace.getConfiguration("dext").get<unknown>("agentCli", ["codex", "claude", "deepseek-harness"]);
+    const configured = vscode.workspace.getConfiguration("dext").get<unknown>("agentCli", DEFAULT_AGENT_PROFILE_IDS);
     const ids = Array.isArray(configured)
       ? [...new Set(configured
         .filter((item): item is string => typeof item === "string" && item.trim() !== "")
         .map((item) => item.trim()))]
       : [];
     const enabledIds = ids.filter((id) => (SUPPORTED_AGENT_PROFILE_IDS as readonly string[]).includes(id));
-    const selectedIds = enabledIds.length ? enabledIds : ["codex", "claude", "deepseek-harness"];
+    const selectedIds = enabledIds.length ? enabledIds : DEFAULT_AGENT_PROFILE_IDS;
     return this.agents.list(selectedIds, this.workspaceTrusted ? this.workspaceRoot : undefined);
   }
 
   /** Returns non-empty profile IDs that cannot be used by `dext.agentCli`. */
   invalidAgentCliIds(): string[] {
-    const configured = vscode.workspace.getConfiguration("dext").get<unknown>("agentCli", ["codex", "claude", "deepseek-harness"]);
+    const configured = vscode.workspace.getConfiguration("dext").get<unknown>("agentCli", DEFAULT_AGENT_PROFILE_IDS);
     if (!Array.isArray(configured)) return [];
     return [...new Set(configured
       .filter((item): item is string => typeof item === "string" && item.trim() !== "")
