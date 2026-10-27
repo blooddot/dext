@@ -1,0 +1,872 @@
+{
+  "schemaVersion": 1,
+  "id": "dext-extension-activation-host-composition",
+  "title": "扩展激活与 DextApplication 宿主组合",
+  "kind": "architecture",
+  "nodes": [
+    {
+      "id": "host.activate",
+      "label": "activate 激活入口",
+      "role": "component",
+      "description": "VS Code 调用的导出激活函数：接收 ExtensionContext，创建 DextApplication 并配置 Pi 运行时，登记 application.dispose 释放回调，再为首个文件工作区设置运行时根与信任状态。随后创建 ProjectStore、读取项目定义并注入工作区设置和结构工具提供器，调用 reload；再以 workspaceState 创建会话历史与偏好，构造历史面板、侧边栏和编辑器标签，条件满足时调用 setupProject。片段后段还创建 API 参考、资源与 API 数据源，但命令注册全貌不在可见行内，因此不据此断言。",
+      "semanticIds": [
+        "host.activate",
+        "responsibility:d025c3e54c310b040362"
+      ],
+      "evidence": [
+        {
+          "path": "src/extension.ts",
+          "symbol": "activate",
+          "line": 42,
+          "note": "导出 activate，接收 vscode.ExtensionContext。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/extension.ts",
+          "symbol": "DextApplication",
+          "line": 43,
+          "note": "用 globalState、secrets 和 globalStorageUri 构造组合根。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/extension.ts",
+          "line": 46,
+          "note": "登记 application.dispose 作为扩展释放回调。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/extension.ts",
+          "line": 48,
+          "note": "为第一个工作区设置运行时根目录。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/extension.ts",
+          "line": 49,
+          "note": "按工作区信任状态设置运行时信任标志。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/extension.ts",
+          "line": 64,
+          "note": "项目设置准备完成后调用 application.reload()。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/extension.ts",
+          "symbol": "DextHistoryStore",
+          "line": 70,
+          "note": "以 workspaceState 构造历史存储。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/extension.ts",
+          "symbol": "DextSidebarProvider",
+          "line": 82,
+          "note": "构造侧边栏并注入应用、历史与偏好。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/extension.ts",
+          "symbol": "EditorTabManager",
+          "line": 109,
+          "note": "创建共享编辑器标签管理器。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/extension.ts",
+          "symbol": "setupProject",
+          "line": 120,
+          "note": "在项目条件成立时调用项目装配。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        }
+      ],
+      "confidence": 0.95,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "host.application",
+      "label": "DextApplication 组合根",
+      "role": "container",
+      "description": "DextApplication 是激活阶段的宿主组合根：类字段创建 MethodRegistry 与由 VsCodeContextHost 支撑的 ContextResolver，并以二者及 terminalRun/applyPatch 处理器构造 DextRuntime；registry 与 runtime 作为公开字段供激活入口和其他宿主组件使用。当前片段未展示 MCP、技能、Agent 档案与项目 AI 的完整装配；文件头导入这些模块本身不证明运行时已完成装配。",
+      "semanticIds": [
+        "host.application",
+        "responsibility:d025c3e54c310b040362"
+      ],
+      "evidence": [
+        {
+          "path": "src/app/application.ts",
+          "symbol": "DextApplication",
+          "line": 143,
+          "note": "DextApplication 类定义开始。",
+          "contentHash": "6bd4674f201fbb5eb9d724aa802b6b0d48132095b6e736508217de655b23e186"
+        },
+        {
+          "path": "src/app/application.ts",
+          "symbol": "MethodRegistry",
+          "line": 145,
+          "note": "公开只读 registry 字段。",
+          "contentHash": "6bd4674f201fbb5eb9d724aa802b6b0d48132095b6e736508217de655b23e186"
+        },
+        {
+          "path": "src/app/application.ts",
+          "line": 146,
+          "note": "用 VsCodeContextHost 构造 ContextResolver。",
+          "contentHash": "6bd4674f201fbb5eb9d724aa802b6b0d48132095b6e736508217de655b23e186"
+        },
+        {
+          "path": "src/app/application.ts",
+          "symbol": "DextRuntime",
+          "line": 147,
+          "note": "以 registry 和 contextResolver 构造运行时。",
+          "contentHash": "6bd4674f201fbb5eb9d724aa802b6b0d48132095b6e736508217de655b23e186"
+        },
+        {
+          "path": "src/app/application.ts",
+          "line": 151,
+          "note": "注入 terminalRun 与 applyPatch 宿主处理器。",
+          "contentHash": "6bd4674f201fbb5eb9d724aa802b6b0d48132095b6e736508217de655b23e186"
+        },
+        {
+          "path": "src/app/application.ts",
+          "line": 153,
+          "note": "类字段中保留按需创建的 Node 内核位置。",
+          "contentHash": "6bd4674f201fbb5eb9d724aa802b6b0d48132095b6e736508217de655b23e186"
+        }
+      ],
+      "confidence": 0.9,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "host.runtime",
+      "label": "DextRuntime 运行时",
+      "role": "service",
+      "description": "由 DextApplication 直接构造的工作流运行时，接收 MethodRegistry、ContextResolver 以及 terminalRun/applyPatch 宿主处理器；激活入口在 workspace 文件夹存在时写入工作区根，并按 VS Code 信任状态与 file scheme 设置信任标志。片段只证明装配和状态注入，不证明具体工作流调用顺序。",
+      "semanticIds": [
+        "host.runtime"
+      ],
+      "evidence": [
+        {
+          "path": "src/app/application.ts",
+          "symbol": "DextRuntime",
+          "line": 147,
+          "note": "运行时字段在类初始化时构造。",
+          "contentHash": "6bd4674f201fbb5eb9d724aa802b6b0d48132095b6e736508217de655b23e186"
+        },
+        {
+          "path": "src/app/application.ts",
+          "line": 150,
+          "note": "构造参数包含 registry、contextResolver 和处理器。",
+          "contentHash": "6bd4674f201fbb5eb9d724aa802b6b0d48132095b6e736508217de655b23e186"
+        },
+        {
+          "path": "src/extension.ts",
+          "line": 48,
+          "note": "激活入口设置工作区根。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/extension.ts",
+          "line": 49,
+          "note": "激活入口设置工作区信任状态。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        }
+      ],
+      "confidence": 0.9,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "host.kernel",
+      "label": "Node 内核（按需）",
+      "role": "component",
+      "description": "DextApplication 的可选 DextKernelHost 私有字段。注释说明它延迟到首次使用才创建，使没有 Code 运行的工作区不必承担子进程开销；当前可见行只显示导入与字段声明，未显示启动、握手或销毁实现。",
+      "semanticIds": [
+        "host.kernel"
+      ],
+      "evidence": [
+        {
+          "path": "src/app/application.ts",
+          "symbol": "DextKernelHost",
+          "line": 30,
+          "note": "从 runner/dextHost 导入内核宿主类型。",
+          "contentHash": "6bd4674f201fbb5eb9d724aa802b6b0d48132095b6e736508217de655b23e186"
+        },
+        {
+          "path": "src/app/application.ts",
+          "line": 153,
+          "note": "注释说明内核在首次使用时创建。",
+          "contentHash": "6bd4674f201fbb5eb9d724aa802b6b0d48132095b6e736508217de655b23e186"
+        },
+        {
+          "path": "src/app/application.ts",
+          "symbol": "DextKernelHost",
+          "line": 155,
+          "note": "私有可选内核字段。",
+          "contentHash": "6bd4674f201fbb5eb9d724aa802b6b0d48132095b6e736508217de655b23e186"
+        }
+      ],
+      "confidence": 0.7,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "project.store",
+      "label": "ProjectStore",
+      "role": "store",
+      "description": "仅在首个工作区文件夹为 file scheme 时创建的 ProjectStore。激活期间读取项目定义，若定义包含 paths 则把 effectiveProjectWorkspaceSettings 写入 DextApplication，并注册结构工具提供器，返回项目结构的缓存路径与 dist/structureMcp.js 服务路径。片段未覆盖项目定义的写入和其他持久化行为。",
+      "semanticIds": [
+        "project.store"
+      ],
+      "evidence": [
+        {
+          "path": "src/extension.ts",
+          "line": 50,
+          "note": "仅在 workspace 文件夹 URI 为 file 时创建项目宿主。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/extension.ts",
+          "symbol": "ProjectStore",
+          "line": 51,
+          "note": "项目宿主存在时构造 ProjectStore。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/extension.ts",
+          "line": 53,
+          "note": "激活阶段读取项目定义。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/extension.ts",
+          "line": 54,
+          "note": "将有效项目工作区设置写入 DextApplication。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/extension.ts",
+          "line": 55,
+          "note": "向应用注册结构工具提供器。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/extension.ts",
+          "line": 59,
+          "note": "结构缓存路径写入扩展存储。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/extension.ts",
+          "line": 60,
+          "note": "结构 MCP 服务路径指向 dist/structureMcp.js。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        }
+      ],
+      "confidence": 0.9,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "project.setup",
+      "label": "setupProject 项目装配",
+      "role": "component",
+      "description": "项目条件成立时由 activate 调用的 Project 装配入口，传入 ExtensionContext、WorkspaceFolder、ProjectStore、共享的 EditorTabManager/EditorTabRestorer、项目编辑器映射、HTML 渲染器、ProjectAiProvider、AgentProfile 读取器，以及设置变更、引用源和刷新侧边栏的回调。设置变更回调会更新 DextApplication、reload 并刷新侧边栏。src/app/projectSetup.ts 的可见行只声明 ProjectSetupOptions 输入，未展示函数体或内部初始化。",
+      "semanticIds": [
+        "project.setup"
+      ],
+      "evidence": [
+        {
+          "path": "src/extension.ts",
+          "line": 119,
+          "note": "项目宿主、文件夹和项目存储同时存在时才进入装配。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/extension.ts",
+          "symbol": "setupProject",
+          "line": 120,
+          "note": "传入编辑器标签管理器、恢复器和项目存储。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/extension.ts",
+          "line": 121,
+          "note": "注入项目 AI provider 与 Agent 档案读取器。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/extension.ts",
+          "line": 123,
+          "note": "设置变更后更新应用、reload 并刷新侧边栏。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/app/projectSetup.ts",
+          "line": 26,
+          "note": "ProjectSetupOptions 定义装配输入。",
+          "contentHash": "4cb770f440758c894569adc13187479c63aadfd45b836a60a68133919bcd7b44"
+        },
+        {
+          "path": "src/app/projectSetup.ts",
+          "line": 27,
+          "note": "选项包含 ProjectStore、EditorTabManager 和 EditorTabRestorer。",
+          "contentHash": "4cb770f440758c894569adc13187479c63aadfd45b836a60a68133919bcd7b44"
+        }
+      ],
+      "confidence": 0.88,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "editor.tabs",
+      "label": "EditorTabManager",
+      "role": "component",
+      "description": "activate 创建的统一编辑器标签管理器：用 VS Code 窗口宿主、localResourceRoots 与 renderEditorHtml 建立面板，并可在消息中按标签 key 路由到 project、api、globalResources provider；同时创建 EditorTabRestorer 并登记 dispose。源码注释称 Project、API、Global Resources 和 History 都走同一管理器，但当前可见 provider 映射仅前三类，History 面板另行构造，因此不能据此确认历史标签已纳入。",
+      "semanticIds": [
+        "editor.tabs"
+      ],
+      "evidence": [
+        {
+          "path": "src/extension.ts",
+          "line": 83,
+          "note": "注释称 Project、API、Global Resources 和 History 统一使用一个管理器。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/extension.ts",
+          "symbol": "EditorTabManager",
+          "line": 109,
+          "note": "构造共享编辑器标签管理器。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/extension.ts",
+          "line": 110,
+          "note": "创建 VS Code 标签宿主并传入渲染函数。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/extension.ts",
+          "line": 113,
+          "note": "消息按 project、api 或 globalResources kind 路由。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/extension.ts",
+          "line": 117,
+          "note": "创建 EditorTabRestorer。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/extension.ts",
+          "line": 118,
+          "note": "登记编辑器标签管理器的释放回调。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        }
+      ],
+      "confidence": 0.85,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "conversation.state",
+      "label": "会话历史与偏好",
+      "role": "store",
+      "description": "激活用 workspaceState 分别构造 DextHistoryStore 和 DextConversationPreferences，使会话历史与偏好随工作区隔离；历史存储按 dext.history.maxTurns 与 maxOutputLength 配置惰性读取限额。两者作为构造依赖交给历史面板和侧边栏。",
+      "semanticIds": [
+        "conversation.state"
+      ],
+      "evidence": [
+        {
+          "path": "src/extension.ts",
+          "line": 65,
+          "note": "注释说明会话历史应属于当前工作区而非全局状态。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/extension.ts",
+          "symbol": "DextHistoryStore",
+          "line": 70,
+          "note": "以 workspaceState 构造历史存储，并延迟读取限额配置。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/extension.ts",
+          "line": 73,
+          "note": "读取 history.maxTurns 配置。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/extension.ts",
+          "symbol": "DextConversationPreferences",
+          "line": 80,
+          "note": "以 workspaceState 构造会话偏好。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        }
+      ],
+      "confidence": 0.9,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "conversation.history",
+      "label": "历史编辑器面板",
+      "role": "component",
+      "description": "以 extensionUri、DextHistoryStore、DextConversationPreferences 和 application.storage 构造的历史编辑器宿主入口。当前片段只证明其依赖与构造，未展示它在独立标签中的渲染、恢复或消息处理。",
+      "semanticIds": [
+        "conversation.history"
+      ],
+      "evidence": [
+        {
+          "path": "src/extension.ts",
+          "symbol": "DextHistoryPanel",
+          "line": 81,
+          "note": "构造历史面板并注入历史、偏好与应用存储。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        }
+      ],
+      "confidence": 0.82,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "sidebar.host",
+      "label": "侧边栏宿主",
+      "role": "component",
+      "description": "以 extensionUri、DextApplication、DextHistoryStore 和 DextConversationPreferences 构造的侧边栏宿主。Project 装配通过回调把 Project 引用源写入侧边栏，并在工作区设置变更后刷新；片段未展开其页面和消息处理实现。",
+      "semanticIds": [
+        "sidebar.host"
+      ],
+      "evidence": [
+        {
+          "path": "src/extension.ts",
+          "symbol": "DextSidebarProvider",
+          "line": 82,
+          "note": "构造侧边栏并注入应用、历史和偏好。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/extension.ts",
+          "line": 122,
+          "note": "项目装配把引用源设置回调写入侧边栏。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/extension.ts",
+          "line": 123,
+          "note": "设置变更后刷新侧边栏。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        }
+      ],
+      "confidence": 0.88,
+      "review": "draft",
+      "freshness": "current"
+    }
+  ],
+  "relations": [
+    {
+      "id": "rel.activate-creates-application",
+      "from": "host.activate",
+      "to": "host.application",
+      "kind": "calls",
+      "label": "创建并 reload 组合根",
+      "evidence": [
+        {
+          "path": "src/extension.ts",
+          "line": 43,
+          "note": "activate 构造 DextApplication。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/extension.ts",
+          "line": 64,
+          "note": "随后调用 application.reload()。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        }
+      ],
+      "confidence": 0.95,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "rel.application-contains-runtime",
+      "from": "host.application",
+      "to": "host.runtime",
+      "kind": "contains",
+      "label": "持有运行时并注入注册表与上下文解析器",
+      "evidence": [
+        {
+          "path": "src/app/application.ts",
+          "line": 145,
+          "note": "组合根创建 MethodRegistry。",
+          "contentHash": "6bd4674f201fbb5eb9d724aa802b6b0d48132095b6e736508217de655b23e186"
+        },
+        {
+          "path": "src/app/application.ts",
+          "line": 146,
+          "note": "组合根构造 ContextResolver。",
+          "contentHash": "6bd4674f201fbb5eb9d724aa802b6b0d48132095b6e736508217de655b23e186"
+        },
+        {
+          "path": "src/app/application.ts",
+          "symbol": "DextRuntime",
+          "line": 147,
+          "note": "组合根用这些依赖构造 DextRuntime。",
+          "contentHash": "6bd4674f201fbb5eb9d724aa802b6b0d48132095b6e736508217de655b23e186"
+        }
+      ],
+      "confidence": 0.9,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "rel.activate-sets-runtime-workspace",
+      "from": "host.activate",
+      "to": "host.runtime",
+      "kind": "calls",
+      "label": "设置工作区根与信任状态",
+      "evidence": [
+        {
+          "path": "src/extension.ts",
+          "line": 48,
+          "note": "activation 调用 runtime.setWorkspaceRoot。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/extension.ts",
+          "line": 49,
+          "note": "activation 调用 runtime.setWorkspaceTrusted。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        }
+      ],
+      "confidence": 0.9,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "rel.application-contains-kernel",
+      "from": "host.application",
+      "to": "host.kernel",
+      "kind": "contains",
+      "label": "按需持有 Node 内核（未展示创建点）",
+      "evidence": [
+        {
+          "path": "src/app/application.ts",
+          "symbol": "DextKernelHost",
+          "line": 30,
+          "note": "导入内核宿主类型。",
+          "contentHash": "6bd4674f201fbb5eb9d724aa802b6b0d48132095b6e736508217de655b23e186"
+        },
+        {
+          "path": "src/app/application.ts",
+          "line": 153,
+          "note": "注释说明内核在首次使用时创建。",
+          "contentHash": "6bd4674f201fbb5eb9d724aa802b6b0d48132095b6e736508217de655b23e186"
+        },
+        {
+          "path": "src/app/application.ts",
+          "symbol": "DextKernelHost",
+          "line": 155,
+          "note": "组合根保留私有可选字段。",
+          "contentHash": "6bd4674f201fbb5eb9d724aa802b6b0d48132095b6e736508217de655b23e186"
+        }
+      ],
+      "confidence": 0.7,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "rel.activate-creates-project-store",
+      "from": "host.activate",
+      "to": "project.store",
+      "kind": "calls",
+      "label": "创建并读取项目定义",
+      "condition": "首个工作区文件夹存在且其 URI scheme 为 file",
+      "evidence": [
+        {
+          "path": "src/extension.ts",
+          "line": 50,
+          "note": "只有 file 工作区才创建项目宿主。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/extension.ts",
+          "symbol": "ProjectStore",
+          "line": 51,
+          "note": "项目宿主存在时构造 ProjectStore。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/extension.ts",
+          "line": 53,
+          "note": "激活阶段读取项目定义。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        }
+      ],
+      "confidence": 0.9,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "rel.setup-depends-project-store",
+      "from": "project.setup",
+      "to": "project.store",
+      "kind": "depends_on",
+      "label": "接收 ProjectStore 作为装配输入",
+      "evidence": [
+        {
+          "path": "src/extension.ts",
+          "line": 120,
+          "note": "setupProject 调用参数包含 projectStore。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/app/projectSetup.ts",
+          "line": 27,
+          "note": "ProjectSetupOptions 声明 projectStore 字段。",
+          "contentHash": "4cb770f440758c894569adc13187479c63aadfd45b836a60a68133919bcd7b44"
+        }
+      ],
+      "confidence": 0.9,
+      "review": "draft",
+      "freshness": "current",
+      "metadata": {
+        "provenance": "inferred",
+        "structureMatch": "reverse"
+      }
+    },
+    {
+      "id": "rel.activate-calls-project-setup",
+      "from": "host.activate",
+      "to": "project.setup",
+      "kind": "calls",
+      "label": "调用项目装配",
+      "condition": "projectHost、folder、projectStore 均存在",
+      "evidence": [
+        {
+          "path": "src/extension.ts",
+          "line": 119,
+          "note": "三个项目前置条件同时成立才进入分支。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/extension.ts",
+          "symbol": "setupProject",
+          "line": 120,
+          "note": "分支内调用 setupProject。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        }
+      ],
+      "confidence": 0.92,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "rel.setup-depends-editor-tabs",
+      "from": "project.setup",
+      "to": "editor.tabs",
+      "kind": "depends_on",
+      "label": "共享编辑器标签管理器与恢复器",
+      "evidence": [
+        {
+          "path": "src/extension.ts",
+          "line": 120,
+          "note": "编辑器标签管理器与恢复器作为选项传入。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/app/projectSetup.ts",
+          "line": 27,
+          "note": "ProjectSetupOptions 声明 editorTabs 与 editorTabRestorer。",
+          "contentHash": "4cb770f440758c894569adc13187479c63aadfd45b836a60a68133919bcd7b44"
+        }
+      ],
+      "confidence": 0.9,
+      "review": "draft",
+      "freshness": "current",
+      "metadata": {
+        "provenance": "inferred",
+        "structureMatch": "reverse"
+      }
+    },
+    {
+      "id": "rel.activate-creates-editor-tabs",
+      "from": "host.activate",
+      "to": "editor.tabs",
+      "kind": "calls",
+      "label": "创建标签管理器、渲染宿主与恢复器",
+      "evidence": [
+        {
+          "path": "src/extension.ts",
+          "symbol": "EditorTabManager",
+          "line": 109,
+          "note": "构造 EditorTabManager。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/extension.ts",
+          "line": 110,
+          "note": "创建 VS Code 标签宿主并传入渲染函数。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/extension.ts",
+          "line": 117,
+          "note": "构造 EditorTabRestorer。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        }
+      ],
+      "confidence": 0.95,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "rel.activate-creates-conversation-state",
+      "from": "host.activate",
+      "to": "conversation.state",
+      "kind": "calls",
+      "label": "以 workspaceState 构造历史与偏好",
+      "evidence": [
+        {
+          "path": "src/extension.ts",
+          "symbol": "DextHistoryStore",
+          "line": 70,
+          "note": "构造工作区历史存储。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        },
+        {
+          "path": "src/extension.ts",
+          "symbol": "DextConversationPreferences",
+          "line": 80,
+          "note": "构造工作区会话偏好。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        }
+      ],
+      "confidence": 0.95,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "rel.activate-creates-history-panel",
+      "from": "host.activate",
+      "to": "conversation.history",
+      "kind": "calls",
+      "label": "构造历史编辑器并注入存储与偏好",
+      "evidence": [
+        {
+          "path": "src/extension.ts",
+          "symbol": "DextHistoryPanel",
+          "line": 81,
+          "note": "构造历史面板并传入历史、偏好和应用存储。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        }
+      ],
+      "confidence": 0.92,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "rel.history-panel-depends-state",
+      "from": "conversation.history",
+      "to": "conversation.state",
+      "kind": "depends_on",
+      "label": "读取共享历史与偏好",
+      "evidence": [
+        {
+          "path": "src/extension.ts",
+          "line": 81,
+          "note": "历史面板的构造参数包含历史存储和偏好。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        }
+      ],
+      "confidence": 0.9,
+      "review": "draft",
+      "freshness": "current",
+      "metadata": {
+        "provenance": "inferred",
+        "structureMatch": "unmapped"
+      }
+    },
+    {
+      "id": "rel.activate-creates-sidebar",
+      "from": "host.activate",
+      "to": "sidebar.host",
+      "kind": "calls",
+      "label": "构造侧边栏并注入应用与会话状态",
+      "evidence": [
+        {
+          "path": "src/extension.ts",
+          "symbol": "DextSidebarProvider",
+          "line": 82,
+          "note": "构造侧边栏并传入应用、历史与偏好。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        }
+      ],
+      "confidence": 0.92,
+      "review": "draft",
+      "freshness": "current"
+    },
+    {
+      "id": "rel.sidebar-depends-conversation-state",
+      "from": "sidebar.host",
+      "to": "conversation.state",
+      "kind": "depends_on",
+      "label": "共享会话历史与偏好",
+      "evidence": [
+        {
+          "path": "src/extension.ts",
+          "line": 82,
+          "note": "侧边栏构造参数包含历史存储和偏好。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        }
+      ],
+      "confidence": 0.9,
+      "review": "draft",
+      "freshness": "current",
+      "metadata": {
+        "provenance": "inferred",
+        "structureMatch": "unmapped"
+      }
+    },
+    {
+      "id": "rel.sidebar-depends-application",
+      "from": "sidebar.host",
+      "to": "host.application",
+      "kind": "depends_on",
+      "label": "接收 DextApplication 引用",
+      "evidence": [
+        {
+          "path": "src/extension.ts",
+          "line": 82,
+          "note": "侧边栏构造参数包含 DextApplication。",
+          "contentHash": "b048a063c5ab34d5ff5fbb65db85891bb2ccc4bdb30736f2ae9c1d1111a781f9"
+        }
+      ],
+      "confidence": 0.82,
+      "review": "draft",
+      "freshness": "current",
+      "metadata": {
+        "provenance": "extracted",
+        "structureMatch": "direct"
+      }
+    }
+  ],
+  "version": 0,
+  "updatedAt": 1793090004078,
+  "confidence": 0.86,
+  "review": "draft",
+  "freshness": "current",
+  "metadata": {
+    "topicSummary": "激活入口先创建并配置 DextApplication，登记释放回调，为 file 工作区准备 ProjectStore 与结构工具提供器，随后 reload；再以 workspaceState 装配会话历史与偏好、历史面板、侧边栏和编辑器标签，并在项目条件成立时调用 setupProject。DextApplication 组合 MethodRegistry、ContextResolver 与 DextRuntime，并保留按需创建的 Node 内核字段。当前可见片段未覆盖命令注册全貌、MCP/技能/Agent 的完整装配、结果修复或停用顺序，故不作断言。",
+    "origin": "inferred",
+    "structureProvenance": "extracted:1;inferred:4",
+    "structureConflicts": 2,
+    "structureWarning": "2 depends_on relations point opposite to the indexed static import direction. Review the direction; imports are not runtime calls.",
+    "topicId": "responsibility:d025c3e54c310b040362",
+    "topicAnalysis": 1,
+    "topicBasis": "[\"responsibility:d025c3e54c310b040362\",\"VS Code 扩展激活与 DextApplication 宿主组合根：注册命令、侧边栏、编辑器标签、历史、项目、API 与资源界面；装配工作流运行时、Agent 路由与档案、MCP、资源与技能、项目 AI、Dext 存储和 Node 内核；处理工作区配置重载与结果修复，并在停用时释放资源。\",[\"src/extension.ts\",\"src/app/application.ts\"],[{\"path\":\"src/extension.ts\",\"contentHash\":\"9e59e2c2b5f242522fdce06b4e02b5f3bc216f1772fbef892e12b57a31a43b96\"},{\"path\":\"src/app/application.ts\",\"contentHash\":\"6bd4674f201fbb5eb9d724aa802b6b0d48132095b6e736508217de655b23e186\"}],\"2b11ce3e2a208245c559ba7d6ab65db795df8c1a0cba8365c568b8ddfee9c9f1\",[\"responsibility:0b8aafb767ce267a1774\",\"responsibility:1a4b7045cff6b25375cd\",\"responsibility:1c95954204896e349d79\",\"responsibility:1e2790ac2ca6991cac34\",\"responsibility:1e74d50be90206d1ea18\",\"responsibility:268ee364d8a5406238e9\",\"responsibility:391ec2709473ddb55d3b\",\"responsibility:3f808fd29eb666b0d894\",\"responsibility:42005f34f9d27b6c1129\",\"responsibility:4872bd41e82066c464de\",\"responsibility:4cb1d3a5e8cd0971335e\",\"responsibility:54feec788b1797a33949\",\"responsibility:551dc589e25bd6d3634f\",\"responsibility:691c014dced9a85e2939\",\"responsibility:c5e3927d546ddae78db9\",\"responsibility:7585e3cceea2556c476b\",\"responsibility:81de4c0db78114fc47dd\",\"responsibility:8fc74ae020aba346959e\",\"responsibility:8fe515d6b918025e5619\",\"responsibility:92c9f0d7eda498a59360\",\"responsibility:947915a83407774ecfa2\",\"responsibility:95cfd2d580b1653e565b\",\"responsibility:98e53942cbe30d650dc9\",\"responsibility:ae124288335f9f747fc0\",\"responsibility:b45b90f0240a422ffd02\",\"responsibility:befcf9832c5949875c53\",\"responsibility:83274176426e4978d2d4\",\"responsibility:d456786476cf94715990\",\"responsibility:df7184c9f2ef6fcd43a6\",\"responsibility:f7f5dfde61101eaf19d8\",\"responsibility:f831b7e137ce537986e7\",\"responsibility:fce2c533311888aada57\",\"responsibility:fd18bd6005ca114416c9\"],[\"src/app/application.ts\",\"src/extension.ts\"]]"
+  }
+}

@@ -1,98 +1,82 @@
 {
   "version": 1,
-  "trigger": "initialize",
-  "generatedAt": 1792837580360,
-  "inputHash": "44f7cd8f0dee0c41748524888b7db39bb6ec30f3a2e9beb508c3713dbb07170f",
-  "structure": {
-    "files": 234,
-    "parsed": 231,
-    "cached": 231,
+  "trigger": "diagram",
+  "generatedAt": 1793089719579,
+  "inputHash": "e3665b0830ec33fb743a4a0235975b4e8d2afe429234a02ab6f153eb93aacd55",
+  "structureIndex": {
+    "hash": "d03da1fa2730b742cea1853f0500f460bda20a0a5e77e087496fe14a8e305aa2",
+    "files": 264,
+    "parsed": 261,
+    "modules": 7,
     "failed": 1,
-    "unsupported": 0,
-    "modules": 7
+    "unsupported": 0
   },
   "selection": {
     "scope": [
       "src/**"
     ],
     "preset": "whole",
-    "files": 20,
-    "fileChars": 8000,
-    "evidenceChars": 120000
+    "files": 32,
+    "fileChars": 12000,
+    "evidenceChars": 96000
   },
   "inventory": {
-    "total": 13,
-    "withSymbols": 8,
+    "total": 28,
+    "withSymbols": 28,
     "byKind": {
-      "source": 9,
-      "readme": 1,
-      "manifest": 3
+      "source": 28
     }
   },
   "excerpts": {
-    "total": 19,
-    "truncated": 18,
+    "total": 4,
+    "truncated": 4,
     "byKind": {
-      "readme": 1,
-      "manifest": 2,
-      "source": 16
+      "source": 4
     }
   },
   "omitted": {
-    "files": 1,
+    "files": 24,
     "objects": 0,
     "knowledge": 0
   },
   "coverage": [
-    "Local index: 231 source files, 7 modules; 231 reused, 1 issues, 0 unsupported files.",
-    "Static imports are code dependencies, not runtime calls. Dynamic imports, macros and unresolved references remain unverified.",
-    "Runtime boundary excerpts are selected from the complete index within a text budget; omitted boundaries remain unverified.",
-    "Browser build entry not indexed in configured scope: node_modules/monaco-editor/esm/vs/editor/editor.worker.js",
-    "Browser build entry not indexed in configured scope: node_modules/monaco-editor/esm/vs/languages/features/typescript/ts.worker.js",
-    "Runtime window omitted by budget: src/app/application.ts:755.",
-    "Runtime window omitted by budget: src/app/application.ts:683.",
-    "Runtime window omitted by budget: src/app/sidebarProvider.ts:1031.",
-    "Runtime window omitted by budget: src/features/project/host/indexing/projectStructureKnowledge.ts:75.",
-    "Runtime window omitted by budget: src/features/conversations/host/conversationController.ts:254.",
-    "Runtime window omitted by budget: src/platform/editor-tabs/editorTabManager.ts:142.",
-    "Runtime window omitted by budget: src/runner/dextHost.ts:208.",
-    "Browser startup excerpt omitted by budget or unsupported entry: node_modules/monaco-editor/esm/vs/editor/editor.worker.js",
-    "Browser startup excerpt omitted by budget or unsupported entry: node_modules/monaco-editor/esm/vs/languages/features/typescript/ts.worker.js"
+    "Module analysis prioritizes its recorded member files and direct dependencies within a bounded scope. Unrelated directory neighbors are excluded.",
+    "Source text exceeds the limit: only 28 of 78 source candidates were read."
   ],
   "paths": [
     "src/extension.ts",
-    "src/webview/main.ts",
+    "src/app/application.ts",
     "src/app/projectSetup.ts",
-    "src/features/mcp/host/mcpRegistry.ts",
-    "src/features/project/browser/entry.ts",
-    "src/features/project/browser/projectReader.ts",
-    "src/features/project/host/diagrams/archifyAdapter.ts",
-    "src/features/project/host/projectEditorProvider.ts",
-    "src/platform/editor-tabs/editorTabManager.ts",
-    "README.md",
-    "esbuild.mjs",
-    "package.json",
-    "tsconfig.json"
+    "src/app/sidebarProvider.ts",
+    "src/features/agents/contracts/agent.ts",
+    "src/features/agents/domain/agentTimeout.ts",
+    "src/features/agents/domain/axAdapter.ts",
+    "src/features/agents/domain/outputLanguage.ts",
+    "src/features/agents/host/agentAssertions.ts",
+    "src/features/agents/host/agentProfiles.ts",
+    "src/features/agents/host/agentRouter.ts",
+    "src/features/agents/host/agentRunner.ts",
+    "src/features/agents/host/harnessPresets.ts",
+    "src/features/agents/host/piAgentRunner.ts",
+    "src/features/agents/host/resultRepair.ts",
+    "src/features/conversations/contracts/history.ts",
+    "src/features/conversations/contracts/preferences.ts",
+    "src/features/conversations/domain/planFile.ts",
+    "src/features/conversations/domain/planResponse.ts",
+    "src/features/conversations/host/conversationPreferences.ts",
+    "src/features/conversations/host/historyEditorProvider.ts",
+    "src/features/conversations/host/historyStore.ts",
+    "src/features/conversations/presentation/historyRender.ts",
+    "src/features/conversations/presentation/turnPresentation.ts",
+    "src/features/mcp/contracts/mcp.ts",
+    "src/features/mcp/domain/mcpManifest.ts",
+    "src/features/mcp/host/mcpImageCache.ts",
+    "src/features/mcp/host/mcpRegistry.ts"
   ],
   "excerpted": [
-    "README.md",
-    "esbuild.mjs",
-    "package.json",
-    "src/webview/main.ts",
-    "src/webview/main.ts",
-    "src/webview/main.ts",
-    "src/webview/main.ts",
-    "src/features/project/browser/entry.ts",
-    "src/features/project/browser/projectReader.ts",
-    "src/features/project/browser/projectReader.ts",
-    "src/features/project/host/diagrams/archifyAdapter.ts",
+    "src/extension.ts",
+    "src/app/application.ts",
     "src/app/projectSetup.ts",
-    "src/features/project/host/projectEditorProvider.ts",
-    "src/platform/editor-tabs/editorTabManager.ts",
-    "src/extension.ts",
-    "src/extension.ts",
-    "src/features/mcp/host/mcpRegistry.ts",
-    "src/features/mcp/host/mcpRegistry.ts",
-    "src/features/mcp/host/mcpRegistry.ts"
+    "src/features/agents/contracts/agent.ts"
   ]
 }
