@@ -8,3 +8,4 @@ coverage/
 .tmp-*
 # Transient Project initialization checkpoint; source paths and AI outlines, never published.
 .dext/project-initialization.checkpoint.json
+.taste-skill
