@@ -48,6 +48,28 @@ const document = await mcp.docs.read({ uri: "README.md" });
 console.log(document.content);
 ```
 
+## 图片
+
+MCP 返回的 `image` content block 会被保留，而不是丢弃。Dext 解码后只接受
+`image/png`、`image/jpeg`、`image/gif` 和 `image/webp`，单图上限 10 MiB，并以随机
+文件名写入 `globalStorage/mcp-media`。原始 `mcpRaw` 信封因此增加 `images` 数组，
+其中 `url` 是 Webview 资源地址，MCP token 不会出现在 URL 中。卡片可以把它当作普通
+Markdown 使用：
+
+```ts
+const result = await mcp.xiaocui.media_image({ taskId, imageId });
+const description = result.images?.[0]
+  ? `![缺陷图](${result.images[0].url})`
+  : "没有返回图片。";
+```
+
+图片写入缓存，不塞进 `content` 或卡片描述，因此不会占用 20,000 字符的描述上限。
+`text` 和 `structured` 的行为保持不变。图片格式不支持、超过上限或缓存失败时，结果
+的其余部分仍会返回，`imageError` 说明跳过了什么。缓存按时间和总大小清理，但当前
+扩展进程写入的文件会保留，避免长时间等待确认时图片被提前删除。分块返回 base64 的
+`media_download` 不算 image block：应由服务端提供返回标准 `image` block 的工具，或
+自行拼接字节后引用已写入的文件。
+
 如果 stdio MCP 从环境变量读取凭据，只需在清单中声明变量名，不要写入密钥：
 
 ```jsonc

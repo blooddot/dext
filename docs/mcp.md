@@ -71,6 +71,32 @@ const document = await mcp.docs.read({ uri: "README.md" });
 console.log(document.content);
 ```
 
+## Images
+
+An MCP `image` content block is kept rather than discarded. Dext decodes it,
+accepts only `image/png`, `image/jpeg`, `image/gif` and `image/webp` up to 10
+MiB, and writes it to a per-call random file under `globalStorage/mcp-media`.
+The raw `mcpRaw` envelope gains an `images` array whose `url` is a Webview
+resource URL; the MCP token is never part of that URL. A card can therefore use
+the URL as ordinary Markdown:
+
+```ts
+const result = await mcp.xiaocui.media_image({ taskId, imageId });
+const description = result.images?.[0]
+  ? `![defect](${result.images[0].url})`
+  : "No image was returned.";
+```
+
+The file is cached, not embedded in `content` or the card description, so the
+20,000-character description limit is not spent on base64. `text` and
+`structured` are unchanged. If an image is unsupported, oversized, or cannot be
+cached, the rest of the result is still returned and `imageError` explains what
+was skipped. The cache is pruned by age and total size, but files written by the
+running extension are kept so a long confirmation cannot lose its image. A
+`media_download` tool that returns chunked base64 is not an image block: either
+add a server tool that returns a standard `image` block, or write the assembled
+bytes yourself and reference that file.
+
 For a stdio MCP that reads its credential from an environment variable, declare
 the variable without putting the secret in the manifest:
 

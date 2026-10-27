@@ -72,7 +72,15 @@ export const mcpRawResultSchema = z.object({
   server: z.string(),
   tool: z.string(),
   content: z.string().optional(),
-  structured: z.record(z.string(), z.unknown()).optional()
+  structured: z.record(z.string(), z.unknown()).optional(),
+  images: z.array(z.object({
+    mimeType: z.string(),
+    url: z.string(),
+    byteLength: z.number().int().nonnegative().optional(),
+    width: z.number().int().positive().optional(),
+    height: z.number().int().positive().optional()
+  }).strict()).optional(),
+  imageError: z.string().optional()
 }).strict();
 /** `AgentResult.patch`; not an API output kind. */
 export const patchResultSchema = z.object({

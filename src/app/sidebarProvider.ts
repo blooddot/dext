@@ -173,6 +173,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     this.fileSearch.dispose();
     this.fileSearch = new FileSearchController(response => this.post(response));
     this.view = view;
+    // Lightweight host tests construct a partial application without the
+    // optional image cache hook.
+    this.application.setMcpImageWebview?.(view.webview);
     this.conversation.controller.clearOutputSignatures();
     this.messageQueue.markNotReady();
     view.webview.options = {

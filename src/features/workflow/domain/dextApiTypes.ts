@@ -291,6 +291,16 @@ function renderManualTypes(extraResultTypes: readonly string[]): string[] {
       "  tool: string;",
       "  content?: string;",
       "  structured?: Record<string, unknown>;",
+      "  /** Cached MCP image blocks, each with a Webview-loadable URL. */",
+      "  images?: Array<{",
+      "    mimeType: string;",
+      "    url: string;",
+      "    byteLength?: number;",
+      "    width?: number;",
+      "    height?: number;",
+      "  }>;",
+      "  /** Why one or more image blocks were skipped; text and structured stay intact. */",
+      "  imageError?: string;",
       "}"
     ].join("\n"),
     [

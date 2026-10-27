@@ -33,7 +33,10 @@ export class DextHistoryPanel implements vscode.Disposable {
         retainContextWhenHidden: true,
         localResourceRoots: [
           vscode.Uri.joinPath(this.extensionUri, "dist"),
-          vscode.Uri.joinPath(this.extensionUri, "media")
+          vscode.Uri.joinPath(this.extensionUri, "media"),
+          // MCP images are cached under global storage and rendered from a
+          // Webview resource URL in historical cards too.
+          this.storage.globalStorageUri
         ]
       }
     );

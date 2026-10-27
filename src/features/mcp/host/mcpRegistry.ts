@@ -10,6 +10,7 @@ import type {
 } from "../contracts/mcp.js";
 import { httpUrlDiagnostic } from "../domain/mcpConfig.js";
 import type { McpProcessEvent, McpRawResult } from "../../../shared/contracts/types.js";
+import type { McpImageCache, McpImageContent } from "./mcpImageCache.js";
 
 export type {
   HttpMcpServerConfig,
@@ -103,6 +104,7 @@ export class RestMcpAdapter {
 export interface McpToolCallResult {
   content?: string;
   structuredContent?: Record<string, unknown>;
+  images?: McpImageContent[];
 }
 
 export interface McpTransportOptions {
@@ -143,14 +145,24 @@ function textFromContent(value: unknown): string | undefined {
   return text || undefined;
 }
 
+function imageContent(value: unknown): McpImageContent[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!isRecord(item) || item.type !== "image" || typeof item.data !== "string" || typeof item.mimeType !== "string") return [];
+    return [{ data: item.data, mimeType: item.mimeType }];
+  });
+}
+
 function toolResult(value: unknown, server: McpServerConfig, tool: string): McpToolCallResult {
   if (!isRecord(value)) throw new Error(`MCP tool '${server.name}.${tool}' returned an invalid response.`);
   if (value.isError === true) throw new Error(`MCP tool '${server.name}.${tool}' reported an error.`);
   const structuredContent = isRecord(value.structuredContent) ? value.structuredContent : undefined;
   const content = textFromContent(value.content);
+  const images = imageContent(value.content);
   return {
     ...(content !== undefined ? { content } : {}),
-    ...(structuredContent !== undefined ? { structuredContent } : {})
+    ...(structuredContent !== undefined ? { structuredContent } : {}),
+    ...(images.length ? { images } : {})
   };
 }
 
@@ -722,12 +734,17 @@ export class McpToolRegistry {
   private readonly servers = new Map<string, McpServerConfig>();
   private readonly tools = new Map<string, McpToolConfig>();
   private accessTokenProvider: McpAccessTokenProvider | undefined;
+  private imageCache: McpImageCache | undefined;
   private readonly rest = new RestMcpAdapter();
 
   constructor(private readonly transport: McpTransport = new DefaultMcpTransport()) {}
 
   setAccessTokenProvider(provider: McpAccessTokenProvider | undefined): void {
     this.accessTokenProvider = provider;
+  }
+
+  setImageCache(cache: McpImageCache | undefined): void {
+    this.imageCache = cache;
   }
 
   setServers(configurations: readonly unknown[]): string[] {
@@ -882,12 +899,30 @@ export class McpToolRegistry {
     const result = definition.kind === "rest"
       ? await this.rest.call(definition, input, transportOptions.accessToken)
       : await this.transport.call(configuredServer, definition.tool, input, transportOptions);
+    let images: McpRawResult["images"];
+    let imageError: string | undefined;
+    if (result.images?.length) {
+      if (!this.imageCache) {
+        imageError = "MCP image content was not cached: no image cache is configured.";
+      } else {
+        try {
+          const stored = await this.imageCache.store(result.images, `${definition.server}.${definition.tool}`);
+          if (stored.images.length) images = stored.images;
+          if (stored.diagnostics.length) imageError = stored.diagnostics.join(" ");
+        } catch (error) {
+          // Image support must never fail the tool call itself.
+          imageError = `MCP image cache failed: ${error instanceof Error ? error.message : String(error)}`;
+        }
+      }
+    }
     return {
       kind: "mcpRaw",
       server: definition.server,
       tool: definition.tool,
       ...(result.content !== undefined ? { content: result.content } : {}),
-      ...(result.structuredContent !== undefined ? { structured: result.structuredContent } : {})
+      ...(result.structuredContent !== undefined ? { structured: result.structuredContent } : {}),
+      ...(images ? { images } : {}),
+      ...(imageError ? { imageError } : {})
     };
   }
 

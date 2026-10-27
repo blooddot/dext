@@ -127,6 +127,8 @@ describe("generated Dext TypeScript surface", () => {
     }
     expect(types).toContain("export interface AgentResult {");
     expect(types).toContain("export type DextResult = ");
+    expect(types).toContain("images?: Array<{");
+    expect(types).toContain("imageError?: string;");
   });
 
   it("writes api/dext.d.ts, tsconfig.json and the ESM marker", () => {

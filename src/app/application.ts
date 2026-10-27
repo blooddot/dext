@@ -37,6 +37,7 @@ import type { SidebarState } from "../platform/webviewProtocol.js";
 
 import { parseMcpManifest } from "../features/mcp/domain/mcpManifest.js";
 import { McpToolRegistry, authDiagnostic, mcpCredentialKind, redactedMcpUrl } from "../features/mcp/host/mcpRegistry.js";
+import { McpImageCache } from "../features/mcp/host/mcpImageCache.js";
 import type { McpCredentialKind, McpDiscoveredTool, McpServerConfig, McpToolConfig } from "../features/mcp/contracts/mcp.js";
 import { McpAccessTokenStore } from "../features/mcp/host/mcpSecrets.js";
 import { DEFAULT_PLAN_DIRECTORY, planFileName, planPathSegments } from "../features/conversations/domain/planFile.js";
@@ -255,6 +256,9 @@ export class DextApplication {
   private declarationText: string = dextModuleDeclaration();
   readonly skills = new SkillCatalog();
   readonly mcp = new McpToolRegistry();
+  /** The sidebar Webview translates cached images into resource URLs; the
+   * token never enters the URL or the Webview. */
+  private mcpImageWebview: vscode.Webview | undefined;
   readonly agents: AgentProfileStore;
   private readonly agentRunner: DefaultAgentRunner;
   /** The normalized `dext.agent.*` limits. Kept in fields because the one-shot
@@ -302,6 +306,12 @@ export class DextApplication {
     this.structureToolProvider = provider;
   }
 
+  /** Called by the sidebar when its Webview exists. A cached MCP image URL is
+   * only usable in a Webview whose localResourceRoots include global storage. */
+  setMcpImageWebview(webview: vscode.Webview | undefined): void {
+    this.mcpImageWebview = webview;
+  }
+
   private async conversationMcpServers(): Promise<readonly AgentMcpServer[]> {
     if (!this.structureToolProvider || !this.workspaceTrusted) return [];
     const tool = await this.structureToolProvider();
@@ -319,6 +329,10 @@ export class DextApplication {
     // storage root. The plain file URI keeps lightweight hostless tests from
     // needing to implement Uri.joinPath just to construct the application.
     this.storage = new DextStorage(globalStorageUri ?? vscode.Uri.file(process.cwd()));
+    this.mcp.setImageCache(new McpImageCache({
+      directory: join(this.storage.globalStorageUri.fsPath, "mcp-media"),
+      toUrl: (filePath) => this.mcpImageWebview?.asWebviewUri(vscode.Uri.file(filePath)).toString()
+    }));
     this.agentRunner = new DefaultAgentRunner();
     this.agentRunner.pi.configure({ sessionDirectory: join(this.storage.globalStorageUri.fsPath, "pi-sessions") });
     // Load once during extension startup. Later launches reuse this snapshot;

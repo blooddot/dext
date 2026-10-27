@@ -244,6 +244,16 @@ export interface McpRawResult extends DextResultBase {
   tool: string;
   content?: string;
   structured?: Record<string, unknown>;
+  /** Cached image blocks from the tool result, with a URL a Webview can load. */
+  images?: Array<{
+    mimeType: string;
+    url: string;
+    byteLength?: number;
+    width?: number;
+    height?: number;
+  }>;
+  /** Why one or more image blocks were skipped; the rest of the result is intact. */
+  imageError?: string;
 }
 
 export interface PatchChange {
