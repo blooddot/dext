@@ -68,6 +68,14 @@ describe("project store", () => {
     expect((await store.readDefinition()).ai.cli).toBe("claude");
   });
 
+  it("persists Pi as the Project AI CLI", async () => {
+    const store = new ProjectStore(new MemoryHost());
+    const initial = await store.readDefinition();
+    const saved = await store.writeDefinition({ ...initial, ai: { cli: "pi" } }, initial.version);
+    expect(saved.status).toBe("applied");
+    expect((await store.readDefinition()).ai.cli).toBe("pi");
+  });
+
   it("starts from project defaults when no file exists", async () => {
     const store = new ProjectStore(new MemoryHost());
     expect(await store.readDefinition()).toMatchObject({

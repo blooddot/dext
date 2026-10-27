@@ -671,7 +671,7 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
         if (!valid) throw new Error("Choose a configured AI CLI.");
         const saved = await options.store.writeDefinition!({
           ...definition,
-          ai: cli ? { cli: cli as "codex" | "claude" | "deepseek-harness" } : {}
+          ai: cli ? { cli: cli as "codex" | "claude" | "deepseek-harness" | "pi" } : {}
         }, definition.version);
         if (saved.status === "conflict") throw new Error("Project settings changed before the AI CLI could be saved. Please retry.");
         selectedAiCli = cli;

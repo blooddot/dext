@@ -41,7 +41,7 @@ export const projectDefinitionSchema = z.object({
   /** Project-only AI CLI. Omitted means use the current Input selection. */
   /** Project-only Agent CLI and optional model override. */
   ai: z.object({
-    cli: z.enum(["codex", "claude", "deepseek-harness"]).optional(),
+    cli: z.enum(["codex", "claude", "deepseek-harness", "pi"]).optional(),
     model: z.string().min(1).optional(),
     reasoningEffort: z.string().min(1).optional(),
     speed: z.string().min(1).optional()
