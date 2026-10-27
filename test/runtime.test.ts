@@ -13,7 +13,7 @@ import { parseAgentResult } from "../src/shared/protocol/resultBoundary.js";
 import { DextRuntime, type RuntimeResultRepairRequest, type DeterministicHandler } from "../src/features/workflow/host/runtime.js";
 import { mcpRawResultSchema } from "../src/shared/contracts/schemas.js";
 import { prepareHistoryTrace } from "../src/features/conversations/domain/agentTraceReplay.js";
-import type { AgentConversationRequest, AgentStructuredRequest } from "../src/features/agents/host/agentRunner.js";
+import type { AgentConversationRequest, AgentExecutionRequest, AgentStructuredRequest } from "../src/features/agents/host/agentRunner.js";
 import type { UiFormDefinition } from "../src/shared/contracts/uiForm.js";
 import type {
   AgentResult,
@@ -276,6 +276,44 @@ describe("Dext runtime", () => {
       await expect(runtime.execute(call)).rejects.toThrow("template requires a trusted local workspace");
       runtime.setWorkspaceTrusted(true);
       await expect(runtime.execute(call)).rejects.toThrow("template requires a configured Agent profile");
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it("keeps a template's format contract after the language instruction", async () => {
+    const root = await mkdtemp(join(tmpdir(), "dext-template-"));
+    try {
+      await writeFile(join(root, "plan.md"), [
+        "---",
+        "dext-template:",
+        "  format: markdown",
+        "  title:",
+        "    type: string",
+        "    description: A short title",
+        "---",
+        "# {{title}}",
+        ""
+      ].join("\n"));
+      const { runtime } = setup();
+      runtime.setWorkspaceRoot(root);
+      runtime.setWorkspaceTrusted(true);
+      selectFakeAgent(runtime);
+      runtime.setOutputLanguage("zh-CN");
+      const requests: AgentExecutionRequest[] = [];
+      runtime.setAgentRunner({
+        run: async (request) => {
+          requests.push(request);
+          return { title: "标题" };
+        }
+      });
+
+      await runtime.execute(invoke("template", [arg("input", "write it"), arg("source", "plan.md")]));
+
+      const instruction = requests[0]?.metadata.instruction ?? "";
+      expect(instruction).toContain("Simplified Chinese (zh-CN)");
+      // The template's own format requirement stays the final instruction, so
+      // the language preference cannot outrank the output contract.
+      expect(instruction.indexOf("Dext renders your field values"))
+        .toBeGreaterThan(instruction.indexOf("Interaction language set by Dext:"));
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
@@ -780,6 +818,33 @@ describe("Dext runtime", () => {
       expect(requests[2]?.input.endsWith(`Goal:\n\n${tasks[2]}`)).toBe(true);
       expect(requests[3]?.input).not.toContain("dext-plan:start");
       expect(requests[3]?.input.endsWith(tasks[3]!)).toBe(true);
+    }
+  );
+
+  it.each(["codex", "claude", "deepseek-harness", "pi"] as const)(
+    "injects the resolved interaction language into %s Code-mode Agent calls",
+    async (provider) => {
+      const { runtime } = setup();
+      runtime.setWorkspaceRoot(process.cwd());
+      runtime.setWorkspaceTrusted(true);
+      runtime.setAgentProfiles([{ id: provider, provider, command: provider, label: provider, models: [] }]);
+      runtime.setAgentSelection({ profileId: provider, permission: "full-access" });
+      runtime.setOutputLanguage("zh-CN");
+      const requests: AgentExecutionRequest[] = [];
+      runtime.setAgentRunner({
+        run: async (request) => {
+          requests.push(request);
+          return { kind: "agent", text: "done" };
+        }
+      });
+
+      await runtime.execute(invoke("agent", [arg("input", "preview"), arg("apply", false)]));
+
+      expect(requests[0]?.metadata.instruction).toContain("Interaction language set by Dext:");
+      expect(requests[0]?.metadata.instruction).toContain("Simplified Chinese (zh-CN)");
+      expect(requests[0]?.metadata.instruction).toContain("Never translate machine-readable output");
+      // The language preference is an instruction, not a rewrite of the call.
+      expect(requests[0]?.resolved.arguments.input).toBe("preview");
     }
   );
 

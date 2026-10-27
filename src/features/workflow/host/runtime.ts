@@ -479,6 +479,11 @@ export class DextRuntime implements WorkflowRuntime {
   ): Promise<RuntimeResponse> {
     if (metadata.signal?.aborted) throw new ExecutionCancelledError();
     const started = performance.now();
+    // Snapshot before the first await, like executeConversation: a configuration
+    // change while skills, rules, or the template load must not split one call
+    // across two language preferences. Code-mode Agent calls otherwise reach the
+    // provider without the interaction-language instruction.
+    const languageInstruction = outputLanguageInstruction(this.outputLanguage);
     let method = this.registry.get(invocation.method);
     if (!method) {
       throw new Error(this.missingMethodMessage(invocation.method));
@@ -592,6 +597,7 @@ export class DextRuntime implements WorkflowRuntime {
           const callInstruction = combineInstructions(
             combineInstructions(undefined, ...skillInstructions),
             ...ruleInstructions,
+            languageInstruction,
             template ? templateInstruction(template.spec) : undefined
           );
           const instruction = combineInstructions(metadata.instruction, callInstruction);
