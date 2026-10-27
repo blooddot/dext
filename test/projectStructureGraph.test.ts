@@ -96,6 +96,39 @@ describe("derived structure graph", () => {
     expect(issues.every(issue => issue.code === "ownership-review" || issue.contextIds.every(id => contexts.some(context => context.id === id)))).toBe(true);
   });
 
+  it("keeps a whole-application community quiet when it spans too many responsibilities", () => {
+    const files: StructureMember[] = Array.from({ length: 20 }, (_, index) => ({
+      path: `src/app/${index}.ts`, hash: "h", language: "typescript", lines: 1, symbols: [], dependencies: []
+    }));
+    for (let from = 0; from < files.length; from++) for (let to = 0; to < files.length; to++) {
+      if (from !== to) files[from]!.dependencies.push({ specifier: `./${to}`, to: files[to]!.path });
+    }
+    const graph = buildStructureGraphFromMembers(files);
+    expect(graph.communities.map(community => community.files)).toEqual([files.map(file => file.path).sort()]);
+    const contexts = Array.from({ length: 10 }, (_, index) => responsibilityContext(`Area ${index + 1}`, "Part of the whole application",
+      files.slice(index * 2, index * 2 + 2), [files[index * 2]!.path]));
+    const intent = projectIntentSchema.parse({ schemaVersion: 1, updatedAt: 0, brief: { name: "App", summary: "App" }, contexts });
+    expect(projectModelQuality(intent, files).some(issue => issue.code === "community-split")).toBe(false);
+  });
+
+  it("keeps a fragmented-looking context quiet when isolated files have no community evidence", () => {
+    const files: StructureMember[] = Array.from({ length: 7 }, (_, index) => ({
+      path: `src/runtime/${index}.ts`, hash: "h", language: "typescript", lines: 1, symbols: [], dependencies: []
+    }));
+    for (const group of [[0, 1, 2, 3], [4, 5]]) for (const from of group) for (const to of group) {
+      if (from !== to) files[from]!.dependencies.push({ specifier: `./${to}`, to: files[to]!.path });
+    }
+    const graph = buildStructureGraphFromMembers(files);
+    const shape = graph.communities.map(community => community.files).sort((left, right) => right.length - left.length);
+    expect(shape[0]).toEqual(files.slice(0, 4).map(file => file.path));
+    expect(shape[1]).toEqual(files.slice(4, 6).map(file => file.path));
+    expect(shape[2]).toEqual([files[6]!.path]);
+    const context = responsibilityContext("Runtime", "One mixed runtime context",
+      [files[0]!, files[1]!, files[2]!, files[4]!, files[5]!, files[6]!], [files[0]!.path]);
+    const intent = projectIntentSchema.parse({ schemaVersion: 1, updatedAt: 0, brief: { name: "App", summary: "App" }, contexts: [context] });
+    expect(projectModelQuality(intent, files).some(issue => issue.code === "module-fragmentation")).toBe(false);
+  });
+
   it("serves bounded node, consumers, search, hubs and path queries", async () => {
     const { graph } = await graphFixture();
     expect(runStructureQuery(graph, { op: "node", path: "src/c.ts" }).nodes[0]).toMatchObject({ path: "src/c.ts", consumers: 1 });

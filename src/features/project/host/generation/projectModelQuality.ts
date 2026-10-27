@@ -17,6 +17,9 @@ export function ownershipConcerns(contexts: readonly ProjectContext[], files: re
   });
 }
 
+/** A community spread across more responsibilities than this describes the whole application, not one reviewable boundary. */
+const COMMUNITY_REVIEW_MAX_MODULES = 8;
+
 /**
  * Community structure is a review signal only: it never rewrites AI ownership or overrides the
  * one-owner-per-file validation. Small graphs and small contexts stay quiet, so a helper or a
@@ -34,7 +37,7 @@ function communityConcerns(contexts: readonly ProjectContext[], graph: Structure
     if (community.files.length < 4) continue;
     const counts = new Map<string, number>();
     for (const path of community.files) { const owner = owners.get(path); if (owner) counts.set(owner.id, (counts.get(owner.id) ?? 0) + 1); }
-    if (counts.size < 3) continue;
+    if (counts.size < 3 || counts.size > COMMUNITY_REVIEW_MAX_MODULES) continue;
     const [largest, count] = [...counts].sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))[0]!;
     if (count / community.files.length >= 0.6) continue;
     const key = `community-split:${community.id}`;
@@ -56,10 +59,13 @@ function communityConcerns(contexts: readonly ProjectContext[], graph: Structure
       counts.set(community, (counts.get(community) ?? 0) + 1);
     }
     if (counts.size < 2) continue;
+    // Isolated files (type-only imports, unresolved specifiers) form single-file communities without community evidence, so they do not count towards the fragmentation ratio.
+    const attributed = [...counts.values()].reduce((total, value) => total + value, 0);
+    if (attributed < 4) continue;
     const [largest] = [...counts].sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))[0]!;
-    if ((counts.get(largest) ?? 0) / files.length >= 0.6) continue;
+    if ((counts.get(largest) ?? 0) / attributed >= 0.6) continue;
     issues.push({ code: "module-fragmentation",
-      message: `'${context.canonicalName}' spans ${counts.size} import communities, and its largest cohesive group is ${counts.get(largest) ?? 0}/${files.length} files. Check whether distinct features were merged into one module; this is a review signal, not an ownership error.`,
+      message: `'${context.canonicalName}' spans ${counts.size} import communities, and its largest cohesive group is ${counts.get(largest) ?? 0}/${attributed} files. Check whether distinct features were merged into one module; this is a review signal, not an ownership error.`,
       contextIds: [context.id], elementIds: [], sourcePaths: files.slice(0, 8) });
   }
 
