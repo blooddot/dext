@@ -363,7 +363,12 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
         ...(targetRequest ? { target: targetRequest } : {})
       }, {
         signal: signal,
-        onEvent: (event) => post({ type: "projectDiagramProgress", message: activityLine(event).trim() || "Generating diagram…" })
+        // A status line, not a transcript: CLI tool results and answer chunks can be whole files.
+        onEvent: (event) => {
+          if (event.phase !== "status") return;
+          const line = activityLine(event).trim();
+          if (line) post({ type: "projectDiagramProgress", message: line.slice(0, 280) });
+        }
       });
       let diagram = result.diagram;
       if (request.topicId) {

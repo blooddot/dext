@@ -25,7 +25,7 @@ import {
   type ProjectModelCheckpointStage
 } from "./projectModelCheckpoint.js";
 export type { IndexedProjectEvidence, ProjectEvidenceFile, ProjectEvidenceFileInput, ProjectEvidenceInput, ProjectEvidenceInventoryEntry, ProjectEvidenceLimits, ProjectEvidencePackage, ProjectEvidenceSelection, ProjectEvidenceSummary, ProjectKnowledgeReference, ProjectStructureIndexSummary } from "../../contracts/evidence.js";
-export const PROJECT_DIAGRAM_PROMPT_VERSION = "project-diagram-7";
+export const PROJECT_DIAGRAM_PROMPT_VERSION = "project-diagram-8";
 export const PROJECT_MODEL_PROMPT_VERSION = "project-model-7";
 
 /**
@@ -1005,6 +1005,7 @@ function buildDiagramPrompt(evidence: ProjectEvidencePackage, request: ProjectDi
     ...(request.explainTopic ? ["This is a module analysis: generate its explanation and diagram together. Put a concise, evidence-grounded module explanation in diagram.metadata as the entry {key: 'topicSummary', value: '...'} and give EVERY node a useful description explaining its role and behavior. These descriptions become the module article, linked to the same nodes and evidence. Do not describe another module in detail.", "Prefer exact visible line references. Only use evidence.symbol if it literally appears in the supplied text or declared symbol list; do not invent qualified Class.method names."] : []),
     `Requirement: ${request.requirement}`,
     "Ground every node, relation and semantic structure in the supplied file excerpts. Cite exact relative paths and valid visible line numbers or symbols.",
+    "The supplied evidence is the only allowed input: do not call tools, read files or run commands. Tool output is not evidence and only delays the answer.",
     EVIDENCE_TIER_GUIDANCE,
     ...(evidence.graph?.edges.length ? ["`graph.edges` lists resolved static imports between the inventory paths. Use it to orient `depends_on` relations, but it is code dependency data, not proof of a runtime call, transport or execution order. Each relation still needs its own read evidence."] : []),
     "Answer one specific developer question. Keep one abstraction level, short labels and a clear main path. Aim for at most 10 nodes; describe secondary details in node descriptions. For workflow, show the normal path by default; add exception paths only when the requirement explicitly requests them. Every relationship must cite a supplied text excerpt, not only an inventory path.",

@@ -146,17 +146,27 @@ describe("Project topic host", () => {
         writeEvidenceSummary: async (summary) => { written.push(summary); } },
       readEvidence: async (request) => buildProjectEvidencePackage({ ...request, files: [{ path: "src/code.ts", content: "export function execute() {}" }], knowledge: [{ id: "code", kind: "context", name: "Code" }] }),
       readStructureIndex: async () => buildProjectEvidencePackage({ files: [] }) as IndexedProjectEvidence,
-      projectAiProvider: { id: "fixture", generate: async () => ({ text: JSON.stringify({ diagram: {
-        schemaVersion: 1, id: "code-view", title: "Code", kind: "architecture", version: 0, updatedAt: 1,
-        metadata: { topicSummary: "Executes source code." },
-        nodes: [{ id: "execute", description: "Runs the supplied source code.", label: "Execute", role: "component", semanticIds: ["code"], evidence: [{ path: "src/code.ts", line: 1 }] }], relations: []
-      } }) }) }
+      projectAiProvider: { id: "fixture", generate: async (request) => {
+        // A CLI may stream tool results and answer chunks; neither belongs on the status line.
+        request.onEvent?.({ phase: "tool", title: "read", text: "<path>src/code.ts</path><content>export function execute() {}</content>" });
+        request.onEvent?.({ phase: "message", text: '{"diagram":' });
+        request.onEvent?.({ phase: "status", title: "Validating AI output", text: "Checking sources." });
+        const diagram = {
+          schemaVersion: 1, id: "code-view", title: "Code", kind: "architecture", version: 0, updatedAt: 1,
+          metadata: { topicSummary: "Executes source code." },
+          nodes: [{ id: "execute", description: "Runs the supplied source code.", label: "Execute", role: "component", semanticIds: ["code"], evidence: [{ path: "src/code.ts", line: 1 }] }], relations: []
+        };
+        return { text: JSON.stringify({ diagram }) };
+      } }
     });
     const messages: { type: string; [key: string]: unknown }[] = [];
     source.subscribe?.((message) => messages.push(message));
     await source.generateTopicDiagram?.("code");
     expect(saved, JSON.stringify(messages.filter((message) => message.type === "projectDiagramGenerateFailed"))).toHaveLength(1);
     expect(saved[0]!.metadata?.topicId).toBe("code");
+    const progress = messages.filter((message) => message.type === "projectDiagramProgress").map((message) => String(message.message));
+    expect(progress).toContain("Validating AI output: Checking sources.");
+    expect(progress.some((line) => line.includes("export function execute") || line.includes('"diagram"'))).toBe(false);
     // A bounded topic read records the persisted index without claiming it was attached to the prompt.
     expect(written).toHaveLength(1);
     expect(written[0]).toMatchObject({ trigger: "diagram", structureIndex: { hash: "structure-hash", files: 1, parsed: 1, modules: 1, failed: 2, unsupported: 3 } });
