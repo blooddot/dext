@@ -488,6 +488,7 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .project-reader-heading > p { max-width: 85ch; }
 .project-reader-kind { margin: 0; color: var(--vscode-descriptionForeground); font-size: 12px; }
 .project-reader-warning { border-left: 3px solid var(--vscode-editorWarning-foreground); padding: 8px 12px; }
+.project-quality-copy { margin-left: 12px; padding: 2px 8px; font-size: 12px; vertical-align: middle; }
 .project-reader-story { display: flex; flex-direction: column; gap: 20px; margin: 20px 0; }
 .project-reader-figure { margin: 0; min-width: 0; border: 1px solid var(--vscode-panel-border); border-radius: 6px; padding: 14px; background: var(--vscode-editor-background); }
 .project-reader-diagram-tools { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }

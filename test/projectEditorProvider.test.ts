@@ -48,6 +48,29 @@ const setup = (overrides: Partial<ProjectEditorDataSource> = {}) => {
 };
 
 describe("project editor tab", () => {
+  it("copies quality text through the host and acknowledges clipboard failures", async () => {
+    const host = new FakeHost();
+    const manager = new EditorTabManager(host);
+    const copied: string[] = [];
+    const provider = new ProjectEditorProvider({
+      manager, restorer: new EditorTabRestorer(manager), dataSource: { load: async () => data },
+      copyText: (text) => {
+        if (text === "fail") throw new Error("Clipboard unavailable");
+        copied.push(text);
+      }
+    });
+    await provider.show("overview");
+    const text = "## Architecture issues\n\n1. 检查 <entry>\n   - src/runner.ts:12";
+    await provider.handleMessage(provider.key, { type: "projectQualityCopy", requestId: 1, text });
+    expect(copied).toEqual([text]);
+    expect(host.created[0]!.panel.messages.at(-1)).toEqual({ type: "projectQualityCopied", requestId: 1, success: true });
+    await provider.handleMessage(provider.key, { type: "projectQualityCopy", requestId: 2, text: "fail" });
+    expect(host.created[0]!.panel.messages.at(-1)).toEqual({ type: "projectQualityCopied", requestId: 2, success: false });
+    await provider.handleMessage("another-tab", { type: "projectQualityCopy", requestId: 3, text });
+    await provider.handleMessage(provider.key, { type: "projectQualityCopy", requestId: "4", text });
+    expect(copied).toEqual([text]);
+  });
+
   it("routes topic actions while keeping generation in the current reading page", async () => {
     const actions: unknown[] = [];
     const { provider } = setup({

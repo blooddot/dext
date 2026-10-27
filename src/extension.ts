@@ -93,7 +93,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // policy, so the relaxed frame/font/image sources stay scoped to that document.
     // An API page replaces that script with the local Mermaid entry only when a flow exists.
     const projectReader = body.includes("data-project-reader");
-    const script = projectReader ? "project.js" : body.includes("data-api-flow") ? "apiFlow.js" : undefined;
+    const script = projectReader || body.includes("data-project-quality-copy") ? "project.js" : body.includes("data-api-flow") ? "apiFlow.js" : undefined;
     return renderEditorTabHtml(body,
       webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "media", "editorTabs.css")).toString(),
       webview.cspSource,

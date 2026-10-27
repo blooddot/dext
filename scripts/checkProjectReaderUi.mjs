@@ -139,15 +139,44 @@ try {
   const ready = () => wait(`document.querySelector('[data-reader-canvas]')?.dataset.state==='ready' || (!document.querySelector('[data-reader-canvas]') && !!document.querySelector('[data-reader-analysis-state]'))`, 'Diagram did not render');
   const click = (selector) => evaluate(`document.querySelector(${JSON.stringify(selector)}).dispatchEvent(new MouseEvent('click',{bubbles:true}))`);
   const hostMessage = (message) => evaluate(`window.dispatchEvent(new MessageEvent('message',{data:${JSON.stringify(message)}}))`);
-  const load = async (theme, pageData = data, filters = { topic: 'run' }) => {
+  const load = async (theme, pageData = data, filters = { topic: 'run' }, page = 'knowledge') => {
     currentData = pageData;
     const light = theme === 'vscode-light';
     themeCss = `:root{--vscode-font-family:Segoe UI,sans-serif;--vscode-font-size:13px;--vscode-editor-background:${light ? '#fff' : '#1e1e1e'};--vscode-foreground:${light ? '#333' : '#ddd'};--vscode-descriptionForeground:${light ? '#555' : '#bbb'};--vscode-input-background:${light ? '#eee' : '#313131'};--vscode-input-foreground:${light ? '#333' : '#ddd'};--vscode-panel-border:${light ? '#ddd' : '#555'};--vscode-focusBorder:#0088ff;--vscode-list-activeSelectionBackground:#004c80;--vscode-list-activeSelectionForeground:#fff;--vscode-button-secondaryBackground:${light ? '#eee' : '#313131'};--vscode-textBlockQuote-background:${light ? '#eee' : '#292929'}}`;
-    pageHtml = ui.renderEditorTabHtml(`<script>document.body.classList.add('${theme}');window.messages=[];window.violations=[];document.addEventListener('securitypolicyviolation',e=>violations.push(e.violatedDirective));window.state={filters:${JSON.stringify(filters)}};window.acquireVsCodeApi=()=>({postMessage:m=>{messages.push(m);projectHostMessage(JSON.stringify(m))},getState:()=>state,setState:s=>{state=s}});</script>` + ui.renderProjectPanel('knowledge', pageData, { state: { key: 'dext.editor:project', page: 'knowledge', filters: {}, restoreVersion: 1 } }), `${origin}/style.css`, origin, { embedFrames: true, scriptUri: `${origin}/project.js`, mermaidUri: `${origin}/mermaid.js` });
+    pageHtml = ui.renderEditorTabHtml(`<script>document.body.classList.add('${theme}');window.messages=[];window.violations=[];document.addEventListener('securitypolicyviolation',e=>violations.push(e.violatedDirective));window.state={filters:${JSON.stringify(filters)}};window.acquireVsCodeApi=()=>({postMessage:m=>{messages.push(m);projectHostMessage(JSON.stringify(m))},getState:()=>state,setState:s=>{state=s}});</script>` + ui.renderProjectPanel(page, pageData, { state: { key: 'dext.editor:project', page, filters: {}, restoreVersion: 1 } }), `${origin}/style.css`, origin, { embedFrames: page !== 'overview', scriptUri: `${origin}/project.js`, mermaidUri: `${origin}/mermaid.js` });
     await send('Page.navigate', { url: `${origin}/?${Date.now()}` });
-    await wait(`document.readyState==='complete' && !!window.messages && !!document.querySelector('[data-reader-article]')`, 'reader load');
-    await ready();
+    await wait(`document.readyState==='complete' && !!window.messages && !!document.querySelector('.project-panel')`, 'reader load');
+    if (page !== 'overview') await ready();
   };
+  const qualityIssues = [
+    { code: 'community-split', message: '检查 <entry> & "边界"', contextIds: [], elementIds: [], sourcePaths: ['src/fallback.ts'], reason: '保留完整原因', evidence: [{ path: 'src/runner.ts', line: 12 }] },
+    { code: 'ownership-review', message: 'Review ownership', contextIds: [], elementIds: [], sourcePaths: ['src/editor.ts'] }
+  ];
+  const qualityTopic = { ...topics.find(topic => topic.id === 'run'), qualityIssues };
+  await load('vscode-dark', { ...data, knowledge: { ...data.knowledge, topics: [qualityTopic] } });
+  assert.equal(await evaluate(`document.querySelectorAll('[data-project-quality-copy]').length`), 2);
+  await evaluate(`document.querySelector('[data-project-quality-copy]').click()`);
+  const copyRequest = await evaluate(`messages.at(-1)`);
+  assert.equal(copyRequest.type, 'projectQualityCopy');
+  assert.equal(copyRequest.text, '# Run TypeScript\n\n## Architecture issues\n\n1. 检查 <entry> & "边界"\n   Code: community-split\n   Reason: 保留完整原因\n   - src/runner.ts:12');
+  assert.equal(await evaluate(`document.querySelector('[data-project-quality-copy]').closest('details').open`), true, 'copy does not toggle the group');
+  await hostMessage({ type: 'projectQualityCopied', requestId: copyRequest.requestId, success: true });
+  assert.equal(await evaluate(`document.querySelector('[data-project-quality-copy]').textContent`), 'Copied');
+  await evaluate(`document.querySelectorAll('[data-project-quality-copy]')[1].click()`);
+  const reviewRequest = await evaluate(`messages.at(-1)`);
+  assert.match(reviewRequest.text, /Ownership needs review[\s\S]*Review ownership[\s\S]*src\/editor.ts/);
+  await hostMessage({ type: 'projectQualityCopied', requestId: reviewRequest.requestId, success: false });
+  assert.equal(await evaluate(`document.querySelectorAll('[data-project-quality-copy]')[1].textContent`), 'Copy failed');
+  assert.equal(await evaluate(`document.querySelectorAll('[data-project-quality-copy]')[1].disabled`), false, 'failed copy can be retried');
+  for (const width of [320, 1400]) {
+    await send('Emulation.setDeviceMetricsOverride', { width, height: 950, deviceScaleFactor: 1, mobile: false });
+    await load('vscode-dark', { ...data, overview: { ...data.overview, qualityIssues } }, {}, 'overview');
+    await evaluate(`document.querySelector('[data-project-quality-copy]').click()`);
+    const overviewCopy = await evaluate('messages.at(-1)');
+    assert.equal(overviewCopy.type, 'projectQualityCopy', 'overview copy works without the reader');
+    assert.match(overviewCopy.text, /Architecture issues[\s\S]*src\/runner.ts:12/);
+    assert.equal(await evaluate(`document.documentElement.scrollWidth <= innerWidth`), true, 'overview copy fits viewport');
+  }
   for (const theme of ['vscode-dark', 'vscode-light', 'vscode-high-contrast']) {
     for (const width of [320, 1400]) {
       await send('Emulation.setDeviceMetricsOverride', { width, height: 950, deviceScaleFactor: 1, mobile: false });

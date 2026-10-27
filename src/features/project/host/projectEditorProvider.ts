@@ -13,6 +13,7 @@ export interface ProjectEditorProviderOptions {
   dataSource: ProjectEditorDataSource;
   /** Main workspace root. The first version keeps a single root. */
   scope?: string;
+  copyText?(text: string): PromiseLike<void> | void;
 }
 
 export interface ProjectEditorShowResult {
@@ -187,7 +188,18 @@ export class ProjectEditorProvider {
       topicId?: unknown; evidenceIndex?: unknown;
       updatedAt?: unknown; elementId?: unknown; elementKind?: unknown;
       requestId?: unknown;
+      text?: unknown;
     };
+    if (payload?.type === "projectQualityCopy" && typeof payload.text === "string" && typeof payload.requestId === "number" && Number.isSafeInteger(payload.requestId)) {
+      try {
+        if (!this.options.copyText) throw new Error("Clipboard is unavailable.");
+        await this.options.copyText(payload.text);
+        this.post({ type: "projectQualityCopied", requestId: payload.requestId, success: true });
+      } catch {
+        this.post({ type: "projectQualityCopied", requestId: payload.requestId, success: false });
+      }
+      return;
+    }
     if (payload?.type === "projectKnowledgeCheck") {
       await this.options.dataSource.checkKnowledge?.();
       return;

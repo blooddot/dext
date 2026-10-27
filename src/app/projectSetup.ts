@@ -102,6 +102,7 @@ export function setupProject(options: ProjectSetupOptions): ProjectEditorProvide
   editors.project = new ProjectEditorProvider({
     manager: editorTabs,
     restorer: editorTabRestorer,
+    copyText: (text) => vscode.env.clipboard.writeText(text),
     dataSource: createProjectPanelDataSource({
       name: folder.name,
       root: ".",
