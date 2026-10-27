@@ -1,6 +1,8 @@
 # taste-skill skill pack
 
 - Source: https://github.com/Leonxlnx/taste-skill.git
+- Release: v2.1.5
+- Upstream version: 2.1.5
 - Versions: all imported; each turn uses its Agent's version, then shared
 - Commit: 12af471f627f866411b4bd785b19646d3672784c
 - Imported: 2026-10-26T14:02:23.952Z
