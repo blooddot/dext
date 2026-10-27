@@ -499,7 +499,9 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .project-reader-canvas [data-reader-element]:focus-visible { outline: 2px solid var(--vscode-focusBorder); }
 .project-reader-canvas .is-selected > rect, .project-reader-canvas .is-selected > polygon, .project-reader-canvas .is-selected > path, .project-reader-canvas path.is-selected { stroke: var(--vscode-focusBorder) !important; stroke-width: 3px !important; }
 .project-reader-figure figcaption { color: var(--vscode-descriptionForeground); font-size: 12px; }
-.project-reader-inspector { margin-top: 14px; padding: 12px; border-left: 3px solid var(--vscode-focusBorder); background: var(--vscode-textBlockQuote-background); }
+.project-reader-inspector { position: relative; margin-top: 14px; padding: 12px 38px 12px 12px; border-left: 3px solid var(--vscode-focusBorder); background: var(--vscode-textBlockQuote-background); }
+.project-reader-inspector-close { position: absolute; top: 6px; right: 6px; padding: 0 6px; border: 0; background: transparent; color: var(--vscode-icon-foreground, var(--vscode-foreground)); font-size: 16px; line-height: 1.4; }
+.project-reader-inspector-close:hover { background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground)); }
 .project-reader-source pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
 .project-reader-source button { display: block; margin: 4px 0; text-align: left; }
 .project-reader-step { padding: 10px 12px; margin: 6px 0; border-left: 3px solid var(--vscode-panel-border); }

@@ -33,22 +33,23 @@ try {
     let result;
     if (frameTree.childFrames?.length) {
       const { executionContextId } = await send("Page.createIsolatedWorld", { frameId: frameTree.childFrames[0].frame.id, worldName: "diagram-layout-check" });
-      result = await send("Runtime.evaluate", { expression, contextId: executionContextId, returnByValue: true });
+      result = await send("Runtime.evaluate", { expression, contextId: executionContextId, returnByValue: true, userGesture: true });
     } else {
       // Sandboxed srcdoc can run in a separate renderer process.
       const { targetInfos } = await send("Target.getTargets");
       const target = targetInfos.find((entry) => entry.type === "iframe");
       assert.ok(target, "sandboxed viewer target exists");
       const { sessionId } = await send("Target.attachToTarget", { targetId: target.targetId, flatten: true });
-      try { result = await send("Runtime.evaluate", { expression, returnByValue: true }, sessionId); }
+      try { result = await send("Runtime.evaluate", { expression, returnByValue: true, userGesture: true }, sessionId); }
       finally { await send("Target.detachFromTarget", { sessionId }); }
     }
     if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails));
     return result.result.value;
   };
+  await send('Emulation.setFocusEmulationEnabled', { enabled: true });
   const bundle = await build({
     stdin: {
-      contents: 'export { renderEditorTabHtml } from "./src/platform/editor-tabs/editorTabHtml.ts"; export { renderProjectPanel } from "./src/features/project/presentation/projectPanel.ts"; export { archifyViewerBridgeScript } from "./src/features/project/browser/archifyBridge.ts"; export { ArchifyAdapter } from "./src/features/project/host/diagrams/archifyAdapter.ts";',
+      contents: 'export { renderEditorTabHtml } from "./src/platform/editor-tabs/editorTabHtml.ts"; export { renderProjectPanel } from "./src/features/project/presentation/projectPanel.ts"; export { archifyViewerBridgeScript } from "./src/features/project/browser/archifyBridge.ts"; export { ArchifyAdapter } from "./src/features/project/host/diagrams/archifyAdapter.ts"; export { architectureLongLabels } from "./test/fixtures/projectArchitectureLongLabels.ts"; export { buildC4Topics } from "./src/features/project/presentation/projectC4.ts";',
       resolveDir: process.cwd()
     },
     bundle: true, write: false, platform: "node", format: "esm"
@@ -95,6 +96,11 @@ try {
       [relation("extends", "child", "base", "inheritance"), relation("implements", "child", "named", "realization")], undefined, { metadata: { derived: true, classMap: true } })
   };
   const adapter = new ui.ArchifyAdapter(resolve("vendor/project-diagrams/archify"));
+  fixtures.architectureLongLabels = ui.architectureLongLabels;
+  if (process.argv.includes('--saved-project')) {
+    const intent = JSON.parse(await readFile(resolve('.dext/project-intent.json'), 'utf8'));
+    for (const topic of ui.buildC4Topics(intent)) fixtures[`saved-${topic.kind}`] = topic.diagram;
+  }
   const htmlByKind = {};
   const mappingByKind = {};
   for (const [kind, fixture] of Object.entries(fixtures)) {
@@ -108,7 +114,7 @@ try {
     mappingByKind[kind] = document.payload.mapping;
     console.log(`rendered ${kind}: ${String(artifact.content).length} bytes`);
   }
-  const summaries = Object.entries(fixtures).map(([kind, value]) => ({ id: value.id, title: value.title, kind, version: value.version, updatedAt: value.updatedAt, review: "draft" }));
+  const summaries = Object.values(fixtures).map(value => ({ id: value.id, title: value.title, kind: value.kind, version: value.version, updatedAt: value.updatedAt, review: "draft" }));
   const baseData = () => ({
     overview: { name: "Dext", root: ".", objects: 0, accepted: 0, drafts: 0, needsVerification: 0, initialization: { status: "uninitialized", intentGenerated: false, diagramsGenerated: 0 } },
     objects: [],
@@ -143,7 +149,8 @@ try {
     // The page stylesheet is a real asset: serving it here is what makes the layout assertions count.
     if (url.startsWith("/editorTabs.css")) {
       response.setHeader("Content-Type", "text/css; charset=utf-8");
-      response.end(await readFile(resolve("media/editorTabs.css"), "utf8"));
+      const hostTheme = ':root{--vscode-editor-background:#1e1e1e;--vscode-foreground:#ddd;--vscode-descriptionForeground:#bbb;--vscode-input-background:#313131;--vscode-input-foreground:#ddd;--vscode-panel-border:#555;--vscode-focusBorder:#0088ff;--vscode-button-secondaryBackground:#313131}';
+      response.end(hostTheme + await readFile(resolve("media/editorTabs.css"), "utf8"));
       return;
     }
     response.setHeader("Content-Type", "text/html; charset=utf-8");
@@ -193,13 +200,55 @@ try {
     assert.equal(await evaluateViewer('!!document.querySelector("svg")'), true);
     assert.equal(await evaluate('document.querySelector("iframe").getAttribute("sandbox")'), "allow-scripts");
     assert.deepEqual(await evaluate('window.violations'), [], kind + ": no CSP violations");
+    if (value.kind === 'architecture') {
+      const labels = await evaluateViewer(`Array.from(document.querySelectorAll('g[data-edge-key]')).filter(g => g.querySelector('rect.c-mask')).map(g => {
+        const rect = g.querySelector('rect.c-mask').getBBox(), text = g.querySelector('text');
+        const glyphs = text.getBBox();
+        return { text: text.textContent, x: Math.min(rect.x, glyphs.x), y: Math.min(rect.y, glyphs.y),
+          right: Math.max(rect.x + rect.width, glyphs.x + glyphs.width), bottom: Math.max(rect.y + rect.height, glyphs.y + glyphs.height) };
+      })`);
+      assert.equal(labels.length, value.relations.length, kind + ': every full label is visible');
+      for (const relation of value.relations) assert.ok(labels.some(label => label.text === relation.label), kind + ': relationship text is preserved');
+      for (let index = 0; index < labels.length; index++) {
+        const left = labels[index];
+        for (const right of labels.slice(index + 1)) assert.ok(left.right + 2 <= right.x || right.right + 2 <= left.x
+          || left.bottom + 2 <= right.y || right.bottom + 2 <= left.y, kind + ': label plates and glyphs must not overlap');
+      }
+      assert.equal(await evaluateViewer(`document.querySelectorAll('[data-graph-role="relationship-number"]').length`), 0, kind + ': no custom renderer badges');
+      await evaluateViewer(`document.querySelector('g[data-edge-key] rect.c-mask').dispatchEvent(new MouseEvent('click',{bubbles:true}))`);
+      await wait(`!document.querySelector('[data-reader-inspector]').hidden`, kind + ': native label opens Project details');
+      assert.ok((await evaluate(`document.querySelector('[data-reader-inspector]').textContent`)).includes(value.relations[0].label), kind + ': full description remains available');
+      await evaluate(`document.querySelector('[data-reader-inspector-close]').click()`);
+      assert.equal(await evaluate(`document.querySelector('[data-reader-inspector]').hidden`), true, kind + ': details can be closed');
+      assert.equal(await evaluate(`document.activeElement.matches('[data-reader-view]')`), true, kind + ': closing returns focus to the diagram controls');
+    }
     await evaluate('document.querySelector("[data-reader-export]").click()');
     await wait('messages.some(m=>m.type==="projectReaderExport")', kind + ": export");
     const exported = await evaluate('messages.find(m=>m.type==="projectReaderExport")');
     assert.equal(exported.diagramId, value.id);
     assert.equal(exported.updatedAt, value.updatedAt);
     assert.match(exported.content, /<svg/);
+    if (value.kind === 'architecture') {
+      const exportedTexts = await evaluate(`Array.from(new DOMParser().parseFromString(${JSON.stringify(exported.content)},'image/svg+xml').querySelectorAll('text')).map(text=>text.textContent)`);
+      for (const relation of value.relations) assert.ok(exportedTexts.includes(relation.label), kind + ': native SVG export preserves the full description');
+    }
+    // Capture the complete diagram, rather than a cropped corner in the default
+    // headless viewport, and verify native presentation for every supported kind.
+    await send('Emulation.setDeviceMetricsOverride', { width: 1800, height: 1000, deviceScaleFactor: 1, mobile: false });
+    await evaluate(`document.querySelector('[data-reader-screen]').click()`);
+    await wait(`!!document.querySelector('.is-fullscreen iframe')`, kind + ': fullscreen');
+    for (let index = 0; index < 100; index++) {
+      if (await evaluateViewer(`document.documentElement.getAttribute('data-present') === 'true'`)) break;
+      await sleep(50);
+    }
+    assert.equal(await evaluateViewer(`document.documentElement.getAttribute('data-present')`), 'true');
+    // The viewer applies its resize observer after presentation state changes.
+    // Let both frames settle before photographing the native fit-to-view result.
+    await sleep(400);
     await writeFile(join(artifacts, kind + "-reader.png"), Buffer.from((await send("Page.captureScreenshot")).data, "base64"));
+    await evaluate(`document.querySelector('[data-reader-screen]').click()`);
+    await wait(`!document.querySelector('.is-fullscreen')`, kind + ': exit fullscreen');
+    await send('Emulation.clearDeviceMetricsOverride');
   }
   await evaluate('document.querySelector("[data-reader-home]").click()');
     assert.equal(await evaluate('document.querySelectorAll(".architecture-rule").length'), 1);
@@ -257,7 +306,7 @@ try {
   assert.equal(resetResult.zoom, probeReady.zoom, "native reset restores the initial scale");
   await writeFile(join(artifacts, "native-viewer.png"), Buffer.from((await send("Page.captureScreenshot")).data, "base64"));
 
-  console.log("PASS: current Project reader displays and exports seven native Archify diagram kinds under CSP; escaped architecture rules; empty and narrow layouts; native fonts, finder, zoom and reset. Screenshots: .tmp-tb/project-diagrams-ui");
+  console.log("PASS: current Project reader displays and exports seven native Archify diagram kinds under CSP; full architecture labels do not overlap; escaped architecture rules; empty and narrow layouts; native fonts, finder, zoom and reset. Screenshots: .tmp-tb/project-diagrams-ui");
 } finally {
   server?.close();
   try { await shutdown?.(); } catch {}

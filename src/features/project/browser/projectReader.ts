@@ -110,7 +110,7 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
     const condition = transition?.condition ?? message?.condition ?? relation?.condition;
     const provenance = typeof relation?.metadata?.provenance === "string" ? relation.metadata.provenance : undefined;
     const reverse = relation?.metadata?.structureMatch === "reverse";
-    inspector.innerHTML = `<strong>${esc(title ?? id)}</strong>${description ? `<p>${esc(description)}</p>` : ""}${condition ? `<p>When: ${esc(condition)}</p>` : ""}${relation?.exception ? "<p>Exception path</p>" : ""}`
+    inspector.innerHTML = `<button type="button" class="project-reader-inspector-close" data-reader-inspector-close aria-label="Close details" title="Close details">&times;</button><strong>${esc(title ?? id)}</strong>${description ? `<p>${esc(description)}</p>` : ""}${condition ? `<p>When: ${esc(condition)}</p>` : ""}${relation?.exception ? "<p>Exception path</p>" : ""}`
       + (provenance ? `<p class="project-help">Structure: ${esc(provenance)}${reverse ? " — opposite to the indexed import direction; review the direction" : ""}</p>` : "")
       + (sections.length ? `<p class="project-help">Linked to the explanation: ${sections.map((section) => esc(section.title)).join(", ")}</p>` : "")
       + `<div class="project-reader-related">${related.map((candidate) => `<button type="button" data-reader-topic="${esc(candidate.id)}">Read ${esc(candidate.title)} →</button>`).join("")}</div>`
@@ -231,6 +231,13 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
   root.addEventListener("click", (event) => {
     const button = event.target instanceof Element ? event.target.closest<HTMLButtonElement>("button") : null;
     if (!button) return;
+    if (button.hasAttribute("data-reader-inspector-close")) {
+      article.querySelector<HTMLElement>("[data-reader-inspector]")!.hidden = true;
+      highlight([]);
+      interactive?.command("select", { nodeId: "" });
+      article.querySelector<HTMLSelectElement>("[data-reader-view]")?.focus();
+      return;
+    }
     if (button.dataset.readerTopic) selectTopic(button.dataset.readerTopic);
     if (button.dataset.readerDiagram) selectDiagram(button.dataset.readerDiagram);
     if (button.hasAttribute("data-reader-home")) {
