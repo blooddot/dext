@@ -333,16 +333,16 @@ interface ArchitectureCell {
  * endpoints' own centre lines, and in a grid those lines pass straight through the
  * cells between them.
  */
-function architectureGeometry(cell: ArchitectureCell): { exitX: number; cy: number; columnGutter: number; rowChannel: number } {
-  const pitchX = cell.width + ARCHITECTURE.gapX;
-  const pitchY = ARCHITECTURE.height + ARCHITECTURE.gapY;
+function architectureGeometry(cell: ArchitectureCell, gapX: number, gapY: number): { exitX: number; cy: number; columnGutter: number; rowChannel: number } {
+  const pitchX = cell.width + gapX;
+  const pitchY = ARCHITECTURE.height + gapY;
   const x = ARCHITECTURE.origin[0] + cell.col * pitchX;
   const y = ARCHITECTURE.origin[1] + cell.row * pitchY;
   return {
     exitX: x + cell.width,
     cy: y + ARCHITECTURE.height / 2,
-    columnGutter: x + cell.width + ARCHITECTURE.gapX / 2,
-    rowChannel: y + ARCHITECTURE.height + ARCHITECTURE.gapY / 2
+    columnGutter: x + cell.width + gapX / 2,
+    rowChannel: y + ARCHITECTURE.height + gapY / 2
   };
 }
 
@@ -352,23 +352,24 @@ function architectureGeometry(cell: ArchitectureCell): { exitX: number; cy: numb
  * agree by construction, and every middle segment stays in a channel no component
  * occupies.
  */
-function architectureVia(from: ArchitectureCell, to: ArchitectureCell): { fromSide: string; toSide: string; via: number[][]; labelSegment: number; labelAt?: number[] } {
-  const a = architectureGeometry(from);
-  const b = architectureGeometry(to);
+function architectureVia(from: ArchitectureCell, to: ArchitectureCell, gapX: number = ARCHITECTURE.gapX,
+  gapY: number = ARCHITECTURE.gapY, labelChannel?: number): { fromSide: string; toSide: string; via: number[][]; labelSegment: number; labelAt?: number[] } {
+  const a = architectureGeometry(from, gapX, gapY);
+  const b = architectureGeometry(to, gapX, gapY);
+  const channel = labelChannel ?? Math.max(a.rowChannel, b.rowChannel);
   if (from.col === to.col) {
     if (from.row === to.row) {
       // A self-reference needs a real loop with distinct endpoint sides, not an out-and-back spur.
       return { fromSide: "right", toSide: "bottom", labelSegment: 2,
-        via: [[a.columnGutter, a.cy], [a.columnGutter, a.rowChannel], [a.exitX - from.width / 2, a.rowChannel]] };
+        via: [[a.columnGutter, a.cy], [a.columnGutter, channel], [a.exitX - from.width / 2, channel]] };
     }
     // Stop at the target row. The general U-shaped route would descend below both
     // endpoints, repeat the same corner, then retrace the gutter back to the target.
     return { fromSide: "right", toSide: "right", labelSegment: 1,
       via: [[a.columnGutter, a.cy], [a.columnGutter, b.cy]],
       // Keep long-route labels in the gap before the destination, away from intermediate boxes.
-      labelAt: [a.columnGutter, b.cy + Math.sign(a.cy - b.cy) * (ARCHITECTURE.height + ARCHITECTURE.gapY) / 2] };
+      labelAt: [a.columnGutter, b.cy + Math.sign(a.cy - b.cy) * (ARCHITECTURE.height + gapY) / 2] };
   }
-  const channel = Math.max(a.rowChannel, b.rowChannel);
   return {
     fromSide: "right",
     toSide: "right",
@@ -383,7 +384,48 @@ function architectureVia(from: ArchitectureCell, to: ArchitectureCell): { fromSi
 }
 
 interface ArchitectureComponentGeometry { id: string; row: number; col: number; size: number[] }
-interface ArchitectureConnectionGeometry { via: number[][]; label?: string; labelAt?: number[]; labelSegment?: number }
+interface ArchitectureConnectionGeometry { from: string; to: string; via: number[][]; label?: string; labelAt?: number[]; labelSegment?: number }
+
+/** Match the unmodified renderer's native single-line label geometry. */
+function architectureLabelSize(label: string): { width: number; height: number } {
+  return { width: Math.max(30, textUnits(label) * 4.8 + 10), height: 14 };
+}
+
+/** Keep labels apart using only the renderer's grid, via and labelAt inputs. */
+function layoutArchitectureConnections<T extends ArchitectureConnectionGeometry>(components: readonly ArchitectureComponentGeometry[],
+  connections: readonly T[], cellWidth: number, gapX: number, minimumGapY: number): { connections: T[]; gapY: number } {
+  const cells = new Map(components.map(component => [component.id, { col: component.col, row: component.row, width: cellWidth }]));
+  const bands = new Map<number, Array<{ height: number; intervals: Array<{ left: number; right: number }> }>>();
+  const plans = connections.map(connection => {
+    const from = cells.get(connection.from), to = cells.get(connection.to);
+    if (!from || !to) return undefined;
+    // A vertical route uses the gap immediately before its target; other routes
+    // run below both endpoints. No label plate may share a component's row.
+    const band = from.col === to.col && from.row !== to.row
+      ? to.row - (from.row < to.row ? 1 : 0) : Math.max(from.row, to.row);
+    const a = architectureGeometry(from, gapX, minimumGapY), b = architectureGeometry(to, gapX, minimumGapY);
+    const metrics = architectureLabelSize(connection.label ?? "");
+    const { width, height } = metrics;
+    const center = from.col === to.col ? a.columnGutter : (a.columnGutter + b.columnGutter) / 2;
+    const left = Math.max(10, center - width / 2), right = left + width;
+    const lanes = bands.get(band) ?? [];
+    let lane = lanes.findIndex(item => item.intervals.every(other => right + 12 <= other.left || other.right + 12 <= left));
+    if (lane < 0) { lane = lanes.length; lanes.push({ height: 0, intervals: [] }); }
+    lanes[lane]!.intervals.push({ left, right });
+    lanes[lane]!.height = Math.max(lanes[lane]!.height, height);
+    bands.set(band, lanes);
+    return { from, to, band, lane, height, center: left + width / 2 };
+  });
+  const gapY = Math.max(minimumGapY, ...[...bands.values()].map(lanes => 40 + lanes.reduce((sum, lane) => sum + lane.height + 10, 0)));
+  return { gapY, connections: connections.map((connection, index) => {
+    const plan = plans[index];
+    if (!plan) return connection;
+    const offset = bands.get(plan.band)!.slice(0, plan.lane).reduce((sum, lane) => sum + lane.height + 10, 0);
+    const baseline = ARCHITECTURE.origin[1] + plan.band * (ARCHITECTURE.height + gapY) + ARCHITECTURE.height + 30 + offset;
+    return { ...connection, ...architectureVia(plan.from, plan.to, gapX, gapY, baseline + 10),
+      ...(connection.label ? { labelAt: [plan.center, baseline] } : {}) };
+  }) };
+}
 
 /** Upstream's automatic canvas bounds omit authored via points. Include the geometry we own. */
 function architectureViewBox(components: readonly ArchitectureComponentGeometry[], connections: readonly ArchitectureConnectionGeometry[],
@@ -409,7 +451,8 @@ function architectureViewBox(components: readonly ArchitectureComponentGeometry[
     const a = connection.via[segment - 1], b = connection.via[segment];
     const label = connection.labelAt ?? (a && b ? [(a[0]! + b[0]!) / 2, (a[1]! + b[1]!) / 2 - 10] : undefined);
     if (connection.label && label) {
-      right = Math.max(right, label[0]! + Math.max(30, textUnits(connection.label) * 4.8 + 10) / 2);
+      const metrics = architectureLabelSize(connection.label);
+      right = Math.max(right, label[0]! + metrics.width / 2);
       bottom = Math.max(bottom, label[1]! + 4);
     }
   }
@@ -472,18 +515,19 @@ function buildArchitecture(project: ProjectDiagram, repository: ArchifyRepositor
       ...(relation.exception ? { variant: "dashed" } : {})
     }];
   });
+  const routed = layoutArchitectureConnections(components, connections, cellWidth, ARCHITECTURE.gapX, ARCHITECTURE.gapY);
   return {
     mapping,
     ir: {
       schema_version: 1,
       diagram_type: "architecture",
-      meta: baseMeta(project, repository, attached, { viewBox: architectureViewBox(components, connections, boundaries, cellWidth, ARCHITECTURE.gapX, ARCHITECTURE.gapY) }),
-      layout: { mode: "grid", cols: columns, gapX: ARCHITECTURE.gapX, gapY: ARCHITECTURE.gapY,
+      meta: baseMeta(project, repository, attached, { viewBox: architectureViewBox(components, routed.connections, boundaries, cellWidth, ARCHITECTURE.gapX, routed.gapY) }),
+      layout: { mode: "grid", cols: columns, gapX: ARCHITECTURE.gapX, gapY: routed.gapY,
         cellW: Math.max(...components.map((component) => component.size[0] ?? 0)),
         cellH: Math.max(...components.map((component) => component.size[1] ?? 0)) },
       components,
       ...(boundaries.length ? { boundaries } : {}),
-      connections
+      connections: routed.connections
     }
   };
 }
@@ -1173,10 +1217,14 @@ function repairIr(input: Record<string, unknown>, diagnostics: readonly string[]
       col: index % cols
     }));
     ir["components"] = repairedComponents;
+    const routed = layoutArchitectureConnections(repairedComponents as ArchitectureComponentGeometry[],
+      (ir["connections"] ?? []) as ArchitectureConnectionGeometry[], layout.cellW, layout.gapX, layout.gapY);
+    layout.gapY = routed.gapY;
+    ir["connections"] = routed.connections;
     ir["meta"] = {
       ...(ir["meta"] as Record<string, unknown> ?? {}),
       viewBox: architectureViewBox(repairedComponents as ArchitectureComponentGeometry[],
-        (ir["connections"] ?? []) as ArchitectureConnectionGeometry[],
+        routed.connections,
         (ir["boundaries"] ?? []) as { wraps: string[]; label: string }[], layout.cellW, layout.gapX, layout.gapY)
     };
   }

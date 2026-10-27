@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { resolve } from "node:path";
 import { ArchifyAdapter } from "../src/features/project/host/diagrams/archifyAdapter.js";
+import { architectureLongLabels } from "./fixtures/projectArchitectureLongLabels.js";
 import type { ProjectDiagram, ProjectDiagramEvidence, ProjectDiagramNode, ProjectDiagramRelation } from "../src/features/project/contracts/projectDiagram.js";
 
 /**
@@ -144,6 +145,30 @@ const classDiagram: ProjectDiagram = {
 };
 
 describe("Archify layout for full-size Project diagrams", { timeout: 180_000 }, () => {
+  it.each([false, true])("keeps full architecture relationship labels apart in the rendered SVG (repair: %s)", async (repair) => {
+    const adapter = new ArchifyAdapter(runtimeRoot);
+    try {
+      const document = await adapter.transform(architectureLongLabels);
+      // Force the real renderer to reject overlapping cells and exercise layout repair.
+      if (repair) (document.payload as { ir: { layout: { cellW: number } } }).ir.layout.cellW = 40;
+      const html = String((await adapter.render(document)).content);
+      if (repair) expect(Number((await adapter.validate(document)).metadata?.repairs)).toBeGreaterThan(0);
+      const labels = [...html.matchAll(/<rect x="([\d.-]+)" y="([\d.-]+)" width="([\d.]+)" height="([\d.]+)"[^>]*class="c-mask"/g)]
+        .map(match => ({ x: Number(match[1]), y: Number(match[2]), width: Number(match[3]), height: Number(match[4]) }))
+        .filter(rect => rect.height === 14);
+      expect(labels).toHaveLength(architectureLongLabels.relations.length);
+      expect(html).not.toContain('data-graph-role="relationship-number"');
+      for (const relation of architectureLongLabels.relations) expect(html).toContain(relation.label);
+      for (let index = 0; index < labels.length; index++) {
+        const left = labels[index]!;
+        for (const right of labels.slice(index + 1)) {
+          expect(left.x + left.width + 2 <= right.x || right.x + right.width + 2 <= left.x
+            || left.y + left.height + 2 <= right.y || right.y + right.height + 2 <= left.y).toBe(true);
+        }
+      }
+    } finally { adapter.dispose(); }
+  });
+
   it.each([
     ["sequence", sequence],
     ["architecture", architecture],

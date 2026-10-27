@@ -414,12 +414,12 @@ describe("ArchifyAdapter", () => {
     relations.push(relation('self', 'n0', 'n0', 'depends_on', { label: 'Reloads' }));
     const diagram: ProjectDiagram = { schemaVersion: 1, id: 'column-routes', title: 'Column routes', kind: 'architecture', version: 1, updatedAt: 1, nodes, relations };
     const document = await adapter.transform(diagram);
-    const { ir } = document.payload as { ir: { components: { id: string; row: number; col: number }[]; connections: { id: string; from: string; to: string; via: number[][] }[] } };
+    const { ir } = document.payload as { ir: { layout: { gapY: number }; components: { id: string; row: number; col: number }[]; connections: { id: string; from: string; to: string; via: number[][] }[] } };
     for (const edge of ir.connections.filter(edge => ['e3', 'e6', 'back'].includes(edge.id))) {
       const from = ir.components.find(component => component.id === edge.from)!;
       const to = ir.components.find(component => component.id === edge.to)!;
       expect(from.col).toBe(to.col);
-      const ys = [from.row, to.row].map(row => 80 + row * (72 + 110) + 36);
+      const ys = [from.row, to.row].map(row => 80 + row * (72 + ir.layout.gapY) + 36);
       expect(edge.via.every(point => point[1]! >= Math.min(...ys) && point[1]! <= Math.max(...ys))).toBe(true);
       expect(new Set(edge.via.map(point => JSON.stringify(point))).size).toBe(edge.via.length);
     }
