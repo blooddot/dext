@@ -324,7 +324,7 @@ describe("Dext package manifest", () => {
     expect(properties["dext.submitOnEnter"]?.description).toContain("Shift+Enter");
     expect(properties).not.toHaveProperty("dext.diff.defaultView");
     expect(properties["dext.history.maxTurns"]).toMatchObject({ type: "integer", default: 100 });
-    expect(properties["dext.history.maxOutputLength"]).toMatchObject({ type: "integer", default: 200000 });
+    expect(properties["dext.history.maxOutputLength"]).toMatchObject({ type: "integer", default: 64000 });
     // Dispatch concurrency has a ceiling because each call can start its own process.
     const concurrency = properties["dext.workflow.maxConcurrency"];
     expect(concurrency).toMatchObject({ type: "integer", default: 4, minimum: 1 });

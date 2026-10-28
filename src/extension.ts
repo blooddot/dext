@@ -590,6 +590,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await vscode.env.clipboard.writeText(historyTurnMarkdown(session.turns[index]!, index));
       })
     ),
+    vscode.commands.registerCommand("dext.history.openSpill", (context?: ConversationContext) =>
+      reportCommandError(async () => {
+        const session = historySession(context);
+        const path = session.turns.find((item) => item.id === context?.turnId)?.spillPath;
+        if (!path) {
+          await vscode.window.showInformationMessage("This turn has no truncated output.");
+          return;
+        }
+        await vscode.window.showTextDocument(vscode.Uri.file(path));
+      })
+    ),
     vscode.commands.registerCommand("dext.history.retryTurn", (context?: ConversationContext) =>
       reportCommandError(async () => {
         const session = historySession(context);

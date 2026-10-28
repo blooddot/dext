@@ -83,8 +83,9 @@ function historyActionButton(icon: string, command: string, label: string, sessi
   return `<button class="history-session-action icon-button compact" type="button" data-history-command="${escapeHtml(command)}" data-session-id="${escapeHtml(sessionId)}"${target} title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}"><i class="codicon codicon-${icon}"></i></button>`;
 }
 
-function historyTurnActions(sessionId: string, turnId: string): string {
+function historyTurnActions(sessionId: string, turnId: string, spill: boolean): string {
   return `<span class="history-turn-actions">${[
+    ...(spill ? [historyActionButton("go-to-file", "dext.history.openSpill", "Open truncated output", sessionId, turnId)] : []),
     historyActionButton(TURN_RENAME_ACTION.icon, "dext.history.renameTurn", TURN_RENAME_ACTION.label, sessionId, turnId),
     historyActionButton(TURN_FORK_ACTION.icon, "dext.history.forkFromTurn", TURN_FORK_ACTION.label, sessionId, turnId),
     historyActionButton(TURN_COPY_ACTION.icon, "dext.history.copyTurn", TURN_COPY_ACTION.label, sessionId, turnId),
@@ -459,7 +460,7 @@ export function renderHistoryRecord(record: DextHistoryRecord, sessionId?: strin
     open: true,
     ...(outputCopy ? { action: copyButton(outputCopy) } : {})
   });
-  return `<details class="history-record"${target}${context}><summary${hint}>${chevron()}<span class="history-summary-input${record.title ? " named" : ""}">${escapeHtml(firstLine)}</span>${planStatusHtml}<span class="history-meta history-record-time">${escapeHtml(dateLabel(record.createdAt))}</span>${sessionId ? historyTurnActions(sessionId, record.id) : ""}</summary><div class="history-record-body">${inputHtml}${todoHtml}${processSummary}${outputSection}</div></details>`;
+  return `<details class="history-record"${target}${context}><summary${hint}>${chevron()}<span class="history-summary-input${record.title ? " named" : ""}">${escapeHtml(firstLine)}</span>${planStatusHtml}<span class="history-meta history-record-time">${escapeHtml(dateLabel(record.createdAt))}</span>${sessionId ? historyTurnActions(sessionId, record.id, Boolean(record.spillPath)) : ""}</summary><div class="history-record-body">${inputHtml}${todoHtml}${processSummary}${outputSection}</div></details>`;
 }
 
 /** The name a conversation carries until the user renames it: the opening line

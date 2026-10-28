@@ -69,6 +69,7 @@ export class DextHistoryPanel implements vscode.Disposable {
           "dext.history.renameTurn",
           "dext.history.forkFromTurn",
           "dext.history.copyTurn",
+          "dext.history.openSpill",
           "dext.history.deleteTurn"
         ];
         if (turnCommands.includes(message.command)) {

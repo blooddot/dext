@@ -11,7 +11,9 @@ export interface DextHistoryLimits {
   maxOutputLength: number;
 }
 
-export const DEFAULT_HISTORY_LIMITS: DextHistoryLimits = { maxTurns: 100, maxOutputLength: 200_000 };
+/** 64k mirrors the CLI harnesses (dsh 64 KB, Pi 50 KB): a turn that needs more
+ * is spilled to a file, not carried through the extension host. */
+export const DEFAULT_HISTORY_LIMITS: DextHistoryLimits = { maxTurns: 100, maxOutputLength: 64_000 };
 
 export type PlanStatus = "new" | "active" | "running" | "completed" | "failed";
 
@@ -41,6 +43,8 @@ export interface DextHistoryRecord {
   planOutcome?: PlanExecutionOutcome;
   response?: InputExecutionResponse;
   error?: string;
+  /** File holding the text this turn's truncation removed, opened on demand. */
+  spillPath?: string;
   /** Skills that were enabled for this turn. */
   skills?: string[];
   /** The command this turn invoked, if any. */
@@ -89,6 +93,8 @@ export interface ConversationHistoryStore {
   removeTurn(sessionId: string, turnId: string, providerSessions?: Readonly<Record<string, string>>): Promise<boolean>;
   fork(turns: readonly DextHistoryRecord[], providerSessions?: Readonly<Record<string, string>>): Promise<DextHistorySession>;
   setProviderSession(sessionId: string, provider: string, providerSessionId: string): Promise<void>;
+  /** Where this turn's truncated text was spilled, if it was. */
+  spillPath(sessionId: string, turnId: string): string | undefined;
   addSuccess(
     input: string,
     process: readonly AgentStreamEvent[],

@@ -9,7 +9,7 @@ AttachmentStore,
 writeExactClipboardText
 } from "../shared/lib/attachmentStore.js";
 import type { AgentSelection } from "../features/agents/contracts/agent.js";
-import type { ConversationHistoryStore, DextHistorySession } from "../features/conversations/contracts/history.js";
+import { DEFAULT_HISTORY_LIMITS, type ConversationHistoryStore, type DextHistorySession } from "../features/conversations/contracts/history.js";
 import type { ConversationPreferences } from "../features/conversations/contracts/preferences.js";
 import { planPathSegments } from "../features/conversations/domain/planFile.js";
 import type { InputNotificationTarget } from "../features/conversations/host/inputNotifications.js";
@@ -118,7 +118,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       knownPlan: (reference) => Boolean(this.application.planUri(reference)),
       activeSessionId: () => this.activeSession.id,
       disposed: () => this.disposed,
-      maxEventTextLength: () => vscode.workspace.getConfiguration("dext").get<number>("history.maxOutputLength", 200_000),
+      maxEventTextLength: () => vscode.workspace.getConfiguration("dext").get<number>("history.maxOutputLength", DEFAULT_HISTORY_LIMITS.maxOutputLength),
       resourceBusy: (sessionId) => this.resourceOperations.has(sessionId),
       notifyInput: async () => await vscode.window.showInformationMessage(
         "Dext: AI needs your response. Choose an option or enter an answer.", "View question"
@@ -769,6 +769,12 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
             sessionId: request.sessionId, turnId: request.turnId
           });
           break;
+        case "openSpillFile": {
+          const path = this.history.spillPath(request.sessionId, request.turnId);
+          if (!path) await vscode.window.showInformationMessage("This turn has no truncated output.");
+          else await vscode.window.showTextDocument(vscode.Uri.file(path));
+          break;
+        }
         case "buildPlan":
           await this.conversation.plans.build(request.planPath);
           break;

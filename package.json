@@ -871,9 +871,9 @@
         },
         "dext.history.maxOutputLength": {
           "type": "integer",
-          "default": 200000,
+          "default": 64000,
           "minimum": 1000,
-          "description": "Characters kept per stored input, process event, and serialized output before history truncates it."
+          "description": "Characters kept per stored input, process event, and serialized output before history truncates it. A longer value keeps its first and last half; the removed text is written to an overflow file inside the conversation storage that the turn can open. The same value also caps one live Process row, which keeps its start only."
         },
         "dext.agentPermission": {
           "type": "string",

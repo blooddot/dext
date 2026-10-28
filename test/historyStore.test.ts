@@ -188,14 +188,39 @@ describe("DextHistoryStore", () => {
       executions: []
     }, "session-2");
     const turn = store.list().at(-1)?.turns.at(-1);
-    expect(turn?.input).toBe(`${"a".repeat(12)}\n... output truncated ...`);
-    expect(turn?.process[0]?.text).toBe(`${"b".repeat(12)}\n... output truncated ...`);
+    expect(turn?.input).toBe("a".repeat(12));
+    expect(turn?.process[0]?.text).toBe(`${"b".repeat(6)}\n... output truncated ...\n${"b".repeat(6)}`);
 
     // Raising the limit takes effect on the next write, not the next window.
     limits.maxTurns = 10;
     limits.maxOutputLength = 100;
     await store.addSuccess("c".repeat(40), [], { kind: "workflow", executions: [] }, "session-2");
     expect(store.list().at(-1)?.turns.at(-1)?.input).toBe("c".repeat(40));
+  });
+
+  it("keeps both ends of oversized text and hands the whole value to the spill writer", async () => {
+    const spilled: string[][] = [];
+    const store = new DextHistoryStore(
+      new MemoryState() as never,
+      () => ({ maxTurns: 10, maxOutputLength: 12 }),
+      async (parts) => { spilled.push([...parts]); return "/tmp/overflow.txt"; }
+    );
+    const input = `begin${"-".repeat(28)}end`;
+    const text = `head${"=".repeat(28)}tail`;
+    await store.addSuccess(input, [{ phase: "status", text }], { kind: "workflow", executions: [] }, "session-1", "ask", "turn-1");
+    const turn = store.list()[0]!.turns[0]!;
+    // Input is re-sent by retry, so it is clipped without a marker.
+    expect(turn.input.startsWith("begin")).toBe(true);
+    expect(turn.input.endsWith("end")).toBe(true);
+    expect(turn.input).not.toContain("truncated");
+    expect(turn.process[0]?.text.startsWith("head")).toBe(true);
+    expect(turn.process[0]?.text).toContain("\n... output truncated ...\n");
+    expect(turn.process[0]?.text.endsWith("tail")).toBe(true);
+    expect(spilled[0]).toContain(input);
+    expect(spilled[0]).toContain(text);
+    expect(turn.spillPath).toBe("/tmp/overflow.txt");
+    expect(store.spillPath("session-1", "turn-1")).toBe("/tmp/overflow.txt");
+    expect(store.spillPath("session-1", "missing")).toBeUndefined();
   });
 
   it("falls back to the built-in limits when a setting is nonsense", async () => {

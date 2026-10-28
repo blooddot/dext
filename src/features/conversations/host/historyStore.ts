@@ -21,15 +21,29 @@ const HISTORY_KEY = "dext.history";
 const SESSION_KEY_PREFIX = "dext.history.session:";
 const ORDER_KEY = "dext.history.order";
 
-function bounded(value: string, maxOutputLength: number): string {
-  return value.length > maxOutputLength
-    ? `${value.slice(0, maxOutputLength)}\n... output truncated ...`
-    : value;
+const TRUNCATION_MARKER = "\n... output truncated ...\n";
+
+/** Keep both ends: a command's conclusion matters as much as its start. Every
+ * oversized value also lands in `spill`, which becomes the turn's overflow file. */
+function bounded(value: string, maxOutputLength: number, spill: string[] = []): string {
+  if (value.length <= maxOutputLength) return value;
+  spill.push(value);
+  const head = Math.ceil(maxOutputLength / 2);
+  return `${value.slice(0, head)}${TRUNCATION_MARKER}${value.slice(head - maxOutputLength)}`;
 }
 
-function serializeResponse(response: InputExecutionResponse, maxOutputLength: number): string {
+/** The input is re-sent by retry/continue, so it is clipped without the marker
+ * that would otherwise be pasted into the next prompt. */
+function clipped(value: string, maxOutputLength: number, spill: string[]): string {
+  if (value.length <= maxOutputLength) return value;
+  spill.push(value);
+  const head = Math.ceil(maxOutputLength / 2);
+  return `${value.slice(0, head)}${value.slice(head - maxOutputLength)}`;
+}
+
+function serializeResponse(response: InputExecutionResponse, maxOutputLength: number, spill: string[]): string {
   try {
-    return bounded(JSON.stringify(response, null, 2), maxOutputLength);
+    return bounded(JSON.stringify(response, null, 2), maxOutputLength, spill);
   } catch {
     return "Unable to serialize execution output.";
   }
@@ -37,7 +51,7 @@ function serializeResponse(response: InputExecutionResponse, maxOutputLength: nu
 
 /** Store final interaction states only. Drafts stay in Webview state; secrets
  * are removed defensively even when a provider supplies them in an event. */
-function storedProcess(process: readonly AgentStreamEvent[], limit: number): AgentStreamEvent[] {
+function storedProcess(process: readonly AgentStreamEvent[], limit: number, spill: string[] = []): AgentStreamEvent[] {
   process = compactAgentEvents(process);
   const last = new Map<string, number>();
   process.forEach((event, index) => {
@@ -45,13 +59,13 @@ function storedProcess(process: readonly AgentStreamEvent[], limit: number): Age
     if (id) last.set(id, index);
   });
   return process.flatMap((event, index) => {
-    const next = structuredClone(event); next.text = bounded(event.text, limit);
+    const next = structuredClone(event); next.text = bounded(event.text, limit, spill);
     if (next.uiInteraction) {
       if (last.get(`ui:${next.uiInteraction.requestId}`) !== index) return [];
       next.uiInteraction = publicInteractionState(next.uiInteraction);
       if (next.uiInteraction.status === "waiting") next.uiInteraction.status = "closed";
       if (JSON.stringify(next.uiInteraction).length > limit) {
-        next.text = bounded(JSON.stringify(next.uiInteraction), limit); delete next.uiInteraction;
+        next.text = bounded(JSON.stringify(next.uiInteraction), limit, spill); delete next.uiInteraction;
         next.phase = "message";
       }
     }
@@ -59,7 +73,7 @@ function storedProcess(process: readonly AgentStreamEvent[], limit: number): Age
       if (last.get(`agent:${next.userInput.id}`) !== index) return [];
       if (next.userInput.status === "waiting") next.userInput.status = "dismissed";
       for (const question of next.userInput.questions) if (question.isSecret && next.userInput.answers) delete next.userInput.answers[question.id];
-      if (JSON.stringify(next.userInput).length > limit) { next.text = bounded(JSON.stringify(next.userInput), limit); delete next.userInput; next.phase = "message"; }
+      if (JSON.stringify(next.userInput).length > limit) { next.text = bounded(JSON.stringify(next.userInput), limit, spill); delete next.userInput; next.phase = "message"; }
     }
     return [next];
   });
@@ -107,7 +121,9 @@ export class DextHistoryStore implements ConversationHistoryStore {
    * setting takes effect on the next turn instead of the next window. */
   constructor(
     private readonly state: Pick<vscode.Memento, "get" | "update">,
-    private readonly readLimits: () => DextHistoryLimits = () => DEFAULT_HISTORY_LIMITS
+    private readonly readLimits: () => DextHistoryLimits = () => DEFAULT_HISTORY_LIMITS,
+    /** Writes the removed text and returns where it went. */
+    private readonly writeSpill?: (parts: readonly string[]) => Promise<string | undefined>
   ) {}
 
   private limits(): DextHistoryLimits {
@@ -303,6 +319,11 @@ export class DextHistoryStore implements ConversationHistoryStore {
     });
   }
 
+  spillPath(sessionId: string, turnId: string): string | undefined {
+    return this.all().find((session) => session.id === sessionId)
+      ?.turns.find((turn) => turn.id === turnId)?.spillPath;
+  }
+
   async addSuccess(
     input: string,
     process: readonly AgentStreamEvent[],
@@ -313,14 +334,15 @@ export class DextHistoryStore implements ConversationHistoryStore {
     turnContext?: TurnRecordContext
   ): Promise<DextHistoryRecord> {
     const { maxOutputLength } = this.limits();
+    const spill: string[] = [];
     return this.add({
-      input: bounded(input, maxOutputLength),
-      process: storedProcess(process, maxOutputLength),
-      output: serializeResponse(response, maxOutputLength),
+      input: clipped(input, maxOutputLength, spill),
+      process: storedProcess(process, maxOutputLength, spill),
+      output: serializeResponse(response, maxOutputLength, spill),
       ...(mode ? { mode } : {}),
       ...turnContext,
       response
-    }, sessionId, turnId);
+    }, sessionId, turnId, spill);
   }
 
   async addFailure(
@@ -334,20 +356,22 @@ export class DextHistoryStore implements ConversationHistoryStore {
   ): Promise<DextHistoryRecord> {
     const message = error instanceof Error ? error.message : String(error);
     const { maxOutputLength } = this.limits();
+    const spill: string[] = [];
     return this.add({
-      input: bounded(input, maxOutputLength),
-      process: storedProcess(process, maxOutputLength),
+      input: clipped(input, maxOutputLength, spill),
+      process: storedProcess(process, maxOutputLength, spill),
       output: "",
       ...(mode ? { mode } : {}),
       ...turnContext,
-      error: bounded(message, maxOutputLength)
-    }, sessionId, turnId);
+      error: bounded(message, maxOutputLength, spill)
+    }, sessionId, turnId, spill);
   }
 
   private async add(
     record: Omit<DextHistoryRecord, "id" | "createdAt">,
     requestedSessionId?: string,
-    requestedTurnId?: string
+    requestedTurnId?: string,
+    spill: readonly string[] = []
   ): Promise<DextHistoryRecord> {
     return this.mutate(async () => {
       const createdAt = Date.now();
@@ -356,6 +380,9 @@ export class DextHistoryStore implements ConversationHistoryStore {
         id: requestedTurnId ?? `${createdAt}-${Math.random().toString(36).slice(2, 8)}`,
         createdAt
       };
+      // A failed overflow write must never cost the turn: the clipped text stays.
+      const spillPath = spill.length ? await this.writeSpill?.(spill) : undefined;
+      if (spillPath) turn.spillPath = spillPath;
       const sessionId = requestedSessionId ?? `single-${turn.id}`;
       const sessions = this.all();
       const existing = sessions.find((session) => session.id === sessionId);

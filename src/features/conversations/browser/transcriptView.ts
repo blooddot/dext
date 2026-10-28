@@ -53,6 +53,8 @@ export interface TranscriptTurnOptions {
   title?: string;
   sessionId?: string;
   mode?: DextHistoryRecord["mode"];
+  /** This stored turn has truncated text in an overflow file. */
+  spill?: boolean;
 }
 
 export interface TranscriptHost {
@@ -73,6 +75,7 @@ export interface TranscriptHost {
   renameTurn(sessionId: string, turnId: string): void;
   forkFromTurn(sessionId: string, turnId: string): void;
   copyTurn(sessionId: string, turnId: string): void;
+  openSpill(sessionId: string, turnId: string): void;
   deleteTurn(sessionId: string, turnId: string): void;
   createTodos(): AgentTodoView;
   createQuestions(turnId: string, sessionId: string | undefined): AgentInputView;
@@ -200,6 +203,11 @@ export class TranscriptView {
         if (sessionId) this.host.deleteTurn(sessionId, turnId);
       }, true)
     );
+    if (options.spill) {
+      actions.append(this.actionButton("go-to-file", "Open truncated output", () => {
+        if (sessionId) this.host.openSpill(sessionId, turnId);
+      }, true));
+    }
     // Keep the turn title as the primary row label, matching the history view;
     // metadata belongs at the trailing edge of the row rather than before it.
     const planExecutionStatus = document.createElement("span");

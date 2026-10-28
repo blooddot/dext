@@ -293,6 +293,7 @@ const transcript = new TranscriptView({
   forkFromTurn: (sessionId, turnId) => vscode.postMessage({ type: "forkFromTurn", sessionId, turnId }),
   copyTurn: (sessionId, turnId) => vscode.postMessage({ type: "copyTurn", sessionId, turnId }),
   deleteTurn: (sessionId, turnId) => vscode.postMessage({ type: "deleteTurn", sessionId, turnId }),
+  openSpill: (sessionId, turnId) => vscode.postMessage({ type: "openSpillFile", sessionId, turnId }),
   createTodos: () => new AgentTodoView(),
   createQuestions: (turnId, sessionId) => createTurnQuestions(turnId, sessionId),
   openReference: (reference) => openInputReference(reference),
@@ -2309,7 +2310,8 @@ function renderOutputSession(session: DextHistorySession): void {
       sessionId: session.id,
       mode: record.mode,
       ...(record.executePlan ? { executePlan: true, ...(record.planPath ? { planPath: record.planPath } : {}) } : {}),
-      ...(record.title ? { title: record.title } : {})
+      ...(record.title ? { title: record.title } : {}),
+      ...(record.spillPath ? { spill: true } : {})
     });
     // Closed history rows need their final status before deferred hydration.
     if (turn.planExecutionStatus) turn.planExecutionStatus.textContent = planExecutionLabel(record.process, record.error, record.planOutcome);

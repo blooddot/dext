@@ -173,6 +173,8 @@ describe("Dext history rendering", () => {
     }
     expect(summary).toMatch(/data-history-command="dext.history.renameTurn"[^>]*title="Rename turn"[^>]*><i class="codicon codicon-rename"/);
     expect(renderHistoryRecord(turn)).not.toContain("data-history-command");
+    const spilled = renderHistoryRecord({ ...turn, spillPath: "/tmp/overflow.txt" }, "session-1");
+    expect(spilled.slice(0, spilled.indexOf("</summary>"))).toContain('data-history-command="dext.history.openSpill"');
     const sessionHtml = renderHistorySession({ id: "session-1", createdAt: 2, updatedAt: 2, turns: [turn] });
     const sessionSummary = sessionHtml.slice(0, sessionHtml.indexOf("</summary>"));
     expect([...sessionSummary.matchAll(/data-history-command="([^"]+)"/g)].map((match) => match[1])).toEqual([
