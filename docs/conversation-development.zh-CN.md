@@ -56,7 +56,7 @@
 
 | 状态 | 所有者 | 存储 / 生命周期 |
 | --- | --- | --- |
-| 已保存回合、计划上下文、provider session | `features/conversations/host/historyStore.ts` | `dext.history` 工作区 memento，串行写入 |
+| 已保存回合、计划上下文、provider session | `features/conversations/host/historyStore.ts` + `historyFileState.ts` | `<storageUri>/conversation-history/`，每会话一个 `<sha256>.json` 加 `overflow/`；旧 `dext.history*` Memento 键一次性导入后删除 |
 | 置顶、收藏、标题、布局、每会话选择、排序 | `features/conversations/host/conversationPreferences.ts` | `dext.pinnedConversations` 等键，键名不变 |
 | 会话集合、当前标签、打开标签、标签顺序 | `features/conversations/host/conversationController.ts` | 内存；布局写入 750ms 防抖 |
 | 布局写入定时器 | 同上 | 随控制器释放 |
@@ -75,6 +75,18 @@
 | Webview 生命周期、HTML 外壳、消息分发、资源/MCP/附件 | `app/sidebarProvider.ts` | VS Code 对象 |
 
 窄接口位于 `contracts/`：`TurnExecutionHost`、`TurnInteractionPort`、`ConversationSessionPort`、`TurnNotifier`、`ConversationHistoryStore`、`ConversationPreferences`；计划文件读取与进度保存通过 `PlanFileHost` / `PlanSessionPort`，补丁由 `features/workflow/host/runtime.ts` 在返回 Agent 结果前调用 apply 宿主自动处理；历史只展示结果，旧补丁明确忽略。会话模块不导入 `DextApplication`、`DextSidebarProvider`、`webview/main.ts`，也不接收整个侧栏状态。`ConversationSummary` 与会话消息 schema 位于 `contracts/protocol.ts`，`src/platform/webviewProtocol.ts` 只做组合。
+
+### 回收迁移前的存储
+
+历史位于 `<storageUri>/conversation-history/`：每个会话一个 `<sha256>.json`，`overflow/` 保存被截断原文，`legacy-backup/` 保存旧 Memento 键的原始副本。`openFileHistoryStore()` 首次激活时导入旧 `dext.history*` 键并删除它们；`legacy-backup/` 在导入完成 7 天后自动删除，因此需要保留回滚余地时请在升级前复制该目录。
+
+工作区存储目录里的 `state.vscdb` 与 `state.vscdb.backup` 属于该工作区的所有扩展，VS Code 运行期间 Dext 无法 VACUUM。请先复制这两个文件、关闭 VS Code，然后执行：
+
+```
+node -e "const {DatabaseSync}=require('node:sqlite');new DatabaseSync(process.argv[1]).exec('VACUUM')" <storage>/state.vscdb
+```
+
+之后可以删除 `state.vscdb.backup`，它是 VS Code 自己保留的上一份数据库副本。
 
 ### Provider 会话身份
 

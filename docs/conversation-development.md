@@ -107,7 +107,7 @@ mapping stays honest.
 
 | State | Owner | Storage / lifetime |
 | --- | --- | --- |
-| Stored turns, plan context, provider session ids | `features/conversations/host/historyStore.ts` | `dext.history` workspace memento, serial writes |
+| Stored turns, plan context, provider session ids | `features/conversations/host/historyStore.ts` + `historyFileState.ts` | `<storageUri>/conversation-history/`, one `<sha256>.json` per conversation plus `overflow/`; the old `dext.history*` Memento keys are imported once and then retired |
 | Pins, favorites, titles, layout, per-conversation selection, sort order | `features/conversations/host/conversationPreferences.ts` | `dext.pinnedConversations`, `dext.favoriteConversations`, `dext.conversationTitles`, `dext.conversationLayout`, `dext.conversationSelections`, `dext.historySortOrder` |
 | Session map, active tab, open tab ids, tab ordering | `features/conversations/host/conversationController.ts` | in memory; layout debounce 750 ms |
 | Layout write debounce timer | `features/conversations/host/conversationController.ts` | released with the controller |
@@ -146,6 +146,25 @@ A conversation module never imports `DextApplication`, `DextSidebarProvider`,
 `webview/main.ts` or the whole sidebar state. `ConversationSummary` and the conversation
 message schema live in `contracts/protocol.ts`, and `src/platform/webviewProtocol.ts` only
 composes them.
+
+### Reclaiming the pre-migration storage
+
+History now lives in `<storageUri>/conversation-history/`: one `<sha256>.json` per
+conversation, `overflow/` for the text a turn truncated, and `legacy-backup/` for the raw
+copy of the old Memento keys. `openFileHistoryStore()` imports the old `dext.history*` keys
+once and retires them; `legacy-backup/` is deleted automatically a week after that import,
+so copy the directory before upgrading if a rollback must stay possible.
+
+`state.vscdb` and `state.vscdb.backup` in the workspace storage folder belong to every
+extension in that workspace, so Dext cannot vacuum them while VS Code runs. Copy both
+files, close VS Code, then run:
+
+```
+node -e "const {DatabaseSync}=require('node:sqlite');new DatabaseSync(process.argv[1]).exec('VACUUM')" <storage>/state.vscdb
+```
+
+Deleting `state.vscdb.backup` afterwards is safe: it is VS Code's own copy of the previous
+database.
 
 ### Provider session identity
 
