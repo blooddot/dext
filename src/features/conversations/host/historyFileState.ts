@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { mkdir, open, readFile, readdir, rename, rm } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, rename, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type * as vscode from "vscode";
 import { DEFAULT_HISTORY_LIMITS, type DextHistoryLimits, type DextHistoryRecord, type DextHistorySession } from "../contracts/history.js";
@@ -10,6 +10,9 @@ const HISTORY_KEY = "dext.history";
 const SESSION_PREFIX = "dext.history.session:";
 const ORDER_KEY = "dext.history.order";
 const IMPORTED_KEY = "dext.history.imported";
+const DAY_MS = 24 * 60 * 60 * 1000;
+const BACKUP_MAX_AGE_MS = 7 * DAY_MS;
+const OVERFLOW_MAX_AGE_MS = DAY_MS;
 
 function historyKey(key: string): boolean {
   return key === HISTORY_KEY || key === ORDER_KEY || key.startsWith(SESSION_PREFIX);
@@ -61,12 +64,17 @@ export class HistoryFileState {
     }
     // A process may exit after a new session file commits but before the order
     // file does. Recover it rather than hiding a successfully written turn.
-    const order = state.get<string[]>(ORDER_KEY, []);
+    const storedOrder = state.get<unknown>(ORDER_KEY, []);
+    const order = Array.isArray(storedOrder)
+      ? storedOrder.filter((id): id is string => typeof id === "string")
+      : [];
     const missing = [...state.values.keys()].filter((key) => key.startsWith(SESSION_PREFIX))
-      .map((key) => state.get<DextHistorySession>(key))
+      .map((key) => state.get<DextHistorySession | undefined>(key, undefined))
+      .filter((session): session is DextHistorySession => typeof session?.id === "string")
       .filter((session) => !order.includes(session.id))
       .sort((a, b) => a.createdAt - b.createdAt);
     if (missing.length) await state.update(ORDER_KEY, [...order, ...missing.map((session) => session.id)]);
+    await pruneOverflow(directory, state.values);
     return state;
   }
 
@@ -86,6 +94,62 @@ export class HistoryFileState {
   }
 }
 
+/** A completed import no longer needs its raw copy, but an interrupted one does.
+ * A failed cleanup must never block activation. */
+async function pruneLegacyBackup(directory: string): Promise<void> {
+  const backup = join(directory, "legacy-backup");
+  try {
+    let newest = 0;
+    for (const name of await readdir(backup)) {
+      newest = Math.max(newest, (await stat(join(backup, name))).mtimeMs);
+    }
+    if (Date.now() - newest > BACKUP_MAX_AGE_MS) await rm(backup, { recursive: true, force: true });
+  } catch { /* no backup, or another window already removed it */ }
+}
+
+/** Overflow text is only reachable through a turn's `spillPath`, so anything
+ * unreferenced for a day is gone; the delay protects a concurrent window's
+ * fresh file from this window's older snapshot. */
+async function pruneOverflow(directory: string, values: ReadonlyMap<string, unknown>): Promise<void> {
+  const overflow = join(directory, "overflow");
+  try {
+    const referenced = new Set<string>();
+    for (const [key, value] of values) {
+      if (!key.startsWith(SESSION_PREFIX)) continue;
+      for (const turn of (value as DextHistorySession | undefined)?.turns ?? []) {
+        if (typeof turn?.spillPath === "string") referenced.add(turn.spillPath);
+      }
+    }
+    for (const name of await readdir(overflow)) {
+      const path = join(overflow, name);
+      if (referenced.has(path)) continue;
+      if (Date.now() - (await stat(path)).mtimeMs < OVERFLOW_MAX_AGE_MS) continue;
+      await rm(path, { force: true });
+    }
+  } catch { /* no overflow directory yet */ }
+}
+
+/** Whole text that truncation removed, one file per turn. A failed write only
+ * costs the overflow copy, never the turn. */
+async function writeSpill(directory: string, parts: readonly string[]): Promise<string | undefined> {
+  const path = join(directory, "overflow", `${randomBytes(8).toString("hex")}.txt`);
+  const temporary = `${path}.tmp`;
+  try {
+    await mkdir(join(directory, "overflow"), { recursive: true });
+    const file = await open(temporary, "wx");
+    try {
+      for (const [index, part] of parts.entries()) {
+        await file.writeFile(`=== part ${index + 1} (${part.length} chars) ===\n${part}\n`);
+      }
+      await file.sync();
+    } finally { await file.close(); }
+    await rename(temporary, path);
+    return path;
+  } catch {
+    return undefined;
+  } finally { await rm(temporary, { force: true }); }
+}
+
 /** Import before exposing commands/sidebar. A completion marker makes a crash
  * between disk commit and Memento cleanup retry cleanup without resurrecting
  * deleted turns. Orphan session keys from an interrupted old migration count
@@ -96,7 +160,8 @@ export async function openFileHistoryStore(
 ): Promise<DextHistoryStore> {
   const state = await HistoryFileState.open(directory);
   const keys = legacy.keys().filter(historyKey);
-  if (keys.length && !state.get(IMPORTED_KEY, false)) {
+  const imported = state.get<boolean>(IMPORTED_KEY, false);
+  if (keys.length && !imported) {
     const backup = join(directory, "legacy-backup");
     await mkdir(backup, { recursive: true });
     // Complete every original backup before changing any source key.
@@ -132,5 +197,7 @@ export async function openFileHistoryStore(
   // VS Code coalesces synchronous Memento.update calls. Delete all history keys
   // in one batch, so even cleanup never sends the old history per session.
   await Promise.all(keys.map((key) => legacy.update(key, undefined)));
-  return new DextHistoryStore(state, readLimits);
+  // Only a window that started after the import may age out the raw backup.
+  if (imported) await pruneLegacyBackup(directory);
+  return new DextHistoryStore(state, readLimits, (parts) => writeSpill(directory, parts));
 }

@@ -1,6 +1,6 @@
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { HistoryFileState, openFileHistoryStore } from "../src/features/conversations/host/historyFileState.js";
 import type { AgentStreamEvent } from "../src/shared/contracts/types.js";
@@ -82,6 +82,53 @@ describe("file history storage", () => {
     expect(store.list().map((session) => session.id)).toEqual(["unindexed"]);
     await store.remove("unindexed");
     expect((await openFileHistoryStore(path, legacy)).list()).toEqual([]);
+  });
+
+  it("rebuilds a corrupted order index from the session files", async () => {
+    const legacy = new Memento();
+    legacy.values.set("dext.history", [session("old")]);
+    const path = await directory();
+    await openFileHistoryStore(path, legacy);
+    const disk = await HistoryFileState.open(path);
+    await disk.update("dext.history.order", { broken: true });
+    expect((await openFileHistoryStore(path, new Memento())).list().map((value) => value.id)).toEqual(["old"]);
+  });
+
+  it("retires the raw import backup after a week and keeps a newer one", async () => {
+    const importOnce = async (ageMs: number): Promise<string> => {
+      const legacy = new Memento();
+      legacy.values.set("dext.history", [session("old")]);
+      const path = await directory();
+      await openFileHistoryStore(path, legacy);
+      const backup = join(path, "legacy-backup");
+      const when = new Date(Date.now() - ageMs);
+      await utimes(join(backup, (await readdir(backup))[0]!), when, when);
+      const store = await openFileHistoryStore(path, legacy);
+      expect(store.list().map((value) => value.id)).toEqual(["old"]);
+      return backup;
+    };
+    await expect(readdir(await importOnce(8 * 24 * 60 * 60 * 1000))).rejects.toThrow();
+    expect(await readdir(await importOnce(24 * 60 * 60 * 1000))).toHaveLength(1);
+  });
+
+  it("spills oversized text to a file and prunes only stale unreferenced ones", async () => {
+    const path = await directory();
+    const limits = () => ({ maxTurns: 10, maxOutputLength: 12 });
+    const store = await openFileHistoryStore(path, new Memento(), limits);
+    const text = `head${"=".repeat(28)}tail`;
+    await store.addSuccess("short", [{ phase: "status", text }], { kind: "workflow", executions: [] }, "session-1", "ask", "turn-1");
+    const spillPath = store.spillPath("session-1", "turn-1")!;
+    expect(await readFile(spillPath, "utf8")).toContain(text);
+
+    const overflow = join(path, "overflow");
+    const stale = join(overflow, "stale.txt");
+    await writeFile(stale, "old");
+    const when = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+    await utimes(stale, when, when);
+    await writeFile(join(overflow, "fresh.txt"), "new");
+
+    await openFileHistoryStore(path, new Memento(), limits);
+    expect((await readdir(overflow)).sort()).toEqual([basename(spillPath), "fresh.txt"].sort());
   });
 
   it("does not resurrect old turns if cleanup fails after the disk import commits", async () => {
