@@ -74,6 +74,13 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
     mimeType: z.string().min(1)
   }),
   z.object({ type: z.literal("deleteImageAttachment"), relativePath: z.string().min(1) }),
+  // The Webview cannot sample the `vscode-webview` image URL on a canvas (it would
+  // taint the canvas), so it asks the host for the bytes as a data URL.
+  z.object({
+    type: z.literal("imageData"),
+    requestId: z.number().int().nonnegative(),
+    relativePath: z.string().min(1).max(8192).regex(/^[^\r\n]+$/)
+  }),
   z.object({ type: z.literal("reload") }),
   z.object({ type: z.literal("addMcp") }),
   z.object({ type: z.literal("openResourceCreator") }),
@@ -158,6 +165,7 @@ export type WebviewResponse =
   | { type: "inputKind"; kind: "empty" | "workflow" | "invalid" }
   | { type: "insertFileReferences"; expressions: string[] }
   | { type: "imageAttachment"; relativePath: string; webviewUri: string; name: string }
+  | { type: "imageDataResult"; requestId: number; dataUrl?: string; error?: string }
   | { type: "clipboardWriteResult"; requestId: number; success: boolean }
   | {
     type: "clipboardReadResult";

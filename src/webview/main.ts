@@ -28,6 +28,7 @@ import { colorizeSource } from "./sourceHighlight.js";
 import { formatDuration } from "../shared/lib/duration.js";
 import { bindFileDropTarget, droppedFilePaths, fileSelectionDropEffect, isFileDrag } from "./fileDrop.js";
 import { FileDropClient } from "./fileDropClient.js";
+import { AttachmentImageClient } from "./attachmentImageClient.js";
 import { ProjectReferenceClient } from "./projectReferenceClient.js";
 
 import { planExecutionLabel } from "../features/conversations/presentation/agentTodoPresentation.js";
@@ -53,6 +54,7 @@ import { registerSlashCommandProvider } from "./monacoSlashCommands.js";
 import { looksLikeGithubUrl } from "../features/resources/domain/skillSource.js";
 import { enableConversationTabDrag } from "../features/conversations/browser/conversationTabDrag.js";
 import { installResultScrollProbe } from "../features/conversations/browser/scrollProbe.js";
+import { ImageAnnotator } from "../features/conversations/browser/imageAnnotator.js";
 
 interface VsCodeApi {
   postMessage(message: WebviewRequest): void;
@@ -212,6 +214,7 @@ const clipboard = new ClipboardClient((request) => vscode.postMessage(request));
 const fileSearch = new FileSearchClient((request) => vscode.postMessage(request));
 const projectReferences = new ProjectReferenceClient((request) => vscode.postMessage(request), (message) => renderError(new Error(message)));
 const fileDrop = new FileDropClient((request) => vscode.postMessage(request));
+const attachmentImages = new AttachmentImageClient((request) => vscode.postMessage(request));
 let executing = false;
 let stopping = false;
 let activeTurnId: string | undefined;
@@ -2387,7 +2390,16 @@ function addImageAttachment(relativePath: string, webviewUri: string, name: stri
   const image = document.createElement("img");
   image.src = webviewUri;
   image.alt = name;
-  image.title = name;
+  image.title = `Annotate ${name}`;
+  image.setAttribute("role", "button");
+  image.tabIndex = 0;
+  const annotate = (): void => annotateImageAttachment(relativePath, name);
+  image.addEventListener("click", annotate);
+  image.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    annotate();
+  });
   const remove = document.createElement("button");
   remove.type = "button";
   remove.className = "image-attachment-remove";
@@ -2407,6 +2419,21 @@ function addImageAttachment(relativePath: string, webviewUri: string, name: stri
   imageAttachments.set(relativePath, chip);
   activeImageAttachmentMetadata.set(relativePath, { relativePath, webviewUri, name });
   persistComposerDraft();
+}
+
+let imageAnnotator: ImageAnnotator | undefined;
+
+/** One overlay is shared by every chip: it owns no per-attachment state after close. */
+function annotateImageAttachment(relativePath: string, name: string): void {
+  imageAnnotator ??= new ImageAnnotator({
+    loadImage: (path) => attachmentImages.load(path),
+    onInsert: (text, previous) => {
+      if (previous) editor.replaceText(previous, text);
+      else editor.insertText(text);
+      persistComposerDraft();
+    }
+  });
+  imageAnnotator.open(relativePath, name);
 }
 
 const activeImageAttachmentMetadata = new Map<string, DraftAttachment>();
@@ -2737,7 +2764,7 @@ elements.inputShell.addEventListener("paste", (event) => {
 
 window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   const message = event.data;
-  if (clipboard.accept(message) || fileSearch.accept(message) || projectReferences.accept(message) || fileDrop.accept(message)) return;
+  if (clipboard.accept(message) || fileSearch.accept(message) || projectReferences.accept(message) || fileDrop.accept(message) || attachmentImages.accept(message)) return;
   if (message.type === "turnRenamed") {
     if (browser.renderedId === message.sessionId) {
       transcript.get(message.turnId)?.title.rename(message.title, message.displayTitle);

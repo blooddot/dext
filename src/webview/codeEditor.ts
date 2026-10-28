@@ -246,6 +246,21 @@ export class DextCodeEditor {
     const selection = this.selection(); const from = position ?? selection.from, to = position ?? selection.to;
     const edit = fileReferenceInsertion(this.source, from, to, expressions); this.edit(edit.from, edit.to, edit.text, edit.cursorOffset);
   }
+  /** Appends a block of text at the caret. `executeEdits` keeps the undo stack, so
+   * a user who does not want the annotations can press Ctrl+Z. */
+  insertText(text: string): void {
+    const source = this.source, selection = this.selection();
+    const prefix = source.slice(0, selection.from).trim() ? "\n\n" : "";
+    const suffix = source.slice(selection.to).trim() ? "\n\n" : "\n";
+    this.edit(selection.from, selection.to, `${prefix}${text}${suffix}`, prefix.length + text.length);
+  }
+  /** Updates an earlier `insertText` block in place; re-annotating an image should
+   * not stack a second copy. Falls back to inserting when the user edited it away. */
+  replaceText(previous: string, text: string): void {
+    const index = this.source.indexOf(previous);
+    if (index < 0) { this.insertText(text); return; }
+    this.edit(index, index + previous.length, text, text.length);
+  }
   removeFileReference(payload: string): void {
     const ref = inputReferenceProjections(this.source).find(ref => ref.reference.payload === payload);
     if (!ref) return; const edit = fileReferenceRemovalEdit(this.source, ref); this.edit(edit.from, edit.to, edit.insert);

@@ -1354,6 +1354,7 @@ body.vscode-high-contrast-light .monaco-editor .view-line .dext-ref-chip {
   height: 100%;
   object-fit: cover;
   display: block;
+  cursor: pointer;
 }
 
 .image-attachment-remove {
@@ -1379,6 +1380,133 @@ body.vscode-high-contrast-light .monaco-editor .view-line .dext-ref-chip {
   background: var(--vscode-badge-background, #4d4d4d);
   opacity: 0.85;
 }
+
+/* Screenshot annotation overlay: hover selects a flat block, drag draws a box. */
+.image-annotator {
+  width: min(560px, calc(100% - 16px));
+}
+
+.image-annotator-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px 0;
+  font-weight: 600;
+}
+
+.image-annotator-close,
+.image-annotator-remove {
+  border: 0;
+  padding: 0 4px;
+  background: transparent;
+  color: var(--vscode-foreground);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.image-annotator-stage {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.image-annotator-image {
+  max-width: 100%;
+  max-height: 60vh;
+  display: block;
+  cursor: crosshair;
+}
+
+.image-annotator-layers {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.image-annotator-hover,
+.image-annotator-box,
+.image-annotator-point {
+  position: absolute;
+  box-sizing: border-box;
+  pointer-events: none;
+  border: 1px solid var(--vscode-focusBorder);
+}
+
+.image-annotator-hover {
+  border-style: dashed;
+  background: color-mix(in srgb, var(--vscode-focusBorder) 18%, transparent);
+}
+
+.image-annotator-region {
+  border-color: var(--vscode-editorWarning-foreground, #d7ba7d);
+}
+
+.image-annotator-active {
+  border-width: 2px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--vscode-focusBorder) 55%, transparent);
+}
+
+.image-annotator-drawing {
+  border-style: dashed;
+}
+
+.image-annotator-point {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #d7ba7d) 30%, transparent);
+  font-size: 10px;
+  line-height: 1;
+}
+
+.image-annotator-region .image-annotator-index {
+  position: absolute;
+  top: -1px;
+  left: -1px;
+  padding: 0 3px;
+  border-radius: 2px;
+  background: var(--vscode-badge-background, #4d4d4d);
+  color: var(--vscode-badge-foreground, #ffffff);
+  font-size: 10px;
+  line-height: 15px;
+}
+
+.image-annotator-list {
+  max-height: 30vh;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow: auto;
+}
+
+.image-annotator-list[hidden] { display: none; }
+
+.image-annotator-row {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+}
+
+.image-annotator-row-label {
+  flex: 0 0 auto;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+
+.image-annotator-row .ui-dialog-input {
+  flex: 1;
+  min-width: 0;
+  min-height: 26px;
+}
+
+.image-annotator-error {
+  color: var(--vscode-errorForeground);
+}
+
+.image-annotator-error[hidden] { display: none; }
 
 .execution-result.has-next {
   margin-bottom: 10px;

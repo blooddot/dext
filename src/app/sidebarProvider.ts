@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { statSync } from "node:fs";
-import { basename, relative, sep } from "node:path";
+import { basename, extname, relative, sep } from "node:path";
 import * as vscode from "vscode";
 import { createConversationServices, type ConversationServices } from "./conversationSetup.js";
 import type { DextApplication } from "./application.js";
@@ -47,6 +47,15 @@ function imageExtension(mimeType: string): string | undefined {
     "image/bmp": ".bmp"
   })[normalized];
 }
+
+/** The reverse of `imageExtension`, for handing an attachment's bytes back to the Webview. */
+const IMAGE_MIME_TYPES: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".bmp": "image/bmp"
+};
 
 /** The Webview host. It owns the VS Code surface, the HTML shell, message
  * dispatch and the features outside this round (resources, MCP, attachments).
@@ -1039,6 +1048,29 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           if (this.conversation.coordinator.anyRunning()) this.pendingAttachmentDeletes.add(request.relativePath);
           else await this.deleteImage(request.relativePath);
           break;
+        case "imageData": {
+          const uri = this.application.storage.uriForReference("attachments", request.relativePath.replaceAll("\\", "/"));
+          const mimeType = uri ? IMAGE_MIME_TYPES[extname(uri.fsPath).toLowerCase()] : undefined;
+          if (!uri || !mimeType) {
+            await this.post({ type: "imageDataResult", requestId: request.requestId, error: "That attachment is not a Dext image." });
+            break;
+          }
+          try {
+            const bytes = await vscode.workspace.fs.readFile(uri);
+            await this.post({
+              type: "imageDataResult",
+              requestId: request.requestId,
+              dataUrl: `data:${mimeType};base64,${Buffer.from(bytes).toString("base64")}`
+            });
+          } catch (error) {
+            await this.post({
+              type: "imageDataResult",
+              requestId: request.requestId,
+              error: error instanceof Error ? error.message : String(error)
+            });
+          }
+          break;
+        }
         case "reload":
           await this.application.reload();
           await this.refresh();
