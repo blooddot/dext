@@ -3,14 +3,30 @@ import { describe, expect, it } from "vitest";
 import { DextHistoryStore } from "../src/features/conversations/host/historyStore.js";
 
 class MemoryState {
-  constructor(private value?: unknown) {}
-  get<T>(_: string, fallback: T): T { return (this.value as T | undefined) ?? fallback; }
-  async update(_: string, value: unknown): Promise<void> { this.value = value; }
+  private readonly values = new Map<string, unknown>();
+  /** A seeded value is the legacy single-blob history an older workspace holds. */
+  constructor(legacy?: unknown) { if (legacy !== undefined) this.values.set("dext.history", legacy); }
+  get<T>(key: string, fallback: T): T { return this.values.has(key) ? (this.values.get(key) as T) : fallback; }
+  async update(key: string, value: unknown): Promise<void> {
+    if (value === undefined) this.values.delete(key);
+    else this.values.set(key, value);
+  }
+  keys(): readonly string[] { return [...this.values.keys()]; }
 }
 
 class DelayedMemoryState extends MemoryState {
   override async update(key: string, value: unknown): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 5));
+    await super.update(key, value);
+  }
+}
+
+/** Records which Memento keys a write touched, to prove one turn no longer
+ * reserializes every conversation. */
+class RecordingState extends MemoryState {
+  readonly written: string[] = [];
+  override async update(key: string, value: unknown): Promise<void> {
+    this.written.push(key);
     await super.update(key, value);
   }
 }
@@ -246,6 +262,47 @@ describe("DextHistoryStore", () => {
       id: "legacy-old-1",
       turns: [expect.objectContaining({ id: "old-1", input: 'ask(input="old")' })]
     })]);
+  });
+
+  it("writes only the conversation a turn belongs to", async () => {
+    const state = new RecordingState();
+    const store = new DextHistoryStore(state as never);
+    await store.addSuccess("first", [], { kind: "workflow", executions: [] }, "session-1");
+    await store.addSuccess("second", [], { kind: "workflow", executions: [] }, "session-2");
+    state.written.length = 0;
+    await store.addSuccess("third", [], { kind: "workflow", executions: [] }, "session-1");
+    expect(state.written).toEqual(["dext.history.session:session-1"]);
+  });
+
+  it("migrates the whole-history blob into one key per conversation", async () => {
+    const legacy = [{ id: "s", createdAt: 1, updatedAt: 1, turns: [] }, { id: "t", createdAt: 2, updatedAt: 2, turns: [] }];
+    const state = new RecordingState(legacy);
+    const store = new DextHistoryStore(state as never);
+    expect(store.list().map((session) => session.id)).toEqual(["s", "t"]);
+
+    await store.setArchived("t", true);
+
+    expect(state.get("dext.history", undefined)).toBeUndefined();
+    expect(state.get<string[]>("dext.history.order", [])).toEqual(["s", "t"]);
+    expect(state.get("dext.history.session:t", undefined)).toMatchObject({ archivedAt: expect.any(Number) });
+    expect(new DextHistoryStore(state as never).list().map((session) => session.id)).toEqual(["s"]);
+  });
+
+  it("resumes an interrupted migration instead of rewriting every conversation", async () => {
+    const legacy = [
+      { id: "s1", createdAt: 1, updatedAt: 1, turns: [] },
+      { id: "s2", createdAt: 2, updatedAt: 2, turns: [] }
+    ];
+    const state = new RecordingState(legacy);
+    await state.update("dext.history.session:s1", legacy[0]);
+    state.written.length = 0;
+    const store = new DextHistoryStore(state as never);
+
+    await store.setArchived("s2", true);
+
+    expect(state.written.filter((key) => key.startsWith("dext.history.session:"))).toEqual(["dext.history.session:s2"]);
+    expect(state.get("dext.history", undefined)).toBeUndefined();
+    expect(state.get<string[]>("dext.history.order", [])).toEqual(["s1", "s2"]);
   });
 
   it("normalizes legacy inline reference storage before history presentation", () => {

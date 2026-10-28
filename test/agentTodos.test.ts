@@ -142,8 +142,11 @@ describe("agent task progress", () => {
   });
 
   it("persists interrupted progress and renders the last snapshot above Process after reloading", async () => {
-    let stored: unknown;
-    const state = { get: <T>(_: string, fallback: T): T => (stored as T) ?? fallback, update: async (_: string, value: unknown) => { stored = value; } };
+    const stored = new Map<string, unknown>();
+    const state = {
+      get: <T>(key: string, fallback: T): T => (stored.has(key) ? stored.get(key) as T : fallback),
+      update: async (key: string, value: unknown) => { if (value === undefined) stored.delete(key); else stored.set(key, value); }
+    };
     const history = new DextHistoryStore(state as never);
     const initial = agentTodoEvent([{ id: "1", text: "Old title", status: "pending" }]);
     const latest = agentTodoEvent([{ id: "1", text: "New title", status: "in_progress" }]);

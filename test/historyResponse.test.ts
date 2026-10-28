@@ -40,7 +40,7 @@ describe("historical result compatibility", () => {
   it("restores normalized results when the history store reopens, preserving the saved record", () => {
     const record = legacyRecord();
     const persisted = [{ id: "session", createdAt: 1, updatedAt: 1, turns: [record] }];
-    const store = new DextHistoryStore({ get: () => persisted } as never);
+    const store = new DextHistoryStore({ get: (key: string, fallback: unknown) => key === "dext.history" ? persisted : fallback } as never);
     expect(store.list()[0]?.turns[0]?.response?.executions[0]?.result.kind).toBe("agent");
     expect((record.response?.executions[0]?.result as unknown as { kind: string }).kind).toBe("chat");
   });

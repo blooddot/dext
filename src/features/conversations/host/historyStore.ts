@@ -15,7 +15,11 @@ import {
   type TurnRecordContext
 } from "../contracts/history.js";
 
+/** Whole-history key from before conversations had keys of their own. Only
+ * read to migrate it; new writes never produce it. */
 const HISTORY_KEY = "dext.history";
+const SESSION_KEY_PREFIX = "dext.history.session:";
+const ORDER_KEY = "dext.history.order";
 
 function bounded(value: string, maxOutputLength: number): string {
   return value.length > maxOutputLength
@@ -102,7 +106,7 @@ export class DextHistoryStore implements ConversationHistoryStore {
   /** Limits are read per write rather than captured once, so changing the
    * setting takes effect on the next turn instead of the next window. */
   constructor(
-    private readonly state: vscode.Memento,
+    private readonly state: Pick<vscode.Memento, "get" | "update">,
     private readonly readLimits: () => DextHistoryLimits = () => DEFAULT_HISTORY_LIMITS
   ) {}
 
@@ -117,13 +121,56 @@ export class DextHistoryStore implements ConversationHistoryStore {
   }
 
   list(includeArchived = false): DextHistorySession[] {
-    const stored = this.state.get<(DextHistoryRecord | DextHistorySession)[]>(HISTORY_KEY, []);
-    const sessions = normalizeSessions(stored);
+    const sessions = this.all();
     return includeArchived ? sessions : sessions.filter((session) => !session.archivedAt);
   }
 
+  /** Conversations in creation order. The production state adapter stores
+   * these values in separate files, outside VS Code's extension Memento. */
   private all(): DextHistorySession[] {
-    return this.list(true);
+    const stored = this.order().flatMap((id) => {
+      const session = this.state.get<DextHistorySession | undefined>(`${SESSION_KEY_PREFIX}${id}`, undefined);
+      return session ? [session] : [];
+    });
+    const sessions = normalizeSessions(stored);
+    const legacy = this.state.get<(DextHistoryRecord | DextHistorySession)[]>(HISTORY_KEY, []);
+    if (!Array.isArray(legacy) || !legacy.length) return sessions;
+    const known = new Set(sessions.map((session) => session.id));
+    return [...normalizeSessions(legacy).filter((session) => !known.has(session.id)), ...sessions];
+  }
+
+  /** Persisted ids, tolerated as anything: an older or corrupted value must not
+   * take the history down. */
+  private order(): string[] {
+    const stored = this.state.get<string[]>(ORDER_KEY, []);
+    return Array.isArray(stored) ? stored : [];
+  }
+
+  /** Writes only touched/trimmed conversations and a changed order. The legacy
+   * value path also supports callers that supply an unmigrated state adapter. */
+  private async persist(sessions: readonly DextHistorySession[], touched: readonly string[] = []): Promise<void> {
+    const turnCounts = new Map(sessions.map((session) => [session.id, session.turns.length]));
+    const kept = trimSessions(sessions, this.limits().maxTurns);
+    const order = kept.map((session) => session.id);
+    const storedOrder = this.order();
+    const migrating = this.state.get<unknown>(HISTORY_KEY, undefined) !== undefined;
+    for (const id of storedOrder) {
+      if (!order.includes(id)) await this.state.update(`${SESSION_KEY_PREFIX}${id}`, undefined);
+    }
+    for (const session of kept) {
+      const stored = this.state.get<DextHistorySession | undefined>(`${SESSION_KEY_PREFIX}${session.id}`, undefined);
+      const changed = touched.includes(session.id) || turnCounts.get(session.id) !== session.turns.length;
+      if (!changed && (!migrating || stored)) continue;
+      await this.state.update(`${SESSION_KEY_PREFIX}${session.id}`, session);
+      if (migrating && !storedOrder.includes(session.id)) {
+        storedOrder.push(session.id);
+        await this.state.update(ORDER_KEY, [...storedOrder]);
+      }
+    }
+    if (migrating || order.length !== storedOrder.length || order.some((id, index) => id !== storedOrder[index])) {
+      await this.state.update(ORDER_KEY, order);
+    }
+    if (migrating) await this.state.update(HISTORY_KEY, undefined);
   }
 
   async setArchived(sessionId: string, archived: boolean): Promise<boolean> {
@@ -133,15 +180,14 @@ export class DextHistoryStore implements ConversationHistoryStore {
       if (!session) return false;
       if (archived) session.archivedAt ??= Date.now();
       else delete session.archivedAt;
-      await this.state.update(HISTORY_KEY, sessions);
+      await this.persist(sessions, [sessionId]);
       return true;
     });
   }
 
   async remove(sessionId: string): Promise<void> {
     await this.mutate(async () => {
-      const sessions = this.all().filter((session) => session.id !== sessionId);
-      await this.state.update(HISTORY_KEY, sessions);
+      await this.persist(this.all().filter((session) => session.id !== sessionId));
     });
   }
 
@@ -153,7 +199,7 @@ export class DextHistoryStore implements ConversationHistoryStore {
       const name = title.trim().replace(/[\r\n]+/g, " ").slice(0, 140);
       if (name) turn.title = name;
       else delete turn.title;
-      await this.state.update(HISTORY_KEY, sessions);
+      await this.persist(sessions, [sessionId]);
       return true;
     });
   }
@@ -167,7 +213,7 @@ export class DextHistoryStore implements ConversationHistoryStore {
         sessions.push(session);
       }
       session.resource = structuredClone(resource);
-      await this.state.update(HISTORY_KEY, sessions);
+      await this.persist(sessions, [sessionId]);
     });
   }
 
@@ -179,7 +225,7 @@ export class DextHistoryStore implements ConversationHistoryStore {
       if (activePlanPath) session.activePlanPath = activePlanPath;
       else delete session.activePlanPath;
       session.planStatus = planStatus;
-      await this.state.update(HISTORY_KEY, sessions);
+      await this.persist(sessions, [sessionId]);
     });
   }
 
@@ -192,7 +238,7 @@ export class DextHistoryStore implements ConversationHistoryStore {
         sessions.push(session);
       }
       session.planProgress = { path, todos: todos.map((item) => ({ ...item })) };
-      await this.state.update(HISTORY_KEY, sessions);
+      await this.persist(sessions, [sessionId]);
     });
   }
 
@@ -217,7 +263,7 @@ export class DextHistoryStore implements ConversationHistoryStore {
         session.createdAt = session.turns[0]!.createdAt;
         session.updatedAt = session.turns.at(-1)!.createdAt;
       }
-      await this.state.update(HISTORY_KEY, sessions);
+      await this.persist(sessions, [sessionId]);
       return true;
     });
   }
@@ -242,7 +288,7 @@ export class DextHistoryStore implements ConversationHistoryStore {
           ? { forkProviderSessions: { ...providerSessions } }
           : {})
       };
-      await this.state.update(HISTORY_KEY, trimSessions([...this.all(), session], this.limits().maxTurns));
+      await this.persist([...this.all(), session], [session.id]);
       return session;
     });
   }
@@ -253,7 +299,7 @@ export class DextHistoryStore implements ConversationHistoryStore {
       const session = sessions.find((item) => item.id === sessionId);
       if (!session) return;
       session.providerSessions = { ...(session.providerSessions ?? {}), [provider]: providerSessionId };
-      await this.state.update(HISTORY_KEY, sessions);
+      await this.persist(sessions, [sessionId]);
     });
   }
 
@@ -319,7 +365,7 @@ export class DextHistoryStore implements ConversationHistoryStore {
       } else {
         sessions.push({ id: sessionId, createdAt, updatedAt: createdAt, turns: [turn] });
       }
-      await this.state.update(HISTORY_KEY, trimSessions(sessions, this.limits().maxTurns));
+      await this.persist(sessions, [sessionId]);
       return turn;
     });
   }

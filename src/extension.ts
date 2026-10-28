@@ -23,7 +23,7 @@ import { DextHistoryPanel } from "./features/conversations/host/historyEditorPro
 import { conversationMarkdown, conversationTitle, historyTurnMarkdown, historyTurnTitle } from "./features/conversations/presentation/historyRender.js";
 import type { DextHistoryRecord, DextHistorySession } from "./features/conversations/contracts/history.js";
 import { DEFAULT_HISTORY_LIMITS } from "./features/conversations/contracts/history.js";
-import { DextHistoryStore } from "./features/conversations/host/historyStore.js";
+import { openFileHistoryStore } from "./features/conversations/host/historyFileState.js";
 import { renderEditorTabHtml } from "./platform/editor-tabs/editorTabHtml.js";
 import type { VscodeWebviewPanelLike } from "./platform/editor-tabs/editorTabManager.js";
 import { EditorTabManager, createVscodeEditorTabHost, wrapVscodeWebviewPanel, type EditorTabPanelHandle } from "./platform/editor-tabs/editorTabManager.js";
@@ -62,21 +62,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
   }
   await application.reload();
-  // Conversation history belongs to the active workspace. Using globalState
-  // here makes every project share the same sessions, so reopening VS Code (or
-  // switching projects) can restore a conversation from an unrelated project.
-  // workspaceState survives extension/window reloads while remaining scoped to
-  // the current workspace.
-  const history = new DextHistoryStore(context.workspaceState, () => {
-    const configuration = vscode.workspace.getConfiguration("dext");
-    return {
-      maxTurns: configuration.get<number>("history.maxTurns", DEFAULT_HISTORY_LIMITS.maxTurns),
-      maxOutputLength: configuration.get<number>(
-        "history.maxOutputLength",
-        DEFAULT_HISTORY_LIMITS.maxOutputLength
-      )
-    };
-  });
+  // Memento updates serialize the extension's entire state across renderer IPC.
+  // Keep history in workspace storage files, and retire old keys only after a
+  // backed-up, resumable import has committed to disk.
+  const history = await openFileHistoryStore(
+    vscode.Uri.joinPath(context.storageUri ?? context.globalStorageUri, "conversation-history").fsPath,
+    context.workspaceState,
+    () => {
+      const configuration = vscode.workspace.getConfiguration("dext");
+      return {
+        maxTurns: configuration.get<number>("history.maxTurns", DEFAULT_HISTORY_LIMITS.maxTurns),
+        maxOutputLength: configuration.get<number>(
+          "history.maxOutputLength",
+          DEFAULT_HISTORY_LIMITS.maxOutputLength
+        )
+      };
+    }
+  );
   const preferences = new DextConversationPreferences(context.workspaceState);
   const historyPanel = new DextHistoryPanel(context.extensionUri, history, preferences, application.storage);
   const sidebar = new DextSidebarProvider(context.extensionUri, application, history, preferences);
