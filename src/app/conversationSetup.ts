@@ -12,6 +12,7 @@ import { InteractionController } from "../features/conversations/host/interactio
 import type { InputNotificationTarget } from "../features/conversations/host/inputNotifications.js";
 import { PlanController } from "../features/conversations/host/planController.js";
 import { TurnExecutionCoordinator } from "../features/conversations/host/turnExecutionCoordinator.js";
+import { DEFAULT_HISTORY_LIMITS } from "../features/conversations/contracts/history.js";
 
 /** What the sidebar still owns: Webview lifecycle, VS Code adapters and the
  * features outside this round. Everything below is passed in as a narrow
@@ -38,6 +39,7 @@ export interface ConversationSetupDependencies {
   knownPlan: (reference: string) => boolean;
   activeSessionId: () => string;
   disposed: () => boolean;
+  maxEventTextLength?: () => number;
   resourceBusy: (sessionId: string) => boolean;
   notifyInput: () => PromiseLike<boolean>;
   openInputTarget: (target: InputNotificationTarget) => Promise<void>;
@@ -79,6 +81,7 @@ export function createConversationServices(dependencies: ConversationSetupDepend
   const events = new AgentEventStream({
     activeSessionId: dependencies.activeSessionId,
     disposed: dependencies.disposed,
+    maxTextLength: dependencies.maxEventTextLength ?? (() => DEFAULT_HISTORY_LIMITS.maxOutputLength),
     post: dependencies.postWhenReady,
     observe: (sessionId, event) => interactions.observeEvent(sessionId, event)
   });

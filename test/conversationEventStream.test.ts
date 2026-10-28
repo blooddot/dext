@@ -62,6 +62,65 @@ describe("AgentEventStream", () => {
     expect(observed[0]?.userInput?.id).toBe("q");
   });
 
+  it("sends only the appended part of a growing stream", () => {
+    const { events, posted } = stream();
+    const log: AgentStreamEvent[] = [];
+    events.append("session", log, { phase: "tool", id: "tool-1", title: "Run", text: "a", replace: true });
+    events.flush();
+    events.append("session", log, { phase: "tool", id: "tool-1", title: "Run", text: "abc", replace: true });
+    events.flush();
+    expect(posted.map((message) => message.type === "agentEvent" ? [message.event.text, message.event.replace] : []))
+      .toEqual([["a", true], ["bc", false]]);
+    expect(log).toHaveLength(1);
+    expect(log[0]?.text).toBe("abc");
+  });
+
+  it("keeps one log entry per message stream instead of one per chunk", () => {
+    const { events, posted } = stream();
+    const log: AgentStreamEvent[] = [];
+    events.append("session", log, { phase: "message", id: "m", text: "Hel", replace: true });
+    events.append("session", log, { phase: "message", id: "m", text: "Hello", replace: true });
+    events.flush();
+    expect(log).toHaveLength(1);
+    expect(log[0]?.text).toBe("Hello");
+    expect(posted.map((message) => message.type === "agentEvent" ? message.event.text : "")).toEqual(["Hello"]);
+  });
+
+  it("compacts Pi snapshots across interleaved usage and parallel tools", () => {
+    const { events, posted } = stream();
+    const log: AgentStreamEvent[] = [];
+    let text = "";
+    for (let index = 0; index < 2000; index++) {
+      text += "中文";
+      events.append("session", log, { phase: "reasoning", id: "thinking", text, replace: true });
+      events.append("session", log, { phase: "tool", id: "parallel", text: String(index), replace: true });
+      events.append("session", log, { phase: "status", text: "", usage: { outputTokens: index } });
+      events.flush();
+    }
+    expect(log).toHaveLength(3);
+    expect(log[0]?.text).toBe(text);
+    expect(log[2]?.usage?.outputTokens).toBe(1999);
+    const wireText = posted.reduce((sum, message) => sum + (message.type === "agentEvent" ? message.event.text.length : 0), 0);
+    expect(wireText).toBeLessThan(15_000);
+  });
+
+  it("retains append deltas across interleaved status events and limits live text", () => {
+    const { events } = stream();
+    const log: AgentStreamEvent[] = [];
+    events.append("session", log, { phase: "message", id: "m", text: "first" });
+    events.append("session", log, { phase: "status", text: "", usage: { inputTokens: 10 } });
+    events.append("session", log, { phase: "message", id: "m", text: " second" });
+    events.append("session", log, { phase: "status", text: "", usage: { outputTokens: 20 } });
+    expect(log[0]?.text).toBe("first second");
+    expect(log[1]?.usage).toEqual({ inputTokens: 10, outputTokens: 20 });
+    events.dispose();
+    const bounded = new AgentEventStream({ activeSessionId: () => "other", disposed: () => false, post: () => {}, maxTextLength: () => 12 });
+    const boundedLog: AgentStreamEvent[] = [];
+    bounded.append("session", boundedLog, { phase: "tool", id: "t", text: "a".repeat(100) });
+    bounded.append("session", boundedLog, { phase: "tool", id: "t", text: "b".repeat(100) });
+    expect(boundedLog[0]?.text).toBe(`${"a".repeat(12)}\n... output truncated ...`);
+  });
+
   it("cancels its timer and drops buffered events on dispose", () => {
     const cancel = vi.fn();
     const posted: ConversationWebviewResponse[] = [];

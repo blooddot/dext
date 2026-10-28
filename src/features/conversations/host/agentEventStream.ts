@@ -1,6 +1,8 @@
 import { randomBytes } from "node:crypto";
 import type { AgentStreamEvent } from "../../../shared/contracts/types.js";
 import type { ConversationWebviewResponse } from "../contracts/protocol.js";
+import { DEFAULT_HISTORY_LIMITS } from "../contracts/history.js";
+import { agentEventKey, appendAgentEvent } from "../domain/agentEventLog.js";
 
 export interface AgentEventStreamOptions {
   /** The conversation the Webview currently shows. Background conversations
@@ -14,25 +16,44 @@ export interface AgentEventStreamOptions {
   schedule?: (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
   cancelSchedule?: (handle: ReturnType<typeof setTimeout>) => void;
   flushDelayMs?: number;
+  maxTextLength?: () => number;
 }
 
-/** Attributes, merges and batches streaming agent events. The execution
- * coordinator owns the per-turn event log; this class owns only the IPC side,
- * so a late event can never be delivered as part of another turn. */
+/** Rows the Webview replaces in place by provider id. */
+function streamRow(event: AgentStreamEvent): boolean {
+  return event.phase === "tool" || event.phase === "message" || event.phase === "reasoning";
+}
+
+function streamKey(sessionId: string, event: AgentStreamEvent): string {
+  return `${sessionId}:${agentEventKey(event) ?? randomBytes(8).toString("hex")}`;
+}
+
+/** Live streams a batch may still remember. Older ones fall back to one full
+ * send per frame, which is what they would have done anyway. */
+const MAX_REMEMBERED_STREAMS = 64;
+
+/** Compacts the coordinator's per-turn log and batches its IPC updates. */
 export class AgentEventStream {
   private pending = new Map<string, AgentStreamEvent>();
+  /** Text already sent for a live stream, so a growing log travels as deltas
+   * instead of resending the whole text on every frame. */
+  private sent = new Map<string, string>();
+  private readonly logPositions = new WeakMap<AgentStreamEvent[], Map<string, number>>();
   private timer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(private readonly options: AgentEventStreamOptions) {}
 
   /** Merges a chunk into the turn's logical event log and publishes it. */
   append(sessionId: string, events: AgentStreamEvent[], event: AgentStreamEvent): AgentStreamEvent {
-    const previous = events.at(-1);
-    let update = event;
-    if (event.phase === "tool" && event.id && previous?.phase === "tool" && previous.id === event.id) {
-      update = { ...event, text: event.replace ? event.text : `${previous.text}${event.text}`, replace: true };
-      events[events.length - 1] = update;
-    } else events.push(event);
+    let positions = this.logPositions.get(events);
+    if (!positions) {
+      positions = new Map();
+      events.forEach((entry, index) => { const key = agentEventKey(entry); if (key !== undefined) positions!.set(key, index); });
+      this.logPositions.set(events, positions);
+    }
+    const configured = this.options.maxTextLength?.() ?? DEFAULT_HISTORY_LIMITS.maxOutputLength;
+    const limit = Number.isInteger(configured) && configured > 0 ? configured : DEFAULT_HISTORY_LIMITS.maxOutputLength;
+    const update = appendAgentEvent(events, positions, event, limit);
     this.publish(sessionId, update);
     return update;
   }
@@ -45,12 +66,29 @@ export class AgentEventStream {
     // while another tab is visible. The active conversation is restored via
     // the coordinator's replay batch.
     if (this.options.activeSessionId() !== sessionId) return;
-    const key = event.phase === "tool" && event.id ? `${sessionId}:${event.id}` : `${sessionId}:${randomBytes(8).toString("hex")}`;
-    const previous = this.pending.get(key);
-    this.pending.set(key, previous && event.phase === "tool"
-      ? { ...event, text: event.replace ? event.text : `${previous.text}${event.text}`, replace: true }
-      : event);
+    const key = streamKey(sessionId, event);
+    // Providers report the text so far; send only the part the Webview lacks.
+    // `replace` stays meaningful for rewrites, which do not extend the row.
+    // The last event of a stream repeats the whole text, so a Webview that
+    // missed earlier frames recovers without the host tracking its state.
+    const sent = streamRow(event) && event.replace && !event.done ? this.sent.get(key) : undefined;
+    const delta = sent !== undefined && event.text.startsWith(sent) ? event.text.slice(sent.length) : undefined;
+    if (streamRow(event)) this.remember(key, event.text, event.done);
+    const wire = delta === undefined ? event : { ...event, text: delta, replace: false };
+    this.enqueue(key, wire);
     if (this.timer === undefined) this.timer = this.schedule(() => this.flush(), this.options.flushDelayMs ?? 16);
+  }
+
+  /** Batches one frame's events. An append stays an append only while the frame
+   * starts with an append; a leading full replacement stays a replacement. */
+  private enqueue(key: string, wire: AgentStreamEvent): void {
+    const previous = this.pending.get(key);
+    if (!previous || previous.phase !== wire.phase || wire.replace || !streamRow(wire)) {
+      this.pending.set(key, wire);
+      return;
+    }
+    const text = `${previous.text}${wire.text}`;
+    this.pending.set(key, previous.replace ? { ...wire, text, replace: true } : { ...wire, text, replace: false });
   }
 
   /** Sends everything buffered. The coordinator calls this before a turn is
@@ -70,6 +108,18 @@ export class AgentEventStream {
     if (this.timer !== undefined) this.cancel(this.timer);
     this.timer = undefined;
     this.pending.clear();
+    this.sent.clear();
+  }
+
+  private remember(key: string, text: string, done: boolean | undefined): void {
+    this.sent.delete(key);
+    if (done) return;
+    this.sent.set(key, text);
+    while (this.sent.size > MAX_REMEMBERED_STREAMS) {
+      const oldest = this.sent.keys().next().value;
+      if (oldest === undefined) break;
+      this.sent.delete(oldest);
+    }
   }
 
   private schedule(callback: () => void, delayMs: number): ReturnType<typeof setTimeout> {

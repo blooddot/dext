@@ -1,6 +1,7 @@
 import type { ResourceSession } from "../../resources/contracts/resourceSession.js";
 import { publicInteractionState } from "../presentation/uiInteractionPresentation.js";
 import { normalizeHistoryResponse } from "../domain/historyResponse.js";
+import { compactAgentEvents } from "../domain/agentEventLog.js";
 import type * as vscode from "vscode";
 import type { AgentStreamEvent, AgentTodoItem, InputExecutionResponse } from "../../../shared/contracts/types.js";
 import { normalizeInputReferenceSource } from "../../workspace/domain/fileReference.js";
@@ -33,6 +34,7 @@ function serializeResponse(response: InputExecutionResponse, maxOutputLength: nu
 /** Store final interaction states only. Drafts stay in Webview state; secrets
  * are removed defensively even when a provider supplies them in an event. */
 function storedProcess(process: readonly AgentStreamEvent[], limit: number): AgentStreamEvent[] {
+  process = compactAgentEvents(process);
   const last = new Map<string, number>();
   process.forEach((event, index) => {
     const id = event.uiInteraction ? `ui:${event.uiInteraction.requestId}` : event.userInput ? `agent:${event.userInput.id}` : undefined;

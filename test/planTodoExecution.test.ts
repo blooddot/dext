@@ -34,7 +34,11 @@ describe("Plan execution task initialization", () => {
       // the agent is called, not reconstructed after the answer arrives.
       const published = harness.coordinator.active("session")?.events ?? [];
       expect(published[0]?.todos?.map((item) => item.text)).toEqual(["Inspect", "Verify"]);
-      expect(published[0]?.todos?.every((item) => item.status === "pending")).toBe(true);
+      // The event log keeps the current task snapshot across rounds. Initial
+      // tasks must be pending; later rounds retain the reported completion.
+      expect(published[0]?.todos?.map((item) => item.status)).toEqual(
+        execute.mock.calls.length === 1 ? ["pending", "pending"] : ["completed", "pending"]
+      );
       metadata.onAgentEvent?.({ phase: "message", text: '<!-- dext-todo: {"updates":[{"id":"plan-1","status":"in_progress"}]} -->' });
       metadata.onAgentEvent?.({
         phase: "message",

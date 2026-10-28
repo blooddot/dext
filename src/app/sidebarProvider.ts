@@ -118,6 +118,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       knownPlan: (reference) => Boolean(this.application.planUri(reference)),
       activeSessionId: () => this.activeSession.id,
       disposed: () => this.disposed,
+      maxEventTextLength: () => vscode.workspace.getConfiguration("dext").get<number>("history.maxOutputLength", 200_000),
       resourceBusy: (sessionId) => this.resourceOperations.has(sessionId),
       notifyInput: async () => await vscode.window.showInformationMessage(
         "Dext: AI needs your response. Choose an option or enter an answer.", "View question"
