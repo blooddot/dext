@@ -26,13 +26,15 @@ vi.mock("vscode", () => ({
   }
 }));
 
-/** `applyTimeoutSettings` touches only these two collaborators, so the instance
- * is built from the prototype and stubbed rather than through the constructor. */
+/** `applyTimeoutSettings` touches only the runner, the concurrency and the
+ * kernels, so the instance is built from the prototype and stubbed rather than
+ * through the constructor. */
 function applicationWithStubs() {
   const application = Object.create(DextApplication.prototype) as DextApplication;
   const setTimeouts = vi.fn();
   Object.assign(application as unknown as Record<string, unknown>, {
     agentRunner: { setTimeouts },
+    kernels: []
   });
   return { application, setTimeouts };
 }

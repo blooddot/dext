@@ -150,9 +150,12 @@ export class DextApplication {
     undefined,
     { terminalRun: terminalRunHandler, applyPatch: applyPatchHandler }
   );
-  /** The TypeScript kernel, created on first use so a workspace without Code
-   * runs never pays for a child process. */
-  private kernel: DextKernelHost | undefined;
+  /** The TypeScript kernels, one per concurrent Code conversation, created on first
+   * use so a workspace without Code runs never pays for a child process. */
+  private kernels: DextKernelHost[] = [];
+  /** Kernels handed to a run that has not reached the kernel yet: a second
+   * conversation must not reuse one, and pruning must not dispose it. */
+  private readonly reservedKernels = new Set<DextKernelHost>();
   private dispatchConcurrency = DEFAULT_DISPATCH_CONCURRENCY;
   private configDiagnostics: string[] = [];
 
@@ -277,8 +280,6 @@ export class DextApplication {
   }
   private workspaceRoot = process.cwd();
   private workspaceUri: vscode.Uri | undefined;
-  /** The root the cached kernel host was built for, so a folder switch replaces it. */
-  private kernelRoot: string | undefined;
   private workspaceTrusted = false;
   private projectWorkspaceSettings: ProjectWorkspaceSettings | undefined;
   private resourceWrite: Promise<void> = Promise.resolve();
@@ -668,25 +669,49 @@ export class DextApplication {
       agentIdleTimeoutMs: this.agentIdleTimeoutMs
     });
     this.dispatchConcurrency = positive("workflow.maxConcurrency", DEFAULT_DISPATCH_CONCURRENCY);
-    this.kernel?.setMaxConcurrency(this.dispatchConcurrency);
+    for (const kernel of this.kernels) kernel.setMaxConcurrency(this.dispatchConcurrency);
   }
 
-  /** The kernel that runs Code mode. Created on demand, one per workspace. */
+  /** A kernel for one Code run. The kernel's run state (generation, replay,
+   * `settleCalls`) is process-wide, so concurrent Code conversations each get their
+   * own process instead of queueing behind one.
+   *
+   * shortcut: no cap on concurrent kernels, so a user running many conversations at
+   * once pays one child process each; add a pool cap when that shows up in memory reports. */
   private kernelHost(): DextKernelHost {
-    // The host is built around one workspace: its working directory, the root the
-    // loader resolves APIs against and the directory a run's buffer is written to.
-    // Opening a different folder replaces it — but only once it is idle, because a
-    // reload must never kill a run that is in flight.
-    if (this.kernel && this.kernelRoot !== this.workspaceRoot && !this.kernel.busy()) this.stopKernel();
-    this.kernel ??= new DextKernelHost({
+    this.pruneKernels();
+    const idle = this.kernels.find((kernel) => !kernel.busy() && !this.reservedKernels.has(kernel) && kernel.workspaceRoot === this.workspaceRoot);
+    if (idle) {
+      this.reservedKernels.add(idle);
+      return idle;
+    }
+    const kernel = new DextKernelHost({
       workspaceRoot: this.workspaceRoot,
       runnerDirectory: __dirname,
       maxConcurrency: this.dispatchConcurrency,
       runsDirectory: this.runsDirectory(),
       execute: (invocation, metadata, context) => this.runtime.execute(invocation, context, metadata)
     });
-    this.kernelRoot = this.workspaceRoot;
-    return this.kernel;
+    this.kernels.push(kernel);
+    this.reservedKernels.add(kernel);
+    return kernel;
+  }
+
+  /** Keeps one idle kernel warm for the next run and disposes the rest: a finished
+   * conversation's process is only worth its memory if a run can still take it. A
+   * kernel built for another folder is never warm, and a busy or reserved one is
+   * left alone because a conversation still needs it. */
+  private pruneKernels(): void {
+    let warm = 0;
+    this.kernels = this.kernels.filter((kernel) => {
+      if (kernel.busy() || this.reservedKernels.has(kernel)) return true;
+      if (kernel.workspaceRoot === this.workspaceRoot && warm === 0) {
+        warm = 1;
+        return true;
+      }
+      kernel.dispose();
+      return false;
+    });
   }
 
   /**
@@ -702,10 +727,11 @@ export class DextApplication {
     return vscode.Uri.joinPath(this.storage.globalStorageUri, "runs", digest).fsPath;
   }
 
-  /** Stops the kernel; the next run starts a fresh one. */
+  /** Stops every kernel; the next run starts a fresh one. */
   stopKernel(): void {
-    this.kernel?.dispose();
-    this.kernel = undefined;
+    for (const kernel of this.kernels) kernel.dispose();
+    this.kernels = [];
+    this.reservedKernels.clear();
   }
 
   /** Project and global MCP manifests use the same format. One file per server
@@ -1650,6 +1676,8 @@ export class DextApplication {
   }
 
   dispose(): Promise<void> {
+    // Each Code conversation may hold a kernel child process; nothing else kills them.
+    this.stopKernel();
     return this.agentRunner.dispose();
   }
 
@@ -1704,14 +1732,21 @@ export class DextApplication {
     metadata: Readonly<ExecutionMetadata> = {},
     run: { resume?: readonly DextReplayEntry[]; onCallLog?: (entries: readonly DextReplayEntry[]) => void; resourceSource?: "describe" | "import" } = {}
   ): Promise<InputExecutionResponse> {
-    return this.kernelHost().runSource(source, {
-      execution: { ...metadata, ...(run.resourceSource ? { resourceSource: run.resourceSource } : {}) },
-      ...(metadata.signal ? { signal: metadata.signal } : {}),
-      ...(run.resume ? { resume: run.resume } : {}),
-      ...(run.onCallLog ? { onCallLog: run.onCallLog } : {}),
-      apiRoots: this.apiRoots(),
-      context: await this.codeContext(source)
-    });
+    const kernel = this.kernelHost();
+    try {
+      return await kernel.runSource(source, {
+        execution: { ...metadata, ...(run.resourceSource ? { resourceSource: run.resourceSource } : {}) },
+        ...(metadata.signal ? { signal: metadata.signal } : {}),
+        ...(run.resume ? { resume: run.resume } : {}),
+        ...(run.onCallLog ? { onCallLog: run.onCallLog } : {}),
+        apiRoots: this.apiRoots(),
+        context: await this.codeContext(source)
+      });
+    } finally {
+      this.reservedKernels.delete(kernel);
+      // The run is over, so the processes it kept alive are now only spare memory.
+      this.pruneKernels();
+    }
   }
 
   /**

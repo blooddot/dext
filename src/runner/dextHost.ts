@@ -176,6 +176,11 @@ export class DextKernelHost {
     return this.ready;
   }
 
+  /** The folder this kernel was built around, so a folder switch can replace it. */
+  get workspaceRoot(): string {
+    return this.options.workspaceRoot;
+  }
+
   /** Whether a run is in flight — or the kernel is still starting one — so the
    * workspace root and run directory it was built with are still in use. */
   busy(): boolean {

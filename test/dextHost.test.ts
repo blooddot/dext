@@ -351,4 +351,36 @@ describe("Dext kernel host", () => {
     await cancelled;
     expect(kernel.busy()).toBe(false);
   });
+
+  it("runs two Code conversations in parallel on separate kernels", { timeout: 30000 }, async () => {
+    // A kernel's run state (generation, replay, `settleCalls`) is process-wide, so
+    // concurrent Code conversations get a process each instead of queueing.
+    const root = await workspace();
+    const file = (name: string): Promise<string> => fixture(root, `${name}.ts`, [
+      'import { ask } from "dext";',
+      `const answer = await ask({ input: "${name}" });`,
+      "console.log(answer.text);"
+    ].join("\n"));
+    let release = (): void => {};
+    let started = (): void => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const entered = new Promise<void>((resolve) => { started = resolve; });
+    const first = host(root, async (invocation) => {
+      if (invocation.arguments.some((argument) => argument.value === "slow")) {
+        started();
+        await gate;
+      }
+      return askResponse(invocation);
+    });
+    const second = host(root, async (invocation) => askResponse(invocation));
+    const slow = first.run(await file("slow"));
+    await entered;
+    const fast = await second.run(await file("fast"));
+    // The fast run finished while the slow one was still in flight.
+    expect(first.busy()).toBe(true);
+    expect(fast.steps?.at(-1)?.stream?.text).toBe("fast\n");
+    release();
+    const slowDone = await slow;
+    expect(slowDone.steps?.at(-1)?.stream?.text).toBe("slow\n");
+  });
 });
