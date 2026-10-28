@@ -6,7 +6,7 @@ export default async function dextPiExtension(pi) {
   const endpoint = process.env.DEXT_PI_BRIDGE, token = process.env.DEXT_PI_BRIDGE_TOKEN;
   if (!endpoint || !token) throw new Error("Dext Pi bridge is unavailable.");
   const socket = connect(endpoint), decoder = new StringDecoder("utf8"), pending = new Map();
-  let sequence = 0, buffer = "", config, active = true;
+  let sequence = 0, buffer = "", config, active = true, submitted = false, nudged = false;
   const send = (frame) => socket.write(`${JSON.stringify(frame)}\n`);
   let resolveConfig, rejectConfig;
   const configured = new Promise((resolve, reject) => { resolveConfig = resolve; rejectConfig = reject; });
@@ -26,7 +26,7 @@ export default async function dextPiExtension(pi) {
       try { frame = JSON.parse(line); } catch { socket.destroy(); return; }
       if (frame.type === "config") { clearTimeout(initialization); resolveConfig(frame.config); }
       else if (frame.type === "clear") { active = false; pi.setActiveTools(pi.getActiveTools().filter((name) => name !== "dext_submit_result")); }
-      else if (frame.type === "begin") active = true;
+      else if (frame.type === "begin") { active = true; submitted = nudged = false; }
       else if (pending.has(frame.id)) { const finish = pending.get(frame.id); pending.delete(frame.id); finish(frame); }
     }
   });
@@ -50,7 +50,13 @@ export default async function dextPiExtension(pi) {
     parameters: { type: "object", properties: { todos: { type: "array", items: { type: "object", properties: { id: string, text: string, status: { type: "string", enum: ["pending", "in_progress", "completed"] } }, required: ["id", "text", "status"], additionalProperties: false } } }, required: ["todos"], additionalProperties: false },
     async execute(_id, args, signal) { return result(await call("todo", { todos: args.todos }, signal)); } });
   if (config.resultSchema) pi.registerTool({ name: "dext_submit_result", label: "Submit result", description: "Submit the complete final result object matching this schema. Fix any validation diagnostics and submit again. Do not wrap or escape the object.",
-    parameters: config.resultSchema, async execute(_id, args, signal) { return result(await call("submit_result", { args }, signal)); } });
+    parameters: config.resultSchema, async execute(_id, args, signal) { const reply = await call("submit_result", { args }, signal); if (reply.status === "accepted") submitted = true; return result(reply); } });
+  // Pi has no native output schema, so a turn that never submits is nudged once before it settles into prose.
+  pi.on("agent_before_settle", (event) => {
+    if (!active || !config.resultSchema || submitted || nudged || event.outcome !== "completed" || !event.context.canContinue) return undefined;
+    nudged = true;
+    return { continue: true, entries: [{ type: "custom_message", customType: "dext_result_reminder", display: false, content: "This Dext turn is not complete: call dext_submit_result with the whole result object. Plain text is not a result." }] };
+  });
   pi.on("tool_call", (event) => {
     if (config.permission !== "full-access" && !config.tools.includes(event.toolName)) return { block: true, reason: "This Dext turn is read-only; this tool is unavailable." };
     if (!active && event.toolName.startsWith("dext_")) return { block: true, reason: "The Dext turn has ended." };

@@ -81,6 +81,8 @@ describe("Pi structured result parity", { timeout: 30000 }, () => {
       expect(JSON.parse(await runner.run(request) as string)).toEqual({ kind: "ask", text: "fixture answer" });
       const records = (await readFile(log, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
       expect(records.some((record) => (record.rejected as { status?: string } | undefined)?.status === "rejected")).toBe(true);
+      // The model reads this text: one `path: message` line per issue, not a zod JSON blob.
+      expect(String((records.find((record) => record.rejected)?.rejected as { diagnostics?: string }).diagnostics)).toContain("kind: ");
       expect(records.some((record) => (record.accepted as { status?: string } | undefined)?.status === "accepted")).toBe(true);
       expect(records.filter((record) => record.command === "prompt")).toHaveLength(1);
       expect(records[0]?.startup).toContain("--no-session");

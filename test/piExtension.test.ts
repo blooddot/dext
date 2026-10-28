@@ -3,6 +3,9 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { PiBridge } from "../src/features/agents/host/piBridge.js";
 interface Tool { name: string; parameters: unknown; execute(id: string, args: unknown, signal?: AbortSignal): Promise<{ content: { text: string }[]; isError: boolean }> }
+interface SettleEvent { outcome: string; context: { canContinue: boolean } }
+interface Boundary { continue?: boolean; entries?: { type: string; display: boolean }[] }
+const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 100));
 const bridges: PiBridge[] = [], shutdowns: (() => void)[] = [];
 const previous = { endpoint: process.env.DEXT_PI_BRIDGE, token: process.env.DEXT_PI_BRIDGE_TOKEN };
 afterEach(() => {
@@ -26,5 +29,29 @@ describe("shipped Pi extension", () => {
     expect(guard?.({ toolName: "read" })).toBeUndefined();
     expect(await tools.get("dext_submit_result")!.execute("one", { value: "ok" })).toMatchObject({ isError: false });
     expect(await tools.get("dext_submit_result")!.execute("two", {})).toMatchObject({ isError: true });
+  });
+  it("nudges one result submission before a typed turn settles without one", async () => {
+    const schema = { type: "object", properties: { value: { type: "string" } }, required: ["value"] };
+    const bridge = new PiBridge({ permission: "read-only", tools: ["read", "dext_submit_result"], mcpServers: [], resultSchema: schema }, async () => ({ status: "accepted" }));
+    bridges.push(bridge); process.env.DEXT_PI_BRIDGE = bridge.endpoint; process.env.DEXT_PI_BRIDGE_TOKEN = bridge.token;
+    const tools = new Map<string, Tool>(); let settle: ((event: SettleEvent) => Boundary | undefined) | undefined;
+    const module = await import(pathToFileURL(resolve("media/pi-extension.mjs")).href) as { default(api: object): Promise<void> };
+    await module.default({ registerTool: (tool: Tool) => tools.set(tool.name, tool),
+      on: (event: string, listener: (payload: unknown) => unknown) => {
+        if (event === "agent_before_settle") settle = listener as (event: SettleEvent) => Boundary | undefined;
+        else if (event === "session_shutdown") shutdowns.push(() => { listener({}); });
+      },
+      getActiveTools: () => [...tools.keys()], setActiveTools: () => {}, registerMcpServer: () => {} });
+    await bridge.ready();
+    const ready = { outcome: "completed", context: { canContinue: true } };
+    expect(settle!(ready)).toMatchObject({ continue: true, entries: [{ type: "custom_message", display: false }] });
+    expect(settle!(ready)).toBeUndefined();
+    bridge.beginTurn(); await tick();
+    expect(settle!({ outcome: "completed", context: { canContinue: false } })).toBeUndefined();
+    expect(settle!({ outcome: "error", context: { canContinue: true } })).toBeUndefined();
+    expect(settle!(ready)).toMatchObject({ continue: true });
+    bridge.beginTurn(); await tick();
+    expect(await tools.get("dext_submit_result")!.execute("one", { value: "ok" })).toMatchObject({ isError: false });
+    expect(settle!(ready)).toBeUndefined();
   });
 });

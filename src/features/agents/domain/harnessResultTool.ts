@@ -65,12 +65,19 @@ export function harnessResultInstruction(): string {
 }
 
 /**
+ * The JSON Schema a result tool advertises as its argument shape: the contract
+ * minus `$schema`, which describes the schema document rather than the
+ * arguments and which provider function-calling schemas do not carry.
+ */
+export function resultToolParameters(outputJsonSchema: object): Record<string, unknown> {
+  const parameters = { ...outputJsonSchema } as Record<string, unknown>;
+  delete parameters["$schema"];
+  return parameters;
+}
+
+/**
  * The tool definition Dext publishes for one contract, or `undefined` when the
  * contract has no object root to submit against.
- *
- * The root `$schema` keyword `z.toJSONSchema` emits is dropped: it describes
- * the draft of the schema document rather than the arguments, and provider
- * function-calling schemas do not carry it.
  *
  * A function-calling tool's arguments must be one object, and the `ui` contracts
  * compile to a root `oneOf` (a value plus a cancellation arm) precisely so a
@@ -79,8 +86,7 @@ export function harnessResultInstruction(): string {
  * map.
  */
 export function harnessResultTool(outputJsonSchema: object): HarnessResultTool | undefined {
-  const parameters = { ...outputJsonSchema } as Record<string, unknown>;
-  delete parameters["$schema"];
+  const parameters = resultToolParameters(outputJsonSchema);
   if (parameters["type"] !== "object") return undefined;
   return { name: HARNESS_RESULT_TOOL, description: DESCRIPTION, parameters };
 }

@@ -8,6 +8,8 @@ import { PiEvents } from "../domain/piEvents.js";
 import { decodePiSession, encodePiSession, parsePiModelId, piModelId, piModelOptions, piModels, piThinkingLevels } from "../domain/piModels.js";
 import { agentTimeout, DEFAULT_AGENT_IDLE_TIMEOUT_MS, DEFAULT_AGENT_TIMEOUT_MS, type AgentTimeout } from "../domain/agentTimeout.js";
 import { ExecutionCancelledError } from "../../../shared/protocol/executionErrors.js";
+import { formatDiagnostics } from "../../../shared/protocol/resultBoundary.js";
+import { resultToolParameters } from "../domain/harnessResultTool.js";
 import { agentPayload, bootstrappedConversationInput, type AgentConversationRequest, type AgentExecutionRequest, type AgentRunner } from "./agentRunner.js";
 import { piArguments, piCommand, piPermission, piTools, checkPiVersion } from "./piCommand.js";
 import { PiBridge } from "./piBridge.js";
@@ -84,7 +86,7 @@ export class PiAgentRunner implements AgentRunner {
     const permission = piPermission(request.allowWorkspaceWrite, request.permission, request.workspaceTrusted);
     let session: Session | undefined;
     const bridge = new PiBridge({ permission, tools: piTools(permission, Boolean(request.contract)), mcpServers: request.mcpServers ?? [],
-      ...(request.contract ? { resultSchema: request.contract.outputJsonSchema as Record<string, unknown> } : {}) }, (frame) => this.bridgeRequest(session, frame));
+      ...(request.contract ? { resultSchema: resultToolParameters(request.contract.outputJsonSchema) } : {}) }, (frame) => this.bridgeRequest(session, frame));
     let transport: PiRpcTransport | undefined;
     try {
       const args = piArguments({ ...resources, trusted: request.workspaceTrusted === true, permission, result: Boolean(request.contract), ephemeral,
@@ -107,7 +109,7 @@ export class PiAgentRunner implements AgentRunner {
     if (frame.kind === "todo") { this.emit(active, { type: "dext_todo", todos: frame.todos }); return { status: "accepted" }; }
     const parsed = active.request.contract?.outputSchema.safeParse(frame.args);
     if (!parsed) return { status: "unavailable" };
-    if (!parsed.success) return { status: "rejected", diagnostics: parsed.error.message };
+    if (!parsed.success) return { status: "rejected", diagnostics: formatDiagnostics(parsed.error) };
     active.submitted = JSON.stringify(parsed.data); return { status: "accepted" };
   }
   private emit(active: Active, frame: PiRecord): void {
