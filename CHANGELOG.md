@@ -10,6 +10,8 @@ All notable changes to Dext are documented in this file.
 
 ## Unreleased
 
+- Give Pi one result nudge before its turn settles. **Fixed:** a typed Pi `agent()`/`ask()` turn that answered in prose after doing its work failed contract validation, so the error text replaced its whole report. The shipped Pi extension now hooks `agent_before_settle` and, once per turn and only while the turn is still Dext's, asks for a `dext_submit_result` call inside that same turn, advertises that tool with the contract's arguments (no `$schema`) and answers a rejected result with `path: message` diagnostics instead of a raw zod blob. Writing turns still never rerun, because nothing executes after the turn.
+
 - Narrow the Project architecture review signals. `community-split` stays quiet for a graph community that spans more than 8 responsibility modules, because that describes the whole application rather than one reviewable boundary, and `module-fragmentation` now measures the largest cohesive group against files that actually have a community, so isolated type-only imports no longer make a context look fragmented.
 
 - Show Pi CLI in the composer by default. `dext.agentCli` now defaults to `codex`, `claude`, `deepseek-harness`, and `pi`, so **Dext: Configure Agent** can associate an installed Pi without a settings edit first. Removing an ID still hides that backend, and Pi's command, version and RPC checks are unchanged.
