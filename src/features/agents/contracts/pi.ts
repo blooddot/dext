@@ -15,7 +15,8 @@ export interface PiBridgeConfig {
 export type PiBridgeRequest =
   | { id: string; kind: "question"; questions: AgentInputQuestion[] }
   | { id: string; kind: "submit_result"; args: unknown }
-  | { id: string; kind: "todo"; todos: AgentTodoItem[] };
+  | { id: string; kind: "todo"; todos: AgentTodoItem[] }
+  | { id: string; kind: "fetch"; url: string };
 export interface PiUiRequest extends PiRecord { type: "extension_ui_request"; id: string; method: string }
 
 export function piObject(value: unknown): Record<string, unknown> {

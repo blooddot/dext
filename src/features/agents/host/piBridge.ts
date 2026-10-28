@@ -13,7 +13,8 @@ const question = z.object({ id: z.string().min(1).max(128), header: z.string().m
 const requests = z.discriminatedUnion("kind", [
   z.object({ id: z.string(), kind: z.literal("question"), questions: z.array(question).min(1).max(20).refine((items) => new Set(items.map((item) => item.id)).size === items.length) }),
   z.object({ id: z.string(), kind: z.literal("submit_result"), args: z.unknown() }),
-  z.object({ id: z.string(), kind: z.literal("todo"), todos: z.array(z.object({ id: z.string(), text: z.string().min(1), status: z.enum(["pending", "in_progress", "completed"]) })).max(200) })
+  z.object({ id: z.string(), kind: z.literal("todo"), todos: z.array(z.object({ id: z.string(), text: z.string().min(1), status: z.enum(["pending", "in_progress", "completed"]) })).max(200) }),
+  z.object({ id: z.string(), kind: z.literal("fetch"), url: z.string().min(1).max(2048) })
 ]);
 
 export class PiBridge {

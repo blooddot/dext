@@ -12,6 +12,7 @@ import { formatDiagnostics } from "../../../shared/protocol/resultBoundary.js";
 import { resultToolParameters } from "../domain/harnessResultTool.js";
 import { agentPayload, bootstrappedConversationInput, type AgentConversationRequest, type AgentExecutionRequest, type AgentRunner } from "./agentRunner.js";
 import { piArguments, piCommand, piPermission, piTools, checkPiVersion } from "./piCommand.js";
+import { piFetch } from "./piFetch.js";
 import { PiBridge } from "./piBridge.js";
 import { piQuestion, piUi } from "./piInteractions.js";
 import { PiRpcTransport } from "./piRpcTransport.js";
@@ -85,7 +86,7 @@ export class PiAgentRunner implements AgentRunner {
     const resources = this.resources(); await mkdir(resources.sessionDirectory, { recursive: true });
     const permission = piPermission(request.allowWorkspaceWrite, request.permission, request.workspaceTrusted);
     let session: Session | undefined;
-    const bridge = new PiBridge({ permission, tools: piTools(permission, Boolean(request.contract)), mcpServers: request.mcpServers ?? [],
+    const bridge = new PiBridge({ permission, tools: piTools(permission, Boolean(request.contract), process.platform, request.workspaceTrusted === true), mcpServers: request.mcpServers ?? [],
       ...(request.contract ? { resultSchema: resultToolParameters(request.contract.outputJsonSchema) } : {}) }, (frame) => this.bridgeRequest(session, frame));
     let transport: PiRpcTransport | undefined;
     try {
@@ -107,6 +108,7 @@ export class PiAgentRunner implements AgentRunner {
     if (!active || active.done || active.controller.signal.aborted) return { status: "unavailable" };
     if (frame.kind === "question") return piQuestion(active.request, frame.id, frame.questions, active.controller.signal, active.timeout);
     if (frame.kind === "todo") { this.emit(active, { type: "dext_todo", todos: frame.todos }); return { status: "accepted" }; }
+    if (frame.kind === "fetch") return piFetch(frame.url, active.controller.signal);
     const parsed = active.request.contract?.outputSchema.safeParse(frame.args);
     if (!parsed) return { status: "unavailable" };
     if (!parsed.success) return { status: "rejected", diagnostics: formatDiagnostics(parsed.error) };

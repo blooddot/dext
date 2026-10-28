@@ -23,6 +23,13 @@ describe("associating an installed Pi command", () => {
     expect(piTools("read-only", false)).not.toContain("bash");
     expect(piTools("full-access", true, "win32")).toContain("powershell");
   });
+  it("offers web reading to read-only turns without widening their tools", () => {
+    const readOnly = piTools("read-only", false, "linux", true);
+    expect(readOnly).toContain("dext_fetch");
+    for (const tool of ["write", "edit", "bash", "powershell", "mcp__*"]) expect(readOnly).not.toContain(tool);
+    expect(piTools("read-only", false, "linux", false)).not.toContain("dext_fetch");
+    expect(piTools("full-access", false, "linux", true)).toEqual(["read", "grep", "find", "ls", "dext_request_user_input", "dext_update_plan", "write", "edit", "bash", "mcp__*"]);
+  });
   it("keeps trusted text context but disables executable project resources", () => {
     const base = { extensionPath: "C:/extension path/pi.mjs", sessionDirectory: "C:/sessions", permission: "read-only" as const };
     const args = piArguments({ ...base, trusted: true });
@@ -31,5 +38,8 @@ describe("associating an installed Pi command", () => {
     expect(piArguments({ ...base, trusted: false })).toContain("--no-context-files");
     const api = piArguments({ ...base, trusted: true, result: true });
     expect(api).toContain("--no-session"); expect(api).not.toContain("--session-dir");
+    expect(args[args.indexOf("--tools") + 1]).toContain("dext_fetch");
+    const untrusted = piArguments({ ...base, trusted: false });
+    expect(untrusted[untrusted.indexOf("--tools") + 1]).not.toContain("dext_fetch");
   });
 });

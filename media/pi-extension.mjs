@@ -49,6 +49,9 @@ export default async function dextPiExtension(pi) {
   pi.registerTool({ name: "dext_update_plan", label: "Update tasks", description: "Publish the complete current task list. When executing a Dext plan also report its stable task IDs with the instructed dext-todo protocol.",
     parameters: { type: "object", properties: { todos: { type: "array", items: { type: "object", properties: { id: string, text: string, status: { type: "string", enum: ["pending", "in_progress", "completed"] } }, required: ["id", "text", "status"], additionalProperties: false } } }, required: ["todos"], additionalProperties: false },
     async execute(_id, args, signal) { return result(await call("todo", { todos: args.todos }, signal)); } });
+  pi.registerTool({ name: "dext_fetch", label: "Fetch URL", description: "Read one http(s) URL and return its text content, truncated when long. Read-only: no POST, custom headers or cookies.",
+    parameters: { type: "object", properties: { url: string }, required: ["url"], additionalProperties: false },
+    async execute(_id, args, signal) { return result(await call("fetch", { url: args.url }, signal)); } });
   if (config.resultSchema) pi.registerTool({ name: "dext_submit_result", label: "Submit result", description: "Submit the complete final result object matching this schema. Fix any validation diagnostics and submit again. Do not wrap or escape the object.",
     parameters: config.resultSchema, async execute(_id, args, signal) { const reply = await call("submit_result", { args }, signal); if (reply.status === "accepted") submitted = true; return result(reply); } });
   // Pi has no native output schema, so a turn that never submits is nudged once before it settles into prose.

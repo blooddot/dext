@@ -16,7 +16,13 @@ afterEach(() => {
 describe("shipped Pi extension", () => {
   it("registers the real schema, carries structured arguments and guards hidden tools", async () => {
     const schema = { type: "object", properties: { value: { type: "string" } }, required: ["value"] };
-    const bridge = new PiBridge({ permission: "read-only", tools: ["read", "dext_submit_result"], mcpServers: [], resultSchema: schema }, async (request) => ({ status: request.kind === "submit_result" && (request.args as { value?: string }).value === "ok" ? "accepted" : "rejected", diagnostics: "value is required" }));
+    const requests: unknown[] = [];
+    const bridge = new PiBridge({ permission: "read-only", tools: ["read", "dext_submit_result", "dext_fetch"], mcpServers: [], resultSchema: schema }, async (request) => {
+      requests.push(request);
+      return request.kind === "fetch"
+        ? { status: "ok", url: request.url, contentType: "text/plain", text: "body", truncated: false }
+        : { status: request.kind === "submit_result" && (request.args as { value?: string }).value === "ok" ? "accepted" : "rejected", diagnostics: "value is required" };
+    });
     bridges.push(bridge); process.env.DEXT_PI_BRIDGE = bridge.endpoint; process.env.DEXT_PI_BRIDGE_TOKEN = bridge.token;
     const tools = new Map<string, Tool>(); let guard: ((event: { toolName: string }) => unknown) | undefined;
     const module = await import(pathToFileURL(resolve("media/pi-extension.mjs")).href) as { default(api: object): Promise<void> };
@@ -29,6 +35,11 @@ describe("shipped Pi extension", () => {
     expect(guard?.({ toolName: "read" })).toBeUndefined();
     expect(await tools.get("dext_submit_result")!.execute("one", { value: "ok" })).toMatchObject({ isError: false });
     expect(await tools.get("dext_submit_result")!.execute("two", {})).toMatchObject({ isError: true });
+    expect([...tools.keys()]).toContain("dext_fetch");
+    expect(tools.get("dext_fetch")?.parameters).toEqual({ type: "object", properties: { url: { type: "string" } }, required: ["url"], additionalProperties: false });
+    expect(guard?.({ toolName: "dext_fetch" })).toBeUndefined();
+    expect(await tools.get("dext_fetch")!.execute("three", { url: "https://example.com/readme.txt" })).toMatchObject({ isError: false });
+    expect(requests.at(-1)).toMatchObject({ kind: "fetch", url: "https://example.com/readme.txt" });
   });
   it("nudges one result submission before a typed turn settles without one", async () => {
     const schema = { type: "object", properties: { value: { type: "string" } }, required: ["value"] };
