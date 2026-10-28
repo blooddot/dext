@@ -48,14 +48,9 @@ function imageExtension(mimeType: string): string | undefined {
   })[normalized];
 }
 
-/** The reverse of `imageExtension`, for handing an attachment's bytes back to the Webview. */
-const IMAGE_MIME_TYPES: Record<string, string> = {
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".gif": "image/gif",
-  ".webp": "image/webp",
-  ".bmp": "image/bmp"
-};
+/** The reverse of `imageExtension`, for opening an attachment in the annotation tab. */
+import { IMAGE_MIME_TYPES } from "../features/conversations/host/attachmentImage.js";
+import { ImageAnnotatorPanel } from "../features/conversations/host/imageAnnotatorPanel.js";
 
 /** The Webview host. It owns the VS Code surface, the HTML shell, message
  * dispatch and the features outside this round (resources, MCP, attachments).
@@ -81,6 +76,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   private readonly resourceOperations = new Set<string>();
   private readonly resourcePreviews = new Map<string, string>();
   private resourcePreviewProvider: vscode.Disposable | undefined;
+  private imageAnnotatorPanel: ImageAnnotatorPanel | undefined;
   private fileSearch = new FileSearchController(response => this.post(response));
   private disposed = false;
   // Model discovery opens an ACP session. Run it once when this sidebar first
@@ -647,6 +643,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     this.mcpAssistantExecution?.controller.abort();
     this.mcpAssistantExecution = undefined;
     this.resourcePreviewProvider?.dispose();
+    this.imageAnnotatorPanel?.dispose();
     this.resourcePreviews.clear();
     this.attachments.dispose();
     this.messageQueue.clear();
@@ -880,7 +877,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           break;
           }
         case "openFileReference":
-          await openDextFileReference(request.reference, this.application.storage);
+          await this.openReference(request.reference);
           break;
         case "searchProjectReferences": {
           try {
@@ -1048,29 +1045,6 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           if (this.conversation.coordinator.anyRunning()) this.pendingAttachmentDeletes.add(request.relativePath);
           else await this.deleteImage(request.relativePath);
           break;
-        case "imageData": {
-          const uri = this.application.storage.uriForReference("attachments", request.relativePath.replaceAll("\\", "/"));
-          const mimeType = uri ? IMAGE_MIME_TYPES[extname(uri.fsPath).toLowerCase()] : undefined;
-          if (!uri || !mimeType) {
-            await this.post({ type: "imageDataResult", requestId: request.requestId, error: "That attachment is not a Dext image." });
-            break;
-          }
-          try {
-            const bytes = await vscode.workspace.fs.readFile(uri);
-            await this.post({
-              type: "imageDataResult",
-              requestId: request.requestId,
-              dataUrl: `data:${mimeType};base64,${Buffer.from(bytes).toString("base64")}`
-            });
-          } catch (error) {
-            await this.post({
-              type: "imageDataResult",
-              requestId: request.requestId,
-              error: error instanceof Error ? error.message : String(error)
-            });
-          }
-          break;
-        }
         case "reload":
           await this.application.reload();
           await this.refresh();
@@ -1307,6 +1281,28 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     await vscode.workspace.fs.writeFile(uri, buffer);
     await this.application.storage.pruneAttachments(this.application.storage.attachmentLimit(), uri);
     return { relativePath: this.application.storage.reference("attachments", name), uri, name };
+  }
+
+  /** A Dext image attachment opens in the annotation tab; every other reference
+   * keeps the ordinary editor behavior. Clicking the chip posts the same request
+   * as clicking an `@` reference, so both land in the same tab. */
+  private async openReference(reference: string): Promise<void> {
+    const normalized = reference.replaceAll("\\", "/");
+    const uri = this.application.storage.uriForReference("attachments", normalized);
+    if (uri && IMAGE_MIME_TYPES[extname(uri.fsPath).toLowerCase()]) {
+      this.imageAnnotatorTab().open(normalized);
+      return;
+    }
+    await openDextFileReference(reference, this.application.storage);
+  }
+
+  /** Built on first use: it needs this provider's own extension Uri and composer. */
+  private imageAnnotatorTab(): ImageAnnotatorPanel {
+    return this.imageAnnotatorPanel ??= new ImageAnnotatorPanel({
+      extensionUri: this.extensionUri,
+      storage: this.application.storage,
+      onInsert: (text, previous) => this.postWhenReady({ type: "insertAnnotations", text, ...(previous ? { previous } : {}) })
+    });
   }
 
   private async deleteImage(relativePath: string): Promise<void> {
