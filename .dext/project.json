@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": 43,
+  "version": 48,
   "knowledge": {
     "enabled": true,
     "initialized": true
@@ -10,6 +10,9 @@
     "include": [
       "src/**"
     ]
+  },
+  "tool": {
+    "structureQuery": true
   },
   "paths": {
     "planDirectory": ".dext/plans",
@@ -24,9 +27,9 @@
     ]
   },
   "ai": {
-    "cli": "deepseek-harness",
-    "model": "[\"deepseek-official\",\"deepseek-flash\"]",
-    "reasoningEffort": "max"
+    "cli": "pi",
+    "model": "myproxy/deepseek-flash",
+    "reasoningEffort": "high"
   },
-  "updatedAt": 1793077978205
+  "updatedAt": 1793109604195
 }
