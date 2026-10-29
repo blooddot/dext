@@ -64,6 +64,10 @@ export function renderPlanToolbar(view: PlanToolbarView): void {
     elements.status.textContent += ` · ${project.label}`;
     elements.status.title = project.detail;
   } else elements.status.title = "";
+  // A contradiction turns Build into a one-click repair; nothing else in the
+  // toolbar changes, so the action stays where the user left it.
+  const conflict = context?.assessment === "conflict" && context.planPath === activePlanPath;
+  elements.status.dataset.state = conflict ? "conflict" : "";
   let review = elements.toolbar.querySelector<HTMLButtonElement>("[data-plan-project-review]");
   if (!review && view.reviewProject) {
     review = view.document.createElement("button");
@@ -90,14 +94,16 @@ export function renderPlanToolbar(view: PlanToolbarView): void {
     : view.executing() || planStatus === "running" || !activePlanPath);
   elements.build.classList.toggle("executing", planBuildRunning);
   elements.build.classList.toggle("stopping", planBuildRunning && view.stopping());
+  elements.build.classList.toggle("conflict", conflict && !planBuildRunning);
   const buildLabel = elements.build.querySelector("span");
-  if (buildLabel) buildLabel.textContent = planBuildRunning ? "Stop" : planStatus === "completed" ? "Rebuild" : "Build";
+  if (buildLabel) buildLabel.textContent = planBuildRunning ? "Stop" : conflict ? "Correct plan" : planStatus === "completed" ? "Rebuild" : "Build";
   elements.build.title = buildRestriction ?? (planBuildRunning
     ? view.stopping() ? "Stopping the active plan" : "Stop building the active plan"
+    : conflict ? `Revise the plan so it satisfies the Project norms: ${elements.status.title}`
     : planStatus === "completed" ? "Rebuild the active plan" : "Build the active plan");
   elements.build.setAttribute("aria-label", elements.build.title);
   const buildIcon = elements.build.querySelector<HTMLElement>("i");
-  if (buildIcon) buildIcon.className = `codicon codicon-${planBuildRunning ? "debug-stop" : "play"}`;
+  if (buildIcon) buildIcon.className = `codicon codicon-${planBuildRunning ? "debug-stop" : conflict ? "wand" : "play"}`;
 }
 
 /** A plan result links back to its saved document for review or editing. */

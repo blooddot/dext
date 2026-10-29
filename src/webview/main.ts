@@ -2494,6 +2494,13 @@ elements.planBuild.addEventListener("click", () => {
     return;
   }
   if (!activePlanPath || executing) return;
+  // A conflicting assessment gets the one-click correction; a Build here would only
+  // be refused by the host.
+  if (planProjectContext?.planPath === activePlanPath && planProjectContext.assessment === "conflict") {
+    elements.planBuild.disabled = true;
+    vscode.postMessage({ type: "correctPlan", planPath: activePlanPath });
+    return;
+  }
   elements.planBuild.disabled = true;
   vscode.postMessage({ type: "buildPlan", planPath: activePlanPath });
 });
@@ -3018,9 +3025,11 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
       resourcePending.delete(message.sessionId);
       resourceErrors.set(message.sessionId, message.message);
       if (message.sessionId !== browser.activeId) return;
-      updateRunState();
     }
     renderInputError(message.message);
+    // A rejected request still owns whatever it disabled when it was sent, such
+    // as Plan's Build button, so re-render instead of waiting for a state message.
+    updateRunState();
     if (elements.mcpAssistantDialog.open) {
       elements.mcpAssistantStatus.textContent = message.message;
       updateMcpAssistantAction();

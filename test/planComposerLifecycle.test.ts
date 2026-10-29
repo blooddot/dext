@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ExecutionMetadata, InputExecutionResponse } from "../src/shared/contracts/types.js";
 import type { DextHistorySession } from "../src/features/conversations/contracts/history.js";
 import { createConversationHarness } from "./conversationHarness.js";
+import { PlanController } from "../src/features/conversations/host/planController.js";
 
 const planSource = "## Tasks\n1. [ ] Implement and verify";
 
@@ -141,5 +142,71 @@ describe("Plan composer after execution", () => {
     await h.run();
     expect(h.controller.session("session")?.planStatus).toBe("new");
     expect(other).toMatchObject({ activePlanPath: "other.plan.md", planStatus: "active" });
+  });
+
+  it("builds into the conversation Build was clicked in after the user opened another tab", async () => {
+    const h: ReturnType<typeof createConversationHarness> = createConversationHarness({
+      planText: planSource,
+      profiles: [{ id: "codex", provider: "codex", command: "codex", label: "Codex", models: [] }],
+      // The Project assessment is a slow AI call; the user may switch tabs meanwhile.
+      preparePlanBuild: async () => { await h.controller.start(); return undefined; }
+    });
+    h.seed([{ id: "session", createdAt: 1, updatedAt: 1, turns: [], activePlanPath: "old.plan.md", planStatus: "active" }]);
+    h.controller.activate(h.controller.session("session")!);
+    await h.plans.build("old.plan.md");
+    expect(h.controller.active().id).not.toBe("session");
+    expect(h.controller.session("session")?.turns).toHaveLength(1);
+    expect(h.controller.session("session")?.turns[0]).toMatchObject({ executePlan: true, planPath: "old.plan.md" });
+    expect(h.controller.active().turns).toHaveLength(0);
+    h.dispose();
+  });
+
+  it("records a contradictory assessment so the toolbar names it and the plan can be revised", async () => {
+    const conflict = { workspaceKey: "w", planPath: "a.plan.md", documentHash: "d", fileHash: "f", availability: "ready" as const,
+      assessment: "conflict" as const, reason: "Plan splits the payment module", basis: [], reviewStatus: "pending" as const };
+    const h = createConversationHarness({ planText: planSource, preparePlanBuild: async () => conflict });
+    h.seed([{ id: "s", createdAt: 1, updatedAt: 1, turns: [], activePlanPath: "a.plan.md", planStatus: "active" }]);
+    h.controller.activate(h.controller.session("s")!);
+    await expect(h.plans.build("a.plan.md")).rejects.toThrow("revise the plan in Plan mode");
+    expect(h.executeConversation).not.toHaveBeenCalled();
+    expect(h.controller.session("s")).toMatchObject({ planStatus: "active", projectContext: { assessment: "conflict" } });
+    expect(h.messages.some(message => message.type === "planContext" && message.projectContext?.assessment === "conflict")).toBe(true);
+    h.dispose();
+  });
+
+  it("corrects a conflicting plan in place and drops the stale assessment", async () => {
+    const conflict = { workspaceKey: "w", planPath: "a.plan.md", documentHash: "d", fileHash: "f", availability: "ready" as const,
+      assessment: "conflict" as const, reason: "Plan splits the payment module", basis: [], reviewStatus: "pending" as const };
+    const h = createConversationHarness({ planText: planSource });
+    h.seed([{ id: "s", createdAt: 1, updatedAt: 1, turns: [], activePlanPath: "a.plan.md", planStatus: "active", projectContext: conflict }]);
+    h.controller.activate(h.controller.session("s")!);
+    await h.plans.correct("a.plan.md");
+    expect(h.executeConversation).toHaveBeenCalledOnce();
+    const [mode, source, metadata] = h.executeConversation.mock.calls[0]!;
+    expect(mode).toBe("plan");
+    expect(String(source)).toContain("Project conflict: Plan splits the payment module");
+    expect(metadata).toMatchObject({ planPath: "a.plan.md" });
+    expect(metadata.executePlan).toBeUndefined();
+    expect(h.controller.session("s")?.projectContext).toBeUndefined();
+    h.dispose();
+  });
+
+  it("restores the plan status when the turn never starts", async () => {
+    const statuses: string[] = [];
+    const session: DextHistorySession = { id: "s", createdAt: 1, updatedAt: 1, turns: [], activePlanPath: "a.plan.md", planStatus: "active" };
+    const plans = new PlanController({
+      host: { isTrustedLocalWorkspace: () => true, readPlan: async () => planSource, knownPlan: () => true },
+      sessions: {
+        active: () => session,
+        savePlanContext: async (_id, _path, status) => { statuses.push(status); },
+        savePlanProgress: async () => undefined,
+        postPlanContext: async () => undefined
+      },
+      running: () => false,
+      startTurn: async () => { throw new Error("Wait for this conversation's current Dext turn to finish."); }
+    });
+    await expect(plans.build("a.plan.md")).rejects.toThrow("Wait for this conversation");
+    expect(session).toMatchObject({ activePlanPath: "a.plan.md", planStatus: "active" });
+    expect(statuses.at(-1)).toBe("active");
   });
 });

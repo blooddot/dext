@@ -63,11 +63,13 @@ describe("legacy Project Plan service", () => {
     const f = fixture(); f.files.set(path, JSON.stringify(object));
     expect(f.service.bindPlan(await f.read("unmatched"), "a", "Work", impact).assessment).toBe("unknown");
     expect(f.service.bindPlan(await f.read("#Missing[missing]"), "a", "Work", impact).assessment).toBe("unknown");
-    f.files.set(path, JSON.stringify({ ...object, description: "x".repeat(7000) }));
+    f.files.set(path, JSON.stringify({ ...object, description: "x".repeat(30_000) }));
     const read = await f.read();
-    expect(read.grounding.length).toBeLessThanOrEqual(6000);
+    expect(read.grounding.length).toBeLessThanOrEqual(24_000);
     expect(read.omitted).toEqual([path]);
     expect(f.service.bindPlan(read, "a", "Work", impact).assessment).toBe("unknown");
+    // A 'none' claim needs complete grounding; a change is still an actionable statement.
+    expect(f.service.bindPlan(read, "a", "Work", { ...impact, assessment: "change" }).assessment).toBe("change");
     expect((await f.service.readPlanContext({ input: "App", workspaceKey: process.cwd() + "/other" })).availability).toBe("unavailable");
   });
   it("checks dangling references and protects externally changed writes", async () => {

@@ -142,6 +142,9 @@ body {
 .plan-target:disabled,
 .plan-choose:disabled { opacity: 0.5; cursor: default; }
 .plan-status { flex: 0 0 auto; color: var(--vscode-descriptionForeground); font-size: 0.9em; white-space: nowrap; }
+/* A contradiction is the one state that is not going well, so it carries the
+   warning tone instead of the plan accent. */
+.plan-status[data-state="conflict"] { color: var(--vscode-editorWarning-foreground); }
 button.primary.plan-build {
   /* Add to the toolbar's 6px gap for 8px after the plan status. */
   margin-left: 2px;
@@ -159,6 +162,15 @@ button.primary.plan-build {
 }
 .plan-build:hover:not(:disabled) {
   background: color-mix(in srgb, var(--plan-accent-fill) 86%, var(--vscode-editor-foreground));
+}
+/* Build's plan accent means "go"; a correction is a repair, so it steps back to
+   the theme's secondary button colour instead of borrowing a new hue. */
+button.primary.plan-build.conflict {
+  color: var(--vscode-foreground);
+  background: var(--vscode-button-secondaryBackground, color-mix(in srgb, var(--vscode-foreground) 14%, transparent));
+}
+button.primary.plan-build.conflict:hover:not(:disabled) {
+  background: var(--vscode-button-secondaryHoverBackground, color-mix(in srgb, var(--vscode-foreground) 22%, transparent));
 }
 .plan-build[hidden] { display: none; }
 

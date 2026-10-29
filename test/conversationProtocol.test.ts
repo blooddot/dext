@@ -11,7 +11,8 @@ describe("conversation protocol", () => {
     expect(types).toContain("selectConversation");
     expect(types).toContain("agentSelection");
     expect(types).toContain("reviewPlanProject");
-    expect(types).toHaveLength(22);
+    expect(types).toContain("correctPlan");
+    expect(types).toHaveLength(23);
     for (const type of types) expect(webviewRequestSchema.options.some((option) => option.shape.type.value === type)).toBe(true);
   });
 
@@ -23,6 +24,7 @@ describe("conversation protocol", () => {
       { type: "executeInput", mode: "agent", source: "hello" },
       { type: "stopExecution", turnId: "turn" },
       { type: "buildPlan", planPath: ".dext/plans/a.plan.md" },
+      { type: "correctPlan", planPath: ".dext/plans/a.plan.md" },
       { type: "selectConversation", sessionId: "session" },
       { type: "moveConversation", sessionId: "a", beforeSessionId: null },
       { type: "pinConversation", sessionId: "a", pinned: true },

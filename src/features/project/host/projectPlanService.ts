@@ -7,6 +7,10 @@ import { type ProjectStore, projectContentHash, type ProjectLegacySnapshot } fro
 
 interface Entry { id: string; locator: string; content: unknown; paths: string[]; names: string[]; global: boolean; links?: string[]; diagnostic?: string; writeTargets?: Array<{ target: string; id: string; beforeHash: string }> }
 
+/** Relevant norms sent to Plan and to the final review. Relations and write hashes
+ * ride along with each node, so a handful of large norms already needs this much. */
+const GROUNDING_BUDGET = 24_000;
+
 export function projectWorkspaceKey(path: string): string {
   const normalized = resolve(path).replaceAll("\\", "/");
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
@@ -95,7 +99,7 @@ export class ProjectPlanService implements ProjectPlanPort {
       let length = 0;
       for (const entry of selected) {
         const text = JSON.stringify({ id: entry.id, locator: entry.locator, value: entry.content, writeTargets: entry.writeTargets });
-        if (length + text.length + 1 > 6000) { omitted.push(entry.locator); continue; }
+        if (length + text.length + 1 > GROUNDING_BUDGET) { omitted.push(entry.locator); continue; }
         parts.push(text); length += text.length + 1;
       }
       if (omitted.length) diagnostics.push("Grounding is truncated; omitted norms require explicit reading before a none assessment.");
@@ -109,7 +113,9 @@ export class ProjectPlanService implements ProjectPlanPort {
     const parsed = parseProjectImpact(document);
     const candidate = impact ?? (parsed.status === "parsed" ? parsed.impact : undefined);
     const known = new Set(read.basis.filter(item => item.kind !== "applicability").map(item => item.id));
-    const valid = read.availability === "ready" && candidate && !read.diagnostics.length && !read.omitted.length && candidate.refs.every(id => known.has(id));
+    // Truncated or flagged grounding cannot prove 'none', but a change still names what it touches.
+    const complete = !read.diagnostics.length && !read.omitted.length;
+    const valid = read.availability === "ready" && candidate && (complete || candidate.assessment !== "none") && candidate.refs.every(id => known.has(id));
     return {
       workspaceKey: read.workspaceKey, planPath: normalize(planPath).replaceAll("\\", "/"),
       documentHash: projectContentHash(planSemanticContent(document)), fileHash: projectContentHash(document),

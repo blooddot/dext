@@ -43,6 +43,7 @@ const conversationSchemaList = [
   z.object({ type: z.literal("copyTurn"), turnId: z.string().min(1), sessionId: z.string().min(1) }),
   z.object({ type: z.literal("openSpillFile"), sessionId: z.string().min(1), turnId: z.string().min(1) }),
   z.object({ type: z.literal("buildPlan"), planPath: z.string().min(1).max(512) }),
+  z.object({ type: z.literal("correctPlan"), planPath: z.string().min(1).max(512) }),
   z.object({ type: z.literal("choosePlan") }),
   z.object({ type: z.literal("newConversation") }),
   z.object({ type: z.literal("selectConversation"), sessionId: z.string().min(1), switchId: z.number().int().positive().optional() }),

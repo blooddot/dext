@@ -110,8 +110,8 @@ export function createConversationServices(dependencies: ConversationSetupDepend
       postPlanContext: () => controller.postPlanContext()
     },
     running: (sessionId) => executionRef.coordinator?.running(sessionId) ?? false,
-    startTurn: async (mode, source, planPath, executePlan) => {
-      await coordinator.execute(controller.active(), mode, source, {
+    startTurn: async (session, mode, source, planPath, executePlan) => {
+      await coordinator.execute(session, mode, source, {
         ...(planPath !== undefined ? { planPath } : {}),
         executePlan
       });

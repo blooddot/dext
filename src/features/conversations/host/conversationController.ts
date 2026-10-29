@@ -535,7 +535,9 @@ export class ConversationController {
       else delete session.activePlanPath;
       session.planStatus = status;
       if (projectContext) session.projectContext = structuredClone(projectContext);
-      else if (session.projectContext?.planPath !== path) delete session.projectContext;
+      // No assessment means none belongs to this plan any more: a revised or newly
+      // chosen plan must not keep the previous verdict.
+      else delete session.projectContext;
     }
     await this.history.updatePlanContext(sessionId, path, status, projectContext);
   }

@@ -29,7 +29,7 @@ export interface PlanControllerOptions {
   running: (sessionId: string) => boolean;
   /** Starts the plan turn through the execution coordinator. Injected because
    * plan building is a caller of execution, not an owner of it. */
-  startTurn: (mode: "plan", source: string, planPath: string | undefined, executePlan: boolean) => Promise<void>;
+  startTurn: (session: DextHistorySession, mode: "plan", source: string, planPath: string | undefined, executePlan: boolean) => Promise<void>;
 }
 
 /** What one plan-executing turn carries. Created when the turn starts and
@@ -79,19 +79,61 @@ export class PlanController {
     const session = this.options.sessions.active();
     if (this.options.running(session.id)) throw new Error("Stop the running turn before building a plan.");
     const previous = session.projectContext?.planPath === planPath ? session.projectContext : undefined;
+    const previousStatus = session.planStatus ?? "active";
     const context = await this.options.host.preparePlanBuild?.(planPath, text, previous);
-    if (this.options.sessions.active().id !== session.id || this.options.running(session.id)) throw new Error("Conversation changed while checking the plan; retry Build.");
+    // A contradiction is recorded before failing: the toolbar then names it, and the
+    // user can revise the plan instead of retrying an evaluation they cannot see.
+    if (context?.assessment === "conflict") {
+      session.projectContext = context;
+      session.activePlanPath = planPath;
+      await this.options.sessions.savePlanContext(session.id, planPath, session.planStatus ?? "active", context);
+      await this.options.sessions.postPlanContext();
+      throw new Error(`Project review required, revise the plan in Plan mode: ${context.reason}`);
+    }
     if (context) session.projectContext = context;
     session.activePlanPath = planPath;
     session.planStatus = "running";
     await this.options.sessions.savePlanContext(session.id, planPath, "running", context);
     await this.options.sessions.postPlanContext();
-    await this.options.startTurn("plan", [
-      `Implement the plan in ${planPath} exactly as written. Do not edit the plan file itself.`,
-      planTodoInstruction(planTodoItems(text)),
-      "",
-      text.trim()
-    ].join("\n"), undefined, true);
+    try {
+      // The turn starts in the conversation this Build was clicked in. The check
+      // above awaits AI work, so a tab switch must not move the build elsewhere.
+      await this.options.startTurn(session, "plan", [
+        `Implement the plan in ${planPath} exactly as written. Do not edit the plan file itself.`,
+        planTodoInstruction(planTodoItems(text)),
+        "",
+        text.trim()
+      ].join("\n"), undefined, true);
+    } catch (error) {
+      // A start the coordinator rejected never took this plan; leaving the
+      // status running would keep Build disabled with no turn behind it.
+      if (!this.options.running(session.id)) {
+        session.planStatus = previousStatus;
+        await this.options.sessions.savePlanContext(session.id, planPath, previousStatus, session.projectContext);
+        await this.options.sessions.postPlanContext();
+      }
+      throw error;
+    }
+  }
+
+  /** One click after a Project conflict: the plan is revised instead of the user
+   * rewriting it. The stale assessment goes with it, so the next Build evaluates
+   * the corrected document. */
+  async correct(planPath: string): Promise<void> {
+    if (!this.options.host.isTrustedLocalWorkspace()) {
+      throw new Error("Correcting a plan requires a trusted local workspace.");
+    }
+    const session = this.options.sessions.active();
+    if (this.options.running(session.id)) throw new Error("Stop the running turn before correcting a plan.");
+    const reason = session.projectContext?.planPath === planPath ? session.projectContext.reason : "";
+    delete session.projectContext;
+    session.activePlanPath = planPath;
+    await this.options.sessions.savePlanContext(session.id, planPath, session.planStatus ?? "active");
+    await this.options.sessions.postPlanContext();
+    await this.options.startTurn(session, "plan", [
+      "Correct this plan so it no longer contradicts the Project norms. Keep every task that is still valid; never weaken a norm to make the plan pass.",
+      reason ? `Project conflict: ${reason}` : ""
+    ].join("\n"), planPath, false);
   }
 
   /** The plan the model wrote becomes the conversation's active target as soon

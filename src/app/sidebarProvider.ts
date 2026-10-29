@@ -816,6 +816,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         case "buildPlan":
           await this.conversation.plans.build(request.planPath);
           break;
+        case "correctPlan":
+          await this.conversation.plans.correct(request.planPath);
+          break;
         case "choosePlan":
           await this.choosePlan();
           break;

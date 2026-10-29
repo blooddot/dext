@@ -133,6 +133,17 @@ async function apiSourceFiles(root: vscode.Uri, limit: number): Promise<vscode.U
   return files;
 }
 
+/** Ask is free-form chat: models still answer Project prompts with prose or a
+ * fenced block instead of the requested JSON. Take the first candidate the
+ * schema accepts, so a wrapper never turns a review into a hard failure. */
+function parseAnswer<T>(schema: z.ZodType<T>, text: string): T | undefined {
+  for (const candidate of agentResultCandidates(text)) {
+    const parsed = schema.safeParse(candidate.value);
+    if (parsed.success) return parsed.data;
+  }
+  return undefined;
+}
+
 /** Registry diagnostics name the server they rejected. Keeping the reason lets
  * a later "unknown API" explain the real cause instead of only "not connected". */
 function mcpRejectionReasons(diagnostics: readonly string[]): Map<string, string> {
@@ -429,7 +440,8 @@ export class DextApplication {
     ].join("\n\n");
     const answer = await this.runtime.executeConversation("ask", prompt, { signal });
     if (answer.result.kind !== "ask") throw new Error("Project review returned an unexpected result.");
-    const report = projectReviewReportSchema.parse(JSON.parse(answer.result.text.replace(/^```(?:json)?\s*|\s*```$/g, "").trim()));
+    const report = parseAnswer(projectReviewReportSchema, answer.result.text);
+    if (!report) return { ...context, assessment: "unknown", reviewStatus: "pending", reason: "The final Project review returned no usable JSON report; manual review is required." };
     if (report.checks.some(check => check.source === "host_observed" || (check.source === "manual" && check.status === "passed"))) throw new Error("The Agent cannot certify host-observed or manual checks.");
     const known = new Set(read.basis.map(item => item.id));
     if (report.refs.some(id => !known.has(id)) || read.diagnostics.length) return { ...context, assessment: "unknown", reviewStatus: "pending", reason: "Final review references are missing or context coverage is incomplete." };
@@ -444,10 +456,9 @@ export class DextApplication {
       if (previous?.availability === "ready") throw new Error("Bound Project is unavailable; restore its workspace before building.");
       return undefined;
     }
-    if (previous) {
-      const validation = await port.validatePlan(previous, document);
-      if (!validation.valid) throw new Error(validation.diagnostics.join(" "));
-    }
+    // A changed Plan or a changed Project only makes the stored assessment stale.
+    // Re-derive it from the current document instead of blocking every Build.
+    if (previous && !(await port.validatePlan(previous, document)).valid) previous = undefined;
     const read = await port.readPlanContext({ workspaceKey: this.workspaceUri.fsPath, input: document });
     if (previous?.availability === "ready" && read.availability !== "ready") throw new Error("Bound Project is no longer readable.");
     if (read.availability !== "ready") return port.bindPlan(read, path, document);
@@ -461,8 +472,11 @@ export class DextApplication {
     // Ask is a read-only transport shared by every supported provider, including Pi.
     const response = await this.runtime.executeConversation("ask", prompt);
     if (response.result.kind !== "ask") throw new Error("Project assessment returned an unexpected result.");
-    const context = port.bindPlan(read, path, document, projectImpactSchema.parse(JSON.parse(response.result.text.replace(/^```(?:json)?\s*|\s*```$/g, "").trim())));
-    if (context.assessment === "unknown" || context.assessment === "conflict") throw new Error(`Project review required: ${context.reason}`);
+    // No usable answer leaves the assessment unknown, which is advisory here.
+    const context = port.bindPlan(read, path, document, parseAnswer(projectImpactSchema, response.result.text));
+    // Unknown is advisory: the plan body and norm hashes were already checked, and the
+    // final review still inspects the actual changes. A contradiction is returned so the
+    // caller records it and names the plan change that resolves it.
     return context;
   }
 

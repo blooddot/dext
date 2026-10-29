@@ -43,6 +43,10 @@ describe("DextHistoryStore", () => {
     expect(restored.planProgress?.documentHash).toBe("semantic");
     await store.updatePlanContext("s", "b.plan.md", "active");
     expect(store.list()[0]?.projectContext).toBeUndefined();
+    // A saved context without a new assessment is stale even for the same plan.
+    await store.updatePlanContext("s", "c.plan.md", "active", context);
+    await store.updatePlanContext("s", "c.plan.md", "active");
+    expect(store.list()[0]?.projectContext).toBeUndefined();
   });
   it("persists a round checkpoint before a final turn exists, without losing native session bindings", async () => {
     const state = new MemoryState(); const store = new DextHistoryStore(state as never);

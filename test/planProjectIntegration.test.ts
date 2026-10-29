@@ -58,6 +58,55 @@ describe("Plan Project integration without migration", () => {
       expect(fs.files.get("virtual/a.plan.md")).toBe("# Revised\n");
     }
   });
+  it.each(["change", "unknown", "conflict"] as const)("returns a pre-Build %s assessment for the caller to record or block", async assessment => {
+    const app = Object.create(DextApplication.prototype) as DextApplication;
+    const context = { workspaceKey: "virtual", planPath: "a.plan.md", documentHash: "", fileHash: "", availability: "ready" as const, assessment, reason: "Checked API", basis: [], reviewStatus: "pending" as const };
+    Object.assign(app, {
+      workspaceUri: { fsPath: "virtual" },
+      projectPlanPort: {
+        readPlanContext: async () => ({ availability: "ready", workspaceKey: "virtual", basis: [], grounding: "", diagnostics: [], omitted: [] }),
+        bindPlan: () => context,
+        validatePlan: async () => ({ valid: true, diagnostics: [] })
+      },
+      runtime: { executeConversation: async () => ({ result: { kind: "ask", text: JSON.stringify({ assessment, reason: "Checked API", refs: [], coverage: "complete" }) } }) }
+    });
+    const run = app.preparePlanBuild("a.plan.md", "# Plan", { ...context, assessment: "unknown" });
+    await expect(run).resolves.toMatchObject({ assessment });
+  });
+  it("re-derives a stale assessment instead of blocking Build after the plan or the norms change", async () => {
+    const app = Object.create(DextApplication.prototype) as DextApplication;
+    const execute = vi.fn(async () => ({ result: { kind: "ask", text: JSON.stringify({ assessment: "change", reason: "Checked API", refs: [], coverage: "complete" }) } }));
+    Object.assign(app, {
+      workspaceUri: { fsPath: "virtual" },
+      projectPlanPort: {
+        readPlanContext: async () => ({ availability: "ready", workspaceKey: "virtual", basis: [], grounding: "", diagnostics: [], omitted: [] }),
+        bindPlan: () => ({ workspaceKey: "virtual", planPath: "a.plan.md", documentHash: "new", fileHash: "new", availability: "ready", assessment: "change", reason: "Checked API", basis: [], reviewStatus: "pending" }),
+        validatePlan: async () => ({ valid: false, diagnostics: ["Plan document changed; review the design before resuming."] })
+      },
+      runtime: { executeConversation: execute }
+    });
+    const stale = { workspaceKey: "virtual", planPath: "a.plan.md", documentHash: "old", fileHash: "old", availability: "ready" as const, assessment: "none" as const, reason: "", basis: [], reviewStatus: "current" as const };
+    await expect(app.preparePlanBuild("a.plan.md", "# Plan", stale)).resolves.toMatchObject({ assessment: "change" });
+    expect(execute).toHaveBeenCalledOnce();
+  });
+  it("recovers a fenced answer and treats prose as unknown instead of failing Build", async () => {
+    const app = Object.create(DextApplication.prototype) as DextApplication;
+    const context = { workspaceKey: "virtual", planPath: "a.plan.md", documentHash: "", fileHash: "", availability: "ready", assessment: "unknown", reason: "Checked API", basis: [], reviewStatus: "pending" };
+    let answer = "";
+    Object.assign(app, {
+      workspaceUri: { fsPath: "virtual" },
+      projectPlanPort: {
+        readPlanContext: async () => ({ availability: "ready", workspaceKey: "virtual", basis: [], grounding: "", diagnostics: [], omitted: [] }),
+        bindPlan: (_read: unknown, _path: string, _document: string, impact?: { assessment: string }) => ({ ...context, assessment: impact?.assessment ?? "unknown" }),
+        validatePlan: async () => ({ valid: true, diagnostics: [] })
+      },
+      runtime: { executeConversation: async () => ({ result: { kind: "ask", text: answer } }) }
+    });
+    answer = `Here is the assessment:\n\`\`\`json\n${JSON.stringify({ assessment: "change", reason: "Touches API", refs: [], coverage: "partial" })}\n\`\`\``;
+    await expect(app.preparePlanBuild("a.plan.md", "# Plan")).resolves.toMatchObject({ assessment: "change" });
+    answer = "**Assessment**: the plan changes the API.";
+    await expect(app.preparePlanBuild("a.plan.md", "# Plan")).resolves.toMatchObject({ assessment: "unknown" });
+  });
   it.each(["none", "change", "unknown", "conflict"] as const)("grounds %s in existing objects without creating native storage", async assessment => {
     const files = new Map([[".dext/objects/api.json", JSON.stringify({ id: "api", canonicalName: "Api", kind: "module", source: "user" })]]);
     const write = vi.fn(async () => {});

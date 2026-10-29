@@ -243,7 +243,8 @@ export class DextHistoryStore implements ConversationHistoryStore {
       else delete session.activePlanPath;
       session.planStatus = planStatus;
       if (projectContext) session.projectContext = planProjectContextSchema.parse(projectContext);
-      else if (session.projectContext?.planPath !== activePlanPath) delete session.projectContext;
+      // No assessment means none belongs to this plan any more.
+      else delete session.projectContext;
       await this.persist(sessions, [sessionId]);
     });
   }

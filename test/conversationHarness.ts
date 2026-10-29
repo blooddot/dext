@@ -125,7 +125,7 @@ export function createConversationHarness(options: ConversationHarnessOptions = 
       postPlanContext: () => controller.postPlanContext()
     },
     running: (sessionId) => executionRef.coordinator?.running(sessionId) ?? false,
-    startTurn: (mode, source, planPath, executePlan) => executionRef.coordinator!.execute(controller.active(), mode, source, {
+    startTurn: (session, mode, source, planPath, executePlan) => executionRef.coordinator!.execute(session, mode, source, {
       ...(planPath !== undefined ? { planPath } : {}),
       executePlan
     })
