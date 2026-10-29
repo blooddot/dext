@@ -2,6 +2,8 @@
 .vscode/**
 .vscode-test/**
 .dext/**
+# Local scratch from review/width-check runs; nothing loads it at runtime.
+.taste-skill/**
 .npmrc
 src/**
 test/**
@@ -28,4 +30,6 @@ esbuild.mjs
 eslint.config.mjs
 vitest.config.mjs
 tsconfig.json
+# Dev tool pin; nothing loads it at runtime.
+mise.toml
 .gitignore
