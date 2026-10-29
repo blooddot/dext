@@ -35,6 +35,40 @@ export interface Size {
   height: number;
 }
 
+export interface ScrollOffset {
+  left: number;
+  top: number;
+}
+
+/** Display pixels per image pixel: 1 is the original size. */
+export const MIN_ZOOM = 0.05;
+export const MAX_ZOOM = 8;
+
+export const clampZoom = (scale: number): number => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, scale));
+
+/** "Fit the window" shrinks a big screenshot but never enlarges a small picture
+ * past its own pixels, where it could only get blurry. */
+export function fitScale(natural: Size, available: Size): number {
+  if (natural.width <= 0 || natural.height <= 0 || available.width <= 0 || available.height <= 0) return 1;
+  return clampZoom(Math.min(1, available.width / natural.width, available.height / natural.height));
+}
+
+/** The scroll offsets that keep the pixel under `anchor` (a client point) under
+ * the pointer after the picture changed size. */
+export function keepAnchor(
+  before: DisplayRect, after: DisplayRect, anchor: ImagePoint, scroll: ScrollOffset
+): ScrollOffset {
+  const fraction = (rect: DisplayRect, point: ImagePoint): ImagePoint => ({
+    x: rect.width > 0 ? (point.x - rect.left) / rect.width : 0,
+    y: rect.height > 0 ? (point.y - rect.top) / rect.height : 0
+  });
+  const at = fraction(before, anchor);
+  return {
+    left: scroll.left + (after.left + at.x * after.width) - (before.left + at.x * before.width),
+    top: scroll.top + (after.top + at.y * after.height) - (before.top + at.y * before.height)
+  };
+}
+
 /** Channel difference that still counts as one flat UI block. Only affects how
  * well hover-select fits; typing a note never depends on it. */
 const COLOR_TOLERANCE = 18;

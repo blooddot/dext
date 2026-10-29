@@ -985,7 +985,7 @@
     "test:host": "npm run build && node scripts/runExtensionTest.mjs",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "check:ui": "node scripts/checkComposerLayoutUi.mjs && node scripts/checkStreamJumpUi.mjs && node scripts/checkConversationScrollUi.mjs && node scripts/checkQuestionVisibilityUi.mjs && node scripts/checkEditorTabsUi.mjs && node scripts/checkProjectReaderUi.mjs && node scripts/checkProjectDiagramsUi.mjs",
+    "check:ui": "node scripts/checkComposerLayoutUi.mjs && node scripts/checkStreamJumpUi.mjs && node scripts/checkConversationScrollUi.mjs && node scripts/checkQuestionVisibilityUi.mjs && node scripts/checkEditorTabsUi.mjs && node scripts/checkProjectReaderUi.mjs && node scripts/checkProjectDiagramsUi.mjs && node scripts/checkImageAnnotatorUi.mjs",
     "check:ui:conversations": "node scripts/checkConversationTabsUi.mjs && node scripts/checkConversationScrollUi.mjs && node scripts/checkStreamJumpUi.mjs && node scripts/checkQuestionVisibilityUi.mjs && node scripts/checkStructuredOutputUi.mjs && node scripts/checkInteractionUi.mjs && node scripts/checkPatchApplicationUi.mjs",
     "check": "node scripts/checkModuleBoundaries.mjs && npm run lint && npm run typecheck && npm run test && npm run build && npm run generate:dext-types -- --check && node scripts/generateApiReference.mjs --check && npm run test:build-assets",
     "check:workspace-types": "node scripts/generateDextTypes.mjs --workspace . --check",

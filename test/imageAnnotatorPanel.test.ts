@@ -49,6 +49,8 @@ describe("image annotator tab", () => {
     expect(state.reveal).toHaveBeenCalledOnce();
     expect(state.html).toContain("imageAnnotator.js");
     expect(state.html).toContain('content=".dext-global/attachments/a.png"');
+    // The tab is the annotation editor: no preview step and no button to reach it.
+    expect(state.html).not.toContain("image-page-annotate");
   });
 
   it("answers the image request with the attachment bytes", async () => {

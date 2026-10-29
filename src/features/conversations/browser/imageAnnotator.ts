@@ -1,15 +1,13 @@
 import {
-  boxFromPoints, composeAnnotationText, detectBlocks, displayToImage, imageBoxToDisplay, pickBlock,
-  type DisplayRect, type ImageBox, type ImageMark, type ImagePoint
+  boxFromPoints, clampZoom, composeAnnotationText, detectBlocks, displayToImage, fitScale, imageBoxToDisplay,
+  keepAnchor, pickBlock, type DisplayRect, type ImageBox, type ImageMark, type ImagePoint
 } from "./imageAnnotation.js";
 
 export interface ImageAnnotatorOptions {
   /** Resolves the attachment's bytes as a `data:` URL. A `vscode-webview` URL
    * would taint the canvas and make `getImageData` throw. */
-  loadImage(relativePath: string): Promise<string>;
-  /** `previous` is this attachment's earlier block, so re-annotating updates it
-   * instead of stacking a second copy in the Input. */
-  onInsert(text: string, previous?: string): void;
+  loadImage(): Promise<string>;
+  onInsert(text: string): void;
 }
 
 /** Long edge of the canvas the block detector reads. Downsampling is what keeps
@@ -17,6 +15,11 @@ export interface ImageAnnotatorOptions {
 const SCAN_MAX_EDGE = 720;
 /** Below this pointer travel a press is a click, not a hand-drawn box. */
 const DRAG_THRESHOLD = 4;
+/** A point mark is a dot you can click, not a pixel marker. */
+const POINT_SIZE = 18;
+/** Drop for the number chip outside the box: it needs this much room above. */
+const BADGE_HEIGHT = 22;
+const ZOOM_STEP = 1.25;
 
 const place = (
   element: HTMLElement, left: number, top: number, width: number, height: number
@@ -27,10 +30,10 @@ const place = (
   element.style.height = `${Math.max(height, 0)}px`;
 };
 
-/** Annotation overlay for one attachment: hover selects a flat UI block, a drag
+/** Annotation page for one attachment: hover selects a flat UI block, a drag
  * draws an arbitrary box, a tap on flat space drops a point. */
 export class ImageAnnotator {
-  readonly element: HTMLDialogElement;
+  readonly element: HTMLElement;
   private readonly image = document.createElement("img");
   private readonly stage = document.createElement("div");
   private readonly layers = document.createElement("div");
@@ -39,34 +42,24 @@ export class ImageAnnotator {
   private readonly list = document.createElement("div");
   private readonly error = document.createElement("div");
   private readonly done = document.createElement("button");
+  private readonly zoomLabel = document.createElement("span");
+  private readonly sizeLabel = document.createElement("span");
+  private readonly toggle = document.createElement("button");
   private path = "";
+  /** shortcut: memory only, reloading the tab starts empty. */
   private marks: ImageMark[] = [];
-  /** Notes survive closing the overlay, so reopening an attachment is an edit.
-   * shortcut: memory only, a Webview reload starts empty. */
-  private readonly saved = new Map<string, ImageMark[]>();
-  /** What was last inserted per attachment, for replacing rather than duplicating. */
-  private readonly inserted = new Map<string, string>();
   private blocks: ImageBox[] = [];
   private natural = { width: 0, height: 0 };
-  private loadToken = 0;
+  /** Display pixels per image pixel. `fit` keeps it tied to the window size. */
+  private zoom = 1;
+  private fit = true;
+  /** Marks hidden: the untouched picture, and no way to draw an invisible one. */
+  private plain = false;
   private drag: { from: ImagePoint; client: ImagePoint; pointerId: number } | undefined;
 
   constructor(private readonly options: ImageAnnotatorOptions) {
-    this.element = document.createElement("dialog");
-    this.element.className = "ui-dialog image-annotator";
-    const surface = document.createElement("div");
-    surface.className = "ui-dialog-surface";
-    const head = document.createElement("div");
-    head.className = "image-annotator-head";
-    const title = document.createElement("span");
-    title.textContent = "Annotate image";
-    const close = document.createElement("button");
-    close.type = "button";
-    close.className = "image-annotator-close";
-    close.setAttribute("aria-label", "Close annotation");
-    close.textContent = "\u00d7";
-    close.addEventListener("click", () => this.close());
-    head.append(title, close);
+    this.element = document.createElement("div");
+    this.element.className = "image-annotator";
 
     this.image.className = "image-annotator-image";
     this.image.alt = "";
@@ -80,79 +73,139 @@ export class ImageAnnotator {
     this.stage.append(this.image, this.layers);
 
     this.list.className = "image-annotator-list";
+    this.list.hidden = true;
     this.error.className = "image-annotator-error";
     this.error.hidden = true;
 
-    const body = document.createElement("div");
-    body.className = "ui-dialog-body";
-    body.append(this.stage, this.error, this.list);
-
     const actions = document.createElement("div");
     actions.className = "ui-dialog-actions";
-    const cancel = document.createElement("button");
-    cancel.type = "button";
-    cancel.className = "secondary";
-    cancel.textContent = "Cancel";
-    cancel.addEventListener("click", () => this.close());
     this.done.type = "button";
     this.done.textContent = "Insert annotations";
+    this.done.disabled = true;
     this.done.addEventListener("click", () => this.insert());
-    actions.append(cancel, this.done);
-    surface.append(head, body, actions);
-    this.element.append(surface);
+    actions.append(this.done);
+    this.zoomLabel.className = "image-annotator-zoom";
+    this.sizeLabel.className = "image-annotator-size";
+    this.toggle.type = "button";
+    this.toggle.className = "image-annotator-toggle";
+    this.toggle.title = "Show or hide the marks on the picture";
+    this.toggle.addEventListener("click", () => this.setPlain(!this.plain));
+    this.setPlain(false);
+    this.element.append(this.stage, this.tools(), this.error, this.list, actions);
 
-    this.element.addEventListener("cancel", (event) => {
-      event.preventDefault();
-      this.close();
-    });
     this.stage.addEventListener("pointerdown", (event) => this.pointerDown(event));
     this.stage.addEventListener("pointermove", (event) => this.pointerMove(event));
     this.stage.addEventListener("pointerup", (event) => this.pointerUp(event));
     this.stage.addEventListener("pointerleave", () => { if (!this.drag) this.hover.hidden = true; });
+    this.stage.addEventListener("wheel", (event) => this.wheel(event), { passive: false });
     // A resized sidebar moves the picture under the marks, so re-place them.
-    new ResizeObserver(() => this.renderMarks()).observe(this.stage);
+    new ResizeObserver(() => {
+      if (this.fit && this.natural.width) this.setZoom(this.fitScaleNow(), true);
+      this.renderMarks();
+    }).observe(this.stage);
   }
 
+  /** Zoom, fit and 1:1 under the picture: the controls a screenshot needs before
+   * anyone can point at a 4px detail in it. */
+  private tools(): HTMLElement {
+    const tools = document.createElement("div");
+    tools.className = "image-annotator-tools";
+    tools.setAttribute("role", "toolbar");
+    tools.setAttribute("aria-label", "Zoom");
+    const button = (label: string, title: string, run: () => void): HTMLButtonElement => {
+      const node = document.createElement("button");
+      node.type = "button";
+      node.textContent = label;
+      node.title = title;
+      node.setAttribute("aria-label", title);
+      node.addEventListener("click", run);
+      return node;
+    };
+    tools.append(
+      button("\u2212", "Zoom out", () => this.zoomBy(1 / ZOOM_STEP)),
+      this.zoomLabel,
+      button("+", "Zoom in", () => this.zoomBy(ZOOM_STEP)),
+      button("Fit", "Fit the picture to the window", () => this.setZoom(this.fitScaleNow(), true)),
+      button("1:1", "Original size", () => this.setZoom(1, false)),
+      this.sizeLabel,
+      this.toggle
+    );
+    return tools;
+  }
+
+  /** Hiding the marks is how you compare against the raw screenshot; drawing stops
+   * with them, so a click cannot leave a mark nobody can see. */
+  private setPlain(plain: boolean): void {
+    this.plain = plain;
+    this.element.classList.toggle("image-annotator-plain", plain);
+    this.toggle.textContent = plain ? "Show annotations" : "Hide annotations";
+    this.toggle.setAttribute("aria-pressed", String(plain));
+    if (plain) this.hover.hidden = true;
+  }
+
+  private fitScaleNow(): number {
+    return fitScale(this.natural, { width: this.stage.clientWidth, height: this.stage.clientHeight });
+  }
+
+  /** Setting the width is the whole zoom: the stage scrolls, and one scroll
+   * correction keeps `anchor` on the same pixel. Passing it makes that pixel
+   * the pointer, or the middle of the picture when a button asked. */
+  private setZoom(scale: number, fit: boolean, anchor?: ImagePoint): void {
+    if (!this.natural.width) return;
+    const before = this.image.getBoundingClientRect();
+    this.fit = fit;
+    this.zoom = clampZoom(scale);
+    // A whole-pixel width, so a fit never overflows by half a pixel into a scrollbar
+    // that shrinks the stage and asks for another fit.
+    this.image.style.width = `${Math.floor(this.natural.width * this.zoom)}px`;
+    if (anchor) {
+      const after = this.image.getBoundingClientRect();
+      const scroll = keepAnchor(before, after, anchor, { left: this.stage.scrollLeft, top: this.stage.scrollTop });
+      this.stage.scrollLeft = scroll.left;
+      this.stage.scrollTop = scroll.top;
+    }
+    this.zoomLabel.textContent = `${Math.round(this.zoom * 100)}%`;
+    this.renderMarks();
+  }
+
+  private zoomBy(factor: number): void {
+    const stage = this.stage.getBoundingClientRect();
+    this.setZoom(this.zoom * factor, false, { x: stage.left + stage.width / 2, y: stage.top + stage.height / 2 });
+  }
+
+  /** Ctrl/Cmd + wheel zooms around the pointer; a plain wheel stays the stage's
+   * own scrolling, so a trackpad pans the way it always does. */
+  private wheel(event: WheelEvent): void {
+    if (!(event.ctrlKey || event.metaKey) || !this.natural.width) return;
+    event.preventDefault();
+    const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 100 : 1);
+    const scale = clampZoom(this.zoom * Math.exp(-delta * 0.0015));
+    if (scale === this.zoom) return;
+    this.setZoom(scale, false, { x: event.clientX, y: event.clientY });
+  }
+
+  /** One image per editor tab: the page shows the picture and annotates at once. */
   open(relativePath: string, name: string): void {
     this.path = relativePath;
-    this.marks = this.saved.get(relativePath) ?? [];
-    this.blocks = [];
-    this.drag = undefined;
-    this.natural = { width: 0, height: 0 };
     this.image.title = name;
-    this.error.hidden = true;
-    this.done.disabled = true;
-    this.renderMarks();
-    this.renderRows();
     if (!this.element.isConnected) document.body.append(this.element);
-    if (!this.element.open) this.element.showModal();
-    void this.load(relativePath);
+    void this.load();
   }
 
-  close(): void {
-    this.loadToken++;
-    this.saved.set(this.path, this.marks);
-    this.drag = undefined;
-    this.hover.hidden = true;
-    this.preview.hidden = true;
-    if (this.element.open) this.element.close();
-  }
-
-  private async load(relativePath: string): Promise<void> {
-    const token = ++this.loadToken;
+  private async load(): Promise<void> {
     try {
-      const url = await this.options.loadImage(relativePath);
+      const url = await this.options.loadImage();
       await new Promise<void>((resolve, reject) => {
         this.image.onload = () => resolve();
         this.image.onerror = () => reject(new Error("The attachment image could not be decoded."));
         this.image.src = url;
       });
-      if (token !== this.loadToken) return;
       this.natural = { width: this.image.naturalWidth, height: this.image.naturalHeight };
+      this.sizeLabel.textContent = `${this.natural.width} \u00d7 ${this.natural.height}`;
       this.blocks = this.scanBlocks();
       this.done.disabled = false;
+      this.setZoom(this.fitScaleNow(), true);
     } catch (error) {
-      if (token !== this.loadToken) return;
       this.error.textContent = error instanceof Error ? error.message : String(error);
       this.error.hidden = false;
     }
@@ -184,13 +237,14 @@ export class ImageAnnotator {
     }));
   }
 
-  /** The stage's own pixel space, so overlay styles can use these numbers directly. */
+  /** The stage's own pixel space, so overlay styles can use these numbers directly.
+   * The layers scroll with the picture, so these are content coordinates. */
   private displayRect(): DisplayRect {
     const image = this.image.getBoundingClientRect();
     const stage = this.stage.getBoundingClientRect();
     return {
-      left: image.left - stage.left,
-      top: image.top - stage.top,
+      left: image.left - stage.left + this.stage.scrollLeft,
+      top: image.top - stage.top + this.stage.scrollTop,
       width: image.width,
       height: image.height
     };
@@ -201,20 +255,36 @@ export class ImageAnnotator {
   }
 
   private pointerDown(event: PointerEvent): void {
-    if (event.button !== 0 || !this.natural.width) return;
+    if (event.button !== 0 || !this.natural.width || this.plain) return;
+    const mark = event.target instanceof Element ? event.target.closest<HTMLElement>(".image-annotator-mark") : null;
+    if (mark) {
+      // A press on a mark edits its note, so a box is not drawn on top of it.
+      event.preventDefault();
+      this.focusNote(Number(mark.dataset.index));
+      return;
+    }
     event.preventDefault();
     this.stage.setPointerCapture(event.pointerId);
     this.drag = { from: this.imagePoint(event), client: { x: event.clientX, y: event.clientY }, pointerId: event.pointerId };
     this.hover.hidden = true;
   }
 
+  private focusNote(index: number): void {
+    if (!Number.isInteger(index)) return;
+    this.list.querySelectorAll<HTMLInputElement>(".image-annotator-row input")[index]?.focus();
+  }
+
   private pointerMove(event: PointerEvent): void {
-    if (!this.natural.width) return;
+    if (!this.natural.width || this.plain) return;
     const display = this.displayRect();
     if (this.drag) {
       const rect = imageBoxToDisplay(display, this.natural, boxFromPoints(this.drag.from, this.imagePoint(event)));
       place(this.preview, rect.left, rect.top, rect.width, rect.height);
       this.preview.hidden = false;
+      return;
+    }
+    if (event.target instanceof Element && event.target.closest(".image-annotator-mark")) {
+      this.hover.hidden = true;
       return;
     }
     const block = pickBlock(this.blocks, this.imagePoint(event));
@@ -247,7 +317,6 @@ export class ImageAnnotator {
     // Focus the note of the mark that was just added, not the first one.
     this.list.lastElementChild?.querySelector("input")?.focus();
   }
-
   /** Row and mark share a number; hovering or focusing a row outlines its mark so
    * the two are readable as one item. */
   private highlight(index: number, active: boolean): void {
@@ -260,6 +329,7 @@ export class ImageAnnotator {
     const nodes = this.marks.map((mark, index) => {
       const node = document.createElement("div");
       node.className = `image-annotator-mark image-annotator-${mark.kind}`;
+      node.dataset.index = String(index);
       const badge = document.createElement("span");
       badge.className = "image-annotator-index";
       badge.textContent = String(index + 1);
@@ -268,10 +338,12 @@ export class ImageAnnotator {
         if (mark.kind === "region") {
           const rect = imageBoxToDisplay(display, this.natural, mark.box);
           place(node, rect.left, rect.top, rect.width, rect.height);
+          // The number normally sits above the box; near the top edge it moves inside.
+          node.classList.toggle("image-annotator-badge-inside", rect.top < BADGE_HEIGHT);
         } else {
           // A point has no box of its own: center a fixed dot on the pixel.
           const rect = imageBoxToDisplay(display, this.natural, { ...mark.point, width: 0, height: 0 });
-          place(node, rect.left - 7, rect.top - 7, 14, 14);
+          place(node, rect.left - POINT_SIZE / 2, rect.top - POINT_SIZE / 2, POINT_SIZE, POINT_SIZE);
         }
       }
       return node;
@@ -280,14 +352,21 @@ export class ImageAnnotator {
   }
 
   private renderRows(): void {
-    this.list.replaceChildren(...this.marks.map((mark, index) => {
+    const head = document.createElement("div");
+    head.className = "image-annotator-list-head";
+    head.textContent = `Annotations (${this.marks.length})`;
+    this.list.replaceChildren(head, ...this.marks.map((mark, index) => {
       const row = document.createElement("div");
       row.className = "image-annotator-row";
+      // The same chip the picture draws, so a row and its box read as one item.
+      const badge = document.createElement("span");
+      badge.className = "image-annotator-index";
+      badge.textContent = String(index + 1);
       const label = document.createElement("span");
       label.className = "image-annotator-row-label";
       label.textContent = mark.kind === "region"
-        ? `${index + 1}. ${mark.box.width}\u00d7${mark.box.height} at ${mark.box.x},${mark.box.y}`
-        : `${index + 1}. point ${mark.point.x},${mark.point.y}`;
+        ? `${mark.box.width}\u00d7${mark.box.height} at ${mark.box.x},${mark.box.y}`
+        : `point ${mark.point.x},${mark.point.y}`;
       const note = document.createElement("input");
       note.className = "ui-dialog-input";
       note.type = "text";
@@ -307,21 +386,16 @@ export class ImageAnnotator {
         this.marks.splice(index, 1);
         this.renderMarks();
         this.renderRows();
+        // Deleting must not drop the keyboard on the floor.
+        this.focusNote(Math.min(index, this.marks.length - 1));
       });
-      row.append(label, note, remove);
+      row.append(badge, label, remove, note);
       return row;
     }));
     this.list.hidden = this.marks.length === 0;
   }
 
   private insert(): void {
-    if (!this.marks.length) { this.close(); return; }
-    const text = composeAnnotationText(this.path, this.marks);
-    const previous = this.inserted.get(this.path);
-    this.inserted.set(this.path, text);
-    // Close first: a modal dialog keeps the page inert, so the editor cannot take
-    // focus (and show the caret) until the overlay is gone.
-    this.close();
-    this.options.onInsert(text, previous);
+    if (this.marks.length) this.options.onInsert(composeAnnotationText(this.path, this.marks));
   }
 }

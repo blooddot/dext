@@ -1381,93 +1381,123 @@ body.vscode-high-contrast-light .monaco-editor .view-line .dext-ref-chip {
   opacity: 0.85;
 }
 
-/* The annotation editor tab: the picture at full size, the same overlay on top. */
+/* The annotation editor tab: the picture fills the page, its annotations below. */
 html:has(.image-page) {
-  overflow: auto;
+  height: 100%;
+  overflow: hidden;
 }
 
 body.image-page {
-  display: block;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
-  overflow: auto;
+  height: 100vh;
+  overflow: hidden;
   background: var(--vscode-editor-background);
 }
 
-.image-page-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--vscode-panel-border);
-}
-
-.image-page-name {
+/* Screenshot annotation page: hover selects a flat block, drag draws a box.
+   The picture owns its own column, so a new annotation row never resizes it and
+   the box you just drew stays under the pointer. */
+.image-annotator {
   flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--vscode-descriptionForeground);
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 320px);
+  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "stage list"
+    "tools actions";
+  gap: 8px;
+  padding: 12px;
 }
 
-.image-page-annotate {
-  min-height: 26px;
-  padding: 2px 10px;
-  border: 1px solid var(--vscode-button-border, transparent);
+.image-annotator .ui-dialog-actions {
+  grid-area: actions;
+  padding: 0;
+}
+
+.image-annotator-stage {
+  grid-area: stage;
+  position: relative;
+  display: flex;
+  min-height: 0;
+  /* `safe` keeps the top-left corner reachable once the picture outgrows the
+     frame, which is what makes the stage's own scrolling work as panning. */
+  align-items: safe center;
+  justify-content: safe center;
+  overflow: auto;
+}
+
+.image-annotator-image {
+  flex: 0 0 auto;
+  max-width: none;
+  max-height: none;
+  display: block;
+  cursor: crosshair;
+}
+
+.image-annotator-tools {
+  grid-area: tools;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+}
+
+.image-annotator-tools button {
+  min-width: 26px;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid transparent;
   border-radius: 3px;
-  color: var(--vscode-button-foreground);
-  background: var(--vscode-button-background);
+  background: transparent;
+  color: var(--vscode-foreground);
+  font-size: 12px;
   cursor: pointer;
 }
 
-.image-page-annotate:disabled {
-  opacity: 0.5;
-  cursor: default;
+.image-annotator-tools button:hover {
+  background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground));
 }
 
-.image-page-stage {
-  padding: 16px;
+.image-annotator-tools button:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+}
+
+.image-annotator-zoom {
+  min-width: 44px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
   text-align: center;
 }
 
-.image-page-stage img {
-  max-width: 100%;
-  height: auto;
+.image-annotator-size {
+  margin: 0 6px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
-.image-page-error {
-  margin: 0 16px 16px;
-  color: var(--vscode-errorForeground);
+/* Pressed reads as on, the way every VS Code toggle does. */
+.image-annotator-tools button[aria-pressed="true"] {
+  border-color: var(--vscode-inputOption-activeBorder, transparent);
+  background: var(--vscode-inputOption-activeBackground);
+  color: var(--vscode-inputOption-activeForeground);
 }
 
-.image-page-error[hidden] {
+/* Hidden marks are how you look at the untouched picture; drawing stops with
+   them, so a click cannot leave a mark nobody can see. */
+.image-annotator-plain .image-annotator-layers {
   display: none;
 }
 
-/* The composer's dialog is sized for the sidebar; a whole editor tab can show more. */
-body.image-page .image-annotator {
-  width: min(1100px, calc(100% - 32px));
+.image-annotator-plain .image-annotator-image {
+  cursor: default;
 }
 
-body.image-page .image-annotator-image {
-  max-height: 70vh;
-}
-
-/* Screenshot annotation overlay: hover selects a flat block, drag draws a box. */
-.image-annotator {
-  width: min(560px, calc(100% - 16px));
-}
-
-.image-annotator-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 8px 12px 0;
-  font-weight: 600;
-}
-
-.image-annotator-close,
 .image-annotator-remove {
   border: 0;
   padding: 0 4px;
@@ -1477,33 +1507,29 @@ body.image-page .image-annotator-image {
   cursor: pointer;
 }
 
-.image-annotator-stage {
-  position: relative;
-  display: flex;
-  justify-content: center;
-  overflow: hidden;
-}
-
-.image-annotator-image {
-  max-width: 100%;
-  max-height: 60vh;
-  display: block;
-  cursor: crosshair;
-}
-
 .image-annotator-layers {
   position: absolute;
   inset: 0;
   pointer-events: none;
 }
 
+/* Marks are placed with inline left/top, so every kind (region and point) needs
+   the same box the hover and drawing previews use. */
 .image-annotator-hover,
 .image-annotator-box,
-.image-annotator-point {
+.image-annotator-mark {
   position: absolute;
   box-sizing: border-box;
   pointer-events: none;
   border: 1px solid var(--vscode-focusBorder);
+}
+
+/* A mark is something you can press to get back to its note, and the dark ring
+   keeps its colour readable on light and dark screenshots alike. */
+.image-annotator-mark {
+  pointer-events: auto;
+  cursor: pointer;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 45%);
 }
 
 .image-annotator-hover {
@@ -1528,26 +1554,54 @@ body.image-page .image-annotator-image {
   display: flex;
   align-items: center;
   justify-content: center;
+  border-color: var(--vscode-editorWarning-foreground, #d7ba7d);
   border-radius: 50%;
-  background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #d7ba7d) 30%, transparent);
-  font-size: 10px;
+  background: var(--vscode-editorWarning-foreground, #d7ba7d);
+  color: #1e1e1e;
+  font-size: 11px;
+  font-weight: 600;
   line-height: 1;
 }
 
+/* The number of a mark, on the picture and in its row: one chip, one colour. */
+.image-annotator-index {
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--vscode-editorWarning-foreground, #d7ba7d);
+  color: #1e1e1e;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+}
+
+/* It hangs off the box instead of sitting inside it, so nobody reads it as part
+   of the screenshot; near the top edge it moves inside. */
 .image-annotator-region .image-annotator-index {
   position: absolute;
-  top: -1px;
+  bottom: 100%;
   left: -1px;
-  padding: 0 3px;
-  border-radius: 2px;
-  background: var(--vscode-badge-background, #4d4d4d);
-  color: var(--vscode-badge-foreground, #ffffff);
-  font-size: 10px;
-  line-height: 15px;
+  margin-bottom: 2px;
+}
+
+.image-annotator-mark.image-annotator-badge-inside .image-annotator-index {
+  top: 1px;
+  bottom: auto;
+  left: 1px;
+  margin: 0;
+}
+
+/* A point mark is a yellow dot already: its number sits in it without a chip. */
+.image-annotator-point .image-annotator-index {
+  min-width: 0;
+  padding: 0;
+  background: none;
+  line-height: 1;
 }
 
 .image-annotator-list {
-  max-height: 30vh;
+  grid-area: list;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -1556,25 +1610,44 @@ body.image-page .image-annotator-image {
 
 .image-annotator-list[hidden] { display: none; }
 
+.image-annotator-list-head {
+  color: var(--vscode-foreground);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Number and size on one line, the note under it: a 320px column leaves no room
+   for a note field beside a label. */
 .image-annotator-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  display: flex;
   gap: 6px;
+  padding: 4px 6px;
+  border-radius: 4px;
+}
+
+.image-annotator-row:hover {
+  background: var(--vscode-list-hoverBackground);
 }
 
 .image-annotator-row-label {
-  flex: 0 0 auto;
+  min-width: 0;
+  overflow: hidden;
   color: var(--vscode-descriptionForeground);
   font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .image-annotator-row .ui-dialog-input {
-  flex: 1;
+  grid-column: 1 / -1;
   min-width: 0;
   min-height: 26px;
 }
 
 .image-annotator-error {
+  grid-area: list;
   color: var(--vscode-errorForeground);
 }
 

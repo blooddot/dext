@@ -17,8 +17,8 @@ export interface ImageAnnotatorPanelOptions {
 const escapeAttribute = (value: string): string => value.replace(/[&<>"']/g, (character) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!);
 
-/** One editor tab per attachment image: the picture at full size plus the same
- * annotation overlay the composer used to open as a modal dialog. */
+/** One editor tab per attachment image: the page itself is the annotation
+ * editor, so opening the tab is the whole interaction. */
 export class ImageAnnotatorPanel {
   private readonly panels = new Map<string, vscode.WebviewPanel>();
   private readonly inserted = new Map<string, string>();
@@ -90,12 +90,6 @@ export class ImageAnnotatorPanel {
   <title>${escapeAttribute(name)}</title>
 </head>
 <body class="image-page">
-  <div class="image-page-toolbar">
-    <span class="image-page-name">${escapeAttribute(name)}</span>
-    <button id="annotate" class="image-page-annotate" type="button" disabled>Annotate image</button>
-  </div>
-  <div class="image-page-stage"><img id="preview" alt="${escapeAttribute(name)}"></div>
-  <p id="error" class="image-page-error" hidden></p>
   <script nonce="${nonce}" src="${asset("dist", "webview", "imageAnnotator.js")}"></script>
 </body>
 </html>`;

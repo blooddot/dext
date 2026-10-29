@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   boxFromPoints,
+  clampZoom,
   composeAnnotationText,
   detectBlocks,
   displayToImage,
+  fitScale,
   imageBoxToDisplay,
+  keepAnchor,
   pickBlock,
   type ImagePixels
 } from "../src/features/conversations/browser/imageAnnotation.js";
@@ -71,6 +74,28 @@ describe("boxFromPoints", () => {
       .toEqual({ x: 40, y: 429, width: 66, height: 65 });
     expect(boxFromPoints({ x: 106, y: 494 }, { x: 40, y: 429 }))
       .toEqual({ x: 40, y: 429, width: 66, height: 65 });
+  });
+});
+
+describe("zoom", () => {
+  it("fits a large picture down and leaves a small one at its own size", () => {
+    expect(fitScale({ width: 2560, height: 1440 }, { width: 1280, height: 720 })).toBe(0.5);
+    expect(fitScale({ width: 2560, height: 1440 }, { width: 1280, height: 2000 })).toBe(0.5);
+    expect(fitScale({ width: 200, height: 100 }, { width: 1280, height: 720 })).toBe(1);
+    expect(fitScale({ width: 0, height: 0 }, { width: 1280, height: 720 })).toBe(1);
+    expect(clampZoom(1000)).toBe(8);
+    expect(clampZoom(0)).toBe(0.05);
+  });
+
+  it("keeps the pixel under the cursor while the picture grows around it", () => {
+    // A 1000x500 picture shown at 1000px, then at 2000px, both starting at the same point.
+    const before = { left: 0, top: 0, width: 1000, height: 500 };
+    const after = { left: 0, top: 0, width: 2000, height: 1000 };
+    // The pointer sits a quarter across the picture: it must stay a quarter across.
+    const scroll = keepAnchor(before, after, { x: 250, y: 125 }, { left: 0, top: 0 });
+    expect(scroll).toEqual({ left: 250, top: 125 });
+    expect({ x: after.left + 0.25 * after.width - scroll.left, y: after.top + 0.25 * after.height - scroll.top })
+      .toEqual({ x: 250, y: 125 });
   });
 });
 
