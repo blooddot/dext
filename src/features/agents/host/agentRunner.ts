@@ -10,7 +10,7 @@ import { ExecutionCancelledError } from "../../../shared/protocol/executionError
 import type { AgentMcpServer, AgentPermission, AgentProfile } from "../contracts/agent.js";
 import type { AxMethodContract } from "../domain/axAdapter.js";
 import type { AgentStreamEvent, AgentStreamPhase, AgentTokenUsage, AgentInputAnswers, AgentInputQuestion, ExecutionMetadata, RegisteredCallable, ResolvedInvocation } from "../../../shared/contracts/types.js";
-import { agentTodoEvent, ClaudeTodoTracker, isClaudeTodoTool, normalizeAgentTodos } from "../domain/agentTodoTracking.js";
+import { ClaudeTodoTracker, isClaudeTodoTool } from "../domain/agentTodoTracking.js";
 import { elicitationFormQuestions, elicitationFormResponse } from "../domain/elicitationForm.js";
 import { uiCallForm } from "../../../shared/contracts/uiForm.js";
 import { cliCompletion } from "../domain/cliCompletion.js";
@@ -427,10 +427,6 @@ export function parseCodexStreamLine(
     // Preserve token accounting if a CLI version attaches usage metadata to
     // the echoed request envelope, while still omitting its prompt text.
     return usage ? { phase: "status", text: "", eventType, usage } : undefined;
-  }
-  if (itemType === "todo_list") {
-    const todos = normalizeAgentTodos(item?.items, "codex");
-    return todos ? agentTodoEvent(todos) : undefined;
   }
   const text = eventText(event, item);
   const eventId = typeof event.id === "string"

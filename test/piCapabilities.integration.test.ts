@@ -80,7 +80,7 @@ describe("Pi with the actual Dext host modules", { timeout: 30000 }, () => {
     expect(log.filter((record) => record.accepted)).toHaveLength(3);
   });
 
-  it("enforces write and trust gates independently of the selected permission and keeps Plan progress", async () => {
+  it("enforces write and trust gates independently of the selected permission and ignores a provider task list", async () => {
     const h = await setup(), events: AgentStreamEvent[] = [];
     await h.runtime.executeConversation("plan", "outline", { onAgentEvent: (event) => events.push(event), agentSessionId: "plan" });
     let log = await h.log();
@@ -90,7 +90,8 @@ describe("Pi with the actual Dext host modules", { timeout: 30000 }, () => {
     await expect(h.runtime.executeConversation("agent", "write")).rejects.toThrow("Explicitly select Full access");
     h.runtime.setAgentSelection({ profileId: "pi", permission: "full-access" });
     await h.runtime.executeConversation("plan", "fixture:todo", { executePlan: true, onAgentEvent: (event) => events.push(event) });
-    expect(events.find((event) => event.phase === "todo")?.todos?.[0]).toMatchObject({ text: "Implement", status: "in_progress" });
+    // Only plan progress drives the Todo panel; a provider's own list is dropped.
+    expect(events.some((event) => event.phase === "todo")).toBe(false);
     log = await h.log(); expect(log.filter((record) => record.startup).at(-1)?.startup).toContain("builtin:mcp");
     h.runtime.setWorkspaceTrusted(false);
     await expect(h.call("agent", { input: "write" })).rejects.toThrow("trusted");

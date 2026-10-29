@@ -36,7 +36,7 @@ describe("associating an installed Pi command", () => {
     expect(readOnly).toContain("dext_fetch");
     for (const tool of ["write", "edit", "bash", "powershell", "mcp__*"]) expect(readOnly).not.toContain(tool);
     expect(piTools("read-only", false, "linux", false)).not.toContain("dext_fetch");
-    expect(piTools("full-access", false, "linux", true)).toEqual(["read", "grep", "find", "ls", "dext_request_user_input", "dext_update_plan", "write", "edit", "bash", "mcp__*"]);
+    expect(piTools("full-access", false, "linux", true)).toEqual(["read", "grep", "find", "ls", "dext_request_user_input", "write", "edit", "bash", "mcp__*"]);
   });
   it("keeps trusted text context but disables executable project resources", () => {
     const base = { extensionPath: "C:/extension path/pi.mjs", sessionDirectory: "C:/sessions", permission: "read-only" as const };

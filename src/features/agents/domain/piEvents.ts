@@ -1,6 +1,5 @@
 import { piObject, piText, type PiRecord } from "../contracts/pi.js";
 import type { AgentStreamEvent, AgentTokenUsage } from "../../../shared/contracts/types.js";
-import { normalizeAgentTodos } from "./agentTodoTracking.js";
 
 type Totals = { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
 const count = (value: unknown): number | undefined => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
@@ -95,11 +94,6 @@ export class PiEvents {
       return [{ id: `${this.prefix}:tool:${String(record.toolCallId)}`, phase: "tool", group: "work-log", title: name,
         text: contentText(result.content, "text") || JSON.stringify(record.args ?? {}), replace: true, done,
         toolKind: ["bash", "powershell"].includes(name) ? "command" : ["read", "write", "edit", "grep", "find", "ls"].includes(name) ? "file" : "step" }];
-    }
-    if (record.type === "dext_todo") {
-      const items = Array.isArray(record.todos) ? record.todos.map((raw) => ({ ...piObject(raw), content: piObject(raw).text })) : undefined;
-      const todos = normalizeAgentTodos(items, "acp");
-      return todos ? [{ phase: "todo", text: "", todos }] : [];
     }
     if (/^(auto_retry_|compaction_|summarization_retry_)/.test(record.type)) return [{ phase: "status", text: "", title: record.type.replaceAll("_", " "),
       ...(record.type === "auto_retry_end" && record.success === false ? { text: piText(record.finalError, "Pi retries exhausted.") } : {}) }];

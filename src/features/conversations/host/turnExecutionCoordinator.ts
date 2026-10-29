@@ -253,7 +253,10 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
         onAgentEvent: (event: AgentStreamEvent) => {
           planRun?.observe(event);
           const scoped = planRun ? { ...event, id: `plan-round-${planRun.rounds}:${event.id ?? "stream"}` } : event;
-          for (const update of todoProgress ? todoProgress.consume(scoped) : [event]) {
+          // A normal turn has no plan to update, so a provider's own task list
+          // would only freeze on its first snapshot: the Todo panel is Plan's.
+          const updates = todoProgress ? todoProgress.consume(scoped) : event.phase === "todo" ? [] : [event];
+          for (const update of updates) {
             this.options.events.append(sessionId, events, { ...update });
           }
         },

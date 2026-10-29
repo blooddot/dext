@@ -1,5 +1,5 @@
 import type { AgentMcpServer, AgentPermission } from "./agent.js";
-import type { AgentInputQuestion, AgentTodoItem } from "../../../shared/contracts/types.js";
+import type { AgentInputQuestion } from "../../../shared/contracts/types.js";
 
 /** The deliberately small wire surface Dext requires from an installed Pi CLI. */
 export interface PiRecord { type: string; [key: string]: unknown }
@@ -16,7 +16,6 @@ export interface PiBridgeConfig {
 export type PiBridgeRequest =
   | { id: string; kind: "question"; questions: AgentInputQuestion[] }
   | { id: string; kind: "submit_result"; args: unknown }
-  | { id: string; kind: "todo"; todos: AgentTodoItem[] }
   | { id: string; kind: "fetch"; url: string }
   | { id: string; kind: "project_query"; query: unknown };
 export interface PiUiRequest extends PiRecord { type: "extension_ui_request"; id: string; method: string }

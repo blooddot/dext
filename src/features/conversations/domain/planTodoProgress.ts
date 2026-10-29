@@ -78,8 +78,8 @@ export class PlanTodoProgress {
   beginRound(verifying: boolean): void { this.messages.clear(); this.verifying = verifying; this.verified = false; }
 
   consume(event: AgentStreamEvent): AgentStreamEvent[] {
-    // The plan's stable IDs drive this panel. Native task lists can have
-    // unrelated IDs and granularity; keep them for ordinary Agent turns.
+    // The plan's stable IDs drive this panel. A provider's native task list is
+    // not ours to show: only plan execution owns the Todo panel.
     if (event.phase === "todo") return [];
     if (event.phase !== "message") return [event];
     const id = event.id ?? "plan-progress";

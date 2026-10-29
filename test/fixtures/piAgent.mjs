@@ -92,7 +92,6 @@ async function receive(request) {
     if (text === "fixture:project-query") {
       message(JSON.stringify(await call("project_query", { query: { operation: "summary", limit: 2 } })));
     } else if (text === "fixture:todo") {
-      await call("todo", { todos: [{ id: "implement", text: "Implement", status: "in_progress" }] });
       message('<!-- dext-todo: {"updates":[{"id":"plan-1","status":"in_progress"}]} -->\nImplementing');
     } else if (text === "fixture:question") {
       const answer = await call("question", { questions: [{ id: "q", question: "Choose", options: [{ label: "A", description: "" }, { label: "B", description: "" }], multiSelect: true }] });

@@ -95,6 +95,20 @@ describe("TurnExecutionCoordinator", () => {
     });
   });
 
+  it("keeps a provider's own task list out of an Agent turn", async () => {
+    const h = createConversationHarness({
+      executeConversation: async (_mode, _source, metadata): Promise<InputExecutionResponse> => {
+        metadata.onAgentEvent?.({ phase: "todo", text: "", todos: [{ id: "1", text: "Build", status: "in_progress" }] });
+        metadata.onAgentEvent?.({ phase: "message", id: "m", text: "done" });
+        return { kind: "workflow", executions: [] };
+      }
+    });
+    h.seed([conversation("session")]);
+    h.controller.activate(h.controller.session("session")!);
+    await h.coordinator.execute(h.controller.session("session")!, "agent", "prompt");
+    expect(h.history.list()[0]?.turns[0]?.process.map((event) => event.phase)).toEqual(["message"]);
+  });
+
   it("buffers a finished turn's events and never reuses them for the next turn", async () => {
     let events: AgentStreamEvent[][] = [];
     const h = createConversationHarness({

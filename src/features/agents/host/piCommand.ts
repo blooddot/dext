@@ -59,7 +59,7 @@ export function piPermission(allowWrite: boolean, permission?: AgentPermission, 
   return "full-access";
 }
 export function piTools(permission: AgentPermission, result: boolean, platform: NodeJS.Platform = process.platform, trusted = false, projectQuery = false): string[] {
-  return ["read", "grep", "find", "ls", "dext_request_user_input", "dext_update_plan",
+  return ["read", "grep", "find", "ls", "dext_request_user_input",
     ...(result ? ["dext_submit_result"] : []),
     ...(trusted && projectQuery ? ["dext_project_query"] : []),
     ...(permission === "read-only" && trusted ? ["dext_fetch"] : []),

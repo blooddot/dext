@@ -46,9 +46,6 @@ export default async function dextPiExtension(pi) {
   pi.registerTool({ name: "dext_request_user_input", label: "Ask the user", description: "Ask the user one or more questions. Supports choices, multiple selections and a custom answer. Wait for the actual response.",
     parameters: { type: "object", properties: { questions: { type: "array", items: question, minItems: 1, maxItems: 20 } }, required: ["questions"], additionalProperties: false },
     async execute(_id, args, signal) { return result(await call("question", { questions: args.questions }, signal)); } });
-  pi.registerTool({ name: "dext_update_plan", label: "Update tasks", description: "Publish the complete current task list. When executing a Dext plan also report its stable task IDs with the instructed dext-todo protocol.",
-    parameters: { type: "object", properties: { todos: { type: "array", items: { type: "object", properties: { id: string, text: string, status: { type: "string", enum: ["pending", "in_progress", "completed"] } }, required: ["id", "text", "status"], additionalProperties: false } } }, required: ["todos"], additionalProperties: false },
-    async execute(_id, args, signal) { return result(await call("todo", { todos: args.todos }, signal)); } });
   pi.registerTool({ name: "dext_fetch", label: "Fetch URL", description: "Read one http(s) URL and return its text content, truncated when long. Read-only: no POST, custom headers or cookies.",
     parameters: { type: "object", properties: { url: string }, required: ["url"], additionalProperties: false },
     async execute(_id, args, signal) { return result(await call("fetch", { url: args.url }, signal)); } });

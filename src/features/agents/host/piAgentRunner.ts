@@ -108,7 +108,6 @@ export class PiAgentRunner implements AgentRunner {
     const active = session?.active;
     if (!active || active.done || active.controller.signal.aborted) return { status: "unavailable" };
     if (frame.kind === "question") return piQuestion(active.request, frame.id, frame.questions, active.controller.signal, active.timeout);
-    if (frame.kind === "todo") { this.emit(active, { type: "dext_todo", todos: frame.todos }); return { status: "accepted" }; }
     if (frame.kind === "fetch") return piFetch(frame.url, active.controller.signal);
     if (frame.kind === "project_query") {
       if (!active.request.workspaceTrusted || !active.request.projectQuery) return { status: "unavailable" };

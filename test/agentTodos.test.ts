@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { agentTodoEvent, ClaudeTodoTracker, normalizeAgentTodos } from "../src/features/agents/domain/agentTodoTracking.js";
-import { CliAgentRunner, parseClaudeStreamEvents, parseCodexStreamLine } from "../src/features/agents/host/agentRunner.js";
+import { CliAgentRunner, parseClaudeStreamEvents } from "../src/features/agents/host/agentRunner.js";
 import type { AgentStreamEvent } from "../src/shared/contracts/types.js";
 import { agentTodoProgress, agentTodoRows, latestAgentTodos, renderAgentTodos } from "../src/features/conversations/presentation/agentTodoPresentation.js";
 import { DextHistoryStore } from "../src/features/conversations/host/historyStore.js";
@@ -41,23 +41,11 @@ describe("agent task progress", () => {
       .toEqual([{ id: "0", text: "Build", status: "in_progress" }]);
     expect(events.filter((event) => event.phase === "tool")).toHaveLength(1);
   });
-  it("consumes Codex snapshots without inventing the active task or completing tasks when a turn ends", () => {
-    const parse = (type: string, items: unknown) => parseCodexStreamLine(JSON.stringify({ type, item: { id: "todo", type: "todo_list", items } }));
-    const first = parse("item.started", [{ text: "Inspect", completed: false }, { text: "Build", completed: false }])!;
-    expect(first.todos?.map((item) => item.status)).toEqual(["pending", "pending"]);
-    const next = parse("item.updated", [{ text: "Inspect", completed: true }, { text: "Build", completed: false }])!;
-    expect(next.todos?.map((item) => item.status)).toEqual(["completed", "pending"]);
-    expect(parse("item.completed", [{ text: "Build", completed: false }])?.todos?.[0]?.status).toBe("pending");
-    expect(latestAgentTodos([first, next])).toEqual(next.todos);
-    expect(first.todos?.[0]?.status).toBe("pending");
-    expect(parse("item.updated", [{ text: "bad", completed: "true" }])).toBeUndefined();
-  });
-
-  it("keeps explicit ACP statuses and accepts clearing the whole list", () => {
-    expect(normalizeAgentTodos([{ content: "Build", status: "in_progress", priority: "high" }], "acp"))
+  it("keeps explicit statuses and accepts clearing the whole list", () => {
+    expect(normalizeAgentTodos([{ content: "Build", status: "in_progress", priority: "high" }]))
       .toEqual([{ id: "0", text: "Build", status: "in_progress" }]);
-    expect(normalizeAgentTodos([{ content: "Build", status: "unknown" }], "acp")).toBeUndefined();
-    expect(normalizeAgentTodos(undefined, "acp")).toBeUndefined();
+    expect(normalizeAgentTodos([{ content: "Build", status: "unknown" }])).toBeUndefined();
+    expect(normalizeAgentTodos(undefined)).toBeUndefined();
     expect(latestAgentTodos([agentTodoEvent([{ id: "a", text: "Build", status: "pending" }]), agentTodoEvent([])]))
       .toEqual([]);
   });

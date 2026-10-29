@@ -176,7 +176,7 @@ export class DeepSeekHarnessRunner implements AgentRunner {
     if (update.sessionUpdate === "config_option_update") { session.options = update.configOptions; return; }
     if (!request) return;
     if (update.sessionUpdate === "plan") {
-      const todos = normalizeAgentTodos(update.entries, "acp");
+      const todos = normalizeAgentTodos(update.entries);
       if (todos) request.onEvent?.(agentTodoEvent(todos));
       return;
     }

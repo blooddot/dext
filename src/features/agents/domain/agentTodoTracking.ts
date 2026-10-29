@@ -9,16 +9,16 @@ function status(value: unknown): AgentTodoItem["status"] | undefined {
   return value === "pending" || value === "in_progress" || value === "completed" ? value : undefined;
 }
 
-/** Reject incomplete snapshots instead of accidentally deleting earlier tasks. */
-export function normalizeAgentTodos(value: unknown, format: "codex" | "claude" | "acp"): AgentTodoItem[] | undefined {
+/** Reject incomplete snapshots instead of accidentally deleting earlier tasks.
+ * Claude's Task tools and Harness's ACP updates share this content/status shape;
+ * Codex exec exposes no plan tool, so it has none. */
+export function normalizeAgentTodos(value: unknown): AgentTodoItem[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const items: AgentTodoItem[] = [];
   for (const [index, raw] of value.entries()) {
     const item = record(raw);
-    const text = format === "codex" ? item?.text : item?.content;
-    const state = format === "codex"
-      ? typeof item?.completed === "boolean" ? item.completed ? "completed" : "pending" : undefined
-      : status(item?.status);
+    const text = item?.content;
+    const state = status(item?.status);
     if (typeof text !== "string" || !text.trim() || !state) return undefined;
     items.push({ id: typeof item?.id === "string" ? item.id : String(index), text, status: state });
   }
@@ -68,7 +68,7 @@ export class ClaudeTodoTracker {
         if (block.is_error === true) continue;
         const output = record(event.tool_use_result);
         if (call.name === "TodoWrite") {
-          const todos = normalizeAgentTodos(call.input.todos, "claude");
+          const todos = normalizeAgentTodos(call.input.todos);
           if (!todos) continue;
           this.tasks = new Map(todos.map((item) => [item.id, item]));
           changed = true;
