@@ -1,11 +1,14 @@
 import * as esbuild from "esbuild";
-import { copyFile, mkdir, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, rm, writeFile } from "node:fs/promises";
 import { buildMarkdownStyles } from "./scripts/buildMarkdownStyles.mjs";
 import { writeShippedDeclaration } from "./scripts/generateDextTypes.mjs";
 import { writeApiReference } from "./scripts/generateApiReference.mjs";
 import { buildStructureIndexAssets } from "./scripts/buildStructureIndexAssets.mjs";
 
 const watch = process.argv.includes("--watch");
+// `dist` is untracked build output, and rebuilds only add or overwrite. A renamed or
+// removed entry would keep its old file here to be packaged with nothing using it.
+await rm("dist", { recursive: true, force: true });
 await buildMarkdownStyles();
 await buildStructureIndexAssets();
 // The generated `dext` declaration ships with the extension as `dist/dext.d.ts`,
