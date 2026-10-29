@@ -10,7 +10,8 @@ describe("conversation protocol", () => {
     expect(types).not.toContain("resolvePatch");
     expect(types).toContain("selectConversation");
     expect(types).toContain("agentSelection");
-    expect(types).toHaveLength(21);
+    expect(types).toContain("reviewPlanProject");
+    expect(types).toHaveLength(22);
     for (const type of types) expect(webviewRequestSchema.options.some((option) => option.shape.type.value === type)).toBe(true);
   });
 

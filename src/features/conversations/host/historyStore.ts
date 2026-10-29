@@ -14,6 +14,7 @@ import {
   type PlanStatus,
   type TurnRecordContext
 } from "../contracts/history.js";
+import { planProjectContextSchema, type PlanProjectContext } from "../../../shared/contracts/planProject.js";
 
 /** Whole-history key from before conversations had keys of their own. Only
  * read to migrate it; new writes never produce it. */
@@ -233,7 +234,7 @@ export class DextHistoryStore implements ConversationHistoryStore {
     });
   }
 
-  async updatePlanContext(sessionId: string, activePlanPath: string | undefined, planStatus: PlanStatus): Promise<void> {
+  async updatePlanContext(sessionId: string, activePlanPath: string | undefined, planStatus: PlanStatus, projectContext?: PlanProjectContext): Promise<void> {
     await this.mutate(async () => {
       const sessions = this.all();
       const session = sessions.find((item) => item.id === sessionId);
@@ -241,11 +242,13 @@ export class DextHistoryStore implements ConversationHistoryStore {
       if (activePlanPath) session.activePlanPath = activePlanPath;
       else delete session.activePlanPath;
       session.planStatus = planStatus;
+      if (projectContext) session.projectContext = planProjectContextSchema.parse(projectContext);
+      else if (session.projectContext?.planPath !== activePlanPath) delete session.projectContext;
       await this.persist(sessions, [sessionId]);
     });
   }
 
-  async updatePlanProgress(sessionId: string, path: string, todos: readonly AgentTodoItem[]): Promise<void> {
+  async updatePlanProgress(sessionId: string, path: string, todos: readonly AgentTodoItem[], documentHash?: string): Promise<void> {
     await this.mutate(async () => {
       const sessions = this.all();
       let session = sessions.find((item) => item.id === sessionId);
@@ -253,7 +256,7 @@ export class DextHistoryStore implements ConversationHistoryStore {
         session = { id: sessionId, createdAt: Date.now(), updatedAt: Date.now(), turns: [], activePlanPath: path, planStatus: "running" };
         sessions.push(session);
       }
-      session.planProgress = { path, todos: todos.map((item) => ({ ...item })) };
+      session.planProgress = { path, todos: todos.map((item) => ({ ...item })), ...(documentHash ? { documentHash } : {}) };
       await this.persist(sessions, [sessionId]);
     });
   }

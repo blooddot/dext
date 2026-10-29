@@ -1,5 +1,6 @@
 import type { UiFormDefinition, UiFormResult, UiInteractionState } from "./uiForm.js";
 import type { WritableAgentPermission } from "./permissions.js";
+import type { PlanProjectContext } from "./planProject.js";
 export type MethodKind = "command" | "skill";
 export type MethodSource = "builtin" | "global" | "project";
 export type BuiltinOutputKind =
@@ -154,6 +155,8 @@ export interface AskResult extends DextResultBase {
 
 /** Plan text plus host-owned state for the saved or executed plan document. */
 export interface PlanResult extends DextResultBase {
+  /** Host-owned grounding; never accepted from provider result JSON. */
+  projectContext?: PlanProjectContext;
   kind: "plan";
   text: string;
   /** Workspace-relative path of the saved plan document, set only by Plan mode. */

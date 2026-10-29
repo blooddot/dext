@@ -48,6 +48,14 @@
   "contributes": {
     "commands": [
       {
+        "command": "dext.planFromProjectObject",
+        "title": "Dext: Plan from Project Object"
+      },
+      {
+        "command": "dext.reviewPlanProject",
+        "title": "Dext: Review Plan Project Updates"
+      },
+      {
         "command": "dext.sidebar.focus",
         "title": "Dext: Focus Sidebar"
       },

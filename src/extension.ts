@@ -9,6 +9,8 @@ import { describeApiFlow } from "./features/workflow/host/apiFlow.js";
 import { redactedMcpUrl } from "./features/mcp/host/mcpRegistry.js";
 import { recordWorkflow } from "./features/workflow/domain/workflowRecorder.js";
 import { ProjectStore } from "./features/project/host/persistence/projectStore.js";
+import { ProjectPlanService } from "./features/project/host/projectPlanService.js";
+import { ProjectPlanReconciler } from "./features/project/host/projectPlanReconcile.js";
 import type { ProjectEditorProvider } from "./features/project/host/projectEditorProvider.js";
 import { VscodeProjectFileHost, effectiveProjectWorkspaceSettings } from "./features/project/host/projectPanelDataSource.js";
 import { projectToolSettingsFromDefinition } from "./features/project/contracts/projectSettings.js";
@@ -50,6 +52,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const projectHost = folder?.uri.scheme === "file" ? new VscodeProjectFileHost(folder.uri) : undefined;
   const projectStore = projectHost ? new ProjectStore(projectHost) : undefined;
   if (projectStore) {
+    application.setProjectPlanPort(new ProjectPlanService(projectStore, folder!.uri.fsPath));
+    application.setProjectReconciler(new ProjectPlanReconciler(projectStore));
+    application.configureProjectEvidence(folder!.uri.fsPath, (context.storageUri ?? context.globalStorageUri).fsPath);
     const definition = await projectStore.readDefinition();
     if (definition.paths) application.setProjectWorkspaceSettings(effectiveProjectWorkspaceSettings(definition));
     application.setStructureToolProvider(async () => {
@@ -316,6 +321,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (editors.project) await editors.project.show("overview");
       else await vscode.window.showInformationMessage("Open a local project folder to use Dext Project.");
     })),
+    vscode.commands.registerCommand("dext.planFromProjectObject", (id?: string) => reportCommandError(async () => {
+      if (!projectStore || typeof id !== "string") throw new Error("Choose a Project object to start a Plan.");
+      const native = await projectStore.readModel();
+      if (native) {
+        const node = native.nodes.find(node => node.id === id);
+        if (!node) throw new Error("Project node is missing.");
+        await sidebar.planFromProjectObject({ objectId: node.id, canonicalName: node.canonicalName }); return;
+      }
+      const snapshot = await projectStore.readLegacySnapshot();
+      const items = [...snapshot.objects, ...(snapshot.intent?.contexts ?? []), ...(snapshot.intent?.capabilities ?? []), ...(snapshot.intent?.terms ?? [])];
+      const matches = items.filter(item => item.id === id);
+      if (matches.length !== 1) throw new Error("Project reference is missing or ambiguous.");
+      await sidebar.planFromProjectObject({ objectId: matches[0]!.id, canonicalName: matches[0]!.canonicalName });
+    })),
+    vscode.commands.registerCommand("dext.reviewPlanProject", () => reportCommandError(() => sidebar.reviewPlanProject())),
     vscode.commands.registerCommand("dext.viewApis", () =>
       reportCommandError(() => editors.api?.showList() ?? Promise.resolve(undefined))
     ),

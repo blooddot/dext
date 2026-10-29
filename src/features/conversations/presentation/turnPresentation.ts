@@ -1,6 +1,17 @@
 import { formatDuration } from "../../../shared/lib/duration.js";
 import type { AgentStreamEvent, AgentTokenUsage, DextResult } from "../../../shared/contracts/types.js";
 import { uiResultText } from "./uiInteractionPresentation.js";
+import type { PlanProjectContext } from "../../../shared/contracts/planProject.js";
+
+export function presentPlanProject(context: PlanProjectContext): { label: string; detail: string } {
+  const label = context.availability === "unavailable" ? "Project unavailable"
+    : context.availability === "absent" ? "No Project model"
+    : context.reviewStatus === "stale" ? "Project basis changed"
+    : context.reviewStatus === "proposed" ? "Project updates pending"
+    : context.reviewStatus === "reconciled" ? "Project reconciled"
+    : { none: "No Project update", change: "Project update required", unknown: "Project impact unknown", conflict: "Project conflict" }[context.assessment];
+  return { label, detail: context.reason };
+}
 
 /** Shared labels and icons for the live conversation and History toolbars. */
 export const TURN_EDIT_ACTION = { icon: "edit", label: "Edit input in Dext" } as const;

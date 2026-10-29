@@ -38,6 +38,24 @@ async function harness(error?: string) {
 }
 
 describe("Plan composer after execution", () => {
+  it("does not start a writable turn when Project preflight rejects changed norms", async () => {
+    const h = createConversationHarness({ planText: planSource, preparePlanBuild: async () => { throw new Error("Project basis changed"); } });
+    h.seed([{ id: "s", createdAt: 1, updatedAt: 1, turns: [], activePlanPath: "a.plan.md", planStatus: "active" }]);
+    h.controller.activate(h.controller.session("s")!);
+    await expect(h.plans.build("a.plan.md")).rejects.toThrow("Project basis changed");
+    expect(h.executeConversation).not.toHaveBeenCalled();
+    expect(h.controller.active().planStatus).toBe("active");
+  });
+  it("invalidates old task completion when document identity changes", () => {
+    const h = createConversationHarness();
+    const session: DextHistorySession = { id: "s", createdAt: 1, updatedAt: 1, turns: [],
+      planProgress: { path: "a.plan.md", documentHash: "old", todos: [{ id: "plan-1", text: "Implement and verify", status: "completed" }] },
+      projectContext: { workspaceKey: "w", planPath: "a.plan.md", documentHash: "new", fileHash: "f", availability: "absent", assessment: "unknown", reason: "", basis: [], reviewStatus: "pending" }
+    };
+    expect(h.plans.startRun(session, planSource, true, "a.plan.md").todoProgress?.snapshot()[0]?.status).toBe("pending");
+    session.planProgress!.documentHash = "new";
+    expect(h.plans.startRun(session, planSource, true, "a.plan.md").todoProgress?.snapshot()[0]?.status).toBe("completed");
+  });
   it("resumes a persisted task checkpoint with verification instead of implementing completed work again", async () => {
     const h = await harness();
     h.session.planProgress = { path: "old.plan.md", todos: [{ id: "plan-1", text: "Implement and verify", status: "completed" }] };

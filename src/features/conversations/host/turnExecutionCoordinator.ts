@@ -211,11 +211,16 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
     let outcome: PlanExecutionOutcome | undefined = planExecution?.planOutcome;
     const recordContext = (): TurnRecordContext => ({
       ...planExecution,
+      ...(executePlan && session.projectContext ? { projectContext: session.projectContext } : {}),
       ...(selectedSkills.length ? { skills: selectedSkills } : {}),
       ...(command ? { command } : {}),
       ...(session.resource ? { resourceSource } : {})
     });
     try {
+      if (executePlan && session.projectContext && this.options.host.startPlanProject) {
+        session.projectContext = await this.options.host.startPlanProject(session.projectContext);
+        await this.options.sessions.savePlanContext(sessionId, executionPlanPath, "running", session.projectContext);
+      }
       if (todoProgress) {
         const initial = todoProgress.initial();
         this.options.events.append(sessionId, events, initial);
@@ -330,13 +335,29 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
         roundSource = planRun.prompt(taskSource, answers.join("\n"));
       }
       // The webview creates the visible row as soon as execution starts. Keep
+      if (executePlan && outcome?.status === "completed" && session.projectContext?.availability === "ready") {
+        const summary = response.executions.map(execution => "text" in execution.result ? execution.result.text : "").join("\n");
+        if (this.options.host.finishPlanProject) session.projectContext = await this.options.host.finishPlanProject(session.projectContext, summary, controller.signal);
+        else session.projectContext = { ...session.projectContext, reviewStatus: "pending", assessment: "unknown", reason: "Project final review is unavailable." };
+        if (controller.signal.aborted) throw new Error("Project review stopped by user.");
+        await this.options.sessions.savePlanContext(sessionId, executionPlanPath, "running", session.projectContext);
+        await this.options.sessions.postPlanContext();
+        if (session.projectContext.reviewStatus !== "reconciled") {
+          outcome = { ...outcome, status: "incomplete", reason: session.projectContext.reason };
+          if (planExecution) planExecution.planOutcome = outcome;
+        }
+        for (const execution of response.executions) if (execution.result.kind === "plan") {
+          execution.result.planOutcome = outcome;
+          execution.result.projectContext = session.projectContext;
+        }
+      }
       // that id when persisting the result so retry/delete actions still point
       // at the stored turn after success or cancellation.
       const turn = await this.options.history.addSuccess(source, events, response, sessionId, mode, turnId, recordContext());
       await this.options.sessions.saveProviderSessions(session);
       if (mode === "plan" && !executePlan) {
         const savedPath = response.executions.find((execution) => execution.result.kind === "plan" && execution.result.planPath)?.result;
-        if (savedPath?.kind === "plan" && savedPath.planPath) await this.options.plans.adoptGeneratedPlan(session, savedPath.planPath);
+        if (savedPath?.kind === "plan" && savedPath.planPath) await this.options.plans.adoptGeneratedPlan(session, savedPath.planPath, savedPath.projectContext);
       }
       this.options.sessions.recordTurn(sessionId, turn);
       await this.options.sessions.postConversationState();

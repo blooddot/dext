@@ -187,7 +187,7 @@ describe("sidebar panel layout", () => {
     expect(application).toMatch(/private async savePlan[\s\S]*?text: plan\.conversation, planPath/);
     expect(application).toMatch(/private async savePlan[\s\S]*?const workspaceStorage = this\.storage\.location\(\) === "workspace"/);
     expect(application).toMatch(/private async savePlan[\s\S]*?this\.storage\.directory\("plans"\)/);
-    expect(application).toMatch(/private async savePlan[\s\S]*?planPath \}/);
+    expect(application).toMatch(/private async savePlan[\s\S]*?text: plan\.conversation, planPath,/);
     expect(application).toContain("globalDiagnostics: this.globalDiagnostics");
     expect(application).not.toContain('mcpDiagnostics: this.configDiagnostics.filter((item) => item.toLowerCase().includes("mcp"))');
     // Building re-reads the plan file through the host port, so the turn runs

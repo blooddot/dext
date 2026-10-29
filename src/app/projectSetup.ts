@@ -105,6 +105,7 @@ export function setupProject(options: ProjectSetupOptions): ProjectEditorProvide
     manager: editorTabs,
     restorer: editorTabRestorer,
     copyText: (text) => vscode.env.clipboard.writeText(text),
+    planFromProjectObject: async id => { await vscode.commands.executeCommand("dext.planFromProjectObject", id); },
     dataSource: createProjectPanelDataSource({
       name: folder.name,
       root: ".",

@@ -1,3 +1,5 @@
+import type { PlanProjectContext } from "../../../shared/contracts/planProject.js";
+import { presentPlanProject } from "../presentation/turnPresentation.js";
 export type PlanStatus = "new" | "active" | "running" | "completed" | "failed";
 
 export interface PlanToolbarElements {
@@ -17,6 +19,8 @@ export interface PlanToolbarView {
   inputMode(): string;
   activePlanPath(): string | undefined;
   planStatus(): PlanStatus;
+  projectContext?(): PlanProjectContext | undefined;
+  reviewProject?(): void;
   executing(): boolean;
   stopping(): boolean;
   activeTurnId(): string | undefined;
@@ -54,6 +58,20 @@ export function renderPlanToolbar(view: PlanToolbarView): void {
     failed: "Failed"
   };
   elements.status.textContent = labels[planStatus];
+  const context = view.projectContext?.();
+  if (context && context.planPath === activePlanPath) {
+    const project = presentPlanProject(context);
+    elements.status.textContent += ` · ${project.label}`;
+    elements.status.title = project.detail;
+  } else elements.status.title = "";
+  let review = elements.toolbar.querySelector<HTMLButtonElement>("[data-plan-project-review]");
+  if (!review && view.reviewProject) {
+    review = view.document.createElement("button");
+    review.type = "button"; review.dataset.planProjectReview = ""; review.textContent = "Review Project updates";
+    review.addEventListener("click", () => view.reviewProject?.());
+    elements.toolbar.append(review);
+  }
+  if (review) { review.hidden = context?.reviewStatus !== "proposed"; review.disabled = view.executing(); }
   elements.status.hidden = !activePlanPath;
   elements.build.hidden = !activePlanPath;
   // Keep the chooser in sync with Build so the host never receives a

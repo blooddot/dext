@@ -14,6 +14,7 @@ export interface ProjectEditorProviderOptions {
   /** Main workspace root. The first version keeps a single root. */
   scope?: string;
   copyText?(text: string): PromiseLike<void> | void;
+  planFromProjectObject?(id: string): PromiseLike<void> | void;
 }
 
 export interface ProjectEditorShowResult {
@@ -190,6 +191,11 @@ export class ProjectEditorProvider {
       requestId?: unknown;
       text?: unknown;
     };
+    if (payload?.type === "projectPlan" && typeof payload.topicId === "string") {
+      if (!this.options.planFromProjectObject) throw new Error("Project Plan action is unavailable.");
+      await this.options.planFromProjectObject(payload.topicId);
+      return;
+    }
     if (payload?.type === "projectQualityCopy" && typeof payload.text === "string" && typeof payload.requestId === "number" && Number.isSafeInteger(payload.requestId)) {
       try {
         if (!this.options.copyText) throw new Error("Clipboard is unavailable.");

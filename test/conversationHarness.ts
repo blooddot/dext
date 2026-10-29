@@ -8,12 +8,13 @@ import { DextConversationPreferences } from "../src/features/conversations/host/
 import { AgentEventStream } from "../src/features/conversations/host/agentEventStream.js";
 import { ConversationController } from "../src/features/conversations/host/conversationController.js";
 import { InteractionController } from "../src/features/conversations/host/interactionController.js";
-import { PlanController } from "../src/features/conversations/host/planController.js";
+import { PlanController, type PlanFileHost } from "../src/features/conversations/host/planController.js";
 import { TurnExecutionCoordinator } from "../src/features/conversations/host/turnExecutionCoordinator.js";
 import type { ExecutionMetadata, InputExecutionResponse } from "../src/shared/contracts/types.js";
 import type { ResourceDocument, ResourceSession } from "../src/features/resources/contracts/resourceSession.js";
 import type { DextReplayEntry } from "../src/runner/dextResumeCache.js";
 import type { SkillCommandResolution } from "../src/features/workflow/contracts/skill.js";
+import type { TurnExecutionHost } from "../src/features/conversations/contracts/execution.js";
 
 /** A shared in-memory memento for controllers and preferences. */
 export class HarnessState {
@@ -40,6 +41,8 @@ export const defaultSelection: AgentSelection = {
 };
 
 export interface ConversationHarnessOptions {
+  startPlanProject?: TurnExecutionHost["startPlanProject"];
+  finishPlanProject?: TurnExecutionHost["finishPlanProject"];
   profiles?: AgentProfile[];
   sessions?: DextHistorySession[];
   layout?: Partial<ConversationLayout>;
@@ -49,6 +52,7 @@ export interface ConversationHarnessOptions {
   executeInput?: (source: string, metadata: Readonly<ExecutionMetadata>, run: { resume?: readonly DextReplayEntry[]; onCallLog?: (entries: readonly DextReplayEntry[]) => void }) => Promise<InputExecutionResponse>;
   draftResource?: (resource: ResourceSession, source: string, metadata: Readonly<ExecutionMetadata>) => Promise<{ draft: ResourceDocument; response: InputExecutionResponse }>;
   planText?: string;
+  preparePlanBuild?: PlanFileHost["preparePlanBuild"];
   trusted?: boolean;
   running?: (sessionId: string) => boolean;
   resolveSkillCommand?: (id: string, selectedSkillIds: readonly string[], args: string) => SkillCommandResolution;
@@ -111,12 +115,13 @@ export function createConversationHarness(options: ConversationHarnessOptions = 
     host: {
       isTrustedLocalWorkspace: () => options.trusted ?? true,
       readPlan: async () => options.planText ?? "",
-      knownPlan: () => true
+      knownPlan: () => true,
+      ...(options.preparePlanBuild ? { preparePlanBuild: options.preparePlanBuild } : {})
     },
     sessions: {
       active: () => controller.active(),
-      savePlanContext: (sessionId, path, status) => controller.savePlanContext(sessionId, path, status),
-      savePlanProgress: (sessionId, path, todos) => controller.savePlanProgress(sessionId, path, todos),
+      savePlanContext: (sessionId, path, status, context) => controller.savePlanContext(sessionId, path, status, context),
+      savePlanProgress: (sessionId, path, todos, hash) => controller.savePlanProgress(sessionId, path, todos, hash),
       postPlanContext: () => controller.postPlanContext()
     },
     running: (sessionId) => executionRef.coordinator?.running(sessionId) ?? false,
@@ -129,6 +134,8 @@ export function createConversationHarness(options: ConversationHarnessOptions = 
     history,
     host: {
       profiles: () => options.profiles ?? [],
+      ...(options.startPlanProject ? { startPlanProject: options.startPlanProject } : {}),
+      ...(options.finishPlanProject ? { finishPlanProject: options.finishPlanProject } : {}),
       executeConversation,
       executeInput,
       draftResource,

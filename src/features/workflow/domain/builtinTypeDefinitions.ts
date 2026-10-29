@@ -24,7 +24,8 @@ const staticTypes: readonly BuiltinTypeDefinition[] = [
   ] },
   { name: "PlanResult", description: "Text returned by Plan and its optional saved-plan state.", fields: [
     { name: "kind", type: '"plan"' }, { name: "text", type: "string" }, { name: "planPath", type: "string", optional: true },
-    { name: "executePlan", type: "boolean", optional: true }, { name: "planOutcome", type: "object", optional: true }
+    { name: "executePlan", type: "boolean", optional: true }, { name: "planOutcome", type: "object", optional: true },
+    { name: "projectContext", type: "object", optional: true, description: "Host-owned Project grounding and review status." }
   ] },
   { name: "SkillResult", description: "Text returned after executing a skill.", fields: [
     { name: "kind", type: '"skill"' }, { name: "text", type: "string" }

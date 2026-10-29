@@ -36,6 +36,7 @@ import { ConversationBrowser, ConversationViewStore, conversationSignature } fro
 import { ComposerDraftStore, type DraftAttachment } from "../features/conversations/browser/composerController.js";
 import { renderConversationTabs } from "../features/conversations/browser/conversationTabs.js";
 import { planActions, renderPlanToolbar as renderPlanToolbarView } from "../features/conversations/browser/planControls.js";
+import type { PlanProjectContext } from "../shared/contracts/planProject.js";
 import { AgentTraceView } from "../features/conversations/browser/agentTraceView.js";
 import { CLI_SPEEDS } from "../features/agents/domain/builtinCli.js";
 import type { ContextReferenceOccurrence } from "../features/workspace/domain/fileReference.js";
@@ -225,6 +226,7 @@ let inputKind: "empty" | "workflow" | "invalid" = "empty";
 type InputMode = "agent" | "ask" | "plan" | "code";
 let inputMode: InputMode = "agent";
 let activePlanPath: string | undefined;
+let planProjectContext: PlanProjectContext | undefined;
 let planStatus: "new" | "active" | "running" | "completed" | "failed" = "new";
 type AgentPermission = "workspace-write" | "full-access";
 const PERMISSION_LABEL: Record<AgentPermission, string> = {
@@ -559,6 +561,8 @@ function renderPlanToolbar(): void {
     inputMode: () => inputMode,
     activePlanPath: () => activePlanPath,
     planStatus: () => planStatus,
+    projectContext: () => planProjectContext,
+    reviewProject: () => vscode.postMessage({ type: "reviewPlanProject" }),
     executing: () => executing,
     stopping: () => stopping,
     activeTurnId: () => activeTurnId,
@@ -2832,6 +2836,7 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     if (lastSidebarState) renderAgentControls({ ...lastSidebarState, agentSelection: message.selection });
     activePlanPath = message.planPath;
     planStatus = message.planStatus;
+    planProjectContext = message.projectContext;
     renderPlanToolbar();
   }
   if (message.type === "conversations") {
@@ -2846,12 +2851,14 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     if (message.planStatus) {
       activePlanPath = message.planPath;
       planStatus = message.planStatus;
+      planProjectContext = message.projectContext;
       renderPlanToolbar();
     }
   }
   if (message.type === "planContext") {
     activePlanPath = message.path;
     planStatus = message.status;
+    planProjectContext = message.projectContext;
     renderPlanToolbar();
   }
   if (message.type === "resourceContext") {

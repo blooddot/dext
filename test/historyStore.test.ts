@@ -1,6 +1,7 @@
 import { uiCallForm } from "../src/shared/contracts/uiForm.js";
 import { describe, expect, it } from "vitest";
 import { DextHistoryStore } from "../src/features/conversations/host/historyStore.js";
+import type { PlanProjectContext } from "../src/shared/contracts/planProject.js";
 
 class MemoryState {
   private readonly values = new Map<string, unknown>();
@@ -32,6 +33,17 @@ class RecordingState extends MemoryState {
 }
 
 describe("DextHistoryStore", () => {
+  it("restores host Project basis and hash-bound progress and drops it when selecting another plan", async () => {
+    const state = new MemoryState(); const store = new DextHistoryStore(state as never);
+    const context: PlanProjectContext = { workspaceKey: "workspace", planPath: "a.plan.md", documentHash: "semantic", fileHash: "bytes", availability: "ready", assessment: "unknown", reason: "Review required", basis: [], reviewStatus: "pending" };
+    await store.updatePlanProgress("s", "a.plan.md", [], "semantic");
+    await store.updatePlanContext("s", "a.plan.md", "active", context);
+    const restored = new DextHistoryStore(state as never).list()[0]!;
+    expect(restored.projectContext).toEqual(context);
+    expect(restored.planProgress?.documentHash).toBe("semantic");
+    await store.updatePlanContext("s", "b.plan.md", "active");
+    expect(store.list()[0]?.projectContext).toBeUndefined();
+  });
   it("persists a round checkpoint before a final turn exists, without losing native session bindings", async () => {
     const state = new MemoryState(); const store = new DextHistoryStore(state as never);
     const todos = [{ id: "plan-1", text: "Implement", status: "in_progress" as const }];

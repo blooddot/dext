@@ -123,6 +123,7 @@ declare module "dext" {
     planPath?: string;
     executePlan?: boolean;
     planOutcome?: Record<string, unknown>;
+    projectContext?: Record<string, unknown>; // Host-owned Project grounding and review status.
   }
 
   /** A zero-based position in a text document. */

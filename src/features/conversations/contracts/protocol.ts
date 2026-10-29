@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { PlanProjectContext } from "../../../shared/contracts/planProject.js";
 import type { AgentStreamEvent, InputExecutionResponse, PlanExecutionOutcome } from "../../../shared/contracts/types.js";
 import { UI_LIMITS, uiFormResultSchema } from "../../../shared/contracts/uiForm.js";
 import type { AgentSelection } from "../../agents/contracts/agent.js";
@@ -10,6 +11,7 @@ import type { DextHistorySession, PlanStatus } from "./history.js";
  * conversation change never edits the host's whole message union. */
 
 const conversationSchemaList = [
+  z.object({ type: z.literal("reviewPlanProject") }),
   z.object({
     type: z.literal("executeInput"),
     mode: z.enum(["agent", "ask", "plan", "code"]),
@@ -97,11 +99,12 @@ export type ConversationWebviewResponse =
     selection: AgentSelection;
     planPath?: string;
     planStatus: PlanStatus;
+    projectContext?: PlanProjectContext;
     resource?: ResourceSession;
     switchId?: number;
     hostInitiated?: true;
   }
-  | { type: "planContext"; path?: string; status: PlanStatus }
+  | { type: "planContext"; path?: string; status: PlanStatus; projectContext?: PlanProjectContext }
   | { type: "resourceContext"; sessionId: string; resource: ResourceSession; busy?: boolean }
   | {
     type: "conversations";
@@ -112,6 +115,7 @@ export type ConversationWebviewResponse =
     selection?: AgentSelection;
     planPath?: string;
     planStatus?: PlanStatus;
+    projectContext?: PlanProjectContext;
     resource?: ResourceSession;
     switchId?: number;
     hostInitiated?: true;

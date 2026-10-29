@@ -1,4 +1,9 @@
 import type { DextResult, ExecutionMetadata, ResolvedInvocation, RuntimeResponse } from "../../../shared/contracts/types.js";
+import type { ProjectPlanPort } from "../../project/contracts/projectPlan.js";
+
+export interface ProjectAwareRuntime {
+  setProjectPlanPort(port: ProjectPlanPort | undefined): void;
+}
 
 /** A deterministic built-in handler the runtime dispatches outside a provider. */
 export type DeterministicHandler = (

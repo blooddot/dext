@@ -2,8 +2,28 @@ import { describe, expect, it } from "vitest";
 import type { AgentStreamEvent, InputExecutionResponse } from "../src/shared/contracts/types.js";
 import type { DextHistorySession } from "../src/features/conversations/contracts/history.js";
 import { createConversationHarness } from "./conversationHarness.js";
+import type { PlanProjectContext } from "../src/shared/contracts/planProject.js";
 
 describe("Plan execution task initialization", () => {
+  it.each(["none", "change", "unknown", "conflict"] as const)("gates completion on actual Project impact %s", async assessment => {
+    const context: PlanProjectContext = { workspaceKey: "w", planPath: "a.plan.md", documentHash: "h", fileHash: "f", availability: "ready", assessment: "none", reason: "anticipated none", basis: [], reviewStatus: "current" };
+    let captured = false;
+    const h = createConversationHarness({
+      startPlanProject: async context => { captured = true; return { ...context, evidenceId: "saved-baseline" }; },
+      finishPlanProject: async context => ({ ...context, assessment, reason: "actual impact", reviewStatus: assessment === "none" ? "reconciled" : "pending" }),
+      executeConversation: async () => {
+        expect(captured).toBe(true);
+        return { kind: "workflow", executions: [{ invocation: { kind: "invocation", method: "plan", arguments: [], source: "chat" }, method: { id: "plan", title: "Plan", kind: "command", source: "builtin" }, durationMs: 1,
+          result: { kind: "plan", text: '<!-- dext-todo: {"updates":[{"id":"plan-1","status":"completed"}],"verification":"passed"} -->' } }] };
+      }
+    });
+    h.seed([{ id: "s", createdAt: 1, updatedAt: 1, turns: [], activePlanPath: "a.plan.md", planStatus: "running", projectContext: context }]);
+    const session = h.controller.session("s")!;
+    await h.coordinator.execute(session, "plan", "## Tasks\n1. [ ] Work", { executePlan: true });
+    expect(session.turns[0]?.planOutcome?.status).toBe(assessment === "none" ? "completed" : "incomplete");
+    expect(session.activePlanPath).toBe(assessment === "none" ? undefined : "a.plan.md");
+    expect(session.turns[0]?.projectContext?.evidenceId).toBe("saved-baseline");
+  });
   it("publishes task rows before calling the agent and saves explicit progress without protocol comments", async () => {
     const source = "# Old plan\n## Tasks\n1. [ ] Inspect\n2. [ ] Verify";
     const initial: DextHistorySession = {

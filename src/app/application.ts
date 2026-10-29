@@ -3,6 +3,12 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { isAbsolute, join, relative as relativePath, resolve, sep } from "node:path";
 import * as vscode from "vscode";
+import type { ProjectPlanPort } from "../features/project/contracts/projectPlan.js";
+import { z } from "zod";
+import { projectImpactSchema, projectReviewReportSchema, type PlanProjectContext } from "../shared/contracts/planProject.js";
+import { ProjectChangeEvidence } from "../features/project/host/projectChangeEvidence.js";
+import type { ProjectPlanReconciler } from "../features/project/host/projectPlanReconcile.js";
+import { planSemanticContent } from "../features/project/knowledge/projectPlan.js";
 import type { AgentAssertionSnapshot } from "../features/agents/host/agentAssertions.js";
 import { DefaultAgentRunner } from "../features/agents/host/agentRouter.js";
 import { piDiscoveryIdentity } from "../features/agents/host/piAgentRunner.js";
@@ -347,6 +353,115 @@ export class DextApplication {
     this.structureToolProvider = provider;
   }
 
+
+  setProjectPlanPort(port: ProjectPlanPort | undefined): void {
+    this.projectPlanPort = port;
+    this.runtime.setProjectPlanPort(port);
+  }
+
+  private projectPlanPort: ProjectPlanPort | undefined;
+  private projectChangeEvidence: ProjectChangeEvidence | undefined;
+  private projectReconciler: ProjectPlanReconciler | undefined;
+
+  setProjectReconciler(reconciler: ProjectPlanReconciler): void { this.projectReconciler = reconciler; }
+
+  async reconcilePlanProject(context: PlanProjectContext, decision: "accept" | "reject", save: (context: PlanProjectContext) => Promise<void>): Promise<PlanProjectContext> {
+    if (!this.workspaceTrusted || !this.workspaceUri || !this.projectReconciler || !this.projectPlanPort) throw new Error("Project reconciliation requires a trusted workspace.");
+    if (!context.report || context.reviewStatus !== "proposed") throw new Error("No pending Project proposal.");
+    const read = await this.projectPlanPort.readPlanContext({ workspaceKey: context.workspaceKey, input: "" });
+    if (read.availability !== "ready") throw new Error("Project workspace is unavailable or does not match the proposal.");
+    if (decision === "accept" && (!context.report.projectDelta.some(delta => delta.op !== "none") || context.report.checks.some(check => check.status !== "passed"))) throw new Error("Project proposal requires complete checks and explicit updates before acceptance.");
+    const uri = this.planUri(context.planPath);
+    if (!uri) throw new Error("Plan is unavailable.");
+    const document = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
+    if (createHash("sha256").update(planSemanticContent(document)).digest("hex") !== context.documentHash) throw new Error("Plan changed; review the proposal again.");
+    const receipts = await this.projectReconciler.reconcile({
+      deltas: context.report.projectDelta, authorizedTargets: context.report.projectDelta.map(delta => delta.target), decision,
+      receipts: context.receipts ?? [], saveReceipts: async receipts => { context = { ...context, receipts }; await save(context); }
+    });
+    const next: PlanProjectContext = { ...context, receipts, reviewStatus: decision === "accept" ? "reconciled" : "pending",
+      reason: decision === "accept" ? "Reviewed Project updates applied." : "Project proposal rejected; a revised assessment is required." };
+    await save(next);
+    return next;
+  }
+
+  configureProjectEvidence(workspace: string, storage: string): void {
+    this.projectChangeEvidence = new ProjectChangeEvidence(workspace, storage);
+  }
+
+  async startPlanProject(context: PlanProjectContext): Promise<PlanProjectContext> {
+    if (context.availability !== "ready") return context;
+    const uri = this.planUri(context.planPath);
+    if (!uri || !this.projectPlanPort) throw new Error("Bound Plan or Project is unavailable.");
+    const document = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
+    const validation = await this.projectPlanPort.validatePlan(context, document);
+    if (!validation.valid) throw new Error(validation.diagnostics.join(" "));
+    if (!this.projectChangeEvidence) throw new Error("Project change evidence storage is unavailable.");
+    if (context.evidenceId) {
+      await this.projectChangeEvidence.compare(context.evidenceId);
+      return context;
+    }
+    const baseline = await this.projectChangeEvidence.capture();
+    return { ...context, evidenceId: baseline.id, reviewStatus: "pending" };
+  }
+
+  async finishPlanProject(context: PlanProjectContext, summary: string, signal: AbortSignal): Promise<PlanProjectContext> {
+    if (context.availability !== "ready") return context;
+    if (!context.evidenceId || !this.projectChangeEvidence || !this.projectPlanPort) return { ...context, assessment: "unknown", reviewStatus: "pending", reason: "Project change evidence is missing." };
+    const changes = await this.projectChangeEvidence.compare(context.evidenceId);
+    const uri = this.planUri(context.planPath);
+    if (!uri) throw new Error("Plan document is unavailable for final Project review.");
+    const document = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
+    const validation = await this.projectPlanPort.validatePlan(context, document);
+    if (!validation.valid) return { ...context, assessment: "conflict", reviewStatus: "stale", reason: validation.diagnostics.join(" ") };
+    if (!changes.complete || JSON.stringify(changes).length > 120_000) return { ...context, assessment: "unknown", reviewStatus: "pending", reason: [...changes.diagnostics, "Actual change coverage is incomplete; manual review is required."].join(" ") };
+    const read = await this.projectPlanPort.readPlanContext({ workspaceKey: context.workspaceKey, input: document, paths: changes.changes.map(change => change.path) });
+    const prompt = [
+      "Review actual implementation changes against Project norms, read-only. Do not modify any file.",
+      "Check responsibilities, interfaces, behavior, dependencies, invariants and decisions even if the plan anticipated none. Changes are host-observed content differences; they do not prove authorship. Concurrent/unexplained edits require unknown or manual review.",
+      "Return JSON matching this schema. Checks you perform use agent_reported, never host_observed. Deltas are proposals, not authorization. Do not declare completion for unresolved work.",
+      "Use supplied writeTargets for target/id/beforeHash. Legacy targets replace one complete JSON document. Native targets are node or relation; body changes replace the owning node. Never invent hashes or directly write Project during this review.",
+      JSON.stringify(z.toJSONSchema(projectReviewReportSchema)), JSON.stringify({ plan: document, project: read, changes, agentSummary: summary.slice(0, 24_000) })
+    ].join("\n\n");
+    const answer = await this.runtime.executeConversation("ask", prompt, { signal });
+    if (answer.result.kind !== "ask") throw new Error("Project review returned an unexpected result.");
+    const report = projectReviewReportSchema.parse(JSON.parse(answer.result.text.replace(/^```(?:json)?\s*|\s*```$/g, "").trim()));
+    if (report.checks.some(check => check.source === "host_observed" || (check.source === "manual" && check.status === "passed"))) throw new Error("The Agent cannot certify host-observed or manual checks.");
+    const known = new Set(read.basis.map(item => item.id));
+    if (report.refs.some(id => !known.has(id)) || read.diagnostics.length) return { ...context, assessment: "unknown", reviewStatus: "pending", reason: "Final review references are missing or context coverage is incomplete." };
+    report.checks.unshift({ source: "host_observed", description: `Compared ${changes.changes.length} content changes against the saved execution baseline.`, status: "passed" });
+    return { ...context, assessment: report.assessment, reason: report.reason, report,
+      reviewStatus: report.assessment === "none" && report.checks.every(check => check.status === "passed") ? "reconciled" : report.assessment === "change" ? "proposed" : "pending" };
+  }
+
+  async preparePlanBuild(path: string, document: string, previous?: PlanProjectContext): Promise<PlanProjectContext | undefined> {
+    const port = this.projectPlanPort;
+    if (!port || !this.workspaceUri) {
+      if (previous?.availability === "ready") throw new Error("Bound Project is unavailable; restore its workspace before building.");
+      return undefined;
+    }
+    if (previous) {
+      const validation = await port.validatePlan(previous, document);
+      if (!validation.valid) throw new Error(validation.diagnostics.join(" "));
+    }
+    const read = await port.readPlanContext({ workspaceKey: this.workspaceUri.fsPath, input: document });
+    if (previous?.availability === "ready" && read.availability !== "ready") throw new Error("Bound Project is no longer readable.");
+    if (read.availability !== "ready") return port.bindPlan(read, path, document);
+    if (previous && previous.assessment !== "unknown" && previous.assessment !== "conflict") return { ...previous, fileHash: createHash("sha256").update(document).digest("hex") };
+    const prompt = [
+      "Evaluate this existing Plan against the Project norms, read-only. Do not write files or rewrite the plan.",
+      "Assess responsibilities, interfaces, behavior, dependencies, invariants and decisions. Missing or partial evidence means unknown; contradictions mean conflict.",
+      "Return assessment, reason, refs and coverage. This assessment grants no write authorization.",
+      JSON.stringify(read), document, JSON.stringify(z.toJSONSchema(projectImpactSchema))
+    ].join("\n\n");
+    // Ask is a read-only transport shared by every supported provider, including Pi.
+    const response = await this.runtime.executeConversation("ask", prompt);
+    if (response.result.kind !== "ask") throw new Error("Project assessment returned an unexpected result.");
+    const context = port.bindPlan(read, path, document, projectImpactSchema.parse(JSON.parse(response.result.text.replace(/^```(?:json)?\s*|\s*```$/g, "").trim())));
+    if (context.assessment === "unknown" || context.assessment === "conflict") throw new Error(`Project review required: ${context.reason}`);
+    return context;
+  }
+
   /** Called by the sidebar when its Webview exists. A cached MCP image URL is
    * only usable in a Webview whose localResourceRoots include global storage. */
   setMcpImageWebview(webview: vscode.Webview | undefined): void {
@@ -358,7 +473,6 @@ export class DextApplication {
     const tool = await this.structureToolProvider();
     if (!tool || !existsSync(tool.cachePath)) return [];
     return [{
-      name: "dext_structure",
       command: process.execPath,
       args: [tool.serverPath, "--cache", tool.cachePath],
       env: process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {}
@@ -1779,11 +1893,13 @@ export class DextApplication {
     metadata: Readonly<ExecutionMetadata> = {}
   ): Promise<InputExecutionResponse> {
     let prompt = this.storage.attachmentPrompt(input);
+    let expectedPlanHash: string | undefined;
     if (mode === "plan" && metadata.planPath && !metadata.executePlan) {
       const target = this.planUri(metadata.planPath);
       if (!target) throw new Error(`Plan '${metadata.planPath}' is no longer available.`);
       try { await vscode.workspace.fs.stat(target); }
       catch { throw new Error(`Plan '${metadata.planPath}' is no longer available.`); }
+      expectedPlanHash = createHash("sha256").update(await vscode.workspace.fs.readFile(target)).digest("hex");
       prompt = [
         "Revise the selected plan document according to the user's request.",
         "Keep the plan complete and internally consistent after applying the requested changes.",
@@ -1796,7 +1912,7 @@ export class DextApplication {
     }
     const response = await this.runtime.executeConversation(mode, prompt, metadata);
     const saved = mode === "plan" && !metadata.executePlan
-      ? await this.savePlan(input, response, metadata.planPath)
+      ? await this.savePlan(input, response, metadata.planPath, expectedPlanHash)
       : response;
     return {
       kind: "workflow",
@@ -1808,7 +1924,7 @@ export class DextApplication {
   /** A plan is only useful if it survives the turn. The model's document goes
    * to the configured storage location, while its concise explanation remains
    * in the chat beside the file reference. */
-  private async savePlan(input: string, response: InputExecutionResponse["executions"][number], existingPath?: string): Promise<InputExecutionResponse["executions"][number]> {
+  private async savePlan(input: string, response: InputExecutionResponse["executions"][number], existingPath?: string, expectedFileHash?: string): Promise<InputExecutionResponse["executions"][number]> {
     const result = response.result;
     if (result.kind !== "plan" || !result.text.trim()) return response;
     const plan = splitPlanResponse(result.text);
@@ -1825,10 +1941,23 @@ export class DextApplication {
     const target = existingPath
       ? this.planUri(existingPath) ?? vscode.Uri.joinPath(directory, ...planPathSegments(existingPath))
       : vscode.Uri.joinPath(directory, name!);
+    if (result.projectContext && this.projectPlanPort) {
+      const validation = await this.projectPlanPort.validatePlan(result.projectContext, plan.document);
+      if (!validation.valid) throw new Error(validation.diagnostics.join(" "));
+    }
     await vscode.workspace.fs.createDirectory(directory);
+    if (existingPath) {
+      const actualHash = createHash("sha256").update(await vscode.workspace.fs.readFile(target)).digest("hex");
+      if (!expectedFileHash || actualHash !== expectedFileHash) throw new Error("Plan changed while generating its revision; external edits were preserved. Retry the revision against the current file.");
+    }
     await vscode.workspace.fs.writeFile(target, new TextEncoder().encode(`${plan.document}\n`));
     const planPath = existingPath ?? (workspaceStorage ? [...segments, name!].join("/") : this.storage.reference("plans", name!));
-    return { ...response, result: { ...result, text: plan.conversation, planPath } };
+    const projectContext = result.projectContext ? {
+      ...result.projectContext, planPath,
+      documentHash: createHash("sha256").update(planSemanticContent(plan.document)).digest("hex"),
+      fileHash: createHash("sha256").update(`${plan.document}\n`).digest("hex")
+    } : undefined;
+    return { ...response, result: { ...result, text: plan.conversation, planPath, ...(projectContext ? { projectContext } : {}) } };
   }
 
   planUri(reference: string): vscode.Uri | undefined {

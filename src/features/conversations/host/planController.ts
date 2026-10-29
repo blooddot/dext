@@ -2,6 +2,7 @@ import { PlanExecution, resumePlanTodos } from "../domain/planExecution.js";
 import { planTodoItems, planTodoInstruction, type PlanTodoProgress } from "../domain/planTodoProgress.js";
 import type { AgentTodoItem, PlanExecutionOutcome } from "../../../shared/contracts/types.js";
 import type { DextHistorySession, PlanStatus } from "../contracts/history.js";
+import type { PlanProjectContext } from "../../../shared/contracts/planProject.js";
 
 /** The host capabilities plan work needs. Reading the actual file is a port so
  * the controller never touches `vscode.workspace.fs` directly. */
@@ -11,12 +12,13 @@ export interface PlanFileHost {
   readPlan: (planPath: string) => Promise<string>;
   /** True when the reference names a Dext plan this host can serve. */
   knownPlan: (reference: string) => boolean;
+  preparePlanBuild?: (path: string, document: string, previous?: PlanProjectContext) => Promise<PlanProjectContext | undefined>;
 }
 
 export interface PlanSessionPort {
   active: () => DextHistorySession;
-  savePlanContext: (sessionId: string, path: string | undefined, status: PlanStatus) => Promise<void>;
-  savePlanProgress: (sessionId: string, path: string, todos: readonly AgentTodoItem[]) => Promise<void>;
+  savePlanContext: (sessionId: string, path: string | undefined, status: PlanStatus, projectContext?: PlanProjectContext) => Promise<void>;
+  savePlanProgress: (sessionId: string, path: string, todos: readonly AgentTodoItem[], documentHash?: string) => Promise<void>;
   postPlanContext: () => Promise<void>;
 }
 
@@ -47,7 +49,8 @@ export class PlanController {
   startRun(session: DextHistorySession, source: string, executePlan: boolean, executionPlanPath: string | undefined): PlanRunContext {
     if (!executePlan) return {};
     const previousPlan = [...session.turns].reverse().find((turn) => turn.executePlan && turn.planPath === executionPlanPath);
-    const previousTodos = session.planProgress && session.planProgress.path === executionPlanPath
+    const sameDocument = !session.projectContext || session.planProgress?.documentHash === session.projectContext.documentHash;
+    const previousTodos = !sameDocument ? [] : session.planProgress && session.planProgress.path === executionPlanPath
       ? session.planProgress.todos
       : previousPlan ? [...previousPlan.process].reverse().find((event) => event.phase === "todo")?.todos ?? [] : [];
     const planRun = new PlanExecution(resumePlanTodos(planTodoItems(source), previousTodos));
@@ -74,9 +77,14 @@ export class PlanController {
     }
     if (!text.trim()) throw new Error(`Plan '${planPath}' is empty.`);
     const session = this.options.sessions.active();
+    if (this.options.running(session.id)) throw new Error("Stop the running turn before building a plan.");
+    const previous = session.projectContext?.planPath === planPath ? session.projectContext : undefined;
+    const context = await this.options.host.preparePlanBuild?.(planPath, text, previous);
+    if (this.options.sessions.active().id !== session.id || this.options.running(session.id)) throw new Error("Conversation changed while checking the plan; retry Build.");
+    if (context) session.projectContext = context;
     session.activePlanPath = planPath;
     session.planStatus = "running";
-    await this.options.sessions.savePlanContext(session.id, planPath, "running");
+    await this.options.sessions.savePlanContext(session.id, planPath, "running", context);
     await this.options.sessions.postPlanContext();
     await this.options.startTurn("plan", [
       `Implement the plan in ${planPath} exactly as written. Do not edit the plan file itself.`,
@@ -88,16 +96,18 @@ export class PlanController {
 
   /** The plan the model wrote becomes the conversation's active target as soon
    * as the turn is stored. */
-  async adoptGeneratedPlan(session: DextHistorySession, planPath: string): Promise<void> {
+  async adoptGeneratedPlan(session: DextHistorySession, planPath: string, projectContext?: PlanProjectContext): Promise<void> {
     session.activePlanPath = planPath;
     session.planStatus = "active";
-    await this.options.sessions.savePlanContext(session.id, planPath, "active");
+    if (projectContext) session.projectContext = projectContext;
+    await this.options.sessions.savePlanContext(session.id, planPath, "active", projectContext);
     await this.options.sessions.postPlanContext();
   }
 
   async saveProgress(session: DextHistorySession, executionPlanPath: string, todos: readonly AgentTodoItem[]): Promise<void> {
-    session.planProgress = { path: executionPlanPath, todos: [...todos] };
-    await this.options.sessions.savePlanProgress(session.id, executionPlanPath, todos);
+    const documentHash = session.projectContext?.documentHash;
+    session.planProgress = { path: executionPlanPath, todos: [...todos], ...(documentHash ? { documentHash } : {}) };
+    await this.options.sessions.savePlanProgress(session.id, executionPlanPath, todos, documentHash);
   }
 
   /** A stopped plan keeps its progress; a completed one clears the target. */
@@ -107,11 +117,12 @@ export class PlanController {
   ): Promise<void> {
     if (session.planStatus !== "running") return;
     if (options.failed) session.planStatus = options.cancelled ? "active" : "failed";
-    else if (options.outcome?.status === "completed") {
+    else if (options.outcome?.status === "completed" && (session.projectContext?.availability !== "ready" || session.projectContext.reviewStatus === "reconciled")) {
       delete session.activePlanPath;
       session.planStatus = "new";
     } else session.planStatus = "active";
-    await this.options.sessions.savePlanContext(session.id, session.activePlanPath, session.planStatus);
+    // Completion clears the active target, but keeps the final assessment and receipts auditable.
+    await this.options.sessions.savePlanContext(session.id, session.activePlanPath, session.planStatus, session.projectContext);
     await this.options.sessions.postPlanContext();
   }
 

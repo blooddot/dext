@@ -92,5 +92,10 @@ await runLabChecks(async ({ evaluate, settle, send, artifacts }) => {
   await evaluate(`document.querySelector('.image-attachment-remove').click()`);
   await settle();
   assert.equal((await bounds()).input.top, before.input.top, 'removing final attachment restores Input height');
-  console.log('PASS Plan attachments grow upward, footer alignment, short/narrow viewports, removal');
+  await evaluate(`host({type:'planContext',path:'a.plan.md',status:'active',projectContext:{workspaceKey:'test',planPath:'a.plan.md',documentHash:'h',fileHash:'f',availability:'ready',assessment:'change',reason:'Interface changed',basis:[],reviewStatus:'proposed'}})`);
+  assert.match(await evaluate(`document.querySelector('#plan-status').textContent`), /Project updates pending/);
+  assert.equal(await evaluate(`document.querySelector('[data-plan-project-review]').hidden`), false);
+  await evaluate(`host({type:'planContext',status:'new'})`);
+  assert.equal(await evaluate(`document.querySelector('[data-plan-project-review]').hidden`), true);
+  console.log('PASS Plan attachments, layout, and Project review state');
 }, false);
