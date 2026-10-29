@@ -32,6 +32,12 @@ describe("native Project bootstrap", () => {
     await expect(bootstrapProject({ ...f.options, signal: controller.signal })).rejects.toThrow();
     expect(f.files.has(".dext/project/model.json")).toBe(false);
   });
+  it("accepts Markdown body strings from the AI as inline knowledge", async () => {
+    const f = fixture([["src/app.ts", "export const a = 1"]]);
+    const generate = vi.fn(async () => ({ text: JSON.stringify({ schemaVersion: 1, revision: 0, updatedAt: 0, relations: [], nodes: [{ id: "api", kind: "contract", title: "API", canonicalName: "API", body: "# Contract\n\nMoney moves once." }] }) }));
+    const initialized = await bootstrapProject({ ...f.options, provider: { id: "fixture", generate } });
+    expect(initialized.model?.nodes).toEqual([expect.objectContaining({ id: "api", review: "draft", freshness: "needs_verification", body: { kind: "inline", text: "# Contract\n\nMoney moves once." } })]);
+  });
   it("resumes a saved candidate without calling AI twice and invalidates changed sources", async () => {
     const f = fixture([["src/app.ts", "export const a = 1"]]);
     const candidate = projectModelSchema.parse({ schemaVersion: 1, revision: 0, updatedAt: 0, nodes: [{ id: "api", kind: "contract", title: "API", canonicalName: "API", body: { kind: "inline", text: "Contract" } }], relations: [] });

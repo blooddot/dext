@@ -19,6 +19,13 @@ export function detectProjectBootstrap(input: { model?: ProjectModel; legacy: bo
   return "empty";
 }
 
+/** Models send node bodies as Markdown strings; the schema only accepts the inline owner. */
+function inlineBodies<T>(value: T): T {
+  const nodes = (value as { nodes?: Array<{ body?: unknown }> } | null)?.nodes;
+  for (const node of Array.isArray(nodes) ? nodes : []) if (typeof node.body === "string") node.body = { kind: "inline", text: node.body };
+  return value;
+}
+
 const checkpointSchema = z.object({ version: z.literal(1), fingerprint: z.string(), route: z.enum(["existing", "legacy", "documents", "code", "empty"]), stage: z.enum(["candidate", "committed"]), candidate: projectModelSchema }).strict();
 export const PROJECT_BOOTSTRAP_CHECKPOINT_PATH = ".dext/project/bootstrap.checkpoint.json";
 
@@ -73,7 +80,7 @@ export async function bootstrapProject(options: {
         "Do not create Plan nodes. Adopt durable documents in place rather than copying them. Return a JSON object matching the supplied schema. Evidence outside this bounded package is unknown.",
         JSON.stringify({ existing: model, sources: [...sources], omitted: options.paths.length - sources.size })
       ].join("\n\n"), responseSchema: z.toJSONSchema(projectModelSchema), inputHash: fingerprint, promptVersion: "project-bootstrap-1", attempt: 1, maxOutputTokens: 32_000 }, signal);
-      candidate = parseProjectModel(JSON.parse(response.text.replace(/^```(?:json)?\s*|\s*```$/g, "").trim()));
+      candidate = parseProjectModel(inlineBodies(JSON.parse(response.text.replace(/^```(?:json)?\s*|\s*```$/g, "").trim())));
       candidate.nodes = candidate.nodes.map(node => ({ ...node, review: "draft", freshness: "needs_verification" }));
       candidate.relations = candidate.relations.map(edge => ({ ...edge, review: "draft", freshness: "needs_verification" }));
     }
