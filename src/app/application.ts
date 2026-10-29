@@ -14,7 +14,7 @@ import { DefaultAgentRunner } from "../features/agents/host/agentRouter.js";
 import { piDiscoveryIdentity } from "../features/agents/host/piAgentRunner.js";
 import { runSingleTurnCli } from "../features/agents/host/agentRunner.js";
 import { DEFAULT_AGENT_IDLE_TIMEOUT_MS, DEFAULT_AGENT_TIMEOUT_MS, MAX_AGENT_TIMEOUT_MS } from "../features/agents/domain/agentTimeout.js";
-import { resolveOutputLanguage } from "../features/agents/domain/outputLanguage.js";
+import { resolveOutputLanguage, type ResolvedOutputLanguage } from "../features/agents/domain/outputLanguage.js";
 import { REPAIR_OUTPUT_FIELD } from "../features/agents/domain/axAdapter.js";
 import { BUILTIN_METHODS } from "../features/workflow/domain/builtins.js";
 import { describeApiFlowIssue, type ApiFlow, type ApiFlowIssue } from "../features/workflow/contracts/apiFlow.js";
@@ -314,9 +314,11 @@ export class DextApplication {
   private agentTimeoutMs = DEFAULT_AGENT_TIMEOUT_MS;
   private agentIdleTimeoutMs = DEFAULT_AGENT_IDLE_TIMEOUT_MS;
   private readonly mcpSecrets: McpAccessTokenStore | undefined;
+  /** Kept beside the runtime copy so Project AI prompts follow the same setting. */
+  private resolvedOutputLanguage: ResolvedOutputLanguage | undefined;
   readonly storage: DextStorage;
   projectAiProvider(): ProjectAiProvider {
-    return createProjectAiProvider({ runtime: this.runtime, listProfiles: () => this.agents.list(), profiles: () => this.agentProfiles(), selection: () => this.agents.currentSelection() });
+    return createProjectAiProvider({ runtime: this.runtime, listProfiles: () => this.agents.list(), profiles: () => this.agentProfiles(), selection: () => this.agents.currentSelection(), language: () => this.resolvedOutputLanguage });
   }
 
 
@@ -954,10 +956,11 @@ export class DextApplication {
    * instruction. */
   applyOutputLanguageSettings(): void {
     const configuration = vscode.workspace.getConfiguration("dext");
-    this.runtime.setOutputLanguage(resolveOutputLanguage(
+    this.resolvedOutputLanguage = resolveOutputLanguage(
       configuration.get<unknown>("outputLanguage", "auto"),
       vscode.env.language
-    ));
+    );
+    this.runtime.setOutputLanguage(this.resolvedOutputLanguage);
   }
 
   state(): SidebarState {

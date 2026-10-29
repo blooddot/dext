@@ -41,6 +41,7 @@ function projectRequest(overrides: Partial<ProjectAiRequest> = {}): ProjectAiReq
  * rather than constructing a whole extension host. */
 function build(options: {
   provider: Provider;
+  language?: string;
   structured?: (input: string, schema: object, metadata: Metadata) => Promise<{ text: string; model?: string }>;
   conversation?: (mode: string, prompt: string, metadata: Metadata) => Promise<unknown>;
 }) {
@@ -52,7 +53,8 @@ function build(options: {
       list: () => [{ id: options.provider, label: "Selected", provider: options.provider, command: "cmd", models: [], defaults: { model: "default-model" } }],
       currentSelection: () => ({ profileId: options.provider, model: "selected-model" })
     },
-    runtime: { executeStructuredJson, executeConversation }
+    runtime: { executeStructuredJson, executeConversation },
+    ...(options.language ? { resolvedOutputLanguage: options.language } : {})
   });
   return { provider: application.projectAiProvider(), executeStructuredJson, executeConversation };
 }
@@ -138,8 +140,7 @@ describe("Project AI transport routing", () => {
     expect(events).toEqual([{ phase: "status", text: "working", id: "s1", title: "Working" }]);
   });
 
-  it("records the model the Project panel would show", async () => {
-    const { provider } = build({ provider: "codex" });
+  it("records the model the Project panel would show", async () => {    const { provider } = build({ provider: "codex" });
 
     // An explicitly selected CLI keeps its own default model rather than
     // inheriting the active conversation's override.
@@ -150,6 +151,17 @@ describe("Project AI transport routing", () => {
 });
 
 describe("Project AI provider contract", () => {
+  it("writes Project knowledge in the interaction language of the conversation setting", async () => {
+    const native = build({ provider: "codex", language: "zh-CN" });
+    await native.provider.generate(projectRequest(), new AbortController().signal);
+    const conversation = build({ provider: "pi", language: "zh-CN" });
+    await conversation.provider.generate(projectRequest(), new AbortController().signal);
+    // Both transports carry the instruction: the schema path is the default one.
+    for (const prompt of [native.executeStructuredJson.mock.calls[0]?.[0], conversation.executeConversation.mock.calls[0]?.[1]]) {
+      expect(prompt).toContain("Simplified Chinese (zh-CN)");
+      expect(prompt).toContain("Project knowledge titles and bodies");
+    }
+  });
   it("exposes one provider id for the generation metadata", () => {
     const { provider } = build({ provider: "codex" });
     const typed: ProjectAiProvider = provider;

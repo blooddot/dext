@@ -1,12 +1,15 @@
 import type { WorkflowRuntime } from "../../../workflow/contracts/runtime.js";
 import type { AgentStreamEvent } from "../../../../shared/contracts/types.js";
 import type { AgentProfile, AgentSelection } from "../../../agents/contracts/agent.js";
+import { outputLanguageInstruction, type ResolvedOutputLanguage } from "../../../agents/domain/outputLanguage.js";
 import type { ProjectAiActivityEvent, ProjectAiProvider, ProjectAiRequest } from "./projectAiGeneration.js";
 export interface ProjectAiDependencies {
   runtime: WorkflowRuntime;
   listProfiles(): readonly AgentProfile[];
   profiles(): readonly AgentProfile[];
   selection(): AgentSelection;
+  /** The interaction language the conversation turns use; Project text follows it. */
+  language?(): ResolvedOutputLanguage | undefined;
 }
 export function createProjectAiProvider(dependencies: ProjectAiDependencies): ProjectAiProvider { return new ProjectAiBridge(dependencies).projectAiProvider(); }
 class ProjectAiBridge {
@@ -17,7 +20,13 @@ class ProjectAiBridge {
   projectAiProvider(): ProjectAiProvider {
     return {
       id: "selected-agent",
-      generate: async (request, signal) => {
+      generate: async (input, signal) => {
+        // Project generation bypasses the conversation turn, so it applies the interaction
+        // language itself; otherwise every drafted body follows the model's own choice.
+        const instruction = outputLanguageInstruction(this.dependencies.language?.());
+        const request: ProjectAiRequest = instruction
+          ? { ...input, prompt: `${input.prompt}\n\n${instruction}\n- Write Project knowledge titles and bodies in that language too; keep code, file paths and identifiers unchanged.` }
+          : input;
         const model = request.agent
           ? request.model ?? this.dependencies.listProfiles().find((profile) => profile.id === request.agent)?.defaults?.model
           : this.dependencies.selection().model;
