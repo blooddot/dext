@@ -14,6 +14,12 @@ Claude 对话改用 CLI 的双向控制协议，它原本要问自己终端的�
 
 `agent({ apply: false })` 只限制 Agent 进程的写入权限；若结果包含 patch，Dext 宿主仍会自动应用并清空返回的 patch。需要只读结论时同时指定 `patch: false`。应用状态与真实错误显示在对话及结果摘要中；旧历史补丁会明确忽略，不会在打开会话时写盘。
 
+## Plan 中的 Project 规范
+
+Plan 与 `plan()` 共用 Project 依据，并保留已有 Agent 权限选择。原生模型提供有界只读 `project_query`：summary、node、search、neighbors、ancestors 和 subtree。查询不会初始化或扫描项目，可在 Project settings → Agent tools → Project norms query tool 中关闭。
+
+Pi 使用当前回合的宿主回调 `dext_project_query`，只读回合继续禁用任意 MCP 服务和写工具；停止或替换回合后旧回调失效。工具结果、生成计划和 Agent 报告都不能自行取得宿主授权。预算不足、证据缺失及规范过期需要明确显示，不能据此报告无影响。
+
 ## 通用配置
 
 Agent 配置保存在 VS Code 扩展全局存储中。输入区域根据后端能力提供 Agent、Model、Reasoning 和 Speed 选项。Codex 配置优先读取本地模型缓存中的模型、推理级别和速度选项；Claude Code 使用 `opus` / `sonnet` 别名及已配置的推理级别。

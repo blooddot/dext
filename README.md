@@ -135,6 +135,8 @@ Dext generates the `dext` type declaration into your project — `.dext/api/dext
 
 ## Project knowledge and editor tabs
 
+Plan reads usable Project norms before planning and checks actual changes after implementation. It keeps one Plan entry and preserves completed `.plan.md` files. Native Project/Knowledge initialization and legacy migration are explicit, independent actions; see [Project development](docs/project-development.md) and [Plan documents](docs/workflows.md#plan-documents).
+
 Project, APIs, Global Resources, and History all open as editor tabs that reuse one page per target and restore the same page after a reload. Project keeps only long-term content — Overview, Knowledge, and Diagrams — and never shows Hook logs, task checklists, or single-run records.
 
 ## Feedback and license

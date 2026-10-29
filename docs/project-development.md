@@ -12,6 +12,28 @@ English | [简体中文](project-development.zh-CN.md)
 [Editor tabs](#editor-tabs) · [Explicit initialization](#explicit-initialization) ·
 [Diagram rendering](#diagram-rendering) · [Checks](#checks)
 
+## Native Project and Plan
+
+Project owns long-term norms; Plan describes one change. Plan checks actual availability (`absent`, `ready`, `unavailable`) before assessing impact (`none`, `change`, `unknown`, `conflict`). Legacy intent, objects and architecture work through the same port before migration. There is no second Spec mode or derived normative graph.
+
+Explicit **Build/Update project model** chooses existing model, legacy migration, durable documents, source code, or empty project. Existing models update through revision guards. Legacy migration backs up exact bytes in `.dext/project/migrations/`, keeps stable IDs with deterministic aliases for collisions, then commits `.dext/project/model.json`. After that commit, legacy norms are neither reread nor dual-written; a damaged native model reports an error. Saved diagrams remain available. Documents are adopted at their original paths; empty projects get a draft without requiring a source index or AI provider.
+
+Native initialization uses a bounded package (100 files, 20,000 characters per file, 80,000 total), prioritizing guidance before other evidence. The workspace include scope still applies. Source-based generation builds goals, architecture and responsibilities; generated candidates are drafts. A checkpoint records route, source fingerprints, model revision and AI settings. Interrupted candidates resume only with an identical baseline. The legacy source-index pipeline described below remains available to its existing consumers and tests; it is no longer a prerequisite for native initialization.
+
+The model stores stable typed nodes and explicit relationships. A body has exactly one owner: inline text or a workspace document with a content hash, including documents under `.dext/project/knowledge/`. Plan files cannot be normative nodes or document bodies. Knowledge exposes body editing, document confirmation, explicit norm confirmation, relationship maintenance and **Plan a change**. Accepted/edited bodies and relationships survive AI regeneration. Deleting an endpoint requires updating its incoming relationships in the same validated batch.
+
+Native writes check revision and document hashes. Multi-document updates retain recovery journals and can resume the same request after interruption. Rollback requires backing up edits made after migration; restoring the old backup blindly would lose new norms. Reading a page, running Plan or querying never initializes or migrates Project.
+
+Build binds the semantic plan body and relevant normative content; execution evidence lives in extension storage under a workspace-isolated `plan-project/` directory. Final review uses content changes, not all changes against HEAD. Missing, non-text, concurrent or over-budget evidence stays unresolved. Pending proposals use expected hashes and per-operation receipts and can be accepted or rejected without rerunning coding tasks. Completion retains the plan and the reconciliation record.
+
+`project_query` reads only the persisted native model, with depth at most 8, at most 200 nodes and a bounded result body. Project settings can disable it. Pi receives the corresponding private current-turn host callback; arbitrary MCP and write tools remain disabled in read-only turns.
+
+### Verification record (2026-10-28)
+
+Automated checks: `npm run check`, `npm run check:ui`, and `npm run check:ui:conversations` passed. `npm run test:host` passed in the installed VS Code; its clipboard assertions were skipped because focus and the OS clipboard baseline were unavailable. Real Codex calls in a temporary project passed the expected `none` and `change` Plan cases, and classified an unplanned return-type change as a conflict rather than `none`. Run the opt-in suite with `DEXT_TEST_PROJECT_CODEX` set to the installed executable: `npx vitest run test/planProjectLive.test.ts`.
+
+The full manual F5 sequence (Build, cancel/restart, and proposal acceptance in the user's desktop session) remains a separate acceptance check; browser message tests and real-model tests are not evidence that a human completed it. No live check initializes or migrates this repository's Project data.
+
 ## Project files
 
 Project data lives under `.dext/` in the workspace:
@@ -19,7 +41,8 @@ Project data lives under `.dext/` in the workspace:
 | Path | Contents |
 | --- | --- |
 | `.dext/project.json` | Schema version, optimistic `version`, project paths (`planDirectory`, `apiDirs`, `skillDirs`, and `mcpDirs`), evidence settings and AI CLI selection. |
-| `.dext/project-intent.json` | AI-generated project brief and semantic knowledge from initialization |
+| `.dext/project/model.json` | Authoritative native nodes, relationships and body ownership after explicit initialization or migration |
+| `.dext/project-intent.json` | Legacy semantic knowledge, used only before native migration |
 | `.dext/objects/<id>.json` | One accepted long-term object per file |
 | `.dext/architecture.json` | Declared design decisions and architecture rules. Rules are evaluated against the saved diagram they name, never against a source scan. |
 | `.dext/diagrams/<id>.json` | Canonical AI-generated diagram IR (renderer-neutral, one file per diagram) |
@@ -93,6 +116,8 @@ Resolution covers common relative imports, local TS path mappings, Python packag
 **Derived structure graph.** Each index also derives an in-memory graph from the same file facts: resolved import edges carry `extracted`, `inferred` or `ambiguous` provenance, PageRank identifies hubs, strong components identify cycles, and a deterministic Louvain pass groups tightly coupled files. It is never persisted, never replaces AI ownership, and never upgrades an import into a runtime call. Bounded diagram evidence uses graph degree to spend its source slots on hubs and shared infrastructure, then attaches a compact edge set (at most 200 edges among the selected paths). A generated `depends_on` relation is annotated with `metadata.provenance` and `metadata.structureMatch`; a reverse import direction sets `metadata.structureConflicts` and a diagram-level warning instead of deleting the model's relation. Community disagreement is exposed only as the review signals `community-split`, `module-fragmentation` and `surprising-dependency` in `qualityIssues`. After a completed project model, Dext injects a host-owned `dext_structure` tool server into Codex, Claude and DeepSeek Harness conversations automatically; it exposes the read-only `structure_query` operations (node, consumer, dependency, community, hub, search and shortest path) without a user MCP manifest, a separate install command or a system `node`. The Project settings **Agent tools** section turns it off per project (on by default); a project without a saved model never injects it at all. The server is launched from Dext's own Electron/Node binary, reads the cached graph on each call and exits with the conversation. Type-only imports are excluded from communities, cross-module consumer counts and runtime-oriented traversal.
 
 ## Explicit initialization
+
+The following source-index pipeline documents the legacy generation path. Native initialization uses the five routes described above and does not require this pipeline.
 
 Opening, restoring, switching or refreshing the Project tab only reads saved `.dext` data. Dext never
 enumerates source files, runs a parser, calls AI, or writes `.dext` in the background. Source text is

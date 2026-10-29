@@ -116,6 +116,12 @@ Values that cross a Dext API boundary must be JSON-serializable, because the ker
 
 ### Plan documents
 
+Plan is the single planning entry, including `plan()`. With no usable Project it keeps the existing workflow; with a usable model it reads relevant norms and distinguishes `none`, `change`, `unknown`, and `conflict`. Model availability enables review, not permission to change norms. The review covers responsibilities, public interfaces, behavior, dependencies, invariants, and decisions.
+
+Build rechecks the plan body, norm hashes and applicability before resuming tasks. Final verification compares the execution content baseline with actual changes and performs a second norm review. Pre-existing edits are not attributed to this run; incomplete coverage stays unresolved. Pending proposals can be reviewed from the Plan toolbar without rerunning coding tasks. Conflicting saves preserve external edits. `.plan.md` remains after completion, and History retains the host assessment and reconciliation receipts.
+
+Optional `dext-project-impact` comments carry candidate conclusions only; workspace identity, hashes and approval belong to the host. Custom `.dext/rules/plan.md` changes presentation but cannot bypass these checks. Project migration is an independent, explicit action; Plan works with legacy data too. No Spec mode, `spec()` API, or separate execution engine is introduced.
+
 A Plan turn returns a chat reply plus a Markdown document that Dext saves as a `.plan.md` file. The default instruction asks for `## Goal`, `## Context`, `## Design`, `## Files`, `## Tasks`, `## Verification`, `## Risks`, and optionally `## Out of scope`, in that order. `## Design` may add `### Before / After`, `### Execution flow` and `### Decisions`; they are conditional, because a change without structural consequences should not carry an empty diagram.
 
 The document body follows `dext.outputLanguage`; `auto` uses the VS Code display language, not the operating system language. When no language is configured, the body follows the user's language. Section headings and task syntax stay in the format's own language so plans remain parseable, and code, commands, paths, identifiers, quoted text, and response delimiters are never translated. The setting, its workspace override, and the limit on hidden model reasoning are described in [Agent configuration](agents.md#interaction-language).

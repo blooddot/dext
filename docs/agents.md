@@ -14,6 +14,12 @@ Claude conversations run the CLI's bidirectional control protocol, so the questi
 
 `agent({ apply: false })` restricts the Agent process permission; if the result contains a patch, the Dext host automatically applies it and clears the returned patch. Also pass `patch: false` for read-only conclusions. Conversation and the result summary report the application status and real errors. Legacy history patches are explicitly ignored without writing on load.
 
+## Project norms during Plan
+
+Plan and `plan()` share Project grounding and preserve existing Agent permission choices. A native model exposes the bounded, read-only `project_query` tool: summary, node, search, neighbors, ancestors and subtree. Queries never initialize or scan the project. Disable it with Project settings → Agent tools → Project norms query tool.
+
+Pi uses a current-turn host callback named `dext_project_query`; read-only turns still disable arbitrary MCP servers and write tools. Stopping or replacing a turn revokes its callback. A tool result, generated plan or Agent report cannot grant itself host authority. Budget limits, missing evidence and stale norms remain visible and must not be reported as no impact.
+
 ## General configuration
 
 Agent profiles are stored in VS Code extension global storage. The input area exposes Agent, Model, Reasoning, and Speed selectors where supported by the provider. Codex profiles read the local Codex model cache when available, including supported reasoning levels and speed tiers. Claude Code profiles use its native `opus`/`sonnet` aliases and configured effort levels. An API call may override the Agent and Model for that call with its own `cli` and `model` arguments; otherwise the input selection is used. `Dext: Configure Agent` edits executable commands and custom model labels without handling credentials.
