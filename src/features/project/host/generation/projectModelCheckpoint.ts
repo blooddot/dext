@@ -28,7 +28,10 @@ const fingerprintSchema = z.object({
   promptVersion: z.string().min(1),
   schemaVersion: z.number().int().positive(),
   /** Stable JSON of the selected Project AI CLI/model/reasoning/speed. */
-  ai: z.string()
+  ai: z.string(),
+  route: z.enum(["existing", "legacy", "documents", "code", "empty"]).optional(),
+  baselineRevision: z.number().int().nonnegative().nullable().optional(),
+  documentHashes: z.record(z.string(), z.string()).optional()
 }).strict();
 
 export type ProjectModelCheckpointFingerprint = z.infer<typeof fingerprintSchema>;
@@ -105,7 +108,7 @@ const FINGERPRINT_FIELDS: readonly (readonly [keyof ProjectModelCheckpointFinger
   ["evidenceInputHash", "evidence package"],
   ["promptVersion", "prompt version"],
   ["schemaVersion", "output schema"],
-  ["ai", "Project AI settings"]
+  ["ai", "Project AI settings"], ["route", "initialization route"], ["baselineRevision", "Project baseline"], ["documentHashes", "adopted documents"]
 ];
 
 export interface ProjectModelCheckpointMismatch {
@@ -122,7 +125,7 @@ export function projectModelCheckpointMismatch(
   current: ProjectModelCheckpointFingerprint
 ): ProjectModelCheckpointMismatch[] {
   return FINGERPRINT_FIELDS
-    .filter(([field]) => saved[field] !== current[field])
+    .filter(([field]) => JSON.stringify(saved[field]) !== JSON.stringify(current[field]))
     .map(([field, label]) => ({ field, label }));
 }
 

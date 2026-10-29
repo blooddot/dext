@@ -21,6 +21,7 @@ function escapeHtml(value: string): string {
 }
 
 export interface ProjectOverviewData {
+  nativeBootstrap?: boolean;
   structure?: ProjectIntent["structure"];
   qualityIssues?: ProjectIntent["qualityIssues"];
   name: string;
@@ -110,8 +111,8 @@ const RESUME_STAGE_LABELS: Record<string, string> = {
   repair: "architecture review"
 };
 
-function renderInitialization(initialization: ProjectInitializationState): string {
-  const phaseLabel = PHASE_LABELS[initialization.phase ?? ""] ?? "Preparing";
+function renderInitialization(initialization: ProjectInitializationState, nativeBootstrap = false): string {
+  const phaseLabel = nativeBootstrap && initialization.phase === "preparing" ? "Selecting Project inputs" : PHASE_LABELS[initialization.phase ?? ""] ?? "Preparing";
   const aiControls = "";
   if (initialization.status === "running") {
     const percent = Math.max(0, Math.min(100, Math.round(initialization.percent ?? 0)));
@@ -133,7 +134,7 @@ function renderInitialization(initialization: ProjectInitializationState): strin
       : "";
     return `<div class="project-init project-init-completed" data-project-initialization-state="completed" role="status">`
       + `<p class="project-initialization-result">Project model ready${initialization.intentGenerated ? " · valid project intent" : ""}${initialization.diagramsGenerated ? ` · ${initialization.diagramsGenerated} diagram${initialization.diagramsGenerated === 1 ? "" : "s"}` : ""}.</p>`
-      + (missingDiagram ? `<p class="project-scan-progress">Open <strong>Knowledge</strong>, choose a module and click <strong>Analyze this module</strong> to generate its explanation and diagram.</p>` : "")
+      + (nativeBootstrap ? `<p class="project-scan-progress">Open <strong>Knowledge</strong> to review normative bodies and maintain their relationships. Initialization does not confirm generated content.</p>` : missingDiagram ? `<p class="project-scan-progress">Open <strong>Knowledge</strong>, choose a module and click <strong>Analyze this module</strong> to generate its explanation and diagram.</p>` : "")
       + pendingResume
       + (initialization.output ? `<details class="project-initialization-log"><summary>Initialization output</summary><pre>${escapeHtml(initialization.output)}</pre></details>` : "")
       + `<button type="button" data-project-initialize>Update project model</button><p class="project-help">Refresh the introduction and module outlines. Saved module analyses remain available; changed outlines are marked for update.</p>`
@@ -153,6 +154,7 @@ function renderInitialization(initialization: ProjectInitializationState): strin
       ? resumable
         ? `<p class="project-scan-progress" role="status">Initialization paused after ${escapeHtml(resumeStage ?? "completed stages")} (${resumePercent}%). Continue resumes from that checkpoint; if sources or AI settings changed, it regenerates.</p>`
         : `<p class="project-scan-progress" role="status">Initialization stopped. The saved model is unchanged. Continuing re-indexes the current sources and starts a new run; this run's unsaved output is discarded.</p>`
+      : nativeBootstrap ? `<p class="project-help"><strong>Not initialized.</strong> Build a Project model from the available inputs. Empty projects and durable documents need no source index. Existing saved diagrams remain viewable.</p>`
       : `<p class="project-help"><strong>Not initialized.</strong> No valid saved semantic model was found. Index the configured JS/TS, Rust and Python sources locally, then generate module summaries. Detailed explanations and diagrams are generated per module in Knowledge.${initialization.diagramsGenerated ? " Saved diagrams remain viewable." : ""}</p>`;
   return `<div class="project-init project-init-uninitialized" data-project-initialization-state="${failed ? "failed" : cancelled ? "cancelled" : "uninitialized"}">`
     + status
@@ -164,7 +166,7 @@ function renderInitialization(initialization: ProjectInitializationState): strin
 
 function renderOverview(overview: ProjectOverviewData): string {
   const initialization = overview.initialization;
-  const evidenceNotice = overview.evidenceConfigured === false
+  const evidenceNotice = overview.evidenceConfigured === false && !overview.nativeBootstrap
     ? `<p class="project-scan-progress project-scan-progress-warning" role="status" data-project-evidence-required>Choose and save <strong>Evidence reading</strong> in Project settings before building or updating the index. Confirm the reading depth and scope, or save the displayed defaults.</p>`
     : "";
   return `<section class="project-overview" data-project-section="overview">`
@@ -174,7 +176,8 @@ function renderOverview(overview: ProjectOverviewData): string {
     + (overview.workspaceSettings && overview.evidenceSettings
       ? renderProjectSettings(overview.workspaceSettings, overview.evidenceSettings, overview.toolSettings ?? { structureQuery: true }, Math.max(overview.workspaceSettingsVersion ?? 0, overview.evidenceSettingsVersion ?? 0), initialization.status === "running", renderProjectInitializationSettings(overview), overview.evidenceConfigured !== false)
       : renderProjectInitializationSettings(overview))
-    + renderInitialization(initialization)
+    + (overview.nativeBootstrap ? `<p class="project-help">Initialize from existing norms, migrate legacy Project data with a backup, adopt durable documents, draft from source, or start an empty model. Plan and queries never initialize Project. Review generated drafts in Knowledge.</p>` : "")
+    + renderInitialization(initialization, overview.nativeBootstrap)
     + (overview.qualityIssues?.length ? renderProjectQuality(overview.qualityIssues) : "")
     + (overview.structure ? `<section class="project-structure-summary"><h3>Local structure index</h3><p>${overview.structure.parsed} source files · ${overview.structure.modules} directory groups${overview.structure.responsibilities !== undefined ? ` · ${overview.structure.responsibilities} knowledge modules` : ""} · ${overview.structure.unresolved} external or unresolved imports</p><p class="project-help">JS/TS, Rust and Python are indexed locally. Knowledge modules organize files by responsibility across directories. Detailed analysis is generated when requested in Knowledge.</p>${overview.structure.failed || overview.structure.unsupported ? `<p class="project-reader-warning">Partial coverage: ${overview.structure.failed} indexing issues · ${overview.structure.unsupported} unsupported files.</p>` : ""}${overview.structure.issues.length ? `<details><summary>Indexing issues</summary><ul>${overview.structure.issues.map(issue => `<li>${escapeHtml(issue.path)} — ${escapeHtml(issue.reason)}</li>`).join("")}</ul></details>` : ""}<button data-project-page="knowledge">Explore modules</button></section>` : "")
     + `<dl class="project-facts">`

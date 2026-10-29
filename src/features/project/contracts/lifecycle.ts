@@ -103,6 +103,7 @@ export interface ProjectInitializationHydration {
 
 
 export interface ProjectInitializationDependencies {
+  bootstrap?(signal: AbortSignal, onProgress: ProjectInitializationProgressListener): Promise<ProjectInitializationOutput>;
   /** Builds the complete local structure index, plus bounded excerpts, when initialization starts. */
   prepareEvidence(signal: AbortSignal, onProgress: ProjectInitializationProgressListener): Promise<IndexedProjectEvidence>;
   /** AI generation; must throw with a clear reason when no provider is available. */

@@ -529,3 +529,10 @@ describe("Project AI generation service", () => {
       .rejects.toMatchObject({ code: "invalid_output" });
   });
 });
+import { compareProjectEvidencePaths as compareBootstrapEvidence } from "../src/features/project/host/generation/projectAiGeneration.js";
+
+describe("Project initialization evidence precedence", () => {
+  it("reads project guidance before product code and downgrades vendor guidance", () => {
+    expect(["vendor/AGENTS.md", "src/main.ts", "AGENTS.md"].sort(compareBootstrapEvidence)).toEqual(["AGENTS.md", "src/main.ts", "vendor/AGENTS.md"]);
+  });
+});

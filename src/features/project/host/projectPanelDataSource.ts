@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import * as vscode from "vscode";
-import { projectInitializationPercent, type ProjectInitializationProgressListener, type ProjectInitializationState } from "../contracts/lifecycle.js";
+import { projectInitializationPercent, type ProjectInitializationOutput, type ProjectInitializationProgressListener, type ProjectInitializationState } from "../contracts/lifecycle.js";
 import type { ProjectArchitectureDecision, ProjectDiagramSummary } from "../contracts/projectArchitectureTypes.js";
 import { validateProjectDiagram, type ProjectDiagram, type ProjectDiagramKind } from "../contracts/projectDiagram.js";
 import { projectEvidenceSettingsSchema, projectPromptLimits, type ProjectEvidenceSettings } from "../contracts/projectEvidenceSettings.js";
@@ -40,6 +40,8 @@ import { ProjectInitializationService } from "./projectService.js";
 
 
 export interface ProjectPanelDataSourceOptions {
+  bootstrapCheckpoint?: () => Promise<{ stage: string; fraction: number } | undefined>;
+  bootstrap?: (provider: ProjectAiProvider | undefined, signal: AbortSignal, progress: ProjectInitializationProgressListener) => Promise<ProjectInitializationOutput>;
   name: string;
   root: string;
   rootUri: vscode.Uri;
@@ -170,6 +172,7 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
   let structureRead = false;
   /** Last checkpoint seen on disk; decorates a stopped state so the page can offer resume. */
   let checkpointInfo: ProjectModelCheckpoint | undefined;
+  let bootstrapCheckpoint: { stage: string; fraction: number } | undefined;
   let resumeCheckpoint: ProjectModelCheckpoint | undefined;
   let resumeSettingsFingerprint = "";
   const checkpointStore: ProjectInitializationCheckpointStore | undefined = options.checkpoint ? {
@@ -178,6 +181,7 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
     clear: async () => { checkpointInfo = undefined; await options.checkpoint!.clear(); }
   } : undefined;
   const refreshCheckpoint = async (): Promise<void> => {
+    bootstrapCheckpoint = await options.bootstrapCheckpoint?.();
     if (!checkpointStore) { checkpointInfo = undefined; return; }
     checkpointInfo = await checkpointStore.read();
   };
@@ -188,6 +192,7 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
     speed: selectedAiSpeed ?? null
   });
   const decorateInitialization = (state: ProjectInitializationState): ProjectInitializationState => {
+    if (state.status === "cancelled" && bootstrapCheckpoint) return { ...state, resumable: true, resumeStage: bootstrapCheckpoint.stage, resumePercent: 85 };
     if (state.status !== "cancelled" || !checkpointInfo) return state;
     return {
       ...state,
@@ -226,6 +231,7 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
   } satisfies ProjectAiProvider : undefined;
 
   const initializationService = new ProjectInitializationService({
+    ...(options.bootstrap ? { bootstrap: (signal: AbortSignal, progress: ProjectInitializationProgressListener) => options.bootstrap!(projectAiProvider, signal, progress) } : {}),
     prepareEvidence: async (signal, onProgress) => {
       if (options.store.readDefinition && !(await options.store.readDefinition()).evidence) {
         throw new Error("Configure and save Evidence reading in Overview > Project settings before building the project model.");
@@ -512,7 +518,7 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
       const hydration = options.store.readInitialization
         ? await options.store.readInitialization()
         : { markedInitialized: false, hasIntent: Boolean(persistedIntent), diagramCount: persistedDiagrams?.length ?? 0 };
-      initializationService.hydrate({ ...hydration, ...(checkpointInfo ? { checkpoint: { stage: checkpointInfo.stage, fraction: checkpointInfo.fraction } } : {}) });
+      initializationService.hydrate({ ...hydration, ...(bootstrapCheckpoint ? { checkpoint: bootstrapCheckpoint } : checkpointInfo ? { checkpoint: { stage: checkpointInfo.stage, fraction: checkpointInfo.fraction } } : {}) });
     }
     if (persistedIntent) generatedIntent = persistedIntent;
     const intent = generatedIntent ?? persistedIntent;
@@ -535,6 +541,7 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
     const topics = intent ? await readTopics() : [];
     return {
       overview: {
+        ...(options.bootstrap ? { nativeBootstrap: true } : {}),
         ...(intent?.structure ? { structure: intent.structure } : {}),
         ...(intent?.qualityIssues ? { qualityIssues: intent.qualityIssues } : {}),
         name: options.name,

@@ -162,6 +162,12 @@ export class ProjectInitializationService {
       if (signal.aborted || !current()) throw new Error("Project initialization was cancelled.");
     };
     try {
+      if (this.dependencies.bootstrap) {
+        const output = await this.dependencies.bootstrap(signal, onProgress);
+        assertActive();
+        this.replaceState({ ...this.state, status: "completed", finishedAt: this.now(), phase: "saving", percent: 100, intentGenerated: Boolean(output.model || output.intent), diagramsGenerated: output.diagrams?.length ?? 0 });
+        return this.snapshot;
+      }
       const evidence = await this.dependencies.prepareEvidence(signal, onProgress);
       assertActive();
       onProgress({ phase: "generating", fraction: 0, message: "Calling the project AI to build the project model…" });

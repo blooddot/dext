@@ -10,6 +10,8 @@ import { readCachedStructure } from "../features/project/host/indexing/projectSt
 import type { ProjectStore } from "../features/project/host/persistence/projectStore.js";
 import { createProjectInitializationCheckpointStore } from "../features/project/host/persistence/projectInitializationCheckpointStore.js";
 import { ProjectEditorProvider } from "../features/project/host/projectEditorProvider.js";
+import { bootstrapProject, readBootstrapCheckpoint } from "../features/project/host/projectBootstrap.js";
+import { VscodeProjectFileHost } from "../features/project/host/persistence/vscodeProjectFileHost.js";
 import { createProjectPanelDataSource, discoverArchifyRepository, effectiveProjectEvidenceSettings, readProjectEvidence as readBoundedProjectEvidence, readStructureIndexEvidence } from "../features/project/host/projectPanelDataSource.js";
 import type { ProjectInitializationProgressListener } from "../features/project/host/projectService.js";
 import { searchProjectReferences } from "../features/project/knowledge/projectContext.js";
@@ -107,6 +109,18 @@ export function setupProject(options: ProjectSetupOptions): ProjectEditorProvide
       name: folder.name,
       root: ".",
       rootUri: folder.uri,
+      bootstrapCheckpoint: () => readBootstrapCheckpoint(new VscodeProjectFileHost(folder.uri)),
+      bootstrap: async (provider, signal, progress) => {
+        const definition = await projectStore.readDefinition();
+        const patterns = definition.evidence?.include.length ? definition.evidence.include : ["**/*"];
+        const files = new Map<string, vscode.Uri>();
+        for (const pattern of patterns) {
+          signal.throwIfAborted();
+          for (const uri of await vscode.workspace.findFiles(new vscode.RelativePattern(folder, pattern), "**/{.git,node_modules,dist,.dext}/**", 2000)) files.set(uri.fsPath, uri);
+        }
+        return bootstrapProject({ name: folder.name, host: new VscodeProjectFileHost(folder.uri), store: projectStore,
+          paths: [...files.values()].map(uri => vscode.workspace.asRelativePath(uri, false).replaceAll("\\", "/")), ...(provider ? { provider } : {}), ai: JSON.stringify(definition.ai), signal, progress });
+      },
       store: {
         readObjects: () => projectStore.readObjects(),
         readArchitecture: () => projectStore.readArchitecture(),

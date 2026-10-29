@@ -167,7 +167,9 @@ export function isProjectEntryPoint(path: string): boolean {
  * manifest or entry point out of the window just because its name sorts earlier.
  */
 export function compareProjectEvidencePaths(leftPath: string, rightPath: string): number {
-  return projectEvidenceFileRank(leftPath) - projectEvidenceFileRank(rightPath)
+  const guidance = (path: string) => /(?:^|\/)(?:AGENTS|CLAUDE|GEMINI)\.md$/i.test(path) && !THIRD_PARTY_EVIDENCE.test(path);
+  return Number(guidance(rightPath)) - Number(guidance(leftPath))
+    || projectEvidenceFileRank(leftPath) - projectEvidenceFileRank(rightPath)
     || Number(isProjectEntryPoint(rightPath)) - Number(isProjectEntryPoint(leftPath))
     || EVIDENCE_KIND_ORDER[projectEvidenceFileKind(leftPath)] - EVIDENCE_KIND_ORDER[projectEvidenceFileKind(rightPath)]
     || leftPath.localeCompare(rightPath);
