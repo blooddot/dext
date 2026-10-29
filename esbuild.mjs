@@ -21,7 +21,8 @@ const contexts = await Promise.all([
     entryPoints: {
       extension: "src/extension.ts",
       extensionHostTest: "test/extensionHost.ts",
-      structureMcp: "src/features/project/host/indexing/projectStructureMcp.ts"
+      structureMcp: "src/features/project/host/indexing/projectStructureMcp.ts",
+      projectModelMcp: "src/features/project/host/indexing/projectModelMcp.ts"
     },
     bundle: true,
     outdir: "dist",

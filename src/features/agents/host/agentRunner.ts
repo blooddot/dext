@@ -20,6 +20,7 @@ import { runCodexConversation } from "./codexConversationRunner.js";
 import { codexErrorMessage } from "../domain/codexError.js";
 
 export interface AgentExecutionRequest {
+  projectQuery?: (input: unknown) => Promise<unknown>;
   workspaceTrusted?: boolean;
   agentPreset?: string;
   profile: AgentProfile;
@@ -49,6 +50,7 @@ export interface AgentExecutionRequest {
 /** An unstructured user conversation. Unlike Dext APIs, it has no JSON
  * envelope or output schema and its result is ordinary assistant text. */
 export interface AgentConversationRequest {
+  projectQuery?: (input: unknown) => Promise<unknown>;
   workspaceTrusted?: boolean;
   agentPreset?: string;
   profile: AgentProfile;

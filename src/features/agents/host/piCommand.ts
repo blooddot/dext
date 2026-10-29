@@ -58,20 +58,22 @@ export function piPermission(allowWrite: boolean, permission?: AgentPermission, 
   if (permission !== "full-access") throw new Error("Pi does not support Workspace write. Explicitly select Full access to edit files or run commands.");
   return "full-access";
 }
-export function piTools(permission: AgentPermission, result: boolean, platform: NodeJS.Platform = process.platform, trusted = false): string[] {
+export function piTools(permission: AgentPermission, result: boolean, platform: NodeJS.Platform = process.platform, trusted = false, projectQuery = false): string[] {
   return ["read", "grep", "find", "ls", "dext_request_user_input", "dext_update_plan",
     ...(result ? ["dext_submit_result"] : []),
+    ...(trusted && projectQuery ? ["dext_project_query"] : []),
     ...(permission === "read-only" && trusted ? ["dext_fetch"] : []),
     ...(permission === "full-access" ? ["write", "edit", platform === "win32" ? "powershell" : "bash", "mcp__*"] : [])];
 }
 export function piArguments(options: {
   extensionPath: string; sessionDirectory: string; sessionPath?: string; trusted: boolean;
   permission: AgentPermission; result?: boolean; ephemeral?: boolean; extra?: readonly string[];
+  projectQuery?: boolean;
 }): string[] {
   return [...piExtraArguments(options.extra ?? []), "--mode", "rpc", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes", "--no-approve", "--offline",
     ...(!options.trusted ? ["--no-context-files"] : []),
     "--extension", options.extensionPath,
     ...(options.permission === "full-access" ? ["--extension", "builtin:mcp"] : ["--no-mcp"]),
-    "--tools", piTools(options.permission, Boolean(options.result), process.platform, options.trusted).join(","),
+    "--tools", piTools(options.permission, Boolean(options.result), process.platform, options.trusted, options.projectQuery).join(","),
     ...(options.result || options.ephemeral ? ["--no-session"] : ["--session-dir", options.sessionDirectory, ...(options.sessionPath ? ["--session", options.sessionPath] : [])])];
 }

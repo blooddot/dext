@@ -89,7 +89,9 @@ async function receive(request) {
       }, 60); return;
     }
     if (text === "fixture:compact") { send({ type: "compaction_start", reason: "threshold" }); input += 4; output += 1; send({ type: "compaction_end", reason: "threshold", result: { summary: "short" }, aborted: false }); }
-    if (text === "fixture:todo") {
+    if (text === "fixture:project-query") {
+      message(JSON.stringify(await call("project_query", { query: { operation: "summary", limit: 2 } })));
+    } else if (text === "fixture:todo") {
       await call("todo", { todos: [{ id: "implement", text: "Implement", status: "in_progress" }] });
       message('<!-- dext-todo: {"updates":[{"id":"plan-1","status":"in_progress"}]} -->\nImplementing');
     } else if (text === "fixture:question") {

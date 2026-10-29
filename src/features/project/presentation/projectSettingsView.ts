@@ -46,6 +46,7 @@ export function renderProjectSettings(settings: ProjectWorkspaceSettings, eviden
           <section class="project-settings-section">
             <h3>Agent tools</h3>
             <label class="project-checkbox-field"><input type="checkbox" name="structureQuery"${tool.structureQuery ? " checked" : ""}> Structure query tool</label>
+            <label class="project-checkbox-field"><input type="checkbox" name="projectQuery"${tool.projectQuery !== false ? " checked" : ""}> Project norms query tool</label>
             <p class="project-help">Offers a read-only structure lookup (consumers, dependencies, hubs, communities and import paths) to Codex, Claude and DeepSeek conversations. It starts only after this project has a saved model and never reads source text or changes files. Turn it off to skip launching the tool for every Agent turn.</p>
           </section>
           <section class="project-settings-section project-evidence-settings" data-project-evidence-settings>
@@ -98,7 +99,7 @@ function bindProjectSettings(api: { postMessage(message: unknown): void }, prese
         mcpDirs: directoryValues("mcpDirs")
       },
       evidence: evidence as ProjectSettings["evidence"],
-      tool: { structureQuery: checked("structureQuery") }
+      tool: { structureQuery: checked("structureQuery"), projectQuery: checked("projectQuery") }
     };
   };
   const save = (): void => {

@@ -11,12 +11,14 @@ export interface PiBridgeConfig {
   tools: string[];
   mcpServers: readonly AgentMcpServer[];
   resultSchema?: Record<string, unknown>;
+  projectQuery?: boolean;
 }
 export type PiBridgeRequest =
   | { id: string; kind: "question"; questions: AgentInputQuestion[] }
   | { id: string; kind: "submit_result"; args: unknown }
   | { id: string; kind: "todo"; todos: AgentTodoItem[] }
-  | { id: string; kind: "fetch"; url: string };
+  | { id: string; kind: "fetch"; url: string }
+  | { id: string; kind: "project_query"; query: unknown };
 export interface PiUiRequest extends PiRecord { type: "extension_ui_request"; id: string; method: string }
 
 export function piObject(value: unknown): Record<string, unknown> {

@@ -2,6 +2,14 @@ import { describe, expect, it } from "vitest";
 import { checkPiVersion, piArguments, piCommand, piExtraArguments, piPermission, piTools } from "../src/features/agents/host/piCommand.js";
 
 describe("associating an installed Pi command", () => {
+  it("adds only the scoped Project callback to trusted read-only tools", () => {
+    expect(piTools("read-only", false, "win32", true, true)).toContain("dext_project_query");
+    expect(piTools("read-only", false, "win32", false, true)).not.toContain("dext_project_query");
+    expect(piTools("read-only", false, "win32", true, false)).not.toContain("dext_project_query");
+    const args = piArguments({ extensionPath: "pi.mjs", sessionDirectory: "sessions", permission: "read-only", trusted: true, projectQuery: true });
+    expect(args).toContain("--no-mcp");
+    expect(args[args.indexOf("--tools") + 1]).not.toMatch(/(?:^|,)(?:write|edit|bash|powershell|mcp__\*)(?:,|$)/);
+  });
   it("rejects an incompatible executable and respects an already cancelled connection check", async () => {
     await expect(checkPiVersion(process.execPath, process.cwd())).rejects.toThrow("could not start or report its version");
     const controller = new AbortController(); controller.abort(new Error("connection cancelled"));

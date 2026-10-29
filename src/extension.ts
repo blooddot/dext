@@ -9,8 +9,9 @@ import { describeApiFlow } from "./features/workflow/host/apiFlow.js";
 import { redactedMcpUrl } from "./features/mcp/host/mcpRegistry.js";
 import { recordWorkflow } from "./features/workflow/domain/workflowRecorder.js";
 import { ProjectStore } from "./features/project/host/persistence/projectStore.js";
-import { ProjectPlanService } from "./features/project/host/projectPlanService.js";
+import { ProjectPlanService, projectWorkspaceKey } from "./features/project/host/projectPlanService.js";
 import { ProjectPlanReconciler } from "./features/project/host/projectPlanReconcile.js";
+import { runProjectQuery } from "./features/project/host/indexing/projectModelMcp.js";
 import type { ProjectEditorProvider } from "./features/project/host/projectEditorProvider.js";
 import { VscodeProjectFileHost, effectiveProjectWorkspaceSettings } from "./features/project/host/projectPanelDataSource.js";
 import { projectToolSettingsFromDefinition } from "./features/project/contracts/projectSettings.js";
@@ -55,6 +56,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     application.setProjectPlanPort(new ProjectPlanService(projectStore, folder!.uri.fsPath));
     application.setProjectReconciler(new ProjectPlanReconciler(projectStore));
     application.configureProjectEvidence(folder!.uri.fsPath, (context.storageUri ?? context.globalStorageUri).fsPath);
+    application.setProjectToolProvider(async () => {
+      const definition = await projectStore.readDefinition();
+      if (definition.tool?.projectQuery === false || !await projectStore.readModel()) return undefined;
+      return { modelPath: vscode.Uri.joinPath(folder!.uri, ".dext", "project", "model.json").fsPath, serverPath: vscode.Uri.joinPath(context.extensionUri, "dist", "projectModelMcp.js").fsPath };
+    });
+    application.runtime.setProjectQueryProvider(async workspace => {
+      if (projectWorkspaceKey(workspace) !== projectWorkspaceKey(folder!.uri.fsPath) || (await projectStore.readDefinition()).tool?.projectQuery === false || !await projectStore.readModel()) return undefined;
+      return async input => {
+        if ((await projectStore.readDefinition()).tool?.projectQuery === false) throw new Error("Project query was disabled.");
+        const model = await projectStore.readModel();
+        if (!model) throw new Error("Project model is unavailable.");
+        return runProjectQuery(model, input);
+      };
+    });
     const definition = await projectStore.readDefinition();
     if (definition.paths) application.setProjectWorkspaceSettings(effectiveProjectWorkspaceSettings(definition));
     application.setStructureToolProvider(async () => {

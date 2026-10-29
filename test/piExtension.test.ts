@@ -17,8 +17,9 @@ describe("shipped Pi extension", () => {
   it("registers the real schema, carries structured arguments and guards hidden tools", async () => {
     const schema = { type: "object", properties: { value: { type: "string" } }, required: ["value"] };
     const requests: unknown[] = [];
-    const bridge = new PiBridge({ permission: "read-only", tools: ["read", "dext_submit_result", "dext_fetch"], mcpServers: [], resultSchema: schema }, async (request) => {
+    const bridge = new PiBridge({ permission: "read-only", tools: ["read", "dext_submit_result", "dext_fetch", "dext_project_query"], projectQuery: true, mcpServers: [], resultSchema: schema }, async (request) => {
       requests.push(request);
+      if (request.kind === "project_query") return { status: "ok", result: { nodes: [], relations: [] } };
       return request.kind === "fetch"
         ? { status: "ok", url: request.url, contentType: "text/plain", text: "body", truncated: false }
         : { status: request.kind === "submit_result" && (request.args as { value?: string }).value === "ok" ? "accepted" : "rejected", diagnostics: "value is required" };
@@ -40,6 +41,9 @@ describe("shipped Pi extension", () => {
     expect(guard?.({ toolName: "dext_fetch" })).toBeUndefined();
     expect(await tools.get("dext_fetch")!.execute("three", { url: "https://example.com/readme.txt" })).toMatchObject({ isError: false });
     expect(requests.at(-1)).toMatchObject({ kind: "fetch", url: "https://example.com/readme.txt" });
+    expect(await tools.get("dext_project_query")!.execute("four", { operation: "summary" })).toMatchObject({ isError: false });
+    expect(requests.at(-1)).toMatchObject({ kind: "project_query", query: { operation: "summary" } });
+    expect(guard?.({ toolName: "mcp__arbitrary_write" })).toMatchObject({ block: true });
   });
   it("nudges one result submission before a typed turn settles without one", async () => {
     const schema = { type: "object", properties: { value: { type: "string" } }, required: ["value"] };

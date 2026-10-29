@@ -27,6 +27,15 @@ async function setup(flags: string[] = []) {
   return { root, runner: create(), create, request, log };
 }
 describe("Pi conversation runner", { timeout: 30000 }, () => {
+  it("scopes Project queries to the active trusted turn and revokes them on the next turn", async () => {
+    const h = await setup(); const query = vi.fn(async () => ({ nodes: [{ id: "api" }], relations: [] }));
+    const result = await h.runner.runConversation(h.request("fixture:project-query", { projectQuery: query }));
+    expect(result).toContain('"api"'); expect(query).toHaveBeenCalledWith({ operation: "summary", limit: 2 });
+    expect(await h.runner.runConversation(h.request("fixture:project-query"))).toContain("unavailable");
+    expect(await h.runner.runConversation(h.request("fixture:project-query", { projectQuery: query, workspaceTrusted: false }))).toContain("unavailable");
+    expect(query).toHaveBeenCalledOnce();
+    for (const row of (await h.log()).filter(row => Array.isArray(row.startup))) expect(row.startup).toContain("--no-mcp");
+  });
   it("reuses one process, bootstraps only a fresh session and resets explicit defaults", async () => {
     const h = await setup();
     expect(await h.runner.runConversation(h.request("first", { reasoningEffort: "off", metadata: { agentSessionId: "chat", conversationContext: "older visible context" } }))).toContain("older visible context");

@@ -353,6 +353,8 @@ export class DextApplication {
     this.structureToolProvider = provider;
   }
 
+  private projectToolProvider: (() => Promise<{ modelPath: string; serverPath: string } | undefined>) | undefined;
+  setProjectToolProvider(provider: () => Promise<{ modelPath: string; serverPath: string } | undefined>): void { this.projectToolProvider = provider; }
 
   setProjectPlanPort(port: ProjectPlanPort | undefined): void {
     this.projectPlanPort = port;
@@ -469,10 +471,14 @@ export class DextApplication {
   }
 
   private async conversationMcpServers(): Promise<readonly AgentMcpServer[]> {
-    if (!this.structureToolProvider || !this.workspaceTrusted) return [];
-    const tool = await this.structureToolProvider();
-    if (!tool || !existsSync(tool.cachePath)) return [];
-    return [{
+    if (!this.workspaceTrusted) return [];
+    const servers: AgentMcpServer[] = [];
+    const project = await this.projectToolProvider?.();
+    if (project) servers.push({ name: "dext_project", command: process.execPath, args: [project.serverPath, "--model", project.modelPath], env: process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {} });
+    const tool = await this.structureToolProvider?.();
+    if (!tool || !existsSync(tool.cachePath)) return servers;
+    return [...servers, {
+      name: "dext_structure",
       command: process.execPath,
       args: [tool.serverPath, "--cache", tool.cachePath],
       env: process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {}

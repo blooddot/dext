@@ -19,7 +19,8 @@ export type ProjectWorkspaceSettings = z.infer<typeof projectWorkspaceSettingsSc
 
 /** Host-owned tools offered to Agent conversations; the user can turn them off per project. */
 export const projectToolSettingsSchema = z.object({
-  structureQuery: z.boolean().default(true)
+  structureQuery: z.boolean().default(true),
+  projectQuery: z.boolean().optional()
 }).strict();
 export type ProjectToolSettings = z.infer<typeof projectToolSettingsSchema>;
 

@@ -11,6 +11,7 @@ const question = z.object({ id: z.string().min(1).max(128), header: z.string().m
   options: z.array(z.object({ label: z.string().min(1).max(2000), description: z.string().max(20000).default("") })).max(200).default([]),
   multiSelect: z.boolean().optional(), isSecret: z.boolean().optional(), detail: z.string().max(20000).optional() });
 const requests = z.discriminatedUnion("kind", [
+  z.object({ id: z.string(), kind: z.literal("project_query"), query: z.unknown() }).strict(),
   z.object({ id: z.string(), kind: z.literal("question"), questions: z.array(question).min(1).max(20).refine((items) => new Set(items.map((item) => item.id)).size === items.length) }),
   z.object({ id: z.string(), kind: z.literal("submit_result"), args: z.unknown() }),
   z.object({ id: z.string(), kind: z.literal("todo"), todos: z.array(z.object({ id: z.string(), text: z.string().min(1), status: z.enum(["pending", "in_progress", "completed"]) })).max(200) }),

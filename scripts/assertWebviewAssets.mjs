@@ -30,6 +30,7 @@ const mainStyles = await readFile(resolve(output, "main.css"), "utf8");
 // Files on disk can pass build checks while .vscodeignore removes them from the VSIX.
 // Keep the History stylesheet's existing URL valid for pages open during an update.
 const packagedFiles = new Set((await listFiles()).map((file) => file.replaceAll("\\", "/")));
+assert.ok(packagedFiles.has("dist/projectModelMcp.js"), "Missing packaged Project model query server.");
 for (const path of [...archifyRuntime.paths, "UPSTREAM.json"]) {
   assert.ok(packagedFiles.has(`vendor/project-diagrams/archify/${path}`), `Missing packaged Archify runtime file '${path}'.`);
 }
