@@ -8,6 +8,21 @@ import { renderReaderArchify, type ReaderArchifyView } from "./projectReaderArch
 export interface ReaderApi { postMessage(message: unknown): void; getState?(): { filters?: Record<string, string> } | undefined; setState?(state: unknown): void }
 
 export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
+  // Native norm controls sit beside the reading view and share the same host channel.
+  root.closest(".project-panel")?.addEventListener("click", event => {
+    const button = event.target instanceof Element ? event.target.closest<HTMLButtonElement>("button") : null;
+    const section = button?.closest<HTMLElement>("[data-native-knowledge]");
+    if (!button || !section) return;
+    const revision = Number(section.dataset.revision);
+    if (button.dataset.projectPlan) { api.postMessage({ type: "projectPlan", topicId: button.dataset.projectPlan }); return; }
+    if (button.dataset.knowledgeOpen) { api.postMessage({ type: "projectKnowledgeOpen", nodeId: button.dataset.knowledgeOpen }); return; }
+    const request = button.dataset.knowledgeSave ? { action: "body", id: button.dataset.knowledgeSave, text: button.closest("details")?.querySelector<HTMLTextAreaElement>("textarea")?.value ?? "" }
+      : button.dataset.knowledgeAdopt ? { action: "adopt", id: button.dataset.knowledgeAdopt }
+      : button.dataset.knowledgeConfirm ? { action: "confirm", id: button.dataset.knowledgeConfirm }
+      : button.dataset.knowledgeUnlink ? { action: "unlink", id: button.dataset.knowledgeUnlink }
+      : button.hasAttribute("data-knowledge-link") ? { action: "link", from: section.querySelector<HTMLSelectElement>("[data-knowledge-from]")?.value, to: section.querySelector<HTMLSelectElement>("[data-knowledge-to]")?.value, kind: section.querySelector<HTMLSelectElement>("[data-knowledge-kind]")?.value } : undefined;
+    if (request) api.postMessage({ type: "projectKnowledgeUpdate", revision, ...request });
+  });
   const template = root.querySelector<HTMLTemplateElement>("[data-project-reader-data]");
   if (!template) return;
   let data = JSON.parse(template.content.textContent ?? "{}") as ProjectReaderData;
@@ -231,6 +246,7 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
   root.addEventListener("click", (event) => {
     const button = event.target instanceof Element ? event.target.closest<HTMLButtonElement>("button") : null;
     if (!button) return;
+    if (button.dataset.projectPlan) api.postMessage({ type: "projectPlan", topicId: button.dataset.projectPlan });
     if (button.hasAttribute("data-reader-inspector-close")) {
       article.querySelector<HTMLElement>("[data-reader-inspector]")!.hidden = true;
       highlight([]);

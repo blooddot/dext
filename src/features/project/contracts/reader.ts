@@ -14,6 +14,8 @@ export interface ProjectReaderExportRequest { diagramId: string; updatedAt: numb
 export interface ProjectReaderRenderRequest { diagramId: string; updatedAt: number; requestId: string }
 
 export interface ProjectEditorDataSource {
+  openKnowledgeDocument?(id: string): Promise<void>;
+  updateKnowledge?(request: unknown): Promise<void>;
   load(): Promise<ProjectPanelData>;
   /** Host → webview messages (render results, generation progress, export status). */
   subscribe?(listener: (message: ProjectPanelMessage) => void): () => void;

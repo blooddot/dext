@@ -1,4 +1,15 @@
 import type { ProjectQualityIssue } from "../contracts/projectIntent.js";
+import type { ProjectModel } from "../contracts/projectModel.js";
+
+export function renderNativeKnowledge(model: ProjectModel): string {
+  const choices = model.nodes.map(node => `<option value="${escapeProjectHtml(node.id)}">${escapeProjectHtml(node.title)}</option>`).join("");
+  return `<section data-native-knowledge data-revision="${model.revision}"><h2>Project norms</h2><p>These bodies and relationships are the maintained Project model. Saving confirms your edit.</p>`
+    + model.nodes.map(node => `<details data-knowledge-node="${escapeProjectHtml(node.id)}"><summary>${escapeProjectHtml(node.title)} · ${escapeProjectHtml(node.kind)} · ${escapeProjectHtml(node.review)}</summary>`
+      + (node.body.kind === "inline" ? `<textarea data-knowledge-text rows="6" aria-label="Norm body">${escapeProjectHtml(node.body.text)}</textarea><button data-knowledge-save="${escapeProjectHtml(node.id)}">Save body</button>` : `<p>Owned document: ${escapeProjectHtml(node.body.path)}</p><button data-knowledge-open="${escapeProjectHtml(node.id)}">Open document</button><button data-knowledge-adopt="${escapeProjectHtml(node.id)}">Confirm current document</button>`)
+      + `<button data-knowledge-confirm="${escapeProjectHtml(node.id)}">Confirm current norm</button><button data-project-plan="${escapeProjectHtml(node.id)}">Plan a change</button></details>`).join("")
+    + `<h3>Relationships</h3><ul>${model.relations.map(edge => `<li>${escapeProjectHtml(edge.from)} → ${escapeProjectHtml(edge.to)} · ${escapeProjectHtml(edge.kind)} <button data-knowledge-unlink="${escapeProjectHtml(edge.id)}">Remove relationship</button></li>`).join("")}</ul>`
+    + `<label>From <select data-knowledge-from>${choices}</select></label><label>To <select data-knowledge-to>${choices}</select></label><label>Relationship <select data-knowledge-kind>${["contains", "depends_on", "related_to", "implements", "constrains", "maps_to", "decides", "communicates"].map(kind => `<option>${kind}</option>`).join("")}</select></label><button data-knowledge-link>Add relationship</button></section>`;
+}
 import type { ArchitectureViewInput } from "../contracts/projectArchitectureTypes.js";
 import type { ProjectDiagram } from "../contracts/projectDiagram.js";
 import { topicFingerprint, type ProjectTopic, type ProjectTopicCheck } from "../knowledge/projectTopics.js";
@@ -45,6 +56,7 @@ export function readerTopicArticle(topic: ProjectTopic, data: ProjectReaderData)
   const landscape = data.topics.find((item) => item.kind === "system_context"), units = data.topics.find((item) => item.kind === "containers");
   const crumbs = landscape && units ? `<nav class="project-reader-breadcrumb" aria-label="Architecture levels"><button data-reader-topic="${esc(landscape.id)}">Project landscape</button> / <button data-reader-topic="${esc(units.id)}">Runtime units</button>${topic.kind === "context" || topic.kind === "flow" ? ` / ${esc(topic.title)}` : ""}</nav>` : "";
   return `${crumbs}<header class="project-reader-heading">${topic.area ? `<p class="project-reader-kind">${esc(topic.area.title)}</p>` : ""}<p class="project-reader-kind">${topic.kind === "flow" ? "How it works" : topic.kind === "structure" ? "Structure map" : topic.kind === "types" ? "Type map" : topic.kind === "system_context" ? "System context · C4 level 1" : topic.kind === "containers" ? "Runtime boundaries · C4 level 2" : "Responsibility boundary"}</p><h2>${esc(topic.title)}</h2><p data-reader-section="${esc(topic.id)}">${esc(topic.description)}</p>`
+    + (topic.kind === "context" ? `<button type="button" data-project-plan="${esc(topic.id)}">Plan a change</button>` : "")
     + `<p data-topic-check="${esc(topic.id)}" class="project-reader-warning"${warning ? "" : " hidden"}>${warning ? "Sources changed or disappeared. This explanation and its diagrams need review." : ""}</p></header>`
     + (topic.kind === "context" || topic.kind === "flow" ? `<section class="project-reader-analysis"><p data-reader-analysis-state>${topic.analysisState === "outline" ? "Not analyzed · module outline only" : warning ? "Needs update · saved analysis remains available" : "Generated · saved explanation"}</p><button type="button" data-topic-diagram="${esc(topic.id)}">${topic.analysisState === "outline" ? "Analyze this module" : "Update module analysis"}</button><p class="project-help">Read this module's sources to generate its explanation and diagram together. Selecting a module does not start AI.</p></section>` : "")
     + `<div class="project-reader-story">${readerDiagramFrame(topicDiagrams(topic, data.diagrams))}`

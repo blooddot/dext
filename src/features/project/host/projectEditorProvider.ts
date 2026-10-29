@@ -181,6 +181,12 @@ export class ProjectEditorProvider {
   /** Handles webview messages routed by the shared manager. */
   async handleMessage(key: string, message: unknown): Promise<void> {
     if (key !== this.key) return;
+    if (message && typeof message === "object" && "type" in message && message.type === "projectKnowledgeUpdate") {
+      if (!this.options.dataSource.updateKnowledge) throw new Error("Knowledge editing is unavailable.");
+      await this.options.dataSource.updateKnowledge(message);
+      await this.show(this.page);
+      return;
+    }
     const payload = message as {
       type?: unknown; page?: unknown; diagramId?: unknown; version?: unknown; kind?: unknown;
       requirement?: unknown; format?: unknown; content?: unknown; nodeId?: unknown; path?: unknown; line?: unknown; refresh?: unknown;
@@ -194,6 +200,10 @@ export class ProjectEditorProvider {
     if (payload?.type === "projectPlan" && typeof payload.topicId === "string") {
       if (!this.options.planFromProjectObject) throw new Error("Project Plan action is unavailable.");
       await this.options.planFromProjectObject(payload.topicId);
+      return;
+    }
+    if (payload?.type === "projectKnowledgeOpen" && typeof payload.nodeId === "string") {
+      await this.options.dataSource.openKnowledgeDocument?.(payload.nodeId);
       return;
     }
     if (payload?.type === "projectQualityCopy" && typeof payload.text === "string" && typeof payload.requestId === "number" && Number.isSafeInteger(payload.requestId)) {

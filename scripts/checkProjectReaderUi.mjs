@@ -143,11 +143,31 @@ try {
     currentData = pageData;
     const light = theme === 'vscode-light';
     themeCss = `:root{--vscode-font-family:Segoe UI,sans-serif;--vscode-font-size:13px;--vscode-editor-background:${light ? '#fff' : '#1e1e1e'};--vscode-foreground:${light ? '#333' : '#ddd'};--vscode-descriptionForeground:${light ? '#555' : '#bbb'};--vscode-input-background:${light ? '#eee' : '#313131'};--vscode-input-foreground:${light ? '#333' : '#ddd'};--vscode-panel-border:${light ? '#ddd' : '#555'};--vscode-focusBorder:#0088ff;--vscode-list-activeSelectionBackground:#004c80;--vscode-list-activeSelectionForeground:#fff;--vscode-button-secondaryBackground:${light ? '#eee' : '#313131'};--vscode-textBlockQuote-background:${light ? '#eee' : '#292929'}}`;
-    pageHtml = ui.renderEditorTabHtml(`<script>document.body.classList.add('${theme}');window.messages=[];window.violations=[];document.addEventListener('securitypolicyviolation',e=>violations.push(e.violatedDirective));window.state={filters:${JSON.stringify(filters)}};window.acquireVsCodeApi=()=>({postMessage:m=>{messages.push(m);projectHostMessage(JSON.stringify(m))},getState:()=>state,setState:s=>{state=s}});</script>` + ui.renderProjectPanel(page, pageData, { state: { key: 'dext.editor:project', page, filters: {}, restoreVersion: 1 } }), `${origin}/style.css`, origin, { embedFrames: page !== 'overview', scriptUri: `${origin}/project.js`, mermaidUri: `${origin}/mermaid.js` });
+    pageHtml = ui.renderEditorTabHtml(`<script>document.body.classList.add('${theme}');window.messages=[];window.violations=[];document.addEventListener('securitypolicyviolation',e=>violations.push({directive:e.violatedDirective,blocked:e.blockedURI,source:e.sourceFile,line:e.lineNumber}));window.state={filters:${JSON.stringify(filters)}};window.acquireVsCodeApi=()=>({postMessage:m=>{messages.push(m);projectHostMessage(JSON.stringify(m))},getState:()=>state,setState:s=>{state=s}});</script>` + ui.renderProjectPanel(page, pageData, { state: { key: 'dext.editor:project', page, filters: {}, restoreVersion: 1 } }), `${origin}/style.css`, origin, { embedFrames: page !== 'overview', scriptUri: `${origin}/project.js`, mermaidUri: `${origin}/mermaid.js` });
     await send('Page.navigate', { url: `${origin}/?${Date.now()}` });
     await wait(`document.readyState==='complete' && !!window.messages && !!document.querySelector('.project-panel')`, 'reader load');
     if (page !== 'overview') await ready();
   };
+  const native = { schemaVersion: 1, revision: 7, updatedAt: 0, nodes: [
+    { id: 'contract', kind: 'contract', title: 'API contract', canonicalName: 'API', review: 'accepted', freshness: 'current', body: { kind: 'inline', text: 'Stable interface' } },
+    { id: 'document', kind: 'architecture', title: 'Architecture', canonicalName: 'Architecture', review: 'draft', body: { kind: 'document', path: 'docs/architecture.md', contentHash: 'saved' } }
+  ], relations: [{ id: 'link', from: 'contract', to: 'document', kind: 'depends_on' }] };
+  await load('vscode-dark', { ...data, model: native });
+  await evaluate(`document.querySelector('[data-knowledge-text]').value='Revised interface'`);
+  await click('[data-knowledge-save]');
+  assert.deepEqual(await evaluate('messages.at(-1)'), { type: 'projectKnowledgeUpdate', revision: 7, action: 'body', id: 'contract', text: 'Revised interface' });
+  await click('[data-knowledge-adopt]');
+  assert.equal((await evaluate('messages.at(-1)')).action, 'adopt');
+  await click('[data-knowledge-open]');
+  assert.deepEqual(await evaluate('messages.at(-1)'), { type: 'projectKnowledgeOpen', nodeId: 'document' });
+  await click('[data-knowledge-confirm]');
+  assert.equal((await evaluate('messages.at(-1)')).action, 'confirm');
+  await click('[data-knowledge-unlink]');
+  assert.equal((await evaluate('messages.at(-1)')).action, 'unlink');
+  await click('[data-knowledge-link]');
+  assert.equal((await evaluate('messages.at(-1)')).action, 'link');
+  await click('[data-project-plan]');
+  assert.deepEqual(await evaluate('messages.at(-1)'), { type: 'projectPlan', topicId: 'contract' });
   const qualityIssues = [
     { code: 'community-split', message: '检查 <entry> & "边界"', contextIds: [], elementIds: [], sourcePaths: ['src/fallback.ts'], reason: '保留完整原因', evidence: [{ path: 'src/runner.ts', line: 12 }] },
     { code: 'ownership-review', message: 'Review ownership', contextIds: [], elementIds: [], sourcePaths: ['src/editor.ts'] }

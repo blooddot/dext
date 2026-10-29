@@ -34,6 +34,7 @@ type ProjectStructureIndexSummary
 } from "./generation/projectAiGeneration.js";
 import { textDecoder } from "./indexing/workspaceEvidence.js";
 import type { ProjectDefinition, ProjectSaveResult } from "./persistence/projectStore.js";
+import type { ProjectModel } from "../contracts/projectModel.js";
 import { textEncoder } from "./persistence/vscodeProjectFileHost.js";
 import type { ProjectInitializationCheckpointStore, ProjectModelCheckpoint } from "./generation/projectModelCheckpoint.js";
 import { ProjectInitializationService } from "./projectService.js";
@@ -41,11 +42,13 @@ import { ProjectInitializationService } from "./projectService.js";
 
 export interface ProjectPanelDataSourceOptions {
   bootstrapCheckpoint?: () => Promise<{ stage: string; fraction: number } | undefined>;
+  updateKnowledge?: (request: unknown) => Promise<void>;
   bootstrap?: (provider: ProjectAiProvider | undefined, signal: AbortSignal, progress: ProjectInitializationProgressListener) => Promise<ProjectInitializationOutput>;
   name: string;
   root: string;
   rootUri: vscode.Uri;
   store: {
+    readModel?(): Promise<ProjectModel | undefined>;
     readObjects(): Promise<ProjectObject[]>;
     /** Only the fields the panel reads; a partial store double stays valid. */
   readArchitecture(): Promise<{ decisions: ProjectArchitectureDecision[]; diagramId?: string | undefined; rules?: readonly ArchitectureRule[] | undefined }>;
@@ -323,7 +326,8 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
     return topics;
   };
   const readTopics = async () => {
-    const intent = await options.store.readIntent?.() ?? generatedIntent;
+    const native = await options.store.readModel?.();
+    const intent = native ? await options.store.readIntent?.() : await options.store.readIntent?.() ?? generatedIntent;
     if (!intent) return [];
     const base = buildProjectTopics(intent, await readDiagrams());
     const derived = await readDerivedTopics();
@@ -520,8 +524,9 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
         : { markedInitialized: false, hasIntent: Boolean(persistedIntent), diagramCount: persistedDiagrams?.length ?? 0 };
       initializationService.hydrate({ ...hydration, ...(bootstrapCheckpoint ? { checkpoint: bootstrapCheckpoint } : checkpointInfo ? { checkpoint: { stage: checkpointInfo.stage, fraction: checkpointInfo.fraction } } : {}) });
     }
-    if (persistedIntent) generatedIntent = persistedIntent;
-    const intent = generatedIntent ?? persistedIntent;
+    const native = await options.store.readModel?.();
+    if (!native && persistedIntent) generatedIntent = persistedIntent;
+    const intent = native ? persistedIntent : generatedIntent ?? persistedIntent;
     const diagrams = sortProjectDiagrams(persistedDiagrams ?? []);
     const initialization = decorateInitialization(initializationService.snapshot);
     const engine = options.diagramRegistry ? await options.diagramRegistry.engineInfo() : undefined;
@@ -564,6 +569,7 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
         } : {})
       },
       objects,
+      ...(native ? { model: native } : {}),
       readerDiagrams: diagrams,
       ...(intent ? {
         knowledge: {
@@ -597,6 +603,13 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
 
   return {
     load,
+    openKnowledgeDocument: async (id: string): Promise<void> => {
+      const model = await options.store.readModel?.();
+      const node = model?.nodes.find(node => node.id === id);
+      if (!node || node.body.kind !== "document" || !options.openEvidence) throw new Error("Knowledge document is unavailable.");
+      await options.openEvidence(node.body.path);
+    },
+    ...(options.updateKnowledge ? { updateKnowledge: options.updateKnowledge } : {}),
     subscribe: (listener: (message: ProjectPanelMessage) => void): (() => void) => {
       listeners.add(listener);
       return () => listeners.delete(listener);

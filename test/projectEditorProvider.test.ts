@@ -48,6 +48,13 @@ const setup = (overrides: Partial<ProjectEditorDataSource> = {}) => {
 };
 
 describe("project editor tab", () => {
+  it("routes the selected Project identity to Plan without triggering generation", async () => {
+    const host = new FakeHost(); const manager = new EditorTabManager(host); const ids: string[] = [];
+    const provider = new ProjectEditorProvider({ manager, restorer: new EditorTabRestorer(manager), dataSource: { load: async () => data }, planFromProjectObject: id => { ids.push(id); } });
+    await provider.handleMessage(provider.key, { type: "projectPlan", topicId: "module:api" });
+    await provider.handleMessage("other", { type: "projectPlan", topicId: "ignored" });
+    expect(ids).toEqual(["module:api"]);
+  });
   it("copies quality text through the host and acknowledges clipboard failures", async () => {
     const host = new FakeHost();
     const manager = new EditorTabManager(host);
