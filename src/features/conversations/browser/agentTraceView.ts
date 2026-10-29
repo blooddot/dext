@@ -1,6 +1,7 @@
 import type { AgentStreamEvent, AgentToolKind, WorkflowStepResponse } from "../../../shared/contracts/types.js";
 import { agentMessageCopyText, presentAgentMessage } from "../presentation/agentMessagePresentation.js";
 import { renderTurnMessage } from "../presentation/turnComponents.js";
+import { renderMarkdownDiagrams } from "../../../platform/browser/markdownDiagrams.js";
 import { turnDomAdapter } from "./turnDomAdapter.js";
 
 export interface AgentToolCommand {
@@ -200,6 +201,7 @@ export class AgentTraceView {
     if (body) {
       const raw = event.replace ? event.text : `${body.dataset.raw ?? ""}${event.text}`;
       body.dataset.raw = raw;
+      if (event.done) item.dataset.final = "true";
       this.copyTexts.set(copyKey, agentMessageCopyText(presentAgentMessage(raw)));
       this.scheduleMessageRender(item);
     }
@@ -358,6 +360,9 @@ export class AgentTraceView {
         const content = this.host.document.createElement("div");
         content.className = "markdown-body";
         content.innerHTML = this.host.markdown(text);
+        // A streaming row is rewritten every frame; a half-written fence would
+        // queue a diagram render per frame, so only a finished row renders one.
+        if (body.parentElement?.dataset.final === "true") renderMarkdownDiagrams(content);
         return content;
       },
       code: (text) => this.host.codeBlock(text),

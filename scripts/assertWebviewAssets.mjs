@@ -18,7 +18,7 @@ const fileNames = files.filter((file) => file.size > 0).map((file) => file.entry
 
 // `ts.worker.js` is what gives the composer its TypeScript completion, hover and
 // diagnostics; without it the editor silently loses every language feature.
-for (const required of ["main.js", "project.js", "apiFlow.js", "mermaid.js", "main.css", "editor.worker.js", "ts.worker.js"]) {
+for (const required of ["main.js", "project.js", "apiFlow.js", "mermaid.js", "diagrams.js", "main.css", "editor.worker.js", "ts.worker.js"]) {
   assert.ok(fileNames.includes(required), `Missing Webview build asset '${required}'.`);
 }
 assert.ok((await stat(resolve("dist", "codicons", "codicon.ttf"))).size > 0, "Missing VS Code codicon font.");
@@ -50,6 +50,7 @@ for (const required of [
   "dist/webview/project.js",
   "dist/webview/apiFlow.js",
   "dist/webview/mermaid.js",
+  "dist/webview/diagrams.js",
   "dist/webview/editor.worker.js",
   "dist/webview/ts.worker.js",
   "dist/codicons/codicon.css",

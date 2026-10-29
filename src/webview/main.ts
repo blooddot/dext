@@ -38,6 +38,7 @@ import { renderConversationTabs } from "../features/conversations/browser/conver
 import { planActions, renderPlanToolbar as renderPlanToolbarView } from "../features/conversations/browser/planControls.js";
 import type { PlanProjectContext } from "../shared/contracts/planProject.js";
 import { AgentTraceView } from "../features/conversations/browser/agentTraceView.js";
+import { renderMarkdownDiagrams } from "../platform/browser/markdownDiagrams.js";
 import { CLI_SPEEDS } from "../features/agents/domain/builtinCli.js";
 import type { ContextReferenceOccurrence } from "../features/workspace/domain/fileReference.js";
 import { DEFAULT_HARNESS_PRESET, harnessPresetOrDefault } from "../features/agents/domain/harnessPresetDefault.js";
@@ -1879,6 +1880,7 @@ function copyableText(content: string): HTMLElement {
   const body = document.createElement("div");
   body.className = "markdown-body";
   body.innerHTML = markdown.render(content);
+  renderMarkdownDiagrams(body);
   return renderTurnMarkdown(turnDomAdapter(document), body);
 }
 

@@ -106,6 +106,7 @@ describe("History turn action routing", () => {
       acquireVsCodeApi: () => ({ postMessage }), Element,
       document: {
         addEventListener: (type: string, callback: (event: unknown) => void) => clickListeners.set(type, callback),
+        querySelector: () => null,
         querySelectorAll: () => rows
       },
       window: { addEventListener: (type: string, callback: (event: unknown) => void) => windowListeners.set(type, callback) }

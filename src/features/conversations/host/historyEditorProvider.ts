@@ -125,6 +125,9 @@ export class DextHistoryPanel implements vscode.Disposable {
     const codicons = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "dist", "codicons", "codicon.css"));
     const style = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "media", "styles.css"));
     const markdownStyle = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "dist", "markdown", "github-markdown.css"));
+    // Diagrams come from the shared bundles, loaded only when a turn has one.
+    const diagrams = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "dist", "webview", "diagrams.js"));
+    const mermaid = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "dist", "webview", "mermaid.js"));
     const ordering = this.preferences.historyOrdering();
     const favorites = new Set(ordering.favorites);
     // For the active view this is equivalent to orderHistorySessions(this.history.list(), ordering);
@@ -151,6 +154,8 @@ export class DextHistoryPanel implements vscode.Disposable {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource}; style-src ${webview.cspSource} 'unsafe-inline'; font-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
+  <meta name="dext-script-nonce" content="${nonce}">
+  <meta name="dext-mermaid" content="${mermaid.toString()}">
   <link rel="stylesheet" href="${codicons.toString()}">
   <link rel="stylesheet" href="${markdownStyle.toString()}">
   <link rel="stylesheet" href="${style.toString()}">
@@ -161,8 +166,11 @@ export class DextHistoryPanel implements vscode.Disposable {
   <section class="history-view" aria-label="Dext History">
     <div class="history-content">${body}</div>
   </section>
+  <script nonce="${nonce}" src="${diagrams.toString()}"></script>
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
+    const renderDiagrams = (root) => window.dextRenderDiagrams?.(root);
+    renderDiagrams(document.querySelector('.history-content'));
     document.addEventListener('click', (event) => {
       const target = event.target instanceof Element ? event.target : null;
       const copyButton = target?.closest('button[data-copy]');
@@ -223,6 +231,7 @@ export class DextHistoryPanel implements vscode.Disposable {
       const body = target.querySelector('.history-session-body');
       if (!body) return;
       body.innerHTML = message.html;
+      renderDiagrams(body);
       target.dataset.historyLoaded = 'true';
       delete target.dataset.historyLoading;
     });

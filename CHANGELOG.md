@@ -10,6 +10,8 @@ All notable changes to Dext are documented in this file.
 
 ## Unreleased
 
+- `mermaid` fenced blocks now render as diagrams in every Dext Markdown output surface: the turn's **Output**, finished **Process** messages, and **History** pages. A row that is still streaming keeps its source until the message completes, so a half-written fence is never rendered.
+
 - Extended Plan and `plan()` with optional Project grounding, preflight version checks, actual-change verification and reviewed norm reconciliation. Existing plans, modes and result kinds remain compatible; completed plans are retained.
 - Added native Project nodes, relationships and owned Knowledge bodies, explicit bootstrap routes and backed-up legacy migration. Existing data remains usable before migration.
 - Added bounded read-only `project_query` and Pi's scoped host query callback, plus Knowledge body/relationship controls and Plan-from-Project actions.

@@ -10,13 +10,17 @@ const historyBundle = await build({ entryPoints: ['src/features/conversations/pr
 const historyModule = { exports: {} };
 new Function('require', 'module', 'exports', historyBundle.outputFiles[0].text)(createRequire(import.meta.url), historyModule, historyModule.exports);
 const { renderHistoryRecord } = historyModule.exports;
+// The shared Mermaid bundle is a separate Webview entry; loading it here is what a
+// real page does when the first diagram appears.
+const mermaidBundle = await build({ entryPoints: ['src/webview/mermaid.ts'], bundle: true, write: false, platform: 'browser', format: 'iife', target: 'es2022', minify: true, logLevel: 'silent' });
+const diagramsBundle = await build({ entryPoints: ['src/webview/diagrams.ts'], bundle: true, write: false, platform: 'browser', format: 'iife', target: 'es2022', minify: true, logLevel: 'silent' });
 const raw = ' \r\n' + JSON.stringify({ 中文: '第一行\n"引号" C:\\path **bold** `code` <img src=x>', nested: [{ long: 'x'.repeat(8000) }] }) + '\r\n ';
 const command = 'powershell -NoProfile -EncodedCommand ' + Buffer.from('Write-Output "中文"', 'utf16le').toString('base64').repeat(500);
 const execution = (result) => ({ invocation: { kind: 'invocation', method: result.kind, source: 'code', arguments: [] },
   method: { id: result.kind, title: result.kind, kind: 'command', source: 'builtin' }, result, durationMs: 1 });
 const response = { kind: 'workflow', executions: [execution({ kind: 'ask', text: raw }), execution({ kind: 'terminal', command,
   cwd: 'C:\\' + 'long-path'.repeat(200), stdout: 'ok', stderr: '', status: 'succeeded', exit_code: 0, duration_ms: 1 }),
-  execution({ kind: 'ask', text: '# Ordinary Markdown\n\n**still bold**' }),
+  execution({ kind: 'ask', text: '# Ordinary Markdown\n\n**still bold**\n\n```mermaid\nflowchart TD\n A[打开宠物] --> B[完成]\n```' }),
   execution({ kind: 'ask', text: '{invalid JSON}' })] };
 const usageEvents = [{ phase: 'status', text: '', usage: { totalTokens: 900 } },
   { phase: 'status', text: '', usage: { inputTokens: 1000, cachedInputTokens: 800, outputTokens: 234 } }];
@@ -31,6 +35,8 @@ await runLabChecks(async ({ evaluate, settle, send, click }) => {
     window.messages=[];
     window.acquireVsCodeApi=()=>({postMessage:m=>{messages.push(m);if(m.type==='clipboardWrite')queueMicrotask(()=>host({type:'clipboardWriteResult',requestId:m.requestId,success:true}));},getState:()=>({}),setState:()=>{}});
     window.host=m=>window.dispatchEvent(new MessageEvent('message',{data:m}));`);
+  await evaluate(mermaidBundle.outputFiles[0].text);
+  await evaluate(diagramsBundle.outputFiles[0].text);
   await evaluate(`{const style=document.createElement('style');style.textContent=${JSON.stringify(await readFile('dist/webview/main.css', 'utf8'))};document.head.append(style);}`);
   await evaluate(await readFile('dist/webview/main.js', 'utf8'));
   await evaluate(`window.selection={profileId:'codex',permission:'full-access',model:'test-model',reasoningEffort:'',speed:'',serviceTier:''};
@@ -43,6 +49,10 @@ await runLabChecks(async ({ evaluate, settle, send, click }) => {
   assert.match(await evaluate(`document.querySelector(${JSON.stringify(processSummary)}).textContent`), /1\.2k tokens/, 'live usage');
   assert.equal(await evaluate(`document.querySelectorAll('.json-output').length`), 0, 'incomplete streaming output is not JSON');
   assert.ok(await evaluate(`document.getElementById('result').textContent.includes('{"partial":')`), 'incomplete stream stays visible');
+  assert.equal(await evaluate(`document.querySelectorAll('.agent-stream-item .markdown-diagram').length`), 0, 'a streaming row renders no diagram mid-fence');
+  await evaluate(`host({type:'agentEvents',sessionId:'active',events:[{phase:'message',id:'final',text:${JSON.stringify('```mermaid\nflowchart TD\n A[过程] --> B[完成]\n```')},replace:true,done:true}]});`);
+  assert.equal(await evaluate(`new Promise(resolve=>{const deadline=Date.now()+15000;const check=()=>{if(document.querySelector('.agent-stream-item [data-diagram-state=ready] svg'))resolve(true);else if(Date.now()>deadline)resolve(false);else setTimeout(check,50);};check();})`), true, 'a finished Process message renders its diagram');
+  assert.equal(await evaluate(`document.querySelector('.agent-stream-item [data-diagram-state=ready] svg').textContent.includes('过程')`), true);
   await evaluate(`host({type:'execution',sessionId:'active',turnId:'t1',response:${JSON.stringify(response)}});
     host({type:'executing',value:false,sessionId:'active',turnId:'t1'});`);
   await settle();
@@ -55,6 +65,9 @@ await runLabChecks(async ({ evaluate, settle, send, click }) => {
   assert.equal(await evaluate(`document.querySelectorAll('.json-output strong,.json-output img').length`), 0);
   assert.equal(await evaluate(`document.querySelectorAll('.json-output').length`), 1);
   assert.ok(await evaluate(`Array.from(document.querySelectorAll('.markdown-body strong')).some(el=>el.textContent==='still bold')`));
+  assert.equal(await evaluate(`new Promise(resolve=>{const deadline=Date.now()+15000;const check=()=>{if(document.querySelector('[data-diagram-state=ready] svg'))resolve(true);else if(Date.now()>deadline)resolve(false);else setTimeout(check,50);};check();})`), true, 'a Mermaid fence in Output renders a diagram');
+  assert.equal(await evaluate(`document.querySelector('[data-diagram-state=ready] svg').textContent.includes('完成')`), true);
+  assert.equal(await evaluate(`document.querySelectorAll('.markdown-diagram-staging').length`), 0, 'diagram staging DOM is cleaned up');
   assert.ok(await evaluate(`document.getElementById('result').textContent.includes('{invalid JSON}')`));
   await click('.json-output .output-copy');
   assert.equal(await evaluate(`messages.findLast(m=>m.type==='clipboardWrite').text`), raw, 'live copy is byte-for-byte source');
@@ -90,7 +103,8 @@ await runLabChecks(async ({ evaluate, settle, send, click }) => {
 
   // History's HTML adapter and the shipped delegated copy handler.
   const historyProvider = await readFile('src/features/conversations/host/historyEditorProvider.ts', 'utf8');
-  const historyScript = historyProvider.slice(historyProvider.indexOf('<script nonce="${nonce}">') + '<script nonce="${nonce}">'.length, historyProvider.indexOf('</script>'));
+  const historyScriptStart = historyProvider.indexOf('<script nonce="${nonce}">') + '<script nonce="${nonce}">'.length;
+  const historyScript = historyProvider.slice(historyScriptStart, historyProvider.indexOf('</script>', historyScriptStart));
   await evaluate(`document.body.innerHTML='<section class="history-view"><div class="history-content" id="history-fixture"></div></section>';`);
   await evaluate(`(()=>{${historyScript}})()`);
   for (const saved of [record, { ...record, output: raw }]) {
@@ -107,4 +121,10 @@ await runLabChecks(async ({ evaluate, settle, send, click }) => {
     await checkWidths('.history-content,.json-output,.terminal-disclosure');
   }
   console.log('PASS Conversation re-open and History replay including legacy raw JSON, exact CRLF copy and narrow layout');
+
+  // A lazily loaded History session arrives as HTML; the provider's inline script
+  // must hand it to the shared diagram renderer.
+  await evaluate(`document.body.insertAdjacentHTML('beforeend','<details class="history-session" data-history-session-id="s1"><summary>x</summary><div class="history-session-body" id="history-diagram-body"></div></details>');
+    window.dispatchEvent(new MessageEvent('message',{data:{type:'historySessionBody',sessionId:'s1',html:${JSON.stringify(renderHistoryRecord(JSON.parse(JSON.stringify(record))))}}}));`);
+  assert.equal(await evaluate(`new Promise(resolve=>{const deadline=Date.now()+15000;const check=()=>{if(document.querySelector('#history-diagram-body [data-diagram-state=ready] svg'))resolve(true);else if(Date.now()>deadline)resolve(false);else setTimeout(check,50);};check();})`), true, 'History renders a Mermaid fence in a lazily loaded session');
 }, false);

@@ -50,6 +50,9 @@ const contexts = await Promise.all([
       // copy of Mermaid in the VSIX; both pages lazy-load it only when a diagram
       // is present, instead of each bundle inlining its own ~3 MB copy.
       mermaid: "src/webview/mermaid.ts",
+      // Host-rendered pages (History) have no bundle to call the diagram renderer
+      // from, so this entry exposes it as a global for their inline script.
+      diagrams: "src/webview/diagrams.ts",
       // API detail pages render Mermaid only when an Execution flow exists; this
       // separate entry keeps that renderer out of every other editor-tab page.
       apiFlow: "src/features/resources/browser/apiFlow.ts",
