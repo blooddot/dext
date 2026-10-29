@@ -1488,7 +1488,6 @@ function selectConversation(sessionId: string): void {
   // event.  The replacement is restored from cache or received from the host
   // afterwards, so a slow response never leaves stale conversation content
   // below an already-selected tab.
-  persistComposerDraft();
   if (sidebarState) renderAgentControls(sidebarState);
   scheduleComposerDraftRestore(sessionId, switchId);
   for (const tab of elements.conversationTabs.querySelectorAll<HTMLElement>(".conversation-tab")) {
@@ -1538,7 +1537,6 @@ const conversationTabDrag = enableConversationTabDrag(elements.conversationTabs,
 
 function renderConversations(sessions: readonly ConversationSummary[], activeId: string): void {
   const activeChanged = browser.setActiveId(activeId);
-  if (activeChanged) persistComposerDraft();
   if (activeChanged) scheduleComposerDraftRestore(activeId);
   runningConversationIds.clear();
   for (const conversation of sessions) {
@@ -2820,7 +2818,8 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     // without going through selectConversation(). Clear the previous tab's
     // execution state before its historical DOM is restored; otherwise the
     // old live row can be appended to the newly selected conversation.
-    if (browser.activeId !== message.activeId) {
+    const activeChanged = browser.activeId !== message.activeId;
+    if (activeChanged) {
       executing = false;
       stopping = false;
       activeTurnId = undefined;
@@ -2828,6 +2827,7 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
       clearVisibleConversation();
     }
     browser.activeId = message.activeId;
+    if (activeChanged) scheduleComposerDraftRestore(message.activeId, message.switchId);
     if (message.resource) resourceSessions.set(message.activeId, message.resource);
     else resourceSessions.delete(message.activeId);
     for (const tab of elements.conversationTabs.querySelectorAll<HTMLElement>(".conversation-tab")) {

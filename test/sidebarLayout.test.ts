@@ -880,7 +880,7 @@ describe("sidebar panel layout", () => {
     h.dispose();
     expect(main).toMatch(/!message\.hostInitiated && browser\.activeId && message\.session\.id !== browser\.activeId/);
     expect(main).toMatch(/!message\.hostInitiated && message\.switchId === undefined && browser\.activeId && message\.activeId !== browser\.activeId/);
-    expect(main).toMatch(/if \(browser\.activeId !== message\.activeId\) \{[\s\S]*?activeExecutionSessionId = undefined;[\s\S]*?clearVisibleConversation\(\);/);
+    expect(main).toMatch(/const activeChanged = browser\.activeId !== message\.activeId;[\s\S]*?activeExecutionSessionId = undefined;[\s\S]*?clearVisibleConversation\(\);/);
   });
 
   it("snapshots replay events before awaiting the executing message", async () => {
