@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 import type { ProjectInitializationProgressListener } from "../../contracts/lifecycle.js";
 import { type ProjectIntent } from "../../contracts/projectIntent.js";
 import type { ProjectObject } from "../../contracts/projectKnowledge.js";
+import type { ProjectModel } from "../../contracts/projectModel.js";
 import type { ArchifyRepository } from "../diagrams/archifyAdapter.js";
 import {
 attachStructureGraph,
@@ -130,7 +131,7 @@ async function findEvidenceScope(
  */
 export async function readStructureIndexEvidence(
   root: vscode.Uri,
-  knowledge: { objects?: readonly ProjectObject[]; intent?: ProjectIntent },
+  knowledge: { objects?: readonly ProjectObject[]; intent?: ProjectIntent; model?: ProjectModel },
   options: ProjectEvidenceReadOptions,
   onProgress?: ProjectInitializationProgressListener,
   signal?: AbortSignal
@@ -163,7 +164,7 @@ export async function readStructureIndexEvidence(
  */
 export async function readProjectEvidence(
   root: vscode.Uri,
-  knowledge: { objects?: readonly ProjectObject[]; intent?: ProjectIntent },
+  knowledge: { objects?: readonly ProjectObject[]; intent?: ProjectIntent; model?: ProjectModel },
   options: ProjectEvidenceReadOptions,
   onProgress?: ProjectInitializationProgressListener,
   signal?: AbortSignal
@@ -286,7 +287,12 @@ export async function readProjectEvidence(
 }
 
 
-export function buildKnowledgeReferences(knowledge: { objects?: readonly ProjectObject[]; intent?: ProjectIntent }): ProjectKnowledgeReference[] {
+export function buildKnowledgeReferences(knowledge: { objects?: readonly ProjectObject[]; intent?: ProjectIntent; model?: ProjectModel }): ProjectKnowledgeReference[] {
+  if (knowledge.model) return knowledge.model.nodes.map(node => ({
+    id: node.id, name: node.title,
+    kind: (["project", "capability", "context", "flow", "step", "term", "constraint", "decision", "architecture", "contract"].includes(node.kind) ? node.kind : ["person", "system", "container"].includes(node.kind) ? "c4" : "object") as ProjectKnowledgeReference["kind"],
+    description: `${node.review}/${node.freshness}: ${node.body.kind === "inline" ? node.body.text : `Document: ${node.body.path}`}`
+  }));
   const references: ProjectKnowledgeReference[] = [];
   for (const object of knowledge.objects ?? []) {
     if (object.confirmation !== "accepted") continue;

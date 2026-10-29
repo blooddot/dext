@@ -2,10 +2,16 @@ import { describe, expect, it } from "vitest";
 import { searchProjectReferences } from "../src/features/project/knowledge/projectContext.js";
 import { projectIntentSchema } from "../src/features/project/contracts/projectIntent.js";
 import { projectObjectSchema } from "../src/features/project/contracts/projectKnowledge.js";
+import { projectModelSchema } from "../src/features/project/contracts/projectModel.js";
 
 const make = (canonicalName: string) => projectObjectSchema.parse({ id: canonicalName, canonicalName, kind: "feature", source: "ai", description: "feature" });
 
 describe("project context", () => {
+  it("offers native contracts and excludes legacy fallback once the model exists", () => {
+    const model = projectModelSchema.parse({ schemaVersion: 1, revision: 0, updatedAt: 0, nodes: [{ id: "contract", title: "API", canonicalName: "API", kind: "contract", body: { kind: "inline", text: "Contract" }, review: "accepted" }], relations: [] });
+    const results = searchProjectReferences({ model, objects: [{ ...make("Legacy"), confirmation: "accepted" }], query: "" });
+    expect(results.map(item => item.objectId)).toEqual(["contract"]);
+  });
   it("offers only reviewed Project names including terms and bounded contexts", () => {
     const intent = projectIntentSchema.parse({ schemaVersion: 1, updatedAt: 1, brief: { name: "Example" },
       capabilities: [{ id: "cap", canonicalName: "TaskQuery", review: "accepted" }],

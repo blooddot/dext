@@ -52,3 +52,15 @@ export function reconcileProjectModel(next: ProjectIntent, previous: ProjectInte
     ...(next.c4 ? { c4: { ...next.c4, elements: next.c4.elements.map(item => ({ ...item, contextIds: item.contextIds.map(idOf) })) } } : {})
   };
 }
+import type { ProjectModel } from "../contracts/projectModel.js";
+
+/** Merge validated candidates; the persistence boundary validates the resulting graph before commit. */
+export function reconcileNativeProject(candidate: ProjectModel, previous?: ProjectModel): ProjectModel {
+  if (!previous) return candidate;
+  const reviewed = (item: { review: string }) => item.review === "accepted" || item.review === "edited";
+  const nodes = new Map(previous.nodes.map(node => [node.id, node]));
+  for (const node of candidate.nodes) if (!nodes.has(node.id) || !reviewed(nodes.get(node.id)!)) nodes.set(node.id, node);
+  const relations = new Map(previous.relations.map(edge => [edge.id, edge]));
+  for (const edge of candidate.relations) if (!relations.has(edge.id) || !reviewed(relations.get(edge.id)!)) relations.set(edge.id, edge);
+  return { ...previous, nodes: [...nodes.values()], relations: [...relations.values()] };
+}

@@ -1,8 +1,13 @@
 import { z } from "zod";
+import { projectContentHash } from "./projectHash.js";
+export { projectContentHash } from "./projectHash.js";
+import { ProjectModelStore, type ProjectDocumentUpdate } from "./projectModelStore.js";
+import type { ProjectModel } from "../../contracts/projectModel.js";
+import { projectModelIntent } from "../../knowledge/projectModel.js";
 import type { ProjectEvidenceSummary } from "../../contracts/evidence.js";
 import { validateProjectDiagram, type ProjectDiagram } from "../../contracts/projectDiagram.js";
 import { projectEvidenceSettingsSchema } from "../../contracts/projectEvidenceSettings.js";
-import { projectIntentSchema, type ProjectIntent } from "../../contracts/projectIntent.js";
+import { projectIntentSchema, validateProjectIntent, type ProjectIntent } from "../../contracts/projectIntent.js";
 import { normalizeProjectObject, type ProjectObject } from "../../contracts/projectKnowledge.js";
 import { projectToolSettingsSchema, projectWorkspaceSettingsSchema } from "../../contracts/projectSettings.js";
 import type { ProjectDiagramHistoryState } from "../../knowledge/projectDiagramHistory.js";
@@ -114,6 +119,18 @@ export interface ProjectFileHost {
   readFile(relativePath: string): Promise<string | undefined>;
   writeFile(relativePath: string, content: string): Promise<void>;
   listDirectory(relativeDir: string): Promise<string[]>;
+  /** Missing files return undefined; all other failures must be propagated. */
+  readFileStrict?(relativePath: string): Promise<string | undefined>;
+  listDirectoryStrict?(relativeDir: string): Promise<string[]>;
+  deleteFile?(relativePath: string): Promise<void>;
+}
+
+export interface ProjectLegacySnapshot {
+  diagram?: ProjectDiagram;
+  intent?: ProjectIntent;
+  objects: ProjectObject[];
+  architecture?: ProjectArchitectureDocument;
+  files: Array<{ path: string; raw: string; hash: string }>;
 }
 
 export type ProjectSaveResult<T> =
@@ -129,6 +146,98 @@ export interface ProjectSaveOptions {
  */
 export class ProjectStore {
   constructor(private readonly host: ProjectFileHost) {}
+
+  readModel(): Promise<ProjectModel | undefined> { return new ProjectModelStore(this.host).read(); }
+  private nativeStore: ProjectModelStore | undefined;
+  updateProject(next: ProjectModel, expectedRevision: number | null, documents: readonly ProjectDocumentUpdate[] = []): Promise<ProjectModel> {
+    this.nativeStore ??= new ProjectModelStore(this.host);
+    return this.nativeStore.update(next, expectedRevision, documents);
+  }
+
+  async readStrict(path: string): Promise<string | undefined> {
+    return this.host.readFileStrict ? this.host.readFileStrict(path) : this.host.readFile(path);
+  }
+
+  async listStrict(path: string): Promise<string[]> {
+    return this.host.listDirectoryStrict ? this.host.listDirectoryStrict(path) : this.host.listDirectory(path);
+  }
+
+  /** The Plan path must distinguish absent data from damaged or inaccessible norms. */
+  async readLegacySnapshot(validateRelations = true): Promise<ProjectLegacySnapshot> {
+    if (await this.readModel()) throw new Error("Native Project is authoritative; legacy snapshot is disabled.");
+    const snapshot: ProjectLegacySnapshot = { objects: [], files: [] };
+    const read = async (path: string): Promise<unknown> => {
+      const raw = await this.readStrict(path);
+      if (raw === undefined) return undefined;
+      snapshot.files.push({ path, raw, hash: projectContentHash(raw) });
+      return JSON.parse(raw) as unknown;
+    };
+    const intent = await read(PROJECT_INTENT_PATH);
+    if (intent !== undefined) {
+      snapshot.intent = projectIntentSchema.parse(intent);
+      const errors = validateProjectIntent(snapshot.intent);
+      if (errors.length) throw new Error(errors.map(error => error.message).join(" "));
+    }
+    const architecture = await read(PROJECT_ARCHITECTURE_PATH);
+    if (architecture !== undefined) snapshot.architecture = projectArchitectureSchema.parse(architecture);
+    const names = this.host.listDirectoryStrict ? await this.host.listDirectoryStrict(".dext/objects") : await this.host.listDirectory(".dext/objects");
+    for (const name of names.sort()) {
+      if (!name.endsWith(".json")) continue;
+      if (/[\\/]/.test(name) || name === "..") throw new Error("Invalid Project object file name.");
+      const object = await read(`.dext/objects/${name}`);
+      if (object === undefined) throw new Error(`Project object '${name}' disappeared during reading.`);
+      snapshot.objects.push(normalizeProjectObject(object));
+    }
+    const ids = new Set(snapshot.objects.map(object => object.id));
+    if (ids.size !== snapshot.objects.length) throw new Error("Duplicate Project object IDs.");
+    for (const object of snapshot.objects) for (const id of validateRelations ? object.relatedIds : []) {
+      if (!ids.has(id)) throw new Error(`Project object '${object.id}' references missing object '${id}'.`);
+    }
+    if (snapshot.architecture?.rules.length) {
+      const diagrams = await this.readDiagrams();
+      const diagram = snapshot.architecture.diagramId
+        ? diagrams.find(item => item.id === snapshot.architecture!.diagramId)
+        : diagrams.filter(item => item.kind === "architecture").length === 1 ? diagrams.find(item => item.kind === "architecture") : undefined;
+      if (!diagram) throw new Error("Architecture rules have no unambiguous saved diagram.");
+      const diagramRaw = await read(projectDiagramPath(diagram.id));
+      if (diagramRaw === undefined) throw new Error("Architecture diagram disappeared during reading.");
+      const savedDiagram = diagramRaw as ProjectDiagram;
+      if (validateProjectDiagram(savedDiagram).some(issue => issue.severity === "error")) throw new Error("Architecture diagram is invalid.");
+      snapshot.diagram = savedDiagram;
+      const nodes = new Set(diagram.nodes.map(node => node.id));
+      for (const rule of snapshot.architecture.rules) {
+        if ((rule.from !== "*" && !nodes.has(rule.from)) || (rule.to !== undefined && !nodes.has(rule.to))) throw new Error(`Architecture rule '${rule.id}' has a missing endpoint.`);
+      }
+    }
+    return snapshot;
+  }
+
+  /** Hash guards protect external editors as well as other in-process callers. */
+  async writeLegacyChecked(path: string, value: unknown, expectedHash: string | null): Promise<"applied" | "conflict"> {
+    if (await this.readModel()) throw new Error("Native Project is authoritative; legacy writes are disabled.");
+    let parsed: unknown;
+    if (path === PROJECT_INTENT_PATH) {
+      parsed = projectIntentSchema.parse(value);
+      const errors = validateProjectIntent(parsed as ProjectIntent);
+      if (errors.length) throw new Error(errors.map(error => error.message).join(" "));
+    } else if (path === PROJECT_ARCHITECTURE_PATH) parsed = projectArchitectureSchema.parse(value);
+    else if (/^\.dext\/objects\/[^/\\]+\.json$/.test(path)) parsed = normalizeProjectObject(value);
+    else throw new Error("Unsupported Project write target.");
+    const current = await this.readStrict(path);
+    if ((current === undefined ? null : projectContentHash(current)) !== expectedHash) return "conflict";
+    await this.host.writeFile(path, `${JSON.stringify(parsed, null, 2)}\n`);
+    return "applied";
+  }
+
+  async deleteLegacyChecked(path: string, expectedHash: string): Promise<"applied" | "conflict"> {
+    if (await this.readModel()) throw new Error("Native Project is authoritative; legacy writes are disabled.");
+    if (!/^\.dext\/objects\/[^/\\]+\.json$/.test(path)) throw new Error("Only an explicit legacy object may be deleted.");
+    if (!this.host.deleteFile) throw new Error("Project deletion is unavailable.");
+    const current = await this.readStrict(path);
+    if (current === undefined || projectContentHash(current) !== expectedHash) return "conflict";
+    await this.host.deleteFile(path);
+    return "applied";
+  }
 
   async readDefinition(): Promise<ProjectDefinition> {
     const raw = await this.host.readFile(PROJECT_DEFINITION_PATH);
@@ -150,6 +259,15 @@ export class ProjectStore {
   }
 
   async readIntent(): Promise<ProjectIntent | undefined> {
+    const native = await this.readModel();
+    if (native) {
+      const documents = new Map<string, string>();
+      for (const node of native.nodes) if (node.body.kind === "document") {
+        const content = await this.readStrict(node.body.path);
+        if (content !== undefined) documents.set(node.body.path, content);
+      }
+      return projectModelIntent(native, documents);
+    }
     const raw = await this.host.readFile(PROJECT_INTENT_PATH);
     if (!raw) return undefined;
     try { return projectIntentSchema.parse(JSON.parse(raw)); } catch { return undefined; }
@@ -167,6 +285,7 @@ export class ProjectStore {
   }
 
   async writeIntent(intent: ProjectIntent): Promise<void> {
+    if (await this.readModel()) throw new Error("Native Project is authoritative; use updateProject.");
     await this.host.writeFile(PROJECT_INTENT_PATH, `${JSON.stringify(projectIntentSchema.parse(intent), null, 2)}\n`);
   }
 
@@ -216,6 +335,13 @@ export class ProjectStore {
   }
 
   async readObjects(): Promise<ProjectObject[]> {
+    const native = await this.readModel();
+    if (native) return native.nodes.filter(node => ["module", "feature", "concept"].includes(node.kind)).map(node => normalizeProjectObject({
+      id: node.id, canonicalName: /^[A-Za-z][A-Za-z0-9._-]*$/.test(node.canonicalName) ? node.canonicalName : `Node-${projectContentHash(node.id).slice(0, 10)}`,
+      displayName: node.title, kind: node.kind, description: node.body.kind === "inline" ? node.body.text : `Document: ${node.body.path}`, paths: node.paths,
+      relatedIds: native.relations.filter(edge => edge.from === node.id && edge.kind === "related_to").map(edge => edge.to),
+      source: node.origin === "declared" ? "user" : "ai", confirmation: node.review === "edited" ? "accepted" : node.review, validity: node.freshness, evidence: node.evidence
+    }));
     const names = await this.host.listDirectory(".dext/objects");
     const objects: ProjectObject[] = [];
     for (const name of names.filter((item) => item.endsWith(".json"))) {
@@ -231,6 +357,17 @@ export class ProjectStore {
   }
 
   async readArchitecture(): Promise<ProjectArchitectureDocument> {
+    const native = await this.readModel();
+    const endpoint = (id: string, role: string) => {
+      const edge = native?.relations.find(edge => edge.from === id && edge.kind === "constrains" && edge.description === role);
+      const node = native?.nodes.find(node => node.id === edge?.to);
+      return node?.properties.legacyNodeId ?? node?.id;
+    };
+    if (native) return projectArchitectureSchema.parse({ schemaVersion: 1, version: native.revision, updatedAt: native.updatedAt,
+      diagramId: native.nodes.find(node => node.properties.legacyScope === "architecture" && node.properties.diagramId)?.properties.diagramId,
+      decisions: native.nodes.filter(node => node.kind === "decision").map(node => ({ id: node.id, title: node.title, detail: node.body.kind === "inline" ? node.body.text : node.body.path })),
+      rules: native.nodes.filter(node => node.kind === "constraint" && node.properties.legacyScope === "architecture").map(node => ({ id: node.id, type: node.properties.type, from: node.properties.wildcardFrom ? "*" : endpoint(node.id, "from"), ...(endpoint(node.id, "to") ? { to: endpoint(node.id, "to") } : {}), reason: node.body.kind === "inline" ? node.body.text : node.body.path }))
+    });
     const raw = await this.host.readFile(PROJECT_ARCHITECTURE_PATH);
     if (!raw) return { schemaVersion: 1, version: 0, decisions: [], rules: [], updatedAt: 0 };
     try {
@@ -243,6 +380,7 @@ export class ProjectStore {
   }
 
   async writeArchitecture(next: ProjectArchitectureDocument, expectedVersion: number, options: ProjectSaveOptions = {}): Promise<ProjectSaveResult<ProjectArchitectureDocument>> {
+    if (await this.readModel()) throw new Error("Native Project is authoritative; edit its nodes and relationships instead.");
     const current = await this.readArchitecture();
     if (current.version !== expectedVersion) return { status: "conflict", current };
     const value = projectArchitectureSchema.parse({ ...next, version: current.version + 1, updatedAt: options.now ?? Date.now() });

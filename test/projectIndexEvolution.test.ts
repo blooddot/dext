@@ -100,3 +100,13 @@ it("keeps old diagrams readable in a temporary workspace after a path-only migra
     if (dirname(directory) === tmpdir() && directory.includes("dext-history-migration-")) await rm(directory, { recursive: true, force: true });
   }
 });
+import { reconcileNativeProject } from "../src/features/project/knowledge/projectModelEvolution.js";
+import { projectModelSchema } from "../src/features/project/contracts/projectModel.js";
+
+describe("native reviewed content protection", () => {
+  it("preserves accepted bodies and relations when candidates change or omit them", () => {
+    const previous = projectModelSchema.parse({ schemaVersion: 1, revision: 1, updatedAt: 0, nodes: ["a", "b"].map(id => ({ id, title: id, canonicalName: id, kind: "module", body: { kind: "inline", text: "accepted" }, review: "accepted" })), relations: [{ id: "ab", from: "a", to: "b", kind: "depends_on", review: "accepted" }] });
+    const candidate = { ...previous, nodes: [{ ...previous.nodes[0]!, body: { kind: "inline" as const, text: "replacement" } }], relations: [] };
+    expect(reconcileNativeProject(candidate, previous)).toEqual(previous);
+  });
+});

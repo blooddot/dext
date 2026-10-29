@@ -1,5 +1,15 @@
 import { z } from "zod";
 
+/** Exactly one normative body owner: inline content or an adopted workspace document. */
+export const knowledgeDocumentPathSchema = z.string().min(1).max(512).refine(path =>
+  !/^[\\/]|^[A-Za-z]:|[\\:]/.test(path) && !path.split("/").some(part => !part || part === "." || part === "..")
+  && !/\.plan\.md$|(^|\/)(?:plans|node_modules|\.git)(\/|$)/i.test(path), "Use a durable workspace document, never a Plan or external path.");
+export const knowledgeBodySchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("inline"), text: z.string().max(256_000) }).strict(),
+  z.object({ kind: z.literal("document"), path: knowledgeDocumentPathSchema, contentHash: z.string().min(1) }).strict()
+]);
+export type KnowledgeBody = z.infer<typeof knowledgeBodySchema>;
+
 /** Where a project object came from. Independent from whether a user confirmed it. */
 export const knowledgeSourceSchema = z.enum(["code", "ai", "user"]);
 export type KnowledgeSource = z.infer<typeof knowledgeSourceSchema>;

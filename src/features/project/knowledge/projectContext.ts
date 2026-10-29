@@ -1,19 +1,24 @@
 import type { ProjectIntent } from "../contracts/projectIntent.js";
+import type { ProjectModel } from "../contracts/projectModel.js";
 import type { ProjectObject } from "../contracts/projectKnowledge.js";
 import { formatProjectReference, type ProjectReferenceCandidate } from "./projectReference.js";
 
 /** Read-only picker data. Accepted items remain addressable when their evidence needs review. */
 export function searchProjectReferences(options: {
   objects: readonly ProjectObject[];
+  model?: ProjectModel;
   intent?: ProjectIntent | undefined;
   query: string;
   limit?: number;
 }): ProjectReferenceCandidate[] {
-  const candidates: ProjectReferenceCandidate[] = options.objects.filter((object) => object.confirmation === "accepted").map((object) => ({
+  const candidates: ProjectReferenceCandidate[] = options.model ? options.model.nodes.filter(node => node.review === "accepted" || node.review === "edited").map(node => ({
+    objectId: node.id, canonicalName: node.canonicalName, displayName: node.title, aliases: [], kind: node.kind,
+    token: formatProjectReference({ objectId: node.id, canonicalName: node.canonicalName })
+  })) : options.objects.filter((object) => object.confirmation === "accepted").map((object) => ({
     objectId: object.id, canonicalName: object.canonicalName, aliases: [...object.aliases], kind: object.kind,
     ...(object.displayName ? { displayName: object.displayName } : {}), token: formatProjectReference({ objectId: object.id, canonicalName: object.canonicalName })
   }));
-  if (options.intent) {
+  if (options.intent && !options.model) {
     for (const [kind, items] of [["capability", options.intent.capabilities], ["context", options.intent.contexts], ["term", options.intent.terms]] as const) {
       for (const item of items) {
         if (item.review !== "accepted" && item.review !== "edited") continue;

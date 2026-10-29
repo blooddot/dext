@@ -1,6 +1,7 @@
 import type { IndexedProjectEvidence } from "./evidence.js";
 import type { ProjectDiagram } from "./projectDiagram.js";
 import type { ProjectIntent } from "./projectIntent.js";
+import type { ProjectModel } from "./projectModel.js";
 
 
 
@@ -80,6 +81,7 @@ export interface ProjectInitializationState {
 
 
 export interface ProjectInitializationOutput {
+  model?: ProjectModel;
   intent?: ProjectIntent;
   diagrams?: ProjectDiagram[];
 }

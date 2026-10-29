@@ -18,7 +18,7 @@ export interface ProjectEvidenceFileInput {
 /** Existing Project knowledge offered to the model as stable semantic references. */
 export interface ProjectKnowledgeReference {
   id: string;
-  kind: "object" | "capability" | "context" | "flow" | "step" | "term" | "constraint" | "decision" | "c4";
+  kind: "object" | "capability" | "context" | "flow" | "step" | "term" | "constraint" | "decision" | "c4" | "project" | "architecture" | "contract";
   name: string;
   description?: string;
 }
