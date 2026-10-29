@@ -1076,7 +1076,7 @@ function renderSkillsControl(state: SidebarState): void {
   elements.skillsControl.title = enabled
     ? "Skills for this conversation"
     : state.skillsDisabledReason ?? "Skills are disabled in this workspace.";
-  elements.skillsControlValue.textContent = selectionLabel(selected);
+  elements.skillsControlValue.textContent = selectionLabel(selected, state.skills ?? []);
   elements.skillsControl.classList.toggle("has-skills", selected.length > 0);
   const focused = document.activeElement instanceof HTMLElement && elements.skillsMenu.contains(document.activeElement)
     ? document.activeElement.dataset.value

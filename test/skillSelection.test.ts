@@ -50,6 +50,12 @@ describe("skill selection tree", () => {
     expect(selectionLabel([])).toBe("No skills");
     expect(selectionLabel(["a"])).toBe("1 skill");
     expect(selectionLabel(["a", "b"])).toBe("2 skills");
+    const skills = [skill("review", "ponytail"), skill("audit", "ponytail"), skill("loose")];
+    expect(selectionLabel(["review"], skills)).toBe("review");
+    expect(selectionLabel(["review", "audit"], skills)).toBe("2 ponytail");
+    expect(selectionLabel(["review", "loose"], skills)).toBe("2 skills");
+    expect(selectionLabel(["loose", "gone"], skills)).toBe("2 skills");
+    expect(selectionLabel(["gone"], skills)).toBe("1 skill");
   });
 
   it("offers commands only for selected skills", () => {

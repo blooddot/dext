@@ -72,8 +72,20 @@ export function commandsForSelection(
   return commands.filter((command) => chosen.has(command.skillId));
 }
 
-export function selectionLabel(selected: readonly string[]): string {
-  return selected.length ? `${selected.length} skill${selected.length === 1 ? "" : "s"}` : "No skills";
+/** A lone skill is named; a selection that stays inside one pack reads as its
+ * count plus the pack name (`2 ponytail`). Ids the catalog no longer knows fall
+ * back to the count. */
+export function selectionLabel(selected: readonly string[], skills: readonly SkillSummary[] = []): string {
+  const count = `${selected.length} skill${selected.length === 1 ? "" : "s"}`;
+  if (!selected.length) return "No skills";
+  const chosen = new Set(selected);
+  const named = skills.filter((skill) => chosen.has(skill.id));
+  if (named.length !== selected.length) return count;
+  if (named.length === 1) return named[0]!.title;
+  const packId = named[0]!.packId;
+  return packId && named.every((skill) => skill.packId === packId)
+    ? `${named.length} ${named[0]!.packName ?? packId}`
+    : count;
 }
 
 /** The slash menu appears only while the first token on the line is the
