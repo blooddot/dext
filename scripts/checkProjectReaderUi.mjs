@@ -224,12 +224,48 @@ try {
     assert.match(overviewCopy.text, /Architecture issues[\s\S]*src\/runner.ts:12/);
     assert.equal(await evaluate(`document.documentElement.scrollWidth <= innerWidth`), true, 'overview copy fits viewport');
   }
+  // Project settings are label/control rows. A generic form-label rule used to win
+  // over the AI row grid, which stacked and centred every control, and a full-width
+  // rule stretched every checkbox across the row.
+  const settingsOverview = {
+    ...data.overview,
+    workspaceSettings: { planDirectory: '.dext/plans', apiDirs: ['.dext/api'], skillDirs: ['.dext/skills'], mcpDirs: ['.dext/mcp'] },
+    evidenceSettings: { depth: 'whole', files: 1000, chars: 1_200_000, fileChars: 200_000, include: [] },
+    workspaceSettingsVersion: 3,
+    evidenceSettingsVersion: 3,
+    toolSettings: { structureQuery: true, projectQuery: true },
+    aiCli: [{ id: 'pi', label: 'Pi CLI', models: [{ id: 'deepseek', label: 'DeepSeek', group: 'myproxy' }] }],
+    selectedAiCli: 'pi',
+    selectedAiModel: 'deepseek'
+  };
+  await send('Emulation.setDeviceMetricsOverride', { width: 1400, height: 950, deviceScaleFactor: 1, mobile: false });
+  await load('vscode-dark', { ...data, overview: settingsOverview }, {}, 'overview');
+  await click('.project-workspace-settings summary');
+  const settingRows = await evaluate(`['.project-ai-cli','.project-ai-model'].map((selector) => {
+    const label = document.querySelector(selector);
+    const control = label.lastElementChild.getBoundingClientRect();
+    const range = document.createRange();
+    range.selectNodeContents(label.firstChild);
+    const text = range.getBoundingClientRect();
+    return { selector, height: Math.round(label.getBoundingClientRect().height), beside: control.left >= text.right, aligned: Math.abs(control.top - text.top) <= 12 };
+  })`);
+  for (const row of settingRows) {
+    assert.ok(row.beside && row.aligned, `${row.selector} keeps its control beside the label: ${JSON.stringify(row)}`);
+    assert.ok(row.height <= 48, `${row.selector} stays one row: ${JSON.stringify(row)}`);
+  }
+  assert.ok((await evaluate(`Array.from(document.querySelectorAll('.project-checkbox-field input')).map((input) => Math.round(input.getBoundingClientRect().width))`)).every((width) => width <= 20), 'checkboxes keep their native size');
+  assert.equal(await evaluate(`getComputedStyle(document.querySelector('.project-settings-summary-hint')).display`), 'none', 'the expand hint disappears once expanded');
+  assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, 'settings fit the editor width');
+  await writeFile(join(artifacts, 'overview-settings.png'), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
   for (const theme of ['vscode-dark', 'vscode-light', 'vscode-high-contrast']) {
     for (const width of [320, 1400]) {
       await send('Emulation.setDeviceMetricsOverride', { width, height: 950, deviceScaleFactor: 1, mobile: false });
       await load(theme);
       assert.equal(await evaluate(`document.querySelector('[data-reader-article] h2').textContent`), 'Run TypeScript', 'restore selected topic');
       assert.equal(await evaluate(`document.documentElement.scrollWidth <= innerWidth`), true, 'reader fits viewport');
+      assert.equal(await evaluate(`(()=>{const a=[...document.querySelectorAll('.project-reader-directory [aria-current="page"]')];return a.length===1&&a[0].dataset.readerTopic==='run'})()`), true, 'one directory entry is current');
+      assert.equal(await evaluate(`!document.querySelector('[data-reader-aside]')`), true, 'the reader has no reading rail beside the article');
+      assert.equal(await evaluate(`(()=>{const m=document.querySelector('.project-reader-main').getBoundingClientRect();const s=document.querySelector('.project-reader').getBoundingClientRect();return m.right>=s.right-2&&m.right>s.left+m.width*.6})()`), true, 'the article fills the reader width');
       assert.equal(await evaluate(`document.querySelectorAll('[data-reader-area]').length`), 2, 'generated functional areas group module navigation');
       assert.equal(await evaluate(`document.querySelector('[data-reader-canvas]').dataset.renderer`), 'archify');
       assert.equal(await evaluateViewer(`!!document.querySelector('svg [data-node-id]')`), true);

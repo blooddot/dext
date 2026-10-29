@@ -13,8 +13,7 @@ function directoryList(name: "apiDirs" | "skillDirs" | "mcpDirs", label: string,
   const displayed = [...new Set([DEFAULT_RESOURCE_DIRECTORIES[name], ...values])];
   return `<label class="project-directory-field" data-project-directory-list="${name}">
     <span class="project-field-label">${label}</span>
-    <input name="${name}" value="${escape(displayed.join(", "))}" spellcheck="false" aria-describedby="${name}-help">
-    <span class="project-help" id="${name}-help">Enter workspace-relative directories separated by commas.</span>
+    <input name="${name}" value="${escape(displayed.join(", "))}" spellcheck="false" aria-describedby="resource-directories-help">
   </label>`;
 }
 
@@ -42,6 +41,7 @@ export function renderProjectSettings(settings: ProjectWorkspaceSettings, eviden
             ${directoryList("apiDirs", "API directories", settings.apiDirs)}
             ${directoryList("skillDirs", "Skill directories", settings.skillDirs)}
             ${directoryList("mcpDirs", "MCP directories", settings.mcpDirs)}
+            <p class="project-help" id="resource-directories-help">Enter workspace-relative directories separated by commas.</p>
           </section>
           <section class="project-settings-section">
             <h3>Agent tools</h3>

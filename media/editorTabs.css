@@ -424,6 +424,9 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 
 /* --- Project diagrams: native Archify viewer ------------------------------------------------ */
 .project-init { display: grid; gap: 8px; margin: 18px 0; }
+/* A grid item stretches by default, which made every action button span the page
+   and center its own label. */
+.project-init > button { justify-self: start; }
 .project-init-uninitialized { padding: 16px; border: 1px solid var(--vscode-panel-border); border-radius: 6px; background: var(--vscode-editor-background); }
 .project-init-uninitialized .project-help { margin: 0; }
 .project-init-completed .project-initialization-result { color: var(--vscode-foreground); }
@@ -455,10 +458,14 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .project-settings-summary-content > span, .project-settings-summary-hint { color: var(--vscode-descriptionForeground); font-weight: normal; }
 .project-settings-summary-hint { margin-left: auto; font-size: 12px; }
 .project-workspace-settings-body { padding: 0 12px 12px; }
-.project-workspace-settings label, .project-directory-field { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; }
+/* Settings fields stack label over control. The AI rows are the exception: they are
+   label/control columns, so they must not inherit the stacked form-label rule. */
+.project-workspace-settings label:not(.project-ai-cli):not(.project-ai-model):not(.project-checkbox-field), .project-directory-field { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; }
 .project-field-label { color: var(--vscode-foreground); }
-.project-workspace-settings input, .project-workspace-settings select { box-sizing: border-box; width: 100%; min-width: 0; padding: 6px 8px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, transparent); font: inherit; }
-.project-directory-field .project-help { margin: 0; }
+.project-workspace-settings input:not([type="checkbox"]), .project-workspace-settings select { box-sizing: border-box; width: 100%; min-width: 0; padding: 6px 8px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, transparent); font: inherit; }
+.project-workspace-settings .project-checkbox-field { display: flex; flex-direction: row; align-items: center; gap: 8px; margin: 8px 0; }
+.project-workspace-settings .project-checkbox-field input { flex: 0 0 auto; margin: 0; }
+.project-workspace-settings details[open] > summary .project-settings-summary-hint { display: none; }
 .project-evidence-settings fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .project-evidence-settings label { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; }
 .project-evidence-settings input, .project-evidence-settings select, .project-evidence-settings textarea { box-sizing: border-box; width: 100%; min-width: 0; padding: 6px 8px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, transparent); font: inherit; }
