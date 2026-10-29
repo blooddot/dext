@@ -12,6 +12,10 @@ All notable changes to Dext are documented in this file.
 
 - `mermaid` fenced blocks now render as diagrams in every Dext Markdown output surface: the turn's **Output**, finished **Process** messages, and **History** pages. A row that is still streaming keeps its source until the message completes, so a half-written fence is never rendered.
 
+- A tool call that never reports a result now stops the turn after thirty minutes instead of waiting forever: idle detection pauses while a tool runs, so nothing else bounded it. Each continuous tool phase gets the full ceiling; sequential tools start a fresh one, and `dext.agent.timeoutMs` still wins when it is shorter.
+
+- The Todo panel is now Plan-only: Pi no longer receives a `dext_update_plan` tool (its bridge request kind and event branch are gone with it), Codex's `todo_list` parser branch is gone because `codex exec` exposes no plan tool, and a normal Agent turn drops any provider task-list events instead of freezing the panel on one snapshot. Plan execution still shows the document's tasks, driven by the model's `dext-todo` reports.
+
 - Extended Plan and `plan()` with optional Project grounding, preflight version checks, actual-change verification and reviewed norm reconciliation. Existing plans, modes and result kinds remain compatible; completed plans are retained.
 - Added native Project nodes, relationships and owned Knowledge bodies, explicit bootstrap routes and backed-up legacy migration. Existing data remains usable before migration.
 - Added bounded read-only `project_query` and Pi's scoped host query callback, plus Knowledge body/relationship controls and Plan-from-Project actions.

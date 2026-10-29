@@ -81,6 +81,30 @@ describe("agent timeout policy", () => {
     expect(controller.signal.reason).toMatchObject({ message: "Stopped by user" });
   });
 
+  it("stops a tool that never reports a result and gives the next tool a fresh window", () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const timeout = agentTimeout(controller, 0, 1000, 4000);
+    timeout.toolStarted("hung");
+    vi.advanceTimersByTime(3999);
+    expect(controller.signal.aborted).toBe(false);
+    vi.advanceTimersByTime(1);
+    expect(controller.signal.reason).toMatchObject({ message: expect.stringContaining("inside one tool call") });
+    expect(vi.getTimerCount()).toBe(0);
+
+    const next = new AbortController();
+    const second = agentTimeout(next, 0, 1000, 4000);
+    second.toolStarted("build");
+    vi.advanceTimersByTime(3000);
+    second.toolFinished("build");
+    second.toolStarted("test");
+    vi.advanceTimersByTime(3000);
+    expect(next.signal.aborted).toBe(false);
+    vi.advanceTimersByTime(1000);
+    expect(next.signal.aborted).toBe(true);
+    second.dispose();
+  });
+
   it("releases timers on completion and ignores late output", () => {
     vi.useFakeTimers();
     const controller = new AbortController();
