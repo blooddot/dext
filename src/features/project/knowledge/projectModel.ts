@@ -48,9 +48,11 @@ export function projectModelIntent(model: ProjectModel, documents: ReadonlyMap<s
     const properties = Object.fromEntries(Object.entries(node.properties).filter(([key]) => allowed[node.kind]?.includes(key)));
     return { ...properties, id: node.id, canonicalName: node.canonicalName, displayName: node.title, origin: node.origin, review: node.review, freshness: node.freshness, confidence: node.confidence, evidence: node.evidence };
   };
+  // Preserve normative Markdown for the reader; presentation owns rendering.
   const text = (node: ProjectModel["nodes"][number]) => knowledgeText(node, documents) ?? "Document unavailable; review required.";
   const root = model.nodes.find(node => node.kind === "project");
-  const contexts = model.nodes.filter(node => node.kind === "context");
+  // Indexed modules are responsibilities too, so they read as bounded contexts in Knowledge and Plan.
+  const contexts = model.nodes.filter(node => node.kind === "context" || node.kind === "module");
   const c4 = model.nodes.filter(node => ["person", "system", "container"].includes(node.kind));
   return projectIntentSchema.parse({
     schemaVersion: 1, updatedAt: model.updatedAt,

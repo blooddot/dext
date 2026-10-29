@@ -144,8 +144,13 @@ export function setupProject(options: ProjectSetupOptions): ProjectEditorProvide
           signal.throwIfAborted();
           for (const uri of await vscode.workspace.findFiles(new vscode.RelativePattern(folder, pattern), "**/{.git,node_modules,dist,.dext}/**", 2000)) files.set(uri.fsPath, uri);
         }
+        const budget = resolveProjectEvidenceSettings(effectiveProjectEvidenceSettings(definition));
         return bootstrapProject({ name: folder.name, host: new VscodeProjectFileHost(folder.uri), store: projectStore,
-          paths: [...files.values()].map(uri => vscode.workspace.asRelativePath(uri, false).replaceAll("\\", "/")), ...(provider ? { provider } : {}), ai: JSON.stringify(definition.ai), signal, progress });
+          paths: [...files.values()].map(uri => vscode.workspace.asRelativePath(uri, false).replaceAll("\\", "/")), ...(provider ? { provider } : {}), ai: JSON.stringify(definition.ai), signal, progress,
+          // The reading depth the user chose in Project settings governs how much a module can explain.
+          budget: { files: budget.maxFiles, chars: budget.maxEvidenceChars, fileChars: budget.maxFileChars },
+          // Indexed imports decide module identity and dependency edges; the AI only writes prose.
+          structure: async () => (await readStructureIndex(signal, progress)).structure });
       },
       store: {
         readModel: () => projectStore.readModel(),

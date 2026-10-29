@@ -87,7 +87,9 @@ Review 预设已移除，新建配置及原本不含 `preset` 的配置保存时
 
 **Additional views > Generate a focused view** 在配置范围与预算内优先读取主题引用的源码，已保存主题只作为历史假设。流程图最多 8 个节点，边界图最多 10 个节点。新图留在当前主题，源代码支持时复用已有步骤或边界 ID。关系必须引用实际读到的文本片段，文件清单本身不足以证明调用或依赖。
 
-**Overview > Build project model / Update project model** 先构建 JS/TS、Rust、Python 本地结构索引，再根据完整文件结构信息分批整理职责模块，最后生成项目简介和有证据支持的 C4 边界；详细模块流程仍按需生成。Knowledge 中选择模块只读取已保存内容；点击 **Analyze this module / Update module analysis** 才分析当前模块，同时生成说明与 Archify 图。
+**Overview > Build project model / Update project model** 先构建 JS/TS、Rust、Python 本地结构索引，再根据完整文件结构信息分批整理职责模块，最后生成项目简介和有证据支持的 C4 边界；详细模块流程仍按需生成。收尾还有一次分批：把每个模块归入少数几个 AI 命名的功能域；分组只是导航，既不合并模块也不改变归属；回答里用模块标题代替 id 会被解析成对应模块，漏掉或重复某个模块时会带着具体错误重试一次，仍失败则整个分组弃用、模块保持未分组，并在进度中说明原因。Knowledge 中选择模块只读取已保存内容；点击 **Analyze this module / Update module analysis** 才分析当前模块，同时生成说明与 Archify 图。
+
+节点标题是简短英文标签，沿用代码和界面已有的说法（例如 `Conversation history`）；界面叫法和代码名字冲突时**以代码名字为准**做标题，界面叫法写进正文，这样标题总能落到真实符号上。正文仍用简体中文。每个正文的第一条 `## Responsibility` 记一次名字映射：`**Names**: <界面名字> → <公开符号或入口文件>`，没有用户界面的项目写成 `<代码名字> → <文件>`，这样界面叫法、代码符号和这份记录指的是同一个职责。
 
 模块正文使用同一张图的 `metadata.topicSummary` 和节点 `description`；`topicId`、`topicAnalysis=1`、`topicBasis` 记录归属及项目模型依据。说明、节点证据和图通过一次 `writeDiagram` 一起保存，更新复用原图 ID，不堆积副本。刷新项目模型不删除模块分析；对应职责或入口证据变化时显示待更新，旧内容继续可读。失败或取消保留原结果，不覆盖其他模块。手动编辑正文和开发对话自动引用尚未实现。
 
