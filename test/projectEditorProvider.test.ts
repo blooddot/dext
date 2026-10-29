@@ -48,6 +48,16 @@ const setup = (overrides: Partial<ProjectEditorDataSource> = {}) => {
 };
 
 describe("project editor tab", () => {
+  it("opens and restores the Project panel page the webview asks for", async () => {
+    const { host, provider } = setup();
+    await provider.show("knowledge");
+    await provider.handleMessage(provider.key, { type: "projectPage", page: "architecture" });
+    expect(provider.page).toBe("architecture");
+    expect(host.created).toHaveLength(1);
+    expect(host.created[0]!.panel.html).toContain('data-project-page="architecture"');
+    await provider.restore({ key: provider.key, page: "architecture", filters: {}, restoreVersion: 1 });
+    expect(provider.page).toBe("architecture");
+  });
   it("routes the selected Project identity to Plan without triggering generation", async () => {
     const host = new FakeHost(); const manager = new EditorTabManager(host); const ids: string[] = [];
     const provider = new ProjectEditorProvider({ manager, restorer: new EditorTabRestorer(manager), dataSource: { load: async () => data }, planFromProjectObject: id => { ids.push(id); } });

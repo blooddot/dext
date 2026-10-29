@@ -24,6 +24,10 @@ describe("editor tab keys", () => {
 describe("editor tab state", () => {
   it("keeps a valid page and falls back to the kind's first page", () => {
     expect(normalizePage("project", "architecture")).toBe("architecture");
+    // Specs was folded into the Knowledge articles; a saved Specs tab restores the reader.
+    expect(normalizePage("project", "specs")).toBe("overview");
+    expect(restoreEditorTabState({ key: "dext.editor:project", page: "knowledge", filters: { spec: "contract" }, restoreVersion: 1 }).state)
+      .toMatchObject({ page: "knowledge", filters: { spec: "contract" } });
     expect(normalizePage("project", "hooks")).toBe("overview");
     // Project must never expose Hooks, Review, or task log pages.
     expect(createEditorTabState("dext.editor:project", { page: "review" })?.page).toBe("overview");

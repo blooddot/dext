@@ -8,25 +8,11 @@ import { renderReaderArchify, type ReaderArchifyView } from "./projectReaderArch
 export interface ReaderApi { postMessage(message: unknown): void; getState?(): { filters?: Record<string, string> } | undefined; setState?(state: unknown): void }
 
 export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
-  // Native norm controls sit beside the reading view and share the same host channel.
-  root.closest(".project-panel")?.addEventListener("click", event => {
-    const button = event.target instanceof Element ? event.target.closest<HTMLButtonElement>("button") : null;
-    const section = button?.closest<HTMLElement>("[data-native-knowledge]");
-    if (!button || !section) return;
-    const revision = Number(section.dataset.revision);
-    if (button.dataset.projectPlan) { api.postMessage({ type: "projectPlan", topicId: button.dataset.projectPlan }); return; }
-    if (button.dataset.knowledgeOpen) { api.postMessage({ type: "projectKnowledgeOpen", nodeId: button.dataset.knowledgeOpen }); return; }
-    const request = button.dataset.knowledgeSave ? { action: "body", id: button.dataset.knowledgeSave, text: button.closest("details")?.querySelector<HTMLTextAreaElement>("textarea")?.value ?? "" }
-      : button.dataset.knowledgeAdopt ? { action: "adopt", id: button.dataset.knowledgeAdopt }
-      : button.dataset.knowledgeConfirm ? { action: "confirm", id: button.dataset.knowledgeConfirm }
-      : button.dataset.knowledgeUnlink ? { action: "unlink", id: button.dataset.knowledgeUnlink }
-      : button.hasAttribute("data-knowledge-link") ? { action: "link", from: section.querySelector<HTMLSelectElement>("[data-knowledge-from]")?.value, to: section.querySelector<HTMLSelectElement>("[data-knowledge-to]")?.value, kind: section.querySelector<HTMLSelectElement>("[data-knowledge-kind]")?.value } : undefined;
-    if (request) api.postMessage({ type: "projectKnowledgeUpdate", revision, ...request });
-  });
   const template = root.querySelector<HTMLTemplateElement>("[data-project-reader-data]");
   if (!template) return;
   let data = JSON.parse(template.content.textContent ?? "{}") as ProjectReaderData;
   const article = root.querySelector<HTMLElement>("[data-reader-article]")!;
+  const pane = root.querySelector<HTMLElement>("[data-reader-diagram-pane]")!;
   const progress = root.querySelector<HTMLElement>("[data-reader-progress]")!;
   let topic: ProjectTopic | undefined;
   let diagram: ProjectDiagram | undefined;
@@ -40,21 +26,49 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
   let nativeFullscreen = false;
   let playbackTimer: number | undefined;
   let playbackIndex = -1;
-  const stopPlayback = () => { if (playbackTimer !== undefined) clearInterval(playbackTimer); playbackTimer = undefined; const button = article.querySelector("[data-reader-play]"); if (button) button.textContent = "Play steps"; };
+  const stopPlayback = () => { if (playbackTimer !== undefined) clearInterval(playbackTimer); playbackTimer = undefined; const button = root.querySelector("[data-reader-play]"); if (button) button.textContent = "Play steps"; };
 
   const saveSelection = () => {
     const previous = api.getState?.();
     api.setState?.({ ...previous, filters: { ...previous?.filters, topic: topic?.id ?? "", diagram: diagram?.id ?? "" } });
   };
+  /** A norm write re-renders the page; remember which norm block was open so it stays open. */
+  const postUpdate = (message: Record<string, unknown>, openId: string) => {
+    const previous = api.getState?.();
+    api.setState?.({ ...previous, filters: { ...previous?.filters, spec: openId } });
+    api.postMessage({ type: "projectKnowledgeUpdate", revision: Number(root.dataset.revision), ...message });
+  };
   const markDirectory = () => root.querySelectorAll<HTMLButtonElement>(".project-reader-directory button").forEach((button) => {
-    const active = topic ? button.dataset.readerTopic === topic.id : button.dataset.readerDiagram === diagram?.id;
+    // On the introduction no topic or diagram is selected: only that entry is current, never every
+    // row whose topic or diagram id happens to be undefined.
+    const active = topic ? button.dataset.readerTopic === topic.id
+      : diagram ? button.dataset.readerDiagram === diagram.id
+        : button.hasAttribute("data-reader-home");
     button.setAttribute("aria-current", active ? "page" : "false");
     const group = button.closest<HTMLDetailsElement>("[data-reader-area]");
     if (active && group) group.open = true;
   });
   const setInteractiveControls = (enabled: boolean) => {
-    article.querySelectorAll<HTMLButtonElement>("[data-reader-zoom], [data-reader-export]").forEach((button) => { button.disabled = !enabled; });
+    root.querySelectorAll<HTMLButtonElement>("[data-reader-zoom], [data-reader-export]").forEach((button) => { button.disabled = !enabled; });
   };
+  /**
+   * A wide editor docks the diagram beside the explanation, where it stays in view while the prose
+   * scrolls; an editor without room keeps it in the article between the explanation and the steps.
+   * Docking moves the one rendered figure, so the renderer, its controls and its state are never
+   * duplicated, and the article keeps a single reading column.
+   */
+  /** Must stay in step with the wide-reader media query in media/editorTabs.css. */
+  const wideReader = matchMedia("(min-width: 1360px)");
+  const dockDiagram = () => {
+    if (fullscreenFigure) return;
+    const figure = root.querySelector<HTMLElement>(".project-reader-figure");
+    const tail = article.querySelector<HTMLElement>(".project-reader-tail");
+    if (!figure || !tail) return;
+    if (wideReader.matches) { if (figure.parentElement !== pane) pane.append(figure); }
+    else if (figure.parentElement === pane) tail.before(figure);
+  };
+  wideReader.addEventListener("change", dockDiagram);
+  const renderArticle = (html: string) => { pane.replaceChildren(); article.innerHTML = html; dockDiagram(); };
   const exitFullscreen = (restoreFocus = true) => {
     const figure = fullscreenFigure;
     if (!figure) return;
@@ -70,10 +84,11 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
     interactive?.command("fullscreen", { active: figure.classList.contains("is-expanded") });
     if (restoreFocus && fullscreenFocus?.isConnected) fullscreenFocus.focus({ preventScroll: true });
     fullscreenFocus = undefined;
+    dockDiagram();
   };
   const enterFullscreen = async () => {
     if (fullscreenFigure) { exitFullscreen(); return; }
-    const figure = article.querySelector<HTMLElement>(".project-reader-figure");
+    const figure = root.querySelector<HTMLElement>(".project-reader-figure");
     if (!figure) return;
     const owner = ++fullscreenRequest;
     fullscreenFigure = figure;
@@ -95,9 +110,9 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
   const closePresentation = () => {
     stopPlayback();
     if (fullscreenFigure) { exitFullscreen(); return; }
-    article.querySelector(".is-expanded")?.classList.remove("is-expanded");
+    root.querySelector(".is-expanded")?.classList.remove("is-expanded");
     interactive?.command("fullscreen", { active: false });
-    const button = article.querySelector("[data-reader-fullscreen]");
+    const button = root.querySelector("[data-reader-fullscreen]");
     if (button) button.textContent = "Expand";
   };
   const highlight = (semanticIds: readonly string[], elementId?: string) => {
@@ -114,7 +129,7 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
     const sections = topic?.sections?.filter((section) => semanticIds.includes(section.id)) ?? [];
     highlight(semanticIds, id);
     interactive?.command("select", { nodeId: node?.id ?? relation?.to });
-    const inspector = article.querySelector<HTMLElement>("[data-reader-inspector]")!;
+    const inspector = root.querySelector<HTMLElement>("[data-reader-inspector]")!;
     inspector.hidden = false;
     const related = data.topics.filter((candidate) => candidate.id !== topic?.id && (semanticIds.includes(candidate.id) || sections.some((section) => section.relatedTopicIds.includes(candidate.id))));
     const title = node?.label ?? `${diagram.nodes.find((node) => node.id === relation?.from)?.label ?? relation?.from} → ${diagram.nodes.find((node) => node.id === relation?.to)?.label ?? relation?.to}`;
@@ -131,10 +146,10 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
       + `<div class="project-reader-related">${related.map((candidate) => `<button type="button" data-reader-topic="${esc(candidate.id)}">Read ${esc(candidate.title)} →</button>`).join("")}</div>`
       + `<ul class="project-topic-evidence">${item.evidence.map((entry, index) => `<li><button type="button" data-reader-element-source="${esc(id)}" data-element-kind="${kind}" data-evidence-index="${index}">${esc(entry.path)}${entry.line ? `:${entry.line}` : ""}${entry.symbol ? ` · ${esc(entry.symbol)}` : ""}</button>${entry.note ? `<small>${esc(entry.note)}</small>` : ""}</li>`).join("") || "<li>No source reference was saved for this element.</li>"}</ul>`;
     const explained = Array.from(article.querySelectorAll<HTMLElement>("[data-reader-section]")).find((node) => semanticIds.includes(node.dataset.readerSection ?? ""));
-    if (!article.querySelector(".is-expanded, .is-fullscreen")) explained?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    if (!root.querySelector(".is-expanded, .is-fullscreen")) explained?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   };
   const renderConnections = () => {
-    const inspector = article.querySelector<HTMLElement>("[data-reader-inspector]");
+    const inspector = root.querySelector<HTMLElement>("[data-reader-inspector]");
     article.querySelector("[data-reader-connections]")?.remove();
     if (!diagram?.relations.length || !inspector) return;
     const connections = document.createElement("details");
@@ -159,18 +174,18 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
     const owner = ++generation;
     stopPlayback(); playbackIndex = -1;
     interactive?.dispose(); interactive = undefined;
-    const canvas = article.querySelector<HTMLElement>("[data-reader-canvas]");
-    const status = article.querySelector<HTMLElement>("[data-reader-render-status]");
+    const canvas = root.querySelector<HTMLElement>("[data-reader-canvas]");
+    const status = root.querySelector<HTMLElement>("[data-reader-render-status]");
     if (!diagram || !canvas || !status) return;
     canvas.replaceChildren();
-    const playback = article.querySelector<HTMLElement>("[data-reader-playback]");
+    const playback = root.querySelector<HTMLElement>("[data-reader-playback]");
     if (playback) playback.hidden = true;
     delete canvas.dataset.renderer;
     canvas.dataset.state = "loading";
     setInteractiveControls(false);
     status.hidden = false;
     status.textContent = "Rendering diagram…";
-    const model = article.querySelector<HTMLElement>("[data-reader-diagram-source]");
+    const model = root.querySelector<HTMLElement>("[data-reader-diagram-source]");
     if (model) model.textContent = JSON.stringify(diagram, null, 2);
     renderConnections();
     const active = renderReaderArchify(diagram, canvas, (message) => api.postMessage(message), inspect, closePresentation);
@@ -181,7 +196,7 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
       canvas.dataset.state = "ready"; canvas.dataset.renderer = "archify";
       status.hidden = true;
       active.command("fullscreen", { active: Boolean(canvas.closest(".is-expanded, .is-fullscreen")) });
-      article.querySelector<HTMLElement>("[data-reader-playback]")!.hidden = projectPlaybackSteps(diagram).length < 2;
+      root.querySelector<HTMLElement>("[data-reader-playback]")!.hidden = projectPlaybackSteps(diagram).length < 2;
       setInteractiveControls(true);
     } catch (error) {
       if (owner !== generation || !canvas.isConnected) return;
@@ -191,7 +206,7 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
       const reason = error instanceof Error ? error.message : String(error);
       status.hidden = false;
       status.textContent = `Diagram unavailable: ${reason.length > 240 ? `${reason.slice(0, 239)}…` : reason}. The explanation and evidence remain available.`;
-      const details = article.querySelector<HTMLDetailsElement>("[data-reader-diagram-source]")?.closest("details");
+      const details = root.querySelector<HTMLDetailsElement>("[data-reader-diagram-source]")?.closest("details");
       if (details) details.open = true;
       setInteractiveControls(false);
     }
@@ -203,9 +218,11 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
     topic = next;
     const available = topicDiagrams(next, data.diagrams);
     diagram = available.find((candidate) => candidate.id === diagramId) ?? available[0];
-    article.innerHTML = readerTopicArticle(next, data);
+    renderArticle(readerTopicArticle(next, data));
+    // The reopened norm block belongs to one render; later navigation must not reopen it.
+    data = { ...data, openNorm: undefined };
     article.querySelectorAll<HTMLButtonElement>("[data-topic-diagram]").forEach((button) => { button.disabled = busy; });
-    const select = article.querySelector<HTMLSelectElement>("[data-reader-view]");
+    const select = root.querySelector<HTMLSelectElement>("[data-reader-view]");
     if (select && diagram) select.value = diagram.id;
     markDirectory(); saveSelection(); void renderDiagram();
   };
@@ -214,14 +231,15 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
     if (!next) return;
     exitFullscreen(false);
     topic = undefined; diagram = next;
-    article.innerHTML = readerGalleryArticle(next, data);
+    renderArticle(readerGalleryArticle(next, data));
     markDirectory(); saveSelection(); void renderDiagram();
   };
   const selectIntroduction = () => {
     exitFullscreen(false);
     stopPlayback(); interactive?.dispose(); interactive = undefined;
     generation++; topic = undefined; diagram = undefined;
-    article.innerHTML = readerIntroduction(data);
+    renderArticle(readerIntroduction(data));
+    data = { ...data, openNorm: undefined };
     markDirectory(); saveSelection();
   };
   root.addEventListener("input", (event) => {
@@ -240,18 +258,35 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
     const select = event.target;
     if (!(select instanceof HTMLSelectElement) || !select.matches("[data-reader-view]")) return;
     diagram = (topic ? topicDiagrams(topic, data.diagrams) : data.diagrams).find((candidate) => candidate.id === select.value);
-    article.querySelector<HTMLElement>("[data-reader-inspector]")!.hidden = true;
+    root.querySelector<HTMLElement>("[data-reader-inspector]")!.hidden = true;
     highlight([]); saveSelection(); void renderDiagram();
   });
+  root.addEventListener("submit", (event) => {
+    const form = event.target instanceof HTMLFormElement ? event.target : null;
+    if (!form || !form.matches("[data-spec-link]")) return;
+    event.preventDefault();
+    const value = (selector: string) => form.querySelector<HTMLSelectElement>(selector)?.value;
+    const from = value("[data-knowledge-from]") ?? "";
+    postUpdate({ action: "link", from, to: value("[data-knowledge-to]"), kind: value("[data-knowledge-kind]") }, from);
+  });
   root.addEventListener("click", (event) => {
-    const button = event.target instanceof Element ? event.target.closest<HTMLButtonElement>("button") : null;
+    const target = event.target instanceof Element ? event.target : null;
+    const button = target?.closest<HTMLButtonElement>("button") ?? null;
     if (!button) return;
     if (button.dataset.projectPlan) api.postMessage({ type: "projectPlan", topicId: button.dataset.projectPlan });
+    if (button.dataset.knowledgeOpen) api.postMessage({ type: "projectKnowledgeOpen", nodeId: button.dataset.knowledgeOpen });
+    if (button.dataset.knowledgeConfirm) postUpdate({ action: "confirm", id: button.dataset.knowledgeConfirm }, button.dataset.knowledgeConfirm);
+    if (button.dataset.knowledgeSave) {
+      const id = button.dataset.knowledgeSave;
+      postUpdate({ action: "body", id, text: button.closest("[data-norm]")?.querySelector("textarea")?.value ?? "" }, id);
+    }
+    if (button.dataset.knowledgeAdopt) postUpdate({ action: "adopt", id: button.dataset.knowledgeAdopt }, button.dataset.knowledgeAdopt);
+    if (button.dataset.knowledgeUnlink) postUpdate({ action: "unlink", id: button.dataset.knowledgeUnlink }, button.closest<HTMLElement>("[data-norm]")?.dataset.norm ?? "");
     if (button.hasAttribute("data-reader-inspector-close")) {
-      article.querySelector<HTMLElement>("[data-reader-inspector]")!.hidden = true;
+      root.querySelector<HTMLElement>("[data-reader-inspector]")!.hidden = true;
       highlight([]);
       interactive?.command("select", { nodeId: "" });
-      article.querySelector<HTMLSelectElement>("[data-reader-view]")?.focus();
+      root.querySelector<HTMLSelectElement>("[data-reader-view]")?.focus();
       return;
     }
     if (button.dataset.readerTopic) selectTopic(button.dataset.readerTopic);
@@ -265,7 +300,7 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
       let node = diagram?.nodes.find((candidate) => candidate.semanticIds.includes(id));
       if (!node && topic.diagram) {
         diagram = topic.diagram;
-        const select = article.querySelector<HTMLSelectElement>("[data-reader-view]");
+        const select = root.querySelector<HTMLSelectElement>("[data-reader-view]");
         if (select) select.value = diagram.id;
         node = diagram.nodes.find((candidate) => candidate.semanticIds.includes(id));
         const selectedNode = node;
@@ -285,7 +320,7 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
       interactive?.command(button.dataset.readerZoom === "fit" ? "reset" : button.dataset.readerZoom === "in" ? "zoom-in" : "zoom-out");
     }
     if (button.hasAttribute("data-reader-fullscreen")) {
-      const figure = article.querySelector<HTMLElement>(".project-reader-figure");
+      const figure = root.querySelector<HTMLElement>(".project-reader-figure");
       if (figure) { figure.classList.toggle("is-expanded"); button.textContent = figure.classList.contains("is-expanded") ? "Close" : "Expand"; interactive?.command("fullscreen", { active: figure.classList.contains("is-expanded") }); }
     }
     if (button.hasAttribute("data-reader-screen")) void enterFullscreen();
@@ -300,7 +335,7 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
         const step = steps[playbackIndex];
         if (!step) { stopPlayback(); playbackIndex = -1; return; }
         inspect(step.id, step.kind);
-        article.querySelector<HTMLElement>("[data-reader-play-status]")!.textContent = `Step ${playbackIndex + 1} / ${steps.length}`;
+        root.querySelector<HTMLElement>("[data-reader-play-status]")!.textContent = `Step ${playbackIndex + 1} / ${steps.length}`;
       };
       if (button.hasAttribute("data-reader-next")) { stopPlayback(); advance(); }
       else if (playbackTimer !== undefined) stopPlayback();
@@ -316,7 +351,7 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
   });
   window.addEventListener("message", (event: MessageEvent<{ type?: string; checks?: ProjectReaderData["checks"]; topics?: ProjectReaderData["topics"]; error?: string; message?: string; active?: boolean; document?: ProjectDiagram; cancelled?: boolean; fileName?: string }>) => {
     const message = event.data;
-    if (!message || !isTrustedHostMessage(event.source, article.querySelector<HTMLIFrameElement>("iframe")?.contentWindow, message)) return;
+    if (!message || !isTrustedHostMessage(event.source, root.querySelector<HTMLIFrameElement>("iframe")?.contentWindow, message)) return;
     if (message.type === "projectKnowledgeChecked") {
       const openDetails = Array.from(article.querySelectorAll<HTMLDetailsElement>("details[open]")).map((details) => details.querySelector("summary")?.textContent);
       if (message.checks) data = { ...data, checks: message.checks };
@@ -361,4 +396,21 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
   else if (data.topics[0]) selectTopic(data.topics[0].id);
   else if (data.diagrams[0]) selectDiagram(data.diagrams[0].id);
 }
-
+
+/** At editor widths a directory column crowds the article, so it folds to one disclosure. */
+export function foldProjectDirectory(root: HTMLElement): void {
+  const disclosure = root.querySelector<HTMLDetailsElement>(".project-directory-disclosure");
+  if (!disclosure) return;
+  const narrow = matchMedia("(max-width: 900px)");
+  const fold = () => { disclosure.open = !narrow.matches; };
+  fold();
+  narrow.addEventListener("change", fold);
+  root.addEventListener("click", (event) => {
+    if (narrow.matches && event.target instanceof Element && event.target.closest("[data-reader-topic],[data-reader-home],[data-reader-diagram]")) {
+      disclosure.open = false;
+      const heading = root.querySelector<HTMLElement>("[data-reader-article] h2");
+      if (heading) { heading.tabIndex = -1; heading.focus({ preventScroll: true }); }
+    }
+  });
+}
+

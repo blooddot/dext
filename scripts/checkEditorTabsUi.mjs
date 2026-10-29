@@ -231,7 +231,7 @@ try {
       // This select shared its rule with the retired scan/renderer controls, so the surviving
       // declarations are asserted here instead of only being eyeballed in a screenshot. min-width is
       // width-dependent (the narrow layout relaxes it), so the stable declarations are used.
-      assert.equal(await evaluate(`getComputedStyle(document.querySelector('.project-ai-cli select')).minHeight`), '28px');
+      assert.equal(await evaluate(`getComputedStyle(document.querySelector('.project-ai-cli select')).minHeight`), width <= 650 ? '44px' : '28px');
       assert.equal(await evaluate(`getComputedStyle(document.querySelector('.project-ai-cli select')).borderRadius`), '4px');
       assert.equal(await evaluate(`document.querySelector('[data-project-settings] details').open`), false);
       await evaluate(`document.querySelector('[data-project-settings] summary').click()`);

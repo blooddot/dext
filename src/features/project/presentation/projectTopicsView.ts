@@ -1,15 +1,6 @@
 import type { ProjectQualityIssue } from "../contracts/projectIntent.js";
 import type { ProjectModel } from "../contracts/projectModel.js";
-
-export function renderNativeKnowledge(model: ProjectModel): string {
-  const choices = model.nodes.map(node => `<option value="${escapeProjectHtml(node.id)}">${escapeProjectHtml(node.title)}</option>`).join("");
-  return `<section data-native-knowledge data-revision="${model.revision}"><h2>Project norms</h2><p>These bodies and relationships are the maintained Project model. Saving confirms your edit.</p>`
-    + model.nodes.map(node => `<details data-knowledge-node="${escapeProjectHtml(node.id)}"><summary>${escapeProjectHtml(node.title)} · ${escapeProjectHtml(node.kind)} · ${escapeProjectHtml(node.review)}</summary>`
-      + (node.body.kind === "inline" ? `<textarea data-knowledge-text rows="6" aria-label="Norm body">${escapeProjectHtml(node.body.text)}</textarea><button data-knowledge-save="${escapeProjectHtml(node.id)}">Save body</button>` : `<p>Owned document: ${escapeProjectHtml(node.body.path)}</p><button data-knowledge-open="${escapeProjectHtml(node.id)}">Open document</button><button data-knowledge-adopt="${escapeProjectHtml(node.id)}">Confirm current document</button>`)
-      + `<button data-knowledge-confirm="${escapeProjectHtml(node.id)}">Confirm current norm</button><button data-project-plan="${escapeProjectHtml(node.id)}">Plan a change</button></details>`).join("")
-    + `<h3>Relationships</h3><ul>${model.relations.map(edge => `<li>${escapeProjectHtml(edge.from)} → ${escapeProjectHtml(edge.to)} · ${escapeProjectHtml(edge.kind)} <button data-knowledge-unlink="${escapeProjectHtml(edge.id)}">Remove relationship</button></li>`).join("")}</ul>`
-    + `<label>From <select data-knowledge-from>${choices}</select></label><label>To <select data-knowledge-to>${choices}</select></label><label>Relationship <select data-knowledge-kind>${["contains", "depends_on", "related_to", "implements", "constrains", "maps_to", "decides", "communicates"].map(kind => `<option>${kind}</option>`).join("")}</select></label><button data-knowledge-link>Add relationship</button></section>`;
-}
+import { renderProjectMarkdown } from "./projectMarkdown.js";
 import type { ArchitectureViewInput } from "../contracts/projectArchitectureTypes.js";
 import type { ProjectDiagram } from "../contracts/projectDiagram.js";
 import { topicFingerprint, type ProjectTopic, type ProjectTopicCheck } from "../knowledge/projectTopics.js";
@@ -26,6 +17,28 @@ export interface ProjectReaderData {
   selectedDiagramId?: string;
   terms?: readonly { canonical: string; definition?: string }[];
   architecture?: ArchitectureViewInput;
+  /** The authored model behind these articles; a norm block is edited where its text is read. */
+  model?: ProjectModel;
+  /** Reopened after a write, so saving does not fold the editor the user is working in. */
+  openNorm?: string | undefined;
+}
+
+const RELATION_KINDS = ["contains", "depends_on", "related_to", "implements", "constrains", "flows_to", "maps_to", "decides", "communicates"];
+
+/** One norm's maintenance controls, folded under the article that already renders its text. */
+function normBlock(model: ProjectModel | undefined, id: string, open: boolean): string {
+  const node = model?.nodes.find((candidate) => candidate.id === id);
+  if (!node) return "";
+  const titles = new Map(model!.nodes.map((item) => [item.id, item.title]));
+  const edges = model!.relations.filter((edge) => edge.from === id || edge.to === id);
+  const options = (selected: string) => model!.nodes.map((item) => `<option value="${esc(item.id)}"${item.id === selected ? " selected" : ""}>${esc(item.title)}</option>`).join("");
+  const body = node.body;
+  return `<details class="project-norm" data-norm="${esc(id)}"${open ? " open" : ""}><summary>Norm · ${esc(node.kind)} · ${esc(node.review)} · ${esc(node.freshness ?? "needs_verification")}</summary>`
+    + `<div class="project-spec-actions"><button type="button" data-knowledge-confirm="${esc(id)}">Confirm current norm</button>${body.kind === "document" ? `<button type="button" data-knowledge-open="${esc(id)}">Open document</button><button type="button" data-knowledge-adopt="${esc(id)}">Confirm current document</button>` : ""}</div>`
+    + (body.kind === "document" ? `<p>Owned document: <code>${esc(body.path)}</code></p>`
+      : `<label>Norm body<textarea data-knowledge-text rows="14">${esc(body.text)}</textarea></label><button type="button" data-knowledge-save="${esc(id)}">Save body</button>`)
+    + `<section class="project-spec-relations"><h3>Relationships</h3>${edges.length ? `<ul>${edges.map((edge) => `<li><div><span>${esc(titles.get(edge.from) ?? edge.from)} → ${esc(titles.get(edge.to) ?? edge.to)}</span><small>${esc(edge.kind)}</small></div><button type="button" data-knowledge-unlink="${esc(edge.id)}">Remove relationship</button></li>`).join("")}</ul>` : '<p class="project-help">No relationships recorded for this norm.</p>'}</section>`
+    + `<form class="project-spec-link" data-spec-link><h3>Add relationship</h3><label>From <select data-knowledge-from>${options(id)}</select></label><label>To <select data-knowledge-to>${options(model!.nodes.find((item) => item.id !== id)?.id ?? id)}</select></label><label>Relationship <select data-knowledge-kind>${RELATION_KINDS.map((kind) => `<option>${kind}</option>`).join("")}</select></label><button type="submit" data-knowledge-link${model!.nodes.length > 1 ? "" : " disabled"}>Add relationship</button></form></details>`;
 }
 
 export function topicDiagrams(topic: ProjectTopic, diagrams: readonly ProjectDiagram[]): ProjectDiagram[] {
@@ -55,12 +68,18 @@ export function readerTopicArticle(topic: ProjectTopic, data: ProjectReaderData)
   const list = (items: readonly string[]) => `<ul>${items.map((item) => `<li>${esc(item)}</li>`).join("")}</ul>`;
   const landscape = data.topics.find((item) => item.kind === "system_context"), units = data.topics.find((item) => item.kind === "containers");
   const crumbs = landscape && units ? `<nav class="project-reader-breadcrumb" aria-label="Architecture levels"><button data-reader-topic="${esc(landscape.id)}">Project landscape</button> / <button data-reader-topic="${esc(units.id)}">Runtime units</button>${topic.kind === "context" || topic.kind === "flow" ? ` / ${esc(topic.title)}` : ""}</nav>` : "";
-  return `${crumbs}<header class="project-reader-heading">${topic.area ? `<p class="project-reader-kind">${esc(topic.area.title)}</p>` : ""}<p class="project-reader-kind">${topic.kind === "flow" ? "How it works" : topic.kind === "structure" ? "Structure map" : topic.kind === "types" ? "Type map" : topic.kind === "system_context" ? "System context · C4 level 1" : topic.kind === "containers" ? "Runtime boundaries · C4 level 2" : "Responsibility boundary"}</p><h2>${esc(topic.title)}</h2><p data-reader-section="${esc(topic.id)}">${esc(topic.description)}</p>`
+  // Prose, diagram and tail are siblings: a wide editor docks the diagram beside the explanation
+  // and narrow editors keep this reading order.
+  const steps = topic.analysisState !== "outline" && (topic.kind === "flow" || topic.diagram?.metadata?.topicAnalysis === 1) && sections.length
+    ? `<div class="project-reader-steps"><h3>${topic.kind === "flow" ? "Follow the flow" : "Inside this module"}</h3>${sections.map((section, index) => `<section class="project-reader-step" data-reader-section="${esc(section.id)}"><button type="button" data-reader-step="${esc(section.id)}"><span>${index + 1}</span>${esc(section.title)}</button>${section.description ? `<div class="project-markdown">${renderProjectMarkdown(section.description)}</div>` : ""}</section>`).join("")}</div>` : "";
+  return `<div class="project-reader-prose">${crumbs}<header class="project-reader-heading">${topic.area ? `<p class="project-reader-kind">${esc(topic.area.title)}</p>` : ""}<p class="project-reader-kind">${topic.kind === "flow" ? "How it works" : topic.kind === "structure" ? "Structure map" : topic.kind === "types" ? "Type map" : topic.kind === "system_context" ? "System context · C4 level 1" : topic.kind === "containers" ? "Runtime boundaries · C4 level 2" : "Responsibility boundary"}</p><h2>${esc(topic.title)}</h2><div class="project-markdown" data-reader-section="${esc(topic.id)}">${renderProjectMarkdown(topic.description)}</div>`
     + (topic.kind === "context" ? `<button type="button" data-project-plan="${esc(topic.id)}">Plan a change</button>` : "")
     + `<p data-topic-check="${esc(topic.id)}" class="project-reader-warning"${warning ? "" : " hidden"}>${warning ? "Sources changed or disappeared. This explanation and its diagrams need review." : ""}</p></header>`
+    + normBlock(data.model, topic.id, data.openNorm === topic.id)
     + (topic.kind === "context" || topic.kind === "flow" ? `<section class="project-reader-analysis"><p data-reader-analysis-state>${topic.analysisState === "outline" ? "Not analyzed · module outline only" : warning ? "Needs update · saved analysis remains available" : "Generated · saved explanation"}</p><button type="button" data-topic-diagram="${esc(topic.id)}">${topic.analysisState === "outline" ? "Analyze this module" : "Update module analysis"}</button><p class="project-help">Read this module's sources to generate its explanation and diagram together. Selecting a module does not start AI.</p></section>` : "")
-    + `<div class="project-reader-story">${readerDiagramFrame(topicDiagrams(topic, data.diagrams))}`
-    + (topic.analysisState !== "outline" && (topic.kind === "flow" || topic.diagram?.metadata?.topicAnalysis === 1) && sections.length ? `<div class="project-reader-steps"><h3>${topic.kind === "flow" ? "Follow the flow" : "Inside this module"}</h3>${sections.map((section, index) => `<section class="project-reader-step" data-reader-section="${esc(section.id)}"><button type="button" data-reader-step="${esc(section.id)}"><span>${index + 1}</span>${esc(section.title)}</button>${section.description ? `<p>${esc(section.description)}</p>` : ""}</section>`).join("")}</div>` : "") + '</div>'
+    + `</div>`
+    + readerDiagramFrame(topicDiagrams(topic, data.diagrams))
+    + `<div class="project-reader-tail">${steps}`
     + (topic.entryPoints.length ? `<section><h3>${topic.kind === "flow" ? "When it starts" : topic.kind === "structure" ? "Most connected files" : topic.kind === "types" ? "Type declaration files" : "Where to start in the code"}</h3>${list(topic.entryPoints)}</section>` : "")
     + (topic.sourceFiles?.length ? `<details class="project-reader-support"><summary>Files in this module · ${topic.sourceFiles.length}</summary>${list(topic.sourceFiles)}</details>` : "")
     + (topic.uncertainties?.length ? `<details class="project-reader-support"><summary>Questions to verify</summary>${list(topic.uncertainties)}</details>` : "")
@@ -68,7 +87,8 @@ export function readerTopicArticle(topic: ProjectTopic, data: ProjectReaderData)
     + (topic.previousAnalyses?.length ? `<section class="project-reader-related"><h3>Earlier module analyses</h3><p class="project-help">Module boundaries changed. These saved analyses overlap this module and need review; they do not describe the new boundary yet.</p>${topic.previousAnalyses.map(item => `<button type="button" data-reader-diagram="${esc(item.id)}">${esc(item.title)}</button>`).join("")}</section>` : "")
     + (topic.responsibilities.length || topic.constraints.length ? `<details class="project-reader-support"><summary>${topic.kind === "flow" ? "Outcomes and constraints" : "Responsibilities and constraints"}</summary>${list(topic.responsibilities)}${topic.constraints.length ? `<h4>Constraints</h4>${list(topic.constraints)}` : ""}</details>` : "")
     + `<details class="project-reader-support"><summary>Sources and freshness · ${topic.evidence.length} references</summary><p class="project-help">${check ? `Last checked ${esc(new Date(check.checkedAt).toLocaleString())} · ${esc(check.state)}. Unchanged files do not establish semantic correctness.` : "These are saved source references. Check them against the current files before relying on the explanation."}</p><button type="button" data-project-check-knowledge>Check sources</button><p data-project-check-status role="status"></p><ul class="project-topic-evidence">${topic.evidence.map((entry, index) => `<li><button type="button" data-topic-evidence="${esc(topic.id)}" data-evidence-index="${index}">${esc(entry.path)}${entry.line ? `:${entry.line}` : ""}${entry.symbol ? ` · ${esc(entry.symbol)}` : ""}</button>${entry.note ? `<small>${esc(entry.note)}</small>` : ""}<small data-topic-file="${esc(topic.id)}" data-file-index="${index}">${esc(check?.files[index]?.state ?? "")}</small></li>`).join("")}</ul></details>`
-    + (topic.relatedTopics?.length ? `<section class="project-reader-related"><h3>Continue exploring</h3>${topic.relatedTopics.map((related) => `<button type="button" data-reader-topic="${esc(related.id)}">${esc(related.title)} →</button>`).join("")}</section>` : "");
+    + (topic.relatedTopics?.length ? `<section class="project-reader-related"><h3>Continue exploring</h3>${topic.relatedTopics.map((related) => `<button type="button" data-reader-topic="${esc(related.id)}">${esc(related.title)} →</button>`).join("")}</section>` : "")
+    + `</div>`;
 }
 
 export function readerGalleryArticle(diagram: ProjectDiagram, data: ProjectReaderData): string {
@@ -80,7 +100,8 @@ export function readerGalleryArticle(diagram: ProjectDiagram, data: ProjectReade
 
 export function readerIntroduction(data: ProjectReaderData): string {
   const notes = data.architecture ? renderRules(data.architecture) + renderDecisions(data.architecture.decisions ?? []) : "";
-  return `<h2>Project introduction</h2><p class="project-reader-intro">${esc(data.brief || "Choose a topic to explore the project.")}</p><h3>Start exploring</h3><div class="project-reader-related">${data.topics.slice(0, 6).map((topic) => `<button type="button" data-reader-topic="${esc(topic.id)}">${esc(topic.title)} →</button>`).join("")}</div>`
+  return `<h2>Project introduction</h2><div class="project-reader-intro project-markdown">${renderProjectMarkdown(data.brief || "Choose a topic to explore the project.")}</div><h3>Start exploring</h3><div class="project-reader-related">${data.topics.slice(0, 6).map((topic) => `<button type="button" data-reader-topic="${esc(topic.id)}">${esc(topic.title)} →</button>`).join("")}</div>`
+    + (data.model?.nodes.some((node) => !data.topics.some((topic) => topic.id === node.id)) ? `<section class="project-reader-norms"><h3>Project norms</h3><p class="project-help">Norms that no module article covers. A saved body is confirmed by you, not by this view.</p>${data.model.nodes.filter((node) => !data.topics.some((topic) => topic.id === node.id)).map((node) => normBlock(data.model, node.id, data.openNorm === node.id)).join("")}</section>` : "")
     + (!data.topics.some((topic) => topic.kind === "system_context") ? '<p class="project-help">System boundaries and runtime units have not been recorded. The project model contains module outlines. Analyze a module to add its detailed explanation and diagram.</p>' : "")
     + (data.terms?.length ? `<details class="project-reader-support"><summary>Glossary · ${data.terms.length}</summary><dl>${data.terms.map((term) => `<dt>${esc(term.canonical)}</dt><dd>${esc(term.definition ?? "")}</dd>`).join("")}</dl></details>` : "")
     + (notes ? `<details class="project-reader-support"><summary>Architecture rules and decisions</summary>${notes}</details>` : "");
@@ -92,17 +113,18 @@ export function renderProjectTopics(topics: readonly ProjectTopic[], checks: rea
   const first = topics[0];
   const article = data.gallery && selected ? readerGalleryArticle(selected, data) : first ? readerTopicArticle(first, data)
     : selected ? readerGalleryArticle(selected, data) : '<h2>Project knowledge</h2><p class="project-help">Initialize the project from Overview to create its first explanation.</p>';
+  /** Authored functional areas; the index already assigned each module, so no path fallback. */
   const directory = (kind: ProjectTopic["kind"], title: string) => {
     const entries = topics.filter((topic) => topic.kind === kind);
     const buttons = (items: readonly ProjectTopic[]) => items.map(topic => `<button type="button" data-reader-topic="${esc(topic.id)}" data-topic-search="${esc([topic.area?.title ?? "", topic.title, topic.description, ...topic.entryPoints].join(" ").toLowerCase())}">${esc(topic.title)}</button>`).join("");
     const groups = new Map(entries.flatMap(topic => topic.area ? [[topic.area.id, topic.area] as const] : []));
-    const content = groups.size ? [...groups.values()].map(area => `<details data-reader-area="${esc(area.id)}"${entries.some(topic => topic.area?.id === area.id && topic.id === first?.id) ? " open" : ""}><summary>${esc(area.title)} <small>(${entries.filter(topic => topic.area?.id === area.id).length})</small></summary><p class="project-help">${esc(area.description)}</p>${buttons(entries.filter(topic => topic.area?.id === area.id))}</details>`).join("") + buttons(entries.filter(topic => !topic.area)) : buttons(entries);
+    const content = groups.size ? [...groups.values()].map(area => `<details data-reader-area="${esc(area.id)}"${entries.some(topic => topic.area?.id === area.id && topic.id === first?.id) ? " open" : ""}><summary>${esc(area.title)} <small>(${entries.filter(topic => topic.area?.id === area.id).length})</small></summary>${area.description ? `<p class="project-help">${esc(area.description)}</p>` : ""}${buttons(entries.filter(topic => topic.area?.id === area.id))}</details>`).join("") + buttons(entries.filter(topic => !topic.area)) : buttons(entries);
     return entries.length ? `${title ? `<h3>${title}</h3>` : ""}${content}` : "";
   };
-  return `<section class="project-reader" data-project-reader><template data-project-reader-data>${esc(JSON.stringify(data))}</template>`
-    + `<aside class="project-reader-directory"><label>Explore project<input type="search" data-project-topic-search placeholder="Find a topic…"></label><button type="button" data-reader-home>Project introduction</button>${directory("system_context", "Architecture")}${directory("containers", "")}${directory("structure", "Structure")}${directory("types", "Types")}${directory("context", "Responsibilities")}${directory("flow", "Flows")}<p data-project-topic-empty hidden>No matching topics.</p>`
+  return `<section class="project-reader" data-project-reader${data.model ? ` data-revision="${data.model.revision}"` : ""}><template data-project-reader-data>${esc(JSON.stringify(data))}</template>`
+    + `<aside class="project-reader-directory"><details class="project-directory-disclosure" open><summary>Browse knowledge</summary><div><label>Explore project<input type="search" data-project-topic-search placeholder="Find a topic…"></label><button type="button" data-reader-home>Project introduction</button>${directory("system_context", "Architecture")}${directory("containers", "")}${directory("structure", "Structure")}${directory("types", "Types")}${directory("context", "Responsibilities")}${directory("flow", "Flows")}<p data-project-topic-empty hidden>No matching topics.</p>`
     + (data.diagrams.length ? `<details class="project-reader-gallery"${data.gallery ? " open" : ""}><summary>All saved diagrams · ${data.diagrams.length}</summary>${data.diagrams.map((diagram) => `<button type="button" data-reader-diagram="${esc(diagram.id)}">${esc(diagram.title)}</button>`).join("")}</details>` : "")
-    + `</aside><div class="project-reader-main"><p class="project-reader-progress" data-reader-progress role="status" hidden></p><article data-reader-article>${article}</article></div></section>`;
+    + `</div></details></aside><div class="project-reader-main"><p class="project-reader-progress" data-reader-progress role="status" hidden></p><article data-reader-article>${article}</article><div class="project-reader-diagram-pane" data-reader-diagram-pane></div></div></section>`;
 }
 
 

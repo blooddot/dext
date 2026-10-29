@@ -6,7 +6,6 @@ import type { ProjectEvidenceSettings } from "../contracts/projectEvidenceSettin
 import type { ProjectIntent } from "../contracts/projectIntent.js";
 import type { ProjectObject } from "../contracts/projectKnowledge.js";
 import type { ProjectModel } from "../contracts/projectModel.js";
-import { renderNativeKnowledge } from "./projectTopicsView.js";
 import type { ProjectToolSettings, ProjectWorkspaceSettings } from "../contracts/projectSettings.js";
 import type { ProjectTopic, ProjectTopicCheck } from "../knowledge/projectTopics.js";
 import { projectSettingsScript, renderProjectSettings } from "./projectSettingsView.js";
@@ -97,7 +96,7 @@ function renderProjectInitializationSettings(overview: ProjectOverviewData): str
 export function renderProjectNav(page: ProjectPanelPage): string {
   const items = PROJECT_PANEL_PAGES.filter((item) => item !== "architecture").map((item) =>
     `<button type="button" role="tab" data-project-page="${item}" aria-selected="${item === page || (item === "knowledge" && page === "architecture")}">${PAGE_LABELS[item]}</button>`).join("");
-  return `<nav class="project-nav" role="tablist" aria-label="Project views">${items}</nav>`;
+  return `<header class="project-workspace-header"><h1>Dext Project</h1><nav class="project-nav" role="tablist" aria-label="Project views">${items}</nav></header>`;
 }
 
 const PHASE_LABELS: Record<string, string> = {
@@ -137,7 +136,7 @@ function renderInitialization(initialization: ProjectInitializationState, native
       : "";
     return `<div class="project-init project-init-completed" data-project-initialization-state="completed" role="status">`
       + `<p class="project-initialization-result">Project model ready${initialization.intentGenerated ? " · valid project intent" : ""}${initialization.diagramsGenerated ? ` · ${initialization.diagramsGenerated} diagram${initialization.diagramsGenerated === 1 ? "" : "s"}` : ""}.</p>`
-      + (nativeBootstrap ? `<p class="project-scan-progress">Open <strong>Knowledge</strong> to review normative bodies and maintain their relationships. Initialization does not confirm generated content.</p>` : missingDiagram ? `<p class="project-scan-progress">Open <strong>Knowledge</strong>, choose a module and click <strong>Analyze this module</strong> to generate its explanation and diagram.</p>` : "")
+      + (nativeBootstrap ? `<p class="project-scan-progress">Read explanations in <strong>Knowledge</strong>; each article folds in its norm and relationships for review.</p>` : missingDiagram ? `<p class="project-scan-progress">Open <strong>Knowledge</strong>, choose a module and click <strong>Analyze this module</strong> to generate its explanation and diagram.</p>` : "")
       + pendingResume
       + (initialization.output ? `<details class="project-initialization-log"><summary>Initialization output</summary><pre>${escapeHtml(initialization.output)}</pre></details>` : "")
       + `<button type="button" data-project-initialize>Update project model</button><p class="project-help">Refresh the introduction and module outlines. Saved module analyses remain available; changed outlines are marked for update.</p>`
@@ -158,7 +157,7 @@ function renderInitialization(initialization: ProjectInitializationState, native
         ? `<p class="project-scan-progress" role="status">Initialization paused after ${escapeHtml(resumeStage ?? "completed stages")} (${resumePercent}%). Continue resumes from that checkpoint; if sources or AI settings changed, it regenerates.</p>`
         : `<p class="project-scan-progress" role="status">Initialization stopped. The saved model is unchanged. Continuing re-indexes the current sources and starts a new run; this run's unsaved output is discarded.</p>`
       : nativeBootstrap ? `<p class="project-help"><strong>Not initialized.</strong> Build a Project model from the available inputs. Empty projects and durable documents need no source index. Existing saved diagrams remain viewable.</p>`
-      : `<p class="project-help"><strong>Not initialized.</strong> No valid saved semantic model was found. Index the configured JS/TS, Rust and Python sources locally, then generate module summaries. Detailed explanations and diagrams are generated per module in Knowledge.${initialization.diagramsGenerated ? " Saved diagrams remain viewable." : ""}</p>`;
+      : `<p class="project-help"><strong>Not initialized.</strong> No valid saved semantic model was found. Index the configured JS/TS, Rust and Python sources locally, then generate module summaries. Module explanations and diagrams are generated in Knowledge.${initialization.diagramsGenerated ? " Saved diagrams remain viewable." : ""}</p>`;
   return `<div class="project-init project-init-uninitialized" data-project-initialization-state="${failed ? "failed" : cancelled ? "cancelled" : "uninitialized"}">`
     + status
     + `<button type="button" class="project-initialize" data-project-initialize>${failed ? "Retry initialization" : cancelled ? (resumable ? "Resume initialization" : "Continue initialization") : "Build project model"}</button>`
@@ -260,9 +259,9 @@ export function projectPanelScript(state?: EditorTabState): string {
 export function renderProjectPanel(page: ProjectPanelPage, data: ProjectPanelData, options: { focusObjectId?: string; state?: EditorTabState } = {}): string {
   const body = page === "overview" ? renderOverview(data.overview)
     : page === "knowledge" && !data.knowledge?.topics && !data.readerDiagrams ? renderKnowledge(data.objects, data.knowledge)
-      : renderProjectTopics(data.knowledge?.topics ?? [], data.knowledge?.checks, { brief: data.knowledge?.brief ?? "", diagrams: data.readerDiagrams ?? [], terms: data.knowledge?.terms ?? [], architecture: data.architecture, gallery: page === "architecture", ...(data.architecture.selected ? { selectedDiagramId: data.architecture.selected.id } : {}) });
+      : renderProjectTopics(data.knowledge?.topics ?? [], data.knowledge?.checks, { brief: data.knowledge?.brief ?? "", diagrams: data.readerDiagrams ?? [], terms: data.knowledge?.terms ?? [], architecture: data.architecture, gallery: page === "architecture", ...(data.model ? { model: data.model } : {}), ...(options.state?.filters?.spec ? { openNorm: options.state.filters.spec } : {}), ...(data.architecture.selected ? { selectedDiagramId: data.architecture.selected.id } : {}) });
   const focus = options.focusObjectId
     ? `<span class="project-focus" data-project-focus="${escapeHtml(options.focusObjectId)}"></span>`
     : "";
-  return `<div class="project-panel" data-project-page="${page}">${renderProjectNav(page)}<main class="project-body">${focus}${body}${page === "knowledge" && data.model ? renderNativeKnowledge(data.model) : ""}</main></div>${projectPanelScript(options.state)}`;
+  return `<div class="project-panel" data-project-page="${page}">${renderProjectNav(page)}<main class="project-body">${focus}${body}</main></div>${projectPanelScript(options.state)}`;
 }

@@ -143,31 +143,58 @@ try {
     currentData = pageData;
     const light = theme === 'vscode-light';
     themeCss = `:root{--vscode-font-family:Segoe UI,sans-serif;--vscode-font-size:13px;--vscode-editor-background:${light ? '#fff' : '#1e1e1e'};--vscode-foreground:${light ? '#333' : '#ddd'};--vscode-descriptionForeground:${light ? '#555' : '#bbb'};--vscode-input-background:${light ? '#eee' : '#313131'};--vscode-input-foreground:${light ? '#333' : '#ddd'};--vscode-panel-border:${light ? '#ddd' : '#555'};--vscode-focusBorder:#0088ff;--vscode-list-activeSelectionBackground:#004c80;--vscode-list-activeSelectionForeground:#fff;--vscode-button-secondaryBackground:${light ? '#eee' : '#313131'};--vscode-textBlockQuote-background:${light ? '#eee' : '#292929'}}`;
-    pageHtml = ui.renderEditorTabHtml(`<script>document.body.classList.add('${theme}');window.messages=[];window.violations=[];document.addEventListener('securitypolicyviolation',e=>violations.push({directive:e.violatedDirective,blocked:e.blockedURI,source:e.sourceFile,line:e.lineNumber}));window.state={filters:${JSON.stringify(filters)}};window.acquireVsCodeApi=()=>({postMessage:m=>{messages.push(m);projectHostMessage(JSON.stringify(m))},getState:()=>state,setState:s=>{state=s}});</script>` + ui.renderProjectPanel(page, pageData, { state: { key: 'dext.editor:project', page, filters: {}, restoreVersion: 1 } }), `${origin}/style.css`, origin, { embedFrames: page !== 'overview', scriptUri: `${origin}/project.js`, mermaidUri: `${origin}/mermaid.js` });
+    pageHtml = ui.renderEditorTabHtml(`<script>document.body.classList.add('${theme}');window.messages=[];window.violations=[];document.addEventListener('securitypolicyviolation',e=>violations.push({directive:e.violatedDirective,blocked:e.blockedURI,source:e.sourceFile,line:e.lineNumber}));window.state={filters:${JSON.stringify(filters)}};window.acquireVsCodeApi=()=>({postMessage:m=>{messages.push(m);projectHostMessage(JSON.stringify(m))},getState:()=>state,setState:s=>{state=s}});</script>` + ui.renderProjectPanel(page, pageData, { state: { key: 'dext.editor:project', page, filters, restoreVersion: 1 } }), `${origin}/style.css`, origin, { embedFrames: page === 'knowledge' || page === 'architecture', scriptUri: `${origin}/project.js`, mermaidUri: `${origin}/mermaid.js` });
     await send('Page.navigate', { url: `${origin}/?${Date.now()}` });
     await wait(`document.readyState==='complete' && !!window.messages && !!document.querySelector('.project-panel')`, 'reader load');
-    if (page !== 'overview') await ready();
+    if ((page === 'knowledge' || page === 'architecture') && filters.topic !== '') await ready();
   };
   const native = { schemaVersion: 1, revision: 7, updatedAt: 0, nodes: [
-    { id: 'contract', kind: 'contract', title: 'API contract', canonicalName: 'API', review: 'accepted', freshness: 'current', body: { kind: 'inline', text: 'Stable interface' } },
+    { id: 'contract', kind: 'contract', title: 'API contract', canonicalName: 'API', review: 'accepted', freshness: 'current', body: { kind: 'inline', text: '## Responsibility\n\n- **Stable** `interface`\n\n<script>window.unsafeNorm=true</script>' } },
+    { id: 'kernel', kind: 'module', title: 'Execution kernel', canonicalName: 'Kernel', review: 'draft', freshness: 'needs_verification', body: { kind: 'inline', text: '## Responsibility\n\n- **Runs** modules' } },
     { id: 'document', kind: 'architecture', title: 'Architecture', canonicalName: 'Architecture', review: 'draft', body: { kind: 'document', path: 'docs/architecture.md', contentHash: 'saved' } }
-  ], relations: [{ id: 'link', from: 'contract', to: 'document', kind: 'depends_on' }] };
-  await load('vscode-dark', { ...data, model: native });
-  await evaluate(`document.querySelector('[data-knowledge-text]').value='Revised interface'`);
-  await click('[data-knowledge-save]');
-  assert.deepEqual(await evaluate('messages.at(-1)'), { type: 'projectKnowledgeUpdate', revision: 7, action: 'body', id: 'contract', text: 'Revised interface' });
-  await click('[data-knowledge-adopt]');
-  assert.equal((await evaluate('messages.at(-1)')).action, 'adopt');
-  await click('[data-knowledge-open]');
-  assert.deepEqual(await evaluate('messages.at(-1)'), { type: 'projectKnowledgeOpen', nodeId: 'document' });
-  await click('[data-knowledge-confirm]');
+  ], relations: [{ id: 'link', from: 'kernel', to: 'document', kind: 'depends_on' }] };
+  // A norm is maintained in the article that renders it: no second page, no copied text.
+  await load('vscode-dark', { ...data, model: native }, { topic: 'kernel' }, 'knowledge');
+  assert.equal(await evaluate("document.querySelectorAll('[data-native-knowledge]').length"), 0, 'there is no separate norms page');
+  assert.equal(await evaluate(`document.querySelectorAll('[data-norm]').length`), 1, 'only the module being read folds in a norm');
+  assert.equal(await evaluate(`document.querySelector('[data-norm="kernel"]').open`), false, 'the norm block starts folded');
+  assert.equal(await evaluate(`document.querySelector('[data-reader-article] .project-markdown').textContent.includes('Execute TypeScript')`), true, 'the article keeps its module explanation');
+  assert.equal(await evaluate(`document.querySelectorAll('[data-reader-article] .project-markdown').length`), 1, 'the norm text is not rendered a second time');
+  assert.equal(await evaluate("!!window.unsafeNorm"), false, 'Markdown cannot execute HTML');
+  await click('[data-norm="kernel"] > summary');
+  assert.equal(await evaluate(`document.querySelector('[data-norm="kernel"]').open`), true, 'the block opens from its own summary');
+  assert.equal(await evaluate(`document.querySelector('[data-norm="kernel"] textarea').value.includes('**Runs**')`), true, 'the source stays editable in place');
+  await evaluate(`document.querySelector('[data-norm="kernel"] textarea').value='Revised interface'`);
+  await click('[data-norm="kernel"] [data-knowledge-save]');
+  assert.deepEqual(await evaluate('messages.at(-1)'), { type: 'projectKnowledgeUpdate', revision: 7, action: 'body', id: 'kernel', text: 'Revised interface' });
+  assert.equal(await evaluate('state.filters.spec'), 'kernel', 'the reopened block follows its own write');
+  await click('[data-norm="kernel"] [data-knowledge-confirm]');
   assert.equal((await evaluate('messages.at(-1)')).action, 'confirm');
-  await click('[data-knowledge-unlink]');
+  await click('[data-norm="kernel"] [data-knowledge-unlink]');
   assert.equal((await evaluate('messages.at(-1)')).action, 'unlink');
-  await click('[data-knowledge-link]');
-  assert.equal((await evaluate('messages.at(-1)')).action, 'link');
-  await click('[data-project-plan]');
-  assert.deepEqual(await evaluate('messages.at(-1)'), { type: 'projectPlan', topicId: 'contract' });
+  await evaluate("document.querySelector('[data-norm=kernel] [data-knowledge-to]').value='contract';document.querySelector('[data-norm=kernel] [data-spec-link]').requestSubmit()");
+  assert.deepEqual(await evaluate('messages.at(-1)'), { type: 'projectKnowledgeUpdate', revision: 7, action: 'link', from: 'kernel', to: 'contract', kind: 'contains' });
+  // A norm no article covers is maintained from the introduction, still on the same page.
+  await load('vscode-dark', { ...data, model: native }, { topic: '' }, 'knowledge');
+  await wait(`document.querySelector('[data-reader-article] h2')?.textContent==='Project introduction'`, 'introduction');
+  assert.equal(await evaluate(`!!document.querySelector('[data-norm="contract"]')`), true, 'uncovered norms live on the introduction');
+  assert.equal(await evaluate("!!window.unsafeNorm"), false, 'uncovered norms cannot execute HTML either');
+  await click('[data-norm="contract"] > summary');
+  await click('[data-norm="contract"] [data-knowledge-confirm]');
+  assert.equal((await evaluate('messages.at(-1)')).action, 'confirm');
+  await click('[data-norm="document"] [data-knowledge-adopt]');
+  assert.equal((await evaluate('messages.at(-1)')).action, 'adopt');
+  await click('[data-norm="document"] [data-knowledge-open]');
+  assert.deepEqual(await evaluate('messages.at(-1)'), { type: 'projectKnowledgeOpen', nodeId: 'document' });
+  for (const width of [390, 1440]) {
+    await send('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: false });
+    await load('vscode-dark', { ...data, model: native }, { topic: 'kernel', spec: 'kernel' }, 'knowledge');
+    assert.equal(await evaluate(`document.querySelector('[data-norm="kernel"]').open`), true, 'the block reopens after its own write');
+    assert.equal(await evaluate("document.querySelector('.project-directory-disclosure').open"), width > 900, 'directory folds at narrow editor widths');
+    assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, 'the article fits the editor width');
+    assert.deepEqual(await evaluate('violations'), [], 'the norm block stays within the editor CSP');
+    await writeFile(join(artifacts, `norm-${width}.png`), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
+  }
   const qualityIssues = [
     { code: 'community-split', message: '检查 <entry> & "边界"', contextIds: [], elementIds: [], sourcePaths: ['src/fallback.ts'], reason: '保留完整原因', evidence: [{ path: 'src/runner.ts', line: 12 }] },
     { code: 'ownership-review', message: 'Review ownership', contextIds: [], elementIds: [], sourcePaths: ['src/editor.ts'] }
@@ -244,7 +271,27 @@ try {
       await hostMessage({ type: 'projectKnowledgeChecked', checks: [{ id: 'run', fingerprint: ui.topicFingerprint(topics.find(t => t.id === 'run')), checkedAt: 10, state: 'changed', files: [{ path: evidence[0].path, state: 'changed' }] }] });
       await ready();
       assert.equal(await evaluate(`document.querySelector('[data-topic-check]').hidden`), false);
-      assert.equal(await evaluate(`document.querySelector('.project-reader-figure').getBoundingClientRect().width >= document.querySelector('.project-reader-story').getBoundingClientRect().width * .95`), true, 'interactive view uses the reading width');
+      const layout = await evaluate(`(() => {
+        const main = document.querySelector('.project-reader-main');
+        const figure = document.querySelector('.project-reader-figure');
+        const prose = document.querySelector('.project-reader-prose');
+        const art = document.querySelector('[data-reader-article]').getBoundingClientRect(), left = prose.getBoundingClientRect(), right = figure.getBoundingClientRect();
+        const docked = !!figure.closest('.project-reader-diagram-pane');
+        return { grid: getComputedStyle(main).display === 'grid', docked, position: getComputedStyle(docked ? figure.parentElement : figure).position, beside: right.left >= left.right - 1, below: right.top >= left.bottom - 1, figure: Math.round(right.width), main: Math.round(main.getBoundingClientRect().width), article: Math.round(art.width) };
+      })()`);
+      if (width >= 1360) {
+        assert.equal(layout.grid, true, 'a wide editor sets the diagram beside the explanation');
+        assert.equal(layout.docked, true, 'the diagram is docked beside the article');
+        assert.equal(layout.beside, true, `the diagram sits right of the explanation: ${JSON.stringify(layout)}`);
+        assert.equal(layout.position, 'sticky', 'the diagram stays in view while the explanation scrolls');
+        assert.ok(layout.figure >= 360, `the diagram column keeps a usable width: ${JSON.stringify(layout)}`);
+        assert.ok(layout.figure < layout.main * .6, `the diagram does not take the whole reader: ${JSON.stringify(layout)}`);
+      } else {
+        assert.equal(layout.grid, false, 'a narrow editor stacks the explanation and its diagram');
+        assert.equal(layout.docked, false, 'a narrow editor keeps the diagram between the explanation and the steps');
+        assert.equal(layout.below, true, `the diagram follows the explanation in one column: ${JSON.stringify(layout)}`);
+        assert.ok(Math.abs(layout.figure - layout.article) <= 2, `the stacked diagram uses the article width: ${JSON.stringify(layout)}`);
+      }
       await evaluate('window.scrollTo(0,0)');
       await writeFile(join(artifacts, `${theme}-${width}.png`), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
       await click('[data-topic-diagram]');
@@ -258,6 +305,9 @@ try {
       await ready();
       assert.equal(await evaluate(`document.querySelector('[data-reader-article] h2').textContent`), 'Execution kernel');
       assert.equal(await evaluate(`document.querySelector('[data-reader-area="area.execution"]').open`), true, 'navigation opens the selected module area');
+      await click('[data-reader-home]');
+      assert.equal(await evaluate(`(()=>{const a=[...document.querySelectorAll('.project-reader-directory [aria-current="page"]')];return a.length===1&&a[0].hasAttribute('data-reader-home')})()`), true, 'the introduction marks only its own entry current');
+      await click('.project-reader-directory [data-reader-topic="kernel"]'); await ready();
       await evaluate(`document.querySelector('[data-project-topic-search]').value='Workflow execution';document.querySelector('[data-project-topic-search]').dispatchEvent(new Event('input',{bubbles:true}))`);
       assert.equal(await evaluate(`document.querySelector('[data-reader-area="area.editing"]').hidden`), true);
       assert.equal(await evaluate(`document.querySelector('[data-reader-area="area.execution"]').open && !document.querySelector('[data-reader-area="area.execution"]').hidden`), true);
@@ -268,6 +318,42 @@ try {
       assert.deepEqual(await evaluate('violations'), [], 'reader respects CSP');
     }
   }
+  // The split waits for a wide editor: at a normal half-screen editor the diagram stays in the reading column.
+  await send('Emulation.setDeviceMetricsOverride', { width: 1100, height: 950, deviceScaleFactor: 1, mobile: false });
+  await load('vscode-dark');
+  await ready();
+  assert.equal(await evaluate(`getComputedStyle(document.querySelector('.project-reader-main')).display`), 'block', 'the split waits for a wide editor');
+  assert.equal(await evaluate(`!!document.querySelector('[data-reader-article] > .project-reader-figure, [data-reader-article] > .project-reader-tail > .project-reader-figure')`), true, 'the diagram stays in the article below the split');
+  assert.equal(await evaluate(`(()=>{const f=document.querySelector('.project-reader-figure').getBoundingClientRect();const a=document.querySelector('[data-reader-article]').getBoundingClientRect();return Math.abs(f.width-a.width)<=2&&f.top>document.querySelector('.project-reader-prose').getBoundingClientRect().bottom-1})()`), true, 'the stacked diagram uses the article width below the explanation');
+  assert.equal(await evaluate(`document.querySelector('.project-reader-main').getBoundingClientRect().right >= document.querySelector('.project-reader').getBoundingClientRect().right - 2`), true, 'the article fills the reader width without a rail');
+  await writeFile(join(artifacts, 'reader-1100.png'), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
+  // A fullscreen editor spends every pixel past the prose measure on the diagram.
+  await send('Emulation.setDeviceMetricsOverride', { width: 2400, height: 1400, deviceScaleFactor: 1, mobile: false });
+  await load('vscode-dark');
+  await ready();
+  const wide = await evaluate(`(() => {
+    const article = document.querySelector('[data-reader-article]');
+    const figure = document.querySelector('.project-reader-figure').getBoundingClientRect();
+    const prose = document.querySelector('.project-reader-prose').getBoundingClientRect();
+    return { figure: Math.round(figure.width), prose: Math.round(prose.width), article: Math.round(article.getBoundingClientRect().width), panel: Math.round(document.querySelector('.project-panel').getBoundingClientRect().width) };
+  })()`);
+  assert.equal(await evaluate(`getComputedStyle(document.querySelector('.project-reader-main')).display`), 'grid', 'a fullscreen editor keeps the diagram beside the explanation');
+  assert.equal(await evaluate(`getComputedStyle(document.querySelector('.project-reader-diagram-pane')).position`), 'sticky', 'the docked diagram stays in view');
+  assert.ok(wide.panel <= 1904 && wide.article <= wide.panel, `the reader stops at its reading cap: ${JSON.stringify(wide)}`);
+  assert.ok(wide.prose >= wide.article * .3 && wide.prose <= 720, `the prose keeps its measure while the diagram grows: ${JSON.stringify(wide)}`);
+  assert.ok(wide.figure > wide.prose, `the diagram takes the width past the prose: ${JSON.stringify(wide)}`);
+  assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, 'the wide reader does not overflow');
+  assert.equal(await evaluate(`(()=>{const h=document.querySelector('.project-workspace-header').getBoundingClientRect();const r=document.querySelector('.project-reader').getBoundingClientRect();return Math.abs(h.left-r.left)<2&&Math.abs(h.right-r.right)<2})()`), true, 'the reader and its workspace header share one frame');
+  await writeFile(join(artifacts, 'reader-2400.png'), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
+  // Crossing the breakpoint re-parents the one rendered diagram instead of duplicating it.
+  await send('Emulation.setDeviceMetricsOverride', { width: 1100, height: 950, deviceScaleFactor: 1, mobile: false });
+  await new Promise(done => setTimeout(done, 250));
+  assert.equal(await evaluate(`!!document.querySelector('[data-reader-article] > .project-reader-figure')`), true, 'narrowing the editor returns the diagram to the article');
+  assert.equal(await evaluate(`document.querySelectorAll('.project-reader-figure').length`), 1, 'undocking keeps a single diagram');
+  await send('Emulation.setDeviceMetricsOverride', { width: 1400, height: 950, deviceScaleFactor: 1, mobile: false });
+  await new Promise(done => setTimeout(done, 250));
+  assert.equal(await evaluate(`!!document.querySelector('.project-reader-diagram-pane > .project-reader-figure')`), true, 'widening the editor docks the diagram again');
+  assert.equal(await evaluate(`document.querySelectorAll('.project-reader-figure').length`), 1, 're-docking keeps a single diagram');
   await load('vscode-dark');
   await evaluate(`document.querySelector('[data-reader-screen]').click()`, true);
   await wait(`document.fullscreenElement===document.querySelector('.is-fullscreen') && !!document.fullscreenElement`, 'native fullscreen');

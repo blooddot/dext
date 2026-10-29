@@ -2,6 +2,11 @@ import { describe, expect, it } from "vitest";
 import { projectObjectSchema } from "../src/features/project/contracts/projectKnowledge.js";
 import type { ProjectInitializationState } from "../src/features/project/host/projectService.js";
 import { renderProjectPanel, type ProjectPanelData } from "../src/features/project/presentation/projectPanel.js";
+import { projectModelSchema } from "../src/features/project/contracts/projectModel.js";
+import { renderProjectMarkdown } from "../src/features/project/presentation/projectMarkdown.js";
+import { readerIntroduction } from "../src/features/project/presentation/projectTopicsView.js";
+import { buildProjectTopics } from "../src/features/project/knowledge/projectTopics.js";
+import { projectModelIntent } from "../src/features/project/knowledge/projectModel.js";
 
 const initialization = (status: ProjectInitializationState["status"], extra: Partial<ProjectInitializationState> = {}): ProjectInitializationState => ({ status, ...extra });
 
@@ -13,6 +18,47 @@ const data = (overrides: Partial<ProjectPanelData> = {}, state: ProjectInitializ
 });
 
 describe("project panel", () => {
+  const model = projectModelSchema.parse({ schemaVersion: 1, revision: 7, updatedAt: 0, nodes: [
+    { id: "module", kind: "module", title: "Renderer <entry>", canonicalName: "Renderer", body: { kind: "inline", text: "## Responsibility\n\n- **Render** `src/entry.ts`\n\n| Field | Value |\n| --- | --- |\n| Mode | read |\n\n<script>alert(1)</script>\n\n[bad](javascript:alert(1))" } },
+    { id: "document", kind: "architecture", title: "Architecture", canonicalName: "Architecture", body: { kind: "document", path: "docs/architecture.md", contentHash: "saved" } }
+  ], relations: [{ id: "relation", from: "module", to: "document", kind: "depends_on" }] });
+
+  it("renders normative Markdown end to end without enabling raw HTML or unsafe links", () => {
+    const topics = buildProjectTopics(projectModelIntent(model));
+    const html = renderProjectPanel("knowledge", data({ model, knowledge: { topics } })).split("<script>")[0]!;
+    expect(html).toContain("<h2>Responsibility</h2>");
+    expect(html).toContain("<strong>Render</strong>");
+    expect(html).toContain("<code>src/entry.ts</code>");
+    expect(html).toContain("<table>");
+    expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+    expect(html).not.toContain('href="javascript:');
+    expect(html).not.toContain("data-native-knowledge");
+    expect(renderProjectMarkdown("# Title")).toBe("<h2>Title</h2>\n");
+  });
+
+  it("folds a norm's maintenance into the article that renders it, and nothing else", () => {
+    const topics = buildProjectTopics(projectModelIntent(model));
+    const html = renderProjectPanel("knowledge", data({ model, knowledge: { topics } })).split("<script>")[0]!;
+    // The model node `module` is a topic, so its controls sit in its own article.
+    expect(html).toContain('data-norm="module"');
+    expect(html).toContain('data-knowledge-save="module"');
+    expect(html).toContain('data-knowledge-confirm="module"');
+    expect(html).toContain('data-knowledge-unlink="relation"');
+    expect(html).toContain("Renderer &lt;entry&gt; → Architecture");
+    expect(html).toContain("data-knowledge-link");
+    // Nodes without an article are maintained from the introduction, never on a second page.
+    const introduction = readerIntroduction({ model, topics, checks: [], diagrams: [], brief: "", gallery: false });
+    expect(introduction).toContain('data-norm="document"');
+    expect(introduction).toContain('data-knowledge-open="document"');
+    expect(introduction).toContain('data-knowledge-adopt="document"');
+    expect(introduction).toContain("Project norms");
+    expect(introduction).not.toContain('data-norm="module"');
+    expect(html).toContain('data-project-page="knowledge" aria-selected="true"');
+    expect(html).not.toContain('data-project-page="specs"');
+    // A reopened norm block stays open after its own write re-renders the page.
+    expect(renderProjectPanel("knowledge", data({ model, knowledge: { topics } }), { state: { key: "dext.editor:project", page: "knowledge", filters: { spec: "module" }, restoreVersion: 1 } }))
+      .toContain('data-norm="module" open');
+  });
   it("shows persisted semantic review warnings and escapes source-derived messages", () => {
     const html = renderProjectPanel('overview', data({ overview: { ...data().overview,
       qualityIssues: [{ code: 'missing-context-mapping', message: 'Webview <entry> needs a knowledge link', contextIds: [], elementIds: [], sourcePaths: [] }] } }));

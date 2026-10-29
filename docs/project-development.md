@@ -89,7 +89,7 @@ Project, API, Global Resources, and History open as editor tabs and share one la
 - `editorTabSerializer` registers a `WebviewPanelSerializer`-compatible restore path with a claim
   guard, so a serializer restore and a proactive restore never double-open the same tab.
 
-The Project tab exposes **Overview** and **Knowledge**. Saved diagrams live in the reader's secondary directory. The old `architecture` page key opens that gallery inside the reader, preserving restored tabs. Hooks and single-run metadata remain outside Project.
+The Project tab exposes **Overview** and **Knowledge**; saved diagrams live in the reader's secondary directory. The old `architecture` page key opens that gallery inside the reader, and the retired `specs` key restores the reader, preserving restored tabs. Each module article folds in its own norm and relationships, so authored text and its maintenance controls never sit on two pages. Hooks and single-run metadata remain outside Project.
 
 ## Exploring topics
 
@@ -206,6 +206,8 @@ Archify renders in an isolated sandbox and retains native animation, zoom and SV
 Optional `intent.c4` records systems, people, external systems and runtime containers. `systemId` identifies the focal system; containers use `parentId` for system ownership and `contextIds` for responsibility links. Every element and relationship requires evidence from a read source/document excerpt. The reader derives separate Project landscape (C1) and Runtime units (C2) views, then links to responsibilities and flows. Directories are never inferred as containers. Existing models remain usable without C4; the structure index generates C4 only when read source/configuration/documentation supports runtime boundaries. ER diagrams are still outside this scope; the new class kind is limited to the explicit type facts above.
 
 The reader supports zoom, fit, expand, SVG export and a collapsed **Diagram model** panel. A failed render leaves the explanation, evidence and saved model available, and opens that panel so the cause and model remain inspectable. Queued results cannot replace a newer topic. SVG export and source navigation resolve the displayed diagram's ID and saved timestamp in the host. All relations are also listed as keyboard-accessible **Connections** entries.
+
+The Knowledge page has no reading rail beside the article: the article uses the width the directory leaves. On a wide editor the diagram is docked beside the explanation and stays in view while the text scrolls, and the pane's share of the width grows with the window while the prose keeps its measure. An editor without room for that column keeps the diagram in the article between the explanation and its steps, so the renderer, its controls and its state are never duplicated.
 
 ### Declared architecture rules
 
