@@ -156,6 +156,31 @@ describe("sidebar panel layout", () => {
     expect(css).not.toContain('.input-section[data-mode="code"] .composer-menu:has(#agent-control)');
   });
 
+  it("keeps Plan's Build reporting the wait it started, even across a tab switch", async () => {
+    const main = await source("src/webview/main.ts");
+    const planControls = await source("src/features/conversations/browser/planControls.ts");
+    const css = await source("media/styles.css");
+    // Preparing the turn is an AI assessment, so Build must say so between the
+    // click and the first turn event instead of looking idle or failed.
+    expect(planControls).toMatch(/preparingBuild\(\): boolean;/);
+    expect(planControls).toMatch(/const preparingBuild = !planBuildRunning && view\.preparingBuild\(\);/);
+    expect(planControls).toMatch(/preparingBuild \|\| view\.executing\(\) \|\| planStatus === "running"/);
+    expect(planControls).toMatch(/preparingBuild \? "Preparing…" :/);
+    expect(planControls).toMatch(/preparingBuild \? "loading codicon-modifier-spin" :/);
+    expect(planControls).toMatch(/classList\.toggle\("preparing", preparingBuild\)/);
+    expect(css).toMatch(/button\.primary\.plan-build\.preparing:disabled \{[\s\S]*?opacity: 0\.8;/);
+    // The wait belongs to the conversation that asked for it, so re-rendering
+    // the toolbar (a tab switch included) cannot turn Build clickable again.
+    expect(main).toMatch(/const pendingBuilds = new Map<string, string>\(\);/);
+    expect(main).toMatch(/pendingBuilds\.set\(browser\.activeId, activePlanPath\)/);
+    expect(main).toMatch(/planStatus === "active" && pendingBuilds\.get\(browser\.activeId \?\? ""\) === activePlanPath/);
+    expect(main).toMatch(/if \(path === message\.path\) pendingBuilds\.delete\(sessionId\);/);
+    expect(main).toMatch(/message\.type === "error"[\s\S]*?pendingBuilds\.delete\(message\.sessionId\)/);
+    expect(main).toMatch(/pendingBuilds\.delete\(message\.sessionId\)[\s\S]*?conversationViewCache\.delete\(message\.sessionId\)/);
+    // The click no longer disables the button by hand; the pending wait owns it.
+    expect(main).not.toContain("elements.planBuild.disabled = true");
+  });
+
   it("keeps the composer usable when the Dext view is made very narrow", async () => {
     const css = await source("media/styles.css");
     // VS Code does not expose a minimum-width option for Webview Views, so the

@@ -229,6 +229,11 @@ let inputMode: InputMode = "agent";
 let activePlanPath: string | undefined;
 let planProjectContext: PlanProjectContext | undefined;
 let planStatus: "new" | "active" | "running" | "completed" | "failed" = "new";
+// A Build leaves the composer before the host starts a turn: it re-reads the plan
+// and may assess it against the Project with an AI call. Remember whose build is
+// still being prepared, so the wait survives a re-render (including a tab
+// switch) instead of turning back into a clickable Build.
+const pendingBuilds = new Map<string, string>();
 type AgentPermission = "workspace-write" | "full-access";
 const PERMISSION_LABEL: Record<AgentPermission, string> = {
   "workspace-write": "Workspace write",
@@ -567,6 +572,11 @@ function renderPlanToolbar(): void {
     stopping: () => stopping,
     activeTurnId: () => activeTurnId,
     buildRestriction: () => fullAccessPresetRestriction(true),
+    preparingBuild: () => Boolean(activePlanPath) && !executing
+      && (planStatus === "running"
+        // The host reports its own state for this plan; the local wait only covers
+        // the time before the first of those messages arrives.
+        || (planStatus === "active" && pendingBuilds.get(browser.activeId ?? "") === activePlanPath)),
     setPlaceholder: (text) => editor.setPlaceholder(text),
     onResourceActive: renderResourceToolbar
   });
@@ -2498,15 +2508,17 @@ elements.planBuild.addEventListener("click", () => {
     return;
   }
   if (!activePlanPath || executing) return;
+  // The host answers with a planContext message (and an error when it refuses),
+  // so the toolbar reports the wait from the click onwards.
+  if (browser.activeId) pendingBuilds.set(browser.activeId, activePlanPath);
   // A conflicting assessment gets the one-click correction; a Build here would only
   // be refused by the host.
   if (planProjectContext?.planPath === activePlanPath && planProjectContext.assessment === "conflict") {
-    elements.planBuild.disabled = true;
     vscode.postMessage({ type: "correctPlan", planPath: activePlanPath });
-    return;
+  } else {
+    vscode.postMessage({ type: "buildPlan", planPath: activePlanPath });
   }
-  elements.planBuild.disabled = true;
-  vscode.postMessage({ type: "buildPlan", planPath: activePlanPath });
+  updateRunState();
 });
 elements.result.addEventListener("click", openOutputLink);
 document.addEventListener("click", (event) => {
@@ -2869,6 +2881,12 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     }
   }
   if (message.type === "planContext") {
+    // The host answers a Build with planContext: "running" once it accepts the
+    // plan, or the unchanged status when it refuses it. Either way the wait that
+    // Build was reporting is over and the host's own state takes over.
+    for (const [sessionId, path] of pendingBuilds) {
+      if (path === message.path) pendingBuilds.delete(sessionId);
+    }
     activePlanPath = message.path;
     planStatus = message.status;
     planProjectContext = message.projectContext;
@@ -2914,6 +2932,8 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     // A background turn changes the session while its DOM may be cached.
     // Drop that snapshot so returning to the tab renders the new turn once.
     conversationViewCache.delete(message.sessionId);
+    // The turn this build was waiting for has run; the toolbar shows its result.
+    pendingBuilds.delete(message.sessionId);
   }
   if (message.type === "execution" && message.sessionId === browser.activeId) {
     transcript.select(message.turnId);
@@ -2923,6 +2943,7 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   }
   if (message.type === "executionFailed") {
     conversationViewCache.delete(message.sessionId);
+    pendingBuilds.delete(message.sessionId);
   }
   if (message.type === "executionFailed" && message.sessionId === browser.activeId) {
     transcript.select(message.turnId);
@@ -3025,6 +3046,10 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     updateRunState();
   }
   if (message.type === "error") {
+    // A refused request will never send the state message its control was
+    // waiting for, so the pending wait ends here.
+    if (message.sessionId) pendingBuilds.delete(message.sessionId);
+    else pendingBuilds.clear();
     if (message.sessionId && resourceSessions.has(message.sessionId)) {
       resourcePending.delete(message.sessionId);
       resourceErrors.set(message.sessionId, message.message);

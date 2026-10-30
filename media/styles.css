@@ -174,6 +174,12 @@ button.primary.plan-build.conflict {
 button.primary.plan-build.conflict:hover:not(:disabled) {
   background: var(--vscode-button-secondaryHoverBackground, color-mix(in srgb, var(--vscode-foreground) 22%, transparent));
 }
+/* Preparing has work behind it — reading the plan and checking it against the
+   Project — so it keeps more of Build's colour than a plainly disabled button
+   and pairs that with the spinning icon. */
+button.primary.plan-build.preparing:disabled {
+  opacity: 0.8;
+}
 .plan-build[hidden] { display: none; }
 
 .conversation-tabs::-webkit-scrollbar {

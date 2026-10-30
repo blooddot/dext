@@ -20,12 +20,15 @@ export interface PlanToolbarView {
   activePlanPath(): string | undefined;
   planStatus(): PlanStatus;
   projectContext?(): PlanProjectContext | undefined;
-  reviewProject?(): void;
   executing(): boolean;
   stopping(): boolean;
   activeTurnId(): string | undefined;
   /** A preset that runs outside the sandbox blocks a writable build turn. */
   buildRestriction(): string | undefined;
+  /** A build this conversation already sent is still being prepared. Reading
+   * the plan and assessing it against the Project is an AI call, so the wait
+   * can outlast the click by a lot. */
+  preparingBuild(): boolean;
   setPlaceholder(text: string): void;
   onResourceActive(): void;
 }
@@ -78,24 +81,32 @@ export function renderPlanToolbar(view: PlanToolbarView): void {
   // new plan, the target button is itself a chooser and must be locked too.
   elements.target.disabled = planLocked && !activePlanPath;
   const planBuildRunning = planStatus === "running" && view.executing();
+  // Preparing names the wait between the click and the first turn event. It is
+  // its own state because neither Build nor Stop describes it: the host has
+  // work in hand but no turn to stop yet. Re-rendering from unchanged host
+  // state must keep showing it, or a tab switch makes Build look clickable
+  // again while the build it already sent is still running.
+  const preparingBuild = !planBuildRunning && view.preparingBuild();
   // Building runs a writable turn, so it applies the selected preset as-is; the
   // host rejects a preset that needs Full access when the tier is not selected.
   const buildRestriction = view.buildRestriction();
   elements.build.disabled = Boolean(buildRestriction) || (planBuildRunning
     ? view.stopping() || !view.activeTurnId()
-    : view.executing() || planStatus === "running" || !activePlanPath);
+    : preparingBuild || view.executing() || planStatus === "running" || !activePlanPath);
   elements.build.classList.toggle("executing", planBuildRunning);
   elements.build.classList.toggle("stopping", planBuildRunning && view.stopping());
+  elements.build.classList.toggle("preparing", preparingBuild);
   elements.build.classList.toggle("conflict", conflict && !planBuildRunning);
   const buildLabel = elements.build.querySelector("span");
-  if (buildLabel) buildLabel.textContent = planBuildRunning ? "Stop" : conflict ? "Correct plan" : planStatus === "completed" ? "Rebuild" : "Build";
+  if (buildLabel) buildLabel.textContent = planBuildRunning ? "Stop" : preparingBuild ? "Preparing…" : conflict ? "Correct plan" : planStatus === "completed" ? "Rebuild" : "Build";
   elements.build.title = buildRestriction ?? (planBuildRunning
     ? view.stopping() ? "Stopping the active plan" : "Stop building the active plan"
+    : preparingBuild ? "Dext is reading the plan and checking it against the Project before the turn starts"
     : conflict ? `Revise the plan so it satisfies the Project norms: ${elements.status.title}`
     : planStatus === "completed" ? "Rebuild the active plan" : "Build the active plan");
   elements.build.setAttribute("aria-label", elements.build.title);
   const buildIcon = elements.build.querySelector<HTMLElement>("i");
-  if (buildIcon) buildIcon.className = `codicon codicon-${planBuildRunning ? "debug-stop" : conflict ? "wand" : "play"}`;
+  if (buildIcon) buildIcon.className = `codicon codicon-${planBuildRunning ? "debug-stop" : preparingBuild ? "loading codicon-modifier-spin" : conflict ? "wand" : "play"}`;
 }
 
 /** A plan result links back to its saved document for review or editing. */
