@@ -42,7 +42,6 @@ import { ProjectInitializationService } from "./projectService.js";
 
 export interface ProjectPanelDataSourceOptions {
   bootstrapCheckpoint?: () => Promise<{ stage: string; fraction: number } | undefined>;
-  updateKnowledge?: (request: unknown) => Promise<void>;
   bootstrap?: (provider: ProjectAiProvider | undefined, signal: AbortSignal, progress: ProjectInitializationProgressListener) => Promise<ProjectInitializationOutput>;
   name: string;
   root: string;
@@ -569,7 +568,6 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
         } : {})
       },
       objects,
-      ...(native ? { model: native } : {}),
       readerDiagrams: diagrams,
       ...(intent ? {
         knowledge: {
@@ -603,13 +601,6 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
 
   return {
     load,
-    openKnowledgeDocument: async (id: string): Promise<void> => {
-      const model = await options.store.readModel?.();
-      const node = model?.nodes.find(node => node.id === id);
-      if (!node || node.body.kind !== "document" || !options.openEvidence) throw new Error("Knowledge document is unavailable.");
-      await options.openEvidence(node.body.path);
-    },
-    ...(options.updateKnowledge ? { updateKnowledge: options.updateKnowledge } : {}),
     subscribe: (listener: (message: ProjectPanelMessage) => void): (() => void) => {
       listeners.add(listener);
       return () => listeners.delete(listener);

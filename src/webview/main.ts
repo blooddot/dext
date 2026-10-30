@@ -710,12 +710,16 @@ function renderResourceControls(): void {
   elements.permissionControlValue.textContent = resource.scope === "project" ? "Project" : "Global";
   elements.permissionControlIcon.className = "codicon codicon-folder";
   elements.permissionControl.classList.remove("is-full-access");
-  renderComposerMenu(elements.modeMenu, (Object.entries(RESOURCE_LABELS) as Array<[ResourceKind, string]>).map(([type, label]) => [type, label, `codicon-${RESOURCE_ICONS[type]}`]), resource.type,
-    (type) => changeResourceOptions(type as ResourceKind, resource.scope));
+  renderComposerMenu(elements.modeMenu, (Object.entries(RESOURCE_LABELS) as Array<[ResourceKind, string]>)
+    // Project norms live in this workspace's model, so the mode appears only when there is one.
+    .filter(([type]) => type !== "project" || Boolean(sidebarState?.resourceRoots?.project))
+    .map(([type, label]) => [type, label, `codicon-${RESOURCE_ICONS[type]}`]), resource.type,
+  (type) => changeResourceOptions(type as ResourceKind, type === "project" ? "project" : resource.scope));
+  const resourceKindKeys = (Object.keys(RESOURCE_LABELS) as ResourceKind[]).filter((type) => type !== "project" || Boolean(sidebarState?.resourceRoots?.project));
   for (const [index, button] of Array.from(elements.modeMenu.querySelectorAll("button")).entries()) {
-    button.dataset.resourceType = Object.keys(RESOURCE_LABELS)[index]!;
+    button.dataset.resourceType = resourceKindKeys[index]!;
   }
-  const scopes: ResourceScope[] = resource.type === "file"
+  const scopes: ResourceScope[] = resource.type === "file" || resource.type === "project"
     ? (sidebarState?.resourceRoots?.project ? ["project"] : [])
     : sidebarState?.resourceRoots?.project ? ["project", "global"] : ["global"];
   renderComposerMenu(elements.permissionMenu, scopes.map((scope) => [scope,
@@ -761,7 +765,8 @@ function renderResourceToolbar(): void {
   const importing = pristineNewSkill(resource) && resourceSource === "import";
   editor.setPlaceholder(importing
     ? "Paste a GitHub URL"
-    : resource.target ? `Describe changes to ${resource.target.name}…` : `Describe the ${RESOURCE_LABELS[resource.type]} to create…`);
+    : resource.type === "project" ? "Describe the norm to create…"
+      : resource.target ? `Describe changes to ${resource.target.name}…` : `Describe the ${RESOURCE_LABELS[resource.type]} to create…`);
 }
 
 function resetMcpAssistantProcess(): void {

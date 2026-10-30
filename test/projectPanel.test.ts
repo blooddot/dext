@@ -25,7 +25,7 @@ describe("project panel", () => {
 
   it("renders normative Markdown end to end without enabling raw HTML or unsafe links", () => {
     const topics = buildProjectTopics(projectModelIntent(model));
-    const html = renderProjectPanel("knowledge", data({ model, knowledge: { topics } })).split("<script>")[0]!;
+    const html = renderProjectPanel("knowledge", data({ knowledge: { topics } })).split("<script>")[0]!;
     expect(html).toContain("<h2>Responsibility</h2>");
     expect(html).toContain("<strong>Render</strong>");
     expect(html).toContain("<code>src/entry.ts</code>");
@@ -36,28 +36,33 @@ describe("project panel", () => {
     expect(renderProjectMarkdown("# Title")).toBe("<h2>Title</h2>\n");
   });
 
-  it("folds a norm's maintenance into the article that renders it, and nothing else", () => {
+  it("keeps the knowledge page read-only, with no norm maintenance anywhere", () => {
     const topics = buildProjectTopics(projectModelIntent(model));
-    const html = renderProjectPanel("knowledge", data({ model, knowledge: { topics } })).split("<script>")[0]!;
-    // The model node `module` is a topic, so its controls sit in its own article.
-    expect(html).toContain('data-norm="module"');
-    expect(html).toContain('data-knowledge-save="module"');
-    expect(html).toContain('data-knowledge-confirm="module"');
-    expect(html).toContain('data-knowledge-unlink="relation"');
-    expect(html).toContain("Renderer &lt;entry&gt; → Architecture");
-    expect(html).toContain("data-knowledge-link");
-    // Nodes without an article are maintained from the introduction, never on a second page.
-    const introduction = readerIntroduction({ model, topics, checks: [], diagrams: [], brief: "", gallery: false });
-    expect(introduction).toContain('data-norm="document"');
-    expect(introduction).toContain('data-knowledge-open="document"');
-    expect(introduction).toContain('data-knowledge-adopt="document"');
-    expect(introduction).toContain("Project norms");
-    expect(introduction).not.toContain('data-norm="module"');
+    const html = renderProjectPanel("knowledge", data({ knowledge: { topics } })).split("<script>")[0]!;
+    // The body that used to carry save, confirm and relationship controls is still rendered as prose.
+    expect(html).toContain("<h2>Responsibility</h2>");
+    expect(html).toContain("Renderer &lt;entry&gt;");
+    expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+    expect(html).not.toContain("<script>alert(1)</script>");
+    expect(html).not.toContain("data-norm=");
+    expect(html).not.toContain("data-knowledge-");
+    expect(html).not.toContain("data-spec-link");
+    const introduction = readerIntroduction({ topics, checks: [], diagrams: [], brief: "", gallery: false });
+    expect(introduction).not.toContain("Project norms");
+    expect(introduction).not.toContain("data-norm");
+    expect(introduction).toContain("Start here");
+    expect(introduction).toContain('data-reading-step="1"');
     expect(html).toContain('data-project-page="knowledge" aria-selected="true"');
     expect(html).not.toContain('data-project-page="specs"');
-    // A reopened norm block stays open after its own write re-renders the page.
-    expect(renderProjectPanel("knowledge", data({ model, knowledge: { topics } }), { state: { key: "dext.editor:project", page: "knowledge", filters: { spec: "module" }, restoreVersion: 1 } }))
-      .toContain('data-norm="module" open');
+  });
+  it("summarizes source freshness on the introduction instead of a norm block", () => {
+    const topics = buildProjectTopics(projectModelIntent(model));
+    const unchecked = readerIntroduction({ topics, checks: [], diagrams: [], brief: "", gallery: false });
+    expect(unchecked).toContain("data-project-freshness");
+    expect(unchecked).toContain("Check sources");
+    const checked = readerIntroduction({ topics, checks: [{ id: topics[0]!.id, fingerprint: topicFingerprint(topics[0]!), checkedAt: 10, state: "changed", files: [] }], diagrams: [], brief: "", gallery: false });
+    expect(checked).toContain("1 of 1 modules changed");
+    expect(checked).toContain("last checked");
   });
   it("shows persisted semantic review warnings and escapes source-derived messages", () => {
     const html = renderProjectPanel('overview', data({ overview: { ...data().overview,

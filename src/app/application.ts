@@ -52,6 +52,9 @@ import { DextStorage } from "../platform/vscode/dextStorage.js";
 import type { ProjectWorkspaceSettings } from "../features/project/contracts/projectSettings.js";
 import type { ProjectAiProvider } from "../features/project/host/generation/projectAiGeneration.js";
 import { RESOURCE_DIRECTORIES, mergeResourceFiles, resourceFileName, resourceFiles, resourcePathSegments, resourcePrompt, type ResourceDocument, type ResourceFileLimits, type ResourceKind, type ResourceScope, type ResourceSession, type ResourceTarget } from "../features/resources/contracts/resourceSession.js";
+import { listProjectNorms, readProjectNorm, writeProjectNorm } from "../features/project/host/persistence/projectNorms.js";
+import { ProjectStore } from "../features/project/host/persistence/projectStore.js";
+import { VscodeProjectFileHost } from "../features/project/host/persistence/vscodeProjectFileHost.js";
 import type { ResourcePackRef } from "../features/resources/contracts/resourceDocuments.js";
 import { importSkillPack, preflightSkillPack, SKILL_PACK_MAX_FILES, SKILL_PACK_MAX_BYTES, SKILL_FILE_MAX_BYTES, SKILL_SUPPORT_FILE_MAX_BYTES, type ImportSkillPackOptions, type SkillPackDraft } from "../features/resources/host/skillImporter.js";
 import { isSkillPackId, normalizeSkillPackManifest, skillPackId, SKILL_PACK_MANIFEST_FILE, SKILL_PACK_SOURCE_FILE, SKILL_PACKS_DIRECTORY, SKILLS_DIRECTORY, type SkillPackManifest } from "../features/resources/domain/skillPack.js";
@@ -1176,13 +1179,26 @@ export class DextApplication {
       }
       return folder.uri;
     }
+    // Project norms live inside the project model, so they have no global scope and never write there.
+    if (type === "project" && scope !== "project") throw new Error("Project norms exist only in this workspace.");
     if (scope === "global") return vscode.Uri.joinPath(this.storage.globalStorageUri, RESOURCE_DIRECTORIES[type]);
     const folder = vscode.workspace.workspaceFolders?.[0];
     if (!folder || folder.uri.scheme !== "file" || !this.workspaceTrusted) throw new Error("Project resources require a trusted local workspace.");
     return vscode.Uri.joinPath(folder.uri, ".dext", RESOURCE_DIRECTORIES[type]);
   }
 
+  /** The model writer behind the Project resource mode; the same store Overview updates. */
+  private projectNormStore(): ProjectStore {
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    if (!folder || folder.uri.scheme !== "file" || !this.workspaceTrusted) throw new Error("Project norms require a trusted local workspace.");
+    return new ProjectStore(new VscodeProjectFileHost(folder.uri));
+  }
+
   async listResources(type: ResourceKind): Promise<Array<{ name: string; path: string; scope: ResourceScope; pack?: ResourcePackRef }>> {
+    if (type === "project") {
+      this.resourceRoot(type, "project");
+      return (await listProjectNorms(this.projectNormStore())).map((norm) => ({ name: norm.title, path: norm.id, scope: "project" as const }));
+    }
     const items: Array<{ name: string; path: string; scope: ResourceScope; pack?: ResourcePackRef }> = [];
     for (const scope of ["project", "global"] as const) {
       if (scope === "project" && (!vscode.workspace.workspaceFolders?.[0] || !this.workspaceTrusted)) continue;
@@ -1485,6 +1501,11 @@ export class DextApplication {
   }
 
   async readResource(type: ResourceKind, scope: ResourceScope, path: string, name: string): Promise<ResourceTarget> {
+    if (type === "project") {
+      this.resourceRoot(type, scope);
+      const norm = await readProjectNorm(this.projectNormStore(), path);
+      return { name: norm.title, path, content: norm.text };
+    }
     const uri = vscode.Uri.joinPath(this.resourceRoot(type, scope), ...resourcePathSegments(type, path));
     const content = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
     if (type === "skill" ? new TextEncoder().encode(content).byteLength > SKILL_FILE_MAX_BYTES : content.length > 200_000) throw new Error("This resource is too large to edit in a conversation.");
@@ -1536,7 +1557,8 @@ export class DextApplication {
       const fence = "`".repeat(Math.max(3, ...Array.from(preview.matchAll(/`+/g), (match) => match[0].length + 1)));
       const language = file.path.endsWith(".ts") ? "typescript" : /\.jsonc?$/.test(file.path) ? "jsonc" : "text";
       const path = index === 0 && resource.type !== "file" ? `${RESOURCE_DIRECTORIES[resource.type]}/${file.path}` : file.path;
-      const label = resource.scope === "project" && !(index === 0 && resource.type === "file") ? `.dext/${path}` : path;
+      const label = resource.type === "project" ? `Project norm: ${file.path}`
+        : resource.scope === "project" && !(index === 0 && resource.type === "file") ? `.dext/${path}` : path;
       return `Draft: ${label}\n\n${fence}${language}\n${preview}\n${fence}`
         + (preview.length < file.content.length ? "\n\nPreview truncated; the complete file will be saved." : "");
     }).join("\n\n") + (flowIssues.length ? `\n\n${this.apiFlowIssueText(flowIssues)}` : "")
@@ -1673,13 +1695,17 @@ export class DextApplication {
       throw new Error("This is a GitHub URL. Switch to Import to install a Skill from it.");
     }
     if (resource.type === "skill" && !resource.target) resource.origin = "describe";
-    const response = await this.runtime.executeConversation("ask", resourcePrompt(resource, this.storage.attachmentPrompt(input)), { ...metadata, resourceSource });
+    // A Project norm is rewritten, never created here: the model owns its identity.
+    if (resource.type === "project" && !resource.target) throw new Error("Select a Project norm to rewrite, then describe the change.");
+    const norm = resource.type === "project" ? await readProjectNorm(this.projectNormStore(), resource.target!.path) : undefined;
+    const response = await this.runtime.executeConversation("ask", resourcePrompt(resource, this.storage.attachmentPrompt(input), norm), { ...metadata, resourceSource });
     if (response.result.kind !== "ask") throw new Error("The selected Agent did not return resource text.");
     const value = agentResultCandidates(response.result.text)[0]?.value;
     if (value === undefined) throw new Error("The Agent returned invalid resource JSON. Refine the request and try again.");
     if (typeof value.name !== "string" || typeof value.content !== "string") throw new Error("The resource needs a name and content.");
     const limits = this.resourceFileLimits(resource, value.content);
-    const files = mergeResourceFiles((resource.draft ?? resource.target)?.files, value.files, limits);
+    // A norm has no supporting files; its prose is the whole resource.
+    const files = resource.type === "project" ? [] : mergeResourceFiles((resource.draft ?? resource.target)?.files, value.files, limits);
     const draft: ResourceDocument = { name: resource.target?.name ?? value.name.trim(), content: value.content, ...(files.length ? { files } : {}) };
     if (!resource.target) resourceFileName(resource.type, draft.name);
     this.validateResource(resource.type, draft);
@@ -1700,6 +1726,12 @@ export class DextApplication {
     if (!resource.draft) throw new Error("Generate a resource draft first.");
     const { type, scope, draft, target } = resource;
     this.validateResource(type, draft);
+    // A Project norm lives in the model, so it is written there and nowhere on disk.
+    if (type === "project") {
+      if (scope !== "project" || !target) throw new Error("Select a Project norm to rewrite, then describe the change.");
+      await writeProjectNorm(this.projectNormStore(), target.path, draft.content);
+      return { name: target.name, path: target.path, content: draft.content };
+    }
     // A historical API may already break the wrapper rule; only a newly created
     // API is blocked, so upgrading Dext cannot make existing work unsaveable.
     if (type === "api" && !target) {

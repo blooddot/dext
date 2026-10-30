@@ -235,7 +235,7 @@ describe("global resources panel", () => {
 
   it("lists only current files, preserving nested paths and actual MCP filenames", async () => {
     const readFile = vi.fn(async (): Promise<string | undefined> => "source");
-    const listFiles = vi.fn(async (kind: Exclude<ResourceKind, "file">) => {
+    const listFiles = vi.fn(async (kind: Exclude<ResourceKind, "file" | "project">) => {
       const path = { api: "git/commit.ts", mcp: "servers.json", rule: "team/style.md", skill: "team/release/SKILL.md" }[kind];
       return [{ name: kind, path, scope: "global" as const }];
     });

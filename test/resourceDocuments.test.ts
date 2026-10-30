@@ -162,6 +162,17 @@ describe("resource documents", () => {
     expect(() => resourceFileName("api", "a..b")).toThrow();
   });
 
+  it("identifies a Project norm by its node id and keeps the rewrite to its body", () => {
+    expect(resourceFileName("project", "module:src-app")).toBe("module:src-app");
+    const prompt = resourcePrompt({ type: "project", scope: "project", target: { name: "App entry", path: "module:src-app", content: "## Responsibility\n\nOld" } }, "Rewrite it",
+      { id: "module:src-app", kind: "module", review: "draft", freshness: "needs_verification", evidence: ["src/app.ts"] });
+    expect(prompt).toContain("must be returned unchanged");
+    // The model owns identity and relationships; only the prose is rewritten, from real evidence.
+    expect(prompt).toContain("change only the body");
+    expect(prompt).toContain('"evidence":["src/app.ts"]');
+    expect(prompt).toContain("Keeping the body byte-for-byte unchanged confirms the norm");
+  });
+
   it.each([
     ["api", "sample", 'export async function main(input: string): Promise<AskResult> {\n  return await ask({ input });\n}\n', "api/sample.ts"],
     ["rule", "review.md", "Review changes.\n", "rules/review.md"],

@@ -422,6 +422,13 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     await this.startConversation(false, { type, scope });
   }
 
+  /** Opens the Resources editor on one saved norm, skipping the resource picker. */
+  async editProjectNorm(id: string): Promise<void> {
+    const saved = (await this.application.listResources("project")).find((entry) => entry.path === id);
+    const target = saved ? await this.application.readResource("project", "project", id, saved.name) : undefined;
+    await this.startConversation(false, { type: "project", scope: "project", ...(target ? { target } : {}) });
+  }
+
   addMcp(): void {
     this.postWhenReady({ type: "mcpAssistant" });
   }

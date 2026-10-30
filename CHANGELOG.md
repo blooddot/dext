@@ -14,6 +14,8 @@ All notable changes to Dext are documented in this file.
 
 - `dext_fetch` reads a GitHub file URL (`raw.githubusercontent.com`, or a `github.com` `blob`/`raw` link) through `cdn.jsdelivr.net` and falls back to the original URL when that fails, so a repository file stays readable when GitHub itself is unreachable. Use a commit or tag rather than a branch name for a stable copy.
 
+- Project norms are maintained from **Resources · Project** instead of the Knowledge reader. The reader is read-only: no norm block, no body textarea, no relationship editor. Choose a norm in the sidebar's Project mode, describe the change, review the draft and save it; an unchanged body counts as a confirmation (`accepted`/`current`) and a changed one as `edited`/`needs_verification`, with the model revision +1 either way.
+
 - Knowledge reads top-down in dependency order: the introduction's **Start here** lists every topic with a dependency-first ordering (a cycle is cut, not looped) and a one-line source-freshness summary that fills in after **Check sources**.
 
 - **Update project model** now re-drafts only the modules whose files changed: each module stage saves the content hashes it read, and an unchanged module keeps its saved prose and review state. The root stage still runs once per update, and a model saved before these hashes existed re-drafts every module on its first update.

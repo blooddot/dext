@@ -148,52 +148,27 @@ try {
     await wait(`document.readyState==='complete' && !!window.messages && !!document.querySelector('.project-panel')`, 'reader load');
     if ((page === 'knowledge' || page === 'architecture') && filters.topic !== '') await ready();
   };
-  const native = { schemaVersion: 1, revision: 7, updatedAt: 0, nodes: [
-    { id: 'contract', kind: 'contract', title: 'API contract', canonicalName: 'API', review: 'accepted', freshness: 'current', body: { kind: 'inline', text: '## Responsibility\n\n- **Stable** `interface`\n\n<script>window.unsafeNorm=true</script>' } },
-    { id: 'kernel', kind: 'module', title: 'Execution kernel', canonicalName: 'Kernel', review: 'draft', freshness: 'needs_verification', body: { kind: 'inline', text: '## Responsibility\n\n- **Runs** modules' } },
-    { id: 'document', kind: 'architecture', title: 'Architecture', canonicalName: 'Architecture', review: 'draft', body: { kind: 'document', path: 'docs/architecture.md', contentHash: 'saved' } }
-  ], relations: [{ id: 'link', from: 'kernel', to: 'document', kind: 'depends_on' }] };
-  // A norm is maintained in the article that renders it: no second page, no copied text.
-  await load('vscode-dark', { ...data, model: native }, { topic: 'kernel' }, 'knowledge');
+  // Knowledge is read-only, so the fixture model is no longer passed to the reader.
+  // Knowledge is read-only: the saved norm body is the article, with no maintenance controls.
+  const htmlTopic = { ...topics.find(topic => topic.id === 'kernel'), description: '## Responsibility\n\n- **Runs** modules\n\n<script>window.unsafeNorm=true</script>' };
+  await load('vscode-dark', { ...data, knowledge: { ...data.knowledge, topics: [htmlTopic] } }, { topic: 'kernel' }, 'knowledge');
   assert.equal(await evaluate("document.querySelectorAll('[data-native-knowledge]').length"), 0, 'there is no separate norms page');
-  assert.equal(await evaluate(`document.querySelectorAll('[data-norm]').length`), 1, 'only the module being read folds in a norm');
-  assert.equal(await evaluate(`document.querySelector('[data-norm="kernel"]').open`), false, 'the norm block starts folded');
-  assert.equal(await evaluate(`document.querySelector('[data-reader-article] .project-markdown').textContent.includes('Execute TypeScript')`), true, 'the article keeps its module explanation');
-  assert.equal(await evaluate(`document.querySelectorAll('[data-reader-article] .project-markdown').length`), 1, 'the norm text is not rendered a second time');
+  assert.equal(await evaluate(`document.querySelectorAll('[data-norm]').length`), 0, 'no norm maintenance block remains in the reader');
+  assert.equal(await evaluate(`document.querySelectorAll('[data-knowledge-save],[data-knowledge-confirm],[data-knowledge-unlink],[data-knowledge-open],[data-knowledge-adopt],[data-spec-link]').length`), 0, 'the reader offers no norm write control');
+  assert.equal(await evaluate(`document.querySelectorAll('[data-reader-article] .project-markdown').length`), 1, 'the article is the only rendering of the norm text');
+  assert.equal(await evaluate(`document.querySelector('[data-reader-article] .project-markdown').textContent.includes('Runs')`), true, 'the norm body is still rendered as prose');
   assert.equal(await evaluate("!!window.unsafeNorm"), false, 'Markdown cannot execute HTML');
-  await click('[data-norm="kernel"] > summary');
-  assert.equal(await evaluate(`document.querySelector('[data-norm="kernel"]').open`), true, 'the block opens from its own summary');
-  assert.equal(await evaluate(`document.querySelector('[data-norm="kernel"] textarea').value.includes('**Runs**')`), true, 'the source stays editable in place');
-  await evaluate(`document.querySelector('[data-norm="kernel"] textarea').value='Revised interface'`);
-  await click('[data-norm="kernel"] [data-knowledge-save]');
-  assert.deepEqual(await evaluate('messages.at(-1)'), { type: 'projectKnowledgeUpdate', revision: 7, action: 'body', id: 'kernel', text: 'Revised interface' });
-  assert.equal(await evaluate('state.filters.spec'), 'kernel', 'the reopened block follows its own write');
-  await click('[data-norm="kernel"] [data-knowledge-confirm]');
-  assert.equal((await evaluate('messages.at(-1)')).action, 'confirm');
-  await click('[data-norm="kernel"] [data-knowledge-unlink]');
-  assert.equal((await evaluate('messages.at(-1)')).action, 'unlink');
-  await evaluate("document.querySelector('[data-norm=kernel] [data-knowledge-to]').value='contract';document.querySelector('[data-norm=kernel] [data-spec-link]').requestSubmit()");
-  assert.deepEqual(await evaluate('messages.at(-1)'), { type: 'projectKnowledgeUpdate', revision: 7, action: 'link', from: 'kernel', to: 'contract', kind: 'contains' });
-  // A norm no article covers is maintained from the introduction, still on the same page.
-  await load('vscode-dark', { ...data, model: native }, { topic: '' }, 'knowledge');
+  await load('vscode-dark', data, { topic: '' }, 'knowledge');
   await wait(`document.querySelector('[data-reader-article] h2')?.textContent==='Project introduction'`, 'introduction');
-  assert.equal(await evaluate(`!!document.querySelector('[data-norm="contract"]')`), true, 'uncovered norms live on the introduction');
-  assert.equal(await evaluate("!!window.unsafeNorm"), false, 'uncovered norms cannot execute HTML either');
-  await click('[data-norm="contract"] > summary');
-  await click('[data-norm="contract"] [data-knowledge-confirm]');
-  assert.equal((await evaluate('messages.at(-1)')).action, 'confirm');
-  await click('[data-norm="document"] [data-knowledge-adopt]');
-  assert.equal((await evaluate('messages.at(-1)')).action, 'adopt');
-  await click('[data-norm="document"] [data-knowledge-open]');
-  assert.deepEqual(await evaluate('messages.at(-1)'), { type: 'projectKnowledgeOpen', nodeId: 'document' });
+  assert.match(await evaluate(`document.querySelector('[data-project-freshness]')?.textContent ?? ''`), /Check sources/, 'the introduction says how to check its sources');
+  assert.ok(await evaluate(`document.querySelectorAll('[data-reading-step]').length`) >= 1, 'Start here lists the topics in reading order');
   for (const width of [390, 1440]) {
     await send('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: false });
-    await load('vscode-dark', { ...data, model: native }, { topic: 'kernel', spec: 'kernel' }, 'knowledge');
-    assert.equal(await evaluate(`document.querySelector('[data-norm="kernel"]').open`), true, 'the block reopens after its own write');
+    await load('vscode-dark', data, { topic: 'kernel' }, 'knowledge');
     assert.equal(await evaluate("document.querySelector('.project-directory-disclosure').open"), width > 900, 'directory folds at narrow editor widths');
     assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, 'the article fits the editor width');
-    assert.deepEqual(await evaluate('violations'), [], 'the norm block stays within the editor CSP');
-    await writeFile(join(artifacts, `norm-${width}.png`), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
+    assert.deepEqual(await evaluate('violations'), [], 'the read-only article stays within the editor CSP');
+    await writeFile(join(artifacts, `read-only-${width}.png`), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
   }
   const qualityIssues = [
     { code: 'community-split', message: '检查 <entry> & "边界"', contextIds: [], elementIds: [], sourcePaths: ['src/fallback.ts'], reason: '保留完整原因', evidence: [{ path: 'src/runner.ts', line: 12 }] },

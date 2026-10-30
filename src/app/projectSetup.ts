@@ -1,8 +1,4 @@
 import * as vscode from "vscode";
-import { randomUUID } from "node:crypto";
-import { z } from "zod";
-import { projectModelRelationSchema } from "../features/project/contracts/projectModel.js";
-import { projectContentHash } from "../features/project/host/persistence/projectHash.js";
 import type { AgentProfile } from "../features/agents/contracts/agent.js";
 import { resolveProjectEvidenceSettings } from "../features/project/contracts/projectEvidenceSettings.js";
 import type { ProjectWorkspaceSettings } from "../features/project/contracts/projectSettings.js";
@@ -36,6 +32,7 @@ export interface ProjectSetupOptions {
   aiProvider: ProjectAiProvider; agentProfiles(): readonly AgentProfile[];
   onWorkspaceSettingsChanged(settings: ProjectWorkspaceSettings): Promise<void>;
   setReferenceSource(source: { search(query: string): Promise<ProjectReferenceCandidate[]>; open(objectId: string): Promise<void> }): void;
+  editProjectNorm(id: string): Promise<void>;
 }
 export function setupProject(options: ProjectSetupOptions): ProjectEditorProvider {
   const { context, folder, projectStore, editorTabs, editorTabRestorer, editors, renderEditorHtml } = options;
@@ -110,32 +107,12 @@ export function setupProject(options: ProjectSetupOptions): ProjectEditorProvide
     restorer: editorTabRestorer,
     copyText: (text) => vscode.env.clipboard.writeText(text),
     planFromProjectObject: async id => { await vscode.commands.executeCommand("dext.planFromProjectObject", id); },
+    editProjectNorm: id => options.editProjectNorm(id),
     dataSource: createProjectPanelDataSource({
       name: folder.name,
       root: ".",
       rootUri: folder.uri,
       bootstrapCheckpoint: () => readBootstrapCheckpoint(new VscodeProjectFileHost(folder.uri)),
-      updateKnowledge: async request => {
-        if (!vscode.workspace.isTrusted) throw new Error("Knowledge editing requires a trusted workspace.");
-        const update = z.object({ type: z.literal("projectKnowledgeUpdate"), revision: z.number().int().nonnegative(), action: z.enum(["body", "adopt", "confirm", "link", "unlink"]), id: z.string().optional(), text: z.string().max(256_000).optional(), from: z.string().optional(), to: z.string().optional(), kind: projectModelRelationSchema.shape.kind.optional() }).strict().parse(request);
-        const model = await projectStore.readModel();
-        if (!model || model.revision !== update.revision) throw new Error("Project changed; reload Knowledge before saving.");
-        if (update.action === "body" || update.action === "adopt" || update.action === "confirm") {
-          const node = model.nodes.find(node => node.id === update.id);
-          if (!node) throw new Error("Knowledge owner is missing.");
-          if (update.action === "body") {
-            if (node.body.kind !== "inline" || update.text === undefined) throw new Error("This body is owned by a document.");
-            node.body.text = update.text;
-          } else if (node.body.kind === "document") {
-            const content = await projectStore.readStrict(node.body.path);
-            if (content === undefined) throw new Error("Knowledge document is missing.");
-            node.body.contentHash = projectContentHash(content);
-          } else if (update.action === "adopt") throw new Error("This node has no adopted document.");
-          node.review = update.action === "confirm" ? "accepted" : "edited"; node.freshness = update.action === "confirm" || update.action === "adopt" ? "current" : "needs_verification";
-        } else if (update.action === "unlink") model.relations = model.relations.filter(edge => edge.id !== update.id);
-        else model.relations.push(projectModelRelationSchema.parse({ id: randomUUID(), from: update.from, to: update.to, kind: update.kind, origin: "declared", review: "edited", freshness: "needs_verification" }));
-        await projectStore.updateProject(model, update.revision);
-      },
       bootstrap: async (provider, signal, progress) => {
         const definition = await projectStore.readDefinition();
         const patterns = definition.evidence?.include.length ? definition.evidence.include : ["**/*"];

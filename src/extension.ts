@@ -142,6 +142,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     setupProject({ context, folder, projectStore, editorTabs, editorTabRestorer, editors, renderEditorHtml,
       aiProvider: application.projectAiProvider(), agentProfiles: () => application.agentProfiles(),
       setReferenceSource: source => sidebar.setProjectReferenceSource(source),
+      editProjectNorm: id => sidebar.editProjectNorm(id),
       onWorkspaceSettingsChanged: async settings => { application.setProjectWorkspaceSettings(settings); await application.reload(); await sidebar.refresh(); }
     });
   }

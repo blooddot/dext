@@ -1,9 +1,9 @@
-export type ResourceKind = "api" | "mcp" | "rule" | "skill" | "file";
+export type ResourceKind = "api" | "mcp" | "rule" | "skill" | "file" | "project";
 export type ResourceScope = "project" | "global";
 
-export const RESOURCE_LABELS: Record<ResourceKind, string> = { api: "API", mcp: "MCP", rule: "Rule", skill: "Skill", file: "File" };
-export const RESOURCE_ICONS: Record<ResourceKind, string> = { api: "symbol-method", mcp: "plug", rule: "law", skill: "book", file: "file" };
-export const RESOURCE_DIRECTORIES: Record<ResourceKind, string> = { api: "api", mcp: "mcp", rule: "rules", skill: "skills", file: "" };
+export const RESOURCE_LABELS: Record<ResourceKind, string> = { api: "API", mcp: "MCP", rule: "Rule", skill: "Skill", file: "File", project: "Project" };
+export const RESOURCE_ICONS: Record<ResourceKind, string> = { api: "symbol-method", mcp: "plug", rule: "law", skill: "book", file: "file", project: "project" };
+export const RESOURCE_DIRECTORIES: Record<ResourceKind, string> = { api: "api", mcp: "mcp", rule: "rules", skill: "skills", file: "", project: "project" };
 
 export interface ResourceDocument {
   name: string;
@@ -34,6 +34,8 @@ export interface ResourceSession {
 }
 
 export function resourceFileName(type: ResourceKind, name: string): string {
+  // A Project norm is identified by its model node id, not by a file path.
+  if (type === "project") return name.trim();
   if (type === "api") {
     if (!/^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)*$/.test(name)) throw new Error("Invalid API name.");
     return `${name.replaceAll(".", "/")}.ts`;
@@ -63,7 +65,7 @@ export function resourceDirectorySegments(type: ResourceKind, path: string): str
   return parts.slice(0, Math.max(0, parts.length - (type === "skill" ? 2 : 1)));
 }
 
-export function resourcePrompt(resource: ResourceSession, input: string): string {
+export function resourcePrompt(resource: ResourceSession, input: string, norm?: ResourceNormContext): string {
   const current = resource.draft ?? resource.target;
   return [
     `Generate one complete Dext ${RESOURCE_LABELS[resource.type]} resource and its supporting files. Do not write files; return a draft for review.`,
@@ -84,12 +86,29 @@ export function resourcePrompt(resource: ResourceSession, input: string): string
       ].join("\n\n")
       : resource.type === "mcp" ? "content is a complete JSONC MCP manifest with name, transport (stdio or http), command/args or url, and a tools allowlist array. Preserve existing tool schemas, auth and other settings unless the user requests changes. Credentials must be environment/SecretStorage references."
         : resource.type === "skill" ? "name is a safe directory name. content is a complete SKILL.md."
+          : resource.type === "project" ? [
+            "name is the id of an existing Project norm and must be returned unchanged. content is the complete replacement body in Markdown with '## Responsibility', '## Design' and '## Boundary'.",
+            "Read the cited evidence paths first. The saved body is an unverified draft: correct what the current code contradicts, keep the decisions it still supports, and cite the evidence paths the body depends on. Never invent files, ids or relationships, and change only the body: the norm's kind, relationships and review state belong to the host.",
+            "Keeping the body byte-for-byte unchanged confirms the norm as it stands.",
+            ...(norm ? [`Saved norm: ${JSON.stringify({ id: norm.id, kind: norm.kind, review: norm.review, freshness: norm.freshness, evidence: norm.evidence, sourceFiles: norm.sourceFiles ?? [] })}`] : [])
+          ].join("\n\n")
           : "name is a safe markdown filename. content is policy markdown.",
     ...(resource.target ? [`Keep the existing resource name exactly: ${resource.target.name}`] : []),
     ...(current ? ["Current draft/document:", JSON.stringify(current)] : []),
     "This resource selection and current document take precedence over earlier resources discussed in this conversation.",
     "User request:", input
   ].join("\n\n");
+}
+
+/** What the Project mode tells the model about the norm it is rewriting. */
+export interface ResourceNormContext {
+  id: string;
+  kind: string;
+  review: string;
+  freshness: string;
+  /** Evidence paths the saved body was written from. */
+  evidence: readonly string[];
+  sourceFiles?: readonly string[];
 }
 
 /** Validate model output before any path reaches the filesystem. */

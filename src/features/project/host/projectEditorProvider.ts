@@ -15,6 +15,8 @@ export interface ProjectEditorProviderOptions {
   scope?: string;
   copyText?(text: string): PromiseLike<void> | void;
   planFromProjectObject?(id: string): PromiseLike<void> | void;
+  /** Opens the Resources editor on a saved norm, so Knowledge need not route through the picker. */
+  editProjectNorm?(id: string): PromiseLike<void> | void;
 }
 
 export interface ProjectEditorShowResult {
@@ -181,12 +183,6 @@ export class ProjectEditorProvider {
   /** Handles webview messages routed by the shared manager. */
   async handleMessage(key: string, message: unknown): Promise<void> {
     if (key !== this.key) return;
-    if (message && typeof message === "object" && "type" in message && message.type === "projectKnowledgeUpdate") {
-      if (!this.options.dataSource.updateKnowledge) throw new Error("Knowledge editing is unavailable.");
-      await this.options.dataSource.updateKnowledge(message);
-      await this.show(this.page);
-      return;
-    }
     const payload = message as {
       type?: unknown; page?: unknown; diagramId?: unknown; version?: unknown; kind?: unknown;
       requirement?: unknown; format?: unknown; content?: unknown; nodeId?: unknown; path?: unknown; line?: unknown; refresh?: unknown;
@@ -196,14 +192,16 @@ export class ProjectEditorProvider {
       updatedAt?: unknown; elementId?: unknown; elementKind?: unknown;
       requestId?: unknown;
       text?: unknown;
+      objectId?: unknown;
     };
+    if (payload?.type === "projectEditNorm" && typeof payload.objectId === "string") {
+      if (!this.options.editProjectNorm) throw new Error("Editing Project norms is unavailable.");
+      await this.options.editProjectNorm(payload.objectId);
+      return;
+    }
     if (payload?.type === "projectPlan" && typeof payload.topicId === "string") {
       if (!this.options.planFromProjectObject) throw new Error("Project Plan action is unavailable.");
       await this.options.planFromProjectObject(payload.topicId);
-      return;
-    }
-    if (payload?.type === "projectKnowledgeOpen" && typeof payload.nodeId === "string") {
-      await this.options.dataSource.openKnowledgeDocument?.(payload.nodeId);
       return;
     }
     if (payload?.type === "projectQualityCopy" && typeof payload.text === "string" && typeof payload.requestId === "number" && Number.isSafeInteger(payload.requestId)) {

@@ -5,7 +5,6 @@ import type { ProjectDiagram } from "../contracts/projectDiagram.js";
 import type { ProjectEvidenceSettings } from "../contracts/projectEvidenceSettings.js";
 import type { ProjectIntent } from "../contracts/projectIntent.js";
 import type { ProjectObject } from "../contracts/projectKnowledge.js";
-import type { ProjectModel } from "../contracts/projectModel.js";
 import type { ProjectToolSettings, ProjectWorkspaceSettings } from "../contracts/projectSettings.js";
 import type { ProjectTopic, ProjectTopicCheck } from "../knowledge/projectTopics.js";
 import { projectSettingsScript, renderProjectSettings } from "./projectSettingsView.js";
@@ -56,7 +55,6 @@ export interface ProjectOverviewData {
 }
 
 export interface ProjectPanelData {
-  model?: ProjectModel;
   overview: ProjectOverviewData;
   /** Long-term objects only. Conversation runs never reach this view. */
   objects: readonly ProjectObject[];
@@ -259,7 +257,7 @@ export function projectPanelScript(state?: EditorTabState): string {
 export function renderProjectPanel(page: ProjectPanelPage, data: ProjectPanelData, options: { focusObjectId?: string; state?: EditorTabState } = {}): string {
   const body = page === "overview" ? renderOverview(data.overview)
     : page === "knowledge" && !data.knowledge?.topics && !data.readerDiagrams ? renderKnowledge(data.objects, data.knowledge)
-      : renderProjectTopics(data.knowledge?.topics ?? [], data.knowledge?.checks, { brief: data.knowledge?.brief ?? "", diagrams: data.readerDiagrams ?? [], terms: data.knowledge?.terms ?? [], architecture: data.architecture, gallery: page === "architecture", ...(data.model ? { model: data.model } : {}), ...(options.state?.filters?.spec ? { openNorm: options.state.filters.spec } : {}), ...(data.architecture.selected ? { selectedDiagramId: data.architecture.selected.id } : {}) });
+      : renderProjectTopics(data.knowledge?.topics ?? [], data.knowledge?.checks, { brief: data.knowledge?.brief ?? "", diagrams: data.readerDiagrams ?? [], terms: data.knowledge?.terms ?? [], architecture: data.architecture, gallery: page === "architecture", ...(data.architecture.selected ? { selectedDiagramId: data.architecture.selected.id } : {}) });
   const focus = options.focusObjectId
     ? `<span class="project-focus" data-project-focus="${escapeHtml(options.focusObjectId)}"></span>`
     : "";

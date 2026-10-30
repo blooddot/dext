@@ -61,8 +61,16 @@ try {
   assert.equal(await evaluate(`document.getElementById('permission-control-value').textContent`), "Project");
   assert.equal(await evaluate(`document.getElementById('resource-save').disabled`), true);
   await evaluate(`document.getElementById('mode-control').click()`);
-  assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('#mode-menu button span')).map(x=>x.textContent)`), ["API", "MCP", "Rule", "Skill", "File"]);
+  assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('#mode-menu button span')).map(x=>x.textContent)`), ["API", "MCP", "Rule", "Skill", "File", "Project"]);
   await key("Escape", 27);
+  await evaluate(`resource={type:'project',scope:'project',target:{name:'Alpha',path:'module:a',content:'## Responsibility'}};host({type:'resourceContext',sessionId:'resource',resource});`);
+  assert.equal(await evaluate(`document.getElementById('mode-control-value').textContent`), "Project");
+  assert.equal(await evaluate(`document.getElementById('permission-control-value').textContent`), "Project");
+  await evaluate(`document.getElementById('permission-control').click()`);
+  // A norm lives in this workspace's model, so it has no Global scope to choose.
+  assert.equal(await evaluate(`document.querySelectorAll('#permission-menu button').length`), 1, 'a Project norm saves into the project only');
+  await key("Escape", 27);
+  await evaluate(`resource={type:'api',scope:'project'};host({type:'resourceContext',sessionId:'resource',resource});`);
   await evaluate(`document.getElementById('permission-control').click()`);
   assert.equal(await evaluate(`document.getElementById('permission-menu').textContent.includes('C:/project/.dext/api')`), true);
   await key("Escape", 27);
@@ -105,7 +113,7 @@ try {
   const artifacts = resolve(".tmp-tb/resource-ui"); await mkdir(artifacts, { recursive: true });
   await evaluate(`document.querySelector('#code-editor textarea').focus()`);
   await send("Input.insertText", { text: "Refine this resource" });
-  const appearances = [["api", "symbol-method"], ["mcp", "plug"], ["rule", "law"], ["skill", "book"], ["file", "file"]];
+  const appearances = [["api", "symbol-method"], ["mcp", "plug"], ["rule", "law"], ["skill", "book"], ["file", "file"], ["project", "project"]];
   for (const [name, themeClass, background, foreground, accent] of [
     ["dark", "vscode-dark", "#181818", "#ddd", "#66aaff"],
     ["light", "vscode-light", "#fff", "#222", "#005fcc"],
@@ -172,7 +180,8 @@ try {
   assert.deepEqual(await evaluate(`sent.filter(x=>x.type==='agentSelection').at(-1).selection.skills`), ["ponytail", "ponytail-review"]);
   await evaluate(`host({type:'conversations',sessions,activeId:'chat',selection:{...selection,mode:'agent',skills:['ponytail']},planStatus:'new',hostInitiated:true})`);
   assert.equal(await evaluate(`document.querySelector('#skills-menu .composer-skill-pack').getAttribute('aria-checked')`), "mixed");
-  assert.equal(await evaluate(`document.getElementById('skills-control-value').textContent`), "1 skill");
+  // A lone skill reads as its own title; the pack name appears only for a multi-skill selection.
+  assert.equal(await evaluate(`document.getElementById('skills-control-value').textContent`), "Ponytail");
   await evaluate(`Array.from(document.querySelectorAll('#skills-menu .composer-skill-option')).find(button=>button.textContent.includes('Review')).click()`);
   assert.deepEqual(await evaluate(`sent.filter(x=>x.type==='agentSelection').at(-1).selection.skills`), ["ponytail", "ponytail-review"]);
   await evaluate(`host({type:'conversations',sessions,activeId:'chat',selection:{...selection,mode:'agent',skills:['ponytail','ponytail-review']},planStatus:'new',hostInitiated:true});document.getElementById('skills-control').click()`);
@@ -202,7 +211,10 @@ try {
   await evaluate(`resource={type:'skill',scope:'project'};activate('resource');`);
   assert.equal(await evaluate(`document.getElementById('resource-source-toggle').hidden`), false);
   assert.equal(await evaluate(`document.getElementById('resource-source-describe').getAttribute('aria-selected')`), "true");
-  assert.equal(await evaluate(`document.querySelector('.monaco-editor .editorPlaceholder')?.textContent`), "Describe the Skill to create…");
+  // Monaco paints the placeholder on a later frame, so wait for the text instead of a fixed delay.
+  const skillPlaceholder = `document.querySelector('.monaco-editor .editorPlaceholder')?.textContent`;
+  for (let attempt = 0; attempt < 40 && await evaluate(skillPlaceholder) !== "Describe the Skill to create…"; attempt++) await new Promise(done => setTimeout(done, 50));
+  assert.equal(await evaluate(skillPlaceholder), "Describe the Skill to create…");
   await evaluate(`document.getElementById('resource-source-import').click()`);
   assert.equal(await evaluate(`document.getElementById('resource-source-import').getAttribute('aria-selected')`), "true");
   assert.equal(await evaluate(`document.querySelector('.monaco-editor .editorPlaceholder')?.textContent`), "Paste a GitHub URL");
@@ -255,7 +267,7 @@ try {
   assert.equal(await evaluate(`(()=>{const r=document.getElementById('resource-source-toggle').getBoundingClientRect();return r.left>=0&&r.right<=innerWidth;})()`), true);
 
   assert.deepEqual(await evaluate(`uiErrors`), []);
-  console.log("PASS: resource tab entry, five resource types, save destinations, shared composer, stop, scoped preview/save, tab isolation, save failure/retry, retained saved tab, five distinct resource palettes/icons, synchronized action colors, neutral disabled actions, keyboard focus, pack tree with tri-state skills, selected-only slash completion, Describe/Import URL gating and resourceSource, AI report before Draft, hidden/disabled states, 320 px import layout, narrow dark/light/high-contrast themes. Screenshots: .tmp-tb/resource-ui");
+  console.log("PASS: resource tab entry, six resource types, save destinations, shared composer, stop, scoped preview/save, tab isolation, save failure/retry, retained saved tab, six distinct resource palettes/icons, synchronized action colors, neutral disabled actions, keyboard focus, pack tree with tri-state skills, selected-only slash completion, Describe/Import URL gating and resourceSource, AI report before Draft, hidden/disabled states, 320 px import layout, narrow dark/light/high-contrast themes. Screenshots: .tmp-tb/resource-ui");
 } finally {
   server.close();
   try { await shutdown?.(); } catch {}

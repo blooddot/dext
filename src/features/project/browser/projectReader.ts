@@ -32,12 +32,6 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
     const previous = api.getState?.();
     api.setState?.({ ...previous, filters: { ...previous?.filters, topic: topic?.id ?? "", diagram: diagram?.id ?? "" } });
   };
-  /** A norm write re-renders the page; remember which norm block was open so it stays open. */
-  const postUpdate = (message: Record<string, unknown>, openId: string) => {
-    const previous = api.getState?.();
-    api.setState?.({ ...previous, filters: { ...previous?.filters, spec: openId } });
-    api.postMessage({ type: "projectKnowledgeUpdate", revision: Number(root.dataset.revision), ...message });
-  };
   const markDirectory = () => root.querySelectorAll<HTMLButtonElement>(".project-reader-directory button").forEach((button) => {
     // On the introduction no topic or diagram is selected: only that entry is current, never every
     // row whose topic or diagram id happens to be undefined.
@@ -219,8 +213,6 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
     const available = topicDiagrams(next, data.diagrams);
     diagram = available.find((candidate) => candidate.id === diagramId) ?? available[0];
     renderArticle(readerTopicArticle(next, data));
-    // The reopened norm block belongs to one render; later navigation must not reopen it.
-    data = { ...data, openNorm: undefined };
     article.querySelectorAll<HTMLButtonElement>("[data-topic-diagram]").forEach((button) => { button.disabled = busy; });
     const select = root.querySelector<HTMLSelectElement>("[data-reader-view]");
     if (select && diagram) select.value = diagram.id;
@@ -239,7 +231,6 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
     stopPlayback(); interactive?.dispose(); interactive = undefined;
     generation++; topic = undefined; diagram = undefined;
     renderArticle(readerIntroduction(data));
-    data = { ...data, openNorm: undefined };
     markDirectory(); saveSelection();
   };
   root.addEventListener("input", (event) => {
@@ -261,27 +252,12 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
     root.querySelector<HTMLElement>("[data-reader-inspector]")!.hidden = true;
     highlight([]); saveSelection(); void renderDiagram();
   });
-  root.addEventListener("submit", (event) => {
-    const form = event.target instanceof HTMLFormElement ? event.target : null;
-    if (!form || !form.matches("[data-spec-link]")) return;
-    event.preventDefault();
-    const value = (selector: string) => form.querySelector<HTMLSelectElement>(selector)?.value;
-    const from = value("[data-knowledge-from]") ?? "";
-    postUpdate({ action: "link", from, to: value("[data-knowledge-to]"), kind: value("[data-knowledge-kind]") }, from);
-  });
   root.addEventListener("click", (event) => {
     const target = event.target instanceof Element ? event.target : null;
     const button = target?.closest<HTMLButtonElement>("button") ?? null;
     if (!button) return;
+    if (button.dataset.projectNorm) api.postMessage({ type: "projectEditNorm", objectId: button.dataset.projectNorm });
     if (button.dataset.projectPlan) api.postMessage({ type: "projectPlan", topicId: button.dataset.projectPlan });
-    if (button.dataset.knowledgeOpen) api.postMessage({ type: "projectKnowledgeOpen", nodeId: button.dataset.knowledgeOpen });
-    if (button.dataset.knowledgeConfirm) postUpdate({ action: "confirm", id: button.dataset.knowledgeConfirm }, button.dataset.knowledgeConfirm);
-    if (button.dataset.knowledgeSave) {
-      const id = button.dataset.knowledgeSave;
-      postUpdate({ action: "body", id, text: button.closest("[data-norm]")?.querySelector("textarea")?.value ?? "" }, id);
-    }
-    if (button.dataset.knowledgeAdopt) postUpdate({ action: "adopt", id: button.dataset.knowledgeAdopt }, button.dataset.knowledgeAdopt);
-    if (button.dataset.knowledgeUnlink) postUpdate({ action: "unlink", id: button.dataset.knowledgeUnlink }, button.closest<HTMLElement>("[data-norm]")?.dataset.norm ?? "");
     if (button.hasAttribute("data-reader-inspector-close")) {
       root.querySelector<HTMLElement>("[data-reader-inspector]")!.hidden = true;
       highlight([]);

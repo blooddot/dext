@@ -170,8 +170,9 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .project-nav button[aria-selected="true"] { color: var(--vscode-foreground); border-bottom-color: var(--vscode-focusBorder); }
 .project-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 12px 20px; }
 .project-facts dt { color: var(--vscode-descriptionForeground); }
+.project-reader-area-note { margin: 0 0 8px; }
 .project-facts dd { margin: 0; overflow-wrap: anywhere; }
-.project-help { max-width: var(--project-measure, 760px); color: var(--vscode-descriptionForeground); }
+.project-help { max-width: var(--project-measure, 760px); color: var(--vscode-foreground); }
 .project-ai-cli, .project-ai-model { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin: 12px 0; color: var(--vscode-foreground); }
 .project-ai-cli select, .project-ai-model select {
   min-width: 220px; max-width: min(100%, 420px); min-height: 30px; padding: 4px 28px 4px 9px;
@@ -485,14 +486,14 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .project-reader-directory { min-width: 0; align-self: start; position: sticky; top: 16px; max-height: calc(100vh - 40px); overflow: auto; padding-right: 14px; border-right: 1px solid var(--vscode-panel-border); }
 .project-reader-directory label { display: block; font-weight: 600; }
 .project-reader-directory input { width: 100%; margin: 8px 0 12px; padding: 6px 8px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 4px; }
-.project-reader-directory h3 { margin: 24px 8px 6px; color: var(--vscode-descriptionForeground); font-size: 12px; }
+.project-reader-directory h3 { margin: 24px 8px 6px; color: var(--vscode-foreground); font-size: 12px; }
 .project-reader-directory button { display: block; width: 100%; min-height: 32px; margin: 4px 0; text-align: left; background: transparent; border: 0; border-radius: 4px; padding: 7px 10px 7px 12px; line-height: 1.4; overflow-wrap: anywhere; }
 .project-reader-directory button:hover { background: var(--vscode-list-hoverBackground); }
 .project-reader-directory button:focus-visible { outline-offset: -2px; }
 .project-reader-directory [data-reader-area] { margin-top: 14px; }
 .project-reader-directory [data-reader-area] summary { cursor: pointer; padding: 6px 8px; border-radius: 4px; font-weight: 600; overflow-wrap: anywhere; }
 .project-reader-directory [data-reader-area] summary:hover { background: var(--vscode-list-hoverBackground); }
-.project-reader-directory [data-reader-area] .project-help { margin: 4px 10px 8px; font-size: 11px; }
+.project-reader-directory [data-reader-area] .project-help { margin: 4px 10px 8px; font-size: 12px; }
 .project-reader-directory [data-reader-area] button { padding-left: 14px; }
 .project-reader-directory button[aria-current="page"] { color: var(--vscode-foreground); background: var(--vscode-list-inactiveSelectionBackground, var(--vscode-editor-inactiveSelectionBackground, var(--vscode-input-background))); font-weight: 600; }
 .project-reader-gallery { margin-top: 24px; font-size: 12px; }
@@ -526,23 +527,7 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .project-markdown table { display: block; overflow: auto; border-collapse: collapse; max-width: 100%; margin: 16px 0; }
 .project-markdown th, .project-markdown td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--vscode-panel-border); }
 .project-markdown a { color: var(--vscode-textLink-foreground, var(--vscode-focusBorder)); }
-.project-markdown a:focus-visible, .project-directory-disclosure summary:focus-visible, .project-norm summary:focus-visible { outline: 2px solid var(--vscode-focusBorder); outline-offset: 2px; }
-.project-norm { margin: 0 0 24px; padding: 0 16px; border: 1px solid var(--vscode-panel-border); }
-.project-norm > summary { cursor: pointer; padding: 12px 0; color: var(--vscode-descriptionForeground); }
-.project-spec-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; }
-.project-norm label { display: block; margin: 16px 0 12px; }
-.project-norm textarea { display: block; width: 100%; min-height: 240px; resize: vertical; padding: 12px; margin-top: 8px; font: inherit; line-height: 1.6; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); }
-.project-spec-relations { margin-top: 24px; }
-.project-spec-relations ul { padding: 0; list-style: none; }
-.project-spec-relations li { display: flex; align-items: start; justify-content: space-between; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--vscode-panel-border); }
-.project-spec-relations li > div { min-width: 0; overflow-wrap: anywhere; }
-.project-spec-relations li small { display: block; color: var(--vscode-descriptionForeground); margin-top: 4px; }
-.project-spec-relations li button { flex-shrink: 0; }
-.project-spec-link { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 24px; }
-.project-spec-link h3 { grid-column: 1 / -1; margin: 0; }
-.project-spec-link label { display: grid; gap: 6px; min-width: 0; }
-.project-spec-link select { width: 100%; min-width: 0; font: inherit; color: var(--vscode-input-foreground); background: var(--vscode-input-background); padding: 8px; border: 1px solid var(--vscode-panel-border); }
-.project-spec-link button { justify-self: start; align-self: end; }
+.project-markdown a:focus-visible, .project-directory-disclosure summary:focus-visible { outline: 2px solid var(--vscode-focusBorder); outline-offset: 2px; }
 @media (max-width: 900px) {
   .project-reader { grid-template-columns: minmax(0, 1fr); gap: 20px; }
   .project-reader-directory { position: static; max-height: none; padding: 0; border: 0; }

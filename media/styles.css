@@ -15,6 +15,7 @@
   --resource-rule-accent: #dfb45c;
   --resource-skill-accent: #63c9b6;
   --resource-file-accent: var(--vscode-descriptionForeground, #a7b0bd);
+  --resource-project-accent: #e58b6a;
   --resource-button-foreground: #121212;
 }
 
@@ -29,6 +30,7 @@ body.vscode-high-contrast-light {
   --resource-mcp-accent: #7546b6;
   --resource-rule-accent: #886000;
   --resource-skill-accent: #08796d;
+  --resource-project-accent: #a34a25;
   --resource-button-foreground: #ffffff;
 }
 
@@ -3788,6 +3790,7 @@ details[open] > summary > .disclosure-chevron {
 [data-resource-type="rule"] { --resource-accent: var(--resource-rule-accent); }
 [data-resource-type="skill"] { --resource-accent: var(--resource-skill-accent); }
 [data-resource-type="file"] { --resource-accent: var(--resource-file-accent); }
+[data-resource-type="project"] { --resource-accent: var(--resource-project-accent); }
 
 .input-section[data-mode="resource"] {
   --composer-accent: var(--resource-accent);
