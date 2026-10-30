@@ -7,6 +7,9 @@ export default defineConfig({
     // Hooks that load a heavy module graph can spend longer than the 10s default
     // transforming it while the whole suite runs in parallel, which surfaces as a
     // spurious "Hook timed out" failure rather than a real problem.
-    hookTimeout: 60000
+    hookTimeout: 60000,
+    // Tests that spawn real processes (node --version, CLIs) need more than 5s when the
+    // whole suite runs in parallel; the default surfaces as a spurious timeout.
+    testTimeout: 20000
   }
 });
