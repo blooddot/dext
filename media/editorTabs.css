@@ -538,13 +538,27 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 }
 @media (max-width: 650px) {
   body:has(.project-panel) { padding: 16px; }
-  .project-spec-link { grid-template-columns: minmax(0, 1fr); }
-  .project-spec-relations li { flex-direction: column; gap: 8px; }
   .project-panel button, .project-panel input, .project-panel select { min-height: 44px; }
 }
 .project-reader-kind { margin: 0; color: var(--vscode-descriptionForeground); font-size: 12px; }
 .project-reader-warning { border-left: 3px solid var(--vscode-editorWarning-foreground); padding: 8px 12px; }
-.project-quality-copy { margin-left: 12px; padding: 2px 8px; font-size: 12px; vertical-align: middle; }
+/* Review signals: one issue per block, its sources and its copy action on one row under the text. */
+.project-quality { margin: 0 0 28px; }
+.project-quality-head { display: flex; align-items: baseline; gap: 8px; margin: 0 0 12px; font-size: 16px; font-weight: 600; }
+.project-quality > summary.project-quality-head { cursor: pointer; }
+.project-quality-count { color: var(--vscode-descriptionForeground); font-weight: 400; }
+.project-quality-list { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; }
+.project-quality-message { margin: 0; font-size: 14px; line-height: 1.6; }
+.project-quality-reason { margin: 4px 0 0; color: var(--vscode-descriptionForeground); font-size: 14px; line-height: 1.6; }
+.project-quality-meta { display: flex; align-items: center; gap: 4px 10px; margin: 8px 0 0; }
+.project-quality-sources { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; min-width: 0; }
+.project-quality-sources button, .project-quality-sources code { overflow-wrap: anywhere; }
+/* Paths read as links; the copy action is the only button in the row. */
+.project-quality-sources button { padding: 2px 0; border: 0; background: transparent; color: var(--vscode-textLink-foreground, var(--vscode-focusBorder)); }
+.project-quality-sources button:hover { background: transparent; text-decoration: underline; }
+.project-quality-meta .project-quality-copy { flex: 0 0 auto; }
+.project-quality-foot { display: flex; justify-content: flex-end; margin: 12px 0 0; }
+.project-quality-copy { padding: 2px 8px; font-size: 12px; }
 .project-reader-figure { margin: 0; min-width: 0; border: 1px solid var(--vscode-panel-border); border-radius: 6px; padding: 14px; background: var(--vscode-editor-background); }
 .project-reader-diagram-tools { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .project-reader-diagram-tools label { flex: 1 1 180px; min-width: 0; display: flex; align-items: center; gap: 6px; }

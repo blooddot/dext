@@ -7,6 +7,7 @@ import { parseProjectModel, projectModelIntent, validateProjectModel } from "../
 import { reconcileNativeProject } from "../knowledge/projectModelEvolution.js";
 import { jsonCandidates } from "../../../shared/protocol/resultBoundary.js";
 import { compareProjectEvidencePaths, type ProjectAiProvider } from "./generation/projectAiGeneration.js";
+import { projectModelQuality, withProjectQuality } from "./generation/projectModelQuality.js";
 import { type ProjectStore, projectContentHash, type ProjectFileHost } from "./persistence/projectStore.js";
 import { commitProjectMigration } from "./persistence/projectMigration.js";
 
@@ -469,7 +470,12 @@ export async function bootstrapProject(options: {
     if (current !== text) throw new Error(`Project source changed during initialization: ${path}`);
   }
   progress({ phase: "saving", fraction: 0, message: dropped.length ? `Validating the Project model and its baseline… dropped ${dropped.length} unresolved entry(ies) from the draft.` : "Validating the Project model and its baseline…" });
-  const next = await store.updateProject(reconcileNativeProject(candidate, model), model?.revision ?? null);
+  const merged = reconcileNativeProject(candidate, model);
+  // Review signals are derived from the committed graph every run; earlier decisions travel as reviews.
+  // shortcut: only a run with a fresh structure index re-derives them, so a Knowledge-only edit keeps the last set.
+  const qualityView = projectModelIntent(merged, sources);
+  const quality = projectModelQuality(qualityView, structure?.modules.flatMap(module => module.members) ?? [], qualityView.qualityIssues ?? []);
+  const next = await store.updateProject(withProjectQuality(merged, quality), model?.revision ?? null);
   await host.writeFile(PROJECT_BOOTSTRAP_CHECKPOINT_PATH, JSON.stringify({ version: 1, route, fingerprint, stage: "committed", completed, candidate: next }));
   return { model: next, intent: projectModelIntent(next, sources) };
 }

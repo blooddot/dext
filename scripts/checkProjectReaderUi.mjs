@@ -180,14 +180,15 @@ try {
   await evaluate(`document.querySelector('[data-project-quality-copy]').click()`);
   const copyRequest = await evaluate(`messages.at(-1)`);
   assert.equal(copyRequest.type, 'projectQualityCopy');
-  assert.equal(copyRequest.text, '# Run TypeScript\n\n## Architecture issues\n\n1. 检查 <entry> & "边界"\n   Code: community-split\n   Reason: 保留完整原因\n   - src/runner.ts:12');
-  assert.equal(await evaluate(`document.querySelector('[data-project-quality-copy]').closest('details').open`), true, 'copy does not toggle the group');
+  assert.equal(copyRequest.text, '# Run TypeScript\n\n## Architecture issues\n\n检查 <entry> & "边界"\n   Code: community-split\n   Reason: 保留完整原因\n   - src/runner.ts:12');
+  assert.equal(await evaluate(`document.querySelector('[data-project-quality-copy]').closest('summary') === null`), true, 'copy never sits inside the disclosure summary');
   await hostMessage({ type: 'projectQualityCopied', requestId: copyRequest.requestId, success: true });
   assert.equal(await evaluate(`document.querySelector('[data-project-quality-copy]').textContent`), 'Copied');
   await evaluate(`document.querySelectorAll('[data-project-quality-copy]')[1].click()`);
   const reviewRequest = await evaluate(`messages.at(-1)`);
   assert.match(reviewRequest.text, /Ownership needs review[\s\S]*Review ownership[\s\S]*src\/editor.ts/);
   await hostMessage({ type: 'projectQualityCopied', requestId: reviewRequest.requestId, success: false });
+  await writeFile(join(artifacts, 'quality-article.png'), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
   assert.equal(await evaluate(`document.querySelectorAll('[data-project-quality-copy]')[1].textContent`), 'Copy failed');
   assert.equal(await evaluate(`document.querySelectorAll('[data-project-quality-copy]')[1].disabled`), false, 'failed copy can be retried');
   for (const width of [320, 1400]) {
@@ -198,6 +199,7 @@ try {
     assert.equal(overviewCopy.type, 'projectQualityCopy', 'overview copy works without the reader');
     assert.match(overviewCopy.text, /Architecture issues[\s\S]*src\/runner.ts:12/);
     assert.equal(await evaluate(`document.documentElement.scrollWidth <= innerWidth`), true, 'overview copy fits viewport');
+    await writeFile(join(artifacts, `quality-overview-${width}.png`), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
   }
   // Project settings are label/control rows. A generic form-label rule used to win
   // over the AI row grid, which stacked and centred every control, and a full-width
@@ -473,7 +475,7 @@ try {
         assert.equal(await evaluate(`Array.from(document.querySelectorAll('[data-reader-article] details')).find(d=>d.querySelector('summary')?.textContent.startsWith('Explained ownership decisions'))?.open`), false, 'explained decisions stay folded');
       }
       if (topic.qualityIssues?.some(issue => issue.code === 'ownership-review' && (!issue.status || issue.status === 'unresolved'))) {
-        assert.equal(await evaluate(`Array.from(document.querySelectorAll('[data-reader-article] details')).find(d=>d.querySelector('summary')?.textContent.startsWith('Ownership needs review'))?.open`), true, 'legacy and unresolved concerns stay visible');
+        assert.equal(await evaluate(`!!Array.from(document.querySelectorAll('[data-reader-article] .project-quality-head')).find(head => head.textContent.startsWith('Ownership needs review'))`), true, 'legacy and unresolved concerns stay visible');
       }
       if (await evaluate(`!!document.querySelector('[data-reader-article] [data-topic-evidence]')`)) {
         await click('[data-reader-article] [data-topic-evidence]');

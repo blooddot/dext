@@ -112,32 +112,50 @@ export function renderProjectTopics(topics: readonly ProjectTopic[], checks: rea
 }
 
 
-function qualityCopyButton(title: string, content: string, topicTitle?: string): string {
-  const text = (topicTitle ? '# ' + topicTitle + '\n\n' : '') + '## ' + title + '\n\n' + content;
-  return `<button type="button" class="project-quality-copy" data-project-quality-copy="${esc(text)}" aria-label="Copy ${esc(title)}" title="Copy descriptions and source paths for AI analysis">Copy</button>`;
+/** One issue as Markdown-ish text: the shape a person pastes into an AI turn. */
+function qualityIssueText(issue: ProjectQualityIssue): string {
+  const sources: Array<{ path: string; line?: number }> = issue.evidence ?? issue.sourcePaths.map(path => ({ path }));
+  return issue.message + `\n   Code: ${issue.code}` + (issue.status ? `\n   Status: ${issue.status}` : "")
+    + (issue.reason ? `\n   Reason: ${issue.reason}` : "")
+    + sources.map(source => `\n   - ${source.path}${source.line ? `:${source.line}` : ""}`).join("");
+}
+
+function qualityCopyButton(label: string, text: string, title: string, heading?: string): string {
+  const content = `${heading ? `# ${heading}\n\n` : ""}## ${title}\n\n${text}`;
+  return `<button type="button" class="project-quality-copy" data-project-quality-copy="${esc(content)}" aria-label="${esc(label)}" title="${esc(label)}: descriptions and source paths, ready for an AI turn">${esc(label)}</button>`;
 }
 
 /** Shared grouping for Overview and Knowledge; legacy issues remain unresolved. */
 export function renderProjectQuality(issues: readonly ProjectQualityIssue[], topic?: ProjectTopic): string {
   const groups = [
-    { title: "Architecture issues", items: issues.filter(issue => issue.code !== "ownership-review"), open: true },
-    { title: "Ownership needs review", items: issues.filter(issue => issue.code === "ownership-review" && (!issue.status || issue.status === "unresolved")), open: true },
-    { title: "Explained ownership decisions", items: issues.filter(issue => issue.code === "ownership-review" && (issue.status === "retained" || issue.status === "reassigned")), open: false }
+    { title: "Architecture issues", items: issues.filter(issue => issue.code !== "ownership-review"), collapsed: false },
+    { title: "Ownership needs review", items: issues.filter(issue => issue.code === "ownership-review" && (!issue.status || issue.status === "unresolved")), collapsed: false },
+    { title: "Explained ownership decisions", items: issues.filter(issue => issue.code === "ownership-review" && (issue.status === "retained" || issue.status === "reassigned")), collapsed: true }
   ];
+  const sourceList = (issue: ProjectQualityIssue): string => {
+    const sources: Array<{ path: string; line?: number }> = issue.evidence ?? issue.sourcePaths.map(path => ({ path }));
+    if (!sources.length) return "";
+    // Evidence opens the file when the article owns the file list, so the row stays a set of buttons.
+    return '<span class="project-quality-sources">' + sources.map(source => {
+      const index = topic?.evidence.findIndex(item => item.path === source.path && item.line === source.line) ?? -1;
+      const label = esc(source.path + (source.line ? ':' + source.line : ''));
+      return topic && index >= 0 ? `<button type="button" data-topic-evidence="${esc(topic.id)}" data-evidence-index="${index}">${label}</button>`
+        : issue.contextIds[0] ? `<button type="button" data-project-page="knowledge" data-project-topic="${esc(issue.contextIds[0])}">${label}</button>`
+          : `<code>${label}</code>`;
+    }).join("") + "</span>";
+  };
   return groups.filter(group => group.items.length).map(group => {
-    const text = group.items.map((issue, index) => {
-      const sources: Array<{ path: string; line?: number }> = issue.evidence ?? issue.sourcePaths.map(path => ({ path }));
-      return `${index + 1}. ${issue.message}\n   Code: ${issue.code}${issue.status ? '\n   Status: ' + issue.status : ''}`
-        + (issue.reason ? '\n   Reason: ' + issue.reason : '')
-        + sources.map(source => '\n   - ' + source.path + (source.line ? ':' + source.line : '')).join('');
-    }).join('\n\n');
-    return '<details class="project-reader-warning"' + (group.open ? ' open' : '') + '><summary>' + esc(group.title) + ' · ' + group.items.length + qualityCopyButton(group.title, text, topic?.title) + '</summary><ul>' + group.items.map(issue => {
-      const sources: Array<{ path: string; line?: number }> = issue.evidence ?? issue.sourcePaths.map(path => ({ path }));
-      return '<li>' + esc(issue.message) + (issue.reason ? '<p>' + esc(issue.reason) + '</p>' : '') + '<ul>' + sources.map(source => {
-        const index = topic?.evidence.findIndex(item => item.path === source.path && item.line === source.line) ?? -1;
-        const label = esc(source.path + (source.line ? ':' + source.line : ''));
-        return '<li>' + (topic && index >= 0 ? '<button type="button" data-topic-evidence="' + esc(topic.id) + '" data-evidence-index="' + index + '">' + label + '</button>' : issue.contextIds[0] ? '<button type="button" data-project-page="knowledge" data-project-topic="' + esc(issue.contextIds[0]) + '">' + label + '</button>' : '<code>' + label + '</code>') + '</li>';
-      }).join('') + '</ul></li>';
-    }).join('') + '</ul></details>';
-  }).join('');
+    const head = `<span class="project-quality-title">${esc(group.title)}</span><span class="project-quality-count">${group.items.length}</span>`;
+    const body = '<ul class="project-quality-list">' + group.items.map(issue => '<li class="project-quality-issue">'
+      + `<p class="project-quality-message">${esc(issue.message)}</p>`
+      + (issue.reason ? `<p class="project-quality-reason">${esc(issue.reason)}</p>` : "")
+      + `<p class="project-quality-meta">${sourceList(issue)}${qualityCopyButton("Copy", qualityIssueText(issue), group.title, topic?.title)}</p>`
+      + "</li>").join("") + "</ul>"
+      // One issue means one text: a second button would copy the same thing.
+      + (group.items.length > 1 ? `<p class="project-quality-foot">${qualityCopyButton(`Copy all ${group.items.length}`, group.items.map(issue => qualityIssueText(issue)).join("\n\n"), group.title, topic?.title)}</p>` : "");
+    // Decided reviews stay folded: they are history, not work.
+    return group.collapsed
+      ? `<details class="project-quality project-quality-decided"><summary class="project-quality-head">${head}</summary>${body}</details>`
+      : `<section class="project-quality"><h3 class="project-quality-head">${head}</h3>${body}</section>`;
+  }).join("");
 }

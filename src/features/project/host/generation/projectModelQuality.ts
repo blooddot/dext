@@ -1,4 +1,5 @@
 import type { ProjectContext, ProjectIntent, ProjectQualityIssue } from "../../contracts/projectIntent.js";
+import type { ProjectModel } from "../../contracts/projectModel.js";
 import { systemContextRelationships } from "../../presentation/projectC4.js";
 import type { StructureMember } from "../indexing/projectStructure.js";
 import { buildStructureGraphFromMembers, structureConsumers, type StructureGraph } from "../indexing/projectStructureGraph.js";
@@ -102,4 +103,18 @@ export function projectModelQuality(intent: ProjectIntent, files: readonly Struc
       contextIds: [], elementIds: [element.id], sourcePaths: element.evidence.map(item => item.path) });
   }
   return issues;
+}
+
+/**
+ * Stores review signals on the model root, which is where the read view surfaces them again. The
+ * native model is the only writer, so a route that drafts a model must record them here.
+ */
+export function withProjectQuality(model: ProjectModel, issues: readonly ProjectQualityIssue[]): ProjectModel {
+  const root = model.nodes.find(node => node.kind === "project");
+  if (!root) return model;
+  const properties = { ...root.properties };
+  delete properties.qualityIssues;
+  return { ...model, nodes: model.nodes.map(node => node === root
+    ? { ...node, properties: issues.length ? { ...properties, qualityIssues: [...issues] } : properties }
+    : node) };
 }
