@@ -105,6 +105,43 @@ describe("agent timeout policy", () => {
     second.dispose();
   });
 
+  it("keeps a long tool phase alive while the process keeps reporting work", () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const timeout = agentTimeout(controller, 0, 1000, 4000);
+    timeout.toolStarted("plan-build");
+    // A plan can hold one call open for hours while the CLI streams frames; the
+    // ceiling is for silence, not for how long the turn has been working.
+    for (let index = 0; index < 20; index++) {
+      vi.advanceTimersByTime(3000);
+      timeout.activity();
+      expect(controller.signal.aborted).toBe(false);
+    }
+    vi.advanceTimersByTime(4000);
+    expect(controller.signal.reason).toMatchObject({ message: expect.stringContaining("inside one tool call") });
+    expect(controller.signal.reason).toMatchObject({ message: expect.stringContaining("plan-build") });
+    timeout.dispose();
+  });
+
+  it("does not hand a spent deadline to tools reported after a call that never finished", () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const timeout = agentTimeout(controller, 0, 1000, 4000);
+    // The first call never reports a result, which used to pin the phase clock:
+    // every later call then inherited its remaining time and the turn died while
+    // the tools that were actually running kept returning.
+    timeout.toolStarted("lost-result");
+    vi.advanceTimersByTime(3000);
+    timeout.toolStarted("after-it");
+    vi.advanceTimersByTime(3000);
+    timeout.toolFinished("after-it");
+    vi.advanceTimersByTime(3000);
+    expect(controller.signal.aborted).toBe(false);
+    vi.advanceTimersByTime(1000);
+    expect(controller.signal.reason).toMatchObject({ message: expect.stringContaining("inside one tool call") });
+    timeout.dispose();
+  });
+
   it("releases timers on completion and ignores late output", () => {
     vi.useFakeTimers();
     const controller = new AbortController();
