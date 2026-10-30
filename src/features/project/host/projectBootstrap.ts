@@ -275,7 +275,9 @@ function parseJsonObject(text: string): unknown {
   for (const candidate of jsonCandidates(text)) {
     try { return JSON.parse(candidate) as unknown; } catch { /* Next candidate. */ }
   }
-  throw new Error("Project AI response did not contain a JSON object.");
+  // Name what the model actually returned, or the next failure is just as opaque.
+  const shown = text.trim().replace(/\s+/g, " ").slice(0, 160);
+  throw new Error(`Project AI response did not contain a JSON object${shown ? `: ${shown}` : " (empty response)."}`);
 }
 
 const checkpointSchema = z.object({ version: z.literal(1), fingerprint: z.string(), route: z.enum(["existing", "legacy", "documents", "code", "empty"]), stage: z.enum(["candidate", "committed"]), completed: z.number().int().nonnegative(), candidate: projectModelSchema }).strict();
@@ -390,7 +392,10 @@ export async function bootstrapProject(options: {
           const titles = new Map<string, string[]>();
           for (const module of modules) titles.set(module.title.toLowerCase(), [...(titles.get(module.title.toLowerCase()) ?? []), module.id]);
           const readAreas = (text: string): { areas: z.infer<typeof areaSchema>["areas"]; errors: string[] } => {
-            const parsed = areaSchema.safeParse(parseJsonObject(text));
+            // A prose answer is a rejected grouping, not a fatal error: the repair round below exists for it.
+            let value: unknown;
+            try { value = parseJsonObject(text); } catch (error) { return { areas: [], errors: [error instanceof Error ? error.message : String(error)] }; }
+            const parsed = areaSchema.safeParse(value);
             if (!parsed.success) return { areas: [], errors: parsed.error.issues.slice(0, 5).map(issue => `${issue.path.join(".")}: ${issue.message}`) };
             const areas = parsed.data.areas.map(area => ({ ...area, moduleIds: area.moduleIds.map(member => {
               const match = titles.get(member.trim().toLowerCase());
