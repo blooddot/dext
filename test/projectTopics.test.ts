@@ -16,15 +16,17 @@ describe("Project topics", () => {
     const saved = intent();
     const before = buildProjectTopics(saved)[0]!;
     saved.capabilities = [projectIntentSchema.parse({ schemaVersion: 1, updatedAt: 1, brief: { name: 'Example' },
-      capabilities: [{ id: 'area.execution', canonicalName: 'Workflow <execution>', description: 'Run reusable workflows', contextIds: ['ctx.code'] }]
+      capabilities: [{ id: 'area.execution', canonicalName: 'Workflow <execution>', description: 'Run **reusable** workflows', contextIds: ['ctx.code'] }]
     }).capabilities[0]!];
     const topics = buildProjectTopics(saved), topic = topics[0]!;
     expect(topic.id).toBe(before.id);
     expect(topic.basis).toBe(before.basis);
-    expect(topic.area).toEqual({ id: 'area.execution', title: 'Workflow <execution>', description: 'Run reusable workflows' });
+    expect(topic.area).toEqual({ id: 'area.execution', title: 'Workflow <execution>', description: 'Run **reusable** workflows' });
     const html = renderProjectTopics(topics);
     expect(html).toContain('data-reader-area="area.execution"');
     expect(html).toContain('Workflow &lt;execution&gt;');
+    expect(html).toContain('<div class="project-help project-reader-area-note"><p>Run <strong>reusable</strong> workflows</p>');
+    expect(html).toContain('data-project-norm="ctx.code"');
     expect(html).toContain('data-reader-topic="flow.run"');
     expect(renderProjectTopics(buildProjectTopics(intent()))).not.toContain('data-reader-area=');
   });
