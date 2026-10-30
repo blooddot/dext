@@ -48,6 +48,27 @@ export async function piFetch(url: string, signal: AbortSignal, options: PiFetch
   const fetcher = options.fetch ?? globalThis.fetch;
   const resolve = options.resolve ?? (async (hostname) => (await lookup(hostname, { all: true, verbatim: true })).map((entry) => entry.address));
   const expiry = AbortSignal.timeout(TIMEOUT_MS), combined = AbortSignal.any([signal, expiry]);
+  const mirror = jsDelivr(url);
+  const first = await fetchOnce(mirror ?? url, signal, fetcher, resolve, expiry, combined);
+  // A branch head can lag on the CDN or a large file can be missing there; the origin is the fallback.
+  if (!mirror || first.status === "ok") return first;
+  return fetchOnce(url, signal, fetcher, resolve, expiry, combined);
+}
+
+/** GitHub serves repository files through a CDN that stays reachable when the site does not. */
+export function jsDelivr(href: string): string | undefined {
+  let url: URL;
+  try { url = new URL(href); } catch { return undefined; }
+  const parts = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+  const [owner, repo] = parts;
+  const rest = url.hostname === "raw.githubusercontent.com" ? parts.slice(2)
+    : url.hostname === "github.com" && (parts[2] === "blob" || parts[2] === "raw") ? parts.slice(3) : undefined;
+  const [ref, ...path] = rest ?? [];
+  if (!owner || !repo || !ref || !path.length) return undefined;
+  return `https://cdn.jsdelivr.net/gh/${owner}/${repo}@${ref}/${path.map(encodeURIComponent).join("/")}`;
+}
+
+async function fetchOnce(url: string, signal: AbortSignal, fetcher: typeof globalThis.fetch, resolve: NonNullable<PiFetchOptions["resolve"]>, expiry: AbortSignal, combined: AbortSignal): Promise<PiFetchReply> {
   let current = url;
   try {
     for (let hop = 0; ; hop++) {
@@ -60,7 +81,7 @@ export async function piFetch(url: string, signal: AbortSignal, options: PiFetch
         current = new URL(location, target).href; continue;
       }
       if (!response.ok) { await response.body?.cancel(); return { status: "failed", reason: `The server answered HTTP ${response.status}.` }; }
-      const reader = response.body?.getReader(), chunks: Uint8Array[] = [], truncated = await read(reader, chunks);
+      const reader = response.body?.getReader(), chunks: Uint8Array[] = [], truncated = await drain(reader, chunks);
       return { status: "ok", url: target.href, contentType: response.headers.get("content-type") ?? "", text: new TextDecoder().decode(Buffer.concat(chunks)), truncated };
     }
   } catch (error) {
@@ -71,7 +92,7 @@ export async function piFetch(url: string, signal: AbortSignal, options: PiFetch
   }
 }
 
-async function read(reader: ReadableStreamDefaultReader<Uint8Array> | undefined, chunks: Uint8Array[]): Promise<boolean> {
+async function drain(reader: ReadableStreamDefaultReader<Uint8Array> | undefined, chunks: Uint8Array[]): Promise<boolean> {
   if (!reader) return false;
   let size = 0;
   for (;;) {

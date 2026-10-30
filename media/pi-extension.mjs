@@ -46,7 +46,7 @@ export default async function dextPiExtension(pi) {
   pi.registerTool({ name: "dext_request_user_input", label: "Ask the user", description: "Ask the user one or more questions. Supports choices, multiple selections and a custom answer. Wait for the actual response.",
     parameters: { type: "object", properties: { questions: { type: "array", items: question, minItems: 1, maxItems: 20 } }, required: ["questions"], additionalProperties: false },
     async execute(_id, args, signal) { return result(await call("question", { questions: args.questions }, signal)); } });
-  pi.registerTool({ name: "dext_fetch", label: "Fetch URL", description: "Read one http(s) URL and return its text content, truncated when long. Read-only: no POST, custom headers or cookies.",
+  pi.registerTool({ name: "dext_fetch", label: "Fetch URL", description: "Read one http(s) URL and return its text content, truncated when long. GitHub file URLs are read through cdn.jsdelivr.net, falling back to the original URL, so prefer a commit or tag over a branch name for a stable copy. Read-only: no POST, custom headers or cookies.",
     parameters: { type: "object", properties: { url: string }, required: ["url"], additionalProperties: false },
     async execute(_id, args, signal) { return result(await call("fetch", { url: args.url }, signal)); } });
   if (config.resultSchema) pi.registerTool({ name: "dext_submit_result", label: "Submit result", description: "Submit the complete final result object matching this schema. Fix any validation diagnostics and submit again. Do not wrap or escape the object.",

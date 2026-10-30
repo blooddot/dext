@@ -1,7 +1,7 @@
 import { createServer, get, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { piAddressBlocked, piFetch, type PiFetchReply } from "../src/features/agents/host/piFetch.js";
+import { jsDelivr, piAddressBlocked, piFetch, type PiFetchReply } from "../src/features/agents/host/piFetch.js";
 
 let server: Server, port = 0, hits = 0;
 beforeAll(async () => {
@@ -71,5 +71,27 @@ describe("piFetch", () => {
     const pending = piFetch(fetchUrl("/hang"), controller.signal, { fetch: localFetch, resolve: publicHost });
     setTimeout(() => controller.abort(new Error("stopped by the user")), 50);
     await expect(pending).rejects.toThrow("stopped by the user");
+  });
+  it("reads a GitHub file through jsDelivr and falls back to the original URL", async () => {
+    const seen: string[] = [];
+    const fetch = async (input: string | URL | Request): Promise<Response> => {
+      const href = input instanceof Request ? input.url : input instanceof URL ? input.href : input;
+      seen.push(href);
+      return href.startsWith("https://cdn.jsdelivr.net/")
+        ? new Response(null, { status: 404 })
+        : new Response("from origin", { status: 200, headers: { "content-type": "text/markdown" } });
+    };
+    const reply = await piFetch("https://github.com/o/r/blob/main/docs/a.md", signal(), { fetch, resolve: publicHost });
+    expect(seen).toEqual(["https://cdn.jsdelivr.net/gh/o/r@main/docs/a.md", "https://github.com/o/r/blob/main/docs/a.md"]);
+    expect(reply).toMatchObject({ status: "ok", text: "from origin", url: "https://github.com/o/r/blob/main/docs/a.md" });
+    seen.length = 0;
+    const cdnOnly = async (input: string | URL | Request): Promise<Response> => {
+      seen.push(input instanceof Request ? input.url : input instanceof URL ? input.href : input);
+      return new Response("from mirror", { status: 200 });
+    };
+    const mirrored = await piFetch("https://raw.githubusercontent.com/o/r/v1/src/a.ts", signal(), { fetch: cdnOnly, resolve: publicHost });
+    expect(seen).toEqual(["https://cdn.jsdelivr.net/gh/o/r@v1/src/a.ts"]);
+    expect(mirrored).toMatchObject({ status: "ok", text: "from mirror", url: "https://cdn.jsdelivr.net/gh/o/r@v1/src/a.ts" });
+    expect(jsDelivr("https://example.com/a/b.md")).toBeUndefined();
   });
 });
