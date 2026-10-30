@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "revision": 0,
+  "revision": 2,
   "nodes": [
     {
       "id": "project",
@@ -9,7 +9,7 @@
       "canonicalName": "Dext extension",
       "body": {
         "kind": "inline",
-        "text": "## Responsibility\n\n- **Names**: Dext → `dext`（`package.json`）/ `activate`（`src/extension.ts`）\n- **目标**：在一个 VS Code 扩展里统一三类工作——把自然语言对话交给外部 Agent CLI（Codex、Claude、DeepSeek Harness、Pi），把 `.plan.md` 变成受检查的执行轮次，把重复任务写成 TypeScript 工作流（`dext` API 的 `ask` / `agent` / `terminal` / `ui.*` / `mcp.*`）；同时把仓库的长期规范沉淀为原生 Project 模型（`.dext/project/model.json`），供 Plan 在规划前读取、在执行后核对。\n- **范围**：侧边栏输入区与会话轮次、会话历史与共用的编辑器标签页（Project / APIs / Global Resources / History）、Plan 的 Build 与自动校验、长期存活的 Node 内核、资源与 Skills、MCP 工具、Project 原生模型与 Archify 图表、输出语言与权限设置。\n- **非目标**：不安装、不修复、不代管任何 Agent CLI 的凭据（只用 CLI 自身的登录态）；不内置模型或在线渲染服务；不提供 Python 解释器或另一门工作流语言（Code 模式就是 Node 里的 TypeScript）；不维护第二套 Spec 模式或派生的规范图，Plan 只描述一次变更；ER 图不在渲染范围内；不把目录树当成知识结构。\n\n## Design\n\n- **双环境、一条边界**：会话、工具与文件访问运行在扩展宿主；Code 模式运行在长期存活的 Node 子进程（`src/runner/dextKernel.mjs`），两侧只通过 `src/runner/dextProtocol.ts` 的消息与 dextSerialization 的值规则交换 JSON 可序列化数据。\n- **组合根唯一**：`src/app/application.ts` 构造 `DextApplication`，`src/app/sidebarProvider.ts` 持有 Webview 生命周期，`src/app/conversationSetup.ts` 与 `src/app/projectSetup.ts` 各自把会话栈与 Project 编辑器装配一次，绝不为一次 Webview 重载再建第二份实例、订阅或计时器。\n- **兼容面即契约**：`package.json` 的命令 id、Webview 消息判别式、CSP/nonce、`dist/webview/*.js` 入口名（`main.js`、`project.js`、`apiFlow.js`、`imageAnnotator.js`、`mermaid.js`）、`dext.agentProfiles` / `dext.agentSelection`、编辑器标签页 key 与 `.dext` 下的 schema 版本都必须保持可读。\n- **生成物可复现**：`dext` 类型声明、`.dext/tsconfig.json` 与 `package.json` 都由注册表与 MCP 清单推导，`npm run check` 证明提交到仓库的产物与当前源码一致；声明中每条路径都是相对路径，所以队友与 CI 无需安装 Dext 也能类型检查。\n- **默认只读**：打开、恢复、切换、刷新页面只读已保存的 `.dext` 数据；枚举源码、调用 AI、写 `.dext` 都必须由用户显式动作触发（Build/Update project model、检查证据、生成图表、发送一轮对话）。\n- **草稿先于接受**：所有 AI 生成内容都是 draft；接受（review 变 accepted）不改变 freshness，仍需对照当前代码才成为 current。Plan 文件永远不是规范节点或正文来源。\n\n## Boundary\n\n- Allowed: `vscode` API 与 Node 内置模块（只在 host / platform 层）；外部 CLI 进程（codex、claude、deepseek-harness、pi）；`src/shared/` 的跨 feature 契约；随包发布的第三方运行时（Archify、Mermaid、Monaco、Tree-sitter、markdown-it）。\n- Forbidden: Webview 侧导入 `vscode`、Node 内置模块或任何 host 实现；`src/runner/` 反向依赖 `src/features/` 或 `src/app/`；未登记的跨 feature host 耦合；把 `.plan.md` 当作规范正文；把未读到的证据写成 `current`；绕过 `npm run check` 新增目录根或兼容转发层。"
+        "text": "## Responsibility\n\n- **Names**: Dext → `dext`（`package.json` 的 `name`）/ `activate`（`src/extension.ts`），`main` 指向 `dist/extension.js`\n- **目的（Purpose）**：在一个 VS Code 扩展里统一三类工作——把自然语言对话交给外部 Agent CLI（Codex、Claude、DeepSeek Harness、可选 Pi），把 `.plan.md` 变成可检查、可勾选的执行轮次，把重复任务写成 TypeScript 工作流（`dext` 模块的 `ask` / `plan` / `agent` / `template` / `apply` / `terminal` / `skill` / `ui.*`）；同时把仓库长期规范沉淀为原生 Project 模型（`.dext/project/model.json`），供 Plan 在规划前读取、在执行后核对。\n- **范围（Scope）**：侧边栏输入区与会话轮次、会话历史与共享的编辑器标签页（Project / APIs / Global Resources / History）、Plan 的 Build 与自动校验、长期存活的 Node 内核（`src/runner/dextKernel.mjs`）、资源与 Skills、MCP 工具（stdio 与 HTTP）、Project 原生模型与 Archify 图表、输出语言与权限设置。\n- **非目标（Non-goals）**：不安装、不修复、不代管任何 Agent CLI 的凭据（只用 CLI 自身的登录态）；不内置模型或在线渲染服务；不提供 Python 解释器或第二门工作流语言（Code 模式的宿主就是 Node 里的 TypeScript）；不维护第二套 Spec 模式或派生的规范图；ER 图不在渲染范围内；不把目录树当作知识结构，也不按目录切分模块。\n\n## Design\n\n- **双环境、一条边界**：会话、工具与文件访问运行在扩展宿主；Code 模式运行在长期存活的 Node 子进程（`src/runner/dextKernel.mjs`），两侧只通过 `src/runner/dextProtocol.ts` 的消息与 `dextSerialization` 的值规则交换 JSON 可序列化数据；`dext` 在 kernel 构建中保持 external，否则会出现第二份 lifetime 注册表。\n- **组合根唯一**：`src/app/application.ts` 构造 `DextApplication`，`src/app/sidebarProvider.ts` 持有 Webview 生命周期，`src/app/conversationSetup.ts` 与 `src/app/projectSetup.ts` 各自把会话栈与 Project 编辑器装配一次；Webview 重载不得再建第二份实例、订阅或计时器。\n- **兼容面即契约**：`package.json` 的命令 id、Webview 消息判别式、CSP/nonce、`dist/webview/*.js` 入口名、`dext.agentProfiles` / `dext.agentSelection`、编辑器标签页 key 与 `.dext` 下的 schema 版本都必须保持可读。\n- **生成物可复现**：`dext` 类型声明、`.dext/tsconfig.json` 与 `package.json` 由注册表与 MCP 清单推导；`npm run check`（边界检查、lint、typecheck、测试、构建、类型与 API 引用 `--check`）证明提交到仓库的产物与当前源码一致，声明只用相对路径，因此队友与 CI 无需安装 Dext 也能类型检查。\n- **默认只读**：打开、恢复、切换、刷新页面只读已保存的 `.dext` 与历史数据；枚举源码、调用 AI、写 `.dext` 都必须由用户显式动作触发（Build/Update project model、检查证据、生成图表、发送一轮对话）。\n- **AI 直接写规范**：生成候选起初仍是 draft，但 Plan 结束后的复核会把更新直接写入模型，人只在需要时从 Project 页面阅读或手改。写入由宿主校验：授权只来自本轮 Plan 读到的 basis、每条 delta 的证据路径必须落在本次真实改动内、单次最多 20 条且正文合计 40,000 字符，越界或冲突留在 pending 并写明原因。模型省略 provenance 字段时保留已存的 review/freshness/origin/evidence；被改源码引用的规范自动变成 needs_verification。Plan 文件永远不是规范节点或正文来源。\n\n## Boundary\n\n- Allowed: `vscode` API 与 Node 内置模块（只在 host / platform 层）；外部 CLI 进程（`codex`、`claude`、`deepseek-harness`、`pi`）；`src/shared/` 的跨 feature 契约；随包发布的第三方运行时（Archify、Mermaid、Monaco、Tree-sitter、markdown-it）；只读回合经 `piFetch` 读取外网，GitHub 文件 URL 先改写为 `cdn.jsdelivr.net` 再回退原地址。\n- Forbidden: Webview 侧导入 `vscode`、Node 内置模块或任何 host 实现；`src/runner/` 反向依赖 `src/features/` 或 `src/app/`；未登记的跨 feature host 耦合；把 `.plan.md` 当作规范正文；把未读到的证据写成 `current`；绕过 `npm run check` 新增目录根或兼容转发层。"
       },
       "paths": [],
       "origin": "inferred",
@@ -26,7 +26,7 @@
       "canonicalName": "Module boundaries",
       "body": {
         "kind": "inline",
-        "text": "## Responsibility\n\n- **Names**: Architecture → `checkModuleBoundaries`（`scripts/checkModuleBoundaries.mjs`）\n- 拥有分层的定义、跨层依赖方向、运行时无环约束，以及“哪些跨 feature host 耦合被显式登记”的白名单。它是图根，只声明边界与不变量。\n- 节点按职责建立，不按目录建立：`src/features/` 下的七个切片（agents、conversations、mcp、project、resources、workflow、workspace）只是概览，同一切片内的 `host/` 与 `browser/` 是两种环境，不等于两个模块。\n\n## Design\n\n**分层**：`src/extension.ts` 是 `src/` 根目录唯一的文件。`src/app/` 是组合根（`application.ts`、`sidebarProvider.ts`、`conversationSetup.ts`、`projectSetup.ts`）；`src/features/<slice>/` 按环境再分——`contracts/`、`domain/`、`knowledge/`、`presentation/` 是无环境的纯层，`host/` 是 Node/VS Code，`browser/` 是 DOM；`src/platform/` 只放环境适配器（`vscode/`、`node/`、`browser/`、`editor-tabs/`）与线协议 `webviewProtocol.ts`；`src/shared/` 是跨 feature 内核，只允许 `contracts/`、`protocol/`、`lib/`；`src/runner/` 是 Node 工作流内核；`src/webview/` 是浏览器入口装配（`main.ts`、`codeEditor.ts` 等）。\n\n**依赖边（有向）**：\n\n- `app` → 任意 feature 的 host、`platform/vscode`、`shared`、`runner`；不 → `webview` 入口。\n- `webview` → feature 的 `browser`/`contracts`/`domain`/`knowledge`/`presentation`、`platform/browser`、`platform/webviewProtocol`。\n- feature `host` → 本 feature 任意层、其他 feature 的纯层、`platform`、`shared`；跨 feature 的 host 必须逐条登记。\n- feature `browser` → 本 feature、纯层、`platform/browser`、`shared`。\n- 纯层 → 同 feature 纯层、其他 feature 纯层、`shared`；对 host/browser/platform 只允许 `import type`，且必须命中 `declaredTypeEdges`（当前 7 条）。\n- `platform` → 环境适配器之间单向；不得依赖 `app`、`webview`、`runner` 或 feature 的 host/browser 实现。\n- `shared` → 仅 `shared`，且不得依赖 `vscode` 或 Node 内置模块；`runner` → 仅 `shared`、自身模块、Node 内置与第三方包。\n\n**不变量**：\n\n1. 运行时图必须无环，`checkModuleBoundaries` 对全图做环检测，任一条环都让 `npm run check` 失败。\n2. `migrationExceptions` 为空，`removedModulePaths` 里的每个路径（含 `src/core/`、`src/common/`、`src/base/`、`src/modules/`、`src/utils/`）都不可恢复；源码、测试、脚本中的 import、mock 与内联构建入口字符串一律会被拒。\n3. `crossFeatureHostCouplings` 只保留 4 条（`workflow/host/runtime` → agents 的 router/runner/repair，`project/host/generation` → `cliAxAIService`）；新增一条必须由 `app` 提供窄端口。\n4. feature 契约是目录内的主题文件，`contracts.ts` 与 `contracts/index.ts` 都被禁；调用方按文件导入。\n5. 浏览器 bundle 由 `checkBrowserMetafile` 校验：`dist/webview/*` 不得包含 host 实现，也不得导入 `vscode` 或 Node 内置模块。\n6. 构建入口固定且各自独立（CJS 的 `extension`/`structureMcp`/`projectModelMcp`，IIFE 的 `main`/`project`/`mermaid`/`apiFlow`/`imageAnnotator` 与两个 worker），否则 Webview 的页面选择与 CSP 会失配。\n7. `dext` 在 kernel 构建中保持 external：内联会造出第二份 lifetime 注册表，未 `await` 的调用会被误报为已结束。\n\n## Boundary\n\n- Allowed: 通过 `contracts`/`domain`/`knowledge`/`presentation` 跨 feature 协作；通过 `app` 注入的窄函数或端口访问另一 feature 的 host 能力；`platform/webviewProtocol` 只依赖 feature 契约。\n- Forbidden: 运行时循环依赖；`shared` 依赖 Node 内置或 `vscode`；纯层运行期依赖 host/browser/platform 实现；`webview` 入口进入 `app` 或 `runner`；恢复 `removedModulePaths` 中任一路径；新增未登记的跨 feature host 耦合；用一个目录或一次 `index.ts` 汇总替代按文件导入的契约。"
+        "text": "## Responsibility\n\n- **Names**: Module boundaries → `checkModuleBoundaries`（`scripts/checkModuleBoundaries.mjs`，同文件导出 `checkBrowserMetafile`）\n- 拥有层的定义、层间允许的依赖方向、全图运行时无环约束，以及“哪些例外被显式登记”的白名单本身：`declaredTypeEdges`（7 条）、`crossFeatureHostCouplings`（4 条）、`removedModulePaths` 与 `migrationExceptions`（当前为空）。\n- 它是图根，只声明边界与不变量，不声明任何单个 feature 的职责内容。边界按职责声明，不按目录声明：`src/features/` 下的七个切片（agents、conversations、mcp、project、resources、workflow、workspace）只是概览；同一切片内的 `host/` 与 `browser/` 是两种运行环境，不等于两个模块。\n\n## Design\n\n**分层**：`src/extension.ts` 是 `src/` 根目录唯一的文件。`src/app/` 是组合根（`application.ts`、`sidebarProvider.ts`、`conversationSetup.ts`、`projectSetup.ts`）；`src/features/<slice>/` 分五层——`contracts/`、`domain/`、`knowledge/`、`presentation/` 是无环境纯层，`host/` 是 Node/VS Code，`browser/` 是 DOM；`src/platform/` 只放环境适配器（`vscode/`、`node/`、`browser/`、`editor-tabs/`）与线协议 `webviewProtocol.ts`；`src/shared/` 是跨 feature 内核，只允许 `contracts/`、`protocol/`、`lib/`；`src/runner/` 是 Node 工作流内核；`src/webview/` 是浏览器入口装配。\n\n**依赖边（有向）**：\n\n- `app` → 任意 feature（含 `host/`）、`platform`、`shared`、`runner`；不得 → `src/webview/` 入口。\n- `webview` → feature 的 `browser`/`contracts`/`domain`/`knowledge`/`presentation`、`platform/browser`、`platform/webviewProtocol`；不得 → `app`、`runner`、feature 的 `host`、其他 `platform` 子目录。\n- feature `host` → 本 feature 任意层、其他 feature 的纯层、`platform`、`shared`、npm 包；跨 feature 的 host 依赖与对 feature `browser` 的依赖必须命中登记。\n- feature `browser` → 本 feature、纯层、`platform/browser`、`shared`；不得 → `vscode`、Node 内置、`app`、`webview`、`runner`、feature `host`。\n- 纯层（`contracts`/`domain`/`knowledge`/`presentation`）→ 同 feature 纯层、其他 feature 纯层、`shared`、npm 包；对 `app`/`webview`/`runner` 零依赖；对 feature 的 `host`/`browser` 只允许 `import type` 且必须命中 `declaredTypeEdges`；对 `platform` 只允许命中 `declaredTypeEdges`。纯层还不得出现 `window`/`document`/`navigator` 全局（HTML 生成函数序列化除外）。\n- `platform/vscode` → 不得 `app`、`webview`、`runner` 或 feature 的 `host`/`browser`；`platform/node` → 不得 `vscode`、`app`、`webview` 或任何 feature；`platform/browser` → 不得 `vscode`、Node 内置、`app`、`webview`、`runner` 或 feature 的 `host`/`browser`；`platform/editor-tabs` → 不得 `app`、`webview`、任何 feature。\n- `platform/webviewProtocol` → 只允许 feature 的 `contracts/`，只允许 `platform/vscode/`，不得 `app`、`webview`、`runner`。\n- `shared` → 仅 `shared`，且不得依赖 `vscode` 或 Node 内置模块；`runner` → 仅 `shared`、自身模块、Node 内置与第三方包，不得依赖其他 `src/` 与 `vscode`。\n\n**不变量**：\n\n1. 运行时图必须无环：`checkModuleBoundaries` 对全图做环检测，`import type` 边不进入运行时图，任一条运行时环都让 `npm run check` 失败。\n2. `migrationExceptions` 为空，`removedModulePaths` 里的每个路径都不可恢复（含 `src/core/`、`src/common/`、`src/base/`、`src/modules/`、`src/utils/` 这些已溶解的目录），`src/`、`test/`、`scripts/` 中的静态/类型 import、字面量动态加载、mock 字符串与内联构建入口字符串一律被拒。\n3. `crossFeatureHostCouplings` 只保留 4 条：`workflow/host/runtime` → agents 的 `agentRouter`/`agentRunner`/`resultRepair`，以及 `project/host/generation/projectAiGeneration` → `cliAxAIService`。新增一条必须由 `app` 提供窄端口，而不是登记进表。\n4. `declaredTypeEdges` 只保留 7 条：`resources/contracts/resourceDocuments` → editor-tabs 三文件，`resources/presentation/resourceDocuments`、`project/presentation/projectPanel` → `editorTabState`，`project/contracts/evidence` → `projectStructure` 与 `projectStructureGraph`。\n5. feature 契约是目录内的主题文件：`contracts.ts` 与 `contracts/index.ts` 都被拒；调用方按文件导入，不建桶文件。\n6. 浏览器包由 `checkBrowserMetafile` 校验：`dist/webview/*` 的输入不得包含 `app`、`platform/vscode`、`platform/node`、feature `host`、`runner`，输出不得导入 `vscode` 或 Node 内置模块。\n7. 构建入口固定且各自独立：CJS 侧 `extension`/`structureMcp`/`projectModelMcp`（另有测试入口 `extensionHost`），IIFE 侧 `main`/`project`/`imageAnnotator`/`mermaid`/`diagrams`/`apiFlow` 加 `editor.worker`/`ts.worker`，另有一份 ESM kernel（`dextLoader`/`dextKernel`/`dextRuntime`/`dextSerialization`）；入口名与页面选择、CSP 及 Webview 的资源加载一一对应。\n\n## Boundary\n\n- Allowed: 通过 `contracts`/`domain`/`knowledge`/`presentation` 跨 feature 协作；通过 `app` 注入的窄函数或端口访问另一 feature 的 host 能力；`platform/webviewProtocol` 只依赖 feature 契约；把新增例外提升为可审计的表项或端口。\n- Forbidden: 运行时循环依赖；`shared` 依赖 Node 内置或 `vscode`；纯层运行期依赖 `host`/`browser`/`platform` 实现或在非浏览器模块里使用 DOM 全局；`webview` 入口进入 `app` 或 `runner`；恢复 `removedModulePaths` 中任一路径或重建已溶解目录；新增未登记的跨 feature host 耦合；用一个目录或一次 `index.ts` 汇总替代按文件导入的契约；把 `dext` 内联进 kernel 构建。"
       },
       "paths": [],
       "origin": "inferred",
@@ -43,7 +43,7 @@
       "canonicalName": "Conversation services",
       "body": {
         "kind": "inline",
-        "text": "## Responsibility\n\n- **Names**: Conversation services → `src/app/conversationSetup.ts`（`createConversationServices`）\n- 它只负责一件事：把会话栈拼成一个整体并交出 `ConversationServices`，自身不实现会话行为。一旦装配完成，`ConversationController`、`TurnExecutionCoordinator`、`AgentEventStream`、`InteractionController`、`PlanController` 就构成同一个栈，由 `DextSidebarProvider` 在构造时调用一次。\n- 因此 `ConversationSetupDependencies` 列出的是侧栏仍需要提供的能力（Webview 投递、VS Code 适配、Agent 执行、资源草稿、计划文件读取、运行状态镜像），而不是侧栏对象本身。\n\n## Design\n\n- 具体类只在这个文件里出现，`sidebarProvider.ts` 只看到 `ConversationServices` 接口。这样 feature host 模块就不需要为了被实例化而反向导入 `src/app/`，装配方向保持单向。\n- 端口全部是窄函数：`post`/`postWhenReady` 投递消息，`running`/`turnOf` 读执行状态，`sessions` 只暴露控制器用到的保存计划上下文、保存进度与投递方法。可选依赖（`startPlanProject`、`finishPlanProject`、`preparePlanBuild`、`resolveSkillCommand`）用条件展开传入，缺省时不留下 `undefined` 键。\n- `executionRef` 是执行引用持有者，用来打破构造顺序：`AgentEventStream`、`InteractionController`、`PlanController` 早于 `TurnExecutionCoordinator` 创建，却要读它的 `running()`/`turnOf()`；装配期间不调用这些端口，所以先给 holder、后补 coordinator 是安全的。\n- `notifier` 把回合生命周期翻译成 `executing`/`execution`/`executionFailed` 响应，并在开始与结束时调用 `runningChanged()`，把 `dext.running` 同步进 VS Code 的 context key。\n- `dispose()` 有固定顺序：`coordinator.abortAll()` → `events.dispose()` → `interactions.dispose()` → `controller.dispose()`，先让挂起的回合收到 abort，再拆缓冲、问题与布局定时器；`test/conversationSetup.test.ts` 用未完成回合验证了这一点。\n\n## Boundary\n\n- Allowed: 依赖 `features/*/contracts`、`features/conversations/host/*` 的具体实现、`shared/contracts/*`、`platform/webviewProtocol` 的响应类型，以及 `runner/dextResumeCache` 的 `DextReplayEntry` 类型；可以读写由依赖注入的存储与偏好实现。\n- Forbidden: 不导入 `src/webview/`（浏览器入口）；不拥有会话、执行、计划或渲染状态，除 `executionRef` 外不保留可变字段；不在 Webview 重载时重建第二个实例、订阅或定时器；不接收或传递 `DextSidebarProvider`、`DextApplication` 或整个侧栏状态对象；feature host 层不得反向导入 `src/app/`。"
+        "text": "## Responsibility\n\n- **Names**: Conversation services → `createConversationServices`（`src/app/conversationSetup.ts`）；返回类型即 `ConversationServices`\n- 只做一件事：把会话栈拼成一个整体并交出 `ConversationServices`（`controller`、`coordinator`、`events`、`interactions`、`plans`、`dispose`），自身不实现会话、执行、计划或渲染行为。装配完成即构成同一条栈：`ConversationController` 持有会话与布局，`AgentEventStream` 缓冲事件，`InteractionController` 管待答问题，`PlanController` 管计划轮次，`TurnExecutionCoordinator` 拥有正在执行的回合。\n- 因此 `ConversationSetupDependencies` 列出的是侧栏仍需要提供的**能力**（投递 Webview 消息、VS Code 适配、Agent 执行、资源草稿、计划文件读取、运行状态镜像），而不是 `DextSidebarProvider` 或整个应用对象。\n- 它是装配点而不是第二套状态：`DextSidebarProvider` 在构造函数里调用一次，`resolveWebviewView` 重载后不重建，只在 `dispose()` 里整体释放。\n\n## Design\n\n- **具体类只出现在这里。** `sidebarProvider.ts` 只看到 `ConversationServices` 接口（`private readonly conversation: ConversationServices`）。这样 feature host 模块不必为了被实例化而反向导入 `src/app/`，装配方向保持单向；`conversationSetup` 也从不导入 `src/webview/`。\n- **端口是窄函数。** `post` / `postWhenReady` 负责投递，`running` / `turnOf` 读执行状态，`sessions` 只暴露 `active()`、`savePlanContext`、`savePlanProgress`、`postPlanContext`，`host` 只暴露计划读取与 Project 起止。可选依赖（`startPlanProject`、`finishPlanProject`、`preparePlanBuild`、`resolveSkillCommand`）用条件展开传入，缺省时不会留下 `undefined` 键。\n- **`executionRef` 用来打破构造顺序。** `AgentEventStream`、`InteractionController`、`PlanController` 早于 `TurnExecutionCoordinator` 创建，却要读它的 `running()` / `turnOf()`；装配期间不调用这些端口，所以先给 holder、构造完 coordinator 后再回填是安全的。`ConversationController` 的 `execution.running` 与 `events` 的 `observe → interactions.observeEvent` 也都走同一条延迟读取路径。\n- **`notifier` 把回合生命周期翻译成线消息。** `started` 发 `executing(value: true)` 并带 `turnId`、`source`、`startedAt`、`mode`，`executed` 发 `execution`，`failed` 发 `executionFailed`（有 `planOutcome` 才带上），`finished` 先 `runningChanged()` 再发 `executing(value: false)`；`runningChanged` 由侧栏实现为 `updateRunningContext()`，把 `dext.running` 同步进 VS Code 的 context key。\n- **选择回落到全局。** `selection: (sessionId) => controller.selection(sessionId) ?? dependencies.currentSelection()`，因此新标签页没有自己的选择时用当前全局选择，而不是在装配时固化一份。\n- **其余端口原样下传。** `resourceBusy` 判定资源占用，`onIdle: flushAttachmentDeletes` 让协调器在空闲时清掉待删附件，`maxEventTextLength` 缺省回落到 `DEFAULT_HISTORY_LIMITS.maxOutputLength`。\n- **`dispose()` 有固定顺序**：`coordinator.abortAll()` → `events.dispose()` → `interactions.dispose()` → `controller.dispose()`。先让挂起回合收到 abort，再拆缓冲、问题与布局定时器；`test/conversationSetup.test.ts` 用一个未完成回合断言 `AbortSignal.aborted` 为真。\n- **结束 provider 会话不在这里。** 侧栏在 `conversation.dispose()` 之后自己按 `coordinator.running()` 调 `application.endAgentSession`，因为 provider 会话属于应用层而不是这条栈。\n\n## Boundary\n\n- Allowed: 依赖 `features/conversations/host/*` 的五类实现、`features/*/contracts` 的类型、`shared/contracts/*`（含 `planProject`、`types`）、`platform/webviewProtocol` 的 `WebviewResponse`、`runner/dextResumeCache` 的 `DextReplayEntry` 与 `workflow/contracts/skill` 的 `SkillCommandResolution`；通过依赖注入读写存储、偏好与配置。\n- Allowed: 在装配期间创建并回填 `executionRef`，把 `ConversationServices` 交给 `DextSidebarProvider` 持有并在其 `dispose()` 中释放。\n- Forbidden: 不导入 `src/webview/`（浏览器入口）；不拥有会话、执行、计划、渲染或历史状态，除 `executionRef` 外不保留可变字段；不在 Webview 重载时重建第二个实例、订阅或计时器（`resolveWebviewView` 只调 `controller.clearOutputSignatures()` 与 `hydrate()`）；不接收或传递 `DextSidebarProvider`、`DextApplication` 或整个侧栏状态对象；不代为结束 provider 会话、不自行设置 `dext.running`；feature host 层不得反向导入 `src/app/`。"
       },
       "paths": [
         "src/app/application.ts",
@@ -77,7 +77,7 @@
       "canonicalName": "Agent runtime",
       "body": {
         "kind": "inline",
-        "text": "## Responsibility\n\n- **Names**: Agent runtime → `src/features/agents/contracts/agent.ts`（`AgentProfile`、`AgentSelection`）/ `host/agentRouter.ts`（`DefaultAgentRunner`）\n- 它拥有三件事：一是“有哪些后端、每个后端能给什么”——profile 目录、模型/推理/速度选项、可写权限与默认值；二是“这次请求交给谁跑”——按 `profile.provider` 派发到 CLI、Harness 或 Pi 的 runner；三是“这一轮是否还活着、结果是否可信”——总时长/空闲/单工具三层计时、工具生命周期、todo 快照与补丁断言。\n- 它是会话栈与外部进程之间唯一的接触面：上层只说 `profile.provider` 与 `AgentSelection`，不认识 codex/claude/dsh/pi 的命令行细节、字段名或缓存文件。\n- 标题取代码名。文档里这块写作 `Agent configuration`（`docs/agents.md`），代码没有同名模块：`DefaultAgentRunner` 是唯一派发入口，`AgentProfileStore` 是唯一目录与选择存储。\n\n## Design\n\n- contracts 是纯层，只放类型与常量（`SUPPORTED_AGENT_PROFILE_IDS`、`DEFAULT_AGENT_PROFILE_IDS`、`AGENT_PERMISSIONS`）。presentation 与 browser 要读同一份 id 列表和选择类型，而 host 不能被纯层导入，所以类型与实现分开放在 `contracts/` 和 `host/`。\n- `AgentProfileStore` 把目录存在 VS Code `Memento` 的 `dext.agentProfiles` 与 `dext.agentSelection`；`mergeProfiles` 始终以 `DEFAULT_PROFILES` 为骨架再叠存储值，并强制 `profile.id === profile.provider`，手改 ID 不会凭空造出第五个后端；Pi 的 `writablePermissions` 被钉成 `full-access`，因为 Pi 没有 Dext 的工作区沙箱。\n- 默认值是读取时合并、不写回：`configuredDefaults` 每次 `list()` 现读 Codex `config.toml`、Claude `settings.json`（含 `env` 段与工作区覆盖）与 Codex 模型缓存，因此用户在 CLI 里改默认模型，侧栏下一次就反映出来；Dext 不复制、不修复、不代管凭据。\n- 选择按字段合并保存：显式空字符串是“重置为 CLI 默认”而不是缺省；`mode` 与 `skills` 只留在内存，技能属于单个会话，不能泄漏进新标签页的全局选择。\n- `DefaultAgentRunner` 只做三件事：按 provider 选 runner、把“该后端不支持此模式”变成显式错误（Harness 没有 schema 字段，就拒绝而不是悄悄降级成文本提示）、把两个超时上限广播给三个 runner。\n- 计时是纯函数：`agentTimeout` 收 `AbortController` 与三个上限，交出 `activity`/`toolStarted`/`toolFinished`/`dispose`。空闲计时在有活跃工具时暂停；单工具上限只在最后一个工具结束时解除，所以顺序执行的工具各自拿满额度，一段连续工具阶段只受一个 ceiling 约束；`MAX_AGENT_TIMEOUT_MS` 防止 `setTimeout` 溢出，显式总时长与活动量无关。\n- `trackCliToolActivity` 读原始 JSONL，而不是展示层过滤后的事件，因为展示层会丢掉空结果、合并并发工具，那会把一个忙碌的回合误判成空闲；不认识的 provider 或事件不暂停看门狗。Codex 与 Claude 的字段差异只关在这一个文件里。\n- `ClaudeTodoTracker` 按 tool-use id 关联，绝不按 create 次数计数；子代理的 task id 属于另一个命名空间，直接忽略；不完整的快照返回 `undefined`，避免误删既有任务。\n- `evaluate` 把断言分成硬失败与软建议：硬失败只在 `apply=false` 的预览中报告（写入模式已经动过文件，重试也修不好冲突），软建议（空变更、单文件重写超过 200 行）任何模式都报告。\n- `presentAgentSelection` 只展示继承值（模型标签回落为 `CLI setting`），不把它们写成显式覆盖，避免打开一次侧栏就把 provider 默认值固化进设置。\n\n## Boundary\n\n- Allowed: 读 Node/VS Code 侧的用户配置文件（`$CODEX_HOME`、`~/.claude`、工作区的 `.codex`/`.claude`）；`vscode.Memento`；`shared/contracts` 的类型；通过注入的 `AgentAssertionSnapshot` 端口读工作区（`application.ts` 用 VS Code 实现该端口）。\n- Forbidden: 不安装、不实现、不认证任何 provider CLI；不拥有会话轮次、历史与事件渲染；不写 `dext.agentCli` 等设置项，只读取启用列表；不把不支持的 profile、权限或模式静默升级/降级；不把工具上限、idle 上限与 provider 网络超时混成一个数；`contracts`/`domain` 不导入 host 或 browser 实现。"
+        "text": "## Responsibility\n\n- **Names**: Agent runtime → `src/features/agents/contracts/agent.ts`（`AgentProfile`、`AgentSelection`、`AgentMcpServer`）/ `src/features/agents/host/agentProfiles.ts`（`AgentProfileStore`）/ `src/features/agents/host/agentRouter.ts`（`DefaultAgentRunner`）；文档（`docs/agents.md`）把这块写作 `Agent configuration`，代码没有同名模块，标题保留代码自己的说法。\n- 它拥有三件事：**有哪些后端、每个后端能提供什么**（profile 目录、模型/推理/速度/服务档选项、可写权限与默认值）；**这次请求交给谁跑**（按 `profile.provider` 派发到 CLI、Harness 或 Pi 的 runner）；**这一轮是否还活着、结果是否可信**（总时长/空闲/单工具三层计时、工具生命周期、todo 快照、补丁断言）。\n- 它是会话栈与外部进程之间唯一的接触面：上层只说 `profile.provider` 与 `AgentSelection`，不认识 codex/claude/dsh/pi 的命令行细节、字段名或缓存文件。形状如此是因为 provider 之间的差异全部收在这一个责任里，换一个后端不需要改动会话、Plan 或渲染。\n\n## Design\n\n- **契约层是纯层**：`contracts/agent.ts` 只放类型与常量（`SUPPORTED_AGENT_PROFILE_IDS`、`DEFAULT_AGENT_PROFILE_IDS`、`AGENT_PERMISSIONS`），因为 presentation 与 browser 要读同一份 id 列表和选择类型，而纯层不允许导入 `host/`；实现因此留在 `host/`。\n- **目录以默认值为骨架**：`AgentProfileStore` 把目录存在 VS Code `Memento` 的 `dext.agentProfiles` 与 `dext.agentSelection`；`mergeProfiles` 始终从 `DEFAULT_PROFILES` 出发再叠存储值，并强制 `profile.id === profile.provider`，手改 id 不会凭空造出第五个后端；Pi 的 `writablePermissions` 被钉成 `full-access`，因为 Pi 没有 Dext 的工作区沙箱。\n- **默认值读取时合并、不写回**：`list()` 每次现读 Codex `config.toml`（经 `toml.ts`）、Claude `settings.json`（含 `env` 段与工作区覆盖）与 Codex 模型缓存，所以用户在 CLI 里改默认模型，侧栏下一次就反映出来；Dext 不复制、不代管凭据。\n- **选择按字段合并保存**：显式空字符串是“重置为 CLI 默认”而不是缺省；`mode` 与 `skills` 只留在内存，技能属于单个会话，不能泄漏进新标签页的全局选择。\n- **派发只做三件事**：`DefaultAgentRunner` 按 provider 选 runner、把“该后端不支持此能力”变成显式错误（Harness 的 ACP 没有 schema 字段，就拒绝而不是悄悄降级成文本提示）、把两个超时上限广播给三个 runner。\n- **计时是纯函数**：`agentTimeout` 收 `AbortController` 与三个上限，交出 `activity`/`toolStarted`/`toolFinished`/`dispose`；空闲计时在有活跃工具时暂停，单工具上限只在最后一个工具结束时解除，因此顺序执行的工具各自拿满额度，一段连续工具阶段只受一个 ceiling 约束；`MAX_AGENT_TIMEOUT_MS` 防止 `setTimeout` 溢出，显式总时长与活动量无关。\n- **工具活动读原始 JSONL**（`trackCliToolActivity`），而不是展示层过滤后的事件：展示层会丢掉空结果、合并并发工具，那会把一个忙碌的回合误判成空闲；不认识的 provider 或事件不暂停看门狗，Codex 与 Claude 的字段差异只关在这一个文件里。\n- **todo 按调用身份关联**：`ClaudeTodoTracker` 以 tool-use id 关联，绝不按 create 次数计数；子代理的 task id 属于另一个命名空间，直接忽略；不完整的快照返回 `undefined`，避免误删既有任务。\n- **断言分硬软**：`evaluate` 只在 `apply=false` 的预览里报告硬失败（写入模式已经动过文件，重试也修不好冲突），软建议（空变更、单文件重写超过 200 行）任何模式都报告。\n- **继承值不当覆盖**：`presentAgentSelection` 只展示继承值（模型标签回落为 `CLI setting`），不把它们写成显式设置，避免打开一次侧栏就把 provider 默认值固化。\n\n## Boundary\n\n- Allowed: 读 Node/VS Code 侧的用户配置文件（`$CODEX_HOME`、`~/.claude`、工作区的 `.codex`/`.claude`）；`vscode.Memento`；`shared/contracts` 的类型；通过注入的 `AgentAssertionSnapshot` 端口读工作区（`application.ts` 用 VS Code 实现该端口）；`contracts/` 与 `domain/` 保持无环境。\n- Forbidden: 安装、实现或认证任何 provider CLI；拥有会话轮次、历史与事件渲染；写 `dext.agentCli` 等设置项（只读取启用列表）；把不支持的 profile、权限或模式静默升级/降级；把工具上限、idle 上限与 provider 网络超时混成一个数；`contracts/`、`domain/` 导入 `host/` 或 `browser/` 实现。"
       },
       "paths": [
         "src/features/agents/contracts/agent.ts",
@@ -95,23 +95,7 @@
         "src/features/conversations/domain/agentTraceReplay.ts",
         "src/features/conversations/host/agentInputBroker.ts",
         "src/features/conversations/browser/agentInputView.ts",
-        "src/features/conversations/browser/agentTodoView.ts",
-        "src/features/agents/contracts/pi.ts",
-        "src/features/agents/domain/piEvents.ts",
-        "src/features/agents/domain/piModels.ts",
-        "src/features/agents/host/piAgentRunner.ts",
-        "src/features/agents/host/piBridge.ts",
-        "src/features/agents/host/piCommand.ts",
-        "src/features/agents/host/piFetch.ts",
-        "src/features/agents/host/piInteractions.ts",
-        "src/features/agents/host/piRpcTransport.ts",
-        "src/features/agents/domain/builtinCli.ts",
-        "src/features/workflow/domain/builtinTypeDefinitions.ts",
-        "src/features/agents/domain/harnessPresetDefault.ts",
-        "src/features/agents/domain/harnessQuestions.ts",
-        "src/features/agents/host/harnessBridge.ts",
-        "src/features/agents/domain/harnessResultTool.ts",
-        "src/features/agents/host/harnessCommand.ts"
+        "src/features/conversations/browser/agentTodoView.ts"
       ],
       "origin": "inferred",
       "review": "draft",
@@ -161,7 +145,7 @@
       "canonicalName": "Codex conversation",
       "body": {
         "kind": "inline",
-        "text": "## Responsibility\n\n- **Names**: Codex conversations → `runCodexConversation`（`src/features/agents/host/codexConversationRunner.ts`）/ `CodexConversationConnection`（`src/features/agents/host/codexConversationConnection.ts`）/ `codexConversationEvent`（`src/features/agents/domain/codexConversationEvents.ts`）\n- 只负责一次交互式 Codex 回合：启动 `codex app-server` 子进程、完成握手、建立/恢复/分叉 thread、启动与中断 turn、把 App Server 的 JSON-RPC 通知翻译成 `AgentStreamEvent`，把原生问题以 `requestAgentInput` 卡片上抛，并在回合结束时交回最终助手文本。\n- 边界由 CLI 能力决定：一次性 `codex exec` 只能返回最终文本，无法回答服务端主动发起的 `requestUserInput`，所以这里必须持有一条双向 stdio 连接；连接、回合状态与事件翻译拆成三个文件，是为了让传输层不认识 Codex 语义，让事件映射保持纯函数，让回合状态只在一个地方维护。\n\n## Design\n\n- 连接层只做线协议：换行分隔的 JSON-RPC 收发、`initialize`/`initialized` 握手、每个请求 30 秒超时、服务端请求的 `respond`/`reject`、16 MB 缓冲上限。stderr 只排空不保留，避免把账号或配置细节写进历史；关闭时先拒绝所有 pending，再结束 stdin 并延迟 500 ms kill。\n- 回合层持有 `threadId`/`turnId`，并据此丢弃其他 thread 或 turn 的消息；同一会话的 Codex 回合由 `agentRunner` 串行排队，因为 App Server 的 thread 不能并发跑两个 turn。\n- 问题卡先注册宿主回调再发布卡片，快速回答不会丢；阻塞问题暂停空闲计时；服务端撤回请求时关闭卡片；异步问题不阻塞 turn，其 delta 被抑制，避免问题文本混进最终回答。\n- 参数面收窄为 `--config`、`--enable`、`--disable`，MCP 服务器以 `mcp_servers.<name>` 配置注入；其他 CLI 参数显式报错而不是被忽略。权限固定 `approvalPolicy: never`，sandbox 由调用方的 `allowWorkspaceWrite`/`permission` 映射，`full-access` 才映射为 `danger-full-access`。\n- 新 thread 才拼接 `conversationContext`，恢复或分叉沿用原 thread；没有 `agentSessionId` 时以 `ephemeral` 启动，Dext 不落盘 provider 会话。\n- 事件映射是纯函数：计划、token 用量、文本/推理/命令 delta、item 生命周期、文件变更与工具调用各自有明确形状，未知方法返回 `undefined`；错误统一经 `codexErrorMessage` 保留 provider 诊断，避免 UI/历史序列化后只剩一句泛化失败。\n\n## Boundary\n\n- Allowed: 管理一次交互式 Codex 回合所需的子进程、stdio JSON-RPC、thread/turn id、`AgentStreamEvent` 与 `AgentInputRequest`；通过注入的 `requestAgentInput` 向宿主提问；使用 `AgentMcpServer` 生成 App Server 配置；使用 `agentTimeout`、`ExecutionCancelledError` 与 `codexErrorMessage`。\n- Forbidden: 不拥有 Agent profile 目录、模型/推理/速度选择或 CLI 安装与登录；不决定权限层级，只映射调用方传入的权限；不做 `DextResult` 校验、解析或修复；不持久化会话历史与 provider session id，只通过回调上报；不渲染问题卡或 Process 时间线；不承担通用 `WorkflowRuntime` 的 typed 调用派发、Code 内核执行或 `dext` 类型声明生成。"
+        "text": "## Responsibility\n\n- **Names**: Codex conversations → `runCodexConversation`（`src/features/agents/host/codexConversationRunner.ts`）/ `CodexConversationConnection`（`src/features/agents/host/codexConversationConnection.ts`）/ `codexConversationEvent`、`codexInputQuestions`（`src/features/agents/domain/codexConversationEvents.ts`）；文档里这一能力写作“Codex conversations”（`docs/agents.zh-CN.md` 的“Codex 对话”），标题与正文沿用代码里的 `Codex conversation`。\n- 它只拥有**一次交互式 Codex 回合**：启动 `codex app-server` 子进程、完成 `initialize` 握手、按需 `thread/start` / `thread/resume` / `thread/fork`、启动与中断 turn、把 App Server 的 JSON-RPC 通知翻译成 `AgentStreamEvent`、把服务端主动发起的 `requestUserInput` 变成 `requestAgentInput` 卡片，并在回合结束时交回最终助手文本。\n- 形状由 CLI 能力决定：一次性 `codex exec` 只能回一段最终文本，无法回答服务端发起的提问，所以这里必须持有一条双向 stdio 连接。连接（线协议）、回合（状态）、事件映射（纯函数）拆成三个文件，是为了让传输层不认识 Codex 语义、让映射不持有状态、让 `threadId`/`turnId` 只在一个地方维护。\n\n## Design\n\n- **连接层只做线协议**：换行分隔的 JSON-RPC 收发、`initialize` 握手（`clientInfo` 的名称/标题/版本直接读 `package.json`，与 MCP 注册表的做法一致）、`initialized` 通知、每个请求 30 秒超时、挂起请求集中拒绝、16 MB 缓冲上限。stderr 只排空不保留，避免把账号与配置细节写进历史；`close()` 先拒绝全部 pending，再结束 stdin、销毁管道，并延迟 500 ms `kill`（`unref` 且监听 `exit` 清定时器）。\n- **回合层是唯一的状态持有者**：只认当前 `threadId` 与 `turnId`，其他 thread/turn 的通知直接丢弃；`turn/started` 记录 turn，`turn/completed` 按 `status` 决定 resolve 还是失败，`error` 只在 `willRetry !== true` 时才终止（可重试错误交给 CLI 自己重试）。同一对话的两个回合不能并行，串行化由上层 `agentRunner` 负责。\n- **启动期与生成期分开计时**：`agentTimeout` 先 `toolStarted(\"connection-startup\")`，让冷启动加载配置的阶段不受空闲上限约束；`turn/start` 成功后再 `toolFinished`，空闲检测才真正开始。阻塞型问题以 `input:<key>` 的名义暂停空闲计时，非阻塞问题不暂停。\n- **问题卡先注册回调，再发布卡片**：`request.metadata.requestAgentInput` 先拿到 `reply` promise，然后才 `emitInput(\"waiting\")`，因此快速回答不会丢失；有 RPC id 的问题用 `connection.respond` 回写 `{ answers }`，无 id 的异步问题改为 `turn/steer` 文本输入；`serverRequest/resolved` 会关闭已被服务端撤回的卡片并 aborted 它的 controller。回答回传时剥离 `isSecret` 字段，密文答案不进入事件流。\n- **异步问题不打断回合**：`delivery: \"async\"` 的 `agentMessage` 一旦携带问题就按非阻塞卡片上报，其 delta 与完成文本都被抑制（`asyncItems`），所以提问文本不会混进最终回答；同一 item id 只问一次（`seenAsync`）。\n- **参数面收窄为可验证的子集**：`codexAppServerArguments` 只接受 `--config`、`--enable`、`--disable`（含 `=` 形式），其他 `dext.agentCliArgs` 参数直接报错而不是被静默忽略；MCP 服务器以 `mcp_servers.<name>` 的 `command`/`args`/`env.*` 配置注入。\n- **权限只映射不决定**：`approvalPolicy` 固定为 `never`，`sandbox` 由调用方的 `allowWorkspaceWrite` 与 `permission` 推导，只有 `full-access` 才映射成 `danger-full-access`；`model_reasoning_summary` 固定 `detailed`，推理级别同时写进 `config` 与 `turn/start` 的 `effort`。\n- **会话上下文只拼给新 thread**：没有 `resumeId`/`forkFromId` 时才把 `conversationContext` 与新消息拼起来；没有 `agentSessionId` 时以 `ephemeral` 启动，Dext 不落盘 provider 会话，provider 返回的 id 只通过 `onThread` 回调上报。\n- **最终文本有优先级**：`phase === \"final_answer\"` 的完成消息优先，其次才回落到最后一条 `agentMessage`；两者都为空时报 “Codex returned no response.”，而不是返回空串。\n- **事件映射是纯函数**：计划、token 用量、文本/推理/命令 delta、item 生命周期、文件变更与工具调用各有明确形状，未知方法返回 `undefined`；命令类 item 的 started/completed 用于开合工具计时。错误统一经 `codexErrorMessage` 保留 provider 诊断（`error.details` 原样附在消息后），使 UI 与历史序列化后仍能看到真实原因。\n- **取消必须传到进程**：外部 `signal` 的 abort 转成 `ExecutionCancelledError`，`abort` 先 `fail` 让等待中的 turn 立刻抛错，再尽力发 `turn/interrupt`，最后 `close()`；`finally` 里统一清理输入卡片、计时器、监听器与连接。\n\n## Boundary\n\n- Allowed: 管理一次交互式 Codex 回合所需的子进程、stdio JSON-RPC、`threadId`/`turnId`、`AgentStreamEvent` 与 `AgentInputRequest`；通过注入的 `requestAgentInput` 向宿主提问；使用 `AgentMcpServer` 生成 App Server 配置；使用 `agentTimeout`、`ExecutionCancelledError` 与 `codexErrorMessage`；依赖 `src/shared/contracts/types.ts` 的 `AgentInputQuestion` / `AgentInputAnswers` / `AgentStreamEvent` 类型与 `agentRunner.ts` 的 `AgentConversationRequest`。\n- Forbidden: 不拥有 Agent profile 目录、模型/推理/速度选择，也不安装、不登录、不修复 CLI；不决定权限等级，只映射调用方给的值；不校验、解析或修复 `DextResult`（那是结果修复层）；不持久化会话历史与 provider session id，只经回调上报；不渲染问题卡与 Process 时间线；不承担 `WorkflowRuntime` 的 typed 调用派发、Code 内核执行或 `dext` 类型声明生成；不引入第二套心跳/重试机制来替代 `agentTimeout`。"
       },
       "paths": [
         "src/features/agents/domain/codexConversationEvents.ts",
@@ -195,7 +179,7 @@
       "canonicalName": "Elicitation form",
       "body": {
         "kind": "inline",
-        "text": "## Responsibility\n**Names**: elicitationForm → src/features/agents/domain/elicitationForm.ts\n\n本模块只负责一件事：在 agent 请求的 elicitation 表单 schema 与 Dext 内部的问答结构之间做双向翻译。对外暴露 `elicitationFormQuestions`（schema → `AgentInputQuestion[]`）与 `elicitationFormResponse`（答案批次 → `ElicitationFormResult`），并以 `ElicitationFormResult` 描述 accept / decline / cancel 三种终态。它属于 domain 层，是纯函数集合，不持有任何会话状态。\n\n## Design\n- 翻译是“全有或全无”的：只要 schema 中有任何字段 Dext 无法完整往返，`elicitationFormQuestions` 返回 `undefined`，调用方据此明确告知 agent，而不是伪造一个 schema 并未允许的答案。\n- 标签与线值是两套东西：卡片展示用户读到的 `label`，回传时通过 `propertyChoices` 把 label 映射回其 `const` 值；自由文本则原样作为值，因此枚举答案不会丢失原始 wire 值。\n- 字段按原始 `Record` 读取：各已知 schema 变体都带 vendor 载荷的索引签名，单靠判别字段无法收窄类型，所以 `propertyChoices` / `formFields` 显式做运行时形状判断。\n- 上限与空集合是显式约束：`MAX_FIELDS = 20` 防止表单爆炸；声明了选项却为空数组同样视为不可渲染，直接拒绝。\n- 标量类型单独处理：`boolean` 生成 Yes/No 两个选项并映射回 `true` / `false`；`number` / `integer` 用 `Number` 解析并校验 `Number.isFinite`，解析失败即 decline。\n- 回答侧按字段逐个编码，任一字段缺失或非法就整体 `decline`；`answers` 为 `null` 表示用户主动取消，映射为 `cancel`。\n\n## Boundary\n- Allowed: 仅依赖 `src/shared/contracts/types.ts` 中的 `AgentInputQuestion` / `AgentInputAnswers`，以及本文件内的私有辅助函数；只做纯数据变换，无 I/O、无副作用。\n- Forbidden: 不渲染任何 UI、不做 ACP 或 Claude Code 的协议传输、不读写会话/持久化状态、不调用 agent runtime 或结果修复逻辑、不引入 domain 层之外的 feature 模块。"
+        "text": "## Responsibility\n\n- **Names**: Elicitation form → `elicitationForm`（`src/features/agents/domain/elicitationForm.ts`）\n- 只拥有“agent 请求的 elicitation 表单 schema 与 Dext 问答结构之间的双向翻译”这一件事，并交出两个纯函数与一个终态联合：`elicitationFormQuestions`（schema → `AgentInputQuestion[]`）、`elicitationFormResponse`（答案批次 → `ElicitationFormResult`）、`ElicitationFormResult`（`accept` 带 `content`，或 `decline`、`cancel`）。\n- 因此它同时决定三件相邻的事：哪些 schema 是 Dext 能诚实渲染与回填的、卡片上显示什么文字、用户读到的标签怎样还原成协议要求的线值。\n- 它不持有会话状态，也不发起或结束任何 elicitation 请求；发生在哪个传输上、卡片如何绘制、答案何时回传，都在别处。\n\n## Design\n\n- **全有或全无**：只要 schema 中有任何字段无法完整往返，`elicitationFormQuestions` 就返回 `undefined`，让调用方明确告知 agent“这张表单 Dext 渲染不了”，而不是伪造一个 schema 从未允许的答案；`elicitationFormResponse` 在缺少字段声明时同样直接 `decline`。\n- **标签与线值是两套东西**：`propertyChoices` 把 `oneOf` 的 `title` 作为展示标签、`const` 作为回传值（缺失 `const` 时退回标签），把 `enum` 的字符串同时当作两者；`answers` 里回来的是用户读到的标签，`elicitationValue` 再用 `find(choice => choice.label === label)` 换回 `value`，所以枚举答案不会丢失原始 wire 值，自由文本则原样作为值。\n- **按原始 `Record` 读取，而不是按判别字段收窄**：已知 schema 变体都带 vendor 载荷的索引签名，单看 `type` 不足以收窄类型，所以 `propertyChoices` / `formFields` 显式做运行时形状判断（非数组对象、非 `null`），`formFields` 还会丢弃非对象属性并只认声明了 `properties` 的 schema。\n- **上限与空集合都是显式约束**：`MAX_FIELDS = 20` 防止一张表单膨胀到不可读；字段声明了选项却是空数组，同样视为不可渲染而整体拒绝——空选项集在卡片上等于没有可选项。\n- **标量类型单独处理**：`boolean` 没有 `enum` 可读，于是合成 `BOOLEAN_OPTIONS` 的 Yes/No 两个选项，并在回传时映射回 `true` / `false`；`number` / `integer` 用 `Number` 解析并校验 `Number.isFinite`，解析失败即 `decline`，绝不把 `NaN` 交给 agent。\n- **回答侧逐字段编码**：每个字段先去空白并丢弃空串，再编码；任一字段没有可用值就整体 `decline`，因此空文本不会被当成“接受了一个空答案”。`answers === null` 表示用户主动取消，映射为 `cancel`；`content` 只写入 schema 声明的字段，多余答案被忽略。\n- **题头与细节按 schema 现状填**：schema 只有 `title` / `description`，所以 `header` 留空、`question` 回退为字段 id，`detail` 仅在 description 非空时才出现，不留下 `undefined` 键。\n\n## Boundary\n\n- Allowed: 仅依赖 `src/shared/contracts/types.ts` 的 `AgentInputQuestion` / `AgentInputAnswers` 类型，以及本文件内的私有辅助（`record`、`text`、`propertyChoices`、`formFields`、`elicitationValue`）；只做纯数据变换，无 I/O、无副作用、不保留状态。\n- Forbidden: 不渲染任何 UI 或决定卡片布局与交互；不做 ACP 或 Claude Code 的协议传输、请求发起与响应回传；不读写会话、历史或任何持久化状态；不调用 agent runtime、结果修复或 Provider 选择；不导入 domain 之外的 feature 模块、`vscode` 或 Node 内置模块；不放宽 schema 以“让表单能显示”，也不为不可往返的字段编造默认答案。"
       },
       "paths": [
         "src/features/agents/domain/elicitationForm.ts"
@@ -210,11 +194,11 @@
     {
       "id": "module:src-features-agents-domain-outputlanguage-ts",
       "kind": "module",
-      "title": "Output scroll controller",
-      "canonicalName": "Output scroll controller",
+      "title": "Interaction surface",
+      "canonicalName": "Interaction surface",
       "body": {
         "kind": "inline",
-        "text": "## Responsibility\n\n- **Names**: OutputScrollController → src/features/conversations/browser/outputScrollController.ts\n- 它独占“渲染后的对话应该停在哪一段输出”这个决定：跟随最新输出、识别阅读者自己的滚动意图、拥有每一个延迟帧（frame）。会话内容由别处渲染，它只负责把视口放到正确的位置，并在渲染变高之后仍然放对。\n- 之所以由它独占，是因为滚动是唯一一处会同时被“内容增长”“浏览器钳制”“用户手势”三方改写的位置；把状态收敛到一个类里，才能让会话切换、手势、处置都走同一条失效路径。\n\n## Design\n\n- 视口是被注入的 DOM，而不是自己创建的：`ScrollViewport` 交出 `body`（滚动端口 `#result-body`）、`result`（被绘制的对话 `#result`）、`section`（浮动跳转控件的定位容器）和 `jumpToLatest` / `jumpToTop`。控制器只读写这些节点，因此测试不需要浏览器。\n- 跟随状态与手势状态分开保存（`followingEnd` / `gesture`）。单次 scroll 事件不足以放弃跟随：内容增长、字体回流、浏览器自身的钳制都会发出 scroll。只有明确意图才释放跟随——`onWheel` 向上、`beginTouchGesture`、`onKeydown` 的 Home/PageUp/ArrowUp、以及落在滚动条 gutter 上的 `beginPointerGesture`。\n- 用 `generation` 计数器加单个 frame handle 管理延迟帧。`cancelScheduled()` 让所有旧回调失效，因此切换会话（`beginSwitch`）、手势开始、`dispose()` 之后，排队的校正不可能移动另一个会话。\n- 把“布局变化”与“离开末端”分开判断：`measureLayout()` 只在非跟随时刷新记忆的高度，`onScroll()` 用 `layoutChanged` 区分两种情况，避免把一次内容长高误判成阅读者往回滚。\n- 延迟两帧是刻意的：`scrollToBottom()` 排两帧，等新渲染的 disclosure 完成布局后 `scrollHeight` 才是完整的；`pin()` 在首帧后若仍未贴近末端，再做一次 settle。\n- 容差是显式常量而非魔法数字：`RESULT_END_TOLERANCE`（24px 判定“在末端”）、`RESULT_TRACK_END_TOLERANCE`（6px 判定拖动释放在轨道末端）、`RESULT_RANGE_TOLERANCE`（32px 判定滚动范围超出内容属于异常）。\n- 滚动条宽度靠测量而不是猜测：`syncGutter()` 把实测 gutter 写进 `--dext-result-scroll-gutter`，因为 VS Code 与 Chromium 的滚动条宽度不同，按钮压到轨道上会正好遮住读者要拖的滑块。\n- `reportStaleRange()` 是诊断而非修复：每个已渲染会话只报一次，把“端口范围大于内容”的差值归因到最低的几个盒子，经 `onDiagnostic` / `warn` 暴露出来，而不是反复挪动位置去掩盖它。\n\n## Boundary\n\n- Allowed: 读写 `ScrollViewport` 各节点的 `scrollTop` / `scrollHeight` / `clientHeight` / `hidden` / CSS 自定义属性；经 `requestFrame` / `cancelFrame` 请求与取消动画帧（可注入）；调用 `conversation`、`canFollow`、`onDiagnostic`、`warn` 回调。\n- Forbidden: 渲染或修改对话与 Markdown 内容；创建视口节点或维护样式表；决定当前选中的会话或 turn 生命周期（只通过 `beginSwitch` 被动响应）；使用无法被 `dispose()` 取消的全局定时器；在多个对话之间共享一份滚动状态。"
+        "text": "## Responsibility\n\n- **Names**: Interaction surface → `InteractionController`（`src/features/conversations/host/interactionController.ts`）/ `InteractionForm`（`src/features/conversations/browser/interactionForm.ts`）/ `OutputScrollController`（`src/features/conversations/browser/outputScrollController.ts`），装配入口 `src/webview/main.ts`；UI API 侧这个名字写作 `UiInteraction`（`src/shared/contracts/types.ts` 注释原文为 “Host-owned, cancellable interaction surface shared by all UI APIs”），`scripts/checkInteractionUi.mjs` 则把这一族当成一组 UI 检查来跑。\n- 它拥有一轮对话在**读者一侧**的全部触点，按时间分三段：\n  - **发送前（输入）**：`src/webview/inputInsertion.ts` 把文件引用、拖放与粘贴换算成一次文档编辑；`ClipboardClient`（`src/webview/clipboardClient.ts`）经协议请求宿主，`src/platform/vscode/clipboardFiles.ts`、`attachments.ts`、`selectionActions.ts` 才接触真实剪贴板、选区与附件字节，交回来的仍是可读的 `@workspace/path` 与 `ref.file(...)` 文本。\n  - **进行中（提问）**：`InteractionController` 用 `UiInteractionBroker` 与 `AgentInputBroker` 拥有每一份待答的 Dext 表单与 provider 问题，`inputNotifications.ts` 拥有“有人在等你回答”的 toast 与焦点交接；`InteractionForm`、`InteractionDialog`、`selectField`、`selectionGroupField`、`interactionMarkdown` 只把 `UiFormDefinition` 变成可提交的 DOM。\n  - **呈现后（落点）**：`outputScrollController.ts` 决定视口停在哪一段输出，`src/features/workspace/browser/outputLink.ts` 决定哪个链接可以离开 Webview，`src/features/agents/domain/outputLanguage.ts` 决定给人看的文字用哪种语言。\n- 形状如此，是因为这里是唯一同时被“读者手势”和“宿主动作”改写、而两侧能力又不可互换的地方：浏览器不能读文件系统，宿主不能渲染 DOM。于是每个触点都被切成三块——纯算式或纯策略、一份宿主能力、一个装配点（`src/webview/main.ts` 只做 `new` 与消息转发），没有人两头都碰。\n\n## Design\n\n- **输入是算式，不是 DOM。** `fileReferenceInsertion` 返回 `{from, to, text, cursorOffset}`，由 `DextCodeEditor` 应用；`ask`/`agent` 的 `input=` 走 `coreInputReferenceInsertion`，把引用留在语义字符串里（`@path` 仍可被 `inputReferenceProjections` 解析），其他位置退回 `inlineInsertion` 的通用行内 token。末尾插入补一个分隔符，避免下一个字符被吸进原子 chip；`ref.file(\"\")` 的空参补的是 `file:///` payload，因为外部 URI 不能被嵌套进调用。\n- **剪贴板是两跳，且靠 requestId 配对。** `ClipboardClient.write/read` 只发 `clipboardWrite`/`clipboardRead` 并等 `*Result`；宿主 `clipboardFileReferences` 只在“整段都是完整绝对路径、且不超过 100 行”时认成文件引用，其余保持普通文本；`copyFilePathKeepingFiles` / `copyFilePathKeepingLine` 先取 `copyFilePath` 写下的路径文本，再把 VS Code 自己的文件列表或行放回剪贴板末尾，所以 Explorer 的粘贴与 Dext 的解析同时成立。\n- **表单只有一处合法性判定。** 每次输入都先 `validateUiAnswers(definition, answers, action)` 逐动作决定按钮可用性，错误文案只在用户真的按过某个动作之后出现（未动过的表单不该看起来是坏的）；`publicDraft` 删除 `secret` 字段、提交后 `saveDraft({})`，密文既不进草稿也不进历史。选择型控件用 `popover=\"manual\"` 加实测 rect 决定向上或向下展开，因此小对话框里也不会被裁掉，并保留 label → wire value 的映射与 radio／自定义输入互斥。\n- **待答请求的所有权在宿主，且按 session + turn + request 匹配。** `InteractionController.observeEvent` 从事件流读等待态，`pendingFocus` 只在会话仍是活动会话、且该请求仍在等待时才交出焦点；`InputNotifications` 的 toast 异步失败被吞掉——通知永远不能阻塞回合。\n- **落点收敛到一个类。** 滚动是唯一同时被“内容增长”“浏览器钳制”“读者手势”三方改写的位置，因此用 `generation` 加单个 frame handle：`cancelScheduled()` 让旧回调全部失效，只有明确意图（向上滚轮、触摸、Home/PageUp/ArrowUp、落在 gutter 上的按下）才释放跟随，布局变化与离开末端分开判断。\n- **语言只在宿主解析。** `resolveOutputLanguage` 把配置与 `vscode.env.language` 合成具体语言，`auto` 认不出时返回 `undefined` 而不是硬塞英文；`outputLanguageInstruction` 只生成 prompt 片段，不动代码、任务协议与 JSON 键。\n- **链接是白名单而非“能开就开”。** `outputLinkReference` 先把 Markdown 目标收敛成工作区相对引用（拒绝 `..`、盘符与未知协议）并发 `openFileReference`；`outputExternalLink` 才放行 http/https/mailto。`interactionMarkdown` 同样只保留 https 图片，其余按文本转义，并为挂掉的图片给一句可读的回退文案。\n\n## Boundary\n\n- Allowed: 读写自己的 DOM（`interaction-*`、`#result-body`、`#result`、跳转控件、`--dext-result-scroll-gutter`）与 `window` 上的事件/尺寸；`platform/webviewProtocol.ts` 里的 `clipboardWrite`/`clipboardRead`/`openFileReference` 消息；`shared/contracts/uiForm.ts` 与 `shared/contracts/types.ts` 的类型；`platform/vscode/*` 提供的剪贴板、选区、附件与命令能力（`vscode` 只出现在 host 与 platform 侧）。\n- Forbidden: 不拥有轮次执行、会话选择与历史落盘（属于 `TurnExecutionCoordinator`、`ConversationController`、`HistoryStore`）；不决定 Agent profile、权限或结果校验；浏览器侧不 import `vscode` 或 `node:` 模块，宿主侧不渲染表单、不决定滚动位置；`outputLanguage.ts` 属纯层，不得依赖 host、`vscode` 或 Node；表单草稿、待答请求与滚动状态不跨会话共享；不把 toast、滚动校正或链接跳转做成阻塞回合的动作。"
       },
       "paths": [
         "src/features/agents/domain/outputLanguage.ts",
@@ -248,7 +232,7 @@
       "canonicalName": "TOML parsing",
       "body": {
         "kind": "inline",
-        "text": "## Responsibility\n\n**Names**: parseToml → src/features/agents/host/toml.ts\n\n该职责只负责一件事：把 TOML 文本解码成可安全遍历的普通表，并按路径取出字符串标量。它是 Codex CLI 配置文件（`config.toml`）进入宿主层时的唯一解码入口，调用方 `agentProfiles.ts` 因此不必再直接接触 `smol-toml`，也不必处理畸形配置。\n\n## Design\n\n- `parseToml(source)` 的语义刻意对齐 `JSON.parse` 读 JSON 的用法：成功时返回 `Record<string, unknown>`，失败时返回 `undefined` 而不是抛错。配置文件属于可选输入，缺失或写坏一个 Codex 配置不应该让智能体配置面板整体失败，所以错误被折叠为「没有值」。\n- 私有 `record()` 是形状收窄的唯一出口：只接受非数组对象，把 `unknown` 变成可索引的表。解析结果与路径遍历都经过它，因此数组、原始值不会伪装成表而被误读。\n- `tomlString(value, ...path)` 负责「根表 → 嵌套表 → 字符串标量」的读取。路径上任何一节缺失、类型不对，或者取到空字符串，都统一归一为 `undefined`；空字符串被视作未设置，避免把 `model = \"\"` 当成有效模型名流传下去。\n- 函数是纯函数、无状态、无 I/O，两个导出分别是「宽入口」和「窄取值」：先整体解码，再逐项取字段。\n\n## Boundary\n\n- Allowed:\n  - 依赖 `smol-toml` 的 `parse` 完成语法层解码。\n  - 对外提供 `parseToml` 与 `tomlString`，被 `src/features/agents/host/agentProfiles.ts` 等宿主侧配置读取代码使用。\n  - 把解析失败、路径缺失、类型不符一律降级为 `undefined`。\n- Forbidden:\n  - 自行读取文件、`CODEX_HOME` 或任何环境变量（读取位置与路径拼接由 `agentProfiles.ts` 负责）。\n  - 决定配置语义，例如 profile 合并、默认值、优先级覆盖（那是 `AgentProfileStore` 与 `codexConfiguredDefaults` 的职责）。\n  - 对畸形输入抛异常，或返回非 `undefined` 的兜底对象。\n  - 引入 UI、`vscode` 或领域契约类型的依赖。"
+        "text": "## Responsibility\n\n- **Names**: `parseToml` → `src/features/agents/host/toml.ts`\n- 这个职责只做一件事：把一段 TOML 文本解码成可安全遍历的普通表，并按路径取出其中的字符串标量。它是 Codex CLI 的 `config.toml` 进入宿主层时唯一的解码入口，因此调用方（`src/features/agents/host/agentProfiles.ts`）不必直接接触 `smol-toml`，也不必自己处理畸形或缺失的配置。\n- 它拥有“配置读不到会怎样”的答案：配置文件是可选的，也不是 Dext 的资产，一份写坏或缺失的 Codex 配置不应该让整块 Agent 配置读取失败。所以失败在这里被折叠成“没有值”，而不是异常。\n- 它不拥有配置的含义。哪个文件算 Codex 配置、`CODEX_HOME` 与路径如何拼、哪个字段是默认模型、profile 怎么合并与覆盖，全都不在这个文件里。\n\n## Design\n\n- **宽入口对齐 `JSON.parse` 的用法**：`parseToml(source)` 成功返回 `Record<string, unknown>`，失败返回 `undefined` 而不是抛错。调用方可以用一条 `if` 表达“有配置就读”，无需为语法错误写 try/catch，也不会因为一个坏字符而中断整轮读取。\n- **形状收窄只有一个出口**：私有 `record()` 只接受非数组对象，把 `unknown` 变成可索引的表，其余（数组、字符串、数字、`null`）一律返回 `undefined`。解析结果和路径遍历都经过它，所以数组或原始值不会伪装成表被误读，例如 `model = 5` 或 `[profile]` 被写成数组都不会“看起来可读”。\n- **取值是逐节下降的窄接口**：`tomlString(value, ...path)` 沿 `根表 → 嵌套表 → 字符串标量` 走，路径上任何一节缺失或类型不符都归一为 `undefined`。它只承认非空字符串，空字符串被视作未设置——否则 `model = \"\"` 会被当成一个有效模型名继续传下去，把一个空值变成一次 provider 调用。\n- **两个导出对应两步用法**：先整体解码（`parseToml`），再逐项取值（`tomlString`）。把“解码”和“读某个字段”分开，是为了让调用方可以只解析一次、读多个字段，而不是每读一个字段就重新解析一遍文本。\n- **纯函数、无状态、无 I/O**：没有缓存、没有全局可变数据，同一份文本永远得到同一个结果，因此它可以在没有 VS Code、没有文件系统的测试里被直接调用。\n\n## Boundary\n\n- Allowed: 依赖 `smol-toml` 的 `parse` 完成语法层解码；导出 `parseToml` 与 `tomlString` 供宿主侧的配置读取代码（如 `src/features/agents/host/agentProfiles.ts`）使用；把解析失败、路径缺失、类型不符、空字符串一律降级为 `undefined`。\n- Allowed: 在 `record()` 一处做运行时形状判断，并让所有读写路径共用它。\n- Forbidden: 自行读取文件、解析 `CODEX_HOME` 或任何环境变量（读取位置与路径拼接属于 `agentProfiles.ts`）；决定配置语义，例如 profile 合并、默认值推导、优先级覆盖或模型选择（属于 `AgentProfileStore` 与 Codex 默认值读取）。\n- Forbidden: 对畸形输入抛异常，或返回非 `undefined` 的兜底对象与“修正后”的表；引入 UI、`vscode`、Node 内置模块或领域契约类型的依赖；在此处缓存解析结果或写入任何状态。"
       },
       "paths": [
         "src/features/agents/host/toml.ts"
@@ -263,11 +247,11 @@
     {
       "id": "module:src-features-conversations-browser-agenttraceview-ts",
       "kind": "module",
-      "title": "AgentTraceView",
-      "canonicalName": "AgentTraceView",
+      "title": "Agent trace view",
+      "canonicalName": "Agent trace view",
       "body": {
         "kind": "inline",
-        "text": "## Responsibility\n\n- **Names**: Process → `AgentTraceView`（`src/features/conversations/browser/agentTraceView.ts`）\n- 独占一次运行中的 Process 时间线 DOM：消息与推理条目、工具命令与工具分组、已编辑文件集合、命令计数、按渲染顺序累积的纯文本副本，以及延迟 Markdown 渲染队列。\n- 这样切分的原因：流式事件由 host 逐批送入，而 DOM 的寿命随标签切换、停顿与历史回放而变。把「何时写入、写到哪个面板」与「节点长什么样」拆开，长对话的切换与历史重放才不用重建整条 trace，也不会让回放覆盖正在进行的一轮。\n\n## Design\n\n- 构造函数只接收 `AgentTraceHost`（`document`、`markdown`、`codeBlock`、`terminal`、`panel()`、`progressState`/`updateProgress`、`revealResult`、`syncResultToggle`、`requestFrame`/`cancelFrame`）。`src/webview/main.ts` 是唯一装配点，所以本模块既不直接触碰全局 `document`，也不认识协议消息或 `vscode`。\n- 结构与解析不在这里：`presentAgentMessage` 判断消息是否为结构化结果，`renderTurnMessage` 决定节点结构，`turnDomAdapter(document)` 提供 DOM 版 `TurnRenderAdapter`；同样的结构也被历史和 HTML 渲染复用。本模块只决定何时渲染、渲染进哪个 `panel()`。\n- 工具分组有两条路径：Agent 自己报告的 `groupId`/`groupLabel`/`solo` 按其意图原样复现（包括它选择单独成行的步骤）；只推扁平命令流的 Agent 则沿用折叠相邻调用的行为。折叠组仅在该组仍是 `panel.lastElementChild` 时继续收集，避免后来的命令被回填到更早的位置；组标题优先取 Agent 自己给的 `labelText`，否则回退为命令计数。\n- 更新按 id 区分追加与替换：命中已有 `eventItems`/`toolItems` 时替换文本，未命中才新建，因此流式消息不会被拆成多项。`eventItems`、`toolItems`、`toolGroups` 三个 Map 加 `editedUris`、`commandIds`、`copyTexts` 构成可整体快照的状态。\n- 渲染被推迟到一帧：`scheduleMessageRender` 只入队 `pendingRenders` 并申请一次帧，`flushMessageRenders` 统一冲刷；`takePendingItems` 在页面被缓存前取走待渲染元素并取消帧，避免渲染落到已脱离的 DOM。\n- 历史回放用 `isolate()`/`restore()` 成对换出整份状态，使回放事件的 id 无法覆盖正在进行的实时回合；`reset()` 只清空状态，不改动 host 钩子。\n- 计数与复制同样归本模块：只有 `toolKind === \"command\"` 才计入 `commandIds`，文件与图片步骤不会虚增 `Ran N commands`；`editedUris` 只从结果里收集 URI 而不渲染补丁内容；`copyTexts` 以渲染顺序保存纯文本，Process 标题栏在流式过程中即可复制。\n\n## Boundary\n\n- Allowed: 读取 `shared/contracts/types.ts` 的 `AgentStreamEvent`、`AgentToolKind`、`WorkflowStepResponse` 等类型；复用 `presentation/agentMessagePresentation.ts`、`presentation/turnComponents.ts` 与 `browser/turnDomAdapter.ts`；通过 `AgentTraceHost` 请求进度更新、展开结果区、同步结果开关与帧调度；在 `host.panel()` 返回的元素内创建、更新和移除本模块的条目。\n- Forbidden: 依赖 `vscode`、Node 内置模块、`src/app/*`、`src/webview/*` 或任何 `host/` 层（浏览器层边界）；持有会话历史、持久化状态、Plan 或 Todo 数据（分别归 host 与 presentation 模块）；解析结果 JSON 或拼装需要被 History 复用的节点结构；决定进度文案的真实来源与计时（`progressState` 和计时器属于装配方）；改为同步渲染或另设计时器。"
+        "text": "## Responsibility\n\n- **Names**: Process → `AgentTraceView`（`src/features/conversations/browser/agentTraceView.ts`）\n- 它独占「一轮运行中的 Process 时间线」这块 DOM 与状态：消息与推理条目、工具命令与工具分组、已编辑文件集合、命令计数、按渲染顺序累积的纯文本副本，以及延迟 Markdown 渲染队列。界面把这个区域叫 Process（`turnPresentation.ts` 的 `TurnSectionPresentation` 用 `label: \"Process\"`），代码名是 `AgentTraceView`；接口名不同，标题仍取代码名。\n- 为什么切片落在这一处：流式事件由宿主逐批送入，而 DOM 的寿命随标签切换、模型停顿与历史回放变化。把「何时写入、写进哪个面板」留在这里、把「节点长什么样」交给 presentation，长对话的切换与回放才不必重建整条 trace，回放也不会覆盖正在进行的一轮。\n- 同一份文件集里的其余模块构成这条边界的两侧。读侧只决定结构与文案：`agentMessagePresentation.ts`（`presentAgentMessage`）判定结构化结果，`turnComponents.ts`（`renderTurnMessage`）给出节点结构，`turnDomAdapter.ts` 提供 DOM 版适配器，`agentTodoPresentation.ts` 给出 Todo 行。寿命侧拥有别的状态：`transcriptView.ts` 与 `turnTitle.ts` 拥有回合行与标题，`planControls.ts` 拥有 Plan 工具栏，`turnExecutionCoordinator.ts` 拥有活动回合，`planController.ts`、`planExecution.ts`、`planTodoProgress.ts`、`planDocumentStream.ts`、`planResponse.ts` 拥有 Plan 轮次与文档协议，`planProject.ts` 是 Plan 结论的契约。\n\n## Design\n\n- 构造函数只接收 `AgentTraceHost`：`document`、`markdown`、`codeBlock`、`terminal`、`panel()`、`progressState` / `updateProgress`、`revealResult`、`syncResultToggle`、`requestFrame` / `cancelFrame`。装配点唯一，本模块因此既不直接触碰全局 `document`，也不认识协议消息、`vscode` 或任何宿主对象。\n- 状态是一份可整体快照的集合：`eventItems`、`toolItems`、`toolGroups` 三个 Map，加 `editedUris`、`commandIds`、`copyTexts`、`pendingRenders` 与 `renderFrame`。`capture()` 交出的正是这些引用，所以 `isolate()` / `restore()` 能成对换出整份状态，而 `reset()` 只清空状态、不改动 host 钩子。\n- 更新按 id 区分追加与替换：命中已有的 `eventItems` / `toolItems` 就改文本，未命中才新建元素；`event.replace` 重设文本，否则在 `dataset.raw` 上累加。因此流式消息不会被拆成多项，复制用的原文与渲染用的文本共用同一条基线。\n- 工具分组有两条路径：Agent 自己报告的 `groupId` / `groupLabel` / `solo` 按其意图原样复现（包括它选择单独成行的步骤）；只推扁平命令流的 Agent 则沿用折叠相邻调用的旧行为。折叠组仅在该组仍是 `panel().lastElementChild` 时继续收集（`trailingGroup`），避免后来的命令被回填到更早的位置；组标题优先取 `labelText`，否则回退为 `Ran N commands`。\n- 计数与复制只认真实命令：只有 `toolKind === \"command\"` 才进 `commandIds`，文件与图片步骤不会虚增头部计数；`copyTexts` 以 `id:<id>` 或 `event:<sequence>` 为键、按渲染顺序保存纯文本，Process 标题栏在流式过程中就能复制。`renderFileChanges` 只从结果里收集 URI（`patchApplication.files`，或 `before !== after` 的变更），既不渲染补丁内容，也不把旧 patch 当作已写入。\n- 渲染被推迟到一帧：`scheduleMessageRender` 只把元素放进 `pendingRenders` 并申请一次帧，`flushMessageRenders` 统一冲刷；`takePendingItems` 在页面被缓存前取走仍连接的待渲染元素并取消帧，避免渲染落进已脱离的 DOM。\n- 结构化结果不在本模块解析：`renderMessageItem` 用 `presentAgentMessage(raw)` 判断是否结构化，再用 `renderTurnMessage` 拼节点；只有上一级 `dataset.final === \"true\"` 时才调用 `renderMarkdownDiagrams`，否则半截 fence 会每帧排队渲染一次图。\n- 进度与结果区是请求而非所有权：`usage` 事件、`phase === \"reasoning\" | \"message\"` 与工具事件都会请求 `updateProgress(...)`，`revealResult` / `syncResultToggle` 由 host 决定；本模块只负责声明「该刷新了」，不判定计时的真实来源。\n\n## Boundary\n\n- Allowed: 读取 `shared/contracts` 的 `AgentStreamEvent`、`AgentToolKind`、`AgentTodoItem`、`WorkflowStepResponse` 类型；复用 `agentMessagePresentation.ts`、`turnComponents.ts`、`turnDomAdapter.ts`、`agentTodoPresentation.ts` 的纯函数与适配器；通过 `AgentTraceHost` 取得 `panel()` 返回的面板、请求进度刷新、展开结果区、同步结果开关并调度帧；调用 `platform/browser/markdownDiagrams.ts` 的 `renderMarkdownDiagrams` 渲染已完成行中的图。\n- Forbidden: 不 import `vscode`、Node 内置模块或任何 `host/` 层实现（浏览器层边界）；不持有会话历史、标签身份、滚动跟随状态、每会话草稿或待回答问题（分别归历史存储、会话控制器、`outputScrollController.ts` 的 `OutputScrollController`、`composerController.ts` 的 `ComposerDraftStore`、交互控制器）；不创建回合行、Plan 工具栏与问题卡（归 `transcriptView.ts` / `turnTitle.ts`、`planControls.ts`、`agentInputView.ts`）；不实现 Plan 的轮次循环、任务状态协议与流式文档过滤（归 `turnExecutionCoordinator.ts`、`planController.ts`、`planExecution.ts`、`planTodoProgress.ts`、`planDocumentStream.ts`、`planResponse.ts`）；不解析结果的语义、不改为同步渲染、不自行另设计时器或帧循环。"
       },
       "paths": [
         "src/features/conversations/browser/agentTraceView.ts",
@@ -301,7 +285,7 @@
       "canonicalName": "Composer editing surface",
       "body": {
         "kind": "inline",
-        "text": "## Responsibility\n\n**Names**: Composer editing surface → src/features/conversations/browser/composerController.ts (`ComposerDraftStore`), src/features/conversations/browser/composerOverflow.ts (`observeComposerOverflow`), src/features/workflow/domain/composerApiModules.ts (`composerApiId`, `composerGlobalApiModules`)\n\n这个责任拥有\"读者正在写的那一块\"的全部自身状态与形态，三件事都属于同一个所有者：\n\n1. **草稿按会话 tab 归属**。`ComposerDraftStore` 以 `sessionId` 为键保存 `ConversationDraft`（`source` + `attachments`）。注释写明契约：草稿属于单个会话 tab，提交一轮只清掉该 tab 的草稿；切换 tab 时保存并恢复正确的那一份。因此 `save` 只用 `source.includes(\"@\" + relativePath)` 过滤附件——读者在编辑器里手动删掉某张图片的 `@` 引用后，切回该 tab 时 chip 不会被复活。`hasUnsent` 回答的是\"读者从未发送过的草稿\"，文本或仍被引用的图片任一存在即为真。\n\n2. **控件溢出布局**。`observeComposerOverflow` 不预设断点，而是按实际渲染宽度决定折叠：临时加上 `measure-extras` 量出自然宽度，先判断是否需要 `skills-compact`，再判断整体 `is-compact`；不紧凑时清掉 `show-extra` 并复位 `aria-expanded`。测量经 `requestAnimationFrame` 去重，由 `ResizeObserver`（`action-row`、`action-actions`）、内容 `MutationObserver`（`hidden` 属性变化，忽略自身切换的布局类）、主题 `MutationObserver`（`html`/`body` 的 `class`/`style`）与字体加载事件共同触发，因为模型标签、字号、权限变化可能在工具栏本身尺寸不变的情况下改变自然宽度。\n\n3. **输入区可导入的 API 模块**。`composerApiModules.ts` 负责\"composer 从生成项目无法命名的根那里收到的 API 模块\"：`.dext/tsconfig.json` 只在项目相对路径上映射 `dext/api/*`，已提交文件不能带机器本地路径，而 composer 的额外库是内存注册的，所以全局模块放在 `file:///dext` 下的虚拟目录 `__dext-global-api__` 中，`COMPOSER_GLOBAL_API_PATHS` 追加在生成项目自身候选之后——顺序即\"项目 API 遮蔽全局 API\"。`composerApiId` 去掉扩展名与 `./`，并把 `index` 归到其目录 id；`projectApiIds` 同时登记 `.../index` 与其目录 id，再加上 `claimed` 集合，保证全局模块既不能抢占项目模块的补全，两个全局根也不能同时提供一个 id。`sourceOrder` 按 kernel 的 `.ts` → `.mts` → `index.ts` 顺序排序，让符号来源与导入解析到的虚拟文件保持一致。\n\n## Design\n\n- **状态以会话为粒度，而不是以窗口为粒度**：草稿存在 `Map<string, ConversationDraft>` 里，`delete`/`clear` 是唯一的清理入口，提交语义由此交给调用方，store 自己不猜测\"哪一轮算发送成功\"。\n- **附件跟随文本存活**：附件不是独立列表，而是文本 `@` 引用的投影，`save` 时即裁剪，避免两份真相。\n- **布局用测量而非魔数**：紧凑状态是从真实宽度推出来的（含 `columnGap`/`rowGap`），所以字号、模型名长度、权限标签变化都能自适应；观察器只在必要时重算，并刻意不对自身切换的类再触发。\n- **域逻辑与 DOM 分离**：`composerApiModules.ts` 只做 id 归一、去重与排序这类纯计算，不触碰文件系统与类型服务；`composerOverflow.ts` 只做 DOM 测量与类名切换；`composerController.ts` 只持有内存数据。三者都不在该节点内保存会话历史或渲染消息。\n- **虚拟路径只为内存服务**：`__dext-global-api__` 这个常量只要求与项目模块的虚拟路径不冲突，它不需要、也不允许出现在生成项目的磁盘布局里。\n\n## Boundary\n\n- Allowed: 读写自身的 `drafts` Map；在 `composer` 控件子树内添加/移除 `measure-extras`、`skills-compact`、`is-compact`、`show-extra` 等布局类并读写 `aria-expanded`；观察 `action-row`、`action-actions`、`html`/`body` 与字体事件；向装配层导出草稿存取、溢出观察入口、`COMPOSER_GLOBAL_API_DIRECTORY`/`COMPOSER_GLOBAL_API_PATHS` 与 `composerGlobalApiModules` 的结果。\n- Forbidden: 把草稿持久化到磁盘或任何工作区文件（草稿只活在内存里）；自行决定一轮对话是否已提交，绕过调用方直接 `delete`；直接使用或写入机器本地的全局存储路径；改写项目模块已有的 `dext/api/<id>` 或改变 `claimed` 之外的 id 归属；在溢出测量里引入固定断点或读窗口宽度来替代真实控件宽度；在 `composerApiModules.ts` 中执行 IO、挂载 DOM 或依赖编辑器实例。"
+        "text": "## Responsibility\n\n- **Names**: Composer editing surface → `ComposerDraftStore`（`src/features/conversations/browser/composerController.ts`）、`observeComposerOverflow`（`src/features/conversations/browser/composerOverflow.ts`）、`composerGlobalApiModules`（`src/features/workflow/domain/composerApiModules.ts`）；界面把这一块叫输入区（composer），代码里同族符号都以 `composer*` 命名，标题取代码名。\n- 它拥有“读者正在写的那一块”的三件自身状态：草稿归属哪个会话 tab、工具栏按真实宽度怎么折叠、composer 能导入哪些内存中的 API 模块。三者同属一个所有者，因为它们都随输入区存在而存在，谁也不读会话历史、不渲染轮次、不碰磁盘。\n- 之所以这样切分：草稿是会话级内存数据，溢出判定是纯 DOM 测量，API id 归一化是纯字符串计算——三种媒介不同因而分成三个文件，但对外只交出同一套结论（哪份草稿、哪种紧凑形态、哪些 `dext/api/<id>`），调用方不必知道彼此的细节。\n\n## Design\n\n- **草稿以会话为粒度，而不是以窗口为粒度**：`drafts` 是 `Map<string, ConversationDraft>`，`save` 只在 `source.includes(\"@\" + relativePath)` 时保留附件，读者在编辑器里手删某个 `@` 引用后，切回该 tab 时 chip 不会被复活。`hasUnsent` 回答“从未发送过的草稿”（文本或仍被引用的图片任一存在即为真）；`delete`/`clear` 是唯一清理入口，store 自己不猜测“哪一轮算发送成功”，提交语义留给调用方。\n- **布局用测量而不是断点**：`measure()` 临时加 `measure-extras` 量出自然宽度（含 `columnGap`、`rowGap`、模型标签、权限标签与 Send/Stop），先判 `skills-compact`，再判整体 `is-compact`；不紧凑时顺手清掉 `show-extra` 并复位 `aria-expanded`。`row.clientWidth` 为 0 时直接返回，避免在隐藏面板上得出结论。\n- **重算由多种信号触发，但每帧只算一次**：`ResizeObserver` 观察 `action-row` 与 `action-actions`，内容 `MutationObserver` 观察子树与 `hidden` 属性（会忽略自身切换的布局类），主题 `MutationObserver` 观察 `html`/`body` 的 `class`/`style`，外加 `document.fonts` 的 `loadingdone` 与 `fonts.ready`——因为模型名、字号、权限变化可能在工具栏尺寸不变的情况下改变自然宽度。所有回调经 `pending` 标记合并到一次 `requestAnimationFrame`。\n- **全局 API 只为内存服务**：`.dext/tsconfig.json` 只在项目相对路径上映射 `dext/api/*`（已提交文件不能带机器本地路径），所以 composer 的额外库注册在 `file:///dext` 下的虚拟目录 `__dext-global-api__`，`COMPOSER_GLOBAL_API_PATHS` 追加在生成项目自身候选之后——“项目 API 遮蔽全局 API”由候选顺序实现，而不是靠覆盖。\n- **id 归属先到先得**：`composerApiId` 去掉扩展名与 `./`，并把 `/index` 归到其目录 id；`projectApiIds` 同时登记 `.../index` 与目录 id，再与 `claimed` 集合一起，保证全局模块不抢占项目模块的补全，两个全局根也不能同时提供一个 id。`sourceOrder` 按 kernel 的 `.ts` → `.mts` → `index.ts` 排序，让符号来源与导入解析到的虚拟文件保持一致。\n- **失败模式是降级而非崩溃**：全局模块为空、id 重复、纯目录名，都只是被跳过；草稿的附件过滤发生在保存时而不是读取时；溢出观察只切换类名，不改结构。\n\n## Boundary\n\n- Allowed: 读写自身的 `drafts` Map；在 composer 控件子树内添加/移除 `measure-extras`、`skills-compact`、`is-compact`、`show-extra` 等布局类并读写 `aria-expanded`；观察 `action-row`、`action-actions`、`html`/`body` 与字体事件；对外导出草稿存取、溢出观察入口、`COMPOSER_GLOBAL_API_DIRECTORY`/`COMPOSER_GLOBAL_API_PATHS` 与 `composerGlobalApiModules` 的结果。\n- Forbidden: 把草稿持久化到磁盘或任何工作区文件（草稿只活在内存里）；自行决定一轮对话是否已提交，或绕过调用方直接 `delete`；直接使用或写入机器本地的全局存储路径；改写项目模块已有的 `dext/api/<id>` 或改变 `claimed` 之外的 id 归属；用固定断点或窗口宽度替代控件真实宽度；在 `composerApiModules.ts` 中执行 IO、挂载 DOM 或依赖编辑器实例；在本节点内保存会话历史、渲染消息或读取 `vscode` / Node 内置模块。"
       },
       "paths": [
         "src/features/conversations/browser/composerController.ts",
@@ -322,7 +306,7 @@
       "canonicalName": "Image annotator",
       "body": {
         "kind": "inline",
-        "text": "## Responsibility\n\n- **Names**: Image annotator → ImageAnnotator (src/features/conversations/browser/imageAnnotator.ts)；宿主侧 `ImageAnnotatorPanel` 见 src/features/conversations/host/imageAnnotatorPanel.ts，页面入口 `imageAnnotatorPage.ts`，几何与文本合成 `imageAnnotation.ts`。界面上的名字是 Webview 视图类型 `dext.imageAnnotator`（宿主）与 `image-annotator` 一类 DOM 类名，代码名保留为 `ImageAnnotator`。\n- 这个责任拥有一张附件图片的完整标注会话：hover 选中平坦 UI 块、拖拽画任意框、点击落点、为每条标记写备注、缩放 / Fit / 1:1、隐藏标记对照原图，最后把全部标记合成为一段带像素坐标的文本交给 composer（`onInsert`）。\n- 切分理由写在文件注释里并被测试固定住：`imageAnnotation.ts` 是无 DOM 的纯函数（`displayToImage`、`imageBoxToDisplay`、`fitScale`、`keepAnchor`、`detectBlocks`、`pickBlock`、`boxFromPoints`、`composeAnnotationText`），`imageAnnotator.ts` 只做 DOM 与指针事件，`imageAnnotatorPanel.ts` 只做 Webview 面板生命周期与附件字节读取，`imageAnnotatorPage.ts` 是 Webview 侧唯一的装配点（读 `meta[name=\"dext-image-path\"]`，post `imageData`，回传 `insertAnnotations`）。\n\n## Design\n\n- 标记只存原始图像像素坐标（origin 左上），显示层每次 `renderMarks` 时换算：缩放、滚动、侧栏尺寸变化都不改标记本身，因此 ResizeObserver 重排后标记仍贴在同一个像素上。\n- 检测是启发式且可降级：`SCAN_MAX_EDGE = 720` 下采样保证打开不卡，`COLOR_TOLERANCE = 18`、`MIN_BLOCK_RATIO` / `MAX_BLOCK_RATIO` 让整页背景不会被当成块，`MAX_BLOCKS = 1500` 封顶；canvas 被污染时捕获异常返回空列表，只失去 hover 选块，画框照常可用。\n- 一次按下有两种结局：位移小于 `DRAG_THRESHOLD` 视作点击（命中块则建 region，否则建 point），否则建手绘 region，零面积框被丢弃——这是“标记悄悄消失”的唯一已知来源，所以 `boxFromPoints` 单独可测。\n- 缩放以“设置图片宽度”实现，`keepAnchor` 把缩放前指针下的像素保持在指针下；Fit 用整像素宽度，避免半像素溢出撑出滚动条再触发新一轮 Fit。`plain` 模式下隐藏标记同时禁止绘制，防止画出看不见的标记。\n- 图片以 `data:` URL 加载而不是 `vscode-webview` URL，否则 canvas 被污染、`getImageData` 抛错；`loadImage` 因此是注入的回调，浏览器类不知道宿主细节。\n- 每个附件一个 tab，面板用 `inserted` 记住该附件上次插入的块，`onInsert(text, previous)` 使重新标注替换而不是在 Input 里叠加第二份。标记是内存态（注释 `shortcut: memory only`），重载 tab 即清空。\n\n## Boundary\n\n- Allowed: 同层同 feature 的纯函数（`./imageAnnotation.js`）；宿主侧 `attachmentImageDataUrl` 与 `DextStorage` 读取附件字节；`webviewProtocol.ts` 中声明的 `insertAnnotations`（含 `previous`）与页面内 `imageData` / `imageDataResult` 消息；`dist/webview/imageAnnotator.js`、`dist/webview/main.css` 与 `media` 下的样式资源。\n- Forbidden: 不 import `src/app/*`（`sidebarProvider.ts` 单向装配面板，反向依赖会成环）；面板不自己打开编辑器 tab 或写文件，只把合成文本交回 composer；不把显示坐标或缩放比例持久化进标记；不在宿主侧渲染 DOM 或读取像素；`browser/` 文件不引用 `vscode` / `node:` 模块；不新增第二套坐标约定，所有换算必须经过 `imageAnnotation.ts`。"
+        "text": "## Responsibility\n\n- **Names**: Image annotator → `ImageAnnotator`（`src/features/conversations/browser/imageAnnotator.ts`）；宿主侧 `ImageAnnotatorPanel`（`src/features/conversations/host/imageAnnotatorPanel.ts`）、页面入口 `imageAnnotatorPage.ts`、几何与文本合成 `imageAnnotation.ts`。界面上只出现 Webview 视图类型 `dext.imageAnnotator` 与 `image-annotator*` 类名，标题沿用代码名。\n- 这个责任拥有一张附件图片的完整标注会话：hover 选中平坦 UI 块、拖拽画任意框、点击落点、为每条标记写备注、缩放 / Fit / 1:1 / 隐藏标记对照原图，最后把全部标记合成为一段带像素坐标的文本交回 composer；同时拥有该标注页在宿主侧的编辑器标签生命周期与附件字节读取。\n- 它不拥有对话、输入区内容或轮次：标注结果只以 `insertAnnotations` 文本交给调用方（`src/app/sidebarProvider.ts`），因此“插到哪里、要不要替换上一份”由装配层决定。\n\n## Design\n\n- **三层切分由文件注释明确写出**：`imageAnnotation.ts` 是无 DOM 的纯函数（`displayToImage`、`imageBoxToDisplay`、`fitScale`、`keepAnchor`、`detectBlocks`、`pickBlock`、`boxFromPoints`、`composeAnnotationText`），`imageAnnotator.ts` 只做 DOM 与指针事件，`imageAnnotatorPage.ts` 只做页面装配（读 `meta[name=\"dext-image-path\"]` / `dext-image-name`，post `imageData`，收 `imageDataResult`，回传 `insertAnnotations`）。所以几何换算可以在没有浏览器的测试里跑，DOM 类不掌握第二套坐标规则。\n- **标记只存原始图像像素坐标（origin 左上）**，显示层每次 `renderMarks()` 才换算。缩放、滚动、侧栏尺寸变化都不改标记本身，`ResizeObserver` 重排后标记仍贴在同一个像素上；`composeAnnotationText` 输出的也是这套坐标。\n- **检测是启发式且可降级**：`SCAN_MAX_EDGE = 720` 让打开大截图不卡，`COLOR_TOLERANCE = 18` 与 `MIN_BLOCK_RATIO` / `MAX_BLOCK_RATIO` 让整页背景不会被当成块，`MAX_BLOCKS = 1500` 封顶；canvas 被污染时捕获异常返回空列表，只失去 hover 选块，画框照常可用。\n- **一次按下有两种结局**：指针位移小于 `DRAG_THRESHOLD = 4` 视作点击（命中块建 `region`，否则建 `point`），否则建手绘 `region`。零面积框被丢弃——这是“标记悄悄消失”的唯一已知来源，所以 `boxFromPoints` 单独可测。\n- **缩放以“设置图片宽度”实现**：`keepAnchor` 把缩放前指针下的像素保持在指针下；Fit 用 `Math.floor` 的整像素宽度，避免半像素溢出撑出滚动条再触发新一轮 Fit；`clampZoom` 把比例限制在 `MIN_ZOOM`–`MAX_ZOOM`。Ctrl/Cmd + wheel 缩放，普通 wheel 保持 trackpad 平移。\n- **图片以 `data:` URL 加载**而不是 `vscode-webview` URL，否则 canvas 被污染、`getImageData` 抛错；因此 `loadImage` 是注入的回调，浏览器类不认识宿主。宿主侧由 `attachmentImageDataUrl` 按扩展名映射 MIME 并拒绝非图片附件。\n- **隐藏即禁止绘制**：`plain` 模式隐藏标记的同时让 pointer 事件提前返回，避免画出看不见的标记；`aria-pressed` 与按钮文案随状态切换。\n- **每个附件一个 tab**：面板用 `Map<relativePath, WebviewPanel>` 复用已开标签（重复打开只 `reveal()`），并用 `inserted` 记住该附件上次插入的块，`onInsert(text, previous)` 使重新标注替换而不是在 Input 里叠第二份。标记是内存态（注释 `memory only`），重载 tab 即清空。\n- **CSP 与资产版本**：页面用 nonce 限脚本、`img-src` 允许 `data:`，资产 URL 追加 `imageAnnotator.js` 的 mtime 查询串，保证重建后的 bundle 不是旧脚本；`retainContextWhenHidden` 让切走再切回不丢标注。\n\n## Boundary\n\n- Allowed: 同 feature 同层的纯函数（`./imageAnnotation.js`）；宿主侧 `attachmentImageDataUrl`（`./attachmentImage.js`）与 `DextStorage` 读取附件字节；`webviewProtocol.ts` 声明的 `insertAnnotations`（含 `previous`）与页面内 `imageData` / `imageDataResult` 消息；`dist/webview/imageAnnotator.js`、`dist/webview/main.css` 与 `media` 下的样式资源；Webview 视图类型 `dext.imageAnnotator`。\n- Forbidden: 不 import `src/app/*`（`sidebarProvider.ts` 单向装配面板，反向依赖会成环）；面板不自己打开编辑器 tab、不写文件，只把合成文本交回 composer；不把显示坐标或缩放比例持久化进标记；宿主侧不渲染 DOM 或读取像素；`browser/` 文件不引用 `vscode` 或 `node:` 模块；不新增第二套坐标约定，所有换算必须经过 `imageAnnotation.ts`；不在标注页里拥有会话状态、提示词构造或历史记录。"
       },
       "paths": [
         "src/features/conversations/browser/imageAnnotation.ts",
@@ -356,7 +340,7 @@
       "canonicalName": "Result scroll probe",
       "body": {
         "kind": "inline",
-        "text": "## Responsibility\n**Names**: Diagnostic for the conversation scroll port → `measureResultScroll` / `installResultScrollProbe` / `formatResultScroll`（`src/features/conversations/browser/scrollProbe.ts`）\n\n这个职责只做一件事：把会话输出滚动容器（`#result-body`）的滚动范围与它实际绘制出来的内容放在一起测量，并指出两者为何不一致。文件头把滚动条“说谎”归为三类，探测模块逐一给出可比较的数值：`excess`（范围超出在流内容，例如塌陷的外边距、浮动或 `transform`）、`phantom`（范围超出所有仍在绘制的内容，读者看到空白）、`unreachable` 与 `covered`（内容画在范围之外，或端口本身被祖先裁掉、被窗口切掉，任何滚动修正都救不回来）。它同时安装可选的 Console 入口：`dextScrollWatch` 打开后才在每次滚动/布局时记录一行，`dextScrollReport()` 随时返回同一份测量。它只读不写：不改动 `scrollTop`、不修改样式、不修复布局，也不决定何时向读者展示诊断。\n\n## Design\n- 统一用滚动坐标比较：`toScroll` 把视口坐标换算成相对端口顶部的滚动位置，因此端口自身滚动后各数值仍然可比。\n- `inFlowBottom` 取 `max(clientHeight, resultBottom)`，与已发布的诊断保持同步：内容短于视口时端口不可滚动，范围不会从内容之下开始。\n- 逐元素遍历 `result` 内所有盒子，`paintState` 沿祖先链走到端口为止：`display: none`、`visibility` 非 `visible`、`opacity: 0`、`content-visibility: hidden` 直接判为未绘制；遇到嵌套 `overflowY` 裁剪盒则求交。端口自身的滚动裁剪被刻意排除——折叠线以下的内容仍然是范围必须覆盖的内容；嵌套滚动容器内部的内容可经该容器到达，所以裁剪停在它自己的边缘。\n- 由未裁剪/裁剪后的底边分别算出 `paintedBottom` 与 `reachable`，再以非负差值给出 `excess`、`phantom`、`unreachable`；`visibleBottom` 让端口底边与所有滚动祖先、`window.innerHeight` 求交，差值即 `covered`。\n- 分组结果按幅度排序并截断（`MAX_BOXES = 8`，内层滚动器 6 条）：`culprits`（画到在流内容之外）、`unpainted`（仍占高度却无人绘制）、`innerClips`（被嵌套裁剪器切掉的部分），让读者看到最可能的原因而不是整棵 DOM。\n- `formatResultScroll` 把 `range`、`painted`、`inflow`、`excess`、`phantom`、`unreachable`、`covered`、`gap`、`top`、`view`、`last-margin` 拼成一行 ` · ` 分隔的文本，便于直接粘贴回问题报告；完整结构体仍随 `console.log` 的第二参数给出。\n- 安装路径通过 `Object.defineProperty` 定义 `window.dextScrollReport` 与带 setter 的 `dextScrollWatch`，默认静默；打开时才用 250ms 节流记录，监听被动 `scroll` 事件，并在 `ResizeObserver` 存在时同时观察端口与内容，覆盖流式 Markdown、字体与折叠块增长导致的重新布局。\n\n## Boundary\n- Allowed: 读取传入的 `ScrollProbeTargets`（`body`、`result`）及其中元素的 `getBoundingClientRect`、`getComputedStyle`、`scrollTop`、`scrollHeight`、`clientHeight`、`scrollHeight`；在 `window` 上定义两个仅用于 DevTools 的全局名；注册 `scroll` 监听与 `ResizeObserver`；由 Webview 入口（`src/webview/main.ts` 的 `installResultScrollProbe`）在启动时安装一次。\n- Forbidden: 设置滚动位置、维护跟随状态或调度延迟滚动帧（属于 `outputScrollController.ts` 的 `OutputScrollController`）；修复 CSS、重排 DOM 或解除裁剪；决定诊断文案是否呈现给读者（`onDiagnostic` 由 `main.ts` 交给控制器）；向宿主 `postMessage`、读写持久化、导入 Node/VS Code 或任何宿主实现。"
+        "text": "## Responsibility\n\n- **Names**: Result scroll probe → `src/features/conversations/browser/scrollProbe.ts`（`measureResultScroll`、`formatResultScroll`、`installResultScrollProbe`）；界面上没有独立页面，公开可见的是 Webview DevTools 里的 `dextScrollReport` / `dextScrollWatch`，代码名以 `installResultScrollProbe` 为准。\n- 这个职责只做一件事：把会话输出滚动端口（`#result-body`）的滚动范围与它实际绘制出来的内容放在一起测量，并指出两者为何不一致。文件头把滚动条“说谎”归为三类：范围超出仍在流内的内容（`excess`，例如塌陷的外边距、浮动或 `transform`）；范围超出所有仍在绘制的内容（`phantom`，读者看到空白）；内容被画到范围之外，或端口本身被祖先、被窗口裁掉（`unreachable` / `covered`，任何滚动修正都救不回来）。\n- 它只产出数值与归因，不修复：不改 `scrollTop`、不写样式、不重排 DOM，也不决定诊断是否呈现给读者。\n- 之所以与 `OutputScrollController` 分成两个责任：控制器关心“渲染后该停在哪”，必须写滚动位置、排帧、维护跟随状态；探测只回答“为什么看起来不对”，必须保持纯只读。“诊断自己动了视口”这一因因此可以被排除，读者贴回来的数字才是原始事实。\n\n## Design\n\n- 统一用滚动坐标比较：`toScroll` 把视口坐标换算成相对端口顶部的滚动位置，所以端口自身滚动之后 `range`、`painted`、`inflow` 仍然可比。\n- `inFlowBottom` 取 `max(clientHeight, resultBottom)`，与已发布的诊断保持同步：内容短于视口时端口不可滚动，范围不会从内容之下开始，`excess` 也就不会把“不可滚动”误报成缺陷。\n- 逐元素遍历 `result` 内所有盒子（零尺寸盒子跳过），`paintState` 沿祖先链走到端口为止：`display: none`、`visibility` 非 `visible`、`opacity: 0`、`content-visibility: hidden` 直接判为未绘制；遇到嵌套 `overflowY` 裁剪盒则四边求交。端口自身的滚动裁剪被刻意排除——折叠线以下的内容仍然是范围必须覆盖的内容；嵌套滚动器内部的内容可经该容器到达，所以裁剪停在它自己的边缘。\n- `visibleBottom` 让端口底边与所有滚动祖先、`window.innerHeight` 求交，差值即 `covered`；它回答的是“内容都对了，但读者根本看不到端口底边”这一独立故障。\n- 由未裁剪与裁剪后的底边分别算出 `paintedBottom`、`reachable`、`inFlowReachable`，再以非负差值给出 `excess`、`phantom`、`unreachable`，使三类缺陷各自可读、不会互相抵消成零。\n- 归因按幅度排序并截断（`MAX_BOXES = 8`，内层滚动器 6 条）：`culprits`（画到在流内容之外）、`unpainted`（仍占高度却无人绘制）、`innerClips`（被嵌套裁剪器切掉的部分）。每个盒子附带 `label`、`height`、`position`、`marginBottom`、`transform` 与最多 4 层祖先链，让读者看到最可能的原因而不是整棵 DOM。\n- `formatResultScroll` 把 `range`、`painted`、`inflow`、`excess`、`phantom`、`unreachable`、`covered`、`gap`、`top`、`view`、`last-margin` 拼成一行 ` · ` 分隔的文本，便于直接粘贴回问题报告；完整结构体仍随 `console.log` 的第二参数给出。\n- 安装路径默认静默：用 `Object.defineProperty` 定义 `window.dextScrollReport` 与带 setter 的 `dextScrollWatch`，打开时才以 250ms 节流记录；监听被动 `scroll`，并在 `ResizeObserver` 可用时同时观察端口与内容，覆盖流式 Markdown、字体回流与折叠块增长导致的重新布局。\n\n## Boundary\n\n- Allowed: 读取传入的 `ScrollProbeTargets`（`body`、`result`）及其元素的 `getBoundingClientRect`、`getComputedStyle`、`scrollTop`、`scrollHeight`、`clientHeight`；在 `window` 上定义两个仅用于 DevTools 的全局名（`declare global` 中的 `dextScrollReport` / `dextScrollWatch`）；注册 `scroll` 监听与 `ResizeObserver`；由 Webview 入口 `src/webview/main.ts` 启动时安装一次。\n- Forbidden: 设置滚动位置、维护跟随状态或调度延迟滚动帧（属于 `outputScrollController.ts` 的 `OutputScrollController`）；修复 CSS、重排 DOM、解除裁剪；决定诊断文案是否呈现给读者（`onDiagnostic` 由 `main.ts` 交给控制器）；向宿主 `postMessage`、读写持久化、导入 Node/VS Code 或任何 `host/` 实现。"
       },
       "paths": [
         "src/features/conversations/browser/scrollProbe.ts"
@@ -375,7 +359,7 @@
       "canonicalName": "Skill pack",
       "body": {
         "kind": "inline",
-        "text": "## Responsibility\n\n- **Names**: Skills → `SkillPackManifest`（`src/features/resources/domain/skillPack.ts`）\n- 决定一个 Skill 怎样成为“已安装的事实”：`skill-packs/<id>/pack.json` 记录来源、发布标签、commit、上游版本、每个 Skill 的 id / 仓库目录 / 安装文件、命令及其 `available` / `unavailable` 状态，以及选择方式（`deterministic` 或 `ai`）；`formatSkillPackReport` 用同一份清单生成人读的 `SOURCE.md`，所以报告与清单不会各说一套。\n- 决定安装与更新只能产出“计划”：`skillImporter` 只返回 `SkillPackDraft`（`ResourceDocument` + 报告），`buildSkillPackUpgradePlan` 只返回完整替换树、要移入回收站的 Skill 目录与增删列表；确认、写盘与失败回滚都不在这里。\n- 决定所有权边界：新包新增的 Skill 只能是本包已拥有的，或 `skills/<id>` 尚未被占用；被其他包清单或独立 Skill 占着，整包失败而不是覆盖。\n- 决定运行时怎么被看见：`SkillCatalog` 扫描 `.dext/skills`、配置的 Skill 目录与全局存储，用清单给 Skill 标上 `packId` / `packName`，解析 v2 清单里的 Agent 变体，登记 `/command` 并给出 `SkillCommandSummary` / `SkillCommandResolution`；`skillSelection.ts` 把同样的摘要按包折成三态勾选的行。\n\n## Design\n\n- 清单“宽进严出”：`normalizeSkillPackManifest` 对缺字段、坏命令记录、缺 `analysis` 一律降级或返回 `undefined`，坏 `pack.json` 不会连带让旁边的 Skill 从目录里消失；严格校验只发生在写入侧（id、越界路径、重复路径、跨包冲突）。\n- 版本不等于内容：`compareSkillPackContent` 跳过 `pack.json` 与 `SOURCE.md` 这两个生成物，并把 CRLF 归一到 LF，因为同一 release 可能换了内容，而新 commit 也可能一个 Skill 都没改；只有内容比较能区分“已是最新”和“看起来没变其实变了”。\n- 计划阶段不读盘：`exists` 作为注入参数传入，`skillPack.ts` / `skillPackUpgrade.ts` 保持纯函数，因此能在没有 Node、没有 VS Code 的测试里跑完整冲突矩阵。\n- 命令是惰性文本：`parseCommandSource` 直接拒绝 `$1-$9`、`$(...)`、`${...}` 与 `!` 行，`expandCommandArguments` 只认识 `$ARGUMENTS`（没有占位符时把剩余文本追加到末尾）；不支持因此发生在导入时并写进报告，而不是运行时的意外执行。\n- 选择被压成稳定前缀：`dedupeSkillIds` 校验、去重并按 `MAX_SELECTED_SKILLS` 截断，同时约束提示词前缀与补全列表；`togglePack` 勾选整包、取消只清本包的 id；`selectionLabel` 在只剩一个包时读作 `2 ponytail`，目录已不认识的 id 退化为纯计数。\n\n## Boundary\n\n- Allowed: `resources/domain/` 的 `skillPack.ts`、`skillPackUpgrade.ts`、`skillImportAnalysis.ts`、`skillSource.ts` 只依赖 `shared/`、`resources/contracts/`、`workflow/contracts/skill.ts` 与 `workflow/domain/` 的解析器。\n- Allowed: `resources/host/`（`skillImporter.ts`、`skillVariants.ts`、`githubArchive.ts`、`githubSkillSnapshot.ts`）可读 Node fs 与 GitHub，并由 `src/app/application.ts` 组装调用。\n- Allowed: 浏览器组合器只 import `workflow/contracts/skill.ts` 与 `skillSelection.ts`；会话侧只通过 `TurnExecutionHost.resolveSkillCommand`（缺省时斜杠文本按普通输入处理）与历史记录的 `skills` / `command` 快照接触 Skill。\n- Forbidden: 纯 domain 文件不得 import Node、VS Code 或 `resources/host`；`buildSkillPackUpgradePlan` 不得自己读盘，`exists` 必须由调用方注入。\n- Forbidden: `skillCatalog` 只读已安装目录与清单，不得 import 安装器的写盘逻辑，也不得回写 `pack.json`。\n- Forbidden: 不得执行 Skill 或命令里的 shell、hook、位置参数；浏览器与 host 之间不传 `sourcePath`，只传 id、标题、描述与包归属。"
+        "text": "## Responsibility\n\n- **Names**: Skills → `skillPack` / `SkillPackManifest`（`src/features/resources/domain/skillPack.ts`）；导入器 `importSkillPack`（`src/features/resources/host/skillImporter.ts`）；运行时发现 `SkillCatalog`（`src/features/workflow/host/skillCatalog.ts`）。界面上的 **Skills** 控件与 `/command` 补全、以及资源页的 **Skill** 分类，指的都是这一份职责。\n- 它拥有“一个 Skill 包如何成为已安装的事实”：`.dext/skill-packs/<id>/pack.json` 记录来源、发布标签、commit、上游版本、每个 Skill 的 id / 仓库目录 / 安装文件，命令及其 `available` / `unavailable` 与选择方式（`deterministic` 或 `ai`）；`formatSkillPackReport` 用同一份清单生成 `SOURCE.md`，因此报告与清单不会各说一套。\n- 它拥有“安装与更新只产出计划”：`skillImporter` 返回 `SkillPackDraft`（`ResourceDocument` + 报告），`buildSkillPackUpgradePlan` 返回完整替换树、要移出回收站的 Skill 目录与增删列表；确认、写盘、失败回滚都在调用方。\n- 它拥有“安装之后怎样被看见和执行”：`SkillCatalog` 扫描 `.dext/skills`、配置的 Skill 目录与全局存储，用清单给 Skill 标上 `packId` / `packName`，解析 v2 清单里的 Agent 变体，登记 `/command` 并交出 `SkillCommandSummary` / `SkillCommandResolution`；`skillSelection.ts` 把同样的摘要按包折成三态勾选的行。\n\n## Design\n\n- **清单宽进严出。** `normalizeSkillPackManifest` 对缺字段、坏命令记录、缺 `analysis` 一律降级或返回 `undefined`，所以一个写坏的 `pack.json` 不会连带让旁边的 Skill 从目录里消失；严格校验只发生在写入侧（id 合法、路径不越界、路径不重复、不与其他包冲突）。\n- **版本不等于内容。** `compareSkillPackContent` 跳过 `pack.json` 与 `SOURCE.md` 这两个生成物，并把 CRLF 归一到 LF：同一 release 可能换了内容，新 commit 也可能一个 Skill 都没改，只有内容比较才能区分“已是最新”和“看起来没变其实变了”。\n- **计划阶段不读盘。** `exists` 作为注入参数传入，`skillPack.ts` / `skillPackUpgrade.ts` 保持纯函数，冲突矩阵因此能在没有 Node、没有 VS Code 的测试里跑完。\n- **所有权先于写入。** 新包新增的 Skill 只能是本包已拥有的，或 `skills/<id>` 尚未被占用；被其他包清单或独立 Skill 占着，整包失败而不是覆盖。\n- **命令是惰性文本。** `parseCommandSource` 直接拒绝 `$1-$9`、`$(...)`、`${...}` 与 `!` 行，`expandCommandArguments` 只认识 `$ARGUMENTS`（没有占位符时把剩余文本追加到末尾）；不支持因此发生在导入时并写进报告，而不是运行时的意外执行。provider 路由字段（`agent` / `model` / `subtask`）记为忽略项，不改变回合所用 Agent。\n- **发现顺序是稳定优先级。** 本地 `.dext/skills` 为 0、配置目录为 1、全局存储为 2；同优先级下包清单先于散落命令登记，本地包可以覆盖全局包；`list()` / `commands()` 按 id 排序，展示顺序不随磁盘枚举顺序抖动。\n- **变体按 Agent 解析，不跨 Agent 借用。** 每个回合先取当前 Agent 的版本，再回落 `shared`；两者都没有时标记 `available: false` 并让执行报缺失版本，而不是拿另一个 CLI 的指令顶上。\n- **选择被压成稳定前缀。** `dedupeSkillIds` 校验、去重并按 `MAX_SELECTED_SKILLS` 截断，同时约束提示词前缀与补全列表；`togglePack` 勾选整包、取消只清本包的 id；`selectionLabel` 在只剩一个包时读作 `2 ponytail`，目录已不认识的 id 退化为纯计数；`isSlashCommandPrefix` 保证斜杠只在行首第一段才算命令。\n- **浏览器只拿摘要。** host 与 Webview 之间不传 `sourcePath`，只传 id、标题、描述与包归属，源码路径留在宿主。\n\n## Boundary\n\n- Allowed: `resources/domain/`（`skillPack.ts`、`skillPackUpgrade.ts`、`skillImportAnalysis.ts`、`skillSource.ts`）只依赖 `shared/`、`resources/contracts/`、`workflow/contracts/skill.ts` 与 `workflow/domain/` 的解析器（`skillMetadata.ts`、`skillCommand.ts`）。\n- Allowed: `resources/host/`（`skillImporter.ts`、`skillVariants.ts`、`githubArchive.ts`、`githubSkillSnapshot.ts`）可读 Node fs 与 GitHub，由 `src/app/application.ts` 组装调用；`workflow/host/skillCatalog.ts` 只读已安装目录与清单。\n- Allowed: 浏览器组合器只 import `workflow/contracts/skill.ts` 与 `skillSelection.ts`；会话侧只通过 `TurnExecutionHost.resolveSkillCommand`（缺省时斜杠文本按普通输入处理）与历史记录的 `skills` / `command` 快照接触 Skill。\n- Forbidden: 纯 domain 文件不得 import Node、VS Code 或 `resources/host`；`buildSkillPackUpgradePlan` 不得自己读盘，`exists` 必须由调用方注入。\n- Forbidden: `skillCatalog` 不得 import 安装器的写盘逻辑，也不得回写 `pack.json`；发现与读取不得触发安装、更新或删除。\n- Forbidden: 不得执行 Skill 或命令里的 shell、hook 与位置参数；不得改写来源仓库文本去翻译 Agent 专用工具名或路径；不得把未导入的原生插件功能当成已安装事实。"
       },
       "paths": [
         "src/features/conversations/browser/skillSelection.ts",
@@ -409,7 +393,7 @@
       "canonicalName": "Conversation history",
       "body": {
         "kind": "inline",
-        "text": "## Responsibility\n\n- **Names**: History → `DextHistoryStore` (`src/features/conversations/host/historyStore.ts`，契约名为 `ConversationHistoryStore`)\n- 它是对话历史的唯一所有者：已完成的每一轮输入、过程事件、响应、Plan 进度、provider 会话标识与溢出文本，都由 `historyStore.ts` 与 `historyFileState.ts` 落盘到 `<storageUri>/conversation-history/`，而不是写进 VS Code 的 Memento。\n- 它同时拥有历史页面的读取面：`historyFileState.ts` 负责按会话分文件的读写与一次性导入，`domain/historyResponse.ts` 在读取时解码并兼容旧响应，`presentation/historyRender.ts` 生成会话与轮次 HTML，`host/historyEditorProvider.ts` 以 `dext.history` 编辑器面板承载这些内容。\n- 它还拥有会话级的展示偏好契约：置顶、收藏、标题、布局（打开的标签与活动标签）、每会话 Agent 选择、排序与过滤，定义在 `contracts/preferences.ts` 的 `ConversationPreferences` 中，按 conversation id 存储，避免两个标签页互相覆盖。\n- 形状如此，是因为历史既要“读了还能看懂”，也要“存了不会互相踩”：兼容逻辑只放在持久化数据边界，保存的原文从不被改写或截断丢失。\n\n## Design\n\n- 一个会话一个 `<sha256(key)>.json`，另有 `dext.history.order` 顺序键、`overflow/` 溢出正文与 `legacy-backup/` 原始备份；写入先写临时文件并 `sync`，再 `rename`，因此崩溃不会留下半份会话。\n- 旧 `dext.history*` Memento 键只被读取一次：先完整备份全部原键，再逐会话写入，最后用 `imported` 标记切掉旧键，迁移中断后重试不会复活已删除的轮次。\n- `mutate()` 只串行化“读—改—写”这一小段：并行的 Agent 任务可以同时结束，但整值写入不会互相覆盖；写入只触碰被修改或被裁剪的会话，未变化的会话不重写。\n- 限额在每次写入时读取而不是构造时快照，因此修改设置对下一轮立即生效；`trimSessions` 只从最早的轮次开始裁剪，`fork()` 复制轮次到新会话，续写不会追加到来源会话。\n- 超长内容用 `bounded()` 保留首尾并写入 `spill`（成为该轮的溢出文件），输入用 `clipped()` 截断且不加标记，避免标记被重发到下一次提示；溢出写入失败只损失溢出副本，不损失这一轮。\n- `storedProcess()` 只保留每个交互的最终状态，等待中的 UI 表单转成 `closed`、等待中的用户输入转成 `dismissed`，并在写入前删除 `isSecret` 字段的答案；`publicInteractionState()` 同样在对外暴露时剥离密文答案。\n- `normalizeHistoryResponse()` / `readHistoryResponse()` 在读取时补齐旧记录缺失的 `kind`，坏 JSON 返回 `undefined` 而不是抛错；渲染层优先使用已解出的 `response`，缺失时才解析 `output`。\n- 历史页面按会话懒加载正文，重命名轮次通过 `postMessage` 原地更新摘要文字，而不是整体重绘，因此展开状态不会被折叠。\n\n## Boundary\n\n- Allowed: 依赖 `shared/contracts` 的类型、表单与 schema 契约（`types.ts`、`uiForm.ts`、`schemas.ts`、`planProject.ts`），依赖 `workspace/domain/fileReference` 规范化输入引用，依赖 `resources/contracts/resourceSession` 保存资源上下文，以及通过 `platform/vscode/contextHost.ts`、`DextStorage` 打开文件引用与构造 Webview，由编辑器标签宿主承载 `dext.history` 面板。\n- Forbidden: 不拥有正在执行的轮次、会话映射或标签切换（属于会话控制器），不拥有会话浏览器 DOM 与滚动行为（属于 browser 层），不执行 Agent、不调用 provider、不写 `.dext` 项目知识，不在读取时改写或截断已保存的输出，不把 Webview 提供的表单定义当作权威（回答只对宿主定义校验），也不把密文答案写入历史或历史 HTML。"
+        "text": "## Responsibility\n\n- **Names**: History → `ConversationHistoryStore`（`src/features/conversations/contracts/history.ts`；实现为 `host/historyStore.ts` 的 `DextHistoryStore` 与 `host/historyFileState.ts`）。界面上这一能力叫 History（`dext.history` 编辑器面板、`dext.history.*` 命令族），代码给出的名字是契约 `ConversationHistoryStore`，所以标题用它，界面名记录在此。\n- 拥有“已经发生的对话”这一份唯一事实：每一轮的输入、过程事件、响应、错误、模式、Skill/命令快照、Plan 上下文与进度、provider 会话标识，以及被截断正文落到了哪个文件。落盘位置是 `<storageUri>/conversation-history/`，不是 VS Code 的 Memento。\n- 拥有读取面：`historyFileState.ts` 负责按会话分文件的读写与一次性旧数据导入，`domain/historyResponse.ts` 在读取时解码并兼容旧响应，`presentation/historyRender.ts` 生成会话与轮次 HTML，`host/historyEditorProvider.ts` 以 `dext.history` 面板承载这些内容。\n- 拥有会话级展示偏好的契约：置顶、收藏、标题、布局（打开的标签与活动标签）、每会话的 Agent 选择、排序与过滤，定义在 `contracts/preferences.ts` 的 `ConversationPreferences` 与 `ConversationLayout` 中。这里只有契约；`dext.pinnedConversations` 一类 Memento 键的具体读写由 `conversationPreferences.ts` 实现，归 `Conversation services`。\n- 拥有会话携带的资源与计划目标：`DextHistorySession` 上的 `resource`（`ResourceSession`）、`activePlanPath`、`planStatus`、`planProgress` 与轮次上的 `resourceSource`/`planPath`/`projectContext`。这正是 `resources/contracts/resourceSession.ts` 出现在本组的原因——历史必须能回答“这一轮基于哪个资源草稿、哪个计划文件”。\n\n## Design\n\n- **一个会话一个文件。** 会话 id 经 `sha256` 得到文件名，另有 `dext.history.order` 顺序键、`overflow/` 溢出正文与 `legacy-backup/` 原始备份。写入先落到临时文件、`sync` 之后再 `rename`，所以崩溃只会留下旧版本，不会留下半份会话。\n- **旧存储只读一次。** `IMPORTED_KEY = \"dext.history.imported\"` 把迁移做成可重入的：先完整备份旧的 `dext.history*` 键，再逐会话写入，最后才用标记切掉旧键，中途中断后重试不会复活已删除的轮次；`legacy-backup/` 也在导入完成后自动清理。\n- **`mutate()` 只串行化“读—改—写”这一小段。** 并行的 Agent 回合可以同时结束，但整值写入不会互相覆盖；写入只触碰被修改或被裁剪的会话，未变化的会话不重写。\n- **限额是读取时取值。** 每次写入都重新读 `DextHistoryLimits`，所以改设置对下一轮立即生效；`trimSessions` 只从最早的轮次开始丢，`fork()` 把轮次复制进新会话，续写不会追加到来源会话。\n- **截断与溢出分开。** `bounded()` 保留首尾并把被删掉的正文写进 `spill`（随后成为该轮的溢出文件，通过 `spillPath()` 取用）；输入用 `clipped()` 直接截断且不加标记，否则标记会在下一次提示里被重发。溢出写入失败只损失溢出副本，不损失这一轮。\n- **落盘前先收敛展示态。** `storedProcess()` 保留每个交互的最终状态（等待中的 UI 表单转成 `closed`、等待中的用户输入转成 `dismissed`），并通过 `publicInteractionState()` 剥掉 `isSecret` 字段的答案；对外暴露时同样剥离。密文不进历史，也不进历史 HTML。\n- **兼容只放在持久化边界。** `normalizeHistoryResponse()` 补齐旧记录缺失的 `kind`，`readHistoryResponse()` 懒解析 `output` 且坏 JSON 返回 `undefined` 而不是抛错；已保存的原文从不被改写或截断丢失。文件注释写明这句原则：兼容属于持久化数据边界，不属于 API 契约。\n- **契约与实现分环境。** `contracts/history.ts` 只有类型与常量（且注释声明它对浏览器 bundle 安全），`contracts/preferences.ts` 只有偏好形状，因此 browser 层与测试都能只依赖契约；Node 的 `fs`、VS Code 的 `Uri` 与面板都留在 host 侧。\n- **偏好按 conversation id，而不是按窗口。** 两个标签页各自保存标题、选择与布局条目，互不覆盖；历史页按会话懒加载正文，重命名轮次通过 `postMessage` 原地改摘要文字，展开状态不会因为整体重绘而折叠。\n\n## Boundary\n\n- Allowed: `shared/contracts` 的类型与表单契约（`types.ts`、`uiForm.ts`、`schemas.ts`、`planProject.ts`）；`workspace/domain/fileReference` 用于规范化输入引用；`resources/contracts/resourceSession` 用于保存资源上下文；`presentation/uiInteractionPresentation` 的 `publicInteractionState`；`platform/vscode/contextHost.ts` 打开文件引用、`DextStorage` 取得存储根与构造 Webview；`node:fs/promises` 与 `node:crypto` 只出现在 `historyFileState.ts`。\n- Forbidden: 不拥有正在执行的回合、会话映射或标签切换（属于会话控制器与 `TurnExecutionCoordinator`）；不拥有浏览器侧的会话 DOM 与滚动（属于 browser 层）；不执行 Agent、不调用 provider；不写 `.dext` 的项目知识；读取时不改写或截断已保存的输出；不把 Webview 传来的表单定义当作权威（回答只对宿主定义校验）；不把 `isSecret` 答案写入历史或历史 HTML；不导入 `src/app/`、`src/webview/main.ts` 或整份侧栏状态。"
       },
       "paths": [
         "src/features/conversations/contracts/preferences.ts",
@@ -443,7 +427,7 @@
       "canonicalName": "Plan document",
       "body": {
         "kind": "inline",
-        "text": "## Responsibility\n\n- **Names**: Plan document → `DEFAULT_PLAN_DIRECTORY`、`planFileName`、`planPathSegments`（`src/features/conversations/domain/planFile.ts`）与 `DEFAULT_PLAN_INSTRUCTION`、`PLAN_TASKS_RULES`、`PLAN_DIAGRAM_RULES`、`PLAN_PROJECT_RULES`（`src/features/conversations/domain/planTemplate.ts`）。界面把这个能力叫作 **New plan / plan document**，代码以 `planFile` 与 `planTemplate` 两个 domain 模块表达，标题采用代码与注释里共用的说法。\n- 这个职责回答两个问题：一份保存下来的计划文档**叫什么、能放在哪里**，以及它**长什么样、按什么规则写**。前者是可测试的命名与路径规则，后者是交给模型的文档契约。\n- 它只定义规则，不执行副作用：真正把文档写到磁盘、校验 Project 影响并回填 `planPath` 的是 Host（`src/app/application.ts` 的 `savePlan`），这里只提供它必须遵守的唯一一份定义，让宿主、webview 路径校验（`src/app/sidebarProvider.ts` 的 `readPlanText`）和测试（`test/planFile.test.ts`）对同一个合法路径达成一致。\n\n## Design\n\n- 命名是纯函数，时间由调用方注入：`planSlug` 把目标压成小写、非字母数字折成 `-`、去掉首尾分隔符、截到 48 字符，全标点时回退为 `plan`，因此任何目标都能得到可用的文件名；`planTimestamp` 输出 `YYYYMMDD-HHMMSS`，`planFileName` 拼成 `<timestamp>-<slug>.plan.md`，目录列表天然按时间排序。\n- 路径是安全边界而不是字符串工具：`planPathSegments` 统一 `\\` 与 `/`、丢弃空段和 `.`，并显式拒绝空路径、含 `..` 的路径、以 `/` 开头的路径和盘符路径。配置里的 `planDirectory` 与 webview 传来的 `buildPlan` 路径都走这一处校验，所以“不能逃出工作区”只有一条实现。\n- 模板由常量片段拼装为 `DEFAULT_PLAN_INSTRUCTION`：模式前言、文档骨架、逐节填写要求、Tasks 规则、Diagram 规则、Project 规则。分段而不是一段长字符串，是为了让宿主按场景只取其中一段（例如运行时单独取 `PLAN_PROJECT_RULES` 附加 Project 上下文）。\n- 骨架把 `## Goal`、`## Context`、`## Design`、`## Files`、`## Tasks`、`## Verification`、`## Risks` 固定为顺序与英文标题，正文语言跟随配置的交互语言；`### Before / After`、`### Execution flow`、`### Decisions` 和 `## Out of scope` 是条件式的，不适用时用一句说明代替空图，避免模板逼出无信息量的图表。\n- `## Tasks` 的形状被当作协议而非风格：Dext 解析它生成任务面板，因此规则限定为每行一个顶层编号复选框、禁止嵌套清单与 `##` 子标题、只允许 `###` 阶段标题、新任务保持未勾选、每条以 `verify:` 收尾。\n- 图表规则刻意保守（仅 mermaid fence、≤12 节点 / 3 子图、标签加引号、禁用 HTML/style/click），并要求每张图后附一句白话说明，使图不能渲染时原文仍可读；同时声明 `## Files` 与 `## Tasks` 是唯一事实来源，图与它们冲突时以清单为准。\n- Project 规则是条件式的，因为它描述的是“宿主给了 Project 上下文时怎么办”：缺失时保持普通流程、不可用时写明诊断且不伪造 none 评估、就绪时才要求评估职责与接口，并留下一次实现与 Project 的最终比对。是否允许写入、哈希与授权仍归宿主，模板只写评估与记录方式。\n- 默认指令可被工作区的 `.dext/rules/plan.md` 覆盖，运行时只负责“有项目规则就用、否则回退到 `DEFAULT_PLAN_INSTRUCTION`”，因此文档形态的演进集中在这两个文件里，不必改每个提供方的提示词。\n\n## Boundary\n\n- Allowed: 纯字符串与 `Date` 计算、导出的常量与纯函数；为 Host 的保存与读取、webview 的路径校验、Project 设置默认值以及测试提供同一份定义。\n- Forbidden: 引入 `vscode` 或任何宿主 API、读写文件与目录、直接读取当前时间、调用 AI 或 Project 服务、拼接响应分隔符与信封、判断工作区信任与 Project 写入授权；也不在此处解析或改写已保存的计划正文。"
+        "text": "## Responsibility\n\n- **Names**: New plan → `planFile`（`src/features/conversations/domain/planFile.ts`）/ `DEFAULT_PLAN_INSTRUCTION`（`src/features/conversations/domain/planTemplate.ts`）\n- 它只回答两个问题，并且只回答这两件事：一份保存下来的计划文档**叫什么、能放在哪里**（`DEFAULT_PLAN_DIRECTORY`、`planSlug`、`planTimestamp`、`planFileName`、`planPathSegments`），以及它**长什么样、按什么规则写**（`PLAN_TASKS_RULES`、`PLAN_DIAGRAM_RULES`、`PLAN_PROJECT_RULES` 与拼装后的 `DEFAULT_PLAN_INSTRUCTION`）。\n- 它不落盘、不调用模型、不读工作区：写文件、校验 Project 影响、回填 `planPath` 与哈希的是宿主（`src/app/application.ts` 的 `savePlan`），把指令塞进 Plan 模式提示词的是 `src/features/workflow/host/runtime.ts` 的 `planInstruction()`。\n\n## Design\n\n- **纯函数放在 domain，是为了让四个消费者对同一条规则达成一致**：宿主保存（`savePlan`）、宿主读回（`sidebarProvider.ts` 用 `planPathSegments` 拼 `buildPlan` 路径、`application.ts` 的 `planUri`）、Project 设置默认值（`projectSettings.ts` 的 `planDirectory` 默认 `DEFAULT_PLAN_DIRECTORY`）与测试（`test/planFile.test.ts`）。文件头注释写明理由：不引入 VS Code，宿主与测试才不会各有一份“合法计划路径”。\n- **命名让时间由调用方注入**：`planFileName(input, now)` 而不是内部取当前时间，`20260821-090503-add-a-cache.plan.md` 因此在测试里可断言；时间戳前缀使目录列表天然按时间排序。`planSlug` 先小写、把非 `[a-z0-9]` 折成 `-`、去首尾分隔符、截到 48 字符、再裁掉尾部 `-`，全标点时回退 `plan`；非 ASCII 目标同样折成空并回退（测试固定了 `planSlug(\"重构历史面板\") === \"plan\"`），这是刻意的可移植性取舍，而不是缺字符支持。\n- **路径校验是安全边界，不是字符串工具**：`planPathSegments` 统一 `\\` 与 `/`、丢弃空段与 `.`，并显式拒绝空路径、含 `..`、以 `/` 开头、以及 `C:` 这类盘符路径，错误文案即契约（`inside the workspace` / `relative to the workspace` / `at least one segment`）。“不能逃出工作区”只有这一处实现。\n- **模板由常量片段拼装，而不是一段长字符串**：`PLAN_MODE_PREAMBLE`、`PLAN_DOCUMENT_SKELETON`、逐节填写要求、`PLAN_TASKS_RULES`、`PLAN_DIAGRAM_RULES`、`PLAN_PROJECT_RULES` 各自导出，宿主才能按场景只取一段——`runtime.ts` 在拿到 Project 上下文时单独前置 `PLAN_PROJECT_RULES`，其余情况用整份 `DEFAULT_PLAN_INSTRUCTION`。\n- **骨架是顺序 + 条件性**：顶层标题固定为 `## Goal`、`## Context`、`## Design`、`## Files`、`## Tasks`、`## Verification`、`## Risks`，`### Before / After`、`### Execution flow`、`### Decisions` 与 `## Out of scope` 是条件式的；不适用时要求用一句说明替代空图，避免模板逼出无信息量的图表。正文语言跟随配置的交互语言，标题保持英文。\n- **`## Tasks` 的形状被当作协议而非风格**：Dext 解析它生成任务面板，所以规则限定每行一个顶层编号复选框、禁止嵌套清单与 `##` 子标题、只允许 `###` 阶段标题、新任务保持未勾选、每条以 `verify: <check>` 收尾，并保持既有任务顺序与措辞。\n- **图表规则刻意保守**：只允许 `mermaid` fence、≤12 节点 / 3 子图、标签加引号、禁用 HTML/`click`/`style`/`classDef`/外链外图，且每张图后附一句白话说明；同时声明 `## Files` 与 `## Tasks` 是唯一事实来源，图与它们冲突时以清单为准。\n- **Project 规则是条件式的**：它描述的是“宿主给了 Project 上下文时怎么办”——缺失时保持普通流程、不可用时写明诊断且不伪造 none 评估、就绪时才要求评估职责与公共接口，并以一条“实现后与 Project 最终比对”的任务收尾。写入授权、哈希与版本仍归宿主，模板只写评估与记录方式。\n- **默认指令可被覆盖**：工作区的 `.dext/rules/plan.md` 存在且非空时整份替换 `DEFAULT_PLAN_INSTRUCTION`（不可信工作区不读该文件），因此文档形态的演进集中在这两个文件里，不必改每个 provider 的提示词。\n\n## Boundary\n\n- Allowed: 纯字符串与 `Date` 计算；导出常量与纯函数，供宿主保存/读取、webview 路径校验、Project 设置默认值、`runtime.ts` 的 Plan 指令拼装与 `test/planFile.test.ts` 共用。\n- Allowed: 在 `planTemplate.ts` 里维护文档形态（标题顺序、逐节要求、Tasks/Diagram/Project 规则）与 `DEFAULT_PLAN_INSTRUCTION` 的拼装顺序。\n- Forbidden: 引入 `vscode` 或任何宿主 API、读写文件与目录、自行读取当前时间、调用 AI 或 Project 服务、拼接响应分隔符与信封（`PLAN_DOCUMENT_START` / `PLAN_DOCUMENT_END` 属于 `planResponse.ts`）、判断工作区信任与 Project 写入授权，也不在此处解析或改写已保存的计划正文。"
       },
       "paths": [
         "src/features/conversations/domain/planFile.ts",
@@ -463,7 +447,7 @@
       "canonicalName": "MCP tool registry",
       "body": {
         "kind": "inline",
-        "text": "## Responsibility\n\n- **Names**: MCP → McpToolRegistry（src/features/mcp/host/mcpRegistry.ts，类型契约见 src/features/mcp/contracts/mcp.ts）\n- 拥有「一个 MCP 服务器 + 显式工具白名单」的完整生命周期：把 `parseMcpManifest` 读出的 manifest 变成已校验的 server/tool 表，并在调用时按 `mcp.<server>.<tool>` 找到服务器、取凭据、走对应传输、把结果封装成 `mcpRaw` 信封。\n- 拥有 manifest 的语义与校验：`name`/`transport`/`auth`/`tools`/`inputSchema`/`outputSchema` 的形状检查、JSONC 解析、旧版 `{server, tool}` 写法的兼容读取，全部以 `diagnostics` 字符串返回而不是抛出，让上层决定如何展示。\n- 拥有凭据寻址：`McpAccessTokenStore` 只把 token 存进注入的 `SecretStorageLike`，键由 server 名、凭据种类（`bearer`/`token`/`query`）和 workspace/global 作用域哈希得出；manifest 语法里刻意不存在存放秘密的字段。\n- 拥有结果中的图片处理：`McpImageCache` 把 `image` 内容块按随机 UUID 落盘、限制类型与 10 MiB 上限、只接受注入的 `toUrl` 产出的 https URL，并在 `mcpRaw` 里给出 `images` / `imageError`，让 token 永远不出现在 URL 中。\n\n## Design\n\n- 三层同向依赖：`contracts` 只有类型与 `McpCredentialKind`，`domain` 是纯函数（`parseMcpManifest`、`httpUrlDiagnostic`），`host` 才允许 `node:child_process`、`node:fs`、`node:crypto` 和网络。这样 manifest 读取与运行时注册表能共用同一条 URL 校验，却互不导入。\n- 传输被拆成可替换的 `McpTransport`（`StdioMcpTransport`、`HttpMcpTransport`）加一个与业务领域无关的 `RestMcpAdapter`；注册表本身只做“找到工具 → 取 token → 交给传输”，因此新增传输或 REST 端点不需要改调用路径。\n- 声明的结果类型由 manifest 决定：有 `outputSchema` 就产出带 `resultType` 的强类型结果定义，没有就退回 `mcpRaw` 信封；同一份 manifest 既生成运行时校验，也生成提交进仓库的 `dext` 声明，二者共用 `mcp.<server>.<tool>` 这个 id。\n- 凭据延迟到调用时才解析（`setAccessTokenProvider` / `transportOptions`），所以启动、列表和诊断都不触碰 token；query 型凭据只在请求发出的瞬间拼进 URL，所有输出路径统一走 `redactedMcpUrl` / `redactedUrlQuery`。\n- 图片缓存把“文件系统”和“Webview 可访问 URL”解耦（构造函数注入 `toUrl`），并且只回收更早会话写入的文件，使一张等待确认卡片的图片不会被 TTL 清掉；缓存失败也只降级为 `imageError`，不影响工具调用本身的结果。\n\n## Boundary\n\n- Allowed: 只依赖 `src/shared/contracts/types.ts` 与 `src/features/mcp/contracts/mcp.ts`；`host` 层使用 node 内建模块；被 `src/app/application.ts`、`src/app/sidebarProvider.ts`、`src/platform/webviewProtocol.ts` 以类型或实例方式消费；HTTPS 与回环 HTTP 之外的地址一律拒绝。\n- Forbidden: 不导入 `vscode` 或任何 Webview 代码，不自行扫描 `.dext/mcp` 或全局存储目录（目录发现与 `reload` 属于 `src/app/application.ts`），不保存、回显或记录明文 token，不承载会话状态、提示词构造或 UI 渲染，不接受 URL userinfo、查询串、片段、内联 header 以及 manifest 里的凭据字段。"
+        "text": "## Responsibility\n\n- **Names**: MCP → McpToolRegistry（`src/features/mcp/host/mcpRegistry.ts`；类型契约 `src/features/mcp/contracts/mcp.ts`）\n- 这个职责拥有「一台 MCP 服务器 + 一份显式工具白名单」的完整生命周期：`setServers` / `setTools` 把 manifest 读出的配置变成已校验的表，`call` 时按 `mcp.<server>.<tool>` 找到条目、取凭据、选传输，并始终以 `mcpRaw` 信封交回结果。\n- 它拥有 manifest 的语义与校验：`parseMcpManifest` 检查 `name` / `transport` / `auth` / `tools` / `inputSchema` / `outputSchema` 的形状，解析 JSONC，兼容旧版 `{server, tool}` 写法，并把问题写成 `diagnostics` 字符串而不是抛出。\n- 它拥有凭据寻址：`McpAccessTokenStore` 只把 token 存进注入的 `SecretStorageLike`，键由 server 名、凭据种类（`bearer` / `token` / `query`）和作用域哈希得出；manifest 语法里刻意没有存放秘密的字段。\n- 它拥有结果中的图片：`McpImageCache` 按随机 UUID 落盘 `image` 内容块，限制类型与 10 MiB 上限，只接受注入的 `toUrl` 产出的 https URL，并在 `mcpRaw` 里给出 `images` / `imageError`。\n\n## Design\n\n- **三层同向依赖**：`contracts` 只有类型与 `McpCredentialKind`；`domain` 是纯函数（`parseMcpManifest`、`httpUrlDiagnostic`）；`host` 才允许 `node:child_process`、`node:fs`、`node:crypto` 与网络。manifest 读取与运行时注册表因此共用同一条 URL 校验，却互不导入。\n- **白名单是默认，不是配置建议**：`call` 只认 `setTools` 登记过的名字，未登记、服务器缺失、重复 server 或工具名冲突都变成显式错误或 `diagnostics`，不存在「按需直连某个服务器」的旁路。\n- **结果类型由 manifest 决定**：有具名 `outputSchema` 才产出带 `resultType` 的强类型结果定义，否则退回 `mcpRaw` 信封；同一份 manifest 既生成运行时校验，也生成提交进仓库的 `dext` 声明，二者共用 `mcp.<server>.<tool>` 这个 id。\n- **传输可替换，注册表不认协议**：`McpTransport` 有 `StdioMcpTransport`、`HttpMcpTransport`，REST 端点走与业务领域无关的 `RestMcpAdapter`；注册表只做「找到工具 → 取 token → 交给传输」，新增传输不需要改调用路径。\n- **凭据延迟到调用瞬间**：`setAccessTokenProvider` / `transportOptions` 只在 `call`、`verifyServer`、`discoverServerTools` 时解析 token，缺失即报错并指回 `Dext: Set MCP Access Token`；query 型凭据只在 `mcpRequestUrl` 里拼进查询串，所有展示路径走 `redactedMcpUrl` / `redactedUrlQuery`。\n- **协议细节收在传输里**：stdio 用换行分隔的 JSON-RPC，每次调用完成 `initialize` + `notifications/initialized` 后立刻 `tools/call` 并关闭子进程；非 JSON 的 stdout 当作服务器日志而不是致命错误，`progress` 通知折成 `McpProcessEvent`。HTTP 用 `package.json` 的 `dext.mcpProtocolVersions`，同时解析 JSON 与 SSE 响应，记住 `Mcp-Session-Id`，404 时重初始化一次，退出时 `DELETE` 终止会话。\n- **请求不能被重定向或带秘密外泄**：HTTP 请求一律 `redirect: \"manual\"`，3xx 直接失败；`FORBIDDEN_HTTP_CONFIGURATION_KEYS` 拒绝 `headers`、`token`、`apiKey` 一类配置；URL 不接受 userinfo、查询串与片段，只允许 HTTPS 与回环 HTTP。\n- **图片失败只降级**：没有缓存、类型不支持或写入失败都只变成 `imageError`，图片永远不能让一次工具调用本身失败；缓存只回收更早会话留下的文件，等待确认卡片上的图片不会被 TTL 清掉。\n\n## Boundary\n\n- Allowed: 只依赖 `src/shared/contracts/types.ts` 与 `src/features/mcp/contracts/mcp.ts`；`host` 层使用 Node 内建模块；被 `src/app/application.ts` 以「目录发现 + reload」的方式注入配置，被 `src/app/sidebarProvider.ts` 与 `src/platform/webviewProtocol.ts` 以类型或实例消费；通过注入的 `McpFetch`、`SecretStorageLike`、`toUrl` 与 `McpAccessTokenProvider` 接触外部世界。\n- Allowed: 对 manifest 与运行时配置返回 `diagnostics`、拒绝非法条目、按 id 派发到 stdio / HTTP / REST 之一，并把 `stdout` / `stderr` / `progress` 作为非结果输出上抛。\n- Forbidden: 不导入 `vscode` 或任何 Webview 代码；不自行扫描 `.dext/mcp` 或全局存储目录（目录发现与 `reload` 属于 `src/app/application.ts`）；不保存、回显或记录明文 token，不把凭据写进 URL 展示形式或历史。\n- Forbidden: 不承载会话状态、提示词构造、结果修复或 UI 渲染；不接受 manifest 里的凭据字段、内联 header、URL userinfo / 查询串 / 片段，也不为「能连通」而放宽 HTTPS 与回环限制或跟随重定向。"
       },
       "paths": [
         "src/features/mcp/contracts/mcp.ts",
@@ -497,7 +481,7 @@
       "canonicalName": "Project reader",
       "body": {
         "kind": "inline",
-        "text": "## Responsibility\n\n- **Names**: Knowledge → startProjectReader（`src/features/project/browser/entry.ts`，实现位于 `src/features/project/browser/projectReader.ts`、`projectReaderArchify.ts`、`archifyBridge.ts`）\n- 该职责拥有 Project 标签页 Knowledge 阅读页在 Webview 中的运行时：解析 `<template data-project-reader-data>` 里的 `ProjectReaderData`，维护“介绍 / 主题 / 已保存图”的选择与 `api.setState` 过滤状态，渲染文章、目录、检查器、回放条与全屏，并把 Archify 图放进一次性 sandbox iframe。标题沿用代码自己的名字（`projectReader.ts`、`startProjectReader`、`ReaderApi`）；界面上这一页叫 Knowledge，两者指同一职责。\n- 入口还承担质量提示“复制”按钮的往返确认：每个点击分配 `requestId`、禁用按钮、10 秒兜底超时，只接受 `isTrustedHostMessage` 校验过的 `projectQualityCopied` 回执。\n\n## Design\n\n- **一个选择就是一份状态**：`projectReader.ts` 把 `topic`、`diagram`、`generation`、`interactive`、全屏与回放状态收在同一个闭包内。`renderDiagram` 先 `dispose()` 旧的 `ReaderArchifyView` 再递增 `generation`，因此迟到的渲染或旧图的选中消息不会替换更新的选择。\n- **渲染器只经沙箱桥接**：`projectReaderArchify.ts` 为每张图创建 `sandbox=\"allow-scripts\"` 的 iframe，向 srcdoc 注入 `archifyViewerBridgeScript` 与一次性 `session` UUID；`archifyBridge.ts` 的两个判定函数把信任拆成两个方向——`isTrustedViewerMessage` 要求来源窗口等于 iframe 且 `__dext` 与会话一致，`isTrustedHostMessage` 则拒绝来自该 iframe 或携带该 token 的消息。形状如此是因为受限页面既不能碰宿主 API，也不能冒充宿主。\n- **桥只转发、不落盘**：点击节点/关系、主题切换、缩放、查找、全屏和 SVG 导出都被压成 viewer command；导出结果经 `URL.createObjectURL` 与 anchor `click` 拦截后回传 `projectReaderExport`，真正的文件写入与证据跳转仍由宿主按图 id 与 `updatedAt` 解析。宿主 id 与 Archify id 的映射由 `map` 命令下发并在桥内双向保存，界面侧不臆造节点身份。\n- **只有一张图**：`dockDiagram` 在宽编辑器把唯一 `.project-reader-figure` 停靠到 `[data-reader-diagram-pane]`，窄编辑器则移回文章 `.project-reader-tail` 之前，从而渲染器、控件和状态不会出现两份，阅读列也保持单一。\n- **失败必须可见**：30 秒 ready 超时、`archify !== true`、渲染错误或消息不合法都会落到显式错误状态并展开 “Diagram model”，解释、证据与已保存模型仍可读；项目明确不切换到第二套布局引擎。\n\n## Boundary\n\n- Allowed: `.project-reader` 根节点内的 DOM、`window.__dextApi` 的 `postMessage`/`getState`/`setState`、`window.Archify` 公开接口、同源 `postMessage` 协议，以及 `../contracts`、`../knowledge`、`../presentation` 中的只读类型与视图函数。\n- Forbidden: `vscode` API、Node 内置模块、文件读写、网络请求；解析源码、调用 AI 或生成/确认知识；改写 `.dext` 持久化数据；引入第二个渲染器或降级布局引擎；复制出第二个图容器。"
+        "text": "## Responsibility\n\n- **Names**: Knowledge → `startProjectReader`（`src/features/project/browser/entry.ts`；实现见 `projectReader.ts`、`projectReaderArchify.ts`、`archifyBridge.ts`）\n- 这个责任拥有 Project 编辑器里 Knowledge 阅读页在 Webview 中的运行时：解析 `<template data-project-reader-data>` 里的 `ProjectReaderData`，维护介绍 / 主题 / 已保存图的选择与过滤状态，渲染文章、目录、检查器、回放条与全屏，并把已经生成的 Archify 图放进一次性 sandbox iframe 里显示。界面把这一页叫作 Knowledge，代码把入口叫作 `startProjectReader`，标题沿用代码名，两者指同一职责。\n- 它还拥有两处“只转发、不落盘”的往返：图表内的节点 / 关系 / 主题 / 缩放 / 查找 / 导出命令经 bridge 回到宿主；质量提示的复制按钮用 `requestId` 等宿主回执 `projectQualityCopied`。\n- 之所以切在这里：受限页面既不能碰宿主 API，也不能冒充宿主，所以信任判定与渲染器生命周期必须与阅读页的渲染代码放在同一层，而真正的文件写入、证据跳转仍留在宿主。\n\n## Design\n\n- **一图一沙箱**：`renderReaderArchify` 为每张图创建 `sandbox=\"allow-scripts\"` 的 iframe、一个 `requestId` 和一个一次性 `session` UUID，把 `archifyViewerBridgeScript(session, theme, …)` 注入 `srcdoc` 的 `<head>`，并给页面脚本补上父页面读到的 `nonce`。会话 token 使旧图或迟到消息无法作用于新的选择。\n- **信任按方向拆成两个纯函数**：`isTrustedViewerMessage` 要求 `event.source` 等于 iframe 窗口且 `__dext` 与会话一致；`isTrustedHostMessage` 反过来拒绝来自该 iframe 或携带该 token 的消息。这样“谁能说什么”不依赖调用点顺序，也不会把宿主消息误当成渲染器消息。\n- **渲染回执要三重对齐**：只有 `type === \"projectReaderRendered\"`、`requestId`、以及 `diagramId` + `updatedAt` 全部与本次请求相符时才接受 HTML；`archify !== true` 或 30 秒未 ready 都落到显式失败，而不是留下一个空白框。\n- **bridge 只做翻译**：`map` 命令下发宿主 id 与 Archify id 的双向映射并常驻在 iframe 内，点击节点 / 关系时用它换回宿主 id 再 `post` 出去；主题切换、全屏、查找、缩放被压成 `VIEWER_COMMANDS` 里的命令；导出被 `URL.createObjectURL` 与 `HTMLAnchorElement.prototype.click` 拦截后回传文本，真正的落盘由宿主按图 id 与 `updatedAt` 决定。\n- **失败与关闭都可预期**：`dispose()` 置 `disposed`、清计时器、移除监听与 iframe，迟到的 `postMessage` 因 `disposed` 或 `canvas.isConnected` 为假被丢弃；`ready` 是被显式 resolve / reject 的 Promise，阅读页可以据此切换成错误态并展开 “Diagram model”。\n- **复制需要有界回执**：每个点击分配 `requestId`、禁用按钮并写 `Copying…`，10 秒兜底超时，只接受 `isTrustedHostMessage` 校验过的回执，重复点击不会叠加请求。\n\n## Boundary\n\n- Allowed: `.project-reader` 根节点内的 DOM 与同源 `window.__dextApi` 的 `postMessage`；`window.Archify` 的公开接口；`../contracts`、`../knowledge`、`../presentation` 的只读类型与视图函数；iframe 的 `sandbox`/`allow` 属性与 `srcdoc` 注入。\n- Forbidden: `vscode` API、Node 内置模块、文件读写与网络请求；解析源码、调用 AI、生成或确认 Project 知识；改写 `.dext` 持久化数据；引入第二个渲染器或降级布局引擎；复制出第二份图容器或让 bridge 自己保存导出结果。"
       },
       "paths": [
         "src/features/project/browser/archifyBridge.ts",
@@ -531,7 +515,7 @@
       "canonicalName": "Project editor data source",
       "body": {
         "kind": "inline",
-        "text": "## Responsibility\n\n- **Names**: Project → `ProjectEditorDataSource`（`src/features/project/contracts/reader.ts`），实现入口 `createProjectPanelDataSource`（`src/features/project/host/projectPanelDataSource.ts`）\n- 这个职责是 Project 编辑器在扩展宿主一侧的契约与装配面：页面通过 `ProjectEditorDataSource` 这个端口取数据、改设置、触发初始化与图渲染，端口之外的宿主模块负责落实——初始化状态机（`ProjectInitializationService`）、`.dext` 下的持久化（`ProjectStore` / `ProjectModelStore` / `ProjectHash` / `ProjectMigration`）、有界证据读取（`workspaceEvidence`、`contracts/evidence.ts` 的 `ProjectEvidencePackage`）、Plan 依据（`ProjectPlanService`、`ProjectChangeEvidence`、`contracts/projectPlan.ts`），以及图与导出（`ProjectDiagramAdapterRegistry`、`Contract/projectDiagramAdapter`、`projectDiagramProcess`）。\n- 它对外只承诺端口上列出的动作，因此同一套宿主逻辑可以配一个内存替身或测试替身，页面关闭时只需取消在途工作，不必知道状态机与文件布局。\n- 本稿为生成草稿：仅依据已读取的契约与宿主片段，未读文件与截断证据之处不下结论。\n\n## Design\n\n- **端口尽量可选**：`ProjectEditorDataSource` 的成员大量使用 `?`，`load()` 是唯一必需的读取。这样旧页面、只读替身和测试双份实现仍成立，新增能力不会强迫所有消费者同步升级；也让「页面能做什么」在一处可读。\n- **状态机与持久化分离**：`ProjectInitializationService` 只持有 `ProjectInitializationState`，依赖以 `ProjectInitializationDependencies`（`prepareEvidence` / `generate` / `persist`）注入。进度按阶段固定配额（`preparing` 0–20、`generating` 20–85、`saving` 85–100）换算，只用已完成的工作单元或 AI 阶段分数推进，`percent` 在运行期间不后退；`run()` 用 `this.controller?.signal === signal` 判定「我仍是当前运行」，因此取消后重试的旧运行即使迟到也不会覆盖新状态。`hydrate()` 只在存在有效 Intent 时才恢复为 `completed`，遗留的 `initialized` 标记或扫描数据单独不构成成功。\n- **证据是有界且可复算的**：`ProjectEvidencePackage` 带 `schemaVersion: 2`、`inputHash` 和 `characterCount`，把便宜的 `inventory`（按路径可引用的完整候选面）与花预算的摘录（带 `startLine` / `endLine` / `contentHash`）分开，所以文件清单可以完整，而正文仍受字符预算约束；行号只在确实提供了摘录时才成立。`ProjectEvidenceSummary` 再把一次读取的选择、省略与覆盖情况持久化，供后来者解释「模型当时看到了什么」。\n- **写入带前置条件**：`ProjectStore` 的每次写入都携带期望 `version`，冲突返回结果而不覆盖；模型与文档正文以内容哈希（`projectContentHash`）确认归属，迁移先备份原始字节。规划侧同样以依据一致为前提：`ProjectPlanService` 把适用集合压成一个 `applicability` 依据条目，`bindPlan` 只在依据完整时才允许 `none`，被截断或带诊断的裁剪结果不会升级成「无影响」。\n- **图与导出交给注册表与子进程**：渲染能力以 `ProjectDiagramAdapterRegistry` 注册，产物经 `projectDiagramProcess` 在独立进程中生成并校验回执，宿主只搬运符合图 ID 与保存时间的文档，渲染失败不会清空已保存的正文与模型。\n\n## Boundary\n\n- Allowed: 只通过注入的文件宿主与存储接口读写 `.dext` 下的 Project 产物；为页面生成只读的面板数据（`ProjectPanelData`）、进度事件与诊断；对图与导出请求做身份与版本核对后再放行。\n- Allowed: 端口契约放在 `contracts/`，不加载 Node 或 VS Code 专属实现，使同一套逻辑可在扩展、worker 与内存测试中运行。\n- Forbidden: 在浏览器侧渲染 DOM 或决定布局（那属于 Project 阅读器与 Archify 桥接）；在契约模块中导入 `vscode` 或 Node 内置模块；绕过 `version` / 内容哈希校验直接写模型与正文；在取消、失败或缺少有效已存 Intent 时把初始化标成完成；把未提供摘录的候选文件写成带行号的证据。"
+        "text": "## Responsibility\n\n- **Names**: Project → `ProjectEditorDataSource`（`src/features/project/contracts/reader.ts`，实现入口 `createProjectPanelDataSource`，`src/features/project/host/projectPanelDataSource.ts`）\n- 它拥有 Project 编辑器在扩展宿主一侧的**唯一端口**，以及端口背后的全部执行：`load()` 把已保存的 `.dext` 数据装配成 `ProjectPanelData`；`setProjectSettings` / `setEvidenceSettings` / `setWorkspaceSettings` / `setAiCli` / `setAiModel` / `setAiReasoning` / `setAiSpeed` 写入设置；`initialize` / `pauseInitialization` / `initialization` / `onInitializationChange` 暴露显式初始化的状态机；`renderReaderDiagram` / `exportReaderDiagram` / `openReaderEvidence` / `cancelDiagramWork` 受理并取消图表与证据请求。\n- 端口落地的四族模块同属这一职责：初始化状态机（`ProjectInitializationService`，`host/projectService.ts` 与 `contracts/lifecycle.ts`）；有界证据（`host/indexing/workspaceEvidence.ts` 与 `contracts/evidence.ts` 的 `ProjectEvidencePackage`）；带版本的持久化（`ProjectStore`、`ProjectModelStore`、`ProjectHash`、`ProjectMigration`）；Plan 依据与图表（`ProjectPlanService`、`contracts/projectPlan.ts`、`ProjectDiagramAdapterRegistry`、`contracts/projectDiagramAdapter.ts`、`projectDiagramProcess`）。\n- 形状如此，是因为页面只能看见端口上列出的动作：同一套宿主逻辑可以配内存替身或测试替身，页面关闭时只需取消在途工作，不必知道状态机、文件布局与渲染进程；契约留在 `contracts/`，不加载 Node 或 VS Code，因此同一份逻辑能在扩展、worker 与内存测试里跑。\n\n## Design\n\n- **端口几乎全可选，读取唯一必需。** `ProjectEditorDataSource` 的成员大量带 `?`，只有 `load()` 是必需的。于是新增能力不会强迫所有消费者同步升级，只读替身与旧页面仍然成立，「页面能做什么」也集中在一处可读。\n- **进度只按已完成的量走。** 三个阶段各占固定份额（`PROJECT_INITIALIZATION_PHASE_PERCENT`：preparing 0–20、generating 20–85、saving 85–100），`projectInitializationPercent` 把阶段内的 0..1 映射到总进度；`progress` / `progressTotal` 是真实工作单元，没有可数总量时才用 `fraction`，`percent` 在一次运行中不后退，`start(startPercent)` 让续跑从检查点百分比起步而不是把进度条推回零。\n- **旧运行不能覆盖新状态。** `run()` 里 `current()` 用 `this.controller?.signal === signal` 判定「我仍是当前运行」，取消后重试的旧运行即使迟到也写不进状态；`start()` 在运行中返回同一个 `activeTask`，重复点击不会开出第二条流水线；订阅者抛错被吞掉，因为进度是通知而不是结果，一个已关闭的页面不该打断一次运行。\n- **只有有效成果才算完成。** `hydrate()` 以 `hasIntent` 判 `completed`；只剩检查点时上报 `cancelled` + `resumable`（附带 `resumeStage` 与折算后的 `resumePercent`）；`markedInitialized` 单独不构成成功；有图无模型时保留图表可见并明说知识尚未初始化。\n- **证据是「完整清单 + 有限摘录」。** `ProjectEvidencePackage` 带 `schemaVersion: 2`、`inputHash` 与 `characterCount`；便宜的 `inventory`（path / kind / lines / symbols / contentHash）让文件面对调用方完整，花预算的摘录才带 `text`、`startLine` / `endLine` / `totalLines` / `truncated`。所以路径本身可以被引用，而**行号只在确实提供了摘录时才成立**；`contentHash` 始终按整份文件计算。\n- **一次读取要能被后来者解释。** `ProjectEvidenceSelection`（scope、preset、files、fileChars、evidenceChars）与 `ProjectEvidenceSummary`（trigger、inputHash、inventory / excerpts 统计、omitted、coverage、paths、excerpted）随模型一起持久化；`structureIndex` 只有在完整索引构建后才附带，一次有界读取不能凭空补上结构摘要。\n- **写入带前置条件。** `ProjectStore` 每次写入都携带期望 `version`，冲突返回结果而不覆盖；模型与正文以内容哈希确认归属，迁移先备份原始字节；因此并发保存表现为一次可报告的冲突，而不是两份互相覆盖的规范。\n- **Plan 依据必须自洽。** `ProjectPlanService` 把适用集合压成一条 `project:applicability` 依据条目（哈希由 id / locator / paths / names / global 计算）；`bindPlan` 在缺少该条目时报诊断，只有依据齐全时才允许 `none`，完成后按当前依据复核，依据变化就报告「相关 Project 规范或适用性已变」。\n- **图表走注册表与独立进程。** 渲染能力经 `ProjectDiagramAdapterRegistry` 注册，产物由 `runDiagramProcess` / `withDiagramFiles` 在独立进程里生成，再用 `assertDiagramDocument`、`diagramReceipt` 核对 id 与版本；页面请求按 `diagramId` + `updatedAt` 验身份（`DiagramTaskRegistry`、`isAllowedEvidencePath`、`isDiagramExportPayload`），过期或越界请求被取消而不是照渲染。\n- **生成物只是草稿。** 新生成的 intent 与 diagram 以 draft 保存，接受只改变 review，不改变 freshness；渲染失败也不清空已保存的正文与模型。\n\n## Boundary\n\n- Allowed: `vscode` 与 `node:crypto`（仅本层）；由 `src/app/projectSetup.ts` 注入一次的 store、文件宿主、检查点、证据读取与图注册表，并据此读写 `.dext/project.json`、`.dext/project/model.json`、`.dext/diagrams/*`、证据摘要与初始化检查点；向页面发 `ProjectPanelMessage` 并广播 `ProjectInitializationState`；对图与导出请求做身份与版本核对后再放行。\n- Allowed: 端口契约放在 `contracts/`，不加载 Node 或 VS Code 专属实现，使同一套逻辑可在扩展、worker 与内存测试中运行。\n- Forbidden: 在浏览器侧渲染 DOM 或决定布局（属于 `browser/projectReader.ts` 与 `archifyBridge.ts`）；在 `contracts/` 模块中导入 `vscode` 或 Node 内置模块；打开、恢复、刷新页面时枚举源码、调用 AI 或写 `.dext`（只有 Build/Update project model、检查证据、生成图表这类显式动作才读源码）；绕过 `version` 或内容哈希直接写模型与正文；在取消、失败或缺少有效已存 Intent 时把初始化标成完成；把没有摘录的候选文件写成带行号的证据；把 `.plan.md` 当作规范正文。"
       },
       "paths": [
         "src/features/project/contracts/evidence.ts",
@@ -565,7 +549,7 @@
       "canonicalName": "Project query",
       "body": {
         "kind": "inline",
-        "text": "## Responsibility\n\n**Names**: project_query → queryProject（`src/features/project/knowledge/projectQuery.ts`），经 `src/features/project/host/indexing/projectModelMcp.ts` 以 MCP 工具暴露\n\n它拥有“只读地查询已经持久化的原生 Project 模型”这一件事：在一个已通过校验的 `ProjectModel` 上按主题取节点与显式关系，并把同一能力通过 stdio MCP 交给外部 Agent。它不建立知识、不判断影响，也不把“这次没查到”当成“没有影响”——工具描述里就写明 partial results do not prove no impact。\n\n## Design\n\n- `projectQuerySchema` 是严格（`.strict()`）输入契约，只允许 `summary`、`node`、`search`、`neighbors`、`ancestors`、`subtree`；`depth` 限制 0–8、`limit` 限制 1–200、`text` 上限 1000 字符，避免查询退化成全图遍历。\n- 遍历是有界 BFS：`neighbors` 走双向边，`ancestors`／`subtree` 只沿 `contains` 方向，因此与所有权层级保持一致；命中数量到顶就置 `truncated`，而不是静默截断。返回的 `relations` 只保留两端都在已选节点集合内的边，结果自洽、不产生悬挂引用。\n- `runProjectQuery` 再叠一层 60,000 字符的响应预算：先收节点、再收关系，超预算即标记 `truncated`，保证读模型的一方拿到的是可消费的大小。\n- `readProjectQuery` 在读取前 `stat`、读取后用 `Buffer.byteLength` 双重检查 16 MiB 上限，再 `parseProjectModel`；损坏或不合法模型直接报错，不做“尽力猜测”。\n- MCP 服务是刻意做窄的 JSON-RPC 2.0 行协议（仅 `initialize`、`tools/list`、`ping`、`tools/call` 与 `project_query`），单行超过 64,000 字符直接忽略，未知工具返回 `isError`，畸形输入不会启动第二个操作。没有 schema 生成之外的依赖，也不需要初始化、扫描或写盘。\n\n## Boundary\n\n- Allowed: 读取传入的 `modelPath`（`.dext/project/model.json` 一类路径）；依赖 `contracts/projectModel` 类型与 `knowledge/projectModel` 的 `parseProjectModel`；通过 stdin/stdout 输出 JSON-RPC 响应。\n- Forbidden: 写入 `.dext` 或任何 Project 文件；触发初始化、迁移、源码索引或 AI/CLI 调用；改写、合并或“修正”模型里的节点与关系；渲染界面或断言改动影响范围。"
+        "text": "## Responsibility\n\n- **Names**: Project query（工具名 `project_query`）→ `queryProject`（`src/features/project/knowledge/projectQuery.ts`），对外由 `startProjectModelMcp`（`src/features/project/host/indexing/projectModelMcp.ts`）暴露；同一职责的发布面是 `renderProjectPanel`（`src/features/project/presentation/projectPanel.ts`）与 `ProjectEditorProvider`（`src/features/project/host/projectEditorProvider.ts`）。\n- 它拥有“一份已保存的 `ProjectModel` 能变成什么答案”这件事，且只有三条出口：给读者的页面（`renderProjectPanel` 的 `overview` / `knowledge` / `architecture` 三页，含 `projectSettingsView`、`projectTopicsView`、`projectArchitectureNotes`、`projectMarkdown`、`projectC4`、`projectDiagramPresentation`）、给 composer 的 `@` 引用（`projectReference` / `projectContext` / `projectReferenceClient`）、给外部 Agent 的只读查询（`queryProject` + `runProjectQuery` + `project_query`）。\n- 它拥有读视图的推导规则：`projectModelIntent` 把 `nodes` / `relations` 投影成 `ProjectIntent`，`knowledgeText` 决定节点正文从 inline 还是文档读取，`architectureRuleReport` 把声明的架构规则对对应图表求值。\n- 它拥有读侧的两个闸门：`parseProjectModel`（结构校验）与 `isDiagramExportPayload` / `DiagramTaskRegistry`（导出只接受当前显示版本，切换图表即取消旧渲染）。\n- 它拥有标签页宿主：`ProjectEditorProvider` 保存页面状态、把 Webview 消息翻成数据源调用、把初始化进度画到 `overview` 卡片上。\n- 之所以把这些合成一个职责：读者、composer 与外部 Agent 读的是同一份模型，任何一处在本地重新解析 `model.json`，Project 就会长出第二份真相；而写入不在这里——`ProjectPlanReconciler` 只按 `authorizedTargets`、`beforeHash` 与回执执行，读路径没有第二个写入口。\n\n## Design\n\n- **先校验再读**：`parseProjectModel` 是 zod parse 加 `validateProjectModel`——重复节点/关系、`.plan.md` 不得成为规范节点、同一文档只能有一个所有者、悬挂关系、`contains` 环，全部在读取时就失败，而不是让坏模型流进页面。\n- **读视图派生、不复制**：`projectModelIntent` 每次现算，`contexts` 把 `module` 节点也读成 bounded context，`domain()` 只保留各 `kind` 合法的 `properties` 键；正文缺失时返回 `Document unavailable; review required.`，让读者看到“需要复核”而不是空白。`replaceKnowledgeBody` 对 `accepted` / `edited` 拒绝 AI 覆盖，读侧因此永远不会“顺手”改掉已接受的知识。\n- **查询必须有界且自洽**：`projectQuerySchema` 是 `.strict()`，`depth` 0–8、`limit` 1–200、`text` ≤1000，杜绝退化成全图遍历；`ancestors` / `subtree` 只沿 `contains` 方向走，与所有权层级一致；返回的 `relations` 只保留两端都在已选集合内的边，`truncated` 显式置位而不是静默截断。`runProjectQuery` 再叠一层 60,000 字符预算，先收节点后收关系。\n- **MCP 刻意做窄**：只认 `initialize` / `tools/list` / `ping` / `tools/call` 与一个 `project_query`，超 64,000 字符的行直接忽略，未知工具返回 `isError`；读模型前 `stat` 与 `Buffer.byteLength` 双重检查 16 MiB，坏的 JSON 直接报错而不做“尽力猜测”。工具描述里写死 partial results do not prove no impact，因为“没查到”不等于“没有影响”。\n- **页面是纯字符串渲染**：presentation 里全是 `(data) => html` 的函数，没有 I/O、没有状态，所以同一份代码既给编辑器标签页用，也给 UI 脚本喂数据；页面选择经 `createEditorTabState` 落进标签状态，重载回到同一页；图标是内联 SVG，因为 Webview 的 CSP 不与外部资源做交易。\n- **宿主只做路由与栅栏**：`handleMessage` 把每种消息翻成一个数据源调用，`post` / `setHtml` 吞掉“Webview is disposed”的异常，因为一次进度更新不属于运行结果、不该中断生成；`initializationRun` 计数让暂停后又恢复的旧运行即使迟到也无法重绘新运行；设置类写入要求 `version` 且初始化期间一律拒绝，避免和正在写入的快照抢同一份文件。\n- **引用把身份与可见文本分开**：`formatProjectReference` 产出 `#canonicalName[objectId]`，`objectId` 是权威身份、名字只是显示快照，所以对象改名后旧对话仍能解析到当前节点；`projectReferenceOccurrences` 先看前一个字符，Markdown 标题、URL 片段、C# 名与 hashtag 都不当成 token，坏的百分号转义退回普通用户文本；`searchProjectReferences` 只把 `accepted` / `edited` 交给 `@` 补全，draft 不能被引用成规范；`ProjectReferenceClient` 是 latest-query-wins，旧请求就地 resolve 空列表，避免后到的候选盖掉新输入。\n- **图表读取只报告、不重绘另一套**：`DiagramTaskRegistry` 按 key abort 旧任务并在 `finish` 时核对 signal，迟到的渲染不能顶替当前选择；`isDiagramExportPayload` 只放行与显示版本一致的 HTML/SVG，且 SVG 不得含 `<script>`；`architectureRuleReport` 在图表有歧义时给 `note` 而不是挑一张错图求值。\n\n## Boundary\n\n- Allowed: 读取 `.dext/project/` 下的模型与文档正文；`projectModelSchema` / `projectIntentSchema` / `projectDiagramSchema` 等契约类型；`knowledge/` 的纯推导与 `presentation/` 的纯渲染；编辑器标签状态（`createEditorTabState`、`describeEditorTab`）；向自己的标签页 `postMessage`；MCP 的 stdin/stdout 行协议；注入的 `ProjectEditorDataSource` 端口（`load`、`initialize`、`pauseInitialization`、`setProjectSettings`、`setWorkspaceSettings`、`setEvidenceSettings`、`updateKnowledge`、`renderReaderDiagram`、`openReaderEvidence`、`exportReaderDiagram`、`generateTopicDiagram`、`cancelDiagramWork`）以及 `copyText` / `planFromProjectObject`。\n- Forbidden: 绕过数据源与 `version` 前置条件直接写模型或正文；在没有显式用户消息（`projectInitialize`、`projectSettings`、`projectKnowledgeUpdate` 等）时启动初始化、AI 生成或写盘；把 `truncated` 或缺失证据说成“无影响”；在 `presentation/` 或 `knowledge/` 里做 I/O、触碰 DOM 或 `vscode`；在浏览器侧解析源码或重新推导节点/关系；引入第二套渲染器、布局引擎或图表容器；在读取时改写或截断已保存的正文；把 Webview 传来的表单与节点身份当作权威（身份以 `objectId` 为准）。"
       },
       "paths": [
         "src/features/project/host/diagrams/projectDiagramViewer.ts",
@@ -599,7 +583,7 @@
       "canonicalName": "ProjectDiagramHistory",
       "body": {
         "kind": "inline",
-        "text": "## Responsibility\n\n- **Names**: ProjectDiagramHistory → src/features/project/knowledge/projectDiagramHistory.ts\n- 该职责拥有“每个图表最后一次可用的输出”（last-good）：以 `diagramId` 为键保存 `ProjectDiagramSnapshot`，维护限定长度的版本序列、`previous` 快照、最近一次校验失败的回执 `lastFailure`，并负责快照之间的差异比较（`compareDiagramSnapshots`）与 JSON 安全的导出/导入（`exportState` / `importState`）。\n- 之所以是这个形状：图表替换是“尝试性”的，失败的、被取消的或被篡改的渲染结果绝不允许顶掉已经验证过的预览。因此写入口 `record` 与构造入口 `createDiagramSnapshot` 共用同一个准入判定 `isUsableDiagramSnapshot`，把“可用性”作为单一闸门，而不是散落在调用方。\n- 第二层原因在于“历史可被持久化但不能被持久化污染”：导出的是纯 JSON（`artifact.content` 的字符串/字节数组二选一），运行时对象（AbortSignal、adapter 实例）不进入存储；导入时先在临时实例上完整重建，全部校验通过后才替换活动历史，因此一个损坏的文件无法清空 last-good。\n\n## Design\n\n- 差异被拆成四个独立维度：`semantic`（节点/关系的语义、标题、kind、metadata）、`evidence`、`renderedLayout`（渲染器报告的几何，仅供呈现）、`artifact`（内容、格式、MIME、adapter 及其版本）。任一维度变化都会置 `changed`，但各维度互不推导。\n- `stable()` 提供与属性插入顺序无关、但保留数组顺序的等价判定；证据比较前先排序，因为引用事实的顺序不改变事实本身。\n- 版本约束是显式的：新快照的 `diagram.version` 不得回退，同版本下 `renderedAt` 不得更早，且同版本不允许语义内容（剔除 `updatedAt`/`review`/`freshness`/`confidence` 后）发生变化。\n- `renderedLayout` 缺失时 `comparable` 为 false：缺少几何报告不构成“布局未变”的证据。\n- 所有进出都以 `structuredClone` 隔离，调用方拿到的历史条目与内部状态不共享引用；`versions` 以 `slice(-maxVersions)` 保留最近 N 次。\n- 反序列化严格校验：编码标记只允许 `text`/`bytes`，字节值必须是 0–255 的整数，恢复后仍要再过一遍 `isUsableDiagramSnapshot`。\n\n## Boundary\n\n- Allowed: 依赖 `../contracts/projectDiagram.js` 的图表契约与校验器、`../contracts/projectDiagramAdapter.js` 的产物类型；只持内存状态并产出 JSON 安全的结构；`isArchifySnapshot` 允许按 diagramId/version 判断某快照能否用于恢复预览。\n- Forbidden: 直接调用 `vscode` 或任何文件系统读写（落盘由 host 侧存储实现承担，例如 `src/features/project/host/persistence/projectInitializationCheckpointStore.ts`）；驱动 adapter、重新渲染或测量几何；修改 Project 真值或图表语义；承担 UI/呈现职责（如回放顺序）或对话编排。"
+        "text": "## Responsibility\n\n- **Names**: Project diagram history → `ProjectDiagramHistory`（`src/features/project/knowledge/projectDiagramHistory.ts`）；同一责任的其他入口是 `createProjectInitializationCheckpointStore`（`src/features/project/host/persistence/projectInitializationCheckpointStore.ts`）、`parseProjectImpact` / `planSemanticContent`（`src/features/project/knowledge/projectPlan.ts`）、`buildC4Topics` / `systemContextRelationships`（`src/features/project/presentation/projectC4.ts`）、`projectPlaybackSteps`（`src/features/project/presentation/projectDiagramPresentation.ts`）。\n- 它拥有五件「都不产生新真值」的事：每个 `diagramId` 最后一次可用输出（last-good）与有限版本序列；被暂停的 Project 初始化的持久恢复点；Plan 文档里 `dext-project-impact` 标记的解析；从已记录的 C4 模型派生的 C1/C2 主题视图；从已记录顺序派生的回放步骤。\n- 五者被归到同一责任，是因为它们都是「读已确定的 Project 事实、算出一个可再生结果」：结果可以重算、可以丢弃，但写错的代价明显不对称——一次失败的渲染会顶掉已验证的预览，一次被取消或被篡改的初始化会顶掉已保存的模型，一段写在 Plan 里的示例会被当成本次变更的依据。\n- 于是它只做校验入口，不负责创建内容：快照必须过 `isUsableDiagramSnapshot`，主题必须来自 `intent.c4` 里显式记录的边界，回放必须有记录顺序或唯一连通路径，失败回执必须能被 `isReceipt` 认出来。\n\n## Design\n\n- **一个校验入口，两处调用。** `record` 与 `createDiagramSnapshot` 共用 `isUsableDiagramSnapshot`：校验图 ID、`schemaVersion`、非负版本、`renderedAt`、artifact 与回执的 adapter／版本一致、回执状态不是 `failed`、问题项只含 `info`／`warning`、内容非空，并且 `validateProjectDiagram` 无 error。可用性只在一个地方定义，调用方无法各自放宽。\n- **替换是有条件的。** 新快照的版本不得回退；同版本下 `renderedAt` 不得更早；同版本还不允许语义变化——比较前先剔除 `updatedAt`／`review`／`freshness`／`confidence`，所以重存一次正文不会伪装成新渲染。\n- **失败与历史分开存。** `lastFailure` 只记最近一次失败回执，不进入 `versions`；`versions` 用 `slice(-maxVersions)` 保留最近 N 次，`previous` 单独保留上一份，`comparison()` 因此总能解释「这次改了什么」。\n- **差异分四维、互不推导。** `semantic`（节点／关系语义、标题、kind、metadata）、`evidence`、`renderedLayout`（渲染器测得的几何，仅供呈现）、`artifact`（内容、格式、MIME、adapter 及其版本）各自判定；`stable()` 忽略属性插入顺序但保留数组顺序，证据比较前先排序（引用事实的顺序不改变事实）；`renderedLayout` 缺失时 `comparable` 为 `false`——没有几何报告不等于布局没变。\n- **进出都隔离且 JSON 安全。** 导出时 artifact 内容编码为 `text` 或 `bytes` 二选一，字节值必须是 0–255 的整数；`importState` 先在临时实例上完整重建、逐条 `record` 并检查 `diagramId` 归属，全部通过后才 `clear()` 再拷贝，所以损坏的历史文件清不掉 live 的 last-good。`AbortSignal`、adapter 实例这类运行时对象永不进入存储，`get`／`record`／`comparison` 都用 `structuredClone` 交出副本。\n- **恢复点走原子写。** checkpoint 只有 `read`／`write`／`clear` 三个动作，落在 `.dext/project-initialization.checkpoint.json`，上限 8 MiB（注释明确它存 AI 提纲与路径、不存源码）；写入先写 `<name>.<uuid>.tmp` 再 `rename`，`finally` 里删残留临时文件；读取超限、解析失败或任何异常都折叠成 `undefined`——「不可恢复」而不是「抛错」，因此坏 checkpoint 不会让初始化整体失败。\n- **标记解析先掩码再匹配。** `parseProjectImpact` 把围栏代码、缩进代码与行内代码替换成等长空格（保持偏移不变），Plan 里的示例因此不能变成协议消息；缺失、未闭合、出现多份、JSON 或 schema 不合法分别给出不同的 `diagnostic`，调用方不必猜。`planSemanticContent` 再移除标记区间并把 `1. [x]` 归一为 `1. [ ]`，从而「勾选进度与宿主摘要不改变任务语义，代码示例才改变」。\n- **C4 只派生，不重新分类。** `buildC4Topics` 需要 `intent.c4` 与 `systemId` 指向的 system，产出 `c4:system_context:<id>` 与 `c4:containers:<id>` 两个 `ProjectTopic`（标题 `Project landscape` / `Runtime units`），图的 metadata 记 `derived: true` 与 `c4Level`，容器视图只用已记录的 `semantics.boundaries`。`systemContextRelationships` 把容器关系折叠到父级、丢弃自环、按 `(from,to)` 合并描述／技术与去重证据——折叠的是进程边界，不是交互。\n- **回放要证据。** `projectPlaybackSteps` 只为 sequence 按 `order` 排序、为 workflow 取 `mainPath`；没有主路径时从唯一入度为 0 的节点走链，遇到分支、成环或没覆盖全部节点就返回空数组，绝不拿数组下标当顺序。\n- **文件位置即分层。** 纯解析留在 `knowledge/`（`projectDiagramHistory.ts`、`projectPlan.ts`），视图构建留在 `presentation/`（`projectC4.ts`、`projectDiagramPresentation.ts`），唯一碰文件系统的实现单独放在 `host/persistence/`，使前三者能在没有 VS Code 的测试里跑完整的准入与冲突矩阵。\n\n## Boundary\n\n- Allowed: 依赖 `../contracts/projectDiagram.js` 的 `ProjectDiagram`、`validateProjectDiagram`、`DiagramValidationReceipt`／`DiagramValidationIssue`，`../contracts/projectDiagramAdapter.js` 的 `DiagramAdapterArtifact`，`../contracts/projectIntent.js` 的 `ProjectIntent`，`../knowledge/projectTopics.js` 的 `ProjectTopic`，以及 `../../../shared/contracts/planProject.js` 的 `projectImpactSchema` 与 `ProjectImpact`；仅 checkpoint store 这一个文件可以依赖 `vscode.workspace.fs`、`node:crypto` 的 `randomUUID` 与 `../generation/projectModelCheckpoint.js` 的 schema 与存储类型。\n- Allowed: 在内存中保存并导出 last-good、版本序列与失败回执；接受注入的 `root` 而不是自己推导工作区；把不可恢复、不可解析、不可比较都表达成 `undefined`、`false` 或显式的 `diagnostic`。\n- Forbidden: 渲染或测量几何、驱动 adapter、重新生成图（几何只在 `renderedLayout` 里透传，不写回 Project 真值）；调用 AI、CLI 或源码索引；写 `.dext` 下除初始化 checkpoint 之外的任何文件，或以历史／Plan 为依据改写模型与正文。\n- Forbidden: 让失败、过期、同版本改语义的快照进入 `lastGood`；跳过 `isUsableDiagramSnapshot` 直接构造或恢复预览；在 `importState` 校验完成前改动 live 历史。\n- Forbidden: 改写或裁剪 Plan 正文、把 `dext-project-impact` 的示例当协议、把「没有标记」当成「没有影响」；在 `projectC4.ts` 里重新分类旧 context 或发明新边界；把数组顺序、目录树或未记录的调用关系当作回放顺序。"
       },
       "paths": [
         "src/features/project/host/persistence/projectInitializationCheckpointStore.ts",
@@ -622,7 +606,7 @@
       "canonicalName": "VscodeProjectFileHost",
       "body": {
         "kind": "inline",
-        "text": "## Responsibility\n\n**Names**: ProjectFileHost → VscodeProjectFileHost\n\n`VscodeProjectFileHost` 是唯一把 `ProjectFileHost` 这个最小文件接口落到真实编辑器上的实现：它把一个 VS Code 工作区根目录（`vscode.Uri`）适配成相对路径的读写、列目录与删除能力，让 `ProjectStore`、`ProjectModelStore`、迁移与初始化检查点等宿主代码只面对接口，而不依赖 `vscode.workspace.fs`。它owns“相对路径 → 工作区内 URI”的解析与越界防护，以及“缺失文件”与“其它失败”的语义区分；它不拥有项目文件的内容含义。\n\n## Design\n\n- **双套读写语义**。宽松版 `readFile` / `listDirectory` 吞掉一切异常并回落到 `undefined` / `[]`，供“缺文件即用默认值”的上游路径使用；严格版 `readFileStrict` / `listDirectoryStrict` 只把 `FileNotFound` 翻译成 `undefined` / `[]`，其余错误必须向上传播，正是接口注释里“Missing files return undefined; all other failures must be propagated”的落地。\n- **路径收敛在 `uri()` 一处**。空段、`.`、`..`、反斜杠与冒号一律拒绝，注释写明理由：`Project path must stay inside the workspace.`。所有方法都经由它，业务代码无法绕过。\n- **写入与删除走 `checkedUri()`**。仅当 scheme 是 `file` 时才用 `realpath` 逐级上溯已存在的祖先、再与根目录 `relative` 比对，从而挡住符号链接逃逸（`Project path resolves outside the workspace.`）；非 `file` scheme（如测试或远程提供者）直接放行，保持可替换性。\n- **读预算与严格解码**。严格读先 `stat`，超过 16 MB 抛 `Project document exceeds the read budget.`，并用 `new TextDecoder(\"utf-8\", { fatal: true })` 解码，避免把超大或二进制文件当成项目文档喂给解析层；宽松读则复用 `../indexing/workspaceEvidence.js` 的 `textDecoder`。\n- **写入自带父目录**。`writeFile` 按 `/` 切段先 `createDirectory` 再 `writeFile`，让调用方不必关心目录是否已存在；`deleteFile` 显式 `recursive: false, useTrash: false`，删除意图必须精确。\n- **只列文件**。两个列目录方法都过滤 `FileType.File`，因为项目存储按文件名而非目录树推理。\n- **导出 `textEncoder`**。相邻宿主代码（如 `projectPanelDataSource.ts`）需要同一套编码写出内容，共用常量避免各处重复构造。\n\n## Boundary\n\n- Allowed: 读取、写入、列目录、删除工作区内相对路径对应的文件；抛出具名错误；依赖 `vscode`、`node:path`、`node:fs/promises` 的 `realpath`、以及索引层共享的 `textDecoder`。\n- Forbidden: 不解析或校验 `ProjectDefinition` / 模型 schema，不做迁移、版本比较、冲突合并或内容哈希（属于 `ProjectStore`、`ProjectModelStore` 与迁移逻辑）；不决定具体项目文件路径常量（由调用方给出）；不缓存文件内容；不触碰 `vscode.window`、面板或任何 UI；不把越界路径静默重写为合法路径，只拒绝。"
+        "text": "## Responsibility\n\n- **Names**: ProjectFileHost → `VscodeProjectFileHost`（`src/features/project/host/persistence/vscodeProjectFileHost.ts`）\n- 它只负责一件事：把 Project 存储所需的最小文件操作（读、写、列目录、删除）落到真实编辑器的工作区根上。`ProjectFileHost`（`./projectStore.ts`）只声明“相对路径进、内容或缺失出来”，本类是它的唯一实现，`ProjectStore`、`ProjectModelStore`、迁移与初始化检查点因此都不必接触 `vscode.workspace.fs`。\n- 它拥有“相对路径 → 工作区内 URI”的解析与越界防护，以及“缺失文件”与“其它失败”的语义区分。它不拥有任何项目文件的内容含义。\n\n## Design\n\n- **同一份路径规则，两种失败语义。** 宽松版 `readFile` / `listDirectory` 吞掉一切异常，回落到 `undefined` / `[]`，供“缺文件即用默认值”的上游路径使用；严格版 `readFileStrict` / `listDirectoryStrict` 只把 `FileNotFound` 翻译成 `undefined` / `[]`，其余错误必须向上抛出。上游对“没有文件”和“读坏了、没权限”的处理本来就不同，若只有一种语义，要么把损坏当成缺省静默吞掉，要么让缺省值路径因缺文件而失败。\n- **宽松路径只付语法校验的成本。** `readFile` / `listDirectory` 只走 `uri()`，不做 `stat` 与 `realpath`，因为这些方法在缺文件属常态的路径上被频繁调用；严格路径才叠加磁盘上的真实边界检查。\n- **路径收敛在 `uri()` 一处。** 空路径、`\\`、`:`，以及空段、`.`、`..` 一律拒绝，注释写明理由：`Project path must stay inside the workspace.`。所有方法都经由它，业务代码无法绕过。\n- **写入与删除再加一层真实边界。** `checkedUri()` 只在 scheme 为 `file` 时，用 `realpath` 逐级上溯到最近的已存在祖先，再与根目录 `relative` 比对，从而挡住符号链接逃逸（`Project path resolves outside the workspace.`）；非 `file` scheme（测试或远程提供者）直接放行，保持实现可替换。这也解释了为何写入、删除、严格读走 `checkedUri()`，而宽松读不需要。\n- **读预算与严格解码。** 严格读先 `stat`，超过 16 MB 抛 `Project document exceeds the read budget.`，并用 `new TextDecoder(\"utf-8\", { fatal: true })` 解码，避免把超大或二进制文件当成项目文档喂给解析层；宽松读复用 `../indexing/workspaceEvidence.js` 的 `textDecoder`。\n- **写入自带父目录。** `writeFile` 按 `/` 切段先 `createDirectory` 再 `writeFile`，调用方不必关心目录是否存在。\n- **删除意图必须精确。** `deleteFile` 显式 `recursive: false, useTrash: false`，既不递归，也不经过回收站。\n- **只列文件。** 两个列目录方法都过滤 `FileType.File`，因为项目存储按文件名而非目录树推理。\n- **共享编码器。** 文件导出 `textEncoder`，相邻宿主代码写好内容时复用同一个实例，避免各处重复构造。\n\n## Boundary\n\n- Allowed: 按工作区相对路径读取、写入、列目录、删除文件；抛出具名错误；依赖 `vscode`、`node:path` 的 `dirname` / `isAbsolute` / `relative`、`node:fs/promises` 的 `realpath`，以及索引层共享的 `textDecoder`；导出 `textEncoder` 供同层存储代码使用。\n- Forbidden: 不解析或校验 `ProjectDefinition` 与模型 schema，不做迁移、版本比较、冲突合并或内容哈希（属于 `ProjectStore`、`ProjectModelStore` 与迁移逻辑）；不决定具体项目文件路径常量（由调用方给出）；不缓存文件内容；不触碰 `vscode.window`、面板或任何 UI；不把越界路径静默重写为合法路径，只拒绝。"
       },
       "paths": [
         "src/features/project/host/persistence/vscodeProjectFileHost.ts"
@@ -637,11 +621,11 @@
     {
       "id": "module:src-features-resources-browser-apiflow-ts",
       "kind": "module",
-      "title": "Resource documents",
-      "canonicalName": "Resource documents",
+      "title": "MethodRegistry",
+      "canonicalName": "MethodRegistry",
       "body": {
         "kind": "inline",
-        "text": "## Responsibility\n\n- **Names**: APIs / Resources pages → `src/features/resources/presentation/resourceDocuments.ts` (`renderResourceList`, `renderResourceDefinition`)\n- 拥有资源页本身：一份资源列表文档与一份资源定义文档的构建与 HTML 渲染（搜索、分组、命名空间/类别树、签名与参数、源码预览、详情页的 Execution flow 与声明参考），以及驱动这些页面的两个入口 wrapper `src/features/resources/presentation/apiPanel.ts` 和 `src/features/resources/presentation/globalResourcesPanel.ts`。\n- 拥有文档契约 `src/features/resources/contracts/resourceDocuments.ts`：`ResourceEntry`、`ResourceListDocument`、`ResourceDefinitionDocument`、`ResourcePanelOptions`、`ResourceEditorDataSource`，也就是说页面看到的数据形状由这里决定，而不是由读取器或运行时注册表决定。\n- 拥有把数据源渲染成文档的宿主适配器 `src/features/resources/host/apiEditorProvider.ts` 与 `src/features/resources/host/globalResourcesEditorProvider.ts`：它们只选择渲染函数与分组方式（`apiTree` 的命名空间树，或 `groupBy() === \"kind\"` 的类别树）。\n- 为什么是这种形状：页面是纯字符串渲染 + 一个契约，宿主因此永远不接触 DOM，Webview 因此可以只按需加载脚本；同一个渲染器被 APIs 页与 Global Resources 页复用，因为两者的差异只是分组与标题，不是内容模型。\n\n## Design\n\n- 契约与渲染分离：`resourceDocuments.ts` 里全是接收文档、返回字符串的函数（`renderResourceList`、`renderResourceDefinition`、`renderResourceTree`、`renderCategoryTree`、`renderReferenceModule`），没有 I/O、没有状态，所以同一份代码既能在编辑器标签页里跑，也能在 UI 脚本里被直接喂数据。\n- 两个页面是一次包装而不是两次实现：`apiPanel.ts` 只是带上 `apiTree: true`，`globalResourcesPanel.ts` 按 `RESOURCE_LABELS` 重排分组并带上 `categoryTree: true`；类别、搜索、刷新、源码跳转因此天然一致。\n- 只读、静态：条目里的 `api`、`apiFunctions`、`apiFlow`、`reference` 来自静态解析（`src/features/workflow/host/apiSource.ts`、`apiFlow.ts`、`apiReference.ts` 与 `contracts/apiReference.ts`、`contracts/apiFlow.ts`），页面从不 import 或执行 `.dext/api` 模块；`apiFlow` 的注释明确它“只在详情页解析，列表页绝不解析”，这是列表打开速度的直接约束。\n- Execution flow 的分层：`apiFlowDiagram.ts` 只产出 `flowchart LR` 源码与带 `data-api-flow-*` 钩子的空壳（节点 id 固定为 `n0`、`n1`…，与函数名无关，保证同一份源码每次一样）；真正的 SVG 由独立 Webview 入口 `src/features/resources/browser/apiFlow.ts` 生成，它通过 `src/platform/browser/markdownDiagrams.ts` → `src/platform/browser/mermaidRenderer.ts` 懒加载共享的 `mermaid.js`，因此 API 页面只在确有 flow 时才付出渲染器与 Mermaid 的体积，并与会话 Markdown 共用同一份严格模式、主题探测与串行渲染队列。\n- 交互留在页面内：`resourceClientScript` 就地按 `data-resource-search-text` 过滤、把折叠节点记进 `document.body.dataset.resourceCollapsed`，并以 `resourceOpen` / `resourceCommand` / `resourceNavigate` / `resourceScope` / `resourceCopy` 消息连同 `viewState` 回传宿主；剪贴板与历史记录属于宿主，页面不自己保存。\n- 图标是 `src/features/resources/presentation/resourceIcons.ts` 里的内联 SVG，因为 Webview 的 CSP 不与外部资源做交易。\n\n## Boundary\n\n- Allowed:\n  - 本功能自己的 `contracts/`、`presentation/`、`host/` 模块；\n  - `src/platform/editor-tabs/*`（`EditorTabState`、标签页管理器）用于持久化页面状态；\n  - `src/platform/browser/markdownDiagrams.ts` 以获得 SVG；\n  - `src/features/workflow/contracts/apiFlow.ts`、`contracts/apiReference.ts` 的类型，以及 `host/apiSource.ts`、`host/apiFlow.ts`、`host/apiReference.ts` 提供的静态解析结果；\n  - `src/features/resources/contracts/resourceSession.ts`（`RESOURCE_LABELS`、资源种类与作用域）。\n- Forbidden:\n  - 导入、执行 `.dext/api` 模块或 `dext` 运行时来生成页面内容；\n  - 在宿主里运行 Mermaid、解析 HTML 或触碰 DOM；\n  - 从运行时注册表或侧边栏资源缓存读取资源列表（那是执行分发的职责）；\n  - 在页面或渲染器里执行创建规则判定（“新增 API 被拦截”属于 `src/app/application.ts` 的保存流程）；\n  - 由页面直接写文件或访问剪贴板、自己维护导航历史；\n  - 把会话 Markdown 的渲染塞进这里，或以资源页为名复制一份 Mermaid 渲染器。"
+        "text": "## Responsibility\n\n- **Names**: Dext API → `MethodRegistry`（`src/features/workflow/domain/registry.ts`）；界面上这一族调用被称为 “Dext API”，代码里的名字是 `MethodRegistry`，两者指同一职责。\n- 它拥有“此刻到底存在哪些可调用方法”这一份唯一清单：以 `CallableDefinition.id` 为键存放定义，并把来源 `MethodSource`（`builtin` / `global` / `project`）贴在条目上，交出 `RegisteredCallable`。运行时按 id 解析一次调用、列表页按 id 列出方法、Webview 按 id 取标题与描述，读的都是它。\n- 它同时拥有条目的生命周期入口：`register`、`registerMany`、`get`、`list`、`clearExternal`，以及单调递增的 `version`。除此之外它什么也不做——不认 manifest、不读 TOML 与 Skill 目录、不执行 handler。\n- 形状如此，是因为生产者有三个（内建契约表、MCP manifest、运行期按 profile 重算的 CLI 字段），而“这个 id 是否存在、它的契约长什么样”只允许有一个答案；把冲突裁决收进一个类，调用方就不必各自记得谁能覆盖谁。\n\n## Design\n\n- 覆盖规则是一张数据表 `SOURCE_PRIORITY`（`builtin: 0`、`global: 1`、`project: 2`），而不是散落的 if：`register` 先做一条显式判断——已有条目是 `builtin` 而新来源不是，直接丢弃；再比较优先级，已有条目严格更高也丢弃。因此同优先级由后注册者覆盖，而内建契约永远不被外部来源改写（`test/registry.test.ts` 断言 `ask` 标题仍是 `Ask`、`chat` 不会被凭空登记）。\n- `builtin` 对自己仍可再注册，这是刻意的：`DextRuntime.setAgentProfiles` 会在 profile 变化时用 `builtinCliFields(profiles)` 重写 `cli` / `model` 字段，从而让四个模型调用的可选参数跟着当前 Agent 目录走，而不需要在注册表里存一份 profile。\n- `revision` 是变更计数，经 `version` getter 暴露；只有真正写入或删除才 `+1`，被拒绝的注册不动计数。目前 `src` 内还没有读取它的调用点，它只是给“清单是否变了”这类失效判断留的入口，不应被当成已使用的能力来引用。\n- `list()` 返回新数组并按 `id.localeCompare` 排序：调用方拿不到内部 `Map`、也无法改动它；投影到 Webview 与 API 页面时顺序稳定，不随注册先后抖动。`Map` 的插入顺序在这里不承载语义，只用于按 id 去重。\n- `clearExternal()` 只删 `source !== \"builtin\"` 的条目，并与重载路径成对出现：`DextApplication.reload()` 先清空外部来源，再把本次解析出的 manifest 方法重新登记，且只登记“服务器确实连上”的工具；被删掉的 manifest 或断连的工具不会残留，未知 id 的报错话术由 `DextRuntime.missingMethodMessage` 区分“未连接”和“根本没有”。因此重载既不需要重新注入内建定义，也不会丢掉内建定义。\n- 装配是单向的：`src/app/application.ts` 构造并持有注册表，构造期以 `builtin` 登记 `BUILTIN_METHODS`，重载期以 `project` 登记 manifest 方法；`DextRuntime` 只经 `get` / `register` 使用它；`src/extension.ts` 用 `application.registry.list()` 生成 APIs 页的数据源。注册表本身不导入任何一个生产者。\n\n## Boundary\n\n- Allowed: 仅依赖 `src/shared/contracts/types.ts` 的纯类型（`CallableDefinition`、`MethodSource`、`RegisteredCallable`）；被 `src/app/application.ts` 持有与登记，被 `src/features/workflow/host/runtime.ts` 读取与局部重注册，被 `src/extension.ts` 以 `list()` 投影到资源页。\n- Allowed: 新增或调整来源优先级、返回顺序与清空语义，只要覆盖规则仍以 `SOURCE_PRIORITY` 一处为准。\n- Forbidden: 不读文件、工作区、VS Code 配置或环境变量（manifest、TOML、Skill 目录都由 host 侧加载后再交给它）；不判断 MCP 服务器是否连通；不校验输入、不解析调用、不执行 handler；不提供跨来源冲突诊断（被丢弃的注册静默返回，报错话术归 `runtime` / `dextHost`）；不依赖 `vscode`、Node 内置模块或任何 `host/`、`browser/` 实现（它属于无环境的 `domain/` 纯层）。"
       },
       "paths": [
         "src/features/resources/browser/apiFlow.ts",
@@ -659,7 +643,8 @@
         "src/features/resources/host/globalResourcesEditorProvider.ts",
         "src/platform/browser/markdownDiagrams.ts",
         "src/shared/lib/markdownCopy.ts",
-        "src/platform/browser/mermaidRenderer.ts"
+        "src/platform/browser/mermaidRenderer.ts",
+        "src/features/workflow/domain/registry.ts"
       ],
       "origin": "inferred",
       "review": "draft",
@@ -675,7 +660,7 @@
       "canonicalName": "Built-in methods",
       "body": {
         "kind": "inline",
-        "text": "## Responsibility\n\n- **Names**: Built-in API → `BUILTIN_METHODS`（`src/features/workflow/domain/builtins.ts`）；对外文档称这一族调用为“Built-in API”，代码里的名字是 `BUILTIN_METHODS`，两者指同一个职责。\n- 这个模块只负责**声明**每个内建调用的契约：`id`、`title`、`description`、`kind`、`version`、`input` 字段列表、`output` 形状、`context` 与 `executor.handler` 句柄。它不执行任何调用，也不读取工作区、模型或 provider。\n- 声明的消费方是固定的几处：`src/app/application.ts` 以 `builtin` 来源把整张表注册进 `MethodRegistry`；`src/features/workflow/domain/dextApiTypes.ts` 用它生成 `dext` 模块声明；`src/features/workflow/domain/builtinTypeDefinitions.ts` 用它生成结果类型；`src/features/workflow/host/runtime.ts` 按 `method.executor.handler` 找到执行器；测试直接引用该表来断言语义契约。\n- 因为声明只有一份，编辑器补全、生成的 `.d.ts`、参数校验和运行时派发不可能各自漂移；改一个字段描述就是同时改四处。\n\n## Design\n\n- 表内每项都是 `CallableDefinition`，`id` 就是用户在 `dext` 模块里调用的名字（`ask`、`plan`、`agent`、`template`、`apply`、`terminal`、`skill`、`ui.*`）。`version` 固定为 `\"1.0.0\"`，`kind` 只有 `\"command\"` 与 `\"skill\"` 两种，`skill` 是唯一非 `command` 的项。\n- 需要读代码上下文的四个模型调用（`ask`、`plan`、`agent`、`template`）共享 `CONTEXTS = [selection, activeFile, file, symbol]`；`apply`、`terminal`、`ui.*`、`skill` 不声明 `context`，因为它们接受的是结果或直接输入，不解析 `@path` 引用。\n- `skills` 与 `rules` 字段被标为 `internal`：调用方确实会写它们，所以仍出现在生成的声明里，但运行时不会把它们当成 provider 的控制字段转发。\n- provider 相关字段不在本文件里手写。`BUILTIN_METHODS` 在导出前做一次映射：只有 `CLI_BUILTIN_IDS` 里的方法才追加 `builtinCliFields()` 带来的 `cli` 与 `model`，从而把 Codex/Claude/Harness/Pi 的模型选项交给 `src/features/agents/domain/builtinCli.ts` 一处维护，其余方法不会凭空多出 `cli`。\n- 七个 `ui.*` 由同一个 `uiDefinition(action)` 工厂从一个字面量 action 元组展开，`input`、`handler`（`uiSelect`…）与 `resultType`（`UiSelectResult`…）都用同一种首字母大写写法推导，所以七个变体在命名和结构上不会互相不一致。`presentation` 的默认值按动作区分：`form` 默认 `inline`，其余默认 `dialog`。\n- 表单的嵌套结构用 `FieldDefinition` 描述：`uiFieldDefinition()` 用 `discriminator` 按 `type` 分出 `select`/`radio`/`checkbox`/`input` 四种变体，`uiActionDefinition()` 与 `uiOptionDefinition()` 描述动作按钮和选项对象，让生成类型、参数校验和 Agent 的 JSON Schema 读的是同一棵树。\n- `uiOutputFields()` 集中说明交互结果的必填/可选划分：`kind`/`type` 判别字段和该动作的实际载荷必填，只有“没有产生文本”时才缺省的 `custom`/`value` 可选。\n\n## Boundary\n\n- Allowed: 引入 `src/shared/contracts/types.ts` 里的契约类型；引入同层领域模块（如 `src/features/agents/domain/builtinCli.ts`）；被 `src/app/`、同特性的 `domain/`、`host/` 以及测试引用。\n- Allowed: 新增或修改内建调用的契约数据（字段、描述、枚举、默认值、`context`、`executor.handler` 名字），只要对应执行器在 `src/features/workflow/host/runtime.ts` 的处理器表里存在。\n- Forbidden: 依赖 `vscode`、Node 内置模块或任何 DOM 全局——它属于无环境的纯层（`domain/`），`scripts/checkModuleBoundaries.mjs` 会拒绝。\n- Forbidden: 依赖 `src/app/`、`src/webview/`、`src/runner/`，或任何特性的 `host/`、`browser/` 实现；也不得在此执行调用、读写文件、启动进程或访问模型。\n- Forbidden: 在此文件里做 provider 特化、参数解析、默认值补全或结果校验——那属于 `builtinCli.ts`、`runtime.ts` 与 `axAdapter.ts`；本文件只描述契约。"
+        "text": "## Responsibility\n\n- **Names**: Built-in API → `BUILTIN_METHODS`（`src/features/workflow/domain/builtins.ts`）\n- 它只拥有一件事：为每个内建调用声明**唯一一份契约**——`id`、`title`、`description`、`kind`、`version`、`input` 字段列表、`output` 形状（含 `ui.*` 的结果字段）、`context`，以及 `executor.handler` 的处理器名。它不执行任何调用，也不读工作区、模型或 provider。\n- 声明的消费方固定为四处，因此改一处即同时改四处：`src/app/application.ts` 以 `builtin` 来源把整张表注册进 `MethodRegistry`；`src/features/workflow/domain/dextApiTypes.ts` 用它生成 `dext` 模块声明（含 `ui` 组与结果类型）；`src/features/workflow/domain/builtinTypeDefinitions.ts` 用它生成结果类型目录；`src/features/workflow/host/runtime.ts` 按 `method.executor.handler` 找到执行器。测试直接引用该表断言语义契约。\n- 标题取代码名；文档里这一族调用写作 `Built-in API`（`docs/workflows.md`），代码里没有同名模块，两者指同一职责。\n\n## Design\n\n- 表内每项都是 `CallableDefinition`，`id` 就是用户在 `dext` 模块里调用的名字（`ask`、`plan`、`agent`、`template`、`apply`、`terminal`、`ui.*`、`skill`）。`version` 固定为 `\"1.0.0\"`，`kind` 只有 `command` 与 `skill` 两种，`skill` 是唯一非 `command` 的项。\n- 需要读代码上下文的四个模型调用（`ask`、`plan`、`agent`、`template`）共享 `CONTEXTS = [selection, activeFile, file, symbol]`；`apply`、`terminal`、`ui.*`、`skill` 不声明 `context`，因为它们接受的是结果或直接输入，不解析 `@path` 引用。\n- `skills` 与 `rules` 被标为 `internal`：调用方确实会写它们，所以仍出现在生成的声明里（`dextOptionsType` 只对 `CONVERSATION_METHODS` 放行 `internal` 字段），但运行时不把它们当成 provider 的控制字段转发。\n- provider 相关字段不在本文件里手写。`BUILTIN_METHODS` 在导出前做一次映射：只有 `CLI_BUILTIN_IDS` 命中的方法才追加 `builtinCliFields()` 带来的 `cli` 与 `model`，从而把 Codex / Claude / Harness / Pi 的模型选项交给 `src/features/agents/domain/builtinCli.ts` 一处维护，其余方法不会凭空多出 `cli`。该集合由两个文件共用（运行时用同一个判定做 `specializeBuiltinCli` 收窄与 `builtinCliMetadata` 解析），它是本表的超集——还包含本表没有定义的 `create`，所以只有表里真实存在的 id 会命中。\n- 七个 `ui.*` 由同一个 `uiDefinition(action)` 工厂从一个字面量 action 元组展开，`input`、`handler`（`uiSelect`…）与 `resultType`（`UiSelectResult`…）都用同一种首字母大写写法推导，所以七个变体在命名和结构上不会互相不一致。`presentation` 的默认值按动作区分：`form` 默认 `inline`，其余默认 `dialog`。\n- 表单的嵌套结构用 `FieldDefinition` 描述：`uiFieldDefinition()` 用 `discriminator` 按 `type` 分出 `select`/`radio`/`checkbox`/`input` 四种变体，`uiActionDefinition()` 与 `uiOptionDefinition()` 描述动作按钮和选项对象，让生成类型、参数校验与 Agent 的 JSON Schema 读的是同一棵树。\n- `uiOutputFields()` 集中说明交互结果的必填/可选划分：`kind`/`type` 判别字段和该动作的实际载荷必填，只有「没有产生文本」时才缺省的 `custom`/`value` 可选，这正对应运行时省略它们的行为；`builtinTypeDefinitions.ts` 直接取 `ui.form` 的 `answers.properties` 生成 `UiFieldAnswer`，不再手抄一份。\n- 描述文本本身就是契约的一部分，因为它出现在 hover、API 页面与声明注释里：`apply` 的说明写明无 patch 的 `AgentResult` 返回 `unchanged` 而畸形 patch 仍抛错，`terminal` 的说明写明它无确认提示、由工作流自行判断安全性。所以这里是「声明的行为约束」，而不是执行实现。\n\n## Boundary\n\n- Allowed: 引入 `src/shared/contracts/types.ts` 的契约类型；引入同层领域模块（如 `src/features/agents/domain/builtinCli.ts`）；被 `src/app/`、本特性的 `domain/` 与 `host/` 以及 `test/` 引用。\n- Allowed: 新增或修改内建调用的契约数据（字段、描述、枚举、默认值、`context`、`executor.handler` 名字），只要对应执行器在 `src/features/workflow/host/runtime.ts` 的处理器表里存在。\n- Forbidden: 依赖 `vscode`、Node 内置模块或任何 DOM 全局——它属于无环境的纯层（`domain/`），`scripts/checkModuleBoundaries.mjs` 会拒绝。\n- Forbidden: 依赖 `src/app/`、`src/webview/`、`src/runner/`，或任何特性的 `host/`、`browser/` 实现。\n- Forbidden: 在此执行调用、读写文件、启动进程或访问模型；也在此做 provider 特化、参数解析、默认值补全或结果校验——那属于 `builtinCli.ts`、`runtime.ts` 与 `axAdapter.ts`，本文件只描述契约。\n- Forbidden: 把 manifest 派生的 MCP 工具、项目 API 或 Skill 目录内容写死在表里；它们由 `MethodRegistry` 与装配层按来源另行登记，这张表只放不随工作区变化的内建项。"
       },
       "paths": [
         "src/features/workflow/domain/builtins.ts"
@@ -694,7 +679,7 @@
       "canonicalName": "Method signature",
       "body": {
         "kind": "inline",
-        "text": "## Responsibility\n- **Names**: Method signature → src/features/workflow/domain/methodSignature.ts\n- 该模块拥有 Dext API 的参考签名表示：把 `FieldDefinition` 渲染为字段类型、参数和默认值，把 `RegisteredCallable.output` 解析为结果类型名，并维护“调用方仍可看到 `skills`/`rules`”的会话方法名单。它只描述契约，不执行契约。\n\n## Design\n- 以纯函数和无环境依赖的方式实现，唯一导入是 `shared/contracts/types.ts` 的类型；因此同一套类型与结果命名规则可被声明生成、内置类型目录、资源页和运行时复用，而不需要各自再写一套格式化规则。\n- `formatFieldType` 递归处理 `object`/`list`/`result`/`enum`，合并 `accepts`，并在 `multiple` 时产出数组 union；`formatMethodParameter` 负责 `?` 与默认值；`methodResultType` 优先使用显式 `resultType`，否则由 `output.kind` 推导 `*Result`。这些规则直接对应公开契约字段，所以模块保持很小，不引入解释器或注册表状态。\n- `CONVERSATION_METHODS` 显式列出 `ask`、`plan`、`agent`、`template`，而不是从字段标志推导：`skills`/`rules` 在运行时仍是 `internal`，只有这四个 API 把它们暴露为调用方选项；把例外集中为一个只读集合，避免各展示面与运行时分派出现不一致。\n\n## Boundary\n- Allowed: 读取 `shared/contracts/types.ts` 中的 `FieldDefinition`、`RegisteredCallable`；提供纯字符串格式化与只读方法名单；被声明生成、内置类型参考、资源面板和运行时复用。\n- Forbidden: 不定义、校验或变更字段契约；不执行 Agent、Skill、MCP 或终端调用；不读写文件、网络或 VS Code/DOM；不生成完整 TypeScript 声明，也不自行决定哪些 `internal` 字段应传给 provider（由调用方按名单处理）。"
+        "text": "## Responsibility\n\n**Names**: Method signature → src/features/workflow/domain/methodSignature.ts\n\n- 它拥有 Dext API 的**参考签名表示**：把 `FieldDefinition` 渲染成参数文本、把 `RegisteredCallable.output` 解析成结果类型名，并维护“哪几个会话方法仍向调用方暴露 `skills` / `rules`”这一份只读名单。\n- 它只描述契约，不执行契约：不解析调用、不校验输入、不跑 Agent、不读工作区。`formatFieldType`、`formatMethodParameter`、`methodResultType`、`CONVERSATION_METHODS` 是它全部的对外面。\n- 因为“签名长什么样”只有这一处实现，资源页的参考签名、生成的 `dext` 声明、内建结果类型目录与运行时分派不可能各自漂移。\n\n## Design\n\n- **纯函数、单导入**：唯一 import 是 `../../../shared/contracts/types.js` 的类型，没有 `vscode`、Node 或 DOM，因此属无环境纯层，测试与三个消费方都能直接使用。\n- **类型渲染是递归的**：`formatFieldType` 先按 `type` 与 `accepts` 逐个渲染再合并去重；`object` 有 `properties` 时展开成 `{ ... }`、否则退为 `dict[str, object]`，`list` 递归到 `items`，`enum` 渲染成字面量联合（空集合回退 `string`），`result` 与 `shapeType` 优先使用显式命名类型。`multiple` 时补成“标量 | 数组”的联合，并在存在多个标量时给数组元素加括号。\n- **参数只补可选性与默认值**：`formatMethodParameter` 用 `required ? \"\" : \"?\"` 与 ` = ` + `formatDefault` 拼出一个参数；默认值的字符串走 `JSON.stringify`，布尔渲染成 `True` / `False`。这套记法（`list[...]`、`dict[...]`、`True`）是 Dext 文档侧的参考签名风格，不是 TypeScript——真正的 `.d.ts` 由 `dextApiTypes.ts` 自己生成，只向本模块借 `methodResultType` 与 `CONVERSATION_METHODS`。\n- **结果类型名有确定的优先级**：`methodResultType` 先用显式 `output.resultType`，否则由 `output.kind` 首字母大写加 `Result` 推导，所以新增一种 `kind` 不必再补一张映射表。\n- **例外集合显式写出而不是推导**：`skills` / `rules` 在契约里是 `internal`，运行时不会把它们当 provider 控制字段转发；但对 `ask` / `plan` / `agent` / `template` 这四个方法，它们是调用方真实可传的选项。把这四个 id 放在一个 `ReadonlySet` 里，让声明生成与资源页的过滤规则（`!field.internal || CONVERSATION_METHODS.has(id)`）和运行时的行为（是否加载技能、`workspace` 参数是否决定 `cwd`）读同一个答案。\n- **不缓存、不构造成本**：全部是纯字符串函数与一个不可变集合，调用方每次现用现算，无需失效通知，也不会因注册表变化而读到过期签名。\n\n## Boundary\n\n- Allowed: 读取 `shared/contracts/types.ts` 中的 `FieldDefinition`、`RegisteredCallable`；提供纯字符串格式化与只读方法名单；被 `src/features/resources/host/resourceEditorProvider.ts`（参考签名）、`src/features/workflow/domain/dextApiTypes.ts`（声明生成）、`src/features/workflow/domain/builtinTypeDefinitions.ts` 与 `src/features/workflow/host/runtime.ts`（技能加载、`cwd` 解析）复用。\n- Forbidden: 不定义、校验或修改字段契约本身（字段来自 `BUILTIN_METHODS` 与 manifest）；不执行 Agent、Skill、MCP 或终端调用；不读写文件、网络、VS Code 或 DOM；不生成完整的 TypeScript 声明（那是 `dextApiTypes.ts` 的职责）；不自行决定哪些 `internal` 字段应传给 provider——名单只声明例外，转发由运行时按它执行。"
       },
       "paths": [
         "src/features/workflow/domain/methodSignature.ts"
@@ -751,7 +736,7 @@
       "canonicalName": "DextReplayEntry",
       "body": {
         "kind": "inline",
-        "text": "## Responsibility\n\n- **Names**: DextReplayEntry → `src/shared/contracts/replay.ts`\n- 拥有一次 Code 运行中单个已记录 API 调用的可重放描述：方法名、调用参数与响应。它只定义跨扩展宿主与 kernel 传递的数据形状，不执行记录、匹配或重放。\n- 该契约让 `src/runner/dextResumeCache.ts` 与 `src/features/conversations/contracts/execution.ts` 共用同一结构，避免会话层依赖 runner 实现。\n\n## Design\n\n- 只有三个字段：`method`、`arguments`、`response`；没有 id、时间戳或序号，调用顺序由数组下标表达，重放身份由“位置 + `method` + `arguments`”在消费端计算。\n- `arguments` 是 `Record<string, unknown>`，`response` 是 `unknown`，因为记录层不知道也不应知道每个 API 方法的具体参数与结果类型；响应保持不透明，才能原样交还给下一次运行。\n- 结构必须是可 JSON 序列化的普通对象，才能穿过扩展宿主与子进程的协议边界；因此没有类、方法或运行时校验。\n- 不引入重放策略：匹配失败由 kernel 抛出，记录由 `DextResumeCache` 完成，这里只负责“一条记录长什么样”。\n\n## Boundary\n\n- Allowed: 被 `src/runner/`、`src/features/conversations/contracts/` 及测试以 `import type` 引用；通过 `dextResumeCache.ts` 再导出；作为 JSON 数据在 host 与 kernel 之间传递。\n- Forbidden: 导入 Node、VS Code、kernel 或任何 feature 实现；承载记录、比较、重放、持久化或校验逻辑；为特定 API 方法增加专用字段；把 UI 文案或产品名写进契约。"
+        "text": "## Responsibility\n\n- **Names**: DextReplayEntry → `src/shared/contracts/replay.ts`\n- 它只拥有一个数据形状：Code 运行期间**一次已记录 API 调用**的可重放描述——方法名、调用参数与响应。它是纯契约文件，没有任何行为。\n- 之所以值得单独成一个文件，是因为它被两个环境共用：会话侧（`src/features/conversations/contracts/execution.ts`）与内核侧的重放记录（`src/runner/dextResumeCache.ts`）需要同一个结构，而会话层不允许反向依赖 `src/runner/` 的实现。把它放进 `src/shared/contracts/`，双方就只依赖契约而不依赖彼此。\n\n## Design\n\n- **只有三个字段**：`method`、`arguments`、`response`。没有 id、时间戳或序号——调用顺序由数组下标表达，重放身份由消费端按“位置 + `method` + `arguments`”计算，所以契约本身不需要再携带一份序号。\n- **值必须不透明**：`arguments` 是 `Record<string, unknown>`，`response` 是 `unknown`。记录层不知道、也不应该知道每个 API 方法的具体参数与结果类型；响应保持不透明，才能在重试时原样交还给下一次运行，而不是在过境时被某份 schema 重新解释。\n- **必须是可 JSON 序列化的普通对象**：这条数据要穿过扩展宿主与 kernel 子进程之间的消息边界，所以它刻意没有类、方法、运行时校验、默认值或 `readonly` 修饰。契约的形状就是线上能传的形状。\n- **不预设重放策略**：何时回放、匹配失败怎么办由内核抛出，记录与查找由 `DextResumeCache` 完成；这里只回答“一条记录长什么样”。把策略留在消费端，同一份契约才能同时服务于“记录”和“重放”两个方向。\n\n## Boundary\n\n- Allowed: 被 `src/runner/`、`src/features/conversations/contracts/` 与测试以 `import type` 引用；经 `dextResumeCache.ts` 再导出；作为 JSON 数据在 host 与 kernel 之间传递。\n- Forbidden: 导入 Node、VS Code、kernel 或任何 feature 实现（不得让共享契约反向依赖环境或业务）；承载记录、比较、重放、持久化或校验逻辑；为特定 API 方法增加专用字段；把 UI 文案或产品名写进契约。"
       },
       "paths": [
         "src/shared/contracts/replay.ts"
@@ -762,6 +747,180 @@
       "confidence": 0,
       "evidence": [],
       "properties": {}
+    },
+    {
+      "id": "module:src-features-agents-contracts-pi-ts",
+      "kind": "module",
+      "title": "Pi agent runner",
+      "canonicalName": "Pi agent runner",
+      "body": {
+        "kind": "inline",
+        "text": "## Responsibility\n\n- **Names**: Pi → `PiAgentRunner`（`src/features/agents/host/piAgentRunner.ts`）\n- 它只拥有一件事：把一轮对话交给已安装的 Pi CLI 跑完，并把这轮的结果交回 Dext。具体包含五个部分：用 `PiRpcTransport` 持有一条长活的双向 RPC 连接；用 `piCommand` 把 Dext 的权限、信任与工具集合翻译成 Pi 的启动参数；用 `piModels` 解析模型 id、思考层级与可恢复的会话绑定；用 `piEvents` 把 Pi 的记录流翻译成 `AgentStreamEvent`；用 `PiBridge` 在回合内为 Pi 提供宿主侧能力（提问、`dext_fetch`、`dext_project_query`、`dext_submit_result`）。\n- 它还拥有“这一轮能不能续、能不能写”的判定：`binding()` 把工作区根、信任状态、权限、CLI 身份、额外参数、MCP 清单与用户级/项目级配置内容哈希成一个标识，只有标识一致时才允许恢复 provider 会话；`validateSession` 要求保存的会话文件 `realpath` 落在 Dext 的 session 目录内。\n- 标题取代码名。文档把这一族能力写作 **Pi**（`docs/agents.md`），代码以 `PiAgentRunner` 作为唯一实现入口，两者指同一职责。\n\n## Design\n\n- **单向分层，各管一段**：`contracts/pi.ts` 只有线协议形状与两个收窄辅助（`piObject`、`piText`）；`domain/` 的 `piEvents`、`piModels` 是纯函数与累加器；`host/` 才允许 `node:child_process`、`node:fs`、`node:net`、`node:dns`。这样事件映射与模型编解码可以在没有进程的测试里跑完整矩阵，而传输层不认识 Pi 语义。\n- **一条会话一条连接，一个 key 一条队列**：`sessions` 以会话 key 存 `Session`，`queues` 以同一 key 串行化回合，因为一个 Pi 会话不能并发跑两个 turn；`run()` 只把契约包进提示词，`runConversation()` 才做排队、取消与生命周期。\n- **取消走一个 AbortController，而不是散落的 kill**：停止时按 `clear_queue` → `abort_retry` → `abort` 顺序尝试，再关闭连接；传输的 `close()` 先拒绝所有 pending，结束 stdin，留 500 ms 宽限后在 Windows 用 `taskkill /t /f`、在 POSIX 杀整个进程组，避免留下孤儿 Pi 进程。\n- **桥是私有的，且只在一个回合内有效**：`PiBridge` 绑定 Windows 命名管道或 tmpdir 下的 unix socket，用 24 字节 token 认证唯一对端，超过 1 MB 缓冲或畸形帧即断开；`bridgeRequest` 先核对 `session.active`、`done` 与 abort 状态，再按 `question`/`fetch`/`project_query`/`submit_result` 分派，旧回合的回调拿到的只有 `unavailable`。宿主 id 与 Pi id 之间的映射只存在于这一次桥里。\n- **结果是当场校验，不是事后修复**：`submit_result` 用 `contract.outputSchema.safeParse` 校验，失败把 `formatDiagnostics` 的文本回给 Pi，提示词里写明“在同一轮修好”；只有通过才记账成 `submitted`。这里刻意不复用 `ResultRepair` 的 ax 修复循环，因为 Pi 有原生工具调用通道，多一次 CLI 往返只会更贵。\n- **权限只有两档，写必须显式**：`piPermission` 把“未授予写”收敛为 `read-only`；写要求可信工作区且调用方显式选了 `full-access`，`Workspace write` 直接报错而不是悄悄降级。`piTools` 由此推导工具白名单：只读回合没有写、编辑、shell 与 `mcp__*`，`dext_fetch` 只在可信的只读回合出现，`dext_project_query` 还要 `projectQuery` 打开。\n- **模型与默认值是读出来的**：`discoverModels` 打开一个 `--no-session` 的临时会话读 Pi 自己的模型目录与思考层级，`defaults` 按 binding 记住干净启动值；`select()` 校验 Pi 真的切到了请求的模型与层级，静默改动即报错，显式清空则回落到 CLI 默认值。\n- **用量是差值而不是累计**：`PiEvents` 先 `setBaseline(get_session_stats)`，结束时再取一次，只有非负差值且不小于消息级合计时才采用，避免把会话历史算进本轮；缺少统计也不影响已经拿到的答案。\n- **网络出口只有一个**：读只读网页必须经 `piFetch`，它拒绝非 http(s)、内嵌凭据、`localhost`/`.local`、回环/私有/链路本地/组播地址，手动跟随最多 5 次重定向，20 秒超时、512 KB 截断，并且不发送任何凭据。\n\n## Boundary\n\n- Allowed: 使用 `node:child_process`、`node:fs/promises`、`node:path`、`node:os`、`node:crypto`、`node:net`、`node:dns/promises` 与 `node:string_decoder`；依赖 `contracts/pi.ts`、`contracts/agent.ts`、`domain/piEvents.ts`、`domain/piModels.ts`、`domain/agentTimeout.ts`、`domain/harnessResultTool.ts`、`host/agentRunner.ts` 的请求/响应形状、`shared/contracts/types.ts`、`shared/contracts/uiForm.ts`、`shared/protocol/executionErrors.ts` 与 `shared/protocol/resultBoundary.ts`。\n- Allowed: 通过注入的请求端口向宿主提问（`requestAgentInput`）、渲染 Dext 表单（`ui.form`）、查询 Project（`projectQuery`）、上报会话绑定（`onAgentSessionId`）与事件（`onEvent`）；`PiRunnerOptions` 允许替换 `transportFactory` 与 `versionProbe`，`extensionPath` / `sessionDirectory` 由装配层给出。\n- Allowed: 由 `DefaultAgentRunner` 按 `profile.provider` 派发，由 `src/app/application.ts` 传入扩展路径、会话目录与超时上限；`dispose()` / `endSession()` 让宿主在停用或删除会话时收干净。\n- Forbidden: 不安装、下载、认证或修复 Pi CLI，也不改写 Pi 的模型与凭据文件；不拥有 Agent profile 目录、模型选择存储与权限默认值（属于 `AgentProfileStore`）。\n- Forbidden: 不做通用的 `DextResult` 解析与多次修复，不把 ax/zod 错误对象外泄；不拥有会话历史、轮次渲染、Plan 或 Code 内核执行。\n- Forbidden: 不新增第二条网络出口或第二条 RPC 通道；不在只读回合保留写工具与 `mcp__*`；不把 `Workspace write` 静默升级成 `full-access`；不从 Dext 的 session 目录之外恢复会话；不在 `dispose()` 后接受新回合。"
+      },
+      "paths": [
+        "src/features/agents/contracts/pi.ts",
+        "src/features/agents/domain/piEvents.ts",
+        "src/features/agents/domain/piModels.ts",
+        "src/features/agents/host/piAgentRunner.ts",
+        "src/features/agents/host/piBridge.ts",
+        "src/features/agents/host/piCommand.ts",
+        "src/features/agents/host/piFetch.ts",
+        "src/features/agents/host/piInteractions.ts",
+        "src/features/agents/host/piRpcTransport.ts",
+        "src/features/agents/domain/builtinCli.ts",
+        "src/features/workflow/domain/builtinTypeDefinitions.ts",
+        "src/features/agents/domain/harnessPresetDefault.ts",
+        "src/features/agents/domain/harnessQuestions.ts",
+        "src/features/agents/host/harnessBridge.ts",
+        "src/features/agents/domain/harnessResultTool.ts",
+        "src/features/agents/host/harnessCommand.ts",
+        "src/features/agents/domain/axAdapter.ts",
+        "src/features/agents/host/deepseekHarnessRunner.ts",
+        "src/features/agents/host/deepseekHarnessPolicy.ts",
+        "src/features/agents/host/deepseekHarnessTransport.ts",
+        "src/features/agents/host/harnessPresets.ts",
+        "src/features/agents/host/resultRepair.ts",
+        "src/shared/protocol/resultBoundary.ts",
+        "src/shared/protocol/resultSerialization.ts",
+        "src/features/agents/host/cliAxAIService.ts",
+        "src/features/agents/domain/cliCompletion.ts",
+        "src/features/project/host/generation/projectAiGeneration.ts",
+        "src/features/project/host/generation/projectAiProvider.ts",
+        "src/features/project/host/generation/projectModelCheckpoint.ts",
+        "src/features/project/host/generation/projectModelQuality.ts",
+        "src/features/project/contracts/projectDiagram.ts",
+        "src/features/project/contracts/projectArchitectureTypes.ts"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0,
+      "evidence": [],
+      "properties": {}
+    },
+    {
+      "id": "module:src-features-workflow-domain-workflowrecorder-ts",
+      "kind": "module",
+      "title": "Workflow recorder",
+      "canonicalName": "Workflow recorder",
+      "body": {
+        "kind": "inline",
+        "text": "## Responsibility\n\n- **Names**: Record Conversation as Dext Workflow → `recordWorkflow`（`src/features/workflow/domain/workflowRecorder.ts`，模块名 `workflowRecorder`，同文件导出 `recordedApiName`）；界面上的名字是命令 `dext.history.recordWorkflow`，代码名仍以 `recordWorkflow` 为准。\n- 它只做一件事：把一次对话的历史轮次（`RecordedTurn`）折算成一份可编辑的 TypeScript API 骨架（`RecordedWorkflow`：`fileName`、`apiId`、`source`），并把这个骨架建议放在 `.dext/api` 下。它既不查询历史，也不写盘、不注册 API。\n- 之所以只有这一层，是因为“从对话生成工作流”唯一需要判断的东西就是文本映射：哪一轮算一步、用什么方法、返回什么类型、哪些字符串其实是参数。把这些判断收在一处，宿主（`src/extension.ts` 的 `recordConversation`）才能只负责落盘、重载与打开文件。\n\n## Design\n\n- **输入被刻意收窄**：`RecordedTurn` 只有 `input`、`mode`、`response`、`error` 四个字段，注释写明“刚好够记录一轮”，因此本模块不需要 `Memento`、不需要历史存储，测试可以直接构造轮次。\n- **失败轮次直接消失，而不是被猜着补全**：`recordWorkflow` 先过滤空输入与 `error`，若一轮都不剩就抛 `This conversation has no successful turn to record.`；剩下的轮次按原顺序一一变成 `step_N`，绝不合并或重排。\n- **名字是纯函数且必须能当标识符**：`recordedApiName` 取第一条长度 ≥ `MIN_TITLE_LENGTH`（3）的输入，小写化、去掉 `@path` 引用、非字母数字折成 `_`、截断 40 字符，再剥掉开头的数字与下划线，全不可用则回退 `recorded_workflow`；重名时的编号后缀由宿主追加，本模块不处理冲突。\n- **复用即参数化**：出现在两轮及以上的同一段输入才被提升为 `main()` 参数（`prompt`、`prompt_2`…），只出现一次的输入保留为字面量——参数化一次性输入等于凭空发明一个对话从未变化过的入参。\n- **确认变成闸门**：`ui.confirm` 调用被还原为 `gate_N_M` 变量加一行注释，而不用 `if` 包住后续步骤，因为骨架的用途是可编译的起点，猜测“No 该跳过哪些步骤”反而会写错。\n- **Code 模式轮次只注释、不重写**：那一轮本来就是 TypeScript，再包一层 `agent()` 会改变它的行为，所以原文逐行加 `//` 保留给作者粘贴。\n- **返回类型跟随真实结果**：`returnType` 取最后一轮结果 `kind` 经 `RESULT_TYPES` 映射出的 `*Result`，缺失时按方法回落 `AgentResult`/`AskResult`；若全部轮次都是 Code 模式则没有可返回的值，改为 `Promise<void>` 与一句 `console.log` 提示。\n- **语法上必须可擦除**：生成的 `import` 只引入实际用过的方法（初始含 `ask`、`ui`）与 result 类型（`type AskResult` 这类，因为结果接口由 `dext` 模块导出而非全局），`test/workflowRecorder.test.ts` 用 `stripTypeScriptTypes` 验证骨架能被 runner 的擦除通道接受——擦不掉的骨架比没有骨架更糟。\n\n## Boundary\n\n- Allowed: 唯一导入是 `src/shared/contracts/types.ts` 的 `DextResult`、`InputExecutionResponse` 类型；输出字符串由宿主 `src/extension.ts` 的 `recordConversation` 写入 `.dext/api`；被 `dext.history.recordWorkflow` 命令与测试直接调用。\n- Allowed: 生成注释里带有记录日期与“编辑后再保存”的提示，属于骨架文本的一部分。\n- Forbidden: 读写文件系统或工作区、创建 `.dext/api` 目录、检测重名、调用 `application.reload()` 或打开编辑器（都在宿主侧）；读取 `vscode`、Node 内置模块或任何存储/偏好实现；查询或改写历史、Plan、Project 数据；执行生成的代码或校验其运行结果（只保证可擦除）；把它写成第二套工作流语言——骨架里只允许出现 `dext` 模块已有的方法与结果类型。"
+      },
+      "paths": [
+        "src/features/workflow/domain/workflowRecorder.ts"
+      ],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0,
+      "evidence": [],
+      "properties": {}
+    },
+    {
+      "id": "area:agent-provider-runtime",
+      "kind": "capability",
+      "title": "Agent provider runtime",
+      "canonicalName": "Agent provider runtime",
+      "body": {
+        "kind": "inline",
+        "text": "**Names**: AgentProvider / AgentProfile → src/features/agents/contracts/agent.ts；DextApplication → src/app/application.ts。\n宿主侧会话运行时：DextApplication 负责整体接线与调度，AgentProfile/AgentProvider 定义 codex、claude、deepseek-harness、pi 四类 agent 的配置与权限；pi.ts 描述 pi runner 契约，codexConversationEvents 把 Codex 事件转换为 AgentStreamEvent，elicitationForm 生成并回收结构化提问结果，outputLanguage 解析输出语言，toml 提供 TOML 解析。"
+      },
+      "paths": [],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0,
+      "evidence": [],
+      "properties": {
+        "moduleIds": [
+          "module:src-app-application-ts",
+          "module:src-features-agents-contracts-agent-ts",
+          "module:src-features-agents-contracts-pi-ts",
+          "module:src-features-agents-domain-codexconversationevents-ts",
+          "module:src-features-agents-domain-elicitationform-ts",
+          "module:src-features-agents-domain-outputlanguage-ts",
+          "module:src-features-agents-host-toml-ts"
+        ]
+      }
+    },
+    {
+      "id": "area:conversation-workspace-surfaces",
+      "kind": "capability",
+      "title": "Conversation workspace surfaces",
+      "canonicalName": "Conversation workspace surfaces",
+      "body": {
+        "kind": "inline",
+        "text": "**Names**: AgentTraceView → src/features/conversations/browser/agentTraceView.ts；ComposerDraftStore → src/features/conversations/browser/composerController.ts。\n会话前端交互层：ComposerDraftStore 管理草稿与附件，AgentTraceView 汇总 agent 工具轨迹，imageAnnotation 提供图片标注几何与文本合成，scrollProbe 测量结果区滚动，skillSelection 处理 skill pack 勾选，preferences 定义历史排序与布局偏好，planFile 生成 Plan 文件路径。"
+      },
+      "paths": [],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0,
+      "evidence": [],
+      "properties": {
+        "moduleIds": [
+          "module:src-features-conversations-browser-agenttraceview-ts",
+          "module:src-features-conversations-browser-composercontroller-ts",
+          "module:src-features-conversations-browser-imageannotation-ts",
+          "module:src-features-conversations-browser-scrollprobe-ts",
+          "module:src-features-conversations-browser-skillselection-ts",
+          "module:src-features-conversations-contracts-preferences-ts",
+          "module:src-features-conversations-domain-planfile-ts"
+        ]
+      }
+    },
+    {
+      "id": "area:project-knowledge-host",
+      "kind": "capability",
+      "title": "Project knowledge host",
+      "canonicalName": "Project knowledge host",
+      "body": {
+        "kind": "inline",
+        "text": "**Names**: VscodeProjectFileHost → src/features/project/host/persistence/vscodeProjectFileHost.ts；ProjectEvidencePackage → src/features/project/contracts/evidence.ts。\n项目知识宿主侧：VscodeProjectFileHost 通过 VS Code 工作区读写项目文件，projectInitializationCheckpointStore 保存初始化检查点，projectDiagramViewer 校验图表导出并维护 DiagramTaskRegistry，archifyBridge 提供 iframe 视图桥与消息校验，evidence 定义证据包与选取契约。"
+      },
+      "paths": [],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0,
+      "evidence": [],
+      "properties": {
+        "moduleIds": [
+          "module:src-features-project-browser-archifybridge-ts",
+          "module:src-features-project-contracts-evidence-ts",
+          "module:src-features-project-host-diagrams-projectdiagramviewer-ts",
+          "module:src-features-project-host-persistence-projectinitializationcheckpointstore-ts",
+          "module:src-features-project-host-persistence-vscodeprojectfilehost-ts"
+        ]
+      }
+    },
+    {
+      "id": "area:method-registry-host",
+      "kind": "capability",
+      "title": "Method registry host",
+      "canonicalName": "Method registry host",
+      "body": {
+        "kind": "inline",
+        "text": "**Names**: ApiFlow → src/features/resources/browser/apiflow.ts；McpToolConfig → src/features/mcp/contracts/mcp.ts。\n方法与工具注册：ApiFlow 记录可调用方法的流转与装配，builtins 声明内置方法集合，methodSignature 生成方法签名与结果类型，workflowRecorder 从 turn 录制 workflow，DextReplayEntry 描述可回放条目，mcp 定义 MCP server/tool 配置与凭据种类。"
+      },
+      "paths": [],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "current",
+      "confidence": 0,
+      "evidence": [],
+      "properties": {
+        "moduleIds": [
+          "module:src-features-resources-browser-apiflow-ts",
+          "module:src-features-mcp-contracts-mcp-ts",
+          "module:src-features-workflow-domain-builtins-ts",
+          "module:src-features-workflow-domain-methodsignature-ts",
+          "module:src-features-workflow-domain-workflowrecorder-ts",
+          "module:src-shared-contracts-replay-ts"
+        ]
+      }
     }
   ],
   "relations": [
@@ -2436,7 +2595,612 @@
       "origin": "detected",
       "review": "draft",
       "freshness": "needs_verification"
+    },
+    {
+      "id": "project--contains--module:src-features-agents-contracts-pi-ts",
+      "from": "project",
+      "to": "module:src-features-agents-contracts-pi-ts",
+      "kind": "contains",
+      "description": "",
+      "evidence": [],
+      "origin": "detected",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "project--contains--module:src-features-workflow-domain-workflowrecorder-ts",
+      "from": "project",
+      "to": "module:src-features-workflow-domain-workflowrecorder-ts",
+      "kind": "contains",
+      "description": "",
+      "evidence": [],
+      "origin": "detected",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "module:src-app-application-ts--depends_on--module:src-features-workflow-domain-workflowrecorder-ts",
+      "from": "module:src-app-application-ts",
+      "to": "module:src-features-workflow-domain-workflowrecorder-ts",
+      "kind": "depends_on",
+      "description": "",
+      "evidence": [],
+      "origin": "detected",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "module:src-app-application-ts--depends_on--module:src-features-agents-contracts-pi-ts",
+      "from": "module:src-app-application-ts",
+      "to": "module:src-features-agents-contracts-pi-ts",
+      "kind": "depends_on",
+      "description": "",
+      "evidence": [],
+      "origin": "detected",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "module:src-features-agents-contracts-pi-ts--depends_on--module:src-features-agents-contracts-agent-ts",
+      "from": "module:src-features-agents-contracts-pi-ts",
+      "to": "module:src-features-agents-contracts-agent-ts",
+      "kind": "depends_on",
+      "description": "",
+      "evidence": [],
+      "origin": "detected",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "module:src-features-agents-contracts-pi-ts--depends_on--module:src-features-agents-domain-codexconversationevents-ts",
+      "from": "module:src-features-agents-contracts-pi-ts",
+      "to": "module:src-features-agents-domain-codexconversationevents-ts",
+      "kind": "depends_on",
+      "description": "",
+      "evidence": [],
+      "origin": "detected",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "module:src-features-project-contracts-evidence-ts--depends_on--module:src-features-agents-contracts-pi-ts",
+      "from": "module:src-features-project-contracts-evidence-ts",
+      "to": "module:src-features-agents-contracts-pi-ts",
+      "kind": "depends_on",
+      "description": "",
+      "evidence": [],
+      "origin": "detected",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "module:src-features-agents-contracts-agent-ts--depends_on--module:src-features-agents-contracts-pi-ts",
+      "from": "module:src-features-agents-contracts-agent-ts",
+      "to": "module:src-features-agents-contracts-pi-ts",
+      "kind": "depends_on",
+      "description": "",
+      "evidence": [],
+      "origin": "detected",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "module:src-features-project-browser-archifybridge-ts--depends_on--module:src-features-agents-contracts-pi-ts",
+      "from": "module:src-features-project-browser-archifybridge-ts",
+      "to": "module:src-features-agents-contracts-pi-ts",
+      "kind": "depends_on",
+      "description": "",
+      "evidence": [],
+      "origin": "detected",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "module:src-features-agents-contracts-pi-ts--depends_on--module:src-features-project-contracts-evidence-ts",
+      "from": "module:src-features-agents-contracts-pi-ts",
+      "to": "module:src-features-project-contracts-evidence-ts",
+      "kind": "depends_on",
+      "description": "",
+      "evidence": [],
+      "origin": "detected",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "module:src-features-agents-contracts-pi-ts--depends_on--module:src-features-project-browser-archifybridge-ts",
+      "from": "module:src-features-agents-contracts-pi-ts",
+      "to": "module:src-features-project-browser-archifybridge-ts",
+      "kind": "depends_on",
+      "description": "",
+      "evidence": [],
+      "origin": "detected",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "module:src-features-agents-contracts-pi-ts--depends_on--module:src-app-application-ts",
+      "from": "module:src-features-agents-contracts-pi-ts",
+      "to": "module:src-app-application-ts",
+      "kind": "depends_on",
+      "description": "",
+      "evidence": [],
+      "origin": "detected",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "module:src-features-project-host-diagrams-projectdiagramviewer-ts--depends_on--module:src-features-agents-contracts-pi-ts",
+      "from": "module:src-features-project-host-diagrams-projectdiagramviewer-ts",
+      "to": "module:src-features-agents-contracts-pi-ts",
+      "kind": "depends_on",
+      "description": "",
+      "evidence": [],
+      "origin": "detected",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "module:src-features-agents-contracts-pi-ts--depends_on--module:src-features-agents-domain-elicitationform-ts",
+      "from": "module:src-features-agents-contracts-pi-ts",
+      "to": "module:src-features-agents-domain-elicitationform-ts",
+      "kind": "depends_on",
+      "description": "",
+      "evidence": [],
+      "origin": "detected",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "module:src-features-agents-contracts-pi-ts--depends_on--module:src-features-project-host-diagrams-projectdiagramviewer-ts",
+      "from": "module:src-features-agents-contracts-pi-ts",
+      "to": "module:src-features-project-host-diagrams-projectdiagramviewer-ts",
+      "kind": "depends_on",
+      "description": "",
+      "evidence": [],
+      "origin": "detected",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "module:src-features-workflow-domain-builtins-ts--depends_on--module:src-features-agents-contracts-pi-ts",
+      "from": "module:src-features-workflow-domain-builtins-ts",
+      "to": "module:src-features-agents-contracts-pi-ts",
+      "kind": "depends_on",
+      "description": "",
+      "evidence": [],
+      "origin": "detected",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "module:src-features-project-host-persistence-projectinitializationcheckpointstore-ts--depends_on--module:src-features-agents-contracts-pi-ts",
+      "from": "module:src-features-project-host-persistence-projectinitializationcheckpointstore-ts",
+      "to": "module:src-features-agents-contracts-pi-ts",
+      "kind": "depends_on",
+      "description": "",
+      "evidence": [],
+      "origin": "detected",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "module:src-features-agents-contracts-pi-ts--depends_on--module:src-features-conversations-contracts-preferences-ts",
+      "from": "module:src-features-agents-contracts-pi-ts",
+      "to": "module:src-features-conversations-contracts-preferences-ts",
+      "kind": "depends_on",
+      "description": "",
+      "evidence": [],
+      "origin": "detected",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "module:src-features-agents-contracts-pi-ts--depends_on--module:src-features-conversations-browser-skillselection-ts",
+      "from": "module:src-features-agents-contracts-pi-ts",
+      "to": "module:src-features-conversations-browser-skillselection-ts",
+      "kind": "depends_on",
+      "description": "",
+      "evidence": [],
+      "origin": "detected",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "module:src-features-agents-contracts-pi-ts--depends_on--module:src-features-workflow-domain-builtins-ts",
+      "from": "module:src-features-agents-contracts-pi-ts",
+      "to": "module:src-features-workflow-domain-builtins-ts",
+      "kind": "depends_on",
+      "description": "",
+      "evidence": [],
+      "origin": "detected",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "module:src-features-agents-contracts-pi-ts--depends_on--module:src-features-workflow-domain-methodsignature-ts",
+      "from": "module:src-features-agents-contracts-pi-ts",
+      "to": "module:src-features-workflow-domain-methodsignature-ts",
+      "kind": "depends_on",
+      "description": "",
+      "evidence": [],
+      "origin": "detected",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "module:src-features-agents-contracts-pi-ts--depends_on--module:src-features-project-host-persistence-projectinitializationcheckpointstore-ts",
+      "from": "module:src-features-agents-contracts-pi-ts",
+      "to": "module:src-features-project-host-persistence-projectinitializationcheckpointstore-ts",
+      "kind": "depends_on",
+      "description": "",
+      "evidence": [],
+      "origin": "detected",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "module:src-features-conversations-browser-agenttraceview-ts--depends_on--module:src-features-agents-contracts-pi-ts",
+      "from": "module:src-features-conversations-browser-agenttraceview-ts",
+      "to": "module:src-features-agents-contracts-pi-ts",
+      "kind": "depends_on",
+      "description": "",
+      "evidence": [],
+      "origin": "detected",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "module:src-features-resources-browser-apiflow-ts--depends_on--module:src-features-agents-domain-codexconversationevents-ts",
+      "from": "module:src-features-resources-browser-apiflow-ts",
+      "to": "module:src-features-agents-domain-codexconversationevents-ts",
+      "kind": "depends_on",
+      "description": "",
+      "evidence": [],
+      "origin": "detected",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "module:src-features-workflow-domain-workflowrecorder-ts--depends_on--module:src-features-agents-domain-codexconversationevents-ts",
+      "from": "module:src-features-workflow-domain-workflowrecorder-ts",
+      "to": "module:src-features-agents-domain-codexconversationevents-ts",
+      "kind": "depends_on",
+      "description": "",
+      "evidence": [],
+      "origin": "detected",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "module:src-features-conversations-browser-agenttraceview-ts--depends_on--module:src-features-resources-browser-apiflow-ts",
+      "from": "module:src-features-conversations-browser-agenttraceview-ts",
+      "to": "module:src-features-resources-browser-apiflow-ts",
+      "kind": "depends_on",
+      "description": "",
+      "evidence": [],
+      "origin": "detected",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "module:src-features-agents-contracts-pi-ts--depends_on--module:src-features-agents-domain-outputlanguage-ts",
+      "from": "module:src-features-agents-contracts-pi-ts",
+      "to": "module:src-features-agents-domain-outputlanguage-ts",
+      "kind": "depends_on",
+      "description": "",
+      "evidence": [],
+      "origin": "detected",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "module:src-features-agents-domain-codexconversationevents-ts--depends_on--module:src-features-agents-contracts-pi-ts",
+      "from": "module:src-features-agents-domain-codexconversationevents-ts",
+      "to": "module:src-features-agents-contracts-pi-ts",
+      "kind": "depends_on",
+      "description": "",
+      "evidence": [],
+      "origin": "detected",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "module:src-features-agents-domain-codexconversationevents-ts--depends_on--module:src-features-resources-browser-apiflow-ts",
+      "from": "module:src-features-agents-domain-codexconversationevents-ts",
+      "to": "module:src-features-resources-browser-apiflow-ts",
+      "kind": "depends_on",
+      "description": "",
+      "evidence": [],
+      "origin": "detected",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "module:src-features-agents-domain-outputlanguage-ts--depends_on--module:src-features-agents-contracts-pi-ts",
+      "from": "module:src-features-agents-domain-outputlanguage-ts",
+      "to": "module:src-features-agents-contracts-pi-ts",
+      "kind": "depends_on",
+      "description": "",
+      "evidence": [],
+      "origin": "detected",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "area:agent-provider-runtime--maps_to--module:src-app-application-ts",
+      "from": "area:agent-provider-runtime",
+      "to": "module:src-app-application-ts",
+      "kind": "maps_to",
+      "description": "",
+      "evidence": [],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "area:agent-provider-runtime--maps_to--module:src-features-agents-contracts-agent-ts",
+      "from": "area:agent-provider-runtime",
+      "to": "module:src-features-agents-contracts-agent-ts",
+      "kind": "maps_to",
+      "description": "",
+      "evidence": [],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "area:agent-provider-runtime--maps_to--module:src-features-agents-contracts-pi-ts",
+      "from": "area:agent-provider-runtime",
+      "to": "module:src-features-agents-contracts-pi-ts",
+      "kind": "maps_to",
+      "description": "",
+      "evidence": [],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "area:agent-provider-runtime--maps_to--module:src-features-agents-domain-codexconversationevents-ts",
+      "from": "area:agent-provider-runtime",
+      "to": "module:src-features-agents-domain-codexconversationevents-ts",
+      "kind": "maps_to",
+      "description": "",
+      "evidence": [],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "area:agent-provider-runtime--maps_to--module:src-features-agents-domain-elicitationform-ts",
+      "from": "area:agent-provider-runtime",
+      "to": "module:src-features-agents-domain-elicitationform-ts",
+      "kind": "maps_to",
+      "description": "",
+      "evidence": [],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "area:agent-provider-runtime--maps_to--module:src-features-agents-domain-outputlanguage-ts",
+      "from": "area:agent-provider-runtime",
+      "to": "module:src-features-agents-domain-outputlanguage-ts",
+      "kind": "maps_to",
+      "description": "",
+      "evidence": [],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "area:agent-provider-runtime--maps_to--module:src-features-agents-host-toml-ts",
+      "from": "area:agent-provider-runtime",
+      "to": "module:src-features-agents-host-toml-ts",
+      "kind": "maps_to",
+      "description": "",
+      "evidence": [],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "area:conversation-workspace-surfaces--maps_to--module:src-features-conversations-browser-agenttraceview-ts",
+      "from": "area:conversation-workspace-surfaces",
+      "to": "module:src-features-conversations-browser-agenttraceview-ts",
+      "kind": "maps_to",
+      "description": "",
+      "evidence": [],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "area:conversation-workspace-surfaces--maps_to--module:src-features-conversations-browser-composercontroller-ts",
+      "from": "area:conversation-workspace-surfaces",
+      "to": "module:src-features-conversations-browser-composercontroller-ts",
+      "kind": "maps_to",
+      "description": "",
+      "evidence": [],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "area:conversation-workspace-surfaces--maps_to--module:src-features-conversations-browser-imageannotation-ts",
+      "from": "area:conversation-workspace-surfaces",
+      "to": "module:src-features-conversations-browser-imageannotation-ts",
+      "kind": "maps_to",
+      "description": "",
+      "evidence": [],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "area:conversation-workspace-surfaces--maps_to--module:src-features-conversations-browser-scrollprobe-ts",
+      "from": "area:conversation-workspace-surfaces",
+      "to": "module:src-features-conversations-browser-scrollprobe-ts",
+      "kind": "maps_to",
+      "description": "",
+      "evidence": [],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "area:conversation-workspace-surfaces--maps_to--module:src-features-conversations-browser-skillselection-ts",
+      "from": "area:conversation-workspace-surfaces",
+      "to": "module:src-features-conversations-browser-skillselection-ts",
+      "kind": "maps_to",
+      "description": "",
+      "evidence": [],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "area:conversation-workspace-surfaces--maps_to--module:src-features-conversations-contracts-preferences-ts",
+      "from": "area:conversation-workspace-surfaces",
+      "to": "module:src-features-conversations-contracts-preferences-ts",
+      "kind": "maps_to",
+      "description": "",
+      "evidence": [],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "area:conversation-workspace-surfaces--maps_to--module:src-features-conversations-domain-planfile-ts",
+      "from": "area:conversation-workspace-surfaces",
+      "to": "module:src-features-conversations-domain-planfile-ts",
+      "kind": "maps_to",
+      "description": "",
+      "evidence": [],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "area:project-knowledge-host--maps_to--module:src-features-project-browser-archifybridge-ts",
+      "from": "area:project-knowledge-host",
+      "to": "module:src-features-project-browser-archifybridge-ts",
+      "kind": "maps_to",
+      "description": "",
+      "evidence": [],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "area:project-knowledge-host--maps_to--module:src-features-project-contracts-evidence-ts",
+      "from": "area:project-knowledge-host",
+      "to": "module:src-features-project-contracts-evidence-ts",
+      "kind": "maps_to",
+      "description": "",
+      "evidence": [],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "area:project-knowledge-host--maps_to--module:src-features-project-host-diagrams-projectdiagramviewer-ts",
+      "from": "area:project-knowledge-host",
+      "to": "module:src-features-project-host-diagrams-projectdiagramviewer-ts",
+      "kind": "maps_to",
+      "description": "",
+      "evidence": [],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "area:project-knowledge-host--maps_to--module:src-features-project-host-persistence-projectinitializationcheckpointstore-ts",
+      "from": "area:project-knowledge-host",
+      "to": "module:src-features-project-host-persistence-projectinitializationcheckpointstore-ts",
+      "kind": "maps_to",
+      "description": "",
+      "evidence": [],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "area:project-knowledge-host--maps_to--module:src-features-project-host-persistence-vscodeprojectfilehost-ts",
+      "from": "area:project-knowledge-host",
+      "to": "module:src-features-project-host-persistence-vscodeprojectfilehost-ts",
+      "kind": "maps_to",
+      "description": "",
+      "evidence": [],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "area:method-registry-host--maps_to--module:src-features-resources-browser-apiflow-ts",
+      "from": "area:method-registry-host",
+      "to": "module:src-features-resources-browser-apiflow-ts",
+      "kind": "maps_to",
+      "description": "",
+      "evidence": [],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "area:method-registry-host--maps_to--module:src-features-mcp-contracts-mcp-ts",
+      "from": "area:method-registry-host",
+      "to": "module:src-features-mcp-contracts-mcp-ts",
+      "kind": "maps_to",
+      "description": "",
+      "evidence": [],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "area:method-registry-host--maps_to--module:src-features-workflow-domain-builtins-ts",
+      "from": "area:method-registry-host",
+      "to": "module:src-features-workflow-domain-builtins-ts",
+      "kind": "maps_to",
+      "description": "",
+      "evidence": [],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "area:method-registry-host--maps_to--module:src-features-workflow-domain-methodsignature-ts",
+      "from": "area:method-registry-host",
+      "to": "module:src-features-workflow-domain-methodsignature-ts",
+      "kind": "maps_to",
+      "description": "",
+      "evidence": [],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "area:method-registry-host--maps_to--module:src-features-workflow-domain-workflowrecorder-ts",
+      "from": "area:method-registry-host",
+      "to": "module:src-features-workflow-domain-workflowrecorder-ts",
+      "kind": "maps_to",
+      "description": "",
+      "evidence": [],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "needs_verification"
+    },
+    {
+      "id": "area:method-registry-host--maps_to--module:src-shared-contracts-replay-ts",
+      "from": "area:method-registry-host",
+      "to": "module:src-shared-contracts-replay-ts",
+      "kind": "maps_to",
+      "description": "",
+      "evidence": [],
+      "origin": "inferred",
+      "review": "draft",
+      "freshness": "needs_verification"
     }
   ],
-  "updatedAt": 1793277767106
+  "updatedAt": 1793333586152
 }
