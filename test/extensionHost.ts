@@ -172,11 +172,11 @@ async function runHostChecks(): Promise<void> {
   await vscode.workspace.fs.createDirectory(fixtureDirectory);
   try { await vscode.workspace.fs.delete(fixture); } catch { /* Not left behind. */ }
   await vscode.workspace.fs.writeFile(fixture, new TextEncoder().encode(
-    'export async function main(): Promise<string> {\n  return "fixture-ok";\n}\n'
+    'export async function echo(): Promise<string> {\n  return "fixture-ok";\n}\n'
   ));
   try {
     const apiRun = await app.executeInput([
-      'import { main as echo } from "dext/api/host-test/echo";',
+      'import { echo } from "dext/api/host-test/echo";',
       "console.log(await echo());",
       ""
     ].join("\n"));
@@ -585,9 +585,9 @@ async function monacoWebviewHostTest(extensionUri: vscode.Uri, realTypes: unknow
         // completion for those modules is Monaco's own TypeScript service.
         window.postMessage({type:'dextTypes',declaration:'declare module "dext" { export const ask: (options: { input: string }) => Promise<unknown>; }',
           apiPaths:['./api/*.ts','./api/*.mts','./api/*/index.ts'],
-          modules:[{path:'api/git/commit.ts',specifier:'dext/api/git/commit',content:'export async function main(input?: string): Promise<string> { return input ?? ""; }'}]},'*');
+          modules:[{path:'api/git/commit.ts',specifier:'dext/api/git/commit',content:'export async function commit(input?: string): Promise<string> { return input ?? ""; }'}]},'*');
         await new Promise(r=>setTimeout(r,300));
-        editor.setValue('import { main } from "dext/api/git/commit";\\nvoid main;\\n');
+        editor.setValue('import { commit } from "dext/api/git/commit";\\nvoid commit;\\n');
         const typeScriptWorker=await (await composerTypescript.getTypeScriptWorker())(editor.view.getModel().uri.toString());
         const unresolved=await typeScriptWorker.getSemanticDiagnostics(editor.view.getModel().uri.toString());
         check(!unresolved.some(diagnostic=>/Cannot find module/.test(String(diagnostic.messageText))),
@@ -599,7 +599,7 @@ async function monacoWebviewHostTest(extensionUri: vscode.Uri, realTypes: unknow
         await new Promise(r=>setTimeout(r,300));
         const importItems=await typeScriptWorker.getCompletionsAtPosition(importModel.uri.toString(),10);
         const importNames=(importItems?.entries??[]).map(entry=>entry.name);
-        check(importNames.includes('main'),
+        check(importNames.includes('commit'),
           'TypeScript completes the import from the API module: '+JSON.stringify(importNames.slice(0,12)));
         // Chat and Code differ by language, and Code really is TypeScript: the state that
         // left a Code badge over a plain-text model is what silenced the editor before.

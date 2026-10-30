@@ -221,7 +221,7 @@ describe("API reference catalog", () => {
       { ...state().methods[0]!, id: "mcp.files.read", source: "project" as const }
     ]);
     const reference = vi.fn(async () => catalog());
-    const readFile = vi.fn(async () => "export function main() {}");
+    const readFile = vi.fn(async () => "export function ask() {}");
     const files = createFileResourceDataSource({
       roots: () => ({ global: "/global", project: "/project/.dext" }),
       listFiles: async kind => kind === "api" ? [
@@ -234,7 +234,7 @@ describe("API reference catalog", () => {
     expect((await files.list(["api"], "")).map(entry => entry.id)).toEqual([
       "api:global:ask.ts", "api:project:git/commit.ts"
     ]);
-    expect((await files.definition("api:global:ask.ts"))?.content).toContain("export function main");
+    expect((await files.definition("api:global:ask.ts"))?.content).toContain("export function ask");
     expect(methods).not.toHaveBeenCalled();
     expect(reference).not.toHaveBeenCalled();
     readFile.mockClear();
@@ -247,7 +247,7 @@ describe("API reference catalog", () => {
     const file = await apis.definition("file:api:global:ask.ts");
     expect(file?.entry.id).toBe("file:api:global:ask.ts");
     expect(file?.entry.source.path).toBe("/global/api/ask.ts");
-    expect(file?.content).toContain("export function main");
+    expect(file?.content).toContain("export function ask");
     expect(await apis.definition("api:project:missing.ts")).toBeUndefined();
   });
 

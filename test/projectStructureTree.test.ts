@@ -7,7 +7,7 @@ const inputs = (files: Record<string, string>) => Object.entries(files).map(([pa
 describe("structure map builder", () => {
   it("derives a deterministic project -> module -> file -> declaration tree", async () => {
     const index = await buildStructureIndex(inputs({
-      "src/index.ts": "import { Store } from './store'; export function main() { return new Store(); }",
+      "src/index.ts": "import { Store } from './store'; export function entry() { return new Store(); }",
       "src/store.ts": "export class Store { save() {} } export interface Options { id: string }",
       "docs/readme.md": "# Read me"
     }));

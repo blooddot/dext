@@ -116,7 +116,7 @@ try {
       assert.equal(await evaluate(`messages.length`), 1);
       assert.equal(await evaluate(`messages[0].type`), 'resourceOpen');
       await writeFile(join(artifacts, `apis-${themeName}-${width}.png`), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
-      await load(ui.renderResourceDefinition(ui.buildResourceDefinition(entries[0], 'export async function main(input: string): Promise<AgentResult> {\n  return await agent({ input });\n}')));
+      await load(ui.renderResourceDefinition(ui.buildResourceDefinition(entries[0], 'export async function run(input: string): Promise<AgentResult> {\n  return await agent({ input });\n}')));
       assert.equal(await evaluate(`getComputedStyle(document.querySelector('.resource-api-signature code')).backgroundColor`), 'rgba(0, 0, 0, 0)');
       assert.equal(await evaluate(`getComputedStyle(document.querySelector('dt .tok-propertyName')).color !== getComputedStyle(document.querySelector('dt .tok-typeName')).color`), true);
       await writeFile(join(artifacts, `api-detail-${themeName}-${width}.png`), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));

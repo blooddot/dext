@@ -64,7 +64,7 @@ describe("resource documents", () => {
     const content = 'throw new Error("Must never execute during discovery");\nexport function commit() {}\n';
     await writeFile(join(project, "api/git/commit.ts"), content);
     await writeFile(join(project, "api/dext.d.ts"), 'declare module "dext" {}');
-    await writeFile(join(root, "api/ask.ts"), 'export function main() {}');
+    await writeFile(join(root, "api/ask.ts"), 'export function ask() {}');
     await writeFile(join(project, "rules/team/style.md"), '# Style');
     await writeFile(join(project, "skills/release/SKILL.md"), '# Release');
     await writeFile(join(project, "mcp/config.jsonc"), '{"name":"different-name"}');
@@ -174,7 +174,7 @@ describe("resource documents", () => {
   });
 
   it.each([
-    ["api", "sample", 'export async function main(input: string): Promise<AskResult> {\n  return await ask({ input });\n}\n', "api/sample.ts"],
+    ["api", "sample", 'export async function sample(input: string): Promise<AskResult> {\n  return await ask({ input });\n}\n', "api/sample.ts"],
     ["rule", "review.md", "Review changes.\n", "rules/review.md"],
     ["skill", "release", "# Release\nVerify first.\n", "skills/release/SKILL.md"],
     ["mcp", "server", '{"name":"server","transport":"stdio","command":"node","tools":[]}\n', "mcp/server.jsonc"]
@@ -419,7 +419,7 @@ describe("resource documents", () => {
 
   it("lists nested resources and reads MCP names independently of filenames", async () => {
     await mkdir(join(root, "api/team"), { recursive: true });
-    await writeFile(join(root, "api/team/lookup.ts"), "export function main() { return 1; }\n");
+    await writeFile(join(root, "api/team/lookup.ts"), "export function lookup() { return 1; }\n");
     await writeFile(join(root, "api/team/ignore.md"), "Not an API");
     await mkdir(join(root, "mcp"));
     await writeFile(join(root, "mcp/settings.jsonc"), '{"name":"server","transport":"stdio","command":"node","tools":[]}');
@@ -449,16 +449,16 @@ describe("resource documents", () => {
     expect(prompt).toContain("Entry functions only compose named wrappers and ordinary helpers");
     expect(prompt).toContain("askForPlan");
     expect(prompt).toContain("runAgent");
-    expect(prompt).toContain("export async function main");
+    expect(prompt).toContain("export async function <leaf>");
   });
 
   it("blocks a new API that mixes top-level API calls", async () => {
     application.setApiFlowAnalyzer(describeApiFlow);
     const resource: ResourceSession = { type: "api", scope: "global", draft: {
       name: "mixed",
-      content: 'import { ask, agent } from "dext";\nexport function main() { return Promise.all([ask({}), agent({})]); }'
+      content: 'import { ask, agent } from "dext";\nexport function mixed() { return Promise.all([ask({}), agent({})]); }'
     } };
-    await expect(application.saveResource(resource)).rejects.toThrow(/main/);
+    await expect(application.saveResource(resource)).rejects.toThrow(/mixed/);
     await expect(application.saveResource(resource)).rejects.toThrow(/ask and agent/);
     await expect(application.saveResource(resource)).rejects.toThrow(/one named wrapper|own named wrapper/);
     expect(await readdir(root)).toEqual([]);
@@ -467,27 +467,27 @@ describe("resource documents", () => {
   it("only warns when an existing API breaks the wrapper rule", async () => {
     const resource: ResourceSession = { type: "api", scope: "global", draft: {
       name: "legacy",
-      content: 'import { ask } from "dext";\nexport function main() { return ask({}); }'
+      content: 'import { ask } from "dext";\nexport function legacy() { return ask({}); }'
     } };
     resource.target = await application.saveResource(resource);
     application.setApiFlowAnalyzer(describeApiFlow);
     resource.draft = {
       name: "legacy",
-      content: 'import { ask, agent } from "dext";\nexport function main() { return Promise.all([ask({}), agent({})]); }'
+      content: 'import { ask, agent } from "dext";\nexport function legacy() { return Promise.all([ask({}), agent({})]); }'
     };
     await expect(application.saveResource(resource)).resolves.toMatchObject({ name: "legacy" });
   });
 
   it("surfaces flow issues in the generated draft text", async () => {
     application.setApiFlowAnalyzer(describeApiFlow);
-    const content = 'import { ask, agent } from "dext";\nexport function main() { return Promise.all([ask({}), agent({})]); }';
+    const content = 'import { ask, agent } from "dext";\nexport function mixed() { return Promise.all([ask({}), agent({})]); }';
     const execute = vi.fn(async () => ({ result: { kind: "ask", text: JSON.stringify({ name: "mixed", content }) } }));
     Object.assign(application, { runtime: { executeConversation: execute } });
     const result = await application.draftResource({ type: "api", scope: "global" }, "Create an API");
     expect(result.draft.content).toBe(content);
     const text = result.response.kind === "workflow" ? (result.response.executions[0]!.result as { text: string }).text : "";
     expect(text).toContain("API flow issues:");
-    expect(text).toContain("main");
+    expect(text).toContain("mixed");
     expect(text).toContain("wrapper");
     expect(await readdir(root)).toEqual([]);
   });
@@ -826,7 +826,7 @@ describe("resource documents", () => {
   });
 
   const bundle = (): ResourceSession => ({ type: "api", scope: "global", draft: {
-    name: "docs.review", content: 'import { ask } from "dext";\nexport function main(input: string) { return ask({ input, rules: ["review.md"] }); }',
+    name: "docs.review", content: 'import { ask } from "dext";\nexport function review(input: string) { return ask({ input, rules: ["review.md"] }); }',
     files: [
       { path: "rules/review.md", content: "Review with evidence." },
       { path: "templates/review.md", content: "# Review\n" },
@@ -864,7 +864,7 @@ describe("resource documents", () => {
     expect(text).toContain("Review with evidence.");
     expect(text).toContain("```typescript");
     expect(await readdir(root)).toEqual([]);
-    execute.mockImplementation(async () => ({ result: { kind: "ask", text: JSON.stringify({ name: "docs.review", content: "export function main() {}" }) } }));
+    execute.mockImplementation(async () => ({ result: { kind: "ask", text: JSON.stringify({ name: "docs.review", content: "export function review() {}" }) } }));
     const revised = await application.draftResource({ ...resource, draft: result.draft }, "Revise API");
     expect(revised.draft.files).toEqual(result.draft.files);
     expect(execute.mock.calls[1]).toEqual(["ask", expect.stringContaining("Review with evidence."), { resourceSource: "describe" }]);
@@ -898,7 +898,7 @@ describe("resource documents", () => {
   it.each(["disk", "editor"])("checks companion %s changes before updating the primary resource", async (source) => {
     const resource = bundle();
     resource.target = await application.saveResource(resource);
-    resource.draft!.content = "export function main() { return 42; }";
+    resource.draft!.content = "export function review() { return 42; }";
     const path = join(root, "rules/review.md");
     if (source === "disk") await writeFile(path, "External edit");
     else Object.assign(vscode.workspace, { textDocuments: [{ uri: vscode.Uri.file(path), isDirty: true }] });
@@ -923,7 +923,7 @@ describe("resource documents", () => {
     const resource = bundle();
     resource.target = await application.saveResource(resource);
     resource.draft!.files![0]!.content = "Revised policy";
-    resource.draft!.content = "export function main() { return 2; }";
+    resource.draft!.content = "export function review() { return 2; }";
     const originalWrite = vscode.workspace.fs.writeFile.bind(vscode.workspace.fs);
     let failed = false;
     vi.spyOn(vscode.workspace.fs, "writeFile").mockImplementation(async (uri, content) => {

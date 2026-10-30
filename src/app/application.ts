@@ -213,7 +213,7 @@ export class DextApplication {
    * `dext/api/*` mapping the generated `.dext/tsconfig.json` gives VS Code — so a
    * specifier completes and type-checks the same way in both places. Without this the
    * composer resolved the built-in `dext` module and nothing else, and a correct
-   * `import { main } from "dext/api/git/commit"` was a `Cannot find module` there.
+   * `import { commit } from "dext/api/git/commit"` was a `Cannot find module` there.
    *
    * Global APIs are included too, though the generated project deliberately omits them:
    * a committed mapping cannot name Dext's machine-local storage. The composer's extra
@@ -1524,9 +1524,12 @@ export class DextApplication {
     if (type === "api") {
       // A Dext API is an ordinary TypeScript module now: the editor's own
       // TypeScript service reports type errors, so this only checks the shape a
-      // callable API needs — a `main` the loader can import.
-      if (!/\bexport\s+(?:async\s+)?(?:function\s+main\b|const\s+main\b)/.test(draft.content)) {
-        throw new Error("The API must export main(), for example `export async function main() { ... }`.");
+      // callable API needs — an entry function the kernel can import, named after
+      // the file.
+      const leaf = draft.name.split(".").at(-1) ?? "";
+      const named = leaf.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      if (!leaf || !new RegExp(`\\bexport\\s+(?:async\\s+)?(?:function\\s+${named}\\b|const\\s+${named}\\b)`).test(draft.content)) {
+        throw new Error(`The API must export ${leaf}(), named after api/${draft.name.split(".").join("/")}.ts. Rename main to ${leaf}.`);
       }
     } else if (type === "mcp") {
       const manifest = parseMcpManifest(draft.content, draft.name);

@@ -103,7 +103,7 @@ describe("file API documentation", () => {
     const files = createFileResourceDataSource({
       roots: () => ({ global: "/global" }),
       listFiles: async () => [{ name: "ask", path: "ask.ts", scope: "global" }],
-      readFile: async () => "export function main(): void {}", describeApi: describeApiSource
+      readFile: async () => "export function ask(): void {}", describeApi: describeApiSource
     });
     const apis = createApiDataSource({ methods: () => [{ id: "ask", kind: "command", source: "builtin", title: "Ask", description: "Ask", input: [], output: { kind: "ask" } }], files });
     const entries = await apis.list(["api"], "");
@@ -113,6 +113,23 @@ describe("file API documentation", () => {
     expect(renderApiDetail(buildResourceDefinition(file.entry, file.content))).toContain('data-resource-id="file:api:global:ask.ts"');
     const builtin = (await apis.definition("api:global:ask.ts"))!;
     expect(renderApiDetail(buildResourceDefinition(builtin.entry, builtin.content))).not.toContain('class="resource-source-heading"');
+  });
+
+  it("lists only modules that export the function their file names", async () => {
+    const sources: Record<string, string> = {
+      "dev/feat.ts": "export async function feat(): Promise<void> {}",
+      "dev/types.ts": "export interface Shape { x: number }",
+      "dev/teambition.ts": "export function needsNoteImages(note: string): boolean { return false; }"
+    };
+    const files = createFileResourceDataSource({
+      roots: () => ({ project: "/project/.dext" }),
+      listFiles: async kind => kind === "api"
+        ? Object.keys(sources).map(path => ({ name: path.slice(0, -3).replaceAll("/", "."), path, scope: "project" as const }))
+        : [],
+      readFile: async entry => sources[entry.path],
+      describeApi: describeApiSource
+    });
+    expect((await files.list(["api"], "")).map(entry => entry.name)).toEqual(["dev.feat"]);
   });
 
   it("renders every exported signature and escapes source markup", async () => {

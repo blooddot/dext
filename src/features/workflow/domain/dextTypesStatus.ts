@@ -3,7 +3,7 @@
  *
  * Code mode is plain TypeScript: the generated declaration is registered as a library
  * and the workspace's own API modules resolve through the project's `dext/api/*`
- * mapping, so `import { main } from "dext/api/git/commit"` completes, hovers and
+ * mapping, so `import { commit } from "dext/api/git/commit"` completes, hovers and
  * diagnoses exactly like any other module. Nothing here completes an API *for* the
  * user: a name that was never imported is an error in TypeScript, and `git.commit()`
  * is a mistake the editor is supposed to show, not translate.

@@ -371,7 +371,7 @@ describe("generated Dext TypeScript surface", () => {
     await run(process.execPath, [script, "--workspace", root]);
     const api = join(root, ".dext", "api", "sample.ts");
     const body = [
-      "export async function main(input: string): Promise<AskResult> {",
+      "export async function sample(input: string): Promise<AskResult> {",
       "  return await ask({ input });",
       "}",
       ""
@@ -389,7 +389,7 @@ describe("generated Dext TypeScript surface", () => {
   }, 60_000);
 
   it("resolves dext/api/<id> imports the way the kernel loader does", async () => {
-    // `import { main } from "dext/api/team/analyze"` is the documented way to call
+    // `import { analyze } from "dext/api/team/analyze"` is the documented way to call
     // another API module, and the kernel loader resolves it from the file stem. The
     // project resolves modules like Node (`nodenext`), which never guesses a missing
     // extension, so the `paths` substitution itself has to name one: with `./api/*`
@@ -400,19 +400,19 @@ describe("generated Dext TypeScript surface", () => {
     await mkdir(directory, { recursive: true });
     await writeFile(
       join(directory, "analyze.ts"),
-      ['import { ask, type AskResult } from "dext";', "", "export async function main(): Promise<AskResult> {", '  return await ask({ input: "explain" });', "}", ""].join("\n"),
+      ['import { ask, type AskResult } from "dext";', "", "export async function analyze(): Promise<AskResult> {", '  return await ask({ input: "explain" });', "}", ""].join("\n"),
       "utf8"
     );
     await writeFile(
       join(directory, "index.ts"),
-      ['export async function main(): Promise<string> {', '  return "index";', "}", ""].join("\n"),
+      ['export async function index(): Promise<string> {', '  return "index";', "}", ""].join("\n"),
       "utf8"
     );
     await writeFile(
       join(root, ".dext", "api", "consumer.ts"),
       [
-        'import { main as analyze } from "dext/api/team/analyze";',
-        'import { main as fromIndex } from "dext/api/team";',
+        'import { analyze } from "dext/api/team/analyze";',
+        'import { index as fromIndex } from "dext/api/team";',
         "",
         "console.log(await analyze(), await fromIndex());",
         ""
@@ -513,13 +513,13 @@ describe("generated Dext TypeScript surface", () => {
     await writeFile(join(root, "tools", "api", "greet.ts"), [
       'import { ask, type AskResult } from "dext";',
       "",
-      "export async function main(): Promise<AskResult> {",
+      "export async function greet(): Promise<AskResult> {",
       '  return await ask({ input: "hello" });',
       "}",
       ""
     ].join("\n"), "utf8");
     await writeFile(join(root, ".dext", "api", "consumer.ts"), [
-      'import { main as greet } from "dext/api/greet";',
+      'import { greet } from "dext/api/greet";',
       "",
       "console.log((await greet()).text);",
       ""

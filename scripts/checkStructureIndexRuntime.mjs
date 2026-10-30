@@ -9,7 +9,7 @@ export async function checkStructureIndexRuntime() {
   await build({ entryPoints: ['src/features/project/host/indexing/projectStructure.ts'], outfile, bundle: true, platform: 'node', format: 'cjs', target: 'node20' });
   const { buildStructureIndex } = await import(pathToFileURL(outfile).href);
   const index = await buildStructureIndex([
-    { path: 'main.js', content: 'export function main() {}' },
+    { path: 'main.js', content: 'export function entry() {}' },
     { path: 'main.ts', content: 'export interface App {}' },
     { path: 'main.tsx', content: 'export function View() { return <div/>; }' },
     { path: 'main.rs', content: 'fn main() {}' },

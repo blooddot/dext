@@ -216,7 +216,7 @@ export function installDextTypescript(options: DextTypescriptOptions = {}): { di
     for (const library of libraries) library.dispose();
     libraries = [
       defaults.addExtraLib(types.declaration, DEXT_DECLARATION_PATH),
-      // The workspace's own APIs, so `import { main } from "dext/api/git/commit"`
+      // The workspace's own APIs, so `import { commit } from "dext/api/git/commit"`
       // resolves and completes here the way it does in `.dext/api/*.ts`.
       ...types.modules.map((source) => defaults.addExtraLib(source.content, `${DEXT_WORKSPACE_PATH}/${source.path}`))
     ];

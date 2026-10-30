@@ -87,17 +87,17 @@ console.log(answer.text);
 ```ts
 import { ask, type AskResult } from "dext";
 
-export async function main(input: string): Promise<AskResult> {
+export async function analyze(input: string): Promise<AskResult> {
   return await ask({ input });
 }
 ```
 
-`ask`、`agent`、`terminal` 等内置 API 从 `dext` 模块导入；自定义 API 按其在 `.dext/api` 下的路径导入。
+`ask`、`agent`、`terminal` 等内置 API 从 `dext` 模块导入；自定义 API 按其在 `.dext/api` 下的路径导入。入口函数与文件同名，因此 `analyze.ts` 导出 `analyze`。
 
 在 Code 模式中，用同样的方式导入自定义 API：
 
 ```ts
-import { main as analyze } from "dext/api/team/analyze";
+import { analyze } from "dext/api/team/analyze";
 
 const answer = await analyze("解释任务筛选逻辑和相关测试");
 console.log(answer.text);

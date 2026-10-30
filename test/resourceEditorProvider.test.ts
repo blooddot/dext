@@ -26,10 +26,10 @@ describe("resource documents", () => {
     expect(list).toContain('data-resource-search');
     expect(list).toContain('data-resource-group="Task"');
     expect(list).toContain('data-resource-open="api:project:Task/Query.ts"');
-    const detail = renderResourceDefinition(buildResourceDefinition(entries[0]!, "export async function main(): Promise<AskResult> { ... }"));
+    const detail = renderResourceDefinition(buildResourceDefinition(entries[0]!, "export async function Query(): Promise<AskResult> { ... }"));
     expect(detail).toContain("openResourceSource");
     expect(detail).toContain("insertResourceReference");
-    expect(detail).toContain("export async function main()");
+    expect(detail).toContain("export async function Query()");
   });
 
   it("escapes resource content and names", () => {

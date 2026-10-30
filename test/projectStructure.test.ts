@@ -334,7 +334,7 @@ describe("structure-driven AI generation", () => {
   });
 
   it("grounds C4 in targeted source excerpts and rejects lines outside the read window", async () => {
-    const path = 'src/worker.ts', content = '// header\n'.repeat(300) + 'export function main() { spawn("node"); }';
+    const path = 'src/worker.ts', content = '// header\n'.repeat(300) + 'export function entry() { spawn("node"); }';
     const index = await buildStructureIndex([{ path, content }]);
     const evidence = attachProjectStructure(buildProjectEvidencePackage({ files: [
       { path: 'README.md', content: 'A modular application.' }, { path, content, excerptStartLine: 295 }

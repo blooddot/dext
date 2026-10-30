@@ -219,7 +219,7 @@ await fs.writeFile(`docs/decisions/${number}-${slug}.md`, created.text);
 
 上面的 `?` 表示可选参数，是文档记法。
 
-项目 API 以 TypeScript 模块存放在 `.dext/api/` 中。模块按其在 `.dext/api` 下的路径导入，例如 `.dext/api/workflow/feature.ts` 对应 `import { main } from "dext/api/workflow/feature"`。全局 API 存放在 Dext 全局存储中，可供所有工作区使用；同名项目 API 优先。`.dext/project.json` 中的 `paths.apiDirs` 可以增加更多 API 目录，`.dext/api` 始终最先查找。
+项目 API 以 TypeScript 模块存放在 `.dext/api/` 中。模块按其在 `.dext/api` 下的路径导入，例如 `.dext/api/workflow/feature.ts` 对应 `import { feature } from "dext/api/workflow/feature"`。全局 API 存放在 Dext 全局存储中，可供所有工作区使用；同名项目 API 优先。`.dext/project.json` 中的 `paths.apiDirs` 可以增加更多 API 目录，`.dext/api` 始终最先查找。
 
 项目 API 可以直接组合类型化 MCP、`agent` 和 UI 调用，不需要导入中间阶段 API。例如，功能开发工作流可以先读取上下文、制定计划，经 `ui.confirm` 确认后实现，再确认并验证。规则存放在 `.dext/rules/`，由各 Agent 阶段显式指定使用顺序；代码生成、提交这类需要确认的操作仍然是显式的 UI 闸门。
 
@@ -265,7 +265,7 @@ const result = await agent({ input: "实现所需的修改" });
 
 标记在提交的输入中保持可读文本，Dext 不会把文件内容展开进提示词，由 Agent 自行读取引用的文件。`ask`、`agent`、`plan`、`template` 的 `input` 都接受这些标记。
 
-输入区使用 Monaco 的 TypeScript 编辑器，高亮、缩进、括号匹配和原生编辑行为都来自 TypeScript 语法。Code 模式就是普通 TypeScript，不多做别的事：Dext 会把生成的 `dext` 声明、工作区自己的 `.dext/api` 模块以及 Dext 全局存储中的 API 作为 extra lib 注入，并沿用生成工程给 VS Code 的那套 `dext/api/*` 映射（全局模块使用一个追加在项目候选之后的虚拟目录）；此后补全、自动导入、参数提示、悬浮文档、转到定义和诊断都由编辑器自身的 TypeScript 服务提供。因此 `import { main } from "dext/api/git/commit"` 在输入区能解析、能类型检查，模块说明符和具名导出也像其他模块一样补全。还没导入的导出会连同绑定它的 import 一起补全——输入 `ask` 会给出 `ask` 和 `import { ask } from "dext";`，输入 `commi` 会给出工作区 API 自己的 `commit` 和 `import { commit } from "dext/api/git/commit";`；在 `import { … } from "…"` 里面则只给该模块的导出、不带额外编辑。这些名字都是从声明和 API 源码里读出来的，绝不按名字形状猜：`git` 是目录而不是导出，所以输入它没有任何提示，旧 `.dx` 那种限定调用也不会被翻译。运行里仍然用了这些名字却没有导入时，报错会直接给出该写的导入：`git is not defined` 后面跟着 `use: import { main as commit } from "dext/api/git/commit";`。
+输入区使用 Monaco 的 TypeScript 编辑器，高亮、缩进、括号匹配和原生编辑行为都来自 TypeScript 语法。Code 模式就是普通 TypeScript，不多做别的事：Dext 会把生成的 `dext` 声明、工作区自己的 `.dext/api` 模块以及 Dext 全局存储中的 API 作为 extra lib 注入，并沿用生成工程给 VS Code 的那套 `dext/api/*` 映射（全局模块使用一个追加在项目候选之后的虚拟目录）；此后补全、自动导入、参数提示、悬浮文档、转到定义和诊断都由编辑器自身的 TypeScript 服务提供。因此 `import { commit } from "dext/api/git/commit"` 在输入区能解析、能类型检查，模块说明符和具名导出也像其他模块一样补全。还没导入的导出会连同绑定它的 import 一起补全——输入 `ask` 会给出 `ask` 和 `import { ask } from "dext";`，输入 `commi` 会给出工作区 API 自己的 `commit` 和 `import { commit } from "dext/api/git/commit";`；在 `import { … } from "…"` 里面则只给该模块的导出、不带额外编辑。这些名字都是从声明和 API 源码里读出来的，绝不按名字形状猜：`git` 是目录而不是导出，所以输入它没有任何提示，旧 `.dx` 那种限定调用也不会被翻译。运行里仍然用了这些名字却没有导入时，报错会直接给出该写的导入：`git is not defined` 后面跟着 `use: import { commit } from "dext/api/git/commit";`。
 
 ## 自定义 API 与 Skills
 
@@ -275,7 +275,7 @@ const result = await agent({ input: "实现所需的修改" });
 // .dext/api/team/analyze.ts -> "dext/api/team/analyze"
 import { ask, type AskResult } from "dext";
 
-export async function main(input: string): Promise<AskResult> {
+export async function analyze(input: string): Promise<AskResult> {
   return await ask({ input });
 }
 ```
@@ -283,32 +283,32 @@ export async function main(input: string): Promise<AskResult> {
 按 `.dext/api` 下的路径导入：
 
 ```ts
-import { main as analyze } from "dext/api/team/analyze";
+import { analyze } from "dext/api/team/analyze";
 
 const answer = await analyze("解释任务筛选逻辑和相关测试");
 console.log(answer.text);
 ```
 
-导出 `main` 只是当模块本身作为运行入口时 Dext 会查找的约定；由导入方决定如何调用。除此之外导出没有特殊含义——模块导出的任何内容导入方都可以使用。
+入口函数与文件同名：`analyze.ts` 的入口就是 `analyze`。当模块本身作为运行入口时，Dext 查找的就是这个名字，其他名字不会被识别；由导入方决定如何调用。除此之外导出没有特殊含义——模块导出的任何内容导入方都可以使用。
 
 较长的 API 可以用普通函数拆分：
 
 ```ts
 // .dext/api/playground/develop.ts
 import type { TerminalResult } from "dext";
-import { main as verify } from "dext/api/playground/verify";
+import { verify } from "dext/api/playground/verify";
 
 function report(checked: TerminalResult): void {
   if (checked.status !== "succeeded") console.error(checked.stderr);
   else console.log(checked.stdout);
 }
 
-export async function main(): Promise<void> {
+export async function develop(): Promise<void> {
   report(await verify());
 }
 ```
 
-辅助函数就是普通函数：一个模块可以导出任意多个值，其他模块可以导入其中任意一个；递归、类、泛型和 npm 包都能使用。没有强制的返回类型——`main` 可以返回 Dext 结果、普通值，也可以不返回。`.dext/api/*.ts` 中的补全、参数提示和悬浮说明由 VS Code 的 TypeScript 服务依据生成的声明提供。
+辅助函数就是普通函数：一个模块可以导出任意多个值，其他模块可以导入其中任意一个；递归、类、泛型和 npm 包都能使用。没有强制的返回类型——入口函数可以返回 Dext 结果、普通值，也可以不返回。`.dext/api/*.ts` 中的补全、参数提示和悬浮说明由 VS Code 的 TypeScript 服务依据生成的声明提供。
 
 ### 执行流程
 
@@ -333,7 +333,7 @@ async function runAgent(input: string): Promise<AgentResult> {
   return agent({ input });
 }
 
-export async function main(input: string): Promise<AgentResult> {
+export async function <leaf>(input: string): Promise<AgentResult> {
   await askForPlan(input);
   return runAgent(input);
 }
@@ -359,7 +359,7 @@ Node 内置模块就是普通 import——自定义 API 读写文件用的 `impo
 
 ## 对话历史与工作流录制
 
-右键 Dext History 条目并选择 **Record Conversation as Dext Workflow**，可以从已有对话生成起始工作流：成功的轮次会转成步骤，重复提示词会成为 `main()` 参数，确认操作会转成 `ui.confirm`，Code 模式的轮次会保留为注释。文件写入 `.dext/api` 后自动打开；它是需要继续修改的 TypeScript 骨架，而不是完成品。
+右键 Dext History 条目并选择 **Record Conversation as Dext Workflow**，可以从已有对话生成起始工作流：成功的轮次会转成步骤，重复提示词会成为入口函数的参数，确认操作会转成 `ui.confirm`，Code 模式的轮次会保留为注释。文件写入 `.dext/api` 后自动打开；它是需要继续修改的 TypeScript 骨架，而不是完成品。
 
 Dext History 按 VS Code 工作区隔离。对话、收藏、名称和已打开的对话标签页会在重启后恢复，不会在不同项目之间共享。
 

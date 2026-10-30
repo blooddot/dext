@@ -22,7 +22,7 @@
  */
 
 import * as nodeModule from "node:module";
-import { readFileSync, readdirSync } from "node:fs";
+import { readdirSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { inspect } from "node:util";
@@ -154,11 +154,8 @@ function describeError(error) {
  * was the old `.dx` spelling, and `ask(...)` needs an import — fails with V8's
  * `X is not defined`. The names are known here: the built-in ones are the runtime
  * module's exports, and an API directory named `X` is what the specifier resolves to.
- * Saying so is the difference between a squiggle and a fix.
- *
- * The binding the suggestion names is one the module actually exports: Dext runs
- * `main`, so that is what an API normally exports, and a module that exports something
- * else is imported by a name it has rather than by `main`.
+ * Saying so is the difference between a squiggle and a fix. An API's binding is its
+ * file name, so the hint can name it without reading the module.
  */
 /**
  * The runtime module user code imports, loaded through this kernel's own loader:
@@ -195,14 +192,8 @@ async function undefinedNameHint(message, apiRoots) {
     const file = entries.filter((entry) => /\.(ts|mts)$/.test(entry)).sort()[0];
     if (!file) continue;
     const leaf = file.replace(/\.(ts|mts)$/, "");
-    const source = readFileSync(path.join(directory, file), "utf8");
-    const names = [...source.matchAll(/\bexport\s+(?:async\s+)?function\s+([A-Za-z_$][A-Za-z0-9_$]*)/g)].map((entry) => entry[1]);
-    for (const entry of source.matchAll(/\bexport\s+(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)/g)) names.push(entry[1]);
-    const alias = leaf !== "main" && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(leaf) ? leaf : "main";
-    const fallback = alias === "main" ? "main" : `main as ${alias}`;
-    const binding = names.includes("main") ? fallback : names.includes(alias) ? alias : names[0] ?? fallback;
     const specifier = directory === root ? `dext/api/${leaf}` : `dext/api/${name}/${leaf}`;
-    return `${message}\nCode mode imports what it calls, so use: import { ${binding} } from "${specifier}";`;
+    return `${message}\nCode mode imports what it calls, so use: import { ${leaf} } from "${specifier}";`;
   }
   return message;
 }

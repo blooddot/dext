@@ -20,6 +20,8 @@ All notable changes to Dext are documented in this file.
 
 - **Update project model** now re-drafts only the modules whose files changed: each module stage saves the content hashes it read, and an unchanged module keeps its saved prose and review state. The root stage still runs once per update, and a model saved before these hashes existed re-drafts every module on its first update.
 
+- **Breaking:** an API's entry function must be named after its file, and `main` is no longer recognised. `api/dev/fix.ts` exports `fix`, so rename `export async function main` to `export async function fix` and change `import { main as fix } from "dext/api/dev/fix"` to `import { fix } from "dext/api/dev/fix"`. Saving a draft that exports anything else is rejected with the name to use, a missing-import hint names the file's own binding, and the Execution flow starts at that function.
+
 - `mermaid` fenced blocks now render as diagrams in every Dext Markdown output surface: the turn's **Output**, finished **Process** messages, and **History** pages. A row that is still streaming keeps its source until the message completes, so a half-written fence is never rendered.
 
 - A tool call that never reports a result now stops the turn after thirty minutes instead of waiting forever: idle detection pauses while a tool runs, so nothing else bounded it. Each continuous tool phase gets the full ceiling; sequential tools start a fresh one, and `dext.agent.timeoutMs` still wins when it is shorter.

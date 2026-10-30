@@ -44,7 +44,7 @@ export const DEXT_PACKAGE_PATH = "package.json";
 
 const BOUNDARY_NOTE =
   "Import a result type when you annotate a return value: they are exported by this\n" +
-  "module, not declared globally, so `export async function main(): Promise<AskResult>`\n" +
+  "module, not declared globally, so `export async function <leaf>(): Promise<AskResult>`\n" +
   "needs `import { ask, type AskResult } from \"dext\";`.\n" +
   "\n" +
   "Values that cross a `dext` API boundary must be JSON-serializable. The kernel and the\n" +

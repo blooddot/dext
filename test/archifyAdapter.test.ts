@@ -392,7 +392,7 @@ describe("ArchifyAdapter", () => {
     try {
       const index = await buildStructureIndex([
         { path: "src/model.ts", content: "export interface Named { name: string } export abstract class Base { id: string; abstract run(): void } export class Child extends Base implements Named { name: string; run(): void {} }" },
-        { path: "src/entry.ts", content: "export function main() {}" }
+        { path: "src/entry.ts", content: "export function entry() {}" }
       ]);
       for (const diagram of [buildStructureMap(index.summary, 7).diagram, buildClassMap(index.summary, 7).diagram]) {
         const document = await adapter.transform(diagram);

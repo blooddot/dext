@@ -164,19 +164,19 @@ describe("Dext kernel host", () => {
     const shared = join(root, "shared-api");
     await mkdir(shared, { recursive: true });
     await writeFile(join(shared, "greeter.ts"), [
-      "export async function main(name: string): Promise<string> {",
+      "export async function greeter(name: string): Promise<string> {",
       "  return `hello ${name}`;",
       "}",
       ""
     ].join("\n"), "utf8");
     await mkdir(join(root, ".dext", "api"), { recursive: true });
     await writeFile(join(root, ".dext", "api", "project.ts"), [
-      "export async function main(): Promise<string> { return \"project\"; }",
+      "export async function project(): Promise<string> { return \"project\"; }",
       ""
     ].join("\n"), "utf8");
     const file = await fixture(root, "consumer.ts", [
-      "import { main as project } from \"dext/api/project\";",
-      "import { main as greeter } from \"dext/api/greeter\";",
+      "import { project } from \"dext/api/project\";",
+      "import { greeter } from \"dext/api/greeter\";",
       "console.log(await project());",
       "console.log(await greeter(\"dext\"));",
       ""
@@ -189,7 +189,7 @@ describe("Dext kernel host", () => {
 
   it("re-evaluates the file on a second run of the same kernel", { timeout: 30000 }, async () => {
     const root = await workspace();
-    const file = await fixture(root, "side-effect.ts", "console.log(\"top\");\nexport function main() { return 1; }\n");
+    const file = await fixture(root, "side-effect.ts", "console.log(\"top\");\nexport function entry() { return 1; }\n");
     const kernel = host(root, async (invocation) => askResponse(invocation));
     const first = await kernel.run(file);
     const second = await kernel.run(file);
@@ -236,7 +236,7 @@ describe("Dext kernel host", () => {
     await mkdir(runs, { recursive: true });
     // Twenty-five stale buffers, plus the two this test writes.
     for (let index = 0; index < 25; index += 1) {
-      await writeFile(join(runs, `run-${1700000000000 + index}-1.ts`), "export function main() { return 1; }\n", "utf8");
+      await writeFile(join(runs, `run-${1700000000000 + index}-1.ts`), "export function entry() { return 1; }\n", "utf8");
     }
     await kernel.runSource("console.log(\"first\");");
     await kernel.runSource("console.log(\"second\");");
@@ -274,14 +274,9 @@ describe("Dext kernel host", () => {
     const root = await workspace();
     const api = join(root, "api", "git");
     await mkdir(api, { recursive: true });
-    await writeFile(join(api, "commit.ts"), "export async function main() { return 1; }\n", "utf8");
+    await writeFile(join(api, "commit.ts"), "export async function commit() { return 1; }\n", "utf8");
     const kernel = host(root, async (invocation) => askResponse(invocation));
     const apiRoots = [join(root, "api")];
-    await expect(kernel.runSource("git.commit();", { apiRoots }))
-      .rejects.toThrow(/git is not defined[\s\S]*import \{ main as commit \} from "dext\/api\/git\/commit";/);
-    // A module that exports something other than the entry point Dext runs is imported
-    // by a name it has: suggesting `main` there would be a fix that cannot resolve.
-    await writeFile(join(api, "commit.ts"), "export async function commit() { return 1; }\n", "utf8");
     await expect(kernel.runSource("git.commit();", { apiRoots }))
       .rejects.toThrow(/git is not defined[\s\S]*import \{ commit \} from "dext\/api\/git\/commit";/);
     await expect(kernel.runSource('await ask({ input: "x" });', { apiRoots }))

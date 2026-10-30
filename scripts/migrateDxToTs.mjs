@@ -8,7 +8,7 @@
  *   node scripts/migrateDxToTs.mjs .dext/api/git/commit.dx        # writes the .ts beside it
  *   node scripts/migrateDxToTs.mjs <file.dx> --stdout             # prints instead of writing
  *
- * Handled: `def main(...) -> Result:` → `export async function main(...): Promise<Result> {`,
+ * Handled: `def main(...) -> Result:` → `export async function <file name>(...): Promise<Result> {`,
  * assignments and returns of Dext calls, keyword arguments → one object literal,
  * `True`/`False`/`None`, `print(text=…)` → `console.log(…)`, comments, and calls
  * that wrap across lines.
@@ -104,6 +104,8 @@ function convert(source, file) {
   const notes = [];
   const body = [];
   const imports = new Set();
+  /** The entry function is named after the `.ts` file the module is written to. */
+  const entry = basename(file, ".dx");
   /** Result interfaces used as annotations; they need `type` imports. */
   const typeImports = new Set();
   let sawMain = false;
@@ -140,6 +142,7 @@ function convert(source, file) {
     const def = /^def\s+([A-Za-z_]\w*)\((.*)\)\s*->\s*([^:]+):$/.exec(trimmed);
     if (def) {
       if (def[1] !== "main") notes.push(`'${def[1]}' is a helper: keep it as a local function or move it to its own module.`);
+      const name = def[1] === "main" ? entry : def[1];
       const parameters = splitArguments(def[2]).map((parameter) => {
         const [name, annotation, fallback] = parameter.split(/\s*(?::|=)\s*/);
         // A default makes the parameter optional in practice, so it never also
@@ -148,7 +151,7 @@ function convert(source, file) {
         return `${name}${optional ? "?" : ""}: ${annotation ? tsType(annotation) : "unknown"}${fallback !== undefined ? ` = ${tsValue(fallback)}` : ""}`;
       });
       const resultType = tsType(def[3]);
-      body.push(`export async function ${def[1]}(${parameters.join(", ")}): Promise<${resultType}> {`);
+      body.push(`export async function ${name}(${parameters.join(", ")}): Promise<${resultType}> {`);
       // `AgentResult` and friends are exported by the `dext` module rather than
       // declared globally, so a return annotation needs them imported as a type.
       if (/^[A-Z]\w*$/.test(resultType)) typeImports.add(resultType);

@@ -150,7 +150,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   /**
    * Hands the composer everything its TypeScript worker cannot read for itself: the
    * generated declaration and the workspace's own API modules. Both are extra
-   * libraries in the worker, and the second one is why `import { main } from
+   * libraries in the worker, and the second one is why `import { commit } from
    * "dext/api/git/commit"` completes there.
    *
    * Both directions are logged to **Dext Input**, because the alternative is a composer

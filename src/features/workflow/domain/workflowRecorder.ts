@@ -12,7 +12,7 @@ export interface RecordedTurn {
 export interface RecordedWorkflow {
   /** Suggested file name below `.dext/api`, including the `.ts` extension. */
   fileName: string;
-  /** The dotted API id the file is addressed by: `import { main } from "dext/api/<id>"`. */
+  /** The dotted API id the file is addressed by: `import { <leaf> } from "dext/api/<id>"`. */
   apiId: string;
   source: string;
 }
@@ -67,7 +67,7 @@ function confirmations(turn: RecordedTurn): string[] {
 }
 
 /** Strings that show up in more than one turn are the workflow's real inputs, so
- * they are lifted into `main()` parameters instead of being pasted twice. */
+ * they are lifted into the entry function's parameters instead of being pasted twice. */
 function sharedParameters(turns: readonly RecordedTurn[]): Map<string, string> {
   const counts = new Map<string, number>();
   for (const turn of turns) {
@@ -99,6 +99,8 @@ export function recordWorkflow(turns: readonly RecordedTurn[]): RecordedWorkflow
     throw new Error("This conversation has no successful turn to record.");
   }
   const name = recordedApiName(usable);
+  // An API's entry function is named after its file, so the skeleton has to match.
+  const entry = name.split(".").at(-1) ?? name;
   const shared = sharedParameters(usable);
   const parameters = [...new Set(shared.values())].map((parameter) => `${parameter}: string`);
   const lines: string[] = [];
@@ -147,7 +149,7 @@ export function recordWorkflow(turns: readonly RecordedTurn[]): RecordedWorkflow
   lines.push("// Edit the steps below, then save to register this file as a reusable API.");
   lines.push(`import { ${imports} } from "dext";`);
   lines.push("");
-  lines.push(`export async function main(${parameters.join(", ")}): Promise<${returnType}> {`);
+  lines.push(`export async function ${entry}(${parameters.join(", ")}): Promise<${returnType}> {`);
   for (const line of body) lines.push(`  ${line}`);
   lines.push("}");
   return { fileName: `${name}.ts`, apiId: name, source: `${lines.join("\n")}\n` };

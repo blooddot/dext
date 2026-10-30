@@ -12,15 +12,15 @@ describe("API flow analysis", () => {
 function helper(): void {}
 const viaArrow = () => helper();
 export { viaArrow as run };
-export function main(): void { helper(); }`);
+export function entry(): void { helper(); }`);
     expect(flow.functions.map((fn) => [fn.name, fn.exported, fn.calls, fn.unused])).toEqual([
       ["helper", false, [], false],
       ["viaArrow", true, ["helper"], false],
-      ["main", true, ["helper"], false]
+      ["entry", true, ["helper"], false]
     ]);
     expect(flow.edges).toEqual([
       { from: "viaArrow", to: "helper", line: 3 },
-      { from: "main", to: "helper", line: 5 }
+      { from: "entry", to: "helper", line: 5 }
     ]);
     expect(flow.issues).toEqual([]);
   });
@@ -32,7 +32,7 @@ function helper() {}
 function askForPlan() { return askAlias({}); }
 function runAgent() { return ai.agent({}); }
 function runPlan() { return ai["plan"]({}); }
-export function main() { askForPlan(); runAgent(); runPlan(); helper(); }`);
+export function entry() { askForPlan(); runAgent(); runPlan(); helper(); }`);
     const byName = new Map(flow.functions.map((fn) => [fn.name, fn]));
     expect(byName.get("askForPlan")?.apiCalls).toEqual([{ tag: "ask", line: 4, callee: "askAlias" }]);
     expect(byName.get("runAgent")?.apiCalls).toEqual([{ tag: "agent", line: 5, callee: "ai.agent" }]);
@@ -40,7 +40,7 @@ export function main() { askForPlan(); runAgent(); runPlan(); helper(); }`);
     expect(byName.get("helper")?.apiCalls).toEqual([]);
     expect(flow.issues).toEqual([]);
     expect(flow.edges.map((edge) => `${edge.from}->${edge.to}`)).toEqual([
-      "main->askForPlan", "main->runAgent", "main->runPlan", "main->helper"
+      "entry->askForPlan", "entry->runAgent", "entry->runPlan", "entry->helper"
     ]);
   });
 
@@ -73,9 +73,9 @@ export default function () {}`);
 
   it("reports multiple top-level API calls from one function", async () => {
     const flow = await describeApiFlow(`import { ask, agent } from "dext";
-export function main() { return Promise.all([ask({}), agent({})]); }`);
+export function entry() { return Promise.all([ask({}), agent({})]); }`);
     expect(flow.issues.map((issue) => issue.rule)).toEqual(["multiple-api-calls"]);
-    expect(flow.issues[0]).toMatchObject({ severity: "error", function: "main", line: 2 });
+    expect(flow.issues[0]).toMatchObject({ severity: "error", function: "entry", line: 2 });
     expect(flow.issues[0]?.message).toContain("ask and agent");
     expect(flow.issues[0]?.suggestion).toContain("wrapper");
   });
@@ -84,14 +84,14 @@ export function main() { return Promise.all([ask({}), agent({})]); }`);
     const flow = await describeApiFlow(`import { ask } from "dext";
 function prepare() {}
 function askForPlan() { prepare(); return ask({}); }
-export function main() { return askForPlan(); }`);
+export function entry() { return askForPlan(); }`);
     expect(flow.issues.map((issue) => [issue.rule, issue.function])).toEqual([["api-wrapper-composes", "askForPlan"]]);
     expect(flow.issues[0]?.message).toContain("prepare");
   });
 
   it("ignores calls in comments, strings, nested functions and callbacks", async () => {
     const flow = await describeApiFlow(`import { ask, agent } from "dext";
-export function main() {
+export function entry() {
   // ask({})
   const text = "agent({})";
   const template = \`plan({})\`;

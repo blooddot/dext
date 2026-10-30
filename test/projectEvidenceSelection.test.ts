@@ -85,10 +85,10 @@ describe("project evidence selection", () => {
       'src/main.ts': 'interface Api { postMessage(m: unknown): void; }\nconst api = acquireVsCodeApi();\n' + '// gap\n'.repeat(400),
       'src/extension.ts': 'export function activate() {}\n' + '// gap\n'.repeat(300) + 'const root = joinPath(context.extensionUri, "vendor", "renderer");',
       'src/renderer.ts': '// gap\n'.repeat(300) + 'export function render() { return runToolProcess(process.execPath, [join(root, "bin/render.mjs")]); }',
-      'src/aTransport.ts': 'import { spawn } from "node:child_process";\nexport function main() { spawn("tool"); }\n' + '// gap\n'.repeat(300)
-        + 'function http(url: string) { return fetch(url); }\n' + '// gap\n'.repeat(300) + 'function call(transport: string) { return transport === "http" ? http("local") : main(); }'
+      'src/aTransport.ts': 'import { spawn } from "node:child_process";\nexport function entry() { spawn("tool"); }\n' + '// gap\n'.repeat(300)
+        + 'function http(url: string) { return fetch(url); }\n' + '// gap\n'.repeat(300) + 'function call(transport: string) { return transport === "http" ? http("local") : entry(); }'
     };
-    for (let i = 0; i < 12; i++) fixtures[`src/zWorker${i}.ts`] = 'import { spawn } from "node:child_process";\nexport function main() { spawn("worker"); }\n' + '// gap\n'.repeat(400);
+    for (let i = 0; i < 12; i++) fixtures[`src/zWorker${i}.ts`] = 'import { spawn } from "node:child_process";\nexport function entry() { spawn("worker"); }\n' + '// gap\n'.repeat(400);
     for (const [path, content] of Object.entries(fixtures)) { files.set(path, content); tree.sources.push(path); }
     try {
       const evidence = await readStructureIndexEvidence({ scheme: 'file', fsPath: 'C:/ws', path: '/C:/ws' } as never, {}, { maxFileChars: 24000 });
@@ -101,12 +101,12 @@ describe("project evidence selection", () => {
     const { readStructureIndexEvidence } = await import('../src/features/project/host/projectPanelDataSource.js');
     const root = { scheme: 'file', fsPath: 'C:/ws', path: '/C:/ws' } as never;
     const path = 'src/aaaTransport.ts';
-    const content = 'import { spawn } from "node:child_process";\nexport function main() { return spawn("tool"); }\n'
+    const content = 'import { spawn } from "node:child_process";\nexport function entry() { return spawn("tool"); }\n'
       + '// unread gap\n'.repeat(200) + 'export function http(url: string) { return fetch(url); }\n'
-      + '// second gap\n'.repeat(200) + 'export function call(server: {transport: string}) { return server.transport === "http" ? http("local") : main(); }\n';
+      + '// second gap\n'.repeat(200) + 'export function call(server: {transport: string}) { return server.transport === "http" ? http("local") : entry(); }\n';
     files.set(path, content); tree.sources.push(path);
     const workers = Array.from({ length: 12 }, (_, i) => `src/zWorker${i}.ts`);
-    for (const worker of workers) { files.set(worker, 'import { spawn } from "node:child_process";\nexport function main() { spawn("node"); }\n' + '// implementation\n'.repeat(100)); tree.sources.push(worker); }
+    for (const worker of workers) { files.set(worker, 'import { spawn } from "node:child_process";\nexport function entry() { spawn("node"); }\n' + '// implementation\n'.repeat(100)); tree.sources.push(worker); }
     try {
       const packaged = await readStructureIndexEvidence(root, {}, { maxFileChars: 24000, maxEvidenceChars });
       const windows = packaged.files.filter(file => file.path === path);
@@ -124,8 +124,8 @@ describe("project evidence selection", () => {
     const fixtures: Record<string, string> = {
       'src/extension.ts': 'import * as vscode from "vscode";\nexport function activate() {}\n',
       'src/platform/editor-tabs/editorTabManager.ts': 'export function createWebviewPanel() { return windowApi.createWebviewPanel("app"); }\n',
-      'src/features/agents/host/agentRunner.ts': 'import { spawn } from "node:child_process";\nexport function main() { return spawn("agent"); }\n',
-      'src/runner/kernel.ts': 'import { spawn } from "node:child_process";\nexport function main() { return spawn("node"); }\n'
+      'src/features/agents/host/agentRunner.ts': 'import { spawn } from "node:child_process";\nexport function entry() { return spawn("agent"); }\n',
+      'src/runner/kernel.ts': 'import { spawn } from "node:child_process";\nexport function entry() { return spawn("node"); }\n'
     };
     for (const [path, content] of Object.entries(fixtures)) { files.set(path, content + '// implementation\n'.repeat(800)); tree.sources.push(path); }
     try {
@@ -174,7 +174,7 @@ describe("project evidence selection", () => {
     const { createHash } = await import('node:crypto');
     const root = { scheme: 'file', fsPath: 'C:/ws', path: '/C:/ws' } as never;
     const path = 'src/worker.ts';
-    const content = 'import { spawn } from "node:child_process";\n// spawn() is explained here, not executed.\n' + '// padding\n'.repeat(300) + 'export function main() { return spawn("node", ["worker.js"]); }\n';
+    const content = 'import { spawn } from "node:child_process";\n// spawn() is explained here, not executed.\n' + '// padding\n'.repeat(300) + 'export function entry() { return spawn("node", ["worker.js"]); }\n';
     files.set(path, content); tree.sources.push(path);
     try {
       const packaged = await readStructureIndexEvidence(root, {}, { maxFiles: 1, maxSourceFiles: 1 });

@@ -37,11 +37,11 @@ describe("the composer's global API modules", () => {
   it("registers a global module under the virtual root with its import specifier", () => {
     expect(composerGlobalApiModules([project], [{
       relative: "git/commit.ts",
-      content: "export function main(): void {}"
+      content: "export function commit(): void {}"
     }])).toEqual([{
       path: `${COMPOSER_GLOBAL_API_DIRECTORY}/git/commit.ts`,
       specifier: "dext/api/git/commit",
-      content: "export function main(): void {}"
+      content: "export function commit(): void {}"
     }]);
   });
 
@@ -50,7 +50,7 @@ describe("the composer's global API modules", () => {
       path: "api/git/commit.ts",
       specifier: "dext/api/git/commit",
       content: "export function commit(): void {}"
-    }], [{ relative: "git/commit.ts", content: "export function main(): void {}" }]);
+    }], [{ relative: "git/commit.ts", content: "export function commit(): void {}" }]);
     expect(modules).toEqual([]);
   });
 
@@ -59,7 +59,7 @@ describe("the composer's global API modules", () => {
       path: "api/git/commit/index.ts",
       specifier: "dext/api/git/commit/index",
       content: "export function commit(): void {}"
-    }], [{ relative: "git/commit.ts", content: "export function main(): void {}" }]);
+    }], [{ relative: "git/commit.ts", content: "export function commit(): void {}" }]);
     expect(modules).toEqual([]);
   });
 
@@ -76,11 +76,11 @@ describe("the composer's global API modules", () => {
   it("offers the global export with the import the kernel resolves", () => {
     const modules = composerGlobalApiModules([], [{
       relative: "git/commit.ts",
-      content: "export async function main(): Promise<void> {}"
+      content: "export async function commit(): Promise<void> {}"
     }]);
     const symbols = dextApiSymbols("", modules);
-    expect(dextSymbolsFor("main", "main", 4, symbols)).toEqual([
-      { name: "main", specifier: "dext/api/git/commit", kind: "function" }
+    expect(dextSymbolsFor("commit", "commit", 4, symbols)).toEqual([
+      { name: "commit", specifier: "dext/api/git/commit", kind: "function" }
     ]);
   });
 });

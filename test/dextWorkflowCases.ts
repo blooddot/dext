@@ -95,7 +95,7 @@ export function workflowCases(runnerDirectory: string): void {
       }
     );
 
-    it.each(["fix();", "await fix();", "export async function main() { await fix(); }"])(
+    it.each(["fix();", "await fix();", "export const main = async () => { await fix(); };"])(
       "waits across timers, native file IO and a held form: %s", { timeout: 30000 }, async (entry) => {
         const form = deferred();
         const answer = deferred();

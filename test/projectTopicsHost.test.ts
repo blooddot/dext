@@ -217,7 +217,7 @@ describe("Project topic host", () => {
     const intent = projectIntentSchema.parse({ schemaVersion: 1, updatedAt: 1, brief: { name: "Example" }, contexts: [{ id: "code", canonicalName: "Code", purpose: "Runs code", evidence: [{ path: "src/model.ts", line: 1 }] }] });
     const index = await buildStructureIndex([
       { path: "src/model.ts", content: "export class Base { id: string } export class Child extends Base { run(): void {} }" },
-      { path: "src/entry.ts", content: "export function main() {}" }
+      { path: "src/entry.ts", content: "export function entry() {}" }
     ]);
     const generate = vi.fn(async () => ({ text: JSON.stringify({ diagram: { schemaVersion: 1, id: "code-view", title: "Code", kind: "architecture", nodes: [], relations: [] } }) }));
     const artifact = (document: DiagramAdapterDocument): DiagramAdapterArtifact => ({ format: "html", mimeType: "text/html", content: "<html>derived</html>", adapterId: "fixture", adapterVersion: "1", diagramId: document.diagramId });

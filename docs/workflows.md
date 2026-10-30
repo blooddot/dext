@@ -54,7 +54,7 @@ import { fix } from "dext/api/dev/fix";
 fix("", "https://www.teambition.com/task/6ab36fad730476294198dade");
 ```
 
-Automatic tracking applies at TypeScript (`.ts` / `.mts`, including Code mode) call sites: named imports (including `as` aliases), default imports, and direct namespace calls such as `api.fix()` or `api["fix"]()`. The imported module can reexport the function. Calls retain their ordinary execution order and concurrency; tracking does not insert `await`. Use `await` to consume a result or order dependent work. An exported `main()` is still awaited. Unhandled workflow rejections fail the current run; `await`/`catch` and Promise combinators can handle them normally. Existing built-in API failures still fail the run.
+Automatic tracking applies at TypeScript (`.ts` / `.mts`, including Code mode) call sites: named imports (including `as` aliases), default imports, and direct namespace calls such as `api.fix()` or `api["fix"]()`. The imported module can reexport the function. Calls retain their ordinary execution order and concurrency; tracking does not insert `await`. Use `await` to consume a result or order dependent work. A `main()` exported by the Code-mode buffer itself is still awaited. Unhandled workflow rejections fail the current run; `await`/`catch` and Promise combinators can handle them normally. Existing built-in API failures still fail the run.
 
 This is an import-call boundary, not a wait for every asynchronous task in Node. Calls through copied function references, callbacks, `.call`/`.apply`, object methods below an exported object, dynamic imports, relative imports and JavaScript call sites need explicit `await` (or a returned Promise awaited by their caller). Detached timers, listeners and background work started inside a workflow are not covered by its returned Promise: await that work inside the workflow when it must finish before the turn closes. Dext requests and output from a closed run cannot enter the next run. Cancelling kills the kernel; already dispatched host work may finish, but its late response is discarded.
 
@@ -226,7 +226,7 @@ await fs.writeFile(`docs/decisions/${number}-${slug}.md`, created.text);
 
 The call is read-only: it never edits the workspace, so it can always be repaired when its output does not match the template, including a render that does not parse as the declared format. It also never chooses a destination, so the same template can render to any path — and a name that must follow a field is composed by the caller from the value it supplied. Codex and Claude receive the template's fields as their native structured-output schema; DeepSeek Harness has no schema field in ACP, so its answer is validated against the same contract in Dext instead. The template must live inside a trusted workspace, because its content becomes part of the Agent instruction.
 
-Project APIs live as TypeScript modules under `.dext/api/`. A module is imported by its path below that directory, so `.dext/api/workflow/feature.ts` is `import { main } from "dext/api/workflow/feature"`. Global APIs are stored in Dext global storage and are available in every workspace; a project API with the same id takes precedence. `paths.apiDirs` in `.dext/project.json` adds further API directories, and `.dext/api` is always searched first.
+Project APIs live as TypeScript modules under `.dext/api/`. A module is imported by its path below that directory, so `.dext/api/workflow/feature.ts` is `import { feature } from "dext/api/workflow/feature"`. Global APIs are stored in Dext global storage and are available in every workspace; a project API with the same id takes precedence. `paths.apiDirs` in `.dext/project.json` adds further API directories, and `.dext/api` is always searched first.
 
 A project-local API composes typed MCP, `agent`, and UI calls directly rather than importing intermediate phase APIs. A typical feature workflow reads context, makes a plan, gates on `ui.confirm`, implements, gates again, then validates. Rules live under `.dext/rules/`; every Agent phase declares the ordered rules it uses, and confirmable actions such as code generation and commit stay explicit UI gates.
 
@@ -275,7 +275,7 @@ Selecting terminal output and pressing Ctrl+Shift+C (Cmd+C on macOS) copies it a
 
 The token stays readable text in the submitted input, and Dext never inlines file contents into the prompt: the Agent reads the referenced file itself. `ask`, `agent`, `plan` and `template` all accept these tokens in `input`.
 
-The composer is Monaco's TypeScript editor, so highlighting, indentation, bracket matching and native editing behavior come from the TypeScript grammar. Code mode is plain TypeScript and nothing more: Dext adds the generated `dext` declaration, the workspace's own `.dext/api` modules, and the APIs in Dext's global storage as extra libraries, resolved by the same `dext/api/*` mapping the generated project gives VS Code (global modules use one appended virtual directory, after the project's candidates), and then completion, auto-import, signature help, hover, Go to Definition and diagnostics are the editor's own. `import { main } from "dext/api/git/commit"` therefore resolves and type-checks in the composer, and its import specifier and named exports complete like any other module's. An export that is not imported yet is completed together with the import that binds it — typing `ask` offers `ask` with `import { ask } from "dext";`, and typing `commi` offers the workspace API's own `commit` with its `import { commit } from "dext/api/git/commit";`; inside `import { … } from "…"` the module's exports are offered without any edit. The names are read out of the declaration and the API sources, never guessed from a name's shape: `git` is a directory, not an export, so typing it offers nothing and `.dx`-style qualified calls are not translated. A run that still used one of those names without importing it fails with the import to write: `git is not defined` is followed by `use: import { main as commit } from "dext/api/git/commit";`.
+The composer is Monaco's TypeScript editor, so highlighting, indentation, bracket matching and native editing behavior come from the TypeScript grammar. Code mode is plain TypeScript and nothing more: Dext adds the generated `dext` declaration, the workspace's own `.dext/api` modules, and the APIs in Dext's global storage as extra libraries, resolved by the same `dext/api/*` mapping the generated project gives VS Code (global modules use one appended virtual directory, after the project's candidates), and then completion, auto-import, signature help, hover, Go to Definition and diagnostics are the editor's own. `import { commit } from "dext/api/git/commit"` therefore resolves and type-checks in the composer, and its import specifier and named exports complete like any other module's. An export that is not imported yet is completed together with the import that binds it — typing `ask` offers `ask` with `import { ask } from "dext";`, and typing `commi` offers the workspace API's own `commit` with its `import { commit } from "dext/api/git/commit";`; inside `import { … } from "…"` the module's exports are offered without any edit. The names are read out of the declaration and the API sources, never guessed from a name's shape: `git` is a directory, not an export, so typing it offers nothing and `.dx`-style qualified calls are not translated. A run that still used one of those names without importing it fails with the import to write: `git is not defined` is followed by `use: import { commit } from "dext/api/git/commit";`.
 
 ## Custom APIs and Skills
 
@@ -285,7 +285,7 @@ Custom APIs live in `.dext/api/**/*.ts`. Directory segments become namespaces an
 // .dext/api/team/analyze.ts -> "dext/api/team/analyze"
 import { ask, type AskResult } from "dext";
 
-export async function main(input: string): Promise<AskResult> {
+export async function analyze(input: string): Promise<AskResult> {
   return await ask({ input });
 }
 ```
@@ -293,32 +293,32 @@ export async function main(input: string): Promise<AskResult> {
 Import one by its path below `.dext/api`:
 
 ```ts
-import { main as analyze } from "dext/api/team/analyze";
+import { analyze } from "dext/api/team/analyze";
 
 const answer = await analyze("Explain task filtering and its tests");
 console.log(answer.text);
 ```
 
-The module exports `main` as a convention Dext looks for when the module is itself the run's entry point; an importer decides how to call it. The export is not special otherwise — anything the module exports is available to the importer.
+The file's entry function is named after the file: `analyze` for `analyze.ts`. Dext looks for that name when the module is itself the run's entry point — a different name is not recognised — and an importer decides how to call it. The export is not special otherwise — anything the module exports is available to the importer.
 
 Split a longer API into helpers the ordinary way:
 
 ```ts
 // .dext/api/playground/develop.ts
 import type { TerminalResult } from "dext";
-import { main as verify } from "dext/api/playground/verify";
+import { verify } from "dext/api/playground/verify";
 
 function report(checked: TerminalResult): void {
   if (checked.status !== "succeeded") console.error(checked.stderr);
   else console.log(checked.stdout);
 }
 
-export async function main(): Promise<void> {
+export async function develop(): Promise<void> {
   report(await verify());
 }
 ```
 
-Helpers are ordinary functions: a module may export as many values as it likes, another module imports any of them, and recursion, classes, generics and npm packages all work. There is no required result type — `main` may return a Dext result, a plain value, or nothing. Completion, signature help and hover in `.dext/api/*.ts` come from VS Code's TypeScript service against the generated declaration.
+Helpers are ordinary functions: a module may export as many values as it likes, another module imports any of them, and recursion, classes, generics and npm packages all work. There is no required result type — the entry function may return a Dext result, a plain value, or nothing. Completion, signature help and hover in `.dext/api/*.ts` come from VS Code's TypeScript service against the generated declaration.
 
 ### Execution flow
 
@@ -343,7 +343,7 @@ async function runAgent(input: string): Promise<AgentResult> {
   return agent({ input });
 }
 
-export async function main(input: string): Promise<AgentResult> {
+export async function <leaf>(input: string): Promise<AgentResult> {
   await askForPlan(input);
   return runAgent(input);
 }
@@ -369,7 +369,7 @@ VS Code's own TypeScript service then gives completion, hover, F12 and diagnosti
 
 ## Conversation history and workflow recording
 
-A conversation can be turned into a starting point instead of being written from scratch: right-click a Dext History entry and choose **Record Conversation as Dext Workflow**. Each successful turn becomes a step, a prompt repeated across turns becomes a `main()` parameter, a confirmation the conversation went through becomes a `ui.confirm` call, and a Code-mode turn is left as a comment. The file is written under `.dext/api` and opened for editing; it is a TypeScript skeleton to revise, not a finished API.
+A conversation can be turned into a starting point instead of being written from scratch: right-click a Dext History entry and choose **Record Conversation as Dext Workflow**. Each successful turn becomes a step, a prompt repeated across turns becomes an entry-function parameter, a confirmation the conversation went through becomes a `ui.confirm` call, and a Code-mode turn is left as a comment. The file is written under `.dext/api` and opened for editing; it is a TypeScript skeleton to revise, not a finished API.
 
 Dext History is scoped to the current VS Code workspace. Conversations,
 favorites, names, and open conversation tabs are restored after restarting VS

@@ -87,17 +87,17 @@ Save reusable APIs as TypeScript modules under `.dext/api/`. For example, create
 ```ts
 import { ask, type AskResult } from "dext";
 
-export async function main(input: string): Promise<AskResult> {
+export async function analyze(input: string): Promise<AskResult> {
   return await ask({ input });
 }
 ```
 
-Built-in APIs such as `ask`, `agent`, and `terminal` are imported from the `dext` module; custom APIs are imported by their path below `.dext/api`.
+Built-in APIs such as `ask`, `agent`, and `terminal` are imported from the `dext` module; custom APIs are imported by their path below `.dext/api`. A module's entry function is named after its file, so `analyze.ts` exports `analyze`.
 
 In Code mode, import a custom API the same way:
 
 ```ts
-import { main as analyze } from "dext/api/team/analyze";
+import { analyze } from "dext/api/team/analyze";
 
 const answer = await analyze("Explain task filtering and its tests");
 console.log(answer.text);
