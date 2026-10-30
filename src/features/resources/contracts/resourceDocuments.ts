@@ -127,8 +127,9 @@ export interface FileResourceDataSourceOptions {
   listFiles(kind: Exclude<ResourceKind, "file">): Promise<Array<{ name: string; path: string; scope: ResourceScope; pack?: ResourcePackRef }>>;
   readFile(entry: ResourceEntry): Promise<string | undefined>;
   describeApi?(content: string): Promise<ApiSourceFunction[]>;
-  /** Builds the function call graph for a detail page; lists deliberately skip it. */
-  describeApiFlow?(content: string): Promise<ApiFlow>;
+  /** Builds the flow for a detail page; lists deliberately skip it. The second
+   * argument is the API's leaf name, which is the entry function's name. */
+  describeApiFlow?(content: string, entryName?: string): Promise<ApiFlow>;
 }
 
 

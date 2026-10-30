@@ -118,6 +118,103 @@ export function commit() { return agent({}); }`);
   });
 });
 
+describe("API flow entry statements", () => {
+  const source = `export async function demo() {
+  const a = await prepare();
+  if (!a) return "bad";
+  await run(a);
+  while (true) { if (await again()) break; }
+  return "ok";
+}`;
+
+  it("walks the entry statements in source order with decisions, loops and an exit per branch", async () => {
+    const entry = (await describeApiFlow(source, undefined, "demo")).entry!;
+    expect(entry.name).toBe("demo");
+    expect(entry.steps.map((step) => [step.kind, step.label])).toEqual([
+      ["entry", "demo L1"],
+      ["step", "prepare L2"],
+      ["decision", "!a"],
+      ["end", "结束"],
+      ["step", "run L4"],
+      ["loop", "true"],
+      ["decision", "await again()"],
+      ["end", "结束"]
+    ]);
+    // A branch's `return` closes where it stands: one shared end node at the bottom
+    // would draw a rail down the whole diagram for every guard clause.
+    expect(entry.steps.filter((step) => step.kind === "end")).toHaveLength(2);
+    expect(entry.edges).toEqual([
+      { from: 0, to: 1 },
+      { from: 1, to: 2 },
+      { from: 2, to: 3, label: "yes" },
+      { from: 2, to: 4, label: "no" },
+      { from: 4, to: 5 },
+      { from: 5, to: 6 },
+      { from: 6, to: 5, label: "no" },
+      { from: 5, to: 7 },
+      // `break` leaves the loop, so its branch keeps an arrow to what follows the loop.
+      { from: 6, to: 7, label: "yes" }
+    ]);
+  });
+
+  it("keeps a short string literal in a condition and folds a long one", async () => {
+    const entry = (await describeApiFlow(`export function demo() {
+  if (state.label === "no-plan") return 1;
+  if (state.label === "a value far too long to fit in one box") return 2;
+  return 3;
+}`, undefined, "demo")).entry!;
+    const decisions = entry.steps.filter((step) => step.kind === "decision").map((step) => step.label);
+    expect(decisions[0]).toBe('state.label === "no-plan"');
+    expect(decisions[1]).toBe("state.label === …");
+  });
+
+  it("tags a step that calls a wrapper or a top-level API", async () => {
+    const entry = (await describeApiFlow(`import { ask } from "dext";
+function askForPlan() { return ask({}); }
+export async function demo() { await askForPlan(); }`, undefined, "demo")).entry!;
+    expect(entry.steps[1]).toEqual({ id: 1, kind: "step", label: "askForPlan L3", tag: "ask" });
+  });
+
+  it("renders the entry flow top-to-bottom with decisions, the end nodes and ordered edges", async () => {
+    const flow = await describeApiFlow(source, undefined, "demo");
+    const mermaid = renderApiFlowMermaid(flow);
+    expect(mermaid.startsWith("flowchart TB")).toBe(true);
+    expect(mermaid).toContain('n0(["demo L1 · entry"])');
+    expect(mermaid).toContain('n2{"!a"}');
+    expect(mermaid).toContain('n3(["结束"])');
+    expect(mermaid).toContain('n7(["结束"])');
+    expect(mermaid).toContain("n0 --> n1");
+    expect(mermaid).toContain("n2 -->|yes| n3");
+    expect(mermaid).toContain("n6 -->|no| n5");
+    // `break` leaves the loop, so its branch keeps an arrow to what follows the loop.
+    expect(mermaid).toContain("n6 -->|yes| n7");
+    expect(mermaid).toContain("n5 --> n7");
+    expect(mermaid).toContain("class n0 entry");
+    expect(renderApiFlow(flow, "demo")).toContain("data-api-flow-source");
+  });
+
+  it("falls back to the call graph when the entry is missing, ambiguous or unparseable", async () => {
+    const missing = await describeApiFlow("export function other() { return 1; }", undefined, "demo");
+    expect(missing.entry).toBeUndefined();
+    expect(missing.functions.map((fn) => fn.name)).toEqual(["other"]);
+    const ambiguous = await describeApiFlow("export function demo() { return 1; }\nexport const demo = () => 2;", undefined, "demo");
+    expect(ambiguous.entry).toBeUndefined();
+    expect(renderApiFlowMermaid(ambiguous).startsWith("flowchart LR")).toBe(true);
+    const broken = await describeApiFlow("export async function demo( {", undefined, "demo");
+    expect(broken).toEqual({ functions: [], edges: [], issues: [] });
+    expect(renderApiFlow(broken, "demo")).toBe("");
+  });
+
+  it("takes the entry from the file name and never from main", async () => {
+    expect((await describeApiFlow("export async function demo() {}", undefined, "demo")).entry?.name).toBe("demo");
+    // The name the compatibility period accepted: it is not an entry point any more.
+    const legacy = "main";
+    const flow = await describeApiFlow(`export async function ${legacy}() {}`, undefined, "demo");
+    expect(flow.entry).toBeUndefined();
+    expect(renderApiFlowMermaid(flow).startsWith("flowchart LR")).toBe(true);
+  });
+});
+
 describe("API flow presentation", () => {
   const flow: ApiFlow = {
     functions: [
@@ -191,8 +288,8 @@ describe("API flow presentation", () => {
   });
 
   it("parses the flow only for a detail page, never for the list", async () => {
-    const content = `import { ask } from "dext";\nexport function main() { return ask({}); }`;
-    const describe = vi.fn(describeApiFlow);
+    const content = `import { ask } from "dext";\nexport function flow() { return ask({}); }`;
+    const describe = vi.fn((content: string, entryName?: string) => describeApiFlow(content, undefined, entryName));
     const files = createFileResourceDataSource({
       roots: () => ({ project: "/project/.dext" }),
       listFiles: async (kind) => kind === "api" ? [{ name: "dev.flow", path: "dev/flow.ts", scope: "project" as const }] : [],
@@ -205,6 +302,6 @@ describe("API flow presentation", () => {
     expect(describe).not.toHaveBeenCalled();
     const detail = await files.definition(list[0]!.id);
     expect(describe).toHaveBeenCalledOnce();
-    expect(detail?.entry.apiFlow?.functions.map((fn) => fn.name)).toEqual(["main"]);
+    expect(detail?.entry.apiFlow?.functions.map((fn) => fn.name)).toEqual(["flow"]);
   });
 });

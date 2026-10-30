@@ -210,11 +210,11 @@ export function createFileResourceDataSource(options: FileResourceDataSourceOpti
   const documentApi = async (entry: ResourceEntry, content: string, includeFlow = false): Promise<ResourceEntry> => {
     if (entry.kind !== "api") return entry;
     const functions = options.describeApi ? await options.describeApi(content) : [];
-    const apiFlow = includeFlow && options.describeApiFlow ? await options.describeApiFlow(content) : undefined;
-    if (!functions.length) return apiFlow ? { ...entry, apiFlow } : entry;
     const leaf = entry.name.split(".").at(-1);
+    const apiFlow = includeFlow && options.describeApiFlow ? await options.describeApiFlow(content, leaf) : undefined;
+    if (!functions.length) return apiFlow ? { ...entry, apiFlow } : entry;
     const apiFunctions = functions.map(item => ({ ...item,
-      name: [leaf, "default", "main"].includes(item.name) ? entry.name : `${entry.name}.${item.name}`
+      name: [leaf, "default"].includes(item.name) ? entry.name : `${entry.name}.${item.name}`
     }));
     const primary = apiFunctions.find(item => item.name === entry.name) ?? apiFunctions[0]!;
     return { ...entry, api: primary.api, apiFunctions, ...(primary.description ? { description: primary.description } : {}), ...(apiFlow ? { apiFlow } : {}) };
@@ -225,7 +225,12 @@ export function createFileResourceDataSource(options: FileResourceDataSourceOpti
       for (const entry of await entries(kinds)) {
         // Only API lists need source metadata. Read sequentially to bound memory and I/O.
         const content = entry.kind === "api" && options.describeApi ? await options.readFile(entry) : undefined;
-        result.push(content === undefined ? entry : await documentApi(entry, content));
+        if (content === undefined) { result.push(entry); continue; }
+        const documented = await documentApi(entry, content);
+        // A Dext API exports the function its file names; a module that exports only
+        // helpers is imported rather than run, so the page lists APIs only.
+        if (!documented.apiFunctions?.some(item => item.name === entry.name)) continue;
+        result.push(documented);
       }
       return filterResourceEntries(result, query);
     },

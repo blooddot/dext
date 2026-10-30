@@ -121,9 +121,33 @@ try {
       assert.equal(await evaluate(`getComputedStyle(document.querySelector('dt .tok-propertyName')).color !== getComputedStyle(document.querySelector('dt .tok-typeName')).color`), true);
       await writeFile(join(artifacts, `api-detail-${themeName}-${width}.png`), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
       // Execution flow: the real apiFlow.js Webview entry renders Mermaid inside the page CSP.
-      const flowFixture = { functions: [
-        { name: 'commit', line: 2, exported: true, calls: [], apiCalls: [{ tag: 'agent', line: 3, callee: 'agent' }], unused: false }
-      ], edges: [], issues: [] };
+      const flowFixture = {
+        functions: [
+          { name: 'commit', line: 2, exported: true, calls: ['prepare', 'runAgent'], apiCalls: [], unused: false },
+          { name: 'runAgent', line: 8, exported: false, calls: [], apiCalls: [{ tag: 'agent', line: 9, callee: 'agent' }], unused: false }
+        ],
+        edges: [{ from: 'commit', to: 'runAgent', line: 4 }],
+        issues: [],
+        // A long vertical chain: the top-to-bottom layout has to fit 320px.
+        entry: {
+          name: 'commit', line: 2,
+          steps: [
+            { id: 0, kind: 'entry', label: 'commit L2' },
+            { id: 1, kind: 'step', label: 'prepare L3' },
+            { id: 2, kind: 'decision', label: '!plan' },
+            { id: 3, kind: 'end', label: '结束' },
+            { id: 4, kind: 'step', label: 'runAgent L6', tag: 'agent' },
+            { id: 5, kind: 'loop', label: 'attempt < 3' },
+            { id: 6, kind: 'step', label: 'retry L9' },
+            { id: 7, kind: 'end', label: '结束' }
+          ],
+          edges: [
+            { from: 0, to: 1 }, { from: 1, to: 2 }, { from: 2, to: 3, label: 'yes' },
+            { from: 2, to: 4, label: 'no' }, { from: 4, to: 5 }, { from: 5, to: 6 },
+            { from: 6, to: 5, label: 'yes' }, { from: 5, to: 7, label: 'no' }
+          ]
+        }
+      };
       const flowSource = 'import { agent } from "dext";\nexport function commit() { return agent({}); }';
       await load(ui.renderResourceDefinition(ui.buildResourceDefinition({ ...entries[0], name: 'git.commit', apiFlow: flowFixture }, flowSource)),
         { scriptUri: `${origin}/apiFlow.js` }, `document.body.classList.add(${JSON.stringify(themeClass)});`);

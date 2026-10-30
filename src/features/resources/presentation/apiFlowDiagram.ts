@@ -1,4 +1,4 @@
-import type { ApiFlow, ApiFlowFunction, ApiFlowIssue } from "../../workflow/contracts/apiFlow.js";
+import type { ApiFlow, ApiFlowEntry, ApiFlowFunction, ApiFlowIssue, ApiFlowStep } from "../../workflow/contracts/apiFlow.js";
 
 function escapeHtml(value: string): string {
   return value.replace(/[&><"']/g, (character) => ({
@@ -6,9 +6,11 @@ function escapeHtml(value: string): string {
   })[character] ?? character);
 }
 
-/** Entity-escape a Mermaid label so user text cannot become markup. */
+/** Entity-escape a Mermaid label so user text cannot become markup. A double quote
+ * becomes an apostrophe: Mermaid's strict mode renders `#quot;` back as the literal
+ * text `&quot;`, which is uglier than quoting with `'`. */
 function mermaidText(value: string): string {
-  return value.replace(/&/g, "#amp;").replace(/</g, "#lt;").replace(/>/g, "#gt;").replace(/"/g, "#quot;");
+  return value.replace(/&/g, "#amp;").replace(/</g, "#lt;").replace(/>/g, "#gt;").replace(/"/g, "'");
 }
 
 function nodeShape(fn: ApiFlowFunction, label: string): string {
@@ -19,11 +21,38 @@ function nodeShape(fn: ApiFlowFunction, label: string): string {
 }
 
 /**
+ * The Mermaid `flowchart TB` source for the statement-level flow of the entry
+ * function: the entry on top, then its statements in source order.
+ */
+function renderEntryMermaid(entry: ApiFlowEntry): string {
+  const lines = ["flowchart TB"];
+  for (const step of entry.steps) {
+    const label = mermaidText([step.label, step.kind === "entry" ? "entry" : "", step.tag ?? ""].filter(Boolean).join(" · "));
+    lines.push(`  n${step.id}${stepShape(step, label)}`);
+  }
+  for (const edge of entry.edges) {
+    lines.push(`  n${edge.from} ${edge.label ? `-->|${edge.label}|` : "-->"} n${edge.to}`);
+  }
+  // Same convention as the call graph: the start of the picture carries the weight.
+  lines.push("  classDef entry stroke-width:2px");
+  for (const step of entry.steps) if (step.kind === "entry") lines.push(`  class n${step.id} entry`);
+  return lines.join("\n");
+}
+
+function stepShape(step: ApiFlowStep, label: string): string {
+  if (step.kind === "entry" || step.kind === "end") return `(["${label}"])`;
+  if (step.kind === "decision") return `{"${label}"}`;
+  if (step.kind === "loop") return `{{"${label}"}}`;
+  return step.tag ? `[["${label}"]]` : `["${label}"]`;
+}
+
+/**
  * The Mermaid `flowchart LR` source for a flow. Node ids are generated (`n0`,
  * `n1`, …) so the output is stable across runs and independent of function
  * names; edges follow function order and each function's source call order.
  */
 export function renderApiFlowMermaid(flow: ApiFlow): string {
+  if (flow.entry) return renderEntryMermaid(flow.entry);
   const ids = new Map(flow.functions.map((fn, index) => [fn.name, `n${index}`]));
   const violation = new Set(flow.issues.map((issue) => issue.function));
   const lines = ["flowchart LR"];

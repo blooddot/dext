@@ -155,7 +155,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // One analyser feeds both the detail page and the creation rules, so they cannot
   // disagree about whether a function breaks the wrapper rule.
   const structureAssets = vscode.Uri.joinPath(context.extensionUri, "dist", "structure-index").fsPath;
-  const apiFlowFor = (content: string) => describeApiFlow(content, structureAssets);
+  const apiFlowFor = (content: string, entryName?: string) => describeApiFlow(content, structureAssets, entryName);
   application.setApiFlowAnalyzer(apiFlowFor);
   const resourceRoots = () => ({
     global: application.storage.globalStorageUri.fsPath,

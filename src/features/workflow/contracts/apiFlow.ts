@@ -59,10 +59,41 @@ export interface ApiFlowEdge {
   line: number;
 }
 
+export type ApiFlowStepKind = "entry" | "step" | "decision" | "loop" | "end";
+
+/** One statement of the entry function, or one control-flow point in it. */
+export interface ApiFlowStep {
+  /** Unique inside its entry flow; the entry node is 0. */
+  id: number;
+  kind: ApiFlowStepKind;
+  /** `name L4` for a call, the condition for a decision or loop, the fixed end label. */
+  label: string;
+  /** Set when the step calls a labelled built-in API, directly or through a wrapper. */
+  tag?: ApiFlowTag;
+}
+
+export interface ApiFlowStepEdge {
+  from: number;
+  to: number;
+  /** The branch a decision edge takes. */
+  label?: "yes" | "no";
+}
+
+/** The statement-level control flow of the module's entry function. */
+export interface ApiFlowEntry {
+  name: string;
+  /** 1-based line of the entry implementation. */
+  line: number;
+  steps: ApiFlowStep[];
+  edges: ApiFlowStepEdge[];
+}
+
 export interface ApiFlow {
   functions: ApiFlowFunction[];
   edges: ApiFlowEdge[];
   issues: ApiFlowIssue[];
+  /** Absent when the entry function is missing, ambiguous or unparseable. */
+  entry?: ApiFlowEntry;
 }
 
 export const EMPTY_API_FLOW: ApiFlow = { functions: [], edges: [], issues: [] };

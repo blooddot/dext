@@ -22,6 +22,10 @@ All notable changes to Dext are documented in this file.
 
 - **Breaking:** an API's entry function must be named after its file, and `main` is no longer recognised. `api/dev/fix.ts` exports `fix`, so rename `export async function main` to `export async function fix` and change `import { main as fix } from "dext/api/dev/fix"` to `import { fix } from "dext/api/dev/fix"`. Saving a draft that exports anything else is rejected with the name to use, a missing-import hint names the file's own binding, and the Execution flow starts at that function.
 
+- The API **Execution flow** is now the entry function's own statements: calls in source order from top to bottom, a `{…}` decision with its yes and no branches for each `if`, a loop node with its back edge, `try` as one step, and an `([结束])` node wherever a branch returns. A condition keeps its short string literals (`source.label === "no-plan"`) and folds a long one to `…`, so a decision reads without opening the source. Assignments, `console.log` and unrecognised statements are not nodes. The previous function call graph remains the fallback when the entry function is missing, ambiguous or does not parse, and the **Functions** list is unchanged.
+
+- A `break` keeps its arrow in the Execution flow: the branch that leaves a loop is now wired to what follows the loop instead of leaving its decision pointing nowhere, and a `continue` goes back to its loop. Diagram colours and line shapes are Mermaid's own again.
+
 - `mermaid` fenced blocks now render as diagrams in every Dext Markdown output surface: the turn's **Output**, finished **Process** messages, and **History** pages. A row that is still streaming keeps its source until the message completes, so a half-written fence is never rendered.
 
 - A tool call that never reports a result now stops the turn after thirty minutes instead of waiting forever: idle detection pauses while a tool runs, so nothing else bounded it. Each continuous tool phase gets the full ceiling; sequential tools start a fresh one, and `dext.agent.timeoutMs` still wins when it is shorter.
