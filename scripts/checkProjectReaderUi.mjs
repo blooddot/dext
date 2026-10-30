@@ -343,6 +343,15 @@ try {
       assert.equal(await evaluate(`document.querySelector('[data-reader-area="area.execution"]').open`), true, 'navigation opens the selected module area');
       await click('[data-reader-home]');
       assert.equal(await evaluate(`(()=>{const a=[...document.querySelectorAll('.project-reader-directory [aria-current="page"]')];return a.length===1&&a[0].hasAttribute('data-reader-home')})()`), true, 'the introduction marks only its own entry current');
+      assert.equal(await evaluate(`!!document.querySelector('[data-project-freshness]')`), true, 'the introduction summarizes how fresh the saved explanations are');
+      assert.match(await evaluate(`document.querySelector('[data-project-freshness]').textContent`), /1 of 1 modules changed/, 'the summary counts the modules the last check found changed');
+      assert.match(await evaluate(`document.querySelector('[data-project-freshness]').textContent`), /last checked/i, 'the summary names the check time');
+      // Dependencies are read first: the fixture's editor depends on the kernel.
+      const readingSteps = await evaluate(`[...document.querySelectorAll('[data-reading-step]')].map(b=>[Number(b.dataset.readingStep), b.dataset.readerTopic])`);
+      assert.deepEqual(readingSteps.map(([, id]) => id).sort(), [...new Set(readingSteps.map(([, id]) => id))].sort(), 'every topic appears once in Start here');
+      assert.deepEqual(readingSteps.map(([step]) => step), readingSteps.map((_, index) => index + 1), 'the steps are numbered in order');
+      const stepIds = readingSteps.map(([, id]) => id);
+      assert.ok(stepIds.indexOf('kernel') < stepIds.indexOf('editor'), `the reused module is read before the module that depends on it: ${JSON.stringify(stepIds)}`);
       await click('.project-reader-directory [data-reader-topic="kernel"]'); await ready();
       await evaluate(`document.querySelector('[data-project-topic-search]').value='Workflow execution';document.querySelector('[data-project-topic-search]').dispatchEvent(new Event('input',{bubbles:true}))`);
       assert.equal(await evaluate(`document.querySelector('[data-reader-area="area.editing"]').hidden`), true);

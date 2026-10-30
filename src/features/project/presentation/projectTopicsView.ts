@@ -3,7 +3,7 @@ import type { ProjectModel } from "../contracts/projectModel.js";
 import { renderProjectMarkdown } from "./projectMarkdown.js";
 import type { ArchitectureViewInput } from "../contracts/projectArchitectureTypes.js";
 import type { ProjectDiagram } from "../contracts/projectDiagram.js";
-import { topicFingerprint, type ProjectTopic, type ProjectTopicCheck } from "../knowledge/projectTopics.js";
+import { readingOrder, topicFingerprint, type ProjectTopic, type ProjectTopicCheck } from "../knowledge/projectTopics.js";
 import { renderDecisions, renderRules } from "./projectArchitectureNotes.js";
 
 export const escapeProjectHtml = (value: string): string => value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character] ?? character);
@@ -100,8 +100,14 @@ export function readerGalleryArticle(diagram: ProjectDiagram, data: ProjectReade
 
 export function readerIntroduction(data: ProjectReaderData): string {
   const notes = data.architecture ? renderRules(data.architecture) + renderDecisions(data.architecture.decisions ?? []) : "";
-  return `<h2>Project introduction</h2><div class="project-reader-intro project-markdown">${renderProjectMarkdown(data.brief || "Choose a topic to explore the project.")}</div><h3>Start exploring</h3><div class="project-reader-related">${data.topics.slice(0, 6).map((topic) => `<button type="button" data-reader-topic="${esc(topic.id)}">${esc(topic.title)} →</button>`).join("")}</div>`
-    + (data.model?.nodes.some((node) => !data.topics.some((topic) => topic.id === node.id)) ? `<section class="project-reader-norms"><h3>Project norms</h3><p class="project-help">Norms that no module article covers. A saved body is confirmed by you, not by this view.</p>${data.model.nodes.filter((node) => !data.topics.some((topic) => topic.id === node.id)).map((node) => normBlock(data.model, node.id, data.openNorm === node.id)).join("")}</section>` : "")
+  const checked = data.checks.filter((check) => data.topics.some((topic) => topic.id === check.id));
+  const changed = checked.filter((check) => check.state !== "unchanged").length;
+  const freshness = checked.length
+    ? `Sources last checked ${new Date(Math.max(...checked.map((check) => check.checkedAt))).toLocaleString()} · ${changed} of ${checked.length} modules changed.`
+    : "These summaries are saved drafts. Open a module and select Check sources to compare them with the current files.";
+  // Dependencies first: a module that others reuse is read before the modules that build on it.
+  const start = readingOrder(data.topics).map((topic, index) => `<button type="button" data-reader-topic="${esc(topic.id)}" data-reading-step="${index + 1}">${index + 1}. ${esc(topic.title)} →</button>`).join("");
+  return `<h2>Project introduction</h2><div class="project-reader-intro project-markdown">${renderProjectMarkdown(data.brief || "Choose a topic to explore the project.")}</div><h3>Start here</h3><div class="project-reader-related">${start}</div><p class="project-help" data-project-freshness>${esc(freshness)}</p>`
     + (!data.topics.some((topic) => topic.kind === "system_context") ? '<p class="project-help">System boundaries and runtime units have not been recorded. The project model contains module outlines. Analyze a module to add its detailed explanation and diagram.</p>' : "")
     + (data.terms?.length ? `<details class="project-reader-support"><summary>Glossary · ${data.terms.length}</summary><dl>${data.terms.map((term) => `<dt>${esc(term.canonical)}</dt><dd>${esc(term.definition ?? "")}</dd>`).join("")}</dl></details>` : "")
     + (notes ? `<details class="project-reader-support"><summary>Architecture rules and decisions</summary>${notes}</details>` : "");

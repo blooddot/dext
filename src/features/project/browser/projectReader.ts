@@ -356,6 +356,8 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
       const openDetails = Array.from(article.querySelectorAll<HTMLDetailsElement>("details[open]")).map((details) => details.querySelector("summary")?.textContent);
       if (message.checks) data = { ...data, checks: message.checks };
       if (topic) selectTopic(topic.id, diagram?.id);
+      // The check is also offered from the introduction, which has no article to re-render.
+      else if (!diagram) selectIntroduction();
       article.querySelectorAll<HTMLDetailsElement>("details").forEach((details) => { details.open = openDetails.includes(details.querySelector("summary")?.textContent); });
       const status = article.querySelector<HTMLElement>("[data-project-check-status]");
       if (status) status.textContent = message.error || "Sources checked. See the recorded check time and any review warning above.";

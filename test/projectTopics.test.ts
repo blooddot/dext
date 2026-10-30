@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { projectIntentSchema } from "../src/features/project/contracts/projectIntent.js";
-import { buildProjectTopics, checkProjectTopics, topicDiagramRequirement, topicFingerprint } from "../src/features/project/knowledge/projectTopics.js";
+import { buildProjectTopics, checkProjectTopics, readingOrder, topicDiagramRequirement, topicFingerprint } from "../src/features/project/knowledge/projectTopics.js";
 import { renderProjectTopics } from "../src/features/project/presentation/projectTopicsView.js";
 
 const intent = () => projectIntentSchema.parse({
@@ -36,6 +36,30 @@ describe("Project topics", () => {
     expect(topics[1]!.evidence.map((entry) => entry.path)).toEqual(["src/old.ts", "src/kernel.ts"]);
     expect(topics[1]!.entryPoints).toEqual(["Submit Code"]);
     expect(topicDiagramRequirement(topics[1]!)).toContain("unverified historical hypothesis");
+  });
+
+  it("reads a dependency before the topic that depends on it", () => {
+    const topics = (dependsOn?: string[]) => buildProjectTopics(projectIntentSchema.parse({ schemaVersion: 1, updatedAt: 1, brief: { name: "Example" },
+      contexts: [
+        { id: "ctx.alpha", canonicalName: "Alpha", purpose: "Reuse the beta module", responsibilities: [], entryPoints: [], evidence: [], ...(dependsOn ? { dependsOn } : {}) },
+        { id: "ctx.beta", canonicalName: "Beta", purpose: "Provide the reused behavior", responsibilities: [], entryPoints: [], evidence: [] }
+      ] }));
+    expect(readingOrder(topics()).map((topic) => topic.id)).toEqual(["ctx.alpha", "ctx.beta"]);
+    const ordered = topics(["ctx.beta"]);
+    expect(ordered[0]!.dependsOn).toEqual(["ctx.beta"]);
+    expect(readingOrder(ordered).map((topic) => topic.id)).toEqual(["ctx.beta", "ctx.alpha"]);
+  });
+
+  it("keeps every topic when dependencies form a cycle", () => {
+    const cyclic = buildProjectTopics(projectIntentSchema.parse({ schemaVersion: 1, updatedAt: 1, brief: { name: "Example" },
+      contexts: [
+        { id: "ctx.a", canonicalName: "A", purpose: "First", responsibilities: [], entryPoints: [], evidence: [], dependsOn: ["ctx.b"] },
+        { id: "ctx.b", canonicalName: "B", purpose: "Second", responsibilities: [], entryPoints: [], evidence: [], dependsOn: ["ctx.a"] }
+      ] }));
+    const first = readingOrder(cyclic).map((topic) => topic.id);
+    expect(first).toHaveLength(2);
+    expect([...first].sort()).toEqual(["ctx.a", "ctx.b"]);
+    expect(readingOrder(cyclic).map((topic) => topic.id)).toEqual(first);
   });
 
   it("deduplicates source reads and reports changed, missing and unverifiable evidence honestly", async () => {

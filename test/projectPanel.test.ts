@@ -5,7 +5,7 @@ import { renderProjectPanel, type ProjectPanelData } from "../src/features/proje
 import { projectModelSchema } from "../src/features/project/contracts/projectModel.js";
 import { renderProjectMarkdown } from "../src/features/project/presentation/projectMarkdown.js";
 import { readerIntroduction } from "../src/features/project/presentation/projectTopicsView.js";
-import { buildProjectTopics } from "../src/features/project/knowledge/projectTopics.js";
+import { buildProjectTopics, topicFingerprint } from "../src/features/project/knowledge/projectTopics.js";
 import { projectModelIntent } from "../src/features/project/knowledge/projectModel.js";
 
 const initialization = (status: ProjectInitializationState["status"], extra: Partial<ProjectInitializationState> = {}): ProjectInitializationState => ({ status, ...extra });

@@ -35,6 +35,8 @@ export interface ProjectTopic {
   generatedAt?: number;
   sections?: ProjectTopicSection[];
   relatedTopics?: { id: string; title: string }[];
+  /** Saved context dependencies; a reading hint, not a separately inferred graph. */
+  dependsOn?: string[];
   /** Derived from the same saved statements as the prose; never a separately inferred graph. */
   diagram?: ProjectDiagram;
 }
@@ -106,6 +108,7 @@ export function buildProjectTopics(intent: ProjectIntent, diagrams: readonly Pro
         diagrams: relatedDiagrams([context.id]), review: context.review,
         sections: [section], ...(context.detail !== "outline" ? { diagram } : {}),
         relatedTopics: [...new Set([...context.dependsOn, ...context.relatedContextIds, ...intent.flows.filter((flow) => flow.steps.some((step) => step.contextId === context.id)).map((flow) => flow.id)])].filter((id) => id !== context.id).flatMap(topicName),
+        dependsOn: [...context.dependsOn],
         ...(context.generatedAt ? { generatedAt: context.generatedAt } : {})
       };
     }),
@@ -148,6 +151,29 @@ export function buildProjectTopics(intent: ProjectIntent, diagrams: readonly Pro
         relatedTopicIds: node.semanticIds.filter(id => id !== topic.id && topics.some(item => item.id === id)) })),
       diagram: analysis, evidence: unique(evidence), generatedAt: analysis.updatedAt };
   });
+}
+
+/**
+ * A dependency-first reading order for the introduction. A topic sits one level below its deepest
+ * saved dependency; a dependency cycle is cut where a stack revisits a topic instead of recursing.
+ * Ties fall back to the functional area and the title so the order is stable.
+ */
+export function readingOrder(topics: readonly ProjectTopic[]): ProjectTopic[] {
+  const byId = new Map(topics.map((topic) => [topic.id, topic]));
+  const levels = new Map<string, number>();
+  const level = (topic: ProjectTopic, stack: Set<string>): number => {
+    const known = levels.get(topic.id);
+    if (known !== undefined) return known;
+    if (stack.has(topic.id)) return 0;
+    stack.add(topic.id);
+    const dependencies = (topic.dependsOn ?? []).flatMap((id) => byId.get(id) ?? []);
+    const result = dependencies.length ? 1 + Math.max(...dependencies.map((dependency) => level(dependency, stack))) : 0;
+    stack.delete(topic.id);
+    levels.set(topic.id, result);
+    return result;
+  };
+  return [...topics].sort((a, b) => level(a, new Set()) - level(b, new Set())
+    || (a.area?.id ?? "").localeCompare(b.area?.id ?? "") || a.title.localeCompare(b.title));
 }
 
 /** Checks file snapshots, not semantic truth. Unknown evidence must never become verified. */
